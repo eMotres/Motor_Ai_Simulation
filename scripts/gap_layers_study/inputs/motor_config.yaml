@@ -1,0 +1,451 @@
+geometry:
+  stator_diameter: 40
+  slot_height: 6.1
+  core_thickness: 1.9
+  num_seg: 2
+  num_slots_per_segment: 6
+  num_poles_per_segment: 7
+  air_gap: 0.2
+  tooth_width: 3.3
+  tooth2_width: 1.7
+  cut_width: 1
+  insulation_thickness: 0.06
+  wire_width: 2.5
+  wire_height: 0.6
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.1
+  num_wires_per_slot: 7
+  wire_split: 1
+  slot_hs: 0.267
+  magnet_height: 5.7
+  rotor_house_height: 1.1
+  shaft_height: 2
+  magnet_fill_down: 0.85
+  magnet_fill_up: 0.34
+  magnet_fill_radius: 0.2
+  magnet_up_gap: 0.1
+  rotor_hole: 0.9
+  magnet_down_height: 1
+  magnet_lamination: 0
+  stator_fillet_r: 1.1
+  stator_fillet_r1: 0.15
+  rotor_fill_r: 0
+  motor_length: 20
+  stator_outer_radius: 20
+  stator_inner_radius: 12.000000000000002
+  num_slots: 12
+  num_poles: 14
+  angle_slot: 30.0
+  angle_pole: 25.714285714285715
+  slot_pitch: 0.5235987755982988
+  pole_pitch: 0.4487989505128276
+  rotor_outer_radius: 11.800000000000002
+  rotor_inner_radius: 5.000000000000002
+  slot_width: 2.8200000000000003
+  wire_parallel: 1
+  sleeve_thickness: 0
+derived_params:
+  stator_outer_radius: stator_diameter / 2
+  stator_inner_radius: stator_outer_radius - core_thickness - slot_height
+  rotor_outer_radius: stator_inner_radius - air_gap
+  rotor_inner_radius: rotor_outer_radius - magnet_height - rotor_house_height
+  num_slots: num_seg * num_slots_per_segment
+  num_poles: num_seg * num_poles_per_segment
+  angle_slot: 360 / num_slots
+  angle_pole: 360 / num_poles
+  slot_width: wire_width + 2 * wire_spacing_x + 2 * insulation_thickness
+  shaft_inner_radius: rotor_inner_radius - shaft_height
+geometry_schema:
+  stator_diameter:
+    label: Stator Diameter
+    unit: mm
+    type: float
+    min: 0
+    max: 6000.0
+    step: 1
+    group: stator
+    description: Outer diameter of the stator
+  slot_height:
+    label: Slot Height
+    unit: mm
+    type: float
+    min: 0
+    max: 1000.0
+    step: 0.1
+    group: stator
+    description: Height of stator slots
+  core_thickness:
+    label: Core Thickness
+    unit: mm
+    type: float
+    min: 0
+    max: 500.0
+    step: 0.1
+    group: stator
+    description: Thickness of stator core (back iron)
+  num_seg:
+    label: Number of Segments
+    unit: ''
+    type: int
+    min: 1
+    max: 120
+    step: 1
+    group: segmentation
+    description: Number of segments in stator
+  num_slots_per_segment:
+    label: Slots per Segment
+    unit: ''
+    type: int
+    min: 1
+    max: 60
+    step: 2
+    group: segmentation
+    description: Number of slots per segment
+  num_poles_per_segment:
+    label: Poles per Segment
+    unit: ''
+    type: int
+    min: 1
+    max: 70
+    step: 2
+    group: segmentation
+    description: Number of poles per segment
+  air_gap:
+    label: Air Gap
+    unit: mm
+    type: float
+    min: 0
+    max: 30.0
+    step: 0.05
+    group: stator
+    description: Air gap between stator and rotor
+  tooth_width:
+    label: Tooth Width
+    unit: mm
+    type: float
+    min: 0
+    max: 500.0
+    step: 0.1
+    group: stator
+    description: Tooth width at the stator outer radius
+  tooth2_width:
+    label: Tooth2 Width
+    unit: mm
+    type: float
+    min: 0
+    max: 500.0
+    step: 0.2
+    group: stator
+    description: Tooth width at out side of the coils
+  cut_width:
+    label: Cut Width
+    unit: mm
+    type: float
+    min: 0
+    max: 500.0
+    step: 0.2
+    group: stator
+    description: The thickness of the jumper between air and gap
+  insulation_thickness:
+    label: Insulation Thickness
+    unit: mm
+    type: float
+    min: 0
+    max: 10.0
+    step: 0.05
+    group: stator
+    description: Insulation between stator core and slot
+  wire_width:
+    label: Wire Width
+    unit: mm
+    type: float
+    min: 0
+    max: 120.0
+    step: 0.5
+    group: winding
+    description: Width of the wire in the slot
+  wire_height:
+    label: Wire Height
+    unit: mm
+    type: float
+    min: 0
+    max: 30.0
+    step: 0.1
+    group: winding
+    description: Height of the wire in the slot
+  wire_spacing_x:
+    label: Wire Spacing X
+    unit: mm
+    type: float
+    min: 0
+    max: 2.0
+    step: 0.1
+    group: winding
+    description: Spacing between wires in x direction
+  wire_spacing_y:
+    label: Wire Spacing Y
+    unit: mm
+    type: float
+    min: 0
+    max: 2.0
+    step: 0.01
+    group: winding
+    description: Spacing between wires in y direction
+  num_wires_per_slot:
+    label: Wires per Slot
+    unit: ''
+    type: int
+    min: 1
+    max: 1000
+    step: 1
+    group: winding
+    description: Number of wires per slot
+  wire_split:
+    label: Wire Split
+    unit: ''
+    type: int
+    min: 1
+    max: 80
+    step: 1
+    group: winding
+    description: Parallel insulated strips across the wire WIDTH (transposed), like
+      splitting the bar in ANSYS. Cuts the width-direction eddy/proximity copper loss
+      by ~N^2 (strip width = wire_width/N, still capped at 2 skin depths). 1 = solid
+      bar. Field and torque unchanged.
+  slot_hs:
+    label: Slot Opening Height
+    unit: mm
+    type: float
+    min: 0
+    max: 1
+    step: 0.01
+    group: stator
+    description: Distance from the last wire to the air gap. Useful for optimization
+      but yields non-manufacturable fractional wire thicknesses, so hidden from the
+      UI for now (kept in the file; not yet wired into the CadQuery geometry).
+    hidden: true
+  magnet_height:
+    label: Magnet Height
+    unit: mm
+    type: float
+    min: 0
+    max: 500.0
+    step: 0.1
+    group: rotor
+    description: Height/thickness of permanent magnets
+  rotor_house_height:
+    label: Rotor Housing Thickness
+    unit: mm
+    type: float
+    min: 0
+    max: 50.0
+    step: 0.1
+    group: rotor
+    description: Thickness of rotor housing
+  shaft_height:
+    label: Shaft Height
+    unit: mm
+    type: float
+    min: 0
+    max: 50.0
+    step: 0.5
+    group: shaft
+    description: Height of the shaft
+  magnet_fill_down:
+    label: Magnet Fill Down
+    unit: ''
+    type: float
+    min: 0
+    max: 1.0
+    step: 0.01
+    group: rotor
+    description: Down fill ratio of the magnet
+  magnet_fill_up:
+    label: Magnet Fill Up
+    unit: ''
+    type: float
+    min: 0
+    max: 1.0
+    step: 0.01
+    group: rotor
+    description: Up fill ratio of the magnet
+  magnet_fill_radius:
+    label: Magnet Fillet Radius
+    unit: mm
+    type: float
+    min: 0
+    max: 50.0
+    step: 0.1
+    group: rotor
+    description: Magnet fillet radius
+  magnet_up_gap:
+    label: Magnet Up Gap
+    unit: mm
+    type: float
+    min: 0
+    max: 60.0
+    step: 0.1
+    group: rotor
+    description: Radial distance from the rotor outer surface to the magnet top (the
+      top follows the rotor circle); 0 = magnet seats on the retaining sleeve
+  rotor_hole:
+    label: Rotor Hole
+    unit: ''
+    type: float
+    min: 0
+    max: 1.0
+    step: 0.05
+    group: rotor
+    description: Rotor hole ratio
+  magnet_down_height:
+    label: Magnet Down Height
+    unit: mm
+    type: float
+    min: 0
+    max: 100.0
+    step: 0.1
+    group: rotor
+    description: Magnet down height
+  magnet_lamination:
+    label: Magnet Lamination
+    unit: mm
+    type: float
+    min: 0
+    max: 500.0
+    step: 0.5
+    group: rotor
+    description: Axial magnet slice length (along the stack); 0 = solid magnet. E.g.
+      180 mm stack / 10 mm lamination = 18 insulated slices per magnet. Applied as
+      the analytic eddy-loss factor k = l^2/(l^2 + w^2) on the magnet loss (axial
+      cuts cannot be meshed in the 2-D cross-section). Field, torque, mass unchanged.
+  stator_fillet_r:
+    label: Outer Corner Fillet
+    unit: mm
+    type: float
+    min: 0
+    max: 200.0
+    step: 0.1
+    group: stator
+    description: Fillet radius on the OUTER-ring corners of the stator (near the OD).
+      Does NOT round the slot pocket — only the outer profile corners.
+  stator_fillet_r1:
+    label: Air-gap Corner Fillet
+    unit: mm
+    type: float
+    min: 0
+    max: 20.0
+    step: 0.1
+    group: stator
+    description: Fillet radius on the INNER / air-gap-side corners (tooth tips, slot
+      mouths near the bore). Does NOT round the deep slot pocket.
+  rotor_fill_r:
+    label: Rotor Corner Fillet
+    unit: mm
+    type: float
+    min: 0
+    max: 60.0
+    step: 0.1
+    group: rotor
+    description: Fillet radius rounding every sharp rotor corner at the air gap
+  motor_length:
+    label: Motor Length
+    unit: mm
+    type: float
+    min: 0
+    max: 5000.0
+    step: 1
+    group: stator
+    description: Axial stack length — scales FEM torque/loss/mass + drives all 3D
+      extrusion
+parameter_groups:
+  stator:
+    label: Stator Parameters
+    order: 1
+  segmentation:
+    label: Segmentation
+    order: 2
+  winding:
+    label: Winding
+    order: 3
+  rotor:
+    label: Rotor Parameters
+    order: 4
+  shaft:
+    label: Shaft Parameters
+    order: 5
+sweep_whitelist:
+- stator_fillet_r
+- stator_fillet_r1
+- slot_height
+- core_thickness
+- tooth_width
+- tooth2_width
+- cut_width
+- wire_width
+- wire_height
+- num_wires_per_slot
+- magnet_height
+- magnet_fill_up
+- magnet_fill_down
+- magnet_fill_radius
+- magnet_up_gap
+- magnet_down_height
+- rotor_fill_r
+- rotor_hole
+- rotor_house_height
+- air_gap
+mesh:
+  n_radial: 11
+  n_angular: 104
+  n_angular_slots: 20
+  mesh_size_mm: 1.0
+  outer_air_factor: 1.2
+  gap_layers: 1.0
+  normal_deviation: 8.0
+  min_size_mm: 0.3
+  n_sectors: 2
+materials:
+  stator_core: 20SW1200
+  slot: copper
+  air_gap: air
+  in_band: air
+  out_band: air
+  rotor_core: 20SW1200
+  magnet: F52SH_120C
+  shaft: Steel_42CrMo4_QT
+  slot_insulation: Nomex
+  wire_insulation: polyimide
+  sleeve: M40X_UD_60
+custom_materials: {}
+winding:
+  n_coils_per_phase: 4
+  connection: 2P
+  n_parallel: 2
+  n_series: 1
+  layers: 1
+  star_delta: star
+simulation:
+  max_current: 85.33
+  frequency: 1516.67
+  rpm: 13000.0
+  phase_offset_deg: 10.0
+  steps_per_period: 36
+  demag: True
+  coil_temp_c: 199.5
+  end_winding_factor: 1.456
+  connection: 2P
+  eddy: True
+  rotor_eddy: True
+  torque_filter: False
+  drive: current
+  v_phase_peak: 30.0
+  v_delta_deg: 0.0
+  current_a: 85.33
+  gamma_deg: 10.0
+  daxis_deg: null
+  mode: motor
+  v_bus: 22.2
+  f_switch: 48000.0
+  i_block: 48.93
+  star_delta: star
+  steps_per_period_source: user

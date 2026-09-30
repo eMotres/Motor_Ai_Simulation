@@ -362,3 +362,120 @@ def test_self_check_flags_a_mesh_limited_ripple():
     bad = layer_self_check([1.0, 1.1, 1.0], [1.03, 1.08, 1.0])
     assert bad["ripple_mesh_limited"] is True
     assert layer_self_check([], [])["ripple_mesh_limited"] is None
+
+
+# ── 8. Coulomb default, measured gap rule, coupled default (2026-09-30) ──────
+def test_torque_method_defaults_to_coulomb():
+    from motor_ai_sim.simulation.virtual_work_torque import (
+        DEFAULT_TORQUE_METHOD, resolve_torque_method)
+    assert DEFAULT_TORQUE_METHOD == "coulomb"
+    assert resolve_torque_method(None, {}) == "coulomb"
+    assert resolve_torque_method(None, None) == "coulomb"
+    assert resolve_torque_method(None, {"torque_method": "hybrid_maxwell_ac"}) \
+        == "hybrid_maxwell_ac"
+    assert resolve_torque_method("hybrid_maxwell_ac", {"torque_method": "coulomb"}) \
+        == "hybrid_maxwell_ac"
+    with pytest.raises(ValueError):
+        resolve_torque_method("maxwell", {})
+
+
+def test_solver_entry_points_default_to_coulomb():
+    import inspect
+    from motor_ai_sim.simulation import fem_solver_2d as fs
+    for fn in (fs.fem_transient_sliding_band, fs.em_transient_eval):
+        assert inspect.signature(fn).parameters["torque_method"].default is None
+    src = inspect.getsource(fs.fem_transient_sliding_band)
+    assert "_resolve_torque_method(torque_method, sim)" in src
+
+
+def test_gap_floor_helper(monkeypatch):
+    from motor_ai_sim.simulation import sb_domains as sbd
+    monkeypatch.setattr(sbd, "GAP_LAYERS_MIN", 1.0)
+    assert sbd.effective_gap_layers(1) == 1.0          # no flat floor by default
+    assert sbd.effective_gap_layers(None) == 1.0
+    monkeypatch.setattr(sbd, "GAP_LAYERS_MIN", 3.0)    # the SB_GAP_LAYERS_MIN fallback
+    assert sbd.effective_gap_layers(1) == 3.0
+    assert sbd.effective_gap_layers(2.0) == 3.0
+    assert sbd.effective_gap_layers(4.0) == 4.0
+    assert sbd.effective_gap_layers(1, "internal_probe") == 1.0
+    assert sbd.effective_gap_layers(float("nan")) == 3.0
+
+
+def test_gap_layers_for_self_check_rule():
+    from motor_ai_sim.simulation.virtual_work_torque import gap_layers_for_self_check as g
+    assert g(1.0, 0.194) == 3.0        # Ø40 static, rated: 19.4 % -> 3/side (3.0 % measured)
+    assert g(1.0, 0.117) == 3.0        # Ø40 static no-load 11.7 % -> 3 (2.2 % measured)
+    assert g(2.0, 0.074) == 4.0        # Ø40 static rated at 2/side, 7.4 %
+    assert g(1.0, 0.021) is None       # Ø40 shipped duty, 2.1 %: passes
+    assert g(1.0, 0.06) == 2.0         # just over the gate: one more layer
+    assert g(2.0, 0.30) == 4.0         # capped at 4/side
+    assert g(4.0, 0.50) is None        # already at the cap
+    assert g(3.0, 0.068) == 4.0        # L155 at 3/side (6.8 %) -> the cap
+    assert g(1.0, None) is None
+
+
+def test_self_check_uses_the_ripple_scale_floor():
+    # a flat waveform: p-p 1e-4 N·m on a 10 N·m mean -> scale = 0.5 % of mean
+    chk = layer_self_check([10.0, 10.0001, 10.0], [10.0005, 10.0006, 10.0005])
+    assert chk["rel_to_ripple_scale"] == pytest.approx(0.0005 / 0.05, rel=1e-3)
+    assert chk["ripple_mesh_limited"] is False
+    assert chk["rel_to_pp"] > 1.0
+
+
+def _fake_result(eps, gl, ring=144):
+    return {"T_avg_Nm": 1.0, "T_ripple_pp_Nm": 0.1, "solve_wall_s": 1.0,
+            "gap_layers_effective": gl, "gap_layers_requested": gl,
+            "slip_nodes_per_period": ring,
+            "coulomb_torque": {"layer_self_check": {"rel_to_ripple_scale": eps}}}
+
+
+def test_gap_refinement_resolves_once_on_the_same_ring(monkeypatch):
+    from motor_ai_sim.simulation import fem_solver_2d as fs
+    calls = []
+
+    def fake(**kw):
+        calls.append(kw)
+        return _fake_result(0.194 if len(calls) == 1 else 0.03, kw["gap_layers"])
+    monkeypatch.setattr(fs, "fem_transient_sliding_band", fake)
+    monkeypatch.delenv("SB_GAP_REFINE", raising=False)
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
+    assert len(calls) == 2
+    assert calls[1]["gap_layers"] == 3.0 and calls[1]["slip_per_period"] == 144
+    gr = out["gap_refinement"]
+    assert gr["applied"] and gr["gap_layers_per_side"] == 3.0
+    assert gr["first"]["gap_layers_per_side"] == 1.0
+    assert "1 to 3 per side" in out["gap_layers_note"]
+    # passing run: one solve, recorded as not applied
+    calls.clear()
+    monkeypatch.setattr(fs, "fem_transient_sliding_band",
+                        lambda **kw: calls.append(kw) or _fake_result(0.02, 1.0))
+    out = fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
+    assert len(calls) == 1 and out["gap_refinement"]["applied"] is False
+    # an unsettled eddy warm-up is never refined (the check measures the transient)
+    calls.clear()
+    monkeypatch.setattr(fs, "fem_transient_sliding_band",
+                        lambda **kw: calls.append(kw) or dict(_fake_result(0.18, 2.0),
+                                                              eddy_settled=False))
+    out = fs._solve_with_gap_refinement({"gap_layers": 2.0, "sampling_purpose": "standard"})
+    assert len(calls) == 1 and "not settled" in out["gap_refinement"]["skipped_reason"]
+    # internal probes and the switch are never refined
+    calls.clear()
+    monkeypatch.setattr(fs, "fem_transient_sliding_band",
+                        lambda **kw: calls.append(kw) or _fake_result(0.5, 1.0))
+    fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "internal_probe"})
+    monkeypatch.setenv("SB_GAP_REFINE", "0")
+    fs._solve_with_gap_refinement({"gap_layers": 1.0, "sampling_purpose": "standard"})
+    assert len(calls) == 2
+
+
+def test_coupled_probe_gap_default_matches_the_run():
+    import inspect
+    import re
+    from pathlib import Path
+    from motor_ai_sim.routes import simulation as sim
+    run_default = inspect.signature(sim.get_fem_transient).parameters["gap_layers"].default
+    src = (Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim" / "routes"
+           / "coupled.py").read_text(encoding="utf-8")
+    probe = [float(x) for x in re.findall(r'_f\(body, "gap_layers", ([0-9.]+)\)', src)]
+    assert probe and all(v == run_default for v in probe)
+    assert "torque_method" in inspect.signature(sim.get_fem_transient).parameters

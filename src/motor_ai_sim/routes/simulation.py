@@ -28,6 +28,10 @@ from motor_ai_sim import jobs as _JOBS
 from motor_ai_sim import progress as _PROG
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim.field_jobs import field_busy, run_field_job
+from motor_ai_sim.simulation.sb_domains import (
+    effective_gap_layers as _effective_gap_layers)
+from motor_ai_sim.simulation.virtual_work_torque import (
+    resolve_torque_method as _resolve_torque_method)
 
 log = logging.getLogger(__name__)
 
@@ -1010,6 +1014,8 @@ async def build_fem_mesh_2d_sliding_band(
     import numpy as _np
 
     _comp_mesh = _parse_component_mesh(component_mesh)
+    # Show the gap the solver will mesh (sb_domains.effective_gap_layers).
+    gap_layers = _effective_gap_layers(gap_layers)
     _gh, _pd = _current_geom_hash_and_params(geo)   # geometry (live + optional override)
     key = (round(rotor_angle_deg, 3), round(mesh_size_mm, 2),
            round(min_size_mm, 2), round(surface_deviation, 4),
@@ -1706,7 +1712,9 @@ def _field_snap_key_fields(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         ("outer_air_factor", round(float(outer_air_factor), 2)),
         ("n_sectors", int(n_sectors) if int(n_sectors) > 1 else -1),
         ("stator_fillet_mm", round(float(stator_fillet_mm), 2)),
-        ("gap_layers", round(float(gap_layers), 1)),
+        # The gap the solver actually meshed (sb_domains.effective_gap_layers):
+        # a request below the floor and the run it produced share one key.
+        ("gap_layers", round(float(_effective_gap_layers(gap_layers)), 1)),
         ("coil_temp_c", round(float(coil_temp_c), 1)),
         # Per-part element sizes are keyed VERBATIM, and that is now correct:
         # every entry the parser accepts changes the mesh.  It did not use to —
@@ -4541,6 +4549,8 @@ def get_fem_transient(
     hi_fidelity:         bool  = False,   # ← 2× slip nodes + finer mesh → smoother raw torque (slower)
     structured_gap:      bool  = False,   # ← commercial-FEM-style concentric-ring air-gap mesh (experimental)
     airgap_macro:        bool  = False,   # ← harmonic air-gap macroelement (honest RAW ripple; full ring + sectors)
+    torque_method:       Optional[str] = None,  # ← REPORTED torque: "coulomb" (default) |
+                                          #   "hybrid_maxwell_ac"; None = config / default
     element_order:       int   = 2,       # ← 2 = P2 quadratic, the ONLY basis.  B is linear per
                                           #   element → smooth Arkkio torque, an energy-consistent
                                           #   mean AND a mesh-convergent ripple (noise floor →0 with
@@ -4670,6 +4680,17 @@ def get_fem_transient(
     if type(sampling_purpose) is not str or sampling_purpose not in (
             "standard", "optimization", "cogging_quality"):
         raise HTTPException(status_code=422, detail="invalid sampling_purpose")
+    # The torque method and the gap layers the SOLVER will use (it applies the
+    # same two rules itself): the cache / ledger key must describe the run that
+    # is actually solved, so a gap_layers=1 request and a pre-2026-09-30
+    # hybrid-method entry can never be served for a Coulomb, 3-layer solve.
+    try:
+        from motor_ai_sim.config import get_config as _get_cfg_tm
+        _torque_method_eff = _resolve_torque_method(
+            torque_method, (_get_cfg_tm() or {}).get("simulation", {}))
+    except ValueError as _tme:
+        raise HTTPException(status_code=422, detail=str(_tme))
+    _gap_layers_eff = _effective_gap_layers(gap_layers, sampling_purpose)
     # The step count: the caller's, validated, else the eddy-aware default
     # (owner 2026-09-26: 72 with the coupled eddy solve, BDF2 reads the magnet
     # loss -4.3 % at 36 and -1 % at 72).  Resolved before anything reads it,
@@ -5096,7 +5117,7 @@ def get_fem_transient(
         ("coil_temp_c", round(coil_temp_c, 1)),
         ("end_winding_factor", round(end_winding_factor, 3)),
         ("rotor_eddy", int(bool(rotor_eddy))),
-        ("gap_layers", round(gap_layers, 1)),
+        ("gap_layers", round(_gap_layers_eff, 1)),
         ("demag", int(bool(demag))),
         ("torque_filter", int(bool(torque_filter))),
         ("pole_copy", int(bool(pole_copy))),
@@ -5161,6 +5182,13 @@ def get_fem_transient(
         # in the key: it changes nothing about the numbers, only whether
         # the last frame's field is kept for the viewer.
         ("eddy", int(bool(eddy))),
+        # The REPORTED torque method (Coulomb default since 2026-09-30): the
+        # same field, a different T_em / ripple — never one entry.
+        ("torque_method", _torque_method_eff),
+        # The measured gap rule (Coulomb self-check gate + one refined
+        # re-solve, fem_solver_2d._solve_with_gap_refinement): a run solved
+        # before it existed may carry a mesh-limited ripple, never served here.
+        ("gap_rule", "coulomb_selfcheck_5pct_v1"),
     ))
     # The pack does not change the FIELD, but it changes the summary's charging
     # block (R_pack sets the bus rise, the capacity sets the C-rate), and the
@@ -5542,6 +5570,7 @@ def get_fem_transient(
                 daxis_deg=_effective_daxis(daxis_deg),
                 mesh_size_mm=float(mesh_size_mm), min_size_mm=float(min_size_mm),
                 outer_air_factor=float(outer_air_factor), gap_layers=float(gap_layers),
+                torque_method=_torque_method_eff,
                 n_sectors=int(n_sectors), stator_fillet_mm=float(stator_fillet_mm),
                 coil_temp_c=float(coil_temp_c),
                 magnet_temp_c=(None if magnet_temp_c is None else float(magnet_temp_c)),
@@ -5672,6 +5701,7 @@ def get_fem_transient(
                             min_size_mm=float(min_size_mm),
                             outer_air_factor=float(outer_air_factor),
                             gap_layers=float(gap_layers),
+                            torque_method=_torque_method_eff,
                             n_sectors=int(n_sectors),
                             stator_fillet_mm=float(stator_fillet_mm),
                             coil_temp_c=float(coil_temp_c),
@@ -6859,7 +6889,9 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
 #                  the numbers are arithmetic over the run's own rpm and mass
 #                  rows plus the machine's bearing cards, so a stored result can
 #                  be given them honestly without re-solving anything.
-_SUMMARY_SHAPE_V = 18   # v18: incremental (frozen-permeability) Ld/Lq, the
+_SUMMARY_SHAPE_V = 19   # v19: torque_method label, Coulomb mean/ripple, the
+                        #      ripple self-check flag, gap-layer floor (2026-09-30)
+                        # v18: incremental (frozen-permeability) Ld/Lq, the
                         #      chord under its own name, ψ_PM sag (2026-09-20)
 # NOT bumped for the eddy-settle verdict (2026-09-07): a solver payload from
 # before that date cannot say whether its warm-up settled, so rebuilding an old
@@ -6983,6 +7015,13 @@ def _demag_with_grade(dsum):
     except Exception:   # noqa: BLE001 — garnish, never fatal
         pass
     return out
+
+
+def _ripple_self_check(sbres: dict) -> dict:
+    """The Coulomb layer self-check of a solver result, or ``{}``."""
+    ct = sbres.get("coulomb_torque")
+    sc = ct.get("layer_self_check") if isinstance(ct, dict) else None
+    return sc if isinstance(sc, dict) else {}
 
 
 def _refresh_summary_shape(res: dict) -> dict:
@@ -7754,6 +7793,24 @@ def _build_transient_summary(
         "T_ripple_raw_pp_Nm": sbres.get("T_ripple_raw_pp_Nm"),
         "T_ripple_pct_available": sbres.get("T_ripple_pct_available"),
         "T_ripple_pct_reason": sbres.get("T_ripple_pct_reason"),
+        # WHICH torque method produced T_em / ripple — the run's OWN label.  A
+        # stored run from before 2026-09-30 keeps its hybrid label
+        # ("energy_mean+maxwell_ripple", "terminal_work_mean+maxwell_ripple",
+        # "maxwell_stress"); nothing is rewritten.  None = not recorded.
+        "torque_method": sbres.get("torque_method"),
+        "T_mean_method": sbres.get("T_mean_method"),
+        "T_avg_coulomb_Nm": sbres.get("T_avg_coulomb_Nm"),
+        "T_ripple_pp_coulomb": sbres.get("T_ripple_pp_coulomb"),
+        # Coulomb's two-ring self-check: True = the rotor- and stator-side gap
+        # rings disagree by more than 5 % of the ripple scale, max(p-p, 0.5 % of
+        # the mean), even after the one refined re-solve: the air-gap mesh (not
+        # the machine) limits the ripple.  None on runs without it.
+        "ripple_mesh_limited": _ripple_self_check(sbres).get("ripple_mesh_limited"),
+        "ripple_self_check_rel": _ripple_self_check(sbres).get("rel_to_ripple_scale"),
+        "gap_refinement": sbres.get("gap_refinement"),
+        "gap_layers_requested": sbres.get("gap_layers_requested"),
+        "gap_layers_effective": sbres.get("gap_layers_effective"),
+        "gap_layers_note": sbres.get("gap_layers_note"),
         # Deprecated compatibility fields: raw ripple, no noise estimate.
         "T_noise_floor_pct": None, "torque_filter_applied": False,
         "P_mech_W": round(_Pmech, 1),

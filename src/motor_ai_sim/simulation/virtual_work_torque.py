@@ -73,6 +73,26 @@ MU0 = 4e-7 * math.pi
 NU0 = 1.0 / MU0
 
 
+#: Reported-torque methods.  "coulomb" is the default since 2026-09-30 (owner,
+#: after docs/COULOMB_TORQUE_2026-09-30.md); "hybrid_maxwell_ac" is the earlier
+#: energy / terminal-work mean + raw Maxwell AC, still selectable.
+TORQUE_METHODS = ("coulomb", "hybrid_maxwell_ac")
+DEFAULT_TORQUE_METHOD = "coulomb"
+
+
+def resolve_torque_method(requested: Optional[str] = None,
+                          sim_cfg: Optional[Dict[str, object]] = None) -> str:
+    """The reported-torque method of a run: the request, else the config's
+    ``simulation.torque_method``, else :data:`DEFAULT_TORQUE_METHOD`.
+    Raises ``ValueError`` on an unknown name (never a silent substitute)."""
+    m = str(requested or (sim_cfg or {}).get("torque_method")
+            or DEFAULT_TORQUE_METHOD)
+    if m not in TORQUE_METHODS:
+        raise ValueError("torque_method must be one of %s; got %r"
+                         % (", ".join(repr(x) for x in TORQUE_METHODS), m))
+    return m
+
+
 class CoulombLayerError(ValueError):
     """The requested layer would deform an element that is not pure air."""
 
@@ -291,13 +311,29 @@ def sliding_band_layers(p: np.ndarray, t: np.ndarray, n_stator_nodes: int,
     }
 
 
-#: Layer self-check gate: the two-layer difference, as a fraction of the
-#: waveform's p-p, above which the ripple is reported as mesh-limited.  The
-#: owner's ripple tolerance is max(0.5 pp, 10 % relative); a layer
-#: disagreement of 10 % of the p-p means the gap mesh alone can move the
-#: ripple by that much (measured: Ø40 at gap_layers 1 reads 19 %, its ripple
-#: is 10 % above the gap_layers 5 value; 3 % at gap_layers 3, 0.7 % at 5).
-SELF_CHECK_MAX_REL_TO_PP = 0.10
+#: Layer self-check gate (owner 2026-09-30): the two-ring difference may be
+#: at most this fraction of the RIPPLE SCALE, max(p-p, 0.5 % of |mean|) — the
+#: owner's ripple tolerance is max(0.5 pp, 10 % relative), and on the measured
+#: machines the ripple error was 0.3-0.55x the self-check (Ø40 static: 19.4 %
+#: -> ripple +10.6 %, 3.0 % -> +0.9 %), so a 5 % gate keeps it near 3 %.
+SELF_CHECK_GATE = 0.05
+#: Absolute ripple floor of the gate's denominator, as a fraction of |mean|.
+RIPPLE_SCALE_FLOOR_REL_MEAN = 0.005
+#: Target the automatic gap refinement aims at (margin under the gate), the
+#: convergence order it assumes and the most layers per side it will choose.
+#: The order is MEASURED, not P2's nominal 2: on the Ø40 static mesh the
+#: self-check fell with order 1.39 (rated) / 1.14 (no-load) from 1 to 2 layers
+#: per side, 2.2 from 2 to 3 and 1.7 / 1.5 from 1 to 3 — 1.5 sends both
+#: 1-layer cases to 3 layers per side, where both pass (3.0 % / 2.2 %).
+SELF_CHECK_TARGET = 0.04
+SELF_CHECK_ORDER = 1.5
+#: Capped at 4/side: measured to pass on the Ø40 static mesh (0.51 %), while
+#: on the L155 (sleeve, 0.69 mm gap) more layers did NOT lower the two-ring
+#: difference (1.2 % at 1/side, 18 % unsettled at 2, 6.8 % at 3) — refinement
+#: beyond 4 would buy cost, not accuracy, on the evidence we have.
+GAP_LAYERS_AUTO_MAX = 4.0
+# kept for callers of the first version
+SELF_CHECK_MAX_REL_TO_PP = SELF_CHECK_GATE
 
 
 def ripple_pp(series: Sequence[float]) -> Optional[float]:
@@ -316,28 +352,51 @@ def layer_self_check(t_rotor_side: Iterable[float],
                           (``None`` if that mean is zero);
     ``rel_to_pp``         max |T_r − T_s| / p-p of the average (``None`` if
                           the waveform is flat);
-    ``ripple_mesh_limited``  rel_to_pp > ``SELF_CHECK_MAX_REL_TO_PP``: the gap
-                          mesh, not the machine, sets the ripple to within
-                          that fraction — refine the gap (gap layers).
+    ``rel_to_ripple_scale``  max |T_r − T_s| / max(p-p, 0.5 % of |mean|) —
+                          the gated number;
+    ``ripple_mesh_limited``  rel_to_ripple_scale > ``SELF_CHECK_GATE``: the gap
+                          mesh, not the machine, sets the ripple — refine the
+                          gap (gap layers per side).
     """
     a = np.asarray(list(t_rotor_side), float)
     b = np.asarray(list(t_stator_side), float)
+    base = {"threshold_rel_to_ripple_scale": SELF_CHECK_GATE,
+            "ripple_scale_floor_rel_mean": RIPPLE_SCALE_FLOOR_REL_MEAN}
     if a.size == 0 or a.shape != b.shape:
         return {"max_abs_diff_Nm": None, "mean_diff_Nm": None,
                 "rel_to_mean": None, "rel_to_pp": None,
-                "threshold_rel_to_pp": SELF_CHECK_MAX_REL_TO_PP,
-                "ripple_mesh_limited": None}
+                "rel_to_ripple_scale": None, "ripple_mesh_limited": None, **base}
     d = a - b
     avg = 0.5 * (a + b)
     m = float(np.mean(avg)); pp = float(np.ptp(avg))
     mx = float(np.max(np.abs(d)))
-    rel_pp = (mx / pp if pp > 0.0 else None)
+    scale = max(pp, RIPPLE_SCALE_FLOOR_REL_MEAN * abs(m))
+    rel_scale = (mx / scale if scale > 0.0 else None)
     return {"max_abs_diff_Nm": mx, "mean_diff_Nm": float(np.mean(d)),
             "rel_to_mean": (mx / abs(m) if m != 0.0 else None),
-            "rel_to_pp": rel_pp,
-            "threshold_rel_to_pp": SELF_CHECK_MAX_REL_TO_PP,
-            "ripple_mesh_limited": (None if rel_pp is None
-                                    else bool(rel_pp > SELF_CHECK_MAX_REL_TO_PP))}
+            "rel_to_pp": (mx / pp if pp > 0.0 else None),
+            "rel_to_ripple_scale": rel_scale,
+            "ripple_mesh_limited": (None if rel_scale is None
+                                    else bool(rel_scale > SELF_CHECK_GATE)),
+            **base}
+
+
+def gap_layers_for_self_check(gap_layers: float, rel_to_ripple_scale: Optional[float],
+                              target: float = SELF_CHECK_TARGET,
+                              order: float = SELF_CHECK_ORDER,
+                              gl_max: float = GAP_LAYERS_AUTO_MAX) -> Optional[float]:
+    """Gap layers per side predicted to bring the self-check to ``target``.
+
+    ``None`` when the check passes the gate (or is unknown) or the mesh is
+    already at ``gl_max``.  Otherwise
+    ``min(gl_max, max(gl + 1, ceil(gl · (ε / target) ** (1 / order))))``.
+    """
+    if rel_to_ripple_scale is None or not math.isfinite(rel_to_ripple_scale):
+        return None
+    if rel_to_ripple_scale <= SELF_CHECK_GATE or gap_layers >= gl_max:
+        return None
+    want = math.ceil(float(gap_layers) * (rel_to_ripple_scale / target) ** (1.0 / order))
+    return float(min(gl_max, max(float(gap_layers) + 1.0, want)))
 
 
 # ── shared per-frame torque post-processing ──────────────────────────────────

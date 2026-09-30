@@ -8,7 +8,7 @@
  */
 import { sixPhaseCells, type SixPhaseResult } from './sixPhase';
 import React from 'react';
-import { Box, Button, Paper, Typography, Tooltip } from '@mui/material';
+import { Box, Button, Chip, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
 import { geoSignature } from '../common/geoSig';
 import { currentMatJson } from '../../lib/apiAuth';
@@ -91,6 +91,16 @@ export interface TransientSummary {
   T_ripple_pct:        number;
   T_ripple_raw_pct?:   number;
   T_ripple_filt_pct?:  number;
+  // The run's OWN torque-method label ("coulomb_virtual_work" since
+  // 2026-09-30; older runs keep theirs, e.g. "energy_mean+maxwell_ripple").
+  torque_method?:      string | null;
+  // Coulomb two-ring self-check: true = the air-gap mesh limits the ripple.
+  ripple_mesh_limited?: boolean | null;
+  ripple_self_check_rel?: number | null;
+  gap_layers_note?:    string | null;
+  // The measured gap rule re-solved this run with more layers per side.
+  gap_refinement?: { applied?: boolean; gap_layers_per_side?: number;
+                     first?: { gap_layers_per_side?: number } } | null;
   P_mech_W:            number;
   V_phase_peak_V:      number;
   V_phase_rms_V:       number;
@@ -476,6 +486,21 @@ function magnetSegNote(m?: TransientSummary['magnet_segmentation']): string {
        + `normalised to the solid stack so a solid magnet is unchanged. This is a `
        + `MODEL pending 3-D validation and a LOWER bracket — inter-slice coupling `
        + `and the return current's own reaction field are not in it.`;
+}
+
+/** Short label of a run's torque method (its own stored label). */
+function torqueMethodShort(m: string): string {
+  if (m === 'coulomb_virtual_work') return 'Torque: Coulomb';
+  if (m === 'maxwell_stress') return 'Torque: Maxwell';
+  return 'Torque: hybrid';
+}
+
+function torqueMethodTooltip(m: string): string {
+  if (m === 'coulomb_virtual_work') {
+    return 'Coulomb virtual work: mean and ripple from the co-energy derivative on the air-gap rings.';
+  }
+  if (m === 'maxwell_stress') return 'Raw Maxwell stress (older run, near-zero current).';
+  return `Older method (${m}): energy / terminal-work mean plus raw Maxwell ripple.`;
 }
 
 /** One card row: its cells share the row width equally and never wrap into
@@ -1061,6 +1086,36 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             </Button>
           </span>
         </Tooltip>
+        {/* Torque method of THIS run (its own label — an older run keeps its
+            hybrid label) and the ripple self-check badge. */}
+        {s.torque_method && (
+          <Tooltip title={torqueMethodTooltip(s.torque_method)}>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>
+              {torqueMethodShort(s.torque_method)}
+            </Typography>
+          </Tooltip>
+        )}
+        {s.gap_refinement?.applied && (
+          <Tooltip title={s.gap_layers_note ?? 'Re-solved with more air-gap layers per side.'}>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>
+              {`Gap ${s.gap_refinement.first?.gap_layers_per_side ?? '?'}→${s.gap_refinement.gap_layers_per_side ?? '?'}/side`}
+            </Typography>
+          </Tooltip>
+        )}
+        {s.ripple_mesh_limited && (
+          <Tooltip title={'The torque on the rotor-side and on the stator-side air-gap ring '
+            + 'differs by '
+            + (s.ripple_self_check_rel != null
+              ? `${fmt(s.ripple_self_check_rel * 100, 0)} % of the ripple`
+              : 'more than 5 % of the ripple')
+            + ': the air-gap mesh, not the machine, sets the ripple. '
+            + 'Raise Air-gap layers/side on the Mesh tab and re-run.'
+            + (s.gap_layers_note ? ` ${s.gap_layers_note}.` : '')}>
+            <Chip size="small" color="warning" variant="outlined"
+              label={tx('rippleMeshLimited')}
+              sx={{ fontSize: 10, height: 18 }}/>
+          </Tooltip>
+        )}
         {/* Snapshot THIS design as a comparison point (Compare tab). Sits next to
             the numbers it captures, so it is obvious what gets saved. */}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, ml: 'auto' }}>
@@ -1306,13 +1361,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         )}
         <Cell label={tx('tRipple')} value={fmt(s.T_ripple_pct, 1)} unit="%"
           accent={accentRipple}
-          tooltip={`Physical torque ripple (T_max − T_min)/|T_avg| over one electrical period, ` +
-                   `reconstructed from the 6·k electrical orders a balanced 3-phase machine can produce ` +
-                   `(6th/12th ripple + cogging).` +
-                   (s.T_ripple_raw_pct != null
-                     ? `  Raw FEM pk-pk = ${s.T_ripple_raw_pct.toFixed(1)}% — the difference is sliding-band ` +
-                       `stair-step noise (forbidden orders), not real ripple.`
-                     : '')}/>
+          tooltip={`Torque ripple (T_max − T_min)/|T_avg| over the solved window, raw samples. `
+                   + (s.torque_method ? torqueMethodTooltip(s.torque_method) : '')}/>
         <Cell label={tx('torqueDensity')} value={fmt(s.torque_per_mass_Nm_kg, 3)} unit="N·m/kg"
           tooltip="T_em / total mass (EM-active + shaft) — figure of merit for motor compactness"/>
         <Cell label={tx('powerDensity')} value={fmt(s.power_per_mass_W_kg / 1000, 3)} unit="kW/kg"

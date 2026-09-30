@@ -1,0 +1,5001 @@
+name: L155 motor
+die: CIANO10 200 opt
+role: motor
+created: '2026-09-11T09:24:02'
+geometry_overrides:
+  motor_length: 155
+  wire_width: 9
+  wire_height: 1
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 10
+  wire_split: 1
+  wire_parallel: 1
+  insulation_thickness: 0.25
+winding:
+  n_coils_per_phase: 4
+  connection: 2P
+  n_parallel: 2
+  n_series: 1
+  layers: 1
+  star_delta: delta
+duties:
+- name: rated 1x9 mm
+  mode: motor
+  saved_at: '2026-09-15T16:01:15'
+  current_arms: 562.067
+  rpm: 14200.0
+  gamma_deg: 15.0
+  note: '1x9 mm single strip, 10 turns, delta — recomputed 2026-09-14 to 180.0 N·m
+    ×k (k_3d 0.9576; end-winding factor 1.355, the geometry value for the 155 mm stack
+    — the duty had been solved at the 180 mm duty''s 1.287; coupled: winding 97.8
+    °C, magnets 104.2 °C, bearing 97.3 °C) — build_sig restamped 2026-09-16 to fac6010d247c:
+    only the shaft part-state moved (reference -> included), identical physics, no
+    re-run.'
+  torque_nm: 179.9
+  power_kw: 267.07
+  star_delta: delta
+  result:
+    efficiency_pct: 98.427
+    ripple_pct: 1.4
+    v_ll_peak_v: 386.408
+    loss_w: 3830.3
+    mass_kg: 27.559
+    p_core_w: 1447.6
+    p_stranded_w: 2259.1
+    p_solid_w: 123.6
+    v_phase_peak_v: 416.191
+    j_coil_a_mm2: 18.0
+    loss_mech_w: 437.732
+    end3d_k: 0.958
+    recorded_at: '2026-09-14T12:31:27'
+    build_sig: d50c7e22ac95
+  mesh:
+    sim.frequency: 1183.33
+    sim.drive: current
+    sim.iBlock: 0
+    sim.apply3d: 1
+    sim.eddyCoupled: true
+    sim.opMode: motor
+    sim.endWinding: 1.355
+    sim.targetKind: 'off'
+    mesh.componentMesh:
+      coil_rel: 0.5
+    mesh.rotorAngle: 0
+    sim.kvNoload: 1
+    sim.connection: 2P
+    sim.vDelta: 0
+    sim.excOnlyA: 0
+    sim.lastSolveCost:
+      frames: 111
+      wall_s: 241.1
+      warm: 75
+      at: 1789326055001
+    mesh.geoMesh: true
+    sim.daxisDeg: ''
+    sim.gamma: 15.0
+    sim.magnetTempC: '104.2'
+    sim.current: 562.067
+    sim.waveform: ''
+    mesh.structuredGap: true
+    sim.fSwGroup: 0
+    sim.starDelta: delta
+    sim.rpm: 14200.0
+    sim.coupledAdopted: 97.8|104.2|2|2026-09-14T12:30:04
+    mesh.poleCopy: false
+    sim.stepsPP: 36
+    sim.busCouple: true
+    sim.vPeak: 30
+    mesh.outerAir: 1.2
+    mesh.gapLayers: 1
+    mesh.meshSize: 4
+    sim.fSwCustom: false
+    sim.demag: true
+    sim.coilTemp: 97.8
+    mesh.ironTemplate: true
+    sim.dcLinkCableUH: ''
+    sim.dcLinkCapUF: ''
+    sim.targetValue: 228.45207142377322
+    sim.fSwitch: 24000
+    mesh.minSize: 0.3
+    mesh.nSectors: 2
+    sim.r25: 1
+    sim.endWindingGeo: 1.355
+    sim.coupled: true
+  summary:
+    rpm: 14200.0
+    I_phase_rms_A: 562.07
+    I_terminal_rms_A: 562.07
+    I_winding_rms_A: 324.51
+    gamma_deg: 15.0
+    connection: 2P
+    n_parallel: 2
+    wire_parallel: 1
+    turns_per_coil: 10
+    n_parallel_eff: 2
+    op_mode: motor
+    op_mode_requested: motor
+    drive: current
+    R_phase_ohm: 0.005253
+    R_line_line_ohm: 0.003502
+    R_phase_eq_star_ohm: 0.001751
+    Ld_eq_star_mH: 0.0135
+    Lq_eq_star_mH: 0.0165
+    Ld_mH: 0.0405
+    Lq_mH: 0.0495
+    psi_pm_Wb: 0.055426
+    saliency_Lq_over_Ld: 1.224
+    dq_note: ''
+    T_em_avg_Nm: 187.855
+    T_ripple_pct: 1.4
+    T_ripple_raw_pct: 1.4
+    T_ripple_filt_pct: 1.4
+    T_noise_floor_pct: 0.0
+    P_mech_W: 279344.1
+    V_phase_peak_V: 434.6
+    V_phase_rms_V: 292.1
+    V_line_peak_V: 403.5
+    V_line_rms_V: 291.0
+    star_delta: delta
+    strand_bonding: transposed
+    V_line_peak_solved_V: 403.5
+    V_line_rms_solved_V: 291.0
+    I_line_rms_A: 562.1
+    L0_mH: 0.11218
+    P_cu_circulating_W: 7.1
+    circulating_harmonics:
+    - harmonic: 3
+      E_rms_V: 25.66
+      R_ohm: 0.022331
+      X_ohm: 2.50221
+      I_circ_rms_A: 10.25
+      P_W: 7.0
+    - harmonic: 9
+      E_rms_V: 2.13
+      R_ohm: 0.158955
+      X_ohm: 7.50664
+      I_circ_rms_A: 0.28
+      P_W: 0.0
+    - harmonic: 15
+      E_rms_V: 0.59
+      R_ohm: 0.432202
+      X_ohm: 12.51106
+      I_circ_rms_A: 0.05
+      P_W: 0.0
+    KV_rpm_per_V_phase: 32.67
+    KV_rpm_per_V_line: 35.19
+    KV_noload_rpm_per_V_line: 34.46
+    V1_LL_V: 411.44
+    V1_phase_V: 411.44
+    THD_pct: 9.07
+    THD_LL_pct: 2.0
+    I1_A: 229.463
+    THD_I_pct: 0.0
+    V1_seed_peak_V: 411.437
+    V1_seed_delta_deg: 23.423
+    Kt_Nm_per_Arms: 0.5789
+    Kt_Nm_per_A_line: 0.3342
+    J_coil_A_per_mm2: 18.0
+    A_phase_mm2: 18.0
+    slot_fill_pct: 43.2
+    A_slot_mm2: 2502.1
+    A_copper_slotted_mm2: 1080.0
+    P_loss_total_W: 3830.3
+    B_gap_mean_T: 0.9348
+    P_core_W: 1447.6
+    P_core_terms:
+      stator:
+        hysteresis_W: 815.145
+        eddy_W: 282.311
+        excess_W: 293.275
+        k_f: 0.9
+        model: measured_surface
+      rotor:
+        hysteresis_W: 25.545
+        eddy_W: 14.036
+        excess_W: 17.294
+        k_f: 0.9
+        model: measured_surface
+    P_core_stator_W: 1390.7
+    P_core_rotor_W: 56.9
+    P_loss_stator_W: 3649.8
+    P_loss_rotor_W: 180.5
+    P_loss_split_measured: true
+    P_stranded_W: 2259.1
+    wire_split: 1
+    cu_ac_solved_ignores_wire_split: false
+    P_solid_W: 123.6
+    P_mag_W: 84.9
+    P_shaft_W: 29.0
+    P_sleeve_W: 9.6839
+    solid_loss_not_solved: false
+    magnet_segmentation:
+      slice_mm: 5.0
+      stack_mm: 155.0
+      n_bodies: 5
+      factor: 0.0218945
+      width_mm: 32.5481
+      width_min_mm: 32.5481
+      width_max_mm: 32.5481
+      model: Russell-Norsworthy axial segmentation, normalised to the solid stack
+        — MODEL, pending 3-D validation
+    eddy_warmup_frames: 75
+    demag_prepass_frames: 36
+    eddy_settled: true
+    eddy_capped: false
+    eddy_settle_residual: 0.00779
+    eddy_settle_tol: 0.02
+    warm_seeded: false
+    demag_seeded: false
+    efficiency: 0.9865
+    P_elec_in_solved_W: 280173.9
+    P_mech_balance_W: 277772.9
+    pwm_dc_residual_A: null
+    pwm_dc_residual_phase: null
+    pwm_dc_tol_A: 0.5
+    pwm_dc_unconverged: null
+    nonlinear_converged: true
+    nonlinear_resid_max: 5.58e-08
+    nonlinear_tol: 0.001
+    nonlinear_unconverged_frames: []
+    steps_snapped: false
+    n_steps_per_period: 36
+    n_steps_per_period_requested: 36
+    slip_nodes_per_period: 216
+    coil_temp_C: 97.8
+    end_winding_factor: 1.35
+    mass_total_kg: 27.559
+    mass_active_kg: 26.676
+    mass_area_source: CAD polygons
+    mass_components:
+    - name: Stator core (B10AHV900M)
+      material: electrical steel
+      density_kg_m3: 7600.0
+      volume_cm3: 1697.2
+      mass_kg: 12.899
+      note: CAD section 12167 mm² × stack, lamination k_f=0.900
+    - name: Copper windings (Cu)
+      material: copper
+      density_kg_m3: 8933.0
+      volume_cm3: 226.8
+      mass_kg: 2.026
+      note: measured copper section 1080 mm² × stack × k_end 1.355
+    - name: Magnets (N52UH_150C)
+      material: NdFeB
+      density_kg_m3: 7500.0
+      volume_cm3: 1027.2
+      mass_kg: 7.704
+      note: CAD magnet polygons 6627 mm² × stack
+    - name: Rotor back-iron (B10AHV900M)
+      material: electrical steel
+      density_kg_m3: 7600.0
+      volume_cm3: 500.0
+      mass_kg: 3.8
+      note: CAD section 3584 mm² × stack, lamination k_f=0.900
+    - name: Shaft (Steel_42CrMo4_QT)
+      material: shaft
+      density_kg_m3: 7850.0
+      volume_cm3: 112.5
+      mass_kg: 0.883
+      note: hollow shaft tube 726 mm² × stack — NOT in active mass
+    - name: Sleeve (M40X_UD_60)
+      material: carbon fibre
+      density_kg_m3: 1590.0
+      volume_cm3: 155.4
+      mass_kg: 0.247
+      note: retaining ring 1002.9 mm² × stack — NOT in active mass
+    part_states: {}
+    rotor_inertia:
+      J_kg_m2: 0.02766407923960738
+      J_kg_cm2: 276.641
+      rotor_iron: 0.009266053307992584
+      magnet: 0.016913538298173356
+      shaft: 0.00047660341700063306
+      sleeve: 0.0010078842164408055
+      J_modelled:
+        rotor_iron: 0.009266053307992584
+        magnet: 0.016913538298173356
+        shaft: 0.00047660341700063306
+        sleeve: 0.0010078842164408055
+      part_states: {}
+      source: CAD polygons
+    sleeve_hoop:
+      sigma_hoop_MPa: 14.334
+      r_mean_mm: 63.85
+      rpm: 14200.0
+      material: M40X_UD_60
+      density_kg_m3: 1590.0
+      thickness_mm: 2.5
+      strength_MPa: 2700.0
+      utilisation_pct: 0.53
+    demag:
+      per_magnet_spread_pct: 0.002
+      bh_kept_vol_pct: 98.437
+      bh_loss_pct: 1.563
+      br_kept_vol_pct: 99.215
+      loss_pct: 0.785
+      br_worst_pct: 98.4
+      area_derated_pct: 100.0
+      grade_nominal: 52.0
+      grade_effective: 51.2
+      magnet_name: N52UH_150C
+      energy_total_J: 289.68
+      energy_lost_J: 4.528
+    end3d:
+      k_flux: 0.9576417702186586
+      k_flux_self: 0.9586015786852167
+      fidelity: quick (n_stack=4, 3-point L-sweep)
+      generated_utc: '2026-09-13T20:34:42Z'
+      machine: 12s/10p OD 200
+      k_flux_vs_L:
+        '116.25': 0.94894
+        '155.0': 0.95764
+        '232.5': 0.9701
+      note: 'CIANO10 200 opt die as of 2026-09-13 (L155 motor: 10 turns 1x9 mm, stack
+        155 mm, sleeve 2.5 mm M40X taken as air in 3-D), stack sweep 116/155/232 mm;
+        solve 4577 s — user 2026-09-13: recompute the 3-D coefficient'
+      T_corrected_Nm: 179.898
+      V_line_peak_corrected_V: 386.41
+    bench_ldq:
+      Ld_mH: 0.0484
+      Lq_mH: 0.0501
+      Lq_over_Ld: 1.034
+      psi_pm_mWb: 55.248
+      I_probe_arms: 2.0
+      daxis_deg: 120.014
+      connection: 2P
+      geo_fingerprint: f497d5fa32aa5669
+      method: small-signal probe at the I=0 iron state — bench/LCR equivalent; loaded
+        (chord) values differ under saturation
+      solve_time_s: 66.1
+    saturation:
+      T_linear_Nm: 184.946
+      droop_pct: 0.0
+      T_reluctance_Nm: 0.6713
+    Km_Nm_sqrtW: 4.6113
+    Km_per_mass_Nm_sqrtW_kg: 0.1673
+    summary_shape_v: 17
+    torque_per_mass_Nm_kg: 6.816
+    power_per_mass_W_kg: 10136.2
+    loss_density_W_kg: 139.0
+    P_bearings_W: 348.84
+    P_windage_W: 88.892
+    P_mech_extra_W: 437.74
+    bearing_temp_c: 97.3
+    bearing_temp_source: coupled
+    bearing_temp_note: fed back from the previous iteration's thermal map — the shaft's
+      average temperature in the cross-section; the final map puts the seat at 98.7
+      °C (residual 1.4 K)
+    P_loss_total_incl_mech_W: 4268.0
+    P_shaft_net_W: 278906.4
+    P_shaft_convention: rotor power MINUS the mechanical losses — what leaves at the
+      coupling
+    efficiency_shaft: 0.9849
+    mech_losses:
+      rpm: 14200.0
+      bearings:
+      - end: A
+        bearing: 71910 CE/HCP4A
+        P_W: 174.422
+        M_total_Nm: 0.1173
+        M_rr_Nm: 0.06077
+        M_sl_Nm: 0.05653
+        M_seal_Nm: 0.0
+        nu_mm2_s: 3.873
+        F_r_N: 61.95
+        speed_ok: true
+        speed_verdict: ok
+        n_dm: 866200.0
+        limit_rpm: 21000.0
+      - end: B
+        bearing: 71910 CE/HCP4A
+        P_W: 174.422
+        M_total_Nm: 0.1173
+        M_rr_Nm: 0.06077
+        M_sl_Nm: 0.05653
+        M_seal_Nm: 0.0
+        nu_mm2_s: 3.873
+        F_r_N: 61.95
+        speed_ok: true
+        speed_verdict: ok
+        n_dm: 866200.0
+        limit_rpm: 21000.0
+      cards:
+      - 71910 CE/HCP4A
+      - 71910 CE/HCP4A
+      lubrication: grease
+      preload_n: 200.0
+      rotor_mass_kg: 12.634
+      rotor_mass_source: given by the caller
+      F_r_total_N: 123.8972161
+      M_bearings_Nm: 0.23459
+      windage:
+        P_W: 88.8917
+        P_gap_W: 60.9824
+        P_faces_W: 27.9092
+        M_total_Nm: 0.059778
+        gap_regime: vortex / transitional (Wendt)
+        face_regime: laminar disc
+        delta_mm: 0.6999999999999923
+      die: CIANO10 200 opt
+      config: L155 motor
+      model: SKF frictional-moment model (tables 2 and 3) + analytic windage — ANALYTIC,
+        not FEM
+      notes:
+      - 'Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward
+        the short side by a force that can exceed its own weight, and it would go
+        straight into F_r. Nor are coupling, belt or gear side loads, or any seal
+        on the shaft itself.'
+      - radial load = rotor weight, half each (no bearing span given)
+    coupling:
+      coil_temp_c: 97.8
+      magnet_temp_c: 104.2
+      bearing_temp_c: 97.3
+      bearing_temp_source: coupled
+      bearing_temp_note: fed back from the previous iteration's thermal map — the
+        shaft's average temperature in the cross-section; the final map puts the seat
+        at 98.7 °C (residual 1.4 K)
+      P_bearings_W: 348.84
+      P_windage_W: 88.892
+      P_mech_extra_W: 437.74
+      P_loss_total_incl_mech_W: 4268.0
+      efficiency_shaft: 0.9849
+      magnet_temp_max_c: 107.8
+      iterations: 2
+      em_runs: 2
+      converged: true
+      runaway: false
+      tol_K: 2.0
+      damping: 1.0
+      damping_final: 1.0
+      max_iter: 6
+      residual_coil_K: 0.1
+      residual_magnet_K: 1.1
+      residual_bearing_K: 1.4
+      tol_bearing_K: 5.0
+      history:
+      - iter: 1
+        T_coil_in: 96.3
+        T_magnet_in: 103.9
+        T_coil_out: 97.8
+        T_magnet_out: 104.2
+        T_magnet_max: 106.9
+        P_loss_W: 3816.7
+        T_em_Nm: 187.872
+        bearing_temp_c: 70.0
+        bearing_temp_source: assigned
+        P_mech_extra_W: 492.36
+        T_bearing_out: 97.3
+        damping_used: 1.0
+      - iter: 2
+        T_coil_in: 97.8
+        T_magnet_in: 104.2
+        T_coil_out: 97.9
+        T_magnet_out: 105.3
+        T_magnet_max: 107.8
+        P_loss_W: 3830.3
+        T_em_Nm: 187.855
+        bearing_temp_c: 97.3
+        bearing_temp_source: coupled
+        P_mech_extra_W: 437.74
+        T_bearing_out: 98.7
+      mechanical:
+        ok: true
+        temps_c:
+          rotor_core: 105.4
+          magnet: 105.3
+          shaft: 98.7
+          sleeve: 106.8
+        rpm: 14200.0
+        case: 14,200 rpm
+        sf_min: 0.4986683506865139
+        sf_min_part: rotor
+        sf_min_p05: 0.7801484160325314
+        rotor_od_growth_um: 114.63783796130386
+        od_growth:
+          max_um: 111.74440083122143
+          mean_um: 64.40567712149505
+          min_um: 29.598215793149933
+          r_mm: 65.09754904486414
+          part: sleeve
+          n_nodes: 512
+        air_gap:
+          clearance_um: 695.0638040419399
+          closed_um: 111.74440083122143
+          remaining_um: 583.3194032107185
+          closed_pct: 16.076855129184487
+          bore_r_mm: 65.79506380404194
+          rotor_r_mm: 65.10000000000001
+        interference_effective_mm: 0.04021063312224258
+        elapsed_s: 45.318
+        torque_nm: 179.898
+        note: solved at the operating 14,200 rpm of this run (the Mechanical tab's
+          proof rpm box says 20,000 rpm)
+        torque_note: 2-D mean 187.9 N·m × 3-D end-effect 0.9576
+        modes:
+          ok: true
+          body: rotor
+          support: free
+          n_modes: 12
+          rpm: 14200.0
+          f1_hz: 11364.8
+          f1_order: 2
+          n_flagged: 0
+          cached: false
+          elapsed_s: 18.521
+          tightest:
+            f_hz: 41783.2
+            order: 10
+            excitation: PWM carrier
+            excitation_hz: 48000.0
+            margin_pct: -13.0
+            flag: false
+        critical_speeds:
+          ok: true
+          rated_rpm: 14200.0
+          first_forward_rpm: 26207
+          first_forward_margin_pct: 45.8
+          n_forward_below_rated: 0
+          n_criticals: 2
+          verdict: subcritical — the machine runs below its first forward critical
+            speed
+          bearing_span_mm: 250.0
+          bearing_k_n_per_m: 150000000.0
+          cached: false
+          elapsed_s: 6.572
+      note: null
+      warning: null
+  materials:
+    slot_insulation: Al2O3
+    shaft: Steel_42CrMo4_QT
+    sleeve: M40X_UD_60
+  runs:
+    current:
+      recorded_at: '2026-09-14T12:31:30'
+      build_sig: fac6010d247c
+      assignment_sig: air_gap=air|in_band=air|magnet=N52UH_150C|out_band=air|rotor_core=B10AHV900M|shaft=Steel_42CrMo4_QT|sleeve=M40X_UD_60|slot=copper|slot_insulation=Al2O3|stator_core=B10AHV900M|wire_insulation=polyimide
+      settings:
+        sim.frequency: 1183.33
+        sim.drive: current
+        sim.iBlock: 0
+        sim.apply3d: 1
+        sim.eddyCoupled: true
+        sim.opMode: motor
+        sim.endWinding: 1.355
+        sim.targetKind: 'off'
+        mesh.componentMesh:
+          coil_rel: 0.5
+        mesh.rotorAngle: 0
+        sim.kvNoload: 1
+        sim.connection: 2P
+        sim.vDelta: 0
+        sim.excOnlyA: 0
+        sim.lastSolveCost:
+          frames: 111
+          wall_s: 241.1
+          warm: 75
+          at: 1789326055001
+        mesh.geoMesh: true
+        sim.daxisDeg: ''
+        sim.gamma: 15.0
+        sim.magnetTempC: '104.2'
+        sim.current: 562.067
+        sim.waveform: ''
+        mesh.structuredGap: true
+        sim.fSwGroup: 0
+        sim.starDelta: delta
+        sim.rpm: 14200.0
+        sim.coupledAdopted: 97.8|104.2|2|2026-09-14T12:30:04
+        mesh.poleCopy: false
+        sim.stepsPP: 36
+        sim.busCouple: true
+        sim.vPeak: 30
+        mesh.outerAir: 1.2
+        mesh.gapLayers: 1
+        mesh.meshSize: 4
+        sim.fSwCustom: false
+        sim.demag: true
+        sim.coilTemp: 97.8
+        mesh.ironTemplate: true
+        sim.dcLinkCableUH: ''
+        sim.dcLinkCapUF: ''
+        sim.targetValue: 228.45207142377322
+        sim.fSwitch: 24000
+        mesh.minSize: 0.3
+        mesh.nSectors: 2
+        sim.r25: 1
+        sim.endWindingGeo: 1.355
+        sim.coupled: true
+      summary:
+        rpm: 14200.0
+        I_phase_rms_A: 562.07
+        I_terminal_rms_A: 562.07
+        I_winding_rms_A: 324.51
+        gamma_deg: 15.0
+        connection: 2P
+        n_parallel: 2
+        wire_parallel: 1
+        turns_per_coil: 10
+        n_parallel_eff: 2
+        op_mode: motor
+        op_mode_requested: motor
+        drive: current
+        R_phase_ohm: 0.005253
+        R_line_line_ohm: 0.003502
+        R_phase_eq_star_ohm: 0.001751
+        Ld_eq_star_mH: 0.0135
+        Lq_eq_star_mH: 0.0165
+        Ld_mH: 0.0405
+        Lq_mH: 0.0495
+        psi_pm_Wb: 0.055426
+        saliency_Lq_over_Ld: 1.224
+        dq_note: ''
+        T_em_avg_Nm: 187.855
+        T_ripple_pct: 1.4
+        T_ripple_raw_pct: 1.4
+        T_ripple_filt_pct: 1.4
+        T_noise_floor_pct: 0.0
+        P_mech_W: 279344.1
+        V_phase_peak_V: 434.6
+        V_phase_rms_V: 292.1
+        V_line_peak_V: 403.5
+        V_line_rms_V: 291.0
+        star_delta: delta
+        strand_bonding: transposed
+        V_line_peak_solved_V: 403.5
+        V_line_rms_solved_V: 291.0
+        I_line_rms_A: 562.1
+        L0_mH: 0.11218
+        P_cu_circulating_W: 7.1
+        circulating_harmonics:
+        - harmonic: 3
+          E_rms_V: 25.66
+          R_ohm: 0.022331
+          X_ohm: 2.50221
+          I_circ_rms_A: 10.25
+          P_W: 7.0
+        - harmonic: 9
+          E_rms_V: 2.13
+          R_ohm: 0.158955
+          X_ohm: 7.50664
+          I_circ_rms_A: 0.28
+          P_W: 0.0
+        - harmonic: 15
+          E_rms_V: 0.59
+          R_ohm: 0.432202
+          X_ohm: 12.51106
+          I_circ_rms_A: 0.05
+          P_W: 0.0
+        KV_rpm_per_V_phase: 32.67
+        KV_rpm_per_V_line: 35.19
+        KV_noload_rpm_per_V_line: 34.46
+        V1_LL_V: 411.44
+        V1_phase_V: 411.44
+        THD_pct: 9.07
+        THD_LL_pct: 2.0
+        I1_A: 229.463
+        THD_I_pct: 0.0
+        V1_seed_peak_V: 411.437
+        V1_seed_delta_deg: 23.423
+        Kt_Nm_per_Arms: 0.5789
+        Kt_Nm_per_A_line: 0.3342
+        J_coil_A_per_mm2: 18.0
+        A_phase_mm2: 18.0
+        slot_fill_pct: 43.2
+        A_slot_mm2: 2502.1
+        A_copper_slotted_mm2: 1080.0
+        P_loss_total_W: 3830.3
+        B_gap_mean_T: 0.9348
+        P_core_W: 1447.6
+        P_core_terms:
+          stator:
+            hysteresis_W: 815.145
+            eddy_W: 282.311
+            excess_W: 293.275
+            k_f: 0.9
+            model: measured_surface
+          rotor:
+            hysteresis_W: 25.545
+            eddy_W: 14.036
+            excess_W: 17.294
+            k_f: 0.9
+            model: measured_surface
+        P_core_stator_W: 1390.7
+        P_core_rotor_W: 56.9
+        P_loss_stator_W: 3649.8
+        P_loss_rotor_W: 180.5
+        P_loss_split_measured: true
+        P_stranded_W: 2259.1
+        wire_split: 1
+        cu_ac_solved_ignores_wire_split: false
+        P_solid_W: 123.6
+        P_mag_W: 84.9
+        P_shaft_W: 29.0
+        P_sleeve_W: 9.6839
+        solid_loss_not_solved: false
+        magnet_segmentation:
+          slice_mm: 5.0
+          stack_mm: 155.0
+          n_bodies: 5
+          factor: 0.0218945
+          width_mm: 32.5481
+          width_min_mm: 32.5481
+          width_max_mm: 32.5481
+          model: Russell-Norsworthy axial segmentation, normalised to the solid stack
+            — MODEL, pending 3-D validation
+        eddy_warmup_frames: 75
+        demag_prepass_frames: 36
+        eddy_settled: true
+        eddy_capped: false
+        eddy_settle_residual: 0.00779
+        eddy_settle_tol: 0.02
+        warm_seeded: false
+        demag_seeded: false
+        efficiency: 0.9865
+        P_elec_in_solved_W: 280173.9
+        P_mech_balance_W: 277772.9
+        pwm_dc_residual_A: null
+        pwm_dc_residual_phase: null
+        pwm_dc_tol_A: 0.5
+        pwm_dc_unconverged: null
+        nonlinear_converged: true
+        nonlinear_resid_max: 5.58e-08
+        nonlinear_tol: 0.001
+        nonlinear_unconverged_frames: []
+        steps_snapped: false
+        n_steps_per_period: 36
+        n_steps_per_period_requested: 36
+        slip_nodes_per_period: 216
+        coil_temp_C: 97.8
+        end_winding_factor: 1.35
+        mass_total_kg: 27.559
+        mass_active_kg: 26.676
+        mass_area_source: CAD polygons
+        mass_components:
+        - name: Stator core (B10AHV900M)
+          material: electrical steel
+          density_kg_m3: 7600.0
+          volume_cm3: 1697.2
+          mass_kg: 12.899
+          note: CAD section 12167 mm² × stack, lamination k_f=0.900
+        - name: Copper windings (Cu)
+          material: copper
+          density_kg_m3: 8933.0
+          volume_cm3: 226.8
+          mass_kg: 2.026
+          note: measured copper section 1080 mm² × stack × k_end 1.355
+        - name: Magnets (N52UH_150C)
+          material: NdFeB
+          density_kg_m3: 7500.0
+          volume_cm3: 1027.2
+          mass_kg: 7.704
+          note: CAD magnet polygons 6627 mm² × stack
+        - name: Rotor back-iron (B10AHV900M)
+          material: electrical steel
+          density_kg_m3: 7600.0
+          volume_cm3: 500.0
+          mass_kg: 3.8
+          note: CAD section 3584 mm² × stack, lamination k_f=0.900
+        - name: Shaft (Steel_42CrMo4_QT)
+          material: shaft
+          density_kg_m3: 7850.0
+          volume_cm3: 112.5
+          mass_kg: 0.883
+          note: hollow shaft tube 726 mm² × stack — NOT in active mass
+        - name: Sleeve (M40X_UD_60)
+          material: carbon fibre
+          density_kg_m3: 1590.0
+          volume_cm3: 155.4
+          mass_kg: 0.247
+          note: retaining ring 1002.9 mm² × stack — NOT in active mass
+        part_states: {}
+        rotor_inertia:
+          J_kg_m2: 0.02766407923960738
+          J_kg_cm2: 276.641
+          rotor_iron: 0.009266053307992584
+          magnet: 0.016913538298173356
+          shaft: 0.00047660341700063306
+          sleeve: 0.0010078842164408055
+          J_modelled:
+            rotor_iron: 0.009266053307992584
+            magnet: 0.016913538298173356
+            shaft: 0.00047660341700063306
+            sleeve: 0.0010078842164408055
+          part_states: {}
+          source: CAD polygons
+        sleeve_hoop:
+          sigma_hoop_MPa: 14.334
+          r_mean_mm: 63.85
+          rpm: 14200.0
+          material: M40X_UD_60
+          density_kg_m3: 1590.0
+          thickness_mm: 2.5
+          strength_MPa: 2700.0
+          utilisation_pct: 0.53
+        demag:
+          per_magnet_spread_pct: 0.002
+          bh_kept_vol_pct: 98.437
+          bh_loss_pct: 1.563
+          br_kept_vol_pct: 99.215
+          loss_pct: 0.785
+          br_worst_pct: 98.4
+          area_derated_pct: 100.0
+          grade_nominal: 52.0
+          grade_effective: 51.2
+          magnet_name: N52UH_150C
+          energy_total_J: 289.68
+          energy_lost_J: 4.528
+        end3d:
+          k_flux: 0.9576417702186586
+          k_flux_self: 0.9586015786852167
+          fidelity: quick (n_stack=4, 3-point L-sweep)
+          generated_utc: '2026-09-13T20:34:42Z'
+          machine: 12s/10p OD 200
+          k_flux_vs_L:
+            '116.25': 0.94894
+            '155.0': 0.95764
+            '232.5': 0.9701
+          note: 'CIANO10 200 opt die as of 2026-09-13 (L155 motor: 10 turns 1x9 mm,
+            stack 155 mm, sleeve 2.5 mm M40X taken as air in 3-D), stack sweep 116/155/232
+            mm; solve 4577 s — user 2026-09-13: recompute the 3-D coefficient'
+          T_corrected_Nm: 179.898
+          V_line_peak_corrected_V: 386.41
+        bench_ldq:
+          Ld_mH: 0.0484
+          Lq_mH: 0.0501
+          Lq_over_Ld: 1.034
+          psi_pm_mWb: 55.248
+          I_probe_arms: 2.0
+          daxis_deg: 120.014
+          connection: 2P
+          geo_fingerprint: f497d5fa32aa5669
+          method: small-signal probe at the I=0 iron state — bench/LCR equivalent;
+            loaded (chord) values differ under saturation
+          solve_time_s: 66.1
+        saturation:
+          T_linear_Nm: 184.946
+          droop_pct: 0.0
+          T_reluctance_Nm: 0.6713
+        Km_Nm_sqrtW: 4.6113
+        Km_per_mass_Nm_sqrtW_kg: 0.1673
+        summary_shape_v: 17
+        torque_per_mass_Nm_kg: 6.816
+        power_per_mass_W_kg: 10136.2
+        loss_density_W_kg: 139.0
+        P_bearings_W: 348.84
+        P_windage_W: 88.892
+        P_mech_extra_W: 437.74
+        bearing_temp_c: 97.3
+        bearing_temp_source: coupled
+        bearing_temp_note: fed back from the previous iteration's thermal map — the
+          shaft's average temperature in the cross-section; the final map puts the
+          seat at 98.7 °C (residual 1.4 K)
+        P_loss_total_incl_mech_W: 4268.0
+        P_shaft_net_W: 278906.4
+        P_shaft_convention: rotor power MINUS the mechanical losses — what leaves
+          at the coupling
+        efficiency_shaft: 0.9849
+        mech_losses:
+          rpm: 14200.0
+          bearings:
+          - end: A
+            bearing: 71910 CE/HCP4A
+            P_W: 174.422
+            M_total_Nm: 0.1173
+            M_rr_Nm: 0.06077
+            M_sl_Nm: 0.05653
+            M_seal_Nm: 0.0
+            nu_mm2_s: 3.873
+            F_r_N: 61.95
+            speed_ok: true
+            speed_verdict: ok
+            n_dm: 866200.0
+            limit_rpm: 21000.0
+          - end: B
+            bearing: 71910 CE/HCP4A
+            P_W: 174.422
+            M_total_Nm: 0.1173
+            M_rr_Nm: 0.06077
+            M_sl_Nm: 0.05653
+            M_seal_Nm: 0.0
+            nu_mm2_s: 3.873
+            F_r_N: 61.95
+            speed_ok: true
+            speed_verdict: ok
+            n_dm: 866200.0
+            limit_rpm: 21000.0
+          cards:
+          - 71910 CE/HCP4A
+          - 71910 CE/HCP4A
+          lubrication: grease
+          preload_n: 200.0
+          rotor_mass_kg: 12.634
+          rotor_mass_source: given by the caller
+          F_r_total_N: 123.8972161
+          M_bearings_Nm: 0.23459
+          windage:
+            P_W: 88.8917
+            P_gap_W: 60.9824
+            P_faces_W: 27.9092
+            M_total_Nm: 0.059778
+            gap_regime: vortex / transitional (Wendt)
+            face_regime: laminar disc
+            delta_mm: 0.6999999999999923
+          die: CIANO10 200 opt
+          config: L155 motor
+          model: SKF frictional-moment model (tables 2 and 3) + analytic windage —
+            ANALYTIC, not FEM
+          notes:
+          - 'Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled
+            toward the short side by a force that can exceed its own weight, and it
+            would go straight into F_r. Nor are coupling, belt or gear side loads,
+            or any seal on the shaft itself.'
+          - radial load = rotor weight, half each (no bearing span given)
+        coupling:
+          coil_temp_c: 97.8
+          magnet_temp_c: 104.2
+          bearing_temp_c: 97.3
+          bearing_temp_source: coupled
+          bearing_temp_note: fed back from the previous iteration's thermal map —
+            the shaft's average temperature in the cross-section; the final map puts
+            the seat at 98.7 °C (residual 1.4 K)
+          P_bearings_W: 348.84
+          P_windage_W: 88.892
+          P_mech_extra_W: 437.74
+          P_loss_total_incl_mech_W: 4268.0
+          efficiency_shaft: 0.9849
+          magnet_temp_max_c: 107.8
+          iterations: 2
+          em_runs: 2
+          converged: true
+          runaway: false
+          tol_K: 2.0
+          damping: 1.0
+          damping_final: 1.0
+          max_iter: 6
+          residual_coil_K: 0.1
+          residual_magnet_K: 1.1
+          residual_bearing_K: 1.4
+          tol_bearing_K: 5.0
+          history:
+          - iter: 1
+            T_coil_in: 96.3
+            T_magnet_in: 103.9
+            T_coil_out: 97.8
+            T_magnet_out: 104.2
+            T_magnet_max: 106.9
+            P_loss_W: 3816.7
+            T_em_Nm: 187.872
+            bearing_temp_c: 70.0
+            bearing_temp_source: assigned
+            P_mech_extra_W: 492.36
+            T_bearing_out: 97.3
+            damping_used: 1.0
+          - iter: 2
+            T_coil_in: 97.8
+            T_magnet_in: 104.2
+            T_coil_out: 97.9
+            T_magnet_out: 105.3
+            T_magnet_max: 107.8
+            P_loss_W: 3830.3
+            T_em_Nm: 187.855
+            bearing_temp_c: 97.3
+            bearing_temp_source: coupled
+            P_mech_extra_W: 437.74
+            T_bearing_out: 98.7
+          mechanical:
+            ok: true
+            temps_c:
+              rotor_core: 105.4
+              magnet: 105.3
+              shaft: 98.7
+              sleeve: 106.8
+            rpm: 14200.0
+            case: 14,200 rpm
+            sf_min: 0.4986683506865139
+            sf_min_part: rotor
+            sf_min_p05: 0.7801484160325314
+            rotor_od_growth_um: 114.63783796130386
+            od_growth:
+              max_um: 111.74440083122143
+              mean_um: 64.40567712149505
+              min_um: 29.598215793149933
+              r_mm: 65.09754904486414
+              part: sleeve
+              n_nodes: 512
+            air_gap:
+              clearance_um: 695.0638040419399
+              closed_um: 111.74440083122143
+              remaining_um: 583.3194032107185
+              closed_pct: 16.076855129184487
+              bore_r_mm: 65.79506380404194
+              rotor_r_mm: 65.10000000000001
+            interference_effective_mm: 0.04021063312224258
+            elapsed_s: 45.318
+            torque_nm: 179.898
+            note: solved at the operating 14,200 rpm of this run (the Mechanical tab's
+              proof rpm box says 20,000 rpm)
+            torque_note: 2-D mean 187.9 N·m × 3-D end-effect 0.9576
+            modes:
+              ok: true
+              body: rotor
+              support: free
+              n_modes: 12
+              rpm: 14200.0
+              f1_hz: 11364.8
+              f1_order: 2
+              n_flagged: 0
+              cached: false
+              elapsed_s: 18.521
+              tightest:
+                f_hz: 41783.2
+                order: 10
+                excitation: PWM carrier
+                excitation_hz: 48000.0
+                margin_pct: -13.0
+                flag: false
+            critical_speeds:
+              ok: true
+              rated_rpm: 14200.0
+              first_forward_rpm: 26207
+              first_forward_margin_pct: 45.8
+              n_forward_below_rated: 0
+              n_criticals: 2
+              verdict: subcritical — the machine runs below its first forward critical
+                speed
+              bearing_span_mm: 250.0
+              bearing_k_n_per_m: 150000000.0
+              cached: false
+              elapsed_s: 6.572
+          note: null
+          warning: null
+      result:
+        efficiency_pct: 98.427
+        ripple_pct: 1.4
+        v_ll_peak_v: 386.408
+        loss_w: 3830.3
+        mass_kg: 27.559
+        p_core_w: 1447.6
+        p_stranded_w: 2259.1
+        p_solid_w: 123.6
+        v_phase_peak_v: 416.191
+        j_coil_a_mm2: 18.0
+        loss_mech_w: 437.732
+        end3d_k: 0.958
+        recorded_at: '2026-09-14T12:31:27'
+        build_sig: d50c7e22ac95
+      payload_file: runs/L155 motor/rated_1x9_mm-32470dfc.current.json.gz
+    pwm_voltage:
+      recorded_at: '2026-09-15T16:01:15'
+      build_sig: fac6010d247c
+      assignment_sig: air_gap=air|in_band=air|magnet=N52UH_150C|out_band=air|rotor_core=B10AHV900M|shaft=Steel_42CrMo4_QT|sleeve=M40X_UD_60|slot=copper|slot_insulation=Al2O3|stator_core=B10AHV900M|wire_insulation=polyimide
+      settings:
+        sim.frequency: 1183.33
+        sim.drive: pwm_voltage
+        sim.iBlock: 0
+        sim.apply3d: 1
+        sim.eddyCoupled: true
+        sim.opMode: motor
+        sim.endWinding: 1.355
+        sim.targetKind: 'off'
+        mesh.componentMesh:
+          coil_rel: 0.5
+        mesh.rotorAngle: 0
+        sim.kvNoload: 1
+        sim.connection: 2P
+        sim.vDelta: 0
+        sim.excOnlyA: 0
+        sim.lastSolveCost:
+          frames: 111
+          wall_s: 241.1
+          warm: 75
+          at: 1789326055001
+        mesh.geoMesh: true
+        sim.daxisDeg: ''
+        sim.gamma: 15.0
+        sim.magnetTempC: '133.0'
+        sim.current: 562.067
+        sim.waveform: ''
+        mesh.structuredGap: true
+        sim.fSwGroup: 0
+        sim.starDelta: delta
+        sim.rpm: 14200.0
+        sim.coupledAdopted: 117.6|133.0|2|2026-09-15T16:00:47
+        mesh.poleCopy: false
+        sim.stepsPP: 400
+        sim.busCouple: true
+        sim.vPeak: 30
+        mesh.outerAir: 1.2
+        mesh.gapLayers: 1
+        mesh.meshSize: 4
+        sim.fSwCustom: false
+        sim.demag: true
+        sim.coilTemp: 117.6
+        mesh.ironTemplate: true
+        sim.dcLinkCableUH: ''
+        sim.dcLinkCapUF: ''
+        sim.targetValue: 228.45207142377322
+        sim.fSwitch: 24000.0
+        mesh.minSize: 0.3
+        mesh.nSectors: 2
+        sim.r25: 1
+        sim.endWindingGeo: 1.355
+        sim.coupled: true
+        sim.vBus: 750.4
+        sim.vPhasePeak: 411.437
+        sim.vDeltaDeg: 23.423
+      summary:
+        rpm: 14200.0
+        I_phase_rms_A: 562.07
+        I_terminal_rms_A: 562.07
+        I_winding_rms_A: 324.51
+        gamma_deg: 15.0
+        connection: 2P
+        n_parallel: 2
+        wire_parallel: 1
+        turns_per_coil: 10
+        n_parallel_eff: 2
+        op_mode: motor
+        op_mode_requested: motor
+        drive: pwm_voltage
+        R_phase_ohm: 0.005566
+        R_line_line_ohm: 0.003711
+        R_phase_eq_star_ohm: 0.001855
+        Ld_eq_star_mH: 0.0175
+        Lq_eq_star_mH: 0.0169
+        Ld_mH: 0.0525
+        Lq_mH: 0.0506
+        psi_pm_Wb: 0.055248
+        saliency_Lq_over_Ld: 0.965
+        dq_note: ''
+        T_em_avg_Nm: 179.222
+        T_ripple_pct: 28.7
+        T_ripple_raw_pct: 28.7
+        T_ripple_filt_pct: 3.0
+        T_noise_floor_pct: 6.78
+        P_mech_W: 266506.2
+        V_phase_peak_V: 643.7
+        V_phase_rms_V: 307.2
+        V_line_peak_V: 593.2
+        V_line_rms_V: 305.7
+        star_delta: delta
+        delta_equivalent_star:
+          applied: true
+          drive: pwm_voltage
+          star_delta: delta
+          circuit: isolated-neutral star (drive.circuit_residual_ll)
+          v_bus_real_V: 750.4
+          v_bus_model_V: 1299.731
+          bus_scale: 1.732051
+          note: 'delta solved on the star equivalent: the isolated-neutral star circuit
+            on a model bus of √3·V_dc = 1299.7 V, whose branch voltage has the SAME
+            HARMONIC MAGNITUDES as the real bridge''s line-to-line voltage — so the
+            fundamental, the ripple rms and every loss are the real machine''s (exact
+            per order when the carrier count divides by 3, aggregate ripple within
+            0.4 % otherwise; PWM study 2026-09-13 §0.3).  The per-harmonic PHASES
+            carry the star-delta rotation, so the solved voltage is not the bridge''s
+            waveform in time: V_line_peak_solved_V is the model branch''s peak, up
+            to ⅔·√3·V_dc = 1.155·V_dc = 866 V, where a two-level bridge''s line voltage
+            peaks at V_dc = 750.4 V.  Quote the rms, not the peak.  Terminals mapped
+            back by the connection: I_line = √3·I_branch, V_LL = V_branch less its
+            zero sequence, plus the delta''s own circulating triplen loss.'
+        strand_bonding: transposed
+        V_line_peak_solved_V: 593.2
+        V_line_rms_solved_V: 305.7
+        I_line_rms_A: 544.3
+        L0_mH: 0.113035
+        P_cu_circulating_W: 18.4
+        circulating_harmonics:
+        - harmonic: 3
+          E_rms_V: 26.69
+          R_ohm: 0.054412
+          X_ohm: 2.52127
+          I_circ_rms_A: 10.58
+          P_W: 18.3
+        - harmonic: 9
+          E_rms_V: 2.39
+          R_ohm: 0.44518
+          X_ohm: 7.56382
+          I_circ_rms_A: 0.32
+          P_W: 0.1
+        - harmonic: 15
+          E_rms_V: 0.47
+          R_ohm: 1.226715
+          X_ohm: 12.60637
+          I_circ_rms_A: 0.04
+          P_W: 0.0
+        KV_rpm_per_V_phase: 22.06
+        KV_rpm_per_V_line: 23.94
+        KV_noload_rpm_per_V_line: 34.57
+        V1_LL_V: 411.44
+        V1_phase_V: 411.44
+        THD_pct: 33.91
+        THD_LL_pct: 32.28
+        I1_A: 221.358
+        THD_I_pct: 5.23
+        V1_seed_peak_V: 411.4391
+        V1_seed_delta_deg: 23.423
+        Kt_Nm_per_Arms: 0.5523
+        Kt_Nm_per_A_line: 0.3189
+        J_coil_A_per_mm2: 18.0
+        A_phase_mm2: 18.0
+        slot_fill_pct: 43.2
+        A_slot_mm2: 2502.1
+        A_copper_slotted_mm2: 1080.0
+        P_loss_total_W: 5824.1
+        B_gap_mean_T: 0.9097
+        P_core_W: 2414.5
+        P_core_terms:
+          stator:
+            hysteresis_W: 1306.038
+            eddy_W: 482.973
+            excess_W: 468.071
+            k_f: 0.9
+            model: measured_surface
+          rotor:
+            hysteresis_W: 54.628
+            eddy_W: 67.194
+            excess_W: 35.6
+            k_f: 0.9
+            model: measured_surface
+        P_core_stator_W: 2257.1
+        P_core_rotor_W: 157.4
+        P_loss_stator_W: 5514.1
+        P_loss_rotor_W: 310.0
+        P_loss_split_measured: true
+        P_stranded_W: 3257.0
+        wire_split: 1
+        cu_ac_solved_ignores_wire_split: false
+        P_solid_W: 152.6
+        P_mag_W: 122.8
+        P_shaft_W: 6.5
+        P_sleeve_W: 23.3328
+        solid_loss_not_solved: false
+        magnet_segmentation:
+          slice_mm: 5.0
+          stack_mm: 155.0
+          n_bodies: 5
+          factor: 0.0218372
+          width_mm: 32.5957
+          width_min_mm: 32.5157
+          width_max_mm: 32.757
+          model: Russell-Norsworthy axial segmentation, normalised to the solid stack
+            — MODEL, pending 3-D validation
+        eddy_warmup_frames: 4800
+        demag_prepass_frames: 0
+        eddy_settled: true
+        eddy_capped: false
+        eddy_settle_residual: 0.000268
+        eddy_settle_tol: 0.02
+        warm_seeded: false
+        demag_seeded: false
+        efficiency: 0.9786
+        P_elec_in_solved_W: 267842.2
+        P_mech_balance_W: 263939.1
+        pwm_dc_residual_A: 0.067
+        pwm_dc_residual_phase: B
+        pwm_dc_tol_A: 0.5
+        pwm_dc_unconverged: false
+        nonlinear_converged: true
+        nonlinear_resid_max: 1.0e-07
+        nonlinear_tol: 0.001
+        nonlinear_unconverged_frames: []
+        steps_snapped: false
+        n_steps_per_period: 400
+        n_steps_per_period_requested: 400
+        slip_nodes_per_period: 400
+        coil_temp_C: 117.6
+        end_winding_factor: 1.35
+        mass_total_kg: 27.559
+        mass_active_kg: 26.676
+        mass_area_source: CAD polygons
+        mass_components:
+        - name: Stator core (B10AHV900M)
+          material: electrical steel
+          density_kg_m3: 7600.0
+          volume_cm3: 1697.2
+          mass_kg: 12.899
+          note: CAD section 12167 mm² × stack, lamination k_f=0.900
+        - name: Copper windings (Cu)
+          material: copper
+          density_kg_m3: 8933.0
+          volume_cm3: 226.8
+          mass_kg: 2.026
+          note: measured copper section 1080 mm² × stack × k_end 1.355
+        - name: Magnets (N52UH_150C)
+          material: NdFeB
+          density_kg_m3: 7500.0
+          volume_cm3: 1027.2
+          mass_kg: 7.704
+          note: CAD magnet polygons 6627 mm² × stack
+        - name: Rotor back-iron (B10AHV900M)
+          material: electrical steel
+          density_kg_m3: 7600.0
+          volume_cm3: 500.0
+          mass_kg: 3.8
+          note: CAD section 3584 mm² × stack, lamination k_f=0.900
+        - name: Shaft (Steel_42CrMo4_QT)
+          material: shaft
+          density_kg_m3: 7850.0
+          volume_cm3: 112.5
+          mass_kg: 0.883
+          note: hollow shaft tube 726 mm² × stack — NOT in active mass
+        - name: Sleeve (M40X_UD_60)
+          material: carbon fibre
+          density_kg_m3: 1590.0
+          volume_cm3: 155.4
+          mass_kg: 0.247
+          note: retaining ring 1002.9 mm² × stack — NOT in active mass
+        part_states: {}
+        rotor_inertia:
+          J_kg_m2: 0.02766407923960738
+          J_kg_cm2: 276.641
+          rotor_iron: 0.009266053307992584
+          magnet: 0.016913538298173356
+          shaft: 0.00047660341700063306
+          sleeve: 0.0010078842164408055
+          J_modelled:
+            rotor_iron: 0.009266053307992584
+            magnet: 0.016913538298173356
+            shaft: 0.00047660341700063306
+            sleeve: 0.0010078842164408055
+          part_states: {}
+          source: CAD polygons
+        sleeve_hoop:
+          sigma_hoop_MPa: 14.334
+          r_mean_mm: 63.85
+          rpm: 14200.0
+          material: M40X_UD_60
+          density_kg_m3: 1590.0
+          thickness_mm: 2.5
+          strength_MPa: 2700.0
+          utilisation_pct: 0.53
+        demag:
+          per_magnet_spread_pct: 0.017
+          bh_kept_vol_pct: 98.043
+          bh_loss_pct: 1.957
+          br_kept_vol_pct: 99.016
+          loss_pct: 0.984
+          br_worst_pct: 82.6
+          area_derated_pct: 100.0
+          grade_nominal: 52.0
+          grade_effective: 51.0
+          magnet_name: N52UH_150C
+          energy_total_J: 289.68
+          energy_lost_J: 5.669
+        end3d: null
+        bench_ldq: null
+        saturation:
+          T_linear_Nm: 179.758
+          droop_pct: 0.3
+        Km_Nm_sqrtW: 4.4133
+        Km_per_mass_Nm_sqrtW_kg: 0.1601
+        summary_shape_v: 17
+        torque_per_mass_Nm_kg: 6.503
+        power_per_mass_W_kg: 9670.4
+        loss_density_W_kg: 211.3
+        I_phase_rms_solved_A: 314.253
+        P_bearings_W: 322.16
+        P_windage_W: 88.152
+        P_mech_extra_W: 410.31
+        bearing_temp_c: 122.9
+        bearing_temp_source: coupled
+        bearing_temp_note: fed back from the previous iteration's thermal map — the
+          shaft's average temperature in the cross-section; the final map puts the
+          seat at 122.4 °C (residual 0.5 K)
+        P_loss_total_incl_mech_W: 6234.5
+        P_shaft_net_W: 266095.9
+        P_shaft_convention: rotor power MINUS the mechanical losses — what leaves
+          at the coupling
+        efficiency_shaft: 0.9771
+        mech_losses:
+          rpm: 14200.0
+          bearings:
+          - end: A
+            bearing: 71910 CE/HCP4A
+            P_W: 161.08
+            M_total_Nm: 0.10832
+            M_rr_Nm: 0.0518
+            M_sl_Nm: 0.05653
+            M_seal_Nm: 0.0
+            nu_mm2_s: 2.621
+            F_r_N: 61.95
+            speed_ok: true
+            speed_verdict: ok
+            n_dm: 866200.0
+            limit_rpm: 21000.0
+          - end: B
+            bearing: 71910 CE/HCP4A
+            P_W: 161.08
+            M_total_Nm: 0.10832
+            M_rr_Nm: 0.0518
+            M_sl_Nm: 0.05653
+            M_seal_Nm: 0.0
+            nu_mm2_s: 2.621
+            F_r_N: 61.95
+            speed_ok: true
+            speed_verdict: ok
+            n_dm: 866200.0
+            limit_rpm: 21000.0
+          cards:
+          - 71910 CE/HCP4A
+          - 71910 CE/HCP4A
+          lubrication: grease
+          preload_n: 200.0
+          rotor_mass_kg: 12.634
+          rotor_mass_source: given by the caller
+          F_r_total_N: 123.8972161
+          M_bearings_Nm: 0.21665
+          windage:
+            P_W: 88.1523
+            P_gap_W: 60.4752
+            P_faces_W: 27.6771
+            M_total_Nm: 0.059281
+            gap_regime: vortex / transitional (Wendt)
+            face_regime: laminar disc
+            delta_mm: 0.6999999999999923
+          die: CIANO10 200 opt
+          config: L155 motor
+          model: SKF frictional-moment model (tables 2 and 3) + analytic windage —
+            ANALYTIC, not FEM
+          notes:
+          - 'Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled
+            toward the short side by a force that can exceed its own weight, and it
+            would go straight into F_r. Nor are coupling, belt or gear side loads,
+            or any seal on the shaft itself.'
+          - radial load = rotor weight, half each (no bearing span given)
+          - 'bearing A: 123 C is outside LGLT_2''s stated range -55…110 C'
+          - 'bearing B: 123 C is outside LGLT_2''s stated range -55…110 C'
+        coupling:
+          drive: pwm
+          inverter:
+            f_carrier_hz: 24000.0
+            f_carrier_eff_hz: 23666.67
+            carriers_per_period: 20
+            steps_per_period: 400
+            samples_per_carrier: 20.0
+            schedule: mixed
+            v_dc_V: 750.4
+            v_phase_peak_V: 411.437
+            v_delta_deg: 23.423
+            m: 0.6333
+            equivalent_star: true
+            v_bus_model_V: 1299.731
+            star_delta: delta
+            dc_residual_A: 0.067
+            dc_tol_A: 0.5
+            dc_unconverged: false
+            dc_band_A: 6.49
+            ripple_quotable: true
+            ripple_pct: 28.7
+            thd_i_pct: 5.23
+            thd_ll_pct: 32.28
+            I_phase_rms_solved_A: 314.25340590978203
+            modulator: ideal two-level, synchronous regular-sampled centre-aligned
+              sine-triangle; no dead time, no device drops, ideal bus
+            sources:
+              f_carrier_hz: the request
+              v_dc_V: the request
+              n_steps_per_period: 'the study''s rule: 20 FEM steps per carrier period'
+              v_phase_peak_V: the request
+              v_delta_deg: the request
+            target_I_phase_rms_A: 324.5095
+            i_tol_pct: 1.0
+            v_phase_peak_seed_V: 411.437
+            point_error_pct: -3.16
+            on_point: false
+          em:
+            T_em_avg_Nm: 179.222
+            T_ripple_pct: 28.7
+            P_stranded_W: 3257.0
+            P_core_W: 2414.5
+            P_solid_W: 152.6
+            P_mag_W: 122.8
+            P_shaft_W: 6.5
+            P_sleeve_W: 23.3328
+            P_loss_total_W: 5824.1
+            efficiency: 0.9786
+            THD_I_pct: 5.23
+            THD_LL_pct: 32.28
+            V_line_peak_V: 593.2
+            n_steps_per_period: 400
+          coil_temp_c: 117.6
+          magnet_temp_c: 133.0
+          bearing_temp_c: 122.9
+          bearing_temp_source: coupled
+          bearing_temp_note: fed back from the previous iteration's thermal map —
+            the shaft's average temperature in the cross-section; the final map puts
+            the seat at 122.4 °C (residual 0.5 K)
+          P_bearings_W: 322.16
+          P_windage_W: 88.152
+          P_mech_extra_W: 410.31
+          P_loss_total_incl_mech_W: 6234.5
+          efficiency_shaft: 0.9771
+          magnet_temp_max_c: 135.3
+          iterations: 2
+          em_runs: 2
+          converged: true
+          runaway: false
+          tol_K: 2.0
+          damping: 1.0
+          damping_final: 1.0
+          max_iter: 3
+          residual_coil_K: 1.6
+          residual_magnet_K: 0.7
+          residual_bearing_K: 0.5
+          tol_bearing_K: 5.0
+          history:
+          - iter: 1
+            T_coil_in: 97.8
+            T_magnet_in: 104.2
+            T_coil_out: 117.6
+            T_magnet_out: 133.0
+            T_magnet_max: 136.0
+            P_loss_W: 5961.3
+            T_em_Nm: 187.459
+            bearing_temp_c: 70.0
+            bearing_temp_source: assigned
+            P_mech_extra_W: 492.36
+            v_phase_peak_V: 411.437
+            I_phase_rms_solved_A: 325.0632411417129
+            T_ripple_pct: 28.8
+            pwm_dc_residual_A: 0.065
+            T_bearing_out: 122.9
+            damping_used: 1.0
+          - iter: 2
+            T_coil_in: 117.6
+            T_magnet_in: 133.0
+            T_coil_out: 116.0
+            T_magnet_out: 132.3
+            T_magnet_max: 135.3
+            P_loss_W: 5824.1
+            T_em_Nm: 179.222
+            bearing_temp_c: 122.9
+            bearing_temp_source: coupled
+            P_mech_extra_W: 410.31
+            v_phase_peak_V: 411.437
+            I_phase_rms_solved_A: 314.25340590978203
+            T_ripple_pct: 28.7
+            pwm_dc_residual_A: 0.067
+            T_bearing_out: 122.4
+          mechanical:
+            ok: true
+            temps_c:
+              rotor_core: 132.9
+              magnet: 132.3
+              shaft: 122.4
+              sleeve: 132.3
+            rpm: 14200.0
+            case: rated
+            sf_min: 0.4989310045319937
+            sf_min_part: rotor
+            sf_min_p05: 0.7809900475278002
+            rotor_od_growth_um: 117.91396888207376
+            od_growth:
+              max_um: 114.5587147083412
+              mean_um: 64.99697638403298
+              min_um: 29.238234694362543
+              r_mm: 65.09754904486414
+              part: sleeve
+              n_nodes: 512
+            air_gap:
+              clearance_um: 695.0638040419399
+              closed_um: 114.5587147083412
+              remaining_um: 580.5050893335987
+              closed_pct: 16.481755206091663
+              bore_r_mm: 65.79506380404194
+              rotor_r_mm: 65.10000000000001
+            interference_effective_mm: 0.05285116405864544
+            elapsed_s: 14.587
+            torque_nm: 179.222
+            modes:
+              ok: true
+              body: rotor
+              support: free
+              n_modes: 12
+              rpm: 14200.0
+              f_switch_hz: 24000.0
+              f1_hz: 11364.8
+              f1_order: 2
+              n_flagged: 4
+              cached: false
+              elapsed_s: 6.398
+              tightest:
+                f_hz: 24028.1
+                order: 3
+                excitation: PWM carrier
+                excitation_hz: 24000.0
+                margin_pct: 0.1
+                flag: true
+            critical_speeds:
+              ok: true
+              rated_rpm: 14200.0
+              campbell:
+                rpm:
+                - 0.0
+                - 1065.0
+                - 2130.0
+                - 3195.0
+                - 4260.0
+                - 5325.0
+                - 6390.0
+                - 7455.0
+                - 8520.0
+                - 9585.0
+                - 10650.0
+                - 11715.0
+                - 12780.0
+                - 13845.0
+                - 14910.0
+                - 15975.0
+                - 17040.0
+                - 18105.0
+                - 19170.0
+                - 20235.0
+                - 21300.0
+                - 22365.0
+                - 23430.0
+                - 24495.0
+                - 25560.0
+                - 26625.0
+                - 27690.0
+                - 28755.0
+                - 29820.0
+                - 30885.0
+                - 31950.0
+                - 33015.0
+                - 34080.0
+                - 35145.0
+                - 36210.0
+                - 37275.0
+                - 38340.0
+                - 39405.0
+                - 40470.0
+                - 41535.0
+                - 42600.0
+                forward:
+                - - 445.9837327721082
+                  - 1282.4937398255388
+                  - 2321.1116222043534
+                - - 446.419592059209
+                  - 1286.78844178357
+                  - 2329.011988040466
+                - - 446.8544834759834
+                  - 1291.0696478292125
+                  - 2336.9139284804346
+                - - 447.2884055243827
+                  - 1295.337004545373
+                  - 2344.816757768115
+                - - 447.7213567608359
+                  - 1299.5901652331945
+                  - 2352.7197867215455
+                - - 448.15333578737915
+                  - 1303.8287900754242
+                  - 2360.622323029614
+                - - 448.5843412574445
+                  - 1308.0525462884243
+                  - 2368.523671548408
+                - - 449.01437187489125
+                  - 1312.2611082665674
+                  - 2376.4231346082665
+                - - 449.4434263908999
+                  - 1316.4541577174173
+                  - 2384.320012322629
+                - - 449.8715036077944
+                  - 1320.631383786485
+                  - 2392.213602904631
+                - - 450.29860237483206
+                  - 1324.7924831735
+                  - 2400.1032029857574
+                - - 450.7247215925414
+                  - 1328.937160239146
+                  - 2407.98810794125
+                - - 451.1498602063676
+                  - 1333.0651271016745
+                  - 2415.867612218802
+                - - 451.5740172104148
+                  - 1337.1761037246454
+                  - 2423.7410096699978
+                - - 451.99719164528113
+                  - 1341.2698179948163
+                  - 2431.607593887462
+                - - 452.4193826024068
+                  - 1345.3460057908537
+                  - 2439.4666585433547
+                - - 452.84058921367813
+                  - 1349.4044110419754
+                  - 2447.3174977309022
+                - - 453.2608106615437
+                  - 1353.4447857778891
+                  - 2455.159406309669
+                - - 453.6800461732691
+                  - 1357.4668901695268
+                  - 2462.991680250598
+                - - 454.0982950215793
+                  - 1361.47049256068
+                  - 2470.8136169862087
+                - - 454.51555652587746
+                  - 1365.455369488974
+                  - 2478.624515757201
+                - - 454.9318300471472
+                  - 1369.4213057009158
+                  - 2486.423677964239
+                - - 455.3471149928118
+                  - 1373.368094156367
+                  - 2494.2104075177554
+                - - 455.76141081398515
+                  - 1377.2955360241945
+                  - 2501.9840111900376
+                - - 456.1747170064166
+                  - 1381.2034406704809
+                  - 2509.7437989630034
+                - - 456.5870331081867
+                  - 1385.0916256390667
+                  - 2517.489084379909
+                - - 456.9983587009499
+                  - 1388.9599166230955
+                  - 2525.219184892356
+                - - 457.40869340786406
+                  - 1392.8081474288133
+                  - 2532.933422206934
+                - - 457.81803689517426
+                  - 1396.6361599331415
+                  - 2540.631122629666
+                - - 458.22638887102397
+                  - 1400.4438040332925
+                  - 2548.3116174079946
+                - - 458.6337490857951
+                  - 1404.2309375893265
+                  - 2555.974243069596
+                - - 459.0401173280337
+                  - 1407.9974263608485
+                  - 2563.6183417575103
+                - - 459.44549343031457
+                  - 1411.7431439357304
+                  - 2571.24326156229
+                - - 459.8498772624132
+                  - 1415.4679716548058
+                  - 2578.84835684876
+                - - 460.2532687384396
+                  - 1419.171798529578
+                  - 2586.432988579198
+                - - 460.65566780792324
+                  - 1422.8545211539904
+                  - 2593.9965246302663
+                - - 461.05707445969455
+                  - 1426.5160436121992
+                  - 2601.538340105437
+                - - 461.45748872362407
+                  - 1430.1562773801265
+                  - 2609.057817641143
+                - - 461.8569106680993
+                  - 1433.7751412232387
+                  - 2616.5543477059177
+                - - 462.25534039670515
+                  - 1437.372561089551
+                  - 2624.027328893818
+                - - 462.6527780532051
+                  - 1440.948469998517
+                  - 2631.476168210053
+                backward:
+                - - 445.9837327719019
+                  - 1282.4937398254049
+                  - 2321.111622203957
+                - - 445.5469071658214
+                  - 1278.185901920106
+                  - 2313.2135130177803
+                - - 445.10911683715216
+                  - 1273.8652944008059
+                  - 2305.3183385326843
+                - - 444.67036343601944
+                  - 1269.5322897813967
+                  - 2297.426772533382
+                - - 444.23064866907737
+                  - 1265.1872665592966
+                  - 2289.5394842682394
+                - - 443.7899742892778
+                  - 1260.830609012659
+                  - 2281.657138188811
+                - - 443.3483421043981
+                  - 1256.4627069873293
+                  - 2273.780393694799
+                - - 442.90575397471235
+                  - 1252.0839556782973
+                  - 2265.909904887371
+                - - 442.4622118122638
+                  - 1247.6947554041037
+                  - 2258.046320328992
+                - - 442.01771758421603
+                  - 1243.2955113728478
+                  - 2250.190282811309
+                - - 441.5722733089241
+                  - 1238.8866334436839
+                  - 2242.342429129478
+                - - 441.12588106238644
+                  - 1234.4685358816982
+                  - 2234.5033898653287
+                - - 440.6785429708464
+                  - 1230.0416371070414
+                  - 2226.6737891771654
+                - - 440.2302612161105
+                  - 1225.606359438404
+                  - 2218.8542445975263
+                - - 439.78103803361944
+                  - 1221.163128832711
+                  - 2211.0453668391388
+                - - 439.33087571731096
+                  - 1216.712374619928
+                  - 2203.247759608569
+                - - 438.8797766102948
+                  - 1212.2545292336456
+                  - 2195.4620194268127
+                - - 438.42774311468514
+                  - 1207.79002793822
+                  - 2187.6887354591804
+                - - 437.97477768754464
+                  - 1203.3193085536927
+                  - 2179.9284893516447
+                - - 437.52088284064195
+                  - 1198.8428111774042
+                  - 2172.1818550770467
+                - - 437.0660611441251
+                  - 1194.3609779024725
+                  - 2164.449398786432
+                - - 436.6103152202489
+                  - 1189.8742525365926
+                  - 2156.7316786700885
+                - - 436.1536477500745
+                  - 1185.3830803188825
+                  - 2149.0292448257965
+                - - 435.6960614695148
+                  - 1180.8879076348267
+                  - 2141.3426391350667
+                - - 435.23755917346386
+                  - 1176.3891817323104
+                  - 2133.6723951470913
+                - - 434.77814371179994
+                  - 1171.8873504375317
+                  - 2126.019037969394
+                - - 434.31781799178253
+                  - 1167.3828618713871
+                  - 2118.3830841672943
+                - - 433.8565849772964
+                  - 1162.8761641661388
+                  - 2110.7650416703614
+                - - 433.3944476896295
+                  - 1158.3677051854172
+                  - 2103.1654096851266
+                - - 432.9314092081416
+                  - 1153.857932244511
+                  - 2095.584678618052
+                - - 432.46747267039643
+                  - 1149.3472918339603
+                  - 2088.0233300014525
+                - - 432.0026412682988
+                  - 1144.8362293460293
+                  - 2080.4818364304288
+                - - 431.53691825506246
+                  - 1140.325188803078
+                  - 2072.9606615045714
+                - - 431.0703069385454
+                  - 1135.8146125914918
+                  - 2065.460259776692
+                - - 430.6028106895484
+                  - 1131.3049411985826
+                  - 2057.981076709512
+                - - 430.1344329319946
+                  - 1126.7966129534934
+                  - 2050.523548636792
+                - - 429.6651771484909
+                  - 1122.2900637739288
+                  - 2043.0881027335827
+                - - 429.19504688221383
+                  - 1117.7857269166796
+                  - 2035.6751569906544
+                - - 428.7240457346326
+                  - 1113.2840327344504
+                  - 2028.2851201957628
+                - - 428.2521773626946
+                  - 1108.7854084382911
+                  - 2020.9183919213908
+                - - 427.77944548452655
+                  - 1104.2902778654538
+                  - 2013.5753625181617
+                n_points: 41
+              rpm_plot_max: 18460.0
+              f_switch_hz: 24000.0
+              first_forward_rpm: 27413
+              first_forward_margin_pct: 48.2
+              n_forward_below_rated: 0
+              n_criticals: 2
+              verdict: subcritical — the machine runs below its first forward critical
+                speed
+              bearing_span_mm: 250.0
+              bearing_k_n_per_m: 200000000.0
+              cached: false
+              elapsed_s: 3.244
+          note: null
+          warning: null
+      payload_file: runs/L155 motor/rated_1x9_mm-32470dfc.pwm_voltage.json.gz
+- name: peak 1x9 mm
+  mode: motor
+  saved_at: '2026-09-27T21:55:55'
+  current_arms: 770.47
+  rpm: 20000.0
+  gamma_deg: 15.0
+  note: '1x9 mm single strip, 10 turns, delta — recomputed 2026-09-13 to 230.0 N·m
+    ×k (k_3d 0.9576 re-measured; coupled: winding 139.2 °C, magnets 165.1 °C, bearing
+    155.6 °C) — build_sig restamped 2026-09-16 to fac6010d247c: only the shaft part-state
+    moved (reference -> included), identical physics, no re-run.'
+  torque_nm: 249.67
+  power_kw: 521.64
+  star_delta: delta
+  result:
+    efficiency_pct: 98.169
+    ripple_pct: 1.0
+    v_ll_peak_v: 539.535
+    loss_w: 7851.8
+    mass_kg: 27.559
+    p_core_w: 2203.8
+    p_stranded_w: 5301.9
+    p_solid_w: 346.1
+    v_phase_peak_v: 605.517
+    j_coil_a_mm2: 24.7
+    loss_mech_w: 1104.067
+    end3d_k: 0.958
+    recorded_at: '2026-09-13T23:08:24'
+    build_sig: d50c7e22ac95
+  mesh:
+    sim.frequency: 1666.67
+    sim.drive: current
+    sim.iBlock: 0
+    sim.apply3d: 1
+    sim.eddyCoupled: true
+    sim.opMode: motor
+    sim.endWinding: 1.355
+    sim.targetKind: 'off'
+    mesh.componentMesh:
+      coil_rel: 0.5
+    mesh.rotorAngle: 0
+    sim.kvNoload: 1
+    sim.connection: 2P
+    sim.vDelta: 0
+    sim.excOnlyA: 0
+    sim.lastSolveCost:
+      frames: 111
+      wall_s: 216.1
+      warm: 75
+      at: 1789322718073
+    mesh.geoMesh: true
+    sim.daxisDeg: ''
+    sim.gamma: 15.0
+    sim.magnetTempC: '165.1'
+    sim.current: 770.4698447140432
+    sim.waveform: ''
+    mesh.structuredGap: true
+    sim.fSwGroup: 0
+    sim.starDelta: delta
+    sim.rpm: 20000.0
+    sim.coupledAdopted: 139.2|165.1|1|2026-09-13T23:07:22
+    mesh.poleCopy: false
+    sim.stepsPP: 36
+    sim.busCouple: true
+    sim.vPeak: 30
+    mesh.outerAir: 1.2
+    mesh.gapLayers: 1
+    mesh.meshSize: 4
+    sim.fSwCustom: false
+    sim.demag: true
+    sim.coilTemp: 139.2
+    mesh.ironTemplate: true
+    sim.dcLinkCableUH: ''
+    sim.dcLinkCapUF: ''
+    sim.targetValue: 228.45207142377322
+    sim.fSwitch: 24000
+    mesh.minSize: 0.3
+    mesh.nSectors: 2
+    sim.r25: 1
+    sim.endWindingGeo: 1.355
+    sim.coupled: true
+  summary:
+    rpm: 20000.0
+    I_phase_rms_A: 770.47
+    I_terminal_rms_A: 770.47
+    I_winding_rms_A: 444.83
+    gamma_deg: 15.0
+    connection: 2P
+    n_parallel: 2
+    wire_parallel: 1
+    turns_per_coil: 10
+    n_parallel_eff: 2
+    op_mode: motor
+    op_mode_requested: motor
+    drive: current
+    R_phase_ohm: 0.005908
+    R_line_line_ohm: 0.003939
+    R_phase_eq_star_ohm: 0.001969
+    Ld_eq_star_mH: 0.0231
+    Lq_eq_star_mH: 0.0175
+    Ld_mH: 0.0694
+    Lq_mH: 0.0524
+    psi_pm_Wb: 0.055426
+    saliency_Lq_over_Ld: 0.755
+    dq_note: ''
+    T_em_avg_Nm: 239.972
+    T_ripple_pct: 1.0
+    T_ripple_raw_pct: 1.0
+    T_ripple_filt_pct: 0.9
+    T_noise_floor_pct: 0.01
+    P_mech_W: 502596.7
+    V_phase_peak_V: 632.3
+    V_phase_rms_V: 407.1
+    V_line_peak_V: 563.4
+    V_line_rms_V: 404.1
+    star_delta: delta
+    strand_bonding: transposed
+    V_line_peak_solved_V: 563.4
+    V_line_rms_solved_V: 404.1
+    I_line_rms_A: 770.5
+    L0_mH: 0.117165
+    P_cu_circulating_W: 17.9
+    circulating_harmonics:
+    - harmonic: 3
+      E_rms_V: 49.33
+      R_ohm: 0.03312
+      X_ohm: 3.68084
+      I_circ_rms_A: 13.4
+      P_W: 17.8
+    - harmonic: 9
+      E_rms_V: 2.74
+      R_ohm: 0.25082
+      X_ohm: 11.04253
+      I_circ_rms_A: 0.25
+      P_W: 0.0
+    - harmonic: 15
+      E_rms_V: 1.17
+      R_ohm: 0.68622
+      X_ohm: 18.40421
+      I_circ_rms_A: 0.06
+      P_W: 0.0
+    KV_rpm_per_V_phase: 31.63
+    KV_rpm_per_V_line: 35.5
+    KV_noload_rpm_per_V_line: 34.46
+    V1_LL_V: 571.48
+    V1_phase_V: 571.48
+    THD_pct: 12.29
+    THD_LL_pct: 1.21
+    I1_A: 314.543
+    THD_I_pct: 0.0
+    V1_seed_peak_V: 571.4778
+    V1_seed_delta_deg: 35.73
+    Kt_Nm_per_Arms: 0.5395
+    Kt_Nm_per_A_line: 0.3115
+    J_coil_A_per_mm2: 24.7
+    A_phase_mm2: 18.0
+    slot_fill_pct: 43.2
+    A_slot_mm2: 2502.1
+    A_copper_slotted_mm2: 1080.0
+    P_loss_total_W: 7851.8
+    B_gap_mean_T: 0.8607
+    P_core_W: 2203.8
+    P_core_terms:
+      stator:
+        hysteresis_W: 1088.146
+        eddy_W: 520.846
+        excess_W: 471.731
+        k_f: 0.9
+        model: measured_surface
+      rotor:
+        hysteresis_W: 50.126
+        eddy_W: 35.253
+        excess_W: 37.674
+        k_f: 0.9
+        model: measured_surface
+    P_core_stator_W: 2080.7
+    P_core_rotor_W: 123.1
+    P_loss_stator_W: 7382.6
+    P_loss_rotor_W: 469.2
+    P_loss_split_measured: true
+    P_stranded_W: 5301.9
+    wire_split: 1
+    cu_ac_solved_ignores_wire_split: false
+    P_solid_W: 346.1
+    P_mag_W: 264.2
+    P_shaft_W: 52.4
+    P_sleeve_W: 29.4863
+    solid_loss_not_solved: false
+    magnet_segmentation:
+      slice_mm: 5.0
+      stack_mm: 155.0
+      n_bodies: 5
+      factor: 0.0218945
+      width_mm: 32.5481
+      width_min_mm: 32.5481
+      width_max_mm: 32.5481
+      model: Russell-Norsworthy axial segmentation, normalised to the solid stack
+        — MODEL, pending 3-D validation
+    eddy_warmup_frames: 39
+    demag_prepass_frames: 36
+    eddy_settled: true
+    eddy_capped: false
+    eddy_settle_residual: 0.000483
+    eddy_settle_tol: 0.02
+    warm_seeded: true
+    demag_seeded: false
+    efficiency: 0.9846
+    P_elec_in_solved_W: 504350.2
+    P_mech_balance_W: 500046.8
+    nonlinear_converged: true
+    nonlinear_resid_max: 2.88e-08
+    nonlinear_tol: 0.001
+    nonlinear_unconverged_frames: []
+    steps_snapped: false
+    n_steps_per_period: 36
+    n_steps_per_period_requested: 36
+    slip_nodes_per_period: 216
+    coil_temp_C: 139.2
+    end_winding_factor: 1.35
+    mass_total_kg: 27.559
+    mass_active_kg: 26.676
+    mass_area_source: CAD polygons
+    mass_components:
+    - name: Stator core (B10AHV900M)
+      material: electrical steel
+      density_kg_m3: 7600.0
+      volume_cm3: 1697.2
+      mass_kg: 12.899
+      note: CAD section 12167 mm² × stack, lamination k_f=0.900
+    - name: Copper windings (Cu)
+      material: copper
+      density_kg_m3: 8933.0
+      volume_cm3: 226.8
+      mass_kg: 2.026
+      note: measured copper section 1080 mm² × stack × k_end 1.355
+    - name: Magnets (N52UH_150C)
+      material: NdFeB
+      density_kg_m3: 7500.0
+      volume_cm3: 1027.2
+      mass_kg: 7.704
+      note: CAD magnet polygons 6627 mm² × stack
+    - name: Rotor back-iron (B10AHV900M)
+      material: electrical steel
+      density_kg_m3: 7600.0
+      volume_cm3: 500.0
+      mass_kg: 3.8
+      note: CAD section 3584 mm² × stack, lamination k_f=0.900
+    - name: Shaft (Steel_42CrMo4_QT)
+      material: shaft
+      density_kg_m3: 7850.0
+      volume_cm3: 112.5
+      mass_kg: 0.883
+      note: hollow shaft tube 726 mm² × stack — NOT in active mass
+    - name: Sleeve (M40X_UD_60)
+      material: carbon fibre
+      density_kg_m3: 1590.0
+      volume_cm3: 155.4
+      mass_kg: 0.247
+      note: retaining ring 1002.9 mm² × stack — NOT in active mass
+    part_states: {}
+    rotor_inertia:
+      J_kg_m2: 0.02766407923960738
+      J_kg_cm2: 276.641
+      rotor_iron: 0.009266053307992584
+      magnet: 0.016913538298173356
+      shaft: 0.00047660341700063306
+      sleeve: 0.0010078842164408055
+      J_modelled:
+        rotor_iron: 0.009266053307992584
+        magnet: 0.016913538298173356
+        shaft: 0.00047660341700063306
+        sleeve: 0.0010078842164408055
+      part_states: {}
+      source: CAD polygons
+    sleeve_hoop:
+      sigma_hoop_MPa: 28.434
+      r_mean_mm: 63.85
+      rpm: 20000.0
+      material: M40X_UD_60
+      density_kg_m3: 1590.0
+      thickness_mm: 2.5
+      strength_MPa: 2700.0
+      utilisation_pct: 1.05
+    demag:
+      per_magnet_spread_pct: 0.06
+      bh_kept_vol_pct: 95.733
+      bh_loss_pct: 4.267
+      br_kept_vol_pct: 97.617
+      loss_pct: 2.383
+      br_worst_pct: 18.4
+      area_derated_pct: 100.0
+      grade_nominal: 52.0
+      grade_effective: 49.8
+      magnet_name: N52UH_150C
+      energy_total_J: 289.68
+      energy_lost_J: 12.361
+    end3d:
+      k_flux: 0.9576417702186586
+      k_flux_self: 0.9586015786852167
+      fidelity: quick (n_stack=4, 3-point L-sweep)
+      generated_utc: '2026-09-13T20:34:42Z'
+      machine: 12s/10p OD 200
+      k_flux_vs_L:
+        '116.25': 0.94894
+        '155.0': 0.95764
+        '232.5': 0.9701
+      note: 'CIANO10 200 opt die as of 2026-09-13 (L155 motor: 10 turns 1x9 mm, stack
+        155 mm, sleeve 2.5 mm M40X taken as air in 3-D), stack sweep 116/155/232 mm;
+        solve 4577 s — user 2026-09-13: recompute the 3-D coefficient'
+      T_corrected_Nm: 229.807
+      V_line_peak_corrected_V: 539.54
+    bench_ldq:
+      Ld_mH: 0.0484
+      Lq_mH: 0.0501
+      Lq_over_Ld: 1.034
+      psi_pm_mWb: 55.248
+      I_probe_arms: 2.0
+      daxis_deg: 120.014
+      connection: 2P
+      geo_fingerprint: f497d5fa32aa5669
+      method: small-signal probe at the I=0 iron state — bench/LCR equivalent; loaded
+        (chord) values differ under saturation
+      solve_time_s: 66.1
+    saturation:
+      T_linear_Nm: 253.86
+      droop_pct: 5.47
+      T_reluctance_Nm: 1.2615
+    Km_Nm_sqrtW: 4.0522
+    Km_per_mass_Nm_sqrtW_kg: 0.147
+    summary_shape_v: 17
+    torque_per_mass_Nm_kg: 8.708
+    power_per_mass_W_kg: 18237.1
+    loss_density_W_kg: 284.9
+    P_bearings_W: 855.15
+    P_windage_W: 248.917
+    P_mech_extra_W: 1104.06
+    bearing_temp_c: 155.6
+    bearing_temp_source: thermal
+    bearing_temp_note: from the last thermal map — the shaft's average temperature
+      in the cross-section; the final map puts the seat at 153.9 °C (residual 1.7
+      K)
+    P_loss_total_incl_mech_W: 8955.8
+    P_shaft_net_W: 501492.6
+    P_shaft_convention: rotor power MINUS the mechanical losses — what leaves at the
+      coupling
+    efficiency_shaft: 0.9825
+    mech_losses:
+      rpm: 20000.0
+      bearings:
+      - end: A
+        bearing: 71910 CE/HCP4A
+        P_W: 427.574
+        M_total_Nm: 0.20415
+        M_rr_Nm: 0.06802
+        M_sl_Nm: 0.13613
+        M_seal_Nm: 0.0
+        nu_mm2_s: 1.776
+        F_r_N: 61.95
+        speed_ok: true
+        speed_verdict: at the limit
+        n_dm: 1220000.0
+        limit_rpm: 21000.0
+      - end: B
+        bearing: 71910 CE/HCP4A
+        P_W: 427.574
+        M_total_Nm: 0.20415
+        M_rr_Nm: 0.06802
+        M_sl_Nm: 0.13613
+        M_seal_Nm: 0.0
+        nu_mm2_s: 1.776
+        F_r_N: 61.95
+        speed_ok: true
+        speed_verdict: at the limit
+        n_dm: 1220000.0
+        limit_rpm: 21000.0
+      cards:
+      - 71910 CE/HCP4A
+      - 71910 CE/HCP4A
+      lubrication: grease
+      preload_n: 200.0
+      rotor_mass_kg: 12.634
+      rotor_mass_source: given by the caller
+      F_r_total_N: 123.8972161
+      M_bearings_Nm: 0.4083
+      windage:
+        P_W: 248.9173
+        P_gap_W: 140.9693
+        P_faces_W: 107.948
+        M_total_Nm: 0.118849
+        gap_regime: vortex / transitional (Wendt)
+        face_regime: turbulent disc
+        delta_mm: 0.6999999999999923
+      die: CIANO10 200 opt
+      config: L155 motor
+      model: SKF frictional-moment model (tables 2 and 3) + analytic windage — ANALYTIC,
+        not FEM
+      notes:
+      - 'Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward
+        the short side by a force that can exceed its own weight, and it would go
+        straight into F_r. Nor are coupling, belt or gear side loads, or any seal
+        on the shaft itself.'
+      - radial load = rotor weight, half each (no bearing span given)
+      - 'bearing A: 156 C is outside LGLT_2''s stated range -55…110 C'
+      - 'bearing B: 156 C is outside LGLT_2''s stated range -55…110 C'
+    coupling:
+      coil_temp_c: 139.2
+      magnet_temp_c: 165.1
+      bearing_temp_c: 155.6
+      bearing_temp_source: thermal
+      bearing_temp_note: from the last thermal map — the shaft's average temperature
+        in the cross-section; the final map puts the seat at 153.9 °C (residual 1.7
+        K)
+      P_bearings_W: 855.15
+      P_windage_W: 248.917
+      P_mech_extra_W: 1104.06
+      P_loss_total_incl_mech_W: 8955.8
+      efficiency_shaft: 0.9825
+      magnet_temp_max_c: 169.3
+      iterations: 1
+      em_runs: 1
+      converged: true
+      runaway: false
+      tol_K: 2.0
+      damping: 1.0
+      damping_final: 1.0
+      max_iter: 6
+      residual_coil_K: 1.0
+      residual_magnet_K: 0.4
+      residual_bearing_K: 1.7
+      tol_bearing_K: 5.0
+      history:
+      - iter: 1
+        T_coil_in: 139.2
+        T_magnet_in: 165.1
+        T_coil_out: 140.2
+        T_magnet_out: 164.7
+        T_magnet_max: 169.3
+        P_loss_W: 7851.8
+        T_em_Nm: 239.972
+        bearing_temp_c: 155.6
+        bearing_temp_source: thermal
+        P_mech_extra_W: 1104.06
+        T_bearing_out: 153.9
+      mechanical:
+        ok: true
+        temps_c:
+          rotor_core: 164.5
+          magnet: 164.7
+          shaft: 153.9
+          sleeve: 163.7
+        rpm: 20000.0
+        case: 20,000 rpm
+        sf_min: 0.26100187182783585
+        sf_min_part: rotor
+        sf_min_p05: 0.37524487312459953
+        rotor_od_growth_um: 236.5484915461232
+        od_growth:
+          max_um: 231.13451444640944
+          mean_um: 134.7581591581216
+          min_um: 62.44406452694619
+          r_mm: 65.09754904486414
+          part: sleeve
+          n_nodes: 512
+        air_gap:
+          clearance_um: 695.0638040419399
+          closed_um: 231.13451444640944
+          remaining_um: 463.92928959553046
+          closed_pct: 33.25371183225401
+          bore_r_mm: 65.79506380404194
+          rotor_r_mm: 65.10000000000001
+        interference_effective_mm: 0.06789585470962223
+        elapsed_s: 33.372
+        torque_nm: 229.807
+        torque_note: 2-D mean 240 N·m × 3-D end-effect 0.9576
+        modes:
+          ok: true
+          body: rotor
+          support: free
+          n_modes: 12
+          rpm: 20000.0
+          f1_hz: 11364.8
+          f1_order: 2
+          n_flagged: 4
+          cached: false
+          elapsed_s: 11.392
+          tightest:
+            f_hz: 24028.1
+            order: 3
+            excitation: PWM carrier
+            excitation_hz: 24000.0
+            margin_pct: 0.1
+            flag: true
+        critical_speeds:
+          ok: true
+          rated_rpm: 20000.0
+          first_forward_rpm: 26207
+          first_forward_margin_pct: 23.7
+          n_forward_below_rated: 0
+          n_criticals: 3
+          verdict: subcritical — the machine runs below its first forward critical
+            speed
+          bearing_span_mm: 250.0
+          bearing_k_n_per_m: 150000000.0
+          cached: false
+          elapsed_s: 6.965
+      note: null
+      warning: null
+  materials:
+    slot_insulation: Al2O3
+    shaft: Steel_42CrMo4_QT
+    sleeve: M40X_UD_60
+  runs:
+    current:
+      recorded_at: '2026-09-13T23:08:26'
+      build_sig: fac6010d247c
+      assignment_sig: air_gap=air|in_band=air|magnet=N52UH_150C|out_band=air|rotor_core=B10AHV900M|shaft=Steel_42CrMo4_QT|sleeve=M40X_UD_60|slot=copper|slot_insulation=Al2O3|stator_core=B10AHV900M|wire_insulation=polyimide
+      settings:
+        sim.frequency: 1666.67
+        sim.drive: current
+        sim.iBlock: 0
+        sim.apply3d: 1
+        sim.eddyCoupled: true
+        sim.opMode: motor
+        sim.endWinding: 1.355
+        sim.targetKind: 'off'
+        mesh.componentMesh:
+          coil_rel: 0.5
+        mesh.rotorAngle: 0
+        sim.kvNoload: 1
+        sim.connection: 2P
+        sim.vDelta: 0
+        sim.excOnlyA: 0
+        sim.lastSolveCost:
+          frames: 111
+          wall_s: 216.1
+          warm: 75
+          at: 1789322718073
+        mesh.geoMesh: true
+        sim.daxisDeg: ''
+        sim.gamma: 15.0
+        sim.magnetTempC: '165.1'
+        sim.current: 770.4698447140432
+        sim.waveform: ''
+        mesh.structuredGap: true
+        sim.fSwGroup: 0
+        sim.starDelta: delta
+        sim.rpm: 20000.0
+        sim.coupledAdopted: 139.2|165.1|1|2026-09-13T23:07:22
+        mesh.poleCopy: false
+        sim.stepsPP: 36
+        sim.busCouple: true
+        sim.vPeak: 30
+        mesh.outerAir: 1.2
+        mesh.gapLayers: 1
+        mesh.meshSize: 4
+        sim.fSwCustom: false
+        sim.demag: true
+        sim.coilTemp: 139.2
+        mesh.ironTemplate: true
+        sim.dcLinkCableUH: ''
+        sim.dcLinkCapUF: ''
+        sim.targetValue: 228.45207142377322
+        sim.fSwitch: 24000
+        mesh.minSize: 0.3
+        mesh.nSectors: 2
+        sim.r25: 1
+        sim.endWindingGeo: 1.355
+        sim.coupled: true
+      summary:
+        rpm: 20000.0
+        I_phase_rms_A: 770.47
+        I_terminal_rms_A: 770.47
+        I_winding_rms_A: 444.83
+        gamma_deg: 15.0
+        connection: 2P
+        n_parallel: 2
+        wire_parallel: 1
+        turns_per_coil: 10
+        n_parallel_eff: 2
+        op_mode: motor
+        op_mode_requested: motor
+        drive: current
+        R_phase_ohm: 0.005908
+        R_line_line_ohm: 0.003939
+        R_phase_eq_star_ohm: 0.001969
+        Ld_eq_star_mH: 0.0231
+        Lq_eq_star_mH: 0.0175
+        Ld_mH: 0.0694
+        Lq_mH: 0.0524
+        psi_pm_Wb: 0.055426
+        saliency_Lq_over_Ld: 0.755
+        dq_note: ''
+        T_em_avg_Nm: 239.972
+        T_ripple_pct: 1.0
+        T_ripple_raw_pct: 1.0
+        T_ripple_filt_pct: 0.9
+        T_noise_floor_pct: 0.01
+        P_mech_W: 502596.7
+        V_phase_peak_V: 632.3
+        V_phase_rms_V: 407.1
+        V_line_peak_V: 563.4
+        V_line_rms_V: 404.1
+        star_delta: delta
+        strand_bonding: transposed
+        V_line_peak_solved_V: 563.4
+        V_line_rms_solved_V: 404.1
+        I_line_rms_A: 770.5
+        L0_mH: 0.117165
+        P_cu_circulating_W: 17.9
+        circulating_harmonics:
+        - harmonic: 3
+          E_rms_V: 49.33
+          R_ohm: 0.03312
+          X_ohm: 3.68084
+          I_circ_rms_A: 13.4
+          P_W: 17.8
+        - harmonic: 9
+          E_rms_V: 2.74
+          R_ohm: 0.25082
+          X_ohm: 11.04253
+          I_circ_rms_A: 0.25
+          P_W: 0.0
+        - harmonic: 15
+          E_rms_V: 1.17
+          R_ohm: 0.68622
+          X_ohm: 18.40421
+          I_circ_rms_A: 0.06
+          P_W: 0.0
+        KV_rpm_per_V_phase: 31.63
+        KV_rpm_per_V_line: 35.5
+        KV_noload_rpm_per_V_line: 34.46
+        V1_LL_V: 571.48
+        V1_phase_V: 571.48
+        THD_pct: 12.29
+        THD_LL_pct: 1.21
+        I1_A: 314.543
+        THD_I_pct: 0.0
+        V1_seed_peak_V: 571.4778
+        V1_seed_delta_deg: 35.73
+        Kt_Nm_per_Arms: 0.5395
+        Kt_Nm_per_A_line: 0.3115
+        J_coil_A_per_mm2: 24.7
+        A_phase_mm2: 18.0
+        slot_fill_pct: 43.2
+        A_slot_mm2: 2502.1
+        A_copper_slotted_mm2: 1080.0
+        P_loss_total_W: 7851.8
+        B_gap_mean_T: 0.8607
+        P_core_W: 2203.8
+        P_core_terms:
+          stator:
+            hysteresis_W: 1088.146
+            eddy_W: 520.846
+            excess_W: 471.731
+            k_f: 0.9
+            model: measured_surface
+          rotor:
+            hysteresis_W: 50.126
+            eddy_W: 35.253
+            excess_W: 37.674
+            k_f: 0.9
+            model: measured_surface
+        P_core_stator_W: 2080.7
+        P_core_rotor_W: 123.1
+        P_loss_stator_W: 7382.6
+        P_loss_rotor_W: 469.2
+        P_loss_split_measured: true
+        P_stranded_W: 5301.9
+        wire_split: 1
+        cu_ac_solved_ignores_wire_split: false
+        P_solid_W: 346.1
+        P_mag_W: 264.2
+        P_shaft_W: 52.4
+        P_sleeve_W: 29.4863
+        solid_loss_not_solved: false
+        magnet_segmentation:
+          slice_mm: 5.0
+          stack_mm: 155.0
+          n_bodies: 5
+          factor: 0.0218945
+          width_mm: 32.5481
+          width_min_mm: 32.5481
+          width_max_mm: 32.5481
+          model: Russell-Norsworthy axial segmentation, normalised to the solid stack
+            — MODEL, pending 3-D validation
+        eddy_warmup_frames: 39
+        demag_prepass_frames: 36
+        eddy_settled: true
+        eddy_capped: false
+        eddy_settle_residual: 0.000483
+        eddy_settle_tol: 0.02
+        warm_seeded: true
+        demag_seeded: false
+        efficiency: 0.9846
+        P_elec_in_solved_W: 504350.2
+        P_mech_balance_W: 500046.8
+        nonlinear_converged: true
+        nonlinear_resid_max: 2.88e-08
+        nonlinear_tol: 0.001
+        nonlinear_unconverged_frames: []
+        steps_snapped: false
+        n_steps_per_period: 36
+        n_steps_per_period_requested: 36
+        slip_nodes_per_period: 216
+        coil_temp_C: 139.2
+        end_winding_factor: 1.35
+        mass_total_kg: 27.559
+        mass_active_kg: 26.676
+        mass_area_source: CAD polygons
+        mass_components:
+        - name: Stator core (B10AHV900M)
+          material: electrical steel
+          density_kg_m3: 7600.0
+          volume_cm3: 1697.2
+          mass_kg: 12.899
+          note: CAD section 12167 mm² × stack, lamination k_f=0.900
+        - name: Copper windings (Cu)
+          material: copper
+          density_kg_m3: 8933.0
+          volume_cm3: 226.8
+          mass_kg: 2.026
+          note: measured copper section 1080 mm² × stack × k_end 1.355
+        - name: Magnets (N52UH_150C)
+          material: NdFeB
+          density_kg_m3: 7500.0
+          volume_cm3: 1027.2
+          mass_kg: 7.704
+          note: CAD magnet polygons 6627 mm² × stack
+        - name: Rotor back-iron (B10AHV900M)
+          material: electrical steel
+          density_kg_m3: 7600.0
+          volume_cm3: 500.0
+          mass_kg: 3.8
+          note: CAD section 3584 mm² × stack, lamination k_f=0.900
+        - name: Shaft (Steel_42CrMo4_QT)
+          material: shaft
+          density_kg_m3: 7850.0
+          volume_cm3: 112.5
+          mass_kg: 0.883
+          note: hollow shaft tube 726 mm² × stack — NOT in active mass
+        - name: Sleeve (M40X_UD_60)
+          material: carbon fibre
+          density_kg_m3: 1590.0
+          volume_cm3: 155.4
+          mass_kg: 0.247
+          note: retaining ring 1002.9 mm² × stack — NOT in active mass
+        part_states: {}
+        rotor_inertia:
+          J_kg_m2: 0.02766407923960738
+          J_kg_cm2: 276.641
+          rotor_iron: 0.009266053307992584
+          magnet: 0.016913538298173356
+          shaft: 0.00047660341700063306
+          sleeve: 0.0010078842164408055
+          J_modelled:
+            rotor_iron: 0.009266053307992584
+            magnet: 0.016913538298173356
+            shaft: 0.00047660341700063306
+            sleeve: 0.0010078842164408055
+          part_states: {}
+          source: CAD polygons
+        sleeve_hoop:
+          sigma_hoop_MPa: 28.434
+          r_mean_mm: 63.85
+          rpm: 20000.0
+          material: M40X_UD_60
+          density_kg_m3: 1590.0
+          thickness_mm: 2.5
+          strength_MPa: 2700.0
+          utilisation_pct: 1.05
+        demag:
+          per_magnet_spread_pct: 0.06
+          bh_kept_vol_pct: 95.733
+          bh_loss_pct: 4.267
+          br_kept_vol_pct: 97.617
+          loss_pct: 2.383
+          br_worst_pct: 18.4
+          area_derated_pct: 100.0
+          grade_nominal: 52.0
+          grade_effective: 49.8
+          magnet_name: N52UH_150C
+          energy_total_J: 289.68
+          energy_lost_J: 12.361
+        end3d:
+          k_flux: 0.9576417702186586
+          k_flux_self: 0.9586015786852167
+          fidelity: quick (n_stack=4, 3-point L-sweep)
+          generated_utc: '2026-09-13T20:34:42Z'
+          machine: 12s/10p OD 200
+          k_flux_vs_L:
+            '116.25': 0.94894
+            '155.0': 0.95764
+            '232.5': 0.9701
+          note: 'CIANO10 200 opt die as of 2026-09-13 (L155 motor: 10 turns 1x9 mm,
+            stack 155 mm, sleeve 2.5 mm M40X taken as air in 3-D), stack sweep 116/155/232
+            mm; solve 4577 s — user 2026-09-13: recompute the 3-D coefficient'
+          T_corrected_Nm: 229.807
+          V_line_peak_corrected_V: 539.54
+        bench_ldq:
+          Ld_mH: 0.0484
+          Lq_mH: 0.0501
+          Lq_over_Ld: 1.034
+          psi_pm_mWb: 55.248
+          I_probe_arms: 2.0
+          daxis_deg: 120.014
+          connection: 2P
+          geo_fingerprint: f497d5fa32aa5669
+          method: small-signal probe at the I=0 iron state — bench/LCR equivalent;
+            loaded (chord) values differ under saturation
+          solve_time_s: 66.1
+        saturation:
+          T_linear_Nm: 253.86
+          droop_pct: 5.47
+          T_reluctance_Nm: 1.2615
+        Km_Nm_sqrtW: 4.0522
+        Km_per_mass_Nm_sqrtW_kg: 0.147
+        summary_shape_v: 17
+        torque_per_mass_Nm_kg: 8.708
+        power_per_mass_W_kg: 18237.1
+        loss_density_W_kg: 284.9
+        P_bearings_W: 855.15
+        P_windage_W: 248.917
+        P_mech_extra_W: 1104.06
+        bearing_temp_c: 155.6
+        bearing_temp_source: thermal
+        bearing_temp_note: from the last thermal map — the shaft's average temperature
+          in the cross-section; the final map puts the seat at 153.9 °C (residual
+          1.7 K)
+        P_loss_total_incl_mech_W: 8955.8
+        P_shaft_net_W: 501492.6
+        P_shaft_convention: rotor power MINUS the mechanical losses — what leaves
+          at the coupling
+        efficiency_shaft: 0.9825
+        mech_losses:
+          rpm: 20000.0
+          bearings:
+          - end: A
+            bearing: 71910 CE/HCP4A
+            P_W: 427.574
+            M_total_Nm: 0.20415
+            M_rr_Nm: 0.06802
+            M_sl_Nm: 0.13613
+            M_seal_Nm: 0.0
+            nu_mm2_s: 1.776
+            F_r_N: 61.95
+            speed_ok: true
+            speed_verdict: at the limit
+            n_dm: 1220000.0
+            limit_rpm: 21000.0
+          - end: B
+            bearing: 71910 CE/HCP4A
+            P_W: 427.574
+            M_total_Nm: 0.20415
+            M_rr_Nm: 0.06802
+            M_sl_Nm: 0.13613
+            M_seal_Nm: 0.0
+            nu_mm2_s: 1.776
+            F_r_N: 61.95
+            speed_ok: true
+            speed_verdict: at the limit
+            n_dm: 1220000.0
+            limit_rpm: 21000.0
+          cards:
+          - 71910 CE/HCP4A
+          - 71910 CE/HCP4A
+          lubrication: grease
+          preload_n: 200.0
+          rotor_mass_kg: 12.634
+          rotor_mass_source: given by the caller
+          F_r_total_N: 123.8972161
+          M_bearings_Nm: 0.4083
+          windage:
+            P_W: 248.9173
+            P_gap_W: 140.9693
+            P_faces_W: 107.948
+            M_total_Nm: 0.118849
+            gap_regime: vortex / transitional (Wendt)
+            face_regime: turbulent disc
+            delta_mm: 0.6999999999999923
+          die: CIANO10 200 opt
+          config: L155 motor
+          model: SKF frictional-moment model (tables 2 and 3) + analytic windage —
+            ANALYTIC, not FEM
+          notes:
+          - 'Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled
+            toward the short side by a force that can exceed its own weight, and it
+            would go straight into F_r. Nor are coupling, belt or gear side loads,
+            or any seal on the shaft itself.'
+          - radial load = rotor weight, half each (no bearing span given)
+          - 'bearing A: 156 C is outside LGLT_2''s stated range -55…110 C'
+          - 'bearing B: 156 C is outside LGLT_2''s stated range -55…110 C'
+        coupling:
+          coil_temp_c: 139.2
+          magnet_temp_c: 165.1
+          bearing_temp_c: 155.6
+          bearing_temp_source: thermal
+          bearing_temp_note: from the last thermal map — the shaft's average temperature
+            in the cross-section; the final map puts the seat at 153.9 °C (residual
+            1.7 K)
+          P_bearings_W: 855.15
+          P_windage_W: 248.917
+          P_mech_extra_W: 1104.06
+          P_loss_total_incl_mech_W: 8955.8
+          efficiency_shaft: 0.9825
+          magnet_temp_max_c: 169.3
+          iterations: 1
+          em_runs: 1
+          converged: true
+          runaway: false
+          tol_K: 2.0
+          damping: 1.0
+          damping_final: 1.0
+          max_iter: 6
+          residual_coil_K: 1.0
+          residual_magnet_K: 0.4
+          residual_bearing_K: 1.7
+          tol_bearing_K: 5.0
+          history:
+          - iter: 1
+            T_coil_in: 139.2
+            T_magnet_in: 165.1
+            T_coil_out: 140.2
+            T_magnet_out: 164.7
+            T_magnet_max: 169.3
+            P_loss_W: 7851.8
+            T_em_Nm: 239.972
+            bearing_temp_c: 155.6
+            bearing_temp_source: thermal
+            P_mech_extra_W: 1104.06
+            T_bearing_out: 153.9
+          mechanical:
+            ok: true
+            temps_c:
+              rotor_core: 164.5
+              magnet: 164.7
+              shaft: 153.9
+              sleeve: 163.7
+            rpm: 20000.0
+            case: 20,000 rpm
+            sf_min: 0.26100187182783585
+            sf_min_part: rotor
+            sf_min_p05: 0.37524487312459953
+            rotor_od_growth_um: 236.5484915461232
+            od_growth:
+              max_um: 231.13451444640944
+              mean_um: 134.7581591581216
+              min_um: 62.44406452694619
+              r_mm: 65.09754904486414
+              part: sleeve
+              n_nodes: 512
+            air_gap:
+              clearance_um: 695.0638040419399
+              closed_um: 231.13451444640944
+              remaining_um: 463.92928959553046
+              closed_pct: 33.25371183225401
+              bore_r_mm: 65.79506380404194
+              rotor_r_mm: 65.10000000000001
+            interference_effective_mm: 0.06789585470962223
+            elapsed_s: 33.372
+            torque_nm: 229.807
+            torque_note: 2-D mean 240 N·m × 3-D end-effect 0.9576
+            modes:
+              ok: true
+              body: rotor
+              support: free
+              n_modes: 12
+              rpm: 20000.0
+              f1_hz: 11364.8
+              f1_order: 2
+              n_flagged: 4
+              cached: false
+              elapsed_s: 11.392
+              tightest:
+                f_hz: 24028.1
+                order: 3
+                excitation: PWM carrier
+                excitation_hz: 24000.0
+                margin_pct: 0.1
+                flag: true
+            critical_speeds:
+              ok: true
+              rated_rpm: 20000.0
+              first_forward_rpm: 26207
+              first_forward_margin_pct: 23.7
+              n_forward_below_rated: 0
+              n_criticals: 3
+              verdict: subcritical — the machine runs below its first forward critical
+                speed
+              bearing_span_mm: 250.0
+              bearing_k_n_per_m: 150000000.0
+              cached: false
+              elapsed_s: 6.965
+          note: null
+          warning: null
+      result:
+        efficiency_pct: 98.169
+        ripple_pct: 1.0
+        v_ll_peak_v: 539.535
+        loss_w: 7851.8
+        mass_kg: 27.559
+        p_core_w: 2203.8
+        p_stranded_w: 5301.9
+        p_solid_w: 346.1
+        v_phase_peak_v: 605.517
+        j_coil_a_mm2: 24.7
+        loss_mech_w: 1104.067
+        end3d_k: 0.958
+        recorded_at: '2026-09-13T23:08:24'
+        build_sig: d50c7e22ac95
+      payload_file: runs/L155 motor/peak_1x9_mm-90cb058f.current.json.gz
+    pwm_voltage:
+      recorded_at: '2026-09-27T21:55:55'
+      build_sig: d50c7e22ac95
+      assignment_sig: air_gap=air|in_band=air|magnet=N52UH_150C|out_band=air|rotor_core=B10AHV900M|shaft=Steel_42CrMo4_QT|sleeve=M40X_UD_60|slot=copper|slot_insulation=Al2O3|stator_core=B10AHV900M|wire_insulation=polyimide
+      settings:
+        sim.frequency: 1666.67
+        sim.drive: current
+        sim.iBlock: 0
+        sim.apply3d: 1
+        sim.eddyCoupled: true
+        sim.opMode: motor
+        sim.endWinding: 1.355
+        sim.targetKind: 'off'
+        mesh.componentMesh:
+          coil_rel: 0.5
+        mesh.rotorAngle: 0
+        sim.kvNoload: 1
+        sim.connection: 2P
+        sim.vDelta: 0
+        sim.excOnlyA: 0
+        sim.lastSolveCost:
+          frames: 111
+          wall_s: 216.1
+          warm: 75
+          at: 1789322718073
+        mesh.geoMesh: true
+        sim.daxisDeg: ''
+        sim.gamma: 15.0
+        sim.magnetTempC: '165.1'
+        sim.current: 770.4698447140432
+        sim.waveform: ''
+        mesh.structuredGap: true
+        sim.fSwGroup: 0
+        sim.starDelta: delta
+        sim.rpm: 20000.0
+        sim.coupledAdopted: 139.2|165.1|1|2026-09-13T23:07:22
+        mesh.poleCopy: false
+        sim.stepsPP: 36
+        sim.busCouple: true
+        sim.vPeak: 30
+        mesh.outerAir: 1.2
+        mesh.gapLayers: 1
+        mesh.meshSize: 4
+        sim.fSwCustom: false
+        sim.demag: true
+        sim.coilTemp: 139.2
+        mesh.ironTemplate: true
+        sim.dcLinkCableUH: ''
+        sim.dcLinkCapUF: ''
+        sim.targetValue: 228.45207142377322
+        sim.fSwitch: 24000
+        mesh.minSize: 0.3
+        mesh.nSectors: 2
+        sim.r25: 1
+        sim.endWindingGeo: 1.355
+        sim.coupled: true
+      summary:
+        rpm: 20000.0
+        I_phase_rms_A: 770.47
+        I_terminal_rms_A: 770.47
+        I_winding_rms_A: 444.83
+        gamma_deg: 15.0
+        connection: 2P
+        n_parallel: 2
+        wire_parallel: 1
+        turns_per_coil: 10
+        n_parallel_eff: 2
+        op_mode: motor
+        op_mode_requested: motor
+        drive: pwm_voltage
+        R_phase_ohm: 0.005908
+        R_line_line_ohm: 0.003939
+        R_phase_eq_star_ohm: 0.001969
+        Ld_eq_star_mH: 0.0201
+        Lq_eq_star_mH: 0.0202
+        Ld_mH: 0.0604
+        Lq_mH: 0.0605
+        Ld_inc_mH: 0.0604
+        Lq_inc_mH: 0.0605
+        Ldq_inc_mH: -0.0018
+        ldq_method: frozen-permeability incremental at the point
+        Ld_chord_mH: 0.0976
+        Lq_chord_mH: 0.0514
+        psi_pm_sag_pct: 4.96
+        psi_pm_frozen_Wb: 0.052507
+        psi_pm_q_frozen_Wb: -0.005983
+        inc_ldq:
+          Ld_mH: 0.060385
+          Lq_mH: 0.060471
+          Ldq_mH: -0.00178
+          saliency_Lq_over_Ld: 1.0014
+          psi_d_pm_frozen_Wb: 0.0525066
+          psi_q_pm_frozen_Wb: -0.00598335
+          i_d_A: -64.594
+          i_q_A: 670.563
+          samples: 4
+          rotor_positions:
+          - 0
+          - 910
+          - 1820
+          - 2730
+          spread_pct:
+            Ld: 1.66
+            Lq: 2.19
+          reciprocity_pct: 0.0
+          superposition_pct: 2.197
+          method: 'frozen-permeability incremental: the per-element ν of the converged
+            loaded field is held fixed and a unit d- and q-axis current solved on
+            it (dψ/di, exact for a linear operator). Magnetostatic — on a coupled-eddy
+            run the field''s own ψ/i also carries the AC redistribution, which is
+            impedance and not inductance.'
+        psi_pm_Wb: 0.055248
+        saliency_Lq_over_Ld: 1.001
+        dq_note: 'chord (ψd − ψ_PM)/i_d = 0.0976 mH — not an inductance here: ~52%
+          of that numerator is the magnet flux the load moved (-5.0% of ψ_PM) plus
+          the q-axis cross term; Ld/Lq above are the frozen-permeability incremental
+          values'
+        psi_pm_probe_skipped: false
+        T_em_avg_Nm: 259.072
+        T_ripple_pct: 24.1
+        T_ripple_raw_pct: 24.1
+        T_ripple_filt_pct: 24.1
+        T_ripple_pp_Nm: 62.32651306288602
+        T_ripple_raw_pp_Nm: 62.32651306288602
+        T_ripple_pct_available: true
+        T_ripple_pct_reason: null
+        T_noise_floor_pct: null
+        torque_filter_applied: false
+        P_mech_W: 542599.4
+        V_phase_peak_V: 997.2
+        V_phase_rms_V: 531.3
+        V_line_peak_V: 866.5
+        V_line_rms_V: 525.3
+        star_delta: delta
+        delta_equivalent_star:
+          applied: true
+          drive: pwm_voltage
+          star_delta: delta
+          circuit: isolated-neutral star (drive.circuit_residual_ll)
+          v_bus_real_V: 750.4
+          v_bus_model_V: 1299.731
+          bus_scale: 1.732051
+          note: 'delta solved on the star equivalent: the isolated-neutral star circuit
+            on a model bus of √3·V_dc = 1299.7 V, whose branch voltage has the SAME
+            HARMONIC MAGNITUDES as the real bridge''s line-to-line voltage — so the
+            fundamental, the ripple rms and every loss are the real machine''s (exact
+            per order when the carrier count divides by 3, aggregate ripple within
+            0.4 % otherwise; PWM study 2026-09-13 §0.3).  The per-harmonic PHASES
+            carry the star-delta rotation, so the solved voltage is not the bridge''s
+            waveform in time: V_line_peak_solved_V is the model branch''s peak, up
+            to ⅔·√3·V_dc = 1.155·V_dc = 866 V, where a two-level bridge''s line voltage
+            peaks at V_dc = 750.4 V.  Quote the rms, not the peak.  Terminals mapped
+            back by the connection: I_line = √3·I_branch, V_LL = V_branch less its
+            zero sequence, plus the delta''s own circulating triplen loss.'
+        strand_bonding: transposed
+        V_line_peak_solved_V: 866.5
+        V_line_rms_solved_V: 525.3
+        I_line_rms_A: 827.4
+        L0_mH: 0.11635
+        P_cu_circulating_W: 72.7
+        circulating_harmonics:
+        - harmonic: 1.0
+          E_rms_V: 0.03
+          R_ohm: 0.011115
+          X_ohm: 1.21842
+          I_circ_rms_A: 0.03
+          P_W: 0.0
+        - harmonic: 2.0
+          E_rms_V: 0.18
+          R_ohm: 0.026738
+          X_ohm: 2.43684
+          I_circ_rms_A: 0.07
+          P_W: 0.0
+        - harmonic: 3.0
+          E_rms_V: 64.5
+          R_ohm: 0.052776
+          X_ohm: 3.65525
+          I_circ_rms_A: 17.64
+          P_W: 49.3
+        - harmonic: 4.0
+          E_rms_V: 0.15
+          R_ohm: 0.08923
+          X_ohm: 4.87367
+          I_circ_rms_A: 0.03
+          P_W: 0.0
+        - harmonic: 5.0
+          E_rms_V: 0.02
+          R_ohm: 0.136098
+          X_ohm: 6.09209
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 6.0
+          E_rms_V: 0.01
+          R_ohm: 0.193382
+          X_ohm: 7.31051
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 7.0
+          E_rms_V: 0.02
+          R_ohm: 0.261081
+          X_ohm: 8.52893
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 8.0
+          E_rms_V: 1.76
+          R_ohm: 0.339195
+          X_ohm: 9.74734
+          I_circ_rms_A: 0.18
+          P_W: 0.0
+        - harmonic: 9.0
+          E_rms_V: 3.7
+          R_ohm: 0.427724
+          X_ohm: 10.96576
+          I_circ_rms_A: 0.34
+          P_W: 0.1
+        - harmonic: 10.0
+          E_rms_V: 0.04
+          R_ohm: 0.526669
+          X_ohm: 12.18418
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 11.0
+          E_rms_V: 0.01
+          R_ohm: 0.636028
+          X_ohm: 13.4026
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 12.0
+          E_rms_V: 0.14
+          R_ohm: 0.755803
+          X_ohm: 14.62101
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 13.0
+          E_rms_V: 0.06
+          R_ohm: 0.885993
+          X_ohm: 15.83943
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 14.0
+          E_rms_V: 35.78
+          R_ohm: 1.026599
+          X_ohm: 17.05785
+          I_circ_rms_A: 2.09
+          P_W: 13.5
+        - harmonic: 15.0
+          E_rms_V: 0.39
+          R_ohm: 1.177619
+          X_ohm: 18.27627
+          I_circ_rms_A: 0.02
+          P_W: 0.0
+        - harmonic: 16.0
+          E_rms_V: 0.16
+          R_ohm: 1.339055
+          X_ohm: 19.49469
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 17.0
+          E_rms_V: 0.01
+          R_ohm: 1.510906
+          X_ohm: 20.7131
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 18.0
+          E_rms_V: 0.11
+          R_ohm: 1.693173
+          X_ohm: 21.93152
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 19.0
+          E_rms_V: 0.34
+          R_ohm: 1.885854
+          X_ohm: 23.14994
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 20.0
+          E_rms_V: 5.79
+          R_ohm: 2.088951
+          X_ohm: 24.36836
+          I_circ_rms_A: 0.24
+          P_W: 0.4
+        - harmonic: 21.0
+          E_rms_V: 0.26
+          R_ohm: 2.302463
+          X_ohm: 25.58678
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 22.0
+          E_rms_V: 0.05
+          R_ohm: 2.52639
+          X_ohm: 26.80519
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 23.0
+          E_rms_V: 0.08
+          R_ohm: 2.760732
+          X_ohm: 28.02361
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 24.0
+          E_rms_V: 0.1
+          R_ohm: 3.005489
+          X_ohm: 29.24203
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 25.0
+          E_rms_V: 10.21
+          R_ohm: 3.260662
+          X_ohm: 30.46045
+          I_circ_rms_A: 0.33
+          P_W: 1.1
+        - harmonic: 26.0
+          E_rms_V: 0.38
+          R_ohm: 3.52625
+          X_ohm: 31.67887
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 27.0
+          E_rms_V: 0.07
+          R_ohm: 3.802253
+          X_ohm: 32.89728
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 28.0
+          E_rms_V: 0.03
+          R_ohm: 4.088672
+          X_ohm: 34.1157
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 29.0
+          E_rms_V: 0.19
+          R_ohm: 4.385505
+          X_ohm: 35.33412
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 30.0
+          E_rms_V: 0.12
+          R_ohm: 4.692754
+          X_ohm: 36.55254
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 31.0
+          E_rms_V: 14.66
+          R_ohm: 5.010418
+          X_ohm: 37.77096
+          I_circ_rms_A: 0.38
+          P_W: 2.2
+        - harmonic: 32.0
+          E_rms_V: 0.46
+          R_ohm: 5.338497
+          X_ohm: 38.98937
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 33.0
+          E_rms_V: 0.17
+          R_ohm: 5.676992
+          X_ohm: 40.20779
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 34.0
+          E_rms_V: 0.03
+          R_ohm: 6.025902
+          X_ohm: 41.42621
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 35.0
+          E_rms_V: 0.14
+          R_ohm: 6.385226
+          X_ohm: 42.64463
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 36.0
+          E_rms_V: 7.23
+          R_ohm: 6.754967
+          X_ohm: 43.86304
+          I_circ_rms_A: 0.16
+          P_W: 0.5
+        - harmonic: 37.0
+          E_rms_V: 0.72
+          R_ohm: 7.135122
+          X_ohm: 45.08146
+          I_circ_rms_A: 0.02
+          P_W: 0.0
+        - harmonic: 38.0
+          E_rms_V: 0.38
+          R_ohm: 7.525692
+          X_ohm: 46.29988
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 39.0
+          E_rms_V: 0.11
+          R_ohm: 7.926678
+          X_ohm: 47.5183
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 40.0
+          E_rms_V: 0.13
+          R_ohm: 8.338079
+          X_ohm: 48.73672
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 41.0
+          E_rms_V: 0.19
+          R_ohm: 8.759895
+          X_ohm: 49.95513
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 42.0
+          E_rms_V: 13.1
+          R_ohm: 9.192127
+          X_ohm: 51.17355
+          I_circ_rms_A: 0.25
+          P_W: 1.7
+        - harmonic: 43.0
+          E_rms_V: 0.33
+          R_ohm: 9.634773
+          X_ohm: 52.39197
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 44.0
+          E_rms_V: 0.04
+          R_ohm: 10.087835
+          X_ohm: 53.61039
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 45.0
+          E_rms_V: 0.08
+          R_ohm: 10.551312
+          X_ohm: 54.82881
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 46.0
+          E_rms_V: 0.42
+          R_ohm: 11.025204
+          X_ohm: 56.04722
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 47.0
+          E_rms_V: 2.19
+          R_ohm: 11.509512
+          X_ohm: 57.26564
+          I_circ_rms_A: 0.04
+          P_W: 0.0
+        - harmonic: 48.0
+          E_rms_V: 11.47
+          R_ohm: 12.004235
+          X_ohm: 58.48406
+          I_circ_rms_A: 0.19
+          P_W: 1.3
+        - harmonic: 49.0
+          E_rms_V: 0.15
+          R_ohm: 12.509372
+          X_ohm: 59.70248
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 50.0
+          E_rms_V: 0.29
+          R_ohm: 13.024925
+          X_ohm: 60.9209
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 51.0
+          E_rms_V: 0.15
+          R_ohm: 13.550894
+          X_ohm: 62.13931
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 52.0
+          E_rms_V: 0.14
+          R_ohm: 14.087277
+          X_ohm: 63.35773
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 53.0
+          E_rms_V: 2.05
+          R_ohm: 14.634076
+          X_ohm: 64.57615
+          I_circ_rms_A: 0.03
+          P_W: 0.0
+        - harmonic: 54.0
+          E_rms_V: 0.03
+          R_ohm: 15.19129
+          X_ohm: 65.79457
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 55.0
+          E_rms_V: 0.18
+          R_ohm: 15.758919
+          X_ohm: 67.01299
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 56.0
+          E_rms_V: 0.15
+          R_ohm: 16.336964
+          X_ohm: 68.2314
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 57.0
+          E_rms_V: 0.11
+          R_ohm: 16.925423
+          X_ohm: 69.44982
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 58.0
+          E_rms_V: 0.28
+          R_ohm: 17.524298
+          X_ohm: 70.66824
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 59.0
+          E_rms_V: 4.04
+          R_ohm: 18.133588
+          X_ohm: 71.88666
+          I_circ_rms_A: 0.05
+          P_W: 0.2
+        - harmonic: 60.0
+          E_rms_V: 0.4
+          R_ohm: 18.753293
+          X_ohm: 73.10507
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 61.0
+          E_rms_V: 0.32
+          R_ohm: 19.383414
+          X_ohm: 74.32349
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 62.0
+          E_rms_V: 0.22
+          R_ohm: 20.023949
+          X_ohm: 75.54191
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 63.0
+          E_rms_V: 0.61
+          R_ohm: 20.6749
+          X_ohm: 76.76033
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 64.0
+          E_rms_V: 1.47
+          R_ohm: 21.336266
+          X_ohm: 77.97875
+          I_circ_rms_A: 0.02
+          P_W: 0.0
+        - harmonic: 65.0
+          E_rms_V: 5.09
+          R_ohm: 22.008048
+          X_ohm: 79.19716
+          I_circ_rms_A: 0.06
+          P_W: 0.3
+        - harmonic: 66.0
+          E_rms_V: 0.41
+          R_ohm: 22.690244
+          X_ohm: 80.41558
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 67.0
+          E_rms_V: 0.14
+          R_ohm: 23.382856
+          X_ohm: 81.634
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 68.0
+          E_rms_V: 0.11
+          R_ohm: 24.085883
+          X_ohm: 82.85242
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 69.0
+          E_rms_V: 0.15
+          R_ohm: 24.799325
+          X_ohm: 84.07084
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 70.0
+          E_rms_V: 5.95
+          R_ohm: 25.523182
+          X_ohm: 85.28925
+          I_circ_rms_A: 0.07
+          P_W: 0.3
+        - harmonic: 71.0
+          E_rms_V: 0.16
+          R_ohm: 26.257455
+          X_ohm: 86.50767
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 72.0
+          E_rms_V: 0.17
+          R_ohm: 27.002143
+          X_ohm: 87.72609
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 73.0
+          E_rms_V: 0.06
+          R_ohm: 27.757246
+          X_ohm: 88.94451
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 74.0
+          E_rms_V: 0.4
+          R_ohm: 28.522764
+          X_ohm: 90.16293
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 75.0
+          E_rms_V: 3.1
+          R_ohm: 29.298698
+          X_ohm: 91.38134
+          I_circ_rms_A: 0.03
+          P_W: 0.1
+        - harmonic: 76.0
+          E_rms_V: 2.74
+          R_ohm: 30.085046
+          X_ohm: 92.59976
+          I_circ_rms_A: 0.03
+          P_W: 0.1
+        - harmonic: 77.0
+          E_rms_V: 0.63
+          R_ohm: 30.88181
+          X_ohm: 93.81818
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 78.0
+          E_rms_V: 0.46
+          R_ohm: 31.688989
+          X_ohm: 95.0366
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 79.0
+          E_rms_V: 0.09
+          R_ohm: 32.506584
+          X_ohm: 96.25502
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 80.0
+          E_rms_V: 0.5
+          R_ohm: 33.334593
+          X_ohm: 97.47343
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 81.0
+          E_rms_V: 4.07
+          R_ohm: 34.173018
+          X_ohm: 98.69185
+          I_circ_rms_A: 0.04
+          P_W: 0.2
+        - harmonic: 82.0
+          E_rms_V: 1.77
+          R_ohm: 35.021858
+          X_ohm: 99.91027
+          I_circ_rms_A: 0.02
+          P_W: 0.0
+        - harmonic: 83.0
+          E_rms_V: 0.08
+          R_ohm: 35.881113
+          X_ohm: 101.12869
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 84.0
+          E_rms_V: 0.12
+          R_ohm: 36.750783
+          X_ohm: 102.3471
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 85.0
+          E_rms_V: 0.23
+          R_ohm: 37.630869
+          X_ohm: 103.56552
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 86.0
+          E_rms_V: 1.85
+          R_ohm: 38.52137
+          X_ohm: 104.78394
+          I_circ_rms_A: 0.02
+          P_W: 0.0
+        - harmonic: 87.0
+          E_rms_V: 0.84
+          R_ohm: 39.422286
+          X_ohm: 106.00236
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 88.0
+          E_rms_V: 0.36
+          R_ohm: 40.333617
+          X_ohm: 107.22078
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 89.0
+          E_rms_V: 0.1
+          R_ohm: 41.255363
+          X_ohm: 108.43919
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 90.0
+          E_rms_V: 0.22
+          R_ohm: 42.187525
+          X_ohm: 109.65761
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 91.0
+          E_rms_V: 1.19
+          R_ohm: 43.130102
+          X_ohm: 110.87603
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 92.0
+          E_rms_V: 1.92
+          R_ohm: 44.083094
+          X_ohm: 112.09445
+          I_circ_rms_A: 0.02
+          P_W: 0.0
+        - harmonic: 93.0
+          E_rms_V: 5.58
+          R_ohm: 45.046501
+          X_ohm: 113.31287
+          I_circ_rms_A: 0.05
+          P_W: 0.3
+        - harmonic: 94.0
+          E_rms_V: 0.25
+          R_ohm: 46.020324
+          X_ohm: 114.53128
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 95.0
+          E_rms_V: 0.39
+          R_ohm: 47.004562
+          X_ohm: 115.7497
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 96.0
+          E_rms_V: 0.13
+          R_ohm: 47.999215
+          X_ohm: 116.96812
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 97.0
+          E_rms_V: 0.21
+          R_ohm: 49.004283
+          X_ohm: 118.18654
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 98.0
+          E_rms_V: 3.08
+          R_ohm: 50.019766
+          X_ohm: 119.40496
+          I_circ_rms_A: 0.02
+          P_W: 0.1
+        - harmonic: 99.0
+          E_rms_V: 0.51
+          R_ohm: 51.045665
+          X_ohm: 120.62337
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 100.0
+          E_rms_V: 0.05
+          R_ohm: 52.081979
+          X_ohm: 121.84179
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 101.0
+          E_rms_V: 0.22
+          R_ohm: 53.128708
+          X_ohm: 123.06021
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 102.0
+          E_rms_V: 0.34
+          R_ohm: 54.185852
+          X_ohm: 124.27863
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 103.0
+          E_rms_V: 1.01
+          R_ohm: 55.253411
+          X_ohm: 125.49705
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 104.0
+          E_rms_V: 2.58
+          R_ohm: 56.331386
+          X_ohm: 126.71546
+          I_circ_rms_A: 0.02
+          P_W: 0.1
+        - harmonic: 105.0
+          E_rms_V: 0.56
+          R_ohm: 57.419776
+          X_ohm: 127.93388
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 106.0
+          E_rms_V: 0.19
+          R_ohm: 58.518581
+          X_ohm: 129.1523
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 107.0
+          E_rms_V: 0.12
+          R_ohm: 59.627801
+          X_ohm: 130.37072
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 108.0
+          E_rms_V: 2.05
+          R_ohm: 60.747437
+          X_ohm: 131.58913
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 109.0
+          E_rms_V: 2.4
+          R_ohm: 61.877487
+          X_ohm: 132.80755
+          I_circ_rms_A: 0.02
+          P_W: 0.0
+        - harmonic: 110.0
+          E_rms_V: 5.22
+          R_ohm: 63.017953
+          X_ohm: 134.02597
+          I_circ_rms_A: 0.04
+          P_W: 0.2
+        - harmonic: 111.0
+          E_rms_V: 0.18
+          R_ohm: 64.168835
+          X_ohm: 135.24439
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 112.0
+          E_rms_V: 0.43
+          R_ohm: 65.330131
+          X_ohm: 136.46281
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 113.0
+          E_rms_V: 0.05
+          R_ohm: 66.501842
+          X_ohm: 137.68122
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 114.0
+          E_rms_V: 2.15
+          R_ohm: 67.683969
+          X_ohm: 138.89964
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 115.0
+          E_rms_V: 0.73
+          R_ohm: 68.876511
+          X_ohm: 140.11806
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 116.0
+          E_rms_V: 1.34
+          R_ohm: 70.079469
+          X_ohm: 141.33648
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 117.0
+          E_rms_V: 0.05
+          R_ohm: 71.292841
+          X_ohm: 142.5549
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 118.0
+          E_rms_V: 0.18
+          R_ohm: 72.516629
+          X_ohm: 143.77331
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 119.0
+          E_rms_V: 0.5
+          R_ohm: 73.750832
+          X_ohm: 144.99173
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 120.0
+          E_rms_V: 1.75
+          R_ohm: 74.99545
+          X_ohm: 146.21015
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 121.0
+          E_rms_V: 1.35
+          R_ohm: 76.250483
+          X_ohm: 147.42857
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 122.0
+          E_rms_V: 0.18
+          R_ohm: 77.515931
+          X_ohm: 148.64699
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 123.0
+          E_rms_V: 0.4
+          R_ohm: 78.791795
+          X_ohm: 149.8654
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 124.0
+          E_rms_V: 0.09
+          R_ohm: 80.078074
+          X_ohm: 151.08382
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 125.0
+          E_rms_V: 0.54
+          R_ohm: 81.374768
+          X_ohm: 152.30224
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 126.0
+          E_rms_V: 1.08
+          R_ohm: 82.681878
+          X_ohm: 153.52066
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 127.0
+          E_rms_V: 2.02
+          R_ohm: 83.999402
+          X_ohm: 154.73908
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 128.0
+          E_rms_V: 0.13
+          R_ohm: 85.327342
+          X_ohm: 155.95749
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 129.0
+          E_rms_V: 0.21
+          R_ohm: 86.665697
+          X_ohm: 157.17591
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 130.0
+          E_rms_V: 0.13
+          R_ohm: 88.014467
+          X_ohm: 158.39433
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 131.0
+          E_rms_V: 1.35
+          R_ohm: 89.373653
+          X_ohm: 159.61275
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 132.0
+          E_rms_V: 2.67
+          R_ohm: 90.743253
+          X_ohm: 160.83116
+          I_circ_rms_A: 0.01
+          P_W: 0.1
+        - harmonic: 133.0
+          E_rms_V: 0.16
+          R_ohm: 92.123269
+          X_ohm: 162.04958
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 134.0
+          E_rms_V: 0.26
+          R_ohm: 93.5137
+          X_ohm: 163.268
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 135.0
+          E_rms_V: 0.05
+          R_ohm: 94.914547
+          X_ohm: 164.48642
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 136.0
+          E_rms_V: 2.16
+          R_ohm: 96.325808
+          X_ohm: 165.70484
+          I_circ_rms_A: 0.01
+          P_W: 0.0
+        - harmonic: 137.0
+          E_rms_V: 0.95
+          R_ohm: 97.747485
+          X_ohm: 166.92325
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 138.0
+          E_rms_V: 2.6
+          R_ohm: 99.179577
+          X_ohm: 168.14167
+          I_circ_rms_A: 0.01
+          P_W: 0.1
+        - harmonic: 139.0
+          E_rms_V: 0.21
+          R_ohm: 100.622084
+          X_ohm: 169.36009
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        - harmonic: 140.0
+          E_rms_V: 0.48
+          R_ohm: 102.075006
+          X_ohm: 170.57851
+          I_circ_rms_A: 0.0
+          P_W: 0.0
+        KV_rpm_per_V_phase: 20.06
+        KV_rpm_per_V_line: 23.08
+        KV_noload_rpm_per_V_line: 34.57
+        V1_LL_V: 617.09
+        V1_phase_V: 617.09
+        THD_pct: 69.35
+        THD_LL_pct: 66.93
+        I1_A: 336.648
+        THD_I_pct: 8.19
+        V1_seed_peak_V: 617.0928
+        V1_seed_delta_deg: 35.73
+        Kt_Nm_per_Arms: 0.5824
+        Kt_Nm_per_A_line: 0.3362
+        J_coil_A_per_mm2: 24.7
+        A_phase_mm2: 18.0
+        slot_fill_pct: 43.2
+        A_slot_mm2: 2502.1
+        A_copper_slotted_mm2: 1080.0
+        P_loss_total_W: 12229.4
+        B_gap_mean_T: 0.8633
+        P_core_W: 4169.5
+        P_core_terms:
+          stator:
+            hysteresis_W: 1724.913
+            eddy_W: 801.848
+            excess_W: 726.397
+            k_f: 0.9
+            model: measured_surface
+            surface_raw_window_candidate_W: 3253.157989302766
+            surface_selected_candidate: raw_window_unfiltered
+            window_closed: true
+          rotor:
+            hysteresis_W: 455.464
+            eddy_W: 132.23
+            excess_W: 328.62
+            k_f: 0.9
+            model: measured_surface
+            surface_raw_window_candidate_W: 916.3140498912117
+            surface_detrended_candidate_W: 234.1850498165595
+            surface_selected_candidate: raw_window_unfiltered
+            window_closed: false
+            window_electrical_periods: 1.0
+            window_method: open_one_period_window
+        P_core_stator_W: 3253.2
+        P_core_rotor_W: 916.3
+        P_loss_stator_W: 10862.3
+        P_loss_rotor_W: 1367.1
+        P_loss_split_measured: true
+        P_stranded_W: 7609.1
+        wire_split: 1
+        cu_ac_solved_ignores_wire_split: false
+        P_solid_W: 450.8
+        P_mag_W: 383.1
+        P_shaft_W: 21.1
+        P_sleeve_W: 46.5656
+        solid_loss_not_solved: false
+        magnet_segmentation:
+          slice_mm: 5.0
+          stack_mm: 155.0
+          n_bodies: 5
+          factor: 0.0220068
+          width_mm: 32.4556
+          width_min_mm: 32.4537
+          width_max_mm: 32.4574
+          width_source: cad_polygon
+          model: Russell-Norsworthy axial segmentation, normalised to the solid stack
+            — MODEL, pending 3-D validation
+        eddy_warmup_frames: 3360
+        demag_prepass_frames: 0
+        eddy_settled: false
+        eddy_capped: true
+        eddy_settle_residual: 0.558
+        eddy_settle_tol: 0.02
+        eddy_settled_via_accelerator: false
+        warm_seeded: false
+        demag_seeded: false
+        efficiency: 0.978
+        P_elec_in_solved_W: 548201.1
+        P_mech_balance_W: 537979.1
+        pwm_dc_residual_A: 0.296
+        pwm_dc_residual_phase: B
+        pwm_dc_tol_A: 0.5
+        pwm_dc_unconverged: false
+        nonlinear_converged: true
+        nonlinear_resid_max: 1.0e-07
+        nonlinear_tol: 0.001
+        nonlinear_unconverged_frames: []
+        steps_snapped: false
+        n_steps_per_period: 280
+        n_steps_per_period_requested: 280
+        slip_nodes_per_period: 280
+        coil_temp_C: 139.2
+        end_winding_factor: 1.35
+        mass_total_kg: 26.676
+        mass_active_kg: 26.676
+        mass_area_source: CAD polygons
+        mass_components:
+        - name: Stator core (B10AHV900M)
+          material: electrical steel
+          density_kg_m3: 7600.0
+          volume_cm3: 1697.2
+          mass_kg: 12.899
+          note: CAD section 12167 mm² × stack, lamination k_f=0.900
+        - name: Copper windings (Cu)
+          material: copper
+          density_kg_m3: 8933.0
+          volume_cm3: 226.8
+          mass_kg: 2.026
+          note: measured copper section 1080 mm² × stack × k_end 1.355
+        - name: Magnets (N52UH_150C)
+          material: NdFeB
+          density_kg_m3: 7500.0
+          volume_cm3: 1027.2
+          mass_kg: 7.704
+          note: CAD magnet polygons 6627 mm² × stack
+        - name: Rotor back-iron (B10AHV900M)
+          material: electrical steel
+          density_kg_m3: 7600.0
+          volume_cm3: 500.0
+          mass_kg: 3.8
+          note: CAD section 3584 mm² × stack, lamination k_f=0.900
+        - name: Shaft (Steel_42CrMo4_QT) — customer-supplied
+          material: shaft
+          density_kg_m3: 7850.0
+          volume_cm3: 112.5
+          mass_kg: 0.0
+          note: customer-supplied — modelled as Steel_42CrMo4_QT for the field, not
+            included in mass (0.883 kg modelled); hollow shaft tube 726 mm² × stack
+            — NOT in active mass
+          state: reference
+          counted: false
+          mass_modelled_kg: 0.883
+        - name: Sleeve (M40X_UD_60)
+          material: carbon fibre
+          density_kg_m3: 1590.0
+          volume_cm3: 155.4
+          mass_kg: 0.247
+          note: retaining ring 1002.9 mm² × stack — NOT in active mass
+        part_states:
+          shaft: reference
+        rotor_inertia:
+          J_kg_m2: 0.027187475822606746
+          J_kg_cm2: 271.875
+          rotor_iron: 0.009266053307992584
+          magnet: 0.016913538298173356
+          shaft: 0.0
+          sleeve: 0.001007884216440807
+          J_modelled:
+            rotor_iron: 0.009266053307992584
+            magnet: 0.016913538298173356
+            shaft: 0.00047660341700063295
+            sleeve: 0.001007884216440807
+          part_states:
+            shaft: reference
+          source: CAD polygons
+        sleeve_hoop:
+          sigma_hoop_MPa: 28.434
+          r_mean_mm: 63.85
+          rpm: 20000.0
+          material: M40X_UD_60
+          density_kg_m3: 1590.0
+          thickness_mm: 2.5
+          strength_MPa: 2700.0
+          utilisation_pct: 1.05
+        demag:
+          per_magnet_spread_pct: 0.16
+          bh_kept_vol_pct: 94.658
+          bh_loss_pct: 5.342
+          br_kept_vol_pct: 96.957
+          loss_pct: 3.043
+          area_derated_pct: 100.0
+          br_corner:
+            flag: corner
+            br_pct: 12.0
+            element: 6459
+            magnet_tag: 102
+            x_mm: 7.803
+            y_mm: 60.914
+            r_mm: 61.412
+            theta_deg: 82.7
+            element_area_pct: 0.0116
+            note: 'Worst single magnet element: a sharp-corner value that does not
+              converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md §3). A
+              corner diagnostic, not the magnet''s figure; the magnet''s figure is
+              the volume-weighted Br kept.'
+          grade_nominal: 52.0
+          grade_effective: 49.2
+          magnet_name: N52UH_150C
+          energy_total_J: 289.68
+          energy_lost_J: 15.475
+        end3d:
+          k_flux: 0.963708383225227
+          k_flux_self: 0.963317896603569
+          fidelity: quick (n_stack=4, 3-point L-sweep)
+          generated_utc: '2026-09-23T23:21:26Z'
+          machine: 12s/10p OD 200
+          k_flux_vs_L:
+            '135.0': 0.95702
+            '180.0': 0.96371
+            '270.0': 0.9741
+          note: 'CIANO10 200 opt / L180 motor, 0.5x9 mm strip variant, rebuilt from
+            config/dies/.history/CIANO10 200 opt/die.20260911-091741.yaml + ''L180
+            motor.20260911-111421.yaml'' (saved the same second as the ''peak 0.5x9
+            mm'' duty, 2026-09-11): 12s/10p OD 200, stack 180 mm, gap 3.2 mm, sleeve
+            2.5 mm, N52UH_150C / B10AHV900M; stack sweep 135/180/270 mm. NOTE: the
+            L=180 mm (factor 1.0) Picard loop hit max_iter=45 at |dH|/|H|=3.6e-3 (tol
+            3e-3) — near-converged, not fully; the 135 and 270 mm points converged
+            cleanly. Night run 2026-09-23/24, user: "3D coefficients are computed at night"
+            — solve 2874 s'
+          inherited: true
+          inherited_from: b3cc30811c51472f
+          inherited_note: coefficient of an EARLIER geometry of this machine (12s/10p
+            OD 200, passport 2026-09-23) — the current geometry has no Stage A passport
+            yet; recompute to confirm or replace it
+          T_corrected_Nm: 249.67
+          V_line_peak_corrected_V: 835.04
+        bench_ldq:
+          Ld_mH: 0.0484
+          Lq_mH: 0.0501
+          Lq_over_Ld: 1.034
+          psi_pm_mWb: 55.248
+          I_probe_arms: 2.0
+          daxis_deg: 120.014
+          connection: 2P
+          geo_fingerprint: d82cbc7959d3221e
+          method: small-signal probe at the I=0 iron state — bench/LCR equivalent;
+            loaded (chord) values differ under saturation
+          solve_time_s: 48.2
+        saturation:
+          T_linear_Nm: 277.779
+          droop_pct: 6.73
+          T_reluctance_Nm: 0.6636
+        Km_Nm_sqrtW: 4.0738
+        Km_per_mass_Nm_sqrtW_kg: 0.1527
+        summary_shape_v: 18
+        torque_per_mass_Nm_kg: 9.712
+        power_per_mass_W_kg: 20340.4
+        loss_density_W_kg: 458.4
+        I_phase_rms_solved_A: 477.687
+        P_bearings_W: 993.02
+        P_windage_W: 269.711
+        P_mech_extra_W: 1262.73
+        bearing_temp_c: 70.0
+        bearing_temp_source: assigned
+        bearing_temp_note: the bearing temperature saved on this machine; the final
+          map puts the seat at 269.4 °C (residual 199.4 K)
+        P_loss_total_incl_mech_W: 13492.1
+        P_shaft_net_W: 541336.7
+        P_shaft_convention: rotor power MINUS the mechanical losses — what leaves
+          at the coupling
+        efficiency_shaft: 0.975682
+        mech_losses:
+          rpm: 20000.0
+          bearings:
+          - end: A
+            bearing: 71910 CE/HCP4A
+            P_W: 496.512
+            M_total_Nm: 0.23707
+            M_rr_Nm: 0.10094
+            M_sl_Nm: 0.13613
+            M_seal_Nm: 0.0
+            nu_mm2_s: 6.635
+            F_r_N: 61.95
+            speed_ok: true
+            speed_verdict: at the limit
+            n_dm: 1220000.0
+            limit_rpm: 21000.0
+          - end: B
+            bearing: 71910 CE/HCP4A
+            P_W: 496.512
+            M_total_Nm: 0.23707
+            M_rr_Nm: 0.10094
+            M_sl_Nm: 0.13613
+            M_seal_Nm: 0.0
+            nu_mm2_s: 6.635
+            F_r_N: 61.95
+            speed_ok: true
+            speed_verdict: at the limit
+            n_dm: 1220000.0
+            limit_rpm: 21000.0
+          cards:
+          - 71910 CE/HCP4A
+          - 71910 CE/HCP4A
+          lubrication: grease
+          preload_n: 200.0
+          rotor_mass_kg: 12.634
+          rotor_mass_source: given by the caller
+          F_r_total_N: 123.8972161
+          M_bearings_Nm: 0.47413
+          windage:
+            P_W: 269.7109
+            P_gap_W: 144.9488
+            P_faces_W: 124.7621
+            M_total_Nm: 0.128777
+            gap_regime: vortex / transitional (Wendt)
+            face_regime: turbulent disc
+            delta_mm: 0.6999999999999923
+          die: CIANO10 200 opt
+          config: L155 motor
+          model: SKF frictional-moment model (tables 2 and 3) + analytic windage —
+            ANALYTIC, not FEM
+          notes:
+          - 'Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled
+            toward the short side by a force that can exceed its own weight, and it
+            would go straight into F_r. Nor are coupling, belt or gear side loads,
+            or any seal on the shaft itself.'
+          - radial load = rotor weight, half each (no bearing span given)
+        coupling:
+          drive: pwm
+          inverter:
+            f_carrier_hz: 24000.0
+            carrier_origin: request
+            f_carrier_eff_hz: 23333.33
+            carriers_per_period: 14
+            steps_per_period: 280
+            samples_per_carrier: 20.0
+            schedule: mixed
+            v_dc_V: 750.4
+            v_phase_peak_V: 617.1103
+            v_phase_peak_next_V: 604.3767
+            v_phase_peak_max_V: 701.1802
+            v_phase_peak_max_uncompensated_V: 747.3453
+            modulator_gain_factor: 0.942943
+            pwm_modulation: sine
+            v_delta_deg: 35.73
+            m: 0.9509
+            equivalent_star: true
+            v_bus_model_V: 1299.731
+            star_delta: delta
+            dc_residual_A: 0.296
+            dc_tol_A: 0.5
+            dc_unconverged: false
+            dc_band_A: 8.897
+            ripple_quotable: true
+            ripple_pct: 24.1
+            thd_i_pct: 8.19
+            thd_ll_pct: 66.93
+            I_phase_rms_solved_A: 477.6867711516392
+            modulator: ideal two-level, synchronous regular-sampled centre-aligned
+              sine-triangle; no dead time, no device drops, ideal bus
+            sources:
+              f_carrier_hz: the request
+              v_dc_V: the request
+              n_steps_per_period: 'the study''s rule: 20 FEM steps per carrier period'
+              v_phase_peak_V: the request
+              v_delta_deg: the request
+            target_I_phase_rms_A: 444.8311
+            i_tol_pct: 1.0
+            v_phase_peak_seed_V: 617.1103
+            point_error_pct: 7.386
+            on_point: false
+          em:
+            T_em_avg_Nm: 259.072
+            T_ripple_pct: 24.1
+            P_stranded_W: 7609.1
+            P_core_W: 4169.5
+            P_solid_W: 450.8
+            P_mag_W: 383.1
+            P_shaft_W: 21.1
+            P_sleeve_W: 46.5656
+            P_loss_total_W: 12229.4
+            efficiency: 0.978
+            THD_I_pct: 8.19
+            THD_LL_pct: 66.93
+            V_line_peak_V: 866.5
+            n_steps_per_period: 280
+          coil_temp_c: 139.2
+          magnet_temp_c: 165.1
+          time_to_limit:
+            within_limits: false
+            time_to_limit_s: 566.768
+            time_to_limit_words: 9 m 27 s
+            limiting_part: magnet
+            time_to_limit_from_rated_s: 214.516
+            limits_c:
+              winding: 200.0
+              magnet: 180.0
+              bearing: 110.0
+            at_point_c:
+              winding: 200.1
+              magnet: 289.7
+              bearing: 70.0
+            over_by_K:
+              magnet: 109.7
+            over_parts:
+            - magnet
+            judged:
+            - winding
+            - magnet
+            - bearing
+            parts:
+            - part: magnet
+              quantity: the hottest magnet element
+              node: magnet
+              limit_c: 180.0
+              limit_source: the N52UH_150C card's own maximum working temperature;
+                the hottest element is 8.30 K above the magnet node's mean, frozen
+                at this map's own shape
+              at_point_c: 289.7
+              over_by_K: 109.7
+              offset_K: 8.3
+              reaches: true
+              time_to_limit_s: 566.768
+              note: the hottest magnet element reaches 180 °C after 9 m 27 s
+              state_c:
+                winding: 181.13
+                stator: 170.04
+                rotor: 172.17
+                magnet: 171.7
+            starts:
+              cold:
+                start: cold
+                start_state_c:
+                  winding: 30.0
+                  stator: 30.0
+                  rotor: 30.0
+                  magnet: 30.0
+                start_source: every node at the ambient / coolant inlet 30.0 °C —
+                  the machine was switched on just now
+                time_to_limit_s: 566.768
+                state_at_limit_c:
+                  winding: 181.13
+                  stator: 170.04
+                  rotor: 172.17
+                  magnet: 171.7
+                time_to_limit_words: 9 m 27 s
+                limiting_part: magnet
+                horizon_s: 900.0
+                settled: false
+                end_state_c:
+                  winding: 187.34
+                  stator: 176.07
+                  rotor: 219.59
+                  magnet: 219.53
+                parts:
+                - part: magnet
+                  quantity: the hottest magnet element
+                  node: magnet
+                  limit_c: 180.0
+                  limit_source: the N52UH_150C card's own maximum working temperature;
+                    the hottest element is 8.30 K above the magnet node's mean, frozen
+                    at this map's own shape
+                  at_point_c: 289.7
+                  over_by_K: 109.7
+                  offset_K: 8.3
+                  reaches: true
+                  time_to_limit_s: 566.768
+                  note: the hottest magnet element reaches 180 °C after 9 m 27 s
+                  state_c:
+                    winding: 181.13
+                    stator: 170.04
+                    rotor: 172.17
+                    magnet: 171.7
+              rated:
+                start: rated
+                start_state_c:
+                  winding: 116.0
+                  stator: 113.3
+                  rotor: 132.9
+                  magnet: 132.3
+                start_source: the rated duty 'rated 1x9 mm''s own coupled run — the
+                  node means of the map it converged on
+                time_to_limit_s: 214.516
+                state_at_limit_c:
+                  winding: 175.3
+                  stator: 164.42
+                  rotor: 172.13
+                  magnet: 171.7
+                time_to_limit_words: 3 m 35 s
+                limiting_part: magnet
+                horizon_s: 900.0
+                settled: false
+                end_state_c:
+                  winding: 191.07
+                  stator: 179.69
+                  rotor: 249.9
+                  magnet: 250.1
+                parts:
+                - part: magnet
+                  quantity: the hottest magnet element
+                  node: magnet
+                  limit_c: 180.0
+                  limit_source: the N52UH_150C card's own maximum working temperature;
+                    the hottest element is 8.30 K above the magnet node's mean, frozen
+                    at this map's own shape
+                  at_point_c: 289.7
+                  over_by_K: 109.7
+                  offset_K: 8.3
+                  reaches: true
+                  time_to_limit_s: 214.516
+                  note: the hottest magnet element reaches 180 °C after 3 m 35 s
+                  state_c:
+                    winding: 175.3
+                    stator: 164.42
+                    rotor: 172.13
+                    magnet: 171.7
+            network:
+              available: true
+              residual_W:
+                winding: 851.2192
+                stator: 0.1066
+                rotor: 46.2284
+                magnet: 0.0
+              worst_residual_W: 851.2192
+              worst_residual_pct_of_losses: 6.436
+              link_kinds:
+                w_s: calibrated
+                r_s: calibrated
+                m_r: calibrated
+              hot_spot_offset_K: 19.1
+              coil_ref_c: 139.2
+              map_winding_mean_c: 181.0
+              map_means_c:
+                winding: 181.0
+                stator: 171.0
+                rotor: 280.8
+                magnet: 281.4
+              coil_ref_drift_K: 41.8
+              note: 'at the map''s own temperatures the network is out of balance
+                by at most 851.22 W (6.44 % of the 13225.5 W this point makes); the
+                calibrated links are exact by construction, so this is the cost of
+                the links the map could not fit and of the end-face films — and mostly
+                of an UNFINISHED loop: the watts are billed at 139.2 °C while the
+                map came back at 181.0 °C, so ρ_Cu(T) re-scales the copper by 1.11×'
+            model: a four-node lumped network (winding, stator, rotor, magnet) fitted
+              to THIS run's own converged thermal map, switched on at the start state
+              and integrated at this operating point; only the copper loss moves with
+              temperature, each part is judged on its node plus the map's own constant
+              offset, and the limit is the first crossing
+            calibration_duty: peak 1x9 mm
+            note: over the magnet limit by 110 K — reaches 180 °C after 9 m 27 s from
+              cold, 3 m 35 s from rated
+            reported_state: steady
+            solve_to: steady
+          solve_to: steady
+          mode: steady
+          constants_20c:
+            coil_temp_c: 20.0
+            magnet_temp_c: 20.0
+            point:
+              rpm: 20000.0
+              I_phase_rms: 770.4698447140432
+              gamma_deg: 15.0
+              drive: pwm
+              star_delta: delta
+            k_3d: 0.963708383225227
+            two_d:
+              psi_pm_Wb: 0.06466392
+              Kt_Nm_per_Arms: 0.7233
+              Kt_Nm_per_A_line: 0.4176
+              Km_Nm_sqrtW: 5.3292
+              Km_per_mass_Nm_sqrtW_kg: 0.1998
+              T_em_avg_Nm: 321.766
+              KV_noload_rpm_per_V_line: 29.536153
+              KV_rpm_per_V_line: 23.08
+              Ld_mH: 0.059
+              Lq_mH: 0.0584
+              Ld_eq_star_mH: 0.0197
+              Lq_eq_star_mH: 0.0195
+              saliency_Lq_over_Ld: 0.991
+              R_phase_ohm: 0.004023
+              R_phase_eq_star_ohm: 0.001341
+              mass_total_kg: 26.676
+              star_delta: delta
+              connection: 2P
+              I_phase_rms_A: 770.47
+            k3d:
+              psi_pm_Wb: 0.062317
+              Kt_Nm_per_Arms: 0.69705
+              Kt_Nm_per_A_line: 0.402445
+              Km_Nm_sqrtW: 5.135795
+              Km_per_mass_Nm_sqrtW_kg: 0.192549
+              T_em_avg_Nm: 310.088592
+              KV_noload_rpm_per_V_line: 30.648434
+              KV_rpm_per_V_line: 23.949154
+            kv_note: walked to 20 °C — Br walked linearly from the card's 150 °C to
+              20 °C at -0.1311 %/K
+            kv_walked: true
+            magnet_grade: N52UH_150C
+            kt_line_Nm_per_A: 0.402445
+            kv_line_rpm_per_V: 30.648434
+            km_Nm_sqrtW: 5.135795
+            km_per_mass_Nm_sqrtW_kg: 0.192549
+            R_phase_20_ohm: 0.004023
+            mass_kg: 26.676
+            computed_at: '2026-09-27T21:41:44'
+            note: solved with the winding and the magnets at 20 °C at this duty's
+              operating point — the datasheet convention every motor catalogue uses,
+              for comparison between machines. The hot values elsewhere in this document
+              are the same constants at this duty's own temperatures. Kt, Km and Km/mass
+              carry k_3d = 0.9637; KV is ÷ k_3d.
+            Ld0_mH: 0.0578
+            Lq0_mH: 0.0606
+            Ldq0_mH: -0.0
+            saliency0_Lq_over_Ld: 1.047
+            ldq0_method: frozen-permeability incremental at i=0, 20 °C
+            ldq0_spread_pct:
+              Ld: 0.0
+              Lq: 0.0
+            ldq0_reciprocity_pct: 0.0
+          bearing_temp_c: 70.0
+          bearing_temp_source: assigned
+          bearing_temp_note: the bearing temperature saved on this machine; the final
+            map puts the seat at 269.4 °C (residual 199.4 K)
+          P_bearings_W: 993.02
+          P_windage_W: 269.711
+          P_mech_extra_W: 1262.73
+          P_loss_total_incl_mech_W: 13492.1
+          efficiency_shaft: 0.975682
+          magnet_temp_max_c: 289.7
+          iterations: 1
+          em_runs: 1
+          converged: false
+          runaway: false
+          tol_K: 2.0
+          damping: 1.0
+          damping_final: 1.0
+          max_iter: 6
+          residual_coil_K: 41.8
+          residual_magnet_K: 116.3
+          residual_bearing_K: 199.4
+          tol_bearing_K: 5.0
+          history:
+          - iter: 1
+            T_coil_in: 139.2
+            T_magnet_in: 165.1
+            T_coil_out: 181.0
+            T_magnet_out: 281.4
+            T_magnet_max: 289.7
+            P_loss_W: 12229.4
+            T_em_Nm: 259.072
+            bearing_temp_c: 70.0
+            bearing_temp_source: assigned
+            P_mech_extra_W: 1262.73
+            v_phase_peak_V: 617.1103
+            I_phase_rms_solved_A: 477.6867711516392
+            T_ripple_pct: 24.1
+            pwm_dc_residual_A: 0.296
+            point_error_pct: 7.386
+            v_phase_peak_next_V: 604.3767
+            T_bearing_out: 269.4
+            damping_used: 1.0
+          em_passes:
+          - phase: final
+            registered: true
+            run_id: '2026-09-27T20:56:41'
+            point:
+              I_phase_rms: 770.47
+              gamma_deg: 15.0
+              rpm: 20000.0
+              coil_temp_c: 139.2
+              magnet_temp_c: 165.1
+              n_steps_per_period: 280
+              n_periods: 1.0
+              drive: pwm_voltage
+              excitation: 750.4/24000
+          mechanical:
+            ok: true
+            temps_c:
+              rotor_core: 280.8
+              magnet: 281.4
+              shaft: 269.4
+              sleeve: 265.6
+            rpm: 20000.0
+            case: 20,000 rpm
+            sf_min: 0.2640443082447012
+            sf_min_part: rotor
+            sf_min_p05: 2.383851052775434
+            rotor_od_growth_um: 191.2090200885781
+            od_growth:
+              max_um: 184.8527578314444
+              mean_um: 103.09708698937351
+              min_um: 47.77679718088719
+              r_mm: 65.09693632338295
+              part: sleeve
+              n_nodes: 1024
+            air_gap:
+              clearance_um: 695.0638040419399
+              closed_um: 184.8527578314444
+              remaining_um: 510.2110462104955
+              closed_pct: 26.595077567913524
+              bore_r_mm: 65.79506380404194
+              rotor_r_mm: 65.10000000000001
+            interference_effective_mm: 0.12230936137819007
+            elapsed_s: 112.001
+            torque_nm: 249.67
+            note: solved at the operating 20,000 rpm of this run (the Mechanical tab's
+              proof rpm box says 36,551 rpm)
+            torque_note: 2-D mean 259.1 N·m × 3-D end-effect 0.9637
+            modes:
+              ok: true
+              body: rotor
+              support: free
+              n_modes: 12
+              rpm: 20000.0
+              f_switch_hz: 24000.0
+              f1_hz: 11361.1
+              f1_order: 2
+              n_flagged: 4
+              cached: false
+              elapsed_s: 102.593
+              tightest:
+                f_hz: 24021.5
+                order: 3
+                excitation: PWM carrier
+                excitation_hz: 24000.0
+                margin_pct: 0.1
+                flag: true
+            critical_speeds:
+              ok: true
+              rated_rpm: 20000.0
+              campbell:
+                rpm:
+                - 0.0
+                - 1500.0
+                - 3000.0
+                - 4500.0
+                - 6000.0
+                - 7500.0
+                - 9000.0
+                - 10500.0
+                - 12000.0
+                - 13500.0
+                - 15000.0
+                - 16500.0
+                - 18000.0
+                - 19500.0
+                - 21000.0
+                - 22500.0
+                - 24000.0
+                - 25500.0
+                - 27000.0
+                - 28500.0
+                - 30000.0
+                - 31500.0
+                - 33000.0
+                - 34500.0
+                - 36000.0
+                - 37500.0
+                - 39000.0
+                - 40500.0
+                - 42000.0
+                - 43500.0
+                - 45000.0
+                - 46500.0
+                - 48000.0
+                - 49500.0
+                - 51000.0
+                - 52500.0
+                - 54000.0
+                - 55500.0
+                - 57000.0
+                - 58500.0
+                - 60000.0
+                forward:
+                - - 445.9837324805055
+                  - 1282.4937310764233
+                  - 2321.1115935478683
+                - - 446.59734051789314
+                  - 1288.538745623192
+                  - 2332.239361579746
+                - - 447.20902734602964
+                  - 1294.5567010054174
+                  - 2343.3696978454827
+                - - 447.81878886173354
+                  - 1300.5466212815052
+                  - 2354.500680487402
+                - - 448.4266211710327
+                  - 1306.5075574676903
+                  - 2365.6303751198197
+                - - 449.0325205699141
+                  - 1312.4385883850807
+                  - 2376.7568364861468
+                - - 449.6364835500614
+                  - 1318.3388214369327
+                  - 2387.8781101618065
+                - - 450.23850679671693
+                  - 1324.2073933108738
+                  - 2398.9922342987015
+                - - 450.8385871865874
+                  - 1330.0434706095389
+                  - 2410.097241401214
+                - - 451.43672178429625
+                  - 1335.8462504057463
+                  - 2421.1911601430616
+                - - 452.03290784189875
+                  - 1341.6149607257548
+                  - 2432.2720172092445
+                - - 452.62714279555775
+                  - 1347.3488609544459
+                  - 2443.3378391665005
+                - - 453.2194242683416
+                  - 1353.0472421702098
+                  - 2454.3866543560966
+                - - 453.8097500613116
+                  - 1358.709427406251
+                  - 2465.416494804119
+                - - 454.3981181559882
+                  - 1364.334771839189
+                  - 2476.425398148853
+                - - 454.9845267102791
+                  - 1369.9226629088448
+                  - 2487.411409576665
+                - - 455.5689740583047
+                  - 1375.4725203671585
+                  - 2498.3725837618936
+                - - 456.1514587090251
+                  - 1380.9837962623321
+                  - 2509.30698681271
+                - - 456.73197933945266
+                  - 1386.4559748580048
+                  - 2520.21269820792
+                - - 457.3105347976301
+                  - 1391.8885724880627
+                  - 2531.0878127294686
+                - - 457.8871240984932
+                  - 1397.2811373540244
+                  - 2541.9304423808794
+                - - 458.4617464213741
+                  - 1402.6332492636686
+                  - 2552.7387182874313
+                - - 459.034401109274
+                  - 1407.9445193163087
+                  - 2563.510792575099
+                - - 459.60508766634376
+                  - 1413.2145895348367
+                  - 2574.24484022092
+                - - 460.17380575290616
+                  - 1418.4431324511668
+                  - 2584.939060872686
+                - - 460.74055518916714
+                  - 1423.6298506449355
+                  - 2595.591680631041
+                - - 461.3053359467344
+                  - 1428.7744762404388
+                  - 2606.2009537914746
+                - - 461.86814815174796
+                  - 1433.876770364594
+                  - 2616.7651645387737
+                - - 462.42899207931197
+                  - 1438.936522567412
+                  - 2627.2826285933443
+                - - 462.9878681523082
+                  - 1443.9535502124877
+                  - 2637.751694802369
+                - - 463.54477693983324
+                  - 1448.9276978352166
+                  - 2648.170746673114
+                - - 464.099719155122
+                  - 1453.858836475205
+                  - 2658.5382038430394
+                - - 464.6526956522825
+                  - 1458.7468629864984
+                  - 2668.852523485488
+                - - 465.20370742457965
+                  - 1463.59169932462
+                  - 2679.112201644827
+                - - 465.75275560241556
+                  - 1468.3932918192065
+                  - 2689.315774501619
+                - - 466.2998414528468
+                  - 1473.1516104292289
+                  - 2699.461819558942
+                - - 466.84496637414594
+                  - 1477.866647987837
+                  - 2709.5489567539717
+                - - 467.38813189621794
+                  - 1482.5384194364883
+                  - 2719.5758494875226
+                - - 467.9293396758896
+                  - 1487.1669610540664
+                  - 2729.541205572186
+                - - 468.4685914992683
+                  - 1491.7523296786403
+                  - 2739.443778096792
+                - - 469.0058892756813
+                  - 1496.294601930319
+                  - 2749.2823662037904
+                backward:
+                - - 445.9837324795192
+                  - 1282.4937310761757
+                  - 2321.1115935475436
+                - - 445.3682075255816
+                  - 1276.4226593477656
+                  - 2309.9883014620636
+                - - 444.7507701565739
+                  - 1270.326557473557
+                  - 2298.871377326912
+                - - 444.1314250693263
+                  - 1264.2064764947993
+                  - 2287.762695921718
+                - - 443.51017717525514
+                  - 1258.063490342395
+                  - 2276.6641133401868
+                - - 442.8870315858697
+                  - 1251.8986946623713
+                  - 2265.577465578376
+                - - 442.261993621585
+                  - 1245.7132055862357
+                  - 2254.504567185034
+                - - 441.63506881347564
+                  - 1239.5081584452103
+                  - 2243.4472099663612
+                - - 441.00626290377375
+                  - 1233.2847064374512
+                  - 2232.4071617457553
+                - - 440.3755818465397
+                  - 1227.0440192477133
+                  - 2221.386165190314
+                - - 439.74303180939813
+                  - 1220.787281629344
+                  - 2210.3859366906026
+                - - 439.1086191736996
+                  - 1214.5156919445526
+                  - 2199.40816530509
+                - - 438.47235054185575
+                  - 1208.2304606773912
+                  - 2188.4545117649986
+                - - 437.83423272958515
+                  - 1201.9328089173093
+                  - 2177.526607538911
+                - - 437.1942727732597
+                  - 1195.6239668210446
+                  - 2166.6260539604027
+                - - 436.5524779279095
+                  - 1189.3051720583321
+                  - 2155.754421417253
+                - - 435.90885567079323
+                  - 1182.9776682428555
+                  - 2144.913248598471
+                - - 435.26341370259036
+                  - 1176.6427033598186
+                  - 2134.1040418068587
+                - - 434.61615994419935
+                  - 1170.3015281899175
+                  - 2123.3282743264776
+                - - 433.9671025419578
+                  - 1163.9553947355869
+                  - 2112.587385851955
+                - - 433.3162498675655
+                  - 1157.6055546572286
+                  - 2101.8827819753687
+                - - 432.66361051721407
+                  - 1151.253257722047
+                  - 2091.2158337306296
+                - - 432.00919331446755
+                  - 1144.8997502704894
+                  - 2080.587877194047
+                - - 431.35300731055025
+                  - 1138.5462737049572
+                  - 2070.0002131399665
+                - - 430.69506178150493
+                  - 1132.194063006392
+                  - 2059.454106750056
+                - - 430.0353662355348
+                  - 1125.8443452809213
+                  - 2048.9507873752837
+                - - 429.37393040593463
+                  - 1119.4983383427837
+                  - 2038.4914483495609
+                - - 428.7107642580136
+                  - 1113.1572493357667
+                  - 2028.0772468512191
+                - - 428.04587798524386
+                  - 1106.8222733956125
+                  - 2017.70930381437
+                - - 427.3792820103818
+                  - 1100.4945923620746
+                  - 2007.388703886046
+                - - 426.71098698689303
+                  - 1094.175373535297
+                  - 1997.1164954282035
+                - - 426.0410037988597
+                  - 1087.865768486086
+                  - 1986.8936905629298
+                - - 425.36934355969856
+                  - 1081.5669119202548
+                  - 1976.7212652591763
+                - - 424.69601761277596
+                  - 1075.2799205966155
+                  - 1966.6001594590732
+                - - 424.0210375315665
+                  - 1069.0058923055303
+                  - 1956.5312772434847
+                - - 423.34441512106224
+                  - 1062.7459049043368
+                  - 1946.5154870324527
+                - - 422.6661624138457
+                  - 1056.5010154148288
+                  - 1936.5536218207035
+                - - 421.9862916733968
+                  - 1050.272259180517
+                  - 1926.6464794472163
+                - - 421.3048153898075
+                  - 1044.0606490874634
+                  - 1916.7948228940727
+                - - 420.6217462843503
+                  - 1037.8671748457573
+                  - 1906.9993806168977
+                - - 419.9370973054477
+                  - 1031.6928023350397
+                  - 1897.260846901387
+                n_points: 41
+              rpm_plot_max: 26000.0
+              f_switch_hz: 24000.0
+              first_forward_rpm: 27414
+              first_forward_margin_pct: 27.0
+              n_forward_below_rated: 0
+              n_criticals: 2
+              verdict: subcritical — the machine runs below its first forward critical
+                speed
+              bearing_span_mm: 250.0
+              bearing_k_n_per_m: 200000000.0
+              cached: false
+              elapsed_s: 1.628
+          note: null
+          warning_code: last_pass_em_refused
+          warning: 'electromagnetic run 2 refused at coil 181.0 °C / magnet 281.4
+            °C: sliding-band transient failed: magnet ''N52UH_150C'': 281.4 °C is
+            +131 K from the card''s 150 °C reference, which the linear model takes
+            past Br = 0 or Hcj = 0 (Br x0.828, Hcj x-0.530). The material is above
+            its Curie / total-loss point in this model — refuse rather than return
+            a negative magnet. — the temperatures above are the last pass that solved'
+      result:
+        efficiency_pct: 97.568
+        ripple_pct: 24.1
+        v_ll_peak_v: 835.053
+        loss_w: 12229.4
+        mass_kg: 26.676
+        p_core_w: 4169.5
+        p_stranded_w: 7609.1
+        p_solid_w: 450.8
+        v_phase_peak_v: 961.01
+        j_coil_a_mm2: 24.7
+        loss_mech_w: 1262.731
+        end3d_k: 0.964
+        recorded_at: '2026-09-27T21:55:55'
+        build_sig: d50c7e22ac95
+      payload_file: runs/L155 motor/peak_1x9_mm-90cb058f.pwm_voltage.json.gz
+materials:
+  magnet: N52UH_150C
+  stator_core: B10AHV900M
+  rotor_core: B10AHV900M
+  shaft: Steel_42CrMo4_QT
+  sleeve: M40X_UD_60
+  slot: copper
+  slot_insulation: Al2O3
+  wire_insulation: polyimide
+copied_from:
+  die: CIANO10 200
+  config: L160
+  at: '2026-09-04T16:37:09'
+  results_dropped: true
+bearings:
+  A:
+    card: 71910 CE/HCP4A
+  B:
+    card: 71910 CE/HCP4A
+  lubrication: grease
+  preload_n: 200.0
+  temp_source: thermal
+  temp_c: 70.0
+battery:
+  chemistry: NMC
+  cells: 202
+  v_cell_min: 2.721
+  v_cell_nom: 3.715
+  v_cell_max: 4.21
+  v_min: 549.6
+  v_nom: 750.4
+  v_max: 850.4
+locked: false

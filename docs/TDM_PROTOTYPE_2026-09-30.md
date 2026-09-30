@@ -76,7 +76,7 @@ through `em_transient_eval` without choosing, so they all get TDM.
   caught.
 - `tdm_demag="full"` (default, the march's one-period pre-pass on the orbit) or
   `"shortcut"` (the owner's 1/6-period window), argument or `SB_TDM_DEMAG`.
-- With `torque_method="coulomb"` the stopping monitor uses the Coulomb
+- With `torque_method="coulomb"` (the default since #88) the stopping monitor uses the Coulomb
   virtual-work torque of each iterate's frames (`virtual_work_torque.
   frame_torques`, the loop's own call); the reported period's Coulomb series,
   mean, ripple and layer self-check come out of the frame loop as for the march.
@@ -589,7 +589,9 @@ paired numbers are §2.4–2.5. Reading the differences:
 - Default switch (b0474ba … b759cad): TDM default, refusals and failure fallback,
   Coulomb monitor, solve-pool estimate, progress strip; targeted tests on the
   server image: `test_time_periodic` 8, `test_tdm_default` 19, `test_tdm_fem` 5
-  (FEM, 30 mm fixture), `test_solve_pool` and the march-pinned tests pass.
+  (FEM, 30 mm fixture), `test_solve_pool` and the march-pinned tests pass; after
+  the rebase onto #88/#89 (1d6b3af): fast set incl. `test_virtual_work_torque` 96
+  passed, `test_tdm_fem` 5 passed.
 - TDM + Coulomb end to end (§2.5), the demag shortcut at peak and in deep field
   weakening (§2.6), the gap-layer cases with TDM plus a 3-period L13 referee
   (§2.7). Draft PR #87; not merged, not deployed. Sandbox removed at the end.

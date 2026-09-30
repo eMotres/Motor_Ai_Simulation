@@ -749,6 +749,19 @@ def _save_yaml(p: Path, d: dict) -> None:
     # redirected the other way.  With layering off this is a no-op.
     p = _write_target(p)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # Derived geometry is never written stale (2026-09-30): a die document's
+    # `geometry` and a configuration's `geometry_overrides` get every derived
+    # field they carry recomputed from their own inputs.  Behind the same
+    # switch as the payload — motor_geometry.fresh_derived_on_write.
+    try:
+        from motor_ai_sim.geometry.motor_geometry import (
+            fresh_derived_on_write, refresh_derived_geometry)
+        if fresh_derived_on_write() and isinstance(d, dict):
+            for _gk in ("geometry", "geometry_overrides"):
+                if isinstance(d.get(_gk), dict):
+                    d[_gk] = refresh_derived_geometry(d[_gk])
+    except Exception:   # noqa: BLE001 — a refresh hiccup must never lose a save
+        log.exception("derived-geometry refresh before save failed (save proceeds)")
     tmp = p.with_suffix(".tmp")
     with open(tmp, "w", encoding="utf-8") as f:
         yaml.safe_dump(d, f, sort_keys=False, allow_unicode=True)
@@ -3594,8 +3607,12 @@ def sync_active_die_geometry(saved_geo: dict,
     if prev_geo:
         _die_g = d.get("geometry") or {}
         _foreign = []
+        # inputs only: a stale derived copy on either side is not a stranger
+        # (2026-09-30, motor_geometry.is_compared_geometry_input)
+        from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
         for k, dv in _die_g.items():
-            if k in FREE_GEO_KEYS or not isinstance(dv, (int, float)):
+            if (k in FREE_GEO_KEYS or not isinstance(dv, (int, float))
+                    or not is_compared_geometry_input(k, _die_g, prev_geo)):
                 continue
             pv = prev_geo.get(k)
             if isinstance(pv, (int, float)) and abs(float(dv) - float(pv)) > 1e-6:
@@ -3694,7 +3711,16 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
     ``scope`` is ``"identity"`` (lamination Ø / topology), ``"die"`` (any other
     die key), ``"winding"`` (a configuration's wire keys) or ``"free"`` (the
     stack length — informational, never blocking).  Only keys BOTH sides carry
-    as numbers are compared: a stamp that is silent on a key says nothing."""
+    as numbers are compared: a stamp that is silent on a key says nothing.
+
+    INPUTS ONLY (2026-09-30).  Derived keys (the radii, slot_width, counts,
+    angles, pitches) are not compared: they are functions of the inputs, so
+    any real difference already shows up in an input key — and the die's
+    STORED copies were stale on most dies (CIANO14 40 new: bore 12.1 stored
+    for inputs that give 12.0), which made every duty of an unchanged machine
+    read as "saved on a different geometry".  ``slot_hs`` is skipped too: the
+    builder never reads it (``motor_geometry.UNUSED_GEOMETRY_KEYS``)."""
+    from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
     saved = duty_saved_geometry(duty)
     if not saved:
         return []
@@ -3704,6 +3730,10 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
     die_keys = set((die_doc or {}).get("geometry") or {}) - set(FREE_GEO_KEYS)
     out: List[Dict[str, Any]] = []
     for k in sorted(set(saved) & set(live)):
+        # slot/pole totals count as derived only when BOTH sides carry the
+        # segment form (motor_geometry.count_is_derived)
+        if not is_compared_geometry_input(k, saved, live):
+            continue
         lv, sv = live.get(k), saved.get(k)
         if (not isinstance(lv, (int, float)) or isinstance(lv, bool)
                 or not isinstance(sv, (int, float)) or isinstance(sv, bool)):
@@ -4639,8 +4669,17 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
         return None
     die_geo = d.get("geometry") or {}
     ov = c.get("geometry_overrides") or {}
+    from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+    _canon_geo = {**die_geo, **{k: v for k, v in ov.items() if v is not None}}
+    _after = {**_canon_geo, **update}
     bad = []
     for k, v in update.items():
+        # A derived key is not an edit: the live object recomputes it from the
+        # inputs whatever value arrives, so it is judged through its inputs —
+        # and the die's stored copy of it may be stale (2026-09-30).  An
+        # unused key (slot_hs) moves nothing.
+        if not is_compared_geometry_input(k, _after, _canon_geo):
+            continue
         free = k in EDITABLE_UNDER_DIE_LOCK
         if free:
             if not cfg_locked:
@@ -4915,6 +4954,16 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     for _k, _v in _ABSENT_MEANS.items():
         if geo.get(_k) is None:
             geo[_k] = _v
+    # The derived fields the die STORES are copies, stale on most dies until
+    # scripts/migrate_derived_geometry.py has run.  They are recomputed from
+    # the merged inputs while the switch is on (the default): the PUT this payload feeds
+    # writes them into motor_config.yaml, whose raw block the passport /
+    # bench-Ld/Lq key (`_geometry_fingerprint`) hashes — see
+    # motor_geometry.fresh_derived_on_write for the order of operations.
+    from motor_ai_sim.geometry.motor_geometry import (fresh_derived_on_write,
+                                                      refresh_derived_geometry)
+    if fresh_derived_on_write():
+        geo = refresh_derived_geometry(geo)
     # The same rule for the materials: a part the configuration does not name
     # is the project's standard for it, said explicitly, so the load replaces
     # whatever the previous machine left in the shared assignment.

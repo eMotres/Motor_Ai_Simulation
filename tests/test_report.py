@@ -7836,9 +7836,15 @@ class TestL13Review20260919:
         assert geo["stator_inner_radius"] == 32.7
         assert geo["air_gap"] == 0.3
         assert h is not None and len(h) >= 6
-        # …and the mismatch is caught rather than blended in silently.
-        assert mismatch is True
+        # The two differ ONLY in derived copies — and 32.8 / 33.1 were the
+        # die's STALE stored radii for the very inputs that give 32.4 / 32.7
+        # (2026-09-30), so this is the same machine: no mismatch note.
+        assert mismatch is False
         assert no_snap is False
+        # …while a real INPUT difference is still caught, not blended in.
+        _, _, mismatch2, _ = R.report_geometry(
+            dict(geo_live, air_gap=0.35), em)
+        assert mismatch2 is True
 
     def test_item1_no_snapshot_falls_back_to_the_live_geometry(self):
         from motor_ai_sim import report as R

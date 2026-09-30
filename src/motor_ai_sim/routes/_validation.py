@@ -68,10 +68,12 @@ try:  # keep in lock-step with the service that strips them on write
 except Exception:  # pragma: no cover - the literal set above is the fallback
     pass
 
-try:  # and with the DERIVATION itself (geometry.motor_geometry.derived_geometry)
-    from motor_ai_sim.geometry.motor_geometry import DERIVED_GEOMETRY_FIELDS
+try:  # and with the DERIVATION itself — motor_geometry's canonical
+    # classification (ALL_DERIVED_GEOMETRY_NAMES = derived_geometry's fields +
+    # the slot/pole totals + the radius properties); a test pins equality.
+    from motor_ai_sim.geometry.motor_geometry import ALL_DERIVED_GEOMETRY_NAMES
     DERIVED_GEOMETRY_NAMES = frozenset(
-        DERIVED_GEOMETRY_NAMES | set(DERIVED_GEOMETRY_FIELDS))
+        DERIVED_GEOMETRY_NAMES | set(ALL_DERIVED_GEOMETRY_NAMES))
 except Exception:  # pragma: no cover - the literal set above is the fallback
     pass
 

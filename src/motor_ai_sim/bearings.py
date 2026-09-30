@@ -745,7 +745,18 @@ def _geom_radii_m(geometry: Dict[str, Any]) -> Optional[Dict[str, float]]:
         except (TypeError, ValueError):
             return None
 
-    r_ro = _f("rotor_outer_radius")
+    # The rotor OD from the INPUTS whenever they are there (2026-09-30): the
+    # stored `rotor_outer_radius` is a copy, and the copy in motor_config.yaml
+    # / die.yaml was stale on most dies — the windage of the CIANO10 200 was
+    # computed at r 73.35 mm for a 61.2 mm rotor.  The stored key is only the
+    # fallback for a dict that does not carry the primaries.
+    try:
+        from motor_ai_sim.geometry.motor_geometry import derived_geometry
+        r_ro = derived_geometry(dict(g)).get("rotor_outer_radius")
+    except Exception:                                   # noqa: BLE001
+        r_ro = None
+    if r_ro is None:
+        r_ro = _f("rotor_outer_radius")
     gap = _f("air_gap")
     length = _f("motor_length")
     if r_ro is None or gap is None or length is None or r_ro <= 0 or length <= 0:

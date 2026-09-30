@@ -223,7 +223,7 @@ _AREA_KEYS = (
     "num_seg", "num_slots_per_segment", "num_poles_per_segment",
     "num_slots", "num_poles",
     "stator_diameter", "core_thickness", "slot_height", "tooth_width",
-    "tooth2_width", "cut_width", "slot_hs", "stator_fillet_r",
+    "tooth2_width", "cut_width", "stator_fillet_r",
     "stator_fillet_r1", "wire_width", "wire_height", "wire_spacing_x",
     "wire_spacing_y", "wire_split", "wire_parallel", "insulation_thickness",
     "num_wires_per_slot", "motor_length", "air_gap",

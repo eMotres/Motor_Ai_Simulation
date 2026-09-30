@@ -4183,9 +4183,10 @@ def _geo_delta(cfg_geo: Dict[str, Any], live: Dict[str, Any]) -> List[str]:
     which is the only form in which the difference is actionable.  Compared on
     the configuration's own keys, at the resolution a geometry field carries.
     """
+    from motor_ai_sim.geometry.motor_geometry import UNUSED_GEOMETRY_KEYS
     out: List[str] = []
     for k, v in (cfg_geo or {}).items():
-        if k not in (live or {}):
+        if k not in (live or {}) or k in UNUSED_GEOMETRY_KEYS:
             continue
         a, b = v, live.get(k)
         try:
@@ -4260,6 +4261,45 @@ def _parse_geo_sig(sig: Any) -> Optional[Dict[str, float]]:
         except (TypeError, ValueError):
             continue
     return out or None
+
+
+#: Input keys whose ABSENCE from a stamp means a known value — the same table
+#: ``routes.family._ABSENT_MEANS`` serves on a load.  A key missing from one
+#: stamp compares as this value; any other input present on one side only is
+#: a mismatch.
+_GEO_SIG_ABSENT_MEANS: Dict[str, float] = {
+    "sleeve_thickness": 0.0, "wire_parallel": 1.0, "wire_split": 1.0,
+}
+
+
+def _geo_sig_inputs_differ(a: Any, b: Any) -> bool:
+    """Do two ``_geoSig`` stamps describe different MACHINES?
+
+    Compared on the INPUT keys (``motor_geometry.is_compared_geometry_input``):
+    a derived field is a function of the inputs — and a stamp built from a
+    die's stored copy can carry a stale one — and ``slot_hs`` is never read by
+    the builder, so neither can make two identical machines differ.  The slot/
+    pole totals are inputs unless BOTH stamps carry the segment form.
+
+    An input present on ONE stamp only is a difference (review of PR #75,
+    2026-09-30), unless its absence has a defined meaning
+    (``_GEO_SIG_ABSENT_MEANS``) and the other side holds exactly that value.
+    Unparseable stamps count as different."""
+    pa, pb = _parse_geo_sig(a), _parse_geo_sig(b)
+    if not pa or not pb:
+        return True
+    from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+    for k in set(pa) | set(pb):
+        if not is_compared_geometry_input(k, pa, pb):
+            continue
+        x = pa.get(k, _GEO_SIG_ABSENT_MEANS.get(k))
+        y = pb.get(k, _GEO_SIG_ABSENT_MEANS.get(k))
+        if x is None or y is None:
+            return True
+        x, y = float(x), float(y)
+        if abs(x - y) > 1e-6 * max(1.0, abs(x)):
+            return True
+    return False
 
 
 def _geo_sig_hash(sig: Any) -> Optional[str]:
@@ -4615,7 +4655,8 @@ def report_geometry(geo_live: Dict[str, Any], em: Dict[str, Any],
             try:
                 from motor_ai_sim.routes.presets import _geo_sig as _live_geo_sig
                 live_sig = _live_geo_sig(geo_live or {})
-                mismatch = bool(live_sig) and live_sig != stored_sig
+                mismatch = (bool(live_sig) and live_sig != stored_sig
+                            and _geo_sig_inputs_differ(live_sig, stored_sig))
             except Exception as exc:                            # noqa: BLE001
                 log.debug("report: live geometry signature unavailable (%s)",
                          exc)
@@ -8431,6 +8472,13 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     """
     geo = dict(die_doc.get("geometry") or {})
     geo.update(cfg_doc.get("geometry_overrides") or {})
+    # DERIVED FIELDS FROM THE INPUTS, NEVER FROM THE FILE (2026-09-30).  The
+    # die's stored radii were stale on most dies, and this table printed them:
+    # "Rotor outer radius" and "Shaft seat Ø" (2 × rotor_inner_radius) of the
+    # CIANO28 85 20SW1200 read 32.80 / 50.0 mm for inputs that give 32.40 /
+    # 49.2, and CILN28 (Ø160) printed a 30 mm machine's 9.00 / 7.4.
+    from motor_ai_sim.geometry.motor_geometry import refresh_derived_geometry
+    geo = refresh_derived_geometry(geo)
     wind = cfg_doc.get("winding") or {}
     mats = dict(cfg_doc.get("materials") or {})
     # A part the CONFIGURATION does not name, but a duty of it does, is the
@@ -8448,7 +8496,9 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     role = str(cfg_doc.get("role") or "motor")
     d_duty = _pick_duty(cfg_doc, duty) or {}
 
-    live_geo = _live_geometry()
+    # the live block's derived copies are refreshed too, or a stale one would
+    # read as "the live machine differs" for an identical machine
+    live_geo = refresh_derived_geometry(_live_geometry())
     live_fp = _live_fingerprint()
     delta = _geo_delta(geo, live_geo)
     # THE MISMATCH IS A SERVER FACT, NOT A CLIENT SENTENCE (client review

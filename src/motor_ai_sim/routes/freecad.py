@@ -52,6 +52,13 @@ def _params_rows(geo: Dict[str, Any]):
     stay in one place; parameters absent from the schema still export (bare)."""
     sch = dict(get_config().get("geometry_schema") or {})
     from motor_ai_sim.routes._validation import DERIVED_GEOMETRY_NAMES
+    # The DERIVED reference rows are recomputed from the primaries in the same
+    # dict (2026-09-30): the config block's stored copies were stale on most
+    # machines, so the spreadsheet's "stator_inner_radius" cell disagreed with
+    # the solids built right next to it (those come from CadQueryMotor, which
+    # always recomputes).
+    from motor_ai_sim.geometry.motor_geometry import refresh_derived_geometry
+    geo = refresh_derived_geometry(geo)
     rows = []
     for k in sorted(geo):
         v = geo[k]

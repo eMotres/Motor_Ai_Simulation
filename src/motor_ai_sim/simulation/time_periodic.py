@@ -65,6 +65,7 @@ from __future__ import annotations
 import ctypes
 import math
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -85,6 +86,11 @@ EDDY_METHODS = ("tdm", "march")
 #: The eddy method every steady-state eddy run uses unless told otherwise
 #: (owner 2026-09-30).
 DEFAULT_EDDY_METHOD = "tdm"
+
+# A wrap GMRES that missed its forcing term is accepted only within this factor
+# of it (an inexact Newton step still contracts there); beyond, the step is
+# rejected and the Newton stops unconverged.
+GMRES_ACCEPT_FACTOR = 10.0
 
 
 def resolve_eddy_method(requested: Optional[str], sim_config: Optional[Dict] = None,
@@ -220,6 +226,14 @@ class FrameFactor:
     fails — the same guards as ``P2Nonlinear._solve_spd``.  The symbolic
     analysis is reused while the pattern holds."""
 
+    # live PARDISO handles of all FrameFactors (leak check, tests)
+    _open_lock = threading.Lock()
+    _open_count = 0
+
+    @classmethod
+    def open_handles(cls) -> int:
+        return int(cls._open_count)
+
     def __init__(self, own: Optional[Callable] = None,
                  release: Optional[Callable] = None) -> None:
         self._own = own
@@ -263,6 +277,8 @@ class FrameFactor:
             except Exception:    # noqa: BLE001 — no scope: released by close()
                 pass
         self._h = h
+        with FrameFactor._open_lock:
+            FrameFactor._open_count += 1
         return h
 
     def factor(self, A, mkl_threads: Optional[int] = None) -> None:
@@ -345,6 +361,8 @@ class FrameFactor:
         self._M = None
         if h is None:
             return
+        with FrameFactor._open_lock:
+            FrameFactor._open_count -= 1
         try:
             if self._release is not None:
                 self._release(h)
@@ -404,7 +422,12 @@ def gmres_right(matvec: Callable[[np.ndarray], np.ndarray], b: np.ndarray, *,
                 restart: int = 40, maxiter: int = 200
                 ) -> Tuple[np.ndarray, Dict[str, Any]]:
     """Solve matvec(x) = b; x = prec(y) with GMRES on matvec∘prec.  Modified
-    Gram-Schmidt with one re-orthogonalisation; ``maxiter`` counts matvecs."""
+    Gram-Schmidt with one re-orthogonalisation; ``maxiter`` counts matvecs.
+
+    ``info["rel_resid"]`` is the TRUE relative residual ||b - matvec(x)|| / ||b||
+    of the UNpreconditioned system (recomputed from x after every cycle, not
+    the Arnoldi estimate); ``info["converged"]`` says whether it met ``rtol``
+    (False when ``maxiter`` stopped it)."""
     P = prec if prec is not None else (lambda v: v)
     n = b.size
     x = np.zeros(n) if x0 is None else np.array(x0, float)
@@ -412,6 +435,7 @@ def gmres_right(matvec: Callable[[np.ndarray], np.ndarray], b: np.ndarray, *,
     info: Dict[str, Any] = {"iterations": 0, "restarts": 0, "resid": []}
     if bn == 0.0:
         info["rel_resid"] = 0.0
+        info["converged"] = True
         return np.zeros(n), info
     r = b - (matvec(x) if x0 is not None else 0.0)
     it = 0
@@ -462,6 +486,7 @@ def gmres_right(matvec: Callable[[np.ndarray], np.ndarray], b: np.ndarray, *,
         r = b - matvec(x)
         info["restarts"] += 1
     info["iterations"] = it
+    info["converged"] = bool(info["rel_resid"] <= rtol)
     return x, info
 
 
@@ -864,16 +889,44 @@ class TimePeriodicEddy:
                         if self.eta is None else float(self.eta))
                 rec["gmres_rtol"] = _eta
                 # right preconditioning: the returned x is already P·y
-                wsol, ginfo = gmres_right(
-                    mv, g, prec=(self._coarse_apply if self._coarse else None),
-                    rtol=_eta, maxiter=self.gmres_max)
+                _prec = self._coarse_apply if self._coarse else None
+                wsol, ginfo = gmres_right(mv, g, prec=_prec, rtol=_eta,
+                                          maxiter=self.gmres_max)
+                if not ginfo.get("converged", False):
+                    # one more budget, restarted from where it stopped
+                    _its0 = int(ginfo["iterations"])
+                    wsol, ginfo = gmres_right(mv, g, prec=_prec, x0=wsol,
+                                              rtol=_eta, maxiter=self.gmres_max)
+                    ginfo["iterations"] = int(ginfo["iterations"]) + _its0
+                    ginfo["retried"] = True
             else:
                 wsol, ginfo = np.zeros(2 * self.nc), {"iterations": 0,
-                                                     "rel_resid": 0.0}
-            _, xs = self._sweep(rhs, (wsol[:self.nc], wsol[self.nc:]), keep_x=True)
+                                                     "rel_resid": 0.0,
+                                                     "converged": True}
             self.stats["gmres_iterations"] += int(ginfo["iterations"])
             rec["gmres_iterations"] = int(ginfo["iterations"])
+            # the TRUE residual of the unpreconditioned wrap system
             rec["gmres_rel_resid"] = float(ginfo.get("rel_resid", 0.0))
+            rec["gmres_converged"] = bool(ginfo.get("converged", False))
+            self.stats["gmres_max_rel_resid"] = max(
+                float(self.stats.get("gmres_max_rel_resid", 0.0)),
+                rec["gmres_rel_resid"])
+            if (not rec["gmres_converged"]
+                    and rec["gmres_rel_resid"] > GMRES_ACCEPT_FACTOR * float(
+                        rec.get("gmres_rtol", self.gmres_rtol))):
+                # an inaccurate shooting correction is NOT taken (Codex review
+                # 2026-09-30): the Newton stops unconverged, and the caller
+                # marches instead
+                self.stats["stopped_by"] = "gmres_not_converged"
+                if self.log is not None:
+                    self.log.warning(
+                        "TDM Newton %d: wrap GMRES did not converge (true "
+                        "relative residual %.3e after %d iterations, forcing "
+                        "%.1e) — step rejected", it, rec["gmres_rel_resid"],
+                        rec["gmres_iterations"], rec.get("gmres_rtol", 0.0))
+                self._tick("linear", t0)
+                break
+            _, xs = self._sweep(rhs, (wsol[:self.nc], wsol[self.nc:]), keep_x=True)
             self._tick("linear", t0)
             dA = [fr.pad(x[:fr.nfree]) for fr, x in zip(self.frames, xs)]
             dU = [x[fr.nfree:] for fr, x in zip(self.frames, xs)]
@@ -1031,4 +1084,92 @@ def image_min_br(mags: Sequence[Dict[str, Any]], br: np.ndarray,
     for k in sorted(maps):
         v = np.minimum(v, br[maps[k]])
     out[idx] = v
+    return out
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  acceptance: the owner's observables of a window of frames
+# ════════════════════════════════════════════════════════════════════════
+def group_joule(A: np.ndarray, U: np.ndarray, a1: np.ndarray, a2: np.ndarray, *,
+                dte: float, Mg: Dict[str, Any], GT, S_raw: np.ndarray,
+                body_group: Sequence[str]) -> Dict[str, float]:
+    """σ∫E² of every conductor GROUP ("cu", "mag", "shaft", "sleeve", …) at one
+    frame, with the step's own BDF2 derivative (a1 = A_{k-1}, a2 = A_{k-2}):
+    dA'·M_g·dA plus, for each body b of the group, U_b·(U_b·S_b − 2·(G'dA)_b)
+    — :meth:`TimePeriodicEddy.joule` split by group [W per metre of sector]."""
+    dA = (np.asarray(A, float) - (C_M1 * np.asarray(a1, float)
+                                  + C_M2 * np.asarray(a2, float))) / float(dte)
+    gd = np.asarray(GT @ dA).ravel()
+    U = np.asarray(U, float)
+    out = {str(g): float(dA @ (M @ dA)) for g, M in Mg.items()}
+    for b, g in enumerate(body_group):
+        out[str(g)] = out.get(str(g), 0.0) + float(
+            U[b] * (U[b] * float(S_raw[b]) - 2.0 * gd[b]))
+    return out
+
+
+def window_gate(ref: Dict[str, Any], got: Dict[str, Any], *,
+                T_rel: float = 1e-3, ripple_pp: float = 0.05,
+                P_rel: float = 5e-3, P_floor_rel: float = 1e-4
+                ) -> Tuple[bool, Dict[str, Any]]:
+    """Compare two windows' observables (``{"T_mean", "ripple_pct",
+    "P": {group: W}}``) in the owner's terms: mean torque within ``T_rel``,
+    ripple within ``ripple_pp`` percentage points, every conductor group's loss
+    within ``P_rel`` of itself or ``P_floor_rel`` of the whole conductor loss
+    (a group below that floor cannot move the total or the efficiency)."""
+    dT = abs(got["T_mean"] - ref["T_mean"]) / max(abs(ref["T_mean"]), 1e-300)
+    dR = abs(got["ripple_pct"] - ref["ripple_pct"])
+    Ptot = max(sum(abs(v) for v in ref["P"].values()), 1e-300)
+    dP = {}
+    ok_P = True
+    for g, v in ref["P"].items():
+        d = abs(got["P"].get(g, 0.0) - v)
+        tol = max(P_rel * abs(v), P_floor_rel * Ptot)
+        dP[g] = {"rel": d / max(abs(v), 1e-300), "abs_W_per_m": d,
+                 "tol_W_per_m": tol, "ok": bool(d <= tol)}
+        ok_P = ok_P and d <= tol
+    ok = bool(dT <= T_rel and dR <= ripple_pp and ok_P)
+    return ok, {"ok": ok, "T_mean_rel": dT, "ripple_pp": dR, "P": dP,
+                "tol": {"T_rel": T_rel, "ripple_pp": ripple_pp, "P_rel": P_rel,
+                        "P_floor_rel": P_floor_rel}}
+
+
+# ════════════════════════════════════════════════════════════════════════
+#  demag: how far Br moved, and the pole-pair relabelling of a continued pass
+# ════════════════════════════════════════════════════════════════════════
+def br_change(mags: Sequence[Dict[str, Any]], br0: np.ndarray, br1: np.ndarray,
+              areas: np.ndarray) -> Dict[str, float]:
+    """How far the Br map (per rotor element, fraction of Br0) moved between
+    two instants: per magnet the area-weighted mean |ΔBr| (the magnet's flux,
+    hence torque, change), its maximum over the magnets (the settle measure),
+    the area mean over all magnets and the largest single element."""
+    per = []
+    num = 0.0
+    den = 0.0
+    emax = 0.0
+    for d in mags:
+        ix = np.asarray(d["idx"], int)
+        a = np.asarray(areas, float)[ix]
+        dd = np.abs(np.asarray(br1, float)[ix] - np.asarray(br0, float)[ix])
+        s = float(np.sum(a))
+        per.append(float(np.sum(dd * a)) / max(s, 1e-30))
+        num += float(np.sum(dd * a))
+        den += s
+        if dd.size:
+            emax = max(emax, float(np.max(dd)))
+    return {"per_magnet_mean_max": float(max(per) if per else 0.0),
+            "area_mean": num / max(den, 1e-30), "element_max": emax}
+
+
+def relabel_br(br: np.ndarray, elems: np.ndarray, image: np.ndarray) -> np.ndarray:
+    """Br carried one electrical period back, exactly as the eddy state is
+    (``rotor_window.period_shift_map`` on the magnet-element centroids):
+    element ``elems[i]`` takes the Br of element ``elems[image[i]]``.  A pass
+    re-run at the SAME rotor angles after this relabelling is the NEXT period
+    in time for every magnet (rotor pole-pair periodic), so repeated pre-pass
+    periods are one continuous history — as the march's splice makes them for
+    the eddy field."""
+    out = np.array(br, float, copy=True)
+    e = np.asarray(elems, int)
+    out[e] = np.asarray(br, float)[e[np.asarray(image, int)]]
     return out

@@ -124,11 +124,12 @@ ENV_RETHREAD = "SOLVE_POOL_RETHREAD_S"
 #: Fallback per-solve RSS before any child has been measured.  A 40 mm march
 #: child peaked at ~355 MB on the AX42 (docs/SOLVE_POOL_2026-09-29.md).  The
 #: time-periodic eddy solve (eddy_method="tdm", the default since 2026-09-30)
-#: keeps one factor per frame of the half period: peak RSS 1.0 GB (Ø40), 1.3 GB
-#: (L13), 1.7-1.9 GB (L155) measured (docs/TDM_PROTOTYPE_2026-09-30.md) —
-#: 2.5 GB covers it with the frame keyframes a Simulation run keeps; six
-#: parallel solves (15 GB) fit the API container's 40 GB with the reserve.
-DEFAULT_RSS_MB = 2500
+#: keeps one factor per frame of the (full, since the Codex review) period:
+#: peak RSS 1.6 GB (Ø40), 2.2-2.3 GB (L13), 4.5 GB (L155) measured against the
+#: march's 0.4-0.75 GB (docs/TDM_PROTOTYPE_2026-09-30.md §3.8) — 4.6 GB covers
+#: the largest; six parallel solves (28 GB) fit the API container's 40 GB with
+#: the reserve.  After three finished children the measured peaks take over.
+DEFAULT_RSS_MB = 4600
 DEFAULT_RESERVE_MB = 2048
 #: Widest a lone solve gets by default.  Measured on the AX42 (40 mm static,
 #: docs/SOLVE_POOL_2026-09-29.md): 1 thread 60 s, 4 threads 61 s, 6 threads

@@ -112,7 +112,7 @@ def _march(m, dt, periods):
     return out
 
 
-def _tdm(m, dt, n_frames, wrap, coarse, starts):
+def _tdm(m, dt, n_frames, wrap, coarse, starts, workers=2, **solver_kw):
     cond = np.flatnonzero(m["Msig"].diagonal() > 0)
     Msd = tp.bdf2_msd(m["Msig"], dt)
     frames = []
@@ -129,7 +129,7 @@ def _tdm(m, dt, n_frames, wrap, coarse, starts):
     s = tp.TimePeriodicEddy(kfun=m["kfun"], tangent=m["tangent"], f_mag=m["f"],
                             G=m["G"], Msig=m["Msig"], S_raw=m["S"], dt=dt,
                             frames=frames, wrap_back=wrap, cond=cond, coarse=spec,
-                            tol=1e-11, workers=2)
+                            tol=1e-11, workers=workers, **solver_kw)
     try:
         st = s.solve(starts, [np.zeros(1)] * n_frames)
         return [fr.A.copy() for fr in s.frames], st
@@ -250,3 +250,120 @@ def test_analytic_dnu_dB2_matches_the_curve_off_the_knots():
     fd = (nu(np.sqrt(B * B + h)) - nu(np.sqrt(B * B - h))) / (2 * h)
     an = tp.dnu_dB2(curve, B, MU0)
     assert np.allclose(an, fd, rtol=1e-4, atol=1e-6 * np.max(np.abs(fd)))
+
+
+# -- Codex review 2026-09-30: parallel frames, GMRES status, the gate --------
+def test_parallel_frames_equal_serial_and_release_every_handle():
+    """Per-frame state is private (own factor, own PARDISO handle, Kpw memo is
+    content-keyed): the orbit with 3 workers equals the serial one bit for bit,
+    run after run, and no handle outlives the solver."""
+    m = _model(dc_source=True)
+    dt = 1e-4
+    starts = [np.zeros(N) for _ in range(NSTEP)]
+    ref, st_ref = _tdm(m, dt, NSTEP, lambda v: np.array(v, float), True, starts,
+                       workers=1)
+    assert st_ref["converged"]
+    for _rep in range(3):
+        par, st = _tdm(m, dt, NSTEP, lambda v: np.array(v, float), True, starts,
+                       workers=3)
+        assert st["converged"]
+        assert st["newton_iterations"] == st_ref["newton_iterations"]
+        assert max(float(np.max(np.abs(a - b))) for a, b in zip(par, ref)) == 0.0
+    assert tp.FrameFactor.open_handles() == 0
+
+
+def test_gmres_reports_convergence_and_the_true_residual():
+    rng = np.random.default_rng(1)
+    A = np.eye(40) + 0.9 * rng.standard_normal((40, 40)) / math.sqrt(40)
+    b = rng.standard_normal(40)
+    x, info = tp.gmres_right(lambda v: A @ v, b, rtol=1e-12, restart=5, maxiter=5)
+    assert info["converged"] is False
+    true = np.linalg.norm(b - A @ x) / np.linalg.norm(b)
+    assert info["rel_resid"] == pytest.approx(true, rel=1e-12)
+    x, info = tp.gmres_right(lambda v: A @ v, b, rtol=1e-10, restart=40, maxiter=400)
+    assert info["converged"] is True
+    assert np.linalg.norm(b - A @ x) / np.linalg.norm(b) <= 1e-10
+
+
+def test_newton_rejects_an_inaccurate_wrap_solve():
+    """A wrap GMRES that misses its forcing term by more than
+    GMRES_ACCEPT_FACTOR is not taken: the Newton stops unconverged (the
+    caller then marches)."""
+    m = _model(dc_source=True, sig_ring=20.0)     # slow ring: many iterations
+    dt = 1e-4
+    starts = [np.zeros(N) for _ in range(NSTEP)]
+    _, st = _tdm(m, dt, NSTEP, lambda v: np.array(v, float), False, starts,
+                 gmres_max=1, eta=1e-8)
+    assert st["converged"] is False
+    assert st["stopped_by"] == "gmres_not_converged"
+    rec = st["newton"][-1]
+    assert rec["gmres_converged"] is False
+    assert rec["gmres_rel_resid"] > tp.GMRES_ACCEPT_FACTOR * 1e-8
+
+
+def test_group_joule_splits_the_frame_loss_by_group():
+    m = _model(dc_source=True)
+    rng = np.random.default_rng(2)
+    A, a1, a2 = (rng.standard_normal(N) for _ in range(3))
+    U = np.array([0.7])
+    dte = tp.DTE_FACTOR * 1e-4
+    sig = m["Msig"].diagonal()
+    wire = np.zeros(N); wire[5:13] = sig[5:13]
+    ring = np.zeros(N); ring[20:31] = sig[20:31]
+    Mg = {"cu": diags(wire, format="csr"), "shaft": diags(ring, format="csr")}
+    out = tp.group_joule(A, U, a1, a2, dte=dte, Mg=Mg, GT=m["G"].T.tocsr(),
+                         S_raw=m["S"], body_group=["cu"])
+    dA = (A - (tp.C_M1 * a1 + tp.C_M2 * a2)) / dte
+    whole = float(dA @ (m["Msig"] @ dA)) + float(
+        U[0] * (U[0] * m["S"][0] - 2.0 * float(np.asarray(m["G"].T @ dA).ravel()[0])))
+    assert out["cu"] + out["shaft"] == pytest.approx(whole, rel=1e-12)
+    assert out["shaft"] == pytest.approx(float(dA @ (Mg["shaft"] @ dA)), rel=1e-12)
+
+
+def test_window_gate_in_the_owners_terms():
+    ref = {"T_mean": 10.0, "ripple_pct": 5.0, "P": {"cu": 100.0, "shaft": 1.0,
+                                                   "mag": 0.001}}
+    ok, info = tp.window_gate(ref, {"T_mean": 10.009, "ripple_pct": 5.04,
+                                    "P": {"cu": 100.4, "shaft": 1.004, "mag": 0.0015}})
+    assert ok, info           # mag moved 50 % but is below 1e-4 of the total
+    for bad in ({"T_mean": 10.02}, {"ripple_pct": 5.06},
+                {"P": {"cu": 100.0, "shaft": 1.02, "mag": 0.001}}):
+        got = {"T_mean": 10.0, "ripple_pct": 5.0, "P": dict(ref["P"])}
+        got.update(bad)
+        assert not tp.window_gate(ref, got)[0], bad
+
+
+def test_br_change_and_the_period_relabelling():
+    mags = [{"idx": np.array([0, 1])}, {"idx": np.array([2, 3])}]
+    areas = np.array([1.0, 3.0, 1.0, 1.0])
+    b0 = np.ones(4)
+    b1 = np.array([0.9, 1.0, 1.0, 0.98])
+    c = tp.br_change(mags, b0, b1, areas)
+    assert c["per_magnet_mean_max"] == pytest.approx(0.1 / 4)   # magnet 0
+    assert c["element_max"] == pytest.approx(0.1)
+    assert c["area_mean"] == pytest.approx(0.12 / 6)
+    # relabel: element elems[i] takes the Br of elems[image[i]]
+    br = np.array([5.0, 0.1, 0.2, 0.3, 0.4])
+    out = tp.relabel_br(br, np.array([1, 2, 3, 4]), np.array([2, 3, 0, 1]))
+    assert out.tolist() == [5.0, 0.3, 0.4, 0.1, 0.2]
+
+
+def test_frame_factor_falls_back_to_lu_and_releases_its_handle():
+    """A matrix Cholesky must decline (indefinite, or unsymmetric) is factorised
+    by LU, loudly (lu_used), and solves correctly; close() releases it."""
+    rng = np.random.default_rng(3)
+    for M in (diags([1.0, -2.0, 3.0, 4.0], format="csr"),                 # indefinite
+              csr_matrix(np.eye(4) + 0.3 * rng.standard_normal((4, 4)))):  # unsymmetric
+        f = tp.FrameFactor()
+        f.factor(M)
+        assert f.lu_used
+        b = rng.standard_normal(4)
+        x = np.asarray(f.solve(b)).ravel()
+        assert np.allclose(M @ x, b, atol=1e-10)
+        f.close()
+    spd = diags([2.0, 3.0, 4.0, 5.0], format="csr")
+    f = tp.FrameFactor()
+    f.factor(spd)
+    assert not f.lu_used
+    f.close()
+    assert tp.FrameFactor.open_handles() == 0

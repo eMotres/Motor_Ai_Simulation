@@ -5,9 +5,26 @@ Branch `feat/tdm-prototype` from `pre-migration-freeze-2026-09-15` (f852bd2).
 Input: `GPU_TDM_STUDY_2026-09-29.md` §4 (branch `perf/profiling-gpu-tdm`),
 `EDDY_SHAFT_SETTLE_2026-09-29.md` (TP-EEC), `CHOLESKY_SPD_2026-09-29.md`.
 
-**Status: complete: validated on the three machines, TDM is the default (§0),
-Coulomb, demag-shortcut and gap-layer checks done (§2.5–2.7); draft PR #87, not
-merged, not deployed.** The progress log at the end is the resume point.
+**Status:** validated on the three machines; TDM is the default (§0); the Coulomb,
+demag-shortcut and gap-layer checks are done (§2.5–2.7). The Codex review's findings
+are answered and fixed, and the fixes re-validated (§3). Draft PR #87, not merged,
+not deployed. The progress log at the end is the resume point.
+
+**After the Codex review (§3), in short:**
+
+- The reported period is accepted only if it reproduces the orbit in torque, ripple
+  and every conductor group's loss (the gate). A rejected attempt is thrown away
+  whole and the request is solved again: strictly, then as a march.
+- The full period is the default.
+- The demag pre-pass repeats to a fixed point in BOTH methods, and a reported period
+  in which Br still moves is labelled `steady_state: false`.
+- Re-validated on five duties plus the severe-demag gap-layer case. March and TDM
+  agree to ≤ 1.8e-6 in torque and ≤ 0.0004 pp in ripple, and the gate never fired.
+- Speed now: L155 3.5×, L13 peak 1.4×, the others about 1×.
+- Peak RSS is up to 4.5 GB (L155).
+
+The numbers in §2 were measured before the review: half period, one pre-pass
+period.
 
 ## Summary
 
@@ -45,12 +62,13 @@ merged, not deployed.** The progress log at the end is the resume point.
   self-check — a steady-state property of that ring, not a transient. L13 (Br
   kept 20 %) differs in period 1 only because the one-period demag pre-pass has
   not converged the ratchet in either method; three periods agree to 1e-4.
-- **Recommendation: GO**, and the owner switched it on (§0): TDM is the default
-  eddy method of every steady-state eddy run, with the full demag pre-pass by
-  default and the shortcut as an option until it is qualified on more machines;
-  voltage drive / PWM, series strand paths and full-ring models are marched
-  automatically with a note, and a TDM failure is marched loudly. Memory: 2.5–3×
-  the march's peak RSS (per-frame factors); the solve pool's estimate follows.
+- **Recommendation: GO**, and the owner switched it on (§0). TDM is the default eddy
+  method of every steady-state eddy run: full period, the full demag pre-pass to its
+  fixed point, and the acceptance gate. The shortcut is EXPERIMENTAL. Voltage drive /
+  PWM, series strand paths and full-ring models are marched automatically with a
+  note, and a rejected TDM attempt is re-solved as a clean march.
+- **Memory:** 3–6× the march's peak RSS (per-frame factors, full period); the solve
+  pool's estimate follows (4.6 GB).
 
 ## 0. Default switch (owner's decision, 2026-09-30)
 
@@ -68,14 +86,27 @@ through `em_transient_eval` without choosing, so they all get TDM.
   excitation object, a fractional window, backward Euler) is marched; the result
   says `eddy_method: "march"`, `eddy_method_requested: "tdm"` and
   `eddy_method_note: "march: TDM not applicable (…)"`.
-- **Failure fallback, loud.** Any exception or non-convergence inside the TDM
-  attempt is logged as a warning, everything the attempt touched (the Br map, the
-  magnet source, the demag diagnostics, the eddy histories) is restored, and the
-  run is marched from its normal static start: `eddy_method_note: "march: TDM
-  failed (…) — marched instead"`, `tdm.failed`. A Stop (a BaseException) is not
-  caught.
-- `tdm_demag="full"` (default, the march's one-period pre-pass on the orbit) or
-  `"shortcut"` (the owner's 1/6-period window), argument or `SB_TDM_DEMAG`.
+- **Transactional attempts (since the Codex review, §3).** A TDM attempt that
+  fails at any stage — or whose reported period fails the acceptance gate — is
+  NOT repaired in place: the whole solve is discarded (`TdmAttemptFailed`) and
+  `fem_transient_sliding_band` solves the request again from scratch: after a
+  gate failure on the owner's-terms stop, TDM once more with the strict 1e-7
+  state-residual stop; otherwise, or if that fails too, a march:
+  `eddy_method_note: "march: TDM failed (<stage>: …) — marched instead"`,
+  `tdm.attempts` records every attempt. A Stop (a BaseException) is not caught.
+- **The acceptance gate (§3.4).** The reported period, marched from the orbit by
+  the unchanged frame loop, must reproduce the orbit frame for frame in the
+  owner's observables (torque mean 0.1 %, ripple 0.05 pp, every conductor
+  group's loss 0.5 %); `tdm.gate` records it.
+- **Demag fixed point (§3.3, both methods).** The pre-pass repeats, continuous in
+  time, until one period moves Br by ≤ 1e-3 (worst magnet, area mean); a
+  reported period in which Br still moves is labelled `demag_settled: false`,
+  `steady_state: false` — never reported as a steady state.
+- `tdm_demag="full"` (default, the pre-pass above on the orbit) or `"shortcut"`
+  (the owner's 1/6-period window: **EXPERIMENTAL**, not qualified, announced in
+  `eddy_method_note`), argument or `SB_TDM_DEMAG`; no workflow sets it.
+- The FULL period is the default; the half period is opt-in (`SB_TDM_HALF=1`,
+  §3.2).
 - With `torque_method="coulomb"` (the default since #88) the stopping monitor uses the Coulomb
   virtual-work torque of each iterate's frames (`virtual_work_torque.
   frame_torques`, the loop's own call); the reported period's Coulomb series,
@@ -88,6 +119,8 @@ through `em_transient_eval` without choosing, so they all get TDM.
   is honoured at each.
 - Tests that pin the MARCH's own behaviour (the warm-up, its settle verdict, the
   warm seed, seed reproducibility) now request `eddy_method="march"`.
+- The Simulation summary (what the UI and reports read) carries `eddy_method`,
+  `eddy_method_requested`, `eddy_method_note`, `demag_settled` and `steady_state`.
 
 ## 1. What was built
 
@@ -162,8 +195,12 @@ The irreversible ratchet is not periodic. TDM solves the orbit on the pristine m
 active), then re-solves the orbit on the ratcheted magnet (warm start) and marches the
 reported period with the ratchet active (as the march does).
 
-- `SB_TDM_DEMAG=full` (default): one whole electrical period, like the march's pre-pass.
-- `SB_TDM_DEMAG=shortcut` (the owner's): on the pristine orbit, the (magnet, instant)
+- `SB_TDM_DEMAG=full` (default): whole electrical periods, like the march's pre-pass,
+  REPEATED to the demag fixed point since the Codex review (§3.3): each further period
+  is the next one in time (Br relabelled one period back by the eddy splice's own
+  pole-pair map, the orbit re-solved on it), until a period moves Br by ≤
+  `SB_DEMAG_SETTLE_TOL` (1e-3), at most `SB_DEMAG_PREPASS_MAX` (8) periods.
+- `SB_TDM_DEMAG=shortcut` (the owner's, **EXPERIMENTAL** — not qualified, §2.6): on the pristine orbit, the (magnet, instant)
   with the largest predicted Br loss is located (`predicted_demag`, the ratchet rule
   without the update); only a window of ⌈N_steps/6⌉ frames around it is marched with
   the ratchet; that magnet's Br map is copied to every other magnet through the pole
@@ -195,8 +232,12 @@ Knobs: `SB_EDDY_METHOD`, `SB_TDM_DEMAG=full|shortcut`, `SB_TDM_STOP=owner|residu
 `SB_TDM_ETA` (0.01; `adaptive`), `SB_TDM_TANGENT=clamped|exact|analytic`,
 `SB_TDM_START=static_seq|static_par|static|project`, `SB_TDM_WORKERS` (frames
 factorised concurrently), `SB_TDM_MKL_THREADS` (MKL threads per factorisation),
-`SB_TDM_TOL` (1e-7), `SB_TDM_MAX_NEWTON` (25), `SB_TDM_HALF=0`, `SB_TDM_HALF_TOL`
-(1e-4), `SB_TDM_COARSE=0`, `SB_TDM_DEMAG_WINDOW` (fraction of the period, 1/6).
+`SB_TDM_TOL` (1e-7), `SB_TDM_MAX_NEWTON` (25), `SB_TDM_HALF=1` (opt-in half period),
+`SB_TDM_HALF_TOL` (1e-5), `SB_TDM_COARSE=0`, `SB_TDM_DEMAG_WINDOW` (fraction of the
+period, 1/6); the gate `SB_TDM_GATE_T` (1e-3), `SB_TDM_GATE_RIPPLE` (0.05 pp),
+`SB_TDM_GATE_P` (5e-3), `SB_TDM_GATE_PFLOOR` (1e-4); both methods
+`SB_DEMAG_SETTLE_TOL` (1e-3), `SB_DEMAG_PREPASS_MAX` (8); tests only
+`SB_TDM_FAULT=<stage>`.
 
 ## 2. Validation
 
@@ -579,6 +620,202 @@ paired numbers are §2.4–2.5. Reading the differences:
   (`torque_method="coulomb"`, #86), and the stopping monitor used it there. The
   result carries the method of every eddy run (`torque_method`).
 
+## 3. Codex review of PR #87 (2026-09-30): verdicts, fixes, re-validation
+
+Codex, reviewing the diff, called the TDM default BLOCKING. Every claim was checked
+against the code and, where it was about numbers, measured. The fixes are in
+`fem_transient_sliding_band` (now the transactional wrapper),
+`_fem_transient_sliding_band_once` (the solver body) and `time_periodic.py`. The
+re-validation ran on the server sandbox with this branch (snapshot T21), 4 threads,
+Coulomb torque (the default since #88).
+
+### 3.1 Verdicts
+
+| # | Codex finding | Verdict | Fix |
+|---|---|---|---|
+| 1 | The owner-terms stop accepts rrel < 1e-5; no bounded state error (Blocker) | **Real** (by design, not certified) | A hard ACCEPTANCE GATE on the reported period (§3.4). A failure re-solves with the strict 1e-7 residual stop, then marches |
+| 2 | The half period is knowingly approximate (Blocker) | **Real**, and larger than reported on the 30 mm fixture: its discrete orbit is not half-period symmetric (shaft state 8 % off the anti-periodic image, shaft loss +0.56 % half against full) | The FULL period is the default. The half period is opt-in (`SB_TDM_HALF=1`) with the source test tightened from 1e-4 to 1e-5. Half-vs-full regression on Ø40, L13, L155 and the fixture (§3.2) |
+| 3 | Active demag: the reported period is not steady (Blocker) | **Real, and shared with the march** | A demag FIXED POINT for both methods; `demag_settled` / `steady_state` in the result (§3.3) |
+| 4 | The rollback is not transactional (High) | **Partly real.** The in-place restore covered Br, the magnet source, the demag diagnostics and the eddy histories; the factors were closed in `finally` and the warm cache is written only after a run returns. None of this was demonstrated | TRANSACTIONAL: a rejected attempt raises `TdmAttemptFailed`, its whole solve is discarded, and the request is solved again from scratch. Every solve runs in its own PARDISO scope. Fault injection at set-up, static start, Newton, demag, re-solve, splice and the gate, each followed by a march equal to a clean march (§3.5) |
+| 5 | Thread safety of parallel frames (High) | **Not real on the default path.** Frames are serial by default (`SB_TDM_WORKERS=1`). With workers, each frame owns its factor and its PARDISO handle; `Kpw`'s memo is an immutable tuple keyed on content, so a racing thread gets its own K; the tangent's `last_dhdb_min_rel` is only a statistic | Tests: synthetic parallel = serial bit for bit (3 repeats); FEM parallel = serial to the Newton tolerance, repeats identical to round-off; open PARDISO handles 0 after every solve (§3.6) |
+| 6 | GMRES stops at maxiter without a status; record the true residual (Medium) | **Real** for the status. The recorded residual was already the true one (recomputed from x after each cycle) | A `converged` flag; one restart from where it stopped; a step whose true residual is more than 10× its forcing term is rejected (the Newton stops unconverged, and the run is marched). The true residual of each step and its maximum are recorded |
+| 7 | Integration tests for every entry point (Medium) | **Real**, and they found a gap: the route's summary did not carry `eddy_method` / `eddy_method_note` | The summary carries `eddy_method`, `eddy_method_requested`, `eddy_method_note`, `demag_settled`, `steady_state`. New `tests/test_tdm_entry_points.py` (§3.7) |
+| 8 | The shortcut is exposed (Medium) | **Real** | EXPERIMENTAL label: `eddy_method_note` says so, plus `tdm.demag.experimental` and a log warning. No workflow sets it (AST test) |
+| 9 | Correctness of the anti-periodic map (High) | Checked. The gate verifies the closure of both BDF2 history levels on every run. The forward map (used only for the starts of later frames) is compared with the back map (`maps_inverse_dev`: 0 on the fixture orbit). Half against full is measured (§3.2) | — |
+| 10 | Coverage: slow conductors, LU fallback, failed factorisation, parallel workers, fallback equivalence (Medium) | Real in part | Tests for the LU fallback, fault injection and parallel workers. Slow conductors against 40-period marches were already in §2.1 |
+
+### 3.2 Half against full period
+
+TDM, demag off: the default (full period) against `SB_TDM_HALF=1`. The L155 needs the
+old 1e-4 source tolerance to take the half period. Relative differences:
+
+| machine | T_avg full → half | ripple [%] full → half | P_mag | P_shaft | P_sleeve | P_cu AC | P_fe | total | wall full → half | magnet-source asymmetry |
+|---|---|---|---|---|---|---|---|---|---|---|
+| d40 | 0.6197595 → 0.6197595 (+3.3e-09) | 5.3186 → 5.3186 (+0.0000 pp) | -3.8e-08 | +5.5e-05 | – | -1.7e-07 | +8.2e-08 | +0.0e+00 | 45 → 34 s | 6.3e-06 (half_antiperiodic, gate True/True) |
+| l13 | 5.453091 → 5.453091 (-1.2e-10) | 6.2296 → 6.2296 (-0.0000 pp) | +2.9e-08 | +1.1e-07 | – | -7.7e-09 | -4.1e-09 | +0.0e+00 | 53 → 41 s | 1.3e-06 (half_antiperiodic, gate True/True) |
+| l155 | 185.4165 → 185.4165 (+7.0e-08) | 1.5582 → 1.5582 (+0.0000 pp) | +4.8e-06 | +2.7e-06 | +7.4e-06 | +1.7e-06 | +1.2e-07 | +5.2e-07 | 157 → 103 s | 2.2e-05 (half_antiperiodic, gate True/True) |
+
+On these three machines the half period is exact to ≤ 5.5e-5 in every quantity. It is
+also 25–35 % faster.
+
+The 30 mm fixture is different (`tests/test_tdm_fem.py`). There the half period gives
+torque 1.7e-7, ripple 2e-5 pp, copper AC +1e-4, magnet +9e-6, **shaft +0.56 %** and
+total 9e-6. In BOTH orbits the reported torque of the second half-period differs from
+the first by up to 0.3 %; the full-period orbit reproduces the same reported period to
+1e-6. So the discrete model is not exactly half-period symmetric there. The gate
+compares the reported period with the orbit frame for frame, so it could certify only
+the first half of a half-period orbit.
+
+Hence the full period is the default, and the half period is an opt-in for machines
+where this table holds.
+
+### 3.3 Demag fixed point (shared by both methods)
+
+The pre-pass is repeated. Each further period is continuous in time: the splice's
+pole-pair map carries the eddy state one period back, and the same map, applied to the
+magnet-element centroids, relabels the Br map; TDM re-solves the orbit on it. The
+repetition stops when one period moves Br by ≤ `SB_DEMAG_SETTLE_TOL` = 1e-3 (worst
+magnet, area mean of |ΔBr|/Br0, so the magnet flux and hence torque moves by ≤ 0.1 %
+in a period), after at most `SB_DEMAG_PREPASS_MAX` = 8 periods.
+
+The REPORTED period is measured the same way and recorded as:
+
+- `demag_settle`: the change per pre-pass period and in the report;
+- `demag_settled`;
+- `steady_state`: the eddy field settled AND Br not moving.
+
+A run above the tolerance in its reported period is labelled `demag_settled: false` and
+`steady_state: false`, with a warning. The gate then keeps it: a Br transient is not a
+TDM defect.
+
+| case | pre-pass periods (march / TDM) | Br moved per pre-pass period (TDM; the march's agree to two digits) | Br moved in the reported period (march / TDM) | Br kept [% vol] (march / TDM) |
+|---|---|---|---|---|
+| Ø40 rated | 2 / 2 | 0.0068, 0.00098 | 1.7e-4 / 1.7e-4 | 99.296 / 99.296 |
+| L13 rated | 4 / 4 | 0.010, 0.0039, 0.0013, 0.00046 | 2.1e-4 / 2.1e-4 | 98.818 / 98.818 |
+| L13 peak | 2 / 2 | 0.0023, 0.00093 | 6.0e-5 / 6.0e-5 | 99.761 / 99.761 |
+| L155 rated | 2 / 2 | 0.0079, 3.6e-7 | 7e-10 / 3e-10 | 99.213 / 99.213 |
+| Ø40 deep FW | 4 / 4 | 0.015, 0.0046, 0.0014, 0.00032 | 7.3e-5 / 7.3e-5 | 98.339 / 98.339 |
+| L13 gap-layer 1/side | 4 / 4 | 0.822, 0.022, 0.0036 (march 0.0031), < 1e-3 | settled / settled | 19.05 / 19.04 |
+
+- **Periods needed.** Every duty needs at least a second period: the first, from the
+  pristine magnet, always moves Br by the whole loss. L13 rated and Ø40 deep FW need
+  four. The L13 gap-layer case (magnets at 210.7 °C, Br kept 19 %) needs four too:
+  0.822, 0.022, 0.0031–0.0036, then < 1e-3.
+- **All settled.** In every case the reported period then moves Br by ≤ 2.1e-4.
+- **Results move** where the one-period pre-pass was not a steady state. Ø40 deep FW:
+  ripple 5.93 → 5.00 %, torque +0.11 %. L13 gap-layer case: torque 0.7883 → 0.7726 N·m
+  (the 3-period referee of §2.7 had reached 0.7743 in its third period).
+- **March and TDM agree on the fixed point:** the same number of periods, the same Br
+  kept to 0.01 %, torque within 1.7e-4 on the L13 gap-layer case and within 1.8e-6
+  elsewhere.
+- **The demag shortcut** (§2.6) was compared with a one-period pre-pass. It is not
+  re-qualified here and stays experimental.
+
+### 3.4 The acceptance gate
+
+The unchanged frame loop marches the reported period from the orbit. Its frames (A, U)
+are compared with the orbit's, frame for frame over the orbit's period, in the owner's
+observables, computed the same way for both:
+
+- the REPORTED torque method's mean, within 0.1 %;
+- its ripple, within 0.05 pp;
+- every conductor group's σE² loss, within 0.5 % of the group — or within 1e-4 of the
+  whole conductor loss for a group too small to move the total or the efficiency.
+
+The check is `time_periodic.window_gate`; the result records it in `tdm.gate`. A
+failure raises; the wrapper re-solves with the strict 1e-7 state residual, then
+marches.
+
+How often it fired: **never on a real run.** That is 0 of the 14 TDM solves of the
+re-validation (§3.8: 6 duties, 2 gap-rule re-solves of the L155, 6 half/full runs) and
+0 of the real solves in `tests/test_tdm_fem.py`. The margins are in §3.8; the worst
+were torque 1.7e-4, ripple 0.013 pp and one group 7e-4. It does fire on the injected
+fault: both attempts, then the march.
+
+Before the full-period default, it fired on every half-period solve of the 30 mm
+fixture, on the second half-period window (§3.2). That is why the default changed.
+
+### 3.5 Transactional attempts, fault injection
+
+`SB_TDM_FAULT=<stage>` (tests only) raises inside the attempt at `setup`,
+`static_start`, `newton`, `demag`, `resolve` or `splice`, or fails the `gate`. Each test
+asserts:
+
+- `eddy_method: "march"`, `eddy_method_requested: "tdm"`, a note naming the stage, and
+  `tdm.attempts`;
+- a real warm-up;
+- torque, total loss, copper AC, magnet and shaft equal to a clean march to 1e-9;
+- a demag history equal to the clean march's;
+- no live PARDISO handle.
+
+The gate case runs both attempts (owner stop, then strict) before the march.
+
+### 3.6 Parallel frames
+
+Serial is the default.
+
+- `tests/test_time_periodic.py`: 3 workers against 1, three repeats. The orbits and the
+  Newton counts are bitwise equal.
+- `tests/test_tdm_fem.py`: 3 workers × 1 MKL thread, two repeats. The runs equal the
+  serial run to 1e-6 (the parallel default start differs: every frame starts from frame
+  0's static field) and each other to 1e-12. The gate passes and no handle is left.
+
+### 3.7 Entry points
+
+`tests/test_tdm_entry_points.py` covers every door:
+
+- **The EM-tab route** (`get_fem_transient`), run for real up to the solver with a stub
+  FEM (as in `test_run_ledger`). It passes no `eddy_method` or `tdm_demag`, and its
+  summary returns the solver's method, note, `demag_settled` and `steady_state` in three
+  cases: TDM, a rejected TDM that was marched, and a demag transient.
+- **The other doors go through that route:** the coupled loop, passports, agent drafts /
+  MCP (via `agent_designs`) and the optimizer (`refine_proc` → kernel
+  `solver.em_transient` → `modules.solvers`).
+- **An AST scan of `src/`** finds no call passing a constant method or the shortcut, and
+  nothing setting `SB_EDDY_METHOD` / `SB_TDM_*`.
+- **The solve pool's child:** its environment carries `SB_EDDY_METHOD` /
+  `SB_TDM_DEMAG`, and a real child process resolves the argument, then the environment,
+  then the config, then the default.
+
+The real solves (TDM, every fallback, the notes, a clean march after each) are the 17
+tests of `tests/test_tdm_fem.py`, including `test_through_em_transient_eval`.
+
+### 3.8 Re-validation (march against TDM, same code, Coulomb torque, demag as the duty says)
+
+| case | T_avg: march → TDM | ripple [%] | P_mag | P_shaft | P_sleeve | P_cu AC | P_fe | total | wall march → TDM | demag periods (march / TDM) | Br moved in the report (march / TDM) | steady (march / TDM) |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Ø40 rated | 0.6156234 → 0.6156231 (-4.2e-07) | 5.56 → 5.5603 (+0.0003 pp) | +3.7e-05 | -1.7e-02 | – | -5.5e-06 | -1.1e-05 | +0.0e+00 | 130 → 126 s (**1.0×**) | 2 / 2 | 0.00017 / 0.00017 | True / True |
+| L13 rated | 5.343147 → 5.343145 (-3.2e-07) | 5.2027 → 5.2027 (+0.0001 pp) | +3.3e-05 | +1.7e-05 | – | -3.7e-05 | -1.4e-07 | +0.0e+00 | 296 → 302 s (**1.0×**) | 4 / 4 | 0.00021 / 0.00021 | True / True |
+| L13 peak | 9.319912 → 9.319911 (-1.2e-07) | 6.5211 → 6.5211 (+0.0000 pp) | -5.3e-06 | -2.2e-05 | – | -1.0e-05 | -4.0e-07 | +0.0e+00 | 230 → 170 s (**1.4×**) | 2 / 2 | 6e-05 / 6e-05 | True / True |
+| L155 rated | 184.4848 → 184.4851 (+1.8e-06) | 1.51 → 1.5101 (+0.0001 pp) | -9.8e-06 | +1.6e-02 | -3.8e-05 | -7.6e-06 | -5.3e-05 | -4.7e-06 | 803 → 228 s (**3.5×**) | 2 / 2 | 7e-10 / 2.7e-10 | True / True |
+| Ø40 deep FW | 0.3789513 → 0.3789509 (-1.0e-06) | 4.9956 → 4.9951 (-0.0004 pp) | -5.8e-05 | -3.4e-02 | – | -2.0e-05 | +1.8e-05 | -1.9e-05 | 227 → 230 s (**1.0×**) | 4 / 4 | 7.3e-05 / 7.3e-05 | True / True |
+| L13 gap-layer 1/side (magnets 210.7 °C, Br kept 19 %) | 0.7725991 → 0.7724687 (-1.7e-04) | 31.067 → 31.064 (-0.0034 pp) | +1.5e-02 | -1.6e-03 | – | – | – | -4.4e-05 | 421 → 529 s (**0.8×**) | 4 / 4 | settled / settled | True / True |
+
+| TDM run | method | period | gate | gate T / ripple / worst group | attempt | stop | Newton | worst GMRES rel. resid | march-vs-orbit | pre-pass per period |
+|---|---|---|---|---|---|---|---|---|---|---|
+| Ø40 rated | tdm | full | True | 8.6e-05 / 0.009 pp / 0.00034 | 1 | owner_terms | 2 | 0.008 | 6.2e-05 | 0.0068, 0.00098 |
+| L13 rated | tdm | full | True | 0.00017 / 0.013 pp / 0.00071 | 1 | owner_terms | 6 | 0.0099 | 0.00025 | 0.01, 0.0039, 0.0013, 0.00046 |
+| L13 peak | tdm | full | True | 4.7e-05 / 0.0051 pp / 0.00014 | 1 | owner_terms | 8 | 0.0049 | 5.6e-05 | 0.0023, 0.00093 |
+| L155 rated | tdm | full | True | 3.7e-08 / 8.8e-06 pp / 2.9e-06 | 1 | owner_terms | 5 | 0.0097 | 1.3e-07 | 0.0079, 3.6e-07 |
+| Ø40 deep FW | tdm | full | True | 6.5e-05 / 0.0064 pp / 0.00019 | 1 | owner_terms | 3 | 0.0065 | 0.00014 | 0.015, 0.0046, 0.0014, 0.00032 |
+| L13 gap-layer 1/side | tdm | full | True | 1.2e-04 / 0.0068 pp / 4.4e-05 | 1 | owner_terms | – | – | – | 0.822, 0.022, 0.0036, < 1e-3 |
+
+Peak RSS (the one-process harness; the L155 includes the gap rule's second solve): TDM
+1.6 GB (Ø40), 2.2–2.3 GB (L13), 4.5 GB (L155) against the march's 0.4–0.75 GB — the
+full period keeps twice the half period's factors (L155 half 2.6 GB). The solve pool's
+fallback estimate goes to 4.6 GB (six parallel L155 solves: 28 GB of the API
+container's 40 GB).
+
+Speed (4 threads, one job next to at most one other): L155 **3.5×**, L13 peak 1.4×;
+Ø40, L13 rated and Ø40 deep FW about 1×. The extra demag periods (both methods) and the
+full period (TDM) cost what the half period and the single pre-pass used to save. Where
+the march settles in three periods, TDM is no faster.
+
+The shaft differences (L155 +1.6 %, Ø40 −1.7 %, Ø40 FW −3.4 %) come from the march's
+unsettled slowest conductor. TDM's reported period reproduces its own orbit there to
+≤ 4e-5 (the gate). On the Ø40 without demag, TDM matched the 40-period march asymptote
+to 4e-6 where the march was +4.6 % off (§2.1).
+
 ## Progress log
 
 - 12:05 Stage 0: module, integration, synthetic tests (5 passed locally and on the
@@ -595,3 +832,9 @@ paired numbers are §2.4–2.5. Reading the differences:
 - TDM + Coulomb end to end (§2.5), the demag shortcut at peak and in deep field
   weakening (§2.6), the gap-layer cases with TDM plus a 3-period L13 referee
   (§2.7). Draft PR #87; not merged, not deployed. Sandbox removed at the end.
+- Codex review (§3): the fixes (a transactional wrapper, the acceptance gate, the full
+  period by default, the demag fixed point in both methods, the GMRES status, the
+  summary keys, the experimental label) and their tests. Re-validation on the server
+  (T21): 5 duties × 2 methods, the severe-demag gap-layer case × 2, half against full
+  on 3 machines. Before the switch to the full period, the gate caught the fixture's
+  half-period asymmetry.

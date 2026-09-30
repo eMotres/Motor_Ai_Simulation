@@ -8007,6 +8007,18 @@ def _build_transient_summary(
                          else bool(sbres["eddy_settled"])),
         "eddy_capped": (None if sbres.get("eddy_capped") is None
                         else bool(sbres["eddy_capped"])),
+        # HOW the eddy steady state was reached (2026-09-30: "tdm" by default,
+        # "march" when asked, when TDM cannot serve the run or when a TDM
+        # attempt was rejected — `eddy_method_note` says which, in one line),
+        # and whether the reported window is a steady state at all: Br still
+        # moving in it (demag_settled False) makes it a demag transient.
+        "eddy_method": sbres.get("eddy_method"),
+        "eddy_method_requested": sbres.get("eddy_method_requested"),
+        "eddy_method_note": sbres.get("eddy_method_note"),
+        "demag_settled": (None if sbres.get("demag_settled") is None
+                          else bool(sbres["demag_settled"])),
+        "steady_state": (None if sbres.get("steady_state") is None
+                         else bool(sbres["steady_state"])),
         "eddy_settle_residual": sbres.get("eddy_settle_residual"),
         "eddy_settle_tol": sbres.get("eddy_settle_tol"),
         # settled with the warm-up prefix moved by accelerator jumps (2026-09-27)

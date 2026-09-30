@@ -368,8 +368,11 @@ def test_interactive_still_runs_the_full_prepass(legs):
         "2026-09-05 reproducibility fix is gone")
     assert d.get("demag_seed_from") is None
     nrep = len(d.get("T_em_Nm") or [])
-    assert int(d["demag_prepass_frames"]) == nrep > 0, (
-        "the interactive pre-pass is no longer one whole electrical period")
+    # whole periods, repeated to the demag fixed point since 2026-09-30
+    nper = int((d.get("demag_settle") or {}).get("prepass_periods") or 0)
+    assert nper >= 1 and int(d["demag_prepass_frames"]) == nper * nrep > 0, (
+        "the interactive pre-pass is no longer a whole number of electrical "
+        "periods")
     # It agrees with the cold leg to the same tolerance test_demag_reproducible
     # pins — the seeding work must not have touched that.
     t0, t1 = _t(legs["cold"]), _t(d)

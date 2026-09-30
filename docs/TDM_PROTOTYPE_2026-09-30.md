@@ -5,7 +5,8 @@ Branch `feat/tdm-prototype` from `pre-migration-freeze-2026-09-15` (f852bd2).
 Input: `GPU_TDM_STUDY_2026-09-29.md` §4 (branch `perf/profiling-gpu-tdm`),
 `EDDY_SHAFT_SETTLE_2026-09-29.md` (TP-EEC), `CHOLESKY_SPD_2026-09-29.md`.
 
-**Status: prototype complete, validated on the three machines; draft PR, not
+**Status: complete: validated on the three machines, TDM is the default (§0),
+Coulomb, demag-shortcut and gap-layer checks done (§2.5–2.7); draft PR #87, not
 merged, not deployed.** The progress log at the end is the resume point.
 
 ## Summary
@@ -29,11 +30,21 @@ merged, not deployed.** The progress log at the end is the resume point.
   methods) dominate.
 - **Demag shortcut (owner's):** ⌈N/6⌉ frames around the worst (magnet, instant)
   of the pristine orbit, that magnet's Br mapped to every pole: torque within
-  0.15 %, ripple within 0.21 pp, total loss within 1e-4, Br kept within 0.04 pp
-  on all four duties (all fractional-slot). Its per-element map differs (max
-  0.09–0.28) because it gives every magnet the same map where the one-period
-  pre-pass gives each its own history segment — and neither is the q-period
-  asymptote.
+  0.15 %, total loss within 6e-4, Br kept within 0.04 pp on six duties (all
+  fractional-slot); ripple within 0.21 pp at rated/peak but **0.54 pp (9 %) low in
+  deep field weakening** (Ø40, γ 60°, 20 000 rpm, §2.6) — not qualified, stays an
+  option. Its per-element map differs (max 0.09–0.33) because it gives every
+  magnet the same map where the one-period pre-pass gives each its own history
+  segment — and neither is the q-period asymptote.
+- **TDM + Coulomb** (§2.5): Coulomb mean within 3e-6 and ripple within 0.002 pp of
+  the march's, layer self-check identical, on Ø40, L13 and L155.
+- **Gap layers** (§2.7): the Coulomb agent's nine cases with TDM: Ø40 and L155
+  equal to the march (torque ≤ 1e-5, ripple ≤ 0.0005 pp, total ≤ 4.4e-4; the shaft
+  where the march is unsettled), L155 5.5–6.9× faster. L155 at 2 per side, "not
+  settled" by the march, settles with TDM and keeps its +4.1 % iron and 18 %
+  self-check — a steady-state property of that ring, not a transient. L13 (Br
+  kept 20 %) differs in period 1 only because the one-period demag pre-pass has
+  not converged the ratchet in either method; three periods agree to 1e-4.
 - **Recommendation: GO**, and the owner switched it on (§0): TDM is the default
   eddy method of every steady-state eddy run, with the full demag pre-pass by
   default and the shortcut as an option until it is qualified on more machines;
@@ -290,7 +301,7 @@ a 4-thread shaftloss job (load 5–11), so the walls carry ±15 % noise.
 ### 2.3 Stage 2: L13 (CIANO28 85 20SW1200 / L13), demag on (the duty's setting)
 
 24s28p, NS = 4 (7 poles per sector), 40 steps: TDM half period, 20 frames. From
-here on every TDM run stops in the owner's terms (§2.6) with the forcing 0.01.
+here on every TDM run stops in the owner's terms (§2.9) with the forcing 0.01.
 
 **Rated (26.1 A, 1000 rpm):**
 
@@ -332,7 +343,7 @@ here on every TDM run stops in the owner's terms (§2.6) with the forcing 0.01.
 | of it: static, Newton, pre-pass, re-solve, reported period | – | 6.1, 9.2, 43.0, 3.1, 18.2 | 6.0, 9.2, 8.2, 3.0, 20.7 |
 | peak RSS [MB] | 497 | 1335 | 1340 |
 
-### 2.5 Stage 3: L155 (CIANO10 200 opt / L155 motor, rated 1x9 mm), demag on
+### 2.4 Stage 3: L155 (CIANO10 200 opt / L155 motor, rated 1x9 mm), demag on
 
 12s10p, NS = 2 (5 poles per sector), 36 steps: TDM half period, 18 frames. The
 march is today's (image-mean start + TP-EEC DC correction, #63): 614 frames,
@@ -392,9 +403,159 @@ quoted for the slow bodies.
 - **The shaft** (4 W of 3.8 kW) reads 0.3–1.9 % above the march, whose own value
   is 0.4 % below the 40-period asymptote. The owner's stop does not wait for the
   slowest body's DC mode; the state-residual stop (`SB_TDM_STOP=residual`) is
-  measured in §2.7.
+  measured in §2.8.
 
-### 2.6 Output path, stopping rule and torque method (coordinator, 2026-09-30)
+### 2.5 TDM + Coulomb end to end (`torque_method="coulomb"`)
+
+Same duties, demag as the duty says (full pre-pass), 4 threads, code b0474ba.
+The reported torque is `coulomb_virtual_work` in both methods; the layer
+self-check (`coulomb_torque.layer_self_check`) is present in both.
+
+| machine | Coulomb T_avg: march → TDM | Coulomb ripple [%]: march → TDM | self-check (max ring difference / p-p): march / TDM | total loss Δ | wall: march → TDM |
+|---|---|---|---|---:|---|
+| Ø40 rated | 0.6155447 → 0.6155441 (−8.9e-7) | 5.730637 → 5.732552 (+0.0019 pp) | 2.466 % / 2.465 % | 0 | 98 → 90 s |
+| L13 rated | 5.356449 → 5.356433 (−3.1e-6) | 5.371824 → 5.371773 (−0.0001 pp) | 2.519 % / 2.519 % | +2.5e-5 | 156 → 139 s |
+| L155 rated | 184.42804 → 184.42842 (+2.1e-6) | 1.943823 → 1.943828 (+0.0000 pp) | 66.45 % / 66.45 % | +8.9e-6 | 329 → 76 s (**4.3×**) |
+
+The stopping monitor used Coulomb on these runs (`tdm.solve.newton[*].monitor.
+torque_method = "coulomb_virtual_work"`). The L155 self-check (66 % of the p-p,
+`ripple_mesh_limited`) is the air-gap mesh at the duty's gap layers, identical in
+both methods: the gap-layer study (§2.7) is the answer to it, not TDM.
+
+### 2.6 The demag shortcut at peak duty and in deep field weakening
+
+Ø40 L12, Coulomb torque, 4 threads. "Peak": the duty (48.79 A, γ 10°, 14 400 rpm).
+"Deep FW": 48.79 A at γ 60° and 20 000 rpm. L13 peak (hybrid torque) is in §2.3.
+
+| point | quantity | march | TDM, full pre-pass | TDM, shortcut |
+|---|---|---:|---:|---:|
+| Ø40 peak | T_avg [N·m] | 0.6900492 | 0.6900480 (−1.8e-6) | 0.6902509 (+2.9e-4) |
+| | ripple [%] | 3.696523 | 3.699563 (+0.003 pp) | 3.642864 (−0.054 pp) |
+| | total loss [W] | 101.757 | 101.758 (+9.8e-6) | 101.778 (+2.1e-4) |
+| | Br kept [% vol] | 98.580 | 98.580 (0) | 98.597 (+0.017 pp) |
+| | Br map: max / mean abs ΔBr | – | 0.0004 / 4e-5 | 0.325 / 0.014 |
+| | wall [s] | 120 | 110 | 78 |
+| Ø40 deep FW | T_avg [N·m] | 0.3785175 | 0.3785144 (−8.2e-6) | 0.3788628 (+9.1e-4) |
+| | ripple [%] | 5.930361 | 5.929643 (−0.0007 pp) | 5.386467 (**−0.544 pp, −9.2 %**) |
+| | total loss [W] | 105.486 | 105.487 (+9.5e-6) | 105.543 (+5.4e-4) |
+| | Br kept [% vol] | 98.418 | 98.418 (0) | 98.442 (+0.024 pp) |
+| | Br map: max / mean abs ΔBr | – | 0.0031 / 6e-5 | 0.143 / 0.012 |
+| | wall [s] | 127 | 117 | 81 |
+
+- **Full pre-pass on the orbit = the march**, at peak and in deep FW alike
+  (torque ≤ 8e-6, ripple ≤ 0.003 pp, Br map ≤ 0.003 per element).
+- **The shortcut is NOT yet qualified**: torque and total loss stay within
+  0.1 %, but in deep field weakening the ripple comes out 0.54 pp (9 %) low —
+  outside the 0.5 pp line, inside the 10 % one. The shortcut gives every magnet the
+  worst magnet's map; the one-period pre-pass gives each magnet its own segment of
+  history, and the per-magnet spread is what the ripple sees. So FULL stays the
+  default (as advised); the shortcut stays an option (`tdm_demag="shortcut"`).
+- Neither is the fractional-slot asymptote: the element-wise image minimum of the
+  full pre-pass is up to 0.25–0.32 lower at single elements (0.12 % of the magnet
+  area on average). Qualifying the shortcut needs that asymptote as the reference
+  (a q-period march, 7 periods here), not the one-period pre-pass.
+
+### 2.7 Gap-layer study cases with TDM (Coulomb torque)
+
+The Coulomb agent's cases (`docs/GAP_LAYERS_CASES.md`, `scripts/gap_layers_study/`
+on `feat/coulomb-default-gap3`, inputs and config of `54f33f2`), unchanged, with
+`SB_EDDY_METHOD=tdm` and `--torque-method coulomb`; code of this branch (b0474ba),
+4 threads. The march columns are `COULOMB_TORQUE_2026-09-30.md` §6.1. Losses are
+the solver's solved values [W].
+
+| quantity | Ø40 1/side | Ø40 2/side | Ø40 3/side | L13 1/side | L13 2/side | L13 3/side | L155 1/side | L155 2/side | L155 3/side |
+|---|---|---|---|---|---|---|---|---|---|
+| Coulomb mean torque N·m | 0.616654 | 0.616667 | 0.616729 | 0.788373 | 0.788663 | 0.789082 | 184.59274 | 184.60566 | 184.60849 |
+| ripple p-p N·m (%) | 0.040749 (6.61) | 0.039227 (6.36) | 0.040572 (6.58) | 0.245660 (31.16) | 0.245722 (31.16) | 0.245676 (31.13) | 3.636424 (1.97) | 3.782933 (2.05) | 3.775024 (2.04) |
+| self-check (gate 5 %) | 2.13 % | 0.81 % | 0.055 % | 1.07 % | 1.87 % | 0.92 % | 1.17 % | **18.3 %** | **6.8 %** |
+| iron W | 9.231 | 9.235 | 9.232 | 2.073 | 2.073 | 2.073 | 1459.502 | 1518.562 | 1460.340 |
+| magnet W | 3.360 | 3.362 | 3.360 | 0.530 | 0.529 | 0.530 | 106.907 | 106.847 | 107.298 |
+| shaft W | 0.008 | 0.008 | 0.008 | 11.895 | 11.893 | 11.891 | 3.804 | 3.807 | 3.826 |
+| sleeve W | 0 | 0 | 0 | 0 | 0 | 0 | 10.039 | 10.035 | 10.058 |
+| copper DC W | 49.109 | 49.109 | 49.109 | 259.793 | 259.793 | 259.793 | 1659.599 | 1659.599 | 1659.599 |
+| copper AC W | 4.475 | 4.464 | 4.472 | 0.113 | 0.113 | 0.113 | 614.010 | 615.180 | 614.830 |
+| **total loss W** | 66.184 | 66.179 | 66.181 | 274.404 | 274.402 | 274.400 | 3853.863 | 3914.030 | 3855.951 |
+| frames marched (demag pre-pass) + Newton iterations | 96 (48) + 5 | 96 (48) + 5 | 96 (48) + 5 | 120 (60) + 22 | 120 (60) + 22 | 120 (60) + 22 | 144 (72) + 5 | 144 (72) + 5, **settled** (5.1e-6) | 168 (84) + 5 |
+| wall time s | 163 | 204 | 281 | 317 | 357 | 355 | 135 | 210 | 191 |
+
+**Δ TDM − march** (relative unless marked):
+
+| quantity | Ø40 1 | Ø40 2 | Ø40 3 | L13 1 | L13 2 | L13 3 | L155 1 | L155 2 | L155 3 |
+|---|---|---|---|---|---|---|---|---|---|
+| Coulomb mean | −1.1e-6 | −7.5e-7 | −1.1e-6 | +1.3e-4 | −1.6e-4 | +1.3e-4 | +1.0e-6 | +9.8e-6 | +1.2e-6 |
+| ripple | −0.0001 pp | +0.0005 pp | +0.0002 pp | +0.20 pp | +0.20 pp | +0.20 pp | +0.0001 pp | +0.0004 pp | +0.0001 pp |
+| self-check | 0 | 0 | 0 | −0.01 pp | −0.01 pp | −0.01 pp | 0 | 0 | 0 |
+| iron | −1.1e-4 | −1.1e-4 | 0 | 0 | 0 | 0 | +3.9e-4 | +2.9e-4 | +4.4e-4 |
+| magnet | +1.4e-4 | +1.6e-4 | +1.8e-4 | +4.2 % | +4.2 % | +4.2 % | +2.3e-5 | −1.4e-4 | +4e-5 |
+| shaft | −3.9 % | −3.9 % | −4.0 % | −2.4 % | −2.4 % | −2.4 % | +0.3 % | +3.6 % | +0.3 % |
+| sleeve | – | – | – | – | – | – | +7e-6 | −1.5e-4 | +1e-4 |
+| copper AC | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+| total loss | +1.5e-5 | 0 | 0 | −9.8e-4 | −9.6e-4 | −9.7e-4 | +1.5e-4 | +1.4e-4 | +1.7e-4 |
+| wall, march / TDM | 1.0× | 1.0× | 0.9× | 0.9× | 0.8× | 0.9× | **5.5×** | **6.9×** | **5.5×** |
+
+The wall times are not paired (the march rows ran earlier under another load); the
+paired numbers are §2.4–2.5. Reading the differences:
+
+- **Ø40 and L155: TDM = march** in torque (≤ 1e-5), ripple (≤ 0.0005 pp),
+  self-check, iron, magnet, sleeve, copper and total loss (≤ 4.4e-4). The shaft
+  differs where the march has not settled its slowest conductor: Ø40 (8 mW) is the
+  §2.1 case — there the march's 3-period shaft is +4.6 % above the 40-period
+  asymptote and TDM is on it to 4e-6.
+- **L155 at 2 per side settles with TDM.** The march hit its 24-period warm-up cap
+  (residual 21.6 %, "not settled"); TDM converges the orbit to a 1.6e-6 state
+  residual, the reported march stays on it (1.3e-6), the settle gauge reads 5.1e-6
+  — and it gives the **same** +4.1 % iron (1518.6 W, series p-p 209 W against 38 W
+  at 1 and 3 per side), +1.6 % total loss and 18.3 % self-check. So those are
+  properties of the periodic steady state on the 288-node ring, **not an
+  unfinished transient** as §6.1 of the Coulomb note reads them; only its shaft
+  (+3.6 %) was unsettled in the march. This matters for the measured gap rule,
+  which skips refining "unsettled" runs: under TDM this run is settled and fails
+  the 5 % gate.
+- **L13 (magnets at 210.7 °C, Br kept 20 % after the pre-pass, T 4.95 → 0.79 N·m)
+  is not a TDM/march difference but the demag ratchet not being converged by the
+  one-period pre-pass** in either method. Referee: both methods run for 3
+  reported periods (the ratchet stays active):
+
+  | run | period | Coulomb mean | ripple [%] | magnet W | shaft W |
+  |---|---:|---:|---:|---:|---:|
+  | march | 1 | 0.7882697 | 30.960 | 0.50807 | 12.1855 |
+  | march | 2 | 0.7771526 | 30.618 | 0.49929 | 12.0679 |
+  | march | 3 | 0.7742524 | 30.984 | 0.49868 | 12.0924 |
+  | TDM | 1 | 0.7883675 | 31.160 | 0.52966 | 11.8952 |
+  | TDM | 2 | 0.7771500 | 30.631 | 0.49928 | 12.0623 |
+  | TDM | 3 | 0.7741644 | 30.980 | 0.49868 | 12.0926 |
+
+  By the third period the two agree to 1.1e-4 in torque, 0.004 pp in ripple and
+  2e-5 in the rotor losses. The first-period difference is what each method
+  carries into the reported window after Br collapses by 80 % in the pre-pass —
+  the march an eddy transient of the collapse, TDM the steady state of the
+  pre-pass Br that the ratchet then keeps cutting — and **both first-period
+  values are 1.8 % off in torque** from the third. A duty that demagnetises this far
+  needs the ratchet iterated to its fixed point (more pre-pass periods), whichever
+  eddy method runs; that is a demag-procedure item, not a TDM one. Here TDM is not
+  faster: 166–186 s of its 232–261 s go to the pre-pass ratchet re-solves.
+
+### 2.8 Checks: the march is unchanged; half against full period; stopping rules
+
+- **The march path is unchanged.** Ø40 no-demag march with the base code (f852bd2)
+  and with this branch (`eddy_method="march"`): every quantity equal to ≤ 7e-14
+  (T_avg −2.8e-15, P_mag −5.4e-14, P_shaft −7.4e-14): MKL round-off.
+- **Half against full period on L155** (no demag, both converged to the march's
+  1e-7 state residual): the FULL-period orbit is the march's fixed point to
+  2.1e-8 (σ-norm of the conductors at the last reported frame); the HALF-period
+  one is 2.6e-4 off it, because the L155 mesh's magnet source is pole
+  antisymmetric to 2.2e-5 only (Ø40 6.3e-6, L13 1.3e-6; the test accepts < 1e-4).
+  Effect on the reported numbers: torque −4e-8 (full) / +1e-6 (half), P_mag
+  +1.5e-5 / +2.0e-4, P_sleeve +6e-5 / +1.3e-4, total loss +3e-6 / +1e-5 — the half
+  period is kept (twice cheaper); `SB_TDM_HALF=0` gives the exact one.
+- **The L155 shaft** (4 W of 3.8 kW) reads +0.2 % (no demag) and +1.9 % (demag)
+  above the march; with the full period and the residual stop it is +0.2 %. The
+  owner's stop and the residual stop give the same shaft (4.0703 / 4.0701 W with
+  demag), so it is the half-period symmetry, not the stopping rule.
+- **Paired timing at 4 threads** (a 4-thread job of another agent sharing the box):
+  L155 with demag, march 323 s, TDM 75 s (**4.3×**).
+
+### 2.9 Output path, stopping rule and torque method (coordinator, 2026-09-30)
 
 - **One post-processing path.** TDM never reports a frame it solved itself: the
   reported period is marched by the unchanged frame loop from the orbit, so the
@@ -412,9 +573,11 @@ quoted for the slow bodies.
   < 0.5 % in the eddy loss, on an iterate whose state residual is < 1e-5; or when
   the state residual meets the march's 1e-7. `SB_TDM_STOP=residual` keeps only
   the latter. Both are recorded (`tdm.solve.stopped_by`, the per-iterate monitor).
-- **Torque method**: every T_avg / ripple in these tables is the shipped
-  `energy_mean+maxwell_ripple` (flux-linkage space-vector mean, raw Maxwell AC),
-  the method the result carries for every eddy run (`torque_method`).
+- **Torque method**: every T_avg / ripple in §2.1–2.4 and §2.8 is the shipped
+  `energy_mean+maxwell_ripple` (flux-linkage space-vector mean, raw Maxwell AC);
+  every T_avg / ripple in §2.5–2.7 is the Coulomb virtual-work torque
+  (`torque_method="coulomb"`, #86), and the stopping monitor used it there. The
+  result carries the method of every eddy run (`torque_method`).
 
 ## Progress log
 
@@ -422,3 +585,11 @@ quoted for the slow bodies.
   server image: the TDM orbit equals a 150-period march to 1e-7, the half-period
   anti-periodic orbit likewise, the coarse space cuts the Krylov count). Sandbox
   `/opt/motres/compute/tdm-20260930` (queue `runq.sh`, jobs in `jobs.txt`).
+- Stage 1–3 (Ø40, L13 rated/peak, L155; demag full / shortcut / off): §2.1–2.4.
+- Default switch (b0474ba … b759cad): TDM default, refusals and failure fallback,
+  Coulomb monitor, solve-pool estimate, progress strip; targeted tests on the
+  server image: `test_time_periodic` 8, `test_tdm_default` 19, `test_tdm_fem` 5
+  (FEM, 30 mm fixture), `test_solve_pool` and the march-pinned tests pass.
+- TDM + Coulomb end to end (§2.5), the demag shortcut at peak and in deep field
+  weakening (§2.6), the gap-layer cases with TDM plus a 3-period L13 referee
+  (§2.7). Draft PR #87; not merged, not deployed. Sandbox removed at the end.

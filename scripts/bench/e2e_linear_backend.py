@@ -60,8 +60,11 @@ def main():
               demag=bool(args.demag))
 
     import numpy as np
-    from motor_ai_sim.simulation import linear_backend as LB
     from motor_ai_sim.simulation import fem_solver_2d as fs
+    try:
+        from motor_ai_sim.simulation import linear_backend as LB
+    except ImportError:              # code before the interface: no hooks
+        LB = None
 
     import threading
     acc = {"seconds": 0.0, "calls": 0}
@@ -83,19 +86,25 @@ def main():
                         acc["seconds"] += time.perf_counter() - t0
                         acc["calls"] += 1
         return w
-    for name in ("solve", "factor", "solve_factored"):
-        setattr(LB.LinearSolver, name, timed(getattr(LB.LinearSolver, name)))
-    init = LB.LinearSolver.__init__
+    if LB is not None:
+        for name in ("solve", "factor", "solve_factored"):
+            setattr(LB.LinearSolver, name, timed(getattr(LB.LinearSolver, name)))
+        init = LB.LinearSolver.__init__
 
-    def init_w(self, *a, **k):
-        init(self, *a, **k)
-        solvers.append(self)
-    LB.LinearSolver.__init__ = init_w
+        def init_w(self, *a, **k):
+            init(self, *a, **k)
+            solvers.append(self)
+        LB.LinearSolver.__init__ = init_w
 
     t0 = time.perf_counter()
     r = fs.em_transient_eval(**kw)
     wall = time.perf_counter() - t0
     peak_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    try:                               # was Intel MKL ever mapped into us?
+        with open("/proc/self/maps") as fm:
+            mkl_loaded = any("mkl" in ln.lower() for ln in fm)
+    except OSError:
+        mkl_loaded = None
 
     main_ls = max(solvers, key=lambda s: s.solves) if solvers else None
 
@@ -111,7 +120,7 @@ def main():
         backend=(main_ls.backend if main_ls else None),
         wall_s=wall, linear_s=acc["seconds"], linear_calls=acc["calls"],
         linear_share=acc["seconds"] / wall if wall else None,
-        peak_rss_MB=peak_kb / 1024.0,
+        peak_rss_MB=peak_kb / 1024.0, mkl_loaded=mkl_loaded,
         n_solvers=len(solvers),
         solver_counts=[dict(backend=s.backend, solves=s.solves,
                             factorizations=s.factorizations,

@@ -103,6 +103,7 @@ def test_a_sine_current_sector_run_is_tdm():
     (dict(external_excitation=True), "external"),
     (dict(six_phase=True), "six-phase"),
     (dict(eddy=False), "eddy is off"),
+    (dict(n_steps_per_period=1), "fewer than 6 steps"),
 ])
 def test_what_tdm_cannot_serve_is_marched_with_a_reason(over, word):
     why = TP.tdm_refusals(**dict(BASE, **over))

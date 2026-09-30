@@ -104,12 +104,15 @@ def resolve_eddy_method(requested: Optional[str], sim_config: Optional[Dict] = N
 def tdm_refusals(*, eddy: bool, voltage_drive: bool, series_paths: bool,
                  frozen_nu: bool, mixed_schedule: bool, bdf2: bool,
                  n_periods: float, full_ring: bool, source_name: Optional[str],
-                 external_excitation: bool, six_phase: bool) -> List[str]:
+                 external_excitation: bool, six_phase: bool,
+                 n_steps_per_period: int = 36) -> List[str]:
     """Why a run cannot be solved time-periodically (empty = it can).  Each
     reason sends the run to the march, with the reason in the result."""
     why: List[str] = []
     if not eddy:
         why.append("eddy is off (nothing to settle)")
+    if int(n_steps_per_period) < 6:
+        why.append("fewer than 6 steps per period (a view, not a steady state)")
     if external_excitation or source_name not in ("current", "custom_current",
                                                   "bldc_current"):
         why.append("an external or closed-loop excitation source")

@@ -7332,7 +7332,8 @@ def fem_transient_sliding_band(
             bdf2=bool(_eddy_bdf2), n_periods=float(n_periods),
             full_ring=bool(_full_ring), source_name=getattr(_src, "name", None),
             external_excitation=excitation is not None,
-            six_phase=bool(six_phase))
+            six_phase=bool(six_phase),
+            n_steps_per_period=int(n_steps_per_period))
         if _tdm_why:
             # NOT an error (owner 2026-09-30: TDM is the default for every
             # steady-state eddy run): whatever TDM cannot solve is marched,

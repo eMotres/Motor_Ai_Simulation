@@ -1,0 +1,369 @@
+{
+  "audit_date": "2026-09-30",
+  "production_endpoint": "https://aerostator.com/mcp",
+  "initialize": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:39:55 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"capabilities\":{\"experimental\":{},\"prompts\":{\"listChanged\":false},\"resources\":{\"listChanged\":false,\"subscribe\":false},\"tools\":{\"listChanged\":false}},\"instructions\":\"AeroStator (aerostator.com): permanent-magnet motor / generator catalog, saved FEM results, draft designs from requirements and 2-D FEM simulations on the user's own queue. Without sign-in only the public tools work: describe_service, list_capabilities, list_calculation_types, get_input_requirements, how_to_authenticate, start_sign_up. Everything that touches the user's machines, drafts, jobs or simulations needs an OAuth sign-in: when an answer says authentication_required, relay its data.user_message and let the user click Connect / Sign in in this app (the page also offers Create account). Never ask for a password in chat. Signed in: start with check_fit, or start_design when nothing fits; if an answer says needs_input, ask the engineer. Read emotres://guide.\",\"protocolVersion\":\"2025-11-25\",\"serverInfo\":{\"name\":\"emotres\",\"title\":\"AeroStator\",\"version\":\"stage3-discovery\"}}}"
+    }
+  },
+  "tools_list_unauthenticated": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:39:55 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{\"tools\":[{\"_meta\":{\"securitySchemes\":[{\"type\":\"noauth\"}]},\"annotations\":{\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false,\"readOnlyHint\":true},\"description\":\"PUBLIC (no sign-in). What AeroStator is: summary, operator, licence (AGPL-3.0-or-later), website, MCP endpoint, terms, privacy and docs links.\",\"inputSchema\":{\"properties\":{},\"type\":\"object\",\"title\":\"describe_serviceArguments\"},\"name\":\"describe_service\",\"outputSchema\":{\"properties\":{\"result\":{\"additionalProperties\":true,\"title\":\"Result\",\"type\":\"object\"}},\"required\":[\"result\"],\"type\":\"object\",\"title\":\"describe_serviceOutput\"}},{\"_meta\":{\"securitySchemes\":[{\"type\":\"noauth\"}]},\"annotations\":{\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false,\"readOnlyHint\":true},\"description\":\"PUBLIC (no sign-in). The full tool catalogue: name, one-line purpose, required scope, whether it needs sign-in, read-only or not; and what each scope unlocks.\",\"inputSchema\":{\"properties\":{},\"type\":\"object\",\"title\":\"list_capabilitiesArguments\"},\"name\":\"list_capabilities\",\"outputSchema\":{\"properties\":{\"result\":{\"additionalProperties\":true,\"title\":\"Result\",\"type\":\"object\"}},\"required\":[\"result\"],\"type\":\"object\",\"title\":\"list_capabilitiesOutput\"}},{\"_meta\":{\"securitySchemes\":[{\"type\":\"noauth\"}]},\"annotations\":{\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false,\"readOnlyHint\":true},\"description\":\"PUBLIC (no sign-in). The calculation types AeroStator supports (fit check, saved performance, design from requirements, 2-D FEM EM transient, thermal, coupled EM-thermal, catalog; web-only: efficiency map, mechanics, inverter losses, 3-D end effect, optimization) and the tools that run them.\",\"inputSchema\":{\"properties\":{},\"type\":\"object\",\"title\":\"list_calculation_typesArguments\"},\"name\":\"list_calculation_types\",\"outputSchema\":{\"properties\":{\"result\":{\"additionalProperties\":true,\"title\":\"Result\",\"type\":\"object\"}},\"required\":[\"result\"],\"type\":\"object\",\"title\":\"list_calculation_typesOutput\"}},{\"_meta\":{\"securitySchemes\":[{\"type\":\"noauth\"}]},\"annotations\":{\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false,\"readOnlyHint\":true},\"description\":\"PUBLIC (no sign-in). Required and optional inputs of one calculation type with UCUM units and valid ranges, taken from the validators. calculation_type: an id from list_calculation_types.\",\"inputSchema\":{\"properties\":{\"calculation_type\":{\"description\":\"id from list_calculation_types, e.g. design_from_requirements\",\"title\":\"Calculation Type\",\"type\":\"string\"}},\"required\":[\"calculation_type\"],\"type\":\"object\",\"title\":\"get_input_requirementsArguments\"},\"name\":\"get_input_requirements\",\"outputSchema\":{\"properties\":{\"result\":{\"additionalProperties\":true,\"title\":\"Result\",\"type\":\"object\"}},\"required\":[\"result\"],\"type\":\"object\",\"title\":\"get_input_requirementsOutput\"}},{\"_meta\":{\"securitySchemes\":[{\"type\":\"noauth\"}]},\"annotations\":{\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false,\"readOnlyHint\":true},\"description\":\"PUBLIC (no sign-in). How to sign in: OAuth metadata and endpoint URLs, scopes and what each unlocks, the sign-up URL and the API-key alternative, plus a user_message to relay.\",\"inputSchema\":{\"properties\":{},\"type\":\"object\",\"title\":\"how_to_authenticateArguments\"},\"name\":\"how_to_authenticate\",\"outputSchema\":{\"properties\":{\"result\":{\"additionalProperties\":true,\"title\":\"Result\",\"type\":\"object\"}},\"required\":[\"result\"],\"type\":\"object\",\"title\":\"how_to_authenticateOutput\"}},{\"_meta\":{\"securitySchemes\":[{\"type\":\"noauth\"}]},\"annotations\":{\"destructiveHint\":false,\"idempotentHint\":true,\"openWorldHint\":false,\"readOnlyHint\":true},\"description\":\"PUBLIC (no sign-in). For a user with no AeroStator account: the sign-up page to open in a browser and a user_message to relay. It creates nothing; the password is typed only on the AeroStator page, never in chat. Easiest path: Connect / Sign in in the AI app, then 'Create account' on the page that opens.\",\"inputSchema\":{\"properties\":{},\"type\":\"object\",\"title\":\"start_sign_upArguments\"},\"name\":\"start_sign_up\",\"outputSchema\":{\"properties\":{\"result\":{\"additionalProperties\":true,\"title\":\"Result\",\"type\":\"object\"}},\"required\":[\"result\"],\"type\":\"object\",\"title\":\"start_sign_upOutput\"}}]}}"
+    }
+  },
+  "describe_service": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:39:55 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":3,\"result\":{\"content\":[{\"text\":\"{\\n  \\\"name\\\": \\\"AeroStator\\\",\\n  \\\"operator\\\": \\\"MOTRES d.o.o.\\\",\\n  \\\"summary\\\": \\\"Engineering service for permanent-magnet electric motors and generators: a catalog of FEM-characterised machines, draft designs from requirements, and 2-D FEM electromagnetic, thermal and coupled simulations on the user's own job queue.\\\",\\n  \\\"for_whom\\\": \\\"engineers sizing motors / generators (aerospace, robotics, EV, marine)\\\",\\n  \\\"license\\\": \\\"AGPL-3.0-or-later\\\",\\n  \\\"website\\\": \\\"https://aerostator.com/\\\",\\n  \\\"mcp_endpoint\\\": \\\"https://aerostator.com/mcp\\\",\\n  \\\"source_code_url\\\": \\\"https://github.com/eMotres/Motor_Ai_Simulation\\\",\\n  \\\"terms_url\\\": \\\"https://emotres.com/terms-conditions\\\",\\n  \\\"privacy_url\\\": \\\"https://emotres.com/privacy-policy\\\",\\n  \\\"docs_url\\\": \\\"https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md\\\",\\n  \\\"access\\\": \\\"the public tools (list_capabilities) work without an account; machines, drafts, simulations and your saved results need an account and an OAuth sign-in (or an agent key). Which catalog machines an account may see is granted per account.\\\",\\n  \\\"data_policy\\\": \\\"anonymous calls return only this public description; they never read accounts, workspaces, machines, drafts, jobs or usage. Only public-datasheet data leaves the server — never internal dimensions or drawings.\\\",\\n  \\\"next\\\": \\\"list_calculation_types, then how_to_authenticate to sign in\\\"\\n}\",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"result\":{\"name\":\"AeroStator\",\"operator\":\"MOTRES d.o.o.\",\"summary\":\"Engineering service for permanent-magnet electric motors and generators: a catalog of FEM-characterised machines, draft designs from requirements, and 2-D FEM electromagnetic, thermal and coupled simulations on the user's own job queue.\",\"for_whom\":\"engineers sizing motors / generators (aerospace, robotics, EV, marine)\",\"license\":\"AGPL-3.0-or-later\",\"website\":\"https://aerostator.com/\",\"mcp_endpoint\":\"https://aerostator.com/mcp\",\"source_code_url\":\"https://github.com/eMotres/Motor_Ai_Simulation\",\"terms_url\":\"https://emotres.com/terms-conditions\",\"privacy_url\":\"https://emotres.com/privacy-policy\",\"docs_url\":\"https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md\",\"access\":\"the public tools (list_capabilities) work without an account; machines, drafts, simulations and your saved results need an account and an OAuth sign-in (or an agent key). Which catalog machines an account may see is granted per account.\",\"data_policy\":\"anonymous calls return only this public description; they never read accounts, workspaces, machines, drafts, jobs or usage. Only public-datasheet data leaves the server — never internal dimensions or drawings.\",\"next\":\"list_calculation_types, then how_to_authenticate to sign in\"}}}}"
+    }
+  },
+  "list_capabilities": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:39:55 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":4,\"result\":{\"content\":[{\"text\":\"{\\n  \\\"service\\\": \\\"AeroStator\\\",\\n  \\\"tools\\\": [\\n    {\\n      \\\"name\\\": \\\"describe_service\\\",\\n      \\\"purpose\\\": \\\"What AeroStator is, who runs it, licence and links.\\\",\\n      \\\"required_scope\\\": null,\\n      \\\"requires_auth\\\": false,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"get_input_requirements\\\",\\n      \\\"purpose\\\": \\\"Required and optional inputs (units, valid ranges) of one calculation type.\\\",\\n      \\\"required_scope\\\": null,\\n      \\\"requires_auth\\\": false,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"how_to_authenticate\\\",\\n      \\\"purpose\\\": \\\"Sign-in and sign-up URLs, OAuth metadata, scopes and the API-key alternative.\\\",\\n      \\\"required_scope\\\": null,\\n      \\\"requires_auth\\\": false,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"list_calculation_types\\\",\\n      \\\"purpose\\\": \\\"The calculations AeroStator supports and which tools run them.\\\",\\n      \\\"required_scope\\\": null,\\n      \\\"requires_auth\\\": false,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"list_capabilities\\\",\\n      \\\"purpose\\\": \\\"This catalogue: every tool, its scope and whether it needs sign-in.\\\",\\n      \\\"required_scope\\\": null,\\n      \\\"requires_auth\\\": false,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"start_sign_up\\\",\\n      \\\"purpose\\\": \\\"The account sign-up page to open in a browser (no password ever goes through chat).\\\",\\n      \\\"required_scope\\\": null,\\n      \\\"requires_auth\\\": false,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"check_fit\\\",\\n      \\\"purpose\\\": \\\"Rank existing machines against torque / speed / voltage / size limits (no solve).\\\",\\n      \\\"required_scope\\\": \\\"machines:read\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"get_catalog_entry\\\",\\n      \\\"purpose\\\": \\\"One catalog entry by kind and id.\\\",\\n      \\\"required_scope\\\": \\\"catalog:read\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"get_design\\\",\\n      \\\"purpose\\\": \\\"One draft: requirements, starting point, parameters, estimate, runs.\\\",\\n      \\\"required_scope\\\": \\\"machines:read\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"get_design_result\\\",\\n      \\\"purpose\\\": \\\"Headline results of a draft's finished runs and the requirement checks.\\\",\\n      \\\"required_scope\\\": \\\"machines:read\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"get_job\\\",\\n      \\\"purpose\\\": \\\"Status, queue position, progress and ETA of a queued simulation.\\\",\\n      \\\"required_scope\\\": \\\"simulate\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"get_machine_performance\\\",\\n      \\\"purpose\\\": \\\"Saved results of one duty: efficiency, loss split, temperatures, ratings.\\\",\\n      \\\"required_scope\\\": \\\"machines:read\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"list_catalog\\\",\\n      \\\"purpose\\\": \\\"Materials, wires, bearings, power devices and dies in the catalog.\\\",\\n      \\\"required_scope\\\": \\\"catalog:read\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"list_machines\\\",\\n      \\\"purpose\\\": \\\"Machines your account may see, with headline ratings from saved results.\\\",\\n      \\\"required_scope\\\": \\\"machines:read\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"open_in_configure\\\",\\n      \\\"purpose\\\": \\\"The link that opens a draft in the Configure tab of the web app.\\\",\\n      \\\"required_scope\\\": \\\"machines:read\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": true\\n    },\\n    {\\n      \\\"name\\\": \\\"simulate\\\",\\n      \\\"purpose\\\": \\\"Queue a 2-D FEM simulation (em | thermal | coupled) of a draft on your job queue.\\\",\\n      \\\"required_scope\\\": \\\"simulate\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": false\\n    },\\n    {\\n      \\\"name\\\": \\\"start_design\\\",\\n      \\\"purpose\\\": \\\"Create a DRAFT design from requirements, scaled from the nearest existing machine.\\\",\\n      \\\"required_scope\\\": \\\"designs:write\\\",\\n      \\\"requires_auth\\\": true,\\n      \\\"read_only\\\": false\\n    }\\n  ],\\n  \\\"scopes\\\": [\\n    {\\n      \\\"scope\\\": \\\"catalog:read\\\",\\n      \\\"description\\\": \\\"Read the materials and dies catalog\\\",\\n      \\\"unlocks\\\": [\\n        \\\"get_catalog_entry\\\",\\n        \\\"list_catalog\\\"\\n      ],\\n      \\\"default_on_new_key\\\": true\\n    },\\n    {\\n      \\\"scope\\\": \\\"machines:read\\\",\\n      \\\"description\\\": \\\"Read your machines and their saved results\\\",\\n      \\\"unlocks\\\": [\\n        \\\"check_fit\\\",\\n        \\\"get_design\\\",\\n        \\\"get_design_result\\\",\\n        \\\"get_machine_performance\\\",\\n        \\\"list_machines\\\",\\n        \\\"open_in_configure\\\"\\n      ],\\n      \\\"default_on_new_key\\\": true\\n    },\\n    {\\n      \\\"scope\\\": \\\"designs:write\\\",\\n      \\\"description\\\": \\\"Create draft machines in your workspace (marked as the agent's; never changes your saved machines or open motor)\\\",\\n      \\\"unlocks\\\": [\\n        \\\"start_design\\\"\\n      ],\\n      \\\"default_on_new_key\\\": false\\n    },\\n    {\\n      \\\"scope\\\": \\\"simulate\\\",\\n      \\\"description\\\": \\\"Queue simulations of those drafts in your job queue (daily fair-use limit)\\\",\\n      \\\"unlocks\\\": [\\n        \\\"get_job\\\",\\n        \\\"simulate\\\"\\n      ],\\n      \\\"default_on_new_key\\\": false\\n    }\\n  ],\\n  \\\"public_resources\\\": [\\n    \\\"emotres://guide\\\"\\n  ],\\n  \\\"note\\\": \\\"tools with requires_auth=false work without sign-in and return only this public service description; the others need an OAuth sign-in (or an agent key) carrying required_scope. tools/list shows the public tools until you sign in, then every tool your scopes allow.\\\"\\n}\",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"result\":{\"service\":\"AeroStator\",\"tools\":[{\"name\":\"describe_service\",\"purpose\":\"What AeroStator is, who runs it, licence and links.\",\"required_scope\":null,\"requires_auth\":false,\"read_only\":true},{\"name\":\"get_input_requirements\",\"purpose\":\"Required and optional inputs (units, valid ranges) of one calculation type.\",\"required_scope\":null,\"requires_auth\":false,\"read_only\":true},{\"name\":\"how_to_authenticate\",\"purpose\":\"Sign-in and sign-up URLs, OAuth metadata, scopes and the API-key alternative.\",\"required_scope\":null,\"requires_auth\":false,\"read_only\":true},{\"name\":\"list_calculation_types\",\"purpose\":\"The calculations AeroStator supports and which tools run them.\",\"required_scope\":null,\"requires_auth\":false,\"read_only\":true},{\"name\":\"list_capabilities\",\"purpose\":\"This catalogue: every tool, its scope and whether it needs sign-in.\",\"required_scope\":null,\"requires_auth\":false,\"read_only\":true},{\"name\":\"start_sign_up\",\"purpose\":\"The account sign-up page to open in a browser (no password ever goes through chat).\",\"required_scope\":null,\"requires_auth\":false,\"read_only\":true},{\"name\":\"check_fit\",\"purpose\":\"Rank existing machines against torque / speed / voltage / size limits (no solve).\",\"required_scope\":\"machines:read\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"get_catalog_entry\",\"purpose\":\"One catalog entry by kind and id.\",\"required_scope\":\"catalog:read\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"get_design\",\"purpose\":\"One draft: requirements, starting point, parameters, estimate, runs.\",\"required_scope\":\"machines:read\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"get_design_result\",\"purpose\":\"Headline results of a draft's finished runs and the requirement checks.\",\"required_scope\":\"machines:read\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"get_job\",\"purpose\":\"Status, queue position, progress and ETA of a queued simulation.\",\"required_scope\":\"simulate\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"get_machine_performance\",\"purpose\":\"Saved results of one duty: efficiency, loss split, temperatures, ratings.\",\"required_scope\":\"machines:read\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"list_catalog\",\"purpose\":\"Materials, wires, bearings, power devices and dies in the catalog.\",\"required_scope\":\"catalog:read\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"list_machines\",\"purpose\":\"Machines your account may see, with headline ratings from saved results.\",\"required_scope\":\"machines:read\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"open_in_configure\",\"purpose\":\"The link that opens a draft in the Configure tab of the web app.\",\"required_scope\":\"machines:read\",\"requires_auth\":true,\"read_only\":true},{\"name\":\"simulate\",\"purpose\":\"Queue a 2-D FEM simulation (em | thermal | coupled) of a draft on your job queue.\",\"required_scope\":\"simulate\",\"requires_auth\":true,\"read_only\":false},{\"name\":\"start_design\",\"purpose\":\"Create a DRAFT design from requirements, scaled from the nearest existing machine.\",\"required_scope\":\"designs:write\",\"requires_auth\":true,\"read_only\":false}],\"scopes\":[{\"scope\":\"catalog:read\",\"description\":\"Read the materials and dies catalog\",\"unlocks\":[\"get_catalog_entry\",\"list_catalog\"],\"default_on_new_key\":true},{\"scope\":\"machines:read\",\"description\":\"Read your machines and their saved results\",\"unlocks\":[\"check_fit\",\"get_design\",\"get_design_result\",\"get_machine_performance\",\"list_machines\",\"open_in_configure\"],\"default_on_new_key\":true},{\"scope\":\"designs:write\",\"description\":\"Create draft machines in your workspace (marked as the agent's; never changes your saved machines or open motor)\",\"unlocks\":[\"start_design\"],\"default_on_new_key\":false},{\"scope\":\"simulate\",\"description\":\"Queue simulations of those drafts in your job queue (daily fair-use limit)\",\"unlocks\":[\"get_job\",\"simulate\"],\"default_on_new_key\":false}],\"public_resources\":[\"emotres://guide\"],\"note\":\"tools with requires_auth=false work without sign-in and return only this public service description; the others need an OAuth sign-in (or an agent key) carrying required_scope. tools/list shows the public tools until you sign in, then every tool your scopes allow.\"}}}}"
+    }
+  },
+  "list_calculation_types": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:39:55 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":5,\"result\":{\"content\":[{\"text\":\"{\\n  \\\"calculation_types\\\": [\\n    {\\n      \\\"id\\\": \\\"machine_fit_check\\\",\\n      \\\"title\\\": \\\"Fit check against saved machines\\\",\\n      \\\"what\\\": \\\"ranks the saved duties of the machines your account may see against torque, speed, DC-bus voltage, outer diameter, active length, mass and cooling; returns margins in percent. Nothing is simulated.\\\",\\n      \\\"method\\\": \\\"comparison with saved 2-D FEM results\\\",\\n      \\\"available_via\\\": \\\"mcp\\\",\\n      \\\"tools\\\": [\\n        \\\"check_fit\\\"\\n      ],\\n      \\\"required_scope\\\": \\\"machines:read\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"saved_performance\\\",\\n      \\\"title\\\": \\\"Saved performance of a catalog machine\\\",\\n      \\\"what\\\": \\\"operating point, shaft efficiency, loss split, coil / magnet / bearing temperatures, continuous rating, KV and torque ripple of one saved duty.\\\",\\n      \\\"method\\\": \\\"saved 2-D FEM results (energy-method torque, coupled thermal)\\\",\\n      \\\"available_via\\\": \\\"mcp\\\",\\n      \\\"tools\\\": [\\n        \\\"list_machines\\\",\\n        \\\"get_machine_performance\\\"\\n      ],\\n      \\\"required_scope\\\": \\\"machines:read\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"design_from_requirements\\\",\\n      \\\"title\\\": \\\"Draft design from requirements\\\",\\n      \\\"what\\\": \\\"validates the requirements (asks for missing or contradictory ones), picks the nearest existing machine you may use and scales stack length, turns and parallel paths; returns an analytical estimate and a draft id. No new laminations.\\\",\\n      \\\"method\\\": \\\"analytical scaling of a FEM-characterised machine\\\",\\n      \\\"available_via\\\": \\\"mcp\\\",\\n      \\\"tools\\\": [\\n        \\\"start_design\\\",\\n        \\\"get_design\\\"\\n      ],\\n      \\\"required_scope\\\": \\\"designs:write\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"em_fem_transient\\\",\\n      \\\"title\\\": \\\"2-D FEM electromagnetic transient\\\",\\n      \\\"what\\\": \\\"torque (energy method) and its ripple, back-EMF, line voltage, phase current, copper / core / magnet / solid-part losses and efficiency of a draft at its operating point.\\\",\\n      \\\"method\\\": \\\"2-D finite-element transient, time-stepped over an electrical period\\\",\\n      \\\"available_via\\\": \\\"mcp\\\",\\n      \\\"tools\\\": [\\n        \\\"simulate\\\",\\n        \\\"get_job\\\",\\n        \\\"get_design_result\\\"\\n      ],\\n      \\\"simulate_what\\\": \\\"em\\\",\\n      \\\"required_scope\\\": \\\"simulate\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"thermal\\\",\\n      \\\"title\\\": \\\"Thermal (one EM pass + steady-state thermal)\\\",\\n      \\\"what\\\": \\\"coil, magnet and bearing temperatures from one EM loss pass.\\\",\\n      \\\"method\\\": \\\"2-D FEM transient losses into a steady-state thermal solve\\\",\\n      \\\"available_via\\\": \\\"mcp\\\",\\n      \\\"tools\\\": [\\n        \\\"simulate\\\",\\n        \\\"get_job\\\",\\n        \\\"get_design_result\\\"\\n      ],\\n      \\\"simulate_what\\\": \\\"thermal\\\",\\n      \\\"required_scope\\\": \\\"simulate\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"coupled_em_thermal\\\",\\n      \\\"title\\\": \\\"Coupled EM <-> thermal to steady temperatures\\\",\\n      \\\"what\\\": \\\"iterates the EM transient and the thermal solve until winding and magnet temperatures settle; performance at those temperatures.\\\",\\n      \\\"method\\\": \\\"fixed-point loop of 2-D FEM transient and thermal solves\\\",\\n      \\\"available_via\\\": \\\"mcp\\\",\\n      \\\"tools\\\": [\\n        \\\"simulate\\\",\\n        \\\"get_job\\\",\\n        \\\"get_design_result\\\"\\n      ],\\n      \\\"simulate_what\\\": \\\"coupled\\\",\\n      \\\"required_scope\\\": \\\"simulate\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"catalog_lookup\\\",\\n      \\\"title\\\": \\\"Materials and component catalog\\\",\\n      \\\"what\\\": \\\"magnets, lamination steels, wires, bearings, power devices and dies with their key specs and provenance.\\\",\\n      \\\"method\\\": \\\"catalog lookup\\\",\\n      \\\"available_via\\\": \\\"mcp\\\",\\n      \\\"tools\\\": [\\n        \\\"list_catalog\\\",\\n        \\\"get_catalog_entry\\\"\\n      ],\\n      \\\"required_scope\\\": \\\"catalog:read\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"efficiency_map\\\",\\n      \\\"title\\\": \\\"Efficiency map (analytical tuner)\\\",\\n      \\\"what\\\": \\\"efficiency over the torque x speed plane with the battery limit, in the Configure tab.\\\",\\n      \\\"method\\\": \\\"analytical rescaling of a machine's FEM passport\\\",\\n      \\\"available_via\\\": \\\"web\\\",\\n      \\\"tools\\\": [],\\n      \\\"web_tab\\\": \\\"Configure\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"mechanical\\\",\\n      \\\"title\\\": \\\"Rotor mechanics\\\",\\n      \\\"what\\\": \\\"rotor centrifugal stress and sleeve sizing at speed and overspeed, safety factors, vibration modes, shaft critical speeds, bearing and windage losses.\\\",\\n      \\\"method\\\": \\\"finite-element and analytical rotor models\\\",\\n      \\\"available_via\\\": \\\"web\\\",\\n      \\\"tools\\\": [],\\n      \\\"web_tab\\\": \\\"Mechanical\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"controller_losses\\\",\\n      \\\"title\\\": \\\"Inverter (controller) losses\\\",\\n      \\\"what\\\": \\\"power-device conduction and switching losses and junction temperature on a coldplate.\\\",\\n      \\\"method\\\": \\\"device datasheet / SPICE loss tables\\\",\\n      \\\"available_via\\\": \\\"web\\\",\\n      \\\"tools\\\": [],\\n      \\\"web_tab\\\": \\\"Controller\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"end_effect_3d\\\",\\n      \\\"title\\\": \\\"3-D end-effect static\\\",\\n      \\\"what\\\": \\\"3-D field of one sector for the end-effect correction of the 2-D torque.\\\",\\n      \\\"method\\\": \\\"3-D finite-element magnetostatics\\\",\\n      \\\"available_via\\\": \\\"web\\\",\\n      \\\"tools\\\": [],\\n      \\\"web_tab\\\": \\\"3D\\\"\\n    },\\n    {\\n      \\\"id\\\": \\\"optimization\\\",\\n      \\\"title\\\": \\\"Optimization and sweeps\\\",\\n      \\\"what\\\": \\\"parameter sweeps, DOE screening and optimization of a loaded machine.\\\",\\n      \\\"method\\\": \\\"repeated 2-D FEM runs\\\",\\n      \\\"available_via\\\": \\\"web\\\",\\n      \\\"tools\\\": [],\\n      \\\"web_tab\\\": \\\"Optimization\\\"\\n    }\\n  ],\\n  \\\"note\\\": \\\"available_via 'mcp' = an agent can run it after sign-in with required_scope; 'web' = in the AeroStator web app only. Call get_input_requirements(calculation_type) for the inputs.\\\"\\n}\",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"result\":{\"calculation_types\":[{\"id\":\"machine_fit_check\",\"title\":\"Fit check against saved machines\",\"what\":\"ranks the saved duties of the machines your account may see against torque, speed, DC-bus voltage, outer diameter, active length, mass and cooling; returns margins in percent. Nothing is simulated.\",\"method\":\"comparison with saved 2-D FEM results\",\"available_via\":\"mcp\",\"tools\":[\"check_fit\"],\"required_scope\":\"machines:read\"},{\"id\":\"saved_performance\",\"title\":\"Saved performance of a catalog machine\",\"what\":\"operating point, shaft efficiency, loss split, coil / magnet / bearing temperatures, continuous rating, KV and torque ripple of one saved duty.\",\"method\":\"saved 2-D FEM results (energy-method torque, coupled thermal)\",\"available_via\":\"mcp\",\"tools\":[\"list_machines\",\"get_machine_performance\"],\"required_scope\":\"machines:read\"},{\"id\":\"design_from_requirements\",\"title\":\"Draft design from requirements\",\"what\":\"validates the requirements (asks for missing or contradictory ones), picks the nearest existing machine you may use and scales stack length, turns and parallel paths; returns an analytical estimate and a draft id. No new laminations.\",\"method\":\"analytical scaling of a FEM-characterised machine\",\"available_via\":\"mcp\",\"tools\":[\"start_design\",\"get_design\"],\"required_scope\":\"designs:write\"},{\"id\":\"em_fem_transient\",\"title\":\"2-D FEM electromagnetic transient\",\"what\":\"torque (energy method) and its ripple, back-EMF, line voltage, phase current, copper / core / magnet / solid-part losses and efficiency of a draft at its operating point.\",\"method\":\"2-D finite-element transient, time-stepped over an electrical period\",\"available_via\":\"mcp\",\"tools\":[\"simulate\",\"get_job\",\"get_design_result\"],\"simulate_what\":\"em\",\"required_scope\":\"simulate\"},{\"id\":\"thermal\",\"title\":\"Thermal (one EM pass + steady-state thermal)\",\"what\":\"coil, magnet and bearing temperatures from one EM loss pass.\",\"method\":\"2-D FEM transient losses into a steady-state thermal solve\",\"available_via\":\"mcp\",\"tools\":[\"simulate\",\"get_job\",\"get_design_result\"],\"simulate_what\":\"thermal\",\"required_scope\":\"simulate\"},{\"id\":\"coupled_em_thermal\",\"title\":\"Coupled EM <-> thermal to steady temperatures\",\"what\":\"iterates the EM transient and the thermal solve until winding and magnet temperatures settle; performance at those temperatures.\",\"method\":\"fixed-point loop of 2-D FEM transient and thermal solves\",\"available_via\":\"mcp\",\"tools\":[\"simulate\",\"get_job\",\"get_design_result\"],\"simulate_what\":\"coupled\",\"required_scope\":\"simulate\"},{\"id\":\"catalog_lookup\",\"title\":\"Materials and component catalog\",\"what\":\"magnets, lamination steels, wires, bearings, power devices and dies with their key specs and provenance.\",\"method\":\"catalog lookup\",\"available_via\":\"mcp\",\"tools\":[\"list_catalog\",\"get_catalog_entry\"],\"required_scope\":\"catalog:read\"},{\"id\":\"efficiency_map\",\"title\":\"Efficiency map (analytical tuner)\",\"what\":\"efficiency over the torque x speed plane with the battery limit, in the Configure tab.\",\"method\":\"analytical rescaling of a machine's FEM passport\",\"available_via\":\"web\",\"tools\":[],\"web_tab\":\"Configure\"},{\"id\":\"mechanical\",\"title\":\"Rotor mechanics\",\"what\":\"rotor centrifugal stress and sleeve sizing at speed and overspeed, safety factors, vibration modes, shaft critical speeds, bearing and windage losses.\",\"method\":\"finite-element and analytical rotor models\",\"available_via\":\"web\",\"tools\":[],\"web_tab\":\"Mechanical\"},{\"id\":\"controller_losses\",\"title\":\"Inverter (controller) losses\",\"what\":\"power-device conduction and switching losses and junction temperature on a coldplate.\",\"method\":\"device datasheet / SPICE loss tables\",\"available_via\":\"web\",\"tools\":[],\"web_tab\":\"Controller\"},{\"id\":\"end_effect_3d\",\"title\":\"3-D end-effect static\",\"what\":\"3-D field of one sector for the end-effect correction of the 2-D torque.\",\"method\":\"3-D finite-element magnetostatics\",\"available_via\":\"web\",\"tools\":[],\"web_tab\":\"3D\"},{\"id\":\"optimization\",\"title\":\"Optimization and sweeps\",\"what\":\"parameter sweeps, DOE screening and optimization of a loaded machine.\",\"method\":\"repeated 2-D FEM runs\",\"available_via\":\"web\",\"tools\":[],\"web_tab\":\"Optimization\"}],\"note\":\"available_via 'mcp' = an agent can run it after sign-in with required_scope; 'web' = in the AeroStator web app only. Call get_input_requirements(calculation_type) for the inputs.\"}}}}"
+    }
+  },
+  "get_input_requirements": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:41:50 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":201,\"result\":{\"content\":[{\"text\":\"{\\n  \\\"calculation_type\\\": \\\"design_from_requirements\\\",\\n  \\\"title\\\": \\\"Draft design from requirements\\\",\\n  \\\"available_via\\\": \\\"mcp\\\",\\n  \\\"required_scope\\\": \\\"designs:write\\\",\\n  \\\"units\\\": \\\"UCUM codes (N.m, /min = rpm, V, mm, kg, Cel = degC, kW, 1)\\\",\\n  \\\"tool\\\": \\\"start_design\\\",\\n  \\\"argument\\\": \\\"requirements\\\",\\n  \\\"rule\\\": \\\"give torque_nm or power_kw, plus speed_rpm, dc_bus_v, cooling and duty; a missing or contradictory essential comes back as status 'needs_input' (ask the engineer, never guess)\\\",\\n  \\\"inputs\\\": [\\n    {\\n      \\\"name\\\": \\\"torque_nm\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": true,\\n      \\\"unit\\\": \\\"N.m\\\",\\n      \\\"description\\\": \\\"shaft torque at rated speed (or give power_kw)\\\",\\n      \\\"range\\\": [\\n        0.01,\\n        20000.0\\n      ],\\n      \\\"exclusive_minimum\\\": 0,\\n      \\\"alternative\\\": \\\"power_kw\\\"\\n    },\\n    {\\n      \\\"name\\\": \\\"power_kw\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": \\\"kW\\\",\\n      \\\"description\\\": \\\"shaft power at rated speed (alternative to torque_nm); must agree with torque x speed within 5%\\\",\\n      \\\"exclusive_minimum\\\": 0\\n    },\\n    {\\n      \\\"name\\\": \\\"speed_rpm\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": true,\\n      \\\"unit\\\": \\\"/min\\\",\\n      \\\"description\\\": \\\"rated speed\\\",\\n      \\\"range\\\": [\\n        50.0,\\n        60000.0\\n      ],\\n      \\\"exclusive_minimum\\\": 0\\n    },\\n    {\\n      \\\"name\\\": \\\"dc_bus_v\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": true,\\n      \\\"unit\\\": \\\"V\\\",\\n      \\\"description\\\": \\\"DC bus voltage of the inverter\\\",\\n      \\\"range\\\": [\\n        12.0,\\n        1500.0\\n      ],\\n      \\\"typical\\\": [\\n        24,\\n        48,\\n        96,\\n        400,\\n        800\\n      ]\\n    },\\n    {\\n      \\\"name\\\": \\\"cooling\\\",\\n      \\\"type\\\": \\\"string\\\",\\n      \\\"required\\\": true,\\n      \\\"unit\\\": null,\\n      \\\"description\\\": \\\"how the heat leaves the machine\\\",\\n      \\\"options\\\": [\\n        \\\"air\\\",\\n        \\\"liquid\\\",\\n        \\\"robotics\\\"\\n      ]\\n    },\\n    {\\n      \\\"name\\\": \\\"duty\\\",\\n      \\\"type\\\": \\\"string\\\",\\n      \\\"required\\\": true,\\n      \\\"unit\\\": null,\\n      \\\"description\\\": \\\"S1 continuous, S2 short-time, S3 intermittent, or peak\\\",\\n      \\\"options\\\": [\\n        \\\"S1\\\",\\n        \\\"S2\\\",\\n        \\\"S3\\\",\\n        \\\"peak\\\"\\n      ]\\n    },\\n    {\\n      \\\"name\\\": \\\"max_speed_rpm\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": \\\"/min\\\",\\n      \\\"description\\\": \\\"maximum speed (default = rated); must not be below speed_rpm\\\",\\n      \\\"exclusive_minimum\\\": 0\\n    },\\n    {\\n      \\\"name\\\": \\\"max_outer_diameter_mm\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": \\\"mm\\\",\\n      \\\"description\\\": \\\"max stator outer diameter\\\",\\n      \\\"exclusive_minimum\\\": 0\\n    },\\n    {\\n      \\\"name\\\": \\\"max_length_mm\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": \\\"mm\\\",\\n      \\\"description\\\": \\\"max active (stack) length\\\",\\n      \\\"exclusive_minimum\\\": 0\\n    },\\n    {\\n      \\\"name\\\": \\\"max_mass_kg\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": \\\"kg\\\",\\n      \\\"description\\\": \\\"max active mass\\\",\\n      \\\"exclusive_minimum\\\": 0\\n    },\\n    {\\n      \\\"name\\\": \\\"ambient_c\\\",\\n      \\\"type\\\": \\\"number\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": \\\"Cel\\\",\\n      \\\"description\\\": \\\"ambient / coolant temperature\\\",\\n      \\\"range\\\": [\\n        -60.0,\\n        150.0\\n      ],\\n      \\\"default\\\": 40.0\\n    },\\n    {\\n      \\\"name\\\": \\\"mode\\\",\\n      \\\"type\\\": \\\"string\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": null,\\n      \\\"description\\\": \\\"motor or generator\\\",\\n      \\\"options\\\": [\\n        \\\"motor\\\",\\n        \\\"generator\\\"\\n      ],\\n      \\\"default\\\": \\\"motor\\\"\\n    },\\n    {\\n      \\\"name\\\": \\\"application\\\",\\n      \\\"type\\\": \\\"string\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": null,\\n      \\\"description\\\": \\\"free-text application notes (max 500 characters)\\\"\\n    }\\n  ],\\n  \\\"optional_arguments\\\": [\\n    {\\n      \\\"name\\\": \\\"base\\\",\\n      \\\"type\\\": \\\"object\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": null,\\n      \\\"description\\\": \\\"force a starting machine: {die, config, duty?} (names from list_machines)\\\"\\n    },\\n    {\\n      \\\"name\\\": \\\"name\\\",\\n      \\\"type\\\": \\\"string\\\",\\n      \\\"required\\\": false,\\n      \\\"unit\\\": null,\\n      \\\"description\\\": \\\"draft name\\\"\\n    }\\n  ]\\n}\",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"result\":{\"calculation_type\":\"design_from_requirements\",\"title\":\"Draft design from requirements\",\"available_via\":\"mcp\",\"required_scope\":\"designs:write\",\"units\":\"UCUM codes (N.m, /min = rpm, V, mm, kg, Cel = degC, kW, 1)\",\"tool\":\"start_design\",\"argument\":\"requirements\",\"rule\":\"give torque_nm or power_kw, plus speed_rpm, dc_bus_v, cooling and duty; a missing or contradictory essential comes back as status 'needs_input' (ask the engineer, never guess)\",\"inputs\":[{\"name\":\"torque_nm\",\"type\":\"number\",\"required\":true,\"unit\":\"N.m\",\"description\":\"shaft torque at rated speed (or give power_kw)\",\"range\":[0.01,20000.0],\"exclusive_minimum\":0,\"alternative\":\"power_kw\"},{\"name\":\"power_kw\",\"type\":\"number\",\"required\":false,\"unit\":\"kW\",\"description\":\"shaft power at rated speed (alternative to torque_nm); must agree with torque x speed within 5%\",\"exclusive_minimum\":0},{\"name\":\"speed_rpm\",\"type\":\"number\",\"required\":true,\"unit\":\"/min\",\"description\":\"rated speed\",\"range\":[50.0,60000.0],\"exclusive_minimum\":0},{\"name\":\"dc_bus_v\",\"type\":\"number\",\"required\":true,\"unit\":\"V\",\"description\":\"DC bus voltage of the inverter\",\"range\":[12.0,1500.0],\"typical\":[24,48,96,400,800]},{\"name\":\"cooling\",\"type\":\"string\",\"required\":true,\"unit\":null,\"description\":\"how the heat leaves the machine\",\"options\":[\"air\",\"liquid\",\"robotics\"]},{\"name\":\"duty\",\"type\":\"string\",\"required\":true,\"unit\":null,\"description\":\"S1 continuous, S2 short-time, S3 intermittent, or peak\",\"options\":[\"S1\",\"S2\",\"S3\",\"peak\"]},{\"name\":\"max_speed_rpm\",\"type\":\"number\",\"required\":false,\"unit\":\"/min\",\"description\":\"maximum speed (default = rated); must not be below speed_rpm\",\"exclusive_minimum\":0},{\"name\":\"max_outer_diameter_mm\",\"type\":\"number\",\"required\":false,\"unit\":\"mm\",\"description\":\"max stator outer diameter\",\"exclusive_minimum\":0},{\"name\":\"max_length_mm\",\"type\":\"number\",\"required\":false,\"unit\":\"mm\",\"description\":\"max active (stack) length\",\"exclusive_minimum\":0},{\"name\":\"max_mass_kg\",\"type\":\"number\",\"required\":false,\"unit\":\"kg\",\"description\":\"max active mass\",\"exclusive_minimum\":0},{\"name\":\"ambient_c\",\"type\":\"number\",\"required\":false,\"unit\":\"Cel\",\"description\":\"ambient / coolant temperature\",\"range\":[-60.0,150.0],\"default\":40.0},{\"name\":\"mode\",\"type\":\"string\",\"required\":false,\"unit\":null,\"description\":\"motor or generator\",\"options\":[\"motor\",\"generator\"],\"default\":\"motor\"},{\"name\":\"application\",\"type\":\"string\",\"required\":false,\"unit\":null,\"description\":\"free-text application notes (max 500 characters)\"}],\"optional_arguments\":[{\"name\":\"base\",\"type\":\"object\",\"required\":false,\"unit\":null,\"description\":\"force a starting machine: {die, config, duty?} (names from list_machines)\"},{\"name\":\"name\",\"type\":\"string\",\"required\":false,\"unit\":null,\"description\":\"draft name\"}]}}}}"
+    }
+  },
+  "oauth_resource_metadata": {
+    "request": {
+      "method": "GET",
+      "url": "https://aerostator.com/.well-known/oauth-protected-resource/mcp?test=1790750386115"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-length": "306",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:39:55 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"resource\":\"https://aerostator.com/mcp\",\"authorization_servers\":[\"https://aerostator.com\"],\"scopes_supported\":[\"catalog:read\",\"machines:read\",\"designs:write\",\"simulate\"],\"bearer_methods_supported\":[\"header\"],\"resource_name\":\"eMotres motor catalog (MCP)\",\"resource_documentation\":\"https://aerostator.com/\"}"
+    }
+  },
+  "oauth_authorization_server_metadata": {
+    "request": {
+      "method": "GET",
+      "url": "https://aerostator.com/.well-known/oauth-authorization-server?test=1790750386115"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-length": "727",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:39:55 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"issuer\":\"https://aerostator.com\",\"authorization_endpoint\":\"https://aerostator.com/oauth/authorize\",\"token_endpoint\":\"https://aerostator.com/oauth/token\",\"registration_endpoint\":\"https://aerostator.com/oauth/register\",\"revocation_endpoint\":\"https://aerostator.com/oauth/revoke\",\"scopes_supported\":[\"catalog:read\",\"machines:read\",\"designs:write\",\"simulate\"],\"response_types_supported\":[\"code\"],\"response_modes_supported\":[\"query\"],\"grant_types_supported\":[\"authorization_code\",\"refresh_token\"],\"code_challenge_methods_supported\":[\"S256\"],\"token_endpoint_auth_methods_supported\":[\"none\",\"client_secret_post\",\"client_secret_basic\"],\"revocation_endpoint_auth_methods_supported\":[\"none\",\"client_secret_post\",\"client_secret_basic\"]}"
+    }
+  },
+  "how_to_authenticate": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:52:29 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":301,\"result\":{\"content\":[{\"text\":\"{\\n  \\\"recommended\\\": \\\"oauth\\\",\\n  \\\"oauth\\\": {\\n    \\\"how\\\": \\\"use your AI app's Connect / Sign in button for this server (claude.ai and ChatGPT custom connectors, Claude Code /mcp). A browser page opens on the AeroStator site: sign in or create an account there, then Allow.\\\",\\n    \\\"spec\\\": \\\"MCP authorization (OAuth 2.1, PKCE S256, RFC 9728 / 8414 / 7591)\\\",\\n    \\\"resource\\\": \\\"https://aerostator.com/mcp\\\",\\n    \\\"resource_metadata_url\\\": \\\"https://aerostator.com/.well-known/oauth-protected-resource/mcp\\\",\\n    \\\"authorization_server_metadata_url\\\": \\\"https://aerostator.com/.well-known/oauth-authorization-server\\\",\\n    \\\"authorize_url\\\": \\\"https://aerostator.com/oauth/authorize\\\",\\n    \\\"token_url\\\": \\\"https://aerostator.com/oauth/token\\\",\\n    \\\"registration_url\\\": \\\"https://aerostator.com/oauth/register\\\",\\n    \\\"default_scopes\\\": [\\n      \\\"catalog:read\\\",\\n      \\\"machines:read\\\"\\n    ]\\n  },\\n  \\\"api_key\\\": {\\n    \\\"how\\\": \\\"sign in on the website, open the avatar menu -> Access for agents -> Create key, tick the scopes, copy the emk_ key (shown once) and send it as 'Authorization: Bearer emk_...'.\\\",\\n    \\\"url\\\": \\\"https://aerostator.com/\\\"\\n  },\\n  \\\"sign_in_url\\\": \\\"https://aerostator.com/?signin=1\\\",\\n  \\\"sign_up_url\\\": \\\"https://aerostator.com/?signup=1\\\",\\n  \\\"scopes\\\": [\\n    {\\n      \\\"scope\\\": \\\"catalog:read\\\",\\n      \\\"description\\\": \\\"Read the materials and dies catalog\\\",\\n      \\\"unlocks\\\": [\\n        \\\"get_catalog_entry\\\",\\n        \\\"list_catalog\\\"\\n      ]\\n    },\\n    {\\n      \\\"scope\\\": \\\"machines:read\\\",\\n      \\\"description\\\": \\\"Read your machines and their saved results\\\",\\n      \\\"unlocks\\\": [\\n        \\\"check_fit\\\",\\n        \\\"get_design\\\",\\n        \\\"get_design_result\\\",\\n        \\\"get_machine_performance\\\",\\n        \\\"list_machines\\\",\\n        \\\"open_in_configure\\\"\\n      ]\\n    },\\n    {\\n      \\\"scope\\\": \\\"designs:write\\\",\\n      \\\"description\\\": \\\"Create draft machines in your workspace (marked as the agent's; never changes your saved machines or open motor)\\\",\\n      \\\"unlocks\\\": [\\n        \\\"start_design\\\"\\n      ]\\n    },\\n    {\\n      \\\"scope\\\": \\\"simulate\\\",\\n      \\\"description\\\": \\\"Queue simulations of those drafts in your job queue (daily fair-use limit)\\\",\\n      \\\"unlocks\\\": [\\n        \\\"get_job\\\",\\n        \\\"simulate\\\"\\n      ]\\n    }\\n  ],\\n  \\\"never\\\": \\\"never type a password into the chat; sign-in and sign-up happen only on the AeroStator page\\\",\\n  \\\"docs_url\\\": \\\"https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md\\\",\\n  \\\"user_message\\\": \\\"To use your AeroStator machines and simulations, connect AeroStator in this app (Connect / Sign in); the page that opens lets you sign in or create an account.\\\"\\n}\",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"result\":{\"recommended\":\"oauth\",\"oauth\":{\"how\":\"use your AI app's Connect / Sign in button for this server (claude.ai and ChatGPT custom connectors, Claude Code /mcp). A browser page opens on the AeroStator site: sign in or create an account there, then Allow.\",\"spec\":\"MCP authorization (OAuth 2.1, PKCE S256, RFC 9728 / 8414 / 7591)\",\"resource\":\"https://aerostator.com/mcp\",\"resource_metadata_url\":\"https://aerostator.com/.well-known/oauth-protected-resource/mcp\",\"authorization_server_metadata_url\":\"https://aerostator.com/.well-known/oauth-authorization-server\",\"authorize_url\":\"https://aerostator.com/oauth/authorize\",\"token_url\":\"https://aerostator.com/oauth/token\",\"registration_url\":\"https://aerostator.com/oauth/register\",\"default_scopes\":[\"catalog:read\",\"machines:read\"]},\"api_key\":{\"how\":\"sign in on the website, open the avatar menu -> Access for agents -> Create key, tick the scopes, copy the emk_ key (shown once) and send it as 'Authorization: Bearer emk_...'.\",\"url\":\"https://aerostator.com/\"},\"sign_in_url\":\"https://aerostator.com/?signin=1\",\"sign_up_url\":\"https://aerostator.com/?signup=1\",\"scopes\":[{\"scope\":\"catalog:read\",\"description\":\"Read the materials and dies catalog\",\"unlocks\":[\"get_catalog_entry\",\"list_catalog\"]},{\"scope\":\"machines:read\",\"description\":\"Read your machines and their saved results\",\"unlocks\":[\"check_fit\",\"get_design\",\"get_design_result\",\"get_machine_performance\",\"list_machines\",\"open_in_configure\"]},{\"scope\":\"designs:write\",\"description\":\"Create draft machines in your workspace (marked as the agent's; never changes your saved machines or open motor)\",\"unlocks\":[\"start_design\"]},{\"scope\":\"simulate\",\"description\":\"Queue simulations of those drafts in your job queue (daily fair-use limit)\",\"unlocks\":[\"get_job\",\"simulate\"]}],\"never\":\"never type a password into the chat; sign-in and sign-up happen only on the AeroStator page\",\"docs_url\":\"https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md\",\"user_message\":\"To use your AeroStator machines and simulations, connect AeroStator in this app (Connect / Sign in); the page that opens lets you sign in or create an account.\"}}}}"
+    }
+  },
+  "start_sign_up": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 200,
+      "headers": {
+        "connection": "keep-alive",
+        "content-encoding": "gzip",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:52:29 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "transfer-encoding": "chunked",
+        "vary": "Accept-Encoding",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\":\"2.0\",\"id\":302,\"result\":{\"content\":[{\"text\":\"{\\n  \\\"sign_up_url\\\": \\\"https://aerostator.com/?signup=1\\\",\\n  \\\"preferred\\\": \\\"click Connect / Sign in for AeroStator in your AI app and choose 'Create account' on the page that opens: after the e-mail confirmation you continue straight to the consent step and come back signed in\\\",\\n  \\\"steps\\\": [\\n    \\\"open the sign-up page (or the Connect / Sign in page of your AI app)\\\",\\n    \\\"create the account with e-mail + password or with Google, accepting the terms\\\",\\n    \\\"confirm the e-mail from the link we send (password accounts)\\\",\\n    \\\"sign in and click Allow; the AI app is then connected\\\"\\n  ],\\n  \\\"account_created_by_this_call\\\": false,\\n  \\\"terms_url\\\": \\\"https://emotres.com/terms-conditions\\\",\\n  \\\"privacy_url\\\": \\\"https://emotres.com/privacy-policy\\\",\\n  \\\"never\\\": \\\"do not ask the user for a password in chat; the password is typed only on the AeroStator page\\\",\\n  \\\"user_message\\\": \\\"Create your AeroStator account at https://aerostator.com/?signup=1 (or via Connect / Sign in in this app), confirm the e-mail, then connect AeroStator here.\\\"\\n}\",\"type\":\"text\"}],\"isError\":false,\"structuredContent\":{\"result\":{\"sign_up_url\":\"https://aerostator.com/?signup=1\",\"preferred\":\"click Connect / Sign in for AeroStator in your AI app and choose 'Create account' on the page that opens: after the e-mail confirmation you continue straight to the consent step and come back signed in\",\"steps\":[\"open the sign-up page (or the Connect / Sign in page of your AI app)\",\"create the account with e-mail + password or with Google, accepting the terms\",\"confirm the e-mail from the link we send (password accounts)\",\"sign in and click Allow; the AI app is then connected\"],\"account_created_by_this_call\":false,\"terms_url\":\"https://emotres.com/terms-conditions\",\"privacy_url\":\"https://emotres.com/privacy-policy\",\"never\":\"do not ask the user for a password in chat; the password is typed only on the AeroStator page\",\"user_message\":\"Create your AeroStator account at https://aerostator.com/?signup=1 (or via Connect / Sign in in this app), confirm the e-mail, then connect AeroStator here.\"}}}}"
+    }
+  },
+  "unauthenticated_protected_tool": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "content-length": "903",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:41:50 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "www-authenticate": "Bearer realm=\"emotres-mcp\", resource_metadata=\"https://aerostator.com/.well-known/oauth-protected-resource/mcp\", scope=\"catalog:read machines:read\"",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\": \"2.0\", \"id\": 203, \"error\": {\"code\": -32001, \"message\": \"Authentication required\", \"data\": {\"error\": \"authentication_required\", \"required_action\": \"sign_up\", \"required_scope\": \"machines:read\", \"tool\": \"list_machines\", \"method\": \"tools/call\", \"reason\": \"no_token\", \"sign_in_url\": \"https://aerostator.com/?signin=1\", \"sign_up_url\": \"https://aerostator.com/?signup=1\", \"authorize_url\": \"https://aerostator.com/oauth/authorize\", \"resource_metadata_url\": \"https://aerostator.com/.well-known/oauth-protected-resource/mcp\", \"docs_url\": \"https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md\", \"user_message\": \"Create an AeroStator account to use 'list_machines': click Connect / Sign in for AeroStator in this app and choose 'Create account', or open https://aerostator.com/?signup=1; then confirm the e-mail and connect.\"}}, \"reason\": \"no_token\"}"
+    }
+  },
+  "unauthenticated_start_design": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "content-length": "901",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:56:09 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "www-authenticate": "Bearer realm=\"emotres-mcp\", resource_metadata=\"https://aerostator.com/.well-known/oauth-protected-resource/mcp\", scope=\"catalog:read machines:read designs:write\"",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\": \"2.0\", \"id\": 401, \"error\": {\"code\": -32001, \"message\": \"Authentication required\", \"data\": {\"error\": \"authentication_required\", \"required_action\": \"sign_up\", \"required_scope\": \"designs:write\", \"tool\": \"start_design\", \"method\": \"tools/call\", \"reason\": \"no_token\", \"sign_in_url\": \"https://aerostator.com/?signin=1\", \"sign_up_url\": \"https://aerostator.com/?signup=1\", \"authorize_url\": \"https://aerostator.com/oauth/authorize\", \"resource_metadata_url\": \"https://aerostator.com/.well-known/oauth-protected-resource/mcp\", \"docs_url\": \"https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md\", \"user_message\": \"Create an AeroStator account to use 'start_design': click Connect / Sign in for AeroStator in this app and choose 'Create account', or open https://aerostator.com/?signup=1; then confirm the e-mail and connect.\"}}, \"reason\": \"no_token\"}"
+    }
+  },
+  "unauthenticated_simulate": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/mcp"
+    },
+    "response": {
+      "status": 401,
+      "headers": {
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "content-length": "888",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:56:09 GMT",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "www-authenticate": "Bearer realm=\"emotres-mcp\", resource_metadata=\"https://aerostator.com/.well-known/oauth-protected-resource/mcp\", scope=\"catalog:read machines:read simulate\"",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"jsonrpc\": \"2.0\", \"id\": 402, \"error\": {\"code\": -32001, \"message\": \"Authentication required\", \"data\": {\"error\": \"authentication_required\", \"required_action\": \"sign_up\", \"required_scope\": \"simulate\", \"tool\": \"simulate\", \"method\": \"tools/call\", \"reason\": \"no_token\", \"sign_in_url\": \"https://aerostator.com/?signin=1\", \"sign_up_url\": \"https://aerostator.com/?signup=1\", \"authorize_url\": \"https://aerostator.com/oauth/authorize\", \"resource_metadata_url\": \"https://aerostator.com/.well-known/oauth-protected-resource/mcp\", \"docs_url\": \"https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md\", \"user_message\": \"Create an AeroStator account to use 'simulate': click Connect / Sign in for AeroStator in this app and choose 'Create account', or open https://aerostator.com/?signup=1; then confirm the e-mail and connect.\"}}, \"reason\": \"no_token\"}"
+    }
+  },
+  "oauth_dynamic_registration": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/oauth/register"
+    },
+    "response": {
+      "status": 201,
+      "headers": {
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "content-length": "354",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:42:51 GMT",
+        "pragma": "no-cache",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"client_id\":\"emc_9FdFMoREqCiEHH7inMVpcw\",\"client_name\":\"AeroStator external audit 2026-09-30\",\"redirect_uris\":[\"http://127.0.0.1:8765/callback\"],\"token_endpoint_auth_method\":\"none\",\"grant_types\":[\"authorization_code\",\"refresh_token\"],\"response_types\":[\"code\"],\"scope\":\"catalog:read machines:read designs:write simulate\",\"client_id_issued_at\":1790750571}"
+    }
+  },
+  "oauth_authorize": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/oauth/authorize?response_type=code&client_id=emc_9FdFMoREqCiEHH7inMVpcw&redirect_uri=http%3A%2F%2F127.0.0.1%3A8765%2Fcallback&scope=catalog%3Aread+machines%3Aread+designs%3Awrite+simulate&state=audit-state&code_challenge=4Z6l3Nkg6nC8dsSEStfD2NphZEokgNDsnNzEdIkMQdw&code_challenge_method=S256&resource=https%3A%2F%2Faerostator.com%2Fmcp"
+    },
+    "response": {
+      "status": 302,
+      "headers": {
+        "connection": "keep-alive",
+        "content-length": "0",
+        "date": "Wed, 30 Sep 2026 06:42:51 GMT",
+        "location": "/agent-consent?request=PY35CYB03chR8gdQJra7RESxWcWWF3ng",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": ""
+    }
+  },
+  "oauth_bad_redirect": {
+    "request": {
+      "method": "POST",
+      "url": "https://aerostator.com/oauth/authorize?response_type=code&client_id=emc_9FdFMoREqCiEHH7inMVpcw&redirect_uri=https%3A%2F%2Fattacker.example%2Fcallback&scope=catalog%3Aread+machines%3Aread+designs%3Awrite+simulate&state=audit-state&code_challenge=4Z6l3Nkg6nC8dsSEStfD2NphZEokgNDsnNzEdIkMQdw&code_challenge_method=S256&resource=https%3A%2F%2Faerostator.com%2Fmcp"
+    },
+    "response": {
+      "status": 400,
+      "headers": {
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "content-length": "94",
+        "content-type": "application/json",
+        "date": "Wed, 30 Sep 2026 06:42:51 GMT",
+        "pragma": "no-cache",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "server": "nginx/1.24.0 (Ubuntu)",
+        "strict-transport-security": "max-age=31536000",
+        "x-content-type-options": "nosniff",
+        "x-frame-options": "DENY"
+      },
+      "body": "{\"error\":\"invalid_request\",\"error_description\":\"redirect_uri does not match the registration\"}"
+    }
+  },
+  "tools_list_authenticated": null,
+  "calculation_request": null,
+  "calculation_result": null
+}

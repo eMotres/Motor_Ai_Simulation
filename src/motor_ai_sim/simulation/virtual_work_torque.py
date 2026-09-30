@@ -327,7 +327,11 @@ RIPPLE_SCALE_FLOOR_REL_MEAN = 0.005
 #: 1-layer cases to 3 layers per side, where both pass (3.0 % / 2.2 %).
 SELF_CHECK_TARGET = 0.04
 SELF_CHECK_ORDER = 1.5
-GAP_LAYERS_AUTO_MAX = 6.0
+#: Capped at 4/side: measured to pass on the Ø40 static mesh (0.51 %), while
+#: on the L155 (sleeve, 0.69 mm gap) more layers did NOT lower the two-ring
+#: difference (1.2 % at 1/side, 18 % unsettled at 2, 6.8 % at 3) — refinement
+#: beyond 4 would buy cost, not accuracy, on the evidence we have.
+GAP_LAYERS_AUTO_MAX = 4.0
 # kept for callers of the first version
 SELF_CHECK_MAX_REL_TO_PP = SELF_CHECK_GATE
 

@@ -408,8 +408,9 @@ def test_gap_layers_for_self_check_rule():
     assert g(2.0, 0.074) == 4.0        # Ø40 static rated at 2/side, 7.4 %
     assert g(1.0, 0.021) is None       # Ø40 shipped duty, 2.1 %: passes
     assert g(1.0, 0.06) == 2.0         # just over the gate: one more layer
-    assert g(2.0, 0.30) == 6.0         # capped at 6/side
-    assert g(6.0, 0.50) is None        # already at the cap
+    assert g(2.0, 0.30) == 4.0         # capped at 4/side
+    assert g(4.0, 0.50) is None        # already at the cap
+    assert g(3.0, 0.068) == 4.0        # L155 at 3/side (6.8 %) -> the cap
     assert g(1.0, None) is None
 
 

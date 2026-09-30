@@ -93,8 +93,9 @@ moves tangentially by the same rotation as its anti-periodic partner, so the ene
   settling prefix.
 * New result keys, at full precision: `T_coulomb_series`, `T_avg_coulomb_Nm`,
   `T_ripple_pp_coulomb`, and `coulomb_torque`. `coulomb_torque` holds the two layer
-  series, `layer_self_check` (max |T_r − T_s|, mean difference, relative to the mean and
-  to the p-p), the Coulomb harmonics, the layer sizes, the requested method, and
+  series, `layer_self_check` (max |T_r − T_s|, mean difference, relative to the mean, to
+  the p-p and to the ripple scale max(p-p, 0.5 % of |mean|), and the
+  `ripple_mesh_limited` flag at the 5 % gate), the Coulomb harmonics, the layer sizes, the requested method, and
   `unavailable_reason`. `torque_method_diagnostics` gains `coulomb_mean_Nm` and the
   Maxwell/space-vector/terminal-work minus Coulomb differences. The raw series
   `torque_coulomb_Nm` is in `P2_transient_sample_history`.
@@ -290,24 +291,31 @@ Steps per period: Ø40 48, L13 60, L155 72. These divide the ring at every level
 levels sample the same rotor angles. Self-check = max|T_rotor-ring − T_stator-ring| /
 max(p-p, 0.5 % of |mean|). Losses are the solver's solved values [W].
 
-| quantity | Ø40 1/side | Ø40 2/side | Ø40 3/side | L13 1/side | L13 2/side | L13 3/side | L155 1/side | L155 2/side |
-|---|---|---|---|---|---|---|---|---|
-| slip ring (nodes/period) | 144 | 192 | 240 | 120 | 120 | 120 | 216 | 288 |
-| elements / P2 DOFs | 11 994 / 25 104 | 16 236 / 33 928 | 21 982 / 45 760 | 15 199 / 31 359 | 16 879 / 34 723 | 18 559 / 38 087 | 22 408 / 46 052 | 28 136 / 57 872 |
-| Coulomb mean torque N·m | 0.616655 | 0.616668 | 0.616729 | 0.788269 | 0.788791 | 0.788978 | 184.59255 | 184.60385 |
-| ripple p-p N·m (%) | 0.040749 (6.61) | 0.039223 (6.36) | 0.040571 (6.58) | 0.244047 (30.96) | 0.244203 (30.96) | 0.244035 (30.93) | 3.636159 (1.97) | 3.782227 (2.05) |
-| self-check (gate 5 %) | 2.13 % | 0.81 % | 0.055 % | 1.08 % | 1.88 % | 0.92 % | 1.17 % | **18.3 %** |
-| iron W | 9.232 | 9.236 | 9.232 | 2.073 | 2.073 | 2.073 | 1458.931 | **1518.116** |
-| magnet W | 3.360 | 3.362 | 3.359 | 0.508 | 0.508 | 0.508 | 106.905 | 106.862 |
-| shaft W | 0.008 | 0.008 | 0.008 | 12.186 | 12.180 | 12.180 | 3.793 | 3.674 |
-| sleeve W | 0 | 0 | 0 | 0 | 0 | 0 | 10.039 | 10.036 |
-| copper DC W | 49.109 | 49.109 | 49.109 | 259.793 | 259.793 | 259.793 | 1659.599 | 1659.599 |
-| copper AC W | 4.475 | 4.464 | 4.472 | 0.113 | 0.113 | 0.113 | 614.009 | 615.186 |
-| **total loss W** | 66.183 | 66.179 | 66.181 | 274.672 | 274.667 | 274.666 | 3853.277 | 3913.473 (+1.56 %) |
-| frames solved (warm-up) | 194 (146) | 194 (146) | 194 (146) | 242 (182) | 242 (182) | 242 (182) | 1226 (1154) | 1874 (1802), **not settled** |
-| wall time s | 171 | 198 | 257 | 285 | 288 | 306 | 748 | 1443 |
+| quantity | Ø40 1/side | Ø40 2/side | Ø40 3/side | L13 1/side | L13 2/side | L13 3/side | L155 1/side | L155 2/side | L155 3/side |
+|---|---|---|---|---|---|---|---|---|---|
+| slip ring (nodes/period) | 144 | 192 | 240 | 120 | 120 | 120 | 216 | 288 | 336 (steps 72 → 84) |
+| elements / P2 DOFs | 11 994 / 25 104 | 16 236 / 33 928 | 21 982 / 45 760 | 15 199 / 31 359 | 16 879 / 34 723 | 18 559 / 38 087 | 22 408 / 46 052 | 28 136 / 57 872 | 33 724 / 69 292 |
+| Coulomb mean torque N·m | 0.616655 | 0.616668 | 0.616729 | 0.788269 | 0.788791 | 0.788978 | 184.59255 | 184.60385 | 184.60827 |
+| ripple p-p N·m (%) | 0.040749 (6.61) | 0.039223 (6.36) | 0.040571 (6.58) | 0.244047 (30.96) | 0.244203 (30.96) | 0.244035 (30.93) | 3.636159 (1.97) | 3.782227 (2.05) | 3.774817 (2.04) |
+| self-check (gate 5 %) | 2.13 % | 0.81 % | 0.055 % | 1.08 % | 1.88 % | 0.92 % | 1.17 % | **18.3 %** | **6.8 %** |
+| iron W | 9.232 | 9.236 | 9.232 | 2.073 | 2.073 | 2.073 | 1458.931 | **1518.116** | 1459.701 |
+| magnet W | 3.360 | 3.362 | 3.359 | 0.508 | 0.508 | 0.508 | 106.905 | 106.862 | 107.294 |
+| shaft W | 0.008 | 0.008 | 0.008 | 12.186 | 12.180 | 12.180 | 3.793 | 3.674 | 3.815 |
+| sleeve W | 0 | 0 | 0 | 0 | 0 | 0 | 10.039 | 10.036 | 10.057 |
+| copper DC W | 49.109 | 49.109 | 49.109 | 259.793 | 259.793 | 259.793 | 1659.599 | 1659.599 | 1659.599 |
+| copper AC W | 4.475 | 4.464 | 4.472 | 0.113 | 0.113 | 0.113 | 614.009 | 615.186 | 614.828 |
+| **total loss W** | 66.183 | 66.179 | 66.181 | 274.672 | 274.667 | 274.666 | 3853.277 | 3913.473 (+1.56 %) | 3855.294 (+0.05 %) |
+| frames solved (warm-up) | 194 (146) | 194 (146) | 194 (146) | 242 (182) | 242 (182) | 242 (182) | 1226 (1154) | 1874 (1802), **not settled** | 1430 (1346) |
+| wall time s | 171 | 198 | 257 | 285 | 288 | 306 | 748 | 1443 | 1051 |
 
-L155 at 3 per side is L155_GL3_NOTE.
+**L155 at 3 per side** settles, and it agrees with 1 per side to +0.008 % in torque,
++0.05 % in total loss and +0.07 pp in ripple. Its 84 steps against 72 account for part
+of the ripple difference. But its two rings disagree more than at 1 per side: 6.8 % of
+the p-p against 1.2 %, with 0.07 N·m RMS of AC against 0.004. The 6th and 12th
+harmonics of both rings and of Maxwell agree to about 3 %. The extra disagreement is
+the rotor-side ring's p-p (3.85 against 3.72 N·m on the stator side). That points at the
+rotor-side belt next to the sleeve at K ≥ 2. It is an open finding, not investigated
+here.
 
 **L155 at 2 per side does not settle.** The eddy warm-up hit its cap of 24 extension
 periods with a residual of 21.6 % (tolerance 2 %). The iron-loss series still swings by
@@ -317,14 +325,15 @@ therefore does not refine unsettled runs (§6.3). Why the L155 warm-up fails on 
 288-node ring is a separate solver finding; it is not investigated here.
 
 **Result.** On the product's own physics, 1 layer per side already passes on all three
-machines (self-check ≤ 2.1 %). On Ø40 and L13, going to 2 or 3 per side:
+machines (self-check ≤ 2.1 %). Going to 2 or 3 per side:
 
 * moves the Coulomb mean torque by ≤ 0.09 %;
 * moves the ripple by ≤ 0.25 pp (Ø40: 6.61 / 6.36 / 6.58 %, non-monotonic, well inside
-  max(0.5 pp, 10 %));
-* moves the total loss by ≤ 0.01 %, far inside the 5 % tolerance. No loss group moves
-  more than 0.25 % (Ø40 copper AC 4.475 / 4.464 / 4.472 W; L13 shaft 12.186 / 12.180 /
-  12.180 W).
+  max(0.5 pp, 10 %)); L155 +0.08 pp;
+* moves the total loss by ≤ 0.01 % on Ø40 and L13 and +0.05 % on L155 at 3/side, far
+  inside the 5 % tolerance. No loss group of a settled run moves more than 0.4 % (L155
+  magnet 106.9 → 107.3 W). The one exception is L155 at 2/side, which did not settle:
+  iron +4.1 %, total +1.6 % (the paragraph below).
 
 The frames to settle do not change. The wall time rises by +50 % on Ø40 (171 → 257 s)
 and +7.5 % on L13 (285 → 306 s). On L155, 1 → 2 per side nearly doubles the wall time
@@ -365,7 +374,9 @@ and only the solved field can measure that. So the rule is measured on every run
    keeps the ripple error near 3 %. The 0.5 %-of-mean floor is the owner's absolute
    ripple tolerance, so a nearly flat waveform is not refined for nothing.
 3. **Refine once:** if the gate fails, `em_transient_eval` solves the run again at
-   gl′ = min(6, max(gl + 1, ⌈gl·(ε/4 %)^(1/1.5)⌉)) layers per side. The target is 4 %.
+   gl′ = min(4, max(gl + 1, ⌈gl·(ε/4 %)^(1/1.5)⌉)) layers per side. The target is 4 %.
+   The cap of 4 per side is measured: Ø40 static passes there (0.51 %), and on L155
+   more layers did not lower ε (§6.1).
    The order 1.5 is measured, not P2's nominal 2: on the Ø40 static mesh ε fell with
    order 1.39 (rated) / 1.14 (no-load) from 1 to 2 per side, 2.2 from 2 to 3, and
    1.7 / 1.5 from 1 to 3.
@@ -389,6 +400,26 @@ and only the solved field can measure that. So the rule is measured on every run
 Cost: runs that pass (every shipped duty measured) pay nothing extra. A run that fails
 pays one more solve at the refined mesh, which costs about 1.5× the first. On Ø40,
 going from 1 to 3 per side added +50 % wall time (§6.1).
+
+### 6.4 End to end through the Simulation route (branch code, Ø40 rated, 36 steps)
+
+`scripts/gap_layers_study/route_smoke.py` calls `routes.simulation.get_fem_transient`
+the way the tab does, with the ledger off and `fresh`.
+
+| request | reported method | gap refinement | self-check | T_em N·m / ripple % | wall |
+|---|---|---|---|---|---|
+| static, 1/side, method not given | `coulomb_virtual_work` | 1 → 4/side on the same 144-node ring, 36 steps kept | 21.3 % → 0.51 % | 0.625 / 5.9 | 107 s (first solve 43 s) |
+| eddy + rotor eddy, 1/side | `coulomb_virtual_work` | none | 2.4 % | 0.619 / 5.9 | 128 s |
+| static, 3/side, `torque_method=hybrid_maxwell_ac` | `terminal_work_mean+maxwell_ripple` | none | 2.9 % | 0.625 / 6.7 | 87 s |
+
+The card fields are all present (`summary_shape_v` 19): `torque_method`,
+`T_avg_coulomb_Nm`, `ripple_mesh_limited`, `ripple_self_check_rel`, `gap_refinement` and
+`gap_layers_note`. A stored run from before this change that recorded its summary build arguments is
+rebuilt at shape 19 when it is served. It keeps its own `torque_method` label (for
+example `energy_mean+maxwell_ripple`), and its Coulomb fields stay absent (None). A run
+too old to rebuild is served as it is, with no label. Nothing on disk is rewritten. The
+run ledger and the optimizer cache (key v5) never serve an older run for a new request:
+their keys now carry the torque method and the gap rule.
 
 ## 5. Notes and provenance
 

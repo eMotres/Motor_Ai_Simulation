@@ -11619,7 +11619,7 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
     gap ring; their difference, over max(p-p, 0.5 % of |mean|), is the gap
     mesh's own error of the ripple.  Above ``SELF_CHECK_GATE`` (5 %) the run is
     solved ONCE more with the gap layers per side predicted by
-    ``gap_layers_for_self_check`` (P2 order 2, 4 % target, at most 6/side),
+    ``gap_layers_for_self_check`` (measured order 1.5, 4 % target, at most 4/side),
     on the SAME slip ring (so the rotor angles and the step snap do not move)
     — measured: the ring density does not move torque or ripple, the gap
     layers do (docs/COULOMB_TORQUE_2026-09-30.md §3.3, §6).  The second result

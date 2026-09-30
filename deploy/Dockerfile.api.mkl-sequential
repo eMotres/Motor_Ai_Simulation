@@ -1,0 +1,117 @@
+# STUDY VARIANT -- not wired into docker-compose.yml, not the production
+# image. See C:\Users\vadim\Downloads\mkl_without_intel_openmp_2026-09-30.md
+# for the licensing analysis and benchmarks this Dockerfile exists to back up.
+#
+# Same base/runtime/test targets as deploy/Dockerfile.api (Stage 6 comments
+# there still apply) EXCEPT for one thing: this image never installs
+# `intel-openmp` / `intel-cmplr-lib-ur` / `umf`.  Those three ship under the
+# "Intel End User License Agreement for Developer Tools (Version August
+# 2024)", whose §3.1(x) bars linking/distributing so that any part of the
+# result becomes Reciprocal Open Source Software, and §3.1(xi) bars SaaS /
+# service-bureau use ("a service that allows use of or access to the
+# Materials by a third party as part of that service") -- both awkward for a
+# hosted FEM API. Core MKL, tbb and tcmlib stay: they are under the Intel
+# Simplified Software License (ISSL, binary redistribution + use, no SaaS or
+# reciprocal-open-source clause at all).
+#
+# HOW: pip's `mkl` wheel METADATA has an unconditional
+# `Requires-Dist: intel-openmp (<2027,>=2025)` -- a normal (non-optional,
+# no marker) dependency, so a plain `pip install mkl` (what requirements.txt
+# pulls transitively via `pypardiso>=0.4`) always pulls intel-openmp in.
+# `pip install --no-deps` on both the MKL stack and pypardiso is the only
+# way to stop that on PyPI. MKL's own shared libraries do NOT hard-link
+# libiomp5.so at the ELF level (confirmed with `ldd` against the running
+# deploy-api-1 image, 2026-09-30) -- libmkl_rt.so dlopen()s the selected
+# threading backend at runtime based on MKL_THREADING_LAYER, and only the
+# INTEL backend (libmkl_intel_thread.so) touches libiomp5.so. With
+# MKL_THREADING_LAYER=SEQUENTIAL (or TBB, using the ISSL-licensed `tbb`
+# package already required by `mkl` itself), libiomp5.so is never dlopen()ed
+# and need not be on disk at all -- verified in a throwaway sandbox on this
+# server: `pip list` shows no intel-openmp/intel-cmplr-lib-ur/umf, no
+# libiomp5.so anywhere under /usr/local/lib, and a real PARDISO solve on
+# exported FEM matrices (17k-45k DOF) succeeds with the same residual as
+# today's INTEL-layer solve. Leaving MKL_THREADING_LAYER unset defaults to
+# INTEL and crashes at import/first-call
+# ("undefined symbol: omp_in_parallel") once intel-openmp is absent -- the
+# env var below is load-bearing, not cosmetic.
+#
+# Build from the REPO ROOT, same as Dockerfile.api:
+#   docker build -f deploy/Dockerfile.api.mkl-sequential -t motres-api:mkl-seq .
+
+FROM python:3.11-slim AS base
+
+# libgomp1 stays: it is the GNU OpenMP runtime (GPL + GCC Runtime Library
+# Exception -- the same permissive-for-linking terms every gcc/g++ build on
+# this box already relies on), needed if MKL_THREADING_LAYER=GNU is ever
+# preferred over TBB/SEQUENTIAL; it carries none of the Intel EULA exposure
+# either way. gmsh/OCP + reportlab-fallback libs unchanged from Dockerfile.api.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libglu1-mesa libgl1 libxrender1 libxcursor1 libxft2 libxinerama1 \
+        libgomp1 fonts-dejavu-core curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid 10001 motres \
+ && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin motres
+
+WORKDIR /app
+
+# ── MKL stack WITHOUT intel-openmp / intel-cmplr-lib-ur / umf ──────────────
+# Versions pinned to match what pip resolved in the current deploy-api-1
+# image (2026-09-30); bump deliberately, re-run the sandbox check, not by
+# accident via an unpinned `pypardiso>=0.4` transitive resolve.
+# --no-deps on BOTH calls is required: mkl's own METADATA still lists
+# intel-openmp as a normal dependency, and pypardiso's METADATA requires
+# `mkl!=2024.0` -- with --no-deps neither call lets pip reach for it.
+RUN pip install --no-cache-dir --no-deps \
+        mkl==2026.1.0 onemkl-license==2026.1.0 tbb==2023.1.0 tcmlib==1.5.0 \
+ && pip install --no-cache-dir --no-deps pypardiso==0.4.7
+
+COPY requirements.txt .
+# requirements.txt's own `pypardiso>=0.4` line is now already satisfied by
+# the pin above, so this install does not re-expand it into intel-openmp.
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY src/ src/
+COPY VERSION ./
+COPY scripts/migrate_to_workspaces.py \
+     scripts/catalog_manifest.py \
+     scripts/check_case_collisions.py \
+     scripts/
+
+COPY config/ config-seed/
+
+RUN mkdir -p /app/cadquery_cache /app/logs \
+ && chown -R 10001:10001 /app/cadquery_cache /app/logs
+
+ENV PYTHONPATH=/app/src \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    LD_LIBRARY_PATH=/usr/local/lib \
+    MKL_THREADING_LAYER=SEQUENTIAL
+
+# ── test image ──────────────────────────────────────────────────────────────
+FROM base AS test
+RUN pip install --no-cache-dir pytest httpx
+COPY tests/ tests/
+COPY pyproject.toml ./
+COPY config/ config/
+USER motres
+ENV HOME=/home/motres \
+    MPLBACKEND=Agg
+CMD ["python", "-m", "pytest", "-q"]
+
+# ── runtime image (default target) ──────────────────────────────────────────
+FROM base AS api
+
+ENV AUTH_ENFORCE=1 \
+    MPLBACKEND=Agg \
+    HOME=/home/motres
+
+USER motres
+EXPOSE 8001
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:8001/api/health || exit 1
+
+CMD ["python", "-m", "uvicorn", "motor_ai_sim.api:app", \
+     "--host", "0.0.0.0", "--port", "8001"]

@@ -27,14 +27,13 @@ export type {
  *  before the two-surface split (2026-09-07). */
 export { outerCooling } from './types';
 import type { ThermalPayload } from './types';
+import type { EmRunStatus, EmRunSummary } from './emRun';
 
 /* The number / duration formatters are the mechanical tab's, imported rather
    than copied: two spellings of `fmt` is two ways for the same value to be
    printed differently, which is exactly what the shared field viewer was built
    to stop (2026-09-06). */
 export { fmt, fmtSecs, fmtClock, readSimSetting } from '../mechanical/api';
-import { readSimSetting } from '../mechanical/api';
-import { EDDY_DEFAULT_STEPS } from '../../lib/eddySteps';
 
 /** How the OUTER stator surface is cooled: air blown at a speed, a liquid loop,
  *  a hand-typed film coefficient — or nothing at all.
@@ -173,24 +172,17 @@ export interface ThermalRequest {
    *  no `gap_k`: the air-gap conductivity is COMPUTED from the gap width and
    *  the rotor speed for every machine and comes back as a result. */
   slot_k?: number;
-  // operating point (from the Electromagnetic tab)
-  rpm: number;
-  gamma_deg: number;
-  I_phase_rms: number;
-  coil_temp_c: number;
-  n_steps_per_period: number;
-  n_periods: number;
-  // mesh (from the Mesh tab)
-  mesh_size_mm: number;
-  min_size_mm: number;
-  outer_air_factor: number;
-  n_sectors: number;
-  /** JSON: per-part element size overrides, as the Mesh tab persists them */
-  component_mesh: string;
+  /* NO operating point and NO EM mesh (2026-09-30).  The backend takes the
+     LATEST Electromagnetic run of the loaded machine and adopts that run's
+     current, γ, speed, coil and magnet temperatures, step count and mesh
+     (`routes/thermal.latest_em_run`) — this tab keeps no copy of them, so
+     there is nothing here that could disagree with the run. */
 }
 
 /** A field answer, with what it cost and which machine it is of. */
 export interface ThermalField extends ThermalPayload {
+  /** the Electromagnetic run this map is of (2026-09-30) */
+  em_run?: EmRunSummary | null;
   elapsed_s?: number;
   solve_time_s?: number;
   cached?: boolean;
@@ -214,6 +206,8 @@ export interface CoupledResult {
   iterations: number;
   field: ThermalField;
   P_cu_W?: number;
+  /** the Electromagnetic run the loop's one loss map is of (2026-09-30) */
+  em_run?: EmRunSummary | null;
   elapsed_s?: number;
   solve_time_s?: number;
   cached?: boolean;
@@ -279,8 +273,18 @@ export interface ThermalMeshRequest {
  *  contract. */
 export const NO_EM_RUN = 'no_electromagnetic_run';
 
-/** A refusal, with that tag beside its sentence. */
-export interface ApiRefusal extends Error { code?: string | null }
+/** A refusal, with that tag beside its sentence.  `reason` is the longer
+ *  story behind a one-line refusal (the latest-EM-run lookup sends its line as
+ *  the message and the why here, for a tooltip). */
+export interface ApiRefusal extends Error {
+  code?: string | null;
+  reason?: string | null;
+  emRefusal?: string | null;
+}
+
+/** The refusal's reason, when it carries one. */
+export const refusalReason = (e: unknown): string | null =>
+  (e instanceof Error ? ((e as ApiRefusal).reason ?? null) : null);
 
 /** Is this the refusal the Thermal tab answers by making the run itself
  *  (through the orchestrator — never by solving anything here)? */
@@ -314,6 +318,8 @@ async function get<T>(
   if (!r.ok) {
     let msg = await r.text();
     let code: string | null = null;
+    let reason: string | null = null;
+    let emRefusal: string | null = null;
     // The 422 carries {detail: {error, error_code, invalid_parameters}} — show
     // the sentence an engineer can act on, not the JSON around it, and keep the
     // tag beside it so a caller can recognise the one refusal it may answer.
@@ -322,9 +328,13 @@ async function get<T>(
       const d = j?.detail;
       msg = typeof d === 'string' ? d : (d?.error ?? msg);
       if (d && typeof d === 'object' && typeof d.error_code === 'string') code = d.error_code;
+      if (d && typeof d === 'object' && typeof d.reason === 'string') reason = d.reason;
+      if (d && typeof d === 'object' && typeof d.em_refusal === 'string') emRefusal = d.em_refusal;
     } catch { /* not JSON — keep the raw text */ }
     const err = new Error(msg.slice(0, 400)) as ApiRefusal;
     err.code = code;
+    err.reason = reason;
+    err.emRefusal = emRefusal;
     throw err;
   }
   return r.json() as Promise<T>;
@@ -597,11 +607,13 @@ async function post<T>(path: string, body: unknown): Promise<T> {
   if (!r.ok) {
     let msg = await r.text();
     let code: string | null = null;
+    let reason: string | null = null;
     try {
       const j = JSON.parse(msg);
       const d = j?.detail;
       msg = typeof d === 'string' ? d : (d?.error ?? msg);
       if (d && typeof d === 'object' && typeof d.error_code === 'string') code = d.error_code;
+      if (d && typeof d === 'object' && typeof d.reason === 'string') reason = d.reason;
       // `_dc_refuse` puts the whole story — the refusal AND what to do about it
       // — in `invalid_parameters[].message`; `error` alone is only the first
       // half, and the remedy is the half an engineer can act on.
@@ -610,6 +622,7 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     } catch { /* not JSON — keep the raw text */ }
     const err = new Error(String(msg).slice(0, 600)) as ApiRefusal;
     err.code = code;
+    err.reason = reason;
     throw err;
   }
   return r.json() as Promise<T>;
@@ -636,6 +649,11 @@ export const fetchThermalField = (p: ThermalRequest) =>
 
 export const fetchCoupled = (p: ThermalRequest & { max_iter: number }) =>
   get<CoupledResult>('/coupled', { ...p });
+
+/** Which Electromagnetic run the next Solve will use — a READ, never a solve
+ *  (`GET /api/thermal/em_run`).  `ok: false` carries the exact refusal Solve
+ *  would give, so the panel can say it before anything is pressed. */
+export const fetchEmRun = () => get<EmRunStatus>('/em_run', {});
 
 /** What the tab was showing before — a lookup, never a solve. */
 export const fetchLastThermal = () => get<LastThermal>('/last', { field: true });
@@ -764,22 +782,6 @@ export function writeSimCoilTemp(c: number): void {
     localStorage.setItem('sim.coilTemp', JSON.stringify(Math.round(c * 10) / 10));
     window.dispatchEvent(new Event('sim-settings-restored'));
   } catch { /* private mode — nothing to restore from anyway */ }
-}
-
-/** The Electromagnetic tab's operating point, as this tab must send it.  ONE place,
- *  so the field solve, the coupled solve and the context line quote the same
- *  numbers (standing rule: every physics value comes from Electromagnetic). */
-export function simOperatingPoint(): {
-  rpm: number; gamma_deg: number; I_phase_rms: number;
-  coil_temp_c: number; n_steps_per_period: number;
-} {
-  return {
-    rpm: Number(readSimSetting('rpm', 0)) || 0,
-    gamma_deg: Number(readSimSetting('gamma', 0)) || 0,
-    I_phase_rms: Math.max(0, Number(readSimSetting('current', 0)) || 0),
-    coil_temp_c: Number(readSimSetting('coilTemp', 120)) || 120,
-    n_steps_per_period: Number(readSimSetting('stepsPP', EDDY_DEFAULT_STEPS)) || EDDY_DEFAULT_STEPS,
-  };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

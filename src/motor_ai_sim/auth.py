@@ -211,6 +211,10 @@ _GATED: dict[tuple[str, str], str] = {
     ("GET",  "/api/thermal/coupled"): "user",
     ("GET",  "/api/thermal/last"): "user",
     ("GET",  "/api/thermal/mesh"): "user",
+    # Which Electromagnetic run the next Solve will use (2026-09-30) — it
+    # reads the caller's run store, so it rides the tier of the solve it
+    # describes.
+    ("GET",  "/api/thermal/em_run"): "user",
     # The DUTY CYCLE (2026-09-14): one conduction solve plus a transient
     # integration over up to 200 cycles, and /duty_cycle/last hands back a
     # result that was already paid for — the same bargain the four above make.

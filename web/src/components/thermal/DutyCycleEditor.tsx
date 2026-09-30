@@ -48,20 +48,11 @@ import {
 import { thermalPanelBlock } from '../../stores/thermalStore';
 import { useUIStore } from '../../stores/motorStore';
 import {
-  fetchDutyCycle, fetchLastDutyCycle, fmt, fmtSecs, isNoEmRun, meshParams,
-  simOperatingPoint,
+  fetchDutyCycle, fetchLastDutyCycle, fmt, fmtSecs, isNoEmRun, refusalReason,
 } from './api';
 import type {
   DutyCycleKind, DutyCycleRequest, DutyCycleResult, DutyCycleSpec,
 } from './api';
-/* The ONE refusal this editor can answer — never by making the run (this
-   tab never launches electromagnetics, owner rule), only by naming WHICH
-   point is missing: `dutyCycleOffer.fetchCalibrationPoint` reads it out of
-   the calibration duty's stored entry, the same one the backend refused
-   against, and `pointWords` / `pointTooltipWords` say it in the one line and
-   the tooltip. */
-import { fetchCalibrationPoint, pointTooltipWords, pointWords } from './dutyCycleOffer';
-import type { CalibrationPoint } from './dutyCycleOffer';
 /* What the shaft is DELIVERING while it heats up — the duties' own torques,
    laid over the same cycle the temperatures are drawn on. */
 import {
@@ -354,10 +345,7 @@ const DutyCycleEditor: React.FC = () => {
     return Number.isFinite(v) && v > 0 ? v : null;
   }, [liveAssign, dutyMats, matLib]);
 
-  /** WHICH duty the network is fitted at — what the picker is showing, and the
-   *  backend's own default when it shows nothing. */
-  const calibDuty = (form.calibrationDuty ?? '').trim() || rated;
-  /** …and whether that is a map worth fitting to.  An impulse point's steady
+  /** Whether the calibration duty is a map worth fitting to.  An impulse point's steady
    *  map is a temperature the machine never reaches, so it is refused HERE
    *  rather than sent and explained afterwards. */
   const calibIssue = useMemo(
@@ -396,14 +384,9 @@ const DutyCycleEditor: React.FC = () => {
    *  second way for the run that gets MADE to stop being the run the retry
    *  LOOKS FOR, and that failure is silent: the same refusal, minutes later.
    *
-   *  WHICH electromagnetic run the calibration map is built from, and on what
-   *  mesh, are sent explicitly, because the route's own defaults (12 steps, a
-   *  3 mm mesh) are NOT this app's — the loss map is looked up by the step
-   *  count and the mesh, so a request that stayed silent asked for a run nobody
-   *  made and was refused by name.  Same two sources the Thermal tab's own
-   *  Solve reads: the Electromagnetic tab for the frame count, the Mesh tab for
-   *  the mesh (standing rule — every physics value comes from where it was
-   *  set). */
+   *  No step count and no mesh (2026-09-30): the calibration map is the
+   *  LATEST Electromagnetic run of the loaded machine, whose settings the
+   *  backend adopts — the same rule as the Thermal tab's own Solve. */
   const cycleRequest = useCallback((): DutyCycleRequest | null => {
     if (!ctx) return null;
     // Blank means the CARD's limit, not "no limit": the magnets are judged by
@@ -411,18 +394,9 @@ const DutyCycleEditor: React.FC = () => {
     // number that is.  A typed value wins, including a typed 0 — which is the
     // one way left to ask for a cycle judged on the winding alone.
     const ml = magnetLimit.trim() === '' ? magnetCardLimit : Number(magnetLimit);
-    const op = simOperatingPoint();
-    const mesh = meshParams();
     return {
       die: ctx.die, config: ctx.config, duty: ctx.duty,
       duty_cycle: block,
-      n_steps_per_period: op.n_steps_per_period,
-      n_periods: 1,
-      mesh_size_mm: mesh.mesh_size_mm,
-      min_size_mm: mesh.min_size_mm,
-      outer_air_factor: mesh.outer_air_factor,
-      n_sectors: mesh.n_sectors,
-      component_mesh: mesh.component_mesh,
       // The cooling the THERMAL PANEL is showing — not what some earlier
       // session persisted server-side.  The network is fitted to a steady map
       // solved under exactly these boundary conditions.
@@ -432,15 +406,13 @@ const DutyCycleEditor: React.FC = () => {
   }, [ctx, block, magnetLimit, magnetCardLimit]);
 
   /* ── the ONE refusal this editor can answer, and never by making the run ──
-     The calibration map is solved at the CALIBRATION DUTY's own stored point,
-     which is not the point on the Electromagnetic tab and may not even be this
-     duty's.  A `no_electromagnetic_run` used to become an OFFER to make that
-     run through the orchestrator; it no longer does (owner rule, 2026-09-07,
-     repeated 2026-09-30: this app never launches electromagnetics from the
-     thermal side).  All that is left is naming which point is missing, and
-     pointing at the Electromagnetic tab — `fetchCalibrationPoint` is read
-     ONLY for that sentence, never to run anything. */
-  interface EmMissing { why: string; point: CalibrationPoint | null }
+     The calibration map is the LATEST Electromagnetic run of the loaded
+     machine (2026-09-30), so the only refusals left are "no run of this
+     machine" and "the latest run is of another machine".  This editor never
+     makes the run (owner rule, 2026-09-07, repeated 2026-09-30): it shows the
+     backend's one line, the reason in the tooltip, and a link to the
+     Electromagnetic tab. */
+  interface EmMissing { why: string; reason: string | null }
   const [emMissing, setEmMissing] = useState<EmMissing | null>(null);
   /** WHICH duty the notice is about.  A ▶ that puts another duty on the panel
    *  makes it stale — the point in it belongs to the previous machine. */
@@ -461,18 +433,12 @@ const DutyCycleEditor: React.FC = () => {
       // beside the code is written for an engineer to act on — shown verbatim.
       const why = e instanceof Error ? e.message : String(e);
       if (!isNoEmRun(e)) { setErr(why); return; }
-      // Read only for the WORDS — which point needs the run — never to make
-      // it.  Its own failure just leaves the point out of the sentence.
-      let point: CalibrationPoint | null = null;
-      try {
-        point = await fetchCalibrationPoint(API, ctx.die, ctx.config, calibDuty);
-      } catch { /* the refusal alone still says to go run it */ }
       setEmMissingKey(key);
-      setEmMissing({ why, point });
+      setEmMissing({ why, reason: refusalReason(e) });
     } finally {
       setBusy(false);
     }
-  }, [cycleRequest, ctx, key, calibDuty]);
+  }, [cycleRequest, ctx, key]);
 
   const run = useCallback(() => {
     if (!ctx || issue) return;
@@ -790,20 +756,16 @@ const DutyCycleEditor: React.FC = () => {
             )}
           </Box>
 
-          {/* ── no CURRENT Electromagnetic result at the calibration point ────
-              One line under Run, tooltip for the rest.  This editor never
-              makes that run — it never did the whole machine's own point
-              either — it just says which point is missing and sends the user
-              to the Electromagnetic tab (owner rule, 2026-09-07, repeated
-              2026-09-30). */}
+          {/* ── no CURRENT Electromagnetic run of this machine ─────────────
+              One line under Run, the reason in the tooltip.  This editor
+              never makes that run — it sends the user to the Electromagnetic
+              tab (owner rule, 2026-09-07, repeated 2026-09-30). */}
           {missing && (
             <Box sx={{ display: 'flex', gap: 1, alignItems: 'center',
               flexWrap: 'wrap', mt: 1 }}>
-              <Tooltip {...TIP_PROPS} title={`The network is fitted to ONE steady map, solved at the calibration duty${missing.point ? ` "${missing.point.duty}"'s own saved point (${pointTooltipWords(missing.point)})` : ''} — not the point on the Electromagnetic tab. This tab never runs electromagnetics itself. The backend refused with: ${missing.why}`}>
+              <Tooltip {...TIP_PROPS} title={`${missing.reason ?? missing.why} The network is fitted to the loss map of the latest Electromagnetic run of this machine; this tab never runs electromagnetics itself.`}>
                 <Typography sx={{ ...warn, fontWeight: 700, whiteSpace: 'normal' }}>
-                  ⚠ No Electromagnetic result for the calibration point
-                  {missing.point ? ` (${pointWords(missing.point)})` : ''} — run
-                  it in the Electromagnetic tab
+                  ⚠ {missing.why}
                 </Typography>
               </Tooltip>
               <Button variant="outlined" size="small" onClick={goToElectromagnetic}>

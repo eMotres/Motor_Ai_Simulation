@@ -18,9 +18,10 @@
  *
  * NOTHING here solves on its own.  `hydrate()` reads, `solveField()` and
  * `solveCoupled()` run only when a button is pressed — and neither of them owns
- * an operating point: the current, the angle, the speed, the coil temperature
- * and the step count are ALWAYS read from the Electromagnetic tab (standing project
- * rule: every physics setting of a run is read from where the user set it).
+ * an operating point: the backend takes the LATEST Electromagnetic run of the
+ * loaded machine and adopts its current, angle, speed, temperatures, step
+ * count and mesh (owner rule 2026-09-30, «always take the current one»).  This
+ * store only mirrors which run that is (`emRun`), for the panel's one line.
  */
 import { create } from 'zustand';
 
@@ -35,10 +36,11 @@ import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/pane
 // `solveCoupled` below, which refuse in place of what used to chain one).
 import { registerThermalPanelBlock } from '../components/simulation/coupledApi';
 import {
-  fetchCoupled, fetchLastThermal, fetchThermalField, fetchThermalMesh,
-  fetchMeshParams, isNoEmRun, readLastSecs, readTherm, simOperatingPoint,
-  writeLastSecs, writeTherm,
+  fetchCoupled, fetchEmRun, fetchLastThermal, fetchThermalField,
+  fetchThermalMesh, fetchMeshParams, isNoEmRun, readLastSecs, readTherm,
+  refusalReason, writeLastSecs, writeTherm,
 } from '../components/thermal/api';
+import type { EmRunStatus } from '../components/thermal/emRun';
 import type {
   BoreMode, CoolMode, CoupledResult, EndFaceMode, FrameMode, ThermKind,
   ThermView, ThermalField, ThermalMeshPayload, ThermalMeshRequest,
@@ -155,6 +157,14 @@ export interface ThermalState {
    *  be run»); the panel reads this to show one line and a link to the
    *  Electromagnetic tab, nothing more. */
   emMissing: string | null;
+  /** …and the reason behind that one line, for its tooltip. */
+  emMissingReason: string | null;
+
+  /** The Electromagnetic run the next Solve will use (a read of
+   *  `/api/thermal/em_run`, refreshed on mount and after every EM run), or
+   *  the refusal Solve would give.  A MIRROR of the run — never edited here. */
+  emRun: EmRunStatus | null;
+  refreshEmRun: () => Promise<void>;
 
   /** the mesh itself: the bare cross-section drawn when nothing has been
    *  solved, and what the Build mesh button produces */
@@ -437,21 +447,17 @@ export function coolingIssue(s: CoolingInputs): string | null {
 }
 
 /**
- * The request BOTH solves send.
+ * The request BOTH solves send: the COOLING, and nothing else.
  *
  * One builder, so the field solve and the coupled solve describe the same
- * machine under the same cooling: two copies of this would be two ways for the
- * coupled loop's converged temperature to belong to a different boundary
- * condition than the map beside it.
+ * machine under the same cooling.  No operating point and no EM mesh: the
+ * backend takes the latest Electromagnetic run of the loaded machine and
+ * adopts ITS point and settings (2026-09-30) — a copy sent from here could
+ * only disagree with that run, and a disagreement used to be a refusal.
  */
-function buildRequest(s: ThermalState, mesh: ThermalMeshRequest,
-                      fresh?: boolean): ThermalRequest {
+function buildRequest(s: ThermalState, fresh?: boolean): ThermalRequest {
   return {
     ...coolingFields(s),
-    // …and the physics of the machine itself, from the Electromagnetic tab.
-    ...simOperatingPoint(),
-    n_periods: 1,
-    ...mesh,
     ...(fresh ? { fresh: true } : {}),
   };
 }
@@ -527,6 +533,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   field: { ...EMPTY } as Slice<ThermalField>,
   coupled: { ...EMPTY } as Slice<CoupledResult>,
   emMissing: null,
+  emMissingReason: null,
+  emRun: null,
 
   geom: null,
   geomBusy: false,
@@ -687,6 +695,11 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     if (!get().field.data) await get().loadGeometry();
   },
 
+  refreshEmRun: async () => {
+    try { set({ emRun: await fetchEmRun() }); }
+    catch (e) { console.warn('thermal: could not read the latest EM run', msg(e)); }
+  },
+
   refreshLast: async () => {
     // `Date.parse` on both — the stamps arrive in two shapes and a string
     // compare across them is meaningless (see the mechanical store).
@@ -762,13 +775,15 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     const bad = coolingIssue(s);
     if (bad) { set({ field: { ...s.field, busy: false, err: bad } }); return; }
     set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() },
-          emMissing: null });
+          emMissing: null, emMissingReason: null });
     try {
-      const mesh = await fetchMeshParams();
-      set({ meshCfg: mesh });
-      const out = tileFullRing(await fetchThermalField(buildRequest(s, mesh, fresh)));
+      // The mesh block is still read for the panel's mesh line; the solve
+      // itself runs on the EM run's own mesh.
+      try { set({ meshCfg: await fetchMeshParams() }); } catch { /* display only */ }
+      const out = tileFullRing(await fetchThermalField(buildRequest(s, fresh)));
       set({ field: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
-                     backendStale: false, restoredAt: null, startedAt: null } });
+                     backendStale: false, restoredAt: null, startedAt: null },
+            ...(out.em_run ? { emRun: { ok: true, em_run: out.em_run } } : {}) });
       if (!out.cached) noteSecs(set, get, 'field', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
       // There is no Electromagnetic run of this machine at this point — this
@@ -778,7 +793,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // read as before.
       if (isNoEmRun(e)) {
         set({ field: { ...s.field, busy: false, err: null, startedAt: null },
-              emMissing: msg(e) });
+              emMissing: msg(e), emMissingReason: refusalReason(e),
+              emRun: { ok: false, error: msg(e), reason: refusalReason(e) } });
         return;
       }
       set({ field: { ...EMPTY, err: msg(e) } as Slice<ThermalField> });
@@ -798,24 +814,25 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     const bad = coolingIssue(s);
     if (bad) { set({ coupled: { ...s.coupled, busy: false, err: bad } }); return; }
     set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() },
-          emMissing: null });
+          emMissing: null, emMissingReason: null });
     try {
-      const mesh = await fetchMeshParams();
-      set({ meshCfg: mesh });
+      try { set({ meshCfg: await fetchMeshParams() }); } catch { /* display only */ }
       const raw = await fetchCoupled({
-        ...buildRequest(s, mesh),
+        ...buildRequest(s),
         // 1…12 on the backend; anything outside that is the field's typo, not a
         // request, so it falls back to the API's own default rather than 422.
         max_iter: Math.min(12, Math.max(1, Math.round(num(s.maxIter, 6)))),
       });
       const out: CoupledResult = { ...raw, field: tileFullRing(raw.field) };
       set({ coupled: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
-                       backendStale: false, restoredAt: null, startedAt: null } });
+                       backendStale: false, restoredAt: null, startedAt: null },
+            ...(out.em_run ? { emRun: { ok: true, em_run: out.em_run } } : {}) });
       if (!out.cached) noteSecs(set, get, 'coupled', out.elapsed_s ?? out.solve_time_s);
     } catch (e) {
       if (isNoEmRun(e)) {
         set({ coupled: { ...s.coupled, busy: false, err: null, startedAt: null },
-              emMissing: msg(e) });
+              emMissing: msg(e), emMissingReason: refusalReason(e),
+              emRun: { ok: false, error: msg(e), reason: refusalReason(e) } });
         return;
       }
       set({ coupled: { ...EMPTY, err: msg(e) } as Slice<CoupledResult> });

@@ -17,7 +17,7 @@ import math
 import time
 import uuid
 from collections import OrderedDict
-from typing import Dict, Optional, Union, Literal
+from typing import Any, Dict, Optional, Union, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Depends, Query
 from pydantic import BaseModel, Field
@@ -1894,6 +1894,69 @@ def _latest_run_snapshot(probe: "OrderedDict"):
     return None, []
 
 
+def _current_part_states(mat_ov=None) -> Dict[str, str]:
+    """Per-part accounting states of the machine a solve builds: the config's,
+    with a per-request ``mat=`` override's ``parts`` on top."""
+    try:
+        from motor_ai_sim.part_states import (config_part_states as _cps,
+                                              normalize_states as _nps)
+        out = {str(k): str(v) for k, v in (_cps() or {}).items()}
+        if isinstance(mat_ov, dict):
+            out.update({str(k): str(v)
+                        for k, v in _nps(mat_ov.get("parts")).items()})
+        return out
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _current_em_assignment(mat_ov=None) -> Dict[str, str]:
+    """Part -> material of the machine a solve builds, EM parts only: the
+    config's assignment with a per-request ``mat=`` override on top."""
+    try:
+        from motor_ai_sim.config import get_material_assignments as _gma
+        out = {str(k): str(v) for k, v in (_gma() or {}).items() if v}
+    except Exception:  # noqa: BLE001
+        out = {}
+    if isinstance(mat_ov, dict):
+        out.update({str(k): str(v)
+                    for k, v in (mat_ov.get("assignment") or {}).items() if v})
+    return {k: v for k, v in out.items() if k not in _EM_INERT_PARTS}
+
+
+def _snapshot_machine_record(key_fields=None) -> Optional[Dict[str, Any]]:
+    """The machine a run is being stored for, as INPUTS a later reader can
+    compare field by field (geometry, EM materials, part states, winding).
+
+    Taken at store time, i.e. inside the run's own request context, so it is
+    the run's machine and not whatever is loaded when somebody reads it.
+    ``None`` when any piece cannot be read — a reader then falls back to the
+    key's fingerprint, never to "same machine"."""
+    try:
+        from motor_ai_sim.config import get_config as _gc
+        from motor_ai_sim.services.geometry_service import (
+            get_current_geometry as _gcg)
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+        geo = dict(_gcg().to_dict() or {})
+        _gov = (key_fields or {}).get("geo_ov")
+        if _gov:                      # a stored override that DIFFERS from live
+            geo = merge_geo_override(geo, dict(_gov))
+        mat = _get_request_materials_safe()
+        cfg = _gc() or {}
+        return {
+            "geometry": {str(k): v for k, v in geo.items()
+                         if v is None or isinstance(v, (bool, int, float, str))},
+            "assignment": _current_em_assignment(mat),
+            "parts": _current_part_states(mat),
+            "winding": {str(k): v for k, v in dict(cfg.get("winding") or {}).items()
+                        if v is None or isinstance(v, (bool, int, float, str))},
+            "op_mode": str(((cfg.get("simulation") or {}).get("mode"))
+                           or "motor").strip().lower(),
+        }
+    except Exception as _e:  # noqa: BLE001 - a record is a convenience
+        log.warning("could not record the run's machine: %s", _e)
+        return None
+
+
 def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
                                     *, eddy: bool, n_steps_per_period: int,
                                     n_periods: float, solve_time_s: float,
@@ -1935,6 +1998,14 @@ def _store_transient_field_snapshot(key: tuple, field: Dict, sbres: Dict,
                 # (see `latest_run_field`).  Without this the only honest answer
                 # to a near-miss was to throw the run away and re-solve.
                 "key_fields": (dict(key_fields) if key_fields else None),
+                # WHICH MACHINE, in its INPUTS (2026-09-30).  The key above
+                # names the machine only through a hash of the raw config
+                # (`cfg_fingerprint`), and a hash cannot say "same geometry
+                # inputs, only a stale derived radius moved".  The Thermal tab
+                # takes the LATEST run of the loaded machine and must be able
+                # to answer "is this run of the machine on screen?" on the
+                # inputs alone — see `routes.thermal.latest_em_run`.
+                "machine": _snapshot_machine_record(key_fields),
             },
         }
         _transient_field_snap.move_to_end(key)
@@ -2232,9 +2303,19 @@ def get_fem_field2d(
     snap_drive:          str   = "current",
     snap_excitation:     str   = "",
     progress_cb=None,
+    snap_key:            Optional[tuple] = None,
 ):
     """The field view — QUEUED.  Parameters are documented on the body below
     (`_fem_field2d_impl`), which is the function this one calls.
+
+    `snap_key` (2026-09-30) names the stored run to serve by its OWN key, for
+    a caller that already chose the run (the Thermal tab takes the latest run
+    of the loaded machine — `routes.thermal.latest_em_run`).  Rebuilding that
+    key from this call's arguments and the live config can miss the very run
+    that was chosen (a config fingerprint that moved with a stale derived
+    radius, not with the machine).  Only honoured with `snapshot_only`, so it
+    can never start a solve; not part of the cache key (the arguments are the
+    run's own, so a cache hit is the same map).
 
     `progress_cb` (2026-09-07) is a pure PASS-THROUGH to the solver's per-frame
     callback — the shared contract in `motor_ai_sim.progress`, i.e.
@@ -2284,7 +2365,8 @@ def get_fem_field2d(
     if _hit is not None:
         return _hit
     if snapshot_only:
-        return _fem_field2d_impl(**_p, _key=key, _progress_cb=progress_cb)
+        return _fem_field2d_impl(**_p, _key=key, _progress_cb=progress_cb,
+                                 _snap_key=snap_key)
     return run_field_job(
         key, _field2d_job_kind(n_steps_per_period, demag, eddy),
         lambda: _fem_field2d_impl(**_p, _key=key, _progress_cb=progress_cb))
@@ -2367,6 +2449,9 @@ def _fem_field2d_impl(
                                           # to the solver.  Never in the cache
                                           # key: who is watching is not part of
                                           # what is solved.
+    _snap_key:           Optional[tuple] = None,  # serve THIS stored run
+                                          # (see `get_fem_field2d.snap_key`);
+                                          # snapshot_only probes only.
 ):
     """Field view computed by the SLIDING-BAND TRANSIENT solver (P2) — the SAME
     solver that produces the transient torque/losses, so the field picture is
@@ -2514,7 +2599,12 @@ def _fem_field2d_impl(
             # missed a snapshot that was sitting on disk the whole time.
             if not _transient_field_snap:
                 _load_last_transient_field_snapshot()
-            _snap = _transient_field_snap.get(tuple(_probe_fields.values()))
+            if _snap_key is not None and snapshot_only:
+                # The caller chose the run already (by its own key) — serve
+                # exactly that one or nothing.
+                _snap = _transient_field_snap.get(tuple(_snap_key))
+            else:
+                _snap = _transient_field_snap.get(tuple(_probe_fields.values()))
             if _snap is None:
                 _log_snap_key_miss(_probe_fields)
         elif snapshot_only and latest_run_field:

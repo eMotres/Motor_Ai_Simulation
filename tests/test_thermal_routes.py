@@ -1026,8 +1026,10 @@ def test_an_unknown_bore_mode_is_named(client):
 
 def test_a_mesh_floor_coarser_than_the_target_is_refused(client):
     for route in ("/api/thermal/field", "/api/thermal/mesh"):
+        # `em_source=point`: in the default latest-run mode /field takes the
+        # mesh of the Electromagnetic run and ignores the one sent.
         r = client.get(route, params={"geo": _geo(), "mesh_size_mm": 1.0,
-                                      "min_size_mm": 4.0})
+                                      "min_size_mm": 4.0, "em_source": "point"})
         _d, fields = _detail(r)
         assert fields == ["min_size_mm"], route
 
@@ -1239,8 +1241,11 @@ def test_a_point_no_electromagnetic_run_covers_is_refused_by_name(client, em_run
     stored run is the honest case: ρJ² is quadratic in it, so the neighbouring
     map is not "close enough" for a number with no label on it.
     """
+    # The EXACT-POINT door (`em_source=point`).  The Thermal tab itself uses
+    # the latest run and adopts its point (tests/test_thermal_latest_em_run.py).
     r = client.get("/api/thermal/field",
-                   params=_field_params(**AIR, I_phase_rms=FAST["I_phase_rms"] + 1.0))
+                   params=_field_params(**AIR, I_phase_rms=FAST["I_phase_rms"] + 1.0,
+                                        em_source="point"))
     assert r.status_code == 422, r.text[:600]
     d = r.json()["detail"]
     assert d["error_code"] == "no_electromagnetic_run", d
@@ -1267,7 +1272,8 @@ def test_a_single_frame_request_is_refused_because_it_is_not_a_cycle(client, em_
     exactly this request.)
     """
     r = client.get("/api/thermal/field",
-                   params=_field_params(**AIR, n_steps_per_period=1))
+                   params=_field_params(**AIR, n_steps_per_period=1,
+                                        em_source="point"))
     assert r.status_code == 422, r.text[:600]
     d = r.json()["detail"]
     assert d["error_code"] == "no_electromagnetic_run", d
@@ -1290,8 +1296,11 @@ def test_a_map_once_handed_over_outlives_the_run_that_produced_it(
     from motor_ai_sim.routes import simulation as sim
     from motor_ai_sim.routes import thermal as th
 
+    # The exact-point door: its memory is what this pins.  The Thermal tab's
+    # own latest-run rule refuses once the run is gone — the CURRENT result.
     first = client.get("/api/thermal/field",
-                       params=_field_params(**{**AIR, "ambient_temp": 31.0}))
+                       params=_field_params(**{**AIR, "ambient_temp": 31.0},
+                                            em_source="point"))
     assert first.status_code == 200, first.text[:600]
     assert first.json()["loss_source"]["kind"] == "simulation_run"
     assert th._LOSS_MAPS, "the map was not remembered"
@@ -1304,7 +1313,8 @@ def test_a_map_once_handed_over_outlives_the_run_that_produced_it(
     monkeypatch.setattr(sim, "_load_last_transient_field_snapshot", lambda *a, **k: None)
 
     again = client.get("/api/thermal/field",
-                       params=_field_params(**{**AIR, "ambient_temp": 32.0}))
+                       params=_field_params(**{**AIR, "ambient_temp": 32.0},
+                                            em_source="point"))
     assert again.status_code == 200, again.text[:600]
     src = again.json()["loss_source"]
     assert src["kind"] == "thermal_store", src
@@ -1314,7 +1324,8 @@ def test_a_map_once_handed_over_outlives_the_run_that_produced_it(
     # ...and with the memory cleared too there is nothing left to serve.
     th._LOSS_MAPS.clear()
     none_left = client.get("/api/thermal/field",
-                           params=_field_params(**{**AIR, "ambient_temp": 33.0}))
+                           params=_field_params(**{**AIR, "ambient_temp": 33.0},
+                                                em_source="point"))
     assert none_left.status_code == 422, none_left.text[:400]
     assert none_left.json()["detail"]["error_code"] == "no_electromagnetic_run"
 
@@ -1536,8 +1547,10 @@ def test_the_real_machines_bearings_reach_this_solve(client, em_runs,
     monkeypatch.setattr(th, "_live_fingerprint", lambda ov=None: "SAME-MACHINE",
                         raising=True)
 
+    # `em_source=point`: this pins the bearings at the REQUEST's 3 000 rpm; the
+    # latest-run mode would take the run's own speed instead.
     f = client.get("/api/thermal/field",
-                   params=_field_params(**AIR, **SHAFT)).json()
+                   params=_field_params(**AIR, **SHAFT, em_source="point")).json()
     m = f["cooling"]["mech_losses"]
     b = f["cooling"]["heat_budget"]
     assert m["has_bearings"] is True

@@ -17,7 +17,6 @@
   "borePumpLitresPerMinuteRequired": "Bore pump, litres per minute — required and greater than zero. A bore is a much smaller wetted area than the housing, so the litres buy less total heat here but land where the magnets are.",
   "nothingFlowsThroughTheBoreIt": "Nothing flows through the bore: it is adiabatic, and everything the rotor and the magnets make has to cross the air gap to get out. That is the default machine.",
   "frame": "Frame",
-  "thisTabOwnsTheCoolingAnd": "This tab owns the COOLING and nothing else. The current, the current angle, the speed, the coil temperature the losses are computed at and the steps per period are read from the Electromagnetic tab every time you press Solve — a standing rule of this project, so that one operating point describes the machine on every tab instead of each panel inventing its own. Change them there.",
   "hotSpot": "Hot-spot",
   "outer": "Outer",
   "innerBore": "Inner bore",

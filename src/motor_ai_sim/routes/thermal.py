@@ -1638,12 +1638,15 @@ def _em_material_names(mat_ov) -> tuple:
             assign = mat_ov.get("assignment")
     except Exception:  # noqa: BLE001
         assign = None
-    if not isinstance(assign, dict):
-        try:
-            from motor_ai_sim.config import get_material_assignments as _gma
-            assign = _gma() or {}
-        except Exception:  # noqa: BLE001
-            assign = {}
+    # An override names the parts it CHANGES; the rest are the config's.  An
+    # override of the liner alone is the config's machine with another liner,
+    # not a machine with no magnet (it compared as one until 2026-09-30).
+    try:
+        from motor_ai_sim.config import get_material_assignments as _gma
+        base = dict(_gma() or {})
+    except Exception:  # noqa: BLE001
+        base = {}
+    assign = {**base, **assign} if isinstance(assign, dict) else base
     # Renamed library keys (materials.MATERIAL_ALIASES) are ONE material: a run
     # keyed under the old spelling still describes the machine drawn with the
     # new one.
@@ -1723,6 +1726,7 @@ def _snapshot_loss_entry(probe):
     want = _physics_identity(probe)
     best = None
     best_fields = None
+    best_key = None
     best_stamp = ""
     n_same_machine = 0
     for key, entry in items:
@@ -1737,7 +1741,7 @@ def _snapshot_loss_entry(probe):
             continue
         stamp = str(((entry.get("meta") or {}).get("computed_at")) or "")
         if best is None or stamp >= best_stamp:
-            best, best_fields, best_stamp = entry, fields, stamp
+            best, best_fields, best_key, best_stamp = entry, fields, key, stamp
     if best is None:
         if n_same_machine:
             return None, None, ("the Electromagnetic run(s) of this machine were "
@@ -1756,7 +1760,10 @@ def _snapshot_loss_entry(probe):
                             "loss map (component totals only), and spreading component "
                             "watts back over the mesh would need a distribution nobody "
                             "measured")
-    return best, best_fields, ""
+    # The run's OWN key rides with its fields, so the replay serves exactly this
+    # run: an override that names the config's materials plus a new liner is
+    # the same physics but a different raw key (2026-09-30).
+    return best, dict(best_fields, _snap_key=best_key), ""
 
 
 # ── the thermal route's OWN memory of the maps it had to solve ────────────────
@@ -2391,7 +2398,8 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
             magnet_temp_c=magnet_temp_c,
             latest_run_field=False)
         em = _sim.get_fem_field2d(**_run_kw, use_transient_snapshot=True,
-                                  snapshot_only=True)
+                                  snapshot_only=True,
+                                  snap_key=_rf.get("_snap_key"))
         _n_ld = len(em.get("loss_density_per_tri") or []) if em else 0
         if em and em.get("ok") and em.get("from_transient") \
                 and _n_ld == int(em.get("n_triangles") or -1):
@@ -2468,6 +2476,374 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
     if _hint:
         why = ("%s; %s" % (why, _hint)) if why else _hint
     raise _no_electromagnetic_run(words=_words, why=why)
+
+
+# ── THE LATEST ELECTROMAGNETIC RUN (2026-09-30) ──────────────────────────────
+# Owner, 2026-09-30, after re-running the EM of CIANO14 40 new / L20 / peak and
+# being refused by the Thermal tab anyway: «it should simply take the values
+# from there and compute».  The refusal was `_em_loss_map`'s exact physics
+# identity: the Thermal panel sent ITS OWN copy of the operating point, without
+# the magnet temperature the run was solved at (45.2 °C), so the probe keyed
+# `magnet_temp_c = None` and missed a run of the same machine one minute old.
+#
+# The Thermal tab (its Solve, its coupled solve and the duty-cycle editor) now
+# takes THE LATEST completed Electromagnetic run of the loaded machine, and
+# adopts that run's point and settings (current, γ, speed, coil and magnet
+# temperatures, steps, mesh, demag) instead of asking for its own.  It refuses
+# only when there is no run of this machine, or when the newest run is of a
+# different machine — geometry INPUTS (derived fields and the unused `slot_hs`
+# skipped, `motor_geometry.is_compared_geometry_input`), EM materials, part
+# states or winding.  It never solves electromagnetics (PR #78).
+#
+# `_em_loss_map` above stays the EXACT-point door for callers that name their
+# own point: the EM tab's coupled orchestrator registering its answer passes.
+
+#: `em_refusal` values beside `error_code = NO_EM_RUN_CODE`.
+EM_REFUSAL_NO_RUN = "no_run"
+EM_REFUSAL_DIFFERENT_MACHINE = "different_machine"
+EM_REFUSAL_NO_LOSS_MAP = "no_loss_map"
+
+#: Relative tolerance of a geometry-input comparison (float round trip only).
+_GEO_INPUT_TOL = 1e-6
+
+
+def _em_refusal(kind: str, headline: str, reason: str) -> HTTPException:
+    """The 422 of the latest-run lookup: ONE short line (``error``) for the
+    panel, the reason for its tooltip, and the same ``error_code`` the old
+    refusal carried so every caller that keys on it keeps working."""
+    return HTTPException(status_code=422, detail={
+        "error": headline, "reason": reason, "error_code": NO_EM_RUN_CODE,
+        "em_refusal": kind, "invalid_parameters": []})
+
+
+def _values_differ(a, b) -> bool:
+    if a is None or b is None:
+        return (a is None) != (b is None)
+    if isinstance(a, bool) or isinstance(b, bool):
+        return bool(a) != bool(b)
+    try:
+        fa, fb = float(a), float(b)
+        return abs(fa - fb) > _GEO_INPUT_TOL * max(1.0, abs(fa), abs(fb))
+    except (TypeError, ValueError):
+        return str(a) != str(b)
+
+
+def _current_machine(geo_ov) -> Dict[str, Any]:
+    """The loaded machine as the same record a run stores
+    (``simulation._snapshot_machine_record``): this request's geometry (the
+    live object with the ``geo=`` override merged), EM materials, part states
+    and winding."""
+    from motor_ai_sim.config import get_config
+    from motor_ai_sim.routes import simulation as _sim
+    from motor_ai_sim.services.geometry_service import get_current_geometry
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+    geo = dict(get_current_geometry().to_dict() or {})
+    if geo_ov:
+        geo = merge_geo_override(geo, dict(geo_ov))
+    mat = _sim._get_request_materials_safe()
+    cfg = get_config() or {}
+    return {"geometry": geo,
+            "assignment": _sim._current_em_assignment(mat),
+            "parts": _sim._current_part_states(mat),
+            "winding": dict(cfg.get("winding") or {})}
+
+
+def _machine_diff(run_fields: Dict[str, Any], record: Optional[Dict[str, Any]],
+                  current: Dict[str, Any], geo_ov) -> Dict[str, List[str]]:
+    """``{"geometry": [...], "materials": [...], "winding": [...]}`` — what makes
+    a stored run a DIFFERENT machine from the loaded one; empty when it is the
+    same.  Never looks at the operating point or the solver settings: those
+    are the run's, and the Thermal tab adopts them.
+
+    A run stored before the machine record existed is judged on what its key
+    carries — the config fingerprint and the materials — which is stricter
+    than the inputs, never looser."""
+    from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+    from motor_ai_sim.routes import simulation as _sim
+    out: Dict[str, List[str]] = {}
+    if not isinstance(record, dict) or not record.get("geometry"):
+        fp_now = _sim._config_physics_fingerprint(with_request_materials=False)
+        if str(run_fields.get("cfg_fingerprint")) != str(fp_now) \
+                or _freeze(run_fields.get("geo_ov")) \
+                != _freeze(_sim._geo_ov_for_key(geo_ov)):
+            out["geometry"] = [
+                "the machine fingerprint differs (%s → %s); this run was stored "
+                "before runs recorded their inputs, so geometry, winding and "
+                "materials cannot be told apart"
+                % (run_fields.get("cfg_fingerprint"), fp_now)]
+        if _em_material_names(run_fields.get("mat_ov")) \
+                != _em_material_names(_sim._get_request_materials_safe()):
+            out["materials"] = ["the EM materials differ"]
+        return out
+
+    rg, cg = dict(record.get("geometry") or {}), dict(current.get("geometry") or {})
+    geo_d = []
+    for k in sorted(set(rg) & set(cg)):
+        if not is_compared_geometry_input(k, rg, cg):
+            continue
+        if _values_differ(rg.get(k), cg.get(k)):
+            geo_d.append("%s: run %s, now %s" % (k, rg.get(k), cg.get(k)))
+    if geo_d:
+        out["geometry"] = geo_d
+
+    from motor_ai_sim.materials import canonical_material_name as _canon
+    ra = {k: _canon(str(v)) for k, v in (record.get("assignment") or {}).items() if v}
+    ca = {k: _canon(str(v)) for k, v in (current.get("assignment") or {}).items() if v}
+    mat_d = ["%s: run %s, now %s" % (k, ra.get(k, "—"), ca.get(k, "—"))
+             for k in sorted(set(ra) | set(ca)) if ra.get(k) != ca.get(k)]
+    rp, cp = dict(record.get("parts") or {}), dict(current.get("parts") or {})
+    mat_d += ["%s: run %s, now %s" % (k, rp.get(k, "included"), cp.get(k, "included"))
+              for k in sorted(set(rp) | set(cp))
+              if str(rp.get(k, "included")) != str(cp.get(k, "included"))]
+    if mat_d:
+        out["materials"] = mat_d
+
+    rw, cw = dict(record.get("winding") or {}), dict(current.get("winding") or {})
+    win_d = ["%s: run %s, now %s" % (k, rw.get(k, "—"), cw.get(k, "—"))
+             for k in sorted(set(rw) | set(cw))
+             if _values_differ(rw.get(k), cw.get(k))]
+    if win_d:
+        out["winding"] = win_d
+    return out
+
+
+def _machine_headline(diff: Dict[str, List[str]]) -> str:
+    words = [w for w in ("geometry", "materials", "winding") if diff.get(w)]
+    if words == ["geometry"]:
+        return "Latest EM run is for a different geometry"
+    if words == ["materials"]:
+        return "Latest EM run used different materials"
+    if words == ["winding"]:
+        return "Latest EM run is for a different winding"
+    if not words:
+        return "Latest EM run is for a different machine"
+    return "Latest EM run is for a different machine (%s)" % ", ".join(words)
+
+
+def _stamp_aware(s: Optional[str]) -> Optional[str]:
+    """A run's ``computed_at`` (the server's naive local time) as an ISO stamp
+    WITH its offset, so a browser in another zone prints the right clock."""
+    if not s:
+        return None
+    try:
+        import datetime as _dt
+        d = _dt.datetime.fromisoformat(str(s))
+        if d.tzinfo is None:
+            d = d.astimezone()
+        return d.isoformat(timespec="seconds")
+    except Exception:  # noqa: BLE001
+        return str(s)
+
+
+def _has_loss_map(entry) -> bool:
+    import numpy as _np
+    fld = (entry or {}).get("field") or {}
+    try:
+        n_tri = int(_np.asarray(fld.get("T")).shape[1])
+        ld = fld.get("loss_dens")
+        n_ld = int(_np.asarray(ld if ld is not None else []).size)
+    except Exception:  # noqa: BLE001
+        return False
+    return n_tri > 0 and n_ld == n_tri
+
+
+def latest_em_run(geo_ov=None) -> Dict[str, Any]:
+    """THE Electromagnetic run the Thermal tab uses: the newest stored run of
+    the loaded machine.  NEVER SOLVES.
+
+    Returns ``{"key", "entry", "fields", "run_id", "point", "summary"}`` where
+    ``point`` is the run's operating point and settings in the thermal
+    solve's own parameter names (to be ADOPTED — the run wins over whatever a
+    panel sent) and ``summary`` is what a panel prints.
+
+    Raises the 422 of ``_em_refusal`` when there is no run of this machine
+    (``no_run``), when the newest run of any machine is of another one
+    (``different_machine`` — the reason names the inputs that differ), or when
+    the newest run of this machine carries no per-element loss map
+    (``no_loss_map`` — eddy currents off).
+    """
+    from motor_ai_sim.routes import simulation as _sim
+
+    try:
+        store = _sim._transient_field_snap
+        if not store:
+            _sim._load_last_transient_field_snapshot()
+            store = _sim._transient_field_snap
+        items = list(store.items())
+    except Exception as exc:  # noqa: BLE001
+        raise _em_refusal(
+            EM_REFUSAL_NO_RUN, "No Electromagnetic run for this machine",
+            "the Electromagnetic run store could not be read (%s)" % exc)
+    runs = []
+    for key, entry in items:
+        fields = _run_key_fields(key, entry)
+        if not fields or str(fields.get("kind", "tfield")) != "tfield":
+            continue
+        stamp = str(((entry.get("meta") or {}).get("computed_at")) or "")
+        runs.append((stamp, key, entry, fields))
+    if not runs:
+        raise _em_refusal(
+            EM_REFUSAL_NO_RUN, "No Electromagnetic run for this machine",
+            "no Electromagnetic run is stored — run this machine on the "
+            "Electromagnetic tab; the Thermal tab never runs it itself")
+    runs.sort(key=lambda r: r[0], reverse=True)
+
+    current = _current_machine(geo_ov)
+    newest_diff: Optional[Dict[str, List[str]]] = None
+    chosen = None
+    for stamp, key, entry, fields in runs:
+        rec = (entry.get("meta") or {}).get("machine")
+        diff = _machine_diff(fields, rec, current, geo_ov)
+        if newest_diff is None:
+            newest_diff = diff
+        if not diff:
+            chosen = (stamp, key, entry, fields)
+            break
+    if chosen is None:
+        d = newest_diff or {}
+        raise _em_refusal(
+            EM_REFUSAL_DIFFERENT_MACHINE, _machine_headline(d),
+            "the latest Electromagnetic run (%s) was solved for a different "
+            "machine — %s.  Run the loaded machine on the Electromagnetic tab."
+            % (runs[0][0] or "unstamped",
+               "; ".join(x for w in ("geometry", "materials", "winding")
+                         for x in (d.get(w) or []))))
+    stamp, key, entry, fields = chosen
+    if not (int(fields.get("eddy") or 0) and int(fields.get("rotor_eddy") or 0)) \
+            or not _has_loss_map(entry):
+        raise _em_refusal(
+            EM_REFUSAL_NO_LOSS_MAP, "Latest EM run has no loss map",
+            "the latest Electromagnetic run of this machine (%s) was solved "
+            "without eddy currents in the winding and the rotor, so it carries "
+            "no per-element loss map to heat the machine with — run it with "
+            "eddy currents on." % (stamp or "unstamped"))
+
+    meta = entry.get("meta") or {}
+    rec = meta.get("machine") or {}
+    op_mode = str(rec.get("op_mode") or _effective_op_mode(None))
+    g_solved = float(fields.get("gamma_deg") or 0.0)
+    g_panel = g_solved - 180.0 if op_mode == "generator" else g_solved
+    comp = fields.get("comp_mesh") or ()
+    try:
+        comp_json = json.dumps(dict(comp)) if comp else ""
+    except Exception:  # noqa: BLE001
+        comp_json = ""
+    mag_t = fields.get("magnet_temp_c")
+    point = {
+        "gamma_deg": round(g_panel, 3),
+        "I_phase_rms": float(fields.get("I_phase_rms") or 0.0),
+        "rpm": float(fields.get("rpm") or _sim._effective_rpm(None)),
+        "coil_temp_c": float(fields.get("coil_temp_c") or 0.0),
+        "magnet_temp_c": None if mag_t is None else float(mag_t),
+        "n_steps_per_period": int(fields.get("n_steps_per_period") or 0),
+        "n_periods": float(fields.get("n_periods") or 1.0),
+        "mesh_size_mm": float(fields.get("mesh_size_mm") or 1.0),
+        "min_size_mm": float(fields.get("min_size_mm") or 0.3),
+        "outer_air_factor": float(fields.get("outer_air_factor") or 1.3),
+        "n_sectors": int(fields.get("n_sectors") or 1),
+        "component_mesh": comp_json,
+        "op_mode": op_mode,
+    }
+    summary = {
+        "run_id": stamp or None,
+        "computed_at": _stamp_aware(stamp),
+        **{k: point[k] for k in ("I_phase_rms", "gamma_deg", "rpm",
+                                 "coil_temp_c", "magnet_temp_c",
+                                 "n_steps_per_period", "n_periods",
+                                 "mesh_size_mm", "min_size_mm", "n_sectors",
+                                 "op_mode")},
+        "demag": bool(int(fields.get("demag") or 0)),
+        "drive": str(fields.get("drive") or "current"),
+        "solve_time_s": meta.get("solve_time_s"),
+        "inputs_recorded": bool(rec),
+    }
+    return {"key": key, "entry": entry, "fields": fields, "run_id": stamp or None,
+            "point": point, "summary": summary}
+
+
+def adopt_em_run_point(run: Dict[str, Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """``kwargs`` with the operating point and the EM settings REPLACED by the
+    run's (current, γ, speed, coil and magnet temperature, steps, periods,
+    mesh, op mode).  The cooling stays the caller's — it belongs to Thermal."""
+    p = dict(run["point"])
+    out = dict(kwargs)
+    for k in ("gamma_deg", "I_phase_rms", "rpm", "coil_temp_c", "magnet_temp_c",
+              "n_steps_per_period", "n_periods", "mesh_size_mm", "min_size_mm",
+              "outer_air_factor", "n_sectors", "component_mesh"):
+        out[k] = p[k]
+    out["op_mode"] = p["op_mode"]
+    return out
+
+
+def _em_map_from_run(run: Dict[str, Any], *, geo, phase_cb=None):
+    """``(em, loss_source)`` — the chosen run's cycle-averaged loss map,
+    replayed on that run's own mesh by ITS OWN key.  Never a solve
+    (``snapshot_only``); a run that cannot be replayed is a 422 by name."""
+    from motor_ai_sim.routes import simulation as _sim
+    f = run["fields"]
+    run_id = run["run_id"]
+    if callable(phase_cb):
+        phase_cb("loss map — Electromagnetic run %s" % (run_id or "(unnamed)"))
+    comp = f.get("comp_mesh") or ()
+    try:
+        _cm = json.dumps(dict(comp)) if comp else ""
+    except Exception:  # noqa: BLE001
+        _cm = ""
+    em = _sim.get_fem_field2d(
+        gamma_deg=float(f.get("gamma_deg") or 0.0),
+        I_phase_rms=float(f.get("I_phase_rms") or 0.0),
+        n_steps_per_period=int(f.get("n_steps_per_period") or 0),
+        n_periods=float(f.get("n_periods") or 1.0),
+        eddy=True, rotor_eddy=True,
+        coil_temp_c=float(f.get("coil_temp_c") or 0.0), geo=geo,
+        mesh_size_mm=float(f.get("mesh_size_mm") or 1.0),
+        min_size_mm=float(f.get("min_size_mm") or 0.3),
+        outer_air_factor=float(f.get("outer_air_factor") or 1.3),
+        n_sectors=int(f.get("n_sectors") or 1),
+        stator_fillet_mm=float(f.get("stator_fillet_mm") or 0.0),
+        gap_layers=float(f.get("gap_layers") or 2.0),
+        component_mesh=_cm,
+        pole_copy=bool(f.get("pole_copy", False)),
+        iron_template=bool(f.get("iron_template", True)),
+        geo_mesh=bool(f.get("geo_mesh", True)),
+        structured_gap=bool(f.get("structured_gap", True)),
+        airgap_macro=bool(f.get("airgap_macro", False)),
+        demag=bool(f.get("demag", False)),
+        rotor_angle_deg=float(f.get("rotor_angle0_deg") or 0.0),
+        magnet_temp_c=(None if f.get("magnet_temp_c") is None
+                       else float(f["magnet_temp_c"])),
+        snap_drive=str(f.get("drive") or "current"),
+        snap_excitation=str(f.get("excitation") or ""),
+        latest_run_field=False, use_transient_snapshot=True,
+        snapshot_only=True, snap_key=tuple(run["key"]))
+    n_ld = len(em.get("loss_density_per_tri") or []) if em else 0
+    if not (em and em.get("ok") and em.get("from_transient")
+            and n_ld == int(em.get("n_triangles") or -1)):
+        raise _em_refusal(
+            EM_REFUSAL_NO_LOSS_MAP, "Latest EM run could not be read",
+            "the latest Electromagnetic run of this machine (%s) could not be "
+            "replayed into a loss map (%s)"
+            % (run_id or "unstamped", (em or {}).get("reason") or "no payload"))
+    log.info("thermal: loss map taken from the LATEST Electromagnetic run %s "
+             "— no EM solve", run_id)
+    s = run["summary"]
+    return em, {
+        "kind": "simulation_run",
+        "run_id": run_id,
+        "computed_at": run_id,
+        "em_run": dict(s),
+        "note": ("cycle-averaged loss density of the latest Electromagnetic "
+                 "run of this machine (%s: %s A, γ %s°, %s rpm, coil %s °C%s, "
+                 "%s steps/period, %s mm mesh, demag %s), replayed on that "
+                 "run's own mesh — no electromagnetic solve ran for this "
+                 "temperature map"
+                 % (run_id or "unstamped", s["I_phase_rms"], s["gamma_deg"],
+                    int(round(s["rpm"])), s["coil_temp_c"],
+                    ("" if s["magnet_temp_c"] is None
+                     else ", magnet %s °C" % s["magnet_temp_c"]),
+                    s["n_steps_per_period"], s["mesh_size_mm"],
+                    "on" if s["demag"] else "off")),
+    }
 
 
 def _scaled_copper_map(em: Dict[str, Any], *, t_ref_c: float, t_c: float):
@@ -3318,8 +3694,14 @@ def solve_thermal_field(
     _em_map:            Optional[Dict[str, Any]] = None,
     _em_loss_source:    Optional[Dict[str, Any]] = None,
     _em_capture:        Optional[Dict[str, Any]] = None,
+    _em_run:            Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Steady-state 2-D thermal map — the function, not the route.
+
+    ``_em_run`` (2026-09-30) is the run ``latest_em_run`` chose: the loss map
+    is replayed from THAT run by its own key instead of being looked up by
+    this call's operating point.  The caller adopts the run's point first
+    (``adopt_em_run_point``), so the numbers here and the map agree.
 
     Obtains the cycle-averaged loss field from the ELECTROMAGNETIC run that
     solved this operating point, or from this router's memory of one (see
@@ -3656,6 +4038,11 @@ def solve_thermal_field(
     # other's temperature field.
     if magnet_temp_c is not None:
         key = key + ("magnet_temp_c", round(float(magnet_temp_c), 2))
+    # The EM RUN itself, when the caller chose one (the latest run): two runs at
+    # the same point but another demag / gap-layer setting are two maps.
+    if _em_run is not None:
+        key = key + ("em_run", str(_em_run.get("run_id") or ""),
+                     hash(_freeze(_em_run.get("key"))))
     # ── THE MECHANICAL LOSSES, resolved BEFORE the cache is consulted ────────
     # They are a heat SOURCE in this solve (see the docstring), so two requests
     # that differ in them are two answers — and neither the bearing ASSIGNMENT
@@ -3755,14 +4142,18 @@ def solve_thermal_field(
         from motor_ai_sim.simulation.fem_solver_2d import _NO_WARM_CACHE_CTX
         _nwc_token = _NO_WARM_CACHE_CTX.set(True)
         try:
-            em, loss_source = _em_loss_map(
-                gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
-                n_steps_per_period=n_steps_per_period, n_periods=n_periods,
-                mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
-                outer_air_factor=outer_air_factor, n_sectors=n_sectors,
-                coil_temp_c=coil_temp_c, component_mesh=component_mesh,
-                geo=geo, geo_ov=_geo_ov, phase_cb=_phase,
-                magnet_temp_c=magnet_temp_c, op_mode=op_mode)
+            if _em_run is not None:
+                em, loss_source = _em_map_from_run(_em_run, geo=geo,
+                                                   phase_cb=_phase)
+            else:
+                em, loss_source = _em_loss_map(
+                    gamma_deg=gamma_deg, I_phase_rms=I_phase_rms,
+                    n_steps_per_period=n_steps_per_period, n_periods=n_periods,
+                    mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
+                    outer_air_factor=outer_air_factor, n_sectors=n_sectors,
+                    coil_temp_c=coil_temp_c, component_mesh=component_mesh,
+                    geo=geo, geo_ov=_geo_ov, phase_cb=_phase,
+                    magnet_temp_c=magnet_temp_c, op_mode=op_mode)
         finally:
             _NO_WARM_CACHE_CTX.reset(_nwc_token)
     if isinstance(_em_capture, dict):
@@ -3854,7 +4245,10 @@ def solve_thermal_field(
     q_cu = (Pcu / V_cu) if V_cu > 1e-12 else 0.0
 
     # 3. materials → conductivities
-    mats = cfg.get("materials", {})
+    # The config's assignment with this request's `mat=` override on top — the
+    # same precedence the cache key (`_assignments`) already used, so a liner
+    # swapped on the client is the liner this solve conducts through.
+    mats = {**dict(cfg.get("materials", {}) or {}), **_assignments()}
     k_steel = _thermal_k("steel", mats.get("stator_core"), 25.0)
     k_mag = _thermal_k("magnet", mats.get("magnet"), 8.0)
     k_shaft = _thermal_k_any(mats.get("shaft"), 150.0)
@@ -5987,6 +6381,10 @@ def solve_thermal_field(
         # difference instead of the user wondering why one map took six minutes
         # and the next took two seconds.
         "loss_source": loss_source,
+        # The Electromagnetic run this map is of (2026-09-30) — the panel's
+        # one line "EM: 81 A · γ 10° · 25 000 rpm · 36 steps · 11:50".
+        "em_run": (dict(loss_source.get("em_run"))
+                   if isinstance(loss_source.get("em_run"), dict) else None),
         "loss_density_label": em.get("loss_density_label"),
         "outlines": em.get("outlines"), "extent": em.get("extent"),
     }
@@ -6216,6 +6614,7 @@ def solve_coupled(
         "cooling": th.get("cooling"),
         # WHERE the one loss map came from, and HOW the copper was moved off it.
         "loss_source": th.get("loss_source"),
+        "em_run": th.get("em_run"),
         "copper_scaling": {
             "alpha_per_k": float(ALPHA_CU_PER_K),
             "t_ref_c": round(float(t_ref_c), 1),
@@ -6446,6 +6845,19 @@ def field(
                                                  "identical request was already "
                                                  "computed — the panel's "
                                                  "Recompute button"),
+    em_source:          str = Query(default="latest",
+                                    description="WHICH Electromagnetic run the "
+                                                "loss map is of.  'latest' "
+                                                "(default, the Thermal tab): the "
+                                                "newest run of the loaded "
+                                                "machine, whose point and "
+                                                "settings REPLACE rpm, gamma_deg, "
+                                                "I_phase_rms, coil_temp_c, "
+                                                "magnet_temp_c, the step count "
+                                                "and the mesh sent here.  "
+                                                "'point': the run at exactly the "
+                                                "point sent (API callers that "
+                                                "name their own point)"),
 ):
     """Steady-state 2-D temperature map of the machine.
 
@@ -6496,6 +6908,23 @@ def field(
     if str(heat_path or "none").strip().lower() != "none":
         _robot_kw = dict(_robot_kw, heat_path=str(heat_path).strip().lower())
 
+    # ── THE LATEST ELECTROMAGNETIC RUN (2026-09-30) ─────────────────────────
+    # The run's point and EM settings REPLACE what the request sent — the
+    # panel's copy of them is not a reason to refuse (owner: «it should simply
+    # take the values from there and compute»).  A 422 only when there is no
+    # run of this machine or the newest one is of another machine.
+    _em = None
+    if _em_source_is_latest(em_source):
+        from motor_ai_sim.routes.simulation import _parse_geo_override
+        _em = latest_em_run(_parse_geo_override(geo))
+        _pt = _em["point"]
+        rpm, gamma_deg, I_phase_rms = _pt["rpm"], _pt["gamma_deg"], _pt["I_phase_rms"]
+        coil_temp_c, magnet_temp_c = _pt["coil_temp_c"], _pt["magnet_temp_c"]
+        n_steps_per_period, n_periods = _pt["n_steps_per_period"], _pt["n_periods"]
+        mesh_size_mm, min_size_mm = _pt["mesh_size_mm"], _pt["min_size_mm"]
+        outer_air_factor, n_sectors = _pt["outer_air_factor"], _pt["n_sectors"]
+        component_mesh, mode = _pt["component_mesh"], _pt["op_mode"]
+
     # ── persistent history (2026-09-22) ─────────────────────────────────────
     # Computed and checked BEFORE the progress bar opens, exactly as
     # mechanical.py's reference integration does — a hit returns with no
@@ -6529,6 +6958,10 @@ def field(
         "geo": geo,
         "params": _RH.round_floats(_hist_params),
         "mode": mode,
+        # The EM run the map is of: a new run at the same point (another demag
+        # or gap setting, or simply re-run) is the CURRENT result, and an answer
+        # filed for the previous one must not be served for it.
+        **({"em_run": [_em["run_id"], repr(_em["key"])]} if _em else {}),
     })
     if not fresh:
         _hist_hit = _THERMAL_FIELD_HISTORY.get(_history_key)
@@ -6560,7 +6993,7 @@ def field(
             shaft_ext_sides=shaft_ext_sides, magnet_temp_c=magnet_temp_c,
             frame=frame, open_air_speed_mps=open_air_speed_mps,
             **_robot_kw, **_mount_kw,
-            op_mode=mode,
+            op_mode=mode, _em_run=_em,
             progress=_progress.callback())
         _remember_last("field", out, _field_params(
             cooling_mode=cooling_mode, ambient_temp=ambient_temp, h_conv=h_conv,
@@ -6599,6 +7032,18 @@ def field(
         # Unconditional: an exception on any path must not leave
         # the progress endpoint reporting a live solve.
         _progress.finish()
+
+
+def _em_source_is_latest(em_source) -> bool:
+    """``em_source`` → True for the latest-run rule (the default), False for
+    the exact-point lookup; anything else is refused by name."""
+    s = str(em_source or "latest").strip().lower()
+    if s not in ("latest", "point"):
+        raise _bad("em_source", em_source, "bad_value",
+                   "em_source must be 'latest' (the newest Electromagnetic run "
+                   "of the loaded machine) or 'point' (the run at exactly the "
+                   "point sent)")
+    return s == "latest"
 
 
 def _field_params(**kw) -> Dict[str, Any]:
@@ -6717,6 +7162,13 @@ def coupled(
                                          include_in_schema=False),
     end_faces:          str = Query(default="still"),
     end_face_sides:     int = Query(default=2, ge=1, le=2),
+    em_source:          str = Query(default="latest",
+                                    description="as /field: 'latest' adopts the "
+                                                "newest Electromagnetic run of "
+                                                "the loaded machine (its coil "
+                                                "temperature is then the "
+                                                "starting guess); 'point' looks "
+                                                "the run up at the point sent"),
 ):
     """The self-consistent operating point: solve for the winding temperature.
 
@@ -6753,6 +7205,22 @@ def coupled(
         from motor_ai_sim.routes.simulation import _parse_geo_override
 
         geo_ov = _parse_geo_override(geo)
+        # THE LATEST ELECTROMAGNETIC RUN (2026-09-30) — as /field: its point
+        # and EM settings replace the request's; its coil temperature is the
+        # loop's starting guess, which is the temperature its map was solved at.
+        _em = None
+        _em_kw: Dict[str, Any] = {}
+        if _em_source_is_latest(em_source):
+            _em = latest_em_run(geo_ov)
+            _pt = _em["point"]
+            rpm, gamma_deg, I_phase_rms = _pt["rpm"], _pt["gamma_deg"], _pt["I_phase_rms"]
+            coil_temp_c = _pt["coil_temp_c"]
+            n_steps_per_period, n_periods = _pt["n_steps_per_period"], _pt["n_periods"]
+            mesh_size_mm, min_size_mm = _pt["mesh_size_mm"], _pt["min_size_mm"]
+            outer_air_factor, n_sectors = _pt["outer_air_factor"], _pt["n_sectors"]
+            component_mesh = _pt["component_mesh"]
+            _em_kw = {"_em_run": _em, "magnet_temp_c": _pt["magnet_temp_c"],
+                      "op_mode": _pt["op_mode"]}
         mode, bmode = _validate_field_params(
             cooling_mode=cooling_mode, ambient_temp=ambient_temp, h_conv=h_conv,
             air_speed_mps=air_speed_mps, fluid=fluid,
@@ -6813,7 +7281,9 @@ def coupled(
             # split the cache (same rule as `fluid_temp_out_c` / `gap_k` in
             # `solve_thermal_field`), and the note that says it was ignored is
             # attached to THIS request's answer below, cached or not.
-            **_cool_kw) + ("coupled", int(max_iter))
+            **_cool_kw) + ("coupled", int(max_iter)) + (
+                ("em_run", str(_em["run_id"] or ""), hash(_freeze(_em["key"])))
+                if _em else ())
 
         _params = _field_params(
             max_iter=max_iter, verify_em=bool(verify_em),
@@ -6842,7 +7312,7 @@ def coupled(
             mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
             outer_air_factor=outer_air_factor, n_sectors=n_sectors,
             coil_temp_c=coil_temp_c, component_mesh=component_mesh, geo=geo,
-            progress=_progress.callback(), **_cool_kw)
+            progress=_progress.callback(), **_cool_kw, **_em_kw)
         _cache_put(_COUPLED_CACHE, key, out, _COUPLED_CACHE_MAX)
         _remember_last("coupled", out, _params, out.get("geometry_fingerprint"))
         return _note_verify_em_ignored(out, verify_em)
@@ -6850,6 +7320,25 @@ def coupled(
         # Unconditional: an exception on any path must not leave
         # the progress endpoint reporting a live solve.
         _progress.finish()
+
+
+@router.get("/em_run")
+def em_run(geo: Optional[str] = Query(default=None)) -> Dict[str, Any]:
+    """The Electromagnetic run the next Thermal Solve will use — a READ.
+
+    ``{ok: True, em_run: {...}}`` with the run's point and settings (what the
+    panel's one line prints), or ``{ok: False, error, reason, em_refusal}``
+    with exactly the refusal Solve would give.  Nothing is solved, replayed
+    or remembered."""
+    from motor_ai_sim.routes.simulation import _parse_geo_override
+    try:
+        run = latest_em_run(_parse_geo_override(geo))
+    except HTTPException as exc:
+        d = exc.detail if isinstance(exc.detail, dict) else {"error": str(exc.detail)}
+        return {"ok": False, "error": d.get("error"), "reason": d.get("reason"),
+                "error_code": d.get("error_code"),
+                "em_refusal": d.get("em_refusal")}
+    return {"ok": True, "em_run": run["summary"]}
 
 
 @router.get("/last")
@@ -7408,23 +7897,33 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                     break
         return float(default)
 
-    point = {
+    # The calibration duty's own SAVED point — kept to say whether the latest
+    # Electromagnetic run below is that point, not to select a run with.
+    cal_point = {
         "rpm": _pt("rpm", "rpm"),
         "I_phase_rms": _pt("current_arms", "I_phase_rms_A"),
         "gamma_deg": _pt("gamma_deg", "gamma_deg"),
         "coil_temp_c": float(cal_summary.get("coil_temp_C") or 120.0),
     }
-    em_sel = {
-        "n_steps_per_period": int(_dc_num(body, "n_steps_per_period", 12)),
-        "n_periods": _dc_num(body, "n_periods", 1.0),
-        "mesh_size_mm": _dc_num(body, "mesh_size_mm", 3.0),
-        "min_size_mm": _dc_num(body, "min_size_mm", 0.3),
-        "outer_air_factor": _dc_num(body, "outer_air_factor", 1.3),
-        "n_sectors": int(_dc_num(body, "n_sectors", 4)),
-        "component_mesh": str(body.get("component_mesh") or ""),
-    }
-    magnet_temp_c = body.get("magnet_temp_c")
-    magnet_temp_c = None if magnet_temp_c is None else float(magnet_temp_c)
+    # THE LATEST ELECTROMAGNETIC RUN of the loaded machine (2026-09-30), the
+    # same rule the Thermal tab's Solve follows: its point and its settings are
+    # adopted, whatever the body says, and with no run of this machine the 422
+    # is `latest_em_run`'s own.  Never a solve.
+    em_run_sel = latest_em_run(geo_ov)
+    _ep = em_run_sel["point"]
+    point = {k: _ep[k] for k in _DC_POINT_KEYS}
+    em_sel = {k: _ep[k] for k in ("n_steps_per_period", "n_periods",
+                                  "mesh_size_mm", "min_size_mm",
+                                  "outer_air_factor", "n_sectors",
+                                  "component_mesh")}
+    magnet_temp_c = _ep["magnet_temp_c"]
+    # Is that run the calibration duty's own point?  Only then may its map
+    # stand in for that duty's losses (`thermal_by_duty`); otherwise the map
+    # fits the network's conductances and every duty's watts come from its
+    # saved summary.
+    cal_is_run = all(_dc_close(round(float(cal_point[k]), 1),
+                               round(float(point[k]), 1))
+                     for k in ("rpm", "I_phase_rms", "gamma_deg"))
 
     _progress.start(
         total=_DC_PROGRESS_TOTAL,
@@ -7442,20 +7941,23 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
         cached = False
         for _k in _LAST_KINDS:                   # "field", then "coupled"
             e = _LAST.get(_k)
+            # …and only a map made from THIS run: an older run at the same
+            # point is not the current Electromagnetic result.
+            _e_run = (((e or {}).get("result") or {}).get("em_run") or {}) \
+                if isinstance(e, dict) else {}
+            if _e_run.get("run_id") != em_run_sel["run_id"]:
+                continue
             if _dc_map_matches(e, point=point, cooling=cooling, fp=fp):
                 steady = dict(e["result"])
                 cached = True
                 break
         if steady is None:
-            # ONE conduction solve, at the calibration duty's own saved point,
+            # ONE conduction solve on the latest Electromagnetic run's map,
             # under this request's boundary conditions.  It does not solve an
-            # electromagnetic anything: the loss map is the duty's stored RUN,
-            # and with no run the 422 below is that lookup's own, by name.
+            # electromagnetic anything.
             steady = solve_thermal_field(
-                geo=body.get("geo"), op_mode=(body.get("mode")
-                                              or cal_entry.get("mode")
-                                              or cal_summary.get("op_mode")),
-                magnet_temp_c=magnet_temp_c,
+                geo=body.get("geo"), op_mode=_ep["op_mode"],
+                magnet_temp_c=magnet_temp_c, _em_run=em_run_sel,
                 progress=_cal_progress, **point, **em_sel, **cooling)
         _progress.update(done=2, phase="duty cycle — integrating")
         t_cycle = time.time()
@@ -7498,7 +8000,8 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                 geometry=geom,
                 calibration_duty=calib)
             profile = normalise_spec(
-                blk, duties, thermal_by_duty={calib: steady},
+                blk, duties,
+                thermal_by_duty=({calib: steady} if cal_is_run else {}),
                 default_duty=calib)
         except DutyCycleError as exc:
             raise _dc_from_error(exc)
@@ -7799,6 +8302,12 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
             },
             "calibration_map": {
                 "loss_source": steady.get("loss_source"),
+                # The Electromagnetic run the map is of — the latest run of
+                # this machine — and whether it is the calibration duty's own
+                # saved point (only then are that duty's watts the map's).
+                "em_run": em_run_sel["summary"],
+                "em_run_is_calibration_point": bool(cal_is_run),
+                "calibration_point": cal_point,
                 "T_max": steady.get("T_max"),
                 "P_loss_total_W": steady.get("P_loss_total_W"),
                 "components": {n: (steady.get("components") or {}).get(n)

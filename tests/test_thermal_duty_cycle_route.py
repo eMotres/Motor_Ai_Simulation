@@ -274,7 +274,16 @@ def mock_map(sandbox, monkeypatch):
 
     monkeypatch.setattr(th, "solve_thermal_field", _fake)
     monkeypatch.setattr(th, "_LAST", {}, raising=False)
+    # …and the latest Electromagnetic run the route adopts (2026-09-30): the
+    # rated duty's own point, the run the owner would have made last.
+    from tests.em_run_stub import patch_latest_em_run
+    patch_latest_em_run(monkeypatch, **RATED_RUN_POINT)
     return calls
+
+
+#: The rated duty's point, as the latest Electromagnetic run carries it.
+RATED_RUN_POINT = {"I_phase_rms": 14.708, "gamma_deg": 2.0, "rpm": 1000.0,
+                   "coil_temp_c": 120.0}
 
 
 def _post(client, **body) -> "object":
@@ -403,6 +412,8 @@ def test_a_cycle_with_no_periodic_state_is_refused_with_a_remedy(client,
 def test_a_map_with_no_components_is_no_steady_thermal_map(client, sandbox,
                                                            monkeypatch):
     from motor_ai_sim.routes import thermal as th
+    from tests.em_run_stub import patch_latest_em_run
+    patch_latest_em_run(monkeypatch, **RATED_RUN_POINT)
     monkeypatch.setattr(th, "_LAST", {}, raising=False)
     monkeypatch.setattr(th, "solve_thermal_field",
                         lambda **kw: {"T_max": 106.1, "cooling": {}})
@@ -421,13 +432,18 @@ def test_the_remembered_map_is_reused_when_it_is_this_duty_at_these_BCs(
     from motor_ai_sim.routes import thermal as th
     from motor_ai_sim.thermal_settings import cooling_fields
 
+    from tests.em_run_stub import patch_latest_em_run
+    run = patch_latest_em_run(monkeypatch, **RATED_RUN_POINT)
     calls = []
     monkeypatch.setattr(th, "solve_thermal_field",
                         lambda **kw: (calls.append(kw), _canned_map())[1])
     params = {"rpm": 1000.0, "I_phase_rms": 14.708, "gamma_deg": 2.0,
               "coil_temp_c": 120.0, **cooling_fields(ROBOT_SETTINGS)}
+    # The remembered map is OF the latest Electromagnetic run (2026-09-30): a
+    # map of an older run at the same point is not the current result.
+    remembered = dict(_canned_map(), em_run=dict(run["summary"]))
     monkeypatch.setattr(th, "_LAST",
-                        {"field": {"result": _canned_map(), "params": params,
+                        {"field": {"result": remembered, "params": params,
                                    "geometry_fingerprint": None,
                                    "computed_at": "2026-09-14T11:00:00"}},
                         raising=False)
@@ -444,9 +460,11 @@ def test_the_remembered_map_is_reused_when_it_is_this_duty_at_these_BCs(
 
 def test_the_calibration_solve_is_at_the_calibration_dutys_own_point(
         client, mock_map):
-    """Not the duty the CYCLE is about: the network is fitted at the rated
-    point, and the peak is then an interpolation of a real solve."""
+    """Not the duty the CYCLE is about: the network is fitted on the latest
+    Electromagnetic run — here the rated point, the calibration duty's own —
+    and the peak is then an interpolation of a real solve."""
     out = _post(client, duty=PEAK).json()
+    assert out["calibration_map"]["em_run_is_calibration_point"] is True
     assert len(mock_map) == 1
     kw = mock_map[0]
     assert kw["I_phase_rms"] == pytest.approx(14.708)     # rated, not peak
@@ -833,3 +851,21 @@ def test_the_peak_segment_carries_the_peak_dutys_own_losses(solved):
     assert on["total_W"] == pytest.approx(686.9, abs=1.5)
     assert solved["spec"]["segments"][1]["duty"] is None     # unpowered rest
     assert solved["spec"]["segments"][1]["total_W"] == 0.0
+
+
+def test_the_calibration_map_is_the_LATEST_em_run_even_at_another_point(
+        client, mock_map, monkeypatch):
+    """2026-09-30: the latest Electromagnetic run is used whatever its point —
+    never a refusal because it is not the calibration duty's.  Its map then
+    fits the network only; the record says so."""
+    from tests.em_run_stub import patch_latest_em_run
+    patch_latest_em_run(monkeypatch, I_phase_rms=45.962, gamma_deg=2.0,
+                        rpm=1000.0, coil_temp_c=200.0, n_steps_per_period=36)
+    r = _post(client, duty=PEAK)
+    assert r.status_code == 200, r.text[:600]
+    out = r.json()
+    kw = mock_map[-1]
+    assert kw["I_phase_rms"] == pytest.approx(45.962)
+    assert kw["n_steps_per_period"] == 36
+    assert out["calibration_map"]["em_run_is_calibration_point"] is False
+    assert out["calibration_map"]["em_run"]["I_phase_rms"] == pytest.approx(45.962)

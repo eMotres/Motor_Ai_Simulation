@@ -26,7 +26,7 @@ not what protects anything:
 | methods `initialize`, `ping`, `notifications/initialized`, `notifications/cancelled`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `resources/templates/list`, `prompts/list` (the three lists are filtered to `PUBLIC_RESOURCES` / `PUBLIC_RESOURCE_TEMPLATES` / `PUBLIC_PROMPTS`; the last two are empty) | 401 `authentication_required` (e.g. `prompts/get`, `completion/complete`) |
 | `tools/call` of the public tools below | a protected tool: 401 `authentication_required`; a name that is neither public nor in `TOOL_SCOPES`: 403 `unknown_tool` |
 | `resources/read` of `emotres://guide` | 401 |
-| `POST` only | `GET` (SSE) / `DELETE`: 401 |
+| JSON-RPC over `POST`; a plain `GET` returns the service card (below) | `GET` with `Accept: text/event-stream`, `DELETE`: 405 `Allow: POST` |
 
 One refused message in a JSON-RPC batch refuses the whole batch. Refusals
 happen in the gate, so no tool body is entered (tested). The SDK list
@@ -142,6 +142,47 @@ is therefore the visitor, and only for requests that came in through the
 host. No host nginx change is required.
 Optional hardening on the host is `proxy_set_header X-Forwarded-For
 $remote_addr;`, which overwrites instead of appending.
+
+## Plain HTTP: `GET /mcp`, `/.well-known/mcp.json`, `/llms.txt`
+
+An external checker or a web-fetch tool starts with a plain
+`GET https://aerostator.com/mcp`, not with MCP. Before this change that
+returned 401 with no explanation, `/.well-known/mcp.json` returned 404, and
+`/llms.txt` returned the SPA's `index.html`.
+
+| request (no `Authorization` header) | answer |
+|---|---|
+| `GET` / `HEAD /mcp`, `Accept` without `text/event-stream` | **200 service card**. JSON by default (`*/*`, `application/json`, no Accept); HTML when `text/html` ranks above JSON (a browser). It covers what AeroStator is, that this is a stateless streamable-HTTP MCP endpoint (POST JSON-RPC 2.0, supported protocol versions from the SDK), the public tools (name + first sentence, taken from the SDK tool registry like `tools/list`), sample `initialize` / `tools/list` requests and a curl line, OAuth metadata URLs, sign-in / sign-up URLs, how to add the server in claude.ai / ChatGPT / Claude Code (`claude mcp add --transport http aerostator https://aerostator.com/mcp`), and the docs, card and source URLs. Headers: `Cache-Control: public, max-age=300`, `Vary: Accept, Authorization`, `Link: </.well-known/mcp.json>; rel="describedby"`. It counts against the anonymous per-IP quota. |
+| `GET /mcp` with `Accept: text/event-stream` (an MCP client opening the standalone SSE stream) | **405**, `Allow: POST`. The streamable-HTTP spec says a server with no GET stream "MUST … return HTTP 405". The TypeScript SDK treats a 405 there as benign (no error, no OAuth). Before, the 401 at this point made it start OAuth right after an anonymous `initialize`. The Python SDK client opens that stream only when the server issued a session id, which this stateless server never does. |
+| `DELETE /mcp` (end session), any other non-POST | **405**, `Allow: POST`. The spec allows 405 for "no session termination", and both SDKs accept it. |
+| any method **with** an `Authorization` header | Unchanged. A bad token gets 401 `invalid_token`, even on GET; a valid one goes to the SDK. |
+
+`server/discover` (the 2026-07-28 revision's first call instead of
+`initialize`) is on the anonymous allow-list. It returns the SDK's
+capabilities and the server instructions.
+
+**Server card** at `/.well-known/mcp.json`, also `/.well-known/mcp` and
+`/.well-known/mcp/server-card.json` (the path used by the older SEP-1649).
+The MCP server-card proposal is not settled: SEP-1649 was superseded by
+SEP-2127, which is still in review, and whether `tools` belongs in the card
+is still debated. So this is a documented **minimal card** in the
+server.json-derived shape SEP-2127 drafts: `name` (`com.aerostator/mcp`),
+`title`, `description`, `version`, `websiteUrl`, `repository`, `license`,
+`remotes: [{type: "streamable-http", url}]`, `protocolVersions`,
+`capabilities`, `authentication` (protected-resource and
+authorization-server metadata URLs, scopes), `tools` (public ones only),
+`documentationUrl`, and `_meta["com.aerostator/card"]` pointing at the
+service card, `llms.txt` and the sign-up page. It is cached for 5 min. The
+existing `location /.well-known/` in `deploy/nginx.conf` already sends it to
+the API.
+
+**`/llms.txt`** (`text/plain`, markdown in the llmstxt.org layout: H1,
+summary quote, link lists) covers the service, the MCP endpoint, the server
+card, OAuth metadata, the Claude Code command, the public tools and the docs.
+`deploy/nginx.conf` has `location = /llms.txt` proxied to the API, so it is
+answered ahead of the SPA fallback. Files: `routes/mcp_discovery.py`,
+`mcp_discovery.service_card / server_card / llms_txt`,
+`tests/test_mcp_plain_http.py`.
 
 ## Error contract
 

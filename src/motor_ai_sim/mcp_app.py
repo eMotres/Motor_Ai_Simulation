@@ -506,6 +506,44 @@ def _arg_names(args: Any) -> Dict[str, Any]:
     return {"arg_type": type(args).__name__} if args is not None else {}
 
 
+def _accept_q(accept: str) -> Dict[str, float]:
+    """``Accept`` -> {media range: q} (lower-cased; malformed q = 0)."""
+    out: Dict[str, float] = {}
+    for part in (accept or "").split(","):
+        bits = [b.strip() for b in part.split(";")]
+        if not bits or not bits[0]:
+            continue
+        q = 1.0
+        for b in bits[1:]:
+            if b.lower().startswith("q="):
+                try:
+                    q = float(b[2:])
+                except ValueError:
+                    q = 0.0
+        out[bits[0].lower()] = max(q, out.get(bits[0].lower(), 0.0))
+    return out
+
+
+def _accepts_event_stream(accept: str) -> bool:
+    return _accept_q(accept).get("text/event-stream", 0.0) > 0.0
+
+
+def _prefers_html(accept: str) -> bool:
+    """HTML only when the client asks for text/html more than for JSON
+    (a browser); curl's ``*/*`` and fetch tools get JSON."""
+    q = _accept_q(accept)
+    html_q = q.get("text/html", 0.0)
+    json_q = max(q.get("application/json", 0.0), q.get("application/*", 0.0))
+    return html_q > 0.0 and html_q > json_q
+
+
+async def public_tool_descriptions() -> List[Dict[str, Any]]:
+    """The public tools exactly as the SDK registry lists them (the same
+    source as tools/list), for the plain-HTTP cards."""
+    return [{"name": t.name, "description": t.description or ""}
+            for t in await get_server().list_tools() if t.name in PUBLIC_TOOLS]
+
+
 def _auth_body(msg_id, err: dict, reason: str) -> dict:
     # ``reason`` stays top-level for existing callers (Stage 1 contract)
     return {**_rpc_error(msg_id, err["code"], err["message"], err["data"]),
@@ -692,15 +730,55 @@ class McpGate:
             [("www-authenticate", _oauth.www_authenticate(
                 scope=_scope_set(*_d.DEFAULT_SIGN_IN_SCOPES, need)))])
 
+    async def _anonymous_plain_http(self, scope, send, method: str) -> None:
+        """Anonymous non-POST.
+
+        * ``GET``/``HEAD`` asking for ``text/event-stream`` (an MCP client
+          opening the standalone SSE stream): 405 + ``Allow: POST`` — the
+          streamable-HTTP spec's "no stream here", which the TypeScript SDK
+          treats as benign (no OAuth, no error).
+        * any other ``GET``/``HEAD`` (a person, a web-fetch tool, a crawler):
+          200 with the service card, JSON or HTML by the Accept header.
+        * ``DELETE`` (session end) and anything else: 405 + ``Allow: POST``.
+        """
+        headers = {k.decode("latin-1").lower(): v.decode("latin-1")
+                   for k, v in scope.get("headers") or ()}
+        accept = headers.get("accept", "")
+        if method in ("GET", "HEAD") and not _accepts_event_stream(accept):
+            card = _d.service_card(await public_tool_descriptions())
+            if _prefers_html(accept):
+                raw = _d.service_card_html(card).encode("utf-8")
+                ctype = b"text/html; charset=utf-8"
+            else:
+                raw = json.dumps(card, indent=1).encode("utf-8")
+                ctype = b"application/json"
+            await send({"type": "http.response.start", "status": 200, "headers": [
+                (b"content-type", ctype), (b"content-length", str(len(raw)).encode()),
+                (b"cache-control", f"public, max-age={_d.CARD_MAX_AGE_S}".encode()),
+                (b"vary", b"Accept, Authorization"),
+                (b"link", (f'<{_oauth.base_url()}/.well-known/mcp.json>; rel="describedby"; '
+                           'type="application/json"').encode())]})
+            await send({"type": "http.response.body",
+                        "body": b"" if method == "HEAD" else raw})
+            return
+        await _send_json(send, 405, {
+            "jsonrpc": "2.0", "id": None,
+            "error": {"code": -32000, "message": "Method Not Allowed",
+                      "data": {"error": "method_not_allowed", "allow": ["POST"],
+                               "detail": ("this MCP server offers no server-sent-event "
+                                          "stream and no session to end: send JSON-RPC "
+                                          "with POST")}}},
+            [("allow", "POST")])
+
     async def _anonymous(self, scope, receive, send, body: bytes, parsed, msgs) -> None:
         """No Authorization header: the public tier, fail closed."""
         ip = _client_ip(scope)
-        if scope.get("method") != "POST":
-            # GET (SSE stream) / DELETE (session end): nothing public there
-            await self._refuse_anonymous(send, {"method": scope.get("method")}, ip)
-            return
         ok, retry = _keys.take_quota("anon:" + ip, per_min=_keys.anon_per_minute_limit(),
                                      per_day=_keys.anon_per_day_limit())
+        method = scope.get("method")
+        if ok and method != "POST":
+            await self._anonymous_plain_http(scope, send, method)
+            return
         if not ok:
             _keys.audit(principal=None, method="anonymous", status=429, ip=ip)
             first = next((m for m in msgs if isinstance(m, dict)), {})

@@ -39,6 +39,9 @@ ANON_METHODS = frozenset({
     "initialize", "ping", "notifications/initialized", "notifications/cancelled",
     "tools/list", "tools/call", "resources/list", "resources/read",
     "resources/templates/list", "prompts/list",
+    # 2026-07-28 clients probe with this instead of initialize: server
+    # capabilities + instructions only (SDK default handler)
+    "server/discover",
 })
 #: Resources an unauthenticated client may list and read.
 PUBLIC_RESOURCES = frozenset({"emotres://guide"})
@@ -540,3 +543,204 @@ def auth_error(*, error: str, required_action: str, tool: str = "",
     }
     return {"code": AUTH_ERROR_CODE, "message": titles.get(error, "Not authorized"),
             "data": data}
+
+
+# ── plain-HTTP discovery: GET /mcp, /.well-known/mcp.json, /llms.txt ────────
+#
+# What a web-fetch tool or a person sees before speaking MCP.  Built from the
+# same tool registry as tools/list (the caller passes the public tools'
+# name + description as the SDK lists them), never hand-written.
+
+CARD_MAX_AGE_S = 300
+
+
+def protocol_versions() -> List[str]:
+    try:
+        from mcp_types.version import (HANDSHAKE_PROTOCOL_VERSIONS,
+                                       MODERN_PROTOCOL_VERSIONS)
+        return [*HANDSHAKE_PROTOCOL_VERSIONS, *MODERN_PROTOCOL_VERSIONS]
+    except Exception:                                   # noqa: BLE001
+        return ["2025-06-18", "2025-11-25"]
+
+
+def _first_sentence(text: str) -> str:
+    t = " ".join((text or "").split())
+    for p in ("PUBLIC (no sign-in). ",):
+        t = t[len(p):] if t.startswith(p) else t
+    cut = t.find(". ")
+    return t if cut < 0 else t[:cut + 1]
+
+
+def public_tool_rows(tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """``tools``: [{name, description}] as the SDK lists them."""
+    return [{"name": t["name"], "description": _first_sentence(t.get("description") or ""),
+             "requires_auth": False}
+            for t in sorted(tools, key=lambda t: t["name"]) if t["name"] in PUBLIC_TOOLS]
+
+
+def service_card(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """The JSON answer of an anonymous plain ``GET /mcp``."""
+    L = links()
+    ep = L["mcp_endpoint"]
+    versions = protocol_versions()
+    init_version = next((v for v in reversed(versions) if v <= "2025-11-25"), versions[-1])
+    headers = {"Content-Type": "application/json",
+               "Accept": "application/json, text/event-stream"}
+    return {
+        "service": SERVICE_NAME,
+        "operator": OPERATOR,
+        "summary": describe_service()["summary"],
+        "this_is": ("an MCP server (Model Context Protocol). Talk to it with an "
+                    "MCP client, or POST JSON-RPC 2.0 to this URL. A plain GET "
+                    "only returns this card."),
+        "mcp": {
+            "endpoint": ep,
+            "transport": "streamable-http",
+            "stateless": True,
+            "method": "POST",
+            "content_type": "application/json",
+            "request_headers": headers,
+            "json_rpc": "2.0",
+            "protocol_versions": versions,
+            "sse_get_stream": False,
+        },
+        "public_tools": public_tool_rows(tools),
+        "public_resources": sorted(PUBLIC_RESOURCES),
+        "try_it": {
+            "initialize": {"method": "POST", "url": ep, "headers": headers, "body": {
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"protocolVersion": init_version, "capabilities": {},
+                           "clientInfo": {"name": "my-agent", "version": "1.0"}}}},
+            "tools_list": {"method": "POST", "url": ep, "headers": headers, "body": {
+                "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}},
+            "curl": (f"curl -s {ep} -H 'Content-Type: application/json' "
+                     "-H 'Accept: application/json, text/event-stream' "
+                     "-d '{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}'"),
+        },
+        "authentication": {
+            "anonymous": ("the public tools above work without sign-in; "
+                          "machines, drafts and simulations need OAuth 2.1 "
+                          "(or an agent key)"),
+            "resource_metadata_url": L["resource_metadata_url"],
+            "authorization_server_metadata_url": L["authorization_server_metadata_url"],
+            "sign_in_url": L["sign_in_url"],
+            "sign_up_url": L["sign_up_url"],
+            "scopes": list(_keys.SCOPES),
+        },
+        "connect": {
+            "claude_ai": ("Settings -> Connectors -> Add custom connector: name "
+                          f"AeroStator, URL {ep}; then Connect"),
+            "chatgpt": ("Settings -> Apps & Connectors -> Create (developer mode): "
+                        f"MCP server URL {ep}, authentication OAuth"),
+            "claude_code": f"claude mcp add --transport http aerostator {ep}",
+        },
+        "server_card_url": _oauth.base_url() + "/.well-known/mcp.json",
+        "llms_txt_url": _oauth.base_url() + "/llms.txt",
+        "docs_url": L["docs_url"],
+        "license": LICENSE,
+        "source_code_url": L["source_code_url"],
+    }
+
+
+def service_card_html(card: Dict[str, Any]) -> str:
+    """The same card for a browser (every value HTML-escaped)."""
+    import html
+    import json as _json
+    e = html.escape
+    tools = "".join(f"<li><code>{e(t['name'])}</code> — {e(t['description'])}</li>"
+                    for t in card["public_tools"])
+    a = card["authentication"]
+    c = card["connect"]
+    body = _json.dumps(card["try_it"]["tools_list"]["body"])
+    return (
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">"
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        f"<title>{e(card['service'])} MCP server</title>"
+        "<style>body{font:15px/1.5 system-ui,sans-serif;max-width:46rem;margin:2rem auto;"
+        "padding:0 1rem}code,pre{background:#f3f3f3;padding:.1rem .3rem;border-radius:3px}"
+        "pre{padding:.6rem;overflow-x:auto}</style></head><body>"
+        f"<h1>{e(card['service'])} — MCP server</h1>"
+        f"<p>{e(card['summary'])}</p>"
+        f"<p>{e(card['this_is'])}</p>"
+        f"<p>Endpoint: <code>{e(card['mcp']['endpoint'])}</code> · transport "
+        f"<code>streamable-http</code> (stateless, JSON responses) · protocol versions "
+        f"{e(', '.join(card['mcp']['protocol_versions']))}</p>"
+        f"<h2>Public tools (no sign-in)</h2><ul>{tools}</ul>"
+        f"<h2>Try it</h2><pre>{e(card['try_it']['curl'])}</pre>"
+        f"<p>Request body for <code>tools/list</code>: <code>{e(body)}</code></p>"
+        "<h2>Sign in</h2>"
+        f"<p>{e(a['anonymous'])}. OAuth metadata: <a href=\"{e(a['resource_metadata_url'])}\">"
+        f"protected resource</a>, <a href=\"{e(a['authorization_server_metadata_url'])}\">"
+        f"authorization server</a>. <a href=\"{e(a['sign_up_url'])}\">Create an account</a> · "
+        f"<a href=\"{e(a['sign_in_url'])}\">Sign in</a></p>"
+        "<h2>Add it to your AI app</h2><ul>"
+        f"<li>Claude (claude.ai / Desktop): {e(c['claude_ai'])}</li>"
+        f"<li>ChatGPT: {e(c['chatgpt'])}</li>"
+        f"<li>Claude Code: <code>{e(c['claude_code'])}</code></li></ul>"
+        f"<p><a href=\"{e(card['server_card_url'])}\">Server card (JSON)</a> · "
+        f"<a href=\"{e(card['docs_url'])}\">Documentation</a> · "
+        f"<a href=\"{e(card['source_code_url'])}\">Source ({e(card['license'])})</a></p>"
+        "</body></html>")
+
+
+def server_card(tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """``/.well-known/mcp.json``.  The MCP server-card proposal is not
+    settled (SEP-1649 superseded by SEP-2127, still in review): this is a
+    minimal card in the server.json-derived shape SEP-2127 drafts
+    (name / title / description / version / websiteUrl / repository /
+    remotes), plus the fields a client needs before connecting (protocol
+    versions, auth metadata, the public tools).  docs/MCP_DISCOVERY.md."""
+    L = links()
+    return {
+        "name": "com.aerostator/mcp",
+        "title": SERVICE_NAME,
+        "description": describe_service()["summary"],
+        "version": "stage3-discovery",
+        "websiteUrl": L["website"],
+        "repository": {"url": L["source_code_url"], "source": "github"},
+        "license": LICENSE,
+        "remotes": [{"type": "streamable-http", "url": L["mcp_endpoint"]}],
+        "protocolVersions": protocol_versions(),
+        "capabilities": {"tools": {}, "resources": {}},
+        "authentication": {
+            "type": "oauth2",
+            "required": "for user data and simulations; the public tools work without it",
+            "protectedResourceMetadata": L["resource_metadata_url"],
+            "authorizationServerMetadata": L["authorization_server_metadata_url"],
+            "scopes": list(_keys.SCOPES),
+        },
+        "tools": public_tool_rows(tools),
+        "documentationUrl": L["docs_url"],
+        "_meta": {"com.aerostator/card": {
+            "format": "minimal server card; the MCP server-card proposal (SEP-2127) is not final",
+            "serviceCard": L["mcp_endpoint"],
+            "llmsTxt": _oauth.base_url() + "/llms.txt",
+            "signUp": L["sign_up_url"]}},
+    }
+
+
+def llms_txt(tools: List[Dict[str, Any]]) -> str:
+    """``/llms.txt`` (llmstxt.org shape: H1, summary blockquote, link lists)."""
+    L = links()
+    ep = L["mcp_endpoint"]
+    rows = "\n".join(f"- `{t['name']}`: {t['description']}" for t in public_tool_rows(tools))
+    return (
+        f"# {SERVICE_NAME}\n\n"
+        f"> {describe_service()['summary']}\n\n"
+        f"{SERVICE_NAME} is run by {OPERATOR}; the code is open source ({LICENSE}). "
+        "AI agents use it through an MCP server (Model Context Protocol, "
+        "streamable HTTP, stateless JSON). Without sign-in an agent can call the "
+        "public discovery tools below; machines, draft designs and FEM "
+        "simulations need an OAuth sign-in by the user.\n\n"
+        "## MCP\n\n"
+        f"- [MCP endpoint]({ep}): POST JSON-RPC 2.0 (`initialize`, `tools/list`, "
+        "`tools/call`); a plain GET returns the service card\n"
+        f"- [Server card]({_oauth.base_url()}/.well-known/mcp.json): machine-readable description\n"
+        f"- [OAuth protected-resource metadata]({L['resource_metadata_url']})\n"
+        f"- Add to Claude Code: `claude mcp add --transport http aerostator {ep}`\n\n"
+        "## Public tools (no sign-in)\n\n"
+        f"{rows}\n\n"
+        "## Docs\n\n"
+        f"- [MCP discovery and auth]({L['docs_url']})\n"
+        f"- [Source code]({L['source_code_url']})\n"
+        f"- [Create an account]({L['sign_up_url']})\n")

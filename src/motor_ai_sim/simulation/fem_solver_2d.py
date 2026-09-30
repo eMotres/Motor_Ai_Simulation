@@ -5351,6 +5351,17 @@ def fem_transient_sliding_band(
                 _r_rot_max = max(_r_rot_max, float(_rr.max()))
     _rs = _node_r("s", _cells_of("s", (DOM_STATOR,)))
     _r_sta_min = float(_rs.min()) if _rs.size else 0.0
+    # Coulomb's stator-side ring must end at the innermost stator-half element
+    # that is NOT air — the iron, or the copper where a coil sits closer to the
+    # bore than any tooth (Ø12 12s10p: coils at r = 3.61 mm, innermost iron
+    # 3.93 mm, bore 3.46 mm -> "the Coulomb layer must be pure air" and the
+    # torque fell back to the hybrid method on every such machine).  Where the
+    # tooth tips are innermost this is the same radius as _r_sta_min.
+    from motor_ai_sim.simulation.virtual_work_torque import AIR_TAGS as _VWT_AIR
+    _rs_na = _node_r("s", _cells_of("s", tuple(int(_k) for _k in half["s"]["cells"]
+                                              if int(_k) not in _VWT_AIR)))
+    _r_sta_coulomb = (min(_r_sta_min, float(_rs_na.min())) if _rs_na.size
+                      else _r_sta_min)
 
     _gap_s_idx = np.array([], int)
     _gap_r_idx = np.array([], int)
@@ -6023,7 +6034,7 @@ def fem_transient_sliding_band(
         mesh_all, _P2E(), stack_length_m=p.stack_length, sector_count=NS,
         maxwell_sector=_torque2, n_stator_nodes=nsn,
         air_mask=_vwt_air_mask(_tags_all2, _nu_const2),
-        r_rotor_metal=_r_rot_max, r_slip=mid, r_stator_metal=_r_sta_min,
+        r_rotor_metal=_r_rot_max, r_slip=mid, r_stator_metal=_r_sta_coulomb,
         slip_nodes_rotor=np.asarray(rring, int) + nsn,
         slip_nodes_stator=np.asarray(sring, int), log_warning=log.warning)
 

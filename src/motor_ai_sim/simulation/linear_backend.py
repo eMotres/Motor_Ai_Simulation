@@ -390,7 +390,7 @@ class MumpsFactor(Factor):
             # give the Context an SYM=1 instance of the same dtype first.
             if ctx.mumps_instance is None:
                 from mumps import _mumps
-                ctx.mumps_instance = _mumps.dmumps(False, 1, None)
+                ctx.mumps_instance = _mumps.dmumps(False, 1)   # (verbose, sym)
                 ctx.dtype = "d"
             ctx.set_matrix(A, symmetric=True)          # keeps triu, COO
         else:
@@ -421,13 +421,11 @@ class MumpsFactor(Factor):
         return np.asarray(self._ctx.solve(b))
 
     def free(self) -> None:
+        # Dropping the last reference runs the instance's __dealloc__, which
+        # is MUMPS' JOB=-2 (calling JOB=-2 here as well would free twice).
         ctx, self._ctx = self._ctx, None
-        if ctx is not None and ctx.mumps_instance is not None:
-            try:
-                ctx.mumps_instance.job = -2          # MUMPS deallocation
-                ctx.mumps_instance.call()
-            except Exception:                        # noqa: BLE001 — cleanup
-                pass
+        if ctx is not None:
+            ctx.mumps_instance = None
 
     def stats(self) -> Dict[str, Any]:
         if self._ctx is None or self._ctx.mumps_instance is None:
@@ -716,6 +714,7 @@ class LinearSolver:
         self.lu_solves = self.lu_analyses = self.lu_failures = 0
         self.factorizations = 0
         self.solves = 0
+        self.n = 0
         self.backend = self._resolve()
 
     # ── selection ─────────────────────────────────────────────────────────
@@ -832,11 +831,11 @@ class LinearSolver:
             self._drop(k)
 
     def _run_spd(self, A, b, keep: bool):
+        name = self._spd_name(A.shape[0])
+        if name is None:                       # no Cholesky backend: LU
+            return None
         pat = self._spd_accept(A)
         if pat is None:
-            return None
-        name = self._spd_name(A.shape[0])
-        if name is None:
             return None
         s = self._stream(name)
         a0 = s.analyses

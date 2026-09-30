@@ -271,6 +271,20 @@ optional extras, see `THIRD_PARTY_NOTICES`), so the server keeps Triangle as the
 default mesher and MKL PARDISO as the sparse solver. Check after a build:
 `docker compose -f deploy/docker-compose.yml exec api python -c "import triangle, pypardiso"`.
 
+**Sparse solvers.** Every image also carries the open-source solvers, SuiteSparse
+CHOLMOD (via scikit-sparse) and MUMPS (via python-mumps), compiled in the
+Dockerfile's `opensolvers-build` stage against Debian's libraries, with OpenBLAS as
+the BLAS. `simulation/linear_backend.py` picks the solver per run from
+`SB_LINEAR_BACKEND` (`auto`, the default: PARDISO when pypardiso/MKL is installed,
+otherwise CHOLMOD for SPD systems and MUMPS for LU and very large SPD systems;
+`pardiso`, `cholmod`, `mumps`, `open`, `superlu` force one). A fully open build is
+`WITH_PARDISO=0` (the Dockerfile default); it contains no Intel MKL and runs on
+CHOLMOD + MUMPS. The measured cost against MKL PARDISO is in
+`docs/OPEN_SOLVERS_2026-09-30.md`. Check the backend of a build:
+`docker compose -f deploy/docker-compose.yml exec api python -c "from motor_ai_sim.simulation import linear_backend as L; print(L.available_backends(), L.LinearSolver().backend)"`.
+Every run records the solver it used and any fallback in the result's
+`linear_solver` block.
+
 **6. TLS.** `certbot` + host nginx in front, proxying to `127.0.0.1:8080`, HSTS,
 auto-renew timer. **Not** Cloudflare's orange cloud: the free tier cuts a
 proxied request at 100 s and a Ø200 PWM transient runs 93 minutes. Cloudflare is
@@ -401,7 +415,7 @@ sudo systemctl enable --now motres-health.timer motres-backup.timer \
 
 ## Sizing
 
-The FEM transient is CPU-bound (MKL PARDISO): real cores matter, 2–4 GB RAM per
+The FEM transient is CPU-bound (MKL PARDISO, or CHOLMOD/MUMPS in an open build): real cores matter, 2–4 GB RAM per
 concurrent solve at 200 mm / 2 mm mesh. On the AX42 that is `QUEUE_WORKERS=2`
 and `cpuset: "0-11"`, leaving four threads for nginx, restic and the host. On an
 AX102: `QUEUE_WORKERS=4`, `cpuset: "0-27"`.

@@ -32,8 +32,11 @@ meshio>=5.3  # skfem.io mesh IO (fem_solver_2d.build_mesh_from_polygons) — wit
 scikit-learn>=1.5  # surrogate model + DOE importance (surrogate.py: RandomForestRegressor, permutation_importance)
 pillow>=10  # PIL.Image domain rasterization for 2D field-map classification (routes/simulation.py)
 # pypardiso (Intel MKL PARDISO) is NOT a default dependency (2026-09-29): MKL is
-# proprietary.  Every solver falls back to SciPy's SuperLU without it.  A solve
-# node that wants the several-times-faster transient installs it on top:
+# proprietary.  Without it the solvers use SuiteSparse CHOLMOD + MUMPS
+# (requirements-opensolvers.txt: source builds against libsuitesparse-dev and
+# libmumps-seq-dev, done in deploy/Dockerfile.api), and SciPy's SuperLU when
+# those are absent too.  A solve node that accepts the MKL licence installs it
+# on top and it becomes the default (simulation/linear_backend.py):
 #   pip install -r requirements-pardiso.txt   (or pip install ".[pardiso]")
 psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d); also the Stage 3 two-workspace soak (tests measure RSS)
 # ── report rendering (migration Stage 6, 2026-09-15) ────────────────────────

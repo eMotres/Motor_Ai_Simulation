@@ -645,6 +645,34 @@ def revoke_invite(email: str, _admin: dict = Depends(require_admin)):
                           "exists": bool(ws_dir and ws_dir.is_dir())}}
 
 
+# ── Agent activity (MCP Stage 3) — drafts + runs of EVERY account ───────────
+# Moved off the Motors catalog page (owner 2026-09-30: that page is not the
+# right place for every AI agent's draft designs and job queue — move it into
+# Admin). The job queue itself is already cross-account here (GET
+# /api/jobs?all=true, honoured only for an admin caller — routes/jobs_api.py);
+# this adds the missing half, drafts.
+
+
+@router.get("/agent_designs")
+def list_agent_designs(_admin: dict = Depends(require_admin)):
+    """Every agent draft on this server, across every account, newest first."""
+    _AA.record(_AA.actor_of(_admin), "agent_design.read", str("*"), subject=str(""), details=None)
+    from motor_ai_sim import agent_designs as _AD
+    return {"designs": [_AD.admin_view(d) for d in _AD.list_all_designs()]}
+
+
+@router.delete("/agent_designs/{design_id}")
+def delete_agent_design(design_id: str, admin_user: dict = Depends(require_admin)):
+    """Delete one draft, whichever account owns it."""
+    from motor_ai_sim import agent_designs as _AD
+    try:
+        owner = _AD.admin_delete_design(design_id)
+    except _AD.DesignError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    _AA.record(_AA.actor_of(admin_user), "agent_design.delete", str(design_id), subject=str(owner), details=None)
+    return {"deleted": design_id, "owner": owner}
+
+
 # ── Sessions + auth events ────────────────────────────────────────────────────
 # The forensic side of sign-in.  A session record says WHICH browser holds a
 # live token (user agent, ip, first and last seen); the event log says what the

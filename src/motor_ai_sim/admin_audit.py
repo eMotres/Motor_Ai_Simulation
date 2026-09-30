@@ -63,6 +63,8 @@ ACTIONS = frozenset({
     "support.chats.read", "support.config",
     # catalog / workspaces
     "die.access", "workspace.read", "workspace.export",
+    # agent drafts (MCP Stage 3) — cross-account reads/writes
+    "agent_design.read", "agent_design.delete",
     # the log itself
     "audit.read", "audit.pseudonymise",
     # retention

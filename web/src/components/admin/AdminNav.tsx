@@ -6,7 +6,7 @@ import { Box, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 
 export type AdminSectionId =
-  | 'overview' | 'users' | 'signups' | 'servers' | 'usage' | 'agents' | 'catalogs' | 'motorsAccess' | 'newsletter' | 'logs';
+  | 'overview' | 'users' | 'signups' | 'servers' | 'usage' | 'agents' | 'agentActivity' | 'catalogs' | 'motorsAccess' | 'newsletter' | 'logs';
 
 export interface AdminSectionDef { id: AdminSectionId; label: string; badge?: number }
 
@@ -17,6 +17,7 @@ export const ADMIN_SECTIONS: { id: AdminSectionId; label: string }[] = [
   { id: 'servers', label: 'Servers' },
   { id: 'usage', label: 'Usage & pricing' },
   { id: 'agents', label: 'Agents' },
+  { id: 'agentActivity', label: 'Agent activity' },
   { id: 'catalogs', label: 'Catalogs' },
   { id: 'motorsAccess', label: 'Motors access' },
   { id: 'newsletter', label: 'Newsletter & notices' },

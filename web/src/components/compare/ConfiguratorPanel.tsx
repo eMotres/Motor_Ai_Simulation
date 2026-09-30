@@ -44,6 +44,7 @@ import { useDieContext } from '../common/useDieContext';
 import { getResolvedPoint } from '../controller/controllerApi';
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
 import { resolveDraftTarget, isBlocked } from '../../lib/configuratorGuard';
+import MyAgentDraftsBlock from './MyAgentDraftsBlock';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -725,6 +726,10 @@ const ConfiguratorPanel: React.FC = () => {
           {draftMsg && <Box sx={{ mt: draft ? 0.5 : 0 }}>{draftMsg}</Box>}
         </Alert>
       )}
+      {/* This account's OWN drafts (MCP Stage 3), moved here from the Motors
+          catalog page 2026-09-30 — cross-account drafts + runs live in
+          Admin -> Agent activity instead.  Renders nothing while empty. */}
+      <MyAgentDraftsBlock />
       {/* Header — NO reference picker (user 2026-08-25 "drop this menu"):
           the Configurator always mirrors ONE machine — the opened draft when
           one is showing, otherwise the loaded/open machine — and never a

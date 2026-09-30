@@ -7636,8 +7636,14 @@ def fem_transient_sliding_band(
             cond=_td_cond, coarse=_td_coarse,
             tol=float(_os_sb.environ.get("SB_TDM_TOL", "1e-7") or 1e-7),
             workers=_td_workers, mkl_threads=_td_mklt,
-            eta=(float(_os_sb.environ["SB_TDM_ETA"])
-                 if _os_sb.environ.get("SB_TDM_ETA") else None), log=log)
+            # Newton forcing of the wrap GMRES: 0.01 fixed (measured on the
+            # Ø40: the space-time Newton contracts ×6 per iteration whatever
+            # the forcing — the table-interpolated B-H curve, not the linear
+            # solve, sets its rate — and 0.01 needs 23 Krylov iterations
+            # where the adaptive 1e-2·rrel needed 62); "adaptive" = that rule
+            eta=(None if str(_os_sb.environ.get("SB_TDM_ETA", "0.01")).lower()
+                 == "adaptive" else float(_os_sb.environ.get("SB_TDM_ETA", "0.01")
+                                          or 0.01)), log=log)
         _tdm_info = {"method": "newton_krylov_shooting_dc_coarse",
                      "period": "half_antiperiodic" if _td_neg else "full",
                      "half_refused": _td_half_why, "frames": int(_td_N),

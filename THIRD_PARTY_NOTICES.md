@@ -5,6 +5,8 @@ uses the runtime dependencies below. Versions and licences were read from the
 installed package metadata (`importlib.metadata`, `node_modules/*/package.json`)
 on 2026-09-29; where the metadata was empty the licence was taken from the
 project's own licence file. Each dependency remains under its own licence.
+The MKL/pypardiso chain entries were re-read on 2026-09-30 after intel-openmp
+and intel-cmplr-lib-ur were removed from the deploy image (note 2).
 
 ## Python (requirements.txt)
 
@@ -57,7 +59,11 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 | Package | Install | Licence |
 |---|---|---|
 | triangle | `requirements-triangle.txt` or extra `[triangle]` | Python wrapper LGPL-3.0; bundled Triangle C code by J. R. Shewchuk: **free for non-commercial use only** (see note 3) |
-| pypardiso | `requirements-pardiso.txt` or extra `[pardiso]` | BSD-3-Clause; pulls **Intel MKL, intel-openmp, TBB, tcmlib, umf, intel-cmplr-lib-ur** (Intel Simplified Software License / Intel EULA, proprietary; see note 2) |
+| pypardiso | `requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for `deploy/Dockerfile.api` | BSD-3-Clause |
+| mkl (pulled by pypardiso) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
+| onemkl-license (pulled by mkl) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
+| tbb (pulled by mkl) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
+| tcmlib (pulled by tbb) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
 
 ## Web client (web/package.json, runtime dependencies)
 
@@ -96,13 +102,40 @@ are not distributed with the software and are not listed.
    GPL-3.0 section 13 explicitly permits combination with AGPL-3.0 code, so
    distributing this project under the AGPL together with gmsh is compatible.
    gmsh is used as an unmodified Python package (`import gmsh`).
-2. **Intel MKL (via pypardiso).** Proprietary, freely redistributable, and not
-   a "System Library" under GPL/AGPL section 1, so it is not a default
-   dependency and is never shipped in this repository or in the default
-   container image. Every solver falls back to SciPy's SuperLU when pypardiso
-   is absent. Operators may install it on their own machines
-   (`requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for
+2. **Intel MKL (via pypardiso) — installed WITHOUT intel-openmp (2026-09-30).**
+   `mkl`, `onemkl-license`, `tbb` and `tcmlib` are under the **Intel
+   Simplified Software License (ISSL, October 2022)**: binary
+   redistribution and use permitted, with attribution and no reverse
+   engineering, and — unlike the EULA below — **no SaaS or
+   reciprocal-open-source restriction at all**. They are proprietary, freely
+   redistributable, and not a "System Library" under GPL/AGPL section 1, so
+   they are not a default dependency and are never shipped in the default
+   container image; every solver falls back to SciPy's SuperLU when
+   pypardiso is absent. Operators may install the chain on their own
+   machines (`requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for
    `deploy/Dockerfile.api`) for a several-times-faster transient solve.
+
+   Two packages `mkl`'s PyPI wheel would otherwise pull in transitively —
+   **`intel-openmp` and `intel-cmplr-lib-ur`** (which in turn pulls `umf`) —
+   are **deliberately excluded**, in the image and in the pinned install
+   command, by installing `mkl`, `onemkl-license`, `tbb`, `tcmlib` and
+   `pypardiso` with `pip install --no-deps` at pinned versions. Those two
+   ship under the "Intel End User License Agreement for Developer Tools"
+   (August 2024), a materially different and more restrictive agreement
+   whose §3.1(x) bars linking or distributing so that any part becomes
+   Reciprocal Open Source Software and whose §3.1(xi) bars SaaS /
+   service-bureau use — both wrong for AeroStator's hosted API. They are not
+   needed: MKL's shared libraries select their threading backend at runtime
+   via `dlopen()`, keyed on `MKL_THREADING_LAYER`, and only the `INTEL`
+   backend ever touches `libiomp5.so` (the EULA'd library). The image sets
+   `MKL_THREADING_LAYER=SEQUENTIAL`, which has no dependency on
+   `libiomp5.so` at all; `src/motor_ai_sim/simulation/
+   pardiso_threading_guard.py` refuses PARDISO (SuperLU fallback) and logs
+   loudly if that variable is ever unset or reset to `INTEL`. See
+   `C:\Users\vadim\Downloads\mkl_without_intel_openmp_2026-09-30.md` for the
+   full licence analysis and the sandbox verification this recipe is based
+   on. `umf` (Apache-2.0 with LLVM exceptions) is not installed either — it
+   was only ever a dependency of the now-excluded `intel-cmplr-lib-ur`.
 3. **Triangle (optional, being phased out).** Its licence permits only
    non-commercial use without the author's permission, a restriction the AGPL
    does not allow, so it is **not a dependency of and not bundled in** the AGPL

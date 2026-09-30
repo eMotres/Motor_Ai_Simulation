@@ -29,6 +29,14 @@ def pardiso_subprocess_env(env: Mapping[str, str]) -> dict[str, str]:
     result = dict(env)
     if "PYPARDISO_MKL_RT" in result or result.get("SB_NO_PARDISO") == "1":
         return result
+    from .pardiso_threading_guard import pardiso_threading_is_safe
+    if not pardiso_threading_is_safe():
+        # Merely importing ``pypardiso`` constructs its module-level
+        # PyPardisoSolver singleton, which can itself touch the INTEL
+        # threading backend -- do not import it at all when unsafe (see
+        # pardiso_threading_guard's docstring: that failure mode is not a
+        # catchable Python exception).
+        return result
     global _discovery_attempted, _runtime_path
     with _discovery_lock:
         if not _discovery_attempted:

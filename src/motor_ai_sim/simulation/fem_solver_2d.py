@@ -5800,8 +5800,11 @@ def fem_transient_sliding_band(
     # sweeps of a frame (re-analysing only when the pattern changes — new
     # frame / new slip pairing).  None ⇒ pypardiso unavailable ⇒ SuperLU.
     try:
-        if _os_sb.environ.get("SB_NO_PARDISO") == "1":
-            raise ImportError("disabled via SB_NO_PARDISO")
+        from motor_ai_sim.simulation.pardiso_threading_guard import (
+            pardiso_threading_is_safe as _pardiso_ok2,
+        )
+        if _os_sb.environ.get("SB_NO_PARDISO") == "1" or not _pardiso_ok2():
+            raise ImportError("disabled via SB_NO_PARDISO / unsafe MKL threading layer")
         import pypardiso as _pypard2
         # PERF — 12.5 s per transient, spent looking for a file.
         # PyPardisoSolver.__init__ locates mkl_rt with ctypes.util.find_library

@@ -53,8 +53,8 @@ from typing import Dict, Iterable, List, Optional, Tuple
 log = logging.getLogger(__name__)
 
 __all__ = ["Finding", "group_by_case", "case_collisions", "die_roots", "check_die_case",
-           "check_auth_secret", "check_report_deps", "run_startup_checks",
-           "StartupCheckError"]
+           "check_auth_secret", "check_report_deps", "check_pardiso_threading_layer",
+           "run_startup_checks", "StartupCheckError"]
 
 
 class StartupCheckError(RuntimeError):
@@ -230,6 +230,39 @@ def check_report_deps() -> List[Finding]:
     return out
 
 
+# ── 4. MKL PARDISO threading layer ──────────────────────────────────────────
+
+def check_pardiso_threading_layer() -> List[Finding]:
+    """WARN when PARDISO's threading layer would need the removed intel-openmp.
+
+    The deploy image (2026-09-30) no longer installs ``intel-openmp`` /
+    ``intel-cmplr-lib-ur`` (deploy/THIRD_PARTY_NOTICES.md — Intel's EULA for
+    those two bars reciprocal-open-source linking and SaaS use). MKL's
+    INTEL threading layer needs ``libiomp5.so`` from that removed package;
+    left unset, ``MKL_THREADING_LAYER`` defaults to ``INTEL``.
+
+    This calls :func:`~motor_ai_sim.simulation.pardiso_threading_guard.
+    pardiso_threading_is_safe`, which is the actual gate every PARDISO call
+    site checks before importing ``pypardiso`` — it does its own CRITICAL
+    logging with the full explanation (once per process, at this first
+    call, i.e. at boot); this Finding is the short, greppable summary that
+    belongs next to the other three checks. Never fatal: every solver in
+    this codebase has a SciPy fallback (SuperLU / ``splu``), so an unsafe
+    threading layer means slower solves, not a broken API.
+    """
+    from motor_ai_sim.simulation.pardiso_threading_guard import (
+        pardiso_threading_is_safe, pardiso_threading_status)
+    if pardiso_threading_is_safe():
+        return []
+    status = pardiso_threading_status()
+    return [Finding(
+        "warn", "pardiso_threading_layer_unsafe",
+        f"MKL_THREADING_LAYER={status['layer']!r} would require the removed "
+        f"intel-openmp package; PARDISO is disabled for this process and "
+        f"every solve falls back to SciPy SuperLU instead. Set "
+        f"MKL_THREADING_LAYER=SEQUENTIAL (or TBB/GNU) in /etc/motres/api.env.")]
+
+
 # ── the entry point ─────────────────────────────────────────────────────────
 
 def run_startup_checks(raise_on_fatal: bool = True) -> List[Finding]:
@@ -241,7 +274,8 @@ def run_startup_checks(raise_on_fatal: bool = True) -> List[Finding]:
     each is wrapped.
     """
     findings: List[Finding] = []
-    for fn in (check_die_case, check_auth_secret, check_report_deps):
+    for fn in (check_die_case, check_auth_secret, check_report_deps,
+               check_pardiso_threading_layer):
         try:
             findings.extend(fn())
         except Exception as exc:                             # noqa: BLE001
@@ -256,5 +290,6 @@ def run_startup_checks(raise_on_fatal: bool = True) -> List[Finding]:
         raise StartupCheckError(
             "refusing to start — " + "; ".join(f.message for f in fatal))
     if not findings:
-        log.info("startup checks: ok (die names, AUTH_SECRET, report deps)")
+        log.info("startup checks: ok (die names, AUTH_SECRET, report deps, "
+                  "PARDISO threading layer)")
     return findings

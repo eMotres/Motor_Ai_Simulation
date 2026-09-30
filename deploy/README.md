@@ -271,6 +271,19 @@ optional extras, see `THIRD_PARTY_NOTICES`), so the server keeps Triangle as the
 default mesher and MKL PARDISO as the sparse solver. Check after a build:
 `docker compose -f deploy/docker-compose.yml exec api python -c "import triangle, pypardiso"`.
 
+`WITH_PARDISO=1` never installs `intel-openmp` / `intel-cmplr-lib-ur` (2026-09-30
+— see `THIRD_PARTY_NOTICES.md` note 2): the image pins `mkl`/`onemkl-license`/
+`tbb`/`tcmlib`/`pypardiso` with `--no-deps` and bakes in
+`ENV MKL_THREADING_LAYER=SEQUENTIAL`, which is the only layer that never
+dlopen()s the now-absent `libiomp5.so`. `/etc/motres/api.env`'s own
+`MKL_THREADING_LAYER=SEQUENTIAL` is redundant with the image default but keep
+it explicit — it is what an operator would change first, and
+`src/motor_ai_sim/simulation/pardiso_threading_guard.py` logs a CRITICAL line
+and disables PARDISO (SciPy SuperLU fallback) at boot if it is ever unset or
+reset to `INTEL`. Check after a build: `curl -s localhost:8080/api/health`
+should show `"mkl": {"threading_layer": "SEQUENTIAL", "pardiso_safe": true,
+"libiomp5_mapped": false}`.
+
 **6. TLS.** `certbot` + host nginx in front, proxying to `127.0.0.1:8080`, HSTS,
 auto-renew timer. **Not** Cloudflare's orange cloud: the free tier cuts a
 proxied request at 100 s and a Ø200 PWM transient runs 93 minutes. Cloudflare is

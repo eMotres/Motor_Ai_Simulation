@@ -383,7 +383,24 @@ def root():
 
 @app.get("/api/health")
 def health_check():
-    return {"status": "healthy"}
+    # Liveness only (see the comment on this route in deploy/Dockerfile.api):
+    # "status" stays unconditionally "healthy" even if the mkl block below
+    # shows PARDISO disabled -- every solver has a SciPy fallback, so an
+    # unsafe threading layer is a diagnostics fact, not an outage. Both
+    # fields are cheap: MKL_THREADING_LAYER is one env read and
+    # libiomp5_mapped() is one small /proc/self/maps read, so this stays
+    # fine to poll every 30 s (deploy/Dockerfile.api HEALTHCHECK).
+    from motor_ai_sim.simulation.pardiso_threading_guard import (
+        pardiso_threading_status, libiomp5_mapped)
+    status = pardiso_threading_status()
+    return {
+        "status": "healthy",
+        "mkl": {
+            "threading_layer": status["layer"],
+            "pardiso_safe": status["safe"],
+            "libiomp5_mapped": libiomp5_mapped(),
+        },
+    }
 
 
 _ASSIGNABLE_PARTS = {'stator_core', 'slot', 'rotor_core', 'magnet', 'shaft',

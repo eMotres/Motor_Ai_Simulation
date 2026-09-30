@@ -42,7 +42,8 @@ import { useWireStock } from '../materials/useWireStock';
 import { stockHint } from '../../lib/wireStock';
 import { useDieContext } from '../common/useDieContext';
 import { getResolvedPoint } from '../controller/controllerApi';
-import { getDraft, patchDraft, draftIdFromUrl, type AgentDraft } from '../../lib/agentDrafts';
+import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
+import { resolveDraftTarget, isBlocked } from '../../lib/configuratorGuard';
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -291,18 +292,26 @@ const ConfiguratorPanel: React.FC = () => {
       if (liveSigRef.current !== sig
           && Number.isFinite(live.L_mm) && Number.isFinite(live.N)) {
         liveSigRef.current = sig;
-        const pp = (m ?? allRefs.find((r) => r.id === refId) ?? allRefs[0])?.passport;
-        const adopt = (k0: Knobs): Knobs => ({
-          N: live.N || k0.N,
-          split: live.split,
-          L_mm: live.L_mm || k0.L_mm,
-          wireH_mm: live.wireH_mm || k0.wireH_mm,
-          nP: live.nP || k0.nP,
-          I_A: Number.isFinite(live.I_A) && live.I_A > 0 ? live.I_A : k0.I_A,
-          rpm: Number.isFinite(live.rpm) && live.rpm > 0 ? live.rpm : k0.rpm,
-        });
-        setKnobs((k0) => { const k1 = adopt(k0); setRefKnobs(k1); return k1; });
-        if (pp) {
+        // Only adopt the live build onto a passport that GENUINELY matches its
+        // cross-section (m).  Grafting these raw slider values onto some other
+        // ref's passport (the previous pick, or the built-in fallback) produced
+        // numbers for a machine that does not exist — e.g. a 200 mm 20p/24s
+        // passport computed with a loaded 40 mm 12s/14p build's turns/current
+        // (owner 2026-09-29: "three different motors on one page").  With no
+        // match, leave the knobs/ranges alone; the render layer shows the
+        // "no configurator model" empty state instead of a wrong-machine result.
+        if (m) {
+          const pp = m.passport;
+          const adopt = (k0: Knobs): Knobs => ({
+            N: live.N || k0.N,
+            split: live.split,
+            L_mm: live.L_mm || k0.L_mm,
+            wireH_mm: live.wireH_mm || k0.wireH_mm,
+            nP: live.nP || k0.nP,
+            I_A: Number.isFinite(live.I_A) && live.I_A > 0 ? live.I_A : k0.I_A,
+            rpm: Number.isFinite(live.rpm) && live.rpm > 0 ? live.rpm : k0.rpm,
+          });
+          setKnobs((k0) => { const k1 = adopt(k0); setRefKnobs(k1); return k1; });
           // Ranges must contain BOTH the passport base and the loaded build.
           const r0 = rangesForRef(pp);
           setRanges({
@@ -320,7 +329,6 @@ const ConfiguratorPanel: React.FC = () => {
     return () => window.removeEventListener('sim-operating-point', pick);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allRefs]);
-  void liveGeo;
   const ref: ReferenceMotor = useMemo(
     () => allRefs.find((r) => r.id === refId) ?? allRefs[0],
     [refId, allRefs],
@@ -430,12 +438,28 @@ const ConfiguratorPanel: React.FC = () => {
     pendingDraft.current = null;
     setKnobs(k1); setRefKnobs(k1);
   }, [refId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The draft's OWN reference card — resolved the same way the backend
+  // matched it (starting_point die/config), never substituted for another
+  // machine's passport.  A slots/poles mismatch against that card (should
+  // never happen, but the guard is cheap) is treated the same as "no card":
+  // refuse the model rather than compute with the wrong one.
+  const draftTarget = useMemo(() => (
+    draft ? resolveDraftTarget(allRefs, draft.reference_motor_id, draft.starting_point) : undefined
+  ), [draft, allRefs]);
   const openDraft = () => {
     if (!draft) return;
+    setDraftOpen(true);
+    if (!draftTarget) {
+      // No FEM-characterised passport for THIS draft's own machine — never
+      // fall back to whatever reference happened to be selected (owner
+      // 2026-09-29: that produced a 200 mm passport's numbers for a 40 mm
+      // draft).  The knobs/refId stay untouched; the render layer shows the
+      // "no configurator model" empty state instead of any result tiles.
+      setDraftMsg('No configurator model for this machine yet — run a simulation to build its passport before tuning it here.');
+      return;
+    }
     const pr = draft.params;
-    const target = draft.reference_motor_id
-      ? allRefs.find((r) => r.id === `cat:${draft.reference_motor_id}`) : undefined;
-    const base = target ? baseKnobs(target.passport) : knobs;
+    const base = baseKnobs(draftTarget.passport);
     const n1 = draft.build?.conductors_per_slot;
     const k1: Knobs = {
       ...base, L_mm: pr.stack_mm, I_A: pr.current_a_rms, rpm: pr.speed_rpm,
@@ -449,11 +473,10 @@ const ConfiguratorPanel: React.FC = () => {
       I_A: { ...r.I_A, max: Math.max(r.I_A.max, pr.current_a_rms * 1.5) },
       rpm: { ...r.rpm, max: Math.max(r.rpm.max, pr.speed_rpm * 1.5) },
     }));
-    if (target && target.id !== refId) {
-      pendingDraft.current = k1; skipReset.current = true; setRefId(target.id);
+    if (draftTarget.id !== refId) {
+      pendingDraft.current = k1; skipReset.current = true; setRefId(draftTarget.id);
     } else { setKnobs(k1); setRefKnobs(k1); }
-    setDraftOpen(true);
-    setDraftMsg(target ? null : 'No passport for this machine yet — the tuner scales the current reference; run simulate for the FEM answer.');
+    setDraftMsg(null);
   };
   const saveDraft = async () => {
     if (!draft) return;
@@ -467,6 +490,29 @@ const ConfiguratorPanel: React.FC = () => {
       setDraft(d); setDraftMsg('Saved to the draft (its FEM results were cleared — simulate again).');
     } catch (e) { setDraftMsg(e instanceof Error ? e.message : String(e)); }
   };
+  // The draft's own last FEM run, if it has one (get_design_result's headline,
+  // already carried on the draft by GET /api/agent_designs/{id}) — shown
+  // beside the scaled tuner numbers, never in place of them.
+  const draftHeadline = useMemo(() => (draft ? bestDraftResult(draft) : null), [draft]);
+
+  // ── ONE machine at a time (owner 2026-09-29: "a complete mess — three
+  //    different motors on one page").  The reference name, the sliders and
+  //    the result tiles must always describe the SAME machine; if the panel
+  //    is showing an opened draft, that machine is the draft's; otherwise
+  //    it is the currently loaded/open machine.  With no matching passport
+  //    for that machine, refuse to compute rather than borrow another
+  //    machine's model.
+  const blocked = isBlocked({ draftOpen, hasDraftTarget: !!draftTarget, liveMatched });
+  const blockedLabel = draftOpen && draft
+    ? `${draft.starting_point.die} / ${draft.starting_point.config}`
+    : (() => {
+        const g = liveGeo as Record<string, unknown> | null;
+        const slots = Number(g?.num_slots), poles = Number(g?.num_poles);
+        const od = Number(g?.stator_outer_radius) * 2;
+        if (!Number.isFinite(slots) || !Number.isFinite(poles)) return 'the loaded motor';
+        return `the loaded motor (${slots}-slot / ${poles}-pole`
+          + `${Number.isFinite(od) ? `, ${od.toFixed(0)} mm OD` : ''})`;
+      })();
 
   // battery the user runs the motor from (persisted; snapshotted into each saved config)
   const [battery, setBattery] = useState<Battery>(() => {
@@ -647,13 +693,17 @@ const ConfiguratorPanel: React.FC = () => {
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'auto' }}>
       {(draft || draftMsg) && (
-        <Alert severity={draft ? 'info' : 'warning'} sx={{ m: 1, fontSize: 12 }}
-          onClose={() => { setDraft(null); setDraftMsg(null); }}
+        <Alert severity={draft ? (draftOpen ? 'success' : 'info') : 'warning'} sx={{ m: 1, fontSize: 12 }}
+          onClose={() => { setDraft(null); setDraftMsg(null); setDraftOpen(false); }}
           action={draft ? (
-            <Box sx={{ display: 'flex', gap: 0.5 }}>
+            <Box sx={{ display: 'flex', gap: 0.5, alignItems: 'center' }}>
               {!draftOpen
-                ? <Button size="small" onClick={openDraft}>Open</Button>
-                : <Button size="small" onClick={() => { void saveDraft(); }}>Save to draft</Button>}
+                ? <Button size="medium" variant="contained" onClick={openDraft}
+                    sx={{ textTransform: 'none', fontWeight: 700, whiteSpace: 'nowrap',
+                          bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } }}>
+                    Open in tuner
+                  </Button>
+                : <Button size="small" onClick={() => { void saveDraft(); }} sx={{ textTransform: 'none' }}>Save to draft</Button>}
             </Box>) : undefined}>
           {draft && (
             <>
@@ -661,35 +711,73 @@ const ConfiguratorPanel: React.FC = () => {
               {draft.starting_point.die} / {draft.starting_point.config}: L {fmt(draft.params.stack_mm, 1)} mm,
               {' '}{fmt(draft.params.current_a_rms, 1)} A, {fmt(draft.params.speed_rpm, 0)} rpm
               {draft.params.connection ? `, ${draft.params.connection}` : ''}.
-              {!draftOpen && ' Open loads it into this tuner only — your open machine stays as it is.'}
+              {!draftOpen && ' Click "Open in tuner" to load it below — your open machine stays as it is.'}
+              {draftOpen && draftTarget && ' Now shown in the tuner below — your open machine is unchanged.'}
+              {draftHeadline && (
+                <Box sx={{ mt: 0.5 }}>
+                  FEM result on file ({draftHeadline.what}): {fmt(draftHeadline.torque_nm ?? NaN, 1)} N·m,
+                  {' '}{fmt(draftHeadline.power_kw ?? NaN, 2)} kW,
+                  {' '}{fmt(draftHeadline.efficiency_shaft_pct ?? NaN, 1)}% shaft η.
+                </Box>
+              )}
             </>
           )}
           {draftMsg && <Box sx={{ mt: draft ? 0.5 : 0 }}>{draftMsg}</Box>}
         </Alert>
       )}
       {/* Header — NO reference picker (user 2026-08-25 "drop this menu"):
-          the Configurator always mirrors the LOADED motor; the name shown is
-          the matched passport's. */}
+          the Configurator always mirrors ONE machine — the opened draft when
+          one is showing, otherwise the loaded/open machine — and never a
+          passport borrowed from some OTHER machine (owner 2026-09-29). */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderBottom: '1px solid var(--line-soft)' }}>
         <BoltIcon sx={{ color: '#60a5fa', fontSize: 20 }} />
         <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }}>Configurator</Typography>
         <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>instant — no simulation</Typography>
         <Box sx={{ flex: 1 }} />
-        <Typography sx={{ fontSize: 12, fontWeight: 700, color: liveMatched ? 'var(--text-1)' : '#f59e0b' }}>
-          {liveMatched ? ref.name : `${ref.name} (last matched — the loaded motor has no passport yet)`}
+        <Typography sx={{ fontSize: 12, fontWeight: 700, color: blocked ? '#f59e0b' : 'var(--text-1)' }}>
+          {draftOpen && draft
+            ? (draftTarget
+                ? `Draft: ${draft.name} (based on ${draft.starting_point.die} / ${draft.starting_point.config})`
+                : `Draft: ${draft.name} — no configurator model yet`)
+            : (liveMatched ? ref.name : `No configurator model for ${blockedLabel}`)}
         </Typography>
         {/* One clear way back to the reference design (user 2026-08-26) —
-            replaces the per-tile "% vs ref" captions. */}
-        <Button size="small" variant={tuned ? 'contained' : 'outlined'} onClick={reset}
-          startIcon={<RestartAltIcon sx={{ fontSize: 15 }} />}
-          disabled={!tuned}
-          title="Put every knob back to the reference design (the motor as loaded)"
-          sx={{ ml: 1.5, textTransform: 'none', fontSize: 11, py: 0.1,
-                ...(tuned ? { bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } } : {}) }}>
-          {tuned ? 'Reset to reference' : 'reference design'}
-        </Button>
+            replaces the per-tile "% vs ref" captions.  Meaningless with no
+            model loaded, so it disappears rather than resetting to nothing. */}
+        {!blocked && (
+          <Button size="small" variant={tuned ? 'contained' : 'outlined'} onClick={reset}
+            startIcon={<RestartAltIcon sx={{ fontSize: 15 }} />}
+            disabled={!tuned}
+            title="Put every knob back to the reference design (the motor as loaded)"
+            sx={{ ml: 1.5, textTransform: 'none', fontSize: 11, py: 0.1,
+                  ...(tuned ? { bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } } : {}) }}>
+            {tuned ? 'Reset to reference' : 'reference design'}
+          </Button>
+        )}
       </Box>
+      {blocked && (
+        <Box sx={{ px: 2, pb: 2 }}>
+          <Alert severity="warning" sx={{ fontSize: 12 }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 700, mb: 0.25 }}>
+              No configurator model for {blockedLabel} yet
+            </Typography>
+            <Typography sx={{ fontSize: 12 }}>
+              This machine has no FEM-characterised passport, so there is nothing to scale — the
+              tuner will not compute or show any numbers borrowed from another machine.
+              {draftOpen
+                ? ' Run a simulation on this draft (simulate → get_design_result) to build one.'
+                : ' Run a simulation and build its passport (Admin → Motors → Generate passport) before tuning it here.'}
+            </Typography>
+          </Alert>
+        </Box>
+      )}
 
+      {/* Nothing below computes or renders while `blocked` — see the empty
+          state above.  Every tile, slider and chart in this block reads
+          `ref`/`p`, which the guards above only let through once it is the
+          SAME machine as the header names. */}
+      {!blocked && (
+      <>
       <Box sx={{ display: 'flex', gap: 2, p: 2, flexWrap: 'wrap' }}>
         {/* ── KNOBS ── */}
         <Box sx={{ ...PANEL, p: 2, flex: '1 1 360px', minWidth: 320 }}>
@@ -1119,6 +1207,8 @@ const ConfiguratorPanel: React.FC = () => {
       <Box sx={{ px: 2, pb: 1.5 }}>
         <PerformanceCharts p={p} knobs={knobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
       </Box>
+      </>
+      )}
 
       <TextPromptDialog state={askName} onClose={() => setAskName(null)} />
     </Box>

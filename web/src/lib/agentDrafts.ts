@@ -16,7 +16,7 @@ export interface AgentDraft {
   created_by: { kind: string; client_name: string; credential_kind: string };
   requirements: Record<string, unknown>;
   starting_point: { die: string; config: string; duty: string; outer_diameter_mm: number | null;
-    base_active_length_mm: number | null };
+    base_active_length_mm: number | null; slots: number | null; poles: number | null };
   why: string[]; warnings: string[];
   params: DraftParams; initial_params: DraftParams;
   estimate: Record<string, unknown>;
@@ -51,6 +51,19 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return r.json() as Promise<T>;
 }
 
+/** Headline of a draft's best finished FEM run, same priority the backend's
+ *  get_design_result(design_id) MCP tool uses: coupled > thermal (1-iter) > em. */
+export interface DraftHeadline {
+  what: string; torque_nm: number | null; power_kw: number | null;
+  efficiency_shaft_pct: number | null; mass_kg: number | null;
+}
+
+export function bestDraftResult(d: AgentDraft): DraftHeadline | null {
+  const r = d.results || {};
+  const head = r.coupled ?? r.thermal ?? r.em;
+  return head ? (head as unknown as DraftHeadline) : null;
+}
+
 export const listDrafts = () => call<{ designs: AgentDraft[] }>('/api/agent_designs').then((j) => j.designs);
 export const getDraft = (id: string) => call<AgentDraft>(`/api/agent_designs/${encodeURIComponent(id)}`);
 export const patchDraft = (id: string, changes: Partial<DraftParams>) =>
@@ -75,10 +88,12 @@ export function showDraftInConfigure(id: string): void {
   window.dispatchEvent(new CustomEvent('agent-draft', { detail: { id } }));
 }
 
-/** The draft id the page was opened with (…/?tab=configure&design=d-…). */
-export function draftIdFromUrl(): string | null {
+/** The draft id the page was opened with (…/?tab=configure&design=d-…).
+ *  `search` defaults to the page's own query string; a caller (or a test)
+ *  may pass one explicitly. */
+export function draftIdFromUrl(search: string = (typeof window !== 'undefined' ? window.location.search : '')): string | null {
   try {
-    const id = new URLSearchParams(window.location.search).get('design');
+    const id = new URLSearchParams(search).get('design');
     return id && /^d-[0-9a-f]{12}$/.test(id) ? id : null;
   } catch { return null; }
 }

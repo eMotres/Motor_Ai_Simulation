@@ -52,7 +52,8 @@ from typing import Any, Dict, List, Mapping, Tuple, Optional, Literal
 
 import numpy as np
 
-from motor_ai_sim.simulation.pardiso_lifetime import (
+from motor_ai_sim.simulation.pardiso_lifetime import (  # noqa: F401
+    own_pardiso as _own_pardiso,   # the TDM prototype (PR #87) registers with it
     pardiso_scope as _pardiso_scope,
 )
 

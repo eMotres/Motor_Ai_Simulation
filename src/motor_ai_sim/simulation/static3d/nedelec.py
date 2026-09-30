@@ -582,6 +582,9 @@ def _regularised_preconditioner(A, Mm, c: float = REG_PRECOND_C):
     Areg = (A + eps * Mm).tocsr()
     ps = None
     try:
+        from ..pardiso_threading_guard import pardiso_threading_is_safe as _pardiso_ok
+        if not _pardiso_ok():
+            raise ImportError("unsafe MKL threading layer (see pardiso_threading_guard)")
         from pypardiso import PyPardisoSolver
         ps = PyPardisoSolver()
         ps.factorize(Areg)
@@ -641,6 +644,9 @@ def _cg(A, b, tol: float = 1e-10, maxiter: int = 40000, Mm=None):
 
 def _direct(A, b):
     try:
+        from ..pardiso_threading_guard import pardiso_threading_is_safe as _pardiso_ok
+        if not _pardiso_ok():
+            raise ImportError("unsafe MKL threading layer (see pardiso_threading_guard)")
         from pypardiso import spsolve as _ps
         from ..pardiso_lifetime import global_pardiso_session
         with global_pardiso_session():

@@ -22,6 +22,15 @@
 #     tree is built once by the `motres-seed` one-shot (docker-compose.yml) —
 #     the old "the image's config/ is copied into an EMPTY volume on first
 #     start" semantics silently produced an empty catalog the second time.
+#
+# WHAT CHANGED 2026-09-30 (intel-openmp removal)
+#   * WITH_PARDISO=1 no longer installs intel-openmp / intel-cmplr-lib-ur /
+#     umf at all -- mkl/onemkl-license/tbb/tcmlib/pypardiso go in pinned,
+#     `--no-deps`.  MKL_THREADING_LAYER=SEQUENTIAL is now a baked-in image
+#     ENV, not just a runtime env-file setting, and a build guard fails the
+#     build if intel-openmp/intel-cmplr-lib-ur or any libiomp5*.so shows up
+#     anyway.  See the comment above the WITH_PARDISO block and
+#     THIRD_PARTY_NOTICES.md note 2.
 
 FROM python:3.11-slim AS base
 
@@ -41,13 +50,49 @@ RUN groupadd --gid 10001 motres \
 WORKDIR /app
 COPY requirements.txt requirements-pardiso.txt requirements-triangle.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
 # Optional proprietary accelerator (Intel MKL via pypardiso), OFF by default so
 # a distributed image contains only AGPL-compatible software.  Our own solve
 # server may build with --build-arg WITH_PARDISO=1 (several times faster
 # transient); without it every solver uses SciPy SuperLU.
+#
+# MKL WITHOUT intel-openmp / intel-cmplr-lib-ur (2026-09-30).  Those two ship
+# under the "Intel End User License Agreement for Developer Tools" (Aug 2024),
+# whose §3.1(x) bars linking/distributing so that any part becomes Reciprocal
+# Open Source Software and §3.1(xi) bars SaaS/service-bureau use -- both wrong
+# for this hosted API.  `mkl`, `onemkl-license`, `tbb` and `tcmlib` stay: they
+# are Intel Simplified Software License (ISSL) -- permissive binary
+# redistribution, no SaaS or reciprocal-open-source clause at all.  See
+# THIRD_PARTY_NOTICES.md note 2 and
+# C:\Users\vadim\Downloads\mkl_without_intel_openmp_2026-09-30.md for the full
+# analysis this recipe is based on.
+#
+# `--no-deps` on BOTH installs below is load-bearing, not cosmetic: pip's
+# `mkl` wheel METADATA has an unconditional `Requires-Dist: intel-openmp`, and
+# that graph gets walked and satisfied even when `mkl` itself is already
+# installed at a version that satisfies pypardiso's own `mkl!=2024.0`
+# constraint -- a plain `pip install -r requirements-pardiso.txt` here would
+# pull intel-openmp (then intel-cmplr-lib-ur, then umf) straight back in.
+# Versions pinned to the ones `docker exec deploy-api-1 pip list` reported on
+# the live server (2026-09-30) -- bump deliberately, re-verify with the build
+# guard below, never via an unpinned resolve.
+#
+# MKL_THREADING_LAYER=SEQUENTIAL is baked in further down (the `api` stage
+# ENV): MKL's libmkl_rt.so dlopen()s its threading backend at RUNTIME, keyed
+# on that variable, and only the INTEL layer (the default when unset) touches
+# libiomp5.so -- which this image never installs.  Leaving it unset would not
+# merely fail to accelerate; pypardiso's first real solve would try to
+# dlopen() a missing libiomp5.so symbol and abort the interpreter outright
+# (not a catchable Python exception -- see
+# src/motor_ai_sim/simulation/pardiso_threading_guard.py, which refuses
+# PARDISO and falls back to SciPy SuperLU if this is ever misconfigured).
 ARG WITH_PARDISO=0
 RUN if [ "$WITH_PARDISO" = "1" ]; then \
-        pip install --no-cache-dir -r requirements-pardiso.txt; fi
+        pip install --no-cache-dir --no-deps \
+            mkl==2026.1.0 onemkl-license==2026.1.0 \
+            tbb==2023.1.0 tcmlib==1.5.0 \
+        && pip install --no-cache-dir --no-deps pypardiso==0.4.7; \
+    fi
 
 # Optional non-commercial `triangle` (geometry-driven mesher), OFF by default:
 # not part of the AGPL distribution.  Our own non-commercial server builds with
@@ -56,6 +101,36 @@ RUN if [ "$WITH_PARDISO" = "1" ]; then \
 ARG WITH_TRIANGLE=0
 RUN if [ "$WITH_TRIANGLE" = "1" ]; then \
         pip install --no-cache-dir -r requirements-triangle.txt; fi
+
+# ── build guard: intel-openmp / intel-cmplr-lib-ur / libiomp5.so must never
+# be in this image (2026-09-30) ─────────────────────────────────────────────
+# Fails the build loudly -- instead of shipping a restricted-licence binary
+# silently -- if any future dependency bump, requirements.txt edit, or a
+# `pip install -r requirements-pardiso.txt` reintroduces the EULA'd Intel
+# packages, or if libiomp5.so ends up on disk by any other path (e.g. an apt
+# package).  Runs on every build, WITH_PARDISO=0 or 1 -- the distributed
+# default must pass this exactly as strictly as our own solve-server build.
+RUN set -eu; \
+    fail=0; \
+    if pip show intel-openmp >/dev/null 2>&1; then \
+        echo "BUILD GUARD FAILED: intel-openmp is installed -- Intel EULA for" \
+             "Developer Tools, not redistributable in this image" >&2; \
+        fail=1; \
+    fi; \
+    if pip show intel-cmplr-lib-ur >/dev/null 2>&1; then \
+        echo "BUILD GUARD FAILED: intel-cmplr-lib-ur is installed -- Intel EULA" \
+             "for Developer Tools, not redistributable in this image" >&2; \
+        fail=1; \
+    fi; \
+    site_packages="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
+    hit="$(find "$site_packages" -iname 'libiomp5*.so*' 2>/dev/null || true)"; \
+    if [ -n "$hit" ]; then \
+        echo "BUILD GUARD FAILED: libiomp5*.so found under $site_packages:" >&2; \
+        echo "$hit" >&2; \
+        fail=1; \
+    fi; \
+    if [ "$fail" = "1" ]; then exit 1; fi; \
+    echo "build guard ok: no intel-openmp, no intel-cmplr-lib-ur, no libiomp5.so"
 
 COPY src/ src/
 # GET /api/version reads the repo-root VERSION three parents above api.py, i.e.
@@ -90,7 +165,8 @@ RUN mkdir -p /app/cadquery_cache /app/logs \
 
 ENV PYTHONPATH=/app/src \
     PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    MKL_THREADING_LAYER=SEQUENTIAL
 
 # ── test image ──────────────────────────────────────────────────────────────
 # docker build -f deploy/Dockerfile.api --target test -t motres-api:test .

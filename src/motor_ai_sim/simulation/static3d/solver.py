@@ -385,6 +385,9 @@ def _linear_solver():
       transient MKL failure from a genuinely singular matrix.
     """
     try:
+        from ..pardiso_threading_guard import pardiso_threading_is_safe as _pardiso_ok
+        if not _pardiso_ok():
+            raise ImportError("unsafe MKL threading layer (see pardiso_threading_guard)")
         from pypardiso import spsolve as _pspsolve
         from ..pardiso_lifetime import global_pardiso_session
 

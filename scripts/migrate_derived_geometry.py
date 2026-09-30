@@ -252,11 +252,17 @@ def write_with_backup(p: Path, data: bytes, date: str) -> Path:
 # ── build_sig impact ─────────────────────────────────────────────────────────
 
 def _result_holders(c: dict):
+    """Every dict whose ``build_sig`` family staleness reads: a duty's
+    ``result``, each stored run ``runs.<drive>`` itself (``_run_rows`` /
+    ``get_duty_runs`` read its own stamp) and that run's ``result``."""
     for d in (c.get("duties") or []):
         if not isinstance(d, dict):
             continue
-        for h in [d.get("result")] + [(r or {}).get("result")
-                                      for r in (d.get("runs") or {}).values()]:
+        hs = [d.get("result")]
+        for r in (d.get("runs") or {}).values():
+            if isinstance(r, dict):
+                hs += [r, r.get("result")]
+        for h in hs:
             if isinstance(h, dict):
                 yield h
 
@@ -287,8 +293,8 @@ def build_sig_impact(die_dir: Path, new_docs: Dict[Path, dict]) -> List[dict]:
 
 def restamp_text(text: str, doc: dict, old: str, new: str) -> str:
     """Move the result stamps ``build_sig: <old>`` to ``<new>`` — ONLY in the
-    result holders ``family._build_sig`` staleness reads (a duty's ``result``
-    and each ``runs.<drive>.result``).  The text edit touches only lines that
+    result holders ``family._build_sig`` staleness reads (a duty's ``result``,
+    each ``runs.<drive>`` and its ``result``).  The text edit touches only lines that
     are exactly ``build_sig: <old>``; the re-parse must equal ``doc`` with
     exactly those holders changed, or nothing is written."""
     want = copy.deepcopy(doc)

@@ -73,14 +73,15 @@ def test_configuration_only_change_is_restamped_path_aware(tmp_path):
     old_sig = fam._build_sig({"geometry": good}, base)
     cfg = dict(base, notes={"build_sig": old_sig},
                duties=[{"name": "peak", "result": {"build_sig": old_sig},
-                        "runs": {"current": {"result": {"build_sig": old_sig}}}},
+                        "runs": {"current": {"build_sig": old_sig,
+                                             "result": {"build_sig": old_sig}}}},
                        {"name": "old", "result": {"build_sig": "000000000000"}}])
     _mk_die(root, good, cfg)
     cf = root / DIE / f"{CFG}.yaml"
 
     r = _run(str(root))
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "2 result stamp(s) on the old sig" in r.stdout      # config-only change
+    assert "3 result stamp(s) on the old sig" in r.stdout      # config-only change
 
     # a `build_sig: <old>` outside a result holder makes the edit unprovable:
     # refused, nothing written
@@ -101,6 +102,7 @@ def test_configuration_only_change_is_restamped_path_aware(tmp_path):
     assert new_sig != old_sig
     assert c["duties"][0]["result"]["build_sig"] == new_sig
     assert c["duties"][0]["runs"]["current"]["result"]["build_sig"] == new_sig
+    assert c["duties"][0]["runs"]["current"]["build_sig"] == new_sig
     assert c["duties"][1]["result"]["build_sig"] == "000000000000"
 
     r = _run(str(root))                                          # idempotent

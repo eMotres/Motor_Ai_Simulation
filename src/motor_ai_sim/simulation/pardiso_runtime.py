@@ -3,6 +3,10 @@
 PyPardiso's first import can recursively scan the Python installation. Let its
 own loader choose the library once, then pass that exact absolute filename to
 children. This module neither chooses another MKL build nor changes a solver.
+
+When this module links or combines this Program with Intel MKL, see the
+additional permission under AGPL section 7 in the repository's
+LICENSE-EXCEPTION file (DRAFT, pending legal review as of 2026-09-30).
 """
 from __future__ import annotations
 

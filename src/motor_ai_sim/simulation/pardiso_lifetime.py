@@ -3,6 +3,10 @@
 PyPardisoSolver has no destructor that releases MKL's factorization buffers.
 Keep its raw handle (and symbolic reuse) intact during a run, then release
 everything on every exit, including failures before P2Nonlinear is created.
+
+When this module links or combines this Program with Intel MKL, see the
+additional permission under AGPL section 7 in the repository's
+LICENSE-EXCEPTION file (DRAFT, pending legal review as of 2026-09-30).
 """
 from __future__ import annotations
 

@@ -116,3 +116,60 @@ release for cross-checks; saved duties re-run once and the changes recorded.
 `geo_mesh_proto.py`, the `[triangle]` extra, `requirements-triangle.txt`, the
 `requires_triangle` tests and the Docker build argument; update
 THIRD_PARTY_NOTICES.md.
+
+## Licensing recommendation (2026-09-30, draft for legal review)
+
+Two options for what happens to the Triangle code path, requested for the
+licensing pack alongside the Intel MKL exception (see repo root
+LICENSE-EXCEPTION):
+
+**Option A — delete the Triangle code path** (the CDT mesher in
+`geo_mesh.py`/`geo_mesh_proto.py`, `requirements-triangle.txt`, the
+`[triangle]` extra, the `WITH_TRIANGLE` Docker arg, the `requires_triangle`
+tests). This is already stage S5 of the plan above. Consequence: the
+licensing question disappears entirely — nothing non-commercial-only is in
+the repository or any image MOTRES builds, so no AGPL-combination analysis
+and no reliance on "MOTRES's use is non-commercial" is needed for meshing at
+all. Cost: loses the ten Triangle-only features listed above
+until stage S2 ports them to gmsh and S3 confirms the numbers on the
+reference machines; deleting before S3 passes would change published
+results with no controlled comparison.
+
+**Option B — keep Triangle as an optional, user-installed plugin that MOTRES
+never distributes.** The code path stays, gated behind `requirements-triangle.txt`
+/ the `[triangle]` extra, exactly as CONTRIBUTING.md already requires for any
+non-AGPL-compatible dependency; the difference from today is that **MOTRES
+stops building it into any image it runs as a service or hands to anyone
+else** (`--build-arg WITH_TRIANGLE=1` is never used again for a server or
+distributed build) and only a developer's own local, personal, genuinely
+non-commercial workstation build may install it, at that person's own risk
+under Triangle's licence. Consequence: keeps the reference mesher available
+for the S2/S3 comparison work without redistributing it. Cost: depends
+indefinitely on a "genuinely non-commercial, never distributed" boundary
+being maintained correctly by every engineer who builds the image, which is
+an ongoing audit burden, not a one-time fix.
+
+**Recommendation: Option B immediately, Option A at S5.** The production
+server currently ships with `--build-arg WITH_TRIANGLE=1`
+(`triangle==20250106`, confirmed by `pip list --format=freeze` inside the
+running `deploy-api-1` container, 2026-09-30). THIRD_PARTY_NOTICES.md's
+justification for that build is "MOTRES currently uses the project
+non-commercially" — but other MOTRES material (`eMotres/AGENTS.md`) refers
+to "the aerostator.com site / shop", which is at minimum a strong signal
+that this premise needs an explicit, current yes/no from the owner and
+counsel before it is relied on any further; Triangle's non-commercial
+restriction is a real compliance risk on the live server today, independent
+of anything AGPL. Until that is confirmed either way:
+
+1. Stop building the production/deployed image with `WITH_TRIANGLE=1`
+   immediately (do not wait for S2/S3 gmsh parity) — fall back to gmsh in
+   production, accepting the S2 feature gaps and any numeric drift on the
+   server until they are ported and validated.
+2. Triangle may stay installed on the owner's own local workstation for the
+   S2/S3 comparison work (`scripts/compare_mesher_triangle_vs_gmsh.py`) —
+   that is the plausible non-commercial use, not the production server.
+3. Proceed with S2 (port the ten Triangle-only features to gmsh) and S3
+   (the acceptance-limit comparison already proposed above) on that
+   timeline; once S3 passes, do Option A (S4 switch default, S5 delete) as
+   already planned, closing the question for good rather than leaving a
+   permanent "optional, trust the operator" carve-out.

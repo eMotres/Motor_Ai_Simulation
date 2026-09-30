@@ -75,5 +75,13 @@ LGPL and GPL-2.0-or-later/GPL-3.0 are compatible). Record every new runtime
 dependency in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packages with
 non-commercial, field-of-use or other restrictions beyond the AGPL are not
 accepted as dependencies. The one existing case, `triangle`, is an optional
-extra being phased out (see [docs/MESHER_TRANSITION.md](docs/MESHER_TRANSITION.md)). Proprietary accelerators may only be optional, with the code working
-without them (the way `pypardiso` / Intel MKL is today).
+extra being phased out (see [docs/MESHER_TRANSITION.md](docs/MESHER_TRANSITION.md)). Proprietary accelerators are optional, with the code working
+without them (the way `pypardiso` / Intel MKL is today) *and* covered, for
+the case where an operator's build does include one, by an explicit
+additional permission under AGPL section 7 granted by MOTRES d.o.o. as
+copyright holder — see [LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT,
+pending legal review**). That permission only covers MOTRES's own
+copyright; if you contribute code that would rely on it, your `Signed-off-by`
+does not by itself extend the permission to your contribution; see
+LICENSE-EXCEPTION's "Granted by the copyright holder; contributor consent"
+section.

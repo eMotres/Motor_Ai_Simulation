@@ -97,18 +97,33 @@ are not distributed with the software and are not listed.
    distributing this project under the AGPL together with gmsh is compatible.
    gmsh is used as an unmodified Python package (`import gmsh`).
 2. **Intel MKL (via pypardiso).** Proprietary, freely redistributable, and not
-   a "System Library" under GPL/AGPL section 1, so it is not a default
-   dependency and is never shipped in this repository or in the default
-   container image. Every solver falls back to SciPy's SuperLU when pypardiso
-   is absent. Operators may install it on their own machines
-   (`requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for
-   `deploy/Dockerfile.api`) for a several-times-faster transient solve.
+   a "System Library" under GPL/AGPL section 1, so it is not a *default*
+   dependency: every solver falls back to SciPy's SuperLU when pypardiso is
+   absent. **Correction, 2026-09-30: the production server image is in fact
+   built with `--build-arg WITH_PARDISO=1`** (`deploy/Dockerfile.api`) and
+   does contain and convey Intel MKL / intel-openmp / TBB / tcmlib / umf /
+   intel-cmplr-lib-ur to users of the hosted service, which the previous
+   wording of this note ("never shipped ... in the default container image")
+   did not reflect. That combination is covered by the additional permission
+   under AGPL section 7 in
+   [LICENSE-EXCEPTION](LICENSE-EXCEPTION) (**DRAFT, pending legal review** --
+   see that file). Operators who do not need this permission can still build
+   without `WITH_PARDISO=1` and install pypardiso separately on their own
+   machines.
 3. **Triangle (optional, being phased out).** Its licence permits only
    non-commercial use without the author's permission, a restriction the AGPL
    does not allow, so it is **not a dependency of and not bundled in** the AGPL
-   distribution: it is an optional extra the operator installs separately.
-   MOTRES currently uses the project non-commercially and installs it on its
-   own machines so that results stay identical during the transition to gmsh
-   (docs/MESHER_TRANSITION.md). Without it the geometry mesher falls back to
-   gmsh (one log line) and the 2-D view uses mapbox-earcut with a shapely
-   (GEOS) constrained-Delaunay fallback. It will be removed at stage S5.
+   distribution as a matter of `requirements.txt`: it is an optional extra
+   the operator installs separately. **Flag, 2026-09-30: the production
+   server image is currently also built with `--build-arg WITH_TRIANGLE=1`**
+   and does contain `triangle==20250106`. THIRD_PARTY_NOTICES and
+   docs/MESHER_TRANSITION.md have assumed MOTRES's use of the project is
+   non-commercial, which is the only basis on which installing Triangle on
+   MOTRES's own production server is consistent with Triangle's
+   non-commercial-only licence; that assumption needs an explicit,
+   current confirmation from the owner given that other MOTRES material
+   describes an aerostator.com "shop" — see the "Licensing recommendation"
+   section added to docs/MESHER_TRANSITION.md. Without Triangle the geometry
+   mesher falls back to gmsh (one log line) and the 2-D view uses
+   mapbox-earcut with a shapely (GEOS) constrained-Delaunay fallback. It
+   will be removed at stage S5 of docs/MESHER_TRANSITION.md.

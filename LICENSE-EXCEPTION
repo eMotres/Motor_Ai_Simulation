@@ -1,0 +1,194 @@
+DRAFT -- PENDING LEGAL REVIEW. Not yet in force. This text has not been
+reviewed or approved by counsel and must not be relied on until the
+"DRAFT" marker above is removed by MOTRES d.o.o.
+
+Additional permission under GNU Affero General Public License version 3
+section 7, granted by MOTRES d.o.o.
+=====================================================================
+
+Scope
+-----
+This Program is distributed under the terms of the GNU Affero General
+Public License, version 3 or (at your option) any later version
+("AGPL"), reproduced unmodified in the file LICENSE. As the holder of
+copyright in this Program, MOTRES d.o.o. grants the following additional
+permission under AGPL section 7, which applies to the whole Program and
+travels with every copy unless removed under the terms AGPL section 7
+allows:
+
+  1. Intel MKL (primary grant). If you modify this Program, or any
+     covered work, by linking or combining it with Intel Math Kernel
+     Library ("Intel MKL", including the components distributed with it
+     under the same terms: Intel OpenMP, Intel TBB, the Intel oneAPI
+     Thread Control Library, Intel oneAPI Unified Memory Framework, and
+     the Intel oneAPI Compiler runtime libraries -- together "Intel
+     MKL"), or a modified version of Intel MKL, containing parts covered
+     by the Intel Simplified Software License, the licensors of this
+     Program grant you additional permission to convey the resulting
+     work. Corresponding Source for a non-source form of such a
+     combination shall include the source code for the parts of the
+     covered work that are not part of Intel MKL, but need not include
+     the source of Intel MKL itself.
+
+  2. Drop-in BLAS/LAPACK/PARDISO replacements (secondary, bounded
+     grant). The same permission extends to linking or combining this
+     Program with any other non-free numerical library that (a) is used
+     by this Program strictly as a drop-in replacement for Intel MKL in
+     the role it fills today -- providing BLAS, LAPACK and/or a PARDISO-
+     compatible sparse direct solver interface consumed through the
+     `pypardiso` integration and SciPy's LAPACK/BLAS bindings -- and (b)
+     is not itself derived from, or a modified version of, this Program.
+     This paragraph does not extend to any other kind of non-free
+     component (meshers, CAD kernels, GUI toolkits, cloud SDKs, etc.);
+     each of those would need its own, separately granted, additional
+     permission naming it.
+
+  3. No sublicense of the accelerator. Nothing in this permission
+     grants you any right under Intel's (or another vendor's) own
+     license for the numerical library itself; you must obtain that
+     library, and any right to redistribute it, directly from its
+     licensor and on that licensor's terms. This permission only removes
+     the AGPL condition that would otherwise prevent conveying the
+     combined work.
+
+  4. You may convey a copy of this Program without this permission, or
+     with the permission removed, as AGPL section 7 allows; in that
+     case the copy may not be linked or combined with Intel MKL (or a
+     library covered by paragraph 2) for distribution.
+
+Why a specific grant and a bounded generic grant, not one open-ended
+grant
+--------------------------------------------------------------------
+Paragraph 1 names Intel MKL specifically, the way the GCC Runtime
+Library Exception, the GNU Classpath linking exception, the classic
+"OpenSSL exception" used by many GPL projects, and Leela Chess Zero's
+NVIDIA CUDA/cuDNN exception each name the specific non-free component
+they permit (see "Precedents" below). A named grant is the safer,
+better-precedented, more defensible form for a copyright holder to
+issue: it is unambiguous about what was agreed to, it is easy for a
+contributor to understand what they are consenting to, and it does not
+inadvertently authorise linking with software nobody has reviewed.
+Paragraph 2 adds a narrow, functionally-bounded fallback -- restricted
+to a drop-in replacement for MKL in the exact BLAS/LAPACK/PARDISO role
+`pypardiso` already fills -- so that switching accelerator vendors (for
+example to AMD AOCL or another vendor's PARDISO-compatible solver) does
+not require re-drafting and re-clearing this exception with every
+contributor each time. It is deliberately not a general "any non-free
+library" grant.
+
+Precedents (verified 2026-09-30; not invented)
+-----------------------------------------------
+- FSF-suggested "Additional permission under GNU GPL version 3 section 7"
+  template (the wording paragraph 1 above is adapted from), reproduced
+  by SPDX as the "GPL-3.0 Linking Exception (with Corresponding
+  Source)": https://spdx.org/licenses/GPL-3.0-linking-source-exception.html
+  (short form without the Corresponding Source sentence:
+  https://spdx.org/licenses/GPL-3.0-linking-exception.html). Origin: the
+  Free Software Foundation's GPL FAQ, https://www.gnu.org/licenses/gpl-faq.html
+  (this session could not re-fetch that page live because of a
+  transient rate limit; the text is cross-verified via SPDX and via its
+  real-world use below, but counsel should pull the FAQ page directly).
+- Leela Chess Zero (GPLv3 chess engine) added exactly this template,
+  naming "NVIDIA Corporation's libraries from the NVIDIA CUDA Toolkit
+  and the NVIDIA CUDA Deep Neural Network library", to let it distribute
+  Windows binaries with the proprietary CUDA/cuDNN DLLs. Live in the
+  file header of every relevant source file, e.g.
+  https://github.com/LeelaChessZero/lc0/blob/master/src/main.cc . The
+  maintainers first collected an explicit "I agree" from every
+  contributor of copyrightable code before adding it:
+  https://github.com/LeelaChessZero/lc0/issues/184 (see "Contributor
+  consent" below). This is the closest verified real-world precedent
+  for a proprietary vendor math/compute library linked into a copyleft
+  scientific-computing project.
+- The "OpenSSL exception", used by many GPLv2-era projects to permit
+  linking with the OpenSSL library (a license the FSF considers
+  GPL-incompatible): "In addition, as a special exception, the
+  copyright holders give permission to link the code of portions of
+  this program with the OpenSSL library ... and distribute linked
+  combinations including the two." Text as catalogued by ScanCode:
+  https://scancode-licensedb.aboutcode.org/openssl-exception-gpl-2.0.html .
+  This is the oldest and most widely reused precedent for "a free
+  program + one named non-free library", though it predates GPLv3
+  section 7 and uses GPLv2-era "special exception" phrasing rather than
+  the section 7 form; for an AGPLv3-or-later project the section 7 form
+  used above is the closer fit.
+- GCC Runtime Library Exception (a section 7 style additional permission
+  the FSF itself issues for GCC's runtime libraries, to let them be
+  linked into proprietary compiled programs):
+  https://www.gnu.org/licenses/gcc-exception-3.1.en.html . Cited here
+  only as a well-known example of the FSF using the same section-7
+  mechanism for a similar purpose (letting a copylefted component be
+  linked into code under other terms), not as a source of wording --
+  its exact drafting solves a different problem (compiler runtime
+  headers, not a proprietary math library) and this session did not
+  re-fetch its current text live.
+- GNU Classpath linking exception (lets GPL'd Java class libraries be
+  linked with independently-licensed application code):
+  https://www.gnu.org/software/classpath/license.html . Cited for the
+  same reason as the GCC exception above -- a known, FSF-sanctioned
+  section-7-style precedent for the general mechanism, not a source of
+  wording for this grant; this session did not re-fetch its current
+  text live either.
+
+Granted by the copyright holder; contributor consent
+------------------------------------------------------
+This permission is granted by MOTRES d.o.o. as the copyright holder of
+MOTRES d.o.o.'s own contributions to this Program. Under CONTRIBUTING.md
+this project takes contributions under the Developer Certificate of
+Origin (DCO) only -- there is no Contributor License Agreement and no
+copyright assignment, so each contributor keeps copyright in their own
+contribution and MOTRES cannot unilaterally grant additional permissions
+over a contribution it does not hold copyright in. AGPL section 7 itself
+says an additional permission over "material you add to a covered work"
+may be applied "if authorized by the copyright holders of that
+material" -- so, exactly as Leela Chess Zero did before adding its CUDA
+exception (github.com/LeelaChessZero/lc0/issues/184), this permission
+needs the explicit agreement of every contributor whose copyrightable
+material is in the Program before it can cover their contributions.
+
+Contributor audit (this repository, all branches, 2026-09-30): `git log
+--all --format='%ae'` shows exactly two distinct commit authors across
+1,684 commits:
+  - vadim@motresres.com -- Vadim Shcherbakov, MOTRES d.o.o. (1,667 commits)
+  - noreply@anthropic.com -- "Claude" (17 commits; Claude Code / Claude
+    Agent SDK sessions run by and under the direction of Vadim
+    Shcherbakov acting for MOTRES d.o.o., not an independent outside
+    contributor)
+There are currently no outside (non-MOTRES) copyright holders in this
+repository's history, so no consent-gathering exercise is needed today
+to make this permission effective over the existing code -- but counsel
+should confirm that reading of the "Claude" commits, and this file's
+"Contributor audit" paragraph must be re-run and this permission
+re-cleared (or the CONTRIBUTING.md contribution flow changed to obtain
+consent up front, e.g. an explicit checkbox in the PR template) the day
+a pull request from anyone else is merged.
+
+Where this text lives
+----------------------
+- This file (LICENSE-EXCEPTION) is the canonical, complete grant.
+- LICENSE itself is left unmodified, matching the project's existing
+  decision (PR #40, CONTRIBUTING.md, README.md) to keep the AGPL-3.0
+  text official and unedited; AGPL section 7 additional permissions are
+  legally effective as a separate grant and do not require editing the
+  license text they supplement (this is also how Leela Chess Zero and
+  the FSF's own GCC/Classpath exceptions operate -- COPYING is not
+  edited).
+- README.md "License" section gets one added sentence pointing here.
+- CONTRIBUTING.md "Dependencies" section is updated: it currently says
+  proprietary accelerators may only be optional "with the code working
+  without them (the way pypardiso / Intel MKL is today)" -- true of the
+  code, but the production server image is in fact built with
+  `--build-arg WITH_PARDISO=1` and does ship Intel MKL, which is exactly
+  why this permission exists; the section now points here instead of
+  relying only on "optional".
+- THIRD_PARTY_NOTICES.md note 2 (Intel MKL) is updated to say the
+  production image does currently include it under this permission,
+  replacing the present "not a default dependency ... never shipped in
+  this repository or in the default container image" wording, which is
+  no longer accurate for the image actually deployed.
+- A short header comment pointing to this file is added to the two
+  modules that actually perform the pypardiso/MKL integration,
+  `src/motor_ai_sim/simulation/pardiso_runtime.py` and
+  `src/motor_ai_sim/simulation/pardiso_lifetime.py`, mirroring how Leela
+  Chess Zero places the exception text in the source files that touch
+  the named library rather than editing every file in the tree.

@@ -57,6 +57,7 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 | Package | Install | Licence |
 |---|---|---|
 | triangle | `requirements-triangle.txt` or extra `[triangle]` | Python wrapper LGPL-3.0; bundled Triangle C code by J. R. Shewchuk: **free for non-commercial use only** (see note 3) |
+| netgen-mesher (+ netgen-occt) | `requirements-netgen.txt` or extra `[netgen]` (evaluation, `MOTOR_AI_SIM_GEO_CDT=netgen`) | netgen-mesher: LGPL-2.1-only (its wheel also bundles GLU/Xmu/Xt/OpenGL loader libraries for the unused GUI); netgen-occt: OpenCASCADE Technology, LGPL-2.1 with the OCCT exception |
 | pypardiso | `requirements-pardiso.txt` or extra `[pardiso]` | BSD-3-Clause; pulls **Intel MKL, intel-openmp, TBB, tcmlib, umf, intel-cmplr-lib-ur** (Intel Simplified Software License / Intel EULA, proprietary; see note 2) |
 
 ## Web client (web/package.json, runtime dependencies)

@@ -1299,16 +1299,29 @@ def _triangulate_gmsh(A: Dict, area: float, regions, rotor_bridge: bool):
     so the mesh is taken as built and only a sliver-ridden bulk (p99.5 aspect
     over the rotor bulk gate) gets the same guarded interior smoothing."""
     from motor_ai_sim.simulation.geo_mesh_gmsh import triangulate_gmsh
+    return _rotor_bulk_gate(A, triangulate_gmsh, area, regions, rotor_bridge,
+                            "gmsh")
+
+
+def _triangulate_netgen(A: Dict, area: float, regions, rotor_bridge: bool):
+    """The netgen CDT backend (geo_mesh_netgen): same contract and the same
+    rotor bulk gate as the gmsh backend."""
+    from motor_ai_sim.simulation.geo_mesh_netgen import triangulate_netgen
+    return _rotor_bulk_gate(A, triangulate_netgen, area, regions, rotor_bridge,
+                            "netgen")
+
+
+def _rotor_bulk_gate(A: Dict, cdt, area: float, regions, rotor_bridge: bool,
+                     name: str):
     V = A["vertices"]
     S = A["segments"]
-    Vo, To = triangulate_gmsh(V, S, area, hole_pts=A.get("holes"),
-                              regions=regions if regions is not None
-                              and len(regions) else None,
-                              budget=_TRI_BUDGET["v"])
+    Vo, To = cdt(V, S, area, hole_pts=A.get("holes"),
+                 regions=regions if regions is not None and len(regions) else None,
+                 budget=_TRI_BUDGET["v"])
     if rotor_bridge and len(To):
         _ar, _ = _aspect_arr(Vo, To)
         _p995 = float(np.percentile(_ar, 99.5))
-        log.info("rotor gmsh: %d tris ARmax=%.0f p99.5=%.1f", len(To),
+        log.info("rotor %s: %d tris ARmax=%.0f p99.5=%.1f", name, len(To),
                  float(_ar.max()), _p995)
         if _p995 > _ROTOR_AR_BULK:
             return _repair_slivers(Vo, To, n_fixed=len(V), in_V=V, in_S=S,
@@ -1317,17 +1330,20 @@ def _triangulate_gmsh(A: Dict, area: float, regions, rotor_bridge: bool):
 
 
 # ── CDT backend selection ────────────────────────────────────────────────────
-# MOTOR_AI_SIM_GEO_CDT = auto (default) | triangle | gmsh.  auto = gmsh since
-# S4 (2026-09-30), also where the optional Triangle package is installed;
-# triangle must be selected explicitly.  `set_cdt_backend` overrides per process
+# MOTOR_AI_SIM_GEO_CDT = auto (default) | triangle | gmsh | netgen.  auto = gmsh
+# since S4 (2026-09-30), also where the optional Triangle package is installed;
+# triangle and netgen (evaluated in docs/MESHER_NETGEN_2026-09-30.md) must be
+# selected explicitly.  `set_cdt_backend` overrides per process
 # (tests, the mesher comparison).  Every other step of the geometry mesher is
 # shared, so switching the backend changes ONLY the triangulation of the PSLG.
 _CDT_OVERRIDE: Dict[str, Optional[str]] = {"v": None}
+CDT_BACKENDS = ("triangle", "gmsh", "netgen")
 
 
 def set_cdt_backend(name: Optional[str]) -> None:
-    if name not in (None, "auto", "triangle", "gmsh"):
-        raise ValueError("CDT backend must be auto, triangle or gmsh, not %r" % name)
+    if name not in (None, "auto") + CDT_BACKENDS:
+        raise ValueError("CDT backend must be auto, triangle, gmsh or netgen, "
+                         "not %r" % name)
     _CDT_OVERRIDE["v"] = None if name in (None, "auto") else name
 
 
@@ -1353,6 +1369,23 @@ def _require_gmsh() -> str:
                     type(e).__name__, e, GMSH_VALIDATED)) from e
 
 
+def _require_netgen() -> str:
+    """Fail closed with an actionable message when netgen cannot be loaded."""
+    from motor_ai_sim.simulation.geo_mesh_netgen import NETGEN_VALIDATED
+    try:
+        import netgen  # noqa: F401
+        import netgen.occ  # noqa: F401
+        return str(getattr(netgen, "__version__", "?"))
+    except Exception as e:  # noqa: BLE001 — ImportError, missing OCCT libs, ...
+        raise RuntimeError(
+            "geometry-driven mesh needs netgen (the netgen CDT backend was "
+            "selected: MOTOR_AI_SIM_GEO_CDT={}) but netgen cannot be loaded: "
+            "{}: {}. Install it with `pip install netgen-mesher=={}`, or select "
+            "gmsh: MOTOR_AI_SIM_GEO_CDT=gmsh."
+            .format(os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto"),
+                    type(e).__name__, e, NETGEN_VALIDATED)) from e
+
+
 def cdt_provenance() -> Dict[str, Optional[str]]:
     """Backend + library versions for the solve's provenance record."""
     be = cdt_backend()
@@ -1370,9 +1403,15 @@ def cdt_provenance() -> Dict[str, Optional[str]]:
             out["triangle"] = "?"
     else:
         out["triangle"] = None
+    from motor_ai_sim.simulation.geo_mesh_netgen import (NETGEN_VALIDATED,
+                                                         netgen_version)
+    out["netgen"] = netgen_version()
     if be == "gmsh" and out["gmsh"] != GMSH_VALIDATED:
         out["note"] = "gmsh {} differs from the validated {}".format(
             out["gmsh"], GMSH_VALIDATED)
+    if be == "netgen" and out["netgen"] != NETGEN_VALIDATED:
+        out["note"] = "netgen {} differs from the validated {}".format(
+            out["netgen"], NETGEN_VALIDATED)
     return out
 
 
@@ -1390,24 +1429,28 @@ def mesher_provenance(build_mesher: Optional[str]) -> Dict[str, Optional[str]]:
 
 
 def cdt_backend() -> str:
-    """'triangle' or 'gmsh' — the backend the next triangulation uses.
+    """'triangle', 'gmsh' or 'netgen' — the backend the next triangulation uses.
 
     Fail-closed policy (docs/MESHER_TRANSITION.md): a selected backend that is
-    unavailable raises with an actionable message; a gmsh meshing failure
-    raises GmshCDTError; nothing silently falls back to a different mesher."""
+    unavailable raises with an actionable message; a gmsh (netgen) meshing
+    failure raises GmshCDTError (NetgenCDTError); nothing silently falls back
+    to a different mesher."""
     want = _CDT_OVERRIDE["v"] or (os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto")
                                   .strip().lower() or "auto")
     if want == "gmsh":
         _require_gmsh()
         return "gmsh"
+    if want == "netgen":
+        _require_netgen()
+        return "netgen"
     if want == "triangle":
         if not HAVE_TRIANGLE:
             raise RuntimeError("MOTOR_AI_SIM_GEO_CDT=triangle but the optional "
                                "'triangle' package is not installed")
         return "triangle"
     if want != "auto":
-        raise ValueError("MOTOR_AI_SIM_GEO_CDT must be auto, triangle or gmsh, "
-                         "not %r" % want)
+        raise ValueError("MOTOR_AI_SIM_GEO_CDT must be auto, triangle, gmsh or "
+                         "netgen, not %r" % want)
     # S4 (owner 2026-09-30): gmsh is the default backend whether or not the
     # optional Triangle package is installed; Triangle stays selectable with
     # MOTOR_AI_SIM_GEO_CDT=triangle for cross-checks.
@@ -1477,8 +1520,11 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
                  "" if _nd else "; nothing droppable, refining with -YY")
         if not _nd:
             _Y = "YY"
-    if cdt_backend() == "gmsh":
+    _be = cdt_backend()
+    if _be == "gmsh":
         return _triangulate_gmsh(A, area, regions, rotor_bridge)
+    if _be == "netgen":
+        return _triangulate_netgen(A, area, regions, rotor_bridge)
     import triangle as _tri
     if regions is not None and len(regions):
         A["regions"] = np.asarray(regions, float)
@@ -2975,10 +3021,11 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             # run.  The budget verdict is about the geometry, not the tiling.
             raise
         except Exception as _te:
-            # Fail closed on a gmsh CDT failure: the whole-wedge build is a
-            # different mesh (two unique seams), not a repair of this one.
+            # Fail closed on a gmsh/netgen CDT failure: the whole-wedge build
+            # is a different mesh (two unique seams), not a repair of this one.
             from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
-            if isinstance(_te, GmshCDTError):
+            from motor_ai_sim.simulation.geo_mesh_netgen import NetgenCDTError
+            if isinstance(_te, (GmshCDTError, NetgenCDTError)):
                 raise
             log.warning("geo tile failed (%s) — whole-wedge fallback", _te)
             Vs = None

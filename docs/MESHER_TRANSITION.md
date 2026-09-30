@@ -20,6 +20,10 @@ at once.
 | yes | `auto` (default) or `triangle` | geometry-driven mesher (`geo_mesh_halves`), Triangle CDT, exactly as before |
 | yes or no | `gmsh` | geometry-driven mesher, gmsh CDT backend (since S2) |
 | no | `auto` | geometry-driven mesher, gmsh CDT backend (since S2; S1 fell back to the plain gmsh build) |
+| yes or no | `netgen` | geometry-driven mesher, netgen CDT backend (evaluation, `geo_mesh_netgen.py`, optional extra `[netgen]`; docs/MESHER_NETGEN_2026-09-30.md) |
+
+Since S4 (`f4acc6a`) `auto` means gmsh also where Triangle is installed;
+Triangle and netgen are used only when selected.
 
 `geo_mesh=False` keeps the tensor iron template (`iron_template.py`, no
 Triangle). The 2-D view uses `mapbox-earcut`; its fallback

@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) MOTRES d.o.o. and contributors
-"""Optimizer-style mini-campaign: Triangle vs gmsh CDT on cusp/fillet-heavy
-candidates (docs/MESHER_TRANSITION.md, "Required before S4" item 4).
+"""Optimizer-style mini-campaign: Triangle vs gmsh (vs netgen) CDT on
+cusp/fillet-heavy candidates (docs/MESHER_TRANSITION.md, "Required before S4"
+item 4; netgen: docs/MESHER_NETGEN_2026-09-30.md).
 
 Each candidate is a perturbation of the 40 mm 12s/14p preset biased towards
 the geometry that broke meshers before: sharp or tiny rotor fillets
@@ -13,6 +14,8 @@ its own child process so its peak RSS and any crash are isolated.
 
     python scripts/mesher_campaign.py plan --workdir W [--n 24] [--budget 400000]
                                            [--solve] [--threads 6]
+                                           [--backends triangle,gmsh,netgen]
+                                           [--only c00,c04,...]
     python scripts/mesher_campaign.py report --workdir W
 
 Recorded per run: mesh build time, triangle count, minimum angle, aspect
@@ -114,6 +117,8 @@ def one(cand_path, backend, out_path, budget, solve):
         res["gmsh_version"] = gmsh.__version__
     except Exception:  # noqa: BLE001
         res["gmsh_version"] = None
+    res["netgen_version"] = __import__(
+        "motor_ai_sim.simulation.geo_mesh_netgen", fromlist=["x"]).netgen_version()
     t0 = time.time()
     try:
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
@@ -185,10 +190,13 @@ def plan(a):
     env = dict(os.environ, OMP_NUM_THREADS=thr, MKL_NUM_THREADS=thr,
                OPENBLAS_NUM_THREADS=thr, SB_NO_WARM_CACHE="1")
     prog = os.path.join(a.workdir, "progress.txt")
+    only = set(a.only.split(",")) if a.only else None
     for c in candidates(a.n):
+        if only and c["id"] not in only:
+            continue
         cp = os.path.join(a.workdir, c["id"] + ".cand.json")
         json.dump(c, open(cp, "w"), indent=1)
-        for be in ("triangle", "gmsh"):
+        for be in a.backends.split(","):
             out = os.path.join(a.workdir, f"{c['id']}_{be}.json")
             if os.path.exists(out):
                 continue
@@ -212,11 +220,12 @@ def report(a):
     import numpy as np
     rows = {}
     for fn in sorted(os.listdir(a.workdir)):
-        if fn.endswith(("_triangle.json", "_gmsh.json")):
+        if fn.endswith(("_triangle.json", "_gmsh.json", "_netgen.json")):
             d = json.load(open(os.path.join(a.workdir, fn)))
             rows.setdefault(d["id"], {})[d["backend"]] = d
     summ = {}
-    for be in ("triangle", "gmsh"):
+    backends = a.backends.split(",")
+    for be in backends:
         ds = [r[be] for r in rows.values() if be in r]
         st = {}
         for d in ds:
@@ -240,19 +249,30 @@ def report(a):
                     "errors": sorted({f"{d.get('error')}: {str(d.get('message'))[:90]}"
                                       for d in ds if d.get("error")})}
     pair = []
+    ref = backends[0]
     for cid, r in sorted(rows.items()):
-        t, g = r.get("triangle", {}), r.get("gmsh", {})
-        ts, gs = t.get("solve") or {}, g.get("solve") or {}
+        t = r.get(ref, {})
+        ts = t.get("solve") or {}
+        row = {"id": cid, "stage_" + ref: t.get("stage"),
+               "ripple_" + ref: ts.get("T_ripple_pct")}
+        for be in backends[1:]:
+            g = r.get(be, {})
+            gs = g.get("solve") or {}
 
-        def dl(k):
-            a_, b_ = ts.get(k), gs.get(k)
-            return (None if a_ in (None, 0) or b_ is None
-                    else 100.0 * (b_ - a_) / abs(a_))
-        pair.append({"id": cid, "stage_tri": t.get("stage"), "stage_gmsh": g.get("stage"),
-                     "dT_pct": dl("T_avg_Nm"), "dV_pct": dl("V_peak"),
-                     "dFe_pct": dl("P_fe_W"), "dMag_pct": dl("P_mag_W"),
-                     "ripple_tri": ts.get("T_ripple_pct"),
-                     "ripple_gmsh": gs.get("T_ripple_pct")})
+            def dl(k):
+                a_, b_ = ts.get(k), gs.get(k)
+                return (None if a_ in (None, 0) or b_ is None
+                        else 100.0 * (b_ - a_) / abs(a_))
+            row.update({"stage_" + be: g.get("stage"),
+                        "dT_pct_" + be: dl("T_avg_Nm"), "dV_pct_" + be: dl("V_peak"),
+                        "dFe_pct_" + be: dl("P_fe_W"), "dMag_pct_" + be: dl("P_mag_W"),
+                        "ripple_" + be: gs.get("T_ripple_pct"),
+                        "mesh_s_" + be: g.get("mesh_s"),
+                        "solve_ratio_" + be: (gs.get("wall_s") / ts["wall_s"]
+                                              if gs.get("wall_s") and ts.get("wall_s") else None),
+                        "rss_ratio_" + be: (g.get("maxrss_mb") / t["maxrss_mb"]
+                                            if g.get("maxrss_mb") and t.get("maxrss_mb") else None)})
+        pair.append(row)
     out = {"summary": summ, "pairs": pair}
     json.dump(out, open(os.path.join(a.workdir, "campaign_report.json"), "w"),
               indent=1, default=str)
@@ -272,8 +292,13 @@ def main():
     p.add_argument("--budget", type=int, default=400_000)
     p.add_argument("--solve", action="store_true")
     p.add_argument("--threads", type=int, default=6)
+    p.add_argument("--backends", default="triangle,gmsh",
+                   help="comma list of CDT backends (triangle,gmsh,netgen)")
+    p.add_argument("--only", default="", help="comma list of candidate ids")
     r = sub.add_parser("report")
     r.add_argument("--workdir", required=True)
+    r.add_argument("--backends", default="triangle,gmsh",
+                   help="comma list; the first is the reference")
     a = ap.parse_args()
     if a.cmd == "one":
         one(a.cand, a.backend, a.out, a.budget, bool(a.solve))

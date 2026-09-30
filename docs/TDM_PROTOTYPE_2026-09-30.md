@@ -34,17 +34,53 @@ merged, not deployed.** The progress log at the end is the resume point.
   0.09–0.28) because it gives every magnet the same map where the one-period
   pre-pass gives each its own history segment — and neither is the q-period
   asymptote.
-- **Recommendation:** GO for the optimizer and passports as an opt-in
-  (`eddy_method="tdm"`) on eddy current-drive points, with the full pre-pass
-  where demag matters and the shortcut where 0.2 pp of ripple is acceptable;
-  keep "march" the default until a routine A/B on more machines. Not for voltage
-  drive / PWM (refused), series strand paths (refused), full-ring models
-  (refused). Memory: 2.5–3× the march's peak RSS (per-frame factors).
+- **Recommendation: GO**, and the owner switched it on (§0): TDM is the default
+  eddy method of every steady-state eddy run, with the full demag pre-pass by
+  default and the shortcut as an option until it is qualified on more machines;
+  voltage drive / PWM, series strand paths and full-ring models are marched
+  automatically with a note, and a TDM failure is marched loudly. Memory: 2.5–3×
+  the march's peak RSS (per-frame factors); the solve pool's estimate follows.
+
+## 0. Default switch (owner's decision, 2026-09-30)
+
+"TDM + Coulomb for all runs": `eddy_method` now defaults to `"tdm"` for every
+steady-state eddy run — the EM tab, the coupled loop, sweeps and the optimizer
+(`refine_proc`), agent drafts / MCP simulate and passports all reach the solver
+through `em_transient_eval` without choosing, so they all get TDM.
+
+- `eddy_method=None` resolves to the argument, else `SB_EDDY_METHOD`, else the
+  config's `simulation.eddy_method`, else `"tdm"` (`time_periodic.
+  resolve_eddy_method`). `"march"` stays selectable by any of the three.
+- **Automatic march, with a one-line note.** A run TDM cannot serve
+  (`time_periodic.tdm_refusals`: voltage and PWM drive, series strand paths, a
+  full-ring model, frozen ν, a six-phase winding, an external/closed-loop
+  excitation object, a fractional window, backward Euler) is marched; the result
+  says `eddy_method: "march"`, `eddy_method_requested: "tdm"` and
+  `eddy_method_note: "march: TDM not applicable (…)"`.
+- **Failure fallback, loud.** Any exception or non-convergence inside the TDM
+  attempt is logged as a warning, everything the attempt touched (the Br map, the
+  magnet source, the demag diagnostics, the eddy histories) is restored, and the
+  run is marched from its normal static start: `eddy_method_note: "march: TDM
+  failed (…) — marched instead"`, `tdm.failed`. A Stop (a BaseException) is not
+  caught.
+- `tdm_demag="full"` (default, the march's one-period pre-pass on the orbit) or
+  `"shortcut"` (the owner's 1/6-period window), argument or `SB_TDM_DEMAG`.
+- With `torque_method="coulomb"` the stopping monitor uses the Coulomb
+  virtual-work torque of each iterate's frames (`virtual_work_torque.
+  frame_torques`, the loop's own call); the reported period's Coulomb series,
+  mean, ripple and layer self-check come out of the frame loop as for the march.
+- Solve pool: the fallback per-solve RSS estimate goes 1500 → 2500 MB (TDM keeps
+  a factor per frame: 1.0–1.9 GB measured); six parallel solves need 15 GB of the
+  API container's 40 GB. The adaptive estimate (largest recent child) is unchanged.
+- The progress strip names the TDM stages ("eddy warm-up (time-periodic steady
+  state, TDM): Newton k, residual …", the demag pre-pass frame by frame); a Stop
+  is honoured at each.
+- Tests that pin the MARCH's own behaviour (the warm-up, its settle verdict, the
+  warm seed, seed reproducibility) now request `eddy_method="march"`.
 
 ## 1. What was built
 
-`eddy_method="tdm"` (option of `fem_transient_sliding_band` / `em_transient_eval`,
-default `"march"`, which is unchanged: its payload does not even gain a key).
+`eddy_method="tdm"` (option of `fem_transient_sliding_band` / `em_transient_eval`).
 Module `src/motor_ai_sim/simulation/time_periodic.py`.
 
 ### 1.1 The problem solved
@@ -125,17 +161,31 @@ reported period with the ratchet active (as the march does).
   the fractional-slot asymptote (element-wise minimum over the pole images: over q
   periods every magnet sees what its images saw in one).
 
-### 1.4 Scope and refusals (loud, `NotImplementedError`)
+### 1.4 Scope, and what is marched instead (with a note, §0)
 
 Current drive (sine; custom/BLDC currents take the full period unless half-wave
-antisymmetric). Refused: voltage drive and PWM (the circuit state is not in the wrap;
-PWM is out of scope: hundreds of steps per period), series strand paths (saddle-point
-bordered matrix), frozen_nu, backward Euler, a mixed schedule, a fractional window,
-a full-ring model.
+antisymmetric). Marched: voltage drive and PWM (the circuit state is not in the
+wrap; PWM is out of scope: hundreds of steps per period), series strand paths
+(saddle-point bordered matrix), frozen_nu, backward Euler, a mixed schedule, a
+fractional window, a full-ring model, a six-phase winding, an external excitation
+object.
 
-Knobs: `SB_TDM_WORKERS` (frames factorised concurrently), `SB_TDM_MKL_THREADS` (MKL
-threads per factorisation), `SB_TDM_TOL` (1e-7), `SB_TDM_HALF=0`, `SB_TDM_COARSE=0`,
-`SB_TDM_DEMAG=full|shortcut`, `SB_TDM_DEMAG_WINDOW` (fraction of the period, 1/6).
+**Voltage drive — designed, not built.** The wrap state would gain the two
+line-to-line currents; ψ is a linear functional of the coil dofs, which are
+conductor dofs, so the sweep already carries what the circuit rows need; each
+frame's solve would take the two circuit rows by the `ve_newton` Schur complement
+(three back-solves and a 2×2). The reported window would have to start without
+the voltage settle prefix (the DC-orbit solve and the Aitken anchors live in it).
+The periodic wrap removes the flux DC mode (τ = L/R ≈ 20 periods) the 10-period
+settle exists for, so the gain would be large; it is a separate change of the
+voltage path.
+
+Knobs: `SB_EDDY_METHOD`, `SB_TDM_DEMAG=full|shortcut`, `SB_TDM_STOP=owner|residual`,
+`SB_TDM_ETA` (0.01; `adaptive`), `SB_TDM_TANGENT=clamped|exact|analytic`,
+`SB_TDM_START=static_seq|static_par|static|project`, `SB_TDM_WORKERS` (frames
+factorised concurrently), `SB_TDM_MKL_THREADS` (MKL threads per factorisation),
+`SB_TDM_TOL` (1e-7), `SB_TDM_MAX_NEWTON` (25), `SB_TDM_HALF=0`, `SB_TDM_HALF_TOL`
+(1e-4), `SB_TDM_COARSE=0`, `SB_TDM_DEMAG_WINDOW` (fraction of the period, 1/6).
 
 ## 2. Validation
 

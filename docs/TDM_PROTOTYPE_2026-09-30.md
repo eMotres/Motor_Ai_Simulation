@@ -136,6 +136,95 @@ Serial runs: MKL 8 threads. Parallel runs: `SB_TDM_WORKERS=4`,
 TDM is closer to the asymptote than the production march on every quantity
 (the march stops at its 2 % gauge; its milliwatt shaft is +4.6 % there).
 
+**Newton and Krylov behaviour (Ø40).** From the static start the first Newton
+step takes the frame residual from 0.13 to 2e-5 (the eddy reaction is nearly
+linear); after that the space-time Newton contracts ×6 per iteration: 4
+iterations to 5.6e-8. The rate is the same with the clamped tangent, the
+unclamped one and an ANALYTIC dν/dB² of the table (`SB_TDM_TANGENT=analytic`,
+`dnu_dB2`, tested against differences off the knots), and the same with a
+Krylov forcing of 1e-2·rrel or a fixed 0.05: it is set by the piecewise-linear
+H(B) table (quadrature points crossing knots), not by the linear algebra. The
+synthetic smooth problem converges quadratically (tests). So the forcing is a
+fixed 0.01 by default: 23 GMRES iterations in all instead of 62, same Newton count.
+
+| variant (Ø40, demag off, one worker) | period | Newton | GMRES total | static start [s] | Newton [s] |
+|---|---|---:|---:|---:|---:|
+| clamped tangent, η = 1e-2·rrel, sequential exact static start | half, 18 | 4 | 107 | 8.5 | 7.4 |
+| same, start = frame 0 projected (no per-frame static) | half | 18 | 271 | 1.3 | 21.4 |
+| exact (unclamped) tangent | half | 4 | 81 | 8.0 | 6.0 |
+| analytic tangent | full, 36 | 4 | 62 | 16.0 | 11.2 |
+| η = 0.05 fixed | full | 4 | 19 | 16.0 | 8.2 |
+| η = 0.01 fixed | full | 4 | 23 | 16.0 | 8.9 |
+
+(The "full" rows ran before the half-period symmetry test was relaxed from 1e-9 to
+1e-4 of the magnet source: the Ø40 mesh's element magnetisation is pole
+antisymmetric to 6.3e-6 only. Full and half periods give the same orbit.)
+
+### 2.2 Stage 1: Ø40 with demag (the duty's own setting)
+
+Reference: the production march with its demag pre-pass (146 frames: 74 warm-up,
+36 pre-pass, 36 reported). All at 6 threads, one worker; the box was shared with
+a 4-thread shaftloss job (load 5–11), so the walls carry ±15 % noise.
+
+| quantity | march | TDM, full pre-pass | TDM, owner's shortcut |
+|---|---:|---:|---:|
+| T_avg [N·m] | 0.6218693 | 0.6218688 (−7.6e-7) | 0.6220011 (+2.1e-4) |
+| ripple [%] | 5.642602 | 5.644492 (+0.002 pp) | 5.558303 (−0.084 pp) |
+| V_peak [V] | 10.99277 | 10.99277 (−4e-7) | 10.98384 (−8e-4) |
+| P_mag 2-D [W] | 3.093844 | 3.094255 (+1.3e-4) | 3.097247 (+1.1e-3) |
+| P_shaft [W] | 0.0085229 | 0.0082894 (−2.7 %) | 0.0083421 (−2.1 %) |
+| P_cu AC [W] | 4.438217 | 4.438434 (+4.9e-5) | 4.438592 (+8.4e-5) |
+| P_fe [W] | 9.139391 | 9.139300 (−1.0e-5) | 9.143353 (+4.3e-4) |
+| total loss [W] | 65.789 | 65.789 (0) | 65.796 (+1.1e-4) |
+| Br kept [% vol] | 99.301 | 99.301 (0) | 99.305 (+0.004 pp) |
+| Br map vs march: max / mean |ΔBr| (de-rated elements) | – | 0.0014 / 8e-5 | 0.283 / 0.011 |
+| frames: warm-up / pre-pass / reported | 74 / 36 / 36 | 0 / 36 / 36 | 0 / 7 / 36 |
+| wall [s] | 88 | 96 | 85 |
+| of it: static start, Newton, pre-pass, re-solve, reported period | – | 8.4, 6.4, 40.7, 8.0, 19.1 | 11.0, 9.3, 9.7, 8.7, 27.6 |
+
+- **TDM + full pre-pass reproduces the march element for element** once the
+  pre-pass runs on the march's own pre-pass positions (θ < 0). A first version
+  marched it on the reported positions (0 ≤ θ < 360°el): on a fractional-slot
+  rotor that hands every magnet a different part of its history (the
+  rotor-frame period is q = 7 electrical periods here), and the Br maps then
+  differ per element by up to 0.28 while Br kept agreed to 0.015 pp.
+- **The shortcut** (magnet tag 106's window, frames 25–31, 7 frames, its Br copied
+  to all 7 magnets): torque +0.02 %, ripple −0.08 pp, total loss +0.01 %. The per
+  element map differs (max 0.28) because it gives every magnet the SAME map
+  while the one-period pre-pass gives each magnet its own segment of history.
+- **The one-period pre-pass is not the fractional-slot asymptote either**: over
+  q periods every magnet sees what its images saw in one; the element-wise image
+  minimum of the full pre-pass is up to 0.28 lower at single elements (0.05 %
+  of the magnet area on average). The reported window keeps the ratchet on, so it
+  still moves (the march-vs-orbit check reads 8.9e-4 at the last frame) — in
+  the march exactly as in TDM.
+- **No wall-time gain on this machine with demag**: its warm-up is only 3
+  periods; the demag pre-pass and the ratchet's re-solves in the reported window
+  (12 solves per frame: the ratchet trips on almost every pass) cost the same in
+  both methods.
+
+### 2.3 Output path, stopping rule and torque method (coordinator, 2026-09-30)
+
+- **One post-processing path.** TDM never reports a frame it solved itself: the
+  reported period is marched by the unchanged frame loop from the orbit, so the
+  frame structure (rotor angle, slip projection, A, currents, ψ) and every
+  per-frame quantity — the shipped torque, a future Coulomb virtual-work torque,
+  Maxwell, ψ/EMF, the loss split, iron loss, demag — come out of the same code as
+  after a march. Nothing torque-specific is computed inside the TDM iteration
+  except the stopping monitor below.
+- **Stopping in the owner's terms** (`SB_TDM_STOP=owner`, the default): after each
+  Newton iterate the monitor evaluates the SHIPPED torque of the orbit (the frame
+  loop's `_torque2` Maxwell series and `_psi2` flux linkage through
+  `sb_postproc.space_vector_hybrid_torque`, i.e. `energy_mean+maxwell_ripple`) and
+  the conductor loss (the march's σE² integrand); the Newton stops when two
+  iterates differ by < 0.1 % in the mean torque, < 0.05 pp in the ripple and
+  < 0.5 % in the eddy loss, on an iterate whose state residual is < 1e-5; or when
+  the state residual meets the march's 1e-7. `SB_TDM_STOP=residual` keeps only
+  the latter. Both are recorded (`tdm.solve.stopped_by`, the per-iterate monitor).
+- **Torque method**: every T_avg / ripple in these tables is the shipped
+  `energy_mean+maxwell_ripple` (flux-linkage space-vector mean, raw Maxwell AC),
+  the method the result carries for every eddy run (`torque_method`).
+
 ## Progress log
 
 - 12:05 Stage 0: module, integration, synthetic tests (5 passed locally and on the

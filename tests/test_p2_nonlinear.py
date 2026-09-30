@@ -310,3 +310,52 @@ class TestAsmKConstMatrix:
         assert K is not p.K_const
         K.data[:] = 0.0
         assert p.K_const.data.any(), "K_const was handed out, not copied"
+
+
+class TestUnclampedTangent:
+    """Review item (PR #63): the DC error correction averages K + T with the
+    UNCLAMPED tangent.  It must be the linearisation of R(A) = K(A)·A to the
+    one-sided finite-difference step of dν/dB² (measured on the library
+    curves: 0.02-0.5 % against a central difference of R; the error sits at
+    the table knots, 2-8 % at this file's deliberate 500:1 kink), and it
+    records min (dH/dB)/ν so a non-monotone curve refuses the correction."""
+
+    @staticmethod
+    def _obj(curve):
+        m = MeshTri().refined(4)
+        b = Basis(m, ElementTriP2())
+        b0 = b.with_element(ElementTriP0())
+        n_el = m.t.shape[1]
+        ids = np.arange(0, n_el, 2)
+        nu_const = np.full(n_el, 1.0 / MU0)
+        nu_const[ids] = 0.0
+        K_const = asm(stiff_nu2, b, nu=b0.interpolate(nu_const)).tocsr()
+        sb = Basis(m, ElementTriP2(), elements=ids)
+        return P2Nonlinear(basis=b, n_dof=b.N, K_const=K_const, sat=[(ids, curve)],
+                           sat_sub=[(sb, sb.with_element(ElementTriP0()), ids, curve)],
+                           pardiso=None, log=_Log()), b
+
+    @pytest.mark.parametrize("amp,tol", [(0.5, 1e-6), (2.5, 1e-3)])
+    def test_is_the_directional_derivative_of_the_residual(self, amp, tol):
+        H = np.linspace(0.0, 4e5, 80)
+        smooth = [(h, MU0 * h + 1.6 * np.tanh(MU0 * 800.0 * h / 1.6)) for h in H]
+        p, b = self._obj(smooth)
+        x, y = b.doflocs
+        A = amp * np.sin(np.pi * x) * np.sin(np.pi * y)
+        d = np.cos(3.0 * x) * y * (1.0 - y)
+        K, info = p.Kpw(A)
+        J = K + p.tangent2(info, clamp=False)
+        eps = 1e-6 * np.abs(A).max() / np.abs(d).max()
+        fd = (p.Kpw(A + eps * d)[0] @ (A + eps * d)
+              - p.Kpw(A - eps * d)[0] @ (A - eps * d)) / (2 * eps)
+        err = np.linalg.norm(J @ d - fd) / np.linalg.norm(fd)
+        assert err < tol, err
+        assert p.last_dhdb_min_rel > 0.0
+
+    def test_non_monotone_curve_is_reported(self):
+        bad = [(0.0, 0.0), (400.0, 0.5), (200.0, 0.8), (2000.0, 1.5), (1e6, 2.7)]
+        p, b = self._obj(bad)
+        x, y = b.doflocs
+        K, info = p.Kpw(0.5 * np.sin(np.pi * x) * np.sin(np.pi * y))
+        p.tangent2(info, clamp=False)
+        assert p.last_dhdb_min_rel <= 0.0

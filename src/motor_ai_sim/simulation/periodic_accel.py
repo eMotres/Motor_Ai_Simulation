@@ -264,6 +264,41 @@ def pole_pair_image_mean(x: np.ndarray, perm: np.ndarray, sign: np.ndarray,
     return acc / float(Q)
 
 
+def image_mean_start_refusal(full_ring: bool, sigma: float, n_dofs: int
+                             ) -> Optional[str]:
+    """Why the pole-pair image-mean start must NOT be applied, or None.
+
+    * no solid ring conductor (no shaft, no sleeve): nothing to do;
+    * a full-ring model: the image map is a rotation by one pole pair there
+      too, but the start was validated on sector models only (L155, Ø40, L13:
+      anti-periodic sectors) — refused rather than assumed;
+    * S^q = −I (σ = −1): the eigenvalue-1 space of S is empty, so the mean is
+      identically zero — it would erase the rotor-frame DC flux the magnets
+      put into the ring instead of removing an imprint."""
+    if int(n_dofs) <= 0:
+        return "no solid ring conductor"
+    if bool(full_ring):
+        return "full-ring model (validated on sector models only)"
+    if float(sigma) < 0.0:
+        return "S^q = -I: no pole-pair-invariant subspace"
+    return None
+
+
+def period_map_residual(u: np.ndarray, x: np.ndarray, M, lam: float) -> float:
+    """Remaining rotor-frame DC error bound of a corrected body, relative to
+    its rotor-frame DC state: ‖u‖·λ/(1−λ) / ‖x‖ in the σ-mass norm, with u the
+    pole-pair-periodic change over one MARCHED period (the original BDF2
+    period map, not the correction's model) and λ the slowest periodic mode.
+    A geometric tail bound: after a correction the error is dominated by that
+    mode, so the march still has to move the state by at most this much."""
+    u = np.asarray(u, float)
+    x = np.asarray(x, float)
+    nu = float(np.sqrt(max(float(u @ np.asarray(M @ u).ravel()), 0.0)))
+    nx = float(np.sqrt(max(float(x @ np.asarray(M @ x).ravel()), 1e-300)))
+    lam = min(max(float(lam), 0.0), 0.999)
+    return nu * lam / (1.0 - lam) / nx
+
+
 def dc_error_correction(u: np.ndarray, solve_JM, M: "np.ndarray | object",
                         perm: np.ndarray, sign: np.ndarray, q: int, sigma: float,
                         period_s: float, n_iter: int = 60, rtol: float = 1e-7,
@@ -300,7 +335,16 @@ def dc_error_correction(u: np.ndarray, solve_JM, M: "np.ndarray | object",
 
     Returns (correction, info): info["lambda"] is the per-period multiplier
     e^{−μ₁T} of the SLOWEST periodic mode (inverse iteration to convergence),
-    the rate a later tail test must assume.
+    the rate a later tail test must assume.  The Rayleigh quotient is
+    zᵀσM·(J̄⁻¹σM z) with ‖z‖_σM = 1, which for an eigenvector (J̄v = μσMv) is
+    exactly 1/μ (tested against dense references at several scalings).
+
+    AN ACCELERATOR, NOT AN EXACT STEP: one stator position's J̄, the
+    projection, the finite-difference tangent and the truncation after u/2
+    make it an approximation of the period map.  It moves only the discarded
+    warm-up prefix; the caller must verify the corrected state on the
+    ORIGINAL march (gauge, slow-mode tail, :func:`period_map_residual`)
+    before a run may be called settled.
     """
     u = pole_pair_image_mean(np.asarray(u, float), perm, sign, q, sigma)
     Q = int(q)

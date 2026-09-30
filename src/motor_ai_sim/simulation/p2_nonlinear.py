@@ -572,11 +572,15 @@ class P2Nonlinear:
 
         ``clamp`` (the Newton's choice) drops dν/dB² < 0 (the rising-μ part
         of a B-H curve), which keeps K + T symmetric positive definite at any
-        field.  ``clamp=False`` is the EXACT linearisation of the residual —
-        K + T is then the differential reluctivity dH/dB along B, still > 0
-        for a monotone curve — used where the linearised DYNAMICS matters, not
-        a Newton step (the DC error correction of the eddy warm-up)."""
+        field.  ``clamp=False`` is the linearisation of the residual to the
+        one-sided difference step of dν/dB² (0.02-0.5 % against a central
+        difference of R on the library curves; larger at sharp table knots):
+        K + T is then the differential reluctivity dH/dB along B, positive for
+        a monotone curve.  Used where the linearised DYNAMICS matters, not a
+        Newton step (the DC error correction of the eddy warm-up), which also
+        reads ``last_dhdb_min_rel`` and refuses a non-positive operator."""
         T = None
+        _min_r = None
         for _k2, _ids2, _c2, gA, Bm, nuq in info:
             _dB = 1e-3 * Bm + 1e-6
             nu1 = 1.0 / (MU0 * np.maximum(_mu_r_from_bh_vec(
@@ -584,8 +588,17 @@ class P2Nonlinear:
             nup = (nu1 - nuq) / _dB / (2.0 * Bm)                  # dν/dB²
             if clamp:
                 nup = np.maximum(nup, 0.0)
+            else:
+                # dH/dB = ν + 2B²·dν/dB² along B: > 0 for a monotone curve,
+                # the condition for K + T to be positive definite
+                _r = float(np.min((nuq + 2.0 * nup * Bm ** 2) / nuq))
+                _min_r = _r if _min_r is None else min(_min_r, _r)
             Ti = self._skel[_k2].tang(gA, 2.0 * nup)
             T = Ti if T is None else T + Ti
+        if not clamp:
+            #: min over the quadrature points of (dH/dB)/ν of the last
+            #: unclamped tangent (1 = linear; <= 0 = non-monotone B-H there)
+            self.last_dhdb_min_rel = _min_r
         return T
 
     # ── globally convergent fallback / Newton seed ───────────────────────────

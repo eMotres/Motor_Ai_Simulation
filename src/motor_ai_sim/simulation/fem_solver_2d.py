@@ -140,6 +140,8 @@ from motor_ai_sim.simulation.periodic_accel import (
     extrapolate_by_sector as _acc_rre_sec,
     restrict_shift as _acc_restrict,
     dc_error_correction as _acc_dc_eec,
+    image_mean_start_refusal as _acc_img_refusal,
+    period_map_residual as _acc_pm_resid,
     pole_pair_image_mean as _acc_image_mean,
     single_mode_extrapolate as _acc_single,
     shift_cycles as _acc_cycles,
@@ -6755,9 +6757,11 @@ def fem_transient_sliding_band(
     # docs/EDDY_SHAFT_SETTLE_2026-09-29.md.  After the extension periods in
     # SB_EDDY_EEC_AT (default "2,4") the rotor-frame DC error of a slow ring
     # conductor (the L155 shaft wall: DC diffusion, τ ≈ 21 periods) is
-    # corrected by ONE static solve of the exact Jacobian averaged over the
-    # period just marched (periodic_accel.dc_error_correction, TP-EEC), then
-    # verified like any accelerator jump.  It replaces the RRE accelerator;
+    # corrected by ONE static solve of the Jacobian (unclamped tangent)
+    # averaged over the period just marched
+    # (periodic_accel.dc_error_correction, TP-EEC), then
+    # verified like any accelerator jump: an ACCELERATOR of the discarded
+    # prefix, not an exact step.  It replaces the RRE accelerator;
     # SB_EDDY_EEC=0 restores it.
     _eec_on = bool(eddy and not _vdrive and not _full_ring
                    and _os_sb.environ.get("SB_EDDY_EEC", "1") != "0")
@@ -6766,11 +6770,14 @@ def fem_transient_sliding_band(
     _eec_groups = [_gk for _gk in ("shaft", "sleeve") if _gk in _Msig_grp]
     _eec_at = sorted({int(_s) for _s in (_os_sb.environ.get(
         "SB_EDDY_EEC_AT", "2,4") or "").split(",") if _s.strip()})
-    _eec_J = None                 # Σ over the period's frames of K + T (exact)
+    _eec_J = None                 # Σ over the period's frames of K + T (unclamped)
     _eec_nJ = 0
     _eec_x0 = None                # the period's start state (same labelling)
     _eec_lam: List[float] = []    # λ of the slow mode seen by each correction
     _eec_accum = False            # average J over the period being marched
+    _eec_sig: Dict[str, str] = {}  # per ring body: why it may / may not be corrected
+    _eec_dhdb = None              # min (dH/dB)/ν over the averaged frames
+    _eec_last: Dict[str, Any] = {}  # bodies / map / σ-mass of the last correction
     if _eec_on:
         _acc_on = False
 
@@ -6841,13 +6848,25 @@ def fem_transient_sliding_band(
             if _gk in _Msig_grp:
                 _dgk = np.asarray(_Msig_grp[_gk].diagonal()).ravel() > 0.0
                 _cm = _dgk if _cm is None else (_cm | _dgk)
+        if _cm is not None and "mag" in _Msig_grp:
+            # dofs shared with a magnet keep the static value: averaging them
+            # would move the magnet's own history at its face (measured: a
+            # 4.9 kW one-frame kick in the L155 magnets)
+            _cm = _cm & ~(np.asarray(_Msig_grp["mag"].diagonal()).ravel() > 0.0)
         _period_shift(np.zeros(N2))              # builds the map
         _m = _shift_cache.get("map")
-        if _cm is None or _m is None:
-            return np.array(vec, float, copy=True), None
-        _ci = np.flatnonzero(_cm)
-        _pm, _sg = _acc_restrict(_m[0], _m[1], _m[2], _ci)
-        _q, _sig, _reg = _acc_cycles(_pm, _sg)
+        _n_ring = 0 if _cm is None else int(np.count_nonzero(_cm))
+        _why = _acc_img_refusal(_full_ring, 1.0, _n_ring)
+        if _why is None and _m is None:
+            _why = "no exact pole-pair map"
+        if _why is None:
+            _ci = np.flatnonzero(_cm)
+            _pm, _sg = _acc_restrict(_m[0], _m[1], _m[2], _ci)
+            _q, _sig, _reg = _acc_cycles(_pm, _sg)
+            _why = _acc_img_refusal(_full_ring, _sig, _n_ring)
+        if _why is not None:
+            log.info("P2 eddy warm-up: one-angle static start kept (%s)", _why)
+            return np.array(vec, float, copy=True), {"refused": _why}
         _x = np.asarray(vec, float)[_ci]
         _xm = _acc_image_mean(_x, _pm, _sg, _q, _sig)
         _out = np.array(vec, float, copy=True)
@@ -7968,10 +7987,14 @@ def fem_transient_sliding_band(
             elif not _warm_done:
                 if (_eec_accum and k < 0 and _warm_extended
                         and _warm_ext_periods in _eec_at):
-                    # the exact Jacobian of this frame's converged field, for
+                    # the unclamped Jacobian of this frame's converged field, for
                     # the period average the DC correction solves with
                     _Kc, _ic = _p2.Kpw(A2)
                     _Tc = _p2.tangent2(_ic, clamp=False) if _ic else None
+                    _r_c = getattr(_p2, "last_dhdb_min_rel", None) if _ic else None
+                    if _r_c is not None:
+                        _eec_dhdb = (_r_c if _eec_dhdb is None
+                                     else min(_eec_dhdb, _r_c))
                     _Jc = _Kc if _Tc is None else (_Kc + _Tc)
                     _eec_J = _Jc if _eec_J is None else (_eec_J + _Jc)
                     _eec_nJ += 1
@@ -8100,25 +8123,50 @@ def fem_transient_sliding_band(
                                          "%s -- not settled", _lam_c,
                                          {_gk: "%.3g %%" % (100.0 * _v)
                                           for _gk, _v in _tails.items()})
-                        elif _warm_quiet and _eec_lam:
-                            # the same slow-mode check after a DC correction:
-                            # the tail at the λ the correction measured
+                        elif _warm_quiet and _eec_lam and _eec_last:
+                            # after a DC correction (an ACCELERATOR, verified
+                            # on the original march):
+                            # (1) the loss tail of EVERY corrected body at the
+                            #     slowest λ the correction measured;
+                            # (2) the period-map residual in the STATE: the
+                            #     pole-pair-periodic change of each corrected
+                            #     body over the period just marched, as a
+                            #     geometric bound on the DC error left
+                            #     (periodic_accel.period_map_residual).
                             _lam_c = max([0.9] + list(_eec_lam))
                             _tails = _acc_tail({_gk: _warm_grp[_gk]
-                                                for _gk in ("shaft",)
+                                                for _gk in _eec_last["bodies"]
                                                 if _gk in _warm_grp},
                                                int(n_steps_per_period), _lam_c)
+                            _pmr = {}
+                            if _eec_x0 is not None:
+                                for _gk, (_bi_r, _pm_r, _sg_r, _q_r, _s_r,
+                                          _M_r) in _eec_last["maps"].items():
+                                    _pmr[_gk] = _acc_pm_resid(
+                                        _acc_image_mean((A2 - _eec_x0)[_bi_r],
+                                                        _pm_r, _sg_r, _q_r, _s_r),
+                                        _acc_image_mean(A2[_bi_r], _pm_r, _sg_r,
+                                                        _q_r, _s_r),
+                                        _M_r, _lam_c)
                             _acc_check = {"lambda": float("%.4g" % _lam_c),
                                           "per_group": {_gk: float("%.3g" % _v)
-                                                        for _gk, _v in _tails.items()}}
-                            if max(_tails.values(), default=0.0) > _EDDY_SETTLE_TOL:
+                                                        for _gk, _v in _tails.items()},
+                                          "period_map_residual": {
+                                              _gk: float("%.3g" % _v)
+                                              for _gk, _v in _pmr.items()}}
+                            _worst_c = max(list(_tails.values()) + list(_pmr.values()),
+                                           default=float("inf"))
+                            if not _pmr or _worst_c > _EDDY_SETTLE_TOL:
                                 _warm_quiet = False
-                                _warm_resid = max(_warm_resid, max(_tails.values()))
+                                _warm_resid = max(_warm_resid, _worst_c)
                                 log.info("P2 eddy DC correction: the gauge passes but "
-                                         "the slow-mode tail at lambda %.3f is %s -- "
-                                         "not settled", _lam_c,
+                                         "the slow-mode tail at lambda %.3f is %s and "
+                                         "the period-map residual %s -- not settled",
+                                         _lam_c,
                                          {_gk: "%.3g %%" % (100.0 * _v)
-                                          for _gk, _v in _tails.items()})
+                                          for _gk, _v in _tails.items()},
+                                         {_gk: "%.3g %%" % (100.0 * _v)
+                                          for _gk, _v in _pmr.items()})
                     _quiet = (_warm_quiet
                               and not (demag and _dm_moved_in_warm))
                     if _ref_ok and not (_warm_resid <= _EDDY_SETTLE_TOL):
@@ -8208,10 +8256,29 @@ def fem_transient_sliding_band(
                                 and _warm_ext_periods in _eec_at
                                 and _eec_nJ == _eddy_cap
                                 and _shift_cache.get("map") is not None):
-                            # the eligible bodies the gauge still calls unsettled
-                            _eg = [_gk for _gk in _eec_groups
-                                   if (_warm_gres.get(_gk) is None
-                                       or _warm_gres[_gk] > _EDDY_SETTLE_TOL)]
+                            # the bodies that are significant (decided when the
+                            # average started) AND still unsettled by the gauge
+                            _why_b = {}
+                            for _gk in _eec_groups:
+                                if not _eec_sig.get(_gk, "").startswith("significant"):
+                                    _why_b[_gk] = _eec_sig.get(_gk, "not measured")
+                                elif not (_warm_gres.get(_gk) is None
+                                          or _warm_gres[_gk] > _EDDY_SETTLE_TOL):
+                                    _why_b[_gk] = "settled by the gauge"
+                                else:
+                                    _why_b[_gk] = "corrected"
+                            _eg = [_gk for _gk, _w in _why_b.items() if _w == "corrected"]
+                            if _eg and not (_eec_dhdb is not None and _eec_dhdb > 0.0):
+                                # K + T is not positive definite somewhere
+                                # (non-monotone B-H): no correction
+                                _acc_jumps.append({
+                                    "method": "dc_error_correction",
+                                    "after_period": int(_warm_ext_periods),
+                                    "applied": False,
+                                    "refused": "averaged operator not positive "
+                                               "(min dH/dB/nu = %s)" % _eec_dhdb,
+                                    "bodies_why": dict(_why_b)})
+                                _eg = []
                             if _eg:
                                 _Mb_e = None
                                 for _gk in _eg:
@@ -8241,9 +8308,26 @@ def fem_transient_sliding_band(
                                 _ok_e = bool(_lam_e is not None and 0.0 < _lam_e < 0.999
                                              and not _ie.get("refused"))
                                 if _ok_e:
+                                    # a time-constant (rotor-frame DC) correction:
+                                    # added to BOTH BDF2 history levels (A2 =
+                                    # A_k, _Aed_prev = A_{k-1}; the splice
+                                    # below carries both across the period), so
+                                    # the discrete dA/dt of the march is not
+                                    # kicked -- only the DC level moves
                                     _corr = np.zeros(N2); _corr[_bi] = _corr_b
                                     A2 = A2 + _corr
                                     _Aed_prev = _Aed_prev + _corr
+                                    _eec_last = {"bodies": list(_eg), "maps": {}}
+                                    for _gk in _eg:
+                                        _Mg_r = _Msig_grp[_gk].tocsr()
+                                        _bg = np.flatnonzero(np.asarray(
+                                            _Mg_r.diagonal()).ravel() > 0.0)
+                                        _pg_r, _sgn_r = _acc_restrict(
+                                            _mp_e[0], _mp_e[1], _mp_e[2], _bg)
+                                        _qg_r, _sg2_r, _ = _acc_cycles(_pg_r, _sgn_r)
+                                        _eec_last["maps"][_gk] = (
+                                            _bg, _pg_r, _sgn_r, _qg_r, _sg2_r,
+                                            _Mg_r[_bg][:, _bg].tocsr())
                                     _warm_grp = {}          # the gauge restarts
                                     _eec_lam.append(float(_lam_e))
                                     _acc_lams.append(float(_lam_e))
@@ -8251,13 +8335,16 @@ def fem_transient_sliding_band(
                                               else _vv) for _kk, _vv in _ie.items()}
                                 _ent.update({"after_period": int(_warm_ext_periods),
                                              "bodies": list(_eg), "dofs": int(_bi.size),
+                                             "bodies_why": dict(_why_b),
+                                             "dhdb_min_rel": (None if _eec_dhdb is None
+                                                              else float("%.3g" % _eec_dhdb)),
                                              "frames_averaged": int(_eec_nJ),
                                              "applied": _ok_e})
                                 _acc_jumps.append(_ent)
                                 log.info("P2 eddy DC error correction after "
                                          "extension period %d: %s", _warm_ext_periods,
                                          _ent)
-                        _eec_J = None; _eec_nJ = 0
+                        _eec_J = None; _eec_nJ = 0; _eec_dhdb = None
                         _warm_extended = True
                         _warm_ext_periods += 1
                         # the DC correction's Jacobian average runs only in a
@@ -8272,10 +8359,19 @@ def fem_transient_sliding_band(
                             _cu_m = abs(_lm.get("cu", 0.0))
                             _mach = (sum(abs(_v) for _gk, _v in _lm.items() if _gk != "cu")
                                      + max(_cu_m, abs(float(_warm_cu_W))))
-                            _eec_accum = any(
-                                _gk in _lm and (abs(_lm[_gk]) >= _EDDY_SIG_W
-                                                or abs(_lm[_gk]) >= 0.02 * _mach)
-                                for _gk in _eec_groups)
+                            _eec_sig = {}
+                            for _gk in _eec_groups:
+                                if _gk not in _lm:
+                                    _eec_sig[_gk] = "not measured"
+                                elif (abs(_lm[_gk]) >= _EDDY_SIG_W
+                                      or abs(_lm[_gk]) >= 0.02 * _mach):
+                                    _eec_sig[_gk] = "significant (%.4g W)" % _lm[_gk]
+                                else:
+                                    _eec_sig[_gk] = ("minor body (%.3g W < %g W and "
+                                                     "< 2 %% of %.4g W)"
+                                                     % (_lm[_gk], _EDDY_SIG_W, _mach))
+                            _eec_accum = any(_v.startswith("significant")
+                                             for _v in _eec_sig.values())
                         if k >= 0:
                             _n_warm += 1           # frame 0 was warm-up too
                             _fseq[_fi:_fi] = (list(range(-_eddy_cap + 1, 0))

@@ -28,7 +28,7 @@ filters, no loosened tolerance.
   1. Start the rotor conductors from the mean of their pole-pair images. This removes the
      imprint and the beat.
   2. After periods 2 and 4, correct the rotor-frame DC error of the slow ring conductors with
-     one static solve of the period-averaged exact Jacobian. This is a time-periodic
+     one static solve of the period-averaged Jacobian (unclamped tangent). This is a time-periodic
      explicit error correction (TP-EEC). It is verified afterwards by the unchanged gauge
      plus a slow-mode tail test at the operator's slowest λ.
 - **Result:** L155 now settles, at 614 frames, with the shaft 0.4 % from its asymptote.
@@ -150,10 +150,27 @@ k² ladder of magnetic diffusion across a slab with the field at both faces.
 
 ### 2.1 Start from the pole-pair image mean (`fem_solver_2d._rotor_image_mean`)
 
-- The cold static start keeps the whole field. Only the rotor conductors' history (shaft,
-  sleeve, magnets) is replaced by its mean over the pole-pair images.
+- The cold static start keeps the whole field. Only the history of the solid ring
+  conductors (shaft, sleeve) is replaced by its mean over the pole-pair images.
+  - Dofs shared with a magnet keep the static value. Averaging them moved the magnet's own
+    history at its face: a 4.9 kW one-frame kick in the L155 magnets, now 1.13 kW against
+    HEAD's 1.11 kW.
+  - Magnets keep the one-angle start: they settle inside a period, and averaging them cost
+    Ø40 one warm-up period.
 - `periodic_accel.pole_pair_image_mean` is the projection on the eigenvalue-1 space of S.
-  With σ = −1 that space does not exist and the mean is 0.
+- **Refused** (`image_mean_start_refusal`, logged, one-angle start kept):
+  - no solid ring conductor;
+  - a full-ring model, validated on sector models only;
+  - S^q = −I, where the eigenvalue-1 space is empty and the mean would erase the
+    magnets' DC flux in the ring.
+- **What the start costs** (L155, the ring loss of the first march frames, HEAD start →
+  image mean):
+  - shaft 0.25 → 44.5 W, sleeve 7.6 → 97.4 W, magnets 1108 → 1126 W in frame 1;
+  - by frame 3: shaft 15.7 W, sleeve 9.7 W, the steady level;
+  - so the history mismatch is dissipated in two steps, about 0.004 J against 3.5 J of
+    ring and magnet loss in period 1;
+  - period-1 shaft mean 28.0 → 12.9 W; sleeve, magnet and copper period-1 means within
+    0.08 %.
 - Nothing the orbit's slow part has is touched: the invariant sector is kept exactly.
 - The result records it in `eddy_cold_start.rotor_image_mean` (q, σ, dofs, share removed).
 - `SB_EDDY_START_IMAGE_MEAN=0` gives the one-angle start of before.
@@ -161,7 +178,7 @@ k² ladder of magnetic diffusion across a slab with the field at both faces.
 ### 2.2 DC error correction (`periodic_accel.dc_error_correction`)
 
 The slow part of a solid ring conductor relaxes as σM·ẋ + J̄·(x − x*) = 0, where J̄ is the
-exact Jacobian averaged over one electrical period. The average removes the fast AC of the
+Jacobian averaged over one electrical period. The average removes the fast AC of the
 skin layer, and the non-conducting region is eliminated by a full static solve. One period
 changes the state by u = (e^{−TA} − I)(x − x*), with A = (σM)⁻¹J̄, so
 
@@ -170,8 +187,14 @@ changes the state by u = (e^{−TA} − I)(x − x*), with A = (σM)⁻¹J̄, so
 - **One static solve corrects all the wall's slow modes at once.** The remainder is μT/12
   of each mode's correction: 0.4 % for the slow mode.
 - **Averaging.** J̄ is the mean of K + T over the 36 frames of the period that ends in the
-  correction. T is the *unclamped* tangent (`P2Nonlinear.tangent2(clamp=False)`): it is the
-  exact linearised dynamics, not a Newton step.
+  correction. T is the *unclamped* tangent (`P2Nonlinear.tangent2(clamp=False)`): the
+  linearised dynamics, not a Newton step.
+  - It is checked against a central difference of R(A) = K(A)·A. On the library curves
+    (42CrMo4, B10AHV900M) the error is 0.02–0.5 %, located at the table knots. At a
+    deliberate 500:1 kink it is 2–8 %.
+  - The minimum over the averaged frames of (dH/dB)/ν is recorded (L155: 0.39). If it is
+    not positive (a non-monotone curve), K + T is not positive definite and the correction
+    is refused.
 - **Only the periodic (m0) part is corrected.**
   - u and the correction are projected on sector m0. On the orbit the rotor-frame DC is m0.
   - J̄ is taken at one stator position, so J̄⁻¹ of an m0 vector is not m0. Its image mean
@@ -187,15 +210,36 @@ changes the state by u = (e^{−TA} − I)(x − x*), with A = (σM)⁻¹J̄, so
   ≤ 0.9, never looser.
 - **When it runs.**
   - Bodies: the closed rings cut by the (anti)periodic boundary (shaft, sleeve: no ∫J
-    row, U ≡ 0) that the gauge calls unsettled.
-  - Only when that body is judged on its own level (≥ 1 W or ≥ 2 % of the machine loss).
-    A milliwatt shaft is left alone and the period average is not even assembled.
+    row, U ≡ 0).
+  - Each body is decided on its own. It must be judged on its own level (≥ 1 W or ≥ 2 %
+    of the machine loss, decided when the average starts) **and** be unsettled by the
+    gauge. The reason for each body is recorded (`bodies_why`); on L155 the second
+    correction moved the shaft only ("sleeve: settled by the gauge").
+  - A milliwatt ring is left alone, and the period average is not even assembled.
   - Only after extension periods 2 and 4 (`SB_EDDY_EEC_AT`), and never in a full-ring
     model.
-- **Honesty guards (unchanged from the RRE accelerator).** Only the discarded prefix moves. The gauge
-  record restarts at each correction. ≥ 4 whole continuous periods are needed after the
-  last correction, plus the slow-mode test. Every correction is recorded in
-  `eddy_settle_gauge.accelerator.jumps`, and `eddy_settled_via_accelerator` says so.
+- **An accelerator, not an exact step.** One stator position's J̄, the projection, the
+  finite-difference tangent and the truncation after u/2 make it an approximation of the
+  period map. It moves only the discarded prefix, and the result must pass the checks
+  below on the original BDF2 march before a run may be called settled.
+- **Both BDF2 levels.** The correction is time-constant (rotor-frame DC). It is added to A_k
+  and A_{k−1}, and the splice carries both across the period. So the discrete dA/dt of the
+  march is unchanged, and only the DC level moves.
+  - Synthetic check (`test_dc_correction_on_both_bdf2_levels_does_not_kick_the_march`):
+    after an exact DC correction of 0.9 the next period deviates from the orbit by 6e-4 when
+    both levels move, and by 0.45 when only one level moves.
+- **Checks after the last correction, all on the original march:**
+  1. the unchanged per-body gauge on ≥ 4 whole continuous periods, its record restarted at
+     the correction;
+  2. the loss tail of **every corrected body** at the slowest λ, ≤ 2 %;
+  3. the **period-map residual** in the state (`periodic_accel.period_map_residual`): the
+     pole-pair-periodic change of each corrected body over the period just marched,
+     ×λ/(1−λ), as a bound on the DC error left, relative to the body's DC state, ≤ 2 %.
+  - L155: 0.32 → 0.08 % over the verification periods (a plain march at period 16: about
+    9 %).
+  - The residual is recorded in `eddy_settle_gauge.accelerator.slow_mode_check`.
+  - Every correction is recorded in `eddy_settle_gauge.accelerator.jumps`, and
+    `eddy_settled_via_accelerator` says so.
 - `SB_EDDY_EEC=0` switches back to the RRE accelerator. With `SB_EDDY_START_IMAGE_MEAN=0`
   as well, the march is the one of before, bit for bit.
 
@@ -285,3 +329,20 @@ same box and settings:
    (§2.2, measured).
 2. The slow-mode test uses the slowest periodic mode of J̄ (0.960). The mode the march
    actually excites is 0.954 (DMD). The stricter choice is kept.
+
+
+## 7. Review of 2026-09-30 (Codex on PR #63), answered with evidence
+
+| finding | real? | evidence / fix |
+|---|---|---|
+| B2: the inverse-iteration Rayleigh quotient gives μ², so λ is wrong | **no** | The code computes zᵀσM·(J̄⁻¹σM z) with ‖z‖_σM = 1, not znᵀσM zn. For an eigenvector that is exactly 1/μ. Dense references with μ = 0.014, 0.51, 1.07 and 173 all give λ = e^{−μT} to 1e-7 (`test_dc_correction_lambda_is_mu_not_mu_squared`; the μ² reading would give 0.999, 0.975, 0.948, 1.7e-4). |
+| H: BDF2 history after the jump | handled | Already correct: the correction goes to A_k and A_{k−1}, and the splice shifts both. The comment in the code now says so. Synthetic proof (§2.2): both levels 6e-4, one level 0.45. The L155 corrected run against the 40-period march's asymptotes: P_shaft −0.37 %, P_mag −0.001 %, P_sleeve −0.001 %, P_cu +0.002 %. |
+| H/M: an accelerator, not exact; period-map residual check | **real (wording, check)** | Renamed to an accelerator throughout. Added the state-based period-map residual gate on the original march (§2.2): L155 0.08 % at the verdict. |
+| M: unclamped finite-difference tangent | partly | The tangent matches a central difference to 0.02–0.5 % on the library curves (tests on a smooth curve at 1e-6 / 1e-3). The minimum (dH/dB)/ν is now recorded, and the correction is refused when it is ≤ 0 (a non-monotone curve is detected: test). |
+| M: per-body eligibility | **real** | Each body is now eligible only when significant AND unsettled, and the reason is recorded per body. The tail test covers every corrected body, not only the shaft. |
+| M: image-mean start: interface nodes, energy, cases | **real (interface)** | Magnet-shared dofs are excluded (the 4.9 kW magnet kick is gone). The start transient is quantified (§2.1). Full ring, σ = −1 and "no ring" are refused (`image_mean_start_refusal`, test). Covered by runs: anti-periodic sectors (L155, Ø40, L13), a thin sleeve (L155, 2.5 mm CF; P_sleeve −0.001 % vs asymptote) and a shaft-only rotor (Ø40, L13; correction not engaged). |
+
+Final L155 with these changes: 614 frames, settled (0.46 %), period-map residual 0.08 %,
+shaft 3.994 W. Ø40: 146 = 146 frames, headlines within 2e-4. L13: 162 = 162 frames, within
+3e-5. Targeted tests on the server: 58 passed (`test_periodic_accel`, `test_p2_nonlinear`,
+`test_eddy_period_gauge`, `test_eddy_settled_flag`, `test_eddy_settle_stop_rule`).

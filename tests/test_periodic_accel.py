@@ -311,3 +311,84 @@ def test_dc_correction_is_pole_pair_periodic_with_a_one_position_operator():
     np.testing.assert_allclose(corr, pole_pair_image_mean(raw, perm, sign, q, sg),
                                rtol=1e-10, atol=1e-10 * np.abs(corr).max())
     assert not np.allclose(sign * raw[perm], raw)  # the raw solve does inject
+
+
+# ── review items (2026-09-30) ──────────────────────────────────────────────
+from motor_ai_sim.simulation.periodic_accel import (  # noqa: E402
+    image_mean_start_refusal, period_map_residual)
+
+
+@pytest.mark.parametrize("aJ,aM", [(1.0, 1.0), (37.0, 1.0), (1.0, 0.013),
+                                   (250.0, 0.02)])
+def test_dc_correction_lambda_is_mu_not_mu_squared(aJ, aM):
+    # review claim: the Rayleigh quotient gives mu^2.  Dense reference with
+    # mu far from 1 in both directions: lambda must be exp(-mu T).
+    perm, sign, P, J, M = _equivariant_diffusion()
+    J, M = J * aJ, M * aM
+    q, sg, _ = shift_cycles(perm, sign)
+    B0 = np.linalg.qr(np.column_stack([
+        pole_pair_image_mean(np.eye(J.shape[0])[:, i], perm, sign, q, sg)
+        for i in range(6)]))[0]
+    mu0 = np.min(np.linalg.eigvals(np.linalg.solve(B0.T @ M @ B0,
+                                                   B0.T @ J @ B0)).real)
+    T = 0.05 / mu0
+    _, info = dc_error_correction(np.ones(J.shape[0]),
+                                  lambda v: np.linalg.solve(J, M @ v), M,
+                                  perm, sign, q, sg, T)
+    assert info["lambda"] == pytest.approx(np.exp(-mu0 * T), rel=1e-7)
+    if abs(mu0 - 1.0) > 0.1:
+        assert abs(info["lambda"] - np.exp(-mu0 ** 2 * T)) > 1e-3
+
+
+def test_image_mean_start_refusals():
+    assert image_mean_start_refusal(False, 1.0, 100) is None
+    assert "no solid ring" in image_mean_start_refusal(False, 1.0, 0)
+    assert "full-ring" in image_mean_start_refusal(True, 1.0, 100)
+    assert "S^q = -I" in image_mean_start_refusal(False, -1.0, 100)
+
+
+def test_period_map_residual_is_the_geometric_tail_bound():
+    M = np.diag([2.0, 1.0, 4.0])
+    x = np.array([1.0, -2.0, 0.5])
+    u = 1e-3 * x
+    # ||u|| lam/(1-lam) / ||x|| = 1e-3 * 0.95/0.05
+    assert period_map_residual(u, x, M, 0.95) == pytest.approx(0.019, rel=1e-12)
+    assert period_map_residual(0 * u, x, M, 0.95) == 0.0
+
+
+def test_dc_correction_on_both_bdf2_levels_does_not_kick_the_march():
+    """Review item (BDF2 history): the solver adds the DC correction c to
+    BOTH history levels (A_k and A_{k-1}).  On a two-mode model (a slow DC
+    mode and a fast mode driven at the period) that removes the slow error
+    and leaves the fast orbit untouched; adding c to one level only gives
+    the BDF2 derivative a kick of order |c|/dt."""
+    from motor_ai_sim.simulation.p2_drive import P2Drive
+    a_s, a_f, N = 0.05, 40.0, 36                  # per period units, T = 1
+    dt = 1.0 / N
+
+    def step(x1, x2, t):
+        dte, xh = P2Drive.bdf2_history(dt, dt, x1, x2)
+        f = np.array([0.0, np.sin(2 * np.pi * t)])
+        A = np.diag([a_s, a_f])
+        return np.linalg.solve(np.eye(2) / dte + A, xh / dte + f)
+
+    def march(x1, x2, t0, n):
+        out = []
+        for j in range(n):
+            t = t0 + (j + 1) * dt
+            x1, x2 = step(x1, x2, t), x1
+            out.append(x1)
+        return np.array(out), x1, x2
+    # orbit: long march from zero
+    _, o1, o2 = march(np.zeros(2), np.zeros(2), 0.0, 400 * N)
+    orbit, _, _ = march(o1, o2, 0.0, N)
+    # a start with a slow DC error of 1.0
+    x1, x2 = o1 + np.array([1.0, 0.0]), o2 + np.array([1.0, 0.0])
+    _, x1, x2 = march(x1, x2, 0.0, 2 * N)
+    c = np.array([-(x1[0] - o1[0]), 0.0])         # the exact DC correction
+    both, _, _ = march(x1 + c, x2 + c, 0.0, N)
+    one, _, _ = march(x1 + c, x2, 0.0, N)
+    e_both = np.max(np.abs(both - orbit))
+    e_one = np.max(np.abs(one - orbit))
+    assert e_both < 1e-3 * abs(c[0])
+    assert e_one > 20.0 * e_both

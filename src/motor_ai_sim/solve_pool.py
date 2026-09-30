@@ -97,9 +97,9 @@ ENV_RESERVE = "SOLVE_POOL_RAM_RESERVE_MB"
 ENV_CHILD = "SOLVE_POOL_CHILD"
 ENV_NICE = "SOLVE_POOL_NICE"
 
-#: Fallback per-solve RSS before any child has been measured.  The measured
-#: L155 eddy child peaks well below this (docs/SOLVE_POOL_2026-09-29.md); the
-#: margin covers the P2 frame keyframes a Simulation run keeps.
+#: Fallback per-solve RSS before any child has been measured.  A 40 mm child
+#: peaked at ~355 MB on the AX42 (docs/SOLVE_POOL_2026-09-29.md); the margin
+#: covers larger machines (L155) and the frame keyframes a Simulation run keeps.
 DEFAULT_RSS_MB = 1500
 DEFAULT_RESERVE_MB = 2048
 #: Widest a lone solve gets by default.  Measured on the AX42 (40 mm static,

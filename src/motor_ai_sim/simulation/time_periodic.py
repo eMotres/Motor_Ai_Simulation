@@ -81,6 +81,58 @@ C_M1 = 4.0 / 3.0
 C_M2 = -1.0 / 3.0
 
 
+EDDY_METHODS = ("tdm", "march")
+#: The eddy method every steady-state eddy run uses unless told otherwise
+#: (owner 2026-09-30).
+DEFAULT_EDDY_METHOD = "tdm"
+
+
+def resolve_eddy_method(requested: Optional[str], sim_config: Optional[Dict] = None,
+                        environ: Optional[Dict[str, str]] = None) -> str:
+    """The eddy method a run uses: the argument, else ``SB_EDDY_METHOD``, else
+    the config's ``simulation.eddy_method``, else :data:`DEFAULT_EDDY_METHOD`.
+    Raises on a name that is neither."""
+    env = os.environ if environ is None else environ
+    m = str(requested or env.get("SB_EDDY_METHOD")
+            or (sim_config or {}).get("eddy_method")
+            or DEFAULT_EDDY_METHOD).strip().lower()
+    if m not in EDDY_METHODS:
+        raise ValueError("eddy_method must be 'march' or 'tdm', got %r" % (requested,))
+    return m
+
+
+def tdm_refusals(*, eddy: bool, voltage_drive: bool, series_paths: bool,
+                 frozen_nu: bool, mixed_schedule: bool, bdf2: bool,
+                 n_periods: float, full_ring: bool, source_name: Optional[str],
+                 external_excitation: bool, six_phase: bool) -> List[str]:
+    """Why a run cannot be solved time-periodically (empty = it can).  Each
+    reason sends the run to the march, with the reason in the result."""
+    why: List[str] = []
+    if not eddy:
+        why.append("eddy is off (nothing to settle)")
+    if external_excitation or source_name not in ("current", "custom_current",
+                                                  "bldc_current"):
+        why.append("an external or closed-loop excitation source")
+    if six_phase:
+        why.append("six-phase winding (not validated with TDM)")
+    if voltage_drive:
+        why.append("voltage / PWM drive: the circuit state is not in the "
+                   "periodic wrap (PWM is out of scope)")
+    if series_paths:
+        why.append("series strand paths (the bordered matrix is a saddle point)")
+    if frozen_nu:
+        why.append("frozen_nu")
+    if mixed_schedule:
+        why.append("mixed-resolution schedule")
+    if not bdf2:
+        why.append("backward Euler (SB_EDDY_BE=1): TDM closes BDF2")
+    if abs(float(n_periods) - round(float(n_periods))) > 1e-9:
+        why.append("a fractional reported window")
+    if full_ring:
+        why.append("full-ring model (validated on sector models only)")
+    return why
+
+
 def bdf2_msd(Msig, dt: float):
     """sigma*M / dte of the uniform BDF2 step — the ONE place both the frames
     and the solver take it from."""

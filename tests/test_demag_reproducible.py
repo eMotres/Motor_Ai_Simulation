@@ -74,8 +74,10 @@ def _clear_warm_cache() -> None:
 def _run() -> Dict[str, Any]:
     set_request_materials(OVERRIDE)
     try:
+        # the warm-seed legs are the MARCH's (TDM ignores the seed)
         return fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
-                                          connection=CONNECTION, **CASE)
+                                          connection=CONNECTION, eddy_method="march",
+                                          **CASE)
     finally:
         set_request_materials(None)
 

@@ -260,8 +260,10 @@ pytestmark_slow = pytest.mark.slow
 def _run() -> Dict[str, Any]:
     set_request_materials(OVERRIDE)
     try:
+        # the warm seed is the MARCH's (TDM solves the orbit and ignores it)
         return fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
-                                          connection=CONNECTION, **CASE)
+                                          connection=CONNECTION, eddy_method="march",
+                                          **CASE)
     finally:
         set_request_materials(None)
 

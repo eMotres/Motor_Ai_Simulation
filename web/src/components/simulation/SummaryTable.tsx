@@ -96,8 +96,11 @@ export interface TransientSummary {
   torque_method?:      string | null;
   // Coulomb two-ring self-check: true = the air-gap mesh limits the ripple.
   ripple_mesh_limited?: boolean | null;
-  ripple_layer_diff_rel_pp?: number | null;
+  ripple_self_check_rel?: number | null;
   gap_layers_note?:    string | null;
+  // The measured gap rule re-solved this run with more layers per side.
+  gap_refinement?: { applied?: boolean; gap_layers_per_side?: number;
+                     first?: { gap_layers_per_side?: number } } | null;
   P_mech_W:            number;
   V_phase_peak_V:      number;
   V_phase_rms_V:       number;
@@ -1092,12 +1095,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             </Typography>
           </Tooltip>
         )}
+        {s.gap_refinement?.applied && (
+          <Tooltip title={s.gap_layers_note ?? 'Re-solved with more air-gap layers per side.'}>
+            <Typography sx={{ fontSize: 10, color: 'var(--text-3)', cursor: 'help' }}>
+              {`Gap ${s.gap_refinement.first?.gap_layers_per_side ?? '?'}→${s.gap_refinement.gap_layers_per_side ?? '?'}/side`}
+            </Typography>
+          </Tooltip>
+        )}
         {s.ripple_mesh_limited && (
-          <Tooltip title={'The torque computed on the rotor-side and the stator-side air-gap '
-            + 'rings differs by '
-            + (s.ripple_layer_diff_rel_pp != null
-              ? `${fmt(s.ripple_layer_diff_rel_pp * 100, 0)} % of the ripple p-p`
-              : 'more than 10 % of the ripple p-p')
+          <Tooltip title={'The torque on the rotor-side and on the stator-side air-gap ring '
+            + 'differs by '
+            + (s.ripple_self_check_rel != null
+              ? `${fmt(s.ripple_self_check_rel * 100, 0)} % of the ripple`
+              : 'more than 5 % of the ripple')
             + ': the air-gap mesh, not the machine, sets the ripple. '
             + 'Raise Air-gap layers/side on the Mesh tab and re-run.'
             + (s.gap_layers_note ? ` ${s.gap_layers_note}.` : '')}>

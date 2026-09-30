@@ -5185,6 +5185,10 @@ def get_fem_transient(
         # The REPORTED torque method (Coulomb default since 2026-09-30): the
         # same field, a different T_em / ripple — never one entry.
         ("torque_method", _torque_method_eff),
+        # The measured gap rule (Coulomb self-check gate + one refined
+        # re-solve, fem_solver_2d._solve_with_gap_refinement): a run solved
+        # before it existed may carry a mesh-limited ripple, never served here.
+        ("gap_rule", "coulomb_selfcheck_5pct_v1"),
     ))
     # The pack does not change the FIELD, but it changes the summary's charging
     # block (R_pack sets the bus rise, the capacity sets the C-rate), and the
@@ -7798,10 +7802,12 @@ def _build_transient_summary(
         "T_avg_coulomb_Nm": sbres.get("T_avg_coulomb_Nm"),
         "T_ripple_pp_coulomb": sbres.get("T_ripple_pp_coulomb"),
         # Coulomb's two-ring self-check: True = the rotor- and stator-side gap
-        # rings disagree by more than 10 % of the torque p-p, i.e. the air-gap
-        # mesh (not the machine) limits the ripple.  None on runs without it.
+        # rings disagree by more than 5 % of the ripple scale, max(p-p, 0.5 % of
+        # the mean), even after the one refined re-solve: the air-gap mesh (not
+        # the machine) limits the ripple.  None on runs without it.
         "ripple_mesh_limited": _ripple_self_check(sbres).get("ripple_mesh_limited"),
-        "ripple_layer_diff_rel_pp": _ripple_self_check(sbres).get("rel_to_pp"),
+        "ripple_self_check_rel": _ripple_self_check(sbres).get("rel_to_ripple_scale"),
+        "gap_refinement": sbres.get("gap_refinement"),
         "gap_layers_requested": sbres.get("gap_layers_requested"),
         "gap_layers_effective": sbres.get("gap_layers_effective"),
         "gap_layers_note": sbres.get("gap_layers_note"),

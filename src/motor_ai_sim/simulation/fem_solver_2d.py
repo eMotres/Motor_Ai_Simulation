@@ -3848,6 +3848,10 @@ def fem_transient_sliding_band(
                                      # torque ~35 % (its Maxwell integral is radius-inconsistent
                                      # under load) and its ripple was a mesh staircase, so every P1
                                      # number needed a correction nobody could state.
+    slip_per_period: Optional[int] = None,  # force the slip-ring nodes per electrical
+                                     # period (None = adaptive).  em_transient_eval's gap
+                                     # refinement pins the first solve's ring so the rotor
+                                     # angles (and the step snap) do not move.
     torque_method: Optional[str] = None,  # REPORTED torque: "coulomb" (DEFAULT since
                                      # 2026-09-30: Coulomb virtual-work waveform, mean and
                                      # ripple) or "hybrid_maxwell_ac" (energy / terminal-work
@@ -3940,17 +3944,16 @@ def fem_transient_sliding_band(
     min_size_mm = float(min_size_mm)
     cfg = get_config(); sim = cfg.get("simulation", {})
     torque_method = _resolve_torque_method(torque_method, sim)
-    # Air-gap mesh floor (sb_domains.effective_gap_layers): every reported run
-    # has >= GAP_LAYERS_MIN element rows on each side of the slip circle.
+    # Air-gap floor (sb_domains.effective_gap_layers; 1 = none unless the
+    # SB_GAP_LAYERS_MIN fallback is set).  The measured gap rule lives in
+    # em_transient_eval (Coulomb self-check gate + one refined re-solve).
     _gap_layers_req = float(gap_layers)
     gap_layers = _effective_gap_layers(gap_layers, sampling_purpose)
     _gap_layers_note = None
     if gap_layers != _gap_layers_req:
         _gap_layers_note = (
-            "gap_layers %g requested, %g used: every reported run has at least "
-            "%g element rows on each side of the slip circle (a coarser gap "
-            "mis-reads the torque ripple)" % (_gap_layers_req, gap_layers,
-                                               _GAP_LAYERS_MIN))
+            "gap layers %g/side requested, %g/side used (floor %g/side)"
+            % (_gap_layers_req, gap_layers, _GAP_LAYERS_MIN))
         log.warning("SB: %s", _gap_layers_note)
     geo = dict(cfg.get("geometry", {}))
     # The winding block is COPIED, never referenced: the per-request connection /
@@ -4528,11 +4531,11 @@ def fem_transient_sliding_band(
         while (pole_pairs * _slip_per_period) % _ns_abs:
             _slip_per_period += 1
         n_slip_eff = pole_pairs * _slip_per_period
-    if _SLIP_PER_PERIOD_OVERRIDE:        # advanced: force ring density (dev flag —
+    if slip_per_period or _SLIP_PER_PERIOD_OVERRIDE:  # force ring density (dev flag —
         # decouples ring-count/mesh convergence studies from the adaptive
         # slip(gap_layers) coupling).  Snapped UP to the 24k grid so the wedge
         # node counts (n_slip/n_sectors) stay integral for sector models too.
-        _spo = int(_SLIP_PER_PERIOD_OVERRIDE)
+        _spo = int(slip_per_period or _SLIP_PER_PERIOD_OVERRIDE)
         _slip_per_period = 24 * max(1, math.ceil(_spo / 24.0))
         n_slip_eff = pole_pairs * _slip_per_period
 
@@ -10360,10 +10363,11 @@ def fem_transient_sliding_band(
     _coul2["torque_method_requested"] = torque_method
     if _coul2["layer_self_check"].get("ripple_mesh_limited"):
         log.warning("Coulomb layer self-check: rotor- and stator-side gap rings "
-                    "differ by %.3g N·m = %.1f %% of the torque p-p — the ripple "
-                    "is limited by the air-gap mesh (raise gap layers)",
+                    "differ by %.3g N·m = %.1f %% of the ripple scale at %g gap "
+                    "layers/side — the ripple is limited by the air-gap mesh",
                     _coul2["layer_self_check"]["max_abs_diff_Nm"],
-                    100.0 * _coul2["layer_self_check"]["rel_to_pp"])
+                    100.0 * _coul2["layer_self_check"]["rel_to_ripple_scale"],
+                    float(gap_layers))
     if torque_method == "coulomb":
         if _coul2["available"]:
             _T2 = list(_coul2["T_coulomb_series"])
@@ -11555,6 +11559,8 @@ def em_transient_eval(
                                      # away, so the field views can render the run's own
                                      # field instead of re-solving it.
     torque_method: Optional[str] = None,  # "coulomb" (default) | "hybrid_maxwell_ac" | None
+    gap_refine: bool = True,         # re-solve ONCE with more gap layers per side when the
+                                     # Coulomb self-check fails its 5 % gate (see below)
 ) -> Dict:
     """THE single canonical sliding-band transient invocation.
 
@@ -11565,7 +11571,7 @@ def em_transient_eval(
     disk-save (those UI concerns stay in the route, which wraps this). Returns the
     raw sliding-band result dict (sbres).
     """
-    return fem_transient_sliding_band(
+    _kw = dict(
         n_steps_per_period=int(n_steps_per_period), n_periods=float(n_periods),
         sampling_purpose=_sampling_purpose(sampling_purpose),
         gamma_deg=float(gamma_deg), I_phase_rms=float(I_phase_rms),
@@ -11603,6 +11609,63 @@ def em_transient_eval(
         # B(t) history is complete, which is what the loss map and the coupled
         # eddy J are derived from.
         return_field=bool(return_field), torque_method=torque_method)
+    return _solve_with_gap_refinement(_kw, gap_refine=bool(gap_refine))
+
+
+def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
+    """Solve, then apply the MEASURED air-gap rule (owner 2026-09-30).
+
+    The Coulomb torque is computed on the rotor-side and on the stator-side
+    gap ring; their difference, over max(p-p, 0.5 % of |mean|), is the gap
+    mesh's own error of the ripple.  Above ``SELF_CHECK_GATE`` (5 %) the run is
+    solved ONCE more with the gap layers per side predicted by
+    ``gap_layers_for_self_check`` (P2 order 2, 4 % target, at most 6/side),
+    on the SAME slip ring (so the rotor angles and the step snap do not move)
+    — measured: the ring density does not move torque or ripple, the gap
+    layers do (docs/COULOMB_TORQUE_2026-09-30.md §3.3, §6).  The second result
+    is returned with ``gap_refinement`` describing both solves; a run that
+    still fails keeps ``ripple_mesh_limited`` set.  Internal probes, the
+    harmonic macro gap and ``SB_GAP_REFINE=0`` are never refined.
+    """
+    from motor_ai_sim.simulation.virtual_work_torque import (
+        SELF_CHECK_GATE as _gate, gap_layers_for_self_check as _gl_for)
+    res = fem_transient_sliding_band(**kw)
+
+    def _sc(r):
+        c = (r.get("coulomb_torque") or {}).get("layer_self_check") or {}
+        return c.get("rel_to_ripple_scale")
+    gl0 = float(res.get("gap_layers_effective") or kw.get("gap_layers") or 1.0)
+    eps0 = _sc(res)
+    new = None
+    if (gap_refine and kw.get("sampling_purpose") != "internal_probe"
+            and not bool(kw.get("airgap_macro"))
+            and _os_sb.environ.get("SB_GAP_REFINE", "1") != "0"):
+        new = _gl_for(gl0, eps0)
+    info = {"applied": False, "gate_rel_to_ripple_scale": _gate,
+            "gap_layers_per_side": gl0, "self_check_rel_to_ripple_scale": eps0}
+    if new is None:
+        res["gap_refinement"] = info
+        return res
+    log.warning("SB gap rule: Coulomb self-check %.1f %% of the ripple scale at "
+                "%g gap layers/side > %.0f %% gate — re-solving once at %g/side "
+                "on the same %s-node slip ring", 100.0 * eps0, gl0,
+                100.0 * _gate, new, res.get("slip_nodes_per_period"))
+    kw2 = dict(kw, gap_layers=float(new),
+               slip_per_period=int(res.get("slip_nodes_per_period") or 0) or None)
+    res2 = fem_transient_sliding_band(**kw2)
+    res2["gap_refinement"] = dict(
+        info, applied=True, gap_layers_per_side=float(new),
+        self_check_rel_to_ripple_scale=_sc(res2),
+        first={"gap_layers_per_side": gl0, "self_check_rel_to_ripple_scale": eps0,
+               "T_avg_Nm": res.get("T_avg_Nm"),
+               "T_ripple_pp_Nm": res.get("T_ripple_pp_Nm"),
+               "solve_wall_s": res.get("solve_wall_s")})
+    res2["gap_layers_requested"] = res.get("gap_layers_requested")
+    res2["gap_layers_note"] = (
+        "gap layers raised from %g to %g per side: the Coulomb self-check was "
+        "%.1f %% of the ripple scale (gate %.0f %%)"
+        % (gl0, new, 100.0 * eps0, 100.0 * _gate))
+    return res2
 
 
 def measure_six_phase_inductances(*, six_phase: dict, I_phase_rms: float,

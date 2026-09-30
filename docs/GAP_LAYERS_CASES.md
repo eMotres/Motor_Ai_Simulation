@@ -47,9 +47,13 @@ Why these step counts: they divide the slip ring at every level (the ring grows 
 gap layers). Ø40: 144 / 192 / 240 nodes per period at gl 1 / 2 / 3. L13: 120 at every
 level. L155: 216 / 288 / 336. The L155 gl3 run snaps 72 to 84.
 
-`SB_GAP_LAYERS_MIN=1` switches off the production floor of 3 layers per side
-(`sb_domains.GAP_LAYERS_MIN`), so levels 1 and 2 really run. Code without the floor
-(`54f33f2`) ignores the variable.
+Two switches make each level run exactly as asked on code that has the gap rule:
+
+* `SB_GAP_LAYERS_MIN=1` keeps the fallback flat floor off. It is already off by default.
+* `SB_GAP_REFINE=0` stops the measured rule from re-solving a level whose Coulomb
+  self-check fails (`fem_solver_2d._solve_with_gap_refinement`).
+
+The march reference numbers were run on `54f33f2`, which has neither switch.
 
 ```sh
 # server sandbox (nice 19, ionice idle, 4 threads; never the live API)
@@ -62,7 +66,7 @@ cp scripts/gap_layers_study/job.sh scripts/gap_layers_study/runq.sh scripts/gap_
 cp -r src $D/src                      # the code under test
 cd $D && D=$D nohup sh runq.sh > runq.out 2>&1 &
 # one case by hand:
-D=$D EXTRA_ENV="-e SB_GAP_LAYERS_MIN=1" sh $D/job.sh e_d40_gl1 coul_run.py \
+D=$D EXTRA_ENV="-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0" sh $D/job.sh e_d40_gl1 coul_run.py \
     --machine d40 --gl 1 --steps 48 --eddy --demag
 # table:
 python scripts/gap_layers_study/gaptable.py $D/out/e_*.json

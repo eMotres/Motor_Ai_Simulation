@@ -3666,7 +3666,9 @@ def _pwm_loss_map(body: Dict[str, Any], em: Dict[str, Any],
         outer_air_factor=_f(body, "outer_air_factor", 1.3),
         n_sectors=int(body.get("n_sectors") or 1),
         stator_fillet_mm=_f(body, "stator_fillet_mm", 0.0),
-        gap_layers=_f(body, "gap_layers", 2.0),
+        # The RUN's default when the body omits it (get_fem_transient: 3.0) —
+        # a 2.0 here keyed the probe to a gap the run never meshed.
+        gap_layers=_f(body, "gap_layers", 3.0),
         component_mesh=str(body.get("component_mesh") or ""),
         pole_copy=bool(body.get("pole_copy", False)),
         iron_template=bool(body.get("iron_template", True)),

@@ -159,20 +159,19 @@ DOM_COIL_BASE = 200
 _SG_M_TARGET = int(_os_sb.environ.get("SB_SG_M_TARGET", "14") or 14)
 
 
-# ── Air-gap mesh floor (owner 2026-09-30) ────────────────────────────────────
+# ── Air-gap mesh floor (2026-09-30) ─────────────────────────────────────────
 # ``gap_layers`` is the number of element rows on EACH side of the slip circle
 # (the rotor half r_ro→mid and the stator half mid→r_si each get that many; the
-# mesher's structured-gap spec calls it K and builds 2K rings).  Every reported
-# sliding-band run uses at least GAP_LAYERS_MIN of them: on the Ø40 (0.2 mm
-# gap) one row per side over-read the converged torque ripple by 0.7 pp /
-# +10 % with every torque method, three rows were inside the owner's
-# max(0.5 pp, 10 %) target (docs/COULOMB_TORQUE_2026-09-30.md §3.3).  Internal
-# probes (d-axis / ψ_PM / Ld-Lq calibration, sampling_purpose "internal_probe")
-# keep what they ask for: they report no torque, and their cached answers (the
-# d-axis frame every run is solved in) must not move.
-# SB_GAP_LAYERS_MIN overrides it for mesh-convergence studies only (1 = off);
-# docs/GAP_LAYERS_CASES.md runs its gl1/gl2 cases that way.
-GAP_LAYERS_MIN = float(_os_sb.environ.get("SB_GAP_LAYERS_MIN", "3") or 3)
+# mesher's structured-gap spec calls it K and builds 2K rings), i.e. 3 per side
+# = 6 rows across the gap.  The gap resolution is decided by MEASUREMENT, not by
+# a flat floor: every run's Coulomb two-ring self-check is gated at 5 % of the
+# ripple scale and em_transient_eval re-solves once with more layers per side
+# when it fails (virtual_work_torque.gap_layers_for_self_check,
+# docs/COULOMB_TORQUE_2026-09-30.md §6).  GAP_LAYERS_MIN is therefore 1 (no
+# floor).  SB_GAP_LAYERS_MIN=3 restores the flat floor the owner first approved
+# — the fallback if the measured rule is ever retired.  Internal probes
+# (sampling_purpose "internal_probe") are never lifted.
+GAP_LAYERS_MIN = float(_os_sb.environ.get("SB_GAP_LAYERS_MIN", "1") or 1)
 
 
 def effective_gap_layers(requested, sampling_purpose: str = "standard") -> float:

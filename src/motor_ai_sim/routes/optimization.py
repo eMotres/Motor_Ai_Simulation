@@ -341,7 +341,11 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # for a multi-strand or delta machine carries the transposed / star
         # answer under a key that still matches its config, so the version is
         # the only honest way to retire them all.
-        "v": 4,
+        # v5 (2026-09-30): the reported torque is Coulomb virtual work by
+        # default and a run whose Coulomb gap self-check fails is re-solved
+        # with more gap layers per side — every v4 entry holds the hybrid
+        # torque on the requested gap.
+        "v": 5,
         "sampling_purpose": sampling_purpose,
         # Physics the CALLER pinned for the whole run (rpm / connection / demag
         # / eddy from a descent plan).  A pinned run solves the pinned values no

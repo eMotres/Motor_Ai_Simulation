@@ -149,7 +149,13 @@ Codex reviewed the PR diff (not blocking with the flag off; blocking before
 | 5d | a queued optimizer eval cancelled by Stop comes back as a failed eval with rc -15 | real | `CommandResult.cancelled` / `cancelled_while_waiting`. `_subprocess_eval` returns `{"ok": False, "cancelled": True}` with no exit-code error and no timing sample, and nothing goes to the surrogate log. Test: `test_queued_optimizer_eval_cancel_is_cancelled_not_failed` |
 | 6 | "byte for byte" overstates the flag-off path | real | Reworded here, in the module docstring and in the PR: behaviourally equivalent, not literally the same code |
 
-The bench above was taken before these fixes. The scheduling changes can
-only make a burst start later (the old width stays reserved until the child
-confirms). The solve path, the child protocol for results, and the equality
-are unchanged.
+Re-checked on the AX42 after the fixes (sandbox
+`/opt/motres/compute/solvepool-20260930`, deleted afterwards). The run started
+only once no other agent's queue or container was running, and used the same
+limits as above:
+- `tests/test_solve_pool.py`: 50 passed on Linux (`motres-api:test`), covering
+  the process group, `wait4` and `waitid(WNOWAIT)` paths.
+- Equality in-process vs pool, static: again bit-identical (348 fields). The
+  cache echo was accepted, with no refusal logged.
+- Pool 6, 12 points: 171.8 s (251 points/h; before the fixes 179.7 s), single
+  solve 59.0 s, peak RSS 1.67 GB tree / 349 MB per child.

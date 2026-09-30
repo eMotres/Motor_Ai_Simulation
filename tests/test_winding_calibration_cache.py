@@ -137,9 +137,11 @@ def test_psi_pm_disk_separates_winding_and_ignores_legacy_without_deletion(monke
     changed = other_winding()
     disk = tmp_path/"daxis.json"
     old = f"psipm_{fem._daxis_geo_fingerprint(GEO)}_L1_C2S_T6P1"
-    entries = {old: [33., 34.], fem.psipm_cache_key(GEO, WIND): [20., 21.]}
+    # the solving path keys on the material cards of the call it answers
+    mats = fem._noload_material_fingerprint()
+    entries = {old: [33., 34.], fem.psipm_cache_key(GEO, WIND, materials=mats): [20., 21.]}
     if matching_entry:
-        entries[fem.psipm_cache_key(GEO, changed)] = [77., 78.]
+        entries[fem.psipm_cache_key(GEO, changed, materials=mats)] = [77., 78.]
     disk.write_text(json.dumps(entries), encoding="utf-8")
     before = disk.read_bytes()
     monkeypatch.setattr(fem, "_daxis_disk_path", lambda: str(disk))

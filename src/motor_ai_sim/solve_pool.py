@@ -1677,11 +1677,11 @@ def apply_fem_echo(echo: Dict[str, Any], *, nonce: str, expected: str) -> bool:
       refused, and this workspace's in-memory seed is DROPPED so the next
       in-process read falls back to the per-workspace disk mirror the worker
       wrote instead of an older state;
-    * d-axis calibrations are added only for keys this process does not hold
+    * d-axis calibrations are added only for keys this workspace does not hold
       (an in-process solve would have hit its own entry first).  Their keys
-      are the solver's topology key (geometry fingerprint + winding); that key
-      is the solver's, and so is the fact that the dict is shared across
-      workspaces in-process too.
+      are the solver's topology key (geometry fingerprint + winding), and
+      ``fem_solver_2d._DAXIS_CACHE`` is a per-workspace map like the warm
+      seed (2026-09-30), so the entries land in the caller's workspace only.
 
     Returns True when installed.
     """

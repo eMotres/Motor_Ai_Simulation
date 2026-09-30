@@ -1,33 +1,27 @@
-import sys
-import types
-
+"""The regularised preconditioner owns one native factorisation and releases
+it exactly once (any backend: PARDISO, CHOLMOD, MUMPS, SuperLU)."""
 import numpy as np
 from scipy.sparse import csr_matrix, eye
 from scipy.sparse.linalg import splu
 
+from motor_ai_sim.simulation import linear_backend as LB
 from motor_ai_sim.simulation.static3d.nedelec import (
     REG_PRECOND_C,
     _regularised_preconditioner,
 )
 
 
-class FakePardiso:
-    def __init__(self, fail=False, fail_release=False):
-        self.fail = fail
+class FakeFactor:
+    def __init__(self, A, fail_release=False):
+        self.A = A
         self.fail_release = fail_release
-        self.freed = []
-        self.matrix = None
+        self.freed = 0
 
-    def factorize(self, matrix):
-        self.matrix = matrix
-        if self.fail:
-            raise RuntimeError("simulated factorization failure")
+    def solve(self, v):
+        return np.linalg.solve(self.A.toarray(), v)
 
-    def solve(self, matrix, vector):
-        return np.linalg.solve(matrix.toarray(), vector)
-
-    def free_memory(self, *, everything):
-        self.freed.append(everything)
+    def free(self):
+        self.freed += 1
         if self.fail_release:
             raise RuntimeError("simulated native cleanup failure")
 
@@ -38,54 +32,45 @@ def _matrices():
     return A, M
 
 
-def _install_fake(monkeypatch, solver):
-    monkeypatch.setitem(
-        sys.modules,
-        "pypardiso",
-        types.SimpleNamespace(PyPardisoSolver=lambda: solver),
-    )
-
-
-def test_factorize_failure_releases_once_then_superlu_fallback_works(monkeypatch):
-    fake = FakePardiso(fail=True)
-    _install_fake(monkeypatch, fake)
-    A, M = _matrices()
-
-    apply, release = _regularised_preconditioner(A, M)
-
-    assert callable(apply)
-    assert callable(release)
-    assert fake.freed == [True]
+def _areg(A, M):
     dK, dM = A.diagonal(), M.diagonal()
     eps = REG_PRECOND_C * np.median(dK[dM > 0] / dM[dM > 0])
-    Areg = (A + eps * M).tocsr()
-    rhs = np.array([1.0, 2.0])
-    np.testing.assert_allclose(apply(rhs), splu(Areg.tocsc()).solve(rhs))
-
-
-def test_cleanup_failure_does_not_break_fallback_or_repeat_release(monkeypatch):
-    fake = FakePardiso(fail=True, fail_release=True)
-    _install_fake(monkeypatch, fake)
-    A, M = _matrices()
-
-    apply, release = _regularised_preconditioner(A, M)
-
-    assert callable(apply)
-    assert callable(release)
-    rhs = np.array([1.0, 2.0])
-    assert np.isfinite(apply(rhs)).all()
-    release()
-    assert fake.freed == [True]
+    return (A + eps * M).tocsr()
 
 
 def test_successful_factorization_cleanup_releases_once(monkeypatch):
-    fake = FakePardiso()
-    _install_fake(monkeypatch, fake)
+    made = []
+
+    def factorize(A, spd=False, log=None):
+        assert spd, "A + eps*M is SPD and must be offered to Cholesky"
+        made.append(FakeFactor(A))
+        return made[-1]
+    monkeypatch.setattr(LB, "factorize", factorize)
     A, M = _matrices()
 
     apply, release = _regularised_preconditioner(A, M)
 
-    np.testing.assert_allclose(apply(np.array([1.0, 2.0])), fake.solve(fake.matrix, np.array([1.0, 2.0])))
-    assert fake.freed == []
+    rhs = np.array([1.0, 2.0])
+    np.testing.assert_allclose(apply(rhs), splu(_areg(A, M).tocsc()).solve(rhs))
+    assert made[0].freed == 0
     release()
-    assert fake.freed == [True]
+    assert made[0].freed == 1
+
+
+def test_factorize_failure_gives_no_preconditioner(monkeypatch):
+    def factorize(A, spd=False, log=None):
+        raise RuntimeError("every backend failed")
+    monkeypatch.setattr(LB, "factorize", factorize)
+    A, M = _matrices()
+    assert _regularised_preconditioner(A, M) == (None, None)
+
+
+def test_real_backend_solves_the_regularised_system():
+    """Whatever backend this environment has, the preconditioner is the exact
+    inverse of A + eps*M and releases cleanly."""
+    A, M = _matrices()
+    apply, release = _regularised_preconditioner(A, M)
+    rhs = np.array([1.0, 2.0])
+    np.testing.assert_allclose(apply(rhs), splu(_areg(A, M).tocsc()).solve(rhs),
+                               rtol=1e-12)
+    release()

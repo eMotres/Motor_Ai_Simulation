@@ -53,7 +53,7 @@ from typing import Any, Dict, List, Mapping, Tuple, Optional, Literal
 import numpy as np
 
 from motor_ai_sim.simulation.pardiso_lifetime import (
-    own_pardiso as _own_pardiso, pardiso_scope as _pardiso_scope,
+    pardiso_scope as _pardiso_scope,
 )
 
 
@@ -5795,56 +5795,22 @@ def fem_transient_sliding_band(
         SlipProjection as _SlipProjection,
         SlipMortarDerivativeAction as _SlipMortarDerivativeAction,
     )
-    # ONE persistent MKL PARDISO solver for the whole run: it caches the
-    # symbolic factorization and reuses it across the same-pattern Picard
-    # sweeps of a frame (re-analysing only when the pattern changes — new
-    # frame / new slip pairing).  None ⇒ pypardiso unavailable ⇒ SuperLU.
-    try:
-        if _os_sb.environ.get("SB_NO_PARDISO") == "1":
-            raise ImportError("disabled via SB_NO_PARDISO")
-        import pypardiso as _pypard2
-        # PERF — 12.5 s per transient, spent looking for a file.
-        # PyPardisoSolver.__init__ locates mkl_rt with ctypes.util.find_library
-        # and, when that returns None (it does on this Windows/CPython layout —
-        # measured, both 'mkl_rt' and 'mkl_rt.1' come back None in 0.01 s), it
-        # falls back to a RECURSIVE glob of sys.prefix/[Ll]ib*/**.  cProfile on
-        # a 4-step demag+eddy run: 211 290 directory reads, 12.5 s, on EVERY
-        # solve, before one element is assembled — 30 % of a short run and
-        # 12.5 s × N of any optimizer batch that evaluates in-process.
-        # The library path is a process constant, and the module-level solver
-        # pypardiso builds at import time has already paid for the search, so
-        # publish its answer through the env var __init__ consults FIRST.  Every
-        # later construction then goes straight to ctypes.CDLL (measured 0.00 s).
-        # Nothing about the solve changes: same class, same one-instance-per-run
-        # lifetime, same MKL library — only the search for it is skipped.
-        if not _os_sb.environ.get("PYPARDISO_MKL_RT"):
-            try:
-                _mkl_rt_path = _pypard2.scipy_aliases.pypardiso_solver.libmkl._name
-                if _mkl_rt_path:
-                    _os_sb.environ["PYPARDISO_MKL_RT"] = str(_mkl_rt_path)
-            except Exception:   # older/rearranged pypardiso — just pay the glob
-                pass
-        _pardiso2 = _own_pardiso(_pypard2.PyPardisoSolver())
-    except Exception as _pae:
-        log.info("pypardiso unavailable (%s) — using SuperLU for P2", _pae)
-        _pardiso2 = None
-    # A SECOND handle, mtype 2 (Cholesky), for the solves whose operator is
-    # SPD by construction (P2Nonlinear.solve_ff(spd=True); proofs in
-    # docs/CHOLESKY_SPD_2026-09-29.md).  Checked per matrix, LU otherwise.
-    # SB_PARDISO_SPD=0 keeps every solve on the unsymmetric LU above.
-    _pardiso2_spd = None
-    if _pardiso2 is not None and _os_sb.environ.get("SB_PARDISO_SPD", "1") != "0":
-        try:
-            _h_spd = _pypard2.PyPardisoSolver(mtype=2)
-            _need = ("_call_pardiso", "_check_b", "set_phase", "iparm")
-            if not all(hasattr(_h_spd, _a) for _a in _need):
-                raise RuntimeError("pypardiso %s lacks %s" % (
-                    getattr(_pypard2, "__version__", "?"),
-                    [_a for _a in _need if not hasattr(_h_spd, _a)]))
-            _pardiso2_spd = _own_pardiso(_h_spd)
-        except Exception as _pae:     # noqa: BLE001 — LU keeps working
-            log.info("PARDISO Cholesky handle unavailable (%s) — LU only", _pae)
-            _pardiso2_spd = None
+    # ONE linear solver for the whole run (simulation/linear_backend.py): MKL
+    # PARDISO when pypardiso is installed, SuiteSparse CHOLMOD (SPD) + MUMPS
+    # (LU, large SPD) otherwise; SB_LINEAR_BACKEND overrides.  It caches the
+    # symbolic analysis per sparsity pattern and reuses it across the
+    # same-pattern Newton/Picard iterations of a frame (re-analysing only when
+    # the pattern changes — new frame / new slip pairing), routes the
+    # SPD-by-construction systems (solve_ff(spd=True); proofs in
+    # docs/CHOLESKY_SPD_2026-09-29.md) to Cholesky after run-time checks, and
+    # falls back loudly (Cholesky -> LU -> SuperLU).  Owned by this run's
+    # scope, so its native memory is released on every exit.
+    from motor_ai_sim.simulation.linear_backend import (
+        make_linear_solver as _make_linear_solver)
+    _lin2 = _make_linear_solver(log=log)
+    log.info("linear solver: backend=%s (requested %s), SPD=%s, LU=%s",
+             _lin2.backend, _lin2.requested, _lin2.spd_backend,
+             _lin2.lu_backend)
     b2 = Basis(mesh_all, _P2E())
     b2_0 = b2.with_element(ElementTriP0())      # P0 for per-element ν interpolate
     N2 = b2.N
@@ -6030,13 +5996,12 @@ def fem_transient_sliding_band(
     # The saturable-iron assembly, the Newton tangent and the damped-Picard
     # sweep — simulation/p2_nonlinear.py.  ONE object so the magnetostatic,
     # voltage-drive, eddy and phasor paths below cannot end up on different
-    # nonlinearities; it owns the PARDISO handle for the same reason.
+    # nonlinearities; it owns the linear solver for the same reason.
     # These used to be defined INSIDE the frame loop; they close over nothing
     # frame-specific (K_const2, _sat_sub2, _sat2, b2), and the voltage-drive
     # phasor initialiser below has to call them BEFORE the loop starts.
     _p2 = _P2Nonlinear(basis=b2, n_dof=N2, K_const=K_const2, sat=_sat2,
-                       sat_sub=_sat_sub2, pardiso=_pardiso2, log=log,
-                       pardiso_spd=_pardiso2_spd)
+                       sat_sub=_sat_sub2, log=log, linear=_lin2)
 
     # ── outer Dirichlet: facet-based so P2 edge midpoints are pinned too ──
     _out_fac2 = mesh_all.facets_satisfying(
@@ -10674,11 +10639,11 @@ def fem_transient_sliding_band(
     # What the two per-run caches actually saved, so a slow run can be read
     # instead of guessed: a healthy run reuses ONE symbolic factorization for a
     # whole frame's Newton sweep and serves ~45 % of its Kpw calls from the memo.
-    log.info("P2 cost: %d linear solves on %d symbolic factorizations "
+    log.info("P2 cost [%s]: %d LU solves on %d symbolic factorizations "
              "(%.1f solves/analysis), Kpw %d assembled + %d memo hits, "
              "perturbed-pivot solves=%d; Cholesky %d solves on %d analyses "
              "(%d declined to LU, %d failures)",
-             _p2.pardiso_solves, _p2.pardiso_analyses,
+             _p2.linear.backend, _p2.pardiso_solves, _p2.pardiso_analyses,
              _p2.pardiso_solves / max(_p2.pardiso_analyses, 1),
              _p2.kpw_calls, _p2.kpw_hits, _p2.pardiso_perturbed,
              _p2.spd_solves, _p2.spd_analyses, _p2.spd_declined,
@@ -11288,16 +11253,12 @@ def fem_transient_sliding_band(
         # then would be a lie, and no name is the honest answer.
         "connection": _conn_label_used,
         # which factorisation did the linear solves (2026-09-29): Cholesky
-        # (PARDISO mtype 2) on the SPD-by-construction systems, the
-        # unsymmetric LU (mtype 11) for the rest and for anything the run-time
-        # checks declined.  Provenance only; no value depends on it beyond
-        # solver round-off.
-        "linear_solver": {"lu_solves": int(_p2.pardiso_solves),
-                          "lu_analyses": int(_p2.pardiso_analyses),
-                          "cholesky_solves": int(_p2.spd_solves),
-                          "cholesky_analyses": int(_p2.spd_analyses),
-                          "cholesky_declined": int(_p2.spd_declined),
-                          "cholesky_failures": int(_p2.spd_failures)},
+        # on the SPD-by-construction systems, the LU for the rest and for
+        # anything the run-time checks declined; since 2026-09-30 also WHICH
+        # library (backend: pardiso / open / cholmod / mumps / superlu) and
+        # every fallback in words (notes).  Provenance only; no value depends
+        # on it beyond solver round-off.
+        "linear_solver": _p2.linear.describe(),
         "picard_iters_mean": (round(float(np.mean(_pic_iters)), 1)
                               if _pic_iters else 0.0),
         "picard_iters_max": (int(max(_pic_iters)) if _pic_iters else 0),

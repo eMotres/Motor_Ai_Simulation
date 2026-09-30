@@ -1077,36 +1077,21 @@ def _rigid_basis(basis, lab_vertex: np.ndarray, mesh,
 
 
 def _solver():
-    """PARDISO if the project's pypardiso is importable, SuperLU otherwise.
+    """The project's sparse direct solver (``simulation/linear_backend.py``):
+    MKL PARDISO when pypardiso is installed, MUMPS otherwise, SciPy SuperLU
+    as the last resort.  The contact systems (penalty springs, friction
+    tangents, cyclic ties) are solved by LU: nothing here promises SPD.
 
-    Same guarded pattern the 3-D solver uses: MKL is much faster on these saddle
-    systems but returns NaN silently from a damaged factorization, so the result
-    is checked before it is believed.
-    """
-    try:
-        from pypardiso import spsolve as _ps
-        from ..pardiso_lifetime import global_pardiso_session
+    Every solve owns its factorisation (no shared module-level solver, no
+    global lock), and a NaN answer is retried once on a fresh factorisation
+    and then checked, the same guard the 3-D solver uses: a damaged
+    factorisation must not be believed.  Returns (name, solve(A, b))."""
+    from ..linear_backend import default_label, solve_once
 
-        def _solve(A, b):
-            Ac = A.tocsr()
-            bb = np.asarray(b, dtype=float)
-            with global_pardiso_session():
-                x = np.asarray(_ps(Ac, bb))
-                if not np.isfinite(x).all():
-                    try:
-                        from pypardiso.scipy_aliases import pypardiso_solver as _pp
-                        _pp.remove_stored_factorization()
-                    except Exception:  # noqa: BLE001
-                        pass
-                    x = np.asarray(_ps(Ac, bb))
-            return x
-        return "pypardiso", _solve
-    except Exception:  # noqa: BLE001
-        import scipy.sparse.linalg as spla
-
-        def _solve(A, b):
-            return np.asarray(spla.spsolve(A.tocsc(), np.asarray(b, dtype=float)))
-        return "superlu", _solve
+    def _solve(A, b):
+        x, _name = solve_once(A.tocsr(), np.asarray(b, dtype=float), spd=False)
+        return np.asarray(x)
+    return default_label(spd=False), _solve
 
 
 #: Normal contact stiffness of a ``separation`` pair, as a multiple of the mean

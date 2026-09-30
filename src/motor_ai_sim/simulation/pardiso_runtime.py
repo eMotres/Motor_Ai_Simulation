@@ -29,6 +29,11 @@ def pardiso_subprocess_env(env: Mapping[str, str]) -> dict[str, str]:
     result = dict(env)
     if "PYPARDISO_MKL_RT" in result or result.get("SB_NO_PARDISO") == "1":
         return result
+    # A child that will not use PARDISO (SB_LINEAR_BACKEND=cholmod/mumps/open/
+    # superlu) needs no hint, and this process must not import MKL for it.
+    from motor_ai_sim.simulation.linear_backend import pardiso_selected
+    if not pardiso_selected(result):
+        return result
     global _discovery_attempted, _runtime_path
     with _discovery_lock:
         if not _discovery_attempted:

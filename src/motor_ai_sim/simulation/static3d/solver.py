@@ -44,7 +44,7 @@ potential:
   * ONE unknown per node instead of three, which on a 3D motor mesh is the
     difference between a solve that fits in memory and one that does not;
   * no gauge, no null space, no tree-cotree bookkeeping — the stiffness matrix
-    is symmetric positive definite and PARDISO eats it;
+    is symmetric positive definite and a sparse Cholesky eats it;
   * the current-free condition makes the total potential single-valued, so the
     usual objection to it (multiply-connected current-carrying regions) does not
     apply to the magnet-only problem this spike is scoped to.
@@ -314,27 +314,6 @@ class Solution:
         return float(((B * n).sum(axis=0) * fb.dx).sum())
 
 
-def _drop_pardiso_factorization() -> None:
-    """Forget pypardiso's cached factorization of whatever it last solved.
-
-    ``pypardiso.spsolve`` is backed by ONE module-global ``PyPardisoSolver`` and
-    it caches the factorization keyed on the matrix CONTENT: a second solve of a
-    numerically identical matrix skips phase 12 and runs phase 33 against the
-    factors the first solve produced.  That is a large speed-up and a real
-    hazard — if a factorization comes back damaged, every later solve of the
-    same matrix inherits the damage instead of re-computing it.  Dropping the
-    cache is what makes the retry below an actual second attempt.
-    """
-    from ..pardiso_lifetime import global_pardiso_session
-
-    with global_pardiso_session():
-        try:
-            from pypardiso.scipy_aliases import pypardiso_solver as _ps
-            _ps.remove_stored_factorization()
-        except Exception:                            # not installed / renamed
-            pass
-
-
 def _finite_or_raise(x: np.ndarray, A, name: str) -> np.ndarray:
     """A solve that returns NaN/Inf has not solved anything — say so, loudly.
 
@@ -343,7 +322,8 @@ def _finite_or_raise(x: np.ndarray, A, name: str) -> np.ndarray:
     back as a silent array of NaN.  Downstream that surfaces as an
     ``np.allclose`` that is False for a reason nobody can read — which is
     exactly how the Stage-A stack test presented (docs: TASK 43).  Fail here,
-    where the matrix is still in scope and can be described.
+    where the matrix is still in scope and can be described.  Applied to every
+    backend (CHOLMOD, MUMPS, PARDISO, SuperLU) alike.
     """
     x = np.asarray(x)
     bad = int((~np.isfinite(x)).sum())
@@ -358,13 +338,31 @@ def _finite_or_raise(x: np.ndarray, A, name: str) -> np.ndarray:
     return x
 
 
+class _Solve:
+    """``solve(b)`` for one matrix; ``name`` is the solver that actually
+    factorised it (after any fallback), known once it has run."""
+
+    def __init__(self, A, name: str) -> None:
+        self.A = A
+        self.name = name
+
+    def __call__(self, b):
+        from ..linear_backend import solve_once
+        x, self.name = solve_once(self.A, np.asarray(b, dtype=float), spd=True)
+        return _finite_or_raise(x, self.A, self.name)
+
+
 def _linear_solver():
-    """PARDISO if the project's pypardiso is importable, SuperLU otherwise.
+    """The project's sparse direct solver (``simulation/linear_backend.py``).
 
-    Returns (name, factory) where factory(A) -> solve(b).
+    Returns (name, factory) where factory(A) -> solve(b); ``solve.name`` is the
+    solver that actually factorised A.  The total-scalar-potential stiffness is
+    SPD, so it goes to Cholesky after the backend's checks: MKL PARDISO
+    (mtype 2) when pypardiso is installed, CHOLMOD (MUMPS SYM=1 above the DOF
+    threshold) otherwise; any doubt goes to LU, loudly.
 
-    Guarded, because MKL PARDISO here is neither bit-reproducible nor
-    fail-loud, and both bit us (TASK 43):
+    Guarded, because a sparse factorisation here is neither bit-reproducible
+    nor fail-loud, and both bit us with MKL (TASK 43):
 
     * **not bit-reproducible.** MKL runs the factorization on as many threads as
       it feels like (measured on this machine: ``mkl_get_max_threads`` 12,
@@ -372,49 +370,21 @@ def _linear_solver():
       Measured on the Stage-A 37k-tet stack: solving the SAME condensed system
       twice back to back differs by 8.9e-14 absolute on a field of 33.3, i.e.
       ~12 ulp, 2.7e-15 relative — and by exactly ZERO with MKL_NUM_THREADS=1.
-      So a test asserting two solves are equal to the last BIT is asserting a
-      property of the thread scheduler; under concurrent load the schedule
-      shifts and it fails on a machine where nothing is wrong.  Nothing here
-      pins the thread count (that would cost a large factor on every 3D solve);
-      callers compare fields to a tolerance instead.
-    * **not fail-loud.** See ``_finite_or_raise``.  A NaN out of a damaged
-      factorization is returned silently, and because the factorization is
-      CACHED on the shared global solver it is then reused — which is why the
-      symptom was NaN out of *both* solves of a pair rather than one.  The
-      guard raises, and one retry on a freshly built factorization separates a
-      transient MKL failure from a genuinely singular matrix.
+      Callers compare fields to a tolerance, never to the last bit.
+    * **not fail-loud.** See ``_finite_or_raise``.  Every solve owns its
+      factorisation (no shared module-level solver any more, so nothing
+      damaged can be inherited and no global lock is needed); a non-finite
+      answer is retried once on a factorisation built from scratch, which
+      separates a transient native failure from a genuinely singular matrix,
+      and a second one raises.
     """
-    try:
-        from pypardiso import spsolve as _pspsolve
-        from ..pardiso_lifetime import global_pardiso_session
+    from ..linear_backend import default_label
 
-        def _fac(A):
-            Ac = A.tocsr()
-            name = "pypardiso(MKL PARDISO)"
+    name = default_label(spd=True)
 
-            def _solve(b):
-                bb = np.asarray(b, dtype=float)
-                with global_pardiso_session():
-                    x = np.asarray(_pspsolve(Ac, bb))
-                    if not np.isfinite(x).all():
-                        # Retry cannot interleave with another global solve.
-                        _drop_pardiso_factorization()
-                        x = np.asarray(_pspsolve(Ac, bb))
-                return _finite_or_raise(x, Ac, name)
-            return _solve
-        return "pypardiso(MKL PARDISO)", _fac
-    except Exception:
-        from scipy.sparse.linalg import splu
-
-        def _fac(A):
-            Ac = A.tocsc()
-            lu = splu(Ac)
-
-            def _solve(b):
-                return _finite_or_raise(lu.solve(np.asarray(b, dtype=float)),
-                                        Ac, "scipy.splu(SuperLU)")
-            return _solve
-        return "scipy.splu(SuperLU)", _fac
+    def _fac(A):
+        return _Solve(A.tocsr(), name)
+    return name, _fac
 
 
 def _region_arrays(mesh, regions: Sequence[Region], mu_r_override=None):
@@ -516,7 +486,7 @@ def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
     if neumann_outer:
         # Pure Neumann: the potential is defined up to a constant.  Pin ONE dof
         # (the node nearest the outer corner) instead of adding a Lagrange
-        # multiplier, which would break the SPD structure PARDISO exploits.
+        # multiplier, which would break the SPD structure the Cholesky exploits.
         # An ANTI-periodic constraint already removes the constant (a nonzero
         # constant is not anti-periodic), so pinning on top of it would clamp a
         # real dof to a value the physics did not choose.
@@ -546,7 +516,9 @@ def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
         if linear_solver == "cg":
             name, xI = _solve_cg(A, b)
         else:
-            xI = fac(A)(b)
+            _s = fac(A)
+            xI = _s(b)
+            name = getattr(_s, "name", name)
         xr = np.asarray(xr, dtype=float)
         xr[I] = xI
         x = T @ xr
@@ -555,7 +527,9 @@ def solve_static3d(mesh, regions: Sequence[Region], order: int = 1,
         if linear_solver == "cg":
             name, xI = _solve_cg(A, b)
         else:
-            xI = fac(A)(b)
+            _s = fac(A)
+            xI = _s(b)
+            name = getattr(_s, "name", name)
         x[I] = xI
     t_solve = time.perf_counter() - t0
 

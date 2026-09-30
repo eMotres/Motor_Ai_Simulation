@@ -62,7 +62,6 @@ def test_success_keeps_symbolic_reuse_and_cleans_once():
     @pardiso_scope
     def run():
         nonlinear = p2(own_pardiso(solver))
-        nonlinear._reuse = True
         first = nonlinear.solve_ff(A, rhs)
         second = nonlinear.solve_ff(A * 2, rhs)
         assert solver.frees == []
@@ -93,7 +92,7 @@ def test_failure_before_nonlinear_construction_releases_handle(error):
     assert solver.frees == [True]
 
 
-@pytest.mark.parametrize("fail_phase", [11, 23, 13])
+@pytest.mark.parametrize("fail_phase", [11, 23])
 @pytest.mark.parametrize("scoped", [False, True])
 @pytest.mark.parametrize("fail_cleanup", [False, True])
 def test_fallback_releases_even_when_cleanup_fails(fail_phase, scoped, fail_cleanup):
@@ -103,11 +102,12 @@ def test_fallback_releases_even_when_cleanup_fails(fail_phase, scoped, fail_clea
 
     def run():
         nonlinear = p2(own_pardiso(solver) if scoped else solver)
-        nonlinear._reuse = fail_phase != 13
         result = nonlinear.solve_ff(A, rhs)
         assert solver.frees == [True]
-        assert nonlinear._pardiso is None
-        assert nonlinear._pat is None
+        # the failed handle is gone and the run is on SuperLU, loudly
+        assert nonlinear.linear.lu_backend == "superlu"
+        assert nonlinear.linear.lu_failures == 1
+        assert any("SuperLU" in n for n in nonlinear.linear.notes)
         # Subsequent calls stay on SuperLU without retrying the failed handle.
         again = nonlinear.solve_ff(A, rhs)
         np.testing.assert_array_equal(again, result)

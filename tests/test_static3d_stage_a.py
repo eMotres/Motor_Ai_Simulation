@@ -586,11 +586,12 @@ class TestLinearSolverGuard:
     """A solve that returns NaN has not solved anything.
 
     ``PyPardisoSolver.solve``'s own finiteness check is commented out upstream,
-    and its factorization is CACHED on a module-global solver keyed by matrix
-    content — so one damaged factorization is handed to every later solve of the
-    same matrix.  That is why the Stage-A stack test's symptom was NaN out of
-    BOTH solves of a pair and never just one.  These pin the guard that turns
-    that into an immediate, readable failure.
+    and its factorization was CACHED on a module-global solver keyed by matrix
+    content — so one damaged factorization was handed to every later solve of
+    the same matrix.  That is why the Stage-A stack test's symptom was NaN out
+    of BOTH solves of a pair and never just one.  Every solve now owns its
+    factorisation (linear_backend.solve_once, any backend); these pin the guard
+    that turns a non-finite answer into an immediate, readable failure.
     """
 
     @staticmethod
@@ -619,47 +620,66 @@ class TestLinearSolverGuard:
         assert "non-finite" in msg and str(A.shape[0]) in msg
         assert str(A.nnz) in msg
 
+    @staticmethod
+    def _fake_backend(monkeypatch, results):
+        """linear_backend.factorize replaced by factors that hand out the
+        given answers in order (None = the real solution)."""
+        from motor_ai_sim.simulation import linear_backend as LB
+        made = {"n": 0}
+
+        class _F:
+            name = "fake"
+
+            def __init__(self, A):
+                self.A = A
+
+            def solve(self, b):
+                r = results[made["n"] - 1]
+                return (np.linalg.solve(self.A.toarray(), b) if r is None
+                        else np.full(self.A.shape[0], r))
+
+            def free(self):
+                pass
+
+        def factorize(A, spd=False, log=None):
+            made["n"] += 1
+            return _F(A)
+        monkeypatch.setattr(LB, "factorize", factorize)
+        return made
+
     def test_a_transient_nan_is_retried_on_a_fresh_factorization(self,
                                                                  monkeypatch):
         """One bad factorization must not be the answer AND must not be kept.
 
-        The retry is what separates "MKL had a bad moment" from "this matrix is
-        singular": the second attempt runs against factors built from scratch,
-        and if it fails the same way the guard raises.
+        The retry is what separates "the native solver had a bad moment" from
+        "this matrix is singular": the second attempt runs against factors
+        built from scratch, and if it fails the same way the guard raises.
         """
-        pytest.importorskip("pypardiso")
         from motor_ai_sim.simulation.static3d import solver as SOL
         A, b = self._spd()
-        real = __import__("pypardiso").spsolve
-        calls = {"n": 0}
-        dropped = {"n": 0}
-
-        def _flaky(Ac, bb, *a, **k):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return np.full(Ac.shape[0], np.nan)
-            return real(Ac, bb)
-
-        monkeypatch.setattr("pypardiso.spsolve", _flaky)
-        monkeypatch.setattr(SOL, "_drop_pardiso_factorization",
-                            lambda: dropped.__setitem__("n", dropped["n"] + 1))
+        made = self._fake_backend(monkeypatch, [np.nan, None])
         _name, fac = SOL._linear_solver()
         x = fac(A)(b)
-        assert calls["n"] == 2, "the NaN was accepted instead of retried"
-        assert dropped["n"] == 1, "the damaged factorization was left cached"
+        assert made["n"] == 2, "the NaN was accepted instead of re-factorised"
         assert np.allclose(A @ x, b, rtol=1e-8, atol=1e-10)
 
     def test_a_persistent_nan_is_not_papered_over_by_the_retry(self,
                                                                monkeypatch):
-        pytest.importorskip("pypardiso")
         from motor_ai_sim.simulation.static3d import solver as SOL
         A, b = self._spd()
-        monkeypatch.setattr("pypardiso.spsolve",
-                            lambda Ac, bb, *a, **k: np.full(Ac.shape[0], np.inf))
-        monkeypatch.setattr(SOL, "_drop_pardiso_factorization", lambda: None)
+        self._fake_backend(monkeypatch, [np.inf, np.inf])
         _name, fac = SOL._linear_solver()
         with pytest.raises(RuntimeError, match="non-finite"):
             fac(A)(b)
+
+    def test_the_solver_that_factorised_is_named(self):
+        from motor_ai_sim.simulation.static3d.solver import _linear_solver
+        A, b = self._spd()
+        _name, fac = _linear_solver()
+        s = fac(A)
+        s(b)
+        assert any(k in s.name for k in ("PARDISO", "CHOLMOD", "MUMPS",
+                                         "SuperLU")), s.name
 
 
 # --------------------------------------------------------------------------

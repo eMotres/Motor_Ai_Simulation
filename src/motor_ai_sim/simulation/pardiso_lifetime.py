@@ -1,8 +1,13 @@
-"""Deterministic ownership of the native PARDISO memory for one FEM run.
+"""Deterministic ownership of the native solver memory for one FEM run.
 
 PyPardisoSolver has no destructor that releases MKL's factorization buffers.
 Keep its raw handle (and symbolic reuse) intact during a run, then release
 everything on every exit, including failures before P2Nonlinear is created.
+
+Since 2026-09-30 the same scope also owns the run's
+``linear_backend.LinearSolver`` (CHOLMOD / MUMPS / PARDISO factors): anything
+registered here is released with ``free_memory(everything=True)`` when it has
+that method (a PyPardisoSolver) and with ``free()`` otherwise.
 """
 from __future__ import annotations
 
@@ -44,9 +49,14 @@ class _Release:
         # exit, and must not prevent the caller's SuperLU fallback.
         self.released = True
         try:
-            self.solver.free_memory(everything=True)
+            if hasattr(self.solver, "free_memory"):
+                self.solver.free_memory(everything=True)
+            else:
+                self.solver.free()
         except Exception:
-            _log.warning("PARDISO memory cleanup failed", exc_info=True)
+            _log.warning("PARDISO memory cleanup failed" if hasattr(
+                self.solver, "free_memory") else "linear solver memory cleanup "
+                "failed", exc_info=True)
 
 
 def pardiso_scope(function):
@@ -76,6 +86,15 @@ def own_pardiso(solver):
         owner = owners[id(solver)] = _Release(solver)
         stack.callback(owner)
     return solver
+
+
+def own_pardiso_if_scoped(solver):
+    """``own_pardiso`` inside a ``pardiso_scope``; outside one (worker threads,
+    standalone callers) the object is returned unregistered and its owner
+    releases it (``free()`` / ``release_pardiso``)."""
+    if _scope.get() is None:
+        return solver
+    return own_pardiso(solver)
 
 
 def release_pardiso(solver):

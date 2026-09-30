@@ -1,148 +1,81 @@
-"""The shared pypardiso.spsolve handle must not be used by concurrent jobs."""
+"""The 3-D and mechanical solves no longer share a module-level solver.
 
-import sys
+Until 2026-09-30 they all went through ``pypardiso.spsolve``, ONE global
+PyPardisoSolver, and had to hold ``global_pardiso_session`` around every solve
+and retry.  They now go through ``linear_backend.solve_once``: each solve owns
+its factorisation, so concurrent jobs cannot see each other's factors and need
+no lock.  These tests pin that (on whatever backend is installed) and that the
+old lock itself still serialises, for any caller that still uses it.
+"""
+
 import threading
-import types
 
 import numpy as np
-import pytest
 from scipy.sparse import csr_matrix
 
 from motor_ai_sim.simulation.mechanical import contact
+from motor_ai_sim.simulation.pardiso_lifetime import global_pardiso_session
 from motor_ai_sim.simulation.static3d import nedelec, solver as static_solver
 
 
-_A = csr_matrix([[4.0, 1.0], [1.0, 3.0]])
-_B = np.array([1.0, 2.0])
+def _system(k):
+    n = 60
+    rng = np.random.default_rng(k)
+    d = 4.0 + rng.random(n)
+    off = -1.0 - 0.1 * rng.random(n - 1)
+    import scipy.sparse as sp
+    A = sp.diags([off, d, off], [-1, 0, 1], format="csr")
+    return csr_matrix(A), rng.standard_normal(n)
 
 
-def _install_fake(monkeypatch, solve, reset):
-    package = types.ModuleType("pypardiso")
-    package.__path__ = []
-    package.spsolve = solve
-    aliases = types.ModuleType("pypardiso.scipy_aliases")
-    aliases.pypardiso_solver = types.SimpleNamespace(
-        remove_stored_factorization=reset)
-    monkeypatch.setitem(sys.modules, "pypardiso", package)
-    monkeypatch.setitem(sys.modules, "pypardiso.scipy_aliases", aliases)
-
-
-def _run_threads(*targets):
+def test_static_mechanical_and_nedelec_solve_concurrently_and_correctly():
+    _, static_fac = static_solver._linear_solver()
+    _, mechanical_solve = contact._solver()
+    jobs = {
+        "static": lambda A, b: static_fac(A)(b),
+        "mechanical": mechanical_solve,
+        "nedelec": lambda A, b: nedelec._direct(A, b)[0],
+    }
+    start = threading.Barrier(len(jobs) * 3)
     errors = []
-    threads = []
 
-    def run(target):
+    def run(name, k):
         try:
-            target()
-        except BaseException as exc:  # include assertion failures in workers
-            errors.append(exc)
+            A, b = _system(k)
+            start.wait(timeout=10)
+            for _ in range(5):
+                x = jobs[name](A, b)
+                assert np.allclose(A @ x, b, rtol=1e-10, atol=1e-12), name
+        except BaseException as exc:          # noqa: BLE001 — report below
+            errors.append((name, exc))
 
-    for name, target in targets:
-        thread = threading.Thread(target=run, args=(target,), name=name)
-        thread.start()
-        threads.append(thread)
-    return threads, errors
-
-
-def _join(threads, *error_lists):
-    for thread in threads:
-        thread.join(timeout=2)
-        assert not thread.is_alive(), f"{thread.name} did not finish"
-    for errors in error_lists:
-        assert not errors, errors
-
-
-def test_static_mechanical_and_nedelec_share_one_global_lock(monkeypatch):
-    entered = threading.Event()
-    release = threading.Event()
-    calls = []
-    active = 0
-    overlap = False
-    state_lock = threading.Lock()
-
-    def solve(A, b):
-        nonlocal active, overlap
-        with state_lock:
-            active += 1
-            overlap |= active > 1
-            calls.append(threading.current_thread().name)
-            first = len(calls) == 1
-        if first:
-            entered.set()
-            assert release.wait(2)
-        with state_lock:
-            active -= 1
-        return np.linalg.solve(A.toarray(), b)
-
-    _install_fake(monkeypatch, solve, lambda: None)
-    _, static_fac = static_solver._linear_solver()
-    _, mechanical_solve = contact._solver()
-    first, errors = _run_threads(("static", lambda: static_fac(_A)(_B)))
-    rest, more_errors = [], []
-    other_started = threading.Event()
-
-    def other(solve):
-        other_started.set()
-        return solve()
-
-    try:
-        assert entered.wait(2)
-        rest, more_errors = _run_threads(
-            ("mechanical", lambda: other(lambda: mechanical_solve(_A, _B))),
-            ("nedelec", lambda: other(lambda: nedelec._direct(_A, _B))),
-        )
-        assert other_started.wait(2)
-        assert not release.wait(0.1)
-        assert calls == ["static"]
-    finally:
-        release.set()
-    _join(first + rest, errors, more_errors)
-    assert not overlap
-    assert set(calls) == {"static", "mechanical", "nedelec"}
+    threads = [threading.Thread(target=run, args=(name, 10 * i + r))
+               for i, name in enumerate(jobs) for r in range(3)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+        assert not t.is_alive()
+    assert not errors, errors
 
 
-@pytest.mark.parametrize("retry_owner", ["static", "mechanical"])
-def test_reset_and_retry_are_atomic_with_other_global_solves(
-    monkeypatch, retry_owner,
-):
-    in_reset = threading.Event()
-    release_reset = threading.Event()
-    operations = []
+def test_global_session_lock_still_serialises():
+    inside = []
+    overlap = []
+    lock = threading.Lock()
 
-    def solve(A, b):
-        name = threading.current_thread().name
-        operations.append(f"solve:{name}")
-        if name == "retry" and operations.count("solve:retry") == 1:
-            return np.full(A.shape[0], np.nan)
-        return np.linalg.solve(A.toarray(), b)
+    def work():
+        with global_pardiso_session():
+            with lock:
+                inside.append(1)
+                overlap.append(len(inside) > 1)
+            threading.Event().wait(0.02)
+            with lock:
+                inside.pop()
 
-    def reset():
-        operations.append("reset")
-        in_reset.set()
-        assert release_reset.wait(2)
-
-    _install_fake(monkeypatch, solve, reset)
-    _, static_fac = static_solver._linear_solver()
-    _, mechanical_solve = contact._solver()
-    retry = (lambda: static_fac(_A)(_B)) if retry_owner == "static" else (
-        lambda: mechanical_solve(_A, _B))
-    first, errors = _run_threads(("retry", retry))
-    second, more_errors = [], []
-    other_started = threading.Event()
-
-    def other():
-        other_started.set()
-        return nedelec._direct(_A, _B)
-
-    try:
-        assert in_reset.wait(2)
-        second, more_errors = _run_threads(("other", other))
-        assert other_started.wait(2)
-        assert not release_reset.wait(0.1)
-        assert operations == ["solve:retry", "reset"]
-    finally:
-        release_reset.set()
-    _join(first + second, errors, more_errors)
-    assert operations == [
-        "solve:retry", "reset", "solve:retry", "solve:other",
-    ]
+    ts = [threading.Thread(target=work) for _ in range(4)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(timeout=10)
+    assert not any(overlap)

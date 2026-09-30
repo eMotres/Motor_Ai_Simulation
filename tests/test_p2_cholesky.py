@@ -226,7 +226,7 @@ class TestGuards:
         assert _lmin(M) < 0.0
         rhs = np.ones(n + 1)
         x = p.solve_ff(M, rhs, spd=True)
-        assert p.spd_failures == 1 and p._pardiso_spd is None
+        assert p.spd_failures == 1 and p.linear.spd_backend is None
         assert np.linalg.norm(M @ x - rhs) <= 1e-8 * np.linalg.norm(rhs)
         assert any("Cholesky failed" in w for w in log.warnings)
         # the rest of the run stays on LU, without complaint
@@ -319,7 +319,7 @@ class TestHandles:
         c = sp.csr_matrix(np.eye(n, 1) * 10.0 * abs(J).max())
         bad = sp.bmat([[J, c], [c.T, sp.eye(1) * 1e-12]]).tocsc()
         p.solve_ff(bad, np.ones(n + 1), spd=True)
-        assert p.spd_failures == 1 and p._pardiso_spd is None
+        assert p.spd_failures == 1 and p.linear.spd_backend is None
         for M in (_bordered(p, b, m, free).tocsc(), J, bad):
             rhs = np.ones(M.shape[0])
             x = p.solve_ff(M, rhs, spd=True)

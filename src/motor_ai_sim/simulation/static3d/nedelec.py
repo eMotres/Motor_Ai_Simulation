@@ -580,38 +580,25 @@ def _regularised_preconditioner(A, Mm, c: float = REG_PRECOND_C):
         return None
     eps = float(c) * float(np.median(dK[ok] / dM[ok]))
     Areg = (A + eps * Mm).tocsr()
-    ps = None
+    # A + eps*M is SPD (curl-curl + a positive mass): Cholesky after the
+    # backend's checks (PARDISO when installed, CHOLMOD / MUMPS otherwise),
+    # LU and then SuperLU on any failure (simulation/linear_backend.py).
     try:
-        from pypardiso import PyPardisoSolver
-        ps = PyPardisoSolver()
-        ps.factorize(Areg)
-
-        def _apply(v):
-            return ps.solve(Areg, np.ascontiguousarray(v, dtype=float))
-
-        def _release():
-            # MKL PARDISO holds its factorisation in memory OUTSIDE the Python
-            # heap, so letting the solver object fall out of scope does not
-            # return it.  A Picard loop builds one of these per sweep; without
-            # this the 40 mm nonlinear sector run reached 11 GB by sweep 33 and
-            # was heading for the machine's limit.  Measured, not feared.
-            try:
-                ps.free_memory(everything=True)
-            except Exception:
-                pass
-        return _apply, _release
+        from ..linear_backend import factorize
+        f = factorize(Areg, spd=True)
     except Exception:
-        if ps is not None:
-            # factorize may allocate native buffers before reporting failure.
-            # Release this handle before dropping it and trying the fallback.
-            from ..pardiso_lifetime import release_pardiso
-            release_pardiso(ps)
-        try:
-            from scipy.sparse.linalg import splu
-            lu = splu(Areg.tocsc())
-            return lu.solve, lambda: None
-        except Exception:
-            return None, None
+        return None, None
+
+    def _apply(v):
+        return f.solve(np.ascontiguousarray(v, dtype=float))
+
+    def _release():
+        # A native factorisation (MKL, CHOLMOD, MUMPS) lives OUTSIDE the
+        # Python heap and a Picard loop builds one of these per sweep: with
+        # MKL, not releasing it took the 40 mm nonlinear sector run to 11 GB
+        # by sweep 33.  Measured, not feared.  Released here, once.
+        f.free()
+    return _apply, _release
 
 
 def _cg(A, b, tol: float = 1e-10, maxiter: int = 40000, Mm=None):
@@ -640,15 +627,12 @@ def _cg(A, b, tol: float = 1e-10, maxiter: int = 40000, Mm=None):
 
 
 def _direct(A, b):
-    try:
-        from pypardiso import spsolve as _ps
-        from ..pardiso_lifetime import global_pardiso_session
-        with global_pardiso_session():
-            x = np.asarray(_ps(A.tocsr(), np.asarray(b, dtype=float)))
-        return x, "pypardiso(MKL PARDISO)"
-    except Exception:
-        from scipy.sparse.linalg import splu
-        return splu(A.tocsc()).solve(b), "scipy.splu(SuperLU)"
+    """One direct solve of a symmetric system (the tree-gauged curl-curl, the
+    source-cleaning Laplacian): Cholesky after the checks, LU otherwise
+    (``linear_backend.solve_once``: own factorisation, no shared state).
+    Returns (x, solver label)."""
+    from ..linear_backend import solve_once
+    return solve_once(A.tocsr(), np.asarray(b, dtype=float), spd=True)
 
 
 def solve_static3d_A(mesh, regions: Sequence[Region],

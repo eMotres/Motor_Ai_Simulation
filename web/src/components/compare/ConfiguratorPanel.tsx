@@ -182,6 +182,11 @@ const MetricTile: React.FC<{
   );
 };
 
+/** Tooltip of the Kt / Km tiles (owner 2026-09-30): what they are corrected by. */
+const KT_BASIS_TIP = (basis: string) => (basis === '2-D'
+  ? '2-D: no measured 3-D torque factor exists for this machine, so Kt and Km are the 2-D values — the 3-D flux factor is not applied to them.'
+  : '3-D corrected with the measured 3-D torque factor k_T of the passport.');
+
 const ConfiguratorPanel: React.FC = () => {
   const { isAdmin } = useAuth();   // editing the slider ranges is admin-only
   // FEM-characterised catalog motors (fetched) come first; the built-in
@@ -1053,9 +1058,11 @@ const ConfiguratorPanel: React.FC = () => {
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label="KV (no-load)" value={result.KV_rpm_per_Vline} unit="rpm/V" d={1} base={baseRes.KV_rpm_per_Vline} />
             {result.Kt_Nm_per_A != null && (
-              <MetricTile label="Kt" value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi />
+              <MetricTile label={`Kt · ${result.kt_km_basis === '2-D' ? '2-D' : '3-D'}`} value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi
+                tip={KT_BASIS_TIP(result.kt_km_basis)} />
             )}
-            <MetricTile label="Km" value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi />
+            <MetricTile label={`Km · ${result.kt_km_basis === '2-D' ? '2-D' : '3-D'}`} value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
+              tip={KT_BASIS_TIP(result.kt_km_basis)} />
             <MetricTile label="Km / mass" value={result.Km_per_mass} unit="N·m/(√W·kg)" d={3} base={baseRes.Km_per_mass} goodHi />
           </Box>
           {(result.demag_keep_pct != null || result.saturation_pct != null) && (

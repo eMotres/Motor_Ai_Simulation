@@ -241,7 +241,10 @@ export interface TransientSummary {
              *  is re-run (user 2026-09-03: keep it, highlight it) */
             inherited?: boolean; inherited_from?: string; inherited_note?: string;
             machine?: string; T_corrected_Nm: number;
-            V_line_peak_corrected_V?: number | null } | null;
+            V_line_peak_corrected_V?: number | null;
+            /** MEASURED 3-D torque factor (Stage B), when a passport has one —
+             *  the only factor Kt / Km may carry (owner 2026-09-30) */
+            k_T?: number | null } | null;
   bench_ldq?: BenchLdq | null;
   /** Coil temperature the run was solved at [°C] — R and copper loss are
    *  quoted at it; the R@25°C view rescales the R cells from it. */
@@ -695,6 +698,16 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // (plain computation, NOT a hook — this sits below the empty-state early
   // return, where a hook would violate the rules-of-hooks)
   const k3d = summary.end3d?.k_flux ?? null;
+  // Kt / Km / Km per mass: the MEASURED 3-D torque factor or plain 2-D (owner
+  // 2026-09-30) — never k_flux, which is a flux (EMF, KV) factor.
+  const kTraw = summary.end3d?.k_T;
+  const kT = apply3d && kTraw != null && kTraw > 0.5 && kTraw <= 1.2 ? kTraw : null;
+  const ktBasis = kT != null ? '3-D' : '2-D';
+  const ktBasisTip = kT != null
+    ? `3-D corrected with the measured torque factor k_T = ${kT.toFixed(4)}. `
+    : (apply3d && k3d != null
+      ? '2-D: no measured 3-D torque factor exists for this machine, so Kt and Km are printed as solved — the 3-D flux factor is not applied to them. '
+      : '');
   const s = (() => {
     if (!apply3d || k3d == null) return summary;
     const k = k3d;
@@ -721,9 +734,12 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       KV_noload_rpm_per_V_line: summary.KV_noload_rpm_per_V_line != null
         ? summary.KV_noload_rpm_per_V_line / k : summary.KV_noload_rpm_per_V_line,
       psi_pm_Wb: summary.psi_pm_Wb != null ? summary.psi_pm_Wb * k : summary.psi_pm_Wb,
-      Km_Nm_sqrtW: summary.Km_Nm_sqrtW != null ? summary.Km_Nm_sqrtW * k : summary.Km_Nm_sqrtW,
-      Km_per_mass_Nm_sqrtW_kg: summary.Km_per_mass_Nm_sqrtW_kg != null
-        ? summary.Km_per_mass_Nm_sqrtW_kg * k : summary.Km_per_mass_Nm_sqrtW_kg,
+      // Km and Km/mass are NOT flux-scaled (owner 2026-09-30): they carry
+      // the MEASURED torque factor k_T or stay 2-D — see ktBasis below.
+      Km_Nm_sqrtW: summary.Km_Nm_sqrtW != null && kT != null
+        ? summary.Km_Nm_sqrtW * kT : summary.Km_Nm_sqrtW,
+      Km_per_mass_Nm_sqrtW_kg: summary.Km_per_mass_Nm_sqrtW_kg != null && kT != null
+        ? summary.Km_per_mass_Nm_sqrtW_kg * kT : summary.Km_per_mass_Nm_sqrtW_kg,
       efficiency: (Pm > 0 && summary.P_loss_total_W > 0)
         ? Pm / (Pm + summary.P_loss_total_W) : summary.efficiency,
       // The charging card is an energy balance on the shaft power, so it moves
@@ -1713,11 +1729,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           // THIS point (T/I_rms), so load saturation is inside it; the k3d
           // toggle scales it with the torque automatically (T is taken off the
           // rescaled copy `s`).  No cell at I=0 — T/0 is not a constant.
-          const kt = (s.T_em_avg_Nm != null && s.I_phase_rms_A > 0)
-            ? s.T_em_avg_Nm / s.I_phase_rms_A : null;
+          // Kt from the 2-D torque × the MEASURED k_T only (owner 2026-09-30).
+          const kt = (summary.T_em_avg_Nm != null && s.I_phase_rms_A > 0)
+            ? summary.T_em_avg_Nm * (kT ?? 1) / s.I_phase_rms_A : null;
           return kt != null && Number.isFinite(kt) ? (
-            <Cell label="Kt" value={fmt(kt, kt < 0.1 ? 4 : 3)} unit="N·m/A"
-              tooltip={(isDelta ? 'DELTA: per LINE amp — the current on the three leads, what the inverter rating is set against. Per WINDING amp it is √3 larger: '
+            <Cell label={apply3d && k3d != null ? `Kt · ${ktBasis}` : 'Kt'}
+              value={fmt(kt, kt < 0.1 ? 4 : 3)} unit="N·m/A"
+              tooltip={ktBasisTip + (isDelta ? 'DELTA: per LINE amp — the current on the three leads, what the inverter rating is set against. Per WINDING amp it is √3 larger: '
                                   + fmt(kt * Math.sqrt(3), 4) + ' N·m/A. ' : '')
                 + 'Torque constant at THIS operating point: T / I_phase_rms = '
                 + fmt(s.T_em_avg_Nm, 3) + ' / ' + fmt(s.I_phase_rms_A, 1)
@@ -1727,16 +1745,18 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           ) : null;
         })()}
         {s.Km_Nm_sqrtW != null && (
-          <Cell label="Km" value={fmt(s.Km_Nm_sqrtW, 3)} unit="N·m/√W"
-            tooltip={"Motor constant Km = T_em / √P_cu_DC — torque per square root of the ohmic loss paid for it. "
+          <Cell label={apply3d && k3d != null ? `Km · ${ktBasis}` : 'Km'}
+            value={fmt(s.Km_Nm_sqrtW, 3)} unit="N·m/√W"
+            tooltip={ktBasisTip + "Motor constant Km = T_em / √P_cu_DC — torque per square root of the ohmic loss paid for it. "
                    + "Operating-point-independent while the iron is unsaturated (T ∝ I, P_cu ∝ I²): the robotics "
                    + "sizing constant. Uses the DC (I²R) copper loss only — the AC add-on is speed-dependent and "
                    + "would make Km a function of rpm. Computed at the solved coil temperature: R grows ≈39 %/100 °C, "
                    + "so a cold-datasheet Km reads higher than the same machine hot."}/>
         )}
         {s.Km_per_mass_Nm_sqrtW_kg != null && (
-          <Cell label={tx('kmMass')} value={fmt(s.Km_per_mass_Nm_sqrtW_kg, 3)} unit="N·m/(√W·kg)"
-            tooltip={"Specific motor constant Km / total mass (EM-active + shaft) — the actuator figure of merit "
+          <Cell label={apply3d && k3d != null ? `${tx('kmMass')} · ${ktBasis}` : tx('kmMass')}
+            value={fmt(s.Km_per_mass_Nm_sqrtW_kg, 3)} unit="N·m/(√W·kg)"
+            tooltip={ktBasisTip + "Specific motor constant Km / total mass (EM-active + shaft) — the actuator figure of merit "
                    + "that survives scaling: torque density says how much torque per kg, Km/m says how much of it "
                    + "you can HOLD continuously per kg for a given copper heat budget."}/>
         )}

@@ -619,8 +619,10 @@ def test_case_matches_baseline(case: str, baseline: Dict[str, Dict[str, float]])
 # how it got there.
 
 def _eddy_run(**over: Any) -> Dict[str, Any]:
-    """One coupled-eddy transient on the 30 mm machine (raw solver dict)."""
-    kw = dict(CASES["p2_eddy"]); kw.update(over)
+    """One coupled-eddy transient on the 30 mm machine (raw solver dict) —
+    the MARCH, whose warm-up these tests pin (TDM, the default since
+    2026-09-30, has none: tests/test_tdm_fem.py)."""
+    kw = dict(CASES["p2_eddy"], eddy_method="march"); kw.update(over)
     set_request_materials(OVERRIDE)
     try:
         return fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,

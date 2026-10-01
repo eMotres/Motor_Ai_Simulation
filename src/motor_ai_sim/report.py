@@ -10683,7 +10683,51 @@ def em_k3d_note(k3d: Any) -> str:
             "columns are printed above." % float(k3d))
 
 
-def em_constants_note(k3d: Any, drive: str = "sine") -> str:
+def torque_factor_3d(src: Any) -> Optional[float]:
+    """The MEASURED 3-D torque factor k_T of a run summary (``end3d.k_T`` or
+    ``end3d.k_torque``), or None.  Owner 2026-09-30: Kt / Km / Km per mass
+    carry k_T only when it was measured, never the flux factor k_flux as a
+    stand-in; without it they are printed plain 2-D."""
+    k = _numf(_g(src or {}, "end3d.k_T"))
+    if k is None:
+        k = _numf(_g(src or {}, "end3d.k_torque"))
+    return k if (k is not None and 0.5 < k <= 1.2) else None
+
+
+#: The one clause a Kt / Km row carries (owner 2026-09-30).
+KT_2D_NOTE = "2-D — no measured 3-D torque factor"
+
+
+def kt_basis_note(k_t: Optional[float]) -> str:
+    return (KT_2D_NOTE if not k_t else
+            "3-D corrected, measured k_T = %s" % _fmt(k_t, 4))
+
+
+def cold_torque_constants(c: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Kt (per line amp), Km, Km per mass of a stored 20 °C block, on the
+    owner's 2026-09-30 basis: 3-D corrected ONLY when the block carries a
+    measured torque factor (``torque_basis == "3-D corrected"``), else the
+    2-D values — which also re-reads blocks written before the rule, whose
+    ``k3d`` column carried the flux factor."""
+    c = c or {}
+    two, k3v = dict(c.get("two_d") or {}), dict(c.get("k3d") or {})
+    measured = (str(c.get("torque_basis") or "") == "3-D corrected"
+                and _numf(c.get("k_torque")) is not None)
+    src = k3v if measured else two
+    delta = str((c.get("point") or {}).get("star_delta")
+                or two.get("star_delta") or "star").lower().startswith("d")
+    return {
+        "kt_line_Nm_per_A": _numf(src.get("Kt_Nm_per_A_line" if delta
+                                          else "Kt_Nm_per_Arms")),
+        "km_Nm_sqrtW": _numf(src.get("Km_Nm_sqrtW")),
+        "km_per_mass_Nm_sqrtW_kg": _numf(src.get("Km_per_mass_Nm_sqrtW_kg")),
+        "k_torque": _numf(c.get("k_torque")) if measured else None,
+        "basis": "3-D corrected" if measured else "2-D",
+    }
+
+
+def em_constants_note(k3d: Any, drive: str = "sine",
+                      k_t: Optional[float] = None) -> str:
     """…and the one under the MACHINE CONSTANTS table, which has one column.
 
     Kt, Km, Km per mass and the two densities carry k_3d — the same correction
@@ -10705,9 +10749,12 @@ def em_constants_note(k3d: Any, drive: str = "sine") -> str:
     if not k3d:
         return ("No 3-D passport for this geometry, so every constant above is "
                 "the 2-D value as solved." + tail)
-    return ("Kt, Km, Km per mass and the two densities above carry k_3d = "
-            "%.4f; the inductances, resistances, flux linkage and mean |B| are "
-            "the 2-D values as solved." % float(k3d) + tail)
+    return ("The two densities above carry k_3d = %.4f; Kt, Km and Km per "
+            "mass are %s; the inductances, resistances, flux linkage and mean "
+            "|B| are the 2-D values as solved."
+            % (float(k3d), ("3-D corrected with the measured k_T = %.4f"
+                            % float(k_t)) if k_t else "2-D (no measured 3-D "
+               "torque factor)") + tail)
 
 
 def em_operating_rows(em: Dict[str, Any], d_duty: Dict[str, Any],
@@ -11006,9 +11053,13 @@ def em_torque_rows(em: Dict[str, Any],
     _dl = str(_g(em, "star_delta") or "star").lower().startswith("d")
     _kt = _g(em, "Kt_Nm_per_A_line") if (_dl and _g(em, "Kt_Nm_per_A_line") is not None) \
         else _g(em, "Kt_Nm_per_Arms")
+    # Kt carries the MEASURED torque factor only (owner 2026-09-30).
+    _kT3 = torque_factor_3d(em)
     tp.append(["Torque constant Kt [N·m/A rms" + (", line" if _dl else "")
                + "]" + _sine_tail,
-               _fmt(_kt, 4), _fmt(_k(_kt), 4) if k3d else "—"])
+               _fmt(_kt, 4),
+               (_fmt(_numf(_kt) * _kT3, 4) if (_kT3 and _numf(_kt) is not None)
+                else KT_2D_NOTE) if k3d else "—"])
     return tp
 
 
@@ -11106,11 +11157,10 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
     delta = str((c.get("point") or {}).get("star_delta")
                 or two.get("star_delta") or "star").lower().startswith("d")
     _tail = ("; × k_3d = %s" % _fmt(k3, 4)) if k3 else "; 2-D, no 3-D passport"
-    # Torque-proportional rows carry the TORQUE factor (review 2026-09-30,
-    # P22); a block written before the split has none and reads as before.
-    _kq = _numf(c.get("k_torque"))
-    _tail_t = (("; × %s (%s)" % (_fmt(_kq, 4), c.get("k_torque_basis")))
-               if (k3 and _kq and c.get("k_torque_basis")) else _tail)
+    # Kt / Km / Km per mass: the MEASURED torque factor or plain 2-D (owner
+    # 2026-09-30); blocks written before the rule are re-read the same way.
+    _ct = cold_torque_constants(c)
+    _tail_t = "; " + kt_basis_note(_ct["k_torque"])
 
     def R(label, v, d, unit, note=""):
         if v is not None:
@@ -11125,12 +11175,12 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
       % (str(c.get("kv_note") or "the no-load probe"),
          "; KV goes as 1/flux, so it is ÷ k_3d" if k3 else ""))
     R("Torque constant Kt [N·m/A rms]",
-      _v("Kt_Nm_per_A_line" if delta else "Kt_Nm_per_Arms"), 4, "",
+      _ct["kt_line_Nm_per_A"], 4, "",
       ("per LINE amp — in delta the winding carries I_line/√3" if delta
        else "per line amp, which in star is the winding's") + _tail_t)
-    R("Motor constant Km [N·m/√W]", _v("Km_Nm_sqrtW"), 3, "",
+    R("Motor constant Km [N·m/√W]", _ct["km_Nm_sqrtW"], 3, "",
       "torque per root watt of copper, at 20 °C copper" + _tail_t)
-    R("Km per mass [N·m/(√W·kg)]", _v("Km_per_mass_Nm_sqrtW_kg"), 4, "",
+    R("Km per mass [N·m/(√W·kg)]", _ct["km_per_mass_Nm_sqrtW_kg"], 4, "",
       "the figure of merit that survives scaling" + _tail_t)
     R("Phase resistance R₂₀ [mΩ]",
       (lambda v: None if v is None else v * 1000.0)(
@@ -11209,12 +11259,20 @@ def em_constant_rows(em: Dict[str, Any],
     # Km 4.416 under identical labels.  The torque constant follows the flux,
     # and Km = Kt / sqrt(R) follows it too.
     _k3c = _numf(_g(em, "end3d.k_flux"))
+    # Kt / Km / Km per mass: the MEASURED torque factor or plain 2-D (owner
+    # 2026-09-30) — never k_flux.  The two torque densities below keep the
+    # flux factor, as the torque rows of section 3 do.
+    _kTc = torque_factor_3d(em)
 
     def _km(v: Any) -> Optional[float]:
         f = _numf(v)
+        return (f * float(_kTc)) if (f is not None and _kTc) else f
+
+    def _kf(v: Any) -> Optional[float]:
+        f = _numf(v)
         return (f * float(_k3c)) if (f is not None and _k3c) else f
 
-    _kt_tail = ((" × k_3d = %s" % _fmt(_k3c, 4)) if _k3c else " (2-D, no 3-D passport)")
+    _kt_tail = "; " + kt_basis_note(_kTc)
     # The load angle, for the inductance note below (reviewer 2026-09-14, C6).
     _gam = _numf(_g(em, "gamma_deg"))
     # WHAT THESE TWO ROWS ARE (client review 2026-09-20: *"这个电机 Ld > Lq?
@@ -11294,20 +11352,21 @@ def em_constant_rows(em: Dict[str, Any],
             rows.append(["Lq, star-equivalent", _inc_missing, _inc_missing_note])
         rows.append(["Saliency Lq/Ld", _inc_missing, _inc_missing_note])
     R("Torque constant Kt" + (" per winding A" if _delta else ""),
-      _km(_g(em, "Kt_Nm_per_Arms")), 4, "N·m/A rms", "2-D" + _kt_tail)
+      _km(_g(em, "Kt_Nm_per_Arms")), 4, "N·m/A rms",
+      "at this operating point" + _kt_tail)
     if _delta:
         R("Torque constant Kt per line A", _km(_g(em, "Kt_Nm_per_A_line")), 4,
-          "N·m/A rms", "what the inverter is rated against; 2-D" + _kt_tail)
+          "N·m/A rms", "what the inverter is rated against" + _kt_tail)
     R("Motor constant Km", _km(_g(em, "Km_Nm_sqrtW")), 3, "N·m/√W",
-      "torque per root watt of copper; 2-D" + _kt_tail)
+      "torque per root watt of copper" + _kt_tail)
     R("Km per mass", _km(_g(em, "Km_per_mass_Nm_sqrtW_kg")), 4,
-      "N·m/(√W·kg)", "2-D" + _kt_tail)
+      "N·m/(√W·kg)", "Km over the total mass" + _kt_tail)
     # …and the two densities every comparison is made in, from THIS report's
     # own numbers (reviewer 2026-09-14, D15): torque × k_3d over the total mass
     # the cover prints, never the stored 2-D `torque_per_mass_Nm_kg`.
     _mtot = _numf(_g(em, "mass_total_kg"))
-    _t3d = _km(_g(em, "T_em_avg_Nm"))
-    _p3d = _km(_g(em, "P_mech_W"))
+    _t3d = _kf(_g(em, "T_em_avg_Nm"))
+    _p3d = _kf(_g(em, "P_mech_W"))
     if _mtot and _t3d:
         R("Torque per mass", abs(_t3d) / _mtot, 3, "N·m/kg",
           "torque × k_3d over the total mass %s" % _fmt(_mtot, 3, "kg"))
@@ -11794,7 +11853,8 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
         out.append(_para("Machine constants", st["h2"]))
         out.append(_table([[r[0], r[1], _para(r[2], st["cell"])] for r in _crows],
                           [175, 95, CONTENT_W - 270], header=True, size=8.8))
-        out.append(_para(em_constants_note(_g(em, "end3d.k_flux"), drive),
+        out.append(_para(em_constants_note(_g(em, "end3d.k_flux"), drive,
+                                           torque_factor_3d(em)),
                          st["note"]))
     # ── …AND THE SAME CONSTANTS AT 20 °C (owner 2026-09-18) ─────────────────
     # Its OWN subsection, because it answers a different question from the table
@@ -17232,7 +17292,7 @@ def glossary_rows(em: Dict[str, Any],
         ["Kt / Km",
          "Kt is torque per amp (per LINE amp where the table says so); Km is "
          "torque per root watt of copper, the size-independent figure of merit. "
-         "Both carry k_3d."],
+         "Both are 2-D unless a measured 3-D torque factor exists."],
         ["THD_LL",
          "Total harmonic distortion of the LINE (terminal) voltage: everything "
          "in the line-to-line waveform that is not the fundamental, per cent of "
@@ -17636,9 +17696,6 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
     def _kdiv(c, key):
         v, k = _numf(_e(c, key)), _numf(_e(c, "end3d.k_flux"))
         return (v / k) if (v is not None and k) else v
-    def _kmul(c, v):
-        k = _numf(_e(c, "end3d.k_flux"))
-        return (v * k) if (v is not None and k) else v
     def _kt(c):
         dl = str(_e(c, "star_delta") or "star").lower().startswith("d")
         v = _e(c, "Kt_Nm_per_A_line") if dl else None
@@ -17662,10 +17719,16 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
                     c, "KV_noload_rpm_per_V_line"), _mag_grade(cols))))
     R("KV, loaded [rpm/V]" + _sine_tail,
       lambda c: _kdiv(c, "KV_rpm_per_V_line"), 2)
-    R("Kt, line current [N·m/A rms]" + _sine_tail,
-      lambda c: _kmul(c, _kt(c)), 4)
-    R("Km [N·m/sqrt(W)]" + _sine_tail,
-      lambda c: _kmul(c, _numf(_e(c, "Km_Nm_sqrtW"))), 3)
+    # Kt / Km: the MEASURED torque factor or plain 2-D (owner 2026-09-30).
+    def _ktmul(c, v):
+        k = torque_factor_3d(c["em"])
+        return (v * k) if (v is not None and k) else v
+    _any_kT = any(torque_factor_3d(c["em"]) for c in cols)
+    _kt_lbl = "" if _any_kT else ", 2-D"
+    R("Kt, line current [N·m/A rms%s]" % _kt_lbl + _sine_tail,
+      lambda c: _ktmul(c, _kt(c)), 4)
+    R("Km [N·m/sqrt(W)%s]" % _kt_lbl + _sine_tail,
+      lambda c: _ktmul(c, _numf(_e(c, "Km_Nm_sqrtW"))), 3)
     R("Copper loss [W]",
       lambda c: _e(c, "P_stranded_W")
       or (c.get("result") or {}).get("p_stranded_w"), 1)

@@ -1348,10 +1348,11 @@ COLD_CONSTANTS_C = 20.0
 #: ``inv_flux`` means it goes as 1/flux (KV is rpm per volt, so a bigger flux is
 #: a SMALLER KV); ``plain`` is a number k_3d has nothing to do with.
 _COLD_FLUX = ("psi_pm_Wb",)
-#: TORQUE-proportional constants carry the 3-D TORQUE factor k_T, not the flux
-#: factor (review 2026-09-30, P22: Stage B measured k_T 0.9795 against k_flux
-#: 0.952 on the Ø40 — a flux factor on Kt under-reads it ~2.8 %).  Each factor
-#: is applied exactly once: k_T on these, k_flux on ψ_PM, 1/k_flux on KV.
+#: TORQUE-proportional constants carry the 3-D TORQUE factor k_T, never the
+#: flux factor (review 2026-09-30, P22: Stage B measured k_T 0.9795 against
+#: k_flux 0.952 on the Ø40).  Owner 2026-09-30: without a MEASURED k_T they are
+#: printed plain 2-D.  Each factor is applied exactly once: k_T on these (when
+#: measured), k_flux on ψ_PM, 1/k_flux on KV.
 _COLD_TORQUE = ("Kt_Nm_per_Arms", "Kt_Nm_per_A_line",
                 "Km_Nm_sqrtW", "Km_per_mass_Nm_sqrtW_kg", "T_em_avg_Nm")
 _COLD_INV_FLUX = ("KV_noload_rpm_per_V_line", "KV_rpm_per_V_line")
@@ -1382,10 +1383,10 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         k3 = None
     if k3 is not None and not (k3 > 0.0):
         k3 = None
-    # The torque factor: the passport's measured k_T when it has one.  No
-    # stored passport carries one today (Stage A measures flux only), so the
-    # flux factor stands in — SAID so in `k_torque_basis` and in the note,
-    # never silently.
+    # The torque factor: the passport's MEASURED k_T, or nothing.  No stored
+    # passport carries one today (Stage A measures flux only), so Kt / Km /
+    # Km per mass stay 2-D — never the flux factor as a stand-in (owner
+    # 2026-09-30).
     kT = None
     try:
         _e3 = s.get("end3d") or {}
@@ -1395,10 +1396,7 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         kT = None
     if kT is not None and not (kT > 0.0):
         kT = None
-    k_torque_basis = ("k_T (3-D torque, measured)" if kT is not None else
-                      ("k_flux stand-in — no 3-D torque factor measured"
-                       if k3 is not None else None))
-    kTq = kT if kT is not None else k3
+    torque_basis = "3-D corrected" if kT is not None else "2-D"
 
     def _n(key):
         v = s.get(key)
@@ -1458,8 +1456,8 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         if v is None:
             continue
         two_d[key] = v
-        if kTq is not None:
-            k3d[key] = round(v * kTq, 6)
+        if kT is not None:
+            k3d[key] = round(v * kT, 6)
     for key in _COLD_INV_FLUX:
         v = _n(key)
         if v is None:
@@ -1485,8 +1483,10 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
                   "drive": str(drive),
                   "star_delta": "delta" if delta else "star"},
         "k_3d": k3,
-        "k_torque": kTq,
-        "k_torque_basis": k_torque_basis,
+        # the MEASURED torque factor or None, and what the torque constants
+        # below therefore are
+        "k_torque": kT,
+        "torque_basis": torque_basis,
         "two_d": two_d,
         "k3d": k3d,
         # WHERE THE NO-LOAD KV CAME FROM.  It is the one number in this block
@@ -1497,12 +1497,12 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
         "magnet_grade": (str(_grade) if _grade else None),
         # WHICH Kt A CATALOGUE WOULD PRINT: per LINE amp, which in star is the
         # winding's and in delta is the winding's ÷ √3.
-        "kt_line_Nm_per_A": ((k3d if k3 is not None else two_d).get(
+        "kt_line_Nm_per_A": ((k3d if kT is not None else two_d).get(
             "Kt_Nm_per_A_line" if delta else "Kt_Nm_per_Arms")),
         "kv_line_rpm_per_V": ((k3d if k3 is not None else two_d).get(
             "KV_noload_rpm_per_V_line")),
-        "km_Nm_sqrtW": ((k3d if k3 is not None else two_d).get("Km_Nm_sqrtW")),
-        "km_per_mass_Nm_sqrtW_kg": ((k3d if k3 is not None else two_d).get(
+        "km_Nm_sqrtW": ((k3d if kT is not None else two_d).get("Km_Nm_sqrtW")),
+        "km_per_mass_Nm_sqrtW_kg": ((k3d if kT is not None else two_d).get(
             "Km_per_mass_Nm_sqrtW_kg")),
         "R_phase_20_ohm": two_d.get("R_phase_ohm"),
         "mass_kg": two_d.get("mass_total_kg"),
@@ -1514,10 +1514,11 @@ def _cold_constants(em: Dict[str, Any], *, body: Dict[str, Any],
             "in this document are the same constants at this duty's own "
             "temperatures.%s"
             % (COLD_CONSTANTS_C,
-               "" if k3 is None else
-               (" Kt, Km and Km/mass carry the torque factor %.4f (%s); "
-                "ψ_PM carries k_3d = %.4f and KV is ÷ k_3d."
-                % (kTq, k_torque_basis, k3)))),
+               ("" if k3 is None else
+                " ψ_PM carries k_3d = %.4f and KV is ÷ k_3d." % k3)
+               + (" Kt, Km and Km/mass are 3-D corrected (measured k_T = %.4f)."
+                  % kT if kT is not None else
+                  " Kt, Km and Km/mass are 2-D (no measured 3-D torque factor)."))),
     }
 
 

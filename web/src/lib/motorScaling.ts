@@ -101,7 +101,10 @@ export interface Passport {
   // points; scaleMotor interpolates it under the length slider.  Absent/null =
   // not measured — the tuner then shows honest 2D values, flagged as such.
   end3d?: { k_flux: number; k_flux_vs_L?: Record<string, number> | null;
-            fidelity?: string } | null;
+            fidelity?: string;
+            /** MEASURED 3-D torque factor (Stage B) — the only factor Kt / Km
+             *  may carry (owner 2026-09-30); absent = Kt / Km stay 2-D */
+            k_T?: number | null } | null;
   // Saturation + demagnetisation calibration: FEM points over phase current at
   // base turns.  Read in AMPERE-TURN space — tooth saturation is set by
   // MMF = turns × coil current, so NI_frac = fN·fI·fConn maps every knob combo
@@ -265,6 +268,10 @@ export interface ScaledResult {
   /** 3D end-effect factor applied to T/EMF at this length (null = not measured,
    *  values are pure 2D). */
   k_end3d: number | null;
+  /** What Kt, Km and Km/mass below are: "3-D corrected" (the passport's
+   *  MEASURED torque factor k_T) or "2-D" — never the flux factor (owner
+   *  2026-09-30). */
+  kt_km_basis: '2-D' | '3-D corrected';
   // ── Full Simulation-card mirror (user 2026-08-25) ──────────────────────────
   power_per_mass_W_kg: number;
   loss_density_W_kg: number;
@@ -687,7 +694,13 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // Km on the DC copper loss (same convention as the Simulation tile).
   // Km is quoted on the DC copper loss (the Simulation card's convention —
   // the AC part is speed-dependent and would make Km a function of rpm).
-  const Km = P_cu_dc > 1e-9 ? T / Math.sqrt(P_cu_dc) : 0;
+  // Kt / Km / Km-per-mass carry the MEASURED 3-D torque factor or none (owner
+  // 2026-09-30): the torque above holds the flux factor fEnd, which is taken
+  // back out here.
+  const kTm = Number(p.end3d?.k_T ?? NaN);
+  const kTorque = Number.isFinite(kTm) && kTm > 0.5 && kTm <= 1.2 ? kTm : null;
+  const Tk = (fEnd > 0 ? T / fEnd : T) * (kTorque ?? 1);
+  const Km = P_cu_dc > 1e-9 ? Tk / Math.sqrt(P_cu_dc) : 0;
   // Demag retention + saturation coefficient off the measured current sweep,
   // both read at the same ampere-turn point as the torque.
   const Ieq = NIfrac * p.I0_A;
@@ -715,7 +728,8 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     Vline_rms_V: (Vphase * Math.sqrt(3)) / Math.SQRT2,
     psi_pm_mWb: psi,
     Km_Nm_sqrtW: Km,
-    Kt_Nm_per_A: k.I_A > 1e-9 ? T / k.I_A : null,
+    Kt_Nm_per_A: k.I_A > 1e-9 ? Tk / k.I_A : null,
+    kt_km_basis: kTorque != null ? '3-D corrected' : '2-D',
     Km_per_mass: mass > 0 ? Km / mass : 0,
     // Inductance scales with the square of the series turns and (to first
     // order) with the stack: L ∝ N²·L·(nS)².  Slot + gap leakage follow the

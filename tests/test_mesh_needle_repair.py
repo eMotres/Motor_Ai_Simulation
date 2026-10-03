@@ -141,6 +141,27 @@ def test_repair_terminates_on_a_ring_that_is_all_needles():
     assert n_fix <= 4 * len(ring) + 16
 
 
+def test_a_pinned_vertex_never_moves():
+    """The cyclic sector pins its cut-face vertices (rotor_stress): the repair
+    then snaps the OTHER flank if it can, and otherwise leaves the needle —
+    a face vertex that moved on one face only broke the G2-L40 sector
+    (2.84e-6 mm off its twin, regression of 4f66471)."""
+    corner = BORE_FRAGMENT[2]
+    out, n_fix, _ = _repair_needles(BORE_FRAGMENT, tol=0.01,
+                                    pinned=lambda q: q == corner)
+    assert corner in [tuple(v) for v in out]             # untouched, byte for byte
+    # pinning BOTH flanks of the needle: nothing may change at all
+    flanks = {BORE_FRAGMENT[0], BORE_FRAGMENT[2]}
+    out2, n2, _ = _repair_needles(BORE_FRAGMENT, tol=0.01,
+                                  pinned=lambda q: q in flanks)
+    for q in flanks:
+        assert q in [tuple(v) for v in out2]
+    # and without a pin the repair is exactly what it was
+    ref, n_ref, _ = _repair_needles(BORE_FRAGMENT, tol=0.01)
+    same, n_same, _ = _repair_needles(BORE_FRAGMENT, tol=0.01, pinned=lambda q: False)
+    assert same == ref and n_same == n_ref == 1
+
+
 def test_repair_is_a_no_op_without_a_fold_back():
     circle = [(math.cos(2 * math.pi * k / 64), math.sin(2 * math.pi * k / 64))
               for k in range(64)]

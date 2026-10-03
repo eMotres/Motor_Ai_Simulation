@@ -171,7 +171,27 @@ def build_section_mesh_2d(section: MotorSection,
     growing the box changes only the far field and leaves the near-gap
     discretisation identical — which is what makes the truncation bracket a
     truncation measurement instead of a remesh artefact.
+
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``).
     """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.static3d.motor_mesh:_build_section_mesh_2d_impl",
+        args=(section, r_box_mm, box_factor, h_gap, h_solid, h_far,
+              grade_far, verbose),
+    )
+
+
+def _build_section_mesh_2d_impl(section: MotorSection,
+                          r_box_mm: Optional[float] = None,
+                          box_factor: float = 4.0,
+                          h_gap: float = 0.22,
+                          h_solid: float = 0.70,
+                          h_far: Optional[float] = None,
+                          grade_far: float = 1.0,
+                          verbose: bool = False) -> Section2D:
+    """Worker-side implementation of ``build_section_mesh_2d``."""
     import gmsh
 
     r_box = float(r_box_mm if r_box_mm else box_factor * section.r_stator_out_mm)

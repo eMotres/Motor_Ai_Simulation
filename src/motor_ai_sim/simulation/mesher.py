@@ -21,6 +21,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
+from motor_ai_sim.simulation import gmsh_worker
 from motor_ai_sim.simulation.sb_domains import (
     DOM_AIR, DOM_AIRGAP, DOM_BAND, DOM_COIL, DOM_COIL_BASE, DOM_MAG_BASE,
     DOM_MAG_N, DOM_MAG_S, DOM_OUTER, DOM_ROTOR, DOM_SHAFT, DOM_SLEEVE,
@@ -32,6 +33,57 @@ from motor_ai_sim.simulation.sb_domains import (
 )
 
 log = logging.getLogger(__name__)
+
+
+class _RadialDomainClassifier:
+    """Point (x, y) in mm -> domain id: small features first, then radial annulus.
+
+    ``build_mesh_from_polygons`` returns one of these as its third value (a
+    "classify this point" callback some callers use directly). It used to be
+    a closure (``def _classify(x, y): ...`` nested inside the mesher), which
+    worked fine in-process but cannot cross the gmsh worker's process
+    boundary — closures are not picklable, only plain objects with
+    module-level classes are. This is that closure turned into a callable
+    with the same captured state as plain (picklable) attributes.
+    """
+
+    def __init__(self, small_polys: List[Tuple[object, int]],
+                 r_shaft_in: float, r_shaft_out: float, r_rotor_out: float,
+                 r_sleeve_out: float, r_stator_in: float, r_stator_out: float,
+                 polys: Optional[dict] = None) -> None:
+        self.small_polys = small_polys
+        self.r_shaft_in = r_shaft_in
+        self.r_shaft_out = r_shaft_out
+        self.r_rotor_out = r_rotor_out
+        self.r_sleeve_out = r_sleeve_out
+        self.r_stator_in = r_stator_in
+        self.r_stator_out = r_stator_out
+        self.polys = polys
+
+    def __call__(self, x: float, y: float) -> int:
+        from shapely.geometry import Point as _Pt
+
+        p = _Pt(x, y)
+        for poly, d in self.small_polys:
+            try:
+                if poly.contains(p):
+                    return d
+            except Exception:
+                continue
+        r = math.hypot(x, y)
+        if r < self.r_shaft_in:
+            return DOM_AIR
+        if r < self.r_shaft_out:
+            return DOM_SHAFT
+        if r < self.r_rotor_out:
+            return DOM_ROTOR
+        if r < self.r_sleeve_out:
+            return DOM_SLEEVE
+        if r < self.r_stator_in:
+            return DOM_AIRGAP
+        if r <= self.r_stator_out + 0.1:
+            return DOM_STATOR
+        return DOM_AIR
 
 
 class MeshingError(RuntimeError):
@@ -2032,7 +2084,23 @@ def _structured_rect_mesh(w_mm: float, h_mm: float, target_mm: float
 
 def _mesh_single_polygon(poly, mesh_size_mm: float, min_size_mm: float
                           ) -> Tuple[np.ndarray, np.ndarray]:
-    """Mesh ONE Shapely polygon via gmsh. Returns (verts (2,N) in mm, tris (3,M))."""
+    """Mesh ONE Shapely polygon via gmsh. Returns (verts (2,N) in mm, tris (3,M)).
+
+    Runs out of process (see ``gmsh_worker``): this process never imports
+    gmsh, keeping gmsh (GPL-2.0-or-later) a separate program from the API's
+    MKL-linked solver code.
+    """
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.mesher:_mesh_single_polygon_impl",
+        args=(poly, mesh_size_mm, min_size_mm),
+    )
+
+
+def _mesh_single_polygon_impl(poly, mesh_size_mm: float, min_size_mm: float
+                               ) -> Tuple[np.ndarray, np.ndarray]:
+    """Worker-side implementation of ``_mesh_single_polygon``. Never call directly
+    from the API process — go through the wrapper above, which runs this in
+    the out-of-process gmsh worker."""
     import gmsh
 
     # gmsh is process-global and NOT thread-safe — serialise all of it
@@ -2839,11 +2907,51 @@ def build_mesh_from_polygons(polys: dict,
     (magnets sitting in rotor pockets, coils in stator slots) get clean
     conforming interfaces automatically.
 
+    Runs out of process (see ``gmsh_worker``): this process never imports
+    gmsh, keeping gmsh (GPL-2.0-or-later) a separate program from the API's
+    MKL-linked solver code. A worker crash or timeout raises
+    ``gmsh_worker.WorkerError`` — there is no silent fallback to another
+    mesher.
+
     Returns
     -------
     mesh        : scikit-fem MeshTri
     cell_tags   : (n_triangles,) int8 array of domain ids
     """
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.mesher:_build_mesh_from_polygons_impl",
+        args=(polys, rotor_angle_deg, mesh_size_mm, min_size_mm,
+              normal_deviation_deg, aspect_ratio, periodic_coils, geo_cfg,
+              outer_air_factor, motion_band, band_thickness_mm, gap_layers,
+              n_sectors, add_background_air, slip_transfinite_r,
+              component_mesh_mm, rotational_period_deg,
+              extra_transfinite_radii, transfinite_radial_cuts),
+    )
+
+
+def _build_mesh_from_polygons_impl(polys: dict,
+                             rotor_angle_deg: float = 0.0,
+                             mesh_size_mm: float = 1.5,
+                             min_size_mm: float = 0.3,
+                             normal_deviation_deg: float = 6.0,
+                             aspect_ratio: float = 10.0,
+                             periodic_coils: bool = False,
+                             geo_cfg: Optional[dict] = None,
+                             outer_air_factor: float = 1.0,
+                             motion_band: bool = False,
+                             band_thickness_mm: float = 0.4,
+                             gap_layers: float = 3.0,   # element layers across the air gap
+                             n_sectors: int = 1,
+                             add_background_air: bool = True,
+                             slip_transfinite_r: Optional[float] = None,
+                             component_mesh_mm: Optional[dict] = None,
+                             rotational_period_deg: Optional[float] = None,
+                             extra_transfinite_radii: Optional[List[float]] = None,
+                             transfinite_radial_cuts: bool = False,
+                             ) -> Tuple["MeshTri", np.ndarray]:
+    """Worker-side implementation of ``build_mesh_from_polygons``. Never call
+    directly from the API process — go through the wrapper above, which runs
+    this in the out-of-process gmsh worker."""
     import gmsh
     from skfem.io.meshio import from_meshio
     import meshio as _mio
@@ -3377,30 +3485,14 @@ def build_mesh_from_polygons(polys: dict,
             if mag_poly is not None:
                 small_polys.append((mag_poly, DOM_MAG_N if polarity > 0 else DOM_MAG_S))
 
-        def _classify(x: float, y: float) -> int:
-            p = _Pt(x, y)
-            # 1) Small feature override (coils, magnets)
-            for poly, d in small_polys:
-                try:
-                    if poly.contains(p):
-                        return d
-                except Exception:
-                    continue
-            # 2) Radial annulus for the bulk regions
-            r = _m.hypot(x, y)
-            if r < r_shaft_in:
-                return DOM_AIR
-            if r < r_shaft_out:
-                return DOM_SHAFT
-            if r < r_rotor_out:
-                return DOM_ROTOR
-            if r < r_sleeve_out:
-                return DOM_SLEEVE
-            if r < r_stator_in:
-                return DOM_AIRGAP
-            if r <= r_stator_out + 0.1:
-                return DOM_STATOR
-            return DOM_AIR
+        # A picklable callable (module-level class), not a closure — this
+        # object crosses back out of the gmsh worker process as part of the
+        # return value, and closures cannot be pickled. See
+        # _RadialDomainClassifier's docstring.
+        _classify = _RadialDomainClassifier(
+            small_polys, r_shaft_in, r_shaft_out, r_rotor_out, r_sleeve_out,
+            r_stator_in, r_stator_out,
+        )
 
         # Domain "specificity" — when a fragment came from multiple input
         # surfaces (e.g. an OCC overlap), pick the most specific domain

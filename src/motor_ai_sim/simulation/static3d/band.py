@@ -187,7 +187,24 @@ def _mesh_piece(regions, domain_xy: np.ndarray, a_sec: float,
     first point).  Its vertices become gmsh geometry POINTS, which is what makes
     the mid-gap ring exactly reproducible on both pieces: a geometry point is
     always a mesh node.
+
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``).
     """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.static3d.band:_mesh_piece_impl",
+        args=(regions, domain_xy, a_sec, r_out_mm, names, h_gap, h_solid,
+              h_far, grade_far, gap_r_lo, gap_r_hi, ring_xy, verbose),
+    )
+
+
+def _mesh_piece_impl(regions, domain_xy: np.ndarray, a_sec: float,
+                r_out_mm: float, names: Dict[str, int],
+                h_gap: float, h_solid: float, h_far: float,
+                grade_far: float, gap_r_lo: float, gap_r_hi: float,
+                ring_xy: np.ndarray, verbose: bool = False):
+    """Worker-side implementation of ``_mesh_piece``."""
     import gmsh
 
     solids = [(r.name, part) for r in regions for part in _poly_parts(r.polygon)]

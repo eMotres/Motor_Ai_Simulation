@@ -17,7 +17,26 @@ Nothing here writes live data.  Each solve runs in its own child process with
   * `nice 19` (os.nice in the child), BLAS/OpenMP threads capped (default 6),
   * SB_NO_WARM_CACHE=1 (no shared warm-start cache).
 
-Server usage (Linux, tonight, one run after another, ~minutes per case):
+Since stage S2 (docs/MESHER_TRANSITION.md) the geometry mesher has a gmsh CDT
+backend next to Triangle, so ONE checkout with triangle installed runs both
+sides: omit --old-src/--old-python and each side's child gets
+MOTOR_AI_SIM_GEO_CDT=triangle|gmsh (the child refuses to run if the backend it
+resolves differs from its side):
+
+    python scripts/compare_mesher_triangle_vs_gmsh.py plan --new-src <tree>/src \
+        --new-python <venv>/bin/python --config <config copy> --dies <dies copy> \
+        --workdir <run dir> --threads 6
+
+The report adds element counts (parsed from the child log), solve wall time
+and peak RSS per side, and per mesh build its build time and quality (minimum
+angle, aspect p99.9).
+
+Netgen (the third CDT backend, docs/MESHER_NETGEN_2026-09-30.md) joins with
+`--meshers triangle,gmsh,netgen` on `plan` and `report`; the first mesher is
+the reference of the deltas and of the owner's acceptance criteria (torque
+<= 1 %, ripple within max(0.5 pp, 10 %), total loss <= 5 %).
+
+Two-tree usage (stage S1, old code with triangle vs new code without it):
 
     # 1. two checkouts side by side (no stash, plain worktrees)
     git -C /opt/motres/app fetch origin
@@ -68,8 +87,12 @@ CASES = {
 CONFIG_FILES = ("motor_config.yaml", "materials_library.yaml", "wire_stock.yaml",
                 "end_effect_3d.json")
 METRICS = (  # (key, label, unit)
-    ("T_avg_Nm", "torque (energy)", "N*m"),
+    ("T_avg_Nm", "torque (reported)", "N*m"),
     ("T_ripple_pct", "torque ripple", "%"),
+    ("T_avg_coulomb_Nm", "Coulomb mean torque", "N*m"),
+    ("T_ripple_pp_coulomb_Nm", "Coulomb ripple p-p", "N*m"),
+    ("T_ripple_pct_coulomb", "Coulomb ripple p-p / mean", "%"),
+    ("coulomb_self_check", "Coulomb self-check (rel. to ripple scale)", "-"),
     ("P_cu_W", "copper loss", "W"),
     ("P_fe_W", "iron loss", "W"),
     ("P_mag_W", "magnet eddy loss", "W"),
@@ -77,6 +100,9 @@ METRICS = (  # (key, label, unit)
     ("P_sleeve_W", "sleeve eddy loss", "W"),
     ("P_loss_total_W", "total loss", "W"),
     ("V_peak", "terminal voltage peak", "V"),
+    ("P_in_W", "electrical input power", "W"),
+    ("P_mech_W", "mechanical power", "W"),
+    ("balance_residual_rel", "field power-balance residual (rel.)", "-"),
 )
 EMF_METRICS = (
     ("E_peak_V", "no-load EMF peak (phase)", "V"),
@@ -111,7 +137,11 @@ def _compose(dies, die, cfg, dname):
         if not mats.get(k):
             mats[k] = v
     runs = duty.get("runs") or {}
-    st = dict(((runs.get("current") or {}).get("settings")) or duty.get("mesh") or {})
+    # the duty's own `mesh` block is the saved statement of how it is run (the
+    # app syncs it into the mesh config, routes/family.duty_mesh_patch); the last
+    # run's settings only fill what the block does not state
+    st = dict(((runs.get("current") or {}).get("settings")) or {})
+    st.update(duty.get("mesh") or {})
     return y, geo, duty, mats, st
 
 
@@ -150,6 +180,19 @@ def _harm(series, n):
     return [float(2 * abs(F[h])) for h in range(n // 2)]
 
 
+def _versions():
+    """Provenance: the mesher/solver library versions this solve ran on."""
+    out = {"python": sys.version.split()[0]}
+    for mod in ("gmsh", "triangle", "numpy", "scipy", "shapely", "pypardiso",
+                "skfem"):
+        try:
+            m = __import__(mod)
+            out[mod] = str(getattr(m, "__version__", "?"))
+        except Exception:  # noqa: BLE001 — absent is a valid answer
+            out[mod] = None
+    return out
+
+
 def run(spec_path, out_path):
     import logging
     logging.basicConfig(level=logging.INFO, stream=sys.stderr,
@@ -159,7 +202,11 @@ def run(spec_path, out_path):
     except (AttributeError, OSError):
         pass
     spec = json.load(open(spec_path, encoding="utf-8"))
+    # study knobs (e.g. SB_SKIN_H1_FRAC, SB_SLEEVE_LAYERS) set BEFORE any import
+    os.environ.update({str(k): str(v) for k, v in (spec.get("env") or {}).items()})
     y, geo, duty, mats, st = _compose(spec["dies"], *spec["case"])
+    # a duty without saved mesh settings runs with the ones named here (recorded)
+    st = dict(st, **(spec.get("settings") or {}))
     sd, wnd = _write_sandbox_config(y, geo, mats, duty, st,
                                     [spec.get("live_config"), spec["dies"]])
     import importlib.util
@@ -168,10 +215,14 @@ def run(spec_path, out_path):
     from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
 
     have_triangle = importlib.util.find_spec("triangle") is not None
-    if spec["mesher"] == "triangle" and not have_triangle:
-        raise SystemExit("the 'triangle' side needs the old code WITH triangle installed")
-    if spec["mesher"] == "gmsh" and have_triangle:
-        raise SystemExit("the 'gmsh' side must run without triangle installed")
+    try:     # S2 tree: one checkout, the CDT backend chosen per run
+        from motor_ai_sim.simulation.geo_mesh import cdt_backend
+        backend = cdt_backend()
+    except ImportError:   # S1 tree: gmsh only where triangle is absent
+        backend = "triangle" if have_triangle else "gmsh"
+    if spec["mesher"] != backend:
+        raise SystemExit(f"side {spec['mesher']!r} resolved to the {backend!r} "
+                         "backend (MOTOR_AI_SIM_GEO_CDT / triangle install)")
 
     n_par = int(wnd.get("n_parallel") or 1)
     I_term = float(duty["current_arms"])
@@ -184,7 +235,8 @@ def run(spec_path, out_path):
         n_steps_per_period=steps, n_periods=1.0, gamma_deg=float(duty["gamma_deg"]),
         I_phase_rms=(0.0 if noload else I_wind), rpm=float(duty["rpm"]),
         n_parallel=n_par, connection=wnd.get("connection"), star_delta=sd,
-        mesh_size_mm=float(st.get("mesh.meshSize", 4)),
+        # spec "mesh_size_mm" overrides the duty's size (convergence checks)
+        mesh_size_mm=float(spec.get("mesh_size_mm") or st.get("mesh.meshSize", 4)),
         min_size_mm=float(st.get("mesh.minSize", 0.3)),
         outer_air_factor=float(st.get("mesh.outerAir", 1.2)),
         gap_layers=float(st.get("mesh.gapLayers", 1)),
@@ -200,6 +252,43 @@ def run(spec_path, out_path):
         structured_gap=bool(st.get("mesh.structuredGap", True)),
         component_mesh_mm=dict(st.get("mesh.componentMesh") or {}),
         geo_override=dict(geo), eddy=True)
+    # study overrides of the solve call (e.g. {"demag": false}), recorded in kwargs
+    kw.update(spec.get("kw_override") or {})
+    # Record every geometry-driven mesh build of this solve (hash of nodes,
+    # triangles and tags, triangle count, band-ring node counts): identical
+    # hashes between two code versions => identical numbers (the solve is
+    # deterministic), so a pre-processing change can be shown to be a no-op.
+    import hashlib
+    from motor_ai_sim.simulation import geo_mesh as _gm
+    _orig = _gm.geo_mesh_halves
+    seen = []
+
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from mesher_campaign import _quality
+
+    def _spy(p, polys, **k):
+        _tb = time.time()
+        out = _orig(p, polys, **k)
+        _tb = time.time() - _tb
+        ms, ts, _cs, mr, tr, _cr = out
+        rec = {"kwargs": {kk: (vv if isinstance(vv, (int, float, str)) else str(vv))
+                          for kk, vv in k.items() if kk != "skin_layers"}}
+        for nm, m_, t_ in (("stator", ms, ts), ("rotor", mr, tr)):
+            h = hashlib.sha1(np.ascontiguousarray(m_.p).tobytes()
+                             + np.ascontiguousarray(m_.t).tobytes()
+                             + np.ascontiguousarray(t_).tobytes()).hexdigest()
+            rec[nm] = {"sha1": h, "n_tri": int(m_.t.shape[1]),
+                       "quality": _quality(m_.p.T * 1e3, m_.t.T)}
+        rec["t_build_s"] = _tb
+        for nm, m_, rr in (("R1", mr, k.get("r1_band")), ("R2", ms, k.get("r2_band"))):
+            if rr:
+                P = m_.p.T * 1e3
+                used = np.unique(m_.t)
+                rad = np.hypot(P[used, 0], P[used, 1])
+                rec[nm + "_nodes"] = int(np.sum(np.abs(rad - float(rr)) < 2e-3))
+        seen.append(rec)
+        return out
+    _gm.geo_mesh_halves = _spy
     t0 = time.time()
     r = em_transient_eval(**kw)
     wall = time.time() - t0
@@ -220,12 +309,38 @@ def run(spec_path, out_path):
 
     nper = r.get("n_steps_per_period") or steps
     T = np.asarray(r.get("T_em_Nm") or [], float)
+    try:
+        import resource
+        maxrss_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except ImportError:          # Windows
+        maxrss_mb = None
     res = {
         "spec": spec, "module": motor_ai_sim.__file__, "have_triangle": have_triangle,
-        "wall_s": wall,
+        "backend": backend, "wall_s": wall, "maxrss_mb": maxrss_mb,
+        "versions": _versions(),
+        "P_in_W": f("P_elec_in_W"), "P_mech_W": f("P_mech_avg_W"),
+        "balance_residual_rel": ((r.get("power_balance") or {}).get("residual_rel")),
+        # new defaults (#88): Coulomb virtual-work torque + measured gap rule
+        "torque_method": r.get("torque_method") or r.get("torque_mean_source"),
+        "T_avg_coulomb_Nm": f("T_avg_coulomb_Nm"),
+        "T_ripple_pp_coulomb_Nm": f("T_ripple_pp_coulomb"),
+        "T_ripple_pp_Nm": f("T_ripple_pp_Nm"),
+        "T_ripple_pct_coulomb": (100.0 * f("T_ripple_pp_coulomb") / abs(f("T_avg_coulomb_Nm"))
+                                 if f("T_ripple_pp_coulomb") is not None
+                                 and f("T_avg_coulomb_Nm") else None),
+        "coulomb_self_check": (((r.get("coulomb_torque") or {}).get("layer_self_check")
+                                or {}).get("rel_to_ripple_scale")),
+        "coulomb": {k: v for k, v in (r.get("coulomb_torque") or {}).items()
+                    if k in ("available", "unavailable_reason", "layer_self_check",
+                             "T_avg_coulomb_Nm", "T_ripple_pp_coulomb", "layers")},
+        "gap_refinement": r.get("gap_refinement"),
+        "gap_layers_effective": f("gap_layers_effective"),
+        "mesher": r.get("mesher"),
+        "eddy_settled": r.get("eddy_settled"),
         "kwargs": {k: v for k, v in kw.items() if k != "geo_override"},
         "mesh_build_events": r.get("mesh_build_events"),
         "mesh_build_notes": r.get("mesh_build_notes"),
+        "mesh_builds": seen,
         "mesh": {k: v for k, v in r.items()
                  if isinstance(v, (int, float)) and any(
                      s in k.lower() for s in ("tri", "node", "n_elem", "dof"))},
@@ -258,7 +373,14 @@ def plan(a):
         cases["L13"] = (a.l13_die, "L13", "rated")
     tags = a.cases.split(",") if a.cases else list(cases)
     prog = os.path.join(a.workdir, "progress.txt")
-    sides = (("triangle", a.old_src, a.old_python), ("gmsh", a.new_src, a.new_python))
+    # one tree (S2+): the same checkout and venv (with triangle installed),
+    # the CDT backend switched by MOTOR_AI_SIM_GEO_CDT; two trees (S1): old
+    # code with triangle vs new code without it.
+    old_src = a.old_src or a.new_src
+    old_py = a.old_python or a.new_python
+    sides = tuple((m, old_src if m == "triangle" else a.new_src,
+                   old_py if m == "triangle" else a.new_python)
+                  for m in a.meshers.split(","))
     for tag in tags:
         for noload in ((False,) if a.no_emf else (False, True)):
             for mesher, src, py in sides:
@@ -282,6 +404,7 @@ def plan(a):
                 env = dict(os.environ)
                 env.update({"PYTHONPATH": os.path.abspath(src),
                             "MOTOR_AI_SIM_CONFIG": os.path.join(cd, "motor_config.yaml"),
+                            "MOTOR_AI_SIM_GEO_CDT": mesher,
                             "SB_NO_WARM_CACHE": "1", "OMP_NUM_THREADS": thr,
                             "MKL_NUM_THREADS": thr, "OPENBLAS_NUM_THREADS": thr,
                             "NUMEXPR_MAX_THREADS": thr})
@@ -299,39 +422,103 @@ def plan(a):
         pf.write(f"{time.strftime('%H:%M:%S')} PLAN DONE\n")
 
 
+def _builds(res):
+    """Sum over the solve's geometry-driven builds: build time, element count,
+    worst minimum angle and worst aspect p99.9 over the halves."""
+    b = res.get("mesh_builds") or []
+    if not b:
+        return {}
+    q = [x[h]["quality"] for x in b for h in ("stator", "rotor") if "quality" in x.get(h, {})]
+    return {"t_build_s": sum(float(x.get("t_build_s") or 0.0) for x in b),
+            "n_builds": len(b),
+            "n_tri_last": (b[-1]["stator"]["n_tri"] + b[-1]["rotor"]["n_tri"]),
+            "min_angle_deg": min((x["min_angle_deg"] for x in q), default=None),
+            "ar_p99_9": max((x["ar_p99_9"] for x in q), default=None)}
+
+
+def _verdict(ref, oth):
+    """The owner's criteria against the reference mesher (2026-09-30): Coulomb
+    mean torque <= 1 %, ripple within max(0.5 pp, 10 %), total loss <= 5 %."""
+    out = {}
+    t0, t1 = ref.get("T_avg_coulomb_Nm"), oth.get("T_avg_coulomb_Nm")
+    if t0 and t1 is not None:
+        out["torque"] = abs(t1 - t0) <= 0.01 * abs(t0)
+    r0, r1 = ref.get("T_ripple_pct_coulomb"), oth.get("T_ripple_pct_coulomb")
+    if r0 is not None and r1 is not None:
+        out["ripple"] = abs(r1 - r0) <= max(0.5, 0.10 * abs(r0))
+    l0, l1 = ref.get("P_loss_total_W"), oth.get("P_loss_total_W")
+    if l0 and l1 is not None:
+        out["total_loss"] = abs(l1 - l0) <= 0.05 * abs(l0)
+    return out
+
+
 def report(a):
-    rows, out = [], {}
+    meshers = a.meshers.split(",")
+    ref_m = meshers[0]
+    out = {}
     tags = sorted({fn.split("_")[0] for fn in os.listdir(a.workdir)
                    if fn.endswith(".json") and "_" in fn and not fn.endswith(".spec.json")
                    and fn != "report.json"})
-    lines = ["# Triangle CDT vs gmsh — same duty, same settings", "",
-             "| case | quantity | triangle (old) | gmsh (new) | delta |",
-             "|---|---|---:|---:|---:|"]
+    lines = ["# CDT backends: same duty, same settings (reference: %s)" % ref_m, "",
+             "| case | quantity | " + " | ".join(meshers) + " | "
+             + " | ".join("%s vs %s" % (m, ref_m) for m in meshers[1:]) + " |",
+             "|---|---|" + "---:|" * (2 * len(meshers) - 1)]
+
+    def _fmt(v, spec="{:.5g}"):
+        return "" if v is None else spec.format(v)
+
     for tag in tags:
         for kind, metrics in (("load", METRICS), ("noload", EMF_METRICS)):
-            p_old = os.path.join(a.workdir, f"{tag}_{kind}_triangle.json")
-            p_new = os.path.join(a.workdir, f"{tag}_{kind}_gmsh.json")
-            if not (os.path.exists(p_old) and os.path.exists(p_new)):
+            res = {}
+            for m in meshers:
+                pth = os.path.join(a.workdir, f"{tag}_{kind}_{m}.json")
+                if os.path.exists(pth):
+                    res[m] = json.load(open(pth, encoding="utf-8"))
+            if ref_m not in res or len(res) < 2:
                 continue
-            o = json.load(open(p_old, encoding="utf-8"))
-            n = json.load(open(p_new, encoding="utf-8"))
-            for key, label, unit in metrics:
-                vo, vn = o.get(key), n.get(key)
-                if vo is None and vn is None:
+            ref = res[ref_m]
+            rows = [(k, f"{lbl} [{u}]", {m: res[m].get(k) for m in res}) for k, lbl, u in metrics]
+            for m in res:
+                res[m]["_b"] = _builds(res[m])
+            for k, lbl in (("t_build_s", "mesh build time, all builds [s]"),
+                           ("n_tri_last", "elements, last build (stator+rotor)"),
+                           ("min_angle_deg", "minimum angle, worst half [deg]"),
+                           ("ar_p99_9", "aspect p99.9, worst half")):
+                rows.append((k, lbl, {m: res[m]["_b"].get(k) for m in res}))
+            rows.append(("wall_s", "solve wall time [s]", {m: res[m].get("wall_s") for m in res}))
+            rows.append(("maxrss_mb", "peak RSS [MB]", {m: res[m].get("maxrss_mb") for m in res}))
+            for k, lbl, vals in rows:
+                if all(v is None for v in vals.values()):
                     continue
-                d = (100.0 * (vn - vo) / abs(vo)
-                     if vo not in (None, 0) and vn is not None else None)
-                out.setdefault(tag, {})[key] = {"triangle": vo, "gmsh": vn,
-                                                "delta_pct": d}
-                lines.append(f"| {tag} | {label} [{unit}] | "
-                             f"{'' if vo is None else f'{vo:.4g}'} | "
-                             f"{'' if vn is None else f'{vn:.4g}'} | "
-                             f"{'' if d is None else f'{d:+.2f} %'} |")
-            out.setdefault(tag, {})[f"{kind}_mesh"] = {"triangle": o.get("mesh"),
-                                                       "gmsh": n.get("mesh")}
-            out[tag][f"{kind}_wall_s"] = {"triangle": o.get("wall_s"),
-                                          "gmsh": n.get("wall_s")}
-            out[tag][f"{kind}_gmsh_build_notes"] = n.get("mesh_build_notes")
+                v0 = vals.get(ref_m)
+                deltas = []
+                for m in meshers[1:]:
+                    vm = vals.get(m)
+                    if k in ("T_ripple_pct", "T_ripple_pct_coulomb", "E_thd_pct") \
+                            and v0 is not None and vm is not None:
+                        deltas.append(f"{vm - v0:+.3f} pp")
+                    elif isinstance(v0, (int, float)) and v0 and isinstance(vm, (int, float)):
+                        deltas.append(f"{100.0 * (vm - v0) / abs(v0):+.3f} %")
+                    else:
+                        deltas.append("")
+                    out.setdefault(tag, {}).setdefault(f"{kind}:{k}", {})[m] = vm
+                out.setdefault(tag, {}).setdefault(f"{kind}:{k}", {})[ref_m] = v0
+                lines.append(f"| {tag} {kind} | {lbl} | "
+                             + " | ".join(_fmt(vals.get(m)) for m in meshers) + " | "
+                             + " | ".join(deltas) + " |")
+            if kind == "load":
+                for m in meshers[1:]:
+                    if m in res:
+                        v = _verdict(ref, res[m])
+                        out.setdefault(tag, {})[f"verdict:{m}"] = v
+                        lines.append(f"| {tag} {kind} | owner criteria, {m} vs {ref_m} | "
+                                     + " | ".join("" for _ in meshers) + " | "
+                                     + " | ".join((", ".join(f"{kk} {'pass' if vv else 'FAIL'}"
+                                                            for kk, vv in v.items())
+                                                  if mm == m else "") for mm in meshers[1:])
+                                     + " |")
+            for m in res:
+                out.setdefault(tag, {})[f"{kind}:mesher:{m}"] = res[m].get("mesher")
     rows = "\n".join(lines) + "\n"
     open(os.path.join(a.workdir, "report.md"), "w", encoding="utf-8").write(rows)
     json.dump(out, open(os.path.join(a.workdir, "report.json"), "w", encoding="utf-8"),
@@ -346,8 +533,11 @@ def main():
     r = sub.add_parser("run", help="(internal) one solve in this process")
     r.add_argument("spec"); r.add_argument("out")
     p = sub.add_parser("plan", help="run every case on both meshers")
-    p.add_argument("--old-src", required=True, help="src/ of a checkout WITH triangle")
-    p.add_argument("--old-python", required=True, help="python of the venv with triangle")
+    p.add_argument("--old-src", default="",
+                   help="src/ of a checkout WITH triangle (default: --new-src, "
+                        "backend switched by MOTOR_AI_SIM_GEO_CDT)")
+    p.add_argument("--old-python", default="",
+                   help="python of the venv with triangle (default: --new-python)")
     p.add_argument("--new-src", required=True, help="src/ of this branch")
     p.add_argument("--new-python", default=sys.executable)
     p.add_argument("--config", required=True, help="config/ to COPY per case (read only)")
@@ -357,8 +547,12 @@ def main():
     p.add_argument("--cases", default="", help="comma list of " + ",".join(CASES))
     p.add_argument("--l13-die", default="", help="die holding the L13 to compare")
     p.add_argument("--no-emf", action="store_true", help="skip the no-load runs")
+    p.add_argument("--meshers", default="triangle,gmsh",
+                   help="comma list of CDT backends (triangle,gmsh,netgen)")
     q = sub.add_parser("report", help="tabulate finished runs")
     q.add_argument("--workdir", required=True)
+    q.add_argument("--meshers", default="triangle,gmsh",
+                   help="comma list; the first is the reference")
     a = ap.parse_args()
     if a.cmd == "run":
         run(a.spec, a.out)

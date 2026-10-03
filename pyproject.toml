@@ -78,6 +78,11 @@ pardiso = [
 triangle = [
     "triangle>=20230923",
 ]
+# OPTIONAL, under evaluation (LGPL-2.1): the netgen CDT backend of the
+# geometry mesher, MOTOR_AI_SIM_GEO_CDT=netgen.  docs/MESHER_NETGEN_2026-09-30.md
+netgen = [
+    "netgen-mesher==6.2.2607",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",

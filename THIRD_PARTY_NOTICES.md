@@ -59,6 +59,7 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 | Package | Install | Licence |
 |---|---|---|
 | triangle | `requirements-triangle.txt` or extra `[triangle]` | Python wrapper LGPL-3.0; bundled Triangle C code by J. R. Shewchuk: **free for non-commercial use only** (see note 3) |
+| netgen-mesher (+ netgen-occt) | `requirements-netgen.txt` or extra `[netgen]`; default geometry mesher (`MOTOR_AI_SIM_GEO_CDT`, default `netgen`) | netgen-mesher: LGPL-2.1-only (its wheel also bundles GLU/Xmu/Xt/OpenGL loader libraries for the unused GUI); netgen-occt: OpenCASCADE Technology, LGPL-2.1 with the OCCT exception. Used in-process as a dynamically linked library (Python wheel with shared objects) that the user can replace by installing another build of the same package — see note 4 |
 | pypardiso | `requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for `deploy/Dockerfile.api` | BSD-3-Clause |
 | mkl (pulled by pypardiso) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
 | onemkl-license (pulled by mkl) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
@@ -145,3 +146,16 @@ are not distributed with the software and are not listed.
    (docs/MESHER_TRANSITION.md). Without it the geometry mesher falls back to
    gmsh (one log line) and the 2-D view uses mapbox-earcut with a shapely
    (GEOS) constrained-Delaunay fallback. It will be removed at stage S5.
+4. **Netgen (LGPL-2.1) — the default geometry mesher.** `netgen-mesher` is
+   pinned at `6.2.2607` and imported in-process as an unmodified library
+   (`import netgen`); it is dynamically linked (Python extension modules and
+   shared objects inside the wheel), so a user can replace it by installing
+   another build of the same package (`pip install netgen-mesher==<version>`)
+   without relinking this program. Its bundled OpenCASCADE (`netgen-occt`) is
+   LGPL-2.1 with the OCCT exception. Netgen is preferred over gmsh because
+   LGPL, unlike GPL, imposes no condition on code that merely calls the
+   library, which matters for running next to proprietary Intel MKL in the
+   same process. gmsh (note 1) remains selectable but is no longer the
+   default. Netgen cannot run on the owner's Windows workstation (App Control
+   blocks its DLLs); Windows development machines use WSL2, or set
+   `MOTOR_AI_SIM_GEO_CDT=triangle` explicitly.

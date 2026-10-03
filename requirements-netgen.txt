@@ -1,0 +1,6 @@
+# OPTIONAL, under evaluation (docs/MESHER_NETGEN_2026-09-30.md): the netgen CDT
+# backend of the geometry-driven mesher (MOTOR_AI_SIM_GEO_CDT=netgen).
+# netgen-mesher is LGPL-2.1-only; it pulls netgen-occt (OpenCASCADE Technology,
+# LGPL-2.1 with the OCCT exception).  Both are dynamically loaded Python
+# packages, so they may run in-process next to Intel MKL under any licence.
+netgen-mesher==6.2.2607

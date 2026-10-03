@@ -28,8 +28,8 @@ from typing import Sequence
 
 import numpy as np
 from skfem import BilinearForm, asm
-from skfem.assembly.form.coo_data import COOData as _COOData
 from skfem.helpers import dot as _dot, grad as _grad
+from motor_ai_sim.simulation.csr_scatter import CsrScatter
 from scipy.sparse import csr_matrix as _csr_matrix
 from scipy.sparse.linalg import splu as _splu
 
@@ -165,7 +165,7 @@ class _Skeleton:
     already carries the factorization.
     """
 
-    __slots__ = ("nb", "nt", "idx", "shape", "lshape", "dx", "gg", "g")
+    __slots__ = ("nb", "nt", "idx", "shape", "lshape", "dx", "gg", "g", "_csr_stiff", "_csr_tang")
 
     def __init__(self, sb):
         self.nb = int(sb.Nbfun)
@@ -182,6 +182,8 @@ class _Skeleton:
         self.shape = (sb.N, sb.N)
         self.lshape = (nb, nb)
         self.dx = sb.dx
+        self._csr_stiff = CsrScatter(self.idx, self.shape)
+        self._csr_tang = CsrScatter(self.idx, self.shape)
         # ∇φ_i at the quadrature points, (dim, n_elem, n_qp) per basis fn
         self.g = [sb.basis[i][0].get(1) for i in range(nb)]
         self.gg = np.empty((nb, nb, nt, self.dx.shape[-1]))
@@ -194,11 +196,13 @@ class _Skeleton:
         """``asm(stiff_nu2, sb, nu=nu)`` with the gradients already dotted."""
         nb, nt = self.nb, self.nt
         data = np.empty((nb, nb, nt))
+        work = np.empty_like(self.dx)
         for j in range(nb):
             for i in range(nb):
-                data[j, i] = np.sum((nu * self.gg[j, i]) * self.dx, axis=1)
-        return _COOData._assemble_scipy_csr(
-            self.idx, data.flatten('C'), self.shape, self.lshape)
+                np.multiply(nu, self.gg[j, i], out=work)
+                np.multiply(work, self.dx, out=work)
+                np.sum(work, axis=1, out=data[j, i])
+        return self._csr_stiff.assemble(data)
 
     def tang(self, gA, c):
         """``asm(tang_nu2, sb, gA=gA, c=c)`` with gA·∇φ hoisted out of the
@@ -206,12 +210,14 @@ class _Skeleton:
         nb, nt = self.nb, self.nt
         a = [gA[0] * gi[0] + gA[1] * gi[1] for gi in self.g]
         data = np.empty((nb, nb, nt))
+        work = np.empty_like(self.dx)
         for j in range(nb):
             caj = c * a[j]
             for i in range(nb):
-                data[j, i] = np.sum((caj * a[i]) * self.dx, axis=1)
-        return _COOData._assemble_scipy_csr(
-            self.idx, data.flatten('C'), self.shape, self.lshape)
+                np.multiply(caj, a[i], out=work)
+                np.multiply(work, self.dx, out=work)
+                np.sum(work, axis=1, out=data[j, i])
+        return self._csr_tang.assemble(data)
 
 
 class P2Nonlinear:

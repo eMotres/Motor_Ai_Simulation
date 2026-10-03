@@ -639,6 +639,24 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "gap_layers_note": d.get("gap_layers_note"),
         "eddy_settled": bool(d.get("eddy_settled", True)),
         "eddy_capped": bool(d.get("eddy_capped", False)),
+        # ── IS THE REPORTED WINDOW A STEADY STATE, AND HOW WAS IT REACHED?
+        # (second Codex review, 2026-10-03, finding 8).  `steady_state` False =
+        # Br still moving in the reported period (a demag transient) or an
+        # unsettled warm-up; `steady_state_note` says which, with the numbers.
+        # `eddy_method` / `eddy_method_note` say whether TDM solved it or why it
+        # was marched; `qualified` False = the experimental demag shortcut.
+        # Carried verbatim (None when the solver did not say) so a stored point
+        # can never read as a steady, qualified one by omission.
+        "steady_state": (None if d.get("steady_state") is None
+                         else bool(d["steady_state"])),
+        "steady_state_note": d.get("steady_state_note"),
+        "demag_settled": (None if d.get("demag_settled") is None
+                          else bool(d["demag_settled"])),
+        "eddy_method": d.get("eddy_method"),
+        "eddy_method_requested": d.get("eddy_method_requested"),
+        "eddy_method_note": d.get("eddy_method_note"),
+        "tdm_experimental": bool(d.get("tdm_experimental", False)),
+        "qualified": (None if d.get("qualified") is None else bool(d["qualified"])),
         "eddy_settle_residual": d.get("eddy_settle_residual"),
         "eddy_settle_tol": d.get("eddy_settle_tol"),
         "cogging_sampling_purpose": d.get("cogging_sampling_purpose"),

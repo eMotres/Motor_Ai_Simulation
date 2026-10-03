@@ -65,7 +65,9 @@ def _clear_warm_cache() -> None:
 
 def _eddy_run(**over: Any) -> Dict[str, Any]:
     """One coupled-eddy transient on the sandbox 30 mm 12s14p (raw dict)."""
-    kw = dict(CASES["p2_eddy"]); kw.update(over)
+    # the MARCH's settle verdict is what this file tests (TDM, the default
+    # since 2026-09-30, has no warm-up: tests/test_tdm_fem.py)
+    kw = dict(CASES["p2_eddy"], eddy_method="march"); kw.update(over)
     _clear_warm_cache()
     set_request_materials(OVERRIDE)
     try:

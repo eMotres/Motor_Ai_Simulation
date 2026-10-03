@@ -33,6 +33,7 @@ for _v in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS",
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "src"))
 sys.path.insert(0, _ROOT)
+sys.path.insert(0, os.getcwd())          # the checkout it is run from (tests/)
 
 
 def _timed(fn, args, kwargs, repeat):

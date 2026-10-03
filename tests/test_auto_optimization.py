@@ -329,9 +329,17 @@ class TestMeshBudgetFence:
 
     @staticmethod
     def _square():
+        """10 x 10 mm, its boundary pre-split at 0.1 mm as every production
+        PSLG is (the CDT never splits a domain-boundary segment; Netgen's
+        advancing front cannot fill a 0.15 mm mesh from four whole 10 mm
+        edges — measured: 'incompletely meshed' below 0.05 mm^2)."""
         import numpy as np
-        V = np.array([[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0]])
-        S = np.array([[0, 1], [1, 2], [2, 3], [3, 0]])
+        side = np.linspace(0.0, 10.0, 100, endpoint=False)
+        z, t = 0.0 * side, 10.0 + 0.0 * side
+        V = np.vstack([np.c_[side, z], np.c_[t, side],
+                       np.c_[10.0 - side, t], np.c_[z, 10.0 - side]])
+        idx = np.arange(len(V))
+        S = np.c_[idx, (idx + 1) % len(V)]
         return V, S
 
     @pytest.fixture(autouse=True)

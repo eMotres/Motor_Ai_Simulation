@@ -94,9 +94,9 @@ def test_the_default_is_tdm_and_it_reproduces_the_march(march, tdm):
     assert march["eddy_method"] == "march"
     info = tdm["tdm"]
     assert info["solve"]["converged"]
-    assert info["maps_inverse_dev"] is not None     # recorded (diagnostic)
     assert tdm["eddy_warmup_frames"] == 0 and tdm["eddy_settled"]
-    assert tdm["steady_state"] is True
+    assert tdm["steady_state"] is True and tdm["steady_state_note"] is None
+    assert tdm["qualified"] is True and tdm["tdm_experimental"] is False
     # the owner's accuracy terms, with a wide margin
     assert tdm["T_avg_Nm"] == pytest.approx(march["T_avg_Nm"], rel=1e-3)
     assert abs(tdm["T_ripple_pct"] - march["T_ripple_pct"]) < 0.05
@@ -104,43 +104,99 @@ def test_the_default_is_tdm_and_it_reproduces_the_march(march, tdm):
                                                       rel=5e-3)
     for k in ("P_cu_ac_W", "P_mag_eddy_W"):
         assert _mean(tdm, k) == pytest.approx(_mean(march, k), rel=1e-2), k
-    # the reported period marched from the orbit stayed on it …
-    assert info["march_vs_orbit_last_frame"] < 1e-3
-    # … and passed the HARD acceptance gate on its first and last window
+    groups = set(info["gate"]["orbit"]["P"])
+    assert {"cu", "mag", "shaft"} <= groups
+    # THE CLOSURE MARCH (finding 1): one whole period from the orbit's start
+    # state, frozen Br, closes on the orbit per group, both history levels
+    cl = info["closure"]
+    assert cl["ok"] is True and cl["frames"] == 12 and cl["frozen_br"] is True
+    assert set(cl["state"]["levels"]) == {"frame 11", "frame 10"}
+    for lev in cl["state"]["levels"].values():
+        assert set(lev) == groups
+        assert max(lev.values()) <= TP.CLOSURE_GATE["state_rel"]
+    for w in cl["windows"].values():
+        assert w["ok"] and w["T_mean_rel"] <= TP.CLOSURE_GATE["T_rel"]
+        assert w["ripple_pp"] <= TP.CLOSURE_GATE["ripple_pp"]
+    assert info["t"]["closure"] > 0.0
+    # THE REPORT GATE (finding 6): hard, per group, both levels, every period
     gate = info["gate"]
-    assert gate["ok"] is True
-    assert "first" in gate["windows"]
+    assert gate["ok"] is True and "error" not in gate
+    assert list(gate["windows"]) == ["frames 0-11"] == list(gate["state"])
     for w in gate["windows"].values():
         assert w["ok"] and w["T_mean_rel"] < 1e-3 and w["ripple_pp"] < 0.05
-    # every Newton step's wrap GMRES converged (true residual recorded)
+    st = gate["state"]["frames 0-11"]
+    assert st["ok"] and set(st["levels"]) == {"frame 11", "frame 10"}
+    assert max(max(v.values()) for v in st["levels"].values()) <= TP.REPORT_GATE["state_rel"]
+    assert info["march_vs_orbit_last_frame"] == max(st["levels"]["frame 11"].values())
+    # THE MAP CHECKS (finding 7) of the full period on the fixture: the inverse
+    # is exact, the constrained spaces, operators and bodies match to round-off
+    mc = info["map_check"]
+    assert mc["ok"] is True and mc["failed"] == []
+    assert mc["dev"]["inverse"] == 0.0
+    assert mc["dev"]["constrained"] < 1e-12
+    # the operators on rough random vectors: the mesher's pole-pair images match
+    # within its node tolerance (measured 9.4e-4), a map defect is O(1)
+    assert mc["dev"]["operators"] < TP.MAP_CHECK_RTOL["operators"]
+    assert mc["dev"]["bodies"] < 1e-10
+    assert mc["dev"]["source"] < TP.MAP_CHECK_RTOL["source"]
+    assert mc["bodies"] > 0 and mc["bodies_moved"] > 0       # the magnets move
+    # every Newton step's wrap solve met its forcing term or the bounded
+    # inexact-Newton factor; the TRUE residual is recorded
     for rec in info["solve"]["newton"]:
         if "gmres_iterations" in rec:
-            assert rec["gmres_converged"] is True
+            assert rec["gmres_converged"] or rec["gmres_accepted_inexact"]
+            assert rec["gmres_rel_resid"] <= TP.GMRES_ACCEPT_FACTOR * rec["gmres_rtol"]
     assert TP.FrameFactor.open_handles() == 0
 
 
-def test_half_period_equals_full_period(tdm, monkeypatch):
-    """The FULL period is the default; the opt-in anti-periodic half period
-    (SB_TDM_HALF=1, on a mesh whose magnet source passes the tight symmetry
-    test) gives the same reported period."""
+def test_half_period_is_taken_only_at_round_off(tdm, monkeypatch):
+    """Finding 2: the opt-in half period (SB_TDM_HALF=1) is taken only when
+    the source, operators, bodies and maps are anti-symmetric to ROUND-OFF.
+    The fixture's are not (source 7.8e-6, operators 9.4e-4), so the run takes
+    the full period and says so; it is the default run, unchanged."""
     assert tdm["tdm"]["period"] == "full"
     monkeypatch.setenv("SB_TDM_HALF", "1")
     half = _run()
-    assert half["eddy_method"] == "tdm", half.get("eddy_method_note")
-    assert half["tdm"]["period"] == "half_antiperiodic"
-    assert half["tdm"]["magnet_source_half_asymmetry"] < 1e-5
-    assert half["T_avg_Nm"] == pytest.approx(tdm["T_avg_Nm"], rel=1e-5)
-    assert abs(half["T_ripple_pct"] - tdm["T_ripple_pct"]) < 1e-3
-    assert half["P_loss_total_avg_W"] == pytest.approx(tdm["P_loss_total_avg_W"],
-                                                       rel=1e-5)
-    # measured: copper AC +1e-4, magnet +9e-6, but the SHAFT +0.56 % — the
-    # discrete orbit is not exactly anti-periodic in the shaft, which is why
-    # the full period is the default
-    for k, rel in (("P_cu_ac_W", 5e-4), ("P_mag_eddy_W", 1e-4), ("P_shaft_eddy_W", 2e-2)):
-        assert _mean(half, k) == pytest.approx(_mean(tdm, k), rel=rel, abs=1e-9), k
+    assert half["eddy_method"] == "tdm" and half["tdm"]["period"] == "full"
+    assert half["eddy_method_note"].startswith(
+        "tdm: half period refused (not anti-symmetric to round-off")
+    hc = half["tdm"]["half_check"]
+    assert hc["ok"] is False and "source" in hc["failed"]
+    assert hc["tol"]["source"] == TP.HALF_SYMMETRY_RTOL == 1e-12
+    assert hc["dev"]["source"] > TP.HALF_SYMMETRY_RTOL
+    _same_as(half, tdm, rel=1e-12)
 
 
-@pytest.mark.parametrize("stage", ["setup", "static_start", "newton", "splice"])
+def test_a_forced_half_period_is_validated_on_both_halves(monkeypatch, tdm):
+    """Finding 2, both halves: with the round-off rule bypassed (test hook
+    only) the half period is taken; the closure march covers the WHOLE period
+    and rejects it on the SECOND half (measured: shaft state 8 %, ripple
+    0.13 pp, magnet loss 0.16 % off; the first half closes to 1e-5); the one
+    retry takes the full period with the strict stop and is accepted."""
+    monkeypatch.setattr(TP, "HALF_SYMMETRY_RTOL", 1e-2)
+    monkeypatch.setenv("SB_TDM_HALF", "1")
+    d = _run()
+    assert d["eddy_method"] == "tdm" and d["tdm"]["period"] == "full"
+    assert d["tdm"]["attempt"] == 2
+    assert d["tdm"]["solve"]["stopped_by"] == "state_residual"
+    prev = d["tdm"]["previous_attempts"]
+    assert [a["stage"] for a in prev] == ["closure"]
+    assert prev[0]["retry_full_period"] is True
+    cl = prev[0]["tdm"]["closure"]
+    assert prev[0]["tdm"]["period"] == "half_antiperiodic" and cl["frames"] == 12
+    assert set(cl["windows"]) == {"frames 0-5", "frames 6-11"}
+    assert cl["windows"]["frames 0-5"]["ok"] is True          # the first half closes
+    assert cl["windows"]["frames 6-11"]["ok"] is False        # the second does not
+    lv = cl["state"]["levels"]
+    assert set(lv) == {"frame 5", "frame 4", "frame 11", "frame 10"}
+    assert max(lv["frame 5"].values()) < TP.CLOSURE_GATE["state_rel"]
+    assert max(lv["frame 11"].values()) > TP.CLOSURE_GATE["state_rel"]
+    assert d["tdm"]["closure"]["ok"] is True
+    _same_as(d, tdm, rel=1e-6)
+
+
+@pytest.mark.parametrize("stage", ["setup", "static_start", "newton", "closure",
+                                   "splice"])
 def test_a_fault_at_any_stage_is_replaced_by_a_clean_march(stage, monkeypatch, march):
     monkeypatch.setenv("SB_TDM_FAULT", stage)
     d = _run()
@@ -178,6 +234,95 @@ def test_a_failed_gate_retries_strictly_then_marches(monkeypatch, march):
     assert [a["stage"] for a in att] == ["report_gate", "report_gate"]
     assert att[0]["retry_residual"] is True and att[1]["retry_residual"] is False
     assert att[1]["tdm"]["attempt"] == 2
+    _same_as(d, march)
+
+
+def test_a_failed_closure_retries_strictly_then_marches(monkeypatch, march):
+    """Finding 1: the closure march's verdict (injected failure) rejects the
+    attempt: one retry with the strict 1e-7 state-residual stop on the full
+    period, then a clean march."""
+    monkeypatch.setenv("SB_TDM_FAULT", "closure_gate")
+    d = _run()
+    assert d["eddy_method"] == "march" and d["eddy_method_requested"] == "tdm"
+    assert d["eddy_method_note"].startswith("march: TDM failed (closure:")
+    att = d["tdm"]["attempts"]
+    assert [a["stage"] for a in att] == ["closure", "closure"]
+    assert att[0]["retry_residual"] is True and att[1]["retry_residual"] is False
+    assert att[1]["tdm"]["attempt"] == 2
+    assert att[1]["tdm"]["closure"]["injected"] is True
+    assert att[1]["tdm"]["solve"]["stopped_by"] == "state_residual"
+    _same_as(d, march)
+
+
+def test_a_rejected_attempt_is_not_kept_alive_during_the_retry(monkeypatch):
+    """Finding 9: when the retry and the march start, no frame, factor or
+    solver object of the rejected attempt is still referenced (its traceback
+    frames are cleared and every link to them cut)."""
+    import gc
+    monkeypatch.setenv("SB_TDM_FAULT", "gate")
+    real = F._fem_transient_sliding_band_once
+    alive = []
+
+    def spy(**kw):
+        gc.collect()
+        alive.append(sum(1 for o in gc.get_objects()
+                         if isinstance(o, (TP.TdmFrame, TP.TimePeriodicEddy,
+                                           TP.FrameFactor))))
+        return real(**kw)
+    monkeypatch.setattr(F, "_fem_transient_sliding_band_once", spy)
+    d = _run()
+    assert d["eddy_method"] == "march"
+    assert [a["stage"] for a in d["tdm"]["attempts"]] == ["report_gate", "report_gate"]
+    assert alive == [0, 0, 0], alive
+
+
+def test_a_failed_factorization_is_marched_loudly(monkeypatch, march):
+    """Finding 10: a PARDISO failure inside TDM (injected into every frame
+    factorisation, Cholesky and the LU fallback) is a failed attempt: marched,
+    with the reason in the note, no handle left."""
+    def boom(self, *a, **k):
+        raise RuntimeError("PARDISO: injected factorization failure (error -4)")
+    monkeypatch.setattr(TP.FrameFactor, "_factor_spd", boom)
+    monkeypatch.setattr(TP.FrameFactor, "_factor_lu", boom)
+    d = _run()
+    assert d["eddy_method"] == "march" and d["eddy_method_requested"] == "tdm"
+    assert "PARDISO: injected factorization failure" in d["eddy_method_note"]
+    assert d["tdm"]["attempts"][0]["stage"] in ("static_start", "newton")
+    _same_as(d, march)
+    assert TP.FrameFactor.open_handles() == 0
+
+
+def _corrupt_bc_sign(monkeypatch):
+    """Wrap period_map_checks so the map it is handed carries a wrong BC sign
+    on half the dofs the map moves (the inverse stays exact)."""
+    import numpy as np
+    real = TP.period_map_checks
+
+    def corrupted(**kw):
+        w, wf = kw["wrap"], kw["wrapf"]
+        v = np.random.default_rng(5).standard_normal(kw["P_from"].shape[0])
+        moved = np.flatnonzero(np.asarray(w(v)) != v)[::2]
+
+        def w2(x):
+            o = np.array(w(x), float); o[moved] *= -1.0; return o
+
+        def wf2(x):
+            y = np.array(x, float, copy=True); y[moved] *= -1.0; return wf(y)
+        return real(**dict(kw, wrap=w2, wrapf=wf2))
+    monkeypatch.setattr(TP, "period_map_checks", corrupted)
+
+
+def test_a_map_with_a_wrong_bc_sign_refuses_tdm_at_setup(monkeypatch, march):
+    """Finding 7: a large map deviation fails the set-up — TDM is refused and
+    the run marched, with the failing checks named."""
+    _corrupt_bc_sign(monkeypatch)
+    d = _run()
+    assert d["eddy_method"] == "march"
+    assert d["eddy_method_note"].startswith("march: TDM failed (setup:")
+    assert "map fails its checks" in d["eddy_method_note"]
+    mc = d["tdm"]["attempts"][0]["tdm"]["map_check"]
+    assert mc["ok"] is False and "inverse" not in mc["failed"]
+    assert set(mc["failed"]) & {"constrained", "operators", "bodies", "source"}
     _same_as(d, march)
 
 
@@ -227,11 +372,18 @@ def test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods(
     for d in (march_demag, tdm_demag):
         s = d["demag_settle"]
         assert s is not None and s["prepass_periods"] >= 1
-        last = s["prepass"][-1]["per_magnet_mean_max"]
-        # iterated until a period moved Br by <= tol, or the cap
-        assert last <= s["tol"] or s["prepass_periods"] == s["prepass_periods_max"]
-        assert d["demag_settled"] is (s["per_magnet_mean_max"] <= s["tol"])
+        assert s["element_tol"] == TP.DEMAG_SETTLE_ELEMENT_TOL
+        last = s["prepass"][-1]
+        # iterated until a period moved Br by <= tol on the area mean AND at
+        # every element (finding 3), or the cap
+        assert (TP.demag_settled(last, s["tol"], s["element_tol"])
+                or s["prepass_periods"] == s["prepass_periods_max"])
+        assert d["demag_settled"] is TP.demag_settled(s, s["tol"], s["element_tol"])
         assert d["steady_state"] is (d["eddy_settled"] and d["demag_settled"])
+        if d["demag_settled"]:
+            assert d["steady_state_note"] is None
+        else:
+            assert "element" in d["steady_state_note"]
     assert tdm_demag["eddy_method"] == "tdm"
     # the same answer (the period counts may differ by one: the march's pre-pass
     # carries the eddy start-up transient of the Br collapse, TDM's does not)
@@ -245,6 +397,20 @@ def test_the_demag_shortcut_is_labelled_experimental(monkeypatch):
     assert d["eddy_method"] == "tdm"
     assert d["eddy_method_note"].startswith("tdm: EXPERIMENTAL demag shortcut")
     assert d["tdm"]["demag"]["experimental"] is True
+    assert d["tdm_experimental"] is True and d["qualified"] is False
+
+
+def test_the_environment_cannot_select_the_shortcut(monkeypatch, tdm_demag):
+    """Finding 11: SB_TDM_DEMAG=shortcut no longer reaches the solver — the
+    full pre-pass runs, the result is qualified, and the note says the
+    variable was ignored."""
+    monkeypatch.setenv("SB_TDM_DEMAG", "shortcut")
+    d = _run("p2_demag_eddy")
+    assert d["eddy_method"] == "tdm" and d["qualified"] is True
+    assert d["tdm_experimental"] is False
+    assert d["tdm"]["demag"]["mode"] == "full"
+    assert "SB_TDM_DEMAG=shortcut ignored" in d["eddy_method_note"]
+    _same_as(d, tdm_demag, rel=1e-12)
 
 
 def test_coulomb_torque_on_the_tdm_frames(march):

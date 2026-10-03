@@ -8019,6 +8019,11 @@ def _build_transient_summary(
                           else bool(sbres["demag_settled"])),
         "steady_state": (None if sbres.get("steady_state") is None
                          else bool(sbres["steady_state"])),
+        "steady_state_note": sbres.get("steady_state_note"),
+        # an EXPERIMENTAL (not qualified) result never passes as a qualified one
+        "tdm_experimental": bool(sbres.get("tdm_experimental", False)),
+        "qualified": (None if sbres.get("qualified") is None
+                      else bool(sbres["qualified"])),
         "eddy_settle_residual": sbres.get("eddy_settle_residual"),
         "eddy_settle_tol": sbres.get("eddy_settle_tol"),
         # settled with the warm-up prefix moved by accelerator jumps (2026-09-27)

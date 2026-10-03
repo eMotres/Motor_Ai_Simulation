@@ -5,6 +5,10 @@ Branch `feat/tdm-prototype` from `pre-migration-freeze-2026-09-15` (f852bd2).
 Input: `GPU_TDM_STUDY_2026-09-29.md` §4 (branch `perf/profiling-gpu-tdm`),
 `EDDY_SHAFT_SETTLE_2026-09-29.md` (TP-EEC), `CHOLESKY_SPD_2026-09-29.md`.
 
+**Second Codex review (2026-10-03): §4** — closure march, hard per-group state
+gates, round-off half period, per-element demag settle, map checks, bounded inexact
+Newton, shortcut behind an explicit argument, optimizer verdicts, memory hygiene.
+
 **Status:** validated on the three machines; TDM is the default (§0); the Coulomb,
 demag-shortcut and gap-layer checks are done (§2.5–2.7). The Codex review's findings
 are answered and fixed, and the fixes re-validated (§3). Draft PR #87, not merged,
@@ -232,12 +236,13 @@ Knobs: `SB_EDDY_METHOD`, `SB_TDM_DEMAG=full|shortcut`, `SB_TDM_STOP=owner|residu
 `SB_TDM_ETA` (0.01; `adaptive`), `SB_TDM_TANGENT=clamped|exact|analytic`,
 `SB_TDM_START=static_seq|static_par|static|project`, `SB_TDM_WORKERS` (frames
 factorised concurrently), `SB_TDM_MKL_THREADS` (MKL threads per factorisation),
-`SB_TDM_TOL` (1e-7), `SB_TDM_MAX_NEWTON` (25), `SB_TDM_HALF=1` (opt-in half period),
-`SB_TDM_HALF_TOL` (1e-5), `SB_TDM_COARSE=0`, `SB_TDM_DEMAG_WINDOW` (fraction of the
-period, 1/6); the gate `SB_TDM_GATE_T` (1e-3), `SB_TDM_GATE_RIPPLE` (0.05 pp),
-`SB_TDM_GATE_P` (5e-3), `SB_TDM_GATE_PFLOOR` (1e-4); both methods
-`SB_DEMAG_SETTLE_TOL` (1e-3), `SB_DEMAG_PREPASS_MAX` (8); tests only
-`SB_TDM_FAULT=<stage>`.
+`SB_TDM_TOL` (1e-7), `SB_TDM_MAX_NEWTON` (25), `SB_TDM_HALF=1` (opt-in half period,
+taken only at round-off symmetry since §4), `SB_TDM_COARSE=0`, `SB_TDM_DEMAG_WINDOW`
+(fraction of the period, 1/6); both methods `SB_DEMAG_SETTLE_TOL` (1e-3),
+`SB_DEMAG_SETTLE_ELEMENT_TOL` (1e-2, §4), `SB_DEMAG_PREPASS_MAX` (8); tests only
+`SB_TDM_FAULT=<stage>`. Since the second review (§4) the closure and report gates
+are constants (`time_periodic.CLOSURE_GATE`, `REPORT_GATE`) with no environment knob,
+`SB_TDM_HALF_TOL` is gone, and `SB_TDM_DEMAG` can no longer select the shortcut.
 
 ## 2. Validation
 
@@ -836,6 +841,90 @@ to 4e-6 where the march was +4.6 % off (§2.1).
     +7.6 %, P_mag_linear −0.5 %. That is the demag fixed point, intended.
 - **Not re-pinned here:** the pins need #88's re-pin and this one, justified line by
   line, by the owner of the baseline.
+
+## 4. Second Codex review (2026-10-03)
+
+Codex re-reviewed 1e41f51 and kept "blocking before making TDM the default". The
+fixes are on `feat/tdm-prototype` on top of 38fab6a (the bit-identical CPU speed-up
+is kept). Claude Opus 5.5, one agent. Every run below went to the server sandbox
+`/opt/motres/compute/tdm-fix-20261003` (throwaway image `motres-api:tdmfix` =
+`motres-api:test` without intel-openmp / intel-cmplr-lib-ur,
+`MKL_THREADING_LAYER=SEQUENTIAL`, `SB_GEO_MESH=1`, `--cpus 8`, `nice 19`, `ionice
+-c3`, one container at a time under `/opt/motres/compute/.runq.lock`).
+
+### 4.1 Findings, fixes, tests
+
+| # (review) | Finding | Fix | Test |
+|---|---|---|---|
+| 1 (#1, blocker) | The owner-terms stop accepts rrel < 1e-5 without a state-closure bound | **Closure march**: after the final orbit, one whole period is marched from the orbit's start state (both BDF2 history levels) with the march's own bordered Newton (`P2Drive.eddy_solve`) and the Br map frozen. Accepted only if, per conductor group, both history levels at the end of the period are within 1e-4 (relative σ-norm) of the orbit's, and the marched window reproduces the orbit's mean torque (1e-4), ripple (0.01 pp) and every group's loss (1e-3, floor 1e-5 of the conductor loss): `time_periodic.CLOSURE_GATE`, `tdm.closure`. A failure (or an error) rejects the attempt; the wrapper retries ONCE with the strict 1e-7 state-residual stop on the full period, then marches with a note | `test_the_default_is_tdm_and_it_reproduces_the_march`, `test_a_failed_closure_retries_strictly_then_marches`, `test_a_fault_at_any_stage…[closure]`, `test_state_closure_per_group_and_level` |
+| 2 (#6, blocker) | `march_vs_orbit_last_frame` and the per-group closure were diagnostic and their errors swallowed | The **report gate** now judges EVERY reported period (both halves of a half-period orbit) on the state — per group, both history levels, ≤ 1e-3 — and on the observables (torque 1e-3, ripple 0.05 pp, group loss 5e-3). `time_periodic.REPORT_GATE` constants; the `SB_TDM_GATE_*` knobs are gone. Any exception fails the gate; a failure is kept only when it is a threshold miss in a window whose Br is still moving (labelled `steady_state: false`), never an error | `test_the_default_is_tdm…` (gate keys), `test_a_failed_gate_retries_strictly_then_marches` |
+| 3 (#2, high) | The opt-in half period accepted a 1e-5 source mismatch and was checked on its first half only | The half period is taken only when the source, the stiffness and σ-mass bilinear forms, the conductor bodies, the inverse and the constrained spaces match "one pole back, negated" to **1e-12** (`HALF_SYMMETRY_RTOL`: the image map is a signed permutation on rotated coordinates, so an exact mesh gives a few ulps). Otherwise the full period, with `eddy_method_note = "tdm: half period refused (…) — full period"`. Both halves are validated (the closure march covers the whole period; the report gate every orbit window). A rejected half-period attempt retries on the full period | `test_half_period_is_taken_only_at_round_off`, `test_a_forced_half_period_is_validated_on_both_halves` |
+| 4 (#3, high) | The demag fixed point used only the area-mean Br change | The pre-pass (both methods) now repeats until the worst magnet's area mean ≤ 1e-3 **and** the largest single-element change ≤ 1e-2 of Br0 (`DEMAG_SETTLE_ELEMENT_TOL`, `SB_DEMAG_SETTLE_ELEMENT_TOL`); the reported period is judged by both, and a miss gives `demag_settled: false`, `steady_state: false` and `steady_state_note` with both numbers. The ratchet physics is unchanged | `test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods`, `test_demag_settled_needs_both_the_mean_and_the_element` |
+| 5 (#7, high) | The inverse map deviation was a diagnostic | **Map checks at set-up** (`time_periodic.period_map_checks`, `tdm.map_check`): H⁻¹H = I and HH⁻¹ = I on arbitrary and constrained vectors; H maps range(P_{N−1}) into range(P_{−1}) and H⁻¹ range(P_0) into range(P_N) (BC signs, slip welds); stiffness and σ-mass invariant on the constrained space; every conductor body onto a whole body of equal conductance; magnet source. A deviation above `MAP_CHECK_RTOL` refuses TDM at set-up (marched, with the failing checks named) | `test_the_default_is_tdm…` (fixture numbers), `test_a_map_with_a_wrong_bc_sign_refuses_tdm_at_setup`, `test_period_map_checks_pass_an_exact_map_and_catch_each_defect` |
+| 6 (#8, medium) | GMRES non-convergence within 10× forcing still proceeded | Kept as a **bounded inexact Newton**, justified: a step whose true linear residual is ≤ 10·η = 0.1 is an inexact-Newton step with forcing < 1 (Dembo–Eisenstat–Steihaug), the line search checks the merit, and nothing is accepted on the GMRES (the residual stop and the two gates decide). The true unpreconditioned residual is now **recomputed by the solver** from the returned w (one extra sweep), recorded (`gmres_rel_resid`, GMRES's own as `gmres_reported_rel_resid`) and used for the decision (`gmres_accepted_inexact`) | `test_bounded_inexact_newton_accepts_a_step_within_the_factor`, `…_rejects_a_step_beyond_the_factor` |
+| 7 (#11, medium) | The experimental demag shortcut was reachable through `SB_TDM_DEMAG` | Only the explicit argument `tdm_demag="shortcut"` selects it (`resolve_tdm_demag`); `SB_TDM_DEMAG=shortcut` is ignored with a note. No route, payload or workflow passes the argument (AST test). A shortcut result carries `tdm_experimental: true`, `qualified: false` (solver, route summary, optimizer), and the optimizer's final certification refuses it | `test_the_shortcut_is_never_taken_from_the_environment`, `test_the_environment_cannot_select_the_shortcut`, `test_the_demag_shortcut_is_labelled_experimental`, `test_no_caller_pins_a_method_or_the_shortcut` |
+| 8 (new, high) | The optimizer output dropped `steady_state`, `demag_settled` and the notes | `refine_proc.run_one` carries `steady_state`, `steady_state_note`, `demag_settled`, `eddy_method`, `eddy_method_requested`, `eddy_method_note`, `tdm_experimental`, `qualified`; the eval cache keeps them (`_RES_KEYS`); `_standard_quality` refuses a non-steady or experimental result | `test_the_optimizer_result_keeps_the_steady_state_verdict`, `test_the_optimizer_result_path_solves_the_fixture_with_tdm_for_real` |
+| 9 (new, high) | `_last` kept failed attempts' tracebacks and arrays alive during retry / fallback | `_drop_attempt`: the wrapper keeps the record and the message only; it clears the traceback frames of the exception and of its `__cause__` / `__context__` chain and cuts the links before the next attempt | `test_a_rejected_attempt_leaves_nothing_referenced` (weakref), `test_a_rejected_attempt_is_not_kept_alive_during_the_retry` (gc: 0 TDM frames / solvers / factors alive at each attempt, real solve) |
+| 10 (#9/#10, medium) | Source-string entry-point checks; no failed-factorization regression | Real calls on the 30 mm fixture through the EM route (`get_fem_transient`, unstubbed) and through the optimizer path (`refine_proc.run_one` → kernel → module → route → solver), asserting the requested / effective method, notes and verdicts. A PARDISO failure injected into every frame factorisation is marched with the reason | `test_the_em_route_solves_the_fixture_with_tdm_for_real`, `test_the_optimizer_result_path_solves_the_fixture_with_tdm_for_real`, `test_a_failed_factorization_is_marched_loudly` |
+
+### 4.2 Measurements (30 mm fixture, server, 12 steps)
+
+Before = 38fab6a, after = this change; same server image, one run each, Coulomb
+torque (the default).
+
+| case | quantity | before | after |
+|---|---|---:|---:|
+| p2_eddy (rated, demag off) | TDM wall [s] | 18.9 | 21.1 (closure march +1.8) |
+| | T_avg [N·m] | 0.407975381 | 0.407975381 (identical) |
+| | ripple [%] | 0.900787 | 0.900787 (identical) |
+| | total loss [W] | 116.545 | 116.545 |
+| p2_demag_eddy | TDM wall [s] | 44.8 | 58.5 (two more pre-pass periods +12.5, closure +1.4) |
+| | pre-pass periods | 3 | 5 (the per-element rule) |
+| | Br moved in the reported period: area mean / element | 1.2e-4 / 0.0101 | 1.8e-5 / 0.0029 |
+| | T_avg [N·m] | 0.3988322 | 0.3988291 (−7.7e-6) |
+| | ripple [%] | 0.71243 | 0.70005 (−0.012 pp) |
+| | total loss [W] | 116.318 | 116.318 |
+| | the march, same code (after) | – | T 0.3988301, ripple 0.69988 %, total 116.318 |
+
+TDM against the march after the change (demag case): torque −2.5e-6, ripple
++0.0002 pp, total loss 0. The demag numbers moved because the reported period now
+starts from a Br map that is settled element by element, in both methods.
+
+**The gates on the fixture (after):**
+
+- Closure march (frozen Br, 12 frames): state worst 7.3e-6 (shaft, frame 10;
+  copper 4e-7, magnets 6e-7); torque 2.8e-7, ripple 2.9e-5 pp, group losses ≤ 9.6e-6.
+  Demag case: state worst 1.5e-6.
+- Report gate: state worst 6.7e-6 (shaft) without demag; 3.1e-5 (copper) with the
+  ratchet active in the window; torque 2.8e-7 / 1.7e-5.
+- Map checks (full period): inverse 0, constrained 1.5e-19, bodies 9e-15 (43
+  bodies, 7 moved), source 9.1e-6, operators 9.4e-4. Recorded only: the inverse
+  over all dofs of constrained vectors 0.017, of arbitrary vectors 0.055 — the
+  non-conducting sector-edge rotor dofs, which no equation reads through the map.
+
+**Half period on the fixture.** Asked for (`SB_TDM_HALF=1`): refused (operators
+9.4e-4, source 7.8e-6 > 1e-12), full period, note. Forced (the round-off rule
+bypassed in a test): the closure march rejects it on the SECOND half — shaft state
+8.4 %, ripple 0.13 pp, magnet loss 0.16 % off, while the first half closes to
+1e-5 — and the one retry (full period, strict stop) is accepted, 4e-9 from the
+default run. This is the asymmetry §3.2 found, now caught by a hard gate.
+
+### 4.3 What a reviewer should still know
+
+- The closure bounds the one-period defect. For a mode decaying as e^{−T/τ} the
+  distance to the true orbit can be up to τ/T times larger; that concerns the
+  ring bodies' DC mode (the coarse space's target), e.g. the L155 shaft (τ ≈ 21
+  periods: ≤ 2e-3 of a 4 W group under the 1e-4 bound).
+- The big machines (Ø40, L13, L155) were not re-run here (owner rule: one server
+  job at a time, this change's verification set only). The closure and report
+  thresholds are 10–100× above the fixture's values; on a miss the cost is one
+  strict retry, then a loud march — never an unproven result.
+- The per-element demag rule adds pre-pass periods where a single element still
+  moves > 1 % of Br0 per period (the fixture: +2 periods, +12.5 s), in both
+  methods.
+- The operator check on rough vectors (9.4e-4 on the fixture) is mesh-limited;
+  its threshold (1e-2) catches map defects, not mesher round-off. The half period
+  needs 1e-12 and so is refused on every mesh measured so far.
 
 ## Progress log
 

@@ -475,6 +475,12 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              # as settled while its P_mag / P_shaft / η are start-up values.
              "eddy_settled", "eddy_capped", "eddy_settle_residual",
              "eddy_settle_tol",
+             # …and the steady-state verdict / method of the eddy solve
+             # (second Codex review 2026-10-03): a demag transient or an
+             # experimental result must not re-seed the cache as a steady one
+             "steady_state", "steady_state_note", "demag_settled",
+             "eddy_method", "eddy_method_requested", "eddy_method_note",
+             "tdm_experimental", "qualified",
              "cogging_sampling_purpose", "cogging_target_raw_samples_per_cycle",
              "cogging_cycles_per_electrical_period",
              "cogging_min_required_steps_per_period",
@@ -3716,6 +3722,14 @@ def _standard_quality(out: Dict[str, Any]) -> tuple[bool, str]:
                        "the settled solid loss, tol %s)"
                        % (r.get("eddy_settle_residual"),
                           r.get("eddy_settle_tol")))
+    # Not a steady state (Br still moving in the reported period) or the
+    # experimental demag shortcut: never a certified final result (second
+    # Codex review 2026-10-03).
+    if r.get("steady_state") is False:
+        return False, ("the reported period is not a steady state (%s)"
+                       % (r.get("steady_state_note") or "demag transient"))
+    if r.get("qualified") is False or r.get("tdm_experimental"):
+        return False, "experimental (not qualified) eddy result"
     return True, ""
 
 

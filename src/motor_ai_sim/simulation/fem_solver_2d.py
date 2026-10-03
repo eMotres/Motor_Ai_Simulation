@@ -7497,6 +7497,8 @@ def _fem_transient_sliding_band_once(
             _td_dth = float(period_mech) * float(n_periods) / float(n_total)
             _td_sgn = 1.0 if _td_dth >= 0.0 else -1.0
 
+            _td_geometry_cache = {}  # per run/mesh, exact integer slip; never cache excitation
+
             def _td_ops(k):
                 """(Pro, free, I_vec, Ist) of frame k — the frame loop's own."""
                 _th = (k / n_total) * period_mech * n_periods
@@ -7509,9 +7511,12 @@ def _fem_transient_sliding_band_once(
                 _Is = _src.mean_over(_fbk)
                 _Iv = np.array([_Is[c["phase"]] * c["Iunit"] if c["key"] == "cu"
                                 else 0.0 for c in _ed_con], float)
-                _P, _o = _proj.build(_m)
-                return (_P, np.setdiff1d(np.arange(_P.shape[1]), _o), _Iv, _Is,
-                        _m)
+                if _m not in _td_geometry_cache:
+                    _P, _o = _proj.build(_m)
+                    _free = np.setdiff1d(np.arange(_P.shape[1]), _o)
+                    _td_geometry_cache[_m] = (_P, _free)
+                _P, _free = _td_geometry_cache[_m]
+                return (_P, _free, _Iv, _Is, _m)
 
             # the exact rotor maps: one period (pole pair) or one half (one pole)
             _td_edf = np.asarray(b2.element_dofs)

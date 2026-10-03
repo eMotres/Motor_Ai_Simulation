@@ -93,16 +93,27 @@ def _foot(u, w, q):
     return (d, t, (u[0] + t * ex, u[1] + t * ey))
 
 
-def _repair_needles(ring, tol: float = _NEEDLE_TOL_MM):
+def _repair_needles(ring, tol: float = _NEEDLE_TOL_MM, pinned=None):
     """Snap away fold-back needles thinner than `tol` from an OPEN ring.
 
     Returns ``(ring, n_fixed, worst_width_mm)``.  A vertex is only touched
     when the ring genuinely doubles back on itself there AND the two flanks
     are closer than `tol`; a real notch of any meshable width is kept.
+
+    ``pinned`` (callable ``(x, y) -> bool``, optional): vertices that must
+    never move or disappear.  The cyclic-symmetry sector passes its two cut
+    faces: ``symmetry.sector_polys`` made face B the exact rotated image of
+    face A, and a repair that moves a vertex on ONE face only (a needle exists
+    where the cut happens to fall 0.2 um beside a fixed polygon station, which
+    is never true on both faces) breaks that congruence — the G2-L40 sector
+    came out 2.84e-6 mm off its twin and could not be meshed periodically
+    (regression of 4f66471, found 2026-10-03).  A fix that would touch a
+    pinned vertex takes the other flank if that one is free, else is skipped.
     """
     v = [(float(x), float(y)) for x, y in ring]
     if len(v) < 4 or tol <= 0.0:
         return v, 0, 0.0
+    _pin = pinned if pinned is not None else (lambda q: False)
     n_fix = 0
     worst = 0.0
     guard = 4 * len(v) + 16          # never spin on a pathological ring
@@ -116,10 +127,12 @@ def _repair_needles(ring, tol: float = _NEEDLE_TOL_MM):
             if ((p[0] - a[0]) * (b[0] - p[0])
                     + (p[1] - a[1]) * (b[1] - p[1])) >= 0.0:
                 continue                      # ring does not fold back at p
+            if _pin(p):
+                continue                      # the apex itself may not go
             d1, t1, f1 = _foot(a, p, b)       # b off the incoming edge
             d2, t2, f2 = _foot(p, b, a)       # a off the outgoing edge
-            ok1 = d1 < tol and 0.0 <= t1 <= 1.0
-            ok2 = d2 < tol and 0.0 <= t2 <= 1.0
+            ok1 = d1 < tol and 0.0 <= t1 <= 1.0 and not _pin(b)
+            ok2 = d2 < tol and 0.0 <= t2 <= 1.0 and not _pin(a)
             if not (ok1 or ok2):
                 continue                      # a real notch — leave it alone
             if ok1 and (not ok2 or d1 <= d2):

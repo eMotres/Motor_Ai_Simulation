@@ -1178,6 +1178,15 @@ def _build_rotor_mesh(polys: dict,
     if not parts:
         raise ValueError("no rotor solids in the geometry — nothing to solve")
 
+    _on_cut_face = None
+    if periodic is not None:
+        _cuts = [(math.cos(float(a)), math.sin(float(a))) for a in periodic]
+
+        def _on_cut_face(q, _tol=1e-6):
+            # the same on-ray test _set_periodic_curves pairs the faces with
+            return any(abs(q[0] * s - q[1] * c) < _tol and (q[0] * c + q[1] * s) > _tol
+                       for c, s in _cuts)
+
     _GMSH_LOCK.acquire()
     try:
         try:
@@ -1216,7 +1225,11 @@ def _build_rotor_mesh(polys: dict,
                 # repair the magnetic mesher runs (mesher._repair_needles)
                 # snaps the corner onto the chord instead of deleting a shared
                 # station, so the rings still meet exactly.
-                cs, _n_needle, _w_needle = _repair_needles(list(coords)[:-1])
+                # On a cyclic sector the two cut faces are exact rotated
+                # twins (symmetry.sector_polys); the repair must not move a
+                # vertex on either face, or the twins stop matching.
+                cs, _n_needle, _w_needle = _repair_needles(
+                    list(coords)[:-1], pinned=_on_cut_face)
                 if _n_needle:
                     _log.info("rotor mesh: %d sub-tolerance fold-back(s) "
                               "removed from a ring (worst %.2f um)",

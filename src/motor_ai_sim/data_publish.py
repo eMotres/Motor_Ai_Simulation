@@ -80,7 +80,7 @@ PUBLISH_NOTICE = (
     "main — it is not a confidentiality gate.")
 PUBLISH_WARNING = (
     PUBLISH_NOTICE + " Publication cannot be undone: the files can be cloned "
-    "and forked at once, under AGPL. Moving the die back to private later "
+    "and forked at once, under Apache-2.0. Moving the die back to private later "
     "does NOT unpublish it.")
 WITHDRAW_WARNING = (
     "Moving to private removes the die from the public repository going "

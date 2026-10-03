@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (C) MOTRES d.o.o. and contributors
 """Licence isolation (owner decision 2026-10-03): gmsh (GPL) is never loaded
 into a Python process that may load Intel MKL / PARDISO, and MKL is never

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (C) MOTRES d.o.o. and contributors
 """CDT mesher comparison: the same EM solve on saved duties, per backend.
 
@@ -8,7 +8,7 @@ Historical name: written for Triangle vs gmsh.  Triangle was REMOVED on
 S1-S3 comparisons were made.
 
 Why: `triangle` was removed on 2026-09-29 (its licence forbids commercial use,
-incompatible with the AGPL), together with the geometry-driven CDT mesher built
+incompatible with an open-source licence), together with the geometry-driven CDT mesher built
 on it.  A geo-mesh request (the saved duties' default, mesh.geoMesh = True) is
 now served by the gmsh build.  This script measures what that costs on the
 reference machines: torque, losses and back-EMF with the OLD code (Triangle

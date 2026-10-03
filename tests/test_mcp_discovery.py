@@ -247,7 +247,7 @@ def test_authenticated_tools_list_follows_scopes(denv):
 def test_public_tool_outputs(denv):
     c = denv["c"]
     ds = _payload(_call(c, "describe_service"))
-    assert ds["license"] == "AGPL-3.0-or-later" and ds["operator"]
+    assert ds["license"] == "Apache-2.0" and ds["operator"]
     assert ds["mcp_endpoint"] == BASE + "/mcp" and ds["website"] == BASE + "/"
 
     caps = _payload(_call(c, "list_capabilities"))

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (C) MOTRES d.o.o. and contributors
 """The rotor mesh of every CDT backend is pole-pair periodic (what TDM needs),
 and a TDM request on a mesh that is not periodic is REFUSED, never marched.

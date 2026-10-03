@@ -77,7 +77,7 @@ services:
       target: api
       # OUR server builds WITH the optional pypardiso/Intel MKL accelerator
       # (#40, 2026-09-29) for the fast sparse solver.  The Dockerfile default
-      # stays 0 for the distributed AGPL image; override here only with
+      # stays 0 for the distributed open-source image; override here only with
       # WITH_PARDISO=0 in deploy/.env.  The default mesher is netgen
       # (in-process, LGPL); gmsh runs only in its worker process; Triangle was
       # removed on 2026-10-03 (docs/MESHER_TRANSITION.md).

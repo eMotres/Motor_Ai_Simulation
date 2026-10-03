@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (C) MOTRES d.o.o. and contributors
 """In-process gmsh vs the gmsh worker: same output? what does the boundary cost?
 

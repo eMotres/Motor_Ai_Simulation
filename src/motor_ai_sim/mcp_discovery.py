@@ -27,7 +27,7 @@ from motor_ai_sim import oauth as _oauth
 
 SERVICE_NAME = "AeroStator"
 OPERATOR = "MOTRES d.o.o."
-LICENSE = "AGPL-3.0-or-later"
+LICENSE = "Apache-2.0"
 
 #: Tools an unauthenticated client may call (read-only service description).
 PUBLIC_TOOLS = frozenset({

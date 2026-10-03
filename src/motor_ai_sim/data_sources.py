@@ -1,6 +1,6 @@
 """The two git SOURCES of catalog dies: OPEN (public repository) and PRIVATE.
 
-* ``open``     lives in the public AGPL repository under ``data/open/dies/``.
+* ``open``     lives in the public Apache-2.0 repository under ``data/open/dies/``.
 * ``private``  lives in the private data repository (the checkout
                ``MOTOR_AI_SIM_PRIVATE_DATA`` points at) under ``config/dies/``.
 

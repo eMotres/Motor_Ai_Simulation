@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) MOTRES d.o.o. and contributors
-"""Optimizer-style mini-campaign: Triangle vs gmsh (vs netgen) CDT on
+"""Optimizer-style mini-campaign: netgen vs gmsh CDT (Triangle, the third
+backend of the original campaign, was removed on 2026-10-03) on
 cusp/fillet-heavy candidates (docs/MESHER_TRANSITION.md, "Required before S4"
 item 4; netgen: docs/MESHER_NETGEN_2026-09-30.md).
 
@@ -14,7 +15,7 @@ its own child process so its peak RSS and any crash are isolated.
 
     python scripts/mesher_campaign.py plan --workdir W [--n 24] [--budget 400000]
                                            [--solve] [--threads 6]
-                                           [--backends triangle,gmsh,netgen]
+                                           [--backends netgen,gmsh]
                                            [--only c00,c04,...]
     python scripts/mesher_campaign.py report --workdir W
 
@@ -112,9 +113,9 @@ def one(cand_path, backend, out_path, budget, solve):
     res = {"id": cand["id"], "backend": backend, "perturbation": cand["perturbation"]}
     from motor_ai_sim.simulation import geo_mesh as gm
     gm.set_cdt_backend(backend)
-    try:
-        import gmsh
-        res["gmsh_version"] = gmsh.__version__
+    try:  # metadata only: gmsh is never imported in a solve process
+        from importlib.metadata import version as _pkg_version
+        res["gmsh_version"] = _pkg_version("gmsh")
     except Exception:  # noqa: BLE001
         res["gmsh_version"] = None
     res["netgen_version"] = __import__(
@@ -318,8 +319,8 @@ def main():
     p.add_argument("--budget", type=int, default=400_000)
     p.add_argument("--solve", action="store_true")
     p.add_argument("--threads", type=int, default=6)
-    p.add_argument("--backends", default="triangle,gmsh",
-                   help="comma list of CDT backends (triangle,gmsh,netgen)")
+    p.add_argument("--backends", default="netgen,gmsh",
+                   help="comma list of CDT backends (netgen,gmsh)")
     p.add_argument("--only", default="", help="comma list of candidate ids")
     r = sub.add_parser("report")
     r.add_argument("--workdir", required=True)

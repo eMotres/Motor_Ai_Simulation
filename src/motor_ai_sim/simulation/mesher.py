@@ -1410,6 +1410,34 @@ def _trace_gap_built() -> None:
     setattr(_BUILD_TRACE, "structured_gap_effective", True)
 
 
+def _trace_take_for_worker() -> Dict[str, object]:
+    """Worker side of the trace bridge: what a ``*_impl`` call recorded on the
+    worker's thread (events, notes, structured-gap flag), then cleared.  The
+    gmsh worker returns it with every answer so the CALLER's trace keeps the
+    fallbacks the build recorded (the optimizer rejects on them)."""
+    out = {"events": list(getattr(_BUILD_TRACE, "events", []) or []),
+           "notes": list(getattr(_BUILD_TRACE, "notes", []) or []),
+           "structured_gap_effective":
+               bool(getattr(_BUILD_TRACE, "structured_gap_effective", False))}
+    _BUILD_TRACE.events = []
+    _BUILD_TRACE.notes = []
+    _BUILD_TRACE.structured_gap_effective = False
+    return out
+
+
+def _trace_merge_from_worker(delta: Optional[Dict[str, object]]) -> None:
+    """Caller side of the trace bridge: replay a worker call's trace delta
+    into this thread's trace, exactly as if the build had run here."""
+    if not delta:
+        return
+    for msg in delta.get("events") or []:
+        _trace_event(msg)
+    for msg in delta.get("notes") or []:
+        _trace_note(msg)
+    if delta.get("structured_gap_effective"):
+        _trace_gap_built()
+
+
 def build_trace() -> Dict[str, object]:
     """The last build's provenance ON THIS THREAD — read right after the build."""
     return {"events": list(getattr(_BUILD_TRACE, "events", [])),

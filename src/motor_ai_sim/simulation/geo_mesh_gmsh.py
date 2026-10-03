@@ -162,9 +162,23 @@ def triangulate_gmsh(V, S, area: float, hole_pts=None, regions=None,
                      ) -> Tuple[np.ndarray, np.ndarray]:
     """Constrained quality triangulation of the PSLG (V mm, S index pairs).
 
-    See the module docstring for the contract.  `budget` (triangles) arms the
-    optimizer fence: a predicted or actual count above it raises
-    geo_mesh.MeshBudgetExceeded before/after meshing."""
+    Runs OUT OF PROCESS in the gmsh worker (``gmsh_worker``; owner decision
+    2026-10-03: gmsh, GPL, never loads in a process that loads MKL).  The
+    worker re-raises GmshCDTError / MeshBudgetExceeded here unchanged."""
+    from motor_ai_sim.simulation import gmsh_worker
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.geo_mesh_gmsh:_triangulate_gmsh_impl",
+        args=(np.asarray(V, float), np.asarray(S, np.int64), float(area)),
+        kwargs=dict(hole_pts=hole_pts, regions=regions, budget=budget))
+
+
+def _triangulate_gmsh_impl(V, S, area: float, hole_pts=None, regions=None,
+                           budget: Optional[int] = None
+                           ) -> Tuple[np.ndarray, np.ndarray]:
+    """Worker-side body of ``triangulate_gmsh`` (never call it in the API
+    process).  See the module docstring for the contract.  `budget`
+    (triangles) arms the optimizer fence: a predicted or actual count above it
+    raises geo_mesh.MeshBudgetExceeded before/after meshing."""
     import gmsh
     from shapely.geometry import Point
     from shapely.prepared import prep

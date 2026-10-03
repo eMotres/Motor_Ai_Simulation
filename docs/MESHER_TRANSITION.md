@@ -230,3 +230,23 @@ together with the TDM default eddy method.**
   checks the rotor-mesh periodicity of every installed backend on the 30 mm
   fixture; `scripts/mesh_periodicity_check.py` does it with distances for
   saved duties.
+
+**S5 — Triangle removed, gmsh out of process (owner decisions 2026-10-03).**
+
+* Triangle is gone: the CDT backend branch in `geo_mesh._triangulate`, the
+  Steiner-cap truncation test that only Triangle needed, `geo_mesh_proto.py`,
+  `requirements-triangle.txt`, the `[triangle]` extra, the `requires_triangle`
+  marker, the `WITH_TRIANGLE` build argument and the Triangle path of the
+  earcut fallback (now shapely/GEOS only). `MOTOR_AI_SIM_GEO_CDT=triangle` is
+  a clear error. The image build fails if `triangle` is installed. Comments
+  in `geo_mesh.py` that describe Triangle are kept: they record why the PSLG
+  is built the way it is, and the rules apply to Netgen and gmsh alike.
+* gmsh runs only in the gmsh worker process (`gmsh_worker.py` /
+  `gmsh_worker_main.py`, from PR #94, extended): the 2-D OCC mesher, the gmsh
+  CDT backend, the mechanical modal / rotor-stress meshes, the static 3-D
+  meshes and the gmsh version check all call `*_impl` bodies in the worker.
+  The worker refuses MKL/pypardiso imports, replays the mesher's build trace
+  (fallback events, notes) into the caller, runs each call under the caller's
+  current environment, re-raises the in-process exception type
+  (`GmshCDTError`, `MeshBudgetExceeded`, ...), and keeps gmsh's terminal
+  output off the frame pipe. See docs/GMSH_OUT_OF_PROCESS_2026-09-30.md.

@@ -80,8 +80,8 @@ def test_backend_selection_and_provenance(monkeypatch):
         prov = gm.mesher_provenance("geo_cdt/netgen")
         assert prov["backend"] == "netgen"
         assert prov["netgen"] == gn.NETGEN_VALIDATED or "note" in prov
-        # owner 2026-10-01: netgen IS the default (auto and unset); gmsh and
-        # triangle are selectable, never a fallback
+        # owner 2026-10-01: netgen IS the default (auto and unset); gmsh is
+        # selectable, never a fallback; triangle was removed (2026-10-03)
         monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "auto")
         assert gm.cdt_backend() == "netgen"
         monkeypatch.delenv("MOTOR_AI_SIM_GEO_CDT")
@@ -105,7 +105,7 @@ def test_missing_netgen_is_an_actionable_error(monkeypatch):
     with pytest.raises(RuntimeError, match="pip install netgen-mesher==") as ei:
         gm.cdt_backend()
     msg = str(ei.value)
-    assert "MOTOR_AI_SIM_GEO_CDT=triangle" in msg and "WSL2" in msg
+    assert "WSL2" in msg and "server" in msg and "triangle" not in msg.lower()
     assert "No backend is chosen automatically" in msg
 
 

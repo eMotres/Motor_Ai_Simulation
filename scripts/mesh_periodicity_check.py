@@ -22,7 +22,7 @@ and reports for the full-period and half-period rotations:
     of the mesh (nodes mapped by nearest image, however far).
 
     python scripts/mesh_periodicity_check.py run  --dies D --config C --workdir W \
-        [--cases d40,l13,l155] [--backends triangle,gmsh,netgen]
+        [--cases d40,l13,l155] [--backends netgen,gmsh]
 """
 from __future__ import annotations
 
@@ -201,5 +201,5 @@ if __name__ == "__main__":
         ap.add_argument("--config", required=True)
         ap.add_argument("--workdir", required=True)
         ap.add_argument("--cases", default="d40,l13,l155")
-        ap.add_argument("--backends", default="triangle,gmsh,netgen")
+        ap.add_argument("--backends", default="netgen,gmsh")
         run(ap.parse_args())

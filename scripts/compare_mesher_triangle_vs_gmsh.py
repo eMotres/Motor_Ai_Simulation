@@ -1,6 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Copyright (C) MOTRES d.o.o. and contributors
-"""Old Triangle CDT mesher vs gmsh: the same EM solve on saved duties.
+"""CDT mesher comparison: the same EM solve on saved duties, per backend.
+
+Historical name: written for Triangle vs gmsh.  Triangle was REMOVED on
+2026-10-03; the current backends are netgen (default) and gmsh, so run it with
+`--meshers netgen,gmsh` (the default).  The Triangle notes below record how the
+S1-S3 comparisons were made.
 
 Why: `triangle` was removed on 2026-09-29 (its licence forbids commercial use,
 incompatible with the AGPL), together with the geometry-driven CDT mesher built
@@ -183,11 +188,14 @@ def _harm(series, n):
 def _versions():
     """Provenance: the mesher/solver library versions this solve ran on."""
     out = {"python": sys.version.split()[0]}
-    for mod in ("gmsh", "triangle", "numpy", "scipy", "shapely", "pypardiso",
-                "skfem"):
+    from importlib.metadata import version as _pkg_version
+    # package metadata, never an import: gmsh (GPL) must not load next to MKL
+    for mod, dist in (("gmsh", "gmsh"), ("netgen", "netgen-mesher"),
+                      ("numpy", "numpy"), ("scipy", "scipy"),
+                      ("shapely", "shapely"), ("pypardiso", "pypardiso"),
+                      ("skfem", "scikit-fem")):
         try:
-            m = __import__(mod)
-            out[mod] = str(getattr(m, "__version__", "?"))
+            out[mod] = str(_pkg_version(dist))
         except Exception:  # noqa: BLE001 — absent is a valid answer
             out[mod] = None
     return out
@@ -547,11 +555,11 @@ def main():
     p.add_argument("--cases", default="", help="comma list of " + ",".join(CASES))
     p.add_argument("--l13-die", default="", help="die holding the L13 to compare")
     p.add_argument("--no-emf", action="store_true", help="skip the no-load runs")
-    p.add_argument("--meshers", default="triangle,gmsh",
-                   help="comma list of CDT backends (triangle,gmsh,netgen)")
+    p.add_argument("--meshers", default="netgen,gmsh",
+                   help="comma list of CDT backends (netgen,gmsh)")
     q = sub.add_parser("report", help="tabulate finished runs")
     q.add_argument("--workdir", required=True)
-    q.add_argument("--meshers", default="triangle,gmsh",
+    q.add_argument("--meshers", default="netgen,gmsh",
                    help="comma list; the first is the reference")
     a = ap.parse_args()
     if a.cmd == "run":

@@ -7,6 +7,8 @@ on 2026-09-29; where the metadata was empty the licence was taken from the
 project's own licence file. Each dependency remains under its own licence.
 The MKL/pypardiso chain entries were re-read on 2026-09-30 after intel-openmp
 and intel-cmplr-lib-ur were removed from the deploy image (note 2).
+2026-10-03: Triangle removed (note 3); gmsh runs only in a separate worker
+process (note 1); Netgen is the default mesher (note 4).
 
 ## Python (requirements.txt)
 
@@ -58,7 +60,6 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 
 | Package | Install | Licence |
 |---|---|---|
-| triangle | `requirements-triangle.txt` or extra `[triangle]` | Python wrapper LGPL-3.0; bundled Triangle C code by J. R. Shewchuk: **free for non-commercial use only** (see note 3) |
 | netgen-mesher (+ netgen-occt) | `requirements-netgen.txt` or extra `[netgen]`; default geometry mesher (`MOTOR_AI_SIM_GEO_CDT`, default `netgen`) | netgen-mesher: LGPL-2.1-only (its wheel also bundles GLU/Xmu/Xt/OpenGL loader libraries for the unused GUI); netgen-occt: OpenCASCADE Technology, LGPL-2.1 with the OCCT exception. Used in-process as a dynamically linked library (Python wheel with shared objects) that the user can replace by installing another build of the same package — see note 4 |
 | pypardiso | `requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for `deploy/Dockerfile.api` | BSD-3-Clause |
 | mkl (pulled by pypardiso) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
@@ -103,6 +104,24 @@ are not distributed with the software and are not listed.
    GPL-3.0 section 13 explicitly permits combination with AGPL-3.0 code, so
    distributing this project under the AGPL together with gmsh is compatible.
    gmsh is used as an unmodified Python package (`import gmsh`).
+
+   **Process separation (2026-10-03).** gmsh is imported ONLY by the gmsh
+   worker, a separate program (`python -m
+   motor_ai_sim.simulation.gmsh_worker_main`) that the API and compute
+   processes start and talk to over a pipe with plain data (pickled numpy
+   arrays, meshes, polygons). No module the API/compute process imports
+   loads gmsh — every gmsh path (2-D OCC meshing, the gmsh CDT backend,
+   thermal and mechanical meshes, static 3-D meshes, version/provenance
+   reads) goes through the worker (`motor_ai_sim/simulation/gmsh_worker.py`).
+   The worker in turn refuses to import Intel MKL / pypardiso (an import
+   hook raises), so GPL gmsh and proprietary MKL never share an address
+   space. The worker only combines gmsh with GPL-compatible code (this AGPL
+   project, the Python standard library, numpy/scipy/shapely/scikit-fem and
+   their OpenBLAS/GEOS builds). Enforced by tests/test_gmsh_isolation.py
+   (fresh API process: `gmsh` never in `sys.modules`, no libgmsh mapped;
+   worker: no MKL module or library mapped) and
+   tests/test_gmsh_process_boundary.py (no `import gmsh` outside
+   worker-side functions).
 2. **Intel MKL (via pypardiso) — installed WITHOUT intel-openmp (2026-09-30).**
    `mkl`, `onemkl-license`, `tbb` and `tcmlib` are under the **Intel
    Simplified Software License (ISSL, October 2022)**: binary
@@ -137,15 +156,12 @@ are not distributed with the software and are not listed.
    full licence analysis and the sandbox verification this recipe is based
    on. `umf` (Apache-2.0 with LLVM exceptions) is not installed either — it
    was only ever a dependency of the now-excluded `intel-cmplr-lib-ur`.
-3. **Triangle (optional, being phased out).** Its licence permits only
-   non-commercial use without the author's permission, a restriction the AGPL
-   does not allow, so it is **not a dependency of and not bundled in** the AGPL
-   distribution: it is an optional extra the operator installs separately.
-   MOTRES currently uses the project non-commercially and installs it on its
-   own machines so that results stay identical during the transition to gmsh
-   (docs/MESHER_TRANSITION.md). Without it the geometry mesher falls back to
-   gmsh (one log line) and the 2-D view uses mapbox-earcut with a shapely
-   (GEOS) constrained-Delaunay fallback. It will be removed at stage S5.
+3. **Triangle — removed (2026-10-03).** Its licence permits only
+   non-commercial use without the author's permission. The Triangle CDT
+   backend, `requirements-triangle.txt`, the `[triangle]` extra, the
+   `WITH_TRIANGLE` image build argument and every `import triangle` were
+   deleted; the API image build fails if the package is ever installed.
+   The 2-D view's earcut fallback uses shapely (GEOS, LGPL-2.1).
 4. **Netgen (LGPL-2.1) — the default geometry mesher.** `netgen-mesher` is
    pinned at `6.2.2607` and imported in-process as an unmodified library
    (`import netgen`); it is dynamically linked (Python extension modules and
@@ -155,7 +171,8 @@ are not distributed with the software and are not listed.
    LGPL-2.1 with the OCCT exception. Netgen is preferred over gmsh because
    LGPL, unlike GPL, imposes no condition on code that merely calls the
    library, which matters for running next to proprietary Intel MKL in the
-   same process. gmsh (note 1) remains selectable but is no longer the
-   default. Netgen cannot run on the owner's Windows workstation (App Control
-   blocks its DLLs); Windows development machines use WSL2, or set
-   `MOTOR_AI_SIM_GEO_CDT=triangle` explicitly.
+   same process. gmsh (note 1) remains selectable (`MOTOR_AI_SIM_GEO_CDT=gmsh`)
+   but is not the default and always runs in its worker process. Netgen
+   cannot run on the owner's Windows workstation (App Control blocks its
+   DLLs); Windows development machines run the API and solves under WSL2 or
+   on the server.

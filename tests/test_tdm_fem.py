@@ -9,7 +9,7 @@ seconds to a minute each).
 
 Environment: these solves need the geometry-driven mesher on a CDT backend
 whose rotor mesh is pole-pair periodic.  Netgen is the default backend
-(``netgen-mesher==6.2.2607``, Linux/WSL2); gmsh and Triangle are periodic too
+(``netgen-mesher==6.2.2607``, Linux/WSL2); gmsh (out of process) is periodic too
 (tests/test_mesh_periodicity.py).  A non-periodic rotor mesh is a REFUSAL
 (``TdmMeshNotPeriodic``), never a silent march."""
 from __future__ import annotations

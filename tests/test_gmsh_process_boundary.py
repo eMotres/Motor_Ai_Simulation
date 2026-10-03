@@ -183,9 +183,13 @@ def test_worker_reports_a_clear_error_on_a_python_exception(monkeypatch):
     sys.path.insert(0, str(_ROOT / "src"))
     from motor_ai_sim.simulation import gmsh_worker
 
-    with pytest.raises(gmsh_worker.WorkerError) as exc_info:
+    # the SAME exception type the in-process call raised (so callers keep
+    # their handling), chained to the WorkerError that carries the worker's
+    # traceback
+    with pytest.raises(ValueError) as exc_info:
         gmsh_worker.call("tests._gmsh_worker_crash_helpers:raise_value_error")
     assert "deliberate failure" in str(exc_info.value)
+    assert isinstance(exc_info.value.__cause__, gmsh_worker.WorkerError)
 
 
 def test_worker_hard_crash_raises_crash_error_not_a_silent_fallback(monkeypatch):

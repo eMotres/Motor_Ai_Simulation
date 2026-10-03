@@ -15,7 +15,8 @@ CDT backend that is installed, and applies the SAME map to the P2 dofs (nodes +
 edge midpoints).  ``scripts/mesh_periodicity_check.py`` is the owner-run
 variant for saved duties (L12, L13, L155) with the distance report.
 
-Netgen is the default backend; gmsh and Triangle are checked where installed.
+Netgen is the default backend; gmsh (run in its worker process) is checked
+where installed.  Triangle was removed on 2026-10-03.
 """
 from __future__ import annotations
 
@@ -40,16 +41,15 @@ class _MeshCaptured(BaseException):
 
 
 def _have(backend: str) -> bool:
-    mod = {"netgen": "netgen", "gmsh": "gmsh", "triangle": "triangle"}[backend]
+    mod = {"netgen": "netgen", "gmsh": "gmsh"}[backend]
     if importlib.util.find_spec(mod) is None:
         return False
     try:
         if backend == "netgen":
             import netgen.occ  # noqa: F401
-        elif backend == "gmsh":
-            import gmsh  # noqa: F401
-        else:
-            import triangle  # noqa: F401
+        else:   # gmsh is never imported here: ask its worker process
+            from motor_ai_sim.simulation import gmsh_worker
+            gmsh_worker.handshake()
     except Exception:       # noqa: BLE001 -- e.g. blocked DLLs on Windows
         return False
     return True
@@ -57,7 +57,7 @@ def _have(backend: str) -> bool:
 
 BACKENDS = [pytest.param(b, marks=pytest.mark.skipif(
     not _have(b), reason="%s is not installed / cannot be loaded" % b))
-    for b in ("netgen", "gmsh", "triangle")]
+    for b in ("netgen", "gmsh")]
 
 
 def _rotor_mesh(backend: str):

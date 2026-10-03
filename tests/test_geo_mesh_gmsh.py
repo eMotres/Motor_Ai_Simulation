@@ -2,8 +2,8 @@
 # Copyright (C) MOTRES d.o.o. and contributors
 """The gmsh CDT backend of the geometry-driven mesher (MESHER_TRANSITION S2).
 
-`geo_mesh._triangulate` was the only Triangle call of the geometry mesher;
-`geo_mesh_gmsh.triangulate_gmsh` replaces it.  Asserted here, feature by
+`geo_mesh_gmsh.triangulate_gmsh` is the selectable (non-default) CDT backend of
+the geometry mesher; it runs in the gmsh worker process (gmsh_worker.py).  Asserted here, feature by
 feature of docs/MESHER_TRANSITION.md, on the 40 mm 12s/14p preset (fast):
 
   * the backend contract on toy PSLGs (input vertices first, boundary
@@ -12,12 +12,12 @@ feature of docs/MESHER_TRANSITION.md, on the 40 mm 12s/14p preset (fast):
   * per-part element size and the wire-cell factor act on the gmsh path;
   * tiling: every pole/slot-pair cell is the same mesh, rotated; repeat builds
     are bit-identical;
-  * exact tagging: every region keeps its CAD section, as on Triangle;
+  * exact tagging: every region keeps its CAD section;
   * moving-band rings R1/R2 carry exactly the uniform slip grid;
   * the optimizer mesh budget fires (and an unreached budget changes nothing);
   * the shaft skin layer: the whole of tests/test_conductor_skin_mesh.py and
     tests/test_mesh_shaft_region.py re-run on this backend (test_zz_*).
-Where Triangle is installed the same machine is also compared with it.
+Triangle, the original backend, was removed on 2026-10-03.
 """
 from __future__ import annotations
 
@@ -85,12 +85,13 @@ def test_backend_selection(monkeypatch):
         monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "bogus")
         with pytest.raises(ValueError):
             gm.cdt_backend()
+        # Triangle was removed (2026-10-03): asking for it is an error that
+        # says so, never a silent substitute
         monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "triangle")
-        if gm.HAVE_TRIANGLE:
-            assert gm.cdt_backend() == "triangle"
-        else:
-            with pytest.raises(RuntimeError):
-                gm.cdt_backend()
+        with pytest.raises(ValueError, match="removed"):
+            gm.cdt_backend()
+        with pytest.raises(ValueError):
+            gm.set_cdt_backend("triangle")
         with pytest.raises(ValueError):
             gm.set_cdt_backend("delaunay")
     finally:
@@ -237,25 +238,6 @@ def test_every_region_keeps_its_cad_section(machine, full):
     assert As[ts >= DOM_COIL_BASE].sum() == pytest.approx(coil, rel=2e-3)
 
 
-@pytest.mark.skipif(not gm.HAVE_TRIANGLE, reason="Triangle not installed")
-def test_same_sections_as_triangle(machine, full):
-    gm.set_cdt_backend("triangle")
-    try:
-        tri = _halves(machine)
-    finally:
-        gm.set_cdt_backend("gmsh")
-    for (V, T, t), (V0, T0, t0) in zip(full, tri):
-        a, a0 = np.abs(_areas(V, T)), np.abs(_areas(V0, T0))
-        for tg in np.unique(t0):
-            want = float(a0[t0 == tg].sum())
-            got = float(a[t == tg].sum())
-            if int(tg) in (0, 8):         # air vs outer air: split by a circle
-                continue                  # not in the PSLG, tagged by centroid
-            assert got == pytest.approx(want, rel=2e-3, abs=1e-4), tg
-        # comparable size: same boundary, graded fill within 0.5x-3x
-        assert 0.5 < len(T) / len(T0) < 3.0
-
-
 def test_per_part_size_acts_on_gmsh(machine, full):
     (_s, (Vr, Tr, tr)) = full
     (_s2, (Vr2, Tr2, tr2)) = _halves(machine, part_mesh_mm={"magnet": 0.3})
@@ -274,7 +256,7 @@ def test_wire_cell_factor_acts_on_gmsh(machine):
     assert counts[0.5] > counts[2.0]
 
 
-BACKENDS = ["gmsh"] + (["triangle"] if gm.HAVE_TRIANGLE else [])
+BACKENDS = ["gmsh"]
 
 
 class _Backend:
@@ -381,7 +363,7 @@ def test_coulomb_layers_are_pure_air_on_both_backends():
     gap air rings (docs/COULOMB_TORQUE_2026-09-30.md); both must be pure air
     on the geometry-driven mesh of each backend (sliding_band_layers raises
     CoulombLayerError otherwise).  The rotor-side ring is the structured belt
-    (identical on both); the stator-side ring also takes the few CDT air
+    (identical on every backend); the stator-side ring also takes the few CDT air
     elements of the slot openings next to the innermost stator iron."""
     got = {}
     for be in BACKENDS:
@@ -390,10 +372,6 @@ def test_coulomb_layers_are_pure_air_on_both_backends():
         assert trace["structured_gap_effective"]
         got[be] = {k: len(v.elements) for k, v in layers.items()}
         assert got[be]["rotor_side"] > 0 and got[be]["stator_side"] > 0
-    if len(got) == 2:
-        assert got["gmsh"]["rotor_side"] == got["triangle"]["rotor_side"]
-        assert got["gmsh"]["stator_side"] == pytest.approx(
-            got["triangle"]["stator_side"], rel=0.02)
 
 
 # ── skin (shaft) and sleeve layers, per backend, on a sleeved hollow shaft ───
@@ -453,18 +431,6 @@ def test_shaft_skin_layers_structure(sleeved, backend):
     assert np.all(np.abs(rb - rb.max()) < 2e-3)
 
 
-@pytest.mark.skipif(len(BACKENDS) < 2, reason="Triangle not installed")
-def test_shaft_skin_patch_identical_on_both_backends(sleeved):
-    """The structured patch is shared code: its node rings are the same on
-    Triangle and gmsh (only the CDT around it differs)."""
-    rings = {}
-    for be in BACKENDS:
-        V, T, tags, DOM_SHAFT, _ = _rotor_sk(sleeved, be, 2)
-        nodes = np.unique(T[tags == DOM_SHAFT])
-        rings[be] = np.unique(np.round(np.hypot(V[nodes, 0], V[nodes, 1]), 4))
-    assert np.array_equal(rings["gmsh"], rings["triangle"])
-
-
 @pytest.mark.parametrize("backend", BACKENDS)
 def test_sleeve_resolution_follows_the_layer_request(sleeved, backend):
     """The sleeve is CDT-meshed to the target cell of `layers` elements
@@ -488,34 +454,32 @@ def test_sleeve_resolution_follows_the_layer_request(sleeved, backend):
 
 
 # ── fail closed ──────────────────────────────────────────────────────────────
-def test_gmsh_failure_is_loud_and_cleans_up(monkeypatch):
+def test_gmsh_failure_is_loud_and_cleans_up():
     """A gmsh meshing failure raises GmshCDTError (never a silent fallback),
     finalizes the gmsh session it opened, and releases the process lock; the
-    next triangulation works."""
-    import threading
-    import gmsh
-    from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
-    from motor_ai_sim.simulation.sb_domains import _GMSH_LOCK
+    next triangulation works.  gmsh lives in the worker process, so the
+    failure is injected THERE (tests/_gmsh_worker_crash_helpers.py) and the
+    worker reports what it saw."""
+    from motor_ai_sim.simulation import gmsh_worker
     V, S = _square_pslg()
-
-    def boom(*a, **k):
-        raise Exception("synthetic meshing failure")
-    monkeypatch.setattr(gmsh.model.mesh, "generate", boom)
-    with pytest.raises(GmshCDTError, match="synthetic meshing failure"):
-        triangulate_gmsh(V, S, gm._cell_area(1.0), hole_pts=[[8.5, 8.5]])
-    assert not gmsh.isInitialized()
-    got = []
-    def _probe():
-        ok = _GMSH_LOCK.acquire(timeout=5)
-        got.append(ok)
-        if ok:
-            _GMSH_LOCK.release()
-    th = threading.Thread(target=_probe)
-    th.start(); th.join()
-    assert got == [True]
-    monkeypatch.undo()
+    rep = gmsh_worker.call(
+        "tests._gmsh_worker_crash_helpers:cdt_with_failing_generate",
+        args=(V, S, gm._cell_area(1.0), [[8.5, 8.5]]))
+    assert rep["raised"] == "GmshCDTError"
+    assert "synthetic meshing failure" in rep["message"]
+    assert rep["initialized_after"] is False
+    assert rep["lock_free_after"] is True
     Vo, To = triangulate_gmsh(V, S, gm._cell_area(1.0), hole_pts=[[8.5, 8.5]])
     assert len(To) > 0
+
+
+def test_gmsh_cdt_error_keeps_its_type_across_the_worker():
+    """The worker re-raises the in-process exception TYPE, so geo_mesh's
+    fail-closed handling (``isinstance(_te, GmshCDTError)``) still applies."""
+    from motor_ai_sim.simulation.geo_mesh_gmsh import GmshCDTError
+    from motor_ai_sim.simulation import gmsh_worker
+    with pytest.raises(GmshCDTError, match="synthetic"):
+        gmsh_worker.call("tests._gmsh_worker_crash_helpers:raise_gmsh_cdt_error")
 
 
 def test_tile_does_not_fall_back_on_a_gmsh_failure(machine, monkeypatch):
@@ -534,29 +498,38 @@ def test_tile_does_not_fall_back_on_a_gmsh_failure(machine, monkeypatch):
 
 
 def test_missing_gmsh_is_an_actionable_error(monkeypatch):
-    import builtins
-    real = builtins.__import__
+    """The gmsh worker cannot load gmsh -> an actionable error that names the
+    install command and the default backend; nothing falls back."""
+    from motor_ai_sim.simulation import gmsh_worker
 
-    def fake(name, *a, **k):
-        if name == "gmsh":
-            raise ImportError("libGLU.so.1: cannot open shared object file")
-        return real(name, *a, **k)
-    monkeypatch.setattr(builtins, "__import__", fake)
-    with pytest.raises(RuntimeError, match="pip install gmsh==") as ei:
-        gm.cdt_backend()
-    assert "MOTOR_AI_SIM_GEO_CDT=triangle" in str(ei.value)
+    def no_gmsh(*a, **k):
+        raise gmsh_worker.WorkerError(
+            "ImportError: libGLU.so.1: cannot open shared object file")
+    monkeypatch.setattr(gmsh_worker, "handshake", no_gmsh)
+    monkeypatch.setattr(gm, "_GMSH_HANDSHAKE", {})
+    gm.set_cdt_backend(None)
+    monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "gmsh")
+    try:
+        with pytest.raises(RuntimeError, match="pip install gmsh==") as ei:
+            gm.cdt_backend()
+    finally:
+        gm.set_cdt_backend("gmsh")
+    msg = str(ei.value)
+    assert "netgen" in msg and "triangle" not in msg.lower()
 
 
-def test_budget_preflight_rejects_before_meshing(monkeypatch):
+def test_budget_preflight_rejects_before_meshing():
     """A cross-section whose target sizes alone predict > 2x the budget is
-    rejected without calling gmsh at all."""
-    import gmsh
+    rejected without calling gmsh's generate at all (counted in the worker),
+    and the rejection reaches the caller as MeshBudgetExceeded."""
+    from motor_ai_sim.simulation import gmsh_worker
     V, S = _square_pslg()
-    called = []
-    monkeypatch.setattr(gmsh.model.mesh, "generate", lambda *a: called.append(1))
     with pytest.raises(gm.MeshBudgetExceeded, match="before meshing"):
         triangulate_gmsh(V, S, gm._cell_area(0.05), budget=1000)
-    assert not called
+    rep = gmsh_worker.call(
+        "tests._gmsh_worker_crash_helpers:budget_preflight_probe",
+        args=(V, S, gm._cell_area(0.05), 1000))
+    assert rep["raised"] == "MeshBudgetExceeded" and rep["generate_calls"] == 0
 
 
 # ── cross-version compatibility: semantic, not bitwise ──────────────────────
@@ -586,9 +559,9 @@ def test_semantic_fingerprint(machine, full):
     area within 0.1 %, quality no worse than 1.3x the reference."""
     got = _fingerprint(full, machine)
     if os.environ.get("GEO_MESH_WRITE_FINGERPRINT") == "1":
-        import gmsh
+        from importlib.metadata import version as _pkg_version
         _FP.parent.mkdir(parents=True, exist_ok=True)
-        _FP.write_text(json.dumps({"gmsh": gmsh.__version__, "halves": got},
+        _FP.write_text(json.dumps({"gmsh": _pkg_version("gmsh"), "halves": got},
                                   indent=1), encoding="utf-8")
     ref = json.loads(_FP.read_text(encoding="utf-8"))["halves"]
     for nm in ("stator", "rotor"):

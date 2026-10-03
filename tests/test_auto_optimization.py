@@ -318,18 +318,15 @@ class TestRejectionAccounting:
         assert rj["evaluated"] == 0 and rj["reject_pct"] == 0.0
 
 
-@pytest.mark.requires_triangle
 class TestMeshBudgetFence:
-    """The cheap pre-mesh reject: Triangle itself, Steiner-capped.
+    """The cheap pre-mesh reject on the default CDT backend (Netgen).
 
     The fence must (a) stay OFF unless the eval subprocess arms it, (b) change
     NOTHING for a mesh that fits the budget, and (c) reject a cascading mesh
-    with the "mesh budget" message the classifier keys on.  (a)+(b) are the
-    no-false-reject half of the contract; (c) is the fence itself."""
+    with the "mesh budget" message the classifier keys on.  The Triangle
+    Steiner-cap variant of this fence was removed with the Triangle backend
+    (2026-10-03); Netgen and gmsh reject from their budget preflight."""
 
-    # A 10x10 mm square PSLG: with a fine max-area constraint the quality mesher
-    # needs thousands of Steiner points — a deterministic stand-in for the
-    # refinement cascade a pathological candidate causes.
     @staticmethod
     def _square():
         import numpy as np
@@ -360,12 +357,14 @@ class TestMeshBudgetFence:
         assert G.tri_budget() is None
 
     def test_unarmed_meshing_is_never_rejected(self):
+        pytest.importorskip("netgen.occ")
         from motor_ai_sim.simulation import geo_mesh as G
         V, S = self._square()
         _, T = G._triangulate(V, S, 0.01, quality=20, hole=False)
         assert len(T) > 2000                     # it really did refine
 
     def test_a_cascading_mesh_is_rejected_with_the_mesh_budget_message(self):
+        pytest.importorskip("netgen.occ")
         from motor_ai_sim.simulation import geo_mesh as G
         V, S = self._square()
         G.set_tri_budget(2000)                   # ~10k tris needed >> budget
@@ -376,6 +375,7 @@ class TestMeshBudgetFence:
     def test_a_mesh_under_the_budget_is_bit_identical_to_the_unarmed_run(self):
         # The whole no-false-reject argument rests on this: an armed budget
         # that is NOT hit must not change the mesh the candidate is scored on.
+        pytest.importorskip("netgen.occ")
         import numpy as np
         from motor_ai_sim.simulation import geo_mesh as G
         V, S = self._square()
@@ -391,110 +391,6 @@ class TestMeshBudgetFence:
         # have.  10x the top of the healthy range is the floor of "far above".
         from motor_ai_sim.optimization.refine_proc import _MESH_TRI_BUDGET
         assert _MESH_TRI_BUDGET >= 10 * 40_000
-
-    def test_counting_output_points_cannot_detect_the_cap(self):
-        """Why the fence tests constraint satisfaction, not the point count.
-
-        The first cut of this fence asked `added_points >= steiner_cap`.  It
-        never fired: Triangle spends its -S budget on REJECTED insertions too,
-        so a run that truly ran out of budget still reports FEWER added points
-        than the cap.  Pinning that here because the fence looks obviously
-        correct written the naive way, and silently returns half-refined meshes
-        when it is.
-        """
-        import numpy as np
-        import triangle as _tri
-        V, S = self._square()
-        A = dict(vertices=V, segments=S)
-        capped = _tri.triangulate(A, "pq20a0.0100S1000")
-        added = len(capped["vertices"]) - len(V)
-        assert added < 1000                      # the naive test would pass it
-        # ...yet the run plainly did not finish: elements far over the target.
-        P = np.asarray(capped["vertices"], float)[
-            np.asarray(capped["triangles"], np.int64)]
-        ar = 0.5 * np.abs((P[:, 1, 0] - P[:, 0, 0]) * (P[:, 2, 1] - P[:, 0, 1])
-                          - (P[:, 2, 0] - P[:, 0, 0]) * (P[:, 1, 1] - P[:, 0, 1]))
-        assert ar.max() > 10 * 0.01
-        from motor_ai_sim.simulation import geo_mesh as G
-        assert G._steiner_cap_truncated(A, capped, 0.01) is True
-
-    def test_a_finished_run_is_not_called_truncated(self):
-        # The other half: a cap that is never reached must read as CLEAN, both
-        # for a global max-area and for the per-region ('Aa') form every
-        # production call site uses.
-        import numpy as np
-        import triangle as _tri
-        from motor_ai_sim.simulation import geo_mesh as G
-        V, S = self._square()
-        A = dict(vertices=V, segments=S)
-        done = _tri.triangulate(A, "pq20a0.0100S1000000")
-        assert G._steiner_cap_truncated(A, done, 0.01) is False
-        # per-region: inner square fine, outer coarse
-        V2 = np.array([[0., 0.], [10., 0.], [10., 10.], [0., 10.],
-                       [1., 1.], [4., 1.], [4., 4.], [1., 4.]])
-        S2 = np.array([[0, 1], [1, 2], [2, 3], [3, 0],
-                       [4, 5], [5, 6], [6, 7], [7, 4]])
-        A2 = dict(vertices=V2, segments=S2,
-                  regions=np.array([[2., 2., 1., 0.05], [8., 8., 2., 1.0]]))
-        o2 = _tri.triangulate(A2, "pq20AaS1000000")
-        assert G._steiner_cap_truncated(A2, o2, 0.05) is False
-
-    def test_area_only_meshing_is_exempt(self):
-        # Area-only CDT (no quality flag) cannot cascade — the rotor fallback
-        # path relies on it building unconditionally.  The cap must not apply.
-        from motor_ai_sim.simulation import geo_mesh as G
-        V, S = self._square()
-        G.set_tri_budget(50)                     # absurdly small on purpose
-        _, T = G._triangulate(V, S, 1.0, quality=None, hole=False)
-        assert len(T) >= 2                       # built, not rejected
-
-    def test_a_cap_that_was_barely_touched_cannot_have_truncated_the_run(self):
-        """The regression that blocked every sweep on the 40 mm machine.
-
-        The fence judged truncation from ONE signal — "some triangle is over its
-        region's max-area target".  That signal is not sufficient: with -Y (no
-        Steiner points on the input boundary, which every sector call site uses)
-        Triangle legitimately FINISHES leaving a boundary triangle it cannot
-        split.  Measured on the user's 24s/28p stator cell: the capped run and
-        the UNCAPPED run are the same mesh — 1969 points, 3718 triangles — and
-        both leave exactly one triangle 1.2x over target, so the fence rejected
-        a perfectly healthy candidate.  It had added 1580 points against a
-        200 000 cap: 0.8 % of an allowance it supposedly ran out of.
-
-        A cap can only have stopped a run that SPENT it, so that is now a
-        necessary condition.  Pinned with a synthetic payload so the numbers are
-        exact and no FEM is paid for.
-        """
-        import numpy as np
-        from motor_ai_sim.simulation import geo_mesh as G
-        # One triangle of area 0.5, in region marker 1 whose target is 0.01 —
-        # 50x over, the strongest possible form of the area signal.
-        A = dict(vertices=np.zeros((389, 2)),
-                 regions=np.array([[0.0, 0.0, 1.0, 0.01]]))
-        out = dict(vertices=np.zeros((1969, 2)),          # 1580 points ADDED
-                   triangles=np.array([[0, 1, 2]]),
-                   triangle_attributes=np.array([[1.0]]))
-        out["vertices"] = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
-                                   + [[0.0, 0.0]] * 1966)
-        A["vertices"] = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]]
-                                 + [[0.0, 0.0]] * 386)
-        # 1580 added of a 200 000 cap → the cap never bound → NOT truncated.
-        assert G._steiner_cap_truncated(A, out, 0.01, cap=200_000) is False
-        # The same mesh against a cap it really did exhaust → still rejected,
-        # so the fence has not been disabled, only made to ask both questions.
-        assert G._steiner_cap_truncated(A, out, 0.01, cap=2_000) is True
-
-    def test_the_cascading_square_is_still_rejected_with_its_cap_supplied(self):
-        # The fence's original purpose, re-verified through the new two-signal
-        # predicate: the cascade eats most of its cap AND misses its target.
-        import triangle as _tri
-        from motor_ai_sim.simulation import geo_mesh as G
-        V, S = self._square()
-        A = dict(vertices=V, segments=S)
-        capped = _tri.triangulate(A, "pq20a0.0100S1000")
-        added = len(capped["vertices"]) - len(V)
-        assert added >= G._CAP_BINDING_FRAC * 1000     # it did spend the cap
-        assert G._steiner_cap_truncated(A, capped, 0.01, cap=1000) is True
 
 
 class TestEvalPayloadContract:

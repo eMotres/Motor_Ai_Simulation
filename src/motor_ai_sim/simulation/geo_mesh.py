@@ -1,8 +1,12 @@
 """Geometry-driven FEM mesh: triangulate the REAL CadQuery polygons (every
-fillet) with a constrained Delaunay (Shewchuk's Triangle) instead of building
-an idealised tensor template and patching it to the geometry.
+fillet) with a constrained Delaunay instead of building an idealised tensor
+template and patching it to the geometry.  The CDT backend is Netgen (default,
+in-process, LGPL) or gmsh (selectable, out of process); Shewchuk's Triangle,
+the original backend, was removed on 2026-10-03 (non-commercial licence).  The
+comments below that describe Triangle record why the PSLG is built the way it
+is; every PSLG rule still applies to both backends.
 
-The boundaries fed to Triangle ARE the real geometry, so the mesh conforms to
+The boundaries fed to the CDT ARE the real geometry, so the mesh conforms to
 every fillet (magnet corners, tooth-tip r1, V-notch apex, OD / slot-bottom
 roundings) by construction; per-triangle domain tags are then an EXACT
 centroid point-in-polygon test (no staircase).
@@ -21,8 +25,8 @@ Proven recipe (see the sliver investigation, 2026-07-15):
      `pq<angle>a<area>` — with (1)+(2) the quality flag no longer explodes and
      gives AR_max < ~5 (stator) / ~100 (rotor bridge) at ~50-60k tris/half.
 
-Deterministic: Triangle is deterministic for a fixed PSLG + options, and the
-PSLG is derived deterministically from the polygons.
+Deterministic: both backends are deterministic for a fixed PSLG + options,
+and the PSLG is derived deterministically from the polygons.
 """
 from __future__ import annotations
 import logging
@@ -32,13 +36,6 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 log = logging.getLogger(__name__)
-
-# `triangle` (J. R. Shewchuk's Triangle) is OPTIONAL: its licence forbids
-# commercial use without the author's permission, so it is not a mandatory
-# dependency of this AGPL project (pip extra `[triangle]`).  Without it the
-# geometry-driven CDT path is unavailable and mesher.py routes to gmsh.
-import importlib.util as _ilu
-HAVE_TRIANGLE = _ilu.find_spec("triangle") is not None
 
 import numpy as np
 
@@ -55,9 +52,6 @@ _SB_GEO_TILE = os.environ.get("SB_GEO_TILE", "1").lower() not in ("0", "false")
 _Q = 20               # Triangle min-angle quality (deg) — 20 keeps clean AR
                       # without the aggressive corner over-refinement q28 caused
                       # (dense fans at fillets/bridges); also safer on thin coils.
-_ROTOR_STEINER_CAP = 6000  # cap Triangle's Steiner points on the rotor so a sharp
-                      # magnet corner near the OD bridge can't blow q up to 1 M tris
-_ROTOR_AR_GATE = 200
 _ROTOR_AR_BULK = 25
 _ROTOR_DEFEATURE_MM = 0.06  # morphological-opening radius (mm) for the rotor
                             # iron: trims knife-edge slivers thinner than ~2eps
@@ -138,7 +132,7 @@ def _coil_rel_of(part_mesh_mm: Optional[Dict]) -> float:
 # The optimizer explores the whitelist without a range box, so a candidate can
 # carry a derived thin feature (a slot opening squeezed to um, a tooth pared to
 # a knife edge) that is perfectly buildable yet makes the STATOR cell's q20
-# refinement cascade — the rotor cell already caps itself (_ROTOR_STEINER_CAP),
+# refinement cascade (the rotor cell of the removed Triangle backend capped itself),
 # the stator cell had no cap and was measured at 0.5-1.1 M tris on such input.
 # Those cascades are Triangle refinement ARTIFACTS: no area/feature-width
 # arithmetic on the polygons predicts them (a knife edge contributes O(1) tris
@@ -174,80 +168,6 @@ def set_tri_budget(n: Optional[int]) -> None:
 
 def tri_budget() -> Optional[int]:
     return _TRI_BUDGET["v"]
-
-
-# A Triangle run that the -S cap actually TRUNCATED has spent most of that cap.
-# Measured on the cascading 10x10 square (the case the fence was written for):
-# 377/500, 847/1000, 2989/5000, 4551/7921 points added — i.e. 57-85 % of the
-# cap, never a sliver of it.  0.25 sits far below that floor and far above the
-# consumption of a run that simply finished (measured on the 40 mm 24s/28p
-# stator cell: 1580 points added against a 200 000 cap = 0.8 %).
-_CAP_BINDING_FRAC = 0.25
-
-
-def _steiner_cap_truncated(A: Dict, out: Dict, area: float,
-                           cap: Optional[int] = None) -> bool:
-    """Did a Steiner-CAPPED Triangle run stop BEFORE meeting its constraints?
-
-    TWO conditions must hold, because either one alone gives a false verdict.
-
-    1. The cap must be able to have BOUND at all.  Triangle spends its -S budget
-       on REJECTED insertions too (a circumcentre that encroaches on a segment
-       is discarded and the segment split instead), so a truncated run holds
-       fewer added points than the cap — but it still holds MOST of it (see
-       `_CAP_BINDING_FRAC`).  A run that added 0.8 % of its allowance stopped
-       because its own constraints were met, not because it ran out.
-
-    2. The mesh must miss its own max-area constraint GROSSLY.  A finished run
-       is expected to satisfy the area target it was meshed under — the
-       per-region column 4 when the caller passed `regions` (`Aa`), else the
-       global `area` (`a<area>`); a truncated one leaves triangles far above it
-       (the cascading square: max element area 25 mm^2 against a 0.01 mm^2
-       target).  Triangles in no declared region, or in a region asking for
-       area <= 0, are unconstrained and are skipped.
-
-    Condition 2 was the whole test until it was measured against a CONVERGED
-    mesh: with -Y (no Steiner points on the input boundary) Triangle cannot
-    always split the last triangle down to its region target, and it legitimately
-    finishes leaving one 1.2x over.  That is a miss by PERCENT; truncation misses
-    by orders of magnitude, and only after eating the cap.  Requiring both
-    conditions keeps the fence firing on real cascades and stops it rejecting
-    every healthy candidate.
-    """
-    T = np.asarray(out.get("triangles"), np.int64)
-    if T.size == 0:
-        return False
-    if cap:
-        # Points Triangle ADDED to the input PSLG.  Its output always begins
-        # with the input vertices, so the difference is exactly the insertions.
-        _added = len(np.asarray(out.get("vertices"), float)) - \
-            len(np.asarray(A.get("vertices"), float))
-        if _added < _CAP_BINDING_FRAC * float(cap):
-            return False                      # the cap never bound → it finished
-    V = np.asarray(out.get("vertices"), float)
-    p = V[T]
-    a = 0.5 * np.abs((p[:, 1, 0] - p[:, 0, 0]) * (p[:, 2, 1] - p[:, 0, 1])
-                     - (p[:, 2, 0] - p[:, 0, 0]) * (p[:, 1, 1] - p[:, 0, 1]))
-    regions = A.get("regions")
-    if regions is None or not len(regions):
-        lim = np.full(len(T), float(area))
-    else:
-        attrs = out.get("triangle_attributes")
-        if attrs is None:
-            return False                      # cannot tell → never false-reject
-        marker = np.asarray(attrs, float)[:, 0]
-        # marker -> its target area; a marker seeded twice with different areas
-        # takes the LOOSEST, so an ambiguity can only ever spare a candidate.
-        tgt: Dict[float, float] = {}
-        for row in np.asarray(regions, float):
-            m, ta = float(row[2]), float(row[3])
-            tgt[m] = max(tgt.get(m, 0.0), ta)
-        lim = np.array([tgt.get(float(m), 0.0) for m in marker], float)
-        free = lim <= 0.0                     # unconstrained region
-        lim[free] = np.inf
-    # 2 % slack absorbs the float arithmetic; a truncated mesh misses by orders
-    # of magnitude, never by percent.
-    return bool(np.any(a > lim * 1.02))
 
 
 def _cell_area(edge_mm: float) -> float:
@@ -1330,23 +1250,23 @@ def _rotor_bulk_gate(A: Dict, cdt, area: float, regions, rotor_bridge: bool,
 
 
 # ── CDT backend selection ────────────────────────────────────────────────────
-# MOTOR_AI_SIM_GEO_CDT = auto (default) | netgen | gmsh | triangle.  auto =
-# netgen since the owner's decision of 2026-10-01 (LGPL, in-process next to
-# MKL/PARDISO; docs/MESHER_NETGEN_2026-09-30.md), also where gmsh or the
-# optional Triangle package is installed.  gmsh (GPL) and triangle
-# (non-commercial licence) stay selectable but NEVER default and are never a
-# fallback: a Netgen failure is a mesh reject.  `set_cdt_backend` overrides per
-# process (tests, the mesher comparison).  Every other step of the geometry
-# mesher is shared, so switching the backend changes ONLY the triangulation of
-# the PSLG.
+# MOTOR_AI_SIM_GEO_CDT = auto (default) | netgen | gmsh.  auto = netgen since
+# the owner's decision of 2026-10-01 (LGPL, in-process next to MKL/PARDISO;
+# docs/MESHER_NETGEN_2026-09-30.md).  gmsh (GPL) stays selectable but is never
+# the default and never a fallback, and it always runs OUT OF PROCESS in the
+# gmsh worker (gmsh_worker.py, owner 2026-10-03).  Triangle (non-commercial
+# licence) was removed on 2026-10-03.  A Netgen failure is a mesh reject.
+# `set_cdt_backend` overrides per process (tests, the mesher comparison).
+# Every other step of the geometry mesher is shared, so switching the backend
+# changes ONLY the triangulation of the PSLG.
 _CDT_OVERRIDE: Dict[str, Optional[str]] = {"v": None}
-CDT_BACKENDS = ("triangle", "gmsh", "netgen")
+CDT_BACKENDS = ("netgen", "gmsh")
 
 
 def set_cdt_backend(name: Optional[str]) -> None:
     if name not in (None, "auto") + CDT_BACKENDS:
-        raise ValueError("CDT backend must be auto, triangle, gmsh or netgen, "
-                         "not %r" % name)
+        raise ValueError("CDT backend must be auto, netgen or gmsh, not %r"
+                         % (name,))
     _CDT_OVERRIDE["v"] = None if name in (None, "auto") else name
 
 
@@ -1355,26 +1275,34 @@ def set_cdt_backend(name: Optional[str]) -> None:
 #: semantic tests define compatibility — but provenance flags it.
 GMSH_VALIDATED = "4.15.2"
 
+_GMSH_HANDSHAKE: Dict[str, Optional[str]] = {}
+
 
 def _require_gmsh() -> str:
-    """Fail closed with an actionable message when gmsh cannot be loaded."""
+    """Fail closed with an actionable message when the gmsh WORKER cannot
+    load gmsh.  gmsh is never imported in this process (licence: GPL next to
+    MKL); the check is one handshake with the worker, cached per process."""
+    if _GMSH_HANDSHAKE.get("version"):
+        return str(_GMSH_HANDSHAKE["version"])
+    from motor_ai_sim.simulation import gmsh_worker
     try:
-        import gmsh  # noqa: F401
-        return str(getattr(gmsh, "__version__", "?"))
+        info = gmsh_worker.handshake()
     except Exception as e:  # noqa: BLE001 — ImportError, missing libGLU, ...
         raise RuntimeError(
-            "geometry-driven mesh needs gmsh (the gmsh CDT backend was selected: "
-            "MOTOR_AI_SIM_GEO_CDT={} , triangle installed: {}) but gmsh cannot be "
-            "loaded: {}: {}. Install it with `pip install gmsh=={}` (Linux also "
-            "needs libglu1-mesa and libxcursor1), or select Triangle where it "
-            "is licensed: MOTOR_AI_SIM_GEO_CDT=triangle."
-            .format(os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto"), HAVE_TRIANGLE,
+            "geometry-driven mesh on the gmsh CDT backend (MOTOR_AI_SIM_GEO_CDT={}) "
+            "needs the gmsh worker, but it cannot load gmsh: {}: {}. Install it "
+            "with `pip install gmsh=={}` (Linux also needs libglu1-mesa and "
+            "libxcursor1), or use the default backend (netgen)."
+            .format(os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto"),
                     type(e).__name__, e, GMSH_VALIDATED)) from e
+    ver = info.get("gmsh_version") or "?"
+    _GMSH_HANDSHAKE["version"] = str(ver)
+    return str(ver)
 
 
 def _require_netgen() -> str:
     """Fail closed with an actionable message when netgen cannot be loaded.
-    Nothing falls back to gmsh or Triangle: the caller gets a mesh reject."""
+    Nothing falls back to gmsh: the caller gets a mesh reject."""
     from motor_ai_sim.simulation.geo_mesh_netgen import NETGEN_VALIDATED
     try:
         import netgen  # noqa: F401
@@ -1386,10 +1314,8 @@ def _require_netgen() -> str:
             "2026-10-01; MOTOR_AI_SIM_GEO_CDT={}) but netgen cannot be loaded: "
             "{}: {}. Install it with `pip install netgen-mesher=={}` (Linux). "
             "On a Windows development machine netgen's DLLs are blocked by "
-            "App Control / WDAC: use WSL2, or select another backend "
-            "explicitly with MOTOR_AI_SIM_GEO_CDT=triangle (non-commercial "
-            "package) or MOTOR_AI_SIM_GEO_CDT=gmsh. No backend is chosen "
-            "automatically."
+            "App Control / WDAC: run the API and the solves under WSL2 or on "
+            "the server. No backend is chosen automatically."
             .format(os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto"),
                     type(e).__name__, e, NETGEN_VALIDATED)) from e
 
@@ -1405,20 +1331,14 @@ def cdt_provenance() -> Dict[str, Optional[str]]:
         out["gmsh"] = str(_pkg_version("gmsh"))
     except Exception:  # noqa: BLE001
         out["gmsh"] = None
-    if HAVE_TRIANGLE:
-        try:
-            from importlib.metadata import version
-            out["triangle"] = version("triangle")
-        except Exception:  # noqa: BLE001
-            out["triangle"] = "?"
-    else:
-        out["triangle"] = None
     from motor_ai_sim.simulation.geo_mesh_netgen import (NETGEN_VALIDATED,
                                                          netgen_version)
     out["netgen"] = netgen_version()
-    if be == "gmsh" and out["gmsh"] != GMSH_VALIDATED:
-        out["note"] = "gmsh {} differs from the validated {}".format(
-            out["gmsh"], GMSH_VALIDATED)
+    if be == "gmsh":
+        out["gmsh_process"] = "worker"
+        if out["gmsh"] != GMSH_VALIDATED:
+            out["note"] = "gmsh {} differs from the validated {}".format(
+                out["gmsh"], GMSH_VALIDATED)
     if be == "netgen" and out["netgen"] != NETGEN_VALIDATED:
         out["note"] = "netgen {} differs from the validated {}".format(
             out["netgen"], NETGEN_VALIDATED)
@@ -1439,11 +1359,11 @@ def mesher_provenance(build_mesher: Optional[str]) -> Dict[str, Optional[str]]:
 
 
 def cdt_backend() -> str:
-    """'triangle', 'gmsh' or 'netgen' — the backend the next triangulation uses.
+    """'netgen' or 'gmsh' — the backend the next triangulation uses.
 
     Fail-closed policy (docs/MESHER_TRANSITION.md): a selected backend that is
-    unavailable raises with an actionable message; a gmsh (netgen) meshing
-    failure raises GmshCDTError (NetgenCDTError); nothing silently falls back
+    unavailable raises with an actionable message; a netgen (gmsh) meshing
+    failure raises NetgenCDTError (GmshCDTError); nothing silently falls back
     to a different mesher."""
     want = _CDT_OVERRIDE["v"] or (os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto")
                                   .strip().lower() or "auto")
@@ -1454,16 +1374,15 @@ def cdt_backend() -> str:
         _require_netgen()
         return "netgen"
     if want == "triangle":
-        if not HAVE_TRIANGLE:
-            raise RuntimeError("MOTOR_AI_SIM_GEO_CDT=triangle but the optional "
-                               "'triangle' package is not installed")
-        return "triangle"
+        raise ValueError("MOTOR_AI_SIM_GEO_CDT=triangle: the Triangle backend was "
+                         "removed on 2026-10-03 (non-commercial licence). Use the "
+                         "default (netgen); on Windows run under WSL2 or on the "
+                         "server.")
     if want != "auto":
-        raise ValueError("MOTOR_AI_SIM_GEO_CDT must be auto, triangle, gmsh or "
-                         "netgen, not %r" % want)
-    # Owner 2026-10-01: netgen is the default backend whether or not gmsh or
-    # the optional Triangle package is installed; both stay selectable
-    # (MOTOR_AI_SIM_GEO_CDT=gmsh|triangle) and neither is a fallback.
+        raise ValueError("MOTOR_AI_SIM_GEO_CDT must be auto, netgen or gmsh, "
+                         "not %r" % want)
+    # Owner 2026-10-01: netgen is the default backend; gmsh stays selectable
+    # (MOTOR_AI_SIM_GEO_CDT=gmsh) and is never a fallback.
     _require_netgen()
     return "netgen"
 
@@ -1533,87 +1452,7 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
     _be = cdt_backend()
     if _be == "gmsh":
         return _triangulate_gmsh(A, area, regions, rotor_bridge)
-    if _be == "netgen":
-        return _triangulate_netgen(A, area, regions, rotor_bridge)
-    import triangle as _tri
-    if regions is not None and len(regions):
-        A["regions"] = np.asarray(regions, float)
-        _tail = "Aa"                          # per-region areas from column 4
-    else:
-        _tail = f"a{area:.4f}"
-
-    if rotor_bridge:
-        # The rotor magnet corner may be ANY radius, 0 (razor-sharp) included, and
-        # the mesh MUST build.  A sharp corner 1.3 mm from the OD is a knife-edge
-        # iron wedge — a near-0° input angle that Triangle's `q` refinement blows
-        # up on (0.5–1.1 M tris).  Strategy that is correct, not a fudge:
-        #   1. try `q` with a Steiner CAP (bounds the blow-up) — on a real fillet
-        #      it converges to a high-quality mesh → accurate near-gap field →
-        #      honest, step-independent macro ripple (area-only slivers do NOT:
-        #      they inject spurious field harmonics, ripple 12→19 % vs 15→16 %);
-        #   2. if the capped result is still sliver-ridden (AR over the gate — a
-        #      genuinely singular knife-edge), fall back to area-only + smoothing:
-        #      fewer tris, the SAME unavoidable corner sliver, always valid.
-        # Area-only baseline first (cheap, always builds) — its count is the
-        # honest size target; a q-mesh may only be accepted within a bounded
-        # BUDGET of it, else the knife-edge corner cascades tiny triangles
-        # through the magnets (measured: 420 → 25 000 magnet tris).
-        out0 = _tri.triangulate(A, f"p{_tail}{_Y}")
-        V0 = np.asarray(out0["vertices"], float)
-        T0 = np.asarray(out0["triangles"], np.int64)
-        _budget = len(T0) + 2 * _ROTOR_STEINER_CAP + 500
-        _q0 = int(quality) if quality is not None else _Q
-        for _qq in (_q0,):        # q20 only — q10/q5 'pass' but with skinny bulk
-            out = _tri.triangulate(
-                A, f"pq{_qq}{_tail}S{_ROTOR_STEINER_CAP}{_Y}")
-            Vo = np.asarray(out["vertices"], float)
-            To = np.asarray(out["triangles"], np.int64)
-            _ar, _ = _aspect_arr(Vo, To)
-            log.info("rotor q%d: %d tris (budget %d, base %d) ARmax=%.0f p99.5=%.1f",
-                     _qq, len(To), _budget, len(T0), float(_ar.max()),
-                     float(np.percentile(_ar, 99.5)))
-            if len(To) > _budget:              # refinement cascade — too costly
-                continue
-            if float(_ar.max()) <= _ROTOR_AR_GATE:
-                return Vo, To                  # q converged clean → honest field
-            # Max-AR broken only by the unavoidable knife-edge slivers while
-            # the BULK is stator-grade → take the quality mesh AS IS (rotor
-            # teeth then match the stator's q-mesh look).  Do NOT Laplace-smooth
-            # it: q-placed nodes are already optimal, and smoothing across the
-            # fine→coarse size gradient drags them and RUINS the shapes
-            # (measured: median AR 2.9 → 7.6).
-            if float(np.percentile(_ar, 99.5)) <= _ROTOR_AR_BULK:
-                return Vo, To
-        return _repair_slivers(V0, T0, n_fixed=len(V), in_V=V, in_S=S, n_iter=60)
-
-    _q = "" if quality is None else f"q{int(quality)}"
-    _cap = _TRI_BUDGET["v"]
-    if _cap and _q:
-        # Armed (optimizer eval subprocess): run the SAME quality refinement
-        # under a Steiner cap so a cascade terminates promptly instead of
-        # building 10^6 triangles.  ~2 triangles per point → capping the added
-        # points at budget/2 caps the triangle count at ~the budget.  A mesh
-        # that needs fewer points than the cap is bit-identical to the unarmed
-        # run; one that hits the cap was truncated mid-refinement — it would
-        # have blown past the budget, so reject it rather than solve on a
-        # half-refined mesh that matches nothing the Simulation tab would build.
-        _s = max(1000, int(_cap) // 2)
-        out = _tri.triangulate(A, f"p{_q}{_tail}S{_s}{_Y}")
-        Vo = np.asarray(out["vertices"], float)
-        To = np.asarray(out["triangles"], np.int64)
-        if _steiner_cap_truncated(A, out, area, cap=_s):
-            raise MeshBudgetExceeded(
-                "mesh budget: quality meshing of this cross-section hit the "
-                "{}-point Steiner cap ({} triangles and still refining; budget "
-                "{} triangles for the whole mesh). A feature of this candidate "
-                "is too thin for the mesher to resolve economically — an eval "
-                "this size cannot finish inside the optimizer's per-candidate "
-                "time cap, so it is rejected before any FEM time is spent."
-                .format(_s, len(To), int(_cap)))
-        return Vo, To
-    out = _tri.triangulate(A, f"p{_q}{_tail}{_Y}")
-    return (np.asarray(out["vertices"], float),
-            np.asarray(out["triangles"], np.int64))
+    return _triangulate_netgen(A, area, regions, rotor_bridge)
 
 
 def _air_parts(annulus_poly, iron, embedded):

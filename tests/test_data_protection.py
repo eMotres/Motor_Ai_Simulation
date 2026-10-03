@@ -539,3 +539,14 @@ def test_sessions_and_auth_events_store_hashed_ips(env):
     blob = (S._SESSIONS_FILE.read_text(encoding="utf-8")
             + S._EVENTS_FILE.read_text(encoding="utf-8"))
     assert "198.51.100.77" not in blob and "ip:" in blob
+
+
+def test_uvicorn_access_record_keeps_args_after_redaction():
+    import logging
+    from uvicorn.logging import AccessFormatter
+    from motor_ai_sim import log_redaction as L
+    r = logging.LogRecord("uvicorn.access", 20, "", 0, '%s - "%s %s HTTP/%s" %d',
+                          ("203.0.113.9:5000", "POST", "/x", "1.1", 200), None)
+    L.RedactingFilter().filter(r)
+    out = AccessFormatter('%(client_addr)s %(request_line)s %(status_code)s').format(r)
+    assert "203.0.113.9" not in out and out.startswith("ip:")

@@ -5,8 +5,8 @@
 The geometry-driven mesher (`src/motor_ai_sim/simulation/geo_mesh.py`) is built
 on J. R. Shewchuk's Triangle (`triangle` package). Its licence permits only
 non-commercial use without the author's permission, a restriction the GNU
-AGPL-3.0-or-later does not allow. It therefore cannot be a dependency of the
-AGPL distribution. Owner decision 2026-09-29: move to gmsh step by step, with
+AGPL-3.0-or-later (the project licence until 2026-10-03; Apache-2.0 since)
+does not allow. It therefore could not be a dependency of the distribution. Owner decision 2026-09-29: move to gmsh step by step, with
 every number checked on the reference machines, instead of removing Triangle
 at once.
 
@@ -113,7 +113,7 @@ back to, not the S2 backend; the current state is the table above.
 
 **S1 — now (this change).** Both meshers. `triangle` is an optional extra
 (`requirements-triangle.txt`, `pip install ".[triangle]"`, Docker
-`--build-arg WITH_TRIANGLE=1`), not part of the AGPL distribution. Where it is
+`--build-arg WITH_TRIANGLE=1`), not part of the distribution. Where it is
 installed (our workstation and server, non-commercial use) the Triangle mesher
 stays the default and every number is identical to before. Without it: gmsh,
 one log line. Tests that drive Triangle are marked `requires_triangle` and

@@ -5,11 +5,13 @@ imports and runs the worker-side mesh functions it is asked for (e.g.
 ``motor_ai_sim.simulation.mesher:_build_mesh_from_polygons_impl``), which in
 turn ``import gmsh`` locally. See ``gmsh_worker.py`` for the framing protocol.
 
-WHY IT IS LICENCE-CLEAN.  gmsh (GPL-2.0-or-later) is combined here only with
-code that is GPL-compatible: this project (AGPL-3.0, compatible through GPL-3.0
-section 13 since gmsh is "or later"), the Python standard library, numpy /
-scipy / shapely / scikit-fem (BSD) and their OpenBLAS / GEOS builds
-(BSD / LGPL).  Intel MKL and pypardiso are BLOCKED from importing in this
+WHY IT IS LICENCE-CLEAN.  gmsh (GPL-2.0-or-later) is a separate program here:
+the API / compute process (Apache-2.0 code, may load proprietary Intel MKL)
+never loads it and talks to this worker only over a pipe.  Inside the worker
+gmsh is combined only with GPL-compatible code: this project (Apache-2.0,
+compatible with GPL-3.0, which gmsh's "or later" allows), the Python standard
+library, numpy / scipy / shapely / scikit-fem (BSD) and their OpenBLAS / GEOS
+builds (BSD / LGPL).  Intel MKL and pypardiso are BLOCKED from importing in this
 process (``_BlockProprietary``): an import attempt raises ImportError, and
 ``{"op": "modules"}`` reports the licence-relevant modules and, on Linux, the
 shared objects actually mapped, so a test can prove that no ``libmkl*`` or

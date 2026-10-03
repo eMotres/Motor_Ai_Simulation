@@ -245,7 +245,7 @@ def test_server_card(c, path):
     assert s["authentication"]["protectedResourceMetadata"] == \
         BASE + "/.well-known/oauth-protected-resource/mcp"
     assert {t["name"] for t in s["tools"]} == set(mcp_app.PUBLIC_TOOLS)
-    assert s["license"] == "AGPL-3.0-or-later"
+    assert s["license"] == "Apache-2.0"
     _no_user_data(r.text)
 
 

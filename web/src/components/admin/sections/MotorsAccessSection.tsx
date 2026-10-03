@@ -22,7 +22,7 @@ const VIS_LABEL: Record<Visibility, string> = { private: 'Private', public: 'Pub
 const VIS_COLOR: Record<Visibility, string> = { private: 'var(--text-3)', public: '#4ade80', selected: '#60a5fa' };
 
 type Source = 'open' | 'private';
-const SOURCE_HELP = 'Open = public GitHub repository (AGPL): publishing pushes there at once and is public immediately. Private = our private repository. Only MOTRES reference data; customer dies never go to git.';
+const SOURCE_HELP = 'Open = public GitHub repository (Apache-2.0): publishing pushes there at once and is public immediately. Private = our private repository. Only MOTRES reference data; customer dies never go to git.';
 
 type MoveStatus = 'prepared' | 'running' | 'incomplete' | 'pending' | 'done' | 'rolled_back';
 interface PendingMove {

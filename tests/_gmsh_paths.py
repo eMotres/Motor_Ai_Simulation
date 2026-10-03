@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (C) MOTRES d.o.o. and contributors
 """One small representative case per gmsh path type, shared by the isolation
 test (tests/test_gmsh_isolation.py, wrappers only) and the in-process vs

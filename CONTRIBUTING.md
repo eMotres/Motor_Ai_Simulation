@@ -1,11 +1,11 @@
 # Contributing
 
 Thank you for helping improve this project. It is developed by
-**MOTRES d.o.o.** and contributors and published under the **GNU Affero General
-Public License v3.0 or later** (see [LICENSE](LICENSE)). It is free software:
-there is no separate licence and no contributor licence agreement. Your
-contribution is licensed under the same AGPL-3.0-or-later terms as the rest of
-the project, and you keep your copyright.
+**MOTRES d.o.o.** and contributors and published under the **Apache License,
+Version 2.0** (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). There is no
+separate licence and no contributor licence agreement: under section 5 of the
+Apache License your contribution is licensed under the same Apache-2.0 terms
+as the rest of the project, and you keep your copyright.
 
 ## Developer Certificate of Origin (required)
 
@@ -24,7 +24,7 @@ Signed-off-by: Your Name <you@example.com>
 - Forgot it? Fix the last commit with `git commit --amend -s --no-edit`, or all
   commits of your branch with `git rebase --signoff <base>`, then push again.
 - If your employer has rights in what you write, make sure you are allowed to
-  contribute it under the AGPL before signing off.
+  contribute it under the Apache License 2.0 before signing off.
 
 The `DCO` check on every pull request fails if any commit lacks a sign-off
 matching its author.
@@ -58,22 +58,24 @@ New source files start with an SPDX identifier (do not mass-edit existing
 files):
 
 ```python
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (C) MOTRES d.o.o. and contributors
 ```
 
 ```ts
-// SPDX-License-Identifier: AGPL-3.0-or-later
+// SPDX-License-Identifier: Apache-2.0
 // Copyright (C) MOTRES d.o.o. and contributors
 ```
 
 ## Dependencies
 
-New dependencies must have a licence compatible with AGPL-3.0-or-later
-(permissive licences such as MIT, BSD, Apache-2.0, ISC, Zlib are preferred;
-LGPL and GPL-2.0-or-later/GPL-3.0 are compatible). Record every new runtime
-dependency in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Packages with
-non-commercial, field-of-use or other restrictions beyond the AGPL are not
-accepted as dependencies. The one existing case, `triangle`, is an optional
-extra being phased out (see [docs/MESHER_TRANSITION.md](docs/MESHER_TRANSITION.md)). Proprietary accelerators may only be optional, with the code working
+New runtime dependencies that load in the same process as our code must have
+a permissive licence (MIT, BSD, Apache-2.0, ISC, Zlib, PSF, ...) or LGPL used as
+a dynamically linked, replaceable library (the way Netgen is). GPL / AGPL code
+may only run as a separate program that our code talks to over a pipe or files
+(the way gmsh runs in `gmsh_worker_main`); it must never be imported by the
+API / compute process. Packages with non-commercial, field-of-use or similar
+restrictions are not accepted at all (Triangle was removed for this reason,
+see [docs/MESHER_TRANSITION.md](docs/MESHER_TRANSITION.md)). Record every new
+runtime dependency in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Proprietary accelerators may only be optional, with the code working
 without them (the way `pypardiso` / Intel MKL is today).

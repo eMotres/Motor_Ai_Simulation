@@ -97,7 +97,7 @@
       "prefix": "创建账户即表示您接受",
       "terms": "服务条款",
       "privacy": "隐私政策",
-      "license": "AeroStator 以 AGPL-3.0-or-later 许可开源：",
+      "license": "AeroStator 以 Apache License 2.0 许可开源：",
       "source": "源代码"
     },
     "link": {

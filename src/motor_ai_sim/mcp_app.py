@@ -171,7 +171,7 @@ def _register_public(srv) -> None:
 
     @srv.tool(annotations=pub, description=(
         "PUBLIC (no sign-in). What AeroStator is: summary, operator, licence "
-        "(AGPL-3.0-or-later), website, MCP endpoint, terms, privacy and docs links."))
+        "(Apache-2.0), website, MCP endpoint, terms, privacy and docs links."))
     def describe_service() -> Dict[str, Any]:
         return _d.describe_service()
 

@@ -1,6 +1,6 @@
 # Engineering portal: core + contracted modules (v4.1, 2026-09-29)
 
-Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (production, 3d914fc), plus the open PRs #40 (licence: AGPL-3.0-or-later + DCO), #41 (private split), #44 (bring-your-own compute, `docs/BYO_COMPUTE.md`) and the MCP stages (`docs/MCP_2026-09-28.md`). The separate ERP project `motres_erp` was read (not changed) to draw the integration boundary. This is a document; no code was changed.
+Base: `motor_ai_sim`, branch `origin/pre-migration-freeze-2026-09-15` (production, 3d914fc), plus the open PRs #40 (licence: AGPL-3.0-or-later + DCO; superseded on 2026-10-03 by Apache-2.0), #41 (private split), #44 (bring-your-own compute, `docs/BYO_COMPUTE.md`) and the MCP stages (`docs/MCP_2026-09-28.md`). The separate ERP project `motres_erp` was read (not changed) to draw the integration boundary. This is a document; no code was changed.
 
 v4 is one consistency pass over v3 (PR #37, commit 5053809) after two technical reviews that the owner accepted in full: `docs/project-structure-review-2026-09-29-codex.md` (cited as **SR**) and `docs/portal-v3-docx-review-2026-09-29-codex.md` (cited as **DR**, finding ids F01–F09, R01–R04, S01–S04, A01–A07). Old text was rewritten in place, not appended to; every concept has one definition and other sections refer to it. The v1–v3 change logs are in git history.
 
@@ -67,7 +67,7 @@ Main idea: a **core** (who, where, on what compute, what is in the catalog, who 
 | **MCP** | `mcp_app.py` (streamable HTTP, `McpGate`: key `emk_`, scopes, quotas, audit), `mcp_tools.py` (field whitelist, `GEOMETRY_DENYLIST`), `agent_designs.py` (drafts, sandbox, `simulate`) | good, **already the IP-protection pattern** | Tools are motor-bound; no `build_system` / `simulate_system`, no catalog-sourcing or RFQ-draft tools. |
 | **Notifications** | newsletter + in-app notices (PR #36), admin tab | works | Needed: per-event notifications for approvals, RFQs, quotes, order status (section 8.7). |
 | **Fusion 360 sync** | `/api/fusion` six-column parameter CSV, in-Fusion script `scripts/fusion360_sync_params/` | works | Becomes one of the CAD sources for manufacturing documents (section 7.4). |
-| **Licence and repo split** | PR #40: AGPL-3.0-or-later + DCO; PR #41: ANSYS cross-checks and approved company reference fixtures moved to a private repo | open PRs | Portal code is public AGPL. Customer runtime data never goes to any git repository (public or private); storage boundaries are defined once in 10A.2. |
+| **Licence and repo split** | PR #40: AGPL-3.0-or-later + DCO (superseded 2026-10-03: Apache-2.0 + DCO); PR #41: ANSYS cross-checks and approved company reference fixtures moved to a private repo | open PRs | Portal code is public, Apache-2.0. Customer runtime data never goes to any git repository (public or private); storage boundaries are defined once in 10A.2. |
 
 ### 1.2 Conclusion
 
@@ -154,7 +154,7 @@ module: aerostator.motor              # unique name (org.module)
 version: 2.3.0                        # semver; major = contract break
 contract: portal/1.0                  # core contract version
 vendor_org: motres
-license: AGPL-3.0-or-later            # code licence; card data licence is per card
+license: Apache-2.0            # code licence; card data licence is per card
 card_kinds: [motor]
 ports:
   shaft:   {type: mech.shaft,  forms: [scalar, map, series]}
@@ -700,7 +700,7 @@ A winding row is marked supported only for the solver whose winding and excitati
 
 ### 5.1 Onboarding a module vendor
 
-1. **Vendor organization** (role `module_vendor`, section 6) accepts the contributor terms: module **code** contributed to the platform is AGPL-3.0-or-later with a DCO sign-off; **data** (cards, maps, FMUs) carries per-card **rights declared separately** (DR S04): `run` (use in a simulation), `cache` (keep derived results), `export_results`, `download` (receive the card/map/FMU itself), `run_on_byo` (may be executed on user-owned nodes). `view_only` / `download` are access presets over these rights, not a data licence; the vendor also names the licence text. No contract with money, no revenue share.
+1. **Vendor organization** (role `module_vendor`, section 6) accepts the contributor terms: module **code** contributed to the platform is Apache-2.0 with a DCO sign-off; **data** (cards, maps, FMUs) carries per-card **rights declared separately** (DR S04): `run` (use in a simulation), `cache` (keep derived results), `export_results`, `download` (receive the card/map/FMU itself), `run_on_byo` (may be executed on user-owned nodes). `view_only` / `download` are access presets over these rights, not a data licence; the vendor also names the licence text. No contract with money, no revenue share.
 2. **Cards** in the catalog envelope with status `draft`. A source is mandatory: datasheet (PDF in the file store), table/figure number, `basis: table|figure`, as already done for MOSFET cards.
 3. **Validation against the datasheet:** the core recomputes 3–5 published points (e.g. propeller C_T at 3 J values, gearbox efficiency at rated point) and records `validation` with the deviation. Threshold → status `active`.
 4. **Manifest check:** contract conformance tests (DR F09): ports, units, signs; the **full energy balance** of 2.7.2 including storage ("output ≤ input" is wrong for a discharging storage element); **quantity-specific physical constraints** instead of global monotonicity (e.g. losses ≥ 0, 0 ≤ η ≤ 1 in the declared quadrant, C_T(J) data within the tested advance-ratio range) with stated uncertainty; the declared validity domain including its mask of unsolved/infeasible points (2.7.3); minimum calculations as declared for the module kind (2.3).
@@ -714,7 +714,7 @@ A winding row is marked supported only for the solver whose winding and excitati
 | **FMU** (FMI 2.0/3.0) | binary `.fmu` (compiled model, sources hidden) | container without network, CPU/RAM/time limits, read-only, separate node | **Step 3b**; gearboxes with thermal model, batteries |
 | **Remote service** | vendor HTTPS endpoint answering per contract | model stays with the vendor; we send **only port values** | **Step 3c**; vendors that do not release a model (CFD) |
 
-An FMU is **executable code with its own distribution rights** (DR S04). An independently licensed FMU executed as a separate process in the sandbox is not linked into the AGPL portal, but its compatibility is assessed per integration and per distribution (who receives the binary, whether results or the FMU are redistributed); the vendor's rights of 5.1 decide run, cache, export and BYO execution. Sandboxing is a security boundary, not a licence grant. The owner's Windows workstation blocks native `.pyd` (WDAC); FMU execution is therefore only on Linux nodes (Hetzner, or BYO Linux nodes that opt in and whose owner holds `run_on_byo` for that FMU), never locally.
+An FMU is **executable code with its own distribution rights** (DR S04). An independently licensed FMU executed as a separate process in the sandbox is not linked into the Apache-2.0 portal, but its compatibility is assessed per integration and per distribution (who receives the binary, whether results or the FMU are redistributed); the vendor's rights of 5.1 decide run, cache, export and BYO execution. Sandboxing is a security boundary, not a licence grant. The owner's Windows workstation blocks native `.pyd` (WDAC); FMU execution is therefore only on Linux nodes (Hetzner, or BYO Linux nodes that opt in and whose owner holds `run_on_byo` for that FMU), never locally.
 
 ### 5.3 Security and IP protection
 
@@ -1001,7 +1001,7 @@ Every transition is an `order_event` with who/when; the seller updates productio
 | Measured vs simulated | ERP → portal | per-serial bench results attached to the customer order and to the design revision's validation |
 | Inventory / invoices | stay in ERP / Minimax | the portal shows at most "in stock / lead time" flags if MOTRES chooses to expose them |
 
-Mechanism: a service account on each side, signed webhooks + idempotent REST calls through a durable outbox, periodic reconciliation, one mapping table (`portal_id ↔ erp_id`). The ERP stays private (not part of the AGPL portal code); only the connector in the portal is public, and it is optional (other manufacturers can use the portal without any ERP). Other orgs may later connect their own ERPs through the same connector interface.
+Mechanism: a service account on each side, signed webhooks + idempotent REST calls through a durable outbox, periodic reconciliation, one mapping table (`portal_id ↔ erp_id`). The ERP stays private (not part of the Apache-2.0 portal code); only the connector in the portal is public, and it is optional (other manufacturers can use the portal without any ERP). Other orgs may later connect their own ERPs through the same connector interface.
 
 ### 8.7 Messaging and notifications
 
@@ -1310,11 +1310,11 @@ Resources are read-only and addressed by `emotres://` URIs (listed and templated
 
 ## 10. Licence, compute and non-commercial operation
 
-- **Licence:** platform code is AGPL-3.0-or-later; contributions under the DCO (`git commit -s`), no CLA (PR #40). Solver components with non-commercial licences are optional (`triangle` optional under the staged gmsh transition of the PR #40 branch, `pypardiso` optional).
+- **Licence:** platform code is Apache-2.0 (owner decision 2026-10-03, replacing AGPL-3.0-or-later of PR #40); contributions under the DCO (`git commit -s`), no CLA. Non-commercial components are not accepted (`triangle` was removed); `pypardiso` / Intel MKL stays optional; gmsh (GPL) runs only as a separate worker program.
 - **Private split (PR #41):** only ANSYS cross-checks and approved MOTRES reference fixtures (with recorded permission and provenance) live in a private repository. **Customer runtime data (orgs, designs, runs, NDAs, drawings, RFQs) never goes to any git repository**; it lives in the regional database and object store (10A.2).
 - **No commerce in the engineering platform:** no tiers, revenue share, listing fees or paid features; roles are `user` and `admin`; limits are fair-use; no payments or commissions between customers and suppliers (8.1, D114). The only paid item is **MOTRES's own compute at provider cost** (managed pool, 10C), with the payments module off until stage S2 (10D).
 - **BYO compute (PR #44), an option next to the managed pool:** users attach their own Linux nodes (pull model, `mcnode_` tokens, owner-only leasing, signed job bundles, same solver code, results with provenance, `own_node` flag in usage). Stage 3 of that plan adds org-shared nodes (a node owned by an org leases jobs of its members). FMU/foreign code runs only on nodes that opt into the sandbox profile. What a BYO node may receive and what its results prove is defined once in 10A.8 (D118).
-- **AGPL and network use:** because the portal is offered over a network, users are entitled to the source of the running version; the footer links the exact commit.
+- **Source of the running version:** Apache-2.0 does not require publishing it for network use; the footer still links the exact commit, by choice.
 
 ---
 
@@ -1328,7 +1328,7 @@ Every stored object carries **independent policy attributes** (DR A04, SR storag
 
 | Class | Examples | Rules |
 |---|---|---|
-| `public` | published catalog cards, marketing site, AGPL source | may be cached anywhere (CDN) |
+| `public` | published catalog cards, marketing site, Apache-2.0 source | may be cached anywhere (CDN) |
 | `internal` | platform logs without PII, metrics, shared materials library | platform staff only; region-pinned where it contains customer references |
 | `customer-confidential` (default for customer objects) | geometry, machine descriptions, duties, results, fields, reports, drawings, BOMs, RFQs | org members with grants only; encrypted at rest with the org key; never leaves the org's region without a policy |
 | `nda_policy` set (overlay) | anything shared under an NDA policy (6.5) | as its publication level + NDA gating, watermark, download rules, full access audit |
@@ -1537,7 +1537,7 @@ Status as understood on 2026-09-29; "to verify" items are checked (terms page, c
 |---|---|---|---|
 | Login and API auth | **OpenID Connect**, **OAuth 2.1** (authorization code + PKCE) | OIDC **adopted** (Google); OAuth 2.1 for the public API **planned M4** | Password accounts store only **Argon2id hashes** (`users.py`), never plaintext; OIDC is offered alongside; this document takes no decision to retire password accounts |
 | Service to service | mTLS, TLS 1.3 | **Planned 3c** | — |
-| Licences | **SPDX licence identifiers** in manifests and file headers | **Planned M0** | `AGPL-3.0-or-later`; vendor modules declare theirs (5.1) |
+| Licences | **SPDX licence identifiers** in manifests and file headers | **Planned M0** | `Apache-2.0`; vendor modules declare theirs (5.1) |
 | SBOM | **CycloneDX** (primary) or SPDX SBOM per release, portal and every module image | **Planned P2** | Generated in CI, stored with the release |
 | Signatures on NDAs and approvals | **eIDAS** (simple/advanced; qualified only on request), PAdES signed PDFs | SES evidence PDF **planned M8** (6.5A); PAdES signing **later**, with a named signer certificate and timestamp service | Click-to-sign audit evidence is not itself a cryptographic PAdES signature; legal effect is the parties' responsibility |
 
@@ -1595,7 +1595,7 @@ Owner position (2026-09-29, refined the same day): the platform stays non-commer
   - **Dedicated nodes**: a node reserved for one customer org for a monthly term; only that org's jobs lease to it; its cost is charged to the org as a monthly reservation at provider cost (10C.4). Useful for guaranteed capacity, predictable wall time and stricter data separation.
 - **Same dispatch path for all.** Platform nodes, dedicated nodes and BYO nodes all use the lease protocol of PR #44 (pull model, signed bundles, provenance). A job record carries `node_kind: shared | dedicated | byo` (extends the `own_node` flag).
 - **BYO compute (PR #44) stays an option**, not the primary path: for self-hosted, on-premises or data-residency needs (a customer that must keep designs on its own hardware or in its own country). BYO CPU-hours are metered but never charged.
-- **Self-hosted instances** (AGPL platform run by a company on its own infrastructure) remain possible and documented; no platform cost involved.
+- **Self-hosted instances** (Apache-2.0 platform run by a company on its own infrastructure) remain possible and documented; no platform cost involved.
 
 ### 10C.2 What we already measure and what to add
 
@@ -1784,7 +1784,7 @@ D1–D23 from v2 (D9 restated; D12 was never assigned):
 | D6 | Third module for the pilot | **Propeller on maps** (C_T/C_P): first "drone" system; gearbox second |
 | D7 | Foreign model format | **Maps → FMU 3.0 (co-sim) → remote service**, in that order |
 | D8 | Where foreign code runs | **Only separate Linux nodes in containers** (Hetzner or opted-in BYO), never in the API, never locally |
-| D9 | Vendor model at start (restated) | **Non-commercial:** vendors publish modules/cards for free under AGPL (code) and a per-card data licence; no listing fees, no revenue share |
+| D9 | Vendor model at start (restated) | **Non-commercial:** vendors publish modules/cards for free under Apache-2.0 (code) and a per-card data licence; no listing fees, no revenue share |
 | D10 | Who may view/download a vendor card | default **`view_only`** (results only); download at the vendor's choice |
 | D11 | "Migration done" criterion (restated) | Track A (adapters): **bit-identical L155 motor, L180 gen, L13** through the new path, timestamps/ids excluded; otherwise no merge. Numerical changes (e.g. gmsh) are track B with their own tolerances (2.7.9, D61) |
 | D13 | Object dynamics and environment: core or modules? | **Modules** (`vehicle`, `environment`, propulsors) with the same contract; the core knows only time, state and ports |

@@ -1,4 +1,4 @@
-# SPDX-License-Identifier: AGPL-3.0-or-later
+# SPDX-License-Identifier: Apache-2.0
 # Copyright (C) MOTRES d.o.o. and contributors
 """Run in a FRESH interpreter by tests/test_gmsh_isolation.py (so no earlier
 test can have polluted ``sys.modules``).  It plays the API / compute process:

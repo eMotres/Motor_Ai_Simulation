@@ -1,14 +1,32 @@
 # Third-party notices
 
-This project (GNU AGPL-3.0-or-later, copyright MOTRES d.o.o. and contributors)
-uses the runtime dependencies below. Versions and licences were read from the
+This project (Apache License 2.0, copyright MOTRES d.o.o. and contributors; see
+LICENSE and NOTICE) uses the runtime dependencies below. Versions and licences were read from the
 installed package metadata (`importlib.metadata`, `node_modules/*/package.json`)
 on 2026-09-29; where the metadata was empty the licence was taken from the
 project's own licence file. Each dependency remains under its own licence.
 The MKL/pypardiso chain entries were re-read on 2026-09-30 after intel-openmp
 and intel-cmplr-lib-ur were removed from the deploy image (note 2).
-2026-10-03: Triangle removed (note 3); gmsh runs only in a separate worker
-process (note 1); Netgen is the default mesher (note 4).
+2026-10-03: the project licence changed from AGPL-3.0-or-later to Apache-2.0;
+Triangle removed (note 3); gmsh runs only in a separate worker program
+(note 1); Netgen is the default mesher (note 4). The installed set was
+re-audited on 2026-10-03 from the package metadata of a server build (production
+requirements + MKL chain + netgen 6.2.2607, no triangle; 121 distributions).
+
+## Dependency model under Apache-2.0
+
+Apache-2.0 is permissive: anyone may use, modify and redistribute this code,
+commercially or not. Distributing it together with its dependencies requires
+that each dependency's own terms are met, and that no dependency imposes its
+licence on our code. The rules the code base follows:
+
+| Kind | How it is used | Examples |
+|---|---|---|
+| Permissive (MIT, BSD, Apache-2.0, ISC, PSF, Zlib, HPND) | in process, freely | numpy, scipy, scikit-fem, shapely, fastapi, cadquery |
+| LGPL | in process **only as a dynamically linked, replaceable library**, unmodified | Netgen + netgen-occt (note 4), OpenCASCADE (cadquery-ocp), GEOS (shapely), casadi (pulled by cadquery) |
+| GPL | **never in a process with our code**; only as a separate program over a pipe | gmsh, in `gmsh_worker_main` (note 1) |
+| Proprietary, freely redistributable | **optional at runtime**, never in the default image; the code runs without it | Intel MKL via pypardiso, ISSL (note 2) |
+| Non-commercial / field-of-use | **not accepted** | Triangle, removed (note 3) |
 
 ## Python (requirements.txt)
 
@@ -22,7 +40,8 @@ process (note 1); Netgen is the default mesher (note 4).
 | scipy | 1.17.1 | BSD-3-Clause |
 | shapely | 2.1.2 | BSD-3-Clause (links GEOS, LGPL-2.1) |
 | scikit-fem | 12.0.1 | BSD-3-Clause |
-| **gmsh** | 4.15.2 | **GPL-2.0-or-later** (see note 1) |
+| **gmsh** | 4.15.2 | **GPL-2.0-or-later**; separate worker program only (note 1) |
+| netgen-mesher (+ netgen-occt 7.8.1) | 6.2.2607 | LGPL-2.1-only (netgen-occt: OpenCASCADE, LGPL-2.1 with the OCCT exception); in process, dynamically linked (note 4) |
 | cadquery | 2.7.0 | Apache-2.0 |
 | cadquery-ocp | 7.8.1.1.post1 | Apache-2.0 bindings; OpenCASCADE Technology LGPL-2.1 with OCCT exception |
 | matplotlib | 3.10.8 | Matplotlib licence (PSF-based, BSD-compatible) |
@@ -49,18 +68,18 @@ All permissive (MIT, BSD, Apache-2.0, ISC, PSF, MIT-CMU) except those listed
 here, audited from the resolved dependency closure of `requirements.txt` on
 2026-09-29:
 
-| Package | Pulled in by | Licence | AGPL-3.0 verdict |
+| Package | Pulled in by | Licence | Apache-2.0 distribution |
 |---|---|---|---|
-| casadi | cadquery | LGPL-3.0-or-later | compatible |
-| OpenCASCADE Technology (in cadquery-ocp) | cadquery | LGPL-2.1 with OCCT exception | compatible |
-| GEOS (in shapely) | shapely | LGPL-2.1 | compatible |
+| casadi | cadquery | LGPL-3.0-or-later | compatible: unmodified, dynamically linked Python extension, replaceable |
+| OpenCASCADE Technology (in cadquery-ocp) | cadquery | LGPL-2.1 with OCCT exception | compatible: dynamically linked, replaceable |
+| GEOS (in shapely) | shapely | LGPL-2.1 | compatible: dynamically linked, replaceable |
 | vtk, trame-* | cadquery-ocp | BSD-3-Clause / Apache-2.0 / MIT | compatible |
+| setuptools | pip / packaging | MIT | compatible |
 
 ### Optional (not installed by default)
 
 | Package | Install | Licence |
 |---|---|---|
-| netgen-mesher (+ netgen-occt) | `requirements-netgen.txt` or extra `[netgen]`; default geometry mesher (`MOTOR_AI_SIM_GEO_CDT`, default `netgen`) | netgen-mesher: LGPL-2.1-only (its wheel also bundles GLU/Xmu/Xt/OpenGL loader libraries for the unused GUI); netgen-occt: OpenCASCADE Technology, LGPL-2.1 with the OCCT exception. Used in-process as a dynamically linked library (Python wheel with shared objects) that the user can replace by installing another build of the same package — see note 4 |
 | pypardiso | `requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for `deploy/Dockerfile.api` | BSD-3-Clause |
 | mkl (pulled by pypardiso) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
 | onemkl-license (pulled by mkl) | same as pypardiso | Intel Simplified Software License (ISSL) — see note 2 |
@@ -80,30 +99,41 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 | @react-three/fiber | 9.5.0 | MIT |
 | @react-three/postprocessing | 3.0.4 | MIT |
 | firebase | 12.14.0 | Apache-2.0 |
+| i18next | 26.4.2 | MIT |
+| i18next-icu | 2.4.4 | MIT |
+| i18next-resources-to-backend | 1.2.3 | MIT |
+| intl-messageformat | 11.2.15 | BSD-3-Clause |
 | postprocessing | 6.38.3 | Zlib |
 | react | 19.2.4 | MIT |
 | react-dom | 19.2.4 | MIT |
 | react-hook-form | 7.71.1 | MIT |
+| react-i18next | 17.0.15 | MIT |
 | recharts | 3.8.1 | MIT |
 | three | 0.183.2 | MIT |
 | zod | 4.3.6 | MIT |
 | zustand | 5.0.11 | MIT |
 
-Transitive npm production dependencies (`npm ls --omit=dev --all`, 275
-packages, audited 2026-09-29): MIT 175, Apache-2.0 57, ISC 22, BSD-3-Clause
-17, and one each of MIT AND ISC (victory-vendor), Zlib, 0BSD and MIT
-(webgl-constants, licence file only). No copyleft-incompatible or
-non-commercial licence.
+Transitive npm production dependencies (`web/package-lock.json`, non-dev
+entries, re-audited 2026-10-03, 285 packages): MIT 183, Apache-2.0 58, ISC 22,
+BSD-3-Clause 18, and one each of MIT AND ISC (victory-vendor), Zlib, 0BSD and
+MIT (webgl-constants, licence file only). No copyleft or non-commercial
+licence.
 
 Development-only tools (pytest, black, ruff, mypy, Vite, TypeScript, ESLint)
 are not distributed with the software and are not listed.
 
 ## Notes
 
-1. **gmsh (GPL-2.0-or-later).** "Or later" allows use under GPL-3.0, and
-   GPL-3.0 section 13 explicitly permits combination with AGPL-3.0 code, so
-   distributing this project under the AGPL together with gmsh is compatible.
-   gmsh is used as an unmodified Python package (`import gmsh`).
+1. **gmsh (GPL-2.0-or-later) — a separate program, never linked with the
+   API process.** gmsh is used unmodified (the PyPI wheel). It is not
+   combined with the Apache-2.0 API / compute process and never shares an
+   address space with Intel MKL. Inside its own worker program gmsh runs
+   next to this project's mesh-building code; Apache-2.0 is compatible with
+   GPL-3.0, which gmsh's "or later" allows, so that program may be
+   distributed under the GPL. Operators who do not want gmsh at all can leave
+   it out: the default mesher is Netgen, and only the paths that still use
+   gmsh (OCC 2-D meshing, mechanical and static 3-D meshes, the optional gmsh
+   CDT backend) need it.
 
    **Process separation (2026-10-03).** gmsh is imported ONLY by the gmsh
    worker, a separate program (`python -m
@@ -115,9 +145,9 @@ are not distributed with the software and are not listed.
    reads) goes through the worker (`motor_ai_sim/simulation/gmsh_worker.py`).
    The worker in turn refuses to import Intel MKL / pypardiso (an import
    hook raises), so GPL gmsh and proprietary MKL never share an address
-   space. The worker only combines gmsh with GPL-compatible code (this AGPL
-   project, the Python standard library, numpy/scipy/shapely/scikit-fem and
-   their OpenBLAS/GEOS builds). Enforced by tests/test_gmsh_isolation.py
+   space. The worker only combines gmsh with GPL-compatible code (this
+   project's Apache-2.0 code, the Python standard library,
+   numpy/scipy/shapely/scikit-fem and their OpenBLAS/GEOS builds). Enforced by tests/test_gmsh_isolation.py
    (fresh API process: `gmsh` never in `sys.modules`, no libgmsh mapped;
    worker: no MKL module or library mapped) and
    tests/test_gmsh_process_boundary.py (no `import gmsh` outside
@@ -127,11 +157,13 @@ are not distributed with the software and are not listed.
    Simplified Software License (ISSL, October 2022)**: binary
    redistribution and use permitted, with attribution and no reverse
    engineering, and — unlike the EULA below — **no SaaS or
-   reciprocal-open-source restriction at all**. They are proprietary, freely
-   redistributable, and not a "System Library" under GPL/AGPL section 1, so
-   they are not a default dependency and are never shipped in the default
-   container image; every solver falls back to SciPy's SuperLU when
-   pypardiso is absent. Operators may install the chain on their own
+   reciprocal-open-source restriction at all**. They are proprietary but freely
+   redistributable; under Apache-2.0 nothing forbids loading them next to
+   our code (no licence exception is needed). They are still OPTIONAL at
+   runtime: not a default dependency, never shipped in the default container
+   image, and every solver falls back to SciPy's SuperLU when pypardiso is
+   absent, so the distributed software is complete without them. They never
+   load into the gmsh worker (note 1). Operators may install the chain on their own
    machines (`requirements-pardiso.txt`, or `--build-arg WITH_PARDISO=1` for
    `deploy/Dockerfile.api`) for a several-times-faster transient solve.
 
@@ -171,7 +203,10 @@ are not distributed with the software and are not listed.
    LGPL-2.1 with the OCCT exception. Netgen is preferred over gmsh because
    LGPL, unlike GPL, imposes no condition on code that merely calls the
    library, which matters for running next to proprietary Intel MKL in the
-   same process. gmsh (note 1) remains selectable (`MOTOR_AI_SIM_GEO_CDT=gmsh`)
+   same process. Under Apache-2.0: Netgen is used unmodified through its
+   public Python API; its LGPL terms (the user's right to replace the
+   library, its source being available upstream) apply to Netgen only and do
+   not extend to our code. gmsh (note 1) remains selectable (`MOTOR_AI_SIM_GEO_CDT=gmsh`)
    but is not the default and always runs in its worker process. Netgen
    cannot run on the owner's Windows workstation (App Control blocks its
    DLLs); Windows development machines run the API and solves under WSL2 or

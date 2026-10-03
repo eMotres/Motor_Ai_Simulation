@@ -140,11 +140,12 @@ Stages, in order; we commit only to "next", not to dates.
 
 ## Licence
 
-**Licence: GNU AGPL-3.0-or-later. Contributions under the DCO.**
+**Licence: Apache License 2.0. Contributions under the DCO.**
 
-AGPL keeps every improvement open, including when the code is run as a network
-service. Contributors keep their copyright and license their work under the
-same terms, certified by the Developer Certificate of Origin.
+Anyone may use, change and redistribute the code, commercially or not; the
+licence asks only that the copyright notice, the NOTICE file and the licence
+travel with it. Contributors keep their copyright and license their work under
+the same terms, certified by the Developer Certificate of Origin.
 
 ## Contact
 

@@ -3,7 +3,7 @@
 # are proprietary (Intel Simplified Software License, ISSL -- permissive
 # binary redistribution, no SaaS/reciprocal-open-source clause; see
 # THIRD_PARTY_NOTICES.md note 2).  The code runs without it (SciPy SuperLU
-# fallback), so it is not a default dependency of this AGPL project.
+# fallback), so it is not a default dependency of this Apache-2.0 project.
 #
 # DO NOT `pip install -r requirements.txt -r requirements-pardiso.txt` as-is:
 # the `mkl` wheel's METADATA hard-requires `intel-openmp`, which pulls

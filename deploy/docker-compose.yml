@@ -77,9 +77,10 @@ services:
       dockerfile: deploy/Dockerfile.api
       target: api
       # OUR server builds WITH the two optional extras (#40, 2026-09-29) so its
-      # numbers stay identical to the pre-AGPL image: `triangle` stays the
-      # default mesher during the staged gmsh transition
-      # (docs/MESHER_TRANSITION.md) and pypardiso/Intel MKL keeps the fast
+      # numbers stay identical to the pre-AGPL image: `triangle` stays
+      # installed for MOTOR_AI_SIM_GEO_CDT=triangle cross-checks only (the
+      # default mesher is netgen since 2026-10-01: requirements.txt,
+      # docs/MESHER_TRANSITION.md) and pypardiso/Intel MKL keeps the fast
       # sparse solver.  The Dockerfile defaults stay 0 for the distributed
       # AGPL image; override here only with WITH_TRIANGLE=0 / WITH_PARDISO=0
       # in deploy/.env (e.g. for the S3 mesher comparison).

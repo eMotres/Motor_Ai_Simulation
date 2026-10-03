@@ -267,9 +267,11 @@ curl -s localhost:8080/api/me              # the real readiness probe
 ```
 
 The compose file builds the API with `WITH_TRIANGLE=1 WITH_PARDISO=1` (the two
-optional extras, see `THIRD_PARTY_NOTICES`), so the server keeps Triangle as the
-default mesher and MKL PARDISO as the sparse solver. Check after a build:
-`docker compose -f deploy/docker-compose.yml exec api python -c "import triangle, pypardiso"`.
+optional extras, see `THIRD_PARTY_NOTICES`), so the server keeps Triangle
+installed for `MOTOR_AI_SIM_GEO_CDT=triangle` cross-checks and MKL PARDISO as
+the sparse solver. The default mesher is Netgen (`netgen-mesher==6.2.2607` in
+`requirements.txt`, LGPL, no fallback to gmsh or Triangle). Check after a build:
+`docker compose -f deploy/docker-compose.yml exec api python -c "import netgen.occ, triangle, pypardiso"`.
 
 `WITH_PARDISO=1` never installs `intel-openmp` / `intel-cmplr-lib-ur` (2026-09-30
 — see `THIRD_PARTY_NOTICES.md` note 2): the image pins `mkl`/`onemkl-license`/

@@ -203,3 +203,30 @@ release for cross-checks; saved duties re-run once and the changes recorded.
 `geo_mesh_proto.py`, the `[triangle]` extra, `requirements-triangle.txt`, the
 `requires_triangle` tests and the Docker build argument; update
 THIRD_PARTY_NOTICES.md.
+
+**S4b — Netgen becomes the default (owner decision 2026-10-01), delivered
+together with the TDM default eddy method.**
+
+* `MOTOR_AI_SIM_GEO_CDT` defaults to `netgen` (`auto` = `netgen`). `gmsh` and
+  `triangle` stay selectable and are never a fallback. gmsh remains in the
+  process for the non-CDT meshing paths (OCC meshing, thermal, static 3-D,
+  mechanical); the CDT provenance reads its version from package metadata
+  instead of importing it. In-process gmsh next to MKL is not licence-clean
+  (GPL); the out-of-process variant is PR #94 and is NOT part of this change.
+* Fail closed: a Netgen load or meshing failure is a mesh reject
+  (`NetgenCDTError`, provenance in the message and on the exception). Nothing
+  retries on gmsh or Triangle.
+* `netgen-mesher==6.2.2607` is pinned in `requirements.txt` (and so in the API,
+  compute-worker and root images; each build proves `import netgen.occ`).
+  Never add `intel-openmp` / `intel-cmplr-lib-ur`; MKL runs with
+  `MKL_THREADING_LAYER=SEQUENTIAL`.
+* Windows development machines cannot load Netgen (App Control blocks its
+  DLLs): use WSL2, or `MOTOR_AI_SIM_GEO_CDT=triangle` explicitly. The load
+  failure message says so.
+* TDM needs a pole-pair-periodic rotor mesh. If the mesh path produced a
+  non-periodic rotor (whole-wedge fallback), a TDM solve raises
+  `TdmMeshNotPeriodic` (`code = "tdm_mesh_not_periodic"`) instead of marching.
+  `eddy_method="march"` stays available explicitly. `tests/test_mesh_periodicity.py`
+  checks the rotor-mesh periodicity of every installed backend on the 30 mm
+  fixture; `scripts/mesh_periodicity_check.py` does it with distances for
+  saved duties.

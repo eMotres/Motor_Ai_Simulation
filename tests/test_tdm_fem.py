@@ -7,10 +7,11 @@ point in both methods, and Coulomb torque works on its frames.  Real solves
 (the 12-step p2_eddy / p2_demag_eddy cases of the physics regression, a few
 seconds to a minute each).
 
-Environment: these solves need the geometry-driven mesher (``pip install -r
-requirements-triangle.txt`` and ``SB_GEO_MESH=1``).  On the gmsh path the 30 mm
-fixture's rotor mesh is not pole-pair periodic, TDM correctly refuses it and
-marches with a note, and the tests that expect TDM fail by design."""
+Environment: these solves need the geometry-driven mesher on a CDT backend
+whose rotor mesh is pole-pair periodic.  Netgen is the default backend
+(``netgen-mesher==6.2.2607``, Linux/WSL2); gmsh and Triangle are periodic too
+(tests/test_mesh_periodicity.py).  A non-periodic rotor mesh is a REFUSAL
+(``TdmMeshNotPeriodic``), never a silent march."""
 from __future__ import annotations
 
 from typing import Any, Dict

@@ -1554,18 +1554,20 @@ def _build_sliding_band_meshes(
         _trace_note("retaining sleeve: geometry-driven mesh instead of the iron template")
         _use_geo = True
     if _use_tpl and _use_geo:
-        # The geometry-driven mesher triangulates its PSLG with Triangle where
-        # the optional package is installed and with gmsh otherwise (or when
-        # MOTOR_AI_SIM_GEO_CDT=gmsh) — docs/MESHER_TRANSITION.md, stage S2.
+        # The geometry-driven mesher triangulates its PSLG with the CDT backend
+        # named by MOTOR_AI_SIM_GEO_CDT: netgen by default (owner 2026-10-01),
+        # gmsh or triangle only when selected explicitly; nothing falls back.
         # Every other step (skin layers, wire cells, tiling, tagging, budget)
-        # is shared, so both backends build the same kind of mesh.
+        # is shared, so all backends build the same kind of mesh.
         from motor_ai_sim.simulation.geo_mesh import cdt_backend, cdt_provenance
         _cdt = cdt_backend()
         if _cdt != "triangle":
             _pv = cdt_provenance()
-            log.info("geometry-driven mesh: gmsh CDT backend (gmsh %s)", _pv.get("gmsh"))
-            _trace_note("geometry-driven mesh on the gmsh CDT backend (gmsh %s%s)"
-                        % (_pv.get("gmsh"), "; " + _pv["note"] if _pv.get("note") else ""))
+            log.info("geometry-driven mesh: %s CDT backend (%s %s)", _cdt, _cdt,
+                     _pv.get(_cdt))
+            _trace_note("geometry-driven mesh on the %s CDT backend (%s %s%s)"
+                        % (_cdt, _cdt, _pv.get(_cdt),
+                           "; " + _pv["note"] if _pv.get("note") else ""))
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct
         # closed-360 OCC double-meshes → dead field).  No sector cuts exist

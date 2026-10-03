@@ -1330,12 +1330,15 @@ def _rotor_bulk_gate(A: Dict, cdt, area: float, regions, rotor_bridge: bool,
 
 
 # ── CDT backend selection ────────────────────────────────────────────────────
-# MOTOR_AI_SIM_GEO_CDT = auto (default) | triangle | gmsh | netgen.  auto = gmsh
-# since S4 (2026-09-30), also where the optional Triangle package is installed;
-# triangle and netgen (evaluated in docs/MESHER_NETGEN_2026-09-30.md) must be
-# selected explicitly.  `set_cdt_backend` overrides per process
-# (tests, the mesher comparison).  Every other step of the geometry mesher is
-# shared, so switching the backend changes ONLY the triangulation of the PSLG.
+# MOTOR_AI_SIM_GEO_CDT = auto (default) | netgen | gmsh | triangle.  auto =
+# netgen since the owner's decision of 2026-10-01 (LGPL, in-process next to
+# MKL/PARDISO; docs/MESHER_NETGEN_2026-09-30.md), also where gmsh or the
+# optional Triangle package is installed.  gmsh (GPL) and triangle
+# (non-commercial licence) stay selectable but NEVER default and are never a
+# fallback: a Netgen failure is a mesh reject.  `set_cdt_backend` overrides per
+# process (tests, the mesher comparison).  Every other step of the geometry
+# mesher is shared, so switching the backend changes ONLY the triangulation of
+# the PSLG.
 _CDT_OVERRIDE: Dict[str, Optional[str]] = {"v": None}
 CDT_BACKENDS = ("triangle", "gmsh", "netgen")
 
@@ -1370,7 +1373,8 @@ def _require_gmsh() -> str:
 
 
 def _require_netgen() -> str:
-    """Fail closed with an actionable message when netgen cannot be loaded."""
+    """Fail closed with an actionable message when netgen cannot be loaded.
+    Nothing falls back to gmsh or Triangle: the caller gets a mesh reject."""
     from motor_ai_sim.simulation.geo_mesh_netgen import NETGEN_VALIDATED
     try:
         import netgen  # noqa: F401
@@ -1378,10 +1382,14 @@ def _require_netgen() -> str:
         return str(getattr(netgen, "__version__", "?"))
     except Exception as e:  # noqa: BLE001 — ImportError, missing OCCT libs, ...
         raise RuntimeError(
-            "geometry-driven mesh needs netgen (the netgen CDT backend was "
-            "selected: MOTOR_AI_SIM_GEO_CDT={}) but netgen cannot be loaded: "
-            "{}: {}. Install it with `pip install netgen-mesher=={}`, or select "
-            "gmsh: MOTOR_AI_SIM_GEO_CDT=gmsh."
+            "geometry-driven mesh needs netgen (the default CDT backend since "
+            "2026-10-01; MOTOR_AI_SIM_GEO_CDT={}) but netgen cannot be loaded: "
+            "{}: {}. Install it with `pip install netgen-mesher=={}` (Linux). "
+            "On a Windows development machine netgen's DLLs are blocked by "
+            "App Control / WDAC: use WSL2, or select another backend "
+            "explicitly with MOTOR_AI_SIM_GEO_CDT=triangle (non-commercial "
+            "package) or MOTOR_AI_SIM_GEO_CDT=gmsh. No backend is chosen "
+            "automatically."
             .format(os.environ.get("MOTOR_AI_SIM_GEO_CDT", "auto"),
                     type(e).__name__, e, NETGEN_VALIDATED)) from e
 
@@ -1390,9 +1398,11 @@ def cdt_provenance() -> Dict[str, Optional[str]]:
     """Backend + library versions for the solve's provenance record."""
     be = cdt_backend()
     out: Dict[str, Optional[str]] = {"backend": be}
+    # versions are read from the package metadata: importing gmsh (GPL) just
+    # to print its version would load it into a process that runs Netgen + MKL
     try:
-        import gmsh
-        out["gmsh"] = str(gmsh.__version__)
+        from importlib.metadata import version as _pkg_version
+        out["gmsh"] = str(_pkg_version("gmsh"))
     except Exception:  # noqa: BLE001
         out["gmsh"] = None
     if HAVE_TRIANGLE:
@@ -1451,11 +1461,11 @@ def cdt_backend() -> str:
     if want != "auto":
         raise ValueError("MOTOR_AI_SIM_GEO_CDT must be auto, triangle, gmsh or "
                          "netgen, not %r" % want)
-    # S4 (owner 2026-09-30): gmsh is the default backend whether or not the
-    # optional Triangle package is installed; Triangle stays selectable with
-    # MOTOR_AI_SIM_GEO_CDT=triangle for cross-checks.
-    _require_gmsh()
-    return "gmsh"
+    # Owner 2026-10-01: netgen is the default backend whether or not gmsh or
+    # the optional Triangle package is installed; both stay selectable
+    # (MOTOR_AI_SIM_GEO_CDT=gmsh|triangle) and neither is a fallback.
+    _require_netgen()
+    return "netgen"
 
 
 def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,

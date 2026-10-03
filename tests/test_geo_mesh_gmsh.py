@@ -65,10 +65,20 @@ def test_backend_selection(monkeypatch):
     try:
         monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "gmsh")
         assert gm.cdt_backend() == "gmsh"
-        monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "auto")
-        assert gm.cdt_backend() == "gmsh"          # S4: gmsh even with triangle
-        monkeypatch.delenv("MOTOR_AI_SIM_GEO_CDT")
-        assert gm.cdt_backend() == "gmsh"
+        # owner 2026-10-01: the default is netgen; with netgen missing the
+        # default FAILS CLOSED (a RuntimeError), it never falls back to gmsh
+        for _unset in ("auto", None):
+            if _unset is None:
+                monkeypatch.delenv("MOTOR_AI_SIM_GEO_CDT")
+            else:
+                monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", _unset)
+            try:
+                import netgen.occ  # noqa: F401
+                assert gm.cdt_backend() == "netgen"
+            except ImportError:
+                with pytest.raises(RuntimeError, match="netgen"):
+                    gm.cdt_backend()
+        monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "gmsh")
         prov = gm.mesher_provenance("geo_cdt/gmsh")
         assert prov["build"] == "geo_cdt/gmsh" and prov["backend"] == "gmsh"
         assert prov["gmsh"] == gm.GMSH_VALIDATED or "note" in prov

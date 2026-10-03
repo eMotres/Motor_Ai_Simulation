@@ -74,7 +74,18 @@ _LOCK = threading.Lock()
 
 
 class NetgenCDTError(RuntimeError):
-    """The netgen backend could not triangulate the PSLG (loud, never silent)."""
+    """The netgen backend could not triangulate the PSLG (loud, never silent).
+
+    FAIL CLOSED (owner 2026-10-01, netgen is the default mesher): this is a
+    mesh REJECT.  Nothing retries on gmsh or Triangle.  ``provenance`` names
+    the backend and library version that rejected the mesh, and the same text
+    is appended to the message so it reaches the API error / optimizer log."""
+
+    def __init__(self, msg: str = "") -> None:
+        self.provenance = {"backend": "netgen", "netgen": netgen_version(),
+                           "validated": NETGEN_VALIDATED, "rejected": True}
+        super().__init__("%s [mesh rejected; backend=netgen %s]"
+                         % (msg, self.provenance["netgen"]))
 
 
 def _env_float(name: str, default: float) -> float:

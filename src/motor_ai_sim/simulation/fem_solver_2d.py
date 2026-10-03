@@ -3635,6 +3635,29 @@ def _select_voltage_settle_periods(source_periods, *, sinusoidal_voltage,
     return periods, "source_policy_unchanged"
 
 
+class TdmMeshNotPeriodic(RuntimeError):
+    """TDM was requested (it is the default eddy method) but the rotor mesh is
+    not pole-pair periodic, so there is no exact period map.  This is a mesh
+    reject, NOT a reason to march: a non-periodic rotor mesh means the mesher
+    fell back to the whole-wedge build (two unique seams) or the backend did
+    not honour the cell tiling, and silently marching would hide that the
+    mesh is wrong for the default solver.  Machine-readable: ``code`` is
+    ``"tdm_mesh_not_periodic"`` and ``detail`` the period-map diagnostics.  Ask
+    for ``eddy_method="march"`` explicitly to solve such a mesh."""
+
+    code = "tdm_mesh_not_periodic"
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(
+            "%s: eddy_method='tdm' needs a pole-pair-periodic rotor mesh but "
+            "this one is not (%s). The mesher fell back to a non-periodic "
+            "(whole-wedge) rotor or the CDT backend is not tiling the pole "
+            "cell; the solve is refused instead of silently marching. Select "
+            "eddy_method='march' explicitly to solve this mesh anyway."
+            % (self.code, detail))
+        self.detail = str(detail)
+
+
 class TdmAttemptFailed(RuntimeError):
     """A time-periodic (TDM) attempt that must not be reported: it failed at
     ``stage`` (set-up, static start, Newton, demag, re-solve, splice) or its
@@ -7597,9 +7620,7 @@ def _fem_transient_sliding_band_once(
                 _td_back, _mi_b = _td_map(1.0, -1.0)
                 _td_fwd, _mi_f = _td_map(1.0, +1.0)
                 if _td_back is None or _td_fwd is None:
-                    raise NotImplementedError(
-                        "eddy_method='tdm' refused: the rotor dofs are not pole-pair "
-                        "periodic (%s) — no exact period map" % (_mi_b,))
+                    raise TdmMeshNotPeriodic(str(_mi_b))
             _td_N = _td_Nh if _td_neg else _td_nspp
             log.info("TDM: %s period, %d frames (%s)",
                      "HALF (anti-periodic)" if _td_neg else "FULL", _td_N,
@@ -8129,6 +8150,8 @@ def _fem_transient_sliding_band_once(
             # (a Stop is a BaseException and is not caught here).  NOTHING is
             # repaired in place: this whole solve is abandoned and
             # fem_transient_sliding_band runs a clean march (transactional).
+            if isinstance(_e_tdm, TdmMeshNotPeriodic):
+                raise          # a mesh reject: loud, never a silent march
             if _tdm_info is not None:
                 _tdm_info["failed"] = "%s: %s" % (type(_e_tdm).__name__, _e_tdm)
                 _tdm_info.pop("t_report_start", None)

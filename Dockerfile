@@ -19,6 +19,9 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
+# netgen-mesher (requirements.txt) is the DEFAULT geometry mesher; fail the
+# build, not the first mesh, if its OCC bindings cannot load on this image.
+RUN python -c "import netgen, netgen.occ; print('netgen', netgen.__version__)"
 
 COPY src/    ./src/
 COPY config/ ./config/

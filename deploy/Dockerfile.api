@@ -50,6 +50,11 @@ RUN groupadd --gid 10001 motres \
 WORKDIR /app
 COPY requirements.txt requirements-pardiso.txt requirements-triangle.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# netgen-mesher==6.2.2607 (requirements.txt) is the DEFAULT geometry mesher
+# (owner 2026-10-01, fail-closed: no fallback).  Prove at build time that its
+# OCC bindings load on this base image, so a missing shared library fails the
+# build instead of every first mesh.
+RUN python -c "import netgen, netgen.occ; print('netgen', netgen.__version__)"
 
 # Optional proprietary accelerator (Intel MKL via pypardiso), OFF by default so
 # a distributed image contains only AGPL-compatible software.  Our own solve
@@ -97,8 +102,9 @@ RUN if [ "$WITH_PARDISO" = "1" ]; then \
 
 # Optional non-commercial `triangle` (geometry-driven mesher), OFF by default:
 # not part of the AGPL distribution.  Our own non-commercial server builds with
-# --build-arg WITH_TRIANGLE=1 during the gmsh transition so its numbers stay
-# identical (docs/MESHER_TRANSITION.md); without it the mesher uses gmsh.
+# --build-arg WITH_TRIANGLE=1 so MOTOR_AI_SIM_GEO_CDT=triangle stays available
+# for cross-checks (docs/MESHER_TRANSITION.md).  The DEFAULT mesher is netgen
+# (requirements.txt), with or without triangle.
 ARG WITH_TRIANGLE=0
 RUN if [ "$WITH_TRIANGLE" = "1" ]; then \
         pip install --no-cache-dir -r requirements-triangle.txt; fi

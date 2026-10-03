@@ -80,8 +80,15 @@ def test_backend_selection_and_provenance(monkeypatch):
         prov = gm.mesher_provenance("geo_cdt/netgen")
         assert prov["backend"] == "netgen"
         assert prov["netgen"] == gn.NETGEN_VALIDATED or "note" in prov
+        # owner 2026-10-01: netgen IS the default (auto and unset); gmsh and
+        # triangle are selectable, never a fallback
         monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "auto")
-        assert gm.cdt_backend() == "gmsh"          # netgen only when selected
+        assert gm.cdt_backend() == "netgen"
+        monkeypatch.delenv("MOTOR_AI_SIM_GEO_CDT")
+        assert gm.cdt_backend() == "netgen"
+        assert gm.mesher_provenance("geo_cdt/netgen")["backend"] == "netgen"
+        monkeypatch.setenv("MOTOR_AI_SIM_GEO_CDT", "gmsh")
+        assert gm.cdt_backend() == "gmsh"
     finally:
         gm.set_cdt_backend("netgen")
 
@@ -97,7 +104,9 @@ def test_missing_netgen_is_an_actionable_error(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake)
     with pytest.raises(RuntimeError, match="pip install netgen-mesher==") as ei:
         gm.cdt_backend()
-    assert "MOTOR_AI_SIM_GEO_CDT=gmsh" in str(ei.value)
+    msg = str(ei.value)
+    assert "MOTOR_AI_SIM_GEO_CDT=triangle" in msg and "WSL2" in msg
+    assert "No backend is chosen automatically" in msg
 
 
 # ── the contract on toy PSLGs ────────────────────────────────────────────────

@@ -3726,7 +3726,9 @@ def fem_transient_sliding_band(*args, **kwargs) -> dict:
     serve) runs once, as before.
     """
     import inspect as _insp
-    _sig = _insp.signature(_fem_transient_sliding_band_once)
+    # bound against the REAL solver signature (a test spy in its place takes
+    # the same keywords)
+    _sig = _insp.signature(_SB_ONCE_SIGNATURE_OF)
     kw = dict(_sig.bind_partial(*args, **kwargs).arguments)
     kw.pop("_tdm_ctl", None)
     attempts: List[Dict[str, Any]] = []
@@ -12723,6 +12725,10 @@ def _fem_transient_sliding_band_once(
                              [np.asarray(ts), np.asarray(tr)]).astype(int),
                          "nsn": int(nsn)} if _frames2 else None),
     }
+
+
+# the signature the transactional wrapper binds its arguments against
+_SB_ONCE_SIGNATURE_OF = _fem_transient_sliding_band_once
 
 
 def _public_sliding_band_signature():

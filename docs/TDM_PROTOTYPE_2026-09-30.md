@@ -909,7 +909,18 @@ bypassed in a test): the closure march rejects it on the SECOND half — shaft s
 1e-5 — and the one retry (full period, strict stop) is accepted, 4e-9 from the
 default run. This is the asymmetry §3.2 found, now caught by a hard gate.
 
-### 4.3 What a reviewer should still know
+### 4.3 Tests (server image, 2026-10-03)
+
+| set | result |
+|---|---|
+| fast: `test_time_periodic`, `test_tdm_default`, `test_csr_scatter`, `test_p2_nonlinear`, `test_p2_projection`, `test_tdm_entry_points -m "not slow"` | 85 passed |
+| `test_tdm_fem` (real solves, 30 mm fixture) | 24 passed (12 min 58 s) |
+| `test_tdm_entry_points -m slow` (real EM route, real optimizer path) | 2 passed |
+| march-pinned `test_demag`, `test_demag_reproducible`, `test_warm_seed` | 31 passed |
+
+Not run (as instructed): the full suite and the physics-regression pins (§3.9).
+
+### 4.4 What a reviewer should still know
 
 - The closure bounds the one-period defect. For a mode decaying as e^{−T/τ} the
   distance to the true orbit can be up to τ/T times larger; that concerns the
@@ -973,3 +984,8 @@ default run. This is the asymmetry §3.2 found, now caught by a hard gate.
   fixture's rotor mesh is not pole-pair periodic, TDM refuses it (setup stage) and
   marches with a note, as designed. No solver change and no tolerance change were
   needed; the test module header now says which environment it needs.
+- **2026-10-03 second Codex review (§4).** Fixes on 38fab6a (kept). Every run on the
+  server sandbox `/opt/motres/compute/tdm-fix-20261003` (image `motres-api:tdmfix`,
+  one container at a time under the shared run lock); one baseline bench had run on
+  the workstation before the owner's server-only rule and was repeated on the server.
+  Verification 142 passed (§4.3). Sandbox, containers and image removed at the end.

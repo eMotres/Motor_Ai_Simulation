@@ -273,7 +273,8 @@ def test_a_rejected_attempt_is_not_kept_alive_during_the_retry(monkeypatch):
     d = _run()
     assert d["eddy_method"] == "march"
     assert [a["stage"] for a in d["tdm"]["attempts"]] == ["report_gate", "report_gate"]
-    assert alive == [0, 0, 0], alive
+    # (the d-axis calibration's own solve may come first: >= 3 entries)
+    assert len(alive) >= 3 and not any(alive), alive
 
 
 def test_a_failed_factorization_is_marched_loudly(monkeypatch, march):
@@ -294,7 +295,7 @@ def test_a_failed_factorization_is_marched_loudly(monkeypatch, march):
 
 def _corrupt_bc_sign(monkeypatch):
     """Wrap period_map_checks so the map it is handed carries a wrong BC sign
-    on half the dofs the map moves (the inverse stays exact)."""
+    on every other dof the map moves."""
     import numpy as np
     real = TP.period_map_checks
 
@@ -321,8 +322,10 @@ def test_a_map_with_a_wrong_bc_sign_refuses_tdm_at_setup(monkeypatch, march):
     assert d["eddy_method_note"].startswith("march: TDM failed (setup:")
     assert "map fails its checks" in d["eddy_method_note"]
     mc = d["tdm"]["attempts"][0]["tdm"]["map_check"]
-    assert mc["ok"] is False and "inverse" not in mc["failed"]
-    assert set(mc["failed"]) & {"constrained", "operators", "bodies", "source"}
+    # measured: constrained 0.21, bodies inf (a body split), source 1.36,
+    # operators 0.015 — each far above its tolerance
+    assert mc["ok"] is False
+    assert {"constrained", "bodies", "source"} <= set(mc["failed"])
     _same_as(d, march)
 
 

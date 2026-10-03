@@ -171,6 +171,16 @@ def test_the_optimizer_result_path_solves_the_fixture_with_tdm_for_real(monkeypa
     sim_cfg = dict(cfg.get("simulation") or {})
     sim_cfg.update({"eddy": True, "demag": False, "drive": "current"})
     cfg["simulation"] = sim_cfg
+    # run_one merges the candidate over the active config's geometry: drop the
+    # sandbox machine's DERIVED keys (counts, radii, pitches) so the fixture's
+    # own segment form decides, and state its counts explicitly
+    cfg["geometry"] = {k: v for k, v in dict(cfg.get("geometry") or {}).items()
+                       if k not in ("angle_pole", "angle_slot", "num_poles",
+                                    "num_slots", "pole_pitch", "rotor_inner_radius",
+                                    "rotor_outer_radius", "slot_pitch", "slot_width",
+                                    "stator_inner_radius", "stator_outer_radius")}
+    geo = dict(geo, num_slots=int(geo["num_seg"] * geo["num_slots_per_segment"]),
+               num_poles=int(geo["num_seg"] * geo["num_poles_per_segment"]))
     monkeypatch.setattr(C, "get_config", lambda *a, **k: cfg)
     _cold()
     set_request_materials(over)

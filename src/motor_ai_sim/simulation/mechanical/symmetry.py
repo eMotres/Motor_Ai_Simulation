@@ -94,6 +94,21 @@ MATCH_TOL_M = 1e-9
 RAY_TOL_M = 1e-9
 RAY_TOL_MM = 1e-6
 
+#: A polygon station closer to a cut face than this (but not ON it), mm, is
+#: dropped from the clipped sector.  The polylines' FIXED angular grid lands
+#: wherever it lands relative to the cut, and on the G2-L40 the 256-gon
+#: station at 180 deg sits 0.23 um beside face A (the cut is at 179.99975 deg)
+#: — on face A only, never on its twin.  Anything inside the rotor mesher's
+#: fold-back tolerance (mesher._NEEDLE_TOL_MM) and OCC's boolean tolerance
+#: (rotor_stress: Geometry.ToleranceBoolean 1e-2 mm) is then treated
+#: differently on the two faces — the needle repair moved the face-A vertex
+#: 2.84e-6 mm (regression of 4f66471), and the fuzzy fragment merges the pair
+#: off the ray — so the two faces stop being exact rotated twins.  Dropping
+#: such a station is a purely geometric rule applied to every ring, so rings
+#: that share it (shaft OD / rotor bore) stay conforming; the face vertex
+#: itself never moves.  0.01 mm is far below any meshed feature.
+NEAR_FACE_MM = 0.01
+
 #: How far a turned magnet centroid may land from the original one and still
 #: count as "the same magnet", as a fraction of the CLOSEST spacing between two
 #: magnet centroids.  Measured on the G2-L40 catalog cross-section: turning its
@@ -367,7 +382,7 @@ def sector_polys(polys: dict, plan: SectorPlan) -> dict:
             if not polys_only:
                 return None
             r = polys_only[0] if len(polys_only) == 1 else MultiPolygon(polys_only)
-        return _snap_cut_faces(r, plan)
+        return _snap_cut_faces(_drop_near_face_stations(r, plan), plan)
 
     for name in ("shaft", "rotor", "sleeve"):
         out[name] = _clip(polys.get(name))
@@ -413,6 +428,41 @@ def _wedge(polys: dict, plan: SectorPlan):
         t = a0 + (a1 - a0) * i / k
         pts.append((big * math.cos(t), big * math.sin(t)))
     return Polygon(pts)
+
+
+def _drop_near_face_stations(geom, plan: SectorPlan,
+                             near_mm: float = NEAR_FACE_MM):
+    """Remove every vertex that lies within ``near_mm`` of either cut face
+    without lying ON it (see ``NEAR_FACE_MM``).  Vertices on a face and every
+    vertex further away are kept byte for byte; a geometry without such a
+    station is returned unchanged (the same object)."""
+    from shapely.geometry import MultiPolygon, Polygon
+
+    rays = [(math.cos(a), math.sin(a))
+            for a in (plan.cut_angle_rad, plan.cut_angle_b_rad)]
+
+    def _near(x, y):
+        for c, s in rays:
+            d = abs(x * s - y * c)
+            if RAY_TOL_MM <= d < near_mm and (x * c + y * s) > 0.0:
+                return True
+        return False
+
+    geoms = list(geom.geoms) if isinstance(geom, MultiPolygon) else [geom]
+    changed = False
+    out = []
+    for g in geoms:
+        rings = []
+        for ring in [g.exterior] + list(g.interiors):
+            pts = [tuple(map(float, p)) for p in list(ring.coords)[:-1]]
+            keep = [p for p in pts if not _near(*p)]
+            if len(keep) != len(pts):
+                changed = True
+            rings.append(keep if len(keep) >= 3 else pts)
+        out.append(Polygon(rings[0], rings[1:]))
+    if not changed:
+        return geom
+    return out[0] if len(out) == 1 else MultiPolygon(out)
 
 
 def _snap_cut_faces(geom, plan: SectorPlan):

@@ -15,19 +15,60 @@ at once.
 `mesher._build_sliding_band_meshes` with the saved-duty defaults
 (`iron_template=True`, `geo_mesh=True`):
 
-| `triangle` installed | Build |
-|---|---|
-| yes | geometry-driven CDT mesher (`geo_mesh_halves`), exactly as before |
-| no | gmsh build, one log line: "optional 'triangle' not installed — geometry-driven mesh unavailable, using the gmsh build" |
+| `triangle` installed | `MOTOR_AI_SIM_GEO_CDT` | Build |
+|---|---|---|
+| yes | `auto` (default) or `triangle` | geometry-driven mesher (`geo_mesh_halves`), Triangle CDT, exactly as before |
+| yes or no | `gmsh` | geometry-driven mesher, gmsh CDT backend (since S2) |
+| no | `auto` | geometry-driven mesher, gmsh CDT backend (since S2; S1 fell back to the plain gmsh build) |
+| yes or no | `netgen` | geometry-driven mesher, netgen CDT backend (evaluation, `geo_mesh_netgen.py`, optional extra `[netgen]`; docs/MESHER_NETGEN_2026-09-30.md) |
+
+Since S4 (`f4acc6a`) `auto` means gmsh also where Triangle is installed;
+Triangle and netgen are used only when selected.
 
 `geo_mesh=False` keeps the tensor iron template (`iron_template.py`, no
 Triangle). The 2-D view uses `mapbox-earcut`; its fallback
 (`earcut_fallback.py`) uses Triangle when installed, and otherwise shapely's
 (GEOS) constrained Delaunay.
 
-## Features only the Triangle mesher has (from the code)
+## S2 as built (2026-09-29): a gmsh backend for the geometry mesher
 
-These are what stage S2 must port or replace on the gmsh path:
+The whole geometry-driven mesher had exactly ONE Triangle call:
+`geo_mesh._triangulate(V, S, ...)`, the quality CDT of a planar straight-line
+graph that `geo_mesh.py` builds itself (resampled slip-grid arcs, 1 um snap,
+clone-identical cuts, densified outlines, skin/wire patches as holes).
+`geo_mesh_gmsh.triangulate_gmsh` replaces that one call. Every other step is
+shared code, so a feature exists on gmsh either because it is verified by a
+test on the gmsh backend (**tested**) or only because the code that implements
+it runs unchanged before/after the triangulation (**inferred**):
+
+| # | Feature | How it works on the gmsh backend | Evidence |
+|---|---|---|---|
+| 1 | Shaft skin layers | the same structured patch (`_skin_patch`) is a hole in the PSLG and stitched afterwards; its rim is domain boundary, never split | **tested**: planned rings present, first cell h1, growth 1.5 to the cap, no hanging node, identical rings on both backends (`test_shaft_skin_layers_structure`, `test_shaft_skin_patch_identical_on_both_backends`, the whole `test_conductor_skin_mesh.py` re-run on gmsh) |
+| 2 | Sleeve layers | NOT a structured patch on either backend: the ring is CDT-meshed to the target cell 0.433 (t/n)^2 of `n` layers (`_sleeve_layers`) | **tested**: mean cell edge <= 1.25 t/n, refines with n, CAD section kept (`test_sleeve_resolution_follows_the_layer_request`); loss convergence: server study in MESHER_COMPARISON |
+| 3 | Per-part sizes | the same region seeds; each face is capped by a `Constant` field at its region's target edge (last seed in a face wins, the `_seeds` order) | **tested** (`test_per_part_size_acts_on_gmsh`) |
+| 4 | Wire cell `coil_rel` | the same structured wire patches / lattice (lattice points are embedded) | **tested** (`test_wire_cell_factor_acts_on_gmsh`) |
+| 5 | Sliver / cusp guards | `_blunt_cusps` before either backend; gmsh has no refinement cascade; frozen-boundary-aware sizing; a rotor bulk over the aspect gate gets the same guarded smoothing | **tested** (`test_cusp_guard_on_the_gmsh_path`, `test_thin_pocket_is_not_a_sliver`); campaign quality distribution in MESHER_COMPARISON |
+| 6 | Rotation invariance / hashes | the same cell tiling; domain-boundary segments frozen (transfinite, 2 nodes) so cuts stay clone-identical; one gmsh thread | **tested**: every cell maps onto the next (`test_every_cell_is_the_same_mesh`); repeat build bit-identical in ONE environment (`test_repeat_build_is_bit_identical`); cross-version = semantic fingerprint (`test_semantic_fingerprint`), not bitwise |
+| 7 | Exact tagging | the same `_tag_stator` / `_tag_rotor` | **tested**: CAD sections kept, same per-tag areas as Triangle |
+| 8 | Moving-band rings | R1/R2 frozen on the slip grid; band rings pinned in `_symmetrize_cuts` (the fix for 1002/1008 seam nodes, which affected both backends) | **tested** on forced Triangle and gmsh, full ring and sector (`test_moving_band_rings`); macro solve `test_moving_band_macro_solve` (slow, server) |
+| 9 | Mesh budget | preflight: faces' area at their target size > 2x budget rejects before gmsh runs; the built count is checked after | **tested** (`test_mesh_budget_on_gmsh`, `test_budget_preflight_rejects_before_meshing`) |
+| 10 | Fail closed | an unloadable gmsh raises with the install command and the Triangle alternative; a meshing failure raises `GmshCDTError` after finalizing gmsh and releasing the lock; no path retries with another mesher | **tested** (`test_gmsh_failure_is_loud_and_cleans_up`, `test_tile_does_not_fall_back_on_a_gmsh_failure`, `test_missing_gmsh_is_an_actionable_error`) |
+
+Sizing on gmsh follows the physical scales the PSLG producer resolved: every
+input segment carries h = min(its length, 2.5 x its local feature size); a
+frozen (boundary) segment's size is its length, and an interface facing a
+frozen segment across a thin feature is not cut finer than that segment. The
+segments are grouped in x1.5 classes, each a `Distance` field feeding
+h0 + 2.0 x distance (`MathEval`); the background mesh is the `Min` of those and
+the region caps. Provenance: every gmsh-backend solve notes the gmsh version
+(`geo_mesh.cdt_provenance`, validated release `GMSH_VALIDATED` = 4.15.2, the
+`requirements.txt` pin).
+## Historical: the S1 gap list (superseded)
+
+Written at S1, BEFORE the gmsh backend existed. The statements below that say
+gmsh lacks a feature ("gmsh has no wire grid", "no equivalent fence", "the
+shaft wall is meshed without it") describe the plain gmsh build that S1 fell
+back to, not the S2 backend; the current state is the table above.
 
 1. **Shaft skin-depth layers** (`_shaft_skin_plan`, `_skin_patch`,
    `_stitch_skin_patch`, `_iron_grade_points`; sized by
@@ -87,26 +128,72 @@ the same geometry.
 
 **S3 — server comparison.** `scripts/compare_mesher_triangle_vs_gmsh.py` on
 L155 motor rated 1x9 mm, L180 gen rated 1x9 mm and L13 rated (loaded and
-no-load), sandboxed, `nice 19`, threads <= 6; usage in its docstring. Proposed
-acceptance criteria (gmsh vs Triangle, same duty and settings) — **for the
-owner to decide**:
+no-load), plus the optimizer-style campaign `scripts/mesher_campaign.py`;
+sandboxed, `nice 19`, threads <= 6. Results and evidence:
+`docs/MESHER_COMPARISON_2026-09-29.md`.
 
-| Quantity | Proposed limit |
-|---|---|
-| Mean torque (energy method) | <= 0.3 % |
-| No-load EMF fundamental | <= 0.3 % |
-| Torque ripple | <= 0.5 percentage points |
-| Cogging torque peak-to-peak | <= 10 % |
-| Copper and iron loss | <= 2 % each |
-| Magnet eddy loss | <= 3 % |
-| Shaft eddy loss | <= 5 % |
-| Sleeve eddy loss (where present) | <= 5 % |
-| Total loss | <= 2 % |
-| Repeat build | bit-identical mesh hash |
+### Acceptance rules (gmsh vs Triangle, same duty and settings)
 
-A case outside a limit sends the relevant feature back to S2 (a mesh
-convergence check on both meshers first, to separate a mesher bias from a
-discretisation error).
+Conditions under which the rules are stated: gmsh 4.15.2 (single thread),
+triangle 20250106, scikit-fem 12.0.1, pypardiso 0.4.7, solver threads 6,
+P2 merged structured belt, nonlinear residual <= 1e-7, eddy warm-up
+tolerance 2 % per period, the duty's own settings (steps, demag, magnet
+temperature, mesh block).
+
+**Field and loss quantities.** A quantity passes when
+|gmsh - Triangle| <= max(relative limit x |Triangle|, absolute floor).
+The floors keep near-zero quantities from failing on noise:
+
+| Quantity | Relative limit | Absolute floor |
+|---|---|---|
+| Mean torque (energy method) | 0.3 % | 0.05 % of the duty's rated torque |
+| No-load EMF fundamental | 0.3 % | 0.1 % of the rated phase voltage |
+| Torque ripple | 0.5 percentage points | — |
+| Cogging torque peak-to-peak | 10 % | 0.1 % of the rated torque |
+| Copper loss, iron loss (each) | 2 % | 0.1 % of the total loss |
+| Magnet eddy loss | 3 % | 0.1 % of the total loss |
+| Shaft eddy loss, sleeve eddy loss | 5 % | 0.1 % of the total loss |
+| Total loss | 2 % | — |
+| Electrical input power | 0.3 % | — |
+
+**Solver balance.** The field power-balance residual
+(`power_balance.residual_rel`) of the two meshers differs by <= 0.1
+percentage points of the input power. The residual itself (-2 to -4 % on
+these duties, post-processed iron loss sits outside the field balance) is a
+solver property and is not judged here.
+
+**Convergence of the reference.** A failed quantity is re-checked on a finer
+mesh on both meshers before a verdict. The mesh-size knob of the geometry
+mesher floors the cell area at 0.12 mm^2 (0.53 mm edge) and does not refine
+the slip grid, so levels are not geometric and Richardson extrapolation is
+not applied. The finest attainable level is the reference.
+
+**Mesh quality (per half, gmsh backend).** Minimum angle >= 1.5 degrees;
+aspect ratio (longest edge / (2 sqrt 3 inradius)) p99.9 <= 30. Campaign
+worst: 2.05 degrees, 22.7.
+
+**Resources.** Median over the runs: solve wall <= 1.25x Triangle and peak
+RSS <= 1.35x Triangle; any single run <= 2x on both, and <= 2 GB RSS.
+
+**Reproducibility.** In one environment (same gmsh build, one gmsh thread):
+the mesh is bit-identical (`test_repeat_build_is_bit_identical`), and a solve
+on an identical mesh repeats to <= 1e-4 relative (measured 5e-12 to 7.8e-5:
+the eddy warm-up with extensions is the source). Across gmsh releases or
+platforms bit identity is NOT required. Compatibility is the semantic
+fingerprint (`test_semantic_fingerprint`): triangle counts within 5 %,
+gap-ring node counts exact, every tag's area within 0.1 %, quality no worse
+than 1.3x the gmsh 4.15.2 reference. A solve records the gmsh version in its
+mesh-build notes (`geo_mesh.cdt_provenance`); production pins gmsh in
+`requirements.txt`.
+
+**Fail closed.** A selected backend that cannot load raises with the install
+command and the Triangle alternative. A gmsh meshing failure raises
+`GmshCDTError` after finalizing gmsh and releasing the process lock. The
+budget preflight rejects a cross-section before gmsh runs, and the built
+count is checked after. No path answers a gmsh failure with a different
+mesher (not the whole-wedge build, not the plain gmsh build). Operators see
+the error in the solve response and the log; the remedy is to fix the
+geometry or, where licensed, select Triangle explicitly.
 
 **S4 — switch the default to gmsh.** After S3 passes: a geo-mesh request goes
 to gmsh even with `triangle` installed; Triangle remains selectable for one
@@ -116,3 +203,50 @@ release for cross-checks; saved duties re-run once and the changes recorded.
 `geo_mesh_proto.py`, the `[triangle]` extra, `requirements-triangle.txt`, the
 `requires_triangle` tests and the Docker build argument; update
 THIRD_PARTY_NOTICES.md.
+
+**S4b — Netgen becomes the default (owner decision 2026-10-01), delivered
+together with the TDM default eddy method.**
+
+* `MOTOR_AI_SIM_GEO_CDT` defaults to `netgen` (`auto` = `netgen`). `gmsh` and
+  `triangle` stay selectable and are never a fallback. gmsh remains in the
+  process for the non-CDT meshing paths (OCC meshing, thermal, static 3-D,
+  mechanical); the CDT provenance reads its version from package metadata
+  instead of importing it. In-process gmsh next to MKL is not licence-clean
+  (GPL); the out-of-process variant is PR #94 and is NOT part of this change.
+* Fail closed: a Netgen load or meshing failure is a mesh reject
+  (`NetgenCDTError`, provenance in the message and on the exception). Nothing
+  retries on gmsh or Triangle.
+* `netgen-mesher==6.2.2607` is pinned in `requirements.txt` (and so in the API,
+  compute-worker and root images; each build proves `import netgen.occ`).
+  Never add `intel-openmp` / `intel-cmplr-lib-ur`; MKL runs with
+  `MKL_THREADING_LAYER=SEQUENTIAL`.
+* Windows development machines cannot load Netgen (App Control blocks its
+  DLLs): use WSL2, or `MOTOR_AI_SIM_GEO_CDT=triangle` explicitly. The load
+  failure message says so.
+* TDM needs a pole-pair-periodic rotor mesh. If the mesh path produced a
+  non-periodic rotor (whole-wedge fallback), a TDM solve raises
+  `TdmMeshNotPeriodic` (`code = "tdm_mesh_not_periodic"`) instead of marching.
+  `eddy_method="march"` stays available explicitly. `tests/test_mesh_periodicity.py`
+  checks the rotor-mesh periodicity of every installed backend on the 30 mm
+  fixture; `scripts/mesh_periodicity_check.py` does it with distances for
+  saved duties.
+
+**S5 — Triangle removed, gmsh out of process (owner decisions 2026-10-03).**
+
+* Triangle is gone: the CDT backend branch in `geo_mesh._triangulate`, the
+  Steiner-cap truncation test that only Triangle needed, `geo_mesh_proto.py`,
+  `requirements-triangle.txt`, the `[triangle]` extra, the `requires_triangle`
+  marker, the `WITH_TRIANGLE` build argument and the Triangle path of the
+  earcut fallback (now shapely/GEOS only). `MOTOR_AI_SIM_GEO_CDT=triangle` is
+  a clear error. The image build fails if `triangle` is installed. Comments
+  in `geo_mesh.py` that describe Triangle are kept: they record why the PSLG
+  is built the way it is, and the rules apply to Netgen and gmsh alike.
+* gmsh runs only in the gmsh worker process (`gmsh_worker.py` /
+  `gmsh_worker_main.py`, from PR #94, extended): the 2-D OCC mesher, the gmsh
+  CDT backend, the mechanical modal / rotor-stress meshes, the static 3-D
+  meshes and the gmsh version check all call `*_impl` bodies in the worker.
+  The worker refuses MKL/pypardiso imports, replays the mesher's build trace
+  (fallback events, notes) into the caller, runs each call under the caller's
+  current environment, re-raises the in-process exception type
+  (`GmshCDTError`, `MeshBudgetExceeded`, ...), and keeps gmsh's terminal
+  output off the frame pipe. See docs/GMSH_OUT_OF_PROCESS_2026-09-30.md.

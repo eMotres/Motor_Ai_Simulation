@@ -46,6 +46,13 @@ _ROOT = Path(__file__).resolve().parents[1]
 # ---------------------------------------------------------------------------
 
 def _two_ring_mesh(ri: float, rc: float, ro: float, h: float):
+    """Built in the gmsh worker process (gmsh is GPL and never loads in a
+    process that may load MKL; owner 2026-10-03)."""
+    from motor_ai_sim.simulation import gmsh_worker
+    return gmsh_worker.call("tests.test_mechanical_contact:_two_ring_mesh_impl", args=(ri, rc, ro, h,))
+
+
+def _two_ring_mesh_impl(ri: float, rc: float, ro: float, h: float):
     """Conforming annulus-in-annulus mesh in METRES, tagged (inner, outer).
 
     The two rings are fragmented so the interface circle is a real edge chain

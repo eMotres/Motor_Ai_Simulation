@@ -48,8 +48,13 @@ RUN groupadd --gid 10001 motres \
  && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin motres
 
 WORKDIR /app
-COPY requirements.txt requirements-pardiso.txt requirements-triangle.txt ./
+COPY requirements.txt requirements-pardiso.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# netgen-mesher==6.2.2607 (requirements.txt) is the DEFAULT geometry mesher
+# (owner 2026-10-01, fail-closed: no fallback).  Prove at build time that its
+# OCC bindings load on this base image, so a missing shared library fails the
+# build instead of every first mesh.
+RUN python -c "import netgen, netgen.occ; print('netgen', netgen.__version__)"
 
 # Optional proprietary accelerator (Intel MKL via pypardiso), OFF by default so
 # a distributed image contains only AGPL-compatible software.  Our own solve
@@ -95,13 +100,12 @@ RUN if [ "$WITH_PARDISO" = "1" ]; then \
         && pip install --no-cache-dir --no-deps pypardiso==0.4.7; \
     fi
 
-# Optional non-commercial `triangle` (geometry-driven mesher), OFF by default:
-# not part of the AGPL distribution.  Our own non-commercial server builds with
-# --build-arg WITH_TRIANGLE=1 during the gmsh transition so its numbers stay
-# identical (docs/MESHER_TRANSITION.md); without it the mesher uses gmsh.
-ARG WITH_TRIANGLE=0
-RUN if [ "$WITH_TRIANGLE" = "1" ]; then \
-        pip install --no-cache-dir -r requirements-triangle.txt; fi
+# Triangle (non-commercial licence) was removed on 2026-10-03: the build fails
+# if anything pulls it back in.  gmsh (GPL) is installed but runs only in the
+# separate gmsh worker process (motor_ai_sim.simulation.gmsh_worker_main).
+RUN if pip show triangle >/dev/null 2>&1; then \
+        echo "BUILD GUARD FAILED: the non-commercial 'triangle' package is installed" >&2; \
+        exit 1; fi
 
 # ── build guard: intel-openmp / intel-cmplr-lib-ur / libiomp5.so must never
 # be in this image (2026-09-30) ─────────────────────────────────────────────

@@ -384,7 +384,9 @@ def test_solver_entry_points_default_to_coulomb():
     from motor_ai_sim.simulation import fem_solver_2d as fs
     for fn in (fs.fem_transient_sliding_band, fs.em_transient_eval):
         assert inspect.signature(fn).parameters["torque_method"].default is None
-    src = inspect.getsource(fs.fem_transient_sliding_band)
+    # the body lives in _fem_transient_sliding_band_once (the public name is the
+    # transactional TDM wrapper since 2026-09-30)
+    src = inspect.getsource(fs._fem_transient_sliding_band_once)
     assert "_resolve_torque_method(torque_method, sim)" in src
 
 

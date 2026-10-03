@@ -1135,6 +1135,10 @@ async def build_fem_mesh_2d_sliding_band(
         log.exception("sliding-band mesh build failed")
         raise HTTPException(status_code=500, detail=f"sliding-band mesh failed: {e}")
 
+    from motor_ai_sim.simulation.mesher import build_trace as _bt_mesh
+    from motor_ai_sim.simulation.geo_mesh import mesher_provenance as _mp_mesh
+    _mesher_prov = _mp_mesh(_bt_mesh().get("mesher"))
+
     # Concatenate into one renderer payload — rotor triangles get their
     # node indices offset by n_stator_nodes, and we re-map per-cell domain
     # ids to the visualisation palette (DOM_MAG_N / S, DOM_COIL).
@@ -1182,6 +1186,8 @@ async def build_fem_mesh_2d_sliding_band(
         "n_rotor_tris":      int(mesh_r.t.shape[1]),
         "n_vertices":        len(verts),
         "n_triangles":       len(tris),
+        # which mesher built this view + CDT backend / gmsh version
+        "mesher": _mesher_prov,
         # Honest mesh sizing: what the slider requested vs what was actually
         # meshed (iron is capped to the feature/4 quality floor).
         "mesh_size_mm":            float(mesh_size_mm),
@@ -8090,6 +8096,18 @@ def _build_transient_summary(
                          else bool(sbres["eddy_settled"])),
         "eddy_capped": (None if sbres.get("eddy_capped") is None
                         else bool(sbres["eddy_capped"])),
+        # HOW the eddy steady state was reached (2026-09-30: "tdm" by default,
+        # "march" when asked, when TDM cannot serve the run or when a TDM
+        # attempt was rejected — `eddy_method_note` says which, in one line),
+        # and whether the reported window is a steady state at all: Br still
+        # moving in it (demag_settled False) makes it a demag transient.
+        "eddy_method": sbres.get("eddy_method"),
+        "eddy_method_requested": sbres.get("eddy_method_requested"),
+        "eddy_method_note": sbres.get("eddy_method_note"),
+        "demag_settled": (None if sbres.get("demag_settled") is None
+                          else bool(sbres["demag_settled"])),
+        "steady_state": (None if sbres.get("steady_state") is None
+                         else bool(sbres["steady_state"])),
         "eddy_settle_residual": sbres.get("eddy_settle_residual"),
         "eddy_settle_tol": sbres.get("eddy_settle_tol"),
         # settled with the warm-up prefix moved by accelerator jumps (2026-09-27)

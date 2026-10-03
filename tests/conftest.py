@@ -166,20 +166,3 @@ def _clear_run_history():
         pass
     yield
 
-
-# ── optional `triangle` (non-commercial licence, pip extra [triangle]) ──────
-# Tests that drive Triangle directly carry @pytest.mark.requires_triangle and
-# are skipped when it is not installed; everything else must pass without it
-# (the mesher falls back to gmsh, the 2-D view to mapbox-earcut).
-import importlib.util as _ilu                             # noqa: E402
-
-_HAVE_TRIANGLE = _ilu.find_spec("triangle") is not None
-
-
-def pytest_collection_modifyitems(config, items):
-    if _HAVE_TRIANGLE:
-        return
-    _skip = pytest.mark.skip(reason="optional 'triangle' not installed")
-    for item in items:
-        if "requires_triangle" in item.keywords:
-            item.add_marker(_skip)

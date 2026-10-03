@@ -9,7 +9,17 @@ numpy==2.4.4
 scipy==1.17.1
 shapely==2.1.2
 scikit-fem==12.0.1
+# gmsh (GPL-2.0-or-later) runs ONLY in the separate gmsh worker process
+# (motor_ai_sim.simulation.gmsh_worker_main, owner 2026-10-03): it is never
+# imported by the API / compute process, which may load Intel MKL.
 gmsh==4.15.2
+# netgen-mesher: the DEFAULT triangulator of the geometry-driven mesher (owner
+# 2026-10-01, MOTOR_AI_SIM_GEO_CDT, default netgen; fail-closed, no fallback).
+# LGPL-2.1, used in-process; pinned to the release validated in
+# docs/MESHER_NETGEN_2026-09-30.md.  Linux wheel (cp311 manylinux); on a
+# Windows workstation App Control blocks its DLLs: run under WSL2 or on the
+# server.  Never add intel-openmp / intel-cmplr-lib-ur.
+netgen-mesher==6.2.2607
 cadquery==2.7.0
 cadquery-ocp==7.8.1.1.post1
 matplotlib==3.10.8
@@ -43,11 +53,8 @@ psutil>=5.9  # worker pinning / CPU accounting (optimization pool, static3d); al
 # 2026-09-15) — the exact set every report in reports/ was rendered with.
 reportlab==5.0.0  # report.py PDF backend; GET /api/family/report/...?format=pdf 500s without it
 python-docx==1.2.0  # report_docx.py — the DEFAULT report format since 2026-09-09 (routes/report.py)
-# `triangle` is an OPTIONAL extra, not installed by default (2026-09-29): its
-# licence forbids commercial use, so it is not part of the AGPL distribution.
-# pip install -r requirements-triangle.txt (or ".[triangle]") restores the
-# geometry-driven mesher, which is then the default as before; without it the
-# mesher uses gmsh.  Transition plan: docs/MESHER_TRANSITION.md.
+# `triangle` (non-commercial licence) was REMOVED on 2026-10-03; it must never
+# be installed (the image build guard fails on it).  docs/MESHER_TRANSITION.md.
 # The FOURTH unpinned report dependency, found on the server at Stage 7:
 # datasheet.py imports openpyxl, so GET /api/family/datasheet/...?format=xlsx
 # answered 500 "datasheet build failed: No module named 'openpyxl'" on the

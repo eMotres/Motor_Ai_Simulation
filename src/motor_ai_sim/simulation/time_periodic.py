@@ -916,7 +916,7 @@ class TimePeriodicEddy:
         out[nc + c["pos"]] += v
         return out
 
-    # ── certification: the period map's contraction and the orbit error ──
+    # ── the orbit-error ESTIMATE: the period map's contraction and the error ──
     # (third Codex review, 2026-10-04, finding 1).  The closure march measures
     # the one-period DEFECT d = Phi(a) - a of the orbit a.  The distance to the
     # true periodic orbit a* is e = a* - a with (I - T) e = d to first order
@@ -971,6 +971,7 @@ class TimePeriodicEddy:
         Hh = np.zeros((m + 1, m))
         V[0] = v / float(np.linalg.norm(v))
         k_end = m
+        top: List[float] = []
         for j in range(m):
             w = self.period_map(V[j])
             for _rep in range(2):
@@ -979,14 +980,23 @@ class TimePeriodicEddy:
                     Hh[i, j] += h
                     w = w - h * V[i]
             Hh[j + 1, j] = float(np.linalg.norm(w))
+            top.append(float(np.max(np.abs(np.linalg.eigvals(Hh[:j + 1, :j + 1])))))
             if Hh[j + 1, j] <= 1e-14 * max(abs(Hh[j, j]), 1e-300):
                 k_end = j + 1
                 break
             V[j + 1] = w / Hh[j + 1, j]
         ritz = np.linalg.eigvals(Hh[:k_end, :k_end])
         mags = np.sort(np.abs(ritz))[::-1]
-        return {"rho": float(mags[0]) if mags.size else 0.0,
+        rho = float(mags[0]) if mags.size else 0.0
+        # converged: the top Ritz value stopped moving over the last step (an
+        # invariant subspace found early is converged by construction)
+        chg = (abs(top[-1] - top[-2]) / max(abs(top[-1]), 1e-300)
+               if len(top) >= 2 else float("inf"))
+        conv = bool(k_end < m or chg <= RITZ_CONVERGED_RTOL)
+        return {"rho": rho,
                 "ritz_top": [float("%.6g" % x) for x in mags[:6]],
+                "ritz_history": [float("%.6g" % x) for x in top],
+                "ritz_last_change": float(chg), "ritz_converged": conv,
                 "arnoldi_steps": int(k_end)}
 
     def orbit_error(self, d: np.ndarray, rtol: float = 1e-8,
@@ -1237,6 +1247,18 @@ def demag_march(ks: Sequence[int], hist: Tuple[np.ndarray, np.ndarray],
     return {"frames": len(list(ks)), "solves": passes, "ratchet_trips": trips}
 
 
+def demag_window_frames(n_steps: int, fraction: Any = "1/6") -> int:
+    """Frames of the demag shortcut's window: ``fraction`` of the period
+    (a float or an exact "p/q"), rounded UP but exact where it divides —
+    6 for 1/6 of 36 (the earlier ceil(0.1666667 * 36) gave 7) — at least 2."""
+    if isinstance(fraction, str) and "/" in fraction:
+        _n, _d = fraction.split("/", 1)
+        frac = float(_n) / float(_d)
+    else:
+        frac = float(fraction)
+    return max(2, int(math.ceil(frac * int(n_steps) - 1e-9)))
+
+
 def predicted_demag(mags: Sequence[Dict[str, Any]], Bx: np.ndarray,
                     By: np.ndarray, br: np.ndarray, area: np.ndarray,
                     MU0: float) -> np.ndarray:
@@ -1363,36 +1385,52 @@ def window_gate(ref: Dict[str, Any], got: Dict[str, Any], *,
                         "P_floor_rel": P_floor_rel}}
 
 
-#: Certification safety fraction (third Codex review, 2026-10-04): a TDM result
-#: is certified steady only when its BOUNDED error in mean torque, ripple and
-#: TOTAL loss is below this fraction of the owner's limits (torque 1 %, ripple
-#: max(0.5 pp, 10 % of the ripple), total loss 5 %).
-CERT_SAFETY = 0.1
+#: Safety fraction of the ORBIT-ERROR ESTIMATE (third / fourth Codex reviews,
+#: 2026-10-04): a TDM result is accepted only when its ESTIMATED error in mean
+#: torque, ripple and TOTAL loss is below this fraction of the owner's limits
+#: (torque 1 %, ripple max(0.5 pp, 10 % of the ripple), total loss 5 %).  It is
+#: a FIRST-ORDER ESTIMATE with an empirical safeguard (the contraction observed
+#: on the closure march), not a proof: the owner stopped the proof loop at this
+#: level of rigour (2026-10-04).
+ESTIMATE_SAFETY = 0.1
+#: The empirical safeguard: when the Arnoldi estimate of the period map's
+#: dominant eigenvalue has not converged, or the effective contraction is at
+#: least this, further closure periods are marched to OBSERVE the decay ...
+RHO_SAFEGUARD = 0.98
+#: ... at most this many.  If the decay is still not resolved the attempt is
+#: rejected (one strict retry, then a march with a note).
+EXTRA_CLOSURE_MAX = 4
+#: The safeguard stops marching closure periods once the march's deviation
+#: from the orbit moves by less than this fraction of the orbit state in a
+#: period (nothing left to observe).
+SAFEGUARD_STOP_REL = 1e-6
+#: Arnoldi's top Ritz value counts as converged when its last change is below
+#: this fraction of itself.
+RITZ_CONVERGED_RTOL = 1e-3
 
 
-def owner_limits(ripple_pct: float, safety: float = CERT_SAFETY) -> Dict[str, float]:
+def owner_limits(ripple_pct: float, safety: float = ESTIMATE_SAFETY) -> Dict[str, float]:
     """The owner's accuracy terms times ``safety``."""
     return {"T_rel": safety * 0.01,
             "ripple_pp": safety * max(0.5, 0.1 * abs(float(ripple_pct))),
             "P_total_rel": safety * 0.05, "safety": float(safety)}
 
 
-def certify_observables(cert: Dict[str, Any], *, P_fe_W: float, P_total_W: float,
-                        report_windows: Optional[Dict[str, Any]] = None,
-                        safety: float = CERT_SAFETY) -> Tuple[bool, Dict[str, Any]]:
-    """The certification verdict of a TDM orbit.
+def estimate_check(est: Dict[str, Any], *, P_total_W: float,
+                   report_windows: Optional[Dict[str, Any]] = None,
+                   safety: float = ESTIMATE_SAFETY) -> Tuple[bool, Dict[str, Any]]:
+    """Is the ESTIMATED orbit error (a first-order estimate, not a bound)
+    below ``safety`` x the owner's terms?
 
-    ``cert`` carries the orbit-error BOUND already mapped to the observables
-    (the perturbation applied at the bound's size, see the solver):
-    ``dT_rel``, ``dripple_pp``, ``dP_cond_W`` (conductor loss, every group),
-    ``rB`` (relative change of the iron flux density, area-weighted L2, worst
-    frame) and the orbit's ``ripple_pct``.  The iron loss moves by at most
-    2·rB·P_fe to first order (P_fe ~ B^2 for the eddy and excess terms, below
-    for hysteresis).  The reported period's own deviation from the orbit (the
-    report gate's windows) is ADDED: the reported numbers are the orbit plus
-    that deviation.  Certified when each total is below ``safety`` x the
-    owner's term; a missing or non-finite bound is not certified."""
-    lim = owner_limits(float(cert.get("ripple_pct") or 0.0), safety)
+    ``est`` carries the estimate already mapped to the observables (the
+    perturbation applied at the estimate's size, see the solver): ``dT_rel``,
+    ``dripple_pp``, ``dP_cond_W`` (conductor loss, every group), ``dP_fe_W``
+    (the iron loss computed DIRECTLY with the report's iron-loss functional on
+    the perturbed orbit and on the closure-march period, against the orbit)
+    and the orbit's ``ripple_pct``.  The reported period's own deviation from
+    the orbit (the report gate's windows) is ADDED.  A missing or non-finite
+    number is not accepted."""
+    lim = owner_limits(float(est.get("ripple_pct") or 0.0), safety)
     rec: Dict[str, Any] = {"limits": lim}
     try:
         gT = gR = gP = 0.0
@@ -1400,17 +1438,16 @@ def certify_observables(cert: Dict[str, Any], *, P_fe_W: float, P_total_W: float
             gT = max(gT, float(w["T_mean_rel"]))
             gR = max(gR, float(w["ripple_pp"]))
             gP = max(gP, sum(float(v["abs_W_per_m"]) for v in w["P"].values()))
-        bT = float(cert["dT_rel"]) + gT
-        bR = float(cert["dripple_pp"]) + gR
-        dP = (float(cert["dP_cond_W"]) + 2.0 * float(cert["rB"]) * max(float(P_fe_W), 0.0)
-              + gP)
-        bP = dP / max(abs(float(P_total_W)), 1e-300)
-        vals = (bT, bR, bP)
+        eT = float(est["dT_rel"]) + gT
+        eR = float(est["dripple_pp"]) + gR
+        dP = float(est["dP_cond_W"]) + float(est["dP_fe_W"]) + gP
+        eP = dP / max(abs(float(P_total_W)), 1e-300)
+        vals = (eT, eR, eP)
         ok = bool(all(math.isfinite(v) for v in vals)
-                  and bT <= lim["T_rel"] and bR <= lim["ripple_pp"]
-                  and bP <= lim["P_total_rel"])
-        rec.update({"bound_T_rel": bT, "bound_ripple_pp": bR,
-                    "bound_P_total_rel": bP, "bound_P_total_W": dP,
+                  and eT <= lim["T_rel"] and eR <= lim["ripple_pp"]
+                  and eP <= lim["P_total_rel"])
+        rec.update({"estimate_T_rel": eT, "estimate_ripple_pp": eR,
+                    "estimate_P_total_rel": eP, "estimate_P_total_W": dP,
                     "report_part": {"T_rel": gT, "ripple_pp": gR, "P_W": gP}})
     except (KeyError, TypeError, ValueError) as e:
         ok = False

@@ -943,6 +943,9 @@ change is now a warning, not a verdict.)
 
 ## 5. Third Codex review (2026-10-04)
 
+(Read with §6: the "certified" orbit-error bound below is a FIRST-ORDER ESTIMATE
+with an empirical safeguard, not a proof, and its fields are renamed there.)
+
 Codex re-reviewed 768d600: findings #2, #4–#8, #11 and both round-2 issues resolved;
 still blocking on three. Fixed here, on the server sandboxes
 `/opt/motres/compute/tdm-fix-20261004` and `…-20261004b` (images `motres-api:tdmfix3`
@@ -1027,6 +1030,126 @@ orbit alone there); and the warm cache was published before the certification
 verdict, so the replacing march started from the rejected attempt's field (now
 published only by an accepted solve). No tolerance was loosened.
 
+## 6. Round 4 and the L155 reference (2026-10-04)
+
+**Owner decision (2026-10-04):** the proof loop stops at this level of rigour;
+after the items below TDM becomes the default without a fifth review.
+
+**Wording.** What §5 called a "certified bound" is a **first-order estimate with
+an empirical safeguard**, not a proof. The result fields are renamed:
+`tdm.certify` → `tdm.orbit_error_estimate`, `CERT_SAFETY` → `ESTIMATE_SAFETY`,
+`certify_observables` → `estimate_check`, the attempt stage `certify` →
+`error_estimate`, the bound fields `bound_*` → `estimate_*`.
+
+### 6.1 Fourth review: findings and fixes
+
+| Finding | Fix | Tests |
+|---|---|---|
+| (a) Demag: a small area-mean image gap let two quiet periods pass before every magnet had visited every rotor image | The image history is complete ONLY after L pre-pass periods, unconditionally (the gap is recorded, not a shortcut) | TF `test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods` (complete ⇔ ≥ 7 periods; settled ⇒ ≥ 7) |
+| (b) The demag drift used the Maxwell series for hybrid runs | The drift is measured with the REPORTED torque method: Coulomb virtual work, or the hybrid space-vector torque (ψ, currents, Maxwell AC, rotor angle per frame) — the same function as the report | TF `test_demag_pre_pass…` (Coulomb), `test_the_demag_drift_uses_the_hybrid_torque_when_the_run_reports_it` |
+| (c) Passport: `[True, None]` read as steady | Every solve must affirm (`is True`); an unknown solve is named in `not_steady` | TE `test_a_passport_needs_every_solve_to_affirm_steadiness` |
+| PWM unknown settle | The carrier-specific case is covered | TF `test_an_unknown_pwm_settle_is_never_reported_steady` |
+| The "certificate" is not a proof | Renamed to an estimate (above). **Empirical safeguard:** Arnoldi records the top Ritz value per step and its convergence; ρ_eff = max(ρ_ritz, ρ_observed), ρ_observed from the decay of the closure march's deviation from the orbit, period by period. When the Ritz value has not converged or ρ_eff ≥ 0.98, up to 4 more closure periods are marched; the observed orbit error ‖D_p‖ + ‖D_p − D_p−1‖·ρ_eff/(1 − ρ_eff) joins ‖e‖ and ‖d‖/(1 − ρ_eff) (the largest is used). If the decay is still unresolved, the attempt is rejected (strict retry, then a march with a note) | TP `test_arnoldi_rho_on_a_near_unit_non_normal_complex_map`, `test_the_orbit_error_estimate_sees_the_slow_mode`; TF `test_the_empirical_safeguard_marches_more_closure_periods`, `test_a_failed_error_estimate_retries_strictly_then_marches` |
+| Total loss: the 2·r_B·P_fe surrogate | The iron loss is computed DIRECTLY with the report's functional (`losses.iron_loss_series`) on the orbit, on the orbit perturbed by the estimated error, and on the closure-march period; the total-loss check uses |P_fe(perturbed) − P_fe(orbit)| + |P_fe(closure) − P_fe(orbit)| | TP `test_estimate_check_against_the_owner_terms`; TF `test_the_default_is_tdm…` (iron fields) |
+
+### 6.2 The settled L155 reference
+
+The reference was a plain march of the L155 motor rated duty: CIANO10 200 opt, Δ,
+winding current 324.5095 A, 14 200 rpm, γ 15°, demag on, Coulomb torque. The frozen
+inputs are the read-only copies of `/srv/motres/shared/dies` used in §5.2 (unchanged
+since 2026-09-30). The run was:
+
+- an eddy warm-up of **164 whole periods** (`SB_EDDY_WARM`);
+- the demag pre-pass to its fixed point (5 periods: L = 5);
+- a **36-period reported window**, recorded period by period.
+
+That is 205 electrical periods in all. Before that run, the gap rule re-solved it at
+4 layers/side.
+
+At the handoff the settle gauge read a remaining transient of 1.0e-4 (tolerance
+0.02). In the reported window the mean torque changed by ≤ 1.2e-7 per period, with
+no trend. The shaft still crept up, by 3.4e-4 W per period. A geometric fit of the
+shaft increments gives an observed contraction **ρ_observed = 0.946** and a shaft
+asymptote of 4.0729 W.
+
+| quantity | march, period 205 (last) | march asymptote (extrapolated) | TDM (this code, 55f49b6+) | TDM − reference |
+|---|---:|---:|---:|---:|
+| T_avg [N·m] | 184.48504 | 184.48504 (no trend) | 184.48507 | +1.6e-7 |
+| ripple [%] | 1.51013 | 1.51013 | 1.51013 | +0.000001 pp |
+| total loss [W] | 3820.161 | 3820.162 | 3820.123 | −1.0e-5 |
+| shaft [W] | 4.0671 | 4.0729 | 4.0731 | +5e-5 |
+| ρ (slow mode) | – | 0.946 (observed, shaft increments) | 0.958 (Arnoldi, converged; ρ_eff) | the estimate's ρ is the larger |
+| estimated orbit error (TDM) | | | torque 1.4e-8, ripple 1.1e-6 pp, total loss 2.3e-6 | |
+| wall [s] | 8831 (205 periods, gap rule re-solve incl.) | | 352 (both gap-rule solves) | 25× |
+| peak RSS [MB] | 1797 | | 4598 | |
+
+- **TDM sits on the settled asymptote.** The differences are 2e-7 in torque,
+  1e-6 pp in ripple and 1e-5 in total loss. The 40-period march of §5.2 was 0.43 pp
+  off in ripple and had not settled.
+- **Predicted vs observed decay.** The orbit-error estimate took ρ_eff = 0.958
+  (Arnoldi, converged; amplification ×24 on the 4e-8 defect). The march's slow
+  mode decays at 0.946 per period, so the estimate's ρ is the larger
+  (conservative) one here. The shaft value TDM reports is 5e-5 from the
+  extrapolated asymptote.
+
+### 6.3 The demag shortcut for optimizer candidates (owner decision, 2026-10-04)
+
+The adaptive two-window demag shortcut is the method of **optimizer candidate
+evaluations** only (`refine_proc.run_one` with `sampling_purpose="optimization"`).
+The full pre-pass stays for everything reported: the EM tab, the coupled loop,
+passports, MCP, reports, and the optimizer's final verification of its chosen
+candidates (standard / final-quality evaluations).
+
+- **Method** (Codex docs `fem-tdm-repeat-short-windows-2026-10-02`,
+  `fem-tdm-l155-adaptive-windows-2026-10-03`): on the current orbit and Br,
+  `predicted_demag` locates the (magnet, instant) with the largest predicted Br
+  loss. A window of exactly 1/6 period around it is marched with the ratchet
+  (`demag_window_frames`: 6 of 36; the old `ceil(0.1666667·N)` gave 7). That
+  magnet's Br map goes to every pole image, taken with `np.minimum` against the
+  current Br; Br never rises, and this is checked. The orbit is then re-solved.
+  The selection is repeated on the updated orbit for the second window.
+- **Settle checks**: the shared ones. They are the Br change of the reported
+  period, the reported-torque drift between the two windows' orbits, and every
+  image map complete.
+- **Labels**: `qualified: false`, `tdm_experimental: true`, and a note. The
+  optimizer's final certification (`_standard_quality`) refuses unqualified
+  results, so a chosen candidate is always verified with the full pre-pass.
+- **Who can select it**: only a ContextVar (`_TDM_DEMAG_REQUEST`) that
+  `refine_proc` sets around the candidate solve and the solve pool carries into
+  its child. The environment (`SB_TDM_DEMAG`) and the routes cannot.
+
+**Server check, shortcut against the full pre-pass** (TDM, same code, Coulomb
+torque, duty settings, `--cpus 8`):
+
+| point | ΔT_avg | Δripple | Δtotal loss | wall full → shortcut | shortcut verdict |
+|---|---:|---:|---:|---|---|
+| Ø40 L12 deep FW (48.79 A, 20 000 rpm, γ 60°) | −0.066 % | +0.137 pp | +0.029 % | 178 → 99 s (1.79×) | `steady_state: false`: torque drifted 0.4 % between the two windows (full: 7 pre-pass periods, steady) |
+| L155 motor peak (Δ, 770.47 A line, 20 000 rpm) | +0.014 % | +0.010 pp | +0.013 % | 240 → 171 s (1.41×) | steady, `qualified: false` |
+
+Both points are inside the owner's terms (torque 1 %, ripple 0.5 pp, total loss
+5 %), at the candidate-ranking level the owner chose this for. On the Ø40 deep-FW
+point the two windows do not reach the demag fixed point. The result says so
+(`steady_state: false` with the drift in the note), so the optimizer flags the
+point. The chosen candidates are re-verified with the full pre-pass in any case.
+
+### 6.4 Tests (server image `motres-api:tdmfix5`, 2026-10-04)
+
+| set | result |
+|---|---|
+| fast: `test_time_periodic`, `test_tdm_default`, `test_csr_scatter`, `test_p2_nonlinear`, `test_p2_projection`, `test_tdm_entry_points -m "not slow"` | 95 passed |
+| `test_tdm_fem` + `test_time_periodic` + `test_tdm_default` + `test_tdm_entry_points` on the final code | 88 passed, 1 failed: the safeguard test assumed a resolved decay (see below); fixed and re-run |
+| `test_tdm_entry_points -m slow` (real EM route + optimizer path) | 2 passed |
+| `test_demag`, `test_demag_reproducible`, `test_warm_seed` (march) | 31 passed |
+
+The safeguard test first expected one extra closure period and acceptance. With
+the stop threshold removed, the closure march's deviation is at round-off and its
+per-period ratio reads 0.988. By the rule that is an unresolved slow mode: four
+extra periods, then a rejection, a strict retry and a march with the note. The
+test now asserts exactly that path. With the default threshold, the safeguard
+stops observing once the deviation moves less than 1e-6 of the state per period.
+
+Re-run on the final code: the safeguard test and the shortcut test, 2 passed.
+
 ## Progress log
 
 - 12:05 Stage 0: module, integration, synthetic tests (5 passed locally and on the
@@ -1086,3 +1209,10 @@ published only by an accepted solve). No tolerance was loosened.
   committed the worktree as `7378750` (wip); this round finished on top of it.
   Validation against 40-period marches on Ø40, L155 and L13 (§5.2); tests 149
   passed on the server (§5.3). Sandboxes and images removed.
+- **2026-10-04 round 4 (§6).** The orbit-error ESTIMATE wording, the empirical
+  safeguard, the direct iron loss, the complete image history and the
+  reported-torque drift; passports must affirm steadiness. The settled L155
+  reference ran 205 periods (TDM agrees to 2e-7 / 1e-6 pp / 1e-5). The adaptive
+  two-window demag shortcut serves optimizer candidates only. The owner's PC shut
+  down twice mid-run; the orchestrator kept `wip/tdm-round4`. Server sandbox
+  `tdm-fix-20261004c` and image `motres-api:tdmfix5` removed at the end.

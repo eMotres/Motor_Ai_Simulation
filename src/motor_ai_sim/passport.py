@@ -778,15 +778,19 @@ def generate_passport(
         "magnetHeight_mm": float(g.get("magnet_height", 0.0) or 0.0),
     }
     _BACKGROUND_RUN.reset(_bg_token)
-    # the solves' verdicts, summarised: steady only if EVERY solve said so
-    # (None: no solve said anything, i.e. a solver that predates the keys)
-    _said = [st.get("steady_state") for st in _solve_status
-             if st.get("steady_state") is not None]
+    # the solves' verdicts, summarised: steady only if EVERY solve AFFIRMED it
+    # (`is True`); a solve that said nothing is UNKNOWN, which is not steady
+    # (fourth Codex review: [True, None] used to read as steady)
+    _vals = [st.get("steady_state") for st in _solve_status]
     passport["solve_status"] = {
         "solves": len(_solve_status),
-        "steady_state": (None if not _said else all(v is True for v in _said)),
-        "not_steady": [st.get("steady_state_note") or "not a steady state"
-                       for st in _solve_status if st.get("steady_state") is False],
+        "steady_state": (None if not _vals else all(v is True for v in _vals)),
+        "not_steady": [
+            (st.get("steady_state_note") or "not a steady state")
+            if st.get("steady_state") is False else
+            "solve %d did not affirm a steady state (verdict unknown)" % (_i + 1)
+            for _i, st in enumerate(_solve_status)
+            if st.get("steady_state") is not True],
         "eddy_methods": sorted({str(st["eddy_method"]) for st in _solve_status
                                 if st.get("eddy_method")}),
         "notes": sorted({str(st["eddy_method_note"]) for st in _solve_status

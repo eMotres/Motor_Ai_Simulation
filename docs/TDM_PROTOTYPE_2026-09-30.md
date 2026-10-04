@@ -5,6 +5,10 @@ Branch `feat/tdm-prototype` from `pre-migration-freeze-2026-09-15` (f852bd2).
 Input: `GPU_TDM_STUDY_2026-09-29.md` §4 (branch `perf/profiling-gpu-tdm`),
 `EDDY_SHAFT_SETTLE_2026-09-29.md` (TP-EEC), `CHOLESKY_SPD_2026-09-29.md`.
 
+**Second Codex review (2026-10-03): §4** — closure march, hard per-group state
+gates, round-off half period, per-element demag settle, map checks, bounded inexact
+Newton, shortcut behind an explicit argument, optimizer verdicts, memory hygiene.
+
 **Status:** validated on the three machines; TDM is the default (§0); the Coulomb,
 demag-shortcut and gap-layer checks are done (§2.5–2.7). The Codex review's findings
 are answered and fixed, and the fixes re-validated (§3). Draft PR #87, not merged,
@@ -232,12 +236,13 @@ Knobs: `SB_EDDY_METHOD`, `SB_TDM_DEMAG=full|shortcut`, `SB_TDM_STOP=owner|residu
 `SB_TDM_ETA` (0.01; `adaptive`), `SB_TDM_TANGENT=clamped|exact|analytic`,
 `SB_TDM_START=static_seq|static_par|static|project`, `SB_TDM_WORKERS` (frames
 factorised concurrently), `SB_TDM_MKL_THREADS` (MKL threads per factorisation),
-`SB_TDM_TOL` (1e-7), `SB_TDM_MAX_NEWTON` (25), `SB_TDM_HALF=1` (opt-in half period),
-`SB_TDM_HALF_TOL` (1e-5), `SB_TDM_COARSE=0`, `SB_TDM_DEMAG_WINDOW` (fraction of the
-period, 1/6); the gate `SB_TDM_GATE_T` (1e-3), `SB_TDM_GATE_RIPPLE` (0.05 pp),
-`SB_TDM_GATE_P` (5e-3), `SB_TDM_GATE_PFLOOR` (1e-4); both methods
-`SB_DEMAG_SETTLE_TOL` (1e-3), `SB_DEMAG_PREPASS_MAX` (8); tests only
-`SB_TDM_FAULT=<stage>`.
+`SB_TDM_TOL` (1e-7), `SB_TDM_MAX_NEWTON` (25), `SB_TDM_HALF=1` (opt-in half period,
+taken only at round-off symmetry since §4), `SB_TDM_COARSE=0`, `SB_TDM_DEMAG_WINDOW`
+(fraction of the period, 1/6); both methods `SB_DEMAG_SETTLE_TOL` (1e-3),
+`SB_DEMAG_SETTLE_ELEMENT_TOL` (1e-2, §4), `SB_DEMAG_PREPASS_MAX` (8); tests only
+`SB_TDM_FAULT=<stage>`. Since the second review (§4) the closure and report gates
+are constants (`time_periodic.CLOSURE_GATE`, `REPORT_GATE`) with no environment knob,
+`SB_TDM_HALF_TOL` is gone, and `SB_TDM_DEMAG` can no longer select the shortcut.
 
 ## 2. Validation
 
@@ -837,6 +842,191 @@ to 4e-6 where the march was +4.6 % off (§2.1).
 - **Not re-pinned here:** the pins need #88's re-pin and this one, justified line by
   line, by the owner of the baseline.
 
+## 4. Second Codex review (2026-10-03)
+
+Codex re-reviewed 1e41f51 and kept "blocking before making TDM the default". The
+fixes are on `feat/tdm-prototype` on top of 38fab6a (the bit-identical CPU speed-up
+is kept). Claude Opus 5.5, one agent. Every run below went to the server sandbox
+`/opt/motres/compute/tdm-fix-20261003` (throwaway image `motres-api:tdmfix` =
+`motres-api:test` without intel-openmp / intel-cmplr-lib-ur,
+`MKL_THREADING_LAYER=SEQUENTIAL`, `SB_GEO_MESH=1`, `--cpus 8`, `nice 19`, `ionice
+-c3`, one container at a time under `/opt/motres/compute/.runq.lock`).
+
+### 4.1 Findings, fixes, tests
+
+| # (review) | Finding | Fix | Test |
+|---|---|---|---|
+| 1 (#1, blocker) | The owner-terms stop accepts rrel < 1e-5 without a state-closure bound | **Closure march**: after the final orbit, one whole period is marched from the orbit's start state (both BDF2 history levels) with the march's own bordered Newton (`P2Drive.eddy_solve`) and the Br map frozen. Accepted only if, per conductor group, both history levels at the end of the period are within 1e-4 (relative σ-norm) of the orbit's, and the marched window reproduces the orbit's mean torque (1e-4), ripple (0.01 pp) and every group's loss (1e-3, floor 1e-5 of the conductor loss): `time_periodic.CLOSURE_GATE`, `tdm.closure`. A failure (or an error) rejects the attempt; the wrapper retries ONCE with the strict 1e-7 state-residual stop on the full period, then marches with a note | `test_the_default_is_tdm_and_it_reproduces_the_march`, `test_a_failed_closure_retries_strictly_then_marches`, `test_a_fault_at_any_stage…[closure]`, `test_state_closure_per_group_and_level` |
+| 2 (#6, blocker) | `march_vs_orbit_last_frame` and the per-group closure were diagnostic and their errors swallowed | The **report gate** now judges EVERY reported period (both halves of a half-period orbit) on the state — per group, both history levels, ≤ 1e-3 — and on the observables (torque 1e-3, ripple 0.05 pp, group loss 5e-3). `time_periodic.REPORT_GATE` constants; the `SB_TDM_GATE_*` knobs are gone. Any exception fails the gate; a failure is kept only when it is a threshold miss in a window whose Br is still moving (labelled `steady_state: false`), never an error | `test_the_default_is_tdm…` (gate keys), `test_a_failed_gate_retries_strictly_then_marches` |
+| 3 (#2, high) | The opt-in half period accepted a 1e-5 source mismatch and was checked on its first half only | The half period is taken only when the source, the stiffness and σ-mass bilinear forms, the conductor bodies, the inverse and the constrained spaces match "one pole back, negated" to **1e-12** (`HALF_SYMMETRY_RTOL`: the image map is a signed permutation on rotated coordinates, so an exact mesh gives a few ulps). Otherwise the full period, with `eddy_method_note = "tdm: half period refused (…) — full period"`. Both halves are validated (the closure march covers the whole period; the report gate every orbit window). A rejected half-period attempt retries on the full period | `test_half_period_is_taken_only_at_round_off`, `test_a_forced_half_period_is_validated_on_both_halves` |
+| 4 (#3, high) | The demag fixed point used only the area-mean Br change | The pre-pass (both methods) now repeats until the worst magnet's area mean ≤ 1e-3 **and** the largest single-element change ≤ 1e-2 of Br0 (`DEMAG_SETTLE_ELEMENT_TOL`, `SB_DEMAG_SETTLE_ELEMENT_TOL`); the reported period is judged by both, and a miss gives `demag_settled: false`, `steady_state: false` and `steady_state_note` with both numbers. The ratchet physics is unchanged | `test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods`, `test_demag_settled_needs_both_the_mean_and_the_element` |
+| 5 (#7, high) | The inverse map deviation was a diagnostic | **Map checks at set-up** (`time_periodic.period_map_checks`, `tdm.map_check`): H⁻¹H = I and HH⁻¹ = I on arbitrary and constrained vectors; H maps range(P_{N−1}) into range(P_{−1}) and H⁻¹ range(P_0) into range(P_N) (BC signs, slip welds); stiffness and σ-mass invariant on the constrained space; every conductor body onto a whole body of equal conductance; magnet source. A deviation above `MAP_CHECK_RTOL` refuses TDM at set-up (marched, with the failing checks named) | `test_the_default_is_tdm…` (fixture numbers), `test_a_map_with_a_wrong_bc_sign_refuses_tdm_at_setup`, `test_period_map_checks_pass_an_exact_map_and_catch_each_defect` |
+| 6 (#8, medium) | GMRES non-convergence within 10× forcing still proceeded | Kept as a **bounded inexact Newton**, justified: a step whose true linear residual is ≤ 10·η = 0.1 is an inexact-Newton step with forcing < 1 (Dembo–Eisenstat–Steihaug), the line search checks the merit, and nothing is accepted on the GMRES (the residual stop and the two gates decide). The true unpreconditioned residual is now **recomputed by the solver** from the returned w (one extra sweep), recorded (`gmres_rel_resid`, GMRES's own as `gmres_reported_rel_resid`) and used for the decision (`gmres_accepted_inexact`) | `test_bounded_inexact_newton_accepts_a_step_within_the_factor`, `…_rejects_a_step_beyond_the_factor` |
+| 7 (#11, medium) | The experimental demag shortcut was reachable through `SB_TDM_DEMAG` | Only the explicit argument `tdm_demag="shortcut"` selects it (`resolve_tdm_demag`); `SB_TDM_DEMAG=shortcut` is ignored with a note. No route, payload or workflow passes the argument (AST test). A shortcut result carries `tdm_experimental: true`, `qualified: false` (solver, route summary, optimizer), and the optimizer's final certification refuses it | `test_the_shortcut_is_never_taken_from_the_environment`, `test_the_environment_cannot_select_the_shortcut`, `test_the_demag_shortcut_is_labelled_experimental`, `test_no_caller_pins_a_method_or_the_shortcut` |
+| 8 (new, high) | The optimizer output dropped `steady_state`, `demag_settled` and the notes | `refine_proc.run_one` carries `steady_state`, `steady_state_note`, `demag_settled`, `eddy_method`, `eddy_method_requested`, `eddy_method_note`, `tdm_experimental`, `qualified`; the eval cache keeps them (`_RES_KEYS`); `_standard_quality` refuses a non-steady or experimental result | `test_the_optimizer_result_keeps_the_steady_state_verdict`, `test_the_optimizer_result_path_solves_the_fixture_with_tdm_for_real` |
+| 9 (new, high) | `_last` kept failed attempts' tracebacks and arrays alive during retry / fallback | `_drop_attempt`: the wrapper keeps the record and the message only; it clears the traceback frames of the exception and of its `__cause__` / `__context__` chain and cuts the links before the next attempt | `test_a_rejected_attempt_leaves_nothing_referenced` (weakref), `test_a_rejected_attempt_is_not_kept_alive_during_the_retry` (gc: 0 TDM frames / solvers / factors alive at each attempt, real solve) |
+| 10 (#9/#10, medium) | Source-string entry-point checks; no failed-factorization regression | Real calls on the 30 mm fixture through the EM route (`get_fem_transient`, unstubbed) and through the optimizer path (`refine_proc.run_one` → kernel → module → route → solver), asserting the requested / effective method, notes and verdicts. A PARDISO failure injected into every frame factorisation is marched with the reason | `test_the_em_route_solves_the_fixture_with_tdm_for_real`, `test_the_optimizer_result_path_solves_the_fixture_with_tdm_for_real`, `test_a_failed_factorization_is_marched_loudly` |
+
+### 4.2 Measurements (30 mm fixture, server, 12 steps)
+
+Before = 38fab6a, after = this change; same server image, one run each, Coulomb
+torque (the default).
+
+| case | quantity | before | after |
+|---|---|---:|---:|
+| p2_eddy (rated, demag off) | TDM wall [s] | 18.9 | 21.1 (closure march +1.8) |
+| | T_avg [N·m] | 0.407975381 | 0.407975381 (identical) |
+| | ripple [%] | 0.900787 | 0.900787 (identical) |
+| | total loss [W] | 116.545 | 116.545 |
+| p2_demag_eddy | TDM wall [s] | 44.8 | 58.5 (two more pre-pass periods +12.5, closure +1.4) |
+| | pre-pass periods | 3 | 5 (the per-element rule) |
+| | Br moved in the reported period: area mean / element | 1.2e-4 / 0.0101 | 1.8e-5 / 0.0029 |
+| | T_avg [N·m] | 0.3988322 | 0.3988291 (−7.7e-6) |
+| | ripple [%] | 0.71243 | 0.70005 (−0.012 pp) |
+| | total loss [W] | 116.318 | 116.318 |
+| | the march, same code (after) | – | T 0.3988301, ripple 0.69988 %, total 116.318 |
+
+TDM against the march after the change (demag case): torque −2.5e-6, ripple
++0.0002 pp, total loss 0. The demag numbers moved because the reported period now
+starts from a Br map that is settled element by element, in both methods.
+
+**The gates on the fixture (after):**
+
+- Closure march (frozen Br, 12 frames): state worst 7.3e-6 (shaft, frame 10;
+  copper 4e-7, magnets 6e-7); torque 2.8e-7, ripple 2.9e-5 pp, group losses ≤ 9.6e-6.
+  Demag case: state worst 1.5e-6.
+- Report gate: state worst 6.7e-6 (shaft) without demag; 3.1e-5 (copper) with the
+  ratchet active in the window; torque 2.8e-7 / 1.7e-5.
+- Map checks (full period): inverse 0, constrained 1.5e-19, bodies 9e-15 (43
+  bodies, 7 moved), source 9.1e-6, operators 9.4e-4. Recorded only: the inverse
+  over all dofs of constrained vectors 0.017, of arbitrary vectors 0.055 — the
+  non-conducting sector-edge rotor dofs, which no equation reads through the map.
+
+**Half period on the fixture.** Asked for (`SB_TDM_HALF=1`): refused (operators
+9.4e-4, source 7.8e-6 > 1e-12), full period, note. Forced (the round-off rule
+bypassed in a test): the closure march rejects it on the SECOND half — shaft state
+8.4 %, ripple 0.13 pp, magnet loss 0.16 % off, while the first half closes to
+1e-5 — and the one retry (full period, strict stop) is accepted, 4e-9 from the
+default run. This is the asymmetry §3.2 found, now caught by a hard gate.
+
+### 4.3 Tests (server image, 2026-10-03)
+
+| set | result |
+|---|---|
+| fast: `test_time_periodic`, `test_tdm_default`, `test_csr_scatter`, `test_p2_nonlinear`, `test_p2_projection`, `test_tdm_entry_points -m "not slow"` | 85 passed |
+| `test_tdm_fem` (real solves, 30 mm fixture) | 24 passed (12 min 58 s) |
+| `test_tdm_entry_points -m slow` (real EM route, real optimizer path) | 2 passed |
+| march-pinned `test_demag`, `test_demag_reproducible`, `test_warm_seed` | 31 passed |
+
+Not run (as instructed): the full suite and the physics-regression pins (§3.9).
+
+### 4.4 What a reviewer should still know
+
+(Superseded in part by §5: the big machines WERE re-run against 40-period marches
+— the validation table for Ø40, L155 and L13 is §5.2 — and the per-element demag
+change is now a warning, not a verdict.)
+
+- The closure bounds the one-period defect. For a mode decaying as e^{−T/τ} the
+  distance to the true orbit can be up to τ/T times larger; that concerns the
+  ring bodies' DC mode (the coarse space's target), e.g. the L155 shaft (τ ≈ 21
+  periods: ≤ 2e-3 of a 4 W group under the 1e-4 bound).
+- The big machines (Ø40, L13, L155) were not re-run here (owner rule: one server
+  job at a time, this change's verification set only). The closure and report
+  thresholds are 10–100× above the fixture's values; on a miss the cost is one
+  strict retry, then a loud march — never an unproven result.
+- The per-element demag rule adds pre-pass periods where a single element still
+  moves > 1 % of Br0 per period (the fixture: +2 periods, +12.5 s), in both
+  methods.
+- The operator check on rough vectors (9.4e-4 on the fixture) is mesh-limited;
+  its threshold (1e-2) catches map defects, not mesher round-off. The half period
+  needs 1e-12 and so is refused on every mesh measured so far.
+
+## 5. Third Codex review (2026-10-04)
+
+Codex re-reviewed 768d600: findings #2, #4–#8, #11 and both round-2 issues resolved;
+still blocking on three. Fixed here, on the server sandboxes
+`/opt/motres/compute/tdm-fix-20261004` and `…-20261004b` (images `motres-api:tdmfix3`
+/ `tdmfix4`, one container at a time under the shared run lock, `--cpus 8`,
+`nice 19`, `ionice -c3`).
+
+**Owner decision (2026-10-04): demag steadiness is judged by its effect on the
+observables.** The steady decision (both methods) is the per-magnet area-mean Br
+change, the observable drift between the last two pre-pass periods and the
+rotor-image history. The per-element change (1 % of Br0, §4) is a WARNING
+(`demag_warning`, `demag_settle.warning`), never a reason for `steady_state: false`.
+It had held both methods "not steady" on the L13 rated duty for one element at
+1.08 % while torque drifted 1.3e-4 and ripple 0.019 pp (§5.2).
+
+### 5.1 Findings, fixes, tests
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 (blocker, #1) | The 1e-4 closure bounds the one-period DEFECT, not the orbit error (×τ/T on a slow mode); the loss gates exclude iron | **Certified orbit error.** After the closure march: the linearised period map T is factorised AT the final orbit (`TimePeriodicEddy.refresh_jacobian`); its dominant eigenvalue ρ by Arnoldi (15 steps) from the defect d; the orbit error e = (I − T)⁻¹d by the preconditioned GMRES; the error taken as the larger of ‖e‖ and ‖d‖/(1 − ρ). That perturbation is propagated through the period (linear frame response) and the owner's observables are evaluated on the perturbed orbit: mean torque, ripple, every conductor group's loss, and the relative change of the iron flux density r_B (iron loss ≤ 2·r_B·P_fe to first order). After the frame loop, with P_fe and the TOTAL loss known, the bound plus the reported period's own deviation from the orbit must be below **1/10 of the owner's terms** (torque 1 %, ripple max(0.5 pp, 10 %), total loss 5 %: `CERT_SAFETY`, `certify_observables`). Otherwise one strict retry, then a march with a note. ρ, the bound, the scale and the sensitivities are in `tdm.certify` | TP `test_the_certified_orbit_error_sees_the_slow_mode` (a slow ring: the defect hides the error by ×>3, ρ equals the dense T's spectral radius, e recovers the true error, ‖d‖/(1−ρ) bounds it), `test_certify_observables_against_the_owner_terms`; TF `test_the_default_is_tdm…` (certify keys), `test_a_failed_certification_retries_strictly_then_marches` |
+| 2 (high, #3) | `image_min_gap` was diagnostic; a per-period Br change does not bound the drift across the rotor-image history | The demag fixed point (both methods) now also requires (a) the **image history complete**: L pre-pass periods (L = order of the period relabelling on the magnet elements, 7 on a 12s14p sector, 5 on the L155) or Br equal to its element-wise image minimum on the area mean, and (b) the **observable drift** between the last two pre-pass periods (mean and ripple of the frame torque — Coulomb when the run reports it) below 1/10 of the owner's terms. The cap is max(8, L). A reported period missing any rule is `steady_state: false` with the numbers in `steady_state_note`; the per-element change is a warning (owner decision above). Ratchet physics unchanged | TF `test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods` (cycle 7, image record, drift record, warning), TP `test_demag_settled_is_the_mean_and_the_element_is_a_warning` |
+| 3 (high, new) | A refused PWM / voltage run could get `_warm_quiet = None` and then `steady_state: true` through `is not False` | **Affirmative only**: `eddy_settled` is True only when the settle was measured and passed (or the run has no eddy march), False when it failed, **None when unknown** (unmeasured voltage settle prefix, PWM gauge that cannot judge) with a note; `steady_state` requires `eddy_settled is True` and the demag verdict True. `refine_proc` keeps None (no `bool(... default True)`). Grep: no other `is not False` on EM settle flags (`report.py` uses one on the THERMAL loop's temperatures — a different verdict) | TF `test_an_unknown_settle_is_never_reported_steady` (p2_voltage_eddy: march, `eddy_settled` None, `steady_state` False, note) |
+| 4 (#1/#3/#10) | Validation against long asymptotes, big machines, RSS | §5.2 | – |
+| 5 (medium, #9) | Coupled / passport / MCP paths without behavioural coverage | The coupled loop carries each EM pass's verdict on its history rows, on its block (`em`) and as `em_steady_state`; a passport carries `solve_status` (every solve's method, notes, steady verdict); the MCP headline (`agent_designs.headline`) carries `steady_state`, its note, the method and its note, `qualified` | TE `test_the_coupled_loop_carries_each_passs_verdict` (the real loop, halves faked), `test_a_passport_reports_its_solves_verdicts` (real `generate_passport`, stub solver), `test_mcp_headlines_carry_the_verdict` |
+
+Also found and fixed on the way: the warm cache was published before the
+certification verdict, so a march replacing a rejected attempt could start from
+the rejected attempt's field (P_mag differed by 1.5e-9 from a clean march); it is
+now published only by an accepted solve.
+
+### 5.2 Validation against long marched asymptotes (server, Coulomb torque, duty settings)
+
+TDM with its default settings against a LONG march from cold: the eddy warm-up
+pinned to 40 whole periods of the plain march (`SB_EDDY_WARM` = 40 × steps), then
+the demag pre-pass to its fixed point and the reported period, as the production
+march does. Duties are read-only copies of `/srv/motres/shared/dies`; the L155 (Δ)
+is driven with its WINDING current 562.07/√3 = 324.51 A. Harness
+`val_run.py` (the §2 harness composition, scratch); one container at a time.
+
+| machine | method | T_avg [N·m] | ripple [%] | total loss [W] | wall [s] | peak RSS [MB] | ρ | certified bound: torque / ripple / total | steady |
+|---|---|---:|---:|---:|---:|---:|---:|---|---|
+| Ø40 (CIANO14 40 new / L12 rated, demag) | TDM | 0.6156275 | 5.5475 | 65.783 | 166 | 1714 | 0.844 | 1.9e-10 / 1.7e-8 pp / 6.7e-9 | yes |
+| | 40-period march | 0.6156541 | 5.5361 | 65.783 | 630 | 378 | – | – | yes |
+| | TDM − march | −0.004 % | +0.011 pp | 0 | 3.8× | | | | |
+| L155 (CIANO10 200 opt / L155 motor rated, Δ, demag) | TDM | 184.48510 | 1.5101 | 3820.10 | 284 | 4590 | 0.960 | 8.5e-8 / 8.9e-6 pp / 7.2e-6 | yes |
+| | 40-period march | 184.42968 | 1.9441 | 3820.59 | 852 | 532 | – | – | **no**: eddy residual 0.026 > 0.02 |
+| | TDM − march | +0.030 % | −0.434 pp | −0.013 % | 3.0× | | | | |
+| L13 (CIANO28 85 20SW1200 / L13 rated, demag) — after the owner's decision | TDM | 5.285939 | 4.2548 | 194.414 | 281 | 2338 | 0.151 | 1.5e-4 / 0.025 pp / 5.5e-6 | yes, warning: one element 1.8 % |
+| | 40-period march | 5.285963 | 4.2531 | 194.414 | 923 | 419 | – | – | yes, warning: one element 1.8 % |
+| | TDM − march | −0.0004 % | +0.002 pp | 0 | 3.3× | | | | |
+| L13, before the decision (element rule a verdict, 8 pre-pass periods) | TDM / march | 5.284085 / 5.284137 | 4.2359 / 4.2422 | 194.411 / 194.411 | 342 / 1010 | 2332 / 417 | 0.151 | 2.2e-9 / 2.7e-7 pp / 5.1e-8 | no / no (one element 1.08 %) |
+
+- **Ø40 and L13: TDM = the long march** to ≤ 0.004 % in torque, ≤ 0.011 pp in
+  ripple and 0 in total loss, 3.3–3.8× faster. Both report the same demag fixed
+  point (7 resp. 5 pre-pass periods; L13 drift between the last two: torque 3.3e-4,
+  ripple 0.021 / 0.005 pp).
+- **L155: the 40-period march is NOT the asymptote.** Its own settle gauge reads
+  0.026 > 0.02 after 40 periods (the shaft ring's τ ≈ 24 periods: ρ = 0.960 =
+  e^(−1/24.5)), and its ripple is 0.43 pp off. TDM's certified orbit error, with
+  that slow mode amplified ×15 (`scale`), is 8.5e-8 in torque and 8.9e-6 pp in
+  ripple — the slow mode is exactly what the certification is for.
+- **Peak RSS**: TDM 1.7 / 2.3 / 4.6 GB against the march's 0.4 / 0.4 / 0.5 GB (the
+  factors of a full period), unchanged from §3.8.
+- The L13 rows before/after the owner's decision differ by +0.035 % in torque and
+  +0.019 pp in ripple: five pre-pass periods instead of eight (the element rule
+  had forced the cap). Both are inside the owner's terms by 30× and 25×.
+
+### 5.3 Tests (server image `motres-api:tdmfix4`, 2026-10-04)
+
+| set | result |
+|---|---|
+| fast: `test_time_periodic`, `test_tdm_default`, `test_csr_scatter`, `test_p2_nonlinear`, `test_p2_projection`, `test_tdm_entry_points -m "not slow"` | 90 passed |
+| `test_tdm_fem` (real solves, 30 mm fixture) | 26 passed |
+| `test_tdm_entry_points -m slow` (real EM route, real optimizer path) | 2 passed |
+| `test_demag`, `test_demag_reproducible`, `test_warm_seed` (march) | 31 passed |
+
+The three `test_tdm_fem` failures of the first round-3 run are fixed: the default
+test compared the computed limit 0.1 × 0.05 to 5e-3 exactly (now `approx`); the
+certification fault key collided with the `certify` stage marker (renamed
+`certify_gate`); the experimental shortcut's report window (a demag transient,
+labelled not steady) was charged to the orbit's certification (now judged on the
+orbit alone there); and the warm cache was published before the certification
+verdict, so the replacing march started from the rejected attempt's field (now
+published only by an accepted solve). No tolerance was loosened.
+
 ## Progress log
 
 - 12:05 Stage 0: module, integration, synthetic tests (5 passed locally and on the
@@ -884,3 +1074,15 @@ to 4e-6 where the march was +4.6 % off (§2.1).
   fixture's rotor mesh is not pole-pair periodic, TDM refuses it (setup stage) and
   marches with a note, as designed. No solver change and no tolerance change were
   needed; the test module header now says which environment it needs.
+- **2026-10-03 second Codex review (§4).** Fixes on 38fab6a (kept). Every run on the
+  server sandbox `/opt/motres/compute/tdm-fix-20261003` (image `motres-api:tdmfix`,
+  one container at a time under the shared run lock); one baseline bench had run on
+  the workstation before the owner's server-only rule and was repeated on the server.
+  Verification 142 passed (§4.3). Sandbox, containers and image removed at the end.
+- **2026-10-04 third Codex review (§5).** Certified orbit error, demag image
+  history and observable drift, affirmative-only settle verdicts, verdicts through
+  the coupled loop / passports / MCP; the owner's decision makes the per-element
+  demag change a warning. The owner's PC shut down mid-run: the orchestrator
+  committed the worktree as `7378750` (wip); this round finished on top of it.
+  Validation against 40-period marches on Ø40, L155 and L13 (§5.2); tests 149
+  passed on the server (§5.3). Sandboxes and images removed.

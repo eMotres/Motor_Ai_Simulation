@@ -114,6 +114,81 @@ def test_the_result_carries_the_method_and_the_note():
     """The payload keys the fallbacks promise (read by the UI / reports)."""
     txt = Path(FS.__file__).read_text(encoding="utf-8")
     for key in ('"eddy_method": _eddy_method', '"eddy_method_requested"',
-                '"eddy_method_note": _tdm_note', '"tdm": _tdm_info'):
+                '"eddy_method_note": (', '"tdm": _tdm_info', '"tdm_experimental"',
+                '"qualified"', '"steady_state_note"'):
         assert key in txt, key
     assert 'march: TDM failed (' in txt and 'march: TDM not applicable (' in txt
+
+
+# ── second Codex review (2026-10-03) ─────────────────────────────────────────
+def test_a_rejected_attempt_leaves_nothing_referenced(monkeypatch):
+    """Finding 9: the wrapper keeps a rejected attempt's record and message
+    only — not its traceback frames, its __cause__ or its arrays — so the
+    retry and the march run without the failed attempt's memory."""
+    import gc
+    import weakref
+    import numpy as np
+    refs = []
+    seen_alive = []
+
+    def fake(**kw):
+        gc.collect()
+        seen_alive.append([r() is not None for r in refs])
+        ctl = kw.get("_tdm_ctl") or {}
+        if "fallback" in ctl:
+            return {"eddy_method": "march", "note": ctl["fallback"]["note"],
+                    "attempts": ctl["fallback"]["attempts"]}
+        big = np.ones(1_000_000)               # the attempt's "orbit"
+        refs.append(weakref.ref(big))
+
+        def inner():
+            local_copy = big                   # noqa: F841 — held by the frame
+            raise RuntimeError("PARDISO error -4 in frame 3")
+        try:
+            inner()
+        except RuntimeError as e:
+            raise FS.TdmAttemptFailed("newton" if ctl else "report_gate", str(e),
+                                      info={"t": 1.0},
+                                      retry_residual=not ctl) from e
+    monkeypatch.setattr(FS, "_fem_transient_sliding_band_once", fake)
+    out = FS.fem_transient_sliding_band(eddy=True)
+    assert out["eddy_method"] == "march"
+    assert [a["stage"] for a in out["attempts"]] == ["report_gate", "newton"]
+    assert out["note"].startswith("march: TDM failed (newton: PARDISO error -4")
+    # attempt 2 started with attempt 1's array gone; the march with both gone
+    assert seen_alive == [[], [False], [False, False]], seen_alive
+
+
+def test_the_optimizer_result_keeps_the_steady_state_verdict(monkeypatch):
+    """Finding 8 (fast half; the real solve is in test_tdm_entry_points):
+    refine_proc.run_one carries steady_state, its note, demag_settled, the
+    method, its note and the qualified flag from the solver's payload."""
+    import math
+    from motor_ai_sim.contracts.result_ir import ResultIR
+    from motor_ai_sim.optimization import refine_proc as R
+    n = 8
+    ph = [2 * math.pi * k / n for k in range(n)]
+    raw = {"T_avg_Nm": 1.0, "T_ripple_pct": 2.0, "P_cu_W": [5.0] * n,
+           "P_fe_W": [1.0] * n, "P_mag_eddy_W": [0.1] * n, "P_shaft_eddy_W": [0.01] * n,
+           "V_peak": 10.0, "picard_converged": True, "n_steps": n,
+           "V_A": [10 * math.sin(p) for p in ph],
+           "V_B": [10 * math.sin(p - 2.0944) for p in ph],
+           "V_C": [10 * math.sin(p + 2.0944) for p in ph],
+           "steady_state": False,
+           "steady_state_note": "demag NOT settled: 0.002 at one element",
+           "demag_settled": False, "eddy_method": "tdm", "eddy_method_requested": "tdm",
+           "eddy_method_note": "tdm: EXPERIMENTAL demag shortcut",
+           "tdm_experimental": True, "qualified": False}
+
+    class _K:
+        def run(self, capability, payload):
+            return {"ok": True, "capability": capability,
+                    "result": ResultIR(physics="em_transient", ok=True, raw=raw)}
+    monkeypatch.setattr(R, "_kernel", lambda: _K())
+    out = R.run_one({}, 50.0, n, 100.0, n_periods=1.0, gamma_deg=0.0,
+                    mesh_size_mm=4.0, min_size_mm=0.3, n_sectors=4,
+                    element_order=2, rpm=3000.0)
+    for k in ("steady_state", "steady_state_note", "demag_settled", "eddy_method",
+              "eddy_method_requested", "eddy_method_note", "tdm_experimental",
+              "qualified"):
+        assert out[k] == raw[k], k

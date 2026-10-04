@@ -87,10 +87,134 @@ EDDY_METHODS = ("tdm", "march")
 #: (owner 2026-09-30).
 DEFAULT_EDDY_METHOD = "tdm"
 
-# A wrap GMRES that missed its forcing term is accepted only within this factor
-# of it (an inexact Newton step still contracts there); beyond, the step is
-# rejected and the Newton stops unconverged.
+# BOUNDED INEXACT NEWTON (second Codex review, 2026-10-03, finding 8).  A wrap
+# GMRES that stops at its iteration budget above its forcing term eta is still
+# a valid inexact-Newton step as long as its TRUE linear residual
+# ||g - (I - T) w|| / ||g|| stays below a forcing term < 1: the Newton then
+# keeps converging, linearly at that rate (Dembo, Eisenstat & Steihaug, SIAM J.
+# Numer. Anal. 19, 1982), and the backtracking line search checks that the
+# step lowers the space-time merit.  The step is therefore taken when the true
+# residual (recomputed independently of GMRES, see TimePeriodicEddy.solve) is
+# <= GMRES_ACCEPT_FACTOR * eta = 0.1 at the default eta = 0.01, and refused
+# above (the Newton stops unconverged and the caller marches).  Nothing is
+# ACCEPTED on the strength of a GMRES: the orbit is accepted only by its
+# nonlinear residual and by the caller's closure march and gates.  Tested in
+# tests/test_time_periodic.py (test_bounded_inexact_newton_*).
 GMRES_ACCEPT_FACTOR = 10.0
+
+# ── acceptance thresholds (second Codex review, 2026-10-03) ─────────────────
+# The owner's accuracy terms are: mean torque <= 1 %, ripple within
+# max(0.5 pp, 10 % relative), TOTAL losses <= 5 %.  A TDM result is accepted only
+# when a one-period march from the orbit closes on it (CLOSURE_GATE, frozen Br)
+# and when the reported period, marched by the production frame loop, stays on
+# it (REPORT_GATE, the demag ratchet active as in the march).
+#
+#  * CLOSURE (frozen Br; measured 3e-7 / 3e-5 pp / 1e-5 / 7e-6 on the 30 mm
+#    fixture): mean torque 1e-4 (1/100 of the owner's 1 %), ripple 0.01 pp
+#    (1/50 of 0.5 pp), every conductor group's loss 1e-3 of itself (1/50 of 5 %,
+#    floor 1e-5 of the whole conductor loss), and the STATE: per conductor group
+#    and for BOTH BDF2 history levels at the end of the period, the relative
+#    sigma-norm distance between the marched state and the orbit's <= 1e-4.
+#    A relative change e of the conductor flux moves the flux linkage, hence the
+#    torque, by <= e, so 1e-4 is 1/100 of the torque term.
+#  * REPORT (ratchet active, so the window also carries the Br the ratchet still
+#    removes, <= the demag settle tolerances; measured <= 3.3e-4 per group on
+#    the fixture's demag case): the owner's terms / 10 as before (torque 1e-3,
+#    ripple 0.05 pp, group loss 5e-3, floor 1e-4) and the state per group, both
+#    levels, at the end of EVERY reported period, <= 1e-3 (the torque term / 10).
+# Distance to the true periodic orbit: a closure defect d of a mode that decays
+# as exp(-T/tau) per period means a distance up to d / (1 - exp(-T/tau)); for
+# the slowest body (the ring DC mode the coarse space carries: the L155 shaft,
+# tau = 21 periods, 4 W of 3.8 kW) the 1e-4 bound is <= 2e-3 of that body's
+# state, far inside the 5 % total-loss term.
+CLOSURE_GATE = {"T_rel": 1e-4, "ripple_pp": 0.01, "P_rel": 1e-3,
+                "P_floor_rel": 1e-5, "state_rel": 1e-4}
+REPORT_GATE = {"T_rel": 1e-3, "ripple_pp": 0.05, "P_rel": 5e-3,
+               "P_floor_rel": 1e-4, "state_rel": 1e-3}
+
+# ── the period maps (second Codex review, 2026-10-03, findings 3 and 7) ─────
+# The HALF period (opt-in) is taken only where the magnet source AND the
+# operators are anti-symmetric under "one pole back, negated" to ROUND-OFF: the
+# image map is a signed permutation of dofs matched on rotated coordinates, so an
+# exactly symmetric mesh/source gives a mismatch of a few ulps of the assembled
+# entries (measured < 1e-14 on the operators of the 30 mm fixture); 1e-12 leaves
+# two decades for summation order.  Anything above is a discretisation
+# asymmetry (the fixture's magnet source: 7.8e-6) that makes the anti-periodic
+# orbit NOT a fixed point of the march — the run then takes the full period.
+HALF_SYMMETRY_RTOL = 1e-12
+# The map checks every TDM set-up runs (both periods): the back map is the
+# exact inverse of the forward map, maps a constrained state (range of a frame
+# projection: periodic BC signs, slip welds) onto a constrained state, maps
+# every conductor body onto a whole body with the same conductance, and leaves
+# the operators and the magnet source invariant.  A deviation above these
+# refuses TDM at set-up (the run is marched, with a note).  Measured on the
+# 30 mm fixture's full period: inverse 0, constrained 1.5e-19, bodies 9e-15,
+# source 9.1e-6, operators 9.4e-4.  The operator number is the bilinear form on
+# ROUGH random constrained vectors (dominated by the highest mesh modes), where
+# the pole-pair images of the geometry-driven mesh match within the mesher's
+# node tolerance, not to round-off; its effect on the solved field is what the
+# source (smooth) number and the closure march measure.  A map DEFECT — a wrong
+# BC sign, a wrong image, a body split — is O(1) on every one of these (tests).
+MAP_CHECK_RTOL = {"inverse": 1e-12, "constrained": 1e-10, "bodies": 1e-10,
+                  "operators": 1e-2, "source": 1e-4}
+
+# ── demag fixed point (shared by the march and TDM) ─────────────────────────
+#: Per magnet, area-weighted mean |dBr|/Br0 moved in one period (flux, hence
+#: torque: the owner's term / 10).
+DEMAG_SETTLE_TOL = 1e-3
+#: …and at any single element (a local region still collapsing): 1 % of Br0 in
+#: one period.  A WARNING only (owner 2026-10-04): demag steadiness is judged
+#: by its effect on the observables — the area mean above, the observable
+#: drift between the last pre-pass periods and the rotor-image history — and
+#: a single element still moving is recorded and named in the note, not a
+#: reason for steady_state False.
+DEMAG_SETTLE_ELEMENT_TOL = 1e-2
+
+
+def demag_settled(chg: Dict[str, float], tol: float = DEMAG_SETTLE_TOL) -> bool:
+    """A period that moved Br by ``chg`` (:func:`br_change`) is settled when
+    the worst magnet's area-mean change is within ``tol``."""
+    return bool(float(chg["per_magnet_mean_max"]) <= float(tol))
+
+
+def demag_element_warning(chg: Dict[str, float],
+                          element_tol: float = DEMAG_SETTLE_ELEMENT_TOL
+                          ) -> Optional[str]:
+    """The per-element WARNING (not a verdict): a single element moved more
+    than ``element_tol`` of Br0 in the period."""
+    em = float(chg.get("element_max") or 0.0)
+    if em <= float(element_tol):
+        return None
+    return ("one magnet element still moved %.3g of Br0 in the period (warning "
+            "level %.1g) — a local change; the torque, ripple and loss drift "
+            "decide steadiness" % (em, float(element_tol)))
+
+
+def resolve_tdm_demag(requested: Optional[str],
+                      environ: Optional[Dict[str, str]] = None
+                      ) -> Tuple[str, Optional[str]]:
+    """The demag mode of a TDM run and a note.
+
+    ``"full"`` (the pre-pass to its fixed point) is the only QUALIFIED mode
+    and the default.  The owner's 1/6-period shortcut is EXPERIMENTAL and is
+    taken only through the explicit argument ``tdm_demag="shortcut"`` (no
+    route, payload or workflow passes it — tests/test_tdm_entry_points.py);
+    the environment can no longer select it (second Codex review, finding
+    11): ``SB_TDM_DEMAG=shortcut`` is ignored with a note, so an ordinary
+    workflow (EM tab, coupled loop, passport, MCP, optimizer) never gets it."""
+    env = os.environ if environ is None else environ
+    if requested is not None:
+        m = str(requested).strip().lower()
+        if m not in ("full", "shortcut"):
+            raise ValueError("tdm_demag must be 'full' or 'shortcut', got %r"
+                             % (requested,))
+        return m, None
+    e = str(env.get("SB_TDM_DEMAG") or "").strip().lower()
+    if e == "shortcut":
+        return "full", ("SB_TDM_DEMAG=shortcut ignored: the experimental demag "
+                        "shortcut is taken only through the explicit "
+                        "tdm_demag='shortcut' argument; full pre-pass used")
+    return "full", None
 
 
 def resolve_eddy_method(requested: Optional[str], sim_config: Optional[Dict] = None,
@@ -792,6 +916,96 @@ class TimePeriodicEddy:
         out[nc + c["pos"]] += v
         return out
 
+    # ── certification: the period map's contraction and the orbit error ──
+    # (third Codex review, 2026-10-04, finding 1).  The closure march measures
+    # the one-period DEFECT d = Phi(a) - a of the orbit a.  The distance to the
+    # true periodic orbit a* is e = a* - a with (I - T) e = d to first order
+    # (T = the linearised period map, the operator the Newton reduces to): a
+    # slow mode with eigenvalue lambda amplifies its share of d by
+    # 1 / (1 - lambda).  So the bound needs T at the final orbit.
+    def refresh_jacobian(self, As: Sequence[np.ndarray], Us: Sequence[np.ndarray]
+                         ) -> None:
+        """Factor every frame's Jacobian AT (As, Us), so that the sweeps below
+        apply the linearised period map of THIS orbit (the factors the Newton
+        left behind belong to its last iterate, or to an earlier Br)."""
+        As = [np.asarray(a, float) for a in As]
+        Us = [np.asarray(u, float) for u in Us]
+        ev = self._eval_all(As, Us)
+        for j, fr in enumerate(self.frames):
+            fr.A, fr.U = As[j], Us[j]
+            fr.K, fr.info = ev[j][5], ev[j][6]
+        first = self._coarse is None and bool(self.coarse_spec)
+        Js = self._jac_all(keep_J=first)
+        if first:
+            self._build_coarse(Js)
+
+    def period_map(self, w: np.ndarray) -> np.ndarray:
+        """T w: the linearised period map on the wrap state (conductor dofs of
+        both BDF2 history levels)."""
+        tw, _ = self._sweep(None, (w[:self.nc], w[self.nc:]))
+        return np.concatenate(tw)
+
+    def propagate(self, w: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """The linear response of every frame (dA_j full vector, dU_j) to a
+        perturbation w of the wrap state."""
+        _, xs = self._sweep(None, (w[:self.nc], w[self.nc:]), keep_x=True)
+        return ([fr.pad(x[:fr.nfree]) for fr, x in zip(self.frames, xs)],
+                [np.asarray(x[fr.nfree:], float) for fr, x in zip(self.frames, xs)])
+
+    def contraction(self, v0: np.ndarray, m: int = 15,
+                    rng_seed: int = 0) -> Dict[str, Any]:
+        """The dominant eigenvalues of T by Arnoldi (m steps) started from v0
+        (the closure defect) plus a random component (so a mode the defect
+        happens to miss is still in the Krylov space).  rho = the largest
+        Ritz magnitude: outlying eigenvalues — the slow modes near 1 that
+        matter here — are the ones Arnoldi finds first."""
+        n = int(v0.size)
+        rng = np.random.default_rng(rng_seed)
+        v = np.asarray(v0, float)
+        nv = float(np.linalg.norm(v))
+        r = rng.standard_normal(n)
+        r *= (nv if nv > 0.0 else 1.0) / max(float(np.linalg.norm(r)), 1e-300)
+        v = (v + 0.1 * r) if nv > 0.0 else r
+        m = int(max(1, min(m, n)))
+        V = np.zeros((m + 1, n))
+        Hh = np.zeros((m + 1, m))
+        V[0] = v / float(np.linalg.norm(v))
+        k_end = m
+        for j in range(m):
+            w = self.period_map(V[j])
+            for _rep in range(2):
+                for i in range(j + 1):
+                    h = float(w @ V[i])
+                    Hh[i, j] += h
+                    w = w - h * V[i]
+            Hh[j + 1, j] = float(np.linalg.norm(w))
+            if Hh[j + 1, j] <= 1e-14 * max(abs(Hh[j, j]), 1e-300):
+                k_end = j + 1
+                break
+            V[j + 1] = w / Hh[j + 1, j]
+        ritz = np.linalg.eigvals(Hh[:k_end, :k_end])
+        mags = np.sort(np.abs(ritz))[::-1]
+        return {"rho": float(mags[0]) if mags.size else 0.0,
+                "ritz_top": [float("%.6g" % x) for x in mags[:6]],
+                "arnoldi_steps": int(k_end)}
+
+    def orbit_error(self, d: np.ndarray, rtol: float = 1e-8,
+                    maxiter: int = 400) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """e = (I - T)^-1 d, by the same right-preconditioned GMRES as the
+        Newton (the DC coarse space carries the slow ring modes)."""
+        dn = float(np.linalg.norm(d))
+        if dn == 0.0:
+            return np.zeros_like(d), {"rel_resid": 0.0, "iterations": 0,
+                                      "converged": True}
+
+        def mv(wv):
+            return wv - self.period_map(wv)
+        _prec = self._coarse_apply if self._coarse else None
+        e, info = gmres_right(mv, d, prec=_prec, rtol=rtol, maxiter=maxiter)
+        true = float(np.linalg.norm(d - mv(e))) / dn
+        return e, {"rel_resid": true, "iterations": int(info["iterations"]),
+                   "converged": bool(true <= max(rtol, 1e-6))}
+
     # ── the Newton ───────────────────────────────────────────────────────
     def solve(self, As: List[np.ndarray], Us: List[np.ndarray]) -> Dict[str, Any]:
         """Newton from the initial orbit (As, Us); returns the stats and
@@ -905,9 +1119,24 @@ class TimePeriodicEddy:
                                                      "converged": True}
             self.stats["gmres_iterations"] += int(ginfo["iterations"])
             rec["gmres_iterations"] = int(ginfo["iterations"])
-            # the TRUE residual of the unpreconditioned wrap system
-            rec["gmres_rel_resid"] = float(ginfo.get("rel_resid", 0.0))
-            rec["gmres_converged"] = bool(ginfo.get("converged", False))
+            # the TRUE residual of the UNpreconditioned wrap system, recomputed
+            # here from the returned w with one more sweep — independent of
+            # GMRES's own bookkeeping (second Codex review, finding 8); the
+            # step is judged on THIS number
+            rec["gmres_reported_rel_resid"] = float(ginfo.get("rel_resid", 0.0))
+            if gn > 0.0:
+                _t_true = float(np.linalg.norm(g - mv(wsol))) / gn
+            else:
+                _t_true = 0.0
+            if not math.isfinite(_t_true):
+                _t_true = float("inf")
+            rec["gmres_rel_resid"] = _t_true
+            rec["gmres_converged"] = bool(_t_true <= float(
+                rec.get("gmres_rtol", self.gmres_rtol)) * (1.0 + 1e-9))
+            rec["gmres_accepted_inexact"] = bool(
+                not rec["gmres_converged"]
+                and _t_true <= GMRES_ACCEPT_FACTOR * float(
+                    rec.get("gmres_rtol", self.gmres_rtol)))
             self.stats["gmres_max_rel_resid"] = max(
                 float(self.stats.get("gmres_max_rel_resid", 0.0)),
                 rec["gmres_rel_resid"])
@@ -1132,6 +1361,249 @@ def window_gate(ref: Dict[str, Any], got: Dict[str, Any], *,
     return ok, {"ok": ok, "T_mean_rel": dT, "ripple_pp": dR, "P": dP,
                 "tol": {"T_rel": T_rel, "ripple_pp": ripple_pp, "P_rel": P_rel,
                         "P_floor_rel": P_floor_rel}}
+
+
+#: Certification safety fraction (third Codex review, 2026-10-04): a TDM result
+#: is certified steady only when its BOUNDED error in mean torque, ripple and
+#: TOTAL loss is below this fraction of the owner's limits (torque 1 %, ripple
+#: max(0.5 pp, 10 % of the ripple), total loss 5 %).
+CERT_SAFETY = 0.1
+
+
+def owner_limits(ripple_pct: float, safety: float = CERT_SAFETY) -> Dict[str, float]:
+    """The owner's accuracy terms times ``safety``."""
+    return {"T_rel": safety * 0.01,
+            "ripple_pp": safety * max(0.5, 0.1 * abs(float(ripple_pct))),
+            "P_total_rel": safety * 0.05, "safety": float(safety)}
+
+
+def certify_observables(cert: Dict[str, Any], *, P_fe_W: float, P_total_W: float,
+                        report_windows: Optional[Dict[str, Any]] = None,
+                        safety: float = CERT_SAFETY) -> Tuple[bool, Dict[str, Any]]:
+    """The certification verdict of a TDM orbit.
+
+    ``cert`` carries the orbit-error BOUND already mapped to the observables
+    (the perturbation applied at the bound's size, see the solver):
+    ``dT_rel``, ``dripple_pp``, ``dP_cond_W`` (conductor loss, every group),
+    ``rB`` (relative change of the iron flux density, area-weighted L2, worst
+    frame) and the orbit's ``ripple_pct``.  The iron loss moves by at most
+    2·rB·P_fe to first order (P_fe ~ B^2 for the eddy and excess terms, below
+    for hysteresis).  The reported period's own deviation from the orbit (the
+    report gate's windows) is ADDED: the reported numbers are the orbit plus
+    that deviation.  Certified when each total is below ``safety`` x the
+    owner's term; a missing or non-finite bound is not certified."""
+    lim = owner_limits(float(cert.get("ripple_pct") or 0.0), safety)
+    rec: Dict[str, Any] = {"limits": lim}
+    try:
+        gT = gR = gP = 0.0
+        for w in (report_windows or {}).values():
+            gT = max(gT, float(w["T_mean_rel"]))
+            gR = max(gR, float(w["ripple_pp"]))
+            gP = max(gP, sum(float(v["abs_W_per_m"]) for v in w["P"].values()))
+        bT = float(cert["dT_rel"]) + gT
+        bR = float(cert["dripple_pp"]) + gR
+        dP = (float(cert["dP_cond_W"]) + 2.0 * float(cert["rB"]) * max(float(P_fe_W), 0.0)
+              + gP)
+        bP = dP / max(abs(float(P_total_W)), 1e-300)
+        vals = (bT, bR, bP)
+        ok = bool(all(math.isfinite(v) for v in vals)
+                  and bT <= lim["T_rel"] and bR <= lim["ripple_pp"]
+                  and bP <= lim["P_total_rel"])
+        rec.update({"bound_T_rel": bT, "bound_ripple_pp": bR,
+                    "bound_P_total_rel": bP, "bound_P_total_W": dP,
+                    "report_part": {"T_rel": gT, "ripple_pp": gR, "P_W": gP}})
+    except (KeyError, TypeError, ValueError) as e:
+        ok = False
+        rec["error"] = "%s: %s" % (type(e).__name__, e)
+    rec["ok"] = bool(ok)
+    return bool(ok), rec
+
+
+def state_closure(pairs: Sequence[Tuple[str, np.ndarray, np.ndarray]],
+                  Mg: Dict[str, Any], state_rel: float
+                  ) -> Tuple[bool, Dict[str, Any]]:
+    """The STATE half of a gate: for every (label, marched, reference) pair —
+    the two BDF2 history levels at the end of a period — and every conductor
+    group g, the relative sigma-norm distance
+    ||A - A_ref||_{M_g} / ||A_ref||_{M_g} <= ``state_rel``.  A group whose
+    reference norm is exactly zero (no field in it) is judged on the absolute
+    distance against the whole conductor norm.  Any non-finite number fails.
+
+    Returns (ok, {"state_rel": tol, "levels": {label: {group: rel}},
+    "worst": max rel, "worst_at": (label, group)})."""
+    out: Dict[str, Dict[str, float]] = {}
+    worst = 0.0
+    worst_at = None
+    ok = True
+    for label, a, ref in pairs:
+        a = np.asarray(a, float)
+        ref = np.asarray(ref, float)
+        d = a - ref
+        tot = 0.0
+        for M in Mg.values():
+            tot += max(float(ref @ (M @ ref)), 0.0)
+        tot = math.sqrt(tot)
+        lev = {}
+        for g, M in Mg.items():
+            num = math.sqrt(max(float(d @ (M @ d)), 0.0))
+            den = math.sqrt(max(float(ref @ (M @ ref)), 0.0))
+            rel = num / den if den > 0.0 else (num / tot if tot > 0.0 else num)
+            if not math.isfinite(rel):
+                rel = float("inf")
+            lev[str(g)] = rel
+            if not rel <= state_rel:
+                ok = False
+            if rel > worst or worst_at is None:
+                worst, worst_at = rel, (label, str(g))
+        out[str(label)] = lev
+    return bool(ok), {"ok": bool(ok), "state_rel": float(state_rel), "levels": out,
+                      "worst": float(worst), "worst_at": worst_at}
+
+
+def range_distance(P, w: np.ndarray) -> float:
+    """||w - P y*|| / ||w||, y* the least-squares coefficients: how far w is
+    from the constrained space range(P) of a frame."""
+    from scipy.sparse.linalg import splu
+    P = P.tocsr()
+    w = np.asarray(w, float)
+    nw = float(np.linalg.norm(w))
+    if nw == 0.0:
+        return 0.0
+    PtP = (P.T @ P).tocsc()
+    rhs = np.asarray(P.T @ w).ravel()
+    off = PtP - _diags(PtP.diagonal())
+    if off.count_nonzero() == 0:
+        y = rhs / np.maximum(PtP.diagonal(), 1e-300)
+    else:
+        y = splu(PtP).solve(rhs)
+    return float(np.linalg.norm(w - np.asarray(P @ y).ravel())) / nw
+
+
+def period_map_checks(*, wrap: Callable, wrapf: Callable, P_from, P_to, P_start,
+                      P_fwd, K, Msig, GT, S_raw: np.ndarray, f_mag: np.ndarray,
+                      n_vec: int = 3, seed: int = 0,
+                      tol: Optional[Dict[str, float]] = None
+                      ) -> Tuple[bool, Dict[str, Any]]:
+    """The checks of a period map H (``wrap``: one (half) period back, ``wrapf``:
+    forward) that every TDM set-up runs (second Codex review, finding 7):
+
+      * inverse: H^-1 H = I and H H^-1 = I, on arbitrary AND on constrained
+        vectors (range of a frame projection);
+      * constrained space: H maps range(P_from) (frame N-1) into range(P_to)
+        (frame -1) and H^-1 maps range(P_start) (frame 0) into range(P_fwd)
+        (frame N) — the periodic BC signs and the slip welds;
+      * operators: the stiffness and the sigma-mass bilinear forms invariant on
+        the constrained space;
+      * conductor bodies: every body maps onto a whole body of equal
+        conductance (:func:`body_map_deviation`);
+      * magnet source: ||H f - f|| / ||f||.
+
+    Returns (ok, record); ``ok`` is False when any deviation exceeds ``tol``
+    (default :data:`MAP_CHECK_RTOL`), and the record names it."""
+    tol = dict(MAP_CHECK_RTOL if tol is None else tol)
+    rng = np.random.default_rng(seed)
+    n = int(P_from.shape[0])
+    us = [np.asarray(P_from @ rng.standard_normal(P_from.shape[1])).ravel()
+          for _ in range(n_vec)]
+    hus = [np.asarray(wrap(u), float) for u in us]
+    u0 = [np.asarray(P_start @ rng.standard_normal(P_start.shape[1])).ravel()
+          for _ in range(n_vec)]
+    # H^-1 H = I on the constrained space, in the CONDUCTOR sigma-norm: the
+    # wrapped state enters the march's equations only through the BDF2
+    # history, i.e. through sigma*M and G' — the conductor dofs (the forward
+    # map gives only Newton STARTS, which each frame re-projects and solves).
+    # Measured on the 30 mm fixture: 0 there; over ALL dofs of constrained
+    # vectors 0.017 and of arbitrary vectors 0.055 (the non-conducting rotor
+    # dofs at the sector edge, which no equation reads through the map) —
+    # both recorded, not judged.
+    Ms = Msig.tocsr()
+
+    def _snorm(x):
+        return math.sqrt(max(float(x @ (Ms @ x)), 0.0))
+    inv = 0.0
+    inv_all = 0.0
+    for v in us + u0:
+        nv = max(_snorm(v), 1e-300)
+        d1 = wrapf(wrap(v)) - v
+        d2 = wrap(wrapf(v)) - v
+        inv = max(inv, _snorm(d1) / nv, _snorm(d2) / nv)
+        na = max(float(np.linalg.norm(v)), 1e-300)
+        inv_all = max(inv_all, float(np.linalg.norm(d1)) / na,
+                      float(np.linalg.norm(d2)) / na)
+    inv_any = 0.0
+    for v in [rng.standard_normal(n) for _ in range(n_vec)]:
+        nv = max(float(np.linalg.norm(v)), 1e-300)
+        inv_any = max(inv_any, float(np.linalg.norm(wrapf(wrap(v)) - v)) / nv)
+    con = max([range_distance(P_to, hu) for hu in hus]
+              + [range_distance(P_fwd, wrapf(u)) for u in u0])
+    ops = max(bilinear_invariance(K, us, hus), bilinear_invariance(Msig, us, hus))
+    bod, image = body_map_deviation(GT, S_raw, us, hus)
+    f = np.asarray(f_mag, float)
+    src = float(np.linalg.norm(np.asarray(wrap(f), float) - f)
+                / max(float(np.linalg.norm(f)), 1e-300))
+    dev = {"inverse": inv, "constrained": con, "operators": ops, "bodies": bod,
+           "source": src}
+    bad = {k: v for k, v in dev.items() if not (v <= tol[k])}
+    rec = {"ok": not bad, "dev": dev, "tol": tol, "failed": sorted(bad),
+           "inverse_all_dofs": inv_all, "inverse_unconstrained": inv_any,
+           "bodies": len(image),
+           "bodies_moved": int(sum(1 for b, j in enumerate(image) if b != j))}
+    return (not bad), rec
+
+
+def bilinear_invariance(A, us: Sequence[np.ndarray], hus: Sequence[np.ndarray]
+                        ) -> float:
+    """How far the bilinear form of the operator ``A`` is from invariant under
+    a period map H, tested on CONSTRAINED vectors (``us`` in the range of a
+    frame's projection, ``hus`` = H(us)): max over pairs (i, j) of
+    |H(u_i)' A H(u_j) - u_i' A u_j| / sqrt(|u_i' A u_i| |u_j' A u_j|).
+    Tested on the constrained space because that is where the march's
+    equations live (periodic BC signs and slip welds tie the sector-edge and
+    band dofs); 0 to round-off for an exactly periodic mesh and material map."""
+    A = A.tocsr()
+    Au = [np.asarray(A @ u).ravel() for u in us]
+    Ahu = [np.asarray(A @ hu).ravel() for hu in hus]
+    dev = 0.0
+    for i in range(len(us)):
+        for j in range(len(us)):
+            a0 = float(np.asarray(us[i], float) @ Au[j])
+            a1 = float(np.asarray(hus[i], float) @ Ahu[j])
+            sc = math.sqrt(abs(float(np.asarray(us[i], float) @ Au[i]))
+                           * abs(float(np.asarray(us[j], float) @ Au[j])))
+            if sc > 0.0:
+                dev = max(dev, abs(a1 - a0) / sc)
+            elif a1 != a0:
+                dev = float("inf")
+    return float(dev)
+
+
+def body_map_deviation(GT, S_raw: np.ndarray, us: Sequence[np.ndarray],
+                       hus: Sequence[np.ndarray]) -> Tuple[float, List[int]]:
+    """Every conductor body must map onto a WHOLE body with the same
+    conductance.  On constrained test vectors u (and H u): the body fluxes
+    c = G'u and c_h = G'(H u) must be a signed permutation of each other, body
+    b of H u taking the flux of one body b' of u (with S_b = S_b').  Returns the
+    worst relative mismatch over bodies (and conductances) and the image body
+    per body; 0 to round-off for a consistent map."""
+    S = np.asarray(S_raw, float)
+    C = np.stack([np.asarray(GT @ u).ravel() for u in us], axis=1)     # (nb, m)
+    Ch = np.stack([np.asarray(GT @ hu).ravel() for hu in hus], axis=1)
+    nb = C.shape[0]
+    scale = max(float(np.max(np.abs(C))), 1e-300)
+    worst = 0.0
+    image: List[int] = []
+    for b in range(nb):
+        dp = np.max(np.abs(C - Ch[b][None, :]), axis=1)
+        dm = np.max(np.abs(C + Ch[b][None, :]), axis=1)
+        d = np.minimum(dp, dm)
+        j = int(np.argmin(d))
+        dev = float(d[j]) / max(float(np.max(np.abs(Ch[b]))), 1e-12 * scale)
+        ds = abs(S[b] - S[j]) / max(abs(S[b]), 1e-300)
+        worst = max(worst, dev, ds)
+        image.append(j)
+    if len(set(image)) != nb:
+        worst = float("inf")          # two bodies onto one: not a bijection
+    return float(worst), image
 
 
 # ════════════════════════════════════════════════════════════════════════

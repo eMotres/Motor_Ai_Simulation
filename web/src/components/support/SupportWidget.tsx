@@ -3,7 +3,7 @@
  *
  * Three modes in one panel:
  *  - Ask:    chat with the in-app AI assistant (backend proxies to Claude).
- *  - Report: file a bug / feature request / question → ticket in Firestore.
+ *  - Report: file a bug / feature request / question → a ticket stored by the backend.
  *  - Tickets: the signed-in user's own tickets and their status.
  *
  * Reporting needs a signed-in account (Firestore is per-user); the AI chat works
@@ -21,11 +21,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   askAssistant, submitTicket, listMyTickets, type ChatMsg, type Ticket, type TicketType,
 } from '../../lib/support';
-import { db } from '../../lib/firebase';
 
-// Tickets live in Firestore; with Firebase unconfigured (project deleted
-// 2026-08-20) only the AI "Ask" tab is functional.
-const ticketsAvailable = Boolean(db);
+
 
 const STATUS_COLOR: Record<string, string> = {
   open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: 'var(--text-3)',
@@ -66,7 +63,7 @@ const SupportWidget: React.FC = () => {
   useEffect(() => {
     if (open && tab === 'tickets' && user) {
       setLoadingTickets(true);
-      listMyTickets(user.uid).then(setTickets).catch(() => setTickets([])).finally(() => setLoadingTickets(false));
+      listMyTickets().then(setTickets).catch(() => setTickets([])).finally(() => setLoadingTickets(false));
     }
   }, [open, tab, user]);
 
@@ -90,7 +87,7 @@ const SupportWidget: React.FC = () => {
     if (!user || !title.trim() || submitting) return;
     setSubmitting(true);
     try {
-      await submitTicket(user.uid, user.email, { type: rtype, title, description: desc });
+      await submitTicket({ type: rtype, title, description: desc });
       setSubmitted(true); setTitle(''); setDesc('');
     } catch { /* surface nothing destructive */ } finally {
       setSubmitting(false);
@@ -131,8 +128,8 @@ const SupportWidget: React.FC = () => {
       <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="fullWidth"
         sx={{ minHeight: 36, borderBottom: '1px solid var(--line-soft)', '& .MuiTab-root': { minHeight: 36, fontSize: 12, textTransform: 'none' } }}>
         <Tab label="Ask" value="ask" />
-        {ticketsAvailable && <Tab label="Report" value="report" />}
-        {ticketsAvailable && user && <Tab label="My tickets" value="tickets" />}
+        <Tab label="Report" value="report" />
+        {user && <Tab label="My tickets" value="tickets" />}
       </Tabs>
 
       {/* ASK */}

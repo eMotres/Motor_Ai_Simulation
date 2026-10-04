@@ -30,9 +30,8 @@ _DAY_MS = 86_400_000.0
 
 #: ``source`` of the real user list (the self-hosted registry).
 _USERS_SOURCE = "self-hosted:users.json"
-#: ``source`` of the ticket list: there is no self-hosted ticket store (tickets
-#: lived in Firestore, which is gone), so the real answer is an empty list.
-_TICKETS_SOURCE = "self-hosted:none (no ticket store; Firestore removed)"
+#: ``source`` of the ticket list (ticket_store; Firestore is gone).
+_TICKETS_SOURCE = "self-hosted:tickets.json"
 
 
 def _mock_enabled() -> bool:
@@ -749,32 +748,35 @@ def list_tickets(_admin: dict = Depends(require_admin_or_token)):
     """All support tickets across users (bugs / feature requests / questions).
     Read-only - also reachable with the ADMIN_API_TOKEN bearer (nightly agent).
 
-    Tickets were Firestore documents; that store is gone and nothing replaced
-    it, so the honest answer is an empty list with the source named.  The demo
-    set is served only with ADMIN_MOCK_DATA=1.  (Visitor access requests live
-    in ``/support/requests``.)"""
+    Tickets are filed through POST /api/support/tickets and kept by
+    ``ticket_store``.  The demo set is served only with ADMIN_MOCK_DATA=1.
+    (Visitor access requests live in ``/support/requests``.)"""
     _AA.record(_AA.actor_of(_admin), "tickets.read", str("*"), subject=str(""), details=None)
     if _mock_enabled():
         t = _mock_tickets()
         return {"source": "mock", "count": len(t), "tickets": t}
-    return {"source": _TICKETS_SOURCE, "count": 0, "tickets": []}
+    from motor_ai_sim import ticket_store as _T
+    t = _T.list_all()
+    return {"source": _TICKETS_SOURCE, "count": len(t), "tickets": t}
 
 
 @router.post("/tickets/status")
 def set_ticket_status(body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
     """Update a ticket's status (open / in_progress / resolved / closed)."""
     _AA.record(_AA.actor_of(_admin), "tickets.status", str(str((body or {}).get("id") or "")), subject=str(""), details={"status": (body or {}).get("status")})
-    uid = (body or {}).get("uid")
     tid = (body or {}).get("id")
     status = (body or {}).get("status")
     if status not in _VALID_TICKET_STATUS:
         raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_TICKET_STATUS}")
-    if not uid or not tid:
-        raise HTTPException(status_code=400, detail="uid and id are required")
+    if not tid:
+        raise HTTPException(status_code=400, detail="id is required")
     if _mock_enabled():
         return {"ok": True, "source": "mock", "id": tid, "status": status}
-    raise HTTPException(status_code=501,
-                        detail="no ticket store is configured (Firestore was removed)")
+    from motor_ai_sim import ticket_store as _T
+    rec = _T.set_status(str(tid), status)
+    if rec is None:
+        raise HTTPException(status_code=404, detail=f"no ticket '{tid}'")
+    return {"ok": True, "source": _TICKETS_SOURCE, "id": tid, "status": status}
 
 
 @router.get("/support")

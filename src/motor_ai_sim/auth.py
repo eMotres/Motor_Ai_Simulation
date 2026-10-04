@@ -523,10 +523,17 @@ _REJECT_QUIET_S = 60.0
 _reject_seen: dict[tuple, float] = {}
 
 
-def _should_report(key: tuple) -> bool:
+#: A "malformed" rejection names no account and no session, so its only
+#: identity is where it came from.  A broken poller repeats it forever
+#: (2026-10-04: one every 60 s filled the 200-entry auth-event ring with
+#: context-free rows), so it is recorded far less often.
+_REJECT_QUIET_ANON_S = 900.0
+
+
+def _should_report(key: tuple, quiet_s: float = _REJECT_QUIET_S) -> bool:
     now = time.time()
     with _lock:
-        if now - _reject_seen.get(key, 0.0) < _REJECT_QUIET_S:
+        if now - _reject_seen.get(key, 0.0) < quiet_s:
             return False
         _reject_seen[key] = now
         if len(_reject_seen) > 2000:                       # pragma: no cover
@@ -631,7 +638,12 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
 def _report_reject(reason: str, email: str, sid: str, ip: str,
                    user_agent: str, path: str) -> None:
     from motor_ai_sim import sessions as _sessions
-    if not _should_report((reason, sid or email)):
+    if reason == "malformed" and not (sid or email):
+        # keyed by origin (ip + path), not by the empty identity, so two
+        # different sources are both visible; each is recorded once per 15 min
+        if not _should_report((reason, ip, path), _REJECT_QUIET_ANON_S):
+            return
+    elif not _should_report((reason, sid or email)):
         return
     logger.warning("auth: token REJECTED (%s) email=%r sid=%r ip=%s ua=%r path=%s",
                    reason, email or "?", sid or "-", ip or "?",
@@ -640,14 +652,16 @@ def _report_reject(reason: str, email: str, sid: str, ip: str,
                            ip=ip, user_agent=user_agent, path=path)
 
 
-def resolve_user(authorization: Optional[str]) -> Optional[dict]:
+def resolve_user(authorization: Optional[str], *, ip: str = "",
+                 user_agent: str = "", path: str = "") -> Optional[dict]:
     """Parse a `Bearer <token>` header → {uid,email,tier}, or None.
 
     Accepts, in order: our own local HS256 token (password accounts /
     service use), then a Google ID token (GIS sign-in).  The legacy Firebase
     path is gone with its project.  `resolve_user_detail` is the same call
     with the reason attached — prefer it wherever the reason matters."""
-    return resolve_user_detail(authorization)["user"]
+    return resolve_user_detail(authorization, ip=ip, user_agent=user_agent,
+                               path=path)["user"]
 
 
 class RoleGateMiddleware(BaseHTTPMiddleware):
@@ -671,7 +685,9 @@ class RoleGateMiddleware(BaseHTTPMiddleware):
             need = required_role(request.method, path) if AUTH_ENFORCE else None
             if closed or need is not None:
                 _authz = request.headers.get("authorization")
-                user = resolve_user(_authz)
+                user = resolve_user(
+                    _authz, ip=(request.client.host if request.client else ""),
+                    user_agent=request.headers.get("user-agent", ""), path=path)
                 # The static ADMIN_API_TOKEN is a CREDENTIAL, not an anonymous
                 # visitor: a headless agent presenting it is let through the
                 # door and then meets the same require_admin_or_token its route

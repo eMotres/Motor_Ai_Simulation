@@ -420,3 +420,41 @@ def test_node_ingest_bearer_skips_account_resolution():
     assert not W._is_node_ingest("/api/admin/nodes", ok)
     assert not W._is_node_ingest("/api/admin/nodes/metrics", "Bearer eyJabc")
     assert not W._is_node_ingest("/api/admin/nodes/metrics", None)
+
+
+def test_admin_users_and_tickets_serve_the_real_store_not_mock(env, monkeypatch):
+    """2026-10-04: /api/admin/users + /tickets answered `source: mock` in
+    production because the Firebase Admin SDK is gone."""
+    monkeypatch.delenv("ADMIN_MOCK_DATA", raising=False)
+    tok = _login(ADMIN, "password-admin")["token"]
+    r = client.get("/api/admin/users", headers=_bearer(tok))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"].startswith("self-hosted")
+    emails = {u["email"] for u in body["users"]}
+    assert emails == {ADMIN, CLIENT}          # no invented accounts
+    adm = next(u for u in body["users"] if u["email"] == ADMIN)
+    assert adm["role"] == "admin" and adm["createdAt"] and adm["lastLoginAt"]
+    assert adm["displayName"] == "Admin" and adm["designCount"] == 0
+    t = client.get("/api/admin/tickets", headers=_bearer(tok)).json()
+    assert t["tickets"] == [] and t["source"].startswith("self-hosted")
+    st = client.get("/api/admin/stats", headers=_bearer(tok)).json()
+    assert st["total"] == 2 and st["source"].startswith("self-hosted")
+    # writes act on the real registry or refuse - never a fake ok
+    r = client.post(f"/api/admin/users/{CLIENT}/disable", json={"disabled": True},
+                    headers=_bearer(tok))
+    assert r.json()["source"].startswith("self-hosted")
+    assert env["U"].get_user(CLIENT)["disabled"] is True
+    r = client.post("/api/admin/users/nobody@example.com/role",
+                    json={"role": "admin"}, headers=_bearer(tok))
+    assert r.status_code == 404
+    r = client.post("/api/admin/tickets/status",
+                    json={"uid": "u", "id": "t", "status": "closed"},
+                    headers=_bearer(tok))
+    assert r.status_code == 501
+
+
+def test_admin_mock_dataset_only_behind_the_explicit_flag(env, monkeypatch):
+    monkeypatch.setenv("ADMIN_MOCK_DATA", "1")
+    tok = _login(ADMIN, "password-admin")["token"]
+    assert client.get("/api/admin/users", headers=_bearer(tok)).json()["source"] == "mock"

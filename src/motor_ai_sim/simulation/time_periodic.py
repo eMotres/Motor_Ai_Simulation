@@ -163,17 +163,31 @@ MAP_CHECK_RTOL = {"inverse": 1e-12, "constrained": 1e-10, "bodies": 1e-10,
 #: torque: the owner's term / 10).
 DEMAG_SETTLE_TOL = 1e-3
 #: …and at any single element (a local region still collapsing): 1 % of Br0 in
-#: one period, ten times the area-mean bound.
+#: one period.  A WARNING only (owner 2026-10-04): demag steadiness is judged
+#: by its effect on the observables — the area mean above, the observable
+#: drift between the last pre-pass periods and the rotor-image history — and
+#: a single element still moving is recorded and named in the note, not a
+#: reason for steady_state False.
 DEMAG_SETTLE_ELEMENT_TOL = 1e-2
 
 
-def demag_settled(chg: Dict[str, float], tol: float = DEMAG_SETTLE_TOL,
-                  element_tol: float = DEMAG_SETTLE_ELEMENT_TOL) -> bool:
+def demag_settled(chg: Dict[str, float], tol: float = DEMAG_SETTLE_TOL) -> bool:
     """A period that moved Br by ``chg`` (:func:`br_change`) is settled when
-    the worst magnet's area mean AND the worst single element are within
-    their tolerances."""
-    return bool(float(chg["per_magnet_mean_max"]) <= float(tol)
-                and float(chg["element_max"]) <= float(element_tol))
+    the worst magnet's area-mean change is within ``tol``."""
+    return bool(float(chg["per_magnet_mean_max"]) <= float(tol))
+
+
+def demag_element_warning(chg: Dict[str, float],
+                          element_tol: float = DEMAG_SETTLE_ELEMENT_TOL
+                          ) -> Optional[str]:
+    """The per-element WARNING (not a verdict): a single element moved more
+    than ``element_tol`` of Br0 in the period."""
+    em = float(chg.get("element_max") or 0.0)
+    if em <= float(element_tol):
+        return None
+    return ("one magnet element still moved %.3g of Br0 in the period (warning "
+            "level %.1g) — a local change; the torque, ripple and loss drift "
+            "decide steadiness" % (em, float(element_tol)))
 
 
 def resolve_tdm_demag(requested: Optional[str],

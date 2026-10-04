@@ -637,6 +637,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "steady_state": (None if d.get("steady_state") is None
                          else bool(d["steady_state"])),
         "steady_state_note": d.get("steady_state_note"),
+        "demag_warning": d.get("demag_warning"),
         "demag_settled": (None if d.get("demag_settled") is None
                           else bool(d["demag_settled"])),
         "eddy_method": d.get("eddy_method"),

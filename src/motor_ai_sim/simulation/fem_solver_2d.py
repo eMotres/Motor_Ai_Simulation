@@ -7351,23 +7351,26 @@ def _fem_transient_sliding_band_once(
     # a run whose Br still moves there is labelled demag_settled False /
     # steady_state False, never silently reported as a steady state.
     #
-    # PER ELEMENT TOO (second Codex review, 2026-10-03, finding 3): the area
-    # mean alone lets a local region (a magnet corner) keep collapsing; a
-    # period settles only when no single element moved by more than
-    # SB_DEMAG_SETTLE_ELEMENT_TOL (default 1e-2 of Br0, ten times the mean
-    # bound) as well.  The reported period is judged by both, and a run that
-    # misses either is labelled demag_settled False / steady_state False with
-    # both numbers in the note.  The ratchet physics is unchanged.
+    # PER ELEMENT: A WARNING (owner 2026-10-04).  Demag steadiness is judged
+    # by its effect on the observables: the area mean above, the observable
+    # drift between the last two pre-pass periods and the rotor-image history
+    # (see `_dm_pass_ok`).  A single element still moving more than
+    # SB_DEMAG_SETTLE_ELEMENT_TOL (1e-2 of Br0) in a period is recorded
+    # (`element_warning`) and named in the note, but does not make the run
+    # non-steady — on the L13 rated duty one element at 1.08 % held both
+    # methods "not steady" while torque drifted 1.3e-4 and ripple 0.019 pp.
+    # The same rule in both methods; the ratchet physics is unchanged.
     from motor_ai_sim.simulation.time_periodic import (
         DEMAG_SETTLE_TOL as _DM_TOL0, DEMAG_SETTLE_ELEMENT_TOL as _DM_ETOL0,
-        demag_settled as _demag_settled_rule)
+        demag_settled as _demag_settled_rule,
+        demag_element_warning as _demag_element_warning)
     _dm_settle_tol = float(_os_sb.environ.get("SB_DEMAG_SETTLE_TOL", "") or _DM_TOL0)
     _dm_settle_etol = float(_os_sb.environ.get("SB_DEMAG_SETTLE_ELEMENT_TOL", "")
                             or _DM_ETOL0)
     _dm_prepass_max = max(1, int(_os_sb.environ.get("SB_DEMAG_PREPASS_MAX", "8") or 8))
 
     def _dm_is_settled(chg):
-        return _demag_settled_rule(chg, _dm_settle_tol, _dm_settle_etol)
+        return _demag_settled_rule(chg, _dm_settle_tol)
     _dm_passes: List[Dict[str, Any]] = []   # one record per pre-pass period
     _dm_pass_br0 = None             # Br at the start of the current pre-pass period
     _dm_pass_done = False           # the march's pre-pass iteration has ended
@@ -7492,9 +7495,10 @@ def _fem_transient_sliding_band_once(
                     _dm_areas())
         _rec["image_gap"] = {"per_magnet_mean_max": _gap["per_magnet_mean_max"],
                              "element_max": _gap["element_max"]}
+        # complete after L periods, or when Br already equals its image
+        # minimum on the area mean (per element: a warning, as above)
         _ok = bool((_L is not None and n_periods >= _L)
-                   or (_gap["per_magnet_mean_max"] <= _dm_settle_tol
-                       and _gap["element_max"] <= _dm_settle_etol))
+                   or _gap["per_magnet_mean_max"] <= _dm_settle_tol)
         _rec["complete"] = _ok
         return _rec, _ok
 
@@ -7519,6 +7523,7 @@ def _fem_transient_sliding_band_once(
         _dr = _dm_drift(passes)
         rec["image_history"] = _img
         rec["drift"] = _dr
+        rec["element_warning"] = _demag_element_warning(rec, _dm_settle_etol)
         return bool(_dm_is_settled(rec) and _img_ok and _dr["ok"])
 
     def _dm_cap():
@@ -10835,6 +10840,11 @@ def _fem_transient_sliding_band_once(
             "image_history": _dm_img_rec,
             "drift": _dm_drift_rec,
             "settled": bool(_dm_moved_ok and _dm_img_ok and _dm_drift_rec["ok"]),
+            # per element: a WARNING only (owner 2026-10-04), for the reported
+            # period or the last pre-pass period
+            "warning": (_demag_element_warning(_dm_settle, _dm_settle_etol)
+                        or (_dm_passes[-1].get("element_warning")
+                            if _dm_passes else None)),
             "prepass_periods": len(_dm_passes),
             "prepass_periods_max": int(_dm_cap()),
             "prepass": [{_kk: (float("%.4g" % _vv) if isinstance(_vv, float) else _vv)
@@ -10844,9 +10854,8 @@ def _fem_transient_sliding_band_once(
             if not _dm_moved_ok:
                 _why.append(
                     "the reported period moved Br by %.3g (worst magnet, area mean "
-                    "|dBr|/Br0; tol %.1g) and by %.3g at one element (tol %.1g)"
-                    % (_dm_settle["per_magnet_mean_max"], _dm_settle_tol,
-                       _dm_settle["element_max"], _dm_settle_etol))
+                    "|dBr|/Br0; tol %.1g)"
+                    % (_dm_settle["per_magnet_mean_max"], _dm_settle_tol))
             if not _dm_img_ok:
                 _g = (_dm_img_rec or {}).get("image_gap") or {}
                 _why.append(
@@ -10870,6 +10879,8 @@ def _fem_transient_sliding_band_once(
                 "demag NOT settled after %d pre-pass period(s): %s — a demag "
                 "transient, not a steady state" % (len(_dm_passes), "; ".join(_why)))
             log.warning("P2 %s", _dm_settle["note"])
+        if _dm_settle.get("warning"):
+            log.warning("P2 demag WARNING: %s", _dm_settle["warning"])
     if _tdm_info is not None and _eddy_method == "tdm":   # a TDM that succeeded
         _tdm_info["t"]["report_loop"] = _t.time() - _tdm_info.pop("t_report_start")
         _tdm_info["report_newton_iterations_mean"] = (
@@ -12825,6 +12836,9 @@ def _fem_transient_sliding_band_once(
         # both affirmatively; unknown is not steady.
         "demag_settle": _dm_settle,
         "demag_settled": (None if _dm_settle is None else bool(_dm_settle["settled"])),
+        # a single magnet element still moving > 1 % of Br0 per period: a
+        # WARNING beside the verdict, never the verdict (owner 2026-10-04)
+        "demag_warning": (None if _dm_settle is None else _dm_settle.get("warning")),
         "steady_state": bool(_eddy_verdict is True
                              and not (_dm_settle is not None
                                       and _dm_settle["settled"] is not True)),

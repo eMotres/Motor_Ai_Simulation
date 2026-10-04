@@ -8020,6 +8020,7 @@ def _build_transient_summary(
         "steady_state": (None if sbres.get("steady_state") is None
                          else bool(sbres["steady_state"])),
         "steady_state_note": sbres.get("steady_state_note"),
+        "demag_warning": sbres.get("demag_warning"),
         # an EXPERIMENTAL (not qualified) result never passes as a qualified one
         "tdm_experimental": bool(sbres.get("tdm_experimental", False)),
         "qualified": (None if sbres.get("qualified") is None

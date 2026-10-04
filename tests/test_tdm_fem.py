@@ -419,19 +419,25 @@ def test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods(
         assert s is not None and s["prepass_periods"] >= 1
         assert s["element_tol"] == TP.DEMAG_SETTLE_ELEMENT_TOL
         last = s["prepass"][-1]
-        # iterated until a period moved Br by <= tol on the area mean AND at
-        # every element (second review), the rotor-image history is complete
-        # and the observables stopped drifting (third review), or the cap
+        # iterated until a period moved Br by <= tol on the area mean, the
+        # rotor-image history is complete and the observables stopped drifting
+        # (third review), or the cap; one element still moving is a WARNING
+        # (owner 2026-10-04)
         img = last["image_history"]
         assert img["cycle_periods"] == 7          # 12s14p sector: 7 pole-pair images
-        stopped = (TP.demag_settled(last, s["tol"], s["element_tol"])
+        stopped = (TP.demag_settled(last, s["tol"])
                    and img["complete"] and last["drift"]["ok"])
         assert stopped or s["prepass_periods"] == s["prepass_periods_max"]
         assert s["prepass_periods_max"] >= img["cycle_periods"]
         assert d["demag_settled"] is (s["moved_settled"]
                                       and s["image_history"]["complete"]
                                       and s["drift"]["ok"])
-        assert s["moved_settled"] is TP.demag_settled(s, s["tol"], s["element_tol"])
+        assert s["moved_settled"] is TP.demag_settled(s, s["tol"])
+        # the per-element number is a warning beside the verdict, never in it
+        assert d["demag_warning"] == s["warning"]
+        assert (s["warning"] is None) is (
+            s["element_max"] <= s["element_tol"]
+            and last["element_max"] <= s["element_tol"])
         assert d["steady_state"] is (d["eddy_settled"] is True and d["demag_settled"])
         # the drift is measured on the last two pre-pass periods' torque
         assert s["drift"].get("T_mean_rel") is not None
@@ -439,7 +445,7 @@ def test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods(
         if d["demag_settled"]:
             assert d["steady_state_note"] is None
         else:
-            assert "element" in d["steady_state_note"]
+            assert d["steady_state_note"].startswith("demag NOT settled")
     assert tdm_demag["eddy_method"] == "tdm"
     # the same answer (the period counts may differ by one: the march's pre-pass
     # carries the eddy start-up transient of the Br collapse, TDM's does not)

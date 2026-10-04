@@ -440,10 +440,16 @@ def test_period_map_checks_pass_an_exact_map_and_catch_each_defect():
     assert not ok and "constrained" in rec["failed"]
 
 
-def test_demag_settled_needs_both_the_mean_and_the_element():
+def test_demag_settled_is_the_mean_and_the_element_is_a_warning():
+    """Owner 2026-10-04: the per-magnet area mean decides (with the drift and
+    the image history, in the solver); one element still moving > 1 % of Br0
+    is a WARNING, recorded, not a verdict."""
     assert tp.demag_settled({"per_magnet_mean_max": 5e-4, "element_max": 5e-3})
-    assert not tp.demag_settled({"per_magnet_mean_max": 5e-4, "element_max": 0.02})
+    assert tp.demag_settled({"per_magnet_mean_max": 5e-4, "element_max": 0.02})
     assert not tp.demag_settled({"per_magnet_mean_max": 2e-3, "element_max": 1e-3})
+    assert tp.demag_element_warning({"element_max": 5e-3}) is None
+    w = tp.demag_element_warning({"element_max": 0.0108})
+    assert w and "0.0108" in w and "warning" in w
 
 
 def test_the_shortcut_is_never_taken_from_the_environment():

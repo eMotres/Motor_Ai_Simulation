@@ -8616,7 +8616,7 @@ def _fem_transient_sliding_band_once(
                 _extra = 0
 
                 def _need_more():
-                    if _incs[-1] <= 1e-2 * _tdm.CLOSURE_GATE["state_rel"] * _a_n:
+                    if _incs[-1] <= _tdm.SAFEGUARD_STOP_REL * _a_n:
                         return False           # the march itself has stopped moving
                     return (_rho_eff >= _tdm.RHO_SAFEGUARD
                             or (not _ctr["ritz_converged"] and _rho_o is None))
@@ -11184,6 +11184,16 @@ def _fem_transient_sliding_band_once(
             if ("error" not in _gate and _dm_settle is not None
                     and not _dm_settle.get("moved_settled", _dm_settle["settled"])):
                 _gate["kept_because"] = "demag not settled: the window is a Br transient"
+            elif ("error" not in _gate and _dm_shortcut_used and _dm_settle is not None
+                  and float(_dm_settle.get("element_max") or 0.0) > 0.0):
+                # the demag SHORTCUT (optimizer candidates, not qualified): the
+                # Br its two windows did not reach is still ratcheted in the
+                # reported window, so the window departs from the frozen-Br
+                # orbit by the ratchet, not by an orbit error (the closure march
+                # and the error estimate judge the orbit).  Kept, labelled.
+                _gate["kept_because"] = ("demag shortcut: the reported window "
+                                         "ratchets the Br the windows did not "
+                                         "reach (not qualified)")
             else:
                 raise TdmAttemptFailed(
                     "report_gate",
@@ -11976,6 +11986,10 @@ def _fem_transient_sliding_band_once(
                       P_sleeve_ser2)]
     P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0
 
+    # a report-gate miss that was KEPT (a demag transient, or the shortcut's
+    # unreached Br) is never a steady state
+    _gate_kept = ((_tdm_info or {}).get("gate") or {}).get("kept_because") \
+        if (_tdm_info is not None and _eddy_method == "tdm") else None
     # ── THE EDDY SETTLE VERDICT, AFFIRMATIVE ONLY (third Codex review,
     # 2026-10-04).  `_warm_quiet` is True (measured, settled), False (measured,
     # not settled) or None — and None is NOT "settled": it is an unmeasured
@@ -12018,7 +12032,8 @@ def _fem_transient_sliding_band_once(
         # the orbit is the ratchet's, not an orbit error, so the estimate
         # judges the orbit alone there (and says so)
         _c_transient = bool(_dm_settle is not None
-                            and not _dm_settle.get("moved_settled", True))
+                            and (not _dm_settle.get("moved_settled", True)
+                                 or "kept_because" in (_tdm_info.get("gate") or {})))
         _ok_c, _rec_c = _tdm.estimate_check(
             _tdm_info["orbit_error_estimate"], P_total_W=float(P_loss_avg2),
             report_windows=(None if _c_transient
@@ -13066,12 +13081,14 @@ def _fem_transient_sliding_band_once(
         "demag_warning": (None if _dm_settle is None else _dm_settle.get("warning")),
         "steady_state": bool(_eddy_verdict is True
                              and not (_dm_settle is not None
-                                      and _dm_settle["settled"] is not True)),
+                                      and _dm_settle["settled"] is not True)
+                             and not _gate_kept),
         # …and WHY not, with the numbers (None when steady)
         "steady_state_note": (
             (_dm_settle or {}).get("note") if (_dm_settle is not None
                                               and _dm_settle["settled"] is not True)
-            else _eddy_verdict_note),
+            else ("the reported period departs from the TDM orbit (%s)" % _gate_kept)
+            if _gate_kept else _eddy_verdict_note),
         # PROVENANCE (owner 2026-09-27): settled, but the discarded warm-up
         # prefix was moved by periodic-accelerator jumps (the gauge then judged
         # >= MIN_VERIFY_PERIODS continuous periods after the last jump).

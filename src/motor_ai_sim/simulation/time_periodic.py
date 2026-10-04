@@ -1400,6 +1400,10 @@ RHO_SAFEGUARD = 0.98
 #: ... at most this many.  If the decay is still not resolved the attempt is
 #: rejected (one strict retry, then a march with a note).
 EXTRA_CLOSURE_MAX = 4
+#: The safeguard stops marching closure periods once the march's deviation
+#: from the orbit moves by less than this fraction of the orbit state in a
+#: period (nothing left to observe).
+SAFEGUARD_STOP_REL = 1e-6
 #: Arnoldi's top Ritz value counts as converged when its last change is below
 #: this fraction of itself.
 RITZ_CONVERGED_RTOL = 1e-3

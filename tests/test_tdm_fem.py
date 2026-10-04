@@ -296,23 +296,34 @@ def test_a_failed_error_estimate_retries_strictly_then_marches(monkeypatch, marc
     _same_as(d, march)
 
 
-def test_the_empirical_safeguard_marches_more_closure_periods(monkeypatch, tdm):
-    """Fourth review: when the Ritz estimate is not trusted (here: the
-    safeguard threshold forced to 0), further closure periods are marched and
-    the contraction is OBSERVED; rho_eff = max(rho_ritz, rho_observed); the
-    observed orbit error enters the estimate.  The orbit itself is unchanged."""
-    monkeypatch.setattr(TP, "RHO_SAFEGUARD", 0.0)
+def test_the_empirical_safeguard_marches_and_refuses_an_unresolved_decay(
+        monkeypatch, march):
+    """Fourth review: when the Ritz estimate is not trusted (forced
+    "unconverged") and the march's own stop threshold is removed, the
+    safeguard marches further closure periods and OBSERVES the decay.  On the
+    fixture the deviation is then at the closure march's round-off, so the
+    observed per-period ratio reads ~1 (measured rho_eff 0.988): an
+    unresolved slow mode by the rule — after EXTRA_CLOSURE_MAX periods the
+    attempt is rejected, retried strictly, and MARCHED with the reason in the
+    note, never accepted on an unverified decay.  (With the default threshold
+    the march stops observing once its deviation moves < 1e-6 of the state.)"""
+    monkeypatch.setattr(TP, "RITZ_CONVERGED_RTOL", -1.0)
+    monkeypatch.setattr(TP, "SAFEGUARD_STOP_REL", 0.0)
     d = _run()
-    assert d["eddy_method"] == "tdm"
-    est = d["tdm"]["orbit_error_estimate"]
-    assert est["ok"] is True and est["extra_closure_periods"] >= 1
-    assert est["closure_periods"] == 1 + est["extra_closure_periods"]
+    assert d["eddy_method"] == "march" and d["eddy_method_requested"] == "tdm"
+    assert "not resolved after %d extra closure period(s)" % TP.EXTRA_CLOSURE_MAX \
+        in d["eddy_method_note"]
+    att = d["tdm"]["attempts"]
+    assert [a["stage"] for a in att] == ["error_estimate", "error_estimate"]
+    est = att[0]["tdm"]["orbit_error_estimate"]
+    assert est["ritz_converged"] is False
+    assert est["extra_closure_periods"] == TP.EXTRA_CLOSURE_MAX
+    assert est["closure_periods"] == 1 + TP.EXTRA_CLOSURE_MAX
+    assert len(est["deviation_increments"]) == est["closure_periods"]
     assert est["rho_observed"] is not None
     assert est["rho_eff"] == pytest.approx(max(est["rho_ritz"], est["rho_observed"]))
-    assert len(est["deviation_increments"]) == est["closure_periods"]
-    assert est["error_norm_observed"] is not None
-    assert est["error_norm"] >= est["error_norm_observed"] * (1 - 1e-12)
-    _same_as(d, tdm, rel=1e-12)
+    assert est["rho_eff"] >= TP.RHO_SAFEGUARD
+    _same_as(d, march)
 
 
 def test_an_unknown_settle_is_never_reported_steady():
@@ -546,6 +557,13 @@ def test_the_demag_shortcut_is_adaptive_two_windows_and_not_qualified(
     assert ws[1]["selection"]["predicted_drop"] != ws[0]["selection"]["predicted_drop"]
     s = d["demag_settle"]
     assert s["image_history"]["method"].startswith("pole-image transfer")
+    # the Br the two windows did not reach is ratcheted in the reported
+    # window: a gate miss there is kept, labelled (measured on the fixture:
+    # state 1.5e-3, torque 7.8e-4) — never silently; a rejected attempt
+    # would have marched
+    gate = d["tdm"]["gate"]
+    if gate["ok"] is not True:
+        assert gate["kept_because"].startswith("demag shortcut")
     assert d["T_avg_Nm"] == pytest.approx(tdm_demag["T_avg_Nm"], rel=2e-3)
 
 

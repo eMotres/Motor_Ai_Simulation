@@ -1,11 +1,7 @@
-// Support: AI chat (via the backend Claude proxy) + user-filed tickets in
-// Firestore (users/{uid}/tickets/{id}), mirroring the saved-designs pattern.
-// Admins read every user's tickets via the backend /api/admin/tickets.
-import {
-  collection, doc, getDocs, setDoc, query, orderBy, serverTimestamp,
-} from 'firebase/firestore';
-import { db } from './firebase';
-
+// Support: AI chat (via the backend Claude proxy) + user-filed tickets stored by
+// the backend (POST/GET /api/support/tickets; the caller's identity comes from
+// the Authorization header the app attaches, never from the body).
+// Admins read every user's tickets via /api/admin/tickets.
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
 export type TicketType = 'bug' | 'feature' | 'question';
@@ -16,26 +12,30 @@ export interface Ticket {
   title: string;
   description: string;
   status: string;     // open | in_progress | resolved | closed
-  createdAt?: unknown;
+  createdAt?: number | null;   // ms epoch
 }
 
-const col = (uid: string) => collection(db!, 'users', uid, 'tickets');
-
-/** File a support ticket (bug / feature / question) for the signed-in user. */
+/** File a support ticket (bug / feature / question) as the signed-in user. */
 export async function submitTicket(
-  uid: string, email: string | null, t: { type: TicketType; title: string; description: string },
-): Promise<void> {
-  const id = `t_${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-  await setDoc(doc(col(uid), id), {
-    type: t.type, title: t.title.trim(), description: t.description.trim(),
-    email: email ?? null, status: 'open', createdAt: serverTimestamp(),
+  t: { type: TicketType; title: string; description: string },
+): Promise<Ticket> {
+  const r = await fetch(`${API}/api/support/tickets`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: t.type, title: t.title.trim(), description: t.description.trim() }),
   });
+  if (!r.ok) {
+    let detail = `HTTP ${r.status}`;
+    try { const b = await r.json(); if (typeof b?.detail === 'string') detail = b.detail; } catch { /* keep status */ }
+    throw new Error(detail);
+  }
+  return (await r.json()).ticket as Ticket;
 }
 
 /** The signed-in user's own tickets, newest first. */
-export async function listMyTickets(uid: string): Promise<Ticket[]> {
-  const snap = await getDocs(query(col(uid), orderBy('createdAt', 'desc')));
-  return snap.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Ticket, 'id'>) }));
+export async function listMyTickets(): Promise<Ticket[]> {
+  const r = await fetch(`${API}/api/support/tickets`);
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return ((await r.json()).tickets ?? []) as Ticket[];
 }
 
 export interface ChatMsg { role: 'user' | 'assistant'; content: string; }

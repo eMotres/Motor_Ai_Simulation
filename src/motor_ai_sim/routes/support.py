@@ -896,3 +896,40 @@ def chat(request: Request, body: dict = Body(default={}),
              if rate_limited else
              f"Sorry — I couldn't answer just now. Please try again, or {where}."),
             "error", detail=msg[:200])
+
+
+# -- user tickets (bug / feature / question) ---------------------------------
+# Self-hosted (ticket_store); the owner is ALWAYS the verified caller.
+
+def _ticket_caller(authorization: Optional[str]) -> str:
+    from fastapi import HTTPException
+    from motor_ai_sim.auth import resolve_user
+    user = resolve_user(authorization)
+    email = str((user or {}).get("email") or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=401, detail="sign in to use tickets")
+    return email
+
+
+@router.post("/tickets")
+def create_ticket(body: dict = Body(default={}),
+                  authorization: Optional[str] = Header(default=None)):
+    """File a ticket as the signed-in caller (identity never read from the body)."""
+    from fastapi import HTTPException
+    from motor_ai_sim import ticket_store as T
+    email = _ticket_caller(authorization)
+    body = body if isinstance(body, dict) else {}
+    try:
+        t = T.create(email, body.get("type"), body.get("title"),
+                     body.get("description"))
+    except T.TicketError as e:
+        raise HTTPException(status_code=e.status, detail=str(e))
+    return {"ok": True, "ticket": t}
+
+
+@router.get("/tickets")
+def my_tickets(authorization: Optional[str] = Header(default=None)):
+    """The caller's own tickets, newest first."""
+    from motor_ai_sim import ticket_store as T
+    rows = T.list_for(_ticket_caller(authorization))
+    return {"count": len(rows), "tickets": rows}

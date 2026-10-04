@@ -32,7 +32,7 @@ const LogsSection: React.FC = () => {
       fetch(`${API}/api/admin/tickets`).then((r) => (r.ok ? r.json() : { tickets: [] })).catch(() => ({ tickets: [] })),
       fetch(`${API}/api/admin/support`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
-    // Ticket storage was Firestore; without it the backend serves a flagged
+    // Tickets are stored by the backend (self-hosted); only an explicit dev flag serves a flagged
     // mock set — never show invented tickets as if they were real.
     setTickets(tk.source === 'mock' ? [] : (tk.tickets || [])); setSupportCfg(sc);
   }, []);

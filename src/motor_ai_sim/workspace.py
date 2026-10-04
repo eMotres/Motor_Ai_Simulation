@@ -827,7 +827,8 @@ def _presented(authorization: Optional[str]) -> bool:
     return isinstance(authorization, str) and bool(authorization.strip())
 
 
-def workspace_for_request(authorization: Optional[str]) -> Workspace:
+def workspace_for_request(authorization: Optional[str], *, ip: str = "",
+                          user_agent: str = "", path: str = "") -> Workspace:
     """``Authorization`` header -> workspace, FAIL-CLOSED (audit 2026-09-29 #7).
 
     * multi-user off (``WORKSPACES_ROOT`` unset): the process workspace, always
@@ -855,7 +856,8 @@ def workspace_for_request(authorization: Optional[str]) -> Workspace:
         if not who or who == ANON_OWNER:
             if not _presented(authorization):
                 return process_workspace()
-            _raise_for_unverified(authorization)
+            _raise_for_unverified(authorization, ip=ip, user_agent=user_agent,
+                                  path=path)
             return process_workspace()          # the static service token
         return workspace_for_identity(who)
     except WorkspaceResolutionError:
@@ -867,7 +869,8 @@ def workspace_for_request(authorization: Optional[str]) -> Workspace:
         raise WorkspaceResolutionError(500, "workspace_resolution_failed") from exc
 
 
-def _raise_for_unverified(authorization: str) -> None:
+def _raise_for_unverified(authorization: str, *, ip: str = "",
+                          user_agent: str = "", path: str = "") -> None:
     """A credential was presented and ``caller_identity`` could not name it.
 
     The static ``ADMIN_API_TOKEN`` is the one credential that is valid WITHOUT
@@ -879,7 +882,8 @@ def _raise_for_unverified(authorization: str) -> None:
         return
     reason = "rejected"
     try:
-        reason = str(_auth.resolve_user_detail(authorization).get("reason") or "rejected")
+        reason = str(_auth.resolve_user_detail(
+            authorization, ip=ip, user_agent=user_agent, path=path).get("reason") or "rejected")
     except Exception as exc:                                # noqa: BLE001
         log.error("workspace: token re-check crashed (%s: %s)", type(exc).__name__, exc)
         raise WorkspaceResolutionError(503, "store_unavailable") from exc
@@ -1309,8 +1313,27 @@ class WorkspaceMiddleware:
                 except Exception:       # noqa: BLE001
                     auth_hdr = None
                 break
+        _path = str(scope.get("path") or "")
+        if _is_node_ingest(_path, auth_hdr):
+            # A node agent's own ``mnode_`` bearer is not an account credential:
+            # the route verifies it (cluster_monitor.verify_token).  Resolving
+            # it as one logged a warning + an auth "malformed" reject every 15 s.
+            token = _WS.set(quarantine_workspace())
+            try:
+                await self.app(scope, receive, send)
+            finally:
+                _WS.reset(token)
+            return
+        _client = scope.get("client")
+        _ua = ""
+        for _k, _v in (scope.get("headers") or ()):
+            if _k.lower() == b"user-agent":
+                _ua = _v.decode("latin-1", "replace")
+                break
         try:
-            resolved = workspace_for_request(auth_hdr)
+            resolved = workspace_for_request(
+                auth_hdr, ip=(_client[0] if _client else ""), user_agent=_ua,
+                path=_path)
         except WorkspaceResolutionError as exc:
             if _open_path(str(scope.get("path") or "")):
                 # The sign-in plumbing (/api/me, /api/auth/*, /api/health ...)
@@ -1333,6 +1356,15 @@ class WorkspaceMiddleware:
             _CALLER.reset(ctok)
             _WRITE_LAYER.reset(ltok)
             _WS.reset(token)
+
+
+def _is_node_ingest(path: str, auth_hdr: Optional[str]) -> bool:
+    """The cluster-monitor metrics POST carrying a per-node ``mnode_`` token."""
+    if path != "/api/admin/nodes/metrics" or not auth_hdr:
+        return False
+    parts = auth_hdr.split(" ", 1)
+    return (len(parts) == 2 and parts[0].lower() == "bearer"
+            and parts[1].strip().startswith("mnode_"))
 
 
 def _open_path(path: str) -> bool:

@@ -301,6 +301,260 @@ def test_newton_rejects_an_inaccurate_wrap_solve():
     assert rec["gmres_rel_resid"] > tp.GMRES_ACCEPT_FACTOR * 1e-8
 
 
+def _perturbed_gmres(factor):
+    """A wrap 'GMRES' that returns the exact solution plus a perturbation whose
+    TRUE residual is ``factor`` x the forcing term, flagged unconverged."""
+    real = tp.gmres_right
+
+    def fake(mv, g, prec=None, x0=None, rtol=1e-8, restart=40, maxiter=200):
+        x, info = real(mv, g, prec=prec, rtol=1e-13, restart=60, maxiter=2000)
+        d = np.random.default_rng(0).standard_normal(g.size)
+        x = x + factor * rtol * np.linalg.norm(g) / np.linalg.norm(mv(d)) * d
+        r = float(np.linalg.norm(g - mv(x)) / np.linalg.norm(g))
+        return x, {"iterations": int(info["iterations"]), "restarts": 0, "resid": [],
+                   "rel_resid": r, "converged": False}
+    return fake
+
+
+def test_bounded_inexact_newton_accepts_a_step_within_the_factor(monkeypatch):
+    """Second Codex review, finding 8: a wrap solve that misses its forcing
+    term eta but whose TRUE residual is within GMRES_ACCEPT_FACTOR * eta is a
+    valid inexact-Newton step (forcing < 1): it is taken, recorded as such
+    (true residual recomputed by the solver itself), and the Newton still
+    converges to the march's fixed point — the accuracy of the orbit does not
+    depend on the GMRES."""
+    m = _model(dc_source=True)
+    dt = 1e-4
+    ref = _march(m, dt, periods=150)[-NSTEP:]
+    monkeypatch.setattr(tp, "gmres_right", _perturbed_gmres(5.0))
+    starts = [np.zeros(N) for _ in range(NSTEP)]
+    orbit, st = _tdm(m, dt, NSTEP, lambda v: np.array(v, float), False, starts,
+                     eta=1e-3)
+    assert st["converged"] and st["stopped_by"] == "state_residual"
+    steps = [r for r in st["newton"] if "gmres_iterations" in r]
+    assert steps
+    for r in steps:
+        assert r["gmres_converged"] is False and r["gmres_accepted_inexact"] is True
+        assert 1e-3 < r["gmres_rel_resid"] <= tp.GMRES_ACCEPT_FACTOR * 1e-3
+        # recomputed by the solver, independent of what GMRES said
+        assert r["gmres_rel_resid"] == pytest.approx(r["gmres_reported_rel_resid"],
+                                                     rel=1e-6)
+    err = max(np.linalg.norm(orbit[j] - ref[j]) for j in range(NSTEP))
+    assert err < 1e-7 * max(np.linalg.norm(a) for a in ref)
+
+
+def test_bounded_inexact_newton_rejects_a_step_beyond_the_factor(monkeypatch):
+    m = _model(dc_source=True)
+    dt = 1e-4
+    monkeypatch.setattr(tp, "gmres_right", _perturbed_gmres(20.0))
+    starts = [np.zeros(N) for _ in range(NSTEP)]
+    _, st = _tdm(m, dt, NSTEP, lambda v: np.array(v, float), False, starts, eta=1e-3)
+    assert st["converged"] is False and st["stopped_by"] == "gmres_not_converged"
+    r = st["newton"][-1]
+    assert r["gmres_accepted_inexact"] is False
+    assert r["gmres_rel_resid"] > tp.GMRES_ACCEPT_FACTOR * 1e-3
+
+
+# -- second Codex review (2026-10-03): closure, map checks, demag, shortcut ---
+def test_state_closure_per_group_and_level():
+    M = {"cu": diags(np.r_[np.ones(3), np.zeros(3)], format="csr"),
+         "shaft": diags(np.r_[np.zeros(3), np.ones(3)], format="csr")}
+    ref = np.r_[np.ones(3), 0.01 * np.ones(3)]
+    got = ref.copy()
+    got[4] += 0.01 * 1e-4          # the small shaft group moved 1e-4/sqrt(3) of itself
+    ok, info = tp.state_closure([("frame 11", got, ref), ("frame 10", ref, ref)], M,
+                                1e-4)
+    assert ok and info["levels"]["frame 10"]["shaft"] == 0.0
+    ok, info = tp.state_closure([("frame 11", got, ref)], M, 1e-4 / 2)
+    assert not ok and info["worst_at"] == ("frame 11", "shaft")
+    bad = ref.copy(); bad[0] = np.nan
+    assert not tp.state_closure([("x", bad, ref)], M, 1.0)[0]   # non-finite fails
+
+
+def _sector_maps(n=12):
+    """A toy 'period map' on n dofs: dofs 0..5 stator (fixed), 6..11 rotor
+    (a cyclic shift by 2 with the anti-periodic BC sign on the fold)."""
+    rot = np.arange(6, 12)
+    perm = np.roll(np.arange(6), 2)
+    sgn = np.where(np.arange(6) < 2, -1.0, 1.0)
+
+    def back(v):
+        o = np.array(v, float, copy=True)
+        o[rot] = sgn * np.asarray(v, float)[rot[perm]]
+        return o
+
+    inv = np.argsort(perm)
+
+    def fwd(v):
+        o = np.array(v, float, copy=True)
+        o[rot[perm]] = np.asarray(v, float)[rot] * sgn
+        return o
+    return back, fwd, rot, perm, sgn, inv
+
+
+def test_period_map_checks_pass_an_exact_map_and_catch_each_defect():
+    back, fwd, rot, perm, sgn, _ = _sector_maps()
+    n = 12
+    I = identity(n, format="csr")
+    # operators invariant under the map: stator block anything, rotor block a
+    # circulant compatible with the signed shift (diagonal here)
+    K = diags(np.r_[np.arange(1.0, 7.0), 2.0 * np.ones(6)], format="csr")
+    Ms = diags(np.r_[np.zeros(6), np.ones(6)], format="csr")
+    # bodies: one stator coil (dofs 0-1), three rotor bodies of two dofs each
+    # that the shift-by-two permutes (with the BC sign on the folded one)
+    cols = [np.r_[1, 1, np.zeros(10)]]
+    for b in range(3):
+        c = np.zeros(n); c[6 + 2 * b: 8 + 2 * b] = 1.0; cols.append(c)
+    G = csr_matrix(np.stack(cols, axis=1))
+    S = np.array([2.0, 2.0, 2.0, 2.0])
+    f = np.zeros(n)            # a source the map leaves invariant
+    kw = dict(P_from=I, P_to=I, P_start=I, P_fwd=I, K=K, Msig=Ms, GT=G.T.tocsr(),
+              S_raw=S, f_mag=f)
+    ok, rec = tp.period_map_checks(wrap=back, wrapf=fwd, **kw)
+    assert ok, rec
+    assert rec["dev"]["inverse"] == 0.0 and rec["dev"]["bodies"] < 1e-14
+    # an inverse that is not exact
+    ok, rec = tp.period_map_checks(wrap=back, wrapf=lambda v: fwd(v) * (1 + 1e-6), **kw)
+    assert not ok and rec["failed"] == ["inverse"]
+    # a wrong BC sign on one rotor dof: the operators and the bodies see it
+    def back_bad(v):
+        o = back(v); o[rot[3]] *= -1.0; return o
+
+    def fwd_bad(v):
+        w = np.array(v, float, copy=True); w[rot[3]] *= -1.0; return fwd(w)
+    Kc = K + csr_matrix((np.ones(2), ([rot[3], rot[4]], [rot[4], rot[3]])), shape=(n, n))
+    ok, rec = tp.period_map_checks(wrap=back_bad, wrapf=fwd_bad,
+                                   **dict(kw, K=Kc))
+    assert not ok and "bodies" in rec["failed"]
+    # a magnet source the map does not leave invariant
+    f2 = np.zeros(n); f2[rot[0]] = 1.0
+    ok, rec = tp.period_map_checks(wrap=back, wrapf=fwd, **dict(kw, f_mag=f2))
+    assert not ok and rec["failed"] == ["source"]
+    # a constrained space the map does not preserve (a weld 0 == 6 at the
+    # start frame, no weld at the end frame)
+    rows = list(range(n)); cs = list(range(n)); cs[6] = 0
+    from scipy.sparse import coo_matrix
+    Pw = coo_matrix((np.ones(n), (rows, cs)), shape=(n, n)).tocsc()
+    Pw = Pw[:, np.flatnonzero(np.asarray(Pw.sum(axis=0)).ravel() > 0)].tocsr()
+    ok, rec = tp.period_map_checks(wrap=back, wrapf=fwd, **dict(kw, P_to=Pw))
+    assert not ok and "constrained" in rec["failed"]
+
+
+def test_demag_settled_is_the_mean_and_the_element_is_a_warning():
+    """Owner 2026-10-04: the per-magnet area mean decides (with the drift and
+    the image history, in the solver); one element still moving > 1 % of Br0
+    is a WARNING, recorded, not a verdict."""
+    assert tp.demag_settled({"per_magnet_mean_max": 5e-4, "element_max": 5e-3})
+    assert tp.demag_settled({"per_magnet_mean_max": 5e-4, "element_max": 0.02})
+    assert not tp.demag_settled({"per_magnet_mean_max": 2e-3, "element_max": 1e-3})
+    assert tp.demag_element_warning({"element_max": 5e-3}) is None
+    w = tp.demag_element_warning({"element_max": 0.0108})
+    assert w and "0.0108" in w and "warning" in w
+
+
+def test_the_shortcut_is_never_taken_from_the_environment():
+    assert tp.resolve_tdm_demag(None, {}) == ("full", None)
+    mode, note = tp.resolve_tdm_demag(None, {"SB_TDM_DEMAG": "shortcut"})
+    assert mode == "full" and "ignored" in note
+    assert tp.resolve_tdm_demag("shortcut", {}) == ("shortcut", None)
+    assert tp.resolve_tdm_demag("full", {"SB_TDM_DEMAG": "shortcut"}) == ("full", None)
+    with pytest.raises(ValueError):
+        tp.resolve_tdm_demag("fast", {})
+
+
+# -- third Codex review (2026-10-04): the certified orbit error ----------------
+def _solver_open(m, dt, n_frames, coarse, tol):
+    cond = np.flatnonzero(m["Msig"].diagonal() > 0)
+    Msd = tp.bdf2_msd(m["Msig"], dt)
+    frames = [tp.TdmFrame(j, _pro(j), _free(_pro(j)), _cur(j), Msd=Msd, G=m["G"],
+                          cond=cond, factor=tp.FrameFactor()) for j in range(n_frames)]
+    spec = None
+    if coarse:
+        ring = np.arange(20, 31)
+        spec = {"ring": ring, "Msig": m["Msig"],
+                "image": (np.arange(ring.size), np.ones(ring.size), 1, 1.0),
+                "period_s": n_frames * dt}
+    return tp.TimePeriodicEddy(kfun=m["kfun"], tangent=m["tangent"], f_mag=m["f"],
+                               G=m["G"], Msig=m["Msig"], S_raw=m["S"], dt=dt,
+                               frames=frames, wrap_back=lambda v: np.array(v, float),
+                               cond=cond, coarse=spec, tol=tol, workers=1), cond
+
+
+def _march_one_period(m, dt, As, Us):
+    """The test's own march (dense bordered Newton) from the orbit's start."""
+    a1, a2 = As[-1], As[-2]
+    out = []
+    U = Us[0].copy()
+    for k in range(NSTEP):
+        P = _pro(k)
+        Ah = tp.C_M1 * a1 + tp.C_M2 * a2
+        A, U = _step(m, P, _free(P), As[k], U, _cur(k), Ah, dt, True)
+        out.append(A)
+        a2, a1 = a1, A
+    return out
+
+
+def test_the_certified_orbit_error_sees_the_slow_mode():
+    """A loosely converged orbit on a slow ring (tau ~ 200 periods): the
+    one-period closure defect d is far SMALLER than the true orbit error
+    (the slow mode barely moves in one period) — exactly the reviewer's case.
+    The certification recovers it: rho (Arnoldi) is the slow eigenvalue of
+    the dense period map, e = (I - T)^-1 d matches the true error, and
+    |d| / (1 - rho) bounds it."""
+    m = _model(dc_source=True, sig_ring=20.0)
+    dt = 1e-4
+    starts = [np.zeros(N) for _ in range(NSTEP)]
+    ref, st_ref = _tdm(m, dt, NSTEP, lambda v: np.array(v, float), True, starts)
+    assert st_ref["converged"]
+    s, cond = _solver_open(m, dt, NSTEP, True, tol=1e-3)
+    try:
+        assert s.solve(starts, [np.zeros(1)] * NSTEP)["converged"]
+        As = [fr.A.copy() for fr in s.frames]
+        Us = [fr.U.copy() for fr in s.frames]
+        mar = _march_one_period(m, dt, As, Us)
+        d = np.concatenate([(mar[-2] - As[-2])[cond], (mar[-1] - As[-1])[cond]])
+        e_true = np.concatenate([(ref[-2] - As[-2])[cond], (ref[-1] - As[-1])[cond]])
+        s.refresh_jacobian(As, Us)
+        ctr = s.contraction(d, m=15)
+        nw = 2 * cond.size
+        T = np.column_stack([s.period_map(np.eye(nw)[:, i]) for i in range(nw)])
+        lam = float(np.max(np.abs(np.linalg.eigvals(T))))
+        e, info = s.orbit_error(d)
+    finally:
+        s.close()
+    assert info["converged"]
+    assert lam > 0.9                                   # a slow mode is there
+    assert ctr["rho"] == pytest.approx(lam, rel=1e-3)
+    nd, ne = np.linalg.norm(d), np.linalg.norm(e_true)
+    assert ne > 3.0 * nd                               # the defect hides it
+    # e recovers it to first order (the loose orbit carries second-order terms:
+    # measured 5.3 % here)
+    assert np.linalg.norm(e - e_true) <= 0.1 * ne
+    assert nd / (1.0 - ctr["rho"]) >= 0.9 * ne         # the bound holds
+    assert tp.FrameFactor.open_handles() == 0
+
+
+def test_certify_observables_against_the_owner_terms():
+    base = {"dT_rel": 1e-4, "dripple_pp": 0.01, "dP_cond_W": 1.0, "rB": 1e-4,
+            "ripple_pct": 5.0}
+    lim = tp.owner_limits(5.0)
+    assert lim == pytest.approx({"T_rel": 1e-3, "ripple_pp": 0.05,
+                                 "P_total_rel": 5e-3, "safety": 0.1})
+    assert tp.owner_limits(20.0)["ripple_pp"] == pytest.approx(0.2)
+    ok, rec = tp.certify_observables(base, P_fe_W=100.0, P_total_W=1000.0)
+    assert ok and rec["bound_P_total_W"] == pytest.approx(1.0 + 2e-2)
+    # the reported window's own deviation is ADDED
+    win = {"w": {"T_mean_rel": 9.5e-4, "ripple_pp": 0.0, "P": {}}}
+    assert not tp.certify_observables(base, P_fe_W=100.0, P_total_W=1000.0,
+                                      report_windows=win)[0]
+    for bad in ({"dT_rel": 2e-3}, {"dripple_pp": 0.06}, {"rB": 0.03},
+                {"dP_cond_W": float("inf")}):
+        assert not tp.certify_observables(dict(base, **bad), P_fe_W=100.0,
+                                          P_total_W=1000.0)[0], bad
+    ok, rec = tp.certify_observables({"rho": 1.0}, P_fe_W=1.0, P_total_W=1.0)
+    assert not ok and "error" in rec
+
+
 def test_group_joule_splits_the_frame_loss_by_group():
     m = _model(dc_source=True)
     rng = np.random.default_rng(2)

@@ -396,3 +396,136 @@ def test_last_seen_is_touched_but_not_on_every_single_request(env, monkeypatch):
     monkeypatch.setattr(S, "_save", lambda d: (writes.append(1), real_save(d)))
     client.get("/api/me", headers=_bearer(j["token"]))
     assert writes == [], "last_seen must not cost a disk write per request"
+
+
+def test_malformed_rejects_are_origin_keyed_and_recorded_rarely(env):
+    """2026-10-04: a poller with a broken bearer wrote a context-free
+    'malformed' reject every minute.  Now: one row per (ip, path) per 15 min,
+    and the row carries the ip and path."""
+    A = env["A"]
+    for _ in range(5):
+        A.resolve_user_detail("Bearer not-a-jwt-at-all", ip="198.51.100.7",
+                              path="/api/x")
+    A.resolve_user_detail("Bearer not-a-jwt-at-all", ip="198.51.100.8",
+                          path="/api/x")
+    rej = [e for e in _events(env) if e.get("event") == "reject"]
+    assert len(rej) == 2
+    assert all(e.get("path") == "/api/x" and e.get("ip") for e in rej)
+
+
+def test_node_ingest_bearer_skips_account_resolution():
+    from motor_ai_sim import workspace as W
+    ok = "Bearer mnode_abc123"
+    assert W._is_node_ingest("/api/admin/nodes/metrics", ok)
+    assert not W._is_node_ingest("/api/admin/nodes", ok)
+    assert not W._is_node_ingest("/api/admin/nodes/metrics", "Bearer eyJabc")
+    assert not W._is_node_ingest("/api/admin/nodes/metrics", None)
+
+
+def test_admin_users_and_tickets_serve_the_real_store_not_mock(env, monkeypatch):
+    """2026-10-04: /api/admin/users + /tickets answered `source: mock` in
+    production because the Firebase Admin SDK is gone."""
+    monkeypatch.delenv("ADMIN_MOCK_DATA", raising=False)
+    tok = _login(ADMIN, "password-admin")["token"]
+    r = client.get("/api/admin/users", headers=_bearer(tok))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"].startswith("self-hosted")
+    emails = {u["email"] for u in body["users"]}
+    assert emails == {ADMIN, CLIENT}          # no invented accounts
+    adm = next(u for u in body["users"] if u["email"] == ADMIN)
+    assert adm["role"] == "admin" and adm["createdAt"] and adm["lastLoginAt"]
+    assert adm["displayName"] == "Admin" and adm["designCount"] == 0
+    t = client.get("/api/admin/tickets", headers=_bearer(tok)).json()
+    assert t["tickets"] == [] and t["source"].startswith("self-hosted")
+    st = client.get("/api/admin/stats", headers=_bearer(tok)).json()
+    assert st["total"] == 2 and st["source"].startswith("self-hosted")
+    # writes act on the real registry or refuse - never a fake ok
+    r = client.post(f"/api/admin/users/{CLIENT}/disable", json={"disabled": True},
+                    headers=_bearer(tok))
+    assert r.json()["source"].startswith("self-hosted")
+    assert env["U"].get_user(CLIENT)["disabled"] is True
+    r = client.post("/api/admin/users/nobody@example.com/role",
+                    json={"role": "admin"}, headers=_bearer(tok))
+    assert r.status_code == 404
+    r = client.post("/api/admin/tickets/status",
+                    json={"uid": "u", "id": "t", "status": "closed"},
+                    headers=_bearer(tok))
+    assert r.status_code == 404
+
+
+def test_admin_mock_dataset_only_behind_the_explicit_flag(env, monkeypatch):
+    monkeypatch.setenv("ADMIN_MOCK_DATA", "1")
+    tok = _login(ADMIN, "password-admin")["token"]
+    assert client.get("/api/admin/users", headers=_bearer(tok)).json()["source"] == "mock"
+
+
+# -- self-hosted support tickets ------------------------------------------------
+
+def _tickets_env(env, monkeypatch):
+    monkeypatch.setenv("SUPPORT_STORE_DIR", str(env["tmp"] / "support"))
+    monkeypatch.delenv("ADMIN_MOCK_DATA", raising=False)
+    return (_login(ADMIN, "password-admin")["token"],
+            _login(CLIENT, "password-client")["token"])
+
+
+def test_tickets_create_list_own_admin_list_and_status(env, monkeypatch):
+    adm, cli = _tickets_env(env, monkeypatch)
+    # identity comes from the token, never the body
+    r = client.post("/api/support/tickets", headers=_bearer(cli), json={
+        "type": "bug", "title": "  Map is dark ", "description": "above 6000 rpm",
+        "email": "evil@example.com", "uid": "evil"})
+    assert r.status_code == 200, r.text
+    t = r.json()["ticket"]
+    assert t["email"] == CLIENT and t["uid"] == CLIENT and t["status"] == "open"
+    assert t["title"] == "Map is dark" and t["createdAt"] > 1e12
+    client.post("/api/support/tickets", headers=_bearer(adm),
+                json={"type": "question", "title": "Other user"})
+    mine = client.get("/api/support/tickets", headers=_bearer(cli)).json()
+    assert mine["count"] == 1 and mine["tickets"][0]["id"] == t["id"]
+    allt = client.get("/api/admin/tickets", headers=_bearer(adm)).json()
+    assert allt["source"] == "self-hosted:tickets.json" and allt["count"] == 2
+    assert set(allt["tickets"][0]) == {"id", "uid", "type", "title", "description",
+                                       "status", "email", "createdAt"}
+    # a non-admin cannot read the admin list or change a status
+    assert client.get("/api/admin/tickets", headers=_bearer(cli)).status_code in (401, 403)
+    assert client.post("/api/admin/tickets/status", headers=_bearer(cli),
+                       json={"id": t["id"], "status": "resolved"}).status_code in (401, 403)
+    r = client.post("/api/admin/tickets/status", headers=_bearer(adm),
+                    json={"id": t["id"], "status": "in_progress"})
+    assert r.status_code == 200
+    mine = client.get("/api/support/tickets", headers=_bearer(cli)).json()
+    assert mine["tickets"][0]["status"] == "in_progress"
+    assert client.post("/api/admin/tickets/status", headers=_bearer(adm),
+                       json={"id": "t_nope", "status": "open"}).status_code == 404
+    assert client.post("/api/admin/tickets/status", headers=_bearer(adm),
+                       json={"id": t["id"], "status": "bogus"}).status_code == 400
+
+
+def test_tickets_anonymous_401_and_loud_validation(env, monkeypatch):
+    adm, cli = _tickets_env(env, monkeypatch)
+    ok = {"type": "bug", "title": "x"}
+    assert client.post("/api/support/tickets", json=ok).status_code == 401
+    assert client.get("/api/support/tickets").status_code == 401
+    h = _bearer(cli)
+    for bad in ({"type": "rant", "title": "x"}, {"type": "bug", "title": "  "},
+                {"type": "bug"}, {"type": "bug", "title": "t" * 121},
+                {"type": "bug", "title": "x", "description": "d" * 4001},
+                {"type": "bug", "title": "x", "description": 5}):
+        r = client.post("/api/support/tickets", headers=h, json=bad)
+        assert r.status_code == 422, (bad, r.text)
+    assert client.get("/api/support/tickets", headers=h).json()["count"] == 0
+
+
+def test_tickets_daily_rate_limit(env, monkeypatch):
+    adm, cli = _tickets_env(env, monkeypatch)
+    from motor_ai_sim import ticket_store as T
+    for i in range(T.DAILY_LIMIT):
+        assert client.post("/api/support/tickets", headers=_bearer(cli),
+                           json={"type": "bug", "title": f"t{i}"}).status_code == 200
+    r = client.post("/api/support/tickets", headers=_bearer(cli),
+                    json={"type": "bug", "title": "one too many"})
+    assert r.status_code == 429
+    # another account is not affected
+    assert client.post("/api/support/tickets", headers=_bearer(adm),
+                       json={"type": "bug", "title": "fine"}).status_code == 200

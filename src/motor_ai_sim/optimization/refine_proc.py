@@ -619,7 +619,12 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # The point carries the verdict so the panel can flag it: an unsettled
         # point is still a point (it is NOT non-physical, `_nonphysical_result`
         # must not veto it), but a FLAGGED one.
-        "eddy_settled": bool(d.get("eddy_settled", True)),
+        # True / False / None (UNKNOWN, e.g. an unmeasured voltage settle) —
+        # never promoted to True (third Codex review); an older payload
+        # without the key keeps the old reading
+        "eddy_settled": (True if "eddy_settled" not in d else
+                         (None if d["eddy_settled"] is None
+                          else bool(d["eddy_settled"]))),
         "eddy_capped": bool(d.get("eddy_capped", False)),
         # ── IS THE REPORTED WINDOW A STEADY STATE, AND HOW WAS IT REACHED?
         # (second Codex review, 2026-10-03, finding 8).  `steady_state` False =

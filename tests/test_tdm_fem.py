@@ -118,6 +118,20 @@ def test_the_default_is_tdm_and_it_reproduces_the_march(march, tdm):
         assert w["ok"] and w["T_mean_rel"] <= TP.CLOSURE_GATE["T_rel"]
         assert w["ripple_pp"] <= TP.CLOSURE_GATE["ripple_pp"]
     assert info["t"]["closure"] > 0.0
+    # THE CERTIFIED ORBIT ERROR (third review, finding 1): rho of the period
+    # map, the orbit-error bound mapped to torque / ripple / TOTAL loss, under
+    # CERT_SAFETY of the owner's terms
+    ce = info["certify"]
+    assert ce["ok"] is True and 0.0 <= ce["rho"] < 1.0
+    assert ce["orbit_error_gmres"]["converged"] and ce["scale"] >= 1.0
+    assert ce["bound_norm"] == pytest.approx(ce["defect_norm"] / (1.0 - ce["rho"]))
+    assert ce["iron_elements"] > 0 and ce["rB"] >= 0.0
+    lim = ce["limits"]
+    assert lim["T_rel"] == pytest.approx(1e-3)
+    assert lim["P_total_rel"] == pytest.approx(5e-3)
+    assert ce["bound_T_rel"] <= lim["T_rel"]
+    assert ce["bound_ripple_pp"] <= lim["ripple_pp"]
+    assert ce["bound_P_total_rel"] <= lim["P_total_rel"]
     # THE REPORT GATE (finding 6): hard, per group, both levels, every period
     gate = info["gate"]
     assert gate["ok"] is True and "error" not in gate
@@ -254,6 +268,34 @@ def test_a_failed_closure_retries_strictly_then_marches(monkeypatch, march):
     _same_as(d, march)
 
 
+def test_a_failed_certification_retries_strictly_then_marches(monkeypatch, march):
+    """Finding 1 (third review): an orbit whose bounded error is not below the
+    safety fraction (injected) is rejected: one strict retry, then a march."""
+    monkeypatch.setenv("SB_TDM_FAULT", "certify_gate")
+    d = _run()
+    assert d["eddy_method"] == "march" and d["eddy_method_requested"] == "tdm"
+    assert d["eddy_method_note"].startswith("march: TDM failed (certify:")
+    att = d["tdm"]["attempts"]
+    assert [a["stage"] for a in att] == ["certify", "certify"]
+    assert att[0]["retry_residual"] is True
+    assert att[1]["tdm"]["certify"]["injected"] is True
+    assert att[1]["tdm"]["certify"]["rho"] < 1.0
+    _same_as(d, march)
+
+
+def test_an_unknown_settle_is_never_reported_steady():
+    """NEW (third review): a run TDM refuses (voltage drive) whose settle is
+    NOT measured (coil-only eddy: no settle gauge) used to read
+    steady_state True through `is not False`.  Unknown stays unknown:
+    eddy_settled None, steady_state False, and the note says why."""
+    d = _run("p2_voltage_eddy")
+    assert d["eddy_method"] == "march"
+    assert d["eddy_method_note"].startswith("march: TDM not applicable (")
+    assert d["eddy_settled"] is None
+    assert d["steady_state"] is False
+    assert "UNKNOWN" in d["steady_state_note"]
+
+
 def test_a_rejected_attempt_is_not_kept_alive_during_the_retry(monkeypatch):
     """Finding 9: when the retry and the march start, no frame, factor or
     solver object of the rejected attempt is still referenced (its traceback
@@ -378,11 +420,22 @@ def test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods(
         assert s["element_tol"] == TP.DEMAG_SETTLE_ELEMENT_TOL
         last = s["prepass"][-1]
         # iterated until a period moved Br by <= tol on the area mean AND at
-        # every element (finding 3), or the cap
-        assert (TP.demag_settled(last, s["tol"], s["element_tol"])
-                or s["prepass_periods"] == s["prepass_periods_max"])
-        assert d["demag_settled"] is TP.demag_settled(s, s["tol"], s["element_tol"])
-        assert d["steady_state"] is (d["eddy_settled"] and d["demag_settled"])
+        # every element (second review), the rotor-image history is complete
+        # and the observables stopped drifting (third review), or the cap
+        img = last["image_history"]
+        assert img["cycle_periods"] == 7          # 12s14p sector: 7 pole-pair images
+        stopped = (TP.demag_settled(last, s["tol"], s["element_tol"])
+                   and img["complete"] and last["drift"]["ok"])
+        assert stopped or s["prepass_periods"] == s["prepass_periods_max"]
+        assert s["prepass_periods_max"] >= img["cycle_periods"]
+        assert d["demag_settled"] is (s["moved_settled"]
+                                      and s["image_history"]["complete"]
+                                      and s["drift"]["ok"])
+        assert s["moved_settled"] is TP.demag_settled(s, s["tol"], s["element_tol"])
+        assert d["steady_state"] is (d["eddy_settled"] is True and d["demag_settled"])
+        # the drift is measured on the last two pre-pass periods' torque
+        assert s["drift"].get("T_mean_rel") is not None
+        assert s["drift"]["tol_T_rel"] == pytest.approx(1e-3)
         if d["demag_settled"]:
             assert d["steady_state_note"] is None
         else:

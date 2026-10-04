@@ -214,6 +214,113 @@ def test_the_optimizer_result_path_solves_the_fixture_with_tdm_for_real(monkeypa
         assert k in O._RES_KEYS, k
 
 
+# ── the coupled loop, passports and MCP carry the verdict (third review, #9) ──
+_VERDICT = {"eddy_method": "march", "eddy_method_requested": "tdm",
+            "eddy_method_note": "march: TDM failed (closure: …) — marched instead",
+            "eddy_settled": True, "demag_settled": False, "steady_state": False,
+            "steady_state_note": "demag NOT settled after 8 pre-pass period(s): …",
+            "qualified": True}
+
+
+def test_the_coupled_loop_carries_each_passs_verdict(monkeypatch):
+    """The REAL coupled loop (route, history, block) with both halves faked
+    (as tests/test_coupled.faked_halves): a pass whose EM run was a marched
+    fallback on a demag transient says so on its history row, on the block,
+    and in `em_steady_state`."""
+    from motor_ai_sim.routes import coupled as cp
+    from tests.test_coupled import COOLING, EM_BODY
+
+    n = [0]
+
+    def _em(body, *, coil_temp_c, magnet_temp_c, **_k):
+        n[0] += 1
+        s = {"P_loss_total_W": 100.0, "T_em_avg_Nm": 5.0, "coil_temp_C": coil_temp_c}
+        # pass 1 steady, pass 2 the transient fallback
+        s.update(_VERDICT if n[0] >= 2 else {"eddy_method": "tdm",
+                                             "eddy_method_requested": "tdm",
+                                             "eddy_method_note": None,
+                                             "eddy_settled": True,
+                                             "demag_settled": None,
+                                             "steady_state": True,
+                                             "steady_state_note": None,
+                                             "qualified": True})
+        return {"summary": s}
+
+    def _th(body, cooling, *, coil_temp_c, magnet_temp_c, rpm,
+            bearing_temp_c=None, **_k):
+        return {"ok": True,
+                "components": {"winding": {"avg": 130.0, "max": 140.0},
+                               "magnet": {"avg": 90.0, "max": 95.0}}}
+    monkeypatch.setattr(cp, "_em_run", _em, raising=True)
+    monkeypatch.setattr(cp, "_thermal_solve", _th, raising=True)
+    monkeypatch.setattr(cp, "_attach_coupling", lambda em, block: False, raising=True)
+    monkeypatch.setattr(cp, "_remember_last", lambda out, **k: None, raising=True)
+    # the route function itself (as MCP's agent_designs._run_coupled calls it)
+    out = cp.run(body={**EM_BODY, "thermal_settings": COOLING, "max_iter": 2,
+                       "tol_k": 0.01, "damping": 0.5}, authorization=None)
+    c = out["coupling"]
+    rows = c["history"]
+    assert [row["steady_state"] for row in rows] == [True, False]
+    assert rows[1]["eddy_method"] == "march"
+    assert rows[1]["eddy_method_note"].startswith("march: TDM failed")
+    assert rows[1]["steady_state_note"].startswith("demag NOT settled")
+    assert c["em"]["steady_state"] is False and c["em"]["demag_settled"] is False
+    assert c["em_steady_state"] is False
+
+
+def test_a_passport_reports_its_solves_verdicts(monkeypatch):
+    """generate_passport on the stub solver of test_passport_loss_fixes: one
+    solve that is a demag transient makes the passport say so."""
+    from motor_ai_sim import passport as pp
+    from motor_ai_sim.config import get_config
+    from motor_ai_sim.routes import simulation as sim
+    from tests.test_passport_loss_fixes import _StubSolver
+
+    geo = dict(get_config().get("geometry") or {})
+    L0 = float(geo.get("motor_length") or 12.0)
+    stub = _StubSolver("star", L0)
+    calls = [0]
+
+    def solver(**kw):
+        d = stub(**kw)
+        calls[0] += 1
+        v = dict(_VERDICT) if calls[0] == 2 else {"eddy_method": "tdm",
+                                                  "steady_state": True,
+                                                  "eddy_method_note": None}
+        d["summary"].update(v)
+        return d
+    monkeypatch.setattr(sim, "get_fem_transient", solver)
+    out = pp.generate_passport(
+        machine={"geometry": geo, "connection": None, "star_delta": "star",
+                 "materials": {}, "end_winding_factor": 2.0},
+        I0=30.0, gamma_deg=10.0, rpm0=1000.0, rpms=[500.0, 1000.0],
+        base_steps=6, sweep_steps=6, pwm="off")
+    ss = out["passport"]["solve_status"]
+    assert ss["solves"] == calls[0] and ss["steady_state"] is False
+    assert ss["not_steady"] == [_VERDICT["steady_state_note"]]
+    assert ss["eddy_methods"] == ["march", "tdm"]
+    assert ss["notes"] == [_VERDICT["eddy_method_note"]]
+
+
+def test_mcp_headlines_carry_the_verdict():
+    """agent_designs.headline — what MCP simulate returns to an agent — for a
+    transient answer and for a coupled answer."""
+    from motor_ai_sim import agent_designs as AD
+    d = {"params": {"speed_rpm": 3000.0, "current_a_rms": 10.0, "mode": "motor"},
+         "requirements": {}}
+    em = {"summary": {"T_em_avg_Nm": 1.0, "P_loss_total_W": 10.0, **_VERDICT}}
+    h = AD.headline(em, d, "em")
+    for k in ("steady_state", "steady_state_note", "eddy_method", "eddy_method_note",
+              "qualified"):
+        assert h[k] == _VERDICT[k], k
+    co = {"em": {"T_em_avg_Nm": 1.0, "P_loss_total_W": 10.0, "steady_state": None,
+                 "eddy_method_note": _VERDICT["eddy_method_note"]},
+          "em_steady_state": False, "coil_temp_c": 100.0}
+    h = AD.headline(co, d, "coupled")
+    assert h["steady_state"] is False
+    assert h["eddy_method_note"] == _VERDICT["eddy_method_note"]
+
+
 _SOLVE_CALLS = ("get_fem_transient", "em_transient_eval", "fem_transient_sliding_band",
                 "_fem_transient_sliding_band_once", "_call_filtered", "run")
 

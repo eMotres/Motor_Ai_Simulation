@@ -902,6 +902,96 @@ class TimePeriodicEddy:
         out[nc + c["pos"]] += v
         return out
 
+    # ── certification: the period map's contraction and the orbit error ──
+    # (third Codex review, 2026-10-04, finding 1).  The closure march measures
+    # the one-period DEFECT d = Phi(a) - a of the orbit a.  The distance to the
+    # true periodic orbit a* is e = a* - a with (I - T) e = d to first order
+    # (T = the linearised period map, the operator the Newton reduces to): a
+    # slow mode with eigenvalue lambda amplifies its share of d by
+    # 1 / (1 - lambda).  So the bound needs T at the final orbit.
+    def refresh_jacobian(self, As: Sequence[np.ndarray], Us: Sequence[np.ndarray]
+                         ) -> None:
+        """Factor every frame's Jacobian AT (As, Us), so that the sweeps below
+        apply the linearised period map of THIS orbit (the factors the Newton
+        left behind belong to its last iterate, or to an earlier Br)."""
+        As = [np.asarray(a, float) for a in As]
+        Us = [np.asarray(u, float) for u in Us]
+        ev = self._eval_all(As, Us)
+        for j, fr in enumerate(self.frames):
+            fr.A, fr.U = As[j], Us[j]
+            fr.K, fr.info = ev[j][5], ev[j][6]
+        first = self._coarse is None and bool(self.coarse_spec)
+        Js = self._jac_all(keep_J=first)
+        if first:
+            self._build_coarse(Js)
+
+    def period_map(self, w: np.ndarray) -> np.ndarray:
+        """T w: the linearised period map on the wrap state (conductor dofs of
+        both BDF2 history levels)."""
+        tw, _ = self._sweep(None, (w[:self.nc], w[self.nc:]))
+        return np.concatenate(tw)
+
+    def propagate(self, w: np.ndarray) -> Tuple[List[np.ndarray], List[np.ndarray]]:
+        """The linear response of every frame (dA_j full vector, dU_j) to a
+        perturbation w of the wrap state."""
+        _, xs = self._sweep(None, (w[:self.nc], w[self.nc:]), keep_x=True)
+        return ([fr.pad(x[:fr.nfree]) for fr, x in zip(self.frames, xs)],
+                [np.asarray(x[fr.nfree:], float) for fr, x in zip(self.frames, xs)])
+
+    def contraction(self, v0: np.ndarray, m: int = 15,
+                    rng_seed: int = 0) -> Dict[str, Any]:
+        """The dominant eigenvalues of T by Arnoldi (m steps) started from v0
+        (the closure defect) plus a random component (so a mode the defect
+        happens to miss is still in the Krylov space).  rho = the largest
+        Ritz magnitude: outlying eigenvalues — the slow modes near 1 that
+        matter here — are the ones Arnoldi finds first."""
+        n = int(v0.size)
+        rng = np.random.default_rng(rng_seed)
+        v = np.asarray(v0, float)
+        nv = float(np.linalg.norm(v))
+        r = rng.standard_normal(n)
+        r *= (nv if nv > 0.0 else 1.0) / max(float(np.linalg.norm(r)), 1e-300)
+        v = (v + 0.1 * r) if nv > 0.0 else r
+        m = int(max(1, min(m, n)))
+        V = np.zeros((m + 1, n))
+        Hh = np.zeros((m + 1, m))
+        V[0] = v / float(np.linalg.norm(v))
+        k_end = m
+        for j in range(m):
+            w = self.period_map(V[j])
+            for _rep in range(2):
+                for i in range(j + 1):
+                    h = float(w @ V[i])
+                    Hh[i, j] += h
+                    w = w - h * V[i]
+            Hh[j + 1, j] = float(np.linalg.norm(w))
+            if Hh[j + 1, j] <= 1e-14 * max(abs(Hh[j, j]), 1e-300):
+                k_end = j + 1
+                break
+            V[j + 1] = w / Hh[j + 1, j]
+        ritz = np.linalg.eigvals(Hh[:k_end, :k_end])
+        mags = np.sort(np.abs(ritz))[::-1]
+        return {"rho": float(mags[0]) if mags.size else 0.0,
+                "ritz_top": [float("%.6g" % x) for x in mags[:6]],
+                "arnoldi_steps": int(k_end)}
+
+    def orbit_error(self, d: np.ndarray, rtol: float = 1e-8,
+                    maxiter: int = 400) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """e = (I - T)^-1 d, by the same right-preconditioned GMRES as the
+        Newton (the DC coarse space carries the slow ring modes)."""
+        dn = float(np.linalg.norm(d))
+        if dn == 0.0:
+            return np.zeros_like(d), {"rel_resid": 0.0, "iterations": 0,
+                                      "converged": True}
+
+        def mv(wv):
+            return wv - self.period_map(wv)
+        _prec = self._coarse_apply if self._coarse else None
+        e, info = gmres_right(mv, d, prec=_prec, rtol=rtol, maxiter=maxiter)
+        true = float(np.linalg.norm(d - mv(e))) / dn
+        return e, {"rel_resid": true, "iterations": int(info["iterations"]),
+                   "converged": bool(true <= max(rtol, 1e-6))}
+
     # ── the Newton ───────────────────────────────────────────────────────
     def solve(self, As: List[np.ndarray], Us: List[np.ndarray]) -> Dict[str, Any]:
         """Newton from the initial orbit (As, Us); returns the stats and
@@ -1257,6 +1347,62 @@ def window_gate(ref: Dict[str, Any], got: Dict[str, Any], *,
     return ok, {"ok": ok, "T_mean_rel": dT, "ripple_pp": dR, "P": dP,
                 "tol": {"T_rel": T_rel, "ripple_pp": ripple_pp, "P_rel": P_rel,
                         "P_floor_rel": P_floor_rel}}
+
+
+#: Certification safety fraction (third Codex review, 2026-10-04): a TDM result
+#: is certified steady only when its BOUNDED error in mean torque, ripple and
+#: TOTAL loss is below this fraction of the owner's limits (torque 1 %, ripple
+#: max(0.5 pp, 10 % of the ripple), total loss 5 %).
+CERT_SAFETY = 0.1
+
+
+def owner_limits(ripple_pct: float, safety: float = CERT_SAFETY) -> Dict[str, float]:
+    """The owner's accuracy terms times ``safety``."""
+    return {"T_rel": safety * 0.01,
+            "ripple_pp": safety * max(0.5, 0.1 * abs(float(ripple_pct))),
+            "P_total_rel": safety * 0.05, "safety": float(safety)}
+
+
+def certify_observables(cert: Dict[str, Any], *, P_fe_W: float, P_total_W: float,
+                        report_windows: Optional[Dict[str, Any]] = None,
+                        safety: float = CERT_SAFETY) -> Tuple[bool, Dict[str, Any]]:
+    """The certification verdict of a TDM orbit.
+
+    ``cert`` carries the orbit-error BOUND already mapped to the observables
+    (the perturbation applied at the bound's size, see the solver):
+    ``dT_rel``, ``dripple_pp``, ``dP_cond_W`` (conductor loss, every group),
+    ``rB`` (relative change of the iron flux density, area-weighted L2, worst
+    frame) and the orbit's ``ripple_pct``.  The iron loss moves by at most
+    2·rB·P_fe to first order (P_fe ~ B^2 for the eddy and excess terms, below
+    for hysteresis).  The reported period's own deviation from the orbit (the
+    report gate's windows) is ADDED: the reported numbers are the orbit plus
+    that deviation.  Certified when each total is below ``safety`` x the
+    owner's term; a missing or non-finite bound is not certified."""
+    lim = owner_limits(float(cert.get("ripple_pct") or 0.0), safety)
+    rec: Dict[str, Any] = {"limits": lim}
+    try:
+        gT = gR = gP = 0.0
+        for w in (report_windows or {}).values():
+            gT = max(gT, float(w["T_mean_rel"]))
+            gR = max(gR, float(w["ripple_pp"]))
+            gP = max(gP, sum(float(v["abs_W_per_m"]) for v in w["P"].values()))
+        bT = float(cert["dT_rel"]) + gT
+        bR = float(cert["dripple_pp"]) + gR
+        dP = (float(cert["dP_cond_W"]) + 2.0 * float(cert["rB"]) * max(float(P_fe_W), 0.0)
+              + gP)
+        bP = dP / max(abs(float(P_total_W)), 1e-300)
+        vals = (bT, bR, bP)
+        ok = bool(all(math.isfinite(v) for v in vals)
+                  and bT <= lim["T_rel"] and bR <= lim["ripple_pp"]
+                  and bP <= lim["P_total_rel"])
+        rec.update({"bound_T_rel": bT, "bound_ripple_pp": bR,
+                    "bound_P_total_rel": bP, "bound_P_total_W": dP,
+                    "report_part": {"T_rel": gT, "ripple_pp": gR, "P_W": gP}})
+    except (KeyError, TypeError, ValueError) as e:
+        ok = False
+        rec["error"] = "%s: %s" % (type(e).__name__, e)
+    rec["ok"] = bool(ok)
+    return bool(ok), rec
 
 
 def state_closure(pairs: Sequence[Tuple[str, np.ndarray, np.ndarray]],

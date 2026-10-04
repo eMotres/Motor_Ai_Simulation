@@ -232,7 +232,26 @@ def generate_passport(
     """
     import json
     from motor_ai_sim.config import get_config
-    from motor_ai_sim.routes.simulation import get_fem_transient, _BACKGROUND_RUN
+    from motor_ai_sim.routes.simulation import (get_fem_transient as _gft,
+                                                _BACKGROUND_RUN)
+
+    # EVERY solve's own verdict (Codex review 2026-10-04): which eddy method it
+    # used, why a TDM request was marched, and whether its reported window is
+    # a steady state.  A passport is a datasheet; a point measured on a demag
+    # transient or an unverified settle must say so (`solve_status` below).
+    _solve_status: List[Dict[str, Any]] = []
+
+    def get_fem_transient(**kw):
+        d = _gft(**kw)
+        s = (d.get("summary") or {}) if isinstance(d, dict) else {}
+
+        def _g(k):
+            v = d.get(k) if isinstance(d, dict) else None
+            return s.get(k) if v is None else v
+        _solve_status.append({k: _g(k) for k in (
+            "eddy_method", "eddy_method_note", "steady_state", "steady_state_note",
+            "demag_settled", "qualified")})
+        return d
 
     # Every solve below is BACKGROUND work: it must never persist as the
     # user's last transient nor claim the field-snapshot store, even though it
@@ -735,5 +754,20 @@ def generate_passport(
         "magnetHeight_mm": float(g.get("magnet_height", 0.0) or 0.0),
     }
     _BACKGROUND_RUN.reset(_bg_token)
+    # the solves' verdicts, summarised: steady only if EVERY solve said so
+    # (None: no solve said anything, i.e. a solver that predates the keys)
+    _said = [st.get("steady_state") for st in _solve_status
+             if st.get("steady_state") is not None]
+    passport["solve_status"] = {
+        "solves": len(_solve_status),
+        "steady_state": (None if not _said else all(v is True for v in _said)),
+        "not_steady": [st.get("steady_state_note") or "not a steady state"
+                       for st in _solve_status if st.get("steady_state") is False],
+        "eddy_methods": sorted({str(st["eddy_method"]) for st in _solve_status
+                                if st.get("eddy_method")}),
+        "notes": sorted({str(st["eddy_method_note"]) for st in _solve_status
+                         if st.get("eddy_method_note")}),
+        "qualified": not any(st.get("qualified") is False for st in _solve_status),
+    }
     return {"passport": passport, "fit": fit, "geo": geo,
             "poles": geo["numPoles"], "slots": geo["numSlots"]}

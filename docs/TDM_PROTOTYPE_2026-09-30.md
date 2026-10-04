@@ -937,6 +937,32 @@ Not run (as instructed): the full suite and the physics-regression pins (§3.9).
   its threshold (1e-2) catches map defects, not mesher round-off. The half period
   needs 1e-12 and so is refused on every mesh measured so far.
 
+## 5. Third Codex review (2026-10-04)
+
+Codex re-reviewed 768d600: findings #2, #4–#8, #11 and both round-2 issues resolved;
+still blocking on three. Fixed here, on the server sandbox
+`/opt/motres/compute/tdm-fix-20261004` (image `motres-api:tdmfix3`, one container
+at a time under the shared run lock, `--cpus 8`, `nice 19`, `ionice -c3`).
+
+### 5.1 Findings, fixes, tests
+
+| # | Finding | Fix | Tests |
+|---|---|---|---|
+| 1 (blocker, #1) | The 1e-4 closure bounds the one-period DEFECT, not the orbit error (×τ/T on a slow mode); the loss gates exclude iron | **Certified orbit error.** After the closure march: the linearised period map T is factorised AT the final orbit (`TimePeriodicEddy.refresh_jacobian`); its dominant eigenvalue ρ by Arnoldi (15 steps) from the defect d; the orbit error e = (I − T)⁻¹d by the preconditioned GMRES; the error taken as the larger of ‖e‖ and ‖d‖/(1 − ρ). That perturbation is propagated through the period (linear frame response) and the owner's observables are evaluated on the perturbed orbit: mean torque, ripple, every conductor group's loss, and the relative change of the iron flux density r_B (iron loss ≤ 2·r_B·P_fe to first order). After the frame loop, with P_fe and the TOTAL loss known, the bound plus the reported period's own deviation from the orbit must be below **1/10 of the owner's terms** (torque 1 %, ripple max(0.5 pp, 10 %), total loss 5 %: `CERT_SAFETY`, `certify_observables`). Otherwise one strict retry, then a march with a note. ρ, the bound, the scale and the sensitivities are in `tdm.certify` | TP `test_the_certified_orbit_error_sees_the_slow_mode` (a slow ring: the defect hides the error by ×>3, ρ equals the dense T's spectral radius, e recovers the true error, ‖d‖/(1−ρ) bounds it), `test_certify_observables_against_the_owner_terms`; TF `test_the_default_is_tdm…` (certify keys), `test_a_failed_certification_retries_strictly_then_marches` |
+| 2 (high, #3) | `image_min_gap` was diagnostic; a per-period Br change does not bound the drift across the rotor-image history | The demag fixed point (both methods) now also requires (a) the **image history complete**: L pre-pass periods (L = order of the period relabelling on the magnet elements, 7 on a 12s14p sector, 5 on the L155) or Br equal to its element-wise image minimum within the settle tolerances, and (b) the **observable drift** between the last two pre-pass periods (mean and ripple of the frame torque — Coulomb when the run reports it) below 1/10 of the owner's terms. The cap is max(8, L). A reported period missing any rule is `steady_state: false` with the numbers in `steady_state_note`. Ratchet physics unchanged | TF `test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods` (cycle 7, image record, drift record) |
+| 3 (high, new) | A refused PWM / voltage run could get `_warm_quiet = None` and then `steady_state: true` through `is not False` | **Affirmative only**: `eddy_settled` is True only when the settle was measured and passed (or the run has no eddy march), False when it failed, **None when unknown** (unmeasured voltage settle prefix, PWM gauge that cannot judge) with a note; `steady_state` requires `eddy_settled is True` and the demag verdict True. `refine_proc` keeps None (no `bool(... default True)`). Grep: no other `is not False` on EM settle flags (`report.py` uses one on the THERMAL loop's temperatures — a different verdict) | TF `test_an_unknown_settle_is_never_reported_steady` (p2_voltage_eddy: march, `eddy_settled` None, `steady_state` False, note) |
+| 4 (#1/#3/#10) | Validation against long asymptotes, big machines, RSS | §5.2 | – |
+| 5 (medium, #9) | Coupled / passport / MCP paths without behavioural coverage | The coupled loop carries each EM pass's verdict on its history rows, on its block (`em`) and as `em_steady_state`; a passport carries `solve_status` (every solve's method, notes, steady verdict); the MCP headline (`agent_designs.headline`) carries `steady_state`, its note, the method and its note, `qualified` | TE `test_the_coupled_loop_carries_each_passs_verdict` (the real loop, halves faked), `test_a_passport_reports_its_solves_verdicts` (real `generate_passport`, stub solver), `test_mcp_headlines_carry_the_verdict` |
+
+Also found and fixed on the way: the warm cache was published before the
+certification verdict, so a march replacing a rejected attempt could start from
+the rejected attempt's field (P_mag differed by 1.5e-9 from a clean march); it is
+now published only by an accepted solve.
+
+### 5.2 Validation against long marched asymptotes (server, Coulomb torque, duty settings)
+
+VALIDATION_PLACEHOLDER
+
 ## Progress log
 
 - 12:05 Stage 0: module, integration, synthetic tests (5 passed locally and on the

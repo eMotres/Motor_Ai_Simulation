@@ -456,6 +456,99 @@ def test_the_shortcut_is_never_taken_from_the_environment():
         tp.resolve_tdm_demag("fast", {})
 
 
+# -- third Codex review (2026-10-04): the certified orbit error ----------------
+def _solver_open(m, dt, n_frames, coarse, tol):
+    cond = np.flatnonzero(m["Msig"].diagonal() > 0)
+    Msd = tp.bdf2_msd(m["Msig"], dt)
+    frames = [tp.TdmFrame(j, _pro(j), _free(_pro(j)), _cur(j), Msd=Msd, G=m["G"],
+                          cond=cond, factor=tp.FrameFactor()) for j in range(n_frames)]
+    spec = None
+    if coarse:
+        ring = np.arange(20, 31)
+        spec = {"ring": ring, "Msig": m["Msig"],
+                "image": (np.arange(ring.size), np.ones(ring.size), 1, 1.0),
+                "period_s": n_frames * dt}
+    return tp.TimePeriodicEddy(kfun=m["kfun"], tangent=m["tangent"], f_mag=m["f"],
+                               G=m["G"], Msig=m["Msig"], S_raw=m["S"], dt=dt,
+                               frames=frames, wrap_back=lambda v: np.array(v, float),
+                               cond=cond, coarse=spec, tol=tol, workers=1), cond
+
+
+def _march_one_period(m, dt, As, Us):
+    """The test's own march (dense bordered Newton) from the orbit's start."""
+    a1, a2 = As[-1], As[-2]
+    out = []
+    U = Us[0].copy()
+    for k in range(NSTEP):
+        P = _pro(k)
+        Ah = tp.C_M1 * a1 + tp.C_M2 * a2
+        A, U = _step(m, P, _free(P), As[k], U, _cur(k), Ah, dt, True)
+        out.append(A)
+        a2, a1 = a1, A
+    return out
+
+
+def test_the_certified_orbit_error_sees_the_slow_mode():
+    """A loosely converged orbit on a slow ring (tau ~ 200 periods): the
+    one-period closure defect d is far SMALLER than the true orbit error
+    (the slow mode barely moves in one period) — exactly the reviewer's case.
+    The certification recovers it: rho (Arnoldi) is the slow eigenvalue of
+    the dense period map, e = (I - T)^-1 d matches the true error, and
+    |d| / (1 - rho) bounds it."""
+    m = _model(dc_source=True, sig_ring=20.0)
+    dt = 1e-4
+    starts = [np.zeros(N) for _ in range(NSTEP)]
+    ref, st_ref = _tdm(m, dt, NSTEP, lambda v: np.array(v, float), True, starts)
+    assert st_ref["converged"]
+    s, cond = _solver_open(m, dt, NSTEP, True, tol=1e-3)
+    try:
+        assert s.solve(starts, [np.zeros(1)] * NSTEP)["converged"]
+        As = [fr.A.copy() for fr in s.frames]
+        Us = [fr.U.copy() for fr in s.frames]
+        mar = _march_one_period(m, dt, As, Us)
+        d = np.concatenate([(mar[-2] - As[-2])[cond], (mar[-1] - As[-1])[cond]])
+        e_true = np.concatenate([(ref[-2] - As[-2])[cond], (ref[-1] - As[-1])[cond]])
+        s.refresh_jacobian(As, Us)
+        ctr = s.contraction(d, m=15)
+        nw = 2 * cond.size
+        T = np.column_stack([s.period_map(np.eye(nw)[:, i]) for i in range(nw)])
+        lam = float(np.max(np.abs(np.linalg.eigvals(T))))
+        e, info = s.orbit_error(d)
+    finally:
+        s.close()
+    assert info["converged"]
+    assert lam > 0.9                                   # a slow mode is there
+    assert ctr["rho"] == pytest.approx(lam, rel=1e-3)
+    nd, ne = np.linalg.norm(d), np.linalg.norm(e_true)
+    assert ne > 3.0 * nd                               # the defect hides it
+    # e recovers it to first order (the loose orbit carries second-order terms:
+    # measured 5.3 % here)
+    assert np.linalg.norm(e - e_true) <= 0.1 * ne
+    assert nd / (1.0 - ctr["rho"]) >= 0.9 * ne         # the bound holds
+    assert tp.FrameFactor.open_handles() == 0
+
+
+def test_certify_observables_against_the_owner_terms():
+    base = {"dT_rel": 1e-4, "dripple_pp": 0.01, "dP_cond_W": 1.0, "rB": 1e-4,
+            "ripple_pct": 5.0}
+    lim = tp.owner_limits(5.0)
+    assert lim == pytest.approx({"T_rel": 1e-3, "ripple_pp": 0.05,
+                                 "P_total_rel": 5e-3, "safety": 0.1})
+    assert tp.owner_limits(20.0)["ripple_pp"] == pytest.approx(0.2)
+    ok, rec = tp.certify_observables(base, P_fe_W=100.0, P_total_W=1000.0)
+    assert ok and rec["bound_P_total_W"] == pytest.approx(1.0 + 2e-2)
+    # the reported window's own deviation is ADDED
+    win = {"w": {"T_mean_rel": 9.5e-4, "ripple_pp": 0.0, "P": {}}}
+    assert not tp.certify_observables(base, P_fe_W=100.0, P_total_W=1000.0,
+                                      report_windows=win)[0]
+    for bad in ({"dT_rel": 2e-3}, {"dripple_pp": 0.06}, {"rB": 0.03},
+                {"dP_cond_W": float("inf")}):
+        assert not tp.certify_observables(dict(base, **bad), P_fe_W=100.0,
+                                          P_total_W=1000.0)[0], bad
+    ok, rec = tp.certify_observables({"rho": 1.0}, P_fe_W=1.0, P_total_W=1.0)
+    assert not ok and "error" in rec
+
+
 def test_group_joule_splits_the_frame_loss_by_group():
     m = _model(dc_source=True)
     rng = np.random.default_rng(2)

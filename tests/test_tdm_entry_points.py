@@ -302,6 +302,36 @@ def test_a_passport_reports_its_solves_verdicts(monkeypatch):
     assert ss["notes"] == [_VERDICT["eddy_method_note"]]
 
 
+def test_a_passport_needs_every_solve_to_affirm_steadiness(monkeypatch):
+    """Fourth review: verdicts [True, …, None] (one solve that did not say)
+    are NOT steady — the unknown solve is named."""
+    from motor_ai_sim import passport as pp
+    from motor_ai_sim.config import get_config
+    from motor_ai_sim.routes import simulation as sim
+    from tests.test_passport_loss_fixes import _StubSolver
+
+    geo = dict(get_config().get("geometry") or {})
+    stub = _StubSolver("star", float(geo.get("motor_length") or 12.0))
+    calls = [0]
+
+    def solver(**kw):
+        d = stub(**kw)
+        calls[0] += 1
+        if calls[0] != 2:                    # solve 2 says nothing
+            d["summary"].update({"eddy_method": "tdm", "steady_state": True,
+                                 "eddy_method_note": None})
+        return d
+    monkeypatch.setattr(sim, "get_fem_transient", solver)
+    out = pp.generate_passport(
+        machine={"geometry": geo, "connection": None, "star_delta": "star",
+                 "materials": {}, "end_winding_factor": 2.0},
+        I0=30.0, gamma_deg=10.0, rpm0=1000.0, rpms=[500.0, 1000.0],
+        base_steps=6, sweep_steps=6, pwm="off")
+    ss = out["passport"]["solve_status"]
+    assert ss["steady_state"] is False
+    assert ss["not_steady"] == ["solve 2 did not affirm a steady state (verdict unknown)"]
+
+
 def test_mcp_headlines_carry_the_verdict():
     """agent_designs.headline — what MCP simulate returns to an agent — for a
     transient answer and for a coupled answer."""

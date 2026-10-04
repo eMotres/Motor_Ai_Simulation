@@ -943,6 +943,9 @@ change is now a warning, not a verdict.)
 
 ## 5. Third Codex review (2026-10-04)
 
+(Read with §6: the "certified" orbit-error bound below is a FIRST-ORDER ESTIMATE
+with an empirical safeguard, not a proof, and its fields are renamed there.)
+
 Codex re-reviewed 768d600: findings #2, #4–#8, #11 and both round-2 issues resolved;
 still blocking on three. Fixed here, on the server sandboxes
 `/opt/motres/compute/tdm-fix-20261004` and `…-20261004b` (images `motres-api:tdmfix3`
@@ -1026,6 +1029,32 @@ labelled not steady) was charged to the orbit's certification (now judged on the
 orbit alone there); and the warm cache was published before the certification
 verdict, so the replacing march started from the rejected attempt's field (now
 published only by an accepted solve). No tolerance was loosened.
+
+## 6. Round 4 and the L155 reference (2026-10-04)
+
+**Owner decision (2026-10-04):** the proof loop stops at this level of rigour;
+after the items below TDM becomes the default without a fifth review.
+
+**Wording.** What §5 called a "certified bound" is a **first-order estimate with
+an empirical safeguard**, not a proof. The result fields are renamed:
+`tdm.certify` → `tdm.orbit_error_estimate`, `CERT_SAFETY` → `ESTIMATE_SAFETY`,
+`certify_observables` → `estimate_check`, the attempt stage `certify` →
+`error_estimate`, the bound fields `bound_*` → `estimate_*`.
+
+### 6.1 Fourth review: findings and fixes
+
+| Finding | Fix | Tests |
+|---|---|---|
+| (a) Demag: a small area-mean image gap let two quiet periods pass before every magnet had visited every rotor image | The image history is complete ONLY after L pre-pass periods, unconditionally (the gap is recorded, not a shortcut) | TF `test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods` (complete ⇔ ≥ 7 periods; settled ⇒ ≥ 7) |
+| (b) The demag drift used the Maxwell series for hybrid runs | The drift is measured with the REPORTED torque method: Coulomb virtual work, or the hybrid space-vector torque (ψ, currents, Maxwell AC, rotor angle per frame) — the same function as the report | TF `test_demag_pre_pass…` (Coulomb), `test_the_demag_drift_uses_the_hybrid_torque_when_the_run_reports_it` |
+| (c) Passport: `[True, None]` read as steady | Every solve must affirm (`is True`); an unknown solve is named in `not_steady` | TE `test_a_passport_needs_every_solve_to_affirm_steadiness` |
+| PWM unknown settle | The carrier-specific case is covered | TF `test_an_unknown_pwm_settle_is_never_reported_steady` |
+| The "certificate" is not a proof | Renamed to an estimate (above). **Empirical safeguard:** Arnoldi records the top Ritz value per step and its convergence; ρ_eff = max(ρ_ritz, ρ_observed), ρ_observed from the decay of the closure march's deviation from the orbit, period by period. When the Ritz value has not converged or ρ_eff ≥ 0.98, up to 4 more closure periods are marched; the observed orbit error ‖D_p‖ + ‖D_p − D_p−1‖·ρ_eff/(1 − ρ_eff) joins ‖e‖ and ‖d‖/(1 − ρ_eff) (the largest is used). If the decay is still unresolved, the attempt is rejected (strict retry, then a march with a note) | TP `test_arnoldi_rho_on_a_near_unit_non_normal_complex_map`, `test_the_orbit_error_estimate_sees_the_slow_mode`; TF `test_the_empirical_safeguard_marches_more_closure_periods`, `test_a_failed_error_estimate_retries_strictly_then_marches` |
+| Total loss: the 2·r_B·P_fe surrogate | The iron loss is computed DIRECTLY with the report's functional (`losses.iron_loss_series`) on the orbit, on the orbit perturbed by the estimated error, and on the closure-march period; the total-loss check uses |P_fe(perturbed) − P_fe(orbit)| + |P_fe(closure) − P_fe(orbit)| | TP `test_estimate_check_against_the_owner_terms`; TF `test_the_default_is_tdm…` (iron fields) |
+
+### 6.2 The settled L155 reference
+
+REF_PLACEHOLDER
 
 ## Progress log
 

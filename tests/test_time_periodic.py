@@ -462,7 +462,7 @@ def test_the_shortcut_is_never_taken_from_the_environment():
         tp.resolve_tdm_demag("fast", {})
 
 
-# -- third Codex review (2026-10-04): the certified orbit error ----------------
+# -- third / fourth Codex reviews (2026-10-04): the orbit-error ESTIMATE -------
 def _solver_open(m, dt, n_frames, coarse, tol):
     cond = np.flatnonzero(m["Msig"].diagonal() > 0)
     Msd = tp.bdf2_msd(m["Msig"], dt)
@@ -494,13 +494,13 @@ def _march_one_period(m, dt, As, Us):
     return out
 
 
-def test_the_certified_orbit_error_sees_the_slow_mode():
+def test_the_orbit_error_estimate_sees_the_slow_mode():
     """A loosely converged orbit on a slow ring (tau ~ 200 periods): the
     one-period closure defect d is far SMALLER than the true orbit error
     (the slow mode barely moves in one period) — exactly the reviewer's case.
-    The certification recovers it: rho (Arnoldi) is the slow eigenvalue of
-    the dense period map, e = (I - T)^-1 d matches the true error, and
-    |d| / (1 - rho) bounds it."""
+    The estimate recovers it: rho (Arnoldi, converged) is the slow
+    eigenvalue of the dense period map, e = (I - T)^-1 d matches the true
+    error, and |d| / (1 - rho) covers it here (an estimate, not a proof)."""
     m = _model(dc_source=True, sig_ring=20.0)
     dt = 1e-4
     starts = [np.zeros(N) for _ in range(NSTEP)]
@@ -524,35 +524,77 @@ def test_the_certified_orbit_error_sees_the_slow_mode():
         s.close()
     assert info["converged"]
     assert lam > 0.9                                   # a slow mode is there
-    assert ctr["rho"] == pytest.approx(lam, rel=1e-3)
+    assert ctr["rho"] == pytest.approx(lam, rel=1e-3) and ctr["ritz_converged"]
     nd, ne = np.linalg.norm(d), np.linalg.norm(e_true)
     assert ne > 3.0 * nd                               # the defect hides it
     # e recovers it to first order (the loose orbit carries second-order terms:
     # measured 5.3 % here)
     assert np.linalg.norm(e - e_true) <= 0.1 * ne
-    assert nd / (1.0 - ctr["rho"]) >= 0.9 * ne         # the bound holds
+    assert nd / (1.0 - ctr["rho"]) >= 0.9 * ne         # covered here
     assert tp.FrameFactor.open_handles() == 0
 
 
-def test_certify_observables_against_the_owner_terms():
-    base = {"dT_rel": 1e-4, "dripple_pp": 0.01, "dP_cond_W": 1.0, "rB": 1e-4,
+def test_estimate_check_against_the_owner_terms():
+    base = {"dT_rel": 1e-4, "dripple_pp": 0.01, "dP_cond_W": 1.0, "dP_fe_W": 0.5,
             "ripple_pct": 5.0}
     lim = tp.owner_limits(5.0)
     assert lim == pytest.approx({"T_rel": 1e-3, "ripple_pp": 0.05,
                                  "P_total_rel": 5e-3, "safety": 0.1})
     assert tp.owner_limits(20.0)["ripple_pp"] == pytest.approx(0.2)
-    ok, rec = tp.certify_observables(base, P_fe_W=100.0, P_total_W=1000.0)
-    assert ok and rec["bound_P_total_W"] == pytest.approx(1.0 + 2e-2)
+    ok, rec = tp.estimate_check(base, P_total_W=1000.0)
+    assert ok and rec["estimate_P_total_W"] == pytest.approx(1.5)
     # the reported window's own deviation is ADDED
     win = {"w": {"T_mean_rel": 9.5e-4, "ripple_pp": 0.0, "P": {}}}
-    assert not tp.certify_observables(base, P_fe_W=100.0, P_total_W=1000.0,
-                                      report_windows=win)[0]
-    for bad in ({"dT_rel": 2e-3}, {"dripple_pp": 0.06}, {"rB": 0.03},
+    assert not tp.estimate_check(base, P_total_W=1000.0, report_windows=win)[0]
+    # the iron loss enters DIRECTLY (no 2 rB P_fe surrogate any more)
+    for bad in ({"dT_rel": 2e-3}, {"dripple_pp": 0.06}, {"dP_fe_W": 4.5},
                 {"dP_cond_W": float("inf")}):
-        assert not tp.certify_observables(dict(base, **bad), P_fe_W=100.0,
-                                          P_total_W=1000.0)[0], bad
-    ok, rec = tp.certify_observables({"rho": 1.0}, P_fe_W=1.0, P_total_W=1.0)
+        assert not tp.estimate_check(dict(base, **bad), P_total_W=1000.0)[0], bad
+    ok, rec = tp.estimate_check({"rho_eff": 1.0}, P_total_W=1.0)
     assert not ok and "error" in rec
+
+
+class _LinearMap(tp.TimePeriodicEddy):
+    """Only what `contraction` needs: a period map T given as a dense matrix."""
+
+    def __init__(self, T):  # noqa: D401 — no solver state
+        self._T = np.asarray(T, float)
+
+    def period_map(self, w):
+        return self._T @ w
+
+
+def _hard_map(seed=4):
+    """A NON-NORMAL map with a NEAR-UNIT real mode (0.995), a COMPLEX PAIR of
+    modulus 0.97 and a fast bulk, under a random ill-conditioned similarity."""
+    rng = np.random.default_rng(seed)
+    n = 30
+    D = np.zeros((n, n))
+    D[0, 0] = 0.995
+    th = 0.4
+    D[1:3, 1:3] = 0.97 * np.array([[np.cos(th), -np.sin(th)],
+                                   [np.sin(th), np.cos(th)]])
+    D[3:, 3:] = np.diag(rng.uniform(-0.3, 0.3, n - 3))
+    D[3, 4] = 2.0                            # a Jordan-like non-normal coupling
+    S = rng.standard_normal((n, n)) + 3.0 * np.eye(n)
+    return S @ D @ np.linalg.inv(S)
+
+
+def test_arnoldi_rho_on_a_near_unit_non_normal_complex_map():
+    """The fourth review's adversarial cases for the estimate's rho: a
+    near-unit mode, a complex pair, non-normality.  With enough steps the top
+    Ritz value converges to the spectral radius and says so; with too few it
+    says it has NOT converged (which sends the solver to the empirical
+    safeguard: more closure periods)."""
+    T = _hard_map()
+    lam = float(np.max(np.abs(np.linalg.eigvals(T))))
+    assert lam == pytest.approx(0.995, rel=1e-9)
+    v0 = np.random.default_rng(1).standard_normal(T.shape[0])
+    full = _LinearMap(T).contraction(v0, m=29)
+    assert full["ritz_converged"] and full["rho"] == pytest.approx(lam, rel=1e-6)
+    short = _LinearMap(T).contraction(v0, m=3)
+    assert short["ritz_converged"] is False
+    assert len(short["ritz_history"]) == 3
 
 
 def test_group_joule_splits_the_frame_loss_by_group():

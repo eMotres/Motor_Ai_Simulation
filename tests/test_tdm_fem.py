@@ -118,20 +118,33 @@ def test_the_default_is_tdm_and_it_reproduces_the_march(march, tdm):
         assert w["ok"] and w["T_mean_rel"] <= TP.CLOSURE_GATE["T_rel"]
         assert w["ripple_pp"] <= TP.CLOSURE_GATE["ripple_pp"]
     assert info["t"]["closure"] > 0.0
-    # THE CERTIFIED ORBIT ERROR (third review, finding 1): rho of the period
-    # map, the orbit-error bound mapped to torque / ripple / TOTAL loss, under
-    # CERT_SAFETY of the owner's terms
-    ce = info["certify"]
-    assert ce["ok"] is True and 0.0 <= ce["rho"] < 1.0
+    # THE ORBIT-ERROR ESTIMATE (third / fourth reviews): a first-order estimate
+    # with an empirical safeguard (not a proof) mapped to torque / ripple /
+    # TOTAL loss (iron computed directly), under ESTIMATE_SAFETY of the owner's
+    # terms
+    ce = info["orbit_error_estimate"]
+    assert "not a proof" in ce["kind"]
+    assert ce["ok"] is True and 0.0 <= ce["rho_ritz"] <= ce["rho_eff"] < 1.0
+    assert ce["ritz_converged"] is True and len(ce["ritz_history"]) >= 2
     assert ce["orbit_error_gmres"]["converged"] and ce["scale"] >= 1.0
-    assert ce["bound_norm"] == pytest.approx(ce["defect_norm"] / (1.0 - ce["rho"]))
-    assert ce["iron_elements"] > 0 and ce["rB"] >= 0.0
+    assert ce["error_norm_rho"] == pytest.approx(
+        ce["defect_norm"] / (1.0 - ce["rho_eff"]))
+    assert ce["error_norm"] >= max(ce["orbit_error_norm"], ce["error_norm_rho"]) * (1 - 1e-12)
+    assert ce["closure_periods"] == 1 and ce["extra_closure_periods"] == 0
+    # the iron loss computed directly on the orbit, the perturbed orbit and the
+    # closure-march period, with the report's functional
+    assert ce["P_fe_orbit_W"] > 0.0
+    assert ce["dP_fe_W"] == pytest.approx(
+        abs(ce["P_fe_perturbed_W"] - ce["P_fe_orbit_W"])
+        + abs(ce["P_fe_closure_W"] - ce["P_fe_orbit_W"]))
+    assert ce["P_fe_orbit_W"] == pytest.approx(_mean(tdm, "P_fe_W"), rel=0.05)
     lim = ce["limits"]
     assert lim["T_rel"] == pytest.approx(1e-3)
     assert lim["P_total_rel"] == pytest.approx(5e-3)
-    assert ce["bound_T_rel"] <= lim["T_rel"]
-    assert ce["bound_ripple_pp"] <= lim["ripple_pp"]
-    assert ce["bound_P_total_rel"] <= lim["P_total_rel"]
+    assert ce["estimate_T_rel"] <= lim["T_rel"]
+    assert ce["estimate_ripple_pp"] <= lim["ripple_pp"]
+    assert ce["estimate_P_total_rel"] <= lim["P_total_rel"]
+    assert "certify" not in info
     # THE REPORT GATE (finding 6): hard, per group, both levels, every period
     gate = info["gate"]
     assert gate["ok"] is True and "error" not in gate
@@ -268,19 +281,38 @@ def test_a_failed_closure_retries_strictly_then_marches(monkeypatch, march):
     _same_as(d, march)
 
 
-def test_a_failed_certification_retries_strictly_then_marches(monkeypatch, march):
-    """Finding 1 (third review): an orbit whose bounded error is not below the
-    safety fraction (injected) is rejected: one strict retry, then a march."""
-    monkeypatch.setenv("SB_TDM_FAULT", "certify_gate")
+def test_a_failed_error_estimate_retries_strictly_then_marches(monkeypatch, march):
+    """An orbit whose estimated error is not below the safety fraction
+    (injected) is rejected: one strict retry, then a march."""
+    monkeypatch.setenv("SB_TDM_FAULT", "estimate_gate")
     d = _run()
     assert d["eddy_method"] == "march" and d["eddy_method_requested"] == "tdm"
-    assert d["eddy_method_note"].startswith("march: TDM failed (certify:")
+    assert d["eddy_method_note"].startswith("march: TDM failed (error_estimate:")
     att = d["tdm"]["attempts"]
-    assert [a["stage"] for a in att] == ["certify", "certify"]
+    assert [a["stage"] for a in att] == ["error_estimate", "error_estimate"]
     assert att[0]["retry_residual"] is True
-    assert att[1]["tdm"]["certify"]["injected"] is True
-    assert att[1]["tdm"]["certify"]["rho"] < 1.0
+    est = att[1]["tdm"]["orbit_error_estimate"]
+    assert est["injected"] is True and est["rho_eff"] < 1.0
     _same_as(d, march)
+
+
+def test_the_empirical_safeguard_marches_more_closure_periods(monkeypatch, tdm):
+    """Fourth review: when the Ritz estimate is not trusted (here: the
+    safeguard threshold forced to 0), further closure periods are marched and
+    the contraction is OBSERVED; rho_eff = max(rho_ritz, rho_observed); the
+    observed orbit error enters the estimate.  The orbit itself is unchanged."""
+    monkeypatch.setattr(TP, "RHO_SAFEGUARD", 0.0)
+    d = _run()
+    assert d["eddy_method"] == "tdm"
+    est = d["tdm"]["orbit_error_estimate"]
+    assert est["ok"] is True and est["extra_closure_periods"] >= 1
+    assert est["closure_periods"] == 1 + est["extra_closure_periods"]
+    assert est["rho_observed"] is not None
+    assert est["rho_eff"] == pytest.approx(max(est["rho_ritz"], est["rho_observed"]))
+    assert len(est["deviation_increments"]) == est["closure_periods"]
+    assert est["error_norm_observed"] is not None
+    assert est["error_norm"] >= est["error_norm_observed"] * (1 - 1e-12)
+    _same_as(d, tdm, rel=1e-12)
 
 
 def test_an_unknown_settle_is_never_reported_steady():
@@ -294,6 +326,20 @@ def test_an_unknown_settle_is_never_reported_steady():
     assert d["eddy_settled"] is None
     assert d["steady_state"] is False
     assert "UNKNOWN" in d["steady_state_note"]
+
+
+def test_an_unknown_pwm_settle_is_never_reported_steady():
+    """The carrier-specific case (fourth review): a PWM-driven eddy run whose
+    settle the gauge cannot judge (a mixed coarse/fine schedule, no
+    carrier-commensurate settle periods) is UNKNOWN, not steady, and the note
+    names the PWM gauge."""
+    d = _run("p2_voltage_eddy", drive="pwm_voltage", v_bus=20.0,
+             f_switch=6.0 * RPM * 7 / 60.0, n_steps_per_period=48)
+    assert d["eddy_method"] == "march"
+    assert "voltage / PWM drive" in d["eddy_method_note"]
+    assert d["eddy_settled"] is None
+    assert d["steady_state"] is False
+    assert "UNKNOWN" in d["steady_state_note"] and "PWM" in d["steady_state_note"]
 
 
 def test_a_rejected_attempt_is_not_kept_alive_during_the_retry(monkeypatch):
@@ -439,9 +485,19 @@ def test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods(
             s["element_max"] <= s["element_tol"]
             and last["element_max"] <= s["element_tol"])
         assert d["steady_state"] is (d["eddy_settled"] is True and d["demag_settled"])
-        # the drift is measured on the last two pre-pass periods' torque
+        # the drift is measured on the last two pre-pass periods' torque, by
+        # the REPORTED torque method (fourth review)
         assert s["drift"].get("T_mean_rel") is not None
         assert s["drift"]["tol_T_rel"] == pytest.approx(1e-3)
+        assert last["torque"]["torque_method"] == d["torque_method"] == \
+            "coulomb_virtual_work"
+        # the image history is complete ONLY after L pre-pass periods (fourth
+        # review: no area-mean shortcut)
+        for p_ in s["prepass"]:
+            assert p_["image_history"]["complete"] is (
+                p_["image_history"]["pre_pass_periods"] >= 7)
+        if d["demag_settled"]:
+            assert s["prepass_periods"] >= 7
         if d["demag_settled"]:
             assert d["steady_state_note"] is None
         else:
@@ -452,6 +508,18 @@ def test_demag_pre_pass_iterates_to_a_fixed_point_in_both_methods(
     assert abs(tdm_demag["demag_settle"]["prepass_periods"]
                - march_demag["demag_settle"]["prepass_periods"]) <= 1
     assert tdm_demag["T_avg_Nm"] == pytest.approx(march_demag["T_avg_Nm"], rel=2e-3)
+
+
+def test_the_demag_drift_uses_the_hybrid_torque_when_the_run_reports_it():
+    """Fourth review: a run that reports the hybrid torque (flux-linkage mean,
+    Maxwell AC) measures its demag drift with that method, not with the raw
+    Maxwell series."""
+    d = _run("p2_demag_eddy", torque_method="hybrid_maxwell_ac")
+    assert d["eddy_method"] == "tdm"
+    meth = d["torque_method"]
+    assert meth != "coulomb_virtual_work"
+    for p_ in d["demag_settle"]["prepass"]:
+        assert p_["torque"]["torque_method"] == meth
 
 
 def test_the_demag_shortcut_is_labelled_experimental(monkeypatch):

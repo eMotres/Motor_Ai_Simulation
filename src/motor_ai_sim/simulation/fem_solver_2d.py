@@ -353,6 +353,29 @@ def optimizer_candidate_scope(active: bool = True):
         _OPT_CANDIDATE.reset(_tok)
 
 
+#: The demag method an OPTIMIZER CANDIDATE evaluation asks for (owner
+#: 2026-10-04): the adaptive two-window shortcut for candidates, the full
+#: pre-pass for everything reported and for the final verification.  Set ONLY
+#: by `refine_proc.run_one` for ``sampling_purpose="optimization"`` evals
+#: (`tdm_demag_scope`); carried into a solve-pool child like the candidate flag.
+#: Never read from the environment.  None = the full pre-pass.
+_TDM_DEMAG_REQUEST: "_ctxvars.ContextVar[Optional[str]]" = _ctxvars.ContextVar(
+    "motor_ai_sim_tdm_demag_request", default=None)
+
+
+@_ctxlib.contextmanager
+def tdm_demag_scope(mode: Optional[str]):
+    """Run the enclosed solves with TDM demag ``mode`` ("shortcut" for an
+    optimizer candidate, None = full) unless a solve names its own."""
+    if mode not in (None, "full", "shortcut"):
+        raise ValueError("tdm_demag must be 'full' or 'shortcut', got %r" % (mode,))
+    _tok = _TDM_DEMAG_REQUEST.set(mode)
+    try:
+        yield
+    finally:
+        _TDM_DEMAG_REQUEST.reset(_tok)
+
+
 def optimizer_candidate_active() -> bool:
     """True inside ``optimizer_candidate_scope(True)`` on THIS context only."""
     return bool(_OPT_CANDIDATE.get())
@@ -4136,7 +4159,8 @@ def _fem_transient_sliding_band_once(
     # The demag shortcut is EXPERIMENTAL: only the explicit argument selects it
     # (second Codex review, finding 11) — SB_TDM_DEMAG=shortcut is ignored with
     # a note, so no ordinary workflow can reach it through the environment.
-    _tdm_demag, _tdm_demag_note = _resolve_tdm_demag(tdm_demag)
+    _tdm_demag, _tdm_demag_note = _resolve_tdm_demag(
+        tdm_demag if tdm_demag is not None else _TDM_DEMAG_REQUEST.get())
     if _tdm_demag_note:
         log.warning("SB: %s", _tdm_demag_note)
     geo = dict(cfg.get("geometry", {}))
@@ -7429,6 +7453,7 @@ def _fem_transient_sliding_band_once(
     # Shared by both methods; a reported period that misses any of them is
     # steady_state False with the numbers in the note.
     _dm_tq_cur: Dict[int, Tuple] = {}
+    _dm_shortcut_used = False      # the demag shortcut ran (TDM, optimizer candidates)
 
     def _dm_frame_torque(A, Is, theta_rad):
         """What the REPORTED torque method needs of one frame (fourth Codex
@@ -8218,52 +8243,20 @@ def _fem_transient_sliding_band_once(
                             math.radians(0.5 * float(period_mech)),
                             int(_poles_per_sector))
                     if _td_dmode == "shortcut" and _td_maps is not None:
-                        # EXPERIMENTAL (Codex review / owner 2026-09-30): not
-                        # qualified — ripple 0.54 pp (9 %) low in deep field
-                        # weakening on the Ø40 — so never a default and always
-                        # announced in the result (eddy_method_note)
+                        # THE DEMAG SHORTCUT — the method of OPTIMIZER CANDIDATES
+                        # only (owner 2026-10-04; requested by refine_proc, never
+                        # by the environment).  Not qualified for reported
+                        # numbers: every reported run (EM tab, coupled loop,
+                        # passport, MCP, reports) and the optimizer's final
+                        # verification take the full pre-pass.  The windows run
+                        # below, once the orbit re-solve is defined.
                         _td_dm["experimental"] = True
-                        _tdm_note = ("tdm: EXPERIMENTAL demag shortcut "
-                                     "(tdm_demag='shortcut', not qualified: ripple "
-                                     "-0.54 pp in deep field weakening) — use the "
-                                     "full pre-pass for reported numbers")
+                        _dm_shortcut_used = True
+                        _tdm_note = ("tdm: demag SHORTCUT (adaptive two 1/6-period "
+                                     "windows; optimizer candidates only, not "
+                                     "qualified) — the full pre-pass gives the "
+                                     "reported numbers")
                         log.warning("TDM: %s", _tdm_note)
-                        # the worst (magnet, instant) on the pristine orbit
-                        _pred = []
-                        for _k in range(_td_nspp):
-                            _bx, _by = _td_Bel(_td_orbit(_k, _td_As))
-                            _pred.append(_tdm.predicted_demag(
-                                _dmst.mags, _bx[nst:], _by[nst:], _br_glob, _ar_r,
-                                MU0))
-                        _pred = np.array(_pred)            # (frames, magnets)
-                        _kw, _mw = np.unravel_index(int(np.argmax(_pred)),
-                                                    _pred.shape)
-                        _frac = float(_os_sb.environ.get("SB_TDM_DEMAG_WINDOW",
-                                                         "0.1666667") or 1 / 6)
-                        _W = max(2, int(math.ceil(_frac * _td_nspp)))
-                        _k0 = int(_kw) - _W // 2
-                        _td_dm.update({"worst_frame": int(_kw),
-                                       "worst_magnet_tag": int(_dmst.mags[_mw]["tag"]),
-                                       "predicted_drop": float(_pred[_kw, _mw]),
-                                       "window_frames": [int(_k0), int(_k0 + _W - 1)]})
-                        if float(_pred.max()) <= 0.0:
-                            _td_dm["skipped"] = "no element reaches the knee on the orbit"
-                        else:
-                            _td_dm["march"] = _tdm.demag_march(
-                                list(range(_k0, _k0 + _W)),
-                                (_td_orbit(_k0 - 1, _td_As), _td_orbit(_k0 - 2, _td_As)),
-                                _td_orbit_start, _td_solve_frame, _td_ratchet, log=log)
-                            _new, _mapi = _tdm.map_br_from_reference(
-                                _dmst.mags, int(_mw), _br_glob, _td_maps)
-                            _td_dm["map"] = _mapi
-                            if not _mapi["complete"]:
-                                log.warning("TDM demag shortcut: the pole map left "
-                                            "%d of %d magnet elements unmapped — "
-                                            "they keep their own window Br",
-                                            _mapi["of"] - _mapi["mapped"], _mapi["of"])
-                            _br_glob[:] = _new
-                            _td_rebuild_fmag()
-                            _n_dmpre += int(_td_dm["march"]["frames"])
                     else:
                         if _td_dmode == "shortcut":
                             _td_dm["refused"] = ("no pole image map of the magnets "
@@ -8297,6 +8290,85 @@ def _fem_transient_sliding_band_once(
                         _td_As = [np.array(_fr_.A, float) for _fr_ in _td_frames]
                         _td_Us = [np.array(_fr_.U, float) for _fr_ in _td_frames]
 
+                    if _td_dmode == "shortcut" and _td_maps is not None:
+                        # ADAPTIVE TWO WINDOWS (owner 2026-10-04; Codex docs
+                        # fem-tdm-l155-adaptive-windows-2026-10-03 and
+                        # fem-tdm-repeat-short-windows-2026-10-02): on the
+                        # CURRENT orbit and Br, the (magnet, instant) with the
+                        # largest predicted Br loss (`predicted_demag`, the
+                        # ratchet rule without the update) is located; a window
+                        # of exactly 1/6 period around it is marched with the
+                        # ratchet; that magnet's Br map is carried to every pole
+                        # image and taken element-wise with np.minimum against the
+                        # current Br (irreversible: Br never rises, checked); the
+                        # orbit is re-solved — and the selection is REPEATED on
+                        # the updated orbit for the second window.  The reported
+                        # period's settle checks are the shared ones (Br change,
+                        # and the drift of the reported torque between the two
+                        # windows' orbits).
+                        # exactly 6 frames for 1/6 of 36 (the old ceil(0.1666667 N)
+                        # gave 7)
+                        _W = _tdm.demag_window_frames(
+                            _td_nspp, _os_sb.environ.get("SB_TDM_DEMAG_WINDOW") or "1/6")
+                        _td_dm["window_frames_count"] = int(_W)
+                        _td_dm["windows"] = []
+                        _td_dm["march"] = {"frames": 0, "solves": 0, "ratchet_trips": 0}
+                        for _wi in (1, 2):
+                            _t_sel = _t.time()
+                            _pred = []
+                            for _k in range(_td_nspp):
+                                _bx, _by = _td_Bel(_td_orbit(_k, _td_As))
+                                _pred.append(_tdm.predicted_demag(
+                                    _dmst.mags, _bx[nst:], _by[nst:], _br_glob, _ar_r,
+                                    MU0))
+                            _pred = np.array(_pred)            # (frames, magnets)
+                            if not np.all(np.isfinite(_pred)):
+                                raise RuntimeError("TDM demag shortcut: non-finite "
+                                                   "predicted demag")
+                            _kw, _mw = np.unravel_index(int(np.argmax(_pred)),
+                                                        _pred.shape)
+                            _k0 = int(_kw) - _W // 2
+                            _sel = {"window": _wi, "worst_frame": int(_kw),
+                                    "worst_magnet_tag": int(_dmst.mags[_mw]["tag"]),
+                                    "predicted_drop": float(_pred[_kw, _mw]),
+                                    "window_frames": [int(_k0), int(_k0 + _W - 1)],
+                                    "selection_s": _t.time() - _t_sel}
+                            if float(_pred.max()) <= 0.0:
+                                _sel["skipped"] = "no element reaches the knee on the orbit"
+                                _td_dm["windows"].append(_sel)
+                                break
+                            _b0w = _br_glob.copy()
+                            _mres = _tdm.demag_march(
+                                list(range(_k0, _k0 + _W)),
+                                (_td_orbit(_k0 - 1, _td_As), _td_orbit(_k0 - 2, _td_As)),
+                                _td_orbit_start, _td_solve_frame, _td_ratchet, log=log)
+                            _new, _mapi = _tdm.map_br_from_reference(
+                                _dmst.mags, int(_mw), _br_glob, _td_maps)
+                            if not _mapi["complete"]:
+                                raise RuntimeError(
+                                    "TDM demag shortcut: the pole map left %d of %d "
+                                    "magnet elements unmapped"
+                                    % (_mapi["of"] - _mapi["mapped"], _mapi["of"]))
+                            _br_glob[:] = np.minimum(_br_glob, _new)
+                            if np.any(_br_glob > _b0w + 1e-12):
+                                raise RuntimeError("TDM demag shortcut: Br rose "
+                                                   "(irreversibility violated)")
+                            _td_rebuild_fmag()
+                            _n_dmpre += int(_mres["frames"])
+                            for _ck in ("frames", "solves", "ratchet_trips"):
+                                _td_dm["march"][_ck] += int(_mres[_ck])
+                            _td_resolve_orbit("after demag shortcut window %d" % _wi)
+                            _td_mark("demag")
+                            _ow = _td_observe(_td_As, _td_Us, _td_orbit(-1, _td_As),
+                                              _td_orbit(-2, _td_As), list(range(_td_N)))
+                            _rec_w = dict(_dm_change(_b0w, _br_glob),
+                                          frames=int(_mres["frames"]), map=_mapi,
+                                          selection=_sel, monotone=True,
+                                          torque={"T_mean": float(_ow["T_mean"]),
+                                                  "ripple_pct": float(_ow["ripple_pct"]),
+                                                  "torque_method": _ow["torque_method"]})
+                            _td_dm["windows"].append(_rec_w)
+                            _dm_passes.append(_rec_w)
                     if not (_td_dmode == "shortcut" and _td_maps is not None):
                         # THE FIXED POINT (shared rule, `_dm_settle_tol`): the
                         # period BEFORE the reported window, θ < 0 — the march's
@@ -10970,7 +11042,15 @@ def _fem_transient_sliding_band_once(
         # pre-pass periods) — all three affirmatively
         _dm_moved_ok = _dm_is_settled(_dm_settle)
         try:
-            _dm_img_rec, _dm_img_ok = _dm_image_check(len(_dm_passes))
+            if _dm_shortcut_used:
+                # the shortcut carries the worst magnet's history to EVERY pole
+                # image by the symmetry map: complete when every map was
+                _dm_img_ok = bool(_dm_passes) and all(
+                    (_p_.get("map") or {}).get("complete") for _p_ in _dm_passes)
+                _dm_img_rec = {"method": "pole-image transfer (demag shortcut)",
+                               "complete": _dm_img_ok, "windows": len(_dm_passes)}
+            else:
+                _dm_img_rec, _dm_img_ok = _dm_image_check(len(_dm_passes))
         except Exception as _e_img:          # noqa: BLE001 — unverifiable: not steady
             _dm_img_rec, _dm_img_ok = {"error": str(_e_img)}, False
         _dm_drift_rec = _dm_drift(_dm_passes)

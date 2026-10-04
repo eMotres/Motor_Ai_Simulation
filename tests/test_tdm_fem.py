@@ -522,12 +522,31 @@ def test_the_demag_drift_uses_the_hybrid_torque_when_the_run_reports_it():
         assert p_["torque"]["torque_method"] == meth
 
 
-def test_the_demag_shortcut_is_labelled_experimental(monkeypatch):
+def test_the_demag_shortcut_is_adaptive_two_windows_and_not_qualified(
+        monkeypatch, tdm_demag):
+    """Owner 2026-10-04: the shortcut (optimizer candidates only) = two
+    windows of exactly 1/6 period, the second RE-SELECTED on the updated
+    orbit; Br carried to every pole image with np.minimum (never rises);
+    labelled not qualified.  Close to the full pre-pass on the fixture."""
     d = _run("p2_demag_eddy", tdm_demag="shortcut")
     assert d["eddy_method"] == "tdm"
-    assert d["eddy_method_note"].startswith("tdm: EXPERIMENTAL demag shortcut")
-    assert d["tdm"]["demag"]["experimental"] is True
+    assert d["eddy_method_note"].startswith("tdm: demag SHORTCUT")
+    dm = d["tdm"]["demag"]
+    assert dm["experimental"] is True
     assert d["tdm_experimental"] is True and d["qualified"] is False
+    assert dm["window_frames_count"] == 2                 # 1/6 of 12 steps
+    ws = dm["windows"]
+    assert [w["selection"]["window"] for w in ws] == [1, 2]
+    for w in ws:
+        sel = w["selection"]
+        assert sel["window_frames"][1] - sel["window_frames"][0] + 1 == 2
+        assert w["monotone"] is True and w["map"]["complete"] is True
+        assert w["torque"]["torque_method"] == d["torque_method"]
+    # the second window is chosen on the UPDATED orbit (its own prediction)
+    assert ws[1]["selection"]["predicted_drop"] != ws[0]["selection"]["predicted_drop"]
+    s = d["demag_settle"]
+    assert s["image_history"]["method"].startswith("pole-image transfer")
+    assert d["T_avg_Nm"] == pytest.approx(tdm_demag["T_avg_Nm"], rel=2e-3)
 
 
 def test_the_environment_cannot_select_the_shortcut(monkeypatch, tdm_demag):

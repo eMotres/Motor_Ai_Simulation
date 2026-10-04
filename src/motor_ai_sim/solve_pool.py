@@ -1256,6 +1256,7 @@ CARRIED_VARS: Tuple[Tuple[str, str], ...] = (
     ("motor_ai_sim.material_context", "_OVERRIDE"),
     ("motor_ai_sim.mech_losses", "BEARING_TEMP_C"),
     ("motor_ai_sim.simulation.fem_solver_2d", "_OPT_CANDIDATE"),
+    ("motor_ai_sim.simulation.fem_solver_2d", "_TDM_DEMAG_REQUEST"),
     ("motor_ai_sim.simulation.fem_solver_2d", "_NO_WARM_CACHE_CTX"),
     ("motor_ai_sim.run_recording", "_RECORD"),
 )

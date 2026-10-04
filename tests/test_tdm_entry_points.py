@@ -49,6 +49,9 @@ def spy(monkeypatch, sim, tmp_path):
     answer = {}
 
     def fake_eval(**kw):
+        # the TDM demag mode the solve would take: the public route never asks
+        # for the shortcut (optimizer candidates only, owner 2026-10-04)
+        kw = dict(kw, _tdm_demag_request=FS._TDM_DEMAG_REQUEST.get())
         calls.append(kw)
         out = {"time_s": [0.0, 0.5, 1.0], "T_avg_Nm": 1.234,
                "T_em_Nm": [1.2, 1.25, 1.23], "rpm": 1000.0, "f_elec_Hz": 100.0,
@@ -90,6 +93,7 @@ def test_the_em_tab_route_leaves_the_method_to_the_solver_and_reports_it(
     assert calls, "the route did not reach the solver"
     assert calls[-1].get("eddy_method") is None      # the solver's default decides
     assert calls[-1].get("tdm_demag") is None        # never the shortcut
+    assert calls[-1]["_tdm_demag_request"] is None   # …by no other door either
     s = _summary(res)
     for k, v in answer.items():
         assert s.get(k) == v, (k, s.get(k))

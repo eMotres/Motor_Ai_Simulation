@@ -292,6 +292,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # like the mesh budget beside it — the kernel seam catches every exception,
     # so the reset below always runs.
     _cand_tok = _fs_cand._OPT_CANDIDATE.set(bool(optimizer_candidate))
+    # DEMAG METHOD (owner 2026-10-04): an optimizer CANDIDATE evaluation
+    # (sampling_purpose "optimization") takes the adaptive two-window demag
+    # shortcut — explicitly, here and nowhere else; a standard / final-quality
+    # evaluation (the verification of the chosen candidates) keeps the full
+    # pre-pass.  The result says which (`qualified` False for the shortcut).
+    _dm_tok = _fs_cand._TDM_DEMAG_REQUEST.set(
+        "shortcut" if sampling_purpose == "optimization" else None)
     _out = _kernel().run("solver.em_transient", {
         "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
         "sampling_purpose": sampling_purpose,
@@ -355,6 +362,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
     _fs_cand._OPT_CANDIDATE.reset(_cand_tok)
+    _fs_cand._TDM_DEMAG_REQUEST.reset(_dm_tok)
     _geo_mesh_mod.set_tri_budget(None)
     # TWO failure carriers, and both must be read.  The kernel ENVELOPE's ok is
     # False only when the module itself threw (Kernel.run's fault isolation);

@@ -452,6 +452,15 @@ def test_demag_settled_is_the_mean_and_the_element_is_a_warning():
     assert w and "0.0108" in w and "warning" in w
 
 
+def test_the_shortcut_window_is_exactly_one_sixth():
+    assert tp.demag_window_frames(36) == 6          # the old ceil(0.1666667*36) = 7
+    assert tp.demag_window_frames(36, "1/6") == 6
+    assert tp.demag_window_frames(36, 1 / 6) == 6
+    assert tp.demag_window_frames(40) == 7          # rounded up where it does not divide
+    assert tp.demag_window_frames(12) == 2
+    assert tp.demag_window_frames(6) == 2           # at least two frames
+
+
 def test_the_shortcut_is_never_taken_from_the_environment():
     assert tp.resolve_tdm_demag(None, {}) == ("full", None)
     mode, note = tp.resolve_tdm_demag(None, {"SB_TDM_DEMAG": "shortcut"})

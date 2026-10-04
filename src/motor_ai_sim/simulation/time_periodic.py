@@ -1247,6 +1247,18 @@ def demag_march(ks: Sequence[int], hist: Tuple[np.ndarray, np.ndarray],
     return {"frames": len(list(ks)), "solves": passes, "ratchet_trips": trips}
 
 
+def demag_window_frames(n_steps: int, fraction: Any = "1/6") -> int:
+    """Frames of the demag shortcut's window: ``fraction`` of the period
+    (a float or an exact "p/q"), rounded UP but exact where it divides —
+    6 for 1/6 of 36 (the earlier ceil(0.1666667 * 36) gave 7) — at least 2."""
+    if isinstance(fraction, str) and "/" in fraction:
+        _n, _d = fraction.split("/", 1)
+        frac = float(_n) / float(_d)
+    else:
+        frac = float(fraction)
+    return max(2, int(math.ceil(frac * int(n_steps) - 1e-9)))
+
+
 def predicted_demag(mags: Sequence[Dict[str, Any]], Bx: np.ndarray,
                     By: np.ndarray, br: np.ndarray, area: np.ndarray,
                     MU0: float) -> np.ndarray:

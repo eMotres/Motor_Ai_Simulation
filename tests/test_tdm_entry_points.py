@@ -49,6 +49,9 @@ def spy(monkeypatch, sim, tmp_path):
     answer = {}
 
     def fake_eval(**kw):
+        # the TDM demag mode the solve would take: the public route never asks
+        # for the shortcut (optimizer candidates only, owner 2026-10-04)
+        kw = dict(kw, _tdm_demag_request=FS._TDM_DEMAG_REQUEST.get())
         calls.append(kw)
         out = {"time_s": [0.0, 0.5, 1.0], "T_avg_Nm": 1.234,
                "T_em_Nm": [1.2, 1.25, 1.23], "rpm": 1000.0, "f_elec_Hz": 100.0,
@@ -90,6 +93,7 @@ def test_the_em_tab_route_leaves_the_method_to_the_solver_and_reports_it(
     assert calls, "the route did not reach the solver"
     assert calls[-1].get("eddy_method") is None      # the solver's default decides
     assert calls[-1].get("tdm_demag") is None        # never the shortcut
+    assert calls[-1]["_tdm_demag_request"] is None   # …by no other door either
     s = _summary(res)
     for k, v in answer.items():
         assert s.get(k) == v, (k, s.get(k))
@@ -300,6 +304,36 @@ def test_a_passport_reports_its_solves_verdicts(monkeypatch):
     assert ss["not_steady"] == [_VERDICT["steady_state_note"]]
     assert ss["eddy_methods"] == ["march", "tdm"]
     assert ss["notes"] == [_VERDICT["eddy_method_note"]]
+
+
+def test_a_passport_needs_every_solve_to_affirm_steadiness(monkeypatch):
+    """Fourth review: verdicts [True, …, None] (one solve that did not say)
+    are NOT steady — the unknown solve is named."""
+    from motor_ai_sim import passport as pp
+    from motor_ai_sim.config import get_config
+    from motor_ai_sim.routes import simulation as sim
+    from tests.test_passport_loss_fixes import _StubSolver
+
+    geo = dict(get_config().get("geometry") or {})
+    stub = _StubSolver("star", float(geo.get("motor_length") or 12.0))
+    calls = [0]
+
+    def solver(**kw):
+        d = stub(**kw)
+        calls[0] += 1
+        if calls[0] != 2:                    # solve 2 says nothing
+            d["summary"].update({"eddy_method": "tdm", "steady_state": True,
+                                 "eddy_method_note": None})
+        return d
+    monkeypatch.setattr(sim, "get_fem_transient", solver)
+    out = pp.generate_passport(
+        machine={"geometry": geo, "connection": None, "star_delta": "star",
+                 "materials": {}, "end_winding_factor": 2.0},
+        I0=30.0, gamma_deg=10.0, rpm0=1000.0, rpms=[500.0, 1000.0],
+        base_steps=6, sweep_steps=6, pwm="off")
+    ss = out["passport"]["solve_status"]
+    assert ss["steady_state"] is False
+    assert ss["not_steady"] == ["solve 2 did not affirm a steady state (verdict unknown)"]
 
 
 def test_mcp_headlines_carry_the_verdict():

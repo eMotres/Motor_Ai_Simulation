@@ -353,6 +353,29 @@ def optimizer_candidate_scope(active: bool = True):
         _OPT_CANDIDATE.reset(_tok)
 
 
+#: The demag method an OPTIMIZER CANDIDATE evaluation asks for (owner
+#: 2026-10-04): the adaptive two-window shortcut for candidates, the full
+#: pre-pass for everything reported and for the final verification.  Set ONLY
+#: by `refine_proc.run_one` for ``sampling_purpose="optimization"`` evals
+#: (`tdm_demag_scope`); carried into a solve-pool child like the candidate flag.
+#: Never read from the environment.  None = the full pre-pass.
+_TDM_DEMAG_REQUEST: "_ctxvars.ContextVar[Optional[str]]" = _ctxvars.ContextVar(
+    "motor_ai_sim_tdm_demag_request", default=None)
+
+
+@_ctxlib.contextmanager
+def tdm_demag_scope(mode: Optional[str]):
+    """Run the enclosed solves with TDM demag ``mode`` ("shortcut" for an
+    optimizer candidate, None = full) unless a solve names its own."""
+    if mode not in (None, "full", "shortcut"):
+        raise ValueError("tdm_demag must be 'full' or 'shortcut', got %r" % (mode,))
+    _tok = _TDM_DEMAG_REQUEST.set(mode)
+    try:
+        yield
+    finally:
+        _TDM_DEMAG_REQUEST.reset(_tok)
+
+
 def optimizer_candidate_active() -> bool:
     """True inside ``optimizer_candidate_scope(True)`` on THIS context only."""
     return bool(_OPT_CANDIDATE.get())
@@ -4161,7 +4184,8 @@ def _fem_transient_sliding_band_once(
     # The demag shortcut is EXPERIMENTAL: only the explicit argument selects it
     # (second Codex review, finding 11) — SB_TDM_DEMAG=shortcut is ignored with
     # a note, so no ordinary workflow can reach it through the environment.
-    _tdm_demag, _tdm_demag_note = _resolve_tdm_demag(tdm_demag)
+    _tdm_demag, _tdm_demag_note = _resolve_tdm_demag(
+        tdm_demag if tdm_demag is not None else _TDM_DEMAG_REQUEST.get())
     if _tdm_demag_note:
         log.warning("SB: %s", _tdm_demag_note)
     geo = dict(cfg.get("geometry", {}))
@@ -7453,30 +7477,50 @@ def _fem_transient_sliding_band_once(
     #     mean 1e-3, element 1e-2); and
     #   * the OBSERVABLE DRIFT between the last two pre-pass periods — mean
     #     torque and ripple of the frame torque (Coulomb when the run reports
-    #     Coulomb, else the frame loop's Maxwell series) — is below CERT_SAFETY
+    #     Coulomb, else the frame loop's Maxwell series) — is below ESTIMATE_SAFETY
     #     of the owner's terms (torque 0.1 %, ripple max(0.05 pp, 1 % of it)).
     # Shared by both methods; a reported period that misses any of them is
     # steady_state False with the numbers in the note.
-    _dm_tq_cur: Dict[int, float] = {}
+    _dm_tq_cur: Dict[int, Tuple] = {}
+    _dm_shortcut_used = False      # the demag shortcut ran (TDM, optimizer candidates)
 
-    def _dm_frame_torque(A):
+    def _dm_frame_torque(A, Is, theta_rad):
+        """What the REPORTED torque method needs of one frame (fourth Codex
+        review: the drift is measured with the run's own torque method, not
+        the raw Maxwell series): the Coulomb virtual-work torque, and for the
+        hybrid method the Maxwell torque, the flux linkages, the currents and
+        the rotor angle (`sb_postproc.space_vector_hybrid_torque`)."""
+        _tc = None
         if torque_method == "coulomb" and _ftq2.coulomb:
-            _v = _frame_torques(_ftq2, A)["coulomb_Nm"]
-            if _v is not None and math.isfinite(_v):
-                return float(_v)
-        return float(_torque2(A) * NS)
+            _tc = _frame_torques(_ftq2, A)["coulomb_Nm"]
+        _q = _psi2(A)
+        return (_tc, float(_torque2(A) * NS), float(_q[0]), float(_q[1]),
+                float(_q[2]), float(Is['A']), float(Is['B']), float(Is['C']),
+                float(theta_rad))
 
     def _dm_take_torque():
         """Mean torque and p-p ripple [%] of the pre-pass period that just
-        ended (its frames' final fields), and reset."""
-        _v = [_dm_tq_cur[_k] for _k in sorted(_dm_tq_cur)]
+        ended (its frames' final fields), by the REPORTED torque method, and
+        reset."""
+        _rows = [_dm_tq_cur[_k] for _k in sorted(_dm_tq_cur)]
         _dm_tq_cur.clear()
-        if not _v:
+        if not _rows:
             return None
-        _a = np.asarray(_v, float)
+        if all(_r[0] is not None and math.isfinite(_r[0]) for _r in _rows):
+            _a = np.asarray([_r[0] for _r in _rows], float)
+            _meth = "coulomb_virtual_work"
+        else:
+            _c = list(zip(*_rows))
+            _wf, _meth = _space_vector_hybrid_torque(
+                list(_c[2]), list(_c[3]), list(_c[4]), list(_c[5]), list(_c[6]),
+                list(_c[7]), list(_c[1]), pole_pairs, n_parallel=int(n_parallel),
+                zero_sequence=bool(getattr(_src, "zero_sequence_path", False)),
+                mechanical_angle_rad=list(_c[8]))
+            _a = np.asarray(_wf, float)
         _m = float(_a.mean())
         return {"T_mean": _m, "ripple_pct": 100.0 * float(_a.max() - _a.min())
-                / max(abs(_m), 1e-300), "frames": int(_a.size)}
+                / max(abs(_m), 1e-300), "frames": int(_a.size),
+                "torque_method": _meth}
 
     def _dm_image():
         """(image maps, cycle length L) of the magnets, cached."""
@@ -7519,15 +7563,17 @@ def _fem_transient_sliding_band_once(
         _rec: Dict[str, Any] = {"cycle_periods": _L, "pre_pass_periods": int(n_periods)}
         if _maps is None:
             _rec["error"] = "no pole image map of the magnets (%s)" % (_minfo,)
-            return _rec, bool(_L is not None and n_periods >= _L)
+            _rec["complete"] = bool(_L is not None and n_periods >= _L)
+            return _rec, _rec["complete"]
         _gap = _brc(_dmst.mags, _imb(_dmst.mags, _br_glob, _maps), _br_glob,
                     _dm_areas())
         _rec["image_gap"] = {"per_magnet_mean_max": _gap["per_magnet_mean_max"],
                              "element_max": _gap["element_max"]}
-        # complete after L periods, or when Br already equals its image
-        # minimum on the area mean (per element: a warning, as above)
-        _ok = bool((_L is not None and n_periods >= _L)
-                   or _gap["per_magnet_mean_max"] <= _dm_settle_tol)
+        # complete ONLY after L pre-pass periods — every magnet has met the
+        # dangerous instant at every rotor image (fourth Codex review: a small
+        # area-mean image gap after a few quiet periods is not that history;
+        # the gap is recorded, not a shortcut)
+        _ok = bool(_L is not None and n_periods >= _L)
         _rec["complete"] = _ok
         return _rec, _ok
 
@@ -8183,7 +8229,8 @@ def _fem_transient_sliding_band_once(
                                                "did not converge at frame %d" % k)
                         # the frame's torque for the drift check (the last
                         # re-solve of a frame overwrites the earlier ones)
-                        _dm_tq_cur[int(k)] = _dm_frame_torque(_A)
+                        _dm_tq_cur[int(k)] = _dm_frame_torque(
+                            _A, _Is, math.radians(_m * spacing))
                         return _A
 
                     def _td_rebuild_fmag():
@@ -8223,52 +8270,20 @@ def _fem_transient_sliding_band_once(
                             math.radians(0.5 * float(period_mech)),
                             int(_poles_per_sector))
                     if _td_dmode == "shortcut" and _td_maps is not None:
-                        # EXPERIMENTAL (Codex review / owner 2026-09-30): not
-                        # qualified — ripple 0.54 pp (9 %) low in deep field
-                        # weakening on the Ø40 — so never a default and always
-                        # announced in the result (eddy_method_note)
+                        # THE DEMAG SHORTCUT — the method of OPTIMIZER CANDIDATES
+                        # only (owner 2026-10-04; requested by refine_proc, never
+                        # by the environment).  Not qualified for reported
+                        # numbers: every reported run (EM tab, coupled loop,
+                        # passport, MCP, reports) and the optimizer's final
+                        # verification take the full pre-pass.  The windows run
+                        # below, once the orbit re-solve is defined.
                         _td_dm["experimental"] = True
-                        _tdm_note = ("tdm: EXPERIMENTAL demag shortcut "
-                                     "(tdm_demag='shortcut', not qualified: ripple "
-                                     "-0.54 pp in deep field weakening) — use the "
-                                     "full pre-pass for reported numbers")
+                        _dm_shortcut_used = True
+                        _tdm_note = ("tdm: demag SHORTCUT (adaptive two 1/6-period "
+                                     "windows; optimizer candidates only, not "
+                                     "qualified) — the full pre-pass gives the "
+                                     "reported numbers")
                         log.warning("TDM: %s", _tdm_note)
-                        # the worst (magnet, instant) on the pristine orbit
-                        _pred = []
-                        for _k in range(_td_nspp):
-                            _bx, _by = _td_Bel(_td_orbit(_k, _td_As))
-                            _pred.append(_tdm.predicted_demag(
-                                _dmst.mags, _bx[nst:], _by[nst:], _br_glob, _ar_r,
-                                MU0))
-                        _pred = np.array(_pred)            # (frames, magnets)
-                        _kw, _mw = np.unravel_index(int(np.argmax(_pred)),
-                                                    _pred.shape)
-                        _frac = float(_os_sb.environ.get("SB_TDM_DEMAG_WINDOW",
-                                                         "0.1666667") or 1 / 6)
-                        _W = max(2, int(math.ceil(_frac * _td_nspp)))
-                        _k0 = int(_kw) - _W // 2
-                        _td_dm.update({"worst_frame": int(_kw),
-                                       "worst_magnet_tag": int(_dmst.mags[_mw]["tag"]),
-                                       "predicted_drop": float(_pred[_kw, _mw]),
-                                       "window_frames": [int(_k0), int(_k0 + _W - 1)]})
-                        if float(_pred.max()) <= 0.0:
-                            _td_dm["skipped"] = "no element reaches the knee on the orbit"
-                        else:
-                            _td_dm["march"] = _tdm.demag_march(
-                                list(range(_k0, _k0 + _W)),
-                                (_td_orbit(_k0 - 1, _td_As), _td_orbit(_k0 - 2, _td_As)),
-                                _td_orbit_start, _td_solve_frame, _td_ratchet, log=log)
-                            _new, _mapi = _tdm.map_br_from_reference(
-                                _dmst.mags, int(_mw), _br_glob, _td_maps)
-                            _td_dm["map"] = _mapi
-                            if not _mapi["complete"]:
-                                log.warning("TDM demag shortcut: the pole map left "
-                                            "%d of %d magnet elements unmapped — "
-                                            "they keep their own window Br",
-                                            _mapi["of"] - _mapi["mapped"], _mapi["of"])
-                            _br_glob[:] = _new
-                            _td_rebuild_fmag()
-                            _n_dmpre += int(_td_dm["march"]["frames"])
                     else:
                         if _td_dmode == "shortcut":
                             _td_dm["refused"] = ("no pole image map of the magnets "
@@ -8302,6 +8317,85 @@ def _fem_transient_sliding_band_once(
                         _td_As = [np.array(_fr_.A, float) for _fr_ in _td_frames]
                         _td_Us = [np.array(_fr_.U, float) for _fr_ in _td_frames]
 
+                    if _td_dmode == "shortcut" and _td_maps is not None:
+                        # ADAPTIVE TWO WINDOWS (owner 2026-10-04; Codex docs
+                        # fem-tdm-l155-adaptive-windows-2026-10-03 and
+                        # fem-tdm-repeat-short-windows-2026-10-02): on the
+                        # CURRENT orbit and Br, the (magnet, instant) with the
+                        # largest predicted Br loss (`predicted_demag`, the
+                        # ratchet rule without the update) is located; a window
+                        # of exactly 1/6 period around it is marched with the
+                        # ratchet; that magnet's Br map is carried to every pole
+                        # image and taken element-wise with np.minimum against the
+                        # current Br (irreversible: Br never rises, checked); the
+                        # orbit is re-solved — and the selection is REPEATED on
+                        # the updated orbit for the second window.  The reported
+                        # period's settle checks are the shared ones (Br change,
+                        # and the drift of the reported torque between the two
+                        # windows' orbits).
+                        # exactly 6 frames for 1/6 of 36 (the old ceil(0.1666667 N)
+                        # gave 7)
+                        _W = _tdm.demag_window_frames(
+                            _td_nspp, _os_sb.environ.get("SB_TDM_DEMAG_WINDOW") or "1/6")
+                        _td_dm["window_frames_count"] = int(_W)
+                        _td_dm["windows"] = []
+                        _td_dm["march"] = {"frames": 0, "solves": 0, "ratchet_trips": 0}
+                        for _wi in (1, 2):
+                            _t_sel = _t.time()
+                            _pred = []
+                            for _k in range(_td_nspp):
+                                _bx, _by = _td_Bel(_td_orbit(_k, _td_As))
+                                _pred.append(_tdm.predicted_demag(
+                                    _dmst.mags, _bx[nst:], _by[nst:], _br_glob, _ar_r,
+                                    MU0))
+                            _pred = np.array(_pred)            # (frames, magnets)
+                            if not np.all(np.isfinite(_pred)):
+                                raise RuntimeError("TDM demag shortcut: non-finite "
+                                                   "predicted demag")
+                            _kw, _mw = np.unravel_index(int(np.argmax(_pred)),
+                                                        _pred.shape)
+                            _k0 = int(_kw) - _W // 2
+                            _sel = {"window": _wi, "worst_frame": int(_kw),
+                                    "worst_magnet_tag": int(_dmst.mags[_mw]["tag"]),
+                                    "predicted_drop": float(_pred[_kw, _mw]),
+                                    "window_frames": [int(_k0), int(_k0 + _W - 1)],
+                                    "selection_s": _t.time() - _t_sel}
+                            if float(_pred.max()) <= 0.0:
+                                _sel["skipped"] = "no element reaches the knee on the orbit"
+                                _td_dm["windows"].append(_sel)
+                                break
+                            _b0w = _br_glob.copy()
+                            _mres = _tdm.demag_march(
+                                list(range(_k0, _k0 + _W)),
+                                (_td_orbit(_k0 - 1, _td_As), _td_orbit(_k0 - 2, _td_As)),
+                                _td_orbit_start, _td_solve_frame, _td_ratchet, log=log)
+                            _new, _mapi = _tdm.map_br_from_reference(
+                                _dmst.mags, int(_mw), _br_glob, _td_maps)
+                            if not _mapi["complete"]:
+                                raise RuntimeError(
+                                    "TDM demag shortcut: the pole map left %d of %d "
+                                    "magnet elements unmapped"
+                                    % (_mapi["of"] - _mapi["mapped"], _mapi["of"]))
+                            _br_glob[:] = np.minimum(_br_glob, _new)
+                            if np.any(_br_glob > _b0w + 1e-12):
+                                raise RuntimeError("TDM demag shortcut: Br rose "
+                                                   "(irreversibility violated)")
+                            _td_rebuild_fmag()
+                            _n_dmpre += int(_mres["frames"])
+                            for _ck in ("frames", "solves", "ratchet_trips"):
+                                _td_dm["march"][_ck] += int(_mres[_ck])
+                            _td_resolve_orbit("after demag shortcut window %d" % _wi)
+                            _td_mark("demag")
+                            _ow = _td_observe(_td_As, _td_Us, _td_orbit(-1, _td_As),
+                                              _td_orbit(-2, _td_As), list(range(_td_N)))
+                            _rec_w = dict(_dm_change(_b0w, _br_glob),
+                                          frames=int(_mres["frames"]), map=_mapi,
+                                          selection=_sel, monotone=True,
+                                          torque={"T_mean": float(_ow["T_mean"]),
+                                                  "ripple_pct": float(_ow["ripple_pct"]),
+                                                  "torque_method": _ow["torque_method"]})
+                            _td_dm["windows"].append(_rec_w)
+                            _dm_passes.append(_rec_w)
                     if not (_td_dmode == "shortcut" and _td_maps is not None):
                         # THE FIXED POINT (shared rule, `_dm_settle_tol`): the
                         # period BEFORE the reported window, θ < 0 — the march's
@@ -8467,7 +8561,6 @@ def _fem_transient_sliding_band_once(
                                         - _td_orbit(_td_N - 2, _td_As)))[_td_cond],
                     np.asarray(_td_wrap(_td_cA[_td_N - 1]
                                         - _td_orbit(_td_N - 1, _td_As)))[_td_cond]])
-                _td_cA = _td_cU = None
                 log.info("TDM closure march (%d frames, frozen Br): %s — state worst "
                          "%.2g at %s; windows %s", _td_ncl,
                          "PASSED" if _td_closure["ok"] else "FAILED",
@@ -8489,44 +8582,135 @@ def _fem_transient_sliding_band_once(
                         info=_tdm_info,
                         retry_residual=bool(_td_stop != "residual"),
                         retry_full=bool(_td_neg))
-                # ── CERTIFIED ORBIT ERROR (third Codex review, 2026-10-04) ─────────
-                # The closure bounds the one-period DEFECT d; the orbit error is
-                # e = (I - T)^-1 d, amplified by 1 / (1 - lambda) on a slow mode.
-                # So: T at the final orbit (one factorisation per frame), its
-                # dominant eigenvalue rho by Arnoldi from d, e by the preconditioned
-                # GMRES, and the error taken as the LARGER of |e| and |d| / (1 - rho)
-                # (scale >= 1 on e's direction).  That perturbation is propagated
-                # through the period (the linear frame response) and the owner's
-                # observables are evaluated on the perturbed orbit: torque mean,
-                # ripple, every conductor group's loss, and the iron flux density's
-                # relative change (for the iron loss).  The verdict is taken after
-                # the frame loop, where the iron and the total loss are known.
-                _td_mark("certify", "TDM certification")
+                # ── ORBIT-ERROR ESTIMATE (third and fourth Codex reviews, 2026-10-04)
+                # A FIRST-ORDER ESTIMATE WITH AN EMPIRICAL SAFEGUARD — not a
+                # proof (the owner stopped the proof loop at this level, 2026-10-04).
+                # The closure measures the one-period DEFECT d; the orbit error is
+                # e = (I - T)^-1 d to first order, amplified by 1 / (1 - lambda) on
+                # a slow mode.  So: T at the final orbit, its dominant eigenvalue
+                # rho_ritz by Arnoldi from d (with a convergence check), e by the
+                # preconditioned GMRES — and, as the SAFEGUARD, the contraction
+                # OBSERVED on the closure march itself: when the Ritz value has
+                # not converged or rho_eff = max(rho_ritz, rho_observed) >= 0.98,
+                # further closure periods are marched (at most EXTRA_CLOSURE_MAX)
+                # and the decay of the march's deviation from the orbit, period
+                # by period, gives rho_observed and an observed orbit error
+                # |D_p| + |D_p - D_(p-1)| rho_eff / (1 - rho_eff).  The error used
+                # is the largest of |e|, |d| / (1 - rho_eff) and the observed one
+                # (on e's direction).  It is propagated through the period and the
+                # observables are evaluated on the perturbed orbit — torque mean,
+                # ripple, every conductor group's loss — and the IRON LOSS directly
+                # with the report's functional (`losses.iron_loss_series`) on the
+                # perturbed orbit and on the closure-march period.  The verdict
+                # (`estimate_check`) is taken after the frame loop, where the
+                # total loss is known.
+                _td_mark("error_estimate", "TDM orbit-error estimate")
                 _t_s = _t.time()
                 _td_solver.refresh_jacobian(_td_As, _td_Us)
                 _ctr = _td_solver.contraction(_td_dwrap, m=15)
-                _rho = float(_ctr["rho"])
+                _rho_r = float(_ctr["rho"])
                 _e_w, _e_info = _td_solver.orbit_error(_td_dwrap)
                 _d_n = float(np.linalg.norm(_td_dwrap))
                 _e_n = float(np.linalg.norm(_e_w))
-                _cert: Dict[str, Any] = {
-                    "rho": _rho, "ritz_top": _ctr["ritz_top"],
-                    "arnoldi_steps": _ctr["arnoldi_steps"], "defect_norm": _d_n,
+                _a_n = float(np.linalg.norm(np.concatenate([
+                    np.asarray(_td_As[_td_N - 2])[_td_cond],
+                    np.asarray(_td_As[_td_N - 1])[_td_cond]])))
+
+                def _td_dev(kend):
+                    """The march's deviation from the orbit at the end of the
+                    orbit period ending at frame ``kend`` (both history levels),
+                    carried back to the first period's frame."""
+                    _pp = (kend + 1) // _td_N
+                    _v2 = _td_cA[kend - 1] - _td_orbit(kend - 1, _td_As)
+                    _v1 = _td_cA[kend] - _td_orbit(kend, _td_As)
+                    for _ in range(_pp):
+                        _v2 = _td_wrap(_v2)
+                        _v1 = _td_wrap(_v1)
+                    return np.concatenate([np.asarray(_v2)[_td_cond],
+                                           np.asarray(_v1)[_td_cond]])
+                _devs = [_td_dev(_td_N - 1 + _p * _td_N)
+                         for _p in range(_td_ncl // _td_N)]
+                _incs = [float(np.linalg.norm(_devs[0]))] + [
+                    float(np.linalg.norm(_devs[_i] - _devs[_i - 1]))
+                    for _i in range(1, len(_devs))]
+
+                def _rho_observed():
+                    _r = [(_incs[_i] / _incs[_i - 1]) for _i in range(1, len(_incs))
+                          if _incs[_i - 1] > 0.0]
+                    return (max(_r[-2:]) if _r else None)
+                _rho_o = _rho_observed()
+                _rho_eff = max(_rho_r, _rho_o or 0.0)
+                _extra = 0
+
+                def _need_more():
+                    if _incs[-1] <= _tdm.SAFEGUARD_STOP_REL * _a_n:
+                        return False           # the march itself has stopped moving
+                    return (_rho_eff >= _tdm.RHO_SAFEGUARD
+                            or (not _ctr["ritz_converged"] and _rho_o is None))
+                while _need_more() and _extra < _tdm.EXTRA_CLOSURE_MAX:
+                    # one more orbit period of the closure march (frozen Br),
+                    # continuous: the history is the march's own last two frames
+                    _k_lo = len(_td_cA)
+                    _td_a1, _td_a2 = _td_cA[-1], _td_cA[-2]
+                    for _kc in range(_k_lo, _k_lo + _td_N):
+                        _cancel_point("TDM closure march (safeguard)")
+                        _Pc, _frc, _Ivc, _Isc, _mc = _td_ops(_kc)
+                        _pdc = np.asarray(_Pc.multiply(_Pc).sum(axis=0)).ravel()
+                        _Astc = _Pc @ (np.asarray(_Pc.T @ _td_cA[-1]).ravel()
+                                       / np.maximum(_pdc, 1.0))
+                        _Ahc = _tdm.C_M1 * _td_a1 + _tdm.C_M2 * _td_a2
+                        _okc, _Ac, _Uc, _rc, _nc = _drv.eddy_solve(
+                            _Pc, _frc, _Astc, _td_cU[-1], _Ivc, _Ahc,
+                            (None if _sat2 else nu_base2),
+                            max(int(nonlinear_iterations), 20), dte=_td_dte_c)
+                        if not _okc:
+                            raise RuntimeError(
+                                "TDM closure march (safeguard): bordered Newton did "
+                                "not converge at frame %d (rrel %.2e)" % (_kc, _rc))
+                        _td_cA.append(np.asarray(_Ac, float))
+                        _td_cU.append(np.asarray(_Uc, float))
+                        _td_a2, _td_a1 = _td_a1, _td_cA[-1]
+                    _extra += 1
+                    _devs.append(_td_dev(len(_td_cA) - 1))
+                    _incs.append(float(np.linalg.norm(_devs[-1] - _devs[-2])))
+                    _rho_o = _rho_observed()
+                    _rho_eff = max(_rho_r, _rho_o or 0.0)
+                _est: Dict[str, Any] = {
+                    "kind": "first-order estimate with an empirical safeguard "
+                            "(not a proof)",
+                    "rho_ritz": _rho_r, "ritz_top": _ctr["ritz_top"],
+                    "ritz_history": _ctr["ritz_history"],
+                    "ritz_converged": _ctr["ritz_converged"],
+                    "arnoldi_steps": _ctr["arnoldi_steps"],
+                    "rho_observed": _rho_o, "rho_eff": _rho_eff,
+                    "closure_periods": len(_devs), "extra_closure_periods": _extra,
+                    "deviation_increments": [float("%.4g" % _x) for _x in _incs],
+                    "defect_norm": _d_n, "orbit_state_norm": _a_n,
                     "orbit_error_norm": _e_n, "orbit_error_gmres": _e_info,
-                    "safety": _tdm.CERT_SAFETY}
-                if not (math.isfinite(_rho) and _rho < 1.0) or not _e_info["converged"]:
-                    _cert.update({"scale": float("inf"), "dT_rel": float("inf"),
-                                  "dripple_pp": float("inf"), "dP_cond_W": float("inf"),
-                                  "rB": float("inf"),
-                                  "why": ("rho >= 1" if not (math.isfinite(_rho)
-                                                             and _rho < 1.0)
-                                          else "orbit-error GMRES did not converge")})
+                    "safety": _tdm.ESTIMATE_SAFETY}
+                _unresolved = (_rho_eff >= _tdm.RHO_SAFEGUARD and _need_more())
+                if (not (math.isfinite(_rho_eff) and _rho_eff < 1.0)
+                        or not _e_info["converged"] or _unresolved):
+                    _est.update({"scale": float("inf"), "dT_rel": float("inf"),
+                                 "dripple_pp": float("inf"), "dP_cond_W": float("inf"),
+                                 "dP_fe_W": float("inf"),
+                                 "why": ("the slow mode is not resolved after %d extra "
+                                         "closure period(s) (rho_eff %.4g)"
+                                         % (_extra, _rho_eff)) if _unresolved
+                                 else ("rho_eff >= 1" if not (math.isfinite(_rho_eff)
+                                                              and _rho_eff < 1.0)
+                                       else "orbit-error GMRES did not converge")})
                 else:
-                    _bnd = _d_n / (1.0 - _rho)
-                    _scl = (max(1.0, _bnd / _e_n) if _e_n > 0.0 else 1.0)
-                    _cert.update({"bound_norm": _bnd, "scale": _scl,
-                                  "amplification": (_scl * _e_n / _d_n if _d_n > 0.0
-                                                    else 1.0)})
+                    _err_rho = _d_n / (1.0 - _rho_eff)
+                    _err_obs = ((float(np.linalg.norm(_devs[-1]))
+                                 + _incs[-1] * _rho_eff / (1.0 - _rho_eff))
+                                if len(_devs) >= 2 else 0.0)
+                    _err = max(_e_n, _err_rho, _err_obs)
+                    _scl = (_err / _e_n if _e_n > 0.0 else 1.0)
+                    _est.update({"error_norm_rho": _err_rho, "error_norm_observed":
+                                 (_err_obs if len(_devs) >= 2 else None),
+                                 "error_norm": _err, "scale": _scl,
+                                 "amplification": (_err / _d_n if _d_n > 0.0 else 1.0)})
                     _w_c = _scl * _e_w
                     _dA_c, _dU_c = _td_solver.propagate(_w_c)
                     _ncd = int(_td_cond.size)
@@ -8541,19 +8725,42 @@ def _fem_transient_sliding_band_once(
                                         _td_orbit(-1, _td_As) + _padc(_w_c[_ncd:]),
                                         _td_orbit(-2, _td_As) + _padc(_w_c[:_ncd]),
                                         list(range(_td_N)))
-                    _iron = np.flatnonzero(np.asarray(nu_base2) * MU0 < 0.5)
-                    _rB = 0.0
-                    if _iron.size:
-                        for _A0c, _dAc in zip(_td_As, _dA_c):
-                            _bx0, _by0, _dx0 = _p2_B_at_quad(b2, _A0c)
-                            _bx1, _by1, _ = _p2_B_at_quad(b2, _dAc)
-                            _n0 = float(np.sum((_bx0[_iron] ** 2 + _by0[_iron] ** 2)
-                                               * _dx0[_iron]))
-                            _n1 = float(np.sum((_bx1[_iron] ** 2 + _by1[_iron] ** 2)
-                                               * _dx0[_iron]))
-                            if _n0 > 0.0:
-                                _rB = max(_rB, math.sqrt(_n1 / _n0))
-                    _cert.update({
+
+                    def _td_fe(states):
+                        """The iron loss [W, machine] of one electrical period of
+                        frames ``states``, with the REPORT's functional
+                        (losses.iron_loss_series: stator closed window, rotor
+                        open window — the same on every candidate compared)."""
+                        _sx, _sy, _rx, _ry = [], [], [], []
+                        for _Ak in states:
+                            _bxq, _byq, _dxq = _p2_B_at_quad(b2, _Ak)
+                            _ar = _dxq.sum(axis=1)
+                            _bxe = (_bxq * _dxq).sum(axis=1) / np.maximum(_ar, 1e-30)
+                            _bye = (_byq * _dxq).sum(axis=1) / np.maximum(_ar, 1e-30)
+                            _sx.append(_bxe[_iron_s_idx]); _sy.append(_bye[_iron_s_idx])
+                            _rx.append(_bxe[_iron_r_idx + nst])
+                            _ry.append(_bye[_iron_r_idx + nst])
+                        _tot = 0.0
+                        for _hx, _hy, _ix, _arh, _mt, _cl in (
+                                (_sx, _sy, _iron_s_idx, areas_s, _steel_s, True),
+                                (_rx, _ry, _iron_r_idx, areas_r, _steel_r, False)):
+                            if _mt is None or not np.asarray(_ix).size:
+                                continue
+                            _pc, _ph = _iron_loss_series(
+                                _hx, _hy, _ix, _arh, _mt, p.stack_length, f_elec,
+                                len(_hx), _central_difference(dt),
+                                _mat_lib.effective_bertotti, terms=None,
+                                n_periods=1.0, closed_window=_cl)
+                            _tot += (float(np.mean(_pc)) + float(_ph)) * NS
+                        return _tot
+                    _nper = int(_td_nspp)
+                    _orb = [_td_orbit(_k, _td_As) for _k in range(_nper)]
+                    _dAfull = [(_dA_c[_k] if _k < _td_N else
+                                _td_wrapf(_dA_c[_k - _td_N])) for _k in range(_nper)]
+                    _fe0 = _td_fe(_orb)
+                    _fe1 = _td_fe([_a + _d for _a, _d in zip(_orb, _dAfull)])
+                    _fec = _td_fe(_td_cA[:_nper])
+                    _est.update({
                         "ripple_pct": float(_td_oobs["ripple_pct"]),
                         "dT_rel": abs(_obs1["T_mean"] - _td_oobs["T_mean"])
                         / max(abs(_td_oobs["T_mean"]), 1e-300),
@@ -8562,13 +8769,18 @@ def _fem_transient_sliding_band_once(
                                                for _g, _v in _td_oobs["P"].items())),
                         "dP_cond_by_group_W": {_g: abs(_obs1["P"].get(_g, 0.0) - _v)
                                                for _g, _v in _td_oobs["P"].items()},
-                        "rB": float(_rB), "iron_elements": int(_iron.size)})
-                    _dA_c = _dU_c = _As1 = _Us1 = None
-                _tdm_info["certify"] = _cert
-                _tdm_info["t"]["certify"] = _t.time() - _t_s
-                log.info("TDM certification input: rho %.4g (Ritz %s), defect %.3g, "
-                         "orbit error %.3g, scale %.3g", _rho, _ctr["ritz_top"][:3],
-                         _d_n, _e_n, float(_cert.get("scale", float("nan"))))
+                        "P_fe_orbit_W": _fe0, "P_fe_perturbed_W": _fe1,
+                        "P_fe_closure_W": _fec,
+                        "dP_fe_W": abs(_fe1 - _fe0) + abs(_fec - _fe0)})
+                    _dA_c = _dU_c = _As1 = _Us1 = _orb = _dAfull = None
+                _td_cA = _td_cU = None
+                _tdm_info["orbit_error_estimate"] = _est
+                _tdm_info["t"]["error_estimate"] = _t.time() - _t_s
+                log.info("TDM orbit-error estimate input: rho_ritz %.4g (converged "
+                         "%s), rho_observed %s, rho_eff %.4g, %d closure period(s), "
+                         "defect %.3g, error %.3g", _rho_r, _ctr["ritz_converged"],
+                         _rho_o, _rho_eff, len(_devs), _d_n,
+                         float(_est.get("error_norm", float("nan"))))
             finally:
                 _td_solver.close()
             # ── hand the orbit to the frame loop: one period, no warm-up ─────────
@@ -10234,7 +10446,8 @@ def _fem_transient_sliding_band_once(
             if (_dm_prepass and _dm_pre_len > 0 and k < 0 and not _dm_pass_done
                     and _dm_pass_br0 is not None and _dmst is not None):
                 # this pre-pass frame's torque, for the drift check
-                _dm_tq_cur[int(k)] = _dm_frame_torque(A2)
+                _dm_tq_cur[int(k)] = _dm_frame_torque(
+                    A2, Ist, math.radians(float(theta_eff)))
             if (_dm_prepass and _dm_pre_len > 0 and k == -1 and not _dm_pass_done
                     and _dm_pass_br0 is not None and _dmst is not None):
                 _dm_c = _dm_change(_dm_pass_br0, _br_glob)
@@ -10858,7 +11071,15 @@ def _fem_transient_sliding_band_once(
         # pre-pass periods) — all three affirmatively
         _dm_moved_ok = _dm_is_settled(_dm_settle)
         try:
-            _dm_img_rec, _dm_img_ok = _dm_image_check(len(_dm_passes))
+            if _dm_shortcut_used:
+                # the shortcut carries the worst magnet's history to EVERY pole
+                # image by the symmetry map: complete when every map was
+                _dm_img_ok = bool(_dm_passes) and all(
+                    (_p_.get("map") or {}).get("complete") for _p_ in _dm_passes)
+                _dm_img_rec = {"method": "pole-image transfer (demag shortcut)",
+                               "complete": _dm_img_ok, "windows": len(_dm_passes)}
+            else:
+                _dm_img_rec, _dm_img_ok = _dm_image_check(len(_dm_passes))
         except Exception as _e_img:          # noqa: BLE001 — unverifiable: not steady
             _dm_img_rec, _dm_img_ok = {"error": str(_e_img)}, False
         _dm_drift_rec = _dm_drift(_dm_passes)
@@ -10992,6 +11213,16 @@ def _fem_transient_sliding_band_once(
             if ("error" not in _gate and _dm_settle is not None
                     and not _dm_settle.get("moved_settled", _dm_settle["settled"])):
                 _gate["kept_because"] = "demag not settled: the window is a Br transient"
+            elif ("error" not in _gate and _dm_shortcut_used and _dm_settle is not None
+                  and float(_dm_settle.get("element_max") or 0.0) > 0.0):
+                # the demag SHORTCUT (optimizer candidates, not qualified): the
+                # Br its two windows did not reach is still ratcheted in the
+                # reported window, so the window departs from the frozen-Br
+                # orbit by the ratchet, not by an orbit error (the closure march
+                # and the error estimate judge the orbit).  Kept, labelled.
+                _gate["kept_because"] = ("demag shortcut: the reported window "
+                                         "ratchets the Br the windows did not "
+                                         "reach (not qualified)")
             else:
                 raise TdmAttemptFailed(
                     "report_gate",
@@ -11499,7 +11730,7 @@ def _fem_transient_sliding_band_once(
     # solid-loss reference needs the WHOLE measured window, so it is built
     # here from the per-frame lists (same expression and _wsc scaling as the
     # settle gauge's samples).
-    _wc_pending: List[Dict[str, Any]] = []   # published after the TDM certification
+    _wc_pending: List[Dict[str, Any]] = []   # published after the TDM error-estimate verdict
     if _wc_A is not None:
         try:
             _solid_ref = [
@@ -11784,6 +12015,10 @@ def _fem_transient_sliding_band_once(
                       P_sleeve_ser2)]
     P_loss_avg2 = float(np.mean(P_tot_ser2)) if P_tot_ser2 else 0.0
 
+    # a report-gate miss that was KEPT (a demag transient, or the shortcut's
+    # unreached Br) is never a steady state
+    _gate_kept = ((_tdm_info or {}).get("gate") or {}).get("kept_because") \
+        if (_tdm_info is not None and _eddy_method == "tdm") else None
     # ── THE EDDY SETTLE VERDICT, AFFIRMATIVE ONLY (third Codex review,
     # 2026-10-04).  `_warm_quiet` is True (measured, settled), False (measured,
     # not settled) or None — and None is NOT "settled": it is an unmeasured
@@ -11811,54 +12046,59 @@ def _fem_transient_sliding_band_once(
                  % int(_vskip)) if _vdrive else "no settle measurement"))
         log.warning("P2 %s", _eddy_verdict_note)
 
-    # ── TDM CERTIFICATION (third Codex review, 2026-10-04, finding 1) ───────
-    # The orbit error bound, mapped to the observables before the frame loop
-    # (`tdm.certify`), is judged here, where the iron and the total loss are
-    # known: bounded torque / ripple / TOTAL-loss errors (plus the reported
-    # period's own deviation from the orbit) must stay below CERT_SAFETY of
-    # the owner's terms, or the attempt is rejected (one strict retry, then a
-    # march with a note).
+    # ── TDM ORBIT-ERROR ESTIMATE: THE VERDICT (third / fourth Codex reviews) ──
+    # The estimate mapped to the observables before the frame loop
+    # (`tdm.orbit_error_estimate`) is judged here, where the total loss is
+    # known: estimated torque / ripple / TOTAL-loss errors (the iron loss
+    # computed directly) plus the reported period's own deviation from the
+    # orbit must stay below ESTIMATE_SAFETY of the owner's terms, or the attempt
+    # is rejected (one strict retry, then a march with a note).  A FIRST-ORDER
+    # ESTIMATE with an empirical safeguard, not a proof.
     if (_tdm_info is not None and _eddy_method == "tdm"
-            and isinstance(_tdm_info.get("certify"), dict)):
+            and isinstance(_tdm_info.get("orbit_error_estimate"), dict)):
         # a window in which Br still moves is a demag TRANSIENT, labelled
         # steady_state False whatever the orbit's accuracy: its deviation from
-        # the orbit is the ratchet's, not an orbit error, so the certification
+        # the orbit is the ratchet's, not an orbit error, so the estimate
         # judges the orbit alone there (and says so)
         _c_transient = bool(_dm_settle is not None
-                            and not _dm_settle.get("moved_settled", True))
-        _ok_c, _rec_c = _tdm.certify_observables(
-            _tdm_info["certify"], P_fe_W=float(P_fe_avg2), P_total_W=float(P_loss_avg2),
+                            and (not _dm_settle.get("moved_settled", True)
+                                 or "kept_because" in (_tdm_info.get("gate") or {})))
+        _ok_c, _rec_c = _tdm.estimate_check(
+            _tdm_info["orbit_error_estimate"], P_total_W=float(P_loss_avg2),
             report_windows=(None if _c_transient
                             else (_tdm_info.get("gate") or {}).get("windows")))
         if _c_transient:
             _rec_c["report_part_excluded"] = ("demag transient in the reported "
                                               "window (steady_state False)")
-        if _td_fault == "certify_gate":
+        if _td_fault == "estimate_gate":
             _ok_c = False
             _rec_c["ok"] = False
             _rec_c["injected"] = True
-        _tdm_info["certify"].update(_rec_c)
-        log.info("TDM certification: %s — rho %.4g, orbit-error bound: torque %.2g, "
-                 "ripple %.2g pp, total loss %.2g (limits %s)",
-                 "CERTIFIED" if _ok_c else "NOT CERTIFIED",
-                 float(_tdm_info["certify"].get("rho", float("nan"))),
-                 float(_rec_c.get("bound_T_rel", float("nan"))),
-                 float(_rec_c.get("bound_ripple_pp", float("nan"))),
-                 float(_rec_c.get("bound_P_total_rel", float("nan"))),
+        _tdm_info["orbit_error_estimate"].update(_rec_c)
+        log.info("TDM orbit-error estimate: %s — rho_eff %.4g, estimated error: "
+                 "torque %.2g, ripple %.2g pp, total loss %.2g (limits %s)",
+                 "ACCEPTED" if _ok_c else "NOT ACCEPTED",
+                 float(_tdm_info["orbit_error_estimate"].get("rho_eff", float("nan"))),
+                 float(_rec_c.get("estimate_T_rel", float("nan"))),
+                 float(_rec_c.get("estimate_ripple_pp", float("nan"))),
+                 float(_rec_c.get("estimate_P_total_rel", float("nan"))),
                  _rec_c.get("limits"))
         if not _ok_c:
             raise TdmAttemptFailed(
-                "certify",
-                "the orbit-error bound exceeds %g of the owner's terms (rho %.4g; "
-                "torque %.3g, ripple %.3g pp, total loss %.3g)" % (
-                    _tdm.CERT_SAFETY, float(_tdm_info["certify"].get("rho", float("nan"))),
-                    float(_rec_c.get("bound_T_rel", float("nan"))),
-                    float(_rec_c.get("bound_ripple_pp", float("nan"))),
-                    float(_rec_c.get("bound_P_total_rel", float("nan")))),
+                "error_estimate",
+                "the estimated orbit error exceeds %g of the owner's terms (rho_eff "
+                "%.4g; torque %.3g, ripple %.3g pp, total loss %.3g)%s" % (
+                    _tdm.ESTIMATE_SAFETY,
+                    float(_tdm_info["orbit_error_estimate"].get("rho_eff", float("nan"))),
+                    float(_rec_c.get("estimate_T_rel", float("nan"))),
+                    float(_rec_c.get("estimate_ripple_pp", float("nan"))),
+                    float(_rec_c.get("estimate_P_total_rel", float("nan"))),
+                    (" — " + _tdm_info["orbit_error_estimate"]["why"])
+                    if _tdm_info["orbit_error_estimate"].get("why") else ""),
                 info=_tdm_info, retry_residual=bool(_td_stop != "residual"),
                 retry_full=bool(_td_neg))
     # the warm cache is published only by a solve that is ACCEPTED (after the
-    # certification): a rejected TDM attempt must leave nothing for the retry
+    # orbit-error estimate verdict): a rejected TDM attempt must leave nothing for the retry
     # or the march to start from (transactional)
     for _wcp in _wc_pending:
         try:
@@ -12872,12 +13112,14 @@ def _fem_transient_sliding_band_once(
         "demag_warning": (None if _dm_settle is None else _dm_settle.get("warning")),
         "steady_state": bool(_eddy_verdict is True
                              and not (_dm_settle is not None
-                                      and _dm_settle["settled"] is not True)),
+                                      and _dm_settle["settled"] is not True)
+                             and not _gate_kept),
         # …and WHY not, with the numbers (None when steady)
         "steady_state_note": (
             (_dm_settle or {}).get("note") if (_dm_settle is not None
                                               and _dm_settle["settled"] is not True)
-            else _eddy_verdict_note),
+            else ("the reported period departs from the TDM orbit (%s)" % _gate_kept)
+            if _gate_kept else _eddy_verdict_note),
         # PROVENANCE (owner 2026-09-27): settled, but the discarded warm-up
         # prefix was moved by periodic-accelerator jumps (the gauge then judged
         # >= MIN_VERIFY_PERIODS continuous periods after the last jump).

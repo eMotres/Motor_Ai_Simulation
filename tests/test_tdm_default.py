@@ -159,6 +159,59 @@ def test_a_rejected_attempt_leaves_nothing_referenced(monkeypatch):
     assert seen_alive == [[], [False], [False, False]], seen_alive
 
 
+def _run_one_seen_request(monkeypatch, purpose):
+    """refine_proc.run_one against a stub kernel; returns the TDM demag mode
+    the solve would have been asked for (the ContextVar inside the call)."""
+    import math
+    from motor_ai_sim.contracts.result_ir import ResultIR
+    from motor_ai_sim.optimization import refine_proc as R
+    seen = []
+    n = 8
+    ph = [2 * math.pi * k / n for k in range(n)]
+    raw = {"T_avg_Nm": 1.0, "T_ripple_pct": 2.0, "P_cu_W": [5.0] * n,
+           "P_fe_W": [1.0] * n, "P_mag_eddy_W": [0.1] * n, "P_shaft_eddy_W": [0.01] * n,
+           "V_peak": 10.0, "picard_converged": True, "n_steps": n,
+           "V_A": [10 * math.sin(p) for p in ph],
+           "V_B": [10 * math.sin(p - 2.0944) for p in ph],
+           "V_C": [10 * math.sin(p + 2.0944) for p in ph]}
+
+    class _K:
+        def run(self, capability, payload):
+            seen.append(FS._TDM_DEMAG_REQUEST.get())
+            return {"ok": True, "capability": capability,
+                    "result": ResultIR(physics="em_transient", ok=True, raw=raw)}
+    monkeypatch.setattr(R, "_kernel", lambda: _K())
+    R.run_one({}, 50.0, n, 100.0, n_periods=1.0, gamma_deg=0.0, mesh_size_mm=4.0,
+              min_size_mm=0.3, n_sectors=4, element_order=2, rpm=3000.0,
+              sampling_purpose=purpose)
+    assert FS._TDM_DEMAG_REQUEST.get() is None          # reset after the call
+    return seen
+
+
+def test_optimizer_candidates_take_the_shortcut_and_final_evaluations_full(monkeypatch):
+    """Owner 2026-10-04: candidate evaluations (sampling_purpose
+    "optimization") request the demag shortcut explicitly; the standard and
+    final-quality evaluations (the verification of chosen candidates) the
+    full pre-pass."""
+    assert _run_one_seen_request(monkeypatch, "optimization") == ["shortcut"]
+    assert _run_one_seen_request(monkeypatch, "standard") == [None]
+    assert _run_one_seen_request(monkeypatch, "cogging_quality") == [None]
+
+
+def test_only_refine_proc_requests_the_shortcut():
+    """Nothing else in src/ may select the shortcut: the request ContextVar is
+    set only in optimization/refine_proc.py (fem_solver_2d defines it)."""
+    hits = []
+    for p in SRC.rglob("*.py"):
+        txt = p.read_text(encoding="utf-8", errors="replace")
+        if "_TDM_DEMAG_REQUEST" in txt or "tdm_demag_scope(" in txt:
+            hits.append(p.relative_to(SRC).as_posix())
+    assert sorted(hits) == ["optimization/refine_proc.py", "simulation/fem_solver_2d.py",
+                            "solve_pool.py"], hits
+    txt = (SRC / "optimization/refine_proc.py").read_text(encoding="utf-8")
+    assert '"shortcut" if sampling_purpose == "optimization" else None' in txt
+
+
 def test_the_optimizer_result_keeps_the_steady_state_verdict(monkeypatch):
     """Finding 8 (fast half; the real solve is in test_tdm_entry_points):
     refine_proc.run_one carries steady_state, its note, demag_settled, the

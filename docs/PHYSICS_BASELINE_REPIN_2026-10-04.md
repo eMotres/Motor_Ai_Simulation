@@ -91,3 +91,13 @@ pin on this coarse 12-step voltage + rotor-eddy case), or keep the case on the
 hybrid torque. Re-pinning it is one command once decided:
 
     UPDATE_PHYSICS_BASELINE=1 python -m pytest -s tests/test_physics_regression.py -k p2_voltage_eddy_rotor
+
+## After merging the final TDM (ccb960b)
+
+Re-run on the merge (ac1585f), update mode against these pins: **no pin
+moves**; only the held `p2_voltage_eddy_rotor` differs, by the same amounts as
+above. Eddy method actually used per case (probe on ac1585f): `p2_eddy` and
+`p2_demag_eddy` run **TDM** (no note, no fallback); `p2_voltage_eddy` and
+`p2_voltage_eddy_rotor` are marched by rule ("TDM not applicable: voltage /
+PWM drive"). The slow-mode safeguard did not send any pin case back to the
+march.

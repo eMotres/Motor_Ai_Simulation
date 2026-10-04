@@ -396,3 +396,65 @@ def test_last_seen_is_touched_but_not_on_every_single_request(env, monkeypatch):
     monkeypatch.setattr(S, "_save", lambda d: (writes.append(1), real_save(d)))
     client.get("/api/me", headers=_bearer(j["token"]))
     assert writes == [], "last_seen must not cost a disk write per request"
+
+
+def test_malformed_rejects_are_origin_keyed_and_recorded_rarely(env):
+    """2026-10-04: a poller with a broken bearer wrote a context-free
+    'malformed' reject every minute.  Now: one row per (ip, path) per 15 min,
+    and the row carries the ip and path."""
+    A = env["A"]
+    for _ in range(5):
+        A.resolve_user_detail("Bearer not-a-jwt-at-all", ip="198.51.100.7",
+                              path="/api/x")
+    A.resolve_user_detail("Bearer not-a-jwt-at-all", ip="198.51.100.8",
+                          path="/api/x")
+    rej = [e for e in _events(env) if e.get("event") == "reject"]
+    assert len(rej) == 2
+    assert all(e.get("path") == "/api/x" and e.get("ip") for e in rej)
+
+
+def test_node_ingest_bearer_skips_account_resolution():
+    from motor_ai_sim import workspace as W
+    ok = "Bearer mnode_abc123"
+    assert W._is_node_ingest("/api/admin/nodes/metrics", ok)
+    assert not W._is_node_ingest("/api/admin/nodes", ok)
+    assert not W._is_node_ingest("/api/admin/nodes/metrics", "Bearer eyJabc")
+    assert not W._is_node_ingest("/api/admin/nodes/metrics", None)
+
+
+def test_admin_users_and_tickets_serve_the_real_store_not_mock(env, monkeypatch):
+    """2026-10-04: /api/admin/users + /tickets answered `source: mock` in
+    production because the Firebase Admin SDK is gone."""
+    monkeypatch.delenv("ADMIN_MOCK_DATA", raising=False)
+    tok = _login(ADMIN, "password-admin")["token"]
+    r = client.get("/api/admin/users", headers=_bearer(tok))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["source"].startswith("self-hosted")
+    emails = {u["email"] for u in body["users"]}
+    assert emails == {ADMIN, CLIENT}          # no invented accounts
+    adm = next(u for u in body["users"] if u["email"] == ADMIN)
+    assert adm["role"] == "admin" and adm["createdAt"] and adm["lastLoginAt"]
+    assert adm["displayName"] == "Admin" and adm["designCount"] == 0
+    t = client.get("/api/admin/tickets", headers=_bearer(tok)).json()
+    assert t["tickets"] == [] and t["source"].startswith("self-hosted")
+    st = client.get("/api/admin/stats", headers=_bearer(tok)).json()
+    assert st["total"] == 2 and st["source"].startswith("self-hosted")
+    # writes act on the real registry or refuse - never a fake ok
+    r = client.post(f"/api/admin/users/{CLIENT}/disable", json={"disabled": True},
+                    headers=_bearer(tok))
+    assert r.json()["source"].startswith("self-hosted")
+    assert env["U"].get_user(CLIENT)["disabled"] is True
+    r = client.post("/api/admin/users/nobody@example.com/role",
+                    json={"role": "admin"}, headers=_bearer(tok))
+    assert r.status_code == 404
+    r = client.post("/api/admin/tickets/status",
+                    json={"uid": "u", "id": "t", "status": "closed"},
+                    headers=_bearer(tok))
+    assert r.status_code == 501
+
+
+def test_admin_mock_dataset_only_behind_the_explicit_flag(env, monkeypatch):
+    monkeypatch.setenv("ADMIN_MOCK_DATA", "1")
+    tok = _login(ADMIN, "password-admin")["token"]
+    assert client.get("/api/admin/users", headers=_bearer(tok)).json()["source"] == "mock"

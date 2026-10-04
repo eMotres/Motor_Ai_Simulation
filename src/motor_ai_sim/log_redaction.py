@@ -143,8 +143,16 @@ class RedactingFilter(logging.Filter):
             return True
         red = redact(msg)
         if red != msg:
-            record.msg = red
-            record.args = None
+            args = record.args
+            if isinstance(args, tuple) and args and record.name == "uvicorn.access":
+                # uvicorn's AccessFormatter unpacks the five args
+                # (client, method, path, http_version, status): redact them
+                # in place, never drop them.
+                record.args = tuple(redact(a) if isinstance(a, str) else a
+                                    for a in args)
+            else:
+                record.msg = red
+                record.args = None
         if record.exc_text:
             record.exc_text = redact(record.exc_text)
         return True

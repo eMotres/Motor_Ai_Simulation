@@ -1,18 +1,21 @@
 """Admin-only endpoints: user management + usage statistics.
 
-The data source is Firebase Auth (the user list) + Firestore (saved designs)
-via the Firebase Admin SDK. On Cloud Run the SDK initialises from Application
-Default Credentials — the service account, no key file. Locally there are no
-credentials, so the SDK is unavailable and the endpoints serve a small MOCK
-dataset flagged `source: "mock"`, letting the admin UI be built and exercised
-without production access.
+The data source is the SELF-HOSTED account store (``users.py`` registry,
+``sessions.py`` for last-seen, the per-user workspace folder for the design
+count).  The Firebase Admin SDK this module once read is gone from the
+deployment; until 2026-10-04 that silently turned the routes into the MOCK
+dataset in production.  Mock data is now served only when ``ADMIN_MOCK_DATA=1``
+is set explicitly (UI development without a registry), and is always flagged
+``source: "mock"``.
 
 Every route requires role == admin (require_admin). When AUTH_ENFORCE is off
 (local dev) the gate is open and the caller is treated as admin.
 """
 from __future__ import annotations
 
+import os
 import time
+from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException
@@ -25,83 +28,73 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 _VALID_ROLES = ("user", "admin")
 _DAY_MS = 86_400_000.0
 
+#: ``source`` of the real user list (the self-hosted registry).
+_USERS_SOURCE = "self-hosted:users.json"
+#: ``source`` of the ticket list: there is no self-hosted ticket store (tickets
+#: lived in Firestore, which is gone), so the real answer is an empty list.
+_TICKETS_SOURCE = "self-hosted:none (no ticket store; Firestore removed)"
 
-# ── Firebase Admin SDK (lazy, optional) ──────────────────────────────────────
-_admin_mod = None
-_init_done = False
-_init_error: Optional[str] = None
+
+def _mock_enabled() -> bool:
+    """Explicit dev switch for the demo dataset - never implied by a missing
+    SDK or by AUTH_ENFORCE."""
+    return os.environ.get("ADMIN_MOCK_DATA", "").strip().lower() in ("1", "true", "yes")
 
 
-def _ensure_admin():
-    """Initialise firebase-admin once and return the module, or None if the
-    package isn't installed / no credentials are available (then we serve mock)."""
-    global _admin_mod, _init_done, _init_error
-    if _init_done:
-        return _admin_mod
-    _init_done = True
+def _created_ms(created) -> Optional[float]:
+    """users.json stores ``created`` as a local ISO string; the UI wants ms."""
+    if isinstance(created, (int, float)):
+        return float(created) * (1000.0 if created < 1e11 else 1.0)
+    if isinstance(created, str) and created:
+        try:
+            return datetime.fromisoformat(created).timestamp() * 1000.0
+        except ValueError:
+            return None
+    return None
+
+
+def _design_count(email: str) -> int:
+    """Dies in the account's own workspace (``<WORKSPACES_ROOT>/<id>/dies``).
+    One listdir, no workspace is created or registered; 0 when absent."""
     try:
-        import firebase_admin
-        if not firebase_admin._apps:
-            # initialize_app() with no args uses Application Default Credentials
-            # (the Cloud Run service account). Raises locally with no creds.
-            firebase_admin.initialize_app()
-        _admin_mod = firebase_admin
-    except Exception as e:  # package missing or no ADC -> mock mode
-        _init_error = str(e)
-        _admin_mod = None
-    return _admin_mod
+        from motor_ai_sim.workspace import workspaces_root, workspace_id
+        base = workspaces_root()
+        if base is None:
+            return 0
+        d = base / workspace_id(email) / "dies"
+        return sum(1 for c in d.iterdir() if c.is_dir()) if d.is_dir() else 0
+    except Exception:                                       # noqa: BLE001
+        return 0
 
 
-def _role_of(user_record) -> str:
-    """Mirror auth._role_for for an Admin-SDK UserRecord: ADMIN_EMAILS wins,
-    then a 'role' custom claim, else 'user'."""
-    from motor_ai_sim.auth import _ADMIN_EMAILS, _ROLE_RANK
-    email = (user_record.email or "").strip().lower()
-    if email and email in _ADMIN_EMAILS:
-        return "admin"
-    claims = user_record.custom_claims or {}
-    r = claims.get("role")
-    return r if r in _ROLE_RANK else "user"
-
-
-def _real_users(admin) -> list[dict]:
-    from firebase_admin import auth as fb_auth
+def _real_users() -> list[dict]:
+    from motor_ai_sim import sessions as _S
+    from motor_ai_sim import users as _U
+    last_seen: dict = {}
+    for r in _S.list_all():
+        e = str(r.get("email") or "").strip().lower()
+        t = float(r.get("last_seen") or r.get("created") or 0) * 1000.0
+        if e and t > last_seen.get(e, 0.0):
+            last_seen[e] = t
     out: list[dict] = []
-    for u in fb_auth.list_users().iterate_all():
-        md = u.user_metadata
+    for u in _U.list_users():
+        email = u["email"]
         out.append({
-            "uid": u.uid,
-            "email": u.email,
-            "displayName": u.display_name or (u.email.split("@")[0] if u.email else u.uid),
-            "createdAt": md.creation_timestamp if md else None,        # ms epoch
-            "lastLoginAt": md.last_sign_in_timestamp if md else None,  # ms epoch
-            "disabled": bool(u.disabled),
-            "role": _role_of(u),
+            "uid": email,                       # the registry key IS the id
+            "email": email,
+            "displayName": u.get("name") or email.split("@")[0],
+            "createdAt": _created_ms(u.get("created")),
+            "lastLoginAt": last_seen.get(email),
+            "disabled": bool(u.get("disabled")),
+            "role": u.get("role") or "user",
+            "designCount": _design_count(email),
         })
     return out
 
 
-def _design_counts(admin) -> dict:
-    """Designs per user from Firestore. Uses a collection-group query over
-    'designs' so it counts even when the parent users/{uid} doc doesn't exist
-    (subcollection docs don't create ancestor docs)."""
-    try:
-        from firebase_admin import firestore
-        db = firestore.client()
-        counts: dict = {}
-        for d in db.collection_group("designs").stream():
-            parent = d.reference.parent.parent  # users/{uid}
-            if parent is None:
-                continue
-            counts[parent.id] = counts.get(parent.id, 0) + 1
-        return counts
-    except Exception:
-        return {}
-
-
 def _mock_users() -> list[dict]:
     """Deterministic demo users (timestamps relative to now, so 'active' and the
-    signup timeline look live). Served only when the Admin SDK is unavailable."""
+    signup timeline look live). Served only with ADMIN_MOCK_DATA=1."""
     now = time.time() * 1000
     # (email, role, created_days_ago, last_login_days_ago|None, designs, disabled)
     rows = [
@@ -138,14 +131,9 @@ def _mock_users() -> list[dict]:
 
 
 def _load_users() -> tuple[str, list[dict]]:
-    admin = _ensure_admin()
-    if admin is None:
+    if _mock_enabled():
         return "mock", _mock_users()
-    users = _real_users(admin)
-    counts = _design_counts(admin)
-    for u in users:
-        u["designCount"] = counts.get(u["uid"], 0)
-    return "firebase", users
+    return _USERS_SOURCE, _real_users()
 
 
 def _day(ms: float) -> str:
@@ -204,31 +192,34 @@ def stats(_admin: dict = Depends(require_admin)):
 
 @router.post("/users/{uid}/role")
 def set_role(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
-    """Set a user's role via a Firebase custom claim ('role')."""
+    """Set an account's role in the self-hosted registry (``uid`` = its e-mail)."""
     _AA.record(_AA.actor_of(_admin), "user.role", str(uid), subject=str(uid), details={"role": (body or {}).get("role")})
     role = (body or {}).get("role")
     if role not in _VALID_ROLES:
         raise HTTPException(status_code=400, detail=f"role must be one of {_VALID_ROLES}")
-    admin = _ensure_admin()
-    if admin is None:
+    if _mock_enabled():
         return {"ok": True, "source": "mock", "uid": uid, "role": role}
-    from firebase_admin import auth as fb_auth
-    current = fb_auth.get_user(uid).custom_claims or {}
-    fb_auth.set_custom_user_claims(uid, {**current, "role": role})
-    return {"ok": True, "source": "firebase", "uid": uid, "role": role}
+    from motor_ai_sim import users as _U
+    try:
+        _U.update_user(uid, role=role)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"user '{uid}' not found")
+    return {"ok": True, "source": _USERS_SOURCE, "uid": uid, "role": role}
 
 
 @router.post("/users/{uid}/disable")
 def set_disabled(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
-    """Disable or re-enable a user's account."""
-    _AA.record(_AA.actor_of(_admin), "user.disable", str(uid), subject=str(uid), details={"disabled": bool((body or {}).get("disabled", True))})
+    """Disable or re-enable an account in the self-hosted registry."""
     disabled = bool((body or {}).get("disabled", True))
-    admin = _ensure_admin()
-    if admin is None:
+    _AA.record(_AA.actor_of(_admin), "user.disable", str(uid), subject=str(uid), details={"disabled": disabled})
+    if _mock_enabled():
         return {"ok": True, "source": "mock", "uid": uid, "disabled": disabled}
-    from firebase_admin import auth as fb_auth
-    fb_auth.update_user(uid, disabled=disabled)
-    return {"ok": True, "source": "firebase", "uid": uid, "disabled": disabled}
+    from motor_ai_sim import users as _U
+    try:
+        _U.update_user(uid, disabled=disabled)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"user '{uid}' not found")
+    return {"ok": True, "source": _USERS_SOURCE, "uid": uid, "disabled": disabled}
 
 
 # ── Per-user motor access ─────────────────────────────────────────────────────
@@ -733,29 +724,6 @@ def admin_auth_events(limit: int = 200, email: Optional[str] = None,
 _VALID_TICKET_STATUS = ("open", "in_progress", "resolved", "closed")
 
 
-def _ms(v):
-    """Best-effort convert a Firestore timestamp / number to epoch ms."""
-    try:
-        if v is None:
-            return None
-        if isinstance(v, (int, float)):
-            return float(v)
-        return float(v.timestamp()) * 1000.0  # Firestore DatetimeWithNanoseconds
-    except Exception:
-        return None
-
-
-def _ticket_view(d: dict) -> dict:
-    return {
-        "type": d.get("type") or "question",
-        "title": d.get("title") or "(no title)",
-        "description": d.get("description") or "",
-        "status": d.get("status") or "open",
-        "email": d.get("email"),
-        "createdAt": _ms(d.get("createdAt")),
-    }
-
-
 def _mock_tickets() -> list[dict]:
     now = time.time() * 1000
     # (type, title, description, status, email, days_ago)
@@ -779,20 +747,17 @@ def _mock_tickets() -> list[dict]:
 @router.get("/tickets")
 def list_tickets(_admin: dict = Depends(require_admin_or_token)):
     """All support tickets across users (bugs / feature requests / questions).
-    Read-only — also reachable with the ADMIN_API_TOKEN bearer (nightly agent)."""
+    Read-only - also reachable with the ADMIN_API_TOKEN bearer (nightly agent).
+
+    Tickets were Firestore documents; that store is gone and nothing replaced
+    it, so the honest answer is an empty list with the source named.  The demo
+    set is served only with ADMIN_MOCK_DATA=1.  (Visitor access requests live
+    in ``/support/requests``.)"""
     _AA.record(_AA.actor_of(_admin), "tickets.read", str("*"), subject=str(""), details=None)
-    admin = _ensure_admin()
-    if admin is None:
+    if _mock_enabled():
         t = _mock_tickets()
         return {"source": "mock", "count": len(t), "tickets": t}
-    from firebase_admin import firestore
-    db = firestore.client()
-    out = []
-    for d in db.collection_group("tickets").stream():
-        parent = d.reference.parent.parent  # users/{uid}
-        out.append({"id": d.id, "uid": parent.id if parent else None, **_ticket_view(d.to_dict() or {})})
-    out.sort(key=lambda x: x.get("createdAt") or 0, reverse=True)
-    return {"source": "firebase", "count": len(out), "tickets": out}
+    return {"source": _TICKETS_SOURCE, "count": 0, "tickets": []}
 
 
 @router.post("/tickets/status")
@@ -806,13 +771,10 @@ def set_ticket_status(body: dict = Body(default={}), _admin: dict = Depends(requ
         raise HTTPException(status_code=400, detail=f"status must be one of {_VALID_TICKET_STATUS}")
     if not uid or not tid:
         raise HTTPException(status_code=400, detail="uid and id are required")
-    admin = _ensure_admin()
-    if admin is None:
+    if _mock_enabled():
         return {"ok": True, "source": "mock", "id": tid, "status": status}
-    from firebase_admin import firestore
-    db = firestore.client()
-    db.collection("users").document(uid).collection("tickets").document(tid).update({"status": status})
-    return {"ok": True, "source": "firebase", "id": tid, "status": status}
+    raise HTTPException(status_code=501,
+                        detail="no ticket store is configured (Firestore was removed)")
 
 
 @router.get("/support")

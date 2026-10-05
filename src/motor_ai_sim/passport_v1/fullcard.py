@@ -568,14 +568,17 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
             inv = p["inverter_loss_W"]
             rows.append([v["id"], v["device"], f"{p['rpm']:.0f} / {p['I_A']:.1f}",
                          p.get("motor_pwm_loss_W"), inv["cond"], inv["sw"], inv["dead"],
-                         p["tj_C"], p["eta_drive_pct"], p.get("p_cont_max_W"),
+                         p["tj_C"] if p.get("continuous_ok") else "(110)",
+                         "yes" if p.get("continuous_ok") else "no",
+                         p["eta_drive_pct"], p.get("p_cont_max_W"),
                          Hh.H(Hh.labels(v["provenance"]["labels"]))])
     o.append(Hh.table(["variant", "device", "rpm / A", "motor PWM W", "cond W", "sw W",
-                       "dead W", "T_j °C", "η drive %", "P cont. W", "labels"], rows,
-                      left_cols=3))
+                       "dead W", "T_j °C", "continuous", "η drive %", "P cont. W", "labels"],
+                      rows, left_cols=3))
     o.append('<p class="note">η drive = battery → shaft incl. motor (sine + PWM extra + '
              'mech), inverter and board copper. T_j and P cont. from the board model '
-             '(favourable airflow, T_amb 45 °C) — estimate.</p>')
+             '(favourable airflow, T_amb 45 °C) — estimate; "(110)": the point is beyond the '
+             'board\'s continuous limit, losses at the controller\'s design T_j 110 °C.</p>')
     o.append("<h2>Loss grid (m = %g)</h2>" % rec["loss_grid"]["plan"]["m"])
     rows = []
     for g in rec["loss_grid"]["points"]:

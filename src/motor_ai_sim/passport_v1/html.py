@@ -180,7 +180,6 @@ def line_chart(series: Sequence[Mapping[str, Any]], *, xlab: str, ylab: str,
         o.append(f'<line x1="{L}" y1="{Y(v):.1f}" x2="{L + pw}" y2="{Y(v):.1f}" stroke="#9a6700" '
                  f'stroke-dasharray="4 3"/><text x="{L + pw - 2}" y="{Y(v) - 3:.1f}" text-anchor="end" '
                  f'class="mu">{esc(name)}</text>')
-    lx = L + 6
     for i, s in enumerate(series):
         c = s.get("color") or PALETTE[i % len(PALETTE)]
         pts = [(X(x), Y(y)) for x, y in zip(s["x"], s["y"]) if x is not None and y is not None]
@@ -196,11 +195,13 @@ def line_chart(series: Sequence[Mapping[str, Any]], *, xlab: str, ylab: str,
             if s.get("marker"):
                 for px, py in pts:
                     o.append(f'<circle cx="{px:.1f}" cy="{py:.1f}" r="2.6" fill="{c}"/>')
-        ly = T + 12 + 14 * i
-        o.append(f'<rect x="{lx + pw - 190}" y="{ly - 8}" width="10" height="3" fill="{c}"/>'
-                 f'<text x="{lx + pw - 176}" y="{ly - 4}">{esc(s["name"])}</text>')
+        ly = h + 10 + 15 * (i // 2)
+        lx2 = L + (i % 2) * (pw / 2)
+        o.append(f'<rect x="{lx2:.1f}" y="{ly - 5}" width="14" height="3" fill="{c}"/>'
+                 f'<text x="{lx2 + 18:.1f}" y="{ly}">{esc(s["name"])}</text>')
     o.append("</svg>")
-    return "".join(o)
+    n_rows = (len(series) + 1) // 2
+    return "".join(o).replace(f'viewBox="0 0 {w} {h}"', f'viewBox="0 0 {w} {h + 6 + 15 * n_rows}"', 1)
 
 
 def heat_chart(xs: Sequence[float], ys: Sequence[float], z: Sequence[Sequence[Optional[float]]], *,

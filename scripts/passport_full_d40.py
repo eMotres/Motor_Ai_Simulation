@@ -359,6 +359,15 @@ def task_pwm(work: Path, a) -> None:
               inv_t_j_c=float(drop.t_j_c), inv_topology="one_3ph")
     rec["drop"] = drop.__dict__ if hasattr(drop, "__dict__") else str(drop)
     rec["steps_pwm"], rec["carriers_per_period"] = steps, nc
+    # The PWM step count raises the slip ring (>= 640 nodes/period); netgen
+    # then rejects the iron-template wedge and the build falls back to gmsh,
+    # whose rotor mesh is not pole-periodic — the route's sine reference
+    # (harm_ref) asks for TDM there and is refused (TdmMeshNotPeriodic).  The
+    # PWM run itself marches (TDM does not apply to a PWM circuit), so the
+    # reference is made to march too: same mesh, same steps, same eddy method
+    # — its only difference stays the drive.
+    os.environ["SB_EDDY_METHOD"] = "march"
+    rec["eddy_method_both"] = "march (SB_EDDY_METHOD) — see the comment in task_pwm"
     t1 = time.time()
     try:
         p = sim.get_fem_transient(**kw)

@@ -140,6 +140,11 @@ class Board:
         self.R_jhs = (T_J_AT_LIMIT_C - T_HS_LIMIT_C) / max(p_fav, 1e-9)
 
     def state(self, card, drv, *, I_rms, f_sw, dead_s, v_dc, cls="favourable"):
+        """Steady state at one current.  A current beyond the board's
+        continuous limit has no steady state on this board (the one-node
+        model runs away): its losses are then evaluated at the controller's
+        design T_j (110 °C, the board-limit junction temperature) and the
+        point is flagged ``continuous_ok: false``."""
         c = self.classes[cls]
         t_j = T_J_AT_LIMIT_C
         for _ in range(8):
@@ -152,8 +157,18 @@ class Board:
                 t_j = t_new
                 break
             t_j = t_new
-        return {"inv": inv, "Q_W": Q, "t_hs_C": t_hs, "t_j_C": t_j,
-                "board_ok": Q <= c["Q_budget_W"] + 1e-9, "tj_ok": t_j <= T_J_DERATE_C}
+        board_ok = Q <= c["Q_budget_W"] + 1e-9
+        tj_ok = t_j <= T_J_DERATE_C
+        basis = "steady state, board model (%s airflow)" % cls
+        if not (board_ok and tj_ok):
+            inv = inverter_losses(card, drv, I_rms=I_rms, f_sw=f_sw, dead_s=dead_s,
+                                  v_dc=v_dc, t_j=T_J_AT_LIMIT_C)
+            Q = inv["total"] + K_BOARD_CU * I_rms ** 2
+            t_j, t_hs = T_J_AT_LIMIT_C, None
+            basis = ("beyond the board's continuous limit (no steady state): losses at the "
+                     "controller's design T_j %.0f °C" % T_J_AT_LIMIT_C)
+        return {"inv": inv, "Q_W": Q, "t_hs_C": t_hs, "t_j_C": t_j, "tj_basis": basis,
+                "board_ok": board_ok, "tj_ok": tj_ok, "continuous_ok": board_ok and tj_ok}
 
     def i_limit(self, card, drv, *, f_sw, dead_s, v_dc, cls="favourable", I_hi=200.0):
         lo, hi = 0.0, float(I_hi)
@@ -340,6 +355,7 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                 "P_shaft_W": P_sh, "T_op_Nm": m_pt["T_op_Nm"], "P_motor_sine_W": P_em,
                 "P_mech_W": m_pt["P_mech_W"], "P_battery_W": P_bat,
                 "board_ok": st["board_ok"], "tj_ok": st["tj_ok"],
+                "continuous_ok": st["continuous_ok"], "tj_basis": st["tj_basis"],
             }
         out_variants.append({
             "id": v["id"], "device": card.part, "technology": drv["tech"],

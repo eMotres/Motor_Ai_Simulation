@@ -1,0 +1,35 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+schema: propeller-1
+id: tmotor_t12x6
+vendor: T-MOTOR
+model: T12*6 Black
+series: T series polymer (fixed wing)
+status: current
+product_url: https://store.tmotor.com/product/ts12-6-prop-polymer-straight.html
+source_urls:
+- https://store.tmotor.com/product/ts12-6-prop-polymer-straight.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 12.0
+  diameter_mm: 304.8
+  pitch_in: 6.0
+  pitch_mm: 152.0
+  blades: null
+material: polymer + carbon fiber
+hub: {}
+mass_g: 18.3
+mass_package_g: 116.5
+published_limits:
+  max_rpm: 20000
+performance:
+  data_quality: geometry_only
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  tables: []
+notes:
+- 'No thrust/torque test data is published for this propeller on T-Motor''s product page or in the motor test tables
+  found; the propeller model refuses to compute loads for it (selectable: false).'
+- T-Motor's page labels the 20000 RPM entry 'Max Thrust'; stored as max_rpm as read. Fixed-wing prop (CW and CCW
+  pair).

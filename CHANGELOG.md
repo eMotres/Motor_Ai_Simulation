@@ -8,6 +8,16 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **Propeller catalogue, propeller load and slipstream cooling air** (owner 2026-10-05, Ø40 drone motors).
+  `config/propellers/tmotor/*.yaml` (12 T-Motor entries of 10-13 in with source URL + access date per
+  table; 5 with measured torque, 2 thrust-only with an explicit estimated C_P, 5 geometry-only that the
+  model refuses to compute), `motor_ai_sim.propeller` (static C_T/C_P fits, thrust/torque/shaft power,
+  ISA air density, momentum-theory slipstream speed x a stated, to-be-calibrated motor-position factor,
+  rpm-for-torque and motor-curve equilibrium), read-only `GET /api/propellers`, `/{id}`, `/{id}/point`,
+  `/cooling-options`, per-die `config/cooling_options.yaml` (CIANO14 40 new = `propeller_air`), and
+  `air_speed_source="propeller"` in `solve_thermal_field` (default `manual`: every other mode
+  bit-identical). Electrical power is never used as shaft power. See
+  `docs/PROPELLER_CATALOG_2026-10-05.md`.
 - **Configure: Drive menu, Sine | PWM** (owner 2026-10-05). PWM lists only the drive
   variants computed for the motor (`pwm_variants` in its passport: a device at a
   carrier frequency) and reads between their computed points; it refuses outside the

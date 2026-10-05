@@ -1,0 +1,41 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+schema: propeller-1
+id: tmotor_ms1101
+vendor: T-MOTOR
+model: MS1101
+series: MS series polymer (straight)
+status: current
+product_url: https://store.tmotor.com/product/ms1101-polymer-straight.html
+source_urls:
+- https://store.tmotor.com/product/ms1101-polymer-straight.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 11.0
+  diameter_mm: 280.3
+  pitch_in: 4.2
+  pitch_mm: 106.68
+  blades: 2
+material: polymer+CF
+hub: {}
+mass_single_blade_g: 10.0
+mass_package_g: 82.0
+published_limits:
+  recommended_thrust_kg:
+  - 0.4
+  - 0.9
+  recommended_rpm:
+  - 4700
+  - 7100
+  max_thrust_kg: 2.0
+  max_rpm: 11000
+performance:
+  data_quality: geometry_only
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  tables: []
+notes:
+- 'No thrust/torque test data is published for this propeller on T-Motor''s product page or in the motor test tables
+  found; the propeller model refuses to compute loads for it (selectable: false).'
+- Diameter 11 in (measured diameter 280.3 mm) as published.

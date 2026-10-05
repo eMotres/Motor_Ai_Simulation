@@ -1,0 +1,58 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+schema: propeller-1
+id: tmotor_fpv_13x12
+vendor: T-MOTOR
+model: FPV 13*12 (C13x12)
+series: FPV propellers
+status: current
+product_url: https://uav-en.tmotor.com/2026/fpv-propellers_0228/1366.html
+source_urls:
+- https://uav-en.tmotor.com/2026/fpv-propellers_0228/1366.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 13.0
+  diameter_mm: 330.0
+  pitch_in: 12.0
+  pitch_mm: 304.8
+  blades: 3
+  disc_diameter_mm: 330.0
+material: glass fiber nylon
+mass_g: 38.6
+hub:
+  diameter_mm: 24.0
+  bore_mm: 6.0
+  center_thickness_mm: 13.0
+  max_blade_width_mm: 27.1
+  includes: 1 CCW + 1 CW prop
+published_limits: {}
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  tables:
+    - id: fpv13x12_1
+      source_url: https://uav-en.tmotor.com/2026/fpv-propellers_0228/1366.html
+      accessed: '2026-10-05'
+      test_motor: "4220 KV350"
+      prop_label_in_source: "13x12"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["voltage_V", "throttle", "current_A", "rpm", "thrust_g", "power_W", "efficiency_g_per_W", "torque_Nm", "temperature"]
+      note: ""
+      rows:
+      - {thr: 10, V: 48.1, I: 0.4, Pel: 19, rpm: 1402, thrust_g: 116, torque_Nm: 0.04}
+      - {thr: 20, V: 48, I: 1.7, Pel: 83, rpm: 2892, thrust_g: 583, torque_Nm: 0.16}
+      - {thr: 30, V: 48, I: 4.5, Pel: 215, rpm: 4226, thrust_g: 1261, torque_Nm: 0.34}
+      - {thr: 40, V: 47.8, I: 9.1, Pel: 437, rpm: 5438, thrust_g: 2102, torque_Nm: 0.56}
+      - {thr: 50, V: 47.7, I: 15.6, Pel: 745, rpm: 6490, thrust_g: 3015, torque_Nm: 0.8}
+      - {thr: 60, V: 47.4, I: 26.8, Pel: 1272, rpm: 7687, thrust_g: 4250, torque_Nm: 1.14}
+      - {thr: 70, V: 47.1, I: 41.3, Pel: 1945, rpm: 8692, thrust_g: 5459, torque_Nm: 1.48}
+      - {thr: 80, V: 46.7, I: 56.6, Pel: 2643, rpm: 9498, thrust_g: 6545, torque_Nm: 1.79}
+      - {thr: 90, V: 46.2, I: 74, Pel: 3424, rpm: 10146, thrust_g: 7525, torque_Nm: 2.08}
+      - {thr: 100, V: 45.7, I: 94.1, Pel: 4304, rpm: 10673, thrust_g: 8354, torque_Nm: 2.33}
+notes:
+- Single test motor, 48 V; one table of 10 throttle steps. Shaft power from torque is 61-75 % of the published electrical
+  power at throttle >= 20 %.

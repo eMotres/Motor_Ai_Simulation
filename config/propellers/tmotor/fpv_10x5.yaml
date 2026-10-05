@@ -1,0 +1,146 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+schema: propeller-1
+id: tmotor_fpv_10x5
+vendor: T-MOTOR
+model: FPV 10*5 (10X5X3)
+series: FPV propellers
+status: current
+product_url: https://uav-en.tmotor.com/2026/fpv-propellers_0228/1364.html
+source_urls:
+- https://uav-en.tmotor.com/2026/fpv-propellers_0228/1364.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 10.0
+  diameter_mm: 254.0
+  pitch_in: 5.0
+  pitch_mm: 127.0
+  blades: 3
+  disc_diameter_mm: 267.0
+material: glass fiber nylon
+mass_g: 26.5
+hub:
+  diameter_mm: 13.6
+  bore_mm: 5.0
+  center_thickness_mm: 10.0
+  max_blade_width_mm: 26.5
+  includes: 1 CCW + 1 CW prop
+published_limits: {}
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  tables:
+    - id: fpv10x5_1
+      source_url: https://uav-en.tmotor.com/2026/fpv-propellers_0228/1364.html
+      accessed: '2026-10-05'
+      test_motor: "3115 400KV"
+      prop_label_in_source: "10X5X3"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["throttle", "voltage_V", "current_A", "power_W", "rpm", "thrust_g", "torque_Nm", "efficiency_g_per_W", "temperature"]
+      note: ""
+      rows:
+      - {thr: 10, V: 48.03, I: 0.22, Pel: 10.4, rpm: 1880, thrust_g: 42, torque_Nm: 0.02}
+      - {thr: 20, V: 48.02, I: 0.73, Pel: 34.9, rpm: 3644, thrust_g: 272, torque_Nm: 0.06}
+      - {thr: 30, V: 48.01, I: 1.77, Pel: 85, rpm: 5187, thrust_g: 619, torque_Nm: 0.11}
+      - {thr: 40, V: 47.98, I: 3.72, Pel: 178.4, rpm: 6758, thrust_g: 1099, torque_Nm: 0.19}
+      - {thr: 50, V: 47.93, I: 6.7, Pel: 321, rpm: 8220, thrust_g: 1646, torque_Nm: 0.29}
+      - {thr: 60, V: 47.87, I: 10.26, Pel: 491, rpm: 9407, thrust_g: 2189, torque_Nm: 0.38}
+      - {thr: 70, V: 47.8, I: 15.99, Pel: 764.3, rpm: 10821, thrust_g: 2931, torque_Nm: 0.51}
+      - {thr: 80, V: 47.67, I: 23.3, Pel: 1110.6, rpm: 11851, thrust_g: 3555, torque_Nm: 0.62}
+      - {thr: 90, V: 47.54, I: 31.01, Pel: 1474.1, rpm: 13011, thrust_g: 4285, torque_Nm: 0.76}
+      - {thr: 100, V: 47.38, I: 41.84, Pel: 1982.4, rpm: 13713, thrust_g: 4817, torque_Nm: 0.85}
+    - id: fpv10x5_2
+      source_url: https://uav-en.tmotor.com/2026/fpv-propellers_0228/1364.html
+      accessed: '2026-10-05'
+      test_motor: "3115 640KV"
+      prop_label_in_source: "10X5X3"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["throttle", "voltage_V", "current_A", "power_W", "rpm", "thrust_g", "torque_Nm", "efficiency_g_per_W", "temperature"]
+      note: ""
+      rows:
+      - {thr: 10, V: 32.08, I: 0.33, Pel: 10.7, rpm: 1738, thrust_g: 37, torque_Nm: 0.02}
+      - {thr: 20, V: 32.07, I: 1.25, Pel: 40.2, rpm: 3686, thrust_g: 285, torque_Nm: 0.06}
+      - {thr: 30, V: 32.04, I: 3.13, Pel: 100.3, rpm: 5243, thrust_g: 655, torque_Nm: 0.11}
+      - {thr: 40, V: 32, I: 5.94, Pel: 190.1, rpm: 6784, thrust_g: 1127, torque_Nm: 0.19}
+      - {thr: 50, V: 31.93, I: 10.67, Pel: 340.6, rpm: 8262, thrust_g: 1705, torque_Nm: 0.29}
+      - {thr: 60, V: 31.83, I: 16.5, Pel: 525.2, rpm: 9432, thrust_g: 2218, torque_Nm: 0.38}
+      - {thr: 70, V: 31.71, I: 25.2, Pel: 799.2, rpm: 10829, thrust_g: 2952, torque_Nm: 0.51}
+      - {thr: 80, V: 31.55, I: 34.25, Pel: 1080.5, rpm: 11770, thrust_g: 3559, torque_Nm: 0.61}
+      - {thr: 90, V: 31.38, I: 47.53, Pel: 1491.4, rpm: 12890, thrust_g: 4265, torque_Nm: 0.74}
+      - {thr: 100, V: 31.17, I: 61.83, Pel: 1927, rpm: 13632, thrust_g: 4797, torque_Nm: 0.84}
+    - id: fpv10x5_3
+      source_url: https://uav-en.tmotor.com/2026/fpv-propellers_0228/1364.html
+      accessed: '2026-10-05'
+      test_motor: "3115 900KV"
+      prop_label_in_source: "10X5X3"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["throttle", "voltage_V", "current_A", "power_W", "rpm", "thrust_g", "torque_Nm", "efficiency_g_per_W", "temperature"]
+      note: ""
+      rows:
+      - {thr: 10, V: 24.04, I: 0.5, Pel: 12.1, rpm: 1649, thrust_g: 28, torque_Nm: 0.03}
+      - {thr: 20, V: 24.03, I: 1.88, Pel: 45.1, rpm: 3767, thrust_g: 305, torque_Nm: 0.06}
+      - {thr: 30, V: 23.99, I: 4.56, Pel: 109.4, rpm: 5379, thrust_g: 691, torque_Nm: 0.12}
+      - {thr: 40, V: 23.89, I: 9.39, Pel: 224.4, rpm: 6958, thrust_g: 1215, torque_Nm: 0.21}
+      - {thr: 50, V: 23.79, I: 15.86, Pel: 377.3, rpm: 8391, thrust_g: 1782, torque_Nm: 0.31}
+      - {thr: 60, V: 23.61, I: 23.86, Pel: 14.2, rpm: 9516, thrust_g: 2307, torque_Nm: 0.4, Pel_suspect: true}
+      - {thr: 70, V: 23.48, I: 36.67, Pel: 16.4, rpm: 10886, thrust_g: 3043, torque_Nm: 0.52, Pel_suspect: true}
+      - {thr: 80, V: 23.24, I: 50.48, Pel: 18.6, rpm: 11874, thrust_g: 3646, torque_Nm: 0.62, Pel_suspect: true}
+      - {thr: 90, V: 23.03, I: 66.87, Pel: 1539.9, rpm: 12795, thrust_g: 4244, torque_Nm: 0.74}
+      - {thr: 100, V: 22.74, I: 83.3, Pel: 1894.2, rpm: 13479, thrust_g: 4735, torque_Nm: 0.82}
+    - id: fpv10x5_4
+      source_url: https://uav-en.tmotor.com/2026/fpv-propellers_0228/1364.html
+      accessed: '2026-10-05'
+      test_motor: "3120 500KV"
+      prop_label_in_source: "10X5X3"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["throttle", "voltage_V", "current_A", "power_W", "rpm", "thrust_g", "torque_Nm", "efficiency_g_per_W", "temperature"]
+      note: ""
+      rows:
+      - {thr: 10, V: 48.08, I: 0.41, Pel: 19.5, rpm: 2388, thrust_g: 82, torque_Nm: 0.04}
+      - {thr: 20, V: 48.06, I: 1.44, Pel: 69.2, rpm: 4553, thrust_g: 459, torque_Nm: 0.09}
+      - {thr: 30, V: 48.04, I: 3.26, Pel: 156.4, rpm: 6208, thrust_g: 927, torque_Nm: 0.17}
+      - {thr: 40, V: 47.99, I: 6.12, Pel: 293.7, rpm: 7908, thrust_g: 1567, torque_Nm: 0.27}
+      - {thr: 50, V: 47.92, I: 11.25, Pel: 539.1, rpm: 9651, thrust_g: 2376, torque_Nm: 0.41}
+      - {thr: 60, V: 47.82, I: 18.19, Pel: 870, rpm: 11209, thrust_g: 3229, torque_Nm: 0.56}
+      - {thr: 70, V: 47.68, I: 26.62, Pel: 1269.4, rpm: 12648, thrust_g: 4124, torque_Nm: 0.72}
+      - {thr: 80, V: 47.5, I: 37.67, Pel: 1789.5, rpm: 13976, thrust_g: 5095, torque_Nm: 0.9}
+      - {thr: 90, V: 47.3, I: 51.56, Pel: 2438.7, rpm: 15234, thrust_g: 6112, torque_Nm: 1.09}
+      - {thr: 100, V: 47.04, I: 68.91, Pel: 3241.6, rpm: 16069, thrust_g: 6837, torque_Nm: 1.23}
+    - id: fpv10x5_5
+      source_url: https://uav-en.tmotor.com/2026/fpv-propellers_0228/1364.html
+      accessed: '2026-10-05'
+      test_motor: "3120 700KV"
+      prop_label_in_source: "10X5X3"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["throttle", "voltage_V", "current_A", "power_W", "rpm", "thrust_g", "torque_Nm", "efficiency_g_per_W", "temperature"]
+      note: ""
+      rows:
+      - {thr: 10, V: 32.08, I: 0.51, Pel: 16.4, rpm: 2131, thrust_g: 58, torque_Nm: 0.03}
+      - {thr: 20, V: 32.06, I: 1.89, Pel: 60.7, rpm: 4226, thrust_g: 388, torque_Nm: 0.08}
+      - {thr: 30, V: 32.03, I: 4.12, Pel: 132.1, rpm: 5789, thrust_g: 803, torque_Nm: 0.14}
+      - {thr: 40, V: 31.97, I: 8.07, Pel: 257.9, rpm: 7394, thrust_g: 1359, torque_Nm: 0.23}
+      - {thr: 50, V: 31.89, I: 13.8, Pel: 440.1, rpm: 8969, thrust_g: 2045, torque_Nm: 0.35}
+      - {thr: 60, V: 31.77, I: 22.37, Pel: 710.5, rpm: 10355, thrust_g: 2759, torque_Nm: 0.47}
+      - {thr: 70, V: 31.63, I: 31.64, Pel: 1000.6, rpm: 11771, thrust_g: 3564, torque_Nm: 0.61}
+      - {thr: 80, V: 31.44, I: 44.84, Pel: 1409.7, rpm: 13059, thrust_g: 4424, torque_Nm: 0.77}
+      - {thr: 90, V: 31.2, I: 60.97, Pel: 1902.2, rpm: 14158, thrust_g: 5197, torque_Nm: 0.92}
+      - {thr: 100, V: 30.89, I: 79.41, Pel: 2453.1, rpm: 15198, thrust_g: 6028, torque_Nm: 1.08}
+notes:
+- T-Motor states a prop disc diameter of 267 mm (10.5 in) for the 10 in model; the coefficients and the slipstream
+  disc use the published 267 mm.
+- The 3115 900KV table has three obviously wrong electrical power values (14.2, 16.4, 18.6 W at 60/70/80 % throttle
+  with 24 V x 24-50 A); they are kept as published and flagged Pel_suspect. Thrust, torque and rpm of those rows
+  are plausible and are used.
+- Shaft power from torque is 62-78 % of the published electrical power at throttle >= 20 %.

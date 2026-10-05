@@ -53,7 +53,10 @@ t('variantFacts: dead time, parallel, bus, provenance', () => {
   const f = D.variantFacts(V1);
   assert.equal(f.deadTime, '100 ns');
   assert.equal(f.nParallel, 2);
-  assert.equal(f.bus, '36–50.4 V (nom 44.4)');
+  assert.deepEqual(f.bus, { min: 36, nom: 44.4, max: 50.4 });
+  assert.equal(f.modulationKey, 'configureDrive.modSvpwmCentred');
+  assert.equal(D.modulationKey('some unknown scheme'), null);   // unknown data is not shown untranslated
+  assert.equal(D.modulationKey('third-harmonic'), 'configureDrive.modThird');
   assert.equal(f.provenance, 'run 2026-10-05');
   assert.equal(D.variantFacts({ ...V1, dead_time_s: 2e-6 }).deadTime, '2 µs');
   assert.equal(D.variantFacts(V2).deadTime, null);

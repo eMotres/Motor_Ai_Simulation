@@ -39,9 +39,16 @@ import ConfiguratorThermal from './ConfiguratorThermal';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
 import { useWireStock } from '../materials/useWireStock';
-import { stockHint } from '../../lib/wireStock';
-import { useDieContext } from '../common/useDieContext';
-import { getResolvedPoint, listDevices } from '../controller/controllerApi';
+import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
+import { listDevices } from '../controller/controllerApi';
+import {
+  physicalRanges, narrowRange, speedLimit, overflows, lineVoltageWarning,
+  readOverrides, writeOverrides, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
+  type KnobKey, type KRange, type Overrides, type PhysRange, type LimitBasis,
+} from '../../lib/configuratorLimits';
+import {
+  fetchConfigureContext, saveLMax, catalogIdOf, type ConfigureContext,
+} from '../../lib/configureContextApi';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import {
@@ -94,17 +101,8 @@ const LABEL = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTrans
 const TH = { px: 1.25, py: 0.7, fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)' } as const;
 const TD = { px: 1.25, py: 0.5, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid var(--app-bg)', fontFamily: 'monospace', color: 'var(--text-1)' } as const;
 
-// ── user-editable slider ranges (persisted) ──────────────────────────────────
-type KnobKey = 'L_mm' | 'N' | 'wireH_mm' | 'I_A' | 'rpm';
-interface KRange { min: number; max: number; }
-const DEFAULT_RANGES: Record<KnobKey, KRange> = {
-  L_mm:     { min: 15,  max: 150 },
-  N:        { min: 3,   max: 24 },
-  wireH_mm: { min: 0.3, max: 2.0 },
-  I_A:      { min: 0,   max: 300 },
-  rpm:      { min: 0,   max: 8000 },
-};
-const RANGES_LS = 'configurator.ranges.v1';
+// The slider RANGES are physical limits now (lib/configuratorLimits.ts, owner
+// 2026-10-05); an admin's local edit can only NARROW them, per machine.
 const KNOBS_LS  = 'configurator.knobs.v1';
 const REFID_LS  = 'configurator.refId.v1';
 
@@ -127,7 +125,11 @@ const KnobSlider: React.FC<{
   onChange: (v: number) => void; onRangeChange?: (min: number, max: number) => void; warn?: boolean;
   /** small grey caption after the unit — e.g. the peak value of an rms field */
   sub?: string;
-}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub }) => {
+  /** one short line under the slider: where its maximum comes from (+ tooltip) */
+  limitNote?: { text: string; tip: string; hand?: boolean };
+  /** admin: clear a hand-set maximum (the "default" rule applies again) */
+  onClearHand?: () => void;
+}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, limitNote, onClearHand }) => {
   const delta = pctDelta(value, base);
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
@@ -148,12 +150,23 @@ const KnobSlider: React.FC<{
         )}
       </Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-        {onRangeChange && <RangeEnd value={min} d={d} title="Range min — editable" onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
+        {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
         <Slider value={value} min={min} max={max} step={step}
           onChange={(_, v) => onChange(v as number)} size="small"
           sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 } }} />
-        {onRangeChange && <RangeEnd value={max} d={d} title="Range max — editable" onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
+        {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
       </Box>
+      {limitNote && (
+        <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mt: -0.25 }} title={limitNote.tip}>
+          {limitNote.text}
+          {limitNote.hand && onClearHand && (
+            <Box component="span" onClick={onClearHand} title={tx('configureLimits.clearHandTip')}
+              sx={{ ml: 0.75, color: '#60a5fa', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>
+              {tx('configureLimits.clearHand')}
+            </Box>
+          )}
+        </Typography>
+      )}
     </Box>
   );
 };
@@ -334,7 +347,6 @@ const ConfiguratorPanel: React.FC = () => {
         // match, leave the knobs/ranges alone; the render layer shows the
         // "no configurator model" empty state instead of a wrong-machine result.
         if (m) {
-          const pp = m.passport;
           const adopt = (k0: Knobs): Knobs => ({
             N: live.N || k0.N,
             split: live.split,
@@ -345,15 +357,6 @@ const ConfiguratorPanel: React.FC = () => {
             rpm: Number.isFinite(live.rpm) && live.rpm > 0 ? live.rpm : k0.rpm,
           });
           setKnobs((k0) => { const k1 = adopt(k0); setRefKnobs(k1); return withDrive(k1, m.id); });
-          // Ranges must contain BOTH the passport base and the loaded build.
-          const r0 = rangesForRef(pp);
-          setRanges({
-            L_mm: { min: Math.min(r0.L_mm.min, live.L_mm * 0.3), max: Math.max(r0.L_mm.max, live.L_mm * 2) },
-            N: { min: Math.min(r0.N.min, Math.max(1, Math.round(live.N * 0.3))), max: Math.max(r0.N.max, Math.ceil(live.N * 2)) },
-            wireH_mm: { min: Math.min(r0.wireH_mm.min, live.wireH_mm * 0.3), max: Math.max(r0.wireH_mm.max, live.wireH_mm * 2) },
-            I_A: { min: 0, max: Math.max(r0.I_A.max, (Number.isFinite(live.I_A) ? live.I_A : 0) * 1.5) },
-            rpm: { min: 0, max: Math.max(r0.rpm.max, (Number.isFinite(live.rpm) ? live.rpm : 0) * 1.5) },
-          });
         }
       }
     };
@@ -373,50 +376,6 @@ const ConfiguratorPanel: React.FC = () => {
   });
   // remember the user's tuning across reloads
   useEffect(() => { try { localStorage.setItem(KNOBS_LS, JSON.stringify(knobs)); } catch { /* ignore */ } }, [knobs]);
-  // The carrier knob below defaults to the CONTROLLER's resolved carrier
-  // (owner-approved: PWM lives in the Controller tab now), not the passport's
-  // own reference carrier — read-only here, same GET /api/controller/point
-  // resolution the Controller and Simulation tabs use. Only a DEFAULT: a
-  // knobs.f_sw_Hz the user has already picked (incl. a passport carrier) is
-  // never overwritten.
-  const dieCtx = useDieContext();
-  const [ctrlCarrierHz, setCtrlCarrierHz] = useState<number | null>(null);
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      try {
-        const pt = await getResolvedPoint(dieCtx.die || undefined, dieCtx.config || undefined);
-        if (alive) setCtrlCarrierHz(Number(pt.f_carrier_hz) > 0 ? Number(pt.f_carrier_hz) : null);
-      } catch { if (alive) setCtrlCarrierHz(null); }
-    })();
-    return () => { alive = false; };
-  }, [dieCtx.die, dieCtx.config]);
-  // Slider ranges FOLLOW THE MACHINE (user 2026-08-25: loading the 850 N·m
-  // motor left the 40 mm ranges — its 205 mm stack and 400 A sat outside the
-  // sliders and the fields showed the previous motor's values).  Derived from
-  // the passport's own base point, then user-editable per parameter.
-  const rangesForRef = React.useCallback((pp: Passport): Record<KnobKey, KRange> => {
-    const r2 = (v: number, lo: number, hi: number) => ({
-      min: Math.max(0, Number((v * lo).toPrecision(2))),
-      max: Number((v * hi).toPrecision(2)),
-    });
-    return {
-      L_mm:     r2(pp.L0_mm, 0.3, 3.0),
-      N:        { min: Math.max(1, Math.round(pp.N0 * 0.3)), max: Math.ceil(pp.N0 * 2.0) },
-      wireH_mm: r2(pp.wireH0_mm, 0.3, 2.5),
-      I_A:      { min: 0, max: Number((pp.I0_A * 2.0).toPrecision(2)) },
-      rpm:      { min: 0, max: Number((pp.rpm0 * 2.0).toPrecision(2)) },
-    };
-  }, []);
-  const [ranges, setRanges] = useState<Record<KnobKey, KRange>>(() => {
-    try { const r = localStorage.getItem(RANGES_LS); if (r) return { ...DEFAULT_RANGES, ...JSON.parse(r) }; } catch { /* ignore */ }
-    return DEFAULT_RANGES;
-  });
-  useEffect(() => { try { localStorage.setItem(RANGES_LS, JSON.stringify(ranges)); } catch { /* ignore */ } }, [ranges]);
-  const setRange = (k: KnobKey) => (min: number, max: number) => {
-    setRanges((s) => ({ ...s, [k]: { min, max } }));
-    setKnobs((s) => ({ ...s, [k]: Math.min(max, Math.max(min, (s as unknown as Record<string, number>)[k])) }));
-  };
   const skipReset = React.useRef(false);
   const lastRefId = React.useRef(refId);
   // reset knobs only when the reference ACTUALLY changes — compare to the last
@@ -428,7 +387,6 @@ const ConfiguratorPanel: React.FC = () => {
     if (skipReset.current) { skipReset.current = false; return; }
     // A different machine → its own base point AND its own slider ranges.
     { const kb = baseKnobs(ref.passport); setKnobs(withDrive(kb, refId)); setRefKnobs(kb); }
-    setRanges(rangesForRef(ref.passport));
   }, [refId]); // eslint-disable-line react-hooks/exhaustive-deps
   // First paint after the references arrive: if the stored knobs/ranges belong
   // to another machine (they are persisted globally), adopt this one's.
@@ -438,10 +396,8 @@ const ConfiguratorPanel: React.FC = () => {
     rangedFor.current = refId;
     const p0 = ref.passport;
     const off = (a: number, b: number) => !(b > 0) || Math.abs(a - b) / b > 1.5;
-    if (off(knobs.L_mm, p0.L0_mm) || off(knobs.I_A, p0.I0_A)
-        || knobs.I_A > ranges.I_A.max || knobs.L_mm > ranges.L_mm.max) {
+    if (off(knobs.L_mm, p0.L0_mm) || off(knobs.I_A, p0.I0_A)) {
       { const kb = baseKnobs(p0); setKnobs(withDrive(kb, refId)); setRefKnobs(kb); }
-      setRanges(rangesForRef(p0));
     }
   }, [refId, ref]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -499,13 +455,6 @@ const ConfiguratorPanel: React.FC = () => {
       nP: pr.parallel_paths ?? base.nP,
       N: n1 && n1 > 0 ? n1 : Math.max(1, Math.round(base.N * (pr.turns_factor || 1))),
     };
-    setRanges((r) => ({
-      ...r,
-      L_mm: { min: Math.min(r.L_mm.min, pr.stack_mm * 0.5), max: Math.max(r.L_mm.max, pr.stack_mm * 2) },
-      N: { min: Math.min(r.N.min, Math.max(1, Math.round(k1.N * 0.3))), max: Math.max(r.N.max, Math.ceil(k1.N * 2)) },
-      I_A: { ...r.I_A, max: Math.max(r.I_A.max, pr.current_a_rms * 1.5) },
-      rpm: { ...r.rpm, max: Math.max(r.rpm.max, pr.speed_rpm * 1.5) },
-    }));
     if (draftTarget.id !== refId) {
       pendingDraft.current = k1; skipReset.current = true; setRefId(draftTarget.id);
     } else { setKnobs(k1); setRefKnobs(k1); }
@@ -594,10 +543,108 @@ const ConfiguratorPanel: React.FC = () => {
   const driveOn = knobs.drive === 'pwm' && variants.length > 0;
   const variant = driveOn
     ? (variants.find((v) => v.id === knobs.drive_variant) ?? variants[0]) : null;
-  // the legacy measured-delta toggle must not stack on a computed variant
+  // The legacy measured-delta flag is never honoured (its menu is gone): Sine is
+  // Sine and PWM is a computed variant, whatever an old stored knob set carries.
   const scaleKnobs = useMemo(
-    () => (driveOn && knobs.pwm ? { ...knobs, pwm: false } : knobs), [driveOn, knobs]);
+    () => (knobs.pwm ? { ...knobs, pwm: false } : knobs), [knobs]);
   const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
+
+  // ── RANGES = PHYSICAL LIMITS (owner 2026-10-05) ───────────────────────────
+  // Per machine, live with the knobs they depend on (lib/configuratorLimits.ts):
+  // stack length (hand-set per motor, else the default rule), wire min 0.2 mm,
+  // turns = what fits the slot, current = the machine's inverter device, speed
+  // = the pack-maximum voltage envelope.  An admin can only NARROW them.
+  const catId = catalogIdOf(refId);
+  const [ctx, setCtx] = useState<ConfigureContext | null>(null);
+  const [limitMsg, setLimitMsg] = useState<string | null>(null);
+  const loadCtx = React.useCallback(async () => {
+    setCtx(catId ? await fetchConfigureContext(catId) : null);
+  }, [catId]);
+  useEffect(() => { setCtx(null); setLimitMsg(null); void loadCtx(); }, [loadCtx]);
+  const readLs = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+  const [overrides, setOverrides] = useState<Overrides>(() => readOverrides(readLs(RANGES_LS_V2), refId));
+  useEffect(() => { setOverrides(readOverrides(readLs(RANGES_LS_V2), refId)); }, [refId]);
+  // the pack: the machine's own (server), else the passport's; NONE = no limit from it
+  // (the Battery panel's stock default is not this machine's pack)
+  const packMaxV: number | null = ctx?.battery?.v_max ?? (Number(p.battery?.v_max) > 0 ? Number(p.battery?.v_max) : null);
+  const packNomV: number | null = ctx?.battery?.v_nom ?? (Number(p.battery?.v_nom) > 0 ? Number(p.battery?.v_nom) : null);
+  const modM = ctx?.modulation.m ?? DEFAULT_MODULATION;
+  const speedLim = useMemo(() => {
+    const at0 = scaleMotor(p, { ...knobs, pwm: false, rpm: 0 }, ref.poles);
+    const at1k = scaleMotor(p, { ...knobs, pwm: false, rpm: 1000 }, ref.poles);
+    const model = Number(p.Vload0_peak_V ?? 0) > 0;
+    return speedLimit({
+      vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
+      v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null,
+    });
+  }, [p, knobs, ref.poles, packMaxV, modM]);
+  const phys = useMemo(() => physicalRanges({
+    p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
+    lMaxMm: ctx?.limits.L_max_mm ?? null,
+    iMaxA: ctx?.current.set ? (ctx.current.i_phase_rms_max_A ?? null) : null,
+    speed: speedLim,
+  }), [p, ref.fit, knobs.N, knobs.wireH_mm, ctx, speedLim]);
+  const ranges: Record<KnobKey, KRange> = useMemo(() => ({
+    L_mm: narrowRange(phys.L_mm, overrides.L_mm), N: narrowRange(phys.N, overrides.N),
+    wireH_mm: narrowRange(phys.wireH_mm, overrides.wireH_mm),
+    I_A: narrowRange(phys.I_A, overrides.I_A), rpm: narrowRange(phys.rpm, overrides.rpm),
+  }), [phys, overrides]);
+  /** an admin's local edit: clamped INSIDE the physical range, so it only narrows */
+  const setRange = (k: KnobKey) => (min: number, max: number) => {
+    const nr = narrowRange(phys[k], { min, max });
+    const next: Overrides = { ...overrides, [k]: nr };
+    setOverrides(next);
+    try { localStorage.setItem(RANGES_LS_V2, writeOverrides(readLs(RANGES_LS_V2), refId, next)); } catch { /* ignore */ }
+    setKnobs((s) => ({ ...s, [k]: Math.min(nr.max, Math.max(nr.min, (s as unknown as Record<string, number>)[k])) }));
+  };
+  /** the stack-length maximum is the one limit an admin SETS (stored with the motor) */
+  const setLRange = (min: number, max: number) => {
+    if (catId && Math.abs(max - ranges.L_mm.max) > 1e-9 && max > 0) {
+      setLimitMsg(null);
+      void saveLMax(catId, max).then(loadCtx).catch(() => setLimitMsg(tx('configureLimits.saveFailed')));
+      setOverrides((o) => { const rest = { ...o }; delete rest.L_mm; return rest; });
+      return;
+    }
+    setRange('L_mm')(min, max);
+  };
+  const clearLMax = () => {
+    if (!catId) return;
+    setLimitMsg(null);
+    void saveLMax(catId, null).then(loadCtx).catch(() => setLimitMsg(tx('configureLimits.saveFailed')));
+  };
+  /** one short line under a slider: where its maximum comes from (+ tooltip) */
+  const limitNote = (k: KnobKey): { text: string; tip: string; hand?: boolean } => {
+    const b: LimitBasis = (phys as Record<KnobKey, PhysRange>)[k].basis;
+    const mx = fmt(ranges[k].max, k === 'wireH_mm' ? 1 : 0);
+    const cur = ctx?.current;
+    if (k === 'L_mm') {
+      return b === 'hand'
+        ? { text: tx('configureLimits.lHand', { max: mx }), tip: tx('configureLimits.lHandTip'), hand: true }
+        : { text: tx('configureLimits.lDefault', { max: mx }), tip: tx('configureLimits.lDefaultTip') };
+    }
+    if (k === 'N') {
+      return { text: tx('configureLimits.nFit', { max: mx }), tip: tx('configureLimits.nFitTip', {
+        wire: fmt(knobs.wireH_mm, 1), avail: fmt(ref.fit.slotHeight_mm - 2 * ref.fit.insulation_mm, 2) }) };
+    }
+    if (k === 'wireH_mm') {
+      return { text: tx('configureLimits.wireFit', { min: fmt(ranges.wireH_mm.min, 1), max: mx, n: knobs.N }),
+               tip: tx('configureLimits.wireFitTip') };
+    }
+    if (k === 'I_A') {
+      return b === 'inverter'
+        ? { text: tx('configureLimits.iInverter', { max: mx, device: cur?.device ?? '', n: cur?.devices_parallel ?? 1 }),
+            tip: tx('configureLimits.iInverterTip', { rating: fmt(cur?.i_d_rating_A ?? NaN, 0), tcase: fmt(cur?.t_case_c ?? NaN, 0) }) }
+        : { text: tx('configureLimits.iNoController'), tip: tx('configureLimits.iNoControllerTip') };
+    }
+    return b === 'envelope'
+      ? { text: tx('configureLimits.rpmEnvelope', { max: mx, v: fmt(packMaxV ?? NaN, 1) }), tip: tx('configureLimits.rpmEnvelopeTip', { m: fmt(modM, 2) }) }
+      : b === 'kv'
+        ? { text: tx('configureLimits.rpmKv', { max: mx, v: fmt(packMaxV ?? NaN, 1) }), tip: tx('configureLimits.rpmKvTip', { m: fmt(modM, 2) }) }
+        : { text: tx('configureLimits.rpmNoBattery'), tip: tx('configureLimits.rpmNoBatteryTip') };
+  };
+  const above = (v: number, r: KRange) => v > r.max * 1.0005 + 1e-9;
+  /** the connection stays free: only a warning when the winding's line voltage exceeds the pack nominal */
+  const connWarn = lineVoltageWarning(result.Vline_peak_V, packNomV);
   // "vs ref" compares against THE MACHINE AS LOADED, not against the
   // passport's calibration point (user 2026-08-26: a freshly loaded motor
   // showed −92.7 % with nothing touched — it was being compared to another
@@ -639,12 +686,12 @@ const ConfiguratorPanel: React.FC = () => {
   const driveRead = useMemo(
     () => (variant && !driveBuildMoved ? readVariant(variant, knobs.rpm, knobs.I_A) : null),
     [variant, driveBuildMoved, knobs.rpm, knobs.I_A]);
-  const packMaxV = Number(p.battery?.v_max) > 0 ? Number(p.battery?.v_max) : null;
+  const drivePackMaxV = ctx?.battery?.v_max ?? (Number(p.battery?.v_max) > 0 ? Number(p.battery?.v_max) : null);
   const driveProblems = useMemo(
     () => (variant && driveRead && driveRead.ok
-      ? limitProblems(variant, driveRead.values, knobs.I_A, devLimits[variant.device] ?? null, packMaxV)
+      ? limitProblems(variant, driveRead.values, knobs.I_A, devLimits[variant.device] ?? null, drivePackMaxV)
       : []),
-    [variant, driveRead, knobs.I_A, devLimits, packMaxV]);
+    [variant, driveRead, knobs.I_A, devLimits, drivePackMaxV]);
   /** the numbers to show — null whenever anything is refused */
   const drv = driveRead && driveRead.ok && driveProblems.length === 0 ? driveRead.values : null;
   /** one short line per refusal (text + tooltip), in the order they matter */
@@ -692,9 +739,9 @@ const ConfiguratorPanel: React.FC = () => {
   // stays wire ROWS either way.
   const kSplit = Math.max(1, Math.round(knobs.split ?? p.wire_split0 ?? 1));
   const rowsLabel = (() => {
-    const tags = [kPar > 1 ? `${kPar} in hand` : '',
-                  kSplit > 1 ? `${kSplit} strips in series` : ''].filter(Boolean);
-    return tags.length ? `Wire rows / slot (${tags.join(', ')})` : 'Turns / slot';
+    const tags = [kPar > 1 ? tx('configureLimits.inHand', { k: kPar }) : '',
+                  kSplit > 1 ? tx('configureLimits.stripsInSeries', { k: kSplit }) : ''].filter(Boolean);
+    return tags.length ? tx('configureLimits.wireRowsTagged', { tags: tags.join(', ') }) : tx('configureLimits.turnsPerSlot');
   })();
   // Current density in the conductor (A/mm², RMS) = strand current / wire area;
   // strand current = phase current / (parallel paths × strands in hand), wire
@@ -729,22 +776,23 @@ const ConfiguratorPanel: React.FC = () => {
   const availStack_mm  = ref.fit.slotHeight_mm - 2 * ref.fit.insulation_mm;
   const rowPitch_mm    = knobs.wireH_mm + ref.fit.wireSpacingY_mm;   // one wire row + its radial gap
   const stackHeight_mm = knobs.N * rowPitch_mm;
-  const overFit   = stackHeight_mm > availStack_mm + 1e-9;
-  const turnsMax  = Math.max(3, Math.min(30, Math.floor(availStack_mm / rowPitch_mm)));
-  const wireMax   = Math.max(0.3, Math.min(2.5, Math.round(Math.floor((availStack_mm / knobs.N - ref.fit.wireSpacingY_mm) / 0.1 + 1e-9) * 0.1 * 10) / 10));
-  const atLimit   = knobs.N >= turnsMax || knobs.wireH_mm >= wireMax - 1e-9;
+  const overFit   = overflows(ref.fit, knobs.N, knobs.wireH_mm);
+  const atLimit   = knobs.N >= ranges.N.max || knobs.wireH_mm >= ranges.wireH_mm.max - 1e-9;
   // Passive stock hint (owner, 2026-09-20): does not restrict the slider —
   // only names the nearest size actually on the shelf. wire_width is FIXED in
   // this tuner (see the module header), so only the thickness knob moves.
   const { data: wireStockData } = useWireStock();
-  const wireStockNote = stockHint(knobs.wireH_mm, ref.fit.wireWidth_mm, wireStockData?.available_sizes ?? []);
-  // The two winding sliders STOP at the slot (user 2026-09-02: the stack gauge
-  // is gone — the cross-section shows the stack, the slider just must not let
-  // the wire leave the stator).  A typed value clamps to the same cap; only a
-  // saved configuration or a machine change can still arrive over the limit,
-  // and that is what the red line under the sliders is for.
-  const turnsSliderMax = Math.max(ranges.N.min, Math.min(ranges.N.max, turnsMax));
-  const wireSliderMax  = Math.max(ranges.wireH_mm.min, Math.min(ranges.wireH_mm.max, wireMax));
+  const stockSizes = wireStockData?.available_sizes ?? [];
+  const wireStockNote = stockSizes.length && !isSizeInStock(knobs.wireH_mm, ref.fit.wireWidth_mm, stockSizes)
+    ? tx('configureLimits.notInStock', { nearest: formatNearestSizes(nearestStockSizes(knobs.wireH_mm, ref.fit.wireWidth_mm, stockSizes, 2)) })
+    : null;
+  // The two winding sliders STOP at the slot (user 2026-09-02): turns at the rows
+  // that fit the CHOSEN wire, wire at the thickest that fits the CHOSEN turns, so
+  // no slider move can make an overflowing combination.  A typed value clamps to
+  // the same cap; only a saved configuration or a machine change can still arrive
+  // over the limit, and that is what the red line under the sliders is for.
+  const turnsSliderMax = ranges.N.max;
+  const wireSliderMax  = ranges.wireH_mm.max;
 
   const set = (k: keyof Knobs) => (v: number) => setKnobs((s) => ({ ...s, [k]: v }));
   // Reset goes back to the machine AS LOADED (the same point the deltas are
@@ -887,10 +935,10 @@ const ConfiguratorPanel: React.FC = () => {
           <Button size="small" variant={tuned ? 'contained' : 'outlined'} onClick={reset}
             startIcon={<RestartAltIcon sx={{ fontSize: 15 }} />}
             disabled={!tuned}
-            title="Put every knob back to the reference design (the motor as loaded)"
+            title={tx('configureLimits.resetToReferenceTip')}
             sx={{ ml: 1.5, textTransform: 'none', fontSize: 11, py: 0.1,
                   ...(tuned ? { bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } } : {}) }}>
-            {tuned ? 'Reset to reference' : 'reference design'}
+            {tuned ? tx('configureLimits.resetShort') : tx('configureLimits.referenceDesign')}
           </Button>
         )}
       </Box>
@@ -923,37 +971,44 @@ const ConfiguratorPanel: React.FC = () => {
           <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)', mb: 0.25 }}>{ref.name}</Typography>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>{ref.subtitle}</Typography>
 
-          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mb: 0.75 }}>Build</Typography>
-          <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0} onChange={set('L_mm')} onRangeChange={isAdmin ? setRange('L_mm') : undefined} />
-          <KnobSlider label={rowsLabel} value={knobs.N} base={p.N0} min={ranges.N.min} max={turnsSliderMax} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={overFit || badTurns} />
-          <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={wireSliderMax} step={0.1} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={overFit} />
+          {/* i18n-guard:begin — every user-visible string below goes through tx() */}
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mb: 0.75 }}>{tx('configureLimits.build')}</Typography>
+          <KnobSlider label={tx('configureLimits.stackLength')} unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0}
+            onChange={set('L_mm')} onRangeChange={isAdmin ? setLRange : undefined} warn={above(knobs.L_mm, ranges.L_mm)}
+            limitNote={limitNote('L_mm')} onClearHand={isAdmin ? clearLMax : undefined} />
+          {limitMsg && <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 0.75 }}>{limitMsg}</Typography>}
+          <KnobSlider label={rowsLabel} value={knobs.N} base={p.N0} min={ranges.N.min} max={turnsSliderMax} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={overFit || badTurns}
+            limitNote={limitNote('N')} />
+          <KnobSlider label={tx('configureLimits.wireThickness')} unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={wireSliderMax} step={WIRE_STEP_MM} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={overFit}
+            limitNote={limitNote('wireH_mm')} />
           {overFit ? (
             <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 1 }}
-              title={`${knobs.N} rows × (${fmt(knobs.wireH_mm, 2)} wire + ${fmt(ref.fit.wireSpacingY_mm, 2)} gap) = ${fmt(stackHeight_mm, 1)} mm; the slot leaves ${fmt(ref.fit.slotHeight_mm, 1)} − 2×${fmt(ref.fit.insulation_mm, 2)} insulation = ${fmt(availStack_mm, 1)} mm. Lower the turns or the wire thickness.`}>
-              ⚠ Wire outside the stator — {fmt(stackHeight_mm, 1)} mm stack in a {fmt(availStack_mm, 1)} mm slot
+              title={tx('configureLimits.overFitTip', { n: knobs.N, wire: fmt(knobs.wireH_mm, 2), gap: fmt(ref.fit.wireSpacingY_mm, 2), stack: fmt(stackHeight_mm, 1), slot: fmt(ref.fit.slotHeight_mm, 1), ins: fmt(ref.fit.insulation_mm, 2), avail: fmt(availStack_mm, 1) })}>
+              ⚠ {tx('configureLimits.overFit', { stack: fmt(stackHeight_mm, 1), avail: fmt(availStack_mm, 1) })}
             </Typography>
           ) : badTurns ? (
             <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 1 }}
-              title={`This build is wound ${kPar} wires in hand, so the slot's wire count must be a multiple of ${kPar}: ${knobs.N} wires would make ${(knobs.N / kPar).toFixed(2)} turns per coil, which is not a winding. Use ${kPar * Math.floor(knobs.N / kPar)} or ${kPar * (Math.floor(knobs.N / kPar) + 1)}.`}>
-              ⚠ {knobs.N} wires is not a whole number of {kPar}-in-hand turns
+              title={tx('configureLimits.badTurnsTip', { k: kPar, n: knobs.N, turns: (knobs.N / kPar).toFixed(2), lo: kPar * Math.floor(knobs.N / kPar), hi: kPar * (Math.floor(knobs.N / kPar) + 1) })}>
+              ⚠ {tx('configureLimits.badTurns', { n: knobs.N, k: kPar })}
             </Typography>
           ) : atLimit ? (
             <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.5, mb: 1 }}
-              title={`${knobs.N} rows × (${fmt(knobs.wireH_mm, 2)} wire + ${fmt(ref.fit.wireSpacingY_mm, 2)} gap) = ${fmt(stackHeight_mm, 1)} mm of ${fmt(availStack_mm, 1)} mm usable slot height — the sliders stop here so the winding stays inside the stator.`}>
-              at the slot limit
+              title={tx('configureLimits.atLimitTip', { n: knobs.N, wire: fmt(knobs.wireH_mm, 2), gap: fmt(ref.fit.wireSpacingY_mm, 2), stack: fmt(stackHeight_mm, 1), avail: fmt(availStack_mm, 1) })}>
+              {tx('configureLimits.atLimit')}
             </Typography>
           ) : wireStockNote ? (
             <Typography sx={{ fontSize: 11, color: '#f59e0b', mt: -0.5, mb: 1 }}
-              title="Compared against the flat wire physically on the shelf (Materials tab → Flat wire in stock). Not enforced yet.">
+              title={tx('configureLimits.stockTip')}>
               {wireStockNote}
             </Typography>
           ) : null}
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
-            <Typography sx={{ ...LABEL, flex: 1 }}>Winding connection</Typography>
+            <Typography sx={{ ...LABEL, flex: 1 }}>{tx('configureLimits.connection')}</Typography>
             <ToggleButtonGroup exclusive size="small" value={knobs.nP} onChange={(_, v) => v != null && set('nP')(v)}>
               {conns.map((c) => (
-                <ToggleButton key={c.nP} value={c.nP} title={c.hint}
+                <ToggleButton key={c.nP} value={c.nP}
+                  title={c.nP === 1 ? tx('configureLimits.connSeries') : c.nS === 1 ? tx('configureLimits.connParallel') : tx('configureLimits.connMixed', { s: c.nS, p: c.nP })}
                   sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)',
                     '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
                   {c.label}
@@ -961,15 +1016,23 @@ const ConfiguratorPanel: React.FC = () => {
               ))}
             </ToggleButtonGroup>
           </Box>
+          {connWarn && (
+            <Typography sx={{ fontSize: 11, color: '#fbbf24', mt: -0.5, mb: 1 }}
+              title={tx('configureLimits.connWarnTip', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) })}>
+              ⚠ {tx('configureLimits.connWarn', { line: fmt(connWarn.line, 0), nominal: fmt(connWarn.nominal, 0) })}
+            </Typography>
+          )}
 
-          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>Operating point</Typography>
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
           {/* rms is the knob; the PEAK rides beside it (user 2026-08-26) —
               inverters and datasheets are quoted in peak, the coil sees rms. */}
-          <KnobSlider label="Phase current (rms)" unit="A" value={knobs.I_A} base={p.I0_A}
+          <KnobSlider label={tx('configureLimits.phaseCurrent')} unit="A" value={knobs.I_A} base={p.I0_A}
             min={ranges.I_A.min} max={ranges.I_A.max} step={1} d={0}
-            sub={`= ${fmt(knobs.I_A * Math.SQRT2, 0)} A peak`}
-            onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr} />
-          <KnobSlider label="Speed" unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={isAdmin ? setRange('rpm') : undefined} />
+            sub={tx('configureLimits.peakOf', { value: fmt(knobs.I_A * Math.SQRT2, 0) })}
+            onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr || above(knobs.I_A, ranges.I_A)}
+            limitNote={limitNote('I_A')} />
+          <KnobSlider label={tx('configureLimits.speed')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={isAdmin ? setRange('rpm') : undefined}
+            warn={above(knobs.rpm, ranges.rpm)} limitNote={limitNote('rpm')} />
 
           {/* ── DRIVE: Sine | PWM (owner 2026-10-05) ─────────────────────
               PWM lists only the drive variants COMPUTED for this motor — a
@@ -1007,10 +1070,17 @@ const ConfiguratorPanel: React.FC = () => {
           )}
           {driveOn && variant && (() => {
             const f = variantFacts(variant);
+            const bus = f.bus;
+            const busText = !bus ? null
+              : bus.min != null && bus.max != null && bus.nom != null
+                ? tx('configureDrive.factBusFull', { min: bus.min, max: bus.max, nom: bus.nom })
+                : bus.min != null && bus.max != null
+                  ? tx('configureDrive.factBusRange', { min: bus.min, max: bus.max })
+                  : bus.nom != null ? tx('configureDrive.factBusNom', { nom: bus.nom }) : null;
             const bits = [
               f.deadTime ? tx('configureDrive.factDead', { value: f.deadTime }) : null,
               f.nParallel ? tx('configureDrive.factParallel', { n: f.nParallel }) : null,
-              f.modulation, f.bus ? tx('configureDrive.factBus', { value: f.bus }) : null,
+              f.modulationKey ? tx(f.modulationKey) : null, busText,
             ].filter(Boolean);
             const tip = [f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
                          tx('configureDrive.variantTip')].filter(Boolean).join('\n');
@@ -1022,79 +1092,18 @@ const ConfiguratorPanel: React.FC = () => {
             <Typography key={r.text} sx={{ fontSize: 11, color: '#f87171', mb: 0.5 }} title={r.tip}>⚠ {r.text}</Typography>
           ))}
 
-          {/* ── EXCITATION ──────────────────────────────────────────────
-              Only when the passport carries MEASURED PWM deltas.  A toggle
-              backed by an assumption would be worse than no toggle. */}
-          {p.pwm && p.pwm.points?.length && !driveOn ? (
-            <>
-              <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>Excitation</Typography>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-                <ToggleButtonGroup exclusive size="small" value={knobs.pwm ? 'pwm' : 'sine'}
-                  onChange={(_, v) => v != null && setKnobs((s) => ({ ...s, pwm: v === 'pwm' }))}>
-                  <ToggleButton value="sine" title="Ideal sinusoidal current — the passport's own measurement"
-                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>Sine</ToggleButton>
-                  <ToggleButton value="pwm" title={`Add the measured carrier deltas (${p.pwm.controller_class}, measured at ${p.pwm.f_sw_Hz.map((x) => (x / 1000).toFixed(0)).join(' / ')} kHz on a ${p.pwm.v_bus_V.toFixed(0)} V bus)`}
-                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>PWM</ToggleButton>
-                </ToggleButtonGroup>
-                {knobs.pwm && (() => {
-                  const carrierOptions = p.pwm!.f_sw_class_Hz ?? p.pwm!.f_sw_Hz;
-                  // Default = the Controller's resolved carrier, snapped to the
-                  // nearest option this passport offers; falls back to the
-                  // passport's own reference carrier with no Controller value
-                  // (e.g. no device chosen yet). Only a default — any carrier
-                  // the passport offers stays pickable below.
-                  const controllerDefaultHz = ctrlCarrierHz == null ? null
-                    : carrierOptions.reduce((best, f) =>
-                        Math.abs(f - ctrlCarrierHz) < Math.abs(best - ctrlCarrierHz) ? f : best,
-                        carrierOptions[0]);
-                  const defaultHz = controllerDefaultHz ?? p.pwm!.f_sw_ref_Hz;
-                  const usingDefault = knobs.f_sw_Hz == null;
-                  return (
-                  <>
-                    <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>carrier</Box>
-                    <select value={String(knobs.f_sw_Hz ?? defaultHz)}
-                      onChange={(e) => setKnobs((s) => ({ ...s, f_sw_Hz: Number(e.target.value) }))}
-                      title={`${p.pwm!.controller_class} — the settings this power stage offers. Carriers outside the measured pair are extrapolated and flagged.`}
-                      style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px' }}>
-                      {carrierOptions.map((f) => (
-                        <option key={f} value={f} style={{ color: '#000' }}>
-                          {(f / 1000).toFixed(0)} kHz{p.pwm!.f_sw_Hz.includes(f) ? ' ·measured' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>bus</Box>
-                    <input type="number" step={1}
-                      value={String(knobs.v_bus_V ?? p.pwm!.v_bus_V)}
-                      onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v > 0) setKnobs((s) => ({ ...s, v_bus_V: v })); }}
-                      title="DC link the inverter switches against — the ripple current is proportional to it. Defaults to the pack the block was measured on."
-                      style={{ width: 62, background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', textAlign: 'right', padding: '1px 4px' }} />
-                    <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>V</Box>
-                    {usingDefault && (
-                      <Box component="span" sx={{ fontSize: 10.5, color: 'var(--text-4)' }}
-                        title="Defaults to the Controller tab's resolved carrier (GET /api/controller/point); pick another passport carrier above to override.">
-                        {controllerDefaultHz != null ? '· from Controller' : '· passport reference'}
-                      </Box>
-                    )}
-                  </>
-                  );
-                })()}
-              </Box>
-              {knobs.pwm && result.pwm_fidelity && (
-                <Typography sx={{ fontSize: 10.5, color: result.pwm_extrapolated ? '#fbbf24' : 'var(--text-4)', mb: 0.5 }}
-                  title={result.pwm_note ?? ''}>
-                  {result.pwm_extrapolated ? '⚠ ' : ''}{result.pwm_fidelity}
-                </Typography>
-              )}
-            </>
-          ) : null}
+          {/* The old measured-delta "Excitation" toggle is gone (owner 2026-10-05): PWM
+              is only what was COMPUTED for this motor (the Drive menu above).  Any
+              leftover `pwm` flag in a stored knob set is ignored by `scaleKnobs`. */}
 
           <Button onClick={reset} size="small" disabled={!tuned}
             startIcon={<RestartAltIcon sx={{ fontSize: 16 }} />}
-            title="Put every knob back to the reference design (the motor as loaded)"
+            title={tx('configureLimits.resetToReferenceTip')}
             sx={{ fontSize: 11, textTransform: 'none',
                   color: tuned ? '#60a5fa' : 'var(--text-3)', mt: 1 }}>
-            Reset to reference design
+            {tx('configureLimits.resetToReference')}
           </Button>
+          {/* i18n-guard:end */}
         </Box>
 
         {/* ── RESULT ── */}

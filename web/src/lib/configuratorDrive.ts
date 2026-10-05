@@ -35,12 +35,26 @@ export function variantLabel(v: PwmVariant): string {
 
 /** The read-only facts shown under the picker, in display order. */
 export interface VariantFacts {
-  deadTime: string | null;      // "100 ns" / "0.5 µs"
+  deadTime: string | null;      // "100 ns" / "0.5 µs" (a number with a unit)
   nParallel: number | null;
-  modulation: string | null;
+  /** i18n key of a KNOWN modulation name (`configureDrive.mod*`), else null */
+  modulationKey: string | null;
   mMax: number | null;
-  bus: string | null;           // "36–50.4 V (nom 44.4)"
+  /** the bus range as numbers; the words around them come from i18n */
+  bus: { min: number | null; nom: number | null; max: number | null } | null;
   provenance: string | null;
+}
+
+/** Known modulation names -> the locale key that names them.  An unknown name
+ *  is data in someone else's words: it is not shown rather than shown untranslated. */
+export function modulationKey(raw: string | null | undefined): string | null {
+  const t = String(raw ?? '').toLowerCase();
+  if (!t) return null;
+  if (t.includes('svpwm') && t.includes('cent')) return 'configureDrive.modSvpwmCentred';
+  if (t.includes('svpwm')) return 'configureDrive.modSvpwm';
+  if (t.includes('third')) return 'configureDrive.modThird';
+  if (t.includes('sine') || t.includes('spwm')) return 'configureDrive.modSine';
+  return null;
 }
 
 export function variantFacts(v: PwmVariant): VariantFacts {
@@ -50,9 +64,10 @@ export function variantFacts(v: PwmVariant): VariantFacts {
   const b = v.bus_v;
   const bn = (x: unknown) => (x != null && Number.isFinite(Number(x)) ? Number(x) : null);
   const bmin = bn(b?.min), bnom = bn(b?.nom), bmax = bn(b?.max);
-  const bus = bmin != null && bmax != null
-    ? `${trimNum(bmin, 1)}–${trimNum(bmax, 1)} V${bnom != null ? ` (nom ${trimNum(bnom, 1)})` : ''}`
-    : bnom != null ? `${trimNum(bnom, 1)} V` : null;
+  const bus = bmin != null || bnom != null || bmax != null
+    ? { min: bmin != null ? Number(trimNum(bmin, 1)) : null,
+        nom: bnom != null ? Number(trimNum(bnom, 1)) : null,
+        max: bmax != null ? Number(trimNum(bmax, 1)) : null } : null;
   const pv = v.provenance;
   const provenance = pv == null ? null
     : typeof pv === 'string' ? pv : JSON.stringify(pv);
@@ -61,7 +76,7 @@ export function variantFacts(v: PwmVariant): VariantFacts {
   return {
     deadTime,
     nParallel: v.n_parallel != null && Number.isFinite(np) && np > 0 ? np : null,
-    modulation: v.modulation ? String(v.modulation) : null,
+    modulationKey: modulationKey(v.modulation),
     mMax: v.m_max != null && Number.isFinite(mm) ? mm : null,
     bus, provenance,
   };

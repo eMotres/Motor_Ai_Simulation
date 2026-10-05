@@ -642,3 +642,58 @@ def get_motor_passport(motor_id: str):
         raise HTTPException(status_code=404,
                             detail=f"motor '{motor_id}' has no passport — generate it first")
     return passport
+
+
+# ---------------------------------------------------------------------------
+# Configure's physical limits (owner 2026-10-05) — see motor_ai_sim.configure_limits
+# ---------------------------------------------------------------------------
+
+@router.get("/{motor_id}/configure_context")
+def get_configure_context(motor_id: str):
+    """What Configure's sliders need to know about ONE machine: the hand-set
+    stack-length maximum, the inverter's phase-current ceiling, the pack and the
+    modulation index.  Read-only; open to every caller who can read the card
+    (the numbers are limits, not data of the owner's)."""
+    from motor_ai_sim import configure_limits as _cl
+    motor = next((m for m in _load().get("motors", []) if m.get("id") == motor_id), None)
+    if not motor:
+        raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    return {"motor_id": motor_id,
+            **_cl.context(motor, _family_doc_of_motor(motor, motor.get("geometry")))}
+
+
+@router.patch("/{motor_id}/configure_limits")
+def set_configure_limits(motor_id: str, body: dict,
+                         authorization: Optional[str] = Header(default=None)):
+    """Admin: set (or clear with ``null``) the stack-length maximum of ONE
+    machine.  Stored on its catalogue card beside the passport; Configure reads
+    it as the physical maximum of its length slider."""
+    from datetime import datetime
+    from motor_ai_sim import configure_limits as _cl
+    ident = _caller_identity(authorization)
+    if not ident.get("is_admin"):
+        raise HTTPException(status_code=403,
+                            detail="only an admin can set a machine's Configure limits")
+    if "L_max_mm" not in (body or {}):
+        raise HTTPException(status_code=422, detail="send {\"L_max_mm\": number | null}")
+    try:
+        v = _cl.validate_l_max(body.get("L_max_mm"))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    found = {"ok": False}
+
+    def _m(d: dict) -> None:
+        for m in d.get("motors", []):
+            if m.get("id") == motor_id:
+                found["ok"] = True
+                if v is None:
+                    m.pop("configure_limits", None)
+                else:
+                    m["configure_limits"] = {
+                        "L_max_mm": v, "set_by": ident.get("id"),
+                        "set_at": datetime.now().isoformat(timespec="seconds")}
+                return
+    _mutate(_m)
+    if not found["ok"]:
+        raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    return {"ok": True, "motor_id": motor_id, "L_max_mm": v}

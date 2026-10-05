@@ -95,6 +95,12 @@ translated (`Phase current` → `相电流`, `R phase` → `相电阻 R`).
 | power device | 功率器件 |
 | switching loss / conduction loss | 开关损耗 / 导通损耗 |
 | dead time | 死区时间 |
+| drive (Sine / PWM menu) | 驱动 |
+| drive variant (device at a carrier) | 驱动方案 |
+| passport (computed motor record) | 性能档案 |
+| pack (battery) | 电池组 |
+| envelope (voltage / computed range) | 包络 / 已计算范围 |
+| inverter device (MOSFET) | 逆变器器件 |
 | carrier (frequency) | 载波（频率） |
 | modulation index m | 调制比 m |
 | sine-triangle PWM / third-harmonic injection | 正弦-三角波 / 三次谐波注入 |

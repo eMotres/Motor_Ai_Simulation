@@ -338,7 +338,7 @@ def list_dies_access(_admin: dict = Depends(require_admin)):
     return {"count": len(out), "dies": out, "journal_error": journal_error}
 
 
-# ── Data source: OPEN (public repo, AGPL) / PRIVATE (private repo) ──────────
+# ── Data source: OPEN (public repo, Apache-2.0) / PRIVATE (private repo) ──────────
 # Separate from visibility above: visibility is who may SEE a die on this
 # server; the source is which git repository the die's files live in.
 # PUBLICATION = the first push to the public repository: every check and the

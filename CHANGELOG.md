@@ -8,6 +8,12 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Changed
+- **Licence: Apache License 2.0** (owner decision 2026-10-03), replacing
+  AGPL-3.0-or-later and the planned MKL section 7 exception (PR #93). `LICENSE`
+  is the Apache-2.0 text, `NOTICE` added, SPDX identifiers `Apache-2.0`.
+  Contributions stay under the DCO. Dependency model in THIRD_PARTY_NOTICES.md:
+  permissive and LGPL (Netgen) libraries in process, gmsh (GPL) only as the
+  separate gmsh worker program, Intel MKL optional, Triangle removed.
 - **Cholesky for the SPD P2 systems** (docs/CHOLESKY_SPD_2026-09-29.md). The secant
   stiffness, the Newton Jacobian and the bordered eddy matrix are SPD by construction and
   are now factorised with PARDISO mtype 2 instead of the unsymmetric LU, guarded per solve

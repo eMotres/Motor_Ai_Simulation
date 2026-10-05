@@ -57,7 +57,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN python -c "import netgen, netgen.occ; print('netgen', netgen.__version__)"
 
 # Optional proprietary accelerator (Intel MKL via pypardiso), OFF by default so
-# a distributed image contains only AGPL-compatible software.  Our own solve
+# a distributed image contains only open-source software.  Our own solve
 # server may build with --build-arg WITH_PARDISO=1 (several times faster
 # transient); without it every solver uses SciPy SuperLU.
 #

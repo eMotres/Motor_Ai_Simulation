@@ -3,10 +3,11 @@
 ## Why
 
 gmsh is GPL-2.0-or-later. Its own exception list does not cover Intel MKL,
-which this API process links (via `pypardiso`) under an AGPL section 7
-exception we are adding for our own code (PR #93). For that exception to
-hold, the API process must never `import gmsh` or link `libgmsh` in-process —
-gmsh has to run as a separate program, communicating at arm's length over
+which this API process may load (via `pypardiso`). (Written when the plan was
+an AGPL section 7 exception, PR #93; since 2026-10-03 our code is Apache-2.0,
+and the separation is what keeps GPL gmsh out of the Apache-2.0 + MKL
+process.) So the API process must never `import gmsh` or link `libgmsh`
+in-process — gmsh has to run as a separate program, communicating at arm's length over
 files/pipes/CLI args. This also makes the platform more robust: a gmsh/OCC
 native crash (a C++ exception, or a real segfault) can no longer take the API
 process down with it.

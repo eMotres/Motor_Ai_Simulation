@@ -1,9 +1,9 @@
 """gmsh runs out of process — licence separation guard + crash/timeout tests.
 
-gmsh is GPL-2.0-or-later. Its exception list does not cover Intel MKL, which
-this API process links (via pypardiso) under an AGPL section 7 exception we
-grant for our own code. For that exception to hold, the API process must
-never import gmsh or link libgmsh in-process: gmsh is a separate program,
+gmsh is GPL-2.0-or-later and Intel MKL, which the API process may load (via
+pypardiso), is proprietary; the two must never share a process, and our own
+code (Apache-2.0) must never be combined with gmsh in one program.  So the API
+process never imports gmsh or links libgmsh: gmsh is a separate program,
 ``motor_ai_sim.simulation.gmsh_worker_main``, talked to over a pipe by
 ``motor_ai_sim.simulation.gmsh_worker``.
 

@@ -59,7 +59,7 @@ declaration ChatGPT's Apps SDK reads.
 
 | tool | returns |
 |---|---|
-| `describe_service()` | name, operator (MOTRES d.o.o.), summary, licence `AGPL-3.0-or-later`, website, MCP endpoint, source / terms / privacy / docs URLs, data policy |
+| `describe_service()` | name, operator (MOTRES d.o.o.), summary, licence `Apache-2.0`, website, MCP endpoint, source / terms / privacy / docs URLs, data policy |
 | `list_capabilities()` | every tool: name, one-line purpose, `required_scope` (null = public), `requires_auth`, `read_only`; every scope with what it unlocks |
 | `list_calculation_types()` | `machine_fit_check`, `saved_performance`, `design_from_requirements`, `em_fem_transient`, `thermal`, `coupled_em_thermal`, `catalog_lookup` (via MCP), plus `efficiency_map`, `mechanical`, `controller_losses`, `end_effect_3d`, `optimization` (web app only, no MCP tool yet) |
 | `get_input_requirements(calculation_type)` | required / optional inputs with UCUM units (`N.m`, `/min`, `V`, `mm`, `kg`, `Cel`, `kW`) and ranges. The ranges come from the validators' own constants (`agent_designs.TORQUE_RANGE_NM`, `DC_BUS_RANGE_V`, `COOLINGS`, `DUTIES`, `STEPS_RANGE`…) and the tool schemas, so they cannot drift. Web-only types return no inputs and name the web tab. |
@@ -278,7 +278,7 @@ point the user at Connect / Sign in.
   The dialog is the existing one (`LoginDialog`): e-mail + password with
   e-mail verification, or Google. It reuses `POST /api/auth/register` and
   `POST /api/auth/verify`; there is no second sign-up implementation.
-  Creating an account shows the Terms / Privacy links and the AGPL notice
+  Creating an account shows the Terms / Privacy links and the Apache-2.0 licence notice
   with the source link.
 - **Continuation, bound to the registrant.** Create account on the consent
   page sends `return_to=/agent-consent?request=<id>`. The server accepts only

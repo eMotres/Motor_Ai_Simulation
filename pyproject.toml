@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "2-D FEM electric-motor design platform (scikit-fem + gmsh, FastAPI)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "AGPL-3.0-or-later"}
+license = {text = "Apache-2.0"}
 authors = [
     {name = "MOTRES d.o.o."}
 ]
@@ -16,7 +16,7 @@ keywords = ["fem", "finite-element", "electric-motor", "simulation", "design"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

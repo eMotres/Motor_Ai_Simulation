@@ -501,11 +501,9 @@
     "tMagnet": "Magnet",
     "tMagnetTip": "Magnet temperature. Judged against {limit} °C (the magnet card's limit); above it the tile reads the limit with a >.",
     "tHousing": "Housing",
-    "tHousingTip": "Housing temperature: all the loss leaves through its surface into the slipstream. It cannot be hotter than the winding it carries, so above {limit} °C the tile reads the limit with a >.",
+    "tHousingTip": "Housing temperature: all the loss leaves through its surface into the slipstream. It cannot be hotter than the winding it carries, so above {limit} °C the tile reads the limit with a >.\nCooling air {air} m/s.\nFilm h {h} W/m²K (cross-flow over the housing at this air speed).",
     "airSpeed": "Cooling air",
     "airSpeedTip": "Air speed over the motor: a fraction of the propeller's slipstream (momentum theory, motor behind the hub).",
-    "filmH": "Film h",
-    "filmHTip": "Heat transfer coefficient of the housing at this air speed (cross-flow over a cylinder).",
     "blankLoading": "Waiting for the propeller data.",
     "blankRefused": "Withheld: the propeller load is refused."
   }

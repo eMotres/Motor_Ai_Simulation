@@ -8,6 +8,8 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **Temperatures row without FILM H** (owner 2026-10-05): the film-h tile is gone; the HOUSING tile's tooltip
+  carries the cooling air speed and h (one line each). The row is winding, magnet, housing, cooling air.
 - **One controller group, system efficiency, short titles** (owner 2026-10-05). PWM LOSS, CONTROLLER LOSS, T_J,
   eta MOTOR and P CONT are one contiguous group at the end of the loss row, same cells in Sine and PWM. The main
   EFFICIENCY tile is the SYSTEM efficiency, battery -> shaft, motor + controller (Sine: the model's, since the

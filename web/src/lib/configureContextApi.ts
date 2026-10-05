@@ -1,6 +1,8 @@
 // Configure's per-machine physical limits as the server states them
 // (src/motor_ai_sim/configure_limits.py): GET /api/catalog/{id}/configure_context
 // and, admin only, PATCH /api/catalog/{id}/configure_limits.
+import type { Preset } from './configuratorPresets';
+
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 export interface ConfigureContext {
@@ -12,8 +14,15 @@ export interface ConfigureContext {
     i_phase_rms_max_A?: number;
   };
   modulation: { m: number; source: 'controller' | 'default' };
-  battery: { v_max: number | null; v_nom: number | null; v_min: number | null } | null;
+  battery: {
+    v_max: number | null; v_nom: number | null; v_min: number | null;
+    /** series cells + chemistry + per-cell voltages: what the Battery panel seeds from */
+    cells?: number | null; chemistry?: string | null;
+    v_cell_min?: number | null; v_cell_nom?: number | null; v_cell_max?: number | null;
+  } | null;
   has_family_doc: boolean;
+  /** one per configuration of the machine's die (read from the machines themselves) */
+  presets?: Preset[];
 }
 
 /** The catalogue id behind a Configure reference (`cat:<id>`), or null for a built-in. */

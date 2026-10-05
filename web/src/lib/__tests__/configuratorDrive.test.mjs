@@ -122,17 +122,26 @@ t('build knobs off the loaded machine are flagged; current and speed are free', 
 t('limits: bus headroom, per-switch current, junction, pack beyond the variant', () => {
   const r = D.readVariant(V1, 1000, 30).values;       // tj 80
   const dev = { v_dss_V: 60, i_d_100c_A: 100, t_j_max_c: 175 };
-  assert.deepEqual(D.limitProblems(V1, r, 30, dev, 50.4), []);        // 50.4 <= 54
-  let p = D.limitProblems(V1, r, 30, { ...dev, v_dss_V: 55 }, 50.4);  // 0.9*55 = 49.5
+  const pk = (min, max) => ({ min, max });
+  assert.deepEqual(D.limitProblems(V1, r, 30, dev, pk(36, 50.4)), []);        // 50.4 <= 54
+  let p = D.limitProblems(V1, r, 30, { ...dev, v_dss_V: 55 }, pk(36, 50.4));  // 0.9*55 = 49.5
   assert.equal(p.length, 1); assert.equal(p[0].kind, 'vds');
-  p = D.limitProblems(V1, r, 30, { ...dev, i_d_100c_A: 10 }, 50.4);   // 30/sqrt2/2 = 10.6
+  p = D.limitProblems(V1, r, 30, { ...dev, i_d_100c_A: 10 }, pk(36, 50.4));   // 30/sqrt2/2 = 10.6
   assert.equal(p[0].kind, 'rating');
-  p = D.limitProblems(V1, { ...r, tj_C: 180 }, 30, dev, 50.4);
+  p = D.limitProblems(V1, { ...r, tj_C: 180 }, 30, dev, pk(36, 50.4));
   assert.equal(p[0].kind, 'tj');
-  p = D.limitProblems(V1, r, 30, dev, 60);                            // pack above the variant's bus
+  p = D.limitProblems(V1, r, 30, dev, pk(36, 60));                    // pack above the variant's bus
   assert.ok(p.some((q) => q.kind === 'bus'));
+  // ... or below it: "computed for 36-50.4 V, this pack 18-25.2 V"
+  p = D.limitProblems(V1, r, 30, dev, pk(18, 25.2));
+  const busP = p.find((q) => q.kind === 'bus');
+  assert.ok(busP && busP.lo === 36 && busP.hi === 50.4 && busP.packMin === 18 && busP.packMax === 25.2);
+  // inside the computed range (a smaller pack window within it) is fine
+  assert.ok(!D.limitProblems(V1, r, 30, dev, pk(40, 48)).some((q) => q.kind === 'bus'));
+  // a variant with no bus range declares nothing to judge against
+  assert.ok(!D.limitProblems({ ...V1, bus_v: null }, r, 30, dev, pk(5, 9)).some((q) => q.kind === 'bus'));
   // no catalogue card known: only the variant's own bus envelope can speak
-  assert.deepEqual(D.limitProblems(V1, r, 30, null, 50.4), []);
+  assert.deepEqual(D.limitProblems(V1, r, 30, null, pk(36, 50.4)), []);
 });
 
 t('the choice is remembered per machine and Sine forgets it', () => {

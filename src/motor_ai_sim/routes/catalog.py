@@ -704,6 +704,37 @@ def get_motor_passport(motor_id: str):
 # Configure's physical limits (owner 2026-10-05) — see motor_ai_sim.configure_limits
 # ---------------------------------------------------------------------------
 
+def _die_docs_of(fam: Optional[dict]) -> tuple:
+    """``(configuration docs, die geometry)`` of the die a family document belongs to —
+    every configuration the die has, found the way ``_family_doc_of_motor`` finds one."""
+    die = str((fam or {}).get("die") or "").strip()
+    if not die:
+        return [], None
+    try:
+        import yaml as _yaml
+        from motor_ai_sim.workspace import iter_dies as _iter_dies
+        for e in _iter_dies():
+            if str(e.get("die") or e.get("name") or "").casefold() != die.casefold():
+                continue
+            d = Path(str(e["dir"]))
+            try:
+                dy = _yaml.safe_load((d / "die.yaml").read_text(encoding="utf-8")) or {}
+            except Exception:                                   # noqa: BLE001
+                dy = {}
+            docs = []
+            for f in sorted(d.glob("*.yaml")):
+                if f.name == "die.yaml":
+                    continue
+                c = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+                if isinstance(c, dict) and c.get("name"):
+                    c.setdefault("die", die)
+                    docs.append(c)
+            return docs, (dy.get("geometry") if isinstance(dy.get("geometry"), dict) else None)
+    except Exception:                                           # noqa: BLE001
+        log.warning("configure presets: the die's configurations could not be read", exc_info=True)
+    return [], None
+
+
 @router.get("/{motor_id}/configure_context")
 def get_configure_context(motor_id: str):
     """What Configure's sliders need to know about ONE machine: the hand-set
@@ -714,8 +745,21 @@ def get_configure_context(motor_id: str):
     motor = next((m for m in _load().get("motors", []) if m.get("id") == motor_id), None)
     if not motor:
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    # Several configurations can share one die name ("CIANO14 40 new": L12, L20), and a
+    # card carries no geometry of its own — the passport's base stack length is what
+    # tells them apart.
+    geo = motor.get("geometry")
+    if not geo:
+        L0 = ((motor.get("passport") or {}).get("passport") or {}).get("L0_mm")
+        geo = {"motor_length": L0} if L0 is not None else None
+    fam = _family_doc_of_motor(motor, geo)
+    from motor_ai_sim import passport_store as _ps
+    docs, die_geo = _die_docs_of(fam)
     return {"motor_id": motor_id,
-            **_cl.context(motor, _family_doc_of_motor(motor, motor.get("geometry")))}
+            **_cl.context(motor, fam),
+            # one preset per configuration of the die, read from the machines themselves
+            "presets": _cl.presets_for_die(
+                docs, die_geo, lambda die, cfg: _ps.variants_for(f"{die} {cfg}", None))}
 
 
 @router.patch("/{motor_id}/configure_limits")

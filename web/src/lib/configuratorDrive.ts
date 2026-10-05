@@ -306,14 +306,23 @@ export type LimitProblem =
   | { kind: 'tj'; tj: number; limit: number }
   | { kind: 'rating'; amps: number; limit: number }
   | { kind: 'vds'; vdss: number; bus: number; max: number }
-  | { kind: 'bus'; pack: number; max: number };
+  | { kind: 'bus'; lo: number | null; hi: number | null; packMin: number | null; packMax: number | null };
+
+/** The pack's voltage window [V] (empty .. full) the bus ranges are judged against. */
+export interface PackWindow { min: number | null; max: number | null; }
 
 export function limitProblems(v: PwmVariant, r: VariantReading, iRms: number,
-                              dev: DeviceLimits | null, packMaxV: number | null): LimitProblem[] {
+                              dev: DeviceLimits | null, pack: PackWindow | null): LimitProblem[] {
   const out: LimitProblem[] = [];
+  const packMaxV = pack?.max ?? null;
   const vbMax = num(v.bus_v?.max);
-  if (vbMax != null && packMaxV != null && packMaxV > vbMax * 1.001) {
-    out.push({ kind: 'bus', pack: packMaxV, max: vbMax });
+  const vbMin = num(v.bus_v?.min);
+  // A variant is computed over a bus range; a pack that reaches outside it is not what
+  // was computed (Sine keeps working — only this variant is refused).
+  const aboveV = vbMax != null && packMaxV != null && packMaxV > vbMax * 1.001;
+  const belowV = vbMin != null && pack?.min != null && pack.min < vbMin * 0.999;
+  if (aboveV || belowV) {
+    out.push({ kind: 'bus', lo: vbMin, hi: vbMax, packMin: pack?.min ?? null, packMax: packMaxV });
   }
   if (!dev) return out;
   const busMax = Math.max(vbMax ?? 0, packMaxV ?? 0);

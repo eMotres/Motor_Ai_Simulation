@@ -511,8 +511,13 @@ def build_banded_section(section: MotorSection,
     for r in section.regions:
         names[r.name] = len(names)
 
+    # The shaft belongs to the rotor piece whatever its kind: a STEEL shaft
+    # carries a B-H curve and is built with kind "iron" (motor_geometry), and
+    # selecting by kind alone dropped it from the mesh — the loaded 3-D model
+    # then refused with "region 'shaft' has no elements" (Ø40 with
+    # Steel_42CrMo4_QT, 2026-10-05; the 2026-08 runs had an aluminium shaft).
     rotor_regs = [r for r in section.regions
-                  if r.kind in ("magnet", "shaft") or r.name == "rotor"]
+                  if r.kind in ("magnet", "shaft") or r.name in ("rotor", "shaft")]
     stator_regs = [r for r in section.regions if r.name == "stator"]
     if not rotor_regs or not stator_regs:
         raise ValueError("the cross-section has no rotor or no stator region")

@@ -86,7 +86,10 @@ def _val(v, unit, method, src, labels=STAGE1_LABELS, **extra):
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _map(recs, st, set_name, mtpa_key, pp):
-    pts = PM.points_from_records([v for k, v in recs.items() if k != "__failed__"], set_name)
+    # the calibration run (full period, cogging sampling) is not a map point:
+    # the zero-current anchor of the map is the 60°-window `hot_I0_anchor`
+    pts = PM.points_from_records([v for k, v in recs.items()
+                                  if k not in ("__failed__", "hot_noload")], set_name)
     return pts, PM.PsiMap.build(pts, pp, mtpa=PM.mtpa_table(st[mtpa_key]))
 
 
@@ -567,8 +570,16 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                  "sc_plan": st.get("cold_sc_plan"), "sc_points": sc,
                  "fw_checks": {k: {"T": recs[k]["r"]["T_avg_Nm"],
                                    "psi_d": recs[k]["r"]["psi_d_Wb"],
-                                   "psi_q": recs[k]["r"]["psi_q_Wb"]}
-                               for k in recs if k.startswith("cold_I1_g+")}},
+                                   "psi_q": recs[k]["r"]["psi_q_Wb"],
+                                   "gamma": recs[k]["kw"]["gamma_deg"],
+                                   "abs_psi_cold_over_hot_map": (
+                                       math.hypot(recs[k]["r"]["psi_d_Wb"], recs[k]["r"]["psi_q_Wb"])
+                                       / math.hypot(*(lambda o: (o["psi_d"], o["psi_q"]))(
+                                           hm.at(recs[k]["r"]["i_d_A"], recs[k]["r"]["i_q_A"])))),
+                                   "note": "cold/hot |psi| at the same (i_d, i_q): the cold "
+                                           "voltage-limit / FW boundary factor (P21)"}
+                               for k in recs
+                               if str(recs[k]["meta"].get("role", "")).startswith("cold fw")}},
         "demag": st.get("demag_knee"),
         "envelope": env,
         "loss_grid": {"plan": {k: v for k, v in lp.items() if k != "points"},

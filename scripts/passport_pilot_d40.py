@@ -324,11 +324,36 @@ def cmd_assemble(a: argparse.Namespace) -> None:
         if not (od / "snapshot.json").exists():
             continue
         st = _state(od)
+        if "checks_plan" not in st:
+            print(f"{M}: stages not complete — skipped")
+            continue
         st["baseline_assemble"] = _baseline(work, a)
         recs[M] = card.build_record(od, _snap(od), st, machine_meta=MACHINES[M])
         with open(od / f"passport_{M}.json", "w", encoding="utf-8") as fh:
             json.dump(recs[M], fh, indent=1, default=str)
         print(f"{M}: record written")
+    from motor_ai_sim.passport_v1 import report_md
+    budget = {}
+    for M in recs:
+        od = work / "out" / M
+        n_ok, n_fail, cpu = 0, 0, 0.0
+        for ln in open(od / "results.jsonl", encoding="utf-8"):
+            r = json.loads(ln)
+            cpu += float(r.get("wall_s") or 0.0)
+            if r.get("ok"):
+                n_ok += 1
+            else:
+                n_fail += 1
+        st = _state(od)
+        budget[M] = {"runs": n_ok, "failed": n_fail, "fem_cpu_h": cpu / 3600.0,
+                     "container_wall_h": sum((st.get("stage_wall_s") or {}).values()) / 3600.0}
+    md = report_md.render(recs, budget=budget)
+    with open(work / "out" / "PASSPORT_PILOT_D40_STAGE1_2026-10-05.md", "w",
+              encoding="utf-8") as fh:
+        fh.write(md)
+    with open(work / "out" / "budget.json", "w", encoding="utf-8") as fh:
+        json.dump(budget, fh, indent=1)
+    print("report written", budget)
 
 
 def main(argv=None) -> None:

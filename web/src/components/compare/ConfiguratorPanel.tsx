@@ -38,7 +38,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import PerformanceCharts from './PerformanceCharts';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import {
-  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, tempRowTiles, type DriveTileSpec, type TempTileSpec,
+  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, tempRowTiles, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
   isPropellerCooled, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
@@ -810,19 +810,20 @@ const ConfiguratorPanel: React.FC = () => {
   const drv = driveRead && driveRead.ok && driveProblems.length === 0 ? driveRead.values : null;
   const driveMode: 'sine' | 'pwm' = driveOn ? 'pwm' : 'sine';
   /** the EFFICIENCY tile: system (motor + controller), battery -> shaft */
-  const sysEff = systemEfficiency(driveMode, drv, result.efficiency * 100);
+  const sysEff = systemEfficiency(driveMode, drv, result.P_mech_W, result.P_loss_W);
   /** …and the reference it is coloured against: the same quantity at the reference knobs (PWM reads the
    *  variant there; if that point is not computed the Sine efficiency stands in) */
   const baseSysEff = (() => {
     if (driveMode === 'sine' || !variant) return baseRes.efficiency * 100;
     const k0 = refKnobs ?? baseKnobs(p);
     const r0 = readVariant(variant, k0.rpm, k0.I_A);
-    return r0.ok && r0.values.eta_drive_pct != null ? r0.values.eta_drive_pct : baseRes.efficiency * 100;
+    const e0 = r0.ok ? systemEfficiency('pwm', r0.values, baseRes.P_mech_W, baseRes.P_loss_W).value : null;
+    return e0 ?? baseRes.efficiency * 100;
   })();
   /** one tile of the drive-dependent set, from its spec */
   const renderSpec = (t: DriveTileSpec) => {
-    const detail = t.id === 'invLoss' && drv && drv.inv_total_W != null
-      ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1) })}` : '';
+    const detail = t.id === 'invLoss' && drv && controllerLossW(drv) != null
+      ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1), b: fmt(drv.board_copper_W ?? 0, 1) })}` : '';
     return (
       <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} unit={t.unit} d={t.d}
         base={t.value ?? 0} goodHi={t.goodHi}
@@ -1122,8 +1123,8 @@ const ConfiguratorPanel: React.FC = () => {
       mode: 'pwm', variant_id: variant.id, device: variant.device,
       technology: variant.technology ?? null, carrier_hz: Number(variant.carrier_hz),
       dead_time_s: variant.dead_time_s ?? null, n_parallel: variant.n_parallel ?? null,
-      inverter_loss_W: drv?.inv_total_W ?? null, tj_C: drv?.tj_C ?? null,
-      eta_drive_pct: drv?.eta_drive_pct ?? null,
+      inverter_loss_W: drv ? controllerLossW(drv) : null, tj_C: drv?.tj_C ?? null,
+      eta_drive_pct: sysEff.value,
     } : { mode: 'sine' };
     // Saved under a NAME the user can change here (the auto name is the suggestion).
     setAskName({
@@ -1574,7 +1575,7 @@ const ConfiguratorPanel: React.FC = () => {
             {/* ONE contiguous controller group at the end of the loss row (owner 2026-10-05): the PWM loss,
                 the controller loss, then T_j, the efficiencies and P cont — same cells in Sine and PWM */}
             {lossTailTiles(driveMode, drv).map(renderSpec)}
-            {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, result.efficiency * 100).map(renderSpec)}
+            {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, motorEfficiency(driveMode, drv, result.P_mech_W, result.P_loss_W)).map(renderSpec)}
           </Box>
           {/* ── TEMPERATURES — ONE row for a propeller-cooled machine, the same five tiles from the first render ── */}
           {cooled && (

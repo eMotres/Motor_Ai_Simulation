@@ -14,7 +14,12 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   controller loss is 0; PWM: the computed point's `eta_drive_pct`); the duplicate "eta drive" tile is gone and
   "eta MOTOR" keeps the motor-only shaft efficiency for reference. Colours against the reference, the saved-
   configuration efficiency column and its best/worst ranking use the system efficiency. Titles are short (details
-  in the tooltip) and Greek letters are no longer uppercased by CSS (eta read as H).
+  in the tooltip) and Greek letters are no longer uppercased by CSS (eta read as H). **The tiles add up**: the
+  controller loss now includes the controller board's copper (tooltip: conduction / switching / dead time /
+  board copper), TOTAL LOSS = motor losses + PWM extra + controller loss, and EFFICIENCY = POWER / (POWER + TOTAL
+  LOSS) exactly, in Sine and PWM (computed from the numbers shown; pinned by a test on the real L12 passport and
+  its pilot variants). "eta MOTOR" = POWER / (POWER + motor losses + PWM extra). A point lacking any part of the
+  total shows dashes in TOTAL LOSS, EFFICIENCY and the controller tile alike.
 - **Default propeller per configuration** (owner 2026-10-05): `config/cooling_options.yaml` `defaults:` under
   the die (CIANO14 40 new: L12 -> `tmotor_fpv_10x5`, L20 -> `tmotor_p13x4_4`), served as `default_propeller`
   (and the die's `defaults` map) by `/api/propellers/cooling-options` and `configure_context.cooling`. A default

@@ -132,7 +132,7 @@ export function motorEfficiency(mode: DriveMode, drv: VariantReading | null, P_s
 // ONE row in the results block, the same five tiles from the first render on: while the
 // propeller data is loading, or the load is refused, they read "—" (a block never appears
 // later and pushes the grid down).
-export const TEMP_ROW_IDS = ['tWinding', 'tMagnet', 'tHousing', 'airSpeed', 'filmH'] as const;
+export const TEMP_ROW_IDS = ['tWinding', 'tMagnet', 'tHousing', 'airSpeed'] as const;
 
 export interface TempTileSpec {
   id: string; labelKey: string; tipKey: string; unit: string; d: number;
@@ -142,6 +142,10 @@ export interface TempTileSpec {
   level?: 'ok' | 'warn' | 'bad';
   /** the limit the tile is judged against (for its tooltip) */
   limit?: number;
+  /** the cooling air speed [m/s] and the housing film coefficient h [W/m2K] behind a housing tile: they are
+   *  printed in ITS tooltip (one line each), not as tiles (owner 2026-10-05) */
+  air?: number | null;
+  h?: number | null;
 }
 
 export interface TempRowInput {
@@ -162,11 +166,10 @@ export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; m
     temp('tWinding', 'configurePropeller.tWinding', 'configurePropeller.tWindingTip', t ? t.T_winding_C : null, lim.winding_C),
     temp('tMagnet', 'configurePropeller.tMagnet', 'configurePropeller.tMagnetTip', t ? t.T_magnet_C : null, lim.magnet_C),
     // the housing has no limit of its own, but it can never be hotter than the winding it carries
-    temp('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip', t ? t.T_housing_C : null, lim.winding_C),
+    { ...temp('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip', t ? t.T_housing_C : null, lim.winding_C),
+      air: t ? t.air_speed_ms : null, h: t ? t.h_W_m2K : null },
     { id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: 'configurePropeller.airSpeedTip', unit: 'm/s', d: 1,
       value: t ? t.air_speed_ms : null },
-    { id: 'filmH', labelKey: 'configurePropeller.filmH', tipKey: 'configurePropeller.filmHTip', unit: 'W/m²K', d: 0,
-      value: t ? t.h_W_m2K : null },
   ];
 }
 

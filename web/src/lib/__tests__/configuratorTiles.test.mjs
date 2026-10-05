@@ -77,13 +77,24 @@ const TEMPS = { T_winding_C: 120, T_magnet_C: 100, T_housing_C: 60, air_speed_ms
 
 t('the temperatures are ONE fixed row of five tiles, present with or without data', () => {
   const want = [...T.TEMP_ROW_IDS];
-  assert.deepEqual(want, ['tWinding', 'tMagnet', 'tHousing', 'airSpeed', 'filmH']);
+  assert.deepEqual(want, ['tWinding', 'tMagnet', 'tHousing', 'airSpeed']);              // no film-h tile
   assert.deepEqual(T.tempRowTiles(null, LIM).map((x) => x.id), want);
   assert.deepEqual(T.tempRowTiles(TEMPS, LIM).map((x) => x.id), want);
   assert.ok(T.tempRowTiles(null, LIM).every((x) => x.value == null && x.display == null));   // "—" while waiting
   const row = Object.fromEntries(T.tempRowTiles(TEMPS, LIM).map((x) => [x.id, x]));
   assert.equal(row.tWinding.value, 120); assert.equal(row.tWinding.level, 'ok');
-  assert.equal(row.airSpeed.value, 9.5); assert.equal(row.filmH.value, 61);
+  assert.equal(row.airSpeed.value, 9.5); assert.equal(row.filmH, undefined);
+  // h and the air speed ride in the HOUSING tile's tooltip (one line each), in every state
+  assert.deepEqual([row.tHousing.air, row.tHousing.h], [9.5, 61]);
+  const none = T.tempRowTiles(null, LIM).find((x) => x.id === 'tHousing');
+  assert.deepEqual([none.air, none.h], [null, null]);
+  for (const l of ['en', 'zh-CN']) {
+    const tip = loc(l).configurePropeller.tHousingTip;
+    assert.match(tip, /\{air\}/); assert.match(tip, /\{h\}/); assert.match(tip, /\{limit\}/);
+    assert.equal(tip.split('\n').length, 3, `${l}: the housing tooltip has the limit line, the air line and the h line`);
+    assert.equal(loc(l).configurePropeller.filmH, undefined); assert.equal(loc(l).configurePropeller.filmHTip, undefined);
+  }
+  assert.match(read('components/compare/ConfiguratorPanel.tsx'), /air: t\.air != null \? fmt\(t\.air, 1\)/);
 });
 
 t('over the limit a temperature tile reads "> limit" in red, never the absurd number', () => {

@@ -938,7 +938,8 @@ const ConfiguratorPanel: React.FC = () => {
   const renderTemp = (t: TempTileSpec) => (
     <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} display={t.display} unit={t.unit} d={t.d} base={t.value ?? 0}
       absLevel={t.level} plain
-      tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '' })}
+      tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '',
+        air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—' })}
       blankTip={tx(loadRefused ? 'configurePropeller.blankRefused' : 'configurePropeller.blankLoading')} />
   );
   /** thermal zones on the knobs: green = continuous below both limits with this propeller, red = beyond.

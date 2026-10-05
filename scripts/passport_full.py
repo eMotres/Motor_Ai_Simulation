@@ -636,6 +636,52 @@ def task_demagseq(work: Path, a) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  demagtemp — demag sensitivity to the magnet temperature (owner decision aid)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def task_demagtemp(work: Path, a) -> None:
+    """The settled operating point (TDM + full demag pre-pass) at fI·I0 on the
+    hot MTPA angle, rated speed, at ANOTHER magnet temperature (``--temp``),
+    with demag on and off: demag share = T(demag)/T(no demag), Br kept.  An
+    aid for the owner's magnet-card / temperature decision when the HOT
+    reference demagnetises the machine (Ø85 at 150 °C); not a card value."""
+    os.environ["SB_NO_WARM_CACHE"] = "1"
+    M, fI, Tm = a.machine, float(a.fi), float(a.temp)
+    snap = _snap(work, M)
+    hm, st, recs = _hot_map(work, M)
+    from motor_ai_sim.passport_v1 import jobs as J
+    from motor_ai_sim.passport_v1 import stages as S
+    from motor_ai_sim.material_context import set_request_materials
+    from motor_ai_sim.simulation import fem_solver_2d as F
+    set_request_materials({"assignment": _materials(snap), "materials": {}})
+    _, Tc = S._hot(snap)
+    I0, n0 = S._I0(snap), S._n0(snap)
+    g = float(hm.gamma_mtpa(fI * I0)) if fI > 0 else 0.0
+    b = S._base(snap, st, static=False)
+    out: Dict[str, Any] = {"task": "demagtemp", "machine": M, "fI": fI, "I": fI * I0,
+                           "gamma": g, "rpm": n0, "magnet_temp_c": Tm, "coil_temp_c": Tc,
+                           "steps": S.loss_steps(snap)}
+    t0 = time.time()
+    for tag, dm in (("demag", True), ("nodemag", False)):
+        if fI == 0.0 and not dm:
+            continue
+        j = J.loss_job("x", b, I_rms=fI * I0, gamma_deg=round(g, 3), rpm=n0, magnet_temp_c=Tm,
+                       coil_temp_c=Tc, steps=S.loss_steps(snap), demag=dm)
+        r = F.em_transient_eval(**j["kw"])
+        ds = r.get("demag_summary") or {}
+        out[tag] = {"T_Nm": r.get("T_avg_Nm"), "br_kept_vol_pct": ds.get("br_kept_vol_pct"),
+                    "per_magnet_spread_pct": ds.get("per_magnet_spread_pct"),
+                    "demag_settled": r.get("demag_settled"), "P_loss_total_W": r.get("P_loss_total_W")}
+    if out.get("nodemag") and out.get("demag") and out["nodemag"]["T_Nm"]:
+        out["demag_torque_drop_pct"] = 100.0 * (1.0 - float(out["demag"]["T_Nm"])
+                                                / float(out["nodemag"]["T_Nm"]))
+    out["wall_s"] = time.time() - t0
+    out["method"] = ("settled TDM loss point, full demag pre-pass, demag on vs off at the same "
+                     "point; magnets virgin at the start; rated speed; winding at the hot reference")
+    _dump(_out(work, "demagtemp_%s_I%g_T%g" % (M, fI, Tm)), out)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  parallel supervisor
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -682,6 +728,7 @@ def main(argv=None) -> None:
     ap.add_argument("--device", default=None)
     ap.add_argument("--fi", type=float, default=None)
     ap.add_argument("--length", type=float, default=None)
+    ap.add_argument("--temp", type=float, default=None, help="magnet temperature (demagtemp)")
     ap.add_argument("rest", nargs="*")
     a = ap.parse_args(argv)
     _use_spec(a.spec)
@@ -690,7 +737,7 @@ def main(argv=None) -> None:
     work = Path(a.work)
     (work / "out" / "full").mkdir(parents=True, exist_ok=True)
     fn = {"stage_a": task_stage_a, "coupled": task_coupled, "mech": task_mech,
-          "pwm": task_pwm, "demagseq": task_demagseq, "cooling": task_cooling,
+          "pwm": task_pwm, "demagseq": task_demagseq, "cooling": task_cooling, "demagtemp": task_demagtemp,
           "parallel": task_parallel}[a.task]
     fn(work, a)
 

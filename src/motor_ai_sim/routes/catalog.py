@@ -44,8 +44,30 @@ def __getattr__(name):
     raise AttributeError(name)
 
 
+def _read_path() -> Path:
+    """The file the CALLER READS: his workspace's own ``motor_catalog.json``.
+
+    A workspace that has none yet (a brand-new account is seeded with the machine
+    only) reads through to ``<shared>/motor_catalog.json`` when the server has one
+    - read-only, never copied: the first write of his own starts a file of his
+    own.  Without this a new, granted user opened Configure on an empty list of
+    references.  With layering off (this workstation) or a ``_CATALOG_PATH``
+    override the single file is read exactly as before."""
+    path = _catalog_path()
+    if globals().get("_CATALOG_PATH") is None and not path.is_file():
+        try:
+            from motor_ai_sim.workspace import layering, shared_root
+            if layering():
+                shared = Path(str(shared_root())) / "motor_catalog.json"
+                if shared.is_file():
+                    return shared
+        except Exception:                                       # noqa: BLE001
+            log.warning("catalog: shared read-through failed", exc_info=True)
+    return path
+
+
 def _load() -> dict:
-    return _read_json(_catalog_path(), {"tiers": [], "diameters_mm": [], "motors": []})
+    return _read_json(_read_path(), {"tiers": [], "diameters_mm": [], "motors": []})
 
 
 def _mutate(fn: Callable[[dict], None]) -> dict:
@@ -237,7 +259,7 @@ _REF_CACHE: dict = {"key": None, "cards": []}
 
 
 def _passport_cards() -> list:
-    path = _catalog_path()
+    path = _read_path()
     try:
         st = path.stat()
         key = (str(path), st.st_mtime_ns, st.st_size)

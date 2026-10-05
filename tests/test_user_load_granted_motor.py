@@ -421,3 +421,24 @@ def test_my_motor_settings_save_is_his_own_workspace_only(env, tmp_path, monkeyp
     assert client.post("/api/presets/theirs/settings", headers=env["user"],
                        json={"mesh": {"gap_layers": 9}}).status_code == 403
     assert (digest(shared_presets), digest(ws_other / "motor_presets.json")) == before
+
+
+def test_a_new_account_reads_the_shared_catalog_until_it_has_its_own(env, tmp_path, monkeypatch):
+    """A brand-new workspace is seeded with the machine only; Configure must not
+    open on an empty list of references for a granted user."""
+    import os
+    from motor_ai_sim.routes import catalog as cat
+    monkeypatch.delattr(cat, "_CATALOG_PATH", raising=False)
+    shared = Path(os.environ["SHARED_ROOT"]) / "motor_catalog.json"
+    shared.write_text(json.dumps({"tiers": [], "diameters_mm": [40], "motors": [
+        _card("c1", f"{GRANTED} {CFG}"), _card("c2", f"{UNGRANTED} {CFG}")]}), encoding="utf-8")
+    ids = [m["id"] for m in client.get("/api/catalog/references", headers=env["user"]).json()["motors"]]
+    assert ids == ["c1"], "granted-only: the shared card of his die, nothing else"
+    # his own file, once there, wins
+    from motor_ai_sim import workspace as W
+    own = Path(os.environ["WORKSPACES_ROOT"]) / W.workspace_id(USER) / "motor_catalog.json"
+    own.write_text(json.dumps({"tiers": [], "diameters_mm": [40], "motors": [
+        _card("mine", f"{GRANTED} {CFG2}")]}), encoding="utf-8")
+    ids = [m["id"] for m in client.get("/api/catalog/references", headers=env["user"]).json()["motors"]]
+    assert ids == ["mine"]
+    assert shared.read_text(encoding="utf-8").count('"c1"') == 1, "the shared file is never written"

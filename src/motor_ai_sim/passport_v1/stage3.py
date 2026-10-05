@@ -196,28 +196,46 @@ class Board:
 #  the operating points
 # ─────────────────────────────────────────────────────────────────────────────
 
+def grid_axes(rec, snap) -> Dict[str, Any]:
+    """The (speed, current) grid every variant is computed on: the loss-grid
+    speeds + the peak duty's speed, × the loss-grid currents (the static map's
+    levels up to the demag limit, incl. the peak row).  A full grid — Configure
+    reads it bilinearly and refuses a gap."""
+    lg = rec["loss_grid"]["plan"]
+    n0 = float(snap["rated_duty"]["rpm"])
+    pk = snap.get("peak_duty")
+    n_pk = float(pk["rpm"]) if pk else n0
+    speeds = sorted(set(float(n) for n in lg["speeds"]) | {n_pk})
+    currents = sorted(set(round(float(I), 6) for I in lg["currents"]))
+    return {"speeds": speeds, "currents": currents, "n_pk": n_pk}
+
+
+def _fw_reason(mode: str) -> str:
+    return ("this current cannot meet the voltage limit (m·V_dc/√3, v_nom) at this speed "
+            "inside the characterised field weakening (γ ≤ 80°): " + str(mode))
+
+
 def operating_points(rec, snap, hm: PM.PsiMap) -> List[Dict[str, Any]]:
-    """Rated and peak current at every loss-grid speed (+ the peak duty's own
-    speed), at the trajectory bus and m of the card; infeasible ones kept."""
+    """Every grid node: (n, I) at its operating angle on the m-limited
+    trajectory; infeasible nodes are kept with the reason."""
     lg = rec["loss_grid"]["plan"]
     R_hot, vlim = float(lg["R_hot_ohm"]), float(lg["v_phase_limit_V"])
     I0 = float(snap["rated_duty"]["current_arms"])
     n0 = float(snap["rated_duty"]["rpm"])
     I_pk = float(lg["I_peak_rms"])
+    ax = grid_axes(rec, snap)
     pk = snap.get("peak_duty")
-    n_pk = float(pk["rpm"]) if pk else n0
-    speeds = sorted(set(float(n) for n in lg["speeds"]) | {n_pk})
     out = []
-    for n in speeds:
-        for which, I in (("rated", I0), ("peak", I_pk)):
+    for n in ax["speeds"]:
+        for I in ax["currents"]:
             g, how = hm.operating_gamma(I, n, R_hot, vlim)
             duty = None
-            if which == "rated" and abs(n - n0) < 1e-6:
+            if abs(I - I0) < 1e-6 and abs(n - n0) < 1e-6:
                 duty = snap["rated_duty"].get("name") or "rated"
-            if which == "peak" and abs(n - n_pk) < 1e-6:
+            if abs(I - I_pk) < 1e-6 and abs(n - ax["n_pk"]) < 1e-6:
                 duty = (pk.get("name") if pk else None) or "peak (I_peak at rated speed)"
-            out.append({"key": "%.0frpm_%s" % (n, which), "rpm": n, "I_A": I,
-                        "row": which, "duty": duty, "gamma_deg": g, "gamma_mode": how})
+            out.append({"key": "%.0frpm_%.4gA" % (n, I), "rpm": n, "I_A": I,
+                        "duty": duty, "gamma_deg": g, "gamma_mode": how})
     return out
 
 
@@ -250,6 +268,55 @@ def motor_point(rec, snap, hm, rows_grid, p) -> Dict[str, Any]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  the motor PWM extra loss from the FEM anchors
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PwmModel:
+    """dP_harm(n, I) from a carrier class's FEM anchors.
+
+    Each anchor gives k_a = dP_a / HDF(m_a) — the ripple loss per unit SVPWM
+    harmonic-distortion factor at its own modulation index m_a.  The FEM shows
+    k depends on m, not on the current (Ø40, 13 000 rpm, MTPA: 5.3 W at 0.5·I0
+    and at I0, m 0.90 / 0.93), and rises at low m where the dead-time
+    distortion is not in HDF (2.5·I0 at γ = 80°, m 0.30: k ×2.3).  So k is
+    linear in m between the anchors (held outside, flagged) and
+    dP(n, I) = k(m) · HDF(m(n, I)).  Exact at every anchor."""
+
+    def __init__(self, anchors: Sequence[Mapping[str, Any]], scale: float = 1.0,
+                 derived: Optional[str] = None):
+        a = [x for x in anchors if x.get("dP_harm_W") is not None and x.get("m_index")]
+        self.anchors = sorted(a, key=lambda x: float(x["m_index"]))
+        self.scale = float(scale)
+        self.derived = derived
+        km: Dict[float, List[float]] = {}
+        for x in self.anchors:          # anchors at the same m are averaged
+            m = round(float(x["m_index"]), 3)
+            km.setdefault(m, []).append(float(x["dP_harm_W"]) * self.scale
+                                        / max(hdf_svpwm(float(x["m_index"])), 1e-12))
+        self.k = sorted((m, sum(v) / len(v)) for m, v in km.items())
+
+    def __bool__(self) -> bool:
+        return bool(self.anchors)
+
+    def at(self, n: float, I: float, m_p: float):
+        for x in self.anchors:
+            if abs(float(x["rpm"]) - n) < 1e-6 and abs(float(x["I"]) - I) < 1e-6:
+                v = float(x["dP_harm_W"]) * self.scale
+                return v, (self.derived or "FEM") + " (%s)" % x.get("tag"), not self.derived
+        ms = [k[0] for k in self.k]
+        ks = [k[1] for k in self.k]
+        held = m_p < ms[0] - 1e-6 or m_p > ms[-1] + 1e-6
+        km = float(np.interp(m_p, ms, ks))
+        how = ("%sFEM anchors (%s A, m %s): k = dP/HDF(m) linear in m%s, × HDF(m %.3f)" % (
+            (self.derived + "; ") if self.derived else "",
+            "/".join("%.1f" % float(x["I"]) for x in self.anchors),
+            "/".join("%.3f" % m for m in ms),
+            " (HELD at the nearest anchor m — outside the FEM range)" if held else "",
+            m_p))
+        return km * hdf_svpwm(m_p), how, False
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  variants
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -258,12 +325,15 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                    si_part: str) -> Dict[str, Any]:
     """``pwm_variants`` + the controller / system-limit block of one machine.
 
-    ``pwm_fem``: {class_id: {"rated": rec, "peak": rec}} from the PWM FEM task.
+    ``pwm_fem``: {class_id: [anchor, ...]} from the PWM FEM task (anchor =
+    {tag, rpm, I, dP_harm_W, m_index}).
     ``variants``: [{id, device, carrier_hz, dead_time_s, fem_class}]."""
     from motor_ai_sim.inverter.devices import get_device
     bat = snap["battery"]
     v_dc = float(bat["v_nom"])
-    m_max = float(rec["loss_grid"]["plan"]["m"]) if rec["loss_grid"]["plan"].get("m") else 0.89
+    lg = rec["loss_grid"]["plan"]
+    m_max = float(lg.get("m") or 0.89)
+    R_hot, vlim = float(lg["R_hot_ohm"]), float(lg["v_phase_limit_V"])
     I0 = float(snap["rated_duty"]["current_arms"])
     si = get_device(si_part)
     si_drv = drive_for(si, r_g_si)
@@ -285,6 +355,25 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
         "geometry_sig": (snap.get("signatures") or {}).get("geometry_sig"),
         "snapshot_sha256": snap.get("snapshot_sha256"),
     }
+    cont_cache: Dict[Any, Any] = {}
+
+    def p_cont(n: float, I_cap: float):
+        key = (round(n, 3), round(I_cap, 4))
+        if key not in cont_cache:
+            mt = hm.max_torque_at(n, R_hot, vlim, I_cap)
+            if mt.get("T") is None or mt["T"] <= 0:
+                cont_cache[key] = (None, "no continuous operation at this speed: at ≤ %.1f A "
+                                         "the voltage limit (v_nom, m %g) needs γ > 80° — "
+                                         "beyond the characterised field weakening"
+                                   % (I_cap, m_max))
+            else:
+                mpc = motor_point(rec, snap, hm, rows_grid,
+                                  {"rpm": n, "I_A": mt["I"], "gamma_deg": mt["gamma"]})
+                cont_cache[key] = (mpc["P_shaft_W"], "max shaft power at I ≤ %.1f A on the "
+                                   "m-limited trajectory (%.1f A, γ %.1f°)"
+                                   % (I_cap, mt["I"], mt["gamma"]))
+        return cont_cache[key]
+
     out_variants = []
     for v in variants:
         card = get_device(v["device"])
@@ -294,109 +383,77 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                                  "refused: bus v_max %.1f V > 90 %% of V_DSS %g V" % (
                                      float(bat["v_max"]), card.v_dss_V)})
             continue
-        fem = pwm_fem.get(v["fem_class"]) or {}
         f_sw, dead = float(v["carrier_hz"]), float(v["dead_time_s"])
-        if not fem and f_sw > 48e3 * 1.01:
-            # No FEM at this carrier (100 kHz: the 1 320-node slip ring did not
-            # finish meshing in 2 h, 2026-10-05).  Ripple current ∝ 1/f_sw; the
-            # ripple-driven loss falls between ∝ 1/f² (fixed resistance /
-            # hysteresis-like) and ∝ 1/f (AC resistance and eddy iron rising
-            # with f): the card takes the geometric middle (48k/f)^1.5 of the
-            # 48 kHz FEM anchor of the same technology and states the range.
+        model = PwmModel(pwm_fem.get(v["fem_class"]) or [])
+        if not model and f_sw > 48e3 * 1.01:
+            # No FEM at this carrier (100 kHz: ~(steps/period)² cost, 5–7 h per
+            # run — see docs/BUG_PWM_100K_COST_2026-10-05.md).
+            # Ripple current ∝ 1/f_sw; the ripple-driven loss falls between
+            # ∝ 1/f² and ∝ 1/f: the card takes (48k/f)^1.5 of the same
+            # technology's 48 kHz FEM anchors and states the range.
             base_cls = next((c for c in ("gan48_20ns", "si48_100ns") if pwm_fem.get(c)), None)
             if base_cls:
                 s = (48e3 / f_sw) ** 1.5
-                lo, hi = (48e3 / f_sw) ** 2, (48e3 / f_sw)
-                fem = {}
-                for row, a in pwm_fem[base_cls].items():
-                    b = dict(a)
-                    b["dP_harm_W"] = float(a["dP_harm_W"]) * s
-                    b["derived"] = ("ESTIMATE, not FEM: %s FEM anchor %.2f W × (48 kHz/%.0f kHz)^1.5 "
-                                    "= %.3f (range ×%.3f…×%.3f → %.2f…%.2f W)" % (
-                                        base_cls, float(a["dP_harm_W"]), f_sw / 1e3, s, lo, hi,
-                                        float(a["dP_harm_W"]) * lo, float(a["dP_harm_W"]) * hi))
-                    fem[row] = b
+                model = PwmModel(pwm_fem[base_cls], scale=s, derived=(
+                    "ESTIMATE, not FEM: %s × (48 kHz/%.0f kHz)^1.5 = ×%.3f (range ×%.3f…×%.3f)"
+                    % (base_cls, f_sw / 1e3, s, (48e3 / f_sw) ** 2, 48e3 / f_sw)))
         I_lim = {cls: board.i_limit(card, drv, f_sw=f_sw, dead_s=dead, v_dc=v_dc, cls=cls)
                  for cls in board.classes}
         points: Dict[str, Any] = {}
-        cov = {"fem": [], "scaled": [], "infeasible": []}
+        cov = {"fem": [], "scaled": [], "infeasible": [], "no_cont": []}
         for p in pts:
             m_pt = mp.get(p["key"])
+            base = {"rpm": p["rpm"], "I_A": p["I_A"], "duty": p["duty"],
+                    "gamma_deg": p["gamma_deg"]}
             if m_pt is None:
                 cov["infeasible"].append(p["key"])
-                points[p["key"]] = {"rpm": p["rpm"], "I_A": p["I_A"], "duty": p["duty"],
-                                    "gamma_deg": None, "status": "infeasible at m = %g: %s"
-                                    % (m_max, p["gamma_mode"])}
+                points[p["key"]] = dict(base, status="infeasible at m = %g: %s"
+                                        % (m_max, _fw_reason(p["gamma_mode"])))
                 continue
-            anchor = fem.get(p["row"]) or {}
-            cross = None
-            si_cls = pwm_fem.get("si48_100ns") or {}
-            if (anchor.get("dP_harm_W") is None and (fem.get("rated") or {}).get("dP_harm_W")
-                    and (si_cls.get(p["row"]) or {}).get("dP_harm_W")
-                    and (si_cls.get("rated") or {}).get("dP_harm_W")):
-                # this class has no FEM at this current row: its rated anchor
-                # × the Si class's row/rated ratio (same machine, same point)
-                k_row = float(si_cls[p["row"]]["dP_harm_W"]) / float(si_cls["rated"]["dP_harm_W"])
-                anchor = dict(si_cls[p["row"]])
-                anchor["dP_harm_W"] = float(fem["rated"]["dP_harm_W"]) * k_row
-                cross = ("rated FEM anchor of this class × Si 48 kHz %s/rated ratio %.3f"
-                         % (p["row"], k_row))
+            if m_pt["P_em_W"] is None:
+                cov["infeasible"].append(p["key"])
+                points[p["key"]] = dict(base, gamma_mode=p["gamma_mode"],
+                                        status="motor loss not available: "
+                                        + "; ".join(m_pt.get("loss_notes") or []))
+                continue
+            m_p = m_pt["V_phase_peak_V"] / (v_dc / 2.0)
             dP, how = None, None
-            if anchor.get("dP_harm_W") is not None:
-                a_n = float(anchor["rpm"])
-                m_a = float(anchor["m_index"])
-                m_p = m_pt["V_phase_peak_V"] / (v_dc / 2.0)
-                if abs(a_n - p["rpm"]) < 1e-6 and cross:
-                    dP, how = float(anchor["dP_harm_W"]), cross
-                    cov["scaled"].append(p["key"])
-                elif abs(a_n - p["rpm"]) < 1e-6 and anchor.get("derived"):
-                    dP, how = float(anchor["dP_harm_W"]), anchor["derived"]
-                    cov["scaled"].append(p["key"])
-                elif abs(a_n - p["rpm"]) < 1e-6:
-                    dP, how = float(anchor["dP_harm_W"]), "FEM"
-                    cov["fem"].append(p["key"])
-                else:
-                    dP = float(anchor["dP_harm_W"]) * hdf_svpwm(m_p) / max(hdf_svpwm(m_a), 1e-12)
-                    how = (("%s; " % cross) if cross else "") + \
-                        (("%s; " % anchor["derived"]) if anchor.get("derived") else "") + \
-                        "FEM anchor at %.0f rpm × HDF(m %.3f)/HDF(m %.3f)" % (a_n, m_p, m_a)
-                    cov["scaled"].append(p["key"])
+            if model:
+                dP, how, is_fem = model.at(p["rpm"], p["I_A"], m_p)
+                (cov["fem"] if is_fem else cov["scaled"]).append(p["key"])
             st = board.state(card, drv, I_rms=p["I_A"], f_sw=f_sw, dead_s=dead, v_dc=v_dc)
             inv = st["inv"]
             P_sh = m_pt["P_shaft_W"]
-            P_em = float(m_pt["P_em_W"] or 0.0)
+            P_em = float(m_pt["P_em_W"])
             P_motor = P_em + m_pt["P_mech_W"] + (dP or 0.0)
             P_board = K_BOARD_CU * p["I_A"] ** 2
             P_bat = P_sh + P_motor + inv["total"] + P_board
-            I_cont = min(I_lim["favourable"], I0)
-            P_cont_cls = {}
+            P_cont_cls, cont_basis = {}, {}
             for cls, Il in I_lim.items():
-                Ic = min(Il, I0)
-                gc, _ = hm.operating_gamma(Ic, p["rpm"],
-                                           float(rec["loss_grid"]["plan"]["R_hot_ohm"]),
-                                           float(rec["loss_grid"]["plan"]["v_phase_limit_V"]))
-                P_cont_cls[cls] = (None if gc is None else motor_point(
-                    rec, snap, hm, rows_grid, {"rpm": p["rpm"], "I_A": Ic,
-                                                "gamma_deg": gc})["P_shaft_W"])
+                P_cont_cls[cls], cont_basis[cls] = p_cont(p["rpm"], min(Il, I0))
             P_cont = P_cont_cls.get("favourable")
-            points[p["key"]] = {
-                "rpm": p["rpm"], "I_A": p["I_A"], "duty": p["duty"],
-                "gamma_deg": p["gamma_deg"], "gamma_mode": p["gamma_mode"],
+            row = dict(base, **{
+                "gamma_mode": p["gamma_mode"],
                 "motor_pwm_loss_W": dP, "motor_pwm_loss_basis": how,
                 "inverter_loss_W": {"cond": inv["cond"], "sw": inv["sw"], "dead": inv["dead"]},
                 "board_copper_W": P_board,
                 "tj_C": st["t_j_C"], "t_heatsink_C": st["t_hs_C"],
-                "eta_drive_pct": 100.0 * P_sh / P_bat if P_bat > 0 else None,
+                "eta_drive_pct": 100.0 * P_sh / P_bat if P_bat > 0 and P_sh > 0 else None,
                 "eta_shaft_pct": 100.0 * P_sh / (P_sh + P_motor) if P_sh > 0 else None,
                 "p_cont_max_W": P_cont, "p_cont_max_W_by_cooling": P_cont_cls,
-                "p_cont_max_basis": ("shaft power at min(board-limit current %.1f A "
-                                     "[favourable airflow], motor rated %.2f A) at this speed"
-                                     % (I_lim["favourable"], I0)),
+                "p_cont_max_basis": ("min(board-limit current %.1f A [favourable airflow], "
+                                     "motor rated %.2f A): %s"
+                                     % (I_lim["favourable"], I0, cont_basis["favourable"])),
                 "P_shaft_W": P_sh, "T_op_Nm": m_pt["T_op_Nm"], "P_motor_sine_W": P_em,
                 "P_mech_W": m_pt["P_mech_W"], "P_battery_W": P_bat,
                 "board_ok": st["board_ok"], "tj_ok": st["tj_ok"],
                 "continuous_ok": st["continuous_ok"], "tj_basis": st["tj_basis"],
-            }
+            })
+            if P_cont is None:
+                row["p_cont_max_status"] = cont_basis["favourable"]
+                cov["no_cont"].append(p["key"])
+            points[p["key"]] = row
+        ax = grid_axes(rec, snap)
         out_variants.append({
             "id": v["id"], "device": card.part, "technology": drv["tech"],
             "carrier_hz": f_sw, "dead_time_s": dead, "modulation": "SVPWM centred",
@@ -405,11 +462,14 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
             "bus_evaluated": "nom",
             "build": fingerprint,
             "drive": {k: drv[k] for k in ("v_gs_on", "v_gs_off", "r_g", "r_g_off", "l_sigma")},
+            "grid": {"rpm": ax["speeds"], "I_A": ax["currents"],
+                     "note": "full (rpm × I_A) grid; infeasible nodes carry `status`"},
             "provenance": {
                 "motor_pwm": ("2-D FEM, drive=inverter (centred SVPWM, device drop + dead time "
                               "in the circuit) vs sine reference at the extracted fundamental, "
-                              "same mesh/steps (harm_ref); FEM class %s" % v["fem_class"]),
-                "motor_pwm_fem_runs": {k: (fem.get(k) or {}).get("tag") for k in ("rated", "peak")},
+                              "same mesh/steps, both marched (harm_ref); FEM class %s"
+                              % v["fem_class"]),
+                "motor_pwm_fem_runs": [x.get("tag") for x in model.anchors] if model else [],
                 "inverter": drv["label"],
                 "thermal": "board model (estimate, calibrated on the controller project's Si "
                            "ratings) — see controller.board",
@@ -417,16 +477,19 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                 "labels": ["2-D", "PWM", "default pending owner"] + (
                     ["GaN dead time 20 ns: default pending owner"] if drv["tech"] == "GaN" else []) + (
                     ["motor PWM loss: ESTIMATE from the 48 kHz FEM (no FEM at this carrier)"]
-                    if any((a or {}).get("derived") for a in fem.values()) else []) + (
+                    if model and model.derived else []) + (
                     ["GaN switching: datasheet model (no public SPICE model)"]
                     if drv["tech"] == "GaN" else ["Si switching: vendor SPICE table"]),
             },
             "i_board_limit_A": I_lim,
             "coverage": {"points": len(points), "fem_points": cov["fem"],
                          "scaled_points": cov["scaled"], "infeasible": cov["infeasible"],
-                         "statement": "rated and peak current at every loss-grid speed + the "
-                                      "peak duty speed, nominal bus; motor PWM loss FEM at "
-                                      "the rated and peak points, HDF-scaled elsewhere"},
+                         "no_continuous": cov["no_cont"],
+                         "statement": "every loss-grid speed + the peak duty speed × every "
+                                      "loss-grid current (static levels up to the demag limit "
+                                      "+ peak), nominal bus; motor PWM loss FEM at the anchor "
+                                      "points, k = dP/HDF(m) interpolated in I and HDF-scaled "
+                                      "elsewhere"},
             "points": points,
         })
     return {"pwm_variants": out_variants, "board": board.describe(),

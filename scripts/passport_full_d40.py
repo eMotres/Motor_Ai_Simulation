@@ -306,9 +306,13 @@ def task_pwm(work: Path, a) -> None:
     from motor_ai_sim.routes import simulation as sim
     from motor_ai_sim.inverter.coupling import fit_device_drop
     from motor_ai_sim.inverter.devices import get_device
-    lp = st.get("loss_plan2") or st["loss_plan"]
+    lp = st.get("loss_plan3") or st.get("loss_plan2") or st["loss_plan"]
     I0, n0 = float(snap["rated_duty"]["current_arms"]), float(snap["rated_duty"]["rpm"])
-    if point == "rated":
+    if a.fi:
+        # an extra current anchor at rated speed (2026-10-05 PWM grid)
+        I, n = float(a.fi) * I0, n0
+        point = "I%gI0" % float(a.fi)
+    elif point == "rated":
         I, n = I0, n0
     else:
         pk = snap.get("peak_duty")
@@ -340,6 +344,8 @@ def task_pwm(work: Path, a) -> None:
                            "gamma": g, "gamma_mode": how, "v_dc": vdc, "m_limit": m,
                            "temps": {"magnet_c": Tm, "coil_c": Tc, "source": t_src},
                            "controller": ctrl}
+    from motor_ai_sim.passport_v1.jobs import wait_while_paused
+    wait_while_paused()
     t0 = time.time()
     # 1) the sine current-drive run at the point: the feed-forward fundamental
     s = sim.get_fem_transient(**_route_kw(snap, I=I, g=g, rpm=n, Tm=Tm, Tc=Tc,

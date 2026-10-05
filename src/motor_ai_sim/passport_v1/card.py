@@ -136,7 +136,7 @@ def static_check_rows(recs, st, hm: PM.PsiMap, I0: float) -> List[Dict[str, Any]
 def _lp(st) -> Dict[str, Any]:
     """The loss trajectory the card uses: the controller-margin re-plan
     (``loss_plan2``, m = 0.89) when it exists, else the stage-1 plan."""
-    return st.get("loss_plan2") or st["loss_plan"]
+    return st.get("loss_plan3") or st.get("loss_plan2") or st["loss_plan"]
 
 
 def loss_rows(recs, st) -> Dict[float, List[Dict[str, Any]]]:

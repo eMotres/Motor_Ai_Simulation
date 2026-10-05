@@ -312,6 +312,84 @@
     "started": "2026-10-05T10:15:19+0000"
    },
    "baseline_sig": "690963803c872a1bbbcb1e38194daf62c8eb3e79b43a6e3853648437176b0af3"
+  },
+  {
+   "code_commit": "a8fcf9b55eb8d125c424a0fdb9d119db1ed025c9",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 284,
+    "sha256": "65eba5d9d8ff505c4a91f29e20685f9e5eb401d74b1bd068e68739d604f02c69"
+   },
+   "image_digest": "sha256:8068a1f285c235c03344987640fd29693b2f7da893c856647e05a2a33b379fb1",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d40-20261005/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "SHARED_ROOT": "/work/shared",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L20/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L20",
+    "stages": "loss3",
+    "workers": 3,
+    "started": "2026-10-05T15:07:09+0000"
+   },
+   "baseline_sig": "1479768208bfc376048a4b325c504a7dd34af7db118473ee3d8ed63f7e44d48b"
   }
  ],
  "daxis_deg": 59.9911,
@@ -326,7 +404,8 @@
   "checks": 673.202267408371,
   "extra": 136.9129123687744,
   "refine": 16.7773540019989,
-  "loss2": 1537.3995943069458
+  "loss2": 1537.3995943069458,
+  "loss3": 2881.627156972885
  },
  "probe": {
   "probe_static60": {
@@ -1810,5 +1889,234 @@
     "id": "lchk_1.25n_mid"
    }
   ]
+ },
+ "demag_limit_I_rms": 79.33229278129261,
+ "demag_limit_source": "demag current limit 79.3 A (\u2264 1 % rated-torque drop, linear between the 1.5\u00b7I0 and 2\u00b7I0 overload probes)",
+ "loss_plan3": {
+  "bus": "nom",
+  "v_dc": 44.4,
+  "m": 0.89,
+  "m_source": "default pending owner \u2014 controller project calc_notes \u00a72 (centred SVPWM, 1 \u00b5s min LS on-time + 0.1 \u00b5s dead time at 48 kHz)",
+  "v_phase_limit_V": 22.814573237297253,
+  "R_hot_ohm": 0.015985662631799465,
+  "I_peak_rms": 59.9325502571295,
+  "I_peak_source": "ASSUMPTION \u2014 no owner peak duty: L12 owner peak/rated current ratio 48.79/42.78 applied to I0 (labelled assumption; the L20 card's peak needs an owner duty)",
+  "n_mech_limit_rpm": 45000.0,
+  "n_mech_source": "bearing speed limit (mech_losses / bearings library); critical speed and rotor stress not computed in stage 1",
+  "n_elec_limit_rpm": 35966.972621562716,
+  "n_max_rpm": 35966.972621562716,
+  "speeds": [
+   3250.0,
+   6500.0,
+   13000.0,
+   19500.0
+  ],
+  "currents": [
+   13.1375,
+   26.275,
+   39.4125,
+   52.55,
+   59.93255,
+   78.825
+  ],
+  "points": [
+   {
+    "rpm": 3250.0,
+    "I": 13.1375,
+    "gamma": 2.03,
+    "mode": "mtpa",
+    "id": "loss3_n3250_I0.25_g+2.03"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n3250_I0.5"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 39.4125,
+    "gamma": 5.8500000000000005,
+    "mode": "mtpa",
+    "id": "loss3_n3250_I0.75_g+5.85"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n3250_I1"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n3250_I1.14"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 78.825,
+    "gamma": 10.210000000000003,
+    "mode": "mtpa",
+    "id": "loss3_n3250_I1.5_g+10.21"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 13.1375,
+    "gamma": 2.03,
+    "mode": "mtpa",
+    "id": "loss3_n6500_I0.25_g+2.03"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n6500_I0.5"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 39.4125,
+    "gamma": 5.8500000000000005,
+    "mode": "mtpa",
+    "id": "loss3_n6500_I0.75_g+5.85"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n6500_I1"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n6500_I1.14"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 78.825,
+    "gamma": 10.210000000000003,
+    "mode": "mtpa",
+    "id": "loss3_n6500_I1.5_g+10.21"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 13.1375,
+    "gamma": 2.03,
+    "mode": "mtpa",
+    "id": "loss3_n13000_I0.25_g+2.03"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n13000_I0.5"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 39.4125,
+    "gamma": 5.8500000000000005,
+    "mode": "mtpa",
+    "id": "loss3_n13000_I0.75_g+5.85"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n13000_I1"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n13000_I1.14"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 78.825,
+    "gamma": 10.210000000000003,
+    "mode": "mtpa",
+    "id": "loss3_n13000_I1.5_g+10.21"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 13.1375,
+    "gamma": 46.17954663711962,
+    "mode": "field weakening",
+    "id": "loss3_n19500_I0.25_g+46.18"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 26.275,
+    "gamma": 30.76024116148409,
+    "mode": "field weakening",
+    "id": "loss2_n19500_I0.5_g+30.76"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 39.4125,
+    "gamma": 27.757146189075822,
+    "mode": "field weakening",
+    "id": "loss3_n19500_I0.75_g+27.76"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 52.55,
+    "gamma": 27.390434538200786,
+    "mode": "field weakening",
+    "id": "loss2_n19500_I1_g+27.39"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 59.93255,
+    "gamma": 27.964827323522034,
+    "mode": "field weakening",
+    "id": "loss2_n19500_I1.14_g+27.96"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 78.825,
+    "gamma": 31.042236214037846,
+    "mode": "field weakening",
+    "id": "loss3_n19500_I1.5_g+31.04"
+   }
+  ],
+  "checks": [
+   {
+    "rpm": 9750.0,
+    "I": 39.412499999999994,
+    "gamma": 5.85,
+    "mode": "mtpa",
+    "role": "mid loss grid",
+    "id": "lchk_0.75n_0.75I"
+   },
+   {
+    "rpm": 4550.0,
+    "I": 59.9325502571295,
+    "gamma": 8.225483870967743,
+    "mode": "mtpa",
+    "role": "low speed, peak current",
+    "id": "lchk_0.35n_peak"
+   },
+   {
+    "rpm": 16250.0,
+    "I": 56.24127512856475,
+    "gamma": 7.837741935483872,
+    "mode": "mtpa",
+    "role": "between speed and current rows",
+    "id": "lchk_1.25n_mid"
+   }
+  ],
+  "current_cap_I_rms": 79.33229278129261,
+  "current_cap_source": "demag current limit 79.3 A (\u2264 1 % rated-torque drop, linear between the 1.5\u00b7I0 and 2\u00b7I0 overload probes)",
+  "extended": "2026-10-05: static current levels 0.25\u20262.5\u00b7I0 up to the demag current limit, every loss-grid speed"
  }
 }

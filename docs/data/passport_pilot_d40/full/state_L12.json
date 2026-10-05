@@ -441,6 +441,84 @@
     "started": "2026-10-05T10:38:01+0000"
    },
    "baseline_sig": "0377eee32a0ed8c66cdb05aaf2567a54752e9c946db64f3afa222d8719804140"
+  },
+  {
+   "code_commit": "a8fcf9b55eb8d125c424a0fdb9d119db1ed025c9",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 284,
+    "sha256": "65eba5d9d8ff505c4a91f29e20685f9e5eb401d74b1bd068e68739d604f02c69"
+   },
+   "image_digest": "sha256:8068a1f285c235c03344987640fd29693b2f7da893c856647e05a2a33b379fb1",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d40-20261005/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "SHARED_ROOT": "/work/shared",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L12/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L12",
+    "stages": "loss3",
+    "workers": 3,
+    "started": "2026-10-05T15:07:09+0000"
+   },
+   "baseline_sig": "b7d7bdf745715b59fbc77859a8e8a60251db87f8882cdf34dea0fbb770f4b4ca"
   }
  ],
  "rebased_from": {
@@ -622,7 +700,8 @@
   "extra": 205.1932017803192,
   "refine": 46.36780571937561,
   "loss2": 491.0101788043976,
-  "noload_pinned": 209.3963439464569
+  "noload_pinned": 209.3963439464569,
+  "loss3": 4062.341275691986
  },
  "demag_knee": {
   "threshold_br_kept_pct": 99.5,
@@ -2063,5 +2142,399 @@
     "id": "lchk2_1.25n_mid_n16250_I1.07_g+34.16"
    }
   ]
+ },
+ "demag_limit_I_rms": 106.95,
+ "demag_limit_source": "demag current limit: no overload probe up to 2.5\u00b7I0 drops the rated torque > 1 % (2.5\u00b7I0: -0.37 %) \u2014 capped at the top static level",
+ "loss_plan3": {
+  "bus": "nom",
+  "v_dc": 22.2,
+  "m": 0.89,
+  "m_source": "default pending owner \u2014 controller project calc_notes \u00a72 (centred SVPWM, 1 \u00b5s min LS on-time + 0.1 \u00b5s dead time at 48 kHz)",
+  "v_phase_limit_V": 11.407286618648627,
+  "R_hot_ohm": 0.009227496890429438,
+  "I_peak_rms": 48.79,
+  "I_peak_source": "owner peak duty",
+  "n_mech_limit_rpm": 45000.0,
+  "n_mech_source": "bearing speed limit (mech_losses / bearings library); critical speed and rotor stress not computed in stage 1",
+  "n_elec_limit_rpm": 22207.498171370644,
+  "n_max_rpm": 22207.498171370644,
+  "speeds": [
+   3250.0,
+   6500.0,
+   13000.0,
+   14400.0,
+   19500.0,
+   22207.0
+  ],
+  "currents": [
+   10.695,
+   21.39,
+   32.085,
+   42.78,
+   48.79,
+   64.17,
+   85.56,
+   106.95
+  ],
+  "points": [
+   {
+    "rpm": 3250.0,
+    "I": 10.695,
+    "gamma": 1.69,
+    "mode": "mtpa",
+    "id": "loss3_n3250_I0.25_g+1.69"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 21.39,
+    "gamma": 3.36,
+    "mode": "mtpa",
+    "id": "loss_n3250_I0.5"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 32.085,
+    "gamma": 5.0,
+    "mode": "mtpa",
+    "id": "loss3_n3250_I0.75_g+5"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 42.78,
+    "gamma": 6.57,
+    "mode": "mtpa",
+    "id": "loss_n3250_I1"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 48.79,
+    "gamma": 7.3763908368396445,
+    "mode": "mtpa",
+    "id": "loss_n3250_I1.14"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 64.17,
+    "gamma": 9.44,
+    "mode": "mtpa",
+    "id": "loss3_n3250_I1.5_g+9.44"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 85.56,
+    "gamma": 11.67,
+    "mode": "mtpa",
+    "id": "loss3_n3250_I2_g+11.67"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 106.95,
+    "gamma": 13.72,
+    "mode": "mtpa",
+    "id": "loss3_n3250_I2.5_g+13.72"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 10.695,
+    "gamma": 1.69,
+    "mode": "mtpa",
+    "id": "loss3_n6500_I0.25_g+1.69"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 21.39,
+    "gamma": 3.36,
+    "mode": "mtpa",
+    "id": "loss_n6500_I0.5"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 32.085,
+    "gamma": 5.0,
+    "mode": "mtpa",
+    "id": "loss3_n6500_I0.75_g+5"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 42.78,
+    "gamma": 6.57,
+    "mode": "mtpa",
+    "id": "loss_n6500_I1"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 48.79,
+    "gamma": 7.3763908368396445,
+    "mode": "mtpa",
+    "id": "loss_n6500_I1.14"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 64.17,
+    "gamma": 9.44,
+    "mode": "mtpa",
+    "id": "loss3_n6500_I1.5_g+9.44"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 85.56,
+    "gamma": 11.67,
+    "mode": "mtpa",
+    "id": "loss3_n6500_I2_g+11.67"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 106.95,
+    "gamma": 13.72,
+    "mode": "mtpa",
+    "id": "loss3_n6500_I2.5_g+13.72"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 10.695,
+    "gamma": 1.69,
+    "mode": "mtpa",
+    "id": "loss3_n13000_I0.25_g+1.69"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 21.39,
+    "gamma": 3.36,
+    "mode": "mtpa",
+    "id": "loss_n13000_I0.5"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 32.085,
+    "gamma": 5.0,
+    "mode": "mtpa",
+    "id": "loss3_n13000_I0.75_g+5"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 42.78,
+    "gamma": 6.57,
+    "mode": "mtpa",
+    "id": "loss_n13000_I1"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 48.79,
+    "gamma": 7.3763908368396445,
+    "mode": "mtpa",
+    "id": "loss_n13000_I1.14"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 64.17,
+    "gamma": 9.44,
+    "mode": "mtpa",
+    "id": "loss3_n13000_I1.5_g+9.44"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 85.56,
+    "gamma": 11.67,
+    "mode": "mtpa",
+    "id": "loss3_n13000_I2_g+11.67"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 106.95,
+    "gamma": 79.99999999999828,
+    "mode": "field weakening",
+    "id": "loss3_n13000_I2.5_g+80"
+   },
+   {
+    "rpm": 14400.0,
+    "I": 10.695,
+    "gamma": 1.69,
+    "mode": "mtpa",
+    "id": "loss3_n14400_I0.25_g+1.69"
+   },
+   {
+    "rpm": 14400.0,
+    "I": 21.39,
+    "gamma": 3.36,
+    "mode": "mtpa",
+    "id": "loss3_n14400_I0.5_g+3.36"
+   },
+   {
+    "rpm": 14400.0,
+    "I": 32.085,
+    "gamma": 5.0,
+    "mode": "mtpa",
+    "id": "loss3_n14400_I0.75_g+5"
+   },
+   {
+    "rpm": 14400.0,
+    "I": 42.78,
+    "gamma": 6.954717515942778,
+    "mode": "field weakening",
+    "id": "loss3_n14400_I1_g+6.95"
+   },
+   {
+    "rpm": 14400.0,
+    "I": 48.79,
+    "gamma": 10.279656261485512,
+    "mode": "field weakening",
+    "id": "loss3_n14400_I1.14_g+10.28"
+   },
+   {
+    "rpm": 14400.0,
+    "I": 64.17,
+    "gamma": 16.837974636286713,
+    "mode": "field weakening",
+    "id": "loss3_n14400_I1.5_g+16.84"
+   },
+   {
+    "rpm": 14400.0,
+    "I": 85.56,
+    "gamma": 23.896886306084475,
+    "mode": "field weakening",
+    "id": "loss3_n14400_I2_g+23.9"
+   },
+   {
+    "rpm": 14400.0,
+    "I": 106.95,
+    "gamma": 79.99999999999828,
+    "mode": "field weakening",
+    "id": "loss3_n14400_I2.5_g+80"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 10.695,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 21.39,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 32.085,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 42.78,
+    "gamma": 66.68295535492871,
+    "mode": "field weakening",
+    "id": "loss2_n19500_I1_g+66.68"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 48.79,
+    "gamma": 59.44385146382001,
+    "mode": "field weakening",
+    "id": "loss2_n19500_I1.14_g+59.44"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 64.17,
+    "gamma": 50.693221210963564,
+    "mode": "field weakening",
+    "id": "loss3_n19500_I1.5_g+50.69"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 85.56,
+    "gamma": 47.93873008094073,
+    "mode": "field weakening",
+    "id": "loss3_n19500_I2_g+47.94"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 106.95,
+    "gamma": 79.99999999999828,
+    "mode": "field weakening",
+    "id": "loss3_n19500_I2.5_g+80"
+   },
+   {
+    "rpm": 22207.0,
+    "I": 10.695,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 22207.0,
+    "I": 21.39,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 22207.0,
+    "I": 32.085,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 22207.0,
+    "I": 42.78,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 22207.0,
+    "I": 48.79,
+    "gamma": 79.99500736535244,
+    "mode": "field weakening",
+    "id": "loss2_n22207_I1.14_g+80"
+   },
+   {
+    "rpm": 22207.0,
+    "I": 64.17,
+    "gamma": 60.93396748210813,
+    "mode": "field weakening",
+    "id": "loss3_n22207_I1.5_g+60.93"
+   },
+   {
+    "rpm": 22207.0,
+    "I": 85.56,
+    "gamma": 54.737047235454995,
+    "mode": "field weakening",
+    "id": "loss3_n22207_I2_g+54.74"
+   },
+   {
+    "rpm": 22207.0,
+    "I": 106.95,
+    "gamma": 79.99999999999828,
+    "mode": "field weakening",
+    "id": "loss3_n22207_I2.5_g+80"
+   }
+  ],
+  "checks": [
+   {
+    "rpm": 9750.0,
+    "I": 32.085,
+    "gamma": 5.0,
+    "mode": "mtpa",
+    "role": "mid loss grid",
+    "id": "lchk_0.75n_0.75I"
+   },
+   {
+    "rpm": 4550.0,
+    "I": 48.79,
+    "gamma": 7.3763908368396445,
+    "mode": "mtpa",
+    "role": "low speed, peak current",
+    "id": "lchk_0.35n_peak"
+   },
+   {
+    "rpm": 16250.0,
+    "I": 45.785,
+    "gamma": 34.1606102271929,
+    "mode": "field weakening",
+    "role": "between speed and current rows",
+    "id": "lchk2_1.25n_mid_n16250_I1.07_g+34.16"
+   }
+  ],
+  "current_cap_I_rms": 106.95,
+  "current_cap_source": "demag current limit: no overload probe up to 2.5\u00b7I0 drops the rated torque > 1 % (2.5\u00b7I0: -0.37 %) \u2014 capped at the top static level",
+  "extended": "2026-10-05: static current levels 0.25\u20262.5\u00b7I0 up to the demag current limit, every loss-grid speed"
  }
 }

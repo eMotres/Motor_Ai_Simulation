@@ -187,8 +187,9 @@ def demag_limit(st: Mapping[str, Any], full_dir: Path, M: str, I0: float) -> Dic
 #  PWM FEM anchors
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, Dict[str, Any]]:
-    out: Dict[str, Dict[str, Any]] = {}
+def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, List[Dict[str, Any]]]:
+    """{carrier class: [FEM anchor, ...]} from the PWM task outputs."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
     for p in sorted(full_dir.glob(f"pwm_{M}_*.json")):
         d = _load(p) or {}
         if d.get("dP_harm_W") is None:
@@ -209,7 +210,8 @@ def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, Dict[str, Any]
                             "iron template falls back to the gmsh build (solver-flagged "
                             "DEGRADED, shaft skin layer not resolved) — PWM and its sine "
                             "reference share that mesh"}
-        out.setdefault(cls, {})[d.get("point")] = row
+        row["point"] = d.get("point")
+        out.setdefault(cls, []).append(row)
     return out
 
 
@@ -610,6 +612,25 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
              'mech), inverter and board copper. T_j and P cont. from the board model '
              '(favourable airflow, T_amb 45 °C) — estimate; "(110)": the point is beyond the '
              'board\'s continuous limit, losses at the controller\'s design T_j 110 °C.</p>')
+    rows = []
+    for v in rec["pwm_variants"]:
+        cv = v.get("coverage")
+        if not cv:
+            continue
+        rows.append([v["id"], cv["points"], len(cv["fem_points"]), len(cv["scaled_points"]),
+                     len(cv["infeasible"]), len(cv.get("no_continuous") or []),
+                     Hh.H(Hh.esc(", ".join(x for x in (v["provenance"].get("motor_pwm_fem_runs")
+                                                       or []) if x)))])
+    if rows:
+        gx = next((v.get("grid") for v in rec["pwm_variants"] if v.get("grid")), {}) or {}
+        o.append("<h3>Drive-variant grid (what Configure reads)</h3>")
+        o.append('<p class="note">rpm %s × I %s A rms. Infeasible nodes carry a status '
+                 '(voltage limit beyond γ = 80°); "no cont." = no continuous operation at the '
+                 'board-limit current at that speed.</p>' % (
+                     " / ".join("%.0f" % x for x in gx.get("rpm", [])),
+                     " / ".join("%.1f" % x for x in gx.get("I_A", []))))
+        o.append(Hh.table(["variant", "points", "PWM FEM", "PWM scaled", "infeasible",
+                           "no cont.", "PWM FEM runs"], rows))
     o.append("<h2>Loss grid (m = %g)</h2>" % rec["loss_grid"]["plan"]["m"])
     rows = []
     for g in rec["loss_grid"]["points"]:

@@ -51,7 +51,8 @@ def test_the_catalogue_response_carries_the_pilots_variants_for_l12(client):
     assert si["device"] == "IQE018N06NM6SC" and si["technology"] == "Si"
     assert si["carrier_hz"] == 48000.0 and si["n_parallel"] == 1
     assert si["bus_v"]["max"] == pytest.approx(25.2)
-    pt = si["points"]["13000rpm_rated"]
+    # the rated duty is a node of the (rpm × I_A) grid, named by its duty
+    pt = next(p for p in si["points"].values() if p.get("duty") == "rated")
     assert pt["rpm"] == 13000 and pt["I_A"] == pytest.approx(42.78)
     assert set(pt["inverter_loss_W"]) == {"cond", "sw", "dead"}
     # the L12 record's build (12 mm) is the one picked, not L20's
@@ -75,22 +76,39 @@ def test_l20_is_matched_by_name_other_cards_and_unpassported_cards_are_unchanged
 
 def test_every_stored_variant_is_readable_by_configure():
     """What the web's usableVariants() and readVariant() need: id, device, a carrier,
-    points that carry rpm and I_A, and the loss/efficiency fields."""
+    points that carry rpm and I_A on a FULL (rpm × I_A) grid (readVariant refuses
+    a gap), and the loss/efficiency fields — or, where the machine cannot run
+    there, a status saying why (never a bare null)."""
     seen = 0
     for die, cfg, rec in ps._records():
         for v in rec["pwm_variants"]:
             assert v["id"] and v["device"] and v["carrier_hz"] > 0
+            rpms = {p["rpm"] for p in v["points"].values()}
+            amps = {p["I_A"] for p in v["points"].values()}
+            assert len(v["points"]) == len(rpms) * len(amps), (die, cfg, v["id"])
             for k, p in v["points"].items():
                 assert p["rpm"] >= 0 and p["I_A"] > 0, (die, cfg, v["id"], k)
-                # a point the pilot could not solve (e.g. past a board limit) carries
-                # nulls; Configure shows "-" for it, it never invents a number
                 if p.get("inverter_loss_W") is not None:
                     assert set(p["inverter_loss_W"]) >= {"cond", "sw", "dead"}
                     assert p["eta_drive_pct"] is not None and p["motor_pwm_loss_W"] is not None
+                    assert p["p_cont_max_W"] is not None or p.get("p_cont_max_status")
+                else:
+                    assert p.get("status"), (die, cfg, v["id"], k)
             full = [p for p in v["points"].values() if p.get("inverter_loss_W") is not None]
-            assert len(full) >= len(v["points"]) - 1, (die, cfg, v["id"])
+            assert len(full) >= len(v["points"]) // 2, (die, cfg, v["id"])
             seen += 1
     assert seen >= 5
+
+
+def test_the_variants_reach_below_and_above_the_rated_current():
+    """Configure's default point (I0 of the old preset, 40.7 A on L12) must be
+    inside every L12 variant's current range (2026-10-05 gap)."""
+    for die, cfg, rec in ps._records():
+        if cfg != "L12":
+            continue
+        for v in rec["pwm_variants"]:
+            amps = sorted({p["I_A"] for p in v["points"].values()})
+            assert amps[0] < 40.659 < amps[-1], v["id"]
 
 
 def test_ambiguity_is_never_guessed(monkeypatch, tmp_path):

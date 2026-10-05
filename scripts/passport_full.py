@@ -273,6 +273,19 @@ def task_cooling(work: Path, a) -> None:
     if a.prop:
         sd["propeller"] = a.prop
     snap = _snap(work, M)
+    # The loop's thermal half reads the speed from the SHARED config (coupled
+    # _preflight refuses a mismatch): this task's private copy is set to the study
+    # speed before anything loads it.
+    cfgp = os.environ.get("MOTOR_AI_SIM_CONFIG")
+    if cfgp:
+        import yaml
+        c = yaml.safe_load(open(cfgp, encoding="utf-8")) or {}
+        sim_ = dict(c.get("simulation") or {})
+        pp_ = int(round(float(snap["geometry"]["num_poles"]))) // 2
+        sim_.update(rpm=float(sd["rpm"]), frequency=float(sd["rpm"]) * pp_ / 60.0)
+        c["simulation"] = sim_
+        with open(cfgp, "w", encoding="utf-8") as fh:
+            yaml.safe_dump(c, fh, sort_keys=False, allow_unicode=True)
     hm, st, _ = _hot_map(work, M)
     from motor_ai_sim.passport_v1 import psimap as PM
     from motor_ai_sim.material_context import set_request_materials

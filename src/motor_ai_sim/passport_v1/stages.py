@@ -74,6 +74,21 @@ def stage_calib(R, snap, st) -> None:
     print(f"  d-axis {st['daxis_deg']} ({st['daxis_source']}); psi_d {r['psi_d_Wb']}")
 
 
+def stage_noload_pinned(R, snap, st) -> None:
+    """The hot no-load full period (cogging-quality sampling) on the d-axis
+    ALREADY pinned in the state — for a passport re-based on new hot
+    temperatures, whose map keeps the original d-axis (geometry only)."""
+    Tm, Tc = _hot(snap)
+    b = J.base_kwargs(snap, daxis_deg=float(st["daxis_deg"]))
+    j = J.static_job("hot_noload", b, I_rms=0.0, gamma_deg=0.0, magnet_temp_c=Tm,
+                     coil_temp_c=Tc, rpm=_n0(snap), n_periods=1.0,
+                     steps=J.STATIC_STEPS_PER_PERIOD, purpose="cogging_quality",
+                     meta={"set": "hot", "role": "no-load anchor (d-axis pinned)"})
+    r = R.run([j])["hot_noload"]["r"]
+    print(f"  hot no-load (pinned d-axis {st['daxis_deg']}): psi_d {r['psi_d_Wb']}, "
+          f"measured d-axis would be {r.get('daxis_deg')}")
+
+
 def stage_probe(R, snap, st) -> None:
     """Timings and the gap rule at the rated point before the grid."""
     Tm, Tc = _hot(snap)

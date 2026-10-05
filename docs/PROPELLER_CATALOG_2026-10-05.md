@@ -111,3 +111,18 @@ API, check `GET /api/propellers/cooling-options?die=CIANO14 40 new`.
   source is chosen).
 - Pass `air_speed_source`, `propeller_id`, `propeller_position` through `/api/thermal/field`, `/coupled`
   and the duty-cycle route.
+
+## Configure UI (2026-10-05, branch feat/configure-propeller)
+
+- `GET /api/propellers/{id}/series?rpm_max=&n=&temp_c=&housing_d_mm=`: the `/point` arithmetic on an rpm
+  grid (thrust, torque, shaft power, cooling air, `extrapolated` per sample, housing film h per sample from
+  `cooling_models.outer_air`). Configure asks once per (propeller, ambient, housing) and interpolates, so the
+  load, the cooling and the knob zones come from the same backend functions.
+- `GET /api/catalog/{id}/configure_context` carries `cooling` (die, config, `cooling_options`, allowed
+  propellers) and `thermal_limits` (winding: class H 180 degC, a stated default; magnet: the assigned magnet
+  card's `max_working_temp_c`, `null` when it has none, then the web falls back to 150 degC and says so).
+- The motor torque -> current inversion is done in the browser with the passport (`scaleMotor`), by bisection;
+  `equilibrium_rpm` is not used (the knob IS the rpm).
+- The housing is treated as at most as hot as the winding limit: above it the housing tile reads `> 180`.
+- PWM extra loss heats the housing but is not put on the winding or the magnet hot-spot (its location is unknown).
+- Server install is unchanged: copy `config/propellers/` and `config/cooling_options.yaml` into `<shared>/`.

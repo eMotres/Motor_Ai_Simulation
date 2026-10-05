@@ -8,6 +8,32 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **Configure with a propeller** (owner 2026-10-05, Ø40 drone motors). A die whose only cooling is
+  `propeller_air` (`config/cooling_options.yaml`) gets a **Propeller** picker (its allowed propellers;
+  geometry-only ones listed disabled, "no test data") and one ambient-air field; the separate Thermal block
+  is gone for it. **Load from the propeller** (default; "Manual" gives the current back): the speed knob
+  gives the propeller torque, the phase current is DERIVED from the passport and shown read-only, and a
+  torque the motor cannot make is refused loudly. **ONE temperatures row** in the result tiles (winding,
+  magnet, housing, cooling air, film h), present from the first render; over a limit (winding 180 degC class H
+  default, magnet = its card's limit) a tile reads `> 180` in red instead of an absurd number, and a single
+  red line above the tiles says "overheats at this current - lower the current or use thicker wire".
+  **Thermal zones** on the speed and current knobs (green below both limits with this propeller, red beyond),
+  recomputed live. "Beyond tested rpm" is marked on the speed title. Backend: `GET /api/propellers/{id}/series`
+  (the propeller on an rpm grid with the housing film h per sample - the browser only interpolates),
+  `configure_context` now carries `cooling`, `thermal_limits`. Not done: `/api/thermal/field`, `/coupled` and the
+  duty cycle do not take the propeller yet (Configure does not need them).
+- **Configure Drive: the same result tiles in Sine and PWM**: every drive tile exists in both modes at a fixed
+  position and width; a refusal turns values into a dash inside the tiles and never inserts a block. MOTOR PWM
+  EXTRA LOSS and CONTROLLER LOSS (conduction / switching / dead time in the tooltip) end the loss row, **0 W in
+  Sine**; TOTAL LOSS = motor losses + PWM extra + controller loss. T_J, DRIVE efficiency, shaft efficiency with
+  drive and P cont. max stay in the fixed drive row ("no inverter model" in Sine).
+- **PWM picker = two dropdowns**: transistor, then PWM frequency (only the carriers computed for that transistor
+  in this motor). Changing the transistor keeps the frequency when that pair exists, else the nearest computed one.
+  The pair names exactly one variant; it is remembered per machine with the id, carried by presets, and "modified
+  from preset" compares the pair. Variant details (technology, dead time, parallel count, modulation, bus) are in
+  the tooltip only.
+- **Clean tile titles**: no `3-D flux` / `2-D` / `(rated)` / `analytical` / `lumped, no FEM` tags; the method goes
+  into the tile's tooltip.
 - **Propeller catalogue, propeller load and slipstream cooling air** (owner 2026-10-05, Ø40 drone motors).
   `config/propellers/tmotor/*.yaml` (12 T-Motor entries of 10-13 in with source URL + access date per
   table; 5 with measured torque, 2 thrust-only with an explicit estimated C_P, 5 geometry-only that the

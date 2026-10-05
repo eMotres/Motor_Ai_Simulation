@@ -54,9 +54,15 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
         if abs(Lr - L_mm) < 1e-6 or B1_2d is None:
             B1_2d = b2 if b2 else B1_2d
         b1m = (sx.get("spill_profile") or {}).get("B1_mid_T") or sx.get("B1_mid_T")
+        # the run's own 2-D leg decides whether k_flux (axial mean / 2-D) is usable:
+        # when the 3-D mid-plane and the 2-D field disagree beyond its tolerance it
+        # says so (k_flux_usable False) and the pure end effect k_flux_self is used
+        usable = (sx.get("two_d") or {}).get("k_flux_usable", True) is not False
         curve.append({"stack_mm": Lr, "k_flux_self": sx.get("k_flux_self"),
-                      "B1_mid_T": b1m,
-                      "k_psi": sx.get("k_flux"), "picard_converged":
+                      "B1_mid_T": b1m, "k_flux_raw": sx.get("k_flux"),
+                      "k_flux_usable": usable,
+                      "k_psi": sx.get("k_flux") if usable else sx.get("k_flux_self"),
+                      "picard_converged":
                           ((sx.get("solves") or [{}])[0]).get("picard_converged"),
                       "two_d_verdict": (sx.get("two_d") or {}).get("verdict"),
                       "ratio_3d_mid_over_2d": (sx.get("two_d") or {}).get("ratio_3d_mid_over_2d"),
@@ -83,12 +89,24 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
     out["k_psi_curve"] = curve
     kpsi = next((r["k_psi"] for r in curve if abs(r["stack_mm"] - L_mm) < 1e-6
                  and r["k_psi"] is not None), None)
+    own = next((r for r in curve if abs(r["stack_mm"] - L_mm) < 1e-6), {})
     out["k_psi"] = {"value": kpsi, "method": "3-D magnetostatic Stage A (I = 0): axial mean "
                     "of the gap fundamental over the stack / the 2-D gap fundamental "
                     "(k_flux_self × B1_mid,3D / B1_2D), at this machine's own stack; "
                     "today's die cross-section, n_stack 4 (quick fidelity)",
                     "B1_2d_T": B1_2d,
                     "labels": ["3-D", "no-load", "quick fidelity"]}
+    if own and own.get("k_flux_usable") is False:
+        out["k_psi"]["method"] = ("3-D magnetostatic Stage A (I = 0) at this machine's own stack: "
+                                  "k_flux_self (axial mean of the gap fundamental / its own "
+                                  "mid-plane value, the pure end effect) — the run's 2-D check "
+                                  "FAILED (3-D mid-plane / 2-D = %.4f, tolerance 2 %%), so "
+                                  "k_flux = %.4f is not used, as the run itself instructs"
+                                  % (float(((_load(full_dir / ("stage_a_L%g.json" % L_mm))
+                                             or {}).get("two_d") or {}).get(
+                                                 "ratio_3d_mid_over_2d") or float("nan")),
+                                     float(own.get("k_flux_raw") or float("nan"))))
+        out["k_psi"]["labels"] = ["3-D", "no-load", "quick fidelity", "k_flux_self (2-D check failed)"]
     if logp.exists():
         out["k_psi"]["sweep_note"] = ("7-point L-sweep stopped after 6 mm (69 min per "
                                       "warm-started length under load); 12 and 20 mm solved, "

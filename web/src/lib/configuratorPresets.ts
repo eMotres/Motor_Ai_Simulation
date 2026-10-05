@@ -71,7 +71,10 @@ export interface BatteryCmp { cells: number; nom: number; max: number; min: numb
 /** What differs between the tuner's current state and a preset — empty = exactly the preset.
  *  Names are field keys (`build`, `current`, `speed`, `battery`, `drive`), not sentences. */
 export function presetDiff(pr: Preset, k: KnobsLike, battery: BatteryCmp | null,
-                           presetBattery: BatteryCmp | null): string[] {
+                           presetBattery: BatteryCmp | null,
+                           /** the propeller in use and the one this preset opens on — given only for a
+                            *  propeller-cooled machine; a different one makes the state "modified" */
+                           prop?: { current: string | null; wanted: string | null }): string[] {
   // the drive is the (transistor, frequency) PAIR: two ids of one pair are the same drive
   const out: string[] = [];
   const p = pr.knobs;
@@ -91,6 +94,7 @@ export function presetDiff(pr: Preset, k: KnobsLike, battery: BatteryCmp | null,
     ? k.drive_device === pv.device && Math.abs(Number(k.drive_carrier_hz) - Number(pv.carrier_hz)) < 1e-6 * Number(pv.carrier_hz)
     : k.drive_variant === pr.drive_variant;
   if (wantPwm !== isPwm || (wantPwm && !same)) out.push('drive');
+  if (prop && (prop.current ?? '') !== (prop.wanted ?? '')) out.push('propeller');
   return out;
 }
 

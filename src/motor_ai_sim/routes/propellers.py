@@ -76,6 +76,10 @@ def get_cooling_options(die: str = Query(..., description="die name"),
     air from the chosen propeller) and ``propeller_details`` carries the summary of
     each allowed propeller; ids the catalogue does not know are listed in
     ``unknown_propellers`` so a stale config is visible, not silent.
+    ``default_propeller`` is the propeller this configuration opens on (``defaults`` has every
+    configuration's); a default the configuration may not use, or the catalogue cannot compute,
+    is withheld and named in ``bad_defaults``.  ``None`` = take the first allowed propeller with
+    torque data.
     """
     from motor_ai_sim.cooling_options import cooling_options
     out = cooling_options(die, config)
@@ -90,6 +94,15 @@ def get_cooling_options(die: str = Query(..., description="die name"),
                 unknown.append(i)
     out["propeller_details"] = details
     out["unknown_propellers"] = unknown
+    # a default must be a propeller the catalogue can compute (geometry-only ones cannot be the load)
+    if ids:
+        cat = pp.load_catalog()
+        for c, pid in list(out.get("defaults", {}).items()):
+            if pid not in cat or not cat[pid].selectable:
+                out["defaults"].pop(c)
+                out["bad_defaults"][c] = pid
+        if out.get("default_propeller") and out["default_propeller"] not in out["defaults"].values():
+            out["default_propeller"] = None
     return out
 
 

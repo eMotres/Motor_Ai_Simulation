@@ -40,7 +40,7 @@ import {
   driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, tempRowTiles, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
-  isPropellerCooled, allowedPropellers, effectivePropeller, readCoolChoice, writeCoolChoice, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
+  isPropellerCooled, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
   seriesAt, currentForTorque, tempLimits, judgeTemps, zoneGradient, zoneSamples, modelLabel, vendorLabel,
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
@@ -108,6 +108,8 @@ interface SavedConfig {
   battery?: Battery;   // snapshot of the battery this config was saved with
   /** the preset (die configuration) it was made from, when it had one */
   presetConfig?: string | null;
+  /** the propeller it was saved with (id + the label to show), for a propeller-cooled machine */
+  propeller?: { id: string; label: string } | null;
   /** the drive (Sine | PWM + device + carrier) it was saved with */
   drive?: DriveRecord;
 }
@@ -841,7 +843,10 @@ const ConfiguratorPanel: React.FC = () => {
     setCoolChoice((c) => ({ ...c, ...patch }));
     try { localStorage.setItem(PROP_CHOICE_LS, writeCoolChoice(readLs(PROP_CHOICE_LS), refId, patch)); } catch { /* ignore */ }
   };
-  const propId = cooled ? effectivePropeller(coolChoice, allowedProps) : null;
+  /** the propeller a configuration opens on (config/cooling_options.yaml `defaults`; else the first with torque data) */
+  const propDefaultFor = (config: string | null) => defaultPropellerFor(ctx?.cooling, config, allowedProps);
+  // The user's own pick wins; with none the picker shows the default of the configuration in use.
+  const propId = cooled ? effectivePropeller(coolChoice, allowedProps, propDefaultFor(baseConfig)) : null;
   const propSummary = allowedProps.find((x) => x.id === propId) ?? null;
   const ambient = coolChoice.ambient ?? DEFAULT_AMBIENT_C;
   const propLoad = cooled && (coolChoice.load ?? 'prop') === 'prop';
@@ -1063,14 +1068,18 @@ const ConfiguratorPanel: React.FC = () => {
     try { localStorage.setItem(BATTERY_BY_MACHINE_LS, clearBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId)); } catch { /* ignore */ }
     batterySeeded.current = '';
     if (pk) setBattery(pk);
+    // the propeller goes back to the one this configuration opens on (the user's pick is dropped)
+    if (cooled) updateCool({ propId: null });
   };
   // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
-  const matchedConfig = presets.find((pr) => presetDiff(pr, knobs, battery, batteryFromPack(pr.battery)).length === 0)?.config ?? null;
+  const matchedConfig = presets.find((pr) => presetDiff(pr, knobs, battery, batteryFromPack(pr.battery),
+    cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined).length === 0)?.config ?? null;
   // The drive is a choice of the user, not part of the reference design, so Reset leaves it
   // where it is — unless a preset is the base: then Reset is "reset to preset" and restores all.
   const reset = () => {
     if (basePreset) { applyPreset(basePreset); return; }
     setKnobs((s) => ({ ...(refKnobs ?? baseKnobs(p)), ...pickDrive(s) }));
+    if (cooled) updateCool({ propId: null });
   };
   /** Has the user moved anything off the reference design? */
   // "Modified": anything off the BASE — the machine as loaded, or the preset last applied (an
@@ -1078,7 +1087,10 @@ const ConfiguratorPanel: React.FC = () => {
   // the drive is the (transistor, frequency) pair: two ids of one pair are the same drive
   const driveOf = (k: Knobs | null) => (k?.drive === 'pwm'
     ? (pairKey(resolveVariant(variants, k)) || (k.drive_variant ?? '')) : '');
+  // the propeller is part of the configuration: another one than the base's default is a modification
+  const propModified = cooled && propId !== effectivePropeller({}, allowedProps, propDefaultFor(baseConfig));
   const modified = driveOf(knobs) !== driveOf(refKnobs)
+    || propModified
     || (!!machinePack && !sameBattery(battery, machinePack))
     || (() => {
     const r0 = refKnobs ?? baseKnobs(p);
@@ -1109,7 +1121,8 @@ const ConfiguratorPanel: React.FC = () => {
       onSubmit: (given) => {
         const nm = given.trim() || name;
         setConfigs((cs) => [...cs, { id, name: nm, refId, knobs: { ...knobs }, result, iMax,
-          battery: { ...battery }, drive, presetConfig: baseConfig }]);
+          battery: { ...battery }, drive, presetConfig: baseConfig,
+          propeller: cooled && propSummary ? { id: propSummary.id, label: `${vendorLabel(propSummary.vendor)} ${modelLabel(propSummary.model)}` } : null }]);
       },
     });
   };
@@ -1133,6 +1146,7 @@ const ConfiguratorPanel: React.FC = () => {
     setKnobs({ ...c.knobs });
     if (c.battery) updateBattery({ ...c.battery });
     setBaseConfig(c.presetConfig ?? presetOfBuild(presets, c.knobs)?.config ?? null);
+    if (cooled && c.propeller?.id) updateCool({ propId: c.propeller.id });
     try { localStorage.setItem(DRIVE_LS, writeDriveChoice(localStorage.getItem(DRIVE_LS), c.refId, pickDrive(c.knobs))); } catch { /* ignore */ }
   };
 
@@ -1151,6 +1165,7 @@ const ConfiguratorPanel: React.FC = () => {
   const KNB_COLS: { label: string; get: (c: SavedConfig) => string }[] = [
     { label: tx('configureDrive.columnDrive'),
       get: (c) => driveText(c.drive ?? (c.knobs.drive === 'pwm' ? { mode: 'pwm' } : null), tx('configureDrive.sine')) },
+    { label: tx('configurePropeller.title'), get: (c) => c.propeller?.label ?? '—' },
     { label: tx('configure.colConn'),   get: (c) => connLabel(c.knobs.nP, (allRefs.find((r) => r.id === c.refId)?.geo.numSlots ?? ref.geo.numSlots)) },
     { label: tx('configure.colTurns'),  get: (c) => `${c.knobs.N}` },
     { label: tx('configure.colLength'), get: (c) => fmt(c.knobs.L_mm, 0) },

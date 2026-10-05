@@ -143,7 +143,7 @@
     "refuseTj": "已拒绝：T_j {tj} °C 超过 {device} 的 {limit} °C 限值",
     "refuseRating": "已拒绝：每个开关 {amps} A rms 超过 {device} 的 {limit} A 额定值",
     "refuseVds": "已拒绝：{device} 耐压 {vdss} V，而母线最高达 {bus} V（最多允许 {max} V）",
-    "refuseBus": "已拒绝：电池组最高达 {pack} V，超过此方案计算时的 {max} V",
+    "refuseBus": "已拒绝：PWM 是按 {lo}–{hi} V 计算的；当前电池组为 {pmin}–{pmax} V — 请申请计算",
     "refuseLimitTip": "超出器件限值，因此不显示数值。请选择其他方案或更改工作点。",
     "motorLoss": "电机 PWM 附加损耗",
     "motorLossTip": "载波相对正弦工作点额外增加的电机损耗，由已计算的点读出。",
@@ -160,7 +160,8 @@
     "pContMax": "最大连续功率",
     "pContMaxTip": "该方案在此转速下可持续输出的最大轴功率。",
     "columnDrive": "驱动",
-    "columnDriveEff": "驱动 η"
+    "columnDriveEff": "驱动 η",
+    "refuseBusTip": "驱动方案只在其计算时的母线电压范围内有效。正弦模式不受影响；请更换电池组，或申请 PWM 计算。"
   },
   "configureLimits": {
     "build": "结构",
@@ -297,7 +298,7 @@
     "totalKoefTip": "退磁系数 × 饱和系数：相对理想电机（新磁钢、线性铁芯）所保留的转矩。",
     "vsRef": "相对参考设计 {delta} %（{base} {unit}）",
     "sameAsRef": "与参考设计相同",
-    "addToComparison": "加入对比",
+    "addToComparison": "保存配置",
     "saved": "已保存的配置",
     "savedHint": "（{n}）— 绿色 = 最佳 · 红色 = 最差",
     "clearAll": "全部清除",
@@ -450,6 +451,16 @@
     "draftRow": "· {die} / {config} · 叠厚 {L} mm · {I} A · {rpm} rpm",
     "draftFem": " · 有限元 {T} N·m",
     "draftNotSimulated": " · 未仿真",
-    "draftOpen": "打开"
+    "draftOpen": "打开",
+    "loading": "正在载入电机模型…",
+    "resetPack": "恢复为本机电池组",
+    "resetPackTip": "恢复为此电机保存时的电池组。您的修改只为此电机记忆；目录中的电机不会被改动。",
+    "packEdited": "已修改",
+    "preset": "预设",
+    "presetModified": "已偏离预设 {config}",
+    "presetTip": "将所有旋钮恢复到该电机的这一真实配置：叠厚、匝数、线材、接法、电流、转速、电池组和驱动。",
+    "saveTitle": "保存配置",
+    "packStock": "通用默认电池组 — 此电机未保存电池组",
+    "motorVTip": "此电机在 {I} A、{rpm} rpm 时所需的直流母线电压（线电压峰值）。"
   }
 }

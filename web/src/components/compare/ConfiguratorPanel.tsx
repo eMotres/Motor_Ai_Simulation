@@ -16,7 +16,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Slider, ToggleButton, ToggleButtonGroup, Button,
-  IconButton, Alert,
+  IconButton, Alert, CircularProgress,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
@@ -26,21 +26,26 @@ import { useMotorStore } from '../../stores/motorStore';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { pickCable } from '../../lib/cableTable';
 import {
-  scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult,
+  scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult, type PwmVariant,
 } from '../../lib/motorScaling';
 import {
-  REFERENCE_PASSPORTS, windingConnections, connLabel, fetchCatalogReferences, type ReferenceMotor,
+  REFERENCE_PASSPORTS, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
-import BatteryPanel, { type Battery, defaultBattery, PRESETS } from './BatteryPanel';
+import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import PerformanceCharts from './PerformanceCharts';
+import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import ConfiguratorThermal from './ConfiguratorThermal';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
 import { useWireStock } from '../materials/useWireStock';
+import {
+  batteryFromPack, readBatteryEdit, writeBatteryEdit, clearBatteryEdit, dropStockEdits, wantedBattery, sameBattery, BATTERY_BY_MACHINE_LS,
+} from '../../lib/configuratorBattery';
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
+import { presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
 import {
   physicalRanges, narrowRange, speedLimit, overflows, lineVoltageWarning,
   readOverrides, writeOverrides, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
@@ -51,16 +56,19 @@ import {
 } from '../../lib/configureContextApi';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import i18n from '../../i18n';
 import {
   usableVariants, variantLabel, variantFacts, readVariant, buildTuned, limitProblems,
   pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
   type DriveRecord, type DeviceLimits,
 } from '../../lib/configuratorDrive';
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
-import { resolveDraftTarget, isBlocked } from '../../lib/configuratorGuard';
+import { resolveDraftTarget, modelState, pickReference } from '../../lib/configuratorGuard';
 import MyAgentDraftsBlock from './MyAgentDraftsBlock';
 
 const tx = nsT('controller');   // every user-visible string (EN source, ZH mirror — docs/I18N.md)
+/** In Chinese the captions keep their unit symbols as written (mm, rpm, ns), not MM / RPM. */
+const unitCase = () => (i18n.language?.startsWith('zh') ? { textTransform: 'none' as const } : undefined);
 const n0f = (x: number) => String(Number(x.toFixed(0)));
 
 /** The machine's remembered drive choice (Sine | PWM + variant), laid over
@@ -87,6 +95,8 @@ interface SavedConfig {
   result: ScaledResult;
   iMax: number;
   battery?: Battery;   // snapshot of the battery this config was saved with
+  /** the preset (die configuration) it was made from, when it had one */
+  presetConfig?: string | null;
   /** the drive (Sine | PWM + device + carrier) it was saved with */
   drive?: DriveRecord;
 }
@@ -125,7 +135,8 @@ const KnobSlider: React.FC<{
   onChange: (v: number) => void; onRangeChange?: (min: number, max: number) => void; warn?: boolean;
   /** small grey caption after the unit — e.g. the peak value of an rms field */
   sub?: string;
-  /** one short line under the slider: where its maximum comes from (+ tooltip) */
+  /** where its maximum comes from — set on the TITLE row, right after the title, in
+   *  the title's own style (owner 2026-10-05: no small print); tooltip for details */
   limitNote?: { text: string; tip: string; hand?: boolean };
   /** admin: clear a hand-set maximum (the "default" rule applies again) */
   onClearHand?: () => void;
@@ -134,8 +145,19 @@ const KnobSlider: React.FC<{
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
     <Box sx={{ mb: 1.25 }}>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mb: 0.25 }}>
-        <Typography sx={{ ...LABEL, flex: 1 }}>{label}</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', columnGap: 0.75, rowGap: 0.25, mb: 0.25, flexWrap: 'wrap' }}>
+        <Typography sx={{ ...LABEL, flex: '1 1 120px', minWidth: 0 }} title={limitNote?.tip}>
+          {label}
+          {/* in Chinese the caption keeps its unit symbols as written (mm, rpm), not MM / RPM */}
+          {limitNote && <Box component="span" sx={unitCase()}>{' · '}{limitNote.text}</Box>}
+          {limitNote?.hand && onClearHand && (
+            <Box component="span" onClick={onClearHand} title={tx('configureLimits.clearHandTip')}
+              sx={{ ml: 0.75, color: '#60a5fa', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>
+              {tx('configureLimits.clearHand')}
+            </Box>
+          )}
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0, ml: 'auto' }}>
         <input value={txt ?? fmt(value, d)} type="number" step={step}
           onChange={(e) => { setTxt(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= min && v <= max) onChange(v); }}
           onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); setTxt(null); }}
@@ -148,6 +170,7 @@ const KnobSlider: React.FC<{
             {delta > 0 ? '+' : ''}{fmt(delta, 0)}%
           </Typography>
         )}
+        </Box>
       </Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
         {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
@@ -156,17 +179,6 @@ const KnobSlider: React.FC<{
           sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 } }} />
         {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
       </Box>
-      {limitNote && (
-        <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mt: -0.25 }} title={limitNote.tip}>
-          {limitNote.text}
-          {limitNote.hand && onClearHand && (
-            <Box component="span" onClick={onClearHand} title={tx('configureLimits.clearHandTip')}
-              sx={{ ml: 0.75, color: '#60a5fa', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>
-              {tx('configureLimits.clearHand')}
-            </Box>
-          )}
-        </Typography>
-      )}
     </Box>
   );
 };
@@ -232,6 +244,11 @@ const ConfiguratorPanel: React.FC = () => {
   // FEM-characterised catalog motors (fetched) come first; the built-in
   // REFERENCE_PASSPORTS stay as a seed/fallback.
   const [catalogRefs, setCatalogRefs] = useState<ReferenceMotor[]>([]);
+  // Has the references fetch been ANSWERED (an empty list included)?  Until it has, and
+  // until the loaded machine has been matched against the answer, the panel says it is
+  // loading — it never shows "no configurator model" for a machine it has not looked up.
+  const [refsAnswered, setRefsAnswered] = useState(false);
+  const [matchChecked, setMatchChecked] = useState(false);
   // Retry until the catalog answers, and refetch on catalog changes — a
   // single failed fetch (server restart window) left the panel with ONLY the
   // built-in 200 mm reference forever, so no loaded motor could ever match
@@ -239,11 +256,11 @@ const ConfiguratorPanel: React.FC = () => {
   // canWrite freeze, same cure.
   useEffect(() => {
     let dead = false;
-    const load = () => fetchCatalogReferences()
-      .then((rs) => {
+    const load = () => fetchCatalogReferencesAnswer()
+      .then((a) => {
         if (dead) return;
-        if (rs.length) setCatalogRefs(rs);
-        else setTimeout(load, 3000);
+        if (a.ok) { setCatalogRefs(a.refs); setRefsAnswered(true); }
+        else setTimeout(load, 3000);              // the server did not answer: still loading
       })
       .catch(() => { if (!dead) setTimeout(load, 3000); });
     load();
@@ -275,6 +292,7 @@ const ConfiguratorPanel: React.FC = () => {
     const pick = () => {
       const g = useMotorStore.getState().geometry as Record<string, any> | null;
       if (!g) return;
+      if (refsAnswered) setMatchChecked(true);   // looked up against the ANSWER, not the seed
       const near = (a: unknown, b: unknown, tol: number) =>
         Number.isFinite(Number(a)) && Number.isFinite(Number(b))
         && Math.abs(Number(a) - Number(b)) <= tol;
@@ -297,9 +315,12 @@ const ConfiguratorPanel: React.FC = () => {
              + rel(p0.N0, Number(g.num_wires_per_slot))
              + rel(p0.wireH0_mm, Number(g.wire_height));
       };
-      const m = sameSection.length
-        ? sameSection.slice().sort((a, b) => dist(a) - dist(b))[0]
-        : undefined;
+      // Same build -> closest magnet / outer-radius geometry -> a card that IS a catalogue machine
+      // (a legacy duplicate of the geometry has no pack, controller or variants).
+      const geoDist = (r: ReferenceMotor) =>
+        Math.abs(Number(r.geo?.magnetHeight_mm) - Number(g.magnet_height) || 0)
+        + Math.abs(Number(r.geo?.statorOR_mm) - Number(g.stator_outer_radius) || 0);
+      const m = pickReference(sameSection, dist, geoDist);
       setLiveMatched(!!m);
       if (m) setRefId((cur) => (cur === m.id ? cur : m.id));
       // ── Open on the LOADED BUILD, not on the passport's base point ───────
@@ -356,7 +377,7 @@ const ConfiguratorPanel: React.FC = () => {
             I_A: Number.isFinite(live.I_A) && live.I_A > 0 ? live.I_A : k0.I_A,
             rpm: Number.isFinite(live.rpm) && live.rpm > 0 ? live.rpm : k0.rpm,
           });
-          setKnobs((k0) => { const k1 = adopt(k0); setRefKnobs(k1); return withDrive(k1, m.id); });
+          setKnobs((k0) => { const k2 = withDrive(adopt(k0), m.id); setRefKnobs(k2); return k2; });
         }
       }
     };
@@ -364,7 +385,13 @@ const ConfiguratorPanel: React.FC = () => {
     pick();   // also on mount / after the references arrive
     return () => window.removeEventListener('sim-operating-point', pick);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allRefs]);
+  }, [allRefs, refsAnswered, liveGeo]);
+  // No machine loaded at all: after a short wait say so (instead of loading forever).
+  useEffect(() => {
+    if (!refsAnswered || liveGeo || matchChecked) return;
+    const t = setTimeout(() => setMatchChecked(true), 4000);
+    return () => clearTimeout(t);
+  }, [refsAnswered, liveGeo, matchChecked]);
   const ref: ReferenceMotor = useMemo(
     () => allRefs.find((r) => r.id === refId) ?? allRefs[0],
     [refId, allRefs],
@@ -386,7 +413,7 @@ const ConfiguratorPanel: React.FC = () => {
     lastRefId.current = refId;
     if (skipReset.current) { skipReset.current = false; return; }
     // A different machine → its own base point AND its own slider ranges.
-    { const kb = baseKnobs(ref.passport); setKnobs(withDrive(kb, refId)); setRefKnobs(kb); }
+    { const kb = withDrive(baseKnobs(ref.passport), refId); setKnobs(kb); setRefKnobs(kb); }
   }, [refId]); // eslint-disable-line react-hooks/exhaustive-deps
   // First paint after the references arrive: if the stored knobs/ranges belong
   // to another machine (they are persisted globally), adopt this one's.
@@ -397,7 +424,7 @@ const ConfiguratorPanel: React.FC = () => {
     const p0 = ref.passport;
     const off = (a: number, b: number) => !(b > 0) || Math.abs(a - b) / b > 1.5;
     if (off(knobs.L_mm, p0.L0_mm) || off(knobs.I_A, p0.I0_A)) {
-      { const kb = baseKnobs(p0); setKnobs(withDrive(kb, refId)); setRefKnobs(kb); }
+      { const kb = withDrive(baseKnobs(p0), refId); setKnobs(kb); setRefKnobs(kb); }
     }
   }, [refId, ref]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -484,7 +511,9 @@ const ConfiguratorPanel: React.FC = () => {
   //    it is the currently loaded/open machine.  With no matching passport
   //    for that machine, refuse to compute rather than borrow another
   //    machine's model.
-  const blocked = isBlocked({ draftOpen, hasDraftTarget: !!draftTarget, liveMatched });
+  const mState = modelState({ refsAnswered, matchChecked, draftOpen, hasDraftTarget: !!draftTarget, liveMatched });
+  const loadingModel = mState === 'loading';
+  const blocked = mState === 'blocked';
   const blockedLabel = draftOpen && draft
     ? `${draft.starting_point.die} / ${draft.starting_point.config}`
     : (() => {
@@ -497,49 +526,40 @@ const ConfiguratorPanel: React.FC = () => {
       })();
 
   // battery the user runs the motor from (persisted; snapshotted into each saved config)
-  const [battery, setBattery] = useState<Battery>(() => {
-    try { const r = localStorage.getItem('configurator.battery.v1'); if (r) { const b = JSON.parse(r); if (b?.type) return b; } } catch { /* ignore */ }
-    return defaultBattery();
-  });
-  useEffect(() => { try { localStorage.setItem('configurator.battery.v1', JSON.stringify(battery)); } catch { /* ignore */ } }, [battery]);
-  // A machine that carries its own pack (family configuration → passport
-  // `battery`) seeds the voltage-match panel with THAT pack when it is loaded
-  // — the user 2026-09-02 saw a 370 V default beside a 750 V charging card.
-  // Once per machine; edits afterwards are the user's and stay.
-  const packSeededFor = React.useRef<string>('');
-  useEffect(() => {
-    const b = p.battery;
-    if (!b || packSeededFor.current === refId) return;
-    packSeededFor.current = refId;
-    const ns = Math.round(Number(b.cells ?? 0));
-    const vNom = Number(b.v_nom), vMax = Number(b.v_max), vMin = Number(b.v_min);
-    if (!(ns > 0) || !(vNom > 0)) return;
-    const lfp = /lfp|lifepo|iron/i.test(String(b.chemistry ?? ''));
-    const preset = lfp ? PRESETS.LFP : PRESETS.NMC;
-    const seeded: Battery = {
-      type: lfp ? 'LFP' : 'NMC', cells: ns,
-      nom: vNom / ns,
-      max: vMax > 0 ? vMax / ns : preset.max,
-      min: vMin > 0 ? vMin / ns : preset.min,
-    };
-    setBattery((cur) => (cur.cells === seeded.cells && cur.type === seeded.type
-      && Math.abs(cur.nom - seeded.nom) < 1e-6 && Math.abs(cur.max - seeded.max) < 1e-6
-      && Math.abs(cur.min - seeded.min) < 1e-6) ? cur : seeded);
-  }, [refId, p.battery]); // eslint-disable-line react-hooks/exhaustive-deps
-
+  const [battery, setBattery] = useState<Battery>(() => defaultBattery());
   const [configs, setConfigs] = useState<SavedConfig[]>(() => {
     try { const r = localStorage.getItem(LS_KEY); const a = r ? JSON.parse(r) : null; return Array.isArray(a) ? a : []; }
     catch { return []; }
   });
   useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(configs)); } catch { /* ignore */ } }, [configs]);
 
+  // ── PRESETS: the configurations of this machine's die (owner 2026-10-05), read from the
+  //    machines themselves by the server; `baseConfig` is the one the knobs are measured against.
+  const [baseConfig, setBaseConfig] = useState<string | null>(null);
+  const catId = catalogIdOf(refId);
+  const [ctx, setCtx] = useState<ConfigureContext | null>(null);
+  const [limitMsg, setLimitMsg] = useState<string | null>(null);
+  const loadCtx = React.useCallback(async () => {
+    setCtx(catId ? await fetchConfigureContext(catId) : null);
+  }, [catId]);
+  useEffect(() => { setCtx(null); setLimitMsg(null); setBaseConfig(null); void loadCtx(); }, [loadCtx]);
+  const presets: Preset[] = ctx?.presets ?? [];
+  const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
+  // a freshly loaded machine starts on the configuration whose build it is
+  useEffect(() => {
+    if (baseConfig != null || !presets.length) return;
+    const m = presetOfBuild(presets, refKnobs ?? baseKnobs(p));
+    if (m) setBaseConfig(m.config);
+  }, [presets, refKnobs, baseConfig]); // eslint-disable-line react-hooks/exhaustive-deps
   // ── DRIVE: Sine | PWM (owner 2026-10-05) ──────────────────────────────────
   // PWM lists ONLY the drive variants COMPUTED for this machine (the passport's
   // `pwm_variants`: a device at a carrier, already solved) and reads between
   // their computed points; nothing is calculated live here.  Sine is the
   // default and the whole block is inert unless the user picks PWM: with it
   // off `scaleKnobs === knobs`, so every Sine number is the one it always was.
-  const variants = useMemo(() => usableVariants(p.pwm_variants), [p]);
+  const variants = useMemo(
+    () => usableVariants((basePreset && basePreset.pwm_variants.length ? basePreset.pwm_variants : p.pwm_variants) as PwmVariant[] | null | undefined),
+    [p, basePreset]);
   const driveOn = knobs.drive === 'pwm' && variants.length > 0;
   const variant = driveOn
     ? (variants.find((v) => v.id === knobs.drive_variant) ?? variants[0]) : null;
@@ -553,20 +573,57 @@ const ConfiguratorPanel: React.FC = () => {
   // stack length (hand-set per motor, else the default rule), wire min 0.2 mm,
   // turns = what fits the slot, current = the machine's inverter device, speed
   // = the pack-maximum voltage envelope.  An admin can only NARROW them.
-  const catId = catalogIdOf(refId);
-  const [ctx, setCtx] = useState<ConfigureContext | null>(null);
-  const [limitMsg, setLimitMsg] = useState<string | null>(null);
-  const loadCtx = React.useCallback(async () => {
-    setCtx(catId ? await fetchConfigureContext(catId) : null);
-  }, [catId]);
-  useEffect(() => { setCtx(null); setLimitMsg(null); void loadCtx(); }, [loadCtx]);
   const readLs = (k: string) => { try { return localStorage.getItem(k); } catch { return null; } };
+  // ── The Battery block follows the MACHINE (owner 2026-10-05: it showed 100 NMC cells /
+  //    300–420 V beside a 6S 18–25.2 V machine).  It opens on the pack the machine was
+  //    saved with — the same source the slider ranges read (configure_context, else the
+  //    passport's own battery) — or on the user's own edit FOR THIS MACHINE; a machine
+  //    that names no pack keeps the stock default.
+  const machinePack = useMemo(
+    () => batteryFromPack(basePreset?.battery) ?? batteryFromPack(ctx?.battery) ?? batteryFromPack(p.battery as never),
+    [basePreset, ctx, p.battery]);
+  const batterySeeded = React.useRef<string>('');
+  // One-time cleanup: an "edit" equal to the stock 100-cell default was never a user's choice
+  // (it shadowed the machine's own pack); drop it before anything reads it.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(BATTERY_BY_MACHINE_LS);
+      const clean = dropStockEdits(raw);
+      if (clean !== raw && clean != null) localStorage.setItem(BATTERY_BY_MACHINE_LS, clean);
+      localStorage.removeItem('configurator.battery.v1');      // the pre-presets global battery
+    } catch { /* ignore */ }
+  }, []);
+  useEffect(() => {
+    const edit = readBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId);
+    const want = wantedBattery(edit, machinePack);
+    const sig = `${refId}|${edit ? 'edit' : 'pack'}|${JSON.stringify(want)}`;
+    if (!want || batterySeeded.current === sig) return;
+    batterySeeded.current = sig;
+    setBattery((cur) => (sameBattery(cur, want) ? cur : want));
+  }, [refId, machinePack]); // eslint-disable-line react-hooks/exhaustive-deps
+  /** a change the USER makes — remembered for this machine only */
+  const updateBattery = (b: Battery) => {
+    setBattery(b);
+    try { localStorage.setItem(BATTERY_BY_MACHINE_LS, writeBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId, b)); } catch { /* ignore */ }
+  };
   const [overrides, setOverrides] = useState<Overrides>(() => readOverrides(readLs(RANGES_LS_V2), refId));
   useEffect(() => { setOverrides(readOverrides(readLs(RANGES_LS_V2), refId)); }, [refId]);
-  // the pack: the machine's own (server), else the passport's; NONE = no limit from it
-  // (the Battery panel's stock default is not this machine's pack)
-  const packMaxV: number | null = ctx?.battery?.v_max ?? (Number(p.battery?.v_max) > 0 ? Number(p.battery?.v_max) : null);
-  const packNomV: number | null = ctx?.battery?.v_nom ?? (Number(p.battery?.v_nom) > 0 ? Number(p.battery?.v_nom) : null);
+  // THE PACK THE USER SEES in the Battery block — the machine's own, or what the user changed
+  // it to — drives everything that depends on the bus: the full-battery speed, the 2S/2P
+  // voltage warning, the PWM bus-range check.  A machine with no pack of its own and no edit
+  // has no pack to judge by (the stock 100-cell default is not this machine's pack).
+  const batteryKnown = machinePack != null || readBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId) != null;
+  const packWindow = batteryKnown
+    ? { min: battery.cells * battery.min, max: battery.cells * battery.max } : null;
+  const packMaxV: number | null = packWindow?.max ?? null;
+  const packNomV: number | null = batteryKnown ? battery.cells * battery.nom : null;
+  /** back to the pack the machine was saved with (the user's edit for it is dropped) */
+  const resetBattery = () => {
+    if (!machinePack) return;
+    try { localStorage.setItem(BATTERY_BY_MACHINE_LS, clearBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId)); } catch { /* ignore */ }
+    batterySeeded.current = '';
+    setBattery(machinePack);
+  };
   const modM = ctx?.modulation.m ?? DEFAULT_MODULATION;
   const speedLim = useMemo(() => {
     const at0 = scaleMotor(p, { ...knobs, rpm: 0 }, ref.poles);
@@ -644,6 +701,30 @@ const ConfiguratorPanel: React.FC = () => {
   const above = (v: number, r: KRange) => v > r.max * 1.0005 + 1e-9;
   /** the connection stays free: only a warning when the winding's line voltage exceeds the pack nominal */
   const connWarn = lineVoltageWarning(result.Vline_peak_V, packNomV);
+  /** the picked variant's read-only facts, for the Drive TITLE row (+ provenance tooltip) */
+  const driveFacts = (() => {
+    if (!driveOn || !variant) return { line: '', tip: '' };
+    const f = variantFacts(variant);
+    const bus = f.bus;
+    const busText = !bus ? null
+      : bus.min != null && bus.max != null && bus.nom != null
+        ? tx('configureDrive.factBusFull', { min: bus.min, max: bus.max, nom: bus.nom })
+        : bus.min != null && bus.max != null
+          ? tx('configureDrive.factBusRange', { min: bus.min, max: bus.max })
+          : bus.nom != null ? tx('configureDrive.factBusNom', { nom: bus.nom }) : null;
+    const bits = [
+      f.deadTime ? tx('configureDrive.factDead', { value: f.deadTime }) : null,
+      f.nParallel ? tx('configureDrive.factParallel', { n: f.nParallel }) : null,
+      f.modulationKey ? tx(f.modulationKey) : null, busText,
+    ].filter(Boolean);
+    return {
+      line: bits.join(' · '),
+      tip: [f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
+            tx('configureDrive.variantTip')].filter(Boolean).join('\n'),
+    };
+  })();
+  const driveFactsLine = driveFacts.line;
+  const driveFactsTip = driveFacts.tip || tx('configureDrive.variantTip');
   // "vs ref" compares against THE MACHINE AS LOADED, not against the
   // passport's calibration point (user 2026-08-26: a freshly loaded motor
   // showed −92.7 % with nothing touched — it was being compared to another
@@ -685,12 +766,11 @@ const ConfiguratorPanel: React.FC = () => {
   const driveRead = useMemo(
     () => (variant && !driveBuildMoved ? readVariant(variant, knobs.rpm, knobs.I_A) : null),
     [variant, driveBuildMoved, knobs.rpm, knobs.I_A]);
-  const drivePackMaxV = ctx?.battery?.v_max ?? (Number(p.battery?.v_max) > 0 ? Number(p.battery?.v_max) : null);
   const driveProblems = useMemo(
     () => (variant && driveRead && driveRead.ok
-      ? limitProblems(variant, driveRead.values, knobs.I_A, devLimits[variant.device] ?? null, drivePackMaxV)
+      ? limitProblems(variant, driveRead.values, knobs.I_A, devLimits[variant.device] ?? null, packWindow)
       : []),
-    [variant, driveRead, knobs.I_A, devLimits, drivePackMaxV]);
+    [variant, driveRead, knobs.I_A, devLimits, packWindow]);
   /** the numbers to show — null whenever anything is refused */
   const drv = driveRead && driveRead.ok && driveProblems.length === 0 ? driveRead.values : null;
   /** one short line per refusal (text + tooltip), in the order they matter */
@@ -717,14 +797,14 @@ const ConfiguratorPanel: React.FC = () => {
     const dev = variant?.device ?? '';
     const n1 = (x: number) => String(Number(x.toFixed(1)));
     return driveProblems.map((q) => ({
-      tip,
+      tip: q.kind === 'bus' ? tx('configureDrive.refuseBusTip') : tip,
       text: q.kind === 'tj'
         ? tx('configureDrive.refuseTj', { tj: n1(q.tj), limit: n0f(q.limit), device: dev })
         : q.kind === 'rating'
           ? tx('configureDrive.refuseRating', { amps: n1(q.amps), limit: n0f(q.limit), device: dev })
           : q.kind === 'vds'
             ? tx('configureDrive.refuseVds', { device: dev, vdss: n0f(q.vdss), bus: n1(q.bus), max: n1(q.max) })
-            : tx('configureDrive.refuseBus', { pack: n1(q.pack), max: n1(q.max) }),
+            : tx('configureDrive.refuseBus', { lo: q.lo != null ? n1(q.lo) : '0', hi: q.hi != null ? n1(q.hi) : '∞', pmin: q.packMin != null ? n1(q.packMin) : '0', pmax: q.packMax != null ? n1(q.packMax) : '∞' }),
     }));
   })();
   // STRANDS IN HAND multiply the parallel paths for every current split: k
@@ -799,14 +879,38 @@ const ConfiguratorPanel: React.FC = () => {
   // measured from), falling back to the passport base when nothing is loaded.
   // The drive is a choice of the user, not part of the reference design, so
   // Reset leaves it where it is.
-  const reset = () => setKnobs((s) => ({ ...(refKnobs ?? baseKnobs(p)), ...pickDrive(s) }));
+  /** Restore EVERYTHING to a real configuration of the die: every knob, its saved pack, its
+   *  default drive.  The user's battery edit for this machine is dropped (the pack is the preset's). */
+  const applyPreset = (pr: Preset) => {
+    const nk = presetKnobs(knobs, pr);
+    setKnobs(nk); setRefKnobs(nk); setBaseConfig(pr.config);
+    try { localStorage.setItem(DRIVE_LS, writeDriveChoice(localStorage.getItem(DRIVE_LS), refId, pickDrive(nk))); } catch { /* ignore */ }
+    const pk = batteryFromPack(pr.battery);
+    try { localStorage.setItem(BATTERY_BY_MACHINE_LS, clearBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId)); } catch { /* ignore */ }
+    batterySeeded.current = '';
+    if (pk) setBattery(pk);
+  };
+  // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
+  const matchedConfig = presets.find((pr) => presetDiff(pr, knobs, battery, batteryFromPack(pr.battery)).length === 0)?.config ?? null;
+  // The drive is a choice of the user, not part of the reference design, so Reset leaves it
+  // where it is — unless a preset is the base: then Reset is "reset to preset" and restores all.
+  const reset = () => {
+    if (basePreset) { applyPreset(basePreset); return; }
+    setKnobs((s) => ({ ...(refKnobs ?? baseKnobs(p)), ...pickDrive(s) }));
+  };
   /** Has the user moved anything off the reference design? */
-  const tuned = (() => {
+  // "Modified": anything off the BASE — the machine as loaded, or the preset last applied (an
+  // applied preset becomes the baseline: refKnobs = its knobs and drive, machinePack = its pack).
+  const driveOf = (k: Knobs | null) => (k?.drive === 'pwm' ? (k.drive_variant ?? '') : '');
+  const modified = driveOf(knobs) !== driveOf(refKnobs)
+    || (!!machinePack && !sameBattery(battery, machinePack))
+    || (() => {
     const r0 = refKnobs ?? baseKnobs(p);
     return (['N', 'L_mm', 'wireH_mm', 'nP', 'I_A', 'rpm'] as const)
       .some((kk) => Math.abs(Number(knobs[kk]) - Number(r0[kk]))
                     > 1e-6 * Math.max(1, Math.abs(Number(r0[kk]))));
   })();
+  const tuned = modified;
 
   const addConfig = () => {
     const n = configs.filter((c) => c.refId === refId).length + 1;
@@ -822,7 +926,16 @@ const ConfiguratorPanel: React.FC = () => {
       inverter_loss_W: drv?.inv_total_W ?? null, tj_C: drv?.tj_C ?? null,
       eta_drive_pct: drv?.eta_drive_pct ?? null,
     } : { mode: 'sine' };
-    setConfigs((cs) => [...cs, { id, name, refId, knobs: { ...knobs }, result, iMax, battery: { ...battery }, drive }]);
+    // Saved under a NAME the user can change here (the auto name is the suggestion).
+    setAskName({
+      title: tx('configure.saveTitle'), label: tx('configure.renameLabel'), initial: name,
+      cancelLabel: tx('configure.cancel'), okLabel: tx('configure.ok'),
+      onSubmit: (given) => {
+        const nm = given.trim() || name;
+        setConfigs((cs) => [...cs, { id, name: nm, refId, knobs: { ...knobs }, result, iMax,
+          battery: { ...battery }, drive, presetConfig: baseConfig }]);
+      },
+    });
   };
   const delConfig = (id: string) => setConfigs((cs) => cs.filter((c) => c.id !== id));
   // load a saved config back as the current design — knobs + battery (+ reference)
@@ -842,7 +955,9 @@ const ConfiguratorPanel: React.FC = () => {
   const loadConfig = (c: SavedConfig) => {
     if (c.refId !== refId) { skipReset.current = true; setRefId(c.refId); }
     setKnobs({ ...c.knobs });
-    if (c.battery) setBattery({ ...c.battery });
+    if (c.battery) updateBattery({ ...c.battery });
+    setBaseConfig(c.presetConfig ?? presetOfBuild(presets, c.knobs)?.config ?? null);
+    try { localStorage.setItem(DRIVE_LS, writeDriveChoice(localStorage.getItem(DRIVE_LS), c.refId, pickDrive(c.knobs))); } catch { /* ignore */ }
   };
 
   const RES_COLS: { key: string; label: string; unit: string; d: number; goodHi?: boolean; get: (c: SavedConfig) => number }[] = [
@@ -932,12 +1047,12 @@ const ConfiguratorPanel: React.FC = () => {
             ? (draftTarget
                 ? tx('configure.headerDraft', { name: draft.name, die: draft.starting_point.die, config: draft.starting_point.config })
                 : tx('configure.headerDraftNoModel', { name: draft.name }))
-            : (liveMatched ? ref.name : tx('configure.headerNoModel', { label: blockedLabel }))}
+            : (loadingModel ? '' : liveMatched ? ref.name : tx('configure.headerNoModel', { label: blockedLabel }))}
         </Typography>
         {/* One clear way back to the reference design (user 2026-08-26) —
             replaces the per-tile "% vs ref" captions.  Meaningless with no
             model loaded, so it disappears rather than resetting to nothing. */}
-        {!blocked && (
+        {!blocked && !loadingModel && (
           <Button size="small" variant={tuned ? 'contained' : 'outlined'} onClick={reset}
             startIcon={<RestartAltIcon sx={{ fontSize: 15 }} />}
             disabled={!tuned}
@@ -948,15 +1063,18 @@ const ConfiguratorPanel: React.FC = () => {
           </Button>
         )}
       </Box>
+      {loadingModel && (
+        <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={14} sx={{ color: '#60a5fa' }} />
+          <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.loading')}</Typography>
+        </Box>
+      )}
       {blocked && (
         <Box sx={{ px: 2, pb: 2 }}>
-          <Alert severity="warning" sx={{ fontSize: 12 }}>
-            <Typography sx={{ fontSize: 13, fontWeight: 700, mb: 0.25 }}>
+          <Alert severity="warning" sx={{ fontSize: 12 }}
+            title={tx('configure.noModelBody') + (draftOpen ? tx('configure.noModelDraft') : tx('configure.noModelLoaded'))}>
+            <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
               {tx('configure.noModelTitle', { label: blockedLabel })}
-            </Typography>
-            <Typography sx={{ fontSize: 12 }}>
-              {tx('configure.noModelBody')}
-              {draftOpen ? tx('configure.noModelDraft') : tx('configure.noModelLoaded')}
             </Typography>
           </Alert>
         </Box>
@@ -966,11 +1084,14 @@ const ConfiguratorPanel: React.FC = () => {
           state above.  Every tile, slider and chart in this block reads
           `ref`/`p`, which the guards above only let through once it is the
           SAME machine as the header names. */}
-      {!blocked && (
+      {!blocked && !loadingModel && (
       <>
-      <Box sx={{ display: 'flex', gap: 2, p: 2, flexWrap: 'wrap' }}>
-        {/* ── KNOBS ── */}
-        <Box sx={{ ...PANEL, p: 2, flex: '1 1 360px', minWidth: 320 }}>
+      <Box sx={{ display: 'grid', gap: 2, p: 2, alignItems: 'start',
+                 gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 560px), 1fr))' }}>
+        {/* ── KNOBS, then ONE ROW: battery | cross-section | side view (owner 2026-10-05: sliders, battery and the motor's
+            voltage marker visible together) ── */}
+        <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <Box sx={{ ...PANEL, p: 2 }}>
           <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)', mb: 0.25 }}>{ref.name}</Typography>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>
             {tx('configure.subtitle', { slots: ref.slots, poles: ref.poles,
@@ -978,6 +1099,31 @@ const ConfiguratorPanel: React.FC = () => {
           </Typography>
 
           {/* i18n-guard:begin — every user-visible string below goes through tx() */}
+          {/* two columns when there is room (build | operating point + drive), one on a phone */}
+          <Box sx={{ display: 'grid', columnGap: 3, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', alignItems: 'start' }}>
+          <Box sx={{ minWidth: 0 }}>
+          {presets.length > 0 && (
+            <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mb: 1.25, flexWrap: 'wrap' }}>
+              <Typography sx={{ ...LABEL, flex: '1 1 120px', minWidth: 0 }} title={tx('configure.presetTip')}>
+                {tx('configure.preset')}
+                {basePreset && modified && (
+                  <Box component="span" sx={{ color: '#fbbf24' }}>
+                    {' · '}{tx('configure.presetModified', { config: basePreset.config })}
+                  </Box>
+                )}
+              </Typography>
+              <ToggleButtonGroup exclusive size="small" value={matchedConfig} sx={{ ml: 'auto', flexWrap: 'wrap' }}>
+                {presets.map((pr) => (
+                  <ToggleButton key={pr.config} value={pr.config} onClick={() => applyPreset(pr)}
+                    title={tx('configure.presetTip')}
+                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)',
+                      '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
+                    {pr.config}
+                  </ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            </Box>
+          )}
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mb: 0.75 }}>{tx('configureLimits.build')}</Typography>
           <KnobSlider label={tx('configureLimits.stackLength')} unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0}
             onChange={set('L_mm')} onRangeChange={isAdmin ? setLRange : undefined} warn={above(knobs.L_mm, ranges.L_mm)}
@@ -1009,9 +1155,17 @@ const ConfiguratorPanel: React.FC = () => {
             </Typography>
           ) : null}
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
-            <Typography sx={{ ...LABEL, flex: 1 }}>{tx('configureLimits.connection')}</Typography>
-            <ToggleButtonGroup exclusive size="small" value={knobs.nP} onChange={(_, v) => v != null && set('nP')(v)}>
+          <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mt: 0.5, mb: 1, flexWrap: 'wrap' }}>
+            <Typography sx={{ ...LABEL, flex: '1 1 140px', minWidth: 0 }}
+              title={connWarn ? tx('configureLimits.connWarnTip', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) }) : undefined}>
+              {tx('configureLimits.connection')}
+              {connWarn && (
+                <Box component="span" sx={{ color: '#fbbf24', ...unitCase() }}>
+                  {' · ⚠ '}{tx('configureLimits.connWarn', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) })}
+                </Box>
+              )}
+            </Typography>
+            <ToggleButtonGroup exclusive size="small" value={knobs.nP} sx={{ ml: 'auto' }} onChange={(_, v) => v != null && set('nP')(v)}>
               {conns.map((c) => (
                 <ToggleButton key={c.nP} value={c.nP}
                   title={c.nP === 1 ? tx('configureLimits.connSeries') : c.nS === 1 ? tx('configureLimits.connParallel') : tx('configureLimits.connMixed', { s: c.nS, p: c.nP })}
@@ -1022,14 +1176,10 @@ const ConfiguratorPanel: React.FC = () => {
               ))}
             </ToggleButtonGroup>
           </Box>
-          {connWarn && (
-            <Typography sx={{ fontSize: 11, color: '#fbbf24', mt: -0.5, mb: 1 }}
-              title={tx('configureLimits.connWarnTip', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) })}>
-              ⚠ {tx('configureLimits.connWarn', { line: fmt(connWarn.line, 0), nominal: fmt(connWarn.nominal, 0) })}
-            </Typography>
-          )}
 
-          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 0, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
           {/* rms is the knob; the PEAK rides beside it (user 2026-08-26) —
               inverters and datasheets are quoted in peak, the coil sees rms. */}
           <KnobSlider label={tx('configureLimits.phaseCurrent')} unit="A" value={knobs.I_A} base={p.I0_A}
@@ -1045,7 +1195,14 @@ const ConfiguratorPanel: React.FC = () => {
               device at a carrier, each already in the passport.  Device,
               dead time and parallel count are read-only facts of the
               variant; nothing is calculated here. */}
-          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>{tx('configureDrive.title')}</Typography>
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}
+            title={variants.length ? driveFactsTip : tx('configureDrive.notComputedTip')}>
+            {tx('configureDrive.title')}
+            {driveFactsLine && <Box component="span" sx={unitCase()}>{' · '}{driveFactsLine}</Box>}
+            {!variants.length && (
+              <Box component="span" sx={{ color: '#fbbf24' }}>{' · '}{tx('configureDrive.notComputed')}</Box>
+            )}
+          </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75, flexWrap: 'wrap' }}
             title={variants.length ? undefined : tx('configureDrive.notComputedTip')}>
             <ToggleButtonGroup exclusive size="small" value={driveOn ? 'pwm' : 'sine'}
@@ -1069,33 +1226,8 @@ const ConfiguratorPanel: React.FC = () => {
               </select>
             )}
           </Box>
-          {!variants.length && (
-            <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 1 }} title={tx('configureDrive.notComputedTip')}>
-              {tx('configureDrive.notComputed')}
-            </Typography>
-          )}
-          {driveOn && variant && (() => {
-            const f = variantFacts(variant);
-            const bus = f.bus;
-            const busText = !bus ? null
-              : bus.min != null && bus.max != null && bus.nom != null
-                ? tx('configureDrive.factBusFull', { min: bus.min, max: bus.max, nom: bus.nom })
-                : bus.min != null && bus.max != null
-                  ? tx('configureDrive.factBusRange', { min: bus.min, max: bus.max })
-                  : bus.nom != null ? tx('configureDrive.factBusNom', { nom: bus.nom }) : null;
-            const bits = [
-              f.deadTime ? tx('configureDrive.factDead', { value: f.deadTime }) : null,
-              f.nParallel ? tx('configureDrive.factParallel', { n: f.nParallel }) : null,
-              f.modulationKey ? tx(f.modulationKey) : null, busText,
-            ].filter(Boolean);
-            const tip = [f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
-                         tx('configureDrive.variantTip')].filter(Boolean).join('\n');
-            return bits.length ? (
-              <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', mb: 0.5 }} title={tip}>{bits.join(' · ')}</Typography>
-            ) : null;
-          })()}
           {driveRefusals.map((r) => (
-            <Typography key={r.text} sx={{ fontSize: 11, color: '#f87171', mb: 0.5 }} title={r.tip}>⚠ {r.text}</Typography>
+            <Typography key={r.text} sx={{ fontSize: 11, fontWeight: 700, color: '#f87171', mb: 0.5 }} title={r.tip}>⚠ {r.text}</Typography>
           ))}
 
 
@@ -1106,7 +1238,19 @@ const ConfiguratorPanel: React.FC = () => {
                   color: tuned ? '#60a5fa' : 'var(--text-3)', mt: 1 }}>
             {tx('configureLimits.resetToReference')}
           </Button>
+          </Box>
+          </Box>
           {/* i18n-guard:end */}
+        </Box>
+        {/* battery | cross-section | side view: one row (they wrap on a narrow screen) */}
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'stretch' }}>
+          <Box sx={{ flex: '1 1 300px', minWidth: 0 }}>
+            <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={updateBattery}
+              machinePack={machinePack} onReset={resetBattery}
+              stockNote={!batteryKnown} vDcTip={tx('configure.motorVTip', { I: fmt(knobs.I_A, 1), rpm: fmt(knobs.rpm, 0) })} />
+          </Box>
+          <GeometryProjections ref0={ref} knobs={knobs} />
+        </Box>
         </Box>
 
         {/* ── RESULT ── */}
@@ -1380,17 +1524,6 @@ const ConfiguratorPanel: React.FC = () => {
         )}
       </Box>
 
-      {/* ── GEOMETRY (left, compact) + BATTERY (right) — one row (user
-          2026-08-25: "geometry on the left, battery on the right, more compact"). ── */}
-      <Box sx={{ px: 2, pb: 1.5, display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        <Box sx={{ flex: '0 1 auto', minWidth: 340 }}>
-          <GeometryProjections ref0={ref} knobs={knobs} />
-        </Box>
-        <Box sx={{ flex: '1 1 320px', minWidth: 300 }}>
-          <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={setBattery} />
-        </Box>
-      </Box>
-
       {/* ── BOOST CHARGING — generators only, and only when the machine has a
           pack.  A motor's Configure tab is unchanged.  UNDER the geometry
           (user 2026-09-02): the cross-section must stay in view while the
@@ -1428,9 +1561,11 @@ const ConfiguratorPanel: React.FC = () => {
       </Box>
 
       {/* ── PERFORMANCE VS SPEED ── */}
-      <Box sx={{ px: 2, pb: 1.5 }}>
-        <PerformanceCharts p={p} knobs={scaleKnobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
-      </Box>
+      {SHOW_CONFIGURE_CHARTS && (
+        <Box sx={{ px: 2, pb: 1.5 }}>
+          <PerformanceCharts p={p} knobs={scaleKnobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
+        </Box>
+      )}
       </>
       )}
 

@@ -26,6 +26,18 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   motor loss, inverter loss split, T_j, drive efficiency battery to shaft; the saved
   configuration records the drive. Sine is the default and unchanged (scaleMotor is
   untouched). EN + ZH strings in the `controller` namespace.
+- **Configure: presets, battery under the sliders, lean loading** (owner 2026-10-05). One
+  preset per configuration of the machine's die (read from the machines, none hard-coded;
+  `GET /api/catalog/{id}/configure_context` -> `presets`): choosing one restores every knob,
+  its saved pack and its default drive; "modified from <preset>" appears on the title row once
+  anything differs; saved configurations now carry the battery, the drive and the preset and
+  are saved under a name. The Battery block sits right under the sliders, opens on the machine's
+  own pack (6S for L12, 12S for L20), the user's edits are kept per machine, "reset to machine
+  pack" returns; everything bus-dependent (full-battery speed, the 2S/2P voltage warning, the
+  motor marker) follows the edited pack, and a PWM variant is refused outside its computed bus
+  range. Limit captions sit on the title row, not under the sliders. `GET /api/catalog/references`
+  serves Configure without the 12 MB of thumbnails; "no configurator model" no longer flashes
+  before the catalogue answers.
 - **Configure reads the passport pilot's computed drive variants** (#106): the catalogue
   response (`GET /api/catalog`, `GET /api/catalog/{id}/passport`) now carries `pwm_variants`
   for a card whose machine has a v1 record in the versioned store
@@ -73,6 +85,16 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   Dependency audit recorded in `THIRD_PARTY_NOTICES.md`.
 
 ### Fixed
+- **Configure showed "NMC 100 cells / 370 V" beside the 6S L12 machine** (owner 2026-10-05, live
+  e7b1ba2). Two reference cards tie on L12's cross-section and build (the real "CIANO14 40 new"
+  and an older duplicate "CIANO14 40_12" with no pack or controller); the first of the tie won,
+  which on the live catalogue is the duplicate. `/api/catalog/references` now flags
+  `has_machine`, and the pick goes build, then geometry, then "is a machine", then order
+  (`pickReference`). A stored battery "edit" equal to the stock 100-cell default is never an edit
+  (never written, dropped once on load). The motor marker (sqrt(3) x phase peak, 18 V rated / 20 V
+  peak at the catalogue duty points, pinned by a test) now names the operating point it is for.
+  The geometry pictures sit right of the Battery block with their subtitles on the title row, and
+  the speed / efficiency charts are hidden behind one flag (`SHOW_CONFIGURE_CHARTS`, off).
 - **L155 eddy: the shaft now settles, 0.4 % from its asymptote** (docs/EDDY_SHAFT_SETTLE_2026-09-29.md).
   The oscillating shaft gauge was a 5-period beat of non-pole-pair-periodic DC patterns that
   the one-angle static start froze into the solid wall; under it the wall's rotor-frame DC

@@ -165,6 +165,79 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
     return cat
 
 
+def _machine_names() -> set:
+    """Casefolded ``"<die> <configuration>"`` and ``"<die>"`` of every die the caller can see —
+    the names ``_family_doc_of_motor`` can match a card by, from directory listings only
+    (no yaml is parsed, so it is cheap enough for a request that is meant to be fast)."""
+    out: set = set()
+    try:
+        from motor_ai_sim.workspace import iter_dies as _iter_dies
+        for e in _iter_dies():
+            die = str(e.get("die") or e.get("name") or "")
+            d = Path(str(e["dir"]))
+            cfgs = [f.stem for f in d.glob("*.yaml") if f.name != "die.yaml"]
+            if cfgs:
+                out.add(die.casefold())
+            out.update(f"{die} {c}".casefold() for c in cfgs)
+    except Exception:                                           # noqa: BLE001
+        log.warning("references: machine names could not be listed", exc_info=True)
+    return out
+
+
+#: ``(path, mtime_ns, size)`` -> the passport-carrying cards of the catalogue file.  The
+#: file is 12 MB (thumbnails) and every writer replaces it atomically, so its
+#: (mtime, size) is a safe key: Configure re-parses it only after a real change.
+_REF_CACHE: dict = {"key": None, "cards": []}
+
+
+def _passport_cards() -> list:
+    path = _catalog_path()
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    if _REF_CACHE["key"] != key:
+        _REF_CACHE["cards"] = [
+            m for m in _load().get("motors", [])
+            if isinstance(m.get("passport"), dict) and m["passport"].get("passport")]
+        _REF_CACHE["key"] = key
+    return _REF_CACHE["cards"]
+
+
+@router.get("/references")
+def get_references(authorization: Optional[str] = Header(default=None)):
+    """Configure's reference motors — ONLY the cards that carry a passport, and
+    only what Configure reads of them (id, name, diameter, the passport block with
+    its computed ``pwm_variants``).
+
+    ``GET /api/catalog`` also ships every card's ``thumb_svg`` — 12 of its 12.6 MB
+    on the live catalogue — and Configure used to download and wait for all of it on
+    every open.  Same visibility rule as ``GET /api/catalog`` (a private card is its
+    owner's and an admin's only; the owner is computed by the very function the
+    back-fill stamps with, so the answer is the same without the write).
+    """
+    from motor_ai_sim.auth import caller_identity as _cid
+    from motor_ai_sim.routes.presets import _owner_of as _own
+    cards = _passport_cards()
+    ident = _cid(authorization)
+    if not ident.get("is_admin"):
+        cards = [m for m in cards
+                 if (m.get("visibility") or "public") != "private"
+                 or _own(_backing_entry(m)) == ident.get("id")]
+    from motor_ai_sim import passport_store as _ps
+    names = _machine_names()
+    out = [{"id": m.get("id"), "name": m.get("name"), "diameter_mm": m.get("diameter_mm"),
+            # True when the card's name is a configuration (or the die) of the catalogue: it
+            # then HAS a pack, controller and variants.  Legacy duplicates of the same
+            # geometry ("CIANO14 40_12" next to "CIANO14 40 new") have none, and the web must
+            # not pick one of those for the loaded machine.
+            "has_machine": str(m.get("name") or "").strip().casefold() in names,
+            "passport": m["passport"]} for m in cards]        # new dicts: the cache is never mutated
+    _ps.attach(out)
+    return {"motors": out}
+
+
 @router.post("/{motor_id}/load")
 def load_motor(motor_id: str,
                authorization: Optional[str] = Header(default=None)):
@@ -656,6 +729,37 @@ def get_motor_passport(motor_id: str):
 # Configure's physical limits (owner 2026-10-05) — see motor_ai_sim.configure_limits
 # ---------------------------------------------------------------------------
 
+def _die_docs_of(fam: Optional[dict]) -> tuple:
+    """``(configuration docs, die geometry)`` of the die a family document belongs to —
+    every configuration the die has, found the way ``_family_doc_of_motor`` finds one."""
+    die = str((fam or {}).get("die") or "").strip()
+    if not die:
+        return [], None
+    try:
+        import yaml as _yaml
+        from motor_ai_sim.workspace import iter_dies as _iter_dies
+        for e in _iter_dies():
+            if str(e.get("die") or e.get("name") or "").casefold() != die.casefold():
+                continue
+            d = Path(str(e["dir"]))
+            try:
+                dy = _yaml.safe_load((d / "die.yaml").read_text(encoding="utf-8")) or {}
+            except Exception:                                   # noqa: BLE001
+                dy = {}
+            docs = []
+            for f in sorted(d.glob("*.yaml")):
+                if f.name == "die.yaml":
+                    continue
+                c = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+                if isinstance(c, dict) and c.get("name"):
+                    c.setdefault("die", die)
+                    docs.append(c)
+            return docs, (dy.get("geometry") if isinstance(dy.get("geometry"), dict) else None)
+    except Exception:                                           # noqa: BLE001
+        log.warning("configure presets: the die's configurations could not be read", exc_info=True)
+    return [], None
+
+
 @router.get("/{motor_id}/configure_context")
 def get_configure_context(motor_id: str):
     """What Configure's sliders need to know about ONE machine: the hand-set
@@ -666,8 +770,21 @@ def get_configure_context(motor_id: str):
     motor = next((m for m in _load().get("motors", []) if m.get("id") == motor_id), None)
     if not motor:
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    # Several configurations can share one die name ("CIANO14 40 new": L12, L20), and a
+    # card carries no geometry of its own — the passport's base stack length is what
+    # tells them apart.
+    geo = motor.get("geometry")
+    if not geo:
+        L0 = ((motor.get("passport") or {}).get("passport") or {}).get("L0_mm")
+        geo = {"motor_length": L0} if L0 is not None else None
+    fam = _family_doc_of_motor(motor, geo)
+    from motor_ai_sim import passport_store as _ps
+    docs, die_geo = _die_docs_of(fam)
     return {"motor_id": motor_id,
-            **_cl.context(motor, _family_doc_of_motor(motor, motor.get("geometry")))}
+            **_cl.context(motor, fam),
+            # one preset per configuration of the die, read from the machines themselves
+            "presets": _cl.presets_for_die(
+                docs, die_geo, lambda die, cfg: _ps.variants_for(f"{die} {cfg}", None))}
 
 
 @router.patch("/{motor_id}/configure_limits")

@@ -143,7 +143,7 @@
     "refuseTj": "Refused: T_j {tj} °C is over the {limit} °C limit of {device}",
     "refuseRating": "Refused: {amps} A rms per switch is over the {limit} A rating of {device}",
     "refuseVds": "Refused: {device} blocks {vdss} V but the bus reaches {bus} V (at most {max} V allowed)",
-    "refuseBus": "Refused: the pack reaches {pack} V, above the {max} V this variant was computed for",
+    "refuseBus": "Refused: PWM computed for {lo}–{hi} V; this pack {pmin}–{pmax} V — request calculation",
     "refuseLimitTip": "A device limit is exceeded, so the numbers are withheld. Pick another variant or change the operating point.",
     "motorLoss": "Motor PWM extra loss",
     "motorLossTip": "The extra motor loss the carrier adds over the sine point, read from the computed points.",
@@ -160,7 +160,8 @@
     "pContMax": "P cont. max",
     "pContMaxTip": "Largest continuous shaft power the variant holds at this speed.",
     "columnDrive": "Drive",
-    "columnDriveEff": "η drive"
+    "columnDriveEff": "η drive",
+    "refuseBusTip": "A drive variant is only valid inside the bus range it was computed for. Sine keeps working; pick another pack or ask for the PWM calculation."
   },
   "configureLimits": {
     "build": "Build",
@@ -297,7 +298,7 @@
     "totalKoefTip": "Demag coefficient × saturation coefficient — torque retained against the ideal machine (fresh magnets, linear iron).",
     "vsRef": "{delta} % vs the reference design ({base} {unit})",
     "sameAsRef": "same as the reference design",
-    "addToComparison": "Add to comparison",
+    "addToComparison": "Save configuration",
     "saved": "Saved configurations",
     "savedHint": "({n}) — green = best · red = worst",
     "clearAll": "Clear all",
@@ -450,6 +451,16 @@
     "draftRow": "· {die} / {config} · L {L} mm · {I} A · {rpm} rpm",
     "draftFem": " · FEM {T} N·m",
     "draftNotSimulated": " · not simulated",
-    "draftOpen": "Open"
+    "draftOpen": "Open",
+    "loading": "Loading the motor model…",
+    "resetPack": "Reset to machine pack",
+    "resetPackTip": "Back to the pack this machine was saved with. Your edits are remembered for this machine only; the catalogue machine is never changed.",
+    "packEdited": "edited",
+    "preset": "Preset",
+    "presetModified": "modified from {config} preset",
+    "presetTip": "Restore every knob to this real configuration of the motor: stack length, turns, wire, connection, current, speed, battery pack and drive.",
+    "saveTitle": "Save configuration",
+    "packStock": "stock pack — none saved for this machine",
+    "motorVTip": "The DC bus this machine needs at {I} A, {rpm} rpm (line peak voltage)."
   }
 }

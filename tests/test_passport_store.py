@@ -110,3 +110,90 @@ def test_ambiguity_is_never_guessed(monkeypatch, tmp_path):
     (d / "L30.json").write_text(json.dumps({"pwm_variants": [{"id": "v", "device": "X",
                                                               "carrier_hz": 1000}]}), encoding="utf-8")
     assert ps.variants_for("Die A L30", None) is None
+
+
+def test_references_flag_the_cards_that_are_real_machines(tmp_path, monkeypatch):
+    """Two cards of one geometry — the real "<die>" and a legacy duplicate with another name —
+    are told apart by `has_machine`, so Configure never picks the duplicate (no pack, no
+    controller, no variants) for the loaded machine (live L12 showed a 100-cell default)."""
+    import yaml
+    from motor_ai_sim import workspace as ws
+    from motor_ai_sim.routes import catalog as cat_mod
+    d = tmp_path / "Die Q"
+    d.mkdir()
+    (d / "die.yaml").write_text(yaml.safe_dump({"name": "Die Q"}), encoding="utf-8")
+    (d / "C1.yaml").write_text(yaml.safe_dump({"name": "C1", "die": "Die Q"}), encoding="utf-8")
+    (d / "C2.yaml").write_text(yaml.safe_dump({"name": "C2", "die": "Die Q"}), encoding="utf-8")
+    monkeypatch.setattr(ws, "iter_dies", lambda: [{"name": "Die Q", "die": "Die Q", "dir": str(d)}])
+    p = tmp_path / "motor_catalog.json"
+    p.write_text(json.dumps({"motors": [
+        {**_card(name="Die Q 40_12"), "id": "dup"},            # legacy duplicate of the geometry
+        {**_card(name="Die Q"), "id": "die_level"},             # older cards carry the die name alone
+        {**_card(name="Die Q C2"), "id": "real"},                # "<die> <configuration>"
+        {**_card(name="Elsewhere"), "id": "none"}]}), encoding="utf-8")
+    monkeypatch.setattr(cat_mod, "_CATALOG_PATH", p)
+    cat_mod._REF_CACHE.update({"key": None, "cards": []})
+    import motor_ai_sim.auth as auth
+    monkeypatch.setattr(auth, "caller_identity", lambda a=None: {"id": "u@x", "is_admin": True})
+    app = FastAPI()
+    app.include_router(cat_mod.router)
+    got = {m["id"]: m["has_machine"] for m in TestClient(app).get("/api/catalog/references").json()["motors"]}
+    assert got == {"dup": False, "die_level": True, "real": True, "none": False}
+
+
+def test_the_store_is_parsed_once_per_change_and_keeps_only_what_configure_reads(monkeypatch, tmp_path):
+    d = tmp_path / "Die B"
+    d.mkdir()
+    f = d / "L1.json"
+    rec = {"pwm_variants": [{"id": "v", "device": "X", "carrier_hz": 1000,
+                             "build": {"length_mm": 1.0}, "points": {"a": {"rpm": 1, "I_A": 1}}}],
+           "cold": {"huge": list(range(5000))}, "hot_map": {"huge": list(range(5000))}}
+    f.write_text(json.dumps(rec), encoding="utf-8")
+    monkeypatch.setattr(ps, "_DIR", tmp_path)
+    ps._CACHE.clear()
+    calls = []
+    real = json.loads
+    monkeypatch.setattr(ps.json, "loads", lambda *a, **k: (calls.append(1), real(*a, **k))[1])
+    for _ in range(5):
+        assert ps.variants_for("Die B L1", None)[0]["id"] == "v"
+    assert len(calls) == 1, "parsed on every request"
+    assert set(ps._CACHE[str(f)][1]) == {"pwm_variants", "build"}      # the heavy blocks are not kept
+    # a changed file is re-read (the mtime/size key), an unchanged one is not
+    rec["pwm_variants"][0]["id"] = "v2"
+    f.write_text(json.dumps(rec) + " ", encoding="utf-8")
+    assert ps.variants_for("Die B L1", None)[0]["id"] == "v2" and len(calls) == 2
+
+
+def test_the_references_route_is_lean_and_visible_like_the_catalogue(tmp_path, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from motor_ai_sim.routes import catalog as cat_mod
+    p = tmp_path / "motor_catalog.json"
+    cards = [
+        {**_card(), "id": "cat_x", "thumb_svg": "<svg>" + "x" * 5000 + "</svg>", "owner": "a@x"},
+        {"id": "cat_nopass", "name": DIE, "thumb_svg": "<svg/>"},
+        {**_card(name="Hidden"), "id": "cat_priv", "visibility": "private", "owner": "someone@else"},
+    ]
+    p.write_text(json.dumps({"tiers": [], "diameters_mm": [], "motors": cards}), encoding="utf-8")
+    monkeypatch.setattr(cat_mod, "_CATALOG_PATH", p)
+    cat_mod._REF_CACHE.update({"key": None, "cards": []})
+    monkeypatch.setattr(cat_mod, "_caller_identity", lambda a=None: {"id": "u@x", "is_admin": False}, raising=False)
+    import motor_ai_sim.auth as auth
+    monkeypatch.setattr(auth, "caller_identity", lambda a=None: {"id": "u@x", "is_admin": False})
+    app = FastAPI()
+    app.include_router(cat_mod.router)
+    c = TestClient(app)
+    r = c.get("/api/catalog/references")
+    assert r.status_code == 200
+    motors = r.json()["motors"]
+    assert [m["id"] for m in motors] == ["cat_x"]                       # passport cards only, private one hidden
+    assert set(motors[0]) == {"id", "name", "diameter_mm", "has_machine", "passport"}  # no thumbnail
+    assert any(v["id"] == "si_48k" for v in motors[0]["passport"]["pwm_variants"])
+    assert b"thumb_svg" not in r.content and b"xxxxx" not in r.content   # the 5 KB thumbnail never travels
+    # the cache is parsed once and never handed out mutated
+    first = cat_mod._REF_CACHE["cards"]
+    c.get("/api/catalog/references")
+    assert cat_mod._REF_CACHE["cards"] is first and "pwm_variants" not in first[0]["passport"]
+    # a rewritten catalogue file is picked up
+    p.write_text(json.dumps({"motors": [{**_card(name="Other"), "id": "cat_y"}]}), encoding="utf-8")
+    assert [m["id"] for m in c.get("/api/catalog/references").json()["motors"]] == ["cat_y"]

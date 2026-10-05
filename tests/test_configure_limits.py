@@ -76,6 +76,127 @@ def test_context_carries_current_pack_and_modulation(client):
     assert c.get("/api/catalog/nope/configure_context").status_code == 404
 
 
+def test_the_context_carries_the_machines_own_pack_for_the_battery_panel(tmp_path, monkeypatch):
+    """The Battery panel must open on the MACHINE's pack (6S for L12), never a
+    100-cell default — so the context states cells, chemistry and per-cell voltages,
+    and the card is matched by its passport's stack length when the die has several
+    configurations."""
+    from motor_ai_sim.routes import catalog as cat_mod
+    p = tmp_path / "motor_catalog.json"
+    p.write_text(json.dumps({"motors": [
+        {"id": "cat_l12", "name": "CIANO14 40 new", "passport": {"passport": {"L0_mm": 12.0}}}]}),
+        encoding="utf-8")
+    monkeypatch.setattr(cat_mod, "_CATALOG_PATH", p)
+    seen = {}
+
+    def fam(motor, geo=None):
+        seen["geo"] = geo
+        return {"battery": {"chemistry": "NMC", "cells": 6, "v_cell_min": 3.0, "v_cell_nom": 3.7,
+                            "v_cell_max": 4.2, "v_min": 18.0, "v_nom": 22.2, "v_max": 25.2}}
+    monkeypatch.setattr(cat_mod, "_family_doc_of_motor", fam)
+    app = FastAPI()
+    app.include_router(cat_mod.router)
+    b = TestClient(app).get("/api/catalog/cat_l12/configure_context").json()["battery"]
+    assert seen["geo"] == {"motor_length": 12.0}
+    assert b == {"v_max": 25.2, "v_nom": 22.2, "v_min": 18.0, "cells": 6, "chemistry": "NMC",
+                 "v_cell_min": 3.0, "v_cell_nom": 3.7, "v_cell_max": 4.2}
+
+
+def _cfg(name, L, N, h, conn_p, duties, battery=None, die="Die X"):
+    d = {"name": name, "die": die,
+         "geometry_overrides": {"motor_length": L, "num_wires_per_slot": N, "wire_height": h},
+         "winding": {"n_parallel": conn_p, "connection": "x"},
+         "duties": [{"name": n, "rpm": r, "current_arms": i} for n, r, i in duties]}
+    if battery:
+        d["battery"] = battery
+    return d
+
+
+S6 = {"chemistry": "NMC", "cells": 6, "v_min": 18.0, "v_nom": 22.2, "v_max": 25.2}
+S12 = {"chemistry": "NMC", "cells": 12, "v_min": 36.0, "v_nom": 44.4, "v_max": 50.4}
+
+
+def test_presets_are_the_dies_configurations_one_each_never_a_fixed_list():
+    """One configuration -> one preset; three -> three; nothing about names is known."""
+    die_geo = {"motor_length": 99, "wire_height": 0.7, "num_wires_per_slot": 5, "wire_split": 1}
+    one = [_cfg("Solo", 30, 6, 0.5, 1, [("peak", 9000, 70), ("rated", 7000, 55)], S6)]
+    out = cl.presets_for_die(one, die_geo)
+    assert [p["config"] for p in out] == ["Solo"]
+    k = out[0]["knobs"]
+    assert (k["L_mm"], k["N"], k["wireH_mm"], k["nP"], k["split"]) == (30, 6, 0.5, 1, 1)
+    assert (k["I_A"], k["rpm"]) == (55, 7000) and out[0]["duty"] == "rated"      # the "rated" duty
+    assert out[0]["battery"]["cells"] == 6 and out[0]["battery"]["v_max"] == 25.2
+
+    three = [_cfg("B", 20, 8, 0.45, 2, [("peak", 25000, 80)], S12),
+             _cfg("C", 40, 5, 0.7, 1, [("rated", 3000, 20)]),
+             _cfg("A", 12, 7, 0.6, 1, [("peak", 14400, 48.8), ("rated", 13000, 42.8)], S6)]
+    out = cl.presets_for_die(three, die_geo)
+    assert [p["config"] for p in out] == ["A", "B", "C"]                  # in the die's own order
+    assert [p["knobs"]["L_mm"] for p in out] == [12, 20, 40]
+    assert [p["knobs"]["nP"] for p in out] == [1, 2, 1]
+    assert out[1]["duty"] == "peak" and out[1]["knobs"]["I_A"] == 80      # no "rated": the first duty
+    assert out[2]["battery"] is None                                       # a config with no pack names none
+    # nothing -> nothing
+    assert cl.presets_for_die([], die_geo) == []
+
+
+def test_a_preset_falls_back_to_the_die_geometry_and_carries_its_variants():
+    die_geo = {"motor_length": 99, "wire_height": 0.7, "num_wires_per_slot": 5}
+    doc = {"name": "Bare", "die": "D", "duties": []}
+    p = cl.preset_of(doc, die_geo, [{"id": "si_48k"}, {"id": "gan_48k"}])
+    assert p["knobs"]["L_mm"] == 99 and p["knobs"]["N"] == 5 and p["knobs"]["wireH_mm"] == 0.7
+    assert p["knobs"]["I_A"] is None and p["knobs"]["rpm"] is None         # unknown stays unknown
+    assert [v["id"] for v in p["pwm_variants"]] == ["si_48k", "gan_48k"]
+    assert p["drive_variant"] == "si_48k"                                   # opens on its first variant
+    assert cl.preset_of(doc, die_geo, None)["drive_variant"] is None       # no variants: Sine
+
+
+def test_the_context_route_lists_the_dies_presets_and_their_own_variants(tmp_path, monkeypatch):
+    from motor_ai_sim.routes import catalog as cat_mod
+    p = tmp_path / "motor_catalog.json"
+    p.write_text(json.dumps({"motors": [
+        {"id": "cat_l12", "name": "CIANO14 40 new", "passport": {"passport": {"L0_mm": 12.0}}}]}),
+        encoding="utf-8")
+    monkeypatch.setattr(cat_mod, "_CATALOG_PATH", p)
+    monkeypatch.setattr(cat_mod, "_family_doc_of_motor", lambda m, g=None: {"die": "CIANO14 40 new", "name": "L12"})
+    docs = [_cfg("L20", 20, 8, 0.45, 2, [("peak", 25000, 80.6)], S12, die="CIANO14 40 new"),
+            _cfg("L12", 12, 7, 0.6, 1, [("rated", 13000, 42.78)], S6, die="CIANO14 40 new")]
+    monkeypatch.setattr(cat_mod, "_die_docs_of", lambda fam: (docs, {"wire_split": 1}))
+    app = FastAPI()
+    app.include_router(cat_mod.router)
+    pr = TestClient(app).get("/api/catalog/cat_l12/configure_context").json()["presets"]
+    assert [x["config"] for x in pr] == ["L12", "L20"]
+    # each preset carries ITS OWN configuration's pilot variants (L12: 5, L20: 3 in the repo store)
+    assert len(pr[0]["pwm_variants"]) == 5 and len(pr[1]["pwm_variants"]) == 3
+    assert all(v["build"]["length_mm"] == 12.0 for v in pr[0]["pwm_variants"])
+    assert all(v["build"]["length_mm"] == 20.0 for v in pr[1]["pwm_variants"])
+    assert pr[0]["drive_variant"] == "si_48k" and pr[0]["battery"]["cells"] == 6
+    assert pr[1]["battery"]["cells"] == 12 and pr[1]["knobs"]["nP"] == 2
+
+
+@pytest.mark.parametrize("n_cfg", [1, 3])
+def test_the_dies_configurations_are_read_from_its_folder(tmp_path, monkeypatch, n_cfg):
+    """A die folder with 1 or 3 configuration files gives 1 or 3 presets — adding a file
+    adds a preset, nothing is listed by name."""
+    import yaml
+    from motor_ai_sim import workspace as ws
+    from motor_ai_sim.routes import catalog as cat_mod
+    d = tmp_path / "Die Z"
+    d.mkdir()
+    (d / "die.yaml").write_text(yaml.safe_dump({"name": "Die Z", "geometry": {"wire_split": 1}}), encoding="utf-8")
+    for i in range(n_cfg):
+        (d / f"C{i}.yaml").write_text(yaml.safe_dump(
+            _cfg(f"C{i}", 10 + 5 * i, 6, 0.5, 1, [("rated", 1000 * (i + 1), 10 + i)], S6, die="Die Z")), encoding="utf-8")
+    monkeypatch.setattr(ws, "iter_dies", lambda: [{"name": "Die Z", "die": "Die Z", "dir": str(d)}])
+    docs, die_geo = cat_mod._die_docs_of({"die": "Die Z", "name": "C0"})
+    out = cl.presets_for_die(docs, die_geo)
+    assert [p["config"] for p in out] == [f"C{i}" for i in range(n_cfg)]
+    assert [p["knobs"]["L_mm"] for p in out] == [10 + 5 * i for i in range(n_cfg)]
+    assert [p["knobs"]["rpm"] for p in out] == [1000 * (i + 1) for i in range(n_cfg)]
+    assert cat_mod._die_docs_of({"die": "Other"}) == ([], None)
+    assert cat_mod._die_docs_of(None) == ([], None)
+
+
 def test_no_controller_is_an_explicit_answer():
     assert cl.current_limit({})["set"] is False
     assert "no controller device" in cl.current_limit(None)["reason"]

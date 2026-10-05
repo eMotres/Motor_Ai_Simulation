@@ -14,6 +14,11 @@ plan:
   # loss trajectory also gets 2·n0 (+ the electrical n_max as always)
   loss_speed_factors: [0.25, 0.5, 1.0, 1.5, 2.0]
   envelope_max_factor: 4.0
+  # settled loss runs at 60 steps/period (the duty's own 120 cost 27 min single-thread
+  # per TDM point on the 2026-10-05 probe); B4 re-solves the rated point at 120
+  loss_steps_per_period: 60
+  # the controller's margin (m = 0.89, the controller block below) from the first plan
+  m_margin: 0.89
   refine_points: [[2.0, 42.5], [2.0, 57.5], [2.5, 42.5], [2.5, 57.5]]
 machines:
   L13:

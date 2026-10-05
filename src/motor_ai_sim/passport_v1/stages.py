@@ -50,6 +50,15 @@ def _speed_factors(snap) -> Tuple[float, ...]:
                                     or LOSS_SPEED_FACTORS))
 
 
+def loss_steps(snap) -> int:
+    """Steps per period of the settled loss runs: the spec's
+    ``plan.loss_steps_per_period`` when set (Ø85: 60 against the duty's 120 —
+    a TDM loss point cost 27 min single-thread at 120; the B4 check re-solves
+    the rated trajectory point at the duty's own count), else the duty's."""
+    v = (snap.get("plan") or {}).get("loss_steps_per_period")
+    return int(v) if v else int(snap["rated_duty"]["steps_per_period"])
+
+
 def _n_mech(mech0: Mapping[str, Any]) -> float:
     """The bearing speed limit, or +inf when no bearing names one (NaN-safe:
     a machine with no bearings has NO mechanical limit from them, stated)."""
@@ -286,7 +295,7 @@ def stage_demag(R, snap, st) -> None:
     Tm, Tc = _hot(snap)
     b = _base(snap, st, static=False)
     I0, n0 = _I0(snap), _n0(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = loss_steps(snap)
     jl = []
     mt = {round(m["fI"], 6): m for m in st["hot_mtpa"]}
     for fI, g in DEMAG_PROBES:
@@ -464,7 +473,7 @@ def stage_extra(R, snap, st) -> None:
           and abs(p["I"] - I0) < 1e-6][0]
     jl.append(J.loss_job("xs_rated_nodemag", _base(snap, st, static=False), I_rms=I0,
                          gamma_deg=round(rp["gamma"], 3), rpm=n0, magnet_temp_c=Tm,
-                         coil_temp_c=Tc, steps=int(snap["rated_duty"]["steps_per_period"]),
+                         coil_temp_c=Tc, steps=loss_steps(snap),
                          demag=False,
                          meta={"set": "state_split", "rpm": n0, "I": I0,
                                "gamma": round(rp["gamma"], 3),
@@ -506,10 +515,13 @@ def stage_loss(R, snap, st) -> None:
     Tm, Tc = _hot(snap)
     b = _base(snap, st, static=False)
     I0, n0 = _I0(snap), _n0(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = loss_steps(snap)
     hm = hot_map(R, snap, st)
     Rh = R_hot(R, st)
-    vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), M_MARGIN)
+    # a spec may state the controller margin up front (Ø85: 0.89), so the first
+    # trajectory is already the one loss2/loss3 re-plan to (no duplicate FW points)
+    m0 = float((snap.get("plan") or {}).get("m_margin") or M_MARGIN)
+    vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), m0)
     I_pk, I_pk_src = _peak_current(snap, st)
     mech0 = LS.mech_losses(rpm=n0, bearings=snap["bearings"], geometry=snap["geometry"],
                            temp_c=None)
@@ -534,7 +546,7 @@ def stage_loss(R, snap, st) -> None:
                                            "gamma": round(g, 3), "mode": how}))
             plan.append(row)
     st["loss_plan"] = {
-        "bus": TRAJECTORY_BUS, "v_dc": bus(snap, TRAJECTORY_BUS), "m": M_MARGIN,
+        "bus": TRAJECTORY_BUS, "v_dc": bus(snap, TRAJECTORY_BUS), "m": m0,
         "v_phase_limit_V": vlim, "R_hot_ohm": Rh,
         "I_peak_rms": I_pk, "I_peak_source": I_pk_src,
         "n_mech_limit_rpm": n_mech, "n_mech_source":
@@ -563,7 +575,7 @@ def _reuse_or_job(R, prefix, n, I, g, how, b, snap, I0, set_name, extra_meta=Non
     """An existing settled point at the same (n, I, gamma) is reused, else a
     new job (the trajectory only moves where the margin moves the FW angle)."""
     Tm, Tc = _hot(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = loss_steps(snap)
     for rid, rec in R.done.items():
         k = rec.get("kw") or {}
         if (rec.get("meta") or {}).get("set") in ("loss", "loss2", "loss3", "loss_check", "loss_check2") \
@@ -712,7 +724,7 @@ def stage_checks(R, snap, st) -> None:
     b = _base(snap, st)
     bl = _base(snap, st, static=False)
     I0, n0 = _I0(snap), _n0(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = loss_steps(snap)
     hm = hot_map(R, snap, st)
     lp = st["loss_plan"]
     Rh, vlim, I_pk = lp["R_hot_ohm"], lp["v_phase_limit_V"], lp["I_peak_rms"]
@@ -766,13 +778,15 @@ def stage_checks(R, snap, st) -> None:
                                  magnet_temp_c=Tm, coil_temp_c=Tc, steps=steps,
                                  meta={"set": "loss_check", "rpm": n, "I": I,
                                        "gamma": round(g, 3), "mode": how, "role": role}))
-    # (d) time step (B4): the rated trajectory point at 72 steps
+    # (d) time step (B4): the rated trajectory point at 72 steps — or, when the
+    #     loss runs use fewer steps than the duty, at the duty's own count
     g1, how1 = hm.operating_gamma(I0, n0, Rh, vlim)
+    s_chk = 72 if steps == int(snap["rated_duty"]["steps_per_period"])         else int(snap["rated_duty"]["steps_per_period"])
     jl.append(J.loss_job("lchk_rated_72steps", bl, I_rms=I0, gamma_deg=round(g1, 3), rpm=n0,
-                         magnet_temp_c=Tm, coil_temp_c=Tc, steps=72,
+                         magnet_temp_c=Tm, coil_temp_c=Tc, steps=s_chk,
                          meta={"set": "loss_check", "rpm": n0, "I": I0,
                                "gamma": round(g1, 3), "mode": how1,
-                               "role": "time-step check (72 vs %d steps)" % steps}))
+                               "role": "time-step check (%d vs %d steps)" % (s_chk, steps)}))
     # (e) the saved duties, re-solved today with their own settings
     duties = [("duty_rated", snap["rated_duty"])]
     if snap.get("peak_duty"):

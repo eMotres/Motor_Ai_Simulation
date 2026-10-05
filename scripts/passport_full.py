@@ -277,6 +277,7 @@ def task_cooling(work: Path, a) -> None:
     from motor_ai_sim.routes import coupled as cp
     from motor_ai_sim.routes import simulation as sim
     from motor_ai_sim.simulation.fem_solver_2d import _NO_WARM_CACHE_CTX
+    from motor_ai_sim.passport_v1.stages import loss_steps
     set_request_materials({"assignment": _materials(snap), "materials": {}})
     lp = st.get("loss_plan3") or st.get("loss_plan2") or st["loss_plan"]
     I0 = float(snap["rated_duty"]["current_arms"])
@@ -294,7 +295,7 @@ def task_cooling(work: Path, a) -> None:
     Tm0, Tc0 = snap["temperatures"]["hot_magnet_c"], snap["temperatures"]["hot_coil_c"]
     body = {
         "restore": False, "n_periods": 1,
-        "n_steps_per_period": int(rd["steps_per_period"]),
+        "n_steps_per_period": loss_steps(snap),
         "gamma_deg": round(float(g), 3), "I_phase_rms": float(I),
         "rpm": n, "mode": "motor",
         "mesh_size_mm": m["mesh_size_mm"], "min_size_mm": m["min_size_mm"],
@@ -494,8 +495,9 @@ def task_pwm(work: Path, a) -> None:
     wait_while_paused()
     t0 = time.time()
     # 1) the sine current-drive run at the point: the feed-forward fundamental
+    from motor_ai_sim.passport_v1.stages import loss_steps
     s = sim.get_fem_transient(**_route_kw(snap, I=I, g=g, rpm=n, Tm=Tm, Tc=Tc,
-                                          steps=int(snap["rated_duty"]["steps_per_period"])))
+                                          steps=loss_steps(snap)))
     ss = s.get("summary") or {}
     rec["sine_36"] = ss
     rec["sine_36_wall_s"] = time.time() - t0
@@ -587,7 +589,7 @@ def task_demagseq(work: Path, a) -> None:
     set_request_materials({"assignment": _materials(snap), "materials": {}})
     Tm, Tc = S._hot(snap)
     I0, n0 = S._I0(snap), S._n0(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = S.loss_steps(snap)
     b = S._base(snap, st, static=False)
     lp = st.get("loss_plan2") or st["loss_plan"]
     vlim = PM.v_phase_limit(float(lp["v_dc"]), float((_mspec(M).get("controller") or {}).get("m")

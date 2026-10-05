@@ -16,6 +16,7 @@ import { CreateUserDialog, ResetPasswordDialog } from '../dialogs/AccountDialogs
 import MotorsDialog, { type RegistryUser } from '../dialogs/MotorsDialog';
 import { ROLES } from '../dialogs/InviteDialog';
 import UserDrawer from '../UserDrawer';
+import { useTranslation } from 'react-i18next';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const ROLE_COLOR: Record<string, string> = {
@@ -34,6 +35,7 @@ type SortKey = 'email' | 'role' | 'created' | 'lastLogin';
 const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: string | null; setNotice: (m: string | null) => void }> = ({
   onInvite, notice, setNotice,
 }) => {
+  const { t } = useTranslation('admin');
   const [users, setUsers] = useState<RegistryUser[]>([]);
   const [sessions, setSessions] = useState<SessionRow[]>([]);
   const [usage, setUsage] = useState<UsageRow[]>([]);
@@ -188,6 +190,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                 <TableCell><TableSortLabel active={sortKey === 'lastLogin'} direction={sortDir} onClick={() => toggleSort('lastLogin')}>Last login</TableSortLabel></TableCell>
                 <TableCell align="right">CPU-h 30 d</TableCell>
                 <TableCell align="center">Motors</TableCell>
+                <TableCell>{t('motors.colDefault')}</TableCell>
                 <TableCell align="center">Status</TableCell>
               </TableRow>
             </TableHead>
@@ -211,6 +214,9 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                     <TableCell sx={{ color: 'var(--text-2)' }}>{last ? new Date(last * 1000).toLocaleDateString() : '—'}</TableCell>
                     <TableCell align="right" sx={{ color: 'var(--text-2)' }}>{uh ? uh.cpu_h.toFixed(1) : '—'}</TableCell>
                     <TableCell align="center" sx={{ color: 'var(--text-3)' }}>{motorsLabel}</TableCell>
+                    <TableCell sx={{ color: 'var(--text-2)', whiteSpace: 'nowrap' }}>
+                      {g?.default ? `${g.default.die} / ${g.default.config}` : '—'}
+                    </TableCell>
                     <TableCell align="center">
                       <Chip size="small" label={u.disabled ? 'disabled' : 'active'}
                         sx={{ height: 18, fontSize: 10, bgcolor: 'var(--panel)', color: u.disabled ? '#f87171' : '#4ade80' }} />
@@ -220,7 +226,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
               })}
               {filtered.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={7} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
+                  <TableCell colSpan={8} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>
                     {users.length === 0
                       ? 'No accounts yet — Google sign-ins appear here automatically; password accounts via "Add account".'
                       : 'No accounts match this search/filter.'}

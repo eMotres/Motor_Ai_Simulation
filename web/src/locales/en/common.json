@@ -129,5 +129,17 @@
   "notifications": "Notifications",
   "notices": "Notices",
   "none": "None.",
-  "markRead": "Mark read"
+  "markRead": "Mark read",
+  "refused": {
+    "admin": "This needs an admin account — your account opens motors in Motors and tunes them in Configure.",
+    "signIn": "Sign in to use this feature.",
+    "forbidden": "Your account is not allowed to do this."
+  },
+  "card": {
+    "badge": "card",
+    "tip": "Full passport card · {date}",
+    "tipNoDate": "Full passport card",
+    "summary": "{cards}/{total} cards",
+    "summaryTip": "{cards} of {total} configurations have a full passport card"
+  }
 }

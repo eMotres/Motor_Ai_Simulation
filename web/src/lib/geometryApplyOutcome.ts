@@ -79,3 +79,19 @@ export function geometryApplyOutcome(
   // concerned it IS applied, just not confirmed by the server yet.
   return { ok: true, refused: [] };
 }
+
+/**
+ * The one-line reason a duty LOAD stops when its geometry write was refused, or
+ * null when it was written.  The winding that follows is validated against the
+ * geometry the server holds NOW, so loading on past a refused geometry write
+ * surfaces three steps later as a misleading "Connection '2S' invalid for 24
+ * slots" (owner 2026-10-05).
+ */
+export function loadStopReason(
+  die: string, cfg: string,
+  outcome: { ok: boolean; refused?: ReadonlyArray<{ field: string; reason: string }> } | null | undefined,
+): string | null {
+  if (!outcome || outcome.ok !== false) return null;
+  const why = (outcome.refused ?? []).map((r) => `${r.field}: ${r.reason}`).join('; ');
+  return `geometry of ${die} / ${cfg} was refused${why ? ` - ${why}` : ''}`;
+}

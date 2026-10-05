@@ -21,6 +21,8 @@ import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { useScrollMemory } from '../../lib/scrollMemory';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import { canWriteServer } from '../../lib/localAuth';
+import { uiCanWrite } from '../../lib/accessUi';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -58,7 +60,8 @@ const MotorsCatalog: React.FC = () => {
   const load = (fresh = false) =>
     fetchFamilyTree({ fresh })
       .then(t => {
-        setCanWrite(t.can_write === true);
+        // may write the SHARED config (admin / local dev) - not merely "a copy into my own workspace"
+        setCanWrite(uiCanWrite(t.can_write, canWriteServer()));
         setNote(typeof t.note === 'string' ? t.note : null);
         setDiams(Array.from(new Set(
           ((t.dies || []) as { stator_diameter: number }[])

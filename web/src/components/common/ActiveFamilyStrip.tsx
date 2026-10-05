@@ -29,6 +29,8 @@ import { followActiveDuty } from '../../lib/dutyLocalApply';
 import { driveLabel } from '../../lib/dutyRuns';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 import { currentMatJson } from '../../lib/apiAuth';
+import { canWriteServer } from '../../lib/localAuth';
+import { uiCanWrite } from '../../lib/accessUi';
 import { controllerMirrorApplies, type ControllerMirror } from '../controller/controllerApi';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
@@ -119,7 +121,11 @@ const ActiveFamilyStrip: React.FC = () => {
   const [, setTick] = useState(0);
 
   const load = () => fetch(`${API}/api/family/context`)
-    .then(r => r.json()).then((j: Ctx) => {
+    .then(r => r.json()).then((j0: Ctx) => {
+      // The server's can_write is true for every registered account (own
+      // workspace); the strip's writer controls and the follower are for a
+      // session that may write the SHARED config.
+      const j: Ctx = { ...j0, can_write: uiCanWrite(j0?.can_write, canWriteServer()) };
       // Ordinary user (no write rights): the server context is the OWNER's
       // machine, not this client's.  When the user has ▶-copied a duty, the
       // strip names THEIR copy from local context instead.

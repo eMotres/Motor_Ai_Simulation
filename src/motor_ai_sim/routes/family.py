@@ -729,6 +729,16 @@ def die_names() -> set[str]:
     return {str(e["name"]) for e in _iter_die_entries()}
 
 
+def die_config_names(die: str) -> list[str]:
+    """The configuration names of one die ("L12", "L20" ...), from the directory
+    listing only — what a per-user default motor may legally name."""
+    for e in _iter_die_entries():
+        if str(e["name"]) == str(die):
+            return sorted(f.stem for f in Path(str(e["dir"])).glob("*.yaml")
+                          if f.name != "die.yaml")
+    return []
+
+
 def _load_yaml(p: Path, what: str) -> dict:
     try:
         with open(p, encoding="utf-8") as f:
@@ -1836,6 +1846,28 @@ def _tree_signature(with_catalog: bool) -> tuple:
     return tuple(sig)
 
 
+def _stamp_cards(dies: list) -> list:
+    """Copy of the tree's dies with the FULL-passport-card flag on every
+    configuration (``card_date``: the card's date or None) and the die-level
+    summary (``cards`` / ``config_count``).  Stamped AFTER the tree cache, on
+    copies, so the cache never holds a stale flag and adding or removing a
+    passport-store file shows on the next request."""
+    try:
+        from motor_ai_sim import passport_store as _ps
+        idx = _ps.card_index()
+    except Exception:                                       # noqa: BLE001
+        idx = {}
+    out = []
+    for d in dies:
+        have = idx.get(str(d.get("name")), {})
+        cfgs = [{**c, "card_date": have.get(str(c.get("name")))}
+                for c in (d.get("configs") or [])]
+        out.append({**d, "configs": cfgs,
+                    "cards": sum(1 for c in cfgs if c["card_date"]),
+                    "config_count": len(cfgs)})
+    return out
+
+
 @router.get("/tree")
 def tree(response: Response, authorization: str = Header(default=None)):
     # Who may CHANGE the catalog: the vendor alone on a single-layer install,
@@ -1922,7 +1954,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
     _sig = _tree_signature(_client_filter)
     _hit = _TREE_CACHE.get(_key)
     if _sig and _hit is not None and _hit[0] == _sig:
-        res = {"dies": list(_hit[1]), "can_write": _can_write}
+        res = {"dies": _stamp_cards(_hit[1]), "can_write": _can_write}
         if not _hit[1] and _acc["mode"] == MODE_GRANTED:
             res["note"] = "no motors granted yet — ask the vendor"
         return res
@@ -2062,7 +2094,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
         })
     if _sig:
         _TREE_CACHE[_key] = (_sig, out)
-    res = {"dies": list(out), "can_write": _can_write}
+    res = {"dies": _stamp_cards(out), "can_write": _can_write}
     if not out and _acc["mode"] == MODE_GRANTED:
         # An empty page tells a new account nothing.  ONE line, no wall of
         # text — the catalog renders it where "no dies yet" would go.

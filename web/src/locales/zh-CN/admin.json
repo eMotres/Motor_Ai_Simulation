@@ -11,5 +11,22 @@
     "motorsAccess": "电机访问权限",
     "newsletter": "通讯与通知",
     "logs": "日志 / 事件"
+  },
+  "motors": {
+    "title": "电机 — {email}",
+    "titleTip": "该账号可见的目录。未授权任何电机 = 目录为空。",
+    "allMotors": "全部电机",
+    "allMotorsNote": "（包括以后新增的）",
+    "loading": "正在加载目录…",
+    "empty": "目录中还没有冲片。",
+    "configs": "{count} 个配置",
+    "defaultTitle": "默认电机",
+    "defaultTip": "在用户自己选择之前，“配置”页签会打开此冲片和配置。仅列出已授权的冲片。",
+    "die": "冲片",
+    "config": "配置",
+    "none": "无",
+    "cancel": "取消",
+    "save": "保存",
+    "colDefault": "默认电机"
   }
 }

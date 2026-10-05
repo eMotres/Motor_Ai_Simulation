@@ -581,32 +581,74 @@ def public_user(email: str) -> dict:
 # sees an empty catalog until the vendor assigns motors to it (user's rule,
 # 2026-09-02).  Admins (tier admin / ADMIN_EMAILS) bypass this entirely.
 
+def _norm_default(raw) -> Optional[dict]:
+    """Any stored shape -> `{"die": str, "config": str}` or None."""
+    if not isinstance(raw, dict):
+        return None
+    die = str(raw.get("die") or "").strip()
+    cfg = str(raw.get("config") or "").strip()
+    return {"die": die, "config": cfg} if die and cfg else None
+
+
+def _default_allowed(all_motors: bool, dies: list, default: Optional[dict]) -> bool:
+    """A default motor must be one the account may open: any die for an
+    ``all`` grant, otherwise a die named in the grant list."""
+    return bool(default) and (all_motors or default["die"] in dies)
+
+
 def normalize_grants(raw) -> dict:
-    """Any stored shape → `{"all": bool, "dies": [str]}` (never None)."""
+    """Any stored shape -> `{"all": bool, "dies": [str]}` (never None), plus a
+    `"default": {die, config}` key ONLY when an admin set one.  The default
+    motor is dropped here whenever it is not covered by the grant, so a stale
+    default can never outlive the grant it rode on."""
     if not isinstance(raw, dict):
         return {"all": False, "dies": []}
     dies = raw.get("dies")
     if not isinstance(dies, (list, tuple, set)):
         dies = []
-    return {"all": bool(raw.get("all")),
-            "dies": sorted({str(d).strip() for d in dies if str(d).strip()})}
+    dies = sorted({str(d).strip() for d in dies if str(d).strip()})
+    all_motors = bool(raw.get("all"))
+    default = _norm_default(raw.get("default"))
+    out = {"all": all_motors, "dies": dies}
+    if _default_allowed(all_motors, dies, default):
+        out["default"] = default
+    return out
 
 
 def get_motor_grants(email: str) -> dict:
     return normalize_grants((_load_soft().get(_norm(email)) or {}).get("motors"))
 
 
+def get_default_motor(email: str) -> Optional[dict]:
+    """The admin-chosen starting motor of an account (`{"die", "config"}`) or None."""
+    return get_motor_grants(email).get("default")
+
+
+_KEEP = object()
+
+
 def set_motor_grants(email: str, *, all_motors: bool,
-                     dies: Optional[list] = None) -> dict:
+                     dies: Optional[list] = None, default=_KEEP) -> dict:
     """Replace an account's grants.  Written through the same atomic _save as
-    every other registry change — never a second writer on users.json."""
+    every other registry change — never a second writer on users.json.
+
+    `default` (`{"die", "config"}` or None) is the motor Configure opens on.
+    Left out, the stored default is kept when the NEW grant still covers its
+    die and cleared when it does not; None clears it.  The route validates
+    that the die/configuration exist; this layer guarantees default ⊆ grants.
+    """
     email = _norm(email)
     with _LOCK:
         users = _load()
         if email not in users:
             raise KeyError(email)
+        if default is _KEEP:
+            default = _norm_default((users[email].get("motors") or {}).get("default")
+                                    if isinstance(users[email].get("motors"), dict) else None)
+        else:
+            default = _norm_default(default)
         users[email]["motors"] = normalize_grants(
-            {"all": all_motors, "dies": list(dies or [])})
+            {"all": all_motors, "dies": list(dies or []), "default": default})
         _save(users)
     return get_motor_grants(email)
 

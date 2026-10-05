@@ -12,5 +12,22 @@
     "motorsAccess": "Motors access",
     "newsletter": "Newsletter & notices",
     "logs": "Logs / Events"
+  },
+  "motors": {
+    "title": "Motors — {email}",
+    "titleTip": "The catalog this account sees. Nothing granted = empty catalog.",
+    "allMotors": "All motors",
+    "allMotorsNote": "(including ones added later)",
+    "loading": "Loading catalog…",
+    "empty": "The catalog has no dies yet.",
+    "configs": "{count, plural, one {# config} other {# configs}}",
+    "defaultTitle": "Default motor",
+    "defaultTip": "Configure opens on this die and configuration until the user picks his own. Only granted dies are listed.",
+    "die": "Die",
+    "config": "Configuration",
+    "none": "None",
+    "cancel": "Cancel",
+    "save": "Save",
+    "colDefault": "Default motor"
   }
 }

@@ -40,6 +40,10 @@ import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import { useAuth } from '../../contexts/AuthContext';
+import { canWriteServer } from '../../lib/localAuth';
+import { isStandardUser, uiCanWrite } from '../../lib/accessUi';
+import { CardBadge, CardSummary } from '../common/CardBadge';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -105,11 +109,15 @@ interface Cfg {
   turns: number | null; connection: string | null; star_delta?: string | null;
   magnet?: string | null; steel?: string | null;
   duties: Duty[];
+  /** date of this configuration's FULL passport card (v1 record), null = none */
+  card_date?: string | null;
 }
 interface Die {
   name: string; locked: boolean; created?: string;
   slots: number; poles: number; stator_diameter: number;
   thumb_svg?: string | null; configs: Cfg[];
+  /** how many of its configurations have a full passport card */
+  cards?: number; config_count?: number;
   /** "workspace" | "published" | "shared" — absent when layering is off
    *  (single-catalog workstation). Only a catalog admin may delete a
    *  published or shared die; see AGENTS.md / DELETE /api/family/die. */
@@ -193,6 +201,8 @@ const FamilyCatalog: React.FC<{
   // The backend enforces this on every mutating endpoint — this flag only
   // decides whether the editing controls are drawn at all.
   const [canWrite, setCanWrite] = useState(false);
+  const { enforced, isAdmin, role } = useAuth();
+  const standardUser = isStandardUser(enforced, isAdmin, role);
 
   // What is loaded in the editor — its die/config/duty rows get highlighted.
   const [active, setActive] = useState<{ die?: string; config?: string;
@@ -222,7 +232,9 @@ const FamilyCatalog: React.FC<{
     try {
       const t = await fetchFamilyTree({ fresh });
       setDies((t.dies as Die[]) || []);
-      setCanWrite(t.can_write === true);
+      // The server's can_write = "may write a copy into MY workspace" (true for every
+      // registered account); the UI's = may write the SHARED config (admin / local dev).
+      setCanWrite(uiCanWrite(t.can_write, canWriteServer()));
       setNote(typeof t.note === 'string' ? t.note : null);
       const c = await (await fetch(`${API}/api/family/context`, { cache: 'no-store' })).json();
       setActive(c?.active ? c : null);
@@ -589,7 +601,9 @@ const FamilyCatalog: React.FC<{
       const done = await applyDutyEverywhere(die, cfg, duty, canWrite);
       setMsg(`✓ applied ${label} — ${done.message}`);
       // Straight to the machine the user just loaded (user request).
-      setActiveTab('geometry');
+      // The owner lands on the Geometry tab; a standard account has Motors +
+      // Configure only, so the machine opens in Configure.
+      setActiveTab(canWrite ? 'geometry' : 'compare');
     } catch (e: any) { setMsg(`✗ apply ${label}: ${e?.message ?? e}`); }
     setBusy(null);
   };
@@ -645,6 +659,7 @@ const FamilyCatalog: React.FC<{
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
               {die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
+            <CardSummary cards={die.cards ?? 0} total={die.config_count ?? die.configs.length} />
             {canWrite && (
               <Tooltip title={tx('renameDie')}>
                 <span>
@@ -725,6 +740,7 @@ const FamilyCatalog: React.FC<{
                   {(active?.die === die.name && active?.config === c.name)
                     ? ' ●' : ''}
                 </Typography>
+                <CardBadge date={c.card_date} />
                 {c.locked && !canWrite && (
                   <Typography component="span" sx={{ fontSize: 11 }}>🔒</Typography>
                 )}
@@ -853,7 +869,7 @@ const FamilyCatalog: React.FC<{
                     </Button>
                   </span>
                 </Tooltip>
-                {!canWrite && (
+                {!canWrite && !standardUser && (
                   <Tooltip title={tx('copyThisMachineIntoMyMotors')}>
                     <span>
                       <Button size="small" disabled={!!busy}

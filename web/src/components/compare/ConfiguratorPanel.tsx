@@ -35,6 +35,9 @@ import GeometryProjections from './GeometryProjections';
 import GreekLabel from './GreekLabel';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
+import { referenceOfDefault } from '../../lib/accessUi';
+import { CONFIGURE_REFID_LS, isOwnChoice } from './configureChoice';
+import { CardBadge } from '../common/CardBadge';
 import PerformanceCharts from './PerformanceCharts';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import {
@@ -128,7 +131,7 @@ const TD = { px: 1.25, py: 0.5, fontSize: 12, whiteSpace: 'nowrap', textAlign: '
 // The slider RANGES are physical limits now (lib/configuratorLimits.ts, owner
 // 2026-10-05); an admin's local edit can only NARROW them, per machine.
 const KNOBS_LS  = 'configurator.knobs.v1';
-const REFID_LS  = 'configurator.refId.v1';
+const REFID_LS  = CONFIGURE_REFID_LS;
 
 // a small editable range endpoint (the min / max flanking a slider)
 const RangeEnd: React.FC<{ value: number; d: number; title: string; onCommit: (v: number) => void }> = ({ value, d, title, onCommit }) => {
@@ -268,7 +271,7 @@ const KT_BASIS_TIP = (basis: string) => (basis === '3-D'
     : tx('configure.ktTip2d'));
 
 const ConfiguratorPanel: React.FC = () => {
-  const { isAdmin } = useAuth();   // editing the slider ranges is admin-only
+  const { isAdmin, defaultMotor, resolved: authResolved } = useAuth();   // editing the slider ranges is admin-only
   // FEM-characterised catalog motors (fetched) come first; the built-in
   // REFERENCE_PASSPORTS stay as a seed/fallback.
   const [catalogRefs, setCatalogRefs] = useState<ReferenceMotor[]>([]);
@@ -316,11 +319,24 @@ const ConfiguratorPanel: React.FC = () => {
   //    match by the machine itself: slots, poles, OD, magnet height) and
   //    auto-select the matching passport.  No match → keep the current pick.
   const liveGeo = useMotorStore((s) => s.geometry) as Record<string, unknown> | null;
+  // DEFAULT MOTOR (owner 2026-10-05): an admin can name the die + configuration
+  // Configure opens on for an account.  While that choice is "pinned", the
+  // live-geometry auto-match below stays out of the way - the live geometry is the
+  // workspace's leftover, not something the user loaded.  The first machine the
+  // user LOADS (the 'sim-operating-point' event) unpins it.
+  const defaultPinned = React.useRef(false);
+  // Did he have a machine of his own before this session?  Read ONCE, before the
+  // effect below writes the automatic seed into the same key.
+  const [hadOwnChoice] = useState(() => {
+    try { return isOwnChoice(localStorage.getItem(CONFIGURE_REFID_LS)); } catch { return false; }
+  });
   useEffect(() => {
-    const pick = () => {
+    const pick = (fromEvent = false) => {
       const g = useMotorStore.getState().geometry as Record<string, any> | null;
       if (!g) return;
       if (refsAnswered) setMatchChecked(true);   // looked up against the ANSWER, not the seed
+      if (fromEvent) defaultPinned.current = false;
+      else if (defaultPinned.current) return;
       const near = (a: unknown, b: unknown, tol: number) =>
         Number.isFinite(Number(a)) && Number.isFinite(Number(b))
         && Math.abs(Number(a) - Number(b)) <= tol;
@@ -409,9 +425,10 @@ const ConfiguratorPanel: React.FC = () => {
         }
       }
     };
-    window.addEventListener('sim-operating-point', pick);
+    const onLoaded = () => pick(true);
+    window.addEventListener('sim-operating-point', onLoaded);
     pick();   // also on mount / after the references arrive
-    return () => window.removeEventListener('sim-operating-point', pick);
+    return () => window.removeEventListener('sim-operating-point', onLoaded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allRefs, refsAnswered, liveGeo]);
   // No machine loaded at all: after a short wait say so (instead of loading forever).
@@ -583,6 +600,31 @@ const ConfiguratorPanel: React.FC = () => {
     const m = presetOfBuild(presets, refKnobs ?? baseKnobs(p));
     if (m) setBaseConfig(m.config);
   }, [presets, refKnobs, baseConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ── DEFAULT MOTOR: open on it when there is no choice of his own yet, and
+  //    "Reset to my default" at any time.  The reference is the catalogue card of
+  //    the default die + configuration; the configuration's preset then restores
+  //    every knob, its battery pack, its propeller and its default drive.
+  const defaultRef = useMemo(() => referenceOfDefault(catalogRefs, defaultMotor), [catalogRefs, defaultMotor]);
+  const [pendingDefault, setPendingDefault] = useState<string | null>(null);
+  const goDefault = React.useCallback(() => {
+    if (!defaultRef || !defaultMotor) return;
+    defaultPinned.current = true;
+    setRefId(defaultRef.id);
+    setPendingDefault(defaultMotor.config);
+  }, [defaultRef, defaultMotor]);
+  const defaultDecided = React.useRef(false);
+  useEffect(() => {
+    if (defaultDecided.current || !refsAnswered || !authResolved) return;
+    defaultDecided.current = true;
+    if (!hadOwnChoice && defaultRef) goDefault();
+  }, [refsAnswered, authResolved, hadOwnChoice, defaultRef, goDefault]);
+  // the preset can only be applied once THIS machine's context has arrived
+  useEffect(() => {
+    if (!pendingDefault || !ctx || ctx.motor_id !== catId) return;
+    const pr = (ctx.presets ?? []).find((x) => x.config === pendingDefault);
+    setPendingDefault(null);
+    if (pr) applyPreset(pr);
+  }, [pendingDefault, ctx, catId]); // eslint-disable-line react-hooks/exhaustive-deps
   // ── DRIVE: Sine | PWM (owner 2026-10-05) ──────────────────────────────────
   // PWM lists ONLY the drive variants COMPUTED for this machine (the passport's
   // `pwm_variants`: a device at a carrier, already solved) and reads between
@@ -1313,13 +1355,20 @@ const ConfiguratorPanel: React.FC = () => {
                   </Box>
                 )}
               </Typography>
+              {defaultMotor && defaultRef && (
+                <Button size="small" onClick={goDefault}
+                  title={tx('configure.resetToDefaultTip', { die: defaultMotor.die, config: defaultMotor.config })}
+                  sx={{ textTransform: 'none', fontSize: 12, minWidth: 0, py: 0.25 }}>
+                  {tx('configure.resetToDefault')}
+                </Button>
+              )}
               <ToggleButtonGroup exclusive size="small" value={matchedConfig} sx={{ ml: 'auto', flexWrap: 'wrap' }}>
                 {presets.map((pr) => (
                   <ToggleButton key={pr.config} value={pr.config} onClick={() => applyPreset(pr)}
                     title={tx('configure.presetTip')}
                     sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)',
                       '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
-                    {pr.config}
+                    {pr.config}{pr.card_date && <Box component="span" sx={{ ml: 0.75 }}><CardBadge date={pr.card_date} /></Box>}
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>

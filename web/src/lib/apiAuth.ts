@@ -4,6 +4,8 @@
 //
 // Scoped strictly to the backend API base, so Firebase SDK / third-party calls
 // are never touched. No-op when signed out (free endpoints stay anonymous).
+import { refusalReasonKey } from './accessUi';
+
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
 let tokenGetter: (() => Promise<string | null>) | null = null;
@@ -119,6 +121,19 @@ export function installFetchAuth(): void {
     } catch {
       /* never let auth wiring break a request */
     }
-    return orig(input as RequestInfo | URL, init);
+    const res = await orig(input as RequestInfo | URL, init);
+    // A call the server's role gate REFUSED must never fail silently: say why,
+    // in one line (components/common/RefusedNotice).  Only the gate's own body
+    // ({detail, required_role, your_role}) counts - any other 401/403 is the
+    // caller's to explain.
+    try {
+      if ((res.status === 401 || res.status === 403) && String(res.url || '').startsWith(API)) {
+        void res.clone().json().then((b) => {
+          const key = refusalReasonKey(res.status, b);
+          if (key) window.dispatchEvent(new CustomEvent('api-refused', { detail: { key } }));
+        }).catch(() => { /* not JSON */ });
+      }
+    } catch { /* a notice must never break a request */ }
+    return res;
   };
 }

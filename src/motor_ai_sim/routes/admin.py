@@ -230,8 +230,15 @@ def set_disabled(uid: str, body: dict = Body(default={}), _admin: dict = Depends
 @router.get("/motors")
 def list_motors(_admin: dict = Depends(require_admin)):
     """Every die in the shared catalog — the grant picker's list."""
+    from motor_ai_sim import passport_store as _ps
     from motor_ai_sim.routes.family import catalog_dies
     dies = catalog_dies()
+    # Which configurations have a FULL passport card (a v1 record in the
+    # passport store) - read from the store, never from a list of names.
+    idx = _ps.card_index()
+    for d in dies:
+        have = idx.get(str(d.get("name")), {})
+        d["cards"] = {c: have[c] for c in (d.get("config_names") or []) if c in have}
     return {"count": len(dies), "dies": dies}
 
 
@@ -243,6 +250,37 @@ def get_user_motors(email: str, _admin: dict = Depends(require_admin)):
     if U.get_user(email) is None:
         raise HTTPException(status_code=404, detail=f"user '{email}' not found")
     return {"email": email.strip().lower(), "motors": U.get_motor_grants(email)}
+
+
+def _check_default(raw, all_motors: bool, dies: list):
+    """Validate the per-user default motor: `{"die", "config"}` or null.
+
+    The die must be GRANTED to the account (any die for an `all` grant) and the
+    configuration must exist on it — a default the user could not open would be
+    a Configure that starts empty with no explanation."""
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=422,
+                            detail="'default' must be {\"die\": ..., \"config\": ...} or null")
+    die = str(raw.get("die") or "").strip()
+    cfg = str(raw.get("config") or "").strip()
+    if not die or not cfg:
+        raise HTTPException(status_code=422,
+                            detail="the default motor needs both a die and a configuration")
+    from motor_ai_sim.routes.family import die_config_names, die_names
+    if die not in die_names():
+        raise HTTPException(status_code=422, detail=f"unknown die '{die}' for the default motor")
+    if not all_motors and die not in dies:
+        raise HTTPException(status_code=422, detail=(
+            f"the default motor '{die}' is not granted to this account — "
+            "grant the die first or pick one of its granted dies"))
+    cfgs = die_config_names(die)
+    if cfg not in cfgs:
+        raise HTTPException(status_code=422, detail=(
+            f"die '{die}' has no configuration '{cfg}' — it has "
+            + (", ".join(f"'{c}'" for c in cfgs) if cfgs else "none")))
+    return {"die": die, "config": cfg}
 
 
 @router.put("/users/{email}/motors")
@@ -265,7 +303,14 @@ def set_user_motors(email: str, body: dict = Body(default={}),
         raise HTTPException(status_code=422,
                             detail="'dies' must be a list of die names")
     dies = _check_dies(raw)
-    grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies)
+    # The DEFAULT motor (die + configuration Configure opens on).  Key absent =
+    # keep the stored one while the new grant still covers it; null = clear.
+    if "default" in body:
+        default = _check_default(body.get("default"), all_motors, dies)
+        grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies,
+                                    default=default)
+    else:
+        grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies)
     return {"ok": True, "email": email.strip().lower(), "motors": grants}
 
 

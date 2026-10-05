@@ -1157,7 +1157,24 @@ def _build_rotor_mesh(polys: dict,
     whole method rests on the two faces carrying the same nodes.  The polygons
     must already be snapped congruent (``symmetry.sector_polys``); a mismatch
     of microns is enough to leave a curve unpaired here.
+
+    Runs out of process (see ``motor_ai_sim.simulation.gmsh_worker``): this
+    process never imports gmsh.
     """
+    from motor_ai_sim.simulation import gmsh_worker
+
+    return gmsh_worker.call(
+        "motor_ai_sim.simulation.mechanical.rotor_stress:_build_rotor_mesh_impl",
+        args=(polys, mesh_size_mm, min_size_mm, weld_tol_mm, periodic),
+    )
+
+
+def _build_rotor_mesh_impl(polys: dict,
+                      mesh_size_mm: float = 1.5,
+                      min_size_mm: float = 0.25,
+                      weld_tol_mm: float = 0.02,
+                      periodic: Optional[Tuple[float, float]] = None) -> RotorMesh:
+    """Worker-side implementation of ``_build_rotor_mesh``."""
     import gmsh
     from shapely.geometry import MultiPolygon
     from shapely.prepared import prep

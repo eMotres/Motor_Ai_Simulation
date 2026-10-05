@@ -52,6 +52,12 @@ COPY deploy/node-agent ./deploy/node-agent
 RUN pip install --no-cache-dir -r requirements.txt \
  && pip install --no-cache-dir --no-deps -e .
 
+# netgen-mesher==6.2.2607 (requirements.txt) is the DEFAULT geometry mesher
+# (owner 2026-10-01, fail-closed: no fallback).  Prove at build time that its
+# OCC bindings load on this base image, so a missing shared library fails the
+# build instead of every first mesh.
+RUN python -c "import netgen, netgen.occ; print('netgen', netgen.__version__)"
+
 # ── build guard: intel-openmp / intel-cmplr-lib-ur / libiomp5.so must never
 # be in this image (2026-09-30, matches deploy/Dockerfile.api) ─────────────
 # requirements.txt never installs pypardiso (that stays in the OPTIONAL

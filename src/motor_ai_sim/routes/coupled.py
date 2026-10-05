@@ -959,6 +959,15 @@ _EM_FACE_KEYS = ("T_em_avg_Nm", "T_ripple_pct", "P_stranded_W", "P_core_W",
                  "THD_I_pct", "THD_LL_pct", "V_line_peak_V",
                  "n_steps_per_period")
 
+#: The EM run's own verdict on its steady state (Codex review 2026-10-04): the
+#: eddy method used, why a TDM request was marched, and whether the reported
+#: window is a steady state at all.  Carried on every history row and on the
+#: block, so a coupled answer built on a demag transient or an unverified
+#: settle says so.
+_EM_VERDICT_KEYS = ("eddy_method", "eddy_method_requested", "eddy_method_note",
+                    "eddy_settled", "demag_settled", "steady_state",
+                    "steady_state_note", "qualified")
+
 
 #: The duty-cycle kinds that are an IMPULSE: the machine does not stay at the
 #: point long enough for a steady temperature to exist.  One definition, in
@@ -5402,6 +5411,10 @@ def _run(body: Dict[str, Any],
                 "bearing_temp_c": _brg_used,
                 "bearing_temp_source": summary.get("bearing_temp_source"),
                 "P_mech_extra_W": summary.get("P_mech_extra_W"),
+                # HOW this pass's EM steady state was reached and whether it
+                # IS one (Codex review 2026-10-04): a marched fallback, a
+                # refusal note or a demag transient travels with the pass
+                **{_vk: summary.get(_vk) for _vk in _EM_VERDICT_KEYS},
             })
             if regime is not None:
                 # WHAT THIS PASS FOUND, beside the temperatures it found it at:
@@ -6589,8 +6602,15 @@ def _run(body: Dict[str, Any],
         # is a comparison of torque and of the four loss classes — a
         # `reference_sine` that carried temperatures but no watts could not
         # print the one row the whole exercise is about (the carrier's cost).
-        "em": {k: _last_summary.get(k) for k in _EM_FACE_KEYS
-               if _last_summary.get(k) is not None},
+        "em": {**{k: _last_summary.get(k) for k in _EM_FACE_KEYS
+                  if _last_summary.get(k) is not None},
+               # the verdict keys ALWAYS (None = the run did not say)
+               **{k: _last_summary.get(k) for k in _EM_VERDICT_KEYS}},
+        # every EM pass of the loop a steady state?  (False on any transient
+        # or unverified pass; None when no pass said)
+        "em_steady_state": (None if not history or all(
+            _h.get("steady_state") is None for _h in history)
+            else all(_h.get("steady_state") is True for _h in history)),
         "coil_temp_c": round(float(em_at[0]), 2),
         "magnet_temp_c": (None if em_at[1] is None else round(float(em_at[1]), 2)),
         # THE REGIME, when this duty has one (2026-09-16).  The temperatures

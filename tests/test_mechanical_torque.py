@@ -42,6 +42,13 @@ E_STEEL, NU_STEEL, RHO_STEEL = 210e9, 0.30, 7800.0
 # ---------------------------------------------------------------------------
 
 def _annulus(ri: float, ro: float, h: float):
+    """Built in the gmsh worker process (gmsh is GPL and never loads in a
+    process that may load MKL; owner 2026-10-03)."""
+    from motor_ai_sim.simulation import gmsh_worker
+    return gmsh_worker.call("tests.test_mechanical_torque:_annulus_impl", args=(ri, ro, h,))
+
+
+def _annulus_impl(ri: float, ro: float, h: float):
     """Annulus mesh in METRES (gmsh, free triangles)."""
     import gmsh
     from skfem import MeshTri

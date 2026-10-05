@@ -490,6 +490,12 @@ _RES_KEYS = ("T_em_Nm", "efficiency", "torque_per_mass_Nm_kg", "T_ripple_pct",
              # as settled while its P_mag / P_shaft / η are start-up values.
              "eddy_settled", "eddy_capped", "eddy_settle_residual",
              "eddy_settle_tol",
+             # …and the steady-state verdict / method of the eddy solve
+             # (second Codex review 2026-10-03): a demag transient or an
+             # experimental result must not re-seed the cache as a steady one
+             "steady_state", "steady_state_note", "demag_settled", "demag_warning",
+             "eddy_method", "eddy_method_requested", "eddy_method_note",
+             "tdm_experimental", "qualified",
              "cogging_sampling_purpose", "cogging_target_raw_samples_per_cycle",
              "cogging_cycles_per_electrical_period",
              "cogging_min_required_steps_per_period",
@@ -3734,6 +3740,14 @@ def _standard_quality(out: Dict[str, Any]) -> tuple[bool, str]:
                        "the settled solid loss, tol %s)"
                        % (r.get("eddy_settle_residual"),
                           r.get("eddy_settle_tol")))
+    # Not a steady state (Br still moving in the reported period) or the
+    # experimental demag shortcut: never a certified final result (second
+    # Codex review 2026-10-03).
+    if r.get("steady_state") is False:
+        return False, ("the reported period is not a steady state (%s)"
+                       % (r.get("steady_state_note") or "demag transient"))
+    if r.get("qualified") is False or r.get("tdm_experimental"):
+        return False, "experimental (not qualified) eddy result"
     return True, ""
 
 
@@ -4845,6 +4859,16 @@ def descent_start(req: DescentRequest):
         # geometry.  A variable that ends pinned AND its window == schema bound is a
         # genuine physical limit (the UI marks it red, no further continue).
         lo, hi = max(lo, s_lo), min(hi, s_hi)
+        # manufacturing floor of the search (0.15 mm minimum fillet); a
+        # variable whose current value is below it is left out, never moved
+        from motor_ai_sim.optimization.manufacturing import apply_floor
+        _x_cur = get_config().get("geometry", {}).get(v.name)
+        lo, hi, _excl = apply_floor(
+            v.name, lo, hi, float(_x_cur) if isinstance(_x_cur, (int, float))
+            and not isinstance(_x_cur, bool) else None)
+        if _excl:
+            log.warning("descent: %s", _excl)
+            continue
         if hi <= lo:
             continue
         step = float(v.step) if float(v.step) > 0 else float(meta.get("step", 0) or 0)
@@ -6017,6 +6041,7 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
     if stator_d <= 0.0:
         stator_d = 2.0 * float(geo.get("stator_outer_radius", 20.0) or 20.0)
     variables = []
+    excluded_vars = []          # searched-out by a manufacturing floor, with reason
     for name in wl:
         cur = geo.get(name)
         if isinstance(cur, bool) or not isinstance(cur, (int, float)):
@@ -6053,6 +6078,16 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
         # A start value already outside its own schema range would otherwise be
         # clamped silently on the first evaluation, i.e. the run would optimise a
         # different machine than the one on screen.  Say so instead.
+        # manufacturing floor of the search (0.15 mm minimum fillet): applied
+        # AFTER the schema check, so a machine outside its own schema is still
+        # refused, while one with a sharp (0) fillet keeps it, unsearched
+        from motor_ai_sim.optimization.manufacturing import apply_floor
+        if not (x0 < lo - 1e-9 or (hi is not None and x0 > hi + 1e-9)):
+            lo, hi, _excl = apply_floor(name, lo, hi, x0)
+            if _excl:
+                log.warning("auto optimization plan: %s", _excl)
+                excluded_vars.append({"name": name, "reason": _excl})
+                continue
         if x0 < lo - 1e-9 or (hi is not None and x0 > hi + 1e-9):
             raise HTTPException(status_code=422, detail=(
                 "%s = %g in the loaded geometry is outside its own schema range "
@@ -6123,6 +6158,8 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
                                 "connection": _conn, "n_parallel": _npar},
             "eval": ev,
             "variables": variables,
+            # searched-out by a manufacturing floor (optimization/manufacturing.py)
+            "excluded_variables": excluded_vars,
             "stator_diameter": stator_d,
             "budget_evals": budget,
             # Kept so every existing consumer of the plan (UI chips, progress,
@@ -6187,6 +6224,8 @@ def _auto_assemble(max_ripple_pct: float, budget_evals: int = 0,
                                 "connection": _conn, "n_parallel": _npar},
         "eval": ev,
         "variables": variables,
+        # searched-out by a manufacturing floor (optimization/manufacturing.py)
+        "excluded_variables": excluded_vars,
         "stator_diameter": stator_d,
         "budget_evals": budget,
         "population": pop,

@@ -1094,6 +1094,16 @@ def headline(answer: Any, d: Dict[str, Any], what: str) -> Dict[str, Any]:
                      "total": _r(p_loss, 1)},
         "mass_kg": (d.get("estimate") or {}).get("mass_kg"),
         "mass_is_estimate": True,
+        # THE SOLVE'S OWN VERDICT (Codex review 2026-10-04): an agent must see
+        # that a number is a demag transient, an unverified settle, a marched
+        # fallback or an experimental result — never only the watts.
+        "steady_state": (_pick(src, "steady_state")
+                         if _pick(src, "steady_state") is not None
+                         else a.get("em_steady_state")),
+        "steady_state_note": _pick(src, "steady_state_note"),
+        "eddy_method": _pick(src, "eddy_method"),
+        "eddy_method_note": _pick(src, "eddy_method_note"),
+        "qualified": _pick(src, "qualified"),
     }
     if what in ("thermal", "coupled"):
         out["temperatures_c"] = {"coil": _r(_num(a.get("coil_temp_c")), 1),

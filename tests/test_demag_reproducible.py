@@ -74,8 +74,10 @@ def _clear_warm_cache() -> None:
 def _run() -> Dict[str, Any]:
     set_request_materials(OVERRIDE)
     try:
+        # the warm-seed legs are the MARCH's (TDM ignores the seed)
         return fem_transient_sliding_band(geo_override=dict(GEO_30MM), rpm=RPM,
-                                          connection=CONNECTION, **CASE)
+                                          connection=CONNECTION, eddy_method="march",
+                                          **CASE)
     finally:
         set_request_materials(None)
 
@@ -176,8 +178,14 @@ def test_the_prepass_ran_and_is_reported(legs):
         # the window rather than against n_steps_per_period because the solver
         # snaps the step count UP to a divisor of the slip-node count.
         nrep = len(d.get("T_em_Nm") or [])
-        assert npre == nrep > 0, (
+        # Since 2026-09-30 the pre-pass is REPEATED until one whole period
+        # moves Br by <= the demag settle tolerance (the shared fixed-point
+        # rule, docs/TDM_PROTOTYPE_2026-09-30.md §3.3): a whole number of
+        # electrical periods, as many as `demag_settle` says.
+        nper = int((d.get("demag_settle") or {}).get("prepass_periods") or 0)
+        assert nper >= 1 and npre == nper * nrep > 0, (
             f"{name}: {npre} demag pre-pass frame(s) against a {nrep}-frame "
-            "reported window — the pre-pass is not one whole electrical period")
+            f"reported window and {nper} pre-pass period(s) — the pre-pass is "
+            "not a whole number of electrical periods")
         assert int(d.get("eddy_warmup_frames") or 0) >= npre, (
             f"{name}: the discarded-frame total does not include the pre-pass")

@@ -33,9 +33,9 @@ classifiers = [
 # anthropic, mcp, cadquery-ocp and python-multipart — every one of them a
 # mandatory (non-optional) entry in requirements.txt, so an editable install
 # from this list alone could not even `import motor_ai_sim.simulation`
-# (ModuleNotFoundError: sympy). pypardiso and triangle stay out: both are
-# genuinely optional there too (requirements-pardiso.txt / -triangle.txt),
-# and that maps to the `pardiso` / `triangle` extras below.
+# (ModuleNotFoundError: sympy). pypardiso stays out: it is genuinely
+# optional there too (requirements-pardiso.txt), which maps to the `pardiso`
+# extra below.  Triangle was removed on 2026-10-03.
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
@@ -48,6 +48,7 @@ dependencies = [
     "shapely>=2.0",
     "scikit-fem>=10",
     "gmsh>=4.13",
+    "netgen-mesher==6.2.2607",   # default CDT backend (LGPL-2.1), pinned
     "trimesh>=4.0",
     "cadquery>=2.4",
     "cadquery-ocp>=7.8",
@@ -73,10 +74,10 @@ dependencies = [
 pardiso = [
     "pypardiso>=0.4.7,<0.5",
 ]
-# OPTIONAL, NON-COMMERCIAL licence (Shewchuk's Triangle): the geometry-driven
-# mesher; gmsh is used when absent.  See docs/MESHER_TRANSITION.md.
-triangle = [
-    "triangle>=20230923",
+# Kept as an alias: netgen-mesher is now a core dependency (the default CDT
+# backend, LGPL-2.1).  docs/MESHER_NETGEN_2026-09-30.md
+netgen = [
+    "netgen-mesher==6.2.2607",
 ]
 dev = [
     "pytest>=7.0",
@@ -117,5 +118,4 @@ python_functions = ["test_*"]
 markers = [
     # Real FEM solves — minutes, not milliseconds. Deselect with -m "not slow".
     "slow: physics regression cases that run the actual solver",
-    "requires_triangle: needs the optional non-commercial `triangle` package (skipped without it)",
 ]

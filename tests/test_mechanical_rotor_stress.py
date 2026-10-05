@@ -25,6 +25,13 @@ OMEGA = RPM * 2.0 * math.pi / 60.0
 # ---------------------------------------------------------------------------
 
 def _ring_mesh(ri: float, ro: float, h: float):
+    """Built in the gmsh worker process (gmsh is GPL and never loads in a
+    process that may load MKL; owner 2026-10-03)."""
+    from motor_ai_sim.simulation import gmsh_worker
+    return gmsh_worker.call("tests.test_mechanical_rotor_stress:_ring_mesh_impl", args=(ri, ro, h,))
+
+
+def _ring_mesh_impl(ri: float, ro: float, h: float):
     """Annulus mesh in METRES (gmsh, free triangles)."""
     import gmsh
     from skfem import MeshTri

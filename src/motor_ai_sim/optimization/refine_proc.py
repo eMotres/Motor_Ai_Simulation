@@ -292,6 +292,13 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     # like the mesh budget beside it — the kernel seam catches every exception,
     # so the reset below always runs.
     _cand_tok = _fs_cand._OPT_CANDIDATE.set(bool(optimizer_candidate))
+    # DEMAG METHOD (owner 2026-10-04): an optimizer CANDIDATE evaluation
+    # (sampling_purpose "optimization") takes the adaptive two-window demag
+    # shortcut — explicitly, here and nowhere else; a standard / final-quality
+    # evaluation (the verification of the chosen candidates) keeps the full
+    # pre-pass.  The result says which (`qualified` False for the shortcut).
+    _dm_tok = _fs_cand._TDM_DEMAG_REQUEST.set(
+        "shortcut" if sampling_purpose == "optimization" else None)
     _out = _kernel().run("solver.em_transient", {
         "n_steps_per_period": nspp, "n_periods": nper, "gamma_deg": float(gamma_deg),
         "sampling_purpose": sampling_purpose,
@@ -356,6 +363,7 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         "sliding_band": True, "fresh": True, "geo": json.dumps(overrides),
     })
     _fs_cand._OPT_CANDIDATE.reset(_cand_tok)
+    _fs_cand._TDM_DEMAG_REQUEST.reset(_dm_tok)
     _geo_mesh_mod.set_tri_budget(None)
     # TWO failure carriers, and both must be read.  The kernel ENVELOPE's ok is
     # False only when the module itself threw (Kernel.run's fault isolation);
@@ -637,8 +645,32 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
         # default (web: adoptGapLayers), with the one-line note.
         "gap_layers_persist": (d.get("gap_refinement") or {}).get("persist_gap_layers"),
         "gap_layers_note": d.get("gap_layers_note"),
-        "eddy_settled": bool(d.get("eddy_settled", True)),
+        # True / False / None (UNKNOWN, e.g. an unmeasured voltage settle) —
+        # never promoted to True (third Codex review); an older payload
+        # without the key keeps the old reading
+        "eddy_settled": (True if "eddy_settled" not in d else
+                         (None if d["eddy_settled"] is None
+                          else bool(d["eddy_settled"]))),
         "eddy_capped": bool(d.get("eddy_capped", False)),
+        # ── IS THE REPORTED WINDOW A STEADY STATE, AND HOW WAS IT REACHED?
+        # (second Codex review, 2026-10-03, finding 8).  `steady_state` False =
+        # Br still moving in the reported period (a demag transient) or an
+        # unsettled warm-up; `steady_state_note` says which, with the numbers.
+        # `eddy_method` / `eddy_method_note` say whether TDM solved it or why it
+        # was marched; `qualified` False = the experimental demag shortcut.
+        # Carried verbatim (None when the solver did not say) so a stored point
+        # can never read as a steady, qualified one by omission.
+        "steady_state": (None if d.get("steady_state") is None
+                         else bool(d["steady_state"])),
+        "steady_state_note": d.get("steady_state_note"),
+        "demag_warning": d.get("demag_warning"),
+        "demag_settled": (None if d.get("demag_settled") is None
+                          else bool(d["demag_settled"])),
+        "eddy_method": d.get("eddy_method"),
+        "eddy_method_requested": d.get("eddy_method_requested"),
+        "eddy_method_note": d.get("eddy_method_note"),
+        "tdm_experimental": bool(d.get("tdm_experimental", False)),
+        "qualified": (None if d.get("qualified") is None else bool(d["qualified"])),
         "eddy_settle_residual": d.get("eddy_settle_residual"),
         "eddy_settle_tol": d.get("eddy_settle_tol"),
         "cogging_sampling_purpose": d.get("cogging_sampling_purpose"),

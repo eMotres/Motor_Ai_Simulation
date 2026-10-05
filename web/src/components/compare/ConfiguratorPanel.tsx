@@ -703,12 +703,13 @@ const ConfiguratorPanel: React.FC = () => {
       const r = driveRead.refusal;
       const env = tx('configureDrive.refuseEnvelopeTip');
       const n0 = (x: number) => String(Number(x.toFixed(0)));
+      const n1c = (x: number) => String(Number(x.toFixed(1)));
       return [{
         tip: env,
         text: r.kind === 'speed'
           ? tx('configureDrive.refuseSpeed', { rpm: n0(r.rpm), lo: n0(r.lo), hi: n0(r.hi) })
           : r.kind === 'current'
-            ? tx('configureDrive.refuseCurrent', { amps: n0(r.I), lo: n0(r.lo), hi: n0(r.hi) })
+            ? tx('configureDrive.refuseCurrent', { amps: n1c(r.I), lo: n1c(r.lo), hi: n1c(r.hi) })
             : r.kind === 'gap' ? tx('configureDrive.refuseGap') : tx('configureDrive.refuseNoCoords'),
       }];
     }

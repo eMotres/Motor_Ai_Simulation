@@ -135,6 +135,11 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
     for m in cat.get("motors", []):
         by_d.setdefault(m.get("diameter_mm"), []).append(m["id"])
     cat["by_diameter"] = by_d
+    # Computed drive variants (Configure's PWM menu) ride in from the versioned
+    # passport store (motor_ai_sim/passport_store.py) — read-only, per request,
+    # and only for cards that have a record; every other card is served as is.
+    from motor_ai_sim import passport_store as _ps
+    _ps.attach(cat.get("motors", []))
     # `is_active` is COMPUTED per request and never stored: it is a fact about
     # the editor's current state, and a stored copy would be wrong the moment the
     # user nudged a dimension.
@@ -641,7 +646,10 @@ def get_motor_passport(motor_id: str):
     if not passport:
         raise HTTPException(status_code=404,
                             detail=f"motor '{motor_id}' has no passport — generate it first")
-    return passport
+    from motor_ai_sim import passport_store as _ps
+    _tmp = [{"name": motor.get("name"), "passport": passport}]
+    _ps.attach(_tmp)
+    return _tmp[0]["passport"]
 
 
 # ---------------------------------------------------------------------------

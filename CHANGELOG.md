@@ -16,6 +16,13 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   motor loss, inverter loss split, T_j, drive efficiency battery to shaft; the saved
   configuration records the drive. Sine is the default and unchanged (scaleMotor is
   untouched). EN + ZH strings in the `controller` namespace.
+- **Configure reads the passport pilot's computed drive variants** (#106): the catalogue
+  response (`GET /api/catalog`, `GET /api/catalog/{id}/passport`) now carries `pwm_variants`
+  for a card whose machine has a v1 record in the versioned store
+  `config/passports/<die>/<config>.json` (`<shared>/passports/` on the server wins, like
+  device cards; `scripts/export_passport_store.py` writes a file from a pilot record).
+  Matched by card name, else die name + stack length; ambiguous = none. Cards without a
+  record are served exactly as before. CIANO14 40 new L12 / L20 ship with the pilot's data.
 - **Configure: slider ranges are physical limits** (owner 2026-10-05), per machine and live
   with the knobs they depend on. Stack-length max is set by hand per motor (admin,
   `PATCH /api/catalog/{id}/configure_limits`, else the default rule); wire min 0.2 mm, step

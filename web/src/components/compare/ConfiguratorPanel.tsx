@@ -77,6 +77,7 @@ import {
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
 import { resolveDraftTarget, modelState, pickReference } from '../../lib/configuratorGuard';
 import MyAgentDraftsBlock from './MyAgentDraftsBlock';
+import { useConfigureSnapshot } from '../support/useConfigureSnapshot';
 
 const tx = nsT('controller');   // every user-visible string (EN source, ZH mirror — docs/I18N.md)
 /** In Chinese the captions keep their unit symbols as written (mm, rpm, ns), not MM / RPM. */
@@ -1189,6 +1190,40 @@ const ConfiguratorPanel: React.FC = () => {
   RES_COLS.forEach((r) => {
     const ns = configs.map(r.get).filter(Number.isFinite);
     resExt[r.key] = ns.length ? { min: Math.min(...ns), max: Math.max(...ns) } : null;
+  });
+
+  // What is on this screen, for the help assistant (support widget): the knobs, the drive, the
+  // battery, the key tiles and the red lines — so an answer or a ticket carries the real numbers.
+  useConfigureSnapshot(blocked || loadingModel ? null : {
+    machine: { name: ref.name, die: catId, configuration: baseConfig },
+    preset: baseConfig, presetModified: modified,
+    knobs: { stackLength_mm: knobs.L_mm, turnsPerSlot: knobs.N, wire_mm: knobs.wireH_mm,
+      connection: connLabel(knobs.nP, ref.geo.numSlots), current_A_rms: knobs.I_A, speed_rpm: knobs.rpm },
+    drive: { mode: driveMode, transistor: variant?.device ?? null,
+      pwm_kHz: variant ? Number(variant.carrier_hz) / 1000 : null },
+    propeller: cooled && propSummary
+      ? { name: `${vendorLabel(propSummary.vendor)} ${modelLabel(propSummary.model)}`, ambient_C: ambient,
+          load: propLoad ? 'propeller' : 'manual' }
+      : null,
+    battery: { cells: battery.cells, cellV: [battery.min, battery.nom, battery.max],
+      pack_V: [battery.cells * battery.min, battery.cells * battery.max],
+      edited: !!machinePack && !sameBattery(battery, machinePack) },
+    tiles: {
+      torque_Nm: result.T_Nm, power_kW: result.P_mech_W / 1000, mass_kg: result.mass_kg,
+      efficiency_pct: sysEff.value, totalLoss_W: totalLossShown(result.P_loss_W, driveMode, drv),
+      copperLoss_W: result.P_cu_W, ironLoss_W: result.P_fe_W, magnetLoss_W: result.P_mag_W,
+      controllerLoss_W: drv ? controllerLossW(drv) : null, junctionTemp_C: drv?.tj_C ?? null,
+      dcBusMin_V: result.Vphase_peak_V * Math.sqrt(3), currentDensity_A_mm2: J_A_mm2,
+      slotFill_pct: result.slot_fill_pct, T_winding_C: thermal?.T_winding_C,
+      T_magnet_C: thermal?.T_magnet_C, T_housing_C: thermal?.T_housing_C,
+    },
+    warnings: [
+      ...driveRefusals.map((r) => r.text),
+      propLine?.text ?? '',
+      overFit ? tx('configureLimits.overFit', { stack: fmt(stackHeight_mm, 1), avail: fmt(availStack_mm, 1) }) : '',
+      badTurns ? tx('configureLimits.badTurns', { n: knobs.N, k: kPar }) : '',
+      connWarn ? tx('configureLimits.connWarn', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) }) : '',
+    ].filter(Boolean),
   });
 
 

@@ -485,8 +485,10 @@ def test_tickets_create_list_own_admin_list_and_status(env, monkeypatch):
     assert mine["count"] == 1 and mine["tickets"][0]["id"] == t["id"]
     allt = client.get("/api/admin/tickets", headers=_bearer(adm)).json()
     assert allt["source"] == "self-hosted:tickets.json" and allt["count"] == 2
+    # the short form; the conversation and context come only with ?detail=1
     assert set(allt["tickets"][0]) == {"id", "uid", "type", "title", "description",
-                                       "status", "email", "createdAt"}
+                                       "status", "email", "createdAt",
+                                       "conversationCount", "hasContext"}
     # a non-admin cannot read the admin list or change a status
     assert client.get("/api/admin/tickets", headers=_bearer(cli)).status_code in (401, 403)
     assert client.post("/api/admin/tickets/status", headers=_bearer(cli),

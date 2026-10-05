@@ -14,22 +14,57 @@ const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
 interface AdminTicket {
   id: string; uid: string | null; type: string; title: string; description: string;
   status: string; email: string | null; createdAt: number | null;
+  /** the chat with the assistant that led to the ticket, and the sanitised session snapshot (?detail=1) */
+  conversation?: Array<{ role: string; content: string }>;
+  context?: Record<string, unknown>;
 }
 const TICKET_STATUSES = ['open', 'in_progress', 'resolved', 'closed'] as const;
 const T_STATUS_COLOR: Record<string, string> = { open: '#60a5fa', in_progress: '#fbbf24', resolved: '#4ade80', closed: 'var(--text-3)' };
-const T_TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: 'var(--text-3)' };
+const T_TYPE_COLOR: Record<string, string> = { bug: '#f87171', feature: '#a78bfa', question: 'var(--text-3)', account: '#38bdf8' };
 
 const fmtDate = (ms?: number | null) =>
   ms ? new Date(ms).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '—';
+
+/** One ticket opened: the full text, the conversation with the assistant and the session snapshot. */
+const TicketDetail: React.FC<{ t: AdminTicket }> = ({ t }) => (
+  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+    {t.description && (
+      <Typography sx={{ fontSize: 13, color: 'var(--text-1)', whiteSpace: 'pre-wrap' }}>{t.description}</Typography>
+    )}
+    {t.conversation && t.conversation.length > 0 && (
+      <Box>
+        <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', mb: 0.5 }}>
+          Conversation ({t.conversation.length})
+        </Typography>
+        {t.conversation.map((m, i) => (
+          <Typography key={i} sx={{ fontSize: 13, color: m.role === 'user' ? 'var(--text-0)' : 'var(--text-2)', whiteSpace: 'pre-wrap', mb: 0.5 }}>
+            <b>{m.role === 'user' ? 'User' : 'Assistant'}:</b> {m.content}
+          </Typography>
+        ))}
+      </Box>
+    )}
+    {t.context && Object.keys(t.context).length > 0 && (
+      <Box>
+        <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', textTransform: 'uppercase', mb: 0.5 }}>
+          Session context
+        </Typography>
+        <Box component="pre" sx={{ m: 0, p: 1, fontSize: 12, bgcolor: 'var(--panel-2)', borderRadius: 1, overflowX: 'auto', color: 'var(--text-1)' }}>
+          {JSON.stringify(t.context, null, 2)}
+        </Box>
+      </Box>
+    )}
+  </Box>
+);
 
 const LogsSection: React.FC = () => {
   const [tickets, setTickets] = useState<AdminTicket[]>([]);
   const [supportCfg, setSupportCfg] = useState<SupportCfg | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     const [tk, sc] = await Promise.all([
-      fetch(`${API}/api/admin/tickets`).then((r) => (r.ok ? r.json() : { tickets: [] })).catch(() => ({ tickets: [] })),
+      fetch(`${API}/api/admin/tickets?detail=1`).then((r) => (r.ok ? r.json() : { tickets: [] })).catch(() => ({ tickets: [] })),
       fetch(`${API}/api/admin/support`).then((r) => (r.ok ? r.json() : null)).catch(() => null),
     ]);
     // Tickets are stored by the backend (self-hosted); only an explicit dev flag serves a flagged
@@ -76,12 +111,15 @@ const LogsSection: React.FC = () => {
           </TableHead>
           <TableBody>
             {tickets.map((t) => (
-              <TableRow key={t.id} hover>
+              <React.Fragment key={t.id}>
+              <TableRow hover>
                 <TableCell>
                   <Chip label={t.type} size="small" sx={{ height: 18, fontSize: 9.5, bgcolor: 'var(--panel-2)', color: T_TYPE_COLOR[t.type] ?? 'var(--text-3)' }} />
                 </TableCell>
-                <TableCell>
-                  <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{t.title}</Typography>
+                <TableCell onClick={() => setOpenId(openId === t.id ? null : t.id)} sx={{ cursor: 'pointer' }}>
+                  <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>
+                    {openId === t.id ? '▾' : '▸'} {t.title}
+                  </Typography>
                   {t.description && (
                     <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', maxWidth: 380, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                       {t.description}
@@ -105,6 +143,14 @@ const LogsSection: React.FC = () => {
                   </Select>
                 </TableCell>
               </TableRow>
+              {openId === t.id && (
+                <TableRow>
+                  <TableCell colSpan={5} sx={{ bgcolor: 'var(--panel)' }}>
+                    <TicketDetail t={t} />
+                  </TableCell>
+                </TableRow>
+              )}
+              </React.Fragment>
             ))}
             {tickets.length === 0 && (
               <TableRow>

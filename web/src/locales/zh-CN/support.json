@@ -1,0 +1,44 @@
+{
+  "title": "帮助与反馈",
+  "close": "关闭",
+  "tabAsk": "提问",
+  "tabTickets": "我的工单",
+  "greeting": "你好！关于本应用的任何问题都可以问我。如果有东西出错、缺失或不清楚，直接告诉我：我会为团队准备一张工单，是否发送由你决定。",
+  "greetingVisitor": "你好！关于 AeroStator 的问题都可以问我。如需申请访问权限，请告诉我你的姓名和工作邮箱，我会转交给团队。",
+  "placeholder": "询问本应用的问题…",
+  "send": "发送消息",
+  "thinking": "正在思考…",
+  "demo": "演示模式：此服务器尚未配置 AI 助手。",
+  "failed": "抱歉，我暂时无法回答。请稍后重试，或写信给 vadim@motresres.com。",
+  "draft": {
+    "heading": "给团队的工单",
+    "ready": "我已准备好一张工单。请检查并按需修改，然后点击发送。",
+    "typeLabel": "类型",
+    "titleLabel": "标题",
+    "descriptionLabel": "发生了什么",
+    "attached": "你的对话和当前界面状态（标签页、电机、设置、最近的错误）会自动附上，不会包含密码或令牌。",
+    "send": "发送给团队",
+    "sending": "正在发送…",
+    "dismiss": "不发送",
+    "sent": "已发送。团队已收到你的工单 {id}。可在“我的工单”中查看其状态。",
+    "sentNoId": "已发送。团队已收到你的工单。可在“我的工单”中查看其状态。",
+    "error": "工单发送失败：{error}",
+    "signIn": "请登录后发送此工单。"
+  },
+  "type": {
+    "bug": "缺陷",
+    "feature": "功能需求",
+    "question": "问题",
+    "account": "账号"
+  },
+  "status": {
+    "open": "待处理",
+    "in_progress": "处理中",
+    "resolved": "已解决",
+    "closed": "已关闭"
+  },
+  "tickets": {
+    "empty": "还没有工单。把遇到的问题或想法告诉我，我会为你准备一张。",
+    "loadFailed": "无法加载你的工单。"
+  }
+}

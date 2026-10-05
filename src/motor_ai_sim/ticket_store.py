@@ -1,4 +1,4 @@
-"""Self-hosted support tickets (bug / feature / question) filed by signed-in users.
+"""Self-hosted support tickets (bug / feature / question / account) filed by signed-in users.
 
 Tickets used to be Firestore documents written straight from the browser; that
 project is gone, so every ticket filed since was lost.  They now live in one
@@ -8,6 +8,13 @@ same atomic, locked ``json_store.mutate_json`` the other self-hosted stores use.
 
 The owner of a ticket is ALWAYS the authenticated caller (the route passes the
 verified e-mail); nothing here reads an identity from a request body.
+
+Since 2026-10-05 every ticket is drafted by the in-app assistant and confirmed
+by the user, and it carries two extra things for the team: the CONVERSATION it
+came from and the session CONTEXT (tab, motor, Configure knobs and tiles, build,
+browser, recent failed calls - already sanitised by ``support_context``).  They
+are stored with the ticket and returned only to the admin side
+(``list_all(detail=True)``); the user's own list stays the short form.
 """
 from __future__ import annotations
 
@@ -22,7 +29,7 @@ from motor_ai_sim.json_store import mutate_json, read_json
 
 log = logging.getLogger(__name__)
 
-TYPES = ("bug", "feature", "question")
+TYPES = ("bug", "feature", "question", "account")
 STATUSES = ("open", "in_progress", "resolved", "closed")
 MAX_TITLE = 120
 MAX_DESCRIPTION = 4000
@@ -43,12 +50,20 @@ def tickets_file() -> Path:
     return support_store.root() / "tickets.json"
 
 
-def _view(rec: dict) -> dict:
-    """The shape the web UI reads (admin LogsSection and the widget)."""
-    return {"id": rec.get("id"), "uid": rec.get("uid"), "type": rec.get("type"),
-            "title": rec.get("title"), "description": rec.get("description") or "",
-            "status": rec.get("status") or "open", "email": rec.get("email"),
-            "createdAt": rec.get("createdAt")}
+def _view(rec: dict, detail: bool = False) -> dict:
+    """The shape the web UI reads (admin LogsSection and the widget).
+
+    ``detail`` adds the attached conversation and context (admin side only)."""
+    out = {"id": rec.get("id"), "uid": rec.get("uid"), "type": rec.get("type"),
+           "title": rec.get("title"), "description": rec.get("description") or "",
+           "status": rec.get("status") or "open", "email": rec.get("email"),
+           "createdAt": rec.get("createdAt"),
+           "conversationCount": len(rec.get("conversation") or []),
+           "hasContext": bool(rec.get("context"))}
+    if detail:
+        out["conversation"] = rec.get("conversation") or []
+        out["context"] = rec.get("context") or {}
+    return out
 
 
 def validate(type_, title, description) -> tuple[str, str, str]:
@@ -67,8 +82,12 @@ def validate(type_, title, description) -> tuple[str, str, str]:
     return type_, title.strip(), description.strip()
 
 
-def create(email: str, type_, title, description="") -> dict:
-    """File one ticket for ``email`` (the authenticated caller)."""
+def create(email: str, type_, title, description="", *,
+           conversation: Optional[list] = None, context: Optional[dict] = None) -> dict:
+    """File one ticket for ``email`` (the authenticated caller).
+
+    ``conversation`` / ``context`` are stored as given: the route sanitises them
+    (``support_context``) before they get here."""
     email = (email or "").strip().lower()
     if not email:
         raise TicketError("sign in to file a ticket", 401)
@@ -89,6 +108,10 @@ def create(email: str, type_, title, description="") -> dict:
         rec = {"id": tid, "uid": email, "email": email, "type": type_,
                "title": title, "description": description, "status": "open",
                "createdAt": now * 1000.0}
+        if conversation:
+            rec["conversation"] = conversation
+        if context:
+            rec["context"] = context
         doc[tid] = rec
         out.update(_view(rec))
         return doc
@@ -99,19 +122,19 @@ def create(email: str, type_, title, description="") -> dict:
     return out
 
 
-def _all() -> list[dict]:
+def _all(detail: bool = False) -> list[dict]:
     try:
         doc = read_json(tickets_file(), {})
     except Exception:                                        # noqa: BLE001
         return []
-    rows = [_view(r) for r in (doc.values() if isinstance(doc, dict) else ())
+    rows = [_view(r, detail) for r in (doc.values() if isinstance(doc, dict) else ())
             if isinstance(r, dict)]
     rows.sort(key=lambda r: r.get("createdAt") or 0, reverse=True)
     return rows
 
 
-def list_all() -> list[dict]:
-    return _all()
+def list_all(detail: bool = False) -> list[dict]:
+    return _all(detail)
 
 
 def list_for(email: str) -> list[dict]:

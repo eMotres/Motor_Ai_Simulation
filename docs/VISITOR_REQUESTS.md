@@ -7,7 +7,7 @@ somebody had stood in the doorway and asked how to get in.
 
 Three mechanisms close that loop. All of them apply to **anonymous callers
 only** — a signed-in user's chat is never logged here; they have a name, a
-Report tab and a session log already.
+ticket list and a session log already (see `docs/SUPPORT_ASSISTANT.md`).
 
 ```
 visitor types  →  POST /api/support/chat  →  provider

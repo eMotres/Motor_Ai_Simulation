@@ -1,0 +1,95 @@
+{
+  "_comment": "Example exchanges of the in-app assistant (owner 2026-10-05). `canned` is the reply a model is EXPECTED to give; tests/test_support_assistant.py feeds it through the real route with the provider mocked and checks what the user ends up reading. The same questions run against the live model with scripts/support_assistant_live_check.py (needs GEMINI_API_KEY): the `must_contain_any` / `must_not_match` rules apply to its answers too.",
+  "exchanges": [
+    {
+      "id": "load_motor",
+      "role": "user",
+      "question": "How do I load a motor?",
+      "context": {"tab": "motors", "tabLabel": "Motors"},
+      "canned": "Open the **Motors** tab, pick the Ø section, then the die and the configuration, and click the green **▶** on the duty you want. The machine opens in **Configure**.",
+      "draft": null,
+      "must_contain_any": ["Motors"],
+      "must_contain_all": ["▶"]
+    },
+    {
+      "id": "pwm_frequency",
+      "role": "user",
+      "question": "What does the PWM frequency dropdown in Configure do?",
+      "context": {"tab": "compare", "tabLabel": "Configure", "configure": {"drive": {"mode": "pwm", "transistor": "GS66516T", "pwm_kHz": 48}}},
+      "canned": "Under **Drive**, once **PWM** is selected, the first dropdown is the transistor and the second one is the **PWM frequency**. It lists only the frequencies that were already computed for that transistor in this motor. A higher frequency means less current ripple but more switching loss, so the **Controller loss** tile goes up.",
+      "draft": null,
+      "must_contain_any": ["PWM frequency"],
+      "must_contain_all": []
+    },
+    {
+      "id": "dash_efficiency",
+      "role": "user",
+      "question": "Why does the Efficiency tile show a dash?",
+      "context": {"tab": "compare", "tabLabel": "Configure", "configure": {"drive": {"mode": "pwm", "transistor": "GS66516T", "pwm_kHz": 48}, "knobs": {"speed_rpm": 12500, "current_A_rms": 40}, "warnings": ["Refused: 12500 rpm is outside the computed range 1000-11000 rpm"]}},
+      "canned": "The PWM point is refused: **12500 rpm** is outside the range that was computed for this transistor (1000-11000 rpm), so the tiles that depend on it show a dash. Lower the **Speed** slider into that range, or switch **Drive** back to **Sine**.",
+      "draft": null,
+      "must_contain_any": ["Speed", "rpm"],
+      "must_contain_all": []
+    },
+    {
+      "id": "thermal_study",
+      "role": "user",
+      "question": "Can I run a thermal simulation of this motor?",
+      "context": {"tab": "compare", "tabLabel": "Configure"},
+      "canned": "Not with this account: it has the **Motors** and **Configure** tools only. In Configure you do see the winding, magnet and housing temperatures for propeller-cooled motors. If you need a full thermal study, I can prepare a request to the team.",
+      "draft": null,
+      "must_contain_any": ["Configure"],
+      "must_contain_all": []
+    },
+    {
+      "id": "turns_limit",
+      "role": "user",
+      "question": "The turns slider stops at 14, I want 18.",
+      "context": {"tab": "compare", "tabLabel": "Configure", "configure": {"knobs": {"turnsPerSlot": 14, "wire_mm": 0.8}}},
+      "canned": "The turns slider stops at what fits in the slot with your current wire: the note beside it says \"fits the slot\". Make the **Wire thickness** thinner (the maximum number of turns rises as the wire gets thinner) and then move the turns up.",
+      "draft": null,
+      "must_contain_any": ["slot"],
+      "must_contain_all": ["Wire thickness"]
+    },
+    {
+      "id": "bug_efficiency_over_100",
+      "role": "user",
+      "question": "After switching to PWM the Efficiency tile shows 140 %, that cannot be right. Motor L12, preset L12, 8000 rpm, 30 A. I expected about 90 %.",
+      "context": {"tab": "compare", "tabLabel": "Configure", "machine": {"configuration": "L12"}, "configure": {"preset": "L12", "drive": {"mode": "pwm", "transistor": "GS66516T", "pwm_kHz": 48}, "tiles": {"efficiency_pct": 140}}},
+      "canned": "That does look wrong: an efficiency above 100 % is impossible. I have prepared a ticket for the team, check it, edit it if you like and press **Send**.\n[[TICKET_DRAFT {\"type\": \"bug\", \"title\": \"Efficiency tile reads 140 % after switching to PWM\", \"description\": \"Motor L12, preset L12, Drive = PWM (GS66516T, 48 kHz), 8000 rpm, 30 A rms. The Efficiency tile shows 140 %; expected about 90 %.\"}]]",
+      "draft": {"type": "bug", "title_contains": "140"},
+      "must_contain_any": ["ticket"],
+      "must_contain_all": []
+    },
+    {
+      "id": "feature_csv",
+      "role": "user",
+      "question": "Please add a button to export the Configure results to CSV.",
+      "context": {"tab": "compare", "tabLabel": "Configure"},
+      "canned": "Good idea, there is no CSV export in Configure today. I have prepared a feature request for the team: check it and press **Send**.\n[[TICKET_DRAFT {\"type\": \"feature\", \"title\": \"Export the Configure results to CSV\", \"description\": \"A button in Configure that exports the current knobs and the result tiles (and the saved configurations) to a CSV file.\"}]]",
+      "draft": {"type": "feature", "title_contains": "CSV"},
+      "must_contain_any": ["ticket", "request"],
+      "must_contain_all": []
+    },
+    {
+      "id": "account_access",
+      "role": "user",
+      "question": "My colleague can open the CILN28 motors but I cannot see them. How do I get access?",
+      "context": {"tab": "motors", "tabLabel": "Motors"},
+      "canned": "Access is granted per account by the team. I have prepared a request, check it and press **Send**, or write to vadim@motresres.com.\n[[TICKET_DRAFT {\"type\": \"account\", \"title\": \"Grant access to the CILN28 motors\", \"description\": \"The user cannot see the CILN28 motors in the Motors tab, a colleague can. Please grant this account the same motors.\"}]]",
+      "draft": {"type": "account", "title_contains": "CILN28"},
+      "must_contain_any": ["vadim@motresres.com"],
+      "must_contain_all": []
+    },
+    {
+      "id": "staff_coupled_thermal",
+      "role": "admin",
+      "question": "Where do I run the coupled EM and thermal loop?",
+      "context": {"tab": "simulation", "tabLabel": "Electromagnetic"},
+      "canned": "Set the cooling on the **Thermal** tab, then on the **Electromagnetic** tab switch on **Coupled thermal — solve for the temperatures** and press **Run Simulation**. The **Thermal** tab then shows the converged result.",
+      "draft": null,
+      "must_contain_any": ["Thermal"],
+      "must_contain_all": ["Run Simulation"]
+    }
+  ]
+}

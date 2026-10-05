@@ -380,6 +380,79 @@ def task_pwm(work: Path, a) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  demagseq — the owner-default demag current limit (default 2, pending owner)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def task_demagseq(work: Path, a) -> None:
+    """Overload, then the rated point on the SAME damaged magnet.
+
+    Owner default (2), pending owner: the demag current limit is the highest
+    current after which the subsequent rated-point torque drops by <= 1 %.
+    One process per overload level: (1) the overload point on the hot MTPA
+    line at rated speed (TDM coupled eddy + full demag pre-pass, the stage-1
+    demag-probe settings); (2) the rated operating point, its Br ratchet
+    CONTINUED from (1) through the solver's own sweep seed
+    (SB_SEED_FROM_PREVIOUS=1: the damaged per-element Br is projected onto the
+    rated run and the ratchet stays active; ``demag_seeded`` must come back
+    true or the pair is refused).  The reference is the same rated point from
+    virgin magnets (its own pre-pass), solved here too."""
+    os.environ["SB_NO_WARM_CACHE"] = "0"
+    os.environ["SB_SEED_FROM_PREVIOUS"] = "1"
+    M, fI = a.machine, float(a.fi)
+    snap = _snap(work, M)
+    hm, st, recs = _hot_map(work, M)
+    from motor_ai_sim.passport_v1 import jobs as J
+    from motor_ai_sim.passport_v1 import psimap as PM
+    from motor_ai_sim.passport_v1 import stages as S
+    from motor_ai_sim.material_context import set_request_materials
+    from motor_ai_sim.simulation import fem_solver_2d as F
+    set_request_materials({"assignment": _materials(snap), "materials": {}})
+    Tm, Tc = S._hot(snap)
+    I0, n0 = S._I0(snap), S._n0(snap)
+    steps = int(snap["rated_duty"]["steps_per_period"])
+    b = S._base(snap, st, static=False)
+    lp = st.get("loss_plan2") or st["loss_plan"]
+    vlim = PM.v_phase_limit(float(lp["v_dc"]), CONTROLLER["common"]["m"])
+    g_r, how_r = hm.operating_gamma(I0, n0, float(lp["R_hot_ohm"]), vlim)
+    lv = [m for m in st["hot_mtpa"] if abs(m["fI"] - fI) < 1e-9]
+    g_o = float(lv[0]["gamma_mtpa"]) if lv else float(hm.gamma_mtpa(fI * I0))
+    out: Dict[str, Any] = {"task": "demagseq", "machine": M, "fI": fI, "I_over": fI * I0,
+                           "gamma_over": g_o, "I_rated": I0, "gamma_rated": g_r,
+                           "gamma_rated_mode": how_r, "rpm": n0, "temps": [Tm, Tc]}
+    t0 = time.time()
+
+    def solve(I, g):
+        j = J.loss_job("x", b, I_rms=I, gamma_deg=round(g, 3), rpm=n0, magnet_temp_c=Tm,
+                       coil_temp_c=Tc, steps=steps)
+        r = F.em_transient_eval(**j["kw"])
+        ds = r.get("demag_summary") or {}
+        return {"T_Nm": float(r["T_avg_Nm"]), "demag_seeded": r.get("demag_seeded"),
+                "demag_seed_from": r.get("demag_seed_from"),
+                "br_kept_vol_pct": ds.get("br_kept_vol_pct"),
+                "br_corner_pct": (ds.get("br_corner") or {}).get("br_pct"),
+                "demag_settled": r.get("demag_settled"), "eddy_settled": r.get("eddy_settled"),
+                "steady_state": r.get("steady_state"), "P_loss_total_W": r.get("P_loss_total_W")}
+    F._SB_WARM_CACHE.clear()
+    out["rated_virgin"] = solve(I0, g_r)          # reference, own pre-pass
+    F._SB_WARM_CACHE.clear()
+    try:
+        F._warm_cache_path().unlink()
+    except OSError:
+        pass
+    out["overload"] = solve(fI * I0, g_o)
+    out["rated_after"] = solve(I0, g_r)
+    ok = bool(out["rated_after"]["demag_seeded"])
+    out["valid"] = ok
+    out["torque_drop_pct"] = (100.0 * (1.0 - out["rated_after"]["T_Nm"]
+                                       / out["rated_virgin"]["T_Nm"]) if ok else None)
+    out["wall_s"] = time.time() - t0
+    out["method"] = ("overload (TDM + demag pre-pass) -> rated point with the Br ratchet "
+                     "continued (SB_SEED_FROM_PREVIOUS); drop vs the rated point from "
+                     "virgin magnets; rated speed, hot temperatures")
+    _dump(_out(work, "demagseq_%s_%g" % (M, fI)), out)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  parallel supervisor
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -418,12 +491,13 @@ def main(argv=None) -> None:
     ap.add_argument("--fsw", type=float, default=None)
     ap.add_argument("--dead-us", type=float, default=None)
     ap.add_argument("--device", default=None)
+    ap.add_argument("--fi", type=float, default=None)
     ap.add_argument("rest", nargs="*")
     a = ap.parse_args(argv)
     work = Path(a.work)
     (work / "out" / "full").mkdir(parents=True, exist_ok=True)
     fn = {"stage_a": task_stage_a, "coupled": task_coupled, "mech": task_mech,
-          "pwm": task_pwm, "parallel": task_parallel}[a.task]
+          "pwm": task_pwm, "demagseq": task_demagseq, "parallel": task_parallel}[a.task]
     fn(work, a)
 
 

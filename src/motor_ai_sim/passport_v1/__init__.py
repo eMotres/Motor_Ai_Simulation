@@ -37,8 +37,10 @@ STAGE1_LABELS = ("2-D", "no 3-D end correction", "sine current drive",
 #: Owner defaults that are NOT owner decisions yet — stamped on the record.
 PENDING_DEFAULTS = {
     "voltage_margin_m": {
-        "value": 0.95,
-        "status": "placeholder (spec P24) — not an owner decision",
+        "value": 0.89,
+        "status": "default pending owner (owner default 5, 2026-10-05): the controller "
+                  "project's centred SVPWM with 1 us min LS on-time + 0.1 us dead time "
+                  "at 48 kHz (calc_notes §2); replaces the 0.95 placeholder (spec P24)",
     },
     "materials_library": {
         "value": "deployed library (/srv/motres/shared/materials_library.yaml)",

@@ -133,9 +133,15 @@ def static_check_rows(recs, st, hm: PM.PsiMap, I0: float) -> List[Dict[str, Any]
     return rows
 
 
+def _lp(st) -> Dict[str, Any]:
+    """The loss trajectory the card uses: the controller-margin re-plan
+    (``loss_plan2``, m = 0.89) when it exists, else the stage-1 plan."""
+    return st.get("loss_plan2") or st["loss_plan"]
+
+
 def loss_rows(recs, st) -> Dict[float, List[Dict[str, Any]]]:
     rows: Dict[float, List[Dict[str, Any]]] = {}
-    for p in st["loss_plan"]["points"]:
+    for p in _lp(st)["points"]:
         if not p.get("id") or p["id"] not in recs:
             continue
         r = recs[p["id"]]["r"]
@@ -197,7 +203,8 @@ def loss_check_rows(recs, st, R_hot: float, snap) -> List[Dict[str, Any]]:
     Tm_hot = snap["temperatures"]["hot_magnet_c"]
     alpha = _cu_alpha(snap)
     out = []
-    plan = list(st["checks_plan"]["loss"])
+    lp2 = st.get("loss_plan2")
+    plan = list(lp2["checks"]) if (lp2 and lp2.get("checks")) else list(st["checks_plan"]["loss"])
     for jid in [k for k in recs if k.startswith(("audit_", "duty_"))] + ["lchk_rated_72steps"]:
         if jid in recs:
             m = recs[jid]["meta"]
@@ -255,7 +262,7 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     n0 = float(snap["rated_duty"]["rpm"])
     T_hot_m, T_hot_c = snap["temperatures"]["hot_magnet_c"], snap["temperatures"]["hot_coil_c"]
     hot_pts, hm = _map(recs, st, "hot", "hot_mtpa", pp)
-    lp = st["loss_plan"]
+    lp = _lp(st)
     R_hot = float(lp["R_hot_ohm"])
     I_pk = float(lp["I_peak_rms"])
 
@@ -317,7 +324,7 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     inc_h = rh1.get("inc_ldq") or {}
     dl = hm.diff_L(float(rh1["i_d_A"]), float(rh1["i_q_A"]))
     # ── voltage / operating envelope (hot map) ────────────────────────────
-    m = PENDING_DEFAULTS["voltage_margin_m"]["value"]
+    m = float(lp.get("m") or PENDING_DEFAULTS["voltage_margin_m"]["value"])
     env = {}
     for which in ("min", "nom", "max"):
         vdc = float(snap["battery"]["v_" + which])

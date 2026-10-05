@@ -22,6 +22,14 @@ import { Box, Typography, TextField, MenuItem, Chip } from '@mui/material';
 import HelpTip from './HelpTip';
 import { useMotorStore } from '../../stores/motorStore';
 import { airH, liqH, lsSetCool, readCool } from './api';
+import { nsT } from '../../i18n/nsT';
+
+const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
+/** the stored system value -> the locale key that names it (the stored values never change) */
+const SYS_KEY: Record<string, string> = {
+  Air: 'configure.sysAir', Water: 'configure.sysWater',
+  'Water-glycol': 'configure.sysWaterGlycol', Oil: 'configure.sysOil',
+};
 
 const CoolingControls: React.FC<{ diameterMm?: number }> = ({ diameterMm }) => {
   const geometry = useMotorStore((s) => s.geometry as Record<string, unknown> | null);
@@ -48,28 +56,28 @@ const CoolingControls: React.FC<{ diameterMm?: number }> = ({ diameterMm }) => {
           duty-cycle editor's picker from opening at all (2026-09-15). */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.375, mb: 0.75 }}>
         <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-3)', letterSpacing: 0.5 }}>
-          COOLING — outer stator surface
+          {tx('configure.cooling')}
         </Typography>
-        <HelpTip title="Air: h from the air speed. Liquid: inlet temperature + flow → the jacket's h." />
+        <HelpTip title={tx('configure.coolingHelp')} />
       </Box>
-      <TextField select size="small" fullWidth label="System" value={sys} onChange={(e) => onSys(e.target.value)}
+      <TextField select size="small" fullWidth label={tx('configure.system')} value={sys} onChange={(e) => onSys(e.target.value)}
         sx={{ mb: 1, '& .MuiSelect-select': { fontSize: 13 } }}>
         {['Air', 'Water', 'Water-glycol', 'Oil'].map((o) => (
-          <MenuItem key={o} value={o} sx={{ fontSize: 13 }}>{o}</MenuItem>
+          <MenuItem key={o} value={o} sx={{ fontSize: 13 }}>{tx(SYS_KEY[o])}</MenuItem>
         ))}
       </TextField>
       <Box sx={{ display: 'flex', gap: 1, mb: 1 }}>
-        <TextField size="small" type="number" label={isAir ? 'Air temp °C' : 'Inlet °C'} value={temp}
+        <TextField size="small" type="number" label={isAir ? tx('configure.airTemp') : tx('configure.inletTemp')} value={temp}
           onChange={(e) => onTemp(parseFloat(e.target.value) || 0)} sx={{ flex: 1 }} />
         {isAir ? (
-          <TextField size="small" type="number" label="Air speed m/s" value={airSpeed}
+          <TextField size="small" type="number" label={tx('configure.airSpeed')} value={airSpeed}
             onChange={(e) => onAir(parseFloat(e.target.value) || 0)} sx={{ flex: 1 }} />
         ) : (
-          <TextField size="small" type="number" label="Flow L/min" value={flow}
+          <TextField size="small" type="number" label={tx('configure.flow')} value={flow}
             onChange={(e) => onFlow(parseFloat(e.target.value) || 0)} sx={{ flex: 1 }} />
         )}
       </Box>
-      <Chip size="small" label={`h ≈ ${h.toFixed(0)} W/m²K  ${isAir ? (h > 7 ? '· forced' : '· natural') : '· jacket'}`}
+      <Chip size="small" label={tx('configure.hChip', { h: h.toFixed(0), kind: isAir ? (h > 7 ? tx('configure.kindForced') : tx('configure.kindNatural')) : tx('configure.kindJacket') })}
         sx={{ width: '100%', justifyContent: 'flex-start', fontFamily: 'monospace', fontWeight: 700,
           bgcolor: 'var(--line-accent)', color: 'var(--brand)' }} />
     </Box>

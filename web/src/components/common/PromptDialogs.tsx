@@ -18,6 +18,9 @@ export interface TextPromptState {
   label?: string;
   initial?: string;
   hint?: string;
+  /** button words; absent = English "Cancel" / "OK" (every existing caller) */
+  cancelLabel?: string;
+  okLabel?: string;
   onSubmit: (value: string) => void;
 }
 
@@ -50,9 +53,9 @@ export const TextPromptDialog: React.FC<{
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}
-          sx={{ textTransform: 'none', color: 'var(--text-2)' }}>Cancel</Button>
+          sx={{ textTransform: 'none', color: 'var(--text-2)' }}>{state?.cancelLabel ?? 'Cancel'}</Button>
         <Button variant="contained" disabled={!value.trim()} onClick={submit}
-          sx={{ textTransform: 'none' }}>OK</Button>
+          sx={{ textTransform: 'none' }}>{state?.okLabel ?? 'OK'}</Button>
       </DialogActions>
     </Dialog>
   );

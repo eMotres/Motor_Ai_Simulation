@@ -11,6 +11,9 @@ import React, { useEffect, useRef } from 'react';
 import { Box, Typography } from '@mui/material';
 import { scaleMotor, maxCurrent, turnsFactor, type Passport, type Knobs } from '../../lib/motorScaling';
 
+import { nsT } from '../../i18n/nsT';
+
+const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 const SQRT3 = Math.sqrt(3);
 const RPM_MAX = 8000;
 const ETA_LO = 0.80, ETA_HI = 0.99;
@@ -130,8 +133,8 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
     for (const r of [RPM_MIN, 2000, 4000, 6000, 8000]) ctx.fillText(`${r / 1000}k`, ML + ((r - RPM_MIN) / (RPM_MAX - RPM_MIN)) * pw, MT + ph + 5);
     ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
     for (let i = 0; i <= 4; i++) { const t = T_MIN + (i / 4) * (Tmax - T_MIN); ctx.fillText(`${t.toFixed(0)}`, ML - 5, MT + ph - (i / 4) * ph); }
-    ctx.textAlign = 'center'; ctx.fillText('Speed (rpm)', ML + pw / 2, MT + ph + 17);
-    ctx.save(); ctx.translate(11, MT + ph / 2); ctx.rotate(-Math.PI / 2); ctx.fillText('Torque (N·m)', 0, 0); ctx.restore();
+    ctx.textAlign = 'center'; ctx.fillText(tx('configure.axisSpeed'), ML + pw / 2, MT + ph + 17);
+    ctx.save(); ctx.translate(11, MT + ph / 2); ctx.rotate(-Math.PI / 2); ctx.fillText(tx('configure.axisTorque'), 0, 0); ctx.restore();
 
     // colour bar
     const cbX = W - MR + 16, cbW = 12;
@@ -144,7 +147,7 @@ const EfficiencyMap: React.FC<{ p: Passport; knobs: Knobs; packMax: number }> = 
   return (
     <Box sx={{ mt: 1.5 }}>
       <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', mb: 0.5 }}>
-        Efficiency map (torque × speed) — ○ operating point · dark = battery can't reach
+        {tx('configure.effMapTitle')}
       </Typography>
       <canvas ref={canvasRef} width={780} height={340} style={{ width: '100%', height: 'auto', display: 'block' }} />
     </Box>

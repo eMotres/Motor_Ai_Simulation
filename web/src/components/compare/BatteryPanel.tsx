@@ -10,6 +10,9 @@
 import React, { useMemo } from 'react';
 import { Box, Typography, ToggleButton, ToggleButtonGroup, TextField } from '@mui/material';
 import BatteryChargingFullIcon from '@mui/icons-material/BatteryChargingFull';
+import { nsT } from '../../i18n/nsT';
+
+const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 export type CellType = 'NMC' | 'LFP';
 export interface Battery { type: CellType; cells: number; nom: number; max: number; min: number; }
@@ -55,10 +58,10 @@ const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery)
     <Box sx={PANEL}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.25, flexWrap: 'wrap' }}>
         <BatteryChargingFullIcon sx={{ color: '#22c55e', fontSize: 20 }} />
-        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>Battery & voltage match</Typography>
+        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.batteryTitle')}</Typography>
         <Box sx={{ flex: 1 }} />
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'monospace' }}>
-          Pack {fmt(packNom)} V nom · {fmt(packMin)}–{fmt(packMax)} V
+          {tx('configure.packSummary', { nom: fmt(packNom), min: fmt(packMin), max: fmt(packMax) })}
         </Typography>
       </Box>
 
@@ -72,12 +75,12 @@ const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery)
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
-        {numField('Cells (series)', bat.cells, setF('cells'), 1)}
+        {numField(tx('configure.cellsSeries'), bat.cells, setF('cells'), 1)}
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography sx={LABEL}>Cell V</Typography>
-          {numField('min', bat.min, setF('min'))}
-          {numField('nom', bat.nom, setF('nom'))}
-          {numField('max', bat.max, setF('max'))}
+          <Typography sx={LABEL}>{tx('configure.cellV')}</Typography>
+          {numField(tx('configure.cellMin'), bat.min, setF('min'))}
+          {numField(tx('configure.cellNom'), bat.nom, setF('nom'))}
+          {numField(tx('configure.cellMax'), bat.max, setF('max'))}
         </Box>
       </Box>
 
@@ -100,12 +103,12 @@ const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery)
         <text x={X(packMin)} y={barY + barH + 18} fill="var(--text-2)" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packMin)}</text>
         <text x={X(packNom)} y={barY + barH + 18} fill="#22c55e" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packNom)}</text>
         <text x={X(packMax)} y={barY + barH + 18} fill="var(--text-2)" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packMax)}</text>
-        <text x={X(packMin)} y={barY - 8} fill="var(--text-4)" fontSize={9} textAnchor="middle">empty</text>
-        <text x={X(packMax)} y={barY - 8} fill="var(--text-4)" fontSize={9} textAnchor="middle">full</text>
+        <text x={X(packMin)} y={barY - 8} fill="var(--text-4)" fontSize={9} textAnchor="middle">{tx('configure.barEmpty')}</text>
+        <text x={X(packMax)} y={barY - 8} fill="var(--text-4)" fontSize={9} textAnchor="middle">{tx('configure.barFull')}</text>
         {/* motor DC-voltage marker */}
         <line x1={mX} y1={barY - 14} x2={mX} y2={barY + barH + 8} stroke={color} strokeWidth={1} />
         <polygon points={`${mX - 5},${barY - 14} ${mX + 5},${barY - 14} ${mX},${barY - 6}`} fill={color} />
-        <text x={Math.min(Math.max(mX, 40), W - 40)} y={barY - 18} fill={color} fontSize={12} fontWeight={700} textAnchor="middle" fontFamily="monospace">motor {fmt(vDc)} V</text>
+        <text x={Math.min(Math.max(mX, 40), W - 40)} y={barY - 18} fill={color} fontSize={12} fontWeight={700} textAnchor="middle" fontFamily="monospace">{tx('configure.motorV', { v: fmt(vDc) })}</text>
       </svg>
     </Box>
   );

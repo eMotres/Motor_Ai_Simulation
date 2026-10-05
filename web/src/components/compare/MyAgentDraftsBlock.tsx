@@ -16,6 +16,9 @@ import { Box, Typography, Button, Collapse, Tooltip } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { listDrafts, bestDraftResult, showDraftInConfigure, type AgentDraft } from '../../lib/agentDrafts';
+import { nsT } from '../../i18n/nsT';
+
+const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 const fmt = (v: unknown, d = 1) => (typeof v === 'number' && Number.isFinite(v) ? v.toFixed(d) : '—');
 const LS_KEY = 'configure.myAgentDrafts.open';
@@ -52,7 +55,7 @@ const MyAgentDraftsBlock: React.FC = () => {
            sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 1.5, py: 1, cursor: 'pointer', userSelect: 'none' }}>
         {open ? <ExpandMoreIcon sx={{ fontSize: 18, color: 'var(--text-3)' }} />
               : <ChevronRightIcon sx={{ fontSize: 18, color: 'var(--text-3)' }} />}
-        <Typography sx={{ fontWeight: 700, fontSize: 12.5 }}>🤖 My agent drafts ({drafts.length})</Typography>
+        <Typography sx={{ fontWeight: 700, fontSize: 12.5 }}>{tx('configure.draftsTitle', { n: drafts.length })}</Typography>
       </Box>
       <Collapse in={open}>
         <Box sx={{ px: 1.5, pb: 1 }}>
@@ -66,13 +69,12 @@ const MyAgentDraftsBlock: React.FC = () => {
                 <Tooltip arrow title={(d.why || []).join(' · ')}>
                   <Typography sx={{ fontSize: 12, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {d.name} <Box component="span" sx={{ color: 'var(--text-3)' }}>
-                      · {d.starting_point.die} / {d.starting_point.config} · L {fmt(d.params.stack_mm)} mm
-                      · {fmt(d.params.current_a_rms)} A · {fmt(d.params.speed_rpm, 0)} rpm
-                      {res ? ` · FEM ${fmt(res.torque_nm, 2)} N·m` : ' · not simulated'}
+                      {tx('configure.draftRow', { die: d.starting_point.die, config: d.starting_point.config, L: fmt(d.params.stack_mm), I: fmt(d.params.current_a_rms), rpm: fmt(d.params.speed_rpm, 0) })}
+                      {res ? tx('configure.draftFem', { T: fmt(res.torque_nm, 2) }) : tx('configure.draftNotSimulated')}
                     </Box>
                   </Typography>
                 </Tooltip>
-                <Button size="small" onClick={() => showDraftInConfigure(d.design_id)}>Open</Button>
+                <Button size="small" onClick={() => showDraftInConfigure(d.design_id)}>{tx('configure.draftOpen')}</Button>
               </Box>
             );
           })}

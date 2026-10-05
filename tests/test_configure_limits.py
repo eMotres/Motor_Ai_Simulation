@@ -98,3 +98,51 @@ def test_slot_fit_identity_matches_the_solvers_bound():
             fits_rows = n <= math.floor(avail / (h + g["wire_spacing_y"]) + 1e-9)
             fits_solver = h <= h_max + 1e-9
             assert fits_rows == fits_solver, (n, h)
+
+
+# ---------------------------------------------------------------------------
+# The phase-current ceiling — the formula, pinned (review 2026-10-05)
+# ---------------------------------------------------------------------------
+#
+# A switch carries its leg's sine current for HALF the period, so its rms is
+# I_leg,rms / sqrt(2) (peak / 2).  The datasheet's continuous drain current I_D
+# is an rms-type rating, so the ceiling is  I_leg,rms,max = sqrt(2) * I_D * n_par.
+# The PEAK current sqrt(2) * I_leg,rms = 2 * I_D is then judged against the
+# pulsed rating I_DM (712 A here), a different and much larger limit.  The
+# alternative I_D * n / sqrt(2) would hold the PEAK to the CONTINUOUS rating and
+# use only half of what the part allows (the Controller tab would show that
+# machine at 50 % device utilisation).  This is the very rule the Controller's
+# "Continuous current per device" row applies, so the two cannot disagree.
+
+L12_DEVICE = "IQE018N06NM6SC"          # the CIANO14 40/60V controller part
+
+
+@pytest.mark.parametrize("n_par", [1, 2, 3])
+def test_current_ceiling_formula_is_sqrt2_times_rating_times_parallel(n_par):
+    card = dv.get_device(L12_DEVICE)
+    assert card.i_d_rating(cl.RATING_T_CASE_C)["i_a"] == pytest.approx(126.0)   # Table 2, T_C = 100 degC
+    cur = cl.current_limit({"device": L12_DEVICE, "devices_parallel": n_par})
+    assert cur["set"] and cur["i_d_rating_A"] == pytest.approx(126.0)
+    assert cur["i_phase_rms_max_A"] == pytest.approx(math.sqrt(2) * 126.0 * n_par, abs=0.06)
+    assert cur["i_phase_rms_max_A"] == pytest.approx([178.2, 356.4, 534.6][n_par - 1], abs=0.06)
+
+
+def test_current_ceiling_is_where_the_controller_puts_the_device_at_its_rating():
+    """At the ceiling the Controller solve's per-device rms current equals the
+    card's 100 degC continuous rating, and the peak is far inside I_DM."""
+    from motor_ai_sim.inverter.losses import solve_controller
+    card = dv.get_device(L12_DEVICE)
+    i_d = card.i_d_rating(cl.RATING_T_CASE_C)["i_a"]
+    for n_par in (1, 2):
+        i_max = cl.current_limit({"device": L12_DEVICE, "devices_parallel": n_par})["i_phase_rms_max_A"]
+        out = solve_controller({
+            "standalone": True, "lean": True, "device": L12_DEVICE,
+            "devices_parallel": n_par, "v_dc_V": 22.2, "i_phase_rms_A": i_max,
+            "f_elec_hz": 1000.0, "f_carrier_hz": 48000.0, "modulation_index": 0.8,
+            "power_factor": 0.9, "dead_time_us": 0.1, "cooling": {"mode": "liquid"}})
+        rows = {r["name"]: r for r in out["limits"]}
+        cont = rows["Continuous current per device"]
+        peak = rows["Peak current per device"]
+        assert cont["value"] == pytest.approx(i_d, rel=0.005) and cont["verdict"] == "pass"
+        assert peak["value"] == pytest.approx(2.0 * i_d, rel=0.005) and peak["verdict"] == "pass"
+        assert peak["limit"] == pytest.approx(card.i_d_pulsed_A)

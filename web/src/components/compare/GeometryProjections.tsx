@@ -15,6 +15,9 @@ import { Box, Typography, CircularProgress } from '@mui/material';
 import type { Knobs } from '../../lib/motorScaling';
 import type { ReferenceMotor } from '../../lib/referencePassports';
 import { useMotorStore } from '../../stores/motorStore';
+import { nsT } from '../../i18n/nsT';
+
+const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = 'var(--panel-2)';
@@ -101,7 +104,7 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
     <Box sx={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <canvas ref={canvasRef} width={720} height={720} style={{ height: '100%', width: 'auto', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', aspectRatio: '1 / 1', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
       {state === 'loading' && <CircularProgress size={20} sx={{ color: '#3b82f6', position: 'absolute', top: '50%', left: '50%', mt: '-10px', ml: '-10px' }} />}
-      {state === 'error' && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>geometry preview needs the backend</Typography>}
+      {state === 'error' && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>{tx('configure.previewNeedsBackend')}</Typography>}
     </Box>
   );
 };
@@ -193,15 +196,15 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
       {/* overflow hidden + contained canvases: the images must never bleed
           into the neighbouring panel (user: "so they don't overlap"). */}
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-        <Typography sx={LABEL}>Cross-section (XY) — real geometry</Typography>
-        <Typography sx={SUB}>{knobs.N} turns/slot · {knobs.wireH_mm.toFixed(1)} mm wire · {numSlots} slots / {numPoles} poles</Typography>
+        <Typography sx={LABEL}>{tx('configure.crossTitle')}</Typography>
+        <Typography sx={SUB}>{tx('configure.crossSub', { n: knobs.N, wire: knobs.wireH_mm.toFixed(1), slots: numSlots, poles: numPoles })}</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5 }}>
           <CrossSectionReal geoStr={geoStr} />
         </Box>
       </Box>
       <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-        <Typography sx={LABEL}>Side view — stack length</Typography>
-        <Typography sx={SUB}>L = {L_mm.toFixed(0)} mm · Ø{OD_mm.toFixed(0)} mm</Typography>
+        <Typography sx={LABEL}>{tx('configure.sideTitle')}</Typography>
+        <Typography sx={SUB}>{tx('configure.sideSub', { L: L_mm.toFixed(0), od: OD_mm.toFixed(0) })}</Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5, display: 'flex', justifyContent: 'center' }}>
           <SideView OD_mm={OD_mm} L_mm={L_mm} />
         </Box>

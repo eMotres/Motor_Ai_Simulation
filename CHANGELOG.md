@@ -24,8 +24,8 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   Sine; "no controller set" otherwise); speed max = the voltage envelope at the pack maximum,
   else Kv x V_max x m. The 2S/2P connection is free with a line-voltage warning. Admin range
   edits only narrow. `GET /api/catalog/{id}/configure_context` serves the machine's limits.
-  The old measured-delta "Excitation" toggle is removed (PWM = computed variants only). The
-  new Configure strings are fully Chinese in ZH (a node test guards it).
+  The old measured-delta "Excitation" toggle and its code (`pwmDeltas`, the `pwm_*` result fields) are removed (PWM = computed variants only). The
+  whole Configure tree is fully Chinese in ZH (a node test scans the source and the locale).
 
 ### Changed
 - **Licence: Apache License 2.0** (owner decision 2026-10-03), replacing

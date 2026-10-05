@@ -22,6 +22,9 @@ import type { Passport, Knobs, ScaledResult } from '../../lib/motorScaling';
 import {
   chargeAt, maxCharge, chargeMap, canCharge, M_LIMIT,
 } from '../../lib/generatorCharge';
+import { nsT } from '../../i18n/nsT';
+
+const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1 } as const;
 const LABEL = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
@@ -33,11 +36,25 @@ const fmt = (v: number | null | undefined, d = 1) =>
 const LIMIT_COLOR: Record<string, string> = {
   none: '#4ade80', current: '#fbbf24', pack: '#fbbf24', modulation: '#f87171',
 };
-const LIMIT_WHY: Record<string, string> = {
-  none: 'nothing is capping this point — the shaft power is the limit',
-  current: "the pack's own charge-current ceiling",
-  pack: 'the pack would be pushed above its maximum terminal voltage',
-  modulation: 'the bus cannot synthesise the voltage this point needs',
+/** what stops the charge, as a locale key (the codes themselves are data) */
+const LIMIT_WHY_KEY: Record<string, string> = {
+  none: 'configure.limWhyNone', current: 'configure.limWhyCurrent',
+  pack: 'configure.limWhyPack', modulation: 'configure.limWhyModulation',
+};
+const LIMIT_NAME_KEY: Record<string, string> = {
+  none: 'configure.limNone', current: 'configure.limCurrent',
+  pack: 'configure.limPack', modulation: 'configure.limModulation',
+};
+const limWhy = (k: string): string => (LIMIT_WHY_KEY[k] ? tx(LIMIT_WHY_KEY[k]) : '');
+const limName = (k: string): string => (LIMIT_NAME_KEY[k] ? tx(LIMIT_NAME_KEY[k]) : k);
+/** the pack's placeholder notes (data keys) -> a sentence in the interface language */
+const PH_KEY: Record<string, string> = {
+  n_parallel: 'configure.phNParallel', r_int_mohm: 'configure.phRInt',
+  capacity_ah: 'configure.phCapacity', i_charge_max_A: 'configure.phIChargeMax',
+};
+const phText = (key: string, raw: string, chem: string | null): string => {
+  if (key === 'v_oc') return tx(raw.startsWith('midpoint') ? 'configure.phVocMid' : 'configure.phVocNom');
+  return PH_KEY[key] ? tx(PH_KEY[key], { chem: chem ?? '—' }) : raw;
 };
 
 const Tile: React.FC<{ label: string; value: string; unit?: string;
@@ -72,57 +89,61 @@ const ChargePanel: React.FC<{
   return (
     <Box sx={{ ...PANEL, p: 1.5 }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>Boost charging</Typography>
+        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.boostCharging')}</Typography>
         <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}
-          title={`Shaft power minus the machine's own losses goes into the pack through an IDEAL bridge — no dead time, no device conduction or switching loss, so a real charger delivers less, never more. The bus is the exact root of V_bus = V_oc + I·R_pack with I = P_charge/V_bus (R_pack = ${pack.cells}·${pack.r_int_mohm} mΩ / ${pack.n_parallel} = ${(pack.R_pack_ohm * 1000).toFixed(2)} mΩ).`}>
-          shaft → pack, ideal bridge
+          title={tx('configure.shaftToPackTip', { cells: pack.cells, rint: pack.r_int_mohm, np: pack.n_parallel, rpack: (pack.R_pack_ohm * 1000).toFixed(2) })}>
+          {tx('configure.shaftToPack')}
         </Typography>
         <Box sx={{ flex: 1 }} />
         {best.charge && best.I_A != null && (
           <Chip size="small" clickable={!!onPickCurrent}
             onClick={onPickCurrent ? () => onPickCurrent(best.I_A as number) : undefined}
-            label={`max ${fmt(best.charge.P_charge_W / 1000, 2)} kW @ ${fmt(best.I_A, 0)} A`}
-            title={`The most charge power any current between ${fmt(best.range_A[0], 0)} and ${fmt(best.range_A[1], 0)} A reaches at ${fmt(knobs.rpm, 0)} rpm, with every pack and modulation limit held. `
-              + (best.at_range_top
-                ? 'It sits at the TOP of that range: nothing in the pack or the modulation stopped it — the machine\'s own current ceiling (conductor headroom and the measured demagnetisation knee) did.'
-                : `Past it: ${LIMIT_WHY[best.limited_by] ?? 'the sweep ran out of measured current'}.`)
-              + (onPickCurrent ? ' Click to set the current knob there.' : '')}
+            label={tx('configure.maxChip', { kw: fmt(best.charge.P_charge_W / 1000, 2), a: fmt(best.I_A, 0) })}
+            title={tx('configure.maxChipTip', {
+              lo: fmt(best.range_A[0], 0), hi: fmt(best.range_A[1], 0), rpm: fmt(knobs.rpm, 0),
+              tail: best.at_range_top
+                ? tx('configure.maxChipTop')
+                : tx('configure.maxChipPast', { why: limWhy(best.limited_by) || tx('configure.maxChipRanOut') }),
+              click: onPickCurrent ? tx('configure.maxChipClick') : '',
+            })}
             sx={{ fontSize: 11, fontWeight: 700, bgcolor: '#065f46', color: '#d1fae5',
                   '&:hover': onPickCurrent ? { bgcolor: '#047857' } : undefined }} />
         )}
       </Box>
 
       <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: 1 }}>
-        <Tile label="Charge power" value={fmt(c.P_charge_W / 1000, 2)} unit="kW"
+        <Tile label={tx('configure.chargePower')} value={fmt(c.P_charge_W / 1000, 2)} unit="kW"
           color={c.charging ? '#4ade80' : '#f87171'}
-          sub={`${fmt(c.P_mech_W / 1000, 2)} kW shaft − ${fmt(c.P_loss_W, 0)} W loss`}
-          title="Mechanical power in, minus every loss the card reports. Ideal bridge — a real charger delivers less." />
-        <Tile label="Charge current" value={fmt(c.I_charge_A, 1)} unit="A"
+          sub={tx('configure.chargePowerSub', { mech: fmt(c.P_mech_W / 1000, 2), loss: fmt(c.P_loss_W, 0) })}
+          title={tx('configure.chargePowerTip')} />
+        <Tile label={tx('configure.chargeCurrent')} value={fmt(c.I_charge_A, 1)} unit="A"
           color={lim === 'current' ? '#fbbf24' : undefined}
-          sub={pack.i_charge_max_A > 0 ? `of ${fmt(pack.i_charge_max_A, 0)} A max` : undefined}
-          title="P_charge / V_bus — the balance number, because that is the honest power." />
-        <Tile label="C-rate" value={fmt(c.C_rate, 3)} unit="C"
-          sub={`${fmt(pack.capacity_ah, 0)} Ah pack`}
-          title={placeholders.length ? `Capacity: ${pack.placeholders.capacity_ah ?? 'from the configuration'}` : 'from the pack on the configuration'} />
-        <Tile label="Bus under charge" value={fmt(c.V_bus_V, 1)} unit="V"
+          sub={pack.i_charge_max_A > 0 ? tx('configure.chargeCurrentSub', { max: fmt(pack.i_charge_max_A, 0) }) : undefined}
+          title={tx('configure.chargeCurrentTip')} />
+        <Tile label={tx('configure.cRate')} value={fmt(c.C_rate, 3)} unit="C"
+          sub={tx('configure.cRateSub', { ah: fmt(pack.capacity_ah, 0) })}
+          title={pack.placeholders.capacity_ah
+            ? tx('configure.cRateTipPh', { text: phText('capacity_ah', pack.placeholders.capacity_ah, pack.chemistry) })
+            : tx('configure.cRateTip')} />
+        <Tile label={tx('configure.busUnderCharge')} value={fmt(c.V_bus_V, 1)} unit="V"
           color={lim === 'pack' ? '#fbbf24' : undefined}
-          sub={`+${fmt(c.V_rise_V, 2)} V over V_oc`}
-          title={`Charging pushes current through R_pack the other way from a discharge, so the terminal sits ABOVE the open circuit. V_oc ${fmt(c.V_oc_V, 0)} V${pack.v_max_V ? `, pack max ${fmt(pack.v_max_V, 0)} V` : ''}.`} />
-        <Tile label="η charge" value={fmt((c.eta_charge ?? 0) * 100, 2)} unit="%"
-          sub={`${fmt(c.P_pack_r_loss_W, 1)} W in R_pack`}
-          title="Shaft in → pack in. The pack's own I²R is reported separately and is NOT in the machine's efficiency." />
-        <Tile label="Limited by" value={lim} color={LIMIT_COLOR[lim]}
-          sub={lim === 'modulation' ? `m ${fmt(c.modulation_index, 3)} > ${M_LIMIT}` : `m ${fmt(c.modulation_index, 3)}`}
-          title={`${LIMIT_WHY[lim]}. ${c.note}`} />
+          sub={tx('configure.busUnderChargeSub', { rise: fmt(c.V_rise_V, 2) })}
+          title={tx('configure.busUnderChargeTip', { voc: fmt(c.V_oc_V, 0), packMax: pack.v_max_V ? tx('configure.busUnderChargePackMax', { v: fmt(pack.v_max_V, 0) }) : '' })} />
+        <Tile label={tx('configure.etaCharge')} value={fmt((c.eta_charge ?? 0) * 100, 2)} unit="%"
+          sub={tx('configure.etaChargeSub', { w: fmt(c.P_pack_r_loss_W, 1) })}
+          title={tx('configure.etaChargeTip')} />
+        <Tile label={tx('configure.limitedBy')} value={limName(lim)} color={LIMIT_COLOR[lim]}
+          sub={lim === 'modulation' ? tx('configure.limitedBySubMod', { m: fmt(c.modulation_index, 3), lim: M_LIMIT }) : tx('configure.limitedBySub', { m: fmt(c.modulation_index, 3) })}
+          title={`${limWhy(lim)}. ${c.note_key ? tx(c.note_key, c.note_params) : ''}`} />
       </Box>
 
       {chartData.length > 1 && (
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
-            <Typography sx={{ ...LABEL }}>Charge map — P_charge at the max-charge current</Typography>
+            <Typography sx={{ ...LABEL }}>{tx('configure.chargeMapTitle')}</Typography>
             <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}
-              title="At every speed the current knob is swept over the passport's own measured range and the best feasible point kept. The band under the curve is what stops it going higher at that speed.">
-              across the measured speed range
+              title={tx('configure.chargeMapTip')}>
+              {tx('configure.chargeMapSub')}
             </Typography>
           </Box>
           <ResponsiveContainer width="100%" height={190}>
@@ -134,17 +155,17 @@ const ChargePanel: React.FC<{
               <YAxis yAxisId="r" orientation="right" tick={AX} width={40} />
               <RcTooltip {...TT} />
               <ReferenceLine x={knobs.rpm} yAxisId="l" stroke="#60a5fa" strokeDasharray="4 3" />
-              <Line yAxisId="l" type="monotone" dataKey="kW" name="P_charge, kW"
+              <Line yAxisId="l" type="monotone" dataKey="kW" name={tx('configure.seriesPCharge')}
                 stroke="#4ade80" dot={false} strokeWidth={2} />
-              <Line yAxisId="r" type="monotone" dataKey="I" name="winning I, A"
+              <Line yAxisId="r" type="monotone" dataKey="I" name={tx('configure.seriesWinningI')}
                 stroke="#fbbf24" dot={false} strokeWidth={1} strokeDasharray="4 3" />
             </ComposedChart>
           </ResponsiveContainer>
           <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', mt: 0.5 }}>
             {Array.from(new Set(map.map((r) => r.limited_by))).map((L) => (
               <Typography key={L} sx={{ fontSize: 9.5, color: LIMIT_COLOR[L] ?? 'var(--text-3)' }}
-                title={LIMIT_WHY[L]}>
-                ● {L}: {map.filter((r) => r.limited_by === L).length} of {map.length} speeds
+                title={limWhy(L)}>
+                {tx('configure.limitCount', { limit: limName(L), n: map.filter((r) => r.limited_by === L).length, total: map.length })}
               </Typography>
             ))}
           </Box>
@@ -153,8 +174,8 @@ const ChargePanel: React.FC<{
 
       {placeholders.length > 0 && (
         <Typography sx={{ fontSize: 10, color: '#fbbf24', mt: 0.75 }}
-          title={placeholders.map(([k2, v]) => `${k2}: ${v}`).join('\n')}>
-          {placeholders.length} pack value{placeholders.length > 1 ? 's are' : ' is'} a placeholder — hover
+          title={placeholders.map(([k2, v]) => phText(k2, v, pack.chemistry)).join('\n')}>
+          {tx('configure.placeholders', { n: placeholders.length })}
         </Typography>
       )}
     </Box>

@@ -60,7 +60,7 @@ import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft 
 import { resolveDraftTarget, isBlocked } from '../../lib/configuratorGuard';
 import MyAgentDraftsBlock from './MyAgentDraftsBlock';
 
-const tx = nsT('controller');   // the Drive menu's strings (EN source, ZH mirror)
+const tx = nsT('controller');   // every user-visible string (EN source, ZH mirror — docs/I18N.md)
 const n0f = (x: number) => String(Number(x.toFixed(0)));
 
 /** The machine's remembered drive choice (Sine | PWM + variant), laid over
@@ -200,8 +200,8 @@ const MetricTile: React.FC<{
   return (
     <Box sx={{ ...PANEL, p: 0.9, flex: '0 1 auto', minWidth: 108, maxWidth: 168 }}
       title={(tip ? `${tip}  ` : '') + (changed
-        ? `${delta > 0 ? '+' : ''}${fmt(delta, 1)} % vs the reference design (${fmt(base, d)} ${unit})`
-        : 'same as the reference design')}>
+        ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
+        : tx('configure.sameAsRef'))}>
       <Typography sx={{ ...LABEL, fontSize: 9.5, whiteSpace: 'nowrap',
         overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Typography>
       <Typography sx={{ fontSize: 16, fontWeight: 800,
@@ -219,13 +219,13 @@ const MetricTile: React.FC<{
 /** Tooltip of the torque / Kt / Km tiles (owner 2026-09-30): which 3-D factor
  *  they carry — one factor for all of them, so torque and Kt agree. */
 const KT_BASIS_TIP = (basis: string) => (basis === '3-D'
-  ? '3-D corrected with the measured 3-D torque factor k_T of this machine.'
+  ? tx('configure.ktTip3d')
   : basis === '3-D flux'
-    ? '3-D with the flux factor k_flux(L) — the torque factor k_T is not measured for this machine yet.'
-    : '2-D: no 3-D result exists for this machine.');
+    ? tx('configure.ktTipFlux')
+    : tx('configure.ktTip2d'));
 /** Short label suffix of those tiles. */
-const KT_BASIS_LABEL = (basis: string) => (basis === '3-D' ? '3-D'
-  : basis === '3-D flux' ? '3-D flux' : '2-D');
+const KT_BASIS_LABEL = (basis: string) => (basis === '3-D' ? tx('configure.basis3d')
+  : basis === '3-D flux' ? tx('configure.basis3dFlux') : tx('configure.basis2d'));
 
 const ConfiguratorPanel: React.FC = () => {
   const { isAdmin } = useAuth();   // editing the slider ranges is admin-only
@@ -413,7 +413,7 @@ const ConfiguratorPanel: React.FC = () => {
     const load = (id: string | null) => {
       if (!id) return;
       getDraft(id).then((d) => { setDraft(d); setDraftOpen(false); setDraftMsg(null); })
-        .catch((e) => setDraftMsg(`Agent draft ${id}: ${e instanceof Error ? e.message : e}`));
+        .catch(() => setDraftMsg(tx('configure.draftLoadFailed', { id })));
     };
     load(draftIdFromUrl());
     const on = (e: Event) => load((e as CustomEvent<{ id: string }>).detail?.id ?? null);
@@ -444,7 +444,7 @@ const ConfiguratorPanel: React.FC = () => {
       // 2026-09-29: that produced a 200 mm passport's numbers for a 40 mm
       // draft).  The knobs/refId stay untouched; the render layer shows the
       // "no configurator model" empty state instead of any result tiles.
-      setDraftMsg('No configurator model for this machine yet — run a simulation to build its passport before tuning it here.');
+      setDraftMsg(tx('configure.draftNoModel'));
       return;
     }
     const pr = draft.params;
@@ -469,8 +469,8 @@ const ConfiguratorPanel: React.FC = () => {
         parallel_paths: knobs.nP,
         ...(n0 && n0 > 0 ? { turns_factor: knobs.N / n0 } : {}),
       });
-      setDraft(d); setDraftMsg('Saved to the draft (its FEM results were cleared — simulate again).');
-    } catch (e) { setDraftMsg(e instanceof Error ? e.message : String(e)); }
+      setDraft(d); setDraftMsg(tx('configure.draftSaved'));
+    } catch { setDraftMsg(tx('configure.draftSaveFailed')); }
   };
   // The draft's own last FEM run, if it has one (get_design_result's headline,
   // already carried on the draft by GET /api/agent_designs/{id}) — shown
@@ -491,9 +491,9 @@ const ConfiguratorPanel: React.FC = () => {
         const g = liveGeo as Record<string, unknown> | null;
         const slots = Number(g?.num_slots), poles = Number(g?.num_poles);
         const od = Number(g?.stator_outer_radius) * 2;
-        if (!Number.isFinite(slots) || !Number.isFinite(poles)) return 'the loaded motor';
-        return `the loaded motor (${slots}-slot / ${poles}-pole`
-          + `${Number.isFinite(od) ? `, ${od.toFixed(0)} mm OD` : ''})`;
+        if (!Number.isFinite(slots) || !Number.isFinite(poles)) return tx('configure.loadedMotor');
+        return tx('configure.loadedMotorDetail', {
+          slots, poles, od: Number.isFinite(od) ? tx('configure.loadedOd', { od: od.toFixed(0) }) : '' });
       })();
 
   // battery the user runs the motor from (persisted; snapshotted into each saved config)
@@ -543,10 +543,9 @@ const ConfiguratorPanel: React.FC = () => {
   const driveOn = knobs.drive === 'pwm' && variants.length > 0;
   const variant = driveOn
     ? (variants.find((v) => v.id === knobs.drive_variant) ?? variants[0]) : null;
-  // The legacy measured-delta flag is never honoured (its menu is gone): Sine is
-  // Sine and PWM is a computed variant, whatever an old stored knob set carries.
-  const scaleKnobs = useMemo(
-    () => (knobs.pwm ? { ...knobs, pwm: false } : knobs), [knobs]);
+  // scaleMotor() is the SINE model and never sees the drive; `scaleKnobs` stays as
+  // the one name the charts and the result use for "the knobs the model reads".
+  const scaleKnobs = knobs;
   const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
 
   // ── RANGES = PHYSICAL LIMITS (owner 2026-10-05) ───────────────────────────
@@ -570,8 +569,8 @@ const ConfiguratorPanel: React.FC = () => {
   const packNomV: number | null = ctx?.battery?.v_nom ?? (Number(p.battery?.v_nom) > 0 ? Number(p.battery?.v_nom) : null);
   const modM = ctx?.modulation.m ?? DEFAULT_MODULATION;
   const speedLim = useMemo(() => {
-    const at0 = scaleMotor(p, { ...knobs, pwm: false, rpm: 0 }, ref.poles);
-    const at1k = scaleMotor(p, { ...knobs, pwm: false, rpm: 1000 }, ref.poles);
+    const at0 = scaleMotor(p, { ...knobs, rpm: 0 }, ref.poles);
+    const at1k = scaleMotor(p, { ...knobs, rpm: 1000 }, ref.poles);
     const model = Number(p.Vload0_peak_V ?? 0) > 0;
     return speedLimit({
       vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
@@ -810,7 +809,8 @@ const ConfiguratorPanel: React.FC = () => {
 
   const addConfig = () => {
     const n = configs.filter((c) => c.refId === refId).length + 1;
-    const name = `${connLabel(knobs.nP, ref.geo.numSlots)} · ${knobs.N}t · ${fmt(knobs.L_mm, 0)}mm · ${fmt(knobs.wireH_mm, 2)}mm (#${n})`;
+    const name = tx('configure.cfgName', { conn: connLabel(knobs.nP, ref.geo.numSlots), n: knobs.N,
+      L: fmt(knobs.L_mm, 0), wire: fmt(knobs.wireH_mm, 2), idx: n });
     const id = `cfg_${Math.random().toString(36).slice(2, 9)}`;
     // The drive rides with the configuration (device + carrier, or Sine), so a
     // saved PWM point says which inverter produced its numbers.
@@ -829,8 +829,9 @@ const ConfiguratorPanel: React.FC = () => {
   // starting point.
   const [askName, setAskName] = useState<TextPromptState | null>(null);
   const renameConfig = (c: SavedConfig) => setAskName({
-    title: 'Rename configuration',
-    label: 'Name', initial: c.name,
+    title: tx('configure.renameTitle'),
+    label: tx('configure.renameLabel'), initial: c.name,
+    cancelLabel: tx('configure.cancel'), okLabel: tx('configure.ok'),
     onSubmit: (name) => {
       const n = name.trim();
       if (n) setConfigs((cs) => cs.map((x) => (x.id === c.id ? { ...x, name: n } : x)));
@@ -844,26 +845,26 @@ const ConfiguratorPanel: React.FC = () => {
   };
 
   const RES_COLS: { key: string; label: string; unit: string; d: number; goodHi?: boolean; get: (c: SavedConfig) => number }[] = [
-    { key: 'T',    label: 'Torque',  unit: 'N·m', d: 1, goodHi: true,  get: (c) => c.result.T_Nm },
-    { key: 'P',    label: 'Power',   unit: 'kW',  d: 2, goodHi: true,  get: (c) => c.result.P_mech_W / 1000 },
-    { key: 'V',    label: 'DC bus',  unit: 'V',   d: 0,                get: (c) => c.result.Vphase_peak_V * Math.sqrt(3) },
-    { key: 'eff',  label: 'η',       unit: '%',   d: 1, goodHi: true,  get: (c) => c.result.efficiency * 100 },
-    { key: 'loss', label: 'Losses',  unit: 'W',   d: 0, goodHi: false, get: (c) => c.result.P_loss_W },
-    { key: 'J',    label: 'J',       unit: 'A/mm²', d: 1, goodHi: false, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
-    { key: 'mass', label: 'Mass',    unit: 'kg',  d: 2, goodHi: false, get: (c) => c.result.mass_kg },
-    { key: 'tm',   label: 'T/mass',  unit: '',    d: 2, goodHi: true,  get: (c) => c.result.torque_per_mass },
+    { key: 'T',    label: tx('configure.colTorque'),  unit: 'N·m', d: 1, goodHi: true,  get: (c) => c.result.T_Nm },
+    { key: 'P',    label: tx('configure.colPower'),   unit: 'kW',  d: 2, goodHi: true,  get: (c) => c.result.P_mech_W / 1000 },
+    { key: 'V',    label: tx('configure.colDcBus'),  unit: 'V',   d: 0,                get: (c) => c.result.Vphase_peak_V * Math.sqrt(3) },
+    { key: 'eff',  label: tx('configure.colEta'),       unit: '%',   d: 1, goodHi: true,  get: (c) => c.result.efficiency * 100 },
+    { key: 'loss', label: tx('configure.colLosses'),  unit: 'W',   d: 0, goodHi: false, get: (c) => c.result.P_loss_W },
+    { key: 'J',    label: tx('configure.colJ'),       unit: 'A/mm²', d: 1, goodHi: false, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
+    { key: 'mass', label: tx('configure.colMass'),    unit: 'kg',  d: 2, goodHi: false, get: (c) => c.result.mass_kg },
+    { key: 'tm',   label: tx('configure.colTPerMass'),  unit: '',    d: 2, goodHi: true,  get: (c) => c.result.torque_per_mass },
     { key: 'etad', label: tx('configureDrive.columnDriveEff'), unit: '%', d: 1, goodHi: true,
       get: (c) => c.drive?.eta_drive_pct ?? NaN },
   ];
   const KNB_COLS: { label: string; get: (c: SavedConfig) => string }[] = [
     { label: tx('configureDrive.columnDrive'),
       get: (c) => driveText(c.drive ?? (c.knobs.drive === 'pwm' ? { mode: 'pwm' } : null), tx('configureDrive.sine')) },
-    { label: 'Conn',   get: (c) => connLabel(c.knobs.nP, (allRefs.find((r) => r.id === c.refId)?.geo.numSlots ?? ref.geo.numSlots)) },
-    { label: 'Turns',  get: (c) => `${c.knobs.N}` },
-    { label: 'Length', get: (c) => fmt(c.knobs.L_mm, 0) },
-    { label: 'Wire h', get: (c) => fmt(c.knobs.wireH_mm, 2) },
-    { label: 'I',      get: (c) => fmt(c.knobs.I_A, 0) },
-    { label: 'rpm',    get: (c) => fmt(c.knobs.rpm, 0) },
+    { label: tx('configure.colConn'),   get: (c) => connLabel(c.knobs.nP, (allRefs.find((r) => r.id === c.refId)?.geo.numSlots ?? ref.geo.numSlots)) },
+    { label: tx('configure.colTurns'),  get: (c) => `${c.knobs.N}` },
+    { label: tx('configure.colLength'), get: (c) => fmt(c.knobs.L_mm, 0) },
+    { label: tx('configure.colWireH'), get: (c) => fmt(c.knobs.wireH_mm, 2) },
+    { label: tx('configure.colCurrent'),      get: (c) => fmt(c.knobs.I_A, 0) },
+    { label: 'rpm',    get: (c) => fmt(c.knobs.rpm, 0) },   // a unit symbol: never translated
   ];
   // best/worst per result column across saved configs (for highlight)
   const resExt: Record<string, { min: number; max: number } | null> = {};
@@ -884,23 +885,27 @@ const ConfiguratorPanel: React.FC = () => {
                 ? <Button size="medium" variant="contained" onClick={openDraft}
                     sx={{ textTransform: 'none', fontWeight: 700, whiteSpace: 'nowrap',
                           bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } }}>
-                    Open in tuner
+                    {tx('configure.openInTuner')}
                   </Button>
-                : <Button size="small" onClick={() => { void saveDraft(); }} sx={{ textTransform: 'none' }}>Save to draft</Button>}
+                : <Button size="small" onClick={() => { void saveDraft(); }} sx={{ textTransform: 'none' }}>{tx('configure.saveToDraft')}</Button>}
             </Box>) : undefined}>
           {draft && (
             <>
-              🤖 Agent draft <b>{draft.name}</b> by {draft.created_by.client_name} — from{' '}
-              {draft.starting_point.die} / {draft.starting_point.config}: L {fmt(draft.params.stack_mm, 1)} mm,
-              {' '}{fmt(draft.params.current_a_rms, 1)} A, {fmt(draft.params.speed_rpm, 0)} rpm
-              {draft.params.connection ? `, ${draft.params.connection}` : ''}.
-              {!draftOpen && ' Click "Open in tuner" to load it below — your open machine stays as it is.'}
-              {draftOpen && draftTarget && ' Now shown in the tuner below — your open machine is unchanged.'}
+              🤖 {tx('configure.bannerDraft', {
+                name: draft.name, client: draft.created_by.client_name,
+                die: draft.starting_point.die, config: draft.starting_point.config,
+                L: fmt(draft.params.stack_mm, 1), I: fmt(draft.params.current_a_rms, 1),
+                rpm: fmt(draft.params.speed_rpm, 0),
+                conn: draft.params.connection ? tx('configure.bannerConn', { conn: draft.params.connection }) : '' })}
+              {!draftOpen && tx('configure.bannerOpenHint', { button: tx('configure.openInTuner') })}
+              {draftOpen && draftTarget && tx('configure.bannerOpened')}
               {draftHeadline && (
                 <Box sx={{ mt: 0.5 }}>
-                  FEM result on file ({draftHeadline.what}): {fmt(draftHeadline.torque_nm ?? NaN, 1)} N·m,
-                  {' '}{fmt(draftHeadline.power_kw ?? NaN, 2)} kW,
-                  {' '}{fmt(draftHeadline.efficiency_shaft_pct ?? NaN, 1)}% shaft η.
+                  {tx('configure.femOnFile', {
+                    what: ({ coupled: tx('configure.whatCoupled'), thermal: tx('configure.whatThermal'),
+                             em: tx('configure.whatEm') } as Record<string, string>)[draftHeadline.what] ?? draftHeadline.what,
+                    T: fmt(draftHeadline.torque_nm ?? NaN, 1), P: fmt(draftHeadline.power_kw ?? NaN, 2),
+                    eta: fmt(draftHeadline.efficiency_shaft_pct ?? NaN, 1) })}
                 </Box>
               )}
             </>
@@ -918,15 +923,15 @@ const ConfiguratorPanel: React.FC = () => {
           passport borrowed from some OTHER machine (owner 2026-09-29). */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderBottom: '1px solid var(--line-soft)' }}>
         <BoltIcon sx={{ color: '#60a5fa', fontSize: 20 }} />
-        <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }}>Configurator</Typography>
-        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>instant — no simulation</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.title')}</Typography>
+        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{tx('configure.instant')}</Typography>
         <Box sx={{ flex: 1 }} />
         <Typography sx={{ fontSize: 12, fontWeight: 700, color: blocked ? '#f59e0b' : 'var(--text-1)' }}>
           {draftOpen && draft
             ? (draftTarget
-                ? `Draft: ${draft.name} (based on ${draft.starting_point.die} / ${draft.starting_point.config})`
-                : `Draft: ${draft.name} — no configurator model yet`)
-            : (liveMatched ? ref.name : `No configurator model for ${blockedLabel}`)}
+                ? tx('configure.headerDraft', { name: draft.name, die: draft.starting_point.die, config: draft.starting_point.config })
+                : tx('configure.headerDraftNoModel', { name: draft.name }))
+            : (liveMatched ? ref.name : tx('configure.headerNoModel', { label: blockedLabel }))}
         </Typography>
         {/* One clear way back to the reference design (user 2026-08-26) —
             replaces the per-tile "% vs ref" captions.  Meaningless with no
@@ -946,14 +951,11 @@ const ConfiguratorPanel: React.FC = () => {
         <Box sx={{ px: 2, pb: 2 }}>
           <Alert severity="warning" sx={{ fontSize: 12 }}>
             <Typography sx={{ fontSize: 13, fontWeight: 700, mb: 0.25 }}>
-              No configurator model for {blockedLabel} yet
+              {tx('configure.noModelTitle', { label: blockedLabel })}
             </Typography>
             <Typography sx={{ fontSize: 12 }}>
-              This machine has no FEM-characterised passport, so there is nothing to scale — the
-              tuner will not compute or show any numbers borrowed from another machine.
-              {draftOpen
-                ? ' Run a simulation on this draft (simulate → get_design_result) to build one.'
-                : ' Run a simulation and build its passport (Admin → Motors → Generate passport) before tuning it here.'}
+              {tx('configure.noModelBody')}
+              {draftOpen ? tx('configure.noModelDraft') : tx('configure.noModelLoaded')}
             </Typography>
           </Alert>
         </Box>
@@ -969,7 +971,10 @@ const ConfiguratorPanel: React.FC = () => {
         {/* ── KNOBS ── */}
         <Box sx={{ ...PANEL, p: 2, flex: '1 1 360px', minWidth: 320 }}>
           <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)', mb: 0.25 }}>{ref.name}</Typography>
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>{ref.subtitle}</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>
+            {tx('configure.subtitle', { slots: ref.slots, poles: ref.poles,
+              torque: (p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0), rpm: p.rpm0 ?? '?' })}
+          </Typography>
 
           {/* i18n-guard:begin — every user-visible string below goes through tx() */}
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mb: 0.75 }}>{tx('configureLimits.build')}</Typography>
@@ -1092,9 +1097,6 @@ const ConfiguratorPanel: React.FC = () => {
             <Typography key={r.text} sx={{ fontSize: 11, color: '#f87171', mb: 0.5 }} title={r.tip}>⚠ {r.text}</Typography>
           ))}
 
-          {/* The old measured-delta "Excitation" toggle is gone (owner 2026-10-05): PWM
-              is only what was COMPUTED for this motor (the Drive menu above).  Any
-              leftover `pwm` flag in a stored knob set is ignored by `scaleKnobs`. */}
 
           <Button onClick={reset} size="small" disabled={!tuned}
             startIcon={<RestartAltIcon sx={{ fontSize: 16 }} />}
@@ -1118,11 +1120,11 @@ const ConfiguratorPanel: React.FC = () => {
               6 KV · Kt · Km · Km/mass
               7 demag koef · saturation koef · total koef */}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label={`Torque · ${KT_BASIS_LABEL(result.kt_km_basis)}`} value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
+            <MetricTile label={tx('configure.torque', { basis: KT_BASIS_LABEL(result.kt_km_basis) })} value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
               tip={KT_BASIS_TIP(result.kt_km_basis)} />
-            <MetricTile label="Power" value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi />
-            <MetricTile label="Mass" value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
-            <MetricTile label="Efficiency" value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi />
+            <MetricTile label={tx('configure.power')} value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi />
+            <MetricTile label={tx('configure.mass')} value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
+            <MetricTile label={tx('configure.efficiency')} value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi />
             {/* The drive's own efficiencies, from the computed variant, right
                 beside the shaft one (owner 2026-10-05). */}
             {drv && drv.eta_shaft_pct != null && (
@@ -1133,56 +1135,28 @@ const ConfiguratorPanel: React.FC = () => {
               <MetricTile label={tx('configureDrive.driveEff')} value={drv.eta_drive_pct} unit="%" d={1}
                 base={drv.eta_drive_pct} goodHi tip={tx('configureDrive.driveEffTip')} />
             )}
-            {result.pwm_on && result.pwm_ripple_pct != null ? (
-              <MetricTile label="T ripple (PWM)" value={result.pwm_ripple_pct} unit="%" d={1}
-                base={ref.passport.ripple0_pct ?? result.pwm_ripple_pct} goodHi={false} />
-            ) : ref.passport.ripple0_pct != null && (
-              <MetricTile label="T ripple (rated)" value={ref.passport.ripple0_pct} unit="%" d={1}
+            {ref.passport.ripple0_pct != null && (
+              <MetricTile label={tx('configure.tRippleRated')} value={ref.passport.ripple0_pct} unit="%" d={1}
                 base={ref.passport.ripple0_pct} goodHi={false} />
             )}
-            <MetricTile label="T / mass" value={result.torque_per_mass} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi />
-            <MetricTile label="P / mass" value={result.power_per_mass_W_kg / 1000} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi />
+            <MetricTile label={tx('configure.tPerMass')} value={result.torque_per_mass} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi />
+            <MetricTile label={tx('configure.pPerMass')} value={result.power_per_mass_W_kg / 1000} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi />
           </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label="Total loss" value={result.P_loss_W} unit="W" d={0} base={baseRes.P_loss_W} goodHi={false} />
-            <MetricTile label="Iron loss" value={result.P_fe_W} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false} />
-            <MetricTile label="Copper loss" value={result.P_cu_W} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} />
-            <MetricTile label="Magnet loss" value={result.P_mag_W} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false} />
+            <MetricTile label={tx('configure.totalLoss')} value={result.P_loss_W} unit="W" d={0} base={baseRes.P_loss_W} goodHi={false} />
+            <MetricTile label={tx('configure.ironLoss')} value={result.P_fe_W} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false} />
+            <MetricTile label={tx('configure.copperLoss')} value={result.P_cu_W} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} />
+            <MetricTile label={tx('configure.magnetLoss')} value={result.P_mag_W} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}
-            <MetricTile label="Stator heat" value={result.P_loss_stator_W} unit="W" d={0}
+            <MetricTile label={tx('configure.statorHeat')} value={result.P_loss_stator_W} unit="W" d={0}
               base={baseRes.P_loss_stator_W} goodHi={false}
-              tip={'Stator iron + all copper. The scaled iron loss is split by the '
-                + 'ratio the passport measured at its base point'
-                + (result.loss_split_measured ? '.'
-                   : ' — iron split unknown here, so the WHOLE iron loss is on the '
-                     + 'stator (regenerate the passport).')} />
-            <MetricTile label="Rotor heat" value={result.P_loss_rotor_W} unit="W" d={0}
+              tip={tx(result.loss_split_measured ? 'configure.statorHeatTipMeasured' : 'configure.statorHeatTipUnknown')} />
+            <MetricTile label={tx('configure.rotorHeat')} value={result.P_loss_rotor_W} unit="W" d={0}
               base={baseRes.P_loss_rotor_W} goodHi={false}
               absLevel={result.loss_split_measured ? undefined : 'warn'}
-              tip={'Rotor iron + magnet/solid loss — it can only leave across the air '
-                + 'gap or through the shaft. Stator + rotor = the Total loss tile'
-                + (result.loss_split_measured ? '.'
-                   : '; the rotor IRON share is unknown here and sits on the stator '
-                     + 'side (regenerate the passport).')} />
-            <MetricTile label="Loss density" value={result.loss_density_W_kg} unit="W/kg" d={0} base={baseRes.loss_density_W_kg} goodHi={false} />
+              tip={tx(result.loss_split_measured ? 'configure.rotorHeatTipMeasured' : 'configure.rotorHeatTipUnknown')} />
+            <MetricTile label={tx('configure.lossDensity')} value={result.loss_density_W_kg} unit="W/kg" d={0} base={baseRes.loss_density_W_kg} goodHi={false} />
           </Box>
-          {/* ── PWM deltas — the watts the carrier ADDS, shown separately so
-              the sine machine stays readable underneath them ── */}
-          {result.pwm_on && (
-            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-              <MetricTile label="Δ magnet (PWM)" value={result.pwm_dP_mag_W ?? 0} unit="W" d={1}
-                base={result.pwm_dP_mag_W ?? 0} />
-              <MetricTile label="Δ iron (PWM)" value={result.pwm_dP_fe_W ?? 0} unit="W" d={1}
-                base={result.pwm_dP_fe_W ?? 0} />
-              <MetricTile label="Δ copper AC (PWM)" value={result.pwm_dP_cu_ac_W ?? 0} unit="W" d={1}
-                base={result.pwm_dP_cu_ac_W ?? 0} />
-              <MetricTile label="Ripple current" value={result.pwm_I_ripple_A ?? 0} unit="A" d={2}
-                base={result.pwm_I_ripple_A ?? 0}
-                absLevel={result.pwm_extrapolated ? 'warn' : undefined} />
-              <MetricTile label="DC link ripple" value={result.pwm_I_dc_ripple_A ?? 0} unit="A p-p" d={1}
-                base={result.pwm_I_dc_ripple_A ?? 0} />
-            </Box>
-          )}
           {/* ── DRIVE — what the picked computed variant adds: the motor loss
               under this inverter, the inverter's loss split, the hottest
               junction and the continuous power it holds ── */}
@@ -1220,29 +1194,29 @@ const ConfiguratorPanel: React.FC = () => {
             </Box>
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label="DC bus (min)" value={result.Vphase_peak_V * Math.sqrt(3)} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} />
-            <MetricTile label="V line peak" value={result.Vline_peak_V} unit="V" d={1} base={baseRes.Vline_peak_V} />
-            <MetricTile label="V phase peak" value={result.Vphase_peak_V} unit="V" d={1} base={baseRes.Vphase_peak_V} />
-            <MetricTile label="V line rms" value={result.Vline_rms_V} unit="V" d={1} base={baseRes.Vline_rms_V} />
-            <MetricTile label="V phase rms" value={result.Vphase_rms_V} unit="V" d={1} base={baseRes.Vphase_rms_V} />
+            <MetricTile label={tx('configure.dcBusMin')} value={result.Vphase_peak_V * Math.sqrt(3)} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} />
+            <MetricTile label={tx('configure.vLinePeak')} value={result.Vline_peak_V} unit="V" d={1} base={baseRes.Vline_peak_V} />
+            <MetricTile label={tx('configure.vPhasePeak')} value={result.Vphase_peak_V} unit="V" d={1} base={baseRes.Vphase_peak_V} />
+            <MetricTile label={tx('configure.vLineRms')} value={result.Vline_rms_V} unit="V" d={1} base={baseRes.Vline_rms_V} />
+            <MetricTile label={tx('configure.vPhaseRms')} value={result.Vphase_rms_V} unit="V" d={1} base={baseRes.Vphase_rms_V} />
             {/* Absolute thresholds, not "vs reference": ≤12 A/mm² is a
                 continuous-duty winding, ≤25 a short-peak one, above that the
                 copper cooks whatever the reference did. */}
-            <MetricTile label="Curr. density" value={J_A_mm2} unit="A/mm²" d={1} base={baseJ}
+            <MetricTile label={tx('configure.currDensity')} value={J_A_mm2} unit="A/mm²" d={1} base={baseJ}
               absLevel={J_A_mm2 <= 12 ? 'ok' : J_A_mm2 <= 25 ? 'warn' : 'bad'} />
           </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             {/* Phase copper section (user 2026-08-26) — the same quantity the
                 Simulation card shows: strand area × parallel paths, so
                 I_phase / A_phase is exactly the density above it. */}
-            <MetricTile label="Phase section" value={A_phase_mm2} unit="mm²" d={2}
+            <MetricTile label={tx('configure.phaseSection')} value={A_phase_mm2} unit="mm²" d={2}
               base={baseA_phase} goodHi />
             {/* Wire coating (user 2026-08-30) — measured copper over the measured
                 winding window; turns and wire height move it, so the tuner can
                 say when a variant stops being windable.  Absolute thresholds:
                 hand-wound rectangular wire lives at ~45-60 %. */}
             {result.slot_fill_pct != null && (
-              <MetricTile label="Fill factor" value={result.slot_fill_pct} unit="%" d={1}
+              <MetricTile label={tx('configure.fillFactor')} value={result.slot_fill_pct} unit="%" d={1}
                 base={p.slot_fill0_pct ?? result.slot_fill_pct}
                 absLevel={result.slot_fill_pct <= 60 ? 'ok'
                           : result.slot_fill_pct <= 75 ? 'warn' : 'bad'} />
@@ -1253,9 +1227,10 @@ const ConfiguratorPanel: React.FC = () => {
               const c = pickCable(A_phase_mm2);
               return c ? (
                 <Box sx={{ ...PANEL, p: 0.9, flex: '0 1 auto', minWidth: 108, maxWidth: 168 }}
-                  title={`Catalogue silicone lead (${c.strands}): ${c.area_mm2} mm² copper — the first size at or above the phase section ${A_phase_mm2.toFixed(2)} mm². Conductor Ø${c.d_mm} mm, insulation O.D. Ø${c.od_mm}±0.1 mm (wall ${c.thk_mm} mm), ${c.r_ohm_km} Ω/km, ${c.i_rated_A} A continuous / ${c.i_max_A} A peak, ${c.roll_m} m per roll.`
-                    + (c.suspect ? ` ⚠ supplier sheet: ${c.suspect}.` : '')}>
-                  <Typography sx={{ ...LABEL, fontSize: 9.5 }}>Lead cable</Typography>
+                  title={tx('configure.leadCableTip', { strands: c.strands, area: c.area_mm2, section: A_phase_mm2.toFixed(2),
+                      d: c.d_mm, od: c.od_mm, thk: c.thk_mm, r: c.r_ohm_km, irated: c.i_rated_A, imax: c.i_max_A, roll: c.roll_m })
+                    + (c.suspect ? tx('configure.cableSuspectLine', { text: tx(c.awg === '10awg' ? 'configure.cableSuspect10' : 'configure.cableSuspect75') }) : '')}>
+                  <Typography sx={{ ...LABEL, fontSize: 9.5 }}>{tx('configure.leadCable')}</Typography>
                   <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)',
                     fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
                     {c.awg.replace('awg', ' AWG')}
@@ -1266,10 +1241,10 @@ const ConfiguratorPanel: React.FC = () => {
                 </Box>
               ) : null;
             })()}
-            <MetricTile label="R phase" value={result.R_ohm * 1000} unit="mΩ" d={1} base={baseRes.R_ohm * 1000}
-              tip="Phase resistance at the coil temperature, end-winding included — the R the copper loss is billed from." />
-            <MetricTile label="R line-line" value={result.R_ohm * 2000} unit="mΩ" d={1} base={baseRes.R_ohm * 2000}
-              tip="2 × R phase — what an ohmmeter across two leads of the isolated-neutral star reads." />
+            <MetricTile label={tx('configure.rPhase')} value={result.R_ohm * 1000} unit="mΩ" d={1} base={baseRes.R_ohm * 1000}
+              tip={tx('configure.rPhaseTip')} />
+            <MetricTile label={tx('configure.rLineLine')} value={result.R_ohm * 2000} unit="mΩ" d={1} base={baseRes.R_ohm * 2000}
+              tip={tx('configure.rLineLineTip')} />
           </Box>
           {(result.Ld_mH != null || result.Lq_mH != null || result.psi_pm_mWb != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
@@ -1283,36 +1258,36 @@ const ConfiguratorPanel: React.FC = () => {
                 <MetricTile label="ψ_PM" value={result.psi_pm_mWb} unit="mWb" d={2} base={baseRes.psi_pm_mWb ?? result.psi_pm_mWb} />
               )}
               {result.Ld_mH != null && result.Lq_mH != null && result.Ld_mH > 0 && (
-                <MetricTile label="Lq / Ld" value={result.Lq_mH / result.Ld_mH} unit="" d={2}
+                <MetricTile label={tx('configure.lqLd')} value={result.Lq_mH / result.Ld_mH} unit="" d={2}
                   base={(baseRes.Ld_mH ?? result.Ld_mH) > 0
                     ? (baseRes.Lq_mH ?? result.Lq_mH) / (baseRes.Ld_mH ?? result.Ld_mH)
                     : result.Lq_mH / result.Ld_mH}
-                  tip="Saliency ratio of the two dq inductances." />
+                  tip={tx('configure.lqLdTip')} />
               )}
             </Box>
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label="KV (no-load)" value={result.KV_rpm_per_Vline} unit="rpm/V" d={1} base={baseRes.KV_rpm_per_Vline} />
+            <MetricTile label={tx('configure.kvNoLoad')} value={result.KV_rpm_per_Vline} unit="rpm/V" d={1} base={baseRes.KV_rpm_per_Vline} />
             {result.Kt_Nm_per_A != null && (
-              <MetricTile label={`Kt · ${KT_BASIS_LABEL(result.kt_km_basis)}`} value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi
+              <MetricTile label={tx('configure.kt', { basis: KT_BASIS_LABEL(result.kt_km_basis) })} value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi
                 tip={KT_BASIS_TIP(result.kt_km_basis)} />
             )}
-            <MetricTile label={`Km · ${KT_BASIS_LABEL(result.kt_km_basis)}`} value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
+            <MetricTile label={tx('configure.km', { basis: KT_BASIS_LABEL(result.kt_km_basis) })} value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
               tip={KT_BASIS_TIP(result.kt_km_basis)} />
-            <MetricTile label="Km / mass" value={result.Km_per_mass} unit="N·m/(√W·kg)" d={3} base={baseRes.Km_per_mass} goodHi />
+            <MetricTile label={tx('configure.kmPerMass')} value={result.Km_per_mass} unit="N·m/(√W·kg)" d={3} base={baseRes.Km_per_mass} goodHi />
           </Box>
           {(result.demag_keep_pct != null || result.saturation_pct != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.demag_keep_pct != null && (
-                <MetricTile label="Demag koef" value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi />
+                <MetricTile label={tx('configure.demagKoef')} value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi />
               )}
               {result.saturation_pct != null && (
-                <MetricTile label="Saturation koef" value={result.saturation_pct} unit="%" d={1} base={baseRes.saturation_pct ?? 100} goodHi />
+                <MetricTile label={tx('configure.saturationKoef')} value={result.saturation_pct} unit="%" d={1} base={baseRes.saturation_pct ?? 100} goodHi />
               )}
               {result.demag_keep_pct != null && result.saturation_pct != null && (
-                <MetricTile label="Total koef" value={result.demag_keep_pct * result.saturation_pct / 100} unit="%" d={1}
+                <MetricTile label={tx('configure.totalKoef')} value={result.demag_keep_pct * result.saturation_pct / 100} unit="%" d={1}
                   base={(baseRes.demag_keep_pct ?? 100) * (baseRes.saturation_pct ?? 100) / 100} goodHi
-                  tip="Demag koef × Saturation koef — torque retained against the ideal machine (fresh magnets, linear iron)." />
+                  tip={tx('configure.totalKoefTip')} />
               )}
             </Box>
           )}
@@ -1334,7 +1309,7 @@ const ConfiguratorPanel: React.FC = () => {
 
           <Button onClick={addConfig} variant="contained" startIcon={<AddIcon />}
             sx={{ textTransform: 'none', fontWeight: 700, bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' }, alignSelf: 'flex-start' }}>
-            Add to comparison
+            {tx('configure.addToComparison')}
           </Button>
         </Box>
       </Box>
@@ -1343,22 +1318,22 @@ const ConfiguratorPanel: React.FC = () => {
           one and only comparison view; the Compare tab is the engineer's. ── */}
       <Box sx={{ px: 2, pb: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
-          <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>Saved configurations</Typography>
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>({configs.length}) — green = best · red = worst</Typography>
+          <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{tx('configure.saved')}</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{tx('configure.savedHint', { n: configs.length })}</Typography>
           <Box sx={{ flex: 1 }} />
           {configs.length > 0 && (
-            <Button onClick={() => setConfigs([])} size="small" sx={{ fontSize: 11, textTransform: 'none', color: '#7f1d1d' }}>Clear all</Button>
+            <Button onClick={() => setConfigs([])} size="small" sx={{ fontSize: 11, textTransform: 'none', color: '#7f1d1d' }}>{tx('configure.clearAll')}</Button>
           )}
         </Box>
         {configs.length === 0 ? (
-          <Alert severity="info" sx={{ fontSize: 12 }}>Tune the knobs above and press <b>Add to comparison</b> to stack configs here.</Alert>
+          <Alert severity="info" sx={{ fontSize: 12 }}>{tx('configure.savedEmpty', { button: tx('configure.addToComparison') })}</Alert>
         ) : (
           <Box sx={{ overflow: 'auto' }}>
             <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
               <Box component="thead"><Box component="tr">
-                <Box component="th" sx={{ ...TH, textAlign: 'left' }}>Configuration</Box>
+                <Box component="th" sx={{ ...TH, textAlign: 'left' }}>{tx('configure.colConfiguration')}</Box>
                 {KNB_COLS.map((k) => <Box component="th" key={k.label} sx={{ ...TH, color: '#fbbf24' }}>{k.label}</Box>)}
-                {RES_COLS.map((r) => <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}>{r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400 }}> {r.unit}</Box> : null}</Box>)}
+                {RES_COLS.map((r) => <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}>{r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400, textTransform: 'none' }}> {r.unit}</Box> : null}</Box>)}
                 <Box component="th" sx={{ ...TH, textAlign: 'center' }} />
                 <Box component="th" sx={{ ...TH, textAlign: 'center' }}>✕</Box>
               </Box></Box>
@@ -1366,9 +1341,9 @@ const ConfiguratorPanel: React.FC = () => {
                 {configs.map((c) => (
                   <Box component="tr" key={c.id} sx={{ '&:hover': { bgcolor: 'var(--panel-2)' } }}>
                     <Box component="td" sx={{ ...TD, textAlign: 'left', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
-                      <Box component="span" onClick={() => loadConfig(c)} title="Apply this configuration (knobs + battery)"
+                      <Box component="span" onClick={() => loadConfig(c)} title={tx('configure.applyTip')}
                         sx={{ color: '#60a5fa', fontWeight: 600, cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>{c.name}</Box>
-                      <IconButton size="small" onClick={() => renameConfig(c)} title="Rename"
+                      <IconButton size="small" onClick={() => renameConfig(c)} title={tx('configure.rename')}
                         sx={{ color: 'var(--text-3)', p: 0.2, ml: 0.5, fontSize: 12 }}>✎</IconButton>
                     </Box>
                     {KNB_COLS.map((k) => <Box component="td" key={k.label} sx={{ ...TD, color: '#fbbf24' }}>{k.get(c)}</Box>)}
@@ -1390,7 +1365,7 @@ const ConfiguratorPanel: React.FC = () => {
                       <Button size="small" onClick={() => loadConfig(c)}
                         sx={{ fontSize: 10.5, py: 0, px: 0.9, minWidth: 0, textTransform: 'none',
                               color: '#34d399', border: '1px solid #34d39955' }}>
-                        apply
+                        {tx('configure.apply')}
                       </Button>
                     </Box>
                     <Box component="td" sx={{ ...TD, textAlign: 'center' }}>
@@ -1427,8 +1402,8 @@ const ConfiguratorPanel: React.FC = () => {
       ) : String(p.role ?? p.mode0 ?? '').toLowerCase() === 'generator' && !p.battery ? (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <Typography sx={{ fontSize: 11, color: '#fbbf24' }}
-            title="Charging is computed against the pack as a CIRCUIT — its internal resistance, capacity and charge ceiling — and those live on the family configuration. This passport was generated before the pack rode along with it; regenerate it and the charging block appears.">
-            Generator — charging needs this machine's pack; regenerate the passport to pick it up
+            title={tx('configure.generatorNeedsPackTip')}>
+            {tx('configure.generatorNeedsPack')}
           </Typography>
         </Box>
       ) : null}

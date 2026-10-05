@@ -134,11 +134,6 @@ export interface Passport {
    *  value.  Scaled by the tuner: L ∝ N² · L_stack · (series count)². */
   ldq0?: { Ld_mH: number; Lq_mH: number;
            I_probe_arms?: number; connection?: string | null } | null;
-  /** MEASURED PWM deltas — what a real inverter's carrier adds on top of the
-   *  sine numbers above (src/motor_ai_sim/passport_pwm.py).  Absent/null = not
-   *  measured, and the tuner then has no PWM toggle for this machine rather
-   *  than a toggle backed by an assumption. */
-  pwm?: PwmBlock | null;
   /** COMPUTED drive variants — each one a (device, carrier) pair solved for
    *  THIS machine (passport pilot, owner 2026-10-05).  Configure's PWM menu
    *  lists exactly these and nothing else; absent/empty = "PWM not computed
@@ -163,28 +158,6 @@ export interface PackSpec {
   r_int_mohm?: number;       // PER CELL
   capacity_ah?: number;      // per string
   i_charge_max_a?: number;
-}
-
-/** One measured PWM point: the sine baseline, the PWM run beside it, and the
- *  deltas between them.  Mirrors passport_pwm.py's `points` entries. */
-export interface PwmPoint {
-  rpm: number; I_A: number; rated?: boolean;
-  f_sw_Hz: number; f_sw_eff_Hz?: number | null; f_elec_Hz: number;
-  carriers_per_period: number; n_steps_per_period: number;
-  samples_per_carrier: number;
-  resolution: 'coarse' | 'partial' | 'resolved' | string;
-  V1_peak_V: number; V1_delta_deg: number;
-  modulation_index?: number | null;
-  dP_mag_W: number; dP_fe_W: number; dP_cu_ac_W: number;
-  dT_pct?: number;
-  ripple_sine_pct?: number | null;
-  ripple_pwm_pct?: number | null;
-  /** the switching ripple current [A rms] these deltas were measured at —
-   *  the abscissa every exponent below is fitted against */
-  I_ripple_A?: number | null;
-  I_dc_mean_A?: number | null;
-  I_dc_rms_A?: number | null;
-  I_dc_ripple_pp_A?: number | null;
 }
 
 /** One computed operating point of a drive variant.  The coordinates are the
@@ -217,39 +190,6 @@ export interface PwmVariant {
   points: Record<string, PwmVariantPoint>;
 }
 
-export interface PwmBlock {
-  fidelity: 'quick' | 'full' | string;
-  controller_class: string;
-  controller_class_id?: string;
-  /** the carriers actually MEASURED (2 on a quick block) */
-  f_sw_Hz: number[];
-  /** every carrier this power stage offers — the picker shows all of them and
-   *  flags the ones outside the measured pair */
-  f_sw_class_Hz?: number[];
-  f_sw_ref_Hz: number;
-  v_bus_V: number;
-  I0_A: number; rpm0: number;
-  rpm_grid: number[];
-  points: PwmPoint[];
-  /** exponents of each delta against the ripple current — `*_source` says
-   *  whether the number was measured on this machine or assumed from physics */
-  fit: {
-    n_mag: number; n_fe: number; n_cu: number;
-    n_ripple: number; n_dc_ripple: number;
-    n_mag_source?: string; n_fe_source?: string; n_cu_source?: string;
-    n_ripple_source?: string; n_dc_ripple_source?: string;
-    ref?: { f_sw_Hz?: number; rpm?: number; I_A?: number; I_ripple_A?: number };
-    [k: string]: unknown;
-  };
-  envelope: {
-    I_ripple_min_A?: number | null; I_ripple_max_A?: number | null;
-    f_sw_min_Hz: number; f_sw_max_Hz: number;
-    rpm_min: number; rpm_max: number;
-  };
-  coarse_bias?: Record<string, unknown>;
-  [k: string]: unknown;
-}
-
 export interface Knobs {
   N: number;       // wire ROWS per slot (see Passport.wire_parallel0/wire_split0)
   L_mm: number;    // lamination length
@@ -264,15 +204,6 @@ export interface Knobs {
    *  which makes the turns ratio the plain row ratio — the behaviour every
    *  caller had before the split existed. */
   split?: number;
-  // ── EXCITATION (optional; absent = the sine numbers, exactly as before) ──
-  /** true = add the passport's MEASURED PWM deltas to the losses and the
-   *  torque ripple.  Ignored when the passport carries no `pwm` block. */
-  pwm?: boolean;
-  /** carrier [Hz].  Defaults to the measured reference carrier. */
-  f_sw_Hz?: number;
-  /** DC link [V].  Defaults to the pack's v_nom (what the block was measured
-   *  against), because the ripple current is ∝ V_bus. */
-  v_bus_V?: number;
   // ── DRIVE (Configure's Sine | PWM menu, owner 2026-10-05).  scaleMotor()
   //    never reads these: the PWM numbers come from the passport's COMPUTED
   //    `pwm_variants` (lib/configuratorDrive.ts), so the sine numbers cannot
@@ -297,9 +228,8 @@ export interface ScaledResult {
   P_mag_W: number;
   P_loss_W: number;
   /** HEAT TO REMOVE, per side [W] — the two numbers a cooling design is sized
-   *  on.  stator = scaled stator iron + all copper (PWM copper delta included);
-   *  rotor = scaled rotor iron + magnet/solid loss (PWM iron delta split by the
-   *  same base ratio, PWM magnet delta to the rotor).  They sum to P_loss_W. */
+   *  on.  stator = scaled stator iron + all copper; rotor = scaled rotor iron +
+   *  magnet/solid loss.  They sum to P_loss_W. */
   P_loss_stator_W: number;
   P_loss_rotor_W: number;
   /** false = the passport carries no base iron split, so the WHOLE iron loss
@@ -346,31 +276,6 @@ export interface ScaledResult {
   /** Saturation coefficient [%]: measured T over the linear extrapolation of
    *  the lightest measured point (null without the sweep). */
   saturation_pct: number | null;
-  // ── PWM (null throughout when the toggle is off or the passport has no
-  //    measured block; the loss/efficiency fields above ALREADY include the
-  //    deltas when it is on) ──────────────────────────────────────────────
-  /** true when the numbers above carry the PWM deltas. */
-  pwm_on: boolean;
-  /** magnet eddy, iron and AC-copper watts the carrier adds [W]. */
-  pwm_dP_mag_W: number | null;
-  pwm_dP_fe_W: number | null;
-  pwm_dP_cu_ac_W: number | null;
-  /** torque ripple under PWM [%] — the passport's sine ripple plus the
-   *  measured PWM increment, scaled by the ripple current. */
-  pwm_ripple_pct: number | null;
-  /** DC-link current ripple, peak-to-peak [A] — what the link capacitor and
-   *  the pack see. */
-  pwm_I_dc_ripple_A: number | null;
-  /** the switching ripple current itself [A rms] — the abscissa of every law
-   *  above, shown so the extrapolation flag can be read rather than trusted. */
-  pwm_I_ripple_A: number | null;
-  /** "coarse" / "partial" / "resolved" of the underlying measurement, plus
-   *  whether the exponents were measured or assumed. */
-  pwm_fidelity: string | null;
-  /** true when the tuned point sits outside the measured envelope — the
-   *  numbers are then the clamped edge of the measurement, not an answer. */
-  pwm_extrapolated: boolean;
-  pwm_note: string | null;
 }
 
 /** Linear interpolation of ys at x over sorted xs; extrapolates beyond the ends
@@ -391,145 +296,6 @@ function interp(xs: number[], ys: number[], x: number): number {
   while (i < n && xs[i] < x) i++;
   const t = (x - xs[i - 1]) / (xs[i] - xs[i - 1]);
   return ys[i - 1] + t * (ys[i] - ys[i - 1]);
-}
-
-/** Like interp(), but CLAMPED at both ends: outside the measured range the
- *  nearest measured point is the honest bound, and the caller flags it.  Used
- *  for the PWM deltas, where a linear extrapolation of a power law is how a
- *  tuner ends up quoting watts nobody measured. */
-function interpClamp(xs: number[], ys: number[], x: number): number {
-  const n = xs.length;
-  if (!n) return 0;
-  if (n === 1) return ys[0];
-  if (x <= xs[0]) return ys[0];
-  if (x >= xs[n - 1]) return ys[n - 1];
-  return interp(xs, ys, x);
-}
-
-/** Bilinear read of one measured PWM field over (rpm, equivalent base-turns
- *  current), clamped at every edge.  The current axis usually holds ONE row —
- *  which is physically right, not a gap: the carrier ripple current is set by
- *  V_bus / (f_sw·L) and does not know the fundamental current, so the deltas
- *  it drives do not move with the current knob (only through saturation's
- *  effect on L, second order and stated). */
-function pwmField(pts: PwmPoint[], key: keyof PwmPoint,
-                  rpm: number, Ieq: number): number {
-  const currents = Array.from(new Set(pts.map((q) => q.I_A))).sort((a, b) => a - b);
-  const byI = currents.map((I) => {
-    const row = pts.filter((q) => q.I_A === I).sort((a, b) => a.rpm - b.rpm);
-    return interpClamp(row.map((q) => q.rpm),
-                       row.map((q) => Number(q[key] ?? 0)), rpm);
-  });
-  return interpClamp(currents, byI, Ieq);
-}
-
-/** What the carrier adds, from the passport's own measurement.
- *
- *  THE LAW, and every piece of it is measured except where it says otherwise:
- *
- *    I_ripple ∝ V_bus / (f_sw · L_phase),  L_phase ∝ N²·L_stack·nS²
- *      → rr = (V_bus/V_bus0)·(f_sw0/f_sw) / (fN²·fL·fConn²)
- *
- *    The FIELD a ripple current makes is its AMPERE-TURNS, not its amps:
- *      rrF = a·rr,  a = fN·fConn  (effective series-turns ratio)
- *    (review 2026-09-30, G18: at fixed NI, doubling the turns makes L ×4,
- *    the current ripple ×1/4 but the NI ripple ×1/2 — a quadratic field loss
- *    goes ×1/4, where rr² said ×1/16.)
- *
- *    ΔP_mag = Δ_measured(rpm) · fL · rrF^n_mag       (n from the passport's fit)
- *    ΔP_fe  = Δ_measured(rpm) · fL · rrF^n_fe
- *    ΔP_cu  = Δ_measured(rpm) · (R/R0) · rr^n_cu     (I_ripple²·R_ac ∝ R_dc —
- *             a first-order stand-in: HF copper does not generally follow R_dc)
- *    ripple = ripple_sine + Δripple_measured(rpm) · rrF^n_ripple
- *    I_dc_ripple = Δ_measured(rpm) · rr^n_dc / (fN·fConn)   (I_dc ∝ I_phase)
- *
- *  The exponents are FITTED on the machine's own two carriers; `fit.*_source`
- *  says "measured" or "assumed", and the tile repeats it.  Outside the
- *  measured envelope the ripple current is clamped and `extrapolated` is set —
- *  a power law extrapolated two octaves is not a measurement.
- */
-function pwmDeltas(p: Passport, k: Knobs, f: {
-  fN: number; fL: number; fConn: number; fR: number; Ieq: number;
-}): {
-  dP_mag: number; dP_fe: number; dP_cu: number; ripple: number | null;
-  I_dc_ripple: number; I_ripple: number; extrapolated: boolean;
-  fidelity: string; note: string;
-} | null {
-  const b = p.pwm;
-  if (!b || !b.points || b.points.length === 0) return null;
-  const fsRef = Number(b.f_sw_ref_Hz) || b.f_sw_Hz[0];
-  const ref = b.points.filter((q) => Math.abs(q.f_sw_Hz - fsRef) < 1e-6);
-  const pts = ref.length ? ref : b.points;
-  const fSw = Number(k.f_sw_Hz) > 0 ? Number(k.f_sw_Hz) : fsRef;
-  const vBus = Number(k.v_bus_V) > 0 ? Number(k.v_bus_V) : b.v_bus_V;
-  // inductance of the tuned winding relative to the measured one
-  const fLind = f.fN * f.fN * f.fL * f.fConn * f.fConn;
-  const rrRaw = (vBus / b.v_bus_V) * (fsRef / fSw) / Math.max(1e-9, fLind);
-
-  const ripRef = Number(b.fit?.ref?.I_ripple_A ?? b.envelope?.I_ripple_max_A ?? 0);
-  const env = b.envelope || { f_sw_min_Hz: fsRef, f_sw_max_Hz: fsRef,
-                              rpm_min: b.rpm0, rpm_max: b.rpm0 };
-  const ripMax = (Number(env.I_ripple_max_A) || ripRef) * 1.5;
-  const ripMin = (Number(env.I_ripple_min_A) || ripRef) / 1.5;
-  const rawRip = ripRef * rrRaw;
-  const outSpan = fSw < env.f_sw_min_Hz * 0.999 || fSw > env.f_sw_max_Hz * 1.001;
-  const outRpm = k.rpm < env.rpm_min * 0.999 || k.rpm > env.rpm_max * 1.001;
-  // The measured envelope is in ripple current AT THE BASE WINDING, where
-  // current ripple and NI ripple are the same ratio; each abscissa is clamped
-  // into it on its own.
-  const aTurns = f.fN * f.fConn;
-  const rawRipF = rawRip * aTurns;
-  const outRip = ripRef > 0 && (rawRip > ripMax || rawRip < ripMin
-                                || rawRipF > ripMax || rawRipF < ripMin);
-  const clampRip = (x: number) => (ripRef > 0 ? Math.min(ripMax, Math.max(ripMin, x)) : x);
-  const ripUsed = clampRip(rawRip);
-  const rr = ripRef > 0 ? ripUsed / ripRef : rrRaw;              // current ripple
-  const rrF = ripRef > 0 ? clampRip(rawRipF) / ripRef : rrRaw * aTurns;  // NI ripple
-
-  const pw = (x: number, n: number) => Math.pow(Math.max(1e-9, x), n);
-  const fit = b.fit || ({} as PwmBlock['fit']);
-  const dMag = pwmField(pts, 'dP_mag_W', k.rpm, f.Ieq) * f.fL * pw(rrF, Number(fit.n_mag ?? 2));
-  const dFe = pwmField(pts, 'dP_fe_W', k.rpm, f.Ieq) * f.fL * pw(rrF, Number(fit.n_fe ?? 2));
-  const dCu = pwmField(pts, 'dP_cu_ac_W', k.rpm, f.Ieq) * f.fR * pw(rr, Number(fit.n_cu ?? 2));
-  const dDc = pwmField(pts, 'I_dc_ripple_pp_A', k.rpm, f.Ieq)
-    * pw(rr, Number(fit.n_dc_ripple ?? 1))
-    / Math.max(1e-9, f.fN * f.fConn);
-  // torque ripple: the SINE ripple of this machine (a datasheet figure the
-  // knobs never move) plus the measured PWM increment, scaled by the ripple.
-  const dRipRow = pts.map((q) => ({
-    ...q,
-    _d: (Number(q.ripple_pwm_pct ?? 0) - Number(q.ripple_sine_pct ?? 0)),
-  })) as (PwmPoint & { _d: number })[];
-  const dRip = pwmField(dRipRow as PwmPoint[], '_d' as keyof PwmPoint, k.rpm, f.Ieq)
-    * pw(rrF, Number(fit.n_ripple ?? 1));
-  const sineRip = p.ripple0_pct != null ? Number(p.ripple0_pct)
-    : Number(pts[0]?.ripple_sine_pct ?? 0);
-
-  const resn = (pts.find((q) => q.rated) ?? pts[0])?.resolution ?? 'unknown';
-  const spc = (pts.find((q) => q.rated) ?? pts[0])?.samples_per_carrier ?? 0;
-  const measured = String(fit.n_mag_source ?? 'assumed').startsWith('measured');
-  const why: string[] = [];
-  if (outSpan) why.push(`${(fSw / 1000).toFixed(1)} kHz is outside the measured `
-    + `${(env.f_sw_min_Hz / 1000).toFixed(0)}–${(env.f_sw_max_Hz / 1000).toFixed(0)} kHz span`);
-  if (outRpm) why.push(`${k.rpm.toFixed(0)} rpm is outside the measured `
-    + `${env.rpm_min.toFixed(0)}–${env.rpm_max.toFixed(0)} rpm span`);
-  if (outRip) why.push(`the ripple current (${rawRip.toFixed(2)} A, `
-    + `${rawRipF.toFixed(2)} A base-turns equivalent) is past `
-    + `1.5× the measured maximum — clamped to ${ripUsed.toFixed(2)} A`);
-  return {
-    dP_mag: dMag, dP_fe: dFe, dP_cu: dCu,
-    ripple: Number.isFinite(sineRip + dRip) ? sineRip + dRip : null,
-    I_dc_ripple: dDc, I_ripple: ripUsed,
-    extrapolated: outSpan || outRpm || outRip,
-    fidelity: `${resn} (${Number(spc).toFixed(1)} samples/carrier), exponents `
-      + `${measured ? 'measured' : 'assumed'}`,
-    note: why.length
-      ? `outside the measured envelope: ${why.join('; ')} — these are the `
-        + 'clamped edge of the measurement, not an answer for this point'
-      : `${b.controller_class} · measured at `
-        + `${b.f_sw_Hz.map((x) => (x / 1000).toFixed(0)).join(' / ')} kHz on a `
-        + `${b.v_bus_V.toFixed(0)} V bus`,
-  };
 }
 
 /** Turns ratio — ELECTRICAL turns over the passport's, never rows over rows.
@@ -698,31 +464,19 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     const w = gridLoss(rows);                     // watts at the base winding
     return Math.max(0, w) * fN * fH * fH * fH * fL;
   })();
-  // ── PWM: the watts the carrier adds on top of the sine numbers ───────────
-  // Measured, not modelled — see pwmDeltas().  The toggle is the ONLY thing
-  // that changes the loss chain; with it off every number below is exactly
-  // what it was before this block existed.
-  const Ieq0 = NIfrac * p.I0_A;
-  const fR = p.R0_ohm > 1e-12 ? R / p.R0_ohm : 1;
-  const pwmOn = !!(k.pwm && p.pwm && p.pwm.points && p.pwm.points.length);
-  const pd = pwmOn ? pwmDeltas(p, k, { fN, fL, fConn, fR, Ieq: Ieq0 }) : null;
-  // Added AS MEASURED, sign included.  A delta that came out slightly negative
-  // (the magnet term on a machine whose carrier ripple is small against its
-  // solve resolution) is what the two solves said; clamping it to zero would
-  // make the tiles stop summing to the total, which is the one property that
-  // lets an engineer check the card against itself.
-  const P_cu = P_cu_dc + P_prox + (pd ? pd.dP_cu : 0);
-  const P_fe_t = P_fe + (pd ? pd.dP_fe : 0);
-  const P_mag_t = P_mag + (pd ? pd.dP_mag : 0);
+  // The loss chain is the sine one.  (The old "measured PWM deltas" toggle was
+  // removed 2026-10-05: PWM is now only what was COMPUTED for the motor —
+  // `pwm_variants`, read by lib/configuratorDrive.ts — and never enters here.)
+  const P_cu = P_cu_dc + P_prox;
+  const P_fe_t = P_fe;
+  const P_mag_t = P_mag;
   const P_loss = P_cu + P_fe_t + P_mag_t;
 
   // ── HEAT TO REMOVE, per side ─────────────────────────────────────────────
   // The loss grid scales ONE iron number, so the scaled core loss is split by
   // the RATIO the passport measured at its base point.  Everything else is
   // already attributed by construction: copper is stator, magnet/solid is
-  // rotor.  The PWM deltas follow their own term — the iron delta by the same
-  // ratio (it is iron loss), the copper delta to the stator, the magnet delta
-  // to the rotor — so the two sides still add up to P_loss exactly.
+  // rotor — so the two sides add up to P_loss exactly.
   const feS0 = Number(p.P_fe_stator0_W ?? NaN);
   const feR0 = Number(p.P_fe_rotor0_W ?? NaN);
   const feSplit = Number.isFinite(feS0) && Number.isFinite(feR0) && feS0 + feR0 > 0;
@@ -792,16 +546,6 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
       ? (100 * p.A_cu0_mm2 * fN * fH) / p.A_slot_mm2 : null,
     demag_keep_pct: demagKeep != null ? Math.min(100, demagKeep) : null,
     saturation_pct: satPct != null ? Math.min(100, satPct) : null,
-    pwm_on: !!pd,
-    pwm_dP_mag_W: pd ? pd.dP_mag : null,
-    pwm_dP_fe_W: pd ? pd.dP_fe : null,
-    pwm_dP_cu_ac_W: pd ? pd.dP_cu : null,
-    pwm_ripple_pct: pd ? pd.ripple : null,
-    pwm_I_dc_ripple_A: pd ? pd.I_dc_ripple : null,
-    pwm_I_ripple_A: pd ? pd.I_ripple : null,
-    pwm_fidelity: pd ? pd.fidelity : null,
-    pwm_extrapolated: !!(pd && pd.extrapolated),
-    pwm_note: pd ? pd.note : null,
   };
 }
 

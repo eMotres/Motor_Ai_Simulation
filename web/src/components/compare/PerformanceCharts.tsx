@@ -24,7 +24,6 @@ const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 const SQRT3 = Math.sqrt(3);
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 2 } as const;
 const LABEL = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
-const SUB = { fontSize: 10, color: 'var(--text-4)' } as const;
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, px: 1.5, py: 1, flex: 1, minWidth: 120, textAlign: 'center' } as const;
 const TT = { contentStyle: { backgroundColor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 6, fontSize: 11 }, labelStyle: { color: 'var(--text-2)' } };
 const AX = { stroke: 'var(--text-4)', fontSize: 10 } as const;
@@ -58,8 +57,7 @@ const PerformanceCharts: React.FC<{ p: Passport; knobs: Knobs; packMin: number; 
   return (
     <Box sx={PANEL}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.perfTitle')}</Typography>
-        <Typography sx={SUB}>{tx('configure.perfSub')}</Typography>
+        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }} title={tx('configure.perfSub')}>{tx('configure.perfTitle')}</Typography>
       </Box>
 
       {/* summary */}

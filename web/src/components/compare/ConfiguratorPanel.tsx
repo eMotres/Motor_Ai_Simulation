@@ -36,6 +36,7 @@ import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import PerformanceCharts from './PerformanceCharts';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
+import { driveRowTiles, extraLossTile, totalLossShown, lossDensityShown, type DriveTileSpec } from '../../lib/configuratorTiles';
 import ConfiguratorThermal from './ConfiguratorThermal';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
@@ -183,9 +184,14 @@ const KnobSlider: React.FC<{
   );
 };
 
+/** the one width of every result tile */
+const TILE_W = 132;
+
 // ── one result tile: value + unit + Δ vs reference ──
 const MetricTile: React.FC<{
-  label: string; value: number; unit: string; d?: number; base: number; goodHi?: boolean;
+  label: string; value: number | null; unit: string; d?: number; base: number; goodHi?: boolean;
+  /** why the value is "—" (shown in the tooltip instead of the vs-reference line) */
+  blankTip?: string;
   /** ABSOLUTE colouring for quantities that have a meaning of their own
    *  (current density): 'ok' | 'warn' | 'bad' overrides the vs-reference
    *  colour, because 9 A/mm² is fine whether or not it grew (user
@@ -194,8 +200,9 @@ const MetricTile: React.FC<{
   /** What the number IS, when the label cannot say it (the heat split's
    *  terms).  Prepended to the vs-reference line in the hover title. */
   tip?: string;
-}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip }) => {
-  const delta = pctDelta(value, base);
+}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip, blankTip }) => {
+  const blank = value == null;
+  const delta = blank ? 0 : pctDelta(value, base);
   // No "% vs ref" line under every tile (user 2026-08-26) — the deltas are
   // carried by COLOUR only; the header's Reset button returns to the
   // reference design.
@@ -210,19 +217,21 @@ const MetricTile: React.FC<{
   // worse, grey = neutral quantity).
   const changed = Math.abs(delta) >= 0.5;
   return (
-    <Box sx={{ ...PANEL, p: 0.9, flex: '0 1 auto', minWidth: 108, maxWidth: 168 }}
-      title={(tip ? `${tip}  ` : '') + (changed
+    // ONE fixed width and a fixed value line: a number changing (or becoming "—") never moves
+    // another tile (owner 2026-10-05: the block must not jump when the drive is toggled)
+    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}
+      title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : changed
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
         : tx('configure.sameAsRef'))}>
       <Typography sx={{ ...LABEL, fontSize: 9.5, whiteSpace: 'nowrap',
         overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Typography>
       <Typography sx={{ fontSize: 16, fontWeight: 800,
-        color: absLevel
+        color: blank ? 'var(--text-3)' : absLevel
           ? (absLevel === 'bad' ? '#f87171' : absLevel === 'warn' ? '#fbbf24' : '#4ade80')
           : (changed && good !== null ? dColor : 'var(--text-0)'),
-        fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-        {fmt(value, d)}<Box component="span" sx={{ fontSize: 10.5,
-          color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>
+        fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap', minHeight: 19 }}>
+        {blank ? '—' : fmt(value, d)}{!blank && <Box component="span" sx={{ fontSize: 10.5,
+          color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>}
       </Typography>
     </Box>
   );
@@ -235,9 +244,6 @@ const KT_BASIS_TIP = (basis: string) => (basis === '3-D'
   : basis === '3-D flux'
     ? tx('configure.ktTipFlux')
     : tx('configure.ktTip2d'));
-/** Short label suffix of those tiles. */
-const KT_BASIS_LABEL = (basis: string) => (basis === '3-D' ? tx('configure.basis3d')
-  : basis === '3-D flux' ? tx('configure.basis3dFlux') : tx('configure.basis2d'));
 
 const ConfiguratorPanel: React.FC = () => {
   const { isAdmin } = useAuth();   // editing the slider ranges is admin-only
@@ -773,6 +779,19 @@ const ConfiguratorPanel: React.FC = () => {
     [variant, driveRead, knobs.I_A, devLimits, packWindow]);
   /** the numbers to show — null whenever anything is refused */
   const drv = driveRead && driveRead.ok && driveProblems.length === 0 ? driveRead.values : null;
+  const driveMode: 'sine' | 'pwm' = driveOn ? 'pwm' : 'sine';
+  /** one tile of the drive-dependent set, from its spec */
+  const renderSpec = (t: DriveTileSpec) => {
+    const detail = t.id === 'invLoss' && drv && drv.inv_total_W != null
+      ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1) })}` : '';
+    return (
+      <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} unit={t.unit} d={t.d}
+        base={t.value ?? 0} goodHi={t.goodHi}
+        absLevel={t.level} tip={tx(t.tipKey) + detail}
+        blankTip={t.blank === 'sine' ? tx('configureDrive.blankSine')
+          : t.blank === 'refused' ? tx('configureDrive.blankRefused') : tx('configureDrive.blankMissing')} />
+    );
+  };
   /** one short line per refusal (text + tooltip), in the order they matter */
   const driveRefusals: { text: string; tip: string }[] = (() => {
     if (!driveOn) return [];
@@ -1039,8 +1058,7 @@ const ConfiguratorPanel: React.FC = () => {
           passport borrowed from some OTHER machine (owner 2026-09-29). */}
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 2, py: 1.25, borderBottom: '1px solid var(--line-soft)' }}>
         <BoltIcon sx={{ color: '#60a5fa', fontSize: 20 }} />
-        <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.title')}</Typography>
-        <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{tx('configure.instant')}</Typography>
+        <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }} title={tx('configure.instant')}>{tx('configure.title')}</Typography>
         <Box sx={{ flex: 1 }} />
         <Typography sx={{ fontSize: 12, fontWeight: 700, color: blocked ? '#f59e0b' : 'var(--text-1)' }}>
           {draftOpen && draft
@@ -1057,7 +1075,7 @@ const ConfiguratorPanel: React.FC = () => {
             startIcon={<RestartAltIcon sx={{ fontSize: 15 }} />}
             disabled={!tuned}
             title={tx('configureLimits.resetToReferenceTip')}
-            sx={{ ml: 1.5, textTransform: 'none', fontSize: 11, py: 0.1,
+            sx={{ ml: 1.5, textTransform: 'none', fontSize: 11, py: 0.1, height: 24, boxSizing: 'border-box',
                   ...(tuned ? { bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' } } : {}) }}>
             {tuned ? tx('configureLimits.resetShort') : tx('configureLimits.referenceDesign')}
           </Button>
@@ -1195,7 +1213,7 @@ const ConfiguratorPanel: React.FC = () => {
               device at a carrier, each already in the passport.  Device,
               dead time and parallel count are read-only facts of the
               variant; nothing is calculated here. */}
-          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
             title={variants.length ? driveFactsTip : tx('configureDrive.notComputedTip')}>
             {tx('configureDrive.title')}
             {driveFactsLine && <Box component="span" sx={unitCase()}>{' · '}{driveFactsLine}</Box>}
@@ -1203,7 +1221,7 @@ const ConfiguratorPanel: React.FC = () => {
               <Box component="span" sx={{ color: '#fbbf24' }}>{' · '}{tx('configureDrive.notComputed')}</Box>
             )}
           </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75, flexWrap: 'wrap' }}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75, flexWrap: 'nowrap', minHeight: 30 }}
             title={variants.length ? undefined : tx('configureDrive.notComputedTip')}>
             <ToggleButtonGroup exclusive size="small" value={driveOn ? 'pwm' : 'sine'}
               onChange={(_, v) => {
@@ -1219,16 +1237,24 @@ const ConfiguratorPanel: React.FC = () => {
               <select value={variant.id} aria-label={tx('configureDrive.pwm')}
                 onChange={(e) => setDrive({ drive: 'pwm', drive_variant: e.target.value })}
                 title={tx('configureDrive.variantTip')}
-                style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', maxWidth: 260 }}>
+                style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', maxWidth: 260, minWidth: 0 }}>
                 {variants.map((v) => (
                   <option key={v.id} value={v.id} style={{ color: '#000' }}>{variantLabel(v)}</option>
                 ))}
               </select>
             )}
           </Box>
-          {driveRefusals.map((r) => (
-            <Typography key={r.text} sx={{ fontSize: 11, fontWeight: 700, color: '#f87171', mb: 0.5 }} title={r.tip}>⚠ {r.text}</Typography>
-          ))}
+          {/* ONE reserved two-line slot: a refusal fills it, it never pushes the blocks below
+              (the tiles on the right turn to "—" at the same time) */}
+          <Box sx={{ height: 34, overflow: 'hidden', mb: 0.5 }}
+            title={driveRefusals.map((r) => `${r.text}. ${r.tip}`).join('\n')}>
+            {driveRefusals.length > 0 && (
+              <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#f87171', lineHeight: 1.3,
+                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+                ⚠ {driveRefusals[0].text}{driveRefusals.length > 1 ? ` (+${driveRefusals.length - 1})` : ''}
+              </Typography>
+            )}
+          </Box>
 
 
           <Button onClick={reset} size="small" disabled={!tuned}
@@ -1265,30 +1291,21 @@ const ConfiguratorPanel: React.FC = () => {
               6 KV · Kt · Km · Km/mass
               7 demag koef · saturation koef · total koef */}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label={tx('configure.torque', { basis: KT_BASIS_LABEL(result.kt_km_basis) })} value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
+            <MetricTile label={tx('configure.torque')} value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
               tip={KT_BASIS_TIP(result.kt_km_basis)} />
             <MetricTile label={tx('configure.power')} value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi />
             <MetricTile label={tx('configure.mass')} value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
             <MetricTile label={tx('configure.efficiency')} value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi />
-            {/* The drive's own efficiencies, from the computed variant, right
-                beside the shaft one (owner 2026-10-05). */}
-            {drv && drv.eta_shaft_pct != null && (
-              <MetricTile label={tx('configureDrive.shaftEffPwm')} value={drv.eta_shaft_pct} unit="%" d={1}
-                base={drv.eta_shaft_pct} goodHi />
-            )}
-            {drv && drv.eta_drive_pct != null && (
-              <MetricTile label={tx('configureDrive.driveEff')} value={drv.eta_drive_pct} unit="%" d={1}
-                base={drv.eta_drive_pct} goodHi tip={tx('configureDrive.driveEffTip')} />
-            )}
             {ref.passport.ripple0_pct != null && (
-              <MetricTile label={tx('configure.tRippleRated')} value={ref.passport.ripple0_pct} unit="%" d={1}
-                base={ref.passport.ripple0_pct} goodHi={false} />
+              <MetricTile label={tx('configure.tRipple')} value={ref.passport.ripple0_pct} unit="%" d={1}
+                base={ref.passport.ripple0_pct} goodHi={false} tip={tx('configure.tRippleTip')} />
             )}
             <MetricTile label={tx('configure.tPerMass')} value={result.torque_per_mass} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi />
             <MetricTile label={tx('configure.pPerMass')} value={result.power_per_mass_W_kg / 1000} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi />
           </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label={tx('configure.totalLoss')} value={result.P_loss_W} unit="W" d={0} base={baseRes.P_loss_W} goodHi={false} />
+            <MetricTile label={tx('configure.totalLoss')} value={totalLossShown(result.P_loss_W, driveMode, drv)} unit="W" d={0}
+              base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')} blankTip={tx('configure.totalLossBlankTip')} />
             <MetricTile label={tx('configure.ironLoss')} value={result.P_fe_W} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false} />
             <MetricTile label={tx('configure.copperLoss')} value={result.P_cu_W} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} />
             <MetricTile label={tx('configure.magnetLoss')} value={result.P_mag_W} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false} />
@@ -1300,44 +1317,15 @@ const ConfiguratorPanel: React.FC = () => {
               base={baseRes.P_loss_rotor_W} goodHi={false}
               absLevel={result.loss_split_measured ? undefined : 'warn'}
               tip={tx(result.loss_split_measured ? 'configure.rotorHeatTipMeasured' : 'configure.rotorHeatTipUnknown')} />
-            <MetricTile label={tx('configure.lossDensity')} value={result.loss_density_W_kg} unit="W/kg" d={0} base={baseRes.loss_density_W_kg} goodHi={false} />
+            <MetricTile label={tx('configure.lossDensity')} value={lossDensityShown(result.loss_density_W_kg, result.P_loss_W, driveMode, drv)} unit="W/kg" d={0}
+              base={baseRes.loss_density_W_kg} goodHi={false} blankTip={tx('configure.totalLossBlankTip')} />
+            {renderSpec(extraLossTile(driveMode, drv))}
           </Box>
-          {/* ── DRIVE — what the picked computed variant adds: the motor loss
-              under this inverter, the inverter's loss split, the hottest
-              junction and the continuous power it holds ── */}
-          {drv && variant && (
-            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-              {drv.motor_pwm_loss_W != null && (
-                <MetricTile label={tx('configureDrive.motorLoss')} value={drv.motor_pwm_loss_W} unit="W" d={0}
-                  base={drv.motor_pwm_loss_W} goodHi={false} tip={tx('configureDrive.motorLossTip')} />
-              )}
-              {drv.inv_total_W != null && (
-                <MetricTile label={tx('configureDrive.invLoss')} value={drv.inv_total_W} unit="W" d={1}
-                  base={drv.inv_total_W} goodHi={false} tip={tx('configureDrive.invLossTip')} />
-              )}
-              {drv.inv_cond_W != null && (
-                <MetricTile label={tx('configureDrive.conduction')} value={drv.inv_cond_W} unit="W" d={1} base={drv.inv_cond_W} />
-              )}
-              {drv.inv_sw_W != null && (
-                <MetricTile label={tx('configureDrive.switching')} value={drv.inv_sw_W} unit="W" d={1} base={drv.inv_sw_W} />
-              )}
-              {drv.inv_dead_W != null && (
-                <MetricTile label={tx('configureDrive.deadLoss')} value={drv.inv_dead_W} unit="W" d={1} base={drv.inv_dead_W} />
-              )}
-              {drv.tj_C != null && (() => {
-                const lim = devLimits[variant.device]?.t_j_max_c;
-                return (
-                  <MetricTile label={tx('configureDrive.tj')} value={drv.tj_C!} unit="°C" d={0} base={drv.tj_C!}
-                    absLevel={lim != null ? (drv.tj_C! > lim - 25 ? 'warn' : 'ok') : undefined}
-                    tip={tx('configureDrive.tjTip')} />
-                );
-              })()}
-              {drv.p_cont_max_W != null && (
-                <MetricTile label={tx('configureDrive.pContMax')} value={drv.p_cont_max_W / 1000} unit="kW" d={2}
-                  base={drv.p_cont_max_W / 1000} goodHi tip={tx('configureDrive.pContMaxTip')} />
-              )}
-            </Box>
-          )}
+          {/* ── DRIVE — the same tiles in Sine and PWM (only the values change; a refusal
+              turns them into "—", it never adds or removes a block) ── */}
+          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+            {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null).map(renderSpec)}
+          </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label={tx('configure.dcBusMin')} value={result.Vphase_peak_V * Math.sqrt(3)} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} />
             <MetricTile label={tx('configure.vLinePeak')} value={result.Vline_peak_V} unit="V" d={1} base={baseRes.Vline_peak_V} />
@@ -1371,7 +1359,7 @@ const ConfiguratorPanel: React.FC = () => {
             {(() => {
               const c = pickCable(A_phase_mm2);
               return c ? (
-                <Box sx={{ ...PANEL, p: 0.9, flex: '0 1 auto', minWidth: 108, maxWidth: 168 }}
+                <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}
                   title={tx('configure.leadCableTip', { strands: c.strands, area: c.area_mm2, section: A_phase_mm2.toFixed(2),
                       d: c.d_mm, od: c.od_mm, thk: c.thk_mm, r: c.r_ohm_km, irated: c.i_rated_A, imax: c.i_max_A, roll: c.roll_m })
                     + (c.suspect ? tx('configure.cableSuspectLine', { text: tx(c.awg === '10awg' ? 'configure.cableSuspect10' : 'configure.cableSuspect75') }) : '')}>
@@ -1414,10 +1402,10 @@ const ConfiguratorPanel: React.FC = () => {
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label={tx('configure.kvNoLoad')} value={result.KV_rpm_per_Vline} unit="rpm/V" d={1} base={baseRes.KV_rpm_per_Vline} />
             {result.Kt_Nm_per_A != null && (
-              <MetricTile label={tx('configure.kt', { basis: KT_BASIS_LABEL(result.kt_km_basis) })} value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi
+              <MetricTile label={tx('configure.kt')} value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi
                 tip={KT_BASIS_TIP(result.kt_km_basis)} />
             )}
-            <MetricTile label={tx('configure.km', { basis: KT_BASIS_LABEL(result.kt_km_basis) })} value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
+            <MetricTile label={tx('configure.km')} value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
               tip={KT_BASIS_TIP(result.kt_km_basis)} />
             <MetricTile label={tx('configure.kmPerMass')} value={result.Km_per_mass} unit="N·m/(√W·kg)" d={3} base={baseRes.Km_per_mass} goodHi />
           </Box>

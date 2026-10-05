@@ -54,6 +54,19 @@ channel the model has back to us is the text itself::
 deliberately forgiving about quoting and unknown keys and deliberately strict
 about ONE thing — the e-mail — because that is the field the record is keyed and
 de-duplicated on, and an invented address is worse than no request at all.
+
+EVERYTHING A SIGNED-IN USER REPORTS GOES THROUGH THE ASSISTANT (2026-10-05).
+There is no report form.  The widget sends the conversation plus a snapshot of
+the session (``context``: tab, motor, Configure knobs and tiles, build, browser,
+the last failed API calls - sanitised by ``support_context``, never a token or
+another user's data); the model gets the snapshot as hidden context and the
+prompt FOR THE CALLER'S ROLE (``support_prompt``: a regular account sees only
+Motors + Configure, staff see every tab).  When the user has a bug, a request, an
+account problem or a question the model cannot answer, it ends its reply with a
+``[[TICKET_DRAFT {json}]]`` marker (``parse_ticket_draft``): the marker is
+stripped and returned as ``ticketDraft``, the widget shows it as a card, and the
+user edits it and presses Send, which posts to ``POST /api/support/tickets``
+with the conversation and context attached.  Nothing is filed by the model.
 """
 from __future__ import annotations
 
@@ -69,6 +82,11 @@ from typing import Optional
 from fastapi import APIRouter, Body, Header, Request
 from fastapi.responses import JSONResponse
 
+from motor_ai_sim import support_context
+from motor_ai_sim.support_prompt import (
+    STAFF_PROMPT, TICKET_PROTOCOL, USER_PROMPT, prompt_for_role,
+)
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/support", tags=["support"])
@@ -78,68 +96,15 @@ _MAX_TURNS = 20
 # Env defaults (used when there's no admin override in Firestore).
 ENV_PROVIDER = os.environ.get("SUPPORT_PROVIDER", "").strip().lower()
 ENV_GEMINI_KEY = (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY") or "").strip()
-ENV_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.0-flash").strip()
+ENV_GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest").strip()
 ENV_ANTHROPIC_KEY = (os.environ.get("ANTHROPIC_API_KEY") or "").strip()
 ENV_ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_SUPPORT_MODEL", "claude-opus-4-8").strip()
 
-SYSTEM_PROMPT = """You are the friendly in-app assistant for **AeroStator Core** — the engineering portal where an invited user opens a proven electric-motor design (permanent-magnet synchronous machines for aerospace, robotics, EV and marine drivetrains), tunes it to a spec, and runs the analyses that prove it: electromagnetic FEM, thermal, mechanical, cost.
-
-## Access — by invitation only
-- There is **no self-sign-up** and **no public pricing**. Accounts are created by the team, and each account is granted the specific motors it may open.
-- A visitor asks for access with the **Request access** link on the landing page (it writes to vadim@motresres.com), or by writing to vadim@motresres.com directly.
-- **Plans and pricing are agreed individually — write to vadim@motresres.com.** NEVER name a price, a plan, a tier or a trial: there is no price list to quote.
-- Signing in is the **Sign in** button on the landing page (Google), for an account that already exists.
-
-## The app — tabs (these are the ONLY tabs; never invent others; which ones a user sees depends on their account)
-- **Motors** — the catalog: sections by stator diameter Ø → a **die** (a stamped lamination: frozen geometry) → a **configuration** (stack length, wire, turns, winding connection, Y/Δ, steel, magnet, battery) → its **duties** (operating points, with kW, N·m, rpm, A, V L-L, efficiency, ripple, losses, mass, KV). The green **▶** on a duty row loads that machine — geometry, winding, materials, operating point — into every other tab. A configuration row also carries **⭳ datasheet**, **⭳ report** and **pdf**. Private copies live under **My motors** above the catalog.
-- **Geometry** — the parameter table of the loaded machine beside a live 3D view; **Save as new motor** keeps a modified one.
-- **Materials** — the materials library (lamination steel, magnets, metals, insulators, coolants) with B-H and loss curves, and which material each part is made of.
-- **Mesh** — the 2D FEM mesh: element size per component, the sector solved (full, 1/2, 1/4 …) and periodic pole/slot meshing. It rebuilds itself as a setting changes.
-- **Electromagnetic** — the FEM transient: winding connection and Y/Δ, the operating point (motor or generator; sine current, target torque/power, PWM inverter, BLDC or a custom waveform; current, speed, current angle, temperatures), then **Run Simulation**. Out come torque and its ripple, back-EMF, copper / iron / magnet losses, R, L, KV/Kt/Km, the field animation and the transient curves.
-- **3D** — the 3D end-effect model of one sector: geometry, mesh and the |B| / demagnetisation fields, at a chosen fidelity.
-- **Mechanical** — rotor centrifugal stress and retaining-sleeve sizing at speed and overspeed, contacts and safety factors, plus vibration modes, shaft critical speeds and bearing / windage losses.
-- **Thermal** — the steady-state temperature map: cooling mode (air, liquid, manual h, none, or **Robotics — still air + mount**, which bundles a still-air housing with its emissivity, the mount W/K, an open bore and the exposed end faces), bore and frame options, coolant and ambient. Below it the read-only result of the last **coupled EM ↔ thermal** loop.
-- **Optimization** — one-click optimization (e.g. minimum torque ripple: explore, then refine), parameter sweeps, and a DOE screening of which variables matter; a result can be applied back to the design.
-- **Compare** — saved runs side by side, showing only the inputs that differ next to the key results.
-- **Cost** — the material cost of the loaded machine: an editable price per kg for copper, magnet, electrical steel and shaft steel plus labour, with the mass and cost of each item.
-- **Configure** — the instant analytical tuner, no FEM: stack length, turns, wire thickness, winding connection, phase current and speed (and PWM carrier / DC bus where the machine's passport carries them), with live torque, power, efficiency, losses, voltages, current density, slot fill, an efficiency map, a battery panel, and saved configurations to compare.
-- **Admin** — the team's own tab: accounts, per-account motor grants, sessions, tickets and this assistant's settings.
-
-## Common how-to answers
-- **Load a motor:** **Motors** tab → open the Ø section → the die → the configuration → click **▶** on the duty you want. Every other tab then describes that machine.
-- **Run the coupled EM ↔ thermal loop:** set the cooling on the **Thermal** tab, then on the **Electromagnetic** tab switch on **Coupled thermal — solve for the temperatures** and press **Run Simulation**; it iterates until the winding and magnet temperatures settle, and the **Thermal** tab shows the converged result.
-- **Generate a report or a datasheet:** **Motors** tab, on the configuration row — **⭳ report** (Word: every duty with its tables, field maps and warnings), **pdf** for the same, **⭳ datasheet** (Excel: a column per duty).
-- **Try a change without a FEM run:** the **Configure** tab rescales the machine's measured passport instantly.
-- **Save your work:** **💾 Save to <duty>** in the strip under the tab bar writes the current point back, or **＋ duty** on a configuration snapshots it as a new duty.
-
-## Helping a user pick a machine
-Ask what matters: the target **torque** and **speed** (or the mechanical load), the **diameter** budget, the **cooling** it will have, and the **supply** (battery cell count / DC-bus voltage). Then point at the nearest die in the catalog they have been granted, and tell them to load a duty with **▶** and open **Configure** to trim stack length / turns / wire / current onto their target while the battery panel confirms the voltage fits. Levers: more torque → a bigger diameter, a longer stack, more turns or more current; higher speed → fewer turns, to keep the bus voltage in range. These are starting points to confirm with a real run — don't overstate precision. What the catalog contains for a given account is decided by that account's grants; never promise a machine you cannot see.
-
-## Facts
-- **Winding connection** trades voltage ↔ current at the same torque: all-series = the highest voltage and the lowest current, all-parallel = the opposite, and the mixed layouts sit between. **Y (star)** vs **Δ (delta)** does the same at the machine's terminals (Δ ≈ √3 more current at √3 less line voltage).
-- **Duty** = one operating point of a configuration (power, torque, speed, current, connection, temperatures, cooling). A configuration usually carries several — continuous, peak, generator …
-- There is **no free tier and no published price list**: plans and pricing are agreed individually — write to vadim@motresres.com.
-
-## Parameter glossary (Configure tab)
-- **Stack length** (mm) — axial lamination length. More length ≈ proportionally more torque, power and mass.
-- **Turns per slot** — wire turns per slot. More turns = more torque per amp and more back-EMF (needs higher bus voltage), and more resistance.
-- **Wire thickness** (mm) — conductor height. Thicker = lower resistance and more current capacity, but the stack of turns must fit inside the slot (there's a slot-fill limit).
-- **Winding connection** — series / parallel groups, plus Y or Δ (see above).
-- **Phase current** (A) — drive current. More current = more torque (until magnetic saturation) and more copper loss (∝ I²).
-- **Speed** (rpm) — operating speed. Back-EMF rises with rpm, so higher speed needs a higher DC-bus voltage.
-- **Current density** (A/mm²) — phase current ÷ conductor cross-section. High values heat the winding; what's acceptable depends on cooling.
-- **DC bus (min)** (V) — the minimum inverter voltage the motor needs at this operating point (≈ √3 × peak phase voltage). The battery's voltage must stay above it.
-- **Efficiency map** — efficiency across the torque × speed plane; dark = beyond what the battery can drive.
-- **Battery** — cell count × cell voltage gives the pack's voltage range; the panel checks whether the motor's required voltage fits inside it.
-- **Geometry tab (advanced)** parameters include stator diameter, slot height, core (back-iron) thickness, tooth widths, air gap, magnet height, and the segment counts (segments × slots-per-segment × poles-per-segment set the total slots and poles).
-
-## How to answer
-- Be concise and warm — usually 1-4 sentences. Reply in the SAME language the user writes in.
-- **Be accurate about the UI.** Only mention tabs, buttons, and steps that are listed above. NEVER invent a tab name, a button, a menu, or a workflow. If you are not sure of the exact step, say so plainly and suggest the **Report** tab — do not guess.
-- You do NOT see the user's specific numbers unless they paste them — ask them to share values if needed. You may give general electric-motor engineering guidance.
-- If it's a **bug**, a **feature request**, an **account** question, or needs a human → say so plainly in one sentence and send them to the **Report** tab in this panel, which files a ticket the team reads (type, title, description); for anything commercial — access for a colleague, another motor, terms — vadim@motresres.com. Ask for the missing detail first (what they did, what happened, which motor and duty) so the ticket is worth reading. Never promise a fix, a date or a price.
-- **Never invent a price, a plan, a tier, a discount or a delivery date** — access and commercial terms are agreed individually with vadim@motresres.com.
-- Never discuss how this assistant itself is built, which model or vendor answers, or anything about the servers."""
+#: The FULL prompt (every tab).  Kept under its old name for the admin settings
+#: page and for callers that want "the" prompt; what a given caller is actually
+#: sent is ``prompt_for_role`` (a regular account gets the Motors + Configure
+#: one - see ``support_prompt``).
+SYSTEM_PROMPT = STAFF_PROMPT
 
 
 #: Appended to the system prompt for a caller with NO account (the landing page
@@ -181,9 +146,8 @@ them step by step through tabs they cannot open yet.
    it, explain it, quote it or offer it as an example — it is for the team's
    system, not for the visitor, who never sees it.
 3. **A bug, an idea, or something that looks broken** → thank them and say the
-   team reads these conversations, so it has been passed on; signed-in users
-   file it themselves with the **Report** tab. Ask for one detail (what they did
-   and what happened) so it is useful.
+   team reads these conversations, so it has been passed on. Ask for one detail
+   (what they did and what happened) so it is useful.
 4. **Never promise a timeline, a price, a plan, a tier, a trial, a delivery date
    or a callback within any particular time.** The team answers every request
    personally, and that is all you may say about when."""
@@ -272,6 +236,99 @@ def parse_access_request(reply: str) -> tuple[str, Optional[dict]]:
     return clean, best
 
 
+# ── the ticket-draft marker ──────────────────────────────────────────────────
+#: What the assistant appends when it has prepared a ticket for a SIGNED-IN user
+#: (``support_prompt.TICKET_PROTOCOL``)::
+#:
+#:     [[TICKET_DRAFT {"type": "bug", "title": "…", "description": "…"}]]
+#:
+#: Like the access-request marker it is this codebase's substitute for a tool API
+#: (the provider call is one plain text completion).  Unlike it, the payload is
+#: JSON, because a description is free text and may contain ``]``.  The parser
+#: is forgiving (a ``key="value"`` body is accepted too) and the marker NEVER
+#: survives into what the user reads - parsed, malformed or unclosed.  A draft is
+#: only a proposal: the widget shows it, the user edits it and presses Send, and
+#: only ``POST /api/support/tickets`` files anything.
+_DRAFT_START_RE = re.compile(r"\[\[\s*TICKET_DRAFT\b", re.IGNORECASE)
+_DRAFT_FIELD_RE = re.compile(
+    r"""(?P<key>type|title|description)\s*=\s*(?:"(?P<dq>[^"]*)"|'(?P<sq>[^']*)'|(?P<bare>[^;\]]*))""",
+    re.IGNORECASE | re.DOTALL)
+
+
+def _draft_type(raw) -> str:
+    t = str(raw or "").strip().lower()
+    for key, name in (("bug", "bug"), ("feat", "feature"), ("account", "account"),
+                      ("access", "account"), ("login", "account"), ("sign", "account")):
+        if key in t:
+            return name
+    return "question"
+
+
+def _draft_from(fields: dict) -> Optional[dict]:
+    from motor_ai_sim import ticket_store as T
+    title = re.sub(r"\s+", " ", str(fields.get("title") or "")).strip()
+    if not title:
+        return None
+    desc = str(fields.get("description") or "").strip()
+    return {"type": _draft_type(fields.get("type")),
+            "title": title[:T.MAX_TITLE],
+            "description": desc[:T.MAX_DESCRIPTION]}
+
+
+def parse_ticket_draft(reply: str) -> tuple[str, Optional[dict]]:
+    """Split one assistant reply into (what the user reads, the ticket draft).
+
+    Every ``[[TICKET_DRAFT ...]]`` span is cut out of the text, whether or not it
+    parses; the draft is the LAST span with a non-empty title, else ``None``.
+    """
+    text = reply or ""
+    draft: Optional[dict] = None
+    out: list[str] = []
+    pos = 0
+    dec = json.JSONDecoder(strict=False)   # a model writes raw newlines inside strings
+    while True:
+        m = _DRAFT_START_RE.search(text, pos)
+        if not m:
+            out.append(text[pos:])
+            break
+        out.append(text[pos:m.start()])
+        i = m.end()
+        fields: Optional[dict] = None
+        end = len(text)
+        j = text.find("{", i)
+        if j != -1 and not text[i:j].strip(" \t\r\n:"):
+            try:
+                obj, k = dec.raw_decode(text, j)
+            except ValueError:
+                obj, k = None, j
+            if isinstance(obj, dict):
+                fields = obj
+                end = k
+                close = text.find("]]", k)
+                if close != -1 and not text[k:close].strip():
+                    end = close + 2
+        if fields is None:
+            close = text.find("]]", i)
+            body = text[i: close if close != -1 else len(text)]
+            fields = {}
+            for fm in _DRAFT_FIELD_RE.finditer(body):
+                raw = fm.group("dq")
+                if raw is None:
+                    raw = fm.group("sq")
+                if raw is None:
+                    raw = fm.group("bare") or ""
+                fields[fm.group("key").lower()] = raw.strip()
+            end = (close + 2) if close != -1 else len(text)
+        d = _draft_from(fields)
+        if d is not None:
+            draft = d
+        pos = end
+    clean = "".join(out)
+    clean = re.sub(r"[ \t]+\n", "\n", clean)
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    return clean, draft
+
+
 # ── Firestore-backed admin overrides (config/ai) ─────────────────────────────
 _fb_done = False
 _fb_db = None
@@ -340,9 +397,14 @@ def _effective() -> dict:
     }
 
 
-def _effective_prompt() -> str:
-    """Admin-overridden system prompt (config/ai.system_prompt) or the default."""
-    return _str(_load_overrides().get("system_prompt")) or SYSTEM_PROMPT
+def _effective_prompt(role: Optional[str] = None) -> str:
+    """Admin-overridden system prompt (config/ai.system_prompt, one text for every
+    caller) or the default FOR THE CALLER'S ROLE (``support_prompt.prompt_for_role``;
+    no role = the full prompt, which is what the admin settings page shows)."""
+    custom = _str(_load_overrides().get("system_prompt"))
+    if custom:
+        return custom
+    return STAFF_PROMPT if role is None else prompt_for_role(role)
 
 
 def _mask(k: str):
@@ -493,7 +555,8 @@ def _gemini_reply(messages: list[dict], key: str, model: str, system_prompt: str
     body = {
         "systemInstruction": {"parts": [{"text": system_prompt}]},
         "contents": contents,
-        "generationConfig": {"maxOutputTokens": 1024},
+        # headroom for a ticket draft (a JSON line) after the answer
+        "generationConfig": {"maxOutputTokens": 2048},
     }
     req = urllib.request.Request(
         url, data=json.dumps(body).encode("utf-8"),
@@ -731,16 +794,39 @@ def _charge_anonymous(ip: str, now: Optional[float] = None) -> Optional[str]:
         return None
 
 
-def _is_anonymous(authorization: Optional[str]) -> bool:
-    """No credentials at all?  `caller_identity` is the ONE definition of who is
-    calling in this backend, role 'anon' its answer for "nobody presented any" —
-    which also keeps the local/unconfigured workstation (where the developer IS
-    the admin) out of the limiter, exactly as it is out of every other gate."""
+def _caller_role(authorization: Optional[str]) -> str:
+    """The caller's role - 'anon' | 'user' | 'admin'.  `caller_identity` is the ONE
+    definition of who is calling in this backend, role 'anon' its answer for
+    "nobody presented any" — which also keeps the local/unconfigured workstation
+    (where the developer IS the admin) out of the limiter, exactly as it is out
+    of every other gate."""
     try:
         from motor_ai_sim.auth import caller_identity
-        return caller_identity(authorization).get("role") == "anon"
+        return str(caller_identity(authorization).get("role") or "anon")
     except Exception:                                        # pragma: no cover
-        return True
+        return "anon"
+
+
+def _is_anonymous(authorization: Optional[str]) -> bool:
+    """No credentials at all?  (see `_caller_role`)"""
+    return _caller_role(authorization) == "anon"
+
+
+def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None) -> str:
+    """Everything the model is told for one call.
+
+    * a visitor: the small (Motors + Configure) prompt + the visitor note, and
+      nothing about a session - a visitor has none;
+    * a signed-in caller: the prompt FOR THEIR ROLE (an admin's custom prompt, if
+      any, replaces it for everyone) + the ticket protocol + the hidden session
+      context, which the server has already sanitised.
+    """
+    if anon:
+        return _effective_prompt("anon") + VISITOR_NOTE
+    sp = _effective_prompt(role)
+    if "TICKET_DRAFT" not in sp:
+        sp += "\n\n" + TICKET_PROTOCOL
+    return sp + support_context.render_for_model(context or {}, role=role)
 
 
 def _mock_reply(messages: list[dict]) -> str:
@@ -750,8 +836,7 @@ def _mock_reply(messages: list[dict]) -> str:
         "(no API key configured). Once it's enabled I'll answer questions about the "
         "Configurator, motor parameters, the catalog and how the app works.\n\n"
         + (f'You asked: "{last[:200]}".\n\n' if last else "")
-        + "In the meantime, use the **Report** tab to send a bug or feature request "
-        "straight to the team."
+        + "In the meantime, write to vadim@motresres.com."
     )
 
 
@@ -766,15 +851,21 @@ def _deliver(reply: str, source: str, *, anon: bool, messages: list[dict],
              **extra) -> dict:
     """The ONE exit of the chat route for a caller who asked something.
 
-    For a SIGNED-IN caller it is a pass-through: their chat is theirs, it is not
-    logged here, and no marker is looked for (the note that defines one is only
-    appended to a visitor's prompt).
+    A ticket-draft marker never reaches the reader: it is parsed and STRIPPED for
+    everybody, and handed back as ``ticketDraft`` only to a SIGNED-IN caller (the
+    widget shows it as a card the user confirms; nothing is filed here).  A
+    visitor has no account to file under, so for them a draft is dropped.
+
+    For a SIGNED-IN caller the rest is a pass-through: their chat is theirs, it
+    is not logged here, and no access-request marker is looked for (the note that
+    defines one is only appended to a visitor's prompt).
 
     For a VISITOR it does the three things the owner asked for: strip and file
     the access-request marker, push it, and write the turn to the day's log.
     None of it may fail the reply — everything below either swallows its own
     errors (`support_store`, `notify`) or is wrapped here.
     """
+    reply, draft = parse_ticket_draft(reply)
     out: dict = {"reply": reply, "source": source}
     if model:
         out["model"] = model
@@ -782,7 +873,14 @@ def _deliver(reply: str, source: str, *, anon: bool, messages: list[dict],
         out["limit"] = limit
     out.update(extra)
     if not anon:
+        if draft is not None:
+            out["ticketDraft"] = draft
+        elif not reply.strip():
+            out["reply"] = "(no reply)"
         return out
+    if not reply.strip():
+        reply = "(no reply)"
+        out["reply"] = reply
 
     filed = None
     try:
@@ -820,7 +918,8 @@ def _deliver(reply: str, source: str, *, anon: bool, messages: list[dict],
 @router.post("/chat")
 def chat(request: Request, body: dict = Body(default={}),
          authorization: Optional[str] = Header(default=None)):
-    anon = _is_anonymous(authorization)
+    role = _caller_role(authorization)
+    anon = role == "anon"
     messages = _sanitize(
         body.get("messages"),
         max_turns=ANON_MAX_TURNS if anon else _MAX_TURNS,
@@ -859,7 +958,8 @@ def chat(request: Request, body: dict = Body(default={}),
     if provider == "none":
         return deliver(_mock_reply(messages), "mock")
 
-    sp = _effective_prompt() + (VISITOR_NOTE if anon else "")
+    ctx = {} if anon else support_context.sanitize_context(body.get("context"))
+    sp = build_system_prompt(role, anon=anon, context=ctx)
     try:
         if provider == "gemini":
             g = eff["gemini"]
@@ -874,7 +974,7 @@ def chat(request: Request, body: dict = Body(default={}),
         if client is None:
             return deliver(_mock_reply(messages), "mock")
         resp = _call_provider(lambda: client.messages.create(
-            model=a["model"], max_tokens=1024, system=sp, messages=messages))
+            model=a["model"], max_tokens=2048, system=sp, messages=messages))
         text = next((b.text for b in resp.content if b.type == "text"), "")
         return deliver(text or "(no reply)", "claude", model=a["model"])
     except Exception as e:
@@ -883,13 +983,12 @@ def chat(request: Request, body: dict = Body(default={}),
         logger.warning("support: provider call failed (%s: %s)%s",
                        type(e).__name__, msg[:160],
                        " [anonymous]" if anon else "")
-        # A VISITOR has no Report tab (it needs an account), so sending them
-        # there is sending them nowhere — they get the address instead, which
-        # is the answer they came for anyway.
+        # There is no model to draft a ticket right now, so everybody gets the
+        # address; a visitor's is also the way in.
         where = ("write to vadim@motresres.com — access is by invitation and we "
                  "answer every request personally"
                  if anon else
-                 "use the **Report** tab to reach the team")
+                 "write to vadim@motresres.com")
         return deliver(
             (f"The assistant is busy right now (usage limit reached). Please try "
              f"again in a minute — or {where}."
@@ -898,7 +997,7 @@ def chat(request: Request, body: dict = Body(default={}),
             "error", detail=msg[:200])
 
 
-# -- user tickets (bug / feature / question) ---------------------------------
+# -- user tickets (bug / feature / question / account) -----------------------
 # Self-hosted (ticket_store); the owner is ALWAYS the verified caller.
 
 def _ticket_caller(authorization: Optional[str]) -> str:
@@ -914,14 +1013,24 @@ def _ticket_caller(authorization: Optional[str]) -> str:
 @router.post("/tickets")
 def create_ticket(body: dict = Body(default={}),
                   authorization: Optional[str] = Header(default=None)):
-    """File a ticket as the signed-in caller (identity never read from the body)."""
+    """File a ticket as the signed-in caller (identity never read from the body).
+
+    Called by the widget when the user presses Send on the assistant's draft (the
+    user may have edited it).  ``conversation`` and ``context`` ride along: the
+    chat that led to the ticket and the session snapshot, both sanitised here
+    (credential-shaped strings scrubbed, bounded), plus the facts only the
+    server knows - the caller's role and the deployed build."""
     from fastapi import HTTPException
     from motor_ai_sim import ticket_store as T
     email = _ticket_caller(authorization)
     body = body if isinstance(body, dict) else {}
+    ctx = support_context.sanitize_context(body.get("context"))
+    ctx["server"] = support_context.server_facts(_caller_role(authorization))
     try:
         t = T.create(email, body.get("type"), body.get("title"),
-                     body.get("description"))
+                     body.get("description"),
+                     conversation=support_context.sanitize_conversation(body.get("conversation")),
+                     context=ctx)
     except T.TicketError as e:
         raise HTTPException(status_code=e.status, detail=str(e))
     return {"ok": True, "ticket": t}

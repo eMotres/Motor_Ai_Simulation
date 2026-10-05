@@ -14,7 +14,7 @@ import { initReactI18next } from 'react-i18next';
 import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from './locale';
 
 export const NAMESPACES = ['common', 'errors', 'help', 'motors', 'geometry', 'simulation',
-  'results', 'controller', 'thermal', 'admin'] as const;
+  'results', 'controller', 'thermal', 'admin', 'support'] as const;
 export type Namespace = (typeof NAMESPACES)[number];
 
 /** Flatten a nested resource object into dotted keys (parity test + dev warn). */

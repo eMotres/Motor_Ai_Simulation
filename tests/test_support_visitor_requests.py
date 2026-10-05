@@ -69,7 +69,8 @@ def env(tmp_path, monkeypatch):
     from motor_ai_sim import users as U
 
     users_file = tmp_path / "users.json"
-    shutil.copy2(_REAL_USERS, users_file)
+    if _REAL_USERS.exists():          # absent in a fresh worktree (git-ignored)
+        shutil.copy2(_REAL_USERS, users_file)
     monkeypatch.setattr(U, "_USERS_FILE", users_file)
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
@@ -680,7 +681,7 @@ def test_the_visitor_note_carries_the_whole_contract():
         assert field in note, field
     for rule in ("ONE QUESTION AT A TIME", "never as a form",
                  "I've passed this to the team", "vadim@motresres.com",
-                 "Report", "Never promise a timeline"):
+                 "Never promise a timeline"):
         assert rule in note, rule
     # …and the old promises it must keep making
     assert "Request access" in note and "invitation" in note.lower()
@@ -688,9 +689,11 @@ def test_the_visitor_note_carries_the_whole_contract():
         assert forbidden in note
 
 
-def test_the_signed_in_prompt_still_points_at_the_report_tab():
-    p = support.SYSTEM_PROMPT
-    assert "**Report** tab" in p
-    assert "files a ticket" in p
-    assert "[[ACCESS_REQUEST" not in p, \
-        "the marker contract belongs to the visitor note only"
+def test_the_signed_in_prompt_has_no_report_tab_and_no_visitor_marker():
+    """Everything a user reports goes through the assistant now (ticket draft the
+    user confirms); the separate Report tab is gone, and so is any mention of it."""
+    for p in (support.SYSTEM_PROMPT, support.USER_PROMPT):
+        assert "**Report**" not in p and "Report tab" not in p
+        assert "[[ACCESS_REQUEST" not in p,             "the marker contract belongs to the visitor note only"
+    assert "Report" not in support.VISITOR_NOTE
+    assert "[[TICKET_DRAFT" in support.TICKET_PROTOCOL

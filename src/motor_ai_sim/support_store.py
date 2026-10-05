@@ -15,7 +15,7 @@ team's inbox, not anybody's saved work.
 * ``support/visitor_chats/<YYYY-MM-DD>.jsonl`` — one line per visitor TURN
   (question + answer + how it was answered).  Append-only, capped per day,
   pruned after ``RETENTION_DAYS``.  A SIGNED-IN user's chat is never written
-  here: they have a name, a Report tab and a session log already, and logging
+  here: they have a name, a ticket list and a session log already, and logging
   their questions would be surveillance of a customer rather than a doorbell.
 * ``support/access_requests.json`` — the structured requests: the contact
   details the assistant collected, the conversation they came out of, and a

@@ -132,3 +132,18 @@ translated (`Phase current` → `相电流`, `R phase` → `相电阻 R`).
 | sign in / sign out | 登录 / 退出登录 |
 | session | 会话 |
 | agent (AI) | 智能体 |
+
+## Help assistant
+
+| EN | ZH |
+|---|---|
+| Help & feedback | 帮助与反馈 |
+| assistant | 助手 |
+| ticket | 工单 |
+| My tickets | 我的工单 |
+| bug | 缺陷 |
+| feature request | 功能需求 |
+| account (ticket type) | 账号 |
+| question (ticket type) | 问题 |
+| Send to the team | 发送给团队 |
+| open / in progress / resolved / closed | 待处理 / 处理中 / 已解决 / 已关闭 |

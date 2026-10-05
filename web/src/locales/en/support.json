@@ -1,0 +1,44 @@
+{
+  "title": "Help & feedback",
+  "close": "Close",
+  "tabAsk": "Ask",
+  "tabTickets": "My tickets",
+  "greeting": "Hi! Ask me anything about the app. If something is broken, missing or unclear, just tell me: I will prepare a ticket for the team, and you decide whether to send it.",
+  "greetingVisitor": "Hi! Ask me about AeroStator. To request access, tell me your name and work e-mail and I will pass them to the team.",
+  "placeholder": "Ask about the app…",
+  "send": "Send message",
+  "thinking": "Thinking…",
+  "demo": "Demo mode: the AI assistant is not set up on this server.",
+  "failed": "Sorry, I could not answer just now. Please try again, or write to vadim@motresres.com.",
+  "draft": {
+    "heading": "Ticket for the team",
+    "ready": "I prepared a ticket. Check it, change anything you like, then press Send.",
+    "typeLabel": "Type",
+    "titleLabel": "Title",
+    "descriptionLabel": "What happened",
+    "attached": "Your conversation and the state of your screen (tab, motor, settings, recent errors) are attached automatically. Passwords and tokens are never included.",
+    "send": "Send to the team",
+    "sending": "Sending…",
+    "dismiss": "Don't send",
+    "sent": "Sent. The team has your ticket {id}. Its status is under My tickets.",
+    "sentNoId": "Sent. The team has your ticket. Its status is under My tickets.",
+    "error": "Could not send the ticket: {error}",
+    "signIn": "Sign in to send this ticket."
+  },
+  "type": {
+    "bug": "Bug",
+    "feature": "Feature",
+    "question": "Question",
+    "account": "Account"
+  },
+  "status": {
+    "open": "Open",
+    "in_progress": "In progress",
+    "resolved": "Resolved",
+    "closed": "Closed"
+  },
+  "tickets": {
+    "empty": "No tickets yet. Tell me about a problem or an idea and I will prepare one.",
+    "loadFailed": "Could not load your tickets."
+  }
+}

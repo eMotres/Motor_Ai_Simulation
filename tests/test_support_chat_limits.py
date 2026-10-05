@@ -68,7 +68,8 @@ def env(tmp_path, monkeypatch):
     from motor_ai_sim import users as U
 
     users_file = tmp_path / "users.json"
-    shutil.copy2(_REAL_USERS, users_file)
+    if _REAL_USERS.exists():          # absent in a fresh worktree (git-ignored)
+        shutil.copy2(_REAL_USERS, users_file)
     monkeypatch.setattr(U, "_USERS_FILE", users_file)
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
@@ -383,11 +384,11 @@ def test_a_real_error_is_not_retried(env, monkeypatch):
     assert calls["n"] == 1, "a broken key must not be tried twice"
 
 
-def test_a_visitor_is_not_sent_to_a_tab_they_do_not_have(env, monkeypatch):
+def test_a_failed_call_never_sends_anyone_to_a_tab_that_does_not_exist(env, monkeypatch):
     """The provider's own quota is real (the live key is a free tier with 20
-    calls a DAY, met on 2026-09-17), so this branch is what a visitor sees on a
-    bad day — and "use the Report tab" sends them nowhere: the Report tab needs
-    an account."""
+    calls a DAY, met on 2026-09-17), so this branch is what a user sees on a bad
+    day.  There is no report tab any more - everything goes through the
+    assistant - so the fallback is the address, for a visitor and a user alike."""
     monkeypatch.setattr(support, "_effective", lambda: {
         "provider": "gemini",
         "gemini": {"key": "k", "model": "m", "key_source": "env"},
@@ -403,7 +404,8 @@ def test_a_visitor_is_not_sent_to_a_tab_they_do_not_have(env, monkeypatch):
     assert "vadim@motresres.com" in visitor["reply"]
     assert "Report" not in visitor["reply"]
     signed_in = ask(headers=env["client"]).json()
-    assert "**Report** tab" in signed_in["reply"]
+    assert "vadim@motresres.com" in signed_in["reply"]
+    assert "Report" not in signed_in["reply"]
 
 
 def test_what_counts_as_transient():

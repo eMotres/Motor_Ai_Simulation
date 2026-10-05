@@ -789,9 +789,11 @@ def _mock_tickets() -> list[dict]:
 
 
 @router.get("/tickets")
-def list_tickets(_admin: dict = Depends(require_admin_or_token)):
-    """All support tickets across users (bugs / feature requests / questions).
-    Read-only - also reachable with the ADMIN_API_TOKEN bearer (nightly agent).
+def list_tickets(detail: bool = False, _admin: dict = Depends(require_admin_or_token)):
+    """All support tickets across users (bugs / feature requests / questions /
+    account issues).  Read-only - also reachable with the ADMIN_API_TOKEN bearer
+    (nightly agent).  ``?detail=1`` adds each ticket's conversation with the
+    assistant and its sanitised session context.
 
     Tickets are filed through POST /api/support/tickets and kept by
     ``ticket_store``.  The demo set is served only with ADMIN_MOCK_DATA=1.
@@ -801,7 +803,7 @@ def list_tickets(_admin: dict = Depends(require_admin_or_token)):
         t = _mock_tickets()
         return {"source": "mock", "count": len(t), "tickets": t}
     from motor_ai_sim import ticket_store as _T
-    t = _T.list_all()
+    t = _T.list_all(detail=detail)
     return {"source": _TICKETS_SOURCE, "count": len(t), "tickets": t}
 
 

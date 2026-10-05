@@ -8,6 +8,16 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **The help assistant takes every question and bug** (owner 2026-10-05). The separate Report form is gone: the user
+  writes, the assistant answers, asks for what is missing and, for a bug, a feature request, an account problem or a
+  question it cannot answer, proposes a ticket (type, title, description) that the user checks, edits and sends with
+  one button. The ticket carries the conversation and a compact, sanitised snapshot of the screen (tab, motor,
+  configuration, Configure knobs and key tiles with their refusals, drive, propeller, battery, the build, the browser
+  and the last ten failed API calls: no tokens, cookies or other users' data). Admin -> Logs -> Support tickets opens a
+  row to show both. Ticket type `account` added. New system prompts for the current app, one per role: a regular
+  account's covers only Motors and Configure (read off the Configure panel's own strings and checked against them),
+  staff and admin get every tab. Answers are rendered as sanitised markdown (no raw HTML), the widget's strings are EN
+  with a full ZH mirror (`support` namespace) and have no small print. See `docs/SUPPORT_ASSISTANT.md`.
 - **Temperatures row without FILM H** (owner 2026-10-05): the film-h tile is gone; the HOUSING tile's tooltip
   carries the cooling air speed and h (one line each). The row is winding, magnet, housing, cooling air.
 - **One controller group, system efficiency, short titles** (owner 2026-10-05). PWM LOSS, CONTROLLER LOSS, T_J,

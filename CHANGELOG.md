@@ -16,6 +16,16 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   motor loss, inverter loss split, T_j, drive efficiency battery to shaft; the saved
   configuration records the drive. Sine is the default and unchanged (scaleMotor is
   untouched). EN + ZH strings in the `controller` namespace.
+- **Configure: slider ranges are physical limits** (owner 2026-10-05), per machine and live
+  with the knobs they depend on. Stack-length max is set by hand per motor (admin,
+  `PATCH /api/catalog/{id}/configure_limits`, else the default rule); wire min 0.2 mm, step
+  0.1 mm; turns max = rows that fit the slot at the chosen wire (same inequality as the
+  solver); phase-current max = the machine's inverter device x devices in parallel (also in
+  Sine; "no controller set" otherwise); speed max = the voltage envelope at the pack maximum,
+  else Kv x V_max x m. The 2S/2P connection is free with a line-voltage warning. Admin range
+  edits only narrow. `GET /api/catalog/{id}/configure_context` serves the machine's limits.
+  The old measured-delta "Excitation" toggle is removed (PWM = computed variants only). The
+  new Configure strings are fully Chinese in ZH (a node test guards it).
 
 ### Changed
 - **Licence: Apache License 2.0** (owner decision 2026-10-03), replacing

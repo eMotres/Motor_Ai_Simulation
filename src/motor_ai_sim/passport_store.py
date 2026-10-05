@@ -15,10 +15,11 @@ Layout, the same way the device cards are installed::
 
 ``scripts/export_passport_store.py`` writes a store file from a pilot record
 (identity + ``pwm_variants`` only — the heavy raw blocks stay in
-``docs/data/``).  This module only READS, and only ever hands out
-``pwm_variants``: the catalogue's own passport (the FEM-scaled analytical model)
-is never replaced or edited by a record, so a machine without one is exactly what
-it was.
+``docs/data/``).  This module only READS, and hands out ``pwm_variants`` and —
+when a record carries one — the family's 3-D ``end3d`` block (k(L) tables
+over the stack-length range; the card's own block is kept as ``end3d_card``).
+Nothing else of the catalogue's passport (the FEM-scaled analytical model) is
+replaced or edited by a record, so a machine without one is exactly what it was.
 """
 from __future__ import annotations
 
@@ -63,10 +64,24 @@ def _usable(v: Any) -> bool:
 _CACHE: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
 
 
+def _usable_end3d(e: Any) -> bool:
+    """A store 3-D block Configure can read: a k_flux and a k(L) table of at
+    least two stack lengths (2026-10-05, Ø40 k(L) over 6–30 mm)."""
+    if not isinstance(e, dict):
+        return False
+    try:
+        float(e.get("k_flux"))
+    except (TypeError, ValueError):
+        return False
+    t = e.get("k_flux_vs_L")
+    return isinstance(t, dict) and len(t) >= 2
+
+
 def _slim(rec: Dict[str, Any]) -> Dict[str, Any]:
     vs = [v for v in (rec.get("pwm_variants") or []) if _usable(v)]
     return {"pwm_variants": vs,
-            "build": rec.get("build") if isinstance(rec.get("build"), dict) else None}
+            "build": rec.get("build") if isinstance(rec.get("build"), dict) else None,
+            "end3d": rec.get("end3d") if _usable_end3d(rec.get("end3d")) else None}
 
 
 def _read(f: Path) -> Optional[Dict[str, Any]]:
@@ -129,6 +144,17 @@ def variants_for(card_name: Optional[str], length_mm: Optional[float] = None,
     shared die is.  Still ambiguous -> ``None``: guessing which machine's
     variants a card gets is the silent substitution a passport must not make.
     """
+    pick = record_for(card_name, length_mm, records)
+    if pick is None:
+        return None
+    return list(pick.get("pwm_variants") or []) or None
+
+
+def record_for(card_name: Optional[str], length_mm: Optional[float] = None,
+               records: Optional[List[Tuple[str, str, Dict[str, Any]]]] = None
+               ) -> Optional[Dict[str, Any]]:
+    """The slim store record a card stands for (the matching rule of
+    :func:`variants_for`), or ``None``."""
     name = str(card_name or "").strip().casefold()
     if not name:
         return None
@@ -149,25 +175,42 @@ def variants_for(card_name: Optional[str], length_mm: Optional[float] = None,
                 if (_length_mm(r) is not None and abs(_length_mm(r) - float(length_mm)) < 1e-6)]
         if len(near) == 1:
             pick = near[0]
-    if pick is None:
-        return None
-    return list(pick.get("pwm_variants") or []) or None
+    return pick
 
 
 def attach(motors: List[Dict[str, Any]]) -> None:
     """Add ``pwm_variants`` to the passport block of every card that has a
-    record, in place (the cards are request-local copies).  Nothing else of a
-    card is touched; a card whose passport already carries variants keeps them."""
+    record, in place (the cards are request-local copies); a card whose
+    passport already carries variants keeps them.
+
+    A record that carries a 3-D block (``end3d``: the family's k(L) tables
+    computed over the stack-length range, 2026-10-05) also replaces the
+    card's own ``passport.end3d`` — the catalogue's quick 3-point Stage A —
+    and the card's block is kept beside it as ``end3d_card``.  Nothing else of
+    a card is touched."""
     recs = _records()                       # once per call, not once per card
     for m in motors:
         sp = m.get("passport")
-        if not isinstance(sp, dict) or sp.get("pwm_variants"):
+        if not isinstance(sp, dict):
             continue
         inner = sp.get("passport") if isinstance(sp.get("passport"), dict) else {}
         try:
             L = float(inner.get("L0_mm"))
         except (TypeError, ValueError):
             L = None
-        vs = variants_for(m.get("name"), L, recs)
-        if vs:
-            m["passport"] = {**sp, "pwm_variants": vs}
+        rec = record_for(m.get("name"), L, recs)
+        if rec is None:
+            continue
+        new = dict(sp)
+        vs = list(rec.get("pwm_variants") or [])
+        if vs and not sp.get("pwm_variants"):
+            new["pwm_variants"] = vs
+        e3 = rec.get("end3d")
+        if e3 and isinstance(sp.get("passport"), dict):
+            inn = dict(sp["passport"])
+            if inn.get("end3d") is not None and "end3d_card" not in inn:
+                inn["end3d_card"] = inn["end3d"]
+            inn["end3d"] = dict(e3)
+            new["passport"] = inn
+        if new != sp:
+            m["passport"] = new

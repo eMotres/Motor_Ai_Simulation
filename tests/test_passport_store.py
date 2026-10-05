@@ -58,7 +58,8 @@ def test_the_catalogue_response_carries_the_pilots_variants_for_l12(client):
     # the L12 record's build (12 mm) is the one picked, not L20's
     assert si["build"]["length_mm"] == 12.0
     # the passport's own model is untouched
-    assert sp["passport"] == {"L0_mm": 12.0, "N0": 7} and sp["poles"] == 14
+    inner = {k: v for k, v in sp["passport"].items() if k not in ("end3d", "end3d_card")}
+    assert inner == {"L0_mm": 12.0, "N0": 7} and sp["poles"] == 14
 
 
 def test_the_single_passport_route_carries_them_too(client):
@@ -175,7 +176,7 @@ def test_the_store_is_parsed_once_per_change_and_keeps_only_what_configure_reads
     for _ in range(5):
         assert ps.variants_for("Die B L1", None)[0]["id"] == "v"
     assert len(calls) == 1, "parsed on every request"
-    assert set(ps._CACHE[str(f)][1]) == {"pwm_variants", "build"}      # the heavy blocks are not kept
+    assert set(ps._CACHE[str(f)][1]) == {"pwm_variants", "build", "end3d"}   # heavy blocks not kept
     # a changed file is re-read (the mtime/size key), an unchanged one is not
     rec["pwm_variants"][0]["id"] = "v2"
     f.write_text(json.dumps(rec) + " ", encoding="utf-8")
@@ -215,3 +216,30 @@ def test_the_references_route_is_lean_and_visible_like_the_catalogue(tmp_path, m
     # a rewritten catalogue file is picked up
     p.write_text(json.dumps({"motors": [{**_card(name="Other"), "id": "cat_y"}]}), encoding="utf-8")
     assert [m["id"] for m in c.get("/api/catalog/references").json()["motors"]] == ["cat_y"]
+
+
+def test_a_store_end3d_replaces_the_cards_and_keeps_it_beside(monkeypatch, tmp_path):
+    """The family's k(L) tables (store ``end3d``) reach the matched card's
+    ``passport.end3d`` — what Configure's length slider reads — and the card's
+    own quick block stays as ``end3d_card``.  A record without one changes
+    nothing of the passport."""
+    d = tmp_path / "Die E"
+    d.mkdir()
+    e3 = {"k_flux": 0.95, "k_flux_vs_L": {"6": 0.93, "30": 0.97},
+          "k_T_vs_L": {"6": 0.96, "30": 0.99}}
+    v = {"id": "v", "device": "X", "carrier_hz": 1000, "build": {"length_mm": 12.0},
+         "points": {"a": {"rpm": 1, "I_A": 1}}}
+    (d / "L12.json").write_text(json.dumps({"pwm_variants": [v], "end3d": e3}), encoding="utf-8")
+    (d / "L20.json").write_text(json.dumps({"pwm_variants": [dict(v, build={"length_mm": 20.0})],
+                                            "end3d": {"k_flux": 0.9}}), encoding="utf-8")
+    monkeypatch.setattr(ps, "_DIR", tmp_path)
+    old = {"k_flux": 0.9518, "k_flux_vs_L": {"9.0": 0.95, "12.0": 0.9518}}
+    cards = [{"name": "Die E", "passport": {"passport": {"L0_mm": 12.0, "end3d": old}}},
+             {"name": "Die E", "passport": {"passport": {"L0_mm": 20.0, "end3d": old}}}]
+    ps.attach(cards)
+    inn = cards[0]["passport"]["passport"]
+    assert inn["end3d"] == e3 and inn["end3d_card"] == old
+    assert cards[0]["passport"]["pwm_variants"][0]["id"] == "v"
+    # an unusable store block (one length, no table) leaves the card's own
+    assert cards[1]["passport"]["passport"]["end3d"] == old
+    assert "end3d_card" not in cards[1]["passport"]["passport"]

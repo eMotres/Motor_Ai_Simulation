@@ -103,3 +103,16 @@ test('torque, Kt, Km: measured k_T, else k_flux, else 2-D — one factor', () =>
   near(r3.Vemf_peak_V, r0.Vemf_peak_V * 0.95, 1e-12, 'EMF keeps k_flux');
   assert.equal(r3.kt_km_basis, '3-D');
 });
+
+test('a measured k_T(L) table is read at the tuned length (clamped)', () => {
+  const p0 = base();
+  const tab = { '77.5': 0.96, '155': 0.98, '310': 0.99 };
+  const p = base({ end3d: { k_flux: 0.95, k_flux_vs_L: { '77.5': 0.93, '155': 0.95 },
+                            k_T: 0.98, k_T_vs_L: tab } });
+  for (const [L, kT] of [[155, 0.98], [77.5, 0.96], [232.5, 0.985], [40, 0.96], [400, 0.99]]) {
+    const r = scaleMotor(p, K(p, { L_mm: L }));
+    const r0 = scaleMotor(p0, K(p0, { L_mm: L }));
+    near(r.T_Nm, r0.T_Nm * kT, 1e-12, `torque × k_T(${L})`);
+    assert.equal(r.kt_km_basis, '3-D');
+  }
+});

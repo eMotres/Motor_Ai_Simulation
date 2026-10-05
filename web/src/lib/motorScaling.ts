@@ -104,7 +104,12 @@ export interface Passport {
             fidelity?: string;
             /** MEASURED 3-D torque factor (Stage B) — the only factor Kt / Km
              *  may carry (owner 2026-09-30); absent = Kt / Km stay 2-D */
-            k_T?: number | null } | null;
+            k_T?: number | null;
+            /** MEASURED k_T at several stack lengths [mm → k] (Stage D co-energy,
+             *  passport store 2026-10-05).  When present it is read at the tuned
+             *  length directly (clamped, no extrapolation) instead of scaling the
+             *  one-length k_T by the flux curve's ratio. */
+            k_T_vs_L?: Record<string, number> | null } | null;
   // Saturation + demagnetisation calibration: FEM points over phase current at
   // base turns.  Read in AMPERE-TURN space — tooth saturation is set by
   // MMF = turns × coil current, so NI_frac = fN·fI·fConn maps every knob combo
@@ -342,6 +347,19 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // as the raw 2D base.  Losses stay 2D (conservative, same convention as the
   // Simulation card).  Null when the machine has no Stage A measurement.
   const e3 = p.end3d;
+  const tableAt = (m: Record<string, number> | null | undefined, L: number): number | null => {
+    if (!m) return null;
+    const pts = Object.entries(m)
+      .map(([kk, vv]) => [Number(kk), Number(vv)] as [number, number])
+      .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
+      .sort((a, b) => a[0] - b[0]);
+    if (pts.length < 2) return pts.length === 1 ? pts[0][1] : null;
+    const xs = pts.map((q) => q[0]);
+    const ys = pts.map((q) => q[1]);
+    if (L <= xs[0]) return ys[0];
+    if (L >= xs[xs.length - 1]) return ys[xs.length - 1];
+    return interp(xs, ys, L);
+  };
   const kOfL = (L: number): number | null => {
     if (!e3) return null;
     const m = e3.k_flux_vs_L;
@@ -376,7 +394,11 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // the flux curve's own ratio k(L)/k(L0) — else the flux factor itself.
   const kTm = Number(p.end3d?.k_T ?? NaN);
   const kTmeas = Number.isFinite(kTm) && kTm > 0.5 && kTm <= 1.2 ? kTm : null;
-  const fTq = kTmeas != null
+  // A measured k_T(L) table wins: k_T read at the tuned length itself.
+  const kTL = tableAt(e3?.k_T_vs_L, k.L_mm);
+  const kTLok = kTL != null && kTL > 0.5 && kTL <= 1.2 ? kTL : null;
+  const fTq = kTLok != null ? kTLok
+    : kTmeas != null
     ? kTmeas * (kEnd != null && kEnd0 != null && kEnd0 > 0 ? kEnd / kEnd0 : 1)
     : fEnd;
 
@@ -536,7 +558,8 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     psi_pm_mWb: psi,
     Km_Nm_sqrtW: Km,
     Kt_Nm_per_A: k.I_A > 1e-9 ? Tk / k.I_A : null,
-    kt_km_basis: kTmeas != null ? '3-D' : (kEnd != null && kEnd0 != null ? '3-D flux' : '2-D'),
+    kt_km_basis: (kTLok != null || kTmeas != null) ? '3-D'
+      : (kEnd != null && kEnd0 != null ? '3-D flux' : '2-D'),
     Km_per_mass: mass > 0 ? Km / mass : 0,
     // Inductance scales with the square of the series turns and (to first
     // order) with the stack: L ∝ N²·L·(nS)².  Slot + gap leakage follow the

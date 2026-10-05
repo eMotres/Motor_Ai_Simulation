@@ -1,7 +1,9 @@
-"""Motor passport v1 — Ø40 pilot, STAGE 1 (2-D, sine, no 3-D, no PWM).
+"""Motor passport v1 — STAGE 1 (2-D, sine, no 3-D, no PWM) for any machine.
 
-Machines: CIANO14 40 new / L12 (6S) and L20 (12S), owner workspace data
-copied read-only into the sandbox.  Spec: docs/PASSPORT_ALGORITHM.md v1.1.
+The machine(s) come from a spec file (``config/passport_specs/<die>.yaml``,
+schema in ``motor_ai_sim/passport_v1/spec.py``); the Ø40 pilot is
+``CIANO14_40_new``, the Ø85 card ``CIANO28_85_20SW1200``.  Owner workspace data
+is copied read-only into the sandbox.  Spec: docs/PASSPORT_ALGORITHM.md v1.1.
 
 Runs ONLY in the server sandbox container (all FEM).  Sub-commands:
 
@@ -16,11 +18,13 @@ Runs ONLY in the server sandbox container (all FEM).  Sub-commands:
               cold      cold 20 °C set (no-load, MTPA line, FW, short circuit)
               loss      settled loss trajectory (TDM + demag) + mech losses
               checks    off-grid checks, independent torque, time step, duties
-  assemble  build the passport record per machine (JSON) + the pilot report.
+  assemble  build the passport record per machine (JSON) + the stage-1 report.
+
+    python scripts/passport_pilot.py --spec CIANO28_85_20SW1200 prepare
 
 Layout inside the container:
   /work/src         this branch's src (read-only mount)
-  /work/inputs      die40/{die.yaml,L12.yaml,L20.yaml}, ws_motor_config.yaml,
+  /work/inputs      <inputs_subdir>/{die.yaml,<config>.yaml}, ws_motor_config.yaml,
                     materials_library.yaml, bearings_library.yaml (copies)
   /work/shared      SHARED_ROOT = copies of the libraries
   /work/ws_<M>      MOTOR_AI_SIM_CONFIG dir of machine M (sandbox only)
@@ -39,25 +43,22 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional
 
-MACHINES = {
-    # Owner 2026-10-05: L12 = 6S version, L20 = 12S version.
-    "L12": {"config": "L12", "rated_duty": "rated", "peak_duty": "peak",
-            "version": "6S", "owner_bus_V": [18.0, 22.2, 25.2],
-            "owner_rated": {"rpm": 13000.0, "I_arms": 42.78},
-            "owner_peak": {"rpm": 14400.0, "I_arms": 48.79}},
-    "L20": {"config": "L20", "rated_duty": "rated", "peak_duty": None,
-            "version": "12S", "owner_bus_V": [36.0, 44.4, 50.4],
-            "owner_rated": {"rpm": 13000.0, "I_arms": 52.55},
-            "owner_peak": None,
-            # No owner peak duty for L20: the loss grid's top current row and
-            # the card's peak row use L12's owner peak/rated current ratio.
-            "peak_rule": {"ratio": 48.79 / 42.78,
-                          "source": "L12 owner peak/rated current ratio 48.79/42.78 "
-                                    "applied to I0 (labelled assumption; the L20 "
-                                    "card's peak needs an owner duty)"}},
-}
-DIE = "CIANO14 40 new"
+REPO = Path(__file__).resolve().parents[1]
 WORKERS_DEFAULT = 6
+
+#: Filled from the spec by ``_use_spec`` (module globals keep the old call sites).
+SPEC: Dict[str, Any] = {}
+MACHINES: Dict[str, Dict[str, Any]] = {}
+DIE = ""
+
+
+def _use_spec(name: str) -> None:
+    global SPEC, MACHINES, DIE
+    sys.path.insert(0, str(REPO / "src"))
+    from motor_ai_sim.passport_v1.spec import default_spec_path, load_spec
+    SPEC = load_spec(default_spec_path(REPO, name))
+    DIE = str(SPEC["die"])
+    MACHINES = {str(k): dict(v) for k, v in SPEC["machines"].items()}
 
 
 def _yaml():
@@ -93,7 +94,8 @@ def cmd_prepare(a: argparse.Namespace) -> None:
             dst.unlink()
         shutil.copy2(inp / f, dst)
     ws_tpl = _load_yaml(inp / "ws_motor_config.yaml")
-    die = _load_yaml(inp / "die40" / "die.yaml")
+    sub = str(SPEC["inputs_subdir"])
+    die = _load_yaml(inp / sub / "die.yaml")
     lib = _load_yaml(shared / "materials_library.yaml")
     # Parts a configuration does not name and that are not liner/enamel are
     # taken from the owner's workspace config (what a duty load leaves in
@@ -102,16 +104,15 @@ def cmd_prepare(a: argparse.Namespace) -> None:
     for M, spec in MACHINES.items():
         os.environ["MOTOR_AI_SIM_CONFIG"] = str(work / "inputs" / "ws_motor_config.yaml")
         from motor_ai_sim.passport_v1 import snapshot as S
-        cfg = _load_yaml(inp / "die40" / f"{spec['config']}.yaml")
+        cfg = _load_yaml(inp / sub / f"{spec['config']}.yaml")
         src = {
-            "die.yaml": _sha(inp / "die40" / "die.yaml"),
-            f"{spec['config']}.yaml": _sha(inp / "die40" / f"{spec['config']}.yaml"),
+            "die.yaml": _sha(inp / sub / "die.yaml"),
+            f"{spec['config']}.yaml": _sha(inp / sub / f"{spec['config']}.yaml"),
             "ws_motor_config.yaml": _sha(inp / "ws_motor_config.yaml"),
             "materials_library.yaml": _sha(shared / "materials_library.yaml"),
             "bearings_library.yaml": _sha(shared / "bearings_library.yaml"),
-            "origin": ("/srv/motres/workspaces/c309c100cd421858/dies/CIANO14 40 new/ "
-                       "+ /srv/motres/shared/{materials,bearings}_library.yaml, "
-                       "copied read-only 2026-10-05"),
+            "origin": str(SPEC.get("origin") or "not stated"),
+            "spec": {"file": Path(SPEC["_path"]).name, "sha256": _sha(Path(SPEC["_path"]))},
         }
         snap = S.machine_snapshot(
             tag=M, die=die, cfg=cfg, rated_duty=spec["rated_duty"],
@@ -123,7 +124,10 @@ def cmd_prepare(a: argparse.Namespace) -> None:
                           "rated": spec["owner_rated"], "peak": spec["owner_peak"],
                           "decided": "owner 2026-10-05 brief",
                           **({"peak_rule": spec["peak_rule"]}
-                             if spec.get("peak_rule") else {})})
+                             if spec.get("peak_rule") else {}),
+                          **({"audit": bool(spec["audit"])} if "audit" in spec else {})},
+            hot_override=spec.get("hot_override"),
+            plan=SPEC.get("plan"))
         # Owner inputs must agree with the stored files (fail closed).
         bat = snap["battery"]
         if [bat["v_min"], bat["v_nom"], bat["v_max"]] != spec["owner_bus_V"]:
@@ -280,11 +284,12 @@ def _baseline(work: Path, a: argparse.Namespace) -> Dict[str, Any]:
     b = baseline_block(code_commit=commit, code_dirty=dirty,
                        src_root=work / "code" / "src",
                        image_digest=os.environ.get("PASSPORT_IMAGE_DIGEST", "unknown"),
-                       mounts={"/work": "/opt/motres/compute/passport-d40-20261005/work"},
+                       mounts={"/work": os.environ.get("PASSPORT_HOST_WORK", "unknown")},
                        extra={"invocation": {"cmd": a.cmd,
                                              "machine": getattr(a, "machine", None),
                                              "stages": getattr(a, "stages", None),
                                              "workers": getattr(a, "workers", None),
+                                             "spec": SPEC.get("_path"),
                                              "started": time.strftime("%Y-%m-%dT%H:%M:%S%z")}})
     return b
 
@@ -348,7 +353,7 @@ def cmd_assemble(a: argparse.Namespace) -> None:
         budget[M] = {"runs": n_ok, "failed": n_fail, "fem_cpu_h": cpu / 3600.0,
                      "container_wall_h": sum((st.get("stage_wall_s") or {}).values()) / 3600.0}
     md = report_md.render(recs, budget=budget)
-    with open(work / "out" / "PASSPORT_PILOT_D40_STAGE1_2026-10-05.md", "w",
+    with open(work / "out" / str(SPEC.get("report_stage1") or "PASSPORT_STAGE1.md"), "w",
               encoding="utf-8") as fh:
         fh.write(md)
     with open(work / "out" / "budget.json", "w", encoding="utf-8") as fh:
@@ -360,14 +365,19 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--work", default="/work")
+    ap.add_argument("--spec", required=True,
+                    help="spec name under config/passport_specs/ or a YAML path")
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("prepare")
     r = sub.add_parser("run")
-    r.add_argument("--machine", required=True, choices=sorted(MACHINES))
+    r.add_argument("--machine", required=True)
     r.add_argument("--stages", required=True)
     r.add_argument("--workers", type=int, default=WORKERS_DEFAULT)
     sub.add_parser("assemble")
     a = ap.parse_args(argv)
+    _use_spec(a.spec)
+    if a.cmd == "run" and a.machine not in MACHINES:
+        raise SystemExit(f"machine {a.machine!r} not in the spec ({sorted(MACHINES)})")
     if a.cmd == "run":
         os.environ["MOTOR_AI_SIM_CONFIG"] = str(Path(a.work) / f"ws_{a.machine}" / "motor_config.yaml")
     {"prepare": cmd_prepare, "run": cmd_run, "assemble": cmd_assemble}[a.cmd](a)

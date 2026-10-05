@@ -1,0 +1,82 @@
+# Passport spec — CIANO28 85 20SW1200 / L13 (Ø85, 24 slots / 28 poles, 13 mm), 2026-10-05.
+# Schema: passport_v1/spec.py.  Owner brief 2026-10-05 + owner update the same evening
+# ("two MOSFETs in parallel may be used for it").
+die: "CIANO28 85 20SW1200"
+inputs_subdir: die85
+origin: >-
+  /srv/motres/workspaces/c309c100cd421858/dies/CIANO28 85 20SW1200/ +
+  /srv/motres/shared/{materials,bearings}_library.yaml, copied read-only 2026-10-05
+workspace_user: vadim@motresres.com
+report_stage1: PASSPORT_D85_STAGE1_2026-10-05.md
+title: "Ø85"
+plan:
+  # rated = peak speed = 1000 rpm; the propeller duty runs to ~2000+ rpm, so the
+  # loss trajectory also gets 2·n0 (+ the electrical n_max as always)
+  loss_speed_factors: [0.25, 0.5, 1.0, 1.5, 2.0]
+  envelope_max_factor: 4.0
+  refine_points: [[2.0, 42.5], [2.0, 57.5], [2.5, 42.5], [2.5, 57.5]]
+machines:
+  L13:
+    config: L13
+    rated_duty: rated
+    peak_duty: peak
+    version: "12S"
+    owner_bus_V: [36.0, 44.4, 50.4]
+    owner_rated: {rpm: 1000.0, I_arms: 25.88}
+    owner_peak: {rpm: 1000.0, I_arms: 45.962}
+    # KNOWN ISSUE (brief 2026-10-05), confirmed: the rated duty's own coupled loop
+    # (robotics cooling as saved, 2026-09-28) is NOT converged — its second EM pass was
+    # refused at magnet 242.9 °C (F52SH_120C linear model: Hcj < 0); the adopted
+    # 293.6 / 210.7 °C are pass 1.  210.7 °C is above the card's 150 °C maximum working
+    # temperature.  NOT clamped: the hot map is solved at an explicit, labelled
+    # reference instead (the magnet card's maximum working temperature, the winding at
+    # Configure's class-H limit) — owner decision pending (magnet card / temperature).
+    hot_override:
+      magnet_c: 150.0
+      coil_c: 180.0
+      source: >-
+        LIMIT-TEMPERATURE reference (proposal): magnet = F52SH_120C max working
+        temperature 150 °C (SH class), winding = Configure's class-H limit 180 °C
+        (owner 2026-10-05) — NOT the rated duty's temperatures
+      reason: >-
+        rated duty (25.88 A, 1000 rpm) has no steady state inside the magnet card under
+        its saved robotics cooling: coupled loop 2026-09-28 not converged (pass 2
+        refused at magnet 242.9 °C), adopted 293.6 / 210.7 °C (pass 1) > card 150 °C
+    stage_a_lengths_mm: [13.0]
+    controller:
+      status: set
+      source: >-
+        owner 2026-10-05: the Ø40 12S controller family
+        (Controller_CIANO14_40_60V/controller_24V_FOC: UCC27289 12 V, R_G 12 ohm,
+        48 kHz centred SVPWM, m = 0.89, dead time 0.1 us) with TWO devices in parallel
+        per switch
+      device: IQE036N08NM6SC
+      n_parallel: 2
+      r_g_ohm: 12.0
+      v_gs_on_V: 12.0
+      v_gs_off_V: 0.0
+      dead_time_us: 0.1
+      f_carrier_hz: 48000.0
+      modulation: svpwm
+      m: 0.89
+      t_j_assumed_c: 110.0
+      build: "12S"
+      board_scale: 2
+    pwm_variants:
+      - {id: si_48k, device: IQE036N08NM6SC, carrier_hz: 48000.0, dead_time_s: 1.0e-7, fem_class: si48_100ns}
+      - {id: gan_48k_IGC016K10S2, device: IGC016K10S2, carrier_hz: 48000.0, dead_time_s: 2.0e-8, fem_class: gan48_20ns}
+      - {id: gan_100k_IGC016K10S2, device: IGC016K10S2, carrier_hz: 100000.0, dead_time_s: 2.0e-8, fem_class: gan100_20ns}
+    mech:
+      critical_speeds: false
+      critical_note: >-
+        not computed: the configuration names no bearings and no shaft line (no beam
+        to solve); rotor stress only
+    cooling_studies:
+      # continuous (S1) ratings and the peak time-to-limit, coupled EM-thermal loop
+      # (routes.coupled.run), per cooling option of config/cooling_options.yaml
+      - {id: robotics_s1_n1000, cooling: robotics, solve_to: continuous, rpm: 1000.0, current: rated}
+      - {id: robotics_peak_n1000, cooling: robotics, solve_to: limits, rpm: 1000.0, current: peak}
+      - {id: propeller_s1_n1000, cooling: propeller_air, solve_to: continuous, rpm: 1000.0, current: rated}
+      - {id: propeller_s1_n1500, cooling: propeller_air, solve_to: continuous, rpm: 1500.0, current: rated}
+      - {id: propeller_s1_n2000, cooling: propeller_air, solve_to: continuous, rpm: 2000.0, current: rated}
+      - {id: propeller_peak_n1000, cooling: propeller_air, solve_to: limits, rpm: 1000.0, current: peak}

@@ -216,8 +216,15 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
                      materials_lib: Mapping[str, Any],
                      fallback_parts: Mapping[str, str], fallback_source: str,
                      source_files: Mapping[str, str],
-                     owner_inputs: Mapping[str, Any]) -> Dict[str, Any]:
-    """The frozen, resolved inputs of one pilot machine and their signatures."""
+                     owner_inputs: Mapping[str, Any],
+                     hot_override: Optional[Mapping[str, Any]] = None,
+                     plan: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """The frozen, resolved inputs of one pilot machine and their signatures.
+
+    ``hot_override`` (spec ``hot_override``): the HOT set is solved at these
+    temperatures instead of the rated duty's — only with a stated source and
+    reason (both recorded), never as a silent clamp; the duty's own values stay
+    in ``temperatures.rated_duty_*``.  ``plan``: the spec's stage parameters."""
     geo = resolve_geometry(die, cfg)
     winding = dict(_req(cfg, "winding", "configuration"))
     winding.setdefault("star_delta", "star")
@@ -279,6 +286,18 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
         "cold_c": 20.0,
         "cold_source": "spec §8.1 (mandatory COLD = 20 °C, magnets and winding)",
     }
+    if hot_override:
+        for k in ("magnet_c", "coil_c", "source", "reason"):
+            _req(hot_override, k, "hot_override")
+        temps.update({
+            "rated_duty_magnet_c": rated["magnet_temp_c"],
+            "rated_duty_coil_c": rated["coil_temp_c"],
+            "hot_magnet_c": float(hot_override["magnet_c"]),
+            "hot_magnet_source": str(hot_override["source"]),
+            "hot_coil_c": float(hot_override["coil_c"]),
+            "hot_coil_source": str(hot_override["source"]),
+            "hot_override_reason": str(hot_override["reason"]),
+        })
     part_states = dict((rd.get("summary") or {}).get("part_states") or {})
     snap = {
         "schema": SNAPSHOT_SCHEMA,
@@ -301,6 +320,8 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
         "owner_inputs": dict(owner_inputs),
         "source_files": dict(source_files),
     }
+    if plan:
+        snap["plan"] = dict(plan)
     snap["signatures"] = signatures(snap)
     return snap
 

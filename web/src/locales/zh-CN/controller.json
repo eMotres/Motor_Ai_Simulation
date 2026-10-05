@@ -467,7 +467,9 @@
     "saveTitle": "保存配置",
     "packStock": "通用默认电池组 — 此电机未保存电池组",
     "motorVTip": "此电机在 {I} A、{rpm} rpm 时所需的直流母线电压（线电压峰值）。",
-    "efficiencyTip": "系统效率，电池 → 轴：电机 + 控制器。等于 功率 / (功率 + 总损耗)。正弦驱动下控制器损耗为 0，因此等于电机自身的效率。"
+    "efficiencyTip": "系统效率，电池 → 轴：电机 + 控制器。等于 功率 / (功率 + 总损耗)。正弦驱动下控制器损耗为 0，因此等于电机自身的效率。",
+    "resetToDefault": "恢复为我的默认电机",
+    "resetToDefaultTip": "回到您账号默认打开的电机：{die} / {config}。"
   },
   "configurePropeller": {
     "title": "螺旋桨",

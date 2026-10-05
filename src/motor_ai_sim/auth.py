@@ -832,6 +832,15 @@ def account_info(authorization: Optional[str], *, ip: str = "",
         "authError": None if reason in ("ok", "no_token") else reason,
         "sid": det["sid"] or None,
     }
+    # The motor Configure opens on for this account (admin-chosen, validated
+    # against the grants by users.normalize_grants); null when none is set.
+    out["defaultMotor"] = None
+    if user is not None and user.get("email"):
+        try:
+            from motor_ai_sim import users as _users
+            out["defaultMotor"] = _users.get_default_motor(user["email"])
+        except Exception:                                   # noqa: BLE001
+            out["defaultMotor"] = None
     if det.get("renewedToken"):
         out["renewedToken"] = det["renewedToken"]
     return out

@@ -467,7 +467,9 @@
     "saveTitle": "Save configuration",
     "packStock": "stock pack — none saved for this machine",
     "motorVTip": "The DC bus this machine needs at {I} A, {rpm} rpm (line peak voltage).",
-    "efficiencyTip": "Efficiency of the system, battery → shaft: motor + controller. It equals Power / (Power + Total loss). In a sine drive the controller loss is 0, so it is the motor's own efficiency."
+    "efficiencyTip": "Efficiency of the system, battery → shaft: motor + controller. It equals Power / (Power + Total loss). In a sine drive the controller loss is 0, so it is the motor's own efficiency.",
+    "resetToDefault": "Reset to my default",
+    "resetToDefaultTip": "Go back to the motor your account opens on: {die} / {config}."
   },
   "configurePropeller": {
     "title": "Propeller",

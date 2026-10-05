@@ -129,5 +129,17 @@
   "notifications": "通知",
   "notices": "公告",
   "none": "无。",
-  "markRead": "标为已读"
+  "markRead": "标为已读",
+  "refused": {
+    "admin": "此操作需要管理员账号——您的账号可在“电机”中打开电机，并在“配置”中调整。",
+    "signIn": "请登录后使用此功能。",
+    "forbidden": "您的账号无权执行此操作。"
+  },
+  "card": {
+    "badge": "档案",
+    "tip": "完整性能档案 · {date}",
+    "tipNoDate": "完整性能档案",
+    "summary": "{cards}/{total} 档案",
+    "summaryTip": "{total} 个配置中有 {cards} 个具备完整性能档案"
+  }
 }

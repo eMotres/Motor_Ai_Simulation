@@ -71,6 +71,9 @@ import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
+import { isStandardUser, landingTabForUser, tabAllowed } from './lib/accessUi';
+import RefusedNotice from './components/common/RefusedNotice';
+import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { useServerLocale } from './i18n/persist';
 
 // Theme is built from the shared eMotres/aerostator design tokens — see
@@ -187,7 +190,7 @@ function App() {
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
-  const { user, isAdmin, role, enforced, resolved: authResolved } = useAuth();
+  const { user, isAdmin, role, enforced, defaultMotor, resolved: authResolved } = useAuth();
   // Interface language (docs/I18N.md): adopt the signed-in user's stored choice.
   const { t: tr, i18n } = useTranslation('common');
   useServerLocale(i18n, useApiReady(), user?.email);
@@ -205,7 +208,15 @@ function App() {
   // comes back from localStorage synchronously — so a signed-in boot is
   // exactly what it was, and only an anonymous one waits.
   const authPending = !authResolved && !user;
-  const fullUI   = !enforced || isAdmin || role !== 'anon';
+  // THE FULL ENGINEERING UI is the admin's (and the local, unenforced dev
+  // server's).  A standard account (role "user", owner 2026-10-05) has exactly
+  // two menus - Motors and Configure - because both only READ the catalogue; the
+  // writer routes stay admin-only in the gate.  Until /api/me has answered we do
+  // not know the role, so the answer is the NARROW one: a hidden tab is never
+  // mounted, and a mounted Simulation panel is what fired the 403s on
+  // /api/simulation/caches for a regular account.
+  const fullUI   = authResolved && (!enforced || isAdmin);
+  const standardUser = isStandardUser(enforced, isAdmin, role);
   const newRequests = useNewRequestCount(isAdmin);
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
@@ -369,9 +380,13 @@ function App() {
   // created the moment there is somebody to create it for.
   useEffect(() => {
     if (authPending || !signedIn) return;
+    // The working-motor auto-save exists for the Geometry tab's edits; a
+    // standard account has no such tab and nothing to auto-save, so it is not
+    // given a write it would never use.
+    if (!authResolved || standardUser) return;
     const t = setTimeout(() => { ensureActiveMotor(); }, 1200);
     return () => clearTimeout(t);
-  }, [authPending, signedIn]);
+  }, [authPending, signedIn, authResolved, standardUser]);
 
   // The Simulation panel is kept mounted but hidden via display:none while
   // another tab is active.  recharts' ResponsiveContainer measures 0×0 inside
@@ -384,18 +399,30 @@ function App() {
   }, [activeTab]);
 
   // Keep the active tab within what the role allows (after sign-out / role change).
+  // Not before /api/me has answered: the role is unknown until then, and a
+  // provisional "anonymous" must not throw an admin off the tab he reloaded on.
   useEffect(() => {
+    if (!authResolved) return;
     if (activeTab === 'admin' && !isAdmin) { setActiveTab('motors'); return; }
     // Anonymous visitors get the catalog only — Configure + FEM require sign-in.
     if (!signedIn && activeTab !== 'motors') { setActiveTab('motors'); return; }
-    // The DEFAULT client set (user's spec 2026-08-24): Motors, Configure,
-    // Compare, Materials.  The old two-tab whitelist here silently bounced
-    // every Materials/Compare click back to Configure ("these two menus don't
-    // work", 2026-08-25) — the gate list on the tabs and this redirect
-    // must name the same set.
-    const clientTabs = ['motors', 'compare', 'materials'];
-    if (!fullUI && !clientTabs.includes(activeTab)) setActiveTab('compare');
-  }, [activeTab, isAdmin, fullUI, signedIn, setActiveTab]);
+    // A standard account has Motors and Configure and nothing else.  Anything
+    // else (a stale tab from before the role was known, a ?tab= link) lands on
+    // Configure when something is selected there, else on Motors.
+    if (standardUser && !tabAllowed(activeTab, true)) {
+      setActiveTab(landingTabForUser(hasOwnConfigureChoice() || !!defaultMotor));
+    }
+  }, [activeTab, isAdmin, standardUser, signedIn, authResolved, defaultMotor, setActiveTab]);
+
+  // A standard account's first screen: Configure when it already has something
+  // selected (his own last choice or the default motor an admin set), else the
+  // Motors list.  Once per sign-in; never moves him afterwards.
+  const landedRef = useRef(false);
+  useEffect(() => {
+    if (!authResolved || !signedIn || !standardUser || landedRef.current) return;
+    landedRef.current = true;
+    setActiveTab(landingTabForUser(hasOwnConfigureChoice() || !!defaultMotor));
+  }, [authResolved, signedIn, standardUser, defaultMotor, setActiveTab]);
 
   // ── Tab registry — the bar AND the content are GENERATED from this list.
   // Module-backed tabs take their title + order from the /api/modules manifests
@@ -469,7 +496,7 @@ function App() {
           </Box>
         </Box>
       ) },
-    { id: 'materials', label: 'Materials', order: 30, gate: 'signedIn', showViewer: true,
+    { id: 'materials', label: 'Materials', order: 30, gate: 'fullUI', showViewer: true,
       render: () => (
         <Box sx={{ display: 'flex', height: '100%' }}>
           {/* Library tree — full-height column on the left */}
@@ -680,6 +707,7 @@ function App() {
         )}
       </Box>
       {/* Floating help/feedback — available to every user, on every tab */}
+      <RefusedNotice />
       <SupportWidget />
       {/* Publishes the per-user material override to the fetch interceptor (Stage 2b) */}
       <MaterialOverrideSync />

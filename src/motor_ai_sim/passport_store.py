@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -66,7 +67,9 @@ _CACHE: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
 def _slim(rec: Dict[str, Any]) -> Dict[str, Any]:
     vs = [v for v in (rec.get("pwm_variants") or []) if _usable(v)]
     return {"pwm_variants": vs,
-            "build": rec.get("build") if isinstance(rec.get("build"), dict) else None}
+            "build": rec.get("build") if isinstance(rec.get("build"), dict) else None,
+            # a v1 passport record = a FULL passport card (the pilot's schema tag)
+            "full": str(rec.get("schema") or "").startswith("passport-v1")}
 
 
 def _read(f: Path) -> Optional[Dict[str, Any]]:
@@ -86,6 +89,9 @@ def _read(f: Path) -> Optional[Dict[str, Any]]:
         return None
     slim = _slim(rec) if isinstance(rec, dict) else None
     if slim is not None:
+        # the card's date = when the record file was written (store files carry
+        # no date of their own); read here so the mtime cache serves it too
+        slim["date"] = time.strftime("%Y-%m-%d", time.localtime(st.st_mtime))
         _CACHE[str(f)] = (sig, slim)
     return slim
 
@@ -117,41 +123,75 @@ def _length_mm(rec: Dict[str, Any]) -> Optional[float]:
         return None
 
 
-def variants_for(card_name: Optional[str], length_mm: Optional[float] = None,
-                 records: Optional[List[Tuple[str, str, Dict[str, Any]]]] = None
-                 ) -> Optional[List[Dict[str, Any]]]:
-    """The computed drive variants of the machine a catalogue card stands for,
-    or ``None`` (no record / no usable variant — the card is served unchanged).
+def _pick(card_name: Optional[str], length_mm: Optional[float] = None,
+          records: Optional[List[Tuple[str, str, Dict[str, Any]]]] = None
+          ) -> Optional[Tuple[str, str, Dict[str, Any]]]:
+    """The ``(die, config, record)`` a catalogue card stands for, or None.
 
     The card is matched by its name: ``"<die> <config>"`` exactly, or the die
-    name alone (older cards carry it) — and when several configurations sit
+    name alone (older cards carry it) - and when several configurations sit
     under that die, by the STACK LENGTH, which is what a configuration of a
-    shared die is.  Still ambiguous -> ``None``: guessing which machine's
-    variants a card gets is the silent substitution a passport must not make.
+    shared die is.  Still ambiguous -> None: guessing which machine's record a
+    card gets is the silent substitution a passport must not make.
     """
     name = str(card_name or "").strip().casefold()
     if not name:
         return None
-    exact: List[Dict[str, Any]] = []
-    by_die: List[Tuple[str, Dict[str, Any]]] = []
+    exact: List[Tuple[str, str, Dict[str, Any]]] = []
+    by_die: List[Tuple[str, str, Dict[str, Any]]] = []
     for die, cfg, rec in (records if records is not None else _records()):
         if f"{die} {cfg}".casefold() == name:
-            exact.append(rec)
+            exact.append((die, cfg, rec))
         elif die.casefold() == name:
-            by_die.append((cfg, rec))
-    pick: Optional[Dict[str, Any]] = None
+            by_die.append((die, cfg, rec))
     if len(exact) == 1:
-        pick = exact[0]
-    elif len(by_die) == 1:
-        pick = by_die[0][1]
-    elif by_die and length_mm is not None:
-        near = [r for _, r in by_die
-                if (_length_mm(r) is not None and abs(_length_mm(r) - float(length_mm)) < 1e-6)]
+        return exact[0]
+    if len(by_die) == 1:
+        return by_die[0]
+    if by_die and length_mm is not None:
+        near = [t for t in by_die
+                if (_length_mm(t[2]) is not None and abs(_length_mm(t[2]) - float(length_mm)) < 1e-6)]
         if len(near) == 1:
-            pick = near[0]
-    if pick is None:
+            return near[0]
+    return None
+
+
+def variants_for(card_name: Optional[str], length_mm: Optional[float] = None,
+                 records: Optional[List[Tuple[str, str, Dict[str, Any]]]] = None
+                 ) -> Optional[List[Dict[str, Any]]]:
+    """The computed drive variants of the machine a catalogue card stands for,
+    or ``None`` (no record / no usable variant - the card is served unchanged)."""
+    hit = _pick(card_name, length_mm, records)
+    if hit is None:
         return None
-    return list(pick.get("pwm_variants") or []) or None
+    return list(hit[2].get("pwm_variants") or []) or None
+
+
+def card_index() -> Dict[str, Dict[str, str]]:
+    """``{die: {config: "YYYY-MM-DD"}}`` for every machine that has a FULL
+    passport card (a v1 record in the store).  Read-only, served from the mtime
+    cache: adding or removing a store file changes the answer on the next call,
+    with no list of names anywhere."""
+    out: Dict[str, Dict[str, str]] = {}
+    for die, cfg, rec in _records():
+        if rec.get("full"):
+            out.setdefault(die, {})[cfg] = str(rec.get("date") or "")
+    return out
+
+
+def card_date(die: str, config: str) -> Optional[str]:
+    """The date of one configuration's full card, or None (it has none)."""
+    return card_index().get(str(die), {}).get(str(config))
+
+
+def card_of(card_name: Optional[str], length_mm: Optional[float] = None
+            ) -> Optional[Dict[str, str]]:
+    """``{"die", "config", "date"}`` of the full card behind a catalogue card
+    (matched like :func:`variants_for`), or None."""
+    hit = _pick(card_name, length_mm)
+    if hit is None or not hit[2].get("full"):
+        return None
+    return {"die": hit[0], "config": hit[1], "date": str(hit[2].get("date") or "")}
 
 
 def attach(motors: List[Dict[str, Any]]) -> None:

@@ -33,6 +33,8 @@ export interface Preset {
   pwm_variants: { id: string; device?: string; carrier_hz?: number }[];
   /** the variant the preset opens on; null = Sine */
   drive_variant: string | null;
+  /** date of this configuration's FULL passport card; null/absent = none */
+  card_date?: string | null;
 }
 
 /** The slice of the tuner's knobs the presets speak about. */

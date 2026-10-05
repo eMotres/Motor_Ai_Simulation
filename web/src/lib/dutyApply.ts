@@ -21,6 +21,9 @@ import {
 import { beginDutyApply, endDutyApply } from './familyFollow';
 import { dutyGeometryCancelledMessage, type DutyGeometryDiffRow } from './dutyGeometryDiff';
 import { askDutyGeometryChoice } from './dutyGeometryDialogService';
+import { canWriteServer } from './localAuth';
+import { loadStopReason } from './geometryApplyOutcome';
+import { uiCanWrite } from './accessUi';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -56,6 +59,15 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
   // as "the machine changed elsewhere" and start following the duty we are
   // in the middle of applying (lib/familyFollow).
   beginDutyApply();
+  // The owner's load writes the SHARED config (activate, geometry PUT, winding /
+  // materials / simulation PATCH) - admin-only server-side.  The server's own
+  // can_write is true for every registered account (own workspace), so the caller's
+  // flag alone is not enough: a standard account takes the local-copy path below,
+  // which writes nothing.  (Live 2026-10-05: the owner path ran for a regular user,
+  // the geometry PUT was a client-local no-op, and the winding PATCH was then
+  // validated against the workspace's OLD 24-slot machine - "Connection '2S'
+  // invalid for 24 slots" - before simulation/mesh PATCHes answered 403.)
+  canWrite = uiCanWrite(canWrite, canWriteServer());
   try {
     // Step 0, shared with the follower: file the panel state under the die
     // and the duty being LEFT, and say what they were (the machine-change
@@ -149,7 +161,11 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
         throw new Error(`cannot activate ${die} / ${cfg}: ${why}${authHint}`);
       }
       // 1) geometry — the die's stamped section + this configuration's stack/wire
-      await updateGeometryViaApi(p.geometry);
+      // The winding below is validated against the geometry the server NOW holds,
+      // so a refused geometry write (die/configuration lock, bad value) must stop
+      // the load here - not surface three steps later as a misleading winding error.
+      const stop = loadStopReason(die, cfg, await updateGeometryViaApi(p.geometry));
+      if (stop) throw new Error(stop);
       // 2) winding connection (authoritative endpoint; validates against layout)
       if (p.sim.connection) {
         const wr = await fetch(`${API}/api/winding/config`, {

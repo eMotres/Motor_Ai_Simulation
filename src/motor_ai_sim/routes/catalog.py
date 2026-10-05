@@ -44,8 +44,30 @@ def __getattr__(name):
     raise AttributeError(name)
 
 
+def _read_path() -> Path:
+    """The file the CALLER READS: his workspace's own ``motor_catalog.json``.
+
+    A workspace that has none yet (a brand-new account is seeded with the machine
+    only) reads through to ``<shared>/motor_catalog.json`` when the server has one
+    - read-only, never copied: the first write of his own starts a file of his
+    own.  Without this a new, granted user opened Configure on an empty list of
+    references.  With layering off (this workstation) or a ``_CATALOG_PATH``
+    override the single file is read exactly as before."""
+    path = _catalog_path()
+    if globals().get("_CATALOG_PATH") is None and not path.is_file():
+        try:
+            from motor_ai_sim.workspace import layering, shared_root
+            if layering():
+                shared = Path(str(shared_root())) / "motor_catalog.json"
+                if shared.is_file():
+                    return shared
+        except Exception:                                       # noqa: BLE001
+            log.warning("catalog: shared read-through failed", exc_info=True)
+    return path
+
+
 def _load() -> dict:
-    return _read_json(_catalog_path(), {"tiers": [], "diameters_mm": [], "motors": []})
+    return _read_json(_read_path(), {"tiers": [], "diameters_mm": [], "motors": []})
 
 
 def _mutate(fn: Callable[[dict], None]) -> dict:
@@ -158,7 +180,8 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
             if (m.get("visibility") or "public") != "private":
                 return True
             return _own(_backing_entry(m)) == ident.get("id")
-        cat["motors"] = [m for m in cat.get("motors", []) if _visible(m)]
+        cat["motors"] = _grant_visible_cards(
+            [m for m in cat.get("motors", []) if _visible(m)], authorization)
         cat["by_diameter"] = {d: [i for i in ids
                                   if any(m["id"] == i for m in cat["motors"])]
                               for d, ids in cat["by_diameter"].items()}
@@ -184,6 +207,51 @@ def _machine_names() -> set:
     return out
 
 
+
+def _machine_die_index() -> dict:
+    """Casefolded ``"<die> <configuration>"`` and ``"<die>"`` -> the die's real
+    name, from directory listings only (same source as ``_machine_names``)."""
+    out: dict = {}
+    try:
+        from motor_ai_sim.workspace import iter_dies as _iter_dies
+        for e in _iter_dies():
+            die = str(e.get("die") or e.get("name") or "")
+            d = Path(str(e["dir"]))
+            cfgs = [f.stem for f in d.glob("*.yaml") if f.name != "die.yaml"]
+            out.setdefault(die.casefold(), die)
+            for c in cfgs:
+                out.setdefault(f"{die} {c}".casefold(), die)
+    except Exception:                                           # noqa: BLE001
+        log.warning("catalog grants: die index could not be built", exc_info=True)
+    return out
+
+
+def _grant_visible_cards(cards: list, authorization: Optional[str]) -> list:
+    """Drop the cards of dies an account was NOT granted.
+
+    Only an account on the per-die grant list (``motor_access.MODE_GRANTED``) is
+    filtered; admins, ``all`` grants and the anonymous exhibit are untouched.  A
+    card is tied to its die by NAME ("<die>" or "<die> <configuration>", the way
+    ``_family_doc_of_motor`` matches it).  A card that names no die of the
+    catalogue cannot be tied to a grant, so a granted account does not get it —
+    except a private card the caller owns (their own duplicate)."""
+    from motor_ai_sim import motor_access as _ma
+    access = _ma.catalog_access(authorization)
+    if access.get("mode") != _ma.MODE_GRANTED:
+        return cards
+    from motor_ai_sim.routes.presets import _owner_of as _own
+    me = _caller_identity(authorization).get("id")
+    index = _machine_die_index()
+    keep = []
+    for m in cards:
+        die = index.get(str(m.get("name") or "").strip().casefold())
+        if die is not None and _ma.may_see_die(access, die):
+            keep.append(m)
+        elif die is None and (m.get("visibility") or "public") == "private"                 and _own(_backing_entry(m)) == me:
+            keep.append(m)
+    return keep
+
+
 #: ``(path, mtime_ns, size)`` -> the passport-carrying cards of the catalogue file.  The
 #: file is 12 MB (thumbnails) and every writer replaces it atomically, so its
 #: (mtime, size) is a safe key: Configure re-parses it only after a real change.
@@ -191,7 +259,7 @@ _REF_CACHE: dict = {"key": None, "cards": []}
 
 
 def _passport_cards() -> list:
-    path = _catalog_path()
+    path = _read_path()
     try:
         st = path.stat()
         key = (str(path), st.st_mtime_ns, st.st_size)
@@ -203,6 +271,13 @@ def _passport_cards() -> list:
             if isinstance(m.get("passport"), dict) and m["passport"].get("passport")]
         _REF_CACHE["key"] = key
     return _REF_CACHE["cards"]
+
+
+def _l0_mm(card: dict) -> Optional[float]:
+    try:
+        return float(((card.get("passport") or {}).get("passport") or {}).get("L0_mm"))
+    except (TypeError, ValueError):
+        return None
 
 
 @router.get("/references")
@@ -225,6 +300,7 @@ def get_references(authorization: Optional[str] = Header(default=None)):
         cards = [m for m in cards
                  if (m.get("visibility") or "public") != "private"
                  or _own(_backing_entry(m)) == ident.get("id")]
+        cards = _grant_visible_cards(cards, authorization)
     from motor_ai_sim import passport_store as _ps
     names = _machine_names()
     out = [{"id": m.get("id"), "name": m.get("name"), "diameter_mm": m.get("diameter_mm"),
@@ -233,6 +309,8 @@ def get_references(authorization: Optional[str] = Header(default=None)):
             # geometry ("CIANO14 40_12" next to "CIANO14 40 new") have none, and the web must
             # not pick one of those for the loaded machine.
             "has_machine": str(m.get("name") or "").strip().casefold() in names,
+            # the FULL passport card behind this machine ({die, config, date}) or None
+            "card": _ps.card_of(m.get("name"), _l0_mm(m)),
             "passport": m["passport"]} for m in cards]        # new dicts: the cache is never mutated
     _ps.attach(out)
     return {"motors": out}
@@ -761,14 +839,17 @@ def _die_docs_of(fam: Optional[dict]) -> tuple:
 
 
 @router.get("/{motor_id}/configure_context")
-def get_configure_context(motor_id: str):
+def get_configure_context(motor_id: str,
+                          authorization: Optional[str] = Header(default=None)):
     """What Configure's sliders need to know about ONE machine: the hand-set
     stack-length maximum, the inverter's phase-current ceiling, the pack and the
     modulation index.  Read-only; open to every caller who can read the card
     (the numbers are limits, not data of the owner's)."""
     from motor_ai_sim import configure_limits as _cl
     motor = next((m for m in _load().get("motors", []) if m.get("id") == motor_id), None)
-    if not motor:
+    if not motor or not _grant_visible_cards([motor], authorization):
+        # 404 for a motor the account was not granted: the same answer as one
+        # that does not exist, so the id is not an oracle.
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
     # Several configurations can share one die name ("CIANO14 40 new": L12, L20), and a
     # card carries no geometry of its own — the passport's base stack length is what
@@ -780,11 +861,15 @@ def get_configure_context(motor_id: str):
     fam = _family_doc_of_motor(motor, geo)
     from motor_ai_sim import passport_store as _ps
     docs, die_geo = _die_docs_of(fam)
+    presets = _cl.presets_for_die(
+        docs, die_geo, lambda die, cfg: _ps.variants_for(f"{die} {cfg}", None))
+    for pr in presets:
+        # does this configuration have a FULL passport card (v1 record)?
+        pr["card_date"] = _ps.card_date(str(pr.get("die") or ""), str(pr.get("config") or ""))
     return {"motor_id": motor_id,
             **_cl.context(motor, fam),
             # one preset per configuration of the die, read from the machines themselves
-            "presets": _cl.presets_for_die(
-                docs, die_geo, lambda die, cfg: _ps.variants_for(f"{die} {cfg}", None))}
+            "presets": presets}
 
 
 @router.patch("/{motor_id}/configure_limits")

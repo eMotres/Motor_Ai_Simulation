@@ -48,6 +48,9 @@ export interface AuthState {
   isAdmin: boolean;
   /** True when the backend enforces auth (production). When false, role restrictions are off. */
   enforced: boolean;
+  /** The motor (die + configuration) an admin chose for this account: Configure
+   *  opens on it until the user has a choice of his own.  null = none set. */
+  defaultMotor: { die: string; config: string } | null;
   /** Has `/api/me` ANSWERED yet?
    *
    *  `enforced` starts false, so before the first answer every consumer reads
@@ -69,7 +72,7 @@ export interface AuthState {
 
 const AuthCtx = createContext<AuthState>({
   user: null, loading: false, enabled: true, role: 'anon', isAdmin: false, enforced: false,
-  resolved: false,
+  defaultMotor: null, resolved: false,
   signIn: async () => {}, logout: async () => {}, getToken: async () => null,
 });
 
@@ -112,6 +115,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [role, setRole] = useState<string>('anon');
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [enforced, setEnforced] = useState<boolean>(false);
+  const [defaultMotor, setDefaultMotor] = useState<{ die: string; config: string } | null>(null);
   // Flipped by the first /api/me answer we actually APPLY — never by the
   // store-busy or provisional paths, both of which come back in a moment.
   const [resolved, setResolved] = useState<boolean>(false);
@@ -159,6 +163,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
       setRole(j.role ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
+      setDefaultMotor(j.defaultMotor && j.defaultMotor.die && j.defaultMotor.config
+        ? { die: String(j.defaultMotor.die), config: String(j.defaultMotor.config) } : null);
       setResolved(true);
       setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });
       // Sliding renewal: inside the last 7 days the backend hands back a fresh
@@ -216,7 +222,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const getToken = useCallback(async () => getStoredToken(), []);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, resolved, signIn, logout, getToken }}>
+    <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, defaultMotor, resolved, signIn, logout, getToken }}>
       {children}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn}
         initialMode={loginOpts.mode} returnTo={loginOpts.returnTo} />

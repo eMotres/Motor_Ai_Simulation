@@ -104,6 +104,7 @@ from motor_ai_sim.routes.coupled import router as coupled_router
 from motor_ai_sim.routes.controller import router as controller_router
 from motor_ai_sim.routes.bearings import router as bearings_router
 from motor_ai_sim.routes.wire_stock import router as wire_stock_router
+from motor_ai_sim.routes.propellers import router as propellers_router
 from motor_ai_sim.routes.optimization import router as optimization_router
 from motor_ai_sim.routes.presets import router as presets_router
 from motor_ai_sim.routes.catalog import router as catalog_router
@@ -309,6 +310,9 @@ app.include_router(controller_router)
 # PATCH /api/family/config/{die}/{cfg}/bearings, next to its battery.
 app.include_router(bearings_router)
 app.include_router(wire_stock_router)
+# /api/propellers — the propeller catalogue + slipstream cooling air (read-only,
+# closed-form; docs/PROPELLER_CATALOG_2026-10-05.md)
+app.include_router(propellers_router)
 app.include_router(optimization_router)
 app.include_router(presets_router)
 app.include_router(catalog_cards_router)   # before the motor catalog: /api/catalog/cards/*

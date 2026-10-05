@@ -51,7 +51,6 @@ const ConfiguratorThermal: React.FC<{ geom: ThermalGeom; losses: ThermalLosses }
     <Paper sx={CARD}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
         <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>{tx('configure.thermalTitle')}</Typography>
-        <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'monospace' }}>{tx('configure.thermalSub')}</Typography>
         <HelpTip title={tx('configure.thermalHelp')} />
       </Box>
 

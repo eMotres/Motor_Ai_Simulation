@@ -30,7 +30,7 @@ export interface Preset {
   duty?: string | null;
   battery: PresetPack | null;
   device?: string | null;
-  pwm_variants: { id: string }[];
+  pwm_variants: { id: string; device?: string; carrier_hz?: number }[];
   /** the variant the preset opens on; null = Sine */
   drive_variant: string | null;
 }
@@ -38,7 +38,7 @@ export interface Preset {
 /** The slice of the tuner's knobs the presets speak about. */
 export interface KnobsLike {
   N: number; L_mm: number; wireH_mm: number; nP: number; I_A: number; rpm: number;
-  split?: number; drive?: 'sine' | 'pwm'; drive_variant?: string;
+  split?: number; drive?: 'sine' | 'pwm'; drive_variant?: string; drive_device?: string; drive_carrier_hz?: number;
 }
 
 /** `base` with every knob the preset states laid over it, and the preset's own drive. */
@@ -51,8 +51,16 @@ export function presetKnobs<K extends KnobsLike>(base: K, pr: Preset): K {
   put('L_mm', k.L_mm); put('N', k.N); put('wireH_mm', k.wireH_mm);
   put('nP', k.nP); put('I_A', k.I_A); put('rpm', k.rpm);
   if (k.split != null && Number.isFinite(k.split)) out.split = k.split;
-  if (pr.drive_variant) { out.drive = 'pwm'; out.drive_variant = pr.drive_variant; }
-  else { out.drive = 'sine'; delete (out as KnobsLike).drive_variant; }
+  if (pr.drive_variant) {
+    out.drive = 'pwm'; out.drive_variant = pr.drive_variant;
+    // the transistor + frequency the preset opens on (the pair is what the two dropdowns show)
+    const v = pr.pwm_variants.find((x) => x.id === pr.drive_variant);
+    if (v?.device && Number(v.carrier_hz) > 0) { out.drive_device = v.device; out.drive_carrier_hz = Number(v.carrier_hz); }
+    else { delete (out as KnobsLike).drive_device; delete (out as KnobsLike).drive_carrier_hz; }
+  } else {
+    out.drive = 'sine';
+    delete (out as KnobsLike).drive_variant; delete (out as KnobsLike).drive_device; delete (out as KnobsLike).drive_carrier_hz;
+  }
   return out;
 }
 
@@ -64,6 +72,7 @@ export interface BatteryCmp { cells: number; nom: number; max: number; min: numb
  *  Names are field keys (`build`, `current`, `speed`, `battery`, `drive`), not sentences. */
 export function presetDiff(pr: Preset, k: KnobsLike, battery: BatteryCmp | null,
                            presetBattery: BatteryCmp | null): string[] {
+  // the drive is the (transistor, frequency) PAIR: two ids of one pair are the same drive
   const out: string[] = [];
   const p = pr.knobs;
   const diff = (a: number, b: number | null) => b != null && !close(a, b);
@@ -77,7 +86,11 @@ export function presetDiff(pr: Preset, k: KnobsLike, battery: BatteryCmp | null,
   }
   const wantPwm = !!pr.drive_variant;
   const isPwm = k.drive === 'pwm';
-  if (wantPwm !== isPwm || (wantPwm && k.drive_variant !== pr.drive_variant)) out.push('drive');
+  const pv = pr.pwm_variants.find((x) => x.id === pr.drive_variant);
+  const same = pv?.device && Number(pv.carrier_hz) > 0 && k.drive_device
+    ? k.drive_device === pv.device && Math.abs(Number(k.drive_carrier_hz) - Number(pv.carrier_hz)) < 1e-6 * Number(pv.carrier_hz)
+    : k.drive_variant === pr.drive_variant;
+  if (wantPwm !== isPwm || (wantPwm && !same)) out.push('drive');
   return out;
 }
 

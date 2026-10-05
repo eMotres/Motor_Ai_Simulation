@@ -1,0 +1,20 @@
+# Per-die cooling options (read by motor_ai_sim.cooling_options; see its docstring).
+# A die with no entry is unrestricted: every cooling mode stays on offer.
+#
+# CIANO14 40 new (configurations L12 6S and L20 12S) is a drone motor: air-cooled
+# only, and the only airflow is the propeller's own slipstream (owner, 2026-10-05).
+# The allowed propellers are the T-Motor entries of 10-13 in that have usable test
+# data (config/propellers/tmotor/); geometry-only entries are not offered.
+# Entries marked "estimated power" have thrust measured but C_P estimated.
+version: 1
+dies:
+  "CIANO14 40 new":
+    cooling_options: [propeller_air]
+    propellers:
+      - tmotor_fpv_10x5        # 10 in, 3 blades, torque measured
+      - tmotor_cf10x3_3        # 10 in, thrust measured, estimated power
+      - tmotor_cf11x3_7        # 11 in, thrust measured, estimated power
+      - tmotor_p12x4           # 12 in, torque measured
+      - tmotor_p13x4_4         # 13 in, torque measured
+      - tmotor_fpv_13x10       # 13 in, 3 blades, torque measured
+      - tmotor_fpv_13x12       # 13 in, 3 blades, torque measured

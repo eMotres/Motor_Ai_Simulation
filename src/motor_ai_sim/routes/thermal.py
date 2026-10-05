@@ -331,6 +331,50 @@ def _fluid_props(name: str):
     return FluidProps(*_coolant_props(name))
 
 
+def _apply_air_speed_source(air_speed_source: str, propeller_id: str,
+                            propeller_position: str, *, rpm: float,
+                            ambient_temp: float, cooling_mode: str,
+                            air_speed_mps: float):
+    """Resolve where the housing air speed comes from (2026-10-05).
+
+    Returns ``(air_speed_mps, info)``.  With the default source (``manual`` /
+    blank) this returns the caller's ``air_speed_mps`` UNCHANGED and ``info`` is
+    None — every existing mode is bit-identical.  With ``propeller`` the speed is
+    computed from the machine's own ``rpm`` and the chosen propeller's slipstream
+    (``motor_ai_sim.propeller``: momentum-theory wake x the stated motor-position
+    factor), at the air density of ``ambient_temp``; ``info`` is the full
+    operating-point dict, attached to the answer as ``cooling_air_source``.  The
+    air mode is the only one with a housing air speed, so ``propeller`` requires
+    ``cooling_mode == "air"`` and a ``propeller_id`` that the catalogue can
+    compute loads for.
+    """
+    src = str(air_speed_source or "manual").strip().lower()
+    if src in ("", "manual"):
+        return air_speed_mps, None
+    if src != "propeller":
+        raise _bad("air_speed_source", air_speed_source, "bad_value",
+                   "air_speed_source must be 'manual' (type the air speed) or "
+                   "'propeller' (computed from rpm and the chosen propeller)")
+    if str(cooling_mode or "").strip().lower() != "air":
+        raise _bad("air_speed_source", air_speed_source, "bad_value",
+                   "air_speed_source='propeller' computes the HOUSING air speed, "
+                   "so it needs cooling_mode='air'")
+    if not str(propeller_id or "").strip():
+        raise _bad("propeller_id", propeller_id, "missing",
+                   "air_speed_source='propeller' needs a propeller_id "
+                   "(GET /api/propellers lists them)")
+    from motor_ai_sim import propeller as _pp
+    try:
+        info = _pp.air_speed_for_thermal(
+            str(propeller_id).strip(), float(rpm), ambient_c=float(ambient_temp),
+            position=(str(propeller_position).strip() or None) if propeller_position else None)
+    except _pp.PropellerNotFound as exc:
+        raise _bad("propeller_id", propeller_id, "unknown", str(exc))
+    except (_pp.PropellerDataError, ValueError) as exc:
+        raise _bad("propeller_id", propeller_id, "bad_value", str(exc))
+    return float(info["air_speed_mps"]), info
+
+
 def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
                 fluid: str, fluid_temp_in_c: float, flow_lpm: float,
                 p_loss_w: float, r_housing_m: float, length_m: float,
@@ -3701,6 +3745,13 @@ def solve_thermal_field(
     # selects the angle the Electromagnetic run is looked up under — see
     # _solved_gamma_deg.  Never changes the thermal physics itself.
     op_mode:            Optional[str] = None,
+    # WHERE THE HOUSING AIR SPEED COMES FROM (2026-10-05).  'manual' (default) =
+    # `air_speed_mps` as typed, bit-identical to every earlier call; 'propeller'
+    # = computed from this call's own `rpm` and the chosen propeller's slipstream
+    # (cooling_mode='air' only).  See `_apply_air_speed_source`.
+    air_speed_source:   str = "manual",
+    propeller_id:       str = "",
+    propeller_position: str = "",
     progress=None,
     _em_map:            Optional[Dict[str, Any]] = None,
     _em_loss_source:    Optional[Dict[str, Any]] = None,
@@ -3971,6 +4022,13 @@ def solve_thermal_field(
 
     t0 = time.time()
     _geo_ov = _parse_geo_override(geo)
+    # Resolved BEFORE validation and the cache key, so a propeller-driven speed
+    # is validated and keyed exactly like a typed one.  Default: returns the
+    # caller's value untouched and `_prop_cooling` is None.
+    air_speed_mps, _prop_cooling = _apply_air_speed_source(
+        air_speed_source, propeller_id, propeller_position, rpm=rpm,
+        ambient_temp=ambient_temp, cooling_mode=cooling_mode,
+        air_speed_mps=air_speed_mps)
     cooling_mode, bore_mode = _validate_field_params(
         cooling_mode=cooling_mode, ambient_temp=ambient_temp, h_conv=h_conv,
         air_speed_mps=air_speed_mps, fluid=fluid,
@@ -4093,6 +4151,12 @@ def solve_thermal_field(
         # that THIS request did not even get as far as looking for it.
         if isinstance(out.get("loss_source"), dict):
             out["loss_source"] = {**out["loss_source"], "thermal_cache_hit": True}
+        # The air source belongs to the REQUEST (two propellers can give the same
+        # speed and share this entry): say which one asked, and say nothing for a
+        # request that did not use one.
+        out.pop("cooling_air_source", None)
+        if _prop_cooling is not None:
+            out["cooling_air_source"] = _prop_cooling
         return out
 
     # ── the step budget of this pass ────────────────────────────────────────
@@ -6419,6 +6483,9 @@ def solve_thermal_field(
         # the two apart — so it is never stored under one.  See the docstring.
         _cache_put(_FIELD_CACHE, key, result, _FIELD_CACHE_MAX)
     _report(2, phase="post-processing (components, flux)")
+    if _prop_cooling is not None:
+        # a copy: the cached entry must not carry this request's propeller
+        result = {**result, "cooling_air_source": _prop_cooling}
     return result
 
 

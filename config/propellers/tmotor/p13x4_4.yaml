@@ -1,0 +1,144 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+schema: propeller-1
+id: tmotor_p13x4_4
+vendor: T-MOTOR
+model: P13*4.4
+series: Polish carbon fiber (P)
+status: current
+product_url: https://store.tmotor.com/product/polish-carbon-fiber-13x4_4-prop.html
+source_urls:
+- https://store.tmotor.com/product/polish-carbon-fiber-13x4_4-prop.html
+- https://uav-en.tmotor.com/2018/Polish_0416/131.html
+- https://store.tmotor.com/product/mn2806-motor-antigravity-type.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 13.0
+  diameter_mm: 330.2
+  pitch_in: 4.4
+  pitch_mm: 111.8
+  blades: 2
+material: CF+Epoxy, polished
+mass_single_blade_g: 14.2
+hub:
+  bore_mm: 6.0
+  mount: 2 blades integrated; 12 mm bolt circle with 2 holes of 3 mm
+  source: product image, uav-en.tmotor.com Polish page 131
+published_limits:
+  optimum_rpm:
+  - 5000
+  - 8000
+  thrust_limit_kg: 4.5
+  matches_motors: MN3X-MN4X
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  tables:
+    - id: mn2806_p13x4_4_1
+      source_url: https://store.tmotor.com/product/mn2806-motor-antigravity-type.html
+      accessed: '2026-10-05'
+      test_motor: "MN2806 KV400"
+      prop_label_in_source: "P13*4.4"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["throttle", "voltage_V", "thrust_g", "torque_Nm", "current_A", "rpm", "input_power_W", "efficiency_g_per_W", "temperature"]
+      note: ""
+      rows:
+      - {thr: 40, V: 23.63, I: 0.86, Pel: 20.38, rpm: 2991, thrust_g: 262, torque_Nm: 0.04}
+      - {thr: 45, V: 23.6, I: 1.14, Pel: 26.83, rpm: 3299, thrust_g: 325, torque_Nm: 0.05}
+      - {thr: 50, V: 23.57, I: 1.5, Pel: 35.42, rpm: 3632, thrust_g: 398, torque_Nm: 0.07}
+      - {thr: 55, V: 23.53, I: 1.88, Pel: 44.21, rpm: 3908, thrust_g: 458, torque_Nm: 0.07}
+      - {thr: 60, V: 23.43, I: 2.32, Pel: 54.29, rpm: 4184, thrust_g: 531, torque_Nm: 0.09}
+      - {thr: 65, V: 23.25, I: 2.75, Pel: 63.91, rpm: 4416, thrust_g: 592, torque_Nm: 0.1}
+      - {thr: 70, V: 23.17, I: 3.27, Pel: 75.78, rpm: 4664, thrust_g: 660, torque_Nm: 0.11}
+      - {thr: 75, V: 23.14, I: 3.82, Pel: 88.36, rpm: 4902, thrust_g: 729, torque_Nm: 0.12}
+      - {thr: 80, V: 23.09, I: 4.4, Pel: 101.53, rpm: 5126, thrust_g: 798, torque_Nm: 0.13}
+      - {thr: 85, V: 23.11, I: 5.07, Pel: 117.1, rpm: 5357, thrust_g: 875, torque_Nm: 0.14}
+      - {thr: 90, V: 23.11, I: 5.8, Pel: 134.1, rpm: 5573, thrust_g: 947, torque_Nm: 0.15}
+      - {thr: 95, V: 23.07, I: 6.56, Pel: 151.45, rpm: 5777, thrust_g: 1018, torque_Nm: 0.16}
+      - {thr: 100, V: 23.05, I: 7.1, Pel: 163.53, rpm: 5902, thrust_g: 1068, torque_Nm: 0.17}
+    - id: mn2806_p13x4_4_2
+      source_url: https://store.tmotor.com/product/mn2806-motor-antigravity-type.html
+      accessed: '2026-10-05'
+      test_motor: "MN2806 KV650"
+      prop_label_in_source: "P13*4.4"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["throttle", "voltage_V", "thrust_g", "torque_Nm", "current_A", "rpm", "input_power_W", "efficiency_g_per_W", "temperature"]
+      note: ""
+      rows:
+      - {thr: 40, V: 15.51, I: 1.32, Pel: 20.44, rpm: 2994, thrust_g: 269, torque_Nm: 0.04}
+      - {thr: 45, V: 15.51, I: 1.88, Pel: 29.13, rpm: 3371, thrust_g: 346, torque_Nm: 0.06}
+      - {thr: 50, V: 15.43, I: 2.48, Pel: 38.3, rpm: 3694, thrust_g: 417, torque_Nm: 0.07}
+      - {thr: 55, V: 15.42, I: 3.13, Pel: 48.2, rpm: 3989, thrust_g: 485, torque_Nm: 0.08}
+      - {thr: 60, V: 15.39, I: 3.88, Pel: 59.69, rpm: 4278, thrust_g: 557, torque_Nm: 0.09}
+      - {thr: 65, V: 15.37, I: 4.64, Pel: 71.38, rpm: 4538, thrust_g: 626, torque_Nm: 0.11}
+      - {thr: 70, V: 15.33, I: 5.46, Pel: 83.73, rpm: 4777, thrust_g: 700, torque_Nm: 0.11}
+      - {thr: 75, V: 15.33, I: 6.49, Pel: 99.46, rpm: 5041, thrust_g: 785, torque_Nm: 0.13}
+      - {thr: 80, V: 15.28, I: 7.59, Pel: 115.98, rpm: 5284, thrust_g: 863, torque_Nm: 0.14}
+      - {thr: 85, V: 15.25, I: 8.77, Pel: 133.74, rpm: 5510, thrust_g: 941, torque_Nm: 0.15}
+      - {thr: 90, V: 15.22, I: 10.01, Pel: 152.4, rpm: 5729, thrust_g: 1015, torque_Nm: 0.16}
+      - {thr: 95, V: 15.19, I: 11.29, Pel: 171.6, rpm: 5925, thrust_g: 1090, torque_Nm: 0.18}
+      - {thr: 100, V: 15.17, I: 12.28, Pel: 186.36, rpm: 6061, thrust_g: 1138, torque_Nm: 0.18}
+    - id: mn4004_cf13x4_4_1
+      source_url: https://store.tmotor.com/product/mn4004-kv300-motor-antigravity-type.html
+      accessed: '2026-10-05'
+      test_motor: "MN4004 KV300"
+      prop_label_in_source: "13*4.4CF"
+      identity: older_cf_label_not_pooled
+      use_in_fit: false
+      torque_resolution_Nm: 0.01
+      columns_published: ["voltage_V", "throttle", "current_A", "input_power_W", "rpm", "torque_Nm", "thrust_g", "efficiency_g_per_W", "temperature"]
+      note: "Labelled '13*4.4 CF' (older CF series). C_T about 8 % below the P13*4.4 rows and C_P about 8 % above; kept as reference only (use_in_fit: false)."
+      rows:
+      - {thr: 50, V: 24, I: 0.9, Pel: 22, rpm: 3173, thrust_g: 311, torque_Nm: 0.06}
+      - {thr: 55, V: 24, I: 1.1, Pel: 26, rpm: 3415, thrust_g: 358, torque_Nm: 0.07}
+      - {thr: 60, V: 24, I: 1.4, Pel: 34, rpm: 3660, thrust_g: 416, torque_Nm: 0.07}
+      - {thr: 65, V: 24, I: 1.7, Pel: 41, rpm: 3914, thrust_g: 477, torque_Nm: 0.09}
+      - {thr: 75, V: 24, I: 2.4, Pel: 58, rpm: 4394, thrust_g: 608, torque_Nm: 0.11}
+      - {thr: 85, V: 24, I: 3.3, Pel: 79, rpm: 4876, thrust_g: 754, torque_Nm: 0.13}
+      - {thr: 100, V: 24, I: 4.2, Pel: 101, rpm: 5317, thrust_g: 895, torque_Nm: 0.16}
+    - id: mn4004_cf13x4_4_2
+      source_url: https://store.tmotor.com/product/mn4004-kv300-motor-antigravity-type.html
+      accessed: '2026-10-05'
+      test_motor: "MN4004 KV400"
+      prop_label_in_source: "13*4.4CF"
+      identity: older_cf_label_not_pooled
+      use_in_fit: false
+      torque_resolution_Nm: 0.01
+      columns_published: ["voltage_V", "throttle", "current_A", "input_power_W", "rpm", "torque_Nm", "thrust_g", "efficiency_g_per_W", "temperature"]
+      note: "Labelled '13*4.4 CF' (older CF series). C_T about 8 % below the P13*4.4 rows and C_P about 8 % above; kept as reference only (use_in_fit: false)."
+      rows:
+      - {thr: 50, V: 24, I: 1.8, Pel: 43, rpm: 3813, thrust_g: 448, torque_Nm: 0.08}
+      - {thr: 55, V: 24, I: 2.2, Pel: 53, rpm: 4146, thrust_g: 535, torque_Nm: 0.09}
+      - {thr: 60, V: 24, I: 2.7, Pel: 65, rpm: 4458, thrust_g: 609, torque_Nm: 0.1}
+      - {thr: 65, V: 24, I: 3.3, Pel: 79, rpm: 4736, thrust_g: 698, torque_Nm: 0.12}
+      - {thr: 75, V: 24, I: 4.6, Pel: 110, rpm: 5308, thrust_g: 885, torque_Nm: 0.14}
+      - {thr: 85, V: 24, I: 6.3, Pel: 151, rpm: 5841, thrust_g: 1067, torque_Nm: 0.18}
+      - {thr: 100, V: 24, I: 8.2, Pel: 197, rpm: 6391, thrust_g: 1311, torque_Nm: 0.21}
+    - id: mn4006_cf13x4_4_1
+      source_url: https://store.tmotor.com/product/mn4006-kv380-motor-antigravity-type.html
+      accessed: '2026-10-05'
+      test_motor: "MN4006 KV380"
+      prop_label_in_source: "13*4.4CF"
+      identity: older_cf_label_not_pooled
+      use_in_fit: false
+      torque_resolution_Nm: 0.01
+      columns_published: ["voltage_V", "throttle", "current_A", "input_power_W", "rpm", "torque_Nm", "thrust_g", "efficiency_g_per_W", "temperature"]
+      note: "Labelled '13*4.4 CF' (older CF series). C_T about 8 % below the P13*4.4 rows and C_P about 8 % above; kept as reference only (use_in_fit: false)."
+      rows:
+      - {thr: 50, V: 24, I: 2, Pel: 48, rpm: 3719, thrust_g: 544, torque_Nm: 0.1}
+      - {thr: 55, V: 24, I: 2.5, Pel: 60, rpm: 4528, thrust_g: 656, torque_Nm: 0.11}
+      - {thr: 60, V: 24, I: 3.1, Pel: 74, rpm: 4840, thrust_g: 753, torque_Nm: 0.12}
+      - {thr: 65, V: 24, I: 3.7, Pel: 89, rpm: 5155, thrust_g: 853, torque_Nm: 0.14}
+      - {thr: 75, V: 24, I: 5.1, Pel: 122, rpm: 5451, thrust_g: 1062, torque_Nm: 0.17}
+      - {thr: 85, V: 24, I: 6.8, Pel: 163, rpm: 6327, thrust_g: 1286, torque_Nm: 0.21}
+      - {thr: 100, V: 24, I: 9.7, Pel: 233, rpm: 6515, thrust_g: 1633, torque_Nm: 0.27}
+notes:
+- Fit uses the MN2806 tables labelled 'P13*4.4' only; MN4004/MN4006 tables labelled '13*4.4 CF' are stored as reference
+  (different C_T/C_P level, probably the older CF series).
+- T-Motor 'Power' is electrical input power; shaft power is derived from the published torque.

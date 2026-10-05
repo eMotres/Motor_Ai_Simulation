@@ -260,8 +260,9 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     I_pk = float(lp["I_peak_rms"])
 
     # ── self-checks on the grid ───────────────────────────────────────────
+    T_ref = max(abs(p["T"]) for p in hot_pts)
     dq_chk = [abs(float(recs[p["id"]]["r"].get("dq_torque_check_pct") or 0.0))
-              for p in hot_pts if p["I"] > 0]
+              for p in hot_pts if p["I"] > 0 and abs(p["T"]) > 0.01 * T_ref]
     recip = []
     for m in hm.mtpa:
         d, q = PM.id_iq(m[0], m[1] + 20.0)

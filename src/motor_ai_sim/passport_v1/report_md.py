@@ -221,6 +221,23 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
         a("")
         a(table(["I/I0", "I A", "γ_MTPA °", "T N·m", "vertex vs parabola"], rows))
         a("")
+    # ── envelope ──────────────────────────────────────────────────────────
+    a("## Operating envelope at the bus (hot map, I ≤ I_peak, FW to 80°, m = 0.95)")
+    a("")
+    for M in Ms:
+        env = recs[M]["envelope"]
+        rows = []
+        for i, pt in enumerate(env["nom"]["torque_speed"]):
+            cells = [f(pt["rpm"], 5)]
+            for w in ("min", "nom", "max"):
+                q = env[w]["torque_speed"][i]
+                cells.append("—" if q.get("T") is None else "%s (%s)" % (
+                    f(q["T"]), "MTPA" if q.get("mode") == "mtpa" else "FW %s°" % f(q["gamma"], 3)))
+            rows.append(cells)
+        a("**%s** — max virgin-map torque [N·m] vs speed (× k_state ≈ 0.98 for operating)" % M)
+        a("")
+        a(table(["n rpm", "v_min", "v_nom", "v_max"], rows))
+        a("")
     # ── loss trajectory ──────────────────────────────────────────────────
     a("## Loss trajectory (hot, settled TDM + demag, v_nom, m = 0.95)")
     a("")

@@ -22,6 +22,7 @@ machines:
     owner_rated: {rpm: 13000.0, I_arms: 42.78}
     owner_peak: {rpm: 14400.0, I_arms: 48.79}
     audit: true
+    k3d: {k_T: stage_b_inherited}
     stage_a_lengths_mm: [12.0, 20.0]
     controller:
       status: set
@@ -63,6 +64,7 @@ machines:
       source: >-
         L12 owner peak/rated current ratio 48.79/42.78 applied to I0 (labelled
         assumption; the L20 card's peak needs an owner duty)
+    k3d: {k_T: stage_b_inherited}
     stage_a_lengths_mm: [20.0]
     controller:
       status: set

@@ -33,6 +33,8 @@ Schema (keys not listed are rejected, so a typo fails closed)::
         stage_a_lengths_mm: [13.0]
         mech: {critical_speeds: false, beam: {...}}
         cooling_studies: [...]       # coupled continuous / limits runs
+        k3d: {k_T: stage_b_inherited | k_psi}           # how the card's k_T is taken
+        propellers: [ids]            # propellers judged against the motor (propeller_air)
 """
 from __future__ import annotations
 
@@ -44,7 +46,7 @@ _TOP = {"die", "inputs_subdir", "origin", "workspace_user", "report_stage1", "ti
 _MACHINE = {"config", "rated_duty", "peak_duty", "version", "owner_bus_V", "owner_rated",
             "owner_peak", "peak_rule", "hot_override", "controller", "pwm_variants",
             "not_computed_variants", "stage_a_lengths_mm", "mech", "cooling_studies",
-            "audit", "notes"}
+            "audit", "k3d", "propellers", "notes"}
 _PLAN = {"loss_speed_factors", "envelope_max_factor", "refine_points"}
 
 

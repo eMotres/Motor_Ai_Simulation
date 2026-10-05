@@ -1,0 +1,201 @@
+# ============================================================
+# Power-device card — Infineon IGC016K10S2
+# CoolGaN(TM) Transistor 100 V G5 with integrated Schottky diode (e-mode GaN
+# HEMT), PG-TSON-6 (3 x 5 mm, exposed die on top)
+# ============================================================
+# Added 2026-10-05 for the Ø40 motor passport (owner addendum: Infineon
+# support suggested GaN HEMTs; this is the part on Infineon's
+# REF_MTR_48V30A_PSC3_GaN board) — for the 12S build, also valid for 6S.
+# Same card layout and provenance convention as the OptiMOS 6 cards.
+#
+# Source: Infineon "IGC016K10S2 Final datasheet", Revision 1.1, 2026-09-18
+# https://www.infineon.com/assets/row/public/documents/24/49/infineon-igc016k10s2-datasheet-en.pdf
+# Reference design (gate drive, R_G): Infineon UG074356 REF_MTR_48V30A_PSC3_GaN
+# user guide V1.1 2026-09-16 (local copy C:\Users\vadim\Downloads) — 2EDL5014AA
+# driver, 5 V gate, R_G,on 5.1 ohm / R_G,off 0 ohm (split outputs), 50 kHz
+# nominal / 100 kHz max, two devices in parallel per switch on that board.
+#
+# GaN FACTS: no body diode — reverse conduction through the channel, here
+# CLAMPED by the integrated monolithic Schottky (V_SD 0.9 V at 0.5 A, 1.7 V at
+# 30 A, Table 8); Q_rr = 0; E_oss published (Diagram 16) and added by the loss
+# model on the times-and-charges basis; no switching-time / E_on-E_off table.
+#
+# Units: V, A, ohm (`_ohm`), mOhm (`_mohm`), degC, W, K/W, nC, pF, uJ.
+# ============================================================
+
+part: IGC016K10S2
+manufacturer: Infineon
+family: "CoolGaN 100 V G5 (integrated Schottky)"
+technology: gan_hemt
+package: PG-TSON-6
+package_common_name: "3 x 5 mm PQFN, exposed die (top side)"
+cooling: top_side
+marking: "16KA2"
+
+package_size_mm:
+  source: "Datasheet section 6 (Package outlines), PG-TSON-6 — same outline family as IGC019S06S1"
+  length_mm: 5.10
+  width_mm: 3.10
+  height_mm: 1.032
+  lead_pitch_mm: 1.075
+  leads: 6
+weight_g: null
+
+footprint:
+  package_outline_id: PG-TSON-6
+  outline_source: "Datasheet section 6 (Package outlines)"
+  land_pattern_ref: "Datasheet section 6 (Package outlines)"
+  land_pattern_note: "Outline dimensions taken from the PG-TSON-6-U01 table of IGC019S06S1 (same package family); check against this datasheet's own section 6 before a layout."
+  body_height_mm: 1.032
+  body_height_source: "PG-TSON-6-U01 table (A max)"
+  top_tab_mm: null
+  top_tab_note: "exposed die on top, internally connected to SOURCE (page 1 note) — size not transcribed"
+  compatibility_group: tson6_3x5
+  compatibility_basis: "PG-TSON-6 3 x 5 mm, same outline family as IGC019S06S1."
+datasheet_revision: "1.1, 2026-09-18"
+datasheet_url: "https://www.infineon.com/assets/row/public/documents/24/49/infineon-igc016k10s2-datasheet-en.pdf"
+
+ratings:
+  source: "Datasheet Table 2 (Maximum ratings), Table 3 (Recommended operating conditions)"
+  v_dss_V: 100
+  v_ds_pulse_V: 120
+  i_d_continuous:
+    - {t_case_c: 25,  i_a: 105, basis: table}
+    - {t_case_c: 50,  i_a: 97,  basis: figure, tolerance_pct: 5}
+    - {t_case_c: 75,  i_a: 88,  basis: figure, tolerance_pct: 5}
+    - {t_case_c: 100, i_a: 74,  basis: figure, tolerance_pct: 5}
+    - {t_case_c: 125, i_a: 55,  basis: figure, tolerance_pct: 8}
+  i_d_pcb_limited_A_at_ta25: 29
+  i_d_pcb_limited_note: "Table 2: V_GS = 5 V, T_A = 25 degC, R_thJA = 38 degC/W (4-layer FR4, vertical, still air)."
+  i_d_pulsed_A: 970             # T_j = 25 degC (380 A at T_j = 125 degC), Table 2
+  i_d_pulsed_125c_A: 380
+  p_tot_W:
+    - {t_case_c: 25, p_w: 45, basis: table}
+  p_tot_pcb_limited_W_at_ta25: 3.3
+  t_j_max_c: 150
+  t_storage_c: {min: -55, max: 150}
+  v_gs_static_V: {min: -4.0, max: 6.0}     # Table 3 (typ 5.0)
+  v_gs_pulsed_V: {min: -7.0, max: 7.0}     # Table 2, pulsed, 100 h total time
+  e_as_mJ: null
+
+gate:
+  source: "Datasheet Table 5 (V_GS(th), R_G) and Table 7 (Gate charge characteristics)"
+  v_gs_th_V: {min: 1.2, typ: 2.0, max: 2.9, at_t_j_c: 25, note: "V_DS = V_GS, I_D = 12 mA"}
+  v_plateau_V: 2.6
+  q_g_nC: 15.0                  # typ, V_DS=50V, I_D=30A, V_GS=0..5V
+  q_g_max_nC: null
+  q_gs_nC: 5.4
+  q_gth_nC: 3.5
+  q_gd_nC: 4.6
+  q_gd_max_nC: null
+  q_sw_nC: 6.5                  # -> Qgs2 = 1.9 nC
+  q_g_sync_nC: null
+  gate_charge_test_conditions: "V_DS = 50 V, I_D = 30 A, V_GS = 0 to 5 V (Table 7)"
+  r_g_internal_ohm: 0.65
+
+r_ds_on:
+  source: >-
+    Datasheet Table 5 (1.3 typ / 1.6 max mOhm at V_GS = 5 V, I_D = 30 A,
+    25 degC) and Diagram 11 (normalised R_DS(on) vs T_j, I_D = 30 A, V_GS = 5 V).
+  measured_at_i_d_A: 30
+  curves:
+    - v_gs_on_V: 5
+      points:
+        - {t_j_c: -40, r_mohm: 0.74, basis: figure, tolerance_pct: 10}
+        - {t_j_c: 0,   r_mohm: 1.04, basis: figure, tolerance_pct: 8}
+        - {t_j_c: 25,  r_mohm: 1.3,  basis: table, anchor: true, r_mohm_max: 1.6}
+        - {t_j_c: 50,  r_mohm: 1.56, basis: figure, tolerance_pct: 8}
+        - {t_j_c: 75,  r_mohm: 1.86, basis: figure, tolerance_pct: 8}
+        - {t_j_c: 100, r_mohm: 2.24, basis: figure, tolerance_pct: 8}
+        - {t_j_c: 125, r_mohm: 2.64, basis: figure, tolerance_pct: 10}
+        - {t_j_c: 150, r_mohm: 3.15, basis: figure, tolerance_pct: 10}
+
+capacitance:
+  source: "Datasheet Table 6, Table 7 (Q_oss) and Diagram 16 (E_oss = f(V_DS))"
+  at_v_ds_V: 50
+  c_iss_pF: 1700
+  c_iss_max_pF: null
+  c_oss_pF: 750
+  c_oss_max_pF: null
+  c_rss_pF: 17
+  c_rss_max_pF: null
+  q_oss_nC: 65                  # typ, V_DS = 50 V
+  q_oss_max_nC: null
+  c_o_er_pF: null
+  e_oss_uJ: 1.28                # Diagram 16 at 50 V (figure)
+  e_oss_curve:                  # Diagram 16, typ, hand-read (tolerance ~10 %)
+    - {v_ds_V: 0,   e_uJ: 0.0}
+    - {v_ds_V: 10,  e_uJ: 0.08}
+    - {v_ds_V: 20,  e_uJ: 0.30}
+    - {v_ds_V: 30,  e_uJ: 0.55}
+    - {v_ds_V: 40,  e_uJ: 0.88}
+    - {v_ds_V: 50,  e_uJ: 1.28}
+    - {v_ds_V: 60,  e_uJ: 1.70}
+    - {v_ds_V: 80,  e_uJ: 2.65}
+    - {v_ds_V: 100, e_uJ: 3.70}
+
+switching:
+  source: >-
+    Datasheet Table 7 (gate charge, V_DS = 50 V, I_D = 30 A, V_GS = 0..5 V).
+    NO switching-time table and NO E_on/E_off table are published.
+  energy_source: times_and_charges
+  v_dd_ref_V: 50
+  i_d_ref_A: 30
+  v_gs_ref_V: 5
+  r_g_ext_ref_ohm: 5.1          # NOT a datasheet value (none published): the turn-on R_G of
+                                 # Infineon's GaN motor reference board (UG074356 §5.3); only the
+                                 # validator's fallback reference — every solve states its own R_g
+  note: >-
+    overlap estimate from Q_gd and Qgs2 = Q_sw - Q_gd; the request states
+    R_g,ext (reference board: 5.1 ohm turn-on, 0 ohm turn-off — the model's
+    single R_g takes the turn-on value, which over-reads the turn-off).
+    E_oss added separately.  A LOWER BOUND on the turn-on overlap.
+  times_ns: null
+
+third_quadrant:
+  source: "Datasheet Table 8 (Reverse operation) and Diagrams 7/8 (reverse output characteristics)"
+  i_sd_continuous:
+    - {t_case_c: 25, i_a: 32, basis: table}
+  i_sm_A: 420
+  v_sd_at_20A:
+    - {t_j_c: 25, v: 1.7, basis: table, v_max: null, i_a: 30,
+       note: "V_SD, V_GS = 0 V, I_S,pulse = 30 A, T_j = 25 degC (Table 8) — NOT 20 A, see i_a"}
+  reverse_recovery:
+    q_rr_nC_typ: 0               # Table 8, V_R=50V, I_S=30A, di/dt=100A/us (defined by design)
+    q_rr_nC_max: null
+    t_rr_ns_typ: null
+    v_r_ref_V: 50
+    i_f_ref_A: 30
+    di_dt_ref_A_us: 100
+    source: "Datasheet Table 8 — no reverse recovery (GaN HEMT + integrated Schottky)"
+  curves:
+    # V_GS = 0 V: the integrated Schottky carries the reverse current first
+    # (0.9 V at 0.5 A, 1.7 V at 30 A — Table 8), the channel joins above
+    # ~2.8 V (Diagram 7).
+    - v_gs_off_V: 0
+      t_j_c: 25
+      basis: table+figure
+      tolerance_pct: 10
+      points: [[0.9, 0.5], [1.7, 30.0], [2.5, 55.0], [2.85, 100.0], [3.2, 200.0]]
+    - v_gs_off_V: 0
+      t_j_c: 125
+      basis: figure
+      tolerance_pct: 20
+      points: [[0.7, 0.5], [1.6, 25.0], [2.8, 50.0], [3.5, 100.0], [4.2, 200.0]]
+  channel_on_note: >-
+    With the gate ON the reverse current flows in the channel at I·R_DS(on);
+    the curves above apply during the dead time only (0 V gate-off assumed).
+
+thermal:
+  source: "Datasheet Table 4 (Thermal characteristics)"
+  r_th_jc_k_w: {typ: 0.5, max: 0.6}
+  r_th_jc_note: "TOP (exposed die) junction-case path, Table 4 — the cooled side of this package; bottom path documented below."
+  r_th_jc_top_k_w: {typ: 0.5, max: 0.6}
+  r_th_jc_bottom_k_w: {typ: 1.9, max: 2.8}
+  r_th_ja_k_w: {max: 38}
+  r_th_ja_note: "Table 4: 38 K/W 2s2p with vias (60 K/W 1s0p). Board numbers, not used."
+  z_th_jc_curve: null
+
+catalog:
+  status: active
+  revision: {n: 1, date: "2026-10-05", by: owner-request-gan-hemts, why: "card added (Infineon support suggestion; REF_MTR_48V30A_PSC3_GaN part)"}

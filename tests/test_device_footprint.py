@@ -45,6 +45,8 @@ def test_shipped_groups_are_the_owners():
         pkg = _doc(part)["package"]
         if pkg.startswith("PG-HDSOP-22-U0"):          # U01 750 V and U03 1200 V
             assert g == "qdpak_750_1200", part
+        elif pkg == "PG-TSON-6":                     # CoolGaN 3 x 5 mm (2026-10-05)
+            assert g == "tson6_3x5", part
         else:
             assert (pkg, g) == ("PG-WHSON-8", "whson8_tson8"), part
 

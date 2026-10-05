@@ -688,6 +688,7 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
     e_on, e_off, e_fr = [], [], []
     extrapolated = False
     notes: List[str] = []
+    energy_kind = None
     for x in ladder:
         e = card.e_switch(i_d_A=float(x), t_j_c=t_j_c, v_dc_V=v_dc,
                           v_gs_off_V=v_gs_off, r_g_ext_ohm=r_g,
@@ -695,6 +696,7 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
                           r_g_off_ext_ohm=r_g_off, l_sigma_nH=l_sigma_nH)
         e_on.append(e["e_on_J"]); e_off.append(e["e_off_J"]); e_fr.append(e["e_fr_J"])
         extrapolated = extrapolated or bool(e["extrapolated"])
+        energy_kind = energy_kind or e.get("switching_energy_source")
         if not notes:
             notes = list(e["notes"])
     tot = np.array(e_on) + np.array(e_off) + np.array(e_fr)
@@ -707,6 +709,19 @@ def _leg_losses(*, card: DeviceCard, i_leg: np.ndarray, n_par: int,
     e_oss = card.e_oss_J(v_dc)
     p_oss_ref = float(f_sw) * n * float(e_oss or 0.0)
     p_oss = p_oss_ref if e_oss_policy == "added" else 0.0
+    # The TIMES-AND-CHARGES overlap model is 0.5·V·I·(t_i + t_v): it carries
+    # no output-capacitance energy at all, so "included in E_on" is false on
+    # that basis.  A card that publishes E_oss (GaN HEMTs do — the loss that
+    # dominates their hard turn-on) gets it ADDED there (2026-10-05).  Every
+    # card without an E_oss number (all the Si OptiMOS cards) is unchanged,
+    # and measured-curve / SPICE bases keep the stated policy.
+    if (e_oss_policy != "added" and energy_kind == "times_and_charges"
+            and e_oss is not None):
+        p_oss = p_oss_ref
+        notes = list(notes) + [
+            "E_oss added: the times-and-charges overlap model excludes the "
+            "output-capacitance energy, and this card publishes E_oss "
+            f"({float(e_oss) * 1e6:.3g} uJ at {float(v_dc):g} V)"]
 
     return {
         "p_conduction_W": p_cond,

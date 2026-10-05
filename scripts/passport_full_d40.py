@@ -309,10 +309,26 @@ def task_pwm(work: Path, a) -> None:
         raise SystemExit("%s %s: no operating angle at m = %g" % (M, point, m))
     g = round(g, 3)
     Tm, Tc = snap["temperatures"]["hot_magnet_c"], snap["temperatures"]["hot_coil_c"]
+    t_src = "snapshot hot temperatures (rated duty)"
+    cp_path = _out(work, "coupled_" + M)
+    if cp_path.exists():
+        cpl = (json.load(open(cp_path, encoding="utf-8")).get("coupling") or {})
+        if cpl.get("converged") and cpl.get("coil_temp_c") is not None:
+            Tm, Tc = float(cpl["magnet_temp_c"]), float(cpl["coil_temp_c"])
+            t_src = ("coupled EM-thermal rated loop, converged (owner default 4, "
+                     "pending owner)")
     sim._BACKGROUND_RUN.set(True)
+    ctrl = dict(CONTROLLER["common"], **CONTROLLER[M])
+    if a.device:
+        ctrl["device"] = a.device
+    if a.dead_us:
+        ctrl["dead_time_us"] = float(a.dead_us)
+    if a.fsw:
+        ctrl["f_carrier_hz"] = float(a.fsw)
     rec: Dict[str, Any] = {"task": "pwm", "machine": M, "point": point, "I": I, "rpm": n,
                            "gamma": g, "gamma_mode": how, "v_dc": vdc, "m_limit": m,
-                           "controller": dict(CONTROLLER["common"], **CONTROLLER[M])}
+                           "temps": {"magnet_c": Tm, "coil_c": Tc, "source": t_src},
+                           "controller": ctrl}
     t0 = time.time()
     # 1) the sine current-drive run at the point: the feed-forward fundamental
     s = sim.get_fem_transient(**_route_kw(snap, I=I, g=g, rpm=n, Tm=Tm, Tc=Tc,
@@ -323,15 +339,16 @@ def task_pwm(work: Path, a) -> None:
     v1, dl = float(ss["V1_seed_peak_V"]), float(ss["V1_seed_delta_deg"])
     # 2) the Controller's bridge
     f_el = n * 7 / 60.0
-    fsw = float(a.fsw or CONTROLLER["common"]["f_carrier_hz"])
+    fsw = float(ctrl["f_carrier_hz"])
     nc = max(int(round(fsw / f_el)), 1)
     steps = PWM_SAMPLES_PER_CARRIER * nc
-    card = get_device(CONTROLLER[M]["device"])
+    card = get_device(ctrl["device"])
+    gan = str(card.doc.get("technology") or "").startswith("gan")
     drop = fit_device_drop(card, t_j_c=CONTROLLER["common"]["t_j_assumed_c"],
                            n_parallel=1, i_leg_peak_A=I * math.sqrt(2.0),
-                           v_gs_on_V=CONTROLLER["common"]["v_gs_on_V"],
+                           v_gs_on_V=(5.0 if gan else CONTROLLER["common"]["v_gs_on_V"]),
                            v_gs_off_V=0.0,
-                           dead_time_s=float(a.dead_us or CONTROLLER["common"]["dead_time_us"]) * 1e-6)
+                           dead_time_s=float(ctrl["dead_time_us"]) * 1e-6)
     kw = _route_kw(snap, I=I, g=g, rpm=n, Tm=Tm, Tc=Tc, steps=steps)
     kw.update(drive="inverter", v_bus=vdc, f_switch=fsw, v_phase_peak=v1,
               v_delta_deg=dl, harm_ref=True, inv_modulation="svpwm",
@@ -357,7 +374,8 @@ def task_pwm(work: Path, a) -> None:
         rec["pwm_error"] = "%s: %s" % (type(e).__name__, getattr(e, "detail", e))
         traceback.print_exc()
     rec["pwm_wall_s"] = time.time() - t1
-    tag = "pwm_%s_%s" % (M, point) + ("" if not a.fsw else "_%dk" % int(fsw / 1000))
+    tag = "pwm_%s_%s_%s_%dk_%dns" % (M, point, card.part, int(round(fsw / 1000)),
+                                      int(round(float(ctrl["dead_time_us"]) * 1000)))
     _dump(_out(work, tag), rec)
 
 
@@ -399,6 +417,7 @@ def main(argv=None) -> None:
     ap.add_argument("--max-iter", type=int, default=6)
     ap.add_argument("--fsw", type=float, default=None)
     ap.add_argument("--dead-us", type=float, default=None)
+    ap.add_argument("--device", default=None)
     ap.add_argument("rest", nargs="*")
     a = ap.parse_args(argv)
     work = Path(a.work)

@@ -72,12 +72,16 @@ machines:
       critical_note: >-
         not computed: the configuration names no bearings and no shaft line (no beam
         to solve); rotor stress only
+    # propellers judged against the motor (config/cooling_options.yaml lists the same);
+    # the propeller-air studies take the slipstream of the proposed default (G40x13.1) —
+    # the other props' air speed at the same rpm differs by at most ~15 % (h by ~8 %)
+    propellers: [tmotor_g30x10_5, tmotor_g32x11, tmotor_g36x11_5, tmotor_g40x13_1]
     cooling_studies:
       # continuous (S1) ratings and the peak time-to-limit, coupled EM-thermal loop
       # (routes.coupled.run), per cooling option of config/cooling_options.yaml
       - {id: robotics_s1_n1000, cooling: robotics, solve_to: continuous, rpm: 1000.0, current: rated}
       - {id: robotics_peak_n1000, cooling: robotics, solve_to: limits, rpm: 1000.0, current: peak}
-      - {id: propeller_s1_n1000, cooling: propeller_air, solve_to: continuous, rpm: 1000.0, current: rated}
-      - {id: propeller_s1_n1500, cooling: propeller_air, solve_to: continuous, rpm: 1500.0, current: rated}
-      - {id: propeller_s1_n2000, cooling: propeller_air, solve_to: continuous, rpm: 2000.0, current: rated}
-      - {id: propeller_peak_n1000, cooling: propeller_air, solve_to: limits, rpm: 1000.0, current: peak}
+      - {id: propeller_s1_n1000, cooling: propeller_air, propeller: tmotor_g40x13_1, solve_to: continuous, rpm: 1000.0, current: rated}
+      - {id: propeller_s1_n1500, cooling: propeller_air, propeller: tmotor_g40x13_1, solve_to: continuous, rpm: 1500.0, current: rated}
+      - {id: propeller_s1_n2000, cooling: propeller_air, propeller: tmotor_g40x13_1, solve_to: continuous, rpm: 2000.0, current: rated}
+      - {id: propeller_peak_n1000, cooling: propeller_air, propeller: tmotor_g40x13_1, solve_to: limits, rpm: 1000.0, current: peak}

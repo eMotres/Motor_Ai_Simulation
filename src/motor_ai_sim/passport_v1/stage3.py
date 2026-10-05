@@ -309,17 +309,33 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                                     % (m_max, p["gamma_mode"])}
                 continue
             anchor = fem.get(p["row"]) or {}
+            cross = None
+            si_cls = pwm_fem.get("si48_100ns") or {}
+            if (anchor.get("dP_harm_W") is None and (fem.get("rated") or {}).get("dP_harm_W")
+                    and (si_cls.get(p["row"]) or {}).get("dP_harm_W")
+                    and (si_cls.get("rated") or {}).get("dP_harm_W")):
+                # this class has no FEM at this current row: its rated anchor
+                # × the Si class's row/rated ratio (same machine, same point)
+                k_row = float(si_cls[p["row"]]["dP_harm_W"]) / float(si_cls["rated"]["dP_harm_W"])
+                anchor = dict(si_cls[p["row"]])
+                anchor["dP_harm_W"] = float(fem["rated"]["dP_harm_W"]) * k_row
+                cross = ("rated FEM anchor of this class × Si 48 kHz %s/rated ratio %.3f"
+                         % (p["row"], k_row))
             dP, how = None, None
             if anchor.get("dP_harm_W") is not None:
                 a_n = float(anchor["rpm"])
                 m_a = float(anchor["m_index"])
                 m_p = m_pt["V_phase_peak_V"] / (v_dc / 2.0)
-                if abs(a_n - p["rpm"]) < 1e-6:
+                if abs(a_n - p["rpm"]) < 1e-6 and cross:
+                    dP, how = float(anchor["dP_harm_W"]), cross
+                    cov["scaled"].append(p["key"])
+                elif abs(a_n - p["rpm"]) < 1e-6:
                     dP, how = float(anchor["dP_harm_W"]), "FEM"
                     cov["fem"].append(p["key"])
                 else:
                     dP = float(anchor["dP_harm_W"]) * hdf_svpwm(m_p) / max(hdf_svpwm(m_a), 1e-12)
-                    how = "FEM anchor at %.0f rpm × HDF(m %.3f)/HDF(m %.3f)" % (a_n, m_p, m_a)
+                    how = (("%s; " % cross) if cross else "") + \
+                        "FEM anchor at %.0f rpm × HDF(m %.3f)/HDF(m %.3f)" % (a_n, m_p, m_a)
                     cov["scaled"].append(p["key"])
             st = board.state(card, drv, I_rms=p["I_A"], f_sw=f_sw, dead_s=dead, v_dc=v_dc)
             inv = st["inv"]

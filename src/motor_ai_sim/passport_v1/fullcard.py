@@ -31,35 +31,53 @@ def _load(p: Path) -> Optional[Dict[str, Any]]:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def stage2_block(full_dir: Path, repo: Path, L_mm: float) -> Dict[str, Any]:
-    sa = _load(full_dir / "stage_a.json")
+    import re
     ee = _load(repo / "config" / "end_effect_3d.json") or {}
     sb = ee.get("stage_b") or {}
     lsf = ((sb.get("long_stack_honesty_test") or {}).get("the_inductive_end_effect_factor") or {})
     a, b = lsf.get("fit_a_uH_per_mm"), lsf.get("fit_b_uH")
     kT12 = ((sb.get("torque") or {}).get("k_T"))
     out: Dict[str, Any] = {"L_mm": L_mm}
+    # (1) the 20 mm stack, its own run (JSON) with the 2-D leg
+    s20 = _load(full_dir / "stage_a_L20.json")
+    B1_2d = ((s20 or {}).get("two_d") or {}).get("B1_T")
     curve = []
-    if sa:
-        for r in sa.get("l_stack_curve") or []:
-            curve.append({"stack_mm": r.get("stack_mm"), "k_flux": r.get("k_flux"),
-                          "k_flux_self": r.get("k_flux_self"),
-                          "picard_converged": r.get("picard_converged")})
-        curve.sort(key=lambda r: r["stack_mm"])
+    if s20:
+        curve.append({"stack_mm": 20.0, "k_flux_self": s20.get("k_flux_self"),
+                      "B1_mid_T": (s20.get("spill_profile") or {}).get("B1_mid_T")
+                      or s20.get("B1_mid_T"),
+                      "k_psi": s20.get("k_flux"), "picard_converged":
+                          ((s20.get("model") or {}).get("picard") or {}).get("converged"),
+                      "source": "out/full/stage_a_L20.json (own cold run + 2-D leg)"})
+    # (2) the stopped 7-point sweep: the 12 mm reference and the 6 mm leg (log)
+    logp = full_dir / "stage_a_sweep_killed_log.txt"
+    if logp.exists():
+        txt = logp.read_text(encoding="utf-8", errors="replace")
+        m = re.search(r"B1\(mid\) = ([0-9.]+) T, k_flux_self = ([0-9.]+)", txt)
+        if m:
+            B1m, ks = float(m.group(1)), float(m.group(2))
+            curve.append({"stack_mm": 12.0, "k_flux_self": ks, "B1_mid_T": B1m,
+                          "k_psi": (ks * B1m / B1_2d) if B1_2d else None,
+                          "picard_converged": True,
+                          "source": "stopped sweep, reference stack (log; Picard 2.2e-3 "
+                                    "< 3e-3 at iteration 44)"})
+        for mm in re.finditer(r"L =\s+([0-9.]+) mm\s+k_self = ([0-9.]+)", txt):
+            curve.append({"stack_mm": float(mm.group(1)), "k_flux_self": float(mm.group(2)),
+                          "B1_mid_T": None, "k_psi": None, "picard_converged": None,
+                          "source": "stopped sweep, warm-started leg (log; self-referenced "
+                                    "only — mid-plane B1 not printed)"})
+    curve.sort(key=lambda r: r["stack_mm"])
     out["k_psi_curve"] = curve
-    kpsi = None
-    if curve:
-        xs = [r["stack_mm"] for r in curve if r["k_flux"] is not None]
-        ys = [r["k_flux"] for r in curve if r["k_flux"] is not None]
-        if xs:
-            kpsi = float(np.interp(L_mm, xs, ys))
-    out["k_psi"] = {"value": kpsi, "method": "3-D magnetostatic Stage A (I = 0): axial mean of "
-                    "the gap fundamental / the 2-D leg, interpolated in L; today's die "
-                    "cross-section, n_stack 4 (quick fidelity)",
+    kpsi = next((r["k_psi"] for r in curve if abs(r["stack_mm"] - L_mm) < 1e-6
+                 and r["k_psi"] is not None), None)
+    out["k_psi"] = {"value": kpsi, "method": "3-D magnetostatic Stage A (I = 0): axial mean "
+                    "of the gap fundamental over the stack / the 2-D gap fundamental "
+                    "(k_flux_self × B1_mid,3D / B1_2D), at this machine's own stack; "
+                    "today's die cross-section, n_stack 4 (quick fidelity)",
+                    "B1_2d_T": B1_2d,
                     "labels": ["3-D", "no-load", "quick fidelity"],
-                    "source": "out/full/stage_a.json" if sa else "NOT AVAILABLE",
-                    "wall_s": ((sa or {}).get("pilot") or {}).get("wall_s"),
-                    "converged_all": (all(r["picard_converged"] for r in curve)
-                                      if curve else None)}
+                    "sweep_note": "7-point L-sweep stopped after 6 mm (69 min per warm-started "
+                                  "length under load); 12 and 20 mm solved, 6 mm self-ratio only"}
     kT = None
     if kT12 is not None:
         kT = 1.0 - (1.0 - float(kT12)) * 12.0 / float(L_mm)
@@ -379,8 +397,8 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
     t = inp["temperatures"]
     bat = inp["battery"]
     o = []
-    o.append(f"<h1>{Hh.esc(rec['machine']['configuration'])} — {M} passport</h1>")
-    o.append(f'<p class="sub">Die {Hh.esc(rec["machine"]["die"])} · bus {bat["v_min"]:g}/'
+    o.append(f"<h1>{Hh.esc(rec['machine']['die'])} · {M} — motor passport</h1>")
+    o.append(f'<p class="sub">Stack {float(rec["stage2_3d"]["L_mm"]):g} mm · bus {bat["v_min"]:g}/'
              f'{bat["v_nom"]:g}/{bat["v_max"]:g} V ({bat.get("cells")}S) · hot magnets '
              f'{t["hot_magnet_c"]:g} °C / winding {t["hot_coil_c"]:g} °C · m = '
              f'{rec["loss_grid"]["plan"]["m"]:g} · {Hh.labels(rec["labels"])}</p>')
@@ -413,17 +431,22 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
                  if p.get("duty") and "peak" not in str(p.get("duty")) and p["I_A"] == rp["I_rms"]]
     for v in rec["pwm_variants"]:
         if not v.get("points"):
-            rows.append([v["id"], v.get("device"), "—", "—", "—", "—", H_(v.get("status", ""))])
+            rows.append([v["id"], v.get("device"), "—", "—", "—", "—", "—",
+                         H_(v.get("status", ""))])
             continue
         pr = [p for p in v["points"].values() if p.get("duty") and abs(p["rpm"] - rp["rpm"]) < 1e-6
               and abs(p["I_A"] - rp["I_rms"]) < 1e-6]
         pr = pr[0] if pr else {}
         bc = pr.get("p_cont_max_W_by_cooling") or {}
+        best = max(((p.get("p_cont_max_W") or 0.0, p["rpm"]) for p in v["points"].values()),
+                   default=(None, None))
         rows.append([v["id"], v["device"], v["i_board_limit_A"]["favourable"],
                      bc.get("favourable"), bc.get("weak"), bc.get("hot_motor"),
+                     f"{Hh.fmt(best[0])} @ {best[1]:.0f}" if best[0] else "—",
                      Hh.H(Hh.labels(["estimate", PEND]))])
-    o.append(Hh.table(["variant", "device", "board-limit I (fav.) A", "P cont. fav. W",
-                       "weak W", "hot motor W", "basis"], rows, left_cols=2))
+    o.append(Hh.table(["variant", "device", "board-limit I (fav.) A",
+                       "P cont. @ rated rpm, fav. W", "weak W", "hot motor W",
+                       "best P cont. W @ rpm", "basis"], rows, left_cols=2))
     o.append(f'<p class="note">Motor rated {rp["I_rms"]:.2f} A / {Hh.fmt(_v(rp["P_shaft_W"]))} W '
              f'shaft at {rp["rpm"]:.0f} rpm. Controller ratings (Si, README): '
              f'{Hh.esc(S3.RATINGS[CTRL[M]["build"]]["W"])} W. System limit = the lower.</p>')
@@ -547,9 +570,11 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
         add(k + " (hot)", d)
     o.append(Hh.table(["quantity", "value", "unit", "basis"], rows, left_cols=1))
     o.append("<h2>3-D factors</h2>")
-    rows = [[r["stack_mm"], r["k_flux"], r["k_flux_self"], r["picard_converged"]]
+    rows = [[r["stack_mm"], r.get("k_psi"), r.get("k_flux_self"), r.get("B1_mid_T"),
+             r.get("picard_converged"), Hh.H(Hh.esc(r.get("source", "")))]
             for r in s2["k_psi_curve"]]
-    o.append(Hh.table(["stack mm", "k_ψ (3-D/2-D)", "k_flux_self", "converged"], rows))
+    o.append(Hh.table(["stack mm", "k_ψ (3-D/2-D)", "k_flux_self", "B1 mid T", "converged",
+                       "source"], rows))
     o.append(Hh.table(["factor", "value at this stack", "basis"],
                       [["k_ψ", _v(s2["k_psi"]), Hh.H(Hh.esc(s2["k_psi"]["method"]) + Hh.labels(s2["k_psi"]["labels"]))],
                        ["k_T", _v(s2["k_T"]), Hh.H(Hh.esc(s2["k_T"]["method"]) + Hh.labels(s2["k_T"]["labels"]))],

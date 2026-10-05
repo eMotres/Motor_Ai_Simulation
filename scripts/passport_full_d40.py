@@ -115,16 +115,27 @@ def task_stage_a(work: Path, a) -> None:
     snap = _snap(work, "L12")
     set_request_materials({"assignment": _materials(snap), "materials": {}})
     L0 = float(snap["geometry"]["motor_length"])
-    lengths = [6.0, 9.0, 12.0, 16.0, 20.0, 24.0, 30.0]
     t0 = time.time()
-    p = run_stage_a(geo_override=dict(snap["geometry"]), n_stack=4,
-                    l_factors=tuple(L / L0 for L in lengths),
-                    do_bracket=True, do_2d=True, verbose=True)
-    p["pilot"] = {"fidelity": "quick (n_stack=4), 7-point L-sweep 6–30 mm, "
-                              "today's die cross-section (L12 and L20 share it)",
+    if a.length:
+        # ONE stack length as its own reference (cold start), + the 2-D leg:
+        # the 7-point warm-started sweep cost 69 min per length under load
+        # (2026-10-05) — the card needs 12 mm (L12) and 20 mm (L20).
+        geo = dict(snap["geometry"])
+        geo["motor_length"] = float(a.length)
+        p = run_stage_a(geo_override=geo, n_stack=4, l_factors=(1.0,),
+                        do_bracket=False, do_2d=True, verbose=True)
+        name = "stage_a_L%g" % float(a.length)
+    else:
+        lengths = [6.0, 9.0, 12.0, 16.0, 20.0, 24.0, 30.0]
+        p = run_stage_a(geo_override=dict(snap["geometry"]), n_stack=4,
+                        l_factors=tuple(L / L0 for L in lengths),
+                        do_bracket=True, do_2d=True, verbose=True)
+        name = "stage_a"
+    p["pilot"] = {"fidelity": "quick (n_stack=4), today's die cross-section (L12 and L20 "
+                              "share it)",
                   "wall_s": time.time() - t0, "geometry_sig_L12":
                       snap["signatures"]["geometry_sig"]}
-    _dump(_out(work, "stage_a"), p)
+    _dump(_out(work, name), p)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -501,6 +512,7 @@ def main(argv=None) -> None:
     ap.add_argument("--dead-us", type=float, default=None)
     ap.add_argument("--device", default=None)
     ap.add_argument("--fi", type=float, default=None)
+    ap.add_argument("--length", type=float, default=None)
     ap.add_argument("rest", nargs="*")
     a = ap.parse_args(argv)
     work = Path(a.work)

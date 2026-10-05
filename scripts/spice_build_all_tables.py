@@ -96,7 +96,8 @@ def grid(part: str, doc: dict) -> dict:
                 "extra": [(d40_set(part), d["v"], [25.0, 75.0, 125.0, 175.0], D40_I),
                           (d40_set(part, D40_L_LOOP_PESS_NH), [v_nom], [25.0, 125.0],
                            D40_I)],
-                "v_gs_on": 10.0, "v_gs_off": [0.0], "i_static": 90.0}
+                "v_gs_on": 10.0, "v_gs_on_extra": [12.0],   # the build's UCC27289 rail
+                "v_gs_off": [0.0], "i_static": 90.0}
     if part in LV:
         return {"v": [22.2, 44.4], "t": [25.0, 75.0, 125.0, 175.0],
                 "i": [5.0, 12.0, 20.0, 31.0, 44.0, 60.0],
@@ -150,13 +151,15 @@ def static_rows(part: str, g: dict, be) -> dict:
     rows_f, rows_r, notes = [], [], []
     i_max = g["i_static"]
     for t in STATIC_T:
-        r = run_static(m, kind="rds", t_j=t, v_gs=g["v_gs_on"], i_max=i_max,
-                       i_step=i_max / 16, backend=be, v_max=2.0 if part in LV_ALL else 5.0)
-        i = np.asarray(r["i_A"], float); o = np.argsort(i)
-        for x in np.linspace(0, i_max, 17)[1:]:
-            rows_f.append([g["v_gs_on"], t, round(float(x), 3),
-                           round(float(np.interp(x, i[o], np.asarray(r["v_kelvin_V"])[o])), 6),
-                           round(float(np.interp(x, i[o], np.asarray(r["v_pin_V"])[o])), 6)])
+        for vgs in [g["v_gs_on"]] + list(g.get("v_gs_on_extra") or []):
+            r = run_static(m, kind="rds", t_j=t, v_gs=vgs, i_max=i_max,
+                           i_step=i_max / 16, backend=be,
+                           v_max=2.0 if part in LV_ALL else 5.0)
+            i = np.asarray(r["i_A"], float); o = np.argsort(i)
+            for x in np.linspace(0, i_max, 17)[1:]:
+                rows_f.append([vgs, t, round(float(x), 3),
+                               round(float(np.interp(x, i[o], np.asarray(r["v_kelvin_V"])[o])), 6),
+                               round(float(np.interp(x, i[o], np.asarray(r["v_pin_V"])[o])), 6)])
         for voff in g["v_gs_off"]:
             r = run_static(m, kind="vsd", t_j=t, v_gs=voff, i_max=i_max,
                            i_step=i_max / 16, backend=be, v_max=6.0 if part not in LV_ALL else 1.5)

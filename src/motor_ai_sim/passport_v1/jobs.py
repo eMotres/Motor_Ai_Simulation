@@ -262,6 +262,18 @@ def worker_init(materials_assignment: Mapping[str, str]) -> None:
     _WORKER_STATE["materials"] = dict(materials_assignment)
 
 
+def wait_while_paused(poll_s: float = 20.0) -> None:
+    """Hold before a FEM solve while the pause flag exists.  On the shared
+    server a host-side watcher creates ``$PASSPORT_PAUSE_FLAG`` whenever a user
+    job is running or queued on the live API (owner rule: sandbox runs yield
+    to the user's own jobs); a solve already under way is not interrupted."""
+    flag = os.environ.get("PASSPORT_PAUSE_FLAG")
+    if not flag:
+        return
+    while os.path.exists(flag):
+        time.sleep(poll_s)
+
+
 def run_job(job: Mapping[str, Any], out_dir: str) -> Dict[str, Any]:
     """Solve one job; write the pruned raw result (gz JSON) and return the
     compact record.  Exceptions are captured — a failed run is a record too
@@ -270,6 +282,7 @@ def run_job(job: Mapping[str, Any], out_dir: str) -> Dict[str, Any]:
     from motor_ai_sim.simulation.fem_solver_2d import em_transient_eval
     set_request_materials({"assignment": dict(_WORKER_STATE.get("materials") or {}),
                            "materials": {}})
+    wait_while_paused()
     t0 = time.time()
     rec: Dict[str, Any] = {"id": job["id"], "meta": dict(job.get("meta") or {}),
                            "pid": os.getpid(),

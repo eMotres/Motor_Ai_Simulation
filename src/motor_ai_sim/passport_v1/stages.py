@@ -534,7 +534,7 @@ def _reuse_or_job(R, prefix, n, I, g, how, b, snap, I0, set_name, extra_meta=Non
     steps = int(snap["rated_duty"]["steps_per_period"])
     for rid, rec in R.done.items():
         k = rec.get("kw") or {}
-        if (rec.get("meta") or {}).get("set") in ("loss", "loss2", "loss_check", "loss_check2") \
+        if (rec.get("meta") or {}).get("set") in ("loss", "loss2", "loss3", "loss_check", "loss_check2") \
                 and k.get("eddy") and k.get("demag") \
                 and abs(float(k.get("rpm", -1)) - n) < 1e-6 \
                 and abs(float(k.get("I_phase_rms", -1)) - I) < 1e-6 \
@@ -611,6 +611,56 @@ def stage_loss2(R, snap, st) -> None:
     print("  loss plan (m %.2f):" % m, [(p["rpm"], round(p["I"], 2),
                                          p["gamma"] and round(p["gamma"], 2), p.get("id"))
                                         for p in plan], flush=True)
+    R.run(jl)
+
+
+def stage_loss3(R, snap, st) -> None:
+    """The m = 0.89 loss trajectory extended to the static map's current
+    levels (0.25 … 2.5 · I0) up to the demag current limit, at every loss-grid
+    speed (2026-10-05, Configure needs the drive variants over the whole
+    current range, incl. below I0).  Every existing settled point at the same
+    (n, I, gamma) is reused; ``loss_plan3`` supersedes ``loss_plan2``."""
+    from motor_ai_sim.passport_v1 import psimap as PM
+    b = _base(snap, st, static=False)
+    I0 = _I0(snap)
+    hm = hot_map(R, snap, st)
+    Rh = R_hot(R, st)
+    lp2 = st["loss_plan2"]
+    m = float(lp2["m"])
+    vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), m)
+    I_pk = float(lp2["I_peak_rms"])
+    I_lim = float(st.get("demag_limit_I_rms") or LEVELS[-1] * I0)
+    currents = sorted({round(f * I0, 6) for f in LEVELS if f * I0 <= I_lim * (1 + 1e-9)}
+                      | {round(c, 6) for c in lp2["currents"]})
+    pk = snap.get("peak_duty")
+    # + the peak duty's own speed: every node of the drive-variant grid is then
+    # a settled FEM loss point (no speed extrapolation of a current row)
+    speeds = sorted(set(float(n) for n in lp2["speeds"])
+                    | ({float(pk["rpm"])} if pk else set()))
+    plan, jl = [], []
+    for n in speeds:
+        for I in currents:
+            g, how = hm.operating_gamma(I, n, Rh, vlim)
+            row = {"rpm": n, "I": I, "gamma": g, "mode": how}
+            if g is not None:
+                jid, job = _reuse_or_job(R, "loss3", n, I, g, how, b, snap, I0, "loss3")
+                row["id"] = jid
+                if job:
+                    jl.append(job)
+            plan.append(row)
+    st["loss_plan3"] = dict(lp2, speeds=speeds, currents=currents, points=plan,
+                            current_cap_I_rms=I_lim,
+                            current_cap_source=st.get("demag_limit_source")
+                            or "2.5·I0 (top static level)",
+                            extended="2026-10-05: static current levels 0.25…2.5·I0 up to "
+                                     "the demag current limit, every loss-grid speed")
+    from motor_ai_sim.passport_v1 import losses as LS
+    for n in speeds:
+        st["mech"].setdefault(str(n), LS.mech_losses(rpm=n, bearings=snap["bearings"],
+                                                     geometry=snap["geometry"], temp_c=None))
+    print("  loss plan 3 (m %.2f): %d points, %d new jobs" % (m, len(plan), len(jl)),
+          [(p["rpm"], round(p["I"], 2), p["gamma"] and round(p["gamma"], 2), p.get("id"))
+           for p in plan], flush=True)
     R.run(jl)
 
 

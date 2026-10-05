@@ -364,6 +364,29 @@ def stage_cold(R, snap, st) -> None:
     print("  cold MTPA:", [(c["fI"], c["gamma_mtpa"], c["T_fem_vertex"]) for c in cold])
 
 
+#: Cell refinement after the first check pass (spec P04 "refine cells from
+#: withheld centres/edges"): the FW arm is halved to 7.5° between 35° and 65°
+#: at the two highest levels, where L20's first pass missed the ψ target.
+REFINE_POINTS = ((2.0, 42.5), (2.0, 57.5), (2.5, 42.5), (2.5, 57.5))
+
+
+def stage_refine(R, snap, st) -> None:
+    Tm, Tc = _hot(snap)
+    b = _base(snap, st)
+    I0, n0 = _I0(snap), _n0(snap)
+    jl = []
+    for fI, g in REFINE_POINTS:
+        jl.append(J.static_job("hot_I%.4g_g%s" % (fI, _g(g)), b, I_rms=fI * I0, gamma_deg=g,
+                               magnet_temp_c=Tm, coil_temp_c=Tc, rpm=n0,
+                               meta={"set": "hot", "fI": fI, "gamma": g,
+                                     "role": "fw refinement (P04, after the first check pass)"}))
+    R.run(jl)
+    st["refinement"] = {"points": [list(p) for p in REFINE_POINTS],
+                        "reason": "first check pass: L20 (2.25·I0, 42.5°) ψ +1.0 %, "
+                                  "(2.25·I0, 57.5°) ψ +0.52 % — FW arm 15° too coarse at "
+                                  "the top levels; checks themselves are NOT added to the grid"}
+
+
 #: Small-signal (bench / LCR-equivalent) probe current [A rms] — the same
 #: 2 A the solver's bench Ld/Lq probe uses (routes.simulation bench_ldq).
 SMALL_SIGNAL_A = 2.0

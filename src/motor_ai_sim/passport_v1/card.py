@@ -554,6 +554,9 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     }
     # ── checks ────────────────────────────────────────────────────────────
     chk_static = static_check_rows(recs, st, hm, I0)
+    pts0 = [p for p in hot_pts if not str(p.get("role") or "").startswith("fw refinement")]
+    chk_static_first = (static_check_rows(recs, st, PM.PsiMap.build(pts0, pp, mtpa=hm.mtpa), I0)
+                        if len(pts0) != len(hot_pts) else None)
     chk_loss = loss_check_rows(recs, st, R_hot, snap)
     indep = {}
     for jid, ref in (("full_rated_mtpa", m1["conf_id"]), ("full_peak", "chk_peak")):
@@ -685,7 +688,10 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                                        "of a current row, linear in I; DC copper analytic "
                                        "3·I²·R_hot; never extrapolated past the grid speeds",
                       "mech": mech},
-        "checks": {"static_offgrid": chk_static, "loss_offgrid": chk_loss,
+        "checks": {"static_offgrid": chk_static,
+                   "static_offgrid_first_pass": chk_static_first,
+                   "refinement": st.get("refinement"),
+                   "loss_offgrid": chk_loss,
                    "independent_torque_B1_window_P05": indep, "time_step_B4": ts,
                    "duties": duties, "audit": audit},
         "stage2_3d": {"status": NOT_COMPUTED_STAGE1,

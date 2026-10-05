@@ -53,12 +53,15 @@ def interp_loss(n: float, I: float, rows: Mapping[float, Sequence[Mapping[str, A
     linear in I between the rows.  DC copper analytic: 3·I²·R (star phase)."""
     Is = sorted(rows)
     out: Dict[str, Any] = {"n": n, "I": I, "groups": {}, "notes": []}
-    if I < Is[0] - 1e-9 or I > Is[-1] + 1e-9:
+    tol = 1e-6 * max(abs(Is[-1]), 1.0)       # row keys are rounded to 1e-6 A
+    if I < Is[0] - tol or I > Is[-1] + tol:
         out["notes"].append("current outside the grid rows — refused")
         out["P_total_W"] = None
         return out
-    lo = max(x for x in Is if x <= I + 1e-9)
-    hi = min(x for x in Is if x >= I - 1e-9)
+    lo = max(x for x in Is if x <= I + tol)
+    hi = min(x for x in Is if x >= I - tol)
+    if hi < lo:
+        hi = lo
     tot = 3.0 * I * I * R_dc_hot
     out["groups"]["P_cu_dc_W"] = tot
     for g in GROUPS:

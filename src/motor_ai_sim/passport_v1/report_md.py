@@ -146,7 +146,7 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
         "map × loss-trajectory state factor")
     row("peak η at the shaft", "%",
         lambda r: f(100 * _v(r["card"]["peak_point"], "eta_shaft")),
-        "map T + interpolated losses")
+        "operating T + interpolated losses")
     for k, lab, u in (("psi_PM_Wb", "ψ_PM", "mWb"), ("Kv_rpm_per_V_line", "Kv (line pk)", "rpm/V")):
         row(lab + " cold / hot", u,
             lambda r, k=k: "%s / %s" % (
@@ -274,21 +274,30 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
     a("")
     for M in Ms:
         rows = []
+        first = {c["id"]: c for c in (recs[M]["checks"].get("static_offgrid_first_pass") or [])}
         for c in recs[M]["checks"]["static_offgrid"]:
             if "err_T_pct" not in c:
-                rows.append([c["id"], "—", "—", "—", "—", "—", c.get("status", "")])
+                rows.append([c["id"], "—", "—", "—", "—", "—", "—", c.get("status", "")])
                 continue
+            c0 = first.get(c["id"])
+            fp = ("%s / %s" % (pct(max(abs(c0["err_psi_d_pct_of_abs_psi"]),
+                                       abs(c0["err_psi_q_pct_of_abs_psi"])), 2),
+                               pct(c0["err_T_pct"], 2)) if c0 and "err_T_pct" in c0 else "—")
             rows.append([c["id"], "%s A, %s°" % (f(c["I_rms"]), f(c["gamma"], 3)),
                          pct(max(abs(c["err_psi_d_pct_of_abs_psi"]),
                                  abs(c["err_psi_q_pct_of_abs_psi"])), 3),
                          pct(c["err_T_pct"], 3), pct(c["err_T_psi_pct"], 3),
                          "%s / %s" % (f(c["ripple_int_pct"], 3), f(c["ripple_fem_pct"], 3)),
+                         fp,
                          ok(c["pass"]) + ("" if c["ripple_ok"] else " (ripple ✘)")])
         a("**%s** — targets ψ ≤ 0.5 %%, T ≤ 1 %%, ripple ≤ max(0.5 pp, 10 %%)" % M)
         a("")
         a(table(["point", "I, γ", "max ψ err", "T err (T-map)", "T err (from ψ)",
-                 "ripple int / FEM %", "verdict"], rows))
+                 "ripple int / FEM %", "first pass ψ / T", "verdict"], rows))
         a("")
+    a("First pass = grid before the P04 cell refinement (FW arm halved to 7.5° between 35° "
+      "and 65° at 2.0 and 2.5·I0, 4 points); the check points are never grid points.")
+    a("")
     a("## Off-grid checks — losses (trajectory interpolation vs direct FEM)")
     a("")
     for M in Ms:

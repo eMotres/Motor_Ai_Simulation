@@ -88,3 +88,43 @@ export function estimateThermal(g: ThermalGeom, l: ThermalLosses, c: ThermalCool
     dT_conv_C: dT_conv, dT_winding_C: dT_winding, dT_magnet_C: dT_magnet,
   };
 }
+
+// ── STILL AIR (the robot-joint cooling, `robotics`) ───────────────────────────────────────
+// A mirror of the backend's `cooling_models.outer_still` (Churchill–Chu on the housing diameter,
+// film properties at ½(T_wall + T_air), PLUS radiation at the housing's emissivity to the air
+// temperature, view factor 1) — no floor, the correlation is the still-air one itself.  The film
+// depends on the wall temperature, so `estimateThermalStill` iterates it against the estimate.
+const STEFAN_BOLTZMANN = 5.670374419e-8;
+export const ROBOTICS_EMISSIVITY = 0.9;      // the robotics mode's default (thermal_duty_cycle)
+
+/** h_conv + h_rad [W/m²K] of a horizontal cylinder (housing) in still air. */
+export function outerStillH(tWall_C: number, tAir_C: number, d_m: number, emissivity = ROBOTICS_EMISSIVITY): { h: number; h_conv: number; h_rad: number } {
+  const d = Math.max(d_m || 0, 1e-4);
+  const tFilm = 0.5 * (tWall_C + tAir_C);
+  const r = Math.max(tFilm + 273.15, 100) / 273.15;
+  const k = 0.0242 * r ** 0.83, nu = 1.33e-5 * r ** 1.75, pr = 0.707;
+  const beta = 1 / Math.max(tFilm + 273.15, 1);
+  const dt = Math.abs(tWall_C - tAir_C);
+  const ra = 9.81 * beta * dt * d ** 3 / Math.max(nu * (nu / pr), 1e-30);
+  const nuD = (0.60 + 0.387 * Math.max(ra, 0) ** (1 / 6) / (1 + (0.559 / pr) ** (9 / 16)) ** (8 / 27)) ** 2;
+  const h_conv = nuD * k / d;
+  const tw = tWall_C + 273.15, te = tAir_C + 273.15;
+  const e = Math.min(Math.max(emissivity, 0), 1);
+  const h_rad = e * STEFAN_BOLTZMANN * (tw * tw + te * te) * (tw + te);
+  return { h: h_conv + h_rad, h_conv, h_rad };
+}
+
+/** `estimateThermal` with the still-air + radiation film evaluated at the housing temperature it
+ *  produces (fixed point, damped; converges in a few passes because h ∝ ~ΔT^0.15). */
+export function estimateThermalStill(g: ThermalGeom, l: ThermalLosses, ambient_C: number, emissivity = ROBOTICS_EMISSIVITY): ThermalEstimate {
+  const D = mm(g.statorOD_mm) || 0.1;
+  let tW = ambient_C + 30;
+  let est = estimateThermal(g, l, { h_Wm2K: outerStillH(tW, ambient_C, D, emissivity).h, ambient_C });
+  for (let i = 0; i < 40; i++) {
+    const next = 0.5 * tW + 0.5 * est.T_housing_C;
+    if (Math.abs(next - tW) < 0.01) break;
+    tW = next;
+    est = estimateThermal(g, l, { h_Wm2K: outerStillH(tW, ambient_C, D, emissivity).h, ambient_C });
+  }
+  return est;
+}

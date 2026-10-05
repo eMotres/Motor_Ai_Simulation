@@ -100,9 +100,12 @@ t('COOLING: the housing film follows the propeller air; more rpm = cooler windin
   assert.ok(Math.abs(b.dT_winding_C - a.dT_winding_C) < 1e-12 && Math.abs(b.dT_magnet_C - a.dT_magnet_C) < 1e-12);
 });
 
-t('which cooling is the propeller: only when `propeller_air` is the ONLY option', () => {
+t('which cooling is the propeller: the only option, or the one in force among several (2026-10-05)', () => {
   assert.equal(P.isPropellerCooled({ restricted: true, cooling_options: ['propeller_air'] }), true);
-  assert.equal(P.isPropellerCooled({ restricted: true, cooling_options: ['propeller_air', 'liquid'] }), false);
+  // two options: the first is in force until the user picks the other (configuratorCooling.test.mjs)
+  assert.equal(P.isPropellerCooled({ restricted: true, cooling_options: ['propeller_air', 'liquid'] }), true);
+  assert.equal(P.isPropellerCooled({ restricted: true, cooling_options: ['propeller_air', 'liquid'] }, { cooling: 'liquid' }), false);
+  assert.equal(P.isPropellerCooled({ restricted: true, cooling_options: ['robotics', 'propeller_air'] }), false);
   assert.equal(P.isPropellerCooled({ restricted: false, cooling_options: null }), false);
   assert.equal(P.isPropellerCooled({ restricted: true, cooling_options: [] }), false);
   assert.equal(P.isPropellerCooled(null), false);
@@ -199,14 +202,14 @@ t('ZONES on the real motor: with the real propeller the speed knob goes green ->
 
 t('the panel: no Thermal block for a propeller-cooled die, ONE temperatures row, the load derived from the propeller', () => {
   const panel = readFileSync(join(HERE, '..', '..', 'components', 'compare', 'ConfiguratorPanel.tsx'), 'utf8');
-  assert.match(panel, /\{ctxDone && !cooled && \(\s*<Box sx=\{\{ px: 2, pb: 1\.5 \}\}>\s*<ConfiguratorThermal/);   // only for the others, and not before the context answered
+  assert.match(panel, /\{ctxDone && !tempOn && \(\s*<Box sx=\{\{ px: 2, pb: 1\.5 \}\}>\s*<ConfiguratorThermal/);   // only for the others, and not before the context answered
   assert.equal((panel.match(/<ConfiguratorThermal/g) || []).length, 1);
-  assert.match(panel, /\{cooled && \(\s*<Box sx=\{\{ display: 'flex', gap: 0\.75, flexWrap: 'wrap' \}\}>\s*\{tempTiles\.map\(renderTemp\)\}/);
+  assert.match(panel, /\{tempOn && \(\s*<Box sx=\{\{ display: 'flex', gap: 0\.75, flexWrap: 'wrap' \}\}>\s*\{tempTiles\.map\(renderTemp\)\}/);
   assert.equal((panel.match(/tempTiles\.map\(renderTemp\)/g) || []).length, 1);                              // one row
   assert.match(panel, /currentForTorque\(propPoint\?\.torque_Nm \?\? null, torqueAtI\(knobs\), ranges\.I_A\.max\)/);
   assert.match(panel, /disabled=\{propLoad\}/);                                                              // the current is shown, not typed, in propeller mode
   assert.match(panel, /updateCool\(\{ load: v \}\)/);                                                       // the manual-load toggle
-  assert.match(panel, /zone=\{cooled \? zones\.rpm : null\}/);                                               // thermal zones on the speed knob
+  assert.match(panel, /zone=\{tempOn \? zones\.rpm : null\}/);                                               // thermal zones on the speed knob
   assert.match(panel, /zone=\{propLoad \? null : zones\.I\}/);                                               // and on the current knob in manual mode
   // power and efficiency go red on a refusal and carry the red line
   assert.equal((panel.match(/absLevel=\{propBad \? 'bad' : undefined\}/g) || []).length, 2);

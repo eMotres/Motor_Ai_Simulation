@@ -69,10 +69,34 @@ export interface CoolingInfo {
   defaults?: Record<string, string> | null;
 }
 
-/** True when the propeller's slipstream is the machine's ONLY cooling. */
-export function isPropellerCooled(c: CoolingInfo | null | undefined): boolean {
+/** The cooling options a die is restricted to (config/cooling_options.yaml), in the file's order;
+ *  [] for an unrestricted die (every cooling mode stays on offer, as before). */
+export function coolingOptions(c: CoolingInfo | null | undefined): string[] {
   const o = c?.cooling_options;
-  return !!c?.restricted && Array.isArray(o) && o.length > 0 && o.every((x) => x === 'propeller_air');
+  return c?.restricted && Array.isArray(o) ? o.filter((x) => typeof x === 'string' && x.length > 0) : [];
+}
+
+/** The cooling in force: the user's remembered pick if the die offers it, else the die's FIRST
+ *  option; `null` for an unrestricted die.  (A die may offer two — the Ø85 serves a robot joint in
+ *  still air AND a propeller drive, owner 2026-10-05.) */
+export function effectiveCooling(c: CoolingInfo | null | undefined, choice?: { cooling?: string | null } | null): string | null {
+  const o = coolingOptions(c);
+  if (!o.length) return null;
+  return choice?.cooling && o.includes(choice.cooling) ? choice.cooling : o[0];
+}
+
+/** The cooling selector is shown only when the die offers more than one cooling. */
+export const showCoolingSelector = (c: CoolingInfo | null | undefined): boolean => coolingOptions(c).length > 1;
+
+/** True when the propeller's slipstream is the machine's cooling in force: its ONLY cooling, or
+ *  the one picked among several. */
+export function isPropellerCooled(c: CoolingInfo | null | undefined, choice?: { cooling?: string | null } | null): boolean {
+  return effectiveCooling(c, choice) === 'propeller_air';
+}
+
+/** True when the robot-joint still-air cooling (`robotics`) is in force. */
+export function isRoboticsCooled(c: CoolingInfo | null | undefined, choice?: { cooling?: string | null } | null): boolean {
+  return effectiveCooling(c, choice) === 'robotics';
 }
 
 /** A catalogue entry as `GET /api/propellers` lists it. */
@@ -188,7 +212,7 @@ export function zoneSamples(min: number, max: number, n = 48): number[] {
 export const PROP_CHOICE_LS = 'configurator.propeller.v1';
 export const DEFAULT_AMBIENT_C = 25;
 
-export interface CoolChoice { propId?: string | null; ambient?: number; load?: 'prop' | 'manual' }
+export interface CoolChoice { propId?: string | null; ambient?: number; load?: 'prop' | 'manual'; cooling?: string | null }
 
 const okAmbient = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= -60 && v <= 80;
 
@@ -203,6 +227,7 @@ export function readCoolChoice(raw: string | null, refId: string): CoolChoice {
     if (typeof o.propId === 'string' && o.propId) out.propId = o.propId;
     if (okAmbient(o.ambient)) out.ambient = o.ambient;
     if (o.load === 'prop' || o.load === 'manual') out.load = o.load;
+    if (typeof o.cooling === 'string' && o.cooling) out.cooling = o.cooling;
     return out;
   } catch { return {}; }
 }

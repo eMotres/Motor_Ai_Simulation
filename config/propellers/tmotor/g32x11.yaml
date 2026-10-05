@@ -1,0 +1,79 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+# Added 2026-10-05 for the Ø85 die (CIANO28 85 20SW1200): large G-series props whose torque at
+# 1000-2400 rpm lies inside that motor's torque range.
+schema: propeller-1
+id: tmotor_g32x11
+vendor: T-MOTOR
+model: G32*11
+series: G series (glossy carbon fiber, 2 blades integrated)
+status: current
+product_url: https://www.ligpower.com/product/g32x11-glossy-carbon-fiber-propeller.html
+source_urls:
+- https://www.ligpower.com/product/g32x11-glossy-carbon-fiber-propeller.html
+- https://store.tmotor.com/product/u13-v2-kv65-motor-u-power.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 32.0
+  diameter_mm: 812.8
+  pitch_in: 11.0
+  pitch_mm: 279.4
+  blades: 2
+material: CF+Epoxy, glossy
+mass_single_blade_g: 107   # 107±5 g as published
+published_limits:
+  optimum_rpm:
+  - 1200
+  - 3000
+  thrust_limit_kg: 35
+  ambient_temp_c: [-40, 65]
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  tables:
+    - id: u13ii_kv130_g32x11_48v
+      source_url: https://store.tmotor.com/product/u13-v2-kv65-motor-u-power.html
+      accessed: '2026-10-05'
+      test_motor: "U13 II KV130 (48 V)"
+      prop_label_in_source: "T-MOTOR G32*11 CF"
+      identity: older_cf_label_not_pooled
+      use_in_fit: false
+      torque_resolution_Nm: 0.1
+      columns_published: ["type", "voltage_V", "propeller", "throttle", "thrust_g", "torque_Nm", "current_A", "rpm", "power_W", "efficiency_g_per_W", "operating_temperature"]
+      note: "Labelled 'G32*11 CF' (KV130 build, 48 V). Its C_T is about 20 % and C_P about 15 % below the KV65 table of the same page at the same rpm; pooled they fit to 11 % rms. Kept as reference only (use_in_fit: false), as the catalogue does for the older CF labels."
+      rows:
+      - {thr: 50, V: 48.0, I: 20.4, Pel: 979.0, rpm: 2612, thrust_g: 7700, torque_Nm: 3.1}
+      - {thr: 55, V: 48.0, I: 30.8, Pel: 1478.0, rpm: 3000, thrust_g: 10000, torque_Nm: 4.0}
+      - {thr: 60, V: 48.0, I: 38.4, Pel: 1843.0, rpm: 3215, thrust_g: 11500, torque_Nm: 4.7}
+      - {thr: 65, V: 48.0, I: 46.7, Pel: 2242.0, rpm: 3428, thrust_g: 13500, torque_Nm: 5.5}
+      - {thr: 75, V: 48.0, I: 65.4, Pel: 3139.0, rpm: 3832, thrust_g: 16700, torque_Nm: 6.9}
+      - {thr: 85, V: 48.0, I: 83.7, Pel: 4018.0, rpm: 4164, thrust_g: 19700, torque_Nm: 8.1}
+      - {thr: 100, V: 48.0, I: 117.9, Pel: 5659.0, rpm: 4609, thrust_g: 24300, torque_Nm: 10.0}
+    - id: u13ii_kv65_g32x11_99v
+      source_url: https://store.tmotor.com/product/u13-v2-kv65-motor-u-power.html
+      accessed: '2026-10-05'
+      test_motor: "U13 II KV65 (99.4 V)"
+      prop_label_in_source: "G32*11"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.1
+      columns_published: ["type", "voltage_V", "propeller", "throttle", "thrust_g", "torque_Nm", "current_A", "rpm", "power_W", "efficiency_g_per_W", "operating_temperature"]
+      note: ""
+      rows:
+      - {thr: 40, V: 99.44, I: 11.7, Pel: 1161.0, rpm: 2485, thrust_g: 8585, torque_Nm: 3.5}
+      - {thr: 45, V: 99.4, I: 13.8, Pel: 1374.0, rpm: 2639, thrust_g: 9671, torque_Nm: 3.9}
+      - {thr: 50, V: 99.36, I: 16.0, Pel: 1589.0, rpm: 2777, thrust_g: 10714, torque_Nm: 4.3}
+      - {thr: 55, V: 99.29, I: 18.7, Pel: 1854.0, rpm: 2922, thrust_g: 11871, torque_Nm: 4.7}
+      - {thr: 60, V: 99.23, I: 21.4, Pel: 2125.0, rpm: 3055, thrust_g: 13128, torque_Nm: 5.2}
+      - {thr: 65, V: 99.15, I: 25.3, Pel: 2512.0, rpm: 3235, thrust_g: 14798, torque_Nm: 5.9}
+      - {thr: 70, V: 99.06, I: 29.8, Pel: 2955.0, rpm: 3414, thrust_g: 16439, torque_Nm: 6.6}
+      - {thr: 75, V: 98.93, I: 34.9, Pel: 3450.0, rpm: 3596, thrust_g: 18380, torque_Nm: 7.4}
+      - {thr: 80, V: 98.78, I: 42.1, Pel: 4156.0, rpm: 3803, thrust_g: 20889, torque_Nm: 8.3}
+      - {thr: 90, V: 98.53, I: 54.7, Pel: 5392.0, rpm: 4125, thrust_g: 24982, torque_Nm: 9.9}
+      - {thr: 100, V: 98.22, I: 68.5, Pel: 6727.0, rpm: 4397, thrust_g: 28711, torque_Nm: 11.4}
+notes:
+- T-Motor 'Power (W)' is electrical input power (motor + ESC); shaft power is derived from the published torque.
+- Fit uses the U13 II KV65 table (99.4 V) only; the KV130 table at 48 V is stored as reference.
+- Torque is printed to 0.1 N*m (some rows as whole numbers, e.g. '4'); the fit skips rows below 5 x that resolution.

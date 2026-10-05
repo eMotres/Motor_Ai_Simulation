@@ -506,5 +506,17 @@
     "airSpeedTip": "Air speed over the motor: a fraction of the propeller's slipstream (momentum theory, motor behind the hub).",
     "blankLoading": "Waiting for the propeller data.",
     "blankRefused": "Withheld: the propeller load is refused."
+  },
+  "configureCooling": {
+    "title": "Cooling",
+    "tip": "This motor serves two uses with different cooling. Robot joint: still air around the housing, natural convection plus radiation. Propeller: the propeller's slipstream over the housing, and the propeller sets the load.",
+    "robotics": "Robot joint",
+    "roboticsTip": "Still air around the housing: natural convection plus radiation (emissivity 0.9). The current is set by hand.",
+    "propeller_air": "Propeller",
+    "propeller_airTip": "The propeller's slipstream cools the housing; the propeller sets the load.",
+    "ambientTip": "Ambient air temperature [°C] around the robot joint.",
+    "zoneTip": "Green: continuous below the temperature limits in still air; red: beyond.",
+    "tHousingTip": "Housing temperature: all the loss leaves through its surface into still air, by natural convection and radiation. It cannot be hotter than the winding it carries, so above {limit} °C the tile reads the limit with a >.\nStill air.\nFilm h {h} W/m²K (convection + radiation at this housing temperature).",
+    "airSpeedTip": "Still air: no forced airflow over a robot joint."
   }
 }

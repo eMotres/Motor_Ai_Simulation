@@ -156,7 +156,9 @@ export interface TempRowInput {
 const _n = (v: number) => String(Number(v.toFixed(0)));
 
 /** `null` input = nothing to show yet / refused: every tile is "—". */
-export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; magnet_C: number }): TempTileSpec[] {
+export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; magnet_C: number }, still = false): TempTileSpec[] {
+  // `still`: the robot-joint cooling (still air + radiation) — same tiles, its own housing / air tips
+  const ns = still ? 'configureCooling' : 'configurePropeller';
   const temp = (id: string, labelKey: string, tipKey: string, T: number | null, limit: number): TempTileSpec => {
     if (T == null || !Number.isFinite(T)) return { id, labelKey, tipKey, unit: '°C', d: 0, value: null, limit };
     if (T > limit) return { id, labelKey, tipKey, unit: '°C', d: 0, value: null, display: `> ${_n(limit)}`, level: 'bad', limit };
@@ -166,9 +168,9 @@ export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; m
     temp('tWinding', 'configurePropeller.tWinding', 'configurePropeller.tWindingTip', t ? t.T_winding_C : null, lim.winding_C),
     temp('tMagnet', 'configurePropeller.tMagnet', 'configurePropeller.tMagnetTip', t ? t.T_magnet_C : null, lim.magnet_C),
     // the housing has no limit of its own, but it can never be hotter than the winding it carries
-    { ...temp('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip', t ? t.T_housing_C : null, lim.winding_C),
+    { ...temp('tHousing', 'configurePropeller.tHousing', `${ns}.tHousingTip`, t ? t.T_housing_C : null, lim.winding_C),
       air: t ? t.air_speed_ms : null, h: t ? t.h_W_m2K : null },
-    { id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: 'configurePropeller.airSpeedTip', unit: 'm/s', d: 1,
+    { id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: `${ns}.airSpeedTip`, unit: 'm/s', d: 1,
       value: t ? t.air_speed_ms : null },
   ];
 }

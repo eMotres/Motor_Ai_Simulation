@@ -1,0 +1,29 @@
+# SPICE model manifest — IGC019S06S1 (CoolGaN 60 V G3, PG-TSON-6)
+# Written 2026-10-05 from what Infineon actually publishes for the part.
+part: IGC019S06S1
+status: not_published
+status_reason: >-
+  Infineon publishes no SPICE / simulation model for this part (checked
+  2026-10-05). The part's design-resources list
+  (dataApi part.designresources ... IGC019S06S1) carries only PCB design data
+  (footprints/symbols for Altium, Cadence, Cadstar, DesignSpark, Eagle, KiCad,
+  Mentor) and links to simulation TOOLS (Interactive Product Sheet); the
+  product-document list (ispnId 68326) carries the datasheet and one
+  application note. No "simulationmodels" asset under
+  /assets/row/public/documents/24/50/ matches the CoolGaN medium-voltage naming
+  pattern (the 650 V G5 one, infineon-coolgan-transistors-650-v-g5-spice-simulationmodels-en.zip,
+  exists; 60-v-g3 / 100-v-g5 variants return 404). Nothing was blocked by a
+  login or the WAF — the model simply is not public.
+source:
+  vendor: Infineon Technologies AG
+  product_page: https://www.infineon.com/part/IGC019S06S1
+  checked: "2026-10-05"
+  owner_action: >-
+    request the CoolGaN 60 V G3 SPICE model for IGC019S06S1 from Infineon
+    (FAE / support ticket); save the zip to C:\Users\vadim\Downloads
+generation_status: >-
+  NOT GENERATED (2026-10-05): no vendor model. The card's switching loss uses
+  the datasheet times-and-charges overlap model + the published E_oss curve
+  (labelled "datasheet model" on the passport and in pwm_variants).
+licence:
+  in_git: false

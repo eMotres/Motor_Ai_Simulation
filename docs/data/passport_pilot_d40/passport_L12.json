@@ -1,0 +1,6732 @@
+{
+ "schema": "passport-v1-pilot-1",
+ "convention_rev": "p03-1: gamma from q-axis, amplitude-invariant peak dq, motoring star",
+ "machine": {
+  "die": "CIANO14 40 new",
+  "configuration": "L12",
+  "version": "6S",
+  "tag": "L12"
+ },
+ "labels": [
+  "2-D",
+  "no 3-D end correction",
+  "sine current drive",
+  "no PWM",
+  "no controller losses"
+ ],
+ "pending_owner_defaults": {
+  "voltage_margin_m": {
+   "value": 0.95,
+   "status": "placeholder (spec P24) \u2014 not an owner decision"
+  },
+  "materials_library": {
+   "value": "deployed library (/srv/motres/shared/materials_library.yaml)",
+   "status": "PR #51 not merged \u2014 owner decision pending (B8)"
+  },
+  "settle_rule": {
+   "value": "spec 3.0.1 tail-bound proposal",
+   "status": "proposal \u2014 owner decision pending (B4/P06)"
+  }
+ },
+ "provenance": {
+  "snapshot_sha256": "685206ed5b28e44c55a1d32a9ffd9734a9ccc3dc5be678143f8165e45ed93eea",
+  "signatures": {
+   "geometry_sig": "713d68a176b97360f34a9d512d85cf3262f30bfd76d2e19ebae1dafa6eb3310f",
+   "winding_sig": "af3d04bece7f95ac85e8487320eca05bb7a1460f4923e351044e60f8ab51fbc5",
+   "materials_sig": "7cae09c102b712be855a6fe991b4b5138087929a81e60583ea23660a336ad877",
+   "thermal_sig": "5ac8e69ddb465d7725318038a1089386a97cca4150bb4bf9a0347fb174a44e07",
+   "bus_sig": "653a56cdd1188273b1f5e2ec07beb1f790fc6f70bb61b7ad15cadc7aec8f5ca5",
+   "mesh_sig": "a92c814f4c429ee8515996a71360ad4e0be36425391eaeef013dcfaf51d4f478",
+   "duty_sig": "e6f5f7ee2e29bb6317449d76967e54fcd08f4ac220ceb2605a7944e169d3b9a6",
+   "part_states_sig": "7741aa1edab7c8d540c60d10713ea7faa80c21a038993ab2529cc09e142349c7"
+  },
+  "baseline_runs": [
+   {
+    "code_commit": "c2c6ade58864e5a285e9c75ab0218971712a916e",
+    "code_dirty": false,
+    "source_tree": {
+     "root": "/work/code/src",
+     "n_files": 279,
+     "sha256": "0a1cce8f99246841236aa403a28d8a2bdbd55a8e72496a42cb562ded860c6c72"
+    },
+    "image_digest": "sha256:90cb75da173d8d18706008683371129f97026aed98342111a661922389951723",
+    "mounts": {
+     "/work": "/opt/motres/compute/passport-d40-20261005/work"
+    },
+    "python": "3.11.16",
+    "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+    "libs": {
+     "numpy": "2.4.4",
+     "scipy": "1.17.1",
+     "scikit-fem": "12.0.1",
+     "pypardiso": "0.4.7",
+     "netgen-mesher": "6.2.2607",
+     "mkl": "2026.1.0",
+     "gmsh": "4.15.2",
+     "PyYAML": "6.0.3",
+     "shapely": "2.1.2"
+    },
+    "blas": {
+     "blas": {
+      "name": "scipy-openblas",
+      "found": true,
+      "version": "0.3.31.188.0",
+      "detection method": "pkgconfig",
+      "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+      "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+      "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+      "pc file directory": "/project/.openblas"
+     },
+     "lapack": {
+      "name": "scipy-openblas",
+      "found": true,
+      "version": "0.3.31.188.0",
+      "detection method": "pkgconfig",
+      "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+      "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+      "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+      "pc file directory": "/project/.openblas"
+     }
+    },
+    "mesher": {
+     "backend": "netgen",
+     "gmsh": "4.15.2",
+     "netgen": "6.2.2607"
+    },
+    "env": {
+     "SB_NO_WARM_CACHE": "1",
+     "SHARED_ROOT": "/work/shared",
+     "MKL_THREADING_LAYER": "SEQUENTIAL",
+     "MKL_NUM_THREADS": "1",
+     "OMP_NUM_THREADS": "1",
+     "OPENBLAS_NUM_THREADS": "1",
+     "MOTOR_AI_SIM_CONFIG": "/work/ws_L12/motor_config.yaml"
+    },
+    "cpu_count": 16,
+    "solver_settings": {
+     "element_order": 2,
+     "torque_method": "coulomb",
+     "eddy_method": "tdm (solver default since 3ba0f9b)",
+     "tdm_demag": "full (one-period ratchet pre-pass)",
+     "nonlinear": "Newton, resid tol per solver default"
+    },
+    "invocation": {
+     "cmd": "run",
+     "machine": "L12",
+     "stages": "extra",
+     "workers": 6,
+     "started": "2026-10-05T07:45:03+0000"
+    },
+    "baseline_sig": "f2c69466f34af9c602e7f29ccbecd5b0a89b1c45779b84fb15eeacb06a6a9f44"
+   },
+   {
+    "code_commit": "2595399fba640d97ca178780d77b57344c4b649a",
+    "code_dirty": false,
+    "source_tree": {
+     "root": "/work/code/src",
+     "n_files": 279,
+     "sha256": "61c3f579f3ace98290022c19d44180ebbaebbae27f0246bfc297ee08d1e23f0a"
+    },
+    "image_digest": "sha256:90cb75da173d8d18706008683371129f97026aed98342111a661922389951723",
+    "mounts": {
+     "/work": "/opt/motres/compute/passport-d40-20261005/work"
+    },
+    "python": "3.11.16",
+    "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+    "libs": {
+     "numpy": "2.4.4",
+     "scipy": "1.17.1",
+     "scikit-fem": "12.0.1",
+     "pypardiso": "0.4.7",
+     "netgen-mesher": "6.2.2607",
+     "mkl": "2026.1.0",
+     "gmsh": "4.15.2",
+     "PyYAML": "6.0.3",
+     "shapely": "2.1.2"
+    },
+    "blas": {
+     "blas": {
+      "name": "scipy-openblas",
+      "found": true,
+      "version": "0.3.31.188.0",
+      "detection method": "pkgconfig",
+      "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+      "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+      "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+      "pc file directory": "/project/.openblas"
+     },
+     "lapack": {
+      "name": "scipy-openblas",
+      "found": true,
+      "version": "0.3.31.188.0",
+      "detection method": "pkgconfig",
+      "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+      "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+      "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+      "pc file directory": "/project/.openblas"
+     }
+    },
+    "mesher": {
+     "backend": "netgen",
+     "gmsh": "4.15.2",
+     "netgen": "6.2.2607"
+    },
+    "env": {
+     "OPENBLAS_NUM_THREADS": "1",
+     "SB_NO_WARM_CACHE": "1",
+     "MKL_THREADING_LAYER": "SEQUENTIAL",
+     "MKL_NUM_THREADS": "1",
+     "OMP_NUM_THREADS": "1",
+     "SHARED_ROOT": "/work/shared",
+     "MOTOR_AI_SIM_CONFIG": "/work/ws_L12/motor_config.yaml"
+    },
+    "cpu_count": 16,
+    "solver_settings": {
+     "element_order": 2,
+     "torque_method": "coulomb",
+     "eddy_method": "tdm (solver default since 3ba0f9b)",
+     "tdm_demag": "full (one-period ratchet pre-pass)",
+     "nonlinear": "Newton, resid tol per solver default"
+    },
+    "invocation": {
+     "cmd": "run",
+     "machine": "L12",
+     "stages": "refine",
+     "workers": 4,
+     "started": "2026-10-05T07:51:37+0000"
+    },
+    "baseline_sig": "8f4de8a0b49bcfe01c2213c65faaa7ae2a4e2550478118ac9b5f9171629be3e8"
+   }
+  ],
+  "baseline_assemble": {
+   "code_commit": "2595399fba640d97ca178780d77b57344c4b649a",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 279,
+    "sha256": "61c3f579f3ace98290022c19d44180ebbaebbae27f0246bfc297ee08d1e23f0a"
+   },
+   "image_digest": "sha256:90cb75da173d8d18706008683371129f97026aed98342111a661922389951723",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d40-20261005/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "SHARED_ROOT": "/work/shared",
+    "MKL_NUM_THREADS": "1"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "assemble",
+    "machine": null,
+    "stages": null,
+    "workers": null,
+    "started": "2026-10-05T07:52:14+0000"
+   },
+   "baseline_sig": "b18885f52eebc6aceab1f1b2683c67aa28e89039eda3965898b31b33edc12752"
+  },
+  "d_axis_deg": 59.9911,
+  "d_axis_source": "calibrated",
+  "gap_layers_static": 2.0,
+  "gap_layers_reason": "duty mesh.gapLayers = 1/side.  Static map: 2/side - the deployed gap rule refined the full-period static probe (144 steps/period) to 2/side (Coulomb ring self-check gate 5 % of the ripple scale); the 60 deg window passed at 1.  Loss runs: duty 1/side, rule on (the TDM rated probe ended at 1).  The magnetostatic demag probe (36 steps) refined to 3/side and reported a non-steady demag transient - not used.",
+  "static_window": "60\u00b0 electrical, 144 steps/period (24 positions, 12 per cogging cycle)",
+  "runs_ok": 152,
+  "runs_failed": [],
+  "fem_wall_s_sum": 17089.37938976288,
+  "stage_wall_s": {
+   "calib": 100.78869915008545,
+   "probe": 272.5688238143921,
+   "hot": 428.67521476745605,
+   "demag": 1245.350751876831,
+   "cold": 159.85293698310852,
+   "loss": 705.3263330459595,
+   "checks": 901.0272974967957,
+   "extra": 135.3281433582306,
+   "refine": 17.15211296081543
+  }
+ },
+ "inputs": {
+  "temperatures": {
+   "hot_magnet_c": 107.2,
+   "hot_magnet_source": "rated duty sim.magnetTempC",
+   "hot_coil_c": 100.6,
+   "hot_coil_source": "rated duty sim.coilTemp",
+   "cold_c": 20.0,
+   "cold_source": "spec \u00a78.1 (mandatory COLD = 20 \u00b0C, magnets and winding)"
+  },
+  "materials": {
+   "magnet": {
+    "name": "F52SH_120C",
+    "source": "configuration"
+   },
+   "stator_core": {
+    "name": "20SW1200",
+    "source": "configuration"
+   },
+   "rotor_core": {
+    "name": "20SW1200",
+    "source": "configuration"
+   },
+   "shaft": {
+    "name": "Steel_42CrMo4_QT",
+    "source": "owner workspace motor_config.yaml (left in place by a duty load)"
+   },
+   "sleeve": {
+    "name": "M40X_UD_60",
+    "source": "owner workspace motor_config.yaml (left in place by a duty load)"
+   },
+   "slot": {
+    "name": "copper",
+    "source": "owner workspace motor_config.yaml (left in place by a duty load)"
+   },
+   "slot_insulation": {
+    "name": "Nomex",
+    "source": "absent-part default (routes.family._ABSENT_MATERIALS)"
+   },
+   "wire_insulation": {
+    "name": "polyimide",
+    "source": "absent-part default (routes.family._ABSENT_MATERIALS)"
+   },
+   "air_gap": {
+    "name": "air",
+    "source": "air placeholder (always air)"
+   },
+   "in_band": {
+    "name": "air",
+    "source": "air placeholder (always air)"
+   },
+   "out_band": {
+    "name": "air",
+    "source": "air placeholder (always air)"
+   }
+  },
+  "winding": {
+   "n_coils_per_phase": 4,
+   "connection": "2S",
+   "n_parallel": 1,
+   "n_series": 2,
+   "layers": 1,
+   "star_delta": "star"
+  },
+  "mesh": {
+   "mesh_size_mm": 1.0,
+   "min_size_mm": 0.3,
+   "outer_air_factor": 1.2,
+   "gap_layers": 1.0,
+   "n_sectors": 2,
+   "component_mesh_mm": {},
+   "iron_template": true,
+   "geo_mesh": true,
+   "pole_copy": false,
+   "structured_gap": true,
+   "structured_gap_requested": true,
+   "not_consumed": {
+    "mesh.rotorAngle": 0
+   }
+  },
+  "rated_duty": {
+   "name": "rated",
+   "mode": "motor",
+   "current_arms": 42.78,
+   "rpm": 13000.0,
+   "gamma_deg": 10.0,
+   "star_delta": "star",
+   "coil_temp_c": 100.6,
+   "magnet_temp_c": 107.2,
+   "end_winding_factor": 1.759,
+   "steps_per_period": 36,
+   "eddy_coupled": true,
+   "demag": true,
+   "drive": "current",
+   "connection": "2S",
+   "mesh": {
+    "mesh_size_mm": 1.0,
+    "min_size_mm": 0.3,
+    "outer_air_factor": 1.2,
+    "gap_layers": 1.0,
+    "n_sectors": 2,
+    "component_mesh_mm": {},
+    "iron_template": true,
+    "geo_mesh": true,
+    "pole_copy": false,
+    "structured_gap": true,
+    "structured_gap_requested": true,
+    "not_consumed": {
+     "mesh.rotorAngle": 0
+    }
+   },
+   "saved_at": "2026-09-09T08:12:23",
+   "stored_geo_sig": null,
+   "stored_summary": {
+    "T_em_avg_Nm": 0.623,
+    "T_ripple_pct": 6.098553056982946,
+    "P_loss_total_W": 65.9,
+    "P_core_W": 9.3,
+    "P_stranded_W": 53.5,
+    "P_solid_W": 3.1,
+    "P_mag_W": 3.1,
+    "efficiency": 0.928,
+    "efficiency_shaft": 0.9278,
+    "V_line_peak_V": 18.5,
+    "V1_LL_V": 17.4,
+    "R_phase_ohm": 0.008945,
+    "psi_pm_Wb": 0.001003,
+    "Ld_mH": 0.0065,
+    "Lq_mH": 0.0059,
+    "coil_temp_C": 100.6,
+    "end_winding_factor": 1.76,
+    "torque_method": null,
+    "n_steps_per_period": 36
+   }
+  },
+  "peak_duty": {
+   "name": "peak",
+   "mode": "motor",
+   "current_arms": 48.79,
+   "rpm": 14400.0,
+   "gamma_deg": 10.0,
+   "star_delta": "star",
+   "coil_temp_c": 200.0,
+   "magnet_temp_c": null,
+   "end_winding_factor": 1.759,
+   "steps_per_period": 36,
+   "eddy_coupled": true,
+   "demag": true,
+   "drive": "current",
+   "connection": "2S",
+   "mesh": {
+    "mesh_size_mm": 1.0,
+    "min_size_mm": 0.3,
+    "outer_air_factor": 1.2,
+    "gap_layers": 1.0,
+    "n_sectors": 2,
+    "component_mesh_mm": {
+     "coil_rel": 0.5
+    },
+    "iron_template": true,
+    "geo_mesh": true,
+    "pole_copy": false,
+    "structured_gap": true,
+    "structured_gap_requested": true,
+    "not_consumed": {
+     "mesh.rotorAngle": 0
+    }
+   },
+   "saved_at": "2026-08-31T16:52:27",
+   "stored_geo_sig": "air_gap:0.2|angle_pole:25.714285714285715|angle_slot:30|core_thickness:1.9|cut_width:1|insulation_thickness:0.06|magnet_down_height:1|magnet_fill_down:0.85|magnet_fill_radius:0.2|magnet_fill_up:0.34|magnet_height:5.7|magnet_lamination:0|magnet_up_gap:0.1|motor_length:12|num_poles:14|num_poles_per_segment:7|num_seg:2|num_slots:12|num_slots_per_segment:6|num_wires_per_slot:7|pole_pitch:0.4487989505128276|rotor_fill_r:0|rotor_hole:0.9|rotor_house_height:1.1|rotor_inner_radius:5.000000000000002|rotor_outer_radius:11.800000000000002|shaft_diameter:5|shaft_height:2|slot_height:6.1|slot_hs:0.267|slot_pitch:0.5235987755982988|slot_width:2.8200000000000003|stator_diameter:40|stator_fillet_r:1.1|stator_fillet_r1:0.1|stator_inner_radius:12.000000000000002|stator_outer_radius:20|tooth2_width:1.7|tooth_width:3.3|wire_height:0.6|wire_spacing_x:0.1|wire_spacing_y:0.1|wire_split:1|wire_width:2.5",
+   "stored_summary": {
+    "T_em_avg_Nm": 0.7,
+    "T_ripple_pct": 3.6339890502509946,
+    "P_loss_total_W": 101.9,
+    "P_core_W": 10.8,
+    "P_stranded_W": 87.2,
+    "P_solid_W": 3.9,
+    "P_mag_W": null,
+    "efficiency": 0.9119,
+    "efficiency_shaft": null,
+    "V_line_peak_V": 20.6,
+    "V1_LL_V": 19.55,
+    "R_phase_ohm": 0.011598,
+    "psi_pm_Wb": 0.001,
+    "Ld_mH": 0.0075,
+    "Lq_mH": 0.0059,
+    "coil_temp_C": 200,
+    "end_winding_factor": 1.76,
+    "torque_method": null,
+    "n_steps_per_period": 36
+   }
+  },
+  "battery": {
+   "chemistry": "NMC",
+   "cells": 6,
+   "v_cell_min": 3.0,
+   "v_cell_nom": 3.7,
+   "v_cell_max": 4.2,
+   "v_min": 18.0,
+   "v_nom": 22.2,
+   "v_max": 25.2
+  },
+  "bearings": {
+   "A": {
+    "card": "618/8-2Z"
+   },
+   "B": {
+    "card": "618/8-2Z"
+   },
+   "lubrication": "grease",
+   "preload_n": 0.0,
+   "temp_source": "thermal",
+   "temp_c": 70.0
+  },
+  "part_states": {
+   "stored": {},
+   "effective": "all default (included); shaft included (owner 2026-09-29)"
+  },
+  "owner_inputs": {
+   "version": "6S",
+   "bus_V": [
+    18.0,
+    22.2,
+    25.2
+   ],
+   "rated": {
+    "rpm": 13000.0,
+    "I_arms": 42.78
+   },
+   "peak": {
+    "rpm": 14400.0,
+    "I_arms": 48.79
+   },
+   "decided": "owner 2026-10-05 brief"
+  }
+ },
+ "card": {
+  "rated_point": {
+   "rpm": 13000.0,
+   "I_rms": 42.78,
+   "gamma_op": 6.34,
+   "gamma_mode": "mtpa",
+   "bus": "v_nom (trajectory bus), m = 0.95",
+   "T_map_virgin_Nm": {
+    "value": 0.626868178661835,
+    "unit": "N\u00b7m",
+    "method": "hot psi-map (virgin magnets, static, Coulomb)",
+    "runs": [
+     "hot_I1_g+6.34"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "T_operating_Nm": {
+    "value": 0.616440131309805,
+    "unit": "N\u00b7m",
+    "method": "settled loss-grid FEM: TDM coupled eddy + demag steady state (Coulomb)",
+    "runs": [
+     "loss_n13000_I1"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "P_shaft_W": {
+    "value": 839.054074757018,
+    "unit": "W",
+    "method": "T_operating\u00b7w \u2212 P_mech",
+    "runs": [
+     "loss_n13000_I1"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "P_loss_em_W": {
+    "value": 66.12739504397416,
+    "unit": "W",
+    "method": "loss-grid FEM total (Cu DC+AC, iron, magnet, shaft)",
+    "runs": [
+     "loss_n13000_I1"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "P_mech_W": {
+    "value": 0.1409,
+    "unit": "W",
+    "method": "SKF bearings + Couette/face windage, analytic",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "eta_shaft": {
+    "value": 0.9268014386316984,
+    "unit": "-",
+    "method": "one efficiency, at the shaft",
+    "runs": [
+     "loss_n13000_I1"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "k_state_split": {
+    "k_state": 0.9833648481339561,
+    "eddy_and_sampling_share": 0.9908732136091478,
+    "demag_share": 0.992422476082643,
+    "runs": [
+     "loss_n13000_I1",
+     "xs_rated_nodemag"
+    ],
+    "method": "same settled TDM point with demag OFF: demag share = T(demag)/T(no demag); the rest (coupled eddy reaction, 36-step sampling, duty gap layers) = T(no demag)/T_map"
+   }
+  },
+  "peak_point": {
+   "rpm": 14400.0,
+   "I_rms": 48.79,
+   "I_source": "owner peak duty",
+   "gamma_op": 7.005904628330995,
+   "gamma_mode": "mtpa",
+   "T_map_virgin_Nm": {
+    "value": 0.7109398598391679,
+    "unit": "N\u00b7m",
+    "method": "hot psi-map interpolation",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "k_state": {
+    "value": 0.9837822954401116,
+    "unit": "-",
+    "method": "operating/virgin torque factor of the loss trajectory, nearest current row, linear in n",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "T_operating_Nm": {
+    "value": 0.6994100472324478,
+    "unit": "N\u00b7m",
+    "method": "map torque \u00d7 k_state",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "P_loss_em_W": {
+    "value": 83.5672704380775,
+    "unit": "W",
+    "method": "loss-trajectory interpolation (per-group n^k, linear in I)",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ],
+    "notes": []
+   },
+   "P_mech_W": {
+    "value": 0.1671,
+    "unit": "W",
+    "method": "analytic",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "P_shaft_W": {
+    "value": 1054.5184037915271,
+    "unit": "W",
+    "method": "T_operating\u00b7w \u2212 P_mech",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "eta_shaft": {
+    "value": 0.9264360497651757,
+    "unit": "-",
+    "method": "operating torque + interpolated losses",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   }
+  },
+  "constants_cold": {
+   "psi_PM_Wb": {
+    "value": 0.0010304176738969051,
+    "unit": "Wb phase peak",
+    "method": "cold no-load psi_d (fundamental frame)",
+    "runs": [
+     "cold_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Kv_rpm_per_V_line": {
+    "value": 764.362576164643,
+    "unit": "rpm/V (line peak)",
+    "method": "60/(2\u03c0\u00b7p\u00b7\u221a3\u00b7psi_PM), fundamental; \u00f7k_3d NOT applied",
+    "runs": [
+     "cold_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Kt_low_Nm_per_A": {
+    "value": 0.0153008377924709,
+    "unit": "N\u00b7m/A rms",
+    "method": "cold MTPA vertex at 0.25\u00b7I0",
+    "runs": [
+     "cold_I0.25_g+1.7"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Kt_rated_Nm_per_A": {
+    "value": 0.015103018237337213,
+    "unit": "N\u00b7m/A rms",
+    "method": "cold MTPA vertex at I0",
+    "runs": [
+     "cold_I1_g+6.56"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Km_Nm_per_sqrtW": {
+    "value": 0.10579802482925753,
+    "unit": "N\u00b7m/\u221aW",
+    "method": "T_cold(I0)/\u221a(3\u00b7I0\u00b2\u00b7R20), DC copper incl. end windings",
+    "runs": [
+     "cold_I1_g+6.56",
+     "cold_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "R_phase_ohm": {
+    "value": 0.006792835839999998,
+    "unit": "\u03a9",
+    "method": "solver R_phase at 20 \u00b0C incl. k_end",
+    "runs": [
+     "cold_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "R_line_line_ohm": {
+    "value": 0.013585671679999996,
+    "unit": "\u03a9",
+    "method": "2\u00b7R_phase (star)",
+    "runs": [
+     "cold_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Ld_bench_mH": {
+    "value": 0.0033824891896008895,
+    "unit": "mH",
+    "method": "symmetric \u00b12 A pairs on the d and q axes, \u0394psi/\u0394i (true small-signal differential at I \u2248 0; bench/LCR equivalent)",
+    "runs": [
+     "cold_ss_g+0",
+     "cold_ss_g+180",
+     "cold_ss_g+90",
+     "cold_ss_g-90"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Lq_bench_mH": {
+    "value": 0.005410709983993059,
+    "unit": "mH",
+    "method": "symmetric \u00b12 A pairs on the d and q axes, \u0394psi/\u0394i (true small-signal differential at I \u2248 0; bench/LCR equivalent)",
+    "runs": [
+     "cold_ss_g+0",
+     "cold_ss_g+180",
+     "cold_ss_g+90",
+     "cold_ss_g-90"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Ld_frozen_2A_mH": {
+    "value": 0.008263,
+    "unit": "mH",
+    "method": "solver inc_ldq: frozen-permeability (secant \u03bd) at 2 A \u2014 NOT the differential (P20)",
+    "runs": [
+     "cold_probe2A"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Lq_frozen_2A_mH": {
+    "value": 0.009163,
+    "unit": "mH",
+    "method": "solver inc_ldq at 2 A (frozen secant \u03bd)",
+    "runs": [
+     "cold_probe2A"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Ld_chord_rated_mH": {
+    "value": 0.00636644681538062,
+    "unit": "mH",
+    "method": "(psi_d \u2212 psi_PM)/i_d at the cold rated MTPA vertex (withheld when |i_d| < 10 % of |i|)",
+    "runs": [
+     "cold_I1_g+6.56"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "Lq_chord_rated_mH": {
+    "value": 0.005417943330240048,
+    "unit": "mH",
+    "method": "psi_q/i_q at the cold rated vertex",
+    "runs": [
+     "cold_I1_g+6.56"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "cogging_pp_Nm": {
+    "value": 0.0741983349235732,
+    "unit": "N\u00b7m",
+    "method": "cold no-load torque p-p, full period, cogging-quality sampling (Coulomb)",
+    "runs": [
+     "cold_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "I_char_rms_A": {
+    "value": 113.45752693127801,
+    "unit": "A rms",
+    "method": "psi_d = 0 on the d-axis (3 static points, quadratic fit) \u2014 characteristic current, not the SC transient",
+    "runs": [
+     "cold_sc_0",
+     "cold_sc_1",
+     "cold_sc_2"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "I_sc_steady_rated_speed_rms_A": {
+    "value": 116.88000193658155,
+    "unit": "A rms",
+    "method": "steady 3-ph short circuit at n0 from both dq equations with R20, linearised cold map",
+    "runs": [
+     "cold_noload",
+     "cold_sc_1",
+     "cold_I1_g+6.56"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "bus_crossing_speed_vmax_rpm": {
+    "value": 19261.936919349002,
+    "unit": "rpm",
+    "method": "cold-magnet bus-crossing speed = Kv_cold \u00d7 v_max (uncontrolled-generator threshold, NOT a mechanical runaway; no modulation margin)",
+    "runs": [
+     "cold_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   },
+   "bus_crossing_speed_vmin_rpm": {
+    "value": 13758.526370963573,
+    "unit": "rpm",
+    "method": "Kv_cold \u00d7 v_min (report convention)",
+    "runs": [
+     "cold_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "COLD 20 \u00b0C magnets and winding"
+    ]
+   }
+  },
+  "constants_hot": {
+   "psi_PM_Wb": {
+    "value": 0.0010036691695051072,
+    "unit": "Wb phase peak",
+    "method": "hot no-load psi_d",
+    "runs": [
+     "hot_I0_anchor"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Kv_rpm_per_V_line": {
+    "value": 784.7333879287895,
+    "unit": "rpm/V (line peak)",
+    "method": "fundamental",
+    "runs": [
+     "hot_I0_anchor"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Kt_rated_Nm_per_A": {
+    "value": 0.014653300108972306,
+    "unit": "N\u00b7m/A rms",
+    "method": "hot MTPA vertex at I0 (virgin map)",
+    "runs": [
+     "hot_I1_g+6.34"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Kt_operating_Nm_per_A": {
+    "value": 0.014409540236320828,
+    "unit": "N\u00b7m/A rms",
+    "method": "rated loss-grid point (demag + eddy, operating angle)",
+    "runs": [
+     "loss_n13000_I1"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "R_phase_ohm": {
+    "value": 0.008944520935006719,
+    "unit": "\u03a9",
+    "method": "solver R_phase at the hot winding temperature",
+    "runs": [
+     "hot_I1_g+6.34"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Ld_small_signal_mH": {
+    "value": 0.0037745858494017187,
+    "unit": "mH",
+    "method": "symmetric \u00b12 A pairs on the d and q axes, \u0394psi/\u0394i (true small-signal differential at I \u2248 0; bench/LCR equivalent)",
+    "runs": [
+     "hot_ss_g+0",
+     "hot_ss_g+180",
+     "hot_ss_g+90",
+     "hot_ss_g-90"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Lq_small_signal_mH": {
+    "value": 0.005703143603063197,
+    "unit": "mH",
+    "method": "symmetric \u00b12 A pairs on the d and q axes, \u0394psi/\u0394i (true small-signal differential at I \u2248 0; bench/LCR equivalent)",
+    "runs": [
+     "hot_ss_g+0",
+     "hot_ss_g+180",
+     "hot_ss_g+90",
+     "hot_ss_g-90"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Ld_incremental_rated_mH": {
+    "value": 0.009126,
+    "unit": "mH",
+    "method": "frozen-permeability incremental at the hot rated vertex (NOT the true differential, P20)",
+    "runs": [
+     "hot_I1_g+6.34"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Lq_incremental_rated_mH": {
+    "value": 0.009718,
+    "unit": "mH",
+    "method": "frozen-permeability incremental at the hot rated vertex",
+    "runs": [
+     "hot_I1_g+6.34"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Ld_differential_rated_mH": {
+    "value": 0.00407203777719384,
+    "unit": "mH",
+    "method": "\u2202psi_d/\u2202i_d of the C\u00b9 map (true differential incl. saturation; central difference h = 1 % of the map radius)",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "Lq_differential_rated_mH": {
+    "value": 0.005679464434748871,
+    "unit": "mH",
+    "method": "\u2202psi_q/\u2202i_q of the map",
+    "runs": [],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   },
+   "cogging_pp_Nm": {
+    "value": 0.066751951498489,
+    "unit": "N\u00b7m",
+    "method": "hot no-load p-p, full period",
+    "runs": [
+     "hot_noload"
+    ],
+    "labels": [
+     "2-D",
+     "no 3-D end correction",
+     "sine current drive",
+     "no PWM",
+     "no controller losses",
+     "HOT: magnets 107.2 \u00b0C, winding 100.6 \u00b0C"
+    ]
+   }
+  },
+  "speed_limits_hot": {
+   "min": {
+    "base_speed_rated_I_rpm": 12559.424148466353,
+    "max_speed_I0_rpm": 19125.72069417277,
+    "max_speed_Ipk_rpm": 20847.00061696086,
+    "method": "hot psi-map, V_ph = |R\u00b7i + jw\u00b7psi| \u2264 m\u00b7V_dc/\u221a3, FW to gamma 80\u00b0 (grid limit), m = 0.95 placeholder"
+   },
+   "nom": {
+    "base_speed_rated_I_rpm": 15655.38608270844,
+    "max_speed_I0_rpm": 23667.164382157735,
+    "max_speed_Ipk_rpm": 25819.525990866638,
+    "method": "hot psi-map, V_ph = |R\u00b7i + jw\u00b7psi| \u2264 m\u00b7V_dc/\u221a3, FW to gamma 80\u00b0 (grid limit), m = 0.95 placeholder"
+   },
+   "max": {
+    "base_speed_rated_I_rpm": 17866.745266206548,
+    "max_speed_I0_rpm": 26910.004700586458,
+    "max_speed_Ipk_rpm": 29369.860458257393,
+    "method": "hot psi-map, V_ph = |R\u00b7i + jw\u00b7psi| \u2264 m\u00b7V_dc/\u221a3, FW to gamma 80\u00b0 (grid limit), m = 0.95 placeholder"
+   }
+  },
+  "mechanical_speed_limit_rpm": {
+   "value": 45000.0,
+   "source": "bearing speed limit (mech_losses / bearings library); critical speed and rotor stress not computed in stage 1"
+  }
+ },
+ "hot_map": {
+  "fixed_retention_state": "virgin magnets at the HOT temperature (reversible Br(T) only); damage is a boundary (B7), see demag",
+  "points": [
+   {
+    "id": "hot_I0.25_g+35",
+    "I": 10.695,
+    "gamma": 35.0,
+    "i_d": -8.675351658317743,
+    "i_q": 12.38968617861339,
+    "psi_d": 0.0009685290054728271,
+    "psi_q": 7.205204313538659e-05,
+    "T": 0.132629054618346,
+    "ripple_pp": 0.060913998678783915,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0_anchor",
+    "I": 0.0,
+    "gamma": 0.0,
+    "i_d": 0.0,
+    "i_q": 0.0,
+    "psi_d": 0.0010036691695051072,
+    "psi_q": 6.80463462866022e-08,
+    "T": 9.262904749597899e-05,
+    "ripple_pp": 0.06460360205982495,
+    "role": "anchor"
+   },
+   {
+    "id": "hot_I0.25_g+80",
+    "I": 10.695,
+    "gamma": 80.0,
+    "i_d": -14.8952311004452,
+    "i_q": 2.6264311268963274,
+    "psi_d": 0.000943046747900818,
+    "psi_q": 1.555214232353741e-05,
+    "T": 0.02839961004776787,
+    "ripple_pp": 0.057987575278391816,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.25_g+50",
+    "I": 10.695,
+    "gamma": 50.0,
+    "i_d": -11.58643296477742,
+    "i_q": 9.722171627405018,
+    "psi_d": 0.0009567272689909868,
+    "psi_q": 5.6936927705287446e-05,
+    "T": 0.10455040226754306,
+    "ripple_pp": 0.05932100483045828,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.25_g+65",
+    "I": 10.695,
+    "gamma": 65.0,
+    "i_d": -13.707918012173312,
+    "i_q": 6.392107146437263,
+    "psi_d": 0.0009479937275163849,
+    "psi_q": 3.763981079248916e-05,
+    "T": 0.06900368155541711,
+    "ripple_pp": 0.058299077466550664,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.25_g+90",
+    "I": 10.695,
+    "gamma": 90.0,
+    "i_d": -15.125014049580246,
+    "i_q": -3.5237474107589297e-15,
+    "psi_d": 0.0009420845443580038,
+    "psi_q": 7.723964245050323e-08,
+    "T": -2.4730128979196127e-05,
+    "ripple_pp": 0.05795931907320591,
+    "role": "d-axis anchor"
+   },
+   {
+    "id": "hot_I0.5_g+50",
+    "I": 21.39,
+    "gamma": 50.0,
+    "i_d": -23.17286592955484,
+    "i_q": 19.444343254810036,
+    "psi_d": 0.0009028177136457835,
+    "psi_q": 0.00011663778601963237,
+    "T": 0.21265263899632383,
+    "ripple_pp": 0.04956728277450678,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.5_g+35",
+    "I": 21.39,
+    "gamma": 35.0,
+    "i_d": -17.350703316635485,
+    "i_q": 24.77937235722678,
+    "psi_d": 0.0009282473683976692,
+    "psi_q": 0.00014665518996758809,
+    "T": 0.2681823448762114,
+    "ripple_pp": 0.05387729932044594,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.5_g+65",
+    "I": 21.39,
+    "gamma": 65.0,
+    "i_d": -27.415836024346625,
+    "i_q": 12.784214292874527,
+    "psi_d": 0.0008835464263577484,
+    "psi_q": 7.747320949046856e-05,
+    "T": 0.1408554308215437,
+    "ripple_pp": 0.04796400787503387,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.5_g+90",
+    "I": 21.39,
+    "gamma": 90.0,
+    "i_d": -30.25002809916049,
+    "i_q": -7.0474948215178595e-15,
+    "psi_d": 0.0008703257757518197,
+    "psi_q": 7.421028483023792e-08,
+    "T": -2.0623447599607114e-05,
+    "ripple_pp": 0.047256075594276206,
+    "role": "d-axis anchor"
+   },
+   {
+    "id": "hot_I0.5_g+80",
+    "I": 21.39,
+    "gamma": 80.0,
+    "i_d": -29.7904622008904,
+    "i_q": 5.252862253792655,
+    "psi_d": 0.0008724881431348629,
+    "psi_q": 3.205514885709923e-05,
+    "T": 0.05810182869458532,
+    "ripple_pp": 0.047338945222053716,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.75_g+35",
+    "I": 32.085,
+    "gamma": 35.0,
+    "i_d": -26.02605497495323,
+    "i_q": 37.16905853584018,
+    "psi_d": 0.0008822251259230625,
+    "psi_q": 0.0002238198727491182,
+    "T": 0.40541434891577754,
+    "ripple_pp": 0.04505893668098615,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.75_g+50",
+    "I": 32.085,
+    "gamma": 50.0,
+    "i_d": -34.75929889433226,
+    "i_q": 29.166514882215054,
+    "psi_d": 0.0008404002304383764,
+    "psi_q": 0.00017938241172918526,
+    "T": 0.3227805377495343,
+    "ripple_pp": 0.039898030346237734,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.75_g+65",
+    "I": 32.085,
+    "gamma": 65.0,
+    "i_d": -41.12375403651994,
+    "i_q": 19.17632143931179,
+    "psi_d": 0.0008078844063946726,
+    "psi_q": 0.00011990971299204403,
+    "T": 0.21438584503652935,
+    "ripple_pp": 0.03847040674738739,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.75_g+80",
+    "I": 32.085,
+    "gamma": 80.0,
+    "i_d": -44.685693301335604,
+    "i_q": 7.879293380688982,
+    "psi_d": 0.0007889138082177484,
+    "psi_q": 4.979948869002286e-05,
+    "T": 0.0885783810305692,
+    "ripple_pp": 0.038739117039804094,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.75_g+90",
+    "I": 32.085,
+    "gamma": 90.0,
+    "i_d": -45.37504214874075,
+    "i_q": -1.0257835524283646e-14,
+    "psi_d": 0.0007851674313226374,
+    "psi_q": 6.822256024709627e-08,
+    "T": -1.9955460878691542e-05,
+    "ripple_pp": 0.03883052954388183,
+    "role": "d-axis anchor"
+   },
+   {
+    "id": "hot_I1_g+35",
+    "I": 42.78,
+    "gamma": 35.0,
+    "i_d": -34.70140663327097,
+    "i_q": 49.55874471445356,
+    "psi_d": 0.0008291353246787731,
+    "psi_q": 0.00030386309792896824,
+    "T": 0.5421017349871703,
+    "ripple_pp": 0.035822680623830094,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I1_g+50",
+    "I": 42.78,
+    "gamma": 50.0,
+    "i_d": -46.34573185910968,
+    "i_q": 38.88868650962007,
+    "psi_d": 0.000767218063252466,
+    "psi_q": 0.0002456020882878391,
+    "T": 0.4327259547584481,
+    "ripple_pp": 0.03357337195770088,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I1_g+80",
+    "I": 42.78,
+    "gamma": 80.0,
+    "i_d": -59.5809244017808,
+    "i_q": 10.50572450758531,
+    "psi_d": 0.0006893214738525476,
+    "psi_q": 6.89310493920746e-05,
+    "T": 0.11909679111344945,
+    "ripple_pp": 0.032597638325359585,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I1_g+65",
+    "I": 42.78,
+    "gamma": 65.0,
+    "i_d": -54.83167204869325,
+    "i_q": 25.568428585749054,
+    "psi_d": 0.0007181418608928898,
+    "psi_q": 0.0001652840791253534,
+    "T": 0.28788893624273126,
+    "ripple_pp": 0.032568158001664904,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I1.5_g+50",
+    "I": 64.17,
+    "gamma": 50.0,
+    "i_d": -69.51859778866452,
+    "i_q": 58.33302976443011,
+    "psi_d": 0.0005911897313138131,
+    "psi_q": 0.0003887442513261812,
+    "T": 0.6457702979550548,
+    "ripple_pp": 0.03525328429568497,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I1_g+90",
+    "I": 42.78,
+    "gamma": 90.0,
+    "i_d": -60.50005619832098,
+    "i_q": -1.4094989643035719e-14,
+    "psi_d": 0.0006836490312747058,
+    "psi_q": 6.261916797405341e-08,
+    "T": -2.1458126592500477e-05,
+    "ripple_pp": 0.03274809914155109,
+    "role": "d-axis anchor"
+   },
+   {
+    "id": "hot_I1.5_g+35",
+    "I": 64.17,
+    "gamma": 35.0,
+    "i_d": -52.05210994990646,
+    "i_q": 74.33811707168036,
+    "psi_d": 0.0006986883756371318,
+    "psi_q": 0.00047612797167776756,
+    "T": 0.8054965629268098,
+    "ripple_pp": 0.028553902100042272,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I1.5_g+65",
+    "I": 64.17,
+    "gamma": 65.0,
+    "i_d": -82.24750807303988,
+    "i_q": 38.35264287862358,
+    "psi_d": 0.0005070910800535104,
+    "psi_q": 0.00026330347519581883,
+    "T": 0.4315035790875169,
+    "ripple_pp": 0.03348875071008883,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I2_g+35",
+    "I": 85.56,
+    "gamma": 35.0,
+    "i_d": -69.40281326654194,
+    "i_q": 99.11748942890712,
+    "psi_d": 0.0005485319508494242,
+    "psi_q": 0.0006576257596957432,
+    "T": 1.049985045282888,
+    "ripple_pp": 0.04275494051401729,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I2_g+50",
+    "I": 85.56,
+    "gamma": 50.0,
+    "i_d": -92.69146371821935,
+    "i_q": 77.77737301924014,
+    "psi_d": 0.000394075053946211,
+    "psi_q": 0.0005406379329482172,
+    "T": 0.8478809081174914,
+    "ripple_pp": 0.04894912827946707,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I2_g+65",
+    "I": 85.56,
+    "gamma": 65.0,
+    "i_d": -109.6633440973865,
+    "i_q": 51.13685717149811,
+    "psi_d": 0.0002745300581444319,
+    "psi_q": 0.00036824180948547035,
+    "T": 0.5713069824807986,
+    "ripple_pp": 0.040614249665405056,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I1.5_g+80",
+    "I": 64.17,
+    "gamma": 80.0,
+    "i_d": -89.37138660267121,
+    "i_q": 15.758586761377964,
+    "psi_d": 0.00045798202929061166,
+    "psi_q": 0.00010998416407380624,
+    "T": 0.1789043365911937,
+    "ripple_pp": 0.02314878713649446,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I1.5_g+90",
+    "I": 64.17,
+    "gamma": 90.0,
+    "i_d": -90.7500842974815,
+    "i_q": -2.0515671048567292e-14,
+    "psi_d": 0.0004482194711355002,
+    "psi_q": 7.042558475656265e-08,
+    "T": -1.0960264122222483e-05,
+    "ripple_pp": 0.019921768843811322,
+    "role": "d-axis anchor"
+   },
+   {
+    "id": "hot_I2.5_g+35",
+    "I": 106.95,
+    "gamma": 35.0,
+    "i_d": -86.75351658317743,
+    "i_q": 123.89686178613391,
+    "psi_d": 0.0003928173022153264,
+    "psi_q": 0.000829695171201525,
+    "T": 1.266621400910875,
+    "ripple_pp": 0.05158250787816021,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I2.5_g+50",
+    "I": 106.95,
+    "gamma": 50.0,
+    "i_d": -115.8643296477742,
+    "i_q": 97.22171627405018,
+    "psi_d": 0.00019176698740763212,
+    "psi_q": 0.0006902520960627263,
+    "T": 1.0353235263174543,
+    "ripple_pp": 0.0578015044270237,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I2_g+80",
+    "I": 85.56,
+    "gamma": 80.0,
+    "i_d": -119.1618488035616,
+    "i_q": 21.01144901517062,
+    "psi_d": 0.00020502145157342555,
+    "psi_q": 0.000153914019264199,
+    "T": 0.23770550246792066,
+    "ripple_pp": 0.021764611733846,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I2.5_g+65",
+    "I": 106.95,
+    "gamma": 65.0,
+    "i_d": -137.07918012173315,
+    "i_q": 63.92107146437263,
+    "psi_d": 3.4111880344104824e-05,
+    "psi_q": 0.00047398916182142005,
+    "T": 0.7049611701786164,
+    "ripple_pp": 0.04886227775615004,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I2_g+90",
+    "I": 85.56,
+    "gamma": 90.0,
+    "i_d": -121.00011239664197,
+    "i_q": -2.8189979286071438e-14,
+    "psi_d": 0.00019131677753007626,
+    "psi_q": 7.238434425245477e-08,
+    "T": -8.586854299620129e-07,
+    "ripple_pp": 0.009818886498902292,
+    "role": "d-axis anchor"
+   },
+   {
+    "id": "hot_I0.25_g-5",
+    "I": 10.695,
+    "gamma": -5.0,
+    "i_d": 1.3182318335599312,
+    "i_q": 15.067458804755017,
+    "psi_d": 0.001007205073277576,
+    "psi_q": 8.570653971178997e-05,
+    "T": 0.1582358099114318,
+    "ripple_pp": 0.06625791128440962,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I2.5_g-5",
+    "I": 106.95,
+    "gamma": -5.0,
+    "i_d": 13.18231833559931,
+    "i_q": 150.67458804755017,
+    "psi_d": 0.0009004021329945599,
+    "psi_q": 0.0007884800270504689,
+    "T": 1.3152746361327958,
+    "ripple_pp": 0.0922208907651405,
+    "role": "gamma=-5 (saturation ridge shift)"
+   },
+   {
+    "id": "hot_I2.5_g+80",
+    "I": 106.95,
+    "gamma": 80.0,
+    "i_d": -148.95231100445199,
+    "i_q": 26.26431126896327,
+    "psi_d": -5.7717109935560604e-05,
+    "psi_q": 0.00019943149956590294,
+    "T": 0.2958750638275818,
+    "ripple_pp": 0.02244408955418531,
+    "role": "fw"
+   },
+   {
+    "id": "hot_I0.25_g+0",
+    "I": 10.695,
+    "gamma": 0.0,
+    "i_d": -1.1412131367220335e-16,
+    "i_q": 15.125014049580258,
+    "psi_d": 0.0010022481675932876,
+    "psi_q": 8.628156569157505e-05,
+    "T": 0.15924301801139973,
+    "ripple_pp": 0.06573075786781776,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I0.25_g+5",
+    "I": 10.695,
+    "gamma": 5.0,
+    "i_d": -1.3182318335599312,
+    "i_q": 15.067458804755017,
+    "psi_d": 0.0009972478493003596,
+    "psi_q": 8.620137798191833e-05,
+    "T": 0.15903811873945373,
+    "ripple_pp": 0.06511582538410862,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I2.5_g+90",
+    "I": 106.95,
+    "gamma": 90.0,
+    "i_d": -151.25014049580244,
+    "i_q": -3.4578243046645696e-14,
+    "psi_d": -7.552716378862246e-05,
+    "psi_q": 6.951339120440007e-08,
+    "T": 4.364805390966864e-06,
+    "ripple_pp": 0.007764219375498573,
+    "role": "d-axis anchor"
+   },
+   {
+    "id": "hot_I2_g-5",
+    "I": 85.56,
+    "gamma": -5.0,
+    "i_d": 10.54585466847945,
+    "i_q": 120.53967043804013,
+    "psi_d": 0.0009460325049941154,
+    "psi_q": 0.0006546251066725391,
+    "T": 1.1247807879672638,
+    "ripple_pp": 0.04959105665224639,
+    "role": "gamma=-5 (saturation ridge shift)"
+   },
+   {
+    "id": "hot_I0.5_g+1.65",
+    "I": 21.39,
+    "gamma": 1.65,
+    "i_d": -0.8710178682258569,
+    "i_q": 30.237485475370335,
+    "psi_d": 0.0009946646818186412,
+    "psi_q": 0.00017245843160254223,
+    "T": 0.3174302088660993,
+    "ripple_pp": 0.06463386432485596,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I0.5_g+6.65",
+    "I": 21.39,
+    "gamma": 6.65,
+    "i_d": -3.503073887697198,
+    "i_q": 30.046508504938387,
+    "psi_d": 0.0009845636788495754,
+    "psi_q": 0.00017236563657821747,
+    "T": 0.3170097705923464,
+    "ripple_pp": 0.06332955551119829,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I0.25_g+1.65",
+    "I": 10.695,
+    "gamma": 1.65,
+    "i_d": -0.43550893411292846,
+    "i_q": 15.118742737685167,
+    "psi_d": 0.001000601232640172,
+    "psi_q": 8.632800978548472e-05,
+    "T": 0.15931019866080648,
+    "ripple_pp": 0.06553881278306567,
+    "role": "mtpa vertex (FEM-confirmed)"
+   },
+   {
+    "id": "hot_I0.5_g-3.35",
+    "I": 21.39,
+    "gamma": -3.35,
+    "i_d": 1.7676671231576526,
+    "i_q": 30.1983369234418,
+    "psi_d": 0.0010046157315432521,
+    "psi_q": 0.0001712406730314815,
+    "T": 0.31542357145831035,
+    "ripple_pp": 0.06575565064531813,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I0.5_g+3.28",
+    "I": 21.39,
+    "gamma": 3.28,
+    "i_d": -1.730771584547795,
+    "i_q": 30.200473998302126,
+    "psi_d": 0.000991385288645417,
+    "psi_q": 0.00017257360461590723,
+    "T": 0.31756219283422477,
+    "ripple_pp": 0.0642332347893892,
+    "role": "mtpa vertex (FEM-confirmed)"
+   },
+   {
+    "id": "hot_I0.75_g+8.28",
+    "I": 32.085,
+    "gamma": 8.28,
+    "i_d": -6.534495328181579,
+    "i_q": 44.90205809098259,
+    "psi_d": 0.0009654327224353247,
+    "psi_q": 0.00025862048244059083,
+    "T": 0.47286224722175396,
+    "ripple_pp": 0.055135700921136066,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I0.75_g+3.28",
+    "I": 32.085,
+    "gamma": 3.28,
+    "i_d": -2.5961573768216923,
+    "i_q": 45.30071099745318,
+    "psi_d": 0.0009808341429714791,
+    "psi_q": 0.00025863526537577724,
+    "T": 0.47353542543434357,
+    "ripple_pp": 0.057052127015206844,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I0.75_g-1.72",
+    "I": 32.085,
+    "gamma": -1.72,
+    "i_d": 1.361938899778492,
+    "i_q": 45.35459813991601,
+    "psi_d": 0.0009959095150494078,
+    "psi_q": 0.00025668097505372403,
+    "T": 0.4705501401400858,
+    "ripple_pp": 0.05876398080785955,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I1_g+4.86",
+    "I": 42.78,
+    "gamma": 4.86,
+    "i_d": -5.125644750791501,
+    "i_q": 60.28253947776825,
+    "psi_d": 0.000960785564547901,
+    "psi_q": 0.00034487966817161177,
+    "T": 0.6266442384783442,
+    "ripple_pp": 0.04392819906954215,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I1_g+9.86",
+    "I": 42.78,
+    "gamma": 9.86,
+    "i_d": -10.36010962794019,
+    "i_q": 59.60641683994319,
+    "psi_d": 0.0009397532324819201,
+    "psi_q": 0.00034509541029473137,
+    "T": 0.6256369431936024,
+    "ripple_pp": 0.041993435688199465,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I1_g-0.14",
+    "I": 42.78,
+    "gamma": -0.14,
+    "i_d": 0.147829377859634,
+    "i_q": 60.49987559057493,
+    "psi_d": 0.0009812210267115215,
+    "psi_q": 0.0003420331933060685,
+    "T": 0.622726942458513,
+    "ripple_pp": 0.04594068910613602,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I0.75_g+4.86",
+    "I": 32.085,
+    "gamma": 4.86,
+    "i_d": -3.844233563093625,
+    "i_q": 45.21190460832618,
+    "psi_d": 0.0009759991559311303,
+    "psi_q": 0.00025884657954035166,
+    "T": 0.47372350725447776,
+    "ripple_pp": 0.056460591997873344,
+    "role": "mtpa vertex (FEM-confirmed)"
+   },
+   {
+    "id": "hot_I1.5_g+6.34",
+    "I": 64.17,
+    "gamma": 6.34,
+    "i_d": -10.02136845386882,
+    "i_q": 90.19506624151794,
+    "psi_d": 0.0009096395433949377,
+    "psi_q": 0.0005207662554269983,
+    "T": 0.9161903695685786,
+    "ripple_pp": 0.016754501179019665,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I1.5_g+11.34",
+    "I": 64.17,
+    "gamma": 11.34,
+    "i_d": -17.84425211182171,
+    "i_q": 88.97842697288908,
+    "psi_d": 0.0008754306627757797,
+    "psi_q": 0.0005240620680141442,
+    "T": 0.9160009066971557,
+    "ripple_pp": 0.016698367327250052,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I1_g+6.34",
+    "I": 42.78,
+    "gamma": 6.34,
+    "i_d": -6.680912302579214,
+    "i_q": 60.130044161011966,
+    "psi_d": 0.000954618933143044,
+    "psi_q": 0.00034522309356402537,
+    "T": 0.6268681786618353,
+    "ripple_pp": 0.04334471792169314,
+    "role": "mtpa vertex (FEM-confirmed)"
+   },
+   {
+    "id": "hot_I1.5_g+1.34",
+    "I": 64.17,
+    "gamma": 1.34,
+    "i_d": -2.1222161309142704,
+    "i_q": 90.72526659477887,
+    "psi_d": 0.0009421123635324712,
+    "psi_q": 0.0005135628691078086,
+    "T": 0.9088368038160577,
+    "ripple_pp": 0.017840527304730847,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I2_g+13.71",
+    "I": 85.56,
+    "gamma": 13.71,
+    "i_d": -28.677959520725448,
+    "i_q": 117.55254926086309,
+    "psi_d": 0.0007758264401864641,
+    "psi_q": 0.0007070179867230868,
+    "T": 1.1703963527044465,
+    "ripple_pp": 0.034827798814448085,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I1.5_g+8.71",
+    "I": 64.17,
+    "gamma": 8.71,
+    "i_d": -13.742588612943896,
+    "i_q": 89.7035063875175,
+    "psi_d": 0.0008936268692277074,
+    "psi_q": 0.0005228367979188593,
+    "T": 0.9170586548837547,
+    "ripple_pp": 0.01663285437902029,
+    "role": "mtpa vertex (FEM-confirmed)"
+   },
+   {
+    "id": "hot_I2_g+8.71",
+    "I": 85.56,
+    "gamma": 8.71,
+    "i_d": -18.323451483925194,
+    "i_q": 119.60467518335668,
+    "psi_d": 0.000825004312138634,
+    "psi_q": 0.0007000941836306206,
+    "T": 1.1706751064325844,
+    "ripple_pp": 0.03728530444884637,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I2_g+3.71",
+    "I": 85.56,
+    "gamma": 3.71,
+    "i_d": -7.829490917329767,
+    "i_q": 120.74653730842746,
+    "psi_d": 0.0008716831275237751,
+    "psi_q": 0.0006875790794829111,
+    "T": 1.1615816450547045,
+    "ripple_pp": 0.04116149578367145,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I2.5_g+11.06",
+    "I": 106.95,
+    "gamma": 11.06,
+    "i_d": -29.01535023475215,
+    "i_q": 148.44094600464751,
+    "psi_d": 0.000717552759066307,
+    "psi_q": 0.0008610500616366996,
+    "T": 1.3805927910521945,
+    "ripple_pp": 0.057258326662213976,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I2.5_g+16.06",
+    "I": 106.95,
+    "gamma": 16.06,
+    "i_d": -41.84241897033525,
+    "i_q": 145.3472289887597,
+    "psi_d": 0.0006536227630654491,
+    "psi_q": 0.000870837850184888,
+    "T": 1.379974338151259,
+    "ripple_pp": 0.049649802463921144,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I2.5_g+6.06",
+    "I": 106.95,
+    "gamma": 6.06,
+    "i_d": -15.967457163935114,
+    "i_q": 150.4049377903462,
+    "psi_d": 0.0007784105874692671,
+    "psi_q": 0.0008444963154798341,
+    "T": 1.3707724114505648,
+    "ripple_pp": 0.06677083929251393,
+    "role": "mtpa bracket"
+   },
+   {
+    "id": "hot_I2_g+11.06",
+    "I": 85.56,
+    "gamma": 11.06,
+    "i_d": -23.212280187801724,
+    "i_q": 118.75275680371803,
+    "psi_d": 0.0008021774212832699,
+    "psi_q": 0.0007040914385977251,
+    "T": 1.1717430961402495,
+    "ripple_pp": 0.0359290554594045,
+    "role": "mtpa vertex (FEM-confirmed)"
+   },
+   {
+    "id": "hot_I2.5_g+13.26",
+    "I": 106.95,
+    "gamma": 13.26,
+    "i_d": -34.692286192251316,
+    "i_q": 147.21769689393648,
+    "psi_d": 0.0006897777750391837,
+    "psi_q": 0.0008662436898155405,
+    "T": 1.3816536989789023,
+    "ripple_pp": 0.05364627405235911,
+    "role": "mtpa vertex (FEM-confirmed)"
+   },
+   {
+    "id": "hot_I2_g+42.5",
+    "I": 85.56,
+    "gamma": 42.5,
+    "i_d": -81.74649105556558,
+    "i_q": 89.21064062152193,
+    "psi_d": 0.0004685429025110943,
+    "psi_q": 0.0006069838885579753,
+    "T": 0.9597600393775568,
+    "ripple_pp": 0.04801644710031394,
+    "role": "fw refinement (P04, after the first check pass)"
+   },
+   {
+    "id": "hot_I2.5_g+42.5",
+    "I": 106.95,
+    "gamma": 42.5,
+    "i_d": -102.18311381945696,
+    "i_q": 111.51330077690241,
+    "psi_d": 0.0002890455411179166,
+    "psi_q": 0.0007718925328581902,
+    "T": 1.1664379179940774,
+    "ripple_pp": 0.05725970327822205,
+    "role": "fw refinement (P04, after the first check pass)"
+   },
+   {
+    "id": "hot_I2_g+57.5",
+    "I": 85.56,
+    "gamma": 57.5,
+    "i_d": -102.05045973772556,
+    "i_q": 65.01331300063742,
+    "psi_d": 0.0003287320313646681,
+    "psi_q": 0.0004606640109434101,
+    "T": 0.7178968369203125,
+    "ripple_pp": 0.046134801953083726,
+    "role": "fw refinement (P04, after the first check pass)"
+   },
+   {
+    "id": "hot_I2.5_g+57.5",
+    "I": 106.95,
+    "gamma": 57.5,
+    "i_d": -127.56307467215694,
+    "i_q": 81.26664125079678,
+    "psi_d": 0.00010583050638083742,
+    "psi_q": 0.0005902899353971043,
+    "T": 0.8807731035366647,
+    "ripple_pp": 0.054905164572217835,
+    "role": "fw refinement (P04, after the first check pass)"
+   }
+  ],
+  "mtpa": [
+   {
+    "fI": 0.25,
+    "I": 10.695,
+    "gamma_mtpa": 1.65,
+    "T_parabola": 0.15930940027571444,
+    "conf_id": "hot_I0.25_g+1.65",
+    "bracket": [
+     -5.0,
+     0.0,
+     5.0
+    ],
+    "T_bracket": [
+     0.1582358099114318,
+     0.15924301801139973,
+     0.15903811873945373
+    ],
+    "parabola_bracketed": true,
+    "T_fem_vertex": 0.15931019866080648,
+    "vertex_vs_parabola_pct": 0.0005011537866918942,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 0.5,
+    "I": 21.39,
+    "gamma_mtpa": 3.28,
+    "T_parabola": 0.3175597901000071,
+    "conf_id": "hot_I0.5_g+3.28",
+    "bracket": [
+     -3.35,
+     1.65,
+     6.65
+    ],
+    "T_bracket": [
+     0.31542357145831035,
+     0.3174302088660993,
+     0.3170097705923464
+    ],
+    "parabola_bracketed": true,
+    "T_fem_vertex": 0.31756219283422477,
+    "vertex_vs_parabola_pct": 0.000756624198827852,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 0.75,
+    "I": 32.085,
+    "gamma_mtpa": 4.86,
+    "T_parabola": 0.47371807858733694,
+    "conf_id": "hot_I0.75_g+4.86",
+    "bracket": [
+     -1.72,
+     3.28,
+     8.28
+    ],
+    "T_bracket": [
+     0.4705501401400858,
+     0.47353542543434357,
+     0.47286224722175396
+    ],
+    "parabola_bracketed": true,
+    "T_fem_vertex": 0.47372350725447776,
+    "vertex_vs_parabola_pct": 0.0011459700159650386,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 1.0,
+    "I": 42.78,
+    "gamma_mtpa": 6.34,
+    "T_parabola": 0.6268591828197746,
+    "conf_id": "hot_I1_g+6.34",
+    "bracket": [
+     -0.14,
+     4.86,
+     9.86
+    ],
+    "T_bracket": [
+     0.622726942458513,
+     0.6266442384783442,
+     0.6256369431936024
+    ],
+    "parabola_bracketed": true,
+    "T_fem_vertex": 0.6268681786618353,
+    "vertex_vs_parabola_pct": 0.001435065850075763,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 1.5,
+    "I": 64.17,
+    "gamma_mtpa": 8.71,
+    "T_parabola": 0.9170408961383705,
+    "conf_id": "hot_I1.5_g+8.71",
+    "bracket": [
+     1.34,
+     6.34,
+     11.34
+    ],
+    "T_bracket": [
+     0.9088368038160577,
+     0.9161903695685786,
+     0.9160009066971557
+    ],
+    "parabola_bracketed": true,
+    "T_fem_vertex": 0.9170586548837547,
+    "vertex_vs_parabola_pct": 0.0019365270904508913,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 2.0,
+    "I": 85.56,
+    "gamma_mtpa": 11.06,
+    "T_parabola": 1.1717114018823722,
+    "conf_id": "hot_I2_g+11.06",
+    "bracket": [
+     -5.0,
+     3.71,
+     8.71,
+     13.71
+    ],
+    "T_bracket": [
+     1.1247807879672638,
+     1.1615816450547045,
+     1.1706751064325844,
+     1.1703963527044465
+    ],
+    "parabola_bracketed": true,
+    "T_fem_vertex": 1.1717430961402495,
+    "vertex_vs_parabola_pct": 0.0027049542938973126,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 2.5,
+    "I": 106.95,
+    "gamma_mtpa": 13.26,
+    "T_parabola": 1.3816067389120736,
+    "conf_id": "hot_I2.5_g+13.26",
+    "bracket": [
+     -5.0,
+     6.06,
+     11.06,
+     16.06
+    ],
+    "T_bracket": [
+     1.3152746361327958,
+     1.3707724114505648,
+     1.3805927910521945,
+     1.379974338151259
+    ],
+    "parabola_bracketed": true,
+    "T_fem_vertex": 1.3816536989789023,
+    "vertex_vs_parabola_pct": 0.0033989459884707896,
+    "vertex_ge_samples": true
+   }
+  ],
+  "interpolation": "Clough\u2013Tocher C\u00b9 in (i_d, i_q), isotropic scale = max |i|",
+  "dq_identity_check_max_pct": 0.13958242309560545,
+  "reciprocity_asym_max": 0.020661577345569365,
+  "refusal": "outside the convex hull or gamma > 80\u00b0 (FW) \u2192 refused"
+ },
+ "cold": {
+  "mtpa": [
+   {
+    "fI": 0.25,
+    "I": 10.695,
+    "gamma_mtpa": 1.7,
+    "T_parabola": 0.16364244126438887,
+    "conf_id": "cold_I0.25_g+1.7",
+    "bracket": [
+     -3.35,
+     1.65,
+     6.65
+    ],
+    "T_bracket": [
+     0.16300733690609137,
+     0.16364238533936082,
+     0.1630309520747672
+    ],
+    "T_fem_vertex": 0.1636424601904763,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 0.5,
+    "I": 21.39,
+    "gamma_mtpa": 3.38,
+    "T_parabola": 0.326368373186503,
+    "conf_id": "cold_I0.5_g+3.38",
+    "bracket": [
+     -1.72,
+     3.28,
+     8.28
+    ],
+    "T_bracket": [
+     0.3250692538844685,
+     0.326367906809659,
+     0.3251658468280542
+    ],
+    "T_fem_vertex": 0.32636852850950493,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 1.0,
+    "I": 42.78,
+    "gamma_mtpa": 6.56,
+    "T_parabola": 0.6461030933445269,
+    "conf_id": "cold_I1_g+6.56",
+    "bracket": [
+     1.34,
+     6.34,
+     11.34
+    ],
+    "T_bracket": [
+     0.6434169916939616,
+     0.6460982368982063,
+     0.6438544231463925
+    ],
+    "T_fem_vertex": 0.646107120193286,
+    "vertex_ge_samples": true
+   },
+   {
+    "fI": 1.5,
+    "I": 64.17,
+    "gamma_mtpa": 9.61,
+    "T_parabola": 0.952453378311646,
+    "conf_id": "cold_I1.5_g+9.61",
+    "bracket": [
+     3.71,
+     8.71,
+     13.71
+    ],
+    "T_bracket": [
+     0.9470892714339885,
+     0.9523288837266861,
+     0.949860059857107
+    ],
+    "T_fem_vertex": 0.9524645830811034,
+    "vertex_ge_samples": true
+   }
+  ],
+  "k_levels": [
+   {
+    "fI": 0.25,
+    "gamma_cold": 1.7,
+    "T_cold": 0.1636424601904763,
+    "T_hot": 0.15931019866080648,
+    "k_T_cold_over_hot": 1.0271938743789644
+   },
+   {
+    "fI": 0.5,
+    "gamma_cold": 3.38,
+    "T_cold": 0.32636852850950493,
+    "T_hot": 0.31756219283422477,
+    "k_T_cold_over_hot": 1.0277310582745511
+   },
+   {
+    "fI": 1.0,
+    "gamma_cold": 6.56,
+    "T_cold": 0.646107120193286,
+    "T_hot": 0.6268681786618353,
+    "k_T_cold_over_hot": 1.030690569702421
+   },
+   {
+    "fI": 1.5,
+    "gamma_cold": 9.61,
+    "T_cold": 0.9524645830811034,
+    "T_hot": 0.9170586548837547,
+    "k_T_cold_over_hot": 1.0386081391945825
+   }
+  ],
+  "k_psi_noload_cold_over_hot": 1.0266507183885973,
+  "sc_plan": {
+   "psi_pm_cold": 0.0010304176738969051,
+   "Ld_chord_hot_axis_H": 7.135175741034633e-06,
+   "I_pred_rms": 102.11596057496932
+  },
+  "sc_points": [
+   [
+    -166.07584283685952,
+    -4.84806716601963e-05
+   ],
+   [
+    -144.41377637987785,
+    0.00013594568001748145
+   ],
+   [
+    -122.75170992289614,
+    0.0003140197042730916
+   ]
+  ],
+  "fw_checks": {
+   "cold_I1_g+80": {
+    "T": 0.124140852192586,
+    "psi_d": 0.0007640025370772627,
+    "psi_q": 6.379204896418602e-05,
+    "gamma": 80.0,
+    "abs_psi_cold_over_hot_map": 1.1066773557998593,
+    "note": "cold/hot |psi| at the same (i_d, i_q): the cold voltage-limit / FW boundary factor (P21)"
+   },
+   "cold_I1_g+50": {
+    "T": 0.4497057976782628,
+    "psi_d": 0.0008285620858087883,
+    "psi_q": 0.00022897915710749707,
+    "gamma": 50.0,
+    "abs_psi_cold_over_hot_map": 1.067094623228282,
+    "note": "cold/hot |psi| at the same (i_d, i_q): the cold voltage-limit / FW boundary factor (P21)"
+   }
+  }
+ },
+ "demag": {
+  "threshold_br_kept_pct": 99.5,
+  "rule": "first 99.5 % Br-retention crossing on the hot MTPA line (the existing tuner's knee rule)",
+  "mtpa_retention": [
+   [
+    42.78,
+    99.283
+   ],
+   [
+    64.17,
+    98.837
+   ],
+   [
+    85.56,
+    98.165
+   ],
+   [
+    106.95,
+    97.046
+   ]
+  ],
+  "I_knee_rms": 29.83263598326365,
+  "below_first_probe": true,
+  "probes": {
+   "dm_I1_gmtpa": {
+    "fI": 1.0,
+    "gamma": 6.34,
+    "demag": {
+     "per_magnet_spread_pct": 0.071,
+     "bh_kept_vol_pct": 98.893,
+     "bh_loss_pct": 1.107,
+     "br_kept_vol_pct": 99.283,
+     "loss_pct": 0.717,
+     "area_derated_pct": 3.28,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 2702,
+      "magnet_tag": 102,
+      "x_mm": 5.763,
+      "y_mm": 10.141,
+      "r_mm": 11.664,
+      "theta_deg": 60.39,
+      "element_area_pct": 0.0007,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true,
+    "T_Nm": 0.616440131309805,
+    "steady_note": null
+   },
+   "dm_I1.5_gmtpa": {
+    "fI": 1.5,
+    "gamma": 8.71,
+    "demag": {
+     "per_magnet_spread_pct": 0.074,
+     "bh_kept_vol_pct": 98.263,
+     "bh_loss_pct": 1.737,
+     "br_kept_vol_pct": 98.837,
+     "loss_pct": 1.163,
+     "area_derated_pct": 4.16,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 630,
+      "magnet_tag": 100,
+      "x_mm": 11.522,
+      "y_mm": 1.817,
+      "r_mm": 11.664,
+      "theta_deg": 8.96,
+      "element_area_pct": 0.0007,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true,
+    "T_Nm": 0.8985161566482172,
+    "steady_note": null
+   },
+   "dm_I2_gmtpa": {
+    "fI": 2.0,
+    "gamma": 11.06,
+    "demag": {
+     "per_magnet_spread_pct": 0.06,
+     "bh_kept_vol_pct": 97.326,
+     "bh_loss_pct": 2.674,
+     "br_kept_vol_pct": 98.165,
+     "loss_pct": 1.835,
+     "area_derated_pct": 5.55,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 6846,
+      "magnet_tag": 106,
+      "x_mm": -11.169,
+      "y_mm": 3.362,
+      "r_mm": 11.664,
+      "theta_deg": 163.25,
+      "element_area_pct": 0.0007,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true,
+    "T_Nm": 1.1366129492010686,
+    "steady_note": null
+   },
+   "dm_I2.5_gmtpa": {
+    "fI": 2.5,
+    "gamma": 13.26,
+    "demag": {
+     "per_magnet_spread_pct": 0.057,
+     "bh_kept_vol_pct": 95.758,
+     "bh_loss_pct": 4.242,
+     "br_kept_vol_pct": 97.046,
+     "loss_pct": 2.954,
+     "area_derated_pct": 12.44,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 1647,
+      "magnet_tag": 101,
+      "x_mm": 9.577,
+      "y_mm": 6.548,
+      "r_mm": 11.602,
+      "theta_deg": 34.36,
+      "element_area_pct": 0.0031,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true,
+    "T_Nm": 1.3167156296256355,
+    "steady_note": null
+   },
+   "dm_I1.5_g+80": {
+    "fI": 1.5,
+    "gamma": 80.0,
+    "demag": {
+     "per_magnet_spread_pct": 0.018,
+     "bh_kept_vol_pct": 98.057,
+     "bh_loss_pct": 1.943,
+     "br_kept_vol_pct": 98.68,
+     "loss_pct": 1.32,
+     "area_derated_pct": 3.82,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 4774,
+      "magnet_tag": 104,
+      "x_mm": -4.335,
+      "y_mm": 10.829,
+      "r_mm": 11.664,
+      "theta_deg": 111.82,
+      "element_area_pct": 0.0007,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true,
+    "T_Nm": 0.17710457732893997,
+    "steady_note": null
+   },
+   "dm_I2.5_g+80": {
+    "fI": 2.5,
+    "gamma": 80.0,
+    "demag": {
+     "per_magnet_spread_pct": 0.124,
+     "bh_kept_vol_pct": 92.723,
+     "bh_loss_pct": 7.277,
+     "br_kept_vol_pct": 94.503,
+     "loss_pct": 5.497,
+     "area_derated_pct": 14.81,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 4696,
+      "magnet_tag": 104,
+      "x_mm": -4.322,
+      "y_mm": 10.731,
+      "r_mm": 11.569,
+      "theta_deg": 111.94,
+      "element_area_pct": 0.0061,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true,
+    "T_Nm": 0.2795034647420638,
+    "steady_note": null
+   },
+   "dm_I1_g+90": {
+    "fI": 1.0,
+    "gamma": 90.0,
+    "demag": {
+     "per_magnet_spread_pct": 0.031,
+     "bh_kept_vol_pct": 98.784,
+     "bh_loss_pct": 1.216,
+     "br_kept_vol_pct": 99.212,
+     "loss_pct": 0.788,
+     "area_derated_pct": 2.79,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 1630,
+      "magnet_tag": 101,
+      "x_mm": 8.605,
+      "y_mm": 7.873,
+      "r_mm": 11.663,
+      "theta_deg": 42.46,
+      "element_area_pct": 0.0007,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": false,
+    "T_Nm": -0.0035460955909852854,
+    "steady_note": "demag NOT settled after 8 pre-pass period(s): the observables still drift between the last two pre-pass periods (torque 0.00139 (tol 0.001), ripple 2.41 pp (tol 8.67)) \u2014 a demag transient, not a steady state",
+    "settled_under_floor": true,
+    "floor_note": "magnets settled; the solver's RELATIVE torque-drift test is degenerate at T \u2248 0 (-0.003546 N\u00b7m) \u2014 settled under the spec \u00a71 absolute floor (0.05 % of rated torque)"
+   }
+  }
+ },
+ "envelope": {
+  "min": {
+   "v_dc": 18.0,
+   "v_phase_limit_V": 9.8726896031426,
+   "base_speed_rated_I_rpm": 12559.424148466353,
+   "max_speed_I0_rpm": 19125.72069417277,
+   "max_speed_Ipk_rpm": 20847.00061696086,
+   "rated_point": {
+    "gamma": 14.962299469334612,
+    "mode": "field weakening"
+   },
+   "torque_speed": [
+    {
+     "rpm": 3250.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 6500.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 9750.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 13000.0,
+     "T": 0.698904645415279,
+     "I": 48.79,
+     "gamma": 17.059135482286198,
+     "mode": "field weakening"
+    },
+    {
+     "rpm": 16250.0,
+     "T": 0.5038604830945435,
+     "I": 48.79,
+     "gamma": 48.93026807999099,
+     "mode": "field weakening"
+    },
+    {
+     "rpm": 19500.0,
+     "T": 0.2655559767988166,
+     "I": 48.79,
+     "gamma": 70.10424825163588,
+     "mode": "field weakening"
+    },
+    {
+     "rpm": 26000.0,
+     "T": null,
+     "reason": "no feasible point"
+    },
+    {
+     "rpm": 32500.0,
+     "T": null,
+     "reason": "no feasible point"
+    },
+    {
+     "rpm": 39000.0,
+     "T": null,
+     "reason": "no feasible point"
+    }
+   ]
+  },
+  "nom": {
+   "v_dc": 22.2,
+   "v_phase_limit_V": 12.176317177209208,
+   "base_speed_rated_I_rpm": 15655.38608270844,
+   "max_speed_I0_rpm": 23667.164382157735,
+   "max_speed_Ipk_rpm": 25819.525990866638,
+   "rated_point": {
+    "gamma": 6.34,
+    "mode": "mtpa"
+   },
+   "torque_speed": [
+    {
+     "rpm": 3250.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 6500.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 9750.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 13000.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 16250.0,
+     "T": 0.6984525652847865,
+     "I": 48.79,
+     "gamma": 17.244066076170874,
+     "mode": "field weakening"
+    },
+    {
+     "rpm": 19500.0,
+     "T": 0.5464640107599152,
+     "I": 48.79,
+     "gamma": 44.24763316932955,
+     "mode": "field weakening"
+    },
+    {
+     "rpm": 26000.0,
+     "T": null,
+     "reason": "no feasible point"
+    },
+    {
+     "rpm": 32500.0,
+     "T": null,
+     "reason": "no feasible point"
+    },
+    {
+     "rpm": 39000.0,
+     "T": null,
+     "reason": "no feasible point"
+    }
+   ]
+  },
+  "max": {
+   "v_dc": 25.2,
+   "v_phase_limit_V": 13.82176544439964,
+   "base_speed_rated_I_rpm": 17866.745266206548,
+   "max_speed_I0_rpm": 26910.004700586458,
+   "max_speed_Ipk_rpm": 29369.860458257393,
+   "rated_point": {
+    "gamma": 6.34,
+    "mode": "mtpa"
+   },
+   "torque_speed": [
+    {
+     "rpm": 3250.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 6500.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 9750.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 13000.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 16250.0,
+     "T": 0.7109398598391679,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa"
+    },
+    {
+     "rpm": 19500.0,
+     "T": 0.6684446986482434,
+     "I": 48.79,
+     "gamma": 25.860128485486435,
+     "mode": "field weakening"
+    },
+    {
+     "rpm": 26000.0,
+     "T": 0.35734034126678177,
+     "I": 48.79,
+     "gamma": 62.597931175861525,
+     "mode": "field weakening"
+    },
+    {
+     "rpm": 32500.0,
+     "T": null,
+     "reason": "no feasible point"
+    },
+    {
+     "rpm": 39000.0,
+     "T": null,
+     "reason": "no feasible point"
+    }
+   ]
+  }
+ },
+ "loss_grid": {
+  "plan": {
+   "bus": "nom",
+   "v_dc": 22.2,
+   "m": 0.95,
+   "v_phase_limit_V": 12.176317177209208,
+   "R_hot_ohm": 0.008944520935006719,
+   "I_peak_rms": 48.79,
+   "I_peak_source": "owner peak duty",
+   "n_mech_limit_rpm": 45000.0,
+   "n_mech_source": "bearing speed limit (mech_losses / bearings library); critical speed and rotor stress not computed in stage 1",
+   "n_elec_limit_rpm": 25841.126568028063,
+   "n_max_rpm": 25841.126568028063,
+   "speeds": [
+    3250.0,
+    6500.0,
+    13000.0,
+    19500.0,
+    25841.0
+   ],
+   "currents": [
+    21.39,
+    42.78,
+    48.79
+   ]
+  },
+  "points": [
+   {
+    "plan": {
+     "rpm": 3250.0,
+     "I": 21.39,
+     "gamma": 3.28,
+     "mode": "mtpa",
+     "id": "loss_n3250_I0.5"
+    },
+    "id": "loss_n3250_I0.5",
+    "rpm": 3250.0,
+    "I_rms": 21.39,
+    "gamma": 3.28,
+    "i_d": -1.7307715845477842,
+    "i_q": 30.200473998302115,
+    "T_Nm": 0.31414798167798175,
+    "T_ripple_pct": 20.209523251626667,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 12.277216340662765,
+     "P_cu_ac_W": 0.22722152251473382,
+     "P_fe_stator_W": 1.1815965390096095,
+     "P_fe_rotor_W": 0.07990509139540891,
+     "P_mag_W": 0.1868923008048594,
+     "P_shaft_W": 0.0010958540141698626,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 0.656,
+      "eddy_W": 0.215,
+      "excess_W": 0.312,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.032,
+      "eddy_W": 0.026,
+      "excess_W": 0.022,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 13.953927648401544,
+    "P_mech_W": 0.0142,
+    "efficiency": {
+     "P_airgap_W": 106.91687406612425,
+     "P_in_W": 120.8708017145258,
+     "P_shaft_W": 106.90267406612425,
+     "eta_shaft": 0.8844375361934668
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.524,
+     "loss_pct": 0.476,
+     "bh_loss_pct": 0.769,
+     "per_magnet_spread_pct": 0.024,
+     "area_derated_pct": 2.51
+    },
+    "demag_corner": 19.2,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.5517929199755771,
+      "ritz_top": [
+       0.551793,
+       0.551793,
+       0.442543,
+       0.442543,
+       0.288404,
+       0.288404
+      ],
+      "ritz_history": [
+       0.0590559,
+       0.160412,
+       0.45397,
+       0.542213,
+       0.550265,
+       0.551684,
+       0.551812,
+       0.551783,
+       0.551793,
+       0.551793,
+       0.551793,
+       0.551793,
+       0.551793,
+       0.551793,
+       0.551793
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.5517929199755771,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       1.027e-09
+      ],
+      "defect_norm": 1.0273393479761867e-09,
+      "orbit_state_norm": 0.17684496219869097,
+      "orbit_error_norm": 1.076646090771249e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 2.10260483623709e-09,
+       "iterations": 11,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 2.292108701005363e-09,
+      "error_norm_observed": null,
+      "error_norm": 2.292108701005363e-09,
+      "scale": 2.128934215851213,
+      "amplification": 2.2311115655413336,
+      "ripple_pct": 20.20952285811209,
+      "dT_rel": 3.682507799805443e-13,
+      "dripple_pp": 2.7633006993710296e-10,
+      "dP_cond_W": 1.6846979974255438e-11,
+      "dP_cond_by_group_W": {
+       "cu": 5.81845682745552e-12,
+       "shaft": 2.0981944480469306e-12,
+       "mag": 8.930328698752987e-12
+      },
+      "P_fe_orbit_W": 1.269112096705841,
+      "P_fe_perturbed_W": 1.2691120967300704,
+      "P_fe_closure_W": 1.2691121078146304,
+      "dP_fe_W": 1.113301895117047e-08,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.20209522858112094,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 1.0055889782753173e-09,
+      "estimate_ripple_pp": 3.9379090566171726e-07,
+      "estimate_P_total_rel": 8.918934034752366e-10,
+      "estimate_P_total_W": 1.2445416022180064e-08,
+      "report_part": {
+       "T_rel": 1.0052207274953367e-09,
+       "ripple_pp": 3.9351457559178016e-07,
+       "P_W": 1.2955500910353385e-09
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 327.3752763271332,
+    "T_map_virgin_Nm": 0.3175621928342246,
+    "k_state": 0.9892486850346661
+   },
+   {
+    "plan": {
+     "rpm": 3250.0,
+     "I": 42.78,
+     "gamma": 6.34,
+     "mode": "mtpa",
+     "id": "loss_n3250_I1"
+    },
+    "id": "loss_n3250_I1",
+    "rpm": 3250.0,
+    "I_rms": 42.78,
+    "gamma": 6.34,
+    "i_d": -6.680912302579189,
+    "i_q": 60.13004416101194,
+    "T_Nm": 0.6202068758460928,
+    "T_ripple_pct": 6.458191400493476,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 49.10886536265106,
+     "P_cu_ac_W": 0.2884633560013157,
+     "P_fe_stator_W": 1.1851255406156938,
+     "P_fe_rotor_W": 0.0829388025894624,
+     "P_mag_W": 0.2003255043299407,
+     "P_shaft_W": 0.0028477343898282805,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 0.657,
+      "eddy_W": 0.217,
+      "excess_W": 0.312,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.034,
+      "eddy_W": 0.026,
+      "excess_W": 0.023,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 50.8685663005773,
+    "P_mech_W": 0.0142,
+    "efficiency": {
+     "P_airgap_W": 211.08071452692923,
+     "P_in_W": 261.9492808275065,
+     "P_shaft_W": 211.06651452692924,
+     "eta_shaft": 0.8057533651558922
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.284,
+     "loss_pct": 0.716,
+     "bh_loss_pct": 1.107,
+     "per_magnet_spread_pct": 0.071,
+     "area_derated_pct": 3.28
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.5257308871867976,
+      "ritz_top": [
+       0.525731,
+       0.525731,
+       0.42049,
+       0.42049,
+       0.272928,
+       0.272928
+      ],
+      "ritz_history": [
+       0.0268586,
+       0.107984,
+       0.397172,
+       0.505389,
+       0.523438,
+       0.525664,
+       0.525813,
+       0.525734,
+       0.52573,
+       0.525731,
+       0.525731,
+       0.525731,
+       0.525731,
+       0.525731,
+       0.525731
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.5257308871867976,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       3.213e-09
+      ],
+      "defect_norm": 3.2127232676313964e-09,
+      "orbit_state_norm": 0.1773211501500021,
+      "orbit_error_norm": 3.2957525365137254e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 2.0625645482228618e-09,
+       "iterations": 11,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 6.774051231324383e-09,
+      "error_norm_observed": null,
+      "error_norm": 6.774051231324383e-09,
+      "scale": 2.0553883085196776,
+      "amplification": 2.108507539249903,
+      "ripple_pct": 6.458191211140749,
+      "dT_rel": 1.8974901008578113e-14,
+      "dripple_pp": 3.839466522492785e-09,
+      "dP_cond_W": 4.0344979961026706e-10,
+      "dP_cond_by_group_W": {
+       "cu": 1.495337187407131e-11,
+       "shaft": 1.3197356922567405e-10,
+       "mag": 2.565228585105217e-10
+      },
+      "P_fe_orbit_W": 1.2754100044065493,
+      "P_fe_perturbed_W": 1.2754100046074324,
+      "P_fe_closure_W": 1.27541003459761,
+      "dP_fe_W": 3.0391943850460734e-08,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.0645819121114075,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 1.1040336711896081e-09,
+      "estimate_ripple_pp": 1.9319219379809738e-07,
+      "estimate_P_total_rel": 7.461757089299782e-10,
+      "estimate_P_total_W": 3.795688852158488e-08,
+      "report_part": {
+       "T_rel": 1.1040146962885995e-09,
+       "ripple_pp": 1.893527272756046e-07,
+       "P_W": 7.161494871513879e-09
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 336.80507588386536,
+    "T_map_virgin_Nm": 0.626868178661835,
+    "k_state": 0.9893736784821939
+   },
+   {
+    "plan": {
+     "rpm": 3250.0,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa",
+     "id": "loss_n3250_I1.14"
+    },
+    "id": "loss_n3250_I1.14",
+    "rpm": 3250.0,
+    "I_rms": 48.79,
+    "gamma": 7.006,
+    "i_d": -8.416092991240378,
+    "i_q": 68.48428709392245,
+    "T_Nm": 0.7028122718237805,
+    "T_ripple_pct": 4.7434226218921784,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 63.8763329324458,
+     "P_cu_ac_W": 0.312641142011735,
+     "P_fe_stator_W": 1.1890009998175242,
+     "P_fe_rotor_W": 0.08306993517243644,
+     "P_mag_W": 0.20789383755021032,
+     "P_shaft_W": 0.0038709874968469557,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 0.658,
+      "eddy_W": 0.218,
+      "excess_W": 0.312,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.034,
+      "eddy_W": 0.025,
+      "excess_W": 0.024,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 65.67280983449456,
+    "P_mech_W": 0.0142,
+    "efficiency": {
+     "P_airgap_W": 239.19456925155367,
+     "P_in_W": 304.86737908604823,
+     "P_shaft_W": 239.18036925155369,
+     "eta_shaft": 0.7845390673432643
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.178,
+     "loss_pct": 0.822,
+     "bh_loss_pct": 1.259,
+     "per_magnet_spread_pct": 0.064,
+     "area_derated_pct": 3.48
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.5158855182067864,
+      "ritz_top": [
+       0.515886,
+       0.515886,
+       0.412133,
+       0.412133,
+       0.267016,
+       0.267016
+      ],
+      "ritz_history": [
+       0.0121954,
+       0.0900398,
+       0.377986,
+       0.492526,
+       0.513195,
+       0.51572,
+       0.515971,
+       0.515888,
+       0.515884,
+       0.515885,
+       0.515886,
+       0.515886,
+       0.515886,
+       0.515886,
+       0.515886
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.5158855182067864,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       3.045e-09
+      ],
+      "defect_norm": 3.0445450612683377e-09,
+      "orbit_state_norm": 0.1775664753842444,
+      "orbit_error_norm": 3.088953339898398e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 1.7064875749104128e-09,
+       "iterations": 11,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 6.288894829154885e-09,
+      "error_norm_observed": null,
+      "error_norm": 6.288894829154885e-09,
+      "scale": 2.0359306655508562,
+      "amplification": 2.06562711426415,
+      "ripple_pct": 4.7434228891489,
+      "dT_rel": 1.9777674410636876e-13,
+      "dripple_pp": 1.914269631697607e-09,
+      "dP_cond_W": 3.6906331723346453e-10,
+      "dP_cond_by_group_W": {
+       "cu": 2.3568702545162523e-11,
+       "shaft": 2.7030559301283175e-10,
+       "mag": 7.518902167547026e-11
+      },
+      "P_fe_orbit_W": 1.2793960687766455,
+      "P_fe_perturbed_W": 1.2793960689334434,
+      "P_fe_closure_W": 1.2793961079135663,
+      "dP_fe_W": 3.929371872324339e-08,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.05,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 1.1242121417493356e-09,
+      "estimate_ripple_pp": 2.6917099127388155e-07,
+      "estimate_P_total_rel": 7.116065396683094e-10,
+      "estimate_P_total_W": 4.673320095661959e-08,
+      "report_part": {
+       "T_rel": 1.1240143650052293e-09,
+       "ripple_pp": 2.6725672164218395e-07,
+       "P_W": 7.07041891614274e-09
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 345.10247564315796,
+    "T_map_virgin_Nm": 0.7109398721051857,
+    "k_state": 0.9885678091772538
+   },
+   {
+    "plan": {
+     "rpm": 6500.0,
+     "I": 21.39,
+     "gamma": 3.28,
+     "mode": "mtpa",
+     "id": "loss_n6500_I0.5"
+    },
+    "id": "loss_n6500_I0.5",
+    "rpm": 6500.0,
+    "I_rms": 21.39,
+    "gamma": 3.28,
+    "i_d": -1.7307715845477842,
+    "i_q": 30.200473998302115,
+    "T_Nm": 0.31294385215422005,
+    "T_ripple_pct": 20.2789005489858,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 12.277216340662765,
+     "P_cu_ac_W": 0.9006939878427804,
+     "P_fe_stator_W": 3.0520987919127345,
+     "P_fe_rotor_W": 0.2290074126304118,
+     "P_mag_W": 0.7475465990573249,
+     "P_shaft_W": 0.001932944071014,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 1.312,
+      "eddy_W": 0.859,
+      "excess_W": 0.881,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.064,
+      "eddy_W": 0.104,
+      "excess_W": 0.061,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 17.20849607617703,
+    "P_mech_W": 0.044000000000000004,
+    "efficiency": {
+     "P_airgap_W": 213.01412316465408,
+     "P_in_W": 230.2226192408311,
+     "P_shaft_W": 212.97012316465407,
+     "eta_shaft": 0.9250616810239243
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.524,
+     "loss_pct": 0.476,
+     "bh_loss_pct": 0.77,
+     "per_magnet_spread_pct": 0.024,
+     "area_derated_pct": 2.51
+    },
+    "demag_corner": 19.2,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.7400204614487034,
+      "ritz_top": [
+       0.74002,
+       0.74002,
+       0.662659,
+       0.662659,
+       0.534971,
+       0.534971
+      ],
+      "ritz_history": [
+       0.0791248,
+       0.21957,
+       0.597666,
+       0.704108,
+       0.728086,
+       0.7367,
+       0.739275,
+       0.739438,
+       0.739994,
+       0.740015,
+       0.740018,
+       0.740021,
+       0.740021,
+       0.74002,
+       0.74002
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.7400204614487034,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       1.007e-09
+      ],
+      "defect_norm": 1.0071737724460986e-09,
+      "orbit_state_norm": 0.1768507381888391,
+      "orbit_error_norm": 1.0554537774892399e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 4.0745865800450526e-09,
+       "iterations": 14,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 3.874050158171863e-09,
+      "error_norm_observed": null,
+      "error_norm": 3.874050158171863e-09,
+      "scale": 3.670506696548687,
+      "amplification": 3.8464565541287388,
+      "ripple_pct": 20.27890030121952,
+      "dT_rel": 1.4066530671851228e-13,
+      "dripple_pp": 2.0587265225913143e-10,
+      "dP_cond_W": 5.650696390836762e-10,
+      "dP_cond_by_group_W": {
+       "cu": 4.811981924035535e-10,
+       "shaft": 4.1954643318492524e-11,
+       "mag": 4.191680336163017e-11
+      },
+      "P_fe_orbit_W": 3.313192631305543,
+      "P_fe_perturbed_W": 3.3131926313879503,
+      "P_fe_closure_W": 3.313192654179615,
+      "dP_fe_W": 2.2956479384106387e-08,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.20278900301219518,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 5.12600696986443e-10,
+      "estimate_ripple_pp": 2.479721530335155e-07,
+      "estimate_P_total_rel": 1.5761567237836026e-09,
+      "estimate_P_total_W": 2.712328679667017e-08,
+      "report_part": {
+       "T_rel": 5.124600316797245e-10,
+       "ripple_pp": 2.4776628038125637e-07,
+       "P_W": 3.601737773480107e-09
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 318.93281507492065,
+    "T_map_virgin_Nm": 0.3175621928342246,
+    "k_state": 0.985456893848773
+   },
+   {
+    "plan": {
+     "rpm": 6500.0,
+     "I": 42.78,
+     "gamma": 6.34,
+     "mode": "mtpa",
+     "id": "loss_n6500_I1"
+    },
+    "id": "loss_n6500_I1",
+    "rpm": 6500.0,
+    "I_rms": 42.78,
+    "gamma": 6.34,
+    "i_d": -6.680912302579189,
+    "i_q": 60.13004416101194,
+    "T_Nm": 0.6189326729428664,
+    "T_ripple_pct": 6.475099577088196,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 49.10886536265106,
+     "P_cu_ac_W": 1.1448967000287098,
+     "P_fe_stator_W": 3.0638812768448367,
+     "P_fe_rotor_W": 0.23599085552721277,
+     "P_mag_W": 0.8013632164407645,
+     "P_shaft_W": 0.0050983442868337845,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 1.314,
+      "eddy_W": 0.867,
+      "excess_W": 0.883,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.068,
+      "eddy_W": 0.102,
+      "excess_W": 0.066,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 54.36009575577942,
+    "P_mech_W": 0.044000000000000004,
+    "efficiency": {
+     "P_airgap_W": 421.29410664986733,
+     "P_in_W": 475.65420240564674,
+     "P_shaft_W": 421.25010664986735,
+     "eta_shaft": 0.8856225899390192
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.284,
+     "loss_pct": 0.716,
+     "bh_loss_pct": 1.107,
+     "per_magnet_spread_pct": 0.071,
+     "area_derated_pct": 3.28
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.7183601360568328,
+      "ritz_top": [
+       0.71836,
+       0.71836,
+       0.642228,
+       0.642228,
+       0.517309,
+       0.517309
+      ],
+      "ritz_history": [
+       0.0443295,
+       0.189643,
+       0.50741,
+       0.666908,
+       0.704181,
+       0.715141,
+       0.71782,
+       0.718031,
+       0.718321,
+       0.718352,
+       0.718352,
+       0.71836,
+       0.71836,
+       0.71836,
+       0.71836
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.7183601360568328,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       2.387e-09
+      ],
+      "defect_norm": 2.3866076314458558e-09,
+      "orbit_state_norm": 0.17733277021361687,
+      "orbit_error_norm": 2.4183162740340016e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 5.484573396687382e-09,
+       "iterations": 14,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 8.473969551155071e-09,
+      "error_norm_observed": null,
+      "error_norm": 8.473969551155071e-09,
+      "scale": 3.5040782887424458,
+      "amplification": 3.5506337277658697,
+      "ripple_pct": 6.475099348016822,
+      "dT_rel": 1.574212785898971e-12,
+      "dripple_pp": 1.3638487672551491e-08,
+      "dP_cond_W": 2.482085528429656e-09,
+      "dP_cond_by_group_W": {
+       "cu": 6.644640393460577e-11,
+       "shaft": 2.2376144513669427e-10,
+       "mag": 2.191877679358356e-09
+      },
+      "P_fe_orbit_W": 3.3316184041844656,
+      "P_fe_perturbed_W": 3.3316184049275868,
+      "P_fe_closure_W": 3.3316185080732845,
+      "dP_fe_W": 1.0463194000109866e-07,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.06475099348016822,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 9.727515704209331e-10,
+      "estimate_ripple_pp": 2.4270986198615674e-07,
+      "estimate_P_total_rel": 2.324439993153603e-09,
+      "estimate_P_total_W": 1.263567806063931e-07,
+      "report_part": {
+       "T_rel": 9.711773576350341e-10,
+       "ripple_pp": 2.2907137431360525e-07,
+       "P_W": 1.9242755076864793e-08
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 331.34257411956787,
+    "T_map_virgin_Nm": 0.626868178661835,
+    "k_state": 0.9873410295990643
+   },
+   {
+    "plan": {
+     "rpm": 6500.0,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa",
+     "id": "loss_n6500_I1.14"
+    },
+    "id": "loss_n6500_I1.14",
+    "rpm": 6500.0,
+    "I_rms": 48.79,
+    "gamma": 7.006,
+    "i_d": -8.416092991240378,
+    "i_q": 68.48428709392245,
+    "T_Nm": 0.7015102080255881,
+    "T_ripple_pct": 4.750911569221177,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 63.8763329324458,
+     "P_cu_ac_W": 1.2412768568824006,
+     "P_fe_stator_W": 3.072327064689066,
+     "P_fe_rotor_W": 0.23902544546246318,
+     "P_mag_W": 0.8316271064202967,
+     "P_shaft_W": 0.0070014421540112014,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 1.316,
+      "eddy_W": 0.872,
+      "excess_W": 0.884,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.069,
+      "eddy_W": 0.102,
+      "excess_W": 0.068,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 69.26759084805404,
+    "P_mech_W": 0.044000000000000004,
+    "efficiency": {
+     "P_airgap_W": 477.50285178947763,
+     "P_in_W": 546.7704426375317,
+     "P_shaft_W": 477.45885178947765,
+     "eta_shaft": 0.8732345689468761
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.178,
+     "loss_pct": 0.822,
+     "bh_loss_pct": 1.26,
+     "per_magnet_spread_pct": 0.064,
+     "area_derated_pct": 3.48
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.7100865882116251,
+      "ritz_top": [
+       0.710087,
+       0.710087,
+       0.634384,
+       0.634384,
+       0.510444,
+       0.510444
+      ],
+      "ritz_history": [
+       0.0248461,
+       0.150042,
+       0.455489,
+       0.65,
+       0.694757,
+       0.706469,
+       0.709682,
+       0.709801,
+       0.710055,
+       0.710091,
+       0.710086,
+       0.710086,
+       0.710087,
+       0.710087,
+       0.710087
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.7100865882116251,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       2.351e-09
+      ],
+      "defect_norm": 2.3514031877974835e-09,
+      "orbit_state_norm": 0.17758113643684884,
+      "orbit_error_norm": 2.3553232390891766e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 3.974337228482659e-09,
+       "iterations": 14,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 8.110708550158117e-09,
+      "error_norm_observed": null,
+      "error_norm": 8.110708550158117e-09,
+      "scale": 3.4435649491976297,
+      "amplification": 3.4493057559198386,
+      "ripple_pct": 4.750911663772856,
+      "dT_rel": 1.1108399178620484e-12,
+      "dripple_pp": 2.2724746528979267e-09,
+      "dP_cond_W": 2.2864583585843756e-09,
+      "dP_cond_by_group_W": {
+       "cu": 1.929834070324432e-10,
+       "shaft": 8.558132006883379e-10,
+       "mag": 1.2376617508635945e-09
+      },
+      "P_fe_orbit_W": 3.343203427575991,
+      "P_fe_perturbed_W": 3.3432034282310155,
+      "P_fe_closure_W": 3.343203565433146,
+      "dP_fe_W": 1.3851217950389128e-07,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.05,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 1.127986481364104e-09,
+      "estimate_ripple_pp": 9.682415313960746e-08,
+      "estimate_P_total_rel": 2.391597300379382e-09,
+      "estimate_P_total_W": 1.6566018327598964e-07,
+      "report_part": {
+       "T_rel": 1.126875641446242e-09,
+       "ripple_pp": 9.455167848670953e-08,
+       "P_W": 2.4861545413513986e-08
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 335.0991642475128,
+    "T_map_virgin_Nm": 0.7109398721051857,
+    "k_state": 0.9867363409346065
+   },
+   {
+    "plan": {
+     "rpm": 13000.0,
+     "I": 21.39,
+     "gamma": 3.28,
+     "mode": "mtpa",
+     "id": "loss_n13000_I0.5"
+    },
+    "id": "loss_n13000_I0.5",
+    "rpm": 13000.0,
+    "I_rms": 21.39,
+    "gamma": 3.28,
+    "i_d": -1.7307715845477842,
+    "i_q": 30.200473998302115,
+    "T_Nm": 0.3105949172488895,
+    "T_ripple_pct": 20.425740639804392,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 12.277216340662765,
+     "P_cu_ac_W": 3.5038704701226173,
+     "P_fe_stator_W": 8.556325214788043,
+     "P_fe_rotor_W": 0.7160272152627662,
+     "P_mag_W": 2.9899145522803896,
+     "P_shaft_W": 0.0033186539139290943,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 2.625,
+      "eddy_W": 3.438,
+      "excess_W": 2.493,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.127,
+      "eddy_W": 0.415,
+      "excess_W": 0.174,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 28.04667244703051,
+    "P_mech_W": 0.1409,
+    "efficiency": {
+     "P_airgap_W": 422.8305077842911,
+     "P_in_W": 450.87718023132163,
+     "P_shaft_W": 422.6896077842911,
+     "eta_shaft": 0.9374828142054807
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.524,
+     "loss_pct": 0.476,
+     "bh_loss_pct": 0.77,
+     "per_magnet_spread_pct": 0.024,
+     "area_derated_pct": 2.51
+    },
+    "demag_corner": 19.1,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.858816572642759,
+      "ritz_top": [
+       0.858817,
+       0.858817,
+       0.812639,
+       0.812639,
+       0.730111,
+       0.730111
+      ],
+      "ritz_history": [
+       0.0725138,
+       0.152179,
+       0.431639,
+       0.679146,
+       0.786475,
+       0.828036,
+       0.846704,
+       0.851229,
+       0.858177,
+       0.858709,
+       0.858783,
+       0.8588,
+       0.858806,
+       0.858811,
+       0.858817
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.858816572642759,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       8.619e-10
+      ],
+      "defect_norm": 8.619202941766319e-10,
+      "orbit_state_norm": 0.17685816705189913,
+      "orbit_error_norm": 9.018638433711944e-10,
+      "orbit_error_gmres": {
+       "rel_resid": 5.8760298778445236e-09,
+       "iterations": 19,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 6.104967915219165e-09,
+      "error_norm_observed": null,
+      "error_norm": 6.104967915219165e-09,
+      "scale": 6.769278932836036,
+      "amplification": 7.082984304309795,
+      "ripple_pct": 20.425740005709617,
+      "dT_rel": 1.406460407409526e-11,
+      "dripple_pp": 8.636931170258322e-10,
+      "dP_cond_W": 1.5114611722800986e-08,
+      "dP_cond_by_group_W": {
+       "cu": 3.601121179030997e-09,
+       "shaft": 2.007016159169539e-10,
+       "mag": 1.1312788927853035e-08
+      },
+      "P_fe_orbit_W": 9.404425299060998,
+      "P_fe_perturbed_W": 9.404425299691772,
+      "P_fe_closure_W": 9.404425382194654,
+      "dP_fe_W": 8.376443005886358e-08,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.20425740005709617,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 8.242954645495389e-10,
+      "estimate_ripple_pp": 6.349584680265252e-07,
+      "estimate_P_total_rel": 4.126494680333086e-09,
+      "estimate_P_total_W": 1.157344446537159e-07,
+      "report_part": {
+       "T_rel": 8.102308604754437e-10,
+       "ripple_pp": 6.340947749094994e-07,
+       "P_W": 1.685540287205134e-08
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 312.3778967857361,
+    "T_map_virgin_Nm": 0.3175621928342246,
+    "k_state": 0.978060122575825
+   },
+   {
+    "plan": {
+     "rpm": 13000.0,
+     "I": 42.78,
+     "gamma": 6.34,
+     "mode": "mtpa",
+     "id": "loss_n13000_I1"
+    },
+    "id": "loss_n13000_I1",
+    "rpm": 13000.0,
+    "I_rms": 42.78,
+    "gamma": 6.34,
+    "i_d": -6.680912302579189,
+    "i_q": 60.13004416101194,
+    "T_Nm": 0.616440131309805,
+    "T_ripple_pct": 6.514972253934811,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 49.10886536265106,
+     "P_cu_ac_W": 4.472630093368899,
+     "P_fe_stator_W": 8.598183218889037,
+     "P_fe_rotor_W": 0.7330156198471354,
+     "P_mag_W": 3.2057494225580165,
+     "P_shaft_W": 0.008951326660017621,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 2.63,
+      "eddy_W": 3.471,
+      "excess_W": 2.497,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.136,
+      "eddy_W": 0.409,
+      "excess_W": 0.188,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 66.12739504397416,
+    "P_mech_W": 0.1409,
+    "efficiency": {
+     "P_airgap_W": 839.194974757018,
+     "P_in_W": 905.3223698009922,
+     "P_shaft_W": 839.054074757018,
+     "eta_shaft": 0.9268014386316984
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.283,
+     "loss_pct": 0.717,
+     "bh_loss_pct": 1.107,
+     "per_magnet_spread_pct": 0.071,
+     "area_derated_pct": 3.28
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.8438218004007473,
+      "ritz_top": [
+       0.843822,
+       0.843822,
+       0.797685,
+       0.797685,
+       0.715441,
+       0.715441
+      ],
+      "ritz_history": [
+       0.00597324,
+       0.0816612,
+       0.421287,
+       0.628026,
+       0.759756,
+       0.81003,
+       0.834961,
+       0.841764,
+       0.843249,
+       0.843658,
+       0.843762,
+       0.843807,
+       0.843806,
+       0.843816,
+       0.843822
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.8438218004007473,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       1.877e-09
+      ],
+      "defect_norm": 1.876696743903732e-09,
+      "orbit_state_norm": 0.17735085007545534,
+      "orbit_error_norm": 1.8611741061573108e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 4.569734583808508e-09,
+       "iterations": 19,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 1.2016380959181653e-08,
+      "error_norm_observed": null,
+      "error_norm": 1.2016380959181653e-08,
+      "scale": 6.456344368550978,
+      "amplification": 6.402942296466228,
+      "ripple_pct": 6.514972176561492,
+      "dT_rel": 5.269794110407555e-13,
+      "dripple_pp": 2.6833853361551974e-08,
+      "dP_cond_W": 7.966066127920723e-09,
+      "dP_cond_by_group_W": {
+       "cu": 4.909850304102292e-12,
+       "shaft": 4.659358333186647e-10,
+       "mag": 7.495220444297956e-09
+      },
+      "P_fe_orbit_W": 9.46357935228293,
+      "P_fe_perturbed_W": 9.463579355835758,
+      "P_fe_closure_W": 9.4635797357959,
+      "dP_fe_W": 3.8706579985614553e-07,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.06514972176561493,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 1.029324605792125e-09,
+      "estimate_ripple_pp": 1.0420717266867996e-07,
+      "estimate_P_total_rel": 6.172874518641216e-09,
+      "estimate_P_total_W": 4.0819611185106963e-07,
+      "report_part": {
+       "T_rel": 1.0287976263810842e-09,
+       "ripple_pp": 7.737331930712799e-08,
+       "P_W": 1.3164245867003377e-08
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 327.6803631782532,
+    "T_map_virgin_Nm": 0.626868178661835,
+    "k_state": 0.9833648481339561
+   },
+   {
+    "plan": {
+     "rpm": 13000.0,
+     "I": 48.79,
+     "gamma": 7.005904628330995,
+     "mode": "mtpa",
+     "id": "loss_n13000_I1.14"
+    },
+    "id": "loss_n13000_I1.14",
+    "rpm": 13000.0,
+    "I_rms": 48.79,
+    "gamma": 7.006,
+    "i_d": -8.416092991240378,
+    "i_q": 68.48428709392245,
+    "T_Nm": 0.6989607160616736,
+    "T_ripple_pct": 4.771140831153648,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 63.8763329324458,
+     "P_cu_ac_W": 4.8547815536994605,
+     "P_fe_stator_W": 8.627086131704425,
+     "P_fe_rotor_W": 0.7400073881373928,
+     "P_mag_W": 3.326669784367816,
+     "P_shaft_W": 0.012420265493845976,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 2.634,
+      "eddy_W": 3.492,
+      "excess_W": 2.501,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.139,
+      "eddy_W": 0.407,
+      "excess_W": 0.194,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 81.43729805584873,
+    "P_mech_W": 0.1409,
+    "efficiency": {
+     "P_airgap_W": 951.5349353151266,
+     "P_in_W": 1032.9722333709753,
+     "P_shaft_W": 951.3940353151266,
+     "eta_shaft": 0.9210257590471445
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.178,
+     "loss_pct": 0.822,
+     "bh_loss_pct": 1.26,
+     "per_magnet_spread_pct": 0.064,
+     "area_derated_pct": 3.48
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.8380964088859463,
+      "ritz_top": [
+       0.838096,
+       0.838096,
+       0.79194,
+       0.79194,
+       0.709906,
+       0.709906
+      ],
+      "ritz_history": [
+       0.0425888,
+       0.222932,
+       0.512084,
+       0.722602,
+       0.791012,
+       0.818095,
+       0.831714,
+       0.83392,
+       0.837312,
+       0.837825,
+       0.838114,
+       0.838148,
+       0.838107,
+       0.838088,
+       0.838096
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.8380964088859463,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       1.918e-09
+      ],
+      "defect_norm": 1.917560169875917e-09,
+      "orbit_state_norm": 0.17760436171483826,
+      "orbit_error_norm": 1.926606663299205e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 3.5208397109571685e-09,
+       "iterations": 19,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 1.1843839637411644e-08,
+      "error_norm_observed": null,
+      "error_norm": 1.1843839637411644e-08,
+      "scale": 6.147513066901646,
+      "amplification": 6.176515252805884,
+      "ripple_pct": 4.771141054058128,
+      "dT_rel": 1.8838319219666293e-13,
+      "dripple_pp": 3.4655931457905353e-09,
+      "dP_cond_W": 3.6664120090651453e-09,
+      "dP_cond_by_group_W": {
+       "cu": 7.888445452408632e-10,
+       "shaft": 2.6656112334794146e-09,
+       "mag": 2.1195623034486744e-10
+      },
+      "P_fe_orbit_W": 9.500365909136377,
+      "P_fe_perturbed_W": 9.500365913544991,
+      "P_fe_closure_W": 9.500366413637805,
+      "dP_fe_W": 5.089100412192238e-07,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.05,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 1.4524272640760277e-09,
+      "estimate_ripple_pp": 2.2637007290882138e-07,
+      "estimate_P_total_rel": 6.950892576820425e-09,
+      "estimate_P_total_W": 5.660619105327114e-07,
+      "report_part": {
+       "T_rel": 1.452238880883831e-09,
+       "ripple_pp": 2.2290447976303085e-07,
+       "P_W": 5.3485457304422446e-08
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 333.2068684101105,
+    "T_map_virgin_Nm": 0.7109398721051857,
+    "k_state": 0.9831502543132934
+   },
+   {
+    "plan": {
+     "rpm": 19500.0,
+     "I": 21.39,
+     "gamma": null,
+     "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+    },
+    "status": "infeasible: needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "plan": {
+     "rpm": 19500.0,
+     "I": 42.78,
+     "gamma": 47.472254726338974,
+     "mode": "field weakening",
+     "id": "loss_n19500_I1"
+    },
+    "id": "loss_n19500_I1",
+    "rpm": 19500.0,
+    "I_rms": 42.78,
+    "gamma": 47.472,
+    "i_d": -44.58534054934131,
+    "i_q": 40.89503891793308,
+    "T_Nm": 0.4469858429134861,
+    "T_ripple_pct": 6.263221960255772,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 49.10886536265106,
+     "P_cu_ac_W": 8.877393396965921,
+     "P_fe_stator_W": 12.680457541628465,
+     "P_fe_rotor_W": 1.2250442025626853,
+     "P_mag_W": 4.286371598717842,
+     "P_shaft_W": 0.020942667417575604,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 3.138,
+      "eddy_W": 5.717,
+      "excess_W": 3.825,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.171,
+      "eddy_W": 0.759,
+      "excess_W": 0.295,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 76.19907476994355,
+    "P_mech_W": 0.27749999999999997,
+    "efficiency": {
+     "P_airgap_W": 912.760836231172,
+     "P_in_W": 988.9599110011155,
+     "P_shaft_W": 912.483336231172,
+     "eta_shaft": 0.9226696917446057
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.191,
+     "loss_pct": 0.809,
+     "bh_loss_pct": 1.224,
+     "per_magnet_spread_pct": 0.025,
+     "area_derated_pct": 2.88
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.8875284848961925,
+      "ritz_top": [
+       0.887528,
+       0.887528,
+       0.854427,
+       0.854427,
+       0.794515,
+       0.794515
+      ],
+      "ritz_history": [
+       0.0500188,
+       0.177693,
+       0.451442,
+       0.564228,
+       0.637287,
+       0.71876,
+       0.78754,
+       0.837233,
+       0.863114,
+       0.879112,
+       0.886956,
+       0.8874,
+       0.887574,
+       0.887487,
+       0.887528
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.8875284848961925,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       4.437e-09
+      ],
+      "defect_norm": 4.436843481406844e-09,
+      "orbit_state_norm": 0.1645570821269403,
+      "orbit_error_norm": 4.688606186153039e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 5.1601156379837135e-09,
+       "iterations": 22,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 3.944859707199449e-08,
+      "error_norm_observed": null,
+      "error_norm": 3.944859707199449e-08,
+      "scale": 8.413715186508707,
+      "amplification": 8.891140117362454,
+      "ripple_pct": 6.263451237492991,
+      "dT_rel": 5.309626597457407e-11,
+      "dripple_pp": 1.3607388993364111e-08,
+      "dP_cond_W": 1.876950343551731e-07,
+      "dP_cond_by_group_W": {
+       "cu": 7.621819264613805e-08,
+       "shaft": 2.5614984529298557e-08,
+       "mag": 8.586185717973649e-08
+      },
+      "P_fe_orbit_W": 14.145392617160525,
+      "P_fe_perturbed_W": 14.145392625677019,
+      "P_fe_closure_W": 14.145393806638202,
+      "dP_fe_W": 1.1979941714201914e-06,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.06263451237492992,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 5.85996205652474e-07,
+      "estimate_ripple_pp": 0.00022929084460798776,
+      "estimate_P_total_rel": 1.2897378085650645e-07,
+      "estimate_P_total_W": 9.827682770847251e-06,
+      "report_part": {
+       "T_rel": 5.859431093864994e-07,
+       "ripple_pp": 0.0002292772372189944,
+       "P_W": 8.441993565071887e-06
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 342.2239098548889,
+    "T_map_virgin_Nm": 0.45389149458640665,
+    "k_state": 0.984785677292294
+   },
+   {
+    "plan": {
+     "rpm": 19500.0,
+     "I": 48.79,
+     "gamma": 44.196762944926625,
+     "mode": "field weakening",
+     "id": "loss_n19500_I1.14"
+    },
+    "id": "loss_n19500_I1.14",
+    "rpm": 19500.0,
+    "I_rms": 48.79,
+    "gamma": 44.197,
+    "i_d": -48.10143924399563,
+    "i_q": 49.468977578439976,
+    "T_Nm": 0.5392899420179492,
+    "T_ripple_pct": 4.6053798879236245,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 63.8763329324458,
+     "P_cu_ac_W": 9.771387503478543,
+     "P_fe_stator_W": 12.549269874967129,
+     "P_fe_rotor_W": 1.22012346568855,
+     "P_mag_W": 4.362251376998513,
+     "P_shaft_W": 0.028832959930725932,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 3.111,
+      "eddy_W": 5.64,
+      "excess_W": 3.797,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.174,
+      "eddy_W": 0.743,
+      "excess_W": 0.303,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 91.80819811350926,
+    "P_mech_W": 0.27749999999999997,
+    "efficiency": {
+     "P_airgap_W": 1101.2490579989956,
+     "P_in_W": 1193.0572561125048,
+     "P_shaft_W": 1100.9715579989956,
+     "eta_shaft": 0.9228153572330937
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.07,
+     "loss_pct": 0.93,
+     "bh_loss_pct": 1.384,
+     "per_magnet_spread_pct": 0.031,
+     "area_derated_pct": 3.13
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.8815869134595776,
+      "ritz_top": [
+       0.881587,
+       0.881587,
+       0.848374,
+       0.848374,
+       0.788267,
+       0.788267
+      ],
+      "ritz_history": [
+       0.0839946,
+       0.226493,
+       0.498654,
+       0.702998,
+       0.797054,
+       0.840892,
+       0.861706,
+       0.87693,
+       0.882277,
+       0.881859,
+       0.88187,
+       0.881703,
+       0.881605,
+       0.881578,
+       0.881587
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.8815869134595776,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       6.004e-09
+      ],
+      "defect_norm": 6.003625070232889e-09,
+      "orbit_state_norm": 0.16396156313543106,
+      "orbit_error_norm": 6.386955918002937e-09,
+      "orbit_error_gmres": {
+       "rel_resid": 3.469645966623707e-09,
+       "iterations": 22,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 5.070068896636223e-08,
+      "error_norm_observed": null,
+      "error_norm": 5.070068896636223e-08,
+      "scale": 7.9381617185507745,
+      "amplification": 8.445012533801595,
+      "ripple_pct": 4.605620087093099,
+      "dT_rel": 3.5535601890136645e-11,
+      "dripple_pp": 3.892201938526796e-08,
+      "dP_cond_W": 1.752383076390751e-07,
+      "dP_cond_by_group_W": {
+       "cu": 1.0126501592822024e-07,
+       "shaft": 2.8072001830720117e-08,
+       "mag": 4.5901289880134755e-08
+      },
+      "P_fe_orbit_W": 14.006670958806703,
+      "P_fe_perturbed_W": 14.006670979631915,
+      "P_fe_closure_W": 14.006672493057351,
+      "dP_fe_W": 1.555075860082411e-06,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.05,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 5.758212701790773e-07,
+      "estimate_ripple_pp": 0.00024023809149387176,
+      "estimate_P_total_rel": 1.1485822687540267e-07,
+      "estimate_P_total_W": 1.0544926847943364e-05,
+      "report_part": {
+       "T_rel": 5.757857345771872e-07,
+       "ripple_pp": 0.0002401991694744865,
+       "P_W": 8.814612680221878e-06
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 348.0119743347168,
+    "T_map_virgin_Nm": 0.5469002055082329,
+    "k_state": 0.986084730973521
+   },
+   {
+    "plan": {
+     "rpm": 25841.0,
+     "I": 21.39,
+     "gamma": null,
+     "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+    },
+    "status": "infeasible: needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "plan": {
+     "rpm": 25841.0,
+     "I": 42.78,
+     "gamma": null,
+     "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+    },
+    "status": "infeasible: needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "plan": {
+     "rpm": 25841.0,
+     "I": 48.79,
+     "gamma": 79.99905468174367,
+     "mode": "field weakening",
+     "id": "loss_n25841_I1.14"
+    },
+    "id": "loss_n25841_I1.14",
+    "rpm": 25841.0,
+    "I_rms": 48.79,
+    "gamma": 79.999,
+    "i_d": -67.95101344111639,
+    "i_q": 11.982819882032024,
+    "T_Nm": 0.13082572795201938,
+    "T_ripple_pct": 18.93941586012544,
+    "torque_method": "coulomb_virtual_work",
+    "groups_W": {
+     "P_cu_dc_W": 63.8763329324458,
+     "P_cu_ac_W": 15.877094815746652,
+     "P_fe_stator_W": 15.08365775408274,
+     "P_fe_rotor_W": 1.7570766209589195,
+     "P_mag_W": 3.5223776322504943,
+     "P_shaft_W": 0.05791831443128654,
+     "P_sleeve_W": 0.0,
+     "P_cu_circulating_W": 0.0
+    },
+    "P_fe_terms": {
+     "stator": {
+      "hysteresis_W": 3.069,
+      "eddy_W": 7.471,
+      "excess_W": 4.543,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true
+     },
+     "rotor": {
+      "hysteresis_W": 0.201,
+      "eddy_W": 1.151,
+      "excess_W": 0.405,
+      "k_f": 0.95,
+      "model": "bertotti",
+      "window_closed": true,
+      "window_electrical_periods": 7.0,
+      "window_method": "pole_pair_image_mapping"
+     }
+    },
+    "P_loss_em_W": 100.1744580699159,
+    "P_mech_W": 0.46540000000000004,
+    "efficiency": {
+     "P_airgap_W": 354.0226869837308,
+     "P_in_W": 454.1971450536467,
+     "P_shaft_W": 353.5572869837308,
+     "eta_shaft": 0.778422521660657
+    },
+    "demag": {
+     "br_kept_vol_pct": 99.093,
+     "loss_pct": 0.907,
+     "bh_loss_pct": 1.378,
+     "per_magnet_spread_pct": 0.04,
+     "area_derated_pct": 3.35
+    },
+    "demag_corner": 11.7,
+    "settle": {
+     "eddy_method": "tdm",
+     "eddy_settled": true,
+     "demag_settled": true,
+     "steady_state": true,
+     "qualified": true,
+     "tdm_stop": "state residual < tol, or the owner's terms: T_mean < 0.1 %, ripple < 0.05 pp, eddy loss < 0.5 % between iterates with rrel < 1e-5",
+     "tdm_orbit_error_estimate": {
+      "kind": "first-order estimate with an empirical safeguard (not a proof)",
+      "rho_ritz": 0.9043414733896096,
+      "ritz_top": [
+       0.904341,
+       0.904341,
+       0.877799,
+       0.877799,
+       0.829454,
+       0.829454
+      ],
+      "ritz_history": [
+       0.278412,
+       0.488552,
+       0.723951,
+       0.836589,
+       0.867967,
+       0.884951,
+       0.891936,
+       0.894357,
+       0.898647,
+       0.902169,
+       0.903617,
+       0.903993,
+       0.904195,
+       0.904267,
+       0.904341
+      ],
+      "ritz_converged": true,
+      "arnoldi_steps": 15,
+      "rho_observed": null,
+      "rho_eff": 0.9043414733896096,
+      "closure_periods": 1,
+      "extra_closure_periods": 0,
+      "deviation_increments": [
+       9.866e-09
+      ],
+      "defect_norm": 9.865760380617865e-09,
+      "orbit_state_norm": 0.15462659463649997,
+      "orbit_error_norm": 1.2462239156540332e-08,
+      "orbit_error_gmres": {
+       "rel_resid": 6.152447188879802e-09,
+       "iterations": 24,
+       "converged": true
+      },
+      "safety": 0.1,
+      "error_norm_rho": 1.0313519066418744e-07,
+      "error_norm_observed": null,
+      "error_norm": 1.0313519066418744e-07,
+      "scale": 8.27581539470464,
+      "amplification": 10.453851166586754,
+      "ripple_pct": 18.938486793037036,
+      "dT_rel": 9.30329753814729e-10,
+      "dripple_pp": 3.532378762827193e-07,
+      "dP_cond_W": 1.007623064111507e-06,
+      "dP_cond_by_group_W": {
+       "cu": 7.736348806020032e-08,
+       "shaft": 8.177037527229425e-07,
+       "mag": 1.1255582332836411e-07
+      },
+      "P_fe_orbit_W": 17.192275681819165,
+      "P_fe_perturbed_W": 17.192275811366358,
+      "P_fe_closure_W": 17.19227809127237,
+      "dP_fe_W": 2.539000398371627e-06,
+      "limits": {
+       "T_rel": 0.001,
+       "ripple_pp": 0.18938486793037038,
+       "P_total_rel": 0.005000000000000001,
+       "safety": 0.1
+      },
+      "estimate_T_rel": 1.6798900173834118e-05,
+      "estimate_ripple_pp": 0.0009294203262797396,
+      "estimate_P_total_rel": 7.441233961385078e-07,
+      "estimate_P_total_W": 7.454215794532038e-05,
+      "report_part": {
+       "T_rel": 1.6797969844080305e-05,
+       "ripple_pp": 0.0009290670884034569,
+       "P_W": 7.099553448283724e-05
+      },
+      "ok": true
+     },
+     "rule": "TDM periodic orbit (state residual), demag full pre-pass with the owner's steadiness rule; spec 3.0.1 tail-bound rule = proposal (owner decision pending)"
+    },
+    "gap_layers": 1.0,
+    "n_steps_per_period": 36,
+    "wall_s": 359.38856315612793,
+    "T_map_virgin_Nm": 0.1360821129792655,
+    "k_state": 0.9613734317305388
+   }
+  ],
+  "interpolation": "per group P = a\u00b7n^k between neighbouring speed points of a current row, linear in I; DC copper analytic 3\u00b7I\u00b2\u00b7R_hot; never extrapolated past the grid speeds",
+  "mech": {
+   "3250.0": {
+    "P_W": 0.0142,
+    "P_bearings_W": 0.012,
+    "P_windage_W": 0.0022,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 3250.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.006,
+       "M_total_Nm": 2e-05,
+       "M_rr_Nm": 2e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 39000.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.006,
+       "M_total_Nm": 2e-05,
+       "M_rr_Nm": 2e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 39000.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 4e-05,
+     "windage": {
+      "P_W": 0.0022,
+      "P_gap_W": 0.0015,
+      "P_faces_W": 0.0007,
+      "M_total_Nm": 6e-06,
+      "gap_regime": "laminar (Ta < 1700)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   },
+   "6500.0": {
+    "P_W": 0.044000000000000004,
+    "P_bearings_W": 0.034,
+    "P_windage_W": 0.01,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 6500.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.017,
+       "M_total_Nm": 3e-05,
+       "M_rr_Nm": 3e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 78000.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.017,
+       "M_total_Nm": 3e-05,
+       "M_rr_Nm": 3e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 78000.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 5e-05,
+     "windage": {
+      "P_W": 0.01,
+      "P_gap_W": 0.0059,
+      "P_faces_W": 0.0042,
+      "M_total_Nm": 1.5e-05,
+      "gap_regime": "laminar (Ta < 1700)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   },
+   "13000.0": {
+    "P_W": 0.1409,
+    "P_bearings_W": 0.094,
+    "P_windage_W": 0.0469,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 13000.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.047,
+       "M_total_Nm": 3e-05,
+       "M_rr_Nm": 3e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 156000.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.047,
+       "M_total_Nm": 3e-05,
+       "M_rr_Nm": 3e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 156000.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 7e-05,
+     "windage": {
+      "P_W": 0.0469,
+      "P_gap_W": 0.0234,
+      "P_faces_W": 0.0235,
+      "M_total_Nm": 3.4e-05,
+      "gap_regime": "laminar (Ta < 1700)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   },
+   "19500.0": {
+    "P_W": 0.27749999999999997,
+    "P_bearings_W": 0.16,
+    "P_windage_W": 0.1175,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 19500.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.08,
+       "M_total_Nm": 4e-05,
+       "M_rr_Nm": 4e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 234000.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.08,
+       "M_total_Nm": 4e-05,
+       "M_rr_Nm": 4e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 234000.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 8e-05,
+     "windage": {
+      "P_W": 0.1175,
+      "P_gap_W": 0.0527,
+      "P_faces_W": 0.0648,
+      "M_total_Nm": 5.8e-05,
+      "gap_regime": "laminar (Ta < 1700)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   },
+   "25841.0": {
+    "P_W": 0.46540000000000004,
+    "P_bearings_W": 0.222,
+    "P_windage_W": 0.2434,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 25841.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.111,
+       "M_total_Nm": 4e-05,
+       "M_rr_Nm": 4e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 310092.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.111,
+       "M_total_Nm": 4e-05,
+       "M_rr_Nm": 4e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 310092.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 8e-05,
+     "windage": {
+      "P_W": 0.2434,
+      "P_gap_W": 0.1124,
+      "P_faces_W": 0.131,
+      "M_total_Nm": 9e-05,
+      "gap_regime": "vortex / transitional (Wendt)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   },
+   "4550.0": {
+    "P_W": 0.0246,
+    "P_bearings_W": 0.02,
+    "P_windage_W": 0.0046,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 4550.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.01,
+       "M_total_Nm": 2e-05,
+       "M_rr_Nm": 2e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 54600.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.01,
+       "M_total_Nm": 2e-05,
+       "M_rr_Nm": 2e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 54600.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 4e-05,
+     "windage": {
+      "P_W": 0.0046,
+      "P_gap_W": 0.0029,
+      "P_faces_W": 0.0017,
+      "M_total_Nm": 1e-05,
+      "gap_regime": "laminar (Ta < 1700)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   },
+   "9750.0": {
+    "P_W": 0.0866,
+    "P_bearings_W": 0.062,
+    "P_windage_W": 0.0246,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 9750.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.031,
+       "M_total_Nm": 3e-05,
+       "M_rr_Nm": 3e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 117000.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.031,
+       "M_total_Nm": 3e-05,
+       "M_rr_Nm": 3e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 117000.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 6e-05,
+     "windage": {
+      "P_W": 0.0246,
+      "P_gap_W": 0.0132,
+      "P_faces_W": 0.0115,
+      "M_total_Nm": 2.4e-05,
+      "gap_regime": "laminar (Ta < 1700)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   },
+   "14400.0": {
+    "P_W": 0.1671,
+    "P_bearings_W": 0.108,
+    "P_windage_W": 0.0591,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 14400.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.054,
+       "M_total_Nm": 4e-05,
+       "M_rr_Nm": 4e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 172800.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.054,
+       "M_total_Nm": 4e-05,
+       "M_rr_Nm": 4e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 172800.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 7e-05,
+     "windage": {
+      "P_W": 0.0591,
+      "P_gap_W": 0.0287,
+      "P_faces_W": 0.0304,
+      "M_total_Nm": 3.9e-05,
+      "gap_regime": "laminar (Ta < 1700)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   },
+   "16250.0": {
+    "P_W": 0.2037,
+    "P_bearings_W": 0.126,
+    "P_windage_W": 0.0777,
+    "bearing_temp_c": 70.0,
+    "bearing_temp_source": "assigned",
+    "speed_limit_rpm": 45000.0,
+    "summary": {
+     "rpm": 16250.0,
+     "bearings": [
+      {
+       "end": "A",
+       "bearing": "618/8-2Z",
+       "P_W": 0.063,
+       "M_total_Nm": 4e-05,
+       "M_rr_Nm": 4e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 195000.0,
+       "limit_rpm": 45000.0
+      },
+      {
+       "end": "B",
+       "bearing": "618/8-2Z",
+       "P_W": 0.063,
+       "M_total_Nm": 4e-05,
+       "M_rr_Nm": 4e-05,
+       "M_sl_Nm": 0.0,
+       "M_seal_Nm": 0.0,
+       "nu_mm2_s": 20.17,
+       "F_r_N": 0.18,
+       "speed_ok": true,
+       "speed_verdict": "ok",
+       "n_dm": 195000.0,
+       "limit_rpm": 45000.0
+      }
+     ],
+     "cards": [
+      "618/8-2Z",
+      "618/8-2Z"
+     ],
+     "lubrication": "grease",
+     "preload_n": 0.0,
+     "rotor_mass_kg": 0.03633825330587998,
+     "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+     "F_r_total_N": 0.3563565317821079,
+     "M_bearings_Nm": 7e-05,
+     "windage": {
+      "P_W": 0.0777,
+      "P_gap_W": 0.0366,
+      "P_faces_W": 0.0411,
+      "M_total_Nm": 4.6e-05,
+      "gap_regime": "laminar (Ta < 1700)",
+      "face_regime": "laminar disc",
+      "delta_mm": 0.1999999999999988
+     },
+     "die": null,
+     "config": null,
+     "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+     "notes": [
+      "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+      "radial load = rotor weight, half each (no bearing span given)"
+     ]
+    }
+   }
+  }
+ },
+ "checks": {
+  "static_offgrid": [
+   {
+    "id": "chk_ridge_0.375",
+    "role": "MTPA ridge between levels",
+    "I_rms": 16.0425,
+    "gamma": 2.465,
+    "i_d": -0.9757697590715809,
+    "i_q": 22.666527874319037,
+    "inside_hull": true,
+    "psi_d_fem": 0.000996767608612453,
+    "psi_d_int": 0.0009967491800810715,
+    "psi_q_fem": 0.00012945314056992885,
+    "psi_q_int": 0.00012944139790275772,
+    "err_psi_d_pct_of_abs_psi": -0.0018334317054915035,
+    "err_psi_q_pct_of_abs_psi": -0.0011682633766596548,
+    "T_fem": 0.23861872167382284,
+    "T_int": 0.23859652935791992,
+    "T_psi_int": 0.238551054794406,
+    "err_T_pct": -0.009300324696758153,
+    "err_T_psi_pct": -0.028357741145447667,
+    "ripple_fem_pct": 27.467641672376732,
+    "ripple_int_pct": 27.42444829154098,
+    "err_ripple_pp": -0.04319338083575275,
+    "ripple_tol_pp": 2.7467641672376732,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_ridge_0.875",
+    "role": "MTPA ridge between levels",
+    "I_rms": 37.432500000000005,
+    "gamma": 5.6,
+    "i_d": -5.165799554495715,
+    "i_q": 52.684899425383506,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009661127231682994,
+    "psi_d_int": 0.0009661187650436875,
+    "psi_q_fem": 0.00030199541557597814,
+    "psi_q_int": 0.00030195176690020627,
+    "err_psi_d_pct_of_abs_psi": 0.0005968976666687598,
+    "err_psi_q_pct_of_abs_psi": -0.004312202925041165,
+    "T_fem": 0.5507667175669202,
+    "T_int": 0.5507554368508674,
+    "T_psi_int": 0.550826768858464,
+    "err_T_pct": -0.0020481840483507234,
+    "err_T_psi_pct": 0.010903217211296645,
+    "ripple_fem_pct": 9.147144211180835,
+    "ripple_int_pct": 9.183692922681423,
+    "err_ripple_pp": 0.03654871150058803,
+    "ripple_tol_pp": 0.9147144211180835,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_ridge_1.25",
+    "role": "MTPA ridge between levels",
+    "I_rms": 53.475,
+    "gamma": 7.525,
+    "i_d": -9.903766877390558,
+    "i_q": 74.97377309191734,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009279744657595308,
+    "psi_d_int": 0.0009277914547200772,
+    "psi_q_fem": 0.00043249172853523834,
+    "psi_q_int": 0.0004329317507609753,
+    "err_psi_d_pct_of_abs_psi": -0.01787549889508853,
+    "err_psi_q_pct_of_abs_psi": 0.042978919924500876,
+    "T_fem": 0.775427649965343,
+    "T_int": 0.7752062674599932,
+    "T_psi_int": 0.7754006519296823,
+    "err_T_pct": -0.028549730636978025,
+    "err_T_psi_pct": -0.0034816962822834677,
+    "ripple_fem_pct": 3.659453110171818,
+    "ripple_int_pct": 3.4706529503823225,
+    "err_ripple_pp": -0.1888001597894955,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_ridge_1.75",
+    "role": "MTPA ridge between levels",
+    "I_rms": 74.86500000000001,
+    "gamma": 9.885,
+    "i_d": -18.175704481611152,
+    "i_q": 104.30330875191424,
+    "inside_hull": true,
+    "psi_d_fem": 0.0008513573143138386,
+    "psi_d_int": 0.00085147767164001,
+    "psi_q_fem": 0.0006144580506812658,
+    "psi_q_int": 0.000614571158736297,
+    "err_psi_d_pct_of_abs_psi": 0.011463288892784331,
+    "err_psi_q_pct_of_abs_psi": 0.010772840774777736,
+    "T_fem": 1.0495685188904447,
+    "T_int": 1.0501170085936518,
+    "T_psi_int": 1.0498131235676835,
+    "err_T_pct": 0.052258589442728993,
+    "err_T_psi_pct": 0.023305260479558065,
+    "ripple_fem_pct": 2.1333191779310234,
+    "ripple_int_pct": 2.1306985526514595,
+    "err_ripple_pp": -0.0026206252795639706,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_fw_1.25_72.5",
+    "role": "deep field weakening",
+    "I_rms": 53.475,
+    "gamma": 72.5,
+    "i_d": -72.12491139694882,
+    "i_q": 22.740897211461963,
+    "inside_hull": true,
+    "psi_d_fem": 0.0005930612220807349,
+    "psi_d_int": 0.0005933501322792559,
+    "psi_q_fem": 0.00015320463855415524,
+    "psi_q_int": 0.00015301707594131308,
+    "err_psi_d_pct_of_abs_psi": 0.04716668460570994,
+    "err_psi_q_pct_of_abs_psi": -0.030620956439185523,
+    "T_fem": 0.25755633219575386,
+    "T_int": 0.25757125113502555,
+    "T_psi_int": 0.25756140283710177,
+    "err_T_pct": 0.005792495623967739,
+    "err_T_psi_pct": 0.0019687504107106257,
+    "ripple_fem_pct": 11.264537146258835,
+    "ripple_int_pct": 11.142529285798393,
+    "err_ripple_pp": -0.12200786046044243,
+    "ripple_tol_pp": 1.1264537146258835,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_fw_2.25_57.5",
+    "role": "deep field weakening",
+    "I_rms": 96.255,
+    "gamma": 57.5,
+    "i_d": -114.80676720494122,
+    "i_q": 73.1399771257171,
+    "inside_hull": true,
+    "psi_d_fem": 0.0002173394533382177,
+    "psi_d_int": 0.0002175127771313476,
+    "psi_q_fem": 0.0005262276259417033,
+    "psi_q_int": 0.0005255084009365556,
+    "err_psi_d_pct_of_abs_psi": 0.03044274879746122,
+    "err_psi_q_pct_of_abs_psi": -0.12632533459588757,
+    "T_fem": 0.8011130089101656,
+    "T_int": 0.7999406816563793,
+    "T_psi_int": 0.8005284020422713,
+    "err_T_pct": -0.1463373133062809,
+    "err_T_psi_pct": -0.07297433213443867,
+    "ripple_fem_pct": 6.461482328387766,
+    "ripple_int_pct": 6.334008958291521,
+    "err_ripple_pp": -0.12747337009624538,
+    "ripple_tol_pp": 0.6461482328387766,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_top_2.4_20",
+    "role": "highest current",
+    "I_rms": 102.672,
+    "gamma": 20.0,
+    "i_d": -49.66137094118582,
+    "i_q": 136.44349528006808,
+    "inside_hull": true,
+    "psi_d_fem": 0.0006233945585579557,
+    "psi_d_int": 0.0006225007069005318,
+    "psi_q_fem": 0.0008426629509513527,
+    "psi_q_int": 0.0008397707323799964,
+    "err_psi_d_pct_of_abs_psi": -0.08527575367640822,
+    "err_psi_q_pct_of_abs_psi": -0.2759251117574954,
+    "T_fem": 1.332365404001426,
+    "T_int": 1.3284439865758728,
+    "T_psi_int": 1.3297235501560087,
+    "err_T_pct": -0.29431996761369517,
+    "err_T_psi_pct": -0.19828298134153033,
+    "ripple_fem_pct": 3.393907038241507,
+    "ripple_int_pct": 3.3766733892181886,
+    "err_ripple_pp": -0.017233649023318254,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_top_2.25_42.5",
+    "role": "highest current",
+    "I_rms": 96.255,
+    "gamma": 42.5,
+    "i_d": -91.96480243751127,
+    "i_q": 100.36197069921215,
+    "inside_hull": true,
+    "psi_d_fem": 0.00037869290130997026,
+    "psi_d_int": 0.00037898357646439976,
+    "psi_q_fem": 0.0006908995348097508,
+    "psi_q_int": 0.0006899340104311371,
+    "err_psi_d_pct_of_abs_psi": 0.03689345938665499,
+    "err_psi_q_pct_of_abs_psi": -0.12254757211404053,
+    "T_fem": 1.0660635947851844,
+    "T_int": 1.0646802391757237,
+    "T_psi_int": 1.0655944273886317,
+    "err_T_pct": -0.12976295375131258,
+    "err_T_psi_pct": -0.044009325414325874,
+    "ripple_fem_pct": 5.072352230468376,
+    "ripple_int_pct": 5.026472041090935,
+    "err_ripple_pp": -0.045880189377441205,
+    "ripple_tol_pp": 0.5072352230468377,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_peak",
+    "role": "peak current at its operating angle (mtpa)",
+    "I_rms": 48.79,
+    "gamma": 7.006,
+    "i_d": -8.4160929912404,
+    "i_q": 68.48428709392249,
+    "inside_hull": true,
+    "psi_d_fem": 0.000940475640169413,
+    "psi_d_int": 0.0009403804083364454,
+    "psi_q_fem": 0.00039402177486009963,
+    "psi_q_int": 0.0003942922672322246,
+    "err_psi_d_pct_of_abs_psi": -0.009339382929057817,
+    "err_psi_q_pct_of_abs_psi": 0.026527178611832476,
+    "T_fem": 0.7110328406245795,
+    "T_int": 0.7109398721051858,
+    "T_psi_int": 0.7110566636120492,
+    "err_T_pct": -0.013075137192256994,
+    "err_T_psi_pct": 0.0033504763927355856,
+    "ripple_fem_pct": 4.912702269575711,
+    "ripple_int_pct": 4.791567221536302,
+    "err_ripple_pp": -0.12113504803940955,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_duty_rated_g",
+    "role": "rated duty current at the duty's gamma",
+    "I_rms": 42.78,
+    "gamma": 10.0,
+    "i_d": -10.505724507585315,
+    "i_q": 59.58092440178085,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009391563381486799,
+    "psi_d_int": 0.0009391548656802773,
+    "psi_q_fem": 0.0003450624824919861,
+    "psi_q_int": 0.0003450605090981469,
+    "err_psi_d_pct_of_abs_psi": -0.0001471671895885258,
+    "err_psi_q_pct_of_abs_psi": -0.00019723263655336594,
+    "T_fem": 0.6255359618973335,
+    "T_int": 0.6255315674181697,
+    "T_psi_int": 0.625598669857282,
+    "err_T_pct": -0.0007025142328274533,
+    "err_T_psi_pct": 0.010024677039869569,
+    "ripple_fem_pct": 6.7049053608174995,
+    "ripple_int_pct": 6.704434331427603,
+    "err_ripple_pp": -0.0004710293898968487,
+    "ripple_tol_pp": 0.67049053608175,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_audit_I0.5",
+    "role": "audit 2026-09-30 corner I x0.5 (gamma 10\u00b0)",
+    "I_rms": 20.3295,
+    "gamma": 10.0,
+    "i_d": -4.992429321574465,
+    "i_q": 28.313473647171662,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009793245295879596,
+    "psi_d_int": 0.0009793211449144648,
+    "psi_q_fem": 0.0001629972211707228,
+    "psi_q_int": 0.00016297490606138792,
+    "err_psi_d_pct_of_abs_psi": -0.00034092323499886024,
+    "err_psi_q_pct_of_abs_psi": -0.002247702555489456,
+    "T_fem": 0.2997411645344624,
+    "T_int": 0.2997153576057315,
+    "T_psi_int": 0.29968705334773166,
+    "err_T_pct": -0.008609737928730663,
+    "err_T_psi_pct": -0.018052637786607366,
+    "ripple_fem_pct": 20.954881023637064,
+    "ripple_int_pct": 20.941760240162818,
+    "err_ripple_pp": -0.013120783474246167,
+    "ripple_tol_pp": 2.0954881023637064,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_audit_I1.0",
+    "role": "audit 2026-09-30 corner I x1.0 (gamma 10\u00b0)",
+    "I_rms": 40.659,
+    "gamma": 10.0,
+    "i_d": -9.98485864314893,
+    "i_q": 56.626947294343324,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009435790979042714,
+    "psi_d_int": 0.0009435668113221773,
+    "psi_q_fem": 0.00032779005581516207,
+    "psi_q_int": 0.00032770496100933326,
+    "err_psi_d_pct_of_abs_psi": -0.0012300194658606556,
+    "err_psi_q_pct_of_abs_psi": -0.008518908416574746,
+    "T_fem": 0.5953388075001183,
+    "T_int": 0.5953351599216514,
+    "T_psi_int": 0.5953856559605781,
+    "err_T_pct": -0.0006126895174433564,
+    "err_T_psi_pct": 0.007869209913696305,
+    "ripple_fem_pct": 7.501444005099564,
+    "ripple_int_pct": 7.539043067848267,
+    "err_ripple_pp": 0.03759906274870328,
+    "ripple_tol_pp": 0.7501444005099565,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_audit_I1.3",
+    "role": "audit 2026-09-30 corner I x1.3 (gamma 10\u00b0)",
+    "I_rms": 52.856700000000004,
+    "gamma": 10.0,
+    "i_d": -12.98031623609361,
+    "i_q": 73.61503148264632,
+    "inside_hull": true,
+    "psi_d_fem": 0.000916014378366775,
+    "psi_d_int": 0.0009158617928799221,
+    "psi_q_fem": 0.0004277887733436064,
+    "psi_q_int": 0.00042823983822955577,
+    "err_psi_d_pct_of_abs_psi": -0.015092792386502338,
+    "err_psi_q_pct_of_abs_psi": 0.044616488873793304,
+    "T_fem": 0.7662730781844875,
+    "T_int": 0.7660017692749905,
+    "T_psi_int": 0.7662887740380765,
+    "err_T_pct": -0.03540629538229492,
+    "err_T_psi_pct": 0.002048336818272063,
+    "ripple_fem_pct": 3.7417703051134756,
+    "ripple_int_pct": 3.5129315951687863,
+    "err_ripple_pp": -0.22883870994468936,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   }
+  ],
+  "static_offgrid_first_pass": [
+   {
+    "id": "chk_ridge_0.375",
+    "role": "MTPA ridge between levels",
+    "I_rms": 16.0425,
+    "gamma": 2.465,
+    "i_d": -0.9757697590715809,
+    "i_q": 22.666527874319037,
+    "inside_hull": true,
+    "psi_d_fem": 0.000996767608612453,
+    "psi_d_int": 0.000996748488693107,
+    "psi_q_fem": 0.00012945314056992885,
+    "psi_q_int": 0.00012944176202013774,
+    "err_psi_d_pct_of_abs_psi": -0.001902217035618693,
+    "err_psi_q_pct_of_abs_psi": -0.0011320377906252096,
+    "T_fem": 0.23861872167382284,
+    "T_int": 0.23859716144557025,
+    "T_psi_int": 0.2385508939756727,
+    "err_T_pct": -0.009035430288684058,
+    "err_T_psi_pct": -0.02842513683517995,
+    "ripple_fem_pct": 27.467641672376732,
+    "ripple_int_pct": 27.42392946788551,
+    "err_ripple_pp": -0.043712204491221485,
+    "ripple_tol_pp": 2.7467641672376732,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_ridge_0.875",
+    "role": "MTPA ridge between levels",
+    "I_rms": 37.432500000000005,
+    "gamma": 5.6,
+    "i_d": -5.165799554495715,
+    "i_q": 52.684899425383506,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009661127231682994,
+    "psi_d_int": 0.0009661192924178642,
+    "psi_q_fem": 0.00030199541557597814,
+    "psi_q_int": 0.0003019518479096843,
+    "err_psi_d_pct_of_abs_psi": 0.0006489987768854037,
+    "err_psi_q_pct_of_abs_psi": -0.004304199719858083,
+    "T_fem": 0.5507667175669202,
+    "T_int": 0.5507559084964283,
+    "T_psi_int": 0.550827064991373,
+    "err_T_pct": -0.001962549687032836,
+    "err_T_psi_pct": 0.010956984604918495,
+    "ripple_fem_pct": 9.147144211180835,
+    "ripple_int_pct": 9.183515660974084,
+    "err_ripple_pp": 0.0363714497932488,
+    "ripple_tol_pp": 0.9147144211180835,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_ridge_1.25",
+    "role": "MTPA ridge between levels",
+    "I_rms": 53.475,
+    "gamma": 7.525,
+    "i_d": -9.903766877390558,
+    "i_q": 74.97377309191734,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009279744657595308,
+    "psi_d_int": 0.0009277898596214933,
+    "psi_q_fem": 0.00043249172853523834,
+    "psi_q_int": 0.0004329320089493712,
+    "err_psi_d_pct_of_abs_psi": -0.018031299239481074,
+    "err_psi_q_pct_of_abs_psi": 0.04300413832880831,
+    "T_fem": 0.775427649965343,
+    "T_int": 0.7752063314333776,
+    "T_psi_int": 0.7753994230777054,
+    "err_T_pct": -0.028541480559182816,
+    "err_T_psi_pct": -0.003640170380673967,
+    "ripple_fem_pct": 3.659453110171818,
+    "ripple_int_pct": 3.470835006284061,
+    "err_ripple_pp": -0.18861810388775702,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_ridge_1.75",
+    "role": "MTPA ridge between levels",
+    "I_rms": 74.86500000000001,
+    "gamma": 9.885,
+    "i_d": -18.175704481611152,
+    "i_q": 104.30330875191424,
+    "inside_hull": true,
+    "psi_d_fem": 0.0008513573143138386,
+    "psi_d_int": 0.000851478045713258,
+    "psi_q_fem": 0.0006144580506812658,
+    "psi_q_int": 0.0006145708053196711,
+    "err_psi_d_pct_of_abs_psi": 0.011498917049747192,
+    "err_psi_q_pct_of_abs_psi": 0.01073918003296645,
+    "T_fem": 1.0495685188904447,
+    "T_int": 1.0501144612516764,
+    "T_psi_int": 1.0498134657992375,
+    "err_T_pct": 0.05201588570976554,
+    "err_T_psi_pct": 0.02333786736017854,
+    "ripple_fem_pct": 2.1333191779310234,
+    "ripple_int_pct": 2.1302662668852332,
+    "err_ripple_pp": -0.0030529110457901965,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_fw_1.25_72.5",
+    "role": "deep field weakening",
+    "I_rms": 53.475,
+    "gamma": 72.5,
+    "i_d": -72.12491139694882,
+    "i_q": 22.740897211461963,
+    "inside_hull": true,
+    "psi_d_fem": 0.0005930612220807349,
+    "psi_d_int": 0.0005927166608851057,
+    "psi_q_fem": 0.00015320463855415524,
+    "psi_q_int": 0.00015343114341174715,
+    "err_psi_d_pct_of_abs_psi": -0.056252113372255615,
+    "err_psi_q_pct_of_abs_psi": 0.0369785602390957,
+    "T_fem": 0.25755633219575386,
+    "T_int": 0.2572999349597919,
+    "T_psi_int": 0.2577237209905465,
+    "err_T_pct": -0.099549963992756,
+    "err_T_psi_pct": 0.06499113936187133,
+    "ripple_fem_pct": 11.264537146258835,
+    "ripple_int_pct": 11.685021844198873,
+    "err_ripple_pp": 0.4204846979400383,
+    "ripple_tol_pp": 1.1264537146258835,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_fw_2.25_57.5",
+    "role": "deep field weakening",
+    "I_rms": 96.255,
+    "gamma": 57.5,
+    "i_d": -114.80676720494122,
+    "i_q": 73.1399771257171,
+    "inside_hull": true,
+    "psi_d_fem": 0.0002173394533382177,
+    "psi_d_int": 0.00021755080183232734,
+    "psi_q_fem": 0.0005262276259417033,
+    "psi_q_int": 0.0005251815054516966,
+    "err_psi_d_pct_of_abs_psi": 0.03712144189043446,
+    "err_psi_q_pct_of_abs_psi": -0.18374155512095616,
+    "T_fem": 0.8011130089101656,
+    "T_int": 0.7993988226344212,
+    "T_psi_int": 0.800163540817529,
+    "err_T_pct": -0.21397558854728346,
+    "err_T_psi_pct": -0.11851862122775601,
+    "ripple_fem_pct": 6.461482328387766,
+    "ripple_int_pct": 6.376227784791154,
+    "err_ripple_pp": -0.08525454359661211,
+    "ripple_tol_pp": 0.6461482328387766,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_top_2.4_20",
+    "role": "highest current",
+    "I_rms": 102.672,
+    "gamma": 20.0,
+    "i_d": -49.66137094118582,
+    "i_q": 136.44349528006808,
+    "inside_hull": true,
+    "psi_d_fem": 0.0006233945585579557,
+    "psi_d_int": 0.0006226063653179993,
+    "psi_q_fem": 0.0008426629509513527,
+    "psi_q_int": 0.0008399780648888149,
+    "err_psi_d_pct_of_abs_psi": -0.07519566811974639,
+    "err_psi_q_pct_of_abs_psi": -0.25614505563265927,
+    "T_fem": 1.332365404001426,
+    "T_int": 1.328913729536591,
+    "T_psi_int": 1.3299830347703516,
+    "err_T_pct": -0.25906365134284665,
+    "err_T_psi_pct": -0.17880749709647342,
+    "ripple_fem_pct": 3.393907038241507,
+    "ripple_int_pct": 3.392000842756168,
+    "err_ripple_pp": -0.0019061954853389906,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_top_2.25_42.5",
+    "role": "highest current",
+    "I_rms": 96.255,
+    "gamma": 42.5,
+    "i_d": -91.96480243751127,
+    "i_q": 100.36197069921215,
+    "inside_hull": true,
+    "psi_d_fem": 0.00037869290130997026,
+    "psi_d_int": 0.000378295457059452,
+    "psi_q_fem": 0.0006908995348097508,
+    "psi_q_int": 0.000689762606295375,
+    "err_psi_d_pct_of_abs_psi": -0.050444948911214905,
+    "err_psi_q_pct_of_abs_psi": -0.14430275629499814,
+    "T_fem": 1.0660635947851844,
+    "T_int": 1.0648409672094,
+    "T_psi_int": 1.0647037736347198,
+    "err_T_pct": -0.11468617648751725,
+    "err_T_psi_pct": -0.12755535008571725,
+    "ripple_fem_pct": 5.072352230468376,
+    "ripple_int_pct": 4.883525978182406,
+    "err_ripple_pp": -0.1888262522859705,
+    "ripple_tol_pp": 0.5072352230468377,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_peak",
+    "role": "peak current at its operating angle (mtpa)",
+    "I_rms": 48.79,
+    "gamma": 7.006,
+    "i_d": -8.4160929912404,
+    "i_q": 68.48428709392249,
+    "inside_hull": true,
+    "psi_d_fem": 0.000940475640169413,
+    "psi_d_int": 0.0009403779969558876,
+    "psi_q_fem": 0.00039402177486009963,
+    "psi_q_int": 0.0003942925540508283,
+    "err_psi_d_pct_of_abs_psi": -0.009575866946168018,
+    "err_psi_q_pct_of_abs_psi": 0.026555306903472378,
+    "T_fem": 0.7110328406245795,
+    "T_int": 0.7109395988559364,
+    "T_psi_int": 0.7110549549702924,
+    "err_T_pct": -0.013113567097858748,
+    "err_T_psi_pct": 0.0031101721959057825,
+    "ripple_fem_pct": 4.912702269575711,
+    "ripple_int_pct": 4.791739067296254,
+    "err_ripple_pp": -0.12096320227945778,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_duty_rated_g",
+    "role": "rated duty current at the duty's gamma",
+    "I_rms": 42.78,
+    "gamma": 10.0,
+    "i_d": -10.505724507585315,
+    "i_q": 59.58092440178085,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009391563381486799,
+    "psi_d_int": 0.0009391543000354661,
+    "psi_q_fem": 0.0003450624824919861,
+    "psi_q_int": 0.000345060516500265,
+    "err_psi_d_pct_of_abs_psi": -0.00020370107312466494,
+    "err_psi_q_pct_of_abs_psi": -0.00019649282514935676,
+    "T_fem": 0.6255359618973335,
+    "T_int": 0.6255316241545535,
+    "T_psi_int": 0.6255983168065826,
+    "err_T_pct": -0.0006934441893336744,
+    "err_T_psi_pct": 0.009968237327231583,
+    "ripple_fem_pct": 6.7049053608174995,
+    "ripple_int_pct": 6.704495634208734,
+    "err_ripple_pp": -0.0004097266087654816,
+    "ripple_tol_pp": 0.67049053608175,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_audit_I0.5",
+    "role": "audit 2026-09-30 corner I x0.5 (gamma 10\u00b0)",
+    "I_rms": 20.3295,
+    "gamma": 10.0,
+    "i_d": -4.992429321574465,
+    "i_q": 28.313473647171662,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009793245295879596,
+    "psi_d_int": 0.0009793190389981257,
+    "psi_q_fem": 0.0001629972211707228,
+    "psi_q_int": 0.00016297640672290073,
+    "err_psi_d_pct_of_abs_psi": -0.0005530429009168476,
+    "err_psi_q_pct_of_abs_psi": -0.002096547539099477,
+    "T_fem": 0.2997411645344624,
+    "T_int": 0.29971858012964625,
+    "T_psi_int": 0.29968650594219925,
+    "err_T_pct": -0.007534635708528491,
+    "err_T_psi_pct": -0.018235263864427885,
+    "ripple_fem_pct": 20.954881023637064,
+    "ripple_int_pct": 20.93952145763311,
+    "err_ripple_pp": -0.015359566003954939,
+    "ripple_tol_pp": 2.0954881023637064,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_audit_I1.0",
+    "role": "audit 2026-09-30 corner I x1.0 (gamma 10\u00b0)",
+    "I_rms": 40.659,
+    "gamma": 10.0,
+    "i_d": -9.98485864314893,
+    "i_q": 56.626947294343324,
+    "inside_hull": true,
+    "psi_d_fem": 0.0009435790979042714,
+    "psi_d_int": 0.0009435580611195731,
+    "psi_q_fem": 0.00032779005581516207,
+    "psi_q_int": 0.00032770509305652285,
+    "err_psi_d_pct_of_abs_psi": -0.00210600917974819,
+    "err_psi_q_pct_of_abs_psi": -0.008505689067828157,
+    "T_fem": 0.5953388075001183,
+    "T_int": 0.5953332734343497,
+    "T_psi_int": 0.595380467083292,
+    "err_T_pct": -0.000929565769745305,
+    "err_T_psi_pct": 0.006997625998653707,
+    "ripple_fem_pct": 7.501444005099564,
+    "ripple_int_pct": 7.539152898647337,
+    "err_ripple_pp": 0.03770889354777296,
+    "ripple_tol_pp": 0.7501444005099565,
+    "ripple_ok": true,
+    "pass": true
+   },
+   {
+    "id": "chk_audit_I1.3",
+    "role": "audit 2026-09-30 corner I x1.3 (gamma 10\u00b0)",
+    "I_rms": 52.856700000000004,
+    "gamma": 10.0,
+    "i_d": -12.98031623609361,
+    "i_q": 73.61503148264632,
+    "inside_hull": true,
+    "psi_d_fem": 0.000916014378366775,
+    "psi_d_int": 0.0009158731171656955,
+    "psi_q_fem": 0.0004277887733436064,
+    "psi_q_int": 0.0004282404925557464,
+    "err_psi_d_pct_of_abs_psi": -0.013972665580022046,
+    "err_psi_q_pct_of_abs_psi": 0.04468121068680245,
+    "T_fem": 0.7662730781844875,
+    "T_int": 0.7660119942410527,
+    "T_psi_int": 0.76629761641373,
+    "err_T_pct": -0.03407191911967017,
+    "err_T_psi_pct": 0.003202282572755793,
+    "ripple_fem_pct": 3.7417703051134756,
+    "ripple_int_pct": 3.51465037459781,
+    "err_ripple_pp": -0.22711993051566548,
+    "ripple_tol_pp": 0.5,
+    "ripple_ok": true,
+    "pass": true
+   }
+  ],
+  "refinement": {
+   "points": [
+    [
+     2.0,
+     42.5
+    ],
+    [
+     2.0,
+     57.5
+    ],
+    [
+     2.5,
+     42.5
+    ],
+    [
+     2.5,
+     57.5
+    ]
+   ],
+   "reason": "first check pass: L20 (2.25\u00b7I0, 42.5\u00b0) \u03c8 +1.0 %, (2.25\u00b7I0, 57.5\u00b0) \u03c8 +0.52 % \u2014 FW arm 15\u00b0 too coarse at the top levels; checks themselves are NOT added to the grid"
+  },
+  "loss_offgrid": [
+   {
+    "id": "lchk_0.75n_0.75I",
+    "role": "mid loss grid",
+    "rpm": 9750.0,
+    "I": 32.085,
+    "gamma_fem": 4.86,
+    "P_fem_W": 37.5569171323078,
+    "P_int_W": 37.68087768128016,
+    "groups_fem": {
+     "P_cu_dc_W": 27.62373676649122,
+     "P_cu_ac_W": 2.230013644992539,
+     "P_fe_stator_W": 5.526340888031486,
+     "P_fe_rotor_W": 0.4470275745476062,
+     "P_mag_W": 1.7255436515314415,
+     "P_shaft_W": 0.0042546067135179385,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 27.623736766491216,
+     "P_cu_ac_W": 2.267240773935965,
+     "P_fe_stator_W": 5.590464603319338,
+     "P_fe_rotor_W": 0.4520388292457199,
+     "P_mag_W": 1.7425276064297004,
+     "P_shaft_W": 0.004869101858208704,
+     "P_sleeve_W": 0.0
+    },
+    "notes": [],
+    "T_fem": 0.46659402139803124,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "err_total_pct": 0.3300605013336427,
+    "pass": true
+   },
+   {
+    "id": "lchk_0.35n_peak",
+    "role": "low speed, peak current",
+    "rpm": 4550.0,
+    "I": 48.79,
+    "gamma_fem": 7.006,
+    "P_fem_W": 66.90413445645412,
+    "P_int_W": 66.92332110266713,
+    "groups_fem": {
+     "P_cu_dc_W": 63.8763329324458,
+     "P_cu_ac_W": 0.6111827880508613,
+     "P_fe_stator_W": 1.8659642275793755,
+     "P_fe_rotor_W": 0.13799735445120764,
+     "P_mag_W": 0.4074840098792831,
+     "P_shaft_W": 0.005173144047585893,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 63.876332932445784,
+     "P_cu_ac_W": 0.6105632340813696,
+     "P_fe_stator_W": 1.8850224608083361,
+     "P_fe_rotor_W": 0.13875700387005668,
+     "P_mag_W": 0.40748423209140916,
+     "P_shaft_W": 0.005161239370181383,
+     "P_sleeve_W": 0.0
+    },
+    "notes": [],
+    "T_fem": 0.7022899201864177,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "err_total_pct": 0.028677818447084214,
+    "pass": true
+   },
+   {
+    "id": "lchk_1.25n_mid",
+    "role": "between speed and current rows",
+    "rpm": 16250.0,
+    "I": 45.785,
+    "gamma_fem": 16.397,
+    "P_fem_W": 80.53079515194452,
+    "P_int_W": 78.50630860617756,
+    "groups_fem": {
+     "P_cu_dc_W": 56.25029140458001,
+     "P_cu_ac_W": 7.022866961834012,
+     "P_fe_stator_W": 11.58507334726781,
+     "P_fe_rotor_W": 1.0260950668419184,
+     "P_mag_W": 4.636033831941917,
+     "P_shaft_W": 0.010434539478848953,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 56.250291404580004,
+     "P_cu_ac_W": 6.828414357147288,
+     "P_fe_stator_W": 10.625524710506504,
+     "P_fe_rotor_W": 0.9734336683809915,
+     "P_mag_W": 3.8116275929513237,
+     "P_shaft_W": 0.017016872611437705,
+     "P_sleeve_W": 0.0
+    },
+    "notes": [],
+    "T_fem": 0.6475092700479506,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "err_total_pct": -2.513928419491184,
+    "pass": true
+   },
+   {
+    "id": "duty_rated",
+    "role": "saved duty re-solved",
+    "rpm": 13000.0,
+    "I": 42.78,
+    "gamma_fem": 10.0,
+    "P_fem_W": 65.83032505282516,
+    "P_int_W": 66.12739504397416,
+    "groups_fem": {
+     "P_cu_dc_W": 49.10886536265106,
+     "P_cu_ac_W": 4.435906663094023,
+     "P_fe_stator_W": 8.448208925141058,
+     "P_fe_rotor_W": 0.7209324931976209,
+     "P_mag_W": 3.108160767435654,
+     "P_shaft_W": 0.008250841305754795,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 49.10886536265106,
+     "P_cu_ac_W": 4.472630093368899,
+     "P_fe_stator_W": 8.598183218889037,
+     "P_fe_rotor_W": 0.7330156198471355,
+     "P_mag_W": 3.2057494225580165,
+     "P_shaft_W": 0.008951326660017623,
+     "P_sleeve_W": 0.0
+    },
+    "notes": [],
+    "T_fem": 0.6154136741956124,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "err_total_pct": 0.45126617696421745,
+    "pass": true
+   },
+   {
+    "id": "duty_peak",
+    "role": "saved duty re-solved",
+    "rpm": 14400.0,
+    "I": 48.79,
+    "gamma_fem": 10.0,
+    "P_fem_W": 101.79425989206216,
+    "P_int_W": 83.5672704380775,
+    "groups_fem": {
+     "P_cu_dc_W": 82.82649571816381,
+     "P_cu_ac_W": 4.366650357115006,
+     "P_fe_stator_W": 9.772784788812038,
+     "P_fe_rotor_W": 0.8650694681050357,
+     "P_mag_W": 3.9508788257475893,
+     "P_shaft_W": 0.012380734118682572,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 63.876332932445784,
+     "P_cu_ac_W": 5.791619946374653,
+     "P_fe_stator_W": 9.482416412983712,
+     "P_fe_rotor_W": 0.8394923862531112,
+     "P_mag_W": 3.5620486731630407,
+     "P_shaft_W": 0.015360086857198812,
+     "P_sleeve_W": 0.0
+    },
+    "notes": [],
+    "T_fem": 0.689443347363319,
+    "coil_temp_c": 200.0,
+    "magnet_temp_c": null,
+    "err_total_pct": -17.90571440208092,
+    "pass": true,
+    "P_int_coil_corrected_W": 102.4469459193419,
+    "err_total_coil_corrected_pct": 0.6411815636479107,
+    "temperature_note": "FEM at coil 200.0 \u00b0C / magnet card vs passport hot coil 100.6 \u00b0C / magnet 107.2 \u00b0C: copper corrected analytically (k_R = 1.3174), magnet temperature not corrected"
+   },
+   {
+    "id": "audit_rpm1.5",
+    "role": "audit corner",
+    "rpm": 19500.0,
+    "I": 40.659,
+    "gamma_fem": 10.0,
+    "P_fem_W": 78.16425860531069,
+    "P_int_W": null,
+    "groups_fem": {
+     "P_cu_dc_W": 44.36001922560145,
+     "P_cu_ac_W": 9.402472398245386,
+     "P_fe_stator_W": 16.0334137272199,
+     "P_fe_rotor_W": 1.4440372620286617,
+     "P_mag_W": 6.914362202360973,
+     "P_shaft_W": 0.009953789854324206,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 44.36001922560144,
+     "P_cu_ac_W": null,
+     "P_fe_stator_W": null,
+     "P_fe_rotor_W": null,
+     "P_mag_W": null,
+     "P_shaft_W": null,
+     "P_sleeve_W": null
+    },
+    "notes": [
+     "P_cu_ac_W: outside the row's speed range (never extrapolated)",
+     "P_fe_stator_W: outside the row's speed range (never extrapolated)",
+     "P_fe_rotor_W: outside the row's speed range (never extrapolated)",
+     "P_mag_W: outside the row's speed range (never extrapolated)",
+     "P_shaft_W: outside the row's speed range (never extrapolated)",
+     "P_sleeve_W: outside the row's speed range (never extrapolated)"
+    ],
+    "T_fem": 0.5833695847220532,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "refused": true,
+    "pass": null
+   },
+   {
+    "id": "audit_base",
+    "role": "audit corner",
+    "rpm": 13000.0,
+    "I": 40.659,
+    "gamma_fem": 10.0,
+    "P_fem_W": 60.90477113483859,
+    "P_int_W": 61.254692663236824,
+    "groups_fem": {
+     "P_cu_dc_W": 44.36001922560145,
+     "P_cu_ac_W": 4.309486884528916,
+     "P_fe_stator_W": 8.437011937311551,
+     "P_fe_rotor_W": 0.7180861274288404,
+     "P_mag_W": 3.072824828272593,
+     "P_shaft_W": 0.007342131695239106,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 44.36001922560144,
+     "P_cu_ac_W": 4.376569356533679,
+     "P_fe_stator_W": 8.59403264260581,
+     "P_fe_rotor_W": 0.7313310753813361,
+     "P_mag_W": 3.1843475637520866,
+     "P_shaft_W": 0.008392799362474203,
+     "P_sleeve_W": 0.0
+    },
+    "notes": [],
+    "T_fem": 0.5856968066558971,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "err_total_pct": 0.5745387789464536,
+    "pass": true
+   },
+   {
+    "id": "audit_rpm0.5",
+    "role": "audit corner",
+    "rpm": 6500.0,
+    "I": 40.659,
+    "gamma_fem": 10.0,
+    "P_fem_W": 49.47642546303019,
+    "P_int_W": 49.57952379615852,
+    "groups_fem": {
+     "P_cu_dc_W": 44.36001922560145,
+     "P_cu_ac_W": 1.1032918359350958,
+     "P_fe_stator_W": 3.008800647536324,
+     "P_fe_rotor_W": 0.23190755821542464,
+     "P_mag_W": 0.7681098952344553,
+     "P_shaft_W": 0.00429630050744105,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 44.36001922560144,
+     "P_cu_ac_W": 1.1206819289886745,
+     "P_fe_stator_W": 3.0627129434862117,
+     "P_fe_rotor_W": 0.23529838790757204,
+     "P_mag_W": 0.7960268421784797,
+     "P_shaft_W": 0.004784467996148709,
+     "P_sleeve_W": 0.0
+    },
+    "notes": [],
+    "T_fem": 0.5881196972930403,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "err_total_pct": 0.20837870190393346,
+    "pass": true
+   },
+   {
+    "id": "audit_I0.5",
+    "role": "audit corner",
+    "rpm": 13000.0,
+    "I": 20.3295,
+    "gamma_fem": 10.0,
+    "P_fem_W": 26.553828921151204,
+    "P_int_W": null,
+    "groups_fem": {
+     "P_cu_dc_W": 11.090004806400362,
+     "P_cu_ac_W": 3.431177213733651,
+     "P_fe_stator_W": 8.421656861292963,
+     "P_fe_rotor_W": 0.705054991950071,
+     "P_mag_W": 2.903186235389648,
+     "P_shaft_W": 0.0027488123845094466,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {},
+    "notes": [
+     "current outside the grid rows \u2014 refused"
+    ],
+    "T_fem": 0.29310822348657123,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "refused": true,
+    "pass": null
+   },
+   {
+    "id": "audit_I1.3",
+    "role": "audit corner",
+    "rpm": 13000.0,
+    "I": 52.856700000000004,
+    "gamma_fem": 10.0,
+    "P_fem_W": 92.70568386218822,
+    "P_int_W": null,
+    "groups_fem": {
+     "P_cu_dc_W": 74.96843249126647,
+     "P_cu_ac_W": 5.115214067357982,
+     "P_fe_stator_W": 8.52033028777411,
+     "P_fe_rotor_W": 0.7359421537145572,
+     "P_mag_W": 3.3506917008340285,
+     "P_shaft_W": 0.015073161241073016,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {},
+    "notes": [
+     "current outside the grid rows \u2014 refused"
+    ],
+    "T_fem": 0.7530324812611805,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "refused": true,
+    "pass": null
+   },
+   {
+    "id": "lchk_rated_72steps",
+    "role": "time-step check (72 vs 36 steps)",
+    "rpm": 13000.0,
+    "I": 42.78,
+    "gamma_fem": 6.34,
+    "P_fem_W": 66.35375060793757,
+    "P_int_W": 66.12739504397416,
+    "groups_fem": {
+     "P_cu_dc_W": 49.10886536265106,
+     "P_cu_ac_W": 4.507177621443184,
+     "P_fe_stator_W": 8.727419181798142,
+     "P_fe_rotor_W": 0.7750372253802649,
+     "P_mag_W": 3.2258956287464766,
+     "P_shaft_W": 0.009355587918454948,
+     "P_sleeve_W": 0.0
+    },
+    "groups_int": {
+     "P_cu_dc_W": 49.10886536265106,
+     "P_cu_ac_W": 4.472630093368899,
+     "P_fe_stator_W": 8.598183218889037,
+     "P_fe_rotor_W": 0.7330156198471355,
+     "P_mag_W": 3.2057494225580165,
+     "P_shaft_W": 0.008951326660017623,
+     "P_sleeve_W": 0.0
+    },
+    "notes": [],
+    "T_fem": 0.6164092604824819,
+    "coil_temp_c": 100.6,
+    "magnet_temp_c": 107.2,
+    "err_total_pct": -0.34113454309594277,
+    "pass": true
+   }
+  ],
+  "independent_torque_B1_window_P05": {
+   "full_rated_mtpa": {
+    "T_coulomb_full_Nm": 0.6267428570473227,
+    "T_terminal_work_full_Nm": 0.6269286442244825,
+    "terminal_work_eligible": true,
+    "err_coulomb_vs_terminal_pct": -0.029634501289951494,
+    "T_window60_Nm": 0.6268681786618353,
+    "err_window60_vs_full_pct": 0.01999569889045525,
+    "psi_d_window60_vs_full_pct": 0.0005142552331653678,
+    "ripple_window60_pct": 6.9144868725383954,
+    "ripple_full_pct": 6.967341656553027,
+    "gap_layers": [
+     3.0,
+     3.0
+    ]
+   },
+   "full_peak": {
+    "T_coulomb_full_Nm": 0.7109066524348736,
+    "T_terminal_work_full_Nm": 0.7110987481118979,
+    "terminal_work_eligible": true,
+    "err_coulomb_vs_terminal_pct": -0.02701392423124407,
+    "T_window60_Nm": 0.7110328406245795,
+    "err_window60_vs_full_pct": 0.017750317748988758,
+    "psi_d_window60_vs_full_pct": 0.0005872704875921593,
+    "ripple_window60_pct": 4.912702269575711,
+    "ripple_full_pct": 4.959260079291099,
+    "gap_layers": [
+     3.0,
+     3.0
+    ]
+   }
+  },
+  "time_step_B4": {
+   "steps": [
+    36,
+    72
+   ],
+   "T_pct": 0.005008170594152262,
+   "P_total_pct": -0.34113454309594277,
+   "groups_pct": {
+    "P_cu_ac_W": -0.7665002574986743,
+    "P_fe_W": -1.8022452416920522,
+    "P_mag_W": -0.6245151271768989,
+    "P_shaft_W": -4.3210673873298315
+   }
+  },
+  "duties": {
+   "duty_rated": {
+    "today": {
+     "T_Nm": 0.6154136741956124,
+     "P_loss_W": 65.83032505282516,
+     "P_cu_W": 53.54477202574508,
+     "P_fe_W": 9.169141418338679,
+     "P_mag_W": 3.108160767435654,
+     "ripple_pct": 6.210057998417355
+    },
+    "stored": {
+     "T_em_avg_Nm": 0.623,
+     "T_ripple_pct": 6.098553056982946,
+     "P_loss_total_W": 65.9,
+     "P_core_W": 9.3,
+     "P_stranded_W": 53.5,
+     "P_solid_W": 3.1,
+     "P_mag_W": 3.1,
+     "efficiency": 0.928,
+     "efficiency_shaft": 0.9278,
+     "V_line_peak_V": 18.5,
+     "V1_LL_V": 17.4,
+     "R_phase_ohm": 0.008945,
+     "psi_pm_Wb": 0.001003,
+     "Ld_mH": 0.0065,
+     "Lq_mH": 0.0059,
+     "coil_temp_C": 100.6,
+     "end_winding_factor": 1.76,
+     "torque_method": null,
+     "n_steps_per_period": 36
+    },
+    "stored_saved_at": "2026-09-09T08:12:23",
+    "T_pct": -1.217708796851936,
+    "P_loss_pct": -0.10572829616820352,
+    "map_T_at_duty_Nm": 0.6255315674181696,
+    "note": "stored duty solved with an older baseline and geometry (stator_fillet_r1 0.1 vs die 0.15 today on L12)"
+   },
+   "duty_peak": {
+    "today": {
+     "T_Nm": 0.689443347363319,
+     "P_loss_W": 101.79425989206216,
+     "P_cu_W": 87.19314607527882,
+     "P_fe_W": 10.637854256917073,
+     "P_mag_W": 3.9508788257475893,
+     "ripple_pct": 4.000503875396801
+    },
+    "stored": {
+     "T_em_avg_Nm": 0.7,
+     "T_ripple_pct": 3.6339890502509946,
+     "P_loss_total_W": 101.9,
+     "P_core_W": 10.8,
+     "P_stranded_W": 87.2,
+     "P_solid_W": 3.9,
+     "P_mag_W": null,
+     "efficiency": 0.9119,
+     "efficiency_shaft": null,
+     "V_line_peak_V": 20.6,
+     "V1_LL_V": 19.55,
+     "R_phase_ohm": 0.011598,
+     "psi_pm_Wb": 0.001,
+     "Ld_mH": 0.0075,
+     "Lq_mH": 0.0059,
+     "coil_temp_C": 200,
+     "end_winding_factor": 1.76,
+     "torque_method": null,
+     "n_steps_per_period": 36
+    },
+    "stored_saved_at": "2026-08-31T16:52:27",
+    "T_pct": -1.5080932338115616,
+    "P_loss_pct": -0.10376850631780955,
+    "map_T_at_duty_Nm": null,
+    "note": "stored duty solved with an older baseline and geometry (stator_fillet_r1 0.1 vs die 0.15 today on L12)"
+   }
+  },
+  "audit": {
+   "reference": {
+    "settings": "I 40.659 A, gamma 10\u00b0, 13 000 rpm, mesh 5 mm, 24 steps, coil 120 \u00b0C, magnet at card temperature (120 \u00b0C), k_end 2.19, rotor eddy post-processed",
+    "base": {
+     "T_Nm": 0.584,
+     "EMF_ph_pk_V": 10.14,
+     "V_line_V": 18.3,
+     "P_cu_W": 62.5,
+     "P_cu_dc_W": 58.4,
+     "P_cu_ac_W": 4.0,
+     "P_fe_W": 8.76,
+     "P_mag_W": 2.08,
+     "P_total_W": 73.3,
+     "eta_pct": 91.6
+    },
+    "duty_grade": {
+     "base_13000": {
+      "P_cu_ac_W": 3.88,
+      "P_total_W": 74.3
+     },
+     "rpm19500": {
+      "P_cu_ac_W": 8.49,
+      "P_total_W": 90.9
+     }
+    },
+    "mtpa_static": {
+     "0.5": [
+      2.6,
+      0.2993
+     ],
+     "1.0": [
+      5.4,
+      0.5902
+     ],
+     "1.5": [
+      7.9,
+      0.8635
+     ],
+     "2.0": [
+      10.7,
+      1.104
+     ]
+    }
+   },
+   "static": [
+    {
+     "I": 20.3295,
+     "gamma_mtpa_audit": 2.6,
+     "T_audit": 0.2993,
+     "gamma_mtpa_passport": 3.1183716690042074,
+     "T_passport": 0.30193851255705173,
+     "T_pct": 0.8815611617279384
+    },
+    {
+     "I": 40.659,
+     "gamma_mtpa_audit": 5.4,
+     "T_audit": 0.5902,
+     "gamma_mtpa_passport": 6.0464908835904625,
+     "T_passport": 0.5968021903054916,
+     "T_pct": 1.118636107335089
+    },
+    {
+     "I": 60.9885,
+     "gamma_mtpa_audit": 7.9,
+     "T_audit": 0.8635,
+     "gamma_mtpa_passport": 8.357491584852735,
+     "T_passport": 0.8756481937907573,
+     "T_pct": 1.406855100261409
+    },
+    {
+     "I": 81.318,
+     "gamma_mtpa_audit": 10.7,
+     "T_audit": 1.104,
+     "gamma_mtpa_passport": 10.593955119214586,
+     "T_passport": 1.1250809222537042,
+     "T_pct": 1.909503827328266
+    }
+   ],
+   "loss": []
+  }
+ },
+ "stage2_3d": {
+  "status": "not computed in stage 1",
+  "fields": [
+   "k_flux(L)",
+   "k_T(L)",
+   "k_L(L)",
+   "magnet segmentation factor"
+  ]
+ },
+ "stage3_pwm_controller": {
+  "status": "not computed in stage 1",
+  "fields": [
+   "PWM loss deltas (2 carriers)",
+   "controller conduction/switching losses (PCB_CIANO14_40)",
+   "drive efficiency"
+  ]
+ },
+ "not_in_stage1": [
+  "harmonic spectrum of stator B in 3 probe regions (\u00a74)",
+  "per-row slot field map for hybrid AC copper (\u00a76.3)",
+  "thermal loop / I_thermal current limit (\u00a78.4)",
+  "critical speed and rotor stress limits (\u00a75.5)",
+  "generator quadrant of the map"
+ ]
+}

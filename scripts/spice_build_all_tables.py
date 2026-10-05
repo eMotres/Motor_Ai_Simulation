@@ -58,10 +58,46 @@ LV = ["IQE050N08NM5SC"]
 SIC750 = ["IMDQ75R004M2H", "IMDQ75R007M2H", "AIMDQ75R016M2H"]
 STATIC_T = [25.0, 75.0, 125.0, 150.0, 175.0]
 
+#: The Ø40 controller's two builds (Controller_CIANO14_40_60V/controller_24V_FOC,
+#: docs/calc_notes.md §1, scripts/hb_model.py; 2026-10-05 passport stage 3):
+#: UCC27289 at 12 V, external R_G 10 ohm (6S) / 12 ohm (12S) PLUS the driver's
+#: own output resistance — 1.3 ohm pull-up / 0.85 ohm pull-down, the controller
+#: project's own gate-current model — so the set's R_G,on / R_G,off are the
+#: TOTAL external resistance seen by the gate pin.  Power loop: the design
+#: requirement L_loop <= 3 nH (6 nH = the project's pessimistic check, simulated
+#: at the nominal bus as a sensitivity set).  Buses = the pack's v_min / v_nom /
+#: v_max; currents up to the 12S peak phase-current amplitude (~85 A).
+D40 = {"IQE018N06NM6SC": {"r_g": 10.0, "v": [18.0, 22.2, 25.2]},
+       "IQE036N08NM6SC": {"r_g": 12.0, "v": [36.0, 44.4, 50.4]}}
+D40_DRV_PULL_UP_OHM, D40_DRV_PULL_DOWN_OHM = 1.3, 0.85
+D40_L_LOOP_NH, D40_L_LOOP_PESS_NH = 3.0, 6.0
+D40_I = [5.0, 12.0, 20.0, 31.0, 44.0, 60.0, 75.0, 90.0]
+LV_ALL = LV + list(D40)
+
+
+def d40_set(part: str, l_nH: float = D40_L_LOOP_NH) -> tuple:
+    """(R_G,on, R_G,off, L_sigma nH, V_GS(off), V_GS(on)) of the Ø40 build."""
+    rg = D40[part]["r_g"]
+    return (round(rg + D40_DRV_PULL_UP_OHM, 3), round(rg + D40_DRV_PULL_DOWN_OHM, 3),
+            float(l_nH), 0.0, 12.0)
+
 
 def grid(part: str, doc: dict) -> dict:
     sw = doc.get("switching") or {}
     i_ref = float(sw.get("i_d_ref_A") or 20.0)
+    if part in D40:
+        # the uniform LV sets (so the Controller tab interpolates in R_G for
+        # these cards exactly as for IQE050N08NM5SC) + the Ø40 build's own set
+        d = D40[part]
+        v_nom = d["v"][1]
+        return {"v": [22.2, 44.4], "t": [25.0, 75.0, 125.0, 175.0],
+                "i": [5.0, 12.0, 20.0, 31.0, 44.0, 60.0],
+                "sets": [(1.6, 1.6, 2.0, 0.0, 10.0), (4.7, 4.7, 2.0, 0.0, 10.0)],
+                "extra": [(d40_set(part), d["v"], [25.0, 75.0, 125.0, 175.0], D40_I),
+                          (d40_set(part, D40_L_LOOP_PESS_NH), [v_nom], [25.0, 125.0],
+                           D40_I)],
+                "v_gs_on": 10.0, "v_gs_on_extra": [12.0],   # the build's UCC27289 rail
+                "v_gs_off": [0.0], "i_static": 90.0}
     if part in LV:
         return {"v": [22.2, 44.4], "t": [25.0, 75.0, 125.0, 175.0],
                 "i": [5.0, 12.0, 20.0, 31.0, 44.0, 60.0],
@@ -115,16 +151,18 @@ def static_rows(part: str, g: dict, be) -> dict:
     rows_f, rows_r, notes = [], [], []
     i_max = g["i_static"]
     for t in STATIC_T:
-        r = run_static(m, kind="rds", t_j=t, v_gs=g["v_gs_on"], i_max=i_max,
-                       i_step=i_max / 16, backend=be, v_max=2.0 if part in LV else 5.0)
-        i = np.asarray(r["i_A"], float); o = np.argsort(i)
-        for x in np.linspace(0, i_max, 17)[1:]:
-            rows_f.append([g["v_gs_on"], t, round(float(x), 3),
-                           round(float(np.interp(x, i[o], np.asarray(r["v_kelvin_V"])[o])), 6),
-                           round(float(np.interp(x, i[o], np.asarray(r["v_pin_V"])[o])), 6)])
+        for vgs in [g["v_gs_on"]] + list(g.get("v_gs_on_extra") or []):
+            r = run_static(m, kind="rds", t_j=t, v_gs=vgs, i_max=i_max,
+                           i_step=i_max / 16, backend=be,
+                           v_max=2.0 if part in LV_ALL else 5.0)
+            i = np.asarray(r["i_A"], float); o = np.argsort(i)
+            for x in np.linspace(0, i_max, 17)[1:]:
+                rows_f.append([vgs, t, round(float(x), 3),
+                               round(float(np.interp(x, i[o], np.asarray(r["v_kelvin_V"])[o])), 6),
+                               round(float(np.interp(x, i[o], np.asarray(r["v_pin_V"])[o])), 6)])
         for voff in g["v_gs_off"]:
             r = run_static(m, kind="vsd", t_j=t, v_gs=voff, i_max=i_max,
-                           i_step=i_max / 16, backend=be, v_max=6.0 if part not in LV else 1.5)
+                           i_step=i_max / 16, backend=be, v_max=6.0 if part not in LV_ALL else 1.5)
             i = np.asarray(r["i_A"], float); o = np.argsort(i)
             if float(i[o][-1]) < 0.95 * i_max:
                 notes.append(f"vsd T{t:g} V_GS {voff:g}: sweep reached {float(i[o][-1]):.1f} A")
@@ -258,7 +296,8 @@ def main() -> int:
                                      "every motor on SPICE, uniformly); the datasheet path is "
                                      "the labelled fallback only"))
             block["failed_points"] = len(failed[p])
-            block["l_sigma_default_nH"] = 2.0 if p in LV else 15.0
+            block["l_sigma_default_nH"] = (D40_L_LOOP_NH if p in D40 else
+                                           2.0 if p in LV else 15.0)
             block["validation"] = validation_summary(p)
             sblock = make_static_block(model=m, simulator=sim, static=st)
             write_block(ROOT / "config" / "devices" / f"{p}.yaml", block,

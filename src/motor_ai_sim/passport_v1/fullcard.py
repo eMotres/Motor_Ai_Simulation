@@ -1,6 +1,8 @@
-"""The full Ø40 passport card: stage 1 record + 3-D factors + mechanics +
-coupled thermal + demag current limit + PWM / controller (stage 3), and the
-HTML cards.  Pure post-processing of solved results (no FEM here)."""
+"""The full passport card: stage 1 record + 3-D factors + mechanics +
+coupled thermal + per-cooling thermal limits + demag current limit + PWM /
+controller (stage 3), and the HTML cards.  Machine-agnostic (the spec names
+the controller, variants, k_T rule and cooling studies).  Pure
+post-processing of solved results (no FEM here)."""
 from __future__ import annotations
 
 import json
@@ -30,7 +32,8 @@ def _load(p: Path) -> Optional[Dict[str, Any]]:
 #  stage 2 — 3-D factors
 # ─────────────────────────────────────────────────────────────────────────────
 
-def stage2_block(full_dir: Path, repo: Path, L_mm: float) -> Dict[str, Any]:
+def stage2_block(full_dir: Path, repo: Path, L_mm: float,
+                 k_T_rule: str = "stage_b_inherited") -> Dict[str, Any]:
     import re
     ee = _load(repo / "config" / "end_effect_3d.json") or {}
     sb = ee.get("stage_b") or {}
@@ -38,20 +41,28 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float) -> Dict[str, Any]:
     a, b = lsf.get("fit_a_uH_per_mm"), lsf.get("fit_b_uH")
     kT12 = ((sb.get("torque") or {}).get("k_T"))
     out: Dict[str, Any] = {"L_mm": L_mm}
-    # (1) the 20 mm stack, its own run (JSON) with the 2-D leg
-    s20 = _load(full_dir / "stage_a_L20.json")
-    B1_2d = ((s20 or {}).get("two_d") or {}).get("B1_T")
     curve = []
-    if s20:
-        curve.append({"stack_mm": 20.0, "k_flux_self": s20.get("k_flux_self"),
-                      "B1_mid_T": (s20.get("spill_profile") or {}).get("B1_mid_T")
-                      or s20.get("B1_mid_T"),
-                      "k_psi": s20.get("k_flux"), "picard_converged":
-                          ((s20.get("solves") or [{}])[0]).get("picard_converged"),
-                      "two_d_verdict": (s20.get("two_d") or {}).get("verdict"),
-                      "ratio_3d_mid_over_2d": (s20.get("two_d") or {}).get("ratio_3d_mid_over_2d"),
-                      "source": "out/full/stage_a_L20.json (own cold run + 2-D leg)"})
-    # (2) the stopped 7-point sweep: the 12 mm reference and the 6 mm leg (log)
+    B1_2d = None
+    # (1) every single-length run (JSON) with its 2-D leg
+    for f in sorted(full_dir.glob("stage_a_L*.json")):
+        sx = _load(f) or {}
+        try:
+            Lr = float(f.stem.split("_L", 1)[1])
+        except ValueError:
+            continue
+        b2 = (sx.get("two_d") or {}).get("B1_T")
+        if abs(Lr - L_mm) < 1e-6 or B1_2d is None:
+            B1_2d = b2 if b2 else B1_2d
+        b1m = (sx.get("spill_profile") or {}).get("B1_mid_T") or sx.get("B1_mid_T")
+        curve.append({"stack_mm": Lr, "k_flux_self": sx.get("k_flux_self"),
+                      "B1_mid_T": b1m,
+                      "k_psi": sx.get("k_flux"), "picard_converged":
+                          ((sx.get("solves") or [{}])[0]).get("picard_converged"),
+                      "two_d_verdict": (sx.get("two_d") or {}).get("verdict"),
+                      "ratio_3d_mid_over_2d": (sx.get("two_d") or {}).get("ratio_3d_mid_over_2d"),
+                      "wall_s": (sx.get("pilot") or {}).get("wall_s"),
+                      "source": "out/full/%s (own cold run + 2-D leg)" % f.name})
+    # (2) Ø40 only: the stopped 7-point sweep (log)
     logp = full_dir / "stage_a_sweep_killed_log.txt"
     if logp.exists():
         txt = logp.read_text(encoding="utf-8", errors="replace")
@@ -77,26 +88,41 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float) -> Dict[str, Any]:
                     "(k_flux_self × B1_mid,3D / B1_2D), at this machine's own stack; "
                     "today's die cross-section, n_stack 4 (quick fidelity)",
                     "B1_2d_T": B1_2d,
-                    "labels": ["3-D", "no-load", "quick fidelity"],
-                    "sweep_note": "7-point L-sweep stopped after 6 mm (69 min per warm-started "
-                                  "length under load); 12 and 20 mm solved, 6 mm self-ratio only"}
+                    "labels": ["3-D", "no-load", "quick fidelity"]}
+    if logp.exists():
+        out["k_psi"]["sweep_note"] = ("7-point L-sweep stopped after 6 mm (69 min per "
+                                      "warm-started length under load); 12 and 20 mm solved, "
+                                      "6 mm self-ratio only")
     kT = None
-    if kT12 is not None:
-        kT = 1.0 - (1.0 - float(kT12)) * 12.0 / float(L_mm)
-    out["k_T"] = {"value": kT, "k_T_at_12mm": kT12,
-                  "method": "INHERITED Stage B (co-energy, matched 2-D window) k_T = %.5f at "
-                            "12 mm on the 2026-08 geometry %s (B15AHV950M / F45SH), scaled "
-                            "by the end-region law 1 − (1 − k_T12)·12/L — not recomputed "
-                            "(Stage B/D cost ~2 660 s per rotor position)" % (
-                                float(kT12 or 0), ee.get("geometry_fingerprint")),
-                  "labels": ["3-D (inherited)", "older geometry", PEND]}
-    kL = None
-    if a and b:
-        kL = (float(a) * L_mm + float(b)) / (float(a) * L_mm)
-    out["k_L"] = {"value": kL, "fit_a_uH_per_mm": a, "fit_b_uH": b,
-                  "method": "Stage B long-stack test: L(L) = a·L + b (stack incl. end "
-                            "region); k_L = L/(a·L) = 1 + b/(a·L)",
-                  "labels": ["3-D (inherited)", "older geometry"]}
+    if k_T_rule == "stage_b_inherited":
+        if kT12 is not None:
+            kT = 1.0 - (1.0 - float(kT12)) * 12.0 / float(L_mm)
+        out["k_T"] = {"value": kT, "k_T_at_12mm": kT12,
+                      "method": "INHERITED Stage B (co-energy, matched 2-D window) k_T = %.5f at "
+                                "12 mm on the 2026-08 geometry %s (B15AHV950M / F45SH), scaled "
+                                "by the end-region law 1 − (1 − k_T12)·12/L — not recomputed "
+                                "(Stage B/D cost ~2 660 s per rotor position)" % (
+                                    float(kT12 or 0), ee.get("geometry_fingerprint")),
+                      "labels": ["3-D (inherited)", "older geometry", PEND]}
+        kL = None
+        if a and b:
+            kL = (float(a) * L_mm + float(b)) / (float(a) * L_mm)
+        out["k_L"] = {"value": kL, "fit_a_uH_per_mm": a, "fit_b_uH": b,
+                      "method": "Stage B long-stack test: L(L) = a·L + b (stack incl. end "
+                                "region); k_L = L/(a·L) = 1 + b/(a·L)",
+                      "labels": ["3-D (inherited)", "older geometry"]}
+    else:
+        # No loaded 3-D torque run exists for this die (Stage B/D: ~2 660 s per rotor
+        # position on the Ø40, more here).  The app's own rule — the 2-D torque × the
+        # no-load flux factor (``end3d_k`` on every duty run) — is used and said so.
+        out["k_T"] = {"value": kpsi, "method": "k_T = k_ψ (Stage A, this run): the app's own "
+                      "3-D torque rule (end3d_k on every duty); no loaded 3-D torque run "
+                      "(Stage B/D) for this die — on the Ø40 the loaded k_T was 0.979 vs "
+                      "k_ψ 0.947, so this is likely CONSERVATIVE by up to ~(1−k_ψ)·0.6",
+                      "labels": ["3-D (Stage A k_ψ as k_T)", PEND]}
+        out["k_L"] = {"value": None, "method": "not computed: no Stage B long-stack test for "
+                      "this die; Ld/Lq are 2-D (no end-winding inductance)",
+                      "labels": ["not computed"]}
     out["magnet_segmentation"] = {
         "note": "magnets are one axial piece; rotor/magnet eddy loss is a 2-D (infinitely "
                 "long, no axial return path) value — an axially unsegmented magnet of "
@@ -215,6 +241,8 @@ def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, List[Dict[str,
     return out
 
 
+#: Legacy Ø40 constants — the spec (config/passport_specs/) supersedes them;
+#: kept so an old work dir assembles without a spec.
 VARIANTS = {
     "L12": [
         {"id": "si_48k", "device": "IQE018N06NM6SC", "carrier_hz": 48e3, "dead_time_s": 100e-9,
@@ -247,10 +275,163 @@ CTRL = {"L12": {"build": "6S", "si": "IQE018N06NM6SC", "r_g": 10.0},
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  thermal limits per cooling option (spec cooling_studies)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def cooling_block(full_dir: Path, M: str, studies: Sequence[Mapping[str, Any]], *,
+                  rec, snap, hm, rows_grid, kT: float) -> Dict[str, Any]:
+    """The coupled-loop answers per cooling option, side by side.
+
+    S1 (``continuous``): the continuous current at the study speed, the part that
+    limits it and every part's temperature (``coupled_continuous_rating``, verified
+    by an EM pass at that current when the loop could); the card's torque and
+    shaft power at that current are read from the passport (hot map × k_state ×
+    k_T at the operating angle) — not the rating's linear-in-current estimate,
+    which is kept beside it.  ``limits``: the time from cold to the first part
+    limit at the study current (the peak duty)."""
+    lg = rec["loss_grid"]["plan"]
+    R_hot, vlim = float(lg["R_hot_ohm"]), float(lg["v_phase_limit_V"])
+    rows = []
+    for sd in studies:
+        d = _load(full_dir / f"cooling_{M}_{sd['id']}.json")
+        row: Dict[str, Any] = {"id": sd["id"], "cooling": sd["cooling"],
+                               "solve_to": sd["solve_to"], "rpm": float(sd["rpm"]),
+                               "current": sd.get("current"),
+                               "propeller": sd.get("propeller")}
+        if not d:
+            row["status"] = "not run"
+            rows.append(row)
+            continue
+        cp = d.get("coupling") or {}
+        pop = d.get("propeller_operating_point") or {}
+        row.update({"wall_s": d.get("wall_s"), "error": d.get("error"),
+                    "I_study_A": (d.get("point") or {}).get("I_rms"),
+                    "ambient_c": d.get("ambient_c"),
+                    "air_speed_ms": pop.get("air_speed_mps"),
+                    "propeller_point": ({k: pop.get(k) for k in (
+                        "propeller_id", "torque_Nm", "thrust_N", "shaft_power_W",
+                        "air_speed_ms", "slipstream_factor", "extrapolated")} if pop else None),
+                    "thermal_settings": d.get("thermal_settings"),
+                    "loop": {k: cp.get(k) for k in ("mode", "converged", "runaway",
+                                                     "coil_temp_c", "magnet_temp_c",
+                                                     "magnet_temp_max_c", "iterations",
+                                                     "warning", "warning_code")}})
+        cr = cp.get("continuous_rating") or {}
+        if sd["solve_to"] == "continuous":
+            Ic = cr.get("I_cont_A_rms")
+            row["s1"] = {k: cr.get(k) for k in ("ok", "feasible", "I_cont_A_rms",
+                                                 "limiting_part", "temperatures_c",
+                                                 "limits_c", "verified", "trustworthy",
+                                                 "converged", "capped", "note",
+                                                 "record_is_s1", "I_estimated_A_rms")}
+            row["s1"]["power_linear"] = {k: (cr.get("power") or {}).get(k)
+                                         for k in ("T_em_Nm", "P_shaft_W", "eta_shaft")}
+            if Ic:
+                n = float(sd["rpm"])
+                g, how = hm.operating_gamma(float(Ic), n, R_hot, vlim)
+                if g is not None:
+                    mp = S3.motor_point(rec, snap, hm, rows_grid,
+                                        {"rpm": n, "I_A": float(Ic), "gamma_deg": g})
+                    T = mp["T_op_Nm"] * kT
+                    w = 2.0 * math.pi * n / 60.0
+                    row["s1"]["card"] = {"T_Nm": T, "P_shaft_W": T * w - mp["P_mech_W"],
+                                         "gamma_deg": g, "gamma_mode": how,
+                                         "P_loss_em_W": mp["P_em_W"],
+                                         "basis": "passport hot map × k_state × k_T at the "
+                                                  "S1 current, operating angle (m-limited)"}
+        else:
+            lim = cp.get("limited") or {}
+            ttl = cp.get("time_to_limit") or {}
+            row["limits"] = {"limiting_part": lim.get("part") or ttl.get("limiting_part"),
+                             "t_cold_s": lim.get("t_cold_s") or ttl.get("time_to_limit_s"),
+                             "at_limit_c": lim.get("at_limit_c"),
+                             "steady_state_would_be_c": lim.get("steady_state_would_be")
+                             or ttl.get("at_point_c"),
+                             "limits_c": ttl.get("limits_c"),
+                             "within_limits": ttl.get("within_limits")}
+        rows.append(row)
+    return {"studies": rows,
+            "method": "coupled EM-thermal loop (routes.coupled.run, TDM eddy + demag, the "
+                      "duty's mesh) per cooling option; S1 = coupled_continuous_rating "
+                      "(network fitted to the 2-D thermal map, re-solved until s* settles, "
+                      "verified by an EM pass at I_cont); limits = time from cold to the "
+                      "first part limit; part limits from the machine's cards (winding: the "
+                      "loop's class-N 200 °C assumption; magnet: card max working "
+                      "temperature; housing: the loop's touch limit)",
+            "labels": ["2-D thermal FEM + 4-node network", "ambient 40 °C",
+                       "propeller slipstream factor 0.4 (behind hub) — to be calibrated",
+                       PEND]}
+
+
+def propeller_match(rec, snap, hm, rows_grid, kT: float, prop_ids: Sequence[str],
+                    cool: Mapping[str, Any]) -> List[Dict[str, Any]]:
+    """Each propeller against the motor: the motor's max (card) torque at v_nom
+    and the propeller-air S1 card torque at the studied speeds vs the prop
+    torque; the highest speed the motor holds continuously with that prop and
+    the highest it reaches at all (peak current, v_nom, m)."""
+    from motor_ai_sim import propeller as PP
+    lg = rec["loss_grid"]["plan"]
+    R_hot, vlim = float(lg["R_hot_ohm"]), float(lg["v_phase_limit_V"])
+    I_pk = float(lg["I_peak_rms"])
+    s1 = sorted(((r["rpm"], ((r.get("s1") or {}).get("card") or {}).get("T_Nm"))
+                 for r in cool.get("studies", []) if r.get("cooling") == "propeller_air"
+                 and r.get("solve_to") == "continuous"
+                 and ((r.get("s1") or {}).get("card") or {}).get("T_Nm")),
+                key=lambda x: x[0])
+    out = []
+    for pid in prop_ids:
+        try:
+            pr = PP.get_propeller(pid)
+        except Exception as e:                       # noqa: BLE001
+            out.append({"id": pid, "status": "not in the catalogue: %s" % e})
+            continue
+        pts = []
+        n_reach = None
+        for n in np.arange(250.0, 4001.0, 50.0):
+            tq = PP.torque_Nm(pr, float(n))
+            mt = hm.max_torque_at(float(n), R_hot, vlim, I_pk)
+            if mt.get("T") is None:
+                break
+            k = S3.k_state_at(rec["loss_grid"]["points"], float(n), mt["I"]) or 1.0
+            if mt["T"] * k * kT >= tq:
+                n_reach = float(n)
+            pts.append({"rpm": float(n), "T_prop_Nm": tq, "T_max_Nm": mt["T"] * k * kT})
+        n_cont = None
+        if len(s1) >= 2:
+            ns = [x[0] for x in s1]
+            ts = [x[1] for x in s1]
+            for n in np.arange(ns[0], ns[-1] + 1e-9, 10.0):
+                if PP.torque_Nm(pr, float(n)) <= float(np.interp(n, ns, ts)):
+                    n_cont = float(n)
+        op_c = PP.operating_point(pr, n_cont) if n_cont else None
+        op_r = PP.operating_point(pr, n_reach) if n_reach else None
+        geo = getattr(pr, "geometry", None) or {}
+        out.append({"id": pid, "model": pr.model,
+                    "diameter_in": (geo.get("diameter_in") if isinstance(geo, dict) else None),
+                    "rpm_range_tested": list(pr.rpm_range) if pr.rpm_range else None,
+                    "T_prop_at_1000_Nm": PP.torque_Nm(pr, 1000.0),
+                    "T_prop_at_2000_Nm": PP.torque_Nm(pr, 2000.0),
+                    "n_cont_rpm": n_cont,
+                    "n_cont_basis": ("highest speed where the prop torque ≤ the propeller-air "
+                                     "S1 card torque (S1 at %s rpm, linear between; none "
+                                     "below the first S1 speed means the prop is lighter "
+                                     "than S1 there)" % "/".join("%.0f" % x[0] for x in s1))
+                    if s1 else "no propeller S1 runs",
+                    "cont_thrust_N": op_c["thrust_N"] if op_c else None,
+                    "cont_shaft_W": op_c["shaft_power_W"] if op_c else None,
+                    "n_reach_rpm": n_reach,
+                    "reach_thrust_N": op_r["thrust_N"] if op_r else None,
+                    "reach_torque_Nm": op_r["torque_Nm"] if op_r else None,
+                    "curve": pts})
+    return out
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  the full record
 # ─────────────────────────────────────────────────────────────────────────────
 
-def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any]) -> Dict[str, Any]:
+def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
+               spec_m: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     od = work / "out" / M
     full = work / "out" / "full"
     snap = json.loads((od / "snapshot.json").read_text(encoding="utf-8"))
@@ -265,7 +446,9 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any]) 
     n0 = float(snap["rated_duty"]["rpm"])
     L = float(snap["geometry"]["motor_length"])
     v_dc = float(snap["battery"]["v_nom"])
-    s2 = stage2_block(full, repo, L)
+    spec_m = dict(spec_m or {})
+    s2 = stage2_block(full, repo, L, str((spec_m.get("k3d") or {}).get("k_T")
+                                         or "stage_b_inherited"))
     rec["stage2_3d"] = s2
     rec["mechanical"] = mech_block(full, M)
     cp = _load(full / f"coupled_{M}.json")
@@ -275,14 +458,46 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any]) 
                                "used_for_card": bool((cp.get("coupling") or {}).get("converged"))}
                               if cp else {"status": "not run for this machine — hot temperatures "
                                           "from the rated duty, labelled"})
+    t_in = snap.get("temperatures") or {}
+    if t_in.get("hot_override_reason"):
+        stored = _load(work / "inputs" / ("duty_results_%s.json" % snap["configuration"])) or {}
+        sc = ((stored.get(snap["rated_duty"]["name"]) or {}).get("coupled") or {})
+        rec["coupled_thermal"] = {
+            "status": "rated duty has no steady state inside the magnet card — hot map at the "
+                      "labelled limit-temperature reference (owner decision pending)",
+            "used_for_card": False, "reason": t_in["hot_override_reason"],
+            "stored_rated_coupled": {k: sc.get(k) for k in (
+                "computed_at", "solve_to", "converged", "runaway", "coil_temp_c",
+                "magnet_temp_c", "magnet_temp_max_c", "residual_coil_K",
+                "residual_magnet_K", "warning", "warning_code", "iterations")},
+            "hot_reference": {"magnet_c": t_in.get("hot_magnet_c"),
+                              "coil_c": t_in.get("hot_coil_c"),
+                              "source": t_in.get("hot_magnet_source")}}
     rec["demag_limit"] = demag_limit(st, full, M, I0)
-    s3 = S3.build_variants(machine=M, rec=rec, snap=snap, hm=hm, rows_grid=rows_grid,
-                           pwm_fem=pwm_classes(full, M, v_dc), variants=VARIANTS[M],
-                           r_g_si=CTRL[M]["r_g"], build=CTRL[M]["build"], si_part=CTRL[M]["si"])
-    rec["pwm_variants"] = s3["pwm_variants"] + NOT_COMPUTED_VARIANTS.get(M, [])
-    rec["stage3_pwm_controller"] = {"board": s3["board"],
-                                    "status": "computed (see pwm_variants)",
-                                    "controller_source": S3.CTRL_SOURCE}
+    ctrl = spec_m.get("controller") if spec_m else (
+        {"status": "set", "device": CTRL[M]["si"], "r_g_ohm": CTRL[M]["r_g"],
+         "build": CTRL[M]["build"], "n_parallel": 1, "board_scale": 1})
+    variants = (spec_m.get("pwm_variants") if spec_m else VARIANTS.get(M)) or []
+    if ctrl and ctrl.get("status") == "set" and variants:
+        s3 = S3.build_variants(machine=M, rec=rec, snap=snap, hm=hm, rows_grid=rows_grid,
+                               pwm_fem=pwm_classes(full, M, v_dc), variants=variants,
+                               r_g_si=float(ctrl["r_g_ohm"]), build=str(ctrl["build"]),
+                               si_part=str(ctrl["device"]),
+                               n_par=int(ctrl.get("n_parallel") or 1),
+                               board_scale=float(ctrl.get("board_scale") or 1))
+        rec["pwm_variants"] = s3["pwm_variants"] + list(
+            (spec_m.get("not_computed_variants") if spec_m else NOT_COMPUTED_VARIANTS.get(M))
+            or [])
+        rec["stage3_pwm_controller"] = {"board": s3["board"],
+                                        "status": "computed (see pwm_variants)",
+                                        "controller": ctrl,
+                                        "controller_source": ctrl.get("source") or S3.CTRL_SOURCE}
+    else:
+        rec["pwm_variants"] = []
+        rec["stage3_pwm_controller"] = {"status": "no controller set",
+                                        "note": "PWM variants are computed only for a machine "
+                                                "with a controller; Configure shows PWM "
+                                                "disabled (request calculation)"}
     # ── headline with 3-D factors ───────────────────────────────────────────
     kT = s2["k_T"]["value"] or 1.0
     kpsi = s2["k_psi"]["value"]
@@ -297,6 +512,14 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any]) 
     rec["card"]["peak_point"]["T_card_Nm"] = C._val(
         T_pk * kT if T_pk else None, "N·m", "map × k_state × k_T(3-D)", [],
         ["2-D × k_T 3-D (inherited)", PEND])
+    studies = list(spec_m.get("cooling_studies") or []) if spec_m else []
+    if studies:
+        rec["cooling"] = cooling_block(full, M, studies, rec=rec, snap=snap, hm=hm,
+                                       rows_grid=rows_grid, kT=kT)
+        props = list(spec_m.get("propellers") or [])
+        if props:
+            rec["propeller_match"] = propeller_match(rec, snap, hm, rows_grid, kT, props,
+                                                     rec["cooling"])
     kv = rec["card"]["constants_cold"]["Kv_rpm_per_V_line"]["value"]
     rec["card"]["constants_cold"]["Kv_3d_rpm_per_V_line"] = C._val(
         kv / kpsi if (kv and kpsi) else None, "rpm/V (line peak)", "2-D Kv ÷ k_psi(3-D)",
@@ -314,7 +537,8 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any]) 
                    float(lg.get("n_mech_limit_rpm") or float("inf")),
                    float(rec["mechanical"].get("limit_speed_sf1_rpm") or float("inf")))
         pts = []
-        for n in np.linspace(max(0.05 * n0, 200.0), min(nmax, 4.0 * n0), 36):
+        emax = float(((snap.get("plan") or {}).get("envelope_max_factor")) or 4.0)
+        for n in np.linspace(max(0.05 * n0, 50.0), min(nmax, emax * n0), 36):
             mt = hm.max_torque_at(float(n), R_hot, vl_eff, I_pk)
             if mt.get("T") is None:
                 continue
@@ -322,7 +546,7 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any]) 
             pts.append({"rpm": float(n), "T_map": mt["T"], "I": mt["I"], "gamma": mt["gamma"],
                         "T_card": mt["T"] * (k or 1.0) * kT, "k_state": k})
         cont = []
-        for n in np.linspace(max(0.05 * n0, 200.0), min(nmax, 4.0 * n0), 36):
+        for n in np.linspace(max(0.05 * n0, 50.0), min(nmax, emax * n0), 36):
             g, _ = hm.operating_gamma(I0, float(n), R_hot, vl_eff)
             if g is None:
                 continue
@@ -393,7 +617,90 @@ def _v(d, key="value"):
     return (d or {}).get(key) if isinstance(d, dict) else d
 
 
-def machine_html(rec: Mapping[str, Any], M: str) -> str:
+def _cooling_html(rec: Mapping[str, Any]) -> str:
+    """Thermal limits per cooling option, side by side (+ the propeller match)."""
+    cool = rec.get("cooling")
+    if not cool:
+        return ""
+    o = ["<h2>Thermal limits — robotics vs propeller cooling</h2>"]
+    st = cool["studies"]
+    s1 = [r for r in st if r["solve_to"] == "continuous"]
+    lim = [r for r in st if r["solve_to"] != "continuous"]
+    rows = []
+    for r in s1:
+        c = r.get("s1") or {}
+        cd = c.get("card") or {}
+        t = c.get("temperatures_c") or {}
+        rows.append([r["cooling"].replace("_", " "), "%.0f" % r["rpm"],
+                     Hh.fmt(r.get("air_speed_ms")) if r.get("air_speed_ms") else "still air",
+                     c.get("I_cont_A_rms") if c.get("I_cont_A_rms") is not None
+                     else H_(r.get("status") or r.get("error") or "—"),
+                     cd.get("T_Nm"), cd.get("P_shaft_W"),
+                     c.get("limiting_part") or "—",
+                     t.get("winding"), t.get("magnet"), t.get("housing"),
+                     "yes" if c.get("verified") else ("no" if c else "—")])
+    o.append(Hh.table(["cooling", "rpm", "air m/s", "I cont. A rms", "T cont. N·m",
+                       "P shaft W", "limited by", "winding °C", "magnet °C", "housing °C",
+                       "verified"], rows, left_cols=1))
+    if lim:
+        rows = []
+        for r in lim:
+            L = r.get("limits") or {}
+            rows.append([r["cooling"].replace("_", " "), "%.0f" % r["rpm"],
+                         Hh.fmt(r.get("I_study_A")),
+                         Hh.fmt(L.get("t_cold_s")) if L.get("t_cold_s") else
+                         ("within limits" if L.get("within_limits") else "—"),
+                         L.get("limiting_part") or "—",
+                         H_(", ".join("%s %s" % (k, Hh.fmt(v)) for k, v in
+                                      (L.get("steady_state_would_be_c") or {}).items()))])
+        o.append(Hh.table(["cooling", "rpm", "I A rms", "s from cold to limit", "first limit",
+                           "steady state would be, °C"], rows, left_cols=1))
+    o.append('<p class="note">%s</p>' % Hh.esc(cool["method"]))
+    pm = rec.get("propeller_match") or []
+    if pm:
+        o.append("<h3>Propellers against this motor</h3>")
+        rows = [[r.get("model") or r["id"], Hh.fmt(r.get("T_prop_at_1000_Nm")),
+                 Hh.fmt(r.get("T_prop_at_2000_Nm")),
+                 Hh.fmt(r.get("n_cont_rpm"), 0) if r.get("n_cont_rpm") else "—",
+                 Hh.fmt(r.get("cont_thrust_N")) if r.get("cont_thrust_N") else "—",
+                 Hh.fmt(r.get("n_reach_rpm"), 0) if r.get("n_reach_rpm") else "—",
+                 Hh.fmt(r.get("reach_thrust_N")) if r.get("reach_thrust_N") else "—",
+                 "%s–%s" % tuple(int(x) for x in r["rpm_range_tested"])
+                 if r.get("rpm_range_tested") else "—"]
+                for r in pm if "curve" in r]
+        o.append(Hh.table(["propeller", "τ @1000 N·m", "τ @2000 N·m", "cont. rpm",
+                           "cont. thrust N", "max rpm (peak I)", "max thrust N",
+                           "tested rpm"], rows, left_cols=1))
+        ser = []
+        for i, r in enumerate([r for r in pm if r.get("curve")]):
+            ser.append({"name": r.get("model") or r["id"],
+                        "x": [q["rpm"] for q in r["curve"]],
+                        "y": [q["T_prop_Nm"] for q in r["curve"]],
+                        "color": Hh.PALETTE[(i + 2) % len(Hh.PALETTE)], "dash": True})
+        cur = next((r["curve"] for r in pm if r.get("curve")), None)
+        if cur:
+            ser.append({"name": "motor max (peak I, v_nom)", "x": [q["rpm"] for q in cur],
+                        "y": [q["T_max_Nm"] for q in cur], "color": "#000"})
+        s1p = sorted((r["rpm"], ((r.get("s1") or {}).get("card") or {}).get("T_Nm"))
+                     for r in s1 if r["cooling"] == "propeller_air"
+                     and ((r.get("s1") or {}).get("card") or {}).get("T_Nm"))
+        if s1p:
+            ser.append({"name": "S1, propeller air", "x": [x[0] for x in s1p],
+                        "y": [x[1] for x in s1p], "color": Hh.PALETTE[0], "marker": True})
+        s1r = sorted((r["rpm"], ((r.get("s1") or {}).get("card") or {}).get("T_Nm"))
+                     for r in s1 if r["cooling"] == "robotics"
+                     and ((r.get("s1") or {}).get("card") or {}).get("T_Nm"))
+        if s1r:
+            ser.append({"name": "S1, robotics", "x": [x[0] for x in s1r],
+                        "y": [x[1] for x in s1r], "color": Hh.PALETTE[1], "marker": True})
+        o.append('<div class="charts">' + Hh.figure(
+            Hh.line_chart(ser, xlab="speed, rpm", ylab="torque, N·m", ymin=0),
+            "Propeller torque (dashed, T-Motor bench data, static) vs the motor's maximum "
+            "card torque and its continuous (S1) torque per cooling.") + "</div>")
+    return "".join(o)
+
+
+def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
     c = rec["card"]
     rp, pk = c["rated_point"], c["peak_point"]
     s2 = rec["stage2_3d"]
@@ -404,6 +711,12 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
     bat = inp["battery"]
     o = []
     o.append(f"<h1>{Hh.esc(rec['machine']['die'])} · {M} — motor passport</h1>")
+    ct0 = rec.get("coupled_thermal") or {}
+    if ct0.get("hot_reference"):
+        o.append('<p class="note bad">HOT = limit-temperature reference (magnet %s °C, '
+                 'winding %s °C), not the rated duty: %s</p>' % (
+                     Hh.fmt(ct0["hot_reference"]["magnet_c"]), Hh.fmt(ct0["hot_reference"]["coil_c"]),
+                     Hh.esc(ct0.get("reason") or "")))
     o.append(f'<p class="sub">Stack {float(rec["stage2_3d"]["L_mm"]):g} mm · bus {bat["v_min"]:g}/'
              f'{bat["v_nom"]:g}/{bat["v_max"]:g} V ({bat.get("cells")}S) · hot magnets '
              f'{t["hot_magnet_c"]:g} °C / winding {t["hot_coil_c"]:g} °C · m = '
@@ -425,6 +738,13 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
                      "≤ 1 % rated-torque drop · " + PEND))
     o.append(Hh.tile("Rotor stress limit (SF 1)", f"{Hh.fmt(mech.get('limit_speed_sf1_rpm'))} rpm",
                      "averaged stress"))
+    for r in (rec.get("cooling") or {}).get("studies", []):
+        cd = ((r.get("s1") or {}).get("card") or {})
+        if r["solve_to"] == "continuous" and abs(r["rpm"] - rp["rpm"]) < 1e-6 and cd.get("T_Nm"):
+            o.append(Hh.tile("Continuous, %s" % r["cooling"].replace("_", " "),
+                             f"{Hh.fmt(cd['T_Nm'])} N·m",
+                             f"{Hh.fmt(r['s1'].get('I_cont_A_rms'))} A at {r['rpm']:.0f} rpm · "
+                             f"limited by {r['s1'].get('limiting_part')}"))
     si = [v for v in rec["pwm_variants"] if v.get("id") == "si_48k"]
     if si and si[0].get("i_board_limit_A"):
         o.append(Hh.tile("Controller continuous (Si)", f"{Hh.fmt(si[0]['i_board_limit_A']['favourable'])} A",
@@ -453,11 +773,20 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
     o.append(Hh.table(["variant", "device", "board-limit I (fav.) A",
                        "P cont. @ rated rpm, fav. W", "weak W", "hot motor W",
                        "best P cont. W @ rpm", "basis"], rows, left_cols=2))
-    o.append(f'<p class="note">Motor rated {rp["I_rms"]:.2f} A / {Hh.fmt(_v(rp["P_shaft_W"]))} W '
-             f'shaft at {rp["rpm"]:.0f} rpm. Controller ratings (Si, controller README, '
-             f'm = 0.89): ' + " / ".join("%g" % x for x in S3.RATINGS[CTRL[M]["build"]]["W"].values())
-             + ' W (favourable / weak airflow / next to a hot motor). System limit = the '
-             'lower of motor and board.</p>')
+    _ct = (rec.get("stage3_pwm_controller") or {}).get("controller") or {}
+    _bd = (rec.get("stage3_pwm_controller") or {}).get("board") or {}
+    if _ct.get("build") in S3.RATINGS:
+        o.append(f'<p class="note">Motor rated {rp["I_rms"]:.2f} A / {Hh.fmt(_v(rp["P_shaft_W"]))} W '
+                 f'shaft at {rp["rpm"]:.0f} rpm. Controller: {Hh.esc(_ct.get("device"))} × '
+                 f'{_ct.get("n_parallel", 1)} per switch, {Hh.fmt(_ct.get("f_carrier_hz", 0) / 1e3, 0)} kHz, '
+                 f'm = {_ct.get("m")}. Board ratings of the calibrated one-device board (Si): '
+                 + " / ".join("%g" % x for x in S3.RATINGS[_ct["build"]]["W"].values())
+                 + ' W (favourable / weak airflow / next to a hot motor)'
+                 + ((" — " + Hh.esc(_bd.get("scaling"))) if _bd.get("scaling") else "")
+                 + '. System limit = the lower of motor and board.</p>')
+    else:
+        o.append('<p class="note">No controller set for this machine — PWM not computed.</p>')
+    o.append(_cooling_html(rec))
     # charts
     o.append("<h2>Charts</h2><div class=\"charts\">")
     env = rec["envelope_card"]["curves"]
@@ -682,7 +1011,7 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
     o.append(f"<footer>Pending owner decisions: {Hh.esc(json.dumps(rec.get('pending_owner_defaults'))[:600])}"
              f"<br>Snapshot {Hh.esc(rec['provenance']['snapshot_sha256'])} · runs ok "
              f"{rec['provenance']['runs_ok']} · schema {Hh.esc(rec['schema'])}</footer>")
-    return Hh.page(f"{M} passport", "".join(o), f"Ø40 motor passport {M}")
+    return Hh.page(f"{M} passport", "".join(o), f"{title} motor passport {M}")
 
 
 def H_(s):

@@ -42,6 +42,7 @@ machines:
         rated duty (25.88 A, 1000 rpm) has no steady state inside the magnet card under
         its saved robotics cooling: coupled loop 2026-09-28 not converged (pass 2
         refused at magnet 242.9 °C), adopted 293.6 / 210.7 °C (pass 1) > card 150 °C
+    k3d: {k_T: k_psi}
     stage_a_lengths_mm: [13.0]
     controller:
       status: set

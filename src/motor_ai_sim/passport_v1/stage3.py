@@ -121,10 +121,20 @@ def inverter_losses(card, drv: Mapping[str, Any], *, I_rms: float, f_sw: float,
 
 
 class Board:
-    """One-node board model calibrated on the Si build (see module doc)."""
+    """One-node board model calibrated on the Si build (see module doc).
 
-    def __init__(self, si_card, si_drv, *, build: str, v_dc: float, f_sw: float, dead_s: float):
+    ``n_par`` devices per switch on a board ``scale`` times the calibrated
+    one-device board (Ø85: the Ø40 12S board scaled ×2 for two devices in
+    parallel — an ESTIMATE, no such board exists): the heat budget Q* scales
+    by ``scale`` (R_sys by 1/scale, the same heatsink temperature rise at
+    scale × the heat), each device keeps its own R_j-hs, the board copper law
+    is unchanged (stated)."""
+
+    def __init__(self, si_card, si_drv, *, build: str, v_dc: float, f_sw: float, dead_s: float,
+                 n_par: int = 1, scale: float = 1.0):
         self.build = build
+        self.n_par = int(n_par)
+        self.scale = float(scale)
         rt = RATINGS[build]
         self.classes = {}
         p_fav = None
@@ -132,9 +142,11 @@ class Board:
             I_r = rt["I_fav"] * W / rt["W"]["favourable"]
             inv = inverter_losses(si_card, si_drv, I_rms=I_r, f_sw=f_sw, dead_s=dead_s,
                                   v_dc=v_dc, t_j=T_J_AT_LIMIT_C)
-            Q = inv["total"] + K_BOARD_CU * I_r ** 2
+            Q = (inv["total"] + K_BOARD_CU * I_r ** 2) * self.scale
             self.classes[cls] = {"I_rating_si_A": I_r, "P_rating_W": W, "Q_budget_W": Q,
-                                 "R_sys_K_per_W": (T_HS_LIMIT_C - T_AMB_C) / Q}
+                                 "R_sys_K_per_W": (T_HS_LIMIT_C - T_AMB_C) / Q,
+                                 "calibration": "one-device Si board at %.2f A" % I_r
+                                 + (" × %g (scaled)" % self.scale if self.scale != 1 else "")}
             if cls == "favourable":
                 p_fav = inv["per_switch_W"]
         self.R_jhs = (T_J_AT_LIMIT_C - T_HS_LIMIT_C) / max(p_fav, 1e-9)
@@ -149,10 +161,10 @@ class Board:
         t_j = T_J_AT_LIMIT_C
         for _ in range(8):
             inv = inverter_losses(card, drv, I_rms=I_rms, f_sw=f_sw, dead_s=dead_s,
-                                  v_dc=v_dc, t_j=t_j)
+                                  v_dc=v_dc, t_j=t_j, n_par=self.n_par)
             Q = inv["total"] + K_BOARD_CU * I_rms ** 2
             t_hs = T_AMB_C + c["R_sys_K_per_W"] * Q
-            t_new = t_hs + self.R_jhs * inv["per_switch_W"]
+            t_new = t_hs + self.R_jhs * inv["per_switch_W"] / self.n_par
             if abs(t_new - t_j) < 0.05:
                 t_j = t_new
                 break
@@ -162,7 +174,7 @@ class Board:
         basis = "steady state, board model (%s airflow)" % cls
         if not (board_ok and tj_ok):
             inv = inverter_losses(card, drv, I_rms=I_rms, f_sw=f_sw, dead_s=dead_s,
-                                  v_dc=v_dc, t_j=T_J_AT_LIMIT_C)
+                                  v_dc=v_dc, t_j=T_J_AT_LIMIT_C, n_par=self.n_par)
             Q = inv["total"] + K_BOARD_CU * I_rms ** 2
             t_j, t_hs = T_J_AT_LIMIT_C, None
             basis = ("beyond the board's continuous limit (no steady state): losses at the "
@@ -188,6 +200,12 @@ class Board:
                 "T_amb_C": T_AMB_C, "T_hs_limit_C": T_HS_LIMIT_C,
                 "T_j_at_limit_C": T_J_AT_LIMIT_C, "T_j_derate_C": T_J_DERATE_C,
                 "R_jhs_K_per_W": self.R_jhs, "K_board_cu_W_per_A2": K_BOARD_CU,
+                "devices_per_switch": self.n_par, "board_scale": self.scale,
+                "scaling": (None if self.scale == 1 else
+                            "Ø40 controller board model scaled ×%g devices — estimate, no "
+                            "board of this size exists: heat budget ×%g, R_sys ÷%g, R_j-hs "
+                            "per device, board copper law unchanged" % (
+                                self.scale, self.scale, self.scale)),
                 "K_board_cu_source": K_BOARD_CU_SOURCE, "classes": self.classes,
                 "source": CTRL_SOURCE, "labels": ["estimate", "default pending owner"]}
 
@@ -322,7 +340,7 @@ class PwmModel:
 
 def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[str, Any],
                    variants: Sequence[Mapping[str, Any]], r_g_si: float, build: str,
-                   si_part: str) -> Dict[str, Any]:
+                   si_part: str, n_par: int = 1, board_scale: float = 1.0) -> Dict[str, Any]:
     """``pwm_variants`` + the controller / system-limit block of one machine.
 
     ``pwm_fem``: {class_id: [anchor, ...]} from the PWM FEM task (anchor =
@@ -337,7 +355,8 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
     I0 = float(snap["rated_duty"]["current_arms"])
     si = get_device(si_part)
     si_drv = drive_for(si, r_g_si)
-    board = Board(si, si_drv, build=build, v_dc=v_dc, f_sw=48e3, dead_s=100e-9)
+    board = Board(si, si_drv, build=build, v_dc=v_dc, f_sw=48e3, dead_s=100e-9,
+                  n_par=n_par, scale=board_scale)
     pts = operating_points(rec, snap, hm)
     mp = {p["key"]: (motor_point(rec, snap, hm, rows_grid, p) if p["gamma_deg"] is not None
                      else None) for p in pts}
@@ -457,7 +476,7 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
         out_variants.append({
             "id": v["id"], "device": card.part, "technology": drv["tech"],
             "carrier_hz": f_sw, "dead_time_s": dead, "modulation": "SVPWM centred",
-            "m_max": m_max, "n_parallel": 1,
+            "m_max": m_max, "n_parallel": int(n_par),
             "bus_v": {"min": float(bat["v_min"]), "nom": v_dc, "max": float(bat["v_max"])},
             "bus_evaluated": "nom",
             "build": fingerprint,

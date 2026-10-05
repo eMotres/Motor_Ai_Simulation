@@ -1,23 +1,29 @@
-"""Motor passport — Ø40 FULL card tasks (stage 2: 3-D + mechanics, stage 3:
-PWM + controller, plus the L12 coupled EM-thermal re-run).  Server sandbox only.
+"""Motor passport — FULL card tasks (stage 2: 3-D + mechanics, stage 3:
+PWM + controller, the coupled EM-thermal runs).  Server sandbox only.
+Machine-agnostic: the die, configurations, controller and cooling studies come
+from the spec (``--spec``, config/passport_specs/<die>.yaml).
 
-Stage 1 lives in scripts/passport_pilot_d40.py (same /work layout).  This file
+Stage 1 lives in scripts/passport_pilot.py (same /work layout).  This file
 adds independent TASKS that run as separate processes inside ONE container
 (``parallel``), each in its own copy of the machine's sandbox workspace so no
 two processes ever write the same store:
 
-  stage_a                 3-D Stage A on today's cross-section: k_flux at
-                          7 stack lengths (6…30 mm) — one cross-section mesh
-                          serves L12 (12 mm) and L20 (20 mm)
-  coupled  --machine L12  the rated duty's coupled EM-thermal loop (routes.
+  stage_a  [--length L]   3-D Stage A on today's cross-section (k_flux); one
+                          length = its own cold reference + the 2-D leg
+  coupled  --machine M    the rated duty's coupled EM-thermal loop (routes.
                           coupled.run, sine) on the owner's Thermal-tab cooling
-  mech     --machine M    rotor-stress limit speed (SF = 1, averaged) and the
-                          critical speeds (rotordynamics beam), routes.mechanical
-  pwm      --machine M --point rated|peak [--fsw 48000 --dead-us 0.1]
+  cooling  --machine M --study ID
+                          one of the spec's ``cooling_studies``: the coupled loop
+                          with solve_to = continuous (S1 rating) or limits (time to
+                          a limit) under ``robotics`` or ``propeller_air`` cooling
+  mech     --machine M    rotor-stress limit speed (SF = 1, averaged) and, when
+                          the spec has a beam, the critical speeds
+  pwm      --machine M --point rated|peak [--fsw 48000 --dead-us 0.1 --spc 20]
                           the Controller's bridge (drive="inverter": device
                           drops + dead time + current loop, centred SVPWM) vs a
                           resolution-matched sine reference (harm_ref) at the
                           card's operating point, HOT temperatures
+  demagseq --machine M --fi F
   parallel T1 ; T2 ; …    run tasks concurrently (threads split), wait for all
 
 Every task writes ``/work/out/full/<task>.json`` (full precision + provenance).
@@ -36,21 +42,31 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List
 
-DIE = "CIANO14 40 new"
-CONTROLLER = {
-    # Controller_CIANO14_40_60V/controller_24V_FOC (README decision #2, BOM
-    # docs/ctrl60_BOM_6S.csv / _12S.csv, calc_notes §1-2): one bridge, one
-    # device per switch, UCC27289 at 12 V gate, R_G 10 / 12 ohm (prototype
-    # starting values), dead time 0.1 us, 48 kHz centred SVPWM, m = 0.89.
-    "L12": {"device": "IQE018N06NM6SC", "r_g_ohm": 10.0},
-    "L20": {"device": "IQE036N08NM6SC", "r_g_ohm": 12.0},
-    "common": {"devices_parallel": 1, "v_gs_on_V": 12.0, "v_gs_off_V": 0.0,
-               "dead_time_us": 0.1, "f_carrier_hz": 48000.0,
-               "modulation": "svpwm", "m": 0.89, "t_j_assumed_c": 110.0,
-               "t_j_source": "controller project: T_j ≈ 110 °C at the 110 °C "
-                             "board limit (README rating table) — assumed for "
-                             "R_DS(on) / V_SD in the PWM pass"},
-}
+REPO = Path(__file__).resolve().parents[1]
+SPEC: Dict[str, Any] = {}
+DIE = ""
+
+
+def _use_spec(name: str) -> None:
+    global SPEC, DIE
+    sys.path.insert(0, str(REPO / "src"))
+    from motor_ai_sim.passport_v1.spec import default_spec_path, load_spec
+    SPEC = load_spec(default_spec_path(REPO, name))
+    DIE = str(SPEC["die"])
+
+
+def _mspec(M: str) -> Dict[str, Any]:
+    return dict(SPEC["machines"][M])
+
+
+def _ctrl(M: str) -> Dict[str, Any]:
+    """The machine's controller (spec); refuses when none is set."""
+    c = _mspec(M).get("controller")
+    if not c or c.get("status") != "set":
+        raise SystemExit("%s: no controller set in the spec — PWM is not computed" % M)
+    return dict(c)
+
+
 PWM_SAMPLES_PER_CARRIER = 20
 
 
@@ -100,8 +116,9 @@ def _task_ws(work: Path, M: str, task: str, with_dies: bool = False) -> Path:
     if with_dies:
         dd = ws / "dies" / DIE
         dd.mkdir(parents=True)
-        for f in ("die.yaml", "L12.yaml", "L20.yaml"):
-            shutil.copy2(work / "inputs" / "die40" / f, dd / f)
+        src = work / "inputs" / str(SPEC["inputs_subdir"])
+        for f in ["die.yaml"] + ["%s.yaml" % m["config"] for m in SPEC["machines"].values()]:
+            shutil.copy2(src / f, dd / f)
     return ws
 
 
@@ -112,7 +129,7 @@ def _task_ws(work: Path, M: str, task: str, with_dies: bool = False) -> Path:
 def task_stage_a(work: Path, a) -> None:
     from motor_ai_sim.material_context import set_request_materials
     from motor_ai_sim.simulation.static3d.end_effect import run_stage_a
-    snap = _snap(work, "L12")
+    snap = _snap(work, a.machine)
     set_request_materials({"assignment": _materials(snap), "materials": {}})
     L0 = float(snap["geometry"]["motor_length"])
     t0 = time.time()
@@ -126,14 +143,14 @@ def task_stage_a(work: Path, a) -> None:
                         do_bracket=False, do_2d=True, verbose=True)
         name = "stage_a_L%g" % float(a.length)
     else:
-        lengths = [6.0, 9.0, 12.0, 16.0, 20.0, 24.0, 30.0]
+        lengths = [float(x) for x in (_mspec(a.machine).get("stage_a_lengths_mm")
+                                      or [6.0, 9.0, 12.0, 16.0, 20.0, 24.0, 30.0])]
         p = run_stage_a(geo_override=dict(snap["geometry"]), n_stack=4,
                         l_factors=tuple(L / L0 for L in lengths),
                         do_bracket=True, do_2d=True, verbose=True)
         name = "stage_a"
-    p["pilot"] = {"fidelity": "quick (n_stack=4), today's die cross-section (L12 and L20 "
-                              "share it)",
-                  "wall_s": time.time() - t0, "geometry_sig_L12":
+    p["pilot"] = {"fidelity": "quick (n_stack=4), today's die cross-section",
+                  "machine": a.machine, "wall_s": time.time() - t0, "geometry_sig":
                       snap["signatures"]["geometry_sig"]}
     _dump(_out(work, name), p)
 
@@ -153,7 +170,7 @@ def task_coupled(work: Path, a) -> None:
     from motor_ai_sim.simulation.fem_solver_2d import _NO_WARM_CACHE_CTX
     set_request_materials({"assignment": _materials(snap), "materials": {}})
     panel = json.load(open(work / "inputs" / "panel_settings.json", encoding="utf-8"))
-    th = dict(((panel.get("thermal") or {}).get("vadim@motresres.com") or {})
+    th = dict(((panel.get("thermal") or {}).get(str(SPEC.get("workspace_user"))) or {})
               .get("settings") or {})
     th = {k: v for k, v in th.items() if k not in ("view", "eqTemp", "showFlux",
                                                    "compareRows")}
@@ -213,6 +230,121 @@ def task_coupled(work: Path, a) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  cooling — S1 rating / time to a limit per cooling option (spec cooling_studies)
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Ambient of every cooling study (°C): the saved robotics setup of the duty
+#: (2026-09-28: still air 40 °C); the propeller studies use the same air so the
+#: two coolings are compared at one ambient (stated on every record).
+COOLING_AMBIENT_C = 40.0
+
+
+def cooling_panel(cooling: str, *, rpm: float, ambient_c: float = COOLING_AMBIENT_C,
+                  propeller: str = None) -> Dict[str, Any]:
+    """The Thermal-panel fields of one cooling option (string values, as stored).
+
+    ``robotics``: the existing robotics mode exactly as the rated duty saved it
+    (still air + radiation, emissivity 0.9, heat path into the housing / mount,
+    both end faces in still air, still air in the bore, housed frame).
+    ``propeller_air``: the air mode with the housing film's air speed computed
+    from the propeller's slipstream at this rpm (``propeller.air_speed_for_
+    thermal``, default motor position behind the hub, factor 0.4 — an
+    engineering assumption to be calibrated); bore still air, housed frame."""
+    base = {"ambientT": "%g" % ambient_c, "boreMode": "still", "frame": "housed",
+            "shaftExtMm": "0"}
+    if cooling == "robotics":
+        return dict(base, coolMode="robotics", emissivity="0.9", heatPath="housing",
+                    endFaces="still", endFaceSides="2"), None
+    if cooling == "propeller_air":
+        from motor_ai_sim import propeller as PP
+        op = PP.air_speed_for_thermal(str(propeller), float(rpm), ambient_c=ambient_c)
+        return dict(base, coolMode="air", airSpeed="%.4f" % float(op["air_speed_mps"])), op
+    raise SystemExit("unknown cooling %r" % cooling)
+
+
+def task_cooling(work: Path, a) -> None:
+    M = a.machine
+    studies = {s["id"]: s for s in (_mspec(M).get("cooling_studies") or [])}
+    if a.study not in studies:
+        raise SystemExit("study %r not in the spec (%s)" % (a.study, sorted(studies)))
+    sd = dict(studies[a.study])
+    if a.prop:
+        sd["propeller"] = a.prop
+    snap = _snap(work, M)
+    hm, st, _ = _hot_map(work, M)
+    from motor_ai_sim.passport_v1 import psimap as PM
+    from motor_ai_sim.material_context import set_request_materials
+    from motor_ai_sim.routes import coupled as cp
+    from motor_ai_sim.routes import simulation as sim
+    from motor_ai_sim.simulation.fem_solver_2d import _NO_WARM_CACHE_CTX
+    set_request_materials({"assignment": _materials(snap), "materials": {}})
+    lp = st.get("loss_plan3") or st.get("loss_plan2") or st["loss_plan"]
+    I0 = float(snap["rated_duty"]["current_arms"])
+    I = I0 if sd.get("current") == "rated" else (
+        float(lp["I_peak_rms"]) if sd.get("current") == "peak" else float(sd["current"]))
+    n = float(sd["rpm"])
+    vlim = PM.v_phase_limit(float(lp["v_dc"]), float(lp["m"]))
+    g, how = hm.operating_gamma(I, n, float(lp["R_hot_ohm"]), vlim)
+    if g is None:
+        raise SystemExit("%s: no operating angle at %g A, %g rpm" % (a.study, I, n))
+    th, prop_op = cooling_panel(str(sd["cooling"]), rpm=n, propeller=sd.get("propeller"))
+    th["maxIter"] = str(int(a.max_iter))
+    rd = snap["rated_duty"]
+    m = snap["mesh"]
+    Tm0, Tc0 = snap["temperatures"]["hot_magnet_c"], snap["temperatures"]["hot_coil_c"]
+    body = {
+        "restore": False, "n_periods": 1,
+        "n_steps_per_period": int(rd["steps_per_period"]),
+        "gamma_deg": round(float(g), 3), "I_phase_rms": float(I),
+        "rpm": n, "mode": "motor",
+        "mesh_size_mm": m["mesh_size_mm"], "min_size_mm": m["min_size_mm"],
+        "outer_air_factor": m["outer_air_factor"], "gap_layers": m["gap_layers"],
+        "n_sectors": m["n_sectors"], "motion_band": True, "band_thickness_mm": 0.4,
+        "stator_fillet_mm": 0, "sliding_band": True,
+        "rotor_eddy": True, "eddy": True, "field_snapshot": True, "demag": True,
+        "torque_filter": False, "pole_copy": m["pole_copy"], "structured_gap": True,
+        "airgap_macro": False, "element_order": 2, "iron_template": m["iron_template"],
+        "geo_mesh": m["geo_mesh"],
+        "coil_temp_c": float(Tc0), "magnet_temp_c": float(Tm0),
+        "end_winding_factor": float(rd["end_winding_factor"]),
+        "connection": snap["winding"]["connection"],
+        "star_delta": snap["winding"].get("star_delta", "star"),
+        "component_mesh": json.dumps(m.get("component_mesh_mm") or {}),
+        "geo": json.dumps(snap["geometry"]),
+        "mat": json.dumps({"assignment": _materials(snap), "materials": {}}),
+        "include_frames": False, "n_frames": 0, "run_id": "pp-cool-%s-%s" % (M, a.study),
+        "mechanical": False, "cold_constants": False, "fresh": True,
+        "max_iter": int(a.max_iter), "drive": "current",
+        "thermal_settings": th, "solve_to": str(sd["solve_to"]),
+    }
+    sim._BACKGROUND_RUN.set(False)        # the loss map must be kept (field snapshot)
+    tok = _NO_WARM_CACHE_CTX.set(True)
+    from motor_ai_sim.passport_v1.jobs import wait_while_paused
+    wait_while_paused()
+    t0 = time.time()
+    try:
+        out = cp.run(dict(body))
+        err = None
+    except Exception as e:                # noqa: BLE001
+        out, err = None, "%s: %s" % (type(e).__name__, getattr(e, "detail", e))
+        traceback.print_exc()
+    finally:
+        _NO_WARM_CACHE_CTX.reset(tok)
+    rec = {"task": "cooling", "machine": M, "study": sd, "wall_s": time.time() - t0,
+           "error": err, "point": {"I_rms": I, "rpm": n, "gamma_deg": g, "gamma_mode": how,
+                                   "start_temps_c": {"magnet": Tm0, "coil": Tc0}},
+           "thermal_settings": th, "ambient_c": COOLING_AMBIENT_C,
+           "propeller_operating_point": prop_op,
+           "body": {k: v for k, v in body.items() if k not in ("geo", "mat")},
+           "coupling": (out or {}).get("coupling"),
+           "thermal": {k: (out or {}).get("thermal", {}).get(k)
+                       for k in ("T_max", "cooling", "point", "components",
+                                 "P_loss_total_W")} if out else None,
+           "summary": ((out or {}).get("transient") or {}).get("summary")}
+    _dump(_out(work, "cooling_%s_%s" % (M, a.study)), rec)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  mech — rotor-stress limit speed + critical speeds
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -224,10 +356,15 @@ def task_mech(work: Path, a) -> None:
     from motor_ai_sim.routes import mechanical as mech
     set_request_materials({"assignment": _materials(snap), "materials": {}})
     panel = json.load(open(work / "inputs" / "panel_settings.json", encoding="utf-8"))
-    mp = dict(((panel.get("mechanical") or {}).get("vadim@motresres.com") or {})
+    mp = dict(((panel.get("mechanical") or {}).get(str(SPEC.get("workspace_user"))) or {})
               .get("settings") or {})
     contacts = mp.get("contacts") or {}
-    T_rated = float(rd["stored_summary"].get("T_em_avg_Nm") or 0.0)
+    # the larger stored duty torque (rated / peak): the stress check is on the
+    # worst torque the rotor carries (Ø85: the stored rated result is a
+    # demagnetised 210 °C solve, the peak duty's torque is the real load)
+    pk = snap.get("peak_duty") or {}
+    T_rated = max(float(rd["stored_summary"].get("T_em_avg_Nm") or 0.0),
+                  float((pk.get("stored_summary") or {}).get("T_em_avg_Nm") or 0.0))
     Tm = float(snap["temperatures"]["hot_magnet_c"])
     geo = json.dumps(snap["geometry"])
     out: Dict[str, Any] = {"task": "mech", "machine": M, "panel_used": {
@@ -246,30 +383,35 @@ def task_mech(work: Path, a) -> None:
     except Exception as e:                # noqa: BLE001
         out["limit_speed_error"] = "%s: %s" % (type(e).__name__, getattr(e, "detail", e))
         traceback.print_exc()
-    L = float(snap["geometry"]["motor_length"])
-    # The shaft line is the DRAWING; none is in the repo.  Default pending owner:
-    # the two 618/8-2Z (5 mm wide) right at the stack ends with 3 mm clearances,
-    # 5 mm overhangs, the Mechanical tab's bearing stiffness 15 MN/m.  The tab's
-    # own span (250 mm) is a leftover of the Ø200 and is reported, not used.
-    span = L + 2 * (3.0 + 5.0)
-    beam = {"bearing_span_mm": span, "overhang_a_mm": 5.0, "overhang_b_mm": 5.0,
-            "bearing_k_n_per_m": float(((mp.get("beam") or {}).get("bearing_k_n_per_m"))
-                                       or 1.5e7),
-            "source": "default pending owner: 618/8-2Z at the stack ends (3 mm "
-                      "clearance), overhangs 5 mm, k from the Mechanical tab"}
-    out["beam_used"] = beam
-    try:
-        c = mech.critical_speeds(bearing_span_mm=span, stack_length_mm=0.0,
-                                 stack_offset_mm=0.0, overhang_a_mm=5.0, overhang_b_mm=5.0,
-                                 shaft_od_mm=0.0, shaft_id_mm=-1.0,
-                                 bearing_k_n_per_m=beam["bearing_k_n_per_m"],
-                                 stack_stiffness_fraction=0.0, rpm=float(rd["rpm"]),
-                                 n_modes=6, rpm_max_factor=1.3, mesh_size_mm=1.0,
-                                 f_switch_hz=48000.0, geo=geo)
-        out["critical_speeds"] = c
-    except Exception as e:                # noqa: BLE001
-        out["critical_speeds_error"] = "%s: %s" % (type(e).__name__, getattr(e, "detail", e))
-        traceback.print_exc()
+    ms = dict(_mspec(M).get("mech") or {})
+    out["torque_used_Nm"] = T_rated
+    if not ms.get("critical_speeds", True):
+        out["critical_speeds_status"] = str(ms.get("critical_note") or "not computed (spec)")
+    else:
+        L = float(snap["geometry"]["motor_length"])
+        bm = dict(ms.get("beam") or {})
+        # The shaft line is the DRAWING; none is in the repo.  Default pending
+        # owner (spec): bearings at the stack ends, overhangs, the Mechanical
+        # tab's bearing stiffness.
+        span = L + float(bm.get("bearing_span_extra_mm", 16.0))
+        oa, ob = float(bm.get("overhang_a_mm", 5.0)), float(bm.get("overhang_b_mm", 5.0))
+        beam = {"bearing_span_mm": span, "overhang_a_mm": oa, "overhang_b_mm": ob,
+                "bearing_k_n_per_m": float(((mp.get("beam") or {}).get("bearing_k_n_per_m"))
+                                           or 1.5e7),
+                "source": str(bm.get("source") or "default pending owner")}
+        out["beam_used"] = beam
+        try:
+            c = mech.critical_speeds(bearing_span_mm=span, stack_length_mm=0.0,
+                                     stack_offset_mm=0.0, overhang_a_mm=oa, overhang_b_mm=ob,
+                                     shaft_od_mm=0.0, shaft_id_mm=-1.0,
+                                     bearing_k_n_per_m=beam["bearing_k_n_per_m"],
+                                     stack_stiffness_fraction=0.0, rpm=float(rd["rpm"]),
+                                     n_modes=6, rpm_max_factor=1.3, mesh_size_mm=1.0,
+                                     f_switch_hz=48000.0, geo=geo)
+            out["critical_speeds"] = c
+        except Exception as e:                # noqa: BLE001
+            out["critical_speeds_error"] = "%s: %s" % (type(e).__name__, getattr(e, "detail", e))
+            traceback.print_exc()
     out["wall_s"] = time.time() - t0
     _dump(_out(work, "mech_" + M), out)
 
@@ -318,7 +460,8 @@ def task_pwm(work: Path, a) -> None:
         pk = snap.get("peak_duty")
         I, n = float(lp["I_peak_rms"]), (float(pk["rpm"]) if pk else n0)
     vdc = float(snap["battery"]["v_nom"])
-    m = float(CONTROLLER["common"]["m"])
+    C = _ctrl(M)
+    m = float(C["m"])
     g, how = hm.operating_gamma(I, n, float(lp["R_hot_ohm"]), PM.v_phase_limit(vdc, m))
     if g is None:
         raise SystemExit("%s %s: no operating angle at m = %g" % (M, point, m))
@@ -333,7 +476,10 @@ def task_pwm(work: Path, a) -> None:
             t_src = ("coupled EM-thermal rated loop, converged (owner default 4, "
                      "pending owner)")
     sim._BACKGROUND_RUN.set(True)
-    ctrl = dict(CONTROLLER["common"], **CONTROLLER[M])
+    ctrl = {k: C[k] for k in ("device", "r_g_ohm", "n_parallel", "v_gs_on_V", "v_gs_off_V",
+                              "dead_time_us", "f_carrier_hz", "modulation", "m",
+                              "t_j_assumed_c")}
+    ctrl["devices_parallel"] = int(C.get("n_parallel") or 1)
     if a.device:
         ctrl["device"] = a.device
     if a.dead_us:
@@ -355,15 +501,19 @@ def task_pwm(work: Path, a) -> None:
     rec["sine_36_wall_s"] = time.time() - t0
     v1, dl = float(ss["V1_seed_peak_V"]), float(ss["V1_seed_delta_deg"])
     # 2) the Controller's bridge
-    f_el = n * 7 / 60.0
+    from motor_ai_sim.passport_v1.stages import pole_pairs
+    f_el = n * pole_pairs(snap) / 60.0
     fsw = float(ctrl["f_carrier_hz"])
     nc = max(int(round(fsw / f_el)), 1)
-    steps = PWM_SAMPLES_PER_CARRIER * nc
+    spc = int(a.spc or PWM_SAMPLES_PER_CARRIER)
+    steps = spc * nc
+    rec["samples_per_carrier"] = spc
     card = get_device(ctrl["device"])
     gan = str(card.doc.get("technology") or "").startswith("gan")
-    drop = fit_device_drop(card, t_j_c=CONTROLLER["common"]["t_j_assumed_c"],
-                           n_parallel=1, i_leg_peak_A=I * math.sqrt(2.0),
-                           v_gs_on_V=(5.0 if gan else CONTROLLER["common"]["v_gs_on_V"]),
+    npar = int(ctrl["devices_parallel"])
+    drop = fit_device_drop(card, t_j_c=float(C["t_j_assumed_c"]),
+                           n_parallel=npar, i_leg_peak_A=I * math.sqrt(2.0),
+                           v_gs_on_V=(5.0 if gan else float(C["v_gs_on_V"])),
                            v_gs_off_V=0.0,
                            dead_time_s=float(ctrl["dead_time_us"]) * 1e-6)
     kw = _route_kw(snap, I=I, g=g, rpm=n, Tm=Tm, Tc=Tc, steps=steps)
@@ -372,7 +522,7 @@ def task_pwm(work: Path, a) -> None:
               inv_r_ds_ohm=float(drop.r_ds_ohm), inv_v_sd_v0_V=float(drop.v_sd_v0_V),
               inv_v_sd_rd_ohm=float(drop.v_sd_rd_ohm),
               inv_dead_time_us=float(drop.dead_time_s) * 1e6,
-              inv_device=card.part, inv_devices_parallel=1,
+              inv_device=card.part, inv_devices_parallel=npar,
               inv_t_j_c=float(drop.t_j_c), inv_topology="one_3ph")
     rec["drop"] = drop.__dict__ if hasattr(drop, "__dict__") else str(drop)
     rec["steps_pwm"], rec["carriers_per_period"] = steps, nc
@@ -402,6 +552,8 @@ def task_pwm(work: Path, a) -> None:
     rec["pwm_wall_s"] = time.time() - t1
     tag = "pwm_%s_%s_%s_%dk_%dns" % (M, point, card.part, int(round(fsw / 1000)),
                                       int(round(float(ctrl["dead_time_us"]) * 1000)))
+    if a.spc:
+        tag += "_spc%d" % spc
     _dump(_out(work, tag), rec)
 
 
@@ -438,7 +590,8 @@ def task_demagseq(work: Path, a) -> None:
     steps = int(snap["rated_duty"]["steps_per_period"])
     b = S._base(snap, st, static=False)
     lp = st.get("loss_plan2") or st["loss_plan"]
-    vlim = PM.v_phase_limit(float(lp["v_dc"]), CONTROLLER["common"]["m"])
+    vlim = PM.v_phase_limit(float(lp["v_dc"]), float((_mspec(M).get("controller") or {}).get("m")
+                                                     or 0.89))
     g_r, how_r = hm.operating_gamma(I0, n0, float(lp["R_hot_ohm"]), vlim)
     lv = [m for m in st["hot_mtpa"] if abs(m["fI"] - fI) < 1e-9]
     g_o = float(lv[0]["gamma_mtpa"]) if lv else float(hm.gamma_mtpa(fI * I0))
@@ -491,13 +644,14 @@ def task_parallel(work: Path, a) -> None:
         if parts and parts[0].startswith("threads="):
             threads = parts.pop(0).split("=", 1)[1]
         name = "_".join(p.replace("--", "") for p in parts)
-        M = parts[parts.index("--machine") + 1] if "--machine" in parts else "L12"
-        ws = _task_ws(work, M, name, with_dies=(parts[0] in ("coupled", "mech")))
+        M = parts[parts.index("--machine") + 1] if "--machine" in parts else             next(iter(SPEC["machines"]))
+        ws = _task_ws(work, M, name, with_dies=(parts[0] in ("coupled", "cooling", "mech")))
         env = dict(os.environ, MOTOR_AI_SIM_CONFIG=str(ws / "motor_config.yaml"),
                    MKL_NUM_THREADS=threads, OMP_NUM_THREADS=threads,
                    OPENBLAS_NUM_THREADS=threads)
         log = open(work / "out" / "full" / ("log_" + name + ".txt"), "w")
-        cmd = [sys.executable, "-u", __file__, "--work", str(work)] + parts
+        cmd = [sys.executable, "-u", __file__, "--work", str(work),
+               "--spec", SPEC["_path"]] + parts
         procs.append((name, subprocess.Popen(cmd, env=env, stdout=log,
                                              stderr=subprocess.STDOUT), time.time()))
         print("started", name, "threads", threads, flush=True)
@@ -510,8 +664,13 @@ def main(argv=None) -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--work", default="/work")
+    ap.add_argument("--spec", required=True)
     ap.add_argument("task")
-    ap.add_argument("--machine", default="L12")
+    ap.add_argument("--machine", default=None)
+    ap.add_argument("--study", default=None)
+    ap.add_argument("--prop", default=None, help="propeller id for a propeller_air study")
+    ap.add_argument("--spc", type=int, default=None,
+                    help="PWM samples per carrier (default 20; >= 4 is the solver's floor)")
     ap.add_argument("--point", default="rated")
     ap.add_argument("--max-iter", type=int, default=6)
     ap.add_argument("--fsw", type=float, default=None)
@@ -521,10 +680,14 @@ def main(argv=None) -> None:
     ap.add_argument("--length", type=float, default=None)
     ap.add_argument("rest", nargs="*")
     a = ap.parse_args(argv)
+    _use_spec(a.spec)
+    if a.machine is None:
+        a.machine = next(iter(SPEC["machines"]))
     work = Path(a.work)
     (work / "out" / "full").mkdir(parents=True, exist_ok=True)
     fn = {"stage_a": task_stage_a, "coupled": task_coupled, "mech": task_mech,
-          "pwm": task_pwm, "demagseq": task_demagseq, "parallel": task_parallel}[a.task]
+          "pwm": task_pwm, "demagseq": task_demagseq, "cooling": task_cooling,
+          "parallel": task_parallel}[a.task]
     fn(work, a)
 
 

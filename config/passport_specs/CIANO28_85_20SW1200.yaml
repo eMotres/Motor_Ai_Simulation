@@ -19,6 +19,9 @@ plan:
   loss_steps_per_period: 60
   # the controller's margin (m = 0.89, the controller block below) from the first plan
   m_margin: 0.89
+  # the loss grid always reaches down to 0.25·I0 (Configure's lowest current row), even
+  # where the demag current limit sits below it
+  loss_floor_levels: [0.25]
   refine_points: [[2.0, 42.5], [2.0, 57.5], [2.5, 42.5], [2.5, 57.5]]
 machines:
   L13:

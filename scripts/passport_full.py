@@ -249,16 +249,18 @@ def cooling_panel(cooling: str, *, rpm: float, ambient_c: float = COOLING_AMBIEN
     ``propeller_air``: the air mode with the housing film's air speed computed
     from the propeller's slipstream at this rpm (``propeller.air_speed_for_
     thermal``, default motor position behind the hub, factor 0.4 — an
-    engineering assumption to be calibrated); bore still air, housed frame."""
-    base = {"ambientT": "%g" % ambient_c, "boreMode": "still", "frame": "housed",
-            "shaftExtMm": "0"}
+    engineering assumption to be calibrated); no bore cooling, housed frame."""
+    base = {"ambientT": "%g" % ambient_c, "frame": "housed", "shaftExtMm": "0"}
     if cooling == "robotics":
-        return dict(base, coolMode="robotics", emissivity="0.9", heatPath="housing",
-                    endFaces="still", endFaceSides="2"), None
+        return dict(base, coolMode="robotics", boreMode="still", emissivity="0.9",
+                    heatPath="housing", endFaces="still", endFaceSides="2"), None
     if cooling == "propeller_air":
+        # the still (radiating) bore exists only in the robotics mode; the air mode
+        # takes no bore cooling (conservative, stated)
         from motor_ai_sim import propeller as PP
         op = PP.air_speed_for_thermal(str(propeller), float(rpm), ambient_c=ambient_c)
-        return dict(base, coolMode="air", airSpeed="%.4f" % float(op["air_speed_mps"])), op
+        return dict(base, coolMode="air", boreMode="none",
+                    airSpeed="%.4f" % float(op["air_speed_mps"])), op
     raise SystemExit("unknown cooling %r" % cooling)
 
 

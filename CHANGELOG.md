@@ -7,6 +7,16 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Added
+- **Configure: Drive menu, Sine | PWM** (owner 2026-10-05). PWM lists only the drive
+  variants computed for the motor (`pwm_variants` in its passport: a device at a
+  carrier frequency) and reads between their computed points; it refuses outside the
+  computed envelope, off the loaded build, and beyond the device's bus, current or
+  junction limits. No variants = PWM disabled with a "request calculation" note. Shows
+  motor loss, inverter loss split, T_j, drive efficiency battery to shaft; the saved
+  configuration records the drive. Sine is the default and unchanged (scaleMotor is
+  untouched). EN + ZH strings in the `controller` namespace.
+
 ### Changed
 - **Licence: Apache License 2.0** (owner decision 2026-10-03), replacing
   AGPL-3.0-or-later and the planned MKL section 7 exception (PR #93). `LICENSE`

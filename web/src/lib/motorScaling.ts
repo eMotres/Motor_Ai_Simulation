@@ -139,6 +139,11 @@ export interface Passport {
    *  measured, and the tuner then has no PWM toggle for this machine rather
    *  than a toggle backed by an assumption. */
   pwm?: PwmBlock | null;
+  /** COMPUTED drive variants — each one a (device, carrier) pair solved for
+   *  THIS machine (passport pilot, owner 2026-10-05).  Configure's PWM menu
+   *  lists exactly these and nothing else; absent/empty = "PWM not computed
+   *  for this motor".  See PwmVariant. */
+  pwm_variants?: PwmVariant[] | null;
   /** The pack this machine is wired to, verbatim from its family configuration.
    *  A generator's charging block is computed against it; the PWM block was
    *  switched against its v_nom. */
@@ -180,6 +185,36 @@ export interface PwmPoint {
   I_dc_mean_A?: number | null;
   I_dc_rms_A?: number | null;
   I_dc_ripple_pp_A?: number | null;
+}
+
+/** One computed operating point of a drive variant.  The coordinates are the
+ *  base-build phase current [A rms] and speed [rpm] it was solved at; they ride
+ *  inside the value (`rpm`, `I_A`) or, failing that, in the key (`"3000rpm_40A"`). */
+export interface PwmVariantPoint {
+  rpm?: number; I_A?: number;
+  motor_pwm_loss_W?: number | null;
+  inverter_loss_W?: { cond?: number | null; sw?: number | null; dead?: number | null } | number | null;
+  tj_C?: number | null;
+  eta_drive_pct?: number | null;
+  eta_shaft_pct?: number | null;
+  p_cont_max_W?: number | null;
+  [k: string]: unknown;
+}
+
+/** A drive variant as the passport record carries it (schema agreed with the
+ *  passport pilot, 2026-10-05). */
+export interface PwmVariant {
+  id: string;
+  device: string;
+  technology?: string | null;            // "Si" | "SiC" | "GaN"
+  carrier_hz: number;
+  dead_time_s?: number | null;
+  modulation?: string | null;            // e.g. "SVPWM centred"
+  m_max?: number | null;
+  n_parallel?: number | null;
+  bus_v?: { min?: number | null; nom?: number | null; max?: number | null } | null;
+  provenance?: string | Record<string, unknown> | null;
+  points: Record<string, PwmVariantPoint>;
 }
 
 export interface PwmBlock {
@@ -238,6 +273,14 @@ export interface Knobs {
   /** DC link [V].  Defaults to the pack's v_nom (what the block was measured
    *  against), because the ripple current is ∝ V_bus. */
   v_bus_V?: number;
+  // ── DRIVE (Configure's Sine | PWM menu, owner 2026-10-05).  scaleMotor()
+  //    never reads these: the PWM numbers come from the passport's COMPUTED
+  //    `pwm_variants` (lib/configuratorDrive.ts), so the sine numbers cannot
+  //    move.  Absent = Sine. ──
+  /** 'pwm' = show the picked computed drive variant; absent/'sine' = Sine */
+  drive?: 'sine' | 'pwm';
+  /** id of the passport's pwm_variants entry (device + carrier) */
+  drive_variant?: string;
 }
 
 export interface ScaledResult {

@@ -41,10 +41,29 @@ import { canCharge } from '../../lib/generatorCharge';
 import { useWireStock } from '../materials/useWireStock';
 import { stockHint } from '../../lib/wireStock';
 import { useDieContext } from '../common/useDieContext';
-import { getResolvedPoint } from '../controller/controllerApi';
+import { getResolvedPoint, listDevices } from '../controller/controllerApi';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+import {
+  usableVariants, variantLabel, variantFacts, readVariant, buildTuned, limitProblems,
+  pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
+  type DriveRecord, type DeviceLimits,
+} from '../../lib/configuratorDrive';
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
 import { resolveDraftTarget, isBlocked } from '../../lib/configuratorGuard';
 import MyAgentDraftsBlock from './MyAgentDraftsBlock';
+
+const tx = nsT('controller');   // the Drive menu's strings (EN source, ZH mirror)
+const n0f = (x: number) => String(Number(x.toFixed(0)));
+
+/** The machine's remembered drive choice (Sine | PWM + variant), laid over
+ *  `k`.  Nothing remembered = `k` itself, so Sine stays exactly as it was. */
+const withDrive = (k: Knobs, refId: string): Knobs => {
+  let raw: string | null = null;
+  try { raw = localStorage.getItem(DRIVE_LS); } catch { /* ignore */ }
+  const c = readDriveChoice(raw, refId);
+  return c ? { ...k, ...c } : k;
+};
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -61,6 +80,8 @@ interface SavedConfig {
   result: ScaledResult;
   iMax: number;
   battery?: Battery;   // snapshot of the battery this config was saved with
+  /** the drive (Sine | PWM + device + carrier) it was saved with */
+  drive?: DriveRecord;
 }
 
 const LS_KEY = 'configurator.configs.v1';
@@ -323,7 +344,7 @@ const ConfiguratorPanel: React.FC = () => {
             I_A: Number.isFinite(live.I_A) && live.I_A > 0 ? live.I_A : k0.I_A,
             rpm: Number.isFinite(live.rpm) && live.rpm > 0 ? live.rpm : k0.rpm,
           });
-          setKnobs((k0) => { const k1 = adopt(k0); setRefKnobs(k1); return k1; });
+          setKnobs((k0) => { const k1 = adopt(k0); setRefKnobs(k1); return withDrive(k1, m.id); });
           // Ranges must contain BOTH the passport base and the loaded build.
           const r0 = rangesForRef(pp);
           setRanges({
@@ -406,7 +427,7 @@ const ConfiguratorPanel: React.FC = () => {
     lastRefId.current = refId;
     if (skipReset.current) { skipReset.current = false; return; }
     // A different machine → its own base point AND its own slider ranges.
-    { const kb = baseKnobs(ref.passport); setKnobs(kb); setRefKnobs(kb); }
+    { const kb = baseKnobs(ref.passport); setKnobs(withDrive(kb, refId)); setRefKnobs(kb); }
     setRanges(rangesForRef(ref.passport));
   }, [refId]); // eslint-disable-line react-hooks/exhaustive-deps
   // First paint after the references arrive: if the stored knobs/ranges belong
@@ -419,7 +440,7 @@ const ConfiguratorPanel: React.FC = () => {
     const off = (a: number, b: number) => !(b > 0) || Math.abs(a - b) / b > 1.5;
     if (off(knobs.L_mm, p0.L0_mm) || off(knobs.I_A, p0.I0_A)
         || knobs.I_A > ranges.I_A.max || knobs.L_mm > ranges.L_mm.max) {
-      { const kb = baseKnobs(p0); setKnobs(kb); setRefKnobs(kb); }
+      { const kb = baseKnobs(p0); setKnobs(withDrive(kb, refId)); setRefKnobs(kb); }
       setRanges(rangesForRef(p0));
     }
   }, [refId, ref]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -563,7 +584,20 @@ const ConfiguratorPanel: React.FC = () => {
   });
   useEffect(() => { try { localStorage.setItem(LS_KEY, JSON.stringify(configs)); } catch { /* ignore */ } }, [configs]);
 
-  const result  = useMemo(() => scaleMotor(p, knobs, ref.poles), [p, knobs, ref.poles]);
+  // ── DRIVE: Sine | PWM (owner 2026-10-05) ──────────────────────────────────
+  // PWM lists ONLY the drive variants COMPUTED for this machine (the passport's
+  // `pwm_variants`: a device at a carrier, already solved) and reads between
+  // their computed points; nothing is calculated live here.  Sine is the
+  // default and the whole block is inert unless the user picks PWM: with it
+  // off `scaleKnobs === knobs`, so every Sine number is the one it always was.
+  const variants = useMemo(() => usableVariants(p.pwm_variants), [p]);
+  const driveOn = knobs.drive === 'pwm' && variants.length > 0;
+  const variant = driveOn
+    ? (variants.find((v) => v.id === knobs.drive_variant) ?? variants[0]) : null;
+  // the legacy measured-delta toggle must not stack on a computed variant
+  const scaleKnobs = useMemo(
+    () => (driveOn && knobs.pwm ? { ...knobs, pwm: false } : knobs), [driveOn, knobs]);
+  const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
   // "vs ref" compares against THE MACHINE AS LOADED, not against the
   // passport's calibration point (user 2026-08-26: a freshly loaded motor
   // showed −92.7 % with nothing touched — it was being compared to another
@@ -572,6 +606,80 @@ const ConfiguratorPanel: React.FC = () => {
   const baseRes = useMemo(() => scaleMotor(p, refKnobs ?? baseKnobs(p), ref.poles),
                           [p, ref.poles, refKnobs]);
   const iMax    = useMemo(() => maxCurrent(p, knobs), [p, knobs]);
+
+  // ── DRIVE, continued: the choice, its reading, the device limits ──────────
+  useTranslation('controller');   // re-render on language change; lazy-loads the namespace
+  /** change the drive and remember it for THIS machine (like the other knobs,
+   *  it also rides in `knobs` → localStorage and the saved configurations) */
+  const setDrive = (patch: Partial<Knobs>) => {
+    const n: Knobs = { ...knobs, ...patch };
+    setKnobs(n);
+    try {
+      localStorage.setItem(DRIVE_LS, writeDriveChoice(localStorage.getItem(DRIVE_LS), refId, pickDrive(n)));
+    } catch { /* ignore */ }
+  };
+  // The device cards' published limits (a read of the catalogue, not a
+  // calculation) — fetched when PWM is on, so a new card needs no UI change.
+  const [devLimits, setDevLimits] = useState<Record<string, DeviceLimits>>({});
+  useEffect(() => {
+    if (!driveOn) return;
+    let dead = false;
+    listDevices().then((r) => {
+      if (dead) return;
+      const m: Record<string, DeviceLimits> = {};
+      for (const d of r.devices) {
+        if (!d.error) m[d.part] = { v_dss_V: d.v_dss_V, i_d_100c_A: d.i_d_100c_A, t_j_max_c: d.t_j_max_c };
+      }
+      setDevLimits(m);
+    }).catch(() => { /* limits unknown: only the envelope checks apply */ });
+    return () => { dead = true; };
+  }, [driveOn]);
+  /** the variants were computed for the loaded build: only I and rpm move */
+  const driveBuildMoved = driveOn && buildTuned(knobs, refKnobs ?? baseKnobs(p));
+  const driveRead = useMemo(
+    () => (variant && !driveBuildMoved ? readVariant(variant, knobs.rpm, knobs.I_A) : null),
+    [variant, driveBuildMoved, knobs.rpm, knobs.I_A]);
+  const packMaxV = Number(p.battery?.v_max) > 0 ? Number(p.battery?.v_max) : null;
+  const driveProblems = useMemo(
+    () => (variant && driveRead && driveRead.ok
+      ? limitProblems(variant, driveRead.values, knobs.I_A, devLimits[variant.device] ?? null, packMaxV)
+      : []),
+    [variant, driveRead, knobs.I_A, devLimits, packMaxV]);
+  /** the numbers to show — null whenever anything is refused */
+  const drv = driveRead && driveRead.ok && driveProblems.length === 0 ? driveRead.values : null;
+  /** one short line per refusal (text + tooltip), in the order they matter */
+  const driveRefusals: { text: string; tip: string }[] = (() => {
+    if (!driveOn) return [];
+    if (driveBuildMoved) {
+      return [{ text: tx('configureDrive.buildTuned'), tip: tx('configureDrive.buildTunedTip') }];
+    }
+    if (driveRead && !driveRead.ok) {
+      const r = driveRead.refusal;
+      const env = tx('configureDrive.refuseEnvelopeTip');
+      const n0 = (x: number) => String(Number(x.toFixed(0)));
+      return [{
+        tip: env,
+        text: r.kind === 'speed'
+          ? tx('configureDrive.refuseSpeed', { rpm: n0(r.rpm), lo: n0(r.lo), hi: n0(r.hi) })
+          : r.kind === 'current'
+            ? tx('configureDrive.refuseCurrent', { amps: n0(r.I), lo: n0(r.lo), hi: n0(r.hi) })
+            : r.kind === 'gap' ? tx('configureDrive.refuseGap') : tx('configureDrive.refuseNoCoords'),
+      }];
+    }
+    const tip = tx('configureDrive.refuseLimitTip');
+    const dev = variant?.device ?? '';
+    const n1 = (x: number) => String(Number(x.toFixed(1)));
+    return driveProblems.map((q) => ({
+      tip,
+      text: q.kind === 'tj'
+        ? tx('configureDrive.refuseTj', { tj: n1(q.tj), limit: n0f(q.limit), device: dev })
+        : q.kind === 'rating'
+          ? tx('configureDrive.refuseRating', { amps: n1(q.amps), limit: n0f(q.limit), device: dev })
+          : q.kind === 'vds'
+            ? tx('configureDrive.refuseVds', { device: dev, vdss: n0f(q.vdss), bus: n1(q.bus), max: n1(q.max) })
+            : tx('configureDrive.refuseBus', { pack: n1(q.pack), max: n1(q.max) }),
+    }));
+  })();
   // STRANDS IN HAND multiply the parallel paths for every current split: k
   // wires wound together each carry 1/k of the turn's current.  It is a
   // property of the BUILD (the passport records what it was measured at), not
@@ -641,7 +749,9 @@ const ConfiguratorPanel: React.FC = () => {
   const set = (k: keyof Knobs) => (v: number) => setKnobs((s) => ({ ...s, [k]: v }));
   // Reset goes back to the machine AS LOADED (the same point the deltas are
   // measured from), falling back to the passport base when nothing is loaded.
-  const reset = () => setKnobs(refKnobs ?? baseKnobs(p));
+  // The drive is a choice of the user, not part of the reference design, so
+  // Reset leaves it where it is.
+  const reset = () => setKnobs((s) => ({ ...(refKnobs ?? baseKnobs(p)), ...pickDrive(s) }));
   /** Has the user moved anything off the reference design? */
   const tuned = (() => {
     const r0 = refKnobs ?? baseKnobs(p);
@@ -654,7 +764,16 @@ const ConfiguratorPanel: React.FC = () => {
     const n = configs.filter((c) => c.refId === refId).length + 1;
     const name = `${connLabel(knobs.nP, ref.geo.numSlots)} · ${knobs.N}t · ${fmt(knobs.L_mm, 0)}mm · ${fmt(knobs.wireH_mm, 2)}mm (#${n})`;
     const id = `cfg_${Math.random().toString(36).slice(2, 9)}`;
-    setConfigs((cs) => [...cs, { id, name, refId, knobs: { ...knobs }, result, iMax, battery: { ...battery } }]);
+    // The drive rides with the configuration (device + carrier, or Sine), so a
+    // saved PWM point says which inverter produced its numbers.
+    const drive: DriveRecord = driveOn && variant ? {
+      mode: 'pwm', variant_id: variant.id, device: variant.device,
+      technology: variant.technology ?? null, carrier_hz: Number(variant.carrier_hz),
+      dead_time_s: variant.dead_time_s ?? null, n_parallel: variant.n_parallel ?? null,
+      inverter_loss_W: drv?.inv_total_W ?? null, tj_C: drv?.tj_C ?? null,
+      eta_drive_pct: drv?.eta_drive_pct ?? null,
+    } : { mode: 'sine' };
+    setConfigs((cs) => [...cs, { id, name, refId, knobs: { ...knobs }, result, iMax, battery: { ...battery }, drive }]);
   };
   const delConfig = (id: string) => setConfigs((cs) => cs.filter((c) => c.id !== id));
   // load a saved config back as the current design — knobs + battery (+ reference)
@@ -685,8 +804,12 @@ const ConfiguratorPanel: React.FC = () => {
     { key: 'J',    label: 'J',       unit: 'A/mm²', d: 1, goodHi: false, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
     { key: 'mass', label: 'Mass',    unit: 'kg',  d: 2, goodHi: false, get: (c) => c.result.mass_kg },
     { key: 'tm',   label: 'T/mass',  unit: '',    d: 2, goodHi: true,  get: (c) => c.result.torque_per_mass },
+    { key: 'etad', label: tx('configureDrive.columnDriveEff'), unit: '%', d: 1, goodHi: true,
+      get: (c) => c.drive?.eta_drive_pct ?? NaN },
   ];
   const KNB_COLS: { label: string; get: (c: SavedConfig) => string }[] = [
+    { label: tx('configureDrive.columnDrive'),
+      get: (c) => driveText(c.drive ?? (c.knobs.drive === 'pwm' ? { mode: 'pwm' } : null), tx('configureDrive.sine')) },
     { label: 'Conn',   get: (c) => connLabel(c.knobs.nP, (allRefs.find((r) => r.id === c.refId)?.geo.numSlots ?? ref.geo.numSlots)) },
     { label: 'Turns',  get: (c) => `${c.knobs.N}` },
     { label: 'Length', get: (c) => fmt(c.knobs.L_mm, 0) },
@@ -848,10 +971,61 @@ const ConfiguratorPanel: React.FC = () => {
             onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr} />
           <KnobSlider label="Speed" unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={isAdmin ? setRange('rpm') : undefined} />
 
+          {/* ── DRIVE: Sine | PWM (owner 2026-10-05) ─────────────────────
+              PWM lists only the drive variants COMPUTED for this motor — a
+              device at a carrier, each already in the passport.  Device,
+              dead time and parallel count are read-only facts of the
+              variant; nothing is calculated here. */}
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>{tx('configureDrive.title')}</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75, flexWrap: 'wrap' }}
+            title={variants.length ? undefined : tx('configureDrive.notComputedTip')}>
+            <ToggleButtonGroup exclusive size="small" value={driveOn ? 'pwm' : 'sine'}
+              onChange={(_, v) => {
+                if (v === 'pwm' && variants.length) setDrive({ drive: 'pwm', drive_variant: variant?.id ?? variants[0].id });
+                else if (v === 'sine') setDrive({ drive: 'sine' });
+              }}>
+              <ToggleButton value="sine" title={tx('configureDrive.sineTip')}
+                sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configureDrive.sine')}</ToggleButton>
+              <ToggleButton value="pwm" disabled={!variants.length} title={tx('configureDrive.pwmTip')}
+                sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configureDrive.pwm')}</ToggleButton>
+            </ToggleButtonGroup>
+            {driveOn && variant && (
+              <select value={variant.id} aria-label={tx('configureDrive.pwm')}
+                onChange={(e) => setDrive({ drive: 'pwm', drive_variant: e.target.value })}
+                title={tx('configureDrive.variantTip')}
+                style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', maxWidth: 260 }}>
+                {variants.map((v) => (
+                  <option key={v.id} value={v.id} style={{ color: '#000' }}>{variantLabel(v)}</option>
+                ))}
+              </select>
+            )}
+          </Box>
+          {!variants.length && (
+            <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 1 }} title={tx('configureDrive.notComputedTip')}>
+              {tx('configureDrive.notComputed')}
+            </Typography>
+          )}
+          {driveOn && variant && (() => {
+            const f = variantFacts(variant);
+            const bits = [
+              f.deadTime ? tx('configureDrive.factDead', { value: f.deadTime }) : null,
+              f.nParallel ? tx('configureDrive.factParallel', { n: f.nParallel }) : null,
+              f.modulation, f.bus ? tx('configureDrive.factBus', { value: f.bus }) : null,
+            ].filter(Boolean);
+            const tip = [f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
+                         tx('configureDrive.variantTip')].filter(Boolean).join('\n');
+            return bits.length ? (
+              <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', mb: 0.5 }} title={tip}>{bits.join(' · ')}</Typography>
+            ) : null;
+          })()}
+          {driveRefusals.map((r) => (
+            <Typography key={r.text} sx={{ fontSize: 11, color: '#f87171', mb: 0.5 }} title={r.tip}>⚠ {r.text}</Typography>
+          ))}
+
           {/* ── EXCITATION ──────────────────────────────────────────────
               Only when the passport carries MEASURED PWM deltas.  A toggle
               backed by an assumption would be worse than no toggle. */}
-          {p.pwm && p.pwm.points?.length ? (
+          {p.pwm && p.pwm.points?.length && !driveOn ? (
             <>
               <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>Excitation</Typography>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1, flexWrap: 'wrap' }}>
@@ -940,6 +1114,16 @@ const ConfiguratorPanel: React.FC = () => {
             <MetricTile label="Power" value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi />
             <MetricTile label="Mass" value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
             <MetricTile label="Efficiency" value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi />
+            {/* The drive's own efficiencies, from the computed variant, right
+                beside the shaft one (owner 2026-10-05). */}
+            {drv && drv.eta_shaft_pct != null && (
+              <MetricTile label={tx('configureDrive.shaftEffPwm')} value={drv.eta_shaft_pct} unit="%" d={1}
+                base={drv.eta_shaft_pct} goodHi />
+            )}
+            {drv && drv.eta_drive_pct != null && (
+              <MetricTile label={tx('configureDrive.driveEff')} value={drv.eta_drive_pct} unit="%" d={1}
+                base={drv.eta_drive_pct} goodHi tip={tx('configureDrive.driveEffTip')} />
+            )}
             {result.pwm_on && result.pwm_ripple_pct != null ? (
               <MetricTile label="T ripple (PWM)" value={result.pwm_ripple_pct} unit="%" d={1}
                 base={ref.passport.ripple0_pct ?? result.pwm_ripple_pct} goodHi={false} />
@@ -988,6 +1172,42 @@ const ConfiguratorPanel: React.FC = () => {
                 absLevel={result.pwm_extrapolated ? 'warn' : undefined} />
               <MetricTile label="DC link ripple" value={result.pwm_I_dc_ripple_A ?? 0} unit="A p-p" d={1}
                 base={result.pwm_I_dc_ripple_A ?? 0} />
+            </Box>
+          )}
+          {/* ── DRIVE — what the picked computed variant adds: the motor loss
+              under this inverter, the inverter's loss split, the hottest
+              junction and the continuous power it holds ── */}
+          {drv && variant && (
+            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+              {drv.motor_pwm_loss_W != null && (
+                <MetricTile label={tx('configureDrive.motorLoss')} value={drv.motor_pwm_loss_W} unit="W" d={0}
+                  base={drv.motor_pwm_loss_W} goodHi={false} tip={tx('configureDrive.motorLossTip')} />
+              )}
+              {drv.inv_total_W != null && (
+                <MetricTile label={tx('configureDrive.invLoss')} value={drv.inv_total_W} unit="W" d={1}
+                  base={drv.inv_total_W} goodHi={false} tip={tx('configureDrive.invLossTip')} />
+              )}
+              {drv.inv_cond_W != null && (
+                <MetricTile label={tx('configureDrive.conduction')} value={drv.inv_cond_W} unit="W" d={1} base={drv.inv_cond_W} />
+              )}
+              {drv.inv_sw_W != null && (
+                <MetricTile label={tx('configureDrive.switching')} value={drv.inv_sw_W} unit="W" d={1} base={drv.inv_sw_W} />
+              )}
+              {drv.inv_dead_W != null && (
+                <MetricTile label={tx('configureDrive.deadLoss')} value={drv.inv_dead_W} unit="W" d={1} base={drv.inv_dead_W} />
+              )}
+              {drv.tj_C != null && (() => {
+                const lim = devLimits[variant.device]?.t_j_max_c;
+                return (
+                  <MetricTile label={tx('configureDrive.tj')} value={drv.tj_C!} unit="°C" d={0} base={drv.tj_C!}
+                    absLevel={lim != null ? (drv.tj_C! > lim - 25 ? 'warn' : 'ok') : undefined}
+                    tip={tx('configureDrive.tjTip')} />
+                );
+              })()}
+              {drv.p_cont_max_W != null && (
+                <MetricTile label={tx('configureDrive.pContMax')} value={drv.p_cont_max_W / 1000} unit="kW" d={2}
+                  base={drv.p_cont_max_W / 1000} goodHi tip={tx('configureDrive.pContMaxTip')} />
+              )}
             </Box>
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
@@ -1192,7 +1412,7 @@ const ConfiguratorPanel: React.FC = () => {
           winding knobs are turned, the charge map reads below it. ── */}
       {canCharge(p) ? (
         <Box sx={{ px: 2, pb: 1.5 }}>
-          <ChargePanel p={p} knobs={knobs} poles={ref.poles} result={result}
+          <ChargePanel p={p} knobs={scaleKnobs} poles={ref.poles} result={result}
             onPickCurrent={(I) => setKnobs((s) => ({ ...s, I_A: I }))} />
         </Box>
       ) : String(p.role ?? p.mode0 ?? '').toLowerCase() === 'generator' && !p.battery ? (
@@ -1224,7 +1444,7 @@ const ConfiguratorPanel: React.FC = () => {
 
       {/* ── PERFORMANCE VS SPEED ── */}
       <Box sx={{ px: 2, pb: 1.5 }}>
-        <PerformanceCharts p={p} knobs={knobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
+        <PerformanceCharts p={p} knobs={scaleKnobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
       </Box>
       </>
       )}

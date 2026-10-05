@@ -8,6 +8,13 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **One controller group, system efficiency, short titles** (owner 2026-10-05). PWM LOSS, CONTROLLER LOSS, T_J,
+  eta MOTOR and P CONT are one contiguous group at the end of the loss row, same cells in Sine and PWM. The main
+  EFFICIENCY tile is the SYSTEM efficiency, battery -> shaft, motor + controller (Sine: the model's, since the
+  controller loss is 0; PWM: the computed point's `eta_drive_pct`); the duplicate "eta drive" tile is gone and
+  "eta MOTOR" keeps the motor-only shaft efficiency for reference. Colours against the reference, the saved-
+  configuration efficiency column and its best/worst ranking use the system efficiency. Titles are short (details
+  in the tooltip) and Greek letters are no longer uppercased by CSS (eta read as H).
 - **Default propeller per configuration** (owner 2026-10-05): `config/cooling_options.yaml` `defaults:` under
   the die (CIANO14 40 new: L12 -> `tmotor_fpv_10x5`, L20 -> `tmotor_p13x4_4`), served as `default_propeller`
   (and the die's `defaults` map) by `/api/propellers/cooling-options` and `configure_context.cooling`. A default

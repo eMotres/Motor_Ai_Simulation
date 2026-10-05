@@ -28,8 +28,10 @@ export interface DriveTileSpec {
   level?: 'ok' | 'warn';
 }
 
-/** The DRIVE row: the same six tiles, the same order, in every mode. */
-export const DRIVE_ROW_IDS = ['tj', 'driveEff', 'shaftEffPwm', 'pContMax'] as const;
+/** The rest of the controller group (after PWM loss and controller loss): the same tiles, in the same
+ *  order, in every mode.  `motorEff` is the motor's own shaft efficiency, for reference; the system
+ *  (motor + controller) efficiency is the main EFFICIENCY tile (see `systemEfficiency`). */
+export const DRIVE_ROW_IDS = ['tj', 'motorEff', 'pContMax'] as const;
 
 /** The loss row's last two tiles (after loss density): the motor's PWM extra loss, then the controller's. */
 export const EXTRA_LOSS_ID = 'motorLoss';
@@ -44,15 +46,20 @@ const pick = (mode: DriveMode, drv: VariantReading | null, f: (r: VariantReading
   return v == null ? { value: null, blank: 'missing' } : { value: v, blank: null };
 };
 
-/** `drv` is the reading to show (null whenever PWM is refused or the drive is Sine). */
-export function driveRowTiles(mode: DriveMode, drv: VariantReading | null, tjLimit: number | null): DriveTileSpec[] {
+/** `drv` is the reading to show (null whenever PWM is refused or the drive is Sine).
+ *  `motorEffSine` = the motor's shaft efficiency [%] from the Sine model: in Sine it IS the motor
+ *  efficiency (a real number, equal to the system one because the controller loss is 0). */
+export function driveRowTiles(mode: DriveMode, drv: VariantReading | null, tjLimit: number | null,
+                              motorEffSine: number | null = null): DriveTileSpec[] {
   const t = (id: string, labelKey: string, tipKey: string, unit: string, d: number,
     f: (r: VariantReading) => number | null, goodHi?: boolean): DriveTileSpec =>
     ({ id, labelKey, tipKey, unit, d, goodHi, ...pick(mode, drv, f) });
   const tiles = [
     t('tj', 'configureDrive.tj', 'configureDrive.tjTip', '°C', 0, (r) => r.tj_C),
-    t('driveEff', 'configureDrive.driveEff', 'configureDrive.driveEffTip', '%', 1, (r) => r.eta_drive_pct, true),
-    t('shaftEffPwm', 'configureDrive.shaftEffPwm', 'configureDrive.shaftEffPwmTip', '%', 1, (r) => r.eta_shaft_pct, true),
+    mode === 'sine' && motorEffSine != null && Number.isFinite(motorEffSine)
+      ? { id: 'motorEff', labelKey: 'configureDrive.motorEff', tipKey: 'configureDrive.motorEffTip', unit: '%', d: 1,
+          goodHi: true, value: motorEffSine, blank: null as Blank }
+      : t('motorEff', 'configureDrive.motorEff', 'configureDrive.motorEffTip', '%', 1, (r) => r.eta_shaft_pct, true),
     t('pContMax', 'configureDrive.pContMax', 'configureDrive.pContMaxTip', 'kW', 2,
       (r) => (r.p_cont_max_W == null ? null : r.p_cont_max_W / 1000), true),
   ];
@@ -88,6 +95,16 @@ export function controllerLossTile(mode: DriveMode, drv: VariantReading | null):
 /** The two loss-row tiles that depend on the drive, in their fixed order. */
 export const lossTailTiles = (mode: DriveMode, drv: VariantReading | null): DriveTileSpec[] =>
   [extraLossTile(mode, drv), controllerLossTile(mode, drv)];
+
+/** The EFFICIENCY tile: the SYSTEM efficiency, shaft power over battery power (owner 2026-10-05: «эффективность
+ *  должна быть для системы мотор + контроллер»).  Sine: the model's shaft efficiency (the controller loss is 0,
+ *  so it is also the system's).  PWM: the computed point's battery -> shaft efficiency (motor losses incl. the PWM
+ *  extra and the bearings / windage, plus the controller).  null = "—" while PWM is refused or the point has none. */
+export function systemEfficiency(mode: DriveMode, drv: VariantReading | null, sineEffPct: number): { value: number | null; blank: Blank } {
+  if (mode === 'sine') return { value: sineEffPct, blank: null };
+  if (!drv) return { value: null, blank: 'refused' };
+  return drv.eta_drive_pct == null ? { value: null, blank: 'missing' } : { value: drv.eta_drive_pct, blank: null };
+}
 
 /** TOTAL LOSS = the model's motor losses + the PWM extra loss + the controller loss (the last two are
  *  0 in Sine).  null while either is unknown (PWM refused), so the tile never shows a total that

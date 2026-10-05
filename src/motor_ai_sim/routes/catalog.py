@@ -165,6 +165,54 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
     return cat
 
 
+#: ``(path, mtime_ns, size)`` -> the passport-carrying cards of the catalogue file.  The
+#: file is 12 MB (thumbnails) and every writer replaces it atomically, so its
+#: (mtime, size) is a safe key: Configure re-parses it only after a real change.
+_REF_CACHE: dict = {"key": None, "cards": []}
+
+
+def _passport_cards() -> list:
+    path = _catalog_path()
+    try:
+        st = path.stat()
+        key = (str(path), st.st_mtime_ns, st.st_size)
+    except OSError:
+        return []
+    if _REF_CACHE["key"] != key:
+        _REF_CACHE["cards"] = [
+            m for m in _load().get("motors", [])
+            if isinstance(m.get("passport"), dict) and m["passport"].get("passport")]
+        _REF_CACHE["key"] = key
+    return _REF_CACHE["cards"]
+
+
+@router.get("/references")
+def get_references(authorization: Optional[str] = Header(default=None)):
+    """Configure's reference motors — ONLY the cards that carry a passport, and
+    only what Configure reads of them (id, name, diameter, the passport block with
+    its computed ``pwm_variants``).
+
+    ``GET /api/catalog`` also ships every card's ``thumb_svg`` — 12 of its 12.6 MB
+    on the live catalogue — and Configure used to download and wait for all of it on
+    every open.  Same visibility rule as ``GET /api/catalog`` (a private card is its
+    owner's and an admin's only; the owner is computed by the very function the
+    back-fill stamps with, so the answer is the same without the write).
+    """
+    from motor_ai_sim.auth import caller_identity as _cid
+    from motor_ai_sim.routes.presets import _owner_of as _own
+    cards = _passport_cards()
+    ident = _cid(authorization)
+    if not ident.get("is_admin"):
+        cards = [m for m in cards
+                 if (m.get("visibility") or "public") != "private"
+                 or _own(_backing_entry(m)) == ident.get("id")]
+    from motor_ai_sim import passport_store as _ps
+    out = [{"id": m.get("id"), "name": m.get("name"), "diameter_mm": m.get("diameter_mm"),
+            "passport": m["passport"]} for m in cards]        # new dicts: the cache is never mutated
+    _ps.attach(out)
+    return {"motors": out}
+
+
 @router.post("/{motor_id}/load")
 def load_motor(motor_id: str,
                authorization: Optional[str] = Header(default=None)):

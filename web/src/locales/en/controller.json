@@ -450,6 +450,7 @@
     "draftRow": "· {die} / {config} · L {L} mm · {I} A · {rpm} rpm",
     "draftFem": " · FEM {T} N·m",
     "draftNotSimulated": " · not simulated",
-    "draftOpen": "Open"
+    "draftOpen": "Open",
+    "loading": "Loading the motor model…"
   }
 }

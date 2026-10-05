@@ -16,7 +16,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Slider, ToggleButton, ToggleButtonGroup, Button,
-  IconButton, Alert,
+  IconButton, Alert, CircularProgress,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
@@ -29,7 +29,7 @@ import {
   scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult,
 } from '../../lib/motorScaling';
 import {
-  REFERENCE_PASSPORTS, windingConnections, connLabel, fetchCatalogReferences, type ReferenceMotor,
+  REFERENCE_PASSPORTS, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
 import BatteryPanel, { type Battery, defaultBattery, PRESETS } from './BatteryPanel';
@@ -51,16 +51,19 @@ import {
 } from '../../lib/configureContextApi';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import i18n from '../../i18n';
 import {
   usableVariants, variantLabel, variantFacts, readVariant, buildTuned, limitProblems,
   pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
   type DriveRecord, type DeviceLimits,
 } from '../../lib/configuratorDrive';
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
-import { resolveDraftTarget, isBlocked } from '../../lib/configuratorGuard';
+import { resolveDraftTarget, modelState } from '../../lib/configuratorGuard';
 import MyAgentDraftsBlock from './MyAgentDraftsBlock';
 
 const tx = nsT('controller');   // every user-visible string (EN source, ZH mirror — docs/I18N.md)
+/** In Chinese the captions keep their unit symbols as written (mm, rpm, ns), not MM / RPM. */
+const unitCase = () => (i18n.language?.startsWith('zh') ? { textTransform: 'none' as const } : undefined);
 const n0f = (x: number) => String(Number(x.toFixed(0)));
 
 /** The machine's remembered drive choice (Sine | PWM + variant), laid over
@@ -125,7 +128,8 @@ const KnobSlider: React.FC<{
   onChange: (v: number) => void; onRangeChange?: (min: number, max: number) => void; warn?: boolean;
   /** small grey caption after the unit — e.g. the peak value of an rms field */
   sub?: string;
-  /** one short line under the slider: where its maximum comes from (+ tooltip) */
+  /** where its maximum comes from — set on the TITLE row, right after the title, in
+   *  the title's own style (owner 2026-10-05: no small print); tooltip for details */
   limitNote?: { text: string; tip: string; hand?: boolean };
   /** admin: clear a hand-set maximum (the "default" rule applies again) */
   onClearHand?: () => void;
@@ -134,8 +138,19 @@ const KnobSlider: React.FC<{
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
     <Box sx={{ mb: 1.25 }}>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, mb: 0.25 }}>
-        <Typography sx={{ ...LABEL, flex: 1 }}>{label}</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'baseline', columnGap: 0.75, rowGap: 0.25, mb: 0.25, flexWrap: 'wrap' }}>
+        <Typography sx={{ ...LABEL, flex: '1 1 120px', minWidth: 0 }} title={limitNote?.tip}>
+          {label}
+          {/* in Chinese the caption keeps its unit symbols as written (mm, rpm), not MM / RPM */}
+          {limitNote && <Box component="span" sx={unitCase()}>{' · '}{limitNote.text}</Box>}
+          {limitNote?.hand && onClearHand && (
+            <Box component="span" onClick={onClearHand} title={tx('configureLimits.clearHandTip')}
+              sx={{ ml: 0.75, color: '#60a5fa', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>
+              {tx('configureLimits.clearHand')}
+            </Box>
+          )}
+        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0, ml: 'auto' }}>
         <input value={txt ?? fmt(value, d)} type="number" step={step}
           onChange={(e) => { setTxt(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= min && v <= max) onChange(v); }}
           onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); setTxt(null); }}
@@ -148,6 +163,7 @@ const KnobSlider: React.FC<{
             {delta > 0 ? '+' : ''}{fmt(delta, 0)}%
           </Typography>
         )}
+        </Box>
       </Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
         {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
@@ -156,17 +172,6 @@ const KnobSlider: React.FC<{
           sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 } }} />
         {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
       </Box>
-      {limitNote && (
-        <Typography sx={{ fontSize: 10, color: 'var(--text-4)', mt: -0.25 }} title={limitNote.tip}>
-          {limitNote.text}
-          {limitNote.hand && onClearHand && (
-            <Box component="span" onClick={onClearHand} title={tx('configureLimits.clearHandTip')}
-              sx={{ ml: 0.75, color: '#60a5fa', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>
-              {tx('configureLimits.clearHand')}
-            </Box>
-          )}
-        </Typography>
-      )}
     </Box>
   );
 };
@@ -232,6 +237,11 @@ const ConfiguratorPanel: React.FC = () => {
   // FEM-characterised catalog motors (fetched) come first; the built-in
   // REFERENCE_PASSPORTS stay as a seed/fallback.
   const [catalogRefs, setCatalogRefs] = useState<ReferenceMotor[]>([]);
+  // Has the references fetch been ANSWERED (an empty list included)?  Until it has, and
+  // until the loaded machine has been matched against the answer, the panel says it is
+  // loading — it never shows "no configurator model" for a machine it has not looked up.
+  const [refsAnswered, setRefsAnswered] = useState(false);
+  const [matchChecked, setMatchChecked] = useState(false);
   // Retry until the catalog answers, and refetch on catalog changes — a
   // single failed fetch (server restart window) left the panel with ONLY the
   // built-in 200 mm reference forever, so no loaded motor could ever match
@@ -239,11 +249,11 @@ const ConfiguratorPanel: React.FC = () => {
   // canWrite freeze, same cure.
   useEffect(() => {
     let dead = false;
-    const load = () => fetchCatalogReferences()
-      .then((rs) => {
+    const load = () => fetchCatalogReferencesAnswer()
+      .then((a) => {
         if (dead) return;
-        if (rs.length) setCatalogRefs(rs);
-        else setTimeout(load, 3000);
+        if (a.ok) { setCatalogRefs(a.refs); setRefsAnswered(true); }
+        else setTimeout(load, 3000);              // the server did not answer: still loading
       })
       .catch(() => { if (!dead) setTimeout(load, 3000); });
     load();
@@ -275,6 +285,7 @@ const ConfiguratorPanel: React.FC = () => {
     const pick = () => {
       const g = useMotorStore.getState().geometry as Record<string, any> | null;
       if (!g) return;
+      if (refsAnswered) setMatchChecked(true);   // looked up against the ANSWER, not the seed
       const near = (a: unknown, b: unknown, tol: number) =>
         Number.isFinite(Number(a)) && Number.isFinite(Number(b))
         && Math.abs(Number(a) - Number(b)) <= tol;
@@ -364,7 +375,13 @@ const ConfiguratorPanel: React.FC = () => {
     pick();   // also on mount / after the references arrive
     return () => window.removeEventListener('sim-operating-point', pick);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allRefs]);
+  }, [allRefs, refsAnswered, liveGeo]);
+  // No machine loaded at all: after a short wait say so (instead of loading forever).
+  useEffect(() => {
+    if (!refsAnswered || liveGeo || matchChecked) return;
+    const t = setTimeout(() => setMatchChecked(true), 4000);
+    return () => clearTimeout(t);
+  }, [refsAnswered, liveGeo, matchChecked]);
   const ref: ReferenceMotor = useMemo(
     () => allRefs.find((r) => r.id === refId) ?? allRefs[0],
     [refId, allRefs],
@@ -484,7 +501,9 @@ const ConfiguratorPanel: React.FC = () => {
   //    it is the currently loaded/open machine.  With no matching passport
   //    for that machine, refuse to compute rather than borrow another
   //    machine's model.
-  const blocked = isBlocked({ draftOpen, hasDraftTarget: !!draftTarget, liveMatched });
+  const mState = modelState({ refsAnswered, matchChecked, draftOpen, hasDraftTarget: !!draftTarget, liveMatched });
+  const loadingModel = mState === 'loading';
+  const blocked = mState === 'blocked';
   const blockedLabel = draftOpen && draft
     ? `${draft.starting_point.die} / ${draft.starting_point.config}`
     : (() => {
@@ -644,6 +663,30 @@ const ConfiguratorPanel: React.FC = () => {
   const above = (v: number, r: KRange) => v > r.max * 1.0005 + 1e-9;
   /** the connection stays free: only a warning when the winding's line voltage exceeds the pack nominal */
   const connWarn = lineVoltageWarning(result.Vline_peak_V, packNomV);
+  /** the picked variant's read-only facts, for the Drive TITLE row (+ provenance tooltip) */
+  const driveFacts = (() => {
+    if (!driveOn || !variant) return { line: '', tip: '' };
+    const f = variantFacts(variant);
+    const bus = f.bus;
+    const busText = !bus ? null
+      : bus.min != null && bus.max != null && bus.nom != null
+        ? tx('configureDrive.factBusFull', { min: bus.min, max: bus.max, nom: bus.nom })
+        : bus.min != null && bus.max != null
+          ? tx('configureDrive.factBusRange', { min: bus.min, max: bus.max })
+          : bus.nom != null ? tx('configureDrive.factBusNom', { nom: bus.nom }) : null;
+    const bits = [
+      f.deadTime ? tx('configureDrive.factDead', { value: f.deadTime }) : null,
+      f.nParallel ? tx('configureDrive.factParallel', { n: f.nParallel }) : null,
+      f.modulationKey ? tx(f.modulationKey) : null, busText,
+    ].filter(Boolean);
+    return {
+      line: bits.join(' · '),
+      tip: [f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
+            tx('configureDrive.variantTip')].filter(Boolean).join('\n'),
+    };
+  })();
+  const driveFactsLine = driveFacts.line;
+  const driveFactsTip = driveFacts.tip || tx('configureDrive.variantTip');
   // "vs ref" compares against THE MACHINE AS LOADED, not against the
   // passport's calibration point (user 2026-08-26: a freshly loaded motor
   // showed −92.7 % with nothing touched — it was being compared to another
@@ -932,12 +975,12 @@ const ConfiguratorPanel: React.FC = () => {
             ? (draftTarget
                 ? tx('configure.headerDraft', { name: draft.name, die: draft.starting_point.die, config: draft.starting_point.config })
                 : tx('configure.headerDraftNoModel', { name: draft.name }))
-            : (liveMatched ? ref.name : tx('configure.headerNoModel', { label: blockedLabel }))}
+            : (loadingModel ? '' : liveMatched ? ref.name : tx('configure.headerNoModel', { label: blockedLabel }))}
         </Typography>
         {/* One clear way back to the reference design (user 2026-08-26) —
             replaces the per-tile "% vs ref" captions.  Meaningless with no
             model loaded, so it disappears rather than resetting to nothing. */}
-        {!blocked && (
+        {!blocked && !loadingModel && (
           <Button size="small" variant={tuned ? 'contained' : 'outlined'} onClick={reset}
             startIcon={<RestartAltIcon sx={{ fontSize: 15 }} />}
             disabled={!tuned}
@@ -948,15 +991,18 @@ const ConfiguratorPanel: React.FC = () => {
           </Button>
         )}
       </Box>
+      {loadingModel && (
+        <Box sx={{ px: 2, py: 1.5, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <CircularProgress size={14} sx={{ color: '#60a5fa' }} />
+          <Typography sx={{ fontSize: 14, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.loading')}</Typography>
+        </Box>
+      )}
       {blocked && (
         <Box sx={{ px: 2, pb: 2 }}>
-          <Alert severity="warning" sx={{ fontSize: 12 }}>
-            <Typography sx={{ fontSize: 13, fontWeight: 700, mb: 0.25 }}>
+          <Alert severity="warning" sx={{ fontSize: 12 }}
+            title={tx('configure.noModelBody') + (draftOpen ? tx('configure.noModelDraft') : tx('configure.noModelLoaded'))}>
+            <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
               {tx('configure.noModelTitle', { label: blockedLabel })}
-            </Typography>
-            <Typography sx={{ fontSize: 12 }}>
-              {tx('configure.noModelBody')}
-              {draftOpen ? tx('configure.noModelDraft') : tx('configure.noModelLoaded')}
             </Typography>
           </Alert>
         </Box>
@@ -966,7 +1012,7 @@ const ConfiguratorPanel: React.FC = () => {
           state above.  Every tile, slider and chart in this block reads
           `ref`/`p`, which the guards above only let through once it is the
           SAME machine as the header names. */}
-      {!blocked && (
+      {!blocked && !loadingModel && (
       <>
       <Box sx={{ display: 'flex', gap: 2, p: 2, flexWrap: 'wrap' }}>
         {/* ── KNOBS ── */}
@@ -1009,9 +1055,17 @@ const ConfiguratorPanel: React.FC = () => {
             </Typography>
           ) : null}
 
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
-            <Typography sx={{ ...LABEL, flex: 1 }}>{tx('configureLimits.connection')}</Typography>
-            <ToggleButtonGroup exclusive size="small" value={knobs.nP} onChange={(_, v) => v != null && set('nP')(v)}>
+          <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mt: 0.5, mb: 1, flexWrap: 'wrap' }}>
+            <Typography sx={{ ...LABEL, flex: '1 1 140px', minWidth: 0 }}
+              title={connWarn ? tx('configureLimits.connWarnTip', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) }) : undefined}>
+              {tx('configureLimits.connection')}
+              {connWarn && (
+                <Box component="span" sx={{ color: '#fbbf24', ...unitCase() }}>
+                  {' · ⚠ '}{tx('configureLimits.connWarn', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) })}
+                </Box>
+              )}
+            </Typography>
+            <ToggleButtonGroup exclusive size="small" value={knobs.nP} sx={{ ml: 'auto' }} onChange={(_, v) => v != null && set('nP')(v)}>
               {conns.map((c) => (
                 <ToggleButton key={c.nP} value={c.nP}
                   title={c.nP === 1 ? tx('configureLimits.connSeries') : c.nS === 1 ? tx('configureLimits.connParallel') : tx('configureLimits.connMixed', { s: c.nS, p: c.nP })}
@@ -1022,12 +1076,6 @@ const ConfiguratorPanel: React.FC = () => {
               ))}
             </ToggleButtonGroup>
           </Box>
-          {connWarn && (
-            <Typography sx={{ fontSize: 11, color: '#fbbf24', mt: -0.5, mb: 1 }}
-              title={tx('configureLimits.connWarnTip', { line: fmt(connWarn.line, 1), nominal: fmt(connWarn.nominal, 1) })}>
-              ⚠ {tx('configureLimits.connWarn', { line: fmt(connWarn.line, 0), nominal: fmt(connWarn.nominal, 0) })}
-            </Typography>
-          )}
 
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
           {/* rms is the knob; the PEAK rides beside it (user 2026-08-26) —
@@ -1045,7 +1093,14 @@ const ConfiguratorPanel: React.FC = () => {
               device at a carrier, each already in the passport.  Device,
               dead time and parallel count are read-only facts of the
               variant; nothing is calculated here. */}
-          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>{tx('configureDrive.title')}</Typography>
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}
+            title={variants.length ? driveFactsTip : tx('configureDrive.notComputedTip')}>
+            {tx('configureDrive.title')}
+            {driveFactsLine && <Box component="span" sx={unitCase()}>{' · '}{driveFactsLine}</Box>}
+            {!variants.length && (
+              <Box component="span" sx={{ color: '#fbbf24' }}>{' · '}{tx('configureDrive.notComputed')}</Box>
+            )}
+          </Typography>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75, flexWrap: 'wrap' }}
             title={variants.length ? undefined : tx('configureDrive.notComputedTip')}>
             <ToggleButtonGroup exclusive size="small" value={driveOn ? 'pwm' : 'sine'}
@@ -1069,33 +1124,8 @@ const ConfiguratorPanel: React.FC = () => {
               </select>
             )}
           </Box>
-          {!variants.length && (
-            <Typography sx={{ fontSize: 11, color: '#fbbf24', mb: 1 }} title={tx('configureDrive.notComputedTip')}>
-              {tx('configureDrive.notComputed')}
-            </Typography>
-          )}
-          {driveOn && variant && (() => {
-            const f = variantFacts(variant);
-            const bus = f.bus;
-            const busText = !bus ? null
-              : bus.min != null && bus.max != null && bus.nom != null
-                ? tx('configureDrive.factBusFull', { min: bus.min, max: bus.max, nom: bus.nom })
-                : bus.min != null && bus.max != null
-                  ? tx('configureDrive.factBusRange', { min: bus.min, max: bus.max })
-                  : bus.nom != null ? tx('configureDrive.factBusNom', { nom: bus.nom }) : null;
-            const bits = [
-              f.deadTime ? tx('configureDrive.factDead', { value: f.deadTime }) : null,
-              f.nParallel ? tx('configureDrive.factParallel', { n: f.nParallel }) : null,
-              f.modulationKey ? tx(f.modulationKey) : null, busText,
-            ].filter(Boolean);
-            const tip = [f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
-                         tx('configureDrive.variantTip')].filter(Boolean).join('\n');
-            return bits.length ? (
-              <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', mb: 0.5 }} title={tip}>{bits.join(' · ')}</Typography>
-            ) : null;
-          })()}
           {driveRefusals.map((r) => (
-            <Typography key={r.text} sx={{ fontSize: 11, color: '#f87171', mb: 0.5 }} title={r.tip}>⚠ {r.text}</Typography>
+            <Typography key={r.text} sx={{ fontSize: 11, fontWeight: 700, color: '#f87171', mb: 0.5 }} title={r.tip}>⚠ {r.text}</Typography>
           ))}
 
 

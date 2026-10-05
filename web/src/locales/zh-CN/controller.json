@@ -450,6 +450,7 @@
     "draftRow": "· {die} / {config} · 叠厚 {L} mm · {I} A · {rpm} rpm",
     "draftFem": " · 有限元 {T} N·m",
     "draftNotSimulated": " · 未仿真",
-    "draftOpen": "打开"
+    "draftOpen": "打开",
+    "loading": "正在载入电机模型…"
   }
 }

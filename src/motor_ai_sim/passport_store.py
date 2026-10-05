@@ -56,20 +56,50 @@ def _usable(v: Any) -> bool:
             and isinstance(v.get("points"), dict) and bool(v["points"]))
 
 
+#: ``{path: ((mtime_ns, size), slim record)}`` — a file is parsed again only when it
+#: changed on disk.  The slim record keeps what Configure reads (the usable
+#: ``pwm_variants``, each carrying its build length for the matching rule); the
+#: pilot's heavy blocks never sit in memory.
+_CACHE: Dict[str, Tuple[Tuple[int, int], Dict[str, Any]]] = {}
+
+
+def _slim(rec: Dict[str, Any]) -> Dict[str, Any]:
+    vs = [v for v in (rec.get("pwm_variants") or []) if _usable(v)]
+    return {"pwm_variants": vs,
+            "build": rec.get("build") if isinstance(rec.get("build"), dict) else None}
+
+
+def _read(f: Path) -> Optional[Dict[str, Any]]:
+    try:
+        st = f.stat()
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        _CACHE.pop(str(f), None)
+        return None
+    hit = _CACHE.get(str(f))
+    if hit and hit[0] == sig:
+        return hit[1]
+    try:
+        rec = json.loads(f.read_text(encoding="utf-8"))
+    except Exception as exc:                                # noqa: BLE001
+        log.warning("passport store: %s is unreadable: %s", f, exc)
+        return None
+    slim = _slim(rec) if isinstance(rec, dict) else None
+    if slim is not None:
+        _CACHE[str(f)] = (sig, slim)
+    return slim
+
+
 def _records() -> List[Tuple[str, str, Dict[str, Any]]]:
-    """``[(die, config, record)]`` for every readable store file."""
+    """``[(die, config, slim record)]`` for every readable store file."""
     out: List[Tuple[str, str, Dict[str, Any]]] = []
     root = store_dir()
     if not root.is_dir():
         return out
     for die_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         for f in sorted(die_dir.glob("*.json")):
-            try:
-                rec = json.loads(f.read_text(encoding="utf-8"))
-            except Exception as exc:                        # noqa: BLE001
-                log.warning("passport store: %s is unreadable: %s", f, exc)
-                continue
-            if isinstance(rec, dict):
+            rec = _read(f)
+            if rec is not None:
                 out.append((die_dir.name, f.stem, rec))
     return out
 
@@ -87,7 +117,8 @@ def _length_mm(rec: Dict[str, Any]) -> Optional[float]:
         return None
 
 
-def variants_for(card_name: Optional[str], length_mm: Optional[float] = None
+def variants_for(card_name: Optional[str], length_mm: Optional[float] = None,
+                 records: Optional[List[Tuple[str, str, Dict[str, Any]]]] = None
                  ) -> Optional[List[Dict[str, Any]]]:
     """The computed drive variants of the machine a catalogue card stands for,
     or ``None`` (no record / no usable variant — the card is served unchanged).
@@ -103,7 +134,7 @@ def variants_for(card_name: Optional[str], length_mm: Optional[float] = None
         return None
     exact: List[Dict[str, Any]] = []
     by_die: List[Tuple[str, Dict[str, Any]]] = []
-    for die, cfg, rec in _records():
+    for die, cfg, rec in (records if records is not None else _records()):
         if f"{die} {cfg}".casefold() == name:
             exact.append(rec)
         elif die.casefold() == name:
@@ -120,14 +151,14 @@ def variants_for(card_name: Optional[str], length_mm: Optional[float] = None
             pick = near[0]
     if pick is None:
         return None
-    vs = [v for v in (pick.get("pwm_variants") or []) if _usable(v)]
-    return vs or None
+    return list(pick.get("pwm_variants") or []) or None
 
 
 def attach(motors: List[Dict[str, Any]]) -> None:
     """Add ``pwm_variants`` to the passport block of every card that has a
     record, in place (the cards are request-local copies).  Nothing else of a
     card is touched; a card whose passport already carries variants keeps them."""
+    recs = _records()                       # once per call, not once per card
     for m in motors:
         sp = m.get("passport")
         if not isinstance(sp, dict) or sp.get("pwm_variants"):
@@ -137,6 +168,6 @@ def attach(motors: List[Dict[str, Any]]) -> None:
             L = float(inner.get("L0_mm"))
         except (TypeError, ValueError):
             L = None
-        vs = variants_for(m.get("name"), L)
+        vs = variants_for(m.get("name"), L, recs)
         if vs:
             m["passport"] = {**sp, "pwm_variants": vs}

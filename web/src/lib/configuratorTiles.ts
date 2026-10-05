@@ -28,8 +28,10 @@ export interface DriveTileSpec {
   level?: 'ok' | 'warn';
 }
 
-/** The DRIVE row: the same six tiles, the same order, in every mode. */
-export const DRIVE_ROW_IDS = ['tj', 'driveEff', 'shaftEffPwm', 'pContMax'] as const;
+/** The rest of the controller group (after PWM loss and controller loss): the same tiles, in the same
+ *  order, in every mode.  `motorEff` is the motor's own shaft efficiency, for reference; the system
+ *  (motor + controller) efficiency is the main EFFICIENCY tile (see `systemEfficiency`). */
+export const DRIVE_ROW_IDS = ['tj', 'motorEff', 'pContMax'] as const;
 
 /** The loss row's last two tiles (after loss density): the motor's PWM extra loss, then the controller's. */
 export const EXTRA_LOSS_ID = 'motorLoss';
@@ -44,15 +46,18 @@ const pick = (mode: DriveMode, drv: VariantReading | null, f: (r: VariantReading
   return v == null ? { value: null, blank: 'missing' } : { value: v, blank: null };
 };
 
-/** `drv` is the reading to show (null whenever PWM is refused or the drive is Sine). */
-export function driveRowTiles(mode: DriveMode, drv: VariantReading | null, tjLimit: number | null): DriveTileSpec[] {
+/** `drv` is the reading to show (null whenever PWM is refused or the drive is Sine).
+ *  `motorEff` = the motor's own efficiency [%] from `motorEfficiency()` (null = unknown / refused). */
+export function driveRowTiles(mode: DriveMode, drv: VariantReading | null, tjLimit: number | null,
+                              motorEff: number | null = null): DriveTileSpec[] {
   const t = (id: string, labelKey: string, tipKey: string, unit: string, d: number,
     f: (r: VariantReading) => number | null, goodHi?: boolean): DriveTileSpec =>
     ({ id, labelKey, tipKey, unit, d, goodHi, ...pick(mode, drv, f) });
   const tiles = [
     t('tj', 'configureDrive.tj', 'configureDrive.tjTip', '°C', 0, (r) => r.tj_C),
-    t('driveEff', 'configureDrive.driveEff', 'configureDrive.driveEffTip', '%', 1, (r) => r.eta_drive_pct, true),
-    t('shaftEffPwm', 'configureDrive.shaftEffPwm', 'configureDrive.shaftEffPwmTip', '%', 1, (r) => r.eta_shaft_pct, true),
+    { id: 'motorEff', labelKey: 'configureDrive.motorEff', tipKey: 'configureDrive.motorEffTip', unit: '%', d: 1, goodHi: true,
+      ...(motorEff != null && Number.isFinite(motorEff) ? { value: motorEff, blank: null as Blank }
+        : { value: null, blank: (mode === 'sine' ? 'sine' : drv ? 'missing' : 'refused') as Blank }) },
     t('pContMax', 'configureDrive.pContMax', 'configureDrive.pContMaxTip', 'kW', 2,
       (r) => (r.p_cont_max_W == null ? null : r.p_cont_max_W / 1000), true),
   ];
@@ -73,16 +78,19 @@ export function extraLossTile(mode: DriveMode, drv: VariantReading | null): Driv
     : { ...base, value: drv.motor_pwm_loss_W, blank: null };
 }
 
-/** The controller's (inverter's) own loss: conduction + switching + dead time.  0 W in Sine (a real
- *  zero: there is no inverter model), the computed value in PWM, "—" when PWM is refused. */
+/** The controller's own loss: conduction + switching + dead time of the bridge + the copper of the coil
+ *  links on its board.  0 W in Sine (a real zero: there is no inverter model), the computed value in PWM,
+ *  "—" when PWM is refused or the point lacks a part (never a sum that leaves one out). */
+export const controllerLossW = (drv: VariantReading): number | null =>
+  drv.inv_total_W == null || drv.board_copper_W == null ? null : drv.inv_total_W + drv.board_copper_W;
+
 export function controllerLossTile(mode: DriveMode, drv: VariantReading | null): DriveTileSpec {
   const base = { id: CONTROLLER_LOSS_ID, labelKey: 'configureDrive.invLoss', tipKey: 'configureDrive.invLossTip',
     unit: 'W', d: 1, goodHi: false };
   if (mode === 'sine') return { ...base, value: 0, blank: null };
   if (!drv) return { ...base, value: null, blank: 'refused' };
-  return drv.inv_total_W == null
-    ? { ...base, value: null, blank: 'missing' }
-    : { ...base, value: drv.inv_total_W, blank: null };
+  const w = controllerLossW(drv);
+  return w == null ? { ...base, value: null, blank: 'missing' } : { ...base, value: w, blank: null };
 }
 
 /** The two loss-row tiles that depend on the drive, in their fixed order. */
@@ -95,6 +103,29 @@ export const lossTailTiles = (mode: DriveMode, drv: VariantReading | null): Driv
 export function totalLossShown(baseW: number, mode: DriveMode, drv: VariantReading | null): number | null {
   const e = extraLossTile(mode, drv).value, c = controllerLossTile(mode, drv).value;
   return e == null || c == null ? null : baseW + e + c;
+}
+
+/** The EFFICIENCY tile: the SYSTEM efficiency, shaft power over battery power (owner 2026-10-05: motor +
+ *  controller), computed from the very numbers the tiles show, so the tiles add up EXACTLY:
+ *
+ *      EFFICIENCY = P_shaft / (P_shaft + TOTAL LOSS)        (POWER tile, TOTAL LOSS tile)
+ *
+ *  with TOTAL LOSS = motor losses + PWM extra loss + controller loss (incl. its board copper).  In Sine the
+ *  last two are 0, so it equals the model's own efficiency.  null = "—" while PWM is refused or a part of the
+ *  total is unknown. */
+export function systemEfficiency(mode: DriveMode, drv: VariantReading | null, P_shaft_W: number, P_loss_W: number):
+  { value: number | null; blank: Blank } {
+  const tot = totalLossShown(P_loss_W, mode, drv);
+  if (tot == null) return { value: null, blank: drv ? 'missing' : 'refused' };
+  return { value: P_shaft_W > 0 ? (100 * P_shaft_W) / (P_shaft_W + tot) : 0, blank: null };
+}
+
+/** The motor's own efficiency: shaft power over the motor's input power, i.e. the motor losses plus the PWM
+ *  extra loss (the controller excluded).  Sine: the model's.  null = "—" while PWM is refused / the extra is unknown. */
+export function motorEfficiency(mode: DriveMode, drv: VariantReading | null, P_shaft_W: number, P_loss_W: number): number | null {
+  const e = extraLossTile(mode, drv).value;
+  if (e == null) return null;
+  return P_shaft_W > 0 ? (100 * P_shaft_W) / (P_shaft_W + P_loss_W + e) : 0;
 }
 
 // ── the temperatures row (propeller-cooled machines) ─────────────────────────────────────────

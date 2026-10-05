@@ -32,12 +32,13 @@ import {
   REFERENCE_PASSPORTS, windingConnections, connLabel, fetchCatalogReferencesAnswer, type ReferenceMotor,
 } from '../../lib/referencePassports';
 import GeometryProjections from './GeometryProjections';
+import GreekLabel from './GreekLabel';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import PerformanceCharts from './PerformanceCharts';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import {
-  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, tempRowTiles, type DriveTileSpec, type TempTileSpec,
+  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, tempRowTiles, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
   isPropellerCooled, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
@@ -245,7 +246,7 @@ const MetricTile: React.FC<{
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
         : tx('configure.sameAsRef'))}>
       <Typography sx={{ ...LABEL, fontSize: 9.5, whiteSpace: 'nowrap',
-        overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</Typography>
+        overflow: 'hidden', textOverflow: 'ellipsis' }}><GreekLabel text={label} /></Typography>
       <Typography sx={{ fontSize: 16, fontWeight: 800,
         color: blank ? 'var(--text-3)' : absLevel
           ? (absLevel === 'bad' ? '#f87171' : absLevel === 'warn' ? '#fbbf24' : '#4ade80')
@@ -808,10 +809,21 @@ const ConfiguratorPanel: React.FC = () => {
   /** the numbers to show — null whenever anything is refused */
   const drv = driveRead && driveRead.ok && driveProblems.length === 0 ? driveRead.values : null;
   const driveMode: 'sine' | 'pwm' = driveOn ? 'pwm' : 'sine';
+  /** the EFFICIENCY tile: system (motor + controller), battery -> shaft */
+  const sysEff = systemEfficiency(driveMode, drv, result.P_mech_W, result.P_loss_W);
+  /** …and the reference it is coloured against: the same quantity at the reference knobs (PWM reads the
+   *  variant there; if that point is not computed the Sine efficiency stands in) */
+  const baseSysEff = (() => {
+    if (driveMode === 'sine' || !variant) return baseRes.efficiency * 100;
+    const k0 = refKnobs ?? baseKnobs(p);
+    const r0 = readVariant(variant, k0.rpm, k0.I_A);
+    const e0 = r0.ok ? systemEfficiency('pwm', r0.values, baseRes.P_mech_W, baseRes.P_loss_W).value : null;
+    return e0 ?? baseRes.efficiency * 100;
+  })();
   /** one tile of the drive-dependent set, from its spec */
   const renderSpec = (t: DriveTileSpec) => {
-    const detail = t.id === 'invLoss' && drv && drv.inv_total_W != null
-      ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1) })}` : '';
+    const detail = t.id === 'invLoss' && drv && controllerLossW(drv) != null
+      ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1), b: fmt(drv.board_copper_W ?? 0, 1) })}` : '';
     return (
       <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} unit={t.unit} d={t.d}
         base={t.value ?? 0} goodHi={t.goodHi}
@@ -1111,8 +1123,8 @@ const ConfiguratorPanel: React.FC = () => {
       mode: 'pwm', variant_id: variant.id, device: variant.device,
       technology: variant.technology ?? null, carrier_hz: Number(variant.carrier_hz),
       dead_time_s: variant.dead_time_s ?? null, n_parallel: variant.n_parallel ?? null,
-      inverter_loss_W: drv?.inv_total_W ?? null, tj_C: drv?.tj_C ?? null,
-      eta_drive_pct: drv?.eta_drive_pct ?? null,
+      inverter_loss_W: drv ? controllerLossW(drv) : null, tj_C: drv?.tj_C ?? null,
+      eta_drive_pct: sysEff.value,
     } : { mode: 'sine' };
     // Saved under a NAME the user can change here (the auto name is the suggestion).
     setAskName({
@@ -1154,13 +1166,11 @@ const ConfiguratorPanel: React.FC = () => {
     { key: 'T',    label: tx('configure.colTorque'),  unit: 'N·m', d: 1, goodHi: true,  get: (c) => c.result.T_Nm },
     { key: 'P',    label: tx('configure.colPower'),   unit: 'kW',  d: 2, goodHi: true,  get: (c) => c.result.P_mech_W / 1000 },
     { key: 'V',    label: tx('configure.colDcBus'),  unit: 'V',   d: 0,                get: (c) => c.result.Vphase_peak_V * Math.sqrt(3) },
-    { key: 'eff',  label: tx('configure.colEta'),       unit: '%',   d: 1, goodHi: true,  get: (c) => c.result.efficiency * 100 },
+    { key: 'eff',  label: tx('configure.colEta'),       unit: '%',   d: 1, goodHi: true,  get: (c) => (c.drive?.mode === 'pwm' ? (c.drive.eta_drive_pct ?? NaN) : c.result.efficiency * 100) },
     { key: 'loss', label: tx('configure.colLosses'),  unit: 'W',   d: 0, goodHi: false, get: (c) => c.result.P_loss_W },
     { key: 'J',    label: tx('configure.colJ'),       unit: 'A/mm²', d: 1, goodHi: false, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
     { key: 'mass', label: tx('configure.colMass'),    unit: 'kg',  d: 2, goodHi: false, get: (c) => c.result.mass_kg },
     { key: 'tm',   label: tx('configure.colTPerMass'),  unit: '',    d: 2, goodHi: true,  get: (c) => c.result.torque_per_mass },
-    { key: 'etad', label: tx('configureDrive.columnDriveEff'), unit: '%', d: 1, goodHi: true,
-      get: (c) => c.drive?.eta_drive_pct ?? NaN },
   ];
   const KNB_COLS: { label: string; get: (c: SavedConfig) => string }[] = [
     { label: tx('configureDrive.columnDrive'),
@@ -1535,8 +1545,10 @@ const ConfiguratorPanel: React.FC = () => {
             <MetricTile label={tx('configure.power')} value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi
               absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} />
             <MetricTile label={tx('configure.mass')} value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
-            <MetricTile label={tx('configure.efficiency')} value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi
-              absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} />
+            <MetricTile label={tx('configure.efficiency')} value={sysEff.value} unit="%" d={1} base={baseSysEff} goodHi
+              absLevel={propBad ? 'bad' : undefined}
+              tip={`${tx('configure.efficiencyTip')}${propBad && propLine ? ` ${propLine.text}` : ''}`}
+              blankTip={tx(sysEff.blank === 'refused' ? 'configureDrive.blankRefused' : 'configureDrive.blankMissing')} />
             {ref.passport.ripple0_pct != null && (
               <MetricTile label={tx('configure.tRipple')} value={ref.passport.ripple0_pct} unit="%" d={1}
                 base={ref.passport.ripple0_pct} goodHi={false} tip={tx('configure.tRippleTip')} />
@@ -1560,7 +1572,10 @@ const ConfiguratorPanel: React.FC = () => {
               tip={tx(result.loss_split_measured ? 'configure.rotorHeatTipMeasured' : 'configure.rotorHeatTipUnknown')} />
             <MetricTile label={tx('configure.lossDensity')} value={lossDensityShown(result.loss_density_W_kg, result.P_loss_W, driveMode, drv)} unit="W/kg" d={0}
               base={baseRes.loss_density_W_kg} goodHi={false} blankTip={tx('configure.totalLossBlankTip')} />
+            {/* ONE contiguous controller group at the end of the loss row (owner 2026-10-05): the PWM loss,
+                the controller loss, then T_j, the efficiencies and P cont — same cells in Sine and PWM */}
             {lossTailTiles(driveMode, drv).map(renderSpec)}
+            {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, motorEfficiency(driveMode, drv, result.P_mech_W, result.P_loss_W)).map(renderSpec)}
           </Box>
           {/* ── TEMPERATURES — ONE row for a propeller-cooled machine, the same five tiles from the first render ── */}
           {cooled && (
@@ -1568,11 +1583,6 @@ const ConfiguratorPanel: React.FC = () => {
               {tempTiles.map(renderTemp)}
             </Box>
           )}
-          {/* ── DRIVE — the same tiles in Sine and PWM (only the values change; a refusal
-              turns them into "—", it never adds or removes a block) ── */}
-          <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null).map(renderSpec)}
-          </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label={tx('configure.dcBusMin')} value={result.Vphase_peak_V * Math.sqrt(3)} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} />
             <MetricTile label={tx('configure.vLinePeak')} value={result.Vline_peak_V} unit="V" d={1} base={baseRes.Vline_peak_V} />
@@ -1712,8 +1722,8 @@ const ConfiguratorPanel: React.FC = () => {
             <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
               <Box component="thead"><Box component="tr">
                 <Box component="th" sx={{ ...TH, textAlign: 'left' }}>{tx('configure.colConfiguration')}</Box>
-                {KNB_COLS.map((k) => <Box component="th" key={k.label} sx={{ ...TH, color: '#fbbf24' }}>{k.label}</Box>)}
-                {RES_COLS.map((r) => <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}>{r.label}{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400, textTransform: 'none' }}> {r.unit}</Box> : null}</Box>)}
+                {KNB_COLS.map((k) => <Box component="th" key={k.label} sx={{ ...TH, color: '#fbbf24' }}><GreekLabel text={k.label} /></Box>)}
+                {RES_COLS.map((r) => <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}><GreekLabel text={r.label} />{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400, textTransform: 'none' }}> {r.unit}</Box> : null}</Box>)}
                 <Box component="th" sx={{ ...TH, textAlign: 'center' }} />
                 <Box component="th" sx={{ ...TH, textAlign: 'center' }}>✕</Box>
               </Box></Box>

@@ -187,6 +187,8 @@ export interface VariantReading {
   inv_sw_W: number | null;
   inv_dead_W: number | null;
   inv_total_W: number | null;
+  /** the copper of the coil links on the controller board (K x I^2): heat of the controller, not of the motor */
+  board_copper_W: number | null;
   tj_C: number | null;
   eta_drive_pct: number | null;
   eta_shaft_pct: number | null;
@@ -218,13 +220,14 @@ export function readingOf(p: PwmVariantPoint): VariantReading {
   return {
     motor_pwm_loss_W: num(p.motor_pwm_loss_W),
     inv_cond_W: i.c, inv_sw_W: i.s, inv_dead_W: i.d, inv_total_W: i.t,
+    board_copper_W: num(p.board_copper_W),
     tj_C: num(p.tj_C), eta_drive_pct: num(p.eta_drive_pct),
     eta_shaft_pct: num(p.eta_shaft_pct), p_cont_max_W: num(p.p_cont_max_W),
   };
 }
 
 const KEYS: (keyof VariantReading)[] = ['motor_pwm_loss_W', 'inv_cond_W', 'inv_sw_W',
-  'inv_dead_W', 'inv_total_W', 'tj_C', 'eta_drive_pct', 'eta_shaft_pct', 'p_cont_max_W'];
+  'inv_dead_W', 'inv_total_W', 'board_copper_W', 'tj_C', 'eta_drive_pct', 'eta_shaft_pct', 'p_cont_max_W'];
 
 /** The bracketing axis values around x: [lo, hi] (equal when x sits on a node
  *  or the axis has one node). */

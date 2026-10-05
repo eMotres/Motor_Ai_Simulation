@@ -165,6 +165,25 @@ def get_catalog(authorization: Optional[str] = Header(default=None)):
     return cat
 
 
+def _machine_names() -> set:
+    """Casefolded ``"<die> <configuration>"`` and ``"<die>"`` of every die the caller can see —
+    the names ``_family_doc_of_motor`` can match a card by, from directory listings only
+    (no yaml is parsed, so it is cheap enough for a request that is meant to be fast)."""
+    out: set = set()
+    try:
+        from motor_ai_sim.workspace import iter_dies as _iter_dies
+        for e in _iter_dies():
+            die = str(e.get("die") or e.get("name") or "")
+            d = Path(str(e["dir"]))
+            cfgs = [f.stem for f in d.glob("*.yaml") if f.name != "die.yaml"]
+            if cfgs:
+                out.add(die.casefold())
+            out.update(f"{die} {c}".casefold() for c in cfgs)
+    except Exception:                                           # noqa: BLE001
+        log.warning("references: machine names could not be listed", exc_info=True)
+    return out
+
+
 #: ``(path, mtime_ns, size)`` -> the passport-carrying cards of the catalogue file.  The
 #: file is 12 MB (thumbnails) and every writer replaces it atomically, so its
 #: (mtime, size) is a safe key: Configure re-parses it only after a real change.
@@ -207,7 +226,13 @@ def get_references(authorization: Optional[str] = Header(default=None)):
                  if (m.get("visibility") or "public") != "private"
                  or _own(_backing_entry(m)) == ident.get("id")]
     from motor_ai_sim import passport_store as _ps
+    names = _machine_names()
     out = [{"id": m.get("id"), "name": m.get("name"), "diameter_mm": m.get("diameter_mm"),
+            # True when the card's name is a configuration (or the die) of the catalogue: it
+            # then HAS a pack, controller and variants.  Legacy duplicates of the same
+            # geometry ("CIANO14 40_12" next to "CIANO14 40 new") have none, and the web must
+            # not pick one of those for the loaded machine.
+            "has_machine": str(m.get("name") or "").strip().casefold() in names,
             "passport": m["passport"]} for m in cards]        # new dicts: the cache is never mutated
     _ps.attach(out)
     return {"motors": out}

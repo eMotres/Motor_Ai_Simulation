@@ -75,6 +75,16 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   Dependency audit recorded in `THIRD_PARTY_NOTICES.md`.
 
 ### Fixed
+- **Configure showed "NMC 100 cells / 370 V" beside the 6S L12 machine** (owner 2026-10-05, live
+  e7b1ba2). Two reference cards tie on L12's cross-section and build (the real "CIANO14 40 new"
+  and an older duplicate "CIANO14 40_12" with no pack or controller); the first of the tie won,
+  which on the live catalogue is the duplicate. `/api/catalog/references` now flags
+  `has_machine`, and the pick goes build, then geometry, then "is a machine", then order
+  (`pickReference`). A stored battery "edit" equal to the stock 100-cell default is never an edit
+  (never written, dropped once on load). The motor marker (sqrt(3) x phase peak, 18 V rated / 20 V
+  peak at the catalogue duty points, pinned by a test) now names the operating point it is for.
+  The geometry pictures sit right of the Battery block with their subtitles on the title row, and
+  the speed / efficiency charts are hidden behind one flag (`SHOW_CONFIGURE_CHARTS`, off).
 - **L155 eddy: the shaft now settles, 0.4 % from its asymptote** (docs/EDDY_SHAFT_SETTLE_2026-09-29.md).
   The oscillating shaft gauge was a 5-period beat of non-pole-pair-periodic DC patterns that
   the one-angle static start froze into the solid wall; under it the wall's rotor-frame DC

@@ -35,12 +35,13 @@ import GeometryProjections from './GeometryProjections';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import PerformanceCharts from './PerformanceCharts';
+import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import ConfiguratorThermal from './ConfiguratorThermal';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
 import { useWireStock } from '../materials/useWireStock';
 import {
-  batteryFromPack, readBatteryEdit, writeBatteryEdit, clearBatteryEdit, wantedBattery, sameBattery, BATTERY_BY_MACHINE_LS,
+  batteryFromPack, readBatteryEdit, writeBatteryEdit, clearBatteryEdit, dropStockEdits, wantedBattery, sameBattery, BATTERY_BY_MACHINE_LS,
 } from '../../lib/configuratorBattery';
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
@@ -62,7 +63,7 @@ import {
   type DriveRecord, type DeviceLimits,
 } from '../../lib/configuratorDrive';
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
-import { resolveDraftTarget, modelState } from '../../lib/configuratorGuard';
+import { resolveDraftTarget, modelState, pickReference } from '../../lib/configuratorGuard';
 import MyAgentDraftsBlock from './MyAgentDraftsBlock';
 
 const tx = nsT('controller');   // every user-visible string (EN source, ZH mirror — docs/I18N.md)
@@ -314,9 +315,12 @@ const ConfiguratorPanel: React.FC = () => {
              + rel(p0.N0, Number(g.num_wires_per_slot))
              + rel(p0.wireH0_mm, Number(g.wire_height));
       };
-      const m = sameSection.length
-        ? sameSection.slice().sort((a, b) => dist(a) - dist(b))[0]
-        : undefined;
+      // Same build -> closest magnet / outer-radius geometry -> a card that IS a catalogue machine
+      // (a legacy duplicate of the geometry has no pack, controller or variants).
+      const geoDist = (r: ReferenceMotor) =>
+        Math.abs(Number(r.geo?.magnetHeight_mm) - Number(g.magnet_height) || 0)
+        + Math.abs(Number(r.geo?.statorOR_mm) - Number(g.stator_outer_radius) || 0);
+      const m = pickReference(sameSection, dist, geoDist);
       setLiveMatched(!!m);
       if (m) setRefId((cur) => (cur === m.id ? cur : m.id));
       // ── Open on the LOADED BUILD, not on the passport's base point ───────
@@ -579,6 +583,16 @@ const ConfiguratorPanel: React.FC = () => {
     () => batteryFromPack(basePreset?.battery) ?? batteryFromPack(ctx?.battery) ?? batteryFromPack(p.battery as never),
     [basePreset, ctx, p.battery]);
   const batterySeeded = React.useRef<string>('');
+  // One-time cleanup: an "edit" equal to the stock 100-cell default was never a user's choice
+  // (it shadowed the machine's own pack); drop it before anything reads it.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(BATTERY_BY_MACHINE_LS);
+      const clean = dropStockEdits(raw);
+      if (clean !== raw && clean != null) localStorage.setItem(BATTERY_BY_MACHINE_LS, clean);
+      localStorage.removeItem('configurator.battery.v1');      // the pre-presets global battery
+    } catch { /* ignore */ }
+  }, []);
   useEffect(() => {
     const edit = readBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId);
     const want = wantedBattery(edit, machinePack);
@@ -1072,10 +1086,11 @@ const ConfiguratorPanel: React.FC = () => {
           SAME machine as the header names. */}
       {!blocked && !loadingModel && (
       <>
-      <Box sx={{ display: 'flex', gap: 2, p: 2, flexWrap: 'wrap' }}>
-        {/* ── KNOBS + BATTERY, one column (owner 2026-10-05: sliders, battery and the motor's
+      <Box sx={{ display: 'grid', gap: 2, p: 2, alignItems: 'start',
+                 gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 560px), 1fr))' }}>
+        {/* ── KNOBS, then ONE ROW: battery | cross-section | side view (owner 2026-10-05: sliders, battery and the motor's
             voltage marker visible together) ── */}
-        <Box sx={{ flex: '1 1 360px', minWidth: 320, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
+        <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Box sx={{ ...PANEL, p: 2 }}>
           <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)', mb: 0.25 }}>{ref.name}</Typography>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>
@@ -1084,6 +1099,9 @@ const ConfiguratorPanel: React.FC = () => {
           </Typography>
 
           {/* i18n-guard:begin — every user-visible string below goes through tx() */}
+          {/* two columns when there is room (build | operating point + drive), one on a phone */}
+          <Box sx={{ display: 'grid', columnGap: 3, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 280px), 1fr))', alignItems: 'start' }}>
+          <Box sx={{ minWidth: 0 }}>
           {presets.length > 0 && (
             <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mb: 1.25, flexWrap: 'wrap' }}>
               <Typography sx={{ ...LABEL, flex: '1 1 120px', minWidth: 0 }} title={tx('configure.presetTip')}>
@@ -1159,7 +1177,9 @@ const ConfiguratorPanel: React.FC = () => {
             </ToggleButtonGroup>
           </Box>
 
-          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
+          </Box>
+          <Box sx={{ minWidth: 0 }}>
+          <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 0, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
           {/* rms is the knob; the PEAK rides beside it (user 2026-08-26) —
               inverters and datasheets are quoted in peak, the coil sees rms. */}
           <KnobSlider label={tx('configureLimits.phaseCurrent')} unit="A" value={knobs.I_A} base={p.I0_A}
@@ -1218,10 +1238,19 @@ const ConfiguratorPanel: React.FC = () => {
                   color: tuned ? '#60a5fa' : 'var(--text-3)', mt: 1 }}>
             {tx('configureLimits.resetToReference')}
           </Button>
+          </Box>
+          </Box>
           {/* i18n-guard:end */}
         </Box>
-        <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={updateBattery}
-          machinePack={machinePack} onReset={resetBattery} />
+        {/* battery | cross-section | side view: one row (they wrap on a narrow screen) */}
+        <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'stretch' }}>
+          <Box sx={{ flex: '1 1 300px', minWidth: 0 }}>
+            <BatteryPanel vDc={result.Vphase_peak_V * Math.sqrt(3)} bat={battery} onChange={updateBattery}
+              machinePack={machinePack} onReset={resetBattery}
+              stockNote={!batteryKnown} vDcTip={tx('configure.motorVTip', { I: fmt(knobs.I_A, 1), rpm: fmt(knobs.rpm, 0) })} />
+          </Box>
+          <GeometryProjections ref0={ref} knobs={knobs} />
+        </Box>
         </Box>
 
         {/* ── RESULT ── */}
@@ -1495,14 +1524,6 @@ const ConfiguratorPanel: React.FC = () => {
         )}
       </Box>
 
-      {/* ── GEOMETRY (left, compact) + BATTERY (right) — one row (user
-          2026-08-25: "geometry on the left, battery on the right, more compact"). ── */}
-      <Box sx={{ px: 2, pb: 1.5, display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        <Box sx={{ flex: '0 1 auto', minWidth: 340 }}>
-          <GeometryProjections ref0={ref} knobs={knobs} />
-        </Box>
-      </Box>
-
       {/* ── BOOST CHARGING — generators only, and only when the machine has a
           pack.  A motor's Configure tab is unchanged.  UNDER the geometry
           (user 2026-09-02): the cross-section must stay in view while the
@@ -1540,9 +1561,11 @@ const ConfiguratorPanel: React.FC = () => {
       </Box>
 
       {/* ── PERFORMANCE VS SPEED ── */}
-      <Box sx={{ px: 2, pb: 1.5 }}>
-        <PerformanceCharts p={p} knobs={scaleKnobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
-      </Box>
+      {SHOW_CONFIGURE_CHARTS && (
+        <Box sx={{ px: 2, pb: 1.5 }}>
+          <PerformanceCharts p={p} knobs={scaleKnobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
+        </Box>
+      )}
       </>
       )}
 

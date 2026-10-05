@@ -16,13 +16,13 @@ import type { Knobs } from '../../lib/motorScaling';
 import type { ReferenceMotor } from '../../lib/referencePassports';
 import { useMotorStore } from '../../stores/motorStore';
 import { nsT } from '../../i18n/nsT';
+import i18n from '../../i18n';
 
 const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const STEEL = '#3b4453', STEEL_DK = '#2a3142', SHAFT = '#5b6675', BG = 'var(--panel-2)';
 const LABEL ={ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
-const SUB = { fontSize: 10, color: 'var(--text-4)', mb: 0.5 } as const;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 1.5 } as const;
 
 type Comp = { vertices: number[][]; faces: number[][] };
@@ -188,28 +188,34 @@ const GeometryProjections: React.FC<{ ref0: ReferenceMotor; knobs: Knobs }> = ({
   const numSlots  = gnum('num_slots') ?? ref0.geo.numSlots;
   const numPoles  = gnum('num_poles') ?? ref0.geo.numPoles;
 
+  // The subtitle rides on the TITLE row in the title's own style (owner 2026-10-05: no small
+  // print); in Chinese its unit symbols keep their case (mm, not MM).
+  const unitCase = i18n.language?.startsWith('zh') ? { textTransform: 'none' as const } : undefined;
   return (
-    // Compact, left-aligned (user 2026-08-25: "let's move it left and make
-    // it more compact — battery on the right"): the parent row places the battery
-    // beside this block, so it must not claim the full viewport height.
-    <Box sx={{ display: 'flex', gap: 1.5, alignItems: 'stretch', justifyContent: 'flex-start', height: 'min(46vh, 420px)' }}>
-      {/* overflow hidden + contained canvases: the images must never bleed
-          into the neighbouring panel (user: "so they don't overlap"). */}
-      <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-        <Typography sx={LABEL}>{tx('configure.crossTitle')}</Typography>
-        <Typography sx={SUB}>{tx('configure.crossSub', { n: knobs.N, wire: knobs.wireH_mm.toFixed(1), slots: numSlots, poles: numPoles })}</Typography>
+    // Two panels as flex items of the parent row (battery | cross-section | side view), each
+    // tall enough to read; they wrap under the battery on a narrow screen.
+    <>
+      {/* overflow hidden + contained canvases: the images must never bleed into the
+          neighbouring panel (user: "so they don't overlap"). */}
+      <Box sx={{ ...PANEL, flex: '2 1 240px', height: 'min(44vh, 380px)', minHeight: 260, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+        <Typography sx={LABEL}>
+          {tx('configure.crossTitle')}
+          <Box component="span" sx={unitCase}>{' · '}{tx('configure.crossSub', { n: knobs.N, wire: knobs.wireH_mm.toFixed(1), slots: numSlots, poles: numPoles })}</Box>
+        </Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5 }}>
           <CrossSectionReal geoStr={geoStr} />
         </Box>
       </Box>
-      <Box sx={{ ...PANEL, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
-        <Typography sx={LABEL}>{tx('configure.sideTitle')}</Typography>
-        <Typography sx={SUB}>{tx('configure.sideSub', { L: L_mm.toFixed(0), od: OD_mm.toFixed(0) })}</Typography>
+      <Box sx={{ ...PANEL, flex: '1 1 200px', height: 'min(44vh, 380px)', minHeight: 260, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+        <Typography sx={LABEL}>
+          {tx('configure.sideTitle')}
+          <Box component="span" sx={unitCase}>{' · '}{tx('configure.sideSub', { L: L_mm.toFixed(0), od: OD_mm.toFixed(0) })}</Box>
+        </Typography>
         <Box sx={{ flex: 1, minHeight: 0, mt: 0.5, display: 'flex', justifyContent: 'center' }}>
           <SideView OD_mm={OD_mm} L_mm={L_mm} />
         </Box>
       </Box>
-    </Box>
+    </>
   );
 };
 

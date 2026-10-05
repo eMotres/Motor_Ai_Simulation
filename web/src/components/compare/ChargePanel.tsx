@@ -24,6 +24,7 @@ import {
 } from '../../lib/generatorCharge';
 import { nsT } from '../../i18n/nsT';
 
+import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1 } as const;
@@ -137,7 +138,7 @@ const ChargePanel: React.FC<{
           title={`${limWhy(lim)}. ${c.note_key ? tx(c.note_key, c.note_params) : ''}`} />
       </Box>
 
-      {chartData.length > 1 && (
+      {SHOW_CONFIGURE_CHARTS && chartData.length > 1 && (
         <Box>
           <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1 }}>
             <Typography sx={{ ...LABEL }}>{tx('configure.chargeMapTitle')}</Typography>

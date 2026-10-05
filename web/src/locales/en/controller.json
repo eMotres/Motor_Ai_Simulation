@@ -459,6 +459,8 @@
     "preset": "Preset",
     "presetModified": "modified from {config} preset",
     "presetTip": "Restore every knob to this real configuration of the motor: stack length, turns, wire, connection, current, speed, battery pack and drive.",
-    "saveTitle": "Save configuration"
+    "saveTitle": "Save configuration",
+    "packStock": "stock pack — none saved for this machine",
+    "motorVTip": "The DC bus this machine needs at {I} A, {rpm} rpm (line peak voltage)."
   }
 }

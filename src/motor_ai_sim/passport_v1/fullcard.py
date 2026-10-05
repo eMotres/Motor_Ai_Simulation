@@ -47,7 +47,9 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float) -> Dict[str, Any]:
                       "B1_mid_T": (s20.get("spill_profile") or {}).get("B1_mid_T")
                       or s20.get("B1_mid_T"),
                       "k_psi": s20.get("k_flux"), "picard_converged":
-                          ((s20.get("model") or {}).get("picard") or {}).get("converged"),
+                          ((s20.get("solves") or [{}])[0]).get("picard_converged"),
+                      "two_d_verdict": (s20.get("two_d") or {}).get("verdict"),
+                      "ratio_3d_mid_over_2d": (s20.get("two_d") or {}).get("ratio_3d_mid_over_2d"),
                       "source": "out/full/stage_a_L20.json (own cold run + 2-D leg)"})
     # (2) the stopped 7-point sweep: the 12 mm reference and the 6 mm leg (log)
     logp = full_dir / "stage_a_sweep_killed_log.txt"
@@ -306,7 +308,9 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any]) 
         vb = float(snap["battery"]["v_" + which])
         vl = PM.v_phase_limit(vb, float(lg["m"]))
         vl_eff = vl / (kpsi or 1.0)
-        nmax = hm.max_speed(R_hot, vl_eff, 0.02 * I_pk)
+        nmax = min(hm.max_speed(R_hot, vl_eff, I_pk),
+                   float(lg.get("n_mech_limit_rpm") or float("inf")),
+                   float(rec["mechanical"].get("limit_speed_sf1_rpm") or float("inf")))
         pts = []
         for n in np.linspace(max(0.05 * n0, 200.0), min(nmax, 4.0 * n0), 36):
             mt = hm.max_torque_at(float(n), R_hot, vl_eff, I_pk)
@@ -448,8 +452,10 @@ def machine_html(rec: Mapping[str, Any], M: str) -> str:
                        "P cont. @ rated rpm, fav. W", "weak W", "hot motor W",
                        "best P cont. W @ rpm", "basis"], rows, left_cols=2))
     o.append(f'<p class="note">Motor rated {rp["I_rms"]:.2f} A / {Hh.fmt(_v(rp["P_shaft_W"]))} W '
-             f'shaft at {rp["rpm"]:.0f} rpm. Controller ratings (Si, README): '
-             f'{Hh.esc(S3.RATINGS[CTRL[M]["build"]]["W"])} W. System limit = the lower.</p>')
+             f'shaft at {rp["rpm"]:.0f} rpm. Controller ratings (Si, controller README, '
+             f'm = 0.89): ' + " / ".join("%g" % x for x in S3.RATINGS[CTRL[M]["build"]]["W"].values())
+             + ' W (favourable / weak airflow / next to a hot motor). System limit = the '
+             'lower of motor and board.</p>')
     # charts
     o.append("<h2>Charts</h2><div class=\"charts\">")
     env = rec["envelope_card"]["curves"]
@@ -717,11 +723,18 @@ def compare_html(recs: Mapping[str, Mapping[str, Any]]) -> str:
             p = pr[0]
             inv = p["inverter_loss_W"]
             rows.append([M, v["id"], v["device"], p.get("motor_pwm_loss_W"),
-                         inv["cond"] + inv["sw"] + inv["dead"], p["tj_C"], p["eta_drive_pct"],
+                         inv["cond"] + inv["sw"] + inv["dead"],
+                         p["tj_C"] if p.get("continuous_ok") else "(110) not cont.",
+                         p["eta_drive_pct"],
                          v["i_board_limit_A"]["favourable"], p.get("p_cont_max_W"),
                          Hh.H(Hh.labels(v["provenance"]["labels"]))])
     o.append(Hh.table(["machine", "variant", "device", "motor PWM W", "inverter W", "T_j °C",
                        "η drive %", "board I A", "P cont. W", "labels"], rows, left_cols=3))
+    o.append('<p class="note">Rated duty point, nominal bus. The motor\'s rated current is above '
+             'the board\'s continuous limit for every device: "(110) not cont." = no steady state '
+             'on this board, inverter losses at the design T_j 110 °C. P cont. = shaft power at '
+             'the board-limit current (favourable airflow) at rated speed — the system limit. '
+             'GaN 100 kHz motor PWM loss = estimate from the 48 kHz FEM (no FEM at 100 kHz).</p>')
     ser = []
     for i, M in enumerate(Ms):
         e = recs[M]["envelope_card"]["curves"]["nom"]

@@ -296,6 +296,26 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
             continue
         fem = pwm_fem.get(v["fem_class"]) or {}
         f_sw, dead = float(v["carrier_hz"]), float(v["dead_time_s"])
+        if not fem and f_sw > 48e3 * 1.01:
+            # No FEM at this carrier (100 kHz: the 1 320-node slip ring did not
+            # finish meshing in 2 h, 2026-10-05).  Ripple current ∝ 1/f_sw; the
+            # ripple-driven loss falls between ∝ 1/f² (fixed resistance /
+            # hysteresis-like) and ∝ 1/f (AC resistance and eddy iron rising
+            # with f): the card takes the geometric middle (48k/f)^1.5 of the
+            # 48 kHz FEM anchor of the same technology and states the range.
+            base_cls = next((c for c in ("gan48_20ns", "si48_100ns") if pwm_fem.get(c)), None)
+            if base_cls:
+                s = (48e3 / f_sw) ** 1.5
+                lo, hi = (48e3 / f_sw) ** 2, (48e3 / f_sw)
+                fem = {}
+                for row, a in pwm_fem[base_cls].items():
+                    b = dict(a)
+                    b["dP_harm_W"] = float(a["dP_harm_W"]) * s
+                    b["derived"] = ("ESTIMATE, not FEM: %s FEM anchor %.2f W × (48 kHz/%.0f kHz)^1.5 "
+                                    "= %.3f (range ×%.3f…×%.3f → %.2f…%.2f W)" % (
+                                        base_cls, float(a["dP_harm_W"]), f_sw / 1e3, s, lo, hi,
+                                        float(a["dP_harm_W"]) * lo, float(a["dP_harm_W"]) * hi))
+                    fem[row] = b
         I_lim = {cls: board.i_limit(card, drv, f_sw=f_sw, dead_s=dead, v_dc=v_dc, cls=cls)
                  for cls in board.classes}
         points: Dict[str, Any] = {}
@@ -329,12 +349,16 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                 if abs(a_n - p["rpm"]) < 1e-6 and cross:
                     dP, how = float(anchor["dP_harm_W"]), cross
                     cov["scaled"].append(p["key"])
+                elif abs(a_n - p["rpm"]) < 1e-6 and anchor.get("derived"):
+                    dP, how = float(anchor["dP_harm_W"]), anchor["derived"]
+                    cov["scaled"].append(p["key"])
                 elif abs(a_n - p["rpm"]) < 1e-6:
                     dP, how = float(anchor["dP_harm_W"]), "FEM"
                     cov["fem"].append(p["key"])
                 else:
                     dP = float(anchor["dP_harm_W"]) * hdf_svpwm(m_p) / max(hdf_svpwm(m_a), 1e-12)
                     how = (("%s; " % cross) if cross else "") + \
+                        (("%s; " % anchor["derived"]) if anchor.get("derived") else "") + \
                         "FEM anchor at %.0f rpm × HDF(m %.3f)/HDF(m %.3f)" % (a_n, m_p, m_a)
                     cov["scaled"].append(p["key"])
             st = board.state(card, drv, I_rms=p["I_A"], f_sw=f_sw, dead_s=dead, v_dc=v_dc)
@@ -391,7 +415,11 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                            "ratings) — see controller.board",
                 "motor_sine": "passport loss trajectory (m = %g) + analytic mech" % m_max,
                 "labels": ["2-D", "PWM", "default pending owner"] + (
-                    ["GaN dead time 20 ns: default pending owner"] if drv["tech"] == "GaN" else []),
+                    ["GaN dead time 20 ns: default pending owner"] if drv["tech"] == "GaN" else []) + (
+                    ["motor PWM loss: ESTIMATE from the 48 kHz FEM (no FEM at this carrier)"]
+                    if any((a or {}).get("derived") for a in fem.values()) else []) + (
+                    ["GaN switching: datasheet model (no public SPICE model)"]
+                    if drv["tech"] == "GaN" else ["Si switching: vendor SPICE table"]),
             },
             "i_board_limit_A": I_lim,
             "coverage": {"points": len(points), "fem_points": cov["fem"],

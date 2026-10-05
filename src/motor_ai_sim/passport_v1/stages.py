@@ -364,6 +364,59 @@ def stage_cold(R, snap, st) -> None:
     print("  cold MTPA:", [(c["fI"], c["gamma_mtpa"], c["T_fem_vertex"]) for c in cold])
 
 
+#: Small-signal (bench / LCR-equivalent) probe current [A rms] — the same
+#: 2 A the solver's bench Ld/Lq probe uses (routes.simulation bench_ldq).
+SMALL_SIGNAL_A = 2.0
+
+
+def stage_extra(R, snap, st) -> None:
+    """Small-signal differential Ld / Lq at I ≈ 0, hot and cold (spec 8.7
+    "bench small-signal at I≈0", P20): symmetric ±d and ±q pairs at 2 A, so
+    L = Δpsi/Δi with psi_PM cancelled.  Added after the L12 pilot showed the
+    solver's frozen-permeability ``inc_ldq`` (secant ν) at ~2× the map's
+    true differential — it is not the bench value."""
+    b = _base(snap, st)
+    I0, n0 = _I0(snap), _n0(snap)
+    Tm, Tc = _hot(snap)
+    T20 = float(snap["temperatures"]["cold_c"])
+    jl = []
+    for tag, mt, ct in (("hot", Tm, Tc), ("cold", T20, T20)):
+        for g in (0.0, 180.0, 90.0, -90.0):
+            jl.append(J.static_job("%s_ss_g%s" % (tag, _g(g)), b, I_rms=SMALL_SIGNAL_A,
+                                   gamma_deg=g, magnet_temp_c=mt, coil_temp_c=ct, rpm=n0,
+                                   meta={"set": tag + "_ss", "fI": SMALL_SIGNAL_A / I0,
+                                         "gamma": g,
+                                         "role": "small-signal ±d/±q pair (bench equivalent)"}))
+    # k_state decomposition at the rated trajectory point: the same settled
+    # TDM run with the demag model OFF isolates the demag share of
+    # (operating torque / virgin map); the remainder is the coupled eddy /
+    # rotor-reaction share.
+    lp = st["loss_plan"]
+    rp = [p for p in lp["points"] if p.get("id") and abs(p["rpm"] - n0) < 1e-6
+          and abs(p["I"] - I0) < 1e-6][0]
+    jl.append(J.loss_job("xs_rated_nodemag", _base(snap, st, static=False), I_rms=I0,
+                         gamma_deg=round(rp["gamma"], 3), rpm=n0, magnet_temp_c=Tm,
+                         coil_temp_c=Tc, steps=int(snap["rated_duty"]["steps_per_period"]),
+                         demag=False,
+                         meta={"set": "state_split", "rpm": n0, "I": I0,
+                               "gamma": round(rp["gamma"], 3),
+                               "role": "rated trajectory point, demag OFF (k_state split)"}))
+    out = R.run(jl)
+    ss = {}
+    for tag in ("hot", "cold"):
+        q1, q2 = out["%s_ss_g+0" % tag]["r"], out["%s_ss_g+180" % tag]["r"]
+        d1, d2 = out["%s_ss_g+90" % tag]["r"], out["%s_ss_g-90" % tag]["r"]
+        ss[tag] = {
+            "Ld_H": (d1["psi_d_Wb"] - d2["psi_d_Wb"]) / (d1["i_d_A"] - d2["i_d_A"]),
+            "Lq_H": (q1["psi_q_Wb"] - q2["psi_q_Wb"]) / (q1["i_q_A"] - q2["i_q_A"]),
+            "I_rms": SMALL_SIGNAL_A,
+            "method": "symmetric ±2 A pairs on the d and q axes, Δpsi/Δi (true small-"
+                      "signal differential at I ≈ 0; bench/LCR equivalent)",
+            "runs": [j["id"] for j in jl if j["id"].startswith(tag)]}
+    st["small_signal"] = ss
+    print("  small-signal:", {k: (1e6 * v["Ld_H"], 1e6 * v["Lq_H"]) for k, v in ss.items()})
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  loss trajectory (spec §4) + mechanical losses (§5.6)
 # ─────────────────────────────────────────────────────────────────────────────

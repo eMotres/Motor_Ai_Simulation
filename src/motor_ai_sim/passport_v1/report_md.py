@@ -116,6 +116,11 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
     row("rated torque, map (hot, virgin)", "N·m",
         lambda r: f(_v(r["card"]["rated_point"], "T_map_virgin_Nm")),
         "static ψ-map, same (I0, γ)")
+    row("rated k_state = demag × rest", "-",
+        lambda r: (lambda s: "%s = %s × %s" % (f(s["k_state"], 5), f(s["demag_share"], 5),
+                                               f(s["eddy_and_sampling_share"], 5))
+                   if s else "—")(r["card"]["rated_point"].get("k_state_split")),
+        "operating / map; demag-off TDM run splits it")
     row("rated γ / mode", "°",
         lambda r: "%s / %s" % (f(r["card"]["rated_point"]["gamma_op"], 3),
                                r["card"]["rated_point"]["gamma_mode"]), "v_nom, m = 0.95")
@@ -130,8 +135,15 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
     row("peak current", "A rms", lambda r: f(r["card"]["peak_point"]["I_rms"]),
         "owner duty (L12) / assumption (L20)")
     row("peak speed", "rpm", lambda r: f(r["card"]["peak_point"]["rpm"]), "")
-    row("peak torque (hot map)", "N·m",
+    row("peak γ / mode", "°",
+        lambda r: "%s / %s" % (f(r["card"]["peak_point"]["gamma_op"], 3),
+                               r["card"]["peak_point"]["gamma_mode"]), "v_nom, m = 0.95")
+    row("peak torque, map (hot, virgin)", "N·m",
         lambda r: f(_v(r["card"]["peak_point"], "T_map_virgin_Nm")), "map at operating γ")
+    row("peak torque, operating (hot)", "N·m",
+        lambda r: "%s (k_state %s)" % (f(_v(r["card"]["peak_point"], "T_operating_Nm")),
+                                        f(_v(r["card"]["peak_point"], "k_state"), 5)),
+        "map × loss-trajectory state factor")
     row("peak η at the shaft", "%",
         lambda r: f(100 * _v(r["card"]["peak_point"], "eta_shaft")),
         "map T + interpolated losses")
@@ -152,10 +164,17 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
         lambda r: "%s / %s" % (f(1e3 * _v(r["card"]["constants_cold"], "R_phase_ohm")),
                                f(1e3 * _v(r["card"]["constants_hot"], "R_phase_ohm"))),
         "incl. end windings (k_end)")
-    row("Ld / Lq bench (cold, 2 A)", "µH",
-        lambda r: "%s / %s" % (f(1e3 * _v(r["card"]["constants_cold"], "Ld_bench_mH")),
-                               f(1e3 * _v(r["card"]["constants_cold"], "Lq_bench_mH"))),
-        "frozen-permeability incremental")
+    row("Ld / Lq bench small-signal cold / hot", "µH",
+        lambda r: "%s / %s ; %s / %s" % (
+            f(1e3 * _v(r["card"]["constants_cold"], "Ld_bench_mH")),
+            f(1e3 * _v(r["card"]["constants_cold"], "Lq_bench_mH")),
+            f(1e3 * _v(r["card"]["constants_hot"], "Ld_small_signal_mH")),
+            f(1e3 * _v(r["card"]["constants_hot"], "Lq_small_signal_mH"))),
+        "±2 A pairs, Δψ/Δi (differential)")
+    row("Ld / Lq solver inc_ldq at 2 A (cold)", "µH",
+        lambda r: "%s / %s" % (f(1e3 * _v(r["card"]["constants_cold"], "Ld_frozen_2A_mH")),
+                               f(1e3 * _v(r["card"]["constants_cold"], "Lq_frozen_2A_mH"))),
+        "frozen secant ν — not the bench value")
     row("Ld / Lq differential (hot I0)", "µH",
         lambda r: "%s / %s" % (f(1e3 * _v(r["card"]["constants_hot"], "Ld_differential_rated_mH")),
                                f(1e3 * _v(r["card"]["constants_hot"], "Lq_differential_rated_mH"))),
@@ -190,6 +209,49 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
     a("Hot = rated-duty magnet / winding temperature; cold = 20 °C. Map torque = virgin "
       "magnets; operating torque = demag steady state + rotor eddy reaction.")
     a("")
+    # ── hot map ───────────────────────────────────────────────────────────
+    a("## Hot ψ-map: MTPA line (FEM-confirmed vertices)")
+    a("")
+    for M in Ms:
+        hm_ = recs[M]["hot_map"]
+        rows = [[f(m["fI"], 3), f(m["I"]), f(m["gamma_mtpa"], 3), f(m["T_fem_vertex"], 6),
+                 pct(m["vertex_vs_parabola_pct"], 4)] for m in hm_["mtpa"]]
+        a("**%s** — %d map points; dq identity ≤ %s %%; window 60° el, 24 positions"
+          % (M, len(hm_["points"]), f(hm_["dq_identity_check_max_pct"], 2)))
+        a("")
+        a(table(["I/I0", "I A", "γ_MTPA °", "T N·m", "vertex vs parabola"], rows))
+        a("")
+    # ── loss trajectory ──────────────────────────────────────────────────
+    a("## Loss trajectory (hot, settled TDM + demag, v_nom, m = 0.95)")
+    a("")
+    for M in Ms:
+        rows = []
+        for g in recs[M]["loss_grid"]["points"]:
+            p = g["plan"]
+            if "status" in g:
+                rows.append([f(p["rpm"], 5), f(p["I"]), "—", "—", "—", "—", "—", "—", "—",
+                             "—", "infeasible"])
+                continue
+            gw = g["groups_W"]
+            rows.append([f(p["rpm"], 5), f(p["I"]), f(g["gamma"], 3), f(g["T_Nm"]),
+                         f(g.get("k_state"), 5),
+                         f((gw.get("P_cu_dc_W") or 0) + (gw.get("P_cu_ac_W") or 0)),
+                         f((gw.get("P_fe_stator_W") or 0) + (gw.get("P_fe_rotor_W") or 0)),
+                         f((gw.get("P_mag_W") or 0) + (gw.get("P_shaft_W") or 0)),
+                         f(g["P_loss_em_W"]), f(100 * (g["efficiency"]["eta_shaft"] or 0)),
+                         "%s %%Br%s" % (f(g["demag"]["br_kept_vol_pct"], 5),
+                                        "" if g["settle"]["steady_state"] else ", NOT steady")])
+        lp = recs[M]["loss_grid"]["plan"]
+        a("**%s** — n_max %s rpm (%s); I_peak %s A (%s)" % (
+            M, f(lp["n_max_rpm"], 5),
+            "electrical, v_nom" if lp["n_elec_limit_rpm"] <= lp["n_mech_limit_rpm"]
+            else "bearing", f(lp["I_peak_rms"]), lp["I_peak_source"]))
+        a("")
+        a(table(["n rpm", "I A", "γ °", "T N·m", "k_state", "Cu W", "iron W", "magnet+shaft W",
+                 "total W", "η shaft %", "demag"], rows))
+        a("")
+    a("k_state = settled operating torque / virgin static map at the same (I, γ).")
+    a("")
     # ── checks ────────────────────────────────────────────────────────────
     a("## Off-grid checks — static map (interpolated vs direct FEM)")
     a("")
@@ -218,15 +280,26 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
             if "P_fem_W" not in c:
                 rows.append([c["id"], "—", "—", "—", "—", c.get("status", "")])
                 continue
+            if c.get("refused"):
+                verdict = "refused (outside the trajectory domain)"
+            else:
+                verdict = ok(c.get("pass"))
+            err = pct(c.get("err_total_pct"))
+            if c.get("err_total_coil_corrected_pct") is not None:
+                err += " → %s Cu-T corr." % pct(c["err_total_coil_corrected_pct"])
             rows.append([c["id"], "%s rpm, %s A, %s°" % (f(c["rpm"], 5), f(c["I"]),
                                                          f(c["gamma_fem"], 3)),
-                         f(c["P_fem_W"]), f(c.get("P_int_W")),
-                         pct(c.get("err_total_pct")),
-                         ok(c.get("pass")) if c.get("P_int_W") else "; ".join(c["notes"])[:60]])
+                         f(c["P_fem_W"]), f(c.get("P_int_W")), err, verdict])
         a("**%s** — target total loss ≤ 5 %%" % M)
         a("")
         a(table(["point", "n, I, γ (FEM)", "FEM W", "passport W", "error", "verdict"], rows))
         a("")
+        notes = [c["id"] + ": " + c["temperature_note"] for c in recs[M]["checks"]["loss_offgrid"]
+                 if c.get("temperature_note")]
+        for n_ in notes:
+            a("- " + n_)
+        if notes:
+            a("")
     a("Audit / duty rows sit at γ = 10° (off the MTPA trajectory): their error includes "
       "the trajectory-reuse limit (spec P10).")
     a("")
@@ -289,8 +362,10 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
         dm = recs[M].get("demag") or {}
         for k, p in (dm.get("probes") or {}).items():
             d = p.get("demag") or {}
+            st_ = ("pass (T≈0, §1 floor)" if p.get("settled_under_floor")
+                   else ok(p.get("settled")))
             rows.append([M, k, f(p["fI"], 3), f(p["gamma"], 3), f(d.get("br_kept_vol_pct"), 5),
-                         f(d.get("per_magnet_spread_pct"), 3), ok(p.get("settled"))])
+                         f(d.get("per_magnet_spread_pct"), 3), st_])
     a(table(["", "probe", "I/I0", "γ", "Br kept %", "per-magnet spread %", "steady"], rows))
     a("")
     for M in Ms:

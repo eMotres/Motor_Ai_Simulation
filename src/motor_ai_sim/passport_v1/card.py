@@ -181,8 +181,21 @@ def loss_point_block(recs, jid, mech: Mapping[str, Any]) -> Dict[str, Any]:
     }
 
 
-def loss_check_rows(recs, st, R_hot: float, mech_of) -> List[Dict[str, Any]]:
+def _cu_alpha(snap) -> float:
+    c = ((snap.get("material_cards") or {}).get("copper") or {}).get("card") or {}
+    return float(c.get("thermal_alpha") or 0.0043)
+
+
+def loss_check_rows(recs, st, R_hot: float, snap) -> List[Dict[str, Any]]:
+    """Trajectory interpolation vs direct FEM.  A check solved at another
+    winding temperature (a saved duty) is also compared after the analytic
+    copper correction R(T) = R20·(1 + α(T − 20)) (spec 8.4): DC copper ×k,
+    resistance-limited AC copper ×1/k; the magnet temperature is not
+    corrected (stated)."""
     rows_grid = loss_rows(recs, st)
+    Tc_hot = float(snap["temperatures"]["hot_coil_c"])
+    Tm_hot = snap["temperatures"]["hot_magnet_c"]
+    alpha = _cu_alpha(snap)
     out = []
     plan = list(st["checks_plan"]["loss"])
     for jid in [k for k in recs if k.startswith(("audit_", "duty_"))] + ["lchk_rated_72steps"]:
@@ -203,9 +216,29 @@ def loss_check_rows(recs, st, R_hot: float, mech_of) -> List[Dict[str, Any]]:
                "groups_fem": {g: r.get(g) for g in ("P_cu_dc_W",) + LS.GROUPS},
                "groups_int": it["groups"], "notes": it["notes"],
                "T_fem": r.get("T_avg_Nm")}
+        kw = recs[p["id"]]["kw"]
+        Tc = float(kw.get("coil_temp_c") or Tc_hot)
+        Tm = kw.get("magnet_temp_c")
+        row["coil_temp_c"], row["magnet_temp_c"] = Tc, Tm
         if it.get("P_total_W"):
             row["err_total_pct"] = _pct(float(it["P_total_W"]), P_fem)
             row["pass"] = bool(abs(row["err_total_pct"]) <= TOL_LOSS_PCT)
+            if abs(Tc - Tc_hot) > 0.5:
+                k = (1 + alpha * (Tc - 20.0)) / (1 + alpha * (Tc_hot - 20.0))
+                g = dict(it["groups"])
+                corr = (float(it["P_total_W"]) + g["P_cu_dc_W"] * (k - 1.0)
+                        + float(g["P_cu_ac_W"] or 0.0) * (1.0 / k - 1.0))
+                row["P_int_coil_corrected_W"] = corr
+                row["err_total_coil_corrected_pct"] = _pct(corr, P_fem)
+                row["pass"] = bool(abs(row["err_total_coil_corrected_pct"]) <= TOL_LOSS_PCT)
+                row["temperature_note"] = (
+                    "FEM at coil %.1f °C / magnet %s vs passport hot coil %.1f °C / magnet "
+                    "%s: copper corrected analytically (k_R = %.4f), magnet temperature not "
+                    "corrected" % (Tc, "card" if Tm is None else "%.1f °C" % Tm, Tc_hot,
+                                   "%.1f °C" % Tm_hot, k))
+        else:
+            row["refused"] = True
+            row["pass"] = None
         out.append(row)
     return out
 
@@ -248,6 +281,7 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     T_c025 = float(_r(recs, c025["conf_id"])["T_avg_Nm"])
     small = _r(recs, "cold_probe2A")
     inc_small = small.get("inc_ldq") or {}
+    ss = st.get("small_signal") or {}
     Ld_chord_c = ((float(rc1["psi_d_Wb"]) - psi_pm_c) / float(rc1["i_d_A"])
                   if abs(float(rc1["i_d_A"])) > 0.1 * math.hypot(float(rc1["i_d_A"]),
                                                                   float(rc1["i_q_A"]))
@@ -316,9 +350,29 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     grid = []
     for p in lp["points"]:
         if p.get("id") and p["id"] in recs:
-            grid.append({"plan": p, **loss_point_block(recs, p["id"], mech_of(p["rpm"]))})
+            blk = loss_point_block(recs, p["id"], mech_of(p["rpm"]))
+            # OPERATING-STATE torque factor: the settled loss-point torque
+            # (demag steady state + rotor eddy reaction, TDM) over the virgin
+            # static map at the same (I, gamma) — what a map reader must apply
+            # to quote operating torque (not decomposed in stage 1).
+            Tm_ = hm.at_Ig(blk["I_rms"], blk["gamma"])["T"]
+            blk["T_map_virgin_Nm"] = Tm_
+            blk["k_state"] = float(blk["T_Nm"]) / Tm_ if Tm_ else None
+            grid.append({"plan": p, **blk})
         else:
             grid.append({"plan": p, "status": "infeasible: " + str(p.get("mode"))})
+
+    def k_state_at(n, I):
+        """k_state on the current row nearest I (rows are the grid currents),
+        linear in n between the row's points, held at the row ends."""
+        pts = [g for g in grid if g.get("k_state") is not None]
+        if not pts:
+            return None
+        Irow = min({g["I_rms"] for g in pts}, key=lambda x: abs(x - I))
+        row = sorted((g["rpm"], g["k_state"]) for g in pts if abs(g["I_rms"] - Irow) < 1e-9)
+        ns = [r[0] for r in row]
+        ks = [r[1] for r in row]
+        return float(np.interp(n, ns, ks))
     # ── card values ───────────────────────────────────────────────────────
     rated_id = [p["id"] for p in lp["points"]
                 if p.get("id") and abs(p["rpm"] - n0) < 1e-6 and abs(p["I"] - I0) < 1e-6]
@@ -332,7 +386,8 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     rows_grid = loss_rows(recs, st)
     pk_loss = LS.interp_loss(n_pk, I_pk, rows_grid, R_hot)
     mech_pk = mech_of(n_pk)
-    T_pk_for_eta = T_pk_map
+    k_pk = k_state_at(n_pk, I_pk)
+    T_pk_for_eta = (T_pk_map * k_pk) if (T_pk_map is not None and k_pk) else None
     eff_pk = (LS.efficiency_shaft(T_pk_for_eta, n_pk, pk_loss["P_total_W"],
                                   float(mech_pk.get("P_W") or 0.0))
               if (T_pk_for_eta is not None and pk_loss.get("P_total_W")) else None)
@@ -367,20 +422,34 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                              "SKF bearings + Couette/face windage, analytic", [], labels_hot),
             "eta_shaft": _val(rated_blk and rated_blk["efficiency"]["eta_shaft"], "-",
                               "one efficiency, at the shaft", rated_id, labels_hot),
+            "k_state_split": (None if ("xs_rated_nodemag" not in recs or not rated_blk) else {
+                "k_state": float(rated_blk["T_Nm"]) / float(T_rated_map_op),
+                "eddy_and_sampling_share": float(recs["xs_rated_nodemag"]["r"]["T_avg_Nm"])
+                / float(T_rated_map_op),
+                "demag_share": float(rated_blk["T_Nm"])
+                / float(recs["xs_rated_nodemag"]["r"]["T_avg_Nm"]),
+                "runs": rated_id + ["xs_rated_nodemag"],
+                "method": "same settled TDM point with demag OFF: demag share = "
+                          "T(demag)/T(no demag); the rest (coupled eddy reaction, 36-step "
+                          "sampling, duty gap layers) = T(no demag)/T_map"}),
         },
         "peak_point": {
             "rpm": n_pk, "I_rms": I_pk, "I_source": lp["I_peak_source"],
             "gamma_op": g_pk, "gamma_mode": how_pk,
             "T_map_virgin_Nm": _val(T_pk_map, "N·m", "hot psi-map interpolation", [],
                                     labels_hot),
+            "k_state": _val(k_pk, "-", "operating/virgin torque factor of the loss "
+                            "trajectory, nearest current row, linear in n", [], labels_hot),
+            "T_operating_Nm": _val(T_pk_for_eta, "N·m", "map torque × k_state", [],
+                                   labels_hot),
             "P_loss_em_W": _val(pk_loss.get("P_total_W"), "W",
                                 "loss-trajectory interpolation (per-group n^k, linear in I)",
                                 [], labels_hot, notes=pk_loss.get("notes")),
             "P_mech_W": _val(mech_pk.get("P_W"), "W", "analytic", [], labels_hot),
-            "P_shaft_W": _val(eff_pk and eff_pk["P_shaft_W"], "W", "T_map·w − P_mech", [],
+            "P_shaft_W": _val(eff_pk and eff_pk["P_shaft_W"], "W", "T_operating·w − P_mech", [],
                               labels_hot),
             "eta_shaft": _val(eff_pk and eff_pk["eta_shaft"], "-",
-                              "map torque + interpolated losses", [], labels_hot),
+                              "operating torque + interpolated losses", [], labels_hot),
         },
         "constants_cold": {
             "psi_PM_Wb": _val(psi_pm_c, "Wb phase peak", "cold no-load psi_d (fundamental frame)",
@@ -399,12 +468,18 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                                 ["cold_noload"], labels_cold),
             "R_line_line_ohm": _val(2.0 * R20, "Ω", "2·R_phase (star)", ["cold_noload"],
                                     labels_cold),
-            "Ld_bench_mH": _val(inc_small.get("Ld_mH"), "mH",
-                                "frozen-permeability incremental at I = 2 A (bench/LCR equiv.)",
-                                ["cold_probe2A"], labels_cold),
-            "Lq_bench_mH": _val(inc_small.get("Lq_mH"), "mH",
-                                "frozen-permeability incremental at I = 2 A (bench/LCR equiv.)",
-                                ["cold_probe2A"], labels_cold),
+            "Ld_bench_mH": _val(ss.get("cold") and 1e3 * ss["cold"]["Ld_H"], "mH",
+                                (ss.get("cold") or {}).get("method", "not measured"),
+                                (ss.get("cold") or {}).get("runs", []), labels_cold),
+            "Lq_bench_mH": _val(ss.get("cold") and 1e3 * ss["cold"]["Lq_H"], "mH",
+                                (ss.get("cold") or {}).get("method", "not measured"),
+                                (ss.get("cold") or {}).get("runs", []), labels_cold),
+            "Ld_frozen_2A_mH": _val(inc_small.get("Ld_mH"), "mH",
+                                    "solver inc_ldq: frozen-permeability (secant ν) at 2 A — "
+                                    "NOT the differential (P20)", ["cold_probe2A"], labels_cold),
+            "Lq_frozen_2A_mH": _val(inc_small.get("Lq_mH"), "mH",
+                                    "solver inc_ldq at 2 A (frozen secant ν)", ["cold_probe2A"],
+                                    labels_cold),
             "Ld_chord_rated_mH": _val(None if Ld_chord_c is None else 1e3 * Ld_chord_c, "mH",
                                       "(psi_d − psi_PM)/i_d at the cold rated MTPA vertex "
                                       "(withheld when |i_d| < 10 % of |i|)",
@@ -444,6 +519,12 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                                           rated_id, labels_hot),
             "R_phase_ohm": _val(R_hot, "Ω", "solver R_phase at the hot winding temperature",
                                 [m1["conf_id"]], labels_hot),
+            "Ld_small_signal_mH": _val(ss.get("hot") and 1e3 * ss["hot"]["Ld_H"], "mH",
+                                       (ss.get("hot") or {}).get("method", "not measured"),
+                                       (ss.get("hot") or {}).get("runs", []), labels_hot),
+            "Lq_small_signal_mH": _val(ss.get("hot") and 1e3 * ss["hot"]["Lq_H"], "mH",
+                                       (ss.get("hot") or {}).get("method", "not measured"),
+                                       (ss.get("hot") or {}).get("runs", []), labels_hot),
             "Ld_incremental_rated_mH": _val(inc_h.get("Ld_mH"), "mH",
                                             "frozen-permeability incremental at the hot rated "
                                             "vertex (NOT the true differential, P20)",
@@ -472,7 +553,7 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     }
     # ── checks ────────────────────────────────────────────────────────────
     chk_static = static_check_rows(recs, st, hm, I0)
-    chk_loss = loss_check_rows(recs, st, R_hot, mech_of)
+    chk_loss = loss_check_rows(recs, st, R_hot, snap)
     indep = {}
     for jid, ref in (("full_rated_mtpa", m1["conf_id"]), ("full_peak", "chk_peak")):
         if jid in recs and ref in recs:
@@ -531,6 +612,21 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                                     "gamma_mtpa_passport": g_p,
                                     "T_passport": hm.at_Ig(I, g_p)["T"],
                                     "T_pct": _pct(hm.at_Ig(I, g_p)["T"], T_a)})
+    demag = dict(st.get("demag_knee") or {})
+    probes = {}
+    for k, p in (demag.get("probes") or {}).items():
+        p = dict(p)
+        r = recs.get(k, {}).get("r", {})
+        p["T_Nm"] = r.get("T_avg_Nm")
+        p["steady_note"] = r.get("steady_state_note")
+        if (p.get("settled") is False and r.get("T_avg_Nm") is not None
+                and abs(float(r["T_avg_Nm"])) < 0.01 * T_rated_map):
+            p["settled_under_floor"] = True
+            p["floor_note"] = ("magnets settled; the solver's RELATIVE torque-drift test is "
+                               "degenerate at T ≈ 0 (%.4g N·m) — settled under the spec §1 "
+                               "absolute floor (0.05 %% of rated torque)" % float(r["T_avg_Nm"]))
+        probes[k] = p
+    demag["probes"] = probes
     failed = recs.pop("__failed__")["list"]
     total_wall = sum(float(v.get("wall_s") or 0.0) for v in recs.values())
     rec = {
@@ -580,7 +676,7 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                                            "voltage-limit / FW boundary factor (P21)"}
                                for k in recs
                                if str(recs[k]["meta"].get("role", "")).startswith("cold fw")}},
-        "demag": st.get("demag_knee"),
+        "demag": demag,
         "envelope": env,
         "loss_grid": {"plan": {k: v for k, v in lp.items() if k != "points"},
                       "points": grid,

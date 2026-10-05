@@ -47,7 +47,8 @@ _MACHINE = {"config", "rated_duty", "peak_duty", "version", "owner_bus_V", "owne
             "owner_peak", "peak_rule", "hot_override", "controller", "pwm_variants",
             "not_computed_variants", "stage_a_lengths_mm", "mech", "cooling_studies",
             "audit", "k3d", "propellers", "notes"}
-_PLAN = {"loss_speed_factors", "envelope_max_factor", "refine_points", "loss_steps_per_period", "m_margin"}
+_PLAN = {"loss_speed_factors", "envelope_max_factor", "refine_points", "loss_steps_per_period", "m_margin",
+         "loss_floor_levels"}
 
 
 class SpecError(ValueError):

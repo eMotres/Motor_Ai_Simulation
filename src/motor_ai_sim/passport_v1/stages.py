@@ -674,8 +674,12 @@ def stage_loss3(R, snap, st) -> None:
     vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), m)
     I_pk = float(lp2["I_peak_rms"])
     I_lim = float(st.get("demag_limit_I_rms") or LEVELS[-1] * I0)
+    # + the spec's floor levels (Ø85: 0.25·I0): Configure reads the variant grid down to
+    # them even where the demag limit sits below (those rows are then labelled by it)
+    floor = [float(f) for f in ((snap.get("plan") or {}).get("loss_floor_levels") or [])]
     currents = sorted({round(f * I0, 6) for f in LEVELS if f * I0 <= I_lim * (1 + 1e-9)}
-                      | {round(c, 6) for c in lp2["currents"]})
+                      | {round(c, 6) for c in lp2["currents"]}
+                      | {round(f * I0, 6) for f in floor})
     pk = snap.get("peak_duty")
     # + the peak duty's own speed: every node of the drive-variant grid is then
     # a settled FEM loss point (no speed extrapolation of a current row)

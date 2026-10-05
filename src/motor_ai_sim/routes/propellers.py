@@ -4,6 +4,7 @@
     GET /api/propellers/cooling-options       what a die/config may offer for cooling
     GET /api/propellers/{id}                  one prop: published data, fits, curves
     GET /api/propellers/{id}/point            thrust / torque / power / cooling air at an rpm
+    GET /api/propellers/{id}/series           the same on an rpm grid (+ housing film h): Configure's hook
 
 SOLVER ISOLATION: nothing here solves a field or writes anything.  The catalogue
 is read from ``config/propellers/`` (and ``<shared>/propellers/`` on the server)
@@ -102,6 +103,43 @@ def get_one(prop_id: str,
     requested air density (default ISA sea level)."""
     prop = _get(prop_id)
     return pp.detail(prop, rho=_rho(temp_c, altitude_m, pressure_pa))
+
+
+@router.get("/{prop_id}/series")
+def get_series(prop_id: str,
+               rpm_max: Optional[float] = Query(default=None, gt=0.0, le=60000.0,
+                                                description="top of the rpm grid; default 1.5 x the tested maximum"),
+               n: int = Query(default=61, ge=3, le=400),
+               temp_c: Optional[float] = Query(default=None, description="air temperature [°C]; default ISA"),
+               altitude_m: float = Query(default=0.0),
+               pressure_pa: Optional[float] = Query(default=None),
+               position: Optional[str] = Query(default=None),
+               factor: Optional[float] = Query(default=None, gt=0.0, le=1.5),
+               housing_d_mm: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
+                                                     description="housing diameter: adds the film coefficient per sample")
+               ) -> Dict[str, Any]:
+    """The whole propeller answer on an rpm grid (one request instead of one per rpm):
+    thrust, torque, shaft power, cooling air speed, ``extrapolated`` per sample and,
+    with ``housing_d_mm``, the housing film coefficient ``h_W_m2K`` of every sample
+    (``cooling_models.outer_air``).  Configure interpolates in it for the propeller load
+    and for the thermal zones on its knobs."""
+    prop = _get(prop_id)
+    rho = _rho(temp_c, altitude_m, pressure_pa)
+    try:
+        out = pp.series(prop, rho, rpm_max=rpm_max, n=n, position=position, factor=factor)
+    except pp.PropellerDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    t_amb = 25.0 if temp_c is None else float(temp_c)
+    out["t_ambient_c"] = t_amb
+    if housing_d_mm is not None:
+        from motor_ai_sim.simulation import cooling_models as cm
+        d = float(housing_d_mm) / 1000.0
+        out["h_W_m2K"] = [cm.outer_air(air_speed_mps=v, t_ambient_c=t_amb, d_housing_m=d)["h_conv"]
+                          for v in out["air_speed_ms"]]
+        out["housing_d_mm"] = float(housing_d_mm)
+    return out
 
 
 @router.get("/{prop_id}/point")

@@ -43,8 +43,8 @@ const V2 = { id: 'igc016-100k', device: 'IGC016K10S2', technology: 'GaN', carrie
 t('usableVariants keeps only complete entries; labels read device · kHz · tech', () => {
   const list = D.usableVariants([V1, V2, { id: 'x' }, null, { id: 'y', device: 'D', carrier_hz: 0, points: { a: {} } }]);
   assert.deepEqual(list.map((v) => v.id), ['iqe018-48k', 'igc016-100k']);
-  assert.equal(D.variantLabel(V1), 'IQE018N06NM6SC · 48 kHz · Si');
-  assert.equal(D.variantLabel(V2), 'IGC016K10S2 · 100 kHz · GaN');
+  assert.equal(D.variantLabel(V1), 'IQE018N06NM6SC · 48 kHz');
+  assert.equal(D.variantLabel(V2), 'IGC016K10S2 · 100 kHz');
   assert.deepEqual(D.usableVariants(undefined), []);
   assert.deepEqual(D.usableVariants(null), []);
 });

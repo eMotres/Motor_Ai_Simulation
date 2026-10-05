@@ -197,6 +197,42 @@ def presets_for_die(docs: list, die_geometry: Optional[Dict[str, Any]] = None,
     return out
 
 
+#: Winding limit when the machine names none: insulation class H (owner 2026-10-05, "180 degC
+#: class H default"); an assumption, said so in ``thermal_limits.winding_basis``.
+WINDING_LIMIT_C = 180.0
+
+
+def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """The temperatures Configure judges the winding and the magnet against.
+
+    Winding: class H 180 degC (a stated default).  Magnet: the ``max_working_temp_c`` of the
+    magnet card the machine is assigned (``materials.magnet``); ``None`` when the machine names
+    no magnet or the card carries no limit - Configure then falls back to its own default and
+    says so."""
+    fam = fam if isinstance(fam, dict) else {}
+    mats = fam.get("materials") if isinstance(fam.get("materials"), dict) else {}
+    name = mats.get("magnet")
+    mag: Optional[float] = None
+    if name:
+        try:
+            from motor_ai_sim.materials import get_material
+            mag = _pos(getattr(get_material("magnet", str(name)), "max_working_temp_c", None))
+        except Exception:                                   # noqa: BLE001
+            mag = None
+    return {"winding_C": WINDING_LIMIT_C, "winding_basis": "class H default",
+            "magnet_C": mag, "magnet_card": str(name) if name else None}
+
+
+def cooling(fam: Optional[Dict[str, Any]], card: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """What cooling this machine may offer (``config/cooling_options.yaml``) plus its identity
+    ``die`` / ``config`` - the web needs both to know whether the propeller IS the cooling."""
+    from motor_ai_sim.cooling_options import cooling_options
+    fam = fam if isinstance(fam, dict) else {}
+    die = str(fam.get("die") or (card or {}).get("name") or "").strip()
+    cfg = str(fam.get("name") or "").strip() or None
+    return cooling_options(die, cfg)
+
+
 def context(card: Optional[Dict[str, Any]], family_doc: Optional[Dict[str, Any]]
             ) -> Dict[str, Any]:
     """Everything Configure reads about one machine's physical limits."""
@@ -208,4 +244,6 @@ def context(card: Optional[Dict[str, Any]], family_doc: Optional[Dict[str, Any]]
         "modulation": modulation(ctrl),
         "battery": pack(fam.get("battery")),
         "has_family_doc": bool(fam),
+        "thermal_limits": thermal_limits(fam),
+        "cooling": cooling(fam, card),
     }

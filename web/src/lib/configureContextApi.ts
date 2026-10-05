@@ -21,6 +21,10 @@ export interface ConfigureContext {
     v_cell_min?: number | null; v_cell_nom?: number | null; v_cell_max?: number | null;
   } | null;
   has_family_doc: boolean;
+  /** what cooling the die may offer (config/cooling_options.yaml) — `propeller_air` for the Ø40 drone motors */
+  cooling?: import('./configuratorPropeller').CoolingInfo;
+  /** the temperatures a winding / magnet is judged against */
+  thermal_limits?: { winding_C?: number | null; magnet_C?: number | null; winding_basis?: string; magnet_card?: string | null };
   /** one per configuration of the machine's die (read from the machines themselves) */
   presets?: Preset[];
 }

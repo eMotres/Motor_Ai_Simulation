@@ -22,7 +22,12 @@ export interface ThermalGeom {
   airGap_mm: number;
   magnetOD_mm: number;      // rotor outer diameter
 }
-export interface ThermalLosses { P_cu_W: number; P_fe_W: number; P_mag_W: number; }
+export interface ThermalLosses {
+  P_cu_W: number; P_fe_W: number; P_mag_W: number;
+  /** extra heat with no known location (the PWM carrier loss): it leaves through the housing like the
+   *  rest but is not put on the winding or magnet hot-spot (owner 2026-10-05: Total loss includes it) */
+  P_extra_W?: number;
+}
 export interface ThermalCooling { h_Wm2K: number; ambient_C: number; }
 
 export interface ThermalEstimate {
@@ -48,7 +53,7 @@ const mm = (x: number) => Math.max(0, x || 0) / 1000;
 
 export function estimateThermal(g: ThermalGeom, l: ThermalLosses, c: ThermalCooling): ThermalEstimate {
   const P_cu = Math.max(0, l.P_cu_W || 0);
-  const P_total = P_cu + Math.max(0, l.P_fe_W || 0) + Math.max(0, l.P_mag_W || 0);
+  const P_total = P_cu + Math.max(0, l.P_fe_W || 0) + Math.max(0, l.P_mag_W || 0) + Math.max(0, l.P_extra_W || 0);
 
   const D = mm(g.statorOD_mm) || 0.1;
   const L = mm(g.stackLength_mm) || 0.03;

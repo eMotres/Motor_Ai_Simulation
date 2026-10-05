@@ -212,6 +212,10 @@ export interface Knobs {
   drive?: 'sine' | 'pwm';
   /** id of the passport's pwm_variants entry (device + carrier) */
   drive_variant?: string;
+  /** the same variant as the two dropdowns name it: transistor + PWM frequency.  The pair is what
+   *  is remembered, so a variant that is renumbered in a new passport is still found. */
+  drive_device?: string;
+  drive_carrier_hz?: number;
 }
 
 export interface ScaledResult {

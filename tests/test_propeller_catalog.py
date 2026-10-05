@@ -519,3 +519,31 @@ def test_cooling_options_route(client):
     assert {d["id"] for d in j["propeller_details"]} == set(j["propellers"])
     free = client.get("/api/propellers/cooling-options", params={"die": "CILN28"}).json()
     assert free["restricted"] is False and free["propeller_details"] == []
+
+
+def test_series_route_is_the_point_route_on_a_grid(client):
+    """Configure's one request per (propeller, ambient, housing): every sample equals what
+    /point says at that rpm — the browser interpolates, it never re-derives the physics."""
+    p = pp.get_propeller("tmotor_p12x4")
+    s = client.get("/api/propellers/tmotor_p12x4/series",
+                   params={"rpm_max": 8000, "n": 41, "temp_c": 30, "housing_d_mm": 40}).json()
+    assert len(s["rpm"]) == 41 and s["rpm"][0] == 0 and s["rpm"][-1] == pytest.approx(8000)
+    for i in (0, 7, 20, 40):
+        pt = client.get("/api/propellers/tmotor_p12x4/point",
+                        params={"rpm": s["rpm"][i], "temp_c": 30, "housing_d_mm": 40}).json()
+        assert s["torque_Nm"][i] == pytest.approx(pt["torque_Nm"], rel=1e-9, abs=1e-12)
+        assert s["thrust_N"][i] == pytest.approx(pt["thrust_N"], rel=1e-9, abs=1e-12)
+        assert s["air_speed_ms"][i] == pytest.approx(pt["air_speed_ms"], rel=1e-9, abs=1e-12)
+        assert s["h_W_m2K"][i] == pytest.approx(pt["film"]["h_conv_W_m2K"], rel=1e-9)
+    # the tested range is reported and samples outside it are flagged (the UI says "beyond tested rpm")
+    lo, hi = s["rpm_range_tested"]
+    assert [bool(e) for e in s["extrapolated"]] == [bool(r > 0 and (r < lo or r > hi)) for r in s["rpm"]]
+    assert s["torque_Nm"] == sorted(s["torque_Nm"])             # monotone: the browser inverts it
+    assert s["propeller_id"] == "tmotor_p12x4" and s["t_ambient_c"] == 30.0
+    # default top = 1.5 x the tested maximum; no housing = no film
+    d = client.get("/api/propellers/tmotor_p12x4/series").json()
+    assert d["rpm"][-1] == pytest.approx(1.5 * p.rpm_range[1]) and "h_W_m2K" not in d
+    # a geometry-only prop refuses, an unknown one is not found, a bad grid is a 422
+    assert client.get("/api/propellers/tmotor_ms1101/series").status_code == 422
+    assert client.get("/api/propellers/nope/series").status_code == 404
+    assert client.get("/api/propellers/tmotor_p12x4/series", params={"n": 2}).status_code == 422

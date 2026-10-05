@@ -771,6 +771,34 @@ def curves(prop: Propeller, rho: float = RHO_ISA, n: int = 41,
     }
 
 
+def series(prop: Propeller, rho: float = RHO_ISA, rpm_max: Optional[float] = None, n: int = 61,
+           position: Optional[str] = None, factor: Optional[float] = None) -> Dict[str, Any]:
+    """The propeller's answer on an even rpm grid from 0 to ``rpm_max`` (default: 1.5 x the
+    tested maximum): thrust, torque, shaft power, cooling air speed and an ``extrapolated``
+    flag per sample.  Configure interpolates in it instead of asking per rpm, so the load, the
+    cooling and the thermal zones on the knobs all come from the SAME backend functions
+    (``operating_point`` arithmetic — nothing is copied into the browser)."""
+    _need_model(prop)
+    hi = float(rpm_max) if rpm_max is not None else 1.5 * float(prop.rpm_range[1])
+    if not (hi > 0.0):
+        raise ValueError("rpm_max must be positive")
+    n = max(3, min(int(n), 400))
+    f, label = position_factor(position, factor)
+    rpms = [hi * i / (n - 1) for i in range(n)]
+    ext = [bool(prop.ct.value(r)[1] or prop.cp.value(r)[1]) if r > 0 else False for r in rpms]
+    return {
+        "propeller_id": prop.id, "rho_kg_m3": float(rho), "rpm": rpms,
+        "thrust_N": [thrust_N(prop, r, rho) for r in rpms],
+        "torque_Nm": [torque_Nm(prop, r, rho) for r in rpms],
+        "shaft_power_W": [shaft_power_W(prop, r, rho) for r in rpms],
+        "air_speed_ms": [f * wake_velocity_ms(prop, r, rho) for r in rpms],
+        "extrapolated": ext,
+        "slipstream_position": label, "slipstream_factor": f,
+        "rpm_range_tested": list(prop.rpm_range) if prop.rpm_range else None,
+        "power_estimated": bool(prop.cp.estimated),
+    }
+
+
 def detail(prop: Propeller, rho: float = RHO_ISA) -> Dict[str, Any]:
     """The full record: the catalogue entry as published, the fits, the curves."""
     out = summary(prop)

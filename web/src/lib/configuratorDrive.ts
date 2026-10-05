@@ -26,11 +26,65 @@ export function usableVariants(list: PwmVariant[] | null | undefined): PwmVarian
 
 const trimNum = (v: number, d: number) => String(Number(v.toFixed(d)));
 
-/** `IQE018N06NM6SC · 48 kHz · Si` — the option label. */
+// ── the TWO dropdowns: transistor, then PWM frequency (owner 2026-10-05) ─────────────────────
+// A variant is one (device, carrier) pair; the transistor menu lists the devices, the frequency
+// menu lists only the carriers computed for the chosen device, and the pair names exactly one
+// variant.  Pure functions over the passport's `pwm_variants`.
+
+/** `48 kHz` — the frequency option's label. */
+export const carrierLabel = (hz: number): string => `${trimNum(Number(hz) / 1000, 1)} kHz`;
+
+/** The devices, in the order the passport lists them, each once (with its technology for the tooltip). */
+export function variantDevices(vs: PwmVariant[]): { device: string; technology: string | null }[] {
+  const out: { device: string; technology: string | null }[] = [];
+  for (const v of vs) if (!out.some((d) => d.device === v.device)) out.push({ device: v.device, technology: v.technology ?? null });
+  return out;
+}
+
+/** The carriers computed for `device` in this motor, ascending. */
+export function variantCarriers(vs: PwmVariant[], device: string): number[] {
+  return Array.from(new Set(vs.filter((v) => v.device === device).map((v) => Number(v.carrier_hz)))).sort((a, b) => a - b);
+}
+
+/** The ONE variant of a pair (the first, if a passport ever lists a pair twice). */
+export function variantFor(vs: PwmVariant[], device: string, carrierHz: number): PwmVariant | undefined {
+  return vs.find((v) => v.device === device && Math.abs(Number(v.carrier_hz) - carrierHz) < 1e-6 * Math.max(1, carrierHz));
+}
+
+/** Stable key of a variant's pair — what "the same drive" means (ids may be renumbered). */
+export const pairKey = (v: Pick<PwmVariant, 'device' | 'carrier_hz'> | null | undefined): string =>
+  (v ? `${v.device}|${Number(v.carrier_hz)}` : '');
+
+/** Change the transistor: keep the current frequency if the new device has it, else the NEAREST computed
+ *  one (a tie goes to the lower frequency).  Undefined when the device has no variant. */
+export function switchDevice(vs: PwmVariant[], cur: PwmVariant | null | undefined, device: string): PwmVariant | undefined {
+  const cs = variantCarriers(vs, device);
+  if (!cs.length) return undefined;
+  const want = cur ? Number(cur.carrier_hz) : cs[0];
+  const exact = variantFor(vs, device, want);
+  if (exact) return exact;
+  let best = cs[0];
+  for (const c of cs) if (Math.abs(c - want) < Math.abs(best - want) - 1e-9) best = c;
+  return variantFor(vs, device, best);
+}
+
+/** Change the frequency of the current transistor. */
+export function switchCarrier(vs: PwmVariant[], cur: PwmVariant | null | undefined, carrierHz: number): PwmVariant | undefined {
+  return cur ? variantFor(vs, cur.device, carrierHz) : undefined;
+}
+
+/** The variant a stored choice names: by id, else by the (device, carrier) pair, else the first. */
+export function resolveVariant(vs: PwmVariant[], c: { drive_variant?: string; drive_device?: string; drive_carrier_hz?: number }): PwmVariant | undefined {
+  return vs.find((v) => v.id === c.drive_variant)
+    ?? (c.drive_device && c.drive_carrier_hz ? variantFor(vs, c.drive_device, Number(c.drive_carrier_hz)) : undefined)
+    ?? vs[0];
+}
+
+/** `IQE018N06NM6SC · 48 kHz` — the option label: device and carrier only (owner 2026-10-05, no
+ *  variant details printed by default; the technology, dead time, parallel count, modulation and
+ *  bus ride in the picker's tooltip). */
 export function variantLabel(v: PwmVariant): string {
-  const bits = [v.device, `${trimNum(Number(v.carrier_hz) / 1000, 1)} kHz`];
-  if (v.technology) bits.push(String(v.technology));
-  return bits.join(' · ');
+  return [v.device, `${trimNum(Number(v.carrier_hz) / 1000, 1)} kHz`].join(' · ');
 }
 
 /** The read-only facts shown under the picker, in display order. */
@@ -233,13 +287,15 @@ export function buildTuned(k: Knobs, r: Knobs | null): boolean {
 
 export const DRIVE_LS = 'configurator.drive.v1';
 
-export interface DriveChoice { drive?: 'pwm'; drive_variant?: string; }
+export interface DriveChoice { drive?: 'pwm'; drive_variant?: string; drive_device?: string; drive_carrier_hz?: number; }
 
 /** Only the drive fields of a knob set. */
-export function pickDrive(k: Pick<Knobs, 'drive' | 'drive_variant'>): DriveChoice {
+export function pickDrive(k: Pick<Knobs, 'drive' | 'drive_variant' | 'drive_device' | 'drive_carrier_hz'>): DriveChoice {
   const out: DriveChoice = {};
   if (k.drive === 'pwm') out.drive = 'pwm';
   if (k.drive_variant) out.drive_variant = k.drive_variant;
+  if (k.drive_device) out.drive_device = k.drive_device;
+  if (Number(k.drive_carrier_hz) > 0) out.drive_carrier_hz = Number(k.drive_carrier_hz);
   return out;
 }
 
@@ -256,6 +312,8 @@ export function readDriveChoice(raw: string | null, refId: string): DriveChoice 
     const out: DriveChoice = {};
     if (c.drive === 'pwm') out.drive = 'pwm';
     if (typeof c.drive_variant === 'string' && c.drive_variant) out.drive_variant = c.drive_variant;
+    if (typeof c.drive_device === 'string' && c.drive_device) out.drive_device = c.drive_device;
+    if (typeof c.drive_carrier_hz === 'number' && c.drive_carrier_hz > 0) out.drive_carrier_hz = c.drive_carrier_hz;
     return out.drive || out.drive_variant ? out : null;
   } catch { return null; }
 }

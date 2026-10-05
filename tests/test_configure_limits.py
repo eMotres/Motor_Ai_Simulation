@@ -267,3 +267,22 @@ def test_current_ceiling_is_where_the_controller_puts_the_device_at_its_rating()
         assert cont["value"] == pytest.approx(i_d, rel=0.005) and cont["verdict"] == "pass"
         assert peak["value"] == pytest.approx(2.0 * i_d, rel=0.005) and peak["verdict"] == "pass"
         assert peak["limit"] == pytest.approx(card.i_d_pulsed_A)
+
+
+def test_context_names_the_cooling_and_the_temperature_limits():
+    """The propeller picker, the dropped Thermal block and the red "> 180 degC" tiles all read
+    these (owner 2026-10-05): the die's cooling options, and the limits a temperature is judged
+    against — class H 180 degC for the winding (stated as a default), the magnet card's own limit."""
+    fam = {"die": "CIANO14 40 new", "name": "L12", "materials": {"magnet": "F52SH_120C"}}
+    c = cl.context({"name": "CIANO14 40 new"}, fam)
+    assert c["cooling"]["restricted"] and c["cooling"]["cooling_options"] == ["propeller_air"]
+    assert c["cooling"]["die"] == "CIANO14 40 new" and c["cooling"]["config"] == "L12"
+    assert "tmotor_p12x4" in c["cooling"]["propellers"]
+    assert c["thermal_limits"] == {"winding_C": 180.0, "winding_basis": "class H default",
+                                   "magnet_C": 150.0, "magnet_card": "F52SH_120C"}
+    # another die is unrestricted; no magnet named = no magnet limit invented
+    free = cl.context(None, {"die": "CILN28", "name": "G2-L40"})
+    assert free["cooling"]["restricted"] is False and free["cooling"]["cooling_options"] is None
+    assert free["thermal_limits"]["magnet_C"] is None and free["thermal_limits"]["magnet_card"] is None
+    # no family document at all: still a complete answer
+    assert cl.context(None, None)["cooling"]["restricted"] is False

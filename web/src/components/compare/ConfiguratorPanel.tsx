@@ -36,7 +36,16 @@ import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import PerformanceCharts from './PerformanceCharts';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
-import { driveRowTiles, extraLossTile, totalLossShown, lossDensityShown, type DriveTileSpec } from '../../lib/configuratorTiles';
+import {
+  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, tempRowTiles, type DriveTileSpec, type TempTileSpec,
+} from '../../lib/configuratorTiles';
+import {
+  isPropellerCooled, allowedPropellers, effectivePropeller, readCoolChoice, writeCoolChoice, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
+  seriesAt, currentForTorque, tempLimits, judgeTemps, zoneGradient, zoneSamples, modelLabel, vendorLabel,
+  type CoolChoice, type PropSeries, type PropSummary,
+} from '../../lib/configuratorPropeller';
+import { fetchPropellers, fetchSeries } from '../../lib/propellerApi';
+import { estimateThermal } from '../../lib/thermalEstimate';
 import ConfiguratorThermal from './ConfiguratorThermal';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
@@ -59,8 +68,9 @@ import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import i18n from '../../i18n';
 import {
-  usableVariants, variantLabel, variantFacts, readVariant, buildTuned, limitProblems,
+  usableVariants, variantFacts, readVariant, buildTuned, limitProblems,
   pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
+  variantDevices, variantCarriers, switchDevice, switchCarrier, resolveVariant, pairKey, carrierLabel,
   type DriveRecord, type DeviceLimits,
 } from '../../lib/configuratorDrive';
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
@@ -141,7 +151,11 @@ const KnobSlider: React.FC<{
   limitNote?: { text: string; tip: string; hand?: boolean };
   /** admin: clear a hand-set maximum (the "default" rule applies again) */
   onClearHand?: () => void;
-}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, limitNote, onClearHand }) => {
+  /** CSS background of the slider rail: the thermal zones (green below the temperature limits, red beyond) */
+  zone?: string | null;
+  /** a value derived from something else (the current that the propeller needs): shown, not editable */
+  disabled?: boolean;
+}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, limitNote, onClearHand, zone, disabled }) => {
   const delta = pctDelta(value, base);
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
@@ -159,7 +173,7 @@ const KnobSlider: React.FC<{
           )}
         </Typography>
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0, ml: 'auto' }}>
-        <input value={txt ?? fmt(value, d)} type="number" step={step}
+        <input value={txt ?? fmt(value, d)} type="number" step={step} readOnly={disabled}
           onChange={(e) => { setTxt(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= min && v <= max) onChange(v); }}
           onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); setTxt(null); }}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
@@ -176,8 +190,9 @@ const KnobSlider: React.FC<{
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
         {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
         <Slider value={value} min={min} max={max} step={step}
-          onChange={(_, v) => onChange(v as number)} size="small"
-          sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 } }} />
+          onChange={(_, v) => onChange(v as number)} size="small" disabled={disabled}
+          sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 },
+                ...(zone ? { '& .MuiSlider-rail': { background: zone, opacity: 0.9, height: 4 } } : {}) }} />
         {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
       </Box>
     </Box>
@@ -192,6 +207,10 @@ const MetricTile: React.FC<{
   label: string; value: number | null; unit: string; d?: number; base: number; goodHi?: boolean;
   /** why the value is "—" (shown in the tooltip instead of the vs-reference line) */
   blankTip?: string;
+  /** printed instead of the number (a temperature over its limit reads "> 180") */
+  display?: string;
+  /** no "vs the reference design" line in the tooltip (a quantity with no reference, like a temperature) */
+  plain?: boolean;
   /** ABSOLUTE colouring for quantities that have a meaning of their own
    *  (current density): 'ok' | 'warn' | 'bad' overrides the vs-reference
    *  colour, because 9 A/mm² is fine whether or not it grew (user
@@ -200,9 +219,9 @@ const MetricTile: React.FC<{
   /** What the number IS, when the label cannot say it (the heat split's
    *  terms).  Prepended to the vs-reference line in the hover title. */
   tip?: string;
-}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip, blankTip }) => {
-  const blank = value == null;
-  const delta = blank ? 0 : pctDelta(value, base);
+}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip, blankTip, display, plain }) => {
+  const blank = value == null && display == null;
+  const delta = value == null ? 0 : pctDelta(value, base);
   // No "% vs ref" line under every tile (user 2026-08-26) — the deltas are
   // carried by COLOUR only; the header's Reset button returns to the
   // reference design.
@@ -220,7 +239,7 @@ const MetricTile: React.FC<{
     // ONE fixed width and a fixed value line: a number changing (or becoming "—") never moves
     // another tile (owner 2026-10-05: the block must not jump when the drive is toggled)
     <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}
-      title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : changed
+      title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : plain ? '' : changed
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
         : tx('configure.sameAsRef'))}>
       <Typography sx={{ ...LABEL, fontSize: 9.5, whiteSpace: 'nowrap',
@@ -230,7 +249,7 @@ const MetricTile: React.FC<{
           ? (absLevel === 'bad' ? '#f87171' : absLevel === 'warn' ? '#fbbf24' : '#4ade80')
           : (changed && good !== null ? dColor : 'var(--text-0)'),
         fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap', minHeight: 19 }}>
-        {blank ? '—' : fmt(value, d)}{!blank && <Box component="span" sx={{ fontSize: 10.5,
+        {blank ? '—' : (display ?? fmt(value as number, d))}{!blank && <Box component="span" sx={{ fontSize: 10.5,
           color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>}
       </Typography>
     </Box>
@@ -545,10 +564,14 @@ const ConfiguratorPanel: React.FC = () => {
   const catId = catalogIdOf(refId);
   const [ctx, setCtx] = useState<ConfigureContext | null>(null);
   const [limitMsg, setLimitMsg] = useState<string | null>(null);
+  // `ctxDone`: the context has been ANSWERED (or there is none to ask for) — blocks that depend on
+  // it (the Thermal block for a die that is not propeller-cooled) wait for it instead of flashing.
+  const [ctxDone, setCtxDone] = useState(false);
   const loadCtx = React.useCallback(async () => {
     setCtx(catId ? await fetchConfigureContext(catId) : null);
+    setCtxDone(true);
   }, [catId]);
-  useEffect(() => { setCtx(null); setLimitMsg(null); setBaseConfig(null); void loadCtx(); }, [loadCtx]);
+  useEffect(() => { setCtx(null); setCtxDone(false); setLimitMsg(null); setBaseConfig(null); void loadCtx(); }, [loadCtx]);
   const presets: Preset[] = ctx?.presets ?? [];
   const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
   // a freshly loaded machine starts on the configuration whose build it is
@@ -567,8 +590,10 @@ const ConfiguratorPanel: React.FC = () => {
     () => usableVariants((basePreset && basePreset.pwm_variants.length ? basePreset.pwm_variants : p.pwm_variants) as PwmVariant[] | null | undefined),
     [p, basePreset]);
   const driveOn = knobs.drive === 'pwm' && variants.length > 0;
-  const variant = driveOn
-    ? (variants.find((v) => v.id === knobs.drive_variant) ?? variants[0]) : null;
+  const variant = driveOn ? (resolveVariant(variants, knobs) ?? null) : null;
+  /** the drive choice that names a variant: its id AND its (transistor, frequency) pair */
+  const choiceOf = (v: PwmVariant): Partial<Knobs> =>
+    ({ drive: 'pwm', drive_variant: v.id, drive_device: v.device, drive_carrier_hz: Number(v.carrier_hz) });
   // scaleMotor() is the SINE model and never sees the drive; `scaleKnobs` stays as
   // the one name the charts and the result use for "the knobs the model reads".
   const scaleKnobs = knobs;
@@ -719,17 +744,18 @@ const ConfiguratorPanel: React.FC = () => {
           ? tx('configureDrive.factBusRange', { min: bus.min, max: bus.max })
           : bus.nom != null ? tx('configureDrive.factBusNom', { nom: bus.nom }) : null;
     const bits = [
+      variant.technology ? String(variant.technology) : null,
       f.deadTime ? tx('configureDrive.factDead', { value: f.deadTime }) : null,
       f.nParallel ? tx('configureDrive.factParallel', { n: f.nParallel }) : null,
       f.modulationKey ? tx(f.modulationKey) : null, busText,
     ].filter(Boolean);
     return {
       line: bits.join(' · '),
-      tip: [f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
+      tip: [bits.join(' · '),
+            f.provenance ? tx('configureDrive.provenanceTip', { text: f.provenance }) : null,
             tx('configureDrive.variantTip')].filter(Boolean).join('\n'),
     };
   })();
-  const driveFactsLine = driveFacts.line;
   const driveFactsTip = driveFacts.tip || tx('configureDrive.variantTip');
   // "vs ref" compares against THE MACHINE AS LOADED, not against the
   // passport's calibration point (user 2026-08-26: a freshly loaded motor
@@ -792,6 +818,135 @@ const ConfiguratorPanel: React.FC = () => {
           : t.blank === 'refused' ? tx('configureDrive.blankRefused') : tx('configureDrive.blankMissing')} />
     );
   };
+  // ── PROPELLER: the load AND the cooling (owner 2026-10-05) ─────────────────────────────────
+  // For a die whose only cooling is the propeller's slipstream (`propeller_air` in
+  // config/cooling_options.yaml: the Ø40 drone motors) the propeller sets the shaft torque at
+  // the speed knob (so the phase current is DERIVED from the passport), and the same rpm sets the
+  // air over the housing (so the temperatures follow).  Every propeller number is the backend's
+  // (`/api/propellers/{id}/series`); here it is only interpolated.  "Manual load" gives the
+  // current back to the engineer.
+  const cooled = isPropellerCooled(ctx?.cooling);
+  const [propList, setPropList] = useState<PropSummary[] | null>(null);
+  useEffect(() => {
+    if (!cooled) return;
+    let dead = false;
+    const go = () => { void fetchPropellers().then((l) => { if (dead) return; if (l) setPropList(l); else setTimeout(go, 3000); }); };
+    go();
+    return () => { dead = true; };
+  }, [cooled]);
+  const allowedProps = useMemo(() => allowedPropellers(ctx?.cooling, propList ?? []), [ctx, propList]);
+  const [coolChoice, setCoolChoice] = useState<CoolChoice>({});
+  useEffect(() => { setCoolChoice(readCoolChoice(readLs(PROP_CHOICE_LS), refId)); }, [refId]);
+  const updateCool = (patch: CoolChoice) => {
+    setCoolChoice((c) => ({ ...c, ...patch }));
+    try { localStorage.setItem(PROP_CHOICE_LS, writeCoolChoice(readLs(PROP_CHOICE_LS), refId, patch)); } catch { /* ignore */ }
+  };
+  const propId = cooled ? effectivePropeller(coolChoice, allowedProps) : null;
+  const propSummary = allowedProps.find((x) => x.id === propId) ?? null;
+  const ambient = coolChoice.ambient ?? DEFAULT_AMBIENT_C;
+  const propLoad = cooled && (coolChoice.load ?? 'prop') === 'prop';
+  // the ambient field: typed text, committed after a short pause (one /series request per value)
+  const [ambTxt, setAmbTxt] = useState<string | null>(null);
+  useEffect(() => {
+    if (ambTxt == null) return;
+    const v = parseFloat(ambTxt);
+    if (!(v >= -60 && v <= 80)) return;
+    const t = setTimeout(() => { if (v !== ambient) updateCool({ ambient: v }); }, 400);
+    return () => clearTimeout(t);
+  }, [ambTxt]); // eslint-disable-line react-hooks/exhaustive-deps
+  const housingMm = ref.geo.statorOR_mm * 2;
+  const [series, setSeries] = useState<PropSeries | null>(null);
+  useEffect(() => {
+    setSeries(null);
+    if (!cooled || !propId) return;
+    let dead = false;
+    const go = () => { void fetchSeries(propId, ambient, housingMm).then((s) => { if (dead) return; if (s) setSeries(s); else setTimeout(go, 3000); }); };
+    go();
+    return () => { dead = true; };
+  }, [cooled, propId, ambient, housingMm]);
+  const propPoint = cooled && series ? seriesAt(series, knobs.rpm) : null;
+  /** the torque of the passport at a current — every other knob as given */
+  const torqueAtI = (k: Knobs) => (I: number) => scaleMotor(p, { ...k, I_A: I }, ref.poles).T_Nm;
+  const propLoadRes = useMemo(
+    () => (propLoad ? currentForTorque(propPoint?.torque_Nm ?? null, torqueAtI(knobs), ranges.I_A.max) : null),
+    [propLoad, propPoint?.torque_Nm, p, ref.poles, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, knobs.rpm, ranges.I_A.max]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the current knob FOLLOWS the propeller (a refusal parks it at the largest current the motor may carry)
+  useEffect(() => {
+    if (!propLoadRes || (!propLoadRes.ok && propLoadRes.kind === 'no_prop')) return;
+    const I = propLoadRes.I_A;
+    if (Math.abs(I - knobs.I_A) > 1e-3) setKnobs((k) => ({ ...k, I_A: I }));
+  }, [propLoadRes]); // eslint-disable-line react-hooks/exhaustive-deps
+  const loadRefused = !!propLoadRes && !propLoadRes.ok && propLoadRes.kind === 'torque';
+  const thermalGeom = useMemo(() => ({
+    statorOD_mm: ref.geo.statorOR_mm * 2,
+    stackLength_mm: knobs.L_mm,
+    numSlots: ref.geo.numSlots,
+    slotHeight_mm: ref.fit.slotHeight_mm,
+    slotWidth_mm: ref.fit.slotWidth_mm,
+    insulation_mm: ref.fit.insulation_mm,
+    coreThickness_mm: Math.max(0, ref.geo.statorOR_mm - ref.geo.statorIR_mm - ref.fit.slotHeight_mm),
+    airGap_mm: Math.max(0, ref.geo.statorIR_mm - ref.geo.rotorOR_mm),
+    magnetOD_mm: ref.geo.rotorOR_mm * 2,
+  }), [ref, knobs.L_mm]);
+  const tLimits = useMemo(() => tempLimits(ctx?.thermal_limits), [ctx]);
+  const extraLossW = extraLossTile(driveMode, drv).value ?? 0;
+  /** winding / magnet / housing temperatures at the knobs (null while the propeller data is
+   *  not here, or while the load is refused — never numbers for a point that cannot be run) */
+  const thermal = useMemo(() => (
+    cooled && propPoint && propPoint.h_W_m2K != null && !loadRefused
+      ? estimateThermal(thermalGeom, { P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W, P_extra_W: extraLossW },
+        { h_Wm2K: propPoint.h_W_m2K, ambient_C: ambient })
+      : null), [cooled, propPoint, loadRefused, thermalGeom, result, extraLossW, ambient]);
+  const verdict = thermal ? judgeTemps(thermal.T_winding_C, thermal.T_magnet_C, tLimits) : null;
+  const overheats = !!verdict?.over;
+  /** the ONE red line above the results (fixed height, so it never moves the grid) */
+  const propLine: { text: string; tip: string } | null = (() => {
+    if (!cooled) return null;
+    if (loadRefused && propLoadRes && !propLoadRes.ok && propLoadRes.kind === 'torque') {
+      return { text: tx('configurePropeller.refuseTorque', { need: fmt(propLoadRes.need_Nm, 3), rpm: fmt(knobs.rpm, 0), have: fmt(propLoadRes.have_Nm, 3), imax: fmt(ranges.I_A.max, 0) }),
+               tip: tx('configurePropeller.refuseTorqueTip') };
+    }
+    if (overheats && verdict) {
+      return { text: tx('configurePropeller.overheat'),
+               tip: [verdict.windingOver ? tx('configurePropeller.overWinding', { limit: fmt(tLimits.winding_C, 0), basis: tLimits.windingBasis }) : null,
+                     verdict.magnetOver ? tx('configurePropeller.overMagnet', { limit: fmt(tLimits.magnet_C, 0) }) : null].filter(Boolean).join(' ') };
+    }
+    if (propList && !allowedProps.length) return { text: tx('configurePropeller.noPropeller'), tip: tx('configurePropeller.noPropellerTip') };
+    return null;
+  })();
+  const propBad = !!propLine && (loadRefused || overheats);
+  const tempTiles = tempRowTiles(
+    thermal && propPoint ? { T_winding_C: thermal.T_winding_C, T_magnet_C: thermal.T_magnet_C, T_housing_C: thermal.T_housing_C,
+      air_speed_ms: propPoint.air_speed_ms, h_W_m2K: propPoint.h_W_m2K ?? 0 } : null, tLimits);
+  const renderTemp = (t: TempTileSpec) => (
+    <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} display={t.display} unit={t.unit} d={t.d} base={t.value ?? 0}
+      absLevel={t.level} plain
+      tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '' })}
+      blankTip={tx(loadRefused ? 'configurePropeller.blankRefused' : 'configurePropeller.blankLoading')} />
+  );
+  /** thermal zones on the knobs: green = continuous below both limits with this propeller, red = beyond.
+   *  Recomputed with wire / turns / length / propeller / ambient (a pure function of them). */
+  const zones = useMemo(() => {
+    if (!cooled || !series) return { rpm: null as string | null, I: null as string | null };
+    const okAt = (rpm: number, I: number): boolean | null => {
+      const pt = seriesAt(series, rpm);
+      if (!pt || pt.h_W_m2K == null) return null;
+      const r = scaleMotor(p, { ...knobs, rpm, I_A: I }, ref.poles);
+      const th = estimateThermal(thermalGeom, { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W, P_mag_W: r.P_mag_W, P_extra_W: extraLossW },
+        { h_Wm2K: pt.h_W_m2K, ambient_C: ambient });
+      return !judgeTemps(th.T_winding_C, th.T_magnet_C, tLimits).over;
+    };
+    const rpmOk = zoneSamples(ranges.rpm.min, ranges.rpm.max).map((r) => {
+      if (!propLoad) return okAt(r, knobs.I_A);
+      const pt = seriesAt(series, r);
+      if (!pt) return null;
+      const ld = currentForTorque(pt.torque_Nm, torqueAtI({ ...knobs, rpm: r }), ranges.I_A.max);
+      return ld.ok ? okAt(r, ld.I_A) : false;
+    });
+    const iOk = propLoad ? [] : zoneSamples(ranges.I_A.min, ranges.I_A.max).map((I) => okAt(knobs.rpm, I));
+    return { rpm: zoneGradient(rpmOk), I: zoneGradient(iOk) };
+  }, [cooled, series, p, ref.poles, thermalGeom, tLimits, extraLossW, ambient, propLoad, ranges.rpm.min, ranges.rpm.max, ranges.I_A.min, ranges.I_A.max,
+      knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, propLoad ? 0 : knobs.I_A, propLoad ? 0 : knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
   /** one short line per refusal (text + tooltip), in the order they matter */
   const driveRefusals: { text: string; tip: string }[] = (() => {
     if (!driveOn) return [];
@@ -920,7 +1075,9 @@ const ConfiguratorPanel: React.FC = () => {
   /** Has the user moved anything off the reference design? */
   // "Modified": anything off the BASE — the machine as loaded, or the preset last applied (an
   // applied preset becomes the baseline: refKnobs = its knobs and drive, machinePack = its pack).
-  const driveOf = (k: Knobs | null) => (k?.drive === 'pwm' ? (k.drive_variant ?? '') : '');
+  // the drive is the (transistor, frequency) pair: two ids of one pair are the same drive
+  const driveOf = (k: Knobs | null) => (k?.drive === 'pwm'
+    ? (pairKey(resolveVariant(variants, k)) || (k.drive_variant ?? '')) : '');
   const modified = driveOf(knobs) !== driveOf(refKnobs)
     || (!!machinePack && !sameBattery(battery, machinePack))
     || (() => {
@@ -1200,13 +1357,61 @@ const ConfiguratorPanel: React.FC = () => {
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 0, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
           {/* rms is the knob; the PEAK rides beside it (user 2026-08-26) —
               inverters and datasheets are quoted in peak, the coil sees rms. */}
+          {/* ── PROPELLER (a die cooled only by its propeller): which one, the ambient air, and
+              whether the propeller sets the load.  One compact block, labels in the title style. ── */}
+          {cooled && (
+            <Box sx={{ mb: 1.25 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mb: 0.5, flexWrap: 'nowrap', minHeight: 28 }}>
+                <Typography sx={{ ...LABEL, flex: '0 0 auto' }} title={tx('configurePropeller.pickerTip')}>{tx('configurePropeller.title')}</Typography>
+                <select value={propId ?? ''} aria-label={tx('configurePropeller.title')}
+                  onChange={(e) => updateCool({ propId: e.target.value })}
+                  title={propSummary && propSummary.power_data === 'estimated' ? tx('configurePropeller.estimatedTip') : tx('configurePropeller.pickerTip')}
+                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260 }}>
+                  {!allowedProps.length && <option value="" style={{ color: '#000' }}>…</option>}
+                  {allowedProps.map((x) => (
+                    <option key={x.id} value={x.id} disabled={!x.selectable} style={{ color: '#000' }}>
+                      {tx(x.blades ? 'configurePropeller.label' : 'configurePropeller.labelNoBlades', { vendor: vendorLabel(x.vendor), model: modelLabel(x.model), blades: x.blades ?? '' })}
+                      {x.selectable ? '' : ` · ${tx('configurePropeller.noTestData')}`}
+                    </option>
+                  ))}
+                </select>
+                <input type="number" step={1} value={ambTxt ?? String(ambient)} aria-label={tx('configurePropeller.ambient')}
+                  title={tx('configurePropeller.ambientTip')}
+                  onChange={(e) => setAmbTxt(e.target.value)}
+                  onBlur={() => setAmbTxt(null)}
+                  style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 13, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
+                <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>°C</Box>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'nowrap', minHeight: 30 }}>
+                <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configurePropeller.loadTip')}>{tx('configurePropeller.load')}</Typography>
+                <ToggleButtonGroup exclusive size="small" value={propLoad ? 'prop' : 'manual'}
+                  onChange={(_, v) => { if (v === 'prop' || v === 'manual') updateCool({ load: v }); }}>
+                  <ToggleButton value="prop" title={tx('configurePropeller.loadPropTip')}
+                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadProp')}</ToggleButton>
+                  <ToggleButton value="manual" title={tx('configurePropeller.loadManualTip')}
+                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadManual')}</ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+            </Box>
+          )}
           <KnobSlider label={tx('configureLimits.phaseCurrent')} unit="A" value={knobs.I_A} base={p.I0_A}
             min={ranges.I_A.min} max={ranges.I_A.max} step={1} d={0}
             sub={tx('configureLimits.peakOf', { value: fmt(knobs.I_A * Math.SQRT2, 0) })}
-            onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr || above(knobs.I_A, ranges.I_A)}
-            limitNote={limitNote('I_A')} />
+            onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr || above(knobs.I_A, ranges.I_A) || (propLoad && loadRefused)}
+            disabled={propLoad} zone={propLoad ? null : zones.I}
+            limitNote={propLoad
+              ? { text: tx('configurePropeller.currentFromProp'), tip: tx('configurePropeller.currentFromPropTip') }
+              : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />
           <KnobSlider label={tx('configureLimits.speed')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={isAdmin ? setRange('rpm') : undefined}
-            warn={above(knobs.rpm, ranges.rpm)} limitNote={limitNote('rpm')} />
+            warn={above(knobs.rpm, ranges.rpm)} zone={cooled ? zones.rpm : null}
+            limitNote={(() => {
+              const n = limitNote('rpm');
+              if (!cooled) return n;
+              const ext = propPoint?.extrapolated && series?.rpm_range_tested
+                ? { text: ` · ${tx('configurePropeller.beyondTested')}`, tip: tx('configurePropeller.beyondTestedTip', { lo: fmt(series.rpm_range_tested[0], 0), hi: fmt(series.rpm_range_tested[1], 0) }) }
+                : null;
+              return { ...n, text: n.text + (ext ? ext.text : ''), tip: `${n.tip} ${tx('configurePropeller.zoneTip')}${ext ? ` ${ext.tip}` : ''}` };
+            })()} />
 
           {/* ── DRIVE: Sine | PWM (owner 2026-10-05) ─────────────────────
               PWM lists only the drive variants COMPUTED for this motor — a
@@ -1216,7 +1421,6 @@ const ConfiguratorPanel: React.FC = () => {
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 1.5, mb: 0.75, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}
             title={variants.length ? driveFactsTip : tx('configureDrive.notComputedTip')}>
             {tx('configureDrive.title')}
-            {driveFactsLine && <Box component="span" sx={unitCase()}>{' · '}{driveFactsLine}</Box>}
             {!variants.length && (
               <Box component="span" sx={{ color: '#fbbf24' }}>{' · '}{tx('configureDrive.notComputed')}</Box>
             )}
@@ -1225,7 +1429,7 @@ const ConfiguratorPanel: React.FC = () => {
             title={variants.length ? undefined : tx('configureDrive.notComputedTip')}>
             <ToggleButtonGroup exclusive size="small" value={driveOn ? 'pwm' : 'sine'}
               onChange={(_, v) => {
-                if (v === 'pwm' && variants.length) setDrive({ drive: 'pwm', drive_variant: variant?.id ?? variants[0].id });
+                if (v === 'pwm' && variants.length) setDrive(choiceOf(variant ?? resolveVariant(variants, knobs) ?? variants[0]));
                 else if (v === 'sine') setDrive({ drive: 'sine' });
               }}>
               <ToggleButton value="sine" title={tx('configureDrive.sineTip')}
@@ -1233,16 +1437,29 @@ const ConfiguratorPanel: React.FC = () => {
               <ToggleButton value="pwm" disabled={!variants.length} title={tx('configureDrive.pwmTip')}
                 sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configureDrive.pwm')}</ToggleButton>
             </ToggleButtonGroup>
-            {driveOn && variant && (
-              <select value={variant.id} aria-label={tx('configureDrive.pwm')}
-                onChange={(e) => setDrive({ drive: 'pwm', drive_variant: e.target.value })}
-                title={tx('configureDrive.variantTip')}
-                style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', maxWidth: 260, minWidth: 0 }}>
-                {variants.map((v) => (
-                  <option key={v.id} value={v.id} style={{ color: '#000' }}>{variantLabel(v)}</option>
-                ))}
-              </select>
-            )}
+            {driveOn && variant && (() => {
+              const devs = variantDevices(variants);
+              const carriers = variantCarriers(variants, variant.device);
+              const selStyle = { background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', minWidth: 0 } as const;
+              return (
+                <>
+                  {/* transistor: the device only; its technology (Si / GaN) and the other facts ride in the tooltip */}
+                  <select value={variant.device} aria-label={tx('configureDrive.transistor')}
+                    onChange={(e) => { const v = switchDevice(variants, variant, e.target.value); if (v) setDrive(choiceOf(v)); }}
+                    title={`${tx('configureDrive.transistorTip')}\n${driveFactsTip}`}
+                    style={{ ...selStyle, flex: '1 1 auto', maxWidth: 200 }}>
+                    {devs.map((d) => (<option key={d.device} value={d.device} style={{ color: '#000' }}>{d.device}</option>))}
+                  </select>
+                  {/* PWM frequency: only the carriers computed for THIS transistor in this motor */}
+                  <select value={Number(variant.carrier_hz)} aria-label={tx('configureDrive.frequency')}
+                    onChange={(e) => { const v = switchCarrier(variants, variant, Number(e.target.value)); if (v) setDrive(choiceOf(v)); }}
+                    title={tx('configureDrive.frequencyTip')}
+                    style={{ ...selStyle, flex: '0 0 auto' }}>
+                    {carriers.map((c) => (<option key={c} value={c} style={{ color: '#000' }}>{carrierLabel(c)}</option>))}
+                  </select>
+                </>
+              );
+            })()}
           </Box>
           {/* ONE reserved two-line slot: a refusal fills it, it never pushes the blocks below
               (the tiles on the right turn to "—" at the same time) */}
@@ -1290,12 +1507,21 @@ const ConfiguratorPanel: React.FC = () => {
               5 Ld · Lq · ψ_PM · Lq/Ld
               6 KV · Kt · Km · Km/mass
               7 demag koef · saturation koef · total koef */}
+          {/* ONE red line (fixed height: it never moves the grid) — only for a propeller-cooled machine */}
+          {cooled && (
+            <Typography sx={{ ...LABEL, fontSize: 11, lineHeight: '16px', height: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              color: '#f87171', mb: -0.5 }} title={propLine ? `${propLine.text}. ${propLine.tip}` : undefined}>
+              {propLine ? `⚠ ${propLine.text}` : ''}
+            </Typography>
+          )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             <MetricTile label={tx('configure.torque')} value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
               tip={KT_BASIS_TIP(result.kt_km_basis)} />
-            <MetricTile label={tx('configure.power')} value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi />
+            <MetricTile label={tx('configure.power')} value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi
+              absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} />
             <MetricTile label={tx('configure.mass')} value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
-            <MetricTile label={tx('configure.efficiency')} value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi />
+            <MetricTile label={tx('configure.efficiency')} value={result.efficiency * 100} unit="%" d={1} base={baseRes.efficiency * 100} goodHi
+              absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} />
             {ref.passport.ripple0_pct != null && (
               <MetricTile label={tx('configure.tRipple')} value={ref.passport.ripple0_pct} unit="%" d={1}
                 base={ref.passport.ripple0_pct} goodHi={false} tip={tx('configure.tRippleTip')} />
@@ -1319,8 +1545,14 @@ const ConfiguratorPanel: React.FC = () => {
               tip={tx(result.loss_split_measured ? 'configure.rotorHeatTipMeasured' : 'configure.rotorHeatTipUnknown')} />
             <MetricTile label={tx('configure.lossDensity')} value={lossDensityShown(result.loss_density_W_kg, result.P_loss_W, driveMode, drv)} unit="W/kg" d={0}
               base={baseRes.loss_density_W_kg} goodHi={false} blankTip={tx('configure.totalLossBlankTip')} />
-            {renderSpec(extraLossTile(driveMode, drv))}
+            {lossTailTiles(driveMode, drv).map(renderSpec)}
           </Box>
+          {/* ── TEMPERATURES — ONE row for a propeller-cooled machine, the same five tiles from the first render ── */}
+          {cooled && (
+            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+              {tempTiles.map(renderTemp)}
+            </Box>
+          )}
           {/* ── DRIVE — the same tiles in Sine and PWM (only the values change; a refusal
               turns them into "—", it never adds or removes a block) ── */}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
@@ -1530,23 +1762,16 @@ const ConfiguratorPanel: React.FC = () => {
         </Box>
       ) : null}
 
-      {/* ── THERMAL (analytical estimate, same cooling inputs as Simulation) ── */}
-      <Box sx={{ px: 2, pb: 1.5 }}>
-        <ConfiguratorThermal
-          geom={{
-            statorOD_mm: ref.geo.statorOR_mm * 2,
-            stackLength_mm: knobs.L_mm,
-            numSlots: ref.geo.numSlots,
-            slotHeight_mm: ref.fit.slotHeight_mm,
-            slotWidth_mm: ref.fit.slotWidth_mm,
-            insulation_mm: ref.fit.insulation_mm,
-            coreThickness_mm: Math.max(0, ref.geo.statorOR_mm - ref.geo.statorIR_mm - ref.fit.slotHeight_mm),
-            airGap_mm: Math.max(0, ref.geo.statorIR_mm - ref.geo.rotorOR_mm),
-            magnetOD_mm: ref.geo.rotorOR_mm * 2,
-          }}
-          losses={{ P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W }}
-        />
-      </Box>
+      {/* ── THERMAL block: only for a machine that is NOT cooled by its propeller alone — there the
+          cooling is the propeller, and the temperatures are one row in the tiles above ── */}
+      {ctxDone && !cooled && (
+        <Box sx={{ px: 2, pb: 1.5 }}>
+          <ConfiguratorThermal
+            geom={thermalGeom}
+            losses={{ P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W }}
+          />
+        </Box>
+      )}
 
       {/* ── PERFORMANCE VS SPEED ── */}
       {SHOW_CONFIGURE_CHARTS && (

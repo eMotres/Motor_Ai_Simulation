@@ -187,8 +187,9 @@ def demag_limit(st: Mapping[str, Any], full_dir: Path, M: str, I0: float) -> Dic
 #  PWM FEM anchors
 # ─────────────────────────────────────────────────────────────────────────────
 
-def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, Dict[str, Any]]:
-    out: Dict[str, Dict[str, Any]] = {}
+def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, List[Dict[str, Any]]]:
+    """{carrier class: [FEM anchor, ...]} from the PWM task outputs."""
+    out: Dict[str, List[Dict[str, Any]]] = {}
     for p in sorted(full_dir.glob(f"pwm_{M}_*.json")):
         d = _load(p) or {}
         if d.get("dP_harm_W") is None:
@@ -209,7 +210,8 @@ def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, Dict[str, Any]
                             "iron template falls back to the gmsh build (solver-flagged "
                             "DEGRADED, shaft skin layer not resolved) — PWM and its sine "
                             "reference share that mesh"}
-        out.setdefault(cls, {})[d.get("point")] = row
+        row["point"] = d.get("point")
+        out.setdefault(cls, []).append(row)
     return out
 
 

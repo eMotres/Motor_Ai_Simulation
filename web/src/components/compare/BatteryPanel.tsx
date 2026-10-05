@@ -43,7 +43,11 @@ const BatteryPanel: React.FC<{
   vDc: number; bat: Battery; onChange: (b: Battery) => void;
   /** the pack the machine was saved with; with `onReset` it adds a "reset to machine pack" control */
   machinePack?: Battery | null; onReset?: () => void;
-}> = ({ vDc, bat, onChange, machinePack, onReset }) => {
+  /** no pack is saved for this machine: the block shows the stock default and SAYS so */
+  stockNote?: boolean;
+  /** hover text of the motor-voltage marker (which operating point it is for) */
+  vDcTip?: string;
+}> = ({ vDc, bat, onChange, machinePack, onReset, stockNote, vDcTip }) => {
   const setType = (t: CellType | null) => { if (t) onChange({ ...bat, type: t, ...PRESETS[t] }); };
   const setF = (k: keyof Battery) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange({ ...bat, [k]: v });
@@ -68,7 +72,10 @@ const BatteryPanel: React.FC<{
     <Box sx={PANEL}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.25, flexWrap: 'wrap' }}>
         <BatteryChargingFullIcon sx={{ color: '#22c55e', fontSize: 20 }} />
-        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.batteryTitle')}</Typography>
+        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>
+          {tx('configure.batteryTitle')}
+          {stockNote && <Box component="span" sx={{ color: '#fbbf24', fontSize: 11, fontWeight: 700 }}>{' · '}{tx('configure.packStock')}</Box>}
+        </Typography>
         <Box sx={{ flex: 1 }} />
         <Typography sx={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'monospace' }}>
           {tx('configure.packSummary', { nom: fmt(packNom), min: fmt(packMin), max: fmt(packMax) })}
@@ -123,7 +130,7 @@ const BatteryPanel: React.FC<{
         {/* motor DC-voltage marker */}
         <line x1={mX} y1={barY - 14} x2={mX} y2={barY + barH + 8} stroke={color} strokeWidth={1} />
         <polygon points={`${mX - 5},${barY - 14} ${mX + 5},${barY - 14} ${mX},${barY - 6}`} fill={color} />
-        <text x={Math.min(Math.max(mX, 40), W - 40)} y={barY - 18} fill={color} fontSize={12} fontWeight={700} textAnchor="middle" fontFamily="monospace">{tx('configure.motorV', { v: fmt(vDc) })}</text>
+        <text x={Math.min(Math.max(mX, 40), W - 40)} y={barY - 18} fill={color} fontSize={12} fontWeight={700} textAnchor="middle" fontFamily="monospace">{vDcTip ? <title>{vDcTip}</title> : null}{tx('configure.motorV', { v: fmt(vDc) })}</text>
       </svg>
     </Box>
   );

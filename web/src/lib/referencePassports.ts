@@ -18,6 +18,9 @@ export interface ReferenceMotor {
   poles: number;
   slots: number;
   passport: Passport;
+  /** the card's name is a real configuration (or die) of the catalogue — it has a pack,
+   *  a controller and computed variants; legacy duplicates of a geometry do not */
+  hasMachine?: boolean;
   // slot/wire context — mirrors the backend slot-fit constraint
   // (geometry_constraints._wire_height_max, which mirrors the radial wire stack
   // in cadquery_geometry): N rows of (wire_height + wireSpacingY) must fit between
@@ -138,6 +141,7 @@ export async function fetchCatalogReferencesAnswer(): Promise<ReferencesAnswer> 
         subtitle: `${slots}-slot / ${poles}-pole · ~${(p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0)} N·m @ ${p.rpm0 ?? '?'} rpm · FEM`,
         poles, slots,
         passport: p,
+        hasMachine: m.has_machine === true,
         fit: sp.fit,
         geo: sp.geo,
       });

@@ -459,6 +459,8 @@
     "preset": "预设",
     "presetModified": "已偏离预设 {config}",
     "presetTip": "将所有旋钮恢复到该电机的这一真实配置：叠厚、匝数、线材、接法、电流、转速、电池组和驱动。",
-    "saveTitle": "保存配置"
+    "saveTitle": "保存配置",
+    "packStock": "通用默认电池组 — 此电机未保存电池组",
+    "motorVTip": "此电机在 {I} A、{rpm} rpm 时所需的直流母线电压（线电压峰值）。"
   }
 }

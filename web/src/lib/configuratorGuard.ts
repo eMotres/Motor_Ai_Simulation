@@ -67,6 +67,29 @@ export function isBlocked(opts: { draftOpen: boolean; hasDraftTarget: boolean; l
  *  and the match was made. */
 export type ModelState = 'loading' | 'blocked' | 'ready';
 
+/** Which of several reference cards of the SAME cross-section stands for the loaded machine.
+ *
+ *  Owner 2026-10-05 (live L12 showed "NMC 100 cells / 370 V" beside a 6S machine): two cards
+ *  share L12's geometry — the real "CIANO14 40 new" and an older "CIANO14 40_12" duplicate —
+ *  and the old rule took whichever came first when their build distance tied, which was the
+ *  duplicate: no pack, no controller, no variants.  Order now: closest BUILD, then closest
+ *  magnet / outer-radius geometry, then a card that IS a machine of the catalogue
+ *  (`hasMachine`), then the catalogue's own order. */
+export function pickReference<T extends { hasMachine?: boolean }>(
+  candidates: T[], buildDist: (r: T) => number, geoDist: (r: T) => number,
+): T | undefined {
+  const EPS = 1e-9;
+  let best: T | undefined;
+  let bd = Infinity, bg = Infinity, bm = false;
+  for (const r of candidates) {
+    const d = buildDist(r), g = geoDist(r), m = !!r.hasMachine;
+    const better = best === undefined || d < bd - EPS
+      || (Math.abs(d - bd) <= EPS && (g < bg - EPS || (Math.abs(g - bg) <= EPS && m && !bm)));
+    if (better) { best = r; bd = d; bg = g; bm = m; }
+  }
+  return best;
+}
+
 export function modelState(o: {
   /** the references fetch has been ANSWERED (even with an empty list) */
   refsAnswered: boolean;

@@ -1,0 +1,94 @@
+# Passport spec — CIANO14 40 new (Ø40 pilot, 2026-10-05). Schema: passport_v1/spec.py.
+# The values the Ø40 pilot ran with (they were constants in scripts/passport_*_d40.py).
+die: "CIANO14 40 new"
+inputs_subdir: die40
+origin: >-
+  /srv/motres/workspaces/c309c100cd421858/dies/CIANO14 40 new/ +
+  /srv/motres/shared/{materials,bearings}_library.yaml, copied read-only 2026-10-05
+workspace_user: vadim@motresres.com
+report_stage1: PASSPORT_PILOT_D40_STAGE1_2026-10-05.md
+title: "Ø40"
+plan:
+  loss_speed_factors: [0.25, 0.5, 1.0, 1.5]
+  envelope_max_factor: 4.0
+  refine_points: [[2.0, 42.5], [2.0, 57.5], [2.5, 42.5], [2.5, 57.5]]
+machines:
+  L12:
+    config: L12
+    rated_duty: rated
+    peak_duty: peak
+    version: "6S"
+    owner_bus_V: [18.0, 22.2, 25.2]
+    owner_rated: {rpm: 13000.0, I_arms: 42.78}
+    owner_peak: {rpm: 14400.0, I_arms: 48.79}
+    audit: true
+    stage_a_lengths_mm: [12.0, 20.0]
+    controller:
+      status: set
+      source: >-
+        Controller_CIANO14_40_60V/controller_24V_FOC (README decision #2, BOM
+        docs/ctrl60_BOM_6S.csv, calc_notes §1-2)
+      device: IQE018N06NM6SC
+      n_parallel: 1
+      r_g_ohm: 10.0
+      v_gs_on_V: 12.0
+      v_gs_off_V: 0.0
+      dead_time_us: 0.1
+      f_carrier_hz: 48000.0
+      modulation: svpwm
+      m: 0.89
+      t_j_assumed_c: 110.0
+      build: "6S"
+      board_scale: 1
+    pwm_variants:
+      - {id: si_48k, device: IQE018N06NM6SC, carrier_hz: 48000.0, dead_time_s: 1.0e-7, fem_class: si48_100ns}
+      - {id: gan_48k_IGC019S06S1, device: IGC019S06S1, carrier_hz: 48000.0, dead_time_s: 2.0e-8, fem_class: gan48_20ns}
+      - {id: gan_48k_IGC016K10S2, device: IGC016K10S2, carrier_hz: 48000.0, dead_time_s: 2.0e-8, fem_class: gan48_20ns}
+      - {id: gan_100k_IGC019S06S1, device: IGC019S06S1, carrier_hz: 100000.0, dead_time_s: 2.0e-8, fem_class: gan100_20ns}
+      - {id: gan_100k_IGC016K10S2, device: IGC016K10S2, carrier_hz: 100000.0, dead_time_s: 2.0e-8, fem_class: gan100_20ns}
+    mech:
+      critical_speeds: true
+      beam: {bearing_span_extra_mm: 16.0, overhang_a_mm: 5.0, overhang_b_mm: 5.0,
+             source: "default pending owner: 618/8-2Z at the stack ends (3 mm clearance), overhangs 5 mm, k from the Mechanical tab"}
+  L20:
+    config: L20
+    rated_duty: rated
+    peak_duty: null
+    version: "12S"
+    owner_bus_V: [36.0, 44.4, 50.4]
+    owner_rated: {rpm: 13000.0, I_arms: 52.55}
+    owner_peak: null
+    peak_rule:
+      ratio: 1.140486208508649
+      source: >-
+        L12 owner peak/rated current ratio 48.79/42.78 applied to I0 (labelled
+        assumption; the L20 card's peak needs an owner duty)
+    stage_a_lengths_mm: [20.0]
+    controller:
+      status: set
+      source: >-
+        Controller_CIANO14_40_60V/controller_24V_FOC (README decision #2, BOM
+        docs/ctrl60_BOM_12S.csv, calc_notes §1-2)
+      device: IQE036N08NM6SC
+      n_parallel: 1
+      r_g_ohm: 12.0
+      v_gs_on_V: 12.0
+      v_gs_off_V: 0.0
+      dead_time_us: 0.1
+      f_carrier_hz: 48000.0
+      modulation: svpwm
+      m: 0.89
+      t_j_assumed_c: 110.0
+      build: "12S"
+      board_scale: 1
+    pwm_variants:
+      - {id: si_48k, device: IQE036N08NM6SC, carrier_hz: 48000.0, dead_time_s: 1.0e-7, fem_class: si48_100ns}
+      - {id: gan_48k_IGC016K10S2, device: IGC016K10S2, carrier_hz: 48000.0, dead_time_s: 2.0e-8, fem_class: gan48_20ns}
+      - {id: gan_100k_IGC016K10S2, device: IGC016K10S2, carrier_hz: 100000.0, dead_time_s: 2.0e-8, fem_class: gan100_20ns}
+    not_computed_variants:
+      - {id: "gan_*_IGD015S10S1", device: IGD015S10S1,
+         status: "not computed: no public datasheet (Infineon lists no document for the part) — no device card"}
+    mech:
+      critical_speeds: true
+      beam: {bearing_span_extra_mm: 16.0, overhang_a_mm: 5.0, overhang_b_mm: 5.0,
+             source: "default pending owner: 618/8-2Z at the stack ends (3 mm clearance), overhangs 5 mm, k from the Mechanical tab"}

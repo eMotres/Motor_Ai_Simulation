@@ -1,4 +1,4 @@
-"""The pilot's computation stages (driven by scripts/passport_pilot_d40.py).
+"""The passport's computation stages (driven by scripts/passport_pilot.py + a spec).
 
 Each stage plans jobs from the frozen snapshot and the state of the previous
 stages, runs them through the runner's process pool and records what it
@@ -38,6 +38,35 @@ def _I0(snap) -> float:
 
 def _n0(snap) -> float:
     return float(snap["rated_duty"]["rpm"])
+
+
+#: Loss-trajectory speeds as multiples of the rated speed (the Ø40 pilot's
+#: default; a spec's ``plan.loss_speed_factors`` overrides it).
+LOSS_SPEED_FACTORS = (0.25, 0.5, 1.0, 1.5)
+
+
+def _speed_factors(snap) -> Tuple[float, ...]:
+    return tuple(float(f) for f in ((snap.get("plan") or {}).get("loss_speed_factors")
+                                    or LOSS_SPEED_FACTORS))
+
+
+def _n_mech(mech0: Mapping[str, Any]) -> float:
+    """The bearing speed limit, or +inf when no bearing names one (NaN-safe:
+    a machine with no bearings has NO mechanical limit from them, stated)."""
+    v = mech0.get("speed_limit_rpm")
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return float("inf")
+    return v if math.isfinite(v) and v > 0 else float("inf")
+
+
+def _audit(snap) -> bool:
+    """The Ø40 audit-2026-09-30 corners apply only where the spec asks for them."""
+    oi = snap.get("owner_inputs") or {}
+    if "audit" in oi:
+        return bool(oi["audit"])
+    return snap.get("tag") == "L12" and snap.get("die") == "CIANO14 40 new"
 
 
 def _base(snap, st, static: bool = True):
@@ -390,13 +419,14 @@ def stage_refine(R, snap, st) -> None:
     b = _base(snap, st)
     I0, n0 = _I0(snap), _n0(snap)
     jl = []
-    for fI, g in REFINE_POINTS:
+    pts = [tuple(x) for x in ((snap.get("plan") or {}).get("refine_points") or REFINE_POINTS)]
+    for fI, g in pts:
         jl.append(J.static_job("hot_I%.4g_g%s" % (fI, _g(g)), b, I_rms=fI * I0, gamma_deg=g,
                                magnet_temp_c=Tm, coil_temp_c=Tc, rpm=n0,
                                meta={"set": "hot", "fI": fI, "gamma": g,
                                      "role": "fw refinement (P04, after the first check pass)"}))
     R.run(jl)
-    st["refinement"] = {"points": [list(p) for p in REFINE_POINTS],
+    st["refinement"] = {"points": [list(p) for p in pts],
                         "reason": "first check pass: L20 (2.25·I0, 42.5°) ψ +1.0 %, "
                                   "(2.25·I0, 57.5°) ψ +0.52 % — FW arm 15° too coarse at "
                                   "the top levels; checks themselves are NOT added to the grid"}
@@ -483,10 +513,10 @@ def stage_loss(R, snap, st) -> None:
     I_pk, I_pk_src = _peak_current(snap, st)
     mech0 = LS.mech_losses(rpm=n0, bearings=snap["bearings"], geometry=snap["geometry"],
                            temp_c=None)
-    n_mech = float(mech0.get("speed_limit_rpm") or float("inf"))
+    n_mech = _n_mech(mech0)
     n_elec = hm.max_speed(Rh, vlim, I_pk)
     n_max = min(n_mech, n_elec)
-    speeds = sorted({round(f * n0, 3) for f in (0.25, 0.5, 1.0, 1.5)} | {round(n_max, 0)})
+    speeds = sorted({round(f * n0, 3) for f in _speed_factors(snap)} | {round(n_max, 0)})
     speeds = [n for n in speeds if n <= n_max + 1e-6]
     currents = sorted({round(0.5 * I0, 6), round(I0, 6), round(I_pk, 6)})
     plan = []
@@ -508,8 +538,10 @@ def stage_loss(R, snap, st) -> None:
         "v_phase_limit_V": vlim, "R_hot_ohm": Rh,
         "I_peak_rms": I_pk, "I_peak_source": I_pk_src,
         "n_mech_limit_rpm": n_mech, "n_mech_source":
-            "bearing speed limit (mech_losses / bearings library); critical speed and "
-            "rotor stress not computed in stage 1",
+            ("bearing speed limit (mech_losses / bearings library); critical speed and "
+             "rotor stress not computed in stage 1") if math.isfinite(n_mech) else
+            "no bearing named on the configuration — no bearing speed limit (stated, "
+            "not a measured +inf)",
         "n_elec_limit_rpm": n_elec, "n_max_rpm": n_max,
         "speeds": speeds, "currents": currents, "points": plan}
     st["mech"] = {str(n): LS.mech_losses(rpm=n, bearings=snap["bearings"],
@@ -564,7 +596,7 @@ def stage_loss2(R, snap, st) -> None:
     n_mech = float(lp0["n_mech_limit_rpm"])
     n_elec = hm.max_speed(Rh, vlim, I_pk)
     n_max = min(n_mech, n_elec)
-    speeds = sorted({round(f * n0, 3) for f in (0.25, 0.5, 1.0, 1.5)} | {round(n_max, 0)})
+    speeds = sorted({round(f * n0, 3) for f in _speed_factors(snap)} | {round(n_max, 0)})
     speeds = [n for n in speeds if n <= n_max + 1e-6]
     currents = sorted({round(0.5 * I0, 6), round(I0, 6), round(I_pk, 6)})
     plan, jl = [], []
@@ -709,7 +741,7 @@ def stage_checks(R, snap, st) -> None:
     rd = snap["rated_duty"]
     st_pts.append(("chk_duty_rated_g", rd["current_arms"], rd["gamma_deg"],
                    "rated duty current at the duty's gamma"))
-    if snap["tag"] == "L12":
+    if _audit(snap):
         for f in (0.5, 1.0, 1.3):
             st_pts.append(("chk_audit_I%.1f" % f, AUDIT_I0 * f, AUDIT_GAMMA,
                            "audit 2026-09-30 corner I x%.1f (gamma 10°)" % f))
@@ -754,8 +786,8 @@ def stage_checks(R, snap, st) -> None:
                              end_winding_factor=du["end_winding_factor"],
                              meta={"set": "duty", "rpm": du["rpm"], "I": du["current_arms"],
                                    "gamma": du["gamma_deg"], "role": "saved duty re-solved"}))
-    # (f) audit loss corners (L12 only; gamma 10°, off the MTPA trajectory)
-    if snap["tag"] == "L12":
+    # (f) audit loss corners (Ø40 L12 only; gamma 10°, off the MTPA trajectory)
+    if _audit(snap):
         for jid, n, I in (("audit_base", n0, AUDIT_I0), ("audit_rpm0.5", 0.5 * n0, AUDIT_I0),
                           ("audit_rpm1.5", 1.5 * n0, AUDIT_I0),
                           ("audit_I0.5", n0, 0.5 * AUDIT_I0), ("audit_I1.3", n0, 1.3 * AUDIT_I0)):

@@ -274,19 +274,26 @@ def motor_point(rec, snap, hm, rows_grid, p) -> Dict[str, Any]:
 class PwmModel:
     """dP_harm(n, I) from a carrier class's FEM anchors.
 
-    Each anchor (n_a, I_a) gives k_a = dP_a / HDF(m_a) — the ripple loss per
-    unit SVPWM harmonic-distortion factor at its own modulation index.  k is
-    linear in I between the anchors' currents (held outside, flagged) and
-    dP(n, I) = k(I) · HDF(m(n, I)).  Exact at every anchor."""
+    Each anchor gives k_a = dP_a / HDF(m_a) — the ripple loss per unit SVPWM
+    harmonic-distortion factor at its own modulation index m_a.  The FEM shows
+    k depends on m, not on the current (Ø40, 13 000 rpm, MTPA: 5.3 W at 0.5·I0
+    and at I0, m 0.90 / 0.93), and rises at low m where the dead-time
+    distortion is not in HDF (2.5·I0 at γ = 80°, m 0.30: k ×2.3).  So k is
+    linear in m between the anchors (held outside, flagged) and
+    dP(n, I) = k(m) · HDF(m(n, I)).  Exact at every anchor."""
 
     def __init__(self, anchors: Sequence[Mapping[str, Any]], scale: float = 1.0,
                  derived: Optional[str] = None):
         a = [x for x in anchors if x.get("dP_harm_W") is not None and x.get("m_index")]
-        self.anchors = sorted(a, key=lambda x: float(x["I"]))
+        self.anchors = sorted(a, key=lambda x: float(x["m_index"]))
         self.scale = float(scale)
         self.derived = derived
-        self.k = [(float(x["I"]), float(x["dP_harm_W"]) * self.scale
-                   / max(hdf_svpwm(float(x["m_index"])), 1e-12)) for x in self.anchors]
+        km: Dict[float, List[float]] = {}
+        for x in self.anchors:          # anchors at the same m are averaged
+            m = round(float(x["m_index"]), 3)
+            km.setdefault(m, []).append(float(x["dP_harm_W"]) * self.scale
+                                        / max(hdf_svpwm(float(x["m_index"])), 1e-12))
+        self.k = sorted((m, sum(v) / len(v)) for m, v in km.items())
 
     def __bool__(self) -> bool:
         return bool(self.anchors)
@@ -296,16 +303,17 @@ class PwmModel:
             if abs(float(x["rpm"]) - n) < 1e-6 and abs(float(x["I"]) - I) < 1e-6:
                 v = float(x["dP_harm_W"]) * self.scale
                 return v, (self.derived or "FEM") + " (%s)" % x.get("tag"), not self.derived
-        Is = [k[0] for k in self.k]
+        ms = [k[0] for k in self.k]
         ks = [k[1] for k in self.k]
-        held = I < Is[0] - 1e-6 or I > Is[-1] + 1e-6
-        kI = float(np.interp(I, Is, ks))
-        how = ("%sFEM anchors at %s A: k = dP/HDF(m) linear in I%s, × HDF(m %.3f)" % (
+        held = m_p < ms[0] - 1e-6 or m_p > ms[-1] + 1e-6
+        km = float(np.interp(m_p, ms, ks))
+        how = ("%sFEM anchors (%s A, m %s): k = dP/HDF(m) linear in m%s, × HDF(m %.3f)" % (
             (self.derived + "; ") if self.derived else "",
-            "/".join("%.1f" % i for i in Is),
-            " (HELD at the nearest anchor current — outside the FEM currents)" if held else "",
+            "/".join("%.1f" % float(x["I"]) for x in self.anchors),
+            "/".join("%.3f" % m for m in ms),
+            " (HELD at the nearest anchor m — outside the FEM range)" if held else "",
             m_p))
-        return kI * hdf_svpwm(m_p), how, False
+        return km * hdf_svpwm(m_p), how, False
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -378,8 +386,8 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
         f_sw, dead = float(v["carrier_hz"]), float(v["dead_time_s"])
         model = PwmModel(pwm_fem.get(v["fem_class"]) or [])
         if not model and f_sw > 48e3 * 1.01:
-            # No FEM at this carrier (100 kHz: the mesh build of the 1 320-node
-            # slip ring did not finish, see docs/BUG_PWM_100K_MESH_2026-10-05.md).
+            # No FEM at this carrier (100 kHz: ~(steps/period)² cost, 5–7 h per
+            # run — see docs/BUG_PWM_100K_COST_2026-10-05.md).
             # Ripple current ∝ 1/f_sw; the ripple-driven loss falls between
             # ∝ 1/f² and ∝ 1/f: the card takes (48k/f)^1.5 of the same
             # technology's 48 kHz FEM anchors and states the range.

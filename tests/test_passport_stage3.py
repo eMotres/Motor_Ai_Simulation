@@ -34,6 +34,25 @@ def test_board_model_reproduces_the_controller_rating_on_its_own_device(build, p
     assert I_hot < I_lim
 
 
+def test_pwm_model_is_exact_at_anchors_and_holds_outside():
+    a = [{"tag": "lo", "rpm": 13000.0, "I": 20.0, "dP_harm_W": 4.0, "m_index": 0.9},
+         {"tag": "hi", "rpm": 13000.0, "I": 40.0, "dP_harm_W": 6.0, "m_index": 1.0}]
+    pm = S3.PwmModel(a)
+    v, how, fem = pm.at(13000.0, 20.0, 0.9)
+    assert fem and v == pytest.approx(4.0) and "lo" in how
+    # between the anchors: k linear in m, times HDF at the point
+    k_mid = 0.5 * (4.0 / S3.hdf_svpwm(0.9) + 6.0 / S3.hdf_svpwm(1.0))
+    v, how, fem = pm.at(6500.0, 30.0, 0.95)
+    assert not fem and v == pytest.approx(k_mid * S3.hdf_svpwm(0.95))
+    # below the lowest anchor m: k held, HDF follows the point
+    v, how, _ = pm.at(3250.0, 30.0, 0.5)
+    assert "HELD" in how
+    assert v == pytest.approx(4.0 / S3.hdf_svpwm(0.9) * S3.hdf_svpwm(0.5))
+    est = S3.PwmModel(a, scale=0.5, derived="ESTIMATE")
+    v, how, fem = est.at(13000.0, 40.0, 1.0)
+    assert not fem and v == pytest.approx(3.0) and how.startswith("ESTIMATE")
+
+
 def test_gan_drive_is_the_reference_board_drive():
     d = S3.drive_for(get_device("IGC016K10S2"), 12.0)
     assert d["tech"] == "GaN" and d["v_gs_on"] == 5.0 and d["r_g"] == 5.1

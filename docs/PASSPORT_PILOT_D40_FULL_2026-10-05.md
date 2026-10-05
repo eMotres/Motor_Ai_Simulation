@@ -74,8 +74,21 @@ limit by ~24 % (conduction halves); at 6S the gain is ~4 %.
 
 Server budget: stage 1 2.32 h container wall + full card 4.75 h (one container,
 `--cpus 8`, nice 19) = 7.1 h. SPICE: 416 double pulses (one failed, uniform
-set). 100 kHz PWM FEM: two runs stopped after 2 h in the mesh build
-(1 320-node slip ring) — estimate used, labelled.
+set). 100 kHz PWM FEM: two runs stopped after 2 h — not stuck in meshing
+(corrected 2026-10-05 evening): a ~(steps/period)² cost cliff, see
+`docs/BUG_PWM_100K_COST_2026-10-05.md`; estimate used, labelled.
+
+## Addendum — drive-variant grid (2026-10-05 evening, feat/passport-d40-pwm-grid)
+
+Configure refused below 42.8 A (variants covered only rated..peak). The loss
+trajectory now spans the static current levels 0.25…2.5·I0 up to the demag
+limit (L12 10.7…107 A, L20 13.1…78.8 A) at every loss-grid speed + the peak
+duty speed (`loss_plan3`, settled FEM points); every variant carries the full
+(rpm × I_A) grid. Motor PWM extra loss: FEM anchors at 0.5·I0, I0, peak and the
+top level (Si 48 kHz and GaN 48 kHz), k = dP/HDF(m) linear in I. Infeasible
+nodes (voltage limit beyond γ = 80°, e.g. L12 I0 at 22 207 rpm — that speed is
+the peak current's limit) carry a `status`; where the board-limit current
+cannot run at a speed, `p_cont_max_status` says so.
 
 ## Rejected
 
@@ -83,7 +96,7 @@ set). 100 kHz PWM FEM: two runs stopped after 2 h in the mesh build
   `docs/BUG_LDLQ_REPORTED_2026-10-05.md`).
 - Interpolating the PWM extra loss from the matched-sine TDM run on the
   normal mesh (cross-mesh, cross-method difference).
-- 100 kHz motor-side FEM: the 1 320-node slip ring did not finish meshing in
-  2 h; the 100 kHz motor PWM loss is the 48 kHz FEM × (48/100)^1.5 with the
+- 100 kHz motor-side FEM: ≈ 5–7 h per run (cost ∝ (steps/period)², see the
+  bug note); the 100 kHz motor PWM loss is the 48 kHz FEM × (48/100)^1.5 with the
   range (48/100)^2…(48/100)^1 stated on every point (ESTIMATE label).
 - Warm-started 7-length Stage A sweep (69 min per length under load).

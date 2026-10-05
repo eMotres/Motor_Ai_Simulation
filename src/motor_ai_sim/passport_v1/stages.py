@@ -505,6 +505,100 @@ def stage_loss(R, snap, st) -> None:
     R.run(jl)
 
 
+#: Voltage margin of the full card (owner default pending, 2026-10-05): the
+#: controller project's centred SVPWM with a 1 µs minimum low-side on-time at
+#: 48 kHz (+0.1 µs dead time) -> m <= 1 - 2·48 kHz·1.1 µs = 0.894 -> 0.89
+#: (Controller_CIANO14_40_60V/controller_24V_FOC/docs/calc_notes.md §2).
+M_MARGIN_CONTROLLER = 0.89
+
+
+def _reuse_or_job(R, prefix, n, I, g, how, b, snap, I0, set_name, extra_meta=None):
+    """An existing settled point at the same (n, I, gamma) is reused, else a
+    new job (the trajectory only moves where the margin moves the FW angle)."""
+    Tm, Tc = _hot(snap)
+    steps = int(snap["rated_duty"]["steps_per_period"])
+    for rid, rec in R.done.items():
+        k = rec.get("kw") or {}
+        if (rec.get("meta") or {}).get("set") in ("loss", "loss2", "loss_check", "loss_check2") \
+                and k.get("eddy") and k.get("demag") \
+                and abs(float(k.get("rpm", -1)) - n) < 1e-6 \
+                and abs(float(k.get("I_phase_rms", -1)) - I) < 1e-6 \
+                and abs(float(k.get("gamma_deg", 999)) - round(g, 3)) < 0.05 \
+                and int(k.get("n_steps_per_period", 0)) == steps:
+            return rid, None
+    jid = "%s_n%.0f_I%.4g_g%s" % (prefix, n, I / I0, _g(round(g, 2)))
+    meta = {"set": set_name, "rpm": n, "I": I, "gamma": round(g, 3), "mode": how}
+    meta.update(extra_meta or {})
+    return jid, J.loss_job(jid, b, I_rms=I, gamma_deg=round(g, 3), rpm=n,
+                           magnet_temp_c=Tm, coil_temp_c=Tc, steps=steps, meta=meta)
+
+
+def stage_loss2(R, snap, st) -> None:
+    """The loss trajectory and its off-grid checks re-planned at the
+    controller margin m = 0.89 (replaces the 0.95 placeholder).  Points whose
+    operating angle does not move are reused; only the FW points are solved."""
+    from motor_ai_sim.passport_v1 import psimap as PM
+    b = _base(snap, st, static=False)
+    I0, n0 = _I0(snap), _n0(snap)
+    hm = hot_map(R, snap, st)
+    Rh = R_hot(R, st)
+    m = M_MARGIN_CONTROLLER
+    vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), m)
+    I_pk, I_pk_src = _peak_current(snap, st)
+    lp0 = st["loss_plan"]
+    n_mech = float(lp0["n_mech_limit_rpm"])
+    n_elec = hm.max_speed(Rh, vlim, I_pk)
+    n_max = min(n_mech, n_elec)
+    speeds = sorted({round(f * n0, 3) for f in (0.25, 0.5, 1.0, 1.5)} | {round(n_max, 0)})
+    speeds = [n for n in speeds if n <= n_max + 1e-6]
+    currents = sorted({round(0.5 * I0, 6), round(I0, 6), round(I_pk, 6)})
+    plan, jl = [], []
+    for n in speeds:
+        for I in currents:
+            g, how = hm.operating_gamma(I, n, Rh, vlim)
+            row = {"rpm": n, "I": I, "gamma": g, "mode": how}
+            if g is not None:
+                jid, job = _reuse_or_job(R, "loss2", n, I, g, how, b, snap, I0, "loss2")
+                row["id"] = jid
+                if job:
+                    jl.append(job)
+            plan.append(row)
+    lchk = [("lchk2_0.75n_0.75I", 0.75 * n0, 0.75 * I0, "mid loss grid"),
+            ("lchk2_0.35n_peak", 0.35 * n0, I_pk, "low speed, peak current"),
+            ("lchk2_1.25n_mid", 1.25 * n0, 0.5 * (I0 + I_pk), "between speed and current rows")]
+    lplan = []
+    for tag, n, I, role in lchk:
+        g, how = hm.operating_gamma(I, n, Rh, vlim)
+        row = {"rpm": n, "I": I, "gamma": g, "mode": how, "role": role}
+        if g is not None:
+            jid, job = _reuse_or_job(R, tag, n, I, g, how, b, snap, I0, "loss_check2",
+                                     {"role": role})
+            row["id"] = jid
+            if job:
+                jl.append(job)
+        else:
+            row["id"] = tag
+        lplan.append(row)
+    st["loss_plan2"] = {
+        "bus": TRAJECTORY_BUS, "v_dc": bus(snap, TRAJECTORY_BUS), "m": m,
+        "m_source": "default pending owner — controller project calc_notes §2 "
+                    "(centred SVPWM, 1 µs min LS on-time + 0.1 µs dead time at 48 kHz)",
+        "v_phase_limit_V": vlim, "R_hot_ohm": Rh,
+        "I_peak_rms": I_pk, "I_peak_source": I_pk_src,
+        "n_mech_limit_rpm": n_mech, "n_mech_source": lp0["n_mech_source"],
+        "n_elec_limit_rpm": n_elec, "n_max_rpm": n_max,
+        "speeds": speeds, "currents": currents, "points": plan,
+        "checks": lplan}
+    from motor_ai_sim.passport_v1 import losses as LS
+    for n in speeds + [p["rpm"] for p in lplan]:
+        st["mech"].setdefault(str(n), LS.mech_losses(rpm=n, bearings=snap["bearings"],
+                                                     geometry=snap["geometry"], temp_c=None))
+    print("  loss plan (m %.2f):" % m, [(p["rpm"], round(p["I"], 2),
+                                         p["gamma"] and round(p["gamma"], 2), p.get("id"))
+                                        for p in plan], flush=True)
+    R.run(jl)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 #  independent checks (spec §9, B1, P05, B4) and duty / audit comparisons
 # ─────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,2391 @@
+{
+ "schema": "passport-v1-full-1",
+ "machine": {
+  "die": "CIANO14 40 new",
+  "configuration": "L12",
+  "version": "6S",
+  "tag": "L12"
+ },
+ "source": "docs/data/passport_pilot_d40/full/passport_L12.json",
+ "pwm_variants": [
+  {
+   "id": "si_48k",
+   "device": "IQE018N06NM6SC",
+   "technology": "Si",
+   "carrier_hz": 48000.0,
+   "dead_time_s": 1e-07,
+   "modulation": "SVPWM centred",
+   "m_max": 0.89,
+   "n_parallel": 1,
+   "bus_v": {
+    "min": 18.0,
+    "nom": 22.2,
+    "max": 25.2
+   },
+   "bus_evaluated": "nom",
+   "build": {
+    "turns_per_coil": null,
+    "wires_per_slot": 7,
+    "coils_per_phase": 4,
+    "length_mm": 12.0,
+    "wire": {
+     "width_mm": 2.5,
+     "height_mm": 0.6,
+     "split": 1,
+     "parallel": 1
+    },
+    "connection": "2S star",
+    "geometry_sig": "713d68a176b97360f34a9d512d85cf3262f30bfd76d2e19ebae1dafa6eb3310f",
+    "snapshot_sha256": "766711160766bb96e226fa39c4b54d8b35538c08347a40360bda28b2f68d3349"
+   },
+   "drive": {
+    "v_gs_on": 12.0,
+    "v_gs_off": 0.0,
+    "r_g": 11.3,
+    "r_g_off": 10.85,
+    "l_sigma": 3.0
+   },
+   "provenance": {
+    "motor_pwm": "2-D FEM, drive=inverter (centred SVPWM, device drop + dead time in the circuit) vs sine reference at the extracted fundamental, same mesh/steps (harm_ref); FEM class si48_100ns",
+    "motor_pwm_fem_runs": {
+     "rated": "pwm_L12_rated_IQE018N06NM6SC_48k_100ns",
+     "peak": "pwm_L12_peak_IQE018N06NM6SC_48k_100ns"
+    },
+    "inverter": "Si: vendor SPICE double-pulse table (ngspice, our driver set)",
+    "thermal": "board model (estimate, calibrated on the controller project's Si ratings) — see controller.board",
+    "motor_sine": "passport loss trajectory (m = 0.89) + analytic mech",
+    "labels": [
+     "2-D",
+     "PWM",
+     "default pending owner",
+     "Si switching: vendor SPICE table"
+    ]
+   },
+   "i_board_limit_A": {
+    "favourable": 26.100000000769796,
+    "weak": 22.905776930929278,
+    "hot_motor": 16.541255314768932
+   },
+   "coverage": {
+    "points": 12,
+    "fem_points": [
+     "13000rpm_rated",
+     "14400rpm_peak"
+    ],
+    "scaled_points": [
+     "3250rpm_rated",
+     "3250rpm_peak",
+     "6500rpm_rated",
+     "6500rpm_peak",
+     "13000rpm_peak",
+     "14400rpm_rated",
+     "19500rpm_rated",
+     "19500rpm_peak",
+     "22207rpm_peak"
+    ],
+    "infeasible": [
+     "22207rpm_rated"
+    ],
+    "statement": "rated and peak current at every loss-grid speed + the peak duty speed, nominal bus; motor PWM loss FEM at the rated and peak points, HDF-scaled elsewhere"
+   },
+   "points": {
+    "3250rpm_rated": {
+     "rpm": 3250.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.1542439519410783,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 0.270)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 12.064624583794963,
+      "sw": 3.1307393003309105,
+      "dead": 0.7589910126256267
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 70.0585152129417,
+     "eta_shaft_pct": 80.14346585310906,
+     "p_cont_max_W": 133.1701619808461,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 133.1701619808461,
+      "weak": 117.00877061700507,
+      "hot_motor": 84.63994710500634
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 216.80245883434478,
+     "T_op_Nm": 0.6371780159239145,
+     "P_motor_sine_W": 52.507044655257445,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 309.45911168025367,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "3250rpm_peak": {
+     "rpm": 3250.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.068371848461856,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.278)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 15.696333971828064,
+      "sw": 3.638791499236281,
+      "dead": 0.8755496609047516
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.41370683527478,
+     "eta_shaft_pct": 78.13446763699275,
+     "p_cont_max_W": 133.1701619808461,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 133.1701619808461,
+      "weak": 117.00877061700507,
+      "hot_motor": 84.63994710500634
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 246.20003094164875,
+     "T_op_Nm": 0.723555288215198,
+     "P_motor_sine_W": 67.77525144430591,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 365.2076743728659,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_rated": {
+     "rpm": 6500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 2.8197269372175104,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 0.492)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 12.064624583794963,
+      "sw": 3.1307393003309105,
+      "dead": 0.7589910126256267
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 81.5134424312592,
+     "eta_shaft_pct": 87.96831648046829,
+     "p_cont_max_W": 265.1858479601352,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 265.1858479601352,
+      "weak": 232.99661203755457,
+      "hot_motor": 168.5264390736552
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 432.590197563345,
+     "T_op_Nm": 0.6357660127023398,
+     "P_motor_sine_W": 56.18489758138962,
+     "P_mech_W": 0.162,
+     "P_battery_W": 530.6979863206625,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_peak": {
+     "rpm": 6500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 2.5504514440079062,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.499)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 15.696333971828064,
+      "sw": 3.638791499236281,
+      "dead": 0.8755496609047516
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 79.80131607346819,
+     "eta_shaft_pct": 86.87108613693488,
+     "p_cont_max_W": 265.1858479601352,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 265.1858479601352,
+      "weak": 232.99661203755457,
+      "hot_motor": 168.5264390736552
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 491.36346316447225,
+     "T_op_Nm": 0.7221111426291607,
+     "P_motor_sine_W": 71.54779866009359,
+     "P_mech_W": 0.162,
+     "P_battery_W": 615.7335334070231,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_rated": {
+     "rpm": 13000.0,
+     "I_A": 42.78,
+     "duty": "rated",
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 5.3,
+     "motor_pwm_loss_basis": "FEM",
+     "inverter_loss_W": {
+      "cond": 12.064624583794963,
+      "sw": 3.1307393003309105,
+      "dead": 0.7589910126256267
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.37433990192193,
+     "eta_shaft_pct": 92.0523879805028,
+     "p_cont_max_W": 525.9552722319482,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 525.9552722319482,
+      "weak": 462.09667546440926,
+      "hot_motor": 334.19756071881534
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 861.2966774642515,
+     "T_op_Nm": 0.6330093381723414,
+     "P_motor_sine_W": 68.60766653784741,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 974.6004082408093,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_peak": {
+     "rpm": 13000.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 4.730247476380903,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.943)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 15.696333971828064,
+      "sw": 3.638791499236281,
+      "dead": 0.8755496609047516
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 87.51453407999918,
+     "eta_shaft_pct": 91.619580504499,
+     "p_cont_max_W": 525.9552722319482,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 525.9552722319482,
+      "weak": 462.09667546440926,
+      "hot_motor": 334.19756071881534
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 978.7533349828727,
+     "T_op_Nm": 0.719288450371451,
+     "P_motor_sine_W": 84.34116867362934,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 1118.3894712713322,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_rated": {
+     "rpm": 14400.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.954717515942778,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.647945001233613,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 12.064624583794963,
+      "sw": 3.1307393003309105,
+      "dead": 0.7589910126256267
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 89.16437926559175,
+     "eta_shaft_pct": 92.54104773066912,
+     "p_cont_max_W": 582.5733984723117,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 582.5733984723117,
+      "weak": 511.83772205288403,
+      "hot_motor": 370.16485648853387
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 951.5822059505537,
+     "T_op_Nm": 0.6313870933576015,
+     "P_motor_sine_W": 70.52395969544077,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1067.2223748859385,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_peak": {
+     "rpm": 14400.0,
+     "I_A": 48.79,
+     "duty": "peak",
+     "gamma_deg": 10.27965626148553,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.0,
+     "motor_pwm_loss_basis": "FEM",
+     "inverter_loss_W": {
+      "cond": 15.696333971828064,
+      "sw": 3.638791499236281,
+      "dead": 0.8755496609047516
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.4038147215783,
+     "eta_shaft_pct": 92.17826024193563,
+     "p_cont_max_W": 582.5733984723117,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 582.5733984723117,
+      "weak": 511.83772205288403,
+      "hot_motor": 370.16485648853387
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 1081.8553458878205,
+     "T_op_Nm": 0.7177771524122607,
+     "P_motor_sine_W": 86.27318945214931,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1223.7654554784192,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_rated": {
+     "rpm": 19500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 66.68295535492871,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.647945001233614,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 12.064624583794963,
+      "sw": 3.1307393003309105,
+      "dead": 0.7589910126256267
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 81.79238772578866,
+     "eta_shaft_pct": 86.78797098051328,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 553.3439323592065,
+     "T_op_Nm": 0.27137310151171684,
+     "P_motor_sine_W": 77.77999031947748,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 676.5225319186279,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_peak": {
+     "rpm": 19500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 59.44385146382001,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.003589919918578,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 15.696333971828064,
+      "sw": 3.638791499236281,
+      "dead": 0.8755496609047516
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 84.49627775810214,
+     "eta_shaft_pct": 89.1255768377701,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 815.1687751090294,
+     "T_op_Nm": 0.3995906951975399,
+     "P_motor_sine_W": 93.64758706742599,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 964.7392722348233,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "22207rpm_rated": {
+     "rpm": 22207.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": null,
+     "status": "infeasible at m = 0.89: needs deeper field weakening than characterised (gamma > 80°)"
+    },
+    "22207rpm_peak": {
+     "rpm": 22207.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 79.99500736535244,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.003589919918578,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 15.696333971828064,
+      "sw": 3.638791499236281,
+      "dead": 0.8755496609047516
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 66.9353392098397,
+     "eta_shaft_pct": 75.01944016110285,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 311.2579144680028,
+     "T_op_Nm": 0.1342611725554194,
+     "P_motor_sine_W": 97.67350448495507,
+     "P_mech_W": 0.9680000000000001,
+     "P_battery_W": 465.01282901132583,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    }
+   }
+  },
+  {
+   "id": "gan_48k_IGC019S06S1",
+   "device": "IGC019S06S1",
+   "technology": "GaN",
+   "carrier_hz": 48000.0,
+   "dead_time_s": 2e-08,
+   "modulation": "SVPWM centred",
+   "m_max": 0.89,
+   "n_parallel": 1,
+   "bus_v": {
+    "min": 18.0,
+    "nom": 22.2,
+    "max": 25.2
+   },
+   "bus_evaluated": "nom",
+   "build": {
+    "turns_per_coil": null,
+    "wires_per_slot": 7,
+    "coils_per_phase": 4,
+    "length_mm": 12.0,
+    "wire": {
+     "width_mm": 2.5,
+     "height_mm": 0.6,
+     "split": 1,
+     "parallel": 1
+    },
+    "connection": "2S star",
+    "geometry_sig": "713d68a176b97360f34a9d512d85cf3262f30bfd76d2e19ebae1dafa6eb3310f",
+    "snapshot_sha256": "766711160766bb96e226fa39c4b54d8b35538c08347a40360bda28b2f68d3349"
+   },
+   "drive": {
+    "v_gs_on": 5.0,
+    "v_gs_off": 0.0,
+    "r_g": 5.1,
+    "r_g_off": null,
+    "l_sigma": null
+   },
+   "provenance": {
+    "motor_pwm": "2-D FEM, drive=inverter (centred SVPWM, device drop + dead time in the circuit) vs sine reference at the extracted fundamental, same mesh/steps (harm_ref); FEM class gan48_20ns",
+    "motor_pwm_fem_runs": {
+     "rated": "pwm_L12_rated_IGC019S06S1_48k_20ns",
+     "peak": "pwm_L12_peak_IGC019S06S1_48k_20ns"
+    },
+    "inverter": "GaN: datasheet times-and-charges + E_oss (no E_on/E_off table, no public SPICE model)",
+    "thermal": "board model (estimate, calibrated on the controller project's Si ratings) — see controller.board",
+    "motor_sine": "passport loss trajectory (m = 0.89) + analytic mech",
+    "labels": [
+     "2-D",
+     "PWM",
+     "default pending owner",
+     "GaN dead time 20 ns: default pending owner",
+     "GaN switching: datasheet model (no public SPICE model)"
+    ]
+   },
+   "i_board_limit_A": {
+    "favourable": 27.143138791689125,
+    "weak": 24.017553736302943,
+    "hot_motor": 17.761632585279585
+   },
+   "coverage": {
+    "points": 12,
+    "fem_points": [
+     "13000rpm_rated",
+     "14400rpm_peak"
+    ],
+    "scaled_points": [
+     "3250rpm_rated",
+     "3250rpm_peak",
+     "6500rpm_rated",
+     "6500rpm_peak",
+     "13000rpm_peak",
+     "14400rpm_rated",
+     "19500rpm_rated",
+     "19500rpm_peak",
+     "22207rpm_peak"
+    ],
+    "infeasible": [
+     "22207rpm_rated"
+    ],
+    "statement": "rated and peak current at every loss-grid speed + the peak duty speed, nominal bus; motor PWM loss FEM at the rated and peak points, HDF-scaled elsewhere"
+   },
+   "points": {
+    "3250rpm_rated": {
+     "rpm": 3250.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.1542439519410783,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 0.270)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.118745723035907,
+      "sw": 0.6898359338737654,
+      "dead": 0.6721970279035261
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 70.39371459594042,
+     "eta_shaft_pct": 80.14346585310906,
+     "p_cont_max_W": 138.43373580506437,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 138.43373580506437,
+      "weak": 122.64121370254061,
+      "hot_motor": 90.85910089168912
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 216.80245883434478,
+     "T_op_Nm": 0.6371780159239145,
+     "P_motor_sine_W": 52.507044655257445,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 307.98553546831533,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "3250rpm_peak": {
+     "rpm": 3250.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.068371848461856,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.278)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.063667899320897,
+      "sw": 0.7808897566550028,
+      "dead": 0.7787330502595053
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.70800138172831,
+     "eta_shaft_pct": 78.13446763699275,
+     "p_cont_max_W": 138.43373580506437,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 138.43373580506437,
+      "weak": 122.64121370254061,
+      "hot_motor": 90.85910089168912
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 246.20003094164875,
+     "T_op_Nm": 0.723555288215198,
+     "P_motor_sine_W": 67.77525144430591,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 363.6202899471322,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_rated": {
+     "rpm": 6500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 2.8197269372175104,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 0.492)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.118745723035907,
+      "sw": 0.6898359338737654,
+      "dead": 0.6721970279035261
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 81.74040904017889,
+     "eta_shaft_pct": 87.96831648046829,
+     "p_cont_max_W": 275.66950099527924,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 275.66950099527924,
+      "weak": 244.21495550929643,
+      "hot_motor": 180.9133557673652
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 432.590197563345,
+     "T_op_Nm": 0.6357660127023398,
+     "P_motor_sine_W": 56.18489758138962,
+     "P_mech_W": 0.162,
+     "P_battery_W": 529.2244101087242,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_peak": {
+     "rpm": 6500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 2.5504514440079062,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.499)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.063667899320897,
+      "sw": 0.7808897566550028,
+      "dead": 0.7787330502595053
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 80.00757864874964,
+     "eta_shaft_pct": 86.87108613693488,
+     "p_cont_max_W": 275.66950099527924,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 275.66950099527924,
+      "weak": 244.21495550929643,
+      "hot_motor": 180.9133557673652
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 491.36346316447225,
+     "T_op_Nm": 0.7221111426291607,
+     "P_motor_sine_W": 71.54779866009359,
+     "P_mech_W": 0.162,
+     "P_battery_W": 614.1461489812893,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_rated": {
+     "rpm": 13000.0,
+     "I_A": 42.78,
+     "duty": "rated",
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 5.3,
+     "motor_pwm_loss_basis": "FEM",
+     "inverter_loss_W": {
+      "cond": 13.118745723035907,
+      "sw": 0.6898359338737654,
+      "dead": 0.6721970279035261
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.50816246311234,
+     "eta_shaft_pct": 92.0523879805028,
+     "p_cont_max_W": 546.7532611445217,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 546.7532611445217,
+      "weak": 484.35217956785317,
+      "hot_motor": 358.77133812189527
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 861.2966774642515,
+     "T_op_Nm": 0.6330093381723414,
+     "P_motor_sine_W": 68.60766653784741,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 973.126832028871,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_peak": {
+     "rpm": 13000.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 4.730247476380903,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.943)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.063667899320897,
+      "sw": 0.7808897566550028,
+      "dead": 0.7787330502595053
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 87.63892425625352,
+     "eta_shaft_pct": 91.619580504499,
+     "p_cont_max_W": 546.7532611445217,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 546.7532611445217,
+      "weak": 484.35217956785317,
+      "hot_motor": 358.77133812189527
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 978.7533349828727,
+     "T_op_Nm": 0.719288450371451,
+     "P_motor_sine_W": 84.34116867362934,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 1116.8020868455985,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_rated": {
+     "rpm": 14400.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.954717515942778,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.647945001233613,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.118745723035907,
+      "sw": 0.6898359338737654,
+      "dead": 0.6721970279035261
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 89.28766395369226,
+     "eta_shaft_pct": 92.54104773066912,
+     "p_cont_max_W": 605.6111708062393,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 605.6111708062393,
+      "weak": 536.4899727520834,
+      "hot_motor": 397.3850406888685
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 951.5822059505537,
+     "T_op_Nm": 0.6313870933576015,
+     "P_motor_sine_W": 70.52395969544077,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1065.7487986740002,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_peak": {
+     "rpm": 14400.0,
+     "I_A": 48.79,
+     "duty": "peak",
+     "gamma_deg": 10.27965626148553,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.0,
+     "motor_pwm_loss_basis": "FEM",
+     "inverter_loss_W": {
+      "cond": 17.063667899320897,
+      "sw": 0.7808897566550028,
+      "dead": 0.7787330502595053
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.51863501003562,
+     "eta_shaft_pct": 92.17826024193563,
+     "p_cont_max_W": 605.6111708062393,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 605.6111708062393,
+      "weak": 536.4899727520834,
+      "hot_motor": 397.3850406888685
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 1081.8553458878205,
+     "T_op_Nm": 0.7177771524122607,
+     "P_motor_sine_W": 86.27318945214931,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1222.1780710526855,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_rated": {
+     "rpm": 19500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 66.68295535492871,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.647945001233614,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.118745723035907,
+      "sw": 0.6898359338737654,
+      "dead": 0.6721970279035261
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 81.97093376434105,
+     "eta_shaft_pct": 86.78797098051328,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 553.3439323592065,
+     "T_op_Nm": 0.27137310151171684,
+     "P_motor_sine_W": 77.77999031947748,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 675.0489557066896,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_peak": {
+     "rpm": 19500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 59.44385146382001,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.003589919918578,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.063667899320897,
+      "sw": 0.7808897566550028,
+      "dead": 0.7787330502595053
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 84.63553728408488,
+     "eta_shaft_pct": 89.1255768377701,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 815.1687751090294,
+     "T_op_Nm": 0.3995906951975399,
+     "P_motor_sine_W": 93.64758706742599,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 963.1518878090895,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "22207rpm_rated": {
+     "rpm": 22207.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": null,
+     "status": "infeasible at m = 0.89: needs deeper field weakening than characterised (gamma > 80°)"
+    },
+    "22207rpm_peak": {
+     "rpm": 22207.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 79.99500736535244,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.003589919918578,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.063667899320897,
+      "sw": 0.7808897566550028,
+      "dead": 0.7787330502595053
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.16461474106978,
+     "eta_shaft_pct": 75.01944016110285,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 311.2579144680028,
+     "T_op_Nm": 0.1342611725554194,
+     "P_motor_sine_W": 97.67350448495507,
+     "P_mech_W": 0.9680000000000001,
+     "P_battery_W": 463.4254445855922,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    }
+   }
+  },
+  {
+   "id": "gan_48k_IGC016K10S2",
+   "device": "IGC016K10S2",
+   "technology": "GaN",
+   "carrier_hz": 48000.0,
+   "dead_time_s": 2e-08,
+   "modulation": "SVPWM centred",
+   "m_max": 0.89,
+   "n_parallel": 1,
+   "bus_v": {
+    "min": 18.0,
+    "nom": 22.2,
+    "max": 25.2
+   },
+   "bus_evaluated": "nom",
+   "build": {
+    "turns_per_coil": null,
+    "wires_per_slot": 7,
+    "coils_per_phase": 4,
+    "length_mm": 12.0,
+    "wire": {
+     "width_mm": 2.5,
+     "height_mm": 0.6,
+     "split": 1,
+     "parallel": 1
+    },
+    "connection": "2S star",
+    "geometry_sig": "713d68a176b97360f34a9d512d85cf3262f30bfd76d2e19ebae1dafa6eb3310f",
+    "snapshot_sha256": "766711160766bb96e226fa39c4b54d8b35538c08347a40360bda28b2f68d3349"
+   },
+   "drive": {
+    "v_gs_on": 5.0,
+    "v_gs_off": 0.0,
+    "r_g": 5.1,
+    "r_g_off": null,
+    "l_sigma": null
+   },
+   "provenance": {
+    "motor_pwm": "2-D FEM, drive=inverter (centred SVPWM, device drop + dead time in the circuit) vs sine reference at the extracted fundamental, same mesh/steps (harm_ref); FEM class gan48_20ns",
+    "motor_pwm_fem_runs": {
+     "rated": "pwm_L12_rated_IGC019S06S1_48k_20ns",
+     "peak": "pwm_L12_peak_IGC019S06S1_48k_20ns"
+    },
+    "inverter": "GaN: datasheet times-and-charges + E_oss (no E_on/E_off table, no public SPICE model)",
+    "thermal": "board model (estimate, calibrated on the controller project's Si ratings) — see controller.board",
+    "motor_sine": "passport loss trajectory (m = 0.89) + analytic mech",
+    "labels": [
+     "2-D",
+     "PWM",
+     "default pending owner",
+     "GaN dead time 20 ns: default pending owner",
+     "GaN switching: datasheet model (no public SPICE model)"
+    ]
+   },
+   "i_board_limit_A": {
+    "favourable": 27.086409852199722,
+    "weak": 23.967772908872575,
+    "hot_motor": 17.732420489664946
+   },
+   "coverage": {
+    "points": 12,
+    "fem_points": [
+     "13000rpm_rated",
+     "14400rpm_peak"
+    ],
+    "scaled_points": [
+     "3250rpm_rated",
+     "3250rpm_peak",
+     "6500rpm_rated",
+     "6500rpm_peak",
+     "13000rpm_peak",
+     "14400rpm_rated",
+     "19500rpm_rated",
+     "19500rpm_peak",
+     "22207rpm_peak"
+    ],
+    "infeasible": [
+     "22207rpm_rated"
+    ],
+    "statement": "rated and peak current at every loss-grid speed + the peak duty speed, nominal bus; motor PWM loss FEM at the rated and peak points, HDF-scaled elsewhere"
+   },
+   "points": {
+    "3250rpm_rated": {
+     "rpm": 3250.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.1542439519410783,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 0.270)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.151624784998404,
+      "sw": 0.9714843931813064,
+      "dead": 0.5661989238057621
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 70.34608499514736,
+     "eta_shaft_pct": 80.14346585310906,
+     "p_cont_max_W": 138.14767304379603,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 138.14767304379603,
+      "weak": 122.38918156155069,
+      "hot_motor": 90.71028804715438
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 216.80245883434478,
+     "T_op_Nm": 0.6371780159239145,
+     "P_motor_sine_W": 52.507044655257445,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 308.19406488548765,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "3250rpm_peak": {
+     "rpm": 3250.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.068371848461856,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.278)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.1064339842816,
+      "sw": 1.1007828972257117,
+      "dead": 0.6834748217495431
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.65824650535745,
+     "eta_shaft_pct": 78.13446763699275,
+     "p_cont_max_W": 138.14767304379603,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 138.14767304379603,
+      "weak": 122.38918156155069,
+      "hot_motor": 90.71028804715438
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 246.20003094164875,
+     "T_op_Nm": 0.723555288215198,
+     "P_motor_sine_W": 67.77525144430591,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 363.88769094415363,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_rated": {
+     "rpm": 6500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 2.8197269372175104,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 0.492)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.151624784998404,
+      "sw": 0.9714843931813064,
+      "dead": 0.5661989238057621
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 81.70821368816351,
+     "eta_shaft_pct": 87.96831648046829,
+     "p_cont_max_W": 275.09973930188113,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 275.09973930188113,
+      "weak": 243.7129738504308,
+      "hot_motor": 180.6169597669715
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 432.590197563345,
+     "T_op_Nm": 0.6357660127023398,
+     "P_motor_sine_W": 56.18489758138962,
+     "P_mech_W": 0.162,
+     "P_battery_W": 529.4329395258965,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_peak": {
+     "rpm": 6500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 2.5504514440079062,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.499)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.1064339842816,
+      "sw": 1.1007828972257117,
+      "dead": 0.6834748217495431
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 79.97275828012219,
+     "eta_shaft_pct": 86.87108613693488,
+     "p_cont_max_W": 275.09973930188113,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 275.09973930188113,
+      "weak": 243.7129738504308,
+      "hot_motor": 180.6169597669715
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 491.36346316447225,
+     "T_op_Nm": 0.7221111426291607,
+     "P_motor_sine_W": 71.54779866009359,
+     "P_mech_W": 0.162,
+     "P_battery_W": 614.4135499783108,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_rated": {
+     "rpm": 13000.0,
+     "I_A": 42.78,
+     "duty": "rated",
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 5.3,
+     "motor_pwm_loss_basis": "FEM",
+     "inverter_loss_W": {
+      "cond": 13.151624784998404,
+      "sw": 0.9714843931813064,
+      "dead": 0.5661989238057621
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.48920028803427,
+     "eta_shaft_pct": 92.0523879805028,
+     "p_cont_max_W": 545.6229397439204,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 545.6229397439204,
+      "weak": 483.356323548925,
+      "hot_motor": 358.1833330907049
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 861.2966774642515,
+     "T_op_Nm": 0.6330093381723414,
+     "P_motor_sine_W": 68.60766653784741,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 973.3353614460433,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_peak": {
+     "rpm": 13000.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 4.730247476380903,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 0.943)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.1064339842816,
+      "sw": 1.1007828972257117,
+      "dead": 0.6834748217495431
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 87.61794549353638,
+     "eta_shaft_pct": 91.619580504499,
+     "p_cont_max_W": 545.6229397439204,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 545.6229397439204,
+      "weak": 483.356323548925,
+      "hot_motor": 358.1833330907049
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 978.7533349828727,
+     "T_op_Nm": 0.719288450371451,
+     "P_motor_sine_W": 84.34116867362934,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 1117.06948784262,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_rated": {
+     "rpm": 14400.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.954717515942778,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.647945001233613,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.151624784998404,
+      "sw": 0.9714843931813064,
+      "dead": 0.5661989238057621
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 89.2701969275419,
+     "eta_shaft_pct": 92.54104773066912,
+     "p_cont_max_W": 604.3591224855732,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 604.3591224855732,
+      "weak": 535.3868707003476,
+      "hot_motor": 396.7337120389346
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 951.5822059505537,
+     "T_op_Nm": 0.6313870933576015,
+     "P_motor_sine_W": 70.52395969544077,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1065.9573280911725,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_peak": {
+     "rpm": 14400.0,
+     "I_A": 48.79,
+     "duty": "peak",
+     "gamma_deg": 10.27965626148553,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.0,
+     "motor_pwm_loss_basis": "FEM",
+     "inverter_loss_W": {
+      "cond": 17.1064339842816,
+      "sw": 1.1007828972257117,
+      "dead": 0.6834748217495431
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.49927220670585,
+     "eta_shaft_pct": 92.17826024193563,
+     "p_cont_max_W": 604.3591224855732,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 604.3591224855732,
+      "weak": 535.3868707003476,
+      "hot_motor": 396.7337120389346
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 1081.8553458878205,
+     "T_op_Nm": 0.7177771524122607,
+     "P_motor_sine_W": 86.27318945214931,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1222.445472049707,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_rated": {
+     "rpm": 19500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 66.68295535492871,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.647945001233614,
+     "motor_pwm_loss_basis": "FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.151624784998404,
+      "sw": 0.9714843931813064,
+      "dead": 0.5661989238057621
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 81.94561993751275,
+     "eta_shaft_pct": 86.78797098051328,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 553.3439323592065,
+     "T_op_Nm": 0.27137310151171684,
+     "P_motor_sine_W": 77.77999031947748,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 675.2574851238619,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_peak": {
+     "rpm": 19500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 59.44385146382001,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.003589919918578,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.1064339842816,
+      "sw": 1.1007828972257117,
+      "dead": 0.6834748217495431
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 84.61204634165082,
+     "eta_shaft_pct": 89.1255768377701,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 815.1687751090294,
+     "T_op_Nm": 0.3995906951975399,
+     "P_motor_sine_W": 93.64758706742599,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 963.419288806111,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "22207rpm_rated": {
+     "rpm": 22207.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": null,
+     "status": "infeasible at m = 0.89: needs deeper field weakening than characterised (gamma > 80°)"
+    },
+    "22207rpm_peak": {
+     "rpm": 22207.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 79.99500736535244,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 5.003589919918578,
+     "motor_pwm_loss_basis": "FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.1064339842816,
+      "sw": 1.1007828972257117,
+      "dead": 0.6834748217495431
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.12588245283757,
+     "eta_shaft_pct": 75.01944016110285,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 27.1 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 311.2579144680028,
+     "T_op_Nm": 0.1342611725554194,
+     "P_motor_sine_W": 97.67350448495507,
+     "P_mech_W": 0.9680000000000001,
+     "P_battery_W": 463.6928455826136,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    }
+   }
+  },
+  {
+   "id": "gan_100k_IGC019S06S1",
+   "device": "IGC019S06S1",
+   "technology": "GaN",
+   "carrier_hz": 100000.0,
+   "dead_time_s": 2e-08,
+   "modulation": "SVPWM centred",
+   "m_max": 0.89,
+   "n_parallel": 1,
+   "bus_v": {
+    "min": 18.0,
+    "nom": 22.2,
+    "max": 25.2
+   },
+   "bus_evaluated": "nom",
+   "build": {
+    "turns_per_coil": null,
+    "wires_per_slot": 7,
+    "coils_per_phase": 4,
+    "length_mm": 12.0,
+    "wire": {
+     "width_mm": 2.5,
+     "height_mm": 0.6,
+     "split": 1,
+     "parallel": 1
+    },
+    "connection": "2S star",
+    "geometry_sig": "713d68a176b97360f34a9d512d85cf3262f30bfd76d2e19ebae1dafa6eb3310f",
+    "snapshot_sha256": "766711160766bb96e226fa39c4b54d8b35538c08347a40360bda28b2f68d3349"
+   },
+   "drive": {
+    "v_gs_on": 5.0,
+    "v_gs_off": 0.0,
+    "r_g": 5.1,
+    "r_g_off": null,
+    "l_sigma": null
+   },
+   "provenance": {
+    "motor_pwm": "2-D FEM, drive=inverter (centred SVPWM, device drop + dead time in the circuit) vs sine reference at the extracted fundamental, same mesh/steps (harm_ref); FEM class gan100_20ns",
+    "motor_pwm_fem_runs": {
+     "rated": "pwm_L12_rated_IGC019S06S1_48k_20ns",
+     "peak": "pwm_L12_peak_IGC019S06S1_48k_20ns"
+    },
+    "inverter": "GaN: datasheet times-and-charges + E_oss (no E_on/E_off table, no public SPICE model)",
+    "thermal": "board model (estimate, calibrated on the controller project's Si ratings) — see controller.board",
+    "motor_sine": "passport loss trajectory (m = 0.89) + analytic mech",
+    "labels": [
+     "2-D",
+     "PWM",
+     "default pending owner",
+     "GaN dead time 20 ns: default pending owner",
+     "motor PWM loss: ESTIMATE from the 48 kHz FEM (no FEM at this carrier)",
+     "GaN switching: datasheet model (no public SPICE model)"
+    ]
+   },
+   "i_board_limit_A": {
+    "favourable": 26.27071368660836,
+    "weak": 23.152683924126904,
+    "hot_motor": 16.906876647226454
+   },
+   "coverage": {
+    "points": 12,
+    "fem_points": [],
+    "scaled_points": [
+     "3250rpm_rated",
+     "3250rpm_peak",
+     "6500rpm_rated",
+     "6500rpm_peak",
+     "13000rpm_rated",
+     "13000rpm_peak",
+     "14400rpm_rated",
+     "14400rpm_peak",
+     "19500rpm_rated",
+     "19500rpm_peak",
+     "22207rpm_peak"
+    ],
+    "infeasible": [
+     "22207rpm_rated"
+    ],
+    "statement": "rated and peak current at every loss-grid speed + the peak duty speed, nominal bus; motor PWM loss FEM at the rated and peak points, HDF-scaled elsewhere"
+   },
+   "points": {
+    "3250rpm_rated": {
+     "rpm": 3250.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 0.38384816046547915,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W); FEM anchor at 13000 rpm × HDF(m 0.270)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.091406240124805,
+      "sw": 1.4371581955703445,
+      "dead": 1.400410474799013
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 70.23913552946676,
+     "eta_shaft_pct": 80.37235463608344,
+     "p_cont_max_W": 134.03205734531818,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 134.03205734531818,
+      "weak": 118.2603087398295,
+      "hot_motor": 86.50366301151837
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 216.80245883434478,
+     "T_op_Nm": 0.6371780159239145,
+     "P_motor_sine_W": 52.507044655257445,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 308.6633359025207,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "3250rpm_peak": {
+     "rpm": 3250.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 0.3552910699991448,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 0.278)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.028107193535202,
+      "sw": 1.6268536596979224,
+      "dead": 1.6223605213739696
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.53324381157475,
+     "eta_shaft_pct": 78.31169055524953,
+     "p_cont_max_W": 134.03205734531818,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 134.03205734531818,
+      "weak": 118.2603087398295,
+      "hot_motor": 86.50366301151837
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 246.20003094164875,
+     "T_op_Nm": 0.723555288215198,
+     "P_motor_sine_W": 67.77525144430591,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 364.56123983704117,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_rated": {
+     "rpm": 6500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 0.9377107811964108,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W); FEM anchor at 13000 rpm × HDF(m 0.492)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.091406240124805,
+      "sw": 1.4371581955703445,
+      "dead": 1.400410474799013
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 81.80746889187523,
+     "eta_shaft_pct": 88.30627587505542,
+     "p_cont_max_W": 266.90251656885687,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 266.90251656885687,
+      "weak": 235.48934641881795,
+      "hot_motor": 172.23847039922566
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 432.590197563345,
+     "T_op_Nm": 0.6357660127023398,
+     "P_motor_sine_W": 56.18489758138962,
+     "P_mech_W": 0.162,
+     "P_battery_W": 528.790590178384,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_peak": {
+     "rpm": 6500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 0.848162204785748,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 0.499)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.028107193535202,
+      "sw": 1.6268536596979224,
+      "dead": 1.6223605213739696
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 80.01386600368619,
+     "eta_shaft_pct": 87.13332074769646,
+     "p_cont_max_W": 266.90251656885687,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 266.90251656885687,
+      "weak": 235.48934641881795,
+      "hot_motor": 172.23847039922566
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 491.36346316447225,
+     "T_op_Nm": 0.7221111426291607,
+     "P_motor_sine_W": 71.54779866009359,
+     "P_mech_W": 0.162,
+     "P_battery_W": 614.0978904104389,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_rated": {
+     "rpm": 13000.0,
+     "I_A": 42.78,
+     "duty": "rated",
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.7625349017820895,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W)",
+     "inverter_loss_W": {
+      "cond": 13.091406240124805,
+      "sw": 1.4371581955703445,
+      "dead": 1.400410474799013
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.69859520826647,
+     "eta_shaft_pct": 92.40173300929462,
+     "p_cont_max_W": 529.360884242482,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 529.360884242482,
+      "weak": 467.0418851017096,
+      "hot_motor": 341.5616718825038
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 861.2966774642515,
+     "T_op_Nm": 0.6330093381723414,
+     "P_motor_sine_W": 68.60766653784741,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 971.037563156334,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_peak": {
+     "rpm": 13000.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.573061560601508,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 0.943)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.028107193535202,
+      "sw": 1.6268536596979224,
+      "dead": 1.6223605213739696
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 87.75704048961543,
+     "eta_shaft_pct": 91.89115495591146,
+     "p_cont_max_W": 529.360884242482,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 529.360884242482,
+      "weak": 467.0418851017096,
+      "hot_motor": 341.5616718825038
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 978.7533349828727,
+     "T_op_Nm": 0.719288450371451,
+     "P_motor_sine_W": 84.34116867362934,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 1115.2989315981908,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_rated": {
+     "rpm": 14400.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.954717515942778,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.8782453184943264,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W); FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.091406240124805,
+      "sw": 1.4371581955703445,
+      "dead": 1.400410474799013
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 89.48258242294115,
+     "eta_shaft_pct": 92.88155338095923,
+     "p_cont_max_W": 586.3457686993645,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 586.3457686993645,
+      "weak": 517.3154927280475,
+      "hot_motor": 378.3220257775426
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 951.5822059505537,
+     "T_op_Nm": 0.6313870933576015,
+     "P_motor_sine_W": 70.52395969544077,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1063.4272952169417,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_peak": {
+     "rpm": 14400.0,
+     "I_A": 48.79,
+     "duty": "peak",
+     "gamma_deg": 10.27965626148553,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.6627687752661222,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W)",
+     "inverter_loss_W": {
+      "cond": 17.028107193535202,
+      "sw": 1.6268536596979224,
+      "dead": 1.6223605213739696
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.64071222584296,
+     "eta_shaft_pct": 92.44111193019359,
+     "p_cont_max_W": 586.3457686993645,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 586.3457686993645,
+      "weak": 517.3154927280475,
+      "hot_motor": 378.3220257775426
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 1081.8553458878205,
+     "T_op_Nm": 0.7177771524122607,
+     "P_motor_sine_W": 86.27318945214931,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1220.494870496323,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_rated": {
+     "rpm": 19500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 66.68295535492871,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.8782453184943269,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W); FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.091406240124805,
+      "sw": 1.4371581955703445,
+      "dead": 1.400410474799013
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 82.25380583307536,
+     "eta_shaft_pct": 87.30415678647145,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 553.3439323592065,
+     "T_op_Nm": 0.27137310151171684,
+     "P_motor_sine_W": 77.77999031947748,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 672.7274522496314,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_peak": {
+     "rpm": 19500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 59.44385146382001,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.6639626166153856,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.028107193535202,
+      "sw": 1.6268536596979224,
+      "dead": 1.6223605213739696
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 84.78391625290702,
+     "eta_shaft_pct": 89.45219763582152,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 815.1687751090294,
+     "T_op_Nm": 0.3995906951975399,
+     "P_motor_sine_W": 93.64758706742599,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 961.4662911741582,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "22207rpm_rated": {
+     "rpm": 22207.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": null,
+     "status": "infeasible at m = 0.89: needs deeper field weakening than characterised (gamma > 80°)"
+    },
+    "22207rpm_peak": {
+     "rpm": 22207.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 79.99500736535244,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.6639626166153856,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.028107193535202,
+      "sw": 1.6268536596979224,
+      "dead": 1.6223605213739696
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.40980139562535,
+     "eta_shaft_pct": 75.62818472356871,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.3 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 311.2579144680028,
+     "T_op_Nm": 0.1342611725554194,
+     "P_motor_sine_W": 97.67350448495507,
+     "P_mech_W": 0.9680000000000001,
+     "P_battery_W": 461.73984795066065,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    }
+   }
+  },
+  {
+   "id": "gan_100k_IGC016K10S2",
+   "device": "IGC016K10S2",
+   "technology": "GaN",
+   "carrier_hz": 100000.0,
+   "dead_time_s": 2e-08,
+   "modulation": "SVPWM centred",
+   "m_max": 0.89,
+   "n_parallel": 1,
+   "bus_v": {
+    "min": 18.0,
+    "nom": 22.2,
+    "max": 25.2
+   },
+   "bus_evaluated": "nom",
+   "build": {
+    "turns_per_coil": null,
+    "wires_per_slot": 7,
+    "coils_per_phase": 4,
+    "length_mm": 12.0,
+    "wire": {
+     "width_mm": 2.5,
+     "height_mm": 0.6,
+     "split": 1,
+     "parallel": 1
+    },
+    "connection": "2S star",
+    "geometry_sig": "713d68a176b97360f34a9d512d85cf3262f30bfd76d2e19ebae1dafa6eb3310f",
+    "snapshot_sha256": "766711160766bb96e226fa39c4b54d8b35538c08347a40360bda28b2f68d3349"
+   },
+   "drive": {
+    "v_gs_on": 5.0,
+    "v_gs_off": 0.0,
+    "r_g": 5.1,
+    "r_g_off": null,
+    "l_sigma": null
+   },
+   "provenance": {
+    "motor_pwm": "2-D FEM, drive=inverter (centred SVPWM, device drop + dead time in the circuit) vs sine reference at the extracted fundamental, same mesh/steps (harm_ref); FEM class gan100_20ns",
+    "motor_pwm_fem_runs": {
+     "rated": "pwm_L12_rated_IGC019S06S1_48k_20ns",
+     "peak": "pwm_L12_peak_IGC019S06S1_48k_20ns"
+    },
+    "inverter": "GaN: datasheet times-and-charges + E_oss (no E_on/E_off table, no public SPICE model)",
+    "thermal": "board model (estimate, calibrated on the controller project's Si ratings) — see controller.board",
+    "motor_sine": "passport loss trajectory (m = 0.89) + analytic mech",
+    "labels": [
+     "2-D",
+     "PWM",
+     "default pending owner",
+     "GaN dead time 20 ns: default pending owner",
+     "motor PWM loss: ESTIMATE from the 48 kHz FEM (no FEM at this carrier)",
+     "GaN switching: datasheet model (no public SPICE model)"
+    ]
+   },
+   "i_board_limit_A": {
+    "favourable": 26.197423109260853,
+    "weak": 23.098990070320724,
+    "hot_motor": 16.896447968792927
+   },
+   "coverage": {
+    "points": 12,
+    "fem_points": [],
+    "scaled_points": [
+     "3250rpm_rated",
+     "3250rpm_peak",
+     "6500rpm_rated",
+     "6500rpm_peak",
+     "13000rpm_rated",
+     "13000rpm_peak",
+     "14400rpm_rated",
+     "14400rpm_peak",
+     "19500rpm_rated",
+     "19500rpm_peak",
+     "22207rpm_peak"
+    ],
+    "infeasible": [
+     "22207rpm_rated"
+    ],
+    "statement": "rated and peak current at every loss-grid speed + the peak duty speed, nominal bus; motor PWM loss FEM at the rated and peak points, HDF-scaled elsewhere"
+   },
+   "points": {
+    "3250rpm_rated": {
+     "rpm": 3250.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 0.38384816046547915,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W); FEM anchor at 13000 rpm × HDF(m 0.270)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.124216782080005,
+      "sw": 2.0239258191277214,
+      "dead": 1.1795810912620044
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 70.14851370580313,
+     "eta_shaft_pct": 80.37235463608344,
+     "p_cont_max_W": 133.6620529261055,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 133.6620529261055,
+      "weak": 117.98817414645012,
+      "hot_motor": 86.45050940443409
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 216.80245883434478,
+     "T_op_Nm": 0.6371780159239145,
+     "P_motor_sine_W": 52.507044655257445,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 309.0620846844963,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "3250rpm_peak": {
+     "rpm": 3250.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 0.3552910699991448,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 0.278)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.070784153920002,
+      "sw": 2.293297702553566,
+      "dead": 1.4239058786448815
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.43877761123085,
+     "eta_shaft_pct": 78.31169055524953,
+     "p_cont_max_W": 133.6620529261055,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 133.6620529261055,
+      "weak": 117.98817414645012,
+      "hot_motor": 86.45050940443409
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 246.20003094164875,
+     "T_op_Nm": 0.723555288215198,
+     "P_motor_sine_W": 67.77525144430591,
+     "P_mech_W": 0.0542,
+     "P_battery_W": 365.07190619755255,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_rated": {
+     "rpm": 6500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 0.9377107811964108,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W); FEM anchor at 13000 rpm × HDF(m 0.492)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.124216782080005,
+      "sw": 2.0239258191277214,
+      "dead": 1.1795810912620044
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 81.74582625062094,
+     "eta_shaft_pct": 88.30627587505542,
+     "p_cont_max_W": 266.1655651966451,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 266.1655651966451,
+      "weak": 234.9473259682407,
+      "hot_motor": 172.1326024105078
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 432.590197563345,
+     "T_op_Nm": 0.6357660127023398,
+     "P_motor_sine_W": 56.18489758138962,
+     "P_mech_W": 0.162,
+     "P_battery_W": 529.1893389603596,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "6500rpm_peak": {
+     "rpm": 6500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 0.848162204785748,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 0.499)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.070784153920002,
+      "sw": 2.293297702553566,
+      "dead": 1.4239058786448815
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 79.94738403025383,
+     "eta_shaft_pct": 87.13332074769646,
+     "p_cont_max_W": 266.1655651966451,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 266.1655651966451,
+      "weak": 234.9473259682407,
+      "hot_motor": 172.1326024105078
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 491.36346316447225,
+     "T_op_Nm": 0.7221111426291607,
+     "P_motor_sine_W": 71.54779866009359,
+     "P_mech_W": 0.162,
+     "P_battery_W": 614.6085567709503,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_rated": {
+     "rpm": 13000.0,
+     "I_A": 42.78,
+     "duty": "rated",
+     "gamma_deg": 6.57,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.7625349017820895,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W)",
+     "inverter_loss_W": {
+      "cond": 13.124216782080005,
+      "sw": 2.0239258191277214,
+      "dead": 1.1795810912620044
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.66218679284326,
+     "eta_shaft_pct": 92.40173300929462,
+     "p_cont_max_W": 527.8988836958227,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 527.8988836958227,
+      "weak": 465.966598149375,
+      "hot_motor": 341.35164573530403
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 861.2966774642515,
+     "T_op_Nm": 0.6330093381723414,
+     "P_motor_sine_W": 68.60766653784741,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 971.4363119383096,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "13000rpm_peak": {
+     "rpm": 13000.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 7.3763908368396445,
+     "gamma_mode": "mtpa",
+     "motor_pwm_loss_W": 1.573061560601508,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 0.943)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.070784153920002,
+      "sw": 2.293297702553566,
+      "dead": 1.4239058786448815
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 87.71687721394721,
+     "eta_shaft_pct": 91.89115495591146,
+     "p_cont_max_W": 527.8988836958227,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 527.8988836958227,
+      "weak": 465.966598149375,
+      "hot_motor": 341.35164573530403
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 978.7533349828727,
+     "T_op_Nm": 0.719288450371451,
+     "P_motor_sine_W": 84.34116867362934,
+     "P_mech_W": 0.45489999999999997,
+     "P_battery_W": 1115.8095979587022,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_rated": {
+     "rpm": 14400.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 6.954717515942778,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.8782453184943264,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W); FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.124216782080005,
+      "sw": 2.0239258191277214,
+      "dead": 1.1795810912620044
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 89.44904209842056,
+     "eta_shaft_pct": 92.88155338095923,
+     "p_cont_max_W": 584.7263219399881,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 584.7263219399881,
+      "weak": 516.1244056423845,
+      "hot_motor": 378.0893814298752
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 951.5822059505537,
+     "T_op_Nm": 0.6313870933576015,
+     "P_motor_sine_W": 70.52395969544077,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1063.8260439989174,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "14400rpm_peak": {
+     "rpm": 14400.0,
+     "I_A": 48.79,
+     "duty": "peak",
+     "gamma_deg": 10.27965626148553,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.6627687752661222,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W)",
+     "inverter_loss_W": {
+      "cond": 17.070784153920002,
+      "sw": 2.293297702553566,
+      "dead": 1.4239058786448815
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 88.60363964219029,
+     "eta_shaft_pct": 92.44111193019359,
+     "p_cont_max_W": 584.7263219399881,
+     "p_cont_max_W_by_cooling": {
+      "favourable": 584.7263219399881,
+      "weak": 516.1244056423845,
+      "hot_motor": 378.0893814298752
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 1081.8553458878205,
+     "T_op_Nm": 0.7177771524122607,
+     "P_motor_sine_W": 86.27318945214931,
+     "P_mech_W": 0.5271,
+     "P_battery_W": 1221.0055368568344,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_rated": {
+     "rpm": 19500.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": 66.68295535492871,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.8782453184943269,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.30 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.22…2.54 W); FEM anchor at 13000 rpm × HDF(m 1.028)/HDF(m 0.933)",
+     "inverter_loss_W": {
+      "cond": 13.124216782080005,
+      "sw": 2.0239258191277214,
+      "dead": 1.1795810912620044
+     },
+     "board_copper_W": 22.986809341958878,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 82.20508004459984,
+     "eta_shaft_pct": 87.30415678647145,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 553.3439323592065,
+     "T_op_Nm": 0.27137310151171684,
+     "P_motor_sine_W": 77.77999031947748,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 673.1262010316069,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "19500rpm_peak": {
+     "rpm": 19500.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 59.44385146382001,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.6639626166153856,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.070784153920002,
+      "sw": 2.293297702553566,
+      "dead": 1.4239058786448815
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 84.73890863229443,
+     "eta_shaft_pct": 89.45219763582152,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 815.1687751090294,
+     "T_op_Nm": 0.3995906951975399,
+     "P_motor_sine_W": 93.64758706742599,
+     "P_mech_W": 0.8094999999999999,
+     "P_battery_W": 961.9769575346695,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    },
+    "22207rpm_rated": {
+     "rpm": 22207.0,
+     "I_A": 42.78,
+     "duty": null,
+     "gamma_deg": null,
+     "status": "infeasible at m = 0.89: needs deeper field weakening than characterised (gamma > 80°)"
+    },
+    "22207rpm_peak": {
+     "rpm": 22207.0,
+     "I_A": 48.79,
+     "duty": null,
+     "gamma_deg": 79.99500736535244,
+     "gamma_mode": "field weakening",
+     "motor_pwm_loss_W": 1.6639626166153856,
+     "motor_pwm_loss_basis": "ESTIMATE, not FEM: gan48_20ns FEM anchor 5.00 W × (48 kHz/100 kHz)^1.5 = 0.333 (range ×0.230…×0.480 → 1.15…2.40 W); FEM anchor at 14400 rpm × HDF(m 1.028)/HDF(m 1.027)",
+     "inverter_loss_W": {
+      "cond": 17.070784153920002,
+      "sw": 2.293297702553566,
+      "dead": 1.4239058786448815
+     },
+     "board_copper_W": 29.899145006480275,
+     "tj_C": 110.0,
+     "t_heatsink_C": null,
+     "eta_drive_pct": 67.33533113139472,
+     "eta_shaft_pct": 75.62818472356871,
+     "p_cont_max_W": null,
+     "p_cont_max_W_by_cooling": {
+      "favourable": null,
+      "weak": null,
+      "hot_motor": null
+     },
+     "p_cont_max_basis": "shaft power at min(board-limit current 26.2 A [favourable airflow], motor rated 42.78 A) at this speed",
+     "P_shaft_W": 311.2579144680028,
+     "T_op_Nm": 0.1342611725554194,
+     "P_motor_sine_W": 97.67350448495507,
+     "P_mech_W": 0.9680000000000001,
+     "P_battery_W": 462.250514311172,
+     "board_ok": false,
+     "tj_ok": false,
+     "continuous_ok": false,
+     "tj_basis": "beyond the board's continuous limit (no steady state): losses at the controller's design T_j 110 °C"
+    }
+   }
+  }
+ ]
+}

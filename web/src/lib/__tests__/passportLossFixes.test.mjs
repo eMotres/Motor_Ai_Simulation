@@ -6,6 +6,7 @@
 //      (the old 1/3 factor was floored to zero);
 //   3. EMF / KV read the stored fundamental, and the voltage limit gets the
 //      loaded WAVEFORM peak back through the base crest factor.
+// (The measured PWM-delta test was removed with the delta code, 2026-10-05.)
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { scaleMotor } from '../motorScaling.ts';
@@ -85,42 +86,6 @@ test('extraction_rev 2: the AC copper comes from the stored watts', () => {
   near(r.P_cu_W - 3 * p.I0_A ** 2 * p.R0_ohm, acw[1][1], 1e-9, 'AC watts');
 });
 
-// G18 (review 2026-09-30): the field a PWM ripple makes is its AMPERE-TURNS.
-const pwmPassport = () => base({
-  pwm: {
-    fidelity: 'quick', controller_class: 'test', f_sw_Hz: [24000, 48000],
-    f_sw_ref_Hz: 24000, v_bus_V: 750, I0_A: 562, rpm0: 14200,
-    rpm_grid: [14200],
-    points: [{ rpm: 14200, I_A: 562, rated: true, f_sw_Hz: 24000, f_elec_Hz: 1183,
-      carriers_per_period: 20, n_steps_per_period: 400, samples_per_carrier: 20,
-      resolution: 'resolved', V1_peak_V: 230, V1_delta_deg: 10,
-      dP_mag_W: 40, dP_fe_W: 100, dP_cu_ac_W: 60, I_ripple_A: 10,
-      ripple_sine_pct: 1, ripple_pwm_pct: 3 }],
-    fit: { n_mag: 2, n_fe: 2, n_cu: 2, n_ripple: 1, n_dc_ripple: 1,
-           ref: { I_ripple_A: 10 } },
-    envelope: { I_ripple_min_A: 1, I_ripple_max_A: 10, f_sw_min_Hz: 24000,
-                f_sw_max_Hz: 48000, rpm_min: 14200, rpm_max: 14200 },
-  },
-});
-
-test('PWM: doubling the turns at fixed NI quarters the field-driven deltas', () => {
-  const p = pwmPassport();
-  const r0 = scaleMotor(p, K(p, { pwm: true }));
-  const r2 = scaleMotor(p, K(p, { pwm: true, N: 2 * p.N0, I_A: p.I0_A / 2 }));
-  near(r0.pwm_dP_mag_W, 40, 1e-9, 'base magnet delta');
-  // L ×4 → current ripple ×1/4, NI ripple ×1/2 → quadratic field loss ×1/4
-  near(r2.pwm_dP_mag_W, 40 / 4, 1e-9, 'magnet delta at 2× turns');
-  near(r2.pwm_dP_fe_W, 100 / 4, 1e-9, 'iron delta at 2× turns');
-  near(r2.pwm_I_ripple_A, 10 / 4, 1e-9, 'ripple CURRENT ×1/4');
-  // copper: I_ripple²·R — current ripple ×1/4, R ×2 → ×2/16
-  near(r2.pwm_dP_cu_ac_W, 60 * (1 / 16) * (r2.R_ohm / r0.R_ohm), 1e-9, 'copper delta');
-  // torque ripple increment follows the NI ripple: 2 pp × 1/2
-  near(r2.pwm_ripple_pct, (p.ripple0_pct ?? 1) + 2 / 2, 1e-9, 'PWM torque ripple');
-});
-
-// Owner 2026-09-30 («если были старые расчёты 3D — применяй пока их»): the
-// torque and Kt / Km carry ONE factor — the measured k_T, else the flux
-// factor — so torque and Kt agree; the EMF keeps the flux factor.
 test('torque, Kt, Km: measured k_T, else k_flux, else 2-D — one factor', () => {
   const p0 = base();
   const r0 = scaleMotor(p0, K(p0));                     // no 3-D at all

@@ -44,7 +44,7 @@ interface Props {
 
 const HelpTip: React.FC<Props> = ({ title, placement = 'top' }) => (
   <Tooltip title={title} placement={placement} {...TIP_PROPS}>
-    <Box component="span" aria-label="help" role="img" sx={{
+    <Box component="span" aria-label={title} role="img" sx={{
       fontSize: 12, lineHeight: 1, color: 'var(--text-4)', cursor: 'help',
       userSelect: 'none', px: 0.125,
       '&:hover': { color: 'var(--text-2)' },

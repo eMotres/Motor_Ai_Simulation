@@ -132,6 +132,9 @@ export interface ChargeResult {
   charging: boolean;
   pack: Pack | null;
   note: string;
+  /** the same note as a locale key + numbers (`configure.chargeNote.*`) */
+  note_key: string;
+  note_params: Record<string, string>;
 }
 
 const NO_CHARGE: ChargeResult = {
@@ -139,7 +142,7 @@ const NO_CHARGE: ChargeResult = {
   V_oc_V: 0, V_bus_V: 0, V_rise_V: 0, C_rate: null, eta_charge: null,
   R_pack_ohm: 0, P_pack_r_loss_W: 0, V1_peak_V: 0, modulation_index: 0,
   V1_max_peak_V: 0, i_charge_max_A: 0, v_max_V: 0, limited_by: 'none',
-  charging: false, pack: null, note: '',
+  charging: false, pack: null, note: '', note_key: '', note_params: {},
 };
 
 /** Is this passport a generator with a pack to charge? */
@@ -193,6 +196,16 @@ export function chargeAt(p: Passport, k: Knobs, poles?: number,
           : `not charging: the machine's own losses (${P_loss.toFixed(0)} W) exceed `
             + `the shaft power (${P_mech.toFixed(0)} W), so the bridge draws from the pack`);
 
+  const noteKey = limited === 'modulation' ? 'configure.chargeNote.modulation'
+    : limited === 'current' ? 'configure.chargeNote.current'
+      : limited === 'pack' ? 'configure.chargeNote.pack'
+        : (P > 0 ? 'configure.chargeNote.ideal' : 'configure.chargeNote.notCharging');
+  const noteParams: Record<string, string> = {
+    v1: V1.toFixed(1), v1max: V1max.toFixed(1), m: m.toFixed(3), limit: String(M_LIMIT),
+    i: I.toFixed(1), imax: pack.i_charge_max_A.toFixed(0), vbus: V_bus.toFixed(1),
+    vpackmax: pack.v_max_V.toFixed(0), ploss: P_loss.toFixed(0), pmech: P_mech.toFixed(0),
+  };
+
   return {
     available: true,
     P_mech_W: P_mech, P_loss_W: P_loss, P_charge_W: P,
@@ -203,6 +216,7 @@ export function chargeAt(p: Passport, k: Knobs, poles?: number,
     V1_peak_V: V1, modulation_index: m, V1_max_peak_V: V1max,
     i_charge_max_A: pack.i_charge_max_A, v_max_V: pack.v_max_V,
     limited_by: limited, charging: P > 0, pack, note,
+    note_key: noteKey, note_params: noteParams,
   };
 }
 

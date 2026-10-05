@@ -17,6 +17,9 @@ import CoolingControls from '../thermal/CoolingControls';
 import { airH, getCoolingPayload, liqH } from '../thermal/api';
 import { estimateThermal, type ThermalGeom, type ThermalLosses } from '../../lib/thermalEstimate';
 import HelpTip from '../common/HelpTip';
+import { nsT } from '../../i18n/nsT';
+
+const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 const CARD = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 2 } as const;
 
@@ -47,34 +50,34 @@ const ConfiguratorThermal: React.FC<{ geom: ThermalGeom; losses: ThermalLosses }
   return (
     <Paper sx={CARD}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>Thermal — analytical estimate</Typography>
-        <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'monospace' }}>lumped · no FEM · instant</Typography>
-        <HelpTip title="Steady-state lumped estimate: all loss leaves the outer surface by convection (h·A); winding & magnet hot-spots add conduction rise. A fast approximation — for an accurate temperature map, run the FEM solve on the Thermal tab." />
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>{tx('configure.thermalTitle')}</Typography>
+        <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', fontFamily: 'monospace' }}>{tx('configure.thermalSub')}</Typography>
+        <HelpTip title={tx('configure.thermalHelp')} />
       </Box>
 
       {/* the shared cooling inputs (localStorage `sim.cool.*`) */}
       <CoolingControls diameterMm={geom.statorOD_mm} />
 
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))', gap: 1, mt: 1.5 }}>
-        <Metric label="Winding" value={`${t.T_winding_C.toFixed(0)} °C`} hot={windHot} />
-        <Metric label="Magnet"  value={`${t.T_magnet_C.toFixed(0)} °C`} hot={magHot} />
-        <Metric label="Housing" value={`${t.T_housing_C.toFixed(0)} °C`} />
-        <Metric label="Ambient" value={`${t.ambient_C.toFixed(0)} °C`} />
-        <Metric label="Total loss" value={`${t.P_total_W.toFixed(0)} W`} />
-        <Metric label="h used" value={`${t.h_Wm2K.toFixed(0)} W/m²K`} />
-        <Metric label="Surface" value={`${(t.A_surface_m2 * 1e4).toFixed(0)} cm²`} />
+        <Metric label={tx('configure.winding')} value={`${t.T_winding_C.toFixed(0)} °C`} hot={windHot} />
+        <Metric label={tx('configure.magnet')} value={`${t.T_magnet_C.toFixed(0)} °C`} hot={magHot} />
+        <Metric label={tx('configure.housing')} value={`${t.T_housing_C.toFixed(0)} °C`} />
+        <Metric label={tx('configure.ambient')} value={`${t.ambient_C.toFixed(0)} °C`} />
+        <Metric label={tx('configure.totalLoss')} value={`${t.P_total_W.toFixed(0)} W`} />
+        <Metric label={tx('configure.hUsed')} value={`${t.h_Wm2K.toFixed(0)} W/m²K`} />
+        <Metric label={tx('configure.surface')} value={`${(t.A_surface_m2 * 1e4).toFixed(0)} cm²`} />
       </Box>
 
       {(windHot || magHot) && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1 }}>
           <Typography sx={{ fontSize: 11.5, color: '#fca5a5' }}>
-            ⚠ {windHot ? `Winding ${t.T_winding_C.toFixed(0)} °C` : ''}
+            ⚠ {windHot ? tx('configure.hotWinding', { t: t.T_winding_C.toFixed(0) }) : ''}
             {windHot && magHot ? ' · ' : ''}
-            {magHot ? `Magnet ${t.T_magnet_C.toFixed(0)} °C` : ''}
+            {magHot ? tx('configure.hotMagnet', { t: t.T_magnet_C.toFixed(0) }) : ''}
           </Typography>
-          <HelpTip title={(windHot ? `Winding ${t.T_winding_C.toFixed(0)} °C exceeds ~155 °C (class F). ` : '')
-            + (magHot ? `Magnet ${t.T_magnet_C.toFixed(0)} °C risks demagnetisation. ` : '')
-            + 'Use stronger cooling (liquid / higher flow or air speed) or reduce current.'} />
+          <HelpTip title={(windHot ? tx('configure.hotWindingTip', { t: t.T_winding_C.toFixed(0) }) : '')
+            + (magHot ? tx('configure.hotMagnetTip', { t: t.T_magnet_C.toFixed(0) }) : '')
+            + tx('configure.hotAdvice')} />
         </Box>
       )}
     </Paper>

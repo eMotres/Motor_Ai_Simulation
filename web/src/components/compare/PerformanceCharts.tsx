@@ -17,6 +17,9 @@ import {
 } from 'recharts';
 import { scaleMotor, type Passport, type Knobs } from '../../lib/motorScaling';
 import EfficiencyMap from './EfficiencyMap';
+import { nsT } from '../../i18n/nsT';
+
+const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 const SQRT3 = Math.sqrt(3);
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 2 } as const;
@@ -55,53 +58,53 @@ const PerformanceCharts: React.FC<{ p: Passport; knobs: Knobs; packMin: number; 
   return (
     <Box sx={PANEL}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 1, flexWrap: 'wrap' }}>
-        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>Performance across speed</Typography>
-        <Typography sx={SUB}>analytical model — FEM speed-curves will refine the losses</Typography>
+        <Typography sx={{ fontSize: 13, fontWeight: 800, color: 'var(--text-0)' }}>{tx('configure.perfTitle')}</Typography>
+        <Typography sx={SUB}>{tx('configure.perfSub')}</Typography>
       </Box>
 
       {/* summary */}
       <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
         <Box sx={CARD}>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>Max speed (battery)</Typography>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>{tx('configure.maxSpeedBattery')}</Typography>
           <Typography sx={{ fontSize: 16, fontWeight: 800, color: maxSpeed === null ? '#4ade80' : '#fbbf24' }}>
             {maxSpeed === null ? '> 8000' : maxSpeed.toFixed(0)}
           </Typography>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>rpm @ {packMax.toFixed(0)} V</Typography>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>{tx('configure.rpmAtV', { v: packMax.toFixed(0) })}</Typography>
         </Box>
         <Box sx={CARD}>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>Battery current (now)</Typography>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>{tx('configure.battCurrentNow')}</Typography>
           <Typography sx={{ fontSize: 16, fontWeight: 800, color: battOk ? '#60a5fa' : '#f87171' }}>{iBatOp.toFixed(0)}</Typography>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>A from {packMin.toFixed(0)}–{packMax.toFixed(0)} V</Typography>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>{tx('configure.ampsFromV', { min: packMin.toFixed(0), max: packMax.toFixed(0) })}</Typography>
         </Box>
         <Box sx={CARD}>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>Peak efficiency</Typography>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-3)' }}>{tx('configure.peakEfficiency')}</Typography>
           <Typography sx={{ fontSize: 16, fontWeight: 800, color: '#4ade80' }}>{peakEff.toFixed(1)}%</Typography>
-          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>@ {peakEffRpm} rpm</Typography>
+          <Typography sx={{ fontSize: 9, color: 'var(--text-4)' }}>{tx('configure.atRpm', { rpm: peakEffRpm })}</Typography>
         </Box>
       </Box>
 
       <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
         {/* power + efficiency */}
         <Paper sx={{ flex: '1 1 360px', minWidth: 320, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1 }}>
-          <Typography sx={{ ...LABEL, mb: 0.5 }}>Power &amp; efficiency vs speed</Typography>
+          <Typography sx={{ ...LABEL, mb: 0.5 }}>{tx('configure.powerEffTitle')}</Typography>
           <ResponsiveContainer width="100%" height={230}>
             <ComposedChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
               <CartesianGrid stroke="var(--panel)" strokeDasharray="3 3" />
               <XAxis dataKey="rpm" tick={AX} tickFormatter={(v) => `${v / 1000}k`} />
               <YAxis yAxisId="kW" tick={AX} tickFormatter={(v) => `${v.toFixed(0)}`} label={{ value: 'kW', angle: -90, position: 'insideLeft', style: { fontSize: 10, fill: '#a78bfa' } }} />
               <YAxis yAxisId="eff" orientation="right" domain={[0, 100]} tick={AX} tickFormatter={(v) => `${v}`} label={{ value: '%', angle: 90, position: 'insideRight', style: { fontSize: 10, fill: '#4ade80' } }} />
-              <RcTooltip {...TT} formatter={(v: number, n: string) => [n === 'eff' ? `${v.toFixed(1)} %` : `${v.toFixed(2)} kW`, n === 'eff' ? 'efficiency' : 'power']} labelFormatter={(l: number) => `${l} rpm`} />
+              <RcTooltip {...TT} formatter={(v: number, _n: string, item: { dataKey?: unknown }) => [item?.dataKey === 'eff' ? `${v.toFixed(1)} %` : `${v.toFixed(2)} kW`, item?.dataKey === 'eff' ? tx('configure.seriesEff') : tx('configure.seriesPower')]} labelFormatter={(l: number) => `${l} rpm`} />
               <Legend wrapperStyle={{ fontSize: 10 }} />
-              {maxSpeed !== null && <ReferenceLine yAxisId="kW" x={Math.round(maxSpeed / 200) * 200} stroke="#f87171" strokeDasharray="5 3" label={{ value: 'battery limit', fill: '#f87171', fontSize: 9, position: 'insideTopRight' }} />}
-              <Line yAxisId="kW" dataKey="kW" name="power" stroke="#a78bfa" dot={false} strokeWidth={1.25} />
-              <Line yAxisId="eff" dataKey="eff" name="eff" stroke="#4ade80" dot={false} strokeWidth={1.25} />
+              {maxSpeed !== null && <ReferenceLine yAxisId="kW" x={Math.round(maxSpeed / 200) * 200} stroke="#f87171" strokeDasharray="5 3" label={{ value: tx('configure.batteryLimit'), fill: '#f87171', fontSize: 9, position: 'insideTopRight' }} />}
+              <Line yAxisId="kW" dataKey="kW" name={tx('configure.seriesPower')} stroke="#a78bfa" dot={false} strokeWidth={1.25} />
+              <Line yAxisId="eff" dataKey="eff" name={tx('configure.seriesEff')} stroke="#4ade80" dot={false} strokeWidth={1.25} />
             </ComposedChart>
           </ResponsiveContainer>
         </Paper>
 
         {/* losses */}
         <Paper sx={{ flex: '1 1 360px', minWidth: 320, bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1 }}>
-          <Typography sx={{ ...LABEL, mb: 0.5 }}>Losses vs speed (W)</Typography>
+          <Typography sx={{ ...LABEL, mb: 0.5 }}>{tx('configure.lossesTitle')}</Typography>
           <ResponsiveContainer width="100%" height={230}>
             <LineChart data={data} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
               <CartesianGrid stroke="var(--panel)" strokeDasharray="3 3" />
@@ -110,9 +113,9 @@ const PerformanceCharts: React.FC<{ p: Passport; knobs: Knobs; packMin: number; 
               <RcTooltip {...TT} formatter={(v: number, n: string) => [`${v.toFixed(0)} W`, n]} labelFormatter={(l: number) => `${l} rpm`} />
               <Legend wrapperStyle={{ fontSize: 10 }} />
               {maxSpeed !== null && <ReferenceLine x={Math.round(maxSpeed / 200) * 200} stroke="#f87171" strokeDasharray="5 3" />}
-              <Line dataKey="cu" name="copper" stroke="#f59e0b" dot={false} strokeWidth={1.25} />
-              <Line dataKey="fe" name="iron" stroke="#60a5fa" dot={false} strokeWidth={1.25} />
-              <Line dataKey="mag" name="magnet" stroke="#ef4444" dot={false} strokeWidth={1.25} />
+              <Line dataKey="cu" name={tx('configure.seriesCopper')} stroke="#f59e0b" dot={false} strokeWidth={1.25} />
+              <Line dataKey="fe" name={tx('configure.seriesIron')} stroke="#60a5fa" dot={false} strokeWidth={1.25} />
+              <Line dataKey="mag" name={tx('configure.seriesMagnet')} stroke="#ef4444" dot={false} strokeWidth={1.25} />
             </LineChart>
           </ResponsiveContainer>
         </Paper>

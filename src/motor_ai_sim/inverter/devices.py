@@ -1297,6 +1297,13 @@ class DeviceCard:
     def e_oss_J(self, v_dc_V: float) -> Optional[float]:
         """E_oss at this bus from C_o(er) — AN2025-10 eq. (11), rearranged."""
         cap = self.doc.get("capacitance") or {}
+        # A digitised E_oss(V_DS) figure (GaN cards, 2026-10-05) wins: GaN
+        # C_oss is strongly non-linear, so a single point scaled by V^2 would
+        # be off by tens of per cent away from its own voltage.
+        pts = _points_of(cap.get("e_oss_curve"), "v_ds_V", "e_uJ")
+        if pts:
+            e = interp(sorted(pts), float(v_dc_V))
+            return None if e is None else float(e) * 1e-6
         c_er = _num(cap.get("c_o_er_pF"))
         if c_er is None:
             e = _num(cap.get("e_oss_uJ"))

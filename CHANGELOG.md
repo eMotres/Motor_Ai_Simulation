@@ -7,6 +7,33 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 
 ## [Unreleased]
 
+### Added
+- **Configure: Drive menu, Sine | PWM** (owner 2026-10-05). PWM lists only the drive
+  variants computed for the motor (`pwm_variants` in its passport: a device at a
+  carrier frequency) and reads between their computed points; it refuses outside the
+  computed envelope, off the loaded build, and beyond the device's bus, current or
+  junction limits. No variants = PWM disabled with a "request calculation" note. Shows
+  motor loss, inverter loss split, T_j, drive efficiency battery to shaft; the saved
+  configuration records the drive. Sine is the default and unchanged (scaleMotor is
+  untouched). EN + ZH strings in the `controller` namespace.
+- **Configure reads the passport pilot's computed drive variants** (#106): the catalogue
+  response (`GET /api/catalog`, `GET /api/catalog/{id}/passport`) now carries `pwm_variants`
+  for a card whose machine has a v1 record in the versioned store
+  `config/passports/<die>/<config>.json` (`<shared>/passports/` on the server wins, like
+  device cards; `scripts/export_passport_store.py` writes a file from a pilot record).
+  Matched by card name, else die name + stack length; ambiguous = none. Cards without a
+  record are served exactly as before. CIANO14 40 new L12 / L20 ship with the pilot's data.
+- **Configure: slider ranges are physical limits** (owner 2026-10-05), per machine and live
+  with the knobs they depend on. Stack-length max is set by hand per motor (admin,
+  `PATCH /api/catalog/{id}/configure_limits`, else the default rule); wire min 0.2 mm, step
+  0.1 mm; turns max = rows that fit the slot at the chosen wire (same inequality as the
+  solver); phase-current max = the machine's inverter device x devices in parallel (also in
+  Sine; "no controller set" otherwise); speed max = the voltage envelope at the pack maximum,
+  else Kv x V_max x m. The 2S/2P connection is free with a line-voltage warning. Admin range
+  edits only narrow. `GET /api/catalog/{id}/configure_context` serves the machine's limits.
+  The old measured-delta "Excitation" toggle and its code (`pwmDeltas`, the `pwm_*` result fields) are removed (PWM = computed variants only). The
+  whole Configure tree is fully Chinese in ZH (a node test scans the source and the locale).
+
 ### Changed
 - **Licence: Apache License 2.0** (owner decision 2026-10-03), replacing
   AGPL-3.0-or-later and the planned MKL section 7 exception (PR #93). `LICENSE`

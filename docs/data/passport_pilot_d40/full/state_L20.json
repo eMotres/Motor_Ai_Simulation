@@ -1,0 +1,1814 @@
+{
+ "baseline_runs": [
+  {
+   "code_commit": "503912b260cd0d8213cdb0d0b5f6954bf9480bed",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 279,
+    "sha256": "12ed8e9f7cbdfb4844d098acc1c3276663646473b4cceb39365f3f762229c642"
+   },
+   "image_digest": "sha256:90cb75da173d8d18706008683371129f97026aed98342111a661922389951723",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d40-20261005/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "SHARED_ROOT": "/work/shared",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L20/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L20",
+    "stages": "calib,probe,hot,demag,cold,loss,checks",
+    "workers": 6,
+    "started": "2026-10-05T06:34:16+0000"
+   },
+   "baseline_sig": "922f14b04a128b4bdb83e12c251439cbcfceaf5cc0e3ae8a8caa20bd81366d61"
+  },
+  {
+   "code_commit": "c2c6ade58864e5a285e9c75ab0218971712a916e",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 279,
+    "sha256": "0a1cce8f99246841236aa403a28d8a2bdbd55a8e72496a42cb562ded860c6c72"
+   },
+   "image_digest": "sha256:90cb75da173d8d18706008683371129f97026aed98342111a661922389951723",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d40-20261005/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "OMP_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "SHARED_ROOT": "/work/shared",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L20/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L20",
+    "stages": "extra",
+    "workers": 6,
+    "started": "2026-10-05T07:47:19+0000"
+   },
+   "baseline_sig": "884bf634223b4017eca942f879054b082b5642486f25234f0c0a9637044c1972"
+  },
+  {
+   "code_commit": "2595399fba640d97ca178780d77b57344c4b649a",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 279,
+    "sha256": "61c3f579f3ace98290022c19d44180ebbaebbae27f0246bfc297ee08d1e23f0a"
+   },
+   "image_digest": "sha256:90cb75da173d8d18706008683371129f97026aed98342111a661922389951723",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d40-20261005/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "MKL_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "SHARED_ROOT": "/work/shared",
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "OMP_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L20/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L20",
+    "stages": "refine",
+    "workers": 4,
+    "started": "2026-10-05T07:51:56+0000"
+   },
+   "baseline_sig": "8eeec760ef6c2b87f549bf9591032f8443d93fc4ace2748ad743ebc0be9ffd28"
+  },
+  {
+   "code_commit": "a70f008ef290823ee87c32d44af9c165f71c8bd2",
+   "code_dirty": true,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 282,
+    "sha256": "e95ce5631b5857d96e2d82e7b22765ff358e05b0f80935e49886cf53196f78a3"
+   },
+   "image_digest": "sha256:90cb75da173d8d18706008683371129f97026aed98342111a661922389951723",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d40-20261005/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "SHARED_ROOT": "/work/shared",
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "MOTOR_AI_SIM_NGSPICE": "/usr/bin/ngspice",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L20/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L20",
+    "stages": "loss2",
+    "workers": 2,
+    "started": "2026-10-05T10:15:19+0000"
+   },
+   "baseline_sig": "690963803c872a1bbbcb1e38194daf62c8eb3e79b43a6e3853648437176b0af3"
+  }
+ ],
+ "daxis_deg": 59.9911,
+ "daxis_source": "calibrated",
+ "stage_wall_s": {
+  "calib": 100.36426115036011,
+  "probe": 240.30895018577576,
+  "hot": 259.52874851226807,
+  "demag": 1354.2658224105835,
+  "cold": 120.47807312011719,
+  "loss": 1496.835753917694,
+  "checks": 673.202267408371,
+  "extra": 136.9129123687744,
+  "refine": 16.7773540019989,
+  "loss2": 1537.3995943069458
+ },
+ "probe": {
+  "probe_static60": {
+   "wall_s": 9.00847601890564,
+   "T": 1.2665339517285936,
+   "gap_layers": 1.0,
+   "gap_refinement": {
+    "applied": false,
+    "gate_rel_to_ripple_scale": 0.05,
+    "gap_layers_per_side": 1.0,
+    "self_check_rel_to_ripple_scale": 0.030307810802755884,
+    "eddy_unsettled": false,
+    "persist_gap_layers": null
+   },
+   "eddy_method": null,
+   "P_loss": 271.41770662860426
+  },
+  "probe_static_full": {
+   "wall_s": 149.83762764930725,
+   "T": 1.265554853905193,
+   "gap_layers": 3.0,
+   "gap_refinement": {
+    "applied": true,
+    "gate_rel_to_ripple_scale": 0.05,
+    "gap_layers_per_side": 3.0,
+    "self_check_rel_to_ripple_scale": 0.01658478017006109,
+    "eddy_unsettled": false,
+    "persist_gap_layers": 3.0,
+    "passed": true,
+    "attempts": [
+     {
+      "gap_layers_per_side": 1.0,
+      "self_check_rel_to_ripple_scale": 0.2668757162664015,
+      "T_avg_Nm": 1.2648685806869908,
+      "T_ripple_pp_Nm": 0.058233453141908864,
+      "eddy_settled": true,
+      "solve_wall_s": 43.7
+     },
+     {
+      "gap_layers_per_side": 2.0,
+      "self_check_rel_to_ripple_scale": 0.06733056344117062,
+      "T_avg_Nm": 1.2653523746635733,
+      "T_ripple_pp_Nm": 0.05291877303606762,
+      "eddy_settled": true,
+      "solve_wall_s": 50.0
+     },
+     {
+      "gap_layers_per_side": 3.0,
+      "self_check_rel_to_ripple_scale": 0.01658478017006109,
+      "T_avg_Nm": 1.265554853905193,
+      "T_ripple_pp_Nm": 0.05253307516731365,
+      "eddy_settled": true,
+      "solve_wall_s": 56.1
+     }
+    ],
+    "first": {
+     "gap_layers_per_side": 1.0,
+     "self_check_rel_to_ripple_scale": 0.2668757162664015,
+     "T_avg_Nm": 1.2648685806869908,
+     "T_ripple_pp_Nm": 0.058233453141908864,
+     "eddy_settled": true,
+     "solve_wall_s": 43.7
+    }
+   },
+   "eddy_method": null,
+   "P_loss": 156.3634261613012
+  },
+  "probe_loss": {
+   "wall_s": 239.86057138442993,
+   "T": 1.24085958928154,
+   "gap_layers": 1.0,
+   "gap_refinement": {
+    "applied": false,
+    "gate_rel_to_ripple_scale": 0.05,
+    "gap_layers_per_side": 1.0,
+    "self_check_rel_to_ripple_scale": 0.031181676869210195,
+    "eddy_unsettled": false,
+    "persist_gap_layers": null
+   },
+   "eddy_method": "tdm",
+   "P_loss": 160.5901108101568
+  }
+ },
+ "gap_layers_static": 3.0,
+ "gap_layers_reason": "duty mesh.gapLayers = 1/side.  Static map: 3/side \u2014 the deployed gap rule refined the full-period static probe (144 steps/period) to 3/side (Coulomb ring self-check gate 5 % of the ripple scale); the 60\u00b0 window passed at 1.  Loss runs: duty 1/side, rule on (the TDM rated probe ended at 1).",
+ "hot_mtpa": [
+  {
+   "fI": 0.25,
+   "I": 13.1375,
+   "gamma_mtpa": 2.03,
+   "T_parabola": 0.3251744006221868,
+   "conf_id": "hot_I0.25_g+2.03",
+   "bracket": [
+    -5.0,
+    0.0,
+    5.0
+   ],
+   "T_bracket": [
+    0.3227286751049542,
+    0.324970444507208,
+    0.3247379401651761
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 0.3251766510681145,
+   "vertex_vs_parabola_pct": 0.0006920735222128872,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 0.5,
+   "I": 26.275,
+   "gamma_mtpa": 4.0,
+   "T_parabola": 0.6470040995529316,
+   "conf_id": "hot_I0.5_g+4",
+   "bracket": [
+    -2.97,
+    2.03,
+    7.03
+   ],
+   "T_bracket": [
+    0.6421918015365324,
+    0.6466187097733944,
+    0.6460976057756164
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 0.6470117743835917,
+   "vertex_vs_parabola_pct": 0.001186210514803924,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 0.75,
+   "I": 39.412499999999994,
+   "gamma_mtpa": 5.85,
+   "T_parabola": 0.9623892186842182,
+   "conf_id": "hot_I0.75_g+5.85",
+   "bracket": [
+    -1.0,
+    4.0,
+    9.0
+   ],
+   "T_bracket": [
+    0.9553429094378755,
+    0.9618747608074127,
+    0.9609008818085767
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 0.9624050710693529,
+   "vertex_vs_parabola_pct": 0.0016471906404311367,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 1.0,
+   "I": 52.55,
+   "gamma_mtpa": 7.45,
+   "T_parabola": 1.2671019017049363,
+   "conf_id": "hot_I1_g+7.45",
+   "bracket": [
+    0.85,
+    5.85,
+    10.85
+   ],
+   "T_bracket": [
+    1.2581907564819719,
+    1.2665783719462578,
+    1.2647363130968419
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 1.2671312946318003,
+   "vertex_vs_parabola_pct": 0.002319697162828188,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 1.5,
+   "I": 78.82499999999999,
+   "gamma_mtpa": 10.21,
+   "T_parabola": 1.8179337363343235,
+   "conf_id": "hot_I1.5_g+10.21",
+   "bracket": [
+    2.45,
+    7.45,
+    12.45,
+    17.45
+   ],
+   "T_bracket": [
+    1.8002064520791214,
+    1.81561583435492,
+    1.8163985742597997,
+    1.8019297448251987
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 1.8179017023365625,
+   "vertex_vs_parabola_pct": -0.0017621103080289443,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 2.0,
+   "I": 105.1,
+   "gamma_mtpa": 13.04,
+   "T_parabola": 2.261596729768599,
+   "conf_id": "hot_I2_g+13.04",
+   "bracket": [
+    -5.0,
+    5.21,
+    10.21,
+    15.21,
+    20.21
+   ],
+   "T_bracket": [
+    2.155458534277927,
+    2.240569930931636,
+    2.2586753860949926,
+    2.2598898658531636,
+    2.242915888247004
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 2.2615130066731735,
+   "vertex_vs_parabola_pct": -0.003701946254314586,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 2.5,
+   "I": 131.375,
+   "gamma_mtpa": 14.66,
+   "T_parabola": 2.5943426366553375,
+   "conf_id": "hot_I2.5_g+14.66",
+   "bracket": [
+    -5.0,
+    8.04,
+    13.04,
+    18.04
+   ],
+   "T_bracket": [
+    2.460718816824885,
+    2.5779832313685445,
+    2.593359925385059,
+    2.5900906265651633
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 2.5944350634874005,
+   "vertex_vs_parabola_pct": 0.003562630115124899,
+   "vertex_ge_samples": true
+  }
+ ],
+ "demag_knee": {
+  "threshold_br_kept_pct": 99.5,
+  "rule": "first 99.5 % Br-retention crossing on the hot MTPA line (the existing tuner's knee rule)",
+  "mtpa_retention": [
+   [
+    52.55,
+    98.804
+   ],
+   [
+    78.82499999999999,
+    97.908
+   ],
+   [
+    105.1,
+    95.336
+   ],
+   [
+    131.375,
+    91.514
+   ]
+  ],
+  "I_knee_rms": 21.969063545150536,
+  "below_first_probe": true,
+  "probes": {
+   "dm_I1_gmtpa": {
+    "fI": 1.0,
+    "gamma": 7.45,
+    "demag": {
+     "per_magnet_spread_pct": 0.087,
+     "bh_kept_vol_pct": 98.199,
+     "bh_loss_pct": 1.801,
+     "br_kept_vol_pct": 98.804,
+     "loss_pct": 1.196,
+     "area_derated_pct": 4.4,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 2702,
+      "magnet_tag": 102,
+      "x_mm": 5.763,
+      "y_mm": 10.141,
+      "r_mm": 11.664,
+      "theta_deg": 60.39,
+      "element_area_pct": 0.0007,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I1.5_gmtpa": {
+    "fI": 1.5,
+    "gamma": 10.21,
+    "demag": {
+     "per_magnet_spread_pct": 0.144,
+     "bh_kept_vol_pct": 96.945,
+     "bh_loss_pct": 3.055,
+     "br_kept_vol_pct": 97.908,
+     "loss_pct": 2.092,
+     "area_derated_pct": 9.09,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 3719,
+      "magnet_tag": 103,
+      "x_mm": 0.852,
+      "y_mm": 11.57,
+      "r_mm": 11.602,
+      "theta_deg": 85.79,
+      "element_area_pct": 0.0031,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I2_gmtpa": {
+    "fI": 2.0,
+    "gamma": 13.04,
+    "demag": {
+     "per_magnet_spread_pct": 0.122,
+     "bh_kept_vol_pct": 93.114,
+     "bh_loss_pct": 6.886,
+     "br_kept_vol_pct": 95.336,
+     "loss_pct": 4.664,
+     "area_derated_pct": 18.88,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 4642,
+      "magnet_tag": 104,
+      "x_mm": -4.462,
+      "y_mm": 10.672,
+      "r_mm": 11.567,
+      "theta_deg": 112.69,
+      "element_area_pct": 0.0255,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I2.5_gmtpa": {
+    "fI": 2.5,
+    "gamma": 14.66,
+    "demag": {
+     "per_magnet_spread_pct": 0.076,
+     "bh_kept_vol_pct": 88.009,
+     "bh_loss_pct": 11.991,
+     "br_kept_vol_pct": 91.514,
+     "loss_pct": 8.486,
+     "area_derated_pct": 22.72,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 2663,
+      "magnet_tag": 102,
+      "x_mm": 5.481,
+      "y_mm": 10.253,
+      "r_mm": 11.626,
+      "theta_deg": 61.87,
+      "element_area_pct": 0.0469,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I1.5_g+80": {
+    "fI": 1.5,
+    "gamma": 80.0,
+    "demag": {
+     "per_magnet_spread_pct": 0.018,
+     "bh_kept_vol_pct": 95.12,
+     "bh_loss_pct": 4.88,
+     "br_kept_vol_pct": 96.501,
+     "loss_pct": 3.499,
+     "area_derated_pct": 8.97,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 5895,
+      "magnet_tag": 105,
+      "x_mm": -9.533,
+      "y_mm": 6.684,
+      "r_mm": 11.643,
+      "theta_deg": 144.96,
+      "element_area_pct": 0.0051,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I2.5_g+80": {
+    "fI": 2.5,
+    "gamma": 80.0,
+    "demag": {
+     "per_magnet_spread_pct": 0.733,
+     "bh_kept_vol_pct": 84.385,
+     "bh_loss_pct": 15.615,
+     "br_kept_vol_pct": 87.916,
+     "loss_pct": 12.084,
+     "area_derated_pct": 30.01,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 3725,
+      "magnet_tag": 103,
+      "x_mm": 0.879,
+      "y_mm": 11.075,
+      "r_mm": 11.11,
+      "theta_deg": 85.46,
+      "element_area_pct": 0.0199,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I1_g+90": {
+    "fI": 1.0,
+    "gamma": 90.0,
+    "demag": {
+     "per_magnet_spread_pct": 0.036,
+     "bh_kept_vol_pct": 97.968,
+     "bh_loss_pct": 2.032,
+     "br_kept_vol_pct": 98.614,
+     "loss_pct": 1.386,
+     "area_derated_pct": 5.22,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 3702,
+      "magnet_tag": 103,
+      "x_mm": -0.79,
+      "y_mm": 11.637,
+      "r_mm": 11.663,
+      "theta_deg": 93.88,
+      "element_area_pct": 0.0007,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   }
+  }
+ },
+ "cold_mtpa": [
+  {
+   "fI": 0.25,
+   "I": 13.1375,
+   "gamma_mtpa": 2.09,
+   "T_parabola": 0.33479367118986264,
+   "conf_id": "cold_I0.25_g+2.09",
+   "bracket": [
+    -2.97,
+    2.03,
+    7.03
+   ],
+   "T_bracket": [
+    0.33348807296442373,
+    0.3347934738309656,
+    0.33355149211713153
+   ],
+   "T_fem_vertex": 0.33479373621198716,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 0.5,
+   "I": 26.275,
+   "gamma_mtpa": 4.14,
+   "T_parabola": 0.6669017298811004,
+   "conf_id": "cold_I0.5_g+4.14",
+   "bracket": [
+    -1.0,
+    4.0,
+    9.0
+   ],
+   "T_bracket": [
+    0.6642014336454691,
+    0.6668998503490063,
+    0.6644788798920614
+   ],
+   "T_fem_vertex": 0.6669022396053786,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 1.0,
+   "I": 52.55,
+   "gamma_mtpa": 8.02,
+   "T_parabola": 1.3135192024816935,
+   "conf_id": "cold_I1_g+8.02",
+   "bracket": [
+    2.45,
+    7.45,
+    12.45
+   ],
+   "T_bracket": [
+    1.3070694817914703,
+    1.313451693180578,
+    1.3094388873651435
+   ],
+   "T_fem_vertex": 1.313526211025365,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 1.5,
+   "I": 78.82499999999999,
+   "gamma_mtpa": 11.35,
+   "T_parabola": 1.9149059616951358,
+   "conf_id": "cold_I1.5_g+11.35",
+   "bracket": [
+    5.21,
+    10.21,
+    15.21
+   ],
+   "T_bracket": [
+    1.9028149943773305,
+    1.9144882744137113,
+    1.9101333437770733
+   ],
+   "T_fem_vertex": 1.914957200336536,
+   "vertex_ge_samples": true
+  }
+ ],
+ "cold_sc_plan": {
+  "psi_pm_cold": 0.0017168621198257762,
+  "Ld_chord_hot_axis_H": 1.253280810841411e-05,
+  "I_pred_rms": 96.86614817600811
+ },
+ "loss_plan": {
+  "bus": "nom",
+  "v_dc": 44.4,
+  "m": 0.95,
+  "v_phase_limit_V": 24.352634354418417,
+  "R_hot_ohm": 0.015985662631799465,
+  "I_peak_rms": 59.9325502571295,
+  "I_peak_source": "ASSUMPTION \u2014 no owner peak duty: L12 owner peak/rated current ratio 48.79/42.78 applied to I0 (labelled assumption; the L20 card's peak needs an owner duty)",
+  "n_mech_limit_rpm": 45000.0,
+  "n_mech_source": "bearing speed limit (mech_losses / bearings library); critical speed and rotor stress not computed in stage 1",
+  "n_elec_limit_rpm": 38461.20010376159,
+  "n_max_rpm": 38461.20010376159,
+  "speeds": [
+   3250.0,
+   6500.0,
+   13000.0,
+   19500.0,
+   38461.0
+  ],
+  "currents": [
+   26.275,
+   52.55,
+   59.93255
+  ],
+  "points": [
+   {
+    "rpm": 3250.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n3250_I0.5"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n3250_I1"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n3250_I1.14"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n6500_I0.5"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n6500_I1"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n6500_I1.14"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n13000_I0.5"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n13000_I1"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n13000_I1.14"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 26.275,
+    "gamma": 7.081964086915645,
+    "mode": "field weakening",
+    "id": "loss_n19500_I0.5"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 52.55,
+    "gamma": 16.648495251742492,
+    "mode": "field weakening",
+    "id": "loss_n19500_I1"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 59.93255,
+    "gamma": 18.66614321652907,
+    "mode": "field weakening",
+    "id": "loss_n19500_I1.14"
+   },
+   {
+    "rpm": 38461.0,
+    "I": 26.275,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 38461.0,
+    "I": 52.55,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 38461.0,
+    "I": 59.93255,
+    "gamma": 79.9994445168279,
+    "mode": "field weakening",
+    "id": "loss_n38461_I1.14"
+   }
+  ]
+ },
+ "mech": {
+  "3250.0": {
+   "P_W": 0.019200000000000002,
+   "P_bearings_W": 0.016,
+   "P_windage_W": 0.0032,
+   "bearing_temp_c": 70.0,
+   "bearing_temp_source": "assigned",
+   "speed_limit_rpm": 45000.0,
+   "summary": {
+    "rpm": 3250.0,
+    "bearings": [
+     {
+      "end": "A",
+      "bearing": "618/8-2Z",
+      "P_W": 0.008,
+      "M_total_Nm": 2e-05,
+      "M_rr_Nm": 2e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 39000.0,
+      "limit_rpm": 45000.0
+     },
+     {
+      "end": "B",
+      "bearing": "618/8-2Z",
+      "P_W": 0.008,
+      "M_total_Nm": 2e-05,
+      "M_rr_Nm": 2e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 39000.0,
+      "limit_rpm": 45000.0
+     }
+    ],
+    "cards": [
+     "618/8-2Z",
+     "618/8-2Z"
+    ],
+    "lubrication": "grease",
+    "preload_n": 0.0,
+    "rotor_mass_kg": 0.06056375550979996,
+    "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+    "F_r_total_N": 0.5939275529701797,
+    "M_bearings_Nm": 5e-05,
+    "windage": {
+     "P_W": 0.0032,
+     "P_gap_W": 0.0024,
+     "P_faces_W": 0.0007,
+     "M_total_Nm": 9e-06,
+     "gap_regime": "laminar (Ta < 1700)",
+     "face_regime": "laminar disc",
+     "delta_mm": 0.1999999999999988
+    },
+    "die": null,
+    "config": null,
+    "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+    "notes": [
+     "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+     "radial load = rotor weight, half each (no bearing span given)"
+    ]
+   }
+  },
+  "6500.0": {
+   "P_W": 0.059899999999999995,
+   "P_bearings_W": 0.046,
+   "P_windage_W": 0.0139,
+   "bearing_temp_c": 70.0,
+   "bearing_temp_source": "assigned",
+   "speed_limit_rpm": 45000.0,
+   "summary": {
+    "rpm": 6500.0,
+    "bearings": [
+     {
+      "end": "A",
+      "bearing": "618/8-2Z",
+      "P_W": 0.023,
+      "M_total_Nm": 3e-05,
+      "M_rr_Nm": 3e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 78000.0,
+      "limit_rpm": 45000.0
+     },
+     {
+      "end": "B",
+      "bearing": "618/8-2Z",
+      "P_W": 0.023,
+      "M_total_Nm": 3e-05,
+      "M_rr_Nm": 3e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 78000.0,
+      "limit_rpm": 45000.0
+     }
+    ],
+    "cards": [
+     "618/8-2Z",
+     "618/8-2Z"
+    ],
+    "lubrication": "grease",
+    "preload_n": 0.0,
+    "rotor_mass_kg": 0.06056375550979996,
+    "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+    "F_r_total_N": 0.5939275529701797,
+    "M_bearings_Nm": 7e-05,
+    "windage": {
+     "P_W": 0.0139,
+     "P_gap_W": 0.0098,
+     "P_faces_W": 0.0042,
+     "M_total_Nm": 2e-05,
+     "gap_regime": "laminar (Ta < 1700)",
+     "face_regime": "laminar disc",
+     "delta_mm": 0.1999999999999988
+    },
+    "die": null,
+    "config": null,
+    "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+    "notes": [
+     "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+     "radial load = rotor weight, half each (no bearing span given)"
+    ]
+   }
+  },
+  "13000.0": {
+   "P_W": 0.1866,
+   "P_bearings_W": 0.124,
+   "P_windage_W": 0.0626,
+   "bearing_temp_c": 70.0,
+   "bearing_temp_source": "assigned",
+   "speed_limit_rpm": 45000.0,
+   "summary": {
+    "rpm": 13000.0,
+    "bearings": [
+     {
+      "end": "A",
+      "bearing": "618/8-2Z",
+      "P_W": 0.062,
+      "M_total_Nm": 5e-05,
+      "M_rr_Nm": 5e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 156000.0,
+      "limit_rpm": 45000.0
+     },
+     {
+      "end": "B",
+      "bearing": "618/8-2Z",
+      "P_W": 0.062,
+      "M_total_Nm": 5e-05,
+      "M_rr_Nm": 5e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 156000.0,
+      "limit_rpm": 45000.0
+     }
+    ],
+    "cards": [
+     "618/8-2Z",
+     "618/8-2Z"
+    ],
+    "lubrication": "grease",
+    "preload_n": 0.0,
+    "rotor_mass_kg": 0.06056375550979996,
+    "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+    "F_r_total_N": 0.5939275529701797,
+    "M_bearings_Nm": 9e-05,
+    "windage": {
+     "P_W": 0.0626,
+     "P_gap_W": 0.039,
+     "P_faces_W": 0.0235,
+     "M_total_Nm": 4.6e-05,
+     "gap_regime": "laminar (Ta < 1700)",
+     "face_regime": "laminar disc",
+     "delta_mm": 0.1999999999999988
+    },
+    "die": null,
+    "config": null,
+    "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+    "notes": [
+     "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+     "radial load = rotor weight, half each (no bearing span given)"
+    ]
+   }
+  },
+  "19500.0": {
+   "P_W": 0.36260000000000003,
+   "P_bearings_W": 0.21,
+   "P_windage_W": 0.1526,
+   "bearing_temp_c": 70.0,
+   "bearing_temp_source": "assigned",
+   "speed_limit_rpm": 45000.0,
+   "summary": {
+    "rpm": 19500.0,
+    "bearings": [
+     {
+      "end": "A",
+      "bearing": "618/8-2Z",
+      "P_W": 0.105,
+      "M_total_Nm": 5e-05,
+      "M_rr_Nm": 5e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 234000.0,
+      "limit_rpm": 45000.0
+     },
+     {
+      "end": "B",
+      "bearing": "618/8-2Z",
+      "P_W": 0.105,
+      "M_total_Nm": 5e-05,
+      "M_rr_Nm": 5e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 234000.0,
+      "limit_rpm": 45000.0
+     }
+    ],
+    "cards": [
+     "618/8-2Z",
+     "618/8-2Z"
+    ],
+    "lubrication": "grease",
+    "preload_n": 0.0,
+    "rotor_mass_kg": 0.06056375550979996,
+    "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+    "F_r_total_N": 0.5939275529701797,
+    "M_bearings_Nm": 0.0001,
+    "windage": {
+     "P_W": 0.1526,
+     "P_gap_W": 0.0878,
+     "P_faces_W": 0.0648,
+     "M_total_Nm": 7.5e-05,
+     "gap_regime": "laminar (Ta < 1700)",
+     "face_regime": "laminar disc",
+     "delta_mm": 0.1999999999999988
+    },
+    "die": null,
+    "config": null,
+    "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+    "notes": [
+     "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+     "radial load = rotor weight, half each (no bearing span given)"
+    ]
+   }
+  },
+  "38461.0": {
+   "P_W": 1.2984,
+   "P_bearings_W": 0.438,
+   "P_windage_W": 0.8604,
+   "bearing_temp_c": 70.0,
+   "bearing_temp_source": "assigned",
+   "speed_limit_rpm": 45000.0,
+   "summary": {
+    "rpm": 38461.0,
+    "bearings": [
+     {
+      "end": "A",
+      "bearing": "618/8-2Z",
+      "P_W": 0.219,
+      "M_total_Nm": 5e-05,
+      "M_rr_Nm": 5e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 461532.0,
+      "limit_rpm": 45000.0
+     },
+     {
+      "end": "B",
+      "bearing": "618/8-2Z",
+      "P_W": 0.219,
+      "M_total_Nm": 5e-05,
+      "M_rr_Nm": 5e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 461532.0,
+      "limit_rpm": 45000.0
+     }
+    ],
+    "cards": [
+     "618/8-2Z",
+     "618/8-2Z"
+    ],
+    "lubrication": "grease",
+    "preload_n": 0.0,
+    "rotor_mass_kg": 0.06056375550979996,
+    "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+    "F_r_total_N": 0.5939275529701797,
+    "M_bearings_Nm": 0.00011,
+    "windage": {
+     "P_W": 0.8604,
+     "P_gap_W": 0.5064,
+     "P_faces_W": 0.354,
+     "M_total_Nm": 0.000214,
+     "gap_regime": "vortex / transitional (Wendt)",
+     "face_regime": "laminar disc",
+     "delta_mm": 0.1999999999999988
+    },
+    "die": null,
+    "config": null,
+    "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+    "notes": [
+     "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+     "radial load = rotor weight, half each (no bearing span given)"
+    ]
+   }
+  },
+  "4550.0": {
+   "P_W": 0.0325,
+   "P_bearings_W": 0.026,
+   "P_windage_W": 0.0065,
+   "bearing_temp_c": 70.0,
+   "bearing_temp_source": "assigned",
+   "speed_limit_rpm": 45000.0,
+   "summary": {
+    "rpm": 4550.0,
+    "bearings": [
+     {
+      "end": "A",
+      "bearing": "618/8-2Z",
+      "P_W": 0.013,
+      "M_total_Nm": 3e-05,
+      "M_rr_Nm": 3e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 54600.0,
+      "limit_rpm": 45000.0
+     },
+     {
+      "end": "B",
+      "bearing": "618/8-2Z",
+      "P_W": 0.013,
+      "M_total_Nm": 3e-05,
+      "M_rr_Nm": 3e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 54600.0,
+      "limit_rpm": 45000.0
+     }
+    ],
+    "cards": [
+     "618/8-2Z",
+     "618/8-2Z"
+    ],
+    "lubrication": "grease",
+    "preload_n": 0.0,
+    "rotor_mass_kg": 0.06056375550979996,
+    "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+    "F_r_total_N": 0.5939275529701797,
+    "M_bearings_Nm": 6e-05,
+    "windage": {
+     "P_W": 0.0065,
+     "P_gap_W": 0.0048,
+     "P_faces_W": 0.0017,
+     "M_total_Nm": 1.4e-05,
+     "gap_regime": "laminar (Ta < 1700)",
+     "face_regime": "laminar disc",
+     "delta_mm": 0.1999999999999988
+    },
+    "die": null,
+    "config": null,
+    "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+    "notes": [
+     "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+     "radial load = rotor weight, half each (no bearing span given)"
+    ]
+   }
+  },
+  "9750.0": {
+   "P_W": 0.1154,
+   "P_bearings_W": 0.082,
+   "P_windage_W": 0.0334,
+   "bearing_temp_c": 70.0,
+   "bearing_temp_source": "assigned",
+   "speed_limit_rpm": 45000.0,
+   "summary": {
+    "rpm": 9750.0,
+    "bearings": [
+     {
+      "end": "A",
+      "bearing": "618/8-2Z",
+      "P_W": 0.041,
+      "M_total_Nm": 4e-05,
+      "M_rr_Nm": 4e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 117000.0,
+      "limit_rpm": 45000.0
+     },
+     {
+      "end": "B",
+      "bearing": "618/8-2Z",
+      "P_W": 0.041,
+      "M_total_Nm": 4e-05,
+      "M_rr_Nm": 4e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 117000.0,
+      "limit_rpm": 45000.0
+     }
+    ],
+    "cards": [
+     "618/8-2Z",
+     "618/8-2Z"
+    ],
+    "lubrication": "grease",
+    "preload_n": 0.0,
+    "rotor_mass_kg": 0.06056375550979996,
+    "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+    "F_r_total_N": 0.5939275529701797,
+    "M_bearings_Nm": 8e-05,
+    "windage": {
+     "P_W": 0.0334,
+     "P_gap_W": 0.022,
+     "P_faces_W": 0.0115,
+     "M_total_Nm": 3.3e-05,
+     "gap_regime": "laminar (Ta < 1700)",
+     "face_regime": "laminar disc",
+     "delta_mm": 0.1999999999999988
+    },
+    "die": null,
+    "config": null,
+    "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+    "notes": [
+     "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+     "radial load = rotor weight, half each (no bearing span given)"
+    ]
+   }
+  },
+  "16250.0": {
+   "P_W": 0.2681,
+   "P_bearings_W": 0.166,
+   "P_windage_W": 0.1021,
+   "bearing_temp_c": 70.0,
+   "bearing_temp_source": "assigned",
+   "speed_limit_rpm": 45000.0,
+   "summary": {
+    "rpm": 16250.0,
+    "bearings": [
+     {
+      "end": "A",
+      "bearing": "618/8-2Z",
+      "P_W": 0.083,
+      "M_total_Nm": 5e-05,
+      "M_rr_Nm": 5e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 195000.0,
+      "limit_rpm": 45000.0
+     },
+     {
+      "end": "B",
+      "bearing": "618/8-2Z",
+      "P_W": 0.083,
+      "M_total_Nm": 5e-05,
+      "M_rr_Nm": 5e-05,
+      "M_sl_Nm": 0.0,
+      "M_seal_Nm": 0.0,
+      "nu_mm2_s": 20.17,
+      "F_r_N": 0.3,
+      "speed_ok": true,
+      "speed_verdict": "ok",
+      "n_dm": 195000.0,
+      "limit_rpm": 45000.0
+     }
+    ],
+    "cards": [
+     "618/8-2Z",
+     "618/8-2Z"
+    ],
+    "lubrication": "grease",
+    "preload_n": 0.0,
+    "rotor_mass_kg": 0.06056375550979996,
+    "rotor_mass_source": "rotor iron + magnets + shaft + sleeve, measured on the CAD polygons",
+    "F_r_total_N": 0.5939275529701797,
+    "M_bearings_Nm": 0.0001,
+    "windage": {
+     "P_W": 0.1021,
+     "P_gap_W": 0.061,
+     "P_faces_W": 0.0411,
+     "M_total_Nm": 6e-05,
+     "gap_regime": "laminar (Ta < 1700)",
+     "face_regime": "laminar disc",
+     "delta_mm": 0.1999999999999988
+    },
+    "die": null,
+    "config": null,
+    "model": "SKF frictional-moment model (tables 2 and 3) + analytic windage \u2014 ANALYTIC, not FEM",
+    "notes": [
+     "Unbalanced magnetic pull is NOT modelled: an off-centre rotor is pulled toward the short side by a force that can exceed its own weight, and it would go straight into F_r. Nor are coupling, belt or gear side loads, or any seal on the shaft itself.",
+     "radial load = rotor weight, half each (no bearing span given)"
+    ]
+   }
+  }
+ },
+ "checks_plan": {
+  "static": [
+   {
+    "id": "chk_ridge_0.375",
+    "I": 19.706249999999997,
+    "gamma": 3.0149999999999997,
+    "role": "MTPA ridge between levels"
+   },
+   {
+    "id": "chk_ridge_0.875",
+    "I": 45.981249999999996,
+    "gamma": 6.65,
+    "role": "MTPA ridge between levels"
+   },
+   {
+    "id": "chk_ridge_1.25",
+    "I": 65.6875,
+    "gamma": 8.830000000000002,
+    "role": "MTPA ridge between levels"
+   },
+   {
+    "id": "chk_ridge_1.75",
+    "I": 91.96249999999999,
+    "gamma": 11.625,
+    "role": "MTPA ridge between levels"
+   },
+   {
+    "id": "chk_fw_1.25_72.5",
+    "I": 65.6875,
+    "gamma": 72.5,
+    "role": "deep field weakening"
+   },
+   {
+    "id": "chk_fw_2.25_57.5",
+    "I": 118.2375,
+    "gamma": 57.5,
+    "role": "deep field weakening"
+   },
+   {
+    "id": "chk_top_2.4_20",
+    "I": 126.11999999999999,
+    "gamma": 20.0,
+    "role": "highest current"
+   },
+   {
+    "id": "chk_top_2.25_42.5",
+    "I": 118.2375,
+    "gamma": 42.5,
+    "role": "highest current"
+   },
+   {
+    "id": "chk_peak",
+    "I": 59.9325502571295,
+    "gamma": 8.225483870967743,
+    "role": "peak current at its operating angle (mtpa)"
+   },
+   {
+    "id": "chk_duty_rated_g",
+    "I": 52.55,
+    "gamma": 10.0,
+    "role": "rated duty current at the duty's gamma"
+   }
+  ],
+  "loss": [
+   {
+    "id": "lchk_0.75n_0.75I",
+    "rpm": 9750.0,
+    "I": 39.412499999999994,
+    "gamma": 5.85,
+    "mode": "mtpa",
+    "role": "mid loss grid"
+   },
+   {
+    "id": "lchk_0.35n_peak",
+    "rpm": 4550.0,
+    "I": 59.9325502571295,
+    "gamma": 8.225483870967743,
+    "mode": "mtpa",
+    "role": "low speed, peak current"
+   },
+   {
+    "id": "lchk_1.25n_mid",
+    "rpm": 16250.0,
+    "I": 56.24127512856475,
+    "gamma": 7.837741935483872,
+    "mode": "mtpa",
+    "role": "between speed and current rows"
+   }
+  ]
+ },
+ "small_signal": {
+  "hot": {
+   "Ld_H": 6.354433081379637e-06,
+   "Lq_H": 9.542670204994415e-06,
+   "I_rms": 2.0,
+   "method": "symmetric \u00b12 A pairs on the d and q axes, \u0394psi/\u0394i (true small-signal differential at I \u2248 0; bench/LCR equivalent)",
+   "runs": [
+    "hot_ss_g+0",
+    "hot_ss_g+180",
+    "hot_ss_g+90",
+    "hot_ss_g-90"
+   ]
+  },
+  "cold": {
+   "Ld_H": 5.638664944790356e-06,
+   "Lq_H": 9.01371049943933e-06,
+   "I_rms": 2.0,
+   "method": "symmetric \u00b12 A pairs on the d and q axes, \u0394psi/\u0394i (true small-signal differential at I \u2248 0; bench/LCR equivalent)",
+   "runs": [
+    "cold_ss_g+0",
+    "cold_ss_g+180",
+    "cold_ss_g+90",
+    "cold_ss_g-90"
+   ]
+  }
+ },
+ "refinement": {
+  "points": [
+   [
+    2.0,
+    42.5
+   ],
+   [
+    2.0,
+    57.5
+   ],
+   [
+    2.5,
+    42.5
+   ],
+   [
+    2.5,
+    57.5
+   ]
+  ],
+  "reason": "first check pass: L20 (2.25\u00b7I0, 42.5\u00b0) \u03c8 +1.0 %, (2.25\u00b7I0, 57.5\u00b0) \u03c8 +0.52 % \u2014 FW arm 15\u00b0 too coarse at the top levels; checks themselves are NOT added to the grid"
+ },
+ "loss_plan2": {
+  "bus": "nom",
+  "v_dc": 44.4,
+  "m": 0.89,
+  "m_source": "default pending owner \u2014 controller project calc_notes \u00a72 (centred SVPWM, 1 \u00b5s min LS on-time + 0.1 \u00b5s dead time at 48 kHz)",
+  "v_phase_limit_V": 22.814573237297253,
+  "R_hot_ohm": 0.015985662631799465,
+  "I_peak_rms": 59.9325502571295,
+  "I_peak_source": "ASSUMPTION \u2014 no owner peak duty: L12 owner peak/rated current ratio 48.79/42.78 applied to I0 (labelled assumption; the L20 card's peak needs an owner duty)",
+  "n_mech_limit_rpm": 45000.0,
+  "n_mech_source": "bearing speed limit (mech_losses / bearings library); critical speed and rotor stress not computed in stage 1",
+  "n_elec_limit_rpm": 35966.972621562716,
+  "n_max_rpm": 35966.972621562716,
+  "speeds": [
+   3250.0,
+   6500.0,
+   13000.0,
+   19500.0
+  ],
+  "currents": [
+   26.275,
+   52.55,
+   59.93255
+  ],
+  "points": [
+   {
+    "rpm": 3250.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n3250_I0.5"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n3250_I1"
+   },
+   {
+    "rpm": 3250.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n3250_I1.14"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n6500_I0.5"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n6500_I1"
+   },
+   {
+    "rpm": 6500.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n6500_I1.14"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 26.275,
+    "gamma": 4.0,
+    "mode": "mtpa",
+    "id": "loss_n13000_I0.5"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 52.55,
+    "gamma": 7.45,
+    "mode": "mtpa",
+    "id": "loss_n13000_I1"
+   },
+   {
+    "rpm": 13000.0,
+    "I": 59.93255,
+    "gamma": 8.225483843958136,
+    "mode": "mtpa",
+    "id": "loss_n13000_I1.14"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 26.275,
+    "gamma": 30.76024116148409,
+    "mode": "field weakening",
+    "id": "loss2_n19500_I0.5_g+30.76"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 52.55,
+    "gamma": 27.390434538200786,
+    "mode": "field weakening",
+    "id": "loss2_n19500_I1_g+27.39"
+   },
+   {
+    "rpm": 19500.0,
+    "I": 59.93255,
+    "gamma": 27.964827323522034,
+    "mode": "field weakening",
+    "id": "loss2_n19500_I1.14_g+27.96"
+   }
+  ],
+  "checks": [
+   {
+    "rpm": 9750.0,
+    "I": 39.412499999999994,
+    "gamma": 5.85,
+    "mode": "mtpa",
+    "role": "mid loss grid",
+    "id": "lchk_0.75n_0.75I"
+   },
+   {
+    "rpm": 4550.0,
+    "I": 59.9325502571295,
+    "gamma": 8.225483870967743,
+    "mode": "mtpa",
+    "role": "low speed, peak current",
+    "id": "lchk_0.35n_peak"
+   },
+   {
+    "rpm": 16250.0,
+    "I": 56.24127512856475,
+    "gamma": 7.837741935483872,
+    "mode": "mtpa",
+    "role": "between speed and current rows",
+    "id": "lchk_1.25n_mid"
+   }
+  ]
+ }
+}

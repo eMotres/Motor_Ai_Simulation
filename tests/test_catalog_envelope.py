@@ -159,7 +159,12 @@ def test_default_prov_rule_is_datasheet_from_the_first_source():
 # ---------------------------------------------------------------------------
 
 def test_the_same_devices_exist_as_before():
-    assert sorted(p.stem for p in DEV_DIR.glob("*.yaml")) == sorted(D_GOLD)
+    # Cards added AFTER the envelope migration (IQE018N06NM6SC / IQE036N08NM6SC in
+    # #79, the Infineon GaN cards next) are legitimate; what this pins is that no
+    # PRE-envelope card was lost or renamed.  (It was `==`, which went red the day
+    # the first new card landed.)
+    on_disk = {p.stem for p in DEV_DIR.glob("*.yaml")}
+    assert set(D_GOLD) <= on_disk, sorted(set(D_GOLD) - on_disk)
 
 
 def _numbers(card) -> dict:

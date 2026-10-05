@@ -107,6 +107,9 @@ export async function fetchCatalogReferences(): Promise<ReferenceMotor[]> {
       const sp = m?.passport;                         // { passport, fit, geo, poles, slots }
       if (!sp?.passport || !sp?.geo || !sp?.fit) continue;   // only motors that were characterised
       const p = sp.passport as Passport;
+      // Computed drive variants may ride beside the passport (the record's
+      // top level) instead of inside it — Configure reads them off `p`.
+      if (!p.pwm_variants && Array.isArray(sp.pwm_variants)) p.pwm_variants = sp.pwm_variants;
       const poles = Number(sp.poles ?? sp.geo.numPoles ?? 0);
       const slots = Number(sp.slots ?? sp.geo.numSlots ?? 0);
       out.push({

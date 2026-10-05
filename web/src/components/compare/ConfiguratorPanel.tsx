@@ -402,7 +402,6 @@ const ConfiguratorPanel: React.FC = () => {
       const sig = `${live.L_mm}|${live.N}|${live.split}|${live.wireH_mm}|${live.nP}|${live.I_A}|${live.rpm}`;
       if (liveSigRef.current !== sig
           && Number.isFinite(live.L_mm) && Number.isFinite(live.N)) {
-        liveSigRef.current = sig;
         // Only adopt the live build onto a passport that GENUINELY matches its
         // cross-section (m).  Grafting these raw slider values onto some other
         // ref's passport (the previous pick, or the built-in fallback) produced
@@ -412,6 +411,11 @@ const ConfiguratorPanel: React.FC = () => {
         // match, leave the knobs/ranges alone; the render layer shows the
         // "no configurator model" empty state instead of a wrong-machine result.
         if (m) {
+          // The build counts as ADOPTED only once a reference matched it.  Recording it
+          // earlier made the references' late arrival a no-op: Configure remounts with the
+          // tab and fetches them again, so a machine loaded in Motors was "seen" before any
+          // reference existed and the knobs stayed on the previous machine's values.
+          liveSigRef.current = sig;
           const adopt = (k0: Knobs): Knobs => ({
             N: live.N || k0.N,
             split: live.split,
@@ -609,6 +613,8 @@ const ConfiguratorPanel: React.FC = () => {
   const goDefault = React.useCallback(() => {
     if (!defaultRef || !defaultMotor) return;
     defaultPinned.current = true;
+    // a deliberately chosen machine, not a leftover live geometry: it needs no match
+    setLiveMatched(true); setMatchChecked(true);
     setRefId(defaultRef.id);
     setPendingDefault(defaultMotor.config);
   }, [defaultRef, defaultMotor]);

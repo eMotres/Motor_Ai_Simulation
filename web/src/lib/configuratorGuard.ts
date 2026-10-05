@@ -54,3 +54,30 @@ export function resolveDraftTarget<T extends { id: string; geo: MachineSig }>(
 export function isBlocked(opts: { draftOpen: boolean; hasDraftTarget: boolean; liveMatched: boolean }): boolean {
   return opts.draftOpen ? !opts.hasDraftTarget : !opts.liveMatched;
 }
+
+/** What the Configure panel shows, in order of what is KNOWN (owner 2026-10-05: it flashed
+ *  "no configurator model" and then loaded everything).
+ *
+ *    loading — the references have not been answered yet, or the loaded machine has not
+ *              been matched against them yet: a one-line loading state, never the error;
+ *    blocked — everything is known and there really is no model for this machine;
+ *    ready   — a model exists.
+ *
+ *  The "no model" empty state is therefore only ever rendered after the fetch COMPLETED
+ *  and the match was made. */
+export type ModelState = 'loading' | 'blocked' | 'ready';
+
+export function modelState(o: {
+  /** the references fetch has been ANSWERED (even with an empty list) */
+  refsAnswered: boolean;
+  /** the loaded machine has been matched against the references (or nothing is loaded) */
+  matchChecked: boolean;
+  draftOpen: boolean;
+  hasDraftTarget: boolean;
+  liveMatched: boolean;
+}): ModelState {
+  if (!o.refsAnswered) return 'loading';
+  if (!o.draftOpen && !o.matchChecked) return 'loading';
+  return isBlocked({ draftOpen: o.draftOpen, hasDraftTarget: o.hasDraftTarget, liveMatched: o.liveMatched })
+    ? 'blocked' : 'ready';
+}

@@ -95,7 +95,14 @@ def pack(batt: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     v_max, v_nom, v_min = _pos(b.get("v_max")), _pos(b.get("v_nom")), _pos(b.get("v_min"))
     if v_max is None and v_nom is None:
         return None
-    return {"v_max": v_max, "v_nom": v_nom, "v_min": v_min}
+    out: Dict[str, Any] = {"v_max": v_max, "v_nom": v_nom, "v_min": v_min}
+    # what the Battery panel seeds itself from: series cells, chemistry, per-cell voltages
+    cells = _pos(b.get("cells"))
+    out["cells"] = int(round(cells)) if cells is not None else None
+    out["chemistry"] = (str(b.get("chemistry")).strip() or None) if b.get("chemistry") else None
+    for k in ("v_cell_min", "v_cell_nom", "v_cell_max"):
+        out[k] = _pos(b.get(k))
+    return out
 
 
 def hand_limits(card: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -116,6 +123,78 @@ def validate_l_max(value: Any) -> Optional[float]:
             f"L_max_mm must be a positive length up to {L_MAX_SANITY_MM:g} mm "
             f"(or null to fall back to the default rule); got {value!r}")
     return v
+
+
+# ---------------------------------------------------------------------------
+# Presets — the real configurations of the machine's DIE
+# ---------------------------------------------------------------------------
+
+#: The duty a preset's operating point is taken from, when the configuration has one
+#: of this name; otherwise its first duty.  (A choice of WHICH saved duty, not a number.)
+PREFERRED_DUTY = "rated"
+
+
+def _num(v: Any) -> Optional[float]:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None,
+              variants: Optional[list] = None) -> Dict[str, Any]:
+    """One configuration of a die as a Configure PRESET: every knob the tuner has, read from
+    the configuration's own document (never typed here), plus its saved pack and the
+    drive variants computed for it.
+
+    A key the configuration does not override falls back to the DIE's geometry; a value
+    neither states is ``None`` and the web leaves that knob where it is.
+    """
+    base = dict(die_geometry or {})
+    geo = {**base, **(doc.get("geometry_overrides") or {})}
+    wnd = doc.get("winding") if isinstance(doc.get("winding"), dict) else {}
+    duties = [d for d in (doc.get("duties") or []) if isinstance(d, dict)]
+    duty = next((d for d in duties if d.get("name") == PREFERRED_DUTY), duties[0] if duties else None)
+    n_par = _num(wnd.get("n_parallel"))
+    split = _num(geo.get("wire_split"))
+    vs = [v for v in (variants or []) if isinstance(v, dict) and v.get("id")]
+    ctrl = doc.get("controller") if isinstance(doc.get("controller"), dict) else {}
+    return {
+        "config": str(doc.get("name") or ""),
+        "die": str(doc.get("die") or ""),
+        "knobs": {
+            "L_mm": _num(geo.get("motor_length")),
+            "N": _num(geo.get("num_wires_per_slot")),
+            "wireH_mm": _num(geo.get("wire_height")),
+            "split": split if split is not None else 1.0,
+            "nP": n_par if n_par is not None else 1.0,
+            "I_A": _num((duty or {}).get("current_arms")),
+            "rpm": _num((duty or {}).get("rpm")),
+        },
+        "duty": (duty or {}).get("name"),
+        "battery": pack(doc.get("battery")),
+        "device": (str(ctrl.get("device")).strip() or None) if ctrl.get("device") else None,
+        "pwm_variants": vs,
+        # the drive a preset opens on: its first computed variant, else Sine
+        "drive_variant": vs[0]["id"] if vs else None,
+    }
+
+
+def presets_for_die(docs: list, die_geometry: Optional[Dict[str, Any]] = None,
+                    variants_for: Optional[Any] = None) -> list:
+    """The presets of a die — ONE PER CONFIGURATION, in the order the die lists them (by
+    name).  No names are known here: a die with one configuration has one preset, one with
+    five has five, and a configuration added tomorrow is a preset tomorrow.
+
+    ``variants_for(die, config)`` -> the drive variants computed for that configuration.
+    """
+    out = []
+    for d in sorted((x for x in docs if isinstance(x, dict) and x.get("name")),
+                    key=lambda x: str(x["name"]).casefold()):
+        vs = variants_for(str(d.get("die") or ""), str(d["name"])) if variants_for else None
+        out.append(preset_of(d, die_geometry, vs))
+    return out
 
 
 def context(card: Optional[Dict[str, Any]], family_doc: Optional[Dict[str, Any]]

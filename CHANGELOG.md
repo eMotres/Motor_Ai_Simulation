@@ -16,6 +16,18 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
   motor loss, inverter loss split, T_j, drive efficiency battery to shaft; the saved
   configuration records the drive. Sine is the default and unchanged (scaleMotor is
   untouched). EN + ZH strings in the `controller` namespace.
+- **Configure: presets, battery under the sliders, lean loading** (owner 2026-10-05). One
+  preset per configuration of the machine's die (read from the machines, none hard-coded;
+  `GET /api/catalog/{id}/configure_context` -> `presets`): choosing one restores every knob,
+  its saved pack and its default drive; "modified from <preset>" appears on the title row once
+  anything differs; saved configurations now carry the battery, the drive and the preset and
+  are saved under a name. The Battery block sits right under the sliders, opens on the machine's
+  own pack (6S for L12, 12S for L20), the user's edits are kept per machine, "reset to machine
+  pack" returns; everything bus-dependent (full-battery speed, the 2S/2P voltage warning, the
+  motor marker) follows the edited pack, and a PWM variant is refused outside its computed bus
+  range. Limit captions sit on the title row, not under the sliders. `GET /api/catalog/references`
+  serves Configure without the 12 MB of thumbnails; "no configurator model" no longer flashes
+  before the catalogue answers.
 - **Configure reads the passport pilot's computed drive variants** (#106): the catalogue
   response (`GET /api/catalog`, `GET /api/catalog/{id}/passport`) now carries `pwm_variants`
   for a card whose machine has a v1 record in the versioned store

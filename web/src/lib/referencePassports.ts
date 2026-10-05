@@ -97,11 +97,31 @@ export const connLabel = (nP: number, numSlots: number): string =>
 // fallback used when the catalog has no characterised motor.
 const _API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
+/** What the references fetch says: `ok` = the server ANSWERED (an empty list is then a
+ *  real "no characterised motor"); `!ok` = it did not, so nothing is known yet. */
+export interface ReferencesAnswer { ok: boolean; refs: ReferenceMotor[]; }
+
+/** The lean route first (`GET /api/catalog/references`: only the cards with a passport,
+ *  ~100 KB); an older server without it falls back to the whole catalogue (12 MB of
+ *  thumbnails on the live one).  Configure used to wait for all of that on every open. */
+async function fetchCatalogJson(): Promise<{ motors?: Array<Record<string, any>> } | null> {
+  for (const path of ['/api/catalog/references', '/api/catalog']) {
+    try {
+      const r = await fetch(`${_API}${path}`, { cache: 'no-store' });
+      if (r.ok) return await r.json();
+    } catch { /* try the next one */ }
+  }
+  return null;
+}
+
 export async function fetchCatalogReferences(): Promise<ReferenceMotor[]> {
+  return (await fetchCatalogReferencesAnswer()).refs;
+}
+
+export async function fetchCatalogReferencesAnswer(): Promise<ReferencesAnswer> {
   try {
-    const r = await fetch(`${_API}/api/catalog`, { cache: 'no-store' });
-    if (!r.ok) return [];
-    const cat = await r.json();
+    const cat = await fetchCatalogJson();
+    if (!cat) return { ok: false, refs: [] };
     const out: ReferenceMotor[] = [];
     for (const m of (cat.motors ?? []) as Array<Record<string, any>>) {
       const sp = m?.passport;                         // { passport, fit, geo, poles, slots }
@@ -122,8 +142,8 @@ export async function fetchCatalogReferences(): Promise<ReferenceMotor[]> {
         geo: sp.geo,
       });
     }
-    return out;
+    return { ok: true, refs: out };
   } catch {
-    return [];
+    return { ok: false, refs: [] };
   }
 }

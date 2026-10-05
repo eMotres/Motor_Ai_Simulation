@@ -8,7 +8,7 @@
  * drive the motor — and down to what state of charge.
  */
 import React, { useMemo } from 'react';
-import { Box, Typography, ToggleButton, ToggleButtonGroup, TextField } from '@mui/material';
+import { Box, Typography, ToggleButton, ToggleButtonGroup, Button } from '@mui/material';
 import BatteryChargingFullIcon from '@mui/icons-material/BatteryChargingFull';
 import { nsT } from '../../i18n/nsT';
 
@@ -26,14 +26,24 @@ const LABEL = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTrans
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1, p: 2 } as const;
 const fmt = (v: number, d = 0) => (Number.isFinite(v) ? v.toFixed(d) : '—');
 
-const numField = (label: string, value: number, onChange: (e: any) => void, step = 0.05) => (
-  <TextField label={label} type="number" value={value} onChange={onChange} size="small"
-    inputProps={{ step, style: { fontSize: 13, padding: '4px 6px', width: 56 } }}
-    InputLabelProps={{ sx: { fontSize: 11 } }}
-    sx={{ '& .MuiOutlinedInput-notchedOutline': { borderColor: 'var(--line)' } }} />
+/** A labelled number field: the label is a normal title (the panel's LABEL style, never
+ *  truncated), the value a plain input — no floating small print. */
+const numField = (label: string, value: number, onChange: (e: any) => void, step = 0.05, width = 66) => (
+  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
+    <Typography sx={LABEL}>{label}</Typography>
+    <input type="number" value={value} step={step} onChange={onChange}
+      style={{ width, background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
+  </Box>
 );
 
-const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery) => void }> = ({ vDc, bat, onChange }) => {
+const sameBat = (a: Battery, b: Battery) => a.cells === b.cells && a.type === b.type
+  && Math.abs(a.nom - b.nom) < 1e-6 && Math.abs(a.max - b.max) < 1e-6 && Math.abs(a.min - b.min) < 1e-6;
+
+const BatteryPanel: React.FC<{
+  vDc: number; bat: Battery; onChange: (b: Battery) => void;
+  /** the pack the machine was saved with; with `onReset` it adds a "reset to machine pack" control */
+  machinePack?: Battery | null; onReset?: () => void;
+}> = ({ vDc, bat, onChange, machinePack, onReset }) => {
   const setType = (t: CellType | null) => { if (t) onChange({ ...bat, type: t, ...PRESETS[t] }); };
   const setF = (k: keyof Battery) => (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange({ ...bat, [k]: v });
@@ -48,7 +58,7 @@ const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery)
   }, [vDc, packNom, packMax]);
 
   // ── voltage bar ───────────────────────────────────────────────────────────
-  const W = 640, padX = 14;
+  const W = 360, padX = 14;   // the viewBox is about the column it sits in, so its labels read at their own size
   const lo = 0, hi = Math.max(packMax, vDc) * 1.05;   // axis from 0 → whole range visible
   const X = (v: number) => padX + ((v - lo) / (hi - lo)) * (W - 2 * padX);
   const barY = 30, barH = 22;
@@ -66,7 +76,7 @@ const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery)
       </Box>
 
       {/* inputs */}
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap', mb: 1.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 2, flexWrap: 'wrap', mb: 1.5 }}>
         <ToggleButtonGroup exclusive size="small" value={bat.type} onChange={(_, v) => setType(v)}>
           {(['NMC', 'LFP'] as CellType[]).map((t) => (
             <ToggleButton key={t} value={t} sx={{ px: 1.5, py: 0.3, fontSize: 12, textTransform: 'none', color: 'var(--text-2)', borderColor: 'var(--line)',
@@ -76,12 +86,17 @@ const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery)
           ))}
         </ToggleButtonGroup>
         {numField(tx('configure.cellsSeries'), bat.cells, setF('cells'), 1)}
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-          <Typography sx={LABEL}>{tx('configure.cellV')}</Typography>
-          {numField(tx('configure.cellMin'), bat.min, setF('min'))}
+        <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
+          {numField(`${tx('configure.cellV')} · ${tx('configure.cellMin')}`, bat.min, setF('min'))}
           {numField(tx('configure.cellNom'), bat.nom, setF('nom'))}
           {numField(tx('configure.cellMax'), bat.max, setF('max'))}
         </Box>
+        {machinePack && onReset && !sameBat(bat, machinePack) && (
+          <Button size="small" onClick={onReset} title={tx('configure.resetPackTip')}
+            sx={{ textTransform: 'none', fontSize: 11, color: '#60a5fa', ml: 'auto' }}>
+            {tx('configure.resetPack')}
+          </Button>
+        )}
       </Box>
 
       {/* voltage-match bar */}
@@ -103,8 +118,8 @@ const BatteryPanel: React.FC<{ vDc: number; bat: Battery; onChange: (b: Battery)
         <text x={X(packMin)} y={barY + barH + 18} fill="var(--text-2)" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packMin)}</text>
         <text x={X(packNom)} y={barY + barH + 18} fill="#22c55e" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packNom)}</text>
         <text x={X(packMax)} y={barY + barH + 18} fill="var(--text-2)" fontSize={11} textAnchor="middle" fontFamily="monospace">{fmt(packMax)}</text>
-        <text x={X(packMin)} y={barY - 8} fill="var(--text-4)" fontSize={9} textAnchor="middle">{tx('configure.barEmpty')}</text>
-        <text x={X(packMax)} y={barY - 8} fill="var(--text-4)" fontSize={9} textAnchor="middle">{tx('configure.barFull')}</text>
+        <text x={X(packMin) + 4} y={barY + barH - 7} fill="var(--text-0)" fontSize={11} textAnchor="start">{tx('configure.barEmpty')}</text>
+        <text x={X(packMax) - 4} y={barY + barH - 7} fill="var(--text-0)" fontSize={11} textAnchor="end">{tx('configure.barFull')}</text>
         {/* motor DC-voltage marker */}
         <line x1={mX} y1={barY - 14} x2={mX} y2={barY + barH + 8} stroke={color} strokeWidth={1} />
         <polygon points={`${mX - 5},${barY - 14} ${mX + 5},${barY - 14} ${mX},${barY - 6}`} fill={color} />

@@ -11,8 +11,16 @@ lives in ``config/cooling_options.yaml``::
       "CIANO14 40 new":
         cooling_options: [propeller_air]
         propellers: [tmotor_fpv_10x5, tmotor_p12x4, ...]
+        defaults:                      # the propeller each configuration opens on (owner 2026-10-05)
+          L12: tmotor_fpv_10x5
+          L20: tmotor_p13x4_4
         configs:                       # optional per-configuration override
           L20: {propellers: [tmotor_fpv_13x10]}
+
+A default must be one of the propellers the configuration may use; one that is not is ignored
+(``default_propeller`` stays ``None``, the entry is listed in ``bad_defaults``) so a typo is visible
+instead of silently selecting a propeller the die does not allow.  With no default Configure takes the
+first allowed propeller that has torque data.
 
 A die with no entry is UNRESTRICTED (``cooling_options`` is ``None``): every
 existing cooling mode stays on offer, exactly as before this file existed.
@@ -92,14 +100,30 @@ def cooling_options(die: str, config: Optional[str] = None) -> Dict[str, Any]:
         if die in dies and isinstance(dies[die], dict):
             entry, source = dies[die], src               # later layer (server) wins
     opts = props = None
+    defaults: Dict[str, str] = {}
+    ok: Dict[str, str] = {}
+    bad: Dict[str, str] = {}
     if entry is not None:
-        opts = _clean_list(entry.get("cooling_options"))
-        props = _clean_list(entry.get("propellers"))
-        over = (entry.get("configs") or {}).get(cfg) if cfg else None
-        if isinstance(over, dict):
-            if "cooling_options" in over:
-                opts = _clean_list(over.get("cooling_options"))
-            if "propellers" in over:
-                props = _clean_list(over.get("propellers"))
+        def _eff(c: str) -> Dict[str, Any]:
+            """options / propellers in force for configuration ``c`` (die values + its override)."""
+            o, pr = _clean_list(entry.get("cooling_options")), _clean_list(entry.get("propellers"))
+            ov = (entry.get("configs") or {}).get(c) if c else None
+            if isinstance(ov, dict):
+                if "cooling_options" in ov:
+                    o = _clean_list(ov.get("cooling_options"))
+                if "propellers" in ov:
+                    pr = _clean_list(ov.get("propellers"))
+            return {"opts": o, "props": pr}
+        e = _eff(cfg)
+        opts, props = e["opts"], e["props"]
+        raw_def = entry.get("defaults")
+        if isinstance(raw_def, dict):
+            defaults = {str(k).strip(): str(v).strip() for k, v in raw_def.items()
+                        if str(k).strip() and str(v).strip()}
+        # a default counts only if ITS configuration may actually use that propeller
+        for c, pid in defaults.items():
+            (ok if pid in set(_eff(c)["props"] or []) else bad)[c] = pid
     return {"die": die, "config": cfg or None, "cooling_options": opts,
-            "propellers": props, "restricted": opts is not None, "source": source}
+            "propellers": props, "restricted": opts is not None, "source": source,
+            "default_propeller": ok.get(cfg) if cfg else None,
+            "defaults": ok, "bad_defaults": bad}

@@ -18,3 +18,8 @@ dies:
       - tmotor_p13x4_4         # 13 in, torque measured
       - tmotor_fpv_13x10       # 13 in, 3 blades, torque measured
       - tmotor_fpv_13x12       # 13 in, 3 blades, torque measured
+    # the propeller each configuration opens on (owner 2026-10-05); Configure's picker takes it on
+    # loading the configuration and on "reset to preset", and still lets the user change it
+    defaults:
+      L12: tmotor_fpv_10x5     # 6S: 10 in, 3 blades
+      L20: tmotor_p13x4_4      # 12S: P13x4.4

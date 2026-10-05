@@ -64,6 +64,9 @@ export interface CoolingInfo {
   cooling_options?: string[] | null;
   propellers?: string[] | null;
   die?: string; config?: string | null;
+  /** the propeller THIS configuration opens on, and every configuration's (config/cooling_options.yaml) */
+  default_propeller?: string | null;
+  defaults?: Record<string, string> | null;
 }
 
 /** True when the propeller's slipstream is the machine's ONLY cooling. */
@@ -211,9 +214,21 @@ export function writeCoolChoice(raw: string | null, refId: string, patch: CoolCh
   return JSON.stringify(m);
 }
 
-/** The propeller actually used: the remembered one if it is still allowed and has data,
- *  else the default.  `null` when the die allows none. */
-export function effectivePropeller(choice: CoolChoice, allowed: PropSummary[]): string | null {
+/** The propeller a CONFIGURATION opens on: its entry in the die's `defaults` if that propeller is
+ *  allowed and has data; else the first allowed propeller with torque data (owner 2026-10-05). */
+export function defaultPropellerFor(cooling: CoolingInfo | null | undefined, config: string | null | undefined,
+                                    allowed: PropSummary[]): string | null {
+  const id = config ? cooling?.defaults?.[config] : cooling?.default_propeller;
+  const d = id ? allowed.find((p) => p.id === id && p.selectable) : undefined;
+  return d ? d.id : defaultPropeller(allowed);
+}
+
+/** The propeller actually used: the user's remembered choice if it is still allowed and has data,
+ *  else `preferred` (the configuration's default), else the first with torque data.  `null` when the
+ *  die allows none. */
+export function effectivePropeller(choice: CoolChoice, allowed: PropSummary[], preferred?: string | null): string | null {
   const c = choice.propId ? allowed.find((p) => p.id === choice.propId && p.selectable) : undefined;
-  return c ? c.id : defaultPropeller(allowed);
+  if (c) return c.id;
+  const d = preferred ? allowed.find((p) => p.id === preferred && p.selectable) : undefined;
+  return d ? d.id : defaultPropeller(allowed);
 }

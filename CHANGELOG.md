@@ -8,6 +8,14 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **Default propeller per configuration** (owner 2026-10-05): `config/cooling_options.yaml` `defaults:` under
+  the die (CIANO14 40 new: L12 -> `tmotor_fpv_10x5`, L20 -> `tmotor_p13x4_4`), served as `default_propeller`
+  (and the die's `defaults` map) by `/api/propellers/cooling-options` and `configure_context.cooling`. A default
+  the configuration may not use, or the catalogue cannot compute, is withheld and named in `bad_defaults`.
+  Configure's picker takes the configuration's default on loading it and on "reset to preset" (the user's pick is
+  dropped); with no default it takes the first allowed propeller with torque data. The preset "modified" check and
+  the preset highlight include the propeller; a saved configuration keeps the user's choice (and shows it in the
+  table). Server install: copy `config/cooling_options.yaml` into `<shared>/`.
 - **Configure with a propeller** (owner 2026-10-05, Ø40 drone motors). A die whose only cooling is
   `propeller_air` (`config/cooling_options.yaml`) gets a **Propeller** picker (its allowed propellers;
   geometry-only ones listed disabled, "no test data") and one ambient-air field; the separate Thermal block

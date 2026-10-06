@@ -50,6 +50,36 @@ const tx = nsT('motors');
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
+// FamilyCatalog can be mounted once per stator diameter. Keep one browser-side
+// refresh timer and let the shared familyTree memo coalesce those subscribers
+// into one request, so an admin's newly saved shared motor appears without a
+// reload while already-open Configure state is left untouched.
+const familyCatalogRefreshers = new Set<() => void>();
+let familyCatalogRefreshTimer: number | null = null;
+let familyCatalogRefreshInProgress = false;
+function subscribeFamilyCatalogRefresh(refresh: () => void): () => void {
+  familyCatalogRefreshers.add(refresh);
+  if (familyCatalogRefreshTimer === null) {
+    familyCatalogRefreshTimer = window.setInterval(() => {
+      if (!pageVisible() || familyCatalogRefreshInProgress) return;
+      familyCatalogRefreshInProgress = true;
+      void fetchFamilyTree({ fresh: true }).then(() => {
+        window.dispatchEvent(new Event('family-catalog-refreshed'));
+        for (const subscriber of familyCatalogRefreshers) subscriber();
+      }).catch(() => {
+        for (const subscriber of familyCatalogRefreshers) subscriber();
+      }).finally(() => { familyCatalogRefreshInProgress = false; });
+    }, 5000);
+  }
+  return () => {
+    familyCatalogRefreshers.delete(refresh);
+    if (!familyCatalogRefreshers.size && familyCatalogRefreshTimer !== null) {
+      window.clearInterval(familyCatalogRefreshTimer);
+      familyCatalogRefreshTimer = null;
+    }
+  };
+}
+
 interface DutyResult {
   efficiency_pct?: number; ripple_pct?: number; v_ll_peak_v?: number;
   loss_w?: number; loss_mech_w?: number; loss_mech_derived?: boolean;
@@ -252,6 +282,9 @@ const FamilyCatalog: React.FC<{
     }
   };
   useEffect(() => { load(); }, []);
+  // Other sessions may have updated the shared catalog. Poll while visible;
+  // the tree refresh changes this catalog view only and never applies geometry.
+  useEffect(() => subscribeFamilyCatalogRefresh(() => { void load(); }), []);
   // Failed load (backend restarting / briefly unreachable): retry every 3 s
   // until it answers — the catalog reappears by itself, no manual F5 needed.
   useEffect(() => {
@@ -945,14 +978,24 @@ const FamilyCatalog: React.FC<{
               {c.duties.length > 0 && (
                 <Box component="table" sx={{
                   width: '100%', mt: 0.4, mb: 0.4, borderCollapse: 'collapse',
+                  tableLayout: 'fixed',
                   '& th': { fontSize: 10, fontWeight: 600, color: 'var(--text-4)',
                             textAlign: 'right', p: '2px 6px', whiteSpace: 'nowrap' },
                   '& td': { fontSize: 11.5, color: 'var(--text-2)', textAlign: 'right',
                             p: '2px 6px', whiteSpace: 'nowrap',
+                            overflow: 'hidden', textOverflow: 'ellipsis',
                             fontVariantNumeric: 'tabular-nums',
                             borderTop: '1px solid var(--panel)' },
                   '& th:first-of-type, & td:first-of-type': { textAlign: 'left' },
                 }}>
+                  <colgroup>
+                    <col style={{ width: '22%' }} /><col style={{ width: '6%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '7%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '8%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '8%' }} />
+                    <col style={{ width: '8%' }} /><col style={{ width: '6%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '11%' }} />
+                  </colgroup>
                   <thead>
                     <tr>
                       <th>{tx('duty')}</th><th>kW</th><th>Nm</th><th>rpm</th>

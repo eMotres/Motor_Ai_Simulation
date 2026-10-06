@@ -693,6 +693,17 @@ const ConfiguratorPanel: React.FC = () => {
     setCtxDone(true);
   }, [catId, identity]);
   useEffect(() => { setCtx(null); setCtxDone(false); setLimitMsg(null); setBaseConfig(null); void loadCtx(); }, [loadCtx]);
+  // A family save from this or another session refreshes the selected motor's
+  // catalog context, but does not apply a new preset or overwrite draft knobs.
+  useEffect(() => {
+    const refresh = () => { void loadCtx(); };
+    window.addEventListener('family-changed', refresh);
+    window.addEventListener('family-catalog-refreshed', refresh);
+    return () => {
+      window.removeEventListener('family-changed', refresh);
+      window.removeEventListener('family-catalog-refreshed', refresh);
+    };
+  }, [loadCtx]);
   const presets: Preset[] = ctx?.presets ?? [];
   const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
   // a freshly loaded machine starts on the configuration whose build it is

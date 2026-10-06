@@ -671,6 +671,28 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
                               "coil_c": t_in.get("hot_coil_c"),
                               "source": t_in.get("hot_magnet_source")}}
     rec["demag_limit"] = demag_limit(st, full, M, I0)
+    # The owner's rule compares the rated point after an overload with the rated
+    # point from virgin magnets — it presumes the rated point itself does not
+    # demagnetise.  When it does (Ø85 at the 150 °C reference: demag share 0.853),
+    # the rule has no reference and is not quoted as a limit.
+    ks_ = (rec["card"]["rated_point"].get("k_state_split") or {})
+    dsh = ks_.get("demag_share")
+    if dsh is not None and dsh < 0.99:
+        dl_ = rec["demag_limit"]
+        dl_["I_limit_rule_value_rms"] = dl_.get("I_limit_rms")
+        dl_["I_limit_rms"] = None
+        dl_["I_limit_over_I0"] = None
+        dl_["how"] = ("not defined at this HOT reference: the rated point itself loses %.1f %% "
+                      "of its torque to demagnetisation from virgin magnets (demag share %.3f), so "
+                      "the rule's reference is already damaged; overloads up to the probes left the "
+                      "rated torque within %s %% of that damaged value. The safe current at this "
+                      "magnet temperature is below 0.25·I0 (Br-retention knee %s A)."
+                      % (100.0 * (1.0 - dsh), dsh,
+                         ", ".join("%+.2f" % r["torque_drop_pct"] for r in dl_.get("sequence") or []
+                                   if r.get("torque_drop_pct") is not None) or "—",
+                         ("%.1f" % ((dl_.get("retention_curve") or {}).get("99.5") or {}).get("I_rms"))
+                         if ((dl_.get("retention_curve") or {}).get("99.5") or {}).get("I_rms")
+                         else "—"))
     ctrl = spec_m.get("controller") if spec_m else (
         {"status": "set", "device": CTRL[M]["si"], "r_g_ohm": CTRL[M]["r_g"],
          "build": CTRL[M]["build"], "n_parallel": 1, "board_scale": 1})

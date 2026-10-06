@@ -346,17 +346,35 @@ def cooling_block(full_dir: Path, M: str, studies: Sequence[Mapping[str, Any]], 
                                          for k in ("T_em_Nm", "P_shaft_W", "eta_shaft")}
             if Ic:
                 n = float(sd["rpm"])
+                w = 2.0 * math.pi * n / 60.0
+                pw = cr.get("power") or {}
+                Tem = pw.get("T_em_Nm")
+                Pm = (S3.motor_point(rec, snap, hm, rows_grid, {"rpm": n, "I_A": float(Ic),
+                                                                 "gamma_deg": 0.0})["P_mech_W"])
+                if Tem is not None:
+                    # the S1 state's OWN electromagnetic pass (TDM + demag at the S1
+                    # temperatures) — the HOT map is at the 150 °C reference, which is
+                    # not this state's magnet temperature
+                    T = float(Tem) * kT
+                    row["s1"]["card"] = {"T_Nm": T, "P_shaft_W": T * w - (Pm or 0.0),
+                                         "P_mech_W": Pm,
+                                         "basis": "the S1 rating's own electromagnetic pass at "
+                                                  "I_cont and the S1 temperatures (TDM + demag) "
+                                                  "× k_T (3-D)" + ("" if Pm else
+                                                                   "; mechanical loss not "
+                                                                   "included (no bearings named)")}
                 g, how = hm.operating_gamma(float(Ic), n, R_hot, vlim)
                 if g is not None:
                     mp = S3.motor_point(rec, snap, hm, rows_grid,
                                         {"rpm": n, "I_A": float(Ic), "gamma_deg": g})
-                    T = mp["T_op_Nm"] * kT
-                    w = 2.0 * math.pi * n / 60.0
-                    row["s1"]["card"] = {"T_Nm": T, "P_shaft_W": T * w - mp["P_mech_W"],
-                                         "gamma_deg": g, "gamma_mode": how,
-                                         "P_loss_em_W": mp["P_em_W"],
-                                         "basis": "passport hot map × k_state × k_T at the "
-                                                  "S1 current, operating angle (m-limited)"}
+                    blk = {"T_Nm": mp["T_op_Nm"] * kT,
+                           "P_shaft_W": mp["T_op_Nm"] * kT * w - mp["P_mech_W"],
+                           "gamma_deg": g, "gamma_mode": how, "P_loss_em_W": mp["P_em_W"],
+                           "basis": "passport HOT map (limit-temperature reference) × k_state × "
+                                    "k_T at the S1 current — a lower bound when the S1 magnet "
+                                    "is cooler than the reference"}
+                    row["s1"]["card_at_hot_reference"] = blk
+                    row["s1"].setdefault("card", blk)
         else:
             lim = cp.get("limited") or {}
             ttl = cp.get("time_to_limit") or {}
@@ -516,6 +534,15 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
                                         "note": "PWM variants are computed only for a machine "
                                                 "with a controller; Configure shows PWM "
                                                 "disabled (request calculation)"}
+    # a configuration that names no bearings has no mechanical loss model: every
+    # shaft number then EXCLUDES the bearings / windage — said on the value, never 0
+    for blk_ in (rec["card"]["rated_point"], rec["card"]["peak_point"]):
+        pm_ = blk_.get("P_mech_W") or {}
+        if isinstance(pm_, dict) and pm_.get("value") is None:
+            for k_ in ("P_shaft_W", "eta_shaft", "P_mech_W"):
+                if isinstance(blk_.get(k_), dict):
+                    blk_[k_]["labels"] = list(blk_[k_].get("labels") or []) + [
+                        "mechanical loss not included: the configuration names no bearings"]
     # ── headline with 3-D factors ───────────────────────────────────────────
     kT = s2["k_T"]["value"] or 1.0
     kpsi = s2["k_psi"]["value"]

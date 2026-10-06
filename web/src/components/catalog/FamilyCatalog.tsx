@@ -835,8 +835,8 @@ const FamilyCatalog: React.FC<{
                     </Typography>
                   </Tooltip>
                 )}
-                {(c.duties?.length ?? 0) > 1 && (
-                  <Tooltip title="Which duty's field maps go into the report — |B|, A_z, losses, temperature, stress, mode shapes. 'auto' is the backend's rule: the duty named rated, else the one loaded in the editor. Only a duty with stored fields can be drawn from; one without falls back to auto.">
+                {(c.duties?.length ?? 0) > 2 && (
+                  <Tooltip title="Choose the duty shown beside rated in the report field-map pairs. Auto selects the comparison duty. A duty needs stored fields.">
                     <select
                       value={picFor(die.name, c.name)}
                       onChange={(e) => setPicFor(die.name, c.name, e.target.value)}

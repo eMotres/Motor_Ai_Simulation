@@ -40,4 +40,8 @@ dies:
       - tmotor_g36x11_5        # 36 in, torque measured (U15 II KV100), tested 2595-4328 rpm
       - tmotor_g40x13_1        # 40 in, torque measured (U15 II KV80/KV100), tested 1843-3546 rpm
     defaults:
-      L13: tmotor_g40x13_1     # proposed — owner to confirm
+      # proposed — owner to confirm: the largest CONTINUOUS thrust of the four on this motor
+      # (~1930 rpm, ~50 N in the card's lumped propeller-air estimate; G40x13.1 reaches more
+      # thrust only for short periods). Below 2485 rpm its coefficients are held at the
+      # tested edge (extrapolated, flagged in Configure).
+      L13: tmotor_g32x11

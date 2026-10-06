@@ -399,6 +399,157 @@ def cooling_block(full_dir: Path, M: str, studies: Sequence[Mapping[str, Any]], 
                        PEND]}
 
 
+# ── Configure's lumped estimate (web/src/lib/thermalEstimate.ts), ported 1:1 ──────────────
+_K_IRON, _K_SLOT, _K_INS, _K_GAP = 25.0, 1.4, 0.2, 0.06
+
+
+def _lumped(g: Mapping[str, float], P_cu: float, P_fe: float, P_mag: float,
+            h: float, amb: float) -> Dict[str, float]:
+    """``estimateThermal`` of the web, in Python (same constants, same paths): all
+    loss leaves the lateral housing + both end faces at film h; the winding and
+    magnet sit above the housing by lumped conduction resistances."""
+    mm = lambda x: max(0.0, float(x or 0.0)) / 1000.0            # noqa: E731
+    D, L = mm(g["statorOD_mm"]) or 0.1, mm(g["stackLength_mm"]) or 0.03
+    P_tot = max(P_cu, 0) + max(P_fe, 0) + max(P_mag, 0)
+    A_cyl = math.pi * D * L
+    A_s = A_cyl + 2 * math.pi * (D / 2) ** 2
+    T_h = amb + P_tot / (max(1.0, h) * A_s)
+    A_slot = max(1e-4, g["numSlots"] * 2 * mm(g["slotHeight_mm"]) * L)
+    R_w = (mm(g["slotWidth_mm"]) * 0.5) / (_K_SLOT * A_slot) + mm(g["insulation_mm"]) / (
+        _K_INS * A_slot) + mm(g["coreThickness_mm"]) / (_K_IRON * max(1e-4, A_cyl))
+    A_gap = max(1e-4, math.pi * mm(g["magnetOD_mm"]) * L)
+    R_g = mm(g["airGap_mm"]) / (_K_GAP * A_gap)
+    return {"T_housing_C": T_h, "T_winding_C": T_h + max(P_cu, 0) * R_w,
+            "T_magnet_C": T_h + max(P_mag, 0) * R_g, "A_surface_m2": A_s, "h_W_m2K": h}
+
+
+def lumped_cooling(rec, snap, hm, rows_grid, kT: float, spec_m: Mapping[str, Any]
+                   ) -> Dict[str, Any]:
+    """What CONFIGURE shows for this machine (its lumped model, the same films):
+    the continuous current per cooling and speed — winding at Configure's class-H
+    180 °C or magnet at the card's 150 °C, whichever first — with the copper at
+    its own temperature (R(T)) and the iron / magnet / shaft groups of the passport
+    loss trajectory.  Robotics = still air + radiation on the housing
+    (cooling_models.outer_still, iterated at the housing temperature, ε 0.9);
+    propeller = cross-flow at the slipstream speed (cooling_models.outer_air, the
+    film Configure reads from /api/propellers/.../series)."""
+    from motor_ai_sim import propeller as PP
+    from motor_ai_sim.simulation import cooling_models as CM
+    geo = snap["geometry"]
+    D = float(geo["stator_diameter"])
+    bore = D - 2.0 * (float(geo["core_thickness"]) + float(geo["slot_height"]))
+    ns = int(round(float(geo.get("num_slots") or 24)))
+    g = {"statorOD_mm": D, "stackLength_mm": float(geo["motor_length"]), "numSlots": ns,
+         "slotHeight_mm": float(geo["slot_height"]),
+         "slotWidth_mm": math.pi * (bore + float(geo["slot_height"])) / ns
+         - float(geo["tooth_width"]),
+         "insulation_mm": float(geo.get("insulation_thickness") or 0.05),
+         "coreThickness_mm": float(geo["core_thickness"]), "airGap_mm": float(geo["air_gap"]),
+         "magnetOD_mm": bore - 2.0 * float(geo["air_gap"])}
+    lg = rec["loss_grid"]["plan"]
+    R_hot = float(lg["R_hot_ohm"])
+    T_hot_c = float(snap["temperatures"]["hot_coil_c"])
+    alpha = C._cu_alpha(snap)
+    R20 = R_hot / (1.0 + alpha * (T_hot_c - 20.0))
+    W_LIM, M_LIM = 180.0, 150.0
+    amb = 40.0
+    D_m = D / 1000.0
+
+    I_floor = min(rows_grid)
+
+    def state(n, I, cooling, prop):
+        # below the lowest trajectory current the non-copper groups are held at that
+        # row's values (an upper bound: iron / magnet / shaft fall with the current)
+        il = LS.interp_loss(n, max(I, I_floor), rows_grid, R_hot)
+        if il.get("P_total_W") is None:
+            return None
+        gr = il["groups"]
+        P_fe = float(gr["P_fe_stator_W"] or 0) + float(gr["P_fe_rotor_W"] or 0)
+        P_mag = float(gr["P_mag_W"] or 0) + float(gr["P_shaft_W"] or 0) + float(gr["P_sleeve_W"] or 0)
+        P_ac = float(gr["P_cu_ac_W"] or 0)
+        Tw = T_hot_c
+        out = None
+        for _ in range(60):
+            P_cu = 3.0 * I * I * R20 * (1.0 + alpha * (Tw - 20.0)) + P_ac
+            if cooling == "propeller_air":
+                v = PP.air_speed_for_thermal(prop, n, ambient_c=amb)["air_speed_mps"]
+                h = float(CM.outer_air(air_speed_mps=v, t_ambient_c=amb, d_housing_m=D_m)["h_conv"])
+                out = _lumped(g, P_cu, P_fe, P_mag, h, amb)
+                out["air_speed_ms"] = v
+            else:
+                tw_h = amb + 30.0
+                for _k in range(40):
+                    h = float(CM.outer_still(t_wall_c=tw_h, t_ambient_c=amb, d_housing_m=D_m,
+                                             emissivity=0.9)["h_total"])
+                    out = _lumped(g, P_cu, P_fe, P_mag, h, amb)
+                    nx = 0.5 * tw_h + 0.5 * out["T_housing_C"]
+                    if abs(nx - tw_h) < 0.01:
+                        break
+                    tw_h = nx
+                out["air_speed_ms"] = 0.0
+            if abs(out["T_winding_C"] - Tw) < 0.01:
+                break
+            Tw = 0.5 * Tw + 0.5 * min(out["T_winding_C"], 400.0)
+        out["P_cu_W"] = P_cu
+        return out
+
+    def i_cont(n, cooling, prop):
+        Is = sorted(rows_grid)
+        lo, hi = 0.0, Is[-1]
+        s_lo = state(n, lo, cooling, prop)
+        if s_lo is None:
+            return None, "outside the loss trajectory at this speed"
+        if s_lo["T_winding_C"] > W_LIM or s_lo["T_magnet_C"] > M_LIM:
+            return None, "over a limit already at zero current"
+        s_hi = state(n, hi, cooling, prop)
+        if s_hi and s_hi["T_winding_C"] <= W_LIM and s_hi["T_magnet_C"] <= M_LIM:
+            return hi, "inside both limits up to the top grid current"
+        for _ in range(40):
+            mid = 0.5 * (lo + hi)
+            sm = state(n, mid, cooling, prop)
+            if sm and sm["T_winding_C"] <= W_LIM and sm["T_magnet_C"] <= M_LIM:
+                lo = mid
+            else:
+                hi = mid
+        return lo, ("bisection on winding 180 °C / magnet 150 °C" + (
+            "; below the lowest trajectory current (%.2f A) the non-copper losses are held at "
+            "that row" % I_floor if lo < I_floor else ""))
+
+    studies = [(c, float(n)) for c, n in (("robotics", 1000.0), ("propeller_air", 1000.0),
+                                          ("propeller_air", 1500.0), ("propeller_air", 2000.0))]
+    prop = next((s.get("propeller") for s in spec_m.get("cooling_studies") or []
+                 if s.get("propeller")), None)
+    vlim = float(lg["v_phase_limit_V"])
+    rows = []
+    for cooling, n in studies:
+        Ic, how = i_cont(n, cooling, prop)
+        row = {"cooling": cooling, "rpm": n, "propeller": prop if cooling == "propeller_air" else None,
+               "I_cont_A_rms": Ic, "how": how}
+        if Ic:
+            stt = state(n, Ic, cooling, prop)
+            gg, gm = hm.operating_gamma(Ic, n, R_hot, vlim)
+            if gg is not None:
+                mp = S3.motor_point(rec, snap, hm, rows_grid, {"rpm": n, "I_A": Ic, "gamma_deg": gg})
+                # k_state of the nearest trajectory row (held below the lowest)
+                T = hm.at_Ig(Ic, gg)["T"] * (S3.k_state_at(rec["loss_grid"]["points"], n, Ic)
+                                             or 1.0) * kT
+                row.update({"T_Nm": T, "P_shaft_W": T * 2 * math.pi * n / 60.0 - (mp["P_mech_W"] or 0.0)})
+            row.update({k: stt[k] for k in ("T_winding_C", "T_magnet_C", "T_housing_C", "h_W_m2K",
+                                            "air_speed_ms")})
+            row["limiting"] = ("winding" if stt["T_winding_C"] >= W_LIM - 0.5 else
+                               "magnet" if stt["T_magnet_C"] >= M_LIM - 0.5 else "top of the grid")
+        rows.append(row)
+    return {"rows": rows, "geometry": g, "limits_c": {"winding": W_LIM, "magnet": M_LIM},
+            "ambient_c": amb,
+            "method": "Configure's lumped model (web/src/lib/thermalEstimate.ts, ported): lateral "
+                      "housing + both end faces at one film; robotics film = still air + radiation "
+                      "(outer_still, eps 0.9) at the housing temperature, NO mount / heat path; "
+                      "propeller film = cross-flow at the slipstream (outer_air); losses = the "
+                      "passport trajectory (copper at its own temperature); torque = hot map × "
+                      "k_state × k_T",
+            "labels": ["lumped estimate (Configure)", "ambient 40 °C", PEND]}
+
+
 def propeller_match(rec, snap, hm, rows_grid, kT: float, prop_ids: Sequence[str],
                     cool: Mapping[str, Any]) -> List[Dict[str, Any]]:
     """Each propeller against the motor: the motor's max (card) torque at v_nom
@@ -414,6 +565,18 @@ def propeller_match(rec, snap, hm, rows_grid, kT: float, prop_ids: Sequence[str]
                  and r.get("solve_to") == "continuous"
                  and ((r.get("s1") or {}).get("card") or {}).get("T_Nm")),
                 key=lambda x: x[0])
+    s1_l = sorted(((r["rpm"], r.get("T_Nm")) for r in (cool.get("lumped") or {}).get("rows", [])
+                   if r.get("cooling") == "propeller_air" and r.get("T_Nm")), key=lambda x: x[0])
+
+    def n_cont_of(pr, pts):
+        if len(pts) < 2:
+            return None
+        ns, ts = [x[0] for x in pts], [x[1] for x in pts]
+        nc = None
+        for n in np.arange(ns[0], ns[-1] + 1e-9, 10.0):
+            if PP.torque_Nm(pr, float(n)) <= float(np.interp(n, ns, ts)):
+                nc = float(n)
+        return nc
     out = []
     for pid in prop_ids:
         try:
@@ -432,14 +595,10 @@ def propeller_match(rec, snap, hm, rows_grid, kT: float, prop_ids: Sequence[str]
             if mt["T"] * k * kT >= tq:
                 n_reach = float(n)
             pts.append({"rpm": float(n), "T_prop_Nm": tq, "T_max_Nm": mt["T"] * k * kT})
-        n_cont = None
-        if len(s1) >= 2:
-            ns = [x[0] for x in s1]
-            ts = [x[1] for x in s1]
-            for n in np.arange(ns[0], ns[-1] + 1e-9, 10.0):
-                if PP.torque_Nm(pr, float(n)) <= float(np.interp(n, ns, ts)):
-                    n_cont = float(n)
+        n_cont = n_cont_of(pr, s1)
+        n_cont_l = n_cont_of(pr, s1_l)
         op_c = PP.operating_point(pr, n_cont) if n_cont else None
+        op_l = PP.operating_point(pr, n_cont_l) if n_cont_l else None
         op_r = PP.operating_point(pr, n_reach) if n_reach else None
         geo = getattr(pr, "geometry", None) or {}
         out.append({"id": pid, "model": pr.model,
@@ -454,6 +613,8 @@ def propeller_match(rec, snap, hm, rows_grid, kT: float, prop_ids: Sequence[str]
                                      "than S1 there)" % "/".join("%.0f" % x[0] for x in s1))
                     if s1 else "no propeller S1 runs",
                     "cont_thrust_N": op_c["thrust_N"] if op_c else None,
+                    "n_cont_lumped_rpm": n_cont_l,
+                    "cont_thrust_lumped_N": op_l["thrust_N"] if op_l else None,
                     "cont_shaft_W": op_c["shaft_power_W"] if op_c else None,
                     "n_reach_rpm": n_reach,
                     "reach_thrust_N": op_r["thrust_N"] if op_r else None,
@@ -561,6 +722,10 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
     if studies:
         rec["cooling"] = cooling_block(full, M, studies, rec=rec, snap=snap, hm=hm,
                                        rows_grid=rows_grid, kT=kT)
+        try:
+            rec["cooling"]["lumped"] = lumped_cooling(rec, snap, hm, rows_grid, kT, spec_m)
+        except Exception as e:                                  # noqa: BLE001
+            rec["cooling"]["lumped"] = {"error": "%s: %s" % (type(e).__name__, e)}
         props = list(spec_m.get("propellers") or [])
         if props:
             rec["propeller_match"] = propeller_match(rec, snap, hm, rows_grid, kT, props,
@@ -700,7 +865,20 @@ def _cooling_html(rec: Mapping[str, Any]) -> str:
                                       (L.get("steady_state_would_be_c") or {}).items()))])
         o.append(Hh.table(["cooling", "rpm", "I A rms", "s from cold to limit", "first limit",
                            "steady state would be, °C"], rows, left_cols=1))
-    o.append('<p class="note">%s</p>' % Hh.esc(cool["method"]))
+    o.append('<p class="note">FEM rows: %s</p>' % Hh.esc(cool["method"]))
+    lp = cool.get("lumped") or {}
+    if lp.get("rows"):
+        o.append("<h3>The same coolings in Configure's lumped model</h3>")
+        rows = [[r["cooling"].replace("_", " "), "%.0f" % r["rpm"],
+                 Hh.fmt(r.get("air_speed_ms")) if r.get("air_speed_ms") else "still air",
+                 Hh.fmt(r.get("h_W_m2K")), r.get("I_cont_A_rms") if r.get("I_cont_A_rms") is not None
+                 else H_(r.get("how") or "—"), r.get("T_Nm"), r.get("P_shaft_W"),
+                 r.get("limiting") or "—", r.get("T_winding_C"), r.get("T_magnet_C"),
+                 r.get("T_housing_C")] for r in lp["rows"]]
+        o.append(Hh.table(["cooling", "rpm", "air m/s", "film h W/m²K", "I cont. A rms",
+                           "T cont. N·m", "P shaft W", "limited by", "winding °C", "magnet °C",
+                           "housing °C"], rows, left_cols=1))
+        o.append('<p class="note">%s</p>' % Hh.esc(lp["method"]))
     pm = rec.get("propeller_match") or []
     if pm:
         o.append("<h3>Propellers against this motor</h3>")
@@ -708,14 +886,16 @@ def _cooling_html(rec: Mapping[str, Any]) -> str:
                  Hh.fmt(r.get("T_prop_at_2000_Nm")),
                  Hh.fmt(r.get("n_cont_rpm"), 0) if r.get("n_cont_rpm") else "—",
                  Hh.fmt(r.get("cont_thrust_N")) if r.get("cont_thrust_N") else "—",
+                 Hh.fmt(r.get("n_cont_lumped_rpm"), 0) if r.get("n_cont_lumped_rpm") else "—",
+                 Hh.fmt(r.get("cont_thrust_lumped_N")) if r.get("cont_thrust_lumped_N") else "—",
                  Hh.fmt(r.get("n_reach_rpm"), 0) if r.get("n_reach_rpm") else "—",
                  Hh.fmt(r.get("reach_thrust_N")) if r.get("reach_thrust_N") else "—",
                  "%s–%s" % tuple(int(x) for x in r["rpm_range_tested"])
                  if r.get("rpm_range_tested") else "—"]
                 for r in pm if "curve" in r]
-        o.append(Hh.table(["propeller", "τ @1000 N·m", "τ @2000 N·m", "cont. rpm",
-                           "cont. thrust N", "max rpm (peak I)", "max thrust N",
-                           "tested rpm"], rows, left_cols=1))
+        o.append(Hh.table(["propeller", "τ @1000 N·m", "τ @2000 N·m", "cont. rpm (FEM)",
+                           "cont. thrust N (FEM)", "cont. rpm (lumped)", "cont. thrust N (lumped)",
+                           "max rpm (peak I)", "max thrust N", "tested rpm"], rows, left_cols=1))
         ser = []
         for i, r in enumerate([r for r in pm if r.get("curve")]):
             ser.append({"name": r.get("model") or r["id"],

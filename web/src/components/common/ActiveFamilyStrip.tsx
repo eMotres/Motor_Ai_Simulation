@@ -30,7 +30,7 @@ import { driveLabel } from '../../lib/dutyRuns';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 import { currentMatJson } from '../../lib/apiAuth';
 import { canWriteServer } from '../../lib/localAuth';
-import { uiCanWrite } from '../../lib/accessUi';
+import { mayFollowSharedContext, uiCanWrite } from '../../lib/accessUi';
 import { controllerMirrorApplies, type ControllerMirror } from '../controller/controllerApi';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLastMotorState } from '../../lib/lastMotor';
@@ -107,7 +107,7 @@ const hhmm = (ms: number) => {
 };
 
 const ActiveFamilyStrip: React.FC = () => {
-  const { user, enforced, isAdmin } = useAuth();
+  const { user, enforced, isAdmin, resolved } = useAuth();
   const identity = user?.email?.trim().toLowerCase() ?? null;
   const lastMotor = useLastMotorState();
   const [ctx, setCtx] = useState<Ctx | null>(null);
@@ -184,6 +184,10 @@ const ActiveFamilyStrip: React.FC = () => {
     useState<{ config: string; duty: string; at: number } | null>(null);
   const following = useRef(false);
   useEffect(() => {
+    // /api/family/context can answer before /api/me establishes the account's
+    // role. Never adopt that shared context (or persist its mesh block) until
+    // the role is resolved and this session is allowed to write shared state.
+    if (!mayFollowSharedContext(resolved, enforced, isAdmin)) return;
     if (!ctx) return;
     const applied = readAppliedContext();
     const verdict = adoptionDecision(ctx, applied);
@@ -219,7 +223,7 @@ const ActiveFamilyStrip: React.FC = () => {
       } catch { /* a failed follow simply retries on the next poll */ }
       finally { following.current = false; }
     })();
-  }, [ctx]);
+  }, [ctx, resolved, enforced, isAdmin]);
 
   // Has the Simulation panel drifted off the loaded duty's operating point?
   // (`ctx` may still be null or RELEASED here — the released branch renders

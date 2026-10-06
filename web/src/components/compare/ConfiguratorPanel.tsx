@@ -1643,12 +1643,23 @@ const ConfiguratorPanel: React.FC = () => {
               whether the propeller sets the load.  One compact block, labels in the title style. ── */}
           {cooled && (
             <Box sx={{ mb: 1.25 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mb: 0.5, flexWrap: 'nowrap', minHeight: 28 }}>
-                <Typography sx={{ ...LABEL, flex: '0 0 auto' }} title={tx('configurePropeller.pickerTip')}>{tx('configurePropeller.title')}</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'nowrap', minHeight: 30 }}>
+                <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configurePropeller.loadTip')}>{tx('configurePropeller.load')}</Typography>
+                <ToggleButtonGroup exclusive size="small" value={propLoad ? 'prop' : 'manual'}
+                  onChange={(_, v) => { if (v === 'prop' || v === 'manual') updateCool({ load: v }); }}>
+                  <ToggleButton value="prop" title={tx('configurePropeller.loadPropTip')}
+                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadProp')}</ToggleButton>
+                  <ToggleButton value="manual" title={tx('configurePropeller.loadManualTip')}
+                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadManual')}</ToggleButton>
+                </ToggleButtonGroup>
+              </Box>
+              <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: 0.5, flexWrap: 'nowrap', minHeight: 28 }}>
+                <Typography sx={{ ...LABEL, flex: '0 0 auto', opacity: propLoad ? 1 : 0.5 }} title={tx('configurePropeller.pickerTip')}>{tx('configurePropeller.title')}</Typography>
                 <select value={propId ?? ''} aria-label={tx('configurePropeller.title')}
+                  disabled={!propLoad}
                   onChange={(e) => updateCool({ propId: e.target.value })}
                   title={propSummary && propSummary.power_data === 'estimated' ? tx('configurePropeller.estimatedTip') : tx('configurePropeller.pickerTip')}
-                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260 }}>
+                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260, opacity: propLoad ? 1 : 0.5, cursor: propLoad ? 'pointer' : 'not-allowed' }}>
                   {!allowedProps.length && <option value="" style={{ color: '#000' }}>…</option>}
                   {allowedProps.map((x) => (
                     <option key={x.id} value={x.id} disabled={!x.selectable} style={{ color: '#000' }}>
@@ -1663,16 +1674,6 @@ const ConfiguratorPanel: React.FC = () => {
                   onBlur={() => setAmbTxt(null)}
                   style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 13, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
                 <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>°C</Box>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'nowrap', minHeight: 30 }}>
-                <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configurePropeller.loadTip')}>{tx('configurePropeller.load')}</Typography>
-                <ToggleButtonGroup exclusive size="small" value={propLoad ? 'prop' : 'manual'}
-                  onChange={(_, v) => { if (v === 'prop' || v === 'manual') updateCool({ load: v }); }}>
-                  <ToggleButton value="prop" title={tx('configurePropeller.loadPropTip')}
-                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadProp')}</ToggleButton>
-                  <ToggleButton value="manual" title={tx('configurePropeller.loadManualTip')}
-                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadManual')}</ToggleButton>
-                </ToggleButtonGroup>
               </Box>
             </Box>
           )}

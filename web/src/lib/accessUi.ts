@@ -31,6 +31,11 @@ export const landingTabForUser = (hasConfigureChoice: boolean): 'compare' | 'mot
 export const uiCanWrite = (serverCanWrite: boolean | undefined, canWriteShared: boolean): boolean =>
   serverCanWrite === true && canWriteShared;
 
+/** A shared-context follower must wait until the role is known, then run only
+ *  for an admin (or an explicitly unenforced local backend). */
+export const mayFollowSharedContext = (resolved: boolean, enforced: boolean, isAdmin: boolean): boolean =>
+  resolved && (!enforced || isAdmin);
+
 /** Which i18n key (common:refused.*) explains a refused call, or null when the
  *  response is not a gate refusal.  `body` is the parsed JSON (the gate answers
  *  `{detail, required_role, your_role}`). */

@@ -30,6 +30,7 @@ import {
 import {
   beginDutyApply, endDutyApply, rememberAppliedContext,
 } from './familyFollow';
+import { canWriteServer } from './localAuth';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -205,6 +206,10 @@ const MESH_SERVER_KEYS: ReadonlyArray<readonly [local: string, server: string]> 
  * ordinary user's ▶ is a client-side copy and must not touch the shared block.
  */
 async function persistMeshBlock(): Promise<void> {
+  // A follower normally adopts server context only for a shared-config writer,
+  // but auth can resolve after that context poll. Recheck the live role at the
+  // write boundary so a local-only load can never PATCH the shared mesh block.
+  if (!canWriteServer()) return;
   const body: Record<string, number> = {};
   for (const [lk, sk] of MESH_SERVER_KEYS) {
     try {

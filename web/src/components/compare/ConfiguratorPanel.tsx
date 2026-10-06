@@ -175,7 +175,7 @@ const KnobSlider: React.FC<{
         <Typography sx={{ ...LABEL, flex: '1 1 120px', minWidth: 0 }} title={limitNote?.tip}>
           {label}
           {/* in Chinese the caption keeps its unit symbols as written (mm, rpm), not MM / RPM */}
-          {limitNote && <Box component="span" sx={unitCase()}>{' · '}{limitNote.text}</Box>}
+          {limitNote?.text && <Box component="span" sx={unitCase()}>{' · '}{limitNote.text}</Box>}
           {limitNote?.hand && onClearHand && (
             <Box component="span" onClick={onClearHand} title={tx('configureLimits.clearHandTip')}
               sx={{ ml: 0.75, color: '#60a5fa', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>
@@ -898,7 +898,7 @@ const ConfiguratorPanel: React.FC = () => {
       return b === 'inverter'
         ? { text: tx('configureLimits.iInverter', { max: mx, device: cur?.device ?? '', n: cur?.devices_parallel ?? 1 }),
             tip: tx('configureLimits.iInverterTip', { rating: fmt(cur?.i_d_rating_A ?? NaN, 0), tcase: fmt(cur?.t_case_c ?? NaN, 0) }) }
-        : { text: tx('configureLimits.iNoController'), tip: tx('configureLimits.iNoControllerTip') };
+        : { text: '', tip: tx('configureLimits.iNoControllerTip') };
     }
     return b === 'envelope'
       ? { text: tx('configureLimits.rpmEnvelope', { max: mx, v: fmt(packMaxV ?? NaN, 1) }), tip: tx('configureLimits.rpmEnvelopeTip', { m: fmt(modM, 2) }) }
@@ -1378,15 +1378,15 @@ const ConfiguratorPanel: React.FC = () => {
     try { localStorage.setItem(DRIVE_LS, writeDriveChoice(localStorage.getItem(DRIVE_LS), c.refId, pickDrive(c.knobs))); } catch { /* ignore */ }
   };
 
-  const RES_COLS: { key: string; label: string; unit: string; d: number; goodHi?: boolean; get: (c: SavedConfig) => number }[] = [
-    { key: 'T',    label: tx('configure.colTorque'),  unit: 'N·m', d: 1, goodHi: true,  get: (c) => c.result.T_Nm },
-    { key: 'P',    label: tx('configure.colPower'),   unit: 'kW',  d: 2, goodHi: true,  get: (c) => c.result.P_mech_W / 1000 },
+  const RES_COLS: { key: string; label: string; unit: string; d: number; get: (c: SavedConfig) => number }[] = [
+    { key: 'T',    label: tx('configure.colTorque'),  unit: 'N·m', d: 1, get: (c) => c.result.T_Nm },
+    { key: 'P',    label: tx('configure.colPower'),   unit: 'kW',  d: 2, get: (c) => c.result.P_mech_W / 1000 },
     { key: 'V',    label: tx('configure.colDcBus'),  unit: 'V',   d: 0,                get: (c) => c.result.Vphase_peak_V * Math.sqrt(3) },
-    { key: 'eff',  label: tx('configure.colEta'),       unit: '%',   d: 1, goodHi: true,  get: (c) => (c.drive?.mode === 'pwm' ? (c.drive.eta_drive_pct ?? NaN) : c.result.efficiency * 100) },
-    { key: 'loss', label: tx('configure.colLosses'),  unit: 'W',   d: 0, goodHi: false, get: (c) => c.result.P_loss_W },
-    { key: 'J',    label: tx('configure.colJ'),       unit: 'A/mm²', d: 1, goodHi: false, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
-    { key: 'mass', label: tx('configure.colMass'),    unit: 'kg',  d: 2, goodHi: false, get: (c) => c.result.mass_kg },
-    { key: 'tm',   label: tx('configure.colTPerMass'),  unit: '',    d: 2, goodHi: true,  get: (c) => c.result.torque_per_mass },
+    { key: 'eff',  label: tx('configure.colEta'),       unit: '%',   d: 1, get: (c) => (c.drive?.mode === 'pwm' ? (c.drive.eta_drive_pct ?? NaN) : c.result.efficiency * 100) },
+    { key: 'loss', label: tx('configure.colLosses'),  unit: 'W',   d: 0, get: (c) => c.result.P_loss_W },
+    { key: 'J',    label: tx('configure.colJ'),       unit: 'A/mm²', d: 1, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
+    { key: 'mass', label: tx('configure.colMass'),    unit: 'kg',  d: 2, get: (c) => c.result.mass_kg },
+    { key: 'tm',   label: tx('configure.colTPerMass'),  unit: '',    d: 2, get: (c) => c.result.torque_per_mass },
   ];
   const KNB_COLS: { label: string; get: (c: SavedConfig) => string }[] = [
     { label: tx('configureDrive.columnDrive'),
@@ -1399,13 +1399,6 @@ const ConfiguratorPanel: React.FC = () => {
     { label: tx('configure.colCurrent'),      get: (c) => fmt(c.knobs.I_A, 0) },
     { label: 'rpm',    get: (c) => fmt(c.knobs.rpm, 0) },   // a unit symbol: never translated
   ];
-  // best/worst per result column across saved configs (for highlight)
-  const resExt: Record<string, { min: number; max: number } | null> = {};
-  RES_COLS.forEach((r) => {
-    const ns = configs.map(r.get).filter(Number.isFinite);
-    resExt[r.key] = ns.length ? { min: Math.min(...ns), max: Math.max(...ns) } : null;
-  });
-
   // What is on this screen, for the help assistant (support widget): the knobs, the drive, the
   // battery, the key tiles and the red lines — so an answer or a ticket carries the real numbers.
   useConfigureSnapshot(blocked || loadingModel ? null : {
@@ -1689,11 +1682,11 @@ const ConfiguratorPanel: React.FC = () => {
             warn={above(knobs.rpm, ranges.rpm)} zone={cooled ? zones.rpm : null}
             limitNote={(() => {
               const n = limitNote('rpm');
-              if (!cooled) return n;
+              if (!cooled) return { ...n, text: '' };
               const ext = propPoint?.extrapolated && series?.rpm_range_tested
-                ? { text: ` · ${tx('configurePropeller.beyondTested')}`, tip: tx('configurePropeller.beyondTestedTip', { lo: fmt(series.rpm_range_tested[0], 0), hi: fmt(series.rpm_range_tested[1], 0) }) }
+                ? { tip: tx('configurePropeller.beyondTestedTip', { lo: fmt(series.rpm_range_tested[0], 0), hi: fmt(series.rpm_range_tested[1], 0) }) }
                 : null;
-              return { ...n, text: n.text + (ext ? ext.text : ''), tip: `${n.tip} ${tx('configurePropeller.zoneTip')}${ext ? ` ${ext.tip}` : ''}` };
+              return { ...n, text: '', tip: `${n.tip} ${tx('configurePropeller.zoneTip')}${ext ? ` ${ext.tip}` : ''}` };
             })()} />
 
           {/* ── DRIVE: Sine | PWM (owner 2026-10-05) ─────────────────────
@@ -1974,7 +1967,7 @@ const ConfiguratorPanel: React.FC = () => {
       <Box sx={{ px: 2, pb: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{tx('configure.saved')}</Typography>
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{tx('configure.savedHint', { n: configs.length })}</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{configs.length}</Typography>
           <Box sx={{ flex: 1 }} />
           {configs.length > 0 && (
             <Button onClick={() => setConfigs([])} size="small" sx={{ fontSize: 11, textTransform: 'none', color: '#7f1d1d' }}>{tx('configure.clearAll')}</Button>
@@ -1987,8 +1980,8 @@ const ConfiguratorPanel: React.FC = () => {
             <Box component="table" sx={{ borderCollapse: 'collapse', width: '100%' }}>
               <Box component="thead"><Box component="tr">
                 <Box component="th" sx={{ ...TH, textAlign: 'left' }}>{tx('configure.colConfiguration')}</Box>
-                {KNB_COLS.map((k) => <Box component="th" key={k.label} sx={{ ...TH, color: '#fbbf24' }}><GreekLabel text={k.label} /></Box>)}
-                {RES_COLS.map((r) => <Box component="th" key={r.key} sx={{ ...TH, color: '#4ade80' }}><GreekLabel text={r.label} />{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400, textTransform: 'none' }}> {r.unit}</Box> : null}</Box>)}
+                {KNB_COLS.map((k) => <Box component="th" key={k.label} sx={TH}><GreekLabel text={k.label} /></Box>)}
+                {RES_COLS.map((r) => <Box component="th" key={r.key} sx={TH}><GreekLabel text={r.label} />{r.unit ? <Box component="span" sx={{ color: 'var(--line)', fontWeight: 400, textTransform: 'none' }}> {r.unit}</Box> : null}</Box>)}
                 <Box component="th" sx={{ ...TH, textAlign: 'center' }} />
                 <Box component="th" sx={{ ...TH, textAlign: 'center' }}>✕</Box>
               </Box></Box>
@@ -1997,34 +1990,23 @@ const ConfiguratorPanel: React.FC = () => {
                   <Box component="tr" key={c.id} sx={{ '&:hover': { bgcolor: 'var(--panel-2)' } }}>
                     <Box component="td" sx={{ ...TD, textAlign: 'left', fontFamily: 'inherit', whiteSpace: 'nowrap' }}>
                       <Box component="span" onClick={() => loadConfig(c)} title={tx('configure.applyTip')}
-                        sx={{ color: '#60a5fa', fontWeight: 600, cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>{c.name}</Box>
+                        sx={{ color: 'var(--text-1)', fontWeight: 600, cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>{c.name}</Box>
                       <IconButton size="small" onClick={() => renameConfig(c)} title={tx('configure.rename')}
-                        sx={{ color: 'var(--text-3)', p: 0.2, ml: 0.5, fontSize: 12 }}>✎</IconButton>
+                        sx={{ color: 'var(--text-1)', p: 0.2, ml: 0.5, fontSize: 12 }}>✎</IconButton>
                     </Box>
-                    {KNB_COLS.map((k) => <Box component="td" key={k.label} sx={{ ...TD, color: '#fbbf24' }}>{k.get(c)}</Box>)}
-                    {RES_COLS.map((r) => {
-                      const v = r.get(c);
-                      let col = 'var(--text-1)';
-                      const e = resExt[r.key];
-                      if (e && e.min !== e.max && r.goodHi !== undefined) {
-                        const best = r.goodHi ? e.max : e.min;
-                        const worst = r.goodHi ? e.min : e.max;
-                        if (Math.abs(v - best) < 1e-9) col = '#4ade80';
-                        else if (Math.abs(v - worst) < 1e-9) col = '#f87171';
-                      }
-                      return <Box component="td" key={r.key} sx={{ ...TD, color: col, fontWeight: col !== 'var(--text-1)' ? 700 : 400 }}>{fmt(v, r.d)}</Box>;
-                    })}
+                    {KNB_COLS.map((k) => <Box component="td" key={k.label} sx={TD}>{k.get(c)}</Box>)}
+                    {RES_COLS.map((r) => <Box component="td" key={r.key} sx={TD}>{fmt(r.get(c), r.d)}</Box>)}
                     {/* Explicit apply (user's ask) — same action as clicking
                         the name, but discoverable. */}
                     <Box component="td" sx={{ ...TD, textAlign: 'center' }}>
                       <Button size="small" onClick={() => loadConfig(c)}
                         sx={{ fontSize: 10.5, py: 0, px: 0.9, minWidth: 0, textTransform: 'none',
-                              color: '#34d399', border: '1px solid #34d39955' }}>
+                              color: 'var(--text-1)', border: '1px solid var(--line)' }}>
                         {tx('configure.apply')}
                       </Button>
                     </Box>
                     <Box component="td" sx={{ ...TD, textAlign: 'center' }}>
-                      <IconButton size="small" onClick={() => delConfig(c.id)} sx={{ color: 'var(--text-3)', p: 0.25, '&:hover': { color: '#f87171' } }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton>
+                      <IconButton size="small" onClick={() => delConfig(c.id)} sx={{ color: 'var(--text-1)', p: 0.25, '&:hover': { color: '#f87171' } }}><DeleteOutlineIcon sx={{ fontSize: 15 }} /></IconButton>
                     </Box>
                   </Box>
                 ))}

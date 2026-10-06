@@ -895,8 +895,31 @@ def get_configure_context(motor_id: str,
     modulation index.  Read-only; open to every caller who can read the card
     (the numbers are limits, not data of the owner's)."""
     from motor_ai_sim import configure_limits as _cl
-    motor = next((m for m in _load().get("motors", []) if m.get("id") == motor_id), None)
-    if not motor or not _grant_visible_cards([motor], authorization):
+    # The Configure picker may have received this card from the shared catalog
+    # while the caller's workspace has its own unrelated catalog. Resolve in
+    # the same workspace-first source order as references, keeping local cards
+    # authoritative when IDs collide.
+    current = _load()
+    motor = next((m for m in current.get("motors", []) if m.get("id") == motor_id), None)
+    if motor is None:
+        loaded_path = _read_path()
+        for path in _reference_catalog_paths():
+            if path == loaded_path:
+                continue
+            other = _read_json(path, {"tiers": [], "diameters_mm": [], "motors": []})
+            motor = next((m for m in other.get("motors", [])
+                          if m.get("id") == motor_id), None)
+            if motor is not None:
+                break
+
+    from motor_ai_sim.auth import caller_identity as _cid
+    from motor_ai_sim.routes.presets import _owner_of as _own
+    ident = _cid(authorization)
+    if (not motor
+            or (not ident.get("is_admin")
+                and (motor.get("visibility") or "public") == "private"
+                and _own(_backing_entry(motor)) != ident.get("id"))
+            or not _grant_visible_cards([motor], authorization)):
         # 404 for a motor the account was not granted: the same answer as one
         # that does not exist, so the id is not an oracle.
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")

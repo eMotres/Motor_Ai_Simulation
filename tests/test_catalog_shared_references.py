@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 
 from motor_ai_sim.routes import catalog as cat
 
@@ -149,4 +150,94 @@ def test_union_keeps_grants_and_private_card_visibility(monkeypatch, catalog_lay
 
     response = cat.get_references("Bearer fake")
     assert [m["id"] for m in response["motors"]] == ["own-private", "granted"]
+
+
+def test_shared_reference_opens_current_family_pack_context_without_widening_access(
+    monkeypatch, catalog_layers, tmp_path,
+):
+    workspace_file, shared_file = catalog_layers
+    die = "CIANO14 40 new"
+    workspace_dir = tmp_path / "shared-dies" / die
+    workspace_dir.mkdir(parents=True)
+    (workspace_dir / "die.yaml").write_text(yaml.safe_dump({
+        "name": die,
+        "geometry": {"num_slots": 12, "num_poles": 14, "stator_diameter": 40.0,
+                     "magnet_height": 5.7},
+    }), encoding="utf-8")
+    battery = {"cells": 6, "chemistry": "NMC", "v_min": 18.0,
+               "v_nom": 22.2, "v_max": 25.2,
+               "v_cell_min": 3.0, "v_cell_nom": 3.7, "v_cell_max": 4.2}
+    for config, length, pack in (("L12", 12.0, battery), ("L20", 20.0, None)):
+        doc = {"die": die, "name": config,
+               "geometry_overrides": {"motor_length": length},
+               "battery": pack, "winding": {}, "duties": []}
+        (workspace_dir / f"{config}.yaml").write_text(
+            yaml.safe_dump(doc), encoding="utf-8")
+
+    shared_card = _reference("cat_ciano14_40_new", die)
+    shared_card["passport"]["passport"]["L0_mm"] = 12.0
+    _write(workspace_file, [{"id": "cat_my_motor", "name": "My motor"}])
+    _write(shared_file, [
+        shared_card,
+        _reference("ungranted", "Another machine"),
+        _reference("foreign-private", die, visibility="private", owner="other@example.com"),
+    ])
+
+    import motor_ai_sim.auth as auth
+    import motor_ai_sim.motor_access as access
+    import motor_ai_sim.passport_store as passport_store
+    import motor_ai_sim.routes.presets as presets
+    import motor_ai_sim.workspace as ws
+
+    identity = {"id": "user@example.com", "is_admin": False}
+    monkeypatch.setattr(auth, "caller_identity", lambda _auth=None: identity)
+    monkeypatch.setattr(cat, "_caller_identity", lambda _auth=None: identity)
+    monkeypatch.setattr(ws, "iter_dies", lambda: [{"die": die, "name": die,
+                                                   "dir": workspace_dir}])
+    monkeypatch.setattr(cat, "_machine_die_index", lambda: {
+        die.casefold(): die,
+    })
+    monkeypatch.setattr(cat, "_machine_names", lambda: {die.casefold()})
+    monkeypatch.setattr(presets, "_owner_of", lambda card: card.get("owner"))
+    monkeypatch.setattr(access, "catalog_access", lambda _auth=None: {
+        "mode": access.MODE_GRANTED, "dies": frozenset({die}), "is_admin": False,
+    })
+    monkeypatch.setattr(access, "may_see_die",
+                        lambda grant, name: name in grant["dies"])
+    monkeypatch.setattr(passport_store, "card_of", lambda *_args: None)
+    monkeypatch.setattr(passport_store, "attach", lambda _motors: None)
+
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    app = FastAPI()
+    app.include_router(cat.router)
+    client = TestClient(app)
+
+    refs = client.get("/api/catalog/references", headers={"Authorization": "Bearer fake"})
+    assert refs.status_code == 200
+    assert [m["id"] for m in refs.json()["motors"]] == ["cat_ciano14_40_new"]
+
+    context = client.get("/api/catalog/cat_ciano14_40_new/configure_context",
+                         headers={"Authorization": "Bearer fake"})
+    assert context.status_code == 200, context.text
+    body = context.json()
+    assert body["has_family_doc"] is True
+    assert body["battery"]["cells"] == 6
+    assert body["battery"]["v_nom"] == 22.2
+    l12 = next(p for p in body["presets"] if p["config"] == "L12")
+    assert l12["battery"]["v_max"] == 25.2
+    assert client.get("/api/catalog/ungranted/configure_context",
+                      headers={"Authorization": "Bearer fake"}).status_code == 404
+    assert client.get("/api/catalog/foreign-private/configure_context",
+                      headers={"Authorization": "Bearer fake"}).status_code == 404
+
+    # An account-local record with the same stable ID remains authoritative.
+    local_duplicate = _reference("cat_ciano14_40_new", die)
+    local_duplicate["passport"]["passport"]["L0_mm"] = 12.0
+    local_duplicate["configure_limits"] = {"L_max_mm": 99.0}
+    _write(workspace_file, [local_duplicate])
+    duplicate = client.get("/api/catalog/cat_ciano14_40_new/configure_context",
+                          headers={"Authorization": "Bearer fake"})
+    assert duplicate.status_code == 200
+    assert duplicate.json()["limits"]["L_max_mm"] == 99.0
 

@@ -671,6 +671,28 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
                               "coil_c": t_in.get("hot_coil_c"),
                               "source": t_in.get("hot_magnet_source")}}
     rec["demag_limit"] = demag_limit(st, full, M, I0)
+    dvt = []
+    for f_ in sorted(full.glob(f"demagtemp_{M}_*.json")):
+        d_ = _load(f_) or {}
+        dvt.append({"magnet_temp_c": d_.get("magnet_temp_c"), "I_rms": d_.get("I"),
+                    "gamma": d_.get("gamma"), "rpm": d_.get("rpm"),
+                    "T_demag_Nm": (d_.get("demag") or {}).get("T_Nm"),
+                    "T_nodemag_Nm": (d_.get("nodemag") or {}).get("T_Nm"),
+                    "br_kept_vol_pct": (d_.get("demag") or {}).get("br_kept_vol_pct"),
+                    "torque_drop_pct": d_.get("demag_torque_drop_pct"),
+                    "method": d_.get("method")})
+    ks0 = rec["card"]["rated_point"].get("k_state_split") or {}
+    if dvt and ks0.get("demag_share") is not None:
+        dvt.append({"magnet_temp_c": snap["temperatures"]["hot_magnet_c"], "I_rms": I0,
+                    "torque_drop_pct": 100.0 * (1.0 - float(ks0["demag_share"])),
+                    "br_kept_vol_pct": ((rec.get("demag") or {}).get("mtpa_retention") or [[None, None]])[0][1],
+                    "method": "the card's rated point (HOT reference): demag share of k_state"})
+    if dvt:
+        rec["demag_vs_temperature"] = {
+            "rows": sorted(dvt, key=lambda r: float(r["magnet_temp_c"] or 0)),
+            "purpose": "owner decision aid (magnet card / temperature): the rated point's torque "
+                       "lost to irreversible demagnetisation vs the magnet temperature",
+            "labels": ["2-D", "TDM + full demag pre-pass", "rated speed, hot-MTPA angle"]}
     # The owner's rule compares the rated point after an overload with the rated
     # point from virgin magnets — it presumes the rated point itself does not
     # demagnetise.  When it does (Ø85 at the 150 °C reference: demag share 0.853),
@@ -1255,6 +1277,12 @@ def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
     ] + [["retention %s %% at" % k, v.get("I_rms"),
           "beyond last probe (%.1f A)" % v["last_probe_I"] if v.get("beyond_last_probe") and v.get("last_probe_I") else "Br-volume, hot MTPA"]
          for k, v in dl["retention_curve"].items()]))
+    dv = (rec.get("demag_vs_temperature") or {}).get("rows") or []
+    if dv:
+        o.append("<h3>Rated point vs magnet temperature (owner decision aid)</h3>")
+        o.append(Hh.table(["magnet °C", "I A rms", "torque lost to demag %", "Br kept %", "basis"],
+                          [[r.get("magnet_temp_c"), r.get("I_rms"), r.get("torque_drop_pct"),
+                            r.get("br_kept_vol_pct"), H_(r.get("method") or "")] for r in dv]))
     o.append(f"<footer>Pending owner decisions: {Hh.esc(json.dumps(rec.get('pending_owner_defaults'))[:600])}"
              f"<br>Snapshot {Hh.esc(rec['provenance']['snapshot_sha256'])} · runs ok "
              f"{rec['provenance']['runs_ok']} · schema {Hh.esc(rec['schema'])}</footer>")

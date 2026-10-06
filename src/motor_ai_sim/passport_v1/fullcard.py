@@ -677,7 +677,7 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
     # the rule has no reference and is not quoted as a limit.
     ks_ = (rec["card"]["rated_point"].get("k_state_split") or {})
     dsh = ks_.get("demag_share")
-    if dsh is not None and dsh < 0.99:
+    if dsh is not None and dsh < 0.95:      # Ø40: 0.987-0.992, unchanged
         dl_ = rec["demag_limit"]
         dl_["I_limit_rule_value_rms"] = dl_.get("I_limit_rms")
         dl_["I_limit_rms"] = None

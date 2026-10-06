@@ -39,6 +39,7 @@ import { referenceOfDefault } from '../../lib/accessUi';
 import { CONFIGURE_REFID_LS, isOwnChoice } from './configureChoice';
 import { CardBadge } from '../common/CardBadge';
 import PerformanceCharts from './PerformanceCharts';
+import PropellerCurves from './PropellerCurves';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import {
   driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, tempRowTiles, type DriveTileSpec, type TempTileSpec,
@@ -49,6 +50,8 @@ import {
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
 import { fetchPropellers, fetchSeries } from '../../lib/propellerApi';
+import { activeDuty } from '../../lib/dutySettings';
+import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
 import { estimateThermal } from '../../lib/thermalEstimate';
 import ConfiguratorThermal from './ConfiguratorThermal';
 import ChargePanel from './ChargePanel';
@@ -304,6 +307,8 @@ const ConfiguratorPanel: React.FC = () => {
   // Signature of the LOADED build — the knobs adopt it whenever it changes
   // (machine loaded / rebuilt), and never while the user is tuning.
   const liveSigRef = React.useRef<string>('');
+  const propRpmSeedRef = React.useRef<string>('');
+  const propRpmManualEditRef = React.useRef<string>('');
   /** The knobs the panel opened with for THIS machine — the "ref" every
    *  percentage is measured against, and what Reset returns to. */
   const [refKnobs, setRefKnobs] = useState<Knobs | null>(null);
@@ -313,6 +318,9 @@ const ConfiguratorPanel: React.FC = () => {
     return REFERENCE_PASSPORTS[0]?.id ?? '';
   });
   useEffect(() => { try { localStorage.setItem(REFID_LS, refId); } catch { /* ignore */ } }, [refId]);
+  const catId = catalogIdOf(refId);
+  const [ctx, setCtx] = useState<ConfigureContext | null>(null);
+  const currentContext = ctx?.motor_id === catId ? ctx : null;
   // ── Follow the LOADED machine (user 2026-08-25: loading CIANO28 150_35 new
   //    still showed the 200 mm reference).  On every machine load the catalog
   //    dispatches 'sim-operating-point'; match the live geometry against the
@@ -400,7 +408,22 @@ const ConfiguratorPanel: React.FC = () => {
         I_A: readLS('current', NaN),
         rpm: readLS('rpm', NaN),
       };
-      const sig = `${live.L_mm}|${live.N}|${live.split}|${live.wireH_mm}|${live.nP}|${live.I_A}|${live.rpm}`;
+      const loadedDuty = activeDuty();
+      const matchingCtx = ctx?.motor_id === catalogIdOf(refId) ? ctx : null;
+      const buildPreset = matchingCtx?.presets?.length
+        ? presetOfBuild(matchingCtx.presets, { N: live.N, L_mm: live.L_mm, wireH_mm: live.wireH_mm, nP: live.nP })
+        : null;
+      const propRpmDefault = propellerDutyRpmDefault(buildPreset, loadedDuty);
+      let propLoadForMotor = false;
+      try {
+        const rawChoice = localStorage.getItem(PROP_CHOICE_LS);
+        propLoadForMotor = isPropellerCooled(matchingCtx?.cooling)
+          && (readCoolChoice(rawChoice, m?.id ?? refId).load ?? 'prop') === 'prop';
+      } catch { propLoadForMotor = isPropellerCooled(matchingCtx?.cooling); }
+      const useCatalogPropRpm = propLoadForMotor && propRpmDefault.rpm != null && propRpmDefault.rpm > 0;
+      const matchedId = m?.id ? (catalogIdOf(m.id) ?? m.id) : refId;
+      const propSeedKey = useCatalogPropRpm ? `${matchedId}|${propRpmDefault.key}` : '';
+      const sig = `${live.L_mm}|${live.N}|${live.split}|${live.wireH_mm}|${live.nP}|${live.I_A}|${live.rpm}|${propSeedKey}`;
       if (liveSigRef.current !== sig
           && Number.isFinite(live.L_mm) && Number.isFinite(live.N)) {
         // Only adopt the live build onto a passport that GENUINELY matches its
@@ -424,8 +447,13 @@ const ConfiguratorPanel: React.FC = () => {
             wireH_mm: live.wireH_mm || k0.wireH_mm,
             nP: live.nP || k0.nP,
             I_A: Number.isFinite(live.I_A) && live.I_A > 0 ? live.I_A : k0.I_A,
-            rpm: Number.isFinite(live.rpm) && live.rpm > 0 ? live.rpm : k0.rpm,
+            rpm: initialRpmForLoadMode(propLoadForMotor ? 'prop' : 'manual', live.rpm,
+              k0.rpm, useCatalogPropRpm ? propRpmDefault.rpm : null),
           });
+          if (useCatalogPropRpm) {
+            propRpmSeedRef.current = propSeedKey;
+            propRpmManualEditRef.current = '';
+          }
           setKnobs((k0) => { const k2 = withDrive(adopt(k0), m.id); setRefKnobs(k2); return k2; });
         }
       }
@@ -435,7 +463,7 @@ const ConfiguratorPanel: React.FC = () => {
     pick();   // also on mount / after the references arrive
     return () => window.removeEventListener('sim-operating-point', onLoaded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allRefs, refsAnswered, liveGeo]);
+  }, [allRefs, refsAnswered, liveGeo, ctx, refId]);
   // No machine loaded at all: after a short wait say so (instead of loading forever).
   useEffect(() => {
     if (!refsAnswered || liveGeo || matchChecked) return;
@@ -586,8 +614,6 @@ const ConfiguratorPanel: React.FC = () => {
   // ── PRESETS: the configurations of this machine's die (owner 2026-10-05), read from the
   //    machines themselves by the server; `baseConfig` is the one the knobs are measured against.
   const [baseConfig, setBaseConfig] = useState<string | null>(null);
-  const catId = catalogIdOf(refId);
-  const [ctx, setCtx] = useState<ConfigureContext | null>(null);
   const [limitMsg, setLimitMsg] = useState<string | null>(null);
   // `ctxDone`: the context has been ANSWERED (or there is none to ask for) — blocks that depend on
   // it (the Thermal block for a die that is not propeller-cooled) wait for it instead of flashing.
@@ -888,7 +914,7 @@ const ConfiguratorPanel: React.FC = () => {
   // air over the housing (so the temperatures follow).  Every propeller number is the backend's
   // (`/api/propellers/{id}/series`); here it is only interpolated.  "Manual load" gives the
   // current back to the engineer.
-  const cooled = isPropellerCooled(ctx?.cooling);
+  const cooled = isPropellerCooled(currentContext?.cooling);
   const [propList, setPropList] = useState<PropSummary[] | null>(null);
   useEffect(() => {
     if (!cooled) return;
@@ -897,20 +923,42 @@ const ConfiguratorPanel: React.FC = () => {
     go();
     return () => { dead = true; };
   }, [cooled]);
-  const allowedProps = useMemo(() => allowedPropellers(ctx?.cooling, propList ?? []), [ctx, propList]);
-  const [coolChoice, setCoolChoice] = useState<CoolChoice>({});
+  const allowedProps = useMemo(() => allowedPropellers(currentContext?.cooling, propList ?? []), [currentContext, propList]);
+  const [coolChoice, setCoolChoice] = useState<CoolChoice>(() => {
+    try { return readCoolChoice(localStorage.getItem(PROP_CHOICE_LS), refId); } catch { return {}; }
+  });
   useEffect(() => { setCoolChoice(readCoolChoice(readLs(PROP_CHOICE_LS), refId)); }, [refId]);
   const updateCool = (patch: CoolChoice) => {
     setCoolChoice((c) => ({ ...c, ...patch }));
     try { localStorage.setItem(PROP_CHOICE_LS, writeCoolChoice(readLs(PROP_CHOICE_LS), refId, patch)); } catch { /* ignore */ }
   };
   /** the propeller a configuration opens on (config/cooling_options.yaml `defaults`; else the first with torque data) */
-  const propDefaultFor = (config: string | null) => defaultPropellerFor(ctx?.cooling, config, allowedProps);
+  const propDefaultFor = (config: string | null) => defaultPropellerFor(currentContext?.cooling, config, allowedProps);
   // The user's own pick wins; with none the picker shows the default of the configuration in use.
   const propId = cooled ? effectivePropeller(coolChoice, allowedProps, propDefaultFor(baseConfig)) : null;
   const propSummary = allowedProps.find((x) => x.id === propId) ?? null;
   const ambient = coolChoice.ambient ?? DEFAULT_AMBIENT_C;
   const propLoad = cooled && (coolChoice.load ?? 'prop') === 'prop';
+  const selectedDuty = activeDuty();
+  const dutyPreset = presetOfBuild(currentContext?.presets ?? [], refKnobs ?? baseKnobs(p));
+  const propRpmDefault = propellerDutyRpmDefault(dutyPreset, selectedDuty);
+  const propRpmSeedKey = dutyPreset && propRpmDefault.rpm != null
+    ? `${catId ?? refId}|${propRpmDefault.key}` : '';
+  // A plain catalog reference may have no live Geometry event. Once its matching
+  // context answers, seed Propeller mode exactly once for that machine/duty.
+  // The loaded-geometry path above normally does this first.
+  useEffect(() => {
+    if (!cooled || !propLoad || !ctxDone || !currentContext || !dutyPreset
+        || !propRpmSeedKey || propRpmDefault.rpm == null || propRpmDefault.rpm <= 0
+        || propRpmSeedRef.current === propRpmSeedKey) return;
+    propRpmSeedRef.current = propRpmSeedKey;
+    propRpmManualEditRef.current = '';
+    setKnobs((k) => ({ ...k, rpm: propRpmDefault.rpm! }));
+    setRefKnobs((k) => ({ ...(k ?? baseKnobs(p)), rpm: propRpmDefault.rpm! }));
+  }, [cooled, propLoad, ctxDone, currentContext, dutyPreset, propRpmSeedKey, propRpmDefault.rpm, p]);
+  const propRpmReady = !propLoad || !propRpmSeedKey
+    || propRpmSeedRef.current === propRpmSeedKey
+    || propRpmManualEditRef.current === propRpmSeedKey;
   // the ambient field: typed text, committed after a short pause (one /series request per value)
   const [ambTxt, setAmbTxt] = useState<string | null>(null);
   useEffect(() => {
@@ -934,8 +982,8 @@ const ConfiguratorPanel: React.FC = () => {
   /** the torque of the passport at a current — every other knob as given */
   const torqueAtI = (k: Knobs) => (I: number) => scaleMotor(p, { ...k, I_A: I }, ref.poles).T_Nm;
   const propLoadRes = useMemo(
-    () => (propLoad ? currentForTorque(propPoint?.torque_Nm ?? null, torqueAtI(knobs), ranges.I_A.max) : null),
-    [propLoad, propPoint?.torque_Nm, p, ref.poles, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, knobs.rpm, ranges.I_A.max]); // eslint-disable-line react-hooks/exhaustive-deps
+    () => (propLoad && propRpmReady ? currentForTorque(propPoint?.torque_Nm ?? null, torqueAtI(knobs), ranges.I_A.max) : null),
+    [propLoad, propRpmReady, propPoint?.torque_Nm, p, ref.poles, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, knobs.rpm, ranges.I_A.max]); // eslint-disable-line react-hooks/exhaustive-deps
   // the current knob FOLLOWS the propeller (a refusal parks it at the largest current the motor may carry)
   useEffect(() => {
     if (!propLoadRes || (!propLoadRes.ok && propLoadRes.kind === 'no_prop')) return;
@@ -1116,6 +1164,10 @@ const ConfiguratorPanel: React.FC = () => {
   const wireSliderMax  = ranges.wireH_mm.max;
 
   const set = (k: keyof Knobs) => (v: number) => setKnobs((s) => ({ ...s, [k]: v }));
+  const setRpm = (v: number) => {
+    if (propLoad && propRpmSeedKey) propRpmManualEditRef.current = propRpmSeedKey;
+    setKnobs((s) => ({ ...s, rpm: v }));
+  };
   // Reset goes back to the machine AS LOADED (the same point the deltas are
   // measured from), falling back to the passport base when nothing is loaded.
   // The drive is a choice of the user, not part of the reference design, so
@@ -1123,8 +1175,15 @@ const ConfiguratorPanel: React.FC = () => {
   /** Restore EVERYTHING to a real configuration of the die: every knob, its saved pack, its
    *  default drive.  The user's battery edit for this machine is dropped (the pack is the preset's). */
   const applyPreset = (pr: Preset) => {
-    const nk = presetKnobs(knobs, pr);
+    const catalogPoint = cooled && propLoad ? propellerDutyRpmDefault(pr, activeDuty()) : null;
+    const nk0 = presetKnobs(knobs, pr);
+    const nk = { ...nk0, rpm: initialRpmForLoadMode(propLoad ? 'prop' : 'manual', nk0.rpm,
+      nk0.rpm, catalogPoint?.rpm ?? null) };
     setKnobs(nk); setRefKnobs(nk); setBaseConfig(pr.config);
+    if (cooled && propLoad) {
+      propRpmSeedRef.current = `${catId ?? refId}|${catalogPoint?.key ?? propellerDutyRpmDefault(pr, null).key}`;
+      propRpmManualEditRef.current = '';
+    }
     try { localStorage.setItem(DRIVE_LS, writeDriveChoice(localStorage.getItem(DRIVE_LS), refId, pickDrive(nk))); } catch { /* ignore */ }
     const pk = batteryFromPack(pr.battery);
     try { localStorage.setItem(BATTERY_BY_MACHINE_LS, clearBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId)); } catch { /* ignore */ }
@@ -1518,7 +1577,7 @@ const ConfiguratorPanel: React.FC = () => {
             limitNote={propLoad
               ? { text: tx('configurePropeller.currentFromProp'), tip: tx('configurePropeller.currentFromPropTip') }
               : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />
-          <KnobSlider label={tx('configureLimits.speed')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={set('rpm')} onRangeChange={isAdmin ? setRange('rpm') : undefined}
+          <KnobSlider label={tx('configureLimits.speed')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRange('rpm') : undefined}
             warn={above(knobs.rpm, ranges.rpm)} zone={cooled ? zones.rpm : null}
             limitNote={(() => {
               const n = limitNote('rpm');
@@ -1794,6 +1853,13 @@ const ConfiguratorPanel: React.FC = () => {
           </Button>
         </Box>
       </Box>
+
+      {cooled && propLoad && (
+        <Box sx={{ px: 2, pb: 1.5 }}>
+          <PropellerCurves series={series} rpm={knobs.rpm} rpmMin={ranges.rpm.min} rpmMax={ranges.rpm.max}
+            powerEstimated={!!series?.power_estimated} onRpmChange={setRpm} />
+        </Box>
+      )}
 
       {/* ── COMPARISON — ABOVE the geometry (user 2026-08-25): the client's
           one and only comparison view; the Compare tab is the engineer's. ── */}

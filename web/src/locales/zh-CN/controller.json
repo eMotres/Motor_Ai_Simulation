@@ -507,6 +507,17 @@
     "airSpeed": "冷却空气",
     "airSpeedTip": "电机上的空气速度：螺旋桨滑流的一部分（动量理论，电机位于桨毂后方）。",
     "blankLoading": "正在等待螺旋桨数据。",
-    "blankRefused": "已隐藏：螺旋桨负载被拒绝。"
+    "blankRefused": "已隐藏：螺旋桨负载被拒绝。",
+    "curvesTitle": "螺旋桨曲线",
+    "curvesTip": "拖动任一图表可设置转速；两个游标和转速控件会同步。蓝色表示测试范围内，琥珀色虚线表示超出测试范围的模型数据。",
+    "curvesLoading": "正在等待螺旋桨数据系列。",
+    "curvesUnavailable": "允许的转速范围内没有可用曲线数据。",
+    "thrustRpm": "推力与转速",
+    "powerRpm": "轴功率与转速",
+    "estimated": "估算",
+    "tested": "已测试",
+    "thrustCursor": "推力曲线转速游标；使用方向键调整转速",
+    "powerCursor": "轴功率曲线转速游标；使用方向键调整转速",
+    "cursorAt": "当前转速：{rpm} rpm"
   }
 }

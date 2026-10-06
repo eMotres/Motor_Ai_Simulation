@@ -103,7 +103,7 @@ const panel = readFileSync(join(ROOT, 'web', 'src', 'components', 'compare', 'Co
 
 t('the panel: default on load and on reset, "modified" includes the propeller, saved configurations keep it', () => {
   assert.match(panel, /effectivePropeller\(coolChoice, allowedProps, propDefaultFor\(baseConfig\)\)/);   // load: the base configuration's default
-  assert.match(panel, /defaultPropellerFor\(ctx\?\.cooling, config, allowedProps\)/);
+  assert.match(panel, /defaultPropellerFor\(currentContext\?\.cooling, config, allowedProps\)/); // context must belong to this catalog card
   assert.match(panel, /if \(cooled\) updateCool\(\{ propId: null \}\);/);                                  // applyPreset AND reset
   assert.equal((panel.match(/if \(cooled\) updateCool\(\{ propId: null \}\);/g) || []).length, 2);
   assert.match(panel, /propModified = cooled && propId !== effectivePropeller\(\{\}, allowedProps, propDefaultFor\(baseConfig\)\)/);

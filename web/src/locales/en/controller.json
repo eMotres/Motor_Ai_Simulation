@@ -507,6 +507,17 @@
     "airSpeed": "Cooling air",
     "airSpeedTip": "Air speed over the motor: a fraction of the propeller's slipstream (momentum theory, motor behind the hub).",
     "blankLoading": "Waiting for the propeller data.",
-    "blankRefused": "Withheld: the propeller load is refused."
+    "blankRefused": "Withheld: the propeller load is refused.",
+    "curvesTitle": "Propeller curves",
+    "curvesTip": "Drag either chart to set speed; both cursors and the RPM control follow. Blue is within the tested range; dashed amber is modeled beyond it.",
+    "curvesLoading": "Waiting for the propeller series.",
+    "curvesUnavailable": "No curve data is available in the allowed RPM range.",
+    "thrustRpm": "Thrust vs RPM",
+    "powerRpm": "Shaft power vs RPM",
+    "estimated": "estimated",
+    "tested": "Tested",
+    "thrustCursor": "Thrust curve speed cursor; use arrow keys to adjust RPM",
+    "powerCursor": "Shaft power curve speed cursor; use arrow keys to adjust RPM",
+    "cursorAt": "Selected speed: {rpm} rpm"
   }
 }

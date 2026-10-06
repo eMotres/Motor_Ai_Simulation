@@ -1,5 +1,8 @@
 import type { PropSeries } from './configuratorPropeller';
 
+/** Newtons per kilogram-force; raw propeller data remains in SI Newtons. */
+export const NEWTONS_PER_KGF = 9.80665;
+
 export interface PropCurvePoint {
   rpm: number;
   thrustTested: number | null;
@@ -28,7 +31,9 @@ export function propellerCurveData(series: PropSeries, allowedMin: number, allow
     const rpm = series.rpm[i];
     if (!Number.isFinite(rpm) || rpm < lo || rpm > hi) continue;
     const isTested = tested(rpm, i);
-    const thrust = Number.isFinite(series.thrust_N?.[i]) ? series.thrust_N[i] : null;
+    // This is a presentation-only conversion for the thrust chart. PropSeries
+    // and every backend value continue to use Newtons.
+    const thrust = Number.isFinite(series.thrust_N?.[i]) ? series.thrust_N[i] / NEWTONS_PER_KGF : null;
     const power = Number.isFinite(series.shaft_power_W?.[i]) ? series.shaft_power_W[i] : null;
     points.push({ rpm,
       thrustTested: isTested ? thrust : null,

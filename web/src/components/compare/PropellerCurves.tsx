@@ -54,7 +54,7 @@ const PropellerCurves: React.FC<Props> = ({ series, rpm, rpmMin, rpmMax, powerEs
     const thrust = kind === 'thrust';
     const testedKey = thrust ? 'thrustTested' : 'powerTested';
     const modeledKey = thrust ? 'thrustBeyondTested' : 'powerBeyondTested';
-    const unit = thrust ? 'N' : 'W';
+    const unit = thrust ? 'kgf' : 'W';
     const hasData = curve?.points.some((p) => p[thrust ? 'thrustTested' : 'powerTested'] != null
       || p[thrust ? 'thrustBeyondTested' : 'powerBeyondTested'] != null) ?? false;
     const noData = !series

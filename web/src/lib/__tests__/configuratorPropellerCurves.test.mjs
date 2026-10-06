@@ -19,6 +19,15 @@ t('series curves use real rpm bounds and mark modeled points beyond tested data'
   assert.ok(got.points.every((p) => !(p.powerTested != null && p.powerBeyondTested != null)));
 });
 
+t('thrust chart converts source Newtons to kgf for display without changing source series', () => {
+  const oneKgf = { ...fixture, rpm: [1000, 2000], thrust_N: [9.80665, 19.6133],
+    shaft_power_W: [10, 20], rpm_range_tested: [1000, 2000], extrapolated: [false, false] };
+  const got = curves.propellerCurveData(oneKgf, 1000, 2000);
+  assert.equal(got.points[0].thrustTested, 1);
+  assert.equal(got.points[1].thrustTested, 2);
+  assert.equal(oneKgf.thrust_N[0], 9.80665);
+});
+
 t('unavailable samples remain gaps and disjoint allowed/series ranges produce no chart domain', () => {
   const sparse = { ...fixture, thrust_N: [...fixture.thrust_N], shaft_power_W: [...fixture.shaft_power_W] };
   const index = sparse.rpm.findIndex((r) => r >= 5000);

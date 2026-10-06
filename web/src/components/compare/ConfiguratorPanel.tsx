@@ -58,7 +58,7 @@ import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
 import { useWireStock } from '../materials/useWireStock';
 import {
-  batteryFromPack, readBatteryEdit, writeBatteryEdit, clearBatteryEdit, dropStockEdits, wantedBattery, sameBattery, BATTERY_BY_MACHINE_LS,
+  batteryFromPack, batteryForMachineConfig, batteryForDisplay, batteryEditKey, readBatteryEditForConfig, writeBatteryEditForConfig, clearBatteryEditForConfig, dropStockEdits, sameBattery, BATTERY_BY_MACHINE_LS,
 } from '../../lib/configuratorBattery';
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
@@ -688,9 +688,15 @@ const ConfiguratorPanel: React.FC = () => {
   //    saved with — the same source the slider ranges read (configure_context, else the
   //    passport's own battery) — or on the user's own edit FOR THIS MACHINE; a machine
   //    that names no pack keeps the stock default.
+  const contextMatchesMotor = !!catId && ctx?.motor_id === catId;
+  const matchingBasePreset = contextMatchesMotor ? basePreset : null;
+  const originalConfig = contextMatchesMotor ? ctx?.cooling?.config : null;
+  const batteryEdit = readBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), refId, baseConfig, originalConfig);
+  const batteryEditKeyForState = batteryEditKey(refId, baseConfig);
   const machinePack = useMemo(
-    () => batteryFromPack(basePreset?.battery) ?? batteryFromPack(ctx?.battery) ?? batteryFromPack(p.battery as never),
-    [basePreset, ctx, p.battery]);
+    () => batteryForMachineConfig(!!matchingBasePreset, matchingBasePreset?.battery,
+      contextMatchesMotor ? ctx?.battery : null, p.battery as never),
+    [matchingBasePreset, contextMatchesMotor, ctx, p.battery]);
   const batterySeeded = React.useRef<string>('');
   // One-time cleanup: an "edit" equal to the stock 100-cell default was never a user's choice
   // (it shadowed the machine's own pack); drop it before anything reads it.
@@ -703,17 +709,17 @@ const ConfiguratorPanel: React.FC = () => {
     } catch { /* ignore */ }
   }, []);
   useEffect(() => {
-    const edit = readBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId);
-    const want = wantedBattery(edit, machinePack);
-    const sig = `${refId}|${edit ? 'edit' : 'pack'}|${JSON.stringify(want)}`;
-    if (!want || batterySeeded.current === sig) return;
+    const edit = readBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), refId, baseConfig, originalConfig);
+    const want = batteryForDisplay(edit, machinePack);
+    const sig = `${batteryEditKeyForState}|${edit ? 'edit' : 'pack'}|${JSON.stringify(want)}`;
+    if (batterySeeded.current === sig) return;
     batterySeeded.current = sig;
     setBattery((cur) => (sameBattery(cur, want) ? cur : want));
-  }, [refId, machinePack]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [refId, baseConfig, originalConfig, batteryEditKeyForState, machinePack]); // eslint-disable-line react-hooks/exhaustive-deps
   /** a change the USER makes — remembered for this machine only */
   const updateBattery = (b: Battery) => {
     setBattery(b);
-    try { localStorage.setItem(BATTERY_BY_MACHINE_LS, writeBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId, b)); } catch { /* ignore */ }
+    try { localStorage.setItem(BATTERY_BY_MACHINE_LS, writeBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), refId, baseConfig, b)); } catch { /* ignore */ }
   };
   const [overrides, setOverrides] = useState<Overrides>(() => readOverrides(readLs(RANGES_LS_V2), refId));
   useEffect(() => { setOverrides(readOverrides(readLs(RANGES_LS_V2), refId)); }, [refId]);
@@ -721,7 +727,7 @@ const ConfiguratorPanel: React.FC = () => {
   // it to — drives everything that depends on the bus: the full-battery speed, the 2S/2P
   // voltage warning, the PWM bus-range check.  A machine with no pack of its own and no edit
   // has no pack to judge by (the stock 100-cell default is not this machine's pack).
-  const batteryKnown = machinePack != null || readBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId) != null;
+  const batteryKnown = machinePack != null || batteryEdit != null;
   const packWindow = batteryKnown
     ? { min: battery.cells * battery.min, max: battery.cells * battery.max } : null;
   const packMaxV: number | null = packWindow?.max ?? null;
@@ -729,7 +735,8 @@ const ConfiguratorPanel: React.FC = () => {
   /** back to the pack the machine was saved with (the user's edit for it is dropped) */
   const resetBattery = () => {
     if (!machinePack) return;
-    try { localStorage.setItem(BATTERY_BY_MACHINE_LS, clearBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId)); } catch { /* ignore */ }
+    try { localStorage.setItem(BATTERY_BY_MACHINE_LS,
+      clearBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), refId, baseConfig, originalConfig)); } catch { /* ignore */ }
     batterySeeded.current = '';
     setBattery(machinePack);
   };
@@ -1186,7 +1193,8 @@ const ConfiguratorPanel: React.FC = () => {
     }
     try { localStorage.setItem(DRIVE_LS, writeDriveChoice(localStorage.getItem(DRIVE_LS), refId, pickDrive(nk))); } catch { /* ignore */ }
     const pk = batteryFromPack(pr.battery);
-    try { localStorage.setItem(BATTERY_BY_MACHINE_LS, clearBatteryEdit(readLs(BATTERY_BY_MACHINE_LS), refId)); } catch { /* ignore */ }
+    try { localStorage.setItem(BATTERY_BY_MACHINE_LS,
+      clearBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), refId, pr.config, originalConfig)); } catch { /* ignore */ }
     batterySeeded.current = '';
     if (pk) setBattery(pk);
     // the propeller goes back to the one this configuration opens on (the user's pick is dropped)
@@ -1263,10 +1271,16 @@ const ConfiguratorPanel: React.FC = () => {
   });
 
   const loadConfig = (c: SavedConfig) => {
+    const targetConfig = c.presetConfig ?? presetOfBuild(presets, c.knobs)?.config ?? null;
     if (c.refId !== refId) { skipReset.current = true; setRefId(c.refId); }
     setKnobs({ ...c.knobs });
-    if (c.battery) updateBattery({ ...c.battery });
-    setBaseConfig(c.presetConfig ?? presetOfBuild(presets, c.knobs)?.config ?? null);
+    if (c.battery) {
+      setBattery({ ...c.battery });
+      try { localStorage.setItem(BATTERY_BY_MACHINE_LS,
+        writeBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), c.refId, targetConfig, c.battery)); } catch { /* ignore */ }
+      batterySeeded.current = '';
+    }
+    setBaseConfig(targetConfig);
     if (cooled && c.propeller?.id) updateCool({ propId: c.propeller.id });
     try { localStorage.setItem(DRIVE_LS, writeDriveChoice(localStorage.getItem(DRIVE_LS), c.refId, pickDrive(c.knobs))); } catch { /* ignore */ }
   };

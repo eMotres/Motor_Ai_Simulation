@@ -404,6 +404,14 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
             continue
         f_sw, dead = float(v["carrier_hz"]), float(v["dead_time_s"])
         model = PwmModel(pwm_fem.get(v["fem_class"]) or [])
+        if not model and abs(f_sw - 48e3) < 480 and pwm_fem.get("si48_100ns")                 and v["fem_class"] != "si48_100ns":
+            # Same carrier, bus and modulation; only the dead time differs (20 vs 100 ns).
+            # Ø40 FEM: GaN 48 kHz 20 ns and Si 48 kHz 100 ns gave the same motor PWM
+            # loss (5.3 / 5.3 W L12, 12.3 / 12.3 W L20) — borrowed, labelled.
+            model = PwmModel(pwm_fem["si48_100ns"], scale=1.0, derived=(
+                "BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors "
+                "(same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time "
+                "changes the motor PWM loss by < 0.1 W)"))
         if not model and f_sw > 48e3 * 1.01:
             # No FEM at this carrier (100 kHz: ~(steps/period)² cost, 5–7 h per
             # run — see docs/BUG_PWM_100K_COST_2026-10-05.md).

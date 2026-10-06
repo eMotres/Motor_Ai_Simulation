@@ -410,6 +410,13 @@ export interface ContinuousRating {
   verified?: boolean;
   /** how many real EM + thermal passes the verification made (cap 2) */
   verification_passes?: number;
+  /** Evidence of a failed trial; it did not replace the operating record. */
+  verification_trial?: {
+    limiting_part?: string;
+    actual_c?: number | null;
+    limit_c?: number | null;
+    I_phase_rms_A?: number | null;
+  };
   /** the verified pass's own reading, minus the limit — 0 is exact, positive
    *  is still over */
   miss_K?: number | null;
@@ -960,6 +967,9 @@ export function continuousRatingLine(c: CouplingBlock | null | undefined):
     string | null {
   const r = c?.continuous_rating;
   if (!r) return null;
+  if (r.verified === false) {
+    return `S1: NOT VERIFIED — ${r.note ?? 'the verification did not confirm the rating'}`;
+  }
   if (r.trustworthy === false) {
     // The specific reason, when the block names one (a contradiction with
     // this run's own time_to_limit verdict, a re-solve that never converged,
@@ -1005,9 +1015,14 @@ export function continuousRatingTip(c: CouplingBlock | null | undefined): string
     return `· ${p.quantity ?? p.part}: ${q}${lim}`;
   });
   return [
-    r.headline ?? '',
+    r.verified === false ? continuousRatingLine(c) : r.headline ?? '',
     r.cooling_label ? `Cooling: ${r.cooling_label}.` : '',
-    'Largest current the machine holds for ever at this cooling: torque '
+    ...(r.verified === false ? (r.verification_trial
+      ? (r.verification_trial.actual_c == null ? [] : [
+        `Last verification ${r.verification_trial.limiting_part ?? 'limiting part'}: ${r.verification_trial.actual_c.toFixed(1)} °C`])
+      : Object.entries(r.temperatures_c ?? {}).map(
+        ([part, temperature]) => `Last verification ${part}: ${temperature.toFixed(1)} °C`)) : []),
+    'Fitted-network estimate: torque '
     + 'scaled linearly with current, iron and magnet losses held at the '
     + 'solved point.',
     ...rows,
@@ -1028,7 +1043,7 @@ export function continuousRatingTip(c: CouplingBlock | null | undefined): string
 export function s1ResultsAtLine(c: CouplingBlock | null | undefined):
     string | null {
   const r = c?.continuous_rating;
-  if (!r || r.record_is_s1 !== true) return null;
+  if (!r || r.record_is_s1 !== true || r.verified !== true) return null;
   const i = r.I_cont_A_rms;
   const iSet = r.duty_point?.I_phase_rms_A;
   if (i == null || iSet == null) return null;

@@ -18848,8 +18848,25 @@ def continuous_rating_feasible(blk: Optional[Dict[str, Any]]) -> bool:
     """Whether a current may be quoted at all — a refused or untrustworthy
     search has a sentence to print, never a number."""
     b = blk or {}
+    # `verified: false` means the network result remains an estimate, whether
+    # or not the record claims to have adopted that verification trial.
+    if b.get("verified") is False:
+        return False
     return bool(b.get("ok", True) and b.get("feasible", True)
                and b.get("trustworthy", True))
+
+
+def _continuous_rating_unverified_note(blk: Mapping[str, Any]) -> str:
+    return str(blk.get("note") or "the S1 verification did not pass")
+
+
+def _continuous_rating_unverified_estimate(blk: Mapping[str, Any]) -> str:
+    current = (_numf(blk.get("I_estimated_A_rms"))
+               or _numf(blk.get("I_cont_A_rms")))
+    lead = ("estimated %s A rms" % _fmt(current, 1, "")
+            if current is not None else "S1 current estimate unavailable")
+    return "%s — NOT VERIFIED — %s" % (
+        lead, _continuous_rating_unverified_note(blk))
 
 
 def _continuous_rating_untrustworthy_why(blk: Mapping[str, Any]) -> str:
@@ -18873,6 +18890,8 @@ def continuous_rating_words(rec: Optional[Dict[str, Any]]) -> str:
         return ""
     if blk.get("trustworthy") is False:
         return "not a rating — " + _continuous_rating_untrustworthy_why(blk)
+    if blk.get("verified") is False:
+        return _continuous_rating_unverified_estimate(blk)
     if not blk.get("ok", True) or blk.get("feasible") is False:
         return str((blk.get("refusal") or {}).get("error") or blk.get("note")
                    or "no continuous rating under this cooling")
@@ -18895,7 +18914,7 @@ def _continuous_rating_setpoint_words(blk: Mapping[str, Any]) -> str:
     *"the currents don't match again"* — the setpoint's own current and the
     rating's must never be silently conflated once a real S1 verification
     pass has made them two different machines on one record)."""
-    if not blk.get("record_is_s1"):
+    if not blk.get("record_is_s1") or blk.get("verified") is not True:
         return ""
     i_set = _numf((blk.get("duty_point") or {}).get("I_phase_rms_A"))
     i_cont = _numf(blk.get("I_cont_A_rms"))
@@ -18915,7 +18934,7 @@ def continuous_rating_clause(rec: Optional[Dict[str, Any]]) -> str:
     for these notes is a single "; …" and never a sentence of its own —
     several facts joined by "; " still read as one clause."""
     blk = continuous_rating_of(rec)
-    if blk is None or not continuous_rating_feasible(blk):
+    if blk is None:
         return ""
     cooling = blk.get("cooling_label")
     parts: List[str] = []
@@ -18929,9 +18948,11 @@ def continuous_rating_clause(rec: Optional[Dict[str, Any]]) -> str:
                                   " (%s K of the limit)"
                                   % _fmt(abs(miss), 1, "")))
     elif blk.get("verified") is False:
-        parts.append("NOT VERIFIED — %s" % (blk.get("note")
-                                                 or "not verified"))
+        parts.append("NOT VERIFIED — %s"
+                     % _continuous_rating_unverified_note(blk))
     else:
+        if not continuous_rating_feasible(blk):
+            return ""
         # No verification was attempted at all (no card limit to verify
         # against) — the number is still the linear estimate.
         parts.append("torque linear in current, iron and magnet losses "
@@ -18947,6 +18968,17 @@ def continuous_rating_limit_words(rec: Optional[Dict[str, Any]]) -> str:
     blk = continuous_rating_of(rec)
     if blk is None:
         return ""
+    if blk.get("verified") is False:
+        trial = blk.get("verification_trial") or {}
+        part = trial.get("limiting_part") or blk.get("limiting_part")
+        actual = _numf(trial.get("actual_c"))
+        lim = (_numf(trial.get("limit_c"))
+               or _numf((blk.get("limits_c") or {}).get(part)))
+        evidence = ("verification trial: %s %s / %s °C; "
+                    % (part, _fmt(actual, 1, ""), _fmt(lim, 0, ""))
+                    if part and actual is not None and lim is not None else "")
+        return (evidence + "NOT VERIFIED — "
+                + _continuous_rating_unverified_note(blk))
     if blk.get("trustworthy") is False:
         return "not a rating — " + _continuous_rating_untrustworthy_why(blk)
     if not blk.get("ok", True) or blk.get("feasible") is False:
@@ -19214,12 +19246,16 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     def _crb(c):
         return continuous_rating_of(_c(c))
 
-    def CR(label, fn, d=2, unit=""):
+    def CR(label, fn, d=2, unit="", *, show_estimate=False):
         def _cell(c):
             if _c(c) is None:
                 return NOT_SOLVED
             blk = _crb(c)
-            if blk is None or not continuous_rating_feasible(blk):
+            if blk is None:
+                return "—"
+            if blk.get("verified") is False and show_estimate:
+                return continuous_rating_words(_c(c))
+            if not continuous_rating_feasible(blk):
                 return "—"
             v = fn(blk)
             return "—" if v is None else _fmt(v, d, unit)
@@ -19235,7 +19271,7 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
     # print once more; `continuous_rating_clause` states whether they are
     # verified or still the linear estimate.
     CR("Continuous rating (S1), current [A rms]",
-       lambda b: _numf(b.get("I_cont_A_rms")), 1)
+       lambda b: _numf(b.get("I_cont_A_rms")), 1, show_estimate=True)
     # VERIFIED ONLY (owner's first addendum still stands for the estimate):
     # `power.T_em_Nm` / `P_shaft_W` are the linear estimate until a real
     # electromagnetic pass confirms them, and an estimate is not printed as a

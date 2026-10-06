@@ -1427,13 +1427,18 @@ def _continuous_rating_row(coupled: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(blk, dict) or not blk:
         return None
     feasible = bool(blk.get("ok", True) and blk.get("feasible", True)
-                    and blk.get("trustworthy", True))
+                    and blk.get("trustworthy", True)
+                    and blk.get("verified") is not False)
     part = str(blk.get("limiting_part") or "") or None
+    trial = (blk.get("verification_trial")
+             if isinstance(blk.get("verification_trial"), dict) else {})
     power = blk.get("power") if isinstance(blk.get("power"), dict) else {}
-    at_point = (_ttl_num((blk.get("temperatures_c") or {}).get(part))
-                if part else None)
+    at_point = (_ttl_num(trial.get("actual_c"))
+                if blk.get("verified") is False else
+                (_ttl_num((blk.get("temperatures_c") or {}).get(part))
+                 if part else None))
     limit = _ttl_num((blk.get("limits_c") or {}).get(part)) if part else None
-    torque = _ttl_num(power.get("T_em_Nm"))
+    torque = (_ttl_num(power.get("T_em_Nm")) if feasible else None)
     cooling_label = str(blk.get("cooling_label") or "") or None
     row: Dict[str, Any] = {
         "i_cont_A": _ttl_num(blk.get("I_cont_A_rms")) if feasible else None,
@@ -1454,9 +1459,22 @@ def _continuous_rating_row(coupled: Any) -> Optional[Dict[str, Any]]:
     # A refused or untrustworthy search has a sentence to print, never a
     # number — same rule as `report.continuous_rating_words`.
     if not feasible:
-        row["note"] = str((blk.get("refusal") or {}).get("error")
-                          or blk.get("headline")
-                          or "no continuous rating under this cooling")
+        if blk.get("verified") is False:
+            estimate = (_ttl_num(blk.get("I_estimated_A_rms"))
+                        or _ttl_num(blk.get("I_cont_A_rms")))
+            prefix = ("estimated %.1f A rms — " % estimate
+                      if estimate is not None else "")
+            trial_note = ("verification trial: %.1f °C of %.0f °C; "
+                          % (at_point, limit)
+                          if at_point is not None and limit is not None else "")
+            note = str(blk.get("note") or
+                       "the verification pass did not meet its temperature "
+                       "limit")
+            row["note"] = (prefix + trial_note + "NOT VERIFIED — " + note)
+        else:
+            row["note"] = str((blk.get("refusal") or {}).get("error")
+                              or blk.get("headline")
+                              or "no continuous rating under this cooling")
         return row
     head = "continuous current at the saved cooling"
     if cooling_label:

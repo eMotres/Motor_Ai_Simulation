@@ -12,6 +12,7 @@ from typing import Callable, Optional
 from fastapi import APIRouter, Header, HTTPException
 
 import logging
+import threading
 
 from motor_ai_sim.auth import caller_identity as _caller_identity
 from motor_ai_sim.json_store import mutate_json as _mutate_json, read_json as _read_json
@@ -252,25 +253,73 @@ def _grant_visible_cards(cards: list, authorization: Optional[str]) -> list:
     return keep
 
 
-#: ``(path, mtime_ns, size)`` -> the passport-carrying cards of the catalogue file.  The
-#: file is 12 MB (thumbnails) and every writer replaces it atomically, so its
-#: (mtime, size) is a safe key: Configure re-parses it only after a real change.
+#: Source metadata -> the passport-carrying cards across the effective catalogues.
+#: Workspace cards and admin-curated shared cards are independent libraries; an
+#: unrelated personal card must not hide the shared references.
 _REF_CACHE: dict = {"key": None, "cards": []}
+_REF_CACHE_LOCK = threading.RLock()
+
+
+def _reference_catalog_paths() -> list[Path]:
+    """Reference sources in precedence order, respecting explicit test overrides."""
+    override = globals().get("_CATALOG_PATH")
+    if override is not None:
+        return [Path(str(override))]
+
+    workspace_path = _catalog_path()
+    try:
+        from motor_ai_sim.workspace import layering, shared_root
+        if layering():
+            shared_path = Path(str(shared_root())) / "motor_catalog.json"
+            if shared_path != workspace_path:
+                return [workspace_path, shared_path]
+    except Exception:  # noqa: BLE001 — keep serving the caller catalogue on resolver errors
+        log.warning("catalog: shared reference source unavailable", exc_info=True)
+    return [workspace_path]
+
+
+def _reference_source_key(paths: list[Path]) -> tuple:
+    """Track metadata for every source, including absent files, for create/remove."""
+    key = []
+    for path in paths:
+        try:
+            st = path.stat()
+            key.append((str(path), st.st_mtime_ns, st.st_size))
+        except OSError:
+            key.append((str(path), None, None))
+    return tuple(key)
 
 
 def _passport_cards() -> list:
-    path = _read_path()
-    try:
-        st = path.stat()
-        key = (str(path), st.st_mtime_ns, st.st_size)
-    except OSError:
-        return []
-    if _REF_CACHE["key"] != key:
-        _REF_CACHE["cards"] = [
-            m for m in _load().get("motors", [])
-            if isinstance(m.get("passport"), dict) and m["passport"].get("passport")]
-        _REF_CACHE["key"] = key
-    return _REF_CACHE["cards"]
+    # The cache is process-global while the source paths are request-local.
+    # Serialize key-check, source reads and list capture so concurrent accounts
+    # cannot observe a half-updated cache from another workspace.
+    with _REF_CACHE_LOCK:
+        paths = _reference_catalog_paths()
+        key = _reference_source_key(paths)
+        if _REF_CACHE["key"] != key:
+            # Read the files separately so one catalogue cannot hide the other.
+            # IDs establish precedence; geometry alone deliberately does not,
+            # since distinct stack/build cards may share a cross-section.
+            ordered: list[dict] = []
+            seen_ids: set[str] = set()
+            for path in paths:
+                catalog = _read_json(path, {"tiers": [], "diameters_mm": [], "motors": []})
+                for motor in catalog.get("motors", []):
+                    motor_id = motor.get("id")
+                    stable_id = str(motor_id) if motor_id is not None else None
+                    if stable_id is not None and stable_id in seen_ids:
+                        continue
+                    if stable_id is not None:
+                        # Record even a workspace card without a passport: it still
+                        # wins over a shared record with the same stable ID.
+                        seen_ids.add(stable_id)
+                    if (isinstance(motor.get("passport"), dict)
+                            and motor["passport"].get("passport")):
+                        ordered.append(motor)
+            _REF_CACHE["cards"] = ordered
+            _REF_CACHE["key"] = key
+        return _REF_CACHE["cards"]
 
 
 def _l0_mm(card: dict) -> Optional[float]:

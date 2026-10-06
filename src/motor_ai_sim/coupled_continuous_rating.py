@@ -805,6 +805,12 @@ def headline(block: Optional[Mapping[str, Any]]) -> str:
                     if n.startswith("THE 2-D") or n.startswith("CONTRADICTS")),
                    None) or b.get("note") or "the map could not be iterated"
         return "NOT A RATING — %s" % why
+    # A route may attach the estimate before it runs the real S1 check.  Keep
+    # that estimate usable for the estimate UI, but never call it a continuous
+    # rating until the physical verification has passed.
+    if b.get("verified") is False:
+        why = b.get("note") or "the S1 verification did not pass"
+        return "NOT VERIFIED — %s" % why
     i = _num(b.get("I_cont_A_rms"))
     part = str(b.get("limiting_part") or "a part")
     lim = _num((b.get("limits_c") or {}).get(part))

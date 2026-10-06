@@ -284,6 +284,22 @@ def test_a_map_that_gets_colder_with_more_copper_stops_the_loop(caps):
     assert ccr.headline(out).startswith("NOT A RATING")
 
 
+def test_an_explicit_failed_verification_is_not_a_positive_headline():
+    # Pure network estimates omit `verified` and remain valid estimates before
+    # the route's physical check.  Once the route stamps False, the sentence
+    # must no longer claim a continuous S1 rating.
+    estimate = {"feasible": True, "trustworthy": True,
+                "I_cont_A_rms": 30.0, "limiting_part": "magnet",
+                "limits_c": {"magnet": 150.0},
+                "power": {"P_shaft_W": 1000.0}}
+    assert ccr.headline(estimate).startswith("30.0 A rms continuously")
+    failed = {**estimate, "verified": False,
+              "note": "still 6.1 K over its limit after 2 verification passes"}
+    line = ccr.headline(failed)
+    assert line.startswith("NOT VERIFIED")
+    assert "6.1 K over" in line
+
+
 def test_without_a_resolve_callback_the_answer_says_so(caps):
     out = ccr.rate(thermal_result=_linear_map(float(RATED_MAP["P_cu_exact_W"])),
                    em_summary=RATED_SUMMARY, caps=caps,

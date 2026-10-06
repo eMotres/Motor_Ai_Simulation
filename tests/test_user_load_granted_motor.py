@@ -423,9 +423,13 @@ def test_my_motor_settings_save_is_his_own_workspace_only(env, tmp_path, monkeyp
     assert (digest(shared_presets), digest(ws_other / "motor_presets.json")) == before
 
 
-def test_a_new_account_reads_the_shared_catalog_until_it_has_its_own(env, tmp_path, monkeypatch):
-    """A brand-new workspace is seeded with the machine only; Configure must not
-    open on an empty list of references for a granted user."""
+def test_configure_keeps_shared_references_when_account_has_its_own_catalog(env, tmp_path, monkeypatch):
+    """A user's catalog supplements shared Configure references.
+
+    Personal catalog writes must not shadow the shared characterized motors:
+    distinct stable IDs are both candidates, while the grant still limits the
+    response to this account's die and never exposes the ungranted shared card.
+    """
     import os
     from motor_ai_sim.routes import catalog as cat
     monkeypatch.delattr(cat, "_CATALOG_PATH", raising=False)
@@ -434,11 +438,13 @@ def test_a_new_account_reads_the_shared_catalog_until_it_has_its_own(env, tmp_pa
         _card("c1", f"{GRANTED} {CFG}"), _card("c2", f"{UNGRANTED} {CFG}")]}), encoding="utf-8")
     ids = [m["id"] for m in client.get("/api/catalog/references", headers=env["user"]).json()["motors"]]
     assert ids == ["c1"], "granted-only: the shared card of his die, nothing else"
-    # his own file, once there, wins
+    # His workspace card is listed first, while the distinct shared ID remains
+    # available. The ungranted shared card is still withheld.
     from motor_ai_sim import workspace as W
     own = Path(os.environ["WORKSPACES_ROOT"]) / W.workspace_id(USER) / "motor_catalog.json"
     own.write_text(json.dumps({"tiers": [], "diameters_mm": [40], "motors": [
         _card("mine", f"{GRANTED} {CFG2}")]}), encoding="utf-8")
     ids = [m["id"] for m in client.get("/api/catalog/references", headers=env["user"]).json()["motors"]]
-    assert ids == ["mine"]
+    assert ids == ["mine", "c1"]
+    assert "c2" not in ids, "combining sources must not bypass die grants"
     assert shared.read_text(encoding="utf-8").count('"c1"') == 1, "the shared file is never written"

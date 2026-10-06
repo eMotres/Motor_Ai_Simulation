@@ -236,6 +236,8 @@
     "noModelBody": "此电机没有经有限元表征的性能档案，因此没有可缩放的对象：调节器不会计算或显示借自其他电机的任何数值。",
     "noModelDraft": "请对此草稿运行仿真以建立性能档案。",
     "noModelLoaded": "请先运行仿真并生成其性能档案（管理 → 电机 → 生成性能档案），再在此调节。",
+    "noSavedMotor": "此账户尚未加载电机。请在“电机”中选择一台，以便在此恢复。",
+    "savedMotorUnavailable": "此账户现在无法访问已保存的电机 {selection}。请在“电机”中选择可访问的电机。",
     "bannerDraft": "智能体草稿 {name}，来自 {client} — 基于 {die} / {config}：叠厚 {L} mm，{I} A，{rpm} rpm{conn}。",
     "bannerConn": "，{conn}",
     "bannerOpenHint": "点击“{button}”将其载入下方，您当前打开的电机保持不变。",

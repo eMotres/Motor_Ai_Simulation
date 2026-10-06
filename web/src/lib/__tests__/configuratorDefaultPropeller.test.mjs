@@ -37,6 +37,16 @@ t('each configuration opens on its own default', () => {
   assert.equal(P.defaultPropellerFor(COOLING, 'L20', ALLOWED), 'tmotor_p13x4_4');
 });
 
+t('propeller choices are isolated by account and exact configuration', () => {
+  const aL20 = P.coolChoiceKey('A@example.com', 'cat:cat_ciano14_40_new', 'L20');
+  const aL12 = P.coolChoiceKey('a@example.com', 'cat:cat_ciano14_40_new', 'L12');
+  const bL20 = P.coolChoiceKey('b@example.com', 'cat:cat_ciano14_40_new', 'L20');
+  const raw = P.writeCoolChoice(null, aL20, { propId: 'tmotor_p13x4_4' });
+  assert.deepEqual(P.readCoolChoice(raw, aL20), { propId: 'tmotor_p13x4_4' });
+  assert.deepEqual(P.readCoolChoice(raw, aL12), {});
+  assert.deepEqual(P.readCoolChoice(raw, bL20), {});
+});
+
 t('no default (or a default that is not allowed / has no data): the first allowed propeller with torque data', () => {
   assert.equal(P.defaultPropellerFor({ ...COOLING, defaults: {} }, 'L12', ALLOWED), 'tmotor_fpv_10x5');
   assert.equal(P.defaultPropellerFor(COOLING, 'L99', ALLOWED), 'tmotor_fpv_10x5');
@@ -104,6 +114,7 @@ const panel = readFileSync(join(ROOT, 'web', 'src', 'components', 'compare', 'Co
 t('the panel: default on load and on reset, "modified" includes the propeller, saved configurations keep it', () => {
   assert.match(panel, /effectivePropeller\(coolChoice, allowedProps, propDefaultFor\(baseConfig\)\)/);   // load: the base configuration's default
   assert.match(panel, /defaultPropellerFor\(currentContext\?\.cooling, config, allowedProps\)/); // context must belong to this catalog card
+  assert.match(panel, /coolChoiceKey\(identity, m\?\.id \?\? refId, buildPreset\?\.config\)/); // reader and writer use the same prefixed ref ID
   assert.match(panel, /if \(cooled\) updateCool\(\{ propId: null \}\);/);                                  // applyPreset AND reset
   assert.equal((panel.match(/if \(cooled\) updateCool\(\{ propId: null \}\);/g) || []).length, 2);
   assert.match(panel, /propModified = cooled && propId !== effectivePropeller\(\{\}, allowedProps, propDefaultFor\(baseConfig\)\)/);

@@ -36,7 +36,9 @@ import GreekLabel from './GreekLabel';
 import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import { referenceOfDefault } from '../../lib/accessUi';
-import { CONFIGURE_REFID_LS, isOwnChoice } from './configureChoice';
+import { readConfigureRefId, writeConfigureRefId, isOwnChoice } from './configureChoice';
+import { configureRefIdForSelection, useLastMotorState } from '../../lib/lastMotor';
+import { getStoredUser } from '../../lib/localAuth';
 import { CardBadge } from '../common/CardBadge';
 import PerformanceCharts from './PerformanceCharts';
 import PropellerCurves from './PropellerCurves';
@@ -45,7 +47,7 @@ import {
   driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, tempRowTiles, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
-  isPropellerCooled, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
+  isPropellerCooled, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
   seriesAt, currentForTorque, tempLimits, judgeTemps, zoneGradient, zoneSamples, modelLabel, vendorLabel,
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
@@ -135,7 +137,6 @@ const TD = { px: 1.25, py: 0.5, fontSize: 12, whiteSpace: 'nowrap', textAlign: '
 // The slider RANGES are physical limits now (lib/configuratorLimits.ts, owner
 // 2026-10-05); an admin's local edit can only NARROW them, per machine.
 const KNOBS_LS  = 'configurator.knobs.v1';
-const REFID_LS  = CONFIGURE_REFID_LS;
 
 // a small editable range endpoint (the min / max flanking a slider)
 const RangeEnd: React.FC<{ value: number; d: number; title: string; onCommit: (v: number) => void }> = ({ value, d, title, onCommit }) => {
@@ -275,7 +276,10 @@ const KT_BASIS_TIP = (basis: string) => (basis === '3-D'
     : tx('configure.ktTip2d'));
 
 const ConfiguratorPanel: React.FC = () => {
-  const { isAdmin, defaultMotor, resolved: authResolved } = useAuth();   // editing the slider ranges is admin-only
+  const { user, enforced, isAdmin, defaultMotor, resolved: authResolved } = useAuth();   // editing the slider ranges is admin-only
+  const identity = user?.email?.trim().toLowerCase() ?? null;
+  const lastMotor = useLastMotorState();
+  const isOrdinaryAccount = !!(enforced && identity && !isAdmin);
   // FEM-characterised catalog motors (fetched) come first; the built-in
   // REFERENCE_PASSPORTS stay as a seed/fallback.
   const [catalogRefs, setCatalogRefs] = useState<ReferenceMotor[]>([]);
@@ -291,6 +295,9 @@ const ConfiguratorPanel: React.FC = () => {
   // canWrite freeze, same cure.
   useEffect(() => {
     let dead = false;
+    setCatalogRefs([]);
+    setRefsAnswered(false);
+    setMatchChecked(false);
     const load = () => fetchCatalogReferencesAnswer()
       .then((a) => {
         if (dead) return;
@@ -302,7 +309,7 @@ const ConfiguratorPanel: React.FC = () => {
     const on = () => load();
     window.addEventListener('family-changed', on);
     return () => { dead = true; window.removeEventListener('family-changed', on); };
-  }, []);
+  }, [identity]);
   const [liveMatched, setLiveMatched] = useState(false);
   // Signature of the LOADED build — the knobs adopt it whenever it changes
   // (machine loaded / rebuilt), and never while the user is tuning.
@@ -313,11 +320,25 @@ const ConfiguratorPanel: React.FC = () => {
    *  percentage is measured against, and what Reset returns to. */
   const [refKnobs, setRefKnobs] = useState<Knobs | null>(null);
   const allRefs = useMemo(() => [...catalogRefs, ...REFERENCE_PASSPORTS], [catalogRefs]);
-  const [refId, setRefId] = useState<string>(() => {
-    try { const r = localStorage.getItem(REFID_LS); if (r) return r; } catch { /* ignore */ }
-    return REFERENCE_PASSPORTS[0]?.id ?? '';
-  });
-  useEffect(() => { try { localStorage.setItem(REFID_LS, refId); } catch { /* ignore */ } }, [refId]);
+  const seedRefId = REFERENCE_PASSPORTS[0]?.id ?? '';
+  const [refChoice, setRefChoice] = useState(() => ({
+    email: identity, id: readConfigureRefId(identity) ?? seedRefId,
+  }));
+  const refId = refChoice.email === identity ? refChoice.id : (readConfigureRefId(identity) ?? seedRefId);
+  const setRefId: React.Dispatch<React.SetStateAction<string>> = (next) => {
+    setRefChoice((prev) => {
+      const base = prev.email === identity ? prev.id : (readConfigureRefId(identity) ?? seedRefId);
+      return { email: identity, id: typeof next === 'function' ? next(base) : next };
+    });
+  };
+  useEffect(() => {
+    if (refChoice.email !== identity) {
+      setRefChoice({ email: identity, id: readConfigureRefId(identity) ?? seedRefId });
+    }
+  }, [identity, refChoice.email, seedRefId]);
+  useEffect(() => {
+    if (refChoice.email === identity) writeConfigureRefId(identity, refChoice.id);
+  }, [identity, refChoice]);
   const catId = catalogIdOf(refId);
   const [ctx, setCtx] = useState<ConfigureContext | null>(null);
   const currentContext = ctx?.motor_id === catId ? ctx : null;
@@ -327,20 +348,54 @@ const ConfiguratorPanel: React.FC = () => {
   //    references (names differ between the family catalog and the cards, so
   //    match by the machine itself: slots, poles, OD, magnet height) and
   //    auto-select the matching passport.  No match → keep the current pick.
-  const liveGeo = useMotorStore((s) => s.geometry) as Record<string, unknown> | null;
+  const liveGeoRaw = useMotorStore((s) => s.geometry) as Record<string, unknown> | null;
+  const restoreMatchesIdentity = lastMotor.email === identity;
+  const liveGeo = isOrdinaryAccount
+    && (!restoreMatchesIdentity || lastMotor.status !== 'loaded') ? null : liveGeoRaw;
   // DEFAULT MOTOR (owner 2026-10-05): an admin can name the die + configuration
   // Configure opens on for an account.  While that choice is "pinned", the
   // live-geometry auto-match below stays out of the way - the live geometry is the
   // workspace's leftover, not something the user loaded.  The first machine the
   // user LOADS (the 'sim-operating-point' event) unpins it.
   const defaultPinned = React.useRef(false);
-  // Did he have a machine of his own before this session?  Read ONCE, before the
-  // effect below writes the automatic seed into the same key.
-  const [hadOwnChoice] = useState(() => {
-    try { return isOwnChoice(localStorage.getItem(CONFIGURE_REFID_LS)); } catch { return false; }
-  });
+  const hadOwnChoice = isOwnChoice(readConfigureRefId(identity))
+    || (restoreMatchesIdentity && (lastMotor.status === 'loaded' || lastMotor.status === 'unavailable'));
   useEffect(() => {
     const pick = (fromEvent = false) => {
+      let savedReference: ReferenceMotor | null = null;
+      if (isOrdinaryAccount) {
+        if (!restoreMatchesIdentity || lastMotor.status === 'loading' || lastMotor.status === 'idle') {
+          if (refsAnswered) setMatchChecked(true);
+          setLiveMatched(false);
+          return;
+        }
+        if (lastMotor.status === 'none') {
+          if (refsAnswered) setMatchChecked(true);
+          setLiveMatched(false);
+          return;
+        }
+        if (lastMotor.status === 'unavailable') {
+          if (refsAnswered) setMatchChecked(true);
+          setLiveMatched(false);
+          return;
+        }
+        if (lastMotor.status === 'loaded' && lastMotor.selection) {
+          if (!refsAnswered) return;
+          const configureRefId = configureRefIdForSelection(lastMotor.selection);
+          const savedRef = configureRefId
+            ? allRefs.find((item) => item.id === configureRefId
+              && item.card?.die === lastMotor.selection?.die)
+            : undefined;
+          if (!savedRef) {
+            setMatchChecked(true);
+            setLiveMatched(false);
+            return;
+          }
+          savedReference = savedRef;
+          setRefId((cur) => cur === savedRef.id ? cur : savedRef.id);
+          setMatchChecked(true);
+        }
+      }
       const g = useMotorStore.getState().geometry as Record<string, any> | null;
       if (!g) return;
       if (refsAnswered) setMatchChecked(true);   // looked up against the ANSWER, not the seed
@@ -373,7 +428,7 @@ const ConfiguratorPanel: React.FC = () => {
       const geoDist = (r: ReferenceMotor) =>
         Math.abs(Number(r.geo?.magnetHeight_mm) - Number(g.magnet_height) || 0)
         + Math.abs(Number(r.geo?.statorOR_mm) - Number(g.stator_outer_radius) || 0);
-      const m = pickReference(sameSection, dist, geoDist);
+      const m = savedReference ?? (isOrdinaryAccount ? null : pickReference(sameSection, dist, geoDist));
       setLiveMatched(!!m);
       if (m) setRefId((cur) => (cur === m.id ? cur : m.id));
       // ── Open on the LOADED BUILD, not on the passport's base point ───────
@@ -409,7 +464,7 @@ const ConfiguratorPanel: React.FC = () => {
         rpm: readLS('rpm', NaN),
       };
       const loadedDuty = activeDuty();
-      const matchingCtx = ctx?.motor_id === catalogIdOf(refId) ? ctx : null;
+      const matchingCtx = ctx?.motor_id === catalogIdOf(savedReference?.id ?? refId) ? ctx : null;
       const buildPreset = matchingCtx?.presets?.length
         ? presetOfBuild(matchingCtx.presets, { N: live.N, L_mm: live.L_mm, wireH_mm: live.wireH_mm, nP: live.nP })
         : null;
@@ -417,8 +472,9 @@ const ConfiguratorPanel: React.FC = () => {
       let propLoadForMotor = false;
       try {
         const rawChoice = localStorage.getItem(PROP_CHOICE_LS);
+        const choiceKey = coolChoiceKey(identity, m?.id ?? refId, buildPreset?.config);
         propLoadForMotor = isPropellerCooled(matchingCtx?.cooling)
-          && (readCoolChoice(rawChoice, m?.id ?? refId).load ?? 'prop') === 'prop';
+          && (readCoolChoice(rawChoice, choiceKey).load ?? 'prop') === 'prop';
       } catch { propLoadForMotor = isPropellerCooled(matchingCtx?.cooling); }
       const useCatalogPropRpm = propLoadForMotor && propRpmDefault.rpm != null && propRpmDefault.rpm > 0;
       const matchedId = m?.id ? (catalogIdOf(m.id) ?? m.id) : refId;
@@ -463,7 +519,8 @@ const ConfiguratorPanel: React.FC = () => {
     pick();   // also on mount / after the references arrive
     return () => window.removeEventListener('sim-operating-point', onLoaded);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allRefs, refsAnswered, liveGeo, ctx, refId]);
+  }, [allRefs, refsAnswered, liveGeo, ctx, refId, isOrdinaryAccount,
+      restoreMatchesIdentity, lastMotor, identity]);
   // No machine loaded at all: after a short wait say so (instead of loading forever).
   useEffect(() => {
     if (!refsAnswered || liveGeo || matchChecked) return;
@@ -590,9 +647,18 @@ const ConfiguratorPanel: React.FC = () => {
   //    for that machine, refuse to compute rather than borrow another
   //    machine's model.
   const mState = modelState({ refsAnswered, matchChecked, draftOpen, hasDraftTarget: !!draftTarget, liveMatched });
-  const loadingModel = mState === 'loading';
-  const blocked = mState === 'blocked';
-  const blockedLabel = draftOpen && draft
+  const restorePending = isOrdinaryAccount && (!restoreMatchesIdentity
+    || lastMotor.status === 'idle' || lastMotor.status === 'loading');
+  const restoreUnavailable = isOrdinaryAccount
+    && (lastMotor.status === 'none' || lastMotor.status === 'unavailable');
+  const loadingModel = restorePending || mState === 'loading';
+  const blocked = restoreUnavailable || mState === 'blocked';
+  const blockedLabel = restoreUnavailable
+    ? (lastMotor.status === 'unavailable'
+      ? tx('configure.savedMotorUnavailable', { selection: lastMotor.selection
+        ? `${lastMotor.selection.die} / ${lastMotor.selection.config}` : '' })
+      : tx('configure.noSavedMotor'))
+    : draftOpen && draft
     ? `${draft.starting_point.die} / ${draft.starting_point.config}`
     : (() => {
         const g = liveGeo as Record<string, unknown> | null;
@@ -619,9 +685,13 @@ const ConfiguratorPanel: React.FC = () => {
   // it (the Thermal block for a die that is not propeller-cooled) wait for it instead of flashing.
   const [ctxDone, setCtxDone] = useState(false);
   const loadCtx = React.useCallback(async () => {
-    setCtx(catId ? await fetchConfigureContext(catId) : null);
+    const requestedIdentity = identity;
+    const next = catId ? await fetchConfigureContext(catId) : null;
+    const currentIdentity = getStoredUser()?.email?.trim().toLowerCase() ?? null;
+    if (currentIdentity !== requestedIdentity) return;
+    setCtx(next);
     setCtxDone(true);
-  }, [catId]);
+  }, [catId, identity]);
   useEffect(() => { setCtx(null); setCtxDone(false); setLimitMsg(null); setBaseConfig(null); void loadCtx(); }, [loadCtx]);
   const presets: Preset[] = ctx?.presets ?? [];
   const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
@@ -646,11 +716,22 @@ const ConfiguratorPanel: React.FC = () => {
     setPendingDefault(defaultMotor.config);
   }, [defaultRef, defaultMotor]);
   const defaultDecided = React.useRef(false);
+  const defaultIdentity = React.useRef(identity);
   useEffect(() => {
-    if (defaultDecided.current || !refsAnswered || !authResolved) return;
+    if (defaultIdentity.current !== identity) {
+      defaultIdentity.current = identity;
+      defaultDecided.current = false;
+      defaultPinned.current = false;
+    }
+  }, [identity]);
+  useEffect(() => {
+    if (defaultDecided.current || !refsAnswered || !authResolved
+        || (isOrdinaryAccount && (!restoreMatchesIdentity
+          || lastMotor.status === 'idle' || lastMotor.status === 'loading'))) return;
     defaultDecided.current = true;
     if (!hadOwnChoice && defaultRef) goDefault();
-  }, [refsAnswered, authResolved, hadOwnChoice, defaultRef, goDefault]);
+  }, [refsAnswered, authResolved, hadOwnChoice, defaultRef, goDefault,
+      isOrdinaryAccount, restoreMatchesIdentity, lastMotor.status]);
   // the preset can only be applied once THIS machine's context has arrived
   useEffect(() => {
     if (!pendingDefault || !ctx || ctx.motor_id !== catId) return;
@@ -931,13 +1012,14 @@ const ConfiguratorPanel: React.FC = () => {
     return () => { dead = true; };
   }, [cooled]);
   const allowedProps = useMemo(() => allowedPropellers(currentContext?.cooling, propList ?? []), [currentContext, propList]);
+  const coolKey = coolChoiceKey(identity, refId, baseConfig);
   const [coolChoice, setCoolChoice] = useState<CoolChoice>(() => {
-    try { return readCoolChoice(localStorage.getItem(PROP_CHOICE_LS), refId); } catch { return {}; }
+    try { return readCoolChoice(localStorage.getItem(PROP_CHOICE_LS), coolKey); } catch { return {}; }
   });
-  useEffect(() => { setCoolChoice(readCoolChoice(readLs(PROP_CHOICE_LS), refId)); }, [refId]);
+  useEffect(() => { setCoolChoice(readCoolChoice(readLs(PROP_CHOICE_LS), coolKey)); }, [coolKey]);
   const updateCool = (patch: CoolChoice) => {
     setCoolChoice((c) => ({ ...c, ...patch }));
-    try { localStorage.setItem(PROP_CHOICE_LS, writeCoolChoice(readLs(PROP_CHOICE_LS), refId, patch)); } catch { /* ignore */ }
+    try { localStorage.setItem(PROP_CHOICE_LS, writeCoolChoice(readLs(PROP_CHOICE_LS), coolKey, patch)); } catch { /* ignore */ }
   };
   /** the propeller a configuration opens on (config/cooling_options.yaml `defaults`; else the first with torque data) */
   const propDefaultFor = (config: string | null) => defaultPropellerFor(currentContext?.cooling, config, allowedProps);

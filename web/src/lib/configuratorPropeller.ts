@@ -188,6 +188,16 @@ export function zoneSamples(min: number, max: number, n = 48): number[] {
 export const PROP_CHOICE_LS = 'configurator.propeller.v1';
 export const DEFAULT_AMBIENT_C = 25;
 
+/** Per-account, per-reference, per-configuration storage; never inherits an
+ * unowned legacy choice from another browser account or motor build. */
+export function coolChoiceKey(email: string | null | undefined, refId: string,
+                             config: string | null | undefined): string {
+  const normalized = email?.trim().toLowerCase();
+  return normalized
+    ? `user:${encodeURIComponent(normalized)}|${refId}|${config ?? ''}`
+    : refId;
+}
+
 export interface CoolChoice { propId?: string | null; ambient?: number; load?: 'prop' | 'manual' }
 
 const okAmbient = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= -60 && v <= 80;

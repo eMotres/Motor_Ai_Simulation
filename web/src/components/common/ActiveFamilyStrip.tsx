@@ -32,6 +32,8 @@ import { currentMatJson } from '../../lib/apiAuth';
 import { canWriteServer } from '../../lib/localAuth';
 import { uiCanWrite } from '../../lib/accessUi';
 import { controllerMirrorApplies, type ControllerMirror } from '../controller/controllerApi';
+import { useAuth } from '../../contexts/AuthContext';
+import { useLastMotorState } from '../../lib/lastMotor';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -105,6 +107,9 @@ const hhmm = (ms: number) => {
 };
 
 const ActiveFamilyStrip: React.FC = () => {
+  const { user, enforced, isAdmin } = useAuth();
+  const identity = user?.email?.trim().toLowerCase() ?? null;
+  const lastMotor = useLastMotorState();
   const [ctx, setCtx] = useState<Ctx | null>(null);
   const liveGeometry = useMotorStore(s => s.geometry) as Record<string, unknown>;
   const [busy, setBusy] = useState(false);
@@ -120,7 +125,15 @@ const ActiveFamilyStrip: React.FC = () => {
   // ticks so the drift marker re-evaluates while the user types in the panel
   const [, setTick] = useState(0);
 
-  const load = () => fetch(`${API}/api/family/context`)
+  const load = () => {
+    if (enforced && identity && !isAdmin) {
+      const selection = lastMotor.email === identity && lastMotor.status === 'loaded'
+        ? lastMotor.selection : null;
+      setCtx(selection ? { active: true, die: selection.die, config: selection.config,
+        duty: selection.duty, can_write: false } : { active: false, can_write: false });
+      return Promise.resolve();
+    }
+    return fetch(`${API}/api/family/context`)
     .then(r => r.json()).then((j0: Ctx) => {
       // The server's can_write is true for every registered account (own
       // workspace); the strip's writer controls and the follower are for a
@@ -129,18 +142,9 @@ const ActiveFamilyStrip: React.FC = () => {
       // Ordinary user (no write rights): the server context is the OWNER's
       // machine, not this client's.  When the user has ▶-copied a duty, the
       // strip names THEIR copy from local context instead.
-      if (!j?.can_write) {
-        try {
-          const loc = JSON.parse(localStorage.getItem('family.localContext') || 'null');
-          if (loc?.die && loc?.config) {
-            setCtx({ active: true, die: loc.die, config: loc.config,
-                     duty: loc.duty ?? null, can_write: false });
-            return;
-          }
-        } catch { /* fall through to the server context */ }
-      }
       setCtx(j);
     }).catch(() => setCtx(null));
+  };
   useEffect(() => {
     load();
     const onChange = () => { void load(); };
@@ -163,7 +167,7 @@ const ActiveFamilyStrip: React.FC = () => {
       window.removeEventListener('sim-operating-point', onOp);
       clearInterval(id);
     };
-  }, []);
+  }, [identity, enforced, isAdmin, lastMotor]);
 
   // ── FOLLOW a machine loaded in another browser ──────────────────────────────
   // The header already showed the new die; the Electromagnetic panel did not

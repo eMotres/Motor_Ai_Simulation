@@ -236,6 +236,8 @@
     "noModelBody": "This machine has no FEM-characterised passport, so there is nothing to scale — the tuner will not compute or show any numbers borrowed from another machine.",
     "noModelDraft": " Run a simulation on this draft to build one.",
     "noModelLoaded": " Run a simulation and build its passport (Admin → Motors → Generate passport) before tuning it here.",
+    "noSavedMotor": "No motor is loaded for this account. Load one from Motors to restore it here.",
+    "savedMotorUnavailable": "The saved motor {selection} is no longer available to this account. Choose an accessible motor from Motors.",
     "bannerDraft": "Agent draft {name} by {client} — from {die} / {config}: L {L} mm, {I} A, {rpm} rpm{conn}.",
     "bannerConn": ", {conn}",
     "bannerOpenHint": " Click “{button}” to load it below — your open machine stays as it is.",

@@ -60,9 +60,21 @@ def k_table(full: Path) -> Dict[str, Any]:
     lsf = ((sb.get("long_stack_honesty_test") or {}).get("the_inductive_end_effect_factor") or {})
     a, b = lsf.get("fit_a_uH_per_mm"), lsf.get("fit_b_uH")
     kT12 = (sb.get("torque") or {}).get("k_T")
+    import re
     rows: List[Dict[str, Any]] = []
-    Ls = sorted({float(p.stem.split("_L")[-1]) for p in full.glob("stage_a_L*.json")}
-                | {float(p.stem.split("_L")[-1]) for p in full.glob("stage_d_L*.json")})
+    rx = re.compile(r"^stage_[ad]_L(\d+(?:\.\d+)?)$")
+    Ls = sorted({float(m.group(1)) for p in full.glob("stage_[ad]_L*.json")
+                 for m in [rx.match(p.stem)] if m})
+    # axial-mesh sensitivity of k_T: the 5-layer runs kept beside the
+    # scaled-mesh ones (stage_d_L<L>_n5.json)
+    mesh_check = []
+    for p in sorted(full.glob("stage_d_L*_n5.json")):
+        L = float(p.stem.split("_L")[1].split("_")[0])
+        a5, an = _load(p) or {}, _load(full / ("stage_d_L%g.json" % L)) or {}
+        if a5.get("k_T") and an.get("k_T"):
+            mesh_check.append({"stack_mm": L, "k_T_n5": a5["k_T"], "k_T": an["k_T"],
+                               "n_stack": (an.get("mesh") or {}).get("n_stack"),
+                               "diff_pct": 100 * (an["k_T"] / a5["k_T"] - 1)})
     for L in Ls:
         sa = _load(full / ("stage_a_L%g.json" % L)) or {}
         sd = _load(full / ("stage_d_L%g.json" % L)) or {}
@@ -77,13 +89,21 @@ def k_table(full: Path) -> Dict[str, Any]:
              "k_T_dm_total": sd.get("k_T_quoted_dm_total"),
              "k_T_error": sd.get("k_T_error"),
              "stage_d_s_per_position": sd.get("s_per_position"),
-             "k_L": ((a * L + b) / (a * L)) if (a and b) else None}
-        r["source"] = ("Stage A L=%g mm (own run, 2-D leg %s)" % (L, r["two_d_verdict"])
+             "k_L": ((a * L + b) / (a * L)) if (a and b) else None,
+             "stage_d_n_stack": (sd.get("mesh") or {}).get("n_stack", 5) if sd else None,
+             "mid_over_2d": two.get("ratio_3d_mid_over_2d")}
+        chk = ""
+        if r["two_d_verdict"] == "FAIL" and r["mid_over_2d"]:
+            chk = (" — self-check FAIL: 3-D mid-plane %.1f %% below 2-D (2 %% gate); on a "
+                   "short stack the end fringing reaches the mid-plane, value kept, flagged"
+                   % (100 * (1 - r["mid_over_2d"])))
+        r["source"] = ("Stage A L=%g mm (own run, 2-D leg %s%s)" % (L, r["two_d_verdict"], chk)
                        if sa else "no Stage A run") + \
             ("; Stage D k_T (co-energy, ±1 shift)" if sd.get("k_T") else
              ("; Stage D FAILED: %s" % sd.get("k_T_error") if sd else "; no Stage D run"))
         rows.append(r)
-    return {"rows": rows, "k_L_law": {"a_uH_per_mm": a, "b_uH": b,
+    return {"rows": rows, "k_T_axial_mesh_check": mesh_check,
+            "k_L_law": {"a_uH_per_mm": a, "b_uH": b,
                                        "source": "Stage B long-stack test, earlier geometry "
                                                  "(config/end_effect_3d.json) — inherited"},
             "k_T_inherited_12mm": kT12}
@@ -154,10 +174,15 @@ def end3d_block(tab: Dict[str, Any], L0: float, geo_sig: Optional[str]) -> Dict[
 
 def k_table_html(tab: Dict[str, Any]) -> str:
     rows = [[r["stack_mm"], r.get("k_psi"), r.get("k_T"), r.get("k_L"),
-             r.get("two_d_verdict"), Hh.H(Hh.esc(r["source"]))] for r in tab["rows"]]
+             r.get("two_d_verdict"), r.get("stage_d_n_stack"),
+             Hh.H(Hh.esc(r["source"]))] for r in tab["rows"]]
+    mc = "; ".join("%g mm: %.5f (5 layers) vs %.5f (%s layers), %+.3f %%"
+                   % (m["stack_mm"], m["k_T_n5"], m["k_T"], m["n_stack"], m["diff_pct"])
+                   for m in tab.get("k_T_axial_mesh_check") or [])
     return ("<h3>k(L) — what Configure's length slider reads</h3>"
             + Hh.table(["stack mm", "k_ψ (Stage A)", "k_T (Stage D)", "k_L (law)",
-                        "3-D/2-D check", "basis"], rows))
+                        "3-D/2-D check", "D axial layers", "basis"], rows)
+            + ('<p class="note">k_T axial-mesh check: %s.</p>' % Hh.esc(mc) if mc else ""))
 
 
 def main(argv=None) -> int:

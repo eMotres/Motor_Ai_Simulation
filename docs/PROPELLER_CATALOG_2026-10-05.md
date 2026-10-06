@@ -126,3 +126,21 @@ API, check `GET /api/propellers/cooling-options?die=CIANO14 40 new`.
 - The housing is treated as at most as hot as the winding limit: above it the housing tile reads `> 180`.
 - PWM extra loss heats the housing but is not put on the winding or the magnet hot-spot (its location is unknown).
 - Server install is unchanged: copy `config/propellers/` and `config/cooling_options.yaml` into `<shared>/`.
+
+## Ø85 additions (2026-10-05, branch feat/passport-d85)
+
+Die CIANO28 85 20SW1200 / L13 (Ø85, 12S) runs ~1000-2400 rpm at up to ~9 N·m, so the 10-13 in
+props are far too light. Added from T-Motor's own pages (torque columns published, access
+2026-10-05), all `torque_measured`:
+
+| id | geometry (product page) | test table(s) | tested rpm | fit rms C_T / C_P |
+|---|---|---|---|---|
+| `tmotor_g30x10_5` | 30×10.5 in, 97±5 g/blade, 33 kg, opt. 1300-3000 rpm | U13 II KV65, 99.5 V | 2679-4654 | 0.7 % / 2.4 % |
+| `tmotor_g32x11` | 32×11 in, 107±5 g/blade, 35 kg, opt. 1200-3000 rpm (ligpower.com, T-Motor's store) | U13 II KV65, 99.4 V (fit); U13 II KV130, 48 V (reference only) | 2485-4397 | 0.7 % / 1.1 % |
+| `tmotor_g36x11_5` | 36×11.5 in, 193 g/blade, 45 kg, opt. 1000-2800 rpm | U15 II KV100, 60 V | 2595-4328 | 0.9 % / 1.3 % |
+| `tmotor_g40x13_1` | 40×13.1 in, 237 g/blade, 60 kg, opt. 1000-2800 rpm | U15 II KV80 50 / 60 V, KV100 50 V | 1843-3546 | 1.3 % / 2.7 % |
+
+Rejected: pooling the G32×11 KV130/48 V table — its C_T is ~20 % and C_P ~15 % below the KV65 table
+of the same page at the same rpm (pooled fit 11 % rms); stored with `use_in_fit: false`, as the
+older-CF-label tables are. Below each tested range the coefficients are held at the edge value and
+flagged `extrapolated` (only the G40 is tested down to this motor's speeds).

@@ -1,0 +1,1435 @@
+{
+ "baseline_runs": [
+  {
+   "code_commit": "aadcb00",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 288,
+    "sha256": "5ac48b0c4fdf454e53ff57cd9adf8b15a55032a350158eb6e8490d292542755b"
+   },
+   "image_digest": "sha256:6ec5e76514c7959cf583ce57f5656680f9336b1bf368e3ef7ab1089ebfe46fa7",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d85/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "SB_NO_WARM_CACHE": "1",
+    "SHARED_ROOT": "/work/shared",
+    "WORKSPACES_ROOT": "/work/wsroot",
+    "MKL_NUM_THREADS": "1",
+    "OMP_NUM_THREADS": "1",
+    "OPENBLAS_NUM_THREADS": "1",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L13/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L13",
+    "stages": "calib,probe",
+    "workers": 6,
+    "spec": "/work/code/config/passport_specs/CIANO28_85_20SW1200.yaml",
+    "started": "2026-10-05T19:36:28+0000"
+   },
+   "baseline_sig": "32de2bca8c24fda1be16a7c01e1724a0b781f3ed57c45d8dd6b05c3d48d1fbaf"
+  },
+  {
+   "code_commit": "0031447",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 288,
+    "sha256": "133c94f74dbdd17525509df53224d00ac8daf58e6cb1994e9f6507b84317e0ae"
+   },
+   "image_digest": "sha256:6ec5e76514c7959cf583ce57f5656680f9336b1bf368e3ef7ab1089ebfe46fa7",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d85/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "SHARED_ROOT": "/work/shared",
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "OPENBLAS_NUM_THREADS": "1",
+    "WORKSPACES_ROOT": "/work/wsroot",
+    "MKL_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "OMP_NUM_THREADS": "1",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L13/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L13",
+    "stages": "hot,demag,cold,loss,extra,checks",
+    "workers": 6,
+    "spec": "/work/code/config/passport_specs/CIANO28_85_20SW1200.yaml",
+    "started": "2026-10-05T20:10:43+0000"
+   },
+   "baseline_sig": "61a99ae71c032794835b6386b416a8da19578f977d15c6b6a190a9187ccf982c"
+  },
+  {
+   "code_commit": "0031447",
+   "code_dirty": false,
+   "source_tree": {
+    "root": "/work/code/src",
+    "n_files": 288,
+    "sha256": "133c94f74dbdd17525509df53224d00ac8daf58e6cb1994e9f6507b84317e0ae"
+   },
+   "image_digest": "sha256:6ec5e76514c7959cf583ce57f5656680f9336b1bf368e3ef7ab1089ebfe46fa7",
+   "mounts": {
+    "/work": "/opt/motres/compute/passport-d85/work"
+   },
+   "python": "3.11.16",
+   "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.41",
+   "libs": {
+    "numpy": "2.4.4",
+    "scipy": "1.17.1",
+    "scikit-fem": "12.0.1",
+    "pypardiso": "0.4.7",
+    "netgen-mesher": "6.2.2607",
+    "mkl": "2026.1.0",
+    "gmsh": "4.15.2",
+    "PyYAML": "6.0.3",
+    "shapely": "2.1.2"
+   },
+   "blas": {
+    "blas": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    },
+    "lapack": {
+     "name": "scipy-openblas",
+     "found": true,
+     "version": "0.3.31.188.0",
+     "detection method": "pkgconfig",
+     "include directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/include",
+     "lib directory": "/opt/_internal/cpython-3.11.14/lib/python3.11/site-packages/scipy_openblas64/lib",
+     "openblas configuration": "OpenBLAS 0.3.31.188.0  USE64BITINT DYNAMIC_ARCH NO_AFFINITY Haswell MAX_THREADS=64",
+     "pc file directory": "/project/.openblas"
+    }
+   },
+   "mesher": {
+    "backend": "netgen",
+    "gmsh": "4.15.2",
+    "netgen": "6.2.2607"
+   },
+   "env": {
+    "SHARED_ROOT": "/work/shared",
+    "MKL_THREADING_LAYER": "SEQUENTIAL",
+    "OPENBLAS_NUM_THREADS": "1",
+    "WORKSPACES_ROOT": "/work/wsroot",
+    "MKL_NUM_THREADS": "1",
+    "SB_NO_WARM_CACHE": "1",
+    "OMP_NUM_THREADS": "1",
+    "MOTOR_AI_SIM_CONFIG": "/work/ws_L13/motor_config.yaml"
+   },
+   "cpu_count": 16,
+   "solver_settings": {
+    "element_order": 2,
+    "torque_method": "coulomb",
+    "eddy_method": "tdm (solver default since 3ba0f9b)",
+    "tdm_demag": "full (one-period ratchet pre-pass)",
+    "nonlinear": "Newton, resid tol per solver default"
+   },
+   "invocation": {
+    "cmd": "run",
+    "machine": "L13",
+    "stages": "refine,loss2,loss3",
+    "workers": 3,
+    "spec": "/work/code5/config/passport_specs/CIANO28_85_20SW1200.yaml",
+    "started": "2026-10-06T00:23:05+0000"
+   },
+   "baseline_sig": "61a99ae71c032794835b6386b416a8da19578f977d15c6b6a190a9187ccf982c"
+  }
+ ],
+ "daxis_deg": 60.01,
+ "daxis_source": "calibrated",
+ "stage_wall_s": {
+  "calib": 163.79958391189575,
+  "probe": 1611.5464403629303,
+  "hot": 1192.3563251495361,
+  "demag": 5494.431851148605,
+  "cold": 575.251877784729,
+  "loss": 4615.755250453949,
+  "extra": 303.79863953590393,
+  "checks": 2891.9694349765778,
+  "refine": 106.18500280380249,
+  "loss2": 0.7016603946685791,
+  "loss3": 3570.1142563819885
+ },
+ "probe": {
+  "probe_static60": {
+   "wall_s": 16.491859197616577,
+   "T": 5.238298503333763,
+   "gap_layers": 1.0,
+   "gap_refinement": {
+    "applied": false,
+    "gate_rel_to_ripple_scale": 0.05,
+    "gap_layers_per_side": 1.0,
+    "self_check_rel_to_ripple_scale": 0.03179139417420515,
+    "eddy_unsettled": false,
+    "persist_gap_layers": null
+   },
+   "eddy_method": null,
+   "P_loss": 224.23010223999927
+  },
+  "probe_static_full": {
+   "wall_s": 79.8689615726471,
+   "T": 5.238298597292575,
+   "gap_layers": 1.0,
+   "gap_refinement": {
+    "applied": false,
+    "gate_rel_to_ripple_scale": 0.05,
+    "gap_layers_per_side": 1.0,
+    "self_check_rel_to_ripple_scale": 0.031791295444000015,
+    "eddy_unsettled": false,
+    "persist_gap_layers": null
+   },
+   "eddy_method": null,
+   "P_loss": 208.07644766756295
+  },
+  "probe_loss": {
+   "wall_s": 1611.0657098293304,
+   "T": 4.4406303317207625,
+   "gap_layers": 1.0,
+   "gap_refinement": {
+    "applied": false,
+    "gate_rel_to_ripple_scale": 0.05,
+    "gap_layers_per_side": 1.0,
+    "self_check_rel_to_ripple_scale": 0.017126098231958962,
+    "eddy_unsettled": false,
+    "persist_gap_layers": null
+   },
+   "eddy_method": "tdm",
+   "P_loss": 208.48032109310054
+  }
+ },
+ "gap_layers_static": 1.0,
+ "gap_layers_reason": "duty mesh.gapLayers = 1/side.  Static map: 1/side \u2014 the deployed gap rule refined the full-period static probe (144 steps/period) to 1/side (Coulomb ring self-check gate 5 % of the ripple scale); the 60\u00b0 window passed at 1.  Loss runs: duty 1/side, rule on (the TDM rated probe ended at 1).",
+ "hot_mtpa": [
+  {
+   "fI": 0.25,
+   "I": 6.47,
+   "gamma_mtpa": 0.05,
+   "T_parabola": 1.3693751037423116,
+   "conf_id": "hot_I0.25_g+0.05",
+   "bracket": [
+    -5.0,
+    0.0,
+    5.0
+   ],
+   "T_bracket": [
+    1.3638438570945357,
+    1.3693745652915428,
+    1.3640599986514645
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 1.3693785903006948,
+   "vertex_vs_parabola_pct": 0.00025460944730090637,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 0.5,
+   "I": 12.94,
+   "gamma_mtpa": 0.47,
+   "T_parabola": 2.714070376709863,
+   "conf_id": "hot_I0.5_g+0.47",
+   "bracket": [
+    -4.95,
+    0.05,
+    5.05
+   ],
+   "T_bracket": [
+    2.7014042498617035,
+    2.7139947268720097,
+    2.7050171386122663
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 2.714081896143042,
+   "vertex_vs_parabola_pct": 0.0004244338421800829,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 0.75,
+   "I": 19.41,
+   "gamma_mtpa": 0.88,
+   "T_parabola": 4.012764137528999,
+   "conf_id": "hot_I0.75_g+0.88",
+   "bracket": [
+    -4.53,
+    0.47,
+    5.47
+   ],
+   "T_bracket": [
+    3.993407240726213,
+    4.012654112268755,
+    3.998804601610749
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 4.012778172932086,
+   "vertex_vs_parabola_pct": 0.000349768952440748,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 1.0,
+   "I": 25.88,
+   "gamma_mtpa": 1.52,
+   "T_parabola": 5.249217264800917,
+   "conf_id": "hot_I1_g+1.52",
+   "bracket": [
+    -4.12,
+    0.88,
+    5.88
+   ],
+   "T_bracket": [
+    5.220122916107242,
+    5.248839560020065,
+    5.231872006242852
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 5.249286491386879,
+   "vertex_vs_parabola_pct": 0.0013187982601999904,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 1.5,
+   "I": 38.82,
+   "gamma_mtpa": 4.2,
+   "T_parabola": 7.489293917178984,
+   "conf_id": "hot_I1.5_g+4.2",
+   "bracket": [
+    -3.48,
+    1.52,
+    6.52,
+    11.52
+   ],
+   "T_bracket": [
+    7.40984722976064,
+    7.4781471890860045,
+    7.480903977822385,
+    7.405905058883426
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 7.488429669830264,
+   "vertex_vs_parabola_pct": -0.011539770748451108,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 2.0,
+   "I": 51.76,
+   "gamma_mtpa": 6.73,
+   "T_parabola": 9.31958101778743,
+   "conf_id": "hot_I2_g+6.73",
+   "bracket": [
+    -5.0,
+    -0.8,
+    4.2,
+    9.2,
+    14.2
+   ],
+   "T_bracket": [
+    9.10866409800816,
+    9.229153497891014,
+    9.308247835935221,
+    9.30883143866153,
+    9.221099423609537
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 9.31892622725729,
+   "vertex_vs_parabola_pct": -0.007025965318507447,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 2.5,
+   "I": 64.7,
+   "gamma_mtpa": 7.77,
+   "T_parabola": 10.747369178826345,
+   "conf_id": "hot_I2.5_g+7.77",
+   "bracket": [
+    -5.0,
+    1.73,
+    6.73,
+    11.73
+   ],
+   "T_bracket": [
+    10.471873923648948,
+    10.68302950715786,
+    10.745469684398918,
+    10.719651497389654
+   ],
+   "parabola_bracketed": true,
+   "T_fem_vertex": 10.747629005995298,
+   "vertex_vs_parabola_pct": 0.0024175885710286706,
+   "vertex_ge_samples": true
+  }
+ ],
+ "demag_knee": {
+  "threshold_br_kept_pct": 99.5,
+  "rule": "first 99.5 % Br-retention crossing on the hot MTPA line (the existing tuner's knee rule)",
+  "mtpa_retention": [
+   [
+    25.88,
+    90.797
+   ],
+   [
+    38.82,
+    87.641
+   ],
+   [
+    51.76,
+    84.57
+   ],
+   [
+    64.7,
+    82.746
+   ]
+  ],
+  "I_knee_rms": 1.4060632402477449,
+  "below_first_probe": true,
+  "probes": {
+   "dm_I1_gmtpa": {
+    "fI": 1.0,
+    "gamma": 1.52,
+    "demag": {
+     "per_magnet_spread_pct": 1.016,
+     "bh_kept_vol_pct": 88.151,
+     "bh_loss_pct": 11.849,
+     "br_kept_vol_pct": 90.797,
+     "loss_pct": 9.203,
+     "area_derated_pct": 17.31,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 6635,
+      "magnet_tag": 106,
+      "x_mm": 4.012,
+      "y_mm": 31.957,
+      "r_mm": 32.207,
+      "theta_deg": 82.84,
+      "element_area_pct": 0.0062,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I1.5_gmtpa": {
+    "fI": 1.5,
+    "gamma": 4.2,
+    "demag": {
+     "per_magnet_spread_pct": 1.905,
+     "bh_kept_vol_pct": 84.533,
+     "bh_loss_pct": 15.467,
+     "br_kept_vol_pct": 87.641,
+     "loss_pct": 12.359,
+     "area_derated_pct": 22.95,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 6642,
+      "magnet_tag": 106,
+      "x_mm": 4.335,
+      "y_mm": 31.443,
+      "r_mm": 31.741,
+      "theta_deg": 82.15,
+      "element_area_pct": 0.0263,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I2_gmtpa": {
+    "fI": 2.0,
+    "gamma": 6.73,
+    "demag": {
+     "per_magnet_spread_pct": 1.591,
+     "bh_kept_vol_pct": 80.929,
+     "bh_loss_pct": 19.071,
+     "br_kept_vol_pct": 84.57,
+     "loss_pct": 15.43,
+     "area_derated_pct": 26.64,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 6371,
+      "magnet_tag": 106,
+      "x_mm": 4.09,
+      "y_mm": 31.656,
+      "r_mm": 31.919,
+      "theta_deg": 82.64,
+      "element_area_pct": 0.0161,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I2.5_gmtpa": {
+    "fI": 2.5,
+    "gamma": 7.77,
+    "demag": {
+     "per_magnet_spread_pct": 2.119,
+     "bh_kept_vol_pct": 78.864,
+     "bh_loss_pct": 21.136,
+     "br_kept_vol_pct": 82.746,
+     "loss_pct": 17.254,
+     "area_derated_pct": 30.8,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 2443,
+      "magnet_tag": 102,
+      "x_mm": 27.245,
+      "y_mm": 16.82,
+      "r_mm": 32.019,
+      "theta_deg": 31.69,
+      "element_area_pct": 0.0237,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": true
+   },
+   "dm_I1.5_g+80": {
+    "fI": 1.5,
+    "gamma": 80.0,
+    "demag": {
+     "per_magnet_spread_pct": 2.004,
+     "bh_kept_vol_pct": 83.8,
+     "bh_loss_pct": 16.2,
+     "br_kept_vol_pct": 87.086,
+     "loss_pct": 12.914,
+     "area_derated_pct": 25.17,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 6535,
+      "magnet_tag": 106,
+      "x_mm": 3.247,
+      "y_mm": 31.81,
+      "r_mm": 31.975,
+      "theta_deg": 84.17,
+      "element_area_pct": 0.0359,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": false
+   },
+   "dm_I2.5_g+80": {
+    "fI": 2.5,
+    "gamma": 80.0,
+    "demag": {
+     "per_magnet_spread_pct": 2.701,
+     "bh_kept_vol_pct": 71.823,
+     "bh_loss_pct": 28.177,
+     "br_kept_vol_pct": 77.395,
+     "loss_pct": 22.605,
+     "area_derated_pct": 42.98,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 5593,
+      "magnet_tag": 105,
+      "x_mm": 10.736,
+      "y_mm": 28.892,
+      "r_mm": 30.822,
+      "theta_deg": 69.61,
+      "element_area_pct": 0.0722,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": false
+   },
+   "dm_I1_g+90": {
+    "fI": 1.0,
+    "gamma": 90.0,
+    "demag": {
+     "per_magnet_spread_pct": 0.942,
+     "bh_kept_vol_pct": 88.728,
+     "bh_loss_pct": 11.272,
+     "br_kept_vol_pct": 91.085,
+     "loss_pct": 8.915,
+     "area_derated_pct": 17.25,
+     "br_corner": {
+      "flag": "corner",
+      "br_pct": 11.7,
+      "element": 1648,
+      "magnet_tag": 101,
+      "x_mm": 30.492,
+      "y_mm": 9.896,
+      "r_mm": 32.058,
+      "theta_deg": 17.98,
+      "element_area_pct": 0.0098,
+      "note": "Worst single magnet element: a sharp-corner value that does not converge with mesh refinement (docs/NO_FILTERS_2026-09-24.md \u00a73). A corner diagnostic, not the magnet's figure; the magnet's figure is the volume-weighted Br kept."
+     }
+    },
+    "settled": false
+   }
+  }
+ },
+ "cold_mtpa": [
+  {
+   "fI": 0.25,
+   "I": 6.47,
+   "gamma_mtpa": 0.39,
+   "T_parabola": 1.4457252781951293,
+   "conf_id": "cold_I0.25_g+0.39",
+   "bracket": [
+    -4.95,
+    0.05,
+    5.05
+   ],
+   "T_bracket": [
+    1.4392385476199543,
+    1.4456990915009917,
+    1.4407823931133288
+   ],
+   "T_fem_vertex": 1.4457508450688417,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 0.5,
+   "I": 12.94,
+   "gamma_mtpa": 0.96,
+   "T_parabola": 2.8786625513486186,
+   "conf_id": "cold_I0.5_g+0.96",
+   "bracket": [
+    -4.53,
+    0.47,
+    5.47
+   ],
+   "T_bracket": [
+    2.8646109228807304,
+    2.8785505336572808,
+    2.869181267770564
+   ],
+   "T_fem_vertex": 2.878726922349152,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 1.0,
+   "I": 25.88,
+   "gamma_mtpa": 1.95,
+   "T_parabola": 5.664169800307784,
+   "conf_id": "cold_I1_g+1.95",
+   "bracket": [
+    -3.48,
+    1.52,
+    6.52
+   ],
+   "T_bracket": [
+    5.635761753908571,
+    5.663992335253106,
+    5.644033150178831
+   ],
+   "T_fem_vertex": 5.664177013214104,
+   "vertex_ge_samples": true
+  },
+  {
+   "fI": 1.5,
+   "I": 38.82,
+   "gamma_mtpa": 3.23,
+   "T_parabola": 8.230000862429668,
+   "conf_id": "cold_I1.5_g+3.23",
+   "bracket": [
+    -0.8,
+    4.2,
+    9.2
+   ],
+   "T_bracket": [
+    8.204924975179816,
+    8.228530302687668,
+    8.174752626196602
+   ],
+   "T_fem_vertex": 8.229830373899137,
+   "vertex_ge_samples": true
+  }
+ ],
+ "cold_sc_plan": {
+  "psi_pm_cold": 0.007518334946992028,
+  "Ld_chord_hot_axis_H": 0.00011667398395203397,
+  "I_pred_rms": 45.56513323857565
+ },
+ "loss_plan": {
+  "bus": "nom",
+  "v_dc": 44.4,
+  "m": 0.89,
+  "v_phase_limit_V": 22.814573237297253,
+  "R_hot_ohm": 0.1014787984062176,
+  "I_peak_rms": 45.962,
+  "I_peak_source": "owner peak duty",
+  "n_mech_limit_rpm": Infinity,
+  "n_mech_source": "no bearing named on the configuration \u2014 no bearing speed limit (stated, not a measured +inf)",
+  "n_elec_limit_rpm": 9485.364128949572,
+  "n_max_rpm": 9485.364128949572,
+  "speeds": [
+   250.0,
+   500.0,
+   1000.0,
+   1500.0,
+   2000.0,
+   9485.0
+  ],
+  "currents": [
+   12.94,
+   25.88,
+   45.962
+  ],
+  "points": [
+   {
+    "rpm": 250.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n250_I0.5"
+   },
+   {
+    "rpm": 250.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n250_I1"
+   },
+   {
+    "rpm": 250.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n250_I1.776"
+   },
+   {
+    "rpm": 500.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n500_I0.5"
+   },
+   {
+    "rpm": 500.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n500_I1"
+   },
+   {
+    "rpm": 500.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n500_I1.776"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n1000_I0.5"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n1000_I1"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n1000_I1.776"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n1500_I0.5"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n1500_I1"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 45.962,
+    "gamma": 12.150829515596225,
+    "mode": "field weakening",
+    "id": "loss_n1500_I1.776"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 12.94,
+    "gamma": 2.840098466535481,
+    "mode": "field weakening",
+    "id": "loss_n2000_I0.5"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 25.88,
+    "gamma": 19.435792314280828,
+    "mode": "field weakening",
+    "id": "loss_n2000_I1"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 45.962,
+    "gamma": 36.46723611846738,
+    "mode": "field weakening",
+    "id": "loss_n2000_I1.776"
+   },
+   {
+    "rpm": 9485.0,
+    "I": 12.94,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 9485.0,
+    "I": 25.88,
+    "gamma": null,
+    "mode": "needs deeper field weakening than characterised (gamma > 80\u00b0)"
+   },
+   {
+    "rpm": 9485.0,
+    "I": 45.962,
+    "gamma": 79.99944926848265,
+    "mode": "field weakening",
+    "id": "loss_n9485_I1.776"
+   }
+  ]
+ },
+ "mech": {
+  "250.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  },
+  "500.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  },
+  "1000.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  },
+  "1500.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  },
+  "2000.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  },
+  "9485.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  },
+  "350.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  },
+  "750.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  },
+  "1250.0": {
+   "P_W": null,
+   "note": "no bearings named \u2014 mechanical loss UNKNOWN (never 0)"
+  }
+ },
+ "small_signal": {
+  "hot": {
+   "Ld_H": 8.184357367193544e-05,
+   "Lq_H": 8.464846635720851e-05,
+   "I_rms": 2.0,
+   "method": "symmetric \u00b12 A pairs on the d and q axes, \u0394psi/\u0394i (true small-signal differential at I \u2248 0; bench/LCR equivalent)",
+   "runs": [
+    "hot_ss_g+0",
+    "hot_ss_g+180",
+    "hot_ss_g+90",
+    "hot_ss_g-90"
+   ]
+  },
+  "cold": {
+   "Ld_H": 6.368175509531543e-05,
+   "Lq_H": 7.18935006555761e-05,
+   "I_rms": 2.0,
+   "method": "symmetric \u00b12 A pairs on the d and q axes, \u0394psi/\u0394i (true small-signal differential at I \u2248 0; bench/LCR equivalent)",
+   "runs": [
+    "cold_ss_g+0",
+    "cold_ss_g+180",
+    "cold_ss_g+90",
+    "cold_ss_g-90"
+   ]
+  }
+ },
+ "checks_plan": {
+  "static": [
+   {
+    "id": "chk_ridge_0.375",
+    "I": 9.705,
+    "gamma": 0.26,
+    "role": "MTPA ridge between levels"
+   },
+   {
+    "id": "chk_ridge_0.875",
+    "I": 22.645,
+    "gamma": 1.2,
+    "role": "MTPA ridge between levels"
+   },
+   {
+    "id": "chk_ridge_1.25",
+    "I": 32.35,
+    "gamma": 2.8600000000000003,
+    "role": "MTPA ridge between levels"
+   },
+   {
+    "id": "chk_ridge_1.75",
+    "I": 45.29,
+    "gamma": 5.465,
+    "role": "MTPA ridge between levels"
+   },
+   {
+    "id": "chk_fw_1.25_72.5",
+    "I": 32.35,
+    "gamma": 72.5,
+    "role": "deep field weakening"
+   },
+   {
+    "id": "chk_fw_2.25_57.5",
+    "I": 58.23,
+    "gamma": 57.5,
+    "role": "deep field weakening"
+   },
+   {
+    "id": "chk_top_2.4_20",
+    "I": 62.111999999999995,
+    "gamma": 20.0,
+    "role": "highest current"
+   },
+   {
+    "id": "chk_top_2.25_42.5",
+    "I": 58.23,
+    "gamma": 42.5,
+    "role": "highest current"
+   },
+   {
+    "id": "chk_peak",
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "role": "peak current at its operating angle (mtpa)"
+   },
+   {
+    "id": "chk_duty_rated_g",
+    "I": 25.88,
+    "gamma": 2.0,
+    "role": "rated duty current at the duty's gamma"
+   }
+  ],
+  "loss": [
+   {
+    "id": "lchk_0.75n_0.75I",
+    "rpm": 750.0,
+    "I": 19.41,
+    "gamma": 0.88,
+    "mode": "mtpa",
+    "role": "mid loss grid"
+   },
+   {
+    "id": "lchk_0.35n_peak",
+    "rpm": 350.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "role": "low speed, peak current"
+   },
+   {
+    "id": "lchk_1.25n_mid",
+    "rpm": 1250.0,
+    "I": 35.921,
+    "gamma": 3.5995888717156106,
+    "mode": "mtpa",
+    "role": "between speed and current rows"
+   }
+  ]
+ },
+ "demag_limit_I_rms": 6.47,
+ "demag_limit_source": "PROVISIONAL cap for the loss3 grid (set before demagseq): at the 150 degC hot reference the settled TDM points keep 90.8 % Br at I0 and 93.6 % at 0.5 I0, so the owner <= 1 % torque-drop limit lies at or below 0.25 I0 (6.47 A); demagseq quantifies it. Grid = levels at or below the cap + the 0.25 I0 floor + 0.5 I0, I0, I_peak.",
+ "refinement": {
+  "points": [
+   [
+    2.0,
+    42.5
+   ],
+   [
+    2.0,
+    57.5
+   ],
+   [
+    2.5,
+    42.5
+   ],
+   [
+    2.5,
+    57.5
+   ]
+  ],
+  "reason": "first check pass: L20 (2.25\u00b7I0, 42.5\u00b0) \u03c8 +1.0 %, (2.25\u00b7I0, 57.5\u00b0) \u03c8 +0.52 % \u2014 FW arm 15\u00b0 too coarse at the top levels; checks themselves are NOT added to the grid"
+ },
+ "loss_plan2": {
+  "bus": "nom",
+  "v_dc": 44.4,
+  "m": 0.89,
+  "m_source": "default pending owner \u2014 controller project calc_notes \u00a72 (centred SVPWM, 1 \u00b5s min LS on-time + 0.1 \u00b5s dead time at 48 kHz)",
+  "v_phase_limit_V": 22.814573237297253,
+  "R_hot_ohm": 0.1014787984062176,
+  "I_peak_rms": 45.962,
+  "I_peak_source": "owner peak duty",
+  "n_mech_limit_rpm": Infinity,
+  "n_mech_source": "no bearing named on the configuration \u2014 no bearing speed limit (stated, not a measured +inf)",
+  "n_elec_limit_rpm": 9493.97916081515,
+  "n_max_rpm": 9493.97916081515,
+  "speeds": [
+   250.0,
+   500.0,
+   1000.0,
+   1500.0,
+   2000.0
+  ],
+  "currents": [
+   12.94,
+   25.88,
+   45.962
+  ],
+  "points": [
+   {
+    "rpm": 250.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n250_I0.5"
+   },
+   {
+    "rpm": 250.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n250_I1"
+   },
+   {
+    "rpm": 250.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n250_I1.776"
+   },
+   {
+    "rpm": 500.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n500_I0.5"
+   },
+   {
+    "rpm": 500.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n500_I1"
+   },
+   {
+    "rpm": 500.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n500_I1.776"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n1000_I0.5"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n1000_I1"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n1000_I1.776"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n1500_I0.5"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n1500_I1"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 45.962,
+    "gamma": 12.152465177028732,
+    "mode": "field weakening",
+    "id": "loss_n1500_I1.776"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 12.94,
+    "gamma": 2.8410905119512013,
+    "mode": "field weakening",
+    "id": "loss_n2000_I0.5"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 25.88,
+    "gamma": 19.41142052342114,
+    "mode": "field weakening",
+    "id": "loss_n2000_I1"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 45.962,
+    "gamma": 36.48338164279008,
+    "mode": "field weakening",
+    "id": "loss_n2000_I1.776"
+   }
+  ],
+  "checks": [
+   {
+    "rpm": 750.0,
+    "I": 19.41,
+    "gamma": 0.88,
+    "mode": "mtpa",
+    "role": "mid loss grid",
+    "id": "lchk_0.75n_0.75I"
+   },
+   {
+    "rpm": 350.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "role": "low speed, peak current",
+    "id": "lchk_0.35n_peak"
+   },
+   {
+    "rpm": 1250.0,
+    "I": 35.921,
+    "gamma": 3.5995888717156106,
+    "mode": "mtpa",
+    "role": "between speed and current rows",
+    "id": "lchk_1.25n_mid"
+   }
+  ]
+ },
+ "loss_plan3": {
+  "bus": "nom",
+  "v_dc": 44.4,
+  "m": 0.89,
+  "m_source": "default pending owner \u2014 controller project calc_notes \u00a72 (centred SVPWM, 1 \u00b5s min LS on-time + 0.1 \u00b5s dead time at 48 kHz)",
+  "v_phase_limit_V": 22.814573237297253,
+  "R_hot_ohm": 0.1014787984062176,
+  "I_peak_rms": 45.962,
+  "I_peak_source": "owner peak duty",
+  "n_mech_limit_rpm": Infinity,
+  "n_mech_source": "no bearing named on the configuration \u2014 no bearing speed limit (stated, not a measured +inf)",
+  "n_elec_limit_rpm": 9493.97916081515,
+  "n_max_rpm": 9493.97916081515,
+  "speeds": [
+   250.0,
+   500.0,
+   1000.0,
+   1500.0,
+   2000.0
+  ],
+  "currents": [
+   6.47,
+   12.94,
+   25.88,
+   45.962
+  ],
+  "points": [
+   {
+    "rpm": 250.0,
+    "I": 6.47,
+    "gamma": 0.05,
+    "mode": "mtpa",
+    "id": "loss3_n250_I0.25_g+0.05"
+   },
+   {
+    "rpm": 250.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n250_I0.5"
+   },
+   {
+    "rpm": 250.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n250_I1"
+   },
+   {
+    "rpm": 250.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n250_I1.776"
+   },
+   {
+    "rpm": 500.0,
+    "I": 6.47,
+    "gamma": 0.05,
+    "mode": "mtpa",
+    "id": "loss3_n500_I0.25_g+0.05"
+   },
+   {
+    "rpm": 500.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n500_I0.5"
+   },
+   {
+    "rpm": 500.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n500_I1"
+   },
+   {
+    "rpm": 500.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n500_I1.776"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 6.47,
+    "gamma": 0.05,
+    "mode": "mtpa",
+    "id": "loss3_n1000_I0.25_g+0.05"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n1000_I0.5"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n1000_I1"
+   },
+   {
+    "rpm": 1000.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "id": "loss_n1000_I1.776"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 6.47,
+    "gamma": 0.05,
+    "mode": "mtpa",
+    "id": "loss3_n1500_I0.25_g+0.05"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 12.94,
+    "gamma": 0.47,
+    "mode": "mtpa",
+    "id": "loss_n1500_I0.5"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 25.88,
+    "gamma": 1.52,
+    "mode": "mtpa",
+    "id": "loss_n1500_I1"
+   },
+   {
+    "rpm": 1500.0,
+    "I": 45.962,
+    "gamma": 12.152465177028732,
+    "mode": "field weakening",
+    "id": "loss_n1500_I1.776"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 6.47,
+    "gamma": 0.05,
+    "mode": "mtpa",
+    "id": "loss3_n2000_I0.25_g+0.05"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 12.94,
+    "gamma": 2.8410905119512013,
+    "mode": "field weakening",
+    "id": "loss_n2000_I0.5"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 25.88,
+    "gamma": 19.41142052342114,
+    "mode": "field weakening",
+    "id": "loss_n2000_I1"
+   },
+   {
+    "rpm": 2000.0,
+    "I": 45.962,
+    "gamma": 36.48338164279008,
+    "mode": "field weakening",
+    "id": "loss_n2000_I1.776"
+   }
+  ],
+  "checks": [
+   {
+    "rpm": 750.0,
+    "I": 19.41,
+    "gamma": 0.88,
+    "mode": "mtpa",
+    "role": "mid loss grid",
+    "id": "lchk_0.75n_0.75I"
+   },
+   {
+    "rpm": 350.0,
+    "I": 45.962,
+    "gamma": 5.596387944358579,
+    "mode": "mtpa",
+    "role": "low speed, peak current",
+    "id": "lchk_0.35n_peak"
+   },
+   {
+    "rpm": 1250.0,
+    "I": 35.921,
+    "gamma": 3.5995888717156106,
+    "mode": "mtpa",
+    "role": "between speed and current rows",
+    "id": "lchk_1.25n_mid"
+   }
+  ],
+  "current_cap_I_rms": 6.47,
+  "current_cap_source": "PROVISIONAL cap for the loss3 grid (set before demagseq): at the 150 degC hot reference the settled TDM points keep 90.8 % Br at I0 and 93.6 % at 0.5 I0, so the owner <= 1 % torque-drop limit lies at or below 0.25 I0 (6.47 A); demagseq quantifies it. Grid = levels at or below the cap + the 0.25 I0 floor + 0.5 I0, I0, I_peak.",
+  "extended": "2026-10-05: static current levels 0.25\u20262.5\u00b7I0 up to the demag current limit, every loss-grid speed"
+ }
+}

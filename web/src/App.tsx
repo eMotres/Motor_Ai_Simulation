@@ -49,6 +49,7 @@ import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
 import MaterialDetailView from './components/materials/MaterialDetailView';
 import WireStockTable from './components/materials/WireStockTable';
+import MaterialsCatalogPanel from './components/materials/MaterialsCatalogPanel';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
 import type { SelectedMaterial, MaterialCategory } from './components/materials/useMaterialsLibrary';
@@ -530,7 +531,8 @@ function App() {
       ) },
     { id: 'materials', label: 'Materials', order: 30, gate: 'fullUI', showViewer: true,
       render: () => (
-        <Box sx={{ display: 'flex', height: '100%' }}>
+        <MaterialsCatalogPanel materialView={
+          <Box sx={{ display: 'flex', height: '100%' }}>
           {/* Library tree — full-height column on the left */}
           <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid', borderColor: 'divider' }}>
             <MaterialsLibraryTree library={matLibrary} loading={matLoading} error={matError}
@@ -551,7 +553,8 @@ function App() {
                 onChanged={matReload} onSelect={setSelectedMaterial} />
             </Box>
           </Box>
-        </Box>
+          </Box>
+        } />
       ) },
     { id: 'mesh', label: 'Mesh', order: 40, panelId: 'mesh', gate: 'fullUI', showViewer: true,
       render: () => <MeshPanel /> },

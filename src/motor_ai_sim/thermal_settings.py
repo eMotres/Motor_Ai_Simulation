@@ -118,7 +118,9 @@ def cooling_fields(s: Mapping[str, Any]) -> Dict[str, Any]:
     because it is the same air.
     """
     ambient = _num(s.get("ambientT"), 40.0)
-    cool = _mode(s.get("coolMode"), COOL_MODES, "air")
+    requested_cool = _mode(s.get("coolMode"), COOL_MODES, "air")
+    source = str(s.get("airSpeedSource") or "manual").strip().lower()
+    cool = "air" if source == "propeller" else requested_cool
     bore = _mode(s.get("boreMode"), BORE_MODES, "none")
     liquid = cool == "liquid"
     bore_liquid = bore == "liquid"
@@ -141,7 +143,14 @@ def cooling_fields(s: Mapping[str, Any]) -> Dict[str, Any]:
     if cool == "manual":
         out["h_conv"] = _num(s.get("hConv"), 50.0)
     if cool == "air":
-        out["air_speed_mps"] = _num(s.get("airSpeed"), 0.0)
+        source = str(s.get("airSpeedSource") or "manual").strip().lower()
+        if source == "propeller":
+            propeller_id = str(s.get("propellerId") or "").strip()
+            out["air_speed_source"] = "propeller"
+            if propeller_id:
+                out["propeller_id"] = propeller_id
+        else:
+            out["air_speed_mps"] = _num(s.get("airSpeed"), 0.0)
     if liquid:
         out["fluid"] = str(s.get("fluid") or "water")
         # The inlet defaults to the AMBIENT rather than to a number of its own:
@@ -192,10 +201,17 @@ def cooling_issue(s: Mapping[str, Any]) -> Optional[str]:
     these by name anyway; saying it HERE means the orchestrator can refuse before
     it spends an electromagnetic run on a thermal solve that cannot answer.
     """
-    cool = _mode(s.get("coolMode"), COOL_MODES, "air")
+    requested_cool = _mode(s.get("coolMode"), COOL_MODES, "air")
+    source = str(s.get("airSpeedSource") or "manual").strip().lower()
+    if source not in ("manual", "propeller"):
+        return "air speed source must be manual or propeller"
+    cool = "air" if source == "propeller" else requested_cool
     bore = _mode(s.get("boreMode"), BORE_MODES, "none")
     if cool == "liquid" and not _num(s.get("flowLpm"), 0.0) > 0:
         return "coolant flow must be greater than 0 L/min"
+    if cool == "air" and str(s.get("airSpeedSource") or "manual").strip().lower() == "propeller" \
+            and not str(s.get("propellerId") or "").strip():
+        return "propeller slipstream cooling needs an assigned propeller ID"
     if cool == "manual" and not _num(s.get("hConv"), 0.0) > 0:
         return "h must be greater than 0 W/m²K"
     if bore == "liquid" and not _num(s.get("boreFlowLpm"), 0.0) > 0:
@@ -247,9 +263,13 @@ def cooling_words(c: Mapping[str, Any]) -> str:
         if str(c.get("end_faces") or "still") != "none":
             bits.append("end faces %s" % str(c.get("end_faces") or "still"))
     else:
-        v = _num(c.get("air_speed_mps"), 0.0)
-        bits.append("still air at %g °C" % amb if v <= 0.0
-                    else "air %g m/s at %g °C" % (v, amb))
+        if str(c.get("air_speed_source") or "manual") == "propeller":
+            bits.append("propeller %s slipstream at %g °C"
+                        % (str(c.get("propeller_id") or "(missing ID)"), amb))
+        else:
+            v = _num(c.get("air_speed_mps"), 0.0)
+            bits.append("still air at %g °C" % amb if v <= 0.0
+                        else "air %g m/s at %g °C" % (v, amb))
     if _num(c.get("mount_g_w_per_k"), 0.0) > 0.0:
         bits.append("mount %g W/K at %g °C"
                     % (_num(c.get("mount_g_w_per_k"), 0.0),
@@ -304,3 +324,77 @@ def thermal_panel_settings(authorization: Optional[str] = None) -> Dict[str, Any
         return dict(s) if isinstance(s, dict) else {}
     except Exception:  # noqa: BLE001 — a missing store is not a failed run
         return {}
+
+
+def propeller_cooling_context_issue(
+        settings: Mapping[str, Any], authorization: Optional[str] = None, *,
+        expected_die: Optional[str] = None,
+        expected_config: Optional[str] = None) -> Optional[str]:
+    """Refuse an unbound propeller source before any solver uses it.
+
+    The Thermal settings record is shared per account, while assigned props are
+    scoped to one loaded reference/configuration. This guard ties source + ID to
+    the authenticated account's current last-motor selection, active family
+    context, and the server's actual cooling allowlist. Pure
+    :func:`cooling_fields` intentionally remains a mapper; request entry points
+    call this before mapping.
+    """
+    if str(settings.get("airSpeedSource") or "manual").strip().lower() != "propeller":
+        return None
+    supplied = str(settings.get("propellerContextKey") or "").strip()
+    propeller_id = str(settings.get("propellerId") or "").strip()
+    if not supplied or not propeller_id:
+        return ("propeller cooling needs a current motor selection and an assigned "
+                "propeller; reload the motor and choose its propeller")
+    try:
+        from motor_ai_sim.routes.account import get_last_motor
+        current = get_last_motor(authorization=authorization) or {}
+        selection = current.get("selection")
+        email = str(current.get("user") or "").strip().lower()
+    except Exception:  # noqa: BLE001 — context lookup must fail closed
+        selection, email = None, ""
+    if not email or not isinstance(selection, Mapping):
+        return ("sign in and load the motor again before using propeller cooling")
+    die = str(selection.get("die") or "")
+    config = str(selection.get("config") or "")
+    ref_id = str(selection.get("ref_id") or "")
+    expected_key = "%s|%s|%s|%s" % (email, die, config, ref_id)
+    if supplied != expected_key:
+        return ("propeller selection belongs to a different motor or account; "
+                "reload the current motor and choose its assigned propeller")
+    if expected_die and die != str(expected_die):
+        return "propeller selection does not match this duty's die; load that motor first"
+    if expected_config and config != str(expected_config):
+        return "propeller selection does not match this duty's configuration; load that motor first"
+    try:
+        from motor_ai_sim.routes.family import _read_ctx
+        active_context = _read_ctx()
+    except Exception:  # noqa: BLE001 — released/unreadable context must fail closed
+        active_context = None
+    if not isinstance(active_context, Mapping) or not active_context.get("die"):
+        return ("the active motor-family context is unavailable or released; "
+                "load the motor family again before using propeller cooling")
+    active_die = str(active_context.get("die") or "")
+    active_config = str(active_context.get("config") or "")
+    if active_die != die or active_config != config:
+        return ("propeller selection does not match the active motor family; "
+                "reload the current motor and choose its assigned propeller")
+    if expected_die and active_die != str(expected_die):
+        return "propeller selection does not match this duty's die; load that motor first"
+    if expected_config and active_config != str(expected_config):
+        return "propeller selection does not match this duty's configuration; load that motor first"
+    try:
+        from motor_ai_sim.routes.propellers import get_cooling_options
+        allowed = get_cooling_options(die=die, config=config) or {}
+        ids = allowed.get("propellers") or []
+        details = allowed.get("propeller_details") or []
+        summary = next((p for p in details
+                        if isinstance(p, Mapping) and str(p.get("id") or "") == propeller_id), None)
+        if ("propeller_air" not in (allowed.get("cooling_options") or [])
+                or propeller_id not in ids or not summary
+                or summary.get("selectable") is not True):
+            return ("the chosen propeller is not usable for this motor/configuration; "
+                    "choose an assigned propeller in Thermal")
+    except Exception:  # noqa: BLE001 — missing allowlist is a refusal, not a guess
+        return "the assigned propeller list is unavailable; reload Thermal and try again"
+    return None

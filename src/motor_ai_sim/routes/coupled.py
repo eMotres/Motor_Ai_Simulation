@@ -4870,6 +4870,7 @@ def _run(body: Dict[str, Any],
     from motor_ai_sim.routes.thermal import RUNAWAY_C
     from motor_ai_sim.thermal_settings import (cooling_fields, cooling_issue,
                                                coupled_iteration_settings,
+                                               propeller_cooling_context_issue,
                                                thermal_panel_settings)
 
     # Per-request materials through the BODY, the kernel's transport: the router
@@ -4895,7 +4896,10 @@ def _run(body: Dict[str, Any],
     stored = thermal_panel_settings(authorization)
     raw = body.get("thermal_settings")
     settings = dict(raw) if isinstance(raw, dict) else dict(stored)
-
+    prop_issue = propeller_cooling_context_issue(settings, authorization)
+    if prop_issue:
+        raise _refuse(prop_issue, ["thermal_settings"],
+                      code="propeller_cooling_context")
     # From the EFFECTIVE settings, not the stored ones: a caller that sent its
     # own `thermal_settings` sent the Thermal tab's whole block, `maxIter`
     # included, and reading the iteration count from a different copy than the

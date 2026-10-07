@@ -47,7 +47,7 @@ import {
   driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, tempRowTiles, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
-  isPropellerCooled, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
+  isPropellerCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
   seriesAt, currentForTorque, tempLimits, judgeTemps, zoneGradient, zoneSamples, modelLabel, vendorLabel,
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
@@ -1013,15 +1013,17 @@ const ConfiguratorPanel: React.FC = () => {
   // air over the housing (so the temperatures follow).  Every propeller number is the backend's
   // (`/api/propellers/{id}/series`); here it is only interpolated.  "Manual load" gives the
   // current back to the engineer.
-  const cooled = isPropellerCooled(currentContext?.cooling);
+  const propellerOnly = isPropellerCooled(currentContext?.cooling);
+  const hasPropellerOption = hasPropellerCooling(currentContext?.cooling);
+  const hasPropellerControls = propellerOnly || hasPropellerOption;
   const [propList, setPropList] = useState<PropSummary[] | null>(null);
   useEffect(() => {
-    if (!cooled) return;
+    if (!hasPropellerControls) return;
     let dead = false;
     const go = () => { void fetchPropellers().then((l) => { if (dead) return; if (l) setPropList(l); else setTimeout(go, 3000); }); };
     go();
     return () => { dead = true; };
-  }, [cooled]);
+  }, [hasPropellerControls]);
   const allowedProps = useMemo(() => allowedPropellers(currentContext?.cooling, propList ?? []), [currentContext, propList]);
   const coolKey = coolChoiceKey(identity, refId, baseConfig);
   const [coolChoice, setCoolChoice] = useState<CoolChoice>(() => {
@@ -1035,10 +1037,16 @@ const ConfiguratorPanel: React.FC = () => {
   /** the propeller a configuration opens on (config/cooling_options.yaml `defaults`; else the first with torque data) */
   const propDefaultFor = (config: string | null) => defaultPropellerFor(currentContext?.cooling, config, allowedProps);
   // The user's own pick wins; with none the picker shows the default of the configuration in use.
-  const propId = cooled ? effectivePropeller(coolChoice, allowedProps, propDefaultFor(baseConfig)) : null;
-  const propSummary = allowedProps.find((x) => x.id === propId) ?? null;
+  const propellerCoolingMode = propellerOnly ? 'propeller' : (coolChoice.cooling ?? 'robotics');
+  const propellerCoolingActive = propellerOnly || (hasPropellerOption && propellerCoolingMode === 'propeller');
+  const optionalPropellerCooling = hasPropellerOption && !propellerOnly;
+  const cooled = propellerCoolingActive;
+  const propId = hasPropellerControls ? effectivePropeller(coolChoice, allowedProps, propDefaultFor(baseConfig)) : null;
+  const propSummary = cooled ? (allowedProps.find((x) => x.id === propId) ?? null) : null;
   const ambient = coolChoice.ambient ?? DEFAULT_AMBIENT_C;
-  const propLoad = cooled && (coolChoice.load ?? 'prop') === 'prop';
+  // Only a machine cooled solely by its propeller may use it as the load. Mixed
+  // Robotics/propeller machines always retain the engineer's current setting.
+  const propLoad = propellerOnly && (coolChoice.load ?? 'prop') === 'prop';
   const selectedDuty = activeDuty();
   const dutyPreset = presetOfBuild(currentContext?.presets ?? [], refKnobs ?? baseKnobs(p));
   const propRpmDefault = propellerDutyRpmDefault(dutyPreset, selectedDuty);
@@ -1048,14 +1056,14 @@ const ConfiguratorPanel: React.FC = () => {
   // context answers, seed Propeller mode exactly once for that machine/duty.
   // The loaded-geometry path above normally does this first.
   useEffect(() => {
-    if (!cooled || !propLoad || !ctxDone || !currentContext || !dutyPreset
+    if (!propellerOnly || !propLoad || !ctxDone || !currentContext || !dutyPreset
         || !propRpmSeedKey || propRpmDefault.rpm == null || propRpmDefault.rpm <= 0
         || propRpmSeedRef.current === propRpmSeedKey) return;
     propRpmSeedRef.current = propRpmSeedKey;
     propRpmManualEditRef.current = '';
     setKnobs((k) => ({ ...k, rpm: propRpmDefault.rpm! }));
     setRefKnobs((k) => ({ ...(k ?? baseKnobs(p)), rpm: propRpmDefault.rpm! }));
-  }, [cooled, propLoad, ctxDone, currentContext, dutyPreset, propRpmSeedKey, propRpmDefault.rpm, p]);
+  }, [propellerOnly, propLoad, ctxDone, currentContext, dutyPreset, propRpmSeedKey, propRpmDefault.rpm, p]);
   const propRpmReady = !propLoad || !propRpmSeedKey
     || propRpmSeedRef.current === propRpmSeedKey
     || propRpmManualEditRef.current === propRpmSeedKey;
@@ -1072,13 +1080,13 @@ const ConfiguratorPanel: React.FC = () => {
   const [series, setSeries] = useState<PropSeries | null>(null);
   useEffect(() => {
     setSeries(null);
-    if (!cooled || !propId) return;
+    if (!propellerCoolingActive || !propId) return;
     let dead = false;
     const go = () => { void fetchSeries(propId, ambient, housingMm).then((s) => { if (dead) return; if (s) setSeries(s); else setTimeout(go, 3000); }); };
     go();
     return () => { dead = true; };
-  }, [cooled, propId, ambient, housingMm]);
-  const propPoint = cooled && series ? seriesAt(series, knobs.rpm) : null;
+  }, [propellerCoolingActive, propId, ambient, housingMm]);
+  const propPoint = propellerCoolingActive && series ? seriesAt(series, knobs.rpm) : null;
   /** the torque of the passport at a current — every other knob as given */
   const torqueAtI = (k: Knobs) => (I: number) => scaleMotor(p, { ...k, I_A: I }, ref.poles).T_Nm;
   const propLoadRes = useMemo(
@@ -1107,15 +1115,15 @@ const ConfiguratorPanel: React.FC = () => {
   /** winding / magnet / housing temperatures at the knobs (null while the propeller data is
    *  not here, or while the load is refused — never numbers for a point that cannot be run) */
   const thermal = useMemo(() => (
-    cooled && propPoint && propPoint.h_W_m2K != null && !loadRefused
+    propellerCoolingActive && propPoint && propPoint.h_W_m2K != null && !loadRefused
       ? estimateThermal(thermalGeom, { P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W, P_extra_W: extraLossW },
         { h_Wm2K: propPoint.h_W_m2K, ambient_C: ambient })
-      : null), [cooled, propPoint, loadRefused, thermalGeom, result, extraLossW, ambient]);
+      : null), [propellerCoolingActive, propPoint, loadRefused, thermalGeom, result, extraLossW, ambient]);
   const verdict = thermal ? judgeTemps(thermal.T_winding_C, thermal.T_magnet_C, tLimits) : null;
   const overheats = !!verdict?.over;
   /** the ONE red line above the results (fixed height, so it never moves the grid) */
   const propLine: { text: string; tip: string } | null = (() => {
-    if (!cooled) return null;
+    if (!propellerCoolingActive) return null;
     if (loadRefused && propLoadRes && !propLoadRes.ok && propLoadRes.kind === 'torque') {
       return { text: tx('configurePropeller.refuseTorque', { need: fmt(propLoadRes.need_Nm, 3), rpm: fmt(knobs.rpm, 0), have: fmt(propLoadRes.have_Nm, 3), imax: fmt(ranges.I_A.max, 0) }),
                tip: tx('configurePropeller.refuseTorqueTip') };
@@ -1142,7 +1150,7 @@ const ConfiguratorPanel: React.FC = () => {
   /** thermal zones on the knobs: green = continuous below both limits with this propeller, red = beyond.
    *  Recomputed with wire / turns / length / propeller / ambient (a pure function of them). */
   const zones = useMemo(() => {
-    if (!cooled || !series) return { rpm: null as string | null, I: null as string | null };
+    if (!propellerCoolingActive || !series) return { rpm: null as string | null, I: null as string | null };
     const okAt = (rpm: number, I: number): boolean | null => {
       const pt = seriesAt(series, rpm);
       if (!pt || pt.h_W_m2K == null) return null;
@@ -1160,7 +1168,7 @@ const ConfiguratorPanel: React.FC = () => {
     });
     const iOk = propLoad ? [] : zoneSamples(ranges.I_A.min, ranges.I_A.max).map((I) => okAt(knobs.rpm, I));
     return { rpm: zoneGradient(rpmOk), I: zoneGradient(iOk) };
-  }, [cooled, series, p, ref.poles, thermalGeom, tLimits, extraLossW, ambient, propLoad, ranges.rpm.min, ranges.rpm.max, ranges.I_A.min, ranges.I_A.max,
+  }, [propellerCoolingActive, series, p, ref.poles, thermalGeom, tLimits, extraLossW, ambient, propLoad, ranges.rpm.min, ranges.rpm.max, ranges.I_A.min, ranges.I_A.max,
       knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, propLoad ? 0 : knobs.I_A, propLoad ? 0 : knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
   /** one short line per refusal (text + tooltip), in the order they matter */
   const driveRefusals: { text: string; tip: string }[] = (() => {
@@ -1632,27 +1640,42 @@ const ConfiguratorPanel: React.FC = () => {
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 0, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
           {/* rms is the knob; the PEAK rides beside it (user 2026-08-26) —
               inverters and datasheets are quoted in peak, the coil sees rms. */}
-          {/* ── PROPELLER (a die cooled only by its propeller): which one, the ambient air, and
-              whether the propeller sets the load.  One compact block, labels in the title style. ── */}
-          {cooled && (
+          {/* Optional propeller cooling changes the thermal estimate only on mixed-cooling motors. */}
+          {hasPropellerControls && (
             <Box sx={{ mb: 1.25 }}>
-              <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'nowrap', minHeight: 30 }}>
-                <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configurePropeller.loadTip')}>{tx('configurePropeller.load')}</Typography>
-                <ToggleButtonGroup exclusive size="small" value={propLoad ? 'prop' : 'manual'}
-                  onChange={(_, v) => { if (v === 'prop' || v === 'manual') updateCool({ load: v }); }}>
-                  <ToggleButton value="prop" title={tx('configurePropeller.loadPropTip')}
-                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadProp')}</ToggleButton>
-                  <ToggleButton value="manual" title={tx('configurePropeller.loadManualTip')}
-                    sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadManual')}</ToggleButton>
-                </ToggleButtonGroup>
-              </Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: 0.5, flexWrap: 'nowrap', minHeight: 28 }}>
-                <Typography sx={{ ...LABEL, flex: '0 0 auto', opacity: propLoad ? 1 : 0.5 }} title={tx('configurePropeller.pickerTip')}>{tx('configurePropeller.title')}</Typography>
+              {optionalPropellerCooling && (
+                <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, flexWrap: 'nowrap', minHeight: 30 }}>
+                  <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }}>{tx('configurePropeller.coolingMode')}</Typography>
+                  <ToggleButtonGroup exclusive size="small" value={propellerCoolingMode}
+                    onChange={(_, v) => { if (v === 'robotics' || v === 'propeller') updateCool({ cooling: v }); }}>
+                    <ToggleButton value="robotics" title={tx('configurePropeller.stillAirTip')}
+                      sx={{ px: 1, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.stillAir')}</ToggleButton>
+                    <ToggleButton value="propeller" title={tx('configurePropeller.propellerAirTip')}
+                      sx={{ px: 1, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.propellerAir')}</ToggleButton>
+                  </ToggleButtonGroup>
+                </Box>
+              )}
+              {cooled && (
+                <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: optionalPropellerCooling ? 0.5 : 0, flexWrap: 'nowrap', minHeight: 28 }}>
+                  {propellerOnly && <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configurePropeller.loadTip')}>{tx('configurePropeller.load')}</Typography>}
+                  {propellerOnly && <ToggleButtonGroup exclusive size="small" value={propLoad ? 'prop' : 'manual'}
+                    onChange={(_, v) => { if (v === 'prop' || v === 'manual') updateCool({ load: v }); }}>
+                    <ToggleButton value="prop" title={tx('configurePropeller.loadPropTip')}
+                      sx={{ px: 1, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadProp')}</ToggleButton>
+                    <ToggleButton value="manual" title={tx('configurePropeller.loadManualTip')}
+                      sx={{ px: 1, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadManual')}</ToggleButton>
+                  </ToggleButtonGroup>}
+                </Box>
+              )}
+              {(cooled || optionalPropellerCooling) && (
+                <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: 0.5, flexWrap: 'nowrap', minHeight: 28 }}>
+                {cooled && <Typography sx={{ ...LABEL, flex: '0 0 auto', opacity: propLoad ? 1 : 0.85 }} title={tx(optionalPropellerCooling ? 'configurePropeller.coolingPickerTip' : 'configurePropeller.pickerTip')}>{tx('configurePropeller.title')}</Typography>}
+                {cooled && (
                 <select value={propId ?? ''} aria-label={tx('configurePropeller.title')}
-                  disabled={!propLoad}
+                  disabled={propellerOnly && !propLoad}
                   onChange={(e) => updateCool({ propId: e.target.value })}
-                  title={propSummary && propSummary.power_data === 'estimated' ? tx('configurePropeller.estimatedTip') : tx('configurePropeller.pickerTip')}
-                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260, opacity: propLoad ? 1 : 0.5, cursor: propLoad ? 'pointer' : 'not-allowed' }}>
+                  title={propSummary && propSummary.power_data === 'estimated' ? tx('configurePropeller.estimatedTip') : tx(optionalPropellerCooling ? 'configurePropeller.coolingPickerTip' : 'configurePropeller.pickerTip')}
+                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260, opacity: propellerOnly && !propLoad ? 0.5 : 1, cursor: propellerOnly && !propLoad ? 'not-allowed' : 'pointer' }}>
                   {!allowedProps.length && <option value="" style={{ color: '#000' }}>…</option>}
                   {allowedProps.map((x) => (
                     <option key={x.id} value={x.id} disabled={!x.selectable} style={{ color: '#000' }}>
@@ -1661,13 +1684,15 @@ const ConfiguratorPanel: React.FC = () => {
                     </option>
                   ))}
                 </select>
+                )}
                 <input type="number" step={1} value={ambTxt ?? String(ambient)} aria-label={tx('configurePropeller.ambient')}
-                  title={tx('configurePropeller.ambientTip')}
+                  title={tx(optionalPropellerCooling ? 'configurePropeller.coolingAmbientTip' : 'configurePropeller.ambientTip')}
                   onChange={(e) => setAmbTxt(e.target.value)}
                   onBlur={() => setAmbTxt(null)}
                   style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 13, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
                 <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>°C</Box>
               </Box>
+              )}
             </Box>
           )}
           <KnobSlider label={tx('configureLimits.phaseCurrent')} unit="A" value={knobs.I_A} base={p.I0_A}
@@ -1829,7 +1854,7 @@ const ConfiguratorPanel: React.FC = () => {
             {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, motorEfficiency(driveMode, drv, result.P_mech_W, result.P_loss_W)).map(renderSpec)}
           </Box>
           {/* ── TEMPERATURES — ONE row for a propeller-cooled machine, the same five tiles from the first render ── */}
-          {cooled && (
+          {propellerOnly && cooled && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {tempTiles.map(renderTemp)}
             </Box>
@@ -2034,13 +2059,25 @@ const ConfiguratorPanel: React.FC = () => {
         </Box>
       ) : null}
 
-      {/* ── THERMAL block: only for a machine that is NOT cooled by its propeller alone — there the
-          cooling is the propeller, and the temperatures are one row in the tiles above ── */}
-      {ctxDone && !cooled && (
+      {/* Generic cooling stays unchanged for ordinary motors. Optional mixed registry cooling
+          uses the same lumped estimator with an explicit still-air or propeller boundary. */}
+      {ctxDone && !propellerOnly && (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <ConfiguratorThermal
             geom={thermalGeom}
-            losses={{ P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W }}
+            losses={{ P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W,
+              ...(optionalPropellerCooling ? { P_extra_W: extraLossW } : {}) }}
+            coolingEstimate={optionalPropellerCooling ? {
+              mode: propellerCoolingMode,
+              ambient_C: ambient,
+              air_speed_ms: propellerCoolingMode === 'robotics' ? 0 : propPoint?.air_speed_ms ?? null,
+              h_Wm2K: propellerCoolingMode === 'robotics' ? null : propPoint?.h_W_m2K ?? null,
+              temperatureLimits: {
+                winding_C: tLimits.winding_C,
+                magnet_C: tLimits.magnet_C,
+                windingBasis: tLimits.windingBasis,
+              },
+            } : undefined}
           />
         </Box>
       )}

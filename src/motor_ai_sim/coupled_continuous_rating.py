@@ -128,6 +128,7 @@ def _num(v: Any) -> Optional[float]:
 #: these and only these.
 COOLING_KEYS: Tuple[str, ...] = (
     "cooling_mode", "ambient_temp", "h_conv", "air_speed_mps",
+    "air_speed_source", "propeller_id", "propeller_position",
     "fluid", "fluid_temp_in_c", "flow_lpm",
     "bore_mode", "bore_air_speed_mps", "bore_fluid", "bore_fluid_temp_in_c",
     "bore_flow_lpm", "shaft_ext_length_mm", "shaft_ext_sides",
@@ -161,7 +162,8 @@ class Condition:
 #: Which cooling keys belong to which mode — everything else is dropped by
 #: :func:`_prune`, exactly as ``thermal_settings.cooling_fields`` only ever
 #: SENDS the keys the mode reads.
-_OUTER_ONLY = {"manual": ("h_conv",), "air": ("air_speed_mps",),
+_OUTER_ONLY = {"manual": ("h_conv",), "air": ("air_speed_mps", "air_speed_source",
+                                                "propeller_id", "propeller_position"),
                "liquid": ("fluid", "fluid_temp_in_c", "flow_lpm"),
                "robotics": ("emissivity", "end_faces", "end_face_sides",
                             "heat_path"),
@@ -184,6 +186,11 @@ def _prune(kw: Mapping[str, Any]) -> Dict[str, Any]:
         if m != bore:
             drop.update(keys)
     drop -= set(_OUTER_ONLY.get(mode, ())) | set(_BORE_ONLY.get(bore, ()))
+    if mode == "air":
+        if str(out.get("air_speed_source") or "manual").strip().lower() == "propeller":
+            drop.add("air_speed_mps")
+        else:
+            drop.update(("air_speed_source", "propeller_id", "propeller_position"))
     if str(out.get("frame") or "housed") != "open":
         drop.add("open_air_speed_mps")
     if not _num(out.get("mount_g_w_per_k")):

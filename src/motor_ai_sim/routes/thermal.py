@@ -375,6 +375,37 @@ def _apply_air_speed_source(air_speed_source: str, propeller_id: str,
     return float(info["air_speed_mps"]), info
 
 
+def _thermal_air_source_kw(source: str, propeller_id: str,
+                           propeller_position: str, propeller_context_key: str,
+                           cooling_mode: str, authorization: Optional[str]) -> Dict[str, Any]:
+    """Validate and retain source provenance before history/coupled caching."""
+    src = str(source or "manual").strip().lower()
+    if src not in ("manual", "propeller"):
+        raise _bad("air_speed_source", source, "bad_value",
+                   "air_speed_source must be 'manual' or 'propeller'")
+    if src == "manual":
+        return {}
+    if str(cooling_mode or "").strip().lower() != "air":
+        raise _bad("air_speed_source", source, "bad_value",
+                   "propeller airflow is only valid with cooling_mode='air'")
+    pid = str(propeller_id or "").strip()
+    if not pid:
+        raise _bad("propeller_id", propeller_id, "missing",
+                   "air_speed_source='propeller' needs an assigned propeller ID")
+    from motor_ai_sim.thermal_settings import propeller_cooling_context_issue
+    issue = propeller_cooling_context_issue({
+        "airSpeedSource": src, "propellerId": pid,
+        "propellerContextKey": propeller_context_key,
+    }, authorization)
+    if issue:
+        raise _bad("propeller_context_key", propeller_context_key, "stale_context", issue)
+    out: Dict[str, Any] = {"air_speed_source": "propeller", "propeller_id": pid}
+    pos = str(propeller_position or "").strip()
+    if pos:
+        out["propeller_position"] = pos
+    return out
+
+
 def _cooling_bc(*, mode: str, t_ambient_c: float, air_speed_mps: float,
                 fluid: str, fluid_temp_in_c: float, flow_lpm: float,
                 p_loss_w: float, r_housing_m: float, length_m: float,
@@ -1159,7 +1190,9 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
                      frame="housed", open_air_speed_mps=0.0,
                      emissivity=0.9, mount_g_w_per_k=0.0, mount_temp_c=None,
                      heat_path="none",
-                     end_faces="still", end_face_sides=2) -> tuple:
+                     end_faces="still", end_face_sides=2,
+                     air_speed_source="manual", propeller_id="",
+                     propeller_position="") -> tuple:
     """What makes two thermal requests the SAME request.
 
     Three groups, and all three are load-bearing:
@@ -1265,6 +1298,10 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
         _base = _base + ("mount", round(_g, 5),
                          (None if mount_temp_c is None
                           else round(float(mount_temp_c), 2)))
+    if str(air_speed_source or "manual").strip().lower() == "propeller":
+        _base = _base + ("air_speed_source", "propeller",
+                         str(propeller_id or "").strip(),
+                         str(propeller_position or "").strip())
     return _base
 
 
@@ -4096,7 +4133,9 @@ def solve_thermal_field(
         frame=frame, open_air_speed_mps=open_air_speed_mps,
         emissivity=emissivity, mount_g_w_per_k=mount_g_w_per_k,
         mount_temp_c=mount_temp_c, heat_path=heat_path, end_faces=end_faces,
-        end_face_sides=end_face_sides)
+        end_face_sides=end_face_sides,
+        air_speed_source=air_speed_source, propeller_id=propeller_id,
+        propeller_position=propeller_position)
     # THE MAGNET TEMPERATURE, appended only when the request carries one — the
     # same rule `_field_snap_key_fields` follows, and for the same reason: with
     # no magnet temperature the key must stay byte-identical to the one every
@@ -6789,6 +6828,10 @@ def field(
     air_speed_mps:      float = Query(default=0.0, ge=0.0,
                                       description="cooling_mode=air: airflow over "
                                                   "the housing"),
+    air_speed_source:   str = Query(default="manual", description="manual or propeller-derived housing airflow"),
+    propeller_id:       str = Query(default="", description="assigned propeller ID for propeller airflow"),
+    propeller_context_key: str = Query(default="", description="account and loaded motor identity for assigned propeller"),
+    propeller_position: str = Query(default="", description="optional catalogue slipstream position"),
     fluid:              str = Query(default="water",
                                     description="cooling_mode=liquid: coolant name "
                                                 "from the materials library"),
@@ -6936,6 +6979,7 @@ def field(
                                                 "'point': the run at exactly the "
                                                 "point sent (API callers that "
                                                 "name their own point)"),
+    authorization: Optional[str] = Header(default=None),
 ):
     """Steady-state 2-D temperature map of the machine.
 
@@ -7012,6 +7056,9 @@ def field(
     # re-specified — see run_history.py's module docstring on why a caller
     # normalises its own canonical structure rather than this module
     # inventing a second one.
+    _source_kw = _thermal_air_source_kw(
+        air_speed_source, propeller_id, propeller_position,
+        propeller_context_key, cooling_mode, authorization)
     _hist_params = _field_params(
         cooling_mode=cooling_mode, ambient_temp=ambient_temp, h_conv=h_conv,
         slot_k=slot_k, rpm=rpm, gamma_deg=gamma_deg,
@@ -7020,6 +7067,7 @@ def field(
         min_size_mm=min_size_mm, outer_air_factor=outer_air_factor,
         n_sectors=n_sectors, coil_temp_c=coil_temp_c,
         component_mesh=component_mesh, air_speed_mps=air_speed_mps,
+        **_source_kw,
         fluid=fluid, fluid_temp_in_c=fluid_temp_in_c, flow_lpm=flow_lpm,
         bore_mode=bore_mode, bore_air_speed_mps=bore_air_speed_mps,
         bore_fluid=bore_fluid,
@@ -7061,6 +7109,7 @@ def field(
             outer_air_factor=outer_air_factor, n_sectors=n_sectors,
             coil_temp_c=coil_temp_c, component_mesh=component_mesh, geo=geo,
             cooling_mode=cooling_mode, air_speed_mps=air_speed_mps, fluid=fluid,
+            **_source_kw,
             fluid_temp_in_c=fluid_temp_in_c, fluid_temp_out_c=fluid_temp_out_c,
             flow_lpm=flow_lpm, bore_mode=bore_mode,
             bore_air_speed_mps=bore_air_speed_mps, bore_fluid=bore_fluid,
@@ -7081,6 +7130,7 @@ def field(
             min_size_mm=min_size_mm, outer_air_factor=outer_air_factor,
             n_sectors=n_sectors, coil_temp_c=coil_temp_c,
             component_mesh=component_mesh, air_speed_mps=air_speed_mps,
+            **_source_kw,
             fluid=fluid, fluid_temp_in_c=fluid_temp_in_c, flow_lpm=flow_lpm,
             bore_mode=bore_mode, bore_air_speed_mps=bore_air_speed_mps,
             bore_fluid=bore_fluid,
@@ -7196,6 +7246,10 @@ def coupled(
     component_mesh:     str = Query(default=""),
     geo:                Optional[str] = Query(default=None),
     air_speed_mps:      float = Query(default=0.0, ge=0.0),
+    air_speed_source:   str = Query(default="manual", description="manual or propeller-derived housing airflow"),
+    propeller_id:       str = Query(default="", description="assigned propeller ID for propeller airflow"),
+    propeller_context_key: str = Query(default="", description="account and loaded motor identity for assigned propeller"),
+    propeller_position: str = Query(default="", description="optional catalogue slipstream position"),
     fluid:              str = Query(default="water"),
     fluid_temp_in_c:    float = Query(default=25.0),
     fluid_temp_out_c:   float = Query(default=0.0,
@@ -7247,6 +7301,7 @@ def coupled(
                                                 "temperature is then the "
                                                 "starting guess); 'point' looks "
                                                 "the run up at the point sent"),
+    authorization: Optional[str] = Header(default=None),
 ):
     """The self-consistent operating point: solve for the winding temperature.
 
@@ -7337,6 +7392,9 @@ def coupled(
         _refuse_retired_link(mount_mode, link_preset, link_material)
         if str(heat_path or "none").strip().lower() != "none":
             _robot_kw["heat_path"] = str(heat_path).strip().lower()
+        _source_kw = _thermal_air_source_kw(
+            air_speed_source, propeller_id, propeller_position,
+            propeller_context_key, mode, authorization)
         _cool_kw = dict(cooling_mode=mode, air_speed_mps=air_speed_mps,
                         fluid=fluid, fluid_temp_in_c=fluid_temp_in_c,
                         flow_lpm=flow_lpm, bore_mode=bmode,
@@ -7346,7 +7404,7 @@ def coupled(
                         bore_flow_lpm=bore_flow_lpm,
                         shaft_ext_length_mm=shaft_ext_length_mm,
                         shaft_ext_diameter_mm=shaft_ext_diameter_mm,
-                        shaft_ext_sides=shaft_ext_sides,
+                        shaft_ext_sides=shaft_ext_sides, **_source_kw,
                         **_open_kw, **_robot_kw)
         key = _field_cache_key(
             geo_ov, _assignments(), ambient_temp=ambient_temp, h_conv=h_conv,
@@ -7581,7 +7639,8 @@ def heat_paths_last(
 #: `cooling_fields()` on EVERY one of them — in both directions, so a map solved
 #: with a 2 W/K mount cannot be served to a request that named no mount.
 _DC_COOLING_KEYS = (
-    "cooling_mode", "ambient_temp", "h_conv", "air_speed_mps", "fluid",
+    "cooling_mode", "ambient_temp", "h_conv", "air_speed_mps",
+    "air_speed_source", "propeller_id", "propeller_position", "fluid",
     "fluid_temp_in_c", "flow_lpm", "bore_mode", "bore_air_speed_mps",
     "bore_fluid", "bore_fluid_temp_in_c", "bore_flow_lpm",
     "shaft_ext_length_mm", "shaft_ext_sides", "frame", "open_air_speed_mps",
@@ -7860,6 +7919,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                                                  periodic_steady_state,
                                                  steady_state, time_to_limit)
     from motor_ai_sim.thermal_settings import (cooling_fields, cooling_issue,
+                                               propeller_cooling_context_issue,
                                                thermal_panel_settings)
 
     t0 = time.time()
@@ -7929,6 +7989,13 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
     raw = body.get("thermal_settings")
     settings = dict(raw) if isinstance(raw, dict) else dict(
         thermal_panel_settings(authorization))
+    prop_issue = propeller_cooling_context_issue(
+        settings, authorization, expected_die=die, expected_config=cfg)
+    if prop_issue:
+        raise _dc_refuse(
+            "propeller_cooling_context", prop_issue,
+            "reload the motor/configuration and choose an assigned propeller in Thermal",
+            ["thermal_settings"])
     issue = cooling_issue(settings)
     if issue is not None:
         raise _dc_refuse(

@@ -341,6 +341,27 @@ def test_a_mode_only_gets_the_parameters_it_reads():
     assert air["air_speed_mps"] == 10.0
 
 
+def test_propeller_air_source_survives_condition_merge_as_request_provenance():
+    defaults = {"cooling_mode": "air", "ambient_temp": 25.0,
+                "air_speed_mps": 0.0, "air_speed_source": "propeller",
+                "propeller_id": "G32x11", "propeller_position": "behind_hub",
+                "bore_mode": "none"}
+    got = ccr.Condition("assigned propeller", {}).merged(defaults)
+    assert got == {k: v for k, v in defaults.items() if k != "air_speed_mps"}
+
+
+def test_manual_air_condition_keeps_legacy_shape_and_drops_propeller_provenance():
+    defaults = {"cooling_mode": "air", "ambient_temp": 25.0,
+                "air_speed_mps": 8.0, "bore_mode": "none",
+                "air_speed_source": "propeller", "propeller_id": "old-id",
+                "propeller_position": "behind_hub"}
+    got = ccr.Condition("manual airflow", {
+        "air_speed_source": "manual", "air_speed_mps": 8.0,
+    }).merged(defaults)
+    assert got == {"cooling_mode": "air", "ambient_temp": 25.0,
+                   "air_speed_mps": 8.0, "bore_mode": "none"}
+
+
 def test_the_saved_cooling_is_read_back_out_of_a_duty_s_thermal_block():
     """The duty record keeps the ANSWER; the question is reconstructed from it."""
     block = {

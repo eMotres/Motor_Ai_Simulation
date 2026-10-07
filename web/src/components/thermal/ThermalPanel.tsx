@@ -56,7 +56,12 @@ import type {
 } from './api';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
-import { useLastMotorState, configureRefIdForSelection, isCurrentLastMotorUser } from '../../lib/lastMotor';
+import { useAuth } from '../../contexts/AuthContext';
+import {
+  fetchLastMotor, getLastMotorState, isCurrentLastMotorUser,
+  setLastMotorState, useLastMotorState, configureRefIdForSelection,
+} from '../../lib/lastMotor';
+import { selectionMatchesActiveFamily, type ActiveFamilyContext } from './thermalLastMotor';
 import {
   allowedPropellers, coolChoiceKey, defaultPropellerFor, effectivePropeller, propellerContextKey,
   hasPropellerCooling, modelLabel, readCoolChoice, restoredThermalPropeller,
@@ -68,6 +73,7 @@ import { fetchPropellers, fetchPropellerCoolingOptions, fetchPropellerThermalPoi
 
 // UI strings: locales/<lng>/thermal.json (docs/I18N.md).
 const tx = nsT('thermal');
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
 /* A hint used to be wrapped round each Select here, pushed under the menu with
    a z-index (2026-09-07: 'the dropdown tooltip doesn't let you switch air
@@ -575,11 +581,55 @@ const CoupledSection: React.FC = () => {
 
 const ThermalPanel: React.FC = () => {
   useTranslation('thermal'); // re-render on language change; lazy-loads the namespace
+  const auth = useAuth();
   // The store's own geometry is the live machine; reading it here is what makes
   // the staleness badge re-evaluate the moment the geometry changes, without a
   // round trip to the backend.
   const liveGeometry = useMotorStore((s) => s.geometry);
   const lastMotor = useLastMotorState();
+  const [idleSelectionHydration, setIdleSelectionHydration] = useState<'idle' | 'loading' | 'unavailable'>('idle');
+  const idleHydrationAttempt = useRef('');
+
+  // Admin sessions use the shared editor workspace, so App does not call
+  // restoreLastMotor for them. Read the account's saved selection here only
+  // when the store is still idle, and bind it only if the active family
+  // context agrees exactly. This is GET-only: it does not load or activate a
+  // workspace, and a null reference ID remains valid.
+  useEffect(() => {
+    const email = auth.user?.email.trim().toLowerCase() ?? '';
+    if (!auth.resolved || !auth.isAdmin || !email || lastMotor.status !== 'idle') return;
+    if (idleHydrationAttempt.current === email) return;
+    idleHydrationAttempt.current = email;
+    let dead = false;
+    setIdleSelectionHydration('loading');
+    void (async () => {
+      try {
+        const saved = await fetchLastMotor(email);
+        if (dead) return;
+        if (saved.unavailable || !saved.selection) {
+          setIdleSelectionHydration('unavailable');
+          return;
+        }
+        const response = await fetch(`${API}/api/family/context`, { cache: 'no-store' });
+        if (!response.ok) throw new Error('family context unavailable');
+        const context = await response.json() as ActiveFamilyContext;
+        if (dead) return;
+        if (!selectionMatchesActiveFamily(saved.selection, context)) {
+          setIdleSelectionHydration('unavailable');
+          return;
+        }
+        if (!isCurrentLastMotorUser(email) || getLastMotorState().status !== 'idle') return;
+        setLastMotorState({ email, status: 'loaded', selection: saved.selection });
+        setIdleSelectionHydration('idle');
+      } catch {
+        if (!dead) setIdleSelectionHydration('unavailable');
+      }
+    })();
+    return () => {
+      dead = true;
+      if (idleHydrationAttempt.current === email) idleHydrationAttempt.current = '';
+    };
+  }, [auth.resolved, auth.isAdmin, auth.user?.email, lastMotor.status]);
 
   const st = useThermalStore();
   const {
@@ -647,16 +697,17 @@ const ThermalPanel: React.FC = () => {
   const coolKey = activeSelection
     ? coolChoiceKey(lastMotor.email, activeRefId ?? `die:${activeSelection.die}`, activeSelection.config) : '';
   const [coolingRegistry, setCoolingRegistry] = useState<{
-    key: string; cooling: CoolingInfo | null; props: PropSummary[] | null;
-  }>({ key: '', cooling: null, props: null });
+    key: string; status: 'loading' | 'ready' | 'unavailable';
+    cooling: CoolingInfo | null; props: PropSummary[] | null;
+  }>({ key: '', status: 'loading', cooling: null, props: null });
   useEffect(() => {
     if (!activeSelection || !activeCoolingKey) {
-      setCoolingRegistry({ key: '', cooling: null, props: null });
+      setCoolingRegistry({ key: '', status: 'loading', cooling: null, props: null });
       return;
     }
     let dead = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
-    setCoolingRegistry({ key: activeCoolingKey, cooling: null, props: null });
+    setCoolingRegistry({ key: activeCoolingKey, status: 'loading', cooling: null, props: null });
     const load = async () => {
       const [cooling, props] = await Promise.all([
         fetchPropellerCoolingOptions(activeSelection.die, activeSelection.config),
@@ -664,10 +715,11 @@ const ThermalPanel: React.FC = () => {
       ]);
       if (dead) return;
       if (!cooling || !props) {
+        setCoolingRegistry({ key: activeCoolingKey, status: 'unavailable', cooling: null, props: null });
         timer = setTimeout(load, 3000);
         return;
       }
-      setCoolingRegistry({ key: activeCoolingKey, cooling, props });
+      setCoolingRegistry({ key: activeCoolingKey, status: 'ready', cooling, props });
     };
     void load();
     return () => { dead = true; if (timer) clearTimeout(timer); };
@@ -679,6 +731,15 @@ const ThermalPanel: React.FC = () => {
   const allowedProps = useMemo(
     () => allowedPropellers(cooling, coolingRegistry.props ?? []), [cooling, coolingRegistry.props]);
   const propellerCoolingAvailable = registryReady && hasPropellerCooling(cooling) && allowedProps.length > 0;
+  const coolingChoiceMessage = !activeSelection
+    ? (lastMotor.status === 'idle' || lastMotor.status === 'loading'
+      ? (idleSelectionHydration === 'unavailable' ? tx('propellerCoolingUnavailable')
+        : tx('propellerCoolingChecking')) : tx('propellerCoolingUnavailable'))
+    : coolingRegistry.key === activeCoolingKey && coolingRegistry.status === 'unavailable'
+        ? tx('propellerCoolingUnavailable')
+        : coolingRegistry.key !== activeCoolingKey || coolingRegistry.status === 'loading'
+          ? tx('propellerCoolingChecking')
+          : !propellerCoolingAvailable ? tx('propellerCoolingNoAssigned') : '';
   const [coolChoice, setCoolChoice] = useState(() => ({} as ReturnType<typeof readCoolChoice>));
   const syncedServerChoice = useRef('');
   const readChoiceRaw = () => { try { return localStorage.getItem(PROP_CHOICE_LS); } catch { return null; } };
@@ -1140,17 +1201,17 @@ const ThermalPanel: React.FC = () => {
             Two rows, one per surface, because they are two independent boundary
             conditions of the same solve (user 2026-09-07) — a machine cooled
             through its hollow shaft alone was not expressible before. */}
-        {(propellerCoolingAvailable || st.airSpeedSource === 'propeller') && (
-          <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
-            <RowLabel text={tx('outerCoolingSource')} tip={tx('outerCoolingSourceTip')} />
-            <Select size="small" value={st.airSpeedSource}
-              disabled={!st.serverSettingsLoaded}
-              onChange={(e) => {
+        <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
+          <RowLabel text={tx('outerCoolingSource')} tip={tx('outerCoolingSourceTip')} />
+          <Select size="small" value={st.airSpeedSource}
+            disabled={!st.serverSettingsLoaded}
+            onChange={(e) => {
                 const source = String(e.target.value) as 'manual' | 'propeller';
                 if (source === 'manual') {
                   setPropellerCooling('manual');
                   return;
                 }
+                if (!propellerCoolingAvailable) return;
                 const candidate = allowedProps.find((p) => p.id === resolvedProp && p.selectable);
                 if (!candidate) {
                   setPropellerCooling('propeller');
@@ -1158,13 +1219,16 @@ const ThermalPanel: React.FC = () => {
                 }
                 saveCoolChoice({ propId: candidate.id });
                 setPropellerCooling('propeller', candidate.id, activeCoolingKey);
-              }}
-              sx={{ fontSize: 11, height: 30, minWidth: 218 }}>
-              <MenuItem value="manual" sx={{ fontSize: 11 }}>{tx('manualCoolingParameters')}</MenuItem>
-              <MenuItem value="propeller" sx={{ fontSize: 11 }}>{tx('propellerSlipstream')}</MenuItem>
-            </Select>
-          </Box>
-        )}
+            }}
+            sx={{ fontSize: 11, height: 30, minWidth: 218 }}>
+            <MenuItem value="manual" sx={{ fontSize: 11 }}>{tx('manualCoolingParameters')}</MenuItem>
+            <MenuItem value="propeller" disabled={!propellerCoolingAvailable} sx={{ fontSize: 11 }}>{tx('propellerSlipstream')}</MenuItem>
+          </Select>
+          {!propellerCoolingAvailable && <Typography role="status" aria-live="polite"
+            sx={{ ...lbl, color: 'var(--text-3)' }}>
+            {coolingChoiceMessage}
+          </Typography>}
+        </Box>
 
         {st.airSpeedSource === 'propeller' && propellerCoolingAvailable && (
           <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>

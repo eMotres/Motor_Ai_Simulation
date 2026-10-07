@@ -18,6 +18,8 @@
   "propellerPointTooltip": "后端螺旋桨数据点：{rpm} rpm、{ambient} °C；{position}。求解时会使用热请求所带的转速重新计算气流。",
   "propellerPointTooltipUnavailable": "后端为当前工作转速和环境温度返回有效数据点前，不显示气流数值。",
   "propellerCoolingUnavailable": "当前加载的电机/配置不支持螺旋桨冷却",
+  "propellerCoolingChecking": "正在检查当前电机已分配的螺旋桨…",
+  "propellerCoolingNoAssigned": "当前电机/配置没有可用于冷却的已分配螺旋桨",
   "propellerSelectionMatching": "正在将螺旋桨选择与当前加载的电机/配置匹配",
   "propellerNeedEmRun": "请先运行电磁仿真以获取螺旋桨冷却所需的当前转速",
   "propellerAirflowCalculatingForCurrentRpm": "正在计算当前转速下的螺旋桨气流",

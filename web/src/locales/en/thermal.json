@@ -18,6 +18,8 @@
   "propellerPointTooltip": "Server propeller point at {rpm} rpm and {ambient} °C; {position}. Solve recomputes this source using the RPM attached to the thermal request.",
   "propellerPointTooltipUnavailable": "No airflow number is shown until the backend returns a valid point for the current operating RPM and ambient.",
   "propellerCoolingUnavailable": "propeller cooling is not available for the loaded motor/configuration",
+  "propellerCoolingChecking": "checking the loaded motor's assigned propellers…",
+  "propellerCoolingNoAssigned": "no assigned propellers are available for cooling",
   "propellerSelectionMatching": "propeller selection is being matched to the loaded motor/configuration",
   "propellerNeedEmRun": "run Electromagnetic to get the current RPM for propeller cooling",
   "propellerAirflowCalculatingForCurrentRpm": "propeller airflow is being calculated for the current RPM",

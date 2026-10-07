@@ -3,6 +3,7 @@ import { Box, Tab, Tabs } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import CatalogBrowser from '../catalogBrowser/CatalogBrowser';
 import WireStockTable from './WireStockTable';
+import PropellersCatalogPanel from './PropellersCatalogPanel';
 import {
   catalogKindForMaterialsView,
   MATERIALS_CATALOG_VIEWS,
@@ -44,6 +45,7 @@ const MaterialsCatalogPanel: React.FC<Props> = ({ materialView }) => {
       <Box sx={{ flex: 1, minHeight: 0, overflow: 'auto' }}>
         {view === 'materials' ? materialView
           : view === 'wire' ? <WireStockTable />
+            : view === 'propellers' ? <PropellersCatalogPanel />
             : kind ? (
               <CatalogBrowser
                 key={kind}

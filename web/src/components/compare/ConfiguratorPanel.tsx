@@ -2024,15 +2024,15 @@ const ConfiguratorPanel: React.FC = () => {
           {(result.demag_keep_pct != null || result.saturation_pct != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.demag_keep_pct != null && (
-                <MetricTile label={tx('configure.demagKoef')} value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi />
+                <MetricTile label={tx('configure.demagKoef')} value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi labelColor="#60a5fa" valueColor="#60a5fa" />
               )}
               {result.saturation_pct != null && (
-                <MetricTile label={tx('configure.saturationKoef')} value={result.saturation_pct} unit="%" d={1} base={baseRes.saturation_pct ?? 100} goodHi />
+                <MetricTile label={tx('configure.saturationKoef')} value={result.saturation_pct} unit="%" d={1} base={baseRes.saturation_pct ?? 100} goodHi labelColor="#60a5fa" valueColor="#60a5fa" />
               )}
               {result.demag_keep_pct != null && result.saturation_pct != null && (
                 <MetricTile label={tx('configure.totalKoef')} value={result.demag_keep_pct * result.saturation_pct / 100} unit="%" d={1}
                   base={(baseRes.demag_keep_pct ?? 100) * (baseRes.saturation_pct ?? 100) / 100} goodHi
-                  tip={tx('configure.totalKoefTip')} />
+                  tip={tx('configure.totalKoefTip')} labelColor="#60a5fa" valueColor="#60a5fa" />
               )}
             </Box>
           )}

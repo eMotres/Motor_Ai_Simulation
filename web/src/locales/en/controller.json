@@ -253,6 +253,7 @@
     "draftSaved": "Saved to the draft (its FEM results were cleared — simulate again).",
     "draftSaveFailed": "Could not save to the draft.",
     "subtitle": "{slots}-slot / {poles}-pole · ~{torque} N·m @ {rpm} rpm",
+    "referenceOnlyNotice": "Reference only · not a continuous rating.",
     "ktTip3d": "3-D corrected with the measured 3-D torque factor k_T of this machine.",
     "ktTipFlux": "3-D with the flux factor k_flux(L) — the torque factor k_T is not measured for this machine yet.",
     "ktTip2d": "2-D: no 3-D result exists for this machine.",

@@ -253,6 +253,7 @@
     "draftSaved": "已保存到草稿（其有限元结果已清除，请重新仿真）。",
     "draftSaveFailed": "无法保存到草稿。",
     "subtitle": "{slots} 槽 / {poles} 极 · ~{torque} N·m @ {rpm} rpm",
+    "referenceOnlyNotice": "仅供参考，不代表连续额定值。",
     "ktTip3d": "已用本电机实测的三维转矩系数 k_T 修正。",
     "ktTipFlux": "三维，采用磁链系数 k_flux(L)；本电机尚未实测转矩系数 k_T。",
     "ktTip2d": "二维：本电机没有三维结果。",

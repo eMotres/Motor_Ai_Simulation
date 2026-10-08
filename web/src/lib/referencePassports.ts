@@ -10,11 +10,14 @@
 // re-run the extractor against a reference config to refresh them.
 
 import type { Passport } from './motorScaling';
+import { isReferenceOnlyCard } from './referenceOnlyPassport';
 
 export interface ReferenceMotor {
   id: string;
   name: string;          // short title for the picker
   subtitle: string;      // one-line spec
+  /** Explicitly unqualified analytical reference; no drive variants may be offered. */
+  referenceOnly?: boolean;
   poles: number;
   slots: number;
   passport: Passport;
@@ -132,17 +135,23 @@ export async function fetchCatalogReferencesAnswer(): Promise<ReferencesAnswer> 
       const sp = m?.passport;                         // { passport, fit, geo, poles, slots }
       if (!sp?.passport || !sp?.geo || !sp?.fit) continue;   // only motors that were characterised
       const p = sp.passport as Passport;
+      const referenceOnly = isReferenceOnlyCard(m);
+      const safePassport = { ...p };
       // Computed drive variants may ride beside the passport (the record's
       // top level) instead of inside it — Configure reads them off `p`.
-      if (!p.pwm_variants && Array.isArray(sp.pwm_variants)) p.pwm_variants = sp.pwm_variants;
+      if (referenceOnly) delete safePassport.pwm_variants;
+      else if (!safePassport.pwm_variants && Array.isArray(sp.pwm_variants)) {
+        safePassport.pwm_variants = sp.pwm_variants;
+      }
       const poles = Number(sp.poles ?? sp.geo.numPoles ?? 0);
       const slots = Number(sp.slots ?? sp.geo.numSlots ?? 0);
       out.push({
         id: `cat:${m.id}`,
         name: String(m.name ?? `${m.diameter_mm ?? '?'} mm`),
-        subtitle: `${slots}-slot / ${poles}-pole · ~${(p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0)} N·m @ ${p.rpm0 ?? '?'} rpm · FEM`,
+        subtitle: referenceOnly ? '' : `${slots}-slot / ${poles}-pole · ~${(p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0)} N·m @ ${p.rpm0 ?? '?'} rpm · FEM`,
         poles, slots,
-        passport: p,
+        passport: safePassport,
+        referenceOnly,
         hasMachine: m.has_machine === true,
         card: m.card && typeof m.card === 'object' ? (m.card as ReferenceMotor['card']) : null,
         fit: sp.fit,

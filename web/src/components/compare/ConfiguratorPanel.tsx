@@ -82,6 +82,7 @@ import {
   variantDevices, variantCarriers, switchDevice, switchCarrier, resolveVariant, pairKey, carrierLabel,
   type DriveRecord, type DeviceLimits,
 } from '../../lib/configuratorDrive';
+import { selectConfigureVariants } from '../../lib/referenceOnlyPassport';
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
 import { resolveDraftTarget, modelState, pickReference } from '../../lib/configuratorGuard';
 import MyAgentDraftsBlock from './MyAgentDraftsBlock';
@@ -757,8 +758,12 @@ const ConfiguratorPanel: React.FC = () => {
   // default and the whole block is inert unless the user picks PWM: with it
   // off `scaleKnobs === knobs`, so every Sine number is the one it always was.
   const variants = useMemo(
-    () => usableVariants((basePreset && basePreset.pwm_variants.length ? basePreset.pwm_variants : p.pwm_variants) as PwmVariant[] | null | undefined),
-    [p, basePreset]);
+    () => usableVariants(selectConfigureVariants(
+      ref.referenceOnly === true,
+      basePreset?.pwm_variants,
+      p.pwm_variants,
+    )),
+    [p, basePreset, ref.referenceOnly]);
   const driveOn = knobs.drive === 'pwm' && variants.length > 0;
   const variant = driveOn ? (resolveVariant(variants, knobs) ?? null) : null;
   /** the drive choice that names a variant: its id AND its (transistor, frequency) pair */
@@ -1544,10 +1549,16 @@ const ConfiguratorPanel: React.FC = () => {
         <Box sx={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1.5 }}>
         <Box sx={{ ...PANEL, p: 2 }}>
           <Typography sx={{ fontSize: 12, fontWeight: 800, color: 'var(--text-1)', mb: 0.25 }}>{ref.name}</Typography>
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>
-            {tx('configure.subtitle', { slots: ref.slots, poles: ref.poles,
-              torque: (p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0), rpm: p.rpm0 ?? '?' })}
-          </Typography>
+          {ref.referenceOnly ? (
+            <Alert severity="warning" sx={{ mb: 1.5, py: 0, fontSize: 12 }}>
+              {tx('configure.referenceOnlyNotice')}
+            </Alert>
+          ) : (
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1.5 }}>
+              {tx('configure.subtitle', { slots: ref.slots, poles: ref.poles,
+                torque: (p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0), rpm: p.rpm0 ?? '?' })}
+            </Typography>
+          )}
 
           {/* i18n-guard:begin — every user-visible string below goes through tx() */}
           {/* two columns when there is room (build | operating point + drive), one on a phone */}

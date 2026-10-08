@@ -11,6 +11,7 @@
 
 import type { Passport } from './motorScaling';
 import { isReferenceOnlyCard } from './referenceOnlyPassport';
+import { referenceCandidateProvenance } from './referenceCardProvenance';
 
 export interface ReferenceMotor {
   id: string;
@@ -26,6 +27,8 @@ export interface ReferenceMotor {
   hasMachine?: boolean;
   /** the FULL passport card (v1 record) behind this machine, from the server; null/absent = none */
   card?: { die: string; config: string; date: string } | null;
+  /** The server's pinned provenance identity; used only to select matching source metadata. */
+  referenceProvenance?: { candidate_sha256?: string | null } | null;
   // slot/wire context — mirrors the backend slot-fit constraint
   // (geometry_constraints._wire_height_max, which mirrors the radial wire stack
   // in cadquery_geometry): N rows of (wire_height + wireSpacingY) must fit between
@@ -109,6 +112,8 @@ const _API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/
  *  real "no characterised motor"); `!ok` = it did not, so nothing is known yet. */
 export interface ReferencesAnswer { ok: boolean; refs: ReferenceMotor[]; }
 
+/** Keep only the server-pinned candidate identity used by reviewed source metadata. */
+
 /** The lean route first (`GET /api/catalog/references`: only the cards with a passport,
  *  ~100 KB); an older server without it falls back to the whole catalogue (12 MB of
  *  thumbnails on the live one).  Configure used to wait for all of that on every open. */
@@ -154,6 +159,7 @@ export async function fetchCatalogReferencesAnswer(): Promise<ReferencesAnswer> 
         referenceOnly,
         hasMachine: m.has_machine === true,
         card: m.card && typeof m.card === 'object' ? (m.card as ReferenceMotor['card']) : null,
+        referenceProvenance: referenceCandidateProvenance(m.reference_provenance),
         fit: sp.fit,
         geo: sp.geo,
       });

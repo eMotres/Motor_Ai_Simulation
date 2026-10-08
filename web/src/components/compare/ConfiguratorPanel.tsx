@@ -73,6 +73,8 @@ import {
 import {
   fetchConfigureContext, saveLMax, catalogIdOf, type ConfigureContext,
 } from '../../lib/configureContextApi';
+import { ConfigureContextRequestGuard, contextForIdentity } from '../../lib/configureContextRequest';
+import { configuratorReferenceTemperatureBasis } from '../../lib/configuratorReferenceTemperature';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import i18n from '../../i18n';
@@ -232,7 +234,12 @@ const MetricTile: React.FC<{
   /** What the number IS, when the label cannot say it (the heat split's
    *  terms).  Prepended to the vs-reference line in the hover title. */
   tip?: string;
-}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip, blankTip, display, plain }) => {
+  /** Basis marker for an unavailable, explicitly temperature-qualified value. */
+  labelColor?: string;
+  blankColor?: string;
+  /** Explicit colour for a physical constant whose temperature basis is shown below. */
+  valueColor?: string;
+}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip, blankTip, display, plain, labelColor, blankColor, valueColor }) => {
   const blank = value == null && display == null;
   const delta = value == null ? 0 : pctDelta(value, base);
   // No "% vs ref" line under every tile (user 2026-08-26) — the deltas are
@@ -248,6 +255,7 @@ const MetricTile: React.FC<{
   // told by the value's colour and by the tooltip (green = better, red =
   // worse, grey = neutral quantity).
   const changed = Math.abs(delta) >= 0.5;
+  const valueLineColor = valueColor ?? (changed && good !== null ? dColor : 'var(--text-0)');
   return (
     // ONE fixed width and a fixed value line: a number changing (or becoming "—") never moves
     // another tile (owner 2026-10-05: the block must not jump when the drive is toggled)
@@ -255,12 +263,12 @@ const MetricTile: React.FC<{
       title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : plain ? '' : changed
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
         : tx('configure.sameAsRef'))}>
-      <Typography sx={{ ...LABEL, fontSize: 9.5, whiteSpace: 'nowrap',
+      <Typography sx={{ ...LABEL, fontSize: 9.5, color: labelColor ?? LABEL.color, whiteSpace: 'nowrap',
         overflow: 'hidden', textOverflow: 'ellipsis' }}><GreekLabel text={label} /></Typography>
       <Typography sx={{ fontSize: 16, fontWeight: 800,
-        color: blank ? 'var(--text-3)' : absLevel
+        color: blank ? (blankColor ?? 'var(--text-3)') : absLevel
           ? (absLevel === 'bad' ? '#f87171' : absLevel === 'warn' ? '#fbbf24' : '#4ade80')
-          : (changed && good !== null ? dColor : 'var(--text-0)'),
+          : valueLineColor,
         fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap', minHeight: 19 }}>
         {blank ? '—' : (display ?? fmt(value as number, d))}{!blank && <Box component="span" sx={{ fontSize: 10.5,
           color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>}
@@ -342,8 +350,14 @@ const ConfiguratorPanel: React.FC = () => {
     if (refChoice.email === identity) writeConfigureRefId(identity, refChoice.id);
   }, [identity, refChoice]);
   const catId = catalogIdOf(refId);
-  const [ctx, setCtx] = useState<ConfigureContext | null>(null);
+  const [ctxState, setCtxState] = useState<{ identity: string | null; value: ConfigureContext | null }>(
+    { identity: null, value: null },
+  );
+  const ctx = contextForIdentity(ctxState.identity, identity, ctxState.value);
   const currentContext = ctx?.motor_id === catId ? ctx : null;
+  const contextRequestGuard = React.useRef(new ConfigureContextRequestGuard());
+  const contextScopeRef = React.useRef({ motorId: catId, identity });
+  contextScopeRef.current = { motorId: catId, identity };
   // ── Follow the LOADED machine (user 2026-08-25: loading CIANO28 150_35 new
   //    still showed the 200 mm reference).  On every machine load the catalog
   //    dispatches 'sim-operating-point'; match the live geometry against the
@@ -529,6 +543,10 @@ const ConfiguratorPanel: React.FC = () => {
     () => allRefs.find((r) => r.id === refId) ?? allRefs[0],
     [refId, allRefs],
   );
+  const referenceTemperatureBasis = configuratorReferenceTemperatureBasis(
+    ref.referenceProvenance?.candidate_sha256,
+  );
+  const coldConstantsUnavailable = referenceTemperatureBasis?.coldConstantsAvailable === false;
   const p = ref.passport;
   const [knobs, setKnobs] = useState<Knobs>(() => {
     try { const r = localStorage.getItem(KNOBS_LS); if (r) { const k = JSON.parse(r); if (k && typeof k.N === 'number') return k as Knobs; } } catch { /* ignore */ }
@@ -683,14 +701,20 @@ const ConfiguratorPanel: React.FC = () => {
   // it (the Thermal block for a die that is not propeller-cooled) wait for it instead of flashing.
   const [ctxDone, setCtxDone] = useState(false);
   const loadCtx = React.useCallback(async () => {
-    const requestedIdentity = identity;
+    const request = contextRequestGuard.current.begin({ motorId: catId, identity });
     const next = catId ? await fetchConfigureContext(catId) : null;
     const currentIdentity = getStoredUser()?.email?.trim().toLowerCase() ?? null;
-    if (currentIdentity !== requestedIdentity) return;
-    setCtx(next);
+    if (!contextRequestGuard.current.accepts(
+      request, contextScopeRef.current, currentIdentity, next?.motor_id ?? null,
+    )) return;
+    setCtxState({ identity, value: next });
     setCtxDone(true);
   }, [catId, identity]);
-  useEffect(() => { setCtx(null); setCtxDone(false); setLimitMsg(null); setBaseConfig(null); void loadCtx(); }, [loadCtx]);
+  useEffect(() => {
+    setCtxState({ identity, value: null }); setCtxDone(false); setLimitMsg(null); setBaseConfig(null);
+    void loadCtx();
+    return () => contextRequestGuard.current.invalidate();
+  }, [loadCtx]);
   // A family save from this or another session refreshes the selected motor's
   // catalog context, but does not apply a new preset or overwrite draft knobs.
   useEffect(() => {
@@ -702,7 +726,7 @@ const ConfiguratorPanel: React.FC = () => {
       window.removeEventListener('family-catalog-refreshed', refresh);
     };
   }, [loadCtx]);
-  const presets: Preset[] = ctx?.presets ?? [];
+  const presets: Preset[] = currentContext?.presets ?? [];
   const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
   // a freshly loaded machine starts on the configuration whose build it is
   useEffect(() => {
@@ -743,11 +767,11 @@ const ConfiguratorPanel: React.FC = () => {
       isOrdinaryAccount, restoreMatchesIdentity, lastMotor.status]);
   // the preset can only be applied once THIS machine's context has arrived
   useEffect(() => {
-    if (!pendingDefault || !ctx || ctx.motor_id !== catId) return;
-    const pr = (ctx.presets ?? []).find((x) => x.config === pendingDefault);
+    if (!pendingDefault || !currentContext) return;
+    const pr = (currentContext.presets ?? []).find((x) => x.config === pendingDefault);
     setPendingDefault(null);
     if (pr) applyPreset(pr);
-  }, [pendingDefault, ctx, catId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pendingDefault, currentContext]); // eslint-disable-line react-hooks/exhaustive-deps
   // ── DRIVE: Sine | PWM (owner 2026-10-05) ──────────────────────────────────
   // PWM lists ONLY the drive variants COMPUTED for this machine (the passport's
   // `pwm_variants`: a device at a carrier, already solved) and reads between
@@ -782,15 +806,15 @@ const ConfiguratorPanel: React.FC = () => {
   //    saved with — the same source the slider ranges read (configure_context, else the
   //    passport's own battery) — or on the user's own edit FOR THIS MACHINE; a machine
   //    that names no pack keeps the stock default.
-  const contextMatchesMotor = !!catId && ctx?.motor_id === catId;
+  const contextMatchesMotor = !!catId && !!currentContext;
   const matchingBasePreset = contextMatchesMotor ? basePreset : null;
-  const originalConfig = contextMatchesMotor ? ctx?.cooling?.config : null;
+  const originalConfig = contextMatchesMotor ? currentContext?.cooling?.config : null;
   const batteryEdit = readBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), refId, baseConfig, originalConfig);
   const batteryEditKeyForState = batteryEditKey(refId, baseConfig);
   const machinePack = useMemo(
     () => batteryForMachineConfig(!!matchingBasePreset, matchingBasePreset?.battery,
-      contextMatchesMotor ? ctx?.battery : null, p.battery as never),
-    [matchingBasePreset, contextMatchesMotor, ctx, p.battery]);
+      contextMatchesMotor ? currentContext?.battery : null, p.battery as never),
+    [matchingBasePreset, contextMatchesMotor, currentContext, p.battery]);
   const batterySeeded = React.useRef<string>('');
   // One-time cleanup: an "edit" equal to the stock 100-cell default was never a user's choice
   // (it shadowed the machine's own pack); drop it before anything reads it.
@@ -834,7 +858,7 @@ const ConfiguratorPanel: React.FC = () => {
     batterySeeded.current = '';
     setBattery(machinePack);
   };
-  const modM = ctx?.modulation.m ?? DEFAULT_MODULATION;
+  const modM = currentContext?.modulation.m ?? DEFAULT_MODULATION;
   const speedLim = useMemo(() => {
     const at0 = scaleMotor(p, { ...knobs, rpm: 0 }, ref.poles);
     const at1k = scaleMotor(p, { ...knobs, rpm: 1000 }, ref.poles);
@@ -846,10 +870,10 @@ const ConfiguratorPanel: React.FC = () => {
   }, [p, knobs, ref.poles, packMaxV, modM]);
   const phys = useMemo(() => physicalRanges({
     p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
-    lMaxMm: ctx?.limits.L_max_mm ?? null,
-    iMaxA: ctx?.current.set ? (ctx.current.i_phase_rms_max_A ?? null) : null,
+    lMaxMm: currentContext?.limits.L_max_mm ?? null,
+    iMaxA: currentContext?.current.set ? (currentContext.current.i_phase_rms_max_A ?? null) : null,
     speed: speedLim,
-  }), [p, ref.fit, knobs.N, knobs.wireH_mm, ctx, speedLim]);
+  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedLim]);
   const ranges: Record<KnobKey, KRange> = useMemo(() => ({
     L_mm: narrowRange(phys.L_mm, overrides.L_mm), N: narrowRange(phys.N, overrides.N),
     wireH_mm: narrowRange(phys.wireH_mm, overrides.wireH_mm),
@@ -882,7 +906,7 @@ const ConfiguratorPanel: React.FC = () => {
   const limitNote = (k: KnobKey): { text: string; tip: string; hand?: boolean } => {
     const b: LimitBasis = (phys as Record<KnobKey, PhysRange>)[k].basis;
     const mx = fmt(ranges[k].max, k === 'wireH_mm' ? 1 : 0);
-    const cur = ctx?.current;
+    const cur = currentContext?.current;
     if (k === 'L_mm') {
       return b === 'hand'
         ? { text: tx('configureLimits.lHand', { max: mx }), tip: tx('configureLimits.lHandTip'), hand: true }
@@ -1112,7 +1136,7 @@ const ConfiguratorPanel: React.FC = () => {
     airGap_mm: Math.max(0, ref.geo.statorIR_mm - ref.geo.rotorOR_mm),
     magnetOD_mm: ref.geo.rotorOR_mm * 2,
   }), [ref, knobs.L_mm]);
-  const tLimits = useMemo(() => tempLimits(ctx?.thermal_limits), [ctx]);
+  const tLimits = useMemo(() => tempLimits(currentContext?.thermal_limits), [currentContext]);
   const extraLossW = extraLossTile(driveMode, drv).value ?? 0;
   /** winding / magnet / housing temperatures at the knobs (null while the propeller data is
    *  not here, or while the load is refused — never numbers for a point that cannot be run) */
@@ -1915,41 +1939,88 @@ const ConfiguratorPanel: React.FC = () => {
                 </Box>
               ) : null;
             })()}
-            <MetricTile label={tx('configure.rPhase')} value={result.R_ohm * 1000} unit="mΩ" d={1} base={baseRes.R_ohm * 1000}
-              tip={tx('configure.rPhaseTip')} />
-            <MetricTile label={tx('configure.rLineLine')} value={result.R_ohm * 2000} unit="mΩ" d={1} base={baseRes.R_ohm * 2000}
-              tip={tx('configure.rLineLineTip')} />
+            <MetricTile label={coldConstantsUnavailable
+              ? tx('configure.rPhaseAtReferenceTemp', { temp: referenceTemperatureBasis.windingC })
+              : tx('configure.rPhase')} value={result.R_ohm * 1000} unit="mΩ" d={1} base={baseRes.R_ohm * 1000}
+              tip={tx('configure.rPhaseTip')} labelColor="#60a5fa" valueColor="#60a5fa" />
+            <MetricTile label={coldConstantsUnavailable
+              ? tx('configure.rLineLineAtReferenceTemp', { temp: referenceTemperatureBasis.windingC })
+              : tx('configure.rLineLine')} value={result.R_ohm * 2000} unit="mΩ" d={1} base={baseRes.R_ohm * 2000}
+              tip={tx('configure.rLineLineTip')} labelColor="#60a5fa" valueColor="#60a5fa" />
           </Box>
-          {(result.Ld_mH != null || result.Lq_mH != null || result.psi_pm_mWb != null) && (
+          {coldConstantsUnavailable ? (
+            <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+              <MetricTile label={tx('configure.ld20c')} value={null} unit="mH" d={3} base={0}
+                blankTip={tx('configure.coldConstantsUnavailable')} labelColor="#60a5fa" blankColor="#60a5fa" />
+              <MetricTile label={tx('configure.lq20c')} value={null} unit="mH" d={3} base={0}
+                blankTip={tx('configure.coldConstantsUnavailable')} labelColor="#60a5fa" blankColor="#60a5fa" />
+              <MetricTile label={tx('configure.psiPm20c')} value={null} unit="mWb" d={2} base={0}
+                blankTip={tx('configure.coldConstantsUnavailable')} labelColor="#60a5fa" blankColor="#60a5fa" />
+              <MetricTile label={tx('configure.lqLd20c')} value={null} unit="" d={2} base={0}
+                blankTip={tx('configure.coldConstantsUnavailable')} labelColor="#60a5fa" blankColor="#60a5fa" />
+            </Box>
+          ) : (result.Ld_mH != null || result.Lq_mH != null || result.psi_pm_mWb != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.Ld_mH != null && (
-                <MetricTile label="Ld" value={result.Ld_mH} unit="mH" d={3} base={baseRes.Ld_mH ?? result.Ld_mH} />
+                <MetricTile label="Ld" value={result.Ld_mH} unit="mH" d={3} base={baseRes.Ld_mH ?? result.Ld_mH} labelColor="#60a5fa" valueColor="#60a5fa" />
               )}
               {result.Lq_mH != null && (
-                <MetricTile label="Lq" value={result.Lq_mH} unit="mH" d={3} base={baseRes.Lq_mH ?? result.Lq_mH} />
+                <MetricTile label="Lq" value={result.Lq_mH} unit="mH" d={3} base={baseRes.Lq_mH ?? result.Lq_mH} labelColor="#60a5fa" valueColor="#60a5fa" />
               )}
               {result.psi_pm_mWb != null && (
-                <MetricTile label="ψ_PM" value={result.psi_pm_mWb} unit="mWb" d={2} base={baseRes.psi_pm_mWb ?? result.psi_pm_mWb} />
+                <MetricTile label="ψ_PM" value={result.psi_pm_mWb} unit="mWb" d={2} base={baseRes.psi_pm_mWb ?? result.psi_pm_mWb} labelColor="#60a5fa" valueColor="#60a5fa" />
               )}
               {result.Ld_mH != null && result.Lq_mH != null && result.Ld_mH > 0 && (
                 <MetricTile label={tx('configure.lqLd')} value={result.Lq_mH / result.Ld_mH} unit="" d={2}
                   base={(baseRes.Ld_mH ?? result.Ld_mH) > 0
                     ? (baseRes.Lq_mH ?? result.Lq_mH) / (baseRes.Ld_mH ?? result.Ld_mH)
                     : result.Lq_mH / result.Ld_mH}
-                  tip={tx('configure.lqLdTip')} />
+                  tip={tx('configure.lqLdTip')} labelColor="#60a5fa" valueColor="#60a5fa" />
               )}
             </Box>
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label={tx('configure.kvNoLoad')} value={result.KV_rpm_per_Vline} unit="rpm/V" d={1} base={baseRes.KV_rpm_per_Vline} />
-            {result.Kt_Nm_per_A != null && (
-              <MetricTile label={tx('configure.kt')} value={result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A} goodHi
+            <MetricTile
+              label={coldConstantsUnavailable ? tx('configure.kvNoLoad20c') : tx('configure.kvNoLoad')}
+              value={coldConstantsUnavailable ? null : result.KV_rpm_per_Vline}
+              unit="rpm/V" d={1} base={baseRes.KV_rpm_per_Vline}
+              blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}
+              blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
+              labelColor="#60a5fa" valueColor="#60a5fa"
+            />
+            {(result.Kt_Nm_per_A != null || coldConstantsUnavailable) && (
+              <MetricTile label={coldConstantsUnavailable ? tx('configure.kt20c') : tx('configure.kt')}
+                value={coldConstantsUnavailable ? null : result.Kt_Nm_per_A} unit="N·m/A" d={3} base={baseRes.Kt_Nm_per_A ?? result.Kt_Nm_per_A ?? 0} goodHi
+                blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}
+                blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
+                labelColor="#60a5fa" valueColor="#60a5fa"
                 tip={KT_BASIS_TIP(result.kt_km_basis)} />
             )}
-            <MetricTile label={tx('configure.km')} value={result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
-              tip={KT_BASIS_TIP(result.kt_km_basis)} />
-            <MetricTile label={tx('configure.kmPerMass')} value={result.Km_per_mass} unit="N·m/(√W·kg)" d={3} base={baseRes.Km_per_mass} goodHi />
+            <MetricTile label={coldConstantsUnavailable ? tx('configure.km20c') : tx('configure.km')}
+              value={coldConstantsUnavailable ? null : result.Km_Nm_sqrtW} unit="N·m/√W" d={3} base={baseRes.Km_Nm_sqrtW} goodHi
+              blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}
+              blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
+              labelColor="#60a5fa" valueColor="#60a5fa"
+              tip={coldConstantsUnavailable ? undefined : KT_BASIS_TIP(result.kt_km_basis)} />
+            <MetricTile label={coldConstantsUnavailable ? tx('configure.kmPerMass20c') : tx('configure.kmPerMass')}
+              value={coldConstantsUnavailable ? null : result.Km_per_mass} unit="N·m/(√W·kg)" d={3} base={baseRes.Km_per_mass} goodHi
+              blankTip={coldConstantsUnavailable ? tx('configure.coldConstantsUnavailable') : undefined}
+              blankColor={coldConstantsUnavailable ? '#60a5fa' : undefined}
+              labelColor="#60a5fa" valueColor="#60a5fa" />
           </Box>
+          {referenceTemperatureBasis && (
+            <Typography title={referenceTemperatureBasis.sourceRecord}
+              sx={{ color: 'var(--text-3)', fontSize: 10.5, mt: 0.5 }}>
+              {tx('configure.referenceTemperatureBasis', {
+                length: referenceTemperatureBasis.stackLengthMm,
+                rpm: referenceTemperatureBasis.rpm,
+                current: referenceTemperatureBasis.currentA,
+                winding: referenceTemperatureBasis.windingC,
+                magnet: referenceTemperatureBasis.magnetC,
+                steel: referenceTemperatureBasis.steelC == null ? tx('configure.temperatureUnknown') : `${referenceTemperatureBasis.steelC}°C`,
+              })}
+            </Typography>
+          )}
           {(result.demag_keep_pct != null || result.saturation_pct != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.demag_keep_pct != null && (

@@ -75,6 +75,7 @@ import {
 } from '../../lib/configureContextApi';
 import { ConfigureContextRequestGuard, contextForIdentity } from '../../lib/configureContextRequest';
 import { configuratorReferenceTemperatureBasis } from '../../lib/configuratorReferenceTemperature';
+import { stackCoefficientReferenceOnly } from '../../lib/stackCoefficientBasis.mjs';
 import { coldConstantsUnavailableForCard } from '../../lib/coldConstantsGuard.mjs';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -562,6 +563,9 @@ const ConfiguratorPanel: React.FC = () => {
     try { const r = localStorage.getItem(KNOBS_LS); if (r) { const k = JSON.parse(r); if (k && typeof k.N === 'number') return k as Knobs; } } catch { /* ignore */ }
     return baseKnobs(p);
   });
+  const stackCoefficientsUnavailable = stackCoefficientReferenceOnly(
+    catId, knobs.L_mm, referenceTemperatureBasis,
+  );
   // remember the user's tuning across reloads
   useEffect(() => { try { localStorage.setItem(KNOBS_LS, JSON.stringify(knobs)); } catch { /* ignore */ } }, [knobs]);
   const skipReset = React.useRef(false);
@@ -2045,7 +2049,12 @@ const ConfiguratorPanel: React.FC = () => {
               })}
             </Typography>
           )}
-          {(result.demag_keep_pct != null || result.saturation_pct != null) && (
+          {stackCoefficientsUnavailable ? (
+            <Typography title="The reference saturation and demagnetisation calculation is available only at the reference stack length."
+              sx={{ color: 'var(--text-3)', fontSize: 10.5, mt: 0.5 }}>
+              Reference coefficients shown only at {referenceTemperatureBasis?.stackLengthMm ?? 'the audited'} mm
+            </Typography>
+          ) : (result.demag_keep_pct != null || result.saturation_pct != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.demag_keep_pct != null && (
                 <MetricTile label={tx('configure.demagKoef')} value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi />

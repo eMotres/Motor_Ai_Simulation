@@ -75,6 +75,7 @@ import {
 } from '../../lib/configureContextApi';
 import { ConfigureContextRequestGuard, contextForIdentity } from '../../lib/configureContextRequest';
 import { configuratorReferenceTemperatureBasis } from '../../lib/configuratorReferenceTemperature';
+import { coldConstantsUnavailableForCard } from '../../lib/coldConstantsGuard.mjs';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import i18n from '../../i18n';
@@ -546,7 +547,16 @@ const ConfiguratorPanel: React.FC = () => {
   const referenceTemperatureBasis = configuratorReferenceTemperatureBasis(
     ref.referenceProvenance?.candidate_sha256,
   );
-  const coldConstantsUnavailable = referenceTemperatureBasis?.coldConstantsAvailable === false;
+  // Exact D85 reference cards fail closed when their audited cold provenance is
+  // absent or malformed; otherwise scaleMotor would expose hot passport values
+  // as if they were 20 °C constants. Legacy cards retain their prior behavior.
+  const coldConstantsUnavailable = coldConstantsUnavailableForCard(catId, referenceTemperatureBasis);
+  const coldBasisLabel = coldConstantsUnavailable && referenceTemperatureBasis
+    ? tx('configure.rPhaseAtReferenceTemp', { temp: referenceTemperatureBasis.windingC })
+    : tx('configure.rPhase');
+  const coldLineBasisLabel = coldConstantsUnavailable && referenceTemperatureBasis
+    ? tx('configure.rLineLineAtReferenceTemp', { temp: referenceTemperatureBasis.windingC })
+    : tx('configure.rLineLine');
   const p = ref.passport;
   const [knobs, setKnobs] = useState<Knobs>(() => {
     try { const r = localStorage.getItem(KNOBS_LS); if (r) { const k = JSON.parse(r); if (k && typeof k.N === 'number') return k as Knobs; } } catch { /* ignore */ }
@@ -868,17 +878,35 @@ const ConfiguratorPanel: React.FC = () => {
       v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null,
     });
   }, [p, knobs, ref.poles, packMaxV, modM]);
+  // The slider's visual scale is a no-load/build envelope.  The physical
+  // current-dependent cap remains available through speedLim for validation;
+  // using the live current here made the thumb move when only current changed.
+  const speedDisplayLim = useMemo(() => {
+    const at0 = scaleMotor(p, { ...knobs, I_A: 0, rpm: 0 }, ref.poles);
+    const at1k = scaleMotor(p, { ...knobs, I_A: 0, rpm: 1000 }, ref.poles);
+    const model = Number(p.Vload0_peak_V ?? 0) > 0;
+    return speedLimit({
+      vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
+      v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null,
+    });
+  }, [p, knobs, ref.poles, packMaxV, modM]);
   const phys = useMemo(() => physicalRanges({
     p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
     lMaxMm: currentContext?.limits.L_max_mm ?? null,
     iMaxA: currentContext?.current.set ? (currentContext.current.i_phase_rms_max_A ?? null) : null,
     speed: speedLim,
   }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedLim]);
+  const displayPhys = useMemo(() => physicalRanges({
+    p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
+    lMaxMm: currentContext?.limits.L_max_mm ?? null,
+    iMaxA: currentContext?.current.set ? (currentContext.current.i_phase_rms_max_A ?? null) : null,
+    speed: speedDisplayLim,
+  }), [p, ref.fit, knobs.N, knobs.wireH_mm, currentContext, speedDisplayLim]);
   const ranges: Record<KnobKey, KRange> = useMemo(() => ({
     L_mm: narrowRange(phys.L_mm, overrides.L_mm), N: narrowRange(phys.N, overrides.N),
     wireH_mm: narrowRange(phys.wireH_mm, overrides.wireH_mm),
-    I_A: narrowRange(phys.I_A, overrides.I_A), rpm: narrowRange(phys.rpm, overrides.rpm),
-  }), [phys, overrides]);
+    I_A: narrowRange(phys.I_A, overrides.I_A), rpm: narrowRange(displayPhys.rpm, overrides.rpm),
+  }), [phys, displayPhys, overrides]);
   /** an admin's local edit: clamped INSIDE the physical range, so it only narrows */
   const setRange = (k: KnobKey) => (min: number, max: number) => {
     const nr = narrowRange(phys[k], { min, max });
@@ -1736,7 +1764,7 @@ const ConfiguratorPanel: React.FC = () => {
               ? { text: tx('configurePropeller.currentFromProp'), tip: tx('configurePropeller.currentFromPropTip') }
               : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />
           <KnobSlider label={tx('configureLimits.speed')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRange('rpm') : undefined}
-            warn={above(knobs.rpm, ranges.rpm)} zone={cooled ? zones.rpm : null}
+            warn={above(knobs.rpm, ranges.rpm) || (speedLim.rpm != null && knobs.rpm > speedLim.rpm)} zone={cooled ? zones.rpm : null}
             limitNote={(() => {
               const n = limitNote('rpm');
               if (!cooled) return { ...n, text: '' };
@@ -1939,43 +1967,39 @@ const ConfiguratorPanel: React.FC = () => {
                 </Box>
               ) : null;
             })()}
-            <MetricTile label={coldConstantsUnavailable
-              ? tx('configure.rPhaseAtReferenceTemp', { temp: referenceTemperatureBasis.windingC })
-              : tx('configure.rPhase')} value={result.R_ohm * 1000} unit="mΩ" d={1} base={baseRes.R_ohm * 1000}
-              tip={tx('configure.rPhaseTip')} labelColor="#60a5fa" valueColor="#60a5fa" />
-            <MetricTile label={coldConstantsUnavailable
-              ? tx('configure.rLineLineAtReferenceTemp', { temp: referenceTemperatureBasis.windingC })
-              : tx('configure.rLineLine')} value={result.R_ohm * 2000} unit="mΩ" d={1} base={baseRes.R_ohm * 2000}
-              tip={tx('configure.rLineLineTip')} labelColor="#60a5fa" valueColor="#60a5fa" />
+            <MetricTile label={coldBasisLabel} value={result.R_ohm * 1000} unit="mΩ" d={1} base={baseRes.R_ohm * 1000}
+              tip={tx('configure.rPhaseTip')} />
+            <MetricTile label={coldLineBasisLabel} value={result.R_ohm * 2000} unit="mΩ" d={1} base={baseRes.R_ohm * 2000}
+              tip={tx('configure.rLineLineTip')} />
           </Box>
           {coldConstantsUnavailable ? (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               <MetricTile label={tx('configure.ld20c')} value={null} unit="mH" d={3} base={0}
-                blankTip={tx('configure.coldConstantsUnavailable')} labelColor="#60a5fa" blankColor="#60a5fa" />
+                blankTip={tx('configure.coldConstantsUnavailable')} />
               <MetricTile label={tx('configure.lq20c')} value={null} unit="mH" d={3} base={0}
-                blankTip={tx('configure.coldConstantsUnavailable')} labelColor="#60a5fa" blankColor="#60a5fa" />
+                blankTip={tx('configure.coldConstantsUnavailable')} />
               <MetricTile label={tx('configure.psiPm20c')} value={null} unit="mWb" d={2} base={0}
-                blankTip={tx('configure.coldConstantsUnavailable')} labelColor="#60a5fa" blankColor="#60a5fa" />
+                blankTip={tx('configure.coldConstantsUnavailable')} />
               <MetricTile label={tx('configure.lqLd20c')} value={null} unit="" d={2} base={0}
-                blankTip={tx('configure.coldConstantsUnavailable')} labelColor="#60a5fa" blankColor="#60a5fa" />
+                blankTip={tx('configure.coldConstantsUnavailable')} />
             </Box>
           ) : (result.Ld_mH != null || result.Lq_mH != null || result.psi_pm_mWb != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.Ld_mH != null && (
-                <MetricTile label="Ld" value={result.Ld_mH} unit="mH" d={3} base={baseRes.Ld_mH ?? result.Ld_mH} labelColor="#60a5fa" valueColor="#60a5fa" />
+                <MetricTile label="Ld" value={result.Ld_mH} unit="mH" d={3} base={baseRes.Ld_mH ?? result.Ld_mH} />
               )}
               {result.Lq_mH != null && (
-                <MetricTile label="Lq" value={result.Lq_mH} unit="mH" d={3} base={baseRes.Lq_mH ?? result.Lq_mH} labelColor="#60a5fa" valueColor="#60a5fa" />
+                <MetricTile label="Lq" value={result.Lq_mH} unit="mH" d={3} base={baseRes.Lq_mH ?? result.Lq_mH} />
               )}
               {result.psi_pm_mWb != null && (
-                <MetricTile label="ψ_PM" value={result.psi_pm_mWb} unit="mWb" d={2} base={baseRes.psi_pm_mWb ?? result.psi_pm_mWb} labelColor="#60a5fa" valueColor="#60a5fa" />
+                <MetricTile label="ψ_PM" value={result.psi_pm_mWb} unit="mWb" d={2} base={baseRes.psi_pm_mWb ?? result.psi_pm_mWb} />
               )}
               {result.Ld_mH != null && result.Lq_mH != null && result.Ld_mH > 0 && (
                 <MetricTile label={tx('configure.lqLd')} value={result.Lq_mH / result.Ld_mH} unit="" d={2}
                   base={(baseRes.Ld_mH ?? result.Ld_mH) > 0
                     ? (baseRes.Lq_mH ?? result.Lq_mH) / (baseRes.Ld_mH ?? result.Ld_mH)
                     : result.Lq_mH / result.Ld_mH}
-                  tip={tx('configure.lqLdTip')} labelColor="#60a5fa" valueColor="#60a5fa" />
+                  tip={tx('configure.lqLdTip')} />
               )}
             </Box>
           )}
@@ -2024,15 +2048,15 @@ const ConfiguratorPanel: React.FC = () => {
           {(result.demag_keep_pct != null || result.saturation_pct != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.demag_keep_pct != null && (
-                <MetricTile label={tx('configure.demagKoef')} value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi labelColor="#60a5fa" valueColor="#60a5fa" />
+                <MetricTile label={tx('configure.demagKoef')} value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi />
               )}
               {result.saturation_pct != null && (
-                <MetricTile label={tx('configure.saturationKoef')} value={result.saturation_pct} unit="%" d={1} base={baseRes.saturation_pct ?? 100} goodHi labelColor="#60a5fa" valueColor="#60a5fa" />
+                <MetricTile label={tx('configure.saturationKoef')} value={result.saturation_pct} unit="%" d={1} base={baseRes.saturation_pct ?? 100} goodHi />
               )}
               {result.demag_keep_pct != null && result.saturation_pct != null && (
                 <MetricTile label={tx('configure.totalKoef')} value={result.demag_keep_pct * result.saturation_pct / 100} unit="%" d={1}
                   base={(baseRes.demag_keep_pct ?? 100) * (baseRes.saturation_pct ?? 100) / 100} goodHi
-                  tip={tx('configure.totalKoefTip')} labelColor="#60a5fa" valueColor="#60a5fa" />
+                  tip={tx('configure.totalKoefTip')} />
               )}
             </Box>
           )}

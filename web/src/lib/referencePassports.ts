@@ -11,7 +11,7 @@
 
 import type { Passport } from './motorScaling';
 import { isReferenceOnlyCard } from './referenceOnlyPassport';
-import { referenceCandidateProvenance } from './referenceCardProvenance';
+import { referenceCandidateProvenanceFromCatalogEntry } from './referenceCardProvenance';
 
 export interface ReferenceMotor {
   id: string;
@@ -159,7 +159,10 @@ export async function fetchCatalogReferencesAnswer(): Promise<ReferencesAnswer> 
         referenceOnly,
         hasMachine: m.has_machine === true,
         card: m.card && typeof m.card === 'object' ? (m.card as ReferenceMotor['card']) : null,
-        referenceProvenance: referenceCandidateProvenance(m.reference_provenance),
+        // The API's passport card is a wrapper: provenance sits beside the
+        // nested `passport` within `m.passport`, not on the motor row itself.
+        // Accept the old top-level shape too, and fail closed on conflicts.
+        referenceProvenance: referenceCandidateProvenanceFromCatalogEntry(m),
         fit: sp.fit,
         geo: sp.geo,
       });

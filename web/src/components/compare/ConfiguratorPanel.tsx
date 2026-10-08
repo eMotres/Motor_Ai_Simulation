@@ -37,7 +37,7 @@ import BatteryPanel, { type Battery, defaultBattery } from './BatteryPanel';
 import { useAuth } from '../../contexts/AuthContext';
 import { referenceOfDefault } from '../../lib/accessUi';
 import { readConfigureRefId, writeConfigureRefId, isOwnChoice } from './configureChoice';
-import { configureRefIdForSelection, useLastMotorState } from '../../lib/lastMotor';
+import { useLastMotorState } from '../../lib/lastMotor';
 import { getStoredUser } from '../../lib/localAuth';
 import { CardBadge } from '../common/CardBadge';
 import PerformanceCharts from './PerformanceCharts';
@@ -83,6 +83,7 @@ import {
   type DriveRecord, type DeviceLimits,
 } from '../../lib/configuratorDrive';
 import { selectConfigureVariants } from '../../lib/referenceOnlyPassport';
+import { resolveConfigureSelectionReference } from '../../lib/resolveConfigureSelectionReference';
 import { getDraft, patchDraft, draftIdFromUrl, bestDraftResult, type AgentDraft } from '../../lib/agentDrafts';
 import { resolveDraftTarget, modelState, pickReference } from '../../lib/configuratorGuard';
 import MyAgentDraftsBlock from './MyAgentDraftsBlock';
@@ -363,6 +364,7 @@ const ConfiguratorPanel: React.FC = () => {
     || (restoreMatchesIdentity && (lastMotor.status === 'loaded' || lastMotor.status === 'unavailable'));
   useEffect(() => {
     const pick = (fromEvent = false) => {
+      const g = useMotorStore.getState().geometry as Record<string, any> | null;
       let savedReference: ReferenceMotor | null = null;
       if (isOrdinaryAccount) {
         if (!restoreMatchesIdentity || lastMotor.status === 'loading' || lastMotor.status === 'idle') {
@@ -382,11 +384,7 @@ const ConfiguratorPanel: React.FC = () => {
         }
         if (lastMotor.status === 'loaded' && lastMotor.selection) {
           if (!refsAnswered) return;
-          const configureRefId = configureRefIdForSelection(lastMotor.selection);
-          const savedRef = configureRefId
-            ? allRefs.find((item) => item.id === configureRefId
-              && item.card?.die === lastMotor.selection?.die)
-            : undefined;
+          const savedRef = resolveConfigureSelectionReference(lastMotor.selection, catalogRefs, g);
           if (!savedRef) {
             setMatchChecked(true);
             setLiveMatched(false);
@@ -397,7 +395,6 @@ const ConfiguratorPanel: React.FC = () => {
           setMatchChecked(true);
         }
       }
-      const g = useMotorStore.getState().geometry as Record<string, any> | null;
       if (!g) return;
       if (refsAnswered) setMatchChecked(true);   // looked up against the ANSWER, not the seed
       if (fromEvent) defaultPinned.current = false;

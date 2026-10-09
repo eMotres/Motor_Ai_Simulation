@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, ButtonBase, Chip, CircularProgress, Link, Paper, Table, TableBody,
-  TableCell, TableRow, TextField, Typography,
+  TableCell, TableRow, TextField, Typography, FormControl, Select, MenuItem,
 } from '@mui/material';
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { fetchPropellers } from '../../lib/propellerApi';
 import type { PropSummary } from '../../lib/configuratorPropeller';
 import { nsT } from '../../i18n/nsT';
+import { buildRpmGroups, type RpmMetric } from './propellerRpmChart';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const tx = nsT('motors');
@@ -72,6 +74,7 @@ const PropellersCatalogPanel: React.FC = () => {
   const [detail, setDetail] = useState<PropellerDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState(false);
+  const [metric, setMetric] = useState<RpmMetric>('thrust');
 
   useEffect(() => {
     let live = true;
@@ -158,6 +161,27 @@ const PropellersCatalogPanel: React.FC = () => {
               <Chip size="small" label={detail.selectable ? tx('propellerCatalogTestData') : tx('propellerCatalogGeometryOnly')}
                 sx={{ height: 20, fontSize: 10 }} />
             </Box>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
+              <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>Performance vs RPM</Typography>
+              <FormControl size="small" sx={{ minWidth: 130 }}>
+                <Select value={metric} onChange={(e) => setMetric(e.target.value as RpmMetric)} aria-label="Chart metric" sx={{ fontSize: 11, height: 30 }}>
+                  <MenuItem value="thrust">Thrust (N)</MenuItem>
+                  <MenuItem value="power">Power (W)</MenuItem>
+                  <MenuItem value="torque">Shaft torque (N·m)</MenuItem>
+                </Select>
+              </FormControl>
+            </Box>
+            {(() => { const groups = buildRpmGroups(detail, metric); const unit = metric === 'thrust' ? ' N' : metric === 'torque' ? ' N·m' : ' W'; return groups.length ? <Box sx={{ mb: 1 }}>
+              <Box sx={{ height: 230 }}><ResponsiveContainer width="100%" height="100%"><LineChart margin={{ top: 5, right: 12, bottom: 18, left: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" /><XAxis type="number" dataKey="rpm" name="RPM" unit=" rpm" domain={['dataMin', 'dataMax']} />
+                <YAxis dataKey="value" name={metric} unit={unit} /><Tooltip labelFormatter={(v) => `${v} rpm`} formatter={(value, name) => [typeof value === 'number' ? `${value.toFixed(2)}${unit}` : `—${unit}`, name]} /><Legend />{groups.map((g, i) => <Line key={g.id} data={g.points} name={g.label} type="monotone" dataKey="value" dot={{ r: 2 }} stroke={['var(--accent)', '#60a5fa', '#f59e0b', '#34d399'][i % 4]} strokeDasharray={g.seriesKind === 'electrical_input' ? '5 3' : undefined} />)}
+              </LineChart></ResponsiveContainer></Box>
+              <Box sx={{ maxHeight: 84, overflowY: 'auto' }}>
+                {groups.map((g) => <Typography key={g.id} sx={{ fontSize: 10, color: 'var(--text-3)', overflowWrap: 'anywhere' }}>
+                  {g.label}: {g.points.length} points · {g.provenance}{g.sourceUrl ? <> · <Link href={g.sourceUrl} target="_blank" rel="noreferrer" sx={{ fontSize: 10 }}>source</Link></> : null}
+                </Typography>)}
+              </Box>
+            </Box> : <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1 }}>No finite {metric} data available for the tested RPM range.</Typography>; })()}
             <Table size="small" aria-label="Propeller properties">
               <TableBody>
                 {[
@@ -169,7 +193,7 @@ const PropellersCatalogPanel: React.FC = () => {
                   [tx('propellerCatalogPowerData'), detail.power_data], [tx('propellerCatalogDataQuality'), detail.data_quality],
                   [tx('propellerCatalogRpmRange'), detail.rpm_range_tested], [tx('propellerCatalogTestDensity'), detail.performance?.test_density_kg_m3 != null ? `${detail.performance.test_density_kg_m3} kg/m³` : null],
                   [tx('propellerCatalogTestBasis'), detail.performance?.static_hover_only ? tx('propellerCatalogStaticTests') : null],
-                  [tx('propellerCatalogFitPoints'), detail.fit?.points], [tx('propellerCatalogAccessed'), detail.accessed],
+                  [tx('propellerCatalogFitPoints'), Array.isArray(detail.fit?.points) ? `${detail.fit.points.length} points` : detail.fit?.points != null ? `${detail.fit.points} points` : null], [tx('propellerCatalogAccessed'), detail.accessed],
                 ].map(([label, value]) => (
                   <TableRow key={String(label)}>
                     <TableCell sx={headSx}>{label}</TableCell>

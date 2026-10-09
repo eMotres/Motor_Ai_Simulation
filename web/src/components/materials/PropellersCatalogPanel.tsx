@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Box, ButtonBase, Chip, CircularProgress, Link, Paper, Table, TableBody,
+  Box, ButtonBase, Chip, CircularProgress, Paper, Table, TableBody,
   TableCell, TableRow, TextField, Typography, FormControl, Select, MenuItem,
 } from '@mui/material';
-import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import { fetchPropellers } from '../../lib/propellerApi';
 import type { PropSummary } from '../../lib/configuratorPropeller';
@@ -63,6 +63,13 @@ function rowsOf(record: Record<string, unknown> | null | undefined, prefix = '')
     }
     return [[label, value] as [string, unknown]];
   });
+}
+
+function chartCaption(provenance: string, metric: RpmMetric): string {
+  if (provenance.includes('estimated')) return 'Estimated coefficient curve';
+  if (provenance.includes('calculated from published shaft torque')) return 'Calculated from published shaft torque';
+  if (provenance.includes('fit')) return 'Calculated from published coefficient fit';
+  return metric === 'thrust' ? 'Published thrust measurements' : 'Published shaft measurements';
 }
 
 const PropellersCatalogPanel: React.FC = () => {
@@ -172,16 +179,12 @@ const PropellersCatalogPanel: React.FC = () => {
               </FormControl>
             </Box>
             {(() => { const groups = buildRpmGroups(detail, metric); const unit = metric === 'thrust' ? ' N' : metric === 'torque' ? ' N·m' : ' W'; return groups.length ? <Box sx={{ mb: 1 }}>
-              <Box sx={{ height: 230 }}><ResponsiveContainer width="100%" height="100%"><LineChart margin={{ top: 5, right: 12, bottom: 18, left: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" /><XAxis type="number" dataKey="rpm" name="RPM" unit=" rpm" domain={['dataMin', 'dataMax']} />
-                <YAxis dataKey="value" name={metric} unit={unit} /><Tooltip labelFormatter={(v) => `${v} rpm`} formatter={(value, name) => [typeof value === 'number' ? `${value.toFixed(2)}${unit}` : `—${unit}`, name]} /><Legend />{groups.map((g, i) => <Line key={g.id} data={g.points} name={g.label} type="monotone" dataKey="value" dot={{ r: 2 }} stroke={['var(--accent)', '#60a5fa', '#f59e0b', '#34d399'][i % 4]} strokeDasharray={g.seriesKind === 'electrical_input' ? '5 3' : undefined} />)}
+       <Box sx={{ height: 460 }}><ResponsiveContainer width="100%" height="100%"><LineChart margin={{ top: 5, right: 12, bottom: 18, left: 0 }}>
+         <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" /><XAxis type="number" dataKey="rpm" name="RPM" unit=" rpm" domain={['dataMin', 'dataMax']} />
+         <YAxis dataKey="value" name={metric} unit={unit} /><Tooltip labelFormatter={(v) => `${v} rpm`} formatter={(value, name) => [typeof value === 'number' ? `${value.toFixed(2)}${unit}` : `—${unit}`, name]} />{groups.map((g) => <Line key={g.id} data={g.points} name={g.label} type="monotone" dataKey="value" dot={{ r: 2 }} stroke="var(--accent)" />)}
               </LineChart></ResponsiveContainer></Box>
-              <Box sx={{ maxHeight: 84, overflowY: 'auto' }}>
-                {groups.map((g) => <Typography key={g.id} sx={{ fontSize: 10, color: 'var(--text-3)', overflowWrap: 'anywhere' }}>
-                  {g.label}: {g.points.length} points · {g.provenance}{g.sourceUrl ? <> · <Link href={g.sourceUrl} target="_blank" rel="noreferrer" sx={{ fontSize: 10 }}>source</Link></> : null}
-                </Typography>)}
-              </Box>
-            </Box> : <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1 }}>No finite {metric} data available for the tested RPM range.</Typography>; })()}
+       <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{groups[0].points.length} points · {chartCaption(groups[0].provenance, metric)}</Typography>
+       </Box> : <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1 }}>{metric === 'thrust' ? 'No measured thrust series is available.' : 'No shaft curve is available: measured shaft torque or a bounded Cp fit is required.'}</Typography>; })()}
             <Table size="small" aria-label="Propeller properties">
               <TableBody>
                 {[
@@ -204,12 +207,6 @@ const PropellersCatalogPanel: React.FC = () => {
             </Table>
             {!!detail.geometry && <PropertyBlock title={tx('propellerCatalogGeometry')} values={detail.geometry} />}
             {!!detail.hub && <PropertyBlock title={tx('propellerCatalogHub')} values={detail.hub} />}
-            {Array.isArray(detail.source_urls) && detail.source_urls.length > 0 && (
-              <Box sx={{ mt: 1 }}>
-                <Typography sx={{ fontSize: 10, color: 'var(--text-3)', mb: 0.35 }}>{tx('propellerCatalogSources')}</Typography>
-                {detail.source_urls.map((url) => <Box key={url}><Link href={url} target="_blank" rel="noreferrer" sx={{ fontSize: 11, overflowWrap: 'anywhere' }}>{url}</Link></Box>)}
-              </Box>
-            )}
           </>
         )}
         {!selectedId && !listError && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tx('propellerCatalogSelect')}</Typography>}

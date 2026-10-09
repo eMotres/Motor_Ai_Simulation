@@ -9,6 +9,7 @@ import { fetchPropellers } from '../../lib/propellerApi';
 import type { PropSummary } from '../../lib/configuratorPropeller';
 import { nsT } from '../../i18n/nsT';
 import { buildRpmGroups, type RpmMetric } from './propellerRpmChart';
+import { chartCaption } from './propellerChartCaption';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 const tx = nsT('motors');
@@ -63,13 +64,6 @@ function rowsOf(record: Record<string, unknown> | null | undefined, prefix = '')
     }
     return [[label, value] as [string, unknown]];
   });
-}
-
-function chartCaption(provenance: string, metric: RpmMetric): string {
-  if (provenance.includes('estimated')) return 'Estimated coefficient curve';
-  if (provenance.includes('calculated from published shaft torque')) return 'Calculated from published shaft torque';
-  if (provenance.includes('fit')) return 'Calculated from published coefficient fit';
-  return metric === 'thrust' ? 'Published thrust measurements' : 'Published shaft measurements';
 }
 
 const PropellersCatalogPanel: React.FC = () => {
@@ -138,7 +132,7 @@ const PropellersCatalogPanel: React.FC = () => {
               aria-pressed={selectedId === item.id}
               sx={{ width: '100%', display: 'block', textAlign: 'left', p: 1, mb: 0.5,
                 borderRadius: 1, border: '1px solid',
-                borderColor: selectedId === item.id ? 'var(--accent)' : 'var(--line-soft)',
+                borderColor: selectedId === item.id ? 'var(--brand, #2563eb)' : 'var(--line-soft)',
                 bgcolor: selectedId === item.id ? 'var(--panel)' : 'transparent' }}>
               <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)' }}>
                 {item.vendor} · {item.model}
@@ -181,7 +175,7 @@ const PropellersCatalogPanel: React.FC = () => {
             {(() => { const groups = buildRpmGroups(detail, metric); const unit = metric === 'thrust' ? ' N' : metric === 'torque' ? ' N·m' : ' W'; return groups.length ? <Box sx={{ mb: 1 }}>
        <Box sx={{ height: 460 }}><ResponsiveContainer width="100%" height="100%"><LineChart margin={{ top: 5, right: 12, bottom: 18, left: 0 }}>
          <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" /><XAxis type="number" dataKey="rpm" name="RPM" unit=" rpm" domain={['dataMin', 'dataMax']} />
-         <YAxis dataKey="value" name={metric} unit={unit} /><Tooltip labelFormatter={(v) => `${v} rpm`} formatter={(value, name) => [typeof value === 'number' ? `${value.toFixed(2)}${unit}` : `—${unit}`, name]} />{groups.map((g) => <Line key={g.id} data={g.points} name={g.label} type="monotone" dataKey="value" dot={{ r: 2 }} stroke="var(--accent)" />)}
+         <YAxis dataKey="value" name={metric} unit={unit} /><Tooltip labelFormatter={(v) => `${v} rpm`} formatter={(value, name) => [typeof value === 'number' ? `${value.toFixed(2)}${unit}` : `—${unit}`, name]} />{groups.map((g) => <Line key={g.id} data={g.points} name={g.label} type="monotone" dataKey="value" dot={{ r: 2 }} stroke="var(--brand, #2563eb)" />)}
               </LineChart></ResponsiveContainer></Box>
        <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{groups[0].points.length} points · {chartCaption(groups[0].provenance, metric)}</Typography>
        </Box> : <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1 }}>{metric === 'thrust' ? 'No measured thrust series is available.' : 'No shaft curve is available: measured shaft torque or a bounded Cp fit is required.'}</Typography>; })()}

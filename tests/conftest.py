@@ -134,6 +134,93 @@ def _assert_the_live_config_is_untouched():
         "with the app idle before treating it as a test bug.")
 
 
+def _lazy_resolver_modules() -> dict:
+    """``{module name: set of its current global names}`` for every imported
+    ``motor_ai_sim`` module that serves some of its constants from a module-level
+    ``__getattr__`` (sixteen route/service modules: ``_PRESETS_PATH``,
+    ``_CATALOG_PATH``, ``_CONFIG_PATH``, ``_DIES_DIR`` ...)."""
+    import sys
+    out = {}
+    for _n, _m in list(sys.modules.items()):
+        if _n.startswith("motor_ai_sim") and _m is not None                 and callable(getattr(_m, "__dict__", {}).get("__getattr__")):
+            out[_n] = set(vars(_m))
+    return out
+
+
+def _drop_stale_lazy_overrides(before: dict) -> None:
+    """Remove every name added to such a module since ``before`` that the module's
+    own resolver can also serve."""
+    import sys
+    for _n, _names in before.items():
+        _m = sys.modules.get(_n)
+        if _m is None:
+            continue
+        for _k in set(vars(_m)) - _names:
+            if not _k.startswith("_"):
+                continue
+            try:
+                _m.__getattr__(_k)            # served by the lazy resolver too
+            except Exception:                                 # noqa: BLE001
+                continue
+            vars(_m).pop(_k, None)
+
+
+@pytest.fixture(autouse=True)
+def _undo_stale_lazy_path_overrides():
+    """``monkeypatch.setattr(routes.presets, "_PRESETS_PATH", x)`` must not outlive
+    the test (2026-10-10).
+
+    Those constants are NOT in the module's ``__dict__``: the module-level
+    ``__getattr__`` resolves them per call against the caller's workspace.  When a
+    test monkeypatches one, pytest records the value the resolver served as the
+    "old" one and, on undo, writes THAT back as a real attribute -- which from
+    then on wins over the resolver for the rest of the session.  The next module
+    that expects per-workspace resolution (tests/test_user_load_granted_motor.py)
+    silently read the sandbox's shared presets instead and failed with a 403 on a
+    motor it never owned, only in a long run.  Here every such name a test adds is
+    removed again after the test (our teardown runs after monkeypatch's: an
+    autouse fixture is set up first).  Module-scoped patches
+    (``pytest.MonkeyPatch()`` in a module fixture) are handled by the module-level
+    fixture below.
+    """
+    before = _lazy_resolver_modules()
+    yield
+    _drop_stale_lazy_overrides(before)
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _restore_the_sandbox_machine_after_each_module():
+    """Every module leaves the sandbox machine as it found it (2026-10-10).
+
+    The sandbox ``motor_config.yaml`` is ONE file for the whole session, and a
+    number of modules really write it (``PUT /api/geometry``, ``POST
+    /api/presets/{id}/apply``, the Fusion import).  A module that did not put the
+    file back handed the next one a different machine: tests/test_presets_apply_
+    geometry_validation.py applies a 30 mm preset and stopped there, after which
+    every stubbed-solve module that follows (test_run_ledger*, test_tdm_default,
+    ...) was refused by the geometry guard — red only in a long run, green alone.
+    tests/test_api.py already restored its own copy; this makes it the rule.
+
+    Restoring the FILE is not restoring the MACHINE: the geometry service keeps
+    the last PUT in memory, so the caches are dropped and the machine re-read.
+    """
+    from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _cfg_path
+    backup = _cfg_path.read_bytes() if _cfg_path.exists() else None
+    lazy_before = _lazy_resolver_modules()
+    yield
+    _drop_stale_lazy_overrides(lazy_before)
+    try:
+        if backup is not None and _cfg_path.exists() and _cfg_path.read_bytes() != backup:
+            _cfg_path.write_bytes(backup)
+            from motor_ai_sim.config import clear_config_cache
+            clear_config_cache()
+            from motor_ai_sim.services import geometry_service as _gs
+            _gs.invalidate_mesh_cache()
+            _gs.get_current_geometry(reload=True)
+    except Exception:                                       # noqa: BLE001
+        pass
+
+
 @pytest.fixture(autouse=True)
 def _clear_run_history():
     """Empty every ``motor_ai_sim.run_history`` kind before each test (2026-09-22).

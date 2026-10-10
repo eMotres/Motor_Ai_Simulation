@@ -316,8 +316,12 @@ def test_a_thermal_request_with_no_electromagnetic_run_does_not_leave_the_bar_ru
     started, and the panel would otherwise poll for ever a run that ended before
     it began.
     """
+    # The EXACT-POINT door: since 2026-09-30 (#83) the Thermal tab's default door
+    # takes the newest stored run of the loaded machine whatever current the
+    # request names, so a 999 A request would simply be answered from it.  Only
+    # em_source=point still refuses a point no run covers.
     r = client.get("/api/thermal/field",
-                   params=_thermal_params(I_phase_rms=999.0))
+                   params=_thermal_params(I_phase_rms=999.0, em_source="point"))
     assert r.status_code == 422, r.text[:400]
     assert r.json()["detail"]["error_code"] == "no_electromagnetic_run"
     assert _poll(client, "/api/thermal/progress")["running"] is False
@@ -331,6 +335,9 @@ def test_thermal_field_progress_is_stopped_after_a_cache_hit(client, em_run):
     assert second.status_code == 200, second.text[:400]
     assert second.json()["cached"] is True
 
+    # A repeat is served from the persistent history (2026-09-22): it returns
+    # BEFORE the bar opens ("a hit returns with no progress ring"), so what must
+    # hold is that nothing is left running, not that a finished bar is replayed.
     out = _poll(client, "/api/thermal/progress")
     assert out["running"] is False
-    assert out["step"] == out["total"] > 0
+    assert out["step"] == out["total"]

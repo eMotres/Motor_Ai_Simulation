@@ -321,8 +321,10 @@ def test_workspace_clash_between_shared_and_private_resolves_to_none(sources, tm
     shared = tmp_path / "shared" / "dies"
     _write_die(shared, "Real A")
     monkeypatch.setattr(DS, "_shared_dies_dir", lambda: shared)
+    # layers() takes prefer_shared since admin saves go to the shared catalogue
     monkeypatch.setattr(W, "layers",
-                        lambda: [W.Layer(W.LAYER_SHARED, shared)] + W.source_layers())
+                        lambda prefer_shared=None: [W.Layer(W.LAYER_SHARED, shared)]
+                        + W.source_layers())
     assert DS.scan()["Real A"]["clash"]
     assert W.resolve_die_dir("Real A") is None
     assert "Real A" not in {e["name"] for e in W.iter_dies()}

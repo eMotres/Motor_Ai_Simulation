@@ -106,10 +106,17 @@ def test_apply_refuses_with_the_same_message_as_the_dry_run(monkeypatch):
         "stator_diameter") != 6
 
 
-def test_geometry_patch_refuses_the_same_values_the_import_does():
+def test_geometry_patch_refuses_the_same_values_the_import_does(monkeypatch):
     """Typed straight into the Geometry tab, the identical combination must
     be refused with the identical message -- both paths go through
-    ``update_geometry`` / ``check_geometry_submission``."""
+    ``update_geometry`` / ``check_geometry_submission``.
+
+    The schema caps are lifted (GEO_UNBOUNDED=1, the documented exploration
+    switch; the owner's live schema runs min 0 / max 6000 on stator_diameter):
+    this test is about the DERIVED-value guard, and the committed schema's
+    ``stator_diameter`` minimum (20 mm) would otherwise refuse the 6 mm CSV value
+    first, as "geometry parameter out of range", before the guard under test runs."""
+    monkeypatch.setenv("GEO_UNBOUNDED", "1")
     changed = {
         "air_gap": 0.1, "core_thickness": 0.7, "magnet_height": 2,
         "rotor_house_height": 0.3, "slot_height": 1.842, "stator_diameter": 6,

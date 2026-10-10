@@ -12,10 +12,11 @@ Two things are covered:
    guarded so schema growth cannot silently drop a parameter off the page.
 
 2. The (now hidden/dev-only) per-machine route builder,
-   ``services.dimension_sheet.build_dimension_sheet``, still works for the
-   three dies actually present in ``config/`` — kept per the owner's
-   permission to leave it as a dev endpoint even though the Help button no
-   longer opens it.
+   ``services.dimension_sheet.build_dimension_sheet``, still works for three
+   dies COMMITTED in ``config/dies`` (a clean checkout / the test image has no
+   other: the owner's local catalogue carries dies that are not in git) — kept
+   per the owner's permission to leave it as a dev endpoint even though the Help
+   button no longer opens it.
 """
 from __future__ import annotations
 
@@ -44,6 +45,11 @@ _RADII_PAGE_KEYS = ("stator_diameter", "stator_inner_radius", "rotor_outer_radiu
 
 _CONFIG_PATH = _ROOT / "config" / "motor_config.yaml"
 
+#: A die + duty that are COMMITTED (config/dies/CIANO28 150_35): magnet_down_height
+#: is nonzero there, which the magnet-edge test below needs.
+_FIXTURE_DIE = "CIANO28 150_35"
+_FIXTURE_DUTY = "L35.yaml"
+
 
 def _schema_keys() -> set:
     """Every key the STATIC generator script draws from — the config's own
@@ -56,7 +62,11 @@ def _schema_keys() -> set:
     # minus what the sheet deliberately leaves out (slot_hs: never read by the
     # geometry builder, owner 2026-09-30)
     from motor_ai_sim.services.dimension_sheet import _NOT_SHOWN_KEYS
-    return keys - set(_NOT_SHOWN_KEYS)
+    # and the retired keys (shaft_diameter, retired 2026-09-07: "dropped from the
+    # form"): the committed motor_config.yaml still lists them in its schema block,
+    # the owner's live config does not, and the picture rightly never draws them.
+    from motor_ai_sim.routes._validation import RETIRED_GEOMETRY_KEYS
+    return keys - set(_NOT_SHOWN_KEYS) - set(RETIRED_GEOMETRY_KEYS)
 
 
 # ── the static Help picture ─────────────────────────────────────────────────
@@ -122,8 +132,8 @@ def test_radii_ring_has_all_seven_names_and_is_not_tiny():
          for gid, meta in groups_cfg.items()],
         key=lambda g: g["order"])
 
-    die_path = _ROOT / "config" / "dies" / "CIANO10 200 opt" / "die.yaml"
-    duty_path = _ROOT / "config" / "dies" / "CIANO10 200 opt" / "L155 motor.yaml"
+    die_path = _ROOT / "config" / "dies" / _FIXTURE_DIE / "die.yaml"
+    duty_path = _ROOT / "config" / "dies" / _FIXTURE_DIE / _FIXTURE_DUTY
     die = yaml.safe_load(die_path.read_text(encoding="utf-8"))
     duty = yaml.safe_load(duty_path.read_text(encoding="utf-8"))
     full_geo = {**die["geometry"], **(duty.get("geometry_overrides") or {})}
@@ -198,7 +208,7 @@ def test_static_picture_carries_no_values():
 
 # ── the per-machine dev route builder (kept, not wired to the Help button) ──
 
-_DIES = ["CIANO14 40 new", "CIANO28 85 20SW1200", "CIANO10 200 opt"]
+_DIES = ["CIANO14 40_12", "CIANO28 150_35", "CILN28"]
 
 
 @pytest.mark.parametrize("die_name", _DIES)
@@ -225,7 +235,8 @@ def test_dev_route_builder_works_for_every_catalog_die(die_name, fmt):
         rendered = " ".join(
             (node.text or "") for node in ET.fromstring(payload).iter()
             if node.tag.endswith("}text") or node.tag.endswith("}tspan"))
-        missing = sorted(k for k in schema if k not in rendered)
+        # the sheet deliberately leaves out slot_hs and the retired keys
+        missing = sorted(k for k in schema if k in _schema_keys() and k not in rendered)
         assert not missing, f"{die_name}: schema key(s) missing: {missing}"
 
 
@@ -262,8 +273,8 @@ def test_magnet_dimensions_match_real_geometry_vertices():
     from motor_ai_sim.cadquery_geometry import CadQueryMotor
     from motor_ai_sim.services.dimension_sheet import _nearest_to_angle
 
-    die_path = _ROOT / "config" / "dies" / "CIANO10 200 opt" / "die.yaml"
-    duty_path = _ROOT / "config" / "dies" / "CIANO10 200 opt" / "L155 motor.yaml"
+    die_path = _ROOT / "config" / "dies" / _FIXTURE_DIE / "die.yaml"
+    duty_path = _ROOT / "config" / "dies" / _FIXTURE_DIE / _FIXTURE_DUTY
     die = yaml.safe_load(die_path.read_text(encoding="utf-8"))
     duty = yaml.safe_load(duty_path.read_text(encoding="utf-8"))
     full_geo = {**die["geometry"], **(duty.get("geometry_overrides") or {})}

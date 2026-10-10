@@ -481,12 +481,15 @@ const FamilyCatalog: React.FC<{
     // sentence.  A non-admin who tries anyway gets the backend's own 403
     // detail below, not a silent nothing (live 2026-09-24: two 403s in the
     // server log and no visible reason in the UI).
-    const wide = die.layer === 'shared' ? 'the shared catalog for every user'
-      : die.layer === 'published' ? 'the published catalog for everyone who sees it'
+    // 2026-10-10 (owner): a DELETE never hides a SHARED die for other users —
+    // it removes only this workspace's own copy; "Retire for all users" is the
+    // separate action below.
+    const wide = die.layer === 'published' ? 'the published catalog for everyone who sees it'
       : null;
     setAskConfirm({
       title: `Delete die '${name}'?`,
-      body: (wide ? `Removes it from ${wide}. ` : '')
+      body: (die.layer === 'shared' ? `${tx('deleteSharedDieBody')} ` : '')
+        + (wide ? `Removes it from ${wide}. ` : '')
         + 'An empty die is removed at once; a die that still has configurations asks once more.',
       onConfirm: () => {
         void (async () => {
@@ -499,6 +502,10 @@ const FamilyCatalog: React.FC<{
               const note = data?.note ? ` (${data.note})` : '';
               setMsg(`✓ die '${name}' deleted${note}`);
               window.dispatchEvent(new CustomEvent('family-changed'));
+              return;
+            }
+            if (data?.code === 'die.retire_required') {
+              setMsg(`✗ ${tx('retireRequired', { die: name })}`);
               return;
             }
             if (r.status !== 409) {
@@ -528,6 +535,44 @@ const FamilyCatalog: React.FC<{
         })();
       },
     });
+  };
+  // "Retire for all users" — admin only, shared dies only.  The dialog names
+  // the die and how many accounts can see it; the request repeats the name.
+  const retireDie = (name: string) => {
+    void (async () => {
+      let users: number | null = null;
+      try {
+        const r = await fetch(`${API}/api/family/die/${encodeURIComponent(name)}/audience`);
+        if (r.ok) users = Number((await r.json())?.users ?? 0);
+      } catch { /* the dialog still opens; the count reads unknown */ }
+      setAskConfirm({
+        title: tx('retireDieTitle', { die: name }),
+        body: users == null ? tx('retireDieBodyUnknown', { die: name })
+          : tx('retireDieBody', { die: name, n: users }),
+        confirmLabel: tx('retireDieConfirm'),
+        onConfirm: () => mutate(tx('retireDieDone', { die: name }),
+          () => post(`/api/family/die/${encodeURIComponent(name)}/retire`, { confirm: name })),
+      });
+    })();
+  };
+  const restoreRetired = () => {
+    void (async () => {
+      let names: string[] = [];
+      try {
+        const r = await fetch(`${API}/api/family/retired`);
+        if (r.ok) names = ((await r.json())?.dies ?? []).map((d: { die: string }) => d.die);
+      } catch { /* empty list below */ }
+      if (!names.length) { setMsg(tx('retiredNone')); return; }
+      setAskText({
+        title: tx('restoreRetiredTitle'),
+        label: tx('restoreRetiredLabel'),
+        initial: names[0],
+        hint: tx('restoreRetiredHint', { names: names.join(', ') }),
+        okLabel: tx('restoreRetiredOk'),
+        onSubmit: (name) => mutate(tx('restoreRetiredDone', { die: name }),
+          () => post(`/api/family/die/${encodeURIComponent(name)}/restore`, {})),
+      });
+    })();
   };
   const renameDie = (die: string) => setAskText({
     title: `Rename die '${die}'`,
@@ -756,6 +801,18 @@ const FamilyCatalog: React.FC<{
                   <IconButton size="small" disabled={!!busy}
                     onClick={() => deleteDie(die)}
                     sx={{ color: 'var(--text-4)', fontSize: 13, p: 0.4 }}>🗑</IconButton>
+                </span>
+              </Tooltip>
+            )}
+            {canWrite && isAdmin && die.layer === 'shared' && (
+              <Tooltip title={tx('retireDieTip')}>
+                <span>
+                  <Button size="small" disabled={!!busy}
+                    onClick={() => retireDie(die.name)}
+                    sx={{ fontSize: 12, py: 0, px: 0.6, minWidth: 0,
+                          textTransform: 'none', color: '#f87171' }}>
+                    {tx('retireDieButton')}
+                  </Button>
                 </span>
               </Tooltip>
             )}
@@ -1253,6 +1310,14 @@ const FamilyCatalog: React.FC<{
             sx={{ textTransform: 'none', fontSize: 11 }}>
             ＋ die from current geometry
           </Button>
+        )}
+        {canWrite && isAdmin && (
+          <Tooltip title={tx('restoreRetiredTip')}>
+            <Button size="small" variant="text" onClick={restoreRetired}
+              sx={{ textTransform: 'none', fontSize: 12 }}>
+              {tx('restoreRetiredButton')}
+            </Button>
+          </Tooltip>
         )}
       {histOf && (
         <ConfigHistoryDialog open onClose={() => setHistOf(null)}

@@ -1220,9 +1220,9 @@ const ThermalPanel: React.FC = () => {
                 saveCoolChoice({ propId: candidate.id });
                 setPropellerCooling('propeller', candidate.id, activeCoolingKey);
             }}
-            sx={{ fontSize: 11, height: 30, minWidth: 218 }}>
-            <MenuItem value="manual" sx={{ fontSize: 11 }}>{tx('manualCoolingParameters')}</MenuItem>
-            <MenuItem value="propeller" disabled={!propellerCoolingAvailable} sx={{ fontSize: 11 }}>{tx('propellerSlipstream')}</MenuItem>
+            sx={{ fontSize: 12, height: 30, minWidth: 218 }}>
+            <MenuItem value="manual" sx={{ fontSize: 12 }}>{tx('manualCoolingParameters')}</MenuItem>
+            <MenuItem value="propeller" disabled={!propellerCoolingAvailable} sx={{ fontSize: 12 }}>{tx('propellerSlipstream')}</MenuItem>
           </Select>
           {!propellerCoolingAvailable && <Typography role="status" aria-live="polite"
             sx={{ ...lbl, color: 'var(--text-3)' }}>
@@ -1245,11 +1245,11 @@ const ThermalPanel: React.FC = () => {
                 saveCoolChoice({ propId: id });
                 setPropellerCooling('propeller', id, activeCoolingKey);
               }}
-              sx={{ fontSize: 11, height: 30, minWidth: 230 }}>
-              {!st.propellerId && <MenuItem value="" disabled sx={{ fontSize: 11 }}>{tx('chooseAssignedPropeller')}</MenuItem>}
+              sx={{ fontSize: 12, height: 30, minWidth: 230 }}>
+              {!st.propellerId && <MenuItem value="" disabled sx={{ fontSize: 12 }}>{tx('chooseAssignedPropeller')}</MenuItem>}
               {allowedProps.map((p) => (
                 <MenuItem key={p.id} value={`prop:${p.id}`} disabled={!p.selectable}
-                  sx={{ fontSize: 11 }}>
+                  sx={{ fontSize: 12 }}>
                   {vendorLabel(p.vendor)} {modelLabel(p.model)}
                   {!p.selectable ? ` · ${tx('noUsablePropellerData')}` : ''}
                 </MenuItem>

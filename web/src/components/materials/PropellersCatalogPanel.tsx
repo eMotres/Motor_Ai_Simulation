@@ -21,8 +21,8 @@ const SERIES_KEY: Record<string, string> = {
   'Published-data fit': 'propellerSeriesFit',
 };
 const seriesLabel = (label: string) => (SERIES_KEY[label] ? tx(SERIES_KEY[label]) : label);
-const headSx = { fontSize: 10, color: 'var(--text-3)', width: 145, py: 0.65, px: 1 } as const;
-const valueSx = { fontSize: 11, color: 'var(--text-1)', py: 0.65, px: 1, overflowWrap: 'anywhere' } as const;
+const headSx = { fontSize: 12, color: 'var(--text-3)', width: 145, py: 0.65, px: 1 } as const;
+const valueSx = { fontSize: 12, color: 'var(--text-1)', py: 0.65, px: 1, overflowWrap: 'anywhere' } as const;
 
 interface PropellerDetail extends PropSummary {
   series?: string;
@@ -143,13 +143,13 @@ const PropellersCatalogPanel: React.FC = () => {
                 borderRadius: 1, border: '1px solid',
                 borderColor: selectedId === item.id ? 'var(--brand, #2563eb)' : 'var(--line-soft)',
                 bgcolor: selectedId === item.id ? 'var(--panel)' : 'transparent' }}>
-              <Typography sx={{ fontSize: 11, fontWeight: 700, color: 'var(--text-1)' }}>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-1)' }}>
                 {item.vendor} · {item.model}
               </Typography>
-              <Typography sx={{ fontSize: 10, color: 'var(--text-3)', mt: 0.25 }}>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mt: 0.25 }}>
                 {item.id} · {item.diameter_in ?? '—'} in · {tx('propellerCatalogBladeCount', { n: item.blades ?? '—' })}
               </Typography>
-              <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>
                 {item.rpm_range_tested ? `${item.rpm_range_tested[0]}–${item.rpm_range_tested[1]} rpm ${tx('propellerCatalogTested')}` : tx('propellerCatalogNoTestRange')}
               </Typography>
             </ButtonBase>
@@ -169,12 +169,12 @@ const PropellersCatalogPanel: React.FC = () => {
                 {detail.vendor} · {detail.model}
               </Typography>
               <Chip size="small" label={detail.selectable ? tx('propellerCatalogTestData') : tx('propellerCatalogGeometryOnly')}
-                sx={{ height: 20, fontSize: 10 }} />
+                sx={{ height: 24, fontSize: 12 }} />
             </Box>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-              <Typography sx={{ fontSize: 11, color: 'var(--text-2)' }}>{tx('propellerChartTitle')}</Typography>
+              <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)' }}>{tx('propellerChartTitle')}</Typography>
               <FormControl size="small" sx={{ minWidth: 130 }}>
-                <Select value={metric} onChange={(e) => setMetric(e.target.value as RpmMetric)} aria-label={tx('propellerChartMetric')} sx={{ fontSize: 11, height: 30 }}>
+                <Select value={metric} onChange={(e) => setMetric(e.target.value as RpmMetric)} aria-label={tx('propellerChartMetric')} sx={{ fontSize: 12, height: 30 }}>
                   <MenuItem value="thrust">{tx('propellerMetricThrust')}</MenuItem>
                   <MenuItem value="power">{tx('propellerMetricPower')}</MenuItem>
                   <MenuItem value="torque">{tx('propellerMetricTorque')}</MenuItem>
@@ -186,8 +186,8 @@ const PropellersCatalogPanel: React.FC = () => {
          <CartesianGrid strokeDasharray="3 3" stroke="var(--line-soft)" /><XAxis type="number" dataKey="rpm" name="RPM" unit=" rpm" domain={['dataMin', 'dataMax']} />
          <YAxis dataKey="value" name={metric} unit={unit} /><Tooltip labelFormatter={(v) => `${v} rpm`} formatter={(value, name) => [typeof value === 'number' ? `${value.toFixed(2)}${unit}` : `—${unit}`, name]} />{groups.map((g) => <Line key={g.id} data={g.points} name={seriesLabel(g.label)} type="monotone" dataKey="value" dot={{ r: 2 }} stroke="var(--brand, #2563eb)" />)}
               </LineChart></ResponsiveContainer></Box>
-       <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{tx('propellerChartPoints', { n: groups[0].points.length })} · {tx(chartCaption(groups[0].provenance, metric))}</Typography>
-       </Box> : <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1 }}>{metric === 'thrust' ? tx('propellerChartNoThrust') : tx('propellerChartNoShaft')}</Typography>; })()}
+       <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{tx('propellerChartPoints', { n: groups[0].points.length })} · {tx(chartCaption(groups[0].provenance, metric))}</Typography>
+       </Box> : <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 1 }}>{metric === 'thrust' ? tx('propellerChartNoThrust') : tx('propellerChartNoShaft')}</Typography>; })()}
             <Table size="small" aria-label={tx('propellerCatalogProperties')}>
               <TableBody>
                 {[
@@ -223,7 +223,7 @@ const PropertyBlock: React.FC<{ title: string; values: Record<string, unknown> }
   if (!rows.length) return null;
   return (
     <Box sx={{ mt: 1 }}>
-      <Typography sx={{ fontSize: 10, color: 'var(--text-3)', mb: 0.35 }}>{title}</Typography>
+      <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-3)', mb: 0.35 }}>{title}</Typography>
       <Table size="small" aria-label={`${title} properties`}><TableBody>
         {rows.map(([key, value]) => <TableRow key={key}>
           <TableCell sx={headSx}>{key.replaceAll('_', ' ')}</TableCell>

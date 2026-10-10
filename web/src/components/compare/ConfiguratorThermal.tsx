@@ -77,7 +77,7 @@ const ConfiguratorThermal: React.FC<{
       {/* the shared cooling inputs (localStorage `sim.cool.*`) */}
       {!coolingEstimate && <CoolingControls diameterMm={geom.statorOD_mm} />}
       {coolingEstimate && (
-        <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1 }}>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 1 }}>
           {coolingEstimate.mode === 'robotics'
             ? tx('configurePropeller.stillAirBasis', { h: h.toFixed(0) })
             : tx('configurePropeller.propellerAirBasis', {
@@ -86,7 +86,7 @@ const ConfiguratorThermal: React.FC<{
         </Typography>
       )}
       {coolingEstimate && (
-        <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 1 }}>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 1 }}>
           {tx('configurePropeller.temperatureLimits', {
             winding: coolingEstimate.temperatureLimits.winding_C.toFixed(0),
             magnet: coolingEstimate.temperatureLimits.magnet_C.toFixed(0),

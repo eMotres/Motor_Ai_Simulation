@@ -265,8 +265,9 @@ const MetricTile: React.FC<{
       title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : plain ? '' : changed
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
         : tx('configure.sameAsRef'))}>
-      <Typography sx={{ ...LABEL, fontSize: 9.5, color: labelColor ?? LABEL.color, whiteSpace: 'nowrap',
-        overflow: 'hidden', textOverflow: 'ellipsis' }}><GreekLabel text={label} /></Typography>
+      <Typography title={label} sx={{ ...LABEL, fontSize: 12, lineHeight: '14px', height: 28,
+        color: labelColor ?? LABEL.color, overflow: 'hidden', display: '-webkit-box',
+        WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}><GreekLabel text={label} /></Typography>
       <Typography sx={{ fontSize: 16, fontWeight: 800,
         color: blank ? (blankColor ?? 'var(--text-3)') : absLevel
           ? (absLevel === 'bad' ? '#f87171' : absLevel === 'warn' ? '#fbbf24' : '#4ade80')
@@ -2038,7 +2039,7 @@ const ConfiguratorPanel: React.FC = () => {
           </Box>
           {referenceTemperatureBasis && (
             <Typography title={referenceTemperatureBasis.sourceRecord}
-              sx={{ color: 'var(--text-3)', fontSize: 10.5, mt: 0.5 }}>
+              sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>
               {tx('configure.referenceTemperatureBasis', {
                 length: referenceTemperatureBasis.stackLengthMm,
                 rpm: referenceTemperatureBasis.rpm,
@@ -2051,7 +2052,7 @@ const ConfiguratorPanel: React.FC = () => {
           )}
           {stackCoefficientsUnavailable ? (
             <Typography title={tx('configure.stackCoefficientsTip')}
-              sx={{ color: 'var(--text-3)', fontSize: 10.5, mt: 0.5 }}>
+              sx={{ color: 'var(--text-3)', fontSize: 12, mt: 0.5 }}>
               {referenceTemperatureBasis?.stackLengthMm != null
                 ? tx('configure.stackCoefficientsOnlyAt', { mm: referenceTemperatureBasis.stackLengthMm })
                 : tx('configure.stackCoefficientsOnlyAudited')}
@@ -2106,7 +2107,7 @@ const ConfiguratorPanel: React.FC = () => {
       <Box sx={{ px: 2, pb: 1.5 }}>
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.75 }}>
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>{tx('configure.saved')}</Typography>
-          <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>{configs.length}</Typography>
+          <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{configs.length}</Typography>
           <Box sx={{ flex: 1 }} />
           {configs.length > 0 && (
             <Button onClick={() => setConfigs([])} size="small" sx={{ fontSize: 11, textTransform: 'none', color: '#7f1d1d' }}>{tx('configure.clearAll')}</Button>

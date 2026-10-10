@@ -53,6 +53,20 @@ import yaml
 
 _IDENT = {"Bearer A": "alice@example.com", "Bearer B": "bob@example.com"}
 
+
+@pytest.fixture(autouse=True)
+def _keep_fake_solve_times_out_of_the_cost_window():
+    """The stand-in child "solves" in ~0.05 s; recorded into the process-wide
+    measured-eval window it made later cost-quote tests (e.g.
+    ``test_the_plan_quotes_evals_and_seconds_per_eval``) read 0 s per eval,
+    depending on timing.  Restore the window after every test here."""
+    from motor_ai_sim.routes import optimization as opt
+    saved = (list(opt._EVAL_SECS), list(opt._EVAL_SECS_SEEDED))
+    yield
+    with opt._eval_secs_lock:
+        opt._EVAL_SECS[:] = saved[0]
+        opt._EVAL_SECS_SEEDED[:] = saved[1]
+
 #: A's machine — the owner's Ø50, whose wire_height bound is 0.72.
 _MACHINE_A = {"stator_diameter": 50.0, "slot_height": 7.5,
               "insulation_thickness": 0.06, "num_wires_per_slot": 9,
@@ -404,6 +418,8 @@ def test_a_sweep_logs_every_outcome_under_one_campaign_id(
     a, _proc_cfg = layered_two_machines
     _FlakyChild.spawns = []
     monkeypatch.setattr(subprocess, "Popen", _FlakyChild, raising=True)
+    # keep ~0 s fake solves out of the process-wide measured eval-cost window
+    monkeypatch.setattr(opt, "_record_eval_seconds", lambda *a, **k: None)
 
     with use_workspace(a):
         with opt._scan_lock:

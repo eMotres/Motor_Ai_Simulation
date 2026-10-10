@@ -152,6 +152,9 @@ def fake_worker(monkeypatch):
     monkeypatch.setattr(SP, "enabled", lambda: False)
     _Popen.out, _Popen.err, _Popen.rc, _Popen.raises = "", "", 0, None
     monkeypatch.setattr(subprocess, "Popen", _Popen)
+    # A fake worker "takes" ~0 s: keep that out of the process-wide measured
+    # eval-cost window (it would make later cost quotes read 0 s per eval).
+    monkeypatch.setattr(O, "_record_eval_seconds", lambda *a, **k: None)
     return _Popen
 
 

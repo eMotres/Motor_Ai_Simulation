@@ -4,7 +4,7 @@ Branch `feat/passport-d85-finish`. Model: Claude Opus 5.5. Server sandbox
 `/opt/motres/compute/passport-d85-finish/` (deployed API image + mounted branch code,
 `--cpus 8` lane 1 / `--cpus 6` lane 2, nice 19, idle IO). One line per finished item.
 
-| time (UTC) | item | result |
+| time (CEST) | item | result |
 |---|---|---|
 | 2026-10-10 19:10 | reuse inventory | 10-05/06 Claude run recovered from `/srv/motres/archive/compute_2026-10-10` (`passport-d85/`): 20 °C set, cooling studies (robotics + propeller S1 / peak), Stage A, rotor stress, demag-vs-temperature, Si 48 kHz motor-PWM FEM anchor (finished 10-06 09:39 incl. its same-mesh sine reference: ΔP = −0.7 W). Pipeline commits cherry-picked from `salvage/motor_ai_sim_wt_d85`; its web cooling selector dropped (the deployed Configure already has one). |
 | 2026-10-10 19:15 | rated-duty hot grid | STOPPED (owner rule): no in-card steady state at 25.88 A / 1000 rpm with either cooling (robotics coupled loop 2026-09-28 refused at magnet 242.9 °C; S1 = 8.52 A robotics, 4.3 A propeller air). Hot set re-based on the converged robotics S1 state (magnet 69.2 °C, winding 75.1 °C), fixed operating angle γ_ref 1.9505°. |

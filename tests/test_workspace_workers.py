@@ -375,3 +375,74 @@ def test_single_user_mode_is_unchanged(tmp_path, monkeypatch):
             assert Path(env["MOTOR_AI_SIM_CONFIG"]) == proc_cfg
     finally:
         _config.clear_config_cache()
+
+
+class _FlakyChild(_FakeChild):
+    """Same stand-in, but the 0.5 mm candidate dies in the solver."""
+
+    def communicate(self, input=None, timeout=None):   # noqa: A002
+        spec = json.loads(input)
+        if abs(float(spec["overrides"].get("wire_height", 0.0)) - 0.5) < 1e-9:
+            type(self).spawns.append((self.env, spec["overrides"]))
+            return ("@@RESULT@@" + json.dumps(
+                {"ok": False, "error": "unconverged FEM frames [2] of 6 "
+                 "(max nonlinear resid 1 vs tol 1e-06) - eval rejected",
+                 "error_class": "RuntimeError"}), "")
+        return super().communicate(input=input, timeout=timeout)
+
+
+def test_a_sweep_logs_every_outcome_under_one_campaign_id(
+        layered_two_machines, monkeypatch):
+    """Eval-log schema 2 end to end through the real ``_scan_worker`` pool:
+    ok / solver-failed / geometry-rejected points are ALL rows of the workspace's
+    dataset, they share ONE campaign id, and the scan cache serves only the ok
+    ones (a failed line can never become a hit)."""
+    from motor_ai_sim.optimization import eval_log as EL
+    from motor_ai_sim.routes import optimization as opt
+    from motor_ai_sim.workspace import use_workspace
+
+    a, _proc_cfg = layered_two_machines
+    _FlakyChild.spawns = []
+    monkeypatch.setattr(subprocess, "Popen", _FlakyChild, raising=True)
+
+    with use_workspace(a):
+        with opt._scan_lock:
+            opt._scan_state.update({"running": True, "done": 0, "total": 0,
+                                    "result": None, "points": [],
+                                    "run_id": "sweep_evlog", "error": None,
+                                    "cancel": False, "cached": 0})
+        opt._scan_worker(
+            [{"name": "wire_height", "min": 0.4, "max": 0.8,
+              "mode": "sweep", "step": 0.1}],
+            [{"gamma_deg": 10.0, "current_a": 63.6396, "rpm": 13000.0}],
+            6, 120.0, 100.0, 5, 12345, "sweep_evlog",
+            mesh_size_mm=1.0, min_size_mm=0.3, n_sectors=2, element_order=2)
+
+    ds = [json.loads(ln) for ln in
+          (Path(str(a.root)) / ".opt_dataset.jsonl").read_text(
+              encoding="utf-8").splitlines() if ln.strip()]
+    by_status = {}
+    for r in ds:
+        by_status.setdefault(r["status"], []).append(r)
+    # 0.4 / 0.6 / 0.7 solved, 0.5 died in the solver, 0.8 rejected pre-solve
+    assert sorted(r["overrides"]["wire_height"] for r in by_status["ok"]) == \
+        pytest.approx([0.4, 0.6, 0.7])
+    (bad,) = by_status["failed"]
+    assert bad["overrides"]["wire_height"] == pytest.approx(0.5)
+    assert bad["error_class"] == "non_convergence"
+    (rej,) = by_status["infeasible"]
+    assert rej["overrides"]["wire_height"] == pytest.approx(0.8)
+    assert rej["pre_solve"] is True
+    ids = {r["campaign_id"] for r in ds}
+    assert len(ids) == 1 and next(iter(ids)).startswith("scan-")
+    assert {r["campaign_kind"] for r in ds} == {"scan"}
+    assert {r["stage"] for r in ds} == {EL.STAGE_SWEEP}
+
+    lines = [json.loads(ln) for ln in
+             (Path(str(a.root)) / ".scan_cache.jsonl").read_text(
+                 encoding="utf-8").splitlines() if ln.strip()]
+    served = [x for x in lines if EL.servable_cache_record(x)]
+    failed = [x for x in lines if not EL.servable_cache_record(x)]
+    assert len(served) == 3 and len(failed) == 1
+    assert {x["m"]["campaign_id"] for x in lines} == ids
+    assert failed[0]["m"]["status"] == "failed" and "v" not in failed[0]

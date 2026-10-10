@@ -102,7 +102,7 @@ const ConfiguratorThermal: React.FC<{
         <Metric label={tx('configure.ambient')} value={`${(t?.ambient_C ?? ambient_C).toFixed(0)} °C`} />
         <Metric label={tx('configure.totalLoss')} value={t ? `${t.P_total_W.toFixed(0)} W` : '—'} />
         <Metric label={tx('configure.hUsed')} value={h > 0 ? `${h.toFixed(0)} W/m²K` : '—'} />
-        {coolingEstimate && <Metric label={tx('configurePropeller.airSpeed')} value={coolingEstimate.air_speed_ms == null ? '—' : `${coolingEstimate.air_speed_ms.toFixed(1)} m/s`} />}
+        {coolingEstimate && <Metric label={tx('configurePropeller.coolingAirSpeed')} value={coolingEstimate.air_speed_ms == null ? '—' : `${coolingEstimate.air_speed_ms.toFixed(1)} m/s`} />}
         <Metric label={tx('configure.surface')} value={t ? `${(t.A_surface_m2 * 1e4).toFixed(0)} cm²` : '—'} />
       </Box>
 

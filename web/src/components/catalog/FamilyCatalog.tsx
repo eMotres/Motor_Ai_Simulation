@@ -867,7 +867,7 @@ const FamilyCatalog: React.FC<{
                   </Tooltip>
                 )}
                 {(c.duties?.length ?? 0) > 2 && (
-                  <Tooltip title="Choose the duty shown beside rated in the report field-map pairs. Auto selects the comparison duty. A duty needs stored fields.">
+                  <Tooltip title={tx('picturesDutyTip')}>
                     <select
                       value={picFor(die.name, c.name)}
                       onChange={(e) => setPicFor(die.name, c.name, e.target.value)}
@@ -877,7 +877,7 @@ const FamilyCatalog: React.FC<{
                                maxWidth: 150 }}>
                       <option value="">{tx('picturesAuto')}</option>
                       {(c.duties ?? []).map((d) => (
-                        <option key={d.name} value={d.name}>pictures: {d.name}</option>
+                        <option key={d.name} value={d.name}>{tx('picturesDuty', { duty: d.name })}</option>
                       ))}
                     </select>
                   </Tooltip>

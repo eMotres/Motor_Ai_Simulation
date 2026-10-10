@@ -2050,9 +2050,11 @@ const ConfiguratorPanel: React.FC = () => {
             </Typography>
           )}
           {stackCoefficientsUnavailable ? (
-            <Typography title="The reference saturation and demagnetisation calculation is available only at the reference stack length."
+            <Typography title={tx('configure.stackCoefficientsTip')}
               sx={{ color: 'var(--text-3)', fontSize: 10.5, mt: 0.5 }}>
-              Reference coefficients shown only at {referenceTemperatureBasis?.stackLengthMm ?? 'the audited'} mm
+              {referenceTemperatureBasis?.stackLengthMm != null
+                ? tx('configure.stackCoefficientsOnlyAt', { mm: referenceTemperatureBasis.stackLengthMm })
+                : tx('configure.stackCoefficientsOnlyAudited')}
             </Typography>
           ) : (result.demag_keep_pct != null || result.saturation_pct != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>

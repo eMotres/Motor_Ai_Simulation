@@ -31,6 +31,7 @@ padding-bottom:4px} h3{font-size:14px;margin:14px 0 4px}
 .tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
 .tile .k{color:var(--muted);font-size:12px} .tile .v{font-size:19px;font-weight:600}
 .tile .b{color:var(--muted);font-size:11px}
+.tile.cold .v{color:var(--accent)}
 .tw{overflow-x:auto;margin:6px 0 4px}
 table{border-collapse:collapse;width:100%;font-size:13px}
 th,td{border-bottom:1px solid var(--line);padding:4px 6px;text-align:right;vertical-align:top}
@@ -106,8 +107,9 @@ def H(s: str) -> Tuple[str, str]:
     return ("__html__", s)
 
 
-def tile(k: str, v: str, b: str = "") -> str:
-    return f'<div class="tile"><div class="k">{esc(k)}</div><div class="v">{v}</div><div class="b">{b}</div></div>'
+def tile(k: str, v: str, b: str = "", cls: str = "") -> str:
+    c = ("tile " + cls).strip()
+    return f'<div class="{c}"><div class="k">{esc(k)}</div><div class="v">{v}</div><div class="b">{b}</div></div>'
 
 
 # ─────────────────────────────────────────────────────────────────────────────

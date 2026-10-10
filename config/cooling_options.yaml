@@ -30,11 +30,12 @@ dies:
   # + heat path into the mount + end faces); propeller_air = the propeller's slipstream.
   # Configure shows a cooling selector because there are two; robotics is listed first,
   # so it is the one in force until the user picks the propeller.
-  # Propellers: T-Motor G-series 30-40 in with measured torque whose torque at 1000-2400
+  # Propellers: T-Motor G-series 28-40 in with measured torque whose torque at 1000-2400
   # rpm lies inside this motor's range (docs/PASSPORT_D85_2026-10-05.md).
   "CIANO28 85 20SW1200":
     cooling_options: [robotics, propeller_air]
     propellers:
+      - tmotor_g28x9_2         # 28 in, torque measured (U8 II KV100, 12S), tested 1896-3709 rpm
       - tmotor_g30x10_5        # 30 in, torque measured (U13 II KV65), tested 2679-4654 rpm
       - tmotor_g32x11          # 32 in, torque measured (U13 II KV65), tested 2485-4397 rpm
       - tmotor_g36x11_5        # 36 in, torque measured (U15 II KV100), tested 2595-4328 rpm

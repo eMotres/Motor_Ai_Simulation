@@ -136,7 +136,10 @@ def stage2_block(full_dir: Path, repo: Path, L_mm: float,
         out["k_T"] = {"value": kpsi, "method": "k_T = k_ψ (Stage A, this run): the app's own "
                       "3-D torque rule (end3d_k on every duty); no loaded 3-D torque run "
                       "(Stage B/D) for this die — on the Ø40 the loaded k_T was 0.979 vs "
-                      "k_ψ 0.947, so this is likely CONSERVATIVE by up to ~(1−k_ψ)·0.6",
+                      "k_ψ 0.947, so this is likely CONSERVATIVE by up to ~(1−k_ψ)·0.6"
+                      + ((" · Stage D (loaded 3-D co-energy) attempted 2026-10-10: %s"
+                          % (_load(full_dir / "status_stage_d.json") or {}).get("status"))
+                         if (full_dir / "status_stage_d.json").exists() else ""),
                       "labels": ["3-D (Stage A k_ψ as k_T)", PEND]}
         out["k_L"] = {"value": None, "method": "not computed: no Stage B long-stack test for "
                       "this die; Ld/Lq are 2-D (no end-winding inductance)",
@@ -255,6 +258,18 @@ def pwm_classes(full_dir: Path, M: str, v_dc: float) -> Dict[str, List[Dict[str,
                             "DEGRADED, shaft skin layer not resolved) — PWM and its sine "
                             "reference share that mesh"}
         row["point"] = d.get("point")
+        dp = float(d.get("dP_harm_W"))
+        ref = float(((d.get("harm_ref") or {}).get("P_loss_ref_W")) or 0.0)
+        if dp < 0.0:
+            # PWM − same-mesh sine reference came out NEGATIVE: the extra loss is
+            # below what this run resolves (a few watts of a ~200 W total, 4 samples
+            # per carrier read the ripple-driven losses LOW).  Stored as 0 W with the
+            # raw value and the reason beside it — never a negative loss.
+            row["dP_harm_W_raw"] = dp
+            row["dP_harm_W"] = 0.0
+            row["dP_note"] = ("FEM PWM − same-mesh sine reference = %+.1f W of %.1f W total "
+                              "(%.2f %%): below this run's resolution; stored as 0 W"
+                              % (dp, ref, 100.0 * dp / ref if ref else float("nan")))
         out.setdefault(cls, []).append(row)
     return out
 
@@ -660,8 +675,8 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
         stored = _load(work / "inputs" / ("duty_results_%s.json" % snap["configuration"])) or {}
         sc = ((stored.get(snap["rated_duty"]["name"]) or {}).get("coupled") or {})
         rec["coupled_thermal"] = {
-            "status": "rated duty has no steady state inside the magnet card — hot map at the "
-                      "labelled limit-temperature reference (owner decision pending)",
+            "status": "rated duty has no steady state inside the magnet card — rated-duty hot "
+                      "grid stopped; hot map at: " + str(t_in.get("hot_magnet_source") or ""),
             "used_for_card": False, "reason": t_in["hot_override_reason"],
             "stored_rated_coupled": {k: sc.get(k) for k in (
                 "computed_at", "solve_to", "converged", "runaway", "coil_temp_c",
@@ -859,6 +874,22 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
     rec["loss_split_rated_current"] = split
     rec["labels"] = ["2-D FEM (stage 1 grid)", "3-D factors (Stage A k_psi; k_T, k_L inherited)",
                      "sine + PWM (FEM anchors)", "controller losses (cards + SPICE)", PEND]
+    cg = _load(full / "codex_cold_grid.json")
+    if cg:
+        rec["cold_operating_grid"] = {
+            "points": sorted(cg.get("points") or [], key=lambda r: (r["I_rms"], r["rpm"])),
+            "source": cg.get("source"),
+            "method": "settled coupled-eddy TDM (120 steps/period, full demag pre-pass), "
+                      "winding and magnets 20 °C, fixed operating angle γ_ref 1.9505°, "
+                      "deployed solver image 56dcf627 (Codex, 2026-10-10); 1000 rpm row = "
+                      "the γ_ref confirmation run",
+            "labels": ["2-D", "20 °C", "fixed γ_ref", "reused (Codex 2026-10-10)"]}
+    st_items = []
+    for f_ in sorted(full.glob("status_*.json")):
+        d_ = _load(f_) or {}
+        if d_.get("item"):
+            st_items.append(d_)
+    rec["status_items"] = st_items
     rec["schema"] = "passport-v1-full-1"
     return rec
 
@@ -982,14 +1013,45 @@ def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
     o.append(f"<h1>{Hh.esc(rec['machine']['die'])} · {M} — motor passport</h1>")
     ct0 = rec.get("coupled_thermal") or {}
     if ct0.get("hot_reference"):
-        o.append('<p class="note bad">HOT = limit-temperature reference (magnet %s °C, '
-                 'winding %s °C), not the rated duty: %s</p>' % (
+        o.append('<p class="note">HOT = magnet %s °C, winding %s °C — %s. Not the rated duty: '
+                 '%s.</p>' % (
                      Hh.fmt(ct0["hot_reference"]["magnet_c"]), Hh.fmt(ct0["hot_reference"]["coil_c"]),
+                     Hh.esc(ct0["hot_reference"].get("source") or ""),
                      Hh.esc(ct0.get("reason") or "")))
+    fg = next((m.get("gamma_mtpa") for m in (rec.get("hot_map") or {}).get("mtpa") or []
+               if "fixed" in str(m.get("method") or "")), None)
+    if fg is not None:
+        o.append('<p class="note">Operating angle: fixed γ_ref = %s° at every loaded row below '
+                 'the voltage limit (owner-directed method), field weakening above it.</p>'
+                 % Hh.fmt(fg, 4))
     o.append(f'<p class="sub">Stack {float(rec["stage2_3d"]["L_mm"]):g} mm · bus {bat["v_min"]:g}/'
              f'{bat["v_nom"]:g}/{bat["v_max"]:g} V ({bat.get("cells")}S) · hot magnets '
              f'{t["hot_magnet_c"]:g} °C / winding {t["hot_coil_c"]:g} °C · m = '
              f'{rec["loss_grid"]["plan"]["m"]:g} · {Hh.labels(rec["labels"])}</p>')
+    # cold 20 °C constants (blue)
+    cc = c["constants_cold"]
+    o.append('<h2>Constants at 20 °C (winding and magnets)</h2><div class="grid">')
+    for k_, lab_, u_, nd_ in (("Kt_rated_Nm_per_A", "Kt (I0)", "N·m/A rms", 4),
+                              ("Kt_low_Nm_per_A", "Kt (0.25·I0)", "N·m/A rms", 4),
+                              ("Km_Nm_per_sqrtW", "Km", "N·m/√W", 4),
+                              ("Kv_rpm_per_V_line", "Kv 2-D", "rpm/V line pk", 4),
+                              ("Kv_3d_rpm_per_V_line", "Kv ÷ k_ψ (3-D)", "rpm/V line pk", 4),
+                              ("psi_PM_Wb", "ψ_PM", "mWb", 4),
+                              ("R_phase_ohm", "R phase", "mΩ", 4),
+                              ("Ld_bench_mH", "Ld small-signal", "µH", 4),
+                              ("Lq_bench_mH", "Lq small-signal", "µH", 4),
+                              ("cogging_pp_Nm", "cogging p-p", "mN·m", 4),
+                              ("I_char_rms_A", "characteristic I", "A rms", 4),
+                              ("I_sc_steady_rated_speed_rms_A", "steady SC @ n0", "A rms", 4)):
+        v_ = _v(cc.get(k_))
+        if v_ is None:
+            continue
+        if u_ in ("mWb", "mΩ", "mN·m"):
+            v_ = 1e3 * float(v_)
+        elif u_ == "µH":
+            v_ = 1e3 * float(v_)
+        o.append(Hh.tile(lab_, f"{Hh.fmt(v_, nd_)} {u_}", "20 °C · 2-D", cls="cold"))
+    o.append("</div>")
     # tiles
     o.append('<div class="grid">')
     o.append(Hh.tile("Rated torque (card)", f"{Hh.fmt(_v(rp.get('T_card_Nm')))} N·m",
@@ -1056,6 +1118,22 @@ def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
     else:
         o.append('<p class="note">No controller set for this machine — PWM not computed.</p>')
     o.append(_cooling_html(rec))
+    cg = rec.get("cold_operating_grid") or {}
+    if cg.get("points"):
+        o.append("<h2>Operating grid at 20 °C, fixed γ_ref</h2>")
+        o.append(Hh.table(["I A rms", "rpm", "T N·m", "ripple %", "P loss W", "Cu W", "Fe W",
+                           "magnet W", "shaft W", "η (EM)", "V line pk V", "steady"],
+                          [[p_["I_rms"], p_["rpm"], p_["T_Nm"], p_["ripple_pct"], p_["P_loss_W"],
+                            p_["P_cu_W"], p_["P_core_W"], p_["P_mag_W"], p_["P_shaft_W"],
+                            p_["eff"], p_["V_line_peak_V"],
+                            "yes" if p_.get("steady") and p_.get("demag_settled") else "no"]
+                           for p_ in cg["points"]]))
+        o.append('<p class="note">%s</p>' % Hh.esc(cg["method"]))
+    sti = rec.get("status_items") or []
+    if sti:
+        o.append("<h2>Not on this card, and why</h2>")
+        o.append(Hh.table(["item", "status"], [[H_(x["item"]), H_(x["status"])] for x in sti],
+                          left_cols=2))
     # charts
     o.append("<h2>Charts</h2><div class=\"charts\">")
     env = rec["envelope_card"]["curves"]

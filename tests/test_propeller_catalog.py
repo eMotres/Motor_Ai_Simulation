@@ -76,7 +76,9 @@ def test_catalog_loads_with_expected_entries(catalog):
 def test_every_entry_documents_its_sources(catalog):
     for p in catalog.values():
         assert p.raw.get("source_urls"), p.id
-        assert p.raw.get("accessed") == "2026-10-05", p.id
+        # an ISO access date, never before the catalogue was started (2026-10-05)
+        acc = str(p.raw.get("accessed") or "")
+        assert len(acc) == 10 and acc >= "2026-10-05", p.id
         for t in (p.raw.get("performance") or {}).get("tables") or []:
             assert t.get("source_url", "").startswith("https://"), (p.id, t.get("id"))
             assert t.get("accessed"), (p.id, t.get("id"))

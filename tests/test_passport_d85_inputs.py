@@ -9,7 +9,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 DIE = "CIANO28 85 20SW1200"
-NEW_PROPS = ("tmotor_g30x10_5", "tmotor_g32x11", "tmotor_g36x11_5", "tmotor_g40x13_1")
+NEW_PROPS = ("tmotor_g28x9_2", "tmotor_g30x10_5", "tmotor_g32x11", "tmotor_g36x11_5", "tmotor_g40x13_1")
 
 
 def test_specs_load_and_name_their_machines():

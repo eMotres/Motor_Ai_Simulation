@@ -61,8 +61,15 @@ def test_a_slot_count_the_table_does_not_know_carries_no_rule():
     assert topology_error({"num_slots_per_segment": 6}) is None      # no poles given
 
 
-def test_the_geometry_put_refuses_an_inadmissible_topology_with_422():
-    """Through the route, on the suite's sandbox config: nothing is written."""
+def test_the_geometry_put_refuses_an_inadmissible_topology_with_422(monkeypatch):
+    """Through the route, on the suite's sandbox config: nothing is written.
+
+    The schema caps are lifted (GEO_UNBOUNDED=1, the documented exploration
+    switch): the committed schema allows 5..7 poles per segment, so 8 would be
+    refused first as "geometry parameter out of range" and the table of
+    admissible topologies under test would never be consulted.  The owner's live
+    schema is wide open (1..70) and answers with this rule."""
+    monkeypatch.setenv("GEO_UNBOUNDED", "1")
     from fastapi.testclient import TestClient
     from motor_ai_sim.api import app
     from motor_ai_sim.services.geometry_service import get_current_geometry

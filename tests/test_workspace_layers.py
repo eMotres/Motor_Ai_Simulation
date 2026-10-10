@@ -143,7 +143,8 @@ def env(tmp_path, monkeypatch):
     fam._TREE_CACHE.clear()
 
     users_file = tmp_path / "users.json"
-    shutil.copy2(_REAL_USERS, users_file)
+    if _REAL_USERS.exists():          # git-ignored: absent in a fresh checkout / the test image
+        shutil.copy2(_REAL_USERS, users_file)
     monkeypatch.setattr(U, "_USERS_FILE", users_file)
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})

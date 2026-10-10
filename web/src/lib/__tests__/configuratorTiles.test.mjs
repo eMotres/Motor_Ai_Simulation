@@ -211,7 +211,9 @@ t('Greek letters are protected from CSS uppercase (eta must not become the Latin
 t('the drive facts are not printed: no variant line under the Drive title, tooltip only', () => {
   const panel = read('components/compare/ConfiguratorPanel.tsx');
   assert.doesNotMatch(panel, /driveFactsLine/);
-  assert.match(panel, /title=\{`\$\{tx\('configureDrive\.transistorTip'\)\}\\n\$\{driveFactsTip\}`\}/);
+  // the tooltip is built with join('\n') rather than a template literal: the hard-coded-English
+  // scanner (configureLocale.test.mjs) mistakes a `\n${...}` template for JSX text.
+  assert.match(panel, /title=\{\[tx\('configureDrive\.transistorTip'\), driveFactsTip\]\.join\('\\n'\)\}/);
 });
 
 // ── EFFICIENCY = the SYSTEM (motor + controller), battery -> shaft ───────────────────────────

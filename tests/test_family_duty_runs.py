@@ -101,7 +101,8 @@ def granted(tmp_path, monkeypatch, dies):
     from motor_ai_sim import users as U
 
     users_file = tmp_path / "users.json"
-    shutil.copy2(_REAL_USERS, users_file)
+    if _REAL_USERS.exists():          # git-ignored: absent in a fresh checkout / the test image
+        shutil.copy2(_REAL_USERS, users_file)
     monkeypatch.setattr(U, "_USERS_FILE", users_file)
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
     monkeypatch.delenv("CATALOG_GRANT_ALL_REGISTERED", raising=False)

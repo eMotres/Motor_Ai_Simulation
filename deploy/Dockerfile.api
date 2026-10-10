@@ -178,9 +178,24 @@ ENV PYTHONPATH=/app/src \
 # docker run --rm motres-api:test                     # full suite (~20 min)
 # See deploy/CONTAINER_TEST.md for the runbook this target exists for.
 FROM base AS test
+# git: tests/test_open_private_data.py, test_run_history.py and
+# src/motor_ai_sim/data_publish.py shell out to it; without the binary ~50 tests
+# ERROR at setup instead of running (found 2026-10-10).  Test stage only.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir pytest httpx
 COPY tests/ tests/
 COPY pyproject.toml ./
+# Source-contract tests read these repo-shaped paths (web/src for the UI/locale
+# pins, web/public/help for the help sheet, deploy/ for nginx.conf and the node
+# agent / compute worker, scripts/ for the migration + review scripts, data/ for
+# the open demo dies).  Test stage only: the runtime image still ships none of it.
+COPY web/src/ web/src/
+COPY web/public/help/ web/public/help/
+COPY deploy/ deploy/
+COPY scripts/ scripts/
+# data/open/dies is the shipped open demo set (tests/test_open_private_data.py).
+COPY data/ data/
 # tests/conftest.py resolves the repo root as tests/.. and reads
 # <root>/config/motor_config.yaml as the seed for its sandbox copy, so the
 # suite needs the catalog at the REPO-shaped path and not only at config-seed/.

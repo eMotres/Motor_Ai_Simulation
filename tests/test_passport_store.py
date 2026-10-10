@@ -175,7 +175,9 @@ def test_the_store_is_parsed_once_per_change_and_keeps_only_what_configure_reads
     for _ in range(5):
         assert ps.variants_for("Die B L1", None)[0]["id"] == "v"
     assert len(calls) == 1, "parsed on every request"
-    assert set(ps._CACHE[str(f)][1]) == {"pwm_variants", "build"}      # the heavy blocks are not kept
+    # the heavy blocks are not kept; "full" (a v1 passport = a FULL card) and "date"
+    # (the file's mtime) were added with the card badges (2026-10-05)
+    assert set(ps._CACHE[str(f)][1]) == {"pwm_variants", "build", "full", "date"}
     # a changed file is re-read (the mtime/size key), an unchanged one is not
     rec["pwm_variants"][0]["id"] = "v2"
     f.write_text(json.dumps(rec) + " ", encoding="utf-8")
@@ -205,7 +207,9 @@ def test_the_references_route_is_lean_and_visible_like_the_catalogue(tmp_path, m
     assert r.status_code == 200
     motors = r.json()["motors"]
     assert [m["id"] for m in motors] == ["cat_x"]                       # passport cards only, private one hidden
-    assert set(motors[0]) == {"id", "name", "diameter_mm", "has_machine", "passport"}  # no thumbnail
+    # no thumbnail; "card" ({die, config, date} of the full passport card, or None) is
+    # the card badge added 2026-10-05
+    assert set(motors[0]) == {"id", "name", "diameter_mm", "has_machine", "card", "passport"}
     assert any(v["id"] == "si_48k" for v in motors[0]["passport"]["pwm_variants"])
     assert b"thumb_svg" not in r.content and b"xxxxx" not in r.content   # the 5 KB thumbnail never travels
     # the cache is parsed once and never handed out mutated

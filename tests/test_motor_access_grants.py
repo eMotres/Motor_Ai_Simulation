@@ -27,6 +27,7 @@ scratchpad; the session asserts the real files were never touched.
 """
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -43,24 +44,40 @@ _REAL_DIES = _ROOT / "config" / "dies"
 ADMIN = "admin@example.com"
 CLIENT = "client@example.com"
 
-# The two dies the user could not see: no passported catalog card, so the old
-# client filter hid them from every non-admin.
-DIES_85 = ["CIANO28 85 20RSW175", "CIANO28 85 20SW1200"]
+# Two dies with NO passported catalog card, so the old client filter hid them
+# from every non-admin (the user's two 85 mm dies in September 2026).  The 85 mm
+# dies live in the owner's local catalogue, not in git, and this module must run
+# on a clean checkout, so the pair is two COMMITTED dies instead -- the rule under
+# test (a granted account sees exactly its grants, ungranted = 404) does not care
+# which dies they are, only that the exhibit filter does not pass them.  The name
+# DIES_85 is kept for the diff's sake.
+DIES_85 = ["CIANO14 40_12", "CIANO20 150_35 new"]
 
-# What an ANONYMOUS visitor saw BEFORE this change, produced by running the
-# pre-edit tree() against this same catalog (scratchpad/family_old.py,
-# 2026-09-02).  The public exhibit must not have moved: these are the motors
-# with a characterised passport card, and the 85 mm pair is NOT among them.
-PUBLIC_EXHIBIT = [
-    "40 mm · 12s-14p high-speed",
-    "CIANO14 30_10",
-    "CIANO14 40 new",
-    "CIANO28 150_35",
-    "CIANO28 150_35 new",
-    "CILN28",
-    "M1 850Nm",
-    "My motor · refine 10-59",
-]
+# The dies whose machine a characterised passport card in the sandbox catalogue
+# (_write_passported_catalog below) describes: slots, poles, stator OR, magnet
+# height.  The ANONYMOUS public exhibit must be exactly these -- the passport-
+# filtered set it always was -- and the two granted dies above are NOT among them.
+PASSPORTED_DIES = ["CIANO14 30_10", "CIANO28 150_35"]
+PUBLIC_EXHIBIT = list(PASSPORTED_DIES)
+
+
+def _write_passported_catalog(path: Path, dies_dir: Path) -> None:
+    """A motor_catalog.json whose ``passport.geo`` cards describe PASSPORTED_DIES
+    -- built from the dies' own primaries, so the exhibit under test is the real
+    ``_die_is_client_ready`` match, not a hard-coded answer.  (The committed
+    catalogue carries no passports; the owner's local one does.)"""
+    import yaml
+    from motor_ai_sim.simulation.geometry_2d import merge_geo_override
+
+    motors = []
+    for name in PASSPORTED_DIES:
+        die = yaml.safe_load((dies_dir / name / "die.yaml").read_text(encoding="utf-8"))
+        g = merge_geo_override(dict(die.get("geometry") or {}), None)
+        motors.append({"id": "cat_" + name, "name": name, "passport": {"geo": {
+            "numSlots": g["num_slots"], "numPoles": g["num_poles"],
+            "statorOR_mm": g["stator_outer_radius"],
+            "magnetHeight_mm": g["magnet_height"]}}})
+    path.write_text(json.dumps({"motors": motors}), encoding="utf-8")
 
 client = TestClient(app)
 
@@ -95,18 +112,19 @@ def env(tmp_path, monkeypatch):
     sandbox = tmp_path
     users_file = sandbox / "users.json"
     dies_dir = sandbox / "dies"
-    shutil.copy2(_REAL_USERS, users_file)
+    if _REAL_USERS.exists():          # git-ignored: absent in a fresh checkout / the test image
+        shutil.copy2(_REAL_USERS, users_file)
     shutil.copytree(_REAL_DIES, dies_dir)
 
     # The anonymous exhibit filter reads motor_catalog.json NEXT TO the active
     # config, which conftest.py redirects to a sandbox holding only the machine
     # file.  Without the cards the filter falls back to "hide nothing" and the
-    # public exhibit would not be under test at all — so put a copy of the real
-    # catalog beside the sandbox config for the duration of this test.
+    # public exhibit would not be under test at all — so put a catalogue with
+    # passported cards beside the sandbox config for the duration of this test.
     cat_dst = Path(_dcp).parent / "motor_catalog.json"
     borrowed = not cat_dst.exists()
     if borrowed:
-        shutil.copy2(_ROOT / "config" / "motor_catalog.json", cat_dst)
+        _write_passported_catalog(cat_dst, dies_dir)
 
     monkeypatch.setattr(U, "_USERS_FILE", users_file)
     monkeypatch.setattr(fam, "_DIES_DIR", dies_dir)
@@ -263,9 +281,9 @@ def test_admin_motor_list_is_admin_only(env):
 
 
 def test_unknown_die_is_refused_and_named(env):
-    r = _grant(env, ["CIANO28 85 20RSW175", "No Such Die"], expect=422)
+    r = _grant(env, [DIES_85[0], "No Such Die"], expect=422)
     assert "No Such Die" in r.json()["detail"]
-    assert "CIANO28 85 20RSW175" not in r.json()["detail"].split("—")[0]
+    assert DIES_85[0] not in r.json()["detail"].split("—")[0]
     # nothing was written: the account still sees nothing
     assert client.get("/api/family/tree", headers=env["client"]).json()["dies"] == []
 

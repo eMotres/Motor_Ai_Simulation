@@ -263,9 +263,19 @@ def test_lock_beats_ownership(stores):
     assert _read(stores["presets"])["m_a"]["name"] == "Unlocked again"
 
 
-def test_lock_flag_reaches_the_catalog_card(stores):
+def test_lock_flag_reaches_the_catalog_card(stores, monkeypatch):
+    from motor_ai_sim import motor_access as ma
     from motor_ai_sim.routes import catalog as cat_mod, presets as pre_mod
 
+    # Owner decision 2026-10-05 (a regular user opens GRANTED motors in Motors +
+    # Configure): a signed-in account on the grant list sees only the cards of
+    # the dies it was granted -- a public card that names no die of the catalogue
+    # (this one) is not shown to it.  This test is about the lock flag, not about
+    # grants, so ALICE is put on `all` and sees every card, as before.
+    _catalog_access = ma.catalog_access
+    monkeypatch.setattr(ma, "catalog_access", lambda authorization=None: (
+        {**_catalog_access(authorization), "mode": ma.MODE_ALL}
+        if authorization == ALICE else _catalog_access(authorization)))
     _save(pre_mod, "m_a", "Motor A", GEO_A, ALICE)
     pre_mod.set_preset_lock("m_a", pre_mod.LockRequest(locked=True),
                             _admin={"uid": "u", "role": "admin"})

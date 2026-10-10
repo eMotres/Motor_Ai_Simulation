@@ -45,7 +45,8 @@ def env(tmp_path, monkeypatch):
     users_file = tmp_path / "users.json"
     dies_dir = tmp_path / "dies"
     da_file = tmp_path / "die_access.json"
-    shutil.copy2(_REAL_USERS, users_file)
+    if _REAL_USERS.exists():          # git-ignored: absent in a fresh checkout / the test image
+        shutil.copy2(_REAL_USERS, users_file)
     shutil.copytree(_REAL_DIES, dies_dir)
 
     monkeypatch.setattr(U, "_USERS_FILE", users_file)

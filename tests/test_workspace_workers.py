@@ -67,12 +67,35 @@ _BOUND_A = 0.72
 _BOUND_PROCESS = 0.3356
 
 
+#: The owner's Ø50 12s-14p machine, the complete BASE geometry (no derived
+#: shadows).  The sweep's in-process grid gate validates the whole cross-section,
+#: so a machine that only overrides seven keys of whatever the sandbox config
+#: holds is buildable only while that config happens to be a Ø50 machine -- the
+#: committed seed is the Ø200 one, and a Ø200 magnet in a Ø50 stator overlaps its
+#: neighbours (16 violations).  Self-contained instead of "the suite's reference
+#: machine".
+_REFERENCE_GEOMETRY = {
+    "stator_diameter": 50, "slot_height": 7.5, "core_thickness": 2.4,
+    "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
+    "air_gap": 0.25, "tooth_width": 4.2, "tooth2_width": 2.1, "cut_width": 1.2,
+    "insulation_thickness": 0.06, "wire_width": 3, "wire_height": 0.5,
+    "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 9,
+    "wire_split": 1, "slot_hs": 0.267, "magnet_height": 7,
+    "rotor_house_height": 1.3, "shaft_height": 2, "magnet_fill_down": 0.87,
+    "magnet_fill_up": 0.34, "magnet_fill_radius": 0.2, "magnet_up_gap": 0.1,
+    "rotor_hole": 0.9, "magnet_down_height": 1.5, "magnet_lamination": 0,
+    "stator_fillet_r": 1.5, "stator_fillet_r1": 0.1, "rotor_fill_r": 0.2,
+    "motor_length": 15, "wire_parallel": 1, "sleeve_thickness": 0,
+}
+
+
 def _write_machine(path: Path, geometry: dict) -> None:
-    """A copy of the suite's reference machine with ``geometry`` overwritten."""
+    """The suite's config with its whole ``geometry`` replaced by the complete
+    reference machine, ``geometry`` overwritten on top."""
     from motor_ai_sim.config import DEFAULT_CONFIG_PATH
 
     cfg = yaml.safe_load(io.open(str(DEFAULT_CONFIG_PATH), encoding="utf-8"))
-    cfg["geometry"].update(geometry)
+    cfg["geometry"] = {**_REFERENCE_GEOMETRY, **geometry}
     path.parent.mkdir(parents=True, exist_ok=True)
     io.open(str(path), "w", encoding="utf-8").write(
         yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True))

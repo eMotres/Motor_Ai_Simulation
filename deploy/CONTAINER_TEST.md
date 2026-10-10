@@ -59,6 +59,15 @@ docker run --rm \
   motres-api:test python -m pytest -q
 ```
 
+The `test` target is a repo-shaped sandbox, not just `tests/`: it also carries
+`git` (the open/private-data and run-history tests drive real repositories),
+`web/src` + `web/public/help` (source-contract tests that read the UI and
+locale files), `deploy/`, `scripts/` and `data/` (the open demo dies).  It still
+has no `config/users.json` (git-ignored, absent in any clean checkout) — the
+tests that copy it guard for that — and only the dies committed under
+`config/dies`: a test that needs a die must use one of those, never one that
+exists only in the owner's local catalogue.
+
 **~20 minutes.** The physics regression alone is ~16 of them — it re-solves the
 reference machines and compares against `tests/physics_baseline.json`, which is
 the only assertion in the suite that would catch "MKL on Linux rounds

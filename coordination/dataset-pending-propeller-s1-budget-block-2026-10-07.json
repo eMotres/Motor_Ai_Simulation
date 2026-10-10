@@ -1,0 +1,20 @@
+{
+  "id": "propeller-s1-budget-block-20261007",
+  "model": "GPT-6",
+  "domain": "coupled",
+  "task": "Continue isolated preparation of propeller maximum S1 coupling while protecting customer Configure and audit the owned D85 reference attempt",
+  "requirements": ["Owner API 8001 read-only", "No unverified release", "Preserve refused physics evidence", "No repeated large FEM", "Do not bypass failed approval review"],
+  "context": "Offline default40-release; D85 L13 eddy_true_03; production last observed 464bbecff77fa03f98e3edb03995f1dc8342b95b",
+  "tools_used": ["source review", "focused pytest before interruption", "owned container stop", "local evidence read"],
+  "actions": ["Retained full point-3 raw response and rejected candidate", "Stopped only own D85 container after mandatory gate refusal and swallowed exception", "Assigned fatal-refusal/raw-response preservation regression to reused worker", "Assigned private bridge fail-closed boundary without copying live authorization", "Saved checkpoint when approval review and workers hit workspace spend cap"],
+  "simulation_results": {"failed_point": "6.47 A RMS at 1000 RPM; coil 180 C; magnet 150 C", "steady_state": false, "demag_settled": false, "nonlinear_converged": true, "eddy_settled": true, "torque_drift_fraction": 0.00213, "torque_drift_tolerance": 0.001, "ripple_drift_pp": 0.027, "ripple_tolerance_pp": 0.127, "stop_exit_code": 137},
+  "checks": ["Prior focused point/search check: 47 passed in 0.26 s", "Fresh Python rehash and SSH status check did not execute: automatic approval review spend-cap failure", "Worker follow-up turns failed on spend cap; current drafts not accepted"],
+  "corrections": ["General generator catches Exception and can swallow owned acceptance refusal", "Parsed finite raw responses must be preserved on early adapter refusals", "No genuine private authorization bundle exists; bridge must fail closed"],
+  "final_answer": "Propeller maximum S1 is not ready or installed. D85 mandatory steady-state acceptance failed; raw results retained and only the owned run stopped. Customer Configure unchanged. Work is partial and final verification requires owner workspace spend-cap resolution.",
+  "artifacts": ["docs/propeller-s1-budget-block-checkpoint-2026-10-07.md", "scratch_s1_20261006/d85_finish_20261007/configure_eddy03_rejected_candidate.json", "scratch_s1_20261006/d85_finish_20261007/configure_eddy03_solve003.response.json.gz", "scratch_s1_20261006/d85_finish_20261007/configure_eddy03_solves_after_rejection.jsonl"],
+  "quality_status": "raw",
+  "source_project": "motor_ai_sim",
+  "model_versions": {"orchestrator": "GPT-6", "workers": "GPT-6", "escalation": "none"},
+  "outcome": "partial",
+  "verification": "failed"
+}

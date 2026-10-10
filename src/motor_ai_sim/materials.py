@@ -471,13 +471,21 @@ class InsulatorMaterial:
 
     EM-inert in the sense that matters (mu_r ≈ 1 → acts like air in the magnetic
     solve); matters for the thermal model (heat path copper→iron) and for
+<<<<<<< Updated upstream
     mass/cost.  ``sigma`` is usually 0 (a insulation) but is NOT assumed to be:
+=======
+    mass/cost.  ``sigma`` is usually 0 (a slot liner) but is NOT assumed to be:
+>>>>>>> Stashed changes
     a carbon-fibre retaining sleeve conducts a little, and that little is a
     solved eddy loss the machine has to dissipate.
 
     The last three fields are MECHANICAL and exist for the rotor sleeve's burst
     check (hoop stress at speed against the material's strength).  They are
+<<<<<<< Updated upstream
     optional: a insulation has no reason to carry them and a card that has none
+=======
+    optional: a slot liner has no reason to carry them and a card that has none
+>>>>>>> Stashed changes
     simply shows no stress row.
     """
     name: str
@@ -491,6 +499,7 @@ class InsulatorMaterial:
     tensile_strength_mpa: Optional[float] = None    # MPa, along the fibres
     youngs_modulus_gpa: Optional[float] = None      # GPa, along the fibres
     max_service_temp_c: Optional[float] = None      # °C, matrix limit
+<<<<<<< Updated upstream
     # ── ORTHOTROPY (added 2026-09-05 for the rotor centrifugal solve) ───────
     # A hoop-wound UD sleeve is stiff ALONG the fibres (youngs_modulus_gpa = E1,
     # the hoop direction) and an order of magnitude softer across them.  Without
@@ -499,6 +508,8 @@ class InsulatorMaterial:
     youngs_modulus_transverse_gpa: Optional[float] = None  # GPa, E2 (radial)
     shear_modulus_gpa: Optional[float] = None       # GPa, G12
     poisson_ratio: Optional[float] = None           # -, nu12
+=======
+>>>>>>> Stashed changes
 
 
 @dataclass
@@ -648,9 +659,12 @@ def _parse_insulator(name: str, raw: dict) -> InsulatorMaterial:
         tensile_strength_mpa=raw.get("tensile_strength_mpa"),
         youngs_modulus_gpa=raw.get("youngs_modulus_gpa"),
         max_service_temp_c=raw.get("max_service_temp_c"),
+<<<<<<< Updated upstream
         youngs_modulus_transverse_gpa=raw.get("youngs_modulus_transverse_gpa"),
         shear_modulus_gpa=raw.get("shear_modulus_gpa"),
         poisson_ratio=raw.get("poisson_ratio"),
+=======
+>>>>>>> Stashed changes
     )
 
 

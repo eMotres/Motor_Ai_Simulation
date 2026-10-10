@@ -261,11 +261,16 @@ def set_user_motors(email: str, body: dict = Body(default={}),
     a die was renamed is a user who still sees nothing and no way to find out
     why."""
     from motor_ai_sim import users as U
+<<<<<<< Updated upstream
+=======
+    from motor_ai_sim.routes.family import die_names
+>>>>>>> Stashed changes
     if U.get_user(email) is None:
         raise HTTPException(status_code=404, detail=f"user '{email}' not found")
     body = body or {}
     all_motors = bool(body.get("all"))
     raw = body.get("dies")
+<<<<<<< Updated upstream
     if raw is not None and not isinstance(raw, (list, tuple)):
         raise HTTPException(status_code=422,
                             detail="'dies' must be a list of die names")
@@ -371,11 +376,17 @@ def _check_dies(raw) -> list:
     nothing and no way to find out why.
     """
     from motor_ai_sim.routes.family import die_names
+=======
+>>>>>>> Stashed changes
     if raw is None:
         raw = []
     if not isinstance(raw, (list, tuple)):
         raise HTTPException(status_code=422,
+<<<<<<< Updated upstream
                             detail="'motors' must be a list of die names or \"all\"")
+=======
+                            detail="'dies' must be a list of die names")
+>>>>>>> Stashed changes
     dies = [str(d).strip() for d in raw if str(d).strip()]
     known = die_names()
     unknown = sorted({d for d in dies if d not in known})
@@ -384,6 +395,7 @@ def _check_dies(raw) -> list:
             "unknown die(s): " + ", ".join(f"'{d}'" for d in unknown)
             + " — the catalog has " + (", ".join(f"'{d}'" for d in sorted(known))
                                        if known else "no dies")))
+<<<<<<< Updated upstream
     return dies
 
 
@@ -482,6 +494,10 @@ def revoke_invite(email: str, _admin: dict = Depends(require_admin)):
             "workspace": {"id": W.workspace_id(email),
                           "path": str(ws_dir) if ws_dir else None,
                           "exists": bool(ws_dir and ws_dir.is_dir())}}
+=======
+    grants = U.set_motor_grants(email, all_motors=all_motors, dies=dies)
+    return {"ok": True, "email": email.strip().lower(), "motors": grants}
+>>>>>>> Stashed changes
 
 
 # ── Sessions + auth events ────────────────────────────────────────────────────

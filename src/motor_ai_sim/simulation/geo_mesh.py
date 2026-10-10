@@ -38,7 +38,11 @@ import numpy as np
 # DOM_* tags — must match iron_template / fem_solver_2d.
 DOM_AIR, DOM_STATOR, DOM_ROTOR, DOM_SHAFT, DOM_OUTER = 0, 1, 5, 6, 8
 DOM_SLEEVE = 11       # carbon-fibre retaining ring on the rotor OD
+<<<<<<< Updated upstream
                       # (9/10 are iron_template's insulation / wire enamel)
+=======
+                      # (9/10 are iron_template's slot liner / wire enamel)
+>>>>>>> Stashed changes
 DOM_MAG_BASE, DOM_COIL_BASE = 100, 200
 
 _SNAP = 1e-3          # snap coords to 1 um (kills sub-um CAD slivers)
@@ -1771,6 +1775,7 @@ def _sleeve_radii(polys: Dict) -> Tuple[float, float]:
     return float(r_lo), float(r_hi)
 
 
+<<<<<<< Updated upstream
 # ── conductor SKIN LAYER: a structured boundary-layer patch in the shaft ─────
 # A solid, conductive (and on most machines magnetic) shaft carries its eddy
 # current in a skin layer δ = sqrt(2/(ω μ σ)) under the surface that faces the
@@ -2018,6 +2023,12 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
                      n_slip: int, area: float, air_mm: float, quality: int,
                      r1_band: float = 0.0, part_area: Optional[Dict] = None,
                      r_sleeve_in: float = 0.0, skin: Optional[Dict] = None):
+=======
+def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
+                     n_slip: int, area: float, air_mm: float, quality: int,
+                     r1_band: float = 0.0, part_area: Optional[Dict] = None,
+                     r_sleeve_in: float = 0.0):
+>>>>>>> Stashed changes
     """(V mm, T) for the rotor disk [0, r_od].  Steel and magnets mesh at
     `area`; the solid shaft core (r < r_shaft) and the flux-barrier air pockets
     get the coarse air size — the rotor centre carries little flux.
@@ -2109,9 +2120,14 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
         _sk["r_in"] if _sk is not None else r_shaft)
     _core_r = 0.5 * _core_top
     _air_reg = [[_core_r, 0.0, 7, air_area]]                   # inside the tube
+<<<<<<< Updated upstream
     _wall_top = _sk["r_in"] if _sk is not None else r_shaft
     if r_bore > 0.0 and _wall_top > r_bore + 1e-9:             # the tube wall
         _air_reg += [[0.5 * (r_bore + _wall_top), 0.0, 10, a_tube]]
+=======
+    if r_bore > 0.0:                                           # the tube wall
+        _air_reg += [[0.5 * (r_bore + r_shaft), 0.0, 10, a_tube]]
+>>>>>>> Stashed changes
     ann = Polygon(_grid_circle(r_iron_od, n_slip)[:-1]).difference(
           Polygon(_grid_circle(r_shaft, n_sh)[:-1]))
     _air_reg += [[*a.representative_point().coords[0], 8, air_area]
@@ -2122,8 +2138,12 @@ def _mesh_rotor_half(polys: Dict, r_od: float, r_shaft: float,
         # loss is integrated, so it needs ~2 elements across its thickness —
         # and no finer, because a 0.4 mm ring at the gap cell size costs more
         # triangles than the rotor iron it sits on.
+<<<<<<< Updated upstream
         _a_sl = max(1e-3, min(area, 0.4330 * ((r_od - r_iron_od)
                                                / _sleeve_layers(skin)) ** 2))
+=======
+        _a_sl = max(1e-3, min(area, 0.4330 * (0.5 * (r_od - r_iron_od)) ** 2))
+>>>>>>> Stashed changes
         _air_reg += [[0.5 * (r_iron_od + r_od), 0.0, 11, _a_sl]]
     if r1_band > r_od + 1e-6:
         # gap-air annulus [r_od, R1] — FINE (it carries the gap field)
@@ -2413,7 +2433,11 @@ def _stator_sector_impl(polys, r_bore, r_out_iron, r_outer, n_slip, span,
 def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality,
                        r1_band: float = 0.0, cell_copies: int = 0,
                        part_area: Optional[Dict] = None,
+<<<<<<< Updated upstream
                        r_sleeve_in: float = 0.0, skin: Optional[Dict] = None):
+=======
+                       r_sleeve_in: float = 0.0):
+>>>>>>> Stashed changes
     """(V mm, T) for a rotor WEDGE [0, span] × [0, r_od] (shaft solid to centre).
     r1_band > r_od extends the wedge with the gap-air annulus ending on the
     uniform moving-band ring R1 (harmonic-macro boundary).
@@ -2456,8 +2480,11 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
         n_bore = max(48, int(2 * math.pi * r_bore / max(0.35, 0.5 * t_tube)))
         if cell_copies > 0:
             n_bore = int(math.ceil(n_bore / cell_copies)) * cell_copies
+<<<<<<< Updated upstream
     if _sk is not None and r_bore > 0.0 and _sk["r_in"] <= r_bore + 1e-9:
         n_bore = n_sh                          # the patch's inner ring IS the bore
+=======
+>>>>>>> Stashed changes
     # With a sleeve, the iron ends at the ring's ID and r_od is the ring's OD.
     r_iron_od = float(r_sleeve_in) if r_sleeve_in > 0.0 else float(r_od)
     iron = _resample(steel, r_iron_od, n_slip)
@@ -2576,8 +2603,12 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
                  for a in _air_parts(ann, steel, mags)]
     if r_iron_od < r_od - 1e-9:                         # the sleeve annulus
         _rs = 0.5 * (r_iron_od + r_od)
+<<<<<<< Updated upstream
         _a_sl = max(1e-3, min(area, 0.4330 * ((r_od - r_iron_od)
                                                / _sleeve_layers(skin)) ** 2))
+=======
+        _a_sl = max(1e-3, min(area, 0.4330 * (0.5 * (r_od - r_iron_od)) ** 2))
+>>>>>>> Stashed changes
         _air_reg += [[_rs * math.cos(span / 2), _rs * math.sin(span / 2),
                       11, _a_sl]]
     if r1_band > r_od + 1e-6:
@@ -2815,8 +2846,12 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                                           area, air_mm, _Q, r1_band=r1_band,
                                           cell_copies=_n_poles,
                                           part_area=part_area,
+<<<<<<< Updated upstream
                                           r_sleeve_in=r_sleeve_in,
                                           skin=skin_layers)
+=======
+                                          r_sleeve_in=r_sleeve_in)
+>>>>>>> Stashed changes
             Vr, Tr = _tile_cells(Vcr, Tcr, _span_r, _n_poles // _ns)
             log.info("geo tile: stator %d x pair-cell(%dtri) = %dtri, rotor "
                      "%d x cell(%dtri) = %dtri (1/%d)", _n_pairs // _ns,
@@ -2839,8 +2874,12 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             Vr, Tr = _mesh_rotor_sector(polys, r_od, r_sh, n_slip, span,
                                         area, air_mm, _Q, r1_band=r1_band,
                                         part_area=part_area,
+<<<<<<< Updated upstream
                                         r_sleeve_in=r_sleeve_in,
                                         skin=skin_layers)
+=======
+                                        r_sleeve_in=r_sleeve_in)
+>>>>>>> Stashed changes
         else:                                          # full ring
             Vs, Ts = _mesh_stator_half(polys, r_bore, r_out_iron,
                                        r_outer, n_slip, area, air_mm, _Q,
@@ -2848,8 +2887,12 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
                                        coil_rel=coil_rel)
             Vr, Tr = _mesh_rotor_half(polys, r_od, r_sh, n_slip, area, air_mm, _Q,
                                       r1_band=r1_band, part_area=part_area,
+<<<<<<< Updated upstream
                                       r_sleeve_in=r_sleeve_in,
                                       skin=skin_layers)
+=======
+                                      r_sleeve_in=r_sleeve_in)
+>>>>>>> Stashed changes
     # Armed budget, second gate: the per-cell Steiner cap bounds each Triangle
     # RUN, but tiling multiplies a cell by its copy count and the two halves
     # add — the number the FEM will actually assemble is checked here, before

@@ -13,6 +13,7 @@ from a password account below; RIGHTS always come from our registry
 - GET  /api/auth/sessions     — the caller's own sessions
 - POST /api/auth/sessions/{sid}/revoke — sign one of them out
 - POST /api/auth/logout       — revoke the session this request is using
+<<<<<<< Updated upstream
 - POST /api/auth/register     — self-service e-mail/password sign-up (unverified)
 - POST /api/auth/verify       — consume the e-mail confirmation link
 - POST /api/auth/reset/request, /reset/confirm — password reset by link
@@ -21,6 +22,10 @@ from a password account below; RIGHTS always come from our registry
 
 Login is rate-limited in-memory per account and per IP (auth_email.Limiter);
 register/reset answers never reveal whether an address has an account.
+=======
+
+Login is rate-limited in-memory: 5 failures per email-or-IP → 60 s lockout.
+>>>>>>> Stashed changes
 
 Every sign-in now creates a SERVER-SIDE session (sessions.py) whose sid rides
 in the token, and appends a line to logs/auth_events.jsonl.  Before that, a
@@ -37,7 +42,10 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
+<<<<<<< Updated upstream
 from motor_ai_sim import auth_email as E
+=======
+>>>>>>> Stashed changes
 from motor_ai_sim import sessions as S
 from motor_ai_sim import users as U
 from motor_ai_sim.auth import require_admin, resolve_user, resolve_user_detail
@@ -51,6 +59,24 @@ def _who(request: Optional[Request]) -> tuple[str, str]:
     ip = request.client.host if request and request.client else "?"
     ua = request.headers.get("user-agent", "") if request else ""
     return ip, ua
+<<<<<<< Updated upstream
+=======
+
+
+def _start_session(email: str, *, method: str, request: Optional[Request]) -> str:
+    """Record the session, return the signed token that names it."""
+    ip, ua = _who(request)
+    sid = S.create(email, expires=time.time() + U._TOKEN_TTL_S,
+                   login_method=method, ip=ip, user_agent=ua)
+    token = U.issue_token(email, sid=sid)
+    S.record_event("login", email=email, sid=sid, reason=method, ip=ip,
+                   user_agent=ua, path="/api/auth/" + method)
+    return token
+
+_FAILS: dict[str, list[float]] = {}
+_FLOCK = threading.Lock()
+_MAX_FAILS, _WINDOW_S, _LOCK_S = 5, 300.0, 60.0
+>>>>>>> Stashed changes
 
 
 def _start_session(email: str, *, method: str, request: Optional[Request]) -> str:
@@ -111,6 +137,7 @@ def login(req: LoginReq, request: Request):
                        ip=ip, path="/api/auth/login")
         # One message for wrong password AND unknown user — no user enumeration.
         raise HTTPException(401, detail="wrong email or password")
+<<<<<<< Updated upstream
     # Past this point the caller holds the correct password.
     if status == "unverified":
         raise HTTPException(403, detail=(
@@ -316,6 +343,11 @@ def pending_approve(email: str, _admin: dict = Depends(require_admin)):
     _newsletter_after_proof(U._norm(email))
     log.info("auth: %s approved by admin %s", email, (_admin or {}).get("email"))
     return {"ok": True, "user": U.public_user(email)}
+=======
+    token = _start_session(req.email, method="password", request=request)
+    log.info("auth: password login ok for %s from %s", req.email.strip().lower(), ip)
+    return {"token": token, "user": U.public_user(req.email)}
+>>>>>>> Stashed changes
 
 
 class GoogleReq(BaseModel):
@@ -343,6 +375,7 @@ def google_login(req: GoogleReq, request: Request):
     tier = _registry_tier(email)
     if tier == "__disabled__":
         raise HTTPException(403, detail="this account is disabled")
+<<<<<<< Updated upstream
     # Same address by password and by Google = one account.  Google's proof
     # of the mailbox verifies a pending password account (and discards its
     # unproven password — see users.link_google).
@@ -356,6 +389,9 @@ def google_login(req: GoogleReq, request: Request):
             N.request_subscribe(email, source="google", ip=_ip(request))
         except Exception as e:                               # noqa: BLE001
             log.warning("newsletter: google sign-up consent failed: %s", e)
+=======
+    token = _start_session(email, method="google", request=request)
+>>>>>>> Stashed changes
     ip = (request.client.host if request and request.client else "?")
     log.info("auth: Google login ok for %s (tier %s) from %s", email, tier, ip)
     return {"token": token,

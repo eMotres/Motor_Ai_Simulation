@@ -552,9 +552,12 @@ def public_user(email: str) -> dict:
     return {"email": _norm(email), "tier": u.get("tier", "free"),
             "name": u.get("name", ""), "disabled": bool(u.get("disabled")),
             "created": u.get("created"),
+<<<<<<< Updated upstream
             # False only for a self-registered account whose link was never
             # used (absent on older records = verified).
             "email_verified": is_verified(u) if u else True,
+=======
+>>>>>>> Stashed changes
             # Which catalog motors this account may open (see below).  Shipped
             # with the record so the admin table draws the count without a
             # second round trip per user.
@@ -596,6 +599,7 @@ def set_motor_grants(email: str, *, all_motors: bool,
             {"all": all_motors, "dies": list(dies or [])})
         _save(users)
     return get_motor_grants(email)
+<<<<<<< Updated upstream
 
 
 # ── invites ──────────────────────────────────────────────────────────────────
@@ -679,6 +683,8 @@ def list_invites() -> list[dict]:
                     "note": inv.get("note") or ""})
     out.sort(key=lambda r: r.get("invited_at") or "", reverse=True)
     return out
+=======
+>>>>>>> Stashed changes
 
 
 def any_users() -> bool:
@@ -718,10 +724,27 @@ def authenticate(email: str, password: str) -> tuple[str, Optional[dict]]:
 
 
 def check_login(email: str, password: str) -> Optional[dict]:
+<<<<<<< Updated upstream
     """Back-compat: the record when the password is right AND the account may
     sign in, else None."""
     status, rec = authenticate(email, password)
     return rec if status == "ok" else None
+=======
+    """Constant-time-ish password check → the user record, or None."""
+    email = _norm(email)
+    u = _load_soft().get(email)
+    # Always burn a hash even for unknown users, so response timing does not
+    # reveal which emails exist.
+    salt = (u or {}).get("pw_salt") or secrets.token_hex(16)
+    iters = int((u or {}).get("pw_iters") or _PBKDF2_ITERS)
+    calc = hashlib.pbkdf2_hmac("sha256", (password or "").encode("utf-8"),
+                               bytes.fromhex(salt), iters).hex()
+    if u is None or u.get("disabled"):
+        return None
+    if not hmac.compare_digest(calc, u.get("pw_hash", "")):
+        return None
+    return u
+>>>>>>> Stashed changes
 
 
 def issue_token(email: str, sid: Optional[str] = None,

@@ -44,5 +44,15 @@ if /i "%~1"=="--print-env" (
 rem NB: /c: makes the space literal - without it findstr ORs two patterns and
 rem a mere SYN_SENT poll to :8001 read as "already serving".
 netstat -ano | findstr /r /c:":8001 .*LISTENING" >nul && exit /b 0
+<<<<<<< Updated upstream
 
+=======
+cd /d C:\Users\vadim\Projects\motor_ai_sim
+rem Google sign-in: fill in the OAuth client ID (docs/GOOGLE_SIGNIN_SETUP.md)
+set GOOGLE_CLIENT_ID=326532371180-npcsdq272vdvjpklst61aj1k8j2i1j5b.apps.googleusercontent.com
+rem TEMPORARY (user rights test 2026-08-20): real enforcement on the local API.
+rem Remove these two lines to return to open dev mode (everyone = admin).
+set AUTH_ENFORCE=1
+set ADMIN_EMAILS=vadim@motresres.com
+>>>>>>> Stashed changes
 python -m uvicorn motor_ai_sim.api:app --port 8001 --host 0.0.0.0 >> uvicorn_8001.out 2>> uvicorn_8001.err

@@ -97,6 +97,7 @@ from motor_ai_sim.simulation.drive import (
     inverse_park as _ipark_dq,
     aitken_flux_anchor as _aitken_flux_anchor,
 )
+<<<<<<< Updated upstream
 from motor_ai_sim.simulation.dc_orbit import (
     DcOrbitSolve as _DcOrbitSolve,
     flux_shift_to_state as _flux_shift_to_state,
@@ -104,6 +105,8 @@ from motor_ai_sim.simulation.dc_orbit import (
     ll_flux as _ll_flux,
     ll_inductance as _ll_inductance,
 )
+=======
+>>>>>>> Stashed changes
 # THE EXCITATION SOURCE INTERFACE.  Everything that decides WHAT this solver
 # applies — waveform, settle schedule, report block — is behind it, so the
 # five shipped drives are five implementations rather than a dozen if-branches,
@@ -115,8 +118,11 @@ from motor_ai_sim.simulation.dc_orbit import (
 from motor_ai_sim.simulation.excitation import (
     ExcitationSource as _ExcSource,
     Feedback as _Feedback,
+<<<<<<< Updated upstream
     SineVoltageSource as _SineVoltageSource,
     _V_SETTLE_ENV as _SOURCE_V_SETTLE_ENV,
+=======
+>>>>>>> Stashed changes
     make_source as _make_source,
 )
 from motor_ai_sim.simulation.losses import (
@@ -1177,15 +1183,27 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 # state with an L/R start-up transient.  Every knob that used to live here is a
 # field of `excitation.SettlePolicy` now, read off `source.settle_policy()`:
 #
+<<<<<<< Updated upstream
 #   periods_static       SB_V_SETTLE_PERIODS — source defaults: 10 for the
 #                        sinusoid, 2 for PWM, 0 for imposed current. The P2
 #                        solver selects 4 instead of 10 only for ordinary
 #                        sinusoidal voltage without eddy/demag, after a pinned
 #                        A/B run; an EXPLICIT env value always wins.
+=======
+#   periods_static       SB_V_SETTLE_PERIODS  — 10 for the sinusoid (every
+#                        pinned number was produced with it), 2 for PWM, 0 for
+#                        an imposed-current source; an EXPLICIT env value wins
+#                        for every source.  Never lower it in production: a
+#                        fine-step PWM study costs 11x its reported window in
+#                        settling, and whether a shorter settle buys anything is
+#                        an empirical question (compare v_dc_residual_A and the
+#                        reported metrics at 2 vs 10 before trusting one).
+>>>>>>> Stashed changes
 #   adaptive_tau_mult    SB_V_SETTLE_TAU_MULT — periods = ceil(k·τ_e/T_e) with
 #   periods_cap          SB_V_SETTLE_MAX        τ_e = max(Ld,Lq)/R from the
 #                        phasor initialiser, floored at periods_static, capped.
 #   coarse_settle        SB_PWM_COARSE_SETTLE — mixed coarse/fine settle.
+<<<<<<< Updated upstream
 #   fine_settle_periods  SB_PWM_FINE_SETTLE   — WHOLE fine settling periods at
 #                        the end of that prefix: the switching turn-on DC is
 #                        solved out on the first, the last verifies (B5).
@@ -1198,6 +1216,19 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 # the phasor initialiser, the Δ² anchor and the DC-orbit solve in the frame
 # loop — lives here; only the decision of WHICH numbers to feed it moved.  See
 # simulation/excitation.py.
+=======
+#   preroll_carriers     SB_PWM_PREROLL_CARRIERS
+#   handover_dc_removal  SB_PWM_HANDOVER_DC   — OPT-IN: the first validation on
+#                        CILN28/G2-L40 (8 kHz, 120 steps) OVER-corrected
+#                        (residual +3.3 A → −15.6 A, ripple 50 → 89 %), so the
+#                        default reproduces the pre-2026-09-02 handover.
+#   aitken               Δ² period-boundary flux anchors (voltage sources only).
+#
+# The MATH driven by those fields — _build_schedule, the adaptive block after
+# the phasor initialiser, the handover DC removal in the frame loop — is
+# unchanged and still lives here; only the decision of WHICH numbers to feed it
+# moved.  See simulation/excitation.py.
+>>>>>>> Stashed changes
 
 # ── MIXED-RESOLUTION SETTLING ────────────────────────────────────────────────
 # The settling periods exist to land the FUNDAMENTAL current orbit (and, when
@@ -1207,6 +1238,7 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 # carriers.  So a PWM run does not need to pay its fine step count for the
 # settle — it can march the settle on the plain sinusoid fundamental (the very
 # amplitude and angle the modulator is compensated to apply) at a COARSE step
+<<<<<<< Updated upstream
 # count on the SAME sliding-band mesh, then switch the real modulator on for
 # the last `fine_settle_periods` settling periods and the reported window.
 # Cost drops from steps x (settle+1) to coarse x (settle-2) + steps x 3.
@@ -1224,6 +1256,22 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 # scheme, unset -> AUTO: mixed only while the run is itself a coarse/partial
 # pass (< 16 steps per switching period).  The env itself is read in
 # simulation/excitation.py (SettlePolicy.coarse_settle /
+=======
+# count on the SAME sliding-band mesh, then switch the real modulator on for a
+# short fine PRE-ROLL and the reported window.  Cost drops from steps x 3 to
+# roughly 2 x coarse + preroll + steps.
+#
+# SB_PWM_COARSE_SETTLE: "0" forces the all-fine march, "1" forces the mixed
+# scheme, unset -> AUTO: mixed only while the run is itself a coarse/partial
+# pass (< 16 steps per switching period).  The mixed scheme's +1..2 pp torque-
+# ripple bias is structural (the switching turn-on transient cannot decay
+# inside one reported period when L/R ~ a period — measured, and neither a
+# longer pre-roll nor a finer settle converges it), which is acceptable on a
+# fast pass whose ripple already reads low, and NOT acceptable on the fully
+# resolved run people quote.  The zone rule keeps fast passes ~2x cheaper and
+# resolved runs exact without anyone having to remember an env var.  The env
+# itself is read in simulation/excitation.py (SettlePolicy.coarse_settle /
+>>>>>>> Stashed changes
 # .coarse_settle_forced); the "< 16 steps per carrier" half of the AUTO rule
 # needs the run's own step count and stays in _build_schedule below.
 # Coarse settle resolution: the largest DIVISOR of the fine count that is <=
@@ -1232,6 +1280,7 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 # and the band is never rebuilt mid-run.  ~40 is the resolution the sinusoidal
 # voltage drive is normally run at.
 _PWM_COARSE_MAX = max(4, int(_os_sb.environ.get("SB_PWM_COARSE_MAX", "40") or 40))
+<<<<<<< Updated upstream
 # Acceptance for the DC left in the phase currents of the REPORTED period — the
 # 2026-09-02 number, now measured the way it is written (worst phase, whole
 # period; see the gauge at the end of the P2 branch).  Above it the reported
@@ -1265,6 +1314,13 @@ def _period_dc(series, i0: int, i1: int, dt_w) -> float:
 # (How much of the settle is marched FINE is SettlePolicy.fine_settle_periods —
 # SB_PWM_FINE_SETTLE, read in simulation/excitation.py.  WHOLE periods, because
 # the DC the modulator's turn-on leaves behind can only be measured over one.)
+=======
+# (The fine PRE-ROLL width, in CARRIER periods, is SettlePolicy.preroll_carriers
+# — SB_PWM_PREROLL_CARRIERS, read in simulation/excitation.py.  The settle hands
+# over a fundamental orbit with no ripple on it; the ripple then has to build
+# up, and the first carrier or two of the fine march carry that phase-in.
+# Discarded like settling.  See the sweep in the study notes for why 2.)
+>>>>>>> Stashed changes
 
 # ── CONDUCTING ROTOR UNDER AN IMPOSED VOLTAGE ────────────────────────────────
 # The magnet/shaft σ·∂A/∂t dynamics used to be force-dropped on every imposed-
@@ -2214,6 +2270,7 @@ def _excluded_parts() -> frozenset:
         return frozenset()
 
 
+<<<<<<< Updated upstream
 def _shaft_skin_material() -> Tuple[float, float]:
     """(σ [S/m], μ_r,max) of the shaft as the eddy solve will see it — the
     same assignment precedence as the σ block in fem_transient_sliding_band
@@ -2254,6 +2311,8 @@ def _shaft_skin_material() -> Tuple[float, float]:
     return sig, mu
 
 
+=======
+>>>>>>> Stashed changes
 def _field2d_static_inputs(
     rotor_angle_deg: float = 0.0,
     gamma_deg: float = 0.0,
@@ -2289,6 +2348,7 @@ def _field2d_static_inputs(
     # are (the source below is still N.I ampere-turns over the real copper) but
     # only n_wires/k of them are in SERIES, so the slot MMF — and every quantity
     # built on it — divides by k exactly as another parallel path would.
+<<<<<<< Updated upstream
     from motor_ai_sim.winding import (n_parallel_effective as _npar_eff,
                                       conductors_per_slot as _cond_slot)
     n_parallel   = _npar_eff(wind.get("n_parallel", 2), geo)
@@ -2298,6 +2358,11 @@ def _field2d_static_inputs(
     # when those strips are in parallel, which is what makes the parallel mode
     # come out identical in MMF.  wire_split = 1 leaves both untouched.
     n_wires      = _cond_slot(geo) or geo.get("num_wires_per_slot", 14)
+=======
+    from motor_ai_sim.winding import n_parallel_effective as _npar_eff
+    n_parallel   = _npar_eff(wind.get("n_parallel", 2), geo)
+    n_wires      = geo.get("num_wires_per_slot", 14)
+>>>>>>> Stashed changes
     pole_pairs   = p.num_poles // 2
     I_coil_peak  = I_phase_rms / n_parallel * math.sqrt(2)
     theta_e      = math.radians(rotor_angle_deg * pole_pairs + gamma_deg + DAXIS_SHIFT_DEG)
@@ -3644,18 +3709,22 @@ def fem_transient_sliding_band(
                                      # modulation index is m = 2·v_phase_peak/v_bus.
     v_delta_deg: float = 0.0,        # voltage drive: voltage angle [°el] in the SAME frame as γ
     v_bus: float = 0.0,              # pwm_voltage: DC link voltage [V] (pole voltage = ±v_bus/2)
+<<<<<<< Updated upstream
     v_bus_real: float = 0.0,         # drive="inverter": the PHYSICAL DC link [V] when `v_bus`
                                      # above is the star-equivalent MODEL bus (√3·V_dc on a delta
                                      # machine).  Device drops and the dead-time clamp are computed
                                      # on this one — they are properties of the power stage, not of
                                      # the change of variable the delta machine is solved through.
                                      # 0 = there is no substitution and it IS `v_bus`.
+=======
+>>>>>>> Stashed changes
     f_switch: float = 0.0,           # pwm_voltage: carrier frequency [Hz], SNAPPED to a whole
                                      # number of carriers per electrical period (synchronous PWM —
                                      # see simulation/pwm.py); the effective value is reported.
     waveform=None,                   # custom_current: [(θ_e_deg, i_A)] samples of the phase-A
                                      # TERMINAL current over one electrical period (B/C = the same
                                      # shape shifted ∓120°el), linearly interpolated.
+<<<<<<< Updated upstream
     inverter_nonideal=None,          # drive="inverter" (Controller Stage 2): the device's own
                                      # non-ideality, as the Controller module resolved it —
                                      # {r_ds_ohm, v_sd_v0_V, v_sd_rd_ohm, dead_time_s, …} per LEG
@@ -3663,6 +3732,8 @@ def fem_transient_sliding_band(
                                      # SAME modulator as "pwm_voltage" with the dead-time clamp and
                                      # the channel/diode drops on top, decided by the PREVIOUS
                                      # step's measured current (inverter/coupling.py).
+=======
+>>>>>>> Stashed changes
     i_block: float = 0.0,            # bldc_current: FLAT-TOP terminal current of the 120° block
                                      # [A] — not an rms and not a sinusoid peak (rms = i_block·
                                      # √(2/3); see simulation/pwm.BlockCurrentSource).  γ is the
@@ -3882,11 +3953,31 @@ def fem_transient_sliding_band(
         _use_geo_tr = False
         _geo_mesh_eff = False
     NS = 1 if _full_ring else int(n_sectors)
+<<<<<<< Updated upstream
     # Count divisibility alone does not certify the paired CAD geometry or
     # the actual phase terminals. Reject before calibration or mesh fallbacks.
     from motor_ai_sim.simulation.geometry_2d import validate_sector_symmetry
     validate_sector_symmetry(p.num_slots, p.num_poles, NS, dom.winding_layout,
                              paired_stator=True)
+=======
+    # A 1/N model exists only when N divides gcd(slots, poles); otherwise the
+    # wedge holds a FRACTIONAL pole count and the (anti)periodic sign below is
+    # computed from the floored poles-per-sector — the comment above names the
+    # consequence (3.5 poles/sector → corrupt BC → spurious torque/ripple), but
+    # only the 1→4 fallthrough was ever guarded: an EXPLICIT invalid N sailed
+    # through and reported the wedge ×N as the machine.  static3d and the iron
+    # template both raise on exactly this; the layer that produces every
+    # published number must too (an unsupported option raises — the route must
+    # not quietly answer a different question).
+    _sym = math.gcd(int(p.num_slots), int(p.num_poles))
+    if NS > 1 and _sym % NS != 0:
+        raise ValueError(
+            "n_sectors=%d is not a symmetry of this machine: %d slots / %d "
+            "poles repeat only in 1/%d fractions (divisors of gcd=%d). Use one "
+            "of %s, or 1 for the full ring."
+            % (NS, p.num_slots, p.num_poles, _sym, _sym,
+               sorted(d for d in range(2, _sym + 1) if _sym % d == 0)))
+>>>>>>> Stashed changes
     sector_deg = 360.0 / NS
     pole_pairs = p.num_poles // 2
     # Sector boundary sign: ANTI-periodic (−1) only when the sector spans an
@@ -3910,6 +4001,7 @@ def fem_transient_sliding_band(
     # strands do not divide the wires; a rounded turn count is a machine the
     # user did not ask for.  See winding.wire_parallel_from_geo.
     from motor_ai_sim.winding import (turns_per_coil as _turns_per_coil,
+<<<<<<< Updated upstream
                                       wire_parallel_from_geo as _wp_geo,
                                       wire_split_from_geo as _ws_geo,
                                       n_parallel_effective as _npar_eff)
@@ -3967,6 +4059,11 @@ def fem_transient_sliding_band(
     # per-strand answer to solver precision — so it stays reachable.
     series_paths = _bond_s.startswith(("ser", "sold"))
     n_parallel = _npar_eff(n_parallel_conn, geo)
+=======
+                                      wire_parallel_from_geo as _wp_geo)
+    wire_parallel = _wp_geo(geo)
+    n_parallel = n_parallel_conn * wire_parallel
+>>>>>>> Stashed changes
     # The connection LABEL this run is entitled to be reported under: only the
     # one whose parallel-path count matches the paths actually solved.  An
     # explicit n_parallel overrides the label (above), and a stale config label
@@ -3982,6 +4079,7 @@ def fem_transient_sliding_band(
             _conn_label_used = _lbl
     except Exception:
         _conn_label_used = ""
+<<<<<<< Updated upstream
     # STRIPS PER WIRE ROW (geometry.wire_split, default 1).  The CAD lays N strips
     # of wire_width side by side per wire ROW, 2·wire_spacing_x apart, so the
     # slot holds num_wires_per_slot × N CONDUCTORS — each drawn, meshed and
@@ -3999,6 +4097,9 @@ def fem_transient_sliding_band(
     wire_split = _ws_geo(geo)
     n_wires_drawn = int(geo.get("num_wires_per_slot", 14))
     n_wires = n_wires_drawn * wire_split
+=======
+    n_wires = int(geo.get("num_wires_per_slot", 14))
+>>>>>>> Stashed changes
     turns_per_coil = _turns_per_coil(geo)
     # Physical copper loss (ρ_Cu(coil_temp)·J²·V_cu·k_end, end-winding the 2-D
     # field never sees) is computed a few dozen lines DOWN, right after the CAD
@@ -4059,10 +4160,15 @@ def fem_transient_sliding_band(
         # that measurement is not a fine adjustment, it is the wrong machine's
         # number: refuse, name both, tell the user to clear the field.
         try:
+<<<<<<< Updated upstream
             # Compare all topology fields, including the versioned resolved
             # winding, while retaining the existing cross-section pin policy.
             _kp = _daxis_topology_key(p, geo, wind, _daxis_geo_fingerprint(geo))[:-1]
             _known = [float(v) for k, v in _DAXIS_CACHE.items() if tuple(k[:-1]) == tuple(_kp)]
+=======
+            _kp = _daxis_topology_key(p, geo, wind, _daxis_geo_fingerprint(geo))[:4]
+            _known = [float(v) for k, v in _DAXIS_CACHE.items() if tuple(k[:4]) == tuple(_kp)]
+>>>>>>> Stashed changes
             _dp_chk = _daxis_disk_path()
             if _dp_chk and _os_sb.path.exists(_dp_chk):
                 import json as _json_dx
@@ -4143,6 +4249,7 @@ def fem_transient_sliding_band(
         n_parallel=n_parallel, v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg), v_bus=float(v_bus),
         f_switch=float(f_switch), f_elec=float(f_elec),
+<<<<<<< Updated upstream
         waveform=waveform, i_block=float(i_block),
         # Stage 2 only: the device's non-ideality and the two things the leg
         # current is reconstructed from (the connection and the model/real bus
@@ -4150,6 +4257,9 @@ def fem_transient_sliding_band(
         inverter_nonideal=inverter_nonideal,
         star_delta=str(star_delta or "star"),
         v_bus_real=float(v_bus_real or 0.0))
+=======
+        waveform=waveform, i_block=float(i_block))
+>>>>>>> Stashed changes
     # What the payload calls this run's drive.  The SOURCE names itself, so a
     # hand-written one is reported as itself rather than as whatever `drive=`
     # happened to be left at.
@@ -4165,6 +4275,7 @@ def fem_transient_sliding_band(
     # How long this source's circuit state takes to reach its orbit, and which
     # accelerators apply.  Everything the schedule below derives comes from it.
     _settle = _src.settle_policy()
+<<<<<<< Updated upstream
     _conv_tol, _conv_cap = _sine_settle_criterion()
     _settle_static_effective, _settle_selection_reason = (
         _select_voltage_settle_periods(
@@ -4195,6 +4306,8 @@ def fem_transient_sliding_band(
     # OFF whenever the converged settle is on; every other source keeps its
     # policy unchanged.
     _aitken_on = bool(_settle.aitken) and _conv_settle is None
+=======
+>>>>>>> Stashed changes
     # Carrier periods per electrical period; 0 = this source has no carrier.
     # The time-resolution gate, the mixed-settle geometry and the eddy gauge's
     # block width are all carrier questions, so they ask THIS rather than
@@ -4428,6 +4541,7 @@ def fem_transient_sliding_band(
                         "nodes/period -> whole-node rotor steps, periodic "
                         "torque); cogging minimum is checked next",
                         _req_steps, n_steps_per_period, _nodes_per_period)
+<<<<<<< Updated upstream
     _cogging_sampling = _cogging_frame_policy(
         int(p.num_slots), int(p.num_poles), int(pole_pairs),
         int(n_steps_per_period), int(_nodes_per_period),
@@ -4474,6 +4588,8 @@ def fem_transient_sliding_band(
                     _cogging_sampling["raw_samples_per_cycle"],
                     _cogging_sampling["target_raw_samples_per_cycle"],
                     _nodes_per_period)
+=======
+>>>>>>> Stashed changes
     # Steps per SWITCHING period is the number that decides whether a PWM run
     # measured the ripple it reports.  The exact-mean voltage integration makes
     # an under-resolved run fail SAFE (it averages toward the sinusoid) rather
@@ -4655,8 +4771,12 @@ def fem_transient_sliding_band(
         gap_layers=gap_layers,
         component_mesh_mm=component_mesh_mm,
         full_ring=_full_ring, pole_copy=pole_copy,
+<<<<<<< Updated upstream
         iron_template=iron_template, geo_mesh=_geo_mesh_eff,
         skin_layers=_skin)
+=======
+        iron_template=iron_template, geo_mesh=_geo_mesh_eff)
+>>>>>>> Stashed changes
     # Build provenance — captured IMMEDIATELY after the build (thread-local in
     # the mesher, so a later build on this thread would overwrite it).  Reported
     # in the result dict: a fallback-built mesh moves the ripple noise floor by
@@ -4667,8 +4787,11 @@ def fem_transient_sliding_band(
         log.warning("mesh build DEGRADED (%d fallback(s)): %s",
                     len(_build_prov["events"]),
                     " | ".join(_build_prov["events"]))
+<<<<<<< Updated upstream
     if _build_prov.get("notes"):
         log.info("mesh build path: %s", " | ".join(_build_prov["notes"]))
+=======
+>>>>>>> Stashed changes
     Ps, Tts = ms.p.copy(), ms.t.copy(); Pr, Ttr = mr.p.copy(), mr.t.copy()
     nsn = Ps.shape[1]
     Pall = np.hstack([Ps, Pr]); Tall = np.hstack([Tts, Ttr + nsn])
@@ -4758,6 +4881,7 @@ def fem_transient_sliding_band(
 
     _cancel_point("materials and per-tag assembly")
     # ── Pre-assemble per-tag stiffness K0 + constant magnet source ───────
+<<<<<<< Updated upstream
     # The ROTOR half's material map — the one the magnet domains come out of, so
     # this is the single build that carries `magnet_temp_c`.  The three stator
     # builds below read coil J_z only; handing them the temperature would change
@@ -4765,6 +4889,10 @@ def fem_transient_sliding_band(
     matr0 = build_materials(_nominal_currents(0.0), dom.winding_layout,
                             getattr(cr, "polys", polys), 0.0, slot_area_m2, n_wires,
                             magnet_temp_c=magnet_temp_c)
+=======
+    matr0 = build_materials(_nominal_currents(0.0), dom.winding_layout,
+                            getattr(cr, "polys", polys), 0.0, slot_area_m2, n_wires)
+>>>>>>> Stashed changes
     # unit-current stator sources (per phase), magnet source is in rotor half
     # σ per domain tag for the eddy-current mass matrix (temperature-corrected
     # copper).  Solid conductors only — air / laminated iron stay σ=0.
@@ -5347,9 +5475,220 @@ def fem_transient_sliding_band(
     # settle count in either scheme, which is what lets the eddy operators
     # and the drive object built between the two calls stay valid.
     #
+<<<<<<< Updated upstream
     # The COUNT is the selected source policy (adapted below for PWM); the
     # schedule maths is the solver's and is unchanged.
     _n_periods0 = float(n_periods)
+=======
+    # The COUNT is the source's (`_settle.periods_static`, adapted below); the
+    # schedule maths is the solver's and is unchanged.
+    _n_periods0 = float(n_periods)
+
+    def _build_schedule(_settle_p):
+        n_periods = float(_n_periods0)
+        n_total = max(1, int(round(n_steps_per_period * n_periods)))
+        _v_settle_periods = 0        # imposed-current runs have no settle
+        _vskip = 0
+        _v_nspp = int(round(n_steps_per_period))
+        if _vdrive:
+            # TEN settling periods with ITERATED Aitken.  The electrical time
+            # constant L/R spans many periods on a low-R machine, so a marched DC
+            # start-up decays too slowly to shed by brute force.  Instead: the
+            # phasor init lands near the orbit, then the period-boundary flux
+            # (which converges GEOMETRICALLY) is Δ²-extrapolated to its limit at
+            # every 3rd boundary (anchors at periods 3, 6, 9 — each application
+            # cuts the residual DC ~3×), and the final settling period runs after
+            # the last anchor so the reported window starts on a clean orbit.
+            # Settling frames use a REDUCED Picard depth (the DC dynamics only
+            # need L roughly right); the last settling period + the reported
+            # window run at full depth.
+            _v_settle_periods = int(_settle_p)
+            _vskip = _v_settle_periods * max(2, _v_nspp)
+            n_periods = float(n_periods) + float(_v_settle_periods)
+            n_total += _vskip
+        # Demagnetisation: SETTLING pass, then a clean measurement pass.
+        # The magnet weakens THROUGH the run, so a single pass measures a machine
+        # whose magnets are still changing: torque decays across the window and the
+        # reported "ripple" is mostly that decay (NdFeB measured 19 % with demag vs
+        # 9 % without — the extra 10 points were the magnet dying, not a physical
+        # oscillation).  Run one extra period first so the de-rating settles, then
+        # discard those frames.  Every reported number then comes from the second
+        # pass, on a magnet that has stopped moving.
+        _dmskip = 0
+        # WITH the coupled eddy solve, the demag settling MERGES into the eddy
+        # warm-up instead of prepending its own period.  Both are settlings that
+        # converge within about one electrical period (user's call, 2026-08-19:
+        # one period suffices for both), the demag ratchet already runs on every
+        # warm-up frame, and the warm-up's quiet test is extended below to refuse
+        # the handoff while the Br map still moved — so the reported window starts
+        # on a magnet AND an eddy field that have both stopped changing.  Measured
+        # before the merge (12 steps): eddy+demag ×6.96 of plain; the second
+        # settling period was pure duplication.
+        if demag and _mag_idx.size and _v_nspp > 1 and n_total > 1 and not eddy:
+            _dmskip = _v_nspp
+            n_periods = float(n_periods) + 1.0
+            n_total += _dmskip
+        period_mech = 360.0 / pole_pairs                      # one electrical period [deg mech]
+        dt = (1.0 / max(f_elec, 1e-9)) * n_periods / n_total
+
+        # ── FRAME SCHEDULE ───────────────────────────────────────────────────
+        # The march used to be a uniform ramp, theta = (k/n_total)·period·n_periods
+        # with one global dt.  It is now an explicit per-frame schedule so the
+        # SETTLE can run coarse while the reported window runs fine (see
+        # _PWM_COARSE_SETTLE).  The uniform branch below reproduces the old
+        # expressions verbatim — same operations, same order — so every non-PWM run
+        # is bit-identical to before.
+        #
+        # `_sched_th`  nominal rotor angle of the frame [mech deg]
+        # `_sched_dth` nominal angular step of the frame [mech deg]
+        # `_sched_dt`  nominal time step of the frame [s]
+        # `_sched_t`   nominal elapsed time at the frame [s]
+        # `_sched_fine` True on frames that run the REAL modulator
+        _preroll = 0
+        _c_nspp = _v_nspp
+        _settle_bounds: set = set()      # frames that END a settle period (Aitken)
+        _sched_mixed = False
+        # The source says whether the mixed scheme is ALLOWED at all
+        # (SB_PWM_COARSE_SETTLE "0" turns it off, "1" forces it); the AUTO half
+        # of the rule — mixed only while the run is itself a coarse pass, under
+        # 16 steps per carrier — needs the run's own step count and so lives
+        # here.  A source with no carrier can never take this path.
+        _coarse_ok = bool(_settle.coarse_settle and _carriers and (
+            _settle.coarse_settle_forced
+            or float(_v_nspp) < 16.0 * max(1, _carriers)))
+        if (_vdrive and _coarse_ok and (_vskip or _dmskip)):
+            _c_nspp = _coarse_settle_nspp(_v_nspp)
+            _ratio = _v_nspp // _c_nspp
+            if _ratio > 1:
+                # Pre-roll: whole fine steps covering the source's
+                # preroll_carriers carrier periods, rounded UP to a multiple of
+                # the coarse:fine ratio.  That
+                # multiple is what lets the pre-roll be carved OUT OF the last
+                # settle period instead of added after it — so the total marched
+                # angle stays a whole number of electrical periods and the reported
+                # window still starts at theta ≡ 0, which every cross-run phasor
+                # comparison (postproc.complex_fundamental) depends on.
+                _pr_want = (_v_nspp * _settle.preroll_carriers
+                            / float(_carriers))
+                _preroll = int(_ratio * math.ceil(_pr_want / _ratio))
+                _preroll = max(0, min(_preroll, _v_nspp - _ratio))
+                _sched_mixed = True
+        if _sched_mixed:
+            _settle_periods_total = int(_v_settle_periods) + (1 if _dmskip else 0)
+            _rep_frames = max(1, int(round(_v_nspp * (
+                float(n_periods) - _settle_periods_total))))
+            _dth_c = period_mech / _c_nspp
+            _dth_f = period_mech / _v_nspp
+            _dt_c = 1.0 / (max(f_elec, 1e-9) * _c_nspp)
+            _dt_f = 1.0 / (max(f_elec, 1e-9) * _v_nspp)
+            _sched_th, _sched_dth, _sched_dt, _sched_fine = [], [], [], []
+            _th = 0.0
+            _pr_coarse = _c_nspp - _preroll // _ratio      # coarse frames in the
+            #                                               last settle period
+            for _pi in range(_settle_periods_total):
+                _last = (_pi == _settle_periods_total - 1)
+                _nc = _pr_coarse if (_last and _preroll) else _c_nspp
+                for _j in range(_nc):
+                    _sched_th.append(_th); _sched_dth.append(_dth_c)
+                    _sched_dt.append(_dt_c); _sched_fine.append(False)
+                    _th += _dth_c
+                if _last and _preroll:
+                    for _j in range(_preroll):
+                        _sched_th.append(_th); _sched_dth.append(_dth_f)
+                        _sched_dt.append(_dt_f); _sched_fine.append(True)
+                        _th += _dth_f
+                # End of this settle period: the Aitken sample point.  Recorded as
+                # the index of the LAST frame of the period, so the test in the loop
+                # is a membership check instead of a modulo that no longer holds.
+                # NOT for the period that ends with the fine PRE-ROLL (2026-09-02):
+                # its last frame carries the switching ripple, and a Δ² over two
+                # smooth coarse-boundary samples and one rippled one is not an
+                # extrapolation — measured on the 30 mm machine (48 steps, 4 per
+                # carrier, 3 settle periods) it re-anchored ψ_C by +0.147 mWb on
+                # the first reported frame (27 % of the amplitude) and left a
+                # −9/−10/+19 A DC in the window.  It never fired with the old
+                # flat 2-period settle (a third boundary never came); the
+                # adaptive L/R settle made it fire on every PWM run.
+                if not (_last and _preroll):
+                    _settle_bounds.add(len(_sched_th) - 1)
+            _skip_total = len(_sched_th)
+            for _j in range(_rep_frames):
+                _sched_th.append(_th); _sched_dth.append(_dth_f)
+                _sched_dt.append(_dt_f); _sched_fine.append(True)
+                _th += _dth_f
+            # The settle prefix is now coarse, so the frame COUNT changed; every
+            # consumer of n_total / _vskip / _dmskip downstream reads these.
+            _vskip = _skip_total if _vdrive else 0
+            _vskip_periods = _settle_periods_total
+            _dmskip = 0                     # folded into the coarse prefix above
+            n_total = len(_sched_th)
+            dt = _dt_f                      # the REPORTED window's step
+            _sched_t = [0.0] * n_total
+            for _j in range(1, n_total):
+                _sched_t[_j] = _sched_t[_j - 1] + _sched_dt[_j - 1]
+            log.warning(
+                "PWM mixed-resolution settling is ON: the reported TORQUE RIPPLE "
+                "carries a measured +1 to +2 pp bias and the DC residual is "
+                "~0.2-0.6 A instead of ~0.08 A, because the settle hands over a "
+                "ripple-FREE orbit and L/R (~0.75 electrical period here) is too "
+                "slow to shed the switching turn-on inside the reported window. "
+                "Neither a longer pre-roll nor a finer coarse settle removes it "
+                "(both swept). Torque and the loss terms are unaffected (<=0.2 %%). "
+                "Set SB_PWM_COARSE_SETTLE=0 for ripple-critical work.")
+            log.info("PWM mixed-resolution settling: %d x %d coarse (sinusoid "
+                     "fundamental) + %d fine pre-roll (%.2f carriers) + %d fine "
+                     "reported = %d frames, against %d all-fine",
+                     _settle_periods_total, _c_nspp, _preroll,
+                     _preroll * _carriers / float(_v_nspp), _rep_frames,
+                     n_total, (_settle_periods_total + 1) * _v_nspp)
+        else:
+            _sched_th = [(k / n_total) * period_mech * n_periods
+                         for k in range(n_total)]
+            _dth_u = period_mech * n_periods / n_total
+            _sched_dth = [_dth_u] * n_total
+            _sched_dt = [dt] * n_total
+            _sched_t = [k * dt for k in range(n_total)]
+            _sched_fine = [True] * n_total
+            _vskip_periods = float(_v_settle_periods) if _vdrive else 0.0
+            # Δ² anchor points, on sources whose policy asks for them (they
+            # anchor circuit STATE, which an imposed-current run does not have).
+            if _settle.aitken and _v_nspp > 0:
+                _settle_bounds = {k for k in range(n_total)
+                                  if (k + 1) % _v_nspp == 0 and (k + 1) < _vskip}
+        # Composition string for the progress strip — the frontend cannot derive it
+        # any more (it used to assume total = 3 x nspp), so the backend states it.
+        _progress_comp = (
+            ("%d×%d settle + %d pre-roll + %d reported"
+             % (int(_v_settle_periods) + (1 if _dmskip else 0), _c_nspp,
+                _preroll, n_total - _vskip - _dmskip))
+            if _sched_mixed else
+            ("%d/period × %d (%d settling + %d reported)"
+             % (_v_nspp, int(round(n_total / max(_v_nspp, 1))),
+                int(round((_vskip + _dmskip) / max(_v_nspp, 1))),
+                int(round((n_total - _vskip - _dmskip) / max(_v_nspp, 1))))
+             if (_vskip or _dmskip) and _v_nspp > 0
+                and n_total % max(_v_nspp, 1) == 0
+             else "%d frames" % n_total))
+        return dict(
+            _vskip=_vskip, _v_nspp=_v_nspp, _v_settle_periods=_v_settle_periods,
+            n_periods=n_periods, n_total=n_total, _dmskip=_dmskip,
+            period_mech=period_mech, dt=dt, _preroll=_preroll, _c_nspp=_c_nspp,
+            _settle_bounds=_settle_bounds, _sched_mixed=_sched_mixed,
+            _sched_th=_sched_th, _sched_dth=_sched_dth, _sched_dt=_sched_dt,
+            _sched_t=_sched_t, _sched_fine=_sched_fine,
+            _vskip_periods=_vskip_periods, _progress_comp=_progress_comp)
+
+    _SCHED_KEYS = ('_vskip', '_v_nspp', '_v_settle_periods', 'n_periods',
+                   'n_total', '_dmskip', 'period_mech', 'dt', '_preroll',
+                   '_c_nspp', '_settle_bounds', '_sched_mixed', '_sched_th',
+                   '_sched_dth', '_sched_dt', '_sched_t', '_sched_fine',
+                   '_vskip_periods', '_progress_comp')
+    _S = _build_schedule(_settle.periods_static)
+    (_vskip, _v_nspp, _v_settle_periods, n_periods, n_total, _dmskip,
+     period_mech, dt, _preroll, _c_nspp, _settle_bounds, _sched_mixed,
+     _sched_th, _sched_dth, _sched_dt, _sched_t, _sched_fine,
+     _vskip_periods, _progress_comp) = [_S[_k] for _k in _SCHED_KEYS]
+>>>>>>> Stashed changes
 
     def _build_schedule(_settle_p):
         n_periods = float(_n_periods0)
@@ -5989,10 +6328,18 @@ def fem_transient_sliding_band(
             _Msig2 = _Msig2 + _Mb
             _Msig_grp[_ky] = (_Mb if _ky not in _Msig_grp
                               else _Msig_grp[_ky] + _Mb)
+<<<<<<< Updated upstream
             if _ky == "mag" and int(_tg) in _cut_pair_of:
                 _g_c = np.asarray(_Mb @ _ones_e).ravel()
                 _pair_gs[int(_tg)] = (_g_c, float(_g_c.sum()))
                 continue                 # its row is the pair's, below
+=======
+            # U ≡ 0 bodies: cut by the anti-periodic boundary (their image
+            # cancels the net current identically) — no constraint row.
+            if _ky == "mag" and _tg not in _int_mag:
+                _n_free_b += 1
+                continue
+>>>>>>> Stashed changes
             if _ky in ("shaft", "sleeve") and not _full_ring:
                 # Cut by the anti-periodic boundary: the image half carries the
                 # equal and opposite current, so the net axial current of the
@@ -6228,6 +6575,7 @@ def fem_transient_sliding_band(
         # its U_b.  A body with no constraint row (a magnet half cut by the
         # anti-periodic boundary) appears in no list, so its U stays 0 — which
         # is exactly what "U ≡ 0 cut body" means.
+<<<<<<< Updated upstream
         # A merged group owns several tags: its U paints every element of all
         # of them (the strands share one U by construction).
         # NB `_t` is this module's alias for `time` — never a loop variable here.
@@ -6242,6 +6590,9 @@ def fem_transient_sliding_band(
                                     _c.get("signs", [1.0] * len(
                                         _c.get("tags", [_c["tag"]]))))])
                     for _c in _ed_con]
+=======
+        _ed_uloc = [_ed_loc_by_tag[int(_c["tag"])] for _c in _ed_con]
+>>>>>>> Stashed changes
         _ed_gmask = {_k: (_ed_key_e == _k)
                      for _k in ("cu", "mag", "shaft", "sleeve")}
 
@@ -6327,7 +6678,11 @@ def fem_transient_sliding_band(
     # ── WHAT THE SOURCE IS TOLD ABOUT THE MACHINE ────────────────────────
     # The last CONVERGED step's terminal currents and flux linkages, handed to
     # the source in its Feedback.  Kept SEPARATE from _iv_state / _psi_prev,
+<<<<<<< Updated upstream
     # which the Aitken anchor and the DC-orbit solve deliberately move off
+=======
+    # which the Aitken anchor and the handover DC removal deliberately move off
+>>>>>>> Stashed changes
     # the solved values: a controller must see what the machine DID, not the
     # solver's settling bookkeeping.  None on the first frame — there is no
     # previous step, and a source that closes a loop must handle that.
@@ -6490,6 +6845,7 @@ def fem_transient_sliding_band(
                          int(_settle.periods_cap))
                 _S = _build_schedule(_sp_pwm)
                 (_vskip, _v_nspp, _v_settle_periods, n_periods, n_total, _dmskip,
+<<<<<<< Updated upstream
                  period_mech, dt, _fine_frames, _c_nspp, _settle_bounds, _sched_mixed,
                  _sched_th, _sched_dth, _sched_dt, _sched_t, _sched_fine, _dc_win,
                  _vskip_periods, _progress_comp) = [_S[_k] for _k in _SCHED_KEYS]
@@ -6512,6 +6868,12 @@ def fem_transient_sliding_band(
                      ("%d corrected + 1 free (verification)" % (len(_dc_win) - 1)
                       if _dc_orbit.correcting else
                       "MEASURED ONLY — corrections off (SB_V_DC_SOLVE=0)"))
+=======
+                 period_mech, dt, _preroll, _c_nspp, _settle_bounds, _sched_mixed,
+                 _sched_th, _sched_dth, _sched_dt, _sched_t, _sched_fine,
+                 _vskip_periods, _progress_comp) = [_S[_k] for _k in _SCHED_KEYS]
+                _dt_k = dt
+>>>>>>> Stashed changes
 
     # ── frame loop ───────────────────────────────────────────────────────
     _T2 = []; _T_vw = []; _T_vw_reason = []
@@ -6523,6 +6885,7 @@ def fem_transient_sliding_band(
     # the excitation chart's series.  Empty on the imposed-current sources,
     # where what was applied IS the current already in _IA/_IB/_IC.
     _vapp = {'A': [], 'B': [], 'C': []}
+<<<<<<< Updated upstream
     # ── incremental (frozen-permeability) d-q inductances ────────────────
     # WHICH reported frames are probed, decided before the loop so the choice
     # cannot depend on anything the loop discovers.  Evenly spaced over the
@@ -6538,6 +6901,9 @@ def fem_transient_sliding_band(
         _inc_at = {int(round(_j * n_total / _ns_inc)) % int(n_total)
                    for _j in range(_ns_inc)}
     _pic_iters = []; _pic_res_max = 0.0; _frame_converged = []
+=======
+    _pic_iters = []; _pic_res_max = 0.0
+>>>>>>> Stashed changes
     _pic_fallback = []      # frames Newton did not solve (fell back to Picard)
     _pic_unconv = []        # frames that met NEITHER path's tolerance
     _snap2 = None
@@ -6768,6 +7134,7 @@ def fem_transient_sliding_band(
     _warm_resid = None              # remaining transient at the handoff [rel]
     _warm_tau_s = None              # fitted settling time constant [s], if clean
     _warm_extended = False          # the probe was not enough → cap march ran
+<<<<<<< Updated upstream
     # ── THE VERDICT, NOT ONLY THE COST (user's sweep, 2026-09-07) ────────────
     # `_n_warm` says how LONG the march was; it does NOT say whether the march
     # WORKED, and the two were being confused.  In the user's 90-point sweep of
@@ -6840,6 +7207,8 @@ def fem_transient_sliding_band(
     _dm_prepass = False             # the pre-pass has been spliced in
     _dm_pre_logged = False          # its one summary line has been emitted
     _n_dmpre = 0                    # pre-pass frames solved (ratchet active)
+=======
+>>>>>>> Stashed changes
     # ── WARM-UP IN THE COMBINED (eddy + conducting rotor + voltage) MODE ──────
     # A voltage run does NOT get the θ<0 probe march, and it does not need one:
     # it already prepends a SETTLING PREFIX of whole electrical periods (_vskip
@@ -7121,9 +7490,13 @@ def fem_transient_sliding_band(
             _warm_n = sum(1 for _x in _fseq if _x < 0)
             _done, _tot, _ph = (
                 (_warm_n + k, _warm_n,
+<<<<<<< Updated upstream
                  ("demag pre-pass — one settled period, Br ratchet active"
                   if _dm_prepass else
                   "eddy warm-up (adaptive) — settling the start-up transient"))
+=======
+                 "eddy warm-up (adaptive) — settling the start-up transient")
+>>>>>>> Stashed changes
                 if k < 0 else (k, n_total, None))
             # FOUR arguments, then three, then two.  The composition string
             # ("2×36 settle + 8 pre-roll + 144 reported") has to come from
@@ -7140,6 +7513,7 @@ def fem_transient_sliding_band(
                     continue
                 except Exception:
                     break
+<<<<<<< Updated upstream
         # ONE line naming what the reported window opens on (user's bug,
         # 2026-09-05: two identical runs differed because the ratchet had seen
         # the start-up transient).  Emitted at the first REPORTED frame, which
@@ -7165,6 +7539,9 @@ def fem_transient_sliding_band(
         theta = (_sched_th[k] if k >= 0 else
                  (k * _warm_dth if _sched_mixed
                   else (k / n_total) * period_mech * n_periods))
+=======
+        theta = _sched_th[k] if k >= 0 else (k / n_total) * period_mech * n_periods
+>>>>>>> Stashed changes
         m_shift = int(round(theta / spacing))
         theta_eff = m_shift * spacing
         # Voltage drive: Crank–Nicolson in ROTOR TIME.  The field only exists
@@ -7176,10 +7553,16 @@ def fem_transient_sliding_band(
         # Nominal step of THIS frame.  Per-frame, because the settle can march
         # coarse while the reported window marches fine; identical for every
         # frame on the uniform schedule.
+<<<<<<< Updated upstream
         _dth_frame = (_sched_dth[k] if k >= 0 else
                       (_warm_dth if _sched_mixed
                        else period_mech * n_periods / n_total))
         _dt_frame = _sched_dt[k] if k >= 0 else (_warm_dt if _sched_mixed else dt)
+=======
+        _dth_frame = (_sched_dth[k] if k >= 0
+                      else period_mech * n_periods / n_total)
+        _dt_frame = _sched_dt[k] if k >= 0 else dt
+>>>>>>> Stashed changes
         # ── ASK THE SOURCE ───────────────────────────────────────────────
         # One Feedback per frame, for every source: the step's rotor motion
         # (already SNAPPED to slip nodes — that is the motion the field really
@@ -7189,8 +7572,12 @@ def fem_transient_sliding_band(
         # before the step is solved — which is exactly the sampling delay a
         # real controller has, so a closed-loop source is not being handed
         # information its hardware could not have.
+<<<<<<< Updated upstream
         _fb_t0 = (float(_sched_t[k]) if k >= 0
                   else float(k * (_warm_dt if _sched_mixed else dt)))
+=======
+        _fb_t0 = float(_sched_t[k]) if k >= 0 else float(k * dt)
+>>>>>>> Stashed changes
         _fb = _Feedback(
             k=int(k),
             theta_prev_deg=(theta_eff - _dth_frame if _th_eff_prev is None
@@ -7762,6 +8149,7 @@ def fem_transient_sliding_band(
                     _warm_solid.append(
                         (_pg.get("mag", 0.0) + _pg.get("shaft", 0.0)) * _wsc)
                     _warm_ks.append(int(k))
+<<<<<<< Updated upstream
                     for _gk, _gv in _pg.items():
                         _warm_grp.setdefault(_gk, []).append(float(_gv) * _wsc)
                 if k >= _vskip - 1:
@@ -7813,6 +8201,15 @@ def fem_transient_sliding_band(
                                             and not _ve_period_gauge)
                                    else _wq)
                     _quiet = (_wq
+=======
+                if k >= _vskip - 1:
+                    _warm_done = True
+                    if len(_warm_solid) >= 3:
+                        _warm_resid, _warm_tau_s = _eddy_settle_resid(
+                            _warm_solid, _ve_gauge_nspp, _ve_gauge_dt)
+                    _quiet = (_warm_resid is not None
+                              and _warm_resid <= _EDDY_SETTLE_TOL
+>>>>>>> Stashed changes
                               and not (demag and _dm_moved_in_warm))
                     log.info("P2 eddy warm-up (voltage drive): %d settling "
                              "frame(s) solved and discarded, remaining "
@@ -8436,6 +8833,7 @@ def fem_transient_sliding_band(
                              2.0 * _sc_psi2 * float(A2 @ f_set2[1]['A']),
                              2.0 * _sc_psi2 * float(A2 @ f_set2[2]['A'])))
         _IA.append(Ist['A']); _IB.append(Ist['B']); _IC.append(Ist['C'])
+<<<<<<< Updated upstream
         # The Δt this frame's step was SOLVED with (rotor time on a voltage
         # run, the nominal step otherwise) — the step voltage divides by it.
         _dt_steps.append(float(_dt_k if _vdrive else dt))
@@ -8521,6 +8919,8 @@ def fem_transient_sliding_band(
                     log.warning("six-phase L_xy probe failed at frame %d: %s",
                                 k, _eiv)
                     _six_blk["xy_probe_error"] = f"{type(_eiv).__name__}: {_eiv}"
+=======
+>>>>>>> Stashed changes
         # The MEASUREMENT the source gets on the next frame — the machine's own
         # converged values, before any settling bookkeeping moves them.
         _fb_i_prev = {'A': Ist['A'], 'B': Ist['B'], 'C': Ist['C']}
@@ -8529,7 +8929,10 @@ def fem_transient_sliding_band(
         # frames can be coarser than the reported ones, so elapsed time is a
         # cumulative sum of the schedule (identical to k*dt when uniform).
         _tt.append(_sched_t[k] if k >= 0 else k * dt)
+<<<<<<< Updated upstream
         _theta_samples.append(math.radians(float(theta_eff)))
+=======
+>>>>>>> Stashed changes
         if _vdrive:
             # ── circuit bookkeeping on the CONVERGED field ───────────────
             # Residual of the line-to-line equations evaluated with the
@@ -8569,6 +8972,7 @@ def fem_transient_sliding_band(
                         log.info("P2 vdrive Aitken anchor at period %d: psiA "
                                  "%.4g -> %.4g (|corr| %.3g Wb)",
                                  _v_anchor_applied, _pa, _new['A'], _corr)
+<<<<<<< Updated upstream
             # ── PERIODIC-ORBIT SOLVE OF THE DC MODE (2026-09-26) ─────────
             # The phasor init lands NEAR the orbit, not on it, and the
             # modulator turning on kicks the state off it again by about half
@@ -8770,6 +9174,89 @@ def fem_transient_sliding_band(
                         _anim_idx = {_anim_k0 + int(round(
                             i * (n_total - 1 - _anim_k0) / (_nf - 1)))
                             for i in range(_nf)}
+=======
+            # ── SWITCHING TURN-ON DC REMOVAL at the pre-roll → window handover
+            # (user 2026-09-02).  The mixed scheme hands the fine march a
+            # ripple-FREE orbit; the modulator then switches its ripple on
+            # from zero instead of from the ripple's own mid-value, which
+            # injects a DC of about half the ripple amplitude with a sign set
+            # by the carrier phase at the handover.  It decays with L/R, and
+            # on a low-R machine (CILN28/G2-L40: 4.8 electrical periods) it
+            # simply does not decay inside the reported window — measured
+            # ±3.3-3.5 A there whatever the settle length (2 or 10 periods,
+            # coarse or fine), i.e. a 1st-order torque pulsation of ~4 N·m
+            # reported as "ripple".  The settle length cannot fix it: the DC
+            # is injected AFTER the settle.  So measure it and take it out —
+            # the same move as the Aitken anchor, on the flux state:
+            #   dc_ph = ⟨ i_fine(θ) − i_orbit(θ) ⟩ over the last whole
+            #           carriers of the pre-roll, where i_orbit is the
+            #           trigonometric interpolant of the last full COARSE
+            #           settle period (the converged fundamental orbit the
+            #           ripple rides on — the ripple itself averages to zero
+            #           over whole carriers)
+            #   ψ_prev −= Σ_j (∂ψ/∂i_j)·dc_j   with the operating-point
+            #           inductance columns of the phasor initialiser
+            #           (i_C = −i_A − i_B, so two columns)
+            #   i_state −= dc
+            # Applied once, at the last pre-roll frame; the reported window
+            # then starts on the orbit.  Reported in v_drive_diag.
+            if (_sched_mixed and _preroll > 0 and k == _vskip - 1
+                    and _carriers and _settle.handover_dc_removal):
+                try:
+                    _ratio_h = max(1, _v_nspp // max(_c_nspp, 1))
+                    _k0 = _vskip - _preroll                 # first pre-roll frame
+                    _kc1 = _k0 - (_c_nspp - _preroll // _ratio_h)
+                    _kc0 = _kc1 - _c_nspp                   # last FULL coarse period
+                    _off = len(_IA) - 1 - k                 # list index of frame k
+                    if _kc0 >= 0 and _off + _kc0 >= 0:
+                        _thc = np.asarray(_sched_th[_kc0:_kc1], float)
+                        _thp = np.asarray(_sched_th[_k0:k + 1], float)
+                        _ncar = int(_carriers)
+                        _th_car = period_mech / max(_ncar, 1)
+                        _dth_f_h = float(_sched_dth[k])
+                        _nwhole = int(math.floor((_thp[-1] - _thp[0] + _dth_f_h)
+                                                 / _th_car + 1e-9))
+                        _dc_h = {}
+                        if _nwhole >= 1:
+                            _th_lo = _thp[-1] + _dth_f_h - _nwhole * _th_car
+                            _phc = 2.0 * np.pi * (_thc - _thc[0]) / period_mech
+                            _php = 2.0 * np.pi * (_thp - _thc[0]) / period_mech
+                            _nc = len(_thc)
+                            for _ph, _ser in (('A', _IA), ('B', _IB), ('C', _IC)):
+                                _ic = np.asarray(_ser[_off + _kc0:_off + _kc1], float)
+                                # trigonometric interpolant of the coarse orbit
+                                _cf = np.fft.rfft(_ic) / _nc
+                                _ref = np.full(_php.shape, _cf[0].real)
+                                for _n in range(1, len(_cf)):
+                                    _wn = 2.0 if (_n < _nc / 2) else 1.0
+                                    _ref += _wn * (_cf[_n].real * np.cos(_n * _php)
+                                                   - _cf[_n].imag * np.sin(_n * _php))
+                                _ip = np.asarray(_ser[_off + _k0:_off + k + 1], float)
+                                _d = _ip - _ref
+                                # mean over the last whole carriers, each frame's
+                                # value holding across its own step
+                                _t0s = _thp; _t1s = _thp + _sched_dth[_k0:k + 1]
+                                _w = np.clip(_t1s, _th_lo, None) - np.clip(_t0s, _th_lo, None)
+                                _w = np.clip(_w, 0.0, None)
+                                _dc_h[_ph] = float((_d * _w).sum() / max(_w.sum(), 1e-30))
+                            _dA, _dB = _dc_h['A'], _dc_h['B']
+                            _psi_prev = {_ph: _psi_prev[_ph] - (_qa[_i] * _dA + _qb[_i] * _dB)
+                                         for _i, _ph in enumerate(('A', 'B', 'C'))}
+                            _iv_state = {_ph: _iv_state[_ph] - _dc_h[_ph]
+                                         for _ph in ('A', 'B', 'C')}
+                            _v_diag["handover_dc_A"] = {
+                                _ph: round(_dc_h[_ph], 4) for _ph in ('A', 'B', 'C')}
+                            _v_diag["handover_carriers"] = _nwhole
+                            log.info("P2 vdrive handover DC removed at frame %d over "
+                                     "%d whole carriers: iA %+.3f iB %+.3f iC %+.3f A",
+                                     k, _nwhole, _dc_h['A'], _dc_h['B'], _dc_h['C'])
+                        else:
+                            log.warning("P2 vdrive handover DC removal skipped: the "
+                                        "pre-roll (%d frames) spans less than one carrier",
+                                        _preroll)
+                except Exception as _e_h:   # a diagnostic must never kill the run
+                    log.warning("P2 vdrive handover DC removal failed: %r", _e_h)
+>>>>>>> Stashed changes
         # Element-mean B in the iron and the coils, captured on EVERY frame —
         # the same thing the P1 path does unconditionally.  This used to sit
         # inside `if rotor_eddy:`, which meant P2 reported ZERO core loss and
@@ -8937,6 +9424,7 @@ def fem_transient_sliding_band(
     _v2_lists = (_T2, _T_vw, _T_vw_reason,
                  _psiA, _psiB, _psiC, _IA, _IB, _IC, _tt, _theta_samples,
                  _hsx2, _hsy2, _hrx2, _hry2, _hcx2, _hcy2, _hmx2, _hmy2,
+<<<<<<< Updated upstream
                  _histA_rot2, _pic_iters, _frame_converged, _bgap2,
                  _ed_cu, _ed_mag, _ed_sh, _ed_sl, _ed_dc2d, _ed_dens_hist,
                  _v_diag["iters"], _v_diag["resid"],
@@ -9030,6 +9518,12 @@ def fem_transient_sliding_band(
                  if not _dc_orbit.correcting else
                  "%d correction(s), %d refused"
                  % (_dc_orbit.corrections, _dc_orbit.refused)))
+=======
+                 _histA_rot2, _pic_iters,
+                 _ed_cu, _ed_mag, _ed_sh, _ed_dc2d, _ed_dens_hist,
+                 _v_diag["iters"], _v_diag["resid"],
+                 _vapp['A'], _vapp['B'], _vapp['C'])
+>>>>>>> Stashed changes
     # DEBUG DUMP of every solved frame INCLUDING the settle prefix and the eddy
     # warm-up (SB_DEBUG_DUMP_FRAMES=<path>) — the trimmed payload cannot show
     # where a DC current is born.  Read-only diagnostics; off by default.
@@ -9037,6 +9531,7 @@ def fem_transient_sliding_band(
     if _dump_p:
         try:
             import json as _json_d
+<<<<<<< Updated upstream
             # ONE PATH, MANY TRANSIENTS: a route call solves the harm_ref
             # reference (and, on some paths, a no-load run) AFTER the one being
             # studied, and each of them used to overwrite this file — so the
@@ -9052,6 +9547,12 @@ def fem_transient_sliding_band(
             _json_d.dump({
                 "n_warm": len(_IA) - len(_sched_th), "vskip": int(_vskip),
                 "fine_frames": int(_fine_frames), "c_nspp": int(_c_nspp),
+=======
+            _fl = lambda a: [float(x) for x in a]  # noqa: E731
+            _json_d.dump({
+                "n_warm": len(_IA) - len(_sched_th), "vskip": int(_vskip),
+                "preroll": int(_preroll), "c_nspp": int(_c_nspp),
+>>>>>>> Stashed changes
                 "v_nspp": int(_v_nspp), "mixed": bool(_sched_mixed),
                 "period_mech": float(period_mech),
                 "th": _fl(_sched_th), "dth": _fl(_sched_dth),
@@ -9642,6 +10143,7 @@ def fem_transient_sliding_band(
                 P_sleeve_ser2 = list(_ed_sl)
                 P_sleeve_avg2 = float(np.mean(_ed_sl))
             log.info("EDDY-SOLVE(P2) magnet=%.3f shaft=%.3f sleeve=%.4f W vs "
+<<<<<<< Updated upstream
                      "frequency-domain LINEAR route magnet=%.3f shaft=%.3f W%s",
                      P_mag_avg2, P_shaft_avg2, P_sleeve_avg2, P_mag_prox_avg2,
                      P_shaft_prox_avg2,
@@ -9649,6 +10151,11 @@ def fem_transient_sliding_band(
                       "estimate, not a check — no μ(B) modulation)"
                       if _P_rot_eddy_window.get("shaft_is_linear_estimate")
                       else ""))
+=======
+                     "honest frequency-domain magnet=%.3f shaft=%.3f W",
+                     P_mag_avg2, P_shaft_avg2, P_sleeve_avg2, P_mag_prox_avg2,
+                     P_shaft_prox_avg2)
+>>>>>>> Stashed changes
     # The segmentation factor multiplies whichever magnet number is REPORTED —
     # coupled or frequency-domain — and the other one too, because they are two
     # routes to the same physical watts and are read against each other.  The
@@ -9841,6 +10348,7 @@ def fem_transient_sliding_band(
     P_airgap_avg2 = float(Tavg * _omega_m2)
     P_mech_avg2 = P_airgap_avg2 - (P_fe_avg2 + P_mag_avg2 + P_shaft_avg2
                                    + P_sleeve_avg2)
+<<<<<<< Updated upstream
     # Terminal (winding) voltage V = R·i + dψ/dt, per STEP, exactly as the
     # time integration sees it (`_step_voltage_series`): the Crank–Nicolson
     # circuit row R·(i_k + i_{k−1})/2 + (ψ_k − ψ_{k−1})/Δt_k, i.e. the EXACT
@@ -9856,6 +10364,38 @@ def fem_transient_sliding_band(
     # at its step's MIDPOINT: `V_rotor_angle_deg` carries those angles.
     _dts_v = (np.asarray(_dt_steps, float) if len(_dt_steps) == len(_psiA)
               else np.full(len(_psiA), float(dt)))
+=======
+    # Terminal voltage V = R·i + dψ/dt — the SAME two-term formula and the
+    # SAME spectral estimator the P1 path uses.  Two reporting-only bugs
+    # lived here, and together they made the two element orders disagree on
+    # V_peak by ~11-13 % for runs whose FIELDS agree to ~1.5 %:
+    #   • np.gradient is NOT periodic — it drops to a one-sided difference
+    #     at the first and last frame, and V_peak is a max over the series,
+    #     so those two edge frames set the reported peak.  The spectral
+    #     derivative (`_spectral_ddt_series`, shared with P1) is periodic by
+    #     construction and truncates the slip-node quantisation jitter.
+    #   • the R·i drop was in the comment but never in the code, so P2
+    #     reported the back-EMF where P1 reports the terminal voltage.
+    # ψ and I are per-branch on BOTH paths (identical sc_psi = L·NS/n_par),
+    # so the two are directly comparable.  Reporting only: the circuit solve
+    # closes on its own residual and never reads this series.
+    #
+    # TRUNCATION ORDER.  This was a hard `min(5, …)`, which contradicted the
+    # docstring above it: the SLOT ripple of the back-EMF sits at k_slot±1
+    # (11 and 13 on 24s/28p), so a cap of 5 dropped exactly the content the
+    # comment promised to keep, and every reported voltage waveform came out
+    # harmonic-free above the 5th — an impossible spectrum for an FE solve.
+    # Measured against ANSYS on the 150 mm machine at no load (2026-08-22):
+    # ours h7/h9/h11/h13 = 0.30/1.17/0.22/0.18 % of fundamental vs ANSYS
+    # 0.80/1.00/0.28/0.26 %, and the spectrum is STABLE from k=13 all the way
+    # to Nyquist (k=29 on 60 frames) — the quantisation floor the truncation
+    # was guarding against is not there at usable step counts.
+    # So keep through the SECOND slot harmonic (physics, not a magic number)
+    # and clamp below Nyquist; the guard band only ever binds on short runs.
+    _k_slot = max(1, math.lcm(int(p.num_slots), int(p.num_poles))
+                  // max(1, int(pole_pairs)))       # cogging order / elec period
+    _Kv2 = max(1, min(2 * _k_slot + 1, (int(n_total) // 2) - 1))
+>>>>>>> Stashed changes
 
     def _vser(psi, cur, j):
         _pv = (None if _pre_frame is None
@@ -9884,6 +10424,7 @@ def fem_transient_sliding_band(
         P_elec_in2 = 0.0
         _P_R2 = 0.0
     _ang = [(k / n_total) * period_mech * n_periods for k in range(n_total)]
+<<<<<<< Updated upstream
     _V_ang = [a - 0.5 * period_mech * n_periods / max(n_total, 1) for a in _ang]
     # POWER BALANCE of the field, from the SAME terminal quantities: what the
     # winding put into the field (P_in minus the R·i² it burned itself) against
@@ -10071,6 +10612,8 @@ def fem_transient_sliding_band(
             _lls = (_va - _vb, _vb - _vc, _vc - _va)
         _V_ll_pk = float(max(np.max(np.abs(p)) for p in _lls))
         _V_ll_rms = float(np.mean([np.sqrt(np.mean(p ** 2)) for p in _lls]))
+=======
+>>>>>>> Stashed changes
     # ── DC-LINK CURRENT (PWM only) ───────────────────────────────────────
     # The bus side of the SAME bridge, from the SAME comparator the circuit
     # integrated: Σ_phase s_phase(t)·i_phase(t).  Not an inverter model bolted
@@ -10106,10 +10649,14 @@ def fem_transient_sliding_band(
         "f_elec": float(f_elec), "n_periods": float(n_periods),
         "n_steps_per_period": int(n_steps_per_period), "n_total": int(n_total),
         "sched_mixed": bool(_sched_mixed), "progress_comp": _progress_comp,
+<<<<<<< Updated upstream
         "c_nspp": int(_c_nspp), "fine_frames": int(_fine_frames),
         "fine_settle_periods": int(_fine_frames // max(int(_v_nspp), 1)),
         "dc_orbit_corrections": int(0 if _dc_orbit is None
                                     else _dc_orbit.corrections),
+=======
+        "c_nspp": int(_c_nspp), "preroll": int(_preroll),
+>>>>>>> Stashed changes
         "v_nspp": int(_v_nspp), "dc_link": _dc_link,
         "settle_periods": int(_v_settle_periods), "n_parallel": int(n_parallel),
     }
@@ -10203,11 +10750,17 @@ def fem_transient_sliding_band(
             "bh_loss_pct": round(100.0 * (1.0 - _kept_bh), 3),
             "br_kept_vol_pct": round(100.0 * _kept, 3),
             "loss_pct": round(100.0 * (1.0 - _kept), 3),
+<<<<<<< Updated upstream
             "area_derated_pct": round(100.0 * float(
                 np.sum(_ar_mag[_brm < 0.999]) / _wsum), 2),
             "br_corner": _demag_corner_diag(
                 half["r"]["mesh"], _mag_idx, _brm, _ar_mag,
                 getattr(_dmst, "mags", [])),
+=======
+            "br_worst_pct": round(100.0 * float(_brm.min()), 1),
+            "area_derated_pct": round(100.0 * float(
+                np.sum(_ar_mag[_brm < 0.999]) / _wsum), 2),
+>>>>>>> Stashed changes
         }
     # ── dq QUANTITIES of this operating point ────────────────────────────────
     # Mean flux linkages and currents in the rotor (d-q) frame, from the same
@@ -10449,6 +11002,7 @@ def fem_transient_sliding_band(
         # for.  ``slip_nodes_per_period`` is the grid that decides the snap.
         "n_steps_per_period_requested": int(_req_steps),
         "steps_snapped": bool(int(n_steps_per_period) != int(_req_steps)),
+<<<<<<< Updated upstream
         "cogging_sampling_purpose": _cogging_sampling["purpose"],
         "cogging_target_raw_samples_per_cycle": _cogging_sampling[
             "target_raw_samples_per_cycle"],
@@ -10465,6 +11019,8 @@ def fem_transient_sliding_band(
             "final_quality_sufficient"],
         "cogging_sampling_auto_raised": _cogging_sampling["auto_raised"],
         "cogging_sampling_reason": _cogging_sampling["reason"],
+=======
+>>>>>>> Stashed changes
         # Build provenance (see the _mesh_build_trace() read after the build):
         # empty events = the requested build ran; anything listed = a silent
         # fallback fired and this result's ripple floor is NOT comparable with
@@ -10472,9 +11028,12 @@ def fem_transient_sliding_band(
         # / structured cells actually materialised (False on the free-gap
         # fallback even when structured_gap=True was requested).
         "mesh_build_events": list(_build_prov["events"]),
+<<<<<<< Updated upstream
         # Deterministic build-path decisions (a sleeve → geometry mesher):
         # reported, never a rejection.
         "mesh_build_notes": list(_build_prov.get("notes") or []),
+=======
+>>>>>>> Stashed changes
         "structured_gap_effective": bool(_build_prov["structured_gap_effective"]),
         "slip_nodes_per_period": int(_nodes_per_period),
         "n_periods": float(n_periods), "rpm": rpm, "f_elec_Hz": f_elec,
@@ -10515,10 +11074,13 @@ def fem_transient_sliding_band(
         # rms terminal phase current, SOLVED — present only where the current
         # was an answer rather than the input (see the copper recompute above).
         "I_phase_rms_solved_A": _I_ph_rms_solved,
+<<<<<<< Updated upstream
         # Mean |B| over the air-gap clearance, one value per rotor position.
         # Averaged over the period into `B_gap_mean_T` by the summary builder,
         # the same path `P_core_W` takes.
         "B_gap_mean_T": [round(float(v), 6) for v in _bgap2],
+=======
+>>>>>>> Stashed changes
         "P_cu_W": P_cu_ser2, "P_fe_W": P_fe_ser2,
         "P_mag_eddy_W": P_mag_ser2, "P_shaft_eddy_W": P_shaft_ser2,
         # Retaining sleeve — all zeros (and absent from the loss map) on the
@@ -10646,6 +11208,7 @@ def fem_transient_sliding_band(
         # and rounding it to 0.000 would read as "not solved".
         "P_sleeve_solve_W": (round(float(P_sleeve_avg2), 4)
                              if (eddy and rotor_eddy) else 0.0),
+<<<<<<< Updated upstream
         # The conductor-body guard's summary (None on a non-eddy run): slots x
         # n_wires bodies as built, and the in-slot area spread with any
         # clipped-stack warnings — see check_eddy_conductor_bodies.
@@ -10657,6 +11220,10 @@ def fem_transient_sliding_band(
         # The window the two numbers above were solved on (rotor_window.py on
         # the nodal potential): method, q windows chained, harmonics solved.
         "P_rotor_eddy_honest_window": _P_rot_eddy_window,
+=======
+        "P_mag_honest_W": round(float(P_mag_prox_avg2), 3),
+        "P_shaft_honest_W": round(float(P_shaft_prox_avg2), 3),
+>>>>>>> Stashed changes
         # AXIAL magnet segmentation — what `magnet_lamination` did to the two
         # magnet numbers above.  Always present (factor 1.0 + the measured loop
         # width on a solid magnet), so the card can say "solid" rather than say
@@ -10705,6 +11272,7 @@ def fem_transient_sliding_band(
         "R_phase_ohm": R_phase, "n_slip_nodes": int(Nring),
         # The CONNECTION's parallel paths, as the label says them.
         "n_parallel": int(n_parallel_conn),
+<<<<<<< Updated upstream
         # …and the numbers that say what the coil actually is.  The slot holds
         # `num_wires_per_slot` wire rows of `wire_split` strips each;
         # `wire_parallel` rows are in hand per turn and a row's strips are
@@ -10715,6 +11283,15 @@ def fem_transient_sliding_band(
         # see a per-request geometry override.
         "wire_parallel": int(wire_parallel),
         "wire_split": int(wire_split),
+=======
+        # …and the two numbers that say what the coil actually is.  The slot
+        # still holds `num_wires_per_slot` wires; `wire_parallel` of them are in
+        # hand per turn, so the coil has `turns_per_coil` SERIES turns and the
+        # divider every quantity above was solved with is `n_parallel_eff`.
+        # Reported rather than derived downstream: a consumer that recomputed
+        # it from the config could not see a per-request geometry override.
+        "wire_parallel": int(wire_parallel),
+>>>>>>> Stashed changes
         "turns_per_coil": int(turns_per_coil),
         "n_parallel_eff": int(n_parallel),
         **_dq,
@@ -10760,7 +11337,10 @@ def fem_transient_sliding_band(
             "kind": _drv_name,
             "series": ("V" if _vdrive else "I"),
             "quantity": _desc.get("quantity"),
+<<<<<<< Updated upstream
             "settle_periods": int(_v_settle_periods),
+=======
+>>>>>>> Stashed changes
             **({"A": _vapp['A'], "B": _vapp['B'], "C": _vapp['C']}
                if _vdrive else {}),
         },
@@ -10959,18 +11539,25 @@ def em_transient_eval(
     geo_mesh=None,
     airgap_macro: bool = False,
     frozen_nu: bool = False,
+<<<<<<< Updated upstream
     inc_ldq: bool = False,           # also measure the incremental (frozen-
                                      # permeability) d-q inductances of the
                                      # point — see frozen_permeability_ldq
     six_phase: Optional[dict] = None,  # two in-phase 3-phase sets (winding_sets);
                                      # None = 3 phases, unchanged
+=======
+>>>>>>> Stashed changes
     drive: str = "current",          # "current" | "voltage" | "pwm_voltage" | "custom_current"
     v_phase_peak: float = 0.0,
     v_delta_deg: float = 0.0,
     v_bus: float = 0.0,              # pwm_voltage: DC link [V]
+<<<<<<< Updated upstream
     v_bus_real: float = 0.0,         # inverter: the PHYSICAL link when v_bus is the model bus
     f_switch: float = 0.0,           # pwm_voltage: carrier [Hz] (snapped, see simulation/pwm.py)
     inverter_nonideal=None,          # inverter: the device's per-leg non-ideality (Controller)
+=======
+    f_switch: float = 0.0,           # pwm_voltage: carrier [Hz] (snapped, see simulation/pwm.py)
+>>>>>>> Stashed changes
     waveform=None,                   # custom_current: [(θ_e_deg, i_A)] over one electrical period
     i_block: float = 0.0,            # bldc_current: flat-top block amplitude [A terminal]
     excitation=None,                 # an ExcitationSource OBJECT instead of the five named
@@ -11023,9 +11610,14 @@ def em_transient_eval(
         **({} if not six_phase else {"six_phase": dict(six_phase)}),
         drive=str(drive or "current"), v_phase_peak=float(v_phase_peak),
         v_delta_deg=float(v_delta_deg),
+<<<<<<< Updated upstream
         v_bus=float(v_bus), v_bus_real=float(v_bus_real),
         f_switch=float(f_switch), waveform=waveform,
         i_block=float(i_block), inverter_nonideal=inverter_nonideal,
+=======
+        v_bus=float(v_bus), f_switch=float(f_switch), waveform=waveform,
+        i_block=float(i_block),
+>>>>>>> Stashed changes
         excitation=excitation,
         element_order=int(element_order),
         return_frames=int(return_frames),

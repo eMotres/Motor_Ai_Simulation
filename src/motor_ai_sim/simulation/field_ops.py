@@ -347,6 +347,7 @@ def torque_metrics(T_series):
     if n == 0:
         return [], None
     avg = float(x.mean())
+<<<<<<< Updated upstream
     ripple = (100.0 * (float(x.max()) - float(x.min())) / abs(avg)
               if abs(avg) > 1e-9 else None)
     return x.tolist(), ripple
@@ -360,6 +361,31 @@ def band_limit_torque(T_series, n_steps_per_period, n_periods):
     """
     raw, ripple = torque_metrics(T_series)
     return raw, ripple, ripple, None
+=======
+    def _pp(arr):
+        return (100.0 * (float(arr.max()) - float(arr.min())) / abs(avg)
+                if abs(avg) > 1e-9 else 0.0)
+    raw_rip = _pp(x)
+    # The 6·k comb assumes the window spans a WHOLE number of electrical
+    # periods — on a fractional window (n_periods=1.5) the rounded comb lands
+    # on orders 8, 16, … and the REAL 6·k ripple is discarded into the "noise"
+    # figure.  A fractional window cannot be comb-filtered honestly, so return
+    # the raw series unfiltered (the headline raw ripple is unaffected either
+    # way).
+    if abs(float(n_periods) - round(float(n_periods))) > 1e-6:
+        return x.tolist(), raw_rip, raw_rip, 0.0
+    nper = max(1, int(round(n_periods)))
+    step = 6 * nper                                  # electrical order 6 → bin 6·nper
+    if n < 2 * step:                                 # too few frames to resolve order 6
+        return x.tolist(), raw_rip, raw_rip, 0.0
+    F = np.fft.rfft(x - avg)
+    G = np.zeros_like(F)
+    G[step:F.size:step] = F[step:F.size:step]        # keep DC + every 6·k harmonic
+    xf = np.fft.irfft(G, n=n) + avg
+    noise = (100.0 * float(np.sqrt(np.mean((x - xf) ** 2))) / abs(avg)
+             if abs(avg) > 1e-9 else 0.0)
+    return xf.tolist(), _pp(xf), raw_rip, noise
+>>>>>>> Stashed changes
 
 def end_winding_factor_geom(p, geo_cfg) -> float:
     """Estimate the end-winding length factor k_end = (active + end-turn) /

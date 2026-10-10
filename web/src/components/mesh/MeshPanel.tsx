@@ -468,6 +468,7 @@ const MeshPanel: React.FC = () => {
   // (until a reload).  Adopt the event's values live, same pattern as the
   // SimulationPanel listener.  Setters are the usePersisted ones, so state and
   // localStorage stay one value (re-writing the same value is a no-op).
+<<<<<<< Updated upstream
   // Applying a design is a USER action (they pressed Apply), so the adopted
   // values are marked dirty and do get persisted — unlike the mount adoption
   // from the server, which must never trigger a save (2026-09-07 incident).
@@ -498,6 +499,19 @@ const MeshPanel: React.FC = () => {
     });
     window.addEventListener('sim-settings-restored', onRestore);
     return () => window.removeEventListener('sim-settings-restored', onRestore);
+=======
+  useEffect(() => {
+    const onEval = (e: Event) => {
+      const p = (e as CustomEvent).detail || {};
+      if (typeof p.n_sectors    === 'number') setNSectors(p.n_sectors);
+      if (typeof p.gap_layers   === 'number') setGapLayers(p.gap_layers);
+      if (typeof p.mesh_size_mm === 'number') setMeshSizeMm(p.mesh_size_mm);
+      if (typeof p.min_size_mm  === 'number') setMinSizeMm(p.min_size_mm);
+      if (typeof p.pole_copy    === 'boolean') setPoleCopy(p.pole_copy);
+    };
+    window.addEventListener('descent-eval-params', onEval as EventListener);
+    return () => window.removeEventListener('descent-eval-params', onEval as EventListener);
+>>>>>>> Stashed changes
   }, []);
   // ── Per-component mesh size (study mesh-density effect on results) ─────────
   // {comp: target element size mm}. Empty/0 → use the global size for that part.
@@ -672,6 +686,7 @@ const MeshPanel: React.FC = () => {
   //     how a 1/2 machine came up as "Full" on 2026-09-07.
   // A restarting API (09:06:45 that day) is retried at 1, 2, 4, 8, 16, 32, 60 s.
   useEffect(() => {
+<<<<<<< Updated upstream
     let alive = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
     let attempt = 0;
@@ -722,6 +737,34 @@ const MeshPanel: React.FC = () => {
           if (!alive) return;
           timer = setTimeout(load, configRetryDelayMs(attempt));
           attempt += 1;
+=======
+    fetch(`${API}/api/mesh/config`)
+      .then(r => r.json())
+      .then(d => {
+        setCfg(d);
+        // Load the PERSISTED FEM mesh settings (config.yaml) → these win over the
+        // per-browser localStorage so the sliders are identical in every session.
+        if (typeof d.mesh_size_mm     === 'number') setMeshSizeMm(d.mesh_size_mm);
+        if (typeof d.min_size_mm      === 'number') setMinSizeMm(d.min_size_mm);
+        if (typeof d.outer_air_factor === 'number') setOuterAirFactor(d.outer_air_factor);
+        // gap_layers changed meaning (now per-side, 1-3): clamp legacy values.
+        if (typeof d.gap_layers       === 'number') setGapLayers(Math.min(3, Math.max(1, Math.round(d.gap_layers))));
+        // normal_deviation is FIXED at the solver's 8° (see const above) — the
+        // setter is gone, and calling it here threw a ReferenceError that aborted
+        // this handler mid-way (n_sectors never adopted, meshReady never set,
+        // initial mesh built by the .catch instead).
+        if (typeof d.n_sectors        === 'number') setNSectors(d.n_sectors);
+        meshReady.current = true;     // saves allowed only AFTER config is loaded
+        // Build the initial mesh with the JUST-LOADED config values (not the stale
+        // defaults) so the displayed mesh matches the Symmetry toggle on first open.
+        fetchFemMesh({
+          mesh_size_mm:     typeof d.mesh_size_mm     === 'number' ? d.mesh_size_mm : undefined,
+          min_size_mm:      typeof d.min_size_mm      === 'number' ? d.min_size_mm : undefined,
+          normal_deviation: typeof d.normal_deviation === 'number' ? d.normal_deviation : undefined,
+          outer_air_factor: typeof d.outer_air_factor === 'number' ? d.outer_air_factor : undefined,
+          gap_layers:       typeof d.gap_layers       === 'number' ? Math.min(3, Math.max(1, Math.round(d.gap_layers))) : undefined,
+          n_sectors:        typeof d.n_sectors        === 'number' ? d.n_sectors : undefined,
+>>>>>>> Stashed changes
         });
     };
     load();

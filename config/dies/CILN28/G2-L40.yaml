@@ -13,36 +13,276 @@ geometry_overrides:
   insulation_thickness: 0.2
 winding:
   n_coils_per_phase: 4
-  connection: 4P
-  n_parallel: 4
-  n_series: 1
+  connection: 4S
+  n_parallel: 1
+  n_series: 4
   layers: 1
-end_winding_factor: 1.144
 duties:
-- name: peak
-  mode: generator
-  current_arms: 36.0
-  rpm: 3000.0
-  gamma_deg: 10.0
-  note: sheet wire 0.6; gamma not optimized yet
-  torque_nm: 59.0
-  power_kw: 18.5
-  saved_at: '2026-08-19T18:07:03'
 - name: optimal
   mode: generator
-  current_arms: 31.0
+  saved_at: '2026-08-20T20:33:10'
+  current_arms: 37.689
   rpm: 2200.0
-  gamma_deg: 10.0
+  gamma_deg: -15.0
   note: sheet wire 0.6; gamma not optimized yet
-  torque_nm: 59.0
-  power_kw: 13.5
-  saved_at: '2026-08-19T18:07:03'
+  torque_nm: 58.55
+  power_kw: 13.49
+  result:
+    efficiency_pct: 96.31
+    ripple_pct: 6.733
+    v_ll_peak_v: 286.8
+    loss_w: 497.4
+    mass_kg: 5.979
+    p_core_w: 96.9
+    p_stranded_w: 326.6
+    p_solid_w: 73.9
+    v_phase_peak_v: 177.7
+    j_coil_a_mm2: 9.0
+    recorded_at: '2026-08-20T20:33:10'
+    build_sig: 662158d572e5
+- name: peak
+  mode: generator
+  saved_at: '2026-08-31T10:54:47'
+  current_arms: 39.952
+  rpm: 3000.0
+  gamma_deg: -15.0
+  note: sheet wire 0.6; gamma not optimized yet | stored result solved at mesh 1.0
+    / half symmetry (settings that travelled in from the 40 mm panel); settings corrected
+    to the user's 2.0 / quarter on 2026-08-31 — re-save after the next run to refresh
+    the numbers
+  torque_nm: 58.81
+  power_kw: 18.48
+  result:
+    efficiency_pct: 96.492
+    ripple_pct: 6.085
+    v_ll_peak_v: 378.111
+    loss_w: 671.6
+    mass_kg: 5.979
+    p_core_w: 148.7
+    p_stranded_w: 395.1
+    p_solid_w: 127.8
+    v_phase_peak_v: 227.246
+    j_coil_a_mm2: 9.5
+    end3d_k: 0.949
+    kv_rpm_per_v: 7.567
+    kv_is_noload: 1.0
+    recorded_at: '2026-08-31T10:54:47'
+    build_sig: 662158d572e5
+  mesh:
+    sim.frequency: 700
+    sim.drive: current
+    sim.apply3d: 1
+    sim.stepsPP: 40
+    sim.eddyCoupled: true
+    mesh.poleCopy: false
+    sim.rpm: 3000
+    sim.opMode: generator
+    sim.endWinding: 1.719
+    sim.targetKind: 'off'
+    mesh.componentMesh: {}
+    sim.vPeak: 30
+    mesh.rotorAngle: 0
+    mesh.outerAir: 1.2
+    mesh.gapLayers: 1
+    mesh.meshSize: 2.43
+    sim.kvNoload: 1
+    sim.connection: 4S
+    sim.vDelta: 0
+    sim.demag: true
+    sim.coilTemp: 120
+    sim.lastSolveCost:
+      frames: 83
+      wall_s: 110.4
+      warm: 43
+      at: 1788166466717
+    mesh.ironTemplate: true
+    sim.targetValue: 850
+    mesh.geoMesh: true
+    mesh.minSize: 0.3
+    mesh.nSectors: 4
+    sim.r25: 1
+    sim.daxisDeg: '60'
+    sim.gamma: -15
+    sim.current: 39.95153313703993
+    sim.endWindingGeo: 1.719
+    mesh.structuredGap: true
+  summary:
+    rpm: 3000
+    I_phase_rms_A: 39.95
+    gamma_deg: -15
+    connection: 4S
+    n_parallel: 1
+    op_mode: generator
+    op_mode_requested: generator
+    R_phase_ohm: 0.066052
+    R_line_line_ohm: 0.132103
+    Ld_mH: 0.434
+    Lq_mH: 0.3833
+    psi_pm_Wb: 0.054823
+    saliency_Lq_over_Ld: 0.883
+    dq_note: ''
+    T_em_avg_Nm: 61.982
+    T_ripple_pct: 6.085395764217226
+    T_ripple_raw_pct: 6.1
+    T_ripple_filt_pct: 5.6
+    T_noise_floor_pct: 0.26
+    P_mech_W: 19472.2
+    V_phase_peak_V: 239.5
+    V_phase_rms_V: 162.2
+    V_line_peak_V: 398.5
+    V_line_rms_V: 280
+    KV_rpm_per_V_phase: 12.53
+    KV_rpm_per_V_line: 7.53
+    KV_noload_rpm_per_V_line: 7.18
+    V1_LL_V: 395.81
+    V1_phase_V: 228.52
+    THD_pct: 8.72
+    THD_LL_pct: 2.49
+    I1_A: 56.5
+    THD_I_pct: 0
+    Kt_Nm_per_Arms: 1.5514
+    J_coil_A_per_mm2: 9.5
+    A_phase_mm2: 4.2
+    slot_fill_pct: 50.8
+    A_slot_mm2: 4163.4
+    A_copper_slotted_mm2: 2116.8
+    P_loss_total_W: 671.6
+    P_core_W: 148.7
+    P_core_terms:
+      stator:
+        hysteresis_W: 81.837
+        eddy_W: 24.831
+        excess_W: 31.09
+        k_f: 0.92
+        model: measured_surface
+      rotor:
+        hysteresis_W: 5.21
+        eddy_W: 3.196
+        excess_W: 2.551
+        k_f: 0.92
+        model: measured_surface
+    P_stranded_W: 395.1
+    wire_split: 1
+    cu_ac_solved_ignores_wire_split: false
+    P_solid_W: 127.8
+    magnet_segmentation:
+      slice_mm: 0
+      stack_mm: 40
+      n_bodies: 7
+      factor: 1
+      width_mm: 17.376
+      width_min_mm: 17.376
+      width_max_mm: 17.376
+      model: solid magnet (magnet_lamination = 0) — 2-D loss unchanged
+    eddy_warmup_frames: 43
+    efficiency: 0.9655
+    P_elec_in_solved_W: -19155.9
+    P_mech_balance_W: -19748.7
+    nonlinear_converged: true
+    nonlinear_resid_max: 6.98e-08
+    nonlinear_tol: 0.001
+    nonlinear_unconverged_frames: []
+    steps_snapped: false
+    n_steps_per_period: 40
+    n_steps_per_period_requested: 40
+    slip_nodes_per_period: 120
+    coil_temp_C: 120
+    end_winding_factor: 1.72
+    mass_total_kg: 5.979
+    mass_active_kg: 5.874
+    mass_area_source: CAD polygons
+    mass_components:
+    - name: Stator core (B15AHV950M)
+      material: electrical steel
+      density_kg_m3: 7600
+      volume_cm3: 305.4
+      mass_kg: 2.321
+      note: CAD section 8298 mm² × stack, lamination k_f=0.920
+    - name: Copper windings (Cu)
+      material: copper
+      density_kg_m3: 8933
+      volume_cm3: 145.6
+      mass_kg: 1.3
+      note: measured copper section 2117 mm² × stack × k_end 1.719
+    - name: Magnets (F52SH_120C)
+      material: NdFeB
+      density_kg_m3: 7500
+      volume_cm3: 184
+      mass_kg: 1.38
+      note: CAD magnet polygons 4600 mm² × stack
+    - name: Rotor back-iron (B15AHV950M)
+      material: electrical steel
+      density_kg_m3: 7600
+      volume_cm3: 114.9
+      mass_kg: 0.873
+      note: CAD section 3123 mm² × stack, lamination k_f=0.920
+    - name: Shaft (Aluminium_6061)
+      material: shaft
+      density_kg_m3: 2700
+      volume_cm3: 38.8
+      mass_kg: 0.105
+      note: hollow shaft tube 970 mm² × stack — NOT in active mass
+    rotor_inertia:
+      J_kg_m2: 0.009359410437797394
+      J_kg_cm2: 93.594
+      rotor_iron: 0.0037250109353591915
+      magnet: 0.0053569635134160165
+      shaft: 0.00027743598902218634
+      source: CAD polygons
+    demag:
+      per_magnet_spread_pct: 0.007
+      bh_kept_vol_pct: 99.897
+      bh_loss_pct: 0.103
+      br_kept_vol_pct: 99.944
+      loss_pct: 0.056
+      br_worst_pct: 74.3
+      area_derated_pct: 0.68
+      grade_nominal: 52
+      grade_effective: 51.9
+      magnet_name: F52SH_120C
+      energy_total_J: 56.23
+      energy_lost_J: 0.058
+    end3d:
+      k_flux: 0.9488356560430936
+      k_flux_self: 0.9587199536458608
+      fidelity: quick (n_stack=4, 3-point L-sweep)
+      generated_utc: '2026-08-27T12:25:02Z'
+      machine: 24s/28p OD 200
+      k_flux_vs_L:
+        '30.0': 0.94648
+        '40.0': 0.94884
+        '60.0': 0.95512
+      T_corrected_Nm: 58.811
+      V_line_peak_corrected_V: 378.09
+    bench_ldq:
+      Ld_mH: 0.3409
+      Lq_mH: 0.3842
+      Lq_over_Ld: 1.127
+      psi_pm_mWb: 54.823
+      I_probe_arms: 2
+      daxis_deg: 60.016
+      connection: 4S
+      geo_fingerprint: a6dfb1f6abbd96c3
+      method: small-signal probe at the I=0 iron state — bench/LCR equivalent; loaded
+        (chord) values differ under saturation
+      solve_time_s: 44.6
+    saturation:
+      T_linear_Nm: 62.825
+      droop_pct: 1.34
+    Km_Nm_sqrtW: 3.4852
+    Km_per_mass_Nm_sqrtW_kg: 0.5829
+    summary_shape_v: 11
+    torque_per_mass_Nm_kg: 10.367
+    power_per_mass_W_kg: 3256.8
+    loss_density_W_kg: 112.3
+    _geoSig: air_gap:0.65|angle_pole:12.857142857142858|angle_slot:15|core_thickness:5.6|cut_width:4.7|insulation_thickness:0.2|magnet_down_height:3.4|magnet_fill_down:0.9|magnet_fill_radius:4|magnet_fill_up:0.44|magnet_height:18.7|magnet_lamination:0|magnet_up_gap:1.6|motor_length:40|num_poles:28|num_poles_per_segment:7|num_seg:4|num_slots:24|num_slots_per_segment:6|num_wires_per_slot:21|pole_pitch:0.2243994752564138|rotor_fill_r:1.3|rotor_hole:0.84|rotor_house_height:1.7|rotor_inner_radius:52.94999999999999|rotor_outer_radius:73.35|shaft_diameter:5|shaft_height:3|slot_height:20.4|slot_hs:0.2|slot_pitch:0.2617993877991494|slot_width:7.6000000000000005|stator_diameter:200|stator_fillet_r:3.9|stator_fillet_r1:0.4|stator_inner_radius:74|stator_outer_radius:100|tooth2_width:5.9|tooth_width:11.3|wire_height:0.6|wire_spacing_x:0.1|wire_spacing_y:0.13|wire_split:1|wire_width:7
+    _geoStaleBackend: false
 materials:
   magnet: F52SH_120C
   stator_core: B15AHV950M
   rotor_core: B15AHV950M
 battery:
-  chemistry: NMC
+  chemistry: NMC (GF Myriad semi-solid, FAP106136260)
   cells: 200
   v_cell_min: 3.2
   v_cell_nom: 3.75
@@ -50,3 +290,8 @@ battery:
   v_min: 640.0
   v_nom: 750.0
   v_max: 860.0
+  n_parallel: 3
+  r_int_mohm: 0.37
+  capacity_ah: 45.0
+  i_charge_max_a: 810.0
+locked: true

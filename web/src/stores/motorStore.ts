@@ -1247,6 +1247,7 @@ export const useMotorStore = create<MotorState>()(
           const local = get().sweepConfig;
           const srvVars = config?.variations && typeof config.variations === 'object'
             ? config.variations : null;
+<<<<<<< Updated upstream
           // NEWEST COPY WINS when both sides carry an edit stamp (2026-09-08).
           // The selection-kind heuristic below cannot tell "this browser's old
           // geometry study" from "the study the user made ten minutes ago in
@@ -1283,6 +1284,8 @@ export const useMotorStore = create<MotorState>()(
             }
             return;
           }
+=======
+>>>>>>> Stashed changes
           // "No selection yet" must not count the two OPERATING-POINT cards the
           // panel seeds by default (γ, phase current): a reset browser profile
           // had exactly those, "won" against the server copy and PUSHED it,

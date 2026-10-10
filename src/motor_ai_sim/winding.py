@@ -23,6 +23,7 @@ turns of k strands each.  Electrically that is exactly an extra factor on the
 parallel-path count — turns/k and k strands in parallel — so every physics
 consumer uses ``n_parallel x wire_parallel`` and nothing else has to know:
 psi and EMF /k, Kt and T /k, KV xk, R_phase and Ld/Lq /k^2, J per strand /k.
+<<<<<<< Updated upstream
 
 ``wire_split`` (STRIPS PER WIRE ROW) is the third, and it is GEOMETRY FIRST.  N
 strips of ``wire_width`` each — ``wire_width`` IS one strip, the user sets it
@@ -68,6 +69,8 @@ Until 2026-09-08 ``wire_split`` was ELECTRICAL ONLY: strips of
 ``wire_width / N`` with no CAD behind them, modelled as ideally transposed and
 invisible to the mesh.  That reading is retired — ``wire_width`` is now the
 strip, not the bar.
+=======
+>>>>>>> Stashed changes
 """
 from __future__ import annotations
 
@@ -75,6 +78,7 @@ import re
 from typing import Any, Mapping, Optional, Tuple
 
 __all__ = ["parse_connection", "n_parallel_from_connection", "connection_label",
+<<<<<<< Updated upstream
            "wire_parallel_from_geo", "wire_split_from_geo", "turns_per_coil",
            "n_parallel_effective", "conductors_per_slot", "strip_width_mm",
            "strip_gap_mm", "winding_footprint_mm", "STRIP_GAP_FACTOR"]
@@ -87,6 +91,9 @@ __all__ = ["parse_connection", "n_parallel_from_connection", "connection_label",
 #: the validator's bound and the thermal template all have to use the SAME gap
 #: or the pocket and the copper in it stop agreeing.
 STRIP_GAP_FACTOR = 2.0
+=======
+           "wire_parallel_from_geo", "turns_per_coil", "n_parallel_effective"]
+>>>>>>> Stashed changes
 
 _PATTERNS = (
     (re.compile(r"^(\d+)S-(\d+)P$"), lambda m: (int(m.group(2)), int(m.group(1)))),
@@ -171,6 +178,7 @@ def _divisors(n: int):
     return {d for d in range(1, max(1, n) + 1) if n % d == 0}
 
 
+<<<<<<< Updated upstream
 def wire_split_from_geo(geo: Optional[Mapping[str, Any]]) -> int:
     """``geometry.wire_split`` — N strips per wire row, side by side.  Absent = 1.
 
@@ -262,23 +270,40 @@ def turns_per_coil(geo: Optional[Mapping[str, Any]]) -> int:
     copper mass are built on it — each row carrying ``wire_split`` strips, and
     those strips are consecutive SERIES turns.  This is the ELECTRICAL turn
     count the MMF, psi, Kt and R are built on.
+=======
+def turns_per_coil(geo: Optional[Mapping[str, Any]]) -> int:
+    """SERIES turns of one coil = ``num_wires_per_slot / wire_parallel``.
+
+    The slot still holds ``num_wires_per_slot`` physical wires — that is
+    geometry, and the CAD, the slot fill and the copper mass are all built on
+    it.  This is the ELECTRICAL turn count the MMF, psi, Kt and R are built on.
+>>>>>>> Stashed changes
     """
     g = dict(geo or {})
     k = wire_parallel_from_geo(g)
     nw = int(round(float(g.get("num_wires_per_slot", 0) or 0)))
+<<<<<<< Updated upstream
     rows = (nw // k if k else nw)
     return rows * wire_split_from_geo(g)
+=======
+    return nw // k if k else nw
+>>>>>>> Stashed changes
 
 
 def n_parallel_effective(n_parallel: Any,
                          geo: Optional[Mapping[str, Any]]) -> int:
+<<<<<<< Updated upstream
     """The divider every physics path uses: paths x strands in hand.
 
     ``n_parallel x wire_parallel``.
+=======
+    """``n_parallel x wire_parallel`` — the divider every physics path uses.
+>>>>>>> Stashed changes
 
     ``n_parallel`` stays what the CONNECTION label says (it is validated against
     the coil count and must not be moved); the strands in hand multiply it at
     the point of use.  I_strand = I_phase / this; psi and the coil MMF carry the
+<<<<<<< Updated upstream
     same divider, which is what makes EMF/Kt scale as 1/k and R/Ld/Lq as 1/k^2
     for the strands.
 
@@ -288,6 +313,9 @@ def n_parallel_effective(n_parallel: Any,
     instead.  (Wiring them in parallel — the reading this function carried for a
     few hours on 2026-09-08 — would put circulating current between strips that
     link different leakage flux, which is why the user removed it.)
+=======
+    same divider, which is what makes EMF/Kt scale as 1/k and R/Ld/Lq as 1/k^2.
+>>>>>>> Stashed changes
     """
     npar = max(1, int(n_parallel or 1))
     return npar * wire_parallel_from_geo(geo)

@@ -5,7 +5,11 @@ import { useMotorStore, useUIStore, useBuildTimingStore } from '../../stores/mot
 import { usePartStates } from '../materials/usePartStates';
 
 // ─── Per-part accounting: an EXCLUDED part is INVISIBLE ──────────────────────
+<<<<<<< Updated upstream
 // "it should be invisible" — no ghost outline, no selectable body, nothing.
+=======
+// "он должен быть невидимым" — no ghost outline, no selectable body, nothing.
+>>>>>>> Stashed changes
 // The backend already drops an excluded part's mesh from /api/geometry/mesh*
 // (routes/geometry._drop_excluded_meshes), which alone makes it undrawable.
 // This is the second gate, and the one that covers the CLIENT-MODE user whose

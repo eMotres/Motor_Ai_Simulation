@@ -8,7 +8,12 @@
  * same endpoints the rest of the app already uses; this panel writes nothing
  * of its own into the live config.
  */
+<<<<<<< Updated upstream
 import React, { useEffect, useRef, useState } from 'react';
+=======
+import React, { useEffect, useState } from 'react';
+import { applyDutySettingsBlock } from '../../lib/dutySnapshot';
+>>>>>>> Stashed changes
 import {
   Box, Paper, Typography, Button, Chip, Tooltip, IconButton, CircularProgress,
 } from '@mui/material';
@@ -19,6 +24,7 @@ import {
   type TextPromptState, type ConfirmState,
 } from '../common/PromptDialogs';
 import BatteryDialog, { type BatteryValue } from './BatteryDialog';
+<<<<<<< Updated upstream
 import ConfigHistoryDialog from './ConfigHistoryDialog';
 import { dutyCycleChip } from '../../lib/dutySettings';
 import { gatedDutyCycleChip } from '../../lib/dutyCycleFlag';
@@ -38,6 +44,19 @@ import {
 } from './reportProgress';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
 import { pageVisible } from '../../lib/pageVisible';
+=======
+import {
+  rememberDieSettings, restoreDieMeshSettings, restoreDieSettings,
+} from '../../lib/dieSettings';
+import {
+  activeDuty, dutyKey, rememberDutyOp, restoreDutyOp, setActiveDuty,
+  clearDutyMaterialsKeys, ASSIGN_KEY,
+} from '../../lib/dutySettings';
+import {
+  applyStoredRun, clearDutyRuns, driveLabel, fetchDutyRuns, setDutyRuns,
+  setPickedRun, type StoredRun,
+} from '../../lib/dutyRuns';
+>>>>>>> Stashed changes
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -64,16 +83,20 @@ interface Duty {
    *  (per duty since 2026-09-13; absent on older duties). */
   star_delta?: string | null;
   note: string; result?: DutyResult | null;
+<<<<<<< Updated upstream
   /** what the machine DOES with this point — S1 continuous, S2 one pull, S3 an
    *  ED % of a cycle, or an explicit segment list (2026-09-14).  Absent on
    *  every duty saved before the cycle existed, which reads as the continuous
    *  point they were always assumed to be. */
   duty_cycle?: Record<string, unknown> | null;
+=======
+>>>>>>> Stashed changes
   // Every excitation this point has been run and saved at.  The row's numbers
   // are always the PRIMARY (sine) run; these say what else is remembered, and
   // ▶ loads them all so the Simulation panel can switch between them.
   primary_drive?: string;
   runs?: DutyRunRow[];
+<<<<<<< Updated upstream
   /** HOW LONG MAY IT RUN — the coupled loop's step response, when this point is
    *  past a limit (2026-09-17).  Absent on a duty with no coupled record, on a
    *  record older than the feature, and on a point inside every limit it has. */
@@ -81,6 +104,8 @@ interface Duty {
   /** THE CONTINUOUS (S1) RATING at this duty's own saved cooling (2026-09-21).
    *  Absent on a duty that never asked `solve_to: continuous`. */
   continuous_rating?: DutyContinuousRating | null;
+=======
+>>>>>>> Stashed changes
 }
 interface Battery {
   chemistry?: string | null; cells?: number | null;
@@ -209,6 +234,7 @@ const FamilyCatalog: React.FC<{
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — an empty page tells that user nothing.
   const [note, setNote] = useState<string | null>(null);
+<<<<<<< Updated upstream
   // The tree comes through lib/familyTree: every Ø section on the Motors tab
   // is one of these, and each used to fetch the 900 KB tree for itself
   // (2026-09-13).  `fresh` after a mutation or a `family-changed` event.
@@ -216,11 +242,20 @@ const FamilyCatalog: React.FC<{
     try {
       const t = await fetchFamilyTree({ fresh });
       setDies((t.dies as Die[]) || []);
+=======
+  const load = async () => {
+    try {
+      // no-store: the tree is per-account and changes the moment the vendor
+      // grants a motor — a cached copy is a user who still sees nothing.
+      const t = await (await fetch(`${API}/api/family/tree`, { cache: 'no-store' })).json();
+      setDies(t.dies || []);
+>>>>>>> Stashed changes
       setCanWrite(t.can_write === true);
       setNote(typeof t.note === 'string' ? t.note : null);
       const c = await (await fetch(`${API}/api/family/context`, { cache: 'no-store' })).json();
       setActive(c?.active ? c : null);
       setLoadFailed(false);
+<<<<<<< Updated upstream
     } catch (e) {
       // 401: the server publishes nothing to anonymous visitors
       // (PUBLIC_EXHIBIT=0).  That is an answer, not an outage — no retry loop,
@@ -232,10 +267,23 @@ const FamilyCatalog: React.FC<{
       }
       setLoadFailed(true); setMsg(`catalog load failed: ${e}`);
     }
+=======
+    } catch (e) { setLoadFailed(true); setMsg(`catalog load failed: ${e}`); }
+>>>>>>> Stashed changes
   };
   useEffect(() => { load(); }, []);
   // Failed load (backend restarting / briefly unreachable): retry every 3 s
   // until it answers — the catalog reappears by itself, no manual F5 needed.
+<<<<<<< Updated upstream
+=======
+  useEffect(() => {
+    if (!loadFailed) return;
+    const id = window.setInterval(() => { void load(); }, 3000);
+    return () => window.clearInterval(id);
+  }, [loadFailed]);   // eslint-disable-line react-hooks/exhaustive-deps
+  // The page-level "+ die" button (and sibling Ø sections) announce family
+  // mutations with this event — every embedded instance refetches.
+>>>>>>> Stashed changes
   useEffect(() => {
     if (!loadFailed) return;
     const id = window.setInterval(() => { if (pageVisible()) void load(true); }, 3000);
@@ -280,6 +328,7 @@ const FamilyCatalog: React.FC<{
   });
   const del = (path: string) => fetch(`${API}${path}`, { method: 'DELETE' });
 
+<<<<<<< Updated upstream
   // ── exports ───────────────────────────────────────────────────────────────
   // Two files per configuration, both read-only, so clients get them too:
   //
@@ -397,6 +446,41 @@ const FamilyCatalog: React.FC<{
   // it is the download's own request — and the file still arrives).
   useEffect(() => () => { if (pollRef.current) window.clearInterval(pollRef.current); }, []);
 
+=======
+  // ── datasheet export ──────────────────────────────────────────────────────
+  // One .xlsx per configuration: a duty column each, the design and battery
+  // blocks, the cross-section, the measured curves and a page explaining every
+  // number.  Google Sheets opens it natively.  Read-only, so clients get it too.
+  const [exporting, setExporting] = useState<string | null>(null);
+  const exportDatasheet = async (die: string, cfg: string) => {
+    const key = `${die}/${cfg}`;
+    setExporting(key);
+    try {
+      const r = await fetch(
+        `${API}/api/family/datasheet/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}`);
+      if (!r.ok) {
+        let msg = `${r.status}`;
+        try { msg = (await r.json()).detail ?? msg; } catch { /* not JSON */ }
+        setMsg(`Datasheet failed: ${msg}`);
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${die} ${cfg} datasheet.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (e: any) {
+      setMsg(`Datasheet failed: ${e?.message ?? e}`);
+    } finally {
+      setExporting(null);
+    }
+  };
+
+>>>>>>> Stashed changes
   // ── create/delete ─────────────────────────────────────────────────────────
   const createDie = () => setAskText({
     title: 'New die from the current geometry',
@@ -547,7 +631,11 @@ const FamilyCatalog: React.FC<{
   const renameDuty = (die: string, cfg: string, duty: string) => setAskText({
     title: `Rename duty '${duty}' in ${die} / ${cfg}`,
     label: 'New name', initial: duty,
+<<<<<<< Updated upstream
     hint: 'Operating point, targets, the recorded result, the stored runs, the solved maps and every thermal / mechanical / coupled answer follow the new name',
+=======
+    hint: 'Operating point, targets and the recorded result stay untouched',
+>>>>>>> Stashed changes
     onSubmit: (name) => { if (name !== duty) mutate(`duty renamed to '${name}'`, () =>
       fetch(`${API}/api/family/duty/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/${encodeURIComponent(duty)}`, {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
@@ -580,8 +668,317 @@ const FamilyCatalog: React.FC<{
     const label = `${cfg} / ${duty}`;
     setBusy(label); setMsg(null);
     try {
+<<<<<<< Updated upstream
       const done = await applyDutyEverywhere(die, cfg, duty, canWrite);
       setMsg(`✓ applied ${label} — ${done.message}`);
+=======
+      // Leaving another die: what is on the panel RIGHT NOW was being used on
+      // that die — remember it as that die's settings, so coming back restores
+      // the user's own mesh/sim state instead of whatever machine was visited
+      // in between (user 2026-08-31: "всегда было 1/4 и max 2 mm").
+      try {
+        const prev = localStorage.getItem('family.lastDie');
+        if (prev && prev !== die) rememberDieSettings(prev);
+      } catch { /* memory is a convenience, never a blocker */ }
+      // Same argument one level down: the OPERATING POINT on the panel right
+      // now belongs to the duty being LEFT.  The panel already writes each
+      // field through to that duty's overlay as it is typed, so this only
+      // catches points written by something else (a Compare apply, a descent
+      // restore) — but it is what makes A → B → A exact.
+      try {
+        const a = activeDuty();
+        const prevKey = dutyKey(a?.die, a?.config, a?.duty);
+        const nextKey = dutyKey(die, cfg, duty);
+        if (prevKey && prevKey !== nextKey) rememberDutyOp(prevKey);
+      } catch { /* memory is a convenience, never a blocker */ }
+      const r = await fetch(`${API}/api/family/payload/${encodeURIComponent(die)}/`
+        + `${encodeURIComponent(cfg)}?duty=${encodeURIComponent(duty)}`);
+      if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
+      const p = await r.json();
+      // From this line on, the panel is editing THIS duty: every
+      // operating-point field it writes is filed under this key (and never
+      // under the duty we just left, which is why the marker moves BEFORE the
+      // first sim.* write rather than after the last one).
+      const opKey = dutyKey(die, cfg, duty);
+      try { setActiveDuty(die, cfg, duty); } catch { /* quota */ }
+      // The MATERIALS are per-duty too, and their default is "the machine's
+      // own" — an ABSENT key, not a value.  So they are cleared here, before
+      // this duty's snapshot (the `materials:` dict applied below) and its
+      // overlay (restoreDutyOp, further down) get to state their own: without
+      // the clear, a duty that never picked any would keep solving with the
+      // magnet and the steel the PREVIOUS duty chose.  lib/dutySettings.ts.
+      try { clearDutyMaterialsKeys(); } catch { /* nothing to clear */ }
+      if (canWrite) {
+        // ── OWNER: load the duty into the SHARED server config ─────────────
+        // -1) DROP any queued geometry edits: they belong to the machine that
+        //     is being replaced, and a debounced replay landing after the
+        //     context switch would save a foreign machine into the new die
+        //     (the backend's stranger guard refuses it too — this closes the
+        //     race at the source; incident 2026-08-24).
+        useMotorStore.setState({ pendingGeometryEdits: null });
+        // 0) mark WHICH die/config/duty the editor is about to become — the
+        //    geometry route enforces the locks against this context, and
+        //    applying the configuration's own canonical values passes.
+        const ar = await fetch(`${API}/api/family/activate`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ die, config: cfg, duty }),
+        });
+        // A failed activate (expired session, 401/403) used to be SILENT and
+        // the geometry PUT below still ran — the live editor then held this
+        // machine while the server context still named the previous die, and
+        // the die sync wrote this machine into THAT die.  Nothing may be
+        // applied when the context could not follow.
+        if (!ar.ok) {
+          let why = `HTTP ${ar.status}`;
+          try { why = (await ar.json()).detail ?? why; } catch { /* no body */ }
+          throw new Error(`cannot activate ${die} / ${cfg}: ${why} — sign in again and retry`);
+        }
+        // 1) geometry — the die's stamped section + this configuration's stack/wire
+        await updateGeometryViaApi(p.geometry);
+        // 2) winding connection (authoritative endpoint; validates against layout)
+        if (p.sim.connection) {
+          const wr = await fetch(`${API}/api/winding/config`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ connection: p.sim.connection,
+                                   layers: p.winding?.layers }),
+          });
+          if (!wr.ok) throw new Error((await wr.json()).detail ?? `winding HTTP ${wr.status}`);
+        }
+        // 2b) the build's materials — a configuration is a physical product;
+        //     loading it must load what it is made of.
+        for (const part of ['magnet', 'stator_core', 'rotor_core']) {
+          const mat = p.materials?.[part];
+          if (!mat) continue;
+          const mr = await fetch(`${API}/api/materials`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ part, material: mat }),
+          });
+          if (!mr.ok) throw new Error((await mr.json()).detail ?? `materials HTTP ${mr.status}`);
+        }
+        // The PATCHes above bypass useMotorAssignments.assign(), so NOTHING
+        // told the other hook instances — including the one that feeds ?mat=
+        // to the solver (MaterialOverrideSync).  It kept the PREVIOUS machine's
+        // assignment and every run after this load was solved with it: the G2
+        // generator (B15AHV950M) ran on the 85 mm die's 20SW1200 all morning
+        // 2026-09-02 (+3.9 % iron, +3.8 % torque, +10 % core loss), invisible
+        // on the panel because only the magnet is shown there.  Same bug class
+        // as 2026-08-25, from the other entry point.  Broadcast, always.
+        try { window.dispatchEvent(new CustomEvent('mat-assign-changed')); } catch { /* SSR */ }
+        // 3) shared simulation config — what the sweep/optimizer read off-tab
+        const simPatch: any = {
+          max_current: p.sim.current_a, rpm: p.sim.rpm, frequency: p.sim.frequency,
+          phase_offset_deg: p.sim.gamma_deg, mode: p.sim.mode,
+          connection: p.sim.connection,
+        };
+        if (p.sim.daxis_deg != null) simPatch.daxis_deg = p.sim.daxis_deg;
+        Object.keys(simPatch).forEach(k => simPatch[k] == null && delete simPatch[k]);
+        const sr = await fetch(`${API}/api/simulation/config`, {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(simPatch),
+        });
+        if (!sr.ok) throw new Error((await sr.json()).detail ?? `sim HTTP ${sr.status}`);
+      } else {
+        // ── ORDINARY USER: the duty becomes THIS CLIENT'S COPY ─────────────
+        // Nothing on the server changes.  The geometry goes into the local
+        // store (every compute request carries it as ?geo=), the operating
+        // point into the panel's localStorage below, the materials into the
+        // local assignment overlay (sent as ?mat=), and the strip shows the
+        // copied die/config/duty from local context.
+        await updateGeometryViaApi(p.geometry);   // local-mode merge, no PUT
+        try {
+          const cur = JSON.parse(localStorage.getItem('mat.assign.local') || '{}');
+          for (const part of ['magnet', 'stator_core', 'rotor_core']) {
+            if (p.materials?.[part]) cur[part] = p.materials[part];
+          }
+          localStorage.setItem('mat.assign.local', JSON.stringify(cur));
+          window.dispatchEvent(new CustomEvent('mat-assign-local-changed'));
+        } catch { /* quota — materials stay whatever they were */ }
+        try {
+          localStorage.setItem('family.localContext',
+            JSON.stringify({ die, config: cfg, duty, at: Date.now() }));
+        } catch { /* quota */ }
+      }
+      // 4) panel-owned persisted values + live nudge for the mounted panel
+      const set = (k: string, v: any) => {
+        try { localStorage.setItem('sim.' + k, JSON.stringify(v)); } catch { /* quota */ }
+      };
+      set('current', p.sim.current_a); set('gamma', p.sim.gamma_deg);
+      set('rpm', p.sim.rpm); set('frequency', p.sim.frequency);
+      set('opMode', p.sim.mode);
+      if (p.sim.connection) set('connection', p.sim.connection);
+      // The d-axis pin is a property of the DIE's topology: a die without one
+      // must CLEAR the field (empty = measure) — leaving the previous
+      // machine's pin in place put a 24s/28p 60° onto a 12s/10p machine
+      // (its own d-axis is 120°) and every γ sat 60° off the q-axis
+      // (user 2026-09-03).
+      set('daxisDeg', p.sim.daxis_deg != null ? String(p.sim.daxis_deg) : '');
+      window.dispatchEvent(new CustomEvent('sim-operating-point', {
+        detail: { current: p.sim.current_a, gamma: p.sim.gamma_deg, rpm: p.sim.rpm,
+                  mode: p.sim.mode, connection: p.sim.connection } }));
+      window.dispatchEvent(new CustomEvent('sim-design-applied'));
+      window.dispatchEvent(new CustomEvent('family-changed'));
+      const dd = p.duty || {};
+      // ── Restore EVERY saved panel setting (user: "сохранять всё что
+      //    можно"): the duty carries the full mesh.*/sim.* state it was
+      //    solved with — write it back verbatim, then tell the mounted
+      //    panels to re-read their fields.  The op-point set() calls above
+      //    stay AFTER-authoritative (same values on a consistent save).
+      if (dd.mesh && typeof dd.mesh === 'object') {
+        // One implementation with the panel's self-heal (lib/dutySnapshot):
+        // never the run trigger / result caches / the machine's DC link,
+        // retired per-part mesh keys dropped.
+        applyDutySettingsBlock(dd.mesh);
+        // …but the MESH fidelity keys belong to the MACHINE, not to the duty:
+        // a duty snapshot can carry another die's mesh (the panel travelled —
+        // the 40 mm's 1.0 mm / ½ landed inside a 200 mm duty and reloaded
+        // itself forever).  The die's own remembered mesh wins over it.
+        try { restoreDieMeshSettings(die); } catch { /* keep duty's */ }
+      } else {
+        // A duty saved before settings capture existed: the die's remembered
+        // block is the best statement of how this machine is normally run.
+        try {
+          restoreDieSettings(die);
+          // …except the die block also carries a full OPERATING POINT, and
+          // that point belongs to whichever duty of this machine was on the
+          // panel when the block was taken — not to the one being loaded.
+          // Writing it back is how "S2 peak" used to reappear under "S1
+          // cont".  The duty's own stored point goes back on top; the fields
+          // the duty has no record of (coil temp, drive) keep the die's
+          // value, which is at least this machine's habit rather than the
+          // previous machine's.
+          const put = (k: string, v: unknown) => {
+            if (v == null) return;
+            try { localStorage.setItem('sim.' + k, JSON.stringify(v)); }
+            catch { /* quota */ }
+          };
+          put('current', p.sim.current_a); put('gamma', p.sim.gamma_deg);
+          put('rpm', p.sim.rpm); put('frequency', p.sim.frequency);
+          put('opMode', p.sim.mode);
+        } catch { /* keep panel as-is */ }
+      }
+      // ── THIS duty's own MATERIALS, as the yaml has them ───────────────────
+      // The saved duty carries a `materials:` dict of its own ({part: name},
+      // null = "the machine's"; routes/family.py DutySpec).  It is written AFTER
+      // the settings block on purpose: an old duty from before the
+      // generalization keeps its magnet-only pick inside that block under the
+      // legacy `mat.magnet` key, and this newer, complete statement must
+      // outrank it.  Both are then outranked by the local overlay below.
+      if (dd.materials && typeof dd.materials === 'object') {
+        try { localStorage.setItem(ASSIGN_KEY, JSON.stringify(dd.materials)); }
+        catch { /* quota — the machine's materials it is */ }
+      }
+      // ── THIS duty's own operating point, last word ────────────────────────
+      // Everything above states the point as the CATALOG has it: the payload's
+      // I/rpm/γ/mode, then the snapshot the duty was solved with.  On top of
+      // that goes the user's own un-saved work on THIS duty — the local
+      // overlay — because it is newer than the snapshot and belongs to exactly
+      // this die/config/duty.  A duty with no overlay lands on its snapshot,
+      // which is why S1 stops inheriting S2's 200 °C.
+      //
+      // The overlay is LOCAL: nothing here writes to the stored duty.  It is
+      // written per keystroke by the Simulation panel and cleared by an
+      // explicit Save to duty (lib/dutySettings.ts).
+      try { restoreDutyOp(opKey); } catch { /* keep the snapshot's point */ }
+      // Memory is written on LEAVING a die and on SAVING a duty — the two
+      // moments when the panel state was demonstrably in use on that die.
+      // Writing it here too would cement a polluted duty snapshot as the
+      // die's memory before the user ever corrected it.
+      try { localStorage.setItem('family.lastDie', die); } catch { /* quota */ }
+      // ALWAYS tell the mounted panels to re-read their persisted fields —
+      // not only when the duty carried saved settings.  Without this, the
+      // panel's own state (from the PREVIOUS motor) wrote itself back over
+      // the just-loaded values, and the first Run went out with the old
+      // winding connection: T×½, R×¼ on the 40 mm (user 2026-08-25, "она
+      // уже не раз повторяется" — this was the recurring first-run bug).
+      window.dispatchEvent(new CustomEvent('sim-settings-restored'));
+      // ── EVERY stored run of this duty, in ONE call ────────────────────────
+      // A duty may have been solved on several excitations (sine, PWM, BLDC);
+      // the catalog row shows the sine numbers, and the Simulation panel's run
+      // selector switches between them with no solve at all.  ▶ is the only
+      // load action, so it brings them all — the fetch is best-effort: a duty
+      // whose runs cannot be read must still load exactly as it did before.
+      let stored: StoredRun[] = [];
+      let primaryRun: StoredRun | null = null;
+      try {
+        const got = await fetchDutyRuns(die, cfg, duty);
+        stored = got.runs;
+        setDutyRuns(opKey, stored);
+        primaryRun = stored.find(r => r.drive === got.primary_drive)
+          ?? stored.find(r => r.primary) ?? null;
+        // Loading a duty always shows its PRIMARY result — the sine run the
+        // catalog row is about.  The selector's own memory takes over from
+        // the next click; defaulting to "whatever was picked last time" would
+        // reopen a 12-minute PWM view for a user who asked for the motor.
+        if (primaryRun) setPickedRun(opKey, String(primaryRun.drive));
+      } catch { stored = []; clearDutyRuns(); }
+      // ── The COMPLETE saved summary (all constants, live 3D/R/KV buttons)
+      //    goes on the dashboard as-is; the legacy mini-summary from the
+      //    recorded result numbers remains the fallback for old duties.
+      const rr = dd.result || {};
+      const others = stored.filter(r => r.drive !== primaryRun?.drive).length;
+      const alsoTxt = others
+        ? ` · ${others} other run${others === 1 ? '' : 's'} ready in Simulation` : '';
+      if (primaryRun?.payload) {
+        // The primary run's WAVEFORMS, so the tab opens on the run this duty
+        // is about instead of on whatever transient the previous machine left
+        // behind.  Its SETTINGS are deliberately not re-applied: the
+        // precedence chain above (duty snapshot → die mesh memory → the user's
+        // local overlay) already spoke, and this is the same block.  Its
+        // SUMMARY comes from the payload route when that has one, because that
+        // route heals a snapshot whose end3d froze before a Stage-A passport
+        // existed — the stored run is a verbatim copy and cannot.
+        applyStoredRun({
+          ...primaryRun,
+          summary: (dd.summary && typeof dd.summary === 'object')
+            ? dd.summary : primaryRun.summary,
+        }, { settings: false });
+        setMsg(`✓ applied ${label} — ${driveLabel(String(primaryRun.drive))} run `
+             + `restored (charts + summary, nothing recomputed)${alsoTxt}`);
+      } else if (dd.summary && typeof dd.summary === 'object') {
+        window.dispatchEvent(new CustomEvent('sim-apply-summary',
+          { detail: { summary: dd.summary } }));
+        setMsg(`✓ applied ${label} — saved run state restored; Run to recompute${alsoTxt}`);
+      } else if (rr.efficiency_pct != null || dd.torque_nm != null) {
+        const rpm = Number(p.sim.rpm) || 0;
+        const omega = 2 * Math.PI * rpm / 60;
+        const T = Number(dd.torque_nm) || 0;
+        const Pmech = dd.power_kw != null ? Number(dd.power_kw) * 1000 : T * omega;
+        const mass = Number(rr.mass_kg) || 0;
+        const Vlpk = Number(rr.v_ll_peak_v) || 0;
+        const ploss = Number(rr.loss_w) || 0;
+        const summary: any = {
+          rpm, I_phase_rms_A: Number(p.sim.current_a) || 0,
+          gamma_deg: Number(p.sim.gamma_deg) || 0,
+          connection: p.sim.connection, op_mode: p.sim.mode,
+          T_em_avg_Nm: T, T_ripple_pct: Number(rr.ripple_pct) || 0,
+          P_mech_W: Pmech,
+          // v_ll_peak_v was RECORDED from a real run, so it IS the line peak.
+          // KV = rpm / V_line_PEAK — the max/max convention of the Simulation
+          // tile and the user's Ansys table (2026-08-04); dividing by rms read
+          // ~√2 (+41 %) high.  The /√2 rms values below are sinusoid
+          // approximations — the duty record keeps peaks only.
+          V_line_peak_V: Vlpk, V_line_rms_V: Vlpk / Math.SQRT2,
+          KV_rpm_per_V_line: Vlpk > 0 ? rpm / Vlpk : 0,
+          P_loss_total_W: ploss,
+          P_core_W: rr.p_core_w ?? undefined,
+          P_stranded_W: rr.p_stranded_w ?? undefined,
+          P_solid_W: rr.p_solid_w ?? undefined,
+          V_phase_peak_V: rr.v_phase_peak_v ?? undefined,
+          V_phase_rms_V: rr.v_phase_peak_v != null
+            ? Number(rr.v_phase_peak_v) / Math.SQRT2 : undefined,   // sinusoid approx
+          J_coil_A_per_mm2: rr.j_coil_a_mm2 ?? undefined,
+          efficiency: rr.efficiency_pct != null ? Number(rr.efficiency_pct) / 100 : 0,
+          mass_total_kg: mass, mass_components: [],
+          torque_per_mass_Nm_kg: mass > 0 && T > 0 ? T / mass : 0,
+          power_per_mass_W_kg: mass > 0 ? Pmech / mass : 0,
+          loss_density_W_kg: mass > 0 ? ploss / mass : 0,
+        };
+        window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
+        setMsg(`✓ applied ${label} — saved results are on the dashboard; Run to recompute`);
+      } else {
+        setMsg(`✓ applied ${label} — no saved results yet; press Run in Simulation`);
+      }
+>>>>>>> Stashed changes
       // Straight to the machine the user just loaded (user request).
       setActiveTab('geometry');
     } catch (e: any) { setMsg(`✗ apply ${label}: ${e?.message ?? e}`); }
@@ -770,6 +1167,7 @@ const FamilyCatalog: React.FC<{
                 {(c.duties?.length ?? 0) > 0 && (
                   <Tooltip title="Download the datasheet (.xlsx) — every duty in a column, the design and battery blocks, the cross-section, the measured curves and a page explaining each number. Opens in Google Sheets or Excel.">
                     <span>
+<<<<<<< Updated upstream
                       <Button size="small"
                         disabled={exporting === `datasheet:${die.name}/${c.name}`}
                         onClick={() => runExport('datasheet', die.name, c.name)}
@@ -777,10 +1175,18 @@ const FamilyCatalog: React.FC<{
                               textTransform: 'none', color: '#34d399' }}>
                         {exporting === `datasheet:${die.name}/${c.name}`
                           ? '… datasheet' : '⭳ datasheet'}
+=======
+                      <Button size="small" disabled={exporting === `${die.name}/${c.name}`}
+                        onClick={() => exportDatasheet(die.name, c.name)}
+                        sx={{ fontSize: 11, py: 0, px: 0.6, minWidth: 0,
+                              textTransform: 'none', color: '#34d399' }}>
+                        {exporting === `${die.name}/${c.name}` ? '… datasheet' : '⭳ datasheet'}
+>>>>>>> Stashed changes
                       </Button>
                     </span>
                   </Tooltip>
                 )}
+<<<<<<< Updated upstream
                 <Tooltip title={ringBusy(ring, `report:${die.name}/${c.name}`)
                   ? ringTip(ring)
                   : 'Full report of the last results of every solver for this configuration — as a WORD document you can edit and forward: every duty compared in tables, the field maps, and the warnings with what to do about each.'}>
@@ -847,6 +1253,8 @@ const FamilyCatalog: React.FC<{
                     </Button>
                   </span>
                 </Tooltip>
+=======
+>>>>>>> Stashed changes
                 {!canWrite && (
                   <Tooltip title="Copy this machine into MY MOTORS — your private space, visible only to you until you share it">
                     <span>
@@ -859,12 +1267,18 @@ const FamilyCatalog: React.FC<{
                     </span>
                   </Tooltip>
                 )}
+<<<<<<< Updated upstream
                 <Tooltip title={roleTip(c)}>
                   <Chip size="small" label={c.role}
                     sx={{ height: 18, fontSize: 10, color: roleColor(c.role),
                           bgcolor: 'transparent', cursor: 'help',
                           border: `1px solid ${roleColor(c.role)}55` }} />
                 </Tooltip>
+=======
+                <Chip size="small" label={c.role}
+                  sx={{ height: 18, fontSize: 10, color: roleColor(c.role),
+                        bgcolor: 'transparent', border: `1px solid ${roleColor(c.role)}55` }} />
+>>>>>>> Stashed changes
                 <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
                   {c.stack_mm} mm · wire {c.wire_height_mm}×{c.wire_width_mm} mm
                   {' '}· {c.turns} turns
@@ -994,6 +1408,7 @@ const FamilyCatalog: React.FC<{
                                 </span>
                               </Tooltip>
                             ))}
+<<<<<<< Updated upstream
                             {/* WHAT THE MACHINE DOES with this point
                                 (2026-09-14).  A duty with no cycle gets no chip
                                 — saying "S1" for it would claim a continuous
@@ -1051,6 +1466,8 @@ const FamilyCatalog: React.FC<{
                                 </span>
                               </Tooltip>
                             )}
+=======
+>>>>>>> Stashed changes
                           </td>
                           {/* kW keeps its decimal even when it is .0 (user
                               2026-08-25) — fmt() strips trailing zeros. */}

@@ -21,7 +21,10 @@ import { useMotorStore } from '../../stores/motorStore';
 import { pageVisible } from '../../lib/pageVisible';
 import AddParameterDialog from '../parameters/AddParameterDialog';
 import FreeCADRoundTrip from '../common/FreeCADRoundTrip';
+<<<<<<< Updated upstream
 import Fusion360RoundTrip from '../common/Fusion360RoundTrip';
+=======
+>>>>>>> Stashed changes
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import { useDieContext } from '../common/useDieContext';
@@ -363,7 +366,10 @@ const ParameterVariationTable: React.FC = () => {
           edited parameters back in through the normal geometry PUT guards. */}
       <Box sx={{ px: 0.5 }}>
         <FreeCADRoundTrip />
+<<<<<<< Updated upstream
         <Fusion360RoundTrip />
+=======
+>>>>>>> Stashed changes
       </Box>
 
       {/* ── RECALCULATE button ── */}

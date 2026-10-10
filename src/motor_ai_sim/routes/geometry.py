@@ -137,6 +137,35 @@ def update_geometry(update: GeometryUpdateModel, request: Request = None):
     # guard compares against it to tell "an edit of this die's machine" from
     # "a foreign machine landing after a die switch" (see
     # sync_active_die_geometry; incident 2026-08-24).
+<<<<<<< Updated upstream
+=======
+    try:
+        from motor_ai_sim.config import get_config as _gc_prev
+        _prev_geo = dict(_gc_prev().get("geometry", {}) or {})
+    except Exception:   # noqa: BLE001
+        _prev_geo = None
+    _unknown = check_unknown_geometry_keys(_submitted_raw)
+    if _unknown:
+        raise reject("unknown geometry field", _unknown)
+
+    # ── Input guard 2: the schema's OWN min/max, enforced server-side ────────
+    # The frontend clamps its sliders to these numbers (GET /api/geometry/schema
+    # serves them); anything that is not the frontend did not.  GEO_UNBOUNDED=1
+    # is the documented escape hatch and logs a warning while it is on.
+    _out_of_range = check_schema_bounds(_submitted_raw)
+    if _out_of_range:
+        raise reject("geometry parameter out of range", _out_of_range)
+
+    # ── Input guard 3: reject unusable VALUES before anything is written ─────
+    # A zero / negative / non-finite dimension does not produce an interesting
+    # cross-section, it produces a crash several layers down in the mesher (or,
+    # worse, a mirrored polygon that meshes fine and solves to nonsense).  422
+    # names the field so the client can highlight it, and nothing is persisted.
+    # Judged on the MERGED geometry, but only the fields this request actually
+    # touched are held against it — plus every multi-parameter ("derived") rule,
+    # since a bore radius that comes out negative is broken regardless of which
+    # knob was the last one typed.
+>>>>>>> Stashed changes
     try:
         from motor_ai_sim.config import get_config as _gc_prev
         _prev_geo = dict(_gc_prev().get("geometry", {}) or {})

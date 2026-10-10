@@ -10,7 +10,11 @@
  * default directly via PATCH, exactly as before.
  */
 import { useState, useEffect, useCallback } from 'react';
+<<<<<<< Updated upstream
 import { useAuth, useApiReady } from '../../contexts/AuthContext';
+=======
+import { useAuth } from '../../contexts/AuthContext';
+>>>>>>> Stashed changes
 import { setDutyMaterial } from '../../lib/dutySettings';
 import { useMotorStore } from '../../stores/motorStore';
 
@@ -39,11 +43,14 @@ function readLocalOverlay(): Partial<MotorAssignments> {
 
 export function useMotorAssignments() {
   const { isAdmin, enforced, tier } = useAuth();
+<<<<<<< Updated upstream
   // GET /api/materials answers 401 to an anonymous caller, and this hook
   // mounts at the App root (MaterialOverrideSync) — the landing's first paint
   // knocked on it (live, 2026-09-16).  Same gate as the geometry/schema
   // probes; signing in re-runs the effect below and fills the assignment.
   const ready = useApiReady();
+=======
+>>>>>>> Stashed changes
   // Ordinary user on an enforced backend → assignments live client-side.
   const localMode = enforced && !isAdmin;
   // Free-tier client → the motor card's materials are read-only (pro/team

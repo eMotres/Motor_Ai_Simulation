@@ -603,10 +603,13 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
         if tier == "__disabled__":
             _report_reject("disabled", email, "", ip, user_agent, path)
             return _out(None, "disabled", email=email)
+<<<<<<< Updated upstream
         try:
             _users.link_google(email)       # Google proof verifies a pending row
         except Exception:                                   # pragma: no cover
             pass
+=======
+>>>>>>> Stashed changes
         return _out({"uid": claims.get("sub"), "email": email, "tier": tier},
                     "ok", email=email)
 

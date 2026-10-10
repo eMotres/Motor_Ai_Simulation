@@ -200,6 +200,7 @@ export function useMaterialsLibrary() {
     if (timerRef.current !== null) { clearTimeout(timerRef.current); timerRef.current = null; }
     if (!isRetry) retriesRef.current = 0;   // a manual reload starts the budget over
     setLoading(true);
+<<<<<<< Updated upstream
     // 0 until the server answers at all — a DNS/offline/CORS failure never
     // reaches the first `then`, and that is the case most worth retrying.
     let status = 0;
@@ -224,6 +225,12 @@ export function useMaterialsLibrary() {
   // Never leave a retry armed behind an unmounted tab.
   useEffect(() => () => {
     if (timerRef.current !== null) clearTimeout(timerRef.current);
+=======
+    fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') + '/api/materials/library', { cache: 'no-store' })
+      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
+      .then(data => { setBase(data); setLoading(false); })
+      .catch(e => { setError(String(e)); setLoading(false); });
+>>>>>>> Stashed changes
   }, []);
 
   // NOT before /api/me has answered, and not while nobody is signed in: this

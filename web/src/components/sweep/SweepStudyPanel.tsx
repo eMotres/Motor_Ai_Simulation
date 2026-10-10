@@ -101,8 +101,13 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       // P: the point's OWN solved P_mech_W (T·ω at the rpm the sweep actually ran
       // at) — the T·ω fallback uses the CURRENT sim.rpm, which drifts if the user
       // changed rpm after the sweep, so it only covers pre-P_mech_W stored results.
+<<<<<<< Updated upstream
       const P2 = p.P_mech_W != null ? Number(p.P_mech_W) / 1000
                                     : (Number(p.T_em_Nm) || 0) * omega / 1000;   // kW, 2-D
+=======
+      const P = p.P_mech_W != null ? Number(p.P_mech_W) / 1000
+                                   : (Number(p.T_em_Nm) || 0) * omega / 1000;   // kW
+>>>>>>> Stashed changes
       const mass = Number(p.mass_total_kg) || 0;
       const td2 = Number(p.torque_per_mass_Nm_kg) || 0;
       const I = Number(p.current_a) || 0, g = Number(p.gamma_deg) || 0;
@@ -118,6 +123,7 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
       const { T, P, eff, Vpk, td, pd } = s3;
       return {
         ov: p.overrides || {}, overrides: p.overrides || {}, I, g, x: td, y: eff,
+<<<<<<< Updated upstream
         apply_eligible: p.apply_eligible === true,
         geom_id: p.geom_id, op_index: p.op_index,
         T, P, eff, Vpk,
@@ -134,6 +140,19 @@ const SweepTable: React.FC<{ points: any[]; rpm: number; vdcFactor?: number; sel
         ripple: Number(p.T_ripple_pct) || 0, mass, td,
         pd,
         ploss, core: Number(p.P_fe_W) || 0,
+=======
+        T: Number(p.T_em_Nm) || 0, P, eff, Vpk: Number(p.V_peak) || 0,
+        // Solved terminal numbers carried through UNDER THE BACKEND NAMES so
+        // applyPoint can push them verbatim instead of re-synthesizing them from
+        // sinusoid identities (which over-read V_line peak — triplens cancel).
+        V_line_peak_V: p.V_line_peak_V, KV_rpm_per_V_line: p.KV_rpm_per_V_line,
+        P_mech_W: p.P_mech_W, power_per_mass_W_kg: p.power_per_mass_W_kg,
+        rpm: p.rpm,   // absent today (refine result omits it) — kept for when it lands
+        ripple: Number(p.T_ripple_pct) || 0, mass, td,
+        pd: p.power_per_mass_W_kg != null ? Number(p.power_per_mass_W_kg) / 1000
+                                          : (mass > 0 ? P / mass : 0),
+        ploss: Number(p.P_loss_total_W) || 0, core: Number(p.P_fe_W) || 0,
+>>>>>>> Stashed changes
         stranded: Number(p.P_cu_W) || 0,
         strandedDc: Number(p.P_cu_dc_W) || 0, strandedAc: Number(p.P_cu_ac_W) || 0,
         solid: (Number(p.P_mag_W) || 0) + (Number(p.P_shaft_W) || 0),
@@ -473,6 +492,7 @@ const SweepStudyPanel: React.FC = () => {
       const vars = Array.isArray(res?.variables) ? res.variables : [];
       if (!vars.length) return;
       const cur = useMotorStore.getState().sweepConfig.variations as Record<string, any>;
+<<<<<<< Updated upstream
       // Restore unless the store already carries EXACTLY the run's variable set
       // (then its ranges may be the user's edits and are kept).  The old rule —
       // "skip when ANY geometry variable is active" — let a freshly created
@@ -487,6 +507,11 @@ const SweepStudyPanel: React.FC = () => {
       const next: Record<string, any> = { ...cur };
       // a default variable the run never named must not survive next to the run's
       for (const k of activeGeo) if (!runGeo.has(k)) next[k] = { ...next[k], mode: 'fixed' };
+=======
+      const hasGeo = Object.entries(cur).some(([k, v]: any) => v?.mode !== 'fixed' && !OP_VARS.has(k));
+      if (hasGeo) return;
+      const next: Record<string, any> = { ...cur };
+>>>>>>> Stashed changes
       let n = 0;
       for (const v of vars) {
         if (!v?.name || OP_VARS.has(v.name)) continue;
@@ -521,8 +546,11 @@ const SweepStudyPanel: React.FC = () => {
   // memory + persisted to .last_scan.json, loaded on startup).
   useEffect(() => {
     // 1) instant: restore the last chart from localStorage (survives ANY reload).
+<<<<<<< Updated upstream
     // (the backend's `machine_now` arrives in step 2 and re-checks this — a
     //  cached chart from another motor is dropped there.)
+=======
+>>>>>>> Stashed changes
     try {
       const c = localStorage.getItem('sweepStudy.lastResult');
       if (c) { const r = JSON.parse(c); setResult(r); restoreVarsFromResult(r); }
@@ -541,6 +569,7 @@ const SweepStudyPanel: React.FC = () => {
           adoptProgress(st);
           await poll(runIdRef.current); setRunning(false);
         } else if (st.result && Array.isArray(st.result.points)) {
+<<<<<<< Updated upstream
           // History, not the answer to anything this session asked for — and
           // only ever THIS machine's history (see `sameMachine`).
           if (sameMachine(st.result, st.machine_now)) {
@@ -553,6 +582,12 @@ const SweepStudyPanel: React.FC = () => {
             setErr(`the stored sweep was computed on ${machineLabel(st.result.machine)}`
                  + ' — not this machine, so it is not shown. Run the sweep to get one.');
           }
+=======
+          // History, not the answer to anything this session asked for.
+          runIdRef.current = String(st.result.run_id ?? '');
+          saveResult(st.result);
+          restoreVarsFromResult(st.result);
+>>>>>>> Stashed changes
         }
       } catch { /* ignore */ }
     })();
@@ -668,6 +703,7 @@ const SweepStudyPanel: React.FC = () => {
                     // sweep's already-computed numbers in Simulation — no re-run.
                     // Terminal values ride under their backend names so applyPoint
                     // pushes the SOLVED line peak / KV / P_mech, not sinusoid guesses.
+<<<<<<< Updated upstream
                     eff: s3.eff, mass: p.mass_total_kg,
                     td: s3.td, Vpk: s3.Vpk,
                     V_line_peak_V: s3.Vl, KV_rpm_per_V_line: s3.KV,
@@ -677,6 +713,12 @@ const SweepStudyPanel: React.FC = () => {
                              td: p.torque_per_mass_Nm_kg, power_per_mass_W_kg: p.power_per_mass_W_kg,
                              eff: (p.efficiency ?? 0) * 100 },
                     k3d: k3dChart,
+=======
+                    eff: (p.efficiency ?? 0) * 100, mass: p.mass_total_kg,
+                    td: p.torque_per_mass_Nm_kg, Vpk: p.V_peak,
+                    V_line_peak_V: p.V_line_peak_V, KV_rpm_per_V_line: p.KV_rpm_per_V_line,
+                    P_mech_W: p.P_mech_W, power_per_mass_W_kg: p.power_per_mass_W_kg,
+>>>>>>> Stashed changes
                     rpm: p.rpm,   // absent today (refine result omits it) — future-proof
                     ploss: p.P_loss_total_W, core: p.P_fe_W,
                     stranded: p.P_cu_W, solid: (p.P_mag_W ?? 0) + (p.P_shaft_W ?? 0),
@@ -922,6 +964,7 @@ const SweepStudyPanel: React.FC = () => {
       window.dispatchEvent(new CustomEvent('sim-operating-point', { detail: { current: p.I, gamma: p.g } }));
       // Show the re-solved standard-quality numbers in Simulation.
       try {
+<<<<<<< Updated upstream
         // The validated result carries the pinned speed from the original Sweep.
         const rpm = Number(p.rpm) || readLS('sim.rpm', 4000);
         const omega = 2 * Math.PI * rpm / 60;
@@ -932,14 +975,29 @@ const SweepStudyPanel: React.FC = () => {
         const r2 = p.raw2d || p;
         const T = Number(r2.T) || 0, mass = Number(p.mass) || 0;
         const Vpk = Number(r2.Vpk) || 0;
+=======
+        // Scan points don't stamp their rpm yet (the refine result omits it), so
+        // the CURRENT sim.rpm stands in — correct unless the user changed rpm
+        // after launching the sweep.  `p.rpm` wins the moment the backend adds it.
+        const rpm = Number(p.rpm) || readLS('sim.rpm', 4000);
+        const omega = 2 * Math.PI * rpm / 60;
+        const T = Number(p.T) || 0, mass = Number(p.mass) || 0;
+        const Vpk = Number(p.Vpk) || 0;
+>>>>>>> Stashed changes
         // SOLVED terminal values first, synthesis only as fallback.  Vpk·√3
         // over-reads the line-line peak: the triplen harmonics of the phase
         // waveform cancel line-to-line, so the measured max|Va−Vb| the backend
         // reports is LESS than √3× the phase peak.  The /√2 rms values are
         // sinusoid approximations (the refine result carries peaks only).
+<<<<<<< Updated upstream
         const Vlpk = Number(r2.V_line_peak_V) || Vpk * Math.sqrt(3);
         const Vrms = Vpk / Math.SQRT2, Vlrms = Vlpk / Math.SQRT2;
         const Pmech = Number(r2.P_mech_W) || T * omega;
+=======
+        const Vlpk = Number(p.V_line_peak_V) || Vpk * Math.sqrt(3);
+        const Vrms = Vpk / Math.SQRT2, Vlrms = Vlpk / Math.SQRT2;
+        const Pmech = Number(p.P_mech_W) || T * omega;
+>>>>>>> Stashed changes
         const ploss = Number(p.ploss) || 0;
         const summary = {
           ...(p.k3d != null ? { end3d: { k_flux: p.k3d, source: 'machine passport, carried from the sweep view' } } : {}),
@@ -950,12 +1008,21 @@ const SweepStudyPanel: React.FC = () => {
           // user's Ansys table use (see refine_proc / simulation.py, 2026-08-04);
           // dividing by rms read ~√2 high and contradicted a by-hand check.
           KV_rpm_per_V_phase: Vpk > 1 ? rpm / Vpk : 0,
+<<<<<<< Updated upstream
           KV_rpm_per_V_line: Number(r2.KV_rpm_per_V_line) || (Vlpk > 1 ? rpm / Vlpk : 0),
           P_loss_total_W: ploss, P_core_W: Number(p.core) || 0,
           P_stranded_W: Number(p.stranded) || 0, P_solid_W: Number(p.solid) || 0,
           efficiency: (Number(r2.eff) || 0) / 100, mass_total_kg: mass, mass_components: [],
           torque_per_mass_Nm_kg: Number(r2.td) || (mass > 0 ? T / mass : 0),
           power_per_mass_W_kg: Number(r2.power_per_mass_W_kg) || (mass > 0 ? Pmech / mass : 0),
+=======
+          KV_rpm_per_V_line: Number(p.KV_rpm_per_V_line) || (Vlpk > 1 ? rpm / Vlpk : 0),
+          P_loss_total_W: ploss, P_core_W: Number(p.core) || 0,
+          P_stranded_W: Number(p.stranded) || 0, P_solid_W: Number(p.solid) || 0,
+          efficiency: (Number(p.eff) || 0) / 100, mass_total_kg: mass, mass_components: [],
+          torque_per_mass_Nm_kg: Number(p.td) || (mass > 0 ? T / mass : 0),
+          power_per_mass_W_kg: Number(p.power_per_mass_W_kg) || (mass > 0 ? Pmech / mass : 0),
+>>>>>>> Stashed changes
           loss_density_W_kg: mass > 0 ? ploss / mass : 0,
         };
         window.dispatchEvent(new CustomEvent('sim-apply-summary', { detail: { summary } }));
@@ -1054,6 +1121,7 @@ const SweepStudyPanel: React.FC = () => {
         </FormControl>
         <Typography sx={{ fontSize: 11, color: nPts > 40 ? '#fca5a5' : 'var(--text-3)', flex: 1 }}>
           <strong>{nPts}</strong> pt{nPts === 1 ? '' : 's'}{nPts > 40 ? ' — large, slow' : ''}
+<<<<<<< Updated upstream
           {/* SAY which step count the sweep will solve at.  It is read from the
               Electromagnetic tab's key at Run time, and that key can be rewritten
               behind the tab's back (an optimizer Apply pins the run's 48 steps into
@@ -1072,11 +1140,17 @@ const SweepStudyPanel: React.FC = () => {
               · 3D ×{k3dChart.toFixed(3)}
             </span>
           )}
+=======
+>>>>>>> Stashed changes
           {' '}
           <label title="Also solve the current motor un-varied at operating point 0 as a reference point on the chart — one more full FEM eval, run last. Off: the sweep ends with its grid."
             style={{ cursor: 'pointer', color: 'var(--text-3)', whiteSpace: 'nowrap' }}>
             <input type="checkbox" checked={withBaseline} onChange={e => setWithBaseline(e.target.checked)}
+<<<<<<< Updated upstream
               style={{ verticalAlign: 'middle', marginLeft: 6 }} /> baseline point (preliminary 3×)
+=======
+              style={{ verticalAlign: 'middle', marginLeft: 6 }} /> baseline point
+>>>>>>> Stashed changes
           </label>
         </Typography>
       </Box>

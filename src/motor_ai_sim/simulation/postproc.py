@@ -138,6 +138,7 @@ def _phase_harmonics(d: Dict[str, Any], keys, h_max: Optional[int]) -> list:
     return amps
 
 
+<<<<<<< Updated upstream
 def _angles_for(d: Dict[str, Any], key: str) -> list:
     """Rotor angles the samples of series ``key`` belong to.
 
@@ -153,6 +154,8 @@ def _angles_for(d: Dict[str, Any], key: str) -> list:
     return list(d.get("rotor_angle_deg") or [])
 
 
+=======
+>>>>>>> Stashed changes
 def _drive_frame_phasor(d: Dict[str, Any], keys) -> "complex":
     """Positive-sequence fundamental phasor of an abc series, in the frame the
     EXCITATION SOURCES are written in.
@@ -176,7 +179,11 @@ def _drive_frame_phasor(d: Dict[str, Any], keys) -> "complex":
     run at a load angle nobody asked for.  The constant survives only as the
     fallback for a result dict too old to carry ``daxis_deg``.
     """
+<<<<<<< Updated upstream
     ang = _angles_for(d, keys[0])
+=======
+    ang = d.get("rotor_angle_deg") or []
+>>>>>>> Stashed changes
     N = len(ang)
     if N < 8:
         return 0j

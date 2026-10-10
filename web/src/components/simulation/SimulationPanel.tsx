@@ -7,16 +7,26 @@
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { healPanelSettingsFromActiveDuty, panelSettingsMissing } from '../../lib/dutySnapshot';
+<<<<<<< Updated upstream
 import { whenVisible } from '../../lib/pageVisible';
+=======
+>>>>>>> Stashed changes
 import {
   Box, Typography, TextField, Button, Chip, Divider,
   LinearProgress, Alert, Tooltip, IconButton, Paper,
   CircularProgress, Dialog, DialogTitle, DialogContent, DialogActions,
   Checkbox, FormControlLabel, FormControl, InputLabel, Select, MenuItem,
+<<<<<<< Updated upstream
   InputAdornment, Switch,
 } from '@mui/material';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
+=======
+  InputAdornment, ListSubheader,
+} from '@mui/material';
+import ShowChartIcon from '@mui/icons-material/ShowChart';
+import { useMotorStore } from '../../stores/motorStore';
+>>>>>>> Stashed changes
 import { geoSignature } from '../common/geoSig';
 import { windingConnections } from '../../lib/referencePassports';
 import { currentGeoJson, currentMatJson } from '../../lib/apiAuth';
@@ -35,6 +45,7 @@ import SolveProgressStrip from './SolveProgressStrip';
 import CommonProgressStrip from '../common/SolveProgressStrip';
 import { showsTransientStrip } from '../common/progressLine';
 import HelpTip from '../common/HelpTip';
+<<<<<<< Updated upstream
 import { normalizeSet1Paths, sixPhaseLine, sixPhaseProblem } from './sixPhase';
 import {
   EDDY_DEFAULT_STEPS, RIPPLE_SAMPLES_PER_COGGING_CYCLE, coggingCyclesPerPeriod,
@@ -51,6 +62,8 @@ import {
   getControllerSettings, readControllerMirror, saveControllerFromMirror,
   controllerSavedFieldsLine, getResolvedPoint, type ControllerSettings,
 } from '../controller/controllerApi';
+=======
+>>>>>>> Stashed changes
 import { syncActiveMotor, getActiveMotor } from '../common/motorSettings';
 import BatteryDialog, { type BatteryValue } from '../catalog/BatteryDialog';
 import {
@@ -62,11 +75,16 @@ import {
   activeDuty, dutyKey, noteDutyOpEdit, isDutyOpKey,
   activeDutyMaterials, setDutyMagnet,
 } from '../../lib/dutySettings';
+<<<<<<< Updated upstream
 import { MACHINE_CHANGED_EVENT } from '../../lib/dutyLocalApply';
 import { setSolveBusy } from '../../lib/familyFollow';
 import { magnetVariants } from '../../lib/magnetVariants';
 import { effectiveAssignment } from '../../lib/dutyMaterials';
 import { runNoticeFor, type RunNotice } from '../../lib/runNotice';
+=======
+import { magnetVariants } from '../../lib/magnetVariants';
+import { effectiveAssignment } from '../../lib/dutyMaterials';
+>>>>>>> Stashed changes
 import { useMotorAssignments } from '../materials/useMotorAssignments';
 import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
 
@@ -101,6 +119,7 @@ interface FieldBusy {
 type DriveKind = 'current' | 'voltage' | 'pwm_voltage' | 'custom_current'
                | 'bldc_current';
 
+<<<<<<< Updated upstream
 // THE PWM DRIVE IS THE CONTROLLER'S (owner 2026-09-24, on the Controller
 // tab's greyed "Carrier 20,000 Hz": «Это значение нужно задавать в
 // контроллере; PWM нужно выкинуть из Electromagnetic»).  This tab no longer
@@ -111,6 +130,60 @@ type DriveKind = 'current' | 'voltage' | 'pwm_voltage' | 'custom_current'
 // Controller's resolved point (`GET /api/controller/point`).
 const fswLabel = (hz: number) =>
   (hz >= 1000 ? `${+(hz / 1000).toFixed(hz % 1000 ? 1 : 0)} kHz` : `${hz} Hz`);
+=======
+// Switching frequencies that real controllers actually offer, grouped by the
+// power stage they belong to.  A free-text kHz box invites numbers no inverter
+// runs at; these are the settings an engineer would find in the drive's own
+// menu.  'custom' reveals the numeric field for everything else — the backend
+// takes any frequency.
+const FSW_GROUPS: { label: string; hint: string; values: number[]; def: number }[] = [
+  { label: 'SiC MOSFET · 400–800 V',
+    hint: 'EV traction / industrial SiC stage — the CILN28 class (640–860 V pack)',
+    values: [16000, 24000, 32000, 48000], def: 24000 },
+  { label: 'IGBT · 400–800 V',
+    hint: 'classic traction inverter — switching loss keeps the carrier low',
+    values: [4000, 8000, 12000, 16000], def: 8000 },
+  { label: 'LV MOSFET ESC · < 100 V',
+    hint: 'drone / hobby controllers (BLHeli_32, AM32) and LV FOC stages — the 40 mm class',
+    values: [24000, 48000, 64000, 96000], def: 48000 },
+];
+const FSW_ALL = Array.from(new Set(FSW_GROUPS.flatMap(g => g.values)));
+const fswLabel = (hz: number) =>
+  (hz >= 1000 ? `${+(hz / 1000).toFixed(hz % 1000 ? 1 : 0)} kHz` : `${hz} Hz`);
+
+// The V_bus value WE last prefilled from the machine's pack.  Kept outside the
+// sim.* block on purpose: sim.* is snapshotted into duty saves and the per-die
+// settings memory, and this is bookkeeping about the panel, not a setting of
+// the machine.  It is what tells a battery change whether the field still
+// holds our prefill (safe to refresh) or a number the user typed (never
+// touched — an explicit DC link is an explicit answer).
+const BUS_SEED_KEY = 'battery.busSeed';
+const readBusSeed = (): number | null => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BUS_SEED_KEY) || 'null');
+    // Number(null) === 0 — the absent-key case must stay null, not become a
+    // phantom «0 V seed» that fails every prefill match (measured live:
+    // V_bus stuck on the previous machine's 750 because of exactly this).
+    if (raw == null) return null;
+    const v = Number(raw);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch { return null; }
+};
+const writeBusSeed = (v: number): void => {
+  try { localStorage.setItem(BUS_SEED_KEY, JSON.stringify(v)); } catch { /* quota */ }
+};
+/** True while V_bus is empty, still equal to the prefill we wrote, or a
+ *  value with NO seed on record — that last case is a bus that travelled in
+ *  with a duty-settings restore from before vBus was machine-scoped (measured
+ *  live 2026-08-31: 750 V from the CILN28 duty sitting over a 6S 22 V pack).
+ *  A hand-typed bus always has a seed mismatch WITH a seed present, and only
+ *  that combination is protected. */
+const busIsPrefill = (vBus: number): boolean => {
+  if (!(vBus > 0)) return true;
+  const s = readBusSeed();
+  return s == null || Math.abs(vBus - s) <= 0.05;
+};
+>>>>>>> Stashed changes
 
 // ── types ─────────────────────────────────────────────────────────────────────
 interface SimStatus {
@@ -231,6 +304,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       window.addEventListener('sim-settings-restored', onRestore);
       return () => window.removeEventListener('sim-settings-restored', onRestore);
     }, [key]);
+<<<<<<< Updated upstream
     // ANOTHER WINDOW of this app wrote the key (an optimizer Apply pins the
     // run's eval params — 48 steps — into sim.stepsPP; a duty or stored-run
     // load rewrites the block).  Those writers fire their re-read events in
@@ -247,6 +321,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       window.addEventListener('storage', onStorage);
       return () => window.removeEventListener('storage', onStorage);
     }, [key]);
+=======
+>>>>>>> Stashed changes
     return [v, setV] as const;
   };
 
@@ -387,10 +463,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [targetKind,  setTargetKind]  = usePersisted<'off' | 'nm' | 'kw'>('targetKind', 'off');
   // The SINUSOIDAL voltage drive is still hidden from the menu (user request) —
   // a persisted 'voltage' selection would strand the panel in an invisible
+<<<<<<< Updated upstream
   // mode, so it is rewritten on mount.  The BLDC / custom-current sources ARE
   // on the menu, so they are left alone; a persisted 'pwm_voltage' (a stored
   // PWM run) is left alone too — it shows its one-line "from Controller"
   // notice and Sine current is one click away.
+=======
+  // mode, so it is rewritten on mount.  The PWM / BLDC / custom-current sources
+  // ARE on the menu, so they are left alone.
+>>>>>>> Stashed changes
   useEffect(() => {
     if (drive === 'voltage') setDrive('current');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -419,6 +500,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   const [opMode,  setOpMode]  = usePersisted<'motor' | 'generator'>('opMode', 'motor');
   const [vPeak,   setVPeak]   = usePersisted('vPeak',  30.0);  // phase-voltage amplitude [V]
   const [vDelta,  setVDelta]  = usePersisted('vDelta',  0.0);  // voltage angle δ [°el], same frame as γ
+<<<<<<< Updated upstream
   // ── PWM IS THE CONTROLLER'S (owner 2026-09-22, removed here 2026-09-24) ─
   // *«как отладим каплинг с контроллером, нам не нужен будет PWM в
   // электромагнитном моделировании — всё будет задаваться в меню Controller»*
@@ -429,6 +511,18 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // the backend resolves them, and `ctrlDrive` below is what this panel shows
   // and gates on.
   const goToTab = useUIStore((st: any) => st.setActiveTab);
+=======
+  // ── PWM inverter source ────────────────────────────────────────────────
+  // All persisted under sim.* like every other operating-point field, so they
+  // ride along into duty saves and the per-die settings memory for free.
+  const [vBus,    setVBus]    = usePersisted('vBus', 0);        // DC link [V]; 0 = not set yet
+  const [fSwitch, setFSwitch] = usePersisted('fSwitch', 24000); // carrier [Hz]
+  // Which controller class the carrier was picked from (index into FSW_GROUPS).
+  // Only a UI grouping — the backend takes the frequency — but it has to be
+  // remembered because the same kHz belongs to more than one class.
+  const [fSwGroup, setFSwGroup] = usePersisted('fSwGroup', 0);
+  const [fSwCustom, setFSwCustom] = usePersisted('fSwCustom', false);
+>>>>>>> Stashed changes
   // ── GENERATOR → BATTERY (boost mode) ───────────────────────────────────
   // Iterate the bus against the pack instead of assuming an infinitely stiff
   // supply.  Persisted ON, but only ever SENT on a generator run of a machine
@@ -519,9 +613,48 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       if (batRetry.current != null) window.clearTimeout(batRetry.current);
     };
   }, [loadBattery]);
+<<<<<<< Updated upstream
   // (The V_bus / carrier-class prefill from this pack that lived here is gone
   // with the PWM controls, 2026-09-24: the pack is now the CONTROLLER's V_dc
   // source, resolved server-side — `ctrlDrive` below.)
+=======
+  // Prefill V_bus and the switching-frequency GROUP from that supply, once, and
+  // only while the user has not set a bus of their own: a typed DC link is a
+  // number nobody checks against the pack that is really there, and the ripple a
+  // PWM run reports scales directly with it.  The default is the NOMINAL pack
+  // voltage — v_min and v_max are the corners a duty is judged against, not the
+  // voltage the machine runs at.  ≥300 V reads as a traction stage (SiC
+  // default), <100 V as an ESC; no battery leaves the field empty and the SiC
+  // 24 kHz default standing.
+  const busSeeded = useRef(false);
+  // Write the pack's nominal into V_bus (and pick the controller class from
+  // it).  `force` is the after-a-save path: the battery CHANGED, so a field
+  // still holding the old prefill must follow it — but a hand-typed bus is
+  // never overwritten, which is what busIsPrefill() checks.
+  const seedBusFromBattery = useCallback((b: BatteryPack | null, force: boolean) => {
+    const vn = Number(b?.v_nom ?? 0);
+    if (!(vn > 0)) return;
+    if (!force && (busSeeded.current || vBus > 0)) return;
+    if (force && !busIsPrefill(vBus)) return;
+    const v = +vn.toFixed(1);
+    busSeeded.current = true;
+    setVBus(v);
+    writeBusSeed(v);
+    const gi = v >= 300 ? 0 : v < 100 ? 2 : 1;    // SiC | LV ESC | IGBT
+    setFSwGroup(gi);
+    setFSwitch(FSW_GROUPS[gi].def);
+  }, [vBus]);
+  useEffect(() => {
+    // Always the prefill-aware path: the battery under the panel CHANGES when
+    // the user loads another machine (CILN28's 750 V pack -> the L12's 6S
+    // 22 V), and the old `if (vBus > 0) bail` kept the previous machine's bus
+    // in the field (measured live 2026-08-31: V_bus 750 over a 22 V battery).
+    // busIsPrefill() still protects a hand-typed DC link — only a value WE
+    // wrote is ever replaced.
+    seedBusFromBattery(battery, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [battery]);
+>>>>>>> Stashed changes
 
   // Saving the dialog = saving THE MACHINE's battery.
   const saveBattery = useCallback(async (spec: CellSpec) => {
@@ -544,6 +677,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
         }
         const saved = ((await r.json())?.battery ?? pack) as BatteryPack;
         setBattery(saved);
+<<<<<<< Updated upstream
+=======
+        seedBusFromBattery(saved, true);
+>>>>>>> Stashed changes
         setBatMsg(`✓ battery saved on ${die}/${config}`);
         // Everyone else reads the same yaml — tell them it moved, then re-read
         // the context so this panel shows what the file actually holds.
@@ -562,8 +699,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }
     writeLocalBattery(key, pack);
     setBattery(pack);
+<<<<<<< Updated upstream
     setBatMsg('✓ battery saved for this motor (this browser)');
   }, [batCtx, loadBattery]);
+=======
+    seedBusFromBattery(pack, true);
+    setBatMsg('✓ battery saved for this motor (this browser)');
+  }, [batCtx, loadBattery, seedBusFromBattery]);
+>>>>>>> Stashed changes
 
   // The save note is one short line and it goes away by itself.
   useEffect(() => {
@@ -807,8 +950,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       : '-');
     const tick = async () => {
       if (!alive) return;
+<<<<<<< Updated upstream
       await whenVisible();              // a hidden tab polls nothing (lib/pageVisible)
       if (!alive) return;
+=======
+>>>>>>> Stashed changes
       try {
         const r = await fetch(`${API}/api/simulation/physics/fem_transient/progress`);
         if (r.ok) {
@@ -915,6 +1061,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     return () => window.removeEventListener('sim-design-applied', on);
   }, [refreshAssign]);
   const [simBusy,  setSimBusy]  = useState(false);
+<<<<<<< Updated upstream
   // Whether the coupled-orchestrator strip is currently showing a bar for a
   // RUNNING solve (set by its onActiveChange) — while true, the plain
   // transient strip below is redundant (see the render site) and hides.
@@ -928,11 +1075,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     setSolveBusy('simulation', simBusy);
     return () => setSolveBusy('simulation', false);
   }, [simBusy]);
+=======
+>>>>>>> Stashed changes
   // Clear the one-shot max-charge flag the moment its solve is over, so the
   // next ordinary Run is an ordinary run.
   useEffect(() => {
     if (!simBusy && chargeMaxOnce) setChargeMaxOnce(false);
   }, [simBusy, chargeMaxOnce]);
+<<<<<<< Updated upstream
   // ── Physics caches, visible ──────────────────────────────────────────────
   // Every finished Run REPLACES the field / snapshot / transient stores
   // server-side; this line is how that is checked without reading the log.
@@ -946,6 +1096,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       .catch(() => { /* diagnostics must never surface as an error */ });
   }, []);
   useEffect(() => { if (!simBusy) loadCaches(); }, [simBusy, runNonce, loadCaches]);
+=======
+>>>>>>> Stashed changes
   // "fresh" tells the backend to discard any frames cached from a Stopped
   // run and recompute everything; cancelledRun remembers that the last run
   // was Stopped so the next Run offers Continue / Start-fresh.
@@ -1152,6 +1304,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // Defaults follow the user's standing practice (2026-09-03): 40 steps per
   // period minimum and demag ON on every machine — a fresh browser profile
   // must not silently solve at 24 steps without the de-rate.
+<<<<<<< Updated upstream
   // EDDY RUNS DEFAULT TO 72 (owner 2026-09-26; eddy is always on here): BDF2
   // reads the L155 magnet loss −4.3 % at 36 steps and −1 % at 72
   // (docs/EDDY_TIME_INTEGRATION_2026-09-25.md).  A default, never a force:
@@ -1185,6 +1338,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     if (steps === prev || steps === EDDY_DEFAULT_STEPS) setSteps(defaultSteps);
     else setStepsSource('user');
   }, [steps, stepsSource, setStepsSource, defaultSteps, setSteps]);
+=======
+  const [steps,    setSteps]    = usePersisted('stepsPP', 40);   // transient frames/period — single source (optimizer reads this too)
+>>>>>>> Stashed changes
   // Magnet/shaft eddy losses ALWAYS come from the real field solve
   // (J = σ(−∂A/∂t + U), per-magnet ∫J=0, assigned-material σ — the Ansys way),
   // never the classical slab d²/12 estimate.  No toggle: real fields only.
@@ -1202,6 +1358,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // run's own last frame instead of launching a second transient.  Turning it
   // OFF is honest too — the run is then magnetostatic and those views solve on
   // demand, exactly as they used to (and say so in their header).
+<<<<<<< Updated upstream
   // ALWAYS ON (user 2026-09-05: "можно эту кнопку убрать — я всегда её
   // использую").  The checkbox is gone; the persisted key is pinned to true
   // so every reader of `sim.eddyCoupled` (the field views' snapshot probes,
@@ -1210,6 +1367,9 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   useEffect(() => {
     try { localStorage.setItem('sim.eddyCoupled', 'true'); } catch { /* quota */ }
   }, []);
+=======
+  const [eddyCoupled, setEddyCoupled] = usePersisted('eddyCoupled', true);
+>>>>>>> Stashed changes
   // EMPTY-STORE NOTICE (user 2026-09-03): a browser whose store came back
   // empty (reset profile, new browser, another origin) shows the factory
   // defaults under the name of the active duty.  NOTHING is applied by itself
@@ -1265,12 +1425,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     end_winding_factor: endWinding, connection, star_delta: starDelta,
     demag, eddy: eddyCoupled, rotor_eddy: fieldLosses, torque_filter: torqueFilter,
     drive, v_phase_peak: vPeak, v_delta_deg: vDelta,
+<<<<<<< Updated upstream
     // The BLDC block amplitude is PHYSICS, so it goes where every other
     // physics field goes: the shared config that the sweep / optimizer /
     // descent read.  (The custom waveform does not — it is up to 20k samples
     // and belongs to its run.)  v_bus / f_switch are NOT sent any more: the
     // PWM drive is the Controller's (2026-09-24).
     i_block: iBlock,
+=======
+    // The PWM inverter's bus and carrier and the BLDC block amplitude are
+    // PHYSICS, so they go where every other physics field goes: the shared
+    // config that the sweep / optimizer / descent read.  (The custom waveform
+    // does not — it is up to 20k samples and belongs to its run.)
+    v_bus: vBus, f_switch: fSwitch, i_block: iBlock,
+>>>>>>> Stashed changes
     mode: opMode,
   });
 
@@ -1289,8 +1457,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
     }, 700);
     return () => clearTimeout(id);
   }, [current, frequency, rpm, phaseOffset, demag, eddyCoupled, fieldLosses,
+<<<<<<< Updated upstream
       coilTemp, steps, stepsSource, endWinding, connection, starDelta, drive, opMode, vPeak,
       vDelta, iBlock]);
+=======
+      coilTemp, steps, endWinding, connection, drive, opMode, vPeak, vDelta,
+      vBus, fSwitch, iBlock]);
+>>>>>>> Stashed changes
 
   // Auto-save EVERY simulation change into the active motor ("my copy").
   // syncActiveMotor is internally debounced, so firing on each change is fine.
@@ -1317,6 +1490,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // valid step counts shown in the helper (divisors of stepsMax, ≥12)
   const validSteps = Array.from({ length: stepsMax }, (_, i) => i + 1)
     .filter(d => stepsMax % d === 0 && d >= 12);
+<<<<<<< Updated upstream
   // ABOVE the ring is legal now: the solver RAISES the slip density to the
   // requested count (fine PWM steps must be honoured, not capped), so a count
   // past stepsMax is run exactly as asked and must not be pulled back.
@@ -1328,6 +1502,28 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // picker says so before the run.
   const stepsRan  = snapSteps(steps);
   const stepsLine = stepsNote(steps, stepsRan, stepsMax, stepsMigratedFrom);
+=======
+  const snapSteps = (v: number) => {
+    // ABOVE the ring is legal now: the solver RAISES the slip density to the
+    // requested count (fine PWM steps must be honoured, not capped), so a
+    // count past stepsMax is run exactly as asked and must not be pulled back.
+    if (v > stepsMax) return v;
+    if (stepsMax % v === 0) return v;       // already a divisor
+    let best = stepsMax;
+    for (let d = 1; d <= stepsMax; d++)
+      if (stepsMax % d === 0 && (Math.abs(d - v) < Math.abs(best - v)
+          || (Math.abs(d - v) === Math.abs(best - v) && d > best))) best = d;
+    return best;
+  };
+  // Snap the persisted steps onto the valid grid whenever it changes (motor /
+  // gap_layers change) or on mount — the divisor set depends on the machine, so
+  // a stored value can fall off the list.
+  useEffect(() => {
+    const s = snapSteps(steps);
+    if (s !== steps) setSteps(s);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepsMax]);
+>>>>>>> Stashed changes
   // ── V₁ SEED from the last CURRENT-drive run of THIS machine ────────────
   // The two-pass workflow the user works in: fix the point on the current
   // drive, where the torque is what you dial in; then run the inverter at the
@@ -1413,10 +1609,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
   // the exact-mean voltage integration averages the pulses away and the run
   // reproduces the ideal sinusoid at PWM cost.  Computed here so the panel can
   // say the number to set BEFORE the run is launched, not after it is refused.
+<<<<<<< Updated upstream
   // The carrier is the CONTROLLER's (2026-09-24) — `ctrlFsw`, what the
   // backend will resolve for this run.
   const pwmCarriers = (drive === 'pwm_voltage' && ctrlFsw > 0 && frequency > 0)
     ? Math.max(1, Math.round(ctrlFsw / frequency)) : 0;
+=======
+  const pwmCarriers = (drive === 'pwm_voltage' && fSwitch > 0 && frequency > 0)
+    ? Math.max(1, Math.round(fSwitch / frequency)) : 0;
+>>>>>>> Stashed changes
   const stepsPerSwitch = pwmCarriers ? steps / pwmCarriers : 0;
   // The step count to SET: 16 samples per switching period, snapped UP onto a
   // count the sliding band can actually run (a divisor of the slip ring, or —
@@ -1495,7 +1696,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
       // and the Re-run solved at another: the exact silent divergence this
       // pin exists to prevent.  (vite build ships without a type-check, so a
       // missing name here reaches production.)
+<<<<<<< Updated upstream
       if (typeof p.steps_per_period === 'number') pickSteps(p.steps_per_period);
+=======
+      if (typeof p.steps_per_period === 'number') setSteps(p.steps_per_period);
+>>>>>>> Stashed changes
       if (typeof p.coil_temp_c === 'number') setCoilTemp(p.coil_temp_c);
       // 0 = "auto" (the descent let the solver derive k_end per candidate); adopting
       // that 0 would blank a cell that must always show the geometry's real factor.
@@ -1934,6 +2139,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                     : 'A magnet temperature belongs to a duty — select a duty first. '
                       + 'The machine\'s own magnet is changed in Materials.'}>
                     <span onClick={(e) => e.stopPropagation()}>
+<<<<<<< Updated upstream
                       {/* The live magnet is always an option, even when the
                           library list this page fetched at mount predates it
                           (a card added while the page was open showed a blank
@@ -1942,6 +2148,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       <Select value={liveMagnet || ''}
                         disabled={!dutyOn} variant="standard" disableUnderline
                         IconComponent={() => null}
+=======
+                      <Select value={magVariants.includes(liveMagnet) ? liveMagnet : ''}
+                        disabled={!dutyOn} variant="standard" disableUnderline
+>>>>>>> Stashed changes
                         onChange={(e) => {
                           const v = String(e.target.value);
                           const pick = v === machineMagnet ? null : v;
@@ -1952,12 +2162,20 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                           setDutyMats(activeDutyMaterials());
                         }}
                         sx={{ fontSize: 11, fontWeight: 700, color: '#2563eb',
+<<<<<<< Updated upstream
                           '& .MuiSelect-select': { py: 0, pl: 0, pr: '0 !important',
                             fontSize: 11, fontWeight: 700, color: '#2563eb' },
                           '&.Mui-disabled .MuiSelect-select': {
                             WebkitTextFillColor: '#2563eb', opacity: 0.7 } }}>
                         {(liveMagnet && !magVariants.includes(liveMagnet)
                           ? [...magVariants, liveMagnet] : magVariants).map(v => (
+=======
+                          '& .MuiSelect-select': { py: 0, pl: 0, pr: '16px !important',
+                            fontSize: 11, fontWeight: 700, color: '#2563eb' },
+                          '&.Mui-disabled .MuiSelect-select': {
+                            WebkitTextFillColor: '#2563eb', opacity: 0.7 } }}>
+                        {magVariants.map(v => (
+>>>>>>> Stashed changes
                           <MenuItem key={v} value={v} sx={{ fontSize: 11 }}>
                             {v}{v === machineMagnet ? ' (machine)' : ''}
                           </MenuItem>
@@ -1967,6 +2185,18 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   </Tooltip>
                 ) : (
                   <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#2563eb' }}>{magInfo.name}</Typography>
+<<<<<<< Updated upstream
+=======
+                )}
+                <Box sx={{ flex: 1 }} />
+                {magInfo.Br != null && (
+                  <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>Br {magInfo.Br.toFixed(2)} T</Typography>
+                )}
+                {magInfo.knee != null && (
+                  <Typography sx={{ fontSize: 10, color: demag ? 'var(--text-3)' : 'var(--text-4)' }}>
+                    knee {(magInfo.knee / 1000).toFixed(0)} kA/m{demag ? '' : ' (unused)'}
+                  </Typography>
+>>>>>>> Stashed changes
                 )}
                 {/* second row: the numbers */}
                 <Box sx={{ flexBasis: '100%', display: 'flex', gap: 1.25, alignItems: 'baseline' }}>
@@ -1983,15 +2213,26 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Tooltip>
           )}
 
+<<<<<<< Updated upstream
           {/* The machine's SUPPLY, in the same chip form as the magnet: the
               Controller's DC-link source, and what a duty's voltage is judged
               against.  Click to edit — same dialog as the Family catalog's 🔋. */}
+=======
+          {/* The machine's SUPPLY, in the same chip form as the magnet: what
+              the PWM source's DC link is prefilled from, and what a duty's
+              voltage is judged against.  Click to edit — same dialog as the
+              Family catalog's 🔋. */}
+>>>>>>> Stashed changes
           <Tooltip placement="right" title={
             (battery
               ? `${battery.cells ?? '?'} cells in series, `
                 + `${battery.v_min}–${battery.v_max} V pack`
                 + (battery.v_nom != null ? ` (nominal ${battery.v_nom} V)` : '')
+<<<<<<< Updated upstream
                 + '. The Controller’s DC link is the NOMINAL unless set there — v_min/v_max are '
+=======
+                + '. The PWM source’s V_bus is prefilled from the NOMINAL — v_min/v_max are '
+>>>>>>> Stashed changes
                 + 'the corners a duty is judged against, not the voltage it runs at. '
               : 'This machine has no battery yet. ')
             + (batCtx.canWrite && batCtx.die && batCtx.config
@@ -2010,8 +2251,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 color: battery ? '#f59e0b' : 'var(--text-4)' }}>
                 {batteryChipLabel(battery)}
               </Typography>
+<<<<<<< Updated upstream
               {/* no machine tag on the chip (user 2026-09-09) — the tooltip
                   says where the pack is saved */}
+=======
+              <Box sx={{ flex: 1 }} />
+              <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>
+                {batCtx.canWrite && batCtx.config ? batCtx.config : 'this browser'}
+              </Typography>
+>>>>>>> Stashed changes
             </Box>
           </Tooltip>
           {batMsg && (
@@ -2050,9 +2298,15 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
             </Box>
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               {/* The ideal sinusoidal VOLTAGE drive is HIDDEN from the menu,
+<<<<<<< Updated upstream
                   not deleted (user request) — everything behind it stays.  A
                   real inverter's chopped voltage is the Controller's (Coupled,
                   Drive = inverter), not a source on this tab. */}
+=======
+                  not deleted (user request) — everything behind it stays; the
+                  PWM source below drives the same circuit with a real
+                  inverter's chopped voltage. */}
+>>>>>>> Stashed changes
               {(['current'] as const).map(m => (
                 <Button key={m} size="small" fullWidth disabled={isRunning || fitBusy}
                   variant={drive === m && targetKind === 'off' ? 'contained' : 'outlined'}
@@ -2068,6 +2322,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 Target T / P
               </Button>
               <HelpTip title={'Sine current: imposed sinusoidal phase currents — the ideal ' +
+<<<<<<< Updated upstream
                 'reference, and the right one for design work. Target T / P: the current is ' +
                 'fitted to a torque or power. BLDC 120°: six-step block commutation. Custom I: ' +
                 'any periodic phase-current waveform. PWM is not set here: the carrier, DC ' +
@@ -2079,6 +2334,18 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 Electromagnetic») — the drive is the Controller's. */}
             <Box sx={{ display: 'flex', gap: 0.5 }}>
               {([['bldc_current', 'BLDC 120°'],
+=======
+                'source, and the right one for design work. PWM inverter: an ideal two-level ' +
+                'stage chops the DC bus, so the currents are the machine’s own response and ' +
+                'carry the real switching ripple (and what it costs in torque ripple, copper ' +
+                'and core loss) — the honest answer for a low-inductance machine. BLDC 120°: ' +
+                'six-step block commutation. Custom I: any periodic phase-current waveform.'} />
+            </Box>
+            {/* The non-ideal sources, on their own row so the labels fit. */}
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              {([['pwm_voltage', 'PWM inverter'],
+                 ['bldc_current', 'BLDC 120°'],
+>>>>>>> Stashed changes
                  ['custom_current', 'Custom I']] as const).map(([m, label]) => (
                 <Button key={m} size="small" fullWidth disabled={isRunning || fitBusy}
                   variant={drive === m ? 'contained' : 'outlined'}
@@ -2092,12 +2359,17 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                     // run's V₁ when the panel has one.
                     if (m === 'bldc_current' && !(iBlock > 0))
                       setIBlock(+(current * Math.sqrt(1.5)).toFixed(2));
+<<<<<<< Updated upstream
+=======
+                    if (m === 'pwm_voltage' && !(vPeak > 0)) setVPeak(30);
+>>>>>>> Stashed changes
                   }}
                   sx={{ fontSize: '0.7rem', textTransform: 'none', py: 0.3 }}>
                   {label}
                 </Button>
               ))}
             </Box>
+<<<<<<< Updated upstream
             {/* A STORED PWM RUN restored into this panel (old records stay
                 readable and re-runnable).  There are no PWM controls here any
                 more (2026-09-24): its carrier and DC link are the Controller's,
@@ -2118,6 +2390,69 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   + 'waveform run Coupled with Drive = inverter. Pick Sine current to leave it.'} />
               </Box>
             )}
+=======
+            {drive === 'pwm_voltage' && (<>
+              <Box sx={{ display: 'flex', gap: 1 }}>
+                <TextField label="V bus (V)" type="number" size="small" fullWidth
+                  value={vBus > 0 ? vBus : ''} onChange={e => setVBus(+e.target.value)}
+                  placeholder={battery?.v_nom ? String(battery.v_nom) : 'no battery set'}
+                  inputProps={{ step: 1, min: 0 }} disabled={isRunning}
+                  InputLabelProps={{ shrink: true }}
+                  InputProps={{ endAdornment: <HelpTip title={
+                    'DC link voltage — each leg swings ±V_bus/2. '
+                    + (battery?.v_nom
+                        ? `Prefilled from this machine's pack NOMINAL voltage (`
+                          + `${battery.cells ?? '?'}s, v_nom ${battery.v_nom} V; v_min/v_max are `
+                          + `the corners a duty is judged against, not the voltage it runs at). `
+                        : 'This machine has no battery yet — set one on the battery chip above, '
+                          + 'or type the link voltage here. ')
+                    + 'The switching ripple scales directly with it, and the modulation index '
+                    + 'm = 2·V₁/V_bus must stay ≤1.15 — above that the run is refused rather '
+                    + 'than silently overmodulated.'} /> }} />
+                {/* The same frequency appears in more than one controller
+                    class (16 kHz is both a SiC and an IGBT setting), so the
+                    option VALUE carries the group index too — a Select with
+                    duplicate values renders every match's label at once. */}
+                <FormControl size="small" fullWidth disabled={isRunning}>
+                  <InputLabel>f switch</InputLabel>
+                  <Select label="f switch"
+                    value={(!fSwCustom && FSW_GROUPS[fSwGroup]?.values.includes(fSwitch))
+                      ? `${fSwGroup}:${fSwitch}` : 'custom'}
+                    onChange={e => {
+                      const raw = String(e.target.value);
+                      if (raw === 'custom') { setFSwCustom(true); return; }
+                      const [gi, hz] = raw.split(':');
+                      setFSwCustom(false); setFSwGroup(+gi); setFSwitch(+hz);
+                    }}>
+                    {FSW_GROUPS.flatMap((g, gi) => [
+                      <ListSubheader key={g.label} sx={{ fontSize: 10.5, lineHeight: '22px' }}>
+                        {g.label}
+                      </ListSubheader>,
+                      ...g.values.map(v => (
+                        <MenuItem key={`${gi}:${v}`} value={`${gi}:${v}`} sx={{ fontSize: 12 }}>
+                          {fswLabel(v)}{v === g.def ? ' · typical' : ''}
+                        </MenuItem>
+                      )),
+                    ])}
+                    <MenuItem value="custom" sx={{ fontSize: 12 }}>custom…</MenuItem>
+                  </Select>
+                </FormControl>
+                <HelpTip title={'Carrier frequency, from the settings real controllers offer: '
+                  + FSW_GROUPS.map(g => `${g.label} — ${g.hint}`).join('; ')
+                  + '. It is SNAPPED to a whole number of carriers per electrical period '
+                  + '(synchronous PWM — the reported period has to repeat), and the effective '
+                  + 'value comes back with the result. Pick "custom…" for anything off the list.'} />
+              </Box>
+              {(fSwCustom || !FSW_ALL.includes(fSwitch)) && (
+                <TextField label="f switch (Hz)" type="number" size="small" fullWidth
+                  value={fSwitch} onChange={e => setFSwitch(+e.target.value)}
+                  inputProps={{ step: 1000, min: 0 }} disabled={isRunning}
+                  InputProps={{ endAdornment: <HelpTip title={
+                    'Any carrier the backend can build. Snapped to a whole number of carriers '
+                    + 'per electrical period; the effective frequency is reported.'} /> }} />
+              )}
+            </>)}
+>>>>>>> Stashed changes
             {drive === 'bldc_current' && (
               <TextField label="I block, flat top (A)" type="number" size="small" fullWidth
                 value={iBlock} onChange={e => setIBlock(+e.target.value)}
@@ -2148,9 +2483,14 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   disabled={isRunning || wfBusy}
                   onClick={() => {
                     setWfBusy(true); setWfMsg(null);
+<<<<<<< Updated upstream
                     // No v_bus / f_switch: the calculator takes the
                     // CONTROLLER's carrier and DC link (2026-09-24).
                     const q = new URLSearchParams({
+=======
+                    const q = new URLSearchParams({
+                      v_bus: String(vBus || 0), f_switch: String(fSwitch),
+>>>>>>> Stashed changes
                       I_phase_rms: String(current), gamma_deg: String(phaseOffset),
                       rpm: String(rpm),
                     });
@@ -2190,12 +2530,21 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 </Button>
                 <HelpTip title={'“Generate from PWM model” calls the PWM calculator: it '
                   + 'integrates the inverter’s chopped voltage through THIS machine’s measured '
+<<<<<<< Updated upstream
                   + 'R, Ld, Lq and ψ_PM (constant-L circuit, no FEM, milliseconds) at the '
                   + 'Controller’s DC link and carrier, and pastes the resulting phase current '
                   + 'here. It is the cheap route the published PWM studies use; a coupled run '
                   + 'with Drive = inverter is the honest one — there the currents come out of the '
                   + 'field solve with saturation and the real back-EMF in the loop. Upload takes '
                   + 'a JSON array or a two-column CSV.'} />
+=======
+                  + 'R, Ld, Lq and ψ_PM (constant-L circuit, no FEM, milliseconds) at the V_bus '
+                  + 'and f_switch set on the PWM source, and pastes the resulting phase current '
+                  + 'here. It is the cheap route the published PWM studies use; “PWM inverter” '
+                  + 'is the honest one — there the currents come out of the field solve with '
+                  + 'saturation and the real back-EMF in the loop. Upload takes a JSON array or '
+                  + 'a two-column CSV.'} />
+>>>>>>> Stashed changes
               </Box>
               {wfMsg && (
                 <Typography sx={{ fontSize: 10, color: wfMsg.startsWith('✗') ? '#fca5a5' : '#38bdf8' }}>
@@ -2264,7 +2613,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       active: steps === suggestSteps },
                   ],
                 });
+<<<<<<< Updated upstream
                 const m = ctrlVdc > 0 && vPeak > 0 ? 2 * vPeak / ctrlVdc : 0;
+=======
+                const m = vBus > 0 && vPeak > 0 ? 2 * vPeak / vBus : 0;
+>>>>>>> Stashed changes
                 // Only when it BLOCKS: a legal m is not a launch criterion
                 // worth a standing row (user 2026-09-01: "вот это можно
                 // выбросить" — the amber 3rd-harmonic note was daily noise;
@@ -2276,8 +2629,13 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                   tip: 'Modulation index m = 2·V_peak/V_bus. Up to 1.00 plain linear; '
                     + '1.00–1.15 needs third-harmonic injection (allowed); above 1.15 the '
                     + 'inverter cannot form the fundamental and the solver refuses the run.',
+<<<<<<< Updated upstream
                   actions: [{ text: 'set ' + (0.5 * ctrlVdc).toFixed(1) + ' V',
                               onClick: () => setVPeak(+(0.5 * ctrlVdc).toFixed(1)) }],
+=======
+                  actions: [{ text: 'set ' + (0.5 * vBus).toFixed(1) + ' V',
+                              onClick: () => setVPeak(+(0.5 * vBus).toFixed(1)) }],
+>>>>>>> Stashed changes
                 });
               }
               if ((drive === 'pwm_voltage' || drive === 'voltage') && v1Seed) {  // no seed -> no row: absence is not an alert
@@ -2315,7 +2673,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       ? 'no battery on this machine — set one to get the charging card'
                       : (busCouple
                           ? 'bus iterated against the pack (V_oc + I·R)'
+<<<<<<< Updated upstream
                           : 'stiff bus at ' + ctrlVdc.toFixed(1) + ' V — pack R ignored'),
+=======
+                          : 'stiff bus at ' + vBus.toFixed(1) + ' V — pack R ignored'),
+>>>>>>> Stashed changes
                   tip: 'Generator into the machine’s own pack through the same bridge: the '
                     + 'winding IS the boost inductor and the modulation index sets the step-up, so '
                     + 'charging works with the EMF below V_bus. Bus coupling re-solves the whole '
@@ -2384,7 +2746,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 onChange={e => setCurrent(+e.target.value / Math.SQRT2)}
                 inputProps={{ step: 5, min: 0, max: 707 }} disabled={isRunning}
                 InputProps={{ endAdornment: <HelpTip title={'Peak of the sinusoidal phase current = RMS·√2. Editing this recomputes the RMS — the solver always receives RMS.'} /> }}/>
+<<<<<<< Updated upstream
               <TextField label={starDelta === 'delta' ? 'I line RMS (Arms) — winding ÷√3' : 'I phase RMS (Arms)'} type="number" size="small" fullWidth
+=======
+              <TextField label="I phase RMS (Arms)" type="number" size="small" fullWidth
+>>>>>>> Stashed changes
                 value={Number(current.toFixed(2))} onChange={e => setCurrent(+e.target.value)}
                 inputProps={{ step: 5, min: 0, max: 500 }} disabled={isRunning}
                 InputProps={{ endAdornment: <HelpTip title={
@@ -2563,6 +2929,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               labelId="steps-pp-label"
               label="Steps per electrical period"
               value={stepsOptions.includes(steps) ? steps : snapSteps(steps)}
+<<<<<<< Updated upstream
               onChange={e => {
                 const v = Number(e.target.value);
                 pickSteps(v, v === snapSteps(defaultSteps));
@@ -2570,13 +2937,22 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               endAdornment={
                 <InputAdornment position="end" sx={{ mr: 2.5 }}>
                   <HelpTip title={`Transient time resolution. Eddy-current runs default to ${defaultSteps} steps per period: ${RIPPLE_SAMPLES_PER_COGGING_CYCLE} samples per cogging cycle (${coggingCycles} per electrical period) so the reported ripple/cogging is resolved, never below ${EDDY_DEFAULT_STEPS} (BDF2 reads the magnet loss about −4 % at 36 steps, −1 % at 72); any count in the list is solved exactly as picked. Up to ${stepsMax} the count must be a DIVISOR of ${stepsMax} — the slip-ring nodes per electrical period for this machine — so the rotor lands on whole mesh nodes. ABOVE ${stepsMax} the solver raises the slip-ring density to match the request exactly (needed to resolve a PWM carrier); the band mesh is then denser and the run slower.`} />
+=======
+              onChange={e => setSteps(Number(e.target.value))}
+              endAdornment={
+                <InputAdornment position="end" sx={{ mr: 2.5 }}>
+                  <HelpTip title={`Transient time resolution. Up to ${stepsMax} the count must be a DIVISOR of ${stepsMax} — the slip-ring nodes per electrical period for this machine — so the rotor lands on whole mesh nodes. ABOVE ${stepsMax} the solver raises the slip-ring density to match the request exactly (needed to resolve a PWM carrier); the band mesh is then denser and the run slower.`} />
+>>>>>>> Stashed changes
                 </InputAdornment>
               }
             >
               {stepsOptions.map(v => (
                 <MenuItem key={v} value={v}>
                   {v}{v > stepsMax ? '  · raises the slip ring' : ''}
+<<<<<<< Updated upstream
                   {v === snapSteps(defaultSteps) ? '  · default' : ''}
+=======
+>>>>>>> Stashed changes
                 </MenuItem>
               ))}
             </Select>
@@ -2660,7 +3036,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                 if (L > 0 && R > 0 && frequency > 0)
                   per = Math.min(12, Math.max(2, Math.ceil(3 * (L / R) * frequency)));
               } catch { /* no history → the static default */ }
+<<<<<<< Updated upstream
               const carriers = Math.max(1, Math.round(ctrlFsw / Math.max(frequency, 1e-9)));
+=======
+              const carriers = Math.max(1, Math.round(fSwitch / Math.max(frequency, 1e-9)));
+>>>>>>> Stashed changes
               if (steps / carriers >= 16) return per * Math.max(2, steps);
               let coarse = 1;
               for (let d = 1; d <= steps; d++) if (steps % d === 0 && d <= 40) coarse = d;
@@ -2733,6 +3113,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               </Typography>
             </Tooltip>
           )}
+<<<<<<< Updated upstream
           {/* ── The EM<->thermal orchestrator, on or off ────────────────────
               User 2026-09-08: "не надо всё смешивать, нужен оркестратор" and
               "чтобы можно было его включать и отключать".  One switch, one
@@ -2851,6 +3232,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               </Select>
             </FormControl>
           )}
+=======
+>>>>>>> Stashed changes
           {simBusy ? (
             <Button
               fullWidth
@@ -2896,6 +3279,7 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               {fitMsg}
             </Typography>
           )}
+<<<<<<< Updated upstream
           {/* WHY the run did not happen — one line, right under the button that
               was pressed.  The whole sentence is the tooltip (UI rule: one short
               line + tooltip, never a wall of text in the rail). */}
@@ -2911,6 +3295,8 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
               </Typography>
             </Tooltip>
           )}
+=======
+>>>>>>> Stashed changes
           {emptyStoreDuty && (
             <Typography component="div" sx={{ fontSize: 11, color: '#fbbf24', textAlign: 'center', mt: 0.75 }}
               title="This browser holds no panel settings (a reset profile or a new browser), so the fields show factory defaults. Nothing is applied by itself — click to pull the active duty's saved settings and operating point.">
@@ -3239,6 +3625,11 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
           drive={drive}
           vPeak={vPeak}
           vDelta={vDelta}
+<<<<<<< Updated upstream
+=======
+          vBus={vBus}
+          fSwitch={fSwitch}
+>>>>>>> Stashed changes
           iBlock={iBlock}
           waveform={waveform}
           // ── the pack on the DC link ──────────────────────────────────

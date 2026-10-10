@@ -142,8 +142,12 @@ _ANCHOR_GEO: Dict[str, float] = {
     "air_gap": 0.2, "tooth_width": 2.6, "tooth2_width": 1.4, "cut_width": 1.5,
     "insulation_thickness": 0.05, "wire_width": 2.0, "wire_height": 0.5,
     "wire_spacing_x": 0.1, "wire_spacing_y": 0.1, "num_wires_per_slot": 6,
+<<<<<<< Updated upstream
     "wire_split": 1,
     "wire_parallel": 1, "slot_hs": 0.267, "magnet_height": 4.5,
+=======
+    "wire_split": 1, "wire_parallel": 1, "slot_hs": 0.267, "magnet_height": 4.5,
+>>>>>>> Stashed changes
     "rotor_house_height": 0.8, "shaft_height": 2.0, "magnet_fill_down": 0.9,
     "magnet_fill_up": 0.3, "magnet_fill_radius": 0.1, "magnet_up_gap": 0.1,
     "rotor_hole": 0.7, "magnet_down_height": 1.4, "magnet_lamination": 0,

@@ -8,6 +8,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Typography, Button, Tooltip, CircularProgress } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
+<<<<<<< Updated upstream
 import { pageVisible } from '../../lib/pageVisible';
 import {
   ConfirmDialog, TextPromptDialog, type ConfirmState, type TextPromptState,
@@ -29,6 +30,16 @@ import { driveLabel } from '../../lib/dutyRuns';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 import { currentMatJson } from '../../lib/apiAuth';
 import { controllerMirrorApplies, type ControllerMirror } from '../controller/controllerApi';
+=======
+import { TextPromptDialog, type TextPromptState } from './PromptDialogs';
+import { rememberDieSettings } from '../../lib/dieSettings';
+import {
+  clearDutyOp, dutyKey, rememberDutyOp, setActiveDuty, ASSIGN_KEY, MAGNET_KEY,
+} from '../../lib/dutySettings';
+import { driveLabel } from '../../lib/dutyRuns';
+import { assignmentSignature } from '../../lib/dutyMaterials';
+import { currentMatJson } from '../../lib/apiAuth';
+>>>>>>> Stashed changes
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -101,10 +112,13 @@ const ActiveFamilyStrip: React.FC = () => {
   // — offers "save as new configuration" instead of leaving a dead end.
   const [buildClash, setBuildClash] = useState(false);
   const [askCfg, setAskCfg] = useState<TextPromptState | null>(null);
+<<<<<<< Updated upstream
   // The RELEASED-context offers (2026-09-20): a new die's name, a new
   // configuration's name, or the "discard and reload" confirmation.
   const [askDie, setAskDie] = useState<TextPromptState | null>(null);
   const [askReload, setAskReload] = useState<ConfirmState | null>(null);
+=======
+>>>>>>> Stashed changes
   // ticks so the drift marker re-evaluates while the user types in the panel
   const [, setTick] = useState(0);
 
@@ -149,6 +163,7 @@ const ActiveFamilyStrip: React.FC = () => {
     };
   }, []);
 
+<<<<<<< Updated upstream
   // ── FOLLOW a machine loaded in another browser ──────────────────────────────
   // The header already showed the new die; the Electromagnetic panel did not
   // know, because its operating point lives in THIS browser's localStorage and
@@ -200,6 +215,25 @@ const ActiveFamilyStrip: React.FC = () => {
       finally { following.current = false; }
     })();
   }, [ctx]);
+=======
+  if (!ctx?.active) {
+    // Released context (a Compare / My-motors / preset load, or the identity
+    // guard): say so in one line — the live machine is not a catalog die
+    // until ▶ makes one active.  Nothing to show when no die was ever loaded.
+    const rel = (ctx as any)?.released_from as string | undefined;
+    if (!rel || !ctx?.can_write) return null;
+    return (
+      <Box sx={{ px: 1.5, py: 0.25, fontSize: 11, color: '#f59e0b',
+                 borderBottom: '1px solid var(--line)' }}>
+        <Tooltip title={`Context released from '${rel}': ${(ctx as any)?.reason ?? 'a whole-machine load outside the catalog'}. `
+          + 'The machine on screen belongs to no die, so nothing is synced into the catalog. '
+          + 'Press ▶ on a duty in Motors to make a die active again.'}>
+          <span>⚠ no die active — the loaded machine is not a catalog duty (released from {rel}); press ▶ in Motors to load one</span>
+        </Tooltip>
+      </Box>
+    );
+  }
+>>>>>>> Stashed changes
 
   // Has the Simulation panel drifted off the loaded duty's operating point?
   // (`ctx` may still be null or RELEASED here — the released branch renders
@@ -271,6 +305,7 @@ const ActiveFamilyStrip: React.FC = () => {
       // hold an APPLIED summary (a Sweep design, a restored duty) while
       // `sim.lastTransient` still holds an older solve; storing that pair would
       // file one run's charts under another run's numbers.  The summary inside
+<<<<<<< Updated upstream
       // the transient is the one this card was built from, so the two have to
       // be the SAME RUN, not merely describe the same point (2026-09-13: two
       // duties were saved with the numbers of one run and no waveforms at all
@@ -388,6 +423,79 @@ const ActiveFamilyStrip: React.FC = () => {
         } catch { /* settings block optional — the save itself must not fail */ }
         dutyBody.summary = s;
       }
+=======
+      // the transient is the one this card was built from, so the two agreeing
+      // on the point they describe is the check.  (`computed_at` lives on the
+      // payload, not on the summary — it cannot serve here.)
+      const lastT = readLS('lastTransient', null) as any;
+      const sameRun = !!(lastT?.summary && s
+        && near(Number(lastT.summary.rpm), Number(s.rpm), 1e-6)
+        && near(Number(lastT.summary.I_phase_rms_A), Number(s.I_phase_rms_A), 1e-6)
+        && near(Number(lastT.summary.gamma_deg), Number(s.gamma_deg), 1e-6)
+        && String(lastT.summary.drive ?? 'current') === drive);
+      const tOfRun = sameRun ? lastT : null;
+      // WYSIWYG save (user's call): if the 3D ×k_flux toggle is ON, the
+      // catalog gets the SAME corrected numbers the screen shows — torque,
+      // power and voltages ×k, efficiency recomputed on the corrected power
+      // (losses stay 2D, same as the display), and the applied k recorded
+      // in the result so the row never hides that it is corrected.
+      const k3d = ((): number | null => {
+        try {
+          return localStorage.getItem('sim.apply3d') === '1' && s?.end3d?.k_flux
+            ? Number(s.end3d.k_flux) : null;
+        } catch { return null; }
+      })();
+      const Tn = Math.abs(Number(s?.T_em_avg_Nm)) * (k3d ?? 1);
+      const PmW = Math.abs(Number(s?.P_mech_W)) * (k3d ?? 1);
+      const dutyBody: any = { name: ctx.duty, mode, from_current: true };
+      if (runMatches) {
+        // The backend routes the snapshot on this: `current` owns the primary,
+        // everything else is stored beside it.
+        dutyBody.drive = drive;
+        // The MATERIAL ASSIGNMENT this run was solved with — the run's own
+        // stamp when it has one (TransientCharts writes `_matSig` on a fresh
+        // solve), the live assignment otherwise.  Stored so a re-assignment
+        // under a saved run can flag it instead of silently changing what its
+        // numbers mean.
+        try {
+          const ms = String(tOfRun?._matSig || assignmentSignature(currentMatJson()) || '');
+          if (ms) dutyBody.assignment_sig = ms;
+        } catch { /* the signature is a staleness hint, never a blocker */ }
+        dutyBody.torque_nm = Tn || undefined;
+        dutyBody.power_kw = PmW / 1000 || undefined;
+        // COMPLETE computed state rides the duty (user: "это всё должно
+        // сохраняться"): the mesh the numbers were solved on + the raw
+        // summary (raw, not the 3D-scaled view — the display toggles
+        // re-derive their corrections from it on load).
+        try {
+          // EVERY panel setting (user: "сохранять всё что можно"): the full
+          // mesh.* and sim.* localStorage state, keyed verbatim so restore is
+          // a plain write-back.  Heavy result caches are excluded — they are
+          // not settings.
+          // runNonce is the RUN TRIGGER, not a setting: saving it and then
+          // writing it back on load made the panel see a changed nonce and
+          // START A SOLVE BY ITSELF (user 2026-08-25: "кто опять включил
+          // расчёт?").  Result caches are excluded for the same "not a
+          // setting" reason.
+          const SKIP = new Set(['sim.lastTransient', 'sim.lastSummary',
+                                'sim.viewSummary', 'sim.runNonce',
+                                // machine-owned, not a panel setting: the DC
+                                // link derives from the battery of whatever
+                                // machine is loaded
+                                'sim.vBus']);
+          const settings: Record<string, unknown> = {};
+          for (let i = 0; i < localStorage.length; i++) {
+            const k = localStorage.key(i)!;
+            if (!k.startsWith('mesh.') && !k.startsWith('sim.')) continue;
+            if (SKIP.has(k)) continue;
+            try { settings[k] = JSON.parse(localStorage.getItem(k)!); }
+            catch { settings[k] = localStorage.getItem(k); }
+          }
+          dutyBody.mesh = settings;
+        } catch { /* settings block optional — the save itself must not fail */ }
+        dutyBody.summary = s;
+      }
+>>>>>>> Stashed changes
       // ── the duty's MATERIALS ────────────────────────────────────────────────
       // A separate dict on the duty entry, NOT part of the mesh/settings block:
       // it is not a panel setting, it is what this duty is made of (user
@@ -413,6 +521,7 @@ const ActiveFamilyStrip: React.FC = () => {
           if (typeof mv === 'string' && mv) dutyBody.materials = { magnet: mv };
         }
       } catch { /* no picks — the machine's materials it is */ }
+<<<<<<< Updated upstream
       // ── the duty's DUTY CYCLE ───────────────────────────────────────────────
       // (2026-09-14)  Sent exactly the way `materials` above is, and for the
       // same reason: it is not a panel setting and not excitation-specific —
@@ -429,6 +538,8 @@ const ActiveFamilyStrip: React.FC = () => {
         dcSent = readDutyCycle(dutyKey(tDie, targetConfig, tDuty));
         if (dcSent) dutyBody.duty_cycle = dcSent;
       } catch { /* no cycle — the continuous point it stays */ }
+=======
+>>>>>>> Stashed changes
       // NOTE for the overlay bookkeeping further down: `mesh` is the ONLY
       // place the snapshot keeps coil temp / drive / voltages, it is written
       // ONLY on the matching-run branch above, and the backend REPLACES it
@@ -449,8 +560,13 @@ const ActiveFamilyStrip: React.FC = () => {
       // A successful save is the strongest possible statement that the panel's
       // settings ARE this die's settings — remember them, so loading any duty
       // of this die later restores the user's own mesh, not a stray snapshot.
+<<<<<<< Updated upstream
       try { rememberDieSettings(tDie); } catch { /* convenience */ }
       const cfgName = (rj && rj.config) ? String(rj.config) : targetConfig;
+=======
+      try { rememberDieSettings(String(ctx.die)); } catch { /* convenience */ }
+      const cfgName = (rj && rj.config) ? String(rj.config) : (ctx.config as string);
+>>>>>>> Stashed changes
       // The duty's SNAPSHOT now states this point, so the local per-duty
       // overlay has nothing left to say — dropping it is what makes a save
       // stick: otherwise the pre-save edit would keep winning on every later
@@ -464,13 +580,19 @@ const ActiveFamilyStrip: React.FC = () => {
       // back to whatever its sibling last left on the panel.
       try {
         if (runMatches) {
+<<<<<<< Updated upstream
           clearDutyOp(dutyKey(tDie, targetConfig, tDuty));
           if (cfgName !== targetConfig) clearDutyOp(dutyKey(tDie, cfgName, tDuty));
+=======
+          clearDutyOp(dutyKey(ctx.die, ctx.config, ctx.duty));
+          if (cfgName !== ctx.config) clearDutyOp(dutyKey(ctx.die, cfgName, ctx.duty));
+>>>>>>> Stashed changes
         }
         // An auto-rename (M1-L200 → M1-L220) moves the duty to a new
         // configuration, and its per-duty memory has to move with it — the
         // point on the panel IS that memory, so re-filing it under the new
         // name is the whole migration.
+<<<<<<< Updated upstream
         if (cfgName !== targetConfig) {
           setActiveDuty(tDie, cfgName, tDuty);
           if (!runMatches) rememberDutyOp(dutyKey(tDie, cfgName, tDuty));
@@ -532,6 +654,15 @@ const ActiveFamilyStrip: React.FC = () => {
           extra += cr.ok ? ' + controller settings' : ' (controller settings NOT saved)';
         }
       } catch { /* the controller mirror is best-effort, never blocks the duty save */ }
+=======
+        if (cfgName !== ctx.config) {
+          setActiveDuty(String(ctx.die), cfgName, String(ctx.duty));
+          if (!runMatches) rememberDutyOp(dutyKey(ctx.die, cfgName, ctx.duty));
+          clearDutyOp(dutyKey(ctx.die, ctx.config, ctx.duty));
+        }
+      } catch { /* memory is a convenience, never a blocker */ }
+      let extra = rj && rj.renamed_to ? ` · renamed to ${rj.renamed_to}` : '';
+>>>>>>> Stashed changes
       // KV as DISPLAYED (user: with the pressed buttons): the summary card
       // publishes its view copy (sim.viewSummary) with the KV button already
       // applied and view_flags saying which convention is on screen.
@@ -545,9 +676,17 @@ const ActiveFamilyStrip: React.FC = () => {
       if (runMatches) {
         const rr = await fetch(`${API}/api/family/duty_result`, {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
+<<<<<<< Updated upstream
           body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
             drive, assignment_sig: dutyBody.assignment_sig,
             result: { efficiency_pct: dutyEfficiencyPct(s, PmW),
+=======
+          body: JSON.stringify({ die: ctx.die, config: cfgName, duty: ctx.duty,
+            drive, assignment_sig: dutyBody.assignment_sig,
+            result: { efficiency_pct: (k3d
+                        ? PmW / (PmW + Number(s.P_loss_total_W))
+                        : Number(s.efficiency)) * 100,
+>>>>>>> Stashed changes
                       ripple_pct: s.T_ripple_pct,
                       v_ll_peak_v: Number(s.V_line_peak_V) * (k3d ?? 1),
                       loss_w: s.P_loss_total_W, mass_kg: s.mass_total_kg,
@@ -585,7 +724,11 @@ const ActiveFamilyStrip: React.FC = () => {
             }
             const pr = await fetch(`${API}/api/family/duty_run`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
+<<<<<<< Updated upstream
               body: JSON.stringify({ die: tDie, config: cfgName, duty: tDuty,
+=======
+              body: JSON.stringify({ die: ctx.die, config: cfgName, duty: ctx.duty,
+>>>>>>> Stashed changes
                 drive, settings: dutyBody.mesh, summary: s,
                 assignment_sig: dutyBody.assignment_sig, payload }),
             });
@@ -597,6 +740,7 @@ const ActiveFamilyStrip: React.FC = () => {
           } catch (pe: any) {
             extra += ` (waveforms NOT stored: ${pe?.message ?? pe})`;
           }
+<<<<<<< Updated upstream
         } else {
           // SAY IT.  A save that files the numbers and drops the charts used to
           // look exactly like a complete one, and the report's torque / phase
@@ -606,6 +750,8 @@ const ActiveFamilyStrip: React.FC = () => {
           // worth one line on screen.
           extra += ' (waveforms NOT stored — this run\'s transient is neither in '
                  + 'this browser nor the backend\'s last run; press Run, then save again)';
+=======
+>>>>>>> Stashed changes
         }
       } else {
         extra += ' (no matching run to record — Run, then save again)';
@@ -621,7 +767,11 @@ const ActiveFamilyStrip: React.FC = () => {
             ? ` (${driveLabel(drive)} run stored — now this duty's primary)`
             : ` (${driveLabel(drive)} run stored; primary sine result kept)`)
         : '';
+<<<<<<< Updated upstream
       setMsg(`✓ saved to ${tDie} / ${cfgName} / ${tDuty}${extra}${where}`);
+=======
+      setMsg(`✓ saved to ${ctx.duty}${extra}${where}`);
+>>>>>>> Stashed changes
       setBuildClash(false);
       window.dispatchEvent(new CustomEvent('family-changed'));
     } catch (e: any) {
@@ -640,16 +790,22 @@ const ActiveFamilyStrip: React.FC = () => {
 
   /** Save the ON-SCREEN build as a NEW configuration of the same die, then
    *  put this duty into it — the escape hatch from a build clash. */
+<<<<<<< Updated upstream
   const saveAsNewConfig = async (name: string, target?: { die: string; duty: string }) => {
     const die = String(target?.die || ctx?.die || '');
     const duty = String(target?.duty || ctx?.duty || '');
     if (!die || !duty) return;
+=======
+  const saveAsNewConfig = async (name: string) => {
+    if (!ctx.die || !ctx.duty) return;
+>>>>>>> Stashed changes
     setBusy(true); setMsg(null);
     try {
       // A fresh configuration has NO stored build, so the duty save below
       // DEFINES it from the live machine (family.py's `_defined_build` path).
       const r = await fetch(`${API}/api/family/config`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
+<<<<<<< Updated upstream
         body: JSON.stringify({ die, name }),
       });
       if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
@@ -670,10 +826,22 @@ const ActiveFamilyStrip: React.FC = () => {
       if (!activated.ok) {
         throw new Error((await activated.json()).detail ?? `HTTP ${activated.status}`);
       }
+=======
+        body: JSON.stringify({ die: ctx.die, name }),
+      });
+      if (!r.ok) throw new Error((await r.json()).detail ?? `HTTP ${r.status}`);
+      const rj = await r.json().catch(() => ({} as any));
+      const created = String(rj?.name || name);
+      await fetch(`${API}/api/family/activate`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ die: ctx.die, config: created, duty: ctx.duty }),
+      });
+>>>>>>> Stashed changes
       setBuildClash(false);
       // The duty moved to a new configuration: its per-duty operating-point
       // memory has to follow, or the panel keeps filing edits under the
       // configuration the duty no longer lives in.
+<<<<<<< Updated upstream
       try { setActiveDuty(die, created, duty); }
       catch { /* memory is a convenience, never a blocker */ }
       window.dispatchEvent(new CustomEvent('family-changed'));
@@ -682,6 +850,15 @@ const ActiveFamilyStrip: React.FC = () => {
       // insufficient here because this function still closes over the old ctx.
       setCtx((c) => (c ? { ...c, active: true, die, config: created, duty } : c));
       await save({ die, config: created, duty });
+=======
+      try { setActiveDuty(String(ctx.die), created, String(ctx.duty)); }
+      catch { /* memory is a convenience, never a blocker */ }
+      window.dispatchEvent(new CustomEvent('family-changed'));
+      setMsg(`✓ configuration '${created}' created — saving the duty…`);
+      // Re-read the context (the strip's own poller is async) and save.
+      setCtx((c) => (c ? { ...c, config: created } : c));
+      setTimeout(() => { void save(); }, 150);
+>>>>>>> Stashed changes
     } catch (e: any) { setMsg(`✗ ${e?.message ?? e}`); }
     setBusy(false);
   };

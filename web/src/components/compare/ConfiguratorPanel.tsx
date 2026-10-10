@@ -38,11 +38,14 @@ import PerformanceCharts from './PerformanceCharts';
 import ConfiguratorThermal from './ConfiguratorThermal';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
+<<<<<<< Updated upstream
 import { useWireStock } from '../materials/useWireStock';
 import { stockHint } from '../../lib/wireStock';
 import { useDieContext } from '../common/useDieContext';
 import { getResolvedPoint } from '../controller/controllerApi';
 import { getDraft, patchDraft, draftIdFromUrl, type AgentDraft } from '../../lib/agentDrafts';
+=======
+>>>>>>> Stashed changes
 
 const baseKnobs = (p: Passport): Knobs => ({
   N: p.N0, L_mm: p.L0_mm, wireH_mm: p.wireH0_mm, nP: p.nP0, I_A: p.I0_A, rpm: p.rpm0,
@@ -273,12 +276,15 @@ const ConfiguratorPanel: React.FC = () => {
       const live = {
         L_mm: Number(g.motor_length),
         N: Number(g.num_wires_per_slot),
+<<<<<<< Updated upstream
         // STRIPS PER WIRE ROW of the loaded build.  Not a slider: the strips
         // are SERIES turns, so a machine split S ways has S× the turns of the
         // same rows unsplit, and a reference passport measured UNSPLIT (they
         // are matched by cross-section, not by build) would otherwise be scaled
         // with a turns ratio short by exactly S.
         split: Math.max(1, Math.round(Number(g.wire_split) || 1)),
+=======
+>>>>>>> Stashed changes
         wireH_mm: Number(g.wire_height),
         nP: (() => {
           const mm = conn.match(/(\d+)\s*P/i);          // "2S-2P" -> 2, "4P" -> 4
@@ -287,14 +293,21 @@ const ConfiguratorPanel: React.FC = () => {
         I_A: readLS('current', NaN),
         rpm: readLS('rpm', NaN),
       };
+<<<<<<< Updated upstream
       const sig = `${live.L_mm}|${live.N}|${live.split}|${live.wireH_mm}|${live.nP}|${live.I_A}|${live.rpm}`;
+=======
+      const sig = `${live.L_mm}|${live.N}|${live.wireH_mm}|${live.nP}|${live.I_A}|${live.rpm}`;
+>>>>>>> Stashed changes
       if (liveSigRef.current !== sig
           && Number.isFinite(live.L_mm) && Number.isFinite(live.N)) {
         liveSigRef.current = sig;
         const pp = (m ?? allRefs.find((r) => r.id === refId) ?? allRefs[0])?.passport;
         const adopt = (k0: Knobs): Knobs => ({
           N: live.N || k0.N,
+<<<<<<< Updated upstream
           split: live.split,
+=======
+>>>>>>> Stashed changes
           L_mm: live.L_mm || k0.L_mm,
           wireH_mm: live.wireH_mm || k0.wireH_mm,
           nP: live.nP || k0.nP,
@@ -332,6 +345,7 @@ const ConfiguratorPanel: React.FC = () => {
   });
   // remember the user's tuning across reloads
   useEffect(() => { try { localStorage.setItem(KNOBS_LS, JSON.stringify(knobs)); } catch { /* ignore */ } }, [knobs]);
+<<<<<<< Updated upstream
   // The carrier knob below defaults to the CONTROLLER's resolved carrier
   // (owner-approved: PWM lives in the Controller tab now), not the passport's
   // own reference carrier — read-only here, same GET /api/controller/point
@@ -350,6 +364,8 @@ const ConfiguratorPanel: React.FC = () => {
     })();
     return () => { alive = false; };
   }, [dieCtx.die, dieCtx.config]);
+=======
+>>>>>>> Stashed changes
   // Slider ranges FOLLOW THE MACHINE (user 2026-08-25: loading the 850 N·m
   // motor left the 40 mm ranges — its 205 mm stack and 400 A sat outside the
   // sliders and the fields showed the previous motor's values).  Derived from
@@ -403,6 +419,7 @@ const ConfiguratorPanel: React.FC = () => {
       setRanges(rangesForRef(p0));
     }
   }, [refId, ref]); // eslint-disable-line react-hooks/exhaustive-deps
+<<<<<<< Updated upstream
 
   // ── MCP Stage 3: an AGENT DRAFT as a simplified machine ──────────────────
   // …/?tab=configure&design=d-… (or Motors → Agent drafts → Configure) shows a
@@ -467,6 +484,8 @@ const ConfiguratorPanel: React.FC = () => {
       setDraft(d); setDraftMsg('Saved to the draft (its FEM results were cleared — simulate again).');
     } catch (e) { setDraftMsg(e instanceof Error ? e.message : String(e)); }
   };
+=======
+>>>>>>> Stashed changes
 
   // battery the user runs the motor from (persisted; snapshotted into each saved config)
   const [battery, setBattery] = useState<Battery>(() => {
@@ -520,6 +539,7 @@ const ConfiguratorPanel: React.FC = () => {
   // a knob — the N slider stays PHYSICAL wires per slot, which is what the
   // slot-fit limiter below counts.
   const kPar = Math.max(1, Math.round(p.wire_parallel0 ?? 1));
+<<<<<<< Updated upstream
   // STRIPS PER WIRE ROW of the machine being configured — also a property of
   // the BUILD, and also not a knob.  They are SERIES turns, so they multiply
   // the turn count the same way the strands in hand divide it; the N slider
@@ -530,6 +550,8 @@ const ConfiguratorPanel: React.FC = () => {
                   kSplit > 1 ? `${kSplit} strips in series` : ''].filter(Boolean);
     return tags.length ? `Wire rows / slot (${tags.join(', ')})` : 'Turns / slot';
   })();
+=======
+>>>>>>> Stashed changes
   // Current density in the conductor (A/mm², RMS) = strand current / wire area;
   // strand current = phase current / (parallel paths × strands in hand), wire
   // area = width × height.
@@ -567,11 +589,14 @@ const ConfiguratorPanel: React.FC = () => {
   const turnsMax  = Math.max(3, Math.min(30, Math.floor(availStack_mm / rowPitch_mm)));
   const wireMax   = Math.max(0.3, Math.min(2.5, Math.round(Math.floor((availStack_mm / knobs.N - ref.fit.wireSpacingY_mm) / 0.1 + 1e-9) * 0.1 * 10) / 10));
   const atLimit   = knobs.N >= turnsMax || knobs.wireH_mm >= wireMax - 1e-9;
+<<<<<<< Updated upstream
   // Passive stock hint (owner, 2026-09-20): does not restrict the slider —
   // only names the nearest size actually on the shelf. wire_width is FIXED in
   // this tuner (see the module header), so only the thickness knob moves.
   const { data: wireStockData } = useWireStock();
   const wireStockNote = stockHint(knobs.wireH_mm, ref.fit.wireWidth_mm, wireStockData?.available_sizes ?? []);
+=======
+>>>>>>> Stashed changes
   // The two winding sliders STOP at the slot (user 2026-09-02: the stack gauge
   // is gone — the cross-section shows the stack, the slider just must not let
   // the wire leave the stator).  A typed value clamps to the same cap; only a
@@ -646,6 +671,7 @@ const ConfiguratorPanel: React.FC = () => {
 
   return (
     <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', bgcolor: 'var(--panel-2)', overflow: 'auto' }}>
+<<<<<<< Updated upstream
       {(draft || draftMsg) && (
         <Alert severity={draft ? 'info' : 'warning'} sx={{ m: 1, fontSize: 12 }}
           onClose={() => { setDraft(null); setDraftMsg(null); }}
@@ -667,6 +693,8 @@ const ConfiguratorPanel: React.FC = () => {
           {draftMsg && <Box sx={{ mt: draft ? 0.5 : 0 }}>{draftMsg}</Box>}
         </Alert>
       )}
+=======
+>>>>>>> Stashed changes
       {/* Header — NO reference picker (user 2026-08-25 "выкинь это меню"):
           the Configurator always mirrors the LOADED motor; the name shown is
           the matched passport's. */}
@@ -698,7 +726,11 @@ const ConfiguratorPanel: React.FC = () => {
 
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mb: 0.75 }}>Build</Typography>
           <KnobSlider label="Stack length" unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0} onChange={set('L_mm')} onRangeChange={isAdmin ? setRange('L_mm') : undefined} />
+<<<<<<< Updated upstream
           <KnobSlider label={rowsLabel} value={knobs.N} base={p.N0} min={ranges.N.min} max={turnsSliderMax} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={overFit || badTurns} />
+=======
+          <KnobSlider label={kPar > 1 ? `Wires / slot (${kPar} in hand)` : 'Turns / slot'} value={knobs.N} base={p.N0} min={ranges.N.min} max={turnsSliderMax} step={1} d={0} onChange={set('N')} onRangeChange={isAdmin ? setRange('N') : undefined} warn={overFit || badTurns} />
+>>>>>>> Stashed changes
           <KnobSlider label="Wire thickness" unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={wireSliderMax} step={0.1} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={overFit} />
           {overFit ? (
             <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 1 }}
@@ -715,11 +747,14 @@ const ConfiguratorPanel: React.FC = () => {
               title={`${knobs.N} rows × (${fmt(knobs.wireH_mm, 2)} wire + ${fmt(ref.fit.wireSpacingY_mm, 2)} gap) = ${fmt(stackHeight_mm, 1)} mm of ${fmt(availStack_mm, 1)} mm usable slot height — the sliders stop here so the winding stays inside the stator.`}>
               at the slot limit
             </Typography>
+<<<<<<< Updated upstream
           ) : wireStockNote ? (
             <Typography sx={{ fontSize: 11, color: '#f59e0b', mt: -0.5, mb: 1 }}
               title="Compared against the flat wire physically on the shelf (Materials tab → Flat wire in stock). Not enforced yet.">
               {wireStockNote}
             </Typography>
+=======
+>>>>>>> Stashed changes
           ) : null}
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5, mb: 1 }}>
@@ -758,6 +793,7 @@ const ConfiguratorPanel: React.FC = () => {
                   <ToggleButton value="pwm" title={`Add the measured carrier deltas (${p.pwm.controller_class}, measured at ${p.pwm.f_sw_Hz.map((x) => (x / 1000).toFixed(0)).join(' / ')} kHz on a ${p.pwm.v_bus_V.toFixed(0)} V bus)`}
                     sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>PWM</ToggleButton>
                 </ToggleButtonGroup>
+<<<<<<< Updated upstream
                 {knobs.pwm && (() => {
                   const carrierOptions = p.pwm!.f_sw_class_Hz ?? p.pwm!.f_sw_Hz;
                   // Default = the Controller's resolved carrier, snapped to the
@@ -779,6 +815,16 @@ const ConfiguratorPanel: React.FC = () => {
                       title={`${p.pwm!.controller_class} — the settings this power stage offers. Carriers outside the measured pair are extrapolated and flagged.`}
                       style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px' }}>
                       {carrierOptions.map((f) => (
+=======
+                {knobs.pwm && (
+                  <>
+                    <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>carrier</Box>
+                    <select value={String(knobs.f_sw_Hz ?? p.pwm.f_sw_ref_Hz)}
+                      onChange={(e) => setKnobs((s) => ({ ...s, f_sw_Hz: Number(e.target.value) }))}
+                      title={`${p.pwm.controller_class} — the settings this power stage offers. Carriers outside the measured pair are extrapolated and flagged.`}
+                      style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px' }}>
+                      {(p.pwm.f_sw_class_Hz ?? p.pwm.f_sw_Hz).map((f) => (
+>>>>>>> Stashed changes
                         <option key={f} value={f} style={{ color: '#000' }}>
                           {(f / 1000).toFixed(0)} kHz{p.pwm!.f_sw_Hz.includes(f) ? ' ·measured' : ''}
                         </option>
@@ -786,11 +832,16 @@ const ConfiguratorPanel: React.FC = () => {
                     </select>
                     <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>bus</Box>
                     <input type="number" step={1}
+<<<<<<< Updated upstream
                       value={String(knobs.v_bus_V ?? p.pwm!.v_bus_V)}
+=======
+                      value={String(knobs.v_bus_V ?? p.pwm.v_bus_V)}
+>>>>>>> Stashed changes
                       onChange={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v) && v > 0) setKnobs((s) => ({ ...s, v_bus_V: v })); }}
                       title="DC link the inverter switches against — the ripple current is proportional to it. Defaults to the pack the block was measured on."
                       style={{ width: 62, background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', textAlign: 'right', padding: '1px 4px' }} />
                     <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>V</Box>
+<<<<<<< Updated upstream
                     {usingDefault && (
                       <Box component="span" sx={{ fontSize: 10.5, color: 'var(--text-4)' }}
                         title="Defaults to the Controller tab's resolved carrier (GET /api/controller/point); pick another passport carrier above to override.">
@@ -800,6 +851,10 @@ const ConfiguratorPanel: React.FC = () => {
                   </>
                   );
                 })()}
+=======
+                  </>
+                )}
+>>>>>>> Stashed changes
               </Box>
               {knobs.pwm && result.pwm_fidelity && (
                 <Typography sx={{ fontSize: 10.5, color: result.pwm_extrapolated ? '#fbbf24' : 'var(--text-4)', mb: 0.5 }}
@@ -826,7 +881,11 @@ const ConfiguratorPanel: React.FC = () => {
               1 torque · power · mass · efficiency · ripple · densities
               2 total loss · iron · copper · magnet · stator/rotor heat · loss density
               3 voltages + current density (unchanged)
+<<<<<<< Updated upstream
               4 phase section · wire coating · lead cable · R phase · R line-line
+=======
+              4 phase section · slot fill · lead cable · R phase · R line-line
+>>>>>>> Stashed changes
               5 Ld · Lq · ψ_PM · Lq/Ld
               6 KV · Kt · Km · Km/mass
               7 demag koef · saturation koef · total koef */}
@@ -903,12 +962,20 @@ const ConfiguratorPanel: React.FC = () => {
                 I_phase / A_phase is exactly the density above it. */}
             <MetricTile label="Phase section" value={A_phase_mm2} unit="mm²" d={2}
               base={baseA_phase} goodHi />
+<<<<<<< Updated upstream
             {/* Wire coating (user 2026-08-30) — measured copper over the measured
+=======
+            {/* Slot fill (user 2026-08-30) — measured copper over the measured
+>>>>>>> Stashed changes
                 winding window; turns and wire height move it, so the tuner can
                 say when a variant stops being windable.  Absolute thresholds:
                 hand-wound rectangular wire lives at ~45-60 %. */}
             {result.slot_fill_pct != null && (
+<<<<<<< Updated upstream
               <MetricTile label="Fill factor" value={result.slot_fill_pct} unit="%" d={1}
+=======
+              <MetricTile label="Slot fill" value={result.slot_fill_pct} unit="%" d={1}
+>>>>>>> Stashed changes
                 base={p.slot_fill0_pct ?? result.slot_fill_pct}
                 absLevel={result.slot_fill_pct <= 60 ? 'ok'
                           : result.slot_fill_pct <= 75 ? 'warn' : 'bad'} />
@@ -986,7 +1053,11 @@ const ConfiguratorPanel: React.FC = () => {
               k_end3d field remains in ScaledResult for admin tooling, and
               future test-bench correction factors will ride the same way. */}
 
+<<<<<<< Updated upstream
           {/* The "wire coating (winding stack)" gauge was removed (user
+=======
+          {/* The "slot fill (winding stack)" gauge was removed (user
+>>>>>>> Stashed changes
               2026-09-02): the cross-section below shows the stack, the two
               winding sliders stop at the slot, and an over-limit design says
               "wire outside the stator" under them. */}

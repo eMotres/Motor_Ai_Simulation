@@ -15,7 +15,10 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Box, Typography, Button } from '@mui/material';
 import FamilyCatalog from './FamilyCatalog';
 import MyMotorsPanel from './MyMotorsPanel';
+<<<<<<< Updated upstream
 import AgentWorkPanel from './AgentWorkPanel';
+=======
+>>>>>>> Stashed changes
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
@@ -47,11 +50,21 @@ const MotorsCatalog: React.FC = () => {
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — shown instead of the vendor's "no dies yet".
   const [note, setNote] = useState<string | null>(null);
+<<<<<<< Updated upstream
   // ONE request for this component and the N Ø sections it mounts
   // (lib/familyTree — 2026-09-13, the tab took seconds because each section
   // fetched the 900 KB tree for itself).  `fresh` after a mutation.
   const load = (fresh = false) =>
     fetchFamilyTree({ fresh })
+=======
+  const load = () =>
+    // no-store: the tree is per-account and changes the moment the vendor
+    // grants a motor — a cached copy is a user who still sees nothing.
+    fetch(`${API}/api/family/tree`, { cache: 'no-store' }).then(r => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.json();
+    })
+>>>>>>> Stashed changes
       .then(t => {
         setCanWrite(t.can_write === true);
         setNote(typeof t.note === 'string' ? t.note : null);
@@ -60,17 +73,26 @@ const MotorsCatalog: React.FC = () => {
             .map(d => Number(d.stator_diameter)).filter(Number.isFinite),
         )).sort((a, b) => a - b));
       })
+<<<<<<< Updated upstream
       .catch((e: { status?: number }) => {
         setDiams([]);
         // 401 = this server keeps nothing public (PUBLIC_EXHIBIT=0) and nobody
         // is signed in.  Say so and STOP: retrying every 3 s cannot mint a
         // session, it just hammers the door while the user reads the message.
         if (e?.status === 401) { setCanWrite(false); setNote(SIGN_IN_NOTE); return; }
+=======
+      .catch(() => {
+>>>>>>> Stashed changes
         // Backend away (a restart window): retry instead of freezing a wrong
         // answer — a failed first load left an ADMIN's catalog stripped of
         // its lock/duplicate buttons until a manual F5 (measured live
         // 2026-08-25: "не вижу замочков").
+<<<<<<< Updated upstream
         setTimeout(() => { void load(true); }, 3000);
+=======
+        setDiams([]);
+        setTimeout(() => { void load(); }, 3000);
+>>>>>>> Stashed changes
       });
   useEffect(() => {
     load();
@@ -123,9 +145,12 @@ const MotorsCatalog: React.FC = () => {
       {/* The signed-in user's private space — above the shared catalog.
           Renders nothing while empty. */}
       <MyMotorsPanel />
+<<<<<<< Updated upstream
       {/* MCP Stage 3: drafts the user's AI agents created + the job queue
           (agent runs badged, Stop).  Renders nothing while empty. */}
       <AgentWorkPanel />
+=======
+>>>>>>> Stashed changes
 
       {diams.length === 0 && (
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>

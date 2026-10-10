@@ -326,6 +326,7 @@ STEEL = "B15AHV950M"
 # failure mode: the user's steel in the field, somebody else's loss surface in
 # P_fe, measured +90 % on these very cases).
 OVERRIDE = {"assignment": {"magnet": MAGNET,
+<<<<<<< Updated upstream
                            "stator_core": STEEL, "rotor_core": STEEL,
                            # The SHAFT too (2026-09-08): it was the one
                            # conducting part still read off the sandbox copy of
@@ -341,6 +342,9 @@ OVERRIDE = {"assignment": {"magnet": MAGNET,
                            # identical (60.0263°).  The explicit value outranks
                            # the config by design, like the steel and the magnet.
                            "shaft": "Aluminium_6061"},
+=======
+                           "stator_core": STEEL, "rotor_core": STEEL},
+>>>>>>> Stashed changes
             "materials": {},
             # Per-part accounting states (2026-09-01) ride the same channel
             # and the LIVE config carries the user's (frameless shaft =

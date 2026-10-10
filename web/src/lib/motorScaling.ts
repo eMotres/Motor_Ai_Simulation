@@ -27,6 +27,7 @@ export interface Passport {
   rpm0: number;        // base speed
   nP0: number;         // base parallel paths (4S→1, 2P·2S→2, 4P→4); 4 coils/phase
   /** STRANDS IN HAND the base point was measured at (geometry.wire_parallel,
+<<<<<<< Updated upstream
    *  ABSENT = 1).  `N0` and the `N` knob are PHYSICAL wire ROWS per slot — that
    *  is what the wire coating and the copper mass are built on — so the SERIES
    *  turns are (N/wire_parallel0)·wire_split0.  The strands are fixed by the
@@ -45,6 +46,16 @@ export interface Passport {
    *  then the turns ratio is off by S.  `Knobs.split` is that machine's own
    *  value; see `turnsFactor`. */
   wire_split0?: number;
+=======
+   *  absent = 1).  `N0` and the `N` knob are PHYSICAL wires per slot — that is
+   *  what the slot fill and the copper mass are built on — so the SERIES turns
+   *  are N/wire_parallel0.  The strands are fixed by the build (they are not a
+   *  knob), so every turns ratio below is the same number either way:
+   *  (N/k)/(N0/k) = N/N0.  Recorded so a 24-turn coil and 24 wires wound
+   *  2-in-hand — the same slot, a factor 2 apart in EMF and 4 in R — can be
+   *  told apart in the passport instead of both reading "N0 = 24". */
+  wire_parallel0?: number;
+>>>>>>> Stashed changes
   T0_Nm: number;       // base torque at (I0, rpm0)
   Vemf0_peak_V: number;// base back-EMF peak at (N0, L0, rpm0)   (no-load terminal V)
   Vload0_peak_V?: number; // base LOADED terminal-V peak at (I0, rpm0); enables the reactive-drop model
@@ -191,6 +202,7 @@ export interface Knobs {
   nP: number;      // parallel paths (winding connection: 4S→1, 2P·2S→2, 4P→4)
   I_A: number;     // phase current (rms)
   rpm: number;     // speed
+<<<<<<< Updated upstream
   /** STRIPS PER WIRE ROW of the machine being configured (geometry.wire_split).
    *  Not a slider — it comes from the loaded build, because the strips are
    *  SERIES turns and a machine split S ways has S× the turns of the same rows
@@ -198,6 +210,8 @@ export interface Knobs {
    *  which makes the turns ratio the plain row ratio — the behaviour every
    *  caller had before the split existed. */
   split?: number;
+=======
+>>>>>>> Stashed changes
   // ── EXCITATION (optional; absent = the sine numbers, exactly as before) ──
   /** true = add the passport's MEASURED PWM deltas to the losses and the
    *  torque ripple.  Ignored when the passport carries no `pwm` block. */
@@ -257,7 +271,11 @@ export interface ScaledResult {
   /** Br retention [%] at this operating point, interpolated from the measured
    *  demag curve (null = passport has no current sweep). */
   demag_keep_pct: number | null;
+<<<<<<< Updated upstream
   /** Wire coating [%] of the tuned winding: measured base copper × turns × wire
+=======
+  /** Slot fill [%] of the tuned winding: measured base copper × turns × wire
+>>>>>>> Stashed changes
    *  height over the measured window (null on passports without the geometry). */
   slot_fill_pct: number | null;
   /** Torque constant [N·m/A rms] at the operating point — measured T over the
@@ -437,6 +455,7 @@ function pwmDeltas(p: Passport, k: Knobs, f: {
   };
 }
 
+<<<<<<< Updated upstream
 /** Turns ratio — ELECTRICAL turns over the passport's, never rows over rows.
  *
  *  turns = (rows / strands in hand) × strips per row, because a `wire_split`
@@ -462,6 +481,18 @@ export function turnsFactor(p: Passport, k: Knobs): number {
  *  `poles` (optional) enables ψ_PM — the electrical frequency needs it. */
 export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult {
   const fN = turnsFactor(p, k);
+=======
+/** Instant analytical scaling of a passport to a new (length, turns, wire, I, rpm).
+ *  `poles` (optional) enables ψ_PM — the electrical frequency needs it. */
+export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult {
+  // Turns ratio — EFFECTIVE turns, not wires: with k strands in hand the coil
+  // has N/k series turns.  k is fixed by the build (it is not a knob), so it
+  // cancels; written out so the definition is the physical one and a future
+  // wire_parallel knob only has to change `kPar`.
+  const kPar0 = Math.max(1, Math.round(p.wire_parallel0 ?? 1));
+  const kPar  = kPar0;
+  const fN = p.N0 ? (k.N / kPar) / (p.N0 / kPar0) : 1;
+>>>>>>> Stashed changes
   const fL = p.L0_mm ? k.L_mm / p.L0_mm : 1;
   const fH = p.wireH0_mm ? k.wireH_mm / p.wireH0_mm : 1;
   const fI = p.I0_A ? k.I_A / p.I0_A : 1;
@@ -484,7 +515,11 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
       // Entries, not key round-trips: the backend writes '35.0' and
       // String(Number('35.0')) is '35' — the lookup missed its own key and a
       // NaN k poisoned torque/EMF/KV across the card (measured live
+<<<<<<< Updated upstream
       // 2026-08-25: "a pile of empty cells").
+=======
+      // 2026-08-25: "куча пустых клеток").
+>>>>>>> Stashed changes
       const pts = Object.entries(m)
         .map(([kk, vv]) => [Number(kk), Number(vv)] as [number, number])
         .filter(([x, y]) => Number.isFinite(x) && Number.isFinite(y))
@@ -704,7 +739,11 @@ export function maxCurrent(p: Passport, k: Knobs): number {
         break;
       }
     }
+<<<<<<< Updated upstream
     const fN = turnsFactor(p, k);
+=======
+    const fN = p.N0 ? k.N / p.N0 : 1;
+>>>>>>> Stashed changes
     const fConn = p.nP0 && k.nP ? p.nP0 / k.nP : 1;
     return Math.min(wire, Idm / (fN * fConn));
   }

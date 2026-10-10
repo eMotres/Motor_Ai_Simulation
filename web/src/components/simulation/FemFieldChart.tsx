@@ -377,10 +377,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // back to).  A hit paints it, a miss leaves the placeholder; no solve is
     // ever started here.  The multi-frame views do the same with their own
     // snapshot probes below.
+<<<<<<< Updated upstream
     // …but only once the request would carry the page's material override —
     // before that the probe's key cannot match the solve's (see
     // useMatOverrideReady); the effect re-runs when `matReady` flips.
     if (matReady && !EDDY_MODES.has(mode) && mode !== 'Loss' && mode !== 'Demag') fetchFem(true);
+=======
+    if (!EDDY_MODES.has(mode) && mode !== 'Temp' && mode !== 'Loss' && mode !== 'Demag') fetchFem(true);
+>>>>>>> Stashed changes
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gamma_deg, rotor_angle_deg, I_phase_rms, payloadOverride, geoSig, matReady]);
 
@@ -429,9 +433,16 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     const onDone = () => {
       if (payloadOverride) return;
       // Exactly what the Re-solve button does for the view that is open —
+<<<<<<< Updated upstream
       // J⟳ / Loss included (user 2026-09-04: "field not solved" was still on
       // screen after Run because only the A_z view auto-fetched).
       if (isEddy) fetchEddy(true);
+=======
+      // J⟳ / Loss / Temp included (user 2026-09-04: "field not solved" was
+      // still on screen after Run because only the A_z view auto-fetched).
+      if (isThermal) fetchThermal();
+      else if (isEddy) fetchEddy(true);
+>>>>>>> Stashed changes
       else if (isLoss) { setLossSnap(null); setLossProbed(false); fetchFem(); }
       else fetchFem();
     };
@@ -606,6 +617,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // First time a J⟳ view is shown: ask the run's snapshot (free, no solve).
   // A miss shows the placeholder — the 10-frame transient behind this view is
   // a Re-solve click, not a side effect of selecting the toggle.
+<<<<<<< Updated upstream
   // (`matReady` gates both probes for the same reason as the single-frame one
   // above: a probe without the override keys a different machine and its miss
   // is then remembered as "the run has nothing" — wrongly.)
@@ -615,6 +627,14 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isEddy, eddyPayload, eddyLoading, eddyErr, eddyProbed, matReady]);
+=======
+  useEffect(() => {
+    if (isEddy && !eddyPayload && !eddyLoading && !eddyErr && !eddyProbed) {
+      fetchEddy(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEddy, eddyPayload, eddyLoading, eddyErr, eddyProbed]);
+>>>>>>> Stashed changes
 
   // Loss AND Demag: probe the run's snapshot once per operating point (no
   // solve) — both maps only mean anything as the run's own cycle history.
@@ -623,6 +643,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLoss, isDemagV, lossSnap, lossProbed, lossProbing, matReady]);
 
+<<<<<<< Updated upstream
   /* The thermal solve used to live here — its own fetch of
      /api/simulation/physics/thermal_field2d, with the cooling inputs in this
      viewer's toolbar.  It moved to the Thermal tab on 2026-09-07: it is a
@@ -693,6 +714,41 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
        + `${payload.source_label ? ` · ${payload.source_label}` : ''}`
        + `${emOut.scale ? ` — ${emOut.scale.note} · ${emOut.scale.bands} bands` : ''}`)
     : '';
+=======
+  // ── Thermal (Temp view) ───────────────────────────────────────────────────
+  const thermalCurrent = (I_phase_rms !== undefined && I_phase_rms > 0) ? I_phase_rms : 0;
+  const fetchThermal = () => {
+    if (payloadOverride) return;
+    setThermalLoading(true); setThermalErr(null);
+    const comp = JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {}));
+    const qs = new URLSearchParams({
+      cooling_mode:     coolMode,
+      ambient_temp:     String(ambientT),           // air ambient / coolant inlet
+      air_speed_mps:    String(coolMode === 'air' ? airSpeed : 0),
+      fluid:            fluid,
+      fluid_temp_in_c:  String(ambientT),           // liquid inlet = T₀
+      fluid_temp_out_c: String(tOut),               // liquid outlet (= housing); flow derived
+      gamma_deg:        String(gamma_deg),
+      I_phase_rms:      String(thermalCurrent),
+      rpm:              String(readSimSetting('rpm', 0)),
+      mesh_size_mm:     String(readMeshSetting('meshSize', 4.0)),
+      min_size_mm:      String(readMeshSetting('minSize',  0.3)),
+      outer_air_factor: String(readMeshSetting('outerAir', 1.3)),
+      n_sectors:        String(readMeshSetting('nSectors', 1)),
+      component_mesh:   comp,
+    }).toString();
+    fetch(`${API}/api/simulation/physics/thermal_field2d?${qs}`)
+      .then(async r => { if (!r.ok) throw new Error(`HTTP ${r.status}: ${await r.text()}`); return r.json(); })
+      .then((d: FemPayload) => { setThermalPayload(tileFullRing(d)); setThermalLoading(false); })
+      .catch(e => { setThermalErr(String(e)); setThermalLoading(false); });
+  };
+  // γ / I / cooling changed → cached thermal solve is stale.
+  useEffect(() => { setThermalPayload(null); setThermalErr(null); },
+    [gamma_deg, I_phase_rms, ambientT, coolMode, airSpeed, fluid, tOut]);
+  // No auto-run here either: the thermal map is an EM field solve plus a
+  // conduction solve (~25 s, more on a big machine), and selecting the Temp
+  // toggle used to start it.  Re-solve runs it.
+>>>>>>> Stashed changes
 
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
@@ -723,6 +779,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                         + 'view has to solve its own 10-frame eddy transient (~25 s). '
                         + 'Turn it on in the Simulation panel to get this instantly.')}
           </Typography>
+<<<<<<< Updated upstream
         ) : undefined}
         /* Nothing solved, nothing running: say so in ONE line and point at the
            button.  This is what the view shows on tab open, on a machine load
@@ -739,6 +796,41 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)',
               cursor: 'help', textAlign: 'center' }}>
               field not solved for this machine — press <b>Re-solve</b> ⓘ
+=======
+          {/* One SHORT visible line (user rule: no walls of text in the web —
+              details live in the tooltip).  Visible: where the picture came
+              from + the operating current.  Hover ⓘ: mesh size, solve time,
+              per-component provenance and the colour-scale semantics. */}
+          <Tooltip placement="bottom-start" title={payload ? (
+              `${payload.n_triangles.toLocaleString()} triangles · ×${payload.symmetry_mult} symmetry`
+              + `${payload.from_transient ? '' : ` · solve ${payload.solve_time_s}s`}`
+              + `${payload.source_label ? ` · ${payload.source_label}` : ''}`
+              + `${fieldView.scale ? ` — ${fieldView.scale.note} · ${fieldView.scale.bands} bands` : ''}`
+            ) : ''}>
+            <Typography sx={{ fontSize: 10, cursor: payload ? 'help' : 'default',
+                              color: payload?.from_transient ? '#38bdf8' : 'var(--text-4)' }}>
+              {payload
+                ? (subHeader
+                     ? subHeader
+                     : `${payload.from_transient
+                            ? ('from last simulation run'
+                               // A relaxed match is the user's MOTOR but not the
+                               // panel's numbers.  That has to be visible, not
+                               // hover-only; the diff itself is in the tooltip.
+                               + ((payload as any).from_transient_relaxed
+                                    ? ' (≠ panel)' : ''))
+                            : 'computed on demand'}`
+                       + `${(isEddy || isLoss || isDemagV) ? ` · @ ${eddyCurrent.toFixed(0)} A` : ''}`
+                       + ' · ⓘ')
+                : busy
+                  ? (isEddy
+                       ? (eddySolving
+                            ? 'No matching simulation run — solving this view on demand…'
+                            : 'Looking for the last simulation run\'s field…')
+                       : isLoss ? 'Checking the last simulation run\'s loss map…'
+                       : 'Solving…')
+                  : 'field not solved for this machine — Re-solve'}
+>>>>>>> Stashed changes
             </Typography>
           </Tooltip>
         ) : null}
@@ -751,6 +843,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                   minWidth: 0, px: 1, border: '1px solid var(--line-soft)' }}>
                 {logLoss ? 'log' : 'lin'}
               </Button>
+<<<<<<< Updated upstream
             )}
             {mode === 'Loss' && (
               <Button size="small" onClick={() => setPerMat(v => !v)}
@@ -789,6 +882,112 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         ) : undefined}
       />
 
+=======
+            </Box>
+          )}
+          {!hideRefresh && (
+            <Button size="small" startIcon={<RefreshIcon fontSize="small"/>}
+              onClick={isThermal ? fetchThermal
+                       // Explicitly (true): this is THE click that is allowed
+                       // to run the 10-frame transient behind the J⟳ view.
+                       : isEddy ? (() => fetchEddy(true))
+                       // Loss: re-check the run's snapshot AND refresh the
+                       // single-frame map it falls back to.
+                       : isLoss ? (() => { setLossSnap(null); setLossProbed(false); fetchFem(); })
+                       : fetchFem}
+              disabled={busy}
+              sx={{ color: '#93c5fd', fontSize: 11, textTransform: 'none' }}>
+              Re-solve
+            </Button>
+          )}
+        </Box>
+      </Box>
+
+      {errMsg && (
+        <Typography sx={{ fontSize: 11, color: '#fca5a5', p: 1,
+          border: '1px solid #7f1d1d', borderRadius: 1 }}>
+          {errMsg}
+        </Typography>
+      )}
+
+      <Box sx={{ display: 'grid',
+        gridTemplateColumns: 'minmax(0, 1fr) auto',
+        gap: 1, height: 460 }}>
+        {/* Canvas */}
+        <Box sx={{ position: 'relative', border: '1px solid var(--app-bg)',
+          bgcolor: 'var(--panel-2)', minHeight: 460 }}>
+          {busy && (
+            <Box sx={{ position: 'absolute', inset: 0, flexDirection: 'column',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              bgcolor: 'rgba(6,13,23,0.7)', zIndex: 5, gap: 1 }}>
+              <CircularProgress size={32}/>
+              {(isEddy || isThermal || isLoss) && (
+                <Typography sx={{ fontSize: 11, color: 'var(--text-2)', textAlign: 'center', maxWidth: 320 }}>
+                  {isThermal
+                    ? 'Running thermal solve (EM losses + conduction, ~25 s)…'
+                    : isLoss
+                      ? 'Looking for the last simulation run\'s loss map (no solve)…'
+                      : !eddySolving
+                        // Still the snapshot probe — a lookup, not a solve.
+                        ? 'Looking for the last simulation run\'s eddy field…'
+                        : (simEddy()
+                            ? 'The last simulation run does not cover this operating '
+                              + 'point, so this view is solving its own 10-frame eddy '
+                              + 'transient (~25 s).'
+                            : 'Coupled eddy solve is OFF in the Simulation run, so this '
+                              + 'view has to solve its own 10-frame eddy transient (~25 s). '
+                              + 'Turn it on in the Simulation panel to get this instantly.')}
+                </Typography>
+              )}
+            </Box>
+          )}
+          {/* Nothing solved, nothing running: say so in ONE line and point at
+              the button.  This is what the view shows on tab open, on a
+              machine load and after a settings change — the states that used
+              to fire a solve nobody asked for. */}
+          {!payload && !busy && !azProbing && !payloadOverride && (
+            <Box sx={{ position: 'absolute', inset: 0, display: 'flex',
+              alignItems: 'center', justifyContent: 'center', px: 2 }}>
+              <Tooltip placement="top" title={
+                'Field views solve only when you ask. Opening the tab or '
+                + 'changing the machine/operating point clears the picture '
+                + 'instead of starting a FEM solve behind your back — press '
+                + 'Re-solve when you want this one computed. (The J⟳ / Loss / '
+                + 'Demag views still look for the last simulation run\'s own '
+                + 'field for free; this line means that lookup found nothing.)'}>
+                <Typography sx={{ fontSize: 11, color: 'var(--text-3)',
+                  cursor: 'help', textAlign: 'center' }}>
+                  field not solved for this machine — press <b>Re-solve</b> ⓘ
+                </Typography>
+              </Tooltip>
+            </Box>
+          )}
+          {payload && (
+            <Canvas style={{ background: 'var(--panel-2)' }}>
+              <OrthographicCamera makeDefault position={[0, 0, 300]}
+                near={0.1} far={5000}/>
+              <FitView payload={payload} controlsRef={controlsRef}/>
+              <ambientLight intensity={1}/>
+              <FieldMesh payload={payload} mode={mode} view={fieldView} showFlux={showFlux}/>
+              <OrbitControls ref={controlsRef} enableDamping={false}
+                enableRotate enablePan enableZoom zoomSpeed={1.2}/>
+              {/* Drive + follow the overlay Viewcube (same as Geometry). */}
+              <CameraSync controlsRef={controlsRef}/>
+              <ViewcubeNavigation controlsRef={controlsRef}/>
+            </Canvas>
+          )}
+          {/* Orientation cube + XYZ axes — same component as Geometry */}
+          {payload && <Viewcube/>}
+        </Box>
+
+        {/* Colour bar — the SAME FieldScale object the fill bands with, so
+            the labels are the band edges of the picture beside them and can
+            never drift from it (they used to be recomputed here, with a
+            second copy of the percentile code). */}
+        {fieldView.scale && <ColorBar scale={fieldView.scale}/>}
+
+      </Box>
+>>>>>>> Stashed changes
 
       {/* Solver diagnostics strip — only the mesh/field numerics that are
           NOT already in the top summary table.  Sits BELOW the full-width

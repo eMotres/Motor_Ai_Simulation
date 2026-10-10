@@ -1322,21 +1322,28 @@ _BUILD_TRACE = threading.local()
 
 def _trace_reset() -> None:
     _BUILD_TRACE.events = []
+<<<<<<< Updated upstream
     _BUILD_TRACE.notes = []
+=======
+>>>>>>> Stashed changes
     _BUILD_TRACE.structured_gap_effective = False
 
 
 def _trace_event(msg: str) -> None:
+<<<<<<< Updated upstream
     """A FALLBACK: the build did not get the path it asked for (template →
     gmsh, pole copy → standard, structured → free gap).  The optimizer rejects
     an eval that carries one, because a fallback-built candidate is not
     comparable with cleanly built ones."""
+=======
+>>>>>>> Stashed changes
     try:
         _BUILD_TRACE.events.append(str(msg))
     except AttributeError:      # build path entered without a reset — self-heal
         _BUILD_TRACE.events = [str(msg)]
 
 
+<<<<<<< Updated upstream
 def _trace_note(msg: str) -> None:
     """A DESIGN DECISION, not a fallback: the build path this machine always
     takes, decided from the geometry alone (e.g. a retaining sleeve routes to
@@ -1351,6 +1358,8 @@ def _trace_note(msg: str) -> None:
         _BUILD_TRACE.notes = [str(msg)]
 
 
+=======
+>>>>>>> Stashed changes
 def _trace_gap_built() -> None:
     # setattr, not attribute access: build_mesh_from_polygons is also called
     # outside the sliding-band path (no _trace_reset ran on this thread).
@@ -1360,7 +1369,10 @@ def _trace_gap_built() -> None:
 def build_trace() -> Dict[str, object]:
     """The last build's provenance ON THIS THREAD — read right after the build."""
     return {"events": list(getattr(_BUILD_TRACE, "events", [])),
+<<<<<<< Updated upstream
             "notes": list(getattr(_BUILD_TRACE, "notes", [])),
+=======
+>>>>>>> Stashed changes
             "structured_gap_effective":
                 bool(getattr(_BUILD_TRACE, "structured_gap_effective", False))}
 
@@ -1513,6 +1525,7 @@ def _build_sliding_band_meshes(
 
     _use_tpl = _SB_IRON_TEMPLATE if iron_template is None else bool(iron_template)
     _use_geo = _SB_GEO_MESH if geo_mesh is None else bool(geo_mesh)
+<<<<<<< Updated upstream
     # Did the geometry-driven mesher (the only one that builds the conductor
     # skin layer) produce the halves?  Checked before each return.
     _skin_geo = [False]
@@ -1523,6 +1536,8 @@ def _build_sliding_band_meshes(
                         "the geometry-driven mesher — the shaft wall is meshed "
                         "WITHOUT it (its eddy loss is not resolved)")
             _trace_note("shaft skin layer not built (non-geo mesher)")
+=======
+>>>>>>> Stashed changes
     # ── THE TENSOR TEMPLATE CANNOT BUILD A RETAINING SLEEVE ─────────────────
     # iron_template.py assembles an IDEALISED cross-section from the radii —
     # yoke, magnet bars, bridge band, gap — and then re-classifies iron/air
@@ -1538,9 +1553,13 @@ def _build_sliding_band_meshes(
         log.info("retaining sleeve present — the tensor iron template has no "
                  "region for a ring in the air gap, so this build uses the "
                  "geometry-driven mesher (which conforms to it)")
+<<<<<<< Updated upstream
         # A note, not an event: every build of THIS machine takes this path,
         # so candidates stay comparable and the optimizer must not reject them.
         _trace_note("retaining sleeve: geometry-driven mesh instead of the iron template")
+=======
+        _trace_event("iron template skipped: retaining sleeve -> geo mesh")
+>>>>>>> Stashed changes
         _use_geo = True
     if full_ring:
         # TRUE 360°: each half stitched from two clean 180° builds (direct

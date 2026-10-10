@@ -62,7 +62,11 @@ const PARAM_META: Record<string, { label: string; unit?: string; d?: number }> =
   num_wires_per_slot: { label: 'Wires/slot',    d: 0 },
   // Strands in hand — a BUILD choice, not a dimension: the same slot, wound
   // k wires per turn, is a different machine electrically (EMF and Kt ÷k,
+<<<<<<< Updated upstream
   // R ÷k²) with identical mass and wire coating.  Off by default (1 on almost
+=======
+  // R ÷k²) with identical mass and slot fill.  Off by default (1 on almost
+>>>>>>> Stashed changes
   // every design); the column-picker offers it beside the wire count.
   wire_parallel:      { label: 'Wires in hand', d: 0 },
   stator_diameter:    { label: 'Stator Ø',      unit: 'mm',  d: 1 },

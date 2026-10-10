@@ -56,7 +56,7 @@
         "step": 0.2
       },
       "cut_width": {
-        "mode": "optimize",
+        "mode": "fixed",
         "min": 3,
         "max": 6,
         "step": 0.5
@@ -200,28 +200,28 @@
         "step": 1
       },
       "gamma_deg": {
-        "mode": "fixed",
-        "min": 14,
-        "max": 18,
+        "mode": "optimize",
+        "min": 12,
+        "max": 16,
         "step": 2
       },
       "current_a": {
         "mode": "optimize",
-        "min": 90,
-        "max": 93,
+        "min": 147,
+        "max": 150,
         "step": 3
       }
     },
     "operatingPoints": [
       {
-        "current_a": 353.5533905932737,
-        "rpm": 2000,
-        "gamma_deg": 16
+        "current_a": 103.94469683442247,
+        "rpm": 2600,
+        "gamma_deg": 10
       },
       {
-        "current_a": 353.5533905932737,
-        "rpm": 2000,
-        "gamma_deg": 16
+        "current_a": 103.94469683442247,
+        "rpm": 2600,
+        "gamma_deg": 10
       }
     ],
     "rippleThreshold": 0.08,
@@ -451,6 +451,248 @@
     "rippleThreshold": 0.05,
     "ratedTorqueNm": 30.5,
     "vBusV": 140,
+    "modulation": "svpwm"
+  },
+  "vadim@motresres.com": {
+    "variations": {
+      "wire_parallel": {
+        "mode": "fixed",
+        "min": 3,
+        "max": 3,
+        "step": 1
+      },
+      "sleeve_thickness": {
+        "mode": "fixed",
+        "min": 0,
+        "max": 0,
+        "step": 0.05
+      },
+      "stator_diameter": {
+        "mode": "fixed",
+        "min": 150,
+        "max": 150,
+        "step": 50
+      },
+      "slot_height": {
+        "mode": "optimize",
+        "min": 24.5,
+        "max": 28,
+        "step": 0.5
+      },
+      "core_thickness": {
+        "mode": "fixed",
+        "min": 11,
+        "max": 11,
+        "step": 0.2
+      },
+      "num_seg": {
+        "mode": "fixed",
+        "min": 4,
+        "max": 4,
+        "step": 1
+      },
+      "num_slots_per_segment": {
+        "mode": "fixed",
+        "min": 6,
+        "max": 6,
+        "step": 2
+      },
+      "num_poles_per_segment": {
+        "mode": "fixed",
+        "min": 7,
+        "max": 7,
+        "step": 2
+      },
+      "air_gap": {
+        "mode": "fixed",
+        "min": 0.5,
+        "max": 0.5,
+        "step": 0.05
+      },
+      "tooth_width": {
+        "mode": "fixed",
+        "min": 10.2,
+        "max": 10.4,
+        "step": 0.2
+      },
+      "tooth2_width": {
+        "mode": "fixed",
+        "min": 4.2,
+        "max": 4.4,
+        "step": 0.2
+      },
+      "cut_width": {
+        "mode": "fixed",
+        "min": 3,
+        "max": 6,
+        "step": 0.5
+      },
+      "insulation_thickness": {
+        "mode": "fixed",
+        "min": 0.15,
+        "max": 0.15,
+        "step": 0.05
+      },
+      "wire_width": {
+        "mode": "fixed",
+        "min": 1.88,
+        "max": 3.13,
+        "step": 0.5
+      },
+      "wire_height": {
+        "mode": "fixed",
+        "min": 0.5,
+        "max": 0.75,
+        "step": 0.1
+      },
+      "wire_spacing_x": {
+        "mode": "fixed",
+        "min": 0.1,
+        "max": 0.1,
+        "step": 0.1
+      },
+      "wire_spacing_y": {
+        "mode": "fixed",
+        "min": 0.13,
+        "max": 0.13,
+        "step": 0.01
+      },
+      "num_wires_per_slot": {
+        "mode": "fixed",
+        "min": 5,
+        "max": 9,
+        "step": 1
+      },
+      "wire_split": {
+        "mode": "fixed",
+        "min": 2,
+        "max": 2,
+        "step": 1
+      },
+      "slot_hs": {
+        "mode": "fixed",
+        "min": 0.2,
+        "max": 0.2,
+        "step": 0.01
+      },
+      "magnet_height": {
+        "mode": "fixed",
+        "min": 20,
+        "max": 35,
+        "step": 1
+      },
+      "rotor_house_height": {
+        "mode": "fixed",
+        "min": 1.2,
+        "max": 1.2,
+        "step": 0.1
+      },
+      "shaft_height": {
+        "mode": "fixed",
+        "min": 3,
+        "max": 3,
+        "step": 0.5
+      },
+      "magnet_fill_down": {
+        "mode": "fixed",
+        "min": 0.68,
+        "max": 1,
+        "step": 0.01
+      },
+      "magnet_fill_up": {
+        "mode": "fixed",
+        "min": 0.38,
+        "max": 0.4,
+        "step": 0.02
+      },
+      "magnet_fill_radius": {
+        "mode": "fixed",
+        "min": 1,
+        "max": 2,
+        "step": 0.2
+      },
+      "magnet_up_gap": {
+        "mode": "fixed",
+        "min": 1.2,
+        "max": 1.6,
+        "step": 0.2
+      },
+      "rotor_hole": {
+        "mode": "fixed",
+        "min": 0.7,
+        "max": 0.9,
+        "step": 0.2
+      },
+      "magnet_down_height": {
+        "mode": "fixed",
+        "min": 8,
+        "max": 9,
+        "step": 1
+      },
+      "magnet_lamination": {
+        "mode": "fixed",
+        "min": 0,
+        "max": 0,
+        "step": 0.5
+      },
+      "stator_fillet_r": {
+        "mode": "fixed",
+        "min": 3.7,
+        "max": 3.9,
+        "step": 0.2
+      },
+      "stator_fillet_r1": {
+        "mode": "fixed",
+        "min": 0.8,
+        "max": 1,
+        "step": 0.2
+      },
+      "rotor_fill_r": {
+        "mode": "fixed",
+        "min": 0.1,
+        "max": 0.7,
+        "step": 0.2
+      },
+      "motor_length": {
+        "mode": "fixed",
+        "min": 35,
+        "max": 35,
+        "step": 1
+      },
+      "shaft_diameter": {
+        "mode": "fixed",
+        "min": 0,
+        "max": 0,
+        "step": 1
+      },
+      "gamma_deg": {
+        "mode": "fixed",
+        "min": 17,
+        "max": 17,
+        "step": 2
+      },
+      "current_a": {
+        "mode": "optimize",
+        "min": 565.6854,
+        "max": 601.0408,
+        "step": 35.3554
+      }
+    },
+    "operatingPoints": [
+      {
+        "current_a": 565.6854,
+        "rpm": 20000,
+        "gamma_deg": 17
+      },
+      {
+        "current_a": 565.6854,
+        "rpm": 20000,
+        "gamma_deg": 17
+      }
+    ],
+    "rippleThreshold": 0.08,
+    "ratedTorqueNm": 0.6,
+    "vBusV": 480,
     "modulation": "svpwm"
   }
 }

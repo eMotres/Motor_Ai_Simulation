@@ -97,12 +97,16 @@ from motor_ai_sim.routes.catalog import router as catalog_router
 from motor_ai_sim.routes.catalog_cards import router as catalog_cards_router
 from motor_ai_sim.routes.saved_sims import router as saved_sims_router
 from motor_ai_sim.routes.freecad import router as freecad_router
+<<<<<<< Updated upstream
 from motor_ai_sim.routes.fusion import router as fusion_router
 from motor_ai_sim.routes.family import router as family_router
 # The PDF report export — same /api/family prefix and the same die gate as the
 # datasheet route it sits beside, in its own module because it reads four other
 # routers' last-result stores (see routes/report.py).
 from motor_ai_sim.routes.report import router as report_router
+=======
+from motor_ai_sim.routes.family import router as family_router
+>>>>>>> Stashed changes
 from motor_ai_sim.routes.my_motors import router as my_motors_router
 from motor_ai_sim.routes.auth_local import router as auth_local_router
 from motor_ai_sim.routes.newsletter import router as newsletter_router, notices_router
@@ -110,6 +114,7 @@ from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.routes.account import router as account_router
 from motor_ai_sim.routes.admin import router as admin_router
 from motor_ai_sim.routes.cluster import router as cluster_router
+from motor_ai_sim.routes.compute_nodes import router as compute_nodes_router, admin_router as compute_nodes_admin_router
 from motor_ai_sim.routes.support import router as support_router
 from motor_ai_sim.routes.modules import router as modules_router
 from motor_ai_sim.routes.kernel import router as kernel_router
@@ -284,7 +289,10 @@ app.include_router(catalog_router)
 app.include_router(saved_sims_router)
 app.include_router(freecad_router)
 app.include_router(family_router)
+<<<<<<< Updated upstream
 app.include_router(report_router)
+=======
+>>>>>>> Stashed changes
 app.include_router(my_motors_router)
 app.include_router(auth_local_router)
 app.include_router(newsletter_router)
@@ -293,6 +301,8 @@ app.include_router(sweep_config_router)
 app.include_router(account_router)
 app.include_router(admin_router)
 app.include_router(cluster_router)
+app.include_router(compute_nodes_router)
+app.include_router(compute_nodes_admin_router)
 app.include_router(support_router)
 app.include_router(modules_router)
 app.include_router(kernel_router)
@@ -353,6 +363,7 @@ _ASSIGNABLE_PARTS = {'stator_core', 'slot', 'rotor_core', 'magnet', 'shaft',
                      # carbon-fibre retaining ring; only exists when
                      # sleeve_thickness > 0, see GET /api/materials
                      'sleeve'}
+<<<<<<< Updated upstream
 # The config THIS PROCESS is pointed at — ``MOTOR_AI_SIM_CONFIG`` included.
 #
 # 2026-09-15.  This was a hardcoded ``Path(__file__)…/config/motor_config.yaml``,
@@ -384,6 +395,9 @@ def __getattr__(name):
     if name == "_CONFIG_PATH":
         return _config_path()
     raise AttributeError(name)
+=======
+_CONFIG_PATH = Path(__file__).parent.parent.parent / "config" / "motor_config.yaml"
+>>>>>>> Stashed changes
 
 
 class MaterialAssignment(BaseModel):
@@ -587,6 +601,7 @@ def update_part_state(assignment: PartStateAssignment):
             status_code=400,
             detail=f"Unknown state '{assignment.state}'. Valid: {list(STATES)}")
     try:
+<<<<<<< Updated upstream
         content = _config_path().read_text(encoding="utf-8")
         _config_path().write_text(
             _set_part_state_in_yaml(content, assignment.part, assignment.state),
@@ -601,6 +616,13 @@ def update_part_state(assignment: PartStateAssignment):
                 reason=f"part state changed ({assignment.part} -> {assignment.state})")
         except Exception:
             pass
+=======
+        content = _CONFIG_PATH.read_text(encoding="utf-8")
+        _CONFIG_PATH.write_text(
+            _set_part_state_in_yaml(content, assignment.part, assignment.state),
+            encoding="utf-8")
+        clear_config_cache()
+>>>>>>> Stashed changes
         from motor_ai_sim.part_states import config_part_states
         out = {"status": "ok", "parts": config_part_states()}
         # The solver refuses nothing (the user asked for "любую деталь"), but
@@ -981,12 +1003,19 @@ def get_winding_config():
     # make one turn out of k of the slot's conductors: the slot carries the same
     # copper and the same total conductor current, but n_wires/k times it.
     from motor_ai_sim.winding import (turns_per_coil as _tpc,
+<<<<<<< Updated upstream
                                       wire_parallel_from_geo as _wp_geo,
                                       n_parallel_effective as _npe)
     try:
         wire_parallel = _wp_geo(geo)
         turns_coil = _tpc(geo)
         npar_eff = _npe(n_parallel, geo)
+=======
+                                      wire_parallel_from_geo as _wp_geo)
+    try:
+        wire_parallel = _wp_geo(geo)
+        turns_coil = _tpc(geo)
+>>>>>>> Stashed changes
     except ValueError as _wpe:
         raise HTTPException(status_code=422, detail=str(_wpe))
     amp_turns  = turns_coil * I_coil
@@ -1006,7 +1035,11 @@ def get_winding_config():
         # connection — it lives in geometry.wire_parallel).
         "wire_parallel":      int(wire_parallel),
         "turns_per_coil":     int(turns_coil),
+<<<<<<< Updated upstream
         "n_parallel_eff":     int(npar_eff),
+=======
+        "n_parallel_eff":     int(n_parallel) * int(wire_parallel),
+>>>>>>> Stashed changes
         "layers":             int(w.get("layers", 1)),
         "num_slots":          num_slots,
         "layout":             layout_str,

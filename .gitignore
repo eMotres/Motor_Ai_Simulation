@@ -121,8 +121,11 @@ config/newsletter.json
 config/newsletter.tmp
 config/.auth_secret
 config/.sessions.json
+<<<<<<< Updated upstream
 config/agent_keys.json
 config/mcp_audit.jsonl
+=======
+>>>>>>> Stashed changes
 
 # cross-run eddy warm cache (solver speedup, regenerated constantly)
 config/.warm_cache.npz

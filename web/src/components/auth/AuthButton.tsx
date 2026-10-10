@@ -5,20 +5,26 @@ import LogoutIcon from '@mui/icons-material/Logout';
 import DevicesIcon from '@mui/icons-material/Devices';
 import { useAuth } from '../../contexts/AuthContext';
 import SessionsDialog from './SessionsDialog';
+<<<<<<< Updated upstream
 import AgentKeysDialog from './AgentKeysDialog';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import NotificationsIcon from '@mui/icons-material/NotificationsNone';
 import NotificationsDialog from './NotificationsDialog';
 import { NoticeBell, NewsletterLinkHandler } from './NoticeBell';
+=======
+>>>>>>> Stashed changes
 
 /** Header login/logout control (self-hosted auth — see contexts/AuthContext). */
 const AuthButton: React.FC = () => {
   const { user, tier, signIn, logout } = useAuth();
   const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
+<<<<<<< Updated upstream
   const [agentsOpen, setAgentsOpen] = React.useState(false);
   const [notifOpen, setNotifOpen] = React.useState(false);
   const [noticeKey, setNoticeKey] = React.useState(0);
+=======
+>>>>>>> Stashed changes
 
   if (!user) {
     return (
@@ -36,8 +42,11 @@ const AuthButton: React.FC = () => {
 
   return (
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+<<<<<<< Updated upstream
       <NewsletterLinkHandler />
       <NoticeBell onOpen={() => setNotifOpen(true)} refreshKey={noticeKey} />
+=======
+>>>>>>> Stashed changes
       <Tooltip title={`${user.email} · ${tier} — click for sessions`} arrow>
         <Avatar src={user.photoURL || undefined}
           onClick={(e) => setAnchor(e.currentTarget)}
@@ -60,6 +69,7 @@ const AuthButton: React.FC = () => {
           <ListItemIcon><DevicesIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           Sessions
         </MenuItem>
+<<<<<<< Updated upstream
         <MenuItem sx={{ fontSize: 12.5 }}
           onClick={() => { setAnchor(null); setAgentsOpen(true); }}>
           <ListItemIcon><SmartToyIcon sx={{ fontSize: 16 }} /></ListItemIcon>
@@ -77,6 +87,11 @@ const AuthButton: React.FC = () => {
       <SessionsDialog open={sessionsOpen} onClose={() => setSessionsOpen(false)}
         onSignedOut={() => { void logout(); }} />
       <AgentKeysDialog open={agentsOpen} onClose={() => setAgentsOpen(false)} />
+=======
+      </Menu>
+      <SessionsDialog open={sessionsOpen} onClose={() => setSessionsOpen(false)}
+        onSignedOut={() => { void logout(); }} />
+>>>>>>> Stashed changes
     </Box>
   );
 };

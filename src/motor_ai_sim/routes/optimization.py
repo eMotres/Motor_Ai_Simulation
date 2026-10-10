@@ -273,7 +273,11 @@ def _config_fingerprint(exclude_geo_keys=()) -> str:
             _geo_fp.pop(str(_k), None)
         phys = {"geometry": _geo_fp, "winding": wind_res,
                 "materials": cfg.get("materials"), "magnet": cfg.get("magnet"),
+<<<<<<< Updated upstream
                 "rotor": cfg.get("rotor"), "stator": cfg.get("stator"), "sim": sim_res,
+=======
+                "rotor": cfg.get("rotor"), "stator": cfg.get("stator"), "sim": sim,
+>>>>>>> Stashed changes
                 # refine_proc feeds mesh.outer_air_factor and mesh.component_mesh
                 # into every solve — without this block a Mesh-tab edit (e.g. a
                 # per-component size) left .scan_cache.jsonl valid and re-sweeps
@@ -322,11 +326,15 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
                     structured_gap: bool = False, airgap_macro: bool = False,
                     iron_template: bool = True, geo_mesh: bool = True,
                     element_order: int = 2, demag: Optional[bool] = None,
+<<<<<<< Updated upstream
                     pins: Optional[Dict[str, Any]] = None,
                     sampling_purpose: Literal["standard", "optimization", "cogging_quality"] =
                     "optimization") -> str:
     if sampling_purpose not in ("standard", "optimization", "cogging_quality"):
         raise ValueError("invalid sampling_purpose")
+=======
+                    pins: Optional[Dict[str, Any]] = None) -> str:
+>>>>>>> Stashed changes
     payload = {
         # Key-format version.  Bumped when the MEANING of a component changes:
         # v2 = end_winding_factor is now honored by refine_proc (it used to be
@@ -334,6 +342,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # ew the caller sent) and the fingerprint gained the mesh block.  The
         # bump orphans every pre-existing .scan_cache.jsonl entry at once —
         # cheaper than auditing which of them are poisoned.
+<<<<<<< Updated upstream
         # v3 (2026-09-12): the SOLVER's default physics changed under an
         # unchanged config — a coil wound with k wires in hand is now solved as
         # the soldered-ends winding (kilowatts of copper on the Ø200), and a
@@ -343,6 +352,9 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # the only honest way to retire them all.
         "v": 4,
         "sampling_purpose": sampling_purpose,
+=======
+        "v": 2,
+>>>>>>> Stashed changes
         # Physics the CALLER pinned for the whole run (rpm / connection / demag
         # / eddy from a descent plan).  A pinned run solves the pinned values no
         # matter what the live config says, so the key must carry them — without
@@ -350,6 +362,7 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # solve kept the pinned physics, and the entry was stored as if computed
         # with the NEW settings.
         "pins": {k: pins[k] for k in sorted(pins)} if pins else None,
+<<<<<<< Updated upstream
         # EFFECTIVE overrides only: an override equal to the live geometry's
         # own value changes nothing about the machine, so it must not change
         # the key either.  User 2026-09-06: "добавил ещё один параметр (толщину
@@ -359,6 +372,9 @@ def _eval_cache_key(overrides: Dict[str, float], current_a: float, steps: int,
         # previous sweep's entries for the same machines.
         "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())
                if not _override_is_noop(k, v)},
+=======
+        "ov": {k: round(float(v), 6) for k, v in sorted(overrides.items())},
+>>>>>>> Stashed changes
         "I": round(float(current_a), 4), "steps": int(steps),
         "ct": round(float(coil_temp_c), 2), "np": round(float(n_periods), 5),
         "g": round(float(gamma_deg), 4), "ms": round(float(mesh_size_mm), 4),
@@ -1571,7 +1587,10 @@ def list_optimizable_variables():
             # num_wires_per_slot (a continuous sweep of it builds fractional
             # turns), so it is a build choice, never an optimizer variable.
             "num_wires_per_slot", "wire_parallel"}
+<<<<<<< Updated upstream
     from motor_ai_sim.routes.family import DIE_IDENTITY_KEYS
+=======
+>>>>>>> Stashed changes
     for name, meta in schema.items():
         if name in skip or name not in geo:
             continue
@@ -1953,12 +1972,17 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # those points under the PRE-edit fingerprint, and a later sweep on
             # the old config got cache hits carrying new-config physics.  The
             # hash is microseconds against a multi-minute FEM eval.
+<<<<<<< Updated upstream
             _cfg_fp = _config_fingerprint(tuple(geo_ov.keys()))
+=======
+            _cfg_fp = _config_fingerprint()
+>>>>>>> Stashed changes
             return _eval_cache_key(geo_ov, I, steps, coil_temp_c, _NPER, g,
                                  mesh_size_mm, min_size_mm, n_sectors, pole_copy, torque_filter, _cfg_fp,
                                  gap_layers, end_winding, rotor_eddy, hi_fidelity, structured_gap, airgap_macro,
                                  iron_template=iron_template, geo_mesh=geo_mesh,
                                  element_order=element_order, demag=demag,
+<<<<<<< Updated upstream
                                  pins=({"rpm": float(rpm)} if rpm else None),
                                  sampling_purpose="optimization")
 
@@ -1967,6 +1991,13 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             pt["gamma_deg"] = g    # stamp γ so the chart can group/connect without the request
             pt["source_cfg_fp"] = source_fp or _config_fingerprint(
                 tuple(k for k in ov if k != "gamma_deg"))
+=======
+                                 pins=({"rpm": float(rpm)} if rpm else None))
+
+        def _mk_point(out, ov, I, gi, oi, g, rpm=None):
+            pt = _point_from_eval(out, ov, I, gi, oi, ripple_max)
+            pt["gamma_deg"] = g    # stamp γ so the chart can group/connect without the request
+>>>>>>> Stashed changes
             # Stamp the SOLVED speed too: the frontend re-derives P = T·ω from
             # its live sim.rpm when the point carries none, which is wrong the
             # moment the user changes speed after the sweep.
@@ -2000,6 +2031,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                                    airgap_macro=airgap_macro,
                                    iron_template=iron_template, geo_mesh=geo_mesh,
                                    element_order=element_order, demag=demag,
+<<<<<<< Updated upstream
                                    rpm=oprpm, owner="scan",
                                     threads=_solo_ctx["threads"],
                                     sampling_purpose="optimization")
@@ -2008,6 +2040,12 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             if out and out.get("ok"):
                 _store_eval(_cache_key(geo_ov, I, g, oprpm), out)   # cache successful evals only
             return i, _mk_point(out, ov, I, gi, oi, g, oprpm, fp_before)
+=======
+                                   rpm=oprpm)
+            if out and out.get("ok"):
+                _store_eval(_cache_key(geo_ov, I, g, oprpm), out)   # cache successful evals only
+            return i, _mk_point(out, ov, I, gi, oi, g, oprpm)
+>>>>>>> Stashed changes
 
         # PREFILL: instantly plot every point already in the cache (from prior
         # sweeps — survives a backend restart via .scan_cache.jsonl) with NO FEM
@@ -2121,6 +2159,10 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
 
         ex = ThreadPoolExecutor(max_workers=_job_workers())
         futs = [ex.submit(_do, it) for it in misses]
+<<<<<<< Updated upstream
+=======
+        done = n_cached + n_rejected
+>>>>>>> Stashed changes
         try:
             # Poll with a 1 s timeout instead of blocking on as_completed(): a Stop
             # must take effect within ~1 s EVEN IF the in-flight subprocess evals
@@ -2241,7 +2283,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
             # computed without those settings.  The run-time fingerprint is
             # stored too: seeding after a config edit must not stamp old-config
             # results as current.
+<<<<<<< Updated upstream
              "scan_params": {"coil_temp_c": float(coil_temp_c), "mesh_size_mm": float(mesh_size_mm),
+=======
+            "scan_params": {"coil_temp_c": float(coil_temp_c), "mesh_size_mm": float(mesh_size_mm),
+>>>>>>> Stashed changes
                             "min_size_mm": float(min_size_mm), "pole_copy": pole_copy,
                             "torque_filter": bool(torque_filter),
                             "n_sectors": int(n_sectors), "gap_layers": float(gap_layers),
@@ -2249,9 +2295,13 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                             "hi_fidelity": bool(hi_fidelity), "structured_gap": bool(structured_gap),
                             "airgap_macro": bool(airgap_macro), "iron_template": bool(iron_template),
                             "geo_mesh": bool(geo_mesh), "element_order": int(element_order),
+<<<<<<< Updated upstream
                              "demag": bool(demag), "cfg_fp": _config_fingerprint(),
                              "validation_provenance_version": 1,
                              "sampling_purpose": "optimization"},
+=======
+                            "demag": bool(demag), "cfg_fp": _config_fingerprint()},
+>>>>>>> Stashed changes
         }
         with _scan_lock:
             if _scan_owns(run_id):
@@ -2747,7 +2797,11 @@ def seed_cache(req: SeedCacheRequest):
     # poisoned cache costs a wrong answer).
     _FULL = ("n_sectors", "gap_layers", "end_winding", "rotor_eddy", "hi_fidelity",
              "structured_gap", "airgap_macro", "iron_template", "geo_mesh",
+<<<<<<< Updated upstream
              "element_order", "demag", "cfg_fp", "sampling_purpose")
+=======
+             "element_order", "demag", "cfg_fp")
+>>>>>>> Stashed changes
     if not all(k in sp for k in _FULL):
         return {"seeded": 0, "cache_size": len(_EVAL_CACHE),
                 "error": "the stored sweep predates the full scan_params record "
@@ -2759,9 +2813,12 @@ def seed_cache(req: SeedCacheRequest):
     mn = float(sp.get("min_size_mm", req.min_size_mm))
     pc = sp.get("pole_copy", req.pole_copy)
     tf = bool(sp.get("torque_filter", req.torque_filter))
+<<<<<<< Updated upstream
     if sp["sampling_purpose"] != "optimization":
         return {"seeded": 0, "cache_size": len(_EVAL_CACHE),
                 "error": "the stored sweep has a different sampling purpose"}
+=======
+>>>>>>> Stashed changes
     # The fingerprint RECORDED AT SCAN TIME — never the current one: seeding
     # after a config edit must not stamp old-config results as current (they
     # will simply miss, which is the honest outcome).
@@ -2784,8 +2841,12 @@ def seed_cache(req: SeedCacheRequest):
                               iron_template=bool(sp["iron_template"]),
                               geo_mesh=bool(sp["geo_mesh"]),
                               element_order=int(sp["element_order"]),
+<<<<<<< Updated upstream
                               demag=bool(sp["demag"]),
                               sampling_purpose="optimization")
+=======
+                              demag=bool(sp["demag"]))
+>>>>>>> Stashed changes
         before = len(_EVAL_CACHE)
         _store_eval(key, {"ok": True, "res": res})
         seeded += int(len(_EVAL_CACHE) > before)
@@ -4006,9 +4067,13 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  # the LIVE config's speed, so the result was
                                  # labeled with the request's rpm but solved at
                                  # whatever the Simulation tab said at eval time.
+<<<<<<< Updated upstream
                                  rpm=(float(op.get("rpm")) if op.get("rpm") else None),
                                  owner="descent",
                                   sampling_purpose=purpose)
+=======
+                                 rpm=(float(op.get("rpm")) if op.get("rpm") else None))
+>>>>>>> Stashed changes
             if o.get("ok") and isinstance(o.get("res"), dict):
                 o["res"]["current_a"] = float(cur)   # record solved current in best
             if isinstance(o, dict):
@@ -4402,9 +4467,13 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                                  element_order=element_order,
                                  # Pin the run's own speed — same reason as the
                                  # gradient worker above.
+<<<<<<< Updated upstream
                                  rpm=(float(op.get("rpm")) if op.get("rpm") else None),
                                  owner="descent",
                                   sampling_purpose=purpose)
+=======
+                                 rpm=(float(op.get("rpm")) if op.get("rpm") else None))
+>>>>>>> Stashed changes
             # Stamp the SOLVED current onto the result so the best records the
             # operating point it was found at (target-torque solves for it) →
             # saving the design can persist current+γ for a reproducible sim.
@@ -6679,8 +6748,12 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             # cache-hit old-rpm physics).
             demag=bool(ev.get("demag", False)),
             pins={"rpm": float(rpm) if rpm is not None else None,
+<<<<<<< Updated upstream
                   "connection": str(conn) if conn else None},
             sampling_purpose=purpose)
+=======
+                  "connection": str(conn) if conn else None})
+>>>>>>> Stashed changes
 
     def _eval_at(d: Dict[str, float], cur: float,
                  purpose: str = "optimization") -> Dict[str, Any]:

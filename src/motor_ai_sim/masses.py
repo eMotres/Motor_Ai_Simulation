@@ -311,7 +311,11 @@ _SLOT_CACHE: Dict[tuple, Optional[Dict[str, float]]] = {}
 
 
 def slot_fill_from_cad(geo: Dict[str, Any]) -> Optional[Dict[str, float]]:
+<<<<<<< Updated upstream
     """Wire coating factor, MEASURED on the same polygons the mesher receives.
+=======
+    """Slot fill factor, MEASURED on the same polygons the mesher receives.
+>>>>>>> Stashed changes
 
     The winding window is not a parameter of this machine — it is whatever the
     stamped tooth shape leaves between the teeth — so it is measured rather than
@@ -323,7 +327,12 @@ def slot_fill_from_cad(geo: Dict[str, Any]) -> Optional[Dict[str, float]]:
     copper, insulation and air.  Returns None when the CAD cannot build the
     cross-section (the caller then simply does not show a fill).
     """
+<<<<<<< Updated upstream
     key = tuple((k, _area_key_val(geo.get(k))) for k in _AREA_KEYS)
+=======
+    key = tuple((k, None if geo.get(k) is None else float(geo[k]))
+                for k in _AREA_KEYS)
+>>>>>>> Stashed changes
     if key in _SLOT_CACHE:
         return _SLOT_CACHE[key]
     out: Optional[Dict[str, float]] = None
@@ -485,7 +494,12 @@ def rotor_inertia_kg_m2(p: Any, geo: Dict[str, Any],
     # Memoised by the same geometry key the AREA cache uses: the polar moments
     # are pure geometry (densities/k_f are applied after), and the summary now
     # rebuilds on cache hits — without this every hit would pay a CAD build.
+<<<<<<< Updated upstream
     _jkey = tuple((k, _area_key_val(geo.get(k))) for k in _AREA_KEYS)
+=======
+    _jkey = tuple((k, None if geo.get(k) is None else float(geo[k]))
+                  for k in _AREA_KEYS)
+>>>>>>> Stashed changes
     if _jkey in _POLAR_CACHE:
         jp_rotor, jp_mag, jp_shaft, jp_sleeve = (
             _POLAR_CACHE[_jkey] or (None, None, None, 0.0))
@@ -610,6 +624,7 @@ def compute_masses(p: Any, geo: Dict[str, Any], k_end: float = 0.0,
     m_cu     = V_cu * rho_cu
     m_shaft  = V_shaft * rho_sh
     m_sleeve = V_sleeve * rho_sl
+<<<<<<< Updated upstream
 
     # ── Accounting state: what of this metal is OURS to weigh ────────────────
     # `reference` = the customer's part sitting in our field (a frameless
@@ -652,6 +667,40 @@ def compute_masses(p: Any, geo: Dict[str, Any], k_end: float = 0.0,
     # Zero-thickness = zero, so nothing moves on a machine without a band.
     m_active = m_stator + m_rotor + m_cu + m_mag + m_sleeve
     m_total  = m_active + m_shaft
+=======
+
+    # ── Accounting state: what of this metal is OURS to weigh ────────────────
+    # `reference` = the customer's part sitting in our field (a frameless
+    # motor's shaft): real to the solve, absent from the mass, the inertia and
+    # every N·m/kg.  `excluded` = not there at all.  The MODELLED masses are
+    # kept alongside under `PHYS` so a card can say "0.061 kg of customer steel
+    # was left out" instead of showing a total that silently shrank.
+    _states = _part_states()
+    _phys = {"stator": m_stator, "cu": m_cu, "mag": m_mag,
+             "rotor": m_rotor, "shaft": m_shaft, "sleeve": m_sleeve}
+    if _states:
+        if _states.get("stator_core"):
+            m_stator = 0.0
+        if _states.get("rotor_core"):
+            m_rotor = 0.0
+        if _states.get("magnet"):
+            m_mag = 0.0
+        if _states.get("slot"):
+            m_cu = 0.0
+        if _states.get("shaft"):
+            m_shaft = 0.0
+        if _states.get("sleeve"):
+            m_sleeve = 0.0
+
+    m_active = m_stator + m_rotor + m_cu + m_mag
+    # The sleeve joins the SHAFT side of the split, not the active side: it is
+    # ours, it is shipped, it turns — but it is not EM-active, so ANSYS's
+    # active-mass expression has no term for it and `active` must stay
+    # comparable.  It IS in `total`, which is what every N·m/kg divides by, so
+    # a retaining ring honestly costs torque density.  Zero-thickness = zero,
+    # so nothing moves on a machine without one.
+    m_total  = m_active + m_shaft + m_sleeve
+>>>>>>> Stashed changes
     return {
         "stator": m_stator, "cu": m_cu, "mag": m_mag, "rotor": m_rotor,
         "shaft": m_shaft, "sleeve": m_sleeve,

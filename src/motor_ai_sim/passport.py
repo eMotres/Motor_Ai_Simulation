@@ -104,6 +104,7 @@ def generate_passport(
     from motor_ai_sim.simulation.geometry_2d import merge_geo_override
     _mgeo = dict((machine or {}).get("geometry") or {}) or None
     _mconn = str((machine or {}).get("connection") or "") or None
+<<<<<<< Updated upstream
     # TERMINAL connection.  Every solve below is told explicitly (never the
     # panel's), the route drives the winding at I_line/√3 in delta, and the
     # passport is then stored as the EQUIVALENT STAR (see the transform at
@@ -114,6 +115,8 @@ def generate_passport(
     _msd = ("delta" if str((machine or {}).get("star_delta") or "")
             .lower().startswith("d") else "star")
     _sq3 = math.sqrt(3.0)
+=======
+>>>>>>> Stashed changes
     _mmats = dict((machine or {}).get("materials") or {})
     # Measured end-winding factor of the real (hand-)wound machine — rides
     # every solve so the passport's R and copper losses describe the motor as
@@ -146,6 +149,7 @@ def generate_passport(
                                **({"parts": _keep} if _keep else {})})
 
     N0 = float(g.get("num_wires_per_slot", 0) or 0)
+<<<<<<< Updated upstream
     # STRANDS IN HAND and STRIPS PER ROW the passport was MEASURED at.  N0 stays
     # the PHYSICAL wire rows per slot (that is what the Configure knob edits and
     # what the wire coating is built on); the ELECTRICAL turns are
@@ -161,6 +165,16 @@ def generate_passport(
                                       wire_split_from_geo as _ws_geo)
     wireParallel0 = float(_wp_geo(g))
     wireSplit0 = float(_ws_geo(g))
+=======
+    # STRANDS IN HAND the passport was MEASURED at.  N0 stays the PHYSICAL wires
+    # per slot (that is what the Configure knob edits and what the slot fill is
+    # built on); the effective turns are N0 / wire_parallel0, and every measured
+    # number below (T0, Vemf0, R0, the loss grid) already carries that divider.
+    # Recorded so a consumer can tell a 24-turn coil from 24 wires wound
+    # 2-in-hand — the two are the same slot and a factor 2 apart in EMF.
+    from motor_ai_sim.winding import wire_parallel_from_geo as _wp_geo
+    wireParallel0 = float(_wp_geo(g))
+>>>>>>> Stashed changes
     L0 = float(g.get("motor_length", 0) or 0)
     wireH0 = float(g.get("wire_height", 0.0) or 0.0)
     if _mconn:
@@ -196,7 +210,10 @@ def generate_passport(
             sliding_band=True, rotor_eddy=eddy, demag=demag,
             geo=(json.dumps(ov) if ov else None),
             rpm=(rpm if rpm is not None else rpm0),
+<<<<<<< Updated upstream
             star_delta=_msd,
+=======
+>>>>>>> Stashed changes
             **({"connection": _mconn} if _mconn else {}),
             **({"end_winding_factor": _mkend} if _mkend > 0 else {}),
             # The MACHINE'S calibrated d-axis (from its die), not a per-run
@@ -259,7 +276,11 @@ def generate_passport(
         keep = 100.0 - float(dm.get("loss_pct") or 0.0)
         cur["I_A"].append(round(I, 2))
         cur["T_Nm"].append(round(abs(float(d.get("T_avg_Nm") or 0.0)), 3))
+<<<<<<< Updated upstream
         cur["V_peak_V"].append(round(float(d.get("V_peak") or 0.0) * _kV, 2))
+=======
+        cur["V_peak_V"].append(round(float(d.get("V_peak") or 0.0), 2))
+>>>>>>> Stashed changes
         cur["demag_keep_pct"].append(round(keep, 2))
         return keep
 
@@ -270,7 +291,11 @@ def generate_passport(
         _dm0 = (sa.get("demag") or {})
         cur["I_A"].append(round(I0, 2))
         cur["T_Nm"].append(round(abs(T0), 3))
+<<<<<<< Updated upstream
         cur["V_peak_V"].append(round(float(A.get("V_peak") or 0.0) * _kV, 2))
+=======
+        cur["V_peak_V"].append(round(float(A.get("V_peak") or 0.0), 2))
+>>>>>>> Stashed changes
         cur["demag_keep_pct"].append(round(100.0 - float(_dm0.get("loss_pct")
                                                          or 0.0), 2))
         # demag knee: extend until retention < 99.5 % or 3·I0
@@ -405,10 +430,13 @@ def generate_passport(
         return get_fem_transient(**kw)
 
     pwm_block: Optional[Dict[str, Any]] = None
+<<<<<<< Updated upstream
     # Why a point produced no PWM measurement, kept even when the whole block
     # comes back None: "this machine has no PWM block" used to be a silence,
     # and the datasheet printed it as one.  Every record carries a `code`.
     pwm_skipped: List[Dict[str, Any]] = []
+=======
+>>>>>>> Stashed changes
     _batt = dict(battery or {})
     _vnom = float(_batt.get("v_nom") or 0.0)
     if str(pwm or "").strip().lower() not in ("", "off", "none", "0", "false"):
@@ -418,12 +446,17 @@ def generate_passport(
             rpms=(loss_grid["rpm"] or rpms),
             pole_pairs=max(1, int(g.get("num_poles", 0) or 0) // 2),
             v_bus_V=_vnom, v_nom_V=(_vnom or None),
+<<<<<<< Updated upstream
             fidelity=str(pwm), sine_steps=(24 if base_steps <= 6 else 40),
             skipped_out=pwm_skipped)
+=======
+            fidelity=str(pwm), sine_steps=(24 if base_steps <= 6 else 40))
+>>>>>>> Stashed changes
 
     passport = {
         "N0": N0, "L0_mm": L0, "wireH0_mm": wireH0,
         "I0_A": I0, "rpm0": round(rpm0), "nP0": nP0,
+<<<<<<< Updated upstream
         # Strands in hand and strips per wire row at the measured point (1 = one
         # wire per turn / one solid bar).  N0 is PHYSICAL wire ROWS per slot, so
         # the SERIES turns are (N0 / wire_parallel0) × wire_split0 — the split's
@@ -431,6 +464,11 @@ def generate_passport(
         # measured on a machine that had neither: read them as 1.
         "wire_parallel0": wireParallel0,
         "wire_split0": wireSplit0,
+=======
+        # Strands in hand at the measured point (1 = one wire per turn).  N0 is
+        # PHYSICAL wires per slot, so the series turns are N0 / wire_parallel0.
+        "wire_parallel0": wireParallel0,
+>>>>>>> Stashed changes
         # The convention every number below was measured in.  A generator
         # solved as a motor is a different point, so the passport says which.
         "mode0": str(mode or "motor"),
@@ -440,12 +478,15 @@ def generate_passport(
         # client card showing "−58.7 N·m" is noise, not information (the
         # catalog rows have always recorded |T| for the same reason).
         "T0_Nm": round(abs(T0), 3),
+<<<<<<< Updated upstream
         # Terminal connection the machine was measured in, and the convention
         # the numbers below are stored in: a delta machine's passport is its
         # EQUIVALENT STAR (I = line current, V = winding/√3, R and L = /3) so
         # that Configure, charging and the datasheet read it like any other.
         "star_delta": _msd,
         "stored_as": ("equivalent star" if _msd == "delta" else "star"),
+=======
+>>>>>>> Stashed changes
         "Vemf0_peak_V": round(Vemf0, 2),
         "Vload0_peak_V": round(float(sa.get("V_phase_peak_V") or 0.0) * _kV, 2),
         "R0_ohm": round(R_A, 5),
@@ -489,12 +530,15 @@ def generate_passport(
         # Configure then has no PWM toggle for this machine rather than a
         # toggle backed by an assumption.
         "pwm": pwm_block,
+<<<<<<< Updated upstream
         # WHY, when there is no block (or when individual points are missing
         # from one).  Machine-readable: each record has a `code`
         # (overmodulation / step_budget / pwm_solve_failed / baseline_failed /
         # seed_failed / no_v1_seed / no_bus / no_speed) and the numbers behind
         # it.  Absent on a passport that measured everything it asked for.
         **({} if not pwm_skipped else {"pwm_skipped": pwm_skipped}),
+=======
+>>>>>>> Stashed changes
         # The pack this machine is wired to, verbatim from the configuration.
         # A generator's Configure tab computes the charge current against it;
         # the PWM block switched against its v_nom.  None = no declared pack.

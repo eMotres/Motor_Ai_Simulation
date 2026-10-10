@@ -327,7 +327,10 @@ _CAUSES: Dict[str, List[str]] = {
         "air_gap", "magnet_up_gap", "rotor_fill_r", "sleeve_thickness"],
     "sleeve_fills_air_gap": ["sleeve_thickness", "air_gap"],
     "sleeve_overlaps_stator": ["sleeve_thickness", "air_gap"],
+<<<<<<< Updated upstream
     "rotor_pocket_tabs_zero_thickness": ["rotor_hole", "magnet_up_gap"],
+=======
+>>>>>>> Stashed changes
     "stator_crosses_air_gap": [
         "air_gap", "slot_height", "core_thickness", "stator_diameter"],
     "air_gap_not_positive": [
@@ -440,6 +443,7 @@ def sleeve_gap_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
     return None
 
 
+<<<<<<< Updated upstream
 def rotor_hole_gap_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, str]]:
     """``(field, code, message)`` when the rotor pocket opening is narrower than
     the magnet while the magnet sits flush with the rotor OD, else ``None``.
@@ -590,6 +594,8 @@ def split_width_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, float]]:
             float(w_max))
 
 
+=======
+>>>>>>> Stashed changes
 def weld_tol_mm(params: Optional[Dict[str, Any]] = None,
                 polys: Optional[Dict[str, Any]] = None) -> float:
     """The tolerance the polygons were BUILT to — machine diameter / _WELD_DIV.
@@ -1105,6 +1111,7 @@ def validate_polygons(polys: Dict[str, Any],
             limit_mm=_num(p.get("air_gap")),
             likely_params=_CAUSES.get(_code, ["sleeve_thickness", "air_gap"])))
 
+<<<<<<< Updated upstream
     # ── 5c. a rotor_hole < 1 opening needs iron tabs of non-zero thickness ───
     # Another SCALAR rule, same reasoning as 5b: `rotor_hole_gap_error` needs no
     # polygon to know the retaining tab over each magnet corner is gone, and it
@@ -1123,6 +1130,8 @@ def validate_polygons(polys: Dict[str, Any],
             limit_mm=_num(p.get("rotor_hole")),
             likely_params=_CAUSES.get(_code, ["rotor_hole", "magnet_up_gap"])))
 
+=======
+>>>>>>> Stashed changes
     # ── 6. iron connectivity (warning — solvable, but rarely intended) ───────
     checks.append("iron_connectivity")
     for label, g, params_hint in (("rotor core", rotor, "rotor"),
@@ -1334,24 +1343,30 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
             _err(k, geo[k], "{} is a fraction of the pole pitch and must be in "
                             "(0, 1] (got {:g}).".format(k, f), min=0.0, max=1.0)
 
+<<<<<<< Updated upstream
     # Every geometry knob is a NUMBER again.  `magnet_top: flat | arc` was the
     # one word-valued one, and it lived for a few hours on 2026-09-06 before the
     # user removed the flat top entirely ("уберём прямую вообще"); a stale key
     # from that window falls through the isinstance(v, str) skip above, which is
     # what "ignore it silently" means here.
 
+=======
+>>>>>>> Stashed changes
     # ── the strands in hand must divide the wires in the slot ────────────────
     # DERIVED, not a field rule: it is the PAIR that is broken, and either half
     # is a legitimate thing to have just typed.  Rounding it would silently
     # build a different machine — 7 wires wound 2-in-hand is 3.5 turns per coil,
     # and 3.5 turns is not a winding.
     _kind["k"] = "derived"
+<<<<<<< Updated upstream
     # ── the slot/pole topology has to be one the family stamps ───────────────
     # DERIVED: it is the PAIR (slots/segment, poles/segment) that is judged,
     # and either half is a legitimate thing to have just typed.
     _topo = topology_error(geo)
     if _topo is not None:
         bad.append(_topo)
+=======
+>>>>>>> Stashed changes
     _wp = _num(geo.get("wire_parallel"))
     _nw = _num(geo.get("num_wires_per_slot"))
     if _wp is not None and _nw is not None and _wp >= 1 and _nw >= 1:
@@ -1364,6 +1379,7 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
                  "{:d}, or make num_wires_per_slot a multiple of {:d}."
                  .format(_wpi, _nwi, _nwi, _wpi, _nwi / _wpi, _nwi, _wpi))
 
+<<<<<<< Updated upstream
     # ── the split strips + their gaps have to fit ACROSS the slot ────────────
     # DERIVED, and the tangential twin of `winding_does_not_fit` (which is the
     # RADIAL stack).  wire_split = N lays N strips of wire_width side by side
@@ -1387,6 +1403,8 @@ def validate_parameter_values(geo: Dict[str, Any]) -> List[Dict[str, Any]]:
         _fld, _msg, _bound = _split_fit
         _err(_fld, geo.get(_fld), _msg, max=_bound)
 
+=======
+>>>>>>> Stashed changes
     # ── the retaining sleeve has to fit inside the air gap ───────────────────
     # DERIVED: it is the PAIR (sleeve_thickness, air_gap) that is broken, and
     # either half is a legitimate thing to have just typed — so the rule applies

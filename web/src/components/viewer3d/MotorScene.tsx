@@ -271,6 +271,7 @@ const View2dToggle: React.FC = () => {
   );
 };
 
+<<<<<<< Updated upstream
 
 /** The lighting rig — three lights, no image-based environment.
  *
@@ -300,6 +301,12 @@ const MotorScene: React.FC<{ force3d?: boolean }> = ({ force3d }) => {
   const { showGrid, showAxes, envIntensity, setSelectedPart } = useUIStore();
   // Materials tab opens in FULL 3D regardless of the leftover render mode
   // (user 2026-08-25: "needs to do the same thing as geometry") — the
+=======
+const MotorScene: React.FC<{ force3d?: boolean }> = ({ force3d }) => {
+  const { showGrid, showAxes, envIntensity, setSelectedPart } = useUIStore();
+  // Materials tab opens in FULL 3D regardless of the leftover render mode
+  // (user 2026-08-25: "нужно сделать то же самое, как в геометрии") — the
+>>>>>>> Stashed changes
   // 2D/3D toggle still works afterwards.
   const { renderMode: _rm, toggleRenderMode: _trm } = useUIStore();
   useEffect(() => {

@@ -91,8 +91,12 @@ SOLVER_REQUIRED_PARAMS: frozenset = frozenset({
     "num_slots", "num_poles",
     # winding / slot
     "wire_width", "wire_height", "wire_spacing_x", "wire_spacing_y",
+<<<<<<< Updated upstream
     "wire_split", "wire_parallel",
     "insulation_thickness", "num_wires_per_slot",
+=======
+    "wire_split", "wire_parallel", "insulation_thickness", "num_wires_per_slot",
+>>>>>>> Stashed changes
     # stator cross-section
     "tooth_width", "tooth2_width", "cut_width", "slot_hs",
     "stator_fillet_r", "stator_fillet_r1",
@@ -342,6 +346,7 @@ SCHEMA_FALLBACK: Dict[str, dict] = {
     },
 }
 
+<<<<<<< Updated upstream
 #: Descriptions the SERVER owns outright, overriding whatever the config says.
 #:
 #: ``geometry_schema`` is per-config DATA: every die and every saved machine
@@ -394,6 +399,8 @@ SCHEMA_DESCRIPTION_OVERRIDE: Dict[str, str] = {
 RETIRED_GEOMETRY_KEYS: frozenset = frozenset({"magnet_top", "shaft_diameter",
                                               "wire_split_series"})
 
+=======
+>>>>>>> Stashed changes
 
 def geometry_schema_meta() -> Dict[str, dict]:
     """The ``geometry_schema`` block the frontend clamps from
@@ -404,9 +411,13 @@ def geometry_schema_meta() -> Dict[str, dict]:
     the check silently skipped every parameter until this was noticed.
 
     ``SCHEMA_FALLBACK`` fills in the knobs the loaded config predates; anything
+<<<<<<< Updated upstream
     the yaml names wins — EXCEPT the descriptions in
     ``SCHEMA_DESCRIPTION_OVERRIDE``, which the server owns because the stored
     text explains a semantic the code has since replaced.
+=======
+    the yaml names wins.
+>>>>>>> Stashed changes
     """
     from motor_ai_sim.config import get_config
     raw = (get_config() or {}).get("geometry_schema", {}) or {}

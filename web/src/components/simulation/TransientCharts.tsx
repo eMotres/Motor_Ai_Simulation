@@ -20,6 +20,7 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 import type { TransientSummary } from './SummaryTable';
 import { useMotorStore } from '../../stores/motorStore';
 import { geoSignature } from '../common/geoSig';
+<<<<<<< Updated upstream
 import { assignmentSignature } from '../../lib/dutyMaterials';
 // THE REQUEST BODY of an Electromagnetic run — shared with the Thermal tab,
 // which builds the same one when it has to make the run its own solve was
@@ -35,6 +36,10 @@ import {
   applyLoadedOperatingPoint,
   type CouplingBlock, type CoupledRunResult,
 } from './coupledApi';
+=======
+import { currentGeoJson, currentMatJson } from '../../lib/apiAuth';
+import { assignmentSignature } from '../../lib/dutyMaterials';
+>>>>>>> Stashed changes
 import HelpTip from '../common/HelpTip';
 
 interface TransientPayload {
@@ -233,8 +238,13 @@ interface Props {
   drive?: 'current' | 'voltage' | 'pwm_voltage' | 'custom_current' | 'bldc_current';
   vPeak?: number;   // voltage drives: FUNDAMENTAL phase-voltage amplitude [V, peak]
   vDelta?: number;  // voltage drives: voltage angle δ [°el] in the γ frame
+<<<<<<< Updated upstream
   // (no vBus / fSwitch — a pwm_voltage run's carrier and DC link are the
   //  Controller's, resolved by the backend, 2026-09-24)
+=======
+  vBus?: number;    // pwm_voltage: DC link [V]
+  fSwitch?: number; // pwm_voltage: carrier [Hz]
+>>>>>>> Stashed changes
   iBlock?: number;  // bldc_current: flat-top block amplitude [A terminal]
   waveform?: string;// custom_current: JSON [[θe_deg, i_A], …] over one period
   // ── GENERATOR → BATTERY (boost mode) ─────────────────────────────────
@@ -330,7 +340,11 @@ function loadLastTransient(): TransientPayload | null {
 }
 
 // (live recompute progress strip: elapsed + points, driven by busy + /progress)
+<<<<<<< Updated upstream
 const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false }) => {
+=======
+const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onSummary, runNonce = 0, onBusyChange, steps = 12, fresh = false, fieldLosses = true, demag = false, torqueFilter = false, appliedFromSweep = false, drive = 'current', vPeak = 0, vDelta = 0, vBus = 0, fSwitch = 0, iBlock = 0, waveform = '', eddyCoupled = true, battery = null, busCouple = false, chargeMax = false }) => {
+>>>>>>> Stashed changes
   // `steps` (n_steps_per_period) is controlled from the left panel and
   // matches the animation viewer's n_frames so both hit the same backend
   // cache key (one solve, not two).
@@ -477,6 +491,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
     setBusy(true); setError(null); setRegimeNotice(null);
     const ctrl = new AbortController();
     abortRef.current = ctrl;
+<<<<<<< Updated upstream
     // THE REQUEST BODY — built in `lib/emRunPayload`, not here.  It lived in
     // this function as a 130-line literal until 2026-09-08, when the Thermal tab
     // was given the right to make the missing Electromagnetic run for itself
@@ -493,6 +508,137 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
       fresh: fresh || freshOnce,
       run_id: String(runNonce),
     });
+=======
+    // Typed inputs — ONE source for both transports.  The direct GET goes through
+    // FastAPI (which coerces query strings to the typed signature); the kernel
+    // POST calls get_fem_transient DIRECTLY, so the JSON types must be REAL here
+    // (a string "false" would read truthy → e.g. a spurious restore).  Build typed
+    // values, then stringify only when assembling the GET query string.
+    const p: Record<string, unknown> = {
+      // restore=true → on open, return the LAST saved transient (stale-flagged if
+      // params differ) instead of recomputing.  Only the Run button omits it.
+      restore:            restoreOnly,
+      n_steps_per_period: steps,
+      n_periods:          1,
+      gamma_deg, I_phase_rms,
+      // Drive mode: "voltage" imposes sinusoidal phase voltages — the currents
+      // become the machine's own response (incl. back-EMF-harmonic parasitics)
+      // and the backend also runs a matched-fundamental current-drive reference
+      // (harm_ref) so ΔP_harm = the watt cost of those harmonic currents.
+      // EXCITATION SOURCE.  Each source's own parameters are sent ONLY with
+      // that source: the backend refuses a v_bus sent with a current drive
+      // rather than ignore it, because a parameter that is quietly dropped is
+      // how a run answers a different question than the one on screen.
+      drive,
+      ...((drive === 'voltage' || drive === 'pwm_voltage')
+        ? { v_phase_peak: vPeak, v_delta_deg: vDelta, harm_ref: true }
+        : { v_phase_peak: 0, v_delta_deg: 0, harm_ref: false }),
+      ...(drive === 'pwm_voltage' ? { v_bus: vBus, f_switch: fSwitch } : {}),
+      ...(drive === 'bldc_current' ? { i_block: iBlock } : {}),
+      ...(drive === 'custom_current' ? { waveform } : {}),
+      // ── THE PACK ON THE DC LINK ────────────────────────────────────
+      // Only ever sent on an imposed-voltage run of a machine that HAS a
+      // battery: on any other run there is no bridge for it to be behind, and
+      // the request stays exactly the one this component has always built.
+      // The two loop flags ride with it; without a battery the backend refuses
+      // them, so they are gated on the same condition rather than separately.
+      ...(((drive === 'voltage' || drive === 'pwm_voltage') && battery)
+        ? { battery: JSON.stringify(battery),
+            ...(busCouple ? { bus_couple: true } : {}),
+            ...(chargeMax ? { charge_max: true } : {}) }
+        : {}),
+      mesh_size_mm:       readMeshSetting('meshSize',    4.0),
+      min_size_mm:        readMeshSetting('minSize',     0.3),
+      outer_air_factor:   readMeshSetting('outerAir',    1.3),
+      motion_band:        readMeshSetting('motionBand',  true),
+      band_thickness_mm:  readMeshSetting('bandThickness', 0.4),
+      gap_layers:         readMeshSetting('gapLayers',   2),
+      n_sectors:          readMeshSetting('nSectors',    1),
+      stator_fillet_mm:   0,   // native geometry — extra smoothing removed
+      // ALWAYS use the sliding band for the transient torque/back-EMF — meshes
+      // ONCE and rotates the rotor through a moving band (clean, physical T(t)),
+      // vs remesh-per-frame which injects huge numerical ripple.  Decoupled from
+      // the Mesh-tab toggle (that now only controls mesh VISUALISATION).
+      sliding_band:       true,
+      // Field-based magnet/shaft eddy losses (σ·∂A/∂t solve) vs the slab estimate.
+      rotor_eddy:         fieldLosses,
+      // Coupled σ·∂A/∂t eddy-current solve (Simulation-tab checkbox).  ON: the
+      // induced currents are solved WITH the field (copper loss is the solved
+      // 2-D value, not a post-process) and the run's field snapshot carries the
+      // real eddy J⟳, so the J⟳ / Loss views render it instead of running a
+      // second transient.  OFF: magnetostatic run, and those views solve on
+      // demand exactly as before.  Never forced on here — it costs solve time
+      // and it changes which copper-loss number the run reports.
+      eddy:               eddyCoupled,
+      // Keep the last frame's field server-side for the J⟳ / Loss views.  Not
+      // an extra solve — it is the frame this run just finished.
+      field_snapshot:     true,
+      // Per-element irreversible demagnetisation: de-rates Br → torque/EMF + %-map.
+      demag,
+      // Band-limit T(t) to the physical 6·k orders (UI toggle, default ON).
+      torque_filter:      torqueFilter,
+      // Bit-identical pole/slot mesh (Mesh-tab "Periodic" toggle).
+      pole_copy:          readMeshSetting('poleCopy', false),
+      // ANSYS-style concentric-ring air-gap mesh (Mesh-tab "Air-gap mesh" toggle).
+      // template halves need the belt → force structured gap when template on
+      structured_gap:     readMeshSetting('structuredGap', false) || readMeshSetting('ironTemplate', true),
+      // Harmonic gap coupling (Mesh-tab "Harmonic gap"): step-independent RAW ripple.
+      airgap_macro:       readMeshSetting('harmonicGap', false),
+      // P2 is the calculation basis (Mesh-tab toggle, default ON): quadratic
+      // elements → B linear per element → smooth Arkkio torque, no P1 staircase,
+      // and the forbidden-order noise floor converges to 0 with mesh refinement.
+      // Irreversible demagnetisation, the voltage drive and the coupled eddy
+      // solve all run on P2. P1 is deleted, so this is a constant now — sending
+      // anything else raises in the solver rather than silently downgrading.
+      element_order:      2,
+      // Deterministic template iron mesh (Mesh-tab "Template iron" toggle).
+      iron_template:      readMeshSetting('ironTemplate', true),
+      // Geometry-driven CDT mesh (Mesh-tab "Geometry-driven mesh" toggle, default ON).
+      geo_mesh:           readMeshSetting('geoMesh', true),
+      // SPEED — sent explicitly whenever the panel has one, so an ordinary
+      // user's rpm applies to THEIR solve without touching the shared config
+      // (omitted → the backend falls back to the shared simulation.rpm).
+      ...(() => {
+        const v = Number(readSimSetting('rpm', NaN));
+        return Number.isFinite(v) && v > 0 ? { rpm: v } : {};
+      })(),
+      // Copper-loss physics: coil temperature → ρ_Cu(T); end-winding factor
+      // (0 = auto-estimate from geometry) for the copper the 2-D field misses.
+      coil_temp_c:        readSimSetting('coilTemp',   120.0),
+      end_winding_factor: readSimSetting('endWinding',   0.0),
+      // Operating mode — generator shifts the drive 180 deg el server-side.
+      mode: readSimSetting<string>('opMode', 'motor'),
+      // D-AXIS: sent only when PINNED.  Blank means "measure it", and the
+      // backend's own resolver decides that from the shared config — sending
+      // a 0 for "blank" would pin the reference to zero degrees instead.
+      ...(() => {
+        const _d = String(readSimSetting<string>('daxisDeg', '') ?? '').trim();
+        return _d === '' || !Number.isFinite(Number(_d))
+          ? {} : { daxis_deg: Number(_d) };
+      })(),
+      // WINDING — send the SELECTED connection explicitly.  The selector
+      // buttons write the shared config through a debounced sync, and the
+      // auto-run raced it: the run computed with the OLD winding while the UI
+      // labelled it with the new one (measured live: a 4S run and a 2S-2P run
+      // both returned 32.11 Nm).  With the label in the request the backend
+      // resolves n_parallel from exactly what the selector shows.
+      ...(readSimSetting<string>('connection', '')
+        ? { connection: readSimSetting<string>('connection', '') } : {}),
+      // Per-part mesh size from the Mesh tab (same localStorage key).
+      component_mesh:     JSON.stringify(readMeshSetting<Record<string, number>>('componentMesh', {})),
+      // SAME include_frames/n_frames as the FemAnimationViewer so both panels hit
+      // the exact same backend cache key (one solve, not two).  Frames ignored here.
+      include_frames:     true,
+      n_frames:           steps,
+      run_id:             String(runNonce),
+      fresh,
+      // The kernel POST bypasses the fetch interceptor's ?geo=/?mat= — the
+      // caller's own geometry and materials must ride the payload, or the
+      // Run solves the SHARED config while the field views show the copy.
+      ...(() => { const g = currentGeoJson(); return g ? { geo: g } : {}; })(),
+      ...(() => { const m = currentMatJson(); return m ? { mat: m } : {}; })(),
+    };
+>>>>>>> Stashed changes
     // Helper: fetch with auto-retry against transient connection drops.
     // The uvicorn supervisor sometimes respawns the worker mid-request when
     // a heavy FEM solve crashes the LLVM JIT; without a retry the user sees
@@ -578,7 +724,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
         }
         // Stamp a FRESH run with the geometry AND the material assignment it
         // was computed for, so a later change (applying a Sweep design; picking
+<<<<<<< Updated upstream
         // another steel, another magnet temperature, another insulation —
+=======
+        // another steel, another magnet temperature, another slot liner —
+>>>>>>> Stashed changes
         // whether on the machine or on the active duty) flags it stale.  The
         // material stamp is taken from the request that was actually sent
         // (`p.mat`), not re-read afterwards, so it describes THIS solve.  It
@@ -814,6 +964,7 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               && !!d?.time_s?.length && !!d?.summary;
             if (backNewer) {
               setData(prev => (prev === last || prev == null) ? d : prev);
+<<<<<<< Updated upstream
               // …and REMEMBER it: the local copy is what "Save to duty" files
               // as the duty's waveforms (ActiveFamilyStrip's same-run check
               // reads sim.lastTransient).  Adopting a newer backend run on
@@ -827,6 +978,11 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
               setData(prev => (prev === last || prev == null)
                 ? { ...last, summary: d.summary } : prev);
               persistLastTransient({ ...last, summary: d.summary });
+=======
+            } else if (d?.summary && richer) {
+              setData(prev => (prev === last || prev == null)
+                ? { ...last, summary: d.summary } : prev);
+>>>>>>> Stashed changes
             }
           } catch { /* offline — the local copy stands */ }
         })();
@@ -1481,6 +1637,29 @@ const TransientCharts: React.FC<Props> = ({ gamma_deg = 0, I_phase_rms = 85, onS
                   <HelpTip title={'Mean phase current over the reported electrical period, worst phase. '
                     + 'Zero on a settled orbit. Above ' + (data.summary?.pwm_dc_tol_A ?? 0.5) + ' A the reported '
                     + 'TORQUE RIPPLE and current ripple ARE this offset, not the machine (the loss terms barely move).'} /></>}
+            </Typography>
+          )}
+          {/* Imposed-current sources that are NOT the sinusoid: say what
+              current actually went in, because "I rms" on the panel is not it. */}
+          {data?.drive === 'bldc_current' && data.bldc && (
+            <Typography sx={{ fontSize: 10, color: 'var(--text-2)', mt: 0.25 }}>
+              <span style={{ color: '#a78bfa', fontWeight: 700 }}>BLDC 120° block</span>
+              {' '}I = {data.bldc.i_block_A.toFixed(1)} A flat top ·{' '}
+              {data.bldc.I_phase_rms_A.toFixed(1)} A rms · I₁ ={' '}
+              {data.bldc.I1_phase_rms_A.toFixed(1)} A rms
+              <HelpTip title={`${data.bldc.note}. The flat top is the controller's current `
+                + `limit; the rms (I·√(2/3)) is what heats the winding and the fundamental `
+                + `(I·2√3/π) is what makes the mean torque — compare against a sinusoidal run `
+                + `at the same rms, not at the same peak.`} />
+            </Typography>
+          )}
+          {data?.drive === 'custom_current' && data.custom_current && (
+            <Typography sx={{ fontSize: 10, color: 'var(--text-2)', mt: 0.25 }}>
+              <span style={{ color: '#a78bfa', fontWeight: 700 }}>imposed waveform</span>
+              {' '}{data.custom_current.n_samples} pts ·{' '}
+              {data.custom_current.I_phase_rms_A.toFixed(1)} A rms · I₁ ={' '}
+              {data.custom_current.I1_phase_rms_A.toFixed(1)} A rms @ γ₁{' '}
+              {data.custom_current.gamma1_deg.toFixed(1)}°
             </Typography>
           )}
           {/* Imposed-current sources that are NOT the sinusoid: say what

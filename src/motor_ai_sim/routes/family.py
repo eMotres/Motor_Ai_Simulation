@@ -31,11 +31,15 @@ from pydantic import BaseModel
 
 from motor_ai_sim import auth as _auth
 from motor_ai_sim.auth import caller_identity, require_admin
+<<<<<<< Updated upstream
 from motor_ai_sim.config import get_config
 from motor_ai_sim import workspace as _WS
 from motor_ai_sim.workspace import layering as _ws_layering
 from motor_ai_sim.workspace import resolve_die_dir as _ws_resolve_die_dir
 from motor_ai_sim.workspace import root as _ws_root_f
+=======
+from motor_ai_sim.config import DEFAULT_CONFIG_PATH, get_config
+>>>>>>> Stashed changes
 from motor_ai_sim.motor_access import (MODE_ANONYMOUS, MODE_GRANTED,
                                        catalog_access, may_see_die)
 
@@ -254,11 +258,37 @@ def _lookalike_hint(n: str) -> str:
             + ". A Cyrillic С looks identical to the Latin C — check the "
               "keyboard layout") if parts else ""
 
+# Duty names are NOT file names — a duty lives inside its configuration's yaml
+# — so they admit Unicode letters.  The user types them off a Russian keyboard,
+# where the Cyrillic С is pixel-identical to the Latin C ('rated 30С' was
+# refused with a message no one could act on, 2026-09-01), and duties saved
+# before the validator already carry Cyrillic letters.
+_DUTY_NAME_RE = re.compile(r"^[^\W_][\w.,()#+°·\- ]{0,63}$", re.UNICODE)
+
+
+def _lookalike_hint(n: str) -> str:
+    """Name the offending characters — 'invalid name' with an invisible
+    Cyrillic С in it is a message the user cannot act on."""
+    bad = sorted({ch for ch in n if not _NAME_RE.match(f"a{ch}")})
+    parts = []
+    for ch in bad[:5]:
+        try:
+            import unicodedata
+            parts.append(f"'{ch}' ({unicodedata.name(ch).title()})")
+        except Exception:                       # noqa: BLE001 — unnamed codepoint
+            parts.append(f"'{ch}' (U+{ord(ch):04X})")
+    return ("; offending character(s): " + ", ".join(parts)
+            + ". A Cyrillic С looks identical to the Latin C — check the "
+              "keyboard layout") if parts else ""
+
 
 def _check_name(name: str, what: str) -> str:
     n = (name or "").strip()
     if what == "duty":
+<<<<<<< Updated upstream
         n = _delookalike_duty_name(n)
+=======
+>>>>>>> Stashed changes
         if not _DUTY_NAME_RE.match(n):
             raise HTTPException(422, detail=(
                 f"duty name '{name}' is invalid — use letters (any alphabet), "
@@ -305,6 +335,7 @@ def _cfg_file(die: str, cfg: str) -> Path:
     return _die_dir(die) / f"{cfg}.yaml"
 
 
+<<<<<<< Updated upstream
 def _die_layer(die: str) -> str:
     """``"workspace"`` | ``"published"`` | ``"shared"`` — where the die is read
     from right now.  A die that exists nowhere reads as ``"workspace"``: that is
@@ -496,6 +527,8 @@ def _iter_die_entries() -> list:
     return out
 
 
+=======
+>>>>>>> Stashed changes
 def _require_die_access(die: str, authorization) -> dict:
     """404 unless the caller may read this die (motor_access.may_see_die).
 
@@ -503,6 +536,7 @@ def _require_die_access(die: str, authorization) -> dict:
     be distinguishable from one that does not exist.  Hiding a die from the
     tree without this guard would be cosmetic — the payload endpoint would
     still hand over the whole machine to anyone who guessed the name.
+<<<<<<< Updated upstream
 
     Stage 2: grants gate the SHARED catalog and nothing else.  A die in the
     caller's own workspace is theirs by construction, and a PUBLISHED die is
@@ -518,11 +552,16 @@ def _require_die_access(die: str, authorization) -> dict:
             if acc["mode"] == MODE_ANONYMOUS:
                 raise HTTPException(404, detail=f"die '{die}' not found")
             return acc
+=======
+    """
+    acc = catalog_access(authorization)
+>>>>>>> Stashed changes
     if not may_see_die(acc, die):
         raise HTTPException(404, detail=f"die '{die}' not found")
     return acc
 
 
+<<<<<<< Updated upstream
 # ── who may WRITE the catalog (migration Stage 5) ────────────────────────────
 # The user's rule, 2026-09-15: *"общий каталог правит пока только админ;
 # пользователи всё сохраняют только в своём пространстве, но могут и делиться
@@ -630,12 +669,22 @@ def _can_write_catalog(who: dict) -> bool:
     return bool(ident) and ident != _auth.ANON_OWNER
 
 
+=======
+>>>>>>> Stashed changes
 def catalog_dies() -> list[dict]:
     """Every die on disk with its configuration and duty counts — the admin
     motor picker's source (unfiltered; the route behind it is admin-only)."""
     out: list[dict] = []
+<<<<<<< Updated upstream
     for _e in _iter_die_entries():
         dd = Path(str(_e["dir"]))
+=======
+    if not _DIES_DIR.is_dir():
+        return out
+    for dd in sorted(_DIES_DIR.iterdir()):
+        if not dd.is_dir() or not (dd / "die.yaml").is_file():
+            continue
+>>>>>>> Stashed changes
         try:
             die = _load_yaml(dd / "die.yaml", "die")
         except HTTPException:      # a broken file must not blank the picker
@@ -651,9 +700,13 @@ def catalog_dies() -> list[dict]:
                 continue
             cfgs.append({"name": cf.stem, "duties": len(c.get("duties") or [])})
         out.append({
+<<<<<<< Updated upstream
             "name": _e["name"],
             **({"layer": _e["layer"], "owner": _e["owner"] or None}
                if _ws_layering() else {}),
+=======
+            "name": dd.name,
+>>>>>>> Stashed changes
             "stator_diameter": geo.get("stator_diameter"),
             "slots": geo.get("num_slots"), "poles": geo.get("num_poles"),
             "configs": len(cfgs),
@@ -665,7 +718,14 @@ def catalog_dies() -> list[dict]:
 
 def die_names() -> set[str]:
     """The die names a grant may legally reference."""
+<<<<<<< Updated upstream
     return {str(e["name"]) for e in _iter_die_entries()}
+=======
+    if not _DIES_DIR.is_dir():
+        return set()
+    return {dd.name for dd in _DIES_DIR.iterdir()
+            if dd.is_dir() and (dd / "die.yaml").is_file()}
+>>>>>>> Stashed changes
 
 
 def _load_yaml(p: Path, what: str) -> dict:
@@ -702,7 +762,11 @@ def _save_yaml(p: Path, d: dict) -> None:
             old = p.read_bytes()
             if old != tmp.read_bytes():
                 from datetime import datetime as _dt
+<<<<<<< Updated upstream
                 hdir = _dies_dir() / ".history" / p.parent.name
+=======
+                hdir = _DIES_DIR / ".history" / p.parent.name
+>>>>>>> Stashed changes
                 hdir.mkdir(parents=True, exist_ok=True)
                 stamp = _dt.now().strftime("%Y%m%d-%H%M%S")
                 (hdir / f"{p.stem}.{stamp}.yaml").write_bytes(old)
@@ -711,6 +775,7 @@ def _save_yaml(p: Path, d: dict) -> None:
                     s.unlink()
     except Exception:   # noqa: BLE001
         log.exception("catalog history snapshot failed (save proceeds)")
+<<<<<<< Updated upstream
     _replace_with_retry(tmp, p)
 
 
@@ -760,6 +825,9 @@ def _replace_with_retry(tmp: Path, p: Path) -> None:
         tmp.unlink()
     except OSError:
         pass
+=======
+    tmp.replace(p)
+>>>>>>> Stashed changes
 
 
 def _plain(v):
@@ -785,6 +853,7 @@ def _sim_of(c: dict) -> dict:
 def _live_parts() -> dict:
     """The live machine's per-part accounting states, or {} when every part is
     included.  Same shape the configuration file stores under ``parts:`` and
+<<<<<<< Updated upstream
     the ``?mat=`` payload carries under ``parts``.
 
     ``ALWAYS_INCLUDED_PARTS`` (the shaft — owner rule 2026-09-29: "во всех
@@ -799,10 +868,17 @@ def _live_parts() -> dict:
         for _part in ALWAYS_INCLUDED_PARTS:
             out.pop(_part, None)
         return out
+=======
+    the ``?mat=`` payload carries under ``parts``."""
+    try:
+        from motor_ai_sim.part_states import config_part_states
+        return dict(config_part_states())
+>>>>>>> Stashed changes
     except Exception:      # noqa: BLE001
         return {}
 
 
+<<<<<<< Updated upstream
 def _live_shaft_note() -> str:
     """One-line warning when the live machine's shaft state is not
     ``included`` — surfaced in config-creation / duty-save responses so the
@@ -851,6 +927,8 @@ def _config_role(c: dict) -> tuple:
     return ("mixed", "duties")
 
 
+=======
+>>>>>>> Stashed changes
 def _build_sig(die_doc: dict, cfg_doc: dict) -> str:
     """Fingerprint of the BUILD a result was computed on: the die's stamped
     geometry + the configuration's free-key overrides + winding + materials.
@@ -931,6 +1009,7 @@ def _drive_of(explicit=None, settings=None, summary=None) -> str:
     return "current"
 
 
+<<<<<<< Updated upstream
 def _with_mech_loss(d: Dict[str, Any]) -> Any:
     """The duty's ``result``, with ``loss_mech_w`` DERIVED when it is absent.
 
@@ -995,6 +1074,8 @@ def _restamp_results(c: dict, old_sig: str, new_sig: str) -> int:
     return n
 
 
+=======
+>>>>>>> Stashed changes
 def _primary_drive(entry: dict) -> str:
     """The excitation the duty's PRIMARY (top-level) snapshot was solved with."""
     return _drive_of(None, entry.get("mesh"), entry.get("summary"))
@@ -1016,6 +1097,7 @@ def _run_stem(duty: str) -> str:
     return f"{ascii_part}-{h}" if ascii_part else f"duty-{h}"
 
 
+<<<<<<< Updated upstream
 def _w_die_dir(die: str) -> Path:
     """The WORKSPACE folder of this die, whether or not it is there yet.
 
@@ -1049,6 +1131,10 @@ def _under_workspace(p: Path) -> bool:
 def _runs_dir(die: str, cfg: str) -> Path:
     """Where this die's run sidecars are WRITTEN — always the workspace."""
     return _w_die_dir(die) / "runs" / cfg
+=======
+def _runs_dir(die: str, cfg: str) -> Path:
+    return _die_dir(die) / "runs" / cfg
+>>>>>>> Stashed changes
 
 
 def _run_rel(cfg: str, duty: str, drive: str) -> str:
@@ -1058,6 +1144,7 @@ def _run_rel(cfg: str, duty: str, drive: str) -> str:
 
 
 def _run_path(die: str, rel: str) -> Path:
+<<<<<<< Updated upstream
     """READ path for a stored run: the workspace's own copy, else the layer the
     die was published or curated in.  Writers call :func:`_run_path_w`."""
     w = _w_die_dir(die) / str(rel)
@@ -1071,6 +1158,9 @@ def _run_path(die: str, rel: str) -> Path:
 
 def _run_path_w(die: str, rel: str) -> Path:
     return _w_die_dir(die) / str(rel)
+=======
+    return _die_dir(die) / str(rel)
+>>>>>>> Stashed changes
 
 
 def _strip_run_payload(payload: dict) -> dict:
@@ -1085,7 +1175,11 @@ def _write_run_payload(die: str, rel: str, duty: str, drive: str,
     not a catalog anyone can repair by hand."""
     import gzip
     import json as _json
+<<<<<<< Updated upstream
     p = _run_path_w(die, rel)
+=======
+    p = _run_path(die, rel)
+>>>>>>> Stashed changes
     p.parent.mkdir(parents=True, exist_ok=True)
     body = _json.dumps({"name": duty, "drive": drive,
                         "recorded_at": datetime.now().isoformat(timespec="seconds"),
@@ -1114,6 +1208,7 @@ def _read_run_payload(die: str, rel: str) -> Optional[dict]:
     return d.get("payload") if isinstance(d, dict) else None
 
 
+<<<<<<< Updated upstream
 def _star_delta_of(c: dict, duty: Optional[str]) -> str:
     """'star' | 'delta' for a duty load: the DUTY's own stored connection
     first (the one its results were solved with — two duties of one
@@ -1133,6 +1228,8 @@ def _star_delta_of(c: dict, duty: Optional[str]) -> str:
     return "delta" if str(v or "star").lower().startswith("d") else "star"
 
 
+=======
+>>>>>>> Stashed changes
 def _store_run(die: str, cfg: str, cfg_doc: dict, entry: dict, drive: str, *,
                settings=None, summary=None, result=None,
                assignment_sig=None, payload=None) -> dict:
@@ -1161,6 +1258,7 @@ def _store_run(die: str, cfg: str, cfg_doc: dict, entry: dict, drive: str, *,
         _write_run_payload(die, rel, str(entry.get("name") or ""), drive, payload)
         rec["payload_file"] = rel
     elif prev.get("payload_file"):
+<<<<<<< Updated upstream
         # Inherit the previous sidecar ONLY while it is the same run.  A save
         # that brings a new summary and no waveforms used to keep the old
         # file under the new `recorded_at`: on 2026-09-13 both duties of the
@@ -1203,6 +1301,9 @@ def _store_run(die: str, cfg: str, cfg_doc: dict, entry: dict, drive: str, *,
                         "and the stored sidecar %s belongs to a different run — "
                         "pointer dropped; re-run the point to record them",
                         drive, die, cfg, entry.get("name"), prev.get("payload_file"))
+=======
+        rec["payload_file"] = prev["payload_file"]
+>>>>>>> Stashed changes
     runs[drive] = rec
     entry["runs"] = runs
     return rec
@@ -1237,6 +1338,7 @@ def _run_rows(build_sig: str, entry: dict) -> list[dict]:
     return rows
 
 
+<<<<<<< Updated upstream
 def _ttl_num(v: Any) -> Optional[float]:
     try:
         f = float(v)
@@ -1397,6 +1499,8 @@ def _continuous_rating_kv(coupled: Any) -> Dict[str, Any]:
     return {"continuous_rating": row} if row else {}
 
 
+=======
+>>>>>>> Stashed changes
 def _duty_run_files(entry: dict) -> list[str]:
     return [str(r["payload_file"])
             for r in (entry.get("runs") or {}).values()
@@ -1417,15 +1521,23 @@ def _move_duty_runs(die: str, entry: dict, cfg: str, new_duty: str,
         dst_rel = _run_rel(cfg, new_duty, drive)
         if dst_rel == src_rel:
             continue
+<<<<<<< Updated upstream
         src, dst = _run_path(die, src_rel), _run_path_w(die, dst_rel)
+=======
+        src, dst = _run_path(die, src_rel), _run_path(die, dst_rel)
+>>>>>>> Stashed changes
         r["payload_file"] = dst_rel
         if not src.is_file():
             continue
         dst.parent.mkdir(parents=True, exist_ok=True)
+<<<<<<< Updated upstream
         # A sidecar that still lives in published/ or shared/ is COPIED even on
         # a rename: this workspace may re-file its own view of somebody else's
         # duty, it may not move their file out from under them.
         if copy or not _under_workspace(src):
+=======
+        if copy:
+>>>>>>> Stashed changes
             shutil.copy2(src, dst)
         else:
             src.replace(dst)
@@ -1437,6 +1549,7 @@ def _refile_config_runs(die: str, cfg_doc: dict, old_cfg: str, new_cfg: str,
     (or is copied) with it, and every duty's `payload_file` follows."""
     import shutil
     src, dst = _runs_dir(die, old_cfg), _runs_dir(die, new_cfg)
+<<<<<<< Updated upstream
     if not src.is_dir():
         # Renaming a configuration of a die read out of published/ or shared/:
         # the sidecars are still over there, so the workspace takes a COPY under
@@ -1445,6 +1558,8 @@ def _refile_config_runs(die: str, cfg_doc: dict, old_cfg: str, new_cfg: str,
         _s = _src_die_dir(die)
         if _s is not None and (_s / "runs" / old_cfg).is_dir():
             src, copy = _s / "runs" / old_cfg, True
+=======
+>>>>>>> Stashed changes
     if src.is_dir():
         dst.parent.mkdir(parents=True, exist_ok=True)
         if copy:
@@ -1462,7 +1577,11 @@ def _refile_config_runs(die: str, cfg_doc: dict, old_cfg: str, new_cfg: str,
 def _delete_duty_runs(die: str, entry: dict) -> int:
     n = 0
     for rel in _duty_run_files(entry):
+<<<<<<< Updated upstream
         p = _run_path_w(die, rel)          # never another layer's file
+=======
+        p = _run_path(die, rel)
+>>>>>>> Stashed changes
         try:
             if p.is_file():
                 p.unlink()
@@ -1505,6 +1624,7 @@ class DutySpec(BaseModel):
     # kept, not dropped, because it has to outrank an older stored pick.
     # Absent → the previous save's dict survives, same rule as `mesh`/`result`.
     materials: Optional[dict] = None
+<<<<<<< Updated upstream
     # THIS DUTY's DUTY CYCLE — what the machine actually does with the point:
     # S1 (continuous), S2 (one pull of t_on_s), S3 (ED % of cycle_s, resting at
     # `rest_duty` or unpowered), or an explicit `segments` list.  A robot joint
@@ -1519,6 +1639,8 @@ class DutySpec(BaseModel):
     # save, the same rule `materials` follows (it is not excitation-specific: a
     # PWM run of the same point is the same cycle).
     duty_cycle: Optional[dict] = None
+=======
+>>>>>>> Stashed changes
     # WHICH EXCITATION the attached run used (`current` = sinusoidal current,
     # `pwm_voltage` = the inverter, …).  It decides whether this save owns the
     # duty's PRIMARY snapshot or only its own `runs[<drive>]` entry.  Absent →
@@ -1529,6 +1651,7 @@ class DutySpec(BaseModel):
     # (lib/dutyMaterials.assignmentSignature), recorded so a stored run can be
     # flagged when the machine is re-assigned under it.
     assignment_sig: Optional[str] = None
+<<<<<<< Updated upstream
 
 
 def _validate_duty_cycle(block, duties, *, duty_name: Optional[str] = None) -> None:
@@ -1629,6 +1752,8 @@ def duty_entry(die: str, cfg: str, duty: str) -> Optional[dict]:
         if str(d.get("name") or "") == str(duty):
             return d
     return None
+=======
+>>>>>>> Stashed changes
 
 
 class DieCreate(BaseModel):
@@ -1640,11 +1765,14 @@ class DieCreate(BaseModel):
 _RESULT_KEYS = ("efficiency_pct", "ripple_pct", "v_ll_peak_v", "loss_w", "mass_kg",
                 "p_core_w", "p_stranded_w", "p_solid_w",
                 "v_phase_peak_v", "j_coil_a_mm2",
+<<<<<<< Updated upstream
                 # Bearings + windage, the watts `efficiency_pct` already carries
                 # since 2026-09-11 (it is the SHAFT efficiency, like the card).
                 # `loss_w` stays the electromagnetic total its three components
                 # sum to, so the row can be read either way round.
                 "loss_mech_w",
+=======
+>>>>>>> Stashed changes
                 # When the user saves with the 3D toggle ON, the recorded
                 # torque/power/voltages carry the Stage-A end-effect
                 # correction and this stamps WHICH k_flux was applied — a
@@ -1764,11 +1892,17 @@ def _tree_signature(with_catalog: bool) -> tuple:
 
 @router.get("/tree")
 def tree(response: Response, authorization: str = Header(default=None)):
+<<<<<<< Updated upstream
     # Who may CHANGE the catalog: the vendor alone on a single-layer install,
     # and — since Stage 5 — any registered account once layering is on, because
     # then its saves land in its own workspace (`require_catalog_write`).
     # can_write tells the frontend whether to draw the editing controls; the
     # mutating endpoints enforce the same rule server-side regardless.
+=======
+    # Clients read the catalog and LOAD duties; changing it is the vendor's
+    # job.  can_write tells the frontend whether to draw the editing controls —
+    # the mutating endpoints enforce the same rule server-side regardless.
+>>>>>>> Stashed changes
     #
     # WHICH motors are listed is per-account (motor_access): admins and
     # `all`-granted accounts see everything, a signed-in account sees its
@@ -1777,12 +1911,20 @@ def tree(response: Response, authorization: str = Header(default=None)):
     # grant does — it must never be cached (a stale tree is a user reporting
     # "I still don't see my motors" after the vendor granted them).
     _acc = catalog_access(authorization)
+<<<<<<< Updated upstream
     _can_write = _can_write_catalog(_acc)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Vary"] = "Authorization"
     out = []
     _entries = _iter_die_entries()
     if not _entries:
+=======
+    _can_write = bool(_acc["is_admin"])
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Vary"] = "Authorization"
+    out = []
+    if not _DIES_DIR.is_dir():
+>>>>>>> Stashed changes
         return {"dies": out, "can_write": _can_write}
     # ── Public exhibit: WORKING configurations only (user 2026-08-25) ────────
     # A motor an ANONYMOUS visitor cannot open in Configure (no FEM passport
@@ -1794,7 +1936,12 @@ def tree(response: Response, authorization: str = Header(default=None)):
     if _client_filter:
         try:
             import json as _pj
+<<<<<<< Updated upstream
             _cat = _pj.loads((_ws_root_f() / "motor_catalog.json")
+=======
+            from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _dcp
+            _cat = _pj.loads((Path(_dcp).parent / "motor_catalog.json")
+>>>>>>> Stashed changes
                              .read_text(encoding="utf-8"))
             for _m in _cat.get("motors", []):
                 _g = ((_m.get("passport") or {}).get("geo")) or {}
@@ -1827,6 +1974,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
                 continue
         return False
 
+<<<<<<< Updated upstream
     # The WORKSPACE is part of the key since Stage 2: two accounts with the
     # same access mode see two different catalogs, and a memo that could not
     # tell them apart is precisely the cross-user leak this migration exists to
@@ -1870,11 +2018,20 @@ def tree(response: Response, authorization: str = Header(default=None)):
         # The community layer is for people who signed in.  The anonymous
         # exhibit stays exactly the passport-filtered shared set it always was.
         if _layer == _WS.LAYER_PUBLISHED and _acc["mode"] == MODE_ANONYMOUS:
+=======
+    for dd in sorted(_DIES_DIR.iterdir()):
+        if not dd.is_dir() or not (dd / "die.yaml").is_file():
+>>>>>>> Stashed changes
+            continue
+        # A signed-in non-admin sees its granted dies and nothing else — with
+        # ALL their configurations and duties, exactly as an admin would.
+        if _acc["mode"] == MODE_GRANTED and dd.name not in _acc["dies"]:
             continue
         die = _load_yaml(dd / "die.yaml", "die")
         geo = die.get("geometry") or {}
         if _client_filter and not _die_is_client_ready(geo):
             continue
+<<<<<<< Updated upstream
         # Every stored solver answer this die has, read ONCE — never
         # `duty_results.get()` per configuration, which re-reads the whole JSON
         # of every layer each time (a twelve-configuration die would parse the
@@ -1883,6 +2040,8 @@ def tree(response: Response, authorization: str = Header(default=None)):
         # moment a coupled run writes one.
         from motor_ai_sim import duty_results as _dr
         _dr_die = _dr.index(_die_name)
+=======
+>>>>>>> Stashed changes
         cfgs = []
         for cf in sorted(dd.glob("*.yaml")):
             if cf.name == "die.yaml":
@@ -1892,7 +2051,10 @@ def tree(response: Response, authorization: str = Header(default=None)):
             ov = c.get("geometry_overrides") or {}
             w = c.get("winding") or {}
             _bsig = _build_sig(die, c)
+<<<<<<< Updated upstream
             _role, _role_src = _config_role(c)
+=======
+>>>>>>> Stashed changes
             cfgs.append({
                 "name": cf.stem,
                 # Derived from the duties, not from the creation-time toggle —
@@ -1940,6 +2102,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
                      "star_delta": (d.get("star_delta")
                                     or (d.get("summary") or {}).get("star_delta")),
                      "torque_nm": d.get("torque_nm"), "power_kw": d.get("power_kw"),
+<<<<<<< Updated upstream
                      "note": d.get("note", ""), "result": _with_mech_loss(d),
                      # What the machine DOES with this point (S1 / S2 / S3 /
                      # segments) — a handful of numbers, so the catalog row can
@@ -1947,11 +2110,15 @@ def tree(response: Response, authorization: str = Header(default=None)):
                      # on every duty saved before the cycle existed, which reads
                      # as the continuous duty they were always assumed to be.
                      "duty_cycle": d.get("duty_cycle"),
+=======
+                     "note": d.get("note", ""), "result": d.get("result"),
+>>>>>>> Stashed changes
                      # Every excitation this duty has been run and SAVED at —
                      # descriptions only, never a payload (the tree is fetched
                      # on every catalog render).  Empty list = a duty that has
                      # only ever been saved the way duties always were.
                      "primary_drive": _primary_drive(d),
+<<<<<<< Updated upstream
                      "runs": _run_rows(_bsig, d),
                      # HOW LONG MAY IT RUN (2026-09-17).  Absent — never null —
                      # on a duty with no coupled record, on a record older than
@@ -1966,6 +2133,9 @@ def tree(response: Response, authorization: str = Header(default=None)):
                      **_continuous_rating_kv(
                          (_dr_cfg.get(str(d.get("name") or "")) or {})
                          .get("coupled"))}
+=======
+                     "runs": _run_rows(_bsig, d)}
+>>>>>>> Stashed changes
                     for d in (c.get("duties") or [])
                 ],
             })
@@ -1986,9 +2156,13 @@ def tree(response: Response, authorization: str = Header(default=None)):
             "thumb_svg": die.get("thumb_svg"),
             "configs": cfgs,
         })
+<<<<<<< Updated upstream
     if _sig:
         _TREE_CACHE[_key] = (_sig, out)
     res = {"dies": list(out), "can_write": _can_write}
+=======
+    res = {"dies": out, "can_write": _can_write}
+>>>>>>> Stashed changes
     if not out and _acc["mode"] == MODE_GRANTED:
         # An empty page tells a new account nothing.  ONE line, no wall of
         # text — the catalog renders it where "no dies yet" would go.
@@ -2071,7 +2245,11 @@ def rename_die(die: str, req: DieRename, _w: dict = Depends(require_catalog_writ
     if ctx.get("die") == die:
         import json as _json
         ctx["die"] = new
+<<<<<<< Updated upstream
         _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
+=======
+        _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+>>>>>>> Stashed changes
     log.info("family: die '%s' renamed to '%s'", die, new)
     return {"ok": True, "die": new}
 
@@ -2106,6 +2284,7 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
         raise HTTPException(409, detail=(
             f"die '{die}' still has {len(cfgs)} configuration(s): "
             f"{', '.join(cfgs)} — delete them first (or pass force=true)"))
+<<<<<<< Updated upstream
 
     admin_email = str((_w.get("user") or {}).get("email") or "")
     note = None
@@ -2150,6 +2329,20 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
     if note:
         out["note"] = note
     return out
+=======
+    for p in dd.glob("*.yaml"):
+        p.unlink()
+    # …and the stored-run sidecars of every duty that went with them.
+    import shutil as _sh
+    _sh.rmtree(dd / "runs", ignore_errors=True)
+    try:
+        dd.rmdir()
+    except OSError:
+        pass                             # non-yaml leftovers — keep the folder
+    log.warning("family: die '%s' deleted (%d configuration(s) with it)",
+                die, len(cfgs))
+    return {"ok": True, "deleted_configs": cfgs}
+>>>>>>> Stashed changes
 
 
 # ── configuration ────────────────────────────────────────────────────────────
@@ -2205,7 +2398,11 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
                  "L-number follows the live stack (%s mm)",
                  name, _fixed, geo.get("motor_length"))
         name = _fixed
+<<<<<<< Updated upstream
     doc = {
+=======
+    _save_yaml(_cfg_file(die, name), {
+>>>>>>> Stashed changes
         "name": name,
         "die": die,
         "role": role,
@@ -2230,6 +2427,28 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
         "duties": [],
     }
     return name, doc
+
+
+# ── L-name ↔ stack consistency ───────────────────────────────────────────────
+# A configuration named "L15" / "G1-L160" declares its stack in the name, and
+# the name must TRACK the build (user's rule 2026-08-24: "нужно это
+# отслеживать и переименовывать") — an L15 holding a 13 mm build misled for a
+# whole session before it was caught by hand.
+_LNUM_RE = re.compile(r"(^|[-_ ])L(\d+(?:\.\d+)?)$")
+
+
+def _lname_fix(name: str, stack) -> Optional[str]:
+    """The corrected name when ``name`` ends in L<number> contradicting the
+    stack; None when the name is free-form or already truthful."""
+    try:
+        if stack is None:
+            return None
+        m = _LNUM_RE.search(str(name))
+        if m is None or abs(float(m.group(2)) - float(stack)) < 0.05:
+            return None
+        return str(name)[:m.start(2)] + ("%g" % float(stack))
+    except (TypeError, ValueError):
+        return None
 
 
 # ── L-name ↔ stack consistency ───────────────────────────────────────────────
@@ -2294,7 +2513,11 @@ def rename_config(die: str, cfg: str, req: ConfigRename, _w: dict = Depends(requ
     if ctx.get("die") == die and ctx.get("config") == cfg:
         import json as _json
         ctx["config"] = new
+<<<<<<< Updated upstream
         _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
+=======
+        _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+>>>>>>> Stashed changes
     log.info("family: configuration '%s/%s' renamed to '%s'", die, cfg, new)
     return {"ok": True, "config": new}
 
@@ -2441,7 +2664,13 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                        if geo.get(k) is not None}
         _live_wind = _plain(live.get("winding")) or {}
         mat = _plain(live.get("materials")) or {}
+<<<<<<< Updated upstream
         _live_mats = {k: mat.get(k) for k in _SAVED_MATERIAL_KEYS if mat.get(k)}
+=======
+        _live_mats = {k: mat.get(k)
+                      for k in ("magnet", "stator_core", "rotor_core")
+                      if mat.get(k)}
+>>>>>>> Stashed changes
         _live_pstates = _live_parts()
         _stored = c.get("geometry_overrides") or None
         if not _stored:
@@ -2506,11 +2735,15 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # result is automatically flagged "computed on an older build".
             # A LOCKED configuration stays canon — refusal as before.
             _mc_diffs = []
+<<<<<<< Updated upstream
             _sig_before = _build_sig(_die_doc_for_sig(die), c)
+=======
+>>>>>>> Stashed changes
             _sw = c.get("winding") or {}
             if str(_sw.get("connection") or "") != str(_live_wind.get("connection") or ""):
                 _mc_diffs.append("connection: %s → %s"
                                  % (_sw.get("connection"), _live_wind.get("connection")))
+<<<<<<< Updated upstream
             # EVERY saved material, not the three this loop used to watch
             # (fixed 2026-09-11).  `_SAVED_MATERIAL_KEYS` was widened on
             # 2026-09-09 so a liner, an enamel, a conductor or a shaft grade
@@ -2531,10 +2764,17 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                     _mc_diffs.append("%s: %s → %s" % (k, _sv, _lv))
                     if _sv is not None:
                         _mc_contradicted = True
+=======
+            _sm = c.get("materials") or {}
+            for k in ("magnet", "stator_core", "rotor_core"):
+                if (_sm.get(k) or None) != (_live_mats.get(k) or None):
+                    _mc_diffs.append("%s: %s → %s" % (k, _sm.get(k), _live_mats.get(k)))
+>>>>>>> Stashed changes
             # Per-part accounting is a build property on the same footing: a
             # configuration whose shaft became `reference` (frameless — the
             # customer brings the shaft) is a different product, and every
             # earlier duty's N·m/kg was billed against a mass that included it.
+<<<<<<< Updated upstream
             # ALWAYS_INCLUDED_PARTS (the shaft) are excluded from this diff: an
             # old stored file that still says ``shaft: reference`` is not a
             # build change to flag or refuse on — it always reads as
@@ -2542,6 +2782,9 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             from motor_ai_sim.part_states import ALWAYS_INCLUDED_PARTS as _ALWAYS_INC
             _sp = {k: v for k, v in (c.get("parts") or {}).items()
                    if k not in _ALWAYS_INC}
+=======
+            _sp = c.get("parts") or {}
+>>>>>>> Stashed changes
             for k in sorted(set(_sp) | set(_live_pstates)):
                 if (_sp.get(k) or "included") != (_live_pstates.get(k) or "included"):
                     _mc_diffs.append("part %s: %s → %s"
@@ -2558,6 +2801,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                     else:
                         c.pop("parts", None)
                     log.info("family: configuration '%s/%s' adopted the live "
+<<<<<<< Updated upstream
                              "build properties on duty save (%s)",
                              die, cfg, "; ".join(_mc_diffs))
                     # ABSENT IS NOT CHANGED (2026-09-11).  When the only thing
@@ -2580,6 +2824,11 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                                      "FILLED keys the configuration had never "
                                      "named, so the build they were computed on "
                                      "is the build it now describes", _n, die, cfg)
+=======
+                             "build properties on duty save (%s) — previous "
+                             "results now flag as computed on an older build",
+                             die, cfg, "; ".join(_mc_diffs))
+>>>>>>> Stashed changes
             # DIE-level geometry too, not only the free keys.  The hole this
             # closes (lived 2026-08-22→24): a ripple-optimized live machine
             # differed from the die in tooth/magnet SHAPE only — free keys
@@ -2654,6 +2903,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
     _drive = _drive_of(d.drive, d.mesh, d.summary)
     _has_primary = bool(prev and (prev.get("summary") or prev.get("mesh")))
     _is_primary = (_drive == "current") or not _has_primary
+<<<<<<< Updated upstream
     # THE DUTY CYCLE, before anything is written: a block naming a duty this
     # configuration does not have (a rename away, a typo) would be accepted
     # here and refused only much later, by the thermal run, with nothing on
@@ -2685,6 +2935,18 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             # An EMPTY block is the only way to say "no cycle any more": the
             # duty goes back to being the continuous point it was before.
             entry.pop("duty_cycle", None)
+=======
+    # Complete computed state (mesh + full summary) and the duty's own material
+    # picks ride the duty; absent in the request → the previous save's copy
+    # survives, same rule as `result`.  MATERIALS are not excitation-specific —
+    # they are what this duty is made of — so they are written either way.
+    for k in ("mesh", "summary", "materials"):
+        v = getattr(d, k, None)
+        if v is not None and (_is_primary or k == "materials"):
+            entry[k] = dict(v)
+        elif prev and prev.get(k):
+            entry[k] = prev[k]
+>>>>>>> Stashed changes
     # The per-excitation runs go LAST in the entry — the primary snapshot is
     # what an engineer opening this file is looking for, and it must not be
     # buried under three summaries.
@@ -2697,6 +2959,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                    assignment_sig=d.assignment_sig)
     duties.append(entry)
     c["duties"] = duties
+<<<<<<< Updated upstream
     # A configuration written before `star_delta` existed names no terminal
     # connection; the live winding this duty was just solved with does.  Fill
     # it ONCE (never overwrite a stated one) so the next ▶ restores the same
@@ -2710,6 +2973,8 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                      "machine: %s", die, cfg, _lw_sd)
     except Exception:      # noqa: BLE001 — a fill-in must never fail a save
         log.debug("star_delta fill skipped", exc_info=True)
+=======
+>>>>>>> Stashed changes
     # The L-number follows the stack whenever this save DEFINED or CHANGED the
     # build (an unlocked configuration adopting a re-tuned stack — see above):
     # an "L12" holding 20 mm is exactly the lie this rename prevents.  Renaming
@@ -2729,7 +2994,11 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
             if ctx.get("die") == die and ctx.get("config") == _oldn:
                 import json as _json
                 ctx["config"] = cfg
+<<<<<<< Updated upstream
                 _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
+=======
+                _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+>>>>>>> Stashed changes
             log.info("family: configuration '%s/%s' renamed to '%s' — the "
                      "L-number follows the defined stack", die, _oldn, cfg)
             log.info("family: duty '%s/%s/%s' saved (%s, %.1f Arms @ %.0f rpm, γ=%.2f°)",
@@ -2791,6 +3060,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     _store_run(die, cfg, c, found, _drive, result=res,
                assignment_sig=req.assignment_sig)
     _save_yaml(p, c)
+<<<<<<< Updated upstream
     # The per-duty store keeps a POINTER at the electromagnetic column, never a
     # copy of it (2026-09-09): the numbers above live in the configuration yaml,
     # which is the one place a catalogue answer may live, and a second copy able
@@ -2806,6 +3076,8 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
         except Exception:  # noqa: BLE001 — bookkeeping never fails a save
             log.debug("family: EM pointer not recorded for %s/%s/%s",
                       die, cfg, req.duty, exc_info=True)
+=======
+>>>>>>> Stashed changes
     log.info("family: %s result recorded on '%s/%s/%s' (%s): %s",
              _drive, die, cfg, req.duty,
              "primary" if _primary else "beside the primary", res)
@@ -2813,7 +3085,11 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
 
 
 @router.post("/duty_run")
+<<<<<<< Updated upstream
 def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write)):
+=======
+def record_duty_run(req: DutyRunSave, _admin: dict = Depends(require_admin)):
+>>>>>>> Stashed changes
     """File a finished run's WAVEFORMS under one excitation of one duty.
 
     The yaml keeps a description (when, on which build, with which materials,
@@ -2822,7 +3098,10 @@ def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write))
     an engineer cannot open in an editor stops being a catalog."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
+<<<<<<< Updated upstream
     _require_die_write(die, _w)
+=======
+>>>>>>> Stashed changes
     drive = _run_drive(req.drive)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
@@ -2941,15 +3220,23 @@ class DutyDuplicate(BaseModel):
 
 @router.post("/duty/{die}/{cfg}/{duty}/duplicate")
 def duplicate_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
+<<<<<<< Updated upstream
                    _w: dict = Depends(require_catalog_write)):
+=======
+                   _admin: dict = Depends(require_admin)):
+>>>>>>> Stashed changes
     """Copy a duty VERBATIM under a new name — operating point, targets, note
     AND the recorded result all ride along (the house rule: a duplicate is a
     full copy, no empty cells).  A duty carries no geometry, so within one
     configuration the copy is exactly as valid as the original; only the
     saved_at stamp is fresh, marking when the copy was made."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+<<<<<<< Updated upstream
     _require_die_write(die, _w)
     new = _delookalike_duty_name(str(req.name or "").strip())
+=======
+    new = str(req.name or "").strip()
+>>>>>>> Stashed changes
     if not new:
         raise HTTPException(422, detail="give the copy a name")
     p = _cfg_file(die, cfg)
@@ -2982,14 +3269,22 @@ def duplicate_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
 
 @router.patch("/duty/{die}/{cfg}/{duty}")
 def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
+<<<<<<< Updated upstream
                 _w: dict = Depends(require_catalog_write)):
+=======
+                _admin: dict = Depends(require_admin)):
+>>>>>>> Stashed changes
     """Rename a duty in place — everything else (operating point, targets,
     note, recorded result) stays untouched.  Born of a live typo ('peal' for
     'peak'): a name slip must be a two-click fix, not delete-and-redo that
     would throw the recorded result away."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+<<<<<<< Updated upstream
     _require_die_write(die, _w)
     new = _delookalike_duty_name(str(req.name or "").strip())
+=======
+    new = str(req.name or "").strip()
+>>>>>>> Stashed changes
     if not new:
         raise HTTPException(422, detail="give the duty a name")
     p = _cfg_file(die, cfg)
@@ -3005,6 +3300,7 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     # (a rename that orphaned the PWM payload would be a silent data loss).
     _move_duty_runs(die, src, cfg, new, copy=False)
     src["name"] = new
+<<<<<<< Updated upstream
     # Every duty cycle that NAMED this duty follows the rename — its own, and
     # any other duty resting at it.  A cycle left pointing at a name that no
     # longer exists would be refused on the next save with a message about a
@@ -3014,6 +3310,8 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     if _n:
         log.info("family: %d duty-cycle reference(s) re-pointed from '%s' to "
                  "'%s' in %s/%s", _n, duty, new, die, cfg)
+=======
+>>>>>>> Stashed changes
     _save_yaml(p, c)
     # the active context may point at this duty by its old name
     ctx = _read_ctx() or {}
@@ -3021,6 +3319,7 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
             and ctx.get("duty") == duty):
         import json as _json
         ctx["duty"] = new
+<<<<<<< Updated upstream
         _ctx_file().write_text(_json.dumps(ctx), encoding="utf-8")
     # …AND SO DO THE DUTY'S ANSWERS (2026-09-16).  Both stores address a duty
     # by its NAME — `duty_results` by the key itself, `duty_fields` by the
@@ -3050,6 +3349,11 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
              n_res, n_fields)
     return {"ok": True, "duty": new, "results_carried": bool(n_res),
             "fields_carried": n_fields}
+=======
+        _CTX_FILE.write_text(_json.dumps(ctx), encoding="utf-8")
+    log.info("family: duty '%s/%s/%s' renamed to '%s'", die, cfg, duty, new)
+    return {"ok": True, "duty": new}
+>>>>>>> Stashed changes
 
 
 @router.delete("/duty/{die}/{cfg}/{duty}")
@@ -3068,6 +3372,7 @@ def delete_duty(die: str, cfg: str, duty: str, _w: dict = Depends(require_catalo
                  if x.get("name") == duty)
     c["duties"] = after
     _save_yaml(p, c)
+<<<<<<< Updated upstream
     # …and so do its stored thermal / mechanical / coupled summaries: a duty
     # that no longer exists must not keep a column in the next report, and a
     # duty later re-created under the same name is a NEW operating point, not
@@ -3093,6 +3398,11 @@ def delete_duty(die: str, cfg: str, duty: str, _w: dict = Depends(require_catalo
                 "%d stored field file(s) removed)", die, cfg, duty,
                 n_runs, n_fields)
     return {"ok": True, "runs_deleted": n_runs, "fields_deleted": n_fields}
+=======
+    log.warning("family: duty '%s/%s/%s' deleted (%d stored run file(s) removed)",
+                die, cfg, duty, n_runs)
+    return {"ok": True, "runs_deleted": n_runs}
+>>>>>>> Stashed changes
 
 
 # ── locks & the active family context ────────────────────────────────────────
@@ -3134,6 +3444,7 @@ def release_context(reason: str) -> Optional[str]:
     released and why.  Returns the die that was active, or None."""
     ctx = _read_ctx() or {}
     import json as _json
+<<<<<<< Updated upstream
     _ctx_file().write_text(_json.dumps({
         "die": None, "config": None, "duty": None,
         "released_from": ctx.get("die"),
@@ -3142,6 +3453,11 @@ def release_context(reason: str) -> Optional[str]:
         # configuration of <die>" instead of a bare "press ▶ in Motors".
         "released_config": ctx.get("config"),
         "released_duty": ctx.get("duty"),
+=======
+    _CTX_FILE.write_text(_json.dumps({
+        "die": None, "config": None, "duty": None,
+        "released_from": ctx.get("die"),
+>>>>>>> Stashed changes
         "reason": reason,
         "at": datetime.now().isoformat(timespec="seconds")}), encoding="utf-8")
     log.info("family: context released (%s) — was '%s/%s'",
@@ -3149,6 +3465,7 @@ def release_context(reason: str) -> Optional[str]:
     return ctx.get("die")
 
 
+<<<<<<< Updated upstream
 def _read_released() -> Optional[dict]:
     """The raw released record, or None when the file is absent, unreadable,
     names no released die, or a die is active."""
@@ -3449,6 +3766,8 @@ def _auto_transition_die(die: str, cfg: Optional[str], duty: Optional[str],
     return {"die": target, "config": target_cfg, "duty": duty, "created": created}
 
 
+=======
+>>>>>>> Stashed changes
 def sync_active_die_geometry(saved_geo: dict,
                              prev_geo: Optional[dict] = None) -> Optional[str]:
     """Refresh the ACTIVE die's geometry snapshot after a geometry save.
@@ -3493,6 +3812,7 @@ def sync_active_die_geometry(saved_geo: dict,
     # die '20SW1200' was overwritten with a 200 mm motor — the catalog then
     # filed it under Ø 200 and its three duties "vanished" for the user.
     _die_g0 = d.get("geometry") or {}
+<<<<<<< Updated upstream
     _diffs = die_identity_diffs(_die_g0, geo)
     if _diffs:
         _ident = [f"{x['key']} {x['die']} → {x['live']}" for x in _diffs]
@@ -3523,6 +3843,33 @@ def sync_active_die_geometry(saved_geo: dict,
                 log.warning("family: could not release the context either: %s", _ce)
             return None
         return (out or {}).get("die")
+=======
+    _ident = []
+    for k in ("stator_diameter", "num_seg", "num_slots_per_segment",
+              "num_poles_per_segment"):
+        dv, sv = _die_g0.get(k), geo.get(k)
+        if (isinstance(dv, (int, float)) and isinstance(sv, (int, float))
+                and abs(float(dv) - float(sv)) > 1e-6):
+            _ident.append(f"{k} {dv} → {sv}")
+    if _ident:
+        log.warning(
+            "family: REFUSED to sync die '%s' — the saved machine is not this "
+            "die (%s). A die keeps its diameter and topology for life; load "
+            "the other motor into its own die. The die snapshot is untouched.",
+            die, "; ".join(_ident))
+        # The live editor no longer holds this die's machine — a whole-machine
+        # load (Compare apply, My motors, a preset, the classic catalog) went
+        # through a path that never calls /activate.  Leaving the context
+        # pointing at the old die is what made the header strip lie
+        # ("CIANO28 85 … / L13 (L40)" over a 200 mm G2-L40 live machine,
+        # 2026-09-01 22:33) and sent the overnight charging study to the wrong
+        # motor.  Drop it: no die is active until a load says which one.
+        try:
+            release_context("live machine is not this die: " + "; ".join(_ident))
+        except Exception as _ce:   # noqa: BLE001 — never fail the save
+            log.warning("family: could not release the context: %s", _ce)
+        return None
+>>>>>>> Stashed changes
     # ── The stranger guard ───────────────────────────────────────────────────
     # Sync follows EDITS of this die's own machine — it never adopts a foreign
     # one.  A save whose PRE-save live machine does not match the die's
@@ -3546,6 +3893,7 @@ def sync_active_die_geometry(saved_geo: dict,
                 "%s). The die snapshot is untouched.",
                 die, ", ".join(sorted(_foreign)[:8]))
             return None
+<<<<<<< Updated upstream
     # ── Config-level keys never reach die.yaml ───────────────────────────────
     # Stack length and the whole wire stack (FREE_GEO_KEYS) belong to the
     # CONFIGURATION (geometry_overrides); the live save may carry any value for
@@ -3564,6 +3912,8 @@ def sync_active_die_geometry(saved_geo: dict,
     if new_geo == _die_prev:
         return None                        # nothing die-level changed
     geo = new_geo
+=======
+>>>>>>> Stashed changes
     d["geometry"] = geo
     try:
         from motor_ai_sim.routes.presets import _gen_thumb_svg
@@ -3578,6 +3928,7 @@ def sync_active_die_geometry(saved_geo: dict,
     return die
 
 
+<<<<<<< Updated upstream
 #: The winding keys of a configuration — FREE_GEO_KEYS minus the stack length.
 #: A duty whose saved machine differs from the die in one of these (or in any
 #: die key) was solved on a different winding: loading it must ask first.
@@ -3667,6 +4018,8 @@ def _blocking(diffs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [x for x in diffs if x["scope"] != "free"]
 
 
+=======
+>>>>>>> Stashed changes
 class Activate(BaseModel):
     die: str
     config: str
@@ -4012,6 +4365,27 @@ def save_as_new_die(req: SaveAsNewDie, _w: dict = Depends(require_catalog_write)
                          "num_poles": geo.get("num_poles")}}
 
 
+class Deactivate(BaseModel):
+    reason: Optional[str] = None
+
+
+@router.post("/deactivate")
+def deactivate(req: Deactivate, _admin: dict = Depends(require_admin)):
+    """No die is active any more — the editor is about to hold a machine that
+    is not a catalog duty (a Compare row, a private "my motor" copy, a preset).
+
+    The ONE rule that ends the clobber family for good: only ▶ (activate +
+    apply) may make a die active; every other whole-machine load releases the
+    context FIRST.  With no active die there is nothing for the geometry save
+    to sync into, so a foreign machine can never be written over a die — not
+    even one that happens to share its diameter and topology (a modified
+    private copy of the same 85 mm, which the identity guard cannot tell
+    apart).  The header strip then says "no die active" instead of lying.
+    """
+    was = release_context(req.reason or "whole-machine load outside the catalog")
+    return {"ok": True, "released_from": was}
+
+
 @router.get("/context")
 def context(response: Response, authorization: str = Header(default=None)):
     """WHAT is loaded in the editor right now — die / configuration / duty —
@@ -4024,6 +4398,7 @@ def context(response: Response, authorization: str = Header(default=None)):
     if not ctx:
         # A RELEASED context says why (identity guard or an explicit
         # deactivate) so the strip can show "no die active" honestly instead
+<<<<<<< Updated upstream
         # of vanishing without a word — and, since 2026-09-20, HOW the live
         # machine differs from the released die, so the strip can offer the
         # ways to keep the work (save as new die / new configuration / reload)
@@ -4037,13 +4412,30 @@ def context(response: Response, authorization: str = Header(default=None)):
                                     str(_rel.get("released_from") or "")):
             _rel = {}
         return {"active": False, "can_write": _can_write_catalog(who), **_rel}
+=======
+        # of vanishing without a word.
+        _rel = {}
+        try:
+            import json as _json
+            _raw = _json.loads(_CTX_FILE.read_text(encoding="utf-8"))
+            if isinstance(_raw, dict) and _raw.get("released_from"):
+                _rel = {"released_from": _raw.get("released_from"),
+                        "reason": _raw.get("reason"), "at": _raw.get("at")}
+        except Exception:   # noqa: BLE001 — no file, no story
+            pass
+        return {"active": False, "can_write": bool(who["is_admin"]), **_rel}
+>>>>>>> Stashed changes
     die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
     duty = ctx.get("duty")
     # A die the caller was not granted does not exist for them — including in
     # the "what is loaded" strip, which would otherwise name it and hand out
     # its build and operating point.
     if not may_see_die(catalog_access(authorization), die):
+<<<<<<< Updated upstream
         return {"active": False, "can_write": _can_write_catalog(who)}
+=======
+        return {"active": False, "can_write": bool(who["is_admin"])}
+>>>>>>> Stashed changes
     try:
         d = _load_yaml(_die_file(die), "die")
         c = _load_yaml(_cfg_file(die, cfg), "configuration")
@@ -4062,6 +4454,7 @@ def context(response: Response, authorization: str = Header(default=None)):
         # The keys a die-lock leaves editable — ONE source of truth for the
         # Geometry tab's read-only greying (must match the PUT guard).
         "free_keys": list(EDITABLE_UNDER_DIE_LOCK),
+<<<<<<< Updated upstream
         # The keys that make this die THIS die: the Geometry table flags them
         # ("die-defining — changing it makes a new die") and the sweep/optimizer
         # pickers refuse to vary them without "allow new lamination".
@@ -4072,16 +4465,21 @@ def context(response: Response, authorization: str = Header(default=None)):
         # so refreshing the tab still explains why the strip's name changed
         # (cleared only by the next /activate, which stamps a fresh context).
         "transitioned_from": ctx.get("transitioned_from"),
+=======
+>>>>>>> Stashed changes
         # The supply this machine is designed around.  The Simulation tab's PWM
         # source prefills V_bus from it: a DC-link voltage typed by hand is a
         # number nobody checks against the pack that is actually there, and the
         # ripple a PWM run reports scales directly with it.
         "battery": c.get("battery"),
+<<<<<<< Updated upstream
         # The bearings this machine is built with — the input to the SKF
         # frictional-moment model behind the "Bearings" and "Windage" cells on
         # the Electromagnetic summary and the mechanical rows in the datasheet.
         # Absent = not decided yet, which is NOT the same as zero loss.
         "bearings": c.get("bearings"),
+=======
+>>>>>>> Stashed changes
         "duty_point": (None if point is None else {
             "current_arms": point.get("current_arms"), "rpm": point.get("rpm"),
             "gamma_deg": point.get("gamma_deg"), "mode": point.get("mode", "motor"),
@@ -4620,6 +5018,7 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
     }
 
 
+<<<<<<< Updated upstream
 # ── per-duty solver results ──────────────────────────────────────────────────
 
 @router.get("/duty_results/{die}/{cfg}")
@@ -4720,6 +5119,8 @@ def duty_fields(die: str, cfg: str, response: Response,
     }
 
 
+=======
+>>>>>>> Stashed changes
 # ── datasheet export ─────────────────────────────────────────────────────────
 
 @router.get("/datasheet/{die}/{cfg}")
@@ -4746,7 +5147,11 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
     passport = None
     try:
         import json
+<<<<<<< Updated upstream
         cat_path = _ws_root_f() / "motor_catalog.json"
+=======
+        cat_path = Path(DEFAULT_CONFIG_PATH).parent / "motor_catalog.json"
+>>>>>>> Stashed changes
         cards = json.loads(cat_path.read_text(encoding="utf-8")).get("motors", [])
         want = f"{die} {cfg}".casefold()
         hit = next((m for m in cards
@@ -4783,7 +5188,11 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
 
     try:
         from motor_ai_sim.datasheet import build_datasheet
+<<<<<<< Updated upstream
         # wire coating is pure geometry — measured here (cached), no FEM
+=======
+        # slot fill is pure geometry — measured here (cached), no FEM
+>>>>>>> Stashed changes
         try:
             from motor_ai_sim.masses import slot_fill_from_cad
             _geo = dict(d.get("geometry") or {})
@@ -4791,6 +5200,7 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
             _slot = slot_fill_from_cad(_geo)
         except Exception:                                     # noqa: BLE001
             _slot = None
+<<<<<<< Updated upstream
         # THE STORED COUPLED RECORDS, for the 20 °C catalogue constants only
         # (owner 2026-09-18).  They live in `.duty_results.json` and not in the
         # yaml, so this is the one thing the card needs that its two documents
@@ -4805,6 +5215,11 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
             _cpl = None
         blob = build_datasheet(die=die, cfg=cfg, die_doc=d, cfg_doc=c,
                                passport=passport, slot=_slot, coupled=_cpl)
+=======
+        blob = build_datasheet(die=die, cfg=cfg, die_doc=d, cfg_doc=c,
+                               passport=passport, slot=_slot,
+                               schema=(get_config().get("geometry_schema") or {}))
+>>>>>>> Stashed changes
     except Exception as e:                                    # noqa: BLE001
         log.exception("datasheet build failed for %s/%s", die, cfg)
         raise HTTPException(500, detail=f"datasheet build failed: {e}")
@@ -4871,7 +5286,11 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
         "die": die, "config": cfg,
         "geometry": geo,
         "winding": c.get("winding") or {},
+<<<<<<< Updated upstream
         "materials": mats,
+=======
+        "materials": c.get("materials") or {},
+>>>>>>> Stashed changes
         # Per-part accounting the configuration was built and characterised
         # under — applied the same way its materials are, so a frameless
         # configuration loads frameless instead of silently regrowing a shaft.
@@ -4900,8 +5319,11 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
         # reaches the frontend: `out["duty"]["materials"]` is the DUTY's partial
         # override, `out["materials"]` above is the CONFIGURATION's assignment.
         # Two different things at two different levels — do not merge them here.
+<<<<<<< Updated upstream
         # `duty_cycle` rides along the same way, unchanged: ▶ restores the cycle
         # the duty was defined with, not whatever the last panel held.
+=======
+>>>>>>> Stashed changes
         out["duty"] = dict(found)
         # The stored per-excitation runs are NOT part of the apply payload:
         # they have their own endpoint (/duty_runs) which gunzips the

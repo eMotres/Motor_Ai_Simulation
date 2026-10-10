@@ -23,8 +23,11 @@ import SummaryTable        from './SummaryTable';
 import StoredRunSelector   from './StoredRunSelector';
 import { useMotorStore }   from '../../stores/motorStore';
 import { geoSignature }    from '../common/geoSig';
+<<<<<<< Updated upstream
 import { applyS1AsOperatingPoint, s1AutoSetPlan, s1AutoSetNoticeText }
                             from './coupledApi';
+=======
+>>>>>>> Stashed changes
 import type { TransientSummary } from './SummaryTable';
 import type { FemPayload } from './fem-types';
 
@@ -65,8 +68,13 @@ interface Props {
                   | 'bldc_current';
   vPeak?:         number;
   vDelta?:        number;
+<<<<<<< Updated upstream
   // (no vBus / fSwitch: the PWM carrier and DC link are the Controller's,
   //  resolved by the backend — 2026-09-24)
+=======
+  vBus?:          number;   // pwm_voltage: DC link [V]
+  fSwitch?:       number;   // pwm_voltage: carrier [Hz]
+>>>>>>> Stashed changes
   iBlock?:        number;   // bldc_current: flat-top block amplitude [A]
   waveform?:      string;   // custom_current: JSON [[θe_deg, i_A], …]
   // ── GENERATOR → BATTERY ─────────────────────────────────────────────
@@ -76,15 +84,22 @@ interface Props {
   battery?:       Record<string, unknown> | null;
   busCouple?:     boolean;
   chargeMax?:     boolean;
+<<<<<<< Updated upstream
   /** The panel's speed — the third coordinate of the operating point the
    *  summary card checks itself against (2026-09-13: a card of the 22 900
    *  rpm peak sat unflagged under a panel set to 20 900). */
   rpm?:           number;
+=======
+>>>>>>> Stashed changes
 }
 
 
 // ── main component ────────────────────────────────────────────────────────────
+<<<<<<< Updated upstream
 const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection = '', runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, eddyCoupled = true, drive = 'current', vPeak = 0, vDelta = 0, iBlock = 0, waveform = '', battery = null, busCouple = false, chargeMax = false, rpm }) => {
+=======
+const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection = '', runNonce = 0, onBusyChange, steps = 12, fresh = false, onSummary, fieldLosses = true, demag = false, torqueFilter = false, eddyCoupled = true, drive = 'current', vPeak = 0, vDelta = 0, vBus = 0, fSwitch = 0, iBlock = 0, waveform = '', battery = null, busCouple = false, chargeMax = false }) => {
+>>>>>>> Stashed changes
   // Latest FEM solve payload — kept around so future siblings can reuse it.
   // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const [_femPayload, setFemPayload] = React.useState<FemPayload | null>(null);
@@ -238,7 +253,11 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
       )}
       <Box sx={summaryStale ? { opacity: 0.35, pointerEvents: 'none' } : undefined}>
         <SummaryTable summary={shownSummary} fromSweep={!!appliedSummary}
+<<<<<<< Updated upstream
           liveOp={{ current: I_phase_rms, gamma: gamma_deg, connection, rpm }}/>
+=======
+          liveOp={{ current: I_phase_rms, gamma: gamma_deg, connection }}/>
+>>>>>>> Stashed changes
       </Box>
 
       {/* ── Field viewer / animation — one widget covers both the static
@@ -258,7 +277,11 @@ const PhysicsDashboard: React.FC<Props> = ({ gamma_deg, I_phase_rms, connection 
       <TransientCharts gamma_deg={gamma_deg} I_phase_rms={I_phase_rms} fieldLosses={fieldLosses}
         demag={demag} torqueFilter={torqueFilter} eddyCoupled={eddyCoupled}
         drive={drive} vPeak={vPeak} vDelta={vDelta}
+<<<<<<< Updated upstream
         iBlock={iBlock} waveform={waveform}
+=======
+        vBus={vBus} fSwitch={fSwitch} iBlock={iBlock} waveform={waveform}
+>>>>>>> Stashed changes
         battery={battery as never} busCouple={busCouple} chargeMax={chargeMax}
         steps={steps} runNonce={runNonce} fresh={fresh} onBusyChange={onBusyChange}
         appliedFromSweep={!!appliedSummary}

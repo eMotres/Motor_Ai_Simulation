@@ -309,12 +309,19 @@ def _family_doc_of_motor(motor: dict,
         return None
     try:
         import yaml as _yaml
+<<<<<<< Updated upstream
         from motor_ai_sim.workspace import iter_dies as _iter_dies
         by_die: dict = {}
         # Stage 2: every layer, workspace first — a card whose configuration
         # lives in the shared catalog must still find its document.
         for f in [q for e in _iter_dies()
                   for q in sorted(Path(str(e["dir"])).glob("*.yaml"))]:
+=======
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DCP
+        dies = Path(_DCP).parent / "dies"
+        by_die: dict = {}
+        for f in dies.glob("*/*.yaml"):
+>>>>>>> Stashed changes
             if f.name == "die.yaml":
                 continue
             d = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
@@ -358,11 +365,17 @@ def _role_of_motor(motor: dict) -> Optional[str]:
         return None
     try:
         import yaml as _yaml
+<<<<<<< Updated upstream
         from motor_ai_sim.workspace import iter_dies as _iter_dies
         # Stage 2: every layer, workspace first — a card whose configuration
         # lives in the shared catalog must still find its document.
         for f in [q for e in _iter_dies()
                   for q in sorted(Path(str(e["dir"])).glob("*.yaml"))]:
+=======
+        from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DCP
+        dies = Path(_DCP).parent / "dies"
+        for f in dies.glob("*/*.yaml"):
+>>>>>>> Stashed changes
             if f.name == "die.yaml":
                 continue
             d = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
@@ -402,7 +415,11 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
     if not preset_id:
         raise HTTPException(status_code=400, detail=f"motor '{motor_id}' has no preset to characterise")
     try:
+<<<<<<< Updated upstream
         # ZERO live-state touch (user 2026-08-25 "so it stays out of my way"):
+=======
+        # ZERO live-state touch (user 2026-08-25 "чтобы он мне не мешал"):
+>>>>>>> Stashed changes
         # the preset's machine rides every solve as per-request overrides —
         # geometry via `geo`, connection as a parameter, materials through
         # the request material context, rpm as an argument.  No apply_preset,
@@ -417,10 +434,13 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
         machine = {
             "geometry": dict(_p["geometry"]),
             "connection": str(_psim.get("connection") or "") or None,
+<<<<<<< Updated upstream
             # Terminal connection of THIS machine (preset sim block, mirrored
             # from winding.star_delta on save); star when absent.
             "star_delta": ("delta" if str(_psim.get("star_delta") or "")
                            .lower().startswith("d") else "star"),
+=======
+>>>>>>> Stashed changes
             "materials": dict(_p.get("materials") or {}),
             # Measured k_end of the built machine (preset sim block) — the
             # passport's R/copper then describe the real winding.
@@ -513,6 +533,7 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 "if mats:\n"
                 "    from motor_ai_sim.material_context import set_request_materials\n"
                 "    set_request_materials({'assignment': mats, 'materials': {}})\n"
+<<<<<<< Updated upstream
                 "from motor_ai_sim.simulation.static3d.end_effect import run_stage_a\n"
                 "# mesh sizes: run_stage_a derives them from the PHYSICAL\n"
                 "# scales (air gap, thinnest magnet), never from the OD\n"
@@ -547,6 +568,23 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                 _pr = _sp.run([_sys.executable, "-c", _child, _src, _mfile],
                               capture_output=True, text=True, timeout=7200,
                               env=_env_c)
+=======
+                "gap = float(g.get('air_gap') or 0.5)\n"
+                "od = float(g.get('stator_diameter') or 100.0)\n"
+                "from motor_ai_sim.simulation.static3d.end_effect import run_stage_a\n"
+                "p = run_stage_a(geo_override=g, n_stack=4, n_cap=6,\n"
+                "                h_gap=max(0.28, min(0.6, gap)),\n"
+                "                h_solid=max(0.8, min(1.6, od / 100.0)),\n"
+                "                order=2, l_factors=(0.75, 1.0, 1.5),\n"
+                "                do_bracket=False, do_2d=True,\n"
+                "                tol=3e-3, max_iter=45, verbose=False)\n"
+                "out = {k: p.get(k) for k in ('k_flux', 'k_flux_self',\n"
+                "                             'generated_utc', 'l_stack_curve')}\n"
+                "print('PASSPORT3D:' + json.dumps(out, default=float))\n")
+            try:
+                _pr = _sp.run([_sys.executable, "-c", _child, _src, _mfile],
+                              capture_output=True, text=True, timeout=7200)
+>>>>>>> Stashed changes
             finally:
                 try:
                     _P2(_mfile).unlink()
@@ -567,6 +605,7 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
                            f"OD {2*result['geo']['statorOR_mm']:.0f}",
                 "k_flux_vs_L": {str(e["stack_mm"]): round(e["k_flux"], 5)
                                 for e in (_sa.get("l_stack_curve") or [])},
+<<<<<<< Updated upstream
                 # provenance: the steel actually solved and the mesh rule, so
                 # a wrong-material passport can be found later
                 "materials": _sa.get("materials"),
@@ -576,6 +615,13 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
             from pathlib import Path as _P
             from motor_ai_sim.workspace import root as _ws_root
             _pp = _ws_root() / "end_effect_passports.json"
+=======
+            }
+            import json as _j
+            from pathlib import Path as _P
+            from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _DCP
+            _pp = _P(_DCP).parent / "end_effect_passports.json"
+>>>>>>> Stashed changes
             _all = _j.loads(_pp.read_text(encoding="utf-8")) if _pp.exists() else {}
             _all[_fp] = _e3
             _pp.write_text(_j.dumps(_all, ensure_ascii=False, indent=1),

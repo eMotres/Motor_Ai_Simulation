@@ -13,8 +13,12 @@
 import React, { useEffect, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
+<<<<<<< Updated upstream
   ToggleButton, ToggleButtonGroup, Box, Typography, Tooltip, Checkbox,
   FormControlLabel,
+=======
+  ToggleButton, ToggleButtonGroup, Box, Typography, Tooltip,
+>>>>>>> Stashed changes
 } from '@mui/material';
 import HelpTip from '../common/HelpTip';
 
@@ -167,6 +171,7 @@ const BatteryDialog: React.FC<{
           mt: 2, mb: 0.75 }}>
           CHARGE SIDE — for running this machine as a generator into the pack
         </Typography>
+<<<<<<< Updated upstream
         {/* WHY A NUMBER IN THE BOX CAN COME BACK (user 2026-09-11: "батарея не
             сохраняется" — the pack had saved; these four had not).  A field
             still showing a placeholder is deliberately NOT sent: a guessed
@@ -199,17 +204,27 @@ const BatteryDialog: React.FC<{
             </Box>
           );
         })()}
+=======
+>>>>>>> Stashed changes
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
           <Tooltip placement="top" title="Parallel strings (NP). Pack resistance is NS·r_int/NP, so strings in parallel divide it.">
             <TextField size="small" label="Strings (parallel)" value={npar}
               onChange={(e) => { setNpar(e.target.value); setPh(p => ({ ...p, n_parallel: false })); }}
+<<<<<<< Updated upstream
               helperText={ph.n_parallel ? (forceStore ? 'assumed — will be stored' : 'assumed — not saved') : ' '}
+=======
+              helperText={ph.n_parallel ? 'assumed 1' : ' '}
+>>>>>>> Stashed changes
               sx={{ width: 128, '& .MuiFormHelperText-root': { fontSize: 9.5, color: '#f59e0b', mx: 0 } }} />
           </Tooltip>
           <Tooltip placement="top" title="DC internal resistance PER CELL. The pack's R is NS·r_int/NP and it is what lifts the bus while charging. The pre-filled figure is a datasheet-range placeholder for the chemistry, NOT a measurement of this pack — it also ignores wiring, fuse, connector and shunt resistance, which on a small pack are a real fraction of the cells' own. Replace it with the measured DC-IR.">
             <TextField size="small" label="r_int (mΩ/cell)" value={rint}
               onChange={(e) => { setRint(e.target.value); setPh(p => ({ ...p, r_int_mohm: false })); }}
+<<<<<<< Updated upstream
               helperText={ph.r_int_mohm ? (forceStore ? 'placeholder — will be stored' : 'placeholder — not saved') : ' '}
+=======
+              helperText={ph.r_int_mohm ? 'placeholder' : ' '}
+>>>>>>> Stashed changes
               sx={{ width: 128, '& .MuiFormHelperText-root': { fontSize: 9.5, color: '#f59e0b', mx: 0 } }} />
           </Tooltip>
           <Tooltip placement="top" title="Capacity per string [Ah]. Only used to quote a C-rate — there is no honest guess for it from a voltage spec, so the pre-filled value is a bare placeholder.">
@@ -222,12 +237,17 @@ const BatteryDialog: React.FC<{
                   if (Number.isFinite(c2)) setIchg(String(c2 * Math.max(1, np)));
                 }
               }}
+<<<<<<< Updated upstream
               helperText={ph.capacity_ah ? (forceStore ? 'placeholder — will be stored' : 'placeholder — not saved') : ' '}
+=======
+              helperText={ph.capacity_ah ? 'placeholder' : ' '}
+>>>>>>> Stashed changes
               sx={{ width: 128, '& .MuiFormHelperText-root': { fontSize: 9.5, color: '#f59e0b', mx: 0 } }} />
           </Tooltip>
           <Tooltip placement="top" title="Maximum charge current the pack will accept [A]. Defaults to 1 C of the capacity above. The charging card flags a run that exceeds it; it is not enforced on the solve — the machine makes what it makes, and clamping it silently would hide the problem.">
             <TextField size="small" label="I charge max (A)" value={ichg}
               onChange={(e) => { setIchg(e.target.value); setPh(p => ({ ...p, i_charge_max_a: false })); }}
+<<<<<<< Updated upstream
               helperText={ph.i_charge_max_a ? (forceStore ? '1 C — will be stored' : '1 C — not saved') : ' '}
               sx={{ width: 138, '& .MuiFormHelperText-root': { fontSize: 9.5, color: '#f59e0b', mx: 0 } }} />
           </Tooltip>
@@ -243,6 +263,24 @@ const BatteryDialog: React.FC<{
           </Typography>
           <HelpTip title="No state-of-charge model: V_oc is taken as the pack nominal, so a charge SESSION (V_oc walking from min to max) is a sweep of this, not a property of it." />
         </Box>
+=======
+              helperText={ph.i_charge_max_a ? 'placeholder — 1 C' : ' '}
+              sx={{ width: 138, '& .MuiFormHelperText-root': { fontSize: 9.5, color: '#f59e0b', mx: 0 } }} />
+          </Tooltip>
+        </Box>
+        <Typography sx={{ fontSize: 11.5, mt: 1, color: 'var(--text-2)' }}>
+          {Number.isFinite(rPack)
+            ? `Pack R ≈ ${(rPack * 1000).toFixed(1)} mΩ`
+              + (Number.isFinite(ic) && ic > 0
+                  ? ` · at ${ic.toFixed(0)} A the bus rises ${(rPack * ic).toFixed(2)} V above open circuit`
+                  : '')
+            : 'enter a sane cell count, string count and r_int'}
+        </Typography>
+        <Typography sx={{ fontSize: 10, mt: 0.5, color: 'var(--text-4)' }}>
+          No state-of-charge model: V_oc is taken as the pack nominal, so a charge
+          SESSION (V_oc walking from min to max) is a sweep of this, not a property of it.
+        </Typography>
+>>>>>>> Stashed changes
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}
@@ -252,10 +290,17 @@ const BatteryDialog: React.FC<{
                                   v_cell_nom: Number.isNaN(no) ? (lo + hi) / 2 : no,
                                   v_cell_max: hi,
                                   // placeholders are NOT saved — see onSave
+<<<<<<< Updated upstream
                                   ...(ph.n_parallel && !forceStore ? {} : { n_parallel: np }),
                                   ...(ph.r_int_mohm && !forceStore ? {} : { r_int_mohm: ri }),
                                   ...(ph.capacity_ah && !forceStore ? {} : { capacity_ah: ca }),
                                   ...(ph.i_charge_max_a && !forceStore ? {} : { i_charge_max_a: ic }) })}
+=======
+                                  ...(ph.n_parallel ? {} : { n_parallel: np }),
+                                  ...(ph.r_int_mohm ? {} : { r_int_mohm: ri }),
+                                  ...(ph.capacity_ah ? {} : { capacity_ah: ca }),
+                                  ...(ph.i_charge_max_a ? {} : { i_charge_max_a: ic }) })}
+>>>>>>> Stashed changes
           sx={{ textTransform: 'none' }}>Save</Button>
       </DialogActions>
     </Dialog>

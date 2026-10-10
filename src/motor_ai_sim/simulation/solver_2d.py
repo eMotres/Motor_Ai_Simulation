@@ -157,6 +157,7 @@ class MagnetostaticsSolver2D:
         # compute_copper_losses builds R_coil from the turn count and R_phase
         # from n_parallel, so handing it turns/k and paths×k gives R ∝ 1/k² and
         # I_coil = I_phase/(paths·k) = the current in ONE strand — both correct.
+<<<<<<< Updated upstream
         # STRIPS PER ROW (geometry.wire_split): a wire row is N strips of
         # wire_width side by side, wired as N consecutive SERIES turns.  So the
         # ×N rides in `turns_per_coil` (R ×N²) and NOT in
@@ -167,14 +168,25 @@ class MagnetostaticsSolver2D:
                                           wire_parallel_from_geo as _wp_geo,
                                           n_parallel_effective as _npar_eff,
                                           strip_width_mm as _strip_w)
+=======
+        from motor_ai_sim.winding import (turns_per_coil as _tpc,
+                                          wire_parallel_from_geo as _wp_geo)
+>>>>>>> Stashed changes
         _wp = _wp_geo(g)
         return {
             "I_phase_rms":       I_phase_rms,
             "n_coils_per_phase": w.get("n_coils_per_phase", 4),
+<<<<<<< Updated upstream
             "n_parallel":        _npar_eff(w.get("n_parallel", 2) or 2, g),
             "n_series":          w.get("n_series", 2),
             "n_wires_per_slot":  int(_tpc(g) or g.get("num_wires_per_slot", 14)),
             "wire_width_m":      _strip_w(g) * mm,
+=======
+            "n_parallel":        int(w.get("n_parallel", 2) or 2) * _wp,
+            "n_series":          w.get("n_series", 2),
+            "n_wires_per_slot":  int(_tpc(g) or g.get("num_wires_per_slot", 14)),
+            "wire_width_m":      g.get("wire_width",  5.0) * mm,
+>>>>>>> Stashed changes
             "wire_height_m":     g.get("wire_height", 0.6) * mm,
             "motor_length_m":    gp.stack_length,
             "r_slot_mid_m":      r_slot_mid,

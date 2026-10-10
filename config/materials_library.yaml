@@ -3200,6 +3200,74 @@ magnet:
     beta_hcj_pct_per_k: -0.7143    # %/K  (Hcj / knee field)
     thermal_conductivity: 7.6
 
+  F52SH_30C:
+    Br: 1.428
+    Hc: 1082200
+    bh_curve:
+    - - -1238800
+      - -0.831
+    - - -1233700
+      - 0.0
+    - - -1233100
+      - 0.09
+    - - -1229300
+      - 0.28
+    - - -1221700
+      - 0.413
+    - - -1212200
+      - 0.446
+    - - -1204600
+      - 0.458
+    - - 0
+      - 1.428
+    density: 7500
+    description: 'Sintered NdFeB magnet, F52SH grade - operating point 30 C. Same derivation
+      as F52SH_120C: Br from the N52SH 20 C typical 1.445 T at alpha(Br) = -0.1185 %/C
+      (the factor the F45SH 1.35 -> 1.19 pair pins); demag curve is the 120 C record
+      scaled self-similarly - B by Br(30)/Br(120), H by Hcj(30)/Hcj(120) with SH-class
+      Hcj(20 C) = 1592 kA/m (20 kOe) and beta(Hcj) = -0.5 %/C. Hc = Br/(mu0*mu_rec).
+      Datasheet anchors: N52 Br 1.43-1.48 T, SH = Hcj >= 20 kOe, max 150 C.'
+    grade: F52SH
+    mu_rec: 1.05
+    sigma: 625000.0
+    specific_heat: 460
+    temperature_c: 30
+    thermal_conductivity: 7.6
+
+  F52SH_80C:
+    Br: 1.342
+    Hc: 1017300
+    bh_curve:
+    - - -912800
+      - -0.781
+    - - -909000
+      - 0.0
+    - - -908600
+      - 0.085
+    - - -905800
+      - 0.263
+    - - -900200
+      - 0.388
+    - - -893200
+      - 0.42
+    - - -887600
+      - 0.43
+    - - 0
+      - 1.342
+    density: 7500
+    description: 'Sintered NdFeB magnet, F52SH grade - operating point 80 C. Same derivation
+      as F52SH_120C: Br from the N52SH 20 C typical 1.445 T at alpha(Br) = -0.1185 %/C
+      (the factor the F45SH 1.35 -> 1.19 pair pins); demag curve is the 120 C record
+      scaled self-similarly - B by Br(80)/Br(120), H by Hcj(80)/Hcj(120) with SH-class
+      Hcj(20 C) = 1592 kA/m (20 kOe) and beta(Hcj) = -0.5 %/C. Hc = Br/(mu0*mu_rec).
+      Datasheet anchors: N52 Br 1.43-1.48 T, SH = Hcj >= 20 kOe, max 150 C.'
+    grade: F52SH
+    mu_rec: 1.05
+    sigma: 625000.0
+    specific_heat: 460
+    temperature_c: 80
+    thermal_conductivity: 7.6
+
 
 # ── CONDUCTORS (windings) ────────────────────────────────────
 
@@ -3376,6 +3444,7 @@ insulator:
     description: "T800 unidirectional CFRP, ~60 % fibre volume, hoop-wound rotor retaining sleeve. mu_r 1; sigma is the TRANSVERSE (across-fibre) value the axial 2-D eddy current actually sees."
     sigma: 80.0              # S/m  transverse to the fibres (along fibres ~3e4)
     density: 1580            # kg/m3  rule of mixtures, Vf 0.60
+<<<<<<< Updated upstream
     # --- mechanical, transverse + shear (added 2026-09-05, rotor solve) ---
     # A hoop-wound UD laminate is strongly ORTHOTROPIC: the 165 GPa below is E1,
     # ALONG the fibres = the hoop direction.  Across the fibres the matrix carries
@@ -3387,6 +3456,8 @@ insulator:
     poisson_ratio: 0.30                  # -    nu12, major Poisson ratio
     cte_ppm_k_1: -0.5   # ppm/K  ALONG the fibres = the hoop direction; carbon contracts when heated
     cte_ppm_k_2: 30.0   # ppm/K  ACROSS them (matrix-dominated). Typical UD 60 % Vf - TO BE VERIFIED WITH THE WINDER
+=======
+>>>>>>> Stashed changes
     thermal_conductivity: 0.8    # W/(m.K)  through-thickness (along fibres ~7)
     thermal_conductivity_axial: 7.0   # W/(m.K)  in-plane, along the fibres
     specific_heat: 900           # J/(kg.K)
@@ -3395,6 +3466,7 @@ insulator:
     youngs_modulus_gpa: 165      # GPa  E1, along the fibres
     max_service_temp_c: 180      # degC  epoxy matrix (180 C class)
 
+<<<<<<< Updated upstream
   # -------------------------------------------------------------------------
   # HIGH-MODULUS hoop-wound sleeves - added 2026-09-06.
   #
@@ -3478,6 +3550,8 @@ insulator:
     permeability: 1.0
     max_service_temp_c: 180      # degC  epoxy matrix (180 C class)
 
+=======
+>>>>>>> Stashed changes
 
 
 # ---------------------------------------------------------------------------

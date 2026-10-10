@@ -72,12 +72,15 @@ def _cache_dir() -> Path:
     except Exception:                   # noqa: BLE001 — never break a solve
         return _ROOT / "config" / ".static3d_cache"
 
+<<<<<<< Updated upstream
 
 def __getattr__(name):
     if name == "_CACHE_DIR":
         return _cache_dir()
     raise AttributeError(name)
 
+=======
+>>>>>>> Stashed changes
 DEFAULT_PRESET = "live"
 
 #: The materials the Stage A / Stage B passport was measured with.  The live

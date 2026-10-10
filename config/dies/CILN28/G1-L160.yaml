@@ -17,7 +17,6 @@ winding:
   n_parallel: 2
   n_series: 2
   layers: 1
-end_winding_factor: 1.144
 duties:
 - name: peak
   mode: generator
@@ -42,7 +41,7 @@ materials:
   stator_core: B15AHV950M
   rotor_core: B15AHV950M
 battery:
-  chemistry: NMC
+  chemistry: NMC (GF Myriad semi-solid, FAP106136260)
   cells: 200
   v_cell_min: 3.2
   v_cell_nom: 3.75
@@ -50,3 +49,7 @@ battery:
   v_min: 640.0
   v_nom: 750.0
   v_max: 860.0
+  n_parallel: 3
+  r_int_mohm: 0.37
+  capacity_ah: 45.0
+  i_charge_max_a: 810.0

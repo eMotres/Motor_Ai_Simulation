@@ -1,5 +1,6 @@
 {
  "p2_demag": {
+<<<<<<< Updated upstream
   "P_cu_W": 110.25743005175799,
   "P_fe_W": 4.411131252489889,
   "T_avg_Nm": 0.3906404010276183,
@@ -90,6 +91,110 @@
   "T_ripple_pp_Nm": 0.004088998791449361,
   "V_peak": 8.556212737999914,
   "v_circuit_resid_max_V": 7.105427357601002e-15,
+=======
+  "P_cu_W": 110.2946194509197,
+  "P_fe_W": 4.707777296464159,
+  "T_avg_Nm": 0.3929934886593305,
+  "T_avg_maxwell_Nm": 0.3918,
+  "T_ripple_pct": 0.7051071409431156,
+  "V_peak": 7.716341681608686,
+  "demag_br_mean": 0.835369484480517,
+  "demag_br_min": 0.13472558018617523
+ },
+ "p2_demag_eddy": {
+  "P_cu_W": 110.33901300752689,
+  "P_cu_ac_solve_W": 3.113,
+  "P_cu_total_solve_W": 65.346,
+  "P_fe_W": 4.7790257276670625,
+  "P_mag_honest_W": 1.587,
+  "P_mag_solve_W": 1.426,
+  "P_shaft_honest_W": 0.565,
+  "P_shaft_solve_W": 0.016,
+  "T_avg_Nm": 0.3984743118429222,
+  "T_avg_maxwell_Nm": 0.3926,
+  "T_ripple_pct": 1.2894429228858584,
+  "V_peak": 7.910008210812563,
+  "demag_br_mean": 0.852558618710694,
+  "demag_br_min": 0.14056374136876545
+ },
+ "p2_eddy": {
+  "P_cu_W": 110.47482638863342,
+  "P_cu_ac_solve_W": 3.249,
+  "P_cu_total_solve_W": 65.482,
+  "P_fe_W": 4.905573362474742,
+  "P_mag_honest_W": 1.625,
+  "P_mag_solve_W": 1.468,
+  "P_shaft_honest_W": 0.575,
+  "P_shaft_solve_W": 0.014,
+  "T_avg_Nm": 0.4085232294730405,
+  "T_avg_maxwell_Nm": 0.4054,
+  "T_ripple_pct": 0.3636190044295107,
+  "V_peak": 7.875331341364297
+ },
+ "p2_load": {
+  "P_cu_W": 110.46489296659537,
+  "P_fe_W": 4.9054093268405845,
+  "T_avg_Nm": 0.4076410899705331,
+  "T_avg_maxwell_Nm": 0.4074,
+  "T_ripple_pct": 0.38400924344283216,
+  "V_peak": 7.864524145964406
+ },
+ "p2_noload": {
+  "P_cu_W": 1.5562428616608335,
+  "P_fe_W": 4.305025849877756,
+  "T_avg_Nm": 1.1879327860624796e-05,
+  "T_avg_maxwell_Nm": 0.0,
+  "T_ripple_pct": 533.6163029443345,
+  "V_peak": 5.375755115923116
+ },
+ "p2_voltage": {
+  "I_A_fund_A": 73.29761036838877,
+  "I_A_peak_A": 71.29548742663238,
+  "I_A_thd_pct": 1.7350833353558792,
+  "P_cu_W": 82.57756424961356,
+  "P_fe_W": 5.848711093883601,
+  "T_avg_Nm": 0.2432873169386031,
+  "T_avg_maxwell_Nm": 0.2426,
+  "T_ripple_pct": 1.4681446713769999,
+  "V_peak": 8.104209947154073,
+  "v_circuit_resid_max_V": 9.020562075079397e-15,
+  "v_dc_residual_A": 0.0
+ },
+ "p2_voltage_eddy": {
+  "I_A_fund_A": 73.2626372439007,
+  "I_A_peak_A": 71.2789874846808,
+  "I_A_thd_pct": 1.7484970830896125,
+  "P_cu_W": 82.71625790252561,
+  "P_cu_ac_solve_W": 2.758,
+  "P_cu_total_solve_W": 49.165,
+  "P_fe_W": 5.846373365213122,
+  "P_mag_solve_W": 0.0,
+  "P_shaft_solve_W": 0.0,
+  "T_avg_Nm": 0.24404254039924597,
+  "T_avg_maxwell_Nm": 0.2416,
+  "T_ripple_pct": 1.5633342728014383,
+  "V_peak": 8.101378307325456,
+  "v_circuit_resid_max_V": 6.217248937900877e-15,
+  "v_dc_residual_A": 0.0
+ },
+ "p2_voltage_eddy_rotor": {
+  "I_A_fund_A": 73.29445139979025,
+  "I_A_peak_A": 71.31019369663305,
+  "I_A_thd_pct": 1.7279799031725027,
+  "P_cu_W": 82.78538715692453,
+  "P_cu_ac_solve_W": 2.758,
+  "P_cu_total_solve_W": 49.205,
+  "P_fe_W": 5.845667818040155,
+  "P_mag_honest_W": 1.721,
+  "P_mag_solve_W": 1.57,
+  "P_shaft_honest_W": 0.392,
+  "P_shaft_solve_W": 0.004,
+  "T_avg_Nm": 0.24467391244991477,
+  "T_avg_maxwell_Nm": 0.2413,
+  "T_ripple_pct": 1.5201138884456038,
+  "V_peak": 8.102128143666476,
+  "v_circuit_resid_max_V": 5.329070518200751e-15,
+>>>>>>> Stashed changes
   "v_dc_residual_A": 0.0
  },
  "p2_voltage_eddy_rotor": {

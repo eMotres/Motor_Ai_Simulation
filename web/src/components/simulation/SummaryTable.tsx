@@ -14,14 +14,25 @@ import { geoSignature } from '../common/geoSig';
 import { currentMatJson } from '../../lib/apiAuth';
 import { assignmentSignature } from '../../lib/dutyMaterials';
 import { pickCable } from '../../lib/cableTable';
+<<<<<<< Updated upstream
 import { fetchBearingLosses } from '../../lib/machineBearings';
 import type { BearingLosses } from '../../lib/machineBearings';
+=======
+>>>>>>> Stashed changes
 import { useMotorStore } from '../../stores/motorStore';
 import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
          continuousRatingTip, s1ResultsAtLine, controllerTerm } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 import SineVsInverterTable from './SineVsInverterTable';
+
+/** Bench-probe result riding in the summary (backend measures it once per
+ *  machine during the run) — small-signal Ld/Lq at the I≈0 iron state, the
+ *  LCR-meter measurement simulated. */
+interface BenchLdq {
+  Ld_mH: number; Lq_mH: number; Lq_over_Ld: number | null;
+  I_probe_arms: number; connection: string | null;
+}
 
 /** Bench-probe result riding in the summary (backend measures it once per
  *  machine during the run) — small-signal Ld/Lq at the I≈0 iron state, the
@@ -44,11 +55,18 @@ export interface TransientSummary {
   connection?:         string;
   n_parallel?:         number;
   // STRANDS IN HAND: k wires wound together as one turn.  The slot keeps its
+<<<<<<< Updated upstream
   // num_wires_per_slot physical wire rows (same copper, same fill, same mass),
   // but the coil has turns_per_coil = (rows/k)×wire_split SERIES turns — so EMF
   // and Kt divide by k, R by k², and the phase current splits over
   // n_parallel_eff = paths×k conductors (the split divides no current: its
   // strips are turns).  Absent on runs saved before it was stamped.
+=======
+  // num_wires_per_slot physical wires (same copper, same fill, same mass), but
+  // the coil has turns_per_coil = wires/k SERIES turns — so EMF and Kt divide
+  // by k, R by k², and the phase current splits over n_parallel_eff = paths×k
+  // conductors.  Absent on runs saved before it was stamped.
+>>>>>>> Stashed changes
   wire_parallel?:      number;
   turns_per_coil?:     number;
   n_parallel_eff?:     number;
@@ -163,9 +181,12 @@ export interface TransientSummary {
    *  milliwatts and would round to nothing inside P_solid_W. Absent when the
    *  machine has no sleeve. */
   P_sleeve_W?:         number | null;
+<<<<<<< Updated upstream
   /** magnet eddy and shaft eddy on their own (2026-09-07) — the sum is P_solid_W */
   P_mag_W?:            number | null;
   P_shaft_W?:          number | null;
+=======
+>>>>>>> Stashed changes
   /** Retaining-sleeve burst check at this run's speed. Thin-ring, OWN MASS
    *  ONLY (sigma = rho*omega^2*r_mean^2) — the magnet pressure the sleeve is
    *  fitted to retain is NOT in it, so this is a lower bound. Reported, never
@@ -210,11 +231,15 @@ export interface TransientSummary {
   Km_Nm_sqrtW?: number | null;
   Km_per_mass_Nm_sqrtW_kg?: number | null;
   demag?: { bh_kept_vol_pct?: number; bh_loss_pct?: number;
+<<<<<<< Updated upstream
             br_kept_vol_pct: number; loss_pct: number;
             // Worst single element: a flagged CORNER diagnostic (sharp-corner
             // value, mesh-dependent) with its location — not the magnet's
             // figure.  br_worst_pct is the same number on pre-2026-09-26 results.
             br_corner?: BrCorner | null; br_worst_pct?: number;
+=======
+            br_kept_vol_pct: number; loss_pct: number; br_worst_pct: number;
+>>>>>>> Stashed changes
             area_derated_pct: number; grade_nominal?: number;
             grade_effective?: number; magnet_name?: string;
             energy_total_J?: number; energy_lost_J?: number } | null;
@@ -231,6 +256,7 @@ export interface TransientSummary {
   /** Coil temperature the run was solved at [°C] — R and copper loss are
    *  quoted at it; the R@25°C view rescales the R cells from it. */
   coil_temp_C?: number;
+<<<<<<< Updated upstream
   /** THE MECHANICAL HALF OF THE LOSS PICTURE, SERVER-SIDE (2026-09-08).
    *
    *  User: "when the coupled run runs, the WHOLE model must be solved, and ALL
@@ -288,6 +314,8 @@ export interface TransientSummary {
    *  claimed — and its presence says the cards on this card set were computed at
    *  temperatures the machine actually reaches, not at temperatures typed in. */
   coupling?: CouplingBlock;
+=======
+>>>>>>> Stashed changes
   /** Per-part accounting the mass was computed under: {part: 'reference'|'excluded'};
    *  absent/empty on an ordinary machine (every part included). */
   part_states?:        Record<string, string>;
@@ -480,12 +508,15 @@ const ROW = {
   display: 'grid', gridAutoFlow: 'column', gridAutoColumns: 'minmax(0, 1fr)', gap: 1,
 } as const;
 
+<<<<<<< Updated upstream
 interface BrCorner {
   flag: 'corner'; br_pct: number; x_mm?: number; y_mm?: number;
   r_mm?: number; theta_deg?: number; magnet_tag?: number | null;
   element_area_pct?: number; note?: string;
 }
 
+=======
+>>>>>>> Stashed changes
 const Cell: React.FC<{
   label: string; value: string; unit?: string;
   tooltip?: string; accent?: 'green' | 'amber' | 'red' | 'blue' | 'default';
@@ -567,6 +598,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
     try { localStorage.setItem('sim.kvNoload', v ? '1' : '0'); } catch { /* quota */ }
   };
 
+<<<<<<< Updated upstream
   // ── THE MECHANICAL HALF OF THE LOSS PICTURE ──────────────────────────────
   // The transient solve knows nothing about bearings — they are not in the
   // field — so these come from GET /api/bearings/losses, an ANALYTIC model over
@@ -621,6 +653,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
     };
   }, [sumRpm, sumMass, runCarriesMech]);
 
+=======
+>>>>>>> Stashed changes
   const [apply3d, setApply3dState] = React.useState<boolean>(() => {
     // ON unless the user switched it off (user 2026-09-03): the machine's
     // stored Stage-A coefficient is the default view; a fresh profile shows
@@ -678,6 +712,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       V_phase_rms_V: summary.V_phase_rms_V * k,
       V_line_peak_V: summary.V_line_peak_V * k,
       V_line_rms_V: summary.V_line_rms_V * k,
+<<<<<<< Updated upstream
       // The delta tiles read the SOLVER's line values — flux-proportional
       // like every voltage above, and the catalog row already stores them
       // ×k (user 2026-09-13: card 722 V beside a saved 702 V).
@@ -686,6 +721,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       V_line_rms_solved_V: summary.V_line_rms_solved_V != null
         ? summary.V_line_rms_solved_V * k : summary.V_line_rms_solved_V,
       V1_LL_V: summary.V1_LL_V != null ? summary.V1_LL_V * k : summary.V1_LL_V,
+=======
+>>>>>>> Stashed changes
       KV_rpm_per_V_line: summary.KV_rpm_per_V_line / k,
       KV_noload_rpm_per_V_line: summary.KV_noload_rpm_per_V_line != null
         ? summary.KV_noload_rpm_per_V_line / k : summary.KV_noload_rpm_per_V_line,
@@ -738,6 +775,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   })();
   const fmt = (n: number, d = 2) => Number(n).toFixed(d);
   const fmtK = (n: number) => n >= 1000 ? `${fmt(n / 1000, 2)}k` : fmt(n, 0);
+<<<<<<< Updated upstream
   // The mechanical cells read an OPTIONAL analytic payload, so their tooltips
   // need a formatter that survives a missing field instead of writing "NaN"
   // into the middle of a sentence.
@@ -866,6 +904,49 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       + 'the server-side mechanical block (2026-09-08), so re-run to store it '
       + 'with the result. NOT FEM, and not part of the solved efficiency beside '
       + 'it.';
+=======
+  // Share of the total loss, for the heat-split cells' unit line ("W · 71 %").
+  const pctOfLoss = (n: number, tot: number) =>
+    tot > 0 ? `${fmt(100 * n / tot, 0)} %` : '—';
+
+  // Copper ρ(T) ratio for the R@25°C view (0.393 %/°C, referenced to 20 °C).
+  const solveT = s.coil_temp_C ?? null;
+  const rf = (r25 && solveT != null)
+    ? (1 + 0.00393 * (25 - 20)) / (1 + 0.00393 * (solveT - 20))
+    : 1;
+
+  // ── The summary AS DISPLAYED, for Compare snapshots ──────────────────────
+  // (User 2026-08-25: a Compare record must carry the SAME values the card
+  // shows, pressed buttons included.)  `s` already carries the 3D toggle;
+  // fold in the R@25 rescale, the KV choice and the bench-Ld fallback the
+  // cells apply, stamp WHICH buttons were pressed, and publish.  A plain
+  // localStorage write keyed to render values — deterministic, no effect
+  // ordering games around the early return above.
+  try {
+    const view: any = {
+      ...s,
+      R_phase_ohm: s.R_phase_ohm != null ? s.R_phase_ohm * rf : s.R_phase_ohm,
+      R_line_line_ohm: s.R_line_line_ohm != null
+        ? s.R_line_line_ohm * rf : s.R_line_line_ohm,
+      Ld_mH: s.Ld_mH ?? s.bench_ldq?.Ld_mH ?? null,
+      saliency_Lq_over_Ld: s.saliency_Lq_over_Ld
+        ?? s.bench_ldq?.Lq_over_Ld ?? null,
+      KV_rpm_per_V_line: (kvNl && s.KV_noload_rpm_per_V_line != null)
+        ? s.KV_noload_rpm_per_V_line : s.KV_rpm_per_V_line,
+      view_flags: {
+        end3d_k: apply3d && k3d != null ? k3d : null,
+        r_temp_C: r25 && solveT != null ? 25 : solveT,
+        kv: (kvNl && s.KV_noload_rpm_per_V_line != null) ? 'no-load' : 'loaded',
+        ld_source: s.Ld_mH != null ? 'chord' : (s.bench_ldq ? 'bench' : 'none'),
+      },
+    };
+    localStorage.setItem('sim.viewSummary', JSON.stringify(view));
+  } catch { /* quota — Compare falls back to the raw summary */ }
+
+  const accentEff: 'green' | 'amber' | 'red' = s.efficiency >= 0.92 ? 'green'
+                                              : s.efficiency >= 0.85 ? 'amber'
+                                              : 'red';
+>>>>>>> Stashed changes
   // Narrowed local for the demag cell: TS cannot narrow s.demag through the
   // optional chains inside JSX, and the headline falls back to the Br-based
   // loss for pre-energy-coefficient payloads.
@@ -879,10 +960,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   // Displayed as the KEPT coefficient (user's call: "должен быть 99.74, а не
   // 0.26") — the retention reads naturally as a health figure: 100 % = intact.
   const dmKept = dmLoss != null ? 100 - dmLoss : null;
+<<<<<<< Updated upstream
   // The worst element as the flagged corner diagnostic (legacy payloads carry
   // only the value, as br_worst_pct).
   const dmCorner: BrCorner | null = dm?.br_corner
     ?? (dm?.br_worst_pct != null ? { flag: 'corner', br_pct: dm.br_worst_pct } : null);
+=======
+>>>>>>> Stashed changes
   const accentRipple: 'green' | 'amber' | 'red' = s.T_ripple_pct <= 5 ? 'green'
                                                 : s.T_ripple_pct <= 15 ? 'amber'
                                                 : 'red';
@@ -942,6 +1026,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         return mm ? mm[1] : null;
       };
       const out: string[] = [];
+<<<<<<< Updated upstream
       // The MAGNET is compared by GRADE, not by temperature record: the
       // coupled loop picks the grade's library record for the temperature it
       // solved (140 °C → N52UH_150C) while the machine is assigned N52UH_20C,
@@ -949,6 +1034,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       // names dimmed every coupled result until the page was reloaded (user
       // 2026-09-09: "после каждого расчёта мне нужно перегружать страницу").
       const grade = (name: string) => name.replace(/_\d+C$/i, '');
+=======
+>>>>>>> Stashed changes
       for (const [prefix, key] of [['Stator core', 'stator_core'],
                                    ['Rotor back-iron', 'rotor_core'],
                                    ['Magnets', 'magnet'],
@@ -960,18 +1047,26 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                                    // by the _matSig witness below instead.
                                    ['Shaft', 'shaft']] as const) {
         const ran = gradeOf(prefix);
+<<<<<<< Updated upstream
         if (!ran || !live[key]) continue;
         const same = key === 'magnet' ? grade(ran) === grade(live[key]) : ran === live[key];
         if (!same) out.push(`${ran} → ${live[key]}`);
+=======
+        if (ran && live[key] && ran !== live[key]) out.push(`${ran} → ${live[key]}`);
+>>>>>>> Stashed changes
       }
       // The WHOLE assignment, named parts and unnamed alike: the stamp the run
       // was made with vs the one the next run would carry.  This is what makes a
       // change to ANY part — including one the active duty made for itself
       // (lib/dutySettings.ts) — dim a result solved with something else.
       // Unknown on either side (a legacy or restored run) raises nothing.
+<<<<<<< Updated upstream
       const normSig = (sig: string) => sig.replace(/(magnet=[A-Za-z0-9]+?)_\d+C(?=\||$)/i, '$1');
       const ranSig = s._matSig ? normSig(s._matSig) : s._matSig;
       const nowSig = normSig(assignmentSignature(j));
+=======
+      const ranSig = s._matSig, nowSig = assignmentSignature(j);
+>>>>>>> Stashed changes
       if (!out.length && ranSig && nowSig && ranSig !== nowSig) {
         out.push('assignment changed');
       }
@@ -980,9 +1075,12 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   })();
   const matStale = matDiffs.length > 0;
   const stale = opStale || geoStale || matStale;
+<<<<<<< Updated upstream
   // Terminal connection this run was SOLVED with (the summary stamps it) —
   // the line cells below change meaning with it, not just their factor.
   const isDelta = String(s.star_delta ?? 'star').toLowerCase().startsWith('d');
+=======
+>>>>>>> Stashed changes
 
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
@@ -1071,10 +1169,16 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           {stale && (
             <Tooltip title={(matStale
                 ? `Solved with OTHER MATERIALS than now assigned (${matDiffs.join('; ')}). `
+<<<<<<< Updated upstream
                 : `Computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}°, ${fmt(Number(s.rpm), 0)} rpm — the panel is now set to `
                   + `${Number.isFinite(liveI as number) ? `I = ${fmt(liveI as number, 2)} A` : ''}`
                   + `${dG > 0.05 && Number.isFinite(liveG as number) ? `, γ = ${fmt(liveG as number, 0)}°` : ''}`
                   + `${dN > 0.5 && Number.isFinite(liveN as number) ? `, ${fmt(liveN as number, 0)} rpm` : ''}. `)
+=======
+                : `Computed at I = ${s.I_phase_rms_A} A, γ = ${s.gamma_deg}° — the panel is now set to `
+                  + `${Number.isFinite(liveI as number) ? `I = ${fmt(liveI as number, 2)} A` : ''}`
+                  + `${dG > 0.05 && Number.isFinite(liveG as number) ? `, γ = ${fmt(liveG as number, 0)}°` : ''}. `)
+>>>>>>> Stashed changes
               + 'Run Simulation to recompute at the current point.'} placement="top">
               <span style={{ marginLeft: 6, cursor: 'help' }}>
                 ⚠{matStale ? ' materials changed' : ''}
@@ -1135,14 +1239,21 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             1 torque · power · mass · efficiency · ripple  (+ the two densities)
             2 total loss · core · stranded · solid · sleeve · stator/rotor heat
             3 voltages + J coil (unchanged)
+<<<<<<< Updated upstream
             4 phase section · wire coating · lead cable · R phase · R line-line
             5 Ld · Lq · ψ_PM · Lq/Ld
             6 KV · Kt · Km · Km/mass · rotor inertia
+=======
+            4 phase section · slot fill · lead cable · R phase · R line-line
+            5 Ld · Lq · ψ_PM · Lq/Ld
+            6 KV · Kt · Km · Km/mass · rotor inertia · sleeve hoop σ
+>>>>>>> Stashed changes
             7 demag koef · saturation koef · 3D coef · total koef
           Every row is its own grid: the cells of a row share its width and
           NEVER wrap into the row below, so a row stays a row whatever the
           window width and whichever optional cells this run carries. */}
 
+<<<<<<< Updated upstream
       {/* ── THE COUPLED RUN, FIRST ────────────────────────────────────
           Directly under the card's heading (user 2026-09-09: "перенеси
           это сразу после Physics Dashboard").  It is the sentence that
@@ -1219,6 +1330,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           unit="N·m" accent="blue"
           tooltip="Average electromagnetic torque from Maxwell stress integral over one electrical period"/>
         <Cell label="Mech power" value={`${fmt(pShaft / 1000, 3)}`} unit="kW"
+=======
+      {/* ── Row 1 — torque, power, mass, efficiency, ripple ───────────────── */}
+      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
+        <Cell label="Torque T_em" value={fmt(s.T_em_avg_Nm, 2)} unit="N·m"
+          accent="blue"
+          tooltip="Average electromagnetic torque from Maxwell stress integral over one electrical period"/>
+        <Cell label="Mech power" value={`${fmt(s.P_mech_W / 1000, 3)}`} unit="kW"
+>>>>>>> Stashed changes
           accent="blue"
           tooltip={mechKnown
             ? `At the COUPLING — ${genMode ? 'what the shaft must supply' : 'what leaves the shaft'}: `
@@ -1243,6 +1362,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         {/* 3 decimals: a 30 mm machine weighs ~0.05 kg, so 2 decimals showed a
             single significant digit and hid every change during optimization.
             Matches the per-component breakdown below, which already uses 3. */}
+<<<<<<< Updated upstream
         {/* ONE mass (user 2026-09-10: "масса у нас только одна") — the total,
             because it is what every N·m/kg and kW/kg in this app divides by.
             The electromagnetic subset moved into the tooltip: it is no longer
@@ -1260,11 +1380,22 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         <Cell label="Efficiency η"
           value={fmt(etaOne * 100, 2) + (s.solid_loss_not_solved || !mechKnown ? '*' : '')} unit="%"
           accent={s.solid_loss_not_solved || !mechKnown ? 'amber' : accentOne}
+=======
+        <Cell label="EM-active mass"
+          value={fmt(s.mass_active_kg ?? s.mass_total_kg, 3)} unit="kg"
+          tooltip={"IN: stator iron + rotor iron (× lamination k_f) + copper (× k_end) + magnets. "
+                 + "OUT: shaft, housing, bearings. CAD sections × stack × the assigned material's density "
+                 + `— the same basis an Ansys active-mass expression uses. With shaft: ${fmt(s.mass_total_kg, 3)} kg.`}/>
+        <Cell label="Efficiency η"
+          value={fmt(s.efficiency * 100, 2) + (s.solid_loss_not_solved ? '*' : '')} unit="%"
+          accent={s.solid_loss_not_solved ? 'amber' : accentEff}
+>>>>>>> Stashed changes
           tooltip={(s.solid_loss_not_solved
             ? '* PARTIAL: magnet/shaft eddy losses are not solvable on an imposed-voltage '
               + 'run yet and are missing from the denominator — this η is optimistic and '
               + 'must not be compared against a current-drive run. '
             : '')
+<<<<<<< Updated upstream
             + (mechKnown
               ? `${genMode ? 'Electrical out / mechanical in, both at the SHAFT' : 'Shaft out / electrical in'}: `
                 + `${fmt(pShaft / 1000, 3)} and ${fmt(pElec / 1000, 3)} kW — what a dynamometer reads. `
@@ -1298,6 +1429,9 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                 ? ' At least one of the datasheet limits FAILED on this run — see the Controller tab.'
                 : '')}/>
         )}
+=======
+            + "P_mech / (P_mech + every loss on this card), with P_mech = T·ω. The solved terminal power carries only the losses inside the field solve (no analytic iron, no end-winding copper), so it is reported separately as a balance diagnostic rather than used here."}/>
+>>>>>>> Stashed changes
         <Cell label="T ripple" value={fmt(s.T_ripple_pct, 1)} unit="%"
           accent={accentRipple}
           tooltip={`Physical torque ripple (T_max − T_min)/|T_avg| over one electrical period, ` +
@@ -1315,11 +1449,18 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
 
       {/* ── Row 2 — losses + heat per side ────────────────────────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
+<<<<<<< Updated upstream
         <Cell label="EM losses" value={fmtK(s.P_loss_total_W)} unit="W"
           accent="amber"
           tooltip={"The ELECTROMAGNETIC losses — Cu + Fe (Bertotti) + magnet eddy + shaft eddy"
                  + (s.P_sleeve_W != null ? " + sleeve eddy" : "") + " — period means. "
                  + "Bearings and windage are their own cells to the right; All losses is the sum."}/>
+=======
+        <Cell label="Total loss" value={fmtK(s.P_loss_total_W)} unit="W"
+          accent="amber"
+          tooltip={"Cu + Fe (Bertotti) + magnet eddy + shaft eddy"
+                 + (s.P_sleeve_W != null ? " + sleeve eddy" : "") + " — period means"}/>
+>>>>>>> Stashed changes
         <Cell label="Core (lamination)" value={fmtK(s.P_core_W)} unit="W"
           tooltip={coreTooltip(s.P_core_terms)}/>
         <Cell label="Stranded (copper)" value={fmtK(s.P_stranded_W)} unit="W"
@@ -1339,6 +1480,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                       + `OVER-read (up to wire_split² on the width-direction term). Re-run to `
                       + `replace it.`
                     : '')}/>
+<<<<<<< Updated upstream
         {/* UNSETTLED (2026-09-07): the eddy warm-up ended at its cap with the
             start-up transient still running, so THIS number and the efficiency
             beside it are start-up values, not physics.  One marker + the
@@ -1350,6 +1492,11 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           value={s.solid_loss_not_solved ? '—' : fmtK(s.P_solid_W)} unit="W"
           accent={(s.solid_loss_not_solved || s.eddy_settled === false)
                   ? 'amber' : 'default'}
+=======
+        <Cell label="Solid (magnets)"
+          value={s.solid_loss_not_solved ? '—' : fmtK(s.P_solid_W)} unit="W"
+          accent={s.solid_loss_not_solved ? 'amber' : 'default'}
+>>>>>>> Stashed changes
           tooltip={s.solid_loss_not_solved
             ? 'NOT SOLVED on this run: rotor eddy was disabled (checkbox off, or the '
               + 'SB_VDRIVE_ROTOR_EDDY=0 hatch), so magnet and shaft eddy losses are missing '
@@ -1361,6 +1508,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                  + "is used only when field losses are off.")
                  + magnetSegNote(s.magnet_segmentation)
                  + (s.eddy_warmup_frames
+<<<<<<< Updated upstream
                     // "over a SETTLED window" is a CLAIM, and until 2026-09-07
                     // it was made unconditionally off the frame count alone —
                     // which says what the warm-up cost, not whether it worked.
@@ -1403,6 +1551,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           <Cell label="Magnet loss" value={fmt(s.P_mag_W, 1)} unit="W"
             tooltip={"Eddy-current loss in the magnets over the cycle (period mean), with the axial segmentation model applied. Heats the magnets directly — the number behind the magnet temperature on the Thermal tab. Part of P_solid_W above."} />
         )}
+=======
+                    ? `  Cycle mean over a SETTLED window: ${s.eddy_warmup_frames} warm-up `
+                      + `frame(s) were solved and discarded first (a probe march at θ<0 on `
+                      + `current drive; the settling-prefix periods on voltage/PWM), so no `
+                      + `σ·∂A/∂t start-up transient is averaged into it.`
+                    : '')}/>
+>>>>>>> Stashed changes
         {s.P_sleeve_W != null && (
           <Cell label="Sleeve loss" value={fmt(s.P_sleeve_W, 4)} unit="W"
             tooltip={"Eddy loss solved in the carbon-fibre retaining ring, inside the same coupled "
@@ -1411,6 +1566,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                    + "the 2-D induced current is AXIAL — transverse to every fibre. It is inside "
                    + "the Solid (magnets) total and the efficiency above."}/>
         )}
+<<<<<<< Updated upstream
         <Cell label="Loss density" value={fmt(s.loss_density_W_kg, 1)} unit="W/kg"
           tooltip="P_loss / mass — thermal stress indicator. Electromagnetic only: the bearings are not in the active mass."/>
       </Box>
@@ -1489,6 +1645,42 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
 
       {/* ── Row 3 — voltages + coil current density ───────────────────────── */}
       {/* (isDelta is derived at the top of the component from s.star_delta) */}
+=======
+        {/* ── HEAT TO REMOVE, per side ─────────────────────────────────
+            Losses stay 2-D under the 3D toggle (same rule as the tiles
+            above), so these read off `s` unchanged. */}
+        {s.P_loss_stator_W != null && (
+          <Cell label="Stator heat" value={fmtK(s.P_loss_stator_W)}
+            unit={`W · ${pctOfLoss(s.P_loss_stator_W, s.P_loss_total_W)}`}
+            tooltip={"Heat the STATOR has to shed: stator iron loss "
+              + `(${fmt(s.P_core_stator_W ?? s.P_core_W, 1)} W) + all copper `
+              + `(${fmt(s.P_stranded_W, 1)} W — I²R incl. end-winding + AC/proximity). `
+              + "It leaves through the housing, the jacket or the fan."
+              + (s.P_loss_split_measured === false
+                 ? "  NB this run carries no per-half iron breakdown, so the WHOLE "
+                   + "core loss is billed here — rerun to get the solved split."
+                 : "")}/>
+        )}
+        {s.P_loss_rotor_W != null && (
+          <Cell label="Rotor heat" value={fmtK(s.P_loss_rotor_W)}
+            unit={`W · ${pctOfLoss(s.P_loss_rotor_W, s.P_loss_total_W)}`}
+            accent={s.P_loss_split_measured === false ? 'amber' : 'default'}
+            tooltip={"Heat the ROTOR has to shed: rotor back-iron loss "
+              + `(${fmt(s.P_core_rotor_W ?? 0, 1)} W) + magnet, shaft and sleeve `
+              + `eddy (${fmt(s.P_solid_W, 1)} W). It can only leave across the air `
+              + "gap, through the shaft, or by windage. Stator + rotor = the Total "
+              + "loss tile, exactly."
+              + (s.P_loss_split_measured === false
+                 ? "  NB this run carries no per-half iron breakdown, so the rotor "
+                   + "IRON share is missing here and sits on the stator side."
+                 : "")}/>
+        )}
+        <Cell label="Loss density" value={fmt(s.loss_density_W_kg, 1)} unit="W/kg"
+          tooltip="P_loss / mass — thermal stress indicator"/>
+      </Box>
+
+      {/* ── Row 3 — voltages + coil current density ───────────────────────── */}
+>>>>>>> Stashed changes
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         <Cell label="V_phase peak" value={fmt(s.V_phase_peak_V, 1)} unit="V"
           tooltip={isDelta
@@ -1521,18 +1713,30 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           accent={s.J_coil_A_per_mm2 == null ? 'default'
                   : s.J_coil_A_per_mm2 <= 20 ? 'green'
                   : s.J_coil_A_per_mm2 <= 40 ? 'amber' : 'red'}
+<<<<<<< Updated upstream
           tooltip="Coil current density = I_phase RMS / (a_parallel × strand copper section, wire_width × wire_height — one STRIP when the wire is split). a_parallel counts the connection's paths TIMES the strands in hand (wire_parallel), because those are the conductors sharing one turn's current. wire_split is NOT in it: a row's strips are consecutive SERIES turns and each carries the branch current whole, so splitting a bar into N narrower strips leaves J where the unsplit row had it. The thermal-loading figure of merit: ~5–15 A/mm² continuous (natural/liquid cooling), 20–40+ for short peak / forced cooling."/>
+=======
+          tooltip="Coil current density = I_phase RMS / (a_parallel × strand copper section, wire_width × wire_height). a_parallel counts the connection's paths TIMES the strands in hand (wire_parallel), because each wire wound in hand carries its share of the turn's current. The thermal-loading figure of merit: ~5–15 A/mm² continuous (natural/liquid cooling), 20–40+ for short peak / forced cooling."/>
+>>>>>>> Stashed changes
       </Box>
 
       {/* ── Row 4 — winding: section, fill, lead, resistance ──────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         {s.A_phase_mm2 != null && (
           <Cell label="Phase section" value={fmt(s.A_phase_mm2, 2)} unit="mm²"
+<<<<<<< Updated upstream
             tooltip={"Copper cross-section the PHASE current flows through: one strand (wire_width × wire_height — one STRIP when the wire is split) × the parallel paths × the strands in hand. A split row's strips are SERIES turns, not extra paths, so they are not in it. I_phase / this area is exactly the J coil cell above — the two cross-check each other. Nearest lead cable: "
               + (pickCable(s.A_phase_mm2)?.awg ?? '—')}/>
         )}
         {s.slot_fill_pct != null && (
           <Cell label="Fill factor" value={fmt(s.slot_fill_pct, 1)} unit="%"
+=======
+            tooltip={"Copper cross-section the PHASE current flows through: one strand (wire_width × wire_height) × the parallel paths × the strands in hand. I_phase / this area is exactly the J coil cell above — the two cross-check each other. Nearest lead cable: "
+              + (pickCable(s.A_phase_mm2)?.awg ?? '—')}/>
+        )}
+        {s.slot_fill_pct != null && (
+          <Cell label="Slot fill" value={fmt(s.slot_fill_pct, 1)} unit="%"
+>>>>>>> Stashed changes
             accent={s.slot_fill_pct <= 60 ? 'green' : s.slot_fill_pct <= 75 ? 'amber' : 'red'}
             tooltip={`Measured conductor area over the winding window the teeth leave — both taken from the CAD polygons the mesher receives, not from a nominal slot rectangle. ${s.A_copper_slotted_mm2?.toFixed(0) ?? '—'} mm² of copper in a ${s.A_slot_mm2?.toFixed(0) ?? '—'} mm² window. Rectangular wire wound by hand reaches ~45–60 %; above ~75 % the winding stops being buildable, and the remainder is insulation, wire spacing and the space the winder needs.`}/>
         )}
@@ -1556,6 +1760,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         {s.R_line_line_ohm != null && (
           <Cell label="R line-line" value={fmt(s.R_line_line_ohm * 1000 * rf, 2)} unit="mΩ"
             tooltip={(r25 && solveT != null ? `At 25 °C (bench-check view). ` : '')
+<<<<<<< Updated upstream
               + (isDelta
                  ? '⅔ × R_winding — one winding in parallel with the other two in series. What an ohmmeter across two leads of the delta reads. Star-equivalent per-phase R = R_winding / 3.'
                  : '2 × R_phase — the terminal-to-terminal resistance of the isolated-neutral star this machine is driven as (the voltage circuit is line-to-line for the same reason). What an ohmmeter across two leads reads.')}/>
@@ -1573,6 +1778,14 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                       ? `wire_split = ${s.wire_split}: every wire row is ${s.wire_split} strips of wire_width side by side, wired in SERIES — each strip is its own turn, so the coil has ${s.wire_split}× the turns of the same rows unsplit: ψ, back-EMF and V ×${s.wire_split}, KV ÷${s.wire_split}, R_phase, Ld and Lq ×${(s.wire_split ?? 1) ** 2}, and every strip carries the full branch current. Set the phase current yourself: the same torque comes back at I ÷ ${s.wire_split}. `
                       : '')
                    + `The coil is ${s.turns_per_coil} series turns and the phase current splits over ${s.n_parallel_eff ?? '—'} conductors.`}/>
+=======
+              + '2 × R_phase — the terminal-to-terminal resistance of the isolated-neutral star this machine is driven as (the voltage circuit is line-to-line for the same reason). What an ohmmeter across two leads reads.'}/>
+        )}
+        {(s.wire_parallel ?? 1) > 1 && (
+          <Cell label="Turns/coil" value={fmt(s.turns_per_coil ?? 0, 0)}
+            unit={`${s.wire_parallel} in hand`}
+            tooltip={`Wound ${s.wire_parallel} wires in hand: the slot still holds all ${(s.turns_per_coil ?? 0) * (s.wire_parallel ?? 1)} physical wires (same copper, same slot fill, same mass), but ${s.wire_parallel} of them make each turn — so the coil is ${s.turns_per_coil} series turns. Against one wire in hand: ψ, back-EMF, V and Kt divide by ${s.wire_parallel}, KV multiplies by ${s.wire_parallel}, and R_phase, Ld and Lq divide by ${(s.wire_parallel ?? 1) ** 2}. The phase current splits over ${s.n_parallel_eff ?? '—'} conductors.`}/>
+>>>>>>> Stashed changes
         )}
       </Box>
 
@@ -1580,6 +1793,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       {(s.Ld_mH != null || s.Lq_mH != null || s.bench_ldq != null || s.psi_pm_Wb != null) && (
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         {/* Ld / Lq / Lq/Ld — ALWAYS a number when one exists, never advice
+<<<<<<< Updated upstream
             text in the value slot (user's call).  Since 2026-09-20 the value
             is the INCREMENTAL (frozen-permeability) inductance of this point:
             the per-element ν of the converged loaded field held fixed and a
@@ -1587,11 +1801,19 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             NO-LOAD ψ_PM and read Ld > Lq on a machine whose Lq is the larger
             (client review of the L180 report). Fallback order is unchanged:
             this run's value, else the bench small-signal probe. */}
+=======
+            text in the value slot (user's call).  Preference order: the
+            loaded (chord) value of this run; else the bench (small-signal)
+            value measured automatically once per machine — with the label
+            saying which frame is on display.  The dq_note stays in the
+            tooltip for the "why" of a missing chord value. */}
+>>>>>>> Stashed changes
         <Cell label="Ld"
           value={s.Ld_mH != null ? fmt(s.Ld_mH, 3)
             : (s.bench_ldq ? fmt(s.bench_ldq.Ld_mH, 3) : '—')} unit="mH"
           accent="blue"
           tooltip={(s.Ld_mH != null
+<<<<<<< Updated upstream
             ? 'd-axis INCREMENTAL inductance at THIS operating point, ∂ψd/∂i_d by frozen permeability: the iron\'s ν is held at the loaded field\'s own state and a unit d-axis current solved on it, so this is flux-per-amp and carries none of the magnet flux the load moved.'
             : 'BENCH value — small-signal Ld at the I≈0 iron state, rotor locked on a magnet: what an LCR meter on the terminals reads. This run predates the incremental measurement; re-run to measure it at the point.')
             + (s.Ldq_inc_mH != null ? ` Cross term ∂ψd/∂i_q = ${fmt(s.Ldq_inc_mH, 3)} mH.` : '')
@@ -1613,10 +1835,24 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           <Cell label="B gap mean" value={fmt(s.B_gap_mean_T, 3)} unit="T"
             tooltip={'Mean |B| over the AIR-GAP clearance, averaged over the electrical period. Area-weighted over the elements between the outermost rotating metal and the stator bore — a mean of the field, not of the mesh. It is the whole gap under load, magnet flux and armature reaction together, so it is not the no-load fundamental B_g1 a sizing formula asks for.'}/>
         )}
+=======
+            ? 'd-axis APPARENT inductance at THIS operating point: Ld = (ψd − ψ_PM)/i_d, with ψ_PM from a cached no-load solve. Saturated (chord) value, not small-signal.'
+            : 'BENCH value — small-signal Ld at the I≈0 iron state, rotor locked on a magnet: what an LCR meter on the terminals reads (the LOWER of the two on a surface-magnet rotor — the d-path crosses the magnet, which is air to the field). The loaded chord Ld needs a d-current to measure (γ ≥ ~6°).')
+            + (s.bench_ldq && s.Ld_mH != null ? ` Bench (small-signal): ${fmt(s.bench_ldq.Ld_mH, 3)} mH.` : '')
+            + (s.dq_note ? ' — ' + s.dq_note : '')}/>
+        <Cell label="Lq" value={s.Lq_mH != null ? fmt(s.Lq_mH, 3) : '—'} unit="mH"
+          accent="blue"
+          tooltip={'q-axis APPARENT inductance under load: Lq = ψq/i_q. The q-axis saturates under load, so this sits below the bench value.'
+            + (s.bench_ldq ? ` Bench (small-signal, rotor between magnets): ${fmt(s.bench_ldq.Lq_mH, 3)} mH.` : '')
+            + (s.dq_note ? ' — ' + s.dq_note : '')}/>
+        <Cell label="ψ_PM" value={s.psi_pm_Wb != null ? fmt(s.psi_pm_Wb * 1000, 2) : '—'} unit="mWb"
+          tooltip={'Magnet flux linkage (phase, peak) measured at I = 0 — one cheap no-load solve, cached per geometry. The PM term of ψd = ψ_PM + Ld·i_d.'}/>
+>>>>>>> Stashed changes
         <Cell label="Lq/Ld"
           value={s.saliency_Lq_over_Ld != null ? fmt(s.saliency_Lq_over_Ld, 2)
             : (s.bench_ldq?.Lq_over_Ld != null ? fmt(s.bench_ldq.Lq_over_Ld, 2) : '—')}
           tooltip={(s.saliency_Lq_over_Ld != null
+<<<<<<< Updated upstream
             ? 'Saliency at this load point, from the two INCREMENTAL inductances (frozen permeability). The dq frame behind these cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.'
             : 'Saliency from the BENCH (small-signal) frame — both axes measured the LCR way at I≈0, so the ratio is cross-saturation-free.')}/>
         {(() => {
@@ -1639,6 +1875,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                 + `set 2 = path ${(s.six_phase?.set2_paths ?? []).join(', ')}; each on its own inverter.`}/>
           </>);
         })()}
+=======
+            ? 'Saliency at this load point (chord frame). The dq frame behind these cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.'
+            : 'Saliency from the BENCH (small-signal) frame — both axes measured the LCR way at I≈0, so the ratio is cross-saturation-free. The loaded chord ratio needs γ ≥ ~6°.')}/>
+>>>>>>> Stashed changes
       </Box>
       )}
 
@@ -1661,9 +1901,13 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             ? s.T_em_avg_Nm / s.I_phase_rms_A : null;
           return kt != null && Number.isFinite(kt) ? (
             <Cell label="Kt" value={fmt(kt, kt < 0.1 ? 4 : 3)} unit="N·m/A"
+<<<<<<< Updated upstream
               tooltip={(isDelta ? 'DELTA: per LINE amp — the current on the three leads, what the inverter rating is set against. Per WINDING amp it is √3 larger: '
                                   + fmt(kt * Math.sqrt(3), 4) + ' N·m/A. ' : '')
                 + 'Torque constant at THIS operating point: T / I_phase_rms = '
+=======
+              tooltip={'Torque constant at THIS operating point: T / I_phase_rms = '
+>>>>>>> Stashed changes
                 + fmt(s.T_em_avg_Nm, 3) + ' / ' + fmt(s.I_phase_rms_A, 1)
                 + '. Measured, so iron saturation is included (the Saturation koef '
                 + 'tile says how much) — the low-current bench Kt sits above this. '
@@ -1694,10 +1938,30 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                    + ` kg·cm². `
                    + "Drive sizing: t_accel = J·Δω/T; mechanical time constant τ = J·ω/T at the operating point."}/>
         )}
+<<<<<<< Updated upstream
         {/* The analytic sleeve hoop σ (ρω²r², own mass only) left this card on
             2026-09-07 — the Mechanical tab solves the real one, with the magnet
             pressure the ring exists to carry; a lower bound that gates nothing
             beside it only invited comparison with the wrong number. */}
+=======
+        {s.sleeve_hoop != null && (
+          <Cell label="Sleeve hoop σ" value={fmt(s.sleeve_hoop.sigma_hoop_MPa, 1)} unit="MPa"
+            accent={s.sleeve_hoop.utilisation_pct == null ? 'default'
+                    : s.sleeve_hoop.utilisation_pct < 50 ? 'green'
+                    : s.sleeve_hoop.utilisation_pct < 80 ? 'amber' : 'red'}
+            tooltip={`Hoop stress in the retaining ring at ${fmt(s.sleeve_hoop.rpm, 0)} rpm: `
+                   + `σ = ρ·ω²·r_mean² = ${fmt(s.sleeve_hoop.density_kg_m3, 0)} kg/m³ × ω² × `
+                   + `(${fmt(s.sleeve_hoop.r_mean_mm, 2)} mm)²`
+                   + (s.sleeve_hoop.strength_MPa != null
+                      ? ` = ${fmt(s.sleeve_hoop.utilisation_pct ?? 0, 1)} % of the `
+                        + `${fmt(s.sleeve_hoop.strength_MPa, 0)} MPa fibre-direction tensile `
+                        + `strength of ${s.sleeve_hoop.material}.`
+                      : '.')
+                   + " LOWER BOUND, and it gates nothing: this is the ring carrying its OWN mass only. "
+                   + "The magnet pressure it is fitted to retain — the reason the sleeve exists — is not "
+                   + "modelled here, and on a surface-PM rotor that term dominates."}/>
+        )}
+>>>>>>> Stashed changes
       </Box>
 
       {/* ── Row 7 — retention coefficients ────────────────────────────────── */}
@@ -1721,10 +1985,15 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                              : '')
                          + '. '
                        : '')
+<<<<<<< Updated upstream
+=======
+                   + `Worst single element ${fmt(dm.br_worst_pct, 1)} % Br (corner statistic); `
+>>>>>>> Stashed changes
                    + `${fmt(dm.area_derated_pct, 1)} % of magnet area de-rated. `
                    + "Knee from the ASSIGNED grade at its record temperature — pick the _30C/_80C/_120C variant "
                    + "matching the real magnet temperature. Shown only when the run modelled demag."}/>
         )}
+<<<<<<< Updated upstream
         {dmCorner != null && (
           <Cell label="⚑ Br corner" value={fmt(dmCorner.br_pct, 1)} unit="%"
             tooltip={'Worst single magnet element — a corner flag, not the magnet\'s figure (that is Demag koef). '
@@ -1734,6 +2003,8 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
                        : '')
                    + '.'}/>
         )}
+=======
+>>>>>>> Stashed changes
         {s.saturation?.droop_pct != null && (
           <Cell label="Saturation koef"
             value={fmt(Math.min(100, 100 - s.saturation.droop_pct), 1)} unit="%"

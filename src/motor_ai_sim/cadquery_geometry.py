@@ -457,6 +457,7 @@ def _sanitize_geom(geom, scale_mm: float, label: str = "",
     return out[0] if len(out) == 1 else _SMP(out)
 
 
+<<<<<<< Updated upstream
 #: How many times `_weld_group_geoms` may replay the group.  A hard stop, NOT a
 #: convergence guarantee: over the 100-build Ø200 sweep of 2026-09-06 the map
 #: reached a fixed point in 1 round 6 times, 2 rounds 66, 3 rounds 23 — and 3
@@ -1211,6 +1212,8 @@ def _fillet_magnet_top_arc(poly, fillet_r: float, r_top: float, scale_mm: float,
     return base
 
 
+=======
+>>>>>>> Stashed changes
 def _sleeve_thickness(p: Dict) -> float:
     """``sleeve_thickness`` [mm] out of a geometry/parameter dict, or 0.0.
 
@@ -1228,6 +1231,7 @@ def _sleeve_thickness(p: Dict) -> float:
     return t if (_isfinite(t) and t > 0.0) else 0.0
 
 
+<<<<<<< Updated upstream
 def _wire_split(p: Dict) -> int:
     """``wire_split`` [-] out of a geometry/parameter dict, or 1.
 
@@ -1305,6 +1309,12 @@ def _sanitize_polys_dict(polys: Dict, scale_mm: float,
                 'in_band', 'out_band'):
         if key in done:
             continue
+=======
+def _sanitize_polys_dict(polys: Dict, scale_mm: float) -> Dict:
+    """Sanitize every ring of every domain in a get_2d_polygons()-shaped dict."""
+    for key in ('stator', 'rotor', 'sleeve', 'shaft', 'air_gap',
+                'in_band', 'out_band'):
+>>>>>>> Stashed changes
         if key in polys and polys[key] is not None:
             polys[key] = _sanitize_geom(polys[key], scale_mm, key, node_map)
     if 'magnets' in polys and 'magnets' not in done:
@@ -2563,6 +2573,15 @@ class CadQueryMotor:
                 sleeve_poly = sleeve_poly.buffer(0)
             r = _tri(sleeve_poly, z=Z_ROTOR)
             if r: result['sleeve'] = r
+<<<<<<< Updated upstream
+=======
+
+        # ── 2+3. MAGNETS + ROTOR CORE ─────────────────────────────────────
+        # Round ONLY the two top corners (mp3/mp4, outer/air-gap edge) to match
+        # CadQuery's edges(">Y and |Z").fillet(mag_fill_r).
+        # The same rounded polygon is used for BOTH the rotor pocket holes and
+        # the magnet so there is no dark gap at the corners.
+>>>>>>> Stashed changes
 
         # ── 2+3. MAGNETS + ROTOR CORE ─────────────────────────────────────
         # Round ONLY the two top corners (mp3/mp4, outer/air-gap edge), the ends
@@ -2570,7 +2589,30 @@ class CadQueryMotor:
         # pocket holes and the magnet so there is no dark gap at the corners.
 
         def _build_mag_poly(pts, fillet_r):
+<<<<<<< Updated upstream
             """The magnet outline with its two TOP corners rounded.
+=======
+            """Hexagon with only the two top corners (indices 2,3) filleted.
+            Clipped to the hexagon — a fillet may only remove material (a
+            near-straight corner made the arc bulge OUT into the rotor iron;
+            see get_2d_polygons' twin, incident 2026-08-24)."""
+            if fillet_r <= 0:
+                return SPoly(pts)
+            try:
+                new_pts = (pts[:2]
+                           + _fillet_corner(pts[1], pts[2], pts[3], fillet_r)
+                           + _fillet_corner(pts[2], pts[3], pts[4], fillet_r)
+                           + pts[4:])
+                _fp, _hex = SPoly(new_pts), SPoly(pts)
+                if not _fp.is_valid: _fp = _fp.buffer(0)
+                if not _hex.is_valid: _hex = _hex.buffer(0)
+                _cl = _fp.intersection(_hex)
+                if not _cl.is_valid: _cl = _cl.buffer(0)
+                return _cl if (not _cl.is_empty
+                               and _cl.geom_type == 'Polygon') else SPoly(pts)
+            except Exception:
+                return SPoly(pts)
+>>>>>>> Stashed changes
 
             The outline is not a hexagon (the top edge carries the OD ring's own
             stations), so the rounding goes through the shared boundary-walking
@@ -3132,6 +3174,7 @@ class CadQueryMotor:
         mag_r_top = rotor_or - mag_up_gap
 
         def _build_mag_poly(pts, fr):
+<<<<<<< Updated upstream
             # Not a hexagon (the top edge carries the OD ring's own stations) —
             # round the two top corners through the shared boundary-walking
             # core, which finds them by radius instead of by index.  The core
@@ -3142,6 +3185,30 @@ class CadQueryMotor:
             return _fillet_magnet_top_arc(SPoly(pts), fr, mag_r_top, scale_mm,
                                           open_top=(float(mag_up_gap) <= 1e-9),
                                           open_wall=_extended_pocket(p))
+=======
+            if fr <= 0: return SPoly(pts)
+            try:
+                new_pts = (pts[:2]
+                           + _fillet_corner(pts[1], pts[2], pts[3], fr)
+                           + _fillet_corner(pts[2], pts[3], pts[4], fr)
+                           + pts[4:])
+                # A fillet may only REMOVE material.  Near-straight top
+                # corners (magnet_fill_up ≈ 0.32 on the 150) made the arc
+                # sweep OUTSIDE the hexagon, so the magnet bulged into the
+                # rotor iron and the cross-section stopped being buildable
+                # (0.048 mm² magnet∩iron — static-3D validator, 2026-08-24).
+                # Clip to the hexagon; if the clip degenerates, drop the
+                # fillet honestly rather than ship a bulged magnet.
+                _fp, _hex = SPoly(new_pts), SPoly(pts)
+                if not _fp.is_valid: _fp = _fp.buffer(0)
+                if not _hex.is_valid: _hex = _hex.buffer(0)
+                _cl = _fp.intersection(_hex)
+                if not _cl.is_valid: _cl = _cl.buffer(0)
+                return _cl if (not _cl.is_empty
+                               and _cl.geom_type == 'Polygon') else SPoly(pts)
+            except Exception:
+                return SPoly(pts)
+>>>>>>> Stashed changes
 
         # rotor_hole >= 1: no rectangle at all — the pocket is the magnet
         # outline with its side edges extended straight to the OD (see
@@ -3259,6 +3326,7 @@ class CadQueryMotor:
                     _f = _f.difference(unary_union(hole_polys))
                     if not _f.is_valid:
                         _f = _f.buffer(0)
+<<<<<<< Updated upstream
                     # NOT clipped back to `rotor_disk` here, though it is
                     # tempting: the fillet's tangent points sit at an arc
                     # distance along the boundary, so on the OD — a 256-gon, not
@@ -3274,6 +3342,8 @@ class CadQueryMotor:
                     # the mesh is worse than the overlap.  The real fix is in
                     # `_fillet_ring_corners`, which must not place an arc outside
                     # the boundary it is rounding; left for that.
+=======
+>>>>>>> Stashed changes
                     if not _f.is_empty and _npoly(_f) == _npoly(rotor_poly):
                         rotor_poly = _f
                 else:
@@ -3473,6 +3543,7 @@ class CadQueryMotor:
         if not in_band_poly.is_valid:  in_band_poly  = in_band_poly.buffer(0)
         if not out_band_poly.is_valid: out_band_poly = out_band_poly.buffer(0)
 
+<<<<<<< Updated upstream
         # ── Weld the whole rotor SIDE as ONE set ─────────────────────────────
         # The rotor, the magnets, the shaft, the sleeve and the air that fills
         # what is left of the disk all share boundaries, and sanitising each of
@@ -3515,6 +3586,17 @@ class CadQueryMotor:
         rotor_poly, shaft_poly, sleeve_poly = _welded[0], _welded[1], _welded[2]
         mag_polys = [(w, pol) for w, (_mp, pol) in zip(_welded[3:], mag_polys)]
         in_band_poly = _derived[0]
+=======
+        # Subtract rotor solids from in_band (shaft + rotor + sleeve + magnets).
+        try:
+            rotor_solids = [rotor_poly, shaft_poly] + [mp for mp, _pol in mag_polys]
+            if sleeve_poly is not None:
+                rotor_solids.append(sleeve_poly)
+            in_band_poly = in_band_poly.difference(unary_union(rotor_solids))
+            if not in_band_poly.is_valid: in_band_poly = in_band_poly.buffer(0)
+        except Exception:
+            pass
+>>>>>>> Stashed changes
 
         # Subtract stator + coils from out_band.
         try:

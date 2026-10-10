@@ -105,11 +105,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [tier, setTier] = useState<string>('anon');
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [enforced, setEnforced] = useState<boolean>(false);
+<<<<<<< Updated upstream
   // Flipped by the first /api/me answer we actually APPLY — never by the
   // store-busy or provisional paths, both of which come back in a moment.
   const [resolved, setResolved] = useState<boolean>(false);
   // A mailed ?verify= / ?reset= link opens the dialog, which consumes it.
   const [loginOpen, setLoginOpen] = useState<boolean>(() => pendingEmailLink() !== null);
+=======
+  const [loginOpen, setLoginOpen] = useState<boolean>(false);
+>>>>>>> Stashed changes
   // One short amber line when the backend could not READ its own auth store —
   // the session is kept and retried, so the user needs to know only that the
   // pause is ours and temporary.
@@ -133,6 +137,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
       setStoreBusy(false);
+<<<<<<< Updated upstream
       // A PROVISIONAL answer — anonymous, but our token was never presented
       // (the mount-time race described below) — must not be applied: doing so
       // set tier=anon / enforced=true for the ~1.5 s until the retry, the
@@ -147,6 +152,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setTimeout(() => { void loadRoleRef.current?.(); }, 1500);
         return;
       }
+=======
+>>>>>>> Stashed changes
       setTier(j.tier ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
       setResolved(true);
       setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });

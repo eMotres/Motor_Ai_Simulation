@@ -12,7 +12,13 @@ from __future__ import annotations
 import logging
 import math
 import os
+<<<<<<< Updated upstream
 from typing import Dict, Any, Literal
+
+log = logging.getLogger(__name__)
+=======
+from typing import Dict, Any
+>>>>>>> Stashed changes
 
 log = logging.getLogger(__name__)
 
@@ -52,6 +58,7 @@ def _excitation_args(sim: Dict[str, Any]) -> Dict[str, Any]:
         # Simulation tab, not to a geometry search.  OPT_ALLOW_PWM=1 keeps the
         # old behaviour for a deliberately long study.
         if (os.environ.get("OPT_ALLOW_PWM") or "").strip() == "1":
+<<<<<<< Updated upstream
             # The carrier and the bus are the CONTROLLER's since 2026-09-24;
             # the retired simulation.v_bus / f_switch are only the fallback.
             try:
@@ -63,6 +70,11 @@ def _excitation_args(sim: Dict[str, Any]) -> Dict[str, Any]:
             return {"drive": d,
                     "v_bus": float(_vd or sim.get("v_bus", 0.0) or 0.0),
                     "f_switch": float(_fc or sim.get("f_switch", 0.0) or 0.0)}
+=======
+            return {"drive": d,
+                    "v_bus": float(sim.get("v_bus", 0.0) or 0.0),
+                    "f_switch": float(sim.get("f_switch", 0.0) or 0.0)}
+>>>>>>> Stashed changes
         log.warning("optimizer: the Simulation tab's excitation is the PWM "
                     "inverter (f_switch %s Hz), which cannot be resolved at the "
                     "optimizer's step count — candidates are evaluated on the "
@@ -432,6 +444,26 @@ def run_one(overrides: Dict[str, float], current_a: float, steps: int,
     _bevents = list(d.get("mesh_build_events") or [])
     if _sg and ("structured_gap_effective" in d) \
             and not bool(d.get("structured_gap_effective")):
+<<<<<<< Updated upstream
+=======
+        raise RuntimeError(
+            "structured gap requested but the build fell back to a FREE gap "
+            "(%s) — the P2 ripple is not comparable with cleanly built "
+            "candidates; eval rejected" % ("; ".join(_bevents) or "no detail"))
+    if _bevents:
+        raise RuntimeError(
+            "mesh build degraded (%s) — this candidate's discretization "
+            "differs from the others'; eval rejected" % "; ".join(_bevents))
+
+    # The four fields every scored metric below is built from.  Checking them
+    # together, by name, means a payload that is short of one says so in words
+    # instead of surfacing as a bare `KeyError: 'T_avg_Nm'` in the run log — the
+    # difference between "10 designs couldn't be built ('T_avg_Nm')" and a
+    # sentence an engineer can act on.
+    _need = ("T_avg_Nm", "P_cu_W", "P_fe_W", "P_mag_eddy_W")
+    _miss = [k for k in _need if k not in d]
+    if _miss:
+>>>>>>> Stashed changes
         raise RuntimeError(
             "structured gap requested but the build fell back to a FREE gap "
             "(%s) — the P2 ripple is not comparable with cleanly built "

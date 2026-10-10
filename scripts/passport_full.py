@@ -475,6 +475,11 @@ def task_pwm(work: Path, a) -> None:
     else:
         pk = snap.get("peak_duty")
         I, n = float(lp["I_peak_rms"]), (float(pk["rpm"]) if pk else n0)
+    if getattr(a, "rpm", None):
+        # an anchor at another speed (Ø85 2026-10-10: fewer carriers per period at
+        # 2000 rpm — the PWM cost grows ~ (steps/period)^2)
+        n = float(a.rpm)
+        point = "%s_n%g" % (point, n)
     vdc = float(snap["battery"]["v_nom"])
     C = _ctrl(M)
     m = float(C["m"])
@@ -742,6 +747,7 @@ def main(argv=None) -> None:
     ap.add_argument("--fi", type=float, default=None)
     ap.add_argument("--length", type=float, default=None)
     ap.add_argument("--temp", type=float, default=None, help="magnet temperature (demagtemp)")
+    ap.add_argument("--rpm", type=float, default=None, help="PWM anchor speed (default: the point's)")
     ap.add_argument("rest", nargs="*")
     a = ap.parse_args(argv)
     _use_spec(a.spec)

@@ -23,3 +23,21 @@ dies:
     defaults:
       L12: tmotor_fpv_10x5     # 6S: 10 in, 3 blades
       L20: tmotor_p13x4_4      # 12S: P13x4.4
+
+  # CIANO28 85 20SW1200 (configuration L13, 12S): one motor, two uses (owner 2026-10-05,
+  # "this variant can be used for robots with one cooling and for propellers with
+  # another"). robotics = the robot-joint still-air mode (natural convection + radiation
+  # + heat path into the mount + end faces); propeller_air = the propeller's slipstream.
+  # Configure shows a cooling selector because there are two; robotics is listed first,
+  # so it is the one in force until the user picks the propeller.
+  # Propellers: T-Motor G-series 30-40 in with measured torque whose torque at 1000-2400
+  # rpm lies inside this motor's range (docs/PASSPORT_D85_2026-10-05.md).
+  "CIANO28 85 20SW1200":
+    cooling_options: [robotics, propeller_air]
+    propellers:
+      - tmotor_g30x10_5        # 30 in, torque measured (U13 II KV65), tested 2679-4654 rpm
+      - tmotor_g32x11          # 32 in, torque measured (U13 II KV65), tested 2485-4397 rpm
+      - tmotor_g36x11_5        # 36 in, torque measured (U15 II KV100), tested 2595-4328 rpm
+      - tmotor_g40x13_1        # 40 in, torque measured (U15 II KV80/KV100), tested 1843-3546 rpm
+    defaults:
+      L13: tmotor_g40x13_1     # proposed — owner to confirm

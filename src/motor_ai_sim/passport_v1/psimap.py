@@ -93,11 +93,16 @@ class PsiMap:
     pole_pairs: int
     scale: float
     mtpa: List[Tuple[float, float, float]] = field(default_factory=list)  # (I, gamma*, T*)
+    #: Owner-directed fixed operating angle (Ø85, 2026-10-10): when set, the
+    #: loaded operating angle is this one value at every current below the
+    #: voltage limit (field weakening above it), not the per-level MTPA vertex.
+    fixed_gamma: Optional[float] = None
     _f: Dict[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def build(cls, pts: Iterable[Mapping[str, float]], pole_pairs: int,
-              mtpa: Optional[List[Tuple[float, float, float]]] = None) -> "PsiMap":
+              mtpa: Optional[List[Tuple[float, float, float]]] = None,
+              fixed_gamma: Optional[float] = None) -> "PsiMap":
         P = list(pts)
         arr = lambda k: np.array([float(p[k]) for p in P], float)   # noqa: E731
         i_d, i_q = arr("i_d"), arr("i_q")
@@ -105,7 +110,8 @@ class PsiMap:
         m = cls(i_d=i_d, i_q=i_q, psi_d=arr("psi_d"), psi_q=arr("psi_q"), T=arr("T"),
                 ripple_pp=np.array([float(p.get("ripple_pp") or 0.0) for p in P]),
                 pole_pairs=int(pole_pairs), scale=scale,
-                mtpa=sorted(mtpa or []))
+                mtpa=sorted(mtpa or []),
+                fixed_gamma=(None if fixed_gamma is None else float(fixed_gamma)))
         from scipy.interpolate import CloughTocher2DInterpolator
         X = np.column_stack([i_d, i_q]) / scale
         for k in ("psi_d", "psi_q", "T", "ripple_pp"):
@@ -142,7 +148,11 @@ class PsiMap:
     # ── MTPA line ─────────────────────────────────────────────────────────
     def gamma_mtpa(self, I_rms: float) -> float:
         """gamma_MTPA(I): linear between the FEM-confirmed vertices, 0 at I=0
-        (the q-axis at zero current), held beyond the last level."""
+        (the q-axis at zero current), held beyond the last level.  With a
+        fixed operating angle (``fixed_gamma``) that angle at every current —
+        the operating line is then the fixed-angle line, labelled as such."""
+        if self.fixed_gamma is not None:
+            return float(self.fixed_gamma)
         if not self.mtpa:
             return 0.0
         I = [0.0] + [m[0] for m in self.mtpa]
@@ -164,7 +174,7 @@ class PsiMap:
         that fits (fixed-current FW).  (None, reason) beyond the grid."""
         g0 = self.gamma_mtpa(I_rms)
         if self.v_phase(I_rms, g0, rpm, R_ph) <= v_lim:
-            return g0, "mtpa"
+            return g0, ("fixed" if self.fixed_gamma is not None else "mtpa")
         if self.v_phase(I_rms, gamma_max, rpm, R_ph) > v_lim:
             return None, "needs deeper field weakening than characterised (gamma > %g°)" % gamma_max
         lo, hi = g0, gamma_max

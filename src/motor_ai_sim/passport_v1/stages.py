@@ -206,6 +206,41 @@ def stage_hot(R, snap, st) -> None:
         fixed.append(job(I, D_AXIS_ANCHOR, "d-axis anchor"))
     for fI in LEVELS[-2:]:
         fixed.append(job(fI * I0, -5.0, "gamma=-5 (saturation ridge shift)"))
+    gf = (snap.get("plan") or {}).get("fixed_gamma_deg")
+    if gf is not None:
+        # Owner-directed fixed operating angle (Ø85, 2026-10-10): one angle,
+        # selected once at the nominal point, at every loaded row.  Each level
+        # gets that angle plus +-MTPA_STEP map samples (the map stays dense
+        # around the operating line); the parabola through the three is kept
+        # as information only — it never moves the operating angle.
+        gf = round(float(gf), 4)
+        st["fixed_gamma_deg"] = gf
+        st["fixed_gamma_source"] = str((snap.get("plan") or {}).get("fixed_gamma_source") or "")
+        lv = []
+        for fI in LEVELS:
+            I = fI * I0
+            js = [job(I, round(gf - MTPA_STEP, 4), "fixed-angle map sample"),
+                  job(I, gf, "fixed operating angle"),
+                  job(I, round(gf + MTPA_STEP, 4), "fixed-angle map sample")]
+            lv.append((fI, I, js))
+        R.run(fixed + [j for _, _, js in lv for j in js])
+        mtpa_rec = []
+        for fI, I, js in lv:
+            gs = [float(j["meta"]["gamma"]) for j in js]
+            Ts = [float(R.done[j["id"]]["r"]["T_avg_Nm"]) for j in js]
+            gv, Tv, ok = PM.parabola_vertex(gs, Ts)
+            mtpa_rec.append({"fI": fI, "I": I, "gamma_mtpa": gf, "T_parabola": Ts[1],
+                             "conf_id": js[1]["id"], "bracket": gs, "T_bracket": Ts,
+                             "parabola_bracketed": ok, "T_fem_vertex": Ts[1],
+                             "vertex_vs_parabola_pct": 0.0, "vertex_ge_samples": None,
+                             "method": "fixed operating angle (owner 2026-10-10)",
+                             "info_parabola_vertex_deg": round(gv, 3),
+                             "info_parabola_T": Tv,
+                             "fixed_vs_vertex_pct": 100.0 * (Ts[1] - Tv) / Tv if Tv else None})
+            print("  level %.2f I0: fixed gamma %.3f°, T %.6g (vertex %.2f°, %.4g)"
+                  % (fI, gf, Ts[1], gv, Tv), flush=True)
+        st["hot_mtpa"] = mtpa_rec
+        return
     mtpa_rec = []
     g_hat = 0.0
     pending = list(fixed)
@@ -259,7 +294,8 @@ def pole_pairs(snap) -> int:
 def hot_map(R, snap, st):
     from motor_ai_sim.passport_v1 import psimap as PM
     pts = PM.points_from_records(R.done.values(), "hot")
-    return PM.PsiMap.build(pts, pole_pairs(snap), mtpa=PM.mtpa_table(st["hot_mtpa"]))
+    return PM.PsiMap.build(pts, pole_pairs(snap), mtpa=PM.mtpa_table(st["hot_mtpa"]),
+                           fixed_gamma=st.get("fixed_gamma_deg"))
 
 
 def R_hot(R, st) -> float:

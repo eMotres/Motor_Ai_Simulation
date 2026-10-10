@@ -505,6 +505,9 @@ def build_variants(*, machine: str, rec, snap, hm, rows_grid, pwm_fem: Mapping[s
                     ["GaN dead time 20 ns: default pending owner"] if drv["tech"] == "GaN" else []) + (
                     ["motor PWM loss: ESTIMATE from the 48 kHz FEM (no FEM at this carrier)"]
                     if model and model.derived else []) + (
+                    ["motor PWM extra loss NOT included: no motor-side PWM FEM anchor for this "
+                     "machine (motor_pwm_loss_W is null; drive efficiency = sine motor + "
+                     "inverter + board copper)"] if not model else []) + (
                     ["GaN switching: datasheet model (no public SPICE model)"]
                     if drv["tech"] == "GaN" else ["Si switching: vendor SPICE table"]),
             },

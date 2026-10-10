@@ -23,6 +23,13 @@ plan:
   # where the demag current limit sits below it
   loss_floor_levels: [0.25]
   refine_points: [[2.0, 42.5], [2.0, 57.5], [2.5, 42.5], [2.5, 57.5]]
+  # owner-directed fixed operating angle (2026-10-10, docs/d85-fixed-operating-angle-
+  # 2026-10-10.md): gamma_ref selected once at 25.88 A, 1000 rpm, 20 °C and kept at every
+  # loaded row below the voltage limit (field weakening above it)
+  fixed_gamma_deg: 1.9505
+  fixed_gamma_source: >-
+    owner-directed fixed operating angle; gamma_ref = 1.9505° confirmed at 25.88 A,
+    1000 rpm, 20 °C (5.6622 N·m, within 0.0002 % of the fitted vertex)
 machines:
   L13:
     config: L13
@@ -32,24 +39,26 @@ machines:
     owner_bus_V: [36.0, 44.4, 50.4]
     owner_rated: {rpm: 1000.0, I_arms: 25.88}
     owner_peak: {rpm: 1000.0, I_arms: 45.962}
-    # KNOWN ISSUE (brief 2026-10-05), confirmed: the rated duty's own coupled loop
-    # (robotics cooling as saved, 2026-09-28) is NOT converged — its second EM pass was
-    # refused at magnet 242.9 °C (F52SH_120C linear model: Hcj < 0); the adopted
-    # 293.6 / 210.7 °C are pass 1.  210.7 °C is above the card's 150 °C maximum working
-    # temperature.  NOT clamped: the hot map is solved at an explicit, labelled
-    # reference instead (the magnet card's maximum working temperature, the winding at
-    # Configure's class-H limit) — owner decision pending (magnet card / temperature).
+    # HOT set (owner rule 2026-10-10: hot grid at CONVERGED coupled temperatures; a hot
+    # magnet outside the F52SH_120C card stops that item, no clamping).  The rated duty
+    # (25.88 A, 1000 rpm) has no in-card steady state with either cooling: the robotics
+    # coupled loop of 2026-09-28 was refused at magnet 242.9 °C (pass 2), and the coupled
+    # S1 searches put the continuous current at 8.52 A (robotics) and 4.3 A (propeller
+    # air, FEM lower bound) -- so the rated-duty hot grid is STOPPED (reported).  The hot
+    # map is solved instead at the converged coupled state of the machine's continuous
+    # rating with its first-listed cooling (robotics, 1000 rpm, S1 8.52 A): magnet
+    # 69.2 °C, winding 75.1 °C, inside the magnet card.
     hot_override:
-      magnet_c: 150.0
-      coil_c: 180.0
+      magnet_c: 69.2
+      coil_c: 75.1
       source: >-
-        LIMIT-TEMPERATURE reference (proposal): magnet = F52SH_120C max working
-        temperature 150 °C (SH class), winding = Configure's class-H limit 180 °C
-        (owner 2026-10-05) — NOT the rated duty's temperatures
+        converged coupled EM-thermal loop at the continuous (S1) rating, robotics
+        cooling, 1000 rpm, 40 °C ambient (cooling_L13_robotics_s1_n1000, 2026-10-06):
+        S1 8.52 A, housing-limited (70 °C touch limit)
       reason: >-
-        rated duty (25.88 A, 1000 rpm) has no steady state inside the magnet card under
-        its saved robotics cooling: coupled loop 2026-09-28 not converged (pass 2
-        refused at magnet 242.9 °C), adopted 293.6 / 210.7 °C (pass 1) > card 150 °C
+        the rated duty (25.88 A, 1000 rpm) has no steady state inside the magnet card
+        with either cooling (robotics coupled loop 2026-09-28 refused at magnet
+        242.9 °C; S1 8.52 A robotics / 4.3 A propeller air): rated-duty hot grid stopped
     k3d: {k_T: k_psi}
     stage_a_lengths_mm: [13.0]
     controller:

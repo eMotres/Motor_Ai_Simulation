@@ -17,6 +17,8 @@ Schema (keys not listed are rejected, so a typo fails closed)::
     plan:                            # optional stage parameters
       loss_speed_factors: [0.25, 0.5, 1.0, 1.5, 2.0]   # × rated speed (+ n_max)
       envelope_max_factor: 4.0
+      fixed_gamma_deg: 1.9505        # owner-directed fixed operating angle (no per-level MTPA)
+      fixed_gamma_source: "..."
     machines:
       L13:
         config: L13
@@ -48,7 +50,7 @@ _MACHINE = {"config", "rated_duty", "peak_duty", "version", "owner_bus_V", "owne
             "not_computed_variants", "stage_a_lengths_mm", "mech", "cooling_studies",
             "audit", "k3d", "propellers", "notes"}
 _PLAN = {"loss_speed_factors", "envelope_max_factor", "refine_points", "loss_steps_per_period", "m_margin",
-         "loss_floor_levels"}
+         "loss_floor_levels", "fixed_gamma_deg", "fixed_gamma_source"}
 
 
 class SpecError(ValueError):

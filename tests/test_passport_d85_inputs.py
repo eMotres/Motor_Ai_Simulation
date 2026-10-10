@@ -20,7 +20,7 @@ def test_specs_load_and_name_their_machines():
     m = d85["machines"]["L13"]
     assert d85["die"] == DIE
     assert m["controller"]["n_parallel"] == 2 and m["controller"]["device"] == "IQE036N08NM6SC"
-    assert m["hot_override"]["magnet_c"] == 150.0
+    assert m["hot_override"]["magnet_c"] == 69.2 and d85["plan"]["fixed_gamma_deg"] == 1.9505
     assert {s["cooling"] for s in m["cooling_studies"]} == {"robotics", "propeller_air"}
 
 

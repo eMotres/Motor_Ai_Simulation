@@ -90,7 +90,8 @@ def _map(recs, st, set_name, mtpa_key, pp):
     # the zero-current anchor of the map is the 60°-window `hot_I0_anchor`
     pts = PM.points_from_records([v for k, v in recs.items()
                                   if k not in ("__failed__", "hot_noload")], set_name)
-    return pts, PM.PsiMap.build(pts, pp, mtpa=PM.mtpa_table(st[mtpa_key]))
+    fg = st.get("fixed_gamma_deg") if mtpa_key == "hot_mtpa" else None
+    return pts, PM.PsiMap.build(pts, pp, mtpa=PM.mtpa_table(st[mtpa_key]), fixed_gamma=fg)
 
 
 def static_check_rows(recs, st, hm: PM.PsiMap, I0: float) -> List[Dict[str, Any]]:

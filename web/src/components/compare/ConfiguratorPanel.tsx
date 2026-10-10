@@ -1776,7 +1776,7 @@ const ConfiguratorPanel: React.FC = () => {
               const ext = propPoint?.extrapolated && series?.rpm_range_tested
                 ? { tip: tx('configurePropeller.beyondTestedTip', { lo: fmt(series.rpm_range_tested[0], 0), hi: fmt(series.rpm_range_tested[1], 0) }) }
                 : null;
-              return { ...n, text: '', tip: `${n.tip} ${tx('configurePropeller.zoneTip')}${ext ? ` ${ext.tip}` : ''}` };
+              return { ...n, text: '', tip: [n.tip, tx('configurePropeller.zoneTip')].join(' ') + (ext ? ' ' + ext.tip : '') };
             })()} />
 
           {/* ── DRIVE: Sine | PWM (owner 2026-10-05) ─────────────────────
@@ -1812,7 +1812,7 @@ const ConfiguratorPanel: React.FC = () => {
                   {/* transistor: the device only; its technology (Si / GaN) and the other facts ride in the tooltip */}
                   <select value={variant.device} aria-label={tx('configureDrive.transistor')}
                     onChange={(e) => { const v = switchDevice(variants, variant, e.target.value); if (v) setDrive(choiceOf(v)); }}
-                    title={`${tx('configureDrive.transistorTip')}\n${driveFactsTip}`}
+                    title={[tx('configureDrive.transistorTip'), driveFactsTip].join('\n')}
                     style={{ ...selStyle, flex: '1 1 auto', maxWidth: 200 }}>
                     {devs.map((d) => (<option key={d.device} value={d.device} style={{ color: '#000' }}>{d.device}</option>))}
                   </select>

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { fileURLToPath } from 'node:url';
 
 class Storage {
   values = new Map();
@@ -15,7 +16,7 @@ globalThis.window = { dispatchEvent() {} };
 globalThis.CustomEvent = class CustomEvent { constructor(type, init) { this.type = type; this.detail = init?.detail; } };
 const { build } = await import('esbuild');
 const bundle = await build({
-  entryPoints: [new URL('../lastMotor.ts', import.meta.url).pathname],
+  entryPoints: [fileURLToPath(new URL('../lastMotor.ts', import.meta.url))],
   bundle: true, platform: 'node', format: 'esm', write: false,
   define: { 'import.meta.env': JSON.stringify({ VITE_API_URL: 'http://test-api' }) },
   plugins: [{

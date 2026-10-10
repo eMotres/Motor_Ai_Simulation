@@ -47,13 +47,17 @@ the propeller UI releases.
 
 ## What was kept in the repository instead
 
-- `config/passports/CIANO28 85 20SW1200/L13.json` — the D85 passport store the
-  live server serves (`/srv/motres/shared/passports/...`, sha256
+- `docs/data/passport_d85/L13_live_store_2026-10-06.json` — a copy of the
+  D85 passport store the live server serves
+  (`/srv/motres/shared/passports/CIANO28 85 20SW1200/L13.json`, sha256
   `3605ffd9…7fe53`, identical to the archived
-  `d85-live-passport-store-L13-1843.json`). Git stores it with LF line
-  endings like the `CIANO14 40 new` stores; a CRLF checkout reproduces the
-  server bytes exactly (checked). The server's shared copy still wins at run
-  time; the repository copy is the fallback.
+  `d85-live-passport-store-L13-1843.json`; git stores it with LF line
+  endings, a CRLF checkout reproduces the server bytes exactly). It is kept
+  as a reference, **not** under `config/passports/`: its PWM variants carry no
+  `motor_pwm_loss_W` (the store's own provenance excludes motor-side PWM
+  loss), which fails `tests/test_passport_store.py::
+  test_every_stored_variant_is_readable_by_configure`. The live server's copy
+  is unaffected.
 - The 48 Codex notes under `docs/` and the coordination records — see
   `docs/CODEX_WORK_2026-10-06_10.md`.
 

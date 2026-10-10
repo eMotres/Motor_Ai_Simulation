@@ -238,7 +238,9 @@ def test_non_admin_cannot_delete_a_shared_die(env, shared_is_read_only):
 
     r = client.delete(f"/api/family/die/{EMPTY_DIE}", headers=env["a"])
     assert r.status_code == 403, r.text
-    assert "catalog admin" in r.json()["detail"]
+    # 2026-10-06 (Codex, admin shared catalogue): the refusal now names the
+    # verified signed-in admin; still a 403 and still no tombstone.
+    assert "only a verified signed-in admin may delete it" in r.json()["detail"]
     assert not W.is_tombstoned(EMPTY_DIE)
     assert EMPTY_DIE in _tree_names(env["a"])
 

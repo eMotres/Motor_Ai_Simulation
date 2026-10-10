@@ -128,6 +128,7 @@ def _num(v: Any) -> Optional[float]:
 #: these and only these.
 COOLING_KEYS: Tuple[str, ...] = (
     "cooling_mode", "ambient_temp", "h_conv", "air_speed_mps",
+    "air_speed_source", "propeller_id", "propeller_position",
     "fluid", "fluid_temp_in_c", "flow_lpm",
     "bore_mode", "bore_air_speed_mps", "bore_fluid", "bore_fluid_temp_in_c",
     "bore_flow_lpm", "shaft_ext_length_mm", "shaft_ext_sides",
@@ -161,7 +162,8 @@ class Condition:
 #: Which cooling keys belong to which mode — everything else is dropped by
 #: :func:`_prune`, exactly as ``thermal_settings.cooling_fields`` only ever
 #: SENDS the keys the mode reads.
-_OUTER_ONLY = {"manual": ("h_conv",), "air": ("air_speed_mps",),
+_OUTER_ONLY = {"manual": ("h_conv",), "air": ("air_speed_mps", "air_speed_source",
+                                                "propeller_id", "propeller_position"),
                "liquid": ("fluid", "fluid_temp_in_c", "flow_lpm"),
                "robotics": ("emissivity", "end_faces", "end_face_sides",
                             "heat_path"),
@@ -184,6 +186,11 @@ def _prune(kw: Mapping[str, Any]) -> Dict[str, Any]:
         if m != bore:
             drop.update(keys)
     drop -= set(_OUTER_ONLY.get(mode, ())) | set(_BORE_ONLY.get(bore, ()))
+    if mode == "air":
+        if str(out.get("air_speed_source") or "manual").strip().lower() == "propeller":
+            drop.add("air_speed_mps")
+        else:
+            drop.update(("air_speed_source", "propeller_id", "propeller_position"))
     if str(out.get("frame") or "housed") != "open":
         drop.add("open_air_speed_mps")
     if not _num(out.get("mount_g_w_per_k")):
@@ -805,6 +812,12 @@ def headline(block: Optional[Mapping[str, Any]]) -> str:
                     if n.startswith("THE 2-D") or n.startswith("CONTRADICTS")),
                    None) or b.get("note") or "the map could not be iterated"
         return "NOT A RATING — %s" % why
+    # A route may attach the estimate before it runs the real S1 check.  Keep
+    # that estimate usable for the estimate UI, but never call it a continuous
+    # rating until the physical verification has passed.
+    if b.get("verified") is False:
+        why = b.get("note") or "the S1 verification did not pass"
+        return "NOT VERIFIED — %s" % why
     i = _num(b.get("I_cont_A_rms"))
     part = str(b.get("limiting_part") or "a part")
     lim = _num((b.get("limits_c") or {}).get(part))

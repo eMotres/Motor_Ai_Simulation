@@ -176,25 +176,25 @@ def test_continuous_stops_the_loop_exactly_as_limits_does(client, monkeypatch):
     assert cr["verified"] is False
     assert cr["verification_passes"] == 2
     assert cr["I_estimated_A_rms"] == 34.36
-    # THE RECORD'S OWN MACHINE MOVED TO S1 (owner's rule): the coupled
-    # block's temperatures are no longer the setpoint's 200 °C AT-THE-LIMIT
-    # pass, they are the S1 verification's own — even unverified, it is the
-    # real pass the record now describes, not the setpoint's.
-    assert c["coil_temp_c"] == 103.0
+    # A failed verification is evidence only: the record remains the original
+    # limited machine, while the estimate and failed trial are both retained.
+    assert c["coil_temp_c"] == 200.0
+    assert cr["record_is_s1"] is False
+    assert cr["verification_status"] == "failed"
+    assert cr["verification_trial"]["actual_c"] == 95.0
+    assert cr["I_cont_A_rms"] == _RATING_BLOCK["I_cont_A_rms"]
+    assert "NOT VERIFIED" in cr["headline"]
     # …and the setpoint's own story survives, unabbreviated.
     assert cr["duty_point"]["I_phase_rms_A"] == LOOP_BODY["I_phase_rms"]
     assert "winding reaches 200" in cr["duty_point"]["verdict"]
 
-    # ── THE RECORD SAYS SO (owner 2026-09-21, third round: "the currents don't
-    # match again" — the AT-THE-LIMIT line used to end "the numbers below are
-    # the machine at that moment", which is false once those numbers are the
-    # S1 pass's) ─────────────────────────────────────────────────────────
-    assert cr["record_is_s1"] is True
+    # Since verification failed, the record still describes the setpoint's
+    # at-the-limit machine and keeps the matching line.
+    assert cr["record_is_s1"] is False
     line = c["limited"]["line"]
-    assert line == ("Setpoint 20.00 A rms runs 24 s from cold (9.0 s from "
-                    "rated) at this cooling, then the winding reaches 200 °C")
-    assert "the numbers below are the machine at that moment" not in line
-    # …and the warning line (the one every surface prints) picks it up too.
+    assert "winding reaches 200 °C" in line
+    assert "the numbers below are the machine at that moment" in line
+    # The warning line keeps the same setpoint provenance.
     assert c["warning"] == line
 
 
@@ -240,10 +240,14 @@ def test_the_block_rides_the_record_as_continuous_rating(client, monkeypatch):
     _fake(monkeypatch, ttl=_ttl_block())
     c = _run(client, solve_to="continuous")
     cr = c["continuous_rating"]
-    # I_cont_A_rms is the VERIFIED reading (owner 2026-09-21) — the network's
-    # own first answer survives separately, as I_estimated_A_rms.
+    # The fixed thermal fake reads 95 °C at the S1 trial, so it misses this
+    # magnet limit. Preserve the network estimate and file the trial current
+    # separately instead of adopting a failed pass.
     assert cr["I_estimated_A_rms"] == 34.36
-    assert cr["I_cont_A_rms"] == 20.0          # the fake EM pass's own current
+    assert cr["I_cont_A_rms"] == 34.36
+    assert cr["verification_trial"]["I_phase_rms_A"] == 20.0
+    assert cr["verified"] is False
+    assert cr["record_is_s1"] is False
     assert cr["limiting_part"] == "magnet"
     assert cr["cooling_label"].startswith("forced air 40 m/s")
 
@@ -354,6 +358,9 @@ def test_a_verification_still_off_after_two_passes_states_the_miss(
     assert cr["verified"] is False
     assert cr["miss_K"] is not None and cr["miss_K"] > 3.0
     assert "still" in cr["note"] and "verification pass" in cr["note"]
+    assert cr["verification_trial"]["miss_K"] == cr["miss_K"]
+    assert cr["record_is_s1"] is False
+    assert "NOT VERIFIED" in cr["headline"]
 
 
 # ---------------------------------------------------------------------------
@@ -408,13 +415,20 @@ def test_unknown_solve_to_mentions_all_three_questions(client, monkeypatch):
 def test_continuous_rating_survives_compact_coupled_into_the_duty_record():
     from motor_ai_sim.duty_results import compact_coupled
 
+    trial = {"verified": False, "passes": 2, "I_phase_rms_A": 30.1,
+             "actual_c": 156.1, "miss_K": 6.1}
     rec = compact_coupled({"coupling": {"coil_temp_c": 200.0,
                                         "solve_to": "continuous",
                                         "mode": "limited",
-                                        "continuous_rating": dict(_RATING_BLOCK)},
+                                        "continuous_rating": {
+                                            **_RATING_BLOCK,
+                                            "verified": False,
+                                            "record_is_s1": False,
+                                            "verification_trial": trial}},
                            "computed_at": "2026-09-21T00:00:00"})
     assert rec["continuous_rating"]["I_cont_A_rms"] == 34.36
     assert rec["continuous_rating"]["limiting_part"] == "magnet"
+    assert rec["continuous_rating"]["verification_trial"] == trial
     # …and a record that never asked grows no key at all, never a null one.
     plain = compact_coupled({"coupling": {"coil_temp_c": 120.0}})
     assert "continuous_rating" not in plain
@@ -455,6 +469,33 @@ def test_the_report_functions_read_the_stored_block_only():
                                              "trustworthy": False}}
     assert "NOT" not in rp.continuous_rating_words(not_trustworthy).upper() \
         or "not a rating" in rp.continuous_rating_words(not_trustworthy)
+
+    # Both new failed records and the old contradictory production shape keep
+    # the estimate only with an explicit label and suppress positive S1 claims.
+    failure_note = "still 6.1 K over its limit after 2 verification passes"
+    failed_trial = {"continuous_rating": {
+        **_RATING_BLOCK, "verified": False, "record_is_s1": False,
+        "I_estimated_A_rms": 34.36, "note": failure_note,
+        "verification_trial": {"limiting_part": "magnet", "limit_c": 150.0,
+                               "actual_c": 156.1, "miss_K": 6.1}}}
+    assert rp.continuous_rating_feasible(
+        failed_trial["continuous_rating"]) is False
+    estimate_words = rp.continuous_rating_words(failed_trial)
+    assert estimate_words.startswith("estimated 34.4 A rms — NOT VERIFIED")
+    assert "6.1 K over" in estimate_words
+    assert "verification trial: magnet 156.1 / 150 °C" in \
+        rp.continuous_rating_limit_words(failed_trial)
+    assert "NOT VERIFIED" in rp.continuous_rating_clause(failed_trial)
+
+    legacy_mismatch = {"continuous_rating": {
+        **_RATING_BLOCK_VERIFIED, "verified": False,
+        "record_is_s1": True, "note": failure_note}}
+    assert rp.continuous_rating_feasible(
+        legacy_mismatch["continuous_rating"]) is False
+    assert rp.continuous_rating_words(legacy_mismatch).startswith(
+        "estimated 34.4 A rms — NOT VERIFIED")
+    assert "6.1 K over" in rp.continuous_rating_limit_words(legacy_mismatch)
+    assert "NOT VERIFIED" in rp.continuous_rating_clause(legacy_mismatch)
 
 
 def test_the_row_group_appears_only_when_a_duty_asked_for_it():
@@ -507,6 +548,28 @@ def test_the_row_group_appears_only_when_a_duty_asked_for_it():
     _, rows_without = rp.coupled_compare_rows(cols_without)
     labels_without = {r[0] for r in rows_without}
     assert not any(l.startswith("Continuous rating") for l in labels_without)
+
+    # A failed check may show the network's current only as an estimate, with
+    # the trial temperature and failure still explained by the limit clause.
+    failed_rating = {**_RATING_BLOCK, "verified": False,
+                     "record_is_s1": False,
+                     "I_estimated_A_rms": 34.36,
+                     "note": "still 6.1 K over its limit after 2 passes",
+                     "verification_trial": {
+                         "limiting_part": "magnet", "limit_c": 150.0,
+                         "actual_c": 156.1, "miss_K": 6.1}}
+    _, rows_failed = rp.coupled_compare_rows(
+        [{"duty": "rated", "em": {}, "d": {},
+          "res": {"coupled": {"coil_temp_c": 200.0,
+                               "continuous_rating": failed_rating}}}])
+    failed_rows = {r[0]: r for r in rows_failed}
+    failed_current = failed_rows[
+        "Continuous rating (S1), current [A rms]"][1]
+    assert failed_current.startswith("estimated 34.4 A rms — NOT VERIFIED")
+    assert "NOT VERIFIED" in failed_rows[
+        "Continuous rating (S1), limited by"][1]
+    assert not any(r[0] == "Continuous rating (S1), torque [N·m]"
+                   for r in rows_failed)
 
 
 # ---------------------------------------------------------------------------

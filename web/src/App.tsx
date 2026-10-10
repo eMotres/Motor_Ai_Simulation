@@ -49,6 +49,7 @@ import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
 import MaterialDetailView from './components/materials/MaterialDetailView';
 import WireStockTable from './components/materials/WireStockTable';
+import MaterialsCatalogPanel from './components/materials/MaterialsCatalogPanel';
 import ErrorBoundary from './components/ErrorBoundary';
 import { useMaterialsLibrary } from './components/materials/useMaterialsLibrary';
 import type { SelectedMaterial, MaterialCategory } from './components/materials/useMaterialsLibrary';
@@ -75,6 +76,7 @@ import { isStandardUser, landingTabForUser, tabAllowed } from './lib/accessUi';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { useServerLocale } from './i18n/persist';
+import { clearLiveDutyContext, invalidateLastMotorOperations, restoreLastMotor, setLastMotorState } from './lib/lastMotor';
 
 // Theme is built from the shared eMotres/aerostator design tokens — see
 // src/theme.ts.  Light is the default (matches the marketing site); dark
@@ -299,11 +301,40 @@ function App() {
   // open.  `signedIn` is true on an unenforced backend, so local dev boots
   // exactly as it always did, and flipping it (the sign-in dialog) re-runs this.
   useEffect(() => {
-    if (authPending || !signedIn) return;
-    fetchGeometryFromApi();
-    fetchSchemaFromApi();
-    loadServerSweepConfig();
-  }, [authPending, signedIn, fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
+    if (!authResolved) return;
+    if (!signedIn) {
+      invalidateLastMotorOperations();
+      setLastMotorState({ email: null, status: 'idle', selection: null });
+      clearLiveDutyContext();
+      useMotorStore.setState({ geometry: null as never });
+      return;
+    }
+    let alive = true;
+    const email = user?.email?.trim().toLowerCase() ?? null;
+    const perAccount = enforced && !!email && !isAdmin;
+    const ordinary = perAccount;
+    void (async () => {
+      fetchSchemaFromApi();
+      loadServerSweepConfig();
+      if (perAccount) {
+        // `/api/geometry` describes the shared owner workspace. Never let it
+        // impersonate a signed-in account while its saved choice is resolving.
+        useMotorStore.setState({ geometry: null as never });
+        try {
+          const restored = await restoreLastMotor(email!);
+          if (!alive || user?.email?.trim().toLowerCase() !== email) return;
+          if (restored.status === 'loaded' || ordinary) return;
+        } catch {
+          if (!alive || user?.email?.trim().toLowerCase() !== email) return;
+          if (ordinary) return;
+        }
+      }
+      if (!alive) return;
+      await fetchGeometryFromApi();
+    })();
+    return () => { alive = false; };
+  }, [authResolved, authPending, signedIn, enforced, isAdmin, user?.email,
+      fetchGeometryFromApi, fetchSchemaFromApi, loadServerSweepConfig]);
 
   // Adopt the server's mesh block into the browser's mesh.* keys once per
   // boot — see lib/meshConfigSync for the full-ring sweep this prevents.
@@ -329,13 +360,15 @@ function App() {
   // pendingGeometryEdits BEFORE adopting the server's geometry — the first
   // successful tick syncs the queue instead of clobbering it.
   useEffect(() => {
-    if (connectedToApi || authPending || !signedIn) return;
+    if (connectedToApi || !authResolved || authPending || !signedIn) return;
+    const ordinary = enforced && !!user && !isAdmin;
     const t = setInterval(() => {
-      fetchGeometryFromApi();
+      if (!ordinary) fetchGeometryFromApi();
       fetchSchemaFromApi();
     }, 5000);
     return () => clearInterval(t);
-  }, [connectedToApi, authPending, signedIn, fetchGeometryFromApi, fetchSchemaFromApi]);
+  }, [connectedToApi, authResolved, authPending, signedIn, enforced, user?.email,
+      isAdmin, fetchGeometryFromApi, fetchSchemaFromApi]);
 
   // THE HEADER CHIP WHILE SIGNED OUT.  `connectedToApi` is set by the geometry
   // and schema fetches, and those answer 401 to a visitor on a server that
@@ -410,7 +443,7 @@ function App() {
     // else (a stale tab from before the role was known, a ?tab= link) lands on
     // Configure when something is selected there, else on Motors.
     if (standardUser && !tabAllowed(activeTab, true)) {
-      setActiveTab(landingTabForUser(hasOwnConfigureChoice() || !!defaultMotor));
+      setActiveTab(landingTabForUser(hasOwnConfigureChoice(user?.email) || !!defaultMotor));
     }
   }, [activeTab, isAdmin, standardUser, signedIn, authResolved, defaultMotor, setActiveTab]);
 
@@ -421,7 +454,7 @@ function App() {
   useEffect(() => {
     if (!authResolved || !signedIn || !standardUser || landedRef.current) return;
     landedRef.current = true;
-    setActiveTab(landingTabForUser(hasOwnConfigureChoice() || !!defaultMotor));
+    setActiveTab(landingTabForUser(hasOwnConfigureChoice(user?.email) || !!defaultMotor));
   }, [authResolved, signedIn, standardUser, defaultMotor, setActiveTab]);
 
   // ── Tab registry — the bar AND the content are GENERATED from this list.
@@ -498,7 +531,8 @@ function App() {
       ) },
     { id: 'materials', label: 'Materials', order: 30, gate: 'fullUI', showViewer: true,
       render: () => (
-        <Box sx={{ display: 'flex', height: '100%' }}>
+        <MaterialsCatalogPanel materialView={
+          <Box sx={{ display: 'flex', height: '100%' }}>
           {/* Library tree — full-height column on the left */}
           <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', borderRight: '1px solid', borderColor: 'divider' }}>
             <MaterialsLibraryTree library={matLibrary} loading={matLoading} error={matError}
@@ -519,7 +553,8 @@ function App() {
                 onChanged={matReload} onSelect={setSelectedMaterial} />
             </Box>
           </Box>
-        </Box>
+          </Box>
+        } />
       ) },
     { id: 'mesh', label: 'Mesh', order: 40, panelId: 'mesh', gate: 'fullUI', showViewer: true,
       render: () => <MeshPanel /> },

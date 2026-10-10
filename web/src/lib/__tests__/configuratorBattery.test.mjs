@@ -42,6 +42,21 @@ t('a user edit is remembered for that machine only', () => {
   assert.equal(B.readBatteryEdit(JSON.stringify({ 'cat:l12': { type: 'NMC', cells: 0 } }), 'cat:l12'), null);
 });
 
+t('configured battery edits do not bleed between presets; legacy machine edit is original-config only', () => {
+  const legacy = { type: 'NMC', cells: 6, nom: 3.7, max: 4.2, min: 3.0 };
+  const newer = { type: 'NMC', cells: 12, nom: 3.7, max: 4.2, min: 3.0 };
+  const rawLegacy = B.writeBatteryEdit(null, 'cat:machine', legacy);
+  assert.deepEqual(B.readBatteryEditForConfig(rawLegacy, 'cat:machine', 'L12', 'L12'), legacy);
+  assert.equal(B.readBatteryEditForConfig(rawLegacy, 'cat:machine', 'L20', 'L12'), null);
+  const rawL20 = B.writeBatteryEditForConfig(rawLegacy, 'cat:machine', 'L20', newer);
+  assert.deepEqual(B.readBatteryEditForConfig(rawL20, 'cat:machine', 'L20', 'L12'), newer);
+  assert.deepEqual(B.readBatteryEditForConfig(rawL20, 'cat:machine', 'L12', 'L12'), legacy);
+  assert.notEqual(B.batteryEditKey('cat:machine', 'L12'), B.batteryEditKey('cat:machine', 'L20'));
+  const cleared = B.clearBatteryEditForConfig(rawL20, 'cat:machine', 'L12', 'L12');
+  assert.equal(B.readBatteryEditForConfig(cleared, 'cat:machine', 'L12', 'L12'), null);
+  assert.deepEqual(B.readBatteryEditForConfig(cleared, 'cat:machine', 'L20', 'L12'), newer);
+});
+
 t('resetting to the machine pack removes only this machine\'s edit', () => {
   const mine = { type: 'NMC', cells: 7, nom: 3.7, max: 4.2, min: 3.0 };
   let raw = B.writeBatteryEdit(null, 'cat:l12', mine);
@@ -52,11 +67,20 @@ t('resetting to the machine pack removes only this machine\'s edit', () => {
   assert.equal(B.clearBatteryEdit('garbage', 'x'), '{}');
 });
 
-t('which battery a machine opens on: the edit, else the pack, else nothing (stock default)', () => {
+t('a configured machine with no saved pack never inherits its card passport pack', () => {
+  assert.equal(B.batteryForMachineConfig(true, null, L12, L12), null);
+  assert.equal(B.batteryForDisplay(null, B.batteryForMachineConfig(true, null, L12, L12)).cells, 100);
+  assert.deepEqual(B.batteryForMachineConfig(false, null, L12, null), B.batteryFromPack(L12));
+  assert.deepEqual(B.batteryForMachineConfig(false, null, null, L12), B.batteryFromPack(L12));
+  assert.deepEqual(B.batteryForMachineConfig(true, L12, null, null), B.batteryFromPack(L12));
+});
+
+t('which battery a machine opens on: the edit, else the pack, else stock display', () => {
   const pack = B.batteryFromPack(L12);
   const edit = { type: 'NMC', cells: 7, nom: 3.7, max: 4.2, min: 3.0 };
   assert.equal(B.wantedBattery(edit, pack), edit);
   assert.equal(B.wantedBattery(null, pack), pack);
   assert.equal(B.wantedBattery(null, null), null);
+  assert.deepEqual(B.batteryForDisplay(null, null), { type: 'NMC', cells: 100, nom: 3.7, max: 4.2, min: 3.0 });
   assert.ok(B.sameBattery(pack, { ...pack }) && !B.sameBattery(pack, edit));
 });

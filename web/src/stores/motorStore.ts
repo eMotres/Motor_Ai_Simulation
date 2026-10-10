@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { syncActiveMotor } from '../components/common/motorSettings';
 import { setGeoGetter } from '../lib/apiAuth';
-import { canWriteServer } from '../lib/localAuth';
+import { canWriteServer, getStoredUser } from '../lib/localAuth';
 import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
 import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
 import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
@@ -32,6 +32,7 @@ import { adoptGapLayers } from '../lib/gapLayersAdopt';
 import { storedGapLayers } from '../lib/meshSettings';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
+const storedIdentity = () => (getStoredUser()?.email ?? '').trim().toLowerCase();
 
 // Restore the eval parameters a descent run used into the Simulation tab's sources,
 // so re-running the Simulation on an applied design REPRODUCES it (the optimizer eval
@@ -379,6 +380,7 @@ export const useMotorStore = create<MotorState>()(
       
       // API Actions
       fetchGeometryFromApi: async () => {
+        const requestedIdentity = storedIdentity();
         // RECONNECT BARRIER: edits queued while the backend was down (see
         // updateGeometryViaApi's catch) must reach the server BEFORE its copy
         // is adopted, or the first successful GET after an outage reverts the
@@ -414,6 +416,9 @@ export const useMotorStore = create<MotorState>()(
             throw new Error(`HTTP error! status: ${response.status}`);
           }
           const data = await response.json();
+          // A request issued for the previous signed-in account must never
+          // replace the new account's locally restored geometry.
+          if (storedIdentity() !== requestedIdentity) return;
           set({
             geometry: data as MotorGeometryParams,
             isLoading: false,
@@ -423,6 +428,7 @@ export const useMotorStore = create<MotorState>()(
             isGeometryUpdating: false,
           });
         } catch (error) {
+          if (storedIdentity() !== requestedIdentity) return;
           console.error('Failed to fetch geometry from API:', error);
           set({
             isLoading: false,

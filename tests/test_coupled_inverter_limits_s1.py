@@ -178,8 +178,17 @@ def test_s1_verification_passes_run_on_the_controller(client, monkeypatch):
     maps: list = []
     _inverter_drive(monkeypatch, ctl_kw, maps)
     _fake_rating(monkeypatch, block=_RATING_BLOCK)
-    th_kw: list = []
+    from tests.test_coupled_continuous_solve_to import _fake_verify
+    _fake_verify(monkeypatch, winding_max_at=lambda _i: 50.0,
+                 magnet_max_at=lambda i: 200.0 if i > 30.0 else 148.0)
     from motor_ai_sim.routes import coupled as cp
+    current_aware_em = cp._em_run
+
+    def _record_controller(body, **kw):
+        ctl_kw.append(kw.get("controller"))
+        return current_aware_em(body, **kw)
+    monkeypatch.setattr(cp, "_em_run", _record_controller, raising=True)
+    th_kw: list = []
     real_th = cp._thermal_solve
 
     def _th(body, cooling, **kw):
@@ -189,9 +198,8 @@ def test_s1_verification_passes_run_on_the_controller(client, monkeypatch):
 
     c = _run(client, solve_to="continuous")
     ctl = _FakeCtl.instances[-1]
-    # loop pass + limit pass + TWO S1 verification passes (the fake map's
-    # magnet reads 95 °C against a 149.7 °C card, so pass 1 misses and one
-    # correction pass follows) — every one of them on the controller.
+    # loop pass + limit pass + TWO S1 verification passes: the current-aware
+    # fake misses on pass 1 and settles within 3 K after one correction.
     assert len(ctl_kw) == 4 and all(k is ctl for k in ctl_kw)
     assert [p for p, _i in ctl.steps] == ["loop", "limit", "s1_verify",
                                           "s1_verify"]
@@ -209,6 +217,31 @@ def test_s1_verification_passes_run_on_the_controller(client, monkeypatch):
     assert c["controller"]["state"]["phase"] == "s1_verify"
     assert c["history"][-1]["phase"] == "s1_verify"
     assert c["history"][-1]["T_junction_c"] == ctl.t_j_c
+
+
+def test_failed_s1_trial_restores_controller_to_the_adopted_duty_pass(
+        client, monkeypatch):
+    _fake(monkeypatch, ttl=_ttl_block())
+    ctl_kw: list = []
+    maps: list = []
+    _inverter_drive(monkeypatch, ctl_kw, maps)
+    _fake_rating(monkeypatch, block=_RATING_BLOCK)
+    from tests.test_coupled_continuous_solve_to import _fake_verify
+    _fake_verify(monkeypatch, winding_max_at=lambda _i: 50.0,
+                 magnet_max_at=lambda _i: 300.0)
+
+    c = _run(client, solve_to="continuous")
+    ctl = _FakeCtl.instances[-1]
+    cr = c["continuous_rating"]
+    assert cr["verified"] is False
+    assert cr["record_is_s1"] is False
+    assert cr["verification_trial"]["actual_c"] == 300.0
+    # S1 verification changed controller state while solving, but the final
+    # record remains the original at-limit EM/thermal pass.
+    assert c["history"][-1]["phase"] == "limit"
+    assert c["controller"]["state"]["phase"] == "limit"
+    assert c["controller"]["t_j_c"] == ctl.t_j_c
+    assert ctl.passes[-1]["phase"] == "limit"
 
 
 # ---------------------------------------------------------------------------

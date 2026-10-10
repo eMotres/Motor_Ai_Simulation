@@ -23,11 +23,15 @@ export interface PresetPack {
   v_cell_min?: number | null; v_cell_nom?: number | null; v_cell_max?: number | null;
 }
 
+export interface PresetDutyPoint { name: string; current_A: number | null; rpm: number | null; }
+
 export interface Preset {
   config: string;
   die: string;
   knobs: PresetKnobs;
   duty?: string | null;
+  /** Named catalog operating points, used only for Propeller-mode defaults. */
+  duty_points?: PresetDutyPoint[];
   battery: PresetPack | null;
   device?: string | null;
   pwm_variants: { id: string; device?: string; carrier_hz?: number }[];

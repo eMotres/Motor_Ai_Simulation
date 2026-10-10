@@ -16,7 +16,7 @@
  * press.  The results live in `stores/thermalStore`, not in this component, so
  * leaving the tab does not throw a solve away.
  */
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, CircularProgress, Collapse, MenuItem, Paper, Select,
   TextField, Tooltip, Typography,
@@ -33,7 +33,6 @@ import type { ColumnDef } from '../common/LocalCompareTable';
 import SolveProgressStrip from '../common/SolveProgressStrip';
 import { SolveTimer, solvedIn } from '../mechanical/SolveTimer';
 import ThermalMap, { GeometryMap } from './ThermalMap';
-import HeatPathView3D from './HeatPathView3D';
 import DutyCycleEditor from './DutyCycleEditor';
 import { DUTY_CYCLE_ENABLED } from '../../lib/dutyCycleFlag';
 import HelpTip, { CTRL_ROW, TIP_PROPS } from './HelpTip';
@@ -57,9 +56,24 @@ import type {
 } from './api';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import { useAuth } from '../../contexts/AuthContext';
+import {
+  fetchLastMotor, getLastMotorState, isCurrentLastMotorUser,
+  setLastMotorState, useLastMotorState, configureRefIdForSelection,
+} from '../../lib/lastMotor';
+import { selectionMatchesActiveFamily, type ActiveFamilyContext } from './thermalLastMotor';
+import {
+  allowedPropellers, coolChoiceKey, defaultPropellerFor, effectivePropeller, propellerContextKey,
+  hasPropellerCooling, modelLabel, readCoolChoice, restoredThermalPropeller,
+  vendorLabel, writeCoolChoice,
+  PROP_CHOICE_LS,
+} from '../../lib/configuratorPropeller';
+import type { CoolingInfo, PropSummary } from '../../lib/configuratorPropeller';
+import { fetchPropellers, fetchPropellerCoolingOptions, fetchPropellerThermalPoint } from '../../lib/propellerApi';
 
 // UI strings: locales/<lng>/thermal.json (docs/I18N.md).
 const tx = nsT('thermal');
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
 /* A hint used to be wrapped round each Select here, pushed under the menu with
    a z-index (2026-09-07: 'the dropdown tooltip doesn't let you switch air
@@ -567,16 +581,61 @@ const CoupledSection: React.FC = () => {
 
 const ThermalPanel: React.FC = () => {
   useTranslation('thermal'); // re-render on language change; lazy-loads the namespace
+  const auth = useAuth();
   // The store's own geometry is the live machine; reading it here is what makes
   // the staleness badge re-evaluate the moment the geometry changes, without a
   // round trip to the backend.
   const liveGeometry = useMotorStore((s) => s.geometry);
+  const lastMotor = useLastMotorState();
+  const [idleSelectionHydration, setIdleSelectionHydration] = useState<'idle' | 'loading' | 'unavailable'>('idle');
+  const idleHydrationAttempt = useRef('');
+
+  // Admin sessions use the shared editor workspace, so App does not call
+  // restoreLastMotor for them. Read the account's saved selection here only
+  // when the store is still idle, and bind it only if the active family
+  // context agrees exactly. This is GET-only: it does not load or activate a
+  // workspace, and a null reference ID remains valid.
+  useEffect(() => {
+    const email = auth.user?.email.trim().toLowerCase() ?? '';
+    if (!auth.resolved || !auth.isAdmin || !email || lastMotor.status !== 'idle') return;
+    if (idleHydrationAttempt.current === email) return;
+    idleHydrationAttempt.current = email;
+    let dead = false;
+    setIdleSelectionHydration('loading');
+    void (async () => {
+      try {
+        const saved = await fetchLastMotor(email);
+        if (dead) return;
+        if (saved.unavailable || !saved.selection) {
+          setIdleSelectionHydration('unavailable');
+          return;
+        }
+        const response = await fetch(`${API}/api/family/context`, { cache: 'no-store' });
+        if (!response.ok) throw new Error('family context unavailable');
+        const context = await response.json() as ActiveFamilyContext;
+        if (dead) return;
+        if (!selectionMatchesActiveFamily(saved.selection, context)) {
+          setIdleSelectionHydration('unavailable');
+          return;
+        }
+        if (!isCurrentLastMotorUser(email) || getLastMotorState().status !== 'idle') return;
+        setLastMotorState({ email, status: 'loaded', selection: saved.selection });
+        setIdleSelectionHydration('idle');
+      } catch {
+        if (!dead) setIdleSelectionHydration('unavailable');
+      }
+    })();
+    return () => {
+      dead = true;
+      if (idleHydrationAttempt.current === email) idleHydrationAttempt.current = '';
+    };
+  }, [auth.resolved, auth.isAdmin, auth.user?.email, lastMotor.status]);
 
   const st = useThermalStore();
   const {
     coolMode, ambientT, airSpeed, fluid, tIn, hConv, flowLpm,
     boreMode, boreAirSpeed, boreFluid, boreTIn, boreFlowLpm,
-    shaftExtMm, shaftExtSides, frame, openAirSpeed,
+    shaftExtMm, shaftExtSides, frame,
     emissivity, heatPath,
     endFaces, endFaceSides,
     view, eqTemp, showFlux, geom, geomBusy, geomErr,
@@ -587,6 +646,7 @@ const ThermalPanel: React.FC = () => {
   // The action identities are stable for the store's lifetime, so they are safe
   // effect dependencies — `st` as a whole is not (a new object per change).
   const setField = st.set;
+  const setPropellerCooling = st.setPropellerCooling;
   const hydrate = st.hydrate;
   const solveField = st.solveField;
   const loadGeometry = st.loadGeometry;
@@ -624,6 +684,163 @@ const ThermalPanel: React.FC = () => {
     };
   }, [refreshEmRun]);
   const emLine = emRun?.ok ? emRunLine(emRun.em_run) : null;
+
+  // Thermal follows the same account-scoped loaded motor as Configure. The
+  // server's shared cooling registry is the single allowlist; no propeller is
+  // inferred from geometry or from a browser-wide previous selection.
+  const activeSelection = lastMotor.status === 'loaded' && lastMotor.email
+    && isCurrentLastMotorUser(lastMotor.email) ? lastMotor.selection : null;
+  const activeRefId = activeSelection ? configureRefIdForSelection(activeSelection) : null;
+  const activeCoolingKey = activeSelection
+    ? propellerContextKey(lastMotor.email, activeSelection.die,
+                          activeSelection.config, activeSelection.ref_id) ?? '' : '';
+  const coolKey = activeSelection
+    ? coolChoiceKey(lastMotor.email, activeRefId ?? `die:${activeSelection.die}`, activeSelection.config) : '';
+  const [coolingRegistry, setCoolingRegistry] = useState<{
+    key: string; status: 'loading' | 'ready' | 'unavailable';
+    cooling: CoolingInfo | null; props: PropSummary[] | null;
+  }>({ key: '', status: 'loading', cooling: null, props: null });
+  useEffect(() => {
+    if (!activeSelection || !activeCoolingKey) {
+      setCoolingRegistry({ key: '', status: 'loading', cooling: null, props: null });
+      return;
+    }
+    let dead = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    setCoolingRegistry({ key: activeCoolingKey, status: 'loading', cooling: null, props: null });
+    const load = async () => {
+      const [cooling, props] = await Promise.all([
+        fetchPropellerCoolingOptions(activeSelection.die, activeSelection.config),
+        fetchPropellers(),
+      ]);
+      if (dead) return;
+      if (!cooling || !props) {
+        setCoolingRegistry({ key: activeCoolingKey, status: 'unavailable', cooling: null, props: null });
+        timer = setTimeout(load, 3000);
+        return;
+      }
+      setCoolingRegistry({ key: activeCoolingKey, status: 'ready', cooling, props });
+    };
+    void load();
+    return () => { dead = true; if (timer) clearTimeout(timer); };
+  }, [activeCoolingKey, activeSelection]);
+
+  const registryReady = !!activeCoolingKey && coolingRegistry.key === activeCoolingKey
+    && !!coolingRegistry.cooling && !!coolingRegistry.props;
+  const cooling = registryReady ? coolingRegistry.cooling : null;
+  const allowedProps = useMemo(
+    () => allowedPropellers(cooling, coolingRegistry.props ?? []), [cooling, coolingRegistry.props]);
+  const propellerCoolingAvailable = registryReady && hasPropellerCooling(cooling) && allowedProps.length > 0;
+  const coolingChoiceMessage = !activeSelection
+    ? (lastMotor.status === 'idle' || lastMotor.status === 'loading'
+      ? (idleSelectionHydration === 'unavailable' ? tx('propellerCoolingUnavailable')
+        : tx('propellerCoolingChecking')) : tx('propellerCoolingUnavailable'))
+    : coolingRegistry.key === activeCoolingKey && coolingRegistry.status === 'unavailable'
+        ? tx('propellerCoolingUnavailable')
+        : coolingRegistry.key !== activeCoolingKey || coolingRegistry.status === 'loading'
+          ? tx('propellerCoolingChecking')
+          : !propellerCoolingAvailable ? tx('propellerCoolingNoAssigned') : '';
+  const [coolChoice, setCoolChoice] = useState(() => ({} as ReturnType<typeof readCoolChoice>));
+  const syncedServerChoice = useRef('');
+  const readChoiceRaw = () => { try { return localStorage.getItem(PROP_CHOICE_LS); } catch { return null; } };
+  useEffect(() => {
+    setCoolChoice(coolKey ? readCoolChoice(readChoiceRaw(), coolKey) : {});
+  }, [coolKey]);
+  const saveCoolChoice = useCallback((patch: Partial<ReturnType<typeof readCoolChoice>>) => {
+    setCoolChoice((choice) => ({ ...choice, ...patch }));
+    if (!coolKey) return;
+    try {
+      localStorage.setItem(PROP_CHOICE_LS,
+        writeCoolChoice(localStorage.getItem(PROP_CHOICE_LS), coolKey, patch));
+    } catch { /* browser storage is a convenience */ }
+  }, [coolKey]);
+  const defaultProp = defaultPropellerFor(cooling, activeSelection?.config, allowedProps);
+  const selectedProp = effectivePropeller(coolChoice, allowedProps, defaultProp);
+  const restoredProp = restoredThermalPropeller(
+    st.propellerId, st.propellerContextKey, activeCoolingKey, allowedProps);
+  const resolvedProp = restoredProp ?? selectedProp;
+  const selectedPropSummary = allowedProps.find((p) => p.id === resolvedProp) ?? null;
+
+  // Once the server settings and this motor's allowlist are both ready, copy a
+  // valid server-bound choice into this browser's convenience preference once.
+  // The server value wins over a missing or different local default; later user
+  // picker changes remain authoritative for this motor.
+  useEffect(() => {
+    if (!st.serverSettingsLoaded || !registryReady || !coolKey || !activeCoolingKey) return;
+    const token = `${coolKey}|${activeCoolingKey}`;
+    if (syncedServerChoice.current === token) return;
+    syncedServerChoice.current = token;
+    if (restoredProp) saveCoolChoice({ propId: restoredProp });
+  }, [st.serverSettingsLoaded, registryReady, coolKey, activeCoolingKey, restoredProp, saveCoolChoice]);
+
+  // A reference/config switch invalidates the previous motor's ID immediately.
+  // Keep the user's selected mode and manual inputs; only bind an assigned
+  // propeller after settings hydration and this motor's allowlist have arrived.
+  useEffect(() => {
+    if (!activeCoolingKey || lastMotor.status === 'none' || lastMotor.status === 'unavailable') {
+      if (st.propellerId || st.propellerContextKey)
+        setPropellerCooling(st.airSpeedSource, '', '');
+      return;
+    }
+    if (st.propellerContextKey && st.propellerContextKey !== activeCoolingKey) {
+      setPropellerCooling(st.airSpeedSource, '', '');
+      return;
+    }
+    if (!st.serverSettingsLoaded || !registryReady) return;
+    if (st.airSpeedSource === 'propeller' && propellerCoolingAvailable && resolvedProp) {
+      if (st.propellerId !== resolvedProp || st.propellerContextKey !== activeCoolingKey)
+        setPropellerCooling('propeller', resolvedProp, activeCoolingKey);
+    } else if (st.airSpeedSource === 'propeller' && registryReady && !propellerCoolingAvailable) {
+      if (st.propellerId || st.propellerContextKey)
+        setPropellerCooling('propeller', '', '');
+    } else if (st.airSpeedSource !== 'propeller' && (st.propellerId || st.propellerContextKey)) {
+      setPropellerCooling('manual', '', '');
+    }
+  }, [lastMotor.status, activeCoolingKey, registryReady, propellerCoolingAvailable,
+      resolvedProp, st.airSpeedSource, st.propellerId, st.propellerContextKey,
+      st.serverSettingsLoaded, setPropellerCooling]);
+
+  const thermalRpm = emRun?.ok && Number.isFinite(emRun.em_run?.rpm)
+    ? emRun.em_run!.rpm : null;
+  const ambientNumber = Number(ambientT.trim());
+  const thermalAmbient = Number.isFinite(ambientNumber) ? ambientNumber : 40;
+  const [airPoint, setAirPoint] = useState<{
+    key: string; status: 'loading' | 'ready' | 'unavailable'; airSpeed: number | null; position?: string;
+  }>({ key: '', status: 'unavailable', airSpeed: null });
+  const pointKey = propellerCoolingAvailable && st.airSpeedSource === 'propeller'
+    && st.propellerContextKey === activeCoolingKey
+    && st.propellerId && thermalRpm != null
+    ? `${activeCoolingKey}|${st.propellerId}|${thermalRpm}|${thermalAmbient}` : '';
+  useEffect(() => {
+    if (!pointKey || thermalRpm == null || !st.propellerId) {
+      setAirPoint({ key: '', status: 'unavailable', airSpeed: null });
+      return;
+    }
+    let dead = false;
+    setAirPoint({ key: pointKey, status: 'loading', airSpeed: null });
+    void fetchPropellerThermalPoint(st.propellerId, thermalRpm, thermalAmbient).then((p) => {
+      if (dead) return;
+      setAirPoint(p
+        ? { key: pointKey, status: 'ready', airSpeed: p.air_speed_ms, position: p.slipstream_position }
+        : { key: pointKey, status: 'unavailable', airSpeed: null });
+    });
+    return () => { dead = true; };
+  }, [pointKey, st.propellerId, thermalRpm, thermalAmbient]);
+  const airPointCurrent = !!pointKey && airPoint.key === pointKey;
+  const slipstreamIssue = st.airSpeedSource === 'propeller'
+    ? (!activeCoolingKey || !registryReady || !propellerCoolingAvailable
+      ? tx('propellerCoolingUnavailable')
+      : st.propellerContextKey !== activeCoolingKey
+        ? tx('propellerSelectionMatching')
+      : !allowedProps.some((p) => p.id === st.propellerId && p.selectable)
+        ? tx('propellerCoolingUnavailable')
+        : thermalRpm == null
+          ? tx('propellerNeedEmRun')
+          : !airPointCurrent || airPoint.status === 'loading'
+            ? tx('propellerAirflowCalculatingForCurrentRpm')
+            : airPoint.status !== 'ready' || airPoint.airSpeed == null
+              ? 'propeller airflow is unavailable at the current RPM and ambient' : null)
+    : null;
 
   /* ── is the shown result still this machine's? ───────────────────────────
      We do NOT re-solve: an expensive solve started by a geometry edit the user
@@ -756,7 +973,7 @@ const ThermalPanel: React.FC = () => {
   const mu = res?.materials_used;
   const air = res?.air_domains;
   /** the cooling as typed — a sentence while it cannot be solved, else null */
-  const coolErr = coolingIssue(st);
+  const coolErr = coolingIssue(st) ?? slipstreamIssue;
   const comps = (res?.components ?? {}) as Record<string, { max?: number; avg?: number } | null | undefined>;
   const partTiles = [
     ...PART_TILES.filter((p) => comps[p.key]),
@@ -865,16 +1082,16 @@ const ThermalPanel: React.FC = () => {
               no air in the bore it decides nothing, and a field that decides
               nothing is a question the user should not be asked (2026-09-07:
               "why do you need this, if we set all boundary conditions anyway"). */}
-          {(coolMode === 'air' || boreMode === 'air' || coolMode === 'robotics') && (
+          {(st.airSpeedSource === 'propeller' || coolMode === 'air' || boreMode === 'air' || coolMode === 'robotics') && (
             <Box sx={CTRL_ROW}>
               <TextField
-                label={coolMode === 'robotics' ? ROBOTICS_HELP.ambientT.label : 'air °C'}
+                label={st.airSpeedSource !== 'propeller' && coolMode === 'robotics' ? ROBOTICS_HELP.ambientT.label : 'air °C'}
                 size="small" value={ambientT}
                 onChange={(e) => setField('ambientT', e.target.value)}
-                sx={{ width: coolMode === 'robotics' ? 122 : 96 }}
+                sx={{ width: st.airSpeedSource !== 'propeller' && coolMode === 'robotics' ? 122 : 96 }}
                 inputProps={{ style: { fontSize: 12 } }}
                 InputLabelProps={{ style: { fontSize: 12 } }} />
-              <HelpTip title={coolMode === 'robotics' ? ROBOTICS_HELP.ambientT.tip
+              <HelpTip title={st.airSpeedSource !== 'propeller' && coolMode === 'robotics' ? ROBOTICS_HELP.ambientT.tip
                 : 'Temperature of the blown air, °C — the one ambient every air path works against.'} />
             </Box>
           )}
@@ -946,7 +1163,7 @@ const ThermalPanel: React.FC = () => {
             plus a tooltip, and this is the tooltip made readable for the one
             reader who wants the whole map at once.  Every word comes from
             `roboticsHelp`, which the 3-D view reads too. */}
-        {coolMode === 'robotics' && (
+        {st.airSpeedSource !== 'propeller' && coolMode === 'robotics' && (
           <Box sx={{ mt: 1 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
               <Typography sx={{ ...lbl, fontStyle: 'italic' }}>
@@ -985,6 +1202,76 @@ const ThermalPanel: React.FC = () => {
             conditions of the same solve (user 2026-09-07) — a machine cooled
             through its hollow shaft alone was not expressible before. */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
+          <RowLabel text={tx('outerCoolingSource')} tip={tx('outerCoolingSourceTip')} />
+          <Select size="small" value={st.airSpeedSource}
+            disabled={!st.serverSettingsLoaded}
+            onChange={(e) => {
+                const source = String(e.target.value) as 'manual' | 'propeller';
+                if (source === 'manual') {
+                  setPropellerCooling('manual');
+                  return;
+                }
+                if (!propellerCoolingAvailable) return;
+                const candidate = allowedProps.find((p) => p.id === resolvedProp && p.selectable);
+                if (!candidate) {
+                  setPropellerCooling('propeller');
+                  return;
+                }
+                saveCoolChoice({ propId: candidate.id });
+                setPropellerCooling('propeller', candidate.id, activeCoolingKey);
+            }}
+            sx={{ fontSize: 11, height: 30, minWidth: 218 }}>
+            <MenuItem value="manual" sx={{ fontSize: 11 }}>{tx('manualCoolingParameters')}</MenuItem>
+            <MenuItem value="propeller" disabled={!propellerCoolingAvailable} sx={{ fontSize: 11 }}>{tx('propellerSlipstream')}</MenuItem>
+          </Select>
+          {!propellerCoolingAvailable && <Typography role="status" aria-live="polite"
+            sx={{ ...lbl, color: 'var(--text-3)' }}>
+            {coolingChoiceMessage}
+          </Typography>}
+        </Box>
+
+        {st.airSpeedSource === 'propeller' && propellerCoolingAvailable && (
+          <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
+            <RowLabel text={tx('assignedPropeller')} tip={tx('assignedPropellerTip')} />
+            <Select size="small"
+              disabled={!st.serverSettingsLoaded}
+              value={st.propellerContextKey === activeCoolingKey && st.propellerId
+                ? `prop:${st.propellerId}` : ''}
+              displayEmpty
+              onChange={(e) => {
+                const id = String(e.target.value).replace(/^prop:/, '');
+                const candidate = allowedProps.find((p) => p.id === id && p.selectable);
+                if (!candidate) return;
+                saveCoolChoice({ propId: id });
+                setPropellerCooling('propeller', id, activeCoolingKey);
+              }}
+              sx={{ fontSize: 11, height: 30, minWidth: 230 }}>
+              {!st.propellerId && <MenuItem value="" disabled sx={{ fontSize: 11 }}>{tx('chooseAssignedPropeller')}</MenuItem>}
+              {allowedProps.map((p) => (
+                <MenuItem key={p.id} value={`prop:${p.id}`} disabled={!p.selectable}
+                  sx={{ fontSize: 11 }}>
+                  {vendorLabel(p.vendor)} {modelLabel(p.model)}
+                  {!p.selectable ? ` · ${tx('noUsablePropellerData')}` : ''}
+                </MenuItem>
+              ))}
+            </Select>
+            {st.airSpeedSource === 'propeller' ? (
+              <Tooltip {...TIP_PROPS} title={airPoint.status === 'ready'
+                ? `${selectedPropSummary ? `${vendorLabel(selectedPropSummary.vendor)} ${modelLabel(selectedPropSummary.model)} · ` : ''}${tx('propellerPointTooltip', { rpm: fmt(thermalRpm, 0), ambient: fmt(thermalAmbient, 1), position: airPoint.position ?? 'backend default position' })}`
+                : tx('propellerPointTooltipUnavailable')}>
+                <Typography sx={{ ...lbl, cursor: 'help' }}>
+                  {airPoint.status === 'loading' || !airPointCurrent
+                    ? tx('propellerAirflowCalculating')
+                    : airPoint.status === 'ready' && airPoint.airSpeed != null
+                      ? `propeller airflow · ${fmt(airPoint.airSpeed, 2)} m/s · ${fmt(thermalRpm, 0)} rpm`
+                      : tx('propellerAirflowUnavailable')}
+                </Typography>
+              </Tooltip>
+            ) : null}
+          </Box>
+        )}
+
+        {st.airSpeedSource !== 'propeller' && <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
           <RowLabel text={tx('outerSurface')}
             tip="The outside of the stator — the housing, the jacket, whatever the machine is wrapped in. This is where almost all of the loss leaves on a normally-built motor: the copper's heat crosses the iron to get here." />
           <Box sx={CTRL_ROW}>
@@ -1055,10 +1342,10 @@ const ThermalPanel: React.FC = () => {
             </>
           )}
 
-          {coolMode === 'air' && (
+          {coolMode === 'air' ? (
             <SpeedSelect value={airSpeed} onChange={(v) => setField('airSpeed', v)}
               tip={tx('blowSpeedOverTheHousingM')} />
-          )}
+          ) : null}
 
           {coolMode === 'liquid' && (
             <>
@@ -1083,7 +1370,7 @@ const ThermalPanel: React.FC = () => {
               <Typography sx={{ ...lbl, cursor: 'help' }}>{tx('adiabaticNothingLeavesHere')}</Typography>
             </Tooltip>
           )}
-        </Box>
+        </Box>}
 
         {/* ── boundary 2: the INNER rotor bore ─────────────────────────────── */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
@@ -1264,27 +1551,6 @@ const ThermalPanel: React.FC = () => {
             </Tooltip>
           )}
         </Box>
-
-        {/* ── the same cooling, ON THE MACHINE ───────────────────────────
-            User 2026-09-15: "better to draw a 3D model with the coils (end
-            windings) and show directly on it where and how much heat can be
-            dissipated … give the ability to set the values right in it — it's
-            much more convenient that way, and define it in this window, where everything is set".
-            So it lives HERE, under the fields it duplicates, and not in a
-            section of its own further down: it is an alternative way to set
-            the same `thermalStore` values — one state, two faces — plus what
-            the last solve got out of each surface.  It never solves.  All the
-            logic is in HeatPathView3D / heatPaths; this is the mount. */}
-        <HeatPathView3D
-          res={res} geometry={liveGeometry} staleNote={staleNote}
-          settings={{
-            coolMode, ambientT, airSpeed, fluid, tIn, hConv, flowLpm,
-            boreMode, boreAirSpeed, boreTIn, boreFlowLpm,
-            shaftExtMm, shaftExtSides, frame, openAirSpeed,
-            emissivity, heatPath, endFaces, endFaceSides,
-          }}
-          onChange={(k, v) => setField(k as Parameters<typeof setField>[0],
-                                       v as never)} />
 
         <Typography sx={{ ...lbl, mt: 0.75, display: 'block' }}>
           Solids only, steady state; the gap and the slot are effective conductivities; cooling acts on the outer surface, on the bore when set{Number(shaftExtMm) > 0 ? ', and down the exposed shaft ends' : ''}{frame === 'open' ? ', plus the end turns and the slot channels in the wash' : ''}.

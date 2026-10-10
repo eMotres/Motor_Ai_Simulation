@@ -48,6 +48,8 @@ import type {
 } from '../components/thermal/api';
 import { tileFullRing } from '../components/thermal/types';
 import { readMeshSettings } from '../components/common/motorSettings';
+import { getLastMotorState, isCurrentLastMotorUser } from '../lib/lastMotor';
+import { propellerContextKey, thermalServerSettingsSnapshot } from '../lib/configuratorPropeller';
 
 /* The staleness test is IMPORTED, not re-implemented: "the result on screen is
    of a different machine" must mean exactly one thing across the app, and this
@@ -144,6 +146,9 @@ export interface ThermalState {
   /** `/last` has been consulted once — a second mount must not re-ask, or a
    *  restored-then-cleared result would come back on every tab switch. */
   hydrated: boolean;
+  /** Server settings read has completed (or failed offline); propeller binding
+   *  waits for this so a local default cannot race a cross-browser saved ID. */
+  serverSettingsLoaded: boolean;
 
   field: Slice<ThermalField>;
   coupled: Slice<CoupledResult>;
@@ -189,6 +194,10 @@ export interface ThermalState {
   ambientT: string;
   /** blow speed over the housing, m/s (outer air mode) */
   airSpeed: string;
+  /** Optional source for outer air; propeller speed is recomputed server-side from its RPM. */
+  airSpeedSource: 'manual' | 'propeller';
+  propellerId: string;
+  propellerContextKey: string;
   fluid: string;
   /** coolant INLET, °C (outer liquid mode).  There is no outlet field any more:
    *  how hot the coolant comes back is what the machine does to it, so it is a
@@ -268,6 +277,7 @@ export interface ThermalState {
   showFlux: boolean;
 
   set: <K extends keyof ThermalState>(k: K, v: ThermalState[K]) => void;
+  setPropellerCooling: (source: 'manual' | 'propeller', id?: string, contextKey?: string) => void;
 
   hydrate: () => Promise<void>;
   /** Adopt the backend's last result when it is NEWER than what is on screen.
@@ -289,7 +299,7 @@ export interface ThermalState {
 /** The small choices persist under `therm.*`.  The operating point is NOT among
  *  them — it always comes from the Electromagnetic tab. */
 const PERSISTED: (keyof ThermalState)[] = [
-  'coolMode', 'ambientT', 'airSpeed', 'fluid', 'tIn', 'hConv', 'flowLpm',
+  'coolMode', 'ambientT', 'airSpeed', 'airSpeedSource', 'fluid', 'tIn', 'hConv', 'flowLpm',
   'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
   'shaftExtMm', 'shaftExtSides',
   'frame', 'openAirSpeed',
@@ -338,7 +348,8 @@ function noteSecs(set: (p: Partial<ThermalState>) => void,
 /** The two surfaces exactly as the panel holds them — text fields, because
  *  that is what the user is typing into. */
 export interface CoolingInputs {
-  coolMode: CoolMode; ambientT: string; airSpeed: string; fluid: string;
+  coolMode: CoolMode; ambientT: string; airSpeed: string; airSpeedSource?: 'manual' | 'propeller';
+  propellerId?: string; propellerContextKey?: string; fluid: string;
   tIn: string; flowLpm: string; hConv: string;
   boreMode: BoreMode; boreAirSpeed: string; boreFluid: string;
   boreTIn: string; boreFlowLpm: string;
@@ -349,7 +360,7 @@ export interface CoolingInputs {
 }
 
 type CoolingRequest = Pick<ThermalRequest,
-  'cooling_mode' | 'ambient_temp' | 'h_conv' | 'air_speed_mps' | 'fluid'
+  'cooling_mode' | 'ambient_temp' | 'h_conv' | 'air_speed_mps' | 'air_speed_source' | 'propeller_id' | 'propeller_context_key' | 'fluid'
   | 'fluid_temp_in_c' | 'flow_lpm' | 'bore_mode' | 'bore_air_speed_mps'
   | 'bore_fluid' | 'bore_fluid_temp_in_c' | 'bore_flow_lpm'
   | 'shaft_ext_length_mm' | 'shaft_ext_sides' | 'frame' | 'open_air_speed_mps'
@@ -357,7 +368,8 @@ type CoolingRequest = Pick<ThermalRequest,
 
 export function coolingFields(s: CoolingInputs): CoolingRequest {
   const ambient = num(s.ambientT, 40);
-  const liquid = s.coolMode === 'liquid';
+  const outerMode: CoolMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
+  const liquid = outerMode === 'liquid';
   const boreLiquid = s.boreMode === 'liquid';
   // ── THE ROBOTICS MODE's own four (2026-09-14) ───────────────────────────
   // Same rule as everything else here: a parameter the chosen mode does not use
@@ -368,7 +380,7 @@ export function coolingFields(s: CoolingInputs): CoolingRequest {
   // with the mode too, and 'none' is not sent: it is the router's default.
   // The panel no longer sends a mount conductance at all (mirrored from
   // `thermal_settings.cooling_fields`).
-  const robot = s.coolMode === 'robotics';
+  const robot = outerMode === 'robotics';
   const endFaces: EndFaceMode = s.endFaces === 'none' ? 'none' : 'still';
   // The exposed shaft is OFF at 0 mm, and off means the two shaft fields are
   // not sent at all — `shaft_ext_sides` beside a length of zero is a parameter
@@ -378,12 +390,18 @@ export function coolingFields(s: CoolingInputs): CoolingRequest {
   // it to disagree with the CAD.
   const shaftMm = Math.max(0, num(s.shaftExtMm, 0));
   return {
-    cooling_mode: s.coolMode,
+    cooling_mode: outerMode,
     // Always sent: it is the ambient the outer film works against AND the
     // temperature of the air blown through the bore — the same air.
     ambient_temp: ambient,
-    h_conv: s.coolMode === 'manual' ? num(s.hConv, 50) : undefined,
-    air_speed_mps: s.coolMode === 'air' ? num(s.airSpeed, 0) : undefined,
+    h_conv: outerMode === 'manual' ? num(s.hConv, 50) : undefined,
+    air_speed_mps: outerMode === 'air' && s.airSpeedSource !== 'propeller'
+      ? num(s.airSpeed, 0) : undefined,
+    air_speed_source: outerMode === 'air' && s.airSpeedSource === 'propeller' ? 'propeller' : undefined,
+    propeller_id: outerMode === 'air' && s.airSpeedSource === 'propeller' && s.propellerId
+      ? s.propellerId : undefined,
+    propeller_context_key: outerMode === 'air' && s.airSpeedSource === 'propeller'
+      ? s.propellerContextKey : undefined,
     fluid: liquid ? s.fluid : undefined,
     // The inlet defaults to the ambient rather than to a number of its own:
     // a coolant loop nobody has configured sits at room temperature.
@@ -424,26 +442,44 @@ export function coolingFields(s: CoolingInputs): CoolingRequest {
  *  validates its input loudly instead of sending an impossible machine and
  *  translating the solver's 422 afterwards. */
 export function coolingIssue(s: CoolingInputs): string | null {
-  if (s.coolMode === 'liquid' && !(num(s.flowLpm, 0) > 0))
+  const outerMode: CoolMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
+  if (outerMode === 'liquid' && !(num(s.flowLpm, 0) > 0))
     return 'coolant flow must be greater than 0 L/min';
-  if (s.coolMode === 'manual' && !(num(s.hConv, 0) > 0))
+  if (outerMode === 'air' && s.airSpeedSource === 'propeller' && !s.propellerId)
+    return 'choose an assigned propeller for slipstream cooling';
+  if (outerMode === 'manual' && !(num(s.hConv, 0) > 0))
     return 'h must be greater than 0 W/m²K';
   if (s.boreMode === 'liquid' && !(num(s.boreFlowLpm, 0) > 0))
     return 'bore coolant flow must be greater than 0 L/min';
-  if (s.boreMode === 'still' && s.coolMode !== 'robotics')
+  if (s.boreMode === 'still' && outerMode !== 'robotics')
     return ('a still (unventilated) bore belongs to the robotics mode — it '
             + 'radiates out of the two ends at the machine’s emissivity, and '
             + 'that input only exists there');
-  if (s.coolMode === 'robotics') {
+  if (outerMode === 'robotics') {
     const eps = num(s.emissivity, 0.9);
     if (!(eps >= 0 && eps <= 1)) return 'emissivity must be between 0 and 1';
   }
   // The panel no longer offers a mount (2026-09-26 — the robotics heat path
   // replaced it; mirrors `thermal_settings.cooling_issue`), so a machine with
   // no film and no bore has no door at all.
-  if (s.coolMode === 'none' && s.boreMode === 'none')
+  if (outerMode === 'none' && s.boreMode === 'none')
     return 'no cooled surface — the heat has nowhere to leave';
   return null;
+}
+
+function livePropellerContextKey(): string | null {
+  const motor = getLastMotorState();
+  if (motor.status !== 'loaded' || !motor.email || !motor.selection
+      || !isCurrentLastMotorUser(motor.email)) return null;
+  const s = motor.selection;
+  return propellerContextKey(motor.email, s.die, s.config, s.ref_id);
+}
+
+function propellerContextIssue(s: ThermalState): string | null {
+  if (s.airSpeedSource !== 'propeller') return null;
+  const live = livePropellerContextKey();
+  return live && s.propellerContextKey === live && !!s.propellerId
+    ? null : 'propeller cooling is not ready for the currently loaded motor';
 }
 
 /**
@@ -499,6 +535,16 @@ function panelCooling(s: ThermalState): Record<string, string> {
     if (v === null || v === undefined || v === '') continue;
     out[k] = String(v);
   }
+  if (s.airSpeedSource === 'propeller') {
+    out.airSpeedSource = 'propeller';
+    out.coolMode = 'air';
+    if (s.propellerId && s.propellerContextKey === livePropellerContextKey()) {
+      out.propellerId = s.propellerId;
+      out.propellerContextKey = s.propellerContextKey;
+    }
+  } else if (s.coolMode === 'air') {
+    out.airSpeedSource = 'manual';
+  }
   return out;
 }
 
@@ -530,6 +576,7 @@ registerThermalPanelBlock(() => {
 
 export const useThermalStore = create<ThermalState>()((set, get) => ({
   hydrated: false,
+  serverSettingsLoaded: false,
   field: { ...EMPTY } as Slice<ThermalField>,
   coupled: { ...EMPTY } as Slice<CoupledResult>,
   emMissing: null,
@@ -549,6 +596,9 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   coolMode: readMode('coolMode', COOL_MODES, 'air' as CoolMode),
   ambientT: readStr('ambientT', '40'),
   airSpeed: readStr('airSpeed', '10'),
+  airSpeedSource: readMode('airSpeedSource', ['manual', 'propeller'] as const, 'manual'),
+  propellerId: '',
+  propellerContextKey: '',
   fluid: readStr('fluid', 'water'),
   tIn: readStr('tIn', '40'),
   hConv: readStr('hConv', '50'),
@@ -604,23 +654,50 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
 
   set: (k, v) => {
     set({ [k]: v } as Pick<ThermalState, typeof k>);
+    const st = get();
+    const persistPanelSettings = () => {
+      const snap: Record<string, unknown> = {};
+      for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
+      // The server copy is per account, so carry the exact motor identity
+      // beside the prop ID. Invalid/in-transition choices persist as an
+      // explicit propeller source with no ID and are refused by the mapper.
+      return savePanelSettings('thermal', thermalServerSettingsSnapshot(
+        snap, st.airSpeedSource, st.propellerId, st.propellerContextKey,
+        livePropellerContextKey()));
+    };
     if (PERSISTED.includes(k)) {
       writeTherm(k as string, v);
       // …and to the SERVER, the memory every browser shares — the same bargain
       // the Electromagnetic tab has with the config (user 2026-09-07: "remember all
       // the latest settings … the same way for every simulation").
-      const snap: Record<string, unknown> = {};
-      const st = get();
-      for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
-      snap[k as string] = v;
-      savePanelSettings('thermal', snap);
+      void persistPanelSettings();
       // The Controller tab's cooling INHERITS these from here (owner
       // 2026-09-25) — tell it to re-fetch rather than making it poll.
       if (COOLING_INHERITANCE_KEYS.has(k as string)) {
         try { window.dispatchEvent(new CustomEvent('thermal-cooling-saved')); }
         catch { /* SSR/no-window */ }
       }
+    } else if ((k === 'propellerId' || k === 'propellerContextKey') && st.hydrated
+               && st.airSpeedSource === 'propeller') {
+      // This is the sole writer for the shared (server) propeller ID. The ID
+      // is never put in browser-global therm.* storage; stale identities write
+      // a blank ID so another caller cannot inherit a prior motor's propeller.
+      void persistPanelSettings();
     }
+  },
+
+  setPropellerCooling: (source, id = '', contextKey = '') => {
+    set({ airSpeedSource: source, propellerId: source === 'propeller' ? id : '',
+      propellerContextKey: source === 'propeller' ? contextKey : '' });
+    writeTherm('airSpeedSource', source);
+    const st = get();
+    const snap: Record<string, unknown> = {};
+    for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
+    void savePanelSettings('thermal', thermalServerSettingsSnapshot(
+      snap, st.airSpeedSource, st.propellerId, st.propellerContextKey,
+      livePropellerContextKey()));
+    try { window.dispatchEvent(new CustomEvent('thermal-cooling-saved')); }
+    catch { /* SSR/no-window */ }
   },
 
   /**
@@ -652,11 +729,28 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // THE HEAT PATH (2026-09-26): validated like an enum, and a server copy
       // saved before it existed maps its old mount fields to the nearest one.
       const srvS = (srv?.settings ?? null) as Record<string, unknown> | null;
+      if ('airSpeedSource' in adopted
+          && !['manual', 'propeller'].includes(String(adopted.airSpeedSource))) {
+        adopted.airSpeedSource = 'manual';
+      }
+      if (String(adopted.airSpeedSource ?? srvS?.airSpeedSource ?? 'manual') === 'propeller') {
+        const liveKey = livePropellerContextKey();
+        const savedId = typeof srvS?.propellerId === 'string' ? srvS.propellerId : '';
+        const savedKey = typeof srvS?.propellerContextKey === 'string'
+          ? srvS.propellerContextKey : '';
+        const bound = !!liveKey && !!savedId && savedKey === liveKey;
+        (adopted as Record<string, unknown>).propellerId = bound ? savedId : '';
+        (adopted as Record<string, unknown>).propellerContextKey = bound ? savedKey : '';
+      } else {
+        (adopted as Record<string, unknown>).propellerId = '';
+        (adopted as Record<string, unknown>).propellerContextKey = '';
+      }
       if (srvS && ('heatPath' in srvS || 'mountG' in srvS || 'mountMode' in srvS)) {
         (adopted as Record<string, unknown>).heatPath = heatPathOf(srvS);
       }
       if (Object.keys(adopted).length) set(adopted as Partial<ThermalState>);
     } catch { /* offline: localStorage already seeded the state */ }
+    set({ serverSettingsLoaded: true });
     try {
       const last = await fetchLastThermal();
       const adopt = <T,>(cur: Slice<T>,
@@ -772,7 +866,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     // Never send a boundary condition that cannot be solved (a liquid loop with
     // no pump, no cooled surface at all): the panel disables Solve on the same
     // verdict, and this is the second lock on the same door.
-    const bad = coolingIssue(s);
+    const bad = coolingIssue(s) ?? propellerContextIssue(s);
     if (bad) { set({ field: { ...s.field, busy: false, err: bad } }); return; }
     set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() },
           emMissing: null, emMissingReason: null });
@@ -811,7 +905,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
    *  `emMissing`, exactly as the field Solve's does. */
   solveCoupled: async () => {
     const s = get();
-    const bad = coolingIssue(s);
+    const bad = coolingIssue(s) ?? propellerContextIssue(s);
     if (bad) { set({ coupled: { ...s.coupled, busy: false, err: bad } }); return; }
     set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() },
           emMissing: null, emMissingReason: null });

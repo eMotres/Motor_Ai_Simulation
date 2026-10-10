@@ -22,10 +22,8 @@ import BatteryDialog, { type BatteryValue } from './BatteryDialog';
 import ConfigHistoryDialog from './ConfigHistoryDialog';
 import { dutyCycleChip } from '../../lib/dutySettings';
 import { gatedDutyCycleChip } from '../../lib/dutyCycleFlag';
-import { timeToLimitChip, timeToLimitChipTip, type DutyTimeToLimit }
-  from '../../lib/timeToLimitChip';
-import { continuousRatingChip, continuousRatingChipTip,
-  type DutyContinuousRating } from '../../lib/continuousRatingChip';
+import type { DutyTimeToLimit } from '../../lib/timeToLimitChip';
+import type { DutyContinuousRating } from '../../lib/continuousRatingChip';
 import { driveLabel } from '../../lib/dutyRuns';
 // The WHOLE load — the server half (owner) and the local half the follower in
 // ActiveFamilyStrip shares (lib/dutyLocalApply, lib/familyFollow) — lives in
@@ -49,6 +47,36 @@ import { CardBadge, CardSummary } from '../common/CardBadge';
 const tx = nsT('motors');
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
+
+// FamilyCatalog can be mounted once per stator diameter. Keep one browser-side
+// refresh timer and let the shared familyTree memo coalesce those subscribers
+// into one request, so an admin's newly saved shared motor appears without a
+// reload while already-open Configure state is left untouched.
+const familyCatalogRefreshers = new Set<() => void>();
+let familyCatalogRefreshTimer: number | null = null;
+let familyCatalogRefreshInProgress = false;
+function subscribeFamilyCatalogRefresh(refresh: () => void): () => void {
+  familyCatalogRefreshers.add(refresh);
+  if (familyCatalogRefreshTimer === null) {
+    familyCatalogRefreshTimer = window.setInterval(() => {
+      if (!pageVisible() || familyCatalogRefreshInProgress) return;
+      familyCatalogRefreshInProgress = true;
+      void fetchFamilyTree({ fresh: true }).then(() => {
+        window.dispatchEvent(new Event('family-catalog-refreshed'));
+        for (const subscriber of familyCatalogRefreshers) subscriber();
+      }).catch(() => {
+        for (const subscriber of familyCatalogRefreshers) subscriber();
+      }).finally(() => { familyCatalogRefreshInProgress = false; });
+    }, 5000);
+  }
+  return () => {
+    familyCatalogRefreshers.delete(refresh);
+    if (!familyCatalogRefreshers.size && familyCatalogRefreshTimer !== null) {
+      window.clearInterval(familyCatalogRefreshTimer);
+      familyCatalogRefreshTimer = null;
+    }
+  };
+}
 
 interface DutyResult {
   efficiency_pct?: number; ripple_pct?: number; v_ll_peak_v?: number;
@@ -252,6 +280,9 @@ const FamilyCatalog: React.FC<{
     }
   };
   useEffect(() => { load(); }, []);
+  // Other sessions may have updated the shared catalog. Poll while visible;
+  // the tree refresh changes this catalog view only and never applies geometry.
+  useEffect(() => subscribeFamilyCatalogRefresh(() => { void load(); }), []);
   // Failed load (backend restarting / briefly unreachable): retry every 3 s
   // until it answers — the catalog reappears by itself, no manual F5 needed.
   useEffect(() => {
@@ -835,8 +866,8 @@ const FamilyCatalog: React.FC<{
                     </Typography>
                   </Tooltip>
                 )}
-                {(c.duties?.length ?? 0) > 1 && (
-                  <Tooltip title="Which duty's field maps go into the report — |B|, A_z, losses, temperature, stress, mode shapes. 'auto' is the backend's rule: the duty named rated, else the one loaded in the editor. Only a duty with stored fields can be drawn from; one without falls back to auto.">
+                {(c.duties?.length ?? 0) > 2 && (
+                  <Tooltip title="Choose the duty shown beside rated in the report field-map pairs. Auto selects the comparison duty. A duty needs stored fields.">
                     <select
                       value={picFor(die.name, c.name)}
                       onChange={(e) => setPicFor(die.name, c.name, e.target.value)}
@@ -945,14 +976,24 @@ const FamilyCatalog: React.FC<{
               {c.duties.length > 0 && (
                 <Box component="table" sx={{
                   width: '100%', mt: 0.4, mb: 0.4, borderCollapse: 'collapse',
+                  tableLayout: 'fixed',
                   '& th': { fontSize: 10, fontWeight: 600, color: 'var(--text-4)',
                             textAlign: 'right', p: '2px 6px', whiteSpace: 'nowrap' },
                   '& td': { fontSize: 11.5, color: 'var(--text-2)', textAlign: 'right',
                             p: '2px 6px', whiteSpace: 'nowrap',
+                            overflow: 'hidden', textOverflow: 'ellipsis',
                             fontVariantNumeric: 'tabular-nums',
                             borderTop: '1px solid var(--panel)' },
                   '& th:first-of-type, & td:first-of-type': { textAlign: 'left' },
                 }}>
+                  <colgroup>
+                    <col style={{ width: '22%' }} /><col style={{ width: '6%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '7%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '8%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '8%' }} />
+                    <col style={{ width: '8%' }} /><col style={{ width: '6%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '11%' }} />
+                  </colgroup>
                   <thead>
                     <tr>
                       <th>{tx('duty')}</th><th>kW</th><th>Nm</th><th>rpm</th>
@@ -1034,42 +1075,6 @@ const FamilyCatalog: React.FC<{
                                   color: '#a78bfa', border: '1px solid #a78bfa55',
                                 }}>
                                   {gatedDutyCycleChip(dutyCycleChip(d.duty_cycle))}
-                                </span>
-                              </Tooltip>
-                            )}
-                            {/* HOW LONG MAY IT RUN (owner 2026-09-17).  A point
-                                the coupled loop found past a limit gets the
-                                other half of the answer right here, where the
-                                reader is when they ask whether they may pull
-                                it.  NOT gated by the duty-cycle flag — this is
-                                not a cycle — and absent entirely on a point
-                                inside every limit (`lib/timeToLimitChip`). */}
-                            {timeToLimitChip(d.time_to_limit) && (
-                              <Tooltip key="ttl" placement="top"
-                                title={timeToLimitChipTip(d.time_to_limit)}>
-                                <span style={{
-                                  marginLeft: 5, fontSize: 9.5, padding: '0 4px',
-                                  borderRadius: 3, cursor: 'help', fontWeight: 600,
-                                  color: '#f59e0b', border: '1px solid #f59e0b88',
-                                }}>
-                                  {timeToLimitChip(d.time_to_limit)}
-                                </span>
-                              </Tooltip>
-                            )}
-                            {/* THE CONTINUOUS (S1) RATING (owner 2026-09-21) —
-                                the other chip beside it, same presence rule and
-                                same data path: absent entirely on a duty that
-                                never asked `solve_to: continuous`
-                                (`lib/continuousRatingChip`). */}
-                            {continuousRatingChip(d.continuous_rating) && (
-                              <Tooltip key="cr" placement="top"
-                                title={continuousRatingChipTip(d.continuous_rating)}>
-                                <span style={{
-                                  marginLeft: 5, fontSize: 9.5, padding: '0 4px',
-                                  borderRadius: 3, cursor: 'help', fontWeight: 600,
-                                  color: '#34d399', border: '1px solid #34d39988',
-                                }}>
-                                  {continuousRatingChip(d.continuous_rating)}
                                 </span>
                               </Tooltip>
                             )}

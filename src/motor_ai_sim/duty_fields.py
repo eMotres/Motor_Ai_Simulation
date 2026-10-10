@@ -157,9 +157,10 @@ def fields_dir(die: str, cfg: str, duty: str, *,
                root: Optional[Any] = None) -> Path:
     """``<die>/runs/<configuration>/<duty-stem>/fields`` — created on demand.
 
-    The WRITE location, and since Stage 2 that is always the caller's own
-    workspace: a solve of somebody else's published duty is this workspace's
-    answer, filed beside its own copy of the machine.
+    Ordinary callers write to their own workspace. A verified administrator
+    writes fields for a shared catalog definition beside that shared motor;
+    a workspace-only legacy motor must be migrated before its fields can be
+    promoted, so a partial shared copy is never created.
 
     ``root`` names a DIFFERENT dies directory for this one call — the seam
     :mod:`motor_ai_sim.duty_refile` files a sandboxed run's fields through
@@ -169,26 +170,55 @@ def fields_dir(die: str, cfg: str, duty: str, *,
     every other caller.  ``None`` — the only value a solve route ever passes —
     is the workspace, exactly as before.
     """
-    base = Path(str(root)) if root else _dies_dir()
+    if root:
+        base = Path(str(root))
+    else:
+        base = _dies_dir()
+        try:
+            from motor_ai_sim import workspace as _ws
+        except Exception:                               # noqa: BLE001
+            _ws = None
+        if (_ws is not None and _ws.is_verified_admin_request()
+                and _ws.write_layer() == _ws.LAYER_PUBLISHED):
+            raise ValueError(
+                "admin field saves target the shared catalog; published-layer field saves are unsupported")
+        if _ws is not None and _ws.is_verified_admin_request():
+            # Do not silently fall back to the workspace when an admin's
+            # shared destination is unavailable; that would split fields from
+            # the shared definition the solver just used.
+            shared = Path(str(_ws.shared_root())) / "dies"
+            shared_die = shared / str(die)
+            own_die = _dies_dir() / str(die)
+            if not (shared_die / "die.yaml").is_file() and (own_die / "die.yaml").is_file():
+                raise ValueError(
+                    f"{die!r} is workspace-only; migrate the complete motor before saving fields")
+            base = shared
     return (base / str(die) / "runs" / str(cfg)
             / _duty_stem(duty) / "fields")
 
 
 def _runs_roots(die: str, cfg: str) -> List[Path]:
-    """Every folder a stored field may be READ from, workspace first.
+    """Every folder a stored field may be read from, caller-preferred first.
 
-    Stage 2 read-through: the workspace, then the published or shared layer the
-    die came out of.  One list, used by :func:`load`, :func:`have` and nothing
-    else — the writers keep pointing at the first entry by construction.
+    Ordinary callers read workspace-first. Verified administrators read the
+    shared catalog first, with their own workspace as a legacy fallback. One
+    list, used by :func:`load`, :func:`have` and nothing else — the writers
+    keep pointing at the caller-preferred layer by construction.
     """
-    roots = [_dies_dir() / str(die) / "runs" / str(cfg)]
+    own = _dies_dir() / str(die) / "runs" / str(cfg)
+    roots = [own]
     try:
         from motor_ai_sim import workspace as _ws
         if _ws.layering():
+            if _ws.is_verified_admin_request():
+                shared = Path(str(_ws.shared_root())) / "dies" / str(die) / "runs" / str(cfg)
+                roots = [shared]
+                if own != shared:
+                    roots.append(own)
             src = _ws.source_die_dir(str(die))
             if src is not None:
                 p = Path(str(src)) / "runs" / str(cfg)
-                if p != roots[0]:
+                if p not in roots:
                     roots.append(p)
     except Exception:                                       # noqa: BLE001
         pass
@@ -196,12 +226,12 @@ def _runs_roots(die: str, cfg: str) -> List[Path]:
 
 
 def field_path(die: str, cfg: str, duty: str, kind: str) -> Path:
-    """The file a stored field is READ from — the workspace's own copy when
-    there is one, the layer the die came from otherwise."""
-    p = fields_dir(die, cfg, duty) / f"{kind}.npz"
+    """The file read from the caller-preferred layer, then its fallback."""
+    roots = _runs_roots(die, cfg)
+    p = roots[0] / _duty_stem(duty) / "fields" / f"{kind}.npz"
     if p.is_file():
         return p
-    for root in _runs_roots(die, cfg)[1:]:
+    for root in roots[1:]:
         q = root / _duty_stem(duty) / "fields" / f"{kind}.npz"
         if q.is_file():
             return q

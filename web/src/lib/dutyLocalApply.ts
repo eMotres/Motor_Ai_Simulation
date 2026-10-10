@@ -30,6 +30,7 @@ import {
 import {
   beginDutyApply, endDutyApply, rememberAppliedContext,
 } from './familyFollow';
+import { canWriteServer } from './localAuth';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -46,6 +47,8 @@ export const PANEL_COIL_TEMP_C = 120;
  *  entry, minus `runs`).  Loose on purpose: this module reads six fields of it
  *  and the yaml owns the rest. */
 export interface DutyEntry {
+  /** YAML duty key returned alongside the selected entry when available. */
+  name?: string;
   mesh?: unknown;
   materials?: unknown;
   /** what the machine DOES with this point — S1 / S2 / S3 / segments
@@ -69,6 +72,8 @@ export interface DutySimBlock {
 }
 
 export interface DutyPayload {
+  die: string;
+  config: string;
   sim: DutySimBlock;
   duty?: DutyEntry | null;
   // The three blocks only the OWNER path writes to the server.  Loosely typed
@@ -201,6 +206,10 @@ const MESH_SERVER_KEYS: ReadonlyArray<readonly [local: string, server: string]> 
  * ordinary user's ▶ is a client-side copy and must not touch the shared block.
  */
 async function persistMeshBlock(): Promise<void> {
+  // A follower normally adopts server context only for a shared-config writer,
+  // but auth can resolve after that context poll. Recheck the live role at the
+  // write boundary so a local-only load can never PATCH the shared mesh block.
+  if (!canWriteServer()) return;
   const body: Record<string, number> = {};
   for (const [lk, sk] of MESH_SERVER_KEYS) {
     try {
@@ -222,7 +231,8 @@ async function persistMeshBlock(): Promise<void> {
 export async function applyDutyLocal(die: string, cfg: string, duty: string,
                                      p: DutyPayload,
                                      prev: OutgoingRef | null,
-                                     persistMesh = false): Promise<LocalApplyResult> {
+                                     persistMesh = false,
+                                     isStillCurrent: () => boolean = () => true): Promise<LocalApplyResult> {
   // From this line on, the panel is editing THIS duty: every operating-point
   // field it writes is filed under this key (and never under the duty we just
   // left, which is why the marker moves BEFORE the first sim.* write rather
@@ -381,6 +391,7 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
   let primaryRun: StoredRun | null = null;
   try {
     const got = await fetchDutyRuns(die, cfg, duty);
+    if (!isStillCurrent()) return { machineChanged: changed, message: 'saved machine restored' };
     stored = got.runs;
     setDutyRuns(opKey, stored);
     primaryRun = stored.find(r => r.drive === got.primary_drive)
@@ -391,6 +402,7 @@ export async function applyDutyLocal(die: string, cfg: string, duty: string,
     // PWM view for a user who asked for the motor.
     if (primaryRun) setPickedRun(opKey, String(primaryRun.drive));
   } catch { stored = []; clearDutyRuns(); }
+  if (!isStillCurrent()) return { machineChanged: changed, message: 'saved machine restored' };
   // ── The COMPLETE saved summary (all constants, live 3D/R/KV buttons) goes on
   //    the dashboard as-is; the legacy mini-summary from the recorded result
   //    numbers remains the fallback for old duties.

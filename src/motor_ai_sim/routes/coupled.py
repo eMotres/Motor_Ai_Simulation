@@ -4870,6 +4870,7 @@ def _run(body: Dict[str, Any],
     from motor_ai_sim.routes.thermal import RUNAWAY_C
     from motor_ai_sim.thermal_settings import (cooling_fields, cooling_issue,
                                                coupled_iteration_settings,
+                                               propeller_cooling_context_issue,
                                                thermal_panel_settings)
 
     # Per-request materials through the BODY, the kernel's transport: the router
@@ -4895,7 +4896,10 @@ def _run(body: Dict[str, Any],
     stored = thermal_panel_settings(authorization)
     raw = body.get("thermal_settings")
     settings = dict(raw) if isinstance(raw, dict) else dict(stored)
-
+    prop_issue = propeller_cooling_context_issue(settings, authorization)
+    if prop_issue:
+        raise _refuse(prop_issue, ["thermal_settings"],
+                      code="propeller_cooling_context")
     # From the EFFECTIVE settings, not the stored ones: a caller that sent its
     # own `thermal_settings` sent the Thermal tab's whole block, `maxIter`
     # included, and reading the iteration count from a different copy than the
@@ -6042,6 +6046,7 @@ def _run(body: Dict[str, Any],
                 continuous_rating["I_estimated_A_rms"] = round(i_est, 3)
                 if lim_c is None:
                     continuous_rating["verified"] = False
+                    continuous_rating["verification_status"] = "unavailable"
                     continuous_rating["note"] = (
                         "no card limit for %r, so the estimate could not be "
                         "verified" % part)
@@ -6060,6 +6065,7 @@ def _run(body: Dict[str, Any],
                     _mag_guess = _cr_temps.get("magnet")
                     _mag_guess = (None if _mag_guess is None
                                  else round(float(_mag_guess), 1))
+                    _ctl_before_s1 = ctl.state() if ctl is not None else None
                     try:
                         v = _s1_verify(
                             body, cooling=cooling, rpm=rpm_eff,
@@ -6071,18 +6077,64 @@ def _run(body: Dict[str, Any],
                     except HTTPException as exc:
                         v = None
                         continuous_rating["verified"] = False
+                        continuous_rating["verification_status"] = "failed"
                         continuous_rating["note"] = (
                             "the verification pass could not be solved at "
                             "%.1f A (%s) — the current below is the network's "
                             "own estimate, not confirmed"
                             % (i_est, _detail_text(exc)))
-                    except Exception:  # noqa: BLE001 — never fails the loop
+                    except Exception as exc:  # noqa: BLE001 — never fails loop
                         v = None
                         log.debug("coupled: S1 verification failed",
                                   exc_info=True)
                         continuous_rating["verified"] = False
-                    if v:
+                        continuous_rating["verification_status"] = "failed"
+                        continuous_rating["note"] = (
+                            "the S1 verification failed (%s) — the estimate "
+                            "remains unconfirmed" % _detail_text(exc))
+                    if ctl is not None and (not v or v.get("verified") is not True):
+                        # The coupled record still points at the preceding
+                        # duty pass, so a failed S1 trial cannot leave the
+                        # controller's junction/device state at that trial.
+                        ctl.restore(_ctl_before_s1)
+                    if v and v.get("verified") is not True:
+                        # Preserve the failed FEM trial as evidence, but leave
+                        # the rate() estimate and its estimated temperatures /
+                        # power untouched.  A solved pass is still not a
+                        # verified S1 rating when its limiting part misses.
+                        _trial_summary = (v.get("em") or {}).get("summary") or {}
+                        continuous_rating["verified"] = False
+                        continuous_rating["verification_status"] = "failed"
+                        continuous_rating["verification_passes"] = v.get("passes")
+                        continuous_rating["miss_K"] = v.get("miss_K")
+                        if v.get("note"):
+                            continuous_rating["note"] = v["note"]
+                        continuous_rating["verification_trial"] = {
+                            "verified": False,
+                            "passes": v.get("passes"),
+                            "limiting_part": part,
+                            "limit_c": float(lim_c),
+                            "actual_c": v.get("actual_c"),
+                            "miss_K": v.get("miss_K"),
+                            "I_phase_rms_A": v.get("I_cont_A_rms"),
+                            "coil_temp_c": v.get("coil_temp_c"),
+                            "magnet_temp_c": v.get("magnet_temp_c"),
+                            "summary": {
+                                key: _trial_summary.get(key)
+                                for key in ("I_phase_rms_A", "T_em_avg_Nm",
+                                            "P_loss_total_W", "P_mech_extra_W",
+                                            "rpm")
+                                if _trial_summary.get(key) is not None},
+                            "controller": {
+                                key: v.get(key) for key in (
+                                    "controller_t_j_c",
+                                    "controller_t_j_residual_K",
+                                    "controller_P_inverter_W")
+                                if v.get(key) is not None},
+                        }
+                    if v and v.get("verified") is True:
                         continuous_rating["verified"] = bool(v.get("verified"))
+                        continuous_rating["verification_status"] = "passed"
                         continuous_rating["verification_passes"] = v.get("passes")
                         continuous_rating["miss_K"] = v.get("miss_K")
                         if v.get("note"):
@@ -6183,6 +6235,10 @@ def _run(body: Dict[str, Any],
                                     "continuous rating verified, not this "
                                     "crossing.")
             if continuous_rating:
+                # The first headline is the network estimate.  Rebuild it
+                # after verification so a failed or missing pass cannot leave
+                # a positive S1 claim attached to the final record.
+                continuous_rating["headline"] = _ccr.headline(continuous_rating)
                 log.info(
                     "coupled: continuous rating — %s",
                     continuous_rating.get("headline")
@@ -7273,8 +7329,9 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
 
     Returns ``{"verified", "passes", "miss_K", "I_cont_A_rms", "em", "field",
     "coil_temp_c", "magnet_temp_c"}`` — ``em``/``field`` are the LAST pass
-    made, real, for the caller to adopt as the record's own (the "AT THE
-    LIMIT" convention, applied to the S1 point instead of the setpoint's).
+    made, real, for the caller to adopt only when that pass verifies within
+    its limit (the "AT THE LIMIT" convention, applied to the S1 point instead
+    of the setpoint's).
     Never raises: a pass that cannot be solved stops the loop where it is and
     reports the miss against the last pass that DID solve, or — on the very
     first pass — re-raises so the caller can fall back to the estimate.
@@ -7368,7 +7425,8 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                 raise
             last["verified"] = False
             last["note"] = ("pass %d could not be solved (%s) — the last "
-                            "verified state stands" % (k + 1, _detail_text(exc)))
+                            "verification trial stands; S1 remains unverified"
+                            % (k + 1, _detail_text(exc)))
             break
         _d_tj_v = None
         if controller is not None:
@@ -7420,8 +7478,9 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                                 "so the miss could not be judged" % node)
             elif not last["verified"]:
                 last["note"] = ("still %.1f K %s its limit after %d "
-                                "verification pass(es) — the last verified "
-                                "state stands" % (abs(miss), "over" if miss > 0
+                                "verification pass(es) — the last "
+                                "verification trial stands; S1 remains "
+                                "unverified" % (abs(miss), "over" if miss > 0
                                                   else "under", k + 1))
             break
         # ONE first-order correction, from the REAL map's reading.

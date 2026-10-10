@@ -13,6 +13,9 @@
 // that machine's run settings (see lib/dieSettings.ts).  A battery doing the
 // same would silently re-scale another motor's PWM ripple.
 
+import { getStoredUser } from './localAuth';
+import { readLocalLastMotor } from './lastMotor';
+
 const KEY = 'battery.local';
 const MAX_MACHINES = 24;
 
@@ -151,11 +154,8 @@ export function writeLocalBattery(key: string | null, battery: BatteryPack): voi
 /** The die/config a non-writing client ▶-copied (written by FamilyCatalog). */
 export function readLocalContext(): { die: string; config: string;
                                       duty?: string | null } | null {
-  try {
-    const loc = JSON.parse(localStorage.getItem('family.localContext') || 'null');
-    if (loc?.die && loc?.config) return loc;
-  } catch { /* unreadable */ }
-  return null;
+  const loc = readLocalLastMotor(getStoredUser()?.email);
+  return loc?.die && loc?.config ? loc : null;
 }
 
 /** "NMC · 200S · 640/750/860 V" — chemistry, series count and the pack's

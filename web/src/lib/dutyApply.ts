@@ -21,9 +21,10 @@ import {
 import { beginDutyApply, endDutyApply } from './familyFollow';
 import { dutyGeometryCancelledMessage, type DutyGeometryDiffRow } from './dutyGeometryDiff';
 import { askDutyGeometryChoice } from './dutyGeometryDialogService';
-import { canWriteServer } from './localAuth';
+import { canWriteServer, getStoredUser } from './localAuth';
 import { loadStopReason } from './geometryApplyOutcome';
 import { uiCanWrite } from './accessUi';
+import { beginLastMotorSelection, isCurrentLastMotorOperation, rememberLoadedMotor, restoreLastMotor } from './lastMotor';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -55,6 +56,9 @@ export async function chooseDutyGeometry(message: string, diffs: DutyGeometryDif
  */
 export async function applyDutyEverywhere(die: string, cfg: string, duty: string,
                                           canWrite: boolean): Promise<LocalApplyResult> {
+  const rememberedEmail = getStoredUser()?.email ?? null;
+  const selectionEpoch = beginLastMotorSelection(rememberedEmail);
+  let completed = false;
   // A poll in another part of THIS browser must not read the activate below
   // as "the machine changed elsewhere" and start following the duty we are
   // in the middle of applying (lib/familyFollow).
@@ -74,6 +78,10 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
     // test the local half needs for the coupled-loop temperatures).
     const prev = leaveForDuty(die, cfg, duty);
     const p = await fetchDutyPayload(die, cfg, duty);
+    if (rememberedEmail
+        && !isCurrentLastMotorOperation(rememberedEmail, selectionEpoch)) {
+      throw new Error('account changed while loading motor duty');
+    }
     // From this line on, the panel is editing THIS duty: every
     // operating-point field it writes is filed under this key (and never
     // under the duty we just left, which is why the marker moves BEFORE the
@@ -237,10 +245,6 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
         localStorage.setItem('mat.assign.local', JSON.stringify(cur));
         window.dispatchEvent(new CustomEvent('mat-assign-local-changed'));
       } catch { /* quota — materials stay whatever they were */ }
-      try {
-        localStorage.setItem('family.localContext',
-          JSON.stringify({ die, config: cfg, duty, at: Date.now() }));
-      } catch { /* quota */ }
     }
     // 4) THE LOCAL HALF — panel-owned persisted values, the live nudges,
     //    the duty's settings block, its materials and its stored runs.  It
@@ -248,9 +252,17 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
     //    load in /api/family/context (lib/dutyLocalApply, lib/familyFollow),
     //    so the two paths cannot drift apart.
     const result = await applyDutyLocal(die, cfg, duty, p, prev, canWrite);
+    completed = true;
+    if (rememberedEmail) void rememberLoadedMotor(rememberedEmail, die, cfg, duty, selectionEpoch).catch(() => {
+      // The local load is complete even if cross-device memory is unavailable.
+    });
     if (staleGeometryNotice) result.message += staleGeometryNotice;
     return result;
   } finally {
     endDutyApply();
+    if (!completed && rememberedEmail
+        && isCurrentLastMotorOperation(rememberedEmail, selectionEpoch)) {
+      void restoreLastMotor(rememberedEmail).catch(() => {});
+    }
   }
 }

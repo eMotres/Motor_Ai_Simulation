@@ -173,6 +173,15 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
             "rpm": _num((duty or {}).get("rpm")),
         },
         "duty": (duty or {}).get("name"),
+        # Every named duty is available to Propeller-mode defaults. The legacy
+        # preset knobs above deliberately remain the rated (or first) duty so
+        # Manual mode and existing preset behavior do not change.
+        "duty_points": [
+            {"name": str(d.get("name") or ""),
+             "current_A": _num(d.get("current_arms")),
+             "rpm": _num(d.get("rpm"))}
+            for d in duties if d.get("name")
+        ],
         "battery": pack(doc.get("battery")),
         "device": (str(ctrl.get("device")).strip() or None) if ctrl.get("device") else None,
         "pwm_variants": vs,

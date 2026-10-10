@@ -5965,7 +5965,8 @@ class TestPwmBridgeVoltageChart:
             assert br["v1_peak_V"] == pytest.approx(self.V1_LINE, rel=0.01)
             # …and the spectrum measured off those very edges agrees
             o, amp, thd = R.pwm_bridge_spectrum(br)
-            assert amp[0] == 100.0 and o[0] == 1
+            assert amp[0] == pytest.approx(100.0, abs=1e-12, rel=0.0)
+            assert o[0] == 1
             # a bridge waveform is not a sinusoid: its THD is of that order
             assert thd > 50.0
 

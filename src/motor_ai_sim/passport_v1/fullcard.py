@@ -741,6 +741,15 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
                                si_part=str(ctrl["device"]),
                                n_par=int(ctrl.get("n_parallel") or 1),
                                board_scale=float(ctrl.get("board_scale") or 1))
+        notes_ = sorted({a_["dP_note"] for c_ in pwm_classes(full, M, v_dc).values()
+                         for a_ in c_ if a_.get("dP_note")})
+        for v_ in s3["pwm_variants"]:
+            if notes_ and v_.get("points"):
+                lab_ = "motor PWM extra loss 0 W: " + "; ".join(notes_)
+                v_["provenance"]["labels"] = list(v_["provenance"].get("labels") or []) + [lab_]
+                for p_ in v_["points"].values():
+                    if p_.get("motor_pwm_loss_basis"):
+                        p_["motor_pwm_loss_basis"] = lab_ + " — " + p_["motor_pwm_loss_basis"]
         rec["pwm_variants"] = s3["pwm_variants"] + list(
             (spec_m.get("not_computed_variants") if spec_m else NOT_COMPUTED_VARIANTS.get(M))
             or [])
@@ -1050,7 +1059,8 @@ def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
             v_ = 1e3 * float(v_)
         elif u_ == "µH":
             v_ = 1e3 * float(v_)
-        o.append(Hh.tile(lab_, f"{Hh.fmt(v_, nd_)} {u_}", "20 °C · 2-D", cls="cold"))
+        o.append(Hh.tile(lab_, f"{Hh.fmt(v_, nd_)} {u_}",
+                         "20 °C · 2-D ÷ k_ψ" if "3d" in k_ else "20 °C · 2-D", cls="cold"))
     o.append("</div>")
     # tiles
     o.append('<div class="grid">')

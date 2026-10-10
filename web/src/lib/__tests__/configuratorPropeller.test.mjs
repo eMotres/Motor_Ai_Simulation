@@ -109,6 +109,18 @@ t('which cooling is the propeller: only when `propeller_air` is the ONLY option'
   assert.equal(P.isPropellerCooled(undefined), false);
 });
 
+t('propeller thermal cooling accepts mixed cooling registries without changing prop-load semantics', () => {
+  const d40 = { restricted: true, cooling_options: ['propeller_air'], propellers: ['a'] };
+  const d85 = { restricted: true, cooling_options: ['robotics', 'propeller_air'], propellers: ['a', 'b'],
+    defaults: { L13: 'b' } };
+  assert.equal(P.hasPropellerCooling(d40), true);
+  assert.equal(P.hasPropellerCooling(d85), true);
+  assert.equal(P.isPropellerCooled(d40), true);
+  assert.equal(P.isPropellerCooled(d85), false); // do not make slipstream the Configure motor load
+  assert.equal(P.hasPropellerCooling({ cooling_options: ['propeller_air'], propellers: [] }), false);
+  assert.equal(P.hasPropellerCooling({ cooling_options: ['robotics'], propellers: ['a'] }), false);
+});
+
 const LIST = [
   { id: 'a', vendor: 'T-Motor', model: 'FPV 10*5', blades: 3, selectable: true, power_data: 'measured_torque' },
   { id: 'b', vendor: 'T-Motor', model: 'CF 10*3.3', blades: 2, selectable: true, power_data: 'estimated' },
@@ -147,6 +159,72 @@ t('the remembered choice is per machine, validated, and falls back to the defaul
   assert.equal(P.effectivePropeller({ propId: 'c' }, al), 'a');             // no data: never selected
   assert.equal(P.effectivePropeller({ propId: 'gone' }, al), 'a');
   assert.equal(P.effectivePropeller({}, []), null);
+});
+
+t('the mixed-registry cooling choice validates and survives unrelated prop/ambient edits', () => {
+  let raw = P.writeCoolChoice(null, 'cat:d85', { cooling: 'robotics' });
+  raw = P.writeCoolChoice(raw, 'cat:d85', { propId: 'b', cooling: 'propeller' });
+  assert.deepEqual(P.readCoolChoice(raw, 'cat:d85'), { cooling: 'propeller', propId: 'b' });
+  raw = P.writeCoolChoice(raw, 'cat:d85', { ambient: 27 });
+  assert.deepEqual(P.readCoolChoice(raw, 'cat:d85'), { cooling: 'propeller', propId: 'b', ambient: 27 });
+  assert.deepEqual(P.readCoolChoice('{"cat:d85":{"cooling":"manual"}}', 'cat:d85'), {});
+});
+
+t('Thermal server settings retain the bound propeller ID and clear stale motor identities', () => {
+  assert.equal(P.propellerContextKey(' User@Example.COM ', 'D85', 'L13', 'ref-a'),
+    'user@example.com|D85|L13|ref-a');
+  assert.deepEqual(P.thermalPropellerSettingsFields('propeller', 'G32x11', 'user|D85|L13|ref-a',
+    'user|D85|L13|ref-a'), {
+    airSpeedSource: 'propeller', propellerId: 'G32x11', propellerContextKey: 'user|D85|L13|ref-a',
+  });
+  assert.deepEqual(P.thermalPropellerSettingsFields('propeller', 'G32x11', 'user|D85|L13|ref-a',
+    'user|D85|L13|ref-b'), {
+    airSpeedSource: 'propeller', propellerId: '', propellerContextKey: '',
+  });
+  assert.deepEqual(P.thermalPropellerSettingsFields('manual', 'G32x11', 'old-context', null), {
+    airSpeedSource: 'manual', propellerId: '', propellerContextKey: '',
+  });
+});
+
+t('Thermal server-restored ID beats another browser local default only for the live assigned motor', () => {
+  const allowed = [
+    { id: 'local-default', selectable: true },
+    { id: 'server-choice', selectable: true },
+    { id: 'assigned-but-unusable', selectable: false },
+  ];
+  const key = 'user@example.com|D85|L13|ref-a';
+  // A second browser has no local choice (or a different default); only the
+  // exact live context and currently selectable registry row can restore it.
+  assert.equal(P.restoredThermalPropeller('server-choice', key, key, allowed), 'server-choice');
+  assert.equal(P.restoredThermalPropeller('assigned-but-unusable', key, key, allowed), null);
+  assert.equal(P.restoredThermalPropeller('server-choice', key,
+    'user@example.com|D85|L13|ref-b', allowed), null);
+  assert.equal(P.restoredThermalPropeller('server-choice', key, null, allowed), null);
+});
+
+t('the server snapshot saves a ready bound propeller and never browser-persists its identity', () => {
+  const base = { coolMode: 'manual', ambientT: '25', airSpeedSource: 'propeller' };
+  const snapshot = P.thermalServerSettingsSnapshot(base, 'propeller', 'G32x11',
+    'user@example.com|D85|L13|ref-a', 'user@example.com|D85|L13|ref-a');
+  assert.deepEqual(snapshot, {
+    ...base, propellerId: 'G32x11',
+    propellerContextKey: 'user@example.com|D85|L13|ref-a',
+  });
+  const stale = P.thermalServerSettingsSnapshot(base, 'propeller', 'G32x11',
+    'user@example.com|D85|L13|ref-a', 'user@example.com|D85|L13|ref-b');
+  assert.equal(stale.propellerId, '');
+  assert.equal(stale.propellerContextKey, '');
+  const store = readFileSync(join(HERE, '..', '..', 'stores', 'thermalStore.ts'), 'utf8');
+  const persisted = store.match(/const PERSISTED:[^=]+=[\s\S]*?\];/)?.[0] ?? '';
+  assert.match(persisted, /'airSpeedSource'/);
+  assert.doesNotMatch(persisted, /'propellerId'|'propellerContextKey'/);
+  assert.match(store, /thermalServerSettingsSnapshot\([\s\S]*?livePropellerContextKey\(\)\)/);
+  assert.match(store, /k === 'propellerId' \|\| k === 'propellerContextKey'[\s\S]*?persistPanelSettings\(\)/);
+  assert.match(store, /serverSettingsLoaded: false/);
+  assert.match(store, /setPropellerCooling: \(source, id = '', contextKey = ''\)[\s\S]*?savePanelSettings\('thermal'/);
+  const panel = readFileSync(join(HERE, '..', '..', 'components', 'thermal', 'ThermalPanel.tsx'), 'utf8');
+  assert.match(panel, /restoredThermalPropeller\([\s\S]*?st\.serverSettingsLoaded/);
+  assert.match(panel, /syncedServerChoice\.current === token/);
 });
 
 t('temperature limits: the winding is class H 180 degC, the magnet the card\'s own (stated fallback)', () => {
@@ -197,12 +275,14 @@ t('ZONES on the real motor: with the real propeller the speed knob goes green ->
   assert.ok(firstRed > 0 && firstRed < samples.length - 1);
 });
 
-t('the panel: no Thermal block for a propeller-cooled die, ONE temperatures row, the load derived from the propeller', () => {
+t('the panel: thermal estimate is available for mixed cooling, while only propeller-only mode owns motor load', () => {
   const panel = readFileSync(join(HERE, '..', '..', 'components', 'compare', 'ConfiguratorPanel.tsx'), 'utf8');
-  assert.match(panel, /\{ctxDone && !cooled && \(\s*<Box sx=\{\{ px: 2, pb: 1\.5 \}\}>\s*<ConfiguratorThermal/);   // only for the others, and not before the context answered
+  assert.match(panel, /\{ctxDone && !propellerOnly && \(\s*<Box sx=\{\{ px: 2, pb: 1\.5 \}\}>\s*<ConfiguratorThermal/);   // mixed and ordinary machines get the estimate
   assert.equal((panel.match(/<ConfiguratorThermal/g) || []).length, 1);
-  assert.match(panel, /\{cooled && \(\s*<Box sx=\{\{ display: 'flex', gap: 0\.75, flexWrap: 'wrap' \}\}>\s*\{tempTiles\.map\(renderTemp\)\}/);
-  assert.equal((panel.match(/tempTiles\.map\(renderTemp\)/g) || []).length, 1);                              // one row
+  assert.match(panel, /\{propellerOnly && cooled && \(\s*<Box sx=\{\{ display: 'flex', gap: 0\.75, flexWrap: 'wrap' \}\}>\s*\{tempTiles\.map\(renderTemp\)\}/);
+  assert.equal((panel.match(/tempTiles\.map\(renderTemp\)/g) || []).length, 1);                              // one propeller-only row
+  assert.match(panel, /const propLoad = propellerOnly &&/);                                                     // mixed mode preserves manual current
+  assert.match(panel, /optionalPropellerCooling \? \{/);                                                       // mixed mode exposes its cooling estimate
   assert.match(panel, /currentForTorque\(propPoint\?\.torque_Nm \?\? null, torqueAtI\(knobs\), ranges\.I_A\.max\)/);
   assert.match(panel, /disabled=\{propLoad\}/);                                                              // the current is shown, not typed, in propeller mode
   assert.match(panel, /updateCool\(\{ load: v \}\)/);                                                       // the manual-load toggle

@@ -89,9 +89,11 @@ services:
     env_file:
       - /etc/motres/api.env
     volumes:
-      # shared READ-ONLY — the catalog and the libraries.  An admin edits it
-      # through the seed one-shot or a maintenance `run`, never through the API.
-      - /srv/motres/shared:/srv/motres/shared:ro
+      # The API can write curated motor definitions/results only when the
+      # request context is a verified signed-in admin. Ordinary accounts still
+      # resolve writes to their own workspace; solver/runtime config is not in
+      # this mount's write path.
+      - /srv/motres/shared:/srv/motres/shared
       - /srv/motres/published:/srv/motres/published
       - /srv/motres/workspaces:/srv/motres/workspaces
       # identity/ is also the PROCESS config directory (see README, "the

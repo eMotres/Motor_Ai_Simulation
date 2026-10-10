@@ -14,7 +14,11 @@ The fix, and what this module checks:
 * an admin's DELETE of a die needs no ``?layer=shared`` opt-in any more —
   ``_require_deletable_die`` in routes/family.py decides purely on
   ``who["is_admin"]`` and the die's current layer;
-* a SHARED die is never unlinked — it is TOMBSTONED
+* (2026-10-10) a DELETE never hides a SHARED die for other users: an admin's
+  DELETE removes only the admin's own workspace copy, and a shared-only die
+  answers 409 ``die.retire_required``; "Retire for all users" is the separate
+  ``POST /die/{die}/retire`` (confirmation repeats the name, audited,
+  reversible with ``/restore``), which TOMBSTONES the die
   (``workspace.add_tombstone``): a name recorded in a small JSON file beside
   ``users.json``, reversible with ``workspace.remove_tombstone``, and every
   read-through (tree, resolve, source) hides a tombstoned name;
@@ -194,63 +198,92 @@ def _tree_names(headers) -> set:
     return {d["name"] for d in r.json()["dies"]}
 
 
-# ── shared layer: tombstone, not unlink ───────────────────────────────────────
+# ── shared layer: DELETE never hides it; "Retire for all users" does ─────────
+# Owner 2026-10-10: deleting must not hide a shared die for other users.
+# Retiring is a separate, explicit, confirmed, audited and reversible action.
 
-def test_admin_deletes_an_empty_shared_die_by_tombstone(env, shared_is_read_only):
-    from motor_ai_sim import workspace as W
-
-    assert EMPTY_DIE in _tree_names(env["admin"])
-    r = client.delete(f"/api/family/die/{EMPTY_DIE}", headers=env["admin"])
-    assert r.status_code == 200, r.text
-    assert r.json()["layer"] == "shared"
-
-    # gone from the tree for the admin AND for every other account
-    assert EMPTY_DIE not in _tree_names(env["admin"])
-    assert EMPTY_DIE not in _tree_names(env["a"])
-    assert client.get(f"/api/family/payload/{EMPTY_DIE}/{CFG}",
-                      headers=env["a"]).status_code == 404
-
-    # nothing on disk under shared/ moved (shared_is_read_only) — reversible
-    assert W.is_tombstoned(EMPTY_DIE)
-    assert W.remove_tombstone(EMPTY_DIE) is True
-    assert EMPTY_DIE in _tree_names(env["admin"]), (
-        "removing the tombstone must bring the die straight back")
-
-
-def test_admin_delete_of_a_shared_die_with_configs_needs_force(
+def test_admin_delete_of_a_shared_die_is_refused_and_points_at_retire(
         env, shared_is_read_only):
     from motor_ai_sim import workspace as W
 
-    r = client.delete(f"/api/family/die/{CFG_DIE}", headers=env["admin"])
-    assert r.status_code == 409, r.text
-    assert CFG in r.json()["detail"]
+    for die in (EMPTY_DIE, CFG_DIE):
+        for q in ("", "?force=true"):
+            r = client.delete(f"/api/family/die/{die}{q}", headers=env["admin"])
+            assert r.status_code == 409, r.text
+            assert r.json().get("code") == "die.retire_required", r.text
+            assert "Retire for all users" in r.json()["detail"]
+            assert not W.is_tombstoned(die)
+            assert die in _tree_names(env["a"])
+
+
+def test_admin_retires_a_shared_die_with_confirmation_and_restores_it(
+        env, shared_is_read_only):
+    from motor_ai_sim import workspace as W
+
+    aud = client.get(f"/api/family/die/{CFG_DIE}/audience", headers=env["admin"])
+    assert aud.status_code == 200, aud.text
+    # admin + A + B (both with an `all` grant) can see it
+    assert aud.json() == {"die": CFG_DIE, "shared": True, "retired": False,
+                          "users": 3}
+
+    # the confirmation must repeat the die name
+    bad = client.post(f"/api/family/die/{CFG_DIE}/retire", headers=env["admin"],
+                      json={"confirm": "something else"})
+    assert bad.status_code == 422, bad.text
     assert not W.is_tombstoned(CFG_DIE)
 
-    r2 = client.delete(f"/api/family/die/{CFG_DIE}?force=true", headers=env["admin"])
-    assert r2.status_code == 200, r2.text
-    assert r2.json()["deleted_configs"] == [CFG]
+    r = client.post(f"/api/family/die/{CFG_DIE}/retire", headers=env["admin"],
+                    json={"confirm": CFG_DIE})
+    assert r.status_code == 200, r.text
+    assert r.json()["retired"] is True and r.json()["users"] == 3
     assert CFG_DIE not in _tree_names(env["admin"])
-    assert W.is_tombstoned(CFG_DIE)
+    assert CFG_DIE not in _tree_names(env["a"])
+    assert client.get(f"/api/family/payload/{CFG_DIE}/{CFG}",
+                      headers=env["a"]).status_code == 404
+    listed = client.get("/api/family/retired", headers=env["admin"]).json()["dies"]
+    assert [d["die"] for d in listed] == [CFG_DIE]
+
+    # reversible: nothing under shared/ moved (shared_is_read_only)
+    back = client.post(f"/api/family/die/{CFG_DIE}/restore", headers=env["admin"])
+    assert back.status_code == 200, back.text
+    assert not W.is_tombstoned(CFG_DIE)
+    assert CFG_DIE in _tree_names(env["a"])
 
 
-def test_non_admin_cannot_delete_a_shared_die(env, shared_is_read_only):
+def test_retire_and_restore_are_in_the_admin_audit(env, shared_is_read_only,
+                                                   tmp_path, monkeypatch, caplog):
+    import json
+    import logging
+    audit = tmp_path / "admin_audit.jsonl"
+    monkeypatch.setenv("ADMIN_AUDIT_FILE", str(audit))
+    with caplog.at_level(logging.WARNING, logger="motor_ai_sim.routes.family"):
+        assert client.post(f"/api/family/die/{EMPTY_DIE}/retire",
+                           headers=env["admin"],
+                           json={"confirm": EMPTY_DIE}).status_code == 200
+        assert client.post(f"/api/family/die/{EMPTY_DIE}/restore",
+                           headers=env["admin"]).status_code == 200
+    rows = [json.loads(line) for line in audit.read_text(encoding="utf-8").splitlines()]
+    assert [(r["action"], r["target"], r["actor"]) for r in rows] == [
+        ("die.retire", EMPTY_DIE, ADMIN), ("die.restore", EMPTY_DIE, ADMIN)]
+    assert rows[0]["details"]["users"] == 3
+    assert any(ADMIN in rec.getMessage() for rec in caplog.records), (
+        "the admin's own email must land in the log line")
+
+
+def test_non_admin_cannot_delete_or_retire_a_shared_die(env, shared_is_read_only):
     from motor_ai_sim import workspace as W
 
     r = client.delete(f"/api/family/die/{EMPTY_DIE}", headers=env["a"])
     assert r.status_code == 403, r.text
-    assert "catalog admin" in r.json()["detail"]
+    assert "only a verified signed-in admin may delete it" in r.json()["detail"]
+    for path, body in (("retire", {"confirm": EMPTY_DIE}), ("restore", None)):
+        rr = client.post(f"/api/family/die/{EMPTY_DIE}/{path}", headers=env["a"],
+                         json=body)
+        assert rr.status_code == 403, rr.text
+    assert client.get(f"/api/family/die/{EMPTY_DIE}/audience",
+                      headers=env["a"]).status_code == 403
     assert not W.is_tombstoned(EMPTY_DIE)
     assert EMPTY_DIE in _tree_names(env["a"])
-
-
-def test_deleting_a_shared_die_is_logged_with_the_admin_email(
-        env, shared_is_read_only, caplog):
-    import logging
-    with caplog.at_level(logging.WARNING, logger="motor_ai_sim.routes.family"):
-        r = client.delete(f"/api/family/die/{EMPTY_DIE}", headers=env["admin"])
-    assert r.status_code == 200, r.text
-    assert any(ADMIN in rec.getMessage() for rec in caplog.records), (
-        "the admin's own email must land in the log line, not just 'deleted'")
 
 
 # ── published layer: reversible trash-move, not unlink ───────────────────────
@@ -308,6 +341,9 @@ def test_workspace_delete_is_unchanged_and_leaves_shared_untouched(
 
     # the admin's own workspace copy is gone …
     assert not (env["works"] / env["ids"][ADMIN] / "dies" / SHADOW_DIE).exists()
+    from motor_ai_sim import workspace as W
+    assert not W.is_tombstoned(SHADOW_DIE), (
+        "deleting the admin's workspace copy must not hide the shared die")
     # … but the shared original is still there for everyone else — this test
     # runs under shared_is_read_only, so any write to it fails the fixture too.
     assert (env["shared"] / "dies" / SHADOW_DIE / "die.yaml").is_file()

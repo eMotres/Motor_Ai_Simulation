@@ -75,6 +75,14 @@ export function isPropellerCooled(c: CoolingInfo | null | undefined): boolean {
   return !!c?.restricted && Array.isArray(o) && o.length > 0 && o.every((x) => x === 'propeller_air');
 }
 
+/** Whether this exact die/config may use propeller slipstream for its housing.
+ * Mixed registries may offer this thermal boundary without making the propeller
+ * the Configure load/current. */
+export function hasPropellerCooling(c: CoolingInfo | null | undefined): boolean {
+  return Array.isArray(c?.cooling_options) && c.cooling_options.includes('propeller_air')
+    && Array.isArray(c.propellers) && c.propellers.length > 0;
+}
+
 /** A catalogue entry as `GET /api/propellers` lists it. */
 export interface PropSummary {
   id: string; vendor: string; model: string; blades?: number | null;
@@ -188,7 +196,59 @@ export function zoneSamples(min: number, max: number, n = 48): number[] {
 export const PROP_CHOICE_LS = 'configurator.propeller.v1';
 export const DEFAULT_AMBIENT_C = 25;
 
-export interface CoolChoice { propId?: string | null; ambient?: number; load?: 'prop' | 'manual' }
+/** Per-account, per-reference, per-configuration storage; never inherits an
+ * unowned legacy choice from another browser account or motor build. */
+export function coolChoiceKey(email: string | null | undefined, refId: string,
+                             config: string | null | undefined): string {
+  const normalized = email?.trim().toLowerCase();
+  return normalized
+    ? `user:${encodeURIComponent(normalized)}|${refId}|${config ?? ''}`
+    : refId;
+}
+
+/** Identity shared with server-side propeller cooling guards. */
+export function propellerContextKey(email: string | null | undefined,
+                                   die: string, config: string,
+                                   refId: string | null | undefined): string | null {
+  const normalized = email?.trim().toLowerCase();
+  return normalized ? `${normalized}|${die}|${config}|${refId ?? ''}` : null;
+}
+
+export interface CoolChoice {
+  propId?: string | null;
+  ambient?: number;
+  load?: 'prop' | 'manual';
+  /** Configure-only boundary choice for mixed registries; does not alter the motor EM load. */
+  cooling?: 'robotics' | 'propeller';
+}
+
+/** The Thermal panel's shared-server record for its per-motor propeller choice.
+ *  A stale or incomplete identity deliberately keeps `propeller` selected but
+ *  clears the ID, so consumers refuse instead of inheriting another motor's fan. */
+export function thermalPropellerSettingsFields(
+  source: 'manual' | 'propeller', propellerId: string,
+  contextKey: string, liveContextKey: string | null,
+): { airSpeedSource: 'manual' | 'propeller'; propellerId: string; propellerContextKey: string } {
+  if (source !== 'propeller')
+    return { airSpeedSource: 'manual', propellerId: '', propellerContextKey: '' };
+  const bound = !!propellerId && !!contextKey && contextKey === liveContextKey;
+  return { airSpeedSource: 'propeller',
+    propellerId: bound ? propellerId : '', propellerContextKey: bound ? contextKey : '' };
+}
+
+/** Build the shared-server Thermal snapshot. Propeller identity is present only
+ *  when it is bound to the currently loaded motor; callers keep it out of the
+ *  browser-global thermal key/value store. */
+export function thermalServerSettingsSnapshot<T extends Record<string, unknown>>(
+  savedFields: T,
+  source: 'manual' | 'propeller', propellerId: string,
+  contextKey: string, liveContextKey: string | null,
+): T & ReturnType<typeof thermalPropellerSettingsFields> {
+  return {
+    ...savedFields,
+    ...thermalPropellerSettingsFields(source, propellerId, contextKey, liveContextKey),
+  };
+}
 
 const okAmbient = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= -60 && v <= 80;
 
@@ -203,6 +263,7 @@ export function readCoolChoice(raw: string | null, refId: string): CoolChoice {
     if (typeof o.propId === 'string' && o.propId) out.propId = o.propId;
     if (okAmbient(o.ambient)) out.ambient = o.ambient;
     if (o.load === 'prop' || o.load === 'manual') out.load = o.load;
+    if (o.cooling === 'robotics' || o.cooling === 'propeller') out.cooling = o.cooling;
     return out;
   } catch { return {}; }
 }
@@ -231,4 +292,15 @@ export function effectivePropeller(choice: CoolChoice, allowed: PropSummary[], p
   if (c) return c.id;
   const d = preferred ? allowed.find((p) => p.id === preferred && p.selectable) : undefined;
   return d ? d.id : defaultPropeller(allowed);
+}
+
+/** A server-restored Thermal choice wins over this browser's local preference
+ * only when its account/motor binding and current registry entry both validate. */
+export function restoredThermalPropeller(
+  savedId: string | null | undefined, savedContextKey: string | null | undefined,
+  activeContextKey: string | null | undefined, allowed: PropSummary[],
+): string | null {
+  if (!savedId || !savedContextKey || !activeContextKey || savedContextKey !== activeContextKey)
+    return null;
+  return allowed.some((p) => p.id === savedId && p.selectable) ? savedId : null;
 }

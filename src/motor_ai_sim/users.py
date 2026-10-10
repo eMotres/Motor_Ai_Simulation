@@ -577,9 +577,9 @@ def public_user(email: str) -> dict:
 # ── per-user motor grants ────────────────────────────────────────────────────
 # WHICH motors of the shared catalog an account may see is registry data, not a
 # property of the machines: `motors: {"all": bool, "dies": [die names]}` on the
-# user record.  An ABSENT key means nothing is granted — a brand-new account
-# sees an empty catalog until the vendor assigns motors to it (user's rule,
-# 2026-09-02).  Admins (tier admin / ADMIN_EMAILS) bypass this entirely.
+# user record. Enabled registered accounts also receive a read-time baseline
+# for the shared CIANO14 40 new motor when its canonical files are installed.
+# Admins (tier admin / ADMIN_EMAILS) bypass this entirely.
 
 def _norm_default(raw) -> Optional[dict]:
     """Any stored shape -> `{"die": str, "config": str}` or None."""
@@ -615,13 +615,55 @@ def normalize_grants(raw) -> dict:
     return out
 
 
+_BASELINE_DIE = "CIANO14 40 new"
+_BASELINE_CONFIG = "L12"
+
+
+def _shared_baseline_available() -> bool:
+    """The default applies only to an installed shared L12 motor."""
+    try:
+        from motor_ai_sim.workspace import shared_root
+        die = Path(str(shared_root())) / "dies" / _BASELINE_DIE
+        return (die / "die.yaml").is_file() and (die / f"{_BASELINE_CONFIG}.yaml").is_file()
+    except (OSError, RuntimeError, ValueError):
+        return False
+
+
+def _effective_motor_grants(email: str) -> dict:
+    """Read-time grants for an existing, enabled account, without persistence."""
+    registry = _load_soft()
+    rec = registry.get(_norm(email))
+    grants = normalize_grants(rec.get("motors") if isinstance(rec, dict) else None)
+    if not isinstance(rec, dict) or bool(rec.get("disabled")):
+        return grants
+    if not _shared_baseline_available():
+        return grants
+    effective = dict(grants)
+    if not effective["all"]:
+        effective["dies"] = sorted(set(grants["dies"]) | {_BASELINE_DIE})
+    if "default" not in effective:
+        effective["default"] = {"die": _BASELINE_DIE, "config": _BASELINE_CONFIG}
+    return effective
+
+
 def get_motor_grants(email: str) -> dict:
-    return normalize_grants((_load_soft().get(_norm(email)) or {}).get("motors"))
+    """What the account may open NOW: the stored grant plus the read-time
+    shared baseline.  An admin-set default always wins over the baseline."""
+    return _effective_motor_grants(email)
+
+
+def get_stored_motor_grants(email: str) -> dict:
+    """Only what an admin stored (Admin -> Users -> Motors), without the
+    read-time baseline — what the admin dialog edits and saves back, so the
+    baseline is never persisted as if an admin had chosen it."""
+    rec = _load_soft().get(_norm(email))
+    return normalize_grants(rec.get("motors") if isinstance(rec, dict) else None)
 
 
 def get_default_motor(email: str) -> Optional[dict]:
-    """The admin-chosen starting motor of an account (`{"die", "config"}`) or None."""
-    return get_motor_grants(email).get("default")
+    """Configured or shared-baseline starting motor, returned as fresh data."""
+    default = _effective_motor_grants(email).get("default")
+    return dict(default) if isinstance(default, dict) else None
 
 
 _KEEP = object()
@@ -650,7 +692,7 @@ def set_motor_grants(email: str, *, all_motors: bool,
         users[email]["motors"] = normalize_grants(
             {"all": all_motors, "dies": list(dies or []), "default": default})
         _save(users)
-    return get_motor_grants(email)
+    return get_stored_motor_grants(email)
 
 
 # ── invites ──────────────────────────────────────────────────────────────────

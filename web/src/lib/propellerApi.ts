@@ -1,7 +1,7 @@
 // The propeller catalogue as the server serves it (src/motor_ai_sim/routes/propellers.py):
 // read-only, ungated.  Configure asks for the list once and for one `/series` per
 // (propeller, ambient, housing) — the propeller physics lives only in the backend.
-import { SERIES_N, SERIES_RPM_MAX, type PropSeries, type PropSummary } from './configuratorPropeller';
+import { SERIES_N, SERIES_RPM_MAX, type CoolingInfo, type PropSeries, type PropSummary } from './configuratorPropeller';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -16,6 +16,37 @@ export function fetchPropellers(): Promise<PropSummary[] | null> {
     .catch(() => null)
     .then((v) => { if (v == null) _list = null; return v; });
   return _list;
+}
+
+/** The same per-die/config allowlist Configure reads from configure_context. */
+export async function fetchPropellerCoolingOptions(die: string, config: string): Promise<CoolingInfo | null> {
+  const q = new URLSearchParams({ die, config });
+  try {
+    const r = await fetch(`${API}/api/propellers/cooling-options?${q}`, { cache: 'no-store' });
+    return r.ok ? await r.json() as CoolingInfo : null;
+  } catch { return null; }
+}
+
+export interface PropellerThermalPoint {
+  propeller_id: string;
+  rpm: number;
+  air_speed_ms: number;
+  slipstream_position: string;
+  rho_kg_m3?: number;
+}
+
+/** One backend-computed slipstream point, matching Thermal's own RPM and ambient. */
+export async function fetchPropellerThermalPoint(id: string, rpm: number,
+                                                 ambientC: number): Promise<PropellerThermalPoint | null> {
+  const q = new URLSearchParams({ rpm: String(rpm), temp_c: String(ambientC) });
+  try {
+    const r = await fetch(`${API}/api/propellers/${encodeURIComponent(id)}/point?${q}`, { cache: 'no-store' });
+    if (!r.ok) return null;
+    const point = await r.json() as PropellerThermalPoint;
+    return point && point.propeller_id === id && point.rpm === rpm
+      && Number.isFinite(point.air_speed_ms) && point.air_speed_ms >= 0
+      ? point : null;
+  } catch { return null; }
 }
 
 const _series = new Map<string, Promise<PropSeries | null>>();

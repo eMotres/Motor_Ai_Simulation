@@ -1,0 +1,48 @@
+{
+  "context": "Native Claude Code 2.1.295; PowerShell 5.1; motor_ai_sim",
+  "model_versions": {
+    "agent": "Sonnet API; Haiku API; Codex GPT-6; no escalation"
+  },
+  "tools_used": [
+    "claude -p",
+    "PowerShell parser",
+    "official logger"
+  ],
+  "task": "Set up bounded claude -p API helper in current project using existing environment key",
+  "quality_status": "raw",
+  "checks": [
+    "Parser passed",
+    "WRAPPER_FINAL_OK exit0 cost USD 0.001403275",
+    "Scoped write parent readback passed; API cost USD 0.00175751",
+    "Three invalid own paths refused before launch",
+    "Mock executable blocked by Windows Application Control; unverified synthetic transport"
+  ],
+  "artifacts": [
+    "scripts/Invoke-ClaudeApiAgent.ps1",
+    "docs/claude-api-agent.md",
+    "scratch_claude_api_agent_20261009/scoped-write-proof.txt"
+  ],
+  "simulation_results": {},
+  "id": "motor_ai_sim_claude_api_agent_setup_20261009_01",
+  "model": "Claude Sonnet API implementation; Claude Haiku API smoke; Codex verification",
+  "final_answer": "Helper operational for bounded API subagent calls; application unchanged. CLI permissions are not an OS sandbox. Synthetic transport verification remains blocked by host policy.",
+  "corrections": [
+    "User persisted existing key to User environment"
+  ],
+  "actions": [
+    "Successful minimal API-only test",
+    "Sonnet API created and hardened two scoped files",
+    "Verified final read-only request and scoped file write",
+    "Kept key only in child environment; no subscription fallback",
+    "Preserved rejected mock transport test; no AppControl bypass"
+  ],
+  "verification": "passed",
+  "domain": "infra",
+  "source_project": "motor_ai_sim",
+  "requirements": [
+    "No key in source/git/logs",
+    "No main application changes",
+    "Bounded child process; read-only default; explicit write paths"
+  ],
+  "outcome": "success"
+}

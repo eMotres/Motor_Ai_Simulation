@@ -46,7 +46,47 @@ export function batteryFromPack(b: PackLike | null | undefined): BatteryLike | n
   return { type: lfp ? 'LFP' : 'NMC', cells: ns, nom, max, min };
 }
 
+/** A present configuration with no pack explicitly means no saved pack. */
+export function batteryForMachineConfig(
+  hasConfig: boolean,
+  configPack: PackLike | null | undefined,
+  contextPack: PackLike | null | undefined,
+  passportPack: PackLike | null | undefined,
+): BatteryLike | null {
+  if (hasConfig) return batteryFromPack(configPack);
+  return batteryFromPack(contextPack) ?? batteryFromPack(passportPack);
+}
+
 export const BATTERY_BY_MACHINE_LS = 'configurator.batteryByRef.v1';
+
+/** Battery edits follow a selected machine configuration when one is known. */
+export function batteryEditKey(refId: string, config: string | null | undefined): string {
+  return config ? `${refId}|config:${config}` : refId;
+}
+
+/** Preserve a legacy per-machine edit only for its trusted original config. */
+export function readBatteryEditForConfig(
+  raw: string | null, refId: string, config: string | null | undefined,
+  originalConfig: string | null | undefined,
+): BatteryLike | null {
+  const key = batteryEditKey(refId, config);
+  return readBatteryEdit(raw, key) ?? (config && config === originalConfig ? readBatteryEdit(raw, refId) : null);
+}
+
+export function writeBatteryEditForConfig(
+  raw: string | null, refId: string, config: string | null | undefined, b: BatteryLike,
+): string {
+  return writeBatteryEdit(raw, batteryEditKey(refId, config), b);
+}
+
+export function clearBatteryEditForConfig(
+  raw: string | null, refId: string, config: string | null | undefined,
+  originalConfig: string | null | undefined,
+): string {
+  let next = clearBatteryEdit(raw, batteryEditKey(refId, config));
+  if (config && config === originalConfig) next = clearBatteryEdit(next, refId);
+  return next;
+}
 
 /** The panel's stock default (BatteryPanel's `defaultBattery()`): 100 NMC cells.  It is what
  *  the block shows while a machine has no pack of its own — never something a USER chose
@@ -113,6 +153,11 @@ export function clearBatteryEdit(raw: string | null, refId: string): string {
  *  (= keep the stock default). */
 export function wantedBattery(edit: BatteryLike | null, machine: BatteryLike | null): BatteryLike | null {
   return edit ?? machine;
+}
+
+/** UI state for a machine with no known pack and no user-specific edit. */
+export function batteryForDisplay(edit: BatteryLike | null, machine: BatteryLike | null): BatteryLike {
+  return wantedBattery(edit, machine) ?? { ...STOCK_BATTERY };
 }
 
 export function sameBattery(a: BatteryLike, b: BatteryLike): boolean {

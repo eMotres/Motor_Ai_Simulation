@@ -129,16 +129,19 @@ const num = (v, def) => {
 
 function coolingFields(s) {
   const ambient = num(s.ambientT, 40);
-  const liquid = s.coolMode === 'liquid';
+  const outerMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
+  const liquid = outerMode === 'liquid';
   const boreLiquid = s.boreMode === 'liquid';
   const shaftMm = Math.max(0, num(s.shaftExtMm, 0));
-  const robot = s.coolMode === 'robotics';
+  const robot = outerMode === 'robotics';
   const endFaces = s.endFaces === 'none' ? 'none' : 'still';
   return {
-    cooling_mode: s.coolMode,
+    cooling_mode: outerMode,
     ambient_temp: ambient,
-    h_conv: s.coolMode === 'manual' ? num(s.hConv, 50) : undefined,
-    air_speed_mps: s.coolMode === 'air' ? num(s.airSpeed, 0) : undefined,
+    h_conv: outerMode === 'manual' ? num(s.hConv, 50) : undefined,
+    air_speed_mps: outerMode === 'air' && s.airSpeedSource !== 'propeller' ? num(s.airSpeed, 0) : undefined,
+    air_speed_source: outerMode === 'air' && s.airSpeedSource === 'propeller' ? 'propeller' : undefined,
+    propeller_id: outerMode === 'air' && s.airSpeedSource === 'propeller' && s.propellerId ? s.propellerId : undefined,
     fluid: liquid ? s.fluid : undefined,
     fluid_temp_in_c: liquid ? num(s.tIn, ambient) : undefined,
     flow_lpm: liquid ? num(s.flowLpm, 8) : undefined,
@@ -182,21 +185,24 @@ function heatPathOf(saved) {
 }
 
 function coolingIssue(s) {
-  if (s.coolMode === 'liquid' && !(num(s.flowLpm, 0) > 0))
+  const outerMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
+  if (outerMode === 'liquid' && !(num(s.flowLpm, 0) > 0))
     return 'coolant flow must be greater than 0 L/min';
-  if (s.coolMode === 'manual' && !(num(s.hConv, 0) > 0))
+  if (outerMode === 'air' && s.airSpeedSource === 'propeller' && !s.propellerId)
+    return 'choose an assigned propeller for slipstream cooling';
+  if (outerMode === 'manual' && !(num(s.hConv, 0) > 0))
     return 'h must be greater than 0 W/m²K';
   if (s.boreMode === 'liquid' && !(num(s.boreFlowLpm, 0) > 0))
     return 'bore coolant flow must be greater than 0 L/min';
-  if (s.boreMode === 'still' && s.coolMode !== 'robotics')
+  if (s.boreMode === 'still' && outerMode !== 'robotics')
     return ('a still (unventilated) bore belongs to the robotics mode — it '
             + 'radiates out of the two ends at the machine’s emissivity, and '
             + 'that input only exists there');
-  if (s.coolMode === 'robotics') {
+  if (outerMode === 'robotics') {
     const eps = num(s.emissivity, 0.9);
     if (!(eps >= 0 && eps <= 1)) return 'emissivity must be between 0 and 1';
   }
-  if (s.coolMode === 'none' && s.boreMode === 'none')
+  if (outerMode === 'none' && s.boreMode === 'none')
     return 'no cooled surface — the heat has nowhere to leave';
   return null;
 }
@@ -237,6 +243,46 @@ test('the outlet temperature is never an input, in any mode', () => {
 test('air on the outer surface sends the speed and nothing liquid', () => {
   assert.deepEqual(keys(coolingFields(inputs({ coolMode: 'air' }))),
     ['air_speed_mps', 'ambient_temp', 'bore_mode', 'cooling_mode'].sort());
+});
+
+test('propeller airflow sends only the backend source and assigned propeller; manual remains unchanged', () => {
+  const r = coolingFields(inputs({ coolMode: 'air', airSpeedSource: 'propeller', propellerId: 'tmotor_fpv_10x5' }));
+  assert.deepEqual(keys(r), ['ambient_temp', 'air_speed_source', 'bore_mode', 'cooling_mode', 'propeller_id'].sort());
+  assert.equal(r.air_speed_source, 'propeller');
+  assert.equal(r.propeller_id, 'tmotor_fpv_10x5');
+  assert.equal(r.air_speed_mps, undefined);
+  const manual = coolingFields(inputs({ coolMode: 'air', airSpeedSource: 'manual', airSpeed: '7.5' }));
+  assert.equal(manual.air_speed_mps, 7.5);
+  assert.equal(manual.air_speed_source, undefined);
+  assert.equal(manual.propeller_id, undefined);
+});
+
+test('choosing propeller cooling overrides a stored manual outer mode without changing build settings', () => {
+  const r = coolingFields(inputs({
+    coolMode: 'manual', hConv: '250', airSpeedSource: 'propeller',
+    propellerId: 'tmotor_fpv_10x5', boreMode: 'air', boreAirSpeed: '3',
+    frame: 'open', shaftExtMm: '100', shaftExtSides: '1',
+  }));
+  assert.equal(r.cooling_mode, 'air');
+  assert.equal(r.air_speed_source, 'propeller');
+  assert.equal(r.propeller_id, 'tmotor_fpv_10x5');
+  assert.equal(r.h_conv, undefined);
+  assert.equal(r.air_speed_mps, undefined);
+  assert.equal(r.bore_mode, 'air');
+  assert.equal(r.bore_air_speed_mps, 3);
+  assert.equal(r.frame, 'open');
+  assert.equal(r.shaft_ext_length_mm, 100);
+  assert.equal(r.shaft_ext_sides, 1);
+});
+
+test('propeller source replaces the saved outer mode but keeps independent inner cooling', () => {
+  const r = sent(coolingFields(inputs({ coolMode: 'liquid', airSpeedSource: 'propeller', propellerId: 'x' })));
+  assert.equal(r.cooling_mode, 'air');
+  assert.equal(r.air_speed_source, 'propeller');
+  assert.equal(r.propeller_id, 'x');
+  assert.ok(!('fluid' in r));
+  assert.ok(!('flow_lpm' in r));
+  assert.ok(!('air_speed_mps' in r));
 });
 
 test('a liquid jacket sends coolant, inlet and flow — and no air speed', () => {

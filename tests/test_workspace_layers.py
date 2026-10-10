@@ -2,16 +2,16 @@
 
 The user's decision of 2026-09-15 is that a catalog is not two things but three:
 
-* ``shared/``      the admin-curated library.  Read-only for everyone but an
-                   admin, who writes it by saying so (``?layer=shared``).
+* ``shared/``      the admin-curated library. Read-only for ordinary accounts;
+                   verified admins write catalog definitions there by default.
 * ``published/``   the community layer.  A user publishes a die / configuration
                    / duty out of their own workspace and every registered
                    account may read it — with the author's name on it, and
                    namespaced per owner so two people may both publish
                    "CIANO28 85".
-* ``workspaces/``  the user's own.  EVERY write lands here; a die that lives
-                   only in one of the other two is copied across on the first
-                   write (copy-on-write) and edited in the copy.
+* ``workspaces/``  the user's own. Ordinary writes land here; a die that lives
+                   only in another layer is copied across on first write.
+                   Admin live configuration and runtime state remain private.
 
 What is under test, in the order the risk sits:
 
@@ -22,16 +22,15 @@ What is under test, in the order the risk sits:
 * B does not see A's duty: same die name, two workspaces, two answers;
 * A publishes → B sees it as ``"<die> · by Alice"``, can read the duty AND its
   stored field, may FORK it into their own workspace, and cannot withdraw it;
-* a plain REGISTERED account (Stage 5, 2026-09-15) writes the catalog at all —
-  die create, duty save — and every byte of it lands in that account's own
-  workspace: the shared layer, the publication and the other user's workspace
-  all come out untouched.  A die the account may not READ is not writable
+* a plain REGISTERED account writes catalog changes into that account's own
+  workspace: the shared layer, the publication and another user's workspace
+  all come out untouched. A die the account may not READ is not writable
   either (404, never 403), ``?layer=shared`` is still the admin's alone, an
   anonymous caller is refused, and with ``WORKSPACES_ROOT`` unset the gate is
   the admin-only one it always was;
 * A unpublishes → it is gone for B the same second;
-* an ADMIN write with ``?layer=shared`` lands in shared and both accounts see
-  it (this is the one write that is allowed in, and it is explicit);
+* a verified ADMIN's default catalog write lands in shared and both accounts
+  see it; runs, fields, and saved result rows follow that shared definition;
 * precedence: a workspace copy shadows the shared original, and
   ``resolve_die_dir`` answers workspace → published → shared in that order;
 * with ``WORKSPACES_ROOT`` unset, every helper degrades to the expression it
@@ -147,11 +146,12 @@ def env(tmp_path, monkeypatch):
     shutil.copy2(_REAL_USERS, users_file)
     monkeypatch.setattr(U, "_USERS_FILE", users_file)
     monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
-    monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN, A})
+    monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
     monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
     U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
-    U.create_user(A, "password-a", role="admin", name=A_NAME)
+    U.create_user(A, "password-a", role="user", name=A_NAME)
     U.create_user(B, "password-b", role="user", name="Bob")
+    U.set_motor_grants(A, all_motors=False, dies=[DIE])
     # B is a plain registered account: it sees what it is GRANTED of the shared
     # catalog, plus whatever anyone has published.
     U.set_motor_grants(B, all_motors=False, dies=[DIE])
@@ -272,6 +272,32 @@ def test_resolution_order_is_workspace_then_published_then_shared(env):
         # …and the layer it came FROM is still reachable, which is what keeps
         # the shared results readable after a copy-on-write.
         assert W.source_die_dir(DIE) == env["shared"] / "dies" / DIE
+
+
+def test_verified_admin_reads_shared_before_legacy_workspace_copy(env):
+    from motor_ai_sim import auth, workspace as W
+    own = _ws_die(env, ADMIN)
+    own.mkdir(parents=True)
+    shutil.copytree(env["shared"] / "dies" / DIE, own, dirs_exist_ok=True)
+    (own / f"{CFG}.yaml").write_text(yaml.safe_dump({
+        "name": CFG, "duties": [{"name": "stale local"}],
+    }), encoding="utf-8")
+    who = auth.caller_identity(env["admin"]["Authorization"])
+    with W.use_workspace(W.workspace_for_identity(ADMIN)), W.use_caller(who):
+        assert W.resolve_die_dir(DIE) == env["shared"] / "dies" / DIE
+        assert W.iter_dies()[0]["layer"] == "shared"
+        assert W.resolve_die_dir(DIE, prefer_shared=False) == own
+
+
+def test_ordinary_user_retains_private_workspace_precedence(env):
+    from motor_ai_sim import auth, workspace as W
+    own = _ws_die(env, A)
+    own.mkdir(parents=True)
+    shutil.copytree(env["shared"] / "dies" / DIE, own, dirs_exist_ok=True)
+    who = auth.caller_identity(env["a"]["Authorization"])
+    with W.use_workspace(W.workspace_for_identity(A)), W.use_caller(who):
+        assert W.resolve_die_dir(DIE) == own
+        assert W.iter_dies()[0]["layer"] == "workspace"
 
 
 # ── publishing ───────────────────────────────────────────────────────────────
@@ -396,6 +422,154 @@ def test_admin_layer_shared_writes_the_curated_catalog_for_everyone(env):
     # both accounts see it
     for who in ("a", "b"):
         assert sorted(_duty_names(env[who])) == sorted([DUTY, "vendor rated"])
+
+
+def test_verified_admin_default_catalog_save_is_shared(env):
+    r = _save_duty(env["admin"], duty="admin default")
+    assert r.status_code == 200, r.text
+    shared_doc = yaml.safe_load(
+        (env["shared"] / "dies" / DIE / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    assert sorted(d["name"] for d in shared_doc["duties"]) == sorted([DUTY, "admin default"])
+    assert not _ws_die(env, ADMIN).exists()
+    assert "admin default" in _duty_names(env["b"])
+
+
+def test_admin_saved_run_and_field_paths_are_shared_but_user_paths_are_private(env):
+    from motor_ai_sim import auth, duty_fields, duty_results, workspace as W
+    from motor_ai_sim.routes import family as F
+    admin = auth.caller_identity(env["admin"]["Authorization"])
+    ordinary = auth.caller_identity(env["a"]["Authorization"])
+    with W.use_workspace(W.workspace_for_identity(ADMIN)), W.use_caller(admin):
+        assert duty_results.store_path() == env["shared"] / ".duty_results.json"
+        assert F._run_path_w(DIE, "runs/L40/example.json.gz") == (
+            env["shared"] / "dies" / DIE / "runs/L40/example.json.gz")
+        expected_field = (
+            env["shared"] / "dies" / DIE / "runs" / CFG
+            / F._run_stem(DUTY) / "fields")
+        assert duty_fields.fields_dir(DIE, CFG, DUTY) == expected_field
+        field = {"vertices": [[0.0, 1.0], [0.0, 0.0], [1.0, 0.0]],
+                 "triangles": [[0], [1], [2]],
+                 "temperature_per_node": [20.0, 30.0, 40.0]}
+        saved_field = duty_fields.save(DIE, CFG, DUTY, "thermal", field)
+        assert saved_field and Path(saved_field).is_relative_to(expected_field)
+        assert duty_fields.load(DIE, CFG, DUTY, "thermal")["temperature_per_node"].tolist() == [20.0, 30.0, 40.0]
+        rel = F._run_rel(CFG, DUTY, "sine")
+        assert F._write_run_payload(DIE, rel, DUTY, "sine", {"ok": True}) > 0
+        assert F._run_path(DIE, rel).is_relative_to(env["shared"] / "dies" / DIE)
+        assert duty_results.record(DIE, CFG, "shared result", "thermal", {"T_max": 68.0})
+    shared_results = json.loads((env["shared"] / ".duty_results.json").read_text(encoding="utf-8"))
+    assert shared_results["results"][DIE][CFG]["shared result"]["thermal"]["T_max"] == 68.0
+    with W.use_workspace(W.workspace_for_identity(A)), W.use_caller(ordinary):
+        assert duty_results.store_path() == _ws_die(env, A).parent.parent / ".duty_results.json"
+        assert duty_fields.fields_dir(DIE, CFG, DUTY).is_relative_to(
+            _ws_die(env, A).parent.parent / "dies")
+        saved_field = duty_fields.save(DIE, CFG, DUTY, "thermal", field)
+        assert saved_field and Path(saved_field).is_relative_to(
+            _ws_die(env, A).parent.parent / "dies")
+        rel = F._run_rel(CFG, DUTY, "sine")
+        assert F._write_run_payload(DIE, rel, DUTY, "sine", {"ok": True}) > 0
+        assert F._run_path(DIE, rel).is_relative_to(_ws_die(env, A))
+        assert duty_results.record(DIE, CFG, "private result", "thermal", {"T_max": 55.0})
+    private_results = _ws_die(env, A).parent.parent / ".duty_results.json"
+    assert private_results.is_file()
+    assert "private result" in json.loads(private_results.read_text(encoding="utf-8"))[
+        "results"][DIE][CFG]
+
+
+def test_shared_global_results_win_per_duty_and_keep_legacy_only_duties(env):
+    from motor_ai_sim import auth, duty_results, workspace as W
+    legacy_path = env["shared"] / "dies" / DIE / ".duty_results.json"
+    legacy_path.write_text(json.dumps({"version": 1, "results": {DIE: {CFG: {
+        "both": {"thermal": {"T_max": 91.0},
+                 "rotor_stress": {"max_mpa": 121.0}},
+        "legacy only": {"modes": {"first_hz": 900.0}},
+    }}}}), encoding="utf-8")
+    global_path = env["shared"] / ".duty_results.json"
+    global_path.write_text(json.dumps({"version": 1, "results": {DIE: {CFG: {
+        "both": {"thermal": {"T_max": 63.0}},
+    }}}}), encoding="utf-8")
+
+    for email, headers in ((ADMIN, env["admin"]), (A, env["a"])):
+        caller = auth.caller_identity(headers["Authorization"])
+        with W.use_workspace(W.workspace_for_identity(email)), W.use_caller(caller):
+            rows = duty_results.get(DIE, CFG)
+        assert rows["both"]["thermal"]["T_max"] == 63.0
+        # A same-duty canonical row replaces the whole fallback row so result
+        # kinds computed on different build revisions are never combined.
+        assert "rotor_stress" not in rows["both"]
+        assert rows["legacy only"]["modes"]["first_hz"] == 900.0
+
+
+def test_admin_structural_catalog_operations_target_shared(env, monkeypatch):
+    """Create, duplicate, and delete operate on the common admin catalog."""
+    from motor_ai_sim import config as C, workspace as W
+    from motor_ai_sim.routes import family as F
+
+    # Keep the tombstone metadata inside this test's temporary server tree.
+    identity = env["tree"] / "identity"
+    identity.mkdir()
+    monkeypatch.setattr(C, "DEFAULT_CONFIG_PATH", identity / "motor_config.yaml")
+    monkeypatch.setattr(F, "_live_cfg", lambda: {
+        "geometry": {"num_slots": 12, "num_poles": 14},
+        "simulation": {},
+    })
+
+    created = client.post("/api/family/die", headers=env["admin"],
+                          json={"name": "ADMIN CREATED 12"})
+    assert created.status_code == 200, created.text
+    new_dir = env["shared"] / "dies" / "ADMIN CREATED 12"
+    assert (new_dir / "die.yaml").is_file()
+    assert not (env["works"] / env["ids"][ADMIN] / "dies"
+                / "ADMIN CREATED 12").exists()
+
+    duplicated = client.post(f"/api/family/die/{DIE}/duplicate",
+                             headers=env["admin"],
+                             json={"name": "ADMIN DUPLICATE 40"})
+    assert duplicated.status_code == 200, duplicated.text
+    duplicate_dir = env["shared"] / "dies" / "ADMIN DUPLICATE 40"
+    assert yaml.safe_load((duplicate_dir / "die.yaml").read_text(encoding="utf-8"))["locked"] is False
+    assert (duplicate_dir / f"{CFG}.yaml").is_file()
+    assert not (env["works"] / env["ids"][ADMIN] / "dies"
+                / "ADMIN DUPLICATE 40").exists()
+
+    # Owner 2026-10-10: a DELETE never hides a shared die for other users;
+    # retiring it is the explicit, confirmed "Retire for all users" action —
+    # a reversible tombstone, the definition stays intact on disk.
+    deleted = client.delete("/api/family/die/ADMIN CREATED 12?force=true",
+                            headers=env["admin"])
+    assert deleted.status_code == 409, deleted.text
+    assert deleted.json()["code"] == "die.retire_required"
+    assert not W.is_tombstoned("ADMIN CREATED 12")
+    retired = client.post("/api/family/die/ADMIN CREATED 12/retire",
+                          headers=env["admin"], json={"confirm": "ADMIN CREATED 12"})
+    assert retired.status_code == 200, retired.text
+    assert retired.json()["layer"] == "shared"
+    assert (new_dir / "die.yaml").is_file()
+    assert W.is_tombstoned("ADMIN CREATED 12")
+
+
+def test_no_request_identity_cannot_use_shared_write_default(env):
+    from motor_ai_sim import workspace as W
+    from motor_ai_sim.routes import family as F
+    own_cfg = _ws_die(env, ADMIN) / f"{CFG}.yaml"
+    with W.use_workspace(W.workspace_for_identity(ADMIN)), W.use_caller(None):
+        assert not W.is_verified_admin_request()
+        with W.use_write_layer("shared"), pytest.raises(Exception):
+            F._write_target(own_cfg)
+
+
+def test_admin_published_write_context_is_rejected_consistently(env):
+    from motor_ai_sim import auth, duty_fields, duty_results, workspace as W
+    from motor_ai_sim.routes import family as F
+    caller = auth.caller_identity(env["admin"]["Authorization"])
+    with W.use_workspace(W.workspace_for_identity(ADMIN)), W.use_caller(caller), \
+            W.use_write_layer("published"):
+        with pytest.raises(Exception, match="published-layer"):
+            duty_results.store_path()
+        with pytest.raises(Exception, match="published-layer"):
+            duty_fields.fields_dir(DIE, CFG, DUTY)
+        with pytest.raises(Exception, match="community publish"):
+            F._write_target(env["shared"] / "dies" / DIE / f"{CFG}.yaml")
 
 
 def test_a_non_admin_cannot_aim_a_write_at_the_shared_layer(env, shared_is_read_only):

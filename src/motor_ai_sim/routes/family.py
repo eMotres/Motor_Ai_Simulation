@@ -451,13 +451,18 @@ def _write_target(p: Path) -> Path:
     src_dir = Path(str(p)).parent
     layer, addressed = _classify_die_dir(src_dir)
     want = _WS.write_layer()
+    if _WS.is_verified_admin_request() and want == _WS.LAYER_PUBLISHED:
+        raise HTTPException(409, detail=(
+            "admin catalog saves go to the shared catalog; publish a copy "
+            "through the community publish action"))
     if want == _WS.LAYER_SHARED:
-        if not _WS.is_admin():
+        if not _WS.is_verified_admin_request():
             raise HTTPException(403, detail=(
                 "only an admin may write the shared catalog — drop "
                 "'?layer=shared' and the save lands in your own workspace"))
+    if _WS.is_verified_admin_request():
         plain = _WS.split_published_label(addressed or src_dir.name)[0]
-        return Path(str(_WS.shared_root())) / "dies" / plain / p.name
+        return _admin_shared_die_dir(plain, source_dir=src_dir) / p.name
     if layer == _WS.LAYER_WORKSPACE:
         return p
     return _copy_on_write(src_dir, addressed) / p.name
@@ -473,7 +478,18 @@ def _require_writable_die(die: str) -> None:
     """
     if not _ws_layering():
         return
-    if _WS.write_layer() == _WS.LAYER_SHARED and _WS.is_admin():
+    if (_WS.write_layer() == _WS.LAYER_SHARED):
+        if not _WS.is_verified_admin_request():
+            raise HTTPException(403, detail="only a verified signed-in admin may edit the shared catalog")
+        _admin_shared_die_dir(die)
+        return
+    if (_WS.is_verified_admin_request()
+            and _WS.write_layer() == _WS.LAYER_PUBLISHED):
+        raise HTTPException(409, detail=(
+            "admin catalog saves go to the shared catalog; publish a copy "
+            "through the community publish action"))
+    if _WS.is_verified_admin_request():
+        _admin_shared_die_dir(die)
         return
     lay = _die_layer(die)
     if lay == _WS.LAYER_WORKSPACE:
@@ -501,6 +517,19 @@ def _require_deletable_die(die: str, who: dict) -> str:
     lay = _die_layer(die)
     if lay == _WS.LAYER_WORKSPACE:
         return lay
+    if lay == _WS.LAYER_SHARED:
+        if _WS.is_verified_admin_request():
+            # Owner 2026-10-10: a DELETE never hides a shared die for other
+            # users.  Retiring it is its own explicit, confirmed, audited
+            # action (POST /die/{die}/retire), reversible with /restore.
+            from motor_ai_sim.api_errors import ApiError
+            raise ApiError(409, "die.retire_required", (
+                f"'{die}' is a shared catalog die — deleting it here would hide "
+                "it for every user; use 'Retire for all users' instead"),
+                params={"die": str(die)})
+        raise HTTPException(403, detail=(
+            f"'{die}' is in the shared catalog — only a verified signed-in "
+            "admin may delete it"))
     if who.get("is_admin"):
         return lay
     raise HTTPException(403, detail=(
@@ -521,8 +550,17 @@ def _ensure_writable_die(die: str) -> Path:
     d = _die_dir(die)
     if not _ws_layering():
         return d
-    if _WS.write_layer() == _WS.LAYER_SHARED and _WS.is_admin():
-        return d
+    if _WS.write_layer() == _WS.LAYER_SHARED:
+        if not _WS.is_verified_admin_request():
+            raise HTTPException(403, detail="only a verified signed-in admin may edit the shared catalog")
+        return _admin_shared_die_dir(die)
+    if (_WS.is_verified_admin_request()
+            and _WS.write_layer() == _WS.LAYER_PUBLISHED):
+        raise HTTPException(409, detail=(
+            "admin catalog saves go to the shared catalog; publish a copy "
+            "through the community publish action"))
+    if _WS.is_verified_admin_request():
+        return _admin_shared_die_dir(die)
     layer, addressed = _classify_die_dir(d)
     if layer == _WS.LAYER_WORKSPACE:
         return d
@@ -635,6 +673,10 @@ def require_catalog_write(authorization: str = Header(default=None)) -> dict:
                 "authorization": authorization}
     is_admin, user = _auth._is_admin_caller(authorization)
     if is_admin:
+        if _WS.write_layer() == _WS.LAYER_PUBLISHED:
+            raise HTTPException(409, detail=(
+                "admin catalog saves go to the shared catalog; publish a copy "
+                "through the community publish action"))
         return {"user": user or {"uid": "local-dev", "email": None,
                                  "role": "admin"},
                 "is_admin": True, "authorization": authorization}
@@ -786,7 +828,7 @@ def _save_yaml(p: Path, d: dict) -> None:
             old = p.read_bytes()
             if old != tmp.read_bytes():
                 from datetime import datetime as _dt
-                hdir = _dies_dir() / ".history" / p.parent.name
+                hdir = p.parent.parent / ".history" / p.parent.name
                 hdir.mkdir(parents=True, exist_ok=True)
                 stamp = _dt.now().strftime("%Y%m%d-%H%M%S")
                 (hdir / f"{p.stem}.{stamp}.yaml").write_bytes(old)
@@ -1100,13 +1142,42 @@ def _run_stem(duty: str) -> str:
     return f"{ascii_part}-{h}" if ascii_part else f"duty-{h}"
 
 
+def _admin_shared_die_dir(die: str, *, source_dir: Optional[Path] = None) -> Path:
+    """Target a verified admin's catalog writes at the shared die folder.
+
+    Existing workspace-only legacy motors must be migrated as a complete,
+    reviewed snapshot first; a single YAML write would create a half-shadowed
+    shared die and strand its saved results. A genuinely new die has no
+    workspace ``die.yaml`` yet and may be created directly in shared.
+    """
+    _segment_or_422(str(die), "die")
+    shared = Path(str(_WS.shared_root())) / "dies" / str(die)
+    if (shared / "die.yaml").is_file():
+        return shared
+    own = Path(source_dir) if source_dir is not None else (_dies_dir() / str(die))
+    if (own / "die.yaml").is_file():
+        raise HTTPException(
+            409,
+            detail=(f"'{die}' is still a workspace-only motor; migrate its "
+                    "complete catalog copy before saving it to the shared catalog"))
+    return shared
+
+
 def _w_die_dir(die: str) -> Path:
-    """The WORKSPACE folder of this die, whether or not it is there yet.
+    """The saved-result folder for this die, whether or not it is there yet.
 
     ``die`` is the name the API was addressed with, which for another account's
     published work is its community label — the same name ``_copy_on_write``
-    gives the copy, so a save and the sidecars it writes always land together.
+    gives the copy, so a save and its sidecars land together. Verified admin
+    requests write to the curated shared catalog; other callers stay local.
     """
+    if (_WS.is_verified_admin_request()
+            and _WS.write_layer() == _WS.LAYER_PUBLISHED):
+        raise HTTPException(409, detail=(
+            "admin catalog saves go to the shared catalog; publish a copy "
+            "through the community publish action"))
+    if _WS.is_verified_admin_request():
+        return _admin_shared_die_dir(die)
     return _dies_dir() / str(die)
 
 
@@ -1131,7 +1202,7 @@ def _under_workspace(p: Path) -> bool:
 
 
 def _runs_dir(die: str, cfg: str) -> Path:
-    """Where this die's run sidecars are WRITTEN — always the workspace."""
+    """Where this die's run sidecars are written for this request identity."""
     return _w_die_dir(die) / "runs" / cfg
 
 
@@ -1144,6 +1215,16 @@ def _run_rel(cfg: str, duty: str, drive: str) -> str:
 def _run_path(die: str, rel: str) -> Path:
     """READ path for a stored run: the workspace's own copy, else the layer the
     die was published or curated in.  Writers call :func:`_run_path_w`."""
+    if _WS.is_verified_admin_request():
+        shared = Path(str(_WS.shared_root())) / "dies" / str(die) / str(rel)
+        if shared.is_file():
+            return shared
+        # Workspace-only motors remain readable until the reviewed migration;
+        # they are never the destination of a new admin result write.
+        own = _dies_dir() / str(die) / str(rel)
+        if own.is_file():
+            return own
+        return shared
     w = _w_die_dir(die) / str(rel)
     if w.is_file() or not _ws_layering():
         return w
@@ -1427,13 +1508,18 @@ def _continuous_rating_row(coupled: Any) -> Optional[Dict[str, Any]]:
     if not isinstance(blk, dict) or not blk:
         return None
     feasible = bool(blk.get("ok", True) and blk.get("feasible", True)
-                    and blk.get("trustworthy", True))
+                    and blk.get("trustworthy", True)
+                    and blk.get("verified") is not False)
     part = str(blk.get("limiting_part") or "") or None
+    trial = (blk.get("verification_trial")
+             if isinstance(blk.get("verification_trial"), dict) else {})
     power = blk.get("power") if isinstance(blk.get("power"), dict) else {}
-    at_point = (_ttl_num((blk.get("temperatures_c") or {}).get(part))
-                if part else None)
+    at_point = (_ttl_num(trial.get("actual_c"))
+                if blk.get("verified") is False else
+                (_ttl_num((blk.get("temperatures_c") or {}).get(part))
+                 if part else None))
     limit = _ttl_num((blk.get("limits_c") or {}).get(part)) if part else None
-    torque = _ttl_num(power.get("T_em_Nm"))
+    torque = (_ttl_num(power.get("T_em_Nm")) if feasible else None)
     cooling_label = str(blk.get("cooling_label") or "") or None
     row: Dict[str, Any] = {
         "i_cont_A": _ttl_num(blk.get("I_cont_A_rms")) if feasible else None,
@@ -1454,9 +1540,22 @@ def _continuous_rating_row(coupled: Any) -> Optional[Dict[str, Any]]:
     # A refused or untrustworthy search has a sentence to print, never a
     # number — same rule as `report.continuous_rating_words`.
     if not feasible:
-        row["note"] = str((blk.get("refusal") or {}).get("error")
-                          or blk.get("headline")
-                          or "no continuous rating under this cooling")
+        if blk.get("verified") is False:
+            estimate = (_ttl_num(blk.get("I_estimated_A_rms"))
+                        or _ttl_num(blk.get("I_cont_A_rms")))
+            prefix = ("estimated %.1f A rms — " % estimate
+                      if estimate is not None else "")
+            trial_note = ("verification trial: %.1f °C of %.0f °C; "
+                          % (at_point, limit)
+                          if at_point is not None and limit is not None else "")
+            note = str(blk.get("note") or
+                       "the verification pass did not meet its temperature "
+                       "limit")
+            row["note"] = (prefix + trial_note + "NOT VERIFIED — " + note)
+        else:
+            row["note"] = str((blk.get("refusal") or {}).get("error")
+                              or blk.get("headline")
+                              or "no continuous rating under this cooling")
         return row
     head = "continuous current at the saved cooling"
     if cooling_label:
@@ -1950,6 +2049,7 @@ def tree(response: Response, authorization: str = Header(default=None)):
         v.get("visibility") == _ma.VIS_SELECTED for v in _ma.all_die_access().values())
     _key = (str(_acc["mode"]), tuple(sorted(str(x) for x in (_acc.get("dies") or ()))),
             _can_write, _client_filter, _WS.workspace().id,
+            _WS.is_verified_admin_request(),
             _acc.get("email") if _sel_present else None)
     _sig = _tree_signature(_client_filter)
     _hit = _TREE_CACHE.get(_key)
@@ -2203,10 +2303,19 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
     """
     die = _check_name(die, "die")
     _require_die_write(die, _w)
-    dd = _die_dir(die)
-    if not (dd / "die.yaml").is_file():
-        raise HTTPException(404, detail=f"die '{die}' not found")
-    lay = _require_deletable_die(die, _w)
+    # A verified admin READS shared first (2026-10-06), but deleting must not
+    # follow that order: when the admin still holds a workspace copy, the
+    # DELETE removes exactly that copy and the shared die stays for everyone
+    # (owner 2026-10-10).  Retiring the shared die is POST /die/{die}/retire.
+    own = _dies_dir() / str(die)
+    if (_ws_layering() and _WS.is_verified_admin_request()
+            and (own / "die.yaml").is_file()):
+        dd, lay = own, _WS.LAYER_WORKSPACE
+    else:
+        dd = _die_dir(die)
+        if not (dd / "die.yaml").is_file():
+            raise HTTPException(404, detail=f"die '{die}' not found")
+        lay = _require_deletable_die(die, _w)
     cfgs = [p.stem for p in dd.glob("*.yaml") if p.name != "die.yaml"]
     if cfgs and not force:
         raise HTTPException(409, detail=(
@@ -2236,11 +2345,9 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
                         "same name still exists")
         log.warning("family: die '%s' deleted (%d configuration(s) with it)",
                     die, len(cfgs))
-    elif lay == _WS.LAYER_SHARED:
-        _WS.add_tombstone(die, admin_email)
-        log.warning("family: shared die '%s' tombstoned by admin %s "
-                    "(%d configuration(s) hidden with it)",
-                    die, admin_email or "?", len(cfgs))
+    elif lay == _WS.LAYER_SHARED:                       # pragma: no cover
+        # _require_deletable_die refuses a shared die (die.retire_required).
+        raise HTTPException(409, detail="use 'Retire for all users'")
     else:  # LAYER_PUBLISHED
         import shutil as _sh
         import time as _time
@@ -2256,6 +2363,112 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
     if note:
         out["note"] = note
     return out
+
+
+# ── retire a SHARED die for every user (owner 2026-10-10) ────────────────────
+# Separate from DELETE on purpose: it changes what every account sees.  The
+# web asks for confirmation naming the die and how many accounts can see it;
+# the request repeats the die name.  Reversible (a tombstone: nothing on disk
+# is touched) and written to the admin audit log both ways.
+
+class DieRetire(BaseModel):
+    confirm: str = ""
+
+
+def _require_verified_admin(_w: dict) -> str:
+    if not _WS.is_verified_admin_request():
+        raise HTTPException(403, detail=(
+            "only a verified signed-in admin may retire or restore a shared die"))
+    return str((_w.get("user") or {}).get("email") or "").strip().lower()
+
+
+def _shared_die_dir(die: str) -> Path:
+    return Path(str(_WS.shared_root())) / "dies" / str(die)
+
+
+def die_audience_count(die: str) -> int:
+    """How many enabled accounts can see this die right now: admins, accounts
+    with an ``all`` grant, the die in their effective grant list, or the die's
+    own public / selected-clients visibility."""
+    from motor_ai_sim import users as _U
+    from motor_ai_sim import motor_access as _MA
+    everyone = _MA.grant_all_registered()
+    n = 0
+    for row in _U.list_users():
+        email = str(row.get("email") or "").strip().lower()
+        if not email or row.get("disabled"):
+            continue
+        if (everyone or email in _auth._ADMIN_EMAILS
+                or str(row.get("role") or "") == "admin"):
+            n += 1
+            continue
+        g = _U.get_motor_grants(email)
+        access = {"mode": (_MA.MODE_ALL if g.get("all") else _MA.MODE_GRANTED),
+                  "dies": frozenset(g.get("dies") or []), "email": email,
+                  "is_admin": False}
+        if _MA.may_see_die(access, str(die)):
+            n += 1
+    return n
+
+
+@router.get("/die/{die}/audience")
+def die_audience(die: str, _w: dict = Depends(require_catalog_write)):
+    """What the Retire dialog names: the die, whether it is shared or
+    retired, and how many accounts can see it."""
+    die = _check_name(die, "die")
+    _require_verified_admin(_w)
+    shared = (_shared_die_dir(die) / "die.yaml").is_file()
+    return {"die": die, "shared": shared,
+            "retired": _WS.is_tombstoned(die),
+            "users": die_audience_count(die) if shared else 0}
+
+
+@router.post("/die/{die}/retire")
+def retire_die(die: str, req: DieRetire,
+               _w: dict = Depends(require_catalog_write)):
+    """Hide a shared die for every user.  Reversible with ``/restore``."""
+    from motor_ai_sim import admin_audit as _AA
+    die = _check_name(die, "die")
+    admin_email = _require_verified_admin(_w)
+    if not (_shared_die_dir(die) / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"'{die}' is not a shared catalog die")
+    if str(req.confirm or "").strip() != die:
+        raise HTTPException(422, detail=(
+            f"repeat the die name '{die}' to confirm retiring it for all users"))
+    users = die_audience_count(die)
+    cfgs = sorted(p.stem for p in _shared_die_dir(die).glob("*.yaml")
+                  if p.name != "die.yaml")
+    _WS.add_tombstone(die, admin_email)
+    _AA.record(admin_email or "local-dev", "die.retire", die,
+               details={"users": users, "configurations": cfgs})
+    log.warning("family: shared die '%s' retired for all users by admin %s "
+                "(%d account(s) could see it)", die, admin_email or "?", users)
+    return {"ok": True, "die": die, "layer": _WS.LAYER_SHARED,
+            "retired": True, "users": users}
+
+
+@router.post("/die/{die}/restore")
+def restore_die(die: str, _w: dict = Depends(require_catalog_write)):
+    """Undo :func:`retire_die` — the die reappears for everyone."""
+    from motor_ai_sim import admin_audit as _AA
+    die = _check_name(die, "die")
+    admin_email = _require_verified_admin(_w)
+    if not _WS.remove_tombstone(die):
+        raise HTTPException(404, detail=f"'{die}' is not retired")
+    _AA.record(admin_email or "local-dev", "die.restore", die)
+    log.warning("family: shared die '%s' restored by admin %s", die,
+                admin_email or "?")
+    return {"ok": True, "die": die, "retired": False}
+
+
+@router.get("/retired")
+def retired_dies(_w: dict = Depends(require_catalog_write)):
+    """The shared dies an admin has retired, for the Restore list."""
+    _require_verified_admin(_w)
+    data = _WS._load_tombstones()
+    return {"dies": [{"die": k, "by": (v or {}).get("by", ""),
+                      "at": (v or {}).get("at", "")}
+                     for k, v in sorted(data.items())]}
 
 
 # ── configuration ────────────────────────────────────────────────────────────
@@ -2422,6 +2635,11 @@ def duplicate_die(die: str, req: DieDuplicate,
     if not (src_dir / "die.yaml").is_file():
         raise HTTPException(404, detail=f"die '{die}' not found")
     dst_dir = _die_dir(new)
+    if _WS.is_verified_admin_request():
+        # A new die has no resolved layer yet, so _die_dir(new) names the
+        # workspace fallback.  Admin definitions and their recorded runs must
+        # be created together in the shared catalog.
+        dst_dir = _admin_shared_die_dir(new, source_dir=dst_dir)
     if (dst_dir / "die.yaml").exists():
         raise HTTPException(409, detail=f"die '{new}' already exists")
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -5128,7 +5346,7 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
 # a result stamped on a different build shows the mismatch like any stale row.
 
 def _hist_dir(die: str) -> Path:
-    return _dies_dir() / ".history" / die
+    return _die_dir(die).parent / ".history" / die
 
 
 def _hist_stem(die: str, cfg: Optional[str]) -> str:

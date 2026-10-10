@@ -125,6 +125,10 @@ def test_presets_are_the_dies_configurations_one_each_never_a_fixed_list():
     k = out[0]["knobs"]
     assert (k["L_mm"], k["N"], k["wireH_mm"], k["nP"], k["split"]) == (30, 6, 0.5, 1, 1)
     assert (k["I_A"], k["rpm"]) == (55, 7000) and out[0]["duty"] == "rated"      # the "rated" duty
+    assert out[0]["duty_points"] == [
+        {"name": "peak", "current_A": 70.0, "rpm": 9000.0},
+        {"name": "rated", "current_A": 55.0, "rpm": 7000.0},
+    ]
     assert out[0]["battery"]["cells"] == 6 and out[0]["battery"]["v_max"] == 25.2
 
     three = [_cfg("B", 20, 8, 0.45, 2, [("peak", 25000, 80)], S12),
@@ -160,7 +164,7 @@ def test_the_context_route_lists_the_dies_presets_and_their_own_variants(tmp_pat
     monkeypatch.setattr(cat_mod, "_CATALOG_PATH", p)
     monkeypatch.setattr(cat_mod, "_family_doc_of_motor", lambda m, g=None: {"die": "CIANO14 40 new", "name": "L12"})
     docs = [_cfg("L20", 20, 8, 0.45, 2, [("peak", 25000, 80.6)], S12, die="CIANO14 40 new"),
-            _cfg("L12", 12, 7, 0.6, 1, [("rated", 13000, 42.78)], S6, die="CIANO14 40 new")]
+            _cfg("L12", 12, 7, 0.6, 1, [("peak", 14400, 48.79), ("rated", 13000, 42.78)], S6, die="CIANO14 40 new")]
     monkeypatch.setattr(cat_mod, "_die_docs_of", lambda fam: (docs, {"wire_split": 1}))
     app = FastAPI()
     app.include_router(cat_mod.router)
@@ -172,6 +176,11 @@ def test_the_context_route_lists_the_dies_presets_and_their_own_variants(tmp_pat
     assert all(v["build"]["length_mm"] == 20.0 for v in pr[1]["pwm_variants"])
     assert pr[0]["drive_variant"] == "si_48k" and pr[0]["battery"]["cells"] == 6
     assert pr[1]["battery"]["cells"] == 12 and pr[1]["knobs"]["nP"] == 2
+    assert pr[0]["duty_points"] == [
+        {"name": "peak", "current_A": 48.79, "rpm": 14400.0},
+        {"name": "rated", "current_A": 42.78, "rpm": 13000.0},
+    ]
+    assert pr[0]["knobs"]["rpm"] == 13000.0 and pr[0]["duty"] == "rated"
 
 
 @pytest.mark.parametrize("n_cfg", [1, 3])

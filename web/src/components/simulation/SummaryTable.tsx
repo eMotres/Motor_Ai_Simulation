@@ -1285,6 +1285,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           <Cell label={tx('continuousRating')}
             value={continuousRatingLine(s.coupling) as string}
             accent={s.coupling.continuous_rating.ok
+                    && s.coupling.continuous_rating.verified === true
                     && s.coupling.continuous_rating.feasible !== false
                     && s.coupling.continuous_rating.trustworthy !== false
                     ? 'green' : 'amber'}

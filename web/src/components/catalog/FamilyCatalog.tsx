@@ -22,10 +22,8 @@ import BatteryDialog, { type BatteryValue } from './BatteryDialog';
 import ConfigHistoryDialog from './ConfigHistoryDialog';
 import { dutyCycleChip } from '../../lib/dutySettings';
 import { gatedDutyCycleChip } from '../../lib/dutyCycleFlag';
-import { timeToLimitChip, timeToLimitChipTip, type DutyTimeToLimit }
-  from '../../lib/timeToLimitChip';
-import { continuousRatingChip, continuousRatingChipTip,
-  type DutyContinuousRating } from '../../lib/continuousRatingChip';
+import type { DutyTimeToLimit } from '../../lib/timeToLimitChip';
+import type { DutyContinuousRating } from '../../lib/continuousRatingChip';
 import { driveLabel } from '../../lib/dutyRuns';
 // The WHOLE load — the server half (owner) and the local half the follower in
 // ActiveFamilyStrip shares (lib/dutyLocalApply, lib/familyFollow) — lives in
@@ -49,6 +47,36 @@ import { CardBadge, CardSummary } from '../common/CardBadge';
 const tx = nsT('motors');
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
+
+// FamilyCatalog can be mounted once per stator diameter. Keep one browser-side
+// refresh timer and let the shared familyTree memo coalesce those subscribers
+// into one request, so an admin's newly saved shared motor appears without a
+// reload while already-open Configure state is left untouched.
+const familyCatalogRefreshers = new Set<() => void>();
+let familyCatalogRefreshTimer: number | null = null;
+let familyCatalogRefreshInProgress = false;
+function subscribeFamilyCatalogRefresh(refresh: () => void): () => void {
+  familyCatalogRefreshers.add(refresh);
+  if (familyCatalogRefreshTimer === null) {
+    familyCatalogRefreshTimer = window.setInterval(() => {
+      if (!pageVisible() || familyCatalogRefreshInProgress) return;
+      familyCatalogRefreshInProgress = true;
+      void fetchFamilyTree({ fresh: true }).then(() => {
+        window.dispatchEvent(new Event('family-catalog-refreshed'));
+        for (const subscriber of familyCatalogRefreshers) subscriber();
+      }).catch(() => {
+        for (const subscriber of familyCatalogRefreshers) subscriber();
+      }).finally(() => { familyCatalogRefreshInProgress = false; });
+    }, 5000);
+  }
+  return () => {
+    familyCatalogRefreshers.delete(refresh);
+    if (!familyCatalogRefreshers.size && familyCatalogRefreshTimer !== null) {
+      window.clearInterval(familyCatalogRefreshTimer);
+      familyCatalogRefreshTimer = null;
+    }
+  };
+}
 
 interface DutyResult {
   efficiency_pct?: number; ripple_pct?: number; v_ll_peak_v?: number;
@@ -252,6 +280,9 @@ const FamilyCatalog: React.FC<{
     }
   };
   useEffect(() => { load(); }, []);
+  // Other sessions may have updated the shared catalog. Poll while visible;
+  // the tree refresh changes this catalog view only and never applies geometry.
+  useEffect(() => subscribeFamilyCatalogRefresh(() => { void load(); }), []);
   // Failed load (backend restarting / briefly unreachable): retry every 3 s
   // until it answers — the catalog reappears by itself, no manual F5 needed.
   useEffect(() => {
@@ -450,12 +481,15 @@ const FamilyCatalog: React.FC<{
     // sentence.  A non-admin who tries anyway gets the backend's own 403
     // detail below, not a silent nothing (live 2026-09-24: two 403s in the
     // server log and no visible reason in the UI).
-    const wide = die.layer === 'shared' ? 'the shared catalog for every user'
-      : die.layer === 'published' ? 'the published catalog for everyone who sees it'
+    // 2026-10-10 (owner): a DELETE never hides a SHARED die for other users —
+    // it removes only this workspace's own copy; "Retire for all users" is the
+    // separate action below.
+    const wide = die.layer === 'published' ? 'the published catalog for everyone who sees it'
       : null;
     setAskConfirm({
       title: `Delete die '${name}'?`,
-      body: (wide ? `Removes it from ${wide}. ` : '')
+      body: (die.layer === 'shared' ? `${tx('deleteSharedDieBody')} ` : '')
+        + (wide ? `Removes it from ${wide}. ` : '')
         + 'An empty die is removed at once; a die that still has configurations asks once more.',
       onConfirm: () => {
         void (async () => {
@@ -468,6 +502,10 @@ const FamilyCatalog: React.FC<{
               const note = data?.note ? ` (${data.note})` : '';
               setMsg(`✓ die '${name}' deleted${note}`);
               window.dispatchEvent(new CustomEvent('family-changed'));
+              return;
+            }
+            if (data?.code === 'die.retire_required') {
+              setMsg(`✗ ${tx('retireRequired', { die: name })}`);
               return;
             }
             if (r.status !== 409) {
@@ -497,6 +535,44 @@ const FamilyCatalog: React.FC<{
         })();
       },
     });
+  };
+  // "Retire for all users" — admin only, shared dies only.  The dialog names
+  // the die and how many accounts can see it; the request repeats the name.
+  const retireDie = (name: string) => {
+    void (async () => {
+      let users: number | null = null;
+      try {
+        const r = await fetch(`${API}/api/family/die/${encodeURIComponent(name)}/audience`);
+        if (r.ok) users = Number((await r.json())?.users ?? 0);
+      } catch { /* the dialog still opens; the count reads unknown */ }
+      setAskConfirm({
+        title: tx('retireDieTitle', { die: name }),
+        body: users == null ? tx('retireDieBodyUnknown', { die: name })
+          : tx('retireDieBody', { die: name, n: users }),
+        confirmLabel: tx('retireDieConfirm'),
+        onConfirm: () => mutate(tx('retireDieDone', { die: name }),
+          () => post(`/api/family/die/${encodeURIComponent(name)}/retire`, { confirm: name })),
+      });
+    })();
+  };
+  const restoreRetired = () => {
+    void (async () => {
+      let names: string[] = [];
+      try {
+        const r = await fetch(`${API}/api/family/retired`);
+        if (r.ok) names = ((await r.json())?.dies ?? []).map((d: { die: string }) => d.die);
+      } catch { /* empty list below */ }
+      if (!names.length) { setMsg(tx('retiredNone')); return; }
+      setAskText({
+        title: tx('restoreRetiredTitle'),
+        label: tx('restoreRetiredLabel'),
+        initial: names[0],
+        hint: tx('restoreRetiredHint', { names: names.join(', ') }),
+        okLabel: tx('restoreRetiredOk'),
+        onSubmit: (name) => mutate(tx('restoreRetiredDone', { die: name }),
+          () => post(`/api/family/die/${encodeURIComponent(name)}/restore`, {})),
+      });
+    })();
   };
   const renameDie = (die: string) => setAskText({
     title: `Rename die '${die}'`,
@@ -728,6 +804,18 @@ const FamilyCatalog: React.FC<{
                 </span>
               </Tooltip>
             )}
+            {canWrite && isAdmin && die.layer === 'shared' && (
+              <Tooltip title={tx('retireDieTip')}>
+                <span>
+                  <Button size="small" disabled={!!busy}
+                    onClick={() => retireDie(die.name)}
+                    sx={{ fontSize: 12, py: 0, px: 0.6, minWidth: 0,
+                          textTransform: 'none', color: '#f87171' }}>
+                    {tx('retireDieButton')}
+                  </Button>
+                </span>
+              </Tooltip>
+            )}
           </Box>
 
           {die.configs.map(c => (
@@ -835,8 +923,8 @@ const FamilyCatalog: React.FC<{
                     </Typography>
                   </Tooltip>
                 )}
-                {(c.duties?.length ?? 0) > 1 && (
-                  <Tooltip title="Which duty's field maps go into the report — |B|, A_z, losses, temperature, stress, mode shapes. 'auto' is the backend's rule: the duty named rated, else the one loaded in the editor. Only a duty with stored fields can be drawn from; one without falls back to auto.">
+                {(c.duties?.length ?? 0) > 2 && (
+                  <Tooltip title={tx('picturesDutyTip')}>
                     <select
                       value={picFor(die.name, c.name)}
                       onChange={(e) => setPicFor(die.name, c.name, e.target.value)}
@@ -846,7 +934,7 @@ const FamilyCatalog: React.FC<{
                                maxWidth: 150 }}>
                       <option value="">{tx('picturesAuto')}</option>
                       {(c.duties ?? []).map((d) => (
-                        <option key={d.name} value={d.name}>pictures: {d.name}</option>
+                        <option key={d.name} value={d.name}>{tx('picturesDuty', { duty: d.name })}</option>
                       ))}
                     </select>
                   </Tooltip>
@@ -945,14 +1033,24 @@ const FamilyCatalog: React.FC<{
               {c.duties.length > 0 && (
                 <Box component="table" sx={{
                   width: '100%', mt: 0.4, mb: 0.4, borderCollapse: 'collapse',
+                  tableLayout: 'fixed',
                   '& th': { fontSize: 10, fontWeight: 600, color: 'var(--text-4)',
                             textAlign: 'right', p: '2px 6px', whiteSpace: 'nowrap' },
                   '& td': { fontSize: 11.5, color: 'var(--text-2)', textAlign: 'right',
                             p: '2px 6px', whiteSpace: 'nowrap',
+                            overflow: 'hidden', textOverflow: 'ellipsis',
                             fontVariantNumeric: 'tabular-nums',
                             borderTop: '1px solid var(--panel)' },
                   '& th:first-of-type, & td:first-of-type': { textAlign: 'left' },
                 }}>
+                  <colgroup>
+                    <col style={{ width: '22%' }} /><col style={{ width: '6%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '7%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '8%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '8%' }} />
+                    <col style={{ width: '8%' }} /><col style={{ width: '6%' }} />
+                    <col style={{ width: '6%' }} /><col style={{ width: '11%' }} />
+                  </colgroup>
                   <thead>
                     <tr>
                       <th>{tx('duty')}</th><th>kW</th><th>Nm</th><th>rpm</th>
@@ -1034,42 +1132,6 @@ const FamilyCatalog: React.FC<{
                                   color: '#a78bfa', border: '1px solid #a78bfa55',
                                 }}>
                                   {gatedDutyCycleChip(dutyCycleChip(d.duty_cycle))}
-                                </span>
-                              </Tooltip>
-                            )}
-                            {/* HOW LONG MAY IT RUN (owner 2026-09-17).  A point
-                                the coupled loop found past a limit gets the
-                                other half of the answer right here, where the
-                                reader is when they ask whether they may pull
-                                it.  NOT gated by the duty-cycle flag — this is
-                                not a cycle — and absent entirely on a point
-                                inside every limit (`lib/timeToLimitChip`). */}
-                            {timeToLimitChip(d.time_to_limit) && (
-                              <Tooltip key="ttl" placement="top"
-                                title={timeToLimitChipTip(d.time_to_limit)}>
-                                <span style={{
-                                  marginLeft: 5, fontSize: 9.5, padding: '0 4px',
-                                  borderRadius: 3, cursor: 'help', fontWeight: 600,
-                                  color: '#f59e0b', border: '1px solid #f59e0b88',
-                                }}>
-                                  {timeToLimitChip(d.time_to_limit)}
-                                </span>
-                              </Tooltip>
-                            )}
-                            {/* THE CONTINUOUS (S1) RATING (owner 2026-09-21) —
-                                the other chip beside it, same presence rule and
-                                same data path: absent entirely on a duty that
-                                never asked `solve_to: continuous`
-                                (`lib/continuousRatingChip`). */}
-                            {continuousRatingChip(d.continuous_rating) && (
-                              <Tooltip key="cr" placement="top"
-                                title={continuousRatingChipTip(d.continuous_rating)}>
-                                <span style={{
-                                  marginLeft: 5, fontSize: 9.5, padding: '0 4px',
-                                  borderRadius: 3, cursor: 'help', fontWeight: 600,
-                                  color: '#34d399', border: '1px solid #34d39988',
-                                }}>
-                                  {continuousRatingChip(d.continuous_rating)}
                                 </span>
                               </Tooltip>
                             )}
@@ -1248,6 +1310,14 @@ const FamilyCatalog: React.FC<{
             sx={{ textTransform: 'none', fontSize: 11 }}>
             ＋ die from current geometry
           </Button>
+        )}
+        {canWrite && isAdmin && (
+          <Tooltip title={tx('restoreRetiredTip')}>
+            <Button size="small" variant="text" onClick={restoreRetired}
+              sx={{ textTransform: 'none', fontSize: 12 }}>
+              {tx('restoreRetiredButton')}
+            </Button>
+          </Tooltip>
         )}
       {histOf && (
         <ConfigHistoryDialog open onClose={() => setHistOf(null)}

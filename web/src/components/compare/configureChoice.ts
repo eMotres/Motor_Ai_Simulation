@@ -8,10 +8,25 @@
 
 export const CONFIGURE_REFID_LS = 'configurator.refId.v1';
 
+export function configureRefIdKey(email?: string | null): string {
+  const normalized = email?.trim().toLowerCase();
+  return normalized
+    ? `${CONFIGURE_REFID_LS}.user.${encodeURIComponent(normalized)}`
+    : CONFIGURE_REFID_LS;
+}
+
+export function readConfigureRefId(email?: string | null): string | null {
+  try { return localStorage.getItem(configureRefIdKey(email)); } catch { return null; }
+}
+
+export function writeConfigureRefId(email: string | null | undefined, refId: string): void {
+  try { localStorage.setItem(configureRefIdKey(email), refId); } catch { /* private mode */ }
+}
+
 /** PURE: is this stored reference id a catalogue machine the user picked? */
 export const isOwnChoice = (stored: string | null | undefined): boolean =>
   typeof stored === 'string' && stored.startsWith('cat:');
 
-export function hasOwnConfigureChoice(): boolean {
-  try { return isOwnChoice(localStorage.getItem(CONFIGURE_REFID_LS)); } catch { return false; }
+export function hasOwnConfigureChoice(email?: string | null): boolean {
+  return isOwnChoice(readConfigureRefId(email));
 }

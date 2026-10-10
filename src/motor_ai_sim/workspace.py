@@ -956,17 +956,21 @@ def _ws_dies_dir() -> Path:
     return root() / "dies"
 
 
-def layers() -> list:
-    """``[workspace, published…, shared]`` — the read-through order.
+def layers(prefer_shared: Optional[bool] = None) -> list:
+    """Read-through order, normally ``[workspace, published…, shared]``.
 
     The published layer expands to ONE entry per owner namespace, because that
     is what a namespace is: ``published/<ws_id>/`` is a whole little catalog of
     its own.  The caller's own namespace comes first among them, so publishing
     a die and then editing it still reads your copy before anyone else's.
+
+    A verified signed-in admin reads the curated shared catalog first.  Their
+    old workspace copies remain as a fallback for migration; an explicit
+    ``False`` keeps maintenance/tests on the historical workspace-first order.
     """
-    out = [Layer(LAYER_WORKSPACE, _ws_dies_dir())]
+    ws_layer = Layer(LAYER_WORKSPACE, _ws_dies_dir())
     if not layering():
-        return out
+        return [ws_layer]
     ws = workspace()
     pub = published_root()
     try:
@@ -974,10 +978,14 @@ def layers() -> list:
     except OSError:
         owners = []
     mine = [d for d in owners if d.name == ws.id]
-    for d in mine + [d for d in owners if d.name != ws.id]:
-        out.append(Layer(LAYER_PUBLISHED, d, owner=_owner_email(d),
-                         owner_id=d.name))
-    out.append(Layer(LAYER_SHARED, Path(str(shared_root())) / "dies"))
+    published = [Layer(LAYER_PUBLISHED, d, owner=_owner_email(d),
+                       owner_id=d.name)
+                 for d in mine + [d for d in owners if d.name != ws.id]]
+    shared = Layer(LAYER_SHARED, Path(str(shared_root())) / "dies")
+    if prefer_shared is None:
+        prefer_shared = is_verified_admin_request()
+    out = ([shared, ws_layer, *published] if prefer_shared
+           else [ws_layer, *published, shared])
     out.extend(source_layers())
     return out
 
@@ -1053,7 +1061,7 @@ def split_published_label(label: str) -> tuple:
     return (s[:i], s[i + len(_BY):]) if i > 0 else (s, "")
 
 
-def iter_dies() -> list:
+def iter_dies(*, prefer_shared: Optional[bool] = None) -> list:
     """Every die this call can SEE, deduplicated, tagged with its layer.
 
     ``[{"name", "die", "dir", "layer", "owner", "owner_id"}]`` — ``die`` is the
@@ -1068,7 +1076,7 @@ def iter_dies() -> list:
     ws = workspace()
     tomb = _load_tombstones()          # one read, not one per shared die
     rule = _catalog_rule()
-    for lay in layers():
+    for lay in layers(prefer_shared=prefer_shared):
         try:
             entries = sorted(lay.dies_dir.iterdir())
         except OSError:
@@ -1091,8 +1099,8 @@ def iter_dies() -> list:
     return [seen[k] for k in sorted(seen)]
 
 
-def resolve_die_dir(die: str):
-    """Where the named die is READ from — workspace, then published, then shared.
+def resolve_die_dir(die: str, *, prefer_shared: Optional[bool] = None):
+    """Where the named die is READ from, honoring the caller's layer order.
 
     ``None`` when no layer has it.  The caller decides what "nowhere" means: the
     catalog's own readers keep pointing at the workspace path, so a 404 still
@@ -1102,7 +1110,7 @@ def resolve_die_dir(die: str):
     ws = workspace()
     base, by = split_published_label(want)
     rule = _catalog_rule()
-    for lay in layers():
+    for lay in layers(prefer_shared=prefer_shared):
         if lay.name == LAYER_PUBLISHED and lay.owner_id != ws.id:
             # Another account's namespace answers to the decorated label only —
             # otherwise B's "CIANO28 85" would silently become A's.
@@ -1148,7 +1156,7 @@ def _contained(cand: Path, base: Path) -> bool:
     return True
 
 
-def source_die_dir(die: str):
+def source_die_dir(die: str, *, prefer_shared: Optional[bool] = None):
     """The published/shared folder this die ALSO lives in, or ``None``.
 
     Where a read falls THROUGH to.  Deliberately not ``resolve_die_dir``: after
@@ -1161,7 +1169,7 @@ def source_die_dir(die: str):
     ws = workspace()
     rule = _catalog_rule()
     base, by = split_published_label(str(die))
-    for lay in layers():
+    for lay in layers(prefer_shared=prefer_shared):
         if lay.name == LAYER_WORKSPACE:
             continue
         if lay.name == LAYER_PUBLISHED and lay.owner_id != ws.id:
@@ -1204,6 +1212,28 @@ _CALLER: "ContextVar[Optional[Dict[str, Any]]]" = ContextVar(
 def caller() -> Optional[Dict[str, Any]]:
     """``auth.caller_identity``'s answer for this request, or ``None``."""
     return _CALLER.get()
+
+
+def is_verified_admin_request() -> bool:
+    """True only for a verified, named admin in the current request context.
+
+    Unlike :func:`is_admin`, this never resolves a credential-less fallback.
+    Shared catalog writes must not inherit the process owner's local-dev admin
+    identity when called from a CLI, an anonymous request, or a test without an
+    explicitly bound caller.
+    """
+    if not layering():
+        return False
+    who = _CALLER.get()
+    if not isinstance(who, dict):
+        return False
+    ident = str(who.get("id") or "").strip()
+    try:
+        from motor_ai_sim.auth import ADMIN_OWNER, ANON_OWNER
+    except Exception:  # noqa: BLE001 — fail closed
+        return False
+    return bool(ident and ident not in (ADMIN_OWNER, ANON_OWNER)
+                and who.get("is_admin"))
 
 
 def is_admin(identity=None) -> bool:

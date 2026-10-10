@@ -105,6 +105,11 @@ export interface ThermalRequest {
   ambient_temp: number;
   h_conv?: number;
   air_speed_mps?: number;
+  /** The backend derives this from the request's RPM when set to propeller. */
+  air_speed_source?: 'manual' | 'propeller';
+  propeller_id?: string;
+  /** Account + selected die/config/reference identity bound to that propeller. */
+  propeller_context_key?: string;
   fluid?: string;
   /** coolant INLET, °C.  There is no outlet input: the outlet is a result of
    *  the flow below (2026-09-07). */

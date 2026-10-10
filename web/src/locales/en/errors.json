@@ -42,5 +42,8 @@
   },
   "prefs": {
     "locale_unsupported": "Unsupported language {locale}; one of {supported}."
+  },
+  "die": {
+    "retire_required": "‘{die}’ is a shared die: deleting it would hide it for every user. Use Retire for all users."
   }
 }

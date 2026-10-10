@@ -78,6 +78,10 @@ src/cadquery_cache/
 
 # Local-only
 .scratch/
+# Raw agent run evidence (Codex scratch_s1_* etc.) stays out of git: archive it
+# on the server and commit only a manifest (docs/data/*_MANIFEST.md).  The
+# already-tracked scratch_perf/ is unaffected.
+scratch_*/
 logfile_uv*.txt
 
 # Nightly tickets agent — plain-text reports written to the local machine

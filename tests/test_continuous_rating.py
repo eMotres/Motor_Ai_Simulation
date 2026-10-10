@@ -284,6 +284,22 @@ def test_a_map_that_gets_colder_with_more_copper_stops_the_loop(caps):
     assert ccr.headline(out).startswith("NOT A RATING")
 
 
+def test_an_explicit_failed_verification_is_not_a_positive_headline():
+    # Pure network estimates omit `verified` and remain valid estimates before
+    # the route's physical check.  Once the route stamps False, the sentence
+    # must no longer claim a continuous S1 rating.
+    estimate = {"feasible": True, "trustworthy": True,
+                "I_cont_A_rms": 30.0, "limiting_part": "magnet",
+                "limits_c": {"magnet": 150.0},
+                "power": {"P_shaft_W": 1000.0}}
+    assert ccr.headline(estimate).startswith("30.0 A rms continuously")
+    failed = {**estimate, "verified": False,
+              "note": "still 6.1 K over its limit after 2 verification passes"}
+    line = ccr.headline(failed)
+    assert line.startswith("NOT VERIFIED")
+    assert "6.1 K over" in line
+
+
 def test_without_a_resolve_callback_the_answer_says_so(caps):
     out = ccr.rate(thermal_result=_linear_map(float(RATED_MAP["P_cu_exact_W"])),
                    em_summary=RATED_SUMMARY, caps=caps,
@@ -323,6 +339,27 @@ def test_a_mode_only_gets_the_parameters_it_reads():
          "bore_mode": "none"})
     assert "flow_lpm" not in air and "fluid" not in air
     assert air["air_speed_mps"] == 10.0
+
+
+def test_propeller_air_source_survives_condition_merge_as_request_provenance():
+    defaults = {"cooling_mode": "air", "ambient_temp": 25.0,
+                "air_speed_mps": 0.0, "air_speed_source": "propeller",
+                "propeller_id": "G32x11", "propeller_position": "behind_hub",
+                "bore_mode": "none"}
+    got = ccr.Condition("assigned propeller", {}).merged(defaults)
+    assert got == {k: v for k, v in defaults.items() if k != "air_speed_mps"}
+
+
+def test_manual_air_condition_keeps_legacy_shape_and_drops_propeller_provenance():
+    defaults = {"cooling_mode": "air", "ambient_temp": 25.0,
+                "air_speed_mps": 8.0, "bore_mode": "none",
+                "air_speed_source": "propeller", "propeller_id": "old-id",
+                "propeller_position": "behind_hub"}
+    got = ccr.Condition("manual airflow", {
+        "air_speed_source": "manual", "air_speed_mps": 8.0,
+    }).merged(defaults)
+    assert got == {"cooling_mode": "air", "ambient_temp": 25.0,
+                   "air_speed_mps": 8.0, "bore_mode": "none"}
 
 
 def test_the_saved_cooling_is_read_back_out_of_a_duty_s_thermal_block():

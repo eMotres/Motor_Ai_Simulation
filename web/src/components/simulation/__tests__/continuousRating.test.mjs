@@ -4,9 +4,8 @@
 // own saved cooling (S1).
 //
 // The repo's convention for node tests: `node --test` cannot load the TS
-// modules, so the pure functions under test are re-stated here verbatim and
-// kept in sync — see couplingLine.test.mjs / timeToLimit.test.mjs, which do
-// the same for the same reason.
+// modules directly. The S1 display functions are transpiled from production
+// source by continuousRatingSource.mjs, rather than mirrored here.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -14,65 +13,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { uiForms, indexOfUi, hasUi } from '../../../i18n/__tests__/uiText.mjs';
 
-// ── verbatim from coupledApi.ts ───────────────────────────────────────────
-function continuousRatingLine(c) {
-  const r = c?.continuous_rating;
-  if (!r) return null;
-  if (r.trustworthy === false) {
-    const why = r.notes?.find(n => n.startsWith('THE 2-D')
-                                  || n.startsWith('CONTRADICTS'))
-      ?? r.note ?? 'the map could not be iterated';
-    return `S1: NOT A RATING — ${why}`;
-  }
-  if (!r.ok || r.feasible === false || r.I_cont_A_rms == null) {
-    return `S1: ${r.refusal?.error ?? r.note ?? 'no continuous rating under '
-      + 'this cooling'}`;
-  }
-  const parts = [`${r.I_cont_A_rms.toFixed(1)} A rms`];
-  if (r.limiting_part) {
-    const lim = r.limits_c?.[r.limiting_part];
-    parts.push(`limited by ${r.limiting_part}`
-      + (lim == null ? '' : ` ${Math.round(lim)} °C`));
-    if (r.verified === true) {
-      const actual = r.temperatures_c?.[r.limiting_part];
-      parts.push(`FEM-verified${actual == null ? ''
-        : ` (${r.limiting_part} ${actual.toFixed(1)} °C)`}`);
-    } else if (r.verified === false) {
-      parts.push(`estimate, not verified (${r.note ?? 'see the tooltip'})`);
-    }
-  }
-  return `S1: ${parts.join(' · ')}`;
-}
-
-function continuousRatingTip(c) {
-  const r = c?.continuous_rating;
-  if (!r) return '';
-  const rows = (r.parts ?? []).map(p => {
-    const q = p.quantity_c != null ? `${p.quantity_c.toFixed(1)} °C` : '—';
-    const lim = p.limit_c != null ? ` / ${p.limit_c} °C` : '';
-    return `· ${p.quantity ?? p.part}: ${q}${lim}`;
-  });
-  return [
-    r.headline ?? '',
-    r.cooling_label ? `Cooling: ${r.cooling_label}.` : '',
-    'Largest current the machine holds for ever at this cooling: torque '
-    + 'scaled linearly with current, iron and magnet losses held at the '
-    + 'solved point.',
-    ...rows,
-    r.trustworthy === false
-      ? (r.notes?.find(n => n.startsWith('THE 2-D')) ?? '') : '',
-  ].filter(Boolean).join('\n');
-}
-
-function s1ResultsAtLine(c) {
-  const r = c?.continuous_rating;
-  if (!r || r.record_is_s1 !== true) return null;
-  const i = r.I_cont_A_rms;
-  const iSet = r.duty_point?.I_phase_rms_A;
-  if (i == null || iSet == null) return null;
-  return `Results at the continuous current ${i.toFixed(1)} A rms `
-    + `(setpoint ${iSet.toFixed(2)} A rms)`;
-}
+import { continuousRatingLine, continuousRatingTip, s1ResultsAtLine } from './continuousRatingSource.mjs';
 
 const API = 'http://localhost:8001';
 function applyS1AsOperatingPoint(i_A_rms) {
@@ -135,9 +76,8 @@ test('an unverified rating names why, never silently prints a bare current', () 
     note: 'still 12.3 K over its limit after 2 verification pass(es) — the '
          + 'last verified state stands' } };
   assert.equal(continuousRatingLine(unverified),
-    'S1: 34.4 A rms · limited by magnet 150 °C · estimate, not verified '
-    + '(still 12.3 K over its limit after 2 verification pass(es) — the '
-    + 'last verified state stands)');
+    'S1: NOT VERIFIED — still 12.3 K over its limit after 2 verification '
+    + 'pass(es) — the last verified state stands');
 });
 
 test('nothing to say when the answer was not asked for', () => {
@@ -248,7 +188,7 @@ test('the summary card reads continuous_rating off the coupling block, not a new
 // setpoint, with nothing on screen saying so.
 
 test('the header line names both currents, only once the record IS s1', () => {
-  const verified = { continuous_rating: { ...RATING, record_is_s1: true,
+  const verified = { continuous_rating: { ...RATING, record_is_s1: true, verified: true,
     I_cont_A_rms: 48.6, duty_point: { I_phase_rms_A: 63.64 } } };
   assert.equal(s1ResultsAtLine(verified),
     'Results at the continuous current 48.6 A rms (setpoint 63.64 A rms)');
@@ -358,7 +298,7 @@ function s1AutoSetNoticeText(plan) {
 }
 
 test('a verified S1 record plans a move from the panel to the S1 current', () => {
-  const verified = { continuous_rating: { ...RATING, record_is_s1: true,
+  const verified = { continuous_rating: { ...RATING, record_is_s1: true, verified: true,
     verified: true, I_cont_A_rms: 48.6,
     duty_point: { I_phase_rms_A: 63.64 } } };
   assert.deepEqual(s1AutoSetPlan(verified, 63.64), { from: 63.64, to: 48.6 });
@@ -372,7 +312,7 @@ test('the notice names both currents and ends in the clickable word', () => {
 });
 
 test('never plans a move for an UNVERIFIED rating — estimate or contradiction', () => {
-  const estimate = { continuous_rating: { ...RATING, record_is_s1: true,
+  const estimate = { continuous_rating: { ...RATING, record_is_s1: true, verified: true,
     verified: false, I_cont_A_rms: 48.6 } };
   assert.equal(s1AutoSetPlan(estimate, 63.64), null);
   const noS1yet = { continuous_rating: { ...RATING, record_is_s1: false,
@@ -383,7 +323,7 @@ test('never plans a move for an UNVERIFIED rating — estimate or contradiction'
 });
 
 test('never plans a move with nothing to compare against, or nothing to move', () => {
-  const verified = { continuous_rating: { ...RATING, record_is_s1: true,
+  const verified = { continuous_rating: { ...RATING, record_is_s1: true, verified: true,
     verified: true, I_cont_A_rms: 48.6 } };
   assert.equal(s1AutoSetPlan(verified, null), null);
   assert.equal(s1AutoSetPlan(verified, undefined), null);
@@ -393,7 +333,7 @@ test('never plans a move with nothing to compare against, or nothing to move', (
 test('nothing to say once the panel already agrees (same 0.05 A tolerance '
    + 'as the staleness guard) — this is what makes the effect fire ONCE per '
    + 'run and clears without re-announcing itself', () => {
-  const verified = { continuous_rating: { ...RATING, record_is_s1: true,
+  const verified = { continuous_rating: { ...RATING, record_is_s1: true, verified: true,
     verified: true, I_cont_A_rms: 48.6 } };
   assert.equal(s1AutoSetPlan(verified, 48.6), null);
   assert.equal(s1AutoSetPlan(verified, 48.63), null);   // inside 0.05 A

@@ -60,6 +60,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -89,6 +91,7 @@ KINDS: Tuple[str, ...] = ("thermal", "rotor_stress", "modes",
 MECH_KINDS: Tuple[str, ...] = ("rotor_stress", "modes", "critical_speeds")
 
 VERSION = 1
+_STORE_LOCK = threading.RLock()
 
 
 # ---------------------------------------------------------------------------
@@ -114,8 +117,55 @@ def _config_dir() -> Path:
 
 
 def store_path() -> Path:
-    """The store this call WRITES — always the caller's own workspace."""
+    """Store for this request identity: shared for verified admins, local otherwise."""
+    try:
+        from motor_ai_sim import workspace as _ws
+    except Exception:                                       # noqa: BLE001 — fail closed
+        _ws = None
+    if _ws is not None and _ws.is_verified_admin_request():
+        if _ws.write_layer() == _ws.LAYER_PUBLISHED:
+            raise ValueError(
+                "admin result saves target the shared catalog; published-layer result saves are unsupported")
+        return Path(str(_ws.shared_root())) / ".duty_results.json"
     return _config_dir() / ".duty_results.json"
+
+
+@contextmanager
+def _store_write_lock():
+    """Serialize shared result read-modify-write across threads and workers."""
+    p = store_path()
+    with _STORE_LOCK:
+        try:
+            from motor_ai_sim import workspace as _ws
+            shared_admin = _ws.is_verified_admin_request()
+        except Exception:                                   # noqa: BLE001
+            shared_admin = False
+        if not shared_admin:
+            yield
+            return
+        p.parent.mkdir(parents=True, exist_ok=True)
+        lock_path = p.with_name(p.name + ".lock")
+        with open(lock_path, "a+b") as fh:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0, os.SEEK_END)
+                if fh.tell() == 0:
+                    fh.write(b"\0")
+                    fh.flush()
+                fh.seek(0)
+                msvcrt.locking(fh.fileno(), msvcrt.LK_LOCK, 1)
+                try:
+                    yield
+                finally:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 # ---------------------------------------------------------------------------
@@ -149,19 +199,32 @@ def _read_store(p: Path) -> Dict[str, Any]:
 
 
 def _fallback_stores(die: str) -> List[Path]:
-    """The published / shared stores that may answer for this die, DEEPEST first
-    (shared, then published), so a shallower layer overwrites a deeper one."""
+    """Layered stores, least-specific first, so canonical rows overlay legacy
+    per-die rows and deeper catalog layers."""
     out: List[Path] = []
     try:
         from motor_ai_sim import workspace as _ws
         if not _ws.layering():
             return out
+        seen = {str(store_path())}
+        # A former layout wrote one ledger beside each die. Keep those rows as
+        # fallback data, but merge them before the shared global ledger so the
+        # canonical global row wins when both contain the same duty/kind.
+        shared_die = (Path(str(_ws.shared_root())) / "dies"
+                      / _ws.split_published_label(str(die))[0]
+                      / ".duty_results.json")
+        if shared_die.is_file() and str(shared_die) not in seen:
+            out.append(shared_die)
+            seen.add(str(shared_die))
         shared = Path(str(_ws.shared_root())) / ".duty_results.json"
-        if shared.is_file() and shared != store_path():
+        if shared.is_file() and str(shared) not in seen:
             out.append(shared)
+            seen.add(str(shared))
         src = _ws.source_die_dir(str(die))
-        if src is not None and (src / ".duty_results.json").is_file():
-            out.append(src / ".duty_results.json")
+        if src is not None:
+            source_store = src / ".duty_results.json"
+            if source_store.is_file() and str(source_store) not in seen:
+                out.append(source_store)
     except Exception:                                       # noqa: BLE001
         return []
     return out
@@ -196,13 +259,14 @@ def read_all() -> Dict[str, Any]:
 def _write_all(doc: Dict[str, Any]) -> bool:
     p = store_path()
     try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_name(p.name + f".tmp{os.getpid()}")
-        doc["version"] = VERSION
-        doc["updated_at"] = _now()
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(doc, fh, ensure_ascii=False, default=str)
-        os.replace(tmp, p)
+        with _STORE_LOCK:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_name(p.name + f".tmp{os.getpid()}")
+            doc["version"] = VERSION
+            doc["updated_at"] = _now()
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh, ensure_ascii=False, default=str)
+            os.replace(tmp, p)
         return True
     except Exception as exc:                                # noqa: BLE001
         log.warning("duty_results: could not persist %s (%s)", p, exc)
@@ -368,17 +432,18 @@ def record(die: str, cfg: str, duty: str, kind: str,
             return False
         if not (die and cfg and duty) or kind not in KINDS:
             return False
-        doc = read_all()
-        res = doc.setdefault("results", {})
-        node = (res.setdefault(str(die), {})
-                   .setdefault(str(cfg), {})
-                   .setdefault(str(duty), {}))
-        e = dict(entry or {})
-        e["kind"] = kind
-        e.setdefault("recorded_at", _now())
-        e = _carry_excitation_blocks(kind, e, node.get(kind))
-        node[kind] = e
-        return _write_all(doc)
+        with _store_write_lock():
+            doc = read_all()
+            res = doc.setdefault("results", {})
+            node = (res.setdefault(str(die), {})
+                       .setdefault(str(cfg), {})
+                       .setdefault(str(duty), {}))
+            e = dict(entry or {})
+            e["kind"] = kind
+            e.setdefault("recorded_at", _now())
+            e = _carry_excitation_blocks(kind, e, node.get(kind))
+            node[kind] = e
+            return _write_all(doc)
     except Exception as exc:                                # noqa: BLE001
         log.warning("duty_results: could not record %s for %s/%s/%s (%s)",
                     kind, die, cfg, duty, exc)
@@ -408,20 +473,21 @@ def record_alt_carrier(die: str, cfg: str, duty: str, kind: str,
             log.warning("duty_results: an alternative carrier needs "
                         "inverter.f_carrier_hz — not recorded")
             return False
-        doc = read_all()
-        node = (((doc.get("results") or {}).get(str(die)) or {})
-                .get(str(cfg)) or {}).get(str(duty))
-        main = (node or {}).get(kind)
-        if not isinstance(node, dict) or not isinstance(main, dict):
-            return False
-        e = _flat(dict(entry or {}))
-        e["kind"] = kind
-        e.setdefault("recorded_at", _now())
-        alts = [a for a in (main.get("alt_carriers") or [])
-                if isinstance(a, dict) and _entry_carrier(a) != f]
-        alts.append(e)
-        main["alt_carriers"] = alts[-ALT_CARRIERS_MAX:]
-        return _write_all(doc)
+        with _store_write_lock():
+            doc = read_all()
+            node = (((doc.get("results") or {}).get(str(die)) or {})
+                    .get(str(cfg)) or {}).get(str(duty))
+            main = (node or {}).get(kind)
+            if not isinstance(node, dict) or not isinstance(main, dict):
+                return False
+            e = _flat(dict(entry or {}))
+            e["kind"] = kind
+            e.setdefault("recorded_at", _now())
+            alts = [a for a in (main.get("alt_carriers") or [])
+                    if isinstance(a, dict) and _entry_carrier(a) != f]
+            alts.append(e)
+            main["alt_carriers"] = alts[-ALT_CARRIERS_MAX:]
+            return _write_all(doc)
     except Exception as exc:                                # noqa: BLE001
         log.warning("duty_results: could not record the %s Hz carrier for "
                     "%s/%s/%s (%s)", f if 'f' in dir() else "?",
@@ -557,9 +623,7 @@ def index(die: str) -> Dict[str, Dict[str, Dict[str, Any]]]:
         for p in store_paths(die):
             for cfg, duties in _die_configs(_read_store(p), die).items():
                 node = out.setdefault(cfg, {})
-                for duty, kinds in duties.items():
-                    if isinstance(kinds, dict):
-                        node[str(duty)] = kinds
+                node.update(duties)
     except Exception:                                       # noqa: BLE001
         return {}
     return out
@@ -578,14 +642,15 @@ def rename(die: str, cfg: str, old: str, new: str) -> bool:
     if str(old) == str(new):
         return False
     try:
-        doc = read_all()
-        results = doc.get("results") or {}
-        for key in (str(die), _plain_die(die)):
-            node = (results.get(key) or {}).get(str(cfg))
-            if isinstance(node, dict) and str(old) in node:
-                node[str(new)] = node.pop(str(old))
-                return _write_all(doc)
-        return False
+        with _store_write_lock():
+            doc = read_all()
+            results = doc.get("results") or {}
+            for key in (str(die), _plain_die(die)):
+                node = (results.get(key) or {}).get(str(cfg))
+                if isinstance(node, dict) and str(old) in node:
+                    node[str(new)] = node.pop(str(old))
+                    return _write_all(doc)
+            return False
     except Exception:                                       # noqa: BLE001
         return False
 
@@ -595,18 +660,19 @@ def forget(die: str, cfg: str, duty: Optional[str] = None) -> bool:
     catalogue DELETES the duty they describe.  A rename carries them instead
     (:func:`rename`)."""
     try:
-        doc = read_all()
-        cfgs = (doc.get("results") or {}).get(str(die)) or {}
-        node = cfgs.get(str(cfg))
-        if not isinstance(node, dict):
-            return False
-        if duty is None:
-            cfgs.pop(str(cfg), None)
-        elif str(duty) in node:
-            node.pop(str(duty), None)
-        else:
-            return False
-        return _write_all(doc)
+        with _store_write_lock():
+            doc = read_all()
+            cfgs = (doc.get("results") or {}).get(str(die)) or {}
+            node = cfgs.get(str(cfg))
+            if not isinstance(node, dict):
+                return False
+            if duty is None:
+                cfgs.pop(str(cfg), None)
+            elif str(duty) in node:
+                node.pop(str(duty), None)
+            else:
+                return False
+            return _write_all(doc)
     except Exception:                                       # noqa: BLE001
         return False
 

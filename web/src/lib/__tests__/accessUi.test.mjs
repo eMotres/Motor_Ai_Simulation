@@ -34,6 +34,13 @@ t('the UI offers writes only to a session that may write the shared config', () 
   assert.equal(A.uiCanWrite(undefined, true), false);
 });
 
+t('the shared-context follower waits for role resolution and skips standard users', () => {
+  assert.equal(A.mayFollowSharedContext(false, false, false), false); // auth unresolved
+  assert.equal(A.mayFollowSharedContext(true, true, false), false);   // standard account
+  assert.equal(A.mayFollowSharedContext(true, true, true), true);     // admin
+  assert.equal(A.mayFollowSharedContext(true, false, false), true);  // local dev
+});
+
 t('only a gate refusal has a reason key', () => {
   const gate = { detail: 'This feature requires an admin account.', required_role: 'admin', your_role: 'user' };
   assert.equal(A.refusalReasonKey(403, gate), 'refused.admin');

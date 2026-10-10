@@ -10,11 +10,15 @@
 // re-run the extractor against a reference config to refresh them.
 
 import type { Passport } from './motorScaling';
+import { isReferenceOnlyCard } from './referenceOnlyPassport';
+import { referenceCandidateProvenanceFromCatalogEntry } from './referenceCardProvenance';
 
 export interface ReferenceMotor {
   id: string;
   name: string;          // short title for the picker
   subtitle: string;      // one-line spec
+  /** Explicitly unqualified analytical reference; no drive variants may be offered. */
+  referenceOnly?: boolean;
   poles: number;
   slots: number;
   passport: Passport;
@@ -23,6 +27,8 @@ export interface ReferenceMotor {
   hasMachine?: boolean;
   /** the FULL passport card (v1 record) behind this machine, from the server; null/absent = none */
   card?: { die: string; config: string; date: string } | null;
+  /** The server's pinned provenance identity; used only to select matching source metadata. */
+  referenceProvenance?: { candidate_sha256?: string | null } | null;
   // slot/wire context — mirrors the backend slot-fit constraint
   // (geometry_constraints._wire_height_max, which mirrors the radial wire stack
   // in cadquery_geometry): N rows of (wire_height + wireSpacingY) must fit between
@@ -106,6 +112,8 @@ const _API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/
  *  real "no characterised motor"); `!ok` = it did not, so nothing is known yet. */
 export interface ReferencesAnswer { ok: boolean; refs: ReferenceMotor[]; }
 
+/** Keep only the server-pinned candidate identity used by reviewed source metadata. */
+
 /** The lean route first (`GET /api/catalog/references`: only the cards with a passport,
  *  ~100 KB); an older server without it falls back to the whole catalogue (12 MB of
  *  thumbnails on the live one).  Configure used to wait for all of that on every open. */
@@ -132,19 +140,29 @@ export async function fetchCatalogReferencesAnswer(): Promise<ReferencesAnswer> 
       const sp = m?.passport;                         // { passport, fit, geo, poles, slots }
       if (!sp?.passport || !sp?.geo || !sp?.fit) continue;   // only motors that were characterised
       const p = sp.passport as Passport;
+      const referenceOnly = isReferenceOnlyCard(m);
+      const safePassport = { ...p };
       // Computed drive variants may ride beside the passport (the record's
       // top level) instead of inside it — Configure reads them off `p`.
-      if (!p.pwm_variants && Array.isArray(sp.pwm_variants)) p.pwm_variants = sp.pwm_variants;
+      if (referenceOnly) delete safePassport.pwm_variants;
+      else if (!safePassport.pwm_variants && Array.isArray(sp.pwm_variants)) {
+        safePassport.pwm_variants = sp.pwm_variants;
+      }
       const poles = Number(sp.poles ?? sp.geo.numPoles ?? 0);
       const slots = Number(sp.slots ?? sp.geo.numSlots ?? 0);
       out.push({
         id: `cat:${m.id}`,
         name: String(m.name ?? `${m.diameter_mm ?? '?'} mm`),
-        subtitle: `${slots}-slot / ${poles}-pole · ~${(p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0)} N·m @ ${p.rpm0 ?? '?'} rpm · FEM`,
+        subtitle: referenceOnly ? '' : `${slots}-slot / ${poles}-pole · ~${(p.T0_Nm ?? 0).toFixed((p.T0_Nm ?? 0) < 10 ? 1 : 0)} N·m @ ${p.rpm0 ?? '?'} rpm · FEM`,
         poles, slots,
-        passport: p,
+        passport: safePassport,
+        referenceOnly,
         hasMachine: m.has_machine === true,
         card: m.card && typeof m.card === 'object' ? (m.card as ReferenceMotor['card']) : null,
+        // The API's passport card is a wrapper: provenance sits beside the
+        // nested `passport` within `m.passport`, not on the motor row itself.
+        // Accept the old top-level shape too, and fail closed on conflicts.
+        referenceProvenance: referenceCandidateProvenanceFromCatalogEntry(m),
         fit: sp.fit,
         geo: sp.geo,
       });

@@ -42,5 +42,8 @@
   },
   "prefs": {
     "locale_unsupported": "不支持的语言 {locale}；可选：{supported}。"
+  },
+  "die": {
+    "retire_required": "“{die}”是共享冲片：删除会对所有用户隐藏它。请使用“对所有用户停用”。"
   }
 }

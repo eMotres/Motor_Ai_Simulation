@@ -30,7 +30,19 @@ const Metric: React.FC<{ label: string; value: string; hot?: boolean }> = ({ lab
   </Box>
 );
 
-const ConfiguratorThermal: React.FC<{ geom: ThermalGeom; losses: ThermalLosses }> = ({ geom, losses }) => {
+type CoolingEstimate = {
+  mode: 'robotics' | 'propeller';
+  ambient_C: number;
+  air_speed_ms: number | null;
+  h_Wm2K: number | null;
+  temperatureLimits: { winding_C: number; magnet_C: number; windingBasis: string };
+};
+
+const ConfiguratorThermal: React.FC<{
+  geom: ThermalGeom;
+  losses: ThermalLosses;
+  coolingEstimate?: CoolingEstimate;
+}> = ({ geom, losses, coolingEstimate }) => {
   // CoolingControls writes to localStorage + fires 'cooling:changed' — re-render on it.
   const [, bump] = useReducer((n: number) => n + 1, 0);
   useEffect(() => {
@@ -38,44 +50,79 @@ const ConfiguratorThermal: React.FC<{ geom: ThermalGeom; losses: ThermalLosses }
     return () => window.removeEventListener('cooling:changed', bump);
   }, []);
 
-  const cp = getCoolingPayload();
-  const isAir = cp.cooling_mode === 'air';
+  const cp = coolingEstimate ? null : getCoolingPayload();
+  const isAir = coolingEstimate ? true : cp?.cooling_mode === 'air';
   const D = (geom.statorOD_mm || 150) / 1000;
-  const h = isAir ? airH(Number(cp.air_speed_mps) || 0, D) : liqH(Number(cp.flow_lpm) || 0);
-  const t = estimateThermal(geom, losses, { h_Wm2K: h, ambient_C: Number(cp.ambient_temp) || 25 });
+  const h = coolingEstimate
+    ? (coolingEstimate.mode === 'robotics' ? airH(0, D) : coolingEstimate.h_Wm2K ?? 0)
+    : isAir ? airH(Number(cp?.air_speed_mps) || 0, D) : liqH(Number(cp?.flow_lpm) || 0);
+  const ambient_C = coolingEstimate?.ambient_C ?? (Number(cp?.ambient_temp) || 25);
+  const t = h > 0 ? estimateThermal(geom, losses, { h_Wm2K: h, ambient_C }) : null;
 
-  const windHot = t.T_winding_C > 155;   // ~class-F winding limit
-  const magHot  = t.T_magnet_C > 150;    // typical NdFeB safe ceiling
+  const windingLimit_C = coolingEstimate?.temperatureLimits.winding_C ?? 155;
+  const magnetLimit_C = coolingEstimate?.temperatureLimits.magnet_C ?? 150;
+  const windHot = t != null && t.T_winding_C > windingLimit_C;   // legacy generic estimate thresholds
+  const magHot  = t != null && t.T_magnet_C > magnetLimit_C;
+  const format = (value: number | undefined) => value == null || !Number.isFinite(value) ? '—' : `${value.toFixed(0)} °C`;
 
   return (
     <Paper sx={CARD}>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', mb: 0.5 }}>
-        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>{tx('configure.thermalTitle')}</Typography>
-        <HelpTip title={tx('configure.thermalHelp')} />
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-0)' }}>
+          {coolingEstimate ? tx('configurePropeller.estimateTitle') : tx('configure.thermalTitle')}
+        </Typography>
+        <HelpTip title={coolingEstimate ? tx('configurePropeller.estimateTip') : tx('configure.thermalHelp')} />
       </Box>
 
       {/* the shared cooling inputs (localStorage `sim.cool.*`) */}
-      <CoolingControls diameterMm={geom.statorOD_mm} />
+      {!coolingEstimate && <CoolingControls diameterMm={geom.statorOD_mm} />}
+      {coolingEstimate && (
+        <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 1 }}>
+          {coolingEstimate.mode === 'robotics'
+            ? tx('configurePropeller.stillAirBasis', { h: h.toFixed(0) })
+            : tx('configurePropeller.propellerAirBasis', {
+              speed: coolingEstimate.air_speed_ms == null ? '—' : coolingEstimate.air_speed_ms.toFixed(1), h: coolingEstimate.h_Wm2K == null ? '—' : coolingEstimate.h_Wm2K.toFixed(0),
+            })}
+        </Typography>
+      )}
+      {coolingEstimate && (
+        <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 1 }}>
+          {tx('configurePropeller.temperatureLimits', {
+            winding: coolingEstimate.temperatureLimits.winding_C.toFixed(0),
+            magnet: coolingEstimate.temperatureLimits.magnet_C.toFixed(0),
+            basis: coolingEstimate.temperatureLimits.windingBasis,
+          })}
+        </Typography>
+      )}
 
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(112px, 1fr))', gap: 1, mt: 1.5 }}>
-        <Metric label={tx('configure.winding')} value={`${t.T_winding_C.toFixed(0)} °C`} hot={windHot} />
-        <Metric label={tx('configure.magnet')} value={`${t.T_magnet_C.toFixed(0)} °C`} hot={magHot} />
-        <Metric label={tx('configure.housing')} value={`${t.T_housing_C.toFixed(0)} °C`} />
-        <Metric label={tx('configure.ambient')} value={`${t.ambient_C.toFixed(0)} °C`} />
-        <Metric label={tx('configure.totalLoss')} value={`${t.P_total_W.toFixed(0)} W`} />
-        <Metric label={tx('configure.hUsed')} value={`${t.h_Wm2K.toFixed(0)} W/m²K`} />
-        <Metric label={tx('configure.surface')} value={`${(t.A_surface_m2 * 1e4).toFixed(0)} cm²`} />
+        <Metric label={tx('configure.winding')} value={format(t?.T_winding_C)} hot={windHot} />
+        <Metric label={tx('configure.magnet')} value={format(t?.T_magnet_C)} hot={magHot} />
+        <Metric label={tx('configure.housing')} value={format(t?.T_housing_C)} />
+        <Metric label={tx('configure.ambient')} value={`${(t?.ambient_C ?? ambient_C).toFixed(0)} °C`} />
+        <Metric label={tx('configure.totalLoss')} value={t ? `${t.P_total_W.toFixed(0)} W` : '—'} />
+        <Metric label={tx('configure.hUsed')} value={h > 0 ? `${h.toFixed(0)} W/m²K` : '—'} />
+        {coolingEstimate && <Metric label={tx('configurePropeller.coolingAirSpeed')} value={coolingEstimate.air_speed_ms == null ? '—' : `${coolingEstimate.air_speed_ms.toFixed(1)} m/s`} />}
+        <Metric label={tx('configure.surface')} value={t ? `${(t.A_surface_m2 * 1e4).toFixed(0)} cm²` : '—'} />
       </Box>
 
       {(windHot || magHot) && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mt: 1 }}>
           <Typography sx={{ fontSize: 11.5, color: '#fca5a5' }}>
-            ⚠ {windHot ? tx('configure.hotWinding', { t: t.T_winding_C.toFixed(0) }) : ''}
+            ⚠ {windHot ? (coolingEstimate
+              ? tx('configurePropeller.hotWinding', { t: t?.T_winding_C.toFixed(0) ?? '', limit: windingLimit_C.toFixed(0) })
+              : tx('configure.hotWinding', { t: t?.T_winding_C.toFixed(0) ?? '' })) : ''}
             {windHot && magHot ? ' · ' : ''}
-            {magHot ? tx('configure.hotMagnet', { t: t.T_magnet_C.toFixed(0) }) : ''}
+            {magHot ? (coolingEstimate
+              ? tx('configurePropeller.hotMagnet', { t: t?.T_magnet_C.toFixed(0) ?? '', limit: magnetLimit_C.toFixed(0) })
+              : tx('configure.hotMagnet', { t: t?.T_magnet_C.toFixed(0) ?? '' })) : ''}
           </Typography>
-          <HelpTip title={(windHot ? tx('configure.hotWindingTip', { t: t.T_winding_C.toFixed(0) }) : '')
-            + (magHot ? tx('configure.hotMagnetTip', { t: t.T_magnet_C.toFixed(0) }) : '')
+          <HelpTip title={(windHot ? (coolingEstimate
+            ? tx('configurePropeller.hotWindingTip', { t: t?.T_winding_C.toFixed(0) ?? '', limit: windingLimit_C.toFixed(0), basis: coolingEstimate.temperatureLimits.windingBasis })
+            : tx('configure.hotWindingTip', { t: t?.T_winding_C.toFixed(0) ?? '' })) : '')
+            + (magHot ? (coolingEstimate
+              ? tx('configurePropeller.hotMagnetTip', { t: t?.T_magnet_C.toFixed(0) ?? '', limit: magnetLimit_C.toFixed(0) })
+              : tx('configure.hotMagnetTip', { t: t?.T_magnet_C.toFixed(0) ?? '' })) : '')
             + tx('configure.hotAdvice')} />
         </Box>
       )}

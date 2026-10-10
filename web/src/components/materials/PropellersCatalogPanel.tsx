@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { fetchPropellers } from '../../lib/propellerApi';
 import type { PropSummary } from '../../lib/configuratorPropeller';
 import { nsT } from '../../i18n/nsT';
-import { buildRpmGroups, type RpmMetric } from './propellerRpmChart';
+import { buildRpmGroups, hasValidRpmCurve, type RpmMetric } from './propellerRpmChart';
 import { chartCaption } from './propellerChartCaption';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
@@ -81,10 +81,11 @@ const PropellersCatalogPanel: React.FC = () => {
     let live = true;
     void fetchPropellers().then((list) => {
       if (!live) return;
-      setProps(list);
+      const visible = list?.filter(hasValidRpmCurve) ?? null;
+      setProps(visible);
       setListError(!list);
-      if (list?.length) setSelectedId((current) => current && list.some((item) => item.id === current)
-        ? current : list[0].id);
+      setSelectedId((current) => current && visible?.some((item) => item.id === current)
+        ? current : visible?.[0]?.id ?? '');
     });
     return () => { live = false; };
   }, []);

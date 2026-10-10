@@ -9,6 +9,14 @@ export type RpmGroup = {
   fitUse: 'included in fit' | 'reference only';
 };
 
+/** Visible catalogue entries must advertise a real tested RPM interval. */
+export function hasValidRpmCurve(value: unknown): boolean {
+  if (!isDict(value) || value.selectable !== true) return false;
+  const range = value.rpm_range_tested;
+  return Array.isArray(range) && range.length === 2 &&
+    range.every((item) => positive(item)) && range[0] < range[1];
+}
+
 type Dict = Record<string, unknown>;
 type CpFit = {
   cRef: number;

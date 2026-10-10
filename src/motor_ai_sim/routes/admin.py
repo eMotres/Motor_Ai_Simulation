@@ -249,7 +249,11 @@ def get_user_motors(email: str, _admin: dict = Depends(require_admin)):
     from motor_ai_sim import users as U
     if U.get_user(email) is None:
         raise HTTPException(status_code=404, detail=f"user '{email}' not found")
-    return {"email": email.strip().lower(), "motors": U.get_motor_grants(email)}
+    # `motors` = what an admin stored (the dialog edits this); `effective` =
+    # what the account sees, incl. the shared CIANO14 40 new baseline.
+    return {"email": email.strip().lower(),
+            "motors": U.get_stored_motor_grants(email),
+            "effective": U.get_motor_grants(email)}
 
 
 def _check_default(raw, all_motors: bool, dies: list):

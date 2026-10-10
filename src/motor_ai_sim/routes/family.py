@@ -519,7 +519,14 @@ def _require_deletable_die(die: str, who: dict) -> str:
         return lay
     if lay == _WS.LAYER_SHARED:
         if _WS.is_verified_admin_request():
-            return lay
+            # Owner 2026-10-10: a DELETE never hides a shared die for other
+            # users.  Retiring it is its own explicit, confirmed, audited
+            # action (POST /die/{die}/retire), reversible with /restore.
+            from motor_ai_sim.api_errors import ApiError
+            raise ApiError(409, "die.retire_required", (
+                f"'{die}' is a shared catalog die — deleting it here would hide "
+                "it for every user; use 'Retire for all users' instead"),
+                params={"die": str(die)})
         raise HTTPException(403, detail=(
             f"'{die}' is in the shared catalog — only a verified signed-in "
             "admin may delete it"))
@@ -2296,10 +2303,19 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
     """
     die = _check_name(die, "die")
     _require_die_write(die, _w)
-    dd = _die_dir(die)
-    if not (dd / "die.yaml").is_file():
-        raise HTTPException(404, detail=f"die '{die}' not found")
-    lay = _require_deletable_die(die, _w)
+    # A verified admin READS shared first (2026-10-06), but deleting must not
+    # follow that order: when the admin still holds a workspace copy, the
+    # DELETE removes exactly that copy and the shared die stays for everyone
+    # (owner 2026-10-10).  Retiring the shared die is POST /die/{die}/retire.
+    own = _dies_dir() / str(die)
+    if (_ws_layering() and _WS.is_verified_admin_request()
+            and (own / "die.yaml").is_file()):
+        dd, lay = own, _WS.LAYER_WORKSPACE
+    else:
+        dd = _die_dir(die)
+        if not (dd / "die.yaml").is_file():
+            raise HTTPException(404, detail=f"die '{die}' not found")
+        lay = _require_deletable_die(die, _w)
     cfgs = [p.stem for p in dd.glob("*.yaml") if p.name != "die.yaml"]
     if cfgs and not force:
         raise HTTPException(409, detail=(
@@ -2329,11 +2345,9 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
                         "same name still exists")
         log.warning("family: die '%s' deleted (%d configuration(s) with it)",
                     die, len(cfgs))
-    elif lay == _WS.LAYER_SHARED:
-        _WS.add_tombstone(die, admin_email)
-        log.warning("family: shared die '%s' tombstoned by admin %s "
-                    "(%d configuration(s) hidden with it)",
-                    die, admin_email or "?", len(cfgs))
+    elif lay == _WS.LAYER_SHARED:                       # pragma: no cover
+        # _require_deletable_die refuses a shared die (die.retire_required).
+        raise HTTPException(409, detail="use 'Retire for all users'")
     else:  # LAYER_PUBLISHED
         import shutil as _sh
         import time as _time
@@ -2349,6 +2363,112 @@ def delete_die(die: str, force: bool = False, _w: dict = Depends(require_catalog
     if note:
         out["note"] = note
     return out
+
+
+# ── retire a SHARED die for every user (owner 2026-10-10) ────────────────────
+# Separate from DELETE on purpose: it changes what every account sees.  The
+# web asks for confirmation naming the die and how many accounts can see it;
+# the request repeats the die name.  Reversible (a tombstone: nothing on disk
+# is touched) and written to the admin audit log both ways.
+
+class DieRetire(BaseModel):
+    confirm: str = ""
+
+
+def _require_verified_admin(_w: dict) -> str:
+    if not _WS.is_verified_admin_request():
+        raise HTTPException(403, detail=(
+            "only a verified signed-in admin may retire or restore a shared die"))
+    return str((_w.get("user") or {}).get("email") or "").strip().lower()
+
+
+def _shared_die_dir(die: str) -> Path:
+    return Path(str(_WS.shared_root())) / "dies" / str(die)
+
+
+def die_audience_count(die: str) -> int:
+    """How many enabled accounts can see this die right now: admins, accounts
+    with an ``all`` grant, the die in their effective grant list, or the die's
+    own public / selected-clients visibility."""
+    from motor_ai_sim import users as _U
+    from motor_ai_sim import motor_access as _MA
+    everyone = _MA.grant_all_registered()
+    n = 0
+    for row in _U.list_users():
+        email = str(row.get("email") or "").strip().lower()
+        if not email or row.get("disabled"):
+            continue
+        if (everyone or email in _auth._ADMIN_EMAILS
+                or str(row.get("role") or "") == "admin"):
+            n += 1
+            continue
+        g = _U.get_motor_grants(email)
+        access = {"mode": (_MA.MODE_ALL if g.get("all") else _MA.MODE_GRANTED),
+                  "dies": frozenset(g.get("dies") or []), "email": email,
+                  "is_admin": False}
+        if _MA.may_see_die(access, str(die)):
+            n += 1
+    return n
+
+
+@router.get("/die/{die}/audience")
+def die_audience(die: str, _w: dict = Depends(require_catalog_write)):
+    """What the Retire dialog names: the die, whether it is shared or
+    retired, and how many accounts can see it."""
+    die = _check_name(die, "die")
+    _require_verified_admin(_w)
+    shared = (_shared_die_dir(die) / "die.yaml").is_file()
+    return {"die": die, "shared": shared,
+            "retired": _WS.is_tombstoned(die),
+            "users": die_audience_count(die) if shared else 0}
+
+
+@router.post("/die/{die}/retire")
+def retire_die(die: str, req: DieRetire,
+               _w: dict = Depends(require_catalog_write)):
+    """Hide a shared die for every user.  Reversible with ``/restore``."""
+    from motor_ai_sim import admin_audit as _AA
+    die = _check_name(die, "die")
+    admin_email = _require_verified_admin(_w)
+    if not (_shared_die_dir(die) / "die.yaml").is_file():
+        raise HTTPException(404, detail=f"'{die}' is not a shared catalog die")
+    if str(req.confirm or "").strip() != die:
+        raise HTTPException(422, detail=(
+            f"repeat the die name '{die}' to confirm retiring it for all users"))
+    users = die_audience_count(die)
+    cfgs = sorted(p.stem for p in _shared_die_dir(die).glob("*.yaml")
+                  if p.name != "die.yaml")
+    _WS.add_tombstone(die, admin_email)
+    _AA.record(admin_email or "local-dev", "die.retire", die,
+               details={"users": users, "configurations": cfgs})
+    log.warning("family: shared die '%s' retired for all users by admin %s "
+                "(%d account(s) could see it)", die, admin_email or "?", users)
+    return {"ok": True, "die": die, "layer": _WS.LAYER_SHARED,
+            "retired": True, "users": users}
+
+
+@router.post("/die/{die}/restore")
+def restore_die(die: str, _w: dict = Depends(require_catalog_write)):
+    """Undo :func:`retire_die` — the die reappears for everyone."""
+    from motor_ai_sim import admin_audit as _AA
+    die = _check_name(die, "die")
+    admin_email = _require_verified_admin(_w)
+    if not _WS.remove_tombstone(die):
+        raise HTTPException(404, detail=f"'{die}' is not retired")
+    _AA.record(admin_email or "local-dev", "die.restore", die)
+    log.warning("family: shared die '%s' restored by admin %s", die,
+                admin_email or "?")
+    return {"ok": True, "die": die, "retired": False}
+
+
+@router.get("/retired")
+def retired_dies(_w: dict = Depends(require_catalog_write)):
+    """The shared dies an admin has retired, for the Restore list."""
+    _require_verified_admin(_w)
+    data = _WS._load_tombstones()
+    return {"dies": [{"die": k, "by": (v or {}).get("by", ""),
+                      "at": (v or {}).get("at", "")}
+                     for k, v in sorted(data.items())]}
 
 
 # ── configuration ────────────────────────────────────────────────────────────

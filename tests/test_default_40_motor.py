@@ -127,3 +127,19 @@ def test_authenticated_me_reports_baseline_default(env):
     payload = load_test.client.get(
         f"/api/family/payload/{DIE}/L12?duty=rated", headers=env["user"])
     assert payload.status_code == 200, payload.text
+
+
+def test_admin_set_default_wins_and_the_editor_never_sees_the_baseline(baseline):
+    """Owner 2026-10-10: CIANO14 40 new is only the FALLBACK default; a
+    per-user default set in Admin -> Users -> Motors wins.  The admin dialog
+    reads the STORED grant, so saving it never persists the baseline."""
+    U, users_file, original = baseline
+    explicit = {"die": "OWN DIE", "config": "L20"}
+    assert U.get_default_motor("explicit@example.com") == explicit
+    assert U.get_motor_grants("explicit@example.com")["default"] == explicit
+    assert U.get_stored_motor_grants("explicit@example.com") == {
+        "all": False, "dies": ["OWN DIE"], "default": explicit}
+    # a plain account: baseline at read time, nothing stored
+    assert U.get_default_motor("ok@example.com") == DEFAULT
+    assert U.get_stored_motor_grants("ok@example.com") == {"all": False, "dies": []}
+    assert users_file.read_text(encoding="utf-8") == original

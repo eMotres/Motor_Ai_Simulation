@@ -647,7 +647,17 @@ def _effective_motor_grants(email: str) -> dict:
 
 
 def get_motor_grants(email: str) -> dict:
+    """What the account may open NOW: the stored grant plus the read-time
+    shared baseline.  An admin-set default always wins over the baseline."""
     return _effective_motor_grants(email)
+
+
+def get_stored_motor_grants(email: str) -> dict:
+    """Only what an admin stored (Admin -> Users -> Motors), without the
+    read-time baseline — what the admin dialog edits and saves back, so the
+    baseline is never persisted as if an admin had chosen it."""
+    rec = _load_soft().get(_norm(email))
+    return normalize_grants(rec.get("motors") if isinstance(rec, dict) else None)
 
 
 def get_default_motor(email: str) -> Optional[dict]:
@@ -682,7 +692,7 @@ def set_motor_grants(email: str, *, all_motors: bool,
         users[email]["motors"] = normalize_grants(
             {"all": all_motors, "dies": list(dies or []), "default": default})
         _save(users)
-    return get_motor_grants(email)
+    return get_stored_motor_grants(email)
 
 
 # ── invites ──────────────────────────────────────────────────────────────────

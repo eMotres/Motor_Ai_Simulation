@@ -532,12 +532,18 @@ def test_admin_structural_catalog_operations_target_shared(env, monkeypatch):
     assert not (env["works"] / env["ids"][ADMIN] / "dies"
                 / "ADMIN DUPLICATE 40").exists()
 
-    # Shared deletion is deliberately a reversible catalog tombstone; the
-    # definition stays intact on disk and disappears from shared reads.
+    # Owner 2026-10-10: a DELETE never hides a shared die for other users;
+    # retiring it is the explicit, confirmed "Retire for all users" action —
+    # a reversible tombstone, the definition stays intact on disk.
     deleted = client.delete("/api/family/die/ADMIN CREATED 12?force=true",
                             headers=env["admin"])
-    assert deleted.status_code == 200, deleted.text
-    assert deleted.json()["layer"] == "shared"
+    assert deleted.status_code == 409, deleted.text
+    assert deleted.json()["code"] == "die.retire_required"
+    assert not W.is_tombstoned("ADMIN CREATED 12")
+    retired = client.post("/api/family/die/ADMIN CREATED 12/retire",
+                          headers=env["admin"], json={"confirm": "ADMIN CREATED 12"})
+    assert retired.status_code == 200, retired.text
+    assert retired.json()["layer"] == "shared"
     assert (new_dir / "die.yaml").is_file()
     assert W.is_tombstoned("ADMIN CREATED 12")
 

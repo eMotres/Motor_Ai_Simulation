@@ -315,7 +315,7 @@
     "referenceTemperatureBasis": "Reference solve: {length} mm, {rpm} rpm, {current} A; winding {winding}°C, magnet {magnet}°C, steel {steel}. 2D analytical scaling; no new FEM solve.",
     "temperatureUnknown": "temperature unrecorded",
     "stackCoefficientsTip": "The reference saturation and demagnetisation calculation is available only at the reference stack length.",
-    "stackCoefficientsOnlyAt": "Reference coefficients shown only at {{mm}} mm",
+    "stackCoefficientsOnlyAt": "Reference coefficients shown only at {mm} mm",
     "stackCoefficientsOnlyAudited": "Reference coefficients shown only at the audited stack length",
     "demagKoef": "Demag coefficient",
     "saturationKoef": "Saturation coefficient",

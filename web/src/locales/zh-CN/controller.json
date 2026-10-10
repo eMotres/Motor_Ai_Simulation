@@ -315,7 +315,7 @@
     "referenceTemperatureBasis": "参考计算：{length} mm，{rpm} rpm，{current} A；绕组 {winding}°C，磁体 {magnet}°C，钢温度 {steel}。二维解析缩放；未进行新的有限元计算。",
     "temperatureUnknown": "未记录温度",
     "stackCoefficientsTip": "参考饱和与退磁计算仅在参考叠长下可用。",
-    "stackCoefficientsOnlyAt": "参考系数仅在 {{mm}} mm 叠长下显示",
+    "stackCoefficientsOnlyAt": "参考系数仅在 {mm} mm 叠长下显示",
     "stackCoefficientsOnlyAudited": "参考系数仅在已审核的叠长下显示",
     "demagKoef": "退磁系数",
     "saturationKoef": "饱和系数",

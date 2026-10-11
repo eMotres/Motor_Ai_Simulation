@@ -98,7 +98,10 @@ def _hot_map(work: Path, M: str):
     recs = card.load_records(od)
     recs.pop("__failed__", None)
     st = _state(work, M)
-    pts, hm = card._map(recs, st, "hot", "hot_mtpa", 7)
+    # pole pairs from the machine itself (was the Ø40's 7: on the Ø85, 14 pole pairs,
+    # it halved the electrical speed of every operating-angle / voltage check here)
+    pp = int(round(float(_snap(work, M)["geometry"]["num_poles"]))) // 2
+    pts, hm = card._map(recs, st, "hot", "hot_mtpa", pp)
     return hm, st, recs
 
 

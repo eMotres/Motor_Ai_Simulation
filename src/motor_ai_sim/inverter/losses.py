@@ -946,11 +946,14 @@ def _ripple_block(req: Dict[str, Any], *, topo: Topology,
     elif req.get("_ripple_ld_mH") is not None:
         ld = float(req["_ripple_ld_mH"]) * 1e-3
         lq = float(req.get("_ripple_lq_mH") or req["_ripple_ld_mH"]) * 1e-3
-        src.setdefault("l", "the duty's incremental L_d/L_q")
+        src.setdefault("l", "the duty's differential L_d/L_q")
     else:
         return {"status": "not_computed",
-                "reason": "no inductance: type L (uH) — or run the duty's "
-                          "Simulation for its L_d/L_q"}
+                "reason": ("no inductance: type L (uH) — "
+                           + req["_ripple_l_note"]
+                           if req.get("_ripple_l_note") else
+                           "no inductance: type L (uH) — or run the duty's "
+                           "Simulation for its L_d/L_q")}
     b0 = three[0]
     m_b = m_by_bridge[b0.id]
     i_b = legs_spec[(b0.id, b0.legs[0].name)]["i_peak_A"] / math.sqrt(2.0)

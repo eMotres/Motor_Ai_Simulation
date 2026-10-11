@@ -2327,6 +2327,16 @@ def _cold_ldq0(em: Dict[str, Any],
                          magnet_temp_c=COLD_CONSTANTS_C)
     if not blk or blk.get("Ld_mH") is None:
         return None
+    # Only a DIFFERENTIAL probe is quoted (simulation/ldq_provenance): a
+    # regularized one (non-monotone B-H table) carries its status and a note
+    # instead of numbers, so no catalogue prints it as small-signal.
+    from motor_ai_sim.simulation.ldq_provenance import (
+        method_status, not_usable_note, record_status)
+    _st = record_status(blk)
+    if _st != "differential":
+        return {"Ld0_mH": None, "Lq0_mH": None,
+                "ldq0_method": str(blk.get("ldq_method") or "secant"),
+                "ldq0_status": _st, "ldq0_note": not_usable_note(blk)}
     _ld, _lq = float(blk["Ld_mH"]), float(blk["Lq_mH"])
     return {
         "Ld0_mH": round(_ld, 4),
@@ -2335,8 +2345,9 @@ def _cold_ldq0(em: Dict[str, Any],
                     else round(float(blk["Ldq_mH"]), 4)),
         "saliency0_Lq_over_Ld": (round(_lq / _ld, 3) if abs(_ld) > 1e-9
                                  else None),
-        "ldq0_method": ("frozen-permeability incremental at i=0, %g °C"
-                        % COLD_CONSTANTS_C),
+        "ldq0_method": ("%s at i=0, %g °C"
+                        % (blk.get("ldq_method"), COLD_CONSTANTS_C)),
+        "ldq0_status": method_status(blk.get("ldq_method")),
         # The probe's own self-checks, kept: `spread_pct` is how much L(θ)
         # moves with rotor position (these are the average of four positions),
         # `reciprocity_pct` the asymmetry of a matrix that must be symmetric.

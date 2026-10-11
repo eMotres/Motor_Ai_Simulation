@@ -313,16 +313,27 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
     src["power_direction"] = ("the duty's mode" if d_entry.get("mode")
                               else f"{where} (op_mode)" if em.get("op_mode")
                               else "no mode on the duty: motor")
-    # THE INDUCTANCE the carrier sees: the incremental L_d/L_q of this very
-    # record (the report's guard: only when the incremental block exists — a
-    # pre-2026-09-20 record's Ld_mH is a chord).  Star-equivalent for delta.
-    if em.get("Ld_inc_mH") is not None and em.get("Lq_inc_mH") is not None:
+    # THE INDUCTANCE the carrier sees: the SMALL-SIGNAL L_d/L_q of this very
+    # record — only with explicit differential provenance
+    # (simulation/ldq_provenance).  A saved duty solved before 2026-10-11
+    # carries Ld_inc_mH as the frozen-permeability SECANT (1.7-2.4x the
+    # small-signal value on a saturated machine, so the ripple would be read
+    # that much low); a regularized probe (non-monotone B-H table) is no
+    # derivative.  Both are refused with the reason, never used.
+    # Star-equivalent for delta.
+    from motor_ai_sim.simulation.ldq_provenance import (
+        is_differential, not_usable_note)
+    if (em.get("Ld_inc_mH") is not None and em.get("Lq_inc_mH") is not None
+            and not is_differential(em)):
+        out["ripple_l_note"] = not_usable_note(em)
+        src["ripple_l"] = f"{where}: {out['ripple_l_note']}"
+    elif em.get("Ld_inc_mH") is not None and em.get("Lq_inc_mH") is not None:
         kd, kq = (("Ld_eq_star_mH", "Lq_eq_star_mH") if sd == "delta"
                   else ("Ld_mH", "Lq_mH"))
         ldv, lqv = _num(em.get(kd)), _num(em.get(kq))
         if ldv and lqv and ldv > 0 and lqv > 0:
             out["ripple_ld_mH"], out["ripple_lq_mH"] = ldv, lqv
-            src["ripple_l"] = (f"{where}: incremental {kd}/{kq} "
+            src["ripple_l"] = (f"{where}: differential {kd}/{kq} "
                                f"({ldv:.4g}/{lqv:.4g} mH)")
     # SIX-PHASE WINDING (owner 2026-09-28): the EM record says which paths
     # are set 1 / set 2 and carries the machine's own L_xy.
@@ -1048,6 +1059,7 @@ _KEY_FIELDS_OPTIONAL = ("switching_source", "r_g_off_ext_ohm", "l_sigma_nH",
                         "modulation_scheme", "r_th_jc_k_w",
                         # 2026-09-28: direction + PWM ripple
                         "power_direction", "_ripple_ld_mH", "_ripple_lq_mH",
+                        "_ripple_l_note",
                         "_gamma_deg",
                         "ripple_l_d_uH", "ripple_l_q_uH", "ripple_l_sub_uH",
                         "ripple_l_xy_pct", "ripple_l_xy_uH", "ripple_l_zero_uH",
@@ -1151,6 +1163,8 @@ def _build_request(body: Dict[str, Any],
         req["_ripple_ld_mH"] = duty["ripple_ld_mH"]
         req["_ripple_lq_mH"] = duty["ripple_lq_mH"]
         req["_ripple_sources"] = {"l": duty_src.get("ripple_l", "the duty record")}
+    elif duty.get("ripple_l_note"):
+        req["_ripple_l_note"] = duty["ripple_l_note"]
     if duty.get("gamma_deg") is not None:
         req["_gamma_deg"] = duty["gamma_deg"]
     # SIX PHASES: the sets of THIS machine's coils (resolved again from the

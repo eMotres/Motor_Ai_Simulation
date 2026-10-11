@@ -524,7 +524,7 @@ def psipm_cache_key(geo, wind, connection=None, materials=None) -> str:
     # v3: the MATERIAL CARDS ride in the key (2026-09-30).  ψ_PM is the magnet's
     # flux through the iron, so it scales with the magnet's Br and with how hard
     # the steel saturates; v2 keyed on geometry and winding only and served one
-    # card set's ψ_PM (and, through the "ldq0_v1_" prefix, its catalogue Ld/Lq)
+    # card set's ψ_PM (and, through the "ldq0_v*_" prefix, its catalogue Ld/Lq)
     # to the same cross-section with another.  Measured 2026-09-30, L155 at its
     # rated point: N52UH_150C -> F52SH_120C moves ψ_PM +3.2 % and
     # B10AHV900M -> 20SW1200 +1.3 %, and the chord Ld = (ψd − ψ_PM)/i_d
@@ -632,49 +632,71 @@ def _calibration_sector_count(num_slots, num_poles, wind):
 #: run of minutes.
 _INC_LDQ_SAMPLES = 4
 
+#: ``ldq_method`` labels of the inductances ``frozen_permeability_ldq``
+#: returns — defined, with the rule every consumer reads them by, in
+#: ``simulation/ldq_provenance``.  ``Ld_mH``/``Lq_mH`` of an ``inc_ldq`` block
+#: are the differential ones since 2026-10-11 (regularized when a non-monotone
+#: B-H table forced the clamped tangent); a block without ``Ld_fp_secant_mH``
+#: predates that and its ``Ld_mH`` is the secant value.
+from motor_ai_sim.simulation.ldq_provenance import (  # noqa: E402
+    LDQ_METHOD_DIFFERENTIAL, LDQ_METHOD_REGULARIZED, LDQ_METHOD_SECANT)
+
+
+def _inc_probe_frames(k0, n_total, n_samples=None):
+    """The frame indices the inductance probe runs on: ``n_samples`` evenly
+    spaced over the REPORTED window ``[k0, n_total)`` — never a settling or a
+    demag-ratchet prefix frame, which ``k0 = _vskip + _dmskip`` excludes (the
+    series trimmed at the end drop exactly those frames)."""
+    k0 = max(0, int(k0))
+    nrep = max(1, int(n_total) - k0)
+    ns = max(1, min(int(_INC_LDQ_SAMPLES if n_samples is None else n_samples),
+                    nrep))
+    return {k0 + int(round(j * nrep / ns)) % nrep for j in range(ns)}
+
 
 def frozen_permeability_ldq(p2, Pro, free, A2, f_mag, Pa, Pb, psi_of, th_dq,
                             n_parallel=1):
-    """Incremental d-q inductances at ONE rotor position by FROZEN PERMEABILITY.
+    """Small-signal (DIFFERENTIAL) d-q inductances at ONE rotor position, and
+    the frozen-permeability SECANT values beside them.
 
     THE EQUATIONS.  A converged nonlinear magnetostatic frame satisfies
 
-        K(ν(|B|))·A  =  f_PM + Σ_k i_k·f_k                              (1)
+        R(A)  =  K(ν(|B|))·A − f_PM − Σ_k i_k·f_k  =  0                  (1)
 
-    with ν the per-element reluctivity the B-H curve put there and f_k the
-    unit-current source column of phase k.  FREEZE that reluctivity — keep the
-    operator K* ≡ K(ν*) of the loaded iron and stop letting ν follow B — and
-    (1) is LINEAR, so superposition splits the field exactly:
+    with ν = H/B the per-element (secant) reluctivity the B-H curve put there
+    and f_k the unit-current source column of phase k.  Perturb the currents
+    by δi and linearise (1) about the converged A:
 
-        A  =  A_PM*  +  Σ_k i_k·x_k ,   K*·A_PM* = f_PM ,  K*·x_k = f_k  (2)
+        J·δA = Σ_k δi_k·f_k ,   J = ∂R/∂A = K(ν) + T ,                   (2)
+        T(u, v) = 2·(dν/dB²)·(∇A·∇u)(∇A·∇v)
 
-    Park both sides at this rotor position and the flux linkages split the same
-    way, ψ_dq = ψ*_PM,dq + L·i_dq, with
+    — J is the DIFFERENTIAL (tangent) reluctivity tensor ν·I + 2·ν'·B⊗B of
+    the converged state, the same Jacobian the Newton assembles
+    (``P2Nonlinear.tangent2``, unclamped here: the exact linearisation, not
+    the Newton's SPD safeguard).  Park the flux linkages of two solves of J
+    with a UNIT d- and a unit q-axis current and
 
         L  =  [[∂ψd/∂i_d, ∂ψd/∂i_q],
                [∂ψq/∂i_d, ∂ψq/∂i_q]]                                    (3)
 
-    read off two solves of K* with a UNIT d- and a unit q-axis current.  The
-    size of the perturbation does not enter: the frozen operator is linear, so
-    Δψ/Δi is exact for any Δi, and solving (i + Δi) against (i) with the
-    magnets on returns these same numbers — the magnet term cancels in the
-    difference.  L is symmetric (reciprocity of a linear magnetic circuit);
-    ``reciprocity_pct`` reports the measured asymmetry instead of averaging it
-    away.  On linear iron ν* is ν, (2) is exact for the machine itself, and the
-    incremental values EQUAL the chord ones.
+    is the small-signal inductance a current loop, a PWM ripple or a bench
+    LCR meter sees: the limit of Δψ/Δi of symmetric ± current pairs.  Magnets
+    are linear (μ_rec) and sit in the constant part of K, so they enter J
+    unchanged.  L is symmetric (J is); ``reciprocity_pct`` reports the
+    measured asymmetry instead of averaging it away.
 
-    WHY IT REPLACES THE CHORD.  ``(ψd − ψ_PM)/i_d`` divides by a ψ_PM measured
-    at NO LOAD, while the loaded iron carries a magnet flux ψ*_PM the armature
-    reaction has MOVED by several per cent — sagged 6.1 % on the L180 rated
-    duty, where the reaction saturates the flux path; RAISED 4.7 % on the L155,
-    where it saturates a leakage path instead.  That difference lands whole in
-    the numerator,
-    and where i_d is a small share of the current it DOMINATES it: the L180
-    generator report a client reviewed read Ld 0.0976 mH against Lq 0.0693 for
-    a machine whose real saliency is Lq/Ld = 1.05.  The third solve here — K*
-    with the magnet source alone — measures ψ*_PM instead, on BOTH axes: under
-    cross-saturation it acquires a q component (−7.5 mWb on that duty), which
-    is why the chord ψq/i_q is not Lq either.
+    THE SECANT VALUES (``*_fp_H``).  Freezing ν alone — the operator K(ν*)
+    without T — makes (1) linear, so A = A*_PM + Σ i_k·x_k splits EXACTLY.
+    That split is what measures ψ*_PM, the magnets' own flux IN THE LOADED
+    IRON (on both axes: under cross-saturation it acquires a q component),
+    and it is why the chord (ψd − ψ_PM)/i_d is not an inductance.  But its
+    unit-current solves give a SECANT-type inductance: at small current the
+    frozen ν is H/B of the magnet-biased teeth, not dH/dB, and it over-reads
+    the differential Δψ/Δi by 1.7-2.4× on the Ø40 machines
+    (docs/BUG_LDLQ_REPORTED_2026-10-05.md).  It is kept under its own name,
+    and the superposition self-check uses it, because only for that operator
+    is ψ = ψ*_PM + L·i an identity.  On linear iron T = 0 and the two
+    coincide exactly.
 
     ``Pa``/``Pb`` are the unit-i_A and unit-i_B source columns with i_C folded
     in (i_C = −i_A − i_B), the same two the voltage drive's phasor initialiser
@@ -686,7 +708,7 @@ def frozen_permeability_ldq(p2, Pro, free, A2, f_mag, Pa, Pb, psi_of, th_dq,
     Returns a dict in HENRY and WEBER (the caller scales and rounds).
     """
     import numpy as _np
-    K, _ = p2.Kpw(A2)          # pointwise secant ν of THIS converged field
+    K, info = p2.Kpw(A2)       # pointwise secant ν of THIS converged field
     Kff = (Pro.T @ K @ Pro).tocsr()[free][:, free].tocsc()
     _npf = float(max(1, int(n_parallel)))
     _iA_d, _iB_d, _ = _ipark_dq(1.0 / _npf, 0.0, th_dq)
@@ -695,24 +717,47 @@ def frozen_permeability_ldq(p2, Pro, free, A2, f_mag, Pa, Pb, psi_of, th_dq,
     def _red(v):
         return _np.asarray(Pro.T @ v).ravel()[free]
 
-    X = p2.solve_ff(Kff, _np.column_stack([
-        _red(f_mag),                            # the magnets in the LOADED iron
-        _red(_iA_d * Pa + _iB_d * Pb),          # unit d-axis phase current
-        _red(_iA_q * Pa + _iB_q * Pb),          # unit q-axis phase current
-    ]), spd=True)
+    _rd = _red(_iA_d * Pa + _iB_d * Pb)         # unit d-axis phase current
+    _rq = _red(_iA_q * Pa + _iB_q * Pb)         # unit q-axis phase current
+
+    def _lmat(X, c_d, c_q):
+        _xd = psi_of(p2.pad2(Pro, free, X[:, c_d]))
+        _xq = psi_of(p2.pad2(Pro, free, X[:, c_q]))
+        _Ldd, _Lqd = _park_dq(_xd[0], _xd[1], _xd[2], th_dq)
+        _Ldq, _Lqq = _park_dq(_xq[0], _xq[1], _xq[2], th_dq)
+        _ref = max(abs(_Ldd), abs(_Lqq), 1e-30)
+        return (float(_Ldd), float(_Lqq), float(0.5 * (_Ldq + _Lqd)),
+                float(100.0 * abs(_Ldq - _Lqd) / _ref))
+
+    # SECANT: K(ν*) with the magnets and the two unit currents
+    X = p2.solve_ff(Kff, _np.column_stack([_red(f_mag), _rd, _rq]), spd=True)
     _pm = psi_of(p2.pad2(Pro, free, X[:, 0]))
-    _xd = psi_of(p2.pad2(Pro, free, X[:, 1]))
-    _xq = psi_of(p2.pad2(Pro, free, X[:, 2]))
     _pmd, _pmq = _park_dq(_pm[0], _pm[1], _pm[2], th_dq)
-    _Ldd, _Lqd = _park_dq(_xd[0], _xd[1], _xd[2], th_dq)
-    _Ldq, _Lqq = _park_dq(_xq[0], _xq[1], _xq[2], th_dq)
-    _ref = max(abs(_Ldd), abs(_Lqq), 1e-30)
+    _Ld_fp, _Lq_fp, _Ldq_fp, _rec_fp = _lmat(X, 1, 2)
+
+    # DIFFERENTIAL: J = K + T, the exact linearisation of (1).  A B-H table
+    # that is not monotone somewhere makes J indefinite there; the Newton's
+    # clamped tangent (dν/dB² < 0 dropped) is then used and the row says so.
+    _clamped = False
+    T = p2.tangent2(info, clamp=False) if info else None
+    _dhdb = getattr(p2, "last_dhdb_min_rel", None) if info else None
+    if T is not None and _dhdb is not None and _dhdb <= 0.0:
+        T = p2.tangent2(info, clamp=True)
+        _clamped = True
+    if T is None:                               # no saturable iron: J = K
+        _Ld, _Lq, _Ldq, _rec = _Ld_fp, _Lq_fp, _Ldq_fp, _rec_fp
+    else:
+        Jff = (Pro.T @ (K + T).tocsr() @ Pro).tocsr()[free][:, free].tocsc()
+        XJ = p2.solve_ff(Jff, _np.column_stack([_rd, _rq]), spd=True)
+        _Ld, _Lq, _Ldq, _rec = _lmat(XJ, 0, 1)
     return {
-        "Ld_H": float(_Ldd), "Lq_H": float(_Lqq),
-        "Ldq_H": float(0.5 * (_Ldq + _Lqd)),
-        "reciprocity_pct": float(100.0 * abs(_Ldq - _Lqd) / _ref),
+        "Ld_H": _Ld, "Lq_H": _Lq, "Ldq_H": _Ldq, "reciprocity_pct": _rec,
+        "Ld_fp_H": _Ld_fp, "Lq_fp_H": _Lq_fp, "Ldq_fp_H": _Ldq_fp,
+        "reciprocity_fp_pct": _rec_fp,
         "psi_d_pm_frozen_Wb": float(_pmd),
         "psi_q_pm_frozen_Wb": float(_pmq),
+        "tangent_clamped": bool(_clamped),
+        "dhdb_min_rel": (None if _dhdb is None else float(_dhdb)),
     }
 
 
@@ -875,11 +920,11 @@ def noload_incremental_ldq(geo, wind, pole_pairs, daxis_deg,
 
     ONE cheap no-load transient (the ψ_PM calibration knobs: 6 frames on the
     calibration mesh) with the magnets and the winding at ``magnet_temp_c`` /
-    ``coil_temp_c``, and the frozen-permeability probe of
+    ``coil_temp_c``, and the differential probe of
     ``frozen_permeability_ldq`` run on its frames.  "Zero current" is not
     "unsaturated iron": at no load the magnets have already pushed the teeth up
-    the B-H curve, and the ν that is frozen here is that state's — which is
-    exactly the iron a small-signal bench measurement meets.
+    the B-H curve, and the tangent reluctivity linearised here is that state's
+    — which is exactly the iron a small-signal bench measurement meets.
 
     Cached on disk next to ψ_PM and the d-axis angle, keyed on the same
     geometry/winding identity plus the magnet temperature (a colder magnet
@@ -887,7 +932,9 @@ def noload_incremental_ldq(geo, wind, pole_pairs, daxis_deg,
     ``inc_ldq`` block of that run, or ``None`` when it could not be measured.
     """
     import json as _j, os as _os
-    key = "ldq0_v1_%s_M%g" % (psipm_cache_key(
+    # v2 (2026-10-11): the block's Ld/Lq are the DIFFERENTIAL values; a v1
+    # entry holds the frozen-permeability secant ones and must not be served.
+    key = "ldq0_v2_%s_M%g" % (psipm_cache_key(
                                   geo, wind, connection,
                                   materials=_noload_material_fingerprint()),
                               float(magnet_temp_c))
@@ -925,9 +972,9 @@ def noload_incremental_ldq(geo, wind, pole_pairs, daxis_deg,
     out = dict(out)
     out["magnet_temp_c"] = float(magnet_temp_c)
     out["coil_temp_c"] = float(coil_temp_c)
-    out["method"] = ("frozen-permeability incremental at i = 0, %g °C — the "
-                     "catalogue convention, quoted like KV"
-                     % float(magnet_temp_c))
+    out["method"] = ("%s at i = 0, %g °C — the catalogue convention, quoted "
+                     "like KV" % (out.get("ldq_method") or LDQ_METHOD_SECANT,
+                                  float(magnet_temp_c)))
     if _dp:
         try:
             _disk = {}
@@ -3869,13 +3916,13 @@ def _fem_transient_sliding_band_once(
                                  # nu the whole chain is clean to 0.004 Nm.  The
                                  # industry-standard method for honest cogging /
                                  # ripple.  Current drive only.
-    inc_ldq: bool = False,       # ALSO measure the incremental (differential)
-                                 # d-q inductances by frozen permeability at a
-                                 # few rotor positions of the reported window —
-                                 # see `frozen_permeability_ldq`.  Costs one
-                                 # extra linear back-solve triple per sampled
-                                 # frame on a matrix the frame already has, and
-                                 # nothing else about the run moves.
+    inc_ldq: bool = False,       # ALSO measure the small-signal (differential,
+                                 # tangent-reluctivity) d-q inductances, and the
+                                 # frozen-permeability secant ones, at a few
+                                 # rotor positions of the reported window —
+                                 # see `frozen_permeability_ldq`.  Costs two
+                                 # linear solves per sampled frame, and nothing
+                                 # else about the run moves.
     six_phase: Optional[dict] = None,  # SIX-PHASE WINDING (two in-phase 3-phase
                                  # sets, ``winding_sets.resolve_six_phase``).  None
                                  # = 3 phases, byte-identical to before.  The sets
@@ -6983,7 +7030,10 @@ def _fem_transient_sliding_band_once(
     # ── incremental (frozen-permeability) d-q inductances ────────────────
     # WHICH reported frames are probed, decided before the loop so the choice
     # cannot depend on anything the loop discovers.  Evenly spaced over the
-    # whole reported window; `_INC_LDQ_SAMPLES` says why four.
+    # REPORTED window — after the voltage-settling and demag prefixes, which
+    # are trimmed from every series at the end; `_INC_LDQ_SAMPLES` says why
+    # four.  (Until 2026-10-11 the spacing ran over all n_total frames, so a
+    # settling or demag run probed its start-up frames.)
     _inc_rows: list = []
     _six_rows: list = []    # six-phase L_xy / L_dq,set probe rows
     _six_psi: list = []     # (theta_e, psi_set1_A, psi_set2_A) per frame
@@ -6991,9 +7041,7 @@ def _fem_transient_sliding_band_once(
     # (A converged settle does not know its reported window yet: it picks the
     # probed frames inside that window when the settle stops — see the loop.)
     if inc_ldq and n_total > 0 and _conv_settle is None:
-        _ns_inc = max(1, min(int(_INC_LDQ_SAMPLES), int(n_total)))
-        _inc_at = {int(round(_j * n_total / _ns_inc)) % int(n_total)
-                   for _j in range(_ns_inc)}
+        _inc_at = _inc_probe_frames(int(_vskip) + int(_dmskip), int(n_total))
     _pic_iters = []; _pic_res_max = 0.0; _frame_converged = []
     _pic_fallback = []      # frames Newton did not solve (fell back to Picard)
     _pic_unconv = []        # frames that met NEITHER path's tolerance
@@ -10653,9 +10701,9 @@ def _fem_transient_sliding_band_once(
                 },
             )
         # ── INCREMENTAL d-q INDUCTANCES at this rotor position ───────────
-        # Frozen permeability on the field THIS frame just converged (see
-        # `frozen_permeability_ldq`): three linear back-solves with the
-        # frame's own operator.  It reads state and never writes any, so a
+        # Tangent (differential) and frozen-permeability secant operators of
+        # the field THIS frame just converged (see `frozen_permeability_ldq`):
+        # two linear solves.  It reads state and never writes any, so a
         # failure here costs the run nothing but this diagnostic.
         if k in _inc_at:
             try:
@@ -10928,11 +10976,8 @@ def _fem_transient_sliding_band_once(
                     # probes are evenly spaced over it, and the animation
                     # keyframes span it, as the pre-loop selection does.
                     if inc_ldq:
-                        _k0r = int(_vskip) + int(_dmskip)
-                        _nrep = max(1, int(n_total) - _k0r)
-                        _ns_inc = max(1, min(int(_INC_LDQ_SAMPLES), _nrep))
-                        _inc_at = {_k0r + int(round(_j * _nrep / _ns_inc)) % _nrep
-                                   for _j in range(_ns_inc)}
+                        _inc_at = _inc_probe_frames(
+                            int(_vskip) + int(_dmskip), int(n_total))
                     if int(return_frames) > 0 and n_total > 1:
                         _anim_k0 = int(_vskip) + int(_dmskip)
                         _nf = max(2, min(int(return_frames), n_total - _anim_k0))
@@ -12722,15 +12767,18 @@ def _fem_transient_sliding_band_once(
     except Exception as _edq:   # noqa: BLE001
         _dq = {"dq_error": f"{type(_edq).__name__}: {_edq}"}
 
-    # ── INCREMENTAL (frozen-permeability) d-q INDUCTANCES of this point ──────
+    # ── INCREMENTAL (differential) d-q INDUCTANCES of this point ─────────────
     # The per-position rows averaged over the reported window, with the
     # modulation they were averaged over reported beside them: L(θ) carries the
     # slot harmonics, so a spread of tens of per cent means "this machine's
     # inductance depends on where the rotor is", which is a finding and not an
-    # error bar to hide.  `superposition_pct` is the method's own self-check —
-    # with ν frozen the field must satisfy ψd = ψ*_PM + Ld·i_d + Ldq·i_q
-    # EXACTLY, so anything but ~0 means the frozen operator is not the one that
-    # produced the frame (a coupled-eddy or demag-rebuilt frame will say so).
+    # error bar to hide.  Ld/Lq/Ldq are the DIFFERENTIAL values (tangent
+    # reluctivity); the frozen-permeability SECANT ones ride beside them as
+    # *_fp_secant_mH.  `superposition_pct` is the secant operator's own
+    # self-check — with ν frozen the field must satisfy ψd = ψ*_PM + Ld,fp·i_d
+    # + Ldq,fp·i_q EXACTLY, so anything but ~0 means the frozen operator is not
+    # the one that produced the frame (a coupled-eddy or demag-rebuilt frame
+    # will say so).
     _inc = {}
     if _inc_rows:
         try:
@@ -12748,10 +12796,10 @@ def _fem_transient_sliding_band_once(
             _sup = []
             for _r in _inc_rows:
                 _ref_p = max(math.hypot(_r["psi_d_Wb"], _r["psi_q_Wb"]), 1e-30)
-                _pd_e = (_r["psi_d_pm_frozen_Wb"] + _r["Ld_H"] * _r["i_d_A"]
-                         + _r["Ldq_H"] * _r["i_q_A"] - _r["psi_d_Wb"])
-                _pq_e = (_r["psi_q_pm_frozen_Wb"] + _r["Ldq_H"] * _r["i_d_A"]
-                         + _r["Lq_H"] * _r["i_q_A"] - _r["psi_q_Wb"])
+                _pd_e = (_r["psi_d_pm_frozen_Wb"] + _r["Ld_fp_H"] * _r["i_d_A"]
+                         + _r["Ldq_fp_H"] * _r["i_q_A"] - _r["psi_d_Wb"])
+                _pq_e = (_r["psi_q_pm_frozen_Wb"] + _r["Ldq_fp_H"] * _r["i_d_A"]
+                         + _r["Lq_fp_H"] * _r["i_q_A"] - _r["psi_q_Wb"])
                 _sup.append(100.0 * max(abs(_pd_e), abs(_pq_e)) / _ref_p)
             _Ldm, _Lqm = _mn("Ld_H"), _mn("Lq_H")
             _inc = {
@@ -12760,6 +12808,21 @@ def _fem_transient_sliding_band_once(
                 "Ldq_mH": round(1e3 * _mn("Ldq_H"), 6),
                 "saliency_Lq_over_Ld": (round(_Lqm / _Ldm, 4)
                                         if abs(_Ldm) > 1e-15 else None),
+                # The frozen-permeability SECANT values of the same frames —
+                # the pre-2026-10-11 Ld_mH/Lq_mH, kept under an explicit name.
+                "Ld_fp_secant_mH": round(1e3 * _mn("Ld_fp_H"), 6),
+                "Lq_fp_secant_mH": round(1e3 * _mn("Lq_fp_H"), 6),
+                "Ldq_fp_secant_mH": round(1e3 * _mn("Ldq_fp_H"), 6),
+                # REGULARIZED when a non-monotone B-H table forced the
+                # Newton's clamped tangent on at least one probed frame: that
+                # operator is not dψ/di of the material law, and every
+                # consumer withholds the value (simulation/ldq_provenance).
+                "ldq_method": (LDQ_METHOD_REGULARIZED
+                               if any(bool(_r.get("tangent_clamped"))
+                                      for _r in _inc_rows)
+                               else LDQ_METHOD_DIFFERENTIAL),
+                "tangent_clamped": any(bool(_r.get("tangent_clamped"))
+                                       for _r in _inc_rows),
                 # The magnets' own flux linkage IN THE LOADED IRON.  Compared
                 # with the no-load psi_PM this IS the cross-saturation sag —
                 # the term the chord Ld divides by i_d and calls an inductance.
@@ -12774,10 +12837,11 @@ def _fem_transient_sliding_band_once(
                 "reciprocity_pct": round(
                     max(_r["reciprocity_pct"] for _r in _inc_rows), 3),
                 "superposition_pct": round(max(_sup), 3),
-                "method": ("frozen-permeability incremental: the per-element ν "
-                           "of the converged loaded field is held fixed and a "
-                           "unit d- and q-axis current solved on it "
-                           "(dψ/di, exact for a linear operator). "
+                "method": ("differential (small-signal): a unit d- and q-axis "
+                           "current solved on the tangent reluctivity "
+                           "(Newton Jacobian) of the converged loaded field, "
+                           "dψ/di at this iron state; *_fp_secant_mH hold the "
+                           "frozen-permeability secant values. "
                            "Magnetostatic — on a coupled-eddy run the field's "
                            "own ψ/i also carries the AC redistribution, which "
                            "is impedance and not inductance."),
@@ -13514,8 +13578,8 @@ def em_transient_eval(
     geo_mesh=None,
     airgap_macro: bool = False,
     frozen_nu: bool = False,
-    inc_ldq: bool = False,           # also measure the incremental (frozen-
-                                     # permeability) d-q inductances of the
+    inc_ldq: bool = False,           # also measure the small-signal
+                                     # (differential) d-q inductances of the
                                      # point — see frozen_permeability_ldq
     six_phase: Optional[dict] = None,  # two in-phase 3-phase sets (winding_sets);
                                      # None = 3 phases, unchanged

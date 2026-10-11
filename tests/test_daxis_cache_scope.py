@@ -279,7 +279,7 @@ def test_psi_pm_disk_entry_of_other_cards_or_old_version_is_not_served(
         set_request_materials(None)
     ldq = {"Ld_mH": 0.1, "Lq_mH": 0.2}
     disk.write_text(json.dumps({k_n52: [2.0e-4, 1e-9], v2: [9.0, 9.0],
-                                "ldq0_v1_%s_M20" % k_n52: ldq}))
+                                "ldq0_v2_%s_M20" % k_n52: ldq}))
 
     set_request_materials(n52)
     try:                      # the same cards: served, no solve
@@ -292,6 +292,33 @@ def test_psi_pm_disk_entry_of_other_cards_or_old_version_is_not_served(
         with pytest.raises(_Intercepted):
             F.noload_psi_pm(_MAT_GEO, _MAT_WIND, 7, 2, 60.)
         with pytest.raises(_Intercepted):   # and so does the catalogue Ld/Lq
+            F.noload_incremental_ldq(_MAT_GEO, _MAT_WIND, 7, 60.)
+    finally:
+        set_request_materials(None)
+
+
+def test_a_v1_only_catalogue_ldq_entry_is_never_served(tmp_path, monkeypatch):
+    """Same cards, same machine — but the disk holds only an ``ldq0_v1_`` entry,
+    written by the frozen-permeability SECANT probe before 2026-10-11.  It must
+    be a miss (the probe solves its own differential value), never served as
+    the small-signal catalogue Ld/Lq."""
+    class _Intercepted(BaseException):
+        pass
+
+    def _intercept(**kw):
+        raise _Intercepted
+
+    disk = tmp_path / "daxis.json"
+    monkeypatch.setattr(F, "_daxis_disk_path", lambda: str(disk))
+    monkeypatch.setattr(F, "em_transient_eval", _intercept)
+    n52 = _ov(magnet="N52UH_150C")
+    set_request_materials(n52)
+    try:
+        k_n52 = F.psipm_cache_key(_MAT_GEO, _MAT_WIND,
+                                  materials=F._noload_material_fingerprint())
+        disk.write_text(json.dumps({"ldq0_v1_%s_M20" % k_n52:
+                                    {"Ld_mH": 0.1, "Lq_mH": 0.2}}))
+        with pytest.raises(_Intercepted):
             F.noload_incremental_ldq(_MAT_GEO, _MAT_WIND, 7, 60.)
     finally:
         set_request_materials(None)

@@ -11221,12 +11221,18 @@ def cold_constant_rows(rec: Optional[Dict[str, Any]]) -> List[List[Any]]:
     # Ld / Lq ON THE CATALOGUE'S OWN BASIS (owner 2026-09-20: *"Ld/Lq also
     # need to be given at 20 degrees and at zero current, like KV"*).  KV above is a
     # no-load constant at 20 °C; quoting the inductances of a 600 A operating
-    # point beside it compares two different machines.  These are the
-    # incremental (frozen-permeability) values at i = 0 and 20 °C — the duty's
-    # own loaded inductances stay in §4, where the operating point is stated.
+    # point beside it compares two different machines.  Labelled from the
+    # block's OWN saved provenance (ldq_provenance.catalogue_ldq0_view): a
+    # block solved before 2026-10-11 holds the frozen-permeability secant and
+    # says so; a regularized probe is withheld.  The duty's own loaded
+    # inductances stay in §4, where the operating point is stated.
+    from motor_ai_sim.simulation.ldq_provenance import catalogue_ldq0_view
+    _st0, _note0 = catalogue_ldq0_view(c)
+    if _st0 == "regularized":
+        rows.append(["Ld / Lq at no load [mH]", NOT_SOLVED, _note0])
     R("Ld at no load [mH]", _numf(c.get("Ld0_mH")), 4, "",
-      "incremental (frozen permeability) at zero current and 20 °C — the same "
-      "basis as KV above")
+      _note0 + ("; the same basis as KV above"
+                if _st0 == "differential" else ""))
     R("Lq at no load [mH]", _numf(c.get("Lq0_mH")), 4, "",
       "same solve, quadrature axis")
     R("Saliency Lq/Ld at no load", _numf(c.get("saliency0_Lq_over_Ld")), 3, "",
@@ -11308,10 +11314,19 @@ def em_constant_rows(em: Dict[str, Any],
     # iron moved.  They are now the INCREMENTAL values: the per-element
     # reluctivity of the converged loaded field is frozen and a unit d- and
     # q-axis current solved on that operator, i.e. ∂ψ/∂i at this iron state.
+    # Since 2026-10-11 that operator is the TANGENT reluctivity (small-signal,
+    # "differential"); a record without that label carries the secant values.
     # The chord is kept as a comparison inside the note, never as "Ld".
     _inc = str(_g(em, "ldq_method") or "")
-    _meth = (" — incremental (frozen permeability) at this point, not a chord"
-             if _inc else "")
+    from motor_ai_sim.simulation.ldq_provenance import (
+        REGULARIZED_NOTE, SCOPE_NOTE, record_status)
+    _ldq_st = record_status(em) if _inc else "none"
+    _meth = ("" if not _inc else
+             " — differential (small-signal) at this point, " + SCOPE_NOTE
+             + "; not a chord"
+             if _ldq_st == "differential" else
+             " — incremental (frozen permeability) at this point: a secant "
+             "value, not the small-signal one; not a chord")
     _at = ("" if (_gam is None or abs(_gam) < 0.5)
            else ", at gamma = %s" % _fmt(_gam, 1, "°"))
     _chord_d_v = _numf(_g(em, "Ld_chord_mH"))
@@ -11367,9 +11382,10 @@ def em_constant_rows(em: Dict[str, Any],
           saliency_note(_g(em, "saliency_Lq_over_Ld")))
     else:
         _inc_missing = NOT_SOLVED + " — re-run the electromagnetic solve"
-        _inc_missing_note = ("this run predates the incremental "
-                              "(frozen-permeability) Ld/Lq measurement; the "
-                              "chord is not printed here as an inductance")
+        _inc_missing_note = (REGULARIZED_NOTE if _ldq_st == "regularized" else
+                             "this run predates the differential "
+                             "(small-signal) Ld/Lq measurement; the "
+                             "chord is not printed here as an inductance")
         rows.append(["Ld" + _w, _inc_missing, _inc_missing_note])
         rows.append(["Lq" + _w, _inc_missing, _inc_missing_note])
         if _delta:

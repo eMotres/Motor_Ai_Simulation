@@ -321,7 +321,7 @@ def test_model_calibration_is_validated_and_used(tmp_path):
 
 
 def test_shipped_models_load_and_rate_with_their_default_propellers():
-    """The three extracted models load; the Ø40 ones give a thermal limit inside the grid."""
+    """The three extracted models load; L12 gives a limit inside the grid."""
     for die, cfg in (("CIANO14 40 new", "L12"), ("CIANO14 40 new", "L20"), ("CIANO28 85 20SW1200", "L13")):
         m = s1.load_model(die, cfg)
         assert m["limits"]["magnet_C"] == 150.0
@@ -330,7 +330,8 @@ def test_shipped_models_load_and_rate_with_their_default_propellers():
         assert lims["winding_C"] == report.PROJECT_INSULATION_C == 200.0
         assert "class N" in lims["winding_basis"]
     r = s1.s1_rating(s1.load_model("CIANO14 40 new", "L12"), pp.get_propeller("tmotor_fpv_10x5"))
-    assert r["limit"] and r["limit"]["binding"] in ("winding", "magnet")
+    # a system rating since 2026-10-11: the die's controller (26.1 A, favourable board) binds first
+    assert r["limit"] and r["limit"]["binding"] == "controller"
     assert 3000.0 < r["limit"]["rpm"] < 20000.0
 
 
@@ -444,12 +445,13 @@ def test_calibration_fit_recovers_known_constants(tmp_path):
     assert "basis" in cal and "slipstream_factor_basis" in cal
     m2 = json.loads(out.read_text(encoding="utf-8"))
     s1.validate_model(m2)
-    # the Configure flag's applicability: inside the anchors' slipstream range ± 20 %
+    # the Configure flag's applicability: inside the fitted / validated slipstream range, no margin
+    assert cal["fit_domain"]["air_speed_ms"] == [lo, hi] and cal["validation_domain"]["n"] == 1
     assert s1.calibration_covers(m2, 0.5 * (lo + hi)) is True
-    assert s1.calibration_covers(m2, 1.19 * hi) is True
-    assert s1.calibration_covers(m2, 1.25 * hi) is False
-    assert s1.calibration_covers(m2, 0.75 * lo) is False
-    assert s1.calibration_covers(model, 5.0) is None          # no range stated: no claim
+    assert s1.calibration_covers(m2, 1.02 * hi) is False
+    assert s1.calibration_covers(m2, 0.98 * lo) is False
+    assert s1.thermal_domain(m2, 1.02 * hi) == "extrapolated"
+    assert s1.calibration_covers(_model(), 5.0) is None       # uncalibrated: no claim
 
 
 def test_housed_calibration_form_fits_the_gap_resistance(tmp_path):
@@ -492,3 +494,291 @@ def test_housed_calibration_form_fits_the_gap_resistance(tmp_path):
     for k, v in true.items():
         assert cal[k] == pytest.approx(v, rel=0.03)
     s1.validate_model(json.loads(out.read_text(encoding="utf-8")))
+
+
+# ---------------------------------------------------------------------------
+# 2026-10-11 review fixes: a SYSTEM (motor + controller + battery) rating
+# ---------------------------------------------------------------------------
+
+PP_PAIRS, PSI_PM, L_DQ = 7, 0.01, 1.0e-4
+
+
+def _psi_table():
+    """A linear surface-magnet psi-map: psi_d = psi_PM + L i_d, psi_q = L i_q."""
+    cur = [0.0, 10.0, 20.0, 40.0, 60.0]
+    gam = [-5.0 + 2.5 * k for k in range(35)]
+    pd, pq, tq = [], [], []
+    for I in cur:
+        rd, rq, rt = [], [], []
+        for g in gam:
+            i_d, i_q = -math.sqrt(2) * I * math.sin(math.radians(g)), math.sqrt(2) * I * math.cos(math.radians(g))
+            d, q = PSI_PM + L_DQ * i_d, L_DQ * i_q
+            rd.append(d)
+            rq.append(q)
+            rt.append(1.5 * PP_PAIRS * (d * i_q - q * i_d))
+        pd.append(rd)
+        pq.append(rq)
+        tq.append(rt)
+    return {"I_A": cur, "gamma_deg": gam, "psi_d_Wb": pd, "psi_q_Wb": pq, "T_Nm": tq,
+            "pole_pairs": PP_PAIRS, "psi_pm_Wb": PSI_PM, "magnet_C": 20.0, "gamma_max_deg": 80.0}
+
+
+def _sys_model(**over):
+    m = _model()
+    raw = dict(m)
+    raw["grid"] = {**m["grid"], "gamma_deg": [[0.0] * len(CUR) for _ in RPM]}
+    raw.update(psi_map=_psi_table(), voltage={"m": 0.9, "v_dc_grid": 1000.0},
+               battery={"v_min": 300.0, "v_nom": 350.0, "v_max": 400.0},
+               sine_controller={"i_board_limit_A": {"favourable": 50.0, "weak": 12.0, "hot_motor": 8.0},
+                                "i_board_basis": "test board", "bus_v": {"min": 250.0, "max": 450.0}},
+               drives={"pwm_a": {"rpm": RPM, "I_A": CUR, "i_board_limit_A": {"favourable": 14.0},
+                                 "bus_v": {"min": 250.0, "nom": 350.0, "max": 450.0},
+                                 "controller_loss_W": [[0.5 * i for i in CUR] for _ in RPM],
+                                 "pwm_extra_W": [[0.2 * i for i in CUR] for _ in RPM]}},
+               demag={"I_limit_A": 60.0, "ref_magnet_C": 20.0})
+    raw.update(over)
+    return s1.validate_model(raw)
+
+
+def test_controller_limit_binds_and_drive_variant_is_selected(tmp_path):
+    prop = _prop(tmp_path)
+    m = _sys_model()
+    free = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0)["limit"]
+    weak = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0, board_cooling="weak")
+    L = weak["limit"]
+    assert L["binding"] == "controller" and L["current_A"] <= 12.0 + 1e-6 and L["rpm"] < free["rpm"]
+    assert weak["drive"]["I_cont_A"] == 12.0 and weak["drive"]["kind"] == "sine"
+    assert L["qualification"]["checks"]["controller"] == "checked"
+    pw = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0, drive="pwm_a")
+    assert pw["limit"]["binding"] == "controller" and pw["limit"]["current_A"] <= 14.0 + 1e-6
+    # the variant's controller loss reaches the battery power, its PWM extra the motor
+    row = s1.solve_point(m, prop, 5000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(m),
+                         drive=s1.resolve_drive(m, "pwm_a"))
+    assert row["controller_loss_W"] == pytest.approx(0.5 * row["current_A"], rel=1e-6)
+    assert row["losses_W"]["pwm_extra"] == pytest.approx(0.2 * row["current_A"], rel=1e-6)
+    assert row["battery_power_W"] == pytest.approx(row["electrical_power_W"] + row["controller_loss_W"])
+    sine = s1.solve_point(m, prop, 5000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(m))
+    assert sine["losses_W"]["pwm_extra"] == 0.0 and sine["controller_loss_W"] is None
+    with pytest.raises(s1.S1Error):
+        s1.resolve_drive(m, "nope")
+    with pytest.raises(s1.S1Error):
+        s1.resolve_drive(m, "sine", "arctic")
+
+
+def test_unknown_controller_is_a_motor_only_limit_and_says_so(tmp_path):
+    L = _run(_model(), _prop(tmp_path))["limit"]
+    assert L["drive_feasibility"] == "unknown"
+    assert "drive_unknown" in L["flags"] and "voltage_unverified" in L["flags"]
+    assert set(L["qualification"]["unverified"]) >= {"controller", "voltage_min_pack", "battery_current"}
+
+
+def test_pack_outside_the_drive_bus_range_fails_the_drive(tmp_path):
+    m = _sys_model()
+    r = _run(m, _prop(tmp_path), pack_v_min=300.0, pack_v_max=500.0)
+    assert r["drive"]["pack_fits"] is False
+    assert r["limit"]["drive_feasibility"] == "failed" and "drive_failed" in r["limit"]["flags"]
+    ok = _run(m, _prop(tmp_path))
+    assert ok["drive"]["pack_fits"] is True and ok["limit"]["drive_feasibility"] == "checked"
+
+
+def test_battery_current_binds_only_when_given(tmp_path):
+    m, prop = _sys_model(), _prop(tmp_path)
+    a = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0)
+    assert "battery_current_unknown" in a["limit"]["flags"]
+    lim_A = 0.5 * a["limit"]["battery_current_A"]
+    b = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0, pack_i_max_A=lim_A)["limit"]
+    assert b["binding"] == "battery_current" and b["battery_current_A"] <= lim_A + 1e-6
+    # sine: no controller loss known, the motor input over the minimum pack voltage
+    assert b["battery_current_A"] == pytest.approx(b["electrical_power_W"] / 300.0, rel=1e-9)
+
+
+def test_voltage_is_rechecked_at_minimum_pack_voltage_and_hot_flux():
+    m = _sys_model()
+    r = s1.resistance(m, 20.0)
+    w = 2 * math.pi * 6000.0 / 60.0 * PP_PAIRS
+    i_q = math.sqrt(2) * 20.0
+    v = math.hypot(-w * L_DQ * i_q, r * i_q + w * PSI_PM)
+    assert s1.phase_voltage(m, 6000.0, 20.0, 0.0, 20.0, r) == pytest.approx(v, rel=1e-9)
+    # hot magnets: less PM flux, less voltage (k_psi = 1 - 0.001 (T - 20))
+    hot = s1.phase_voltage(m, 6000.0, 20.0, 0.0, 120.0, r)
+    assert hot == pytest.approx(math.hypot(-w * L_DQ * i_q, r * i_q + w * PSI_PM * 0.9), rel=1e-9)
+    drv = s1.resolve_drive(m)
+    vd = lambda vl: vl * math.sqrt(3) / 0.9                               # noqa: E731
+    assert s1.voltage_check(m, drv, 6000.0, 20.0, 20.0, 20.0, vd(v * 1.01))["status"] == "ok"
+    deep = s1.voltage_check(m, drv, 6000.0, 20.0, 20.0, 20.0, vd(v * 0.99))
+    assert deep["status"] == "deeper_fw" and deep["I_A"] > 20.0 and deep["gamma_deg"] > 0.0
+    st = s1.dq_state(m, deep["I_A"], deep["gamma_deg"], 20.0)
+    assert st["T"] >= s1.dq_state(m, 20.0, 0.0, 20.0)["T"] - 1e-6
+    assert s1.phase_voltage(m, 6000.0, deep["I_A"], deep["gamma_deg"], 20.0, r) <= deep["V_limit_V"] + 1e-9
+    # the same pack voltage holds with hot magnets
+    assert s1.voltage_check(m, drv, 6000.0, 20.0, 120.0, 20.0, vd(v * 0.99))["status"] == "ok"
+    assert s1.voltage_check(m, drv, 6000.0, 20.0, 20.0, 20.0, vd(5.0))["status"] == "infeasible"
+    assert s1.voltage_check(_model(), drv, 6000.0, 20.0, 20.0, 20.0, 300.0)["status"] == "unverified"
+
+
+def test_voltage_binds_the_s1_point_at_a_low_pack(tmp_path):
+    m, prop = _sys_model(), _prop(tmp_path)
+    w = 2 * math.pi * 4000.0 / 60.0 * PP_PAIRS
+    low = 0.6 * w * PSI_PM * math.sqrt(3) / 0.9           # the no-load voltage reaches it below 4000 rpm
+    r = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0, pack_v_min=low, pack_v_max=low * 1.05)
+    rows = [x for x in r["rows"] if x["voltage"]]
+    assert any(x["voltage"]["status"] == "deeper_fw" for x in rows)
+    high = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0)
+    assert r["limit"]["rpm"] < high["limit"]["rpm"]              # the low pack costs speed
+    deep = [x for x in rows if x["ok"] and x["voltage"]["status"] == "deeper_fw"]
+    assert deep
+    for x in deep:
+        assert x["current_A"] > x["current_grid_A"]
+        assert x["losses_W"]["cu_dc"] == pytest.approx(3 * x["current_A"] ** 2 * s1.resistance(m, x["T_winding_C"]),
+                                                       rel=1e-4)        # at the iterate, within the 0.01 K tolerance
+
+
+def test_demag_limit_follows_the_magnet_temperature(tmp_path):
+    card = {"name": "T", "T_ref_C": 20.0, "Br_ref_T": 1.44, "alpha_br_pct_per_K": -0.12,
+            "Hcj_ref_A_m": 1.592e6, "beta_hcj_pct_per_K": -0.55, "mu_rec": 1.05, "knee_fraction": 0.97}
+    m = _sys_model(demag={"I_limit_A": 40.0, "ref_magnet_C": 50.0, "magnet": card, "permeance_coeff": 2.0})
+    assert s1.demag_limit_at(m, 30.0)[0] == 40.0                   # held below the probe temperature
+    i_hot, basis = s1.demag_limit_at(m, 120.0)
+    assert 0 < i_hot < 40.0 and basis.startswith("reference temperature only")
+
+    def margin(t):
+        dt = t - 20.0
+        return 0.97 * 1.592e6 * (1 - 0.0055 * dt) - 1.44 * (1 - 0.0012 * dt) / (4e-7 * math.pi * 3.05)
+    assert i_hot == pytest.approx(40.0 * margin(120.0) / margin(50.0), rel=1e-9)
+    # scaling only the coercivity would NOT be conservative: the self field eats the margin first
+    assert i_hot < 40.0 * (1 - 0.0055 * 100) / (1 - 0.0055 * 30)
+    bare = _sys_model(demag={"I_limit_A": 40.0, "ref_magnet_C": 50.0})
+    assert s1.demag_limit_at(bare, 120.0)[0] is None
+    r = _run(_sys_model(demag={"I_limit_A": 8.0, "ref_magnet_C": 20.0, "magnet": card}), _prop(tmp_path),
+             winding_limit_c=400.0, magnet_limit_c=400.0)
+    assert r["limit"]["binding"] == "demag" and "demag_reference_only" in r["limit"]["flags"]
+    assert r["limit"]["current_A"] <= r["limit"]["demag_limit_A"] + 1e-6
+
+
+def test_missing_loss_cell_refuses_the_point_and_current_extrapolation_is_flagged(tmp_path):
+    m = _model()
+    m["grid"]["loss_W"]["fe_stator"][2] = [None] * len(CUR)      # the 4000 rpm row: no value
+    ls = s1.losses(m, 4000.0, 20.0, 50.0)
+    assert ls["unavailable"] == ["fe_stator"]
+    row = s1.solve_point(m, _prop(tmp_path), 4000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(m))
+    assert row["binding"] == "loss_data" and row["losses_unavailable"] == ["fe_stator"] and not row["ok"]
+    full = _model()
+    a = s1.losses(full, 3000.0, 2.0, 50.0)                          # below the 5 A first current
+    assert a["below_loss_grid_current"] and not a["below_loss_grid_speed"] and a["below_loss_grid"]
+    b = s1.losses(full, 500.0, 20.0, 50.0)
+    assert b["below_loss_grid_speed"] and not b["below_loss_grid_current"]
+    c = s1.losses(full, 3000.0, 20.0, 50.0)
+    assert not c["below_loss_grid"] and c["unavailable"] == []
+
+
+def test_shipped_l12_with_a_null_loss_cell_is_refused_not_zeroed():
+    m = s1.load_model("CIANO14 40 new", "L12")
+    ok = s1.losses(m, 6500.0, 21.39, 100.0)
+    assert ok["fe_stator"] > 1.0 and not ok["unavailable"]
+    m["grid"]["loss_W"]["fe_stator"][1][1] = None
+    assert s1.losses(m, 6500.0, 21.39, 100.0)["unavailable"] == ["fe_stator"]
+    # and the shipped model flags the review's 3.70 A point below its 10.7 A grid current
+    low = s1.losses(s1.load_model("CIANO14 40 new", "L12"), 3720.0, 3.70, 40.0)
+    assert low["below_loss_grid_current"]
+
+
+def test_nonconvergence_is_not_runaway(tmp_path, monkeypatch):
+    m, prop = _model(), _prop(tmp_path)
+    monkeypatch.setattr(s1, "FIXED_POINT_MAX_IT", 2)
+    row = s1.solve_point(m, prop, 6000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(m))
+    assert row["binding"] == "nonconverged" and row["T_winding_C"] is None and row["converged"] is False
+    r = _run(m, prop)
+    assert r["nonconverged_rpm"] and not any(x["binding"] == "runaway" for x in r["rows"])
+
+
+def test_refinement_finds_a_band_between_coarse_samples(tmp_path):
+    """Losses are huge except at the 2000 rpm grid row: the coarse 5-point scan
+    (1000, 3750, 6500 ...) misses the cool band; the row breakpoints find it."""
+    m = _model()
+    m["grid"]["loss_W"]["fe_stator"] = [[(5.0 if n == 2000.0 else 400.0) for _ in CUR] for n in RPM]
+    r = _run(m, _prop(tmp_path), n_points=5)
+    assert not any(x["ok"] for x in r["rows"])
+    assert r["limit"] is not None and 2000.0 < r["limit"]["rpm"] < 3750.0
+    assert r["limit"]["binding"] in ("winding", "magnet") and r["bands"]
+
+
+def test_scan_end_is_a_lower_bound_with_its_reason(tmp_path):
+    m, prop = _model(), _prop(tmp_path)
+    r = _run(m, prop, rpm_max=4000.0, winding_limit_c=400.0, magnet_limit_c=400.0)["limit"]
+    assert r["lower_bound"] is True and r["range_end"] == "requested"
+    g = m["grid"]
+    wide = _model(grid={**g, "rpm": RPM + [16000.0], "T_Nm": g["T_Nm"] + [g["T_Nm"][-1]],
+                        "loss_W": {k: t + [t[-1]] for k, t in g["loss_W"].items()}},
+                  limits={**m["limits"], "rpm_max": 16000.0})
+    r2 = s1.s1_rating(wide, prop, rpm_min=1000.0, winding_limit_c=400.0, magnet_limit_c=400.0)["limit"]
+    assert r2["binding"] == "speed_range" and r2["lower_bound"] and r2["range_end"] == "propeller_data"
+    assert r2["rpm"] == pytest.approx(1.5 * prop.rpm_range[1])
+
+
+def test_flux_slope_is_normalised_to_the_hot_reference():
+    ex = _exporter()
+    psi_h, t_h, psi_c, t_c = 0.00102108, 53.5, 0.00103042, 20.0
+    c = ex.flux_slope(psi_h, t_h, psi_c, t_c)
+    m = _model(flux_temp_coeff_per_K=c, magnet_ref_temp_C=t_h)
+    assert s1.flux_factor(m, t_h) == 1.0
+    assert psi_h * s1.flux_factor(m, t_c) == pytest.approx(psi_c, rel=1e-12)
+    for die, cfg in (("CIANO14 40 new", "L12"), ("CIANO14 40 new", "L20")):
+        sm = s1.load_model(die, cfg)
+        basis = sm["flux_coeff_basis"]
+        hot = float(basis.split("hot ")[1].split(" Wb @ ")[0])
+        cold = float(basis.split("cold ")[1].split(" Wb @ ")[0])
+        assert cold == pytest.approx(hot * s1.flux_factor(sm, 20.0), rel=1e-5)
+
+
+def test_exporter_loss_group_never_turns_missing_into_zero():
+    ex = _exporter()
+    assert ex.loss_group({"groups_W": {"P_mag_W": 1.5, "P_shaft_W": 0.25}},
+                         ("P_mag_W",), ("P_shaft_W", "P_sleeve_W")) == 1.75
+    assert ex.loss_group({"groups_W": {"P_shaft_W": 0.25}}, ("P_mag_W",), ("P_shaft_W",)) is None
+    assert ex.loss_group({"groups_W": {"P_fe_stator_W": 0.0}}, ("P_fe_stator_W",), ()) == 0.0
+
+
+def test_thermal_domain_fit_validated_extrapolated():
+    cal = {"housing_film_factor": 1.0, "fit_domain": {"air_speed_ms": [6.0, 10.0]},
+           "validation_domain": {"air_speed_ms": [12.0, 12.0]}}
+    m = _model(thermal_calibration=cal)
+    assert s1.thermal_domain(m, 8.0) == "fit"
+    assert s1.thermal_domain(m, 11.0) == "validated" and s1.calibration_covers(m, 11.0) is True
+    assert s1.thermal_domain(m, 12.3) == "extrapolated" and s1.calibration_covers(m, 12.3) is False
+    assert s1.thermal_domain(_model(), 8.0) is None
+
+
+def test_shipped_models_carry_the_system_data_and_qualify_their_limits():
+    l12 = s1.load_model("CIANO14 40 new", "L12")
+    assert l12["schema"] == s1.SCHEMA and "si_48k" in l12["drives"]
+    assert l12["drives"]["si_48k"]["i_board_limit_A"]["favourable"] == pytest.approx(26.1, abs=0.01)
+    cal = l12["thermal_calibration"]
+    assert cal["fit_domain"]["rpm"] == [5935.0, 9751.0] and cal["validation_domain"]["rpm"] == [11370.0, 11370.0]
+    prop = pp.get_propeller("tmotor_fpv_10x5")
+    for drive in ("sine", "si_48k"):
+        L = s1.s1_rating(l12, prop, drive=drive)["limit"]
+        assert L["binding"] == "controller" and 25.0 < L["current_A"] <= 26.11
+        assert L["drive_feasibility"] == "checked" and "slipstream_uncalibrated" in L["flags"]
+        assert L["qualification"]["checks"]["voltage_min_pack"] == "checked"
+    # motor-only (no controller): the winding limit lies beyond the held-out 11 370 rpm check
+    bare = {k: v for k, v in l12.items() if k != "sine_controller"}
+    mo = s1.s1_rating(bare, prop)["limit"]
+    assert mo["rpm"] > 11370.0 and "thermal_extrapolated" in mo["flags"] and "drive_unknown" in mo["flags"]
+    l20 = s1.s1_rating(s1.load_model("CIANO14 40 new", "L20"), pp.get_propeller("tmotor_p13x4_4"))["limit"]
+    assert l20["lower_bound"] and l20["range_end"] == "propeller_data"
+    l13 = s1.load_model("CIANO28 85 20SW1200", "L13")
+    assert l13["loss_groups"]["mech"]["status"] == "omitted"
+    L = s1.s1_rating(l13, pp.get_propeller("tmotor_g32x11"))["limit"]
+    assert "mech_omitted" in L["flags"] and L["voltage"]["v_dc"] == 36.0
+
+
+def test_route_takes_the_drive_and_the_pack(client, wired):
+    m = _sys_model()
+    (wired / "s1" / "TEST DIE" / "L1.json").write_text(json.dumps(m), encoding="utf-8")
+    q = {"die": "TEST DIE", "config": "L1", "n": 11}
+    j = client.get("/api/propellers/syn_s1/s1", params={**q, "drive": "pwm_a", "pack_v_min": 280,
+                                                         "pack_v_max": 400, "pack_i_max_A": 50}).json()
+    assert j["drive"]["id"] == "pwm_a" and j["pack"]["v_min"] == 280.0 and j["pack"]["i_max_A"] == 50.0
+    assert j["drives_available"] == [s1.SINE, "pwm_a"]
+    assert client.get("/api/propellers/syn_s1/s1", params={**q, "drive": "nope"}).status_code == 422
+    assert client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "arctic"}).status_code == 422

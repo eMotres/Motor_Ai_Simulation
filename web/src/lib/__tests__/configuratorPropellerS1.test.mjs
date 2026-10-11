@@ -63,7 +63,41 @@ t('no continuous point names what failed first', () => {
   const l = S.s1Line({ ...R, limit: null, no_continuous_point: true, first_failure: 'winding' }, 'tmotor_fpv_10x5', 'L12');
   assert.deepEqual(l, { kind: 'none', bindingKey: 'configurePropeller.s1BindWinding' });
   for (const [b, k] of [['current', 's1BindCurrent'], ['voltage', 's1BindVoltage'], ['speed', 's1BindVoltage'],
-    ['speed_range', 's1BindGrid'], ['runaway', 's1BindRunaway'], [null, 's1BindUnknown']]) {
+    ['speed_range', 's1BindGrid'], ['runaway', 's1BindRunaway'], [null, 's1BindUnknown'],
+    ['controller', 's1BindController'], ['battery_current', 's1BindBattery'], ['demag', 's1BindDemag'],
+    ['loss_data', 's1BindLossData'], ['nonconverged', 's1BindNonconverged']]) {
     assert.equal(S.s1BindingKey(b), `configurePropeller.${k}`);
   }
+});
+
+t('a limit is an upper edge unless the scan ended still passing: then a lower bound with its reason', () => {
+  const l = S.s1Line(R, 'tmotor_fpv_10x5', 'L12');
+  assert.equal(l.lowerBound, false);
+  assert.equal(l.rangeEndKey, null);
+  const lb = S.s1Line({ ...R, limit: { ...LIMIT, binding: 'speed_range', lower_bound: true, range_end: 'propeller_data' } },
+    'tmotor_fpv_10x5', 'L12');
+  assert.equal(lb.lowerBound, true);
+  assert.equal(lb.rangeEndKey, 'configurePropeller.s1EndProp');
+  assert.equal(S.s1RangeEndKey('motor_speed_grid'), 'configurePropeller.s1EndGrid');
+  assert.equal(S.s1RangeEndKey('requested'), 'configurePropeller.s1EndRequested');
+  // an older answer without lower_bound: speed_range still reads as a lower bound
+  assert.equal(S.s1Line({ ...R, limit: { ...LIMIT, binding: 'speed_range' } }, 'tmotor_fpv_10x5', 'L12').lowerBound, true);
+});
+
+t('the backend qualification codes become tooltip sentences, unknown codes are skipped', () => {
+  const cal = { model: { thermal_calibration: { housing_film_factor: 0.17 } } };
+  const flags = ['slipstream_uncalibrated', 'pwm_omitted', 'mech_omitted', 'voltage_deeper_fw',
+    'demag_reference_only', 'drive_unknown', 'battery_current_unknown', 'below_loss_grid_current', 'something_new'];
+  const l = S.s1Line({ ...R, ...cal, limit: { ...LIMIT, flags } }, 'tmotor_fpv_10x5', 'L12');
+  assert.deepEqual(l.flagKeys, [
+    'configurePropeller.s1FlagCalibrated', 'configurePropeller.s1FlagSlipstream',
+    'configurePropeller.s1FlagPwmOmitted', 'configurePropeller.s1FlagMechOmitted',
+    'configurePropeller.s1FlagVoltageFw', 'configurePropeller.s1FlagDemagRef',
+    'configurePropeller.s1FlagDriveUnknown', 'configurePropeller.s1FlagBatteryUnknown',
+    'configurePropeller.s1FlagBelowGridCurrent']);
+  // thermal extrapolation replaces the plain "calibrated"; an uncalibrated network says so
+  const ex = S.s1Line({ ...R, ...cal, limit: { ...LIMIT, flags: ['thermal_extrapolated'] } }, 'tmotor_fpv_10x5', 'L12');
+  assert.deepEqual(ex.flagKeys, ['configurePropeller.s1FlagCalibratedOutside']);
+  const un = S.s1Line({ ...R, limit: { ...LIMIT, flags: ['thermal_uncalibrated', 'drive_failed'] } }, 'tmotor_fpv_10x5', 'L12');
+  assert.deepEqual(un.flagKeys, ['configurePropeller.s1FlagThermalUncalibrated', 'configurePropeller.s1FlagDriveFailed']);
 });

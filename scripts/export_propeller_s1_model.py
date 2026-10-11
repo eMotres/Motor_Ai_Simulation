@@ -21,6 +21,19 @@ Two sources::
         --r-ref 0.093962 --r-temp 149.3 --coil-c 180 --magnet-c 150 --flux-coeff -0.001199 --magnet-limit 150
 
 Writes to ``config/propeller_s1/<die>/<config>.json`` (``--out`` overrides).
+
+Schema 2 (2026-10-11 review fixes) also carries what the S1 limit needs to be a
+SYSTEM rating, not a motor-only one: every computed drive variant of the store
+record (``drives``: its own controller-loss and motor-PWM-extra grids, the
+board's continuous current per cooling class, the bus range), the die's
+controller block for a sine drive (``sine_controller``), the passport battery,
+the hot psi-map on a regular (I, gamma) table with the loss grid's operating
+angle (``psi_map``, ``grid.gamma_deg``: the voltage re-check at the minimum pack
+voltage and the operating magnet temperature), the demagnetisation current
+limit with the magnet card's Br/HcJ temperature laws (``demag``), and the
+status of every loss group (``loss_groups``: a missing cell is ``null``, never 0).
+``--geom-from`` takes ``thermal_geom`` from an existing model when the catalogue
+card is not at hand.
 """
 from __future__ import annotations
 
@@ -33,6 +46,22 @@ from typing import Any, Dict, List, Optional
 
 ROOT = Path(__file__).resolve().parents[1]
 ALPHA_CU = 0.00393
+SCHEMA = "propeller-s1-model-2"
+MU0 = 4e-7 * math.pi
+
+#: model loss group <- the passport's groups_W keys: the REQUIRED term(s) (a point
+#: without one has no value for the group: null, never 0) and the optional
+#: sub-terms that are 0 when a machine has no such part (no sleeve, no parallel paths)
+LOSS_TERMS = {"cu_ac": (("P_cu_ac_W",), ("P_cu_circulating_W",)),
+              "fe_stator": (("P_fe_stator_W",), ()),
+              "fe_rotor": (("P_fe_rotor_W",), ()),
+              "rotor_eddy": (("P_mag_W",), ("P_shaft_W", "P_sleeve_W"))}
+
+#: the permeance coefficient behind a magnet grade's maximum working temperature
+#: (L/D = 0.7 convention): the self-demagnetising field the demag scaling assumes
+DEMAG_PERMEANCE_COEFF = 2.0
+#: the generated magnet cards put the knee at this fraction of HcJ (materials_library.yaml)
+KNEE_FRACTION = 0.97
 
 
 def _load(p: str) -> Dict[str, Any]:
@@ -102,14 +131,146 @@ def _thermal_geom(catalog: str, card_id: str, stack_mm: float) -> Dict[str, floa
             "magnetOD_mm": 2 * geo["rotorOR_mm"], "source": f"catalogue card {card_id} (passport fit/geo)"}
 
 
-def _controller(v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-    if not v:
-        return None
+def _drive(v: Dict[str, Any]) -> Dict[str, Any]:
+    """One computed drive variant of the store record, on its OWN (rpm, I) grid:
+    controller losses, the motor's PWM extra loss, the passport's per-point
+    continuous / board / T_j verdicts (1 / 0 / null) and the board's continuous
+    current per cooling class (the binding controller envelope)."""
     t = _variant_tables(v)
-    return {"variant": {"id": v.get("id"), "device": v.get("device"), "carrier_hz": v.get("carrier_hz"),
-                        "bus_evaluated": v.get("bus_evaluated")},
-            "rpm": t["rpm"], "I_A": t["I_A"], "loss_W": t["ctrl"],
-            "basis": "inverter conduction + switching + dead time + board copper, passport drive variant"}
+    flag = lambda k: t["table"](lambda p: None if p.get(k) is None else (1 if p.get(k) else 0))  # noqa: E731
+    pwm = t["table"](lambda p: _val(p.get("motor_pwm_loss_W")))
+    prov = v.get("provenance") or {}
+    lim = {k: float(x) for k, x in (v.get("i_board_limit_A") or {}).items() if _val(x) is not None}
+    return {"id": v.get("id"), "device": v.get("device"), "technology": v.get("technology"),
+            "carrier_hz": _val(v.get("carrier_hz")), "n_parallel": v.get("n_parallel"),
+            "dead_time_s": v.get("dead_time_s"), "m_max": _val(v.get("m_max")),
+            "bus_v": v.get("bus_v"), "bus_evaluated": v.get("bus_evaluated"),
+            "i_board_limit_A": lim or None,
+            "i_board_basis": ("board continuous current of this build (all devices in parallel) per board "
+                              "cooling class: %s" % (prov.get("thermal") or "passport board model")),
+            "rpm": t["rpm"], "I_A": t["I_A"],
+            "controller_loss_W": t["ctrl"],
+            "pwm_extra_W": pwm if any(x is not None for r in pwm for x in r) else None,
+            "continuous_ok": flag("continuous_ok"), "board_ok": flag("board_ok"), "tj_ok": flag("tj_ok"),
+            "basis": "inverter conduction + switching + dead time + board copper; motor PWM extra loss "
+                     "(%s), passport drive variant" % (prov.get("motor_pwm") or "passport")}
+
+
+def _drives(store: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not store:
+        return {}
+    return {v["id"]: _drive(v) for v in store.get("pwm_variants") or []
+            if isinstance(v, dict) and v.get("points") and v.get("id")}
+
+
+def _sine_controller(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The die's controller block (``stage3_pwm_controller.board``): the board's
+    continuous current per cooling class - what a sine-drive S1 must also respect."""
+    b = ((d.get("stage3_pwm_controller") or {}).get("board") or {})
+    cl = {k: float(c["I_rating_si_A"]) for k, c in (b.get("classes") or {}).items()
+          if _val((c or {}).get("I_rating_si_A")) is not None}
+    if not cl:
+        return None
+    bat = d["inputs"].get("battery") or {}
+    return {"i_board_limit_A": cl,
+            "i_board_basis": "the die's controller board, continuous current of its Si build per cooling class "
+                             "(%s)" % (b.get("model") or "passport board model"),
+            # the ratings were made for the passport's own pack
+            "bus_v": ({"min": bat.get("v_min"), "nom": bat.get("v_nom"), "max": bat.get("v_max")}
+                      if _val(bat.get("v_min")) and _val(bat.get("v_max")) else None),
+            "source": b.get("source"), "T_amb_C": _val(b.get("T_amb_C")), "labels": b.get("labels") or []}
+
+
+def _pole_pairs(pts: List[Dict[str, Any]]) -> int:
+    """From the map's own torque identity T = 3/2·p·(psi_d·i_q - psi_q·i_d)."""
+    ps = []
+    for p in pts:
+        den = 1.5 * (float(p["psi_d"]) * float(p["i_q"]) - float(p["psi_q"]) * float(p["i_d"]))
+        if abs(den) > 1e-9 and abs(float(p["T"])) > 1e-6:
+            ps.append(float(p["T"]) / den)
+    if not ps:
+        raise SystemExit("hot_map: cannot infer the pole pairs")
+    ps.sort()
+    return int(round(ps[len(ps) // 2]))
+
+
+def _psi_map(d: Dict[str, Any], gamma_max: float = 80.0) -> Dict[str, Any]:
+    """The passport's hot psi-map (Clough-Tocher in (i_d, i_q), the passport's own
+    interpolant) sampled on a regular (I_rms, gamma) table, so the S1 solver can
+    re-check the phase voltage with plain bilinear interpolation."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from motor_ai_sim.passport_v1 import psimap as PM
+    pts = [p for p in d["hot_map"]["points"] if all(k in p for k in ("i_d", "i_q", "psi_d", "psi_q", "T"))]
+    p_pairs = _pole_pairs(pts)
+    pm = PM.PsiMap.build(pts, p_pairs)
+    levels = sorted({round(float(p["I"]), 4) for p in pts if float(p["I"]) > 0})
+    top = levels[-1]
+    cur = [0.0]
+    for a, b in zip([0.0] + levels, levels):
+        cur += [round(a + (b - a) / 2, 4), b]
+    gam = [round(-5.0 + 2.5 * k, 3) for k in range(int((gamma_max + 5.0) / 2.5) + 1)]
+    # the top level lies on the hull's chords between its sampled angles: step just inside
+    for f in (0.999, 0.995, 0.99, 0.985, 0.98):
+        cur[-1] = round(top * f, 4)
+        if all(math.isfinite(pm.at_Ig(cur[-1], g)["psi_d"]) for g in gam):
+            break
+
+    def tab(key):
+        out = []
+        for I in cur:
+            row = []
+            for g in gam:
+                o = pm.at_Ig(I, g) if I > 0 else pm.at(0.0, 0.0)
+                v = o.get(key)
+                row.append(None if v is None or not math.isfinite(v) else float(v))
+            out.append(row)
+        return out
+    psi_pm = _val(pm.at(0.0, 0.0)["psi_d"])
+    return {"I_A": cur, "gamma_deg": gam, "psi_d_Wb": tab("psi_d"), "psi_q_Wb": tab("psi_q"),
+            "T_Nm": tab("T"), "pole_pairs": p_pairs, "psi_pm_Wb": psi_pm,
+            "magnet_C": float(d["inputs"]["temperatures"]["hot_magnet_c"]), "gamma_max_deg": gamma_max,
+            "basis": "passport hot psi-map (2-D, virgin magnets at %g C, %d FEM points), sampled on a regular "
+                     "(I, gamma) table; amplitude-invariant peak dq, gamma from the q-axis"
+                     % (float(d["inputs"]["temperatures"]["hot_magnet_c"]), len(pts))}
+
+
+def _magnet_card(name: str) -> Dict[str, Any]:
+    import yaml
+    lib = yaml.safe_load((ROOT / "config" / "materials_library.yaml").read_text(encoding="utf-8"))
+    card = None
+    for sec in lib.values() if isinstance(lib, dict) else []:
+        if isinstance(sec, dict) and isinstance(sec.get(name), dict):
+            card = sec[name]
+    if card is None:
+        raise SystemExit(f"magnet card {name!r} not in materials_library.yaml")
+    bh = card.get("bh_curve") or []
+    # HcJ = the intrinsic coercivity: the B-H point where J = B + mu0*H crosses 0
+    hcj = None
+    for (h0, b0), (h1, b1) in zip(bh, bh[1:]):
+        j0, j1 = b0 - MU0 * h0, b1 - MU0 * h1
+        if j0 <= 0 <= j1 and j1 != j0:
+            hcj = -(h0 + (h1 - h0) * (0 - j0) / (j1 - j0))
+            break
+    if hcj is None:
+        raise SystemExit(f"magnet card {name!r}: no J = 0 crossing in bh_curve (HcJ)")
+    return {"name": name, "T_ref_C": float(card["temperature_c"]), "Br_ref_T": float(card["Br"]),
+            "alpha_br_pct_per_K": float(card["alpha_br_pct_per_k"]), "Hcj_ref_A_m": float(hcj),
+            "beta_hcj_pct_per_K": float(card["beta_hcj_pct_per_k"]), "mu_rec": float(card.get("mu_rec") or 1.05),
+            "knee_fraction": KNEE_FRACTION, "max_working_temp_C": _val(card.get("max_working_temp_c")),
+            "source": "materials_library.yaml card %s (HcJ = the J = 0 crossing of its bh_curve)" % name}
+
+
+def _demag(d: Dict[str, Any], t_mag: float) -> Dict[str, Any]:
+    dl = d["demag_limit"]
+    out = {"I_limit_A": _val(dl["I_limit_rms"]), "ref_magnet_C": t_mag,
+           "rule": dl.get("rule"), "how": dl.get("how"),
+           # the passport probed demagnetisation at ONE magnet temperature (its hot state)
+           "temperature_data": "reference temperature only",
+           "permeance_coeff": DEMAG_PERMEANCE_COEFF}
+    name = ((d["inputs"].get("materials") or {}).get("magnet") or {}).get("name")
+    if name:
+        out["magnet"] = _magnet_card(name)
+    return out
 
 
 def _floors(args, rpm: List[float], labels: List[str]) -> Dict[str, Any]:
@@ -138,7 +299,9 @@ def from_full(args) -> Dict[str, Any]:
     if abs(_val(ch["R_phase_ohm"]) - r_hot) > 1e-9:
         raise SystemExit("R_hot of the loss grid differs from constants_hot.R_phase_ohm")
     psi_h, psi_c = _val(ch["psi_PM_Wb"]), _val(cc["psi_PM_Wb"])
-    c_psi = (psi_h / psi_c - 1.0) / (t_mag - t_cold)
+    # the solver applies k = 1 + c·(T - T_hot) around the HOT flux, so the slope is
+    # normalised to the hot flux: k(T_hot) = 1 and psi_h·k(T_cold) = psi_c exactly
+    c_psi = flux_slope(psi_h, t_mag, psi_c, t_cold)
     pts = [p for p in d["loss_grid"]["points"] if p.get("rpm") is not None]
     extra: List[Dict[str, Any]] = []
     for f in args.extra_points or []:
@@ -157,25 +320,16 @@ def from_full(args) -> Dict[str, Any]:
             out.append(row)
         return out
 
-    g = lambda p, k: float((p.get("groups_W") or {}).get(k) or 0.0)       # noqa: E731
-    loss = {"cu_ac": table(lambda p: g(p, "P_cu_ac_W") + g(p, "P_cu_circulating_W")),
-            "fe_stator": table(lambda p: g(p, "P_fe_stator_W")),
-            "fe_rotor": table(lambda p: g(p, "P_fe_rotor_W")),
-            "rotor_eddy": table(lambda p: g(p, "P_mag_W") + g(p, "P_shaft_W") + g(p, "P_sleeve_W"))}
+    loss = {k: table(lambda p, req=req, opt=opt: loss_group(p, req, opt))
+            for k, (req, opt) in LOSS_TERMS.items()}
+    missing = {k: sum(1 for a, row in enumerate(t) for b, x in enumerate(row)
+                      if x is None and by.get(_key(rpm[a], cur[b])) is not None) for k, t in loss.items()}
     labels = ["2-D FEM loss grid (settled TDM, coupled eddy + demag) of the full v1 passport",
               f"torque x k_T(3-D) {(_val(d['stage2_3d']['k_T']) or 1.0):.4f}"]
-    if v is not None:
-        vt = _variant_tables(v)
-        if vt["rpm"] == rpm and vt["I_A"] == cur:
-            pw = vt["table"](lambda p: p.get("motor_pwm_loss_W"))
-            # keep the PWM extra loss only where the base grid is feasible too
-            if all((pw[a][b] is not None) == (by.get(_key(rpm[a], cur[b])) is not None)
-                   for a in range(len(rpm)) for b in range(len(cur))):
-                loss["pwm_extra"] = [[None if x is None else float(x) for x in row] for row in pw]
-                labels.append(f"motor PWM extra loss of drive variant {v.get('id')} (FEM at a few points, scaled elsewhere)")
-        if "pwm_extra" not in loss:
-            labels.append(f"motor PWM extra loss of drive variant {v.get('id')} not included (its grid differs "
-                          "from this loss grid)")
+    drives = _drives(store)
+    if drives:
+        labels.append("drive variants %s: controller loss, motor PWM extra loss and board continuous current "
+                      "on each variant's own grid" % ", ".join(drives))
     if extra:
         labels.append("loss grid extended to %s rpm by %d settled FEM points (passport stage loss4, "
                       "same hot temperatures / steps / operating-angle rule)"
@@ -189,8 +343,16 @@ def from_full(args) -> Dict[str, Any]:
     stack = float(args.stack_mm or stack or d["inputs"]["mesh"].get("motor_length") or 0)
     if not stack:
         raise SystemExit("stack length unknown: pass --stack-mm")
+    mech_W = ({"rpm": [x[0] for x in mech_pts], "W": [x[1] for x in mech_pts],
+               "basis": "bearings (SKF model) + windage, passport"} if len(mech_pts) >= 2 else None)
+    groups = {k: {"status": "grid", "missing_cells": missing[k],
+                  "terms": list(LOSS_TERMS[k][0]) + list(LOSS_TERMS[k][1])} for k in loss}
+    groups["pwm_extra"] = {"status": "per drive", "note": "0 for a sine drive; each PWM variant's own grid"}
+    groups["mech"] = ({"status": "grid", "note": mech_W["basis"]} if mech_W
+                      else {"status": "omitted", "note": "no bearings named in the passport"})
+    bat = d["inputs"].get("battery") or {}
     m = {
-        "schema": "propeller-s1-model-1",
+        "schema": SCHEMA,
         "die": d["machine"]["die"], "config": d["machine"]["configuration"],
         "source": {"kind": "full v1 passport", "file": Path(args.source).as_posix().split("/docs/")[-1]
                    if "/docs/" in Path(args.source).as_posix() else Path(args.source).name,
@@ -201,13 +363,24 @@ def from_full(args) -> Dict[str, Any]:
         "R_phase_ohm": r_hot, "R_temp_C": t_coil,
         "magnet_ref_temp_C": t_mag,
         "flux_temp_coeff_per_K": c_psi,
-        "flux_coeff_basis": f"passport psi_PM hot {psi_h:.6g} Wb @ {t_mag:g} C vs cold {psi_c:.6g} Wb @ {t_cold:g} C",
+        "flux_coeff_basis": (f"passport psi_PM hot {psi_h:.6g} Wb @ {t_mag:g} C vs cold {psi_c:.6g} Wb @ {t_cold:g} C, "
+                             "(psi_h - psi_c) / (psi_h (T_h - T_c)): normalised to the hot reference"),
         "torque_factor": _val(d["stage2_3d"]["k_T"]) or 1.0,
         "grid": {"rpm": rpm, "I_A": cur, "T_Nm": table(lambda p: float(p["T_Nm"])), "loss_W": loss,
+                 "gamma_deg": table(lambda p: _val(p.get("gamma"))),
                  **_floors(args, rpm, labels)},
-        "mech_W": ({"rpm": [x[0] for x in mech_pts], "W": [x[1] for x in mech_pts],
-                    "basis": "bearings (SKF model) + windage, passport"} if len(mech_pts) >= 2 else None),
-        "controller": _controller(v),
+        "loss_groups": groups,
+        "mech_W": mech_W,
+        "drives": drives,
+        "default_drive": (v or {}).get("id"),
+        "sine_controller": _sine_controller(d),
+        "battery": ({k: bat.get(k) for k in ("chemistry", "cells", "v_min", "v_nom", "v_max")}
+                    if _val(bat.get("v_min")) and _val(bat.get("v_max")) else None),
+        "voltage": {"m": _val(plan.get("m")), "v_dc_grid": _val(plan.get("v_dc")),
+                    "basis": "linear SVPWM phase-voltage peak m·V_dc/sqrt3 (the passport's rule); the loss grid's "
+                             "operating angles hold at V_dc %s V" % plan.get("v_dc")},
+        "psi_map": _psi_map(d),
+        "demag": _demag(d, t_mag),
         "limits": {"I_max_A": _val(d["demag_limit"]["I_limit_rms"]),
                    "I_max_basis": "passport demagnetisation current limit at the hot magnet temperature "
                                   f"({t_mag:g} C): {d['demag_limit'].get('how') or d['demag_limit'].get('rule')}",
@@ -216,10 +389,36 @@ def from_full(args) -> Dict[str, Any]:
                                     "(voltage, characterised field weakening)",
                    "magnet_C": float(args.magnet_limit),
                    "magnet_basis": args.magnet_basis},
-        "thermal_geom": _thermal_geom(args.catalog, args.card, stack),
+        "thermal_geom": _geom(args, stack),
         "labels": labels,
     }
     return m
+
+
+def flux_slope(psi_h: float, t_h: float, psi_c: float, t_c: float) -> float:
+    """``(psi_h - psi_c) / (psi_h (T_h - T_c))``: the relative flux slope about the
+    HOT reference the S1 solver applies it around (``propeller_s1.flux_factor``)."""
+    return (psi_h - psi_c) / (psi_h * (t_h - t_c))
+
+
+def loss_group(p: Dict[str, Any], req, opt) -> Optional[float]:
+    """One model loss group at a passport point: None when a required term is absent
+    (unavailable - the solver refuses it), optional sub-terms 0 when absent."""
+    gw = p.get("groups_W") or {}
+    vals = [_val(gw.get(k)) for k in req]
+    if any(x is None for x in vals):
+        return None
+    return float(sum(vals) + sum(_val(gw.get(k)) or 0.0 for k in opt))
+
+
+def _geom(args, stack: float) -> Dict[str, Any]:
+    if getattr(args, "geom_from", None):
+        g = dict(_load(args.geom_from)["thermal_geom"])
+        g["stackLength_mm"] = float(stack)
+        return g
+    if not (args.catalog and args.card):
+        raise SystemExit("thermal geometry: pass --catalog and --card, or --geom-from <model>")
+    return _thermal_geom(args.catalog, args.card, stack)
 
 
 def from_store(args) -> Dict[str, Any]:
@@ -245,8 +444,9 @@ def from_store(args) -> Dict[str, Any]:
             mech[float(p["rpm"])] = float(p["P_mech_W"])
     mech_pts = sorted(mech.items())
     stack = float(args.stack_mm or v.get("build", {}).get("length_mm") or 0)
+    lumped = {"status": "lumped", "note": "inside fe_stator: the record's total sine loss is not split"}
     return {
-        "schema": "propeller-s1-model-1",
+        "schema": SCHEMA,
         "die": s["machine"]["die"], "config": s["machine"]["configuration"],
         "source": {"kind": "passport store record (drive variant points)", "file": args.source_name or Path(args.source).name,
                    "store_variant": v.get("id"), "record_source": s.get("source")},
@@ -259,13 +459,18 @@ def from_store(args) -> Dict[str, Any]:
                  "loss_W": {"fe_stator": t["table"](rest)}},
         "mech_W": ({"rpm": [x[0] for x in mech_pts], "W": [x[1] for x in mech_pts], "basis": "passport store"}
                    if any(x[1] > 0 for x in mech_pts) else None),
-        "controller": _controller(v),
+        "loss_groups": {"fe_stator": {"status": "grid", "note": "total sine motor loss minus DC copper and mech"},
+                        "cu_ac": lumped, "fe_rotor": lumped, "rotor_eddy": lumped,
+                        "pwm_extra": {"status": "per drive"},
+                        "mech": ({"status": "grid"} if any(x[1] > 0 for x in mech_pts)
+                                 else {"status": "omitted", "note": "not in the store record"})},
+        "drives": _drives(s), "default_drive": v.get("id"),
         "limits": {"I_max_A": float(t["I_A"][-1]),
                    "I_max_basis": args.imax_basis,
                    "rpm_max": float(t["rpm"][-1]),
                    "rpm_max_basis": "top of the passport store speed grid (no voltage envelope in the record)",
                    "magnet_C": float(args.magnet_limit), "magnet_basis": args.magnet_basis},
-        "thermal_geom": _thermal_geom(args.catalog, args.card, stack),
+        "thermal_geom": _geom(args, stack),
         "labels": [f"torque = operating torque T_op of drive variant {v.get('id')} (store record)",
                    f"losses: total sine motor loss of the record at coil {t_coil:g} C / magnet {args.magnet_c} C; "
                    "DC copper split off with R(T), the rest (iron + AC + eddy, not split in the record) put on the stator",
@@ -306,6 +511,12 @@ def _anchor_row(path: str, model: Dict[str, Any]) -> Dict[str, Any]:
 #: Residual weights of the calibration fit: the two limited parts carry it, the
 #: stator (the lumped "housing") only steers the split.
 FIT_WEIGHTS = {"winding": 1.0, "magnet": 1.0, "housing": 0.5}
+
+
+def _resid_after(r: Dict[str, Any], cal: Dict[str, float], temps) -> List[float]:
+    """Calibrated network minus FEM at one anchor: winding hot spot and hottest magnet [K]."""
+    t = temps(r, cal)
+    return [t[k] - r["fem_C"][k] for k in ("winding", "magnet")]
 
 
 def calibrate(args) -> Dict[str, Any]:
@@ -362,11 +573,23 @@ def calibrate(args) -> Dict[str, Any]:
                       "lumped_before_C": {k: b[k] for k in ("winding", "magnet", "housing")},
                       "lumped_after_C": {k: a_[k] for k in ("winding", "magnet", "housing")}})
     v_fit = [r["air_speed_ms"] for r in rows]
+
+    def domain(rs):
+        if not rs:
+            return None
+        v, n = [r["air_speed_ms"] for r in rs], [r["rpm"] for r in rs]
+        return {"air_speed_ms": [round(min(v), 4), round(max(v), 4)], "rpm": [min(n), max(n)],
+                "propellers": sorted({str(r.get("propeller")) for r in rs}), "n": len(rs),
+                "max_residual_K": round(max(abs(a) for r in rs for a in _resid_after(r, cal, temps)), 2)}
     m["thermal_calibration"] = {
         **{k: round(v, 6) for k, v in cal.items()},
         # the slipstream speeds the fitted anchors ran at (propeller_s1.calibration_covers)
         "anchor_air_speed_ms": [round(min(v_fit), 4), round(max(v_fit), 4)],
         "anchor_rpm": [r["rpm"] for r in rows],
+        # where the network was FITTED and where held-out anchors CHECKED it
+        # (propeller_s1.thermal_domain: outside both = thermal extrapolation)
+        "fit_domain": domain(rows),
+        "validation_domain": domain(checks),
         "form": form,
         "basis": ("fitted %s to %d coupled EM-thermal FEM anchors (propeller as load and cooling, "
                   "air_speed_source propeller, slipstream factor %s, the machine's own frame and "
@@ -399,6 +622,7 @@ def main(argv=None) -> int:
     ap.add_argument("--variant", help="drive variant id (default: the first, Configure's default)")
     ap.add_argument("--catalog")
     ap.add_argument("--card")
+    ap.add_argument("--geom-from", help="full / store: take thermal_geom from this existing S1 model JSON")
     ap.add_argument("--stack-mm", type=float)
     ap.add_argument("--magnet-limit", type=float)
     ap.add_argument("--magnet-basis", default="magnet card max_working_temp_c (F52SH_120C, SH class 150 C)")
@@ -432,8 +656,8 @@ def main(argv=None) -> int:
         print({k: v for k, v in m["thermal_calibration"].items() if k != "anchors"})
         print(f"wrote {out}")
         return 0
-    if not (a.catalog and a.card and a.magnet_limit is not None):
-        ap.error("full / store need --catalog --card --magnet-limit")
+    if not (((a.catalog and a.card) or a.geom_from) and a.magnet_limit is not None):
+        ap.error("full / store need --catalog --card (or --geom-from) and --magnet-limit")
     m = from_full(a) if a.kind == "full" else from_store(a)
     out = Path(a.out) if a.out else ROOT / "config" / "propeller_s1" / m["die"] / f"{m['config']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)

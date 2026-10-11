@@ -165,11 +165,24 @@ def get_s1(prop_id: str,
            position: Optional[str] = Query(default=None),
            factor: Optional[float] = Query(default=None, gt=0.0, le=1.5),
            n: int = Query(default=41, ge=5, le=201, description="scan points"),
+           drive: str = Query(default="sine", min_length=1, max_length=100,
+                              description="'sine' or a computed PWM variant id (Configure's selected drive)"),
+           board_cooling: str = Query(default="favourable", description="favourable | weak | hot_motor"),
+           pack_v_min: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
+                                               description="pack minimum voltage [V]; default the passport's"),
+           pack_v_max: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
+                                               description="pack full voltage [V]; default the passport's"),
+           pack_i_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0,
+                                                 description="pack continuous current [A]; unknown if omitted"),
            authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """Continuous (S1) limit of ``die`` / ``config`` driving propeller ``prop_id``,
     which is also its only cooling: per-speed rows (load, current, losses, air,
     winding / magnet / housing temperature, margins) and the highest speed at
-    which everything stays inside the limits (``motor_ai_sim.propeller_s1``).
+    which everything stays inside the limits (``motor_ai_sim.propeller_s1``) -
+    the motor's temperatures, the selected drive's continuous controller current,
+    the voltage at the pack's minimum, the demagnetisation current at the magnet
+    temperature and (when given) the pack's continuous current.  A limit the model
+    cannot check is named in ``limit.flags`` / ``limit.qualification``.
 
     Signed-in callers only, and only for a die the account may see (the
     Configure context rule).  Closed-form arithmetic on the configuration's S1
@@ -189,7 +202,9 @@ def get_s1(prop_id: str,
     try:
         model = s1.load_model(die, config)
         out = s1.s1_rating(model, prop, ambient_c=ambient_c, altitude_m=altitude_m,
-                           position=position, factor=factor, n_points=n)
+                           position=position, factor=factor, n_points=n, drive=drive,
+                           board_cooling=board_cooling, pack_v_min=pack_v_min, pack_v_max=pack_v_max,
+                           pack_i_max_A=pack_i_max_A)
     except s1.S1ModelNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except (s1.S1Error, pp.PropellerDataError, ValueError) as exc:

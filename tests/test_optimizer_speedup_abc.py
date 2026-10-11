@@ -96,14 +96,18 @@ def fixture_machine(monkeypatch):
     half the ring (n_sectors=2 — a true symmetry of 12/14).  Every other config
     section is the live one, unchanged.
     """
-    from omegaconf import OmegaConf
+    try:    # optional in the app (config.py falls back to plain YAML) and
+        from omegaconf import OmegaConf    # absent from the deploy image
+    except ImportError:
+        OmegaConf = None
     import motor_ai_sim.config as _mc
     from motor_ai_sim.simulation.geometry_2d import merge_geo_override
     from tests.test_physics_regression import GEO_30MM
 
     live = _mc.get_config()
     cfg = (OmegaConf.to_container(live, resolve=True)
-           if OmegaConf.is_config(live) else dict(live))
+           if OmegaConf is not None and OmegaConf.is_config(live)
+           else dict(live))
     cfg["geometry"] = merge_geo_override(dict(cfg.get("geometry") or {}),
                                          dict(GEO_30MM))
     assert (cfg["geometry"]["num_slots"], cfg["geometry"]["num_poles"]) == (12, 14)

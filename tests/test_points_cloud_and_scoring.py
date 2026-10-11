@@ -166,13 +166,26 @@ class _CountingBowl:
             q -= curv * (float(overrides[nm]) - star) ** 2
         bumped = current_a > 1.05 * self.I
         self.n_ok += 1
-        return {"ok": True, "res": {
+        res = {
             "T_em_Nm": 30.0 + q,
             "torque_per_mass_Nm_kg": self.TD0 + q + (0.5 if bumped else 0.0),
             "efficiency": self.EFF0 - (0.01 if bumped else 0.0),
             "T_ripple_pct": float(self.ripple(overrides)),
             "mass_total_kg": 3.0, "P_loss_total_W": 480.0, "V_peak": 90.0,
-        }}
+        }
+        # Final 6× validation now checks quality stamps (review 2026-09-24/10-03);
+        # supply them when the caller asks for final-purpose sampling.
+        purpose = kw.get("sampling_purpose")
+        if purpose in O._FINAL_OK_PURPOSES:
+            res.update({
+                "nonlinear_converged": True,
+                "cogging_sampling_purpose": purpose,
+                "cogging_sampling_final_quality_sufficient": True,
+                "eddy_settled": True,
+                "steady_state": True,
+                "qualified": True,
+            })
+        return {"ok": True, "res": res}
 
 
 @pytest.fixture

@@ -2531,7 +2531,7 @@ def _preflight(body: Dict[str, Any], *,
     this signature because callers pass it and because a future check may need
     to know whether this is a loop or a single pass.
     """
-    from motor_ai_sim.routes.simulation import _effective_rpm, _effective_winding
+    from motor_ai_sim.routes.simulation import _effective_winding
 
     _cycle_preflight(body)
     drive = _coupled_drive(body)
@@ -2547,19 +2547,14 @@ def _preflight(body: Dict[str, Any], *,
             "rotor is heated by nothing, so the magnet temperature it feeds back "
             "would be the ambient.", ["eddy", "rotor_eddy"])
 
-    # The two fields the thermal loss-map probe resolves from the SHARED CONFIG
-    # instead of from the request (`_loss_snapshot_probe` deliberately does not
-    # take them).  When the Electromagnetic tab's own value differs, the run this
-    # loop makes can never be the run the thermal side looks for — and the 422
-    # that follows blames the operating point.  Say which one, before the solve.
-    rpm = body.get("rpm")
-    if rpm is not None and round(_effective_rpm(rpm), 3) != round(_effective_rpm(None), 3):
-        raise _refuse(
-            "the coupled loop's thermal half looks its loss map up at the shared "
-            "configuration's speed (%.0f rpm) while this run asks for %.0f rpm, "
-            "so the two halves would describe different machines. Save the speed "
-            "to the machine first." % (_effective_rpm(None), _effective_rpm(rpm)),
-            ["rpm"])
+    # The SPEED is no longer one of them (2026-10-11): the thermal half looks the
+    # loss map up at this run's own rpm (`_thermal_solve` -> `loss_map_rpm`), the
+    # rpm the EM half solves at and the propeller air is computed from — a request
+    # at another speed than the saved one is answered at that speed and the saved
+    # configuration is not touched.  The WINDING is still resolved from the shared
+    # configuration by the thermal probe: when the request's differs, the run this
+    # loop makes can never be the run the thermal side looks for.  Say so, before
+    # the solve.
     try:
         want = _effective_winding(body.get("n_parallel"), body.get("connection"))
         have = _effective_winding(None, None)
@@ -3942,6 +3937,13 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         op_mode=body.get("mode"))
     if bearing_temp_c is not None:
         kw["bearing_temp_c"] = float(bearing_temp_c)
+    # The loss map is looked up at THIS pass's speed — the rpm the EM half just
+    # solved at — not the saved configuration's (2026-10-11): one rpm for the
+    # electromagnetic run, the loss map, the gap and the propeller air.  A body
+    # without an rpm runs at the configuration's speed, and the lookup is the
+    # one it always was.
+    if body.get("rpm") not in (None, ""):
+        kw["loss_map_rpm"] = float(rpm)
     if em_map is not None:
         # THE MAP IS HANDED OVER, not looked up (the PWM drive).  The seam is
         # `solve_thermal_field`'s own `_em_map` / `_em_loss_source`, which exists
@@ -3967,6 +3969,7 @@ def _thermal_solve(body: Dict[str, Any], cooling: Dict[str, Any], *,
         # store is a pickle that sits next to the user's config.
         _p = th._field_params(**{k: v for k, v in kw.items()
                                  if k not in ("geo", "bearing_temp_c",
+                                              "loss_map_rpm",
                                               "_em_map", "_em_loss_source",
                                               "_em_capture")})
         # …and handed BACK, so a caller that goes on to change the map can
@@ -4035,9 +4038,9 @@ def _register_answer_pass(phase: str, body: Dict[str, Any],
             magnet_temp_c=(None if magnet_temp_c is None
                            else float(magnet_temp_c)),
             op_mode=body.get("mode"))
+        _rpm = None if body.get("rpm") in (None, "") else body["rpm"]
         probe = _th.coupled_pass_probe(**kw, drive=drive, excitation=excitation,
-                                       rpm=(None if body.get("rpm") in (None, "")
-                                            else body["rpm"]))
+                                       rpm=_rpm)
         if em_map is None:
             if drive:
                 raise ValueError("a PWM pass must hand its own loss map over")
@@ -4045,7 +4048,7 @@ def _register_answer_pass(phase: str, body: Dict[str, Any],
             _kw = dict(kw)
             _geo = _kw.pop("geo")
             em_map, _src = _th._em_loss_map(
-                **_kw, geo=_geo, geo_ov=_parse_geo_override(_geo))
+                **_kw, geo=_geo, geo_ov=_parse_geo_override(_geo), rpm=_rpm)
         rec["point"] = _th.register_coupled_pass(
             phase=phase, probe=probe, em=em_map, run_id=rec["run_id"])
         rec["registered"] = True

@@ -11,7 +11,7 @@ import { nsT } from '../../i18n/nsT';
 const tx = nsT('controller');
 const MARGIN = { top: 8, right: 10, bottom: 20, left: 4 };
 const Y_AXIS_WIDTH = 38;
-const CURVE_COLORS = { tested: '#60a5fa', modeled: '#fbbf24', cursor: 'var(--text-2)' };
+const CURVE_COLORS = { tested: '#60a5fa', modeled: '#fbbf24', cursor: 'var(--text-2)', s1: '#16a34a' };
 
 interface Props {
   series: PropSeries | null;
@@ -20,9 +20,11 @@ interface Props {
   rpmMax: number;
   powerEstimated: boolean;
   onRpmChange: (rpm: number) => void;
+  /** the continuous (S1) limit with this propeller, marked on both curves (null = none) */
+  s1Rpm?: number | null;
 }
 
-const PropellerCurves: React.FC<Props> = ({ series, rpm, rpmMin, rpmMax, powerEstimated, onRpmChange }) => {
+const PropellerCurves: React.FC<Props> = ({ series, rpm, rpmMin, rpmMax, powerEstimated, onRpmChange, s1Rpm }) => {
   const pointerBox = useRef<Record<'thrust' | 'power', HTMLDivElement | null>>({ thrust: null, power: null });
   const dragging = useRef(false);
   const curve = useMemo(() => series ? propellerCurveData(series, rpmMin, rpmMax) : null,
@@ -90,6 +92,7 @@ const PropellerCurves: React.FC<Props> = ({ series, rpm, rpmMin, rpmMax, powerEs
                 <RcTooltip formatter={(value, name) => [value == null ? '—' : `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`, name]} labelFormatter={(v) => `${Number(v).toLocaleString()} rpm`} />
                 <Line type="monotone" dataKey={testedKey} name={tx('configurePropeller.tested')} stroke={CURVE_COLORS.tested} dot={false} connectNulls={false} isAnimationActive={false} strokeWidth={2} />
                 <Line type="monotone" dataKey={modeledKey} name={tx('configurePropeller.beyondTested')} stroke={CURVE_COLORS.modeled} strokeDasharray="5 3" dot={false} connectNulls={false} isAnimationActive={false} strokeWidth={2} />
+                {s1Rpm != null && s1Rpm >= domain![0] && s1Rpm <= domain![1] && <ReferenceLine x={s1Rpm} stroke={CURVE_COLORS.s1} strokeDasharray="4 3" strokeWidth={1.5} label={{ value: tx('configurePropeller.s1Marker'), position: 'insideTopRight', fill: CURVE_COLORS.s1, fontSize: 11 }} />}
                 {rpm >= domain![0] && rpm <= domain![1] && <ReferenceLine x={rpm} stroke={CURVE_COLORS.cursor} strokeWidth={1.5} />}
               </LineChart>
             </ResponsiveContainer>

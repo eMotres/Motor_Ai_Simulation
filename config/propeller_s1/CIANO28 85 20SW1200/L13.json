@@ -1,0 +1,180 @@
+{
+ "schema": "propeller-s1-model-1",
+ "die": "CIANO28 85 20SW1200",
+ "config": "L13",
+ "source": {
+  "kind": "passport store record (drive variant points)",
+  "file": "passports/CIANO28 85 20SW1200/L13.json",
+  "store_variant": "si_48k",
+  "record_source": "docs/data/passport_d85/passport_L13.json"
+ },
+ "R_phase_ohm": 0.093962,
+ "R_temp_C": 149.3,
+ "magnet_ref_temp_C": 150.0,
+ "flux_temp_coeff_per_K": -0.001199,
+ "flux_coeff_basis": "magnet card alpha(Br) -0.1199 %/K (F52SH_120C)",
+ "torque_factor": 1.0,
+ "grid": {
+  "rpm": [
+   250.0,
+   500.0,
+   1000.0,
+   1500.0,
+   2000.0
+  ],
+  "I_A": [
+   6.47,
+   12.94,
+   25.88,
+   45.962
+  ],
+  "T_Nm": [
+   [
+    1.2473828657123331,
+    2.441213665178759,
+    4.4697401413933795,
+    6.5340225358993305
+   ],
+   [
+    1.2442080337288963,
+    2.4382708460479523,
+    4.467823188511758,
+    6.536450880427074
+   ],
+   [
+    1.2378274218201057,
+    2.4319481849897797,
+    4.462281962706913,
+    6.534745627560126
+   ],
+   [
+    1.2314542783333853,
+    2.4255563021498547,
+    4.456143290246671,
+    6.463987481078018
+   ],
+   [
+    1.2251145009882878,
+    2.415377531862265,
+    4.161664006949098,
+    5.392486720895171
+   ]
+  ],
+  "loss_W": {
+   "fe_stator": [
+    [
+     0.49853393174936755,
+     0.5213949359113741,
+     0.6594981400797906,
+     1.1971576324787065
+    ],
+    [
+     1.261796879765141,
+     1.3144096090439703,
+     1.6865324794659955,
+     3.4496143781033197
+    ],
+    [
+     3.5044501540570785,
+     3.6390594507464513,
+     4.63272452637608,
+     9.851951484539313
+    ],
+    [
+     6.663328778272231,
+     6.905756380556063,
+     8.718157746296555,
+     18.95413567758885
+    ],
+    [
+     10.70883487040539,
+     11.01374723559556,
+     13.268472339227259,
+     35.77440404788422
+    ]
+   ]
+  }
+ },
+ "mech_W": null,
+ "controller": {
+  "variant": {
+   "id": "si_48k",
+   "device": "IQE036N08NM6SC",
+   "carrier_hz": 48000.0,
+   "bus_evaluated": "nom"
+  },
+  "rpm": [
+   250.0,
+   500.0,
+   1000.0,
+   1500.0,
+   2000.0
+  ],
+  "I_A": [
+   6.47,
+   12.94,
+   25.88,
+   45.962
+  ],
+  "loss_W": [
+   [
+    2.4034921167312078,
+    5.296958566291222,
+    16.106260203365803,
+    47.686951515037165
+   ],
+   [
+    2.4034921167312078,
+    5.296958566291222,
+    16.106260203365803,
+    47.686951515037165
+   ],
+   [
+    2.4034921167312078,
+    5.296958566291222,
+    16.106260203365803,
+    47.686951515037165
+   ],
+   [
+    2.4034921167312078,
+    5.296958566291222,
+    16.106260203365803,
+    47.686951515037165
+   ],
+   [
+    2.4034921167312078,
+    5.296958566291222,
+    16.106260203365803,
+    47.686951515037165
+   ]
+  ],
+  "basis": "inverter conduction + switching + dead time + board copper, passport drive variant"
+ },
+ "limits": {
+  "I_max_A": 45.962,
+  "I_max_basis": "top of the passport store current grid (the peak duty current)",
+  "rpm_max": 2000.0,
+  "rpm_max_basis": "top of the passport store speed grid (no voltage envelope in the record)",
+  "winding_C": 180.0,
+  "winding_basis": "insulation class H (owner default)",
+  "magnet_C": 150.0,
+  "magnet_basis": "magnet card max_working_temp_c (F52SH_120C, SH class 150 C)"
+ },
+ "thermal_geom": {
+  "statorOD_mm": 85.0,
+  "stackLength_mm": 13.0,
+  "numSlots": 24,
+  "slotHeight_mm": 7.0,
+  "slotWidth_mm": 3.3000000000000003,
+  "insulation_mm": 0.05,
+  "coreThickness_mm": 2.3999999999999986,
+  "airGap_mm": 0.29999999999999716,
+  "magnetOD_mm": 65.60000000000001,
+  "source": "catalogue card cat_ciano28_85 (passport fit/geo)"
+ },
+ "labels": [
+  "torque = operating torque T_op of drive variant si_48k (store record)",
+  "losses: total sine motor loss of the record at coil 180 C / magnet 150.0 C; DC copper split off with R(T), the rest (iron + AC + eddy, not split in the record) put on the stator",
+  "flux vs magnet temperature from the magnet card's Br coefficient (no cold/hot pair in the record)"
+ ]
+}

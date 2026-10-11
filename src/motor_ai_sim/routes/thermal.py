@@ -1625,8 +1625,13 @@ def _solved_gamma_deg(gamma_deg, op_mode) -> float:
 def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
                          outer_air_factor, n_sectors, coil_temp_c,
                          component_mesh, n_steps_per_period, n_periods, geo_ov,
-                         magnet_temp_c=None, op_mode=None):
+                         magnet_temp_c=None, op_mode=None, rpm=None):
     """This thermal request, spelled as a Simulation-run snapshot key.
+
+    ``rpm`` (2026-10-11) is the ELECTROMAGNETIC speed to look the map up at when
+    the caller solved it at a speed of its own — the coupled loop at a request
+    rpm that is not the saved one.  ``None`` (the Thermal tab, every caller
+    before) keeps the shared configuration's speed, bit-identical.
 
     Every constant in here is one the thermal route hard-codes when it calls
     ``get_fem_field2d`` (``eddy``/``rotor_eddy`` on, no demag, current drive,
@@ -1652,7 +1657,7 @@ def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
     # auto-symmetry wedge), and a single-frame request pinned to one step.
     ns_eff = _snap_n_sectors(n_sectors, geo_ov)
     nsteps = int(n_steps_per_period) if int(n_steps_per_period) > 1 else 1
-    return _field_snap_key_fields(
+    fields = _field_snap_key_fields(
         gamma_deg=_solved_gamma_deg(gamma_deg, op_mode), I_phase_rms=I_phase_rms,
         mesh_size_mm=mesh_size_mm, min_size_mm=min_size_mm,
         outer_air_factor=outer_air_factor, n_sectors=ns_eff,
@@ -1669,6 +1674,10 @@ def _loss_snapshot_probe(*, gamma_deg, I_phase_rms, mesh_size_mm, min_size_mm,
         geo_ov=geo_ov, mat_ov=_get_request_materials_safe(),
         magnet_temp_c=magnet_temp_c,
         rotor_angle0_deg=0.0)
+    if rpm is not None:
+        from motor_ai_sim.routes.simulation import _effective_rpm
+        fields["rpm"] = round(_effective_rpm(rpm), 3)
+    return fields
 
 
 #: The fields that make two loss maps THE SAME PHYSICS: the machine (geometry
@@ -2370,9 +2379,12 @@ def _remember_loss_map(identity, em, note: str,
 def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
                  mesh_size_mm, min_size_mm, outer_air_factor, n_sectors,
                  coil_temp_c, component_mesh, geo, geo_ov, phase_cb=None,
-                 magnet_temp_c=None, op_mode=None):
+                 magnet_temp_c=None, op_mode=None, rpm=None):
     """The cycle-averaged loss map for THIS operating point, and where it came
     from.  THIS FUNCTION NEVER SOLVES.
+
+    ``rpm`` = the electromagnetic speed of the map (``_loss_snapshot_probe``);
+    ``None`` = the shared configuration's.
 
     Returns ``(em, loss_source)`` where ``em`` is the field-view payload the
     thermal solve reads (vertices / triangles / ``domain_per_tri`` /
@@ -2416,7 +2428,8 @@ def _em_loss_map(*, gamma_deg, I_phase_rms, n_steps_per_period, n_periods,
             outer_air_factor=outer_air_factor, n_sectors=n_sectors,
             coil_temp_c=coil_temp_c, component_mesh=component_mesh,
             n_steps_per_period=n_steps_per_period, n_periods=n_periods,
-            geo_ov=geo_ov, magnet_temp_c=magnet_temp_c, op_mode=op_mode)
+            geo_ov=geo_ov, magnet_temp_c=magnet_temp_c, op_mode=op_mode,
+            rpm=rpm)
     except Exception as exc:  # noqa: BLE001
         _probe_err = "the run key of this request could not be built (%s)" % exc
 
@@ -3789,6 +3802,11 @@ def solve_thermal_field(
     air_speed_source:   str = "manual",
     propeller_id:       str = "",
     propeller_position: str = "",
+    # THE SPEED THE LOSS MAP WAS SOLVED AT (2026-10-11).  None (every route
+    # call) = the shared configuration's speed, bit-identical.  The coupled loop
+    # passes its own request rpm, so the map it looks up is the run it just made
+    # at that speed — the same rpm `rpm` above gives the gap and the propeller air.
+    loss_map_rpm:       Optional[float] = None,
     progress=None,
     _em_map:            Optional[Dict[str, Any]] = None,
     _em_loss_source:    Optional[Dict[str, Any]] = None,
@@ -4146,6 +4164,11 @@ def solve_thermal_field(
     # other's temperature field.
     if magnet_temp_c is not None:
         key = key + ("magnet_temp_c", round(float(magnet_temp_c), 2))
+    # The loss map's OWN speed, when the caller names one (the coupled loop): the
+    # same rule — absent, the key is byte-identical; present, a map solved at
+    # another speed than the saved one is a different answer.
+    if loss_map_rpm is not None:
+        key = key + ("loss_map_rpm", round(float(loss_map_rpm), 3))
     # The EM RUN itself, when the caller chose one (the latest run): two runs at
     # the same point but another demag / gap-layer setting are two maps.
     if _em_run is not None:
@@ -4267,7 +4290,8 @@ def solve_thermal_field(
                     outer_air_factor=outer_air_factor, n_sectors=n_sectors,
                     coil_temp_c=coil_temp_c, component_mesh=component_mesh,
                     geo=geo, geo_ov=_geo_ov, phase_cb=_phase,
-                    magnet_temp_c=magnet_temp_c, op_mode=op_mode)
+                    magnet_temp_c=magnet_temp_c, op_mode=op_mode,
+                    rpm=loss_map_rpm)
         finally:
             _NO_WARM_CACHE_CTX.reset(_nwc_token)
     if isinstance(_em_capture, dict):

@@ -561,6 +561,7 @@
     "s1FlagBelowGrid": "低于护照最低转速的电机损耗为外推值。",
     "s1FlagFwFloor": "高于空载电压极限：驱动器需提供弱磁电流。",
     "s1FlagCalibrated": "集总热模型已按该冷却方式的耦合有限元计算校准。",
+    "s1FlagCalibratedOutside": "集总热模型已按该冷却方式的耦合有限元计算校准，但校准时的滑流速度与此工况不同。",
     "s1FlagBands": "非单调：部分较低转速超出限值。",
     "s1Marker": "S1",
     "curvesTitle": "螺旋桨曲线",

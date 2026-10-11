@@ -462,7 +462,8 @@ def housing_film(air_speed_ms: float, ambient_c: float, d_housing_m: float) -> f
 
 #: The calibration constants a model may carry (``thermal_calibration``), with
 #: the value that leaves Configure's network exactly as it is.
-CALIBRATION_KEYS = {"housing_film_factor": 1.0, "winding_air_area_m2": 0.0, "rotor_air_area_m2": 0.0}
+CALIBRATION_KEYS = {"housing_film_factor": 1.0, "winding_air_area_m2": 0.0, "rotor_air_area_m2": 0.0,
+                    "gap_resistance_factor": 1.0}
 
 
 def calibration_of(m: Mapping[str, Any]) -> Dict[str, float]:
@@ -474,11 +475,29 @@ def calibration_of(m: Mapping[str, Any]) -> Dict[str, float]:
     for k in CALIBRATION_KEYS:
         if raw.get(k) is not None:
             v = _num(raw.get(k))
-            if v is None or v < 0 or (k == "housing_film_factor" and v <= 0):
+            if v is None or v < 0 or (k in ("housing_film_factor", "gap_resistance_factor") and v <= 0):
                 raise S1Error(f"model: thermal_calibration.{k} must be a finite number >= 0 "
-                              "(the housing factor > 0)")
+                              "(the housing and gap factors > 0)")
             out[k] = v
     return out
+
+
+#: A calibrated network is taken as calibrated within this fraction outside the
+#: slipstream speeds its FEM anchors ran at (the Ø40 L12 validation anchor sat
+#: 17 % above its highest fitted speed and landed within 1.5 K).
+CALIBRATION_RANGE_MARGIN = 0.2
+
+
+def calibration_covers(m: Mapping[str, Any], air_speed_ms: Optional[float]) -> Optional[bool]:
+    """Whether ``air_speed_ms`` lies inside the calibration's anchor slipstream range
+    (``thermal_calibration.anchor_air_speed_ms`` ± ``CALIBRATION_RANGE_MARGIN``);
+    None when the model is uncalibrated or its calibration states no range."""
+    rng = (m.get("thermal_calibration") or {}).get("anchor_air_speed_ms")
+    v = _num(air_speed_ms)
+    if not rng or v is None:
+        return None
+    lo, hi = float(rng[0]), float(rng[1])
+    return (1.0 - CALIBRATION_RANGE_MARGIN) * lo <= v <= (1.0 + CALIBRATION_RANGE_MARGIN) * hi
 
 
 def temperatures(geom: Mapping[str, float], p_cu: float, p_rotor: float, p_total: float,
@@ -493,9 +512,12 @@ def temperatures(geom: Mapping[str, float], p_cu: float, p_rotor: float, p_total
     adds the two paths an open, propeller-washed machine has besides its outer
     surface — the end turns / slot channels straight to the air
     (``G_wa = h·A_w``) and the rotor faces / ventilated gap straight to the air
-    (``G_ra = h·A_r``) — and scales the housing film (``f_h``).  The three nodes
+    (``G_ra = h·A_r``) — and scales the housing film (``f_h``).  A HOUSED frame has
+    no rotor-to-air path (its rotor heat leaves only across the gap), so its fit
+    scales the gap resistance instead (``gap_resistance_factor`` f_g, default 1).
+    The three nodes
     (housing, winding, rotor) are then one linear system; with A_w = A_r = 0 and
-    f_h = 1 it is the uncalibrated network exactly."""
+    f_h = f_g = 1 it is the uncalibrated network exactly."""
     mm = lambda x: max(0.0, float(x or 0.0)) / 1000.0           # noqa: E731
     D = mm(geom["statorOD_mm"]) or 0.1
     L = mm(geom["stackLength_mm"]) or 0.03
@@ -507,9 +529,9 @@ def temperatures(geom: Mapping[str, float], p_cu: float, p_rotor: float, p_total
            + mm(geom["insulation_mm"]) / (K_INS * a_slot)
            + mm(geom["coreThickness_mm"]) / (K_IRON * max(1e-4, a_cyl)))
     a_gap = max(1e-4, math.pi * mm(geom["magnetOD_mm"]) * L)
-    r_gap = mm(geom["airGap_mm"]) / (K_GAP * a_gap)
     c = dict(CALIBRATION_KEYS)
     c.update({k: float(v) for k, v in (cal or {}).items() if k in CALIBRATION_KEYS})
+    r_gap = c["gap_resistance_factor"] * mm(geom["airGap_mm"]) / (K_GAP * a_gap)
     g_h = c["housing_film_factor"] * h * a_surf
     g_wa = c["winding_air_area_m2"] * h
     g_ra = c["rotor_air_area_m2"] * h
@@ -718,7 +740,8 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
                  "T_housing_C": best["T_housing_C"], "air_speed_ms": best["air_speed_ms"],
                  "binding": binding, "extrapolated": best["extrapolated"],
                  "power_estimated": best["power_estimated"], "below_loss_grid": best["below_loss_grid"],
-                 "fw_floor": bool(best.get("fw_floor"))}
+                 "fw_floor": bool(best.get("fw_floor")),
+                 "calibration_in_range": calibration_covers(m, best["air_speed_ms"])}
         if binding == "speed_range":
             limit["range_end_basis"] = (lims["rpm_max_basis"] if hi >= lims["rpm_max"] - 1e-6
                                         else "1.5 x the propeller's highest tested rpm")

@@ -51,6 +51,14 @@ t('field weakening and a calibrated thermal model are stated', () => {
   assert.deepEqual(S.s1Line({ ...R, model: { thermal_calibration: null } }, 'tmotor_fpv_10x5', 'L12').flagKeys, []);
 });
 
+t('a limit outside the calibration anchors\' slipstream range says so', () => {
+  const cal = { model: { thermal_calibration: { housing_film_factor: 0.5 } } };
+  const out = { ...R, ...cal, limit: { ...LIMIT, calibration_in_range: false } };
+  assert.deepEqual(S.s1Line(out, 'tmotor_fpv_10x5', 'L12').flagKeys, ['configurePropeller.s1FlagCalibratedOutside']);
+  const inside = { ...R, ...cal, limit: { ...LIMIT, calibration_in_range: true } };
+  assert.deepEqual(S.s1Line(inside, 'tmotor_fpv_10x5', 'L12').flagKeys, ['configurePropeller.s1FlagCalibrated']);
+});
+
 t('no continuous point names what failed first', () => {
   const l = S.s1Line({ ...R, limit: null, no_continuous_point: true, first_failure: 'winding' }, 'tmotor_fpv_10x5', 'L12');
   assert.deepEqual(l, { kind: 'none', bindingKey: 'configurePropeller.s1BindWinding' });

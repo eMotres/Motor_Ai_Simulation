@@ -1302,6 +1302,12 @@ def _field_cache_key(geo_ov, assign, *, ambient_temp, h_conv, slot_k,
         _base = _base + ("air_speed_source", "propeller",
                          str(propeller_id or "").strip(),
                          str(propeller_position or "").strip())
+        # 2026-10-11: a HOUSED machine in its propeller's stream also cools its
+        # two end caps, so a map solved before that path existed is not this one.
+        if _norm_frame(frame) != "open":
+            from motor_ai_sim.simulation.cooling_models import (
+                HOUSING_REAR_FACE_SPEED_FACTOR as _RF)
+            _base = _base + ("housing_end_faces", float(_RF))
     return _base
 
 
@@ -4869,6 +4875,27 @@ def solve_thermal_field(
                            "t_sink_c": float(ambient_temp),
                            "node": "heat_path", "symmetry_mult": sym})
 
+    # ── THE HOUSED FRAME's END CAPS in the propeller slipstream (2026-10-11) ──
+    # A housed drone motor cooled by its own propeller has its two end caps in
+    # the same stream as the housing side, and until now only the side was a
+    # cooled surface (the Ø85 propeller-air FEM read 4.3 A against the lumped
+    # 9.7 A partly for that reason).  Only with the PROPELLER as the air source:
+    # a typed air speed, robotics / still air, liquid and the open frame (which
+    # has its own end-turn / rotor-face paths in the wash) are unchanged.  The
+    # caps sit at the housing temperature, so they are a second film on the
+    # housing facets, reported on its own (`cooling.housing_end_faces`).
+    _hfe_on = bool(cooling_mode == "air" and frame == "housed"
+                   and _prop_cooling is not None)
+    _hfe: Dict[str, Any] = {}
+    if _hfe_on:
+        _hfe_d_sh = _shaft_d_out
+        if _hfe_d_sh <= 0.0:
+            _rir = float(g.get("rotor_inner_radius") or 0.0) * 1e-3
+            _hfe_d_sh = 2.0 * _rir if _rir > 0.0 else 2.0 * max(r_bore_m, 0.0)
+        _hfe = _cm3.housing_end_faces_slipstream(
+            air_speed_mps=air_speed_mps, t_ambient_c=ambient_temp,
+            d_housing_m=2.0 * R_house, d_shaft_m=_hfe_d_sh, length_m=L)
+
     # ── THE AXIAL END FACES (2026-09-14) ─────────────────────────────────────
     # User, 2026-09-14, with the Fusion model in front of him: the 24 coils stand
     # PROUD of the core on both sides — hairpin-like, fully exposed — and the
@@ -5544,7 +5571,11 @@ def solve_thermal_field(
                            "t_sink": float(t_sink),
                            **({"node": "heat_path"} if _hp_housing else {})},
                           {"name": "bore", "h": float(h_bore),
-                           "t_sink": float(t_bore_sink)}],
+                           "t_sink": float(t_bore_sink)}]
+                + ([{"name": "housing_end_faces", "facets": "outer",
+                     "G_W_per_K": float(_hfe["G_W_per_K"]),
+                     "symmetry_mult": sym,
+                     "t_sink": float(ambient_temp)}] if _hfe_on else []),
                 # The exposed shaft ends, the mount and the axial end faces — all
                 # lumped conductances on the elements they act on, not facet
                 # films (every one of those surfaces is out along the axis, so
@@ -5636,6 +5667,26 @@ def solve_thermal_field(
     _by_name = {s["name"]: s for s in (th.get("surfaces") or [])}
     _outer_w = float(_by_name.get("outer", {}).get("heat_removed_W", 0.0)) * sym
     _bore_w = float(_by_name.get("bore", {}).get("heat_removed_W", 0.0)) * sym
+    _hfe_s = _by_name.get("housing_end_faces") or {}
+    _hfe_w = float(_hfe_s.get("heat_removed_W", 0.0) or 0.0) * sym
+    if _hfe_on:
+        _hfe_t = _hfe_s.get("t_mean_c")
+        housing_end_faces = {
+            **_hfe, "heat_removed_W": round(_hfe_w, 3),
+            "front_W": round(_hfe_w * _hfe["front"]["h_conv"]
+                             / max(_hfe["front"]["h_conv"] + _hfe["rear"]["h_conv"], 1e-12), 3),
+            "rear_W": round(_hfe_w * _hfe["rear"]["h_conv"]
+                            / max(_hfe["front"]["h_conv"] + _hfe["rear"]["h_conv"], 1e-12), 3),
+            "t_wall_c": (None if _hfe_t is None else round(float(_hfe_t), 2)),
+            # G spread over the housing facets this mesh really has
+            "h_on_housing_facets": _hfe_s.get("h_conv")}
+    else:
+        housing_end_faces = {
+            "mode": "off", "G_W_per_K": 0.0, "heat_removed_W": 0.0,
+            "note": ("the housing end caps are not a cooled surface here: they "
+                     "are only in the stream when a HOUSED machine is cooled by "
+                     "its propeller (cooling_mode='air', air_speed_source="
+                     "'propeller')")}
     if _iterating:
         _, _, cooling = _cooling_bc(
             mode=cooling_mode, t_ambient_c=ambient_temp,
@@ -6103,7 +6154,7 @@ def solve_thermal_field(
             gap_flow["notes"] = list(_gf_notes)
 
     _resid = (_gen_w - _outer_w - _bore_w - _shaft_w - _ew_w - _ch_w
-              - _mount_w - _ef_w_total - _gf_w - _brg_w)
+              - _mount_w - _ef_w_total - _gf_w - _brg_w - _hfe_w)
 
     # ── WHERE THE ROTOR'S HEAT GOES: out through the gap, or in through the
     #    shaft (2026-09-10) ───────────────────────────────────────────────────
@@ -6220,6 +6271,9 @@ def solve_thermal_field(
         "housing_pct": _share_s(_outer_w),
         "mount_W": round(_mount_w, 3),
         "mount_pct": _share_s(_mount_w),
+        # the housed frame's end caps in the propeller slipstream (2026-10-11)
+        "housing_end_faces_W": round(_hfe_w, 3),
+        "housing_end_faces_pct": _share_s(_hfe_w),
         "end_faces_W": round(_ef_stator_side_w, 3),
         "end_faces_pct": _share_s(_ef_stator_side_w),
         "end_windings_W": round(_ew_w, 3),
@@ -6229,7 +6283,7 @@ def solve_thermal_field(
         # reaches the back iron.
         "gap_flow_W": round(_gf_w_sta, 3),
         "gap_flow_pct": _share_s(_gf_w_sta),
-        "closure_W": round(_stator_in_w - _outer_w - _mount_w
+        "closure_W": round(_stator_in_w - _outer_w - _mount_w - _hfe_w
                            - _ef_stator_side_w - _ew_w - _ch_w - _gf_w_sta, 3),
         "note": ("what the stator side makes and where it goes: ∫q dV outside "
                  "the slip radius plus what crosses the AIR GAP from the rotor, "
@@ -6262,6 +6316,10 @@ def solve_thermal_field(
         # held temperature.  0 on a machine bolted to nothing — which is what
         # every answer before today assumed, and said nothing about.
         "mount_W": round(_mount_w, 3),
+        # THE HOUSED FRAME's END CAPS in the propeller slipstream (2026-10-11):
+        # a second film on the housing facets; 0 unless the propeller is the
+        # air source of a housed machine.
+        "housing_end_faces_W": round(_hfe_w, 3),
         # THE AXIAL END FACES (2026-09-14): the end turns, the core end faces and
         # the magnet ends of a machine whose ends are open, all four summed.  0
         # on a housed machine.
@@ -6402,6 +6460,9 @@ def solve_thermal_field(
             # THE AXIAL END FACES (2026-09-14): the end turns, the two core end
             # faces and the magnet ends, each with its own film, area and watts.
             "end_faces": end_faces_block,
+            # THE HOUSED FRAME's END CAPS in the propeller slipstream
+            # (2026-10-11): per-face speed, film and area, and the watts.
+            "housing_end_faces": housing_end_faces,
             # THE OPEN FRAME (2026-09-09): the two paths a machine with no
             # housing has and a housed one does not.  Reported beside
             # `shaft_ends` and for the same reason — they leave along the axis /

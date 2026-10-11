@@ -507,8 +507,10 @@ def task_propanchor(work: Path, a) -> None:
         # one correction step: the torque is ~linear in current near the point
         I = I * q_em / T3
         comps = thm.get("components") or {}
-        Tc0 = float((comps.get("winding") or {}).get("avg") or Tc0)
-        Tm0 = float((comps.get("magnet") or {}).get("avg") or Tm0)
+        # the same caps as the first start: a pass that ran past the cards must not
+        # hand the EM solve a magnet the linear model cannot represent
+        Tc0 = min(float((comps.get("winding") or {}).get("avg") or Tc0), 170.0)
+        Tm0 = min(float((comps.get("magnet") or {}).get("avg") or Tm0), 140.0)
 
 
 def _num_or_none(v):

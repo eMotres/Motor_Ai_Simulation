@@ -428,12 +428,67 @@ def test_calibration_fit_recovers_known_constants(tmp_path):
         f.write_text(json.dumps(a), encoding="utf-8")
         files.append(str(f))
     out = tmp_path / "out.json"
-    assert ex.main(["calibrate", str(mf), "--out", str(out)] + sum((["--anchor", f] for f in files), [])) == 0
+    fit, check = files, files[2]          # the check row: reported, not fitted
+    assert ex.main(["calibrate", str(mf), "--out", str(out), "--check", check]
+                   + sum((["--anchor", f] for f in fit), [])) == 0
     cal = json.loads(out.read_text(encoding="utf-8"))["thermal_calibration"]
     for k, v in true.items():
         assert cal[k] == pytest.approx(v, rel=0.02)
     for r in cal["anchors"]:
         for k in ("winding", "magnet", "housing"):
             assert r["lumped_after_C"][k] == pytest.approx(r["fem_C"][k], abs=0.05)
+    assert [r["role"] for r in cal["anchors"]] == ["fit", "fit", "fit", "check"]
+    assert cal["anchor_rpm"] == [6000.0, 8500.0, 9800.0]
+    lo, hi = cal["anchor_air_speed_ms"]
+    assert 0 < lo < hi
     assert "basis" in cal and "slipstream_factor_basis" in cal
+    m2 = json.loads(out.read_text(encoding="utf-8"))
+    s1.validate_model(m2)
+    # the Configure flag's applicability: inside the anchors' slipstream range ± 20 %
+    assert s1.calibration_covers(m2, 0.5 * (lo + hi)) is True
+    assert s1.calibration_covers(m2, 1.19 * hi) is True
+    assert s1.calibration_covers(m2, 1.25 * hi) is False
+    assert s1.calibration_covers(m2, 0.75 * lo) is False
+    assert s1.calibration_covers(model, 5.0) is None          # no range stated: no claim
+
+
+def test_housed_calibration_form_fits_the_gap_resistance(tmp_path):
+    """The housed frame (Ø85) has no rotor-to-air path: its fit scales the gap
+    resistance, which can make the magnet HOTTER than the uncalibrated network —
+    the one direction the open form's rotor air area cannot reach."""
+    geom = s1.load_model("CIANO28 85 20SW1200", "L13")["thermal_geom"]
+    base = s1.temperatures(geom, 11.0, 1.2, 16.0, 25.0, 25.0, None)
+    hot = s1.temperatures(geom, 11.0, 1.2, 16.0, 25.0, 25.0, {"gap_resistance_factor": 3.0})
+    assert hot["magnet"] - hot["housing"] == pytest.approx(3.0 * (base["magnet"] - base["housing"]), rel=1e-9)
+    with pytest.raises(s1.S1Error):
+        _model(thermal_calibration={"gap_resistance_factor": 0.0})
+    ex = _exporter()
+    m = s1.load_model("CIANO28 85 20SW1200", "L13")
+    model = {k: v for k, v in m.items() if k != "_path"}
+    mf = tmp_path / "L13.json"
+    mf.write_text(json.dumps(model), encoding="utf-8")
+    true = {"housing_film_factor": 0.7, "winding_air_area_m2": 1.0e-3, "gap_resistance_factor": 3.0}
+    prop = pp.get_propeller("tmotor_g32x11")
+    files = []
+    for n, p_cu, p_r, p_t in ((1250.0, 8.0, 1.0, 12.0), (1600.0, 16.0, 1.5, 22.0), (1800.0, 24.0, 2.0, 31.0)):
+        op = pp.operating_point(prop, n, pp.air_density(temp_c=25.0))
+        h = s1.housing_film(op["air_speed_ms"], 25.0, 0.085)
+        t = s1.temperatures(geom, p_cu, p_r, p_t, h, 25.0, true)
+        a = {"rpm": n, "ambient_c": 25.0, "propeller": "tmotor_g32x11", "passes": [{
+            "I_rms": 8.0, "error": None, "torque_miss": 0.0,
+            "components": {"winding": {"max": t["winding"], "avg": t["winding"] - 0.5},
+                           "magnet": {"max": t["magnet"], "avg": t["magnet"]},
+                           "stator": {"avg": t["housing"]}},
+            "coupling": {"em": {"P_stranded_W": p_cu}},
+            "cooling": {"heat_budget": {"losses_W": p_t, "rotor_heat_split": {"rotor_W": p_r}}}}]}
+        f = tmp_path / f"anchor_{n:.0f}.json"
+        f.write_text(json.dumps(a), encoding="utf-8")
+        files.append(str(f))
+    out = tmp_path / "out.json"
+    assert ex.main(["calibrate", str(mf), "--out", str(out), "--form", "housed"]
+                   + sum((["--anchor", f] for f in files), [])) == 0
+    cal = json.loads(out.read_text(encoding="utf-8"))["thermal_calibration"]
+    assert cal["form"] == "housed" and "rotor_air_area_m2" not in cal
+    for k, v in true.items():
+        assert cal[k] == pytest.approx(v, rel=0.03)
     s1.validate_model(json.loads(out.read_text(encoding="utf-8")))

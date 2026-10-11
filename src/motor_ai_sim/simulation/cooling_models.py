@@ -443,6 +443,72 @@ def outer_air(*, air_speed_mps: float, t_ambient_c: float, d_housing_m: float,
                           f"h = {NATURAL_CONVECTION_H:.0f} W/m²·K"))
 
 
+#: The REAR end face of a housed motor in a propeller slipstream sits in the
+#: separated wake behind the housing (base region), not in the stream itself.
+#: Its film is taken at this fraction of the housing air speed — an engineering
+#: assumption (2026-10-11), stated wherever the rear face is reported; the FRONT
+#: face (towards the propeller) takes the housing air speed itself.
+HOUSING_REAR_FACE_SPEED_FACTOR = 0.5
+
+
+def housing_end_faces_slipstream(*, air_speed_mps: float, t_ambient_c: float,
+                                 d_housing_m: float, d_shaft_m: float,
+                                 length_m: float,
+                                 rear_speed_factor: float = HOUSING_REAR_FACE_SPEED_FACTOR,
+                                 props: Optional[FluidProps] = None) -> Dict[str, Any]:
+    """The two END CAPS of a HOUSED motor in its own propeller's slipstream.
+
+    The housing side (``outer_air``) is the only cooled surface the housed frame
+    had; on a propeller-cooled drone motor the two end caps are in the same
+    stream.  Each face is the end-cap annulus outside the shaft::
+
+        A_face  = π/4 · (D_housing² − d_shaft²)
+        h_front = outer_air(v,          D_housing).h      (towards the propeller)
+        h_rear  = outer_air(f_rear · v, D_housing).h      (the wake behind the motor)
+        G       = h_front · A_face + h_rear · A_face        [W/K, whole machine]
+
+    The SAME film model as the housing side (Churchill–Bernstein on the housing
+    diameter, natural-convection floor), at the face's own speed.  The caps are
+    taken at the HOUSING temperature (fin efficiency 1: a 3–5 mm aluminium cap
+    of the Ø85's radius at h ≈ 60 W/m²·K has mL ≈ 0.3, η ≈ 0.97), so in a 2-D
+    cross-section they act on the housing facets: ``h_equiv_on_od`` = G / (π·D·L)
+    is the coefficient that, on the housing side's own area, carries G.
+    """
+    v = max(float(air_speed_mps), 0.0)
+    f_rear = max(float(rear_speed_factor), 0.0)
+    D = max(float(d_housing_m), 1e-4)
+    d = min(max(float(d_shaft_m), 0.0), D)
+    L = max(float(length_m), 1e-6)
+    a_face = 0.25 * math.pi * (D * D - d * d)
+    front = outer_air(air_speed_mps=v, t_ambient_c=t_ambient_c, d_housing_m=D,
+                      props=props)
+    rear = outer_air(air_speed_mps=f_rear * v, t_ambient_c=t_ambient_c,
+                     d_housing_m=D, props=props)
+    g = (float(front["h_conv"]) + float(rear["h_conv"])) * a_face
+    a_od = math.pi * D * L
+    return {
+        "mode": "slipstream",
+        "area_per_face_m2": a_face,
+        "d_housing_m": D, "d_shaft_m": d,
+        "front": {"air_speed_mps": v, "h_conv": float(front["h_conv"]),
+                  "regime": front.get("regime"), "area_m2": a_face},
+        "rear": {"air_speed_mps": f_rear * v, "h_conv": float(rear["h_conv"]),
+                 "regime": rear.get("regime"), "area_m2": a_face,
+                 "speed_factor": f_rear},
+        "G_W_per_K": g,
+        "h_equiv_on_od": g / a_od,
+        "od_area_m2": a_od,
+        "t_sink_c": float(t_ambient_c),
+        "note": ("the two housing END CAPS in the propeller slipstream (housed "
+                 "frame): the housing side's own film model (Churchill–Bernstein "
+                 "on D_housing) at the front face's speed = the housing air speed "
+                 "and the rear face's = %.2f × it (the wake behind the motor — "
+                 "an assumption), on the cap annulus π/4·(D² − d_shaft²) each; "
+                 "the caps are at the housing temperature (fin efficiency 1)"
+                 % f_rear),
+    }
+
+
 def _still_film(*, t_wall_c: float, t_ambient_c: float, d_m: float,
                 nu_floor: float,
                 props: Optional[FluidProps] = None) -> Dict[str, float]:

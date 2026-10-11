@@ -1195,7 +1195,11 @@ def network_from_steady(thermal_result: Mapping[str, Any], *,
     # rotor's conduction path out through the shaft into the housing /
     # structure.  0 on every map before it.
     bearings_w = float(budget.get("bearings_W") or 0.0)
-    housing_w = float(budget.get("housing_W") or 0.0)
+    # The housed frame's end caps in the propeller slipstream (2026-10-11) are
+    # a second film on the housing facets: the same housing node, so its watts
+    # join the housing path.  0 on every other map.
+    housing_w = (float(budget.get("housing_W") or 0.0)
+                 + float(budget.get("housing_end_faces_W") or 0.0))
     # ── THE OPEN FRAME's two winding-side paths (2026-09-20) ────────────────
     # On a machine built WITHOUT a housing the map cools the end turns in the
     # airflow and the ventilated slot channels directly to the room, and those

@@ -178,11 +178,24 @@ const KnobSlider: React.FC<{
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
     <Box sx={{ mb: 1.25 }}>
-      <Box sx={{ display: 'flex', alignItems: 'baseline', columnGap: 0.75, rowGap: 0.25, mb: 0.25, flexWrap: 'wrap' }}>
-        <Typography sx={{ ...LABEL, flex: '1 1 120px', minWidth: 0 }} title={limitNote?.tip}>
+      {/* header: label left · value box centred over the track · limit note flush right.
+          Narrow container (< 400 px): the note drops under the row, right-aligned. */}
+      <Box sx={{ containerType: 'inline-size', mb: 0.25 }}>
+      <Box sx={{
+        display: 'grid', alignItems: 'baseline', columnGap: 0.75, rowGap: 0.25,
+        gridTemplateColumns: 'minmax(0, 1fr) auto minmax(0, 1fr)',
+        gridTemplateAreas: '"label value note"',
+        '@container (max-width: 400px)': {
+          gridTemplateColumns: 'minmax(0, 1fr) auto',
+          gridTemplateAreas: '"label value" "note note"',
+        },
+      }}>
+        <Typography sx={{ ...LABEL, gridArea: 'label', minWidth: 0 }} title={limitNote?.tip}>
           {label}
+        </Typography>
+        <Typography component="div" sx={{ ...LABEL, gridArea: 'note', minWidth: 0, textAlign: 'right' }} title={limitNote?.tip}>
           {/* in Chinese the caption keeps its unit symbols as written (mm, rpm), not MM / RPM */}
-          {limitNote?.text && <Box component="span" sx={unitCase()}>{' · '}{limitNote.text}</Box>}
+          {limitNote?.text && <Box component="span" sx={unitCase()}>{limitNote.text}</Box>}
           {limitNote?.hand && onClearHand && (
             <Box component="span" onClick={onClearHand} title={tx('configureLimits.clearHandTip')}
               sx={{ ml: 0.75, color: '#60a5fa', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>
@@ -190,7 +203,7 @@ const KnobSlider: React.FC<{
             </Box>
           )}
         </Typography>
-        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0, ml: 'auto' }}>
+        <Box sx={{ gridArea: 'value', display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0, justifySelf: 'center' }}>
         <input value={txt ?? fmt(value, d)} type="number" step={step} readOnly={disabled}
           onChange={(e) => { setTxt(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= min && v <= max) onChange(v); }}
           onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); setTxt(null); }}
@@ -204,6 +217,7 @@ const KnobSlider: React.FC<{
           </Typography>
         )}
         </Box>
+      </Box>
       </Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
         {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}

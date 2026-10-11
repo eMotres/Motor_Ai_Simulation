@@ -94,7 +94,11 @@ def solve_steady_thermal(
     ``surfaces`` is the cooled-surface list; each entry is
     ``{"name": "outer"|"bore", "h": W/m²·K, "t_sink": °C}``.  Omitting it falls
     back to the legacy single outer surface built from ``h_conv`` / ``t_ambient``,
-    so every caller that predates the bore surface keeps working unchanged.
+    so every caller that predates the bore surface keeps working unchanged.  An
+    entry may add ``"facets": "outer"|"bore"`` to act on that surface's facets
+    under its own name (a second film, reported separately), and may give a
+    whole-machine ``"G_W_per_K"`` (+ ``"symmetry_mult"``) instead of ``h``: the
+    film is then G spread over the facets the mesh really has.
 
     ``k_radial_elem`` is the per-element RADIAL conductivity; ``k_elem`` is then
     read as the CIRCUMFERENTIAL one.  Pass ``None`` (the default) for a fully
@@ -411,7 +415,18 @@ def solve_steady_thermal(
         name = str(s.get("name", "outer"))
         h = float(s.get("h", 0.0) or 0.0)
         ts = float(s.get("t_sink", t_ambient))
-        fset = facet_sets.get(name, np.array([], int))
+        # ``facets`` (2026-10-11) lets a second named film act on the SAME
+        # facets as "outer" / "bore" and be reported on its own (the housed
+        # frame's end caps, which sit at the housing temperature).
+        fset = facet_sets.get(str(s.get("facets") or name), np.array([], int))
+        if s.get("G_W_per_K") is not None and fset.size:
+            # A whole-machine conductance spread over the facets this mesh
+            # really has (grooves, a wedge): h = G / (A_facets · L · sym).
+            _fb0 = FacetBasis(mesh, ElementTriP1(), facets=fset)
+            _a_pm = float(np.sum(_fb0.dx))
+            _sym_s = max(int(s.get("symmetry_mult", 1) or 1), 1)
+            h = (float(s["G_W_per_K"]) / (_a_pm * L * _sym_s)
+                 if _a_pm > 0.0 else 0.0)
         if h <= 0.0 or fset.size == 0:
             active.append({"name": name, "h": h, "t_sink": ts, "facets": fset,
                            "basis": None})

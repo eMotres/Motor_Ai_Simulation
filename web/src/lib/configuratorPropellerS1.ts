@@ -24,6 +24,8 @@ export interface S1Limit {
   below_loss_grid: boolean;
   /** above the no-load voltage limit: the drive carries d-axis current at this speed */
   fw_floor?: boolean;
+  /** false: the limit's slipstream lies outside the calibration anchors' range; null/absent: no range stated */
+  calibration_in_range?: boolean | null;
 }
 
 export interface S1Result {
@@ -71,7 +73,10 @@ export function s1Line(r: S1Result | null | undefined, propId: string | null, co
   if (L.power_estimated) flagKeys.push('configurePropeller.s1FlagEstimated');
   if (L.below_loss_grid) flagKeys.push('configurePropeller.s1FlagBelowGrid');
   if (L.fw_floor) flagKeys.push('configurePropeller.s1FlagFwFloor');
-  if (r.model?.thermal_calibration) flagKeys.push('configurePropeller.s1FlagCalibrated');
+  if (r.model?.thermal_calibration) {
+    flagKeys.push(L.calibration_in_range === false
+      ? 'configurePropeller.s1FlagCalibratedOutside' : 'configurePropeller.s1FlagCalibrated');
+  }
   if (!r.monotone) flagKeys.push('configurePropeller.s1FlagBands');
   return { kind: 'limit', rpm: L.rpm, thrust_kgf: L.thrust_N / G0, shaft_W: L.shaft_power_W,
            electrical_W: L.electrical_power_W, bindingKey: s1BindingKey(L.binding), flagKeys, limit: L };

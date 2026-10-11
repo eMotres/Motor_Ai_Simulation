@@ -291,7 +291,8 @@ def _anchor_row(path: str, model: Dict[str, Any]) -> Dict[str, Any]:
     hb = (p.get("cooling") or {}).get("heat_budget") or {}
     em = (p.get("coupling") or {}).get("em") or {}
     comps = p["components"]
-    return {"file": Path(path).name, "rpm": n, "I_rms": float(p["I_rms"]), "ambient_c": amb,
+    return {"file": Path(path).name, "propeller": a["propeller"],
+            "rpm": n, "I_rms": float(p["I_rms"]), "ambient_c": amb,
             "air_speed_ms": op["air_speed_ms"], "h_W_m2K": h,
             "p_cu_W": float(em["P_stranded_W"]),
             "p_rotor_W": float(hb["rotor_heat_split"]["rotor_W"]),
@@ -322,14 +323,24 @@ def calibrate(args) -> Dict[str, Any]:
     from motor_ai_sim import propeller_s1 as S1
     m = _load(args.source)
     rows = [_anchor_row(f, m) for f in args.anchor]
-    keys = ("housing_film_factor", "winding_air_area_m2", "rotor_air_area_m2")
+    # open frame (Ø40): housing film factor + end-turn and rotor air areas;
+    # housed frame (Ø85): no rotor-to-air path, the gap resistance factor instead
+    form = getattr(args, "form", None) or "open"
+    if form == "housed":
+        keys = ("housing_film_factor", "winding_air_area_m2", "gap_resistance_factor")
+        scale = (1.0, 1e-3, 1.0)
+        x0, lo, hi = [1.0, 0.5, 1.0], [0.05, 0.0, 0.1], [20.0, 100.0, 50.0]
+    else:
+        keys = ("housing_film_factor", "winding_air_area_m2", "rotor_air_area_m2")
+        scale = (1.0, 1e-3, 1e-3)
+        x0, lo, hi = [1.0, 2.0, 1.0], [0.05, 0.0, 0.0], [20.0, 100.0, 100.0]
 
     def temps(r, cal):
         return S1.temperatures(m["thermal_geom"], r["p_cu_W"], r["p_rotor_W"], r["p_total_W"],
                                r["h_W_m2K"], r["ambient_c"], cal)
 
     def cal_of(x):
-        return dict(zip(keys, (float(x[0]), float(x[1]) * 1e-3, float(x[2]) * 1e-3)))
+        return {k: float(v) * f for k, v, f in zip(keys, x, scale)}
 
     def resid(x):
         out = []
@@ -338,18 +349,25 @@ def calibrate(args) -> Dict[str, Any]:
             out += [FIT_WEIGHTS[k] * (t[k] - r["fem_C"][k]) for k in FIT_WEIGHTS]
         return np.array(out)
 
-    sol = least_squares(resid, x0=[1.0, 2.0, 1.0], bounds=([0.05, 0.0, 0.0], [20.0, 100.0, 100.0]))
+    sol = least_squares(resid, x0=x0, bounds=(lo, hi))
     cal = cal_of(sol.x)
+    checks = [_anchor_row(f, m) for f in (getattr(args, "check", None) or [])]
     table = []
-    for r in rows:
+    for r, role in [(r, "fit") for r in rows] + [(r, "check") for r in checks]:
         b, a_ = temps(r, None), temps(r, cal)
         table.append({**{k: r[k] for k in ("file", "rpm", "I_rms", "air_speed_ms", "h_W_m2K", "p_cu_W",
                                            "p_rotor_W", "p_total_W", "torque_miss")},
+                      "role": role, "propeller": r.get("propeller"),
                       "fem_C": r["fem_C"],
                       "lumped_before_C": {k: b[k] for k in ("winding", "magnet", "housing")},
                       "lumped_after_C": {k: a_[k] for k in ("winding", "magnet", "housing")}})
+    v_fit = [r["air_speed_ms"] for r in rows]
     m["thermal_calibration"] = {
         **{k: round(v, 6) for k, v in cal.items()},
+        # the slipstream speeds the fitted anchors ran at (propeller_s1.calibration_covers)
+        "anchor_air_speed_ms": [round(min(v_fit), 4), round(max(v_fit), 4)],
+        "anchor_rpm": [r["rpm"] for r in rows],
+        "form": form,
         "basis": ("fitted %s to %d coupled EM-thermal FEM anchors (propeller as load and cooling, "
                   "air_speed_source propeller, slipstream factor %s, the machine's own frame and "
                   "Simulation settings, %g C air): the lumped network fed each anchor's own losses, "
@@ -369,6 +387,10 @@ def main(argv=None) -> int:
     ap.add_argument("kind", choices=["full", "store", "calibrate"])
     ap.add_argument("source", help="passport record / store record, or (calibrate) the S1 model JSON")
     ap.add_argument("--anchor", action="append", help="calibrate: a propanchor JSON (repeat)")
+    ap.add_argument("--form", choices=["open", "housed"], default="open",
+                    help="calibrate: open frame (rotor air area) or housed (gap resistance factor)")
+    ap.add_argument("--check", action="append",
+                    help="calibrate: a propanchor JSON reported against the fit, not fitted (repeat)")
     ap.add_argument("--date", default="2026-10-11")
     ap.add_argument("--slipstream-factor", default="0.4 (behind_hub)")
     ap.add_argument("--slipstream-basis", default="kept at 0.4 (behind_hub): the anchors use the same "
@@ -402,8 +424,9 @@ def main(argv=None) -> int:
         out = Path(a.out) if a.out else Path(a.source)
         out.write_text(json.dumps(m, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
         for r in m["thermal_calibration"]["anchors"]:
-            print("%6.0f rpm %5.1f A  FEM W/M/H %s  before %s  after %s" % (
-                r["rpm"], r["I_rms"], [round(r["fem_C"][k], 1) for k in ("winding", "magnet", "housing")],
+            print("%-5s %6.0f rpm %5.1f A  FEM W/M/H %s  before %s  after %s" % (
+                r.get("role", "fit"), r["rpm"], r["I_rms"],
+                [round(r["fem_C"][k], 1) for k in ("winding", "magnet", "housing")],
                 [round(r["lumped_before_C"][k], 1) for k in ("winding", "magnet", "housing")],
                 [round(r["lumped_after_C"][k], 1) for k in ("winding", "magnet", "housing")]))
         print({k: v for k, v in m["thermal_calibration"].items() if k != "anchors"})

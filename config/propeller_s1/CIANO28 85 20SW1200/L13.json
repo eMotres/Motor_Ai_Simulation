@@ -942,6 +942,207 @@
   "motor PWM extra loss of drive variant si_48k not included (its grid differs from this loss grid)",
   "loss grid extended to 2125/2250/2375/2500/2750/3000/3500/4000/4500 rpm by 38 settled FEM points (passport stage loss4, same hot temperatures / steps / operating-angle rule)",
   "mechanical loss UNKNOWN (no bearings named in the passport) — not included",
-  "field-weakening floor current per speed (hot psi-map of the passport (magnet 69.2 C), V_ph <= m.V_dc/sqrt3 with V_dc 44.4 V, m 0.89, R_hot 0.0758 ohm, gamma <= 80 deg (the loss trajectory rule); smallest current that fits, 0.05 A steps)"
- ]
+  "field-weakening floor current per speed (hot psi-map of the passport (magnet 69.2 C), V_ph <= m.V_dc/sqrt3 with V_dc 44.4 V, m 0.89, R_hot 0.0758 ohm, gamma <= 80 deg (the loss trajectory rule); smallest current that fits, 0.05 A steps)",
+  "thermal network calibrated to coupled FEM anchors (2026-10-11)"
+ ],
+ "thermal_calibration": {
+  "housing_film_factor": 0.457138,
+  "winding_air_area_m2": 0.003147,
+  "gap_resistance_factor": 3.04033,
+  "anchor_air_speed_ms": [
+   3.2549,
+   4.6871
+  ],
+  "anchor_rpm": [
+   1250.0,
+   1412.0,
+   1600.0,
+   1800.0
+  ],
+  "form": "housed",
+  "basis": "fitted 2026-10-11 to 4 coupled EM-thermal FEM anchors (propeller as load and cooling, air_speed_source propeller, slipstream factor 0.4 (behind_hub), the machine's own frame and Simulation settings, 25 C air): the lumped network fed each anchor's own losses, least squares on the winding hot spot, hottest magnet and stator mean (weights {'winding': 1.0, 'magnet': 1.0, 'housing': 0.5})",
+  "slipstream_factor_basis": "kept at 0.4 (behind_hub): the anchors use the same slipstream model, so they cannot constrain it",
+  "anchors": [
+   {
+    "file": "anchor_L13_tmotor_g32x11_n1250.json",
+    "rpm": 1250.0,
+    "I_rms": 4.159935510447748,
+    "air_speed_ms": 3.2549150179326602,
+    "h_W_m2K": 22.7,
+    "p_cu_W": 8.4,
+    "p_rotor_W": 0.981,
+    "p_total_W": 12.53,
+    "torque_miss": 0.0012929219868700326,
+    "role": "fit",
+    "propeller": "tmotor_g32x11",
+    "fem_C": {
+     "winding": 81.4,
+     "magnet": 85.2,
+     "housing": 79.5,
+     "winding_avg": 80.9,
+     "magnet_avg": 85.1
+    },
+    "lumped_before_C": {
+     "winding": 65.22415705724242,
+     "magnet": 64.07541450819676,
+     "housing": 62.24461010888686
+    },
+    "lumped_after_C": {
+     "winding": 81.68486813577462,
+     "magnet": 85.70800059634843,
+     "housing": 80.14175040368605
+    }
+   },
+   {
+    "file": "anchor_L13_tmotor_g32x11_n1412.json",
+    "rpm": 1412.0,
+    "I_rms": 5.222690367906173,
+    "air_speed_ms": 3.676752004256734,
+    "h_W_m2K": 24.35,
+    "p_cu_W": 11.6,
+    "p_rotor_W": 1.152,
+    "p_total_W": 16.37,
+    "torque_miss": -0.013449822047466142,
+    "role": "fit",
+    "propeller": "tmotor_g32x11",
+    "fem_C": {
+     "winding": 94.1,
+     "magnet": 98.2,
+     "housing": 91.6,
+     "winding_avg": 93.5,
+     "magnet_avg": 98.1
+    },
+    "lumped_before_C": {
+     "winding": 74.47616729778963,
+     "magnet": 72.51149028669006,
+     "housing": 70.36155484529863
+    },
+    "lumped_after_C": {
+     "winding": 94.27890847325189,
+     "magnet": 98.58398741065648,
+     "housing": 92.04747342294284
+    }
+   },
+   {
+    "file": "anchor_L13_tmotor_g32x11_n1600.json",
+    "rpm": 1600.0,
+    "I_rms": 6.759892654885517,
+    "air_speed_ms": 4.166291222953806,
+    "h_W_m2K": 26.19,
+    "p_cu_W": 17.1,
+    "p_rotor_W": 1.324,
+    "p_total_W": 22.51,
+    "torque_miss": -0.015971838017292406,
+    "role": "fit",
+    "propeller": "tmotor_g32x11",
+    "fem_C": {
+     "winding": 114.0,
+     "magnet": 117.9,
+     "housing": 110.3,
+     "winding_avg": 113.1,
+     "magnet_avg": 117.9
+    },
+    "lumped_before_C": {
+     "winding": 89.0588587507357,
+     "magnet": 85.46428520988883,
+     "housing": 82.99335246301187
+    },
+    "lumped_after_C": {
+     "winding": 113.9881361612082,
+     "magnet": 118.03679144308897,
+     "housing": 110.52433960304309
+    }
+   },
+   {
+    "file": "anchor_L13_tmotor_g32x11_n1800.json",
+    "rpm": 1800.0,
+    "I_rms": 9.233488603122387,
+    "air_speed_ms": 4.687077625823032,
+    "h_W_m2K": 28.06,
+    "p_cu_W": 27.9,
+    "p_rotor_W": 1.329,
+    "p_total_W": 33.14,
+    "torque_miss": -0.03480374702124156,
+    "role": "fit",
+    "propeller": "tmotor_g32x11",
+    "fem_C": {
+     "winding": 148.2,
+     "magnet": 150.5,
+     "housing": 142.4,
+     "winding_avg": 147.0,
+     "magnet_avg": 150.4
+    },
+    "lumped_before_C": {
+     "winding": 114.58621089755181,
+     "magnet": 107.17012259726773,
+     "housing": 104.68985853337084
+    },
+    "lumped_after_C": {
+     "winding": 148.15374478129831,
+     "magnet": 149.6558973980789,
+     "housing": 142.11507527162803
+    }
+   },
+   {
+    "file": "anchor_L13_tmotor_g28x9_2_n2290.json",
+    "rpm": 2290.0,
+    "I_rms": 9.697776464822102,
+    "air_speed_ms": 4.600107176325944,
+    "h_W_m2K": 27.75,
+    "p_cu_W": 32.0,
+    "p_rotor_W": 1.831,
+    "p_total_W": 37.42,
+    "torque_miss": -0.06532754691983222,
+    "role": "check",
+    "propeller": "tmotor_g28x9_2",
+    "fem_C": {
+     "winding": 165.9,
+     "magnet": 169.7,
+     "housing": 159.0,
+     "winding_avg": 164.3,
+     "magnet_avg": 169.6
+    },
+    "lumped_before_C": {
+     "winding": 127.3375855597708,
+     "magnet": 119.40405881111397,
+     "housing": 115.98693051841629
+    },
+    "lumped_after_C": {
+     "winding": 165.6792718228411,
+     "magnet": 169.07578661499662,
+     "housing": 158.68658773348304
+    }
+   },
+   {
+    "file": "anchor_L13_tmotor_g32x11_n2017.json",
+    "rpm": 2017.0,
+    "I_rms": 11.087946913242366,
+    "air_speed_ms": 5.252130872936142,
+    "h_W_m2K": 30.02,
+    "p_cu_W": 39.1,
+    "p_rotor_W": 2.494,
+    "p_total_W": 44.3,
+    "torque_miss": -0.34575215828049755,
+    "role": "check",
+    "propeller": "tmotor_g32x11",
+    "fem_C": {
+     "winding": 180.4,
+     "magnet": 186.0,
+     "housing": 172.1,
+     "winding_avg": 178.5,
+     "magnet_avg": 185.9
+    },
+    "lumped_before_C": {
+     "winding": 138.43971203997899,
+     "magnet": 129.22509134086403,
+     "housing": 124.5706304113239
+    },
+    "lumped_after_C": {
+     "winding": 179.65685651965225,
+     "magnet": 185.1217530923556,
+     "housing": 170.97065423353806
+    }
+   }
+  ]
+ }
 }

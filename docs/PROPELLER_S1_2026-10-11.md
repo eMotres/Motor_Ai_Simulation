@@ -154,10 +154,86 @@ channels, the rotor end faces and the gap duct in the slipstream (`open_air_spee
 the propeller's housing air speed). The housing-only limitation the D85 run found is the
 HOUSED frame's (Ø85); it matters only for an Ø85 FEM anchor, which this stage did not run.
 
+# Stage C — Ø85 housed frame: slipstream end caps + FEM calibration (2026-10-11)
+
+## End caps in the slipstream (thermal solver)
+A housed machine cooled by its own propeller (`cooling_mode = air`, `air_speed_source =
+propeller`, `frame = housed`) now also cools its two END CAPS (`cooling_models.
+housing_end_faces_slipstream`); every other mode (typed air speed, robotics, liquid, open
+frame) is unchanged and keys the cache as before.
+
+    A_face  = π/4 · (D_housing² − d_shaft²)          (Ø85: D 85 mm, d 49.2 mm → 3.77e-3 m² per face)
+    h_front = outer_air(v, D_housing)                 (the housing side's own Churchill–Bernstein film)
+    h_rear  = outer_air(0.5 · v, D_housing)           (the wake behind the motor — an assumption)
+    G       = (h_front + h_rear) · A_face             (whole machine, W/K)
+
+v is the slipstream speed at the run's rpm (the housing side's). The caps are taken at the
+housing temperature (fin efficiency 1: aluminium cap, mL ≈ 0.3), so G is a second film on
+the housing facets of the 2-D section (spread over the facets the mesh really has), reported
+as `cooling.housing_end_faces` (per-face speed, h, area, watts) and on its own budget lines
+(`housing_end_faces_W`); the budget closes with it. On the Ø85 the faces are 2.2 × the
+side area: they carry 61–62 % of the heat at every anchor.
+
+## Anchors (`passport_full.py propanchor --frame housed`, server sandbox; records in `docs/data/propeller_s1_stage_c/`)
+L13, G32×11 unless stated, 25 °C air, factor 0.4 behind_hub, eddy / rotor eddy / demag on,
+60 steps per period (the passport's settled-loss setting; the duty's 120 doubles the cost),
+sine drive at the passport's operating angle, `solve_to = steady`.
+
+| n rpm | I A | T_3D / Q | FEM W / M / stator °C | before (Stage B) W / M | after W / M | role |
+|---|---|---|---|---|---|---|
+| 1 250 | 4.16 | +0.1 % | 81.4 / 85.2 / 79.5 | 65.2 / 64.1 | 81.7 / 85.7 | fit |
+| 1 412 | 5.22 | −1.3 % | 94.1 / 98.2 / 91.6 | 74.5 / 72.5 | 94.3 / 98.6 | fit |
+| 1 600 | 6.76 | −1.6 % | 114.0 / 117.9 / 110.3 | 89.1 / 85.5 | 114.0 / 118.0 | fit |
+| 1 800 | 9.23 | −3.5 % (1 correction) | 148.2 / 150.5 / 142.4 | 114.6 / 107.2 | 148.2 / 149.7 | fit |
+| 2 017 | 11.09 | −35 % (demag) | 180.4 / 186.0 / 172.1 | 138.4 / 129.2 | 179.7 / 185.1 | check, out of range |
+| G28 2 290 | 9.70 | −6.5 % (demag) | 165.9 / 169.7 / 159.0 | 127.3 / 119.4 | 165.7 / 169.1 | check (G28) |
+| 2 320 | 20.7 | — | runaway (> 400 °C) | — | — | no steady state |
+
+Network columns are fed each anchor's own FEM losses (like for like). The brief's 1.0× and
+1.15× of the Stage B S1 (2 017 / 2 320 rpm) have no steady state inside the magnet card: at
+2 017 the hot magnets demagnetise (Br down to 0.12 × on 88 % of the elements) and the torque
+falls 35 % short; 2 320 runs away. The fit anchors were therefore moved to 1 250–1 800 rpm,
+around the new S1; 2 017 and G28 2 290 stay as checks (their first pass is a converged
+thermal state).
+
+## Calibration — housed form
+The open form (f_h, A_w, A_r) cannot fit a housed frame: the FEM magnet sits ABOVE the
+stator (6–8 K at 1–2 W of rotor heat, ≈ 5.7 K/W against the lumped gap's 1.9 K/W) and A_r
+can only cool the rotor (the open fit drives A_r to 0 and misses the stator by 5 K). The
+housed form keeps f_h and A_w and replaces A_r by a gap resistance factor f_g (the rotor's
+only exit is the gap): `export_propeller_s1_model.py calibrate --form housed`.
+
+| f_h | A_w m² | f_g | max residual (fit) | checks |
+|---|---|---|---|---|
+| 0.4571 | 3.147e-3 | 3.040 | 0.8 K | ≤ 1.1 K |
+
+f_h < 1: the lumped surface counts two full discs at the side's film; the FEM has two cap
+annuli, the rear in the wake. A_w is a fit term (the lumped slot resistance is too high
+against the meshed slot), not an air path. Slipstream factor kept at 0.4 (not constrained).
+
+## S1 after calibration (25 °C air, ISA, behind_hub 0.4)
+| propeller | Stage B | Stage C | thrust | shaft | I | T_w / T_m | binding |
+|---|---|---|---|---|---|---|---|
+| G28×9.2 | 2 290 rpm | 2 142 rpm | 2.77 kgf | 207 W | 5.9 A | 140 / 150 °C | magnet, field weakening |
+| G30×10.5 | 2 125 | 1 861 | 3.72 kgf | 293 W | 7.6 A | 144 / 150 °C | magnet, prop extrapolated |
+| G32×11 | 2 017 | 1 722 | 3.93 kgf | 286 W | 8.0 A | 145 / 150 °C | magnet, prop extrapolated |
+| G36×11.5 | 1 760 | 1 511 | 3.88 kgf | 259 W | 8.2 A | 147 / 150 °C | magnet, prop extrapolated |
+| G40×13.1 | 1 381 | 1 204 | 3.69 kgf | 217 W | 8.6 A | 150 / 150 °C | magnet, prop extrapolated |
+
+The FEM itself reaches the magnet limit at ≈ 1 780 rpm with the G32 (1 800 rpm: 150.5 °C,
+torque 3.5 % short), so the S1 answer is ≈ 3 % conservative. The reason is the loss grid,
+not the network: at the anchors' own current and temperature its AC copper reads 4.7–8.3 W
+against the FEM's ≈ 5 W and grows with speed (total loss +3 % at 1 250, +16 % at 1 800 rpm).
+
+**Configure flag.** The model now carries `anchor_air_speed_ms` (3.25–4.69 m/s); the S1 limit
+says `calibration_in_range` (± 20 %), and Configure shows "calibrated" inside it and
+"calibrated at other slipstream speeds" outside. All five G limits are inside. The Ø40 models
+carry no range (exported before) and keep the plain flag.
+
 ## Left open
-- Ø85: one or two coupled FEM anchors (housed frame, propeller air) — they need the
-  forced-air end faces on the housed path first (the D85 finding), then the same calibration.
-- The slipstream factor 0.4 stays uncalibrated (needs a measurement: thermocouple or
-  anemometer behind the hub).
+- Ø85 loss grid AC copper vs the coupled anchors (above): a loss-side correction would lift
+  the S1 by ≈ 3 %.
+- The rear-face speed factor 0.5 and the slipstream factor 0.4 are assumptions (need a
+  measurement: thermocouple or anemometer behind the hub).
 - The S1 answer keeps the Si 48 kHz PWM extra loss of the passport drive variant (Ø40:
   4.4–9.2 W, +12…20 K); the anchors are sine-driven.

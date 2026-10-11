@@ -1347,10 +1347,16 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
          for i in range(len(duties))],
         "torque per square root of copper loss — the winding-independent "
         "quality of the magnetic design; higher is better", 3)
+    from motor_ai_sim.simulation.ldq_provenance import SCOPE_NOTE, method_status
     if any(_g(d, "summary.Ld_mH") for d in duties):
         row("Ld at load (mH)", [_g(d, "summary.Ld_mH") for d in duties],
-            "chord inductance at THIS duty's iron state — not the same as the "
-            "bench value in the design block below", 4)
+            ("differential (small-signal) at THIS duty's iron state, "
+             if all(method_status(_g(d, "summary.ldq_method")) == "differential"
+                    for d in duties if _g(d, "summary.Ld_mH"))
+             else "incremental at THIS duty's iron state (a duty solved before "
+                  "2026-10-11 holds the frozen-permeability secant), ")
+            + SCOPE_NOTE + " — not the bench value in the design block below",
+            4)
         row("Lq at load (mH)", [_g(d, "summary.Lq_mH") for d in duties], "", 4)
     blank()
 
@@ -1632,11 +1638,15 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         # quotes the inductances at 600 A beside it is comparing two different
         # machines.  Incremental (∂ψ/∂i at the no-load iron state), never a
         # loaded chord.
+        # Labelled from the block's own saved provenance: a pre-2026-10-11
+        # block is the frozen-permeability secant and says so.
+        from motor_ai_sim.simulation.ldq_provenance import catalogue_ldq0_view
+        _st0, _note0 = catalogue_ldq0_view(_c20)
         _ld0, _lq0 = _c20.get("Ld0_mH"), _c20.get("Lq0_mH")
         if _ld0 is not None:
-            _tail0 = ("incremental (frozen permeability) at zero current and "
-                      "20 °C — the same basis as KV above, which is what makes "
-                      "the two comparable between machines")
+            _tail0 = _note0 + ("; the same basis as KV above, which is what "
+                               "makes the two comparable between machines"
+                               if _st0 == "differential" else "")
             one("Ld at 20 °C, no load (mH)" + (" — winding" if _delta else ""),
                 _ld0, _tail0, 4)
             one("Lq at 20 °C, no load (mH)" + (" — winding" if _delta else ""),

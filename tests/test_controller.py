@@ -2253,7 +2253,8 @@ def test_generator_duty_drives_the_direction_and_ripple_l(synth_dir, monkeypatch
     _patch_duty(monkeypatch, node, d_entry={
         "mode": "generator",
         "summary": {"Ld_inc_mH": 0.1, "Lq_inc_mH": 0.15, "Ld_mH": 0.1,
-                    "Lq_mH": 0.15, "gamma_deg": 170.0}})
+                    "Lq_mH": 0.15, "gamma_deg": 170.0,
+                    "ldq_method": "differential (tangent reluctivity)"}})
     # the form's own direction is ignored on a machine run
     r = _solve(_duty_solve_body(power_direction="motor", thd_limit_pct=50.0))
     assert r.status_code == 200, r.text
@@ -2264,5 +2265,41 @@ def test_generator_duty_drives_the_direction_and_ripple_l(synth_dir, monkeypatch
     rip = out["ripple"]
     assert rip["status"] == "computed", (rip, out["sources"])
     assert rip["l_d_uH"] == pytest.approx(100.0) and rip["l_q_uH"] == pytest.approx(150.0)
-    assert "incremental" in rip["sources"]["l"]
+    assert "differential" in rip["sources"]["l"]
     assert rip["thd_verdict"] in ("pass", "fail")
+
+
+@pytest.mark.parametrize("summary_extra", [
+    # a duty saved with summary shape v19 (2026-09-20 .. 2026-10-10): its
+    # Ld_inc_mH is the frozen-permeability SECANT
+    {"ldq_method": "frozen-permeability incremental at the point",
+     "summary_shape_v": 19},
+    # a v20 run whose probe had to regularize the tangent
+    {"ldq_method": "differential (tangent reluctivity)",
+     "ldq_tangent_clamped": True},
+])
+def test_a_secant_or_regularized_duty_l_never_feeds_the_ripple(
+        synth_dir, monkeypatch, summary_extra):
+    """docs/BUG_LDLQ_REPORTED_2026-10-05.md: a saved duty whose L_d/L_q are
+    not the small-signal inductance is refused through the real /solve
+    consumer, with the reason, instead of under-reading the ripple 1.7-2.4x."""
+    node = {
+        "coupled": {
+            "mode": "steady",
+            "em": {"T_em_avg_Nm": -12.0, "P_loss_total_W": 500.0,
+                   "op_mode": "generator"},
+            "inverter": {"I_phase_rms_solved_A": 48.6, "star_delta": "star",
+                         "v_dc_V": 400.0},
+        },
+        "thermal": {"point": {"rpm": 3000.0}},
+    }
+    _patch_duty(monkeypatch, node, d_entry={
+        "mode": "generator",
+        "summary": {"Ld_inc_mH": 0.25, "Lq_inc_mH": 0.3, "Ld_mH": 0.25,
+                    "Lq_mH": 0.3, "gamma_deg": 170.0, **summary_extra}})
+    r = _solve(_duty_solve_body(power_direction="motor", thd_limit_pct=50.0))
+    assert r.status_code == 200, r.text
+    rip = r.json()["ripple"]
+    assert rip["status"] == "not_computed", rip
+    assert "re-run" in rip["reason"] or "B-H" in rip["reason"], rip["reason"]
+    assert "l_d_uH" not in rip

@@ -61,8 +61,10 @@ export interface TransientSummary {
   // sign, so a hand-typed generator angle is labelled too.
   op_mode?:            'motor' | 'generator' | string;
   // Terminal parameters (persisted with the summary like everything else).
-  // R includes the end-winding; Ld/Lq are the INCREMENTAL (frozen-permeability)
-  // inductances of THIS operating point — ∂ψ/∂i at the loaded iron state.  The
+  // R includes the end-winding; Ld/Lq are the INCREMENTAL inductances of THIS
+  // operating point — ∂ψ/∂i at the loaded iron state, DIFFERENTIAL (tangent
+  // reluctivity, small-signal) since 2026-10-11; `ldq_method` says which, and
+  // the frozen-permeability secant values ride under *_fp_secant_mH.  The
   // chord they replaced is kept under *_chord_mH for comparison only; it is
   // not an inductance under saturation.  Absent on runs from before the dq
   // stamp, and Ld/Lq absent on runs before the incremental measurement
@@ -75,9 +77,14 @@ export interface TransientSummary {
   Lq_inc_mH?:           number | null;
   /** cross term ∂ψd/∂i_q of the same 2×2 matrix */
   Ldq_inc_mH?:          number | null;
-  Ld_chord_mH?:         number | null;
+  /** frozen-permeability SECANT values of the same frames (not small-signal) */
+  Ld_fp_secant_mH?:     number | null;
+  Lq_fp_secant_mH?:     number | null;
+  Ld_chord_mH?:        number | null;
   Lq_chord_mH?:         number | null;
   ldq_method?:          string | null;
+  /** true when a non-monotone B-H table forced a regularized tangent: Ld/Lq withheld */
+  ldq_tangent_clamped?: boolean | null;
   psi_pm_Wb?:           number | null;
   /** the magnets' own flux linkage in the LOADED iron (frozen permeability) */
   psi_pm_frozen_Wb?:    number | null;
@@ -1038,6 +1045,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   })();
   const matStale = matDiffs.length > 0;
   const stale = opStale || geoStale || matStale;
+  // Ld/Lq of this run are the differential (small-signal) values — false on a
+  // run solved before 2026-10-11, whose values are the frozen-permeability secant.
+  const diffLdq = (s.ldq_method ?? '').startsWith('differential') && !s.ldq_tangent_clamped;
+  const LDQ_SCOPE = ' 2-D magnetostatic, per winding: no end-winding inductance, no 3-D correction, no frequency-dependent eddy effect.';
   // Terminal connection this run was SOLVED with (the summary stamps it) —
   // the line cells below change meaning with it, not just their factor.
   const isDelta = String(s.star_delta ?? 'star').toLowerCase().startsWith('d');
@@ -1673,9 +1684,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
         {/* Ld / Lq / Lq/Ld — ALWAYS a number when one exists, never advice
             text in the value slot (user's call).  Since 2026-09-20 the value
-            is the INCREMENTAL (frozen-permeability) inductance of this point:
-            the per-element ν of the converged loaded field held fixed and a
-            unit d/q current solved on it. The chord it replaces divided by a
+            is the INCREMENTAL inductance of this point; since 2026-10-11 the
+            DIFFERENTIAL one (a unit d/q current solved on the tangent
+            reluctivity of the converged loaded field), with the frozen-
+            permeability secant value in the tooltip. The chord divided by a
             NO-LOAD ψ_PM and read Ld > Lq on a machine whose Lq is the larger
             (client review of the L180 report). Fallback order is unchanged:
             this run's value, else the bench small-signal probe. */}
@@ -1684,7 +1696,10 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             : (s.bench_ldq ? fmt(s.bench_ldq.Ld_mH, 3) : '—')} unit="mH"
           accent="blue"
           tooltip={(s.Ld_mH != null
-            ? 'd-axis INCREMENTAL inductance at THIS operating point, ∂ψd/∂i_d by frozen permeability: the iron\'s ν is held at the loaded field\'s own state and a unit d-axis current solved on it, so this is flux-per-amp and carries none of the magnet flux the load moved.'
+            ? (diffLdq
+              ? 'd-axis DIFFERENTIAL (small-signal) inductance at THIS operating point, ∂ψd/∂i_d on the tangent reluctivity of the loaded iron: what a current loop and the PWM ripple see.' + LDQ_SCOPE
+                + (s.Ld_fp_secant_mH != null ? ` Frozen-permeability secant: ${fmt(s.Ld_fp_secant_mH, 3)} mH.` : '')
+              : 'd-axis inductance at THIS operating point by frozen permeability (secant ν) — this run predates the differential measurement, and the secant over-reads the small-signal value; re-run to measure it.')
             : 'BENCH value — small-signal Ld at the I≈0 iron state, rotor locked on a magnet: what an LCR meter on the terminals reads. This run predates the incremental measurement; re-run to measure it at the point.')
             + (s.Ldq_inc_mH != null ? ` Cross term ∂ψd/∂i_q = ${fmt(s.Ldq_inc_mH, 3)} mH.` : '')
             + (s.bench_ldq && s.Ld_mH != null ? ` Bench (small-signal): ${fmt(s.bench_ldq.Ld_mH, 3)} mH.` : '')
@@ -1692,14 +1707,17 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
             + (s.dq_note ? ' — ' + s.dq_note : '')}/>
         <Cell label="Lq" value={s.Lq_mH != null ? fmt(s.Lq_mH, 3) : '—'} unit="mH"
           accent="blue"
-          tooltip={'q-axis INCREMENTAL inductance under load, ∂ψq/∂i_q by frozen permeability (same solve as Ld). The q-axis saturates under load, so this sits below the no-load value.'
+          tooltip={(diffLdq
+              ? 'q-axis DIFFERENTIAL (small-signal) inductance under load, ∂ψq/∂i_q on the tangent reluctivity (same solve as Ld).' + LDQ_SCOPE
+                + (s.Lq_fp_secant_mH != null ? ` Frozen-permeability secant: ${fmt(s.Lq_fp_secant_mH, 3)} mH.` : '')
+              : 'q-axis inductance under load by frozen permeability (secant ν, same solve as Ld).')
             + (s.bench_ldq ? ` Bench (small-signal, rotor between magnets): ${fmt(s.bench_ldq.Lq_mH, 3)} mH.` : '')
             + (s.Lq_chord_mH != null ? ` Chord ψq/i_q for comparison: ${fmt(s.Lq_chord_mH, 3)} mH.` : '')
             + (s.dq_note ? ' — ' + s.dq_note : '')}/>
         <Cell label="ψ_PM" value={s.psi_pm_Wb != null ? fmt(s.psi_pm_Wb * 1000, 2) : '—'} unit="mWb"
           tooltip={'Magnet flux linkage (phase, peak) measured at I = 0 — one cheap no-load solve, cached per geometry. The PM term of ψd = ψ_PM + Ld·i_d.'
             + (s.psi_pm_frozen_Wb != null
-              ? ` In the LOADED iron the magnets link ${fmt(s.psi_pm_frozen_Wb * 1000, 2)} mWb (${fmt(-(s.psi_pm_sag_pct ?? 0), 1)}%) — measured on the same frozen-permeability solve as Ld/Lq. That difference is what the old chord Ld divided by i_d and called an inductance.`
+              ? ` In the LOADED iron the magnets link ${fmt(s.psi_pm_frozen_Wb * 1000, 2)} mWb (${fmt(-(s.psi_pm_sag_pct ?? 0), 1)}%) — measured on a frozen-permeability solve of that iron. That difference is what the old chord Ld divided by i_d and called an inductance.`
               : '')}/>
         {s.B_gap_mean_T != null && (
           <Cell label={tx('bGapMean')} value={fmt(s.B_gap_mean_T, 3)} unit="T"
@@ -1709,7 +1727,7 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           value={s.saliency_Lq_over_Ld != null ? fmt(s.saliency_Lq_over_Ld, 2)
             : (s.bench_ldq?.Lq_over_Ld != null ? fmt(s.bench_ldq.Lq_over_Ld, 2) : '—')}
           tooltip={(s.saliency_Lq_over_Ld != null
-            ? 'Saliency at this load point, from the two INCREMENTAL inductances (frozen permeability). The dq frame behind these cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.'
+            ? `Saliency at this load point, from the two ${diffLdq ? 'DIFFERENTIAL' : 'frozen-permeability'} inductances. The dq frame behind these cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.`
             : 'Saliency from the BENCH (small-signal) frame — both axes measured the LCR way at I≈0, so the ratio is cross-saturation-free.')}/>
         {(() => {
           const c6 = sixPhaseCells(s.six_phase);

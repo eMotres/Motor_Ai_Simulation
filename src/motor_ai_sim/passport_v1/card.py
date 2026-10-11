@@ -290,6 +290,13 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     T_c025 = float(_r(recs, c025["conf_id"])["T_avg_Nm"])
     small = _r(recs, "cold_probe2A")
     inc_small = small.get("inc_ldq") or {}
+
+    def _secant(blk, ax):
+        # The rows below are labelled frozen-permeability (secant ν).  Since
+        # 2026-10-11 the solver's Ld_mH/Lq_mH are the differential values and
+        # the secant ones are *_fp_secant_mH; an older record's Ld_mH IS secant.
+        v = blk.get(ax + "_fp_secant_mH")
+        return blk.get(ax + "_mH") if v is None else v
     ss = st.get("small_signal") or {}
     Ld_chord_c = ((float(rc1["psi_d_Wb"]) - psi_pm_c) / float(rc1["i_d_A"])
                   if abs(float(rc1["i_d_A"])) > 0.1 * math.hypot(float(rc1["i_d_A"]),
@@ -483,10 +490,10 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
             "Lq_bench_mH": _val(ss.get("cold") and 1e3 * ss["cold"]["Lq_H"], "mH",
                                 (ss.get("cold") or {}).get("method", "not measured"),
                                 (ss.get("cold") or {}).get("runs", []), labels_cold),
-            "Ld_frozen_2A_mH": _val(inc_small.get("Ld_mH"), "mH",
+            "Ld_frozen_2A_mH": _val(_secant(inc_small, "Ld"), "mH",
                                     "solver inc_ldq: frozen-permeability (secant ν) at 2 A — "
                                     "NOT the differential (P20)", ["cold_probe2A"], labels_cold),
-            "Lq_frozen_2A_mH": _val(inc_small.get("Lq_mH"), "mH",
+            "Lq_frozen_2A_mH": _val(_secant(inc_small, "Lq"), "mH",
                                     "solver inc_ldq at 2 A (frozen secant ν)", ["cold_probe2A"],
                                     labels_cold),
             "Ld_chord_rated_mH": _val(None if Ld_chord_c is None else 1e3 * Ld_chord_c, "mH",
@@ -534,11 +541,11 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
             "Lq_small_signal_mH": _val(ss.get("hot") and 1e3 * ss["hot"]["Lq_H"], "mH",
                                        (ss.get("hot") or {}).get("method", "not measured"),
                                        (ss.get("hot") or {}).get("runs", []), labels_hot),
-            "Ld_incremental_rated_mH": _val(inc_h.get("Ld_mH"), "mH",
+            "Ld_incremental_rated_mH": _val(_secant(inc_h, "Ld"), "mH",
                                             "frozen-permeability incremental at the hot rated "
                                             "vertex (NOT the true differential, P20)",
                                             [m1["conf_id"]], labels_hot),
-            "Lq_incremental_rated_mH": _val(inc_h.get("Lq_mH"), "mH",
+            "Lq_incremental_rated_mH": _val(_secant(inc_h, "Lq"), "mH",
                                             "frozen-permeability incremental at the hot rated vertex",
                                             [m1["conf_id"]], labels_hot),
             "Ld_differential_rated_mH": _val(1e3 * dl["Ld_diff_H"], "mH",

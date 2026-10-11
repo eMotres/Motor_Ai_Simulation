@@ -6935,7 +6935,9 @@ def _compute_masses(p, geo_cfg: dict, k_end: float = 0.0) -> dict:
 #                  the numbers are arithmetic over the run's own rpm and mass
 #                  rows plus the machine's bearing cards, so a stored result can
 #                  be given them honestly without re-solving anything.
-_SUMMARY_SHAPE_V = 19   # v19: torque_method label, Coulomb mean/ripple, the
+_SUMMARY_SHAPE_V = 20   # v20: Ld/Lq differential (tangent reluctivity), the
+                        #      secant under Ld_fp_secant_mH (2026-10-11)
+                        # v19: torque_method label, Coulomb mean/ripple, the
                         #      ripple self-check flag, gap-layer floor (2026-09-30)
                         # v18: incremental (frozen-permeability) Ld/Lq, the
                         #      chord under its own name, ψ_PM sag (2026-09-20)
@@ -7696,15 +7698,32 @@ def _build_transient_summary(
     except Exception:   # noqa: BLE001 — a droop failure must not sink the summary
         _sat_droop = None
 
-    # ── THE REPORTED Ld/Lq: frozen-permeability INCREMENTAL at this point ────
-    # The solver measured them on the frames it already solved: the per-element
-    # ν of the converged loaded field is held fixed and a unit d- and q-axis
-    # current solved on that operator, so Ld = ∂ψd/∂i_d and Lq = ∂ψq/∂i_q are
-    # flux-per-amp at THIS iron state and nothing else (fem_solver_2d.
-    # frozen_permeability_ldq).  The magnets' own flux in that same loaded iron
-    # comes out of the same solve, which turns the ψ_PM sag — the term that
-    # contaminated the chord — into a number of its own instead of a suspicion.
+    # ── THE REPORTED Ld/Lq: DIFFERENTIAL (small-signal) at this point ────────
+    # The solver measured them on the frames it already solved: a unit d- and
+    # q-axis current solved on the TANGENT reluctivity of the converged loaded
+    # field (the Newton Jacobian), so Ld = ∂ψd/∂i_d and Lq = ∂ψq/∂i_q are the
+    # small-signal inductances a current loop and a PWM ripple see at THIS iron
+    # state (fem_solver_2d.frozen_permeability_ldq).  The frozen-permeability
+    # SECANT values ride beside them (Ld_fp_secant_mH): they over-read the
+    # differential 1.7-2.4× at small current (docs/BUG_LDLQ_REPORTED_2026-10-05).
+    # The magnets' own flux in that same loaded iron comes out of the secant
+    # solve, which turns the ψ_PM sag — the term that contaminated the chord —
+    # into a number of its own instead of a suspicion.
+    #
+    # A block WITHOUT Ld_fp_secant_mH was solved before 2026-10-11: its Ld_mH IS
+    # the secant value.  It is reported as that, under the secant label, and
+    # Ld_inc_mH/Lq_inc_mH stay empty so nothing reads it as small-signal.
+    #
+    # A REGULARIZED block (non-monotone B-H table, clamped tangent) is not a
+    # differential either: Ld/Lq are withheld, the secant kept, and dq_note
+    # says to check the steel's curve.
+    from motor_ai_sim.simulation.ldq_provenance import (
+        LDQ_METHOD_DIFFERENTIAL, LDQ_METHOD_REGULARIZED, LDQ_METHOD_SECANT,
+        REGULARIZED_NOTE, record_status)
     _Ld_mH = _Lq_mH = _Ldq_mH = _psi_sag_pct = None
+    _Ld_fp_mH = _Lq_fp_mH = None
+    _ldq_differential = False
+    _ldq_regularized = False
     _ldq_method = None
     _inc_blk = sbres.get("inc_ldq")
     try:
@@ -7713,14 +7732,32 @@ def _build_transient_summary(
             _Lq_mH = float(_inc_blk["Lq_mH"])
             _Ldq_mH = (None if _inc_blk.get("Ldq_mH") is None
                        else float(_inc_blk["Ldq_mH"]))
-            _ldq_method = "frozen-permeability incremental at the point"
+            _st = (record_status(_inc_blk)
+                   if _inc_blk.get("Ld_fp_secant_mH") is not None else "secant")
+            if _st in ("differential", "regularized"):
+                _Ld_fp_mH = float(_inc_blk["Ld_fp_secant_mH"])
+                _Lq_fp_mH = float(_inc_blk["Lq_fp_secant_mH"])
+            if _st == "differential":
+                _ldq_differential = True
+                _ldq_method = LDQ_METHOD_DIFFERENTIAL
+            elif _st == "regularized":
+                _ldq_regularized = True
+                _ldq_method = LDQ_METHOD_REGULARIZED
+                _Ld_mH = _Lq_mH = _Ldq_mH = None
+                _dq_note = REGULARIZED_NOTE
+            else:
+                _Ld_fp_mH, _Lq_fp_mH = _Ld_mH, _Lq_mH
+                _ldq_method = LDQ_METHOD_SECANT
+                _dq_note = (_dq_note or
+                            "Ld/Lq of this run are frozen-permeability secant "
+                            "values — re-run to measure the differential ones")
             _pmf = _inc_blk.get("psi_d_pm_frozen_Wb")
             if _psi_pm and _pmf is not None:
                 _psi_sag_pct = 100.0 * (1.0 - float(_pmf) / float(_psi_pm))
         else:
             _dq_note = (_dq_note or
                         "this run predates the incremental Ld/Lq measurement — "
-                        "re-run to measure them by frozen permeability")
+                        "re-run to measure them")
     except Exception:   # noqa: BLE001 — never sink a summary over a diagnostic
         _Ld_mH = _Lq_mH = _Ldq_mH = None
 
@@ -7746,7 +7783,7 @@ def _build_transient_summary(
                     "chord (ψd − ψ_PM)/i_d = %.4f mH — not an inductance here: "
                     "~%.0f%% of that numerator is the magnet flux the load "
                     "moved (%+.1f%% of ψ_PM) plus the q-axis cross term; Ld/Lq "
-                    "above are the frozen-permeability incremental values"
+                    "above are the incremental values at this point"
                     % (_Ld_chord,
                        min(100.0, 100.0 * (_d_pm + _x_wb) / _numer),
                        -_psi_sag_pct))
@@ -7822,17 +7859,28 @@ def _build_transient_summary(
                           else round(_Ld_mH / (3.0 if _is_delta else 1.0), 4)),
         "Lq_eq_star_mH": (None if _Lq_mH is None
                           else round(_Lq_mH / (3.0 if _is_delta else 1.0), 4)),
-        # Ld_mH / Lq_mH ARE the incremental (frozen-permeability) values since
-        # 2026-09-20 — every consumer that reads them (the card, §4, the
-        # datasheet, the PWM calculator) gets flux-per-amp at this point.
+        # Ld_mH / Lq_mH ARE the incremental values since 2026-09-20 and the
+        # DIFFERENTIAL (tangent-reluctivity) ones since 2026-10-11 — every
+        # consumer that reads them (the card, §4, the datasheet, the PWM
+        # calculator) gets small-signal flux-per-amp at this point.  On a run
+        # older than that they are the secant values and `ldq_method` says so.
         "Ld_mH": (None if _Ld_mH is None else round(_Ld_mH, 4)),
         "Lq_mH": (None if _Lq_mH is None else round(_Lq_mH, 4)),
-        "Ld_inc_mH": (None if _Ld_mH is None else round(_Ld_mH, 4)),
-        "Lq_inc_mH": (None if _Lq_mH is None else round(_Lq_mH, 4)),
-        # The CROSS term of the same 2×2 matrix.  Symmetric by reciprocity of a
-        # linear magnetic circuit, which the solver checks rather than assumes.
-        "Ldq_inc_mH": (None if _Ldq_mH is None else round(_Ldq_mH, 4)),
+        # Written ONLY for the differential values: their presence is what
+        # the report and the controller read as "small-signal Ld/Lq".
+        "Ld_inc_mH": (None if _Ld_mH is None or not _ldq_differential
+                      else round(_Ld_mH, 4)),
+        "Lq_inc_mH": (None if _Lq_mH is None or not _ldq_differential
+                      else round(_Lq_mH, 4)),
+        # The CROSS term of the same 2×2 matrix.  Symmetric by reciprocity
+        # (the tangent operator is symmetric), which the solver checks.
+        "Ldq_inc_mH": (None if _Ldq_mH is None or not _ldq_differential
+                       else round(_Ldq_mH, 4)),
+        # The frozen-permeability SECANT values, under their own name.
+        "Ld_fp_secant_mH": (None if _Ld_fp_mH is None else round(_Ld_fp_mH, 4)),
+        "Lq_fp_secant_mH": (None if _Lq_fp_mH is None else round(_Lq_fp_mH, 4)),
         "ldq_method": _ldq_method,
+        "ldq_tangent_clamped": bool(_ldq_regularized),
         # The chord, under its own name: (ψd − ψ_PM_noload)/i_d and ψq/i_q.
         # NOT an inductance under saturation — see `dq_note`.
         "Ld_chord_mH": (None if _Ld_chord is None else round(_Ld_chord, 4)),

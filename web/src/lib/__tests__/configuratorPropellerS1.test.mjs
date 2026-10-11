@@ -43,6 +43,14 @@ t('the catalogue and grid flags become tooltip sentences', () => {
     'configurePropeller.s1FlagBelowGrid', 'configurePropeller.s1FlagBands']);
 });
 
+t('field weakening and a calibrated thermal model are stated', () => {
+  const r = { ...R, model: { thermal_calibration: { housing_film_factor: 0.17 } },
+    limit: { ...LIMIT, fw_floor: true } };
+  assert.deepEqual(S.s1Line(r, 'tmotor_fpv_10x5', 'L12').flagKeys, [
+    'configurePropeller.s1FlagFwFloor', 'configurePropeller.s1FlagCalibrated']);
+  assert.deepEqual(S.s1Line({ ...R, model: { thermal_calibration: null } }, 'tmotor_fpv_10x5', 'L12').flagKeys, []);
+});
+
 t('no continuous point names what failed first', () => {
   const l = S.s1Line({ ...R, limit: null, no_continuous_point: true, first_failure: 'winding' }, 'tmotor_fpv_10x5', 'L12');
   assert.deepEqual(l, { kind: 'none', bindingKey: 'configurePropeller.s1BindWinding' });

@@ -233,6 +233,92 @@ def test_model_validation_refuses_bad_input():
         s1.load_model("../etc", "L1")
 
 
+def test_field_weakening_floor_needs_current_even_for_a_light_load(tmp_path):
+    """Above the no-load voltage limit the low-current cells are infeasible and the
+    model states the floor: below it nothing runs, a load lighter than the floor's
+    torque runs AT the floor (flagged), torque goes to 0 at the floor, losses
+    follow the first feasible interval's line."""
+    rpm = RPM + [16000.0]
+    T = [[KT * i for i in CUR] for _ in RPM] + [[None, None, KT * 20 * 0.5, KT * 40 * 0.7, KT * 60 * 0.8]]
+    fe = [[0.8 * (n / 1000.0) ** 1.5 * (1 + i / 60.0) for i in CUR] for n in RPM]
+    fe.append([None, None, 30.0, 40.0, 55.0])
+    m = _model(grid={"rpm": rpm, "I_A": CUR, "T_Nm": T, "loss_W": {"fe_stator": fe},
+                     "I_floor_A": [0, 0, 0, 0, 0, 12.0]},
+               limits={"I_max_A": 60.0, "rpm_max": 16000.0, "winding_C": 180.0, "magnet_C": 150.0})
+    assert s1.floor_current(m, 12000.0) == 0.0
+    assert s1.floor_current(m, 16000.0) == 12.0
+    assert s1.floor_current(m, 14000.0) == 12.0                  # the larger of the two rows
+    assert s1.em_torque(m, 16000.0, 10.0, 20.0) is None
+    assert s1.em_torque(m, 16000.0, 12.0, 20.0) == pytest.approx(0.0, abs=1e-12)
+    assert s1.em_torque(m, 16000.0, 16.0, 20.0) == pytest.approx(KT * 10 * 4 / 8)
+    loss, _ = s1.grid_at(m["grid"]["rpm"], CUR, fe, 16000.0, 15.0, kind="loss", floors=m["grid"]["I_floor_A"])
+    assert loss == pytest.approx(30.0 + (40.0 - 30.0) * (15.0 - 20.0) / 20.0)
+    I, st = s1.current_for_torque(m, 16000.0, 0.01, 20.0)
+    assert st == "ok" and 12.0 < I < 12.5                      # a light load still needs the floor
+    assert s1.current_for_torque(m, 16000.0, 0.0, 20.0) == (12.0, "fw_floor")
+    I, st = s1.current_for_torque(m, 16000.0, KT * 30.0, 20.0)
+    assert st == "ok" and 40.0 < I < 60.0
+    # no floor declared: the old behaviour (the infeasible cells give no current)
+    g = {k: v for k, v in m["grid"].items() if k != "I_floor_A"}
+    m2 = s1.validate_model({**m, "grid": g})
+    assert s1.current_for_torque(m2, 16000.0, 0.01, 20.0)[0] is None
+    with pytest.raises(s1.S1Error):
+        s1.validate_model({**m, "grid": {**m["grid"], "I_floor_A": [0, 0]}})
+    with pytest.raises(s1.S1Error):
+        s1.validate_model({**m, "grid": {**m["grid"], "I_floor_A": [0, 0, 0, 0, 0, -1]}})
+
+
+GEOM = {"statorOD_mm": 40.0, "stackLength_mm": 15.0, "numSlots": 12, "slotHeight_mm": 6.0,
+        "slotWidth_mm": 2.8, "insulation_mm": 0.06, "coreThickness_mm": 2.0,
+        "airGap_mm": 0.3, "magnetOD_mm": 23.0}
+
+
+def test_calibration_defaults_are_configures_network_exactly():
+    a = s1.temperatures(GEOM, 12.0, 2.0, 30.0, 55.0, 25.0)
+    b = s1.temperatures(GEOM, 12.0, 2.0, 30.0, 55.0, 25.0, dict(s1.CALIBRATION_KEYS))
+    t_h = 25.0 + 30.0 / (55.0 * a["A_surface_m2"])
+    for k in ("housing", "winding", "magnet"):
+        assert a[k] == pytest.approx(b[k], abs=1e-12)
+    assert a["housing"] == pytest.approx(t_h, rel=1e-12)
+    assert a["winding"] == pytest.approx(t_h + 12.0 * a["R_winding_K_W"], rel=1e-12)
+    assert a["magnet"] == pytest.approx(t_h + 2.0 * a["R_gap_K_W"], rel=1e-12)
+
+
+def test_calibrated_network_balances_and_cools_through_the_new_paths():
+    cal = {"housing_film_factor": 1.3, "winding_air_area_m2": 4e-3, "rotor_air_area_m2": 1.5e-3}
+    h, amb = 55.0, 25.0
+    t = s1.temperatures(GEOM, 12.0, 2.0, 30.0, h, amb, cal)
+    base = s1.temperatures(GEOM, 12.0, 2.0, 30.0, h, amb)
+    # every watt leaves through one of the three surfaces
+    out = (t["G_housing_W_K"] * (t["housing"] - amb) + t["G_winding_air_W_K"] * (t["winding"] - amb)
+           + t["G_rotor_air_W_K"] * (t["magnet"] - amb))
+    assert out == pytest.approx(30.0, rel=1e-9)
+    # the winding and rotor node balances hold
+    assert (t["winding"] - t["housing"]) / t["R_winding_K_W"] \
+        + t["G_winding_air_W_K"] * (t["winding"] - amb) == pytest.approx(12.0, rel=1e-9)
+    assert (t["magnet"] - t["housing"]) / t["R_gap_K_W"] \
+        + t["G_rotor_air_W_K"] * (t["magnet"] - amb) == pytest.approx(2.0, rel=1e-9)
+    assert t["winding"] < base["winding"] and t["magnet"] < base["magnet"]
+    # the rotor path alone cools the magnet more than the winding
+    r = s1.temperatures(GEOM, 12.0, 2.0, 30.0, h, amb, {"rotor_air_area_m2": 3e-3})
+    assert base["magnet"] - r["magnet"] > base["winding"] - r["winding"] > 0
+
+
+def test_model_calibration_is_validated_and_used(tmp_path):
+    with pytest.raises(s1.S1Error):
+        _model(thermal_calibration={"rotor_air_area_m2": -1.0})
+    with pytest.raises(s1.S1Error):
+        _model(thermal_calibration={"housing_film_factor": 0.0})
+    with pytest.raises(s1.S1Error):
+        _model(thermal_calibration=[1, 2])
+    prop = _prop(tmp_path)
+    plain = _run(_model(), prop)
+    cool = _run(_model(thermal_calibration={"housing_film_factor": 1.5, "winding_air_area_m2": 5e-3,
+                                            "rotor_air_area_m2": 2e-3, "basis": "test"}), prop)
+    assert cool["limit"]["rpm"] > plain["limit"]["rpm"]
+    assert cool["model"]["thermal_calibration"]["basis"] == "test"
+
+
 def test_shipped_models_load_and_rate_with_their_default_propellers():
     """The three extracted models load; the Ø40 ones give a thermal limit inside the grid."""
     for die, cfg in (("CIANO14 40 new", "L12"), ("CIANO14 40 new", "L20"), ("CIANO28 85 20SW1200", "L13")):
@@ -295,3 +381,54 @@ def test_route_refuses_what_it_must(client, wired, monkeypatch):
     monkeypatch.setattr(ma, "catalog_access", lambda a=None: {"mode": ma.MODE_GRANTED, "dies": frozenset()})
     monkeypatch.setattr(ma, "may_see_die", lambda acc, die: False)
     assert client.get("/api/propellers/syn_s1/s1", params={"die": "TEST DIE", "config": "L1"}).status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# the calibration fit (scripts/export_propeller_s1_model.py calibrate)
+# ---------------------------------------------------------------------------
+
+def _exporter():
+    import importlib.util
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[1] / "scripts" / "export_propeller_s1_model.py"
+    spec = importlib.util.spec_from_file_location("export_propeller_s1_model", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_calibration_fit_recovers_known_constants(tmp_path):
+    """Anchors made by a known calibrated network: the fit gives the constants back
+    and the 'after' temperatures land on the anchors."""
+    ex = _exporter()
+    m = s1.load_model("CIANO14 40 new", "L12")
+    model = {k: v for k, v in m.items() if k != "_path"}
+    mf = tmp_path / "L12.json"
+    mf.write_text(json.dumps(model), encoding="utf-8")
+    true = {"housing_film_factor": 1.4, "winding_air_area_m2": 3.0e-3, "rotor_air_area_m2": 1.2e-3}
+    prop = pp.get_propeller("tmotor_fpv_10x5")
+    files = []
+    for n, p_cu, p_r, p_t in ((6000.0, 3.2, 0.8, 6.8), (8500.0, 9.5, 1.4, 16.0), (9800.0, 15.0, 1.8, 24.0)):
+        op = pp.operating_point(prop, n, pp.air_density(temp_c=25.0))
+        h = s1.housing_film(op["air_speed_ms"], 25.0, 0.040)
+        t = s1.temperatures(model["thermal_geom"], p_cu, p_r, p_t, h, 25.0, true)
+        a = {"rpm": n, "ambient_c": 25.0, "propeller": "tmotor_fpv_10x5", "passes": [{
+            "I_rms": 10.0, "error": None, "torque_miss": 0.0,
+            "components": {"winding": {"max": t["winding"], "avg": t["winding"] - 0.5},
+                           "magnet": {"max": t["magnet"], "avg": t["magnet"]},
+                           "stator": {"avg": t["housing"]}},
+            "coupling": {"em": {"P_stranded_W": p_cu}},
+            "cooling": {"heat_budget": {"losses_W": p_t, "rotor_heat_split": {"rotor_W": p_r}}}}]}
+        f = tmp_path / f"anchor_{n:.0f}.json"
+        f.write_text(json.dumps(a), encoding="utf-8")
+        files.append(str(f))
+    out = tmp_path / "out.json"
+    assert ex.main(["calibrate", str(mf), "--out", str(out)] + sum((["--anchor", f] for f in files), [])) == 0
+    cal = json.loads(out.read_text(encoding="utf-8"))["thermal_calibration"]
+    for k, v in true.items():
+        assert cal[k] == pytest.approx(v, rel=0.02)
+    for r in cal["anchors"]:
+        for k in ("winding", "magnet", "housing"):
+            assert r["lumped_after_C"][k] == pytest.approx(r["fem_C"][k], abs=0.05)
+    assert "basis" in cal and "slipstream_factor_basis" in cal
+    s1.validate_model(json.loads(out.read_text(encoding="utf-8")))

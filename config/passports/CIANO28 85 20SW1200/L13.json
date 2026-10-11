@@ -69,7 +69,8 @@
    "provenance": {
     "motor_pwm": "2-D FEM, drive=inverter (centred SVPWM, device drop + dead time in the circuit) vs sine reference at the extracted fundamental, same mesh/steps, both marched (harm_ref); FEM class si48_100ns",
     "motor_pwm_fem_runs": [
-     "pwm_L13_rated_IQE036N08NM6SC_48k_100ns_spc4"
+     "pwm_L13_rated_IQE036N08NM6SC_48k_100ns_spc4",
+     "pwm_L13_rated_n2000_IQE036N08NM6SC_48k_100ns_spc4"
     ],
     "inverter": "Si: vendor SPICE double-pulse table (ngspice, our driver set)",
     "thermal": "board model (estimate, calibrated on the controller project's Si ratings) — see controller.board",
@@ -79,7 +80,7 @@
      "PWM",
      "default pending owner",
      "Si switching: vendor SPICE table",
-     "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W"
+     "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W"
     ]
    },
    "i_board_limit_A": {
@@ -90,7 +91,8 @@
    "coverage": {
     "points": 48,
     "fem_points": [
-     "1000rpm_25.88A"
+     "1000rpm_25.88A",
+     "2000rpm_25.88A"
     ],
     "scaled_points": [
      "250rpm_6.47A",
@@ -127,7 +129,6 @@
      "2000rpm_6.47A",
      "2000rpm_12.94A",
      "2000rpm_19.41A",
-     "2000rpm_25.88A",
      "2000rpm_38.82A",
      "2000rpm_45.96A",
      "2000rpm_51.76A",
@@ -156,7 +157,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.153)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.153)",
      "inverter_loss_W": {
       "cond": 0.20652067048248157,
       "sw": 1.55414623169713,
@@ -191,7 +192,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.185)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.185)",
      "inverter_loss_W": {
       "cond": 0.8583117058943557,
       "sw": 2.102003320772938,
@@ -226,7 +227,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.216)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.216)",
      "inverter_loss_W": {
       "cond": 2.0415239907182174,
       "sw": 2.6608930387987826,
@@ -261,7 +262,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.248)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.248)",
      "inverter_loss_W": {
       "cond": 3.9484927823827496,
       "sw": 3.2861479678416585,
@@ -296,7 +297,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.310)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.310)",
      "inverter_loss_W": {
       "cond": 10.626211411353587,
       "sw": 4.653202846242422,
@@ -331,7 +332,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.343)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.343)",
      "inverter_loss_W": {
       "cond": 14.92159662456083,
       "sw": 5.437118388476986,
@@ -366,7 +367,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.370)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.370)",
      "inverter_loss_W": {
       "cond": 18.950391127681897,
       "sw": 6.101265981592437,
@@ -401,7 +402,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.428)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.428)",
      "inverter_loss_W": {
       "cond": 29.70399304493278,
       "sw": 7.63500018114941,
@@ -436,7 +437,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.276)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.276)",
      "inverter_loss_W": {
       "cond": 0.20652067048248157,
       "sw": 1.55414623169713,
@@ -471,7 +472,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.308)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.308)",
      "inverter_loss_W": {
       "cond": 0.8583117058943557,
       "sw": 2.102003320772938,
@@ -506,7 +507,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.340)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.340)",
      "inverter_loss_W": {
       "cond": 2.0415239907182174,
       "sw": 2.6608930387987826,
@@ -541,7 +542,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.373)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.373)",
      "inverter_loss_W": {
       "cond": 3.9484927823827496,
       "sw": 3.2861479678416585,
@@ -576,7 +577,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.439)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.439)",
      "inverter_loss_W": {
       "cond": 10.626211411353587,
       "sw": 4.653202846242422,
@@ -611,7 +612,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.474)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.474)",
      "inverter_loss_W": {
       "cond": 14.92159662456083,
       "sw": 5.437118388476986,
@@ -646,7 +647,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.502)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.502)",
      "inverter_loss_W": {
       "cond": 18.950391127681897,
       "sw": 6.101265981592437,
@@ -681,7 +682,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
      "inverter_loss_W": {
       "cond": 29.70399304493278,
       "sw": 7.63500018114941,
@@ -716,7 +717,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.520)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.520)",
      "inverter_loss_W": {
       "cond": 0.20652067048248157,
       "sw": 1.55414623169713,
@@ -751,7 +752,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.553)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.553)",
      "inverter_loss_W": {
       "cond": 0.8583117058943557,
       "sw": 2.102003320772938,
@@ -786,7 +787,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.589)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.589)",
      "inverter_loss_W": {
       "cond": 2.0415239907182174,
       "sw": 2.6608930387987826,
@@ -821,7 +822,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM (pwm_L13_rated_IQE036N08NM6SC_48k_100ns_spc4)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM (pwm_L13_rated_IQE036N08NM6SC_48k_100ns_spc4)",
      "inverter_loss_W": {
       "cond": 3.9484927823827496,
       "sw": 3.2861479678416585,
@@ -856,7 +857,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.703)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.703)",
      "inverter_loss_W": {
       "cond": 10.626211411353587,
       "sw": 4.653202846242422,
@@ -891,7 +892,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.745)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.745)",
      "inverter_loss_W": {
       "cond": 14.92159662456083,
       "sw": 5.437118388476986,
@@ -926,7 +927,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.778)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.778)",
      "inverter_loss_W": {
       "cond": 18.950391127681897,
       "sw": 6.101265981592437,
@@ -961,7 +962,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.845)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.845)",
      "inverter_loss_W": {
       "cond": 29.70399304493278,
       "sw": 7.63500018114941,
@@ -996,7 +997,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.764)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.764)",
      "inverter_loss_W": {
       "cond": 0.20652067048248157,
       "sw": 1.55414623169713,
@@ -1031,7 +1032,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.799)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.799)",
      "inverter_loss_W": {
       "cond": 0.8583117058943557,
       "sw": 2.102003320772938,
@@ -1066,7 +1067,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.837)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.837)",
      "inverter_loss_W": {
       "cond": 2.0415239907182174,
       "sw": 2.6608930387987826,
@@ -1101,7 +1102,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.878)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.878)",
      "inverter_loss_W": {
       "cond": 3.9484927823827496,
       "sw": 3.2861479678416585,
@@ -1136,7 +1137,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.969)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 0.969)",
      "inverter_loss_W": {
       "cond": 10.626211411353587,
       "sw": 4.653202846242422,
@@ -1171,7 +1172,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.020)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.020)",
      "inverter_loss_W": {
       "cond": 14.92159662456083,
       "sw": 5.437118388476986,
@@ -1206,7 +1207,7 @@
      "gamma_deg": 9.308627855563953,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 18.950391127681897,
       "sw": 6.101265981592437,
@@ -1241,7 +1242,7 @@
      "gamma_deg": 79.99956478235474,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.483)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.483)",
      "inverter_loss_W": {
       "cond": 29.70399304493278,
       "sw": 7.63500018114941,
@@ -1276,7 +1277,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.009)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.009)",
      "inverter_loss_W": {
       "cond": 0.20652067048248157,
       "sw": 1.55414623169713,
@@ -1311,7 +1312,7 @@
      "gamma_deg": 7.926344846381776,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 0.8583117058943557,
       "sw": 2.102003320772938,
@@ -1346,7 +1347,7 @@
      "gamma_deg": 14.930845522949518,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 2.0415239907182174,
       "sw": 2.6608930387987826,
@@ -1381,7 +1382,7 @@
      "gamma_deg": 19.13751995329545,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM (pwm_L13_rated_n2000_IQE036N08NM6SC_48k_100ns_spc4)",
      "inverter_loss_W": {
       "cond": 3.9484927823827496,
       "sw": 3.2861479678416585,
@@ -1416,7 +1417,7 @@
      "gamma_deg": 26.614997209515884,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 10.626211411353587,
       "sw": 4.653202846242422,
@@ -1451,7 +1452,7 @@
      "gamma_deg": 31.200960817426175,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 14.92159662456083,
       "sw": 5.437118388476986,
@@ -1486,7 +1487,7 @@
      "gamma_deg": 35.257097629891035,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 18.950391127681897,
       "sw": 6.101265981592437,
@@ -1521,7 +1522,7 @@
      "gamma_deg": 79.99956478235474,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
      "inverter_loss_W": {
       "cond": 29.70399304493278,
       "sw": 7.63500018114941,
@@ -1591,7 +1592,7 @@
      "gamma_deg": 79.99973543427646,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9/25.9 A, m 0.603/1.032): k = dP/HDF(m) linear in m, × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 14.92159662456083,
       "sw": 5.437118388476986,
@@ -1697,7 +1698,7 @@
    "provenance": {
     "motor_pwm": "2-D FEM, drive=inverter (centred SVPWM, device drop + dead time in the circuit) vs sine reference at the extracted fundamental, same mesh/steps, both marched (harm_ref); FEM class gan48_20ns",
     "motor_pwm_fem_runs": [
-     "pwm_L13_rated_IQE036N08NM6SC_48k_100ns_spc4"
+     "pwm_L13_rated_n2000_IGC016K10S2_48k_20ns_spc4"
     ],
     "inverter": "GaN: datasheet times-and-charges + E_oss (no E_on/E_off table, no public SPICE model)",
     "thermal": "board model (estimate, calibrated on the controller project's Si ratings) — see controller.board",
@@ -1707,9 +1708,8 @@
      "PWM",
      "default pending owner",
      "GaN dead time 20 ns: default pending owner",
-     "motor PWM loss: ESTIMATE from the 48 kHz FEM (no FEM at this carrier)",
      "GaN switching: datasheet model (no public SPICE model)",
-     "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W"
+     "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W"
     ]
    },
    "i_board_limit_A": {
@@ -1719,7 +1719,9 @@
    },
    "coverage": {
     "points": 48,
-    "fem_points": [],
+    "fem_points": [
+     "2000rpm_25.88A"
+    ],
     "scaled_points": [
      "250rpm_6.47A",
      "250rpm_12.94A",
@@ -1756,7 +1758,6 @@
      "2000rpm_6.47A",
      "2000rpm_12.94A",
      "2000rpm_19.41A",
-     "2000rpm_25.88A",
      "2000rpm_38.82A",
      "2000rpm_45.96A",
      "2000rpm_51.76A",
@@ -1785,7 +1786,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.153)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.153)",
      "inverter_loss_W": {
       "cond": 0.09639493192601181,
       "sw": 0.5825177907378706,
@@ -1820,7 +1821,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.185)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.185)",
      "inverter_loss_W": {
       "cond": 0.3985059141270137,
       "sw": 0.8609075814757413,
@@ -1855,7 +1856,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.216)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.216)",
      "inverter_loss_W": {
       "cond": 0.9453570343848228,
       "sw": 1.139297372213612,
@@ -1890,7 +1891,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.248)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.248)",
      "inverter_loss_W": {
       "cond": 1.8003129152579287,
       "sw": 1.4176871629514824,
@@ -1925,7 +1926,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.310)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.310)",
      "inverter_loss_W": {
       "cond": 5.037919229129047,
       "sw": 1.974466744427224,
@@ -1960,7 +1961,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.343)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.343)",
      "inverter_loss_W": {
       "cond": 7.590417960771074,
       "sw": 2.2817712089480695,
@@ -1995,7 +1996,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.370)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.370)",
      "inverter_loss_W": {
       "cond": 9.626233437388802,
       "sw": 2.531246325902965,
@@ -2030,7 +2031,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.428)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.428)",
      "inverter_loss_W": {
       "cond": 15.040989745920006,
       "sw": 3.088025907378706,
@@ -2065,7 +2066,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.276)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.276)",
      "inverter_loss_W": {
       "cond": 0.09639493192601181,
       "sw": 0.5825177907378706,
@@ -2100,7 +2101,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.308)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.308)",
      "inverter_loss_W": {
       "cond": 0.3985059141270137,
       "sw": 0.8609075814757413,
@@ -2135,7 +2136,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.340)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.340)",
      "inverter_loss_W": {
       "cond": 0.9453570343848228,
       "sw": 1.139297372213612,
@@ -2170,7 +2171,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.373)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.373)",
      "inverter_loss_W": {
       "cond": 1.8003129152579287,
       "sw": 1.4176871629514824,
@@ -2205,7 +2206,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.439)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.439)",
      "inverter_loss_W": {
       "cond": 5.037919229129047,
       "sw": 1.974466744427224,
@@ -2240,7 +2241,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.474)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.474)",
      "inverter_loss_W": {
       "cond": 7.590417960771074,
       "sw": 2.2817712089480695,
@@ -2275,7 +2276,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.502)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.502)",
      "inverter_loss_W": {
       "cond": 9.626233437388802,
       "sw": 2.531246325902965,
@@ -2310,7 +2311,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
      "inverter_loss_W": {
       "cond": 15.040989745920006,
       "sw": 3.088025907378706,
@@ -2345,7 +2346,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.520)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.520)",
      "inverter_loss_W": {
       "cond": 0.09639493192601181,
       "sw": 0.5825177907378706,
@@ -2380,7 +2381,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.553)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.553)",
      "inverter_loss_W": {
       "cond": 0.3985059141270137,
       "sw": 0.8609075814757413,
@@ -2415,7 +2416,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.589)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.589)",
      "inverter_loss_W": {
       "cond": 0.9453570343848228,
       "sw": 1.139297372213612,
@@ -2450,7 +2451,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W) (pwm_L13_rated_IQE036N08NM6SC_48k_100ns_spc4)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.625)",
      "inverter_loss_W": {
       "cond": 1.8003129152579287,
       "sw": 1.4176871629514824,
@@ -2485,7 +2486,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.703)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.703)",
      "inverter_loss_W": {
       "cond": 5.037919229129047,
       "sw": 1.974466744427224,
@@ -2520,7 +2521,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.745)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.745)",
      "inverter_loss_W": {
       "cond": 7.590417960771074,
       "sw": 2.2817712089480695,
@@ -2555,7 +2556,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.778)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.778)",
      "inverter_loss_W": {
       "cond": 9.626233437388802,
       "sw": 2.531246325902965,
@@ -2590,7 +2591,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.845)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.845)",
      "inverter_loss_W": {
       "cond": 15.040989745920006,
       "sw": 3.088025907378706,
@@ -2625,7 +2626,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.764)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.764)",
      "inverter_loss_W": {
       "cond": 0.09639493192601181,
       "sw": 0.5825177907378706,
@@ -2660,7 +2661,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.799)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.799)",
      "inverter_loss_W": {
       "cond": 0.3985059141270137,
       "sw": 0.8609075814757413,
@@ -2695,7 +2696,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.837)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.837)",
      "inverter_loss_W": {
       "cond": 0.9453570343848228,
       "sw": 1.139297372213612,
@@ -2730,7 +2731,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.878)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.878)",
      "inverter_loss_W": {
       "cond": 1.8003129152579287,
       "sw": 1.4176871629514824,
@@ -2765,7 +2766,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.969)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.969)",
      "inverter_loss_W": {
       "cond": 5.037919229129047,
       "sw": 1.974466744427224,
@@ -2800,7 +2801,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.020)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.020)",
      "inverter_loss_W": {
       "cond": 7.590417960771074,
       "sw": 2.2817712089480695,
@@ -2835,7 +2836,7 @@
      "gamma_deg": 9.308627855563953,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 9.626233437388802,
       "sw": 2.531246325902965,
@@ -2870,7 +2871,7 @@
      "gamma_deg": 79.99956478235474,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.483)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.483)",
      "inverter_loss_W": {
       "cond": 15.040989745920006,
       "sw": 3.088025907378706,
@@ -2905,7 +2906,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.009)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.009)",
      "inverter_loss_W": {
       "cond": 0.09639493192601181,
       "sw": 0.5825177907378706,
@@ -2940,7 +2941,7 @@
      "gamma_deg": 7.926344846381776,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 0.3985059141270137,
       "sw": 0.8609075814757413,
@@ -2975,7 +2976,7 @@
      "gamma_deg": 14.930845522949518,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 0.9453570343848228,
       "sw": 1.139297372213612,
@@ -3010,7 +3011,7 @@
      "gamma_deg": 19.13751995329545,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM (pwm_L13_rated_n2000_IGC016K10S2_48k_20ns_spc4)",
      "inverter_loss_W": {
       "cond": 1.8003129152579287,
       "sw": 1.4176871629514824,
@@ -3045,7 +3046,7 @@
      "gamma_deg": 26.614997209515884,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 5.037919229129047,
       "sw": 1.974466744427224,
@@ -3080,7 +3081,7 @@
      "gamma_deg": 31.200960817426175,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 7.590417960771074,
       "sw": 2.2817712089480695,
@@ -3115,7 +3116,7 @@
      "gamma_deg": 35.257097629891035,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 9.626233437388802,
       "sw": 2.531246325902965,
@@ -3150,7 +3151,7 @@
      "gamma_deg": 79.99956478235474,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
      "inverter_loss_W": {
       "cond": 15.040989745920006,
       "sw": 3.088025907378706,
@@ -3220,7 +3221,7 @@
      "gamma_deg": 79.99973543427646,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — BORROWED, not FEM at this dead time: the Si 48 kHz 100 ns FEM anchors (same carrier, bus, modulation; Ø40 FEM showed 20 vs 100 ns dead time changes the motor PWM loss by < 0.1 W); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 7.590417960771074,
       "sw": 2.2817712089480695,
@@ -3326,7 +3327,7 @@
    "provenance": {
     "motor_pwm": "2-D FEM, drive=inverter (centred SVPWM, device drop + dead time in the circuit) vs sine reference at the extracted fundamental, same mesh/steps, both marched (harm_ref); FEM class gan100_20ns",
     "motor_pwm_fem_runs": [
-     "pwm_L13_rated_IQE036N08NM6SC_48k_100ns_spc4"
+     "pwm_L13_rated_n2000_IGC016K10S2_48k_20ns_spc4"
     ],
     "inverter": "GaN: datasheet times-and-charges + E_oss (no E_on/E_off table, no public SPICE model)",
     "thermal": "board model (estimate, calibrated on the controller project's Si ratings) — see controller.board",
@@ -3338,7 +3339,7 @@
      "GaN dead time 20 ns: default pending owner",
      "motor PWM loss: ESTIMATE from the 48 kHz FEM (no FEM at this carrier)",
      "GaN switching: datasheet model (no public SPICE model)",
-     "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W"
+     "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W"
     ]
    },
    "i_board_limit_A": {
@@ -3414,7 +3415,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.153)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.153)",
      "inverter_loss_W": {
       "cond": 0.0973726629880068,
       "sw": 1.2135787307038972,
@@ -3449,7 +3450,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.185)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.185)",
      "inverter_loss_W": {
       "cond": 0.4059726780711532,
       "sw": 1.7935574614077943,
@@ -3484,7 +3485,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.216)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.216)",
      "inverter_loss_W": {
       "cond": 0.9687812282381193,
       "sw": 2.3735361921116915,
@@ -3519,7 +3520,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.248)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.248)",
      "inverter_loss_W": {
       "cond": 1.8544372267515237,
       "sw": 2.9535149228155886,
@@ -3554,7 +3555,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.310)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.310)",
      "inverter_loss_W": {
       "cond": 5.40347194944,
       "sw": 4.113472384223383,
@@ -3589,7 +3590,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.343)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.343)",
      "inverter_loss_W": {
       "cond": 7.574599520006402,
       "sw": 4.7536900186418105,
@@ -3624,7 +3625,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.370)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.370)",
      "inverter_loss_W": {
       "cond": 9.606172354560002,
       "sw": 5.273429845631178,
@@ -3659,7 +3660,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.428)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.428)",
      "inverter_loss_W": {
       "cond": 15.009644304000005,
       "sw": 6.433387307038972,
@@ -3694,7 +3695,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.276)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.276)",
      "inverter_loss_W": {
       "cond": 0.0973726629880068,
       "sw": 1.2135787307038972,
@@ -3729,7 +3730,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.308)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.308)",
      "inverter_loss_W": {
       "cond": 0.4059726780711532,
       "sw": 1.7935574614077943,
@@ -3764,7 +3765,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.340)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.340)",
      "inverter_loss_W": {
       "cond": 0.9687812282381193,
       "sw": 2.3735361921116915,
@@ -3799,7 +3800,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.373)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.373)",
      "inverter_loss_W": {
       "cond": 1.8544372267515237,
       "sw": 2.9535149228155886,
@@ -3834,7 +3835,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.439)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.439)",
      "inverter_loss_W": {
       "cond": 5.40347194944,
       "sw": 4.113472384223383,
@@ -3869,7 +3870,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.474)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.474)",
      "inverter_loss_W": {
       "cond": 7.574599520006402,
       "sw": 4.7536900186418105,
@@ -3904,7 +3905,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.502)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.502)",
      "inverter_loss_W": {
       "cond": 9.606172354560002,
       "sw": 5.273429845631178,
@@ -3939,7 +3940,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
      "inverter_loss_W": {
       "cond": 15.009644304000005,
       "sw": 6.433387307038972,
@@ -3974,7 +3975,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.520)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.520)",
      "inverter_loss_W": {
       "cond": 0.0973726629880068,
       "sw": 1.2135787307038972,
@@ -4009,7 +4010,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.553)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.553)",
      "inverter_loss_W": {
       "cond": 0.4059726780711532,
       "sw": 1.7935574614077943,
@@ -4044,7 +4045,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.589)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.589)",
      "inverter_loss_W": {
       "cond": 0.9687812282381193,
       "sw": 2.3735361921116915,
@@ -4079,7 +4080,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480) (pwm_L13_rated_IQE036N08NM6SC_48k_100ns_spc4)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.625)",
      "inverter_loss_W": {
       "cond": 1.8544372267515237,
       "sw": 2.9535149228155886,
@@ -4114,7 +4115,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.703)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.703)",
      "inverter_loss_W": {
       "cond": 5.40347194944,
       "sw": 4.113472384223383,
@@ -4149,7 +4150,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.745)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.745)",
      "inverter_loss_W": {
       "cond": 7.574599520006402,
       "sw": 4.7536900186418105,
@@ -4184,7 +4185,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.778)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.778)",
      "inverter_loss_W": {
       "cond": 9.606172354560002,
       "sw": 5.273429845631178,
@@ -4219,7 +4220,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.845)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.845)",
      "inverter_loss_W": {
       "cond": 15.009644304000005,
       "sw": 6.433387307038972,
@@ -4254,7 +4255,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.764)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.764)",
      "inverter_loss_W": {
       "cond": 0.0973726629880068,
       "sw": 1.2135787307038972,
@@ -4289,7 +4290,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.799)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.799)",
      "inverter_loss_W": {
       "cond": 0.4059726780711532,
       "sw": 1.7935574614077943,
@@ -4324,7 +4325,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.837)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.837)",
      "inverter_loss_W": {
       "cond": 0.9687812282381193,
       "sw": 2.3735361921116915,
@@ -4359,7 +4360,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.878)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.878)",
      "inverter_loss_W": {
       "cond": 1.8544372267515237,
       "sw": 2.9535149228155886,
@@ -4394,7 +4395,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.969)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.969)",
      "inverter_loss_W": {
       "cond": 5.40347194944,
       "sw": 4.113472384223383,
@@ -4429,7 +4430,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.020)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.020)",
      "inverter_loss_W": {
       "cond": 7.574599520006402,
       "sw": 4.7536900186418105,
@@ -4464,7 +4465,7 @@
      "gamma_deg": 9.308627855563953,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 9.606172354560002,
       "sw": 5.273429845631178,
@@ -4499,7 +4500,7 @@
      "gamma_deg": 79.99956478235474,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.483)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.483)",
      "inverter_loss_W": {
       "cond": 15.009644304000005,
       "sw": 6.433387307038972,
@@ -4534,7 +4535,7 @@
      "gamma_deg": 1.9505,
      "gamma_mode": "fixed",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.009)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.009)",
      "inverter_loss_W": {
       "cond": 0.0973726629880068,
       "sw": 1.2135787307038972,
@@ -4569,7 +4570,7 @@
      "gamma_deg": 7.926344846381776,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 0.4059726780711532,
       "sw": 1.7935574614077943,
@@ -4604,7 +4605,7 @@
      "gamma_deg": 14.930845522949518,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 0.9687812282381193,
       "sw": 2.3735361921116915,
@@ -4639,7 +4640,7 @@
      "gamma_deg": 19.13751995329545,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480) (pwm_L13_rated_n2000_IGC016K10S2_48k_20ns_spc4)",
      "inverter_loss_W": {
       "cond": 1.8544372267515237,
       "sw": 2.9535149228155886,
@@ -4674,7 +4675,7 @@
      "gamma_deg": 26.614997209515884,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 5.40347194944,
       "sw": 4.113472384223383,
@@ -4709,7 +4710,7 @@
      "gamma_deg": 31.200960817426175,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 7.574599520006402,
       "sw": 4.7536900186418105,
@@ -4744,7 +4745,7 @@
      "gamma_deg": 35.257097629891035,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 9.606172354560002,
       "sw": 5.273429845631178,
@@ -4779,7 +4780,7 @@
      "gamma_deg": 79.99956478235474,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 0.561)",
      "inverter_loss_W": {
       "cond": 15.009644304000005,
       "sw": 6.433387307038972,
@@ -4849,7 +4850,7 @@
      "gamma_deg": 79.99973543427646,
      "gamma_mode": "field weakening",
      "motor_pwm_loss_W": 0.0,
-     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: si48_100ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 0.603): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
+     "motor_pwm_loss_basis": "motor PWM extra loss 0 W: FEM PWM − same-mesh sine reference = -0.7 W of 208.4 W total (-0.34 %): below this run's resolution; stored as 0 W; FEM PWM − same-mesh sine reference = -1.5 W of 174.5 W total (-0.86 %): below this run's resolution; stored as 0 W — ESTIMATE, not FEM: gan48_20ns × (48 kHz/100 kHz)^1.5 = ×0.333 (range ×0.230…×0.480); FEM anchors (25.9 A, m 1.032): k = dP/HDF(m) linear in m (HELD at the nearest anchor m — outside the FEM range), × HDF(m 1.028)",
      "inverter_loss_W": {
       "cond": 7.574599520006402,
       "sw": 4.7536900186418105,

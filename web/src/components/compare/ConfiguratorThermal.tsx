@@ -16,6 +16,7 @@ import { Box, Paper, Typography } from '@mui/material';
 import CoolingControls from '../thermal/CoolingControls';
 import { airH, getCoolingPayload, liqH } from '../thermal/api';
 import { estimateThermal, type ThermalGeom, type ThermalLosses } from '../../lib/thermalEstimate';
+import { PROJECT_WINDING_LIMIT_C } from '../../lib/configuratorPropeller';
 import HelpTip from '../common/HelpTip';
 import { nsT } from '../../i18n/nsT';
 
@@ -59,7 +60,7 @@ const ConfiguratorThermal: React.FC<{
   const ambient_C = coolingEstimate?.ambient_C ?? (Number(cp?.ambient_temp) || 25);
   const t = h > 0 ? estimateThermal(geom, losses, { h_Wm2K: h, ambient_C }) : null;
 
-  const windingLimit_C = coolingEstimate?.temperatureLimits.winding_C ?? 155;
+  const windingLimit_C = coolingEstimate?.temperatureLimits.winding_C ?? PROJECT_WINDING_LIMIT_C;
   const magnetLimit_C = coolingEstimate?.temperatureLimits.magnet_C ?? 150;
   const windHot = t != null && t.T_winding_C > windingLimit_C;   // legacy generic estimate thresholds
   const magHot  = t != null && t.T_magnet_C > magnetLimit_C;

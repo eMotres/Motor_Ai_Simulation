@@ -16,7 +16,7 @@ const LIMIT = {
 const R = {
   propeller_id: 'tmotor_fpv_10x5', die: 'CIANO14 40 new', config: 'L12', ambient_c: 25,
   limit: LIMIT, no_continuous_point: false, first_failure: 'magnet', monotone: true,
-  limits: { winding_C: 180, magnet_C: 150, winding_basis: 'class H', magnet_basis: 'card' },
+  limits: { winding_C: 200, magnet_C: 150, winding_basis: 'class N', magnet_basis: 'card' },
 };
 
 t('a limit reads speed, thrust in kgf, shaft power and the binding key', () => {

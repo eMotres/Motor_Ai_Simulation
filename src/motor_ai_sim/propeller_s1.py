@@ -62,7 +62,6 @@ log = logging.getLogger(__name__)
 SCHEMA = "propeller-s1-model-1"
 ALPHA_CU = 0.00393                    # /K, copper resistivity at 20 °C reference
 T_CU_REF_C = 20.0
-WINDING_LIMIT_C = 180.0               # insulation class H (owner default)
 RUNAWAY_C = 600.0                     # a fixed point above this is a thermal runaway
 FIXED_POINT_TOL_K = 0.01
 FIXED_POINT_MAX_IT = 400
@@ -537,11 +536,16 @@ def temperatures(geom: Mapping[str, float], p_cu: float, p_rotor: float, p_total
 def limits_of(m: Mapping[str, Any], winding_limit_c: Optional[float] = None,
               magnet_limit_c: Optional[float] = None) -> Dict[str, Any]:
     lim = m.get("limits") or {}
-    w = _num(winding_limit_c) or _num(lim.get("winding_C")) or WINDING_LIMIT_C
+    w = _num(winding_limit_c) or _num(lim.get("winding_C"))
+    w_basis = str(lim.get("winding_basis") or "model limit") if w is not None and winding_limit_c is None else "given by the caller"
+    if w is None:                      # the project's ONE insulation class (report.PROJECT_INSULATION_C)
+        from motor_ai_sim.coupled_time_to_limit import winding_limit
+        w = winding_limit()[0]
+        w_basis = "project insulation class N (%g °C)" % w
     mg = _num(magnet_limit_c) or _num(lim.get("magnet_C"))
     if mg is None:
         raise S1Error("model: no magnet temperature limit (limits.magnet_C)")
-    return {"winding_C": w, "winding_basis": str(lim.get("winding_basis") or "insulation class H (default)"),
+    return {"winding_C": w, "winding_basis": w_basis,
             "magnet_C": mg, "magnet_basis": str(lim.get("magnet_basis") or "magnet card"),
             "I_max_A": current_cap(m), "I_max_basis": str(lim.get("I_max_basis") or "top of the passport current grid"),
             "rpm_max": speed_cap(m), "rpm_max_basis": str(lim.get("rpm_max_basis") or "top of the passport speed grid")}

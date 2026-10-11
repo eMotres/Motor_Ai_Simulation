@@ -1,5 +1,5 @@
 // node --test — Configure with a propeller (owner 2026-10-05): the load from the propeller, the
-// cooling from its slipstream, red "> 180" temperatures, thermal zones on the knobs.
+// cooling from its slipstream, red "> 200" temperatures, thermal zones on the knobs.
 //
 // Real data: the series fixture is the BACKEND's own `/api/propellers/{id}/series` output
 // (motor_ai_sim.propeller.series + cooling_models.outer_air, 25 degC, Ø40 housing) and the motor is
@@ -227,18 +227,18 @@ t('the server snapshot saves a ready bound propeller and never browser-persists 
   assert.match(panel, /syncedServerChoice\.current === token/);
 });
 
-t('temperature limits: the winding is class H 180 degC, the magnet the card\'s own (stated fallback)', () => {
-  assert.deepEqual(P.tempLimits({ winding_C: 180, magnet_C: 150, winding_basis: 'class H default' }),
-    { winding_C: 180, magnet_C: 150, magnetIsDefault: false, windingBasis: 'class H default' });
+t('temperature limits: the winding is class N 200 degC, the magnet the card\'s own (stated fallback)', () => {
+  assert.deepEqual(P.tempLimits({ winding_C: 200, magnet_C: 150, winding_basis: 'class N default' }),
+    { winding_C: 200, magnet_C: 150, magnetIsDefault: false, windingBasis: 'class N default' });
   const d = P.tempLimits({ magnet_C: null });
-  assert.equal(d.winding_C, 180); assert.equal(d.magnet_C, P.DEFAULT_MAGNET_LIMIT_C); assert.equal(d.magnetIsDefault, true);
-  assert.equal(P.tempLimits(undefined).winding_C, 180);
-  const lim = P.tempLimits({ winding_C: 180, magnet_C: 150 });
-  assert.deepEqual(P.judgeTemps(179, 149, lim), { windingOver: false, magnetOver: false, over: false });
-  assert.deepEqual(P.judgeTemps(181, 100, lim), { windingOver: true, magnetOver: false, over: true });
+  assert.equal(d.winding_C, 200); assert.equal(d.magnet_C, P.DEFAULT_MAGNET_LIMIT_C); assert.equal(d.magnetIsDefault, true);
+  assert.equal(P.tempLimits(undefined).winding_C, 200);
+  const lim = P.tempLimits({ winding_C: 200, magnet_C: 150 });
+  assert.deepEqual(P.judgeTemps(199, 149, lim), { windingOver: false, magnetOver: false, over: false });
+  assert.deepEqual(P.judgeTemps(201, 100, lim), { windingOver: true, magnetOver: false, over: true });
   assert.deepEqual(P.judgeTemps(100, 151, lim), { windingOver: false, magnetOver: true, over: true });
-  assert.deepEqual(P.tempTile(2263, 180), { value: 180, over: true, level: 'bad' });
-  assert.deepEqual(P.tempTile(null, 180), { value: null, over: false });
+  assert.deepEqual(P.tempTile(2263, 200), { value: 200, over: true, level: 'bad' });
+  assert.deepEqual(P.tempTile(null, 200), { value: null, over: false });
 });
 
 t('thermal zones: green below the limits, red beyond, neutral where not judged', () => {
@@ -258,7 +258,7 @@ t('ZONES on the real motor: with the real propeller the speed knob goes green ->
   const geo = { statorOD_mm: 40, stackLength_mm: 12, numSlots: 12, slotHeight_mm: CARD.fit.slotHeight_mm, slotWidth_mm: CARD.fit.slotWidth_mm,
     insulation_mm: CARD.fit.insulation_mm, coreThickness_mm: Math.max(0, CARD.geo.statorOR_mm - CARD.geo.statorIR_mm - CARD.fit.slotHeight_mm),
     airGap_mm: Math.max(0, CARD.geo.statorIR_mm - CARD.geo.rotorOR_mm), magnetOD_mm: CARD.geo.rotorOR_mm * 2 };
-  const lim = P.tempLimits({ winding_C: 180, magnet_C: 150 });
+  const lim = P.tempLimits({ winding_C: 200, magnet_C: 150 });
   const okAt = (rpm) => {
     const pt = P.seriesAt(S12, rpm);
     const ld = P.currentForTorque(pt.torque_Nm, torqueAt(rpm), 90);

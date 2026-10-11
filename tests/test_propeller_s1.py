@@ -17,6 +17,7 @@ import yaml
 
 from motor_ai_sim import propeller as pp
 from motor_ai_sim import propeller_s1 as s1
+from motor_ai_sim import report
 
 G0 = 9.80665
 RPM = [1000.0, 2000.0, 4000.0, 8000.0, 12000.0]
@@ -36,7 +37,7 @@ def _model(**over):
                             "cu_ac": [[0.02 * (i / 10.0) ** 2 * (n / 1000.0) for i in CUR] for n in RPM],
                             "rotor_eddy": [[0.01 * (n / 1000.0) ** 2 * (i / 10.0) for i in CUR] for n in RPM]}},
         "mech_W": {"rpm": RPM, "W": [0.01 * n / 1000.0 for n in RPM]},
-        "limits": {"I_max_A": 60.0, "rpm_max": 12000.0, "winding_C": 180.0, "magnet_C": 150.0},
+        "limits": {"I_max_A": 60.0, "rpm_max": 12000.0, "winding_C": 200.0, "magnet_C": 150.0},
         "thermal_geom": {"statorOD_mm": 40.0, "stackLength_mm": 15.0, "numSlots": 12, "slotHeight_mm": 6.0,
                          "slotWidth_mm": 2.8, "insulation_mm": 0.06, "coreThickness_mm": 2.0,
                          "airGap_mm": 0.3, "magnetOD_mm": 23.0},
@@ -157,7 +158,7 @@ def test_bisection_lands_on_the_binding_limit(tmp_path):
     assert r["monotone"] and L is not None
     assert L["binding"] in ("winding", "magnet")
     key = "T_winding_C" if L["binding"] == "winding" else "T_magnet_C"
-    lim = 180.0 if L["binding"] == "winding" else 150.0
+    lim = 200.0 if L["binding"] == "winding" else 150.0
     assert L[key] <= lim and L[key] > lim - 1.0               # bisected to 1 rpm: within a kelvin
     rho = r["rho_kg_m3"]
     above = s1.solve_point(m, prop, L["rpm"] + 2.0, ambient_c=25.0, rho=rho, lims=r["limits"])
@@ -170,7 +171,7 @@ def test_bisection_lands_on_the_binding_limit(tmp_path):
 def test_binding_constraint_follows_the_tightest_limit(tmp_path):
     m, prop = _model(), _prop(tmp_path)
     w = _run(m, prop, magnet_limit_c=400.0)["limit"]
-    assert w["binding"] == "winding" and w["T_winding_C"] == pytest.approx(180.0, abs=1.0)
+    assert w["binding"] == "winding" and w["T_winding_C"] == pytest.approx(200.0, abs=1.0)
     g = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=90.0)["limit"]
     assert g["binding"] == "magnet" and g["T_magnet_C"] == pytest.approx(90.0, abs=1.0)
     assert g["rpm"] < w["rpm"]
@@ -244,7 +245,7 @@ def test_field_weakening_floor_needs_current_even_for_a_light_load(tmp_path):
     fe.append([None, None, 30.0, 40.0, 55.0])
     m = _model(grid={"rpm": rpm, "I_A": CUR, "T_Nm": T, "loss_W": {"fe_stator": fe},
                      "I_floor_A": [0, 0, 0, 0, 0, 12.0]},
-               limits={"I_max_A": 60.0, "rpm_max": 16000.0, "winding_C": 180.0, "magnet_C": 150.0})
+               limits={"I_max_A": 60.0, "rpm_max": 16000.0, "winding_C": 200.0, "magnet_C": 150.0})
     assert s1.floor_current(m, 12000.0) == 0.0
     assert s1.floor_current(m, 16000.0) == 12.0
     assert s1.floor_current(m, 14000.0) == 12.0                  # the larger of the two rows
@@ -323,7 +324,11 @@ def test_shipped_models_load_and_rate_with_their_default_propellers():
     """The three extracted models load; the Ø40 ones give a thermal limit inside the grid."""
     for die, cfg in (("CIANO14 40 new", "L12"), ("CIANO14 40 new", "L20"), ("CIANO28 85 20SW1200", "L13")):
         m = s1.load_model(die, cfg)
-        assert m["limits"]["magnet_C"] == 150.0 and m["limits"]["winding_C"] == 180.0
+        assert m["limits"]["magnet_C"] == 150.0
+        assert "winding_C" not in m["limits"]            # the project's ONE class applies, not a model number
+        lims = s1.limits_of(m)
+        assert lims["winding_C"] == report.PROJECT_INSULATION_C == 200.0
+        assert "class N" in lims["winding_basis"]
     r = s1.s1_rating(s1.load_model("CIANO14 40 new", "L12"), pp.get_propeller("tmotor_fpv_10x5"))
     assert r["limit"] and r["limit"]["binding"] in ("winding", "magnet")
     assert 3000.0 < r["limit"]["rpm"] < 20000.0

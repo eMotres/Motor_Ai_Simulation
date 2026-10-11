@@ -72,7 +72,7 @@ t('TOTAL LOSS = motor losses + PWM extra + controller loss (Sine: the motor loss
 });
 
 // ── the temperatures row (propeller-cooled machines) ─────────────────────────────────────────
-const LIM = { winding_C: 180, magnet_C: 150 };
+const LIM = { winding_C: 200, magnet_C: 150 };
 const TEMPS = { T_winding_C: 120, T_magnet_C: 100, T_housing_C: 60, air_speed_ms: 9.5, h_W_m2K: 61 };
 
 t('the temperatures are ONE fixed row of five tiles, present with or without data', () => {
@@ -99,10 +99,10 @@ t('the temperatures are ONE fixed row of five tiles, present with or without dat
 
 t('over the limit a temperature tile reads "> limit" in red, never the absurd number', () => {
   const row = Object.fromEntries(T.tempRowTiles({ ...TEMPS, T_winding_C: 2263, T_magnet_C: 151 }, LIM).map((x) => [x.id, x]));
-  assert.equal(row.tWinding.display, '> 180'); assert.equal(row.tWinding.level, 'bad'); assert.equal(row.tWinding.value, null);
+  assert.equal(row.tWinding.display, '> 200'); assert.equal(row.tWinding.level, 'bad'); assert.equal(row.tWinding.value, null);
   assert.equal(row.tMagnet.display, '> 150'); assert.equal(row.tMagnet.level, 'bad');
   // within 20 K of the limit: amber; exactly at the limit is still allowed
-  const near = Object.fromEntries(T.tempRowTiles({ ...TEMPS, T_winding_C: 165, T_magnet_C: 150 }, LIM).map((x) => [x.id, x]));
+  const near = Object.fromEntries(T.tempRowTiles({ ...TEMPS, T_winding_C: 185, T_magnet_C: 150 }, LIM).map((x) => [x.id, x]));
   assert.equal(near.tWinding.level, 'warn'); assert.equal(near.tWinding.display, undefined);
   assert.equal(near.tMagnet.level, 'warn'); assert.equal(near.tMagnet.value, 150);
 });

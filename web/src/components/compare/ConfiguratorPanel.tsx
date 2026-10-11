@@ -225,7 +225,7 @@ const MetricTile: React.FC<{
   label: string; value: number | null; unit: string; d?: number; base: number; goodHi?: boolean;
   /** why the value is "—" (shown in the tooltip instead of the vs-reference line) */
   blankTip?: string;
-  /** printed instead of the number (a temperature over its limit reads "> 180") */
+  /** printed instead of the number (a temperature over its limit reads "> 200") */
   display?: string;
   /** no "vs the reference design" line in the tooltip (a quantity with no reference, like a temperature) */
   plain?: boolean;

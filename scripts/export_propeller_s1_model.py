@@ -214,7 +214,6 @@ def from_full(args) -> Dict[str, Any]:
                    "rpm_max": float(plan["n_max_rpm"]),
                    "rpm_max_basis": f"passport speed limit at v_nom {plan.get('v_dc')} V, m = {plan.get('m')} "
                                     "(voltage, characterised field weakening)",
-                   "winding_C": 180.0, "winding_basis": "insulation class H (owner default)",
                    "magnet_C": float(args.magnet_limit),
                    "magnet_basis": args.magnet_basis},
         "thermal_geom": _thermal_geom(args.catalog, args.card, stack),
@@ -265,7 +264,6 @@ def from_store(args) -> Dict[str, Any]:
                    "I_max_basis": args.imax_basis,
                    "rpm_max": float(t["rpm"][-1]),
                    "rpm_max_basis": "top of the passport store speed grid (no voltage envelope in the record)",
-                   "winding_C": 180.0, "winding_basis": "insulation class H (owner default)",
                    "magnet_C": float(args.magnet_limit), "magnet_basis": args.magnet_basis},
         "thermal_geom": _thermal_geom(args.catalog, args.card, stack),
         "labels": [f"torque = operating torque T_op of drive variant {v.get('id')} (store record)",

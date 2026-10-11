@@ -881,7 +881,9 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
         split.append({"rpm": n, **il["groups"], "P_mech_W": mech.get("P_W"),
                       "P_pwm_extra_W": pwm, "P_inverter_W": inv})
     rec["loss_split_rated_current"] = split
-    rec["labels"] = ["2-D FEM (stage 1 grid)", "3-D factors (Stage A k_psi; k_T, k_L inherited)",
+    rec["labels"] = ["2-D FEM (stage 1 grid)",
+                     ("3-D factors (Stage A k_psi; k_T, k_L inherited)" if s2["k_L"].get("value")
+                      is not None else "3-D factor (Stage A k_psi; k_T = k_psi)"),
                      "sine + PWM (FEM anchors)", "controller losses (cards + SPICE)", PEND]
     cg = _load(full / "codex_cold_grid.json")
     if cg:
@@ -1074,7 +1076,8 @@ def machine_html(rec: Mapping[str, Any], M: str, title: str = "Ø40") -> str:
                      f"{pk['rpm']:.0f} rpm, {pk['I_rms']:.2f} A"))
     o.append(Hh.tile("k_ψ / k_T / k_L (3-D)",
                      f"{Hh.fmt(_v(s2['k_psi']))} / {Hh.fmt(_v(s2['k_T']))} / {Hh.fmt(_v(s2['k_L']))}",
-                     "Stage A today · Stage B inherited"))
+                     ("Stage A · k_T = k_ψ (no loaded 3-D run)" if _v(s2["k_L"]) is None
+                      else "Stage A today · Stage B inherited")))
     o.append(Hh.tile("Demag current limit", f"{Hh.fmt(dl.get('I_limit_rms'))} A",
                      "≤ 1 % rated-torque drop · " + PEND))
     o.append(Hh.tile("Rotor stress limit (SF 1)", f"{Hh.fmt(mech.get('limit_speed_sf1_rpm'))} rpm",

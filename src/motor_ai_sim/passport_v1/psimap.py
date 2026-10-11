@@ -121,6 +121,16 @@ class PsiMap:
     def at(self, i_d: float, i_q: float) -> Dict[str, float]:
         x = np.array([[i_d / self.scale, i_q / self.scale]])
         out = {k: float(f(x)[0]) for k, f in self._f.items()}
+        for eps in (1e-9, 1e-6):
+            if math.isfinite(out["psi_d"]):
+                break
+            # a point ON the hull (a top-level map sample, or its angle rounded to
+            # the job id's 0.001°) can fall a rounding error outside it: retry at
+            # most 1e-6 (relative) inside, never further
+            x2 = x * (1.0 - eps)
+            o2 = {k: float(f(x2)[0]) for k, f in self._f.items()}
+            if math.isfinite(o2["psi_d"]):
+                out = o2
         out["T_psi"] = 1.5 * self.pole_pairs * (out["psi_d"] * i_q - out["psi_q"] * i_d)
         out["inside"] = bool(np.isfinite(out["psi_d"]))
         return out

@@ -46,6 +46,30 @@ current the model refuses.
 CONTROLLER LOSSES (inverter + board copper of the passport's drive variant) are
 added to the battery power only: the controller is not inside the motor's
 thermal model.
+
+A SYSTEM RATING, NOT A MOTOR-ONLY ONE (2026-10-11 review)
+=========================================================
+At every speed the converged point must also hold, besides the two temperatures:
+
+* the CONTROLLER's continuous current of the selected drive (a computed PWM
+  variant's board limit, or the die's controller block for a sine drive) at the
+  chosen board cooling class -> ``controller``;
+* the phase VOLTAGE at the MINIMUM pack voltage and the operating magnet
+  temperature (the passport's hot psi-map, its PM flux shifted by k_psi(T_m),
+  R(T_w)): at the grid's operating angle, else at a deeper field-weakening angle
+  with more current (the losses then taken at that current), else ``voltage``;
+* the DEMAGNETISATION current limit at the operating magnet temperature (the
+  passport's limit at its probe temperature, scaled by the magnet card's knee
+  margin HcJ(T) vs the self-demagnetising field; ``demag_basis`` says when only
+  the reference-temperature probe exists) -> ``demag``;
+* the BATTERY's continuous current at the minimum pack voltage, when the caller
+  gives it -> ``battery_current``.
+
+A constraint the model cannot check is reported ``unverified`` (``flags``), never
+passed silently; with no controller data the answer is the motor-only limit with
+``drive_feasibility = "unknown"``.  A loss group the grid lacks at a point
+(``null`` cell) refuses the point (``loss_data``) instead of counting 0; a fixed
+point that does not settle is ``nonconverged``, not ``runaway``.
 """
 from __future__ import annotations
 
@@ -59,12 +83,21 @@ from motor_ai_sim import propeller as pp
 
 log = logging.getLogger(__name__)
 
-SCHEMA = "propeller-s1-model-1"
+SCHEMA = "propeller-s1-model-2"
+#: schema 1 (before the system checks) still loads: its limits come out ``unknown``
+SCHEMAS = ("propeller-s1-model-1", SCHEMA)
 ALPHA_CU = 0.00393                    # /K, copper resistivity at 20 °C reference
 T_CU_REF_C = 20.0
 RUNAWAY_C = 600.0                     # a fixed point above this is a thermal runaway
 FIXED_POINT_TOL_K = 0.01
 FIXED_POINT_MAX_IT = 400
+MU0 = 4e-7 * math.pi
+SQ2, SQ3 = math.sqrt(2.0), math.sqrt(3.0)
+
+SINE = "sine"
+#: the board cooling classes the passport rates its controllers for
+BOARD_COOLING = ("favourable", "weak", "hot_motor")
+DEFAULT_BOARD_COOLING = "favourable"
 
 # Configure's lumped conductivities (web/src/lib/thermalEstimate.ts) [W/m·K]
 K_IRON = 25.0
@@ -158,8 +191,8 @@ def _table(v: Any, n_rpm: int, n_i: int, name: str) -> List[List[Optional[float]
 
 def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
     """Check a model dict and return a normalised copy (``S1Error`` on anything wrong)."""
-    if not isinstance(raw, Mapping) or raw.get("schema") != SCHEMA:
-        raise S1Error(f"model: schema must be {SCHEMA!r}")
+    if not isinstance(raw, Mapping) or raw.get("schema") not in SCHEMAS:
+        raise S1Error(f"model: schema must be one of {SCHEMAS}")
     m: Dict[str, Any] = {k: raw[k] for k in raw}
     for k in ("R_phase_ohm", "R_temp_C", "magnet_ref_temp_C"):
         if _num(raw.get(k)) is None:
@@ -183,7 +216,24 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
         if any(v is None or v < 0 for v in vals):
             raise S1Error("model: grid.I_floor_A must be non-negative numbers (or null)")
         grid["I_floor_A"] = vals
+    if g.get("gamma_deg") is not None:
+        grid["gamma_deg"] = _table(g.get("gamma_deg"), len(rpm), len(cur), "grid.gamma_deg")
     m["grid"] = grid
+    m["drives"] = {str(k): _drive_of(d, str(k)) for k, d in (raw.get("drives") or {}).items()}
+    if raw.get("sine_controller") is not None:
+        m["sine_controller"] = _controller_block(raw.get("sine_controller"), "sine_controller")
+    if raw.get("psi_map") is not None:
+        m["psi_map"] = _psi_map_of(raw.get("psi_map"))
+    dm = raw.get("demag")
+    if dm is not None:
+        if not isinstance(dm, Mapping) or _num(dm.get("I_limit_A")) is None or _num(dm.get("ref_magnet_C")) is None:
+            raise S1Error("model: demag needs I_limit_A and ref_magnet_C")
+        m["demag"] = dict(dm)
+    bat = raw.get("battery")
+    if bat is not None:
+        if not isinstance(bat, Mapping) or not (0 < (_num(bat.get("v_min")) or 0) <= (_num(bat.get("v_max")) or 0)):
+            raise S1Error("model: battery needs 0 < v_min <= v_max")
+        m["battery"] = dict(bat)
     mech = raw.get("mech_W") or {}
     if mech:
         m["mech_W"] = {"rpm": _axis(mech.get("rpm"), "mech_W.rpm"),
@@ -211,6 +261,59 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
         calibration_of(raw)
     m["flux_temp_coeff_per_K"] = _num(raw.get("flux_temp_coeff_per_K")) or 0.0
     return m
+
+
+def _bus(v: Any, name: str) -> Optional[Dict[str, float]]:
+    if v is None:
+        return None
+    lo, hi = _num((v or {}).get("min")), _num((v or {}).get("max"))
+    if lo is None or hi is None or not (0 < lo <= hi):
+        raise S1Error(f"model: {name}.bus_v needs 0 < min <= max")
+    return {"min": lo, "nom": _num(v.get("nom")), "max": hi}
+
+
+def _controller_block(c: Any, name: str) -> Dict[str, Any]:
+    if not isinstance(c, Mapping):
+        raise S1Error(f"model: {name} must be a mapping")
+    out = dict(c)
+    lim = c.get("i_board_limit_A")
+    if lim is not None:
+        if not isinstance(lim, Mapping) or any(_num(x) is None or _num(x) <= 0 for x in lim.values()):
+            raise S1Error(f"model: {name}.i_board_limit_A must map cooling classes to positive currents")
+        out["i_board_limit_A"] = {str(k): float(x) for k, x in lim.items()}
+    out["bus_v"] = _bus(c.get("bus_v"), name)
+    return out
+
+
+def _drive_of(d: Any, key: str) -> Dict[str, Any]:
+    """One drive variant: its own (rpm, I) axes and tables (controller loss, motor
+    PWM extra loss; null = not computed there) and the board's continuous current."""
+    name = f"drives.{key}"
+    out = _controller_block(d, name)
+    rpm, cur = _axis(d.get("rpm"), f"{name}.rpm"), _axis(d.get("I_A"), f"{name}.I_A")
+    out.update(rpm=rpm, I_A=cur)
+    for k in ("controller_loss_W", "pwm_extra_W"):
+        out[k] = None if d.get(k) is None else _table(d.get(k), len(rpm), len(cur), f"{name}.{k}")
+    return out
+
+
+def _psi_map_of(p: Any) -> Dict[str, Any]:
+    if not isinstance(p, Mapping):
+        raise S1Error("model: psi_map must be a mapping")
+    cur, gam = p.get("I_A"), p.get("gamma_deg")
+    if not isinstance(gam, list) or len(gam) < 2 or any(_num(x) is None for x in gam) \
+            or any(b <= a for a, b in zip(gam, gam[1:])):
+        raise S1Error("model: psi_map.gamma_deg must be increasing numbers")
+    out = dict(p)
+    out["I_A"] = _axis(cur, "psi_map.I_A")
+    out["gamma_deg"] = [float(x) for x in gam]
+    for k in ("psi_d_Wb", "psi_q_Wb", "T_Nm"):
+        out[k] = _table(p.get(k), len(out["I_A"]), len(gam), f"psi_map.{k}")
+    for k in ("pole_pairs", "psi_pm_Wb", "magnet_C"):
+        if _num(p.get(k)) is None:
+            raise S1Error(f"model: psi_map.{k} missing")
+    out["gamma_max_deg"] = _num(p.get("gamma_max_deg")) or float(gam[-1])
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +376,34 @@ def _along_speed(x0: float, y0: float, x1: float, y1: float, x: float, power_law
         k = math.log(y1 / y0) / math.log(x1 / x0)
         return y0 * (x / x0) ** k
     return y0 + (y1 - y0) * (x - x0) / (x1 - x0)
+
+
+def _first_current(row: Sequence[Optional[float]], cur: Sequence[float]) -> Optional[float]:
+    return next((c for c, y in zip(cur, row) if y is not None), None)
+
+
+def grid_eval(rpm_ax: Sequence[float], cur_ax: Sequence[float], table: Sequence[Sequence[Optional[float]]],
+              rpm: float, I: float, *, kind: str, floors: Optional[Sequence[float]] = None
+              ) -> Tuple[Optional[float], bool, bool]:
+    """``grid_at`` plus whether the current lies below the first FEASIBLE cell of a
+    row it reads (the first interval's line continued down: an extrapolation in
+    current, flagged like the one in speed)."""
+    v, below = grid_at(rpm_ax, cur_ax, table, rpm, I, kind=kind, floors=floors)
+    if v is None or kind == "torque":
+        return v, below, False
+    if below or rpm <= rpm_ax[0]:
+        rows = [0]
+    elif rpm >= rpm_ax[-1]:
+        rows = [len(rpm_ax) - 1]
+    else:
+        i0, i1 = _bracket(rpm_ax, rpm)
+        rows = [i0] if rpm == rpm_ax[i0] else [i0, i1]
+    below_i = False
+    for r in rows:
+        c0 = _first_current(table[r], cur_ax)
+        if c0 is not None and I < c0 - 1e-9:
+            below_i = True
+    return v, below, below_i
 
 
 def grid_at(rpm_ax: Sequence[float], cur_ax: Sequence[float], table: Sequence[Sequence[Optional[float]]],
@@ -418,36 +549,317 @@ def current_for_torque(m: Mapping[str, Any], rpm: float, need_Nm: float, t_magne
     return None, ("current" if best_i == len(pts) - 1 else "voltage")
 
 
-def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float) -> Dict[str, Any]:
-    """Motor losses by group [W] at (rpm, I, winding temperature)."""
+def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float,
+           drive: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+    """Motor losses by group [W] at (rpm, I, winding temperature) with ``drive``
+    (``resolve_drive``; None = the model's own groups only).
+
+    A group the grid HAS but cannot give at this point (a null cell) is listed in
+    ``unavailable`` (the caller refuses the point; its 0 here is a placeholder, not
+    a loss).  The drive's PWM extra loss comes from the drive's own grid; where
+    that grid has no value it is listed in ``drive_unavailable`` and counted 0
+    (flagged).  ``below_loss_grid_speed`` / ``_current``: a value read below the
+    grid's first speed / first feasible current (extrapolated)."""
     g = m["grid"]
     r = resistance(m, t_winding_c)
     out: Dict[str, Any] = {"cu_dc": 3.0 * I * I * r}
-    below = False
+    below_n = below_i = False
+    unavailable: List[str] = []
+    drive_unavailable: List[str] = []
     for k in LOSS_GROUPS:
         t = g["loss_W"].get(k)
         if t is None:
             out[k] = 0.0
             continue
-        v, b = grid_at(g["rpm"], g["I_A"], t, rpm, I, kind="loss", floors=g.get("I_floor_A"))
-        below = below or b
+        v, bn, bi = grid_eval(g["rpm"], g["I_A"], t, rpm, I, kind="loss", floors=g.get("I_floor_A"))
+        below_n, below_i = below_n or bn, below_i or bi
+        if v is None:
+            unavailable.append(k)
         out[k] = 0.0 if v is None else v
+    pw = (drive or {}).get("pwm_extra_W")
+    if g["loss_W"].get("pwm_extra") is None and pw is not None:
+        v, _, _ = grid_eval(drive["rpm"], drive["I_A"], pw, rpm, I, kind="loss")
+        if v is None:
+            drive_unavailable.append("pwm_extra")
+        out["pwm_extra"] = 0.0 if v is None else v
     # resistance-limited eddy in the conductors goes with the conductivity
     out["cu_ac"] *= resistance(m, float(m["R_temp_C"])) / r
     out["mech"] = _mech_W(m, rpm)
     out["motor_total"] = sum(out[k] for k in ("cu_dc", "cu_ac", "fe_stator", "fe_rotor",
                                                "rotor_eddy", "pwm_extra", "mech"))
     out["R_phase_ohm"] = r
-    out["below_loss_grid"] = below
+    out["below_loss_grid_speed"] = below_n
+    out["below_loss_grid_current"] = below_i
+    out["below_loss_grid"] = below_n or below_i
+    out["unavailable"] = unavailable
+    out["drive_unavailable"] = drive_unavailable
     return out
 
 
-def controller_loss(m: Mapping[str, Any], rpm: float, I: float) -> Optional[float]:
-    c = m.get("controller")
+def controller_loss(m: Mapping[str, Any], rpm: float, I: float,
+                    drive: Optional[Mapping[str, Any]] = None) -> Optional[float]:
+    """Inverter + board copper loss of ``drive`` at (rpm, I); None = not computed
+    there (or a sine drive / a model without one)."""
+    if drive is not None:
+        t = drive.get("controller_loss_W")
+        if t is None:
+            return None
+        v, _ = grid_at(drive["rpm"], drive["I_A"], t, rpm, I, kind="loss")
+        return v
+    c = m.get("controller")                                     # schema 1
     if not c:
         return None
     v, _ = grid_at(c["rpm"], c["I_A"], c["loss_W"], rpm, I, kind="loss")
     return v
+
+
+# ---------------------------------------------------------------------------
+# The drive: controller envelope, pack
+# ---------------------------------------------------------------------------
+
+def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
+                  board_cooling: Optional[str] = None) -> Dict[str, Any]:
+    """The selected drive: ``sine`` (default; the die's controller block bounds its
+    current) or one computed PWM variant id of ``m["drives"]`` (its board limit,
+    its controller-loss and motor-PWM-extra grids).  ``I_cont_A`` None = the
+    controller's continuous current is not known for this model."""
+    bc = board_cooling or DEFAULT_BOARD_COOLING
+    if bc not in BOARD_COOLING:
+        raise S1Error(f"board cooling must be one of {BOARD_COOLING}")
+    did = str(drive or SINE)
+    if did == SINE:
+        sc = m.get("sine_controller") or {}
+        lim = (sc.get("i_board_limit_A") or {}).get(bc)
+        return {"id": SINE, "kind": "sine", "board_cooling": bc, "I_cont_A": lim,
+                "I_cont_basis": (sc.get("i_board_basis") if lim is not None
+                                 else "the model carries no controller block for a sine drive"),
+                "bus_v": sc.get("bus_v"), "controller_loss_W": None, "pwm_extra_W": None,
+                "device": None, "carrier_hz": None, "n_parallel": None}
+    drives = m.get("drives") or {}
+    if did not in drives:
+        raise S1Error(f"unknown drive {did!r}: use {SINE!r} or one of {sorted(drives)}")
+    d = dict(drives[did])
+    lim = (d.get("i_board_limit_A") or {}).get(bc)
+    d.update(id=did, kind="pwm", board_cooling=bc, I_cont_A=lim,
+             I_cont_basis=(d.get("i_board_basis") if lim is not None
+                           else "the variant carries no board continuous current"))
+    return d
+
+
+def resolve_pack(m: Mapping[str, Any], v_min: Optional[float] = None, v_max: Optional[float] = None,
+                 i_max_A: Optional[float] = None) -> Dict[str, Any]:
+    """The battery the S1 point must run from: the caller's window, else the
+    passport's pack.  ``i_max_A`` = its continuous current (None = not known)."""
+    b = m.get("battery") or {}
+    lo = _num(v_min) if v_min is not None else _num(b.get("v_min"))
+    hi = _num(v_max) if v_max is not None else _num(b.get("v_max"))
+    if lo is not None and hi is not None and not (0 < lo <= hi):
+        raise S1Error("pack voltage window must satisfy 0 < v_min <= v_max")
+    src = "caller" if (v_min is not None or v_max is not None) else ("passport battery" if b else None)
+    return {"v_min": lo, "v_max": hi, "i_max_A": _num(i_max_A), "source": src}
+
+
+def pack_fits_drive(drive: Mapping[str, Any], pack: Mapping[str, Any]) -> Optional[bool]:
+    """Whether the pack's window lies inside the bus range the drive was computed
+    over (Configure's rule, ``configuratorDrive.limitProblems``); None = unknown."""
+    bus = drive.get("bus_v")
+    if not bus or pack.get("v_min") is None or pack.get("v_max") is None:
+        return None
+    return pack["v_max"] <= bus["max"] * 1.001 and pack["v_min"] >= bus["min"] * 0.999
+
+
+# ---------------------------------------------------------------------------
+# Demagnetisation current limit at the magnet temperature
+# ---------------------------------------------------------------------------
+
+def demag_limit_at(m: Mapping[str, Any], t_magnet_c: float) -> Tuple[Optional[float], str]:
+    """``(I_limit, basis)``: the demagnetisation current limit at ``t_magnet_c``.
+
+    The passport probes demagnetisation at ONE magnet temperature.  Above it the
+    limit is scaled by the knee margin of the magnet card: the armature field at
+    the worst magnet point grows with the current, the margin it may use is the
+    knee field minus the magnet's own demagnetising field,
+    ``H_k(T) - H_self(T)``, ``H_k = knee_fraction · HcJ(T)``,
+    ``H_self = Br(T) / (mu0 (mu_rec + Pc))`` (Pc = the permeance coefficient
+    behind the grade's working temperature).  Below the probe temperature the
+    probe's own limit is held (NdFeB is stronger cold: conservative).  Without a
+    magnet card the probe's limit stands only AT its temperature: above it the
+    answer is None (unverified)."""
+    dm = m.get("demag")
+    if not dm:
+        return None, "unknown (the model has no demagnetisation limit)"
+    i_ref, t_ref = float(dm["I_limit_A"]), float(dm["ref_magnet_C"])
+    if t_magnet_c <= t_ref:
+        return i_ref, f"passport demagnetisation probe at {t_ref:g} C (held below it)"
+    mg = dm.get("magnet")
+    if not mg:
+        return None, f"reference temperature only ({t_ref:g} C), no magnet card to scale it"
+    pc = float(dm.get("permeance_coeff") or 2.0)
+
+    def margin(t: float) -> float:
+        dt = t - float(mg["T_ref_C"])
+        hcj = float(mg["Hcj_ref_A_m"]) * (1.0 + float(mg["beta_hcj_pct_per_K"]) / 100.0 * dt)
+        br = float(mg["Br_ref_T"]) * (1.0 + float(mg["alpha_br_pct_per_K"]) / 100.0 * dt)
+        return float(mg.get("knee_fraction") or 0.97) * hcj - br / (MU0 * (float(mg["mu_rec"]) + pc))
+    m_ref = margin(t_ref)
+    if m_ref <= 0:
+        return None, "reference temperature only: the card's knee margin is not positive at the probe temperature"
+    return (i_ref * max(0.0, margin(t_magnet_c)) / m_ref,
+            f"reference temperature only: probe at {t_ref:g} C scaled by the knee margin of {mg.get('name')} "
+            f"(Pc {pc:g})")
+
+
+# ---------------------------------------------------------------------------
+# Voltage at the minimum pack voltage and the operating magnet temperature
+# ---------------------------------------------------------------------------
+
+def _bilinear(xs: Sequence[float], ys: Sequence[float], tabs: Sequence[Sequence[Sequence[Optional[float]]]],
+              x: float, y: float) -> Optional[List[float]]:
+    """Bilinear values of every table in ``tabs`` at (x, y); None outside / at a null cell."""
+    if not (xs[0] - 1e-9 <= x <= xs[-1] + 1e-9 and ys[0] - 1e-9 <= y <= ys[-1] + 1e-9):
+        return None
+    i0, i1 = _bracket(xs, min(max(x, xs[0]), xs[-1]))
+    j0, j1 = _bracket(ys, min(max(y, ys[0]), ys[-1]))
+    wx = (x - xs[i0]) / (xs[i1] - xs[i0]) if xs[i1] > xs[i0] else 0.0
+    wy = (y - ys[j0]) / (ys[j1] - ys[j0]) if ys[j1] > ys[j0] else 0.0
+    wx, wy = min(max(wx, 0.0), 1.0), min(max(wy, 0.0), 1.0)
+    out = []
+    for tab in tabs:
+        a, b, c, d = tab[i0][j0], tab[i0][j1], tab[i1][j0], tab[i1][j1]
+        if a is None or b is None or c is None or d is None:
+            return None
+        out.append(a * (1 - wx) * (1 - wy) + b * (1 - wx) * wy + c * wx * (1 - wy) + d * wx * wy)
+    return out
+
+
+def dq_state(m: Mapping[str, Any], I: float, gamma_deg: float, t_magnet_c: float) -> Optional[Dict[str, float]]:
+    """psi_d, psi_q, torque of the hot psi-map at (I rms, gamma) with the PM flux
+    moved to ``t_magnet_c`` (psi_d + (k_psi(T)/k_psi(T_map) - 1)·psi_PM; the torque
+    by the same shift, 3/2·p·dpsi·i_q).  None outside the characterised map."""
+    pm = m["psi_map"]
+    v = _bilinear(pm["I_A"], pm["gamma_deg"], (pm["psi_d_Wb"], pm["psi_q_Wb"], pm["T_Nm"]), I, gamma_deg)
+    if v is None:
+        return None
+    pd, pq, tq = v
+    dpsi = (flux_factor(m, t_magnet_c) / flux_factor(m, float(pm["magnet_C"])) - 1.0) * float(pm["psi_pm_Wb"])
+    g = math.radians(gamma_deg)
+    i_d, i_q = -SQ2 * I * math.sin(g), SQ2 * I * math.cos(g)
+    return {"psi_d": pd + dpsi, "psi_q": pq, "i_d": i_d, "i_q": i_q,
+            "T": tq + 1.5 * float(pm["pole_pairs"]) * dpsi * i_q}
+
+
+def phase_voltage(m: Mapping[str, Any], rpm: float, I: float, gamma_deg: float, t_magnet_c: float,
+                  r_phase: float) -> Optional[float]:
+    """Phase-voltage PEAK |R·i + j·w·psi| (the passport's rule) [V]; None off the map."""
+    s = dq_state(m, I, gamma_deg, t_magnet_c)
+    if s is None:
+        return None
+    w = 2.0 * math.pi * rpm / 60.0 * float(m["psi_map"]["pole_pairs"])
+    return math.hypot(r_phase * s["i_d"] - w * s["psi_q"], r_phase * s["i_q"] + w * s["psi_d"])
+
+
+def _mtpa_gamma(m: Mapping[str, Any], I: float) -> float:
+    """The operating line below the voltage limit: the loss grid's angles at its
+    lowest speed (MTPA or the fixed operating angle), linear in I, 0 at I = 0."""
+    ga = (m["grid"].get("gamma_deg") or [None])[0]
+    pts = [(c, g) for c, g in zip(m["grid"]["I_A"], ga or []) if g is not None]
+    if not pts:
+        return 0.0
+    if I >= pts[-1][0]:
+        return float(pts[-1][1])
+    xs, ys = [0.0] + [p[0] for p in pts], [0.0] + [p[1] for p in pts]
+    lo, hi = _bracket(xs, I)
+    return ys[lo] + (ys[hi] - ys[lo]) * (I - xs[lo]) / (xs[hi] - xs[lo])
+
+
+def operating_angle(m: Mapping[str, Any], rpm: float, I: float, v_limit: float, t_magnet_c: float,
+                    r_phase: float) -> Optional[float]:
+    """The passport's operating-angle rule at another voltage / magnet temperature:
+    the operating line when its voltage fits, else the smallest angle up to the
+    characterised field weakening (``gamma_max_deg``) that fits; None beyond it."""
+    g0 = _mtpa_gamma(m, I)
+    gmax = float(m["psi_map"]["gamma_max_deg"])
+    fits = lambda g: (lambda v: v is not None and v <= v_limit)(          # noqa: E731
+        phase_voltage(m, rpm, I, g, t_magnet_c, r_phase))
+    if fits(g0):
+        return g0
+    if not fits(gmax):
+        return None
+    lo, hi = g0, gmax
+    while hi - lo > 0.02:
+        mid = 0.5 * (lo + hi)
+        if fits(mid):
+            hi = mid
+        else:
+            lo = mid
+    return hi
+
+
+def voltage_check(m: Mapping[str, Any], drive: Mapping[str, Any], rpm: float, I: float,
+                  t_magnet_c: float, t_winding_c: float, v_dc: Optional[float],
+                  i_hint: Optional[float] = None) -> Dict[str, Any]:
+    """Re-check the voltage of the grid's operating point at ``v_dc`` (the minimum
+    pack voltage) with the magnets at ``t_magnet_c`` and the winding at ``t_winding_c``.
+
+    ``status``: ``ok`` (the grid's angle fits), ``deeper_fw`` (only a deeper field-
+    weakening angle fits; ``I_A`` is then the smallest current that still makes the
+    point's torque there - more than the grid's), ``infeasible`` (no current up to
+    the cap makes it) or ``unverified`` (no psi-map / pack voltage / modulation
+    limit, or the point lies off the characterised map)."""
+    vm = m.get("voltage") or {}
+    mod = _num(drive.get("m_max")) or _num(vm.get("m"))
+    v_grid = _num(vm.get("v_dc_grid"))
+    if not m.get("psi_map") or v_dc is None or not mod or not v_grid:
+        return {"status": "unverified", "I_A": I}
+    r = resistance(m, t_winding_c)
+    v_lim = mod * float(v_dc) / SQ3
+    # the grid's operating angle: the passport's rule at its own bus and temperatures
+    g_ref = operating_angle(m, rpm, I, mod * v_grid / SQ3, float(m["magnet_ref_temp_C"]), float(m["R_phase_ohm"]))
+    if g_ref is None:
+        g_ref = _mtpa_gamma(m, I)
+    ref = dq_state(m, I, g_ref, t_magnet_c)
+    v0 = phase_voltage(m, rpm, I, g_ref, t_magnet_c, r)
+    base = {"v_dc": float(v_dc), "V_limit_V": v_lim, "modulation": mod}
+    if ref is None or v0 is None:
+        return {"status": "unverified", "I_A": I, **base}
+    if v0 <= v_lim:
+        return {"status": "ok", "I_A": I, "gamma_deg": g_ref, "V_V": v0, **base}
+    target = ref["T"]
+    cap = min(current_cap(m), float(m["psi_map"]["I_A"][-1]))
+
+    def ok(i: float) -> Optional[float]:
+        g = operating_angle(m, rpm, i, v_lim, t_magnet_c, r)
+        if g is None:
+            return None
+        s = dq_state(m, i, g, t_magnet_c)
+        return g if (s is not None and s["T"] >= target) else None
+    prev, hit = I, None
+    if i_hint is not None and I < i_hint <= cap:
+        # warm start (the fixed point's previous answer): the edge is usually close by
+        if ok(i_hint) is not None:
+            hit = i_hint
+            near = max(I, i_hint - 0.3)
+            if near > I and ok(near) is None:
+                prev = near
+            prev = i_hint
+    if hit is None:
+        start = prev
+        for k in range(1, 25):
+            i = start + (cap - start) * k / 24.0
+            if ok(i) is not None:
+                hit = i
+                break
+            prev = i
+    if hit is None:
+        return {"status": "infeasible", "I_A": None, "gamma_deg": None, "V_V": v0, **base}
+    lo, hi = prev, hit
+    while hi - lo > 0.01:
+        mid = 0.5 * (lo + hi)
+        if ok(mid) is not None:
+            hi = mid
+        else:
+            lo = mid
+    return {"status": "deeper_fw", "I_A": hi, "gamma_deg": ok(hi), "V_V": v_lim, "I_grid_A": I, **base}
 
 
 # ---------------------------------------------------------------------------
@@ -482,22 +894,32 @@ def calibration_of(m: Mapping[str, Any]) -> Dict[str, float]:
     return out
 
 
-#: A calibrated network is taken as calibrated within this fraction outside the
-#: slipstream speeds its FEM anchors ran at (the Ø40 L12 validation anchor sat
-#: 17 % above its highest fitted speed and landed within 1.5 K).
-CALIBRATION_RANGE_MARGIN = 0.2
+def thermal_domain(m: Mapping[str, Any], air_speed_ms: Optional[float]) -> Optional[str]:
+    """Where ``air_speed_ms`` lies against the calibration's anchors: ``fit`` (inside
+    the slipstream speeds the network was fitted at), ``validated`` (outside them
+    but inside the span the held-out check anchors extend it to), ``extrapolated``
+    (outside both); None when the model is uncalibrated or states no range.  No
+    margin: a point beyond the last anchor is an extrapolation."""
+    cal = m.get("thermal_calibration") or {}
+    fit = (cal.get("fit_domain") or {}).get("air_speed_ms") or cal.get("anchor_air_speed_ms")
+    v = _num(air_speed_ms)
+    if not fit or v is None:
+        return None
+    lo, hi = float(fit[0]), float(fit[1])
+    if lo - 1e-9 <= v <= hi + 1e-9:
+        return "fit"
+    val = (cal.get("validation_domain") or {}).get("air_speed_ms")
+    if val and min(lo, float(val[0])) - 1e-9 <= v <= max(hi, float(val[1])) + 1e-9:
+        return "validated"
+    return "extrapolated"
 
 
 def calibration_covers(m: Mapping[str, Any], air_speed_ms: Optional[float]) -> Optional[bool]:
-    """Whether ``air_speed_ms`` lies inside the calibration's anchor slipstream range
-    (``thermal_calibration.anchor_air_speed_ms`` ± ``CALIBRATION_RANGE_MARGIN``);
-    None when the model is uncalibrated or its calibration states no range."""
-    rng = (m.get("thermal_calibration") or {}).get("anchor_air_speed_ms")
-    v = _num(air_speed_ms)
-    if not rng or v is None:
-        return None
-    lo, hi = float(rng[0]), float(rng[1])
-    return (1.0 - CALIBRATION_RANGE_MARGIN) * lo <= v <= (1.0 + CALIBRATION_RANGE_MARGIN) * hi
+    """Whether ``air_speed_ms`` lies inside the calibration's fitted or validated
+    slipstream range (``thermal_domain``); None when the model is uncalibrated or
+    its calibration states no range."""
+    d = thermal_domain(m, air_speed_ms)
+    return None if d is None else d != "extrapolated"
 
 
 def temperatures(geom: Mapping[str, float], p_cu: float, p_rotor: float, p_total: float,
@@ -567,17 +989,75 @@ def limits_of(m: Mapping[str, Any], winding_limit_c: Optional[float] = None,
     mg = _num(magnet_limit_c) or _num(lim.get("magnet_C"))
     if mg is None:
         raise S1Error("model: no magnet temperature limit (limits.magnet_C)")
+    dm = m.get("demag") or {}
     return {"winding_C": w, "winding_basis": w_basis,
             "magnet_C": mg, "magnet_basis": str(lim.get("magnet_basis") or "magnet card"),
             "I_max_A": current_cap(m), "I_max_basis": str(lim.get("I_max_basis") or "top of the passport current grid"),
-            "rpm_max": speed_cap(m), "rpm_max_basis": str(lim.get("rpm_max_basis") or "top of the passport speed grid")}
+            "rpm_max": speed_cap(m), "rpm_max_basis": str(lim.get("rpm_max_basis") or "top of the passport speed grid"),
+            "demag_ref_A": _num(dm.get("I_limit_A")), "demag_ref_magnet_C": _num(dm.get("ref_magnet_C"))}
+
+
+def _fixed_point(m: Mapping[str, Any], rpm: float, q_em: float, h: float, ambient_c: float,
+                 cal: Mapping[str, float], drive: Mapping[str, Any], pack: Mapping[str, Any],
+                 damping0: float, max_it: int) -> Dict[str, Any]:
+    """Iterate current -> voltage re-check -> losses -> temperatures to the fixed point.
+
+    ``state``: ``converged``, ``no_current`` (``status`` says why: current cap,
+    voltage at the grid's bus, voltage at the minimum pack voltage), ``loss_data``
+    (a required loss group has no value here), ``runaway`` (the iterate left any
+    physical temperature: no steady state) or ``nonconverged`` (the iteration did
+    not settle within ``max_it`` - NOT a proof that no steady state exists)."""
+    t_w = t_m = float(ambient_c)
+    damping, last_res = damping0, float("inf")
+    vc: Optional[Dict[str, Any]] = None
+    I = I_t = None
+    for it in range(1, max_it + 1):
+        I_t, status = current_for_torque(m, rpm, q_em, t_m)
+        if I_t is None:
+            return {"state": "no_current", "status": status, "t_w": t_w, "t_m": t_m, "it": it, "voltage": vc}
+        hint = vc["I_A"] if (vc and vc.get("status") == "deeper_fw") else None
+        vc = voltage_check(m, drive, rpm, I_t, t_m, t_w, pack.get("v_min"), hint)
+        if vc["status"] == "infeasible":
+            return {"state": "no_current", "status": "voltage", "t_w": t_w, "t_m": t_m, "it": it, "voltage": vc}
+        I = max(I_t, float(vc["I_A"]))
+        if I > current_cap(m) + 1e-9:
+            return {"state": "no_current", "status": "current", "t_w": t_w, "t_m": t_m, "it": it, "voltage": vc}
+        ls = losses(m, rpm, I, t_w, drive)
+        if ls["unavailable"]:
+            return {"state": "loss_data", "groups": ls["unavailable"], "I": I, "it": it, "voltage": vc}
+        th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
+                          ls["motor_total"], h, ambient_c, cal)
+        res = max(abs(th["winding"] - t_w), abs(th["magnet"] - t_m))
+        if res > last_res * 0.999 and it > 3:
+            damping = max(0.05, damping * 0.5)
+        last_res = res
+        t_w += damping * (th["winding"] - t_w)
+        t_m += damping * (th["magnet"] - t_m)
+        if t_w > RUNAWAY_C or t_m > RUNAWAY_C:
+            return {"state": "runaway", "I": I, "it": it, "voltage": vc}
+        if res < FIXED_POINT_TOL_K:
+            return {"state": "converged", "I": I, "I_grid": I_t, "t_w": t_w, "t_m": t_m, "it": it, "voltage": vc}
+    return {"state": "nonconverged", "I": I, "I_grid": I_t, "t_w": t_w, "t_m": t_m, "it": max_it,
+            "residual_K": last_res, "voltage": vc}
+
+
+def _exceed(value: float, limit: float, span: float) -> float:
+    return (value - limit) / max(span, 1e-9)
 
 
 def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient_c: float,
                 rho: float, lims: Mapping[str, Any], position: Optional[str] = None,
-                factor: Optional[float] = None) -> Dict[str, Any]:
+                factor: Optional[float] = None, drive: Any = None,
+                pack: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
     """Everything at one propeller speed: load, current, losses, air, temperatures,
-    margins and what (if anything) stops it."""
+    margins and what (if anything) stops it.  ``drive`` = a ``resolve_drive`` dict
+    or id (default sine), ``pack`` = a ``resolve_pack`` dict (default the passport's).
+
+    ``violations`` lists every limit the converged point breaks, worst first
+    (temperatures by their share of the limit's rise over ambient, currents by
+    their share of the limit); ``binding`` is the first of them."""
+    drv = drive if isinstance(drive, Mapping) else resolve_drive(m, drive)
+    pk = pack if pack is not None else resolve_pack(m)
     op = pp.operating_point(prop, rpm, rho, position=position, factor=factor)
     w = 2.0 * math.pi * rpm / 60.0
     p_mech = _mech_W(m, rpm)
@@ -588,12 +1068,16 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         "rpm": float(rpm), "thrust_N": op["thrust_N"], "torque_prop_Nm": op["torque_Nm"],
         "torque_em_Nm": q_em, "shaft_power_W": op["shaft_power_W"],
         "air_speed_ms": op["air_speed_ms"], "h_W_m2K": h,
+        "slipstream_factor": op.get("slipstream_factor"), "slipstream_position": op.get("slipstream_position"),
         "extrapolated": bool(op["extrapolated"]), "power_estimated": bool(op["power_estimated"]),
         "current_A": None, "losses_W": None, "T_winding_C": None, "T_magnet_C": None,
         "T_housing_C": None, "margin_winding_K": None, "margin_magnet_K": None,
         "electrical_power_W": None, "battery_power_W": None, "controller_loss_W": None,
-        "converged": None, "iterations": 0, "below_loss_grid": False, "fw_floor": False, "ok": False,
-        "binding": None,
+        "battery_current_A": None, "controller_limit_A": drv.get("I_cont_A"),
+        "demag_limit_A": None, "demag_basis": None, "voltage": None, "current_grid_A": None,
+        "converged": None, "iterations": 0, "below_loss_grid": False, "below_loss_grid_speed": False,
+        "below_loss_grid_current": False, "losses_unavailable": [], "drive_losses_unavailable": [],
+        "fw_floor": False, "ok": False, "binding": None, "violations": [],
     }
     if rpm > lims["rpm_max"] + 1e-6:
         row["binding"] = "speed"
@@ -601,60 +1085,66 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
     cal = calibration_of(m)
     # above the no-load voltage limit the drive carries d-axis current at any load
     row["fw_floor"] = floor_current(m, rpm) > 0.0
-    t_w = t_m = float(ambient_c)
-    damping, last_res = 1.0, float("inf")
-    I = None
-    for it in range(1, FIXED_POINT_MAX_IT + 1):
-        I, status = current_for_torque(m, rpm, q_em, t_m)
-
-        if I is None:
-            # the torque is out of reach (at the current cap or the voltage limit).  When the
-            # iterate is already past a temperature limit the motor overheats on the way there
-            # (the hot magnets lost the flux): that limit binds, not the current
-            ow, om = t_w - lims["winding_C"], t_m - lims["magnet_C"]
-            row["binding"] = status if max(ow, om) <= 0 else ("winding" if ow >= om else "magnet")
-            row["iterations"] = it
-            return row
-        ls = losses(m, rpm, I, t_w)
-        p_rotor = ls["fe_rotor"] + ls["rotor_eddy"]
-        th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], p_rotor, ls["motor_total"], h,
-                          ambient_c, cal)
-        res = max(abs(th["winding"] - t_w), abs(th["magnet"] - t_m))
-        if res > last_res * 0.999 and it > 3:
-            damping = max(0.1, damping * 0.5)
-        last_res = res
-        t_w += damping * (th["winding"] - t_w)
-        t_m += damping * (th["magnet"] - t_m)
-        row["iterations"] = it
-        if t_w > RUNAWAY_C or t_m > RUNAWAY_C:
-            # no steady state: the temperatures are not printed (they are not a state of the motor)
-            row.update(binding="runaway", converged=False, current_A=I)
-            return row
-        if res < FIXED_POINT_TOL_K:
-            row["converged"] = True
-            break
-    else:
-        row["converged"] = False
-    ls = losses(m, rpm, I, t_w)
+    fp = _fixed_point(m, rpm, q_em, h, ambient_c, cal, drv, pk, 1.0, FIXED_POINT_MAX_IT)
+    if fp["state"] == "nonconverged":
+        # one more, heavily damped, before calling it: a slow orbit is not a runaway
+        fp2 = _fixed_point(m, rpm, q_em, h, ambient_c, cal, drv, pk, 0.2, 3 * FIXED_POINT_MAX_IT)
+        fp = fp2 if fp2["state"] != "nonconverged" else fp
+    row["iterations"] = fp["it"]
+    row["voltage"] = fp.get("voltage")
+    if fp["state"] == "no_current":
+        # the torque is out of reach (at the current cap or the voltage limit).  When the
+        # iterate is already past a temperature limit the motor overheats on the way there
+        # (the hot magnets lost the flux): that limit binds, not the current
+        ow, om = fp["t_w"] - lims["winding_C"], fp["t_m"] - lims["magnet_C"]
+        row["binding"] = fp["status"] if max(ow, om) <= 0 else ("winding" if ow >= om else "magnet")
+        row["violations"] = [row["binding"]]
+        return row
+    if fp["state"] == "loss_data":
+        row.update(binding="loss_data", violations=["loss_data"], losses_unavailable=fp["groups"],
+                   current_A=fp["I"])
+        return row
+    if fp["state"] in ("runaway", "nonconverged"):
+        # no steady state found: the temperatures are not printed (they are not a state of the motor)
+        row.update(binding=fp["state"], violations=[fp["state"]], converged=False, current_A=fp["I"])
+        return row
+    I, t_w = fp["I"], fp["t_w"]
+    ls = losses(m, rpm, I, t_w, drv)
     th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
                       ls["motor_total"], h, ambient_c, cal)
     p_in = op["shaft_power_W"] + ls["motor_total"]
-    pc = controller_loss(m, rpm, I)
-    row.update(current_A=I, T_winding_C=th["winding"], T_magnet_C=th["magnet"], T_housing_C=th["housing"],
+    pc = (controller_loss(m, rpm, I, drv if drv.get("kind") == "pwm" else None)
+          if (drv.get("kind") == "pwm" or m.get("controller")) else None)
+    p_batt = (p_in + pc) if pc is not None else None
+    i_batt = ((p_batt if p_batt is not None else p_in) / pk["v_min"]) if pk.get("v_min") else None
+    i_dm, dm_basis = demag_limit_at(m, th["magnet"])
+    row.update(converged=True, current_A=I, current_grid_A=fp["I_grid"],
+               T_winding_C=th["winding"], T_magnet_C=th["magnet"], T_housing_C=th["housing"],
                losses_W={k: ls[k] for k in ("cu_dc", "cu_ac", "fe_stator", "fe_rotor", "rotor_eddy",
                                              "pwm_extra", "mech", "motor_total")},
                R_phase_ohm=ls["R_phase_ohm"], below_loss_grid=bool(ls["below_loss_grid"]),
-               electrical_power_W=p_in, controller_loss_W=pc,
-               battery_power_W=(p_in + pc) if pc is not None else None,
+               below_loss_grid_speed=bool(ls["below_loss_grid_speed"]),
+               below_loss_grid_current=bool(ls["below_loss_grid_current"]),
+               drive_losses_unavailable=list(ls["drive_unavailable"]),
+               electrical_power_W=p_in, controller_loss_W=pc, battery_power_W=p_batt,
+               battery_current_A=i_batt, demag_limit_A=i_dm, demag_basis=dm_basis,
                margin_winding_K=lims["winding_C"] - th["winding"],
                margin_magnet_K=lims["magnet_C"] - th["magnet"])
-    if not row["converged"] or th["winding"] > RUNAWAY_C or th["magnet"] > RUNAWAY_C:
-        row.update(binding="runaway", T_winding_C=None, T_magnet_C=None, T_housing_C=None,
-                   margin_winding_K=None, margin_magnet_K=None)
-        return row
-    mw, mm_ = row["margin_winding_K"], row["margin_magnet_K"]
-    if mw < 0 or mm_ < 0:
-        row["binding"] = "winding" if mw <= mm_ else "magnet"
+    viol: List[Tuple[str, float]] = []
+    if th["winding"] > lims["winding_C"]:
+        viol.append(("winding", _exceed(th["winding"], lims["winding_C"], lims["winding_C"] - ambient_c)))
+    if th["magnet"] > lims["magnet_C"]:
+        viol.append(("magnet", _exceed(th["magnet"], lims["magnet_C"], lims["magnet_C"] - ambient_c)))
+    if i_dm is not None and I > i_dm + 1e-9:
+        viol.append(("demag", _exceed(I, i_dm, i_dm) if i_dm > 0 else float("inf")))
+    if drv.get("I_cont_A") is not None and I > float(drv["I_cont_A"]) + 1e-9:
+        viol.append(("controller", _exceed(I, float(drv["I_cont_A"]), float(drv["I_cont_A"]))))
+    if pk.get("i_max_A") is not None and i_batt is not None and i_batt > float(pk["i_max_A"]) + 1e-9:
+        viol.append(("battery_current", _exceed(i_batt, float(pk["i_max_A"]), float(pk["i_max_A"]))))
+    viol.sort(key=lambda kv: -kv[1])
+    row["violations"] = [k for k, _ in viol]
+    if viol:
+        row["binding"] = viol[0][0]
     else:
         row["ok"] = True
     return row
@@ -683,16 +1173,121 @@ def _bands(rows: Sequence[Mapping[str, Any]]) -> List[Tuple[float, float]]:
 
 def _bisect_edge(f: Callable[[float], Dict[str, Any]], lo: float, hi: float, tol_rpm: float
                  ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """``(last ok row, first failing row)`` between an ok ``lo`` and a failing ``hi``."""
+    """``(row at lo side, row at hi side)`` of the ok / not-ok edge between ``lo``
+    and ``hi`` (either side may be the passing one), bisected to ``tol_rpm``."""
     r_lo, r_hi = f(lo), f(hi)
+    want = r_lo["ok"]
     while hi - lo > tol_rpm:
         mid = 0.5 * (lo + hi)
         r = f(mid)
-        if r["ok"]:
+        if r["ok"] == want:
             lo, r_lo = mid, r
         else:
             hi, r_hi = mid, r
     return r_lo, r_hi
+
+
+def _breakpoints(m: Mapping[str, Any], drive: Mapping[str, Any], prop: pp.Propeller,
+                 lo: float, hi: float) -> List[float]:
+    """Speeds where the model's answer can jump (a loss-grid / drive-grid speed row,
+    where the field-weakening floor and the feasible cells change; the ends of the
+    propeller's tested range): scanned on both sides, so a narrow band between two
+    coarse samples is not missed."""
+    xs = list(m["grid"]["rpm"]) + list(drive.get("rpm") or [])
+    if prop.rpm_range:
+        xs += [float(prop.rpm_range[0]), float(prop.rpm_range[1])]
+    out = []
+    for x in xs:
+        for d in (-0.5, 0.5):
+            if lo < x + d < hi:
+                out.append(x + d)
+    return out
+
+
+def _flags(m: Mapping[str, Any], drv: Mapping[str, Any], pk: Mapping[str, Any],
+           row: Mapping[str, Any]) -> Tuple[List[str], Dict[str, Any]]:
+    """``(flags, qualification)`` of one answered speed: what the number rests on,
+    what it omits and which limits could not be checked (never a silent pass)."""
+    cal = m.get("thermal_calibration")
+    td = thermal_domain(m, row.get("air_speed_ms")) if cal else None
+    base_pwm = m["grid"]["loss_W"].get("pwm_extra") is not None
+    if drv.get("kind") == "sine":
+        pwm = "included (passport drive variant)" if base_pwm else "zero (sine drive)"
+    elif base_pwm:
+        pwm = "included (passport drive variant)"
+    elif drv.get("pwm_extra_W") is None:
+        pwm = "omitted"
+    elif "pwm_extra" in (row.get("drive_losses_unavailable") or []):
+        pwm = "unavailable at this point"
+    else:
+        pwm = "included"
+    mech = "included" if m.get("mech_W") else "omitted"
+    ctrl = "included" if row.get("controller_loss_W") is not None else "omitted"
+    v = (row.get("voltage") or {}).get("status") or "unverified"
+    fits = pack_fits_drive(drv, pk)
+    dm_basis = str(row.get("demag_basis") or "")
+    demag = ("unknown" if row.get("demag_limit_A") is None
+             else "reference temperature only" if dm_basis.startswith("reference temperature only")
+             else "at temperature")
+    checks = {"controller": "checked" if drv.get("I_cont_A") is not None else "unknown",
+              "voltage_min_pack": "checked" if v in ("ok", "deeper_fw") else "unverified",
+              "pack_bus_range": {True: "checked", False: "failed", None: "unknown"}[fits],
+              "battery_current": "checked" if pk.get("i_max_A") is not None else "unknown",
+              "demag": demag}
+    if fits is False:
+        feas = "failed"
+    elif "unknown" in (checks["controller"], checks["pack_bus_range"]) or checks["voltage_min_pack"] != "checked":
+        feas = "unknown"
+    else:
+        feas = "checked"
+    q = {"thermal": "calibrated" if cal else "uncalibrated", "thermal_domain": td,
+         "slipstream": {"factor": row.get("slipstream_factor"), "position": row.get("slipstream_position"),
+                        "calibrated": False,
+                        "basis": (cal or {}).get("slipstream_factor_basis") or "assumed (propeller.py)"},
+         "propeller": {"extrapolated": bool(row.get("extrapolated")),
+                       "power_estimated": bool(row.get("power_estimated"))},
+         "losses": {"pwm_extra": pwm, "mech": mech, "controller": ctrl},
+         "loss_grid_extrapolated": {"speed": bool(row.get("below_loss_grid_speed")),
+                                    "current": bool(row.get("below_loss_grid_current"))},
+         "checks": checks, "drive_feasibility": feas,
+         "unverified": [k for k, s in checks.items() if s in ("unknown", "unverified")]}
+    f: List[str] = []
+    if not cal:
+        f.append("thermal_uncalibrated")
+    elif td == "extrapolated":
+        f.append("thermal_extrapolated")
+    f.append("slipstream_uncalibrated")
+    if row.get("extrapolated"):
+        f.append("prop_extrapolated")
+    if row.get("power_estimated"):
+        f.append("prop_power_estimated")
+    if row.get("below_loss_grid_speed"):
+        f.append("below_loss_grid_speed")
+    if row.get("below_loss_grid_current"):
+        f.append("below_loss_grid_current")
+    if row.get("fw_floor"):
+        f.append("fw_floor")
+    if pwm == "omitted":
+        f.append("pwm_omitted")
+    elif pwm == "unavailable at this point":
+        f.append("pwm_unavailable")
+    if mech == "omitted":
+        f.append("mech_omitted")
+    if v == "deeper_fw":
+        f.append("voltage_deeper_fw")
+    elif v != "ok":
+        f.append("voltage_unverified")
+    if demag == "reference temperature only":
+        f.append("demag_reference_only")
+    elif demag == "unknown":
+        f.append("demag_unknown")
+    if feas == "failed":
+        f.append("drive_failed")
+    elif checks["controller"] == "unknown":
+        f.append("drive_unknown")
+    if checks["battery_current"] == "unknown":
+        f.append("battery_current_unknown")
+    return f, q
 
 
 def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25.0,
@@ -700,69 +1295,136 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
               factor: Optional[float] = None, n_points: int = 41,
               rpm_min: Optional[float] = None, rpm_max: Optional[float] = None,
               winding_limit_c: Optional[float] = None, magnet_limit_c: Optional[float] = None,
-              tol_rpm: float = 1.0) -> Dict[str, Any]:
-    """Rows over speed and the continuous limit with propeller ``prop``.
+              tol_rpm: float = 1.0, drive: Optional[str] = None, board_cooling: Optional[str] = None,
+              pack_v_min: Optional[float] = None, pack_v_max: Optional[float] = None,
+              pack_i_max_A: Optional[float] = None) -> Dict[str, Any]:
+    """Rows over speed and the continuous limit with propeller ``prop``, driven by
+    ``drive`` (``sine`` or a PWM variant id; the board at ``board_cooling``) from the
+    pack (``pack_*``; default the passport's battery).
 
     The scan runs from ``rpm_min`` (default 10 % of the top) to ``rpm_max``
     (default: the motor's speed cap — the top of its characterised grid / voltage
-    limit — but not more than 1.5 x the propeller's highest tested rpm).  The limit
-    is the upper edge of the highest band of speeds that pass, bisected to
-    ``tol_rpm``.  ``monotone`` is False when a failing speed lies below a passing
-    one (all bands are listed then)."""
+    limit — but not more than 1.5 x the propeller's highest tested rpm), plus both
+    sides of every speed where the model can jump (``_breakpoints``) and every edge
+    between a passing and a failing speed (bisected to ``tol_rpm``).  The limit is
+    the upper edge of the highest passing band.  ``monotone`` is False when a
+    failing speed lies below a passing one (all bands are listed then).  When the
+    scan ends still passing, the limit is a LOWER bound (``lower_bound``,
+    ``range_end`` says why the scan stopped)."""
     if not prop.selectable:
         raise S1Error(f"{prop.id} has no usable thrust/power data")
+    drv = resolve_drive(m, drive, board_cooling)
+    pk = resolve_pack(m, pack_v_min, pack_v_max, pack_i_max_A)
     lims = limits_of(m, winding_limit_c, magnet_limit_c)
     rho = pp.air_density(temp_c=ambient_c, altitude_m=altitude_m)
-    hi = float(rpm_max) if rpm_max else min(lims["rpm_max"], 1.5 * prop.rpm_range[1])
+    prop_end = 1.5 * prop.rpm_range[1]
+    hi = float(rpm_max) if rpm_max else min(lims["rpm_max"], prop_end)
     lo = float(rpm_min) if rpm_min else 0.1 * hi
     if not (0 < lo < hi):
         raise S1Error("rpm range must satisfy 0 < rpm_min < rpm_max")
     n = max(5, min(int(n_points), 201))
-    f = lambda r: solve_point(m, prop, r, ambient_c=ambient_c, rho=rho, lims=lims,  # noqa: E731
-                              position=position, factor=factor)
+    cache: Dict[float, Dict[str, Any]] = {}
+
+    def f(r: float) -> Dict[str, Any]:
+        k = round(float(r), 6)
+        if k not in cache:
+            cache[k] = solve_point(m, prop, r, ambient_c=ambient_c, rho=rho, lims=lims,
+                                   position=position, factor=factor, drive=drv, pack=pk)
+        return cache[k]
     rows = [f(lo + (hi - lo) * i / (n - 1)) for i in range(n)]
-    bands = _bands(rows)
-    first_fail = next((i for i, r in enumerate(rows) if not r["ok"]), None)
-    monotone = first_fail is None or not any(r["ok"] for r in rows[first_fail:])
+    for x in _breakpoints(m, drv, prop, lo, hi):
+        f(x)
+    # refine: every ok / not-ok edge bisected; between two failing samples that fail for
+    # different reasons (a voltage floor below, a temperature above ...) look inside once
+    for _ in range(2):
+        allr = sorted(cache.values(), key=lambda r: r["rpm"])
+        for a, b in zip(allr, allr[1:]):
+            if b["rpm"] - a["rpm"] <= tol_rpm:
+                continue
+            if a["ok"] != b["ok"]:
+                _bisect_edge(f, a["rpm"], b["rpm"], tol_rpm)
+            elif not a["ok"] and a["binding"] != b["binding"]:
+                for k in (1, 2, 3):
+                    f(a["rpm"] + (b["rpm"] - a["rpm"]) * k / 4.0)
+    allr = sorted(cache.values(), key=lambda r: r["rpm"])
+    bands = _bands(allr)
+    first_fail = next((i for i, r in enumerate(allr) if not r["ok"]), None)
+    monotone = first_fail is None or not any(r["ok"] for r in allr[first_fail:])
     limit: Optional[Dict[str, Any]] = None
     if bands:
-        top_ok = max(i for i, r in enumerate(rows) if r["ok"])
-        if top_ok == n - 1:
-            best, nxt = rows[-1], None
-            binding = "speed_range"            # passes up to the end of the scanned range
+        top_ok = max(i for i, r in enumerate(allr) if r["ok"])
+        best = allr[top_ok]
+        if top_ok == len(allr) - 1:
+            binding, nxt = "speed_range", None             # passes up to the end of the scanned range
         else:
-            best, nxt = _bisect_edge(f, rows[top_ok]["rpm"], rows[top_ok + 1]["rpm"], tol_rpm)
+            nxt = allr[top_ok + 1]
             binding = nxt["binding"]
+        flags, qual = _flags(m, drv, pk, best)
         limit = {"rpm": best["rpm"], "thrust_N": best["thrust_N"], "thrust_g": best["thrust_N"] / pp.G0 * 1000.0,
                  "shaft_power_W": best["shaft_power_W"], "electrical_power_W": best["electrical_power_W"],
-                 "battery_power_W": best["battery_power_W"], "current_A": best["current_A"],
+                 "battery_power_W": best["battery_power_W"], "battery_current_A": best["battery_current_A"],
+                 "current_A": best["current_A"], "current_grid_A": best["current_grid_A"],
                  "T_winding_C": best["T_winding_C"], "T_magnet_C": best["T_magnet_C"],
                  "T_housing_C": best["T_housing_C"], "air_speed_ms": best["air_speed_ms"],
-                 "binding": binding, "extrapolated": best["extrapolated"],
+                 "binding": binding, "violations_above": (nxt or {}).get("violations") or [],
+                 "lower_bound": binding == "speed_range",
+                 "extrapolated": best["extrapolated"],
                  "power_estimated": best["power_estimated"], "below_loss_grid": best["below_loss_grid"],
+                 "below_loss_grid_speed": best["below_loss_grid_speed"],
+                 "below_loss_grid_current": best["below_loss_grid_current"],
                  "fw_floor": bool(best.get("fw_floor")),
-                 "calibration_in_range": calibration_covers(m, best["air_speed_ms"])}
+                 "controller_limit_A": best["controller_limit_A"], "demag_limit_A": best["demag_limit_A"],
+                 "demag_basis": best["demag_basis"], "voltage": best["voltage"],
+                 "cooling": {"slipstream_factor": best["slipstream_factor"],
+                             "slipstream_position": best["slipstream_position"],
+                             "air_speed_ms": best["air_speed_ms"], "h_W_m2K": best["h_W_m2K"]},
+                 "thermal_domain": thermal_domain(m, best["air_speed_ms"]),
+                 "calibration_in_range": calibration_covers(m, best["air_speed_ms"]),
+                 "drive_feasibility": qual["drive_feasibility"],
+                 "flags": flags, "qualification": qual}
         if binding == "speed_range":
-            limit["range_end_basis"] = (lims["rpm_max_basis"] if hi >= lims["rpm_max"] - 1e-6
-                                        else "1.5 x the propeller's highest tested rpm")
+            if rpm_max:
+                limit["range_end"], limit["range_end_basis"] = "requested", "the requested top of the scan"
+            elif hi >= lims["rpm_max"] - 1e-6:
+                limit["range_end"], limit["range_end_basis"] = "motor_speed_grid", lims["rpm_max_basis"]
+            else:
+                limit["range_end"] = "propeller_data"
+                limit["range_end_basis"] = "1.5 x the propeller's highest tested rpm"
     return {
         "propeller_id": prop.id, "propeller": prop.model,
         "die": m.get("die"), "config": m.get("config"),
         "ambient_c": float(ambient_c), "altitude_m": float(altitude_m), "rho_kg_m3": rho,
         "rpm_range_tested": list(prop.rpm_range) if prop.rpm_range else None,
         "power_data": prop.power_data,
-        "limits": lims, "rows": rows, "bands": [list(b) for b in bands], "monotone": monotone,
+        "drive": {"id": drv["id"], "kind": drv["kind"], "device": drv.get("device"),
+                  "technology": drv.get("technology"), "carrier_hz": drv.get("carrier_hz"),
+                  "n_parallel": drv.get("n_parallel"), "board_cooling": drv["board_cooling"],
+                  "I_cont_A": drv.get("I_cont_A"), "I_cont_basis": drv.get("I_cont_basis"),
+                  "bus_v": drv.get("bus_v"), "pack_fits": pack_fits_drive(drv, pk)},
+        "drives_available": [SINE] + sorted(m.get("drives") or {}),
+        "pack": pk,
+        "limits": lims, "rows": rows,
+        "refined": [{"rpm": r["rpm"], "ok": r["ok"], "binding": r["binding"]} for r in allr
+                    if not any(r is x for x in rows)],
+        "bands": [list(b) for b in bands], "monotone": monotone,
+        "nonconverged_rpm": [r["rpm"] for r in allr if r["binding"] == "nonconverged"],
         "limit": limit,
         "no_continuous_point": limit is None,
-        "first_failure": (None if first_fail is None else rows[first_fail]["binding"]),
-        "model": {"source": m.get("source"), "labels": m.get("labels") or [],
+        "first_failure": (None if first_fail is None else allr[first_fail]["binding"]),
+        "model": {"source": m.get("source"), "labels": m.get("labels") or [], "schema": m.get("schema"),
                   "magnet_ref_temp_C": m.get("magnet_ref_temp_C"), "R_temp_C": m.get("R_temp_C"),
                   "flux_temp_coeff_per_K": m.get("flux_temp_coeff_per_K"),
                   "flux_coeff_basis": m.get("flux_coeff_basis"),
-                  "torque_factor": m.get("torque_factor"), "controller": (m.get("controller") or {}).get("variant"),
+                  "torque_factor": m.get("torque_factor"),
+                  "controller": (m.get("controller") or {}).get("variant") or drv["id"],
+                  "loss_groups": m.get("loss_groups"),
                   "thermal_calibration": ({k: v for k, v in m["thermal_calibration"].items() if k != "anchors"}
                                           if m.get("thermal_calibration") else None)},
         "method": "propeller Q(n) + bearing/windage -> current from the passport torque map at the magnet "
-                  "temperature -> passport loss grid with R(T) -> slipstream film (outer_air) -> Configure's "
-                  "lumped thermal estimate, iterated to the fixed point at each speed; limit by bisection",
+                  "temperature -> voltage re-check at the minimum pack voltage (hot psi-map, PM flux at the "
+                  "magnet temperature) -> passport loss grid with R(T) + the drive's PWM extra -> slipstream "
+                  "film (outer_air) -> Configure's lumped thermal estimate (calibrated where anchored), iterated "
+                  "to the fixed point at each speed; the point must also hold the controller's continuous "
+                  "current, the demagnetisation limit at the magnet temperature and (if given) the pack's "
+                  "continuous current; limit by bisection",
     }

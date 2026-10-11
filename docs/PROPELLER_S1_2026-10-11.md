@@ -105,7 +105,8 @@ the network fed each anchor's own FEM losses (`scripts/export_propeller_s1_model
 A_w is what the FEM's own end-turn film implies (L12: 1.34e-3 m² × h_end 145 / h_housing
 45 = 4.3e-3 m²). The slipstream factor stays 0.4: the anchors use the same slipstream model,
 so they cannot constrain it (a measurement can). The L12 anchor at 11 370 rpm (not in the
-fit, 1.34 × the highest fitted speed) lands within −0.4 / +1.5 K.
+fit, 1.166 × the highest fitted speed 9 751 rpm — corrected 2026-10-11, the earlier "1.34 ×" was
+wrong) lands within −0.4 / +1.5 K.
 
 ## S1 after calibration (25 °C air, ISA, behind_hub 0.4)
 | motor / propeller | Stage A | Stage B | binding | I | T_w / T_m |
@@ -237,3 +238,44 @@ carry no range (exported before) and keep the plain flag.
   measurement: thermocouple or anemometer behind the hub).
 - The S1 answer keeps the Si 48 kHz PWM extra loss of the passport drive variant (Ø40:
   4.4–9.2 W, +12…20 K); the anchors are sine-driven.
+
+# Review fixes — a system (motor + controller + battery) rating (2026-10-11)
+
+Independent review: `docs/reviews/REVIEW_PROPELLER_S1_ASTRA_2026-10-11.md` (8 findings). Model schema
+`propeller-s1-model-2`; the three models re-exported with `scripts/export_propeller_s1_model.py` (loss
+grids, torque, floors and calibration constants unchanged; L20 flux slope magnitude +2.9 %).
+
+| # | finding | fix |
+|---|---|---|
+| 1 | controller / battery limits dropped | every computed drive variant exported (`drives`: board continuous current per cooling class, controller-loss and PWM-extra grids on the variant's own grid, ok flags, bus range) + the die's controller block for sine (`sine_controller`) + the passport pack. The route takes `drive` (Configure's selected variant, default `sine`), `board_cooling` (default favourable), `pack_v_min/max`, `pack_i_max_A`. New bindings `controller`, `battery_current`; `drive_feasibility` checked / unknown (motor-only) / failed (pack outside the drive's bus range). |
+| 2 | electrical limits frozen at the reference state | at every iteration the grid's operating point is re-checked on the passport's hot psi-map (exported as a regular (I, γ) table) at the MINIMUM pack voltage, R(T_w) and the PM flux at T_m; if only a deeper field-weakening angle fits, the smallest current that still makes the torque is used (`voltage_deeper_fw`), else `voltage`. Demag limit at T_m: the probe value held below its temperature, scaled above it by the magnet card's knee margin 0.97·HcJ(T) − Br(T)/(μ0(μ_rec + Pc)), Pc = 2 (`demag_basis: reference temperature only`). |
+| 3 | qualifications lost | `limit.flags` + `limit.qualification` (thermal calibrated / domain, slipstream factor + position uncalibrated, propeller extrapolated / estimated, PWM / mech / controller losses included or omitted, loss-grid extrapolation, every drive check) and `limit.cooling`; the Configure S1 tooltip lists them (EN + zh-CN). |
+| 4 | calibration domain | `thermal_calibration.fit_domain` / `validation_domain` (rpm, air speed, propellers, max residual); `thermal_domain` = fit / validated / extrapolated, no ±20 % margin any more. L12 fit 5 935–9 751 rpm, check 11 370 rpm (residual 2.1 K); L20 fit only; L13 fit 1 250–1 800, checks 2 017 / G28 2 290. The 1.34 × above is 1.166 ×. |
+| 5 | lower bound shown as "up to" | `limit.lower_bound` + `range_end` (propeller_data / motor_speed_grid / requested); Configure: "≥ N rpm · limit not reached (end of propeller data)". |
+| 6 | missing losses become 0 | the exporter writes null for a missing required term (`loss_groups` lists grid / lumped / omitted); a null cell refuses the point (`loss_data`); `below_loss_grid_speed` and `_current` flagged separately (L12 at 3.70 A is now flagged). |
+| 7 | nonconvergence = runaway | `nonconverged` (a second, damped attempt first) separate from `runaway`; the scan adds both sides of every loss-/drive-grid speed and the prop's tested-range ends, bisects every pass/fail edge and looks inside failing pairs with different reasons. |
+| 8 | flux slope normalisation | `(ψ_h − ψ_c)/(ψ_h (T_h − T_c))`; both reference endpoints reproduced (test). |
+
+## S1 before → after (25 °C air, ISA, behind_hub 0.4, passport pack, favourable board)
+"Before" = the deployed model (motor only, si_48k PWM extra). "After" = sine drive, then each computed
+PWM variant (same binding unless stated).
+
+| motor + propeller | before | after, sine | after, PWM variants |
+|---|---|---|---|
+| L12 + FPV 10×5 | 11 680 (41.4 A, winding 200 °C) | 9 487 (26.1 A, controller) | si_48k 9 475 · GaN 48 k IGC016K10S2 9 638 / IGC019S06S1 9 648 · GaN 100 k 9 500 / 9 512 — all controller |
+| L20 + P13×4.4 | ≥ 9 092 (end of prop data) | ≥ 9 092 (16.2 A) | si_48k, GaN 48 k, GaN 100 k: ≥ 9 092 |
+| L13 + G28×9.2 | 2 142 (5.9 A, magnet) | 1 804 (6.7 A, magnet, deeper FW at 36 V) | 1 804 (all three) |
+| L13 + G30×10.5 | 1 861 (7.6 A, magnet) | 1 731 (7.8 A, magnet, deeper FW) | 1 731 |
+| L13 + G32×11 | 1 722 (8.0 A, magnet) | 1 686 (8.0 A, magnet, deeper FW) | 1 686 |
+| L13 + G36×11.5 | 1 511 (8.2 A, magnet) | 1 511 (8.2 A, magnet) | 1 511 |
+| L13 + G40×13.1 | 1 204 (8.6 A, magnet) | 1 202 (8.5 A, demag at 149 °C) | 1 202 |
+
+- L12: the controller (26.1 A Si / 27.1 A GaN 48 kHz, favourable board) binds ~2 200 rpm below the old
+  winding limit, well inside the thermal fit domain. Motor-only (no controller) the limit would be
+  11 714 rpm, demag-bound (41.6 A at a 122 °C magnet, scaled from the 53.5 °C probe) and thermally
+  extrapolated (beyond the 11 370 rpm check).
+- L13: above ≈ 1 750 rpm the 36 V minimum pack (hot magnets) needs field weakening the 44.4 V grid did
+  not; the extra d-axis current heats the magnets sooner. The Ø85 variants' motor PWM extra is 0 W
+  (below the FEM's resolution) and their 34–40 A boards do not bind, so PWM = sine.
+- Flags on every answer: slipstream 0.4 uncalibrated; battery continuous current not checked (no rating
+  in the pack); L13 bearings/windage omitted, demag scaled from one probe temperature.

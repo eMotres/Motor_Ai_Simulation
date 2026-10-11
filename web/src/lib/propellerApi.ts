@@ -53,12 +53,16 @@ export async function fetchPropellerThermalPoint(id: string, rpm: number,
 const _s1 = new Map<string, Promise<S1Result | null>>();
 
 /** The continuous (S1) limit of one die/configuration with this propeller (signed-in; the
- *  global fetch adds the token).  Cached per (propeller, die, config, ambient); a failure is not. */
-export function fetchPropellerS1(id: string, die: string, config: string, ambientC: number): Promise<S1Result | null> {
-  const key = `${id}|${die}|${config}|${ambientC.toFixed(1)}`;
+ *  global fetch adds the token), for the selected drive (`sine` or a computed PWM variant id) and
+ *  the pack's voltage window (null = the passport's own pack).  Cached per request; a failure is not. */
+export function fetchPropellerS1(id: string, die: string, config: string, ambientC: number,
+                                 drive = 'sine', pack: { min: number; max: number } | null = null
+): Promise<S1Result | null> {
+  const key = `${id}|${die}|${config}|${ambientC.toFixed(1)}|${drive}|${pack ? `${pack.min.toFixed(2)}-${pack.max.toFixed(2)}` : ''}`;
   const hit = _s1.get(key);
   if (hit) return hit;
-  const q = new URLSearchParams({ die, config, ambient_c: String(ambientC) });
+  const q = new URLSearchParams({ die, config, ambient_c: String(ambientC), drive });
+  if (pack) { q.set('pack_v_min', String(pack.min)); q.set('pack_v_max', String(pack.max)); }
   const p = fetch(`${API}/api/propellers/${encodeURIComponent(id)}/s1?${q}`, { cache: 'no-store' })
     .then((r) => (r.ok ? (r.json() as Promise<S1Result>) : null))
     .catch(() => null)

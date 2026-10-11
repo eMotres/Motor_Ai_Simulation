@@ -1162,14 +1162,20 @@ const ConfiguratorPanel: React.FC = () => {
   // the configuration's PASSPORT build, so it is not shown once the build knobs move off it.
   const s1Die = currentContext?.cooling?.die ?? null;
   const s1Config = baseConfig ?? currentContext?.cooling?.config ?? null;
+  // ... with the drive picked in the Drive block (Sine, or the PWM variant: its controller's continuous
+  // current binds) and the pack the Battery block shows (its minimum voltage binds the voltage)
+  const s1Drive = driveOn && variant ? String(variant.id) : 'sine';
+  const s1PackMin = packWindow?.min ?? null;
+  const s1PackMax = packWindow?.max ?? null;
   const [s1, setS1] = useState<S1Result | null>(null);
   useEffect(() => {
     setS1(null);
     if (!propellerCoolingActive || !propId || !s1Die || !s1Config) return;
     let dead = false;
-    void fetchPropellerS1(propId, s1Die, s1Config, ambient).then((r) => { if (!dead) setS1(r); });
+    const pack = s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null;
+    void fetchPropellerS1(propId, s1Die, s1Config, ambient, s1Drive, pack).then((r) => { if (!dead) setS1(r); });
     return () => { dead = true; };
-  }, [propellerCoolingActive, propId, s1Die, s1Config, ambient]);
+  }, [propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax]);
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
   const s1Text: { text: string; tip: string } | null = (() => {
@@ -1182,12 +1188,21 @@ const ConfiguratorPanel: React.FC = () => {
     const L = s1Info.limit;
     const lim = s1?.limits;
     const n0 = (x: number | null | undefined) => (x == null ? '—' : fmt(x, 0));
+    const vals = { prop, rpm: fmt(s1Info.rpm, 0), thrust: fmt(s1Info.thrust_kgf, 2), power: fmt(s1Info.shaft_W, 0) };
+    const drv = s1?.drive;
     return {
-      text: tx('configurePropeller.s1Line', { prop, rpm: fmt(s1Info.rpm, 0), thrust: fmt(s1Info.thrust_kgf, 2),
-        power: fmt(s1Info.shaft_W, 0), binding: tx(s1Info.bindingKey) }),
+      // a scan that ended still passing is a LOWER bound: "≥ N rpm, limit not reached", never "up to"
+      text: s1Info.lowerBound
+        ? tx('configurePropeller.s1LineLower', { ...vals, reason: tx(s1Info.rangeEndKey ?? 'configurePropeller.s1EndGrid') })
+        : tx('configurePropeller.s1Line', { ...vals, binding: tx(s1Info.bindingKey) }),
       tip: [tx('configurePropeller.s1Tip', { rpm: fmt(s1Info.rpm, 0), tw: n0(L.T_winding_C), tm: n0(L.T_magnet_C),
         th: n0(L.T_housing_C), amps: L.current_A == null ? '—' : fmt(L.current_A, 1), air: fmt(L.air_speed_ms, 1),
         pel: n0(s1Info.electrical_W), wl: n0(lim?.winding_C), ml: n0(lim?.magnet_C), ambient: fmt(ambient, 0) }),
+        ...(L.cooling && drv ? [tx('configurePropeller.s1TipSystem', {
+          factor: L.cooling.slipstream_factor == null ? '—' : fmt(L.cooling.slipstream_factor, 2),
+          position: L.cooling.slipstream_position ?? '—',
+          drive: drv.kind === 'sine' ? tx('configurePropeller.s1DriveSine') : drv.id,
+          ictl: drv.I_cont_A == null ? '—' : fmt(drv.I_cont_A, 1) })] : []),
         ...s1Info.flagKeys.map((k) => tx(k))].join(' '),
     };
   })();

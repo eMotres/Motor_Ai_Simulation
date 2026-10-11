@@ -21,7 +21,7 @@ import re
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Tuple, Literal
+from typing import List, Optional, Dict, Any, Tuple, Literal, Callable
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -3899,7 +3899,9 @@ def _finalize_standard_shortlist(
         best_metrics: Dict[str, Any], coarse_base: Dict[str, Any],
         base_x: Dict[str, float], base_current: float, bump_pct: float,
         evaluate, score, limit: int = 3,
-        bump_current: Optional[float] = None) -> Dict[str, Any]:
+        bump_current: Optional[float] = None,
+        publish: Optional[Callable[[Dict[str, Any]], None]] = None
+        ) -> Dict[str, Any]:
     """Re-solve baseline A/B and top-N preliminary designs at 6x quality.
 
     The shortlist is explicitly a *shortlist*, not a proof of a global 6x
@@ -3974,6 +3976,11 @@ def _finalize_standard_shortlist(
             seen.add(k)
         if len(shortlisted) >= max(1, int(limit)):
             break
+    # Baseline A is a paid final-quality solve: plot it, but only AFTER the
+    # shortlist is drawn from the coarse cloud, so it never competes as a
+    # coarse candidate.
+    if publish is not None:
+        publish(base_a)
 
     # ── B and every finalist, in parallel, after A (fix D) ────────────────
     # Job 0 is baseline B; jobs 1.. are the finalists in shortlist order.  The
@@ -3995,6 +4002,8 @@ def _finalize_standard_shortlist(
     if base_b is None:
         return dict(initial, reason="standard baseline B: " + why,
                     shortlist_count=len(shortlisted))
+    if publish is not None:
+        publish(base_b)
     standard_base = dict(base_a["res"])
     # Preserve the run's objective mode: product-mode legacy runs still solve B
     # for provenance, but must not silently change their objective to a line.
@@ -4541,7 +4550,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             bump_current=I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0),
             evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE),
             score=lambda m, b: _descent_cost(
-                m, b, ripple_max, w_eff, w_td, lam, v_peak_limit))
+                m, b, ripple_max, w_eff, w_td, lam, v_peak_limit),
+            publish=lambda out: _pub_pt(all_pts, out, "final_baseline"))
         result = {"best": {"metrics": _msum(best_seen["metrics"]),
                            "cost": round(best_seen["cost"], 5),
                            "F": round(best_seen["F"], 5),
@@ -4946,7 +4956,8 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             bump_current=I * (1.0 + max(0.0, float(current_bump_pct)) / 100.0),
             evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE),
             score=lambda m, b: _descent_cost(
-                m, b, ripple_max, w_eff, w_td, lam, v_peak_limit))
+                m, b, ripple_max, w_eff, w_td, lam, v_peak_limit),
+            publish=lambda out: _pub_pt(all_pts, out, "final_baseline"))
         result = {
                 "best": {"x": best["x"],
                          "overrides": {k: round(float(v), 4) for k, v in best["x"].items()},
@@ -6797,7 +6808,8 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             points=all_pts, best_x=best["x"], best_metrics=best["metrics"],
             coarse_base=base, base_x=to_geom(x0), base_current=I,
             bump_pct=bump, evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE),
-            score=lambda m, b: _descent_cost(m, b, ripple_max, 1.0, 1.0, 1.0, 1e9))
+            score=lambda m, b: _descent_cost(m, b, ripple_max, 1.0, 1.0, 1.0, 1e9),
+            publish=lambda out: _pub_pt(all_pts, out, "final_baseline"))
         rj = _reject_block()
         result = {
             "best": {"x": best["x"],
@@ -7405,7 +7417,8 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                           base_x=baseline_x, base_current=I, bump_pct=bump,
                           evaluate=lambda d, cur: _eval_at(d, cur, _FINAL_PURPOSE),
                           score=lambda m, b: _descent_cost(
-                              m, b, ripple_max, 1.0, 1.0, 1.0, 1e9)))
+                              m, b, ripple_max, 1.0, 1.0, 1.0, 1e9),
+                          publish=lambda out: _pub_pt(all_pts, out, "final_baseline")))
         rj = _reject_block()
         result = {
             "best": {"x": best["x"],

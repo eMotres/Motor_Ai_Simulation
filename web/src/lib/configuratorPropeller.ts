@@ -140,15 +140,17 @@ export function currentForTorque(need_Nm: number | null, torqueAt: (I: number) =
 }
 
 // ── temperatures against their limits ────────────────────────────────────────────────────
+/** The project's winding insulation class N (200 °C) — mirrors report.PROJECT_INSULATION_C; used only when the API sends no limit. */
+export const PROJECT_WINDING_LIMIT_C = 200;
 export const DEFAULT_MAGNET_LIMIT_C = 150;     // used only when the machine's magnet card names no limit
 
 export interface TempLimits { winding_C: number; magnet_C: number; magnetIsDefault: boolean; windingBasis: string }
 
 /** The context's `thermal_limits`, with the magnet fallback made explicit. */
 export function tempLimits(t: { winding_C?: number | null; magnet_C?: number | null; winding_basis?: string } | null | undefined): TempLimits {
-  const w = t?.winding_C != null && t.winding_C > 0 ? t.winding_C : 180;
+  const w = t?.winding_C != null && t.winding_C > 0 ? t.winding_C : PROJECT_WINDING_LIMIT_C;
   const m = t?.magnet_C != null && t.magnet_C > 0 ? t.magnet_C : DEFAULT_MAGNET_LIMIT_C;
-  return { winding_C: w, magnet_C: m, magnetIsDefault: !(t?.magnet_C != null && t.magnet_C > 0), windingBasis: t?.winding_basis ?? 'class H default' };
+  return { winding_C: w, magnet_C: m, magnetIsDefault: !(t?.magnet_C != null && t.magnet_C > 0), windingBasis: t?.winding_basis ?? 'project insulation class N (200 °C)' };
 }
 
 export interface TempTile {

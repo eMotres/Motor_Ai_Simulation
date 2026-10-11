@@ -137,7 +137,7 @@ export const TEMP_ROW_IDS = ['tWinding', 'tMagnet', 'tHousing', 'airSpeed'] as c
 export interface TempTileSpec {
   id: string; labelKey: string; tipKey: string; unit: string; d: number;
   value: number | null;
-  /** printed instead of the number: "> 180" for a temperature over its limit */
+  /** printed instead of the number: "> 200" for a temperature over its limit */
   display?: string;
   level?: 'ok' | 'warn' | 'bad';
   /** the limit the tile is judged against (for its tooltip) */

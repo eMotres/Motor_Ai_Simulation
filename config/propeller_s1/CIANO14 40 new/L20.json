@@ -321,8 +321,6 @@
   "I_max_basis": "passport demagnetisation current limit at the hot magnet temperature (113.6 C): linear between overload probes 78.8 and 105.1 A",
   "rpm_max": 35966.972621562716,
   "rpm_max_basis": "passport speed limit at v_nom 44.4 V, m = 0.89 (voltage, characterised field weakening)",
-  "winding_C": 180.0,
-  "winding_basis": "insulation class H (owner default)",
   "magnet_C": 150.0,
   "magnet_basis": "magnet card max_working_temp_c (F52SH_120C, SH class 150 C)"
  },

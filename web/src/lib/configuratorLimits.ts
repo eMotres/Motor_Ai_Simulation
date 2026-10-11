@@ -220,3 +220,32 @@ export function writeOverrides(raw: string | null, refId: string, ov: Overrides)
   if (Object.keys(ov).length) all[refId] = ov; else delete all[refId];
   return JSON.stringify(all);
 }
+
+/** The upper limit shown in a slider's label line, built from the live range.
+ *  `tx` is the i18n lookup; `basisTip` is the limit's own explanation. */
+export interface LimitNoteText { text: string; tip: string; }
+
+/** Speed: always names the live maximum, whatever the load mode or drive. */
+export function speedLimitNote(
+  tx: (key: string, vars?: Record<string, string | number>) => string,
+  a: { basis: LimitBasis; max: string; packV: string; m: string },
+): LimitNoteText {
+  if (a.basis === 'envelope') {
+    return { text: tx('configureLimits.rpmEnvelope', { max: a.max }), tip: tx('configureLimits.rpmEnvelopeTip', { m: a.m, v: a.packV }) };
+  }
+  if (a.basis === 'kv') {
+    return { text: tx('configureLimits.rpmKv', { max: a.max }), tip: tx('configureLimits.rpmKvTip', { m: a.m, v: a.packV }) };
+  }
+  return { text: tx('configureLimits.rpmNoBattery', { max: a.max }), tip: tx('configureLimits.rpmNoBatteryTip') };
+}
+
+/** Phase current in propeller mode: "FROM THE PROPELLER" plus the maximum; the tip adds the limit's basis. */
+export function propellerCurrentNote(
+  tx: (key: string, vars?: Record<string, string | number>) => string,
+  a: { max: string; basisTip: string },
+): LimitNoteText {
+  return {
+    text: tx('configurePropeller.currentFromPropMax', { max: a.max }),
+    tip: [tx('configurePropeller.currentFromPropTip'), a.basisTip].filter(Boolean).join(' '),
+  };
+}

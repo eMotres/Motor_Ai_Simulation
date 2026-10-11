@@ -68,7 +68,7 @@ import { listDevices } from '../controller/controllerApi';
 import { presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
 import {
   physicalRanges, narrowRange, speedLimit, overflows, lineVoltageWarning,
-  readOverrides, writeOverrides, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
+  readOverrides, writeOverrides, speedLimitNote, propellerCurrentNote, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
   type KnobKey, type KRange, type Overrides, type PhysRange, type LimitBasis,
 } from '../../lib/configuratorLimits';
 import {
@@ -960,11 +960,7 @@ const ConfiguratorPanel: React.FC = () => {
             tip: tx('configureLimits.iInverterTip', { rating: fmt(cur?.i_d_rating_A ?? NaN, 0), tcase: fmt(cur?.t_case_c ?? NaN, 0) }) }
         : { text: '', tip: tx('configureLimits.iNoControllerTip') };
     }
-    return b === 'envelope'
-      ? { text: tx('configureLimits.rpmEnvelope', { max: mx, v: fmt(packMaxV ?? NaN, 1) }), tip: tx('configureLimits.rpmEnvelopeTip', { m: fmt(modM, 2) }) }
-      : b === 'kv'
-        ? { text: tx('configureLimits.rpmKv', { max: mx, v: fmt(packMaxV ?? NaN, 1) }), tip: tx('configureLimits.rpmKvTip', { m: fmt(modM, 2) }) }
-        : { text: tx('configureLimits.rpmNoBattery'), tip: tx('configureLimits.rpmNoBatteryTip') };
+    return speedLimitNote(tx, { basis: b, max: mx, packV: fmt(packMaxV ?? NaN, 1), m: fmt(modM, 2) });
   };
   const above = (v: number, r: KRange) => v > r.max * 1.0005 + 1e-9;
   /** the connection stays free: only a warning when the winding's line voltage exceeds the pack nominal */
@@ -1806,17 +1802,17 @@ const ConfiguratorPanel: React.FC = () => {
             onChange={set('I_A')} onRangeChange={isAdmin ? setRange('I_A') : undefined} warn={overCurr || above(knobs.I_A, ranges.I_A) || (propLoad && loadRefused)}
             disabled={propLoad} zone={propLoad ? null : zones.I}
             limitNote={propLoad
-              ? { text: tx('configurePropeller.currentFromProp'), tip: tx('configurePropeller.currentFromPropTip') }
+              ? propellerCurrentNote(tx, { max: fmt(ranges.I_A.max, 0), basisTip: limitNote('I_A').tip })
               : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />
           <KnobSlider label={tx('configureLimits.speed')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRange('rpm') : undefined}
             warn={above(knobs.rpm, ranges.rpm) || (speedLim.rpm != null && knobs.rpm > speedLim.rpm)} zone={cooled ? zones.rpm : null}
             limitNote={(() => {
               const n = limitNote('rpm');
-              if (!cooled) return { ...n, text: '' };
+              if (!cooled) return n;
               const ext = propPoint?.extrapolated && series?.rpm_range_tested
                 ? { tip: tx('configurePropeller.beyondTestedTip', { lo: fmt(series.rpm_range_tested[0], 0), hi: fmt(series.rpm_range_tested[1], 0) }) }
                 : null;
-              return { ...n, text: '', tip: [n.tip, tx('configurePropeller.zoneTip')].join(' ') + (ext ? ' ' + ext.tip : '') };
+              return { ...n, tip: [n.tip, tx('configurePropeller.zoneTip')].join(' ') + (ext ? ' ' + ext.tip : '') };
             })()} />
 
           {/* ── DRIVE: Sine | PWM (owner 2026-10-05) ─────────────────────

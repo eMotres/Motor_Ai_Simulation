@@ -534,8 +534,10 @@ def _store_eval(key: str, res: Dict[str, Any]) -> None:
                 line["m"]["cfg_fp"] = _config_fingerprint()
             except Exception:  # noqa: BLE001 — provenance must not lose the value
                 line.pop("m", None)
-            # already inside `with _eval_cache_lock` -- do not re-take it
-            _eval_log.append_line(_eval_cache_path(), line)
+            # already inside `with _eval_cache_lock` -- do not re-take it.
+            # "v" is stored verbatim (NaN/inf allowed, as before this change);
+            # only the "m" provenance block is strict-JSON (build_meta cleans it).
+            _eval_log.append_line(_eval_cache_path(), line, allow_nan=True)
         except Exception as _e:  # noqa: BLE001
             log.warning("could not persist eval: %s", _e)
 

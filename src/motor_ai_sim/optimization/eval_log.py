@@ -392,13 +392,18 @@ def _json_default(o: Any) -> Any:
 
 
 def append_line(path: str, rec: Dict[str, Any],
-                lock: Optional[Any] = None) -> None:
+                lock: Optional[Any] = None, allow_nan: bool = False) -> None:
     """Append ONE json line with a single ``write`` on an ``O_APPEND``
     descriptor.  Thread-safe in-process (``lock``, else a module lock); across
     processes the O_APPEND single write keeps lines whole.  A file whose last
     line was torn by a crash gets a newline first so the new row is not
-    glued to it."""
-    data = (json.dumps(rec, default=_json_default, allow_nan=False,
+    glued to it.
+
+    ``allow_nan=False`` (default, for LOG rows, which are passed through
+    :func:`clean` first) refuses NaN/inf so every row is strict JSON.  The scan
+    CACHE line carries the solver's result dict verbatim and must keep storing
+    exactly what it always did, so ``_store_eval`` passes ``allow_nan=True``."""
+    data = (json.dumps(rec, default=_json_default, allow_nan=allow_nan,
                        separators=(",", ":")) + "\n").encode("utf-8")
     flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT | getattr(os, "O_BINARY", 0)
     with (lock if lock is not None else _append_lock):

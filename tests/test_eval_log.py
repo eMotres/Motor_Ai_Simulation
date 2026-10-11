@@ -431,3 +431,41 @@ def test_sanitize_error_is_short_pathless_and_stackless():
     assert s == "ValueError: bad value in <path>"
     assert len(EL.sanitize_error("e" * 5000)) == 300
     assert "Users" not in EL.sanitize_error(r"open C:\Users\someone\a.txt failed")
+
+
+def test_a_cache_value_with_nan_and_inf_is_persisted_and_reloads_as_before(
+        cache_file):
+    """The cache line stores the solver result VERBATIM (NaN/inf allowed, as
+    before schema 2); only the log rows and the "m" block are strict JSON."""
+    import math
+    res = dict(RES, P_mag_W=float("nan"), SF_min=float("inf"),
+               extra={"deep": [float("-inf"), 1.0]})
+    val = {"ok": True, "res": res}
+    assert O._eval_healthy(val) is True              # verdict before the write
+    with EL.campaign("scan"):
+        O._store_eval("knan", val)
+    (line,) = rows_loose(cache_file)
+    assert math.isnan(line["v"]["res"]["P_mag_W"])
+    assert line["v"]["res"]["SF_min"] == float("inf")
+    assert line["v"]["res"]["extra"]["deep"][0] == float("-inf")
+    json.dumps(line["m"], allow_nan=False)           # the m block is strict
+    O._EVAL_CACHE.clear()
+    O._load_eval_cache()
+    got = O._EVAL_CACHE.get("knan")
+    assert got is not None and O._eval_healthy(got) is True
+    assert math.isnan(got["res"]["P_mag_W"]) and got["res"]["SF_min"] == math.inf
+    assert got["res"]["T_em_Nm"] == res["T_em_Nm"]
+
+
+def test_log_rows_stay_strict_json_but_the_writer_can_be_told_otherwise(tmp_path):
+    p = str(tmp_path / "x.jsonl")
+    with pytest.raises(ValueError):
+        EL.append_line(p, {"a": float("nan")})
+    EL.append_line(p, {"a": float("nan")}, allow_nan=True)
+    assert "NaN" in open(p, encoding="utf-8").read()
+
+
+def rows_loose(p):
+    """json.loads accepts NaN/Infinity tokens, like the cache loader."""
+    return [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines()
+            if ln.strip()]

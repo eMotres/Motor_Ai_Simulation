@@ -2,6 +2,7 @@
 // read-only, ungated.  Configure asks for the list once and for one `/series` per
 // (propeller, ambient, housing) — the propeller physics lives only in the backend.
 import { SERIES_N, SERIES_RPM_MAX, type CoolingInfo, type PropSeries, type PropSummary } from './configuratorPropeller';
+import type { S1Result } from './configuratorPropellerS1';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -47,6 +48,23 @@ export async function fetchPropellerThermalPoint(id: string, rpm: number,
       && Number.isFinite(point.air_speed_ms) && point.air_speed_ms >= 0
       ? point : null;
   } catch { return null; }
+}
+
+const _s1 = new Map<string, Promise<S1Result | null>>();
+
+/** The continuous (S1) limit of one die/configuration with this propeller (signed-in; the
+ *  global fetch adds the token).  Cached per (propeller, die, config, ambient); a failure is not. */
+export function fetchPropellerS1(id: string, die: string, config: string, ambientC: number): Promise<S1Result | null> {
+  const key = `${id}|${die}|${config}|${ambientC.toFixed(1)}`;
+  const hit = _s1.get(key);
+  if (hit) return hit;
+  const q = new URLSearchParams({ die, config, ambient_c: String(ambientC) });
+  const p = fetch(`${API}/api/propellers/${encodeURIComponent(id)}/s1?${q}`, { cache: 'no-store' })
+    .then((r) => (r.ok ? (r.json() as Promise<S1Result>) : null))
+    .catch(() => null)
+    .then((v) => { if (v == null) _s1.delete(key); return v; });
+  _s1.set(key, p);
+  return p;
 }
 
 const _series = new Map<string, Promise<PropSeries | null>>();

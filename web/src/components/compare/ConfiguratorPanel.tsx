@@ -51,7 +51,8 @@ import {
   seriesAt, currentForTorque, tempLimits, judgeTemps, zoneGradient, zoneSamples, modelLabel, vendorLabel,
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
-import { fetchPropellers, fetchSeries } from '../../lib/propellerApi';
+import { fetchPropellers, fetchSeries, fetchPropellerS1 } from '../../lib/propellerApi';
+import { s1Line, type S1Result } from '../../lib/configuratorPropellerS1';
 import { activeDuty } from '../../lib/dutySettings';
 import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
 import { estimateThermal } from '../../lib/thermalEstimate';
@@ -1146,6 +1147,40 @@ const ConfiguratorPanel: React.FC = () => {
     return () => { dead = true; };
   }, [propellerCoolingActive, propId, ambient, housingMm]);
   const propPoint = propellerCoolingActive && series ? seriesAt(series, knobs.rpm) : null;
+  // The continuous (S1) limit with this propeller, from the backend (motor_ai_sim.propeller_s1): the
+  // highest speed whose steady winding / magnet temperature stays inside the limits.  It belongs to
+  // the configuration's PASSPORT build, so it is not shown once the build knobs move off it.
+  const s1Die = currentContext?.cooling?.die ?? null;
+  const s1Config = baseConfig ?? currentContext?.cooling?.config ?? null;
+  const [s1, setS1] = useState<S1Result | null>(null);
+  useEffect(() => {
+    setS1(null);
+    if (!propellerCoolingActive || !propId || !s1Die || !s1Config) return;
+    let dead = false;
+    void fetchPropellerS1(propId, s1Die, s1Config, ambient).then((r) => { if (!dead) setS1(r); });
+    return () => { dead = true; };
+  }, [propellerCoolingActive, propId, s1Die, s1Config, ambient]);
+  const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
+  const s1Info = propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
+  const s1Text: { text: string; tip: string } | null = (() => {
+    if (!s1Info) return null;
+    const prop = propSummary ? modelLabel(propSummary.model) : (propId ?? '');
+    if (s1Info.kind === 'none') {
+      return { text: tx('configurePropeller.s1None', { prop, binding: tx(s1Info.bindingKey) }),
+               tip: tx('configurePropeller.s1NoneTip', { ambient: fmt(ambient, 0) }) };
+    }
+    const L = s1Info.limit;
+    const lim = s1?.limits;
+    const n0 = (x: number | null | undefined) => (x == null ? '—' : fmt(x, 0));
+    return {
+      text: tx('configurePropeller.s1Line', { prop, rpm: fmt(s1Info.rpm, 0), thrust: fmt(s1Info.thrust_kgf, 2),
+        power: fmt(s1Info.shaft_W, 0), binding: tx(s1Info.bindingKey) }),
+      tip: [tx('configurePropeller.s1Tip', { rpm: fmt(s1Info.rpm, 0), tw: n0(L.T_winding_C), tm: n0(L.T_magnet_C),
+        th: n0(L.T_housing_C), amps: L.current_A == null ? '—' : fmt(L.current_A, 1), air: fmt(L.air_speed_ms, 1),
+        pel: n0(s1Info.electrical_W), wl: n0(lim?.winding_C), ml: n0(lim?.magnet_C), ambient: fmt(ambient, 0) }),
+        ...s1Info.flagKeys.map((k) => tx(k))].join(' '),
+    };
+  })();
   /** the torque of the passport at a current — every other knob as given */
   const torqueAtI = (k: Knobs) => (I: number) => scaleMotor(p, { ...k, I_A: I }, ref.poles).T_Nm;
   const propLoadRes = useMemo(
@@ -1758,6 +1793,11 @@ const ConfiguratorPanel: React.FC = () => {
                 <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>°C</Box>
               </Box>
               )}
+              {cooled && s1Text && (
+                <Typography title={s1Text.tip} sx={{ fontSize: 12, color: 'var(--text-2)', mt: 0.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'help' }}>
+                  {s1Text.text}
+                </Typography>
+              )}
             </Box>
           )}
           <KnobSlider label={tx('configureLimits.phaseCurrent')} unit="A" value={knobs.I_A} base={p.I0_A}
@@ -2098,7 +2138,8 @@ const ConfiguratorPanel: React.FC = () => {
       {cooled && propLoad && (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <PropellerCurves series={series} rpm={knobs.rpm} rpmMin={ranges.rpm.min} rpmMax={ranges.rpm.max}
-            powerEstimated={!!series?.power_estimated} onRpmChange={setRpm} />
+            powerEstimated={!!series?.power_estimated} onRpmChange={setRpm}
+            s1Rpm={s1Info?.kind === 'limit' ? s1Info.rpm : null} />
         </Box>
       )}
 

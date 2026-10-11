@@ -5,6 +5,7 @@
     GET /api/propellers/{id}                  one prop: published data, fits, curves
     GET /api/propellers/{id}/point            thrust / torque / power / cooling air at an rpm
     GET /api/propellers/{id}/series           the same on an rpm grid (+ housing film h): Configure's hook
+    GET /api/propellers/{id}/s1               continuous (S1) limit of a die/config with this prop (signed in)
 
 SOLVER ISOLATION: nothing here solves a field or writes anything.  The catalogue
 is read from ``config/propellers/`` (and ``<shared>/propellers/`` on the server)
@@ -23,7 +24,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 
 from motor_ai_sim import propeller as pp
 
@@ -152,6 +153,47 @@ def get_series(prop_id: str,
         out["h_W_m2K"] = [cm.outer_air(air_speed_mps=v, t_ambient_c=t_amb, d_housing_m=d)["h_conv"]
                           for v in out["air_speed_ms"]]
         out["housing_d_mm"] = float(housing_d_mm)
+    return out
+
+
+@router.get("/{prop_id}/s1")
+def get_s1(prop_id: str,
+           die: str = Query(..., min_length=1, max_length=200),
+           config: str = Query(..., min_length=1, max_length=100),
+           ambient_c: float = Query(default=25.0, ge=-60.0, le=80.0, description="air temperature [°C]"),
+           altitude_m: float = Query(default=0.0, ge=-500.0, le=11000.0),
+           position: Optional[str] = Query(default=None),
+           factor: Optional[float] = Query(default=None, gt=0.0, le=1.5),
+           n: int = Query(default=41, ge=5, le=201, description="scan points"),
+           authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    """Continuous (S1) limit of ``die`` / ``config`` driving propeller ``prop_id``,
+    which is also its only cooling: per-speed rows (load, current, losses, air,
+    winding / magnet / housing temperature, margins) and the highest speed at
+    which everything stays inside the limits (``motor_ai_sim.propeller_s1``).
+
+    Signed-in callers only, and only for a die the account may see (the
+    Configure context rule).  Closed-form arithmetic on the configuration's S1
+    model (extracted from its passport) - no field solve, nothing written."""
+    from motor_ai_sim import motor_access as ma
+    from motor_ai_sim import propeller_s1 as s1
+    from motor_ai_sim.cooling_options import cooling_options
+    access = ma.catalog_access(authorization)
+    if access.get("mode") == ma.MODE_ANONYMOUS:
+        raise HTTPException(status_code=401, detail="Sign in required.")
+    if not ma.may_see_die(access, die):
+        raise HTTPException(status_code=404, detail=f"no propeller S1 model for {die} {config}")
+    allowed = cooling_options(die, config).get("propellers")
+    if allowed is not None and prop_id not in allowed:
+        raise HTTPException(status_code=422, detail=f"{prop_id} is not a propeller {die} {config} may use")
+    prop = _get(prop_id)
+    try:
+        model = s1.load_model(die, config)
+        out = s1.s1_rating(model, prop, ambient_c=ambient_c, altitude_m=altitude_m,
+                           position=position, factor=factor, n_points=n)
+    except s1.S1ModelNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (s1.S1Error, pp.PropellerDataError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     return out
 
 

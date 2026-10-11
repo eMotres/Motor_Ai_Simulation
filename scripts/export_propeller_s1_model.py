@@ -112,6 +112,20 @@ def _controller(v: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
             "basis": "inverter conduction + switching + dead time + board copper, passport drive variant"}
 
 
+def _floors(args, rpm: List[float], labels: List[str]) -> Dict[str, Any]:
+    """``{"I_floor_A": [...]}`` from ``--floors`` (JSON ``{rpm: [...], I_floor_A: [...],
+    basis}``: the smallest current that holds the voltage at each speed), or {}."""
+    if not getattr(args, "floors", None):
+        return {}
+    f = _load(args.floors)
+    by = {round(float(r), 1): float(i or 0.0) for r, i in zip(f["rpm"], f["I_floor_A"])}
+    missing = [r for r in rpm if round(r, 1) not in by]
+    if missing:
+        raise SystemExit(f"--floors has no value for {missing} rpm")
+    labels.append("field-weakening floor current per speed (%s)" % f.get("basis", "floors file"))
+    return {"I_floor_A": [by[round(r, 1)] for r in rpm]}
+
+
 def from_full(args) -> Dict[str, Any]:
     d = _load(args.source)
     store = _load(args.store) if args.store else None
@@ -125,9 +139,13 @@ def from_full(args) -> Dict[str, Any]:
         raise SystemExit("R_hot of the loss grid differs from constants_hot.R_phase_ohm")
     psi_h, psi_c = _val(ch["psi_PM_Wb"]), _val(cc["psi_PM_Wb"])
     c_psi = (psi_h / psi_c - 1.0) / (t_mag - t_cold)
-    rpm = [float(x) for x in plan["speeds"]]
+    pts = [p for p in d["loss_grid"]["points"] if p.get("rpm") is not None]
+    extra: List[Dict[str, Any]] = []
+    for f in args.extra_points or []:
+        extra += [p for p in _load(f)["points"] if p.get("rpm") is not None]
+    rpm = sorted({float(x) for x in plan["speeds"]} | {float(p["rpm"]) for p in extra})
     cur = [float(x) for x in plan["currents"]]
-    by = {_key(p["rpm"], p["I_rms"]): p for p in d["loss_grid"]["points"] if p.get("rpm") is not None}
+    by = {_key(p["rpm"], p["I_rms"]): p for p in pts + extra}
 
     def table(fn):
         out = []
@@ -155,8 +173,18 @@ def from_full(args) -> Dict[str, Any]:
                    for a in range(len(rpm)) for b in range(len(cur))):
                 loss["pwm_extra"] = [[None if x is None else float(x) for x in row] for row in pw]
                 labels.append(f"motor PWM extra loss of drive variant {v.get('id')} (FEM at a few points, scaled elsewhere)")
+        if "pwm_extra" not in loss:
+            labels.append(f"motor PWM extra loss of drive variant {v.get('id')} not included (its grid differs "
+                          "from this loss grid)")
+    if extra:
+        labels.append("loss grid extended to %s rpm by %d settled FEM points (passport stage loss4, "
+                      "same hot temperatures / steps / operating-angle rule)"
+                      % ("/".join("%g" % r for r in sorted({float(p["rpm"]) for p in extra})), len(extra)))
     mech = d["loss_grid"].get("mech") or {}
-    mech_pts = sorted((float(k), float(x["P_W"])) for k, x in mech.items())
+    mech_pts = sorted((float(k), float(x["P_W"])) for k, x in mech.items()
+                      if _val(x.get("P_W")) is not None)
+    if not mech_pts:
+        labels.append("mechanical loss UNKNOWN (no bearings named in the passport) — not included")
     stack = (v or {}).get("build", {}).get("length_mm") if v else None
     stack = float(args.stack_mm or stack or d["inputs"]["mesh"].get("motor_length") or 0)
     if not stack:
@@ -167,15 +195,18 @@ def from_full(args) -> Dict[str, Any]:
         "source": {"kind": "full v1 passport", "file": Path(args.source).as_posix().split("/docs/")[-1]
                    if "/docs/" in Path(args.source).as_posix() else Path(args.source).name,
                    "snapshot_sha256": d["provenance"].get("snapshot_sha256"),
-                   "store_variant": (v or {}).get("id")},
+                   "store_variant": (v or {}).get("id"),
+                   **({"extra_points": [Path(f).name for f in args.extra_points]} if extra else {}),
+                   **({"floors": Path(args.floors).name} if getattr(args, "floors", None) else {})},
         "R_phase_ohm": r_hot, "R_temp_C": t_coil,
         "magnet_ref_temp_C": t_mag,
         "flux_temp_coeff_per_K": c_psi,
         "flux_coeff_basis": f"passport psi_PM hot {psi_h:.6g} Wb @ {t_mag:g} C vs cold {psi_c:.6g} Wb @ {t_cold:g} C",
         "torque_factor": _val(d["stage2_3d"]["k_T"]) or 1.0,
-        "grid": {"rpm": rpm, "I_A": cur, "T_Nm": table(lambda p: float(p["T_Nm"])), "loss_W": loss},
-        "mech_W": {"rpm": [x[0] for x in mech_pts], "W": [x[1] for x in mech_pts],
-                   "basis": "bearings (SKF model) + windage, passport"},
+        "grid": {"rpm": rpm, "I_A": cur, "T_Nm": table(lambda p: float(p["T_Nm"])), "loss_W": loss,
+                 **_floors(args, rpm, labels)},
+        "mech_W": ({"rpm": [x[0] for x in mech_pts], "W": [x[1] for x in mech_pts],
+                    "basis": "bearings (SKF model) + windage, passport"} if len(mech_pts) >= 2 else None),
         "controller": _controller(v),
         "limits": {"I_max_A": _val(d["demag_limit"]["I_limit_rms"]),
                    "I_max_basis": "passport demagnetisation current limit at the hot magnet temperature "
@@ -244,16 +275,112 @@ def from_store(args) -> Dict[str, Any]:
     }
 
 
+def _anchor_row(path: str, model: Dict[str, Any]) -> Dict[str, Any]:
+    """One coupled FEM anchor (``passport_full.py propanchor``): its speed, the
+    losses the thermal map carried and the steady temperatures it reached."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from motor_ai_sim import propeller as PP
+    from motor_ai_sim import propeller_s1 as S1
+    a = _load(path)
+    ok = [p for p in a["passes"] if not p.get("error") and p.get("components")]
+    if not ok:
+        raise SystemExit(f"{path}: no finished pass")
+    p = ok[-1]
+    n, amb = float(a["rpm"]), float(a["ambient_c"])
+    prop = PP.get_propeller(a["propeller"])
+    op = PP.operating_point(prop, n, PP.air_density(temp_c=amb))
+    h = S1.housing_film(op["air_speed_ms"], amb, float(model["thermal_geom"]["statorOD_mm"]) / 1000.0)
+    hb = (p.get("cooling") or {}).get("heat_budget") or {}
+    em = (p.get("coupling") or {}).get("em") or {}
+    comps = p["components"]
+    return {"file": Path(path).name, "rpm": n, "I_rms": float(p["I_rms"]), "ambient_c": amb,
+            "air_speed_ms": op["air_speed_ms"], "h_W_m2K": h,
+            "p_cu_W": float(em["P_stranded_W"]),
+            "p_rotor_W": float(hb["rotor_heat_split"]["rotor_W"]),
+            "p_total_W": float(hb["losses_W"]),
+            "torque_miss": p.get("torque_miss"),
+            "fem_C": {"winding": float(comps["winding"]["max"]), "magnet": float(comps["magnet"]["max"]),
+                      "housing": float(comps["stator"]["avg"]),
+                      "winding_avg": float(comps["winding"]["avg"]), "magnet_avg": float(comps["magnet"]["avg"])}}
+
+
+#: Residual weights of the calibration fit: the two limited parts carry it, the
+#: stator (the lumped "housing") only steers the split.
+FIT_WEIGHTS = {"winding": 1.0, "magnet": 1.0, "housing": 0.5}
+
+
+def calibrate(args) -> Dict[str, Any]:
+    """Fit the S1 model's thermal calibration to coupled FEM anchors.
+
+    The lumped network is fed the anchors' OWN losses (copper, rotor, total, as
+    the thermal map carried them), so only the network is fitted, not the loss
+    model.  Unknowns: the housing film factor and the end-turn and rotor
+    air-path areas (``propeller_s1.temperatures``), least squares on the winding
+    hot spot, the hottest magnet element and the stator mean (weights
+    ``FIT_WEIGHTS``), all >= 0."""
+    sys.path.insert(0, str(ROOT / "src"))
+    import numpy as np
+    from scipy.optimize import least_squares
+    from motor_ai_sim import propeller_s1 as S1
+    m = _load(args.source)
+    rows = [_anchor_row(f, m) for f in args.anchor]
+    keys = ("housing_film_factor", "winding_air_area_m2", "rotor_air_area_m2")
+
+    def temps(r, cal):
+        return S1.temperatures(m["thermal_geom"], r["p_cu_W"], r["p_rotor_W"], r["p_total_W"],
+                               r["h_W_m2K"], r["ambient_c"], cal)
+
+    def cal_of(x):
+        return dict(zip(keys, (float(x[0]), float(x[1]) * 1e-3, float(x[2]) * 1e-3)))
+
+    def resid(x):
+        out = []
+        for r in rows:
+            t = temps(r, cal_of(x))
+            out += [FIT_WEIGHTS[k] * (t[k] - r["fem_C"][k]) for k in FIT_WEIGHTS]
+        return np.array(out)
+
+    sol = least_squares(resid, x0=[1.0, 2.0, 1.0], bounds=([0.05, 0.0, 0.0], [20.0, 100.0, 100.0]))
+    cal = cal_of(sol.x)
+    table = []
+    for r in rows:
+        b, a_ = temps(r, None), temps(r, cal)
+        table.append({**{k: r[k] for k in ("file", "rpm", "I_rms", "air_speed_ms", "h_W_m2K", "p_cu_W",
+                                           "p_rotor_W", "p_total_W", "torque_miss")},
+                      "fem_C": r["fem_C"],
+                      "lumped_before_C": {k: b[k] for k in ("winding", "magnet", "housing")},
+                      "lumped_after_C": {k: a_[k] for k in ("winding", "magnet", "housing")}})
+    m["thermal_calibration"] = {
+        **{k: round(v, 6) for k, v in cal.items()},
+        "basis": ("fitted %s to %d coupled EM-thermal FEM anchors (propeller as load and cooling, "
+                  "air_speed_source propeller, slipstream factor %s, the machine's own frame and "
+                  "Simulation settings, %g C air): the lumped network fed each anchor's own losses, "
+                  "least squares on the winding hot spot, hottest magnet and stator mean (weights %s)"
+                  % (args.date, len(rows), args.slipstream_factor, rows[0]["ambient_c"], FIT_WEIGHTS)),
+        "slipstream_factor_basis": args.slipstream_basis,
+        "anchors": table,
+    }
+    labels = [x for x in (m.get("labels") or []) if not x.startswith("thermal network calibrated")]
+    labels.append("thermal network calibrated to coupled FEM anchors (%s)" % args.date)
+    m["labels"] = labels
+    return m
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("kind", choices=["full", "store"])
-    ap.add_argument("source")
+    ap.add_argument("kind", choices=["full", "store", "calibrate"])
+    ap.add_argument("source", help="passport record / store record, or (calibrate) the S1 model JSON")
+    ap.add_argument("--anchor", action="append", help="calibrate: a propanchor JSON (repeat)")
+    ap.add_argument("--date", default="2026-10-11")
+    ap.add_argument("--slipstream-factor", default="0.4 (behind_hub)")
+    ap.add_argument("--slipstream-basis", default="kept at 0.4 (behind_hub): the anchors use the same "
+                                                  "slipstream model, so they cannot constrain it")
     ap.add_argument("--store", help="passport store record (drive variants) for the full kind")
     ap.add_argument("--variant", help="drive variant id (default: the first, Configure's default)")
-    ap.add_argument("--catalog", required=True)
-    ap.add_argument("--card", required=True)
+    ap.add_argument("--catalog")
+    ap.add_argument("--card")
     ap.add_argument("--stack-mm", type=float)
-    ap.add_argument("--magnet-limit", type=float, required=True)
+    ap.add_argument("--magnet-limit", type=float)
     ap.add_argument("--magnet-basis", default="magnet card max_working_temp_c (F52SH_120C, SH class 150 C)")
     ap.add_argument("--r-ref", type=float)
     ap.add_argument("--r-temp", type=float)
@@ -263,10 +390,29 @@ def main(argv=None) -> int:
     ap.add_argument("--flux-basis", default="magnet card alpha(Br) -0.1199 %/K (F52SH_120C)")
     ap.add_argument("--imax-basis", default="top of the passport store current grid (the peak duty current)")
     ap.add_argument("--source-name")
+    ap.add_argument("--extra-points", action="append",
+                    help="full kind: JSON {points: [...]} of extra loss-grid points (record format)")
+    ap.add_argument("--floors", help="full kind: JSON {rpm, I_floor_A, basis} — the field-weakening floor")
     ap.add_argument("--out")
     a = ap.parse_args(argv)
     if a.kind == "store" and None in (a.r_ref, a.r_temp, a.coil_c, a.magnet_c, a.flux_coeff):
         ap.error("store needs --r-ref --r-temp --coil-c --magnet-c --flux-coeff")
+    if a.kind == "calibrate":
+        if not a.anchor:
+            ap.error("calibrate needs --anchor (one or more)")
+        m = calibrate(a)
+        out = Path(a.out) if a.out else Path(a.source)
+        out.write_text(json.dumps(m, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+        for r in m["thermal_calibration"]["anchors"]:
+            print("%6.0f rpm %5.1f A  FEM W/M/H %s  before %s  after %s" % (
+                r["rpm"], r["I_rms"], [round(r["fem_C"][k], 1) for k in ("winding", "magnet", "housing")],
+                [round(r["lumped_before_C"][k], 1) for k in ("winding", "magnet", "housing")],
+                [round(r["lumped_after_C"][k], 1) for k in ("winding", "magnet", "housing")]))
+        print({k: v for k, v in m["thermal_calibration"].items() if k != "anchors"})
+        print(f"wrote {out}")
+        return 0
+    if not (a.catalog and a.card and a.magnet_limit is not None):
+        ap.error("full / store need --catalog --card --magnet-limit")
     m = from_full(a) if a.kind == "full" else from_store(a)
     out = Path(a.out) if a.out else ROOT / "config" / "propeller_s1" / m["die"] / f"{m['config']}.json"
     out.parent.mkdir(parents=True, exist_ok=True)

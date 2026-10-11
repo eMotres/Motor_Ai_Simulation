@@ -549,6 +549,100 @@
  "labels": [
   "2-D FEM loss grid (settled TDM, coupled eddy + demag) of the full v1 passport",
   "torque x k_T(3-D) 0.9795",
-  "motor PWM extra loss of drive variant si_48k (FEM at a few points, scaled elsewhere)"
- ]
+  "motor PWM extra loss of drive variant si_48k (FEM at a few points, scaled elsewhere)",
+  "thermal network calibrated to coupled FEM anchors (2026-10-11)"
+ ],
+ "thermal_calibration": {
+  "housing_film_factor": 0.172914,
+  "winding_air_area_m2": 0.004328,
+  "rotor_air_area_m2": 0.002615,
+  "basis": "fitted 2026-10-11 to 3 coupled EM-thermal FEM anchors (propeller as load and cooling, air_speed_source propeller, slipstream factor 0.4 (behind_hub), the machine's own frame and Simulation settings, 25 C air): the lumped network fed each anchor's own losses, least squares on the winding hot spot, hottest magnet and stator mean (weights {'winding': 1.0, 'magnet': 1.0, 'housing': 0.5})",
+  "slipstream_factor_basis": "kept at 0.4 (behind_hub): the anchors use the same slipstream model, so they cannot constrain it",
+  "anchors": [
+   {
+    "file": "anchor_L12_tmotor_fpv_10x5_n5935.json",
+    "rpm": 5935.0,
+    "I_rms": 9.74355978407915,
+    "air_speed_ms": 6.2302117454726025,
+    "h_W_m2K": 45.45,
+    "p_cu_W": 3.2,
+    "p_rotor_W": 0.787,
+    "p_total_W": 6.81,
+    "torque_miss": 0.009771778720220725,
+    "fem_C": {
+     "winding": 45.7,
+     "magnet": 42.9,
+     "housing": 46.0,
+     "winding_avg": 45.5,
+     "magnet_avg": 42.9
+    },
+    "lumped_before_C": {
+     "winding": 64.80313293972551,
+     "magnet": 65.20946617249749,
+     "housing": 62.26090354977335
+    },
+    "lumped_after_C": {
+     "winding": 45.88291847935675,
+     "magnet": 41.988089355926675,
+     "housing": 46.604366173648266
+    }
+   },
+   {
+    "file": "anchor_L12_tmotor_fpv_10x5_n8479.json",
+    "rpm": 8479.0,
+    "I_rms": 20.475605760418954,
+    "air_speed_ms": 9.04585480497963,
+    "h_W_m2K": 56.35,
+    "p_cu_W": 12.3,
+    "p_rotor_W": 1.603,
+    "p_total_W": 18.59,
+    "torque_miss": -0.0006200802147861006,
+    "fem_C": {
+     "winding": 72.6,
+     "magnet": 59.7,
+     "housing": 72.0,
+     "winding_avg": 72.3,
+     "magnet_avg": 59.6
+    },
+    "lumped_before_C": {
+     "winding": 116.81168956141563,
+     "magnet": 113.04577156262661,
+     "housing": 107.03999534378698
+    },
+    "lumped_after_C": {
+     "winding": 72.84606366782057,
+     "magnet": 59.37353503762205,
+     "housing": 72.34527668761626
+    }
+   },
+   {
+    "file": "anchor_L12_tmotor_fpv_10x5_n9751.json",
+    "rpm": 9751.0,
+    "I_rms": 27.704604091905306,
+    "air_speed_ms": 10.46901796693069,
+    "h_W_m2K": 61.41,
+    "p_cu_W": 22.9,
+    "p_rotor_W": 2.149,
+    "p_total_W": 30.78,
+    "torque_miss": -0.00020931494475440182,
+    "fem_C": {
+     "winding": 99.4,
+     "magnet": 74.3,
+     "housing": 97.1,
+     "winding_avg": 98.8,
+     "magnet_avg": 74.0
+    },
+    "lumped_before_C": {
+     "winding": 167.83634062250218,
+     "magnet": 157.69492333748562,
+     "housing": 149.64351155065697
+    },
+    "lumped_after_C": {
+     "winding": 99.20718265580415,
+     "magnet": 74.78276326462056,
+     "housing": 96.68428668340681
+    }
+   }
+  ]
+ }
 }

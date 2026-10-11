@@ -22,6 +22,8 @@ export interface S1Limit {
   extrapolated: boolean;
   power_estimated: boolean;
   below_loss_grid: boolean;
+  /** above the no-load voltage limit: the drive carries d-axis current at this speed */
+  fw_floor?: boolean;
 }
 
 export interface S1Result {
@@ -34,6 +36,8 @@ export interface S1Result {
   first_failure: S1Binding | null;
   monotone: boolean;
   limits: { winding_C: number; magnet_C: number; winding_basis: string; magnet_basis: string };
+  /** the motor model: a thermal calibration is present when the lumped network was fitted to FEM */
+  model?: { thermal_calibration?: Record<string, unknown> | null };
 }
 
 const G0 = 9.80665;
@@ -66,6 +70,8 @@ export function s1Line(r: S1Result | null | undefined, propId: string | null, co
   if (L.extrapolated) flagKeys.push('configurePropeller.s1FlagExtrapolated');
   if (L.power_estimated) flagKeys.push('configurePropeller.s1FlagEstimated');
   if (L.below_loss_grid) flagKeys.push('configurePropeller.s1FlagBelowGrid');
+  if (L.fw_floor) flagKeys.push('configurePropeller.s1FlagFwFloor');
+  if (r.model?.thermal_calibration) flagKeys.push('configurePropeller.s1FlagCalibrated');
   if (!r.monotone) flagKeys.push('configurePropeller.s1FlagBands');
   return { kind: 'limit', rpm: L.rpm, thrust_kgf: L.thrust_N / G0, shaft_W: L.shaft_power_W,
            electrical_W: L.electrical_power_W, bindingKey: s1BindingKey(L.binding), flagKeys, limit: L };

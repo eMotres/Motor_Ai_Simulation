@@ -558,6 +558,8 @@
     "s1FlagExtrapolated": "Propeller data extrapolated beyond its tested rpm.",
     "s1FlagEstimated": "Propeller power is an estimate.",
     "s1FlagBelowGrid": "Motor losses extrapolated below the passport's lowest speed.",
+    "s1FlagFwFloor": "Above the no-load voltage limit: the drive carries field-weakening current.",
+    "s1FlagCalibrated": "Lumped thermal model calibrated to coupled FEM runs with this cooling.",
     "s1FlagBands": "Not monotone: some lower speeds exceed a limit.",
     "s1Marker": "S1",
     "curvesTitle": "Propeller curves",

@@ -341,6 +341,100 @@
  "labels": [
   "2-D FEM loss grid (settled TDM, coupled eddy + demag) of the full v1 passport",
   "torque x k_T(3-D) 0.9877",
-  "motor PWM extra loss of drive variant si_48k (FEM at a few points, scaled elsewhere)"
- ]
+  "motor PWM extra loss of drive variant si_48k (FEM at a few points, scaled elsewhere)",
+  "thermal network calibrated to coupled FEM anchors (2026-10-11)"
+ ],
+ "thermal_calibration": {
+  "housing_film_factor": 0.518507,
+  "winding_air_area_m2": 0.004106,
+  "rotor_air_area_m2": 0.001464,
+  "basis": "fitted 2026-10-11 to 3 coupled EM-thermal FEM anchors (propeller as load and cooling, air_speed_source propeller, slipstream factor 0.4 (behind_hub), the machine's own frame and Simulation settings, 25 C air): the lumped network fed each anchor's own losses, least squares on the winding hot spot, hottest magnet and stator mean (weights {'winding': 1.0, 'magnet': 1.0, 'housing': 0.5})",
+  "slipstream_factor_basis": "kept at 0.4 (behind_hub): the anchors use the same slipstream model, so they cannot constrain it",
+  "anchors": [
+   {
+    "file": "anchor_L20_tmotor_p13x4_4_n10351.json",
+    "rpm": 10351.0,
+    "I_rms": 21.033449951051544,
+    "air_speed_ms": 9.947495861504263,
+    "h_W_m2K": 59.59,
+    "p_cu_W": 20.3,
+    "p_rotor_W": 3.999,
+    "p_total_W": 34.49,
+    "torque_miss": 0.0012059531455628214,
+    "fem_C": {
+     "winding": 97.6,
+     "magnet": 91.8,
+     "housing": 96.9,
+     "winding_avg": 97.2,
+     "magnet_avg": 91.7
+    },
+    "lumped_before_C": {
+     "winding": 149.82265167187953,
+     "magnet": 149.13584779965782,
+     "housing": 140.14629105637408
+    },
+    "lumped_after_C": {
+     "winding": 97.15010724504826,
+     "magnet": 91.77778277236166,
+     "housing": 95.88827995964121
+    }
+   },
+   {
+    "file": "anchor_L20_tmotor_p13x4_4_n6301.json",
+    "rpm": 6301.0,
+    "I_rms": 7.809195979483826,
+    "air_speed_ms": 6.055373531382315,
+    "h_W_m2K": 44.72,
+    "p_cu_W": 3.8,
+    "p_rotor_W": 1.482,
+    "p_total_W": 10.39,
+    "torque_miss": 0.007082648538080161,
+    "fem_C": {
+     "winding": 52.4,
+     "magnet": 52.9,
+     "housing": 52.8,
+     "winding_avg": 52.2,
+     "magnet_avg": 52.8
+    },
+    "lumped_before_C": {
+     "winding": 73.03282375800617,
+     "magnet": 74.5529489569617,
+     "housing": 71.22148531766526
+    },
+    "lumped_after_C": {
+     "winding": 53.23004968155555,
+     "magnet": 53.08608967348524,
+     "housing": 53.88948571540086
+    }
+   },
+   {
+    "file": "anchor_L20_tmotor_p13x4_4_n9001.json",
+    "rpm": 9001.0,
+    "I_rms": 15.814579463823115,
+    "air_speed_ms": 8.650121751463614,
+    "h_W_m2K": 54.9,
+    "p_cu_W": 12.0,
+    "p_rotor_W": 3.014,
+    "p_total_W": 23.39,
+    "torque_miss": 6.410290472724789e-05,
+    "fem_C": {
+     "winding": 77.2,
+     "magnet": 75.3,
+     "housing": 77.3,
+     "winding_avg": 77.0,
+     "magnet_avg": 75.3
+    },
+    "lumped_before_C": {
+     "winding": 115.47944506453793,
+     "magnet": 116.53475377441914,
+     "housing": 109.75942893714554
+    },
+    "lumped_after_C": {
+     "winding": 77.5530376327449,
+     "magnet": 75.18486721972661,
+     "housing": 77.47965808118394
+    }
+   }
+  ]
+ }
 }

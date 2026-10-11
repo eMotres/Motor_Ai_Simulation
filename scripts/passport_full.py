@@ -364,6 +364,162 @@ def task_cooling(work: Path, a) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  propanchor — coupled FEM anchor of the propeller S1 model (Stage B, 2026-10-11)
+# ─────────────────────────────────────────────────────────────────────────────
+
+#: Ambient of the propeller S1 anchors (°C): the Stage A S1 table's air.
+ANCHOR_AMBIENT_C = 25.0
+#: The EM torque may miss the propeller load by this much before one current
+#: correction step is made (brief: 2 %).
+ANCHOR_TORQUE_TOL = 0.02
+
+
+def anchor_panel(snap_sim: Dict[str, Any], prop: str, *, frame: str,
+                 ambient_c: float = ANCHOR_AMBIENT_C) -> Dict[str, Any]:
+    """Thermal-panel fields of a propeller-only machine: the air mode with the
+    housing air speed computed from ``prop``'s slipstream at the run's own rpm
+    (``air_speed_source = propeller``), the machine's own frame (open: the end
+    turns, slot channels, rotor faces and gap duct are in the same wash,
+    ``open_air_speed_mps = 0`` = the housing air speed), no bore cooling (the
+    propeller is the only airflow), no exposed shaft."""
+    return {"coolMode": "air", "airSpeedSource": "propeller", "propellerId": str(prop),
+            "ambientT": "%g" % ambient_c, "frame": frame, "openAirSpeed": "0",
+            "boreMode": "none", "shaftExtMm": "0"}
+
+
+def task_propanchor(work: Path, a) -> None:
+    """One coupled EM-thermal steady state with the propeller as load and cooling.
+
+    The current is the S1 model's (``motor_ai_sim.propeller_s1``) at this speed,
+    unless ``--current`` is given; when the converged EM torque × k_T misses the
+    propeller torque + bearing/windage torque by more than 2 %, ONE correction
+    step re-runs at I·Q/T (operating angle re-resolved).  eddy / rotor eddy /
+    demag / steps per period are the machine's own saved Simulation settings."""
+    import yaml
+    from motor_ai_sim import propeller as PP
+    from motor_ai_sim import propeller_s1 as S1
+    from motor_ai_sim import thermal_settings as TS
+    from motor_ai_sim.passport_v1 import psimap as PM
+    from motor_ai_sim.material_context import set_request_materials
+    from motor_ai_sim.routes import coupled as cp
+    from motor_ai_sim.routes import simulation as sim
+    from motor_ai_sim.simulation.fem_solver_2d import _NO_WARM_CACHE_CTX
+    M, n, pid = a.machine, float(a.rpm), str(a.prop)
+    snap = _snap(work, M)
+    cfg = str(_mspec(M)["config"])
+    hm, st, _ = _hot_map(work, M)
+    lp = st.get("loss_plan3") or st.get("loss_plan2") or st["loss_plan"]
+    vlim = PM.v_phase_limit(float(lp["v_dc"]), float(lp["m"]))
+    R_hot = float(lp["R_hot_ohm"])
+    model = S1.load_model(DIE, cfg)
+    prop = PP.get_propeller(pid)
+    rho = PP.air_density(temp_c=ANCHOR_AMBIENT_C)
+    s1row = S1.solve_point(model, prop, n, ambient_c=ANCHOR_AMBIENT_C, rho=rho,
+                           lims=S1.limits_of(model))
+    q_em = float(s1row["torque_em_Nm"])
+    k_T = float(model["torque_factor"])
+    cfgp = os.environ.get("MOTOR_AI_SIM_CONFIG")
+    simset = dict((yaml.safe_load(open(cfgp, encoding="utf-8")) or {}).get("simulation") or {}) \
+        if cfgp else {}
+    flags = {k: bool(simset.get(k, True)) for k in ("eddy", "rotor_eddy", "demag")}
+    steps = int(simset.get("steps_per_period") or snap["rated_duty"]["steps_per_period"])
+    frame = str(a.frame or "open")
+    th = anchor_panel(simset, pid, frame=frame)
+    th["maxIter"] = str(int(a.max_iter))
+    # The propeller-context gate binds a Configure selection to a signed-in user's
+    # loaded motor; this sandbox has neither, and the propeller is named here.
+    TS.propeller_cooling_context_issue = lambda *_a, **_k: None
+    set_request_materials({"assignment": _materials(snap), "materials": {}})
+    m, rd = snap["mesh"], snap["rated_duty"]
+    I = float(a.current) if a.current else float(s1row["current_A"] or 0.0)
+    if I <= 0:
+        raise SystemExit("no S1 current at %g rpm (%s)" % (n, s1row.get("binding")))
+    # start from the S1 model's temperatures, kept inside the material cards (the
+    # lumped model can sit far past them; the loop only needs a start)
+    Tc0 = min(float(s1row.get("T_winding_C") or snap["temperatures"]["hot_coil_c"]), 170.0)
+    Tm0 = min(float(s1row.get("T_magnet_C") or snap["temperatures"]["hot_magnet_c"]), 140.0)
+    passes: List[Dict[str, Any]] = []
+    for k in range(2):
+        g, how = hm.operating_gamma(I, n, R_hot, vlim)
+        if g is None:
+            raise SystemExit("no operating angle at %g A, %g rpm (%s)" % (I, n, how))
+        body = {
+            "restore": False, "n_periods": 1, "n_steps_per_period": steps,
+            "gamma_deg": round(float(g), 3), "I_phase_rms": round(I, 4), "rpm": n,
+            "mode": "motor",
+            "mesh_size_mm": m["mesh_size_mm"], "min_size_mm": m["min_size_mm"],
+            "outer_air_factor": m["outer_air_factor"], "gap_layers": m["gap_layers"],
+            "n_sectors": m["n_sectors"], "motion_band": True, "band_thickness_mm": 0.4,
+            "stator_fillet_mm": 0, "sliding_band": True,
+            "rotor_eddy": flags["rotor_eddy"], "eddy": flags["eddy"],
+            "field_snapshot": True, "demag": flags["demag"],
+            "torque_filter": False, "pole_copy": m["pole_copy"], "structured_gap": True,
+            "airgap_macro": False, "element_order": 2, "iron_template": m["iron_template"],
+            "geo_mesh": m["geo_mesh"],
+            "coil_temp_c": round(Tc0, 2), "magnet_temp_c": round(Tm0, 2),
+            "end_winding_factor": float(rd["end_winding_factor"]),
+            "connection": snap["winding"]["connection"],
+            "star_delta": snap["winding"].get("star_delta", "star"),
+            "component_mesh": json.dumps(m.get("component_mesh_mm") or {}),
+            "geo": json.dumps(snap["geometry"]),
+            "mat": json.dumps({"assignment": _materials(snap), "materials": {}}),
+            "include_frames": False, "n_frames": 0,
+            "run_id": "pp-anchor-%s-%s-n%.0f-%d" % (M, pid, n, k),
+            "mechanical": False, "cold_constants": False, "fresh": True,
+            "max_iter": int(a.max_iter), "drive": "current",
+            "thermal_settings": th, "solve_to": "steady",
+        }
+        sim._BACKGROUND_RUN.set(False)    # the loss map must be kept (field snapshot)
+        tok = _NO_WARM_CACHE_CTX.set(True)
+        t0 = time.time()
+        try:
+            out = cp.run(dict(body))
+            err = None
+        except Exception as e:            # noqa: BLE001
+            out, err = None, "%s: %s" % (type(e).__name__, getattr(e, "detail", e))
+            traceback.print_exc()
+        finally:
+            _NO_WARM_CACHE_CTX.reset(tok)
+        cpl = (out or {}).get("coupling") or {}
+        T2 = _num_or_none(((cpl.get("em") or {}).get("T_em_avg_Nm")))
+        T3 = None if T2 is None else T2 * k_T
+        thm = (out or {}).get("thermal") or {}
+        cool = thm.get("cooling") or {}
+        p = {"pass": k, "I_rms": I, "gamma_deg": g, "gamma_mode": how, "wall_s": time.time() - t0,
+             "error": err, "T_em_2d_Nm": T2, "T_em_3d_Nm": T3, "Q_target_Nm": q_em,
+             "torque_miss": (None if T3 is None else T3 / q_em - 1.0),
+             "components": thm.get("components"), "T_max": thm.get("T_max"),
+             "P_loss_total_W": thm.get("P_loss_total_W"),
+             "cooling": {kk: cool.get(kk) for kk in ("outer", "frame", "end_windings",
+                                                     "slot_channels", "gap_flow", "end_faces",
+                                                     "heat_budget", "mech_losses")},
+             "cooling_air_source": thm.get("cooling_air_source"),
+             "coupling": cpl, "summary": ((out or {}).get("transient") or {}).get("summary"),
+             "body": {kk: v for kk, v in body.items() if kk not in ("geo", "mat")}}
+        passes.append(p)
+        _dump(_out(work, "anchor_%s_%s_n%.0f" % (M, pid, n)),
+              {"task": "propanchor", "machine": M, "die": DIE, "config": cfg, "propeller": pid,
+               "rpm": n, "ambient_c": ANCHOR_AMBIENT_C, "thermal_settings": th,
+               "sim_flags": flags, "steps_per_period": steps, "k_T": k_T,
+               "stage_a_point": s1row, "passes": passes})
+        if err or T3 is None or abs(T3 / q_em - 1.0) <= ANCHOR_TORQUE_TOL or k == 1:
+            break
+        # one correction step: the torque is ~linear in current near the point
+        I = I * q_em / T3
+        comps = thm.get("components") or {}
+        Tc0 = float((comps.get("winding") or {}).get("avg") or Tc0)
+        Tm0 = float((comps.get("magnet") or {}).get("avg") or Tm0)
+
+
+def _num_or_none(v):
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return None
+    return x if math.isfinite(x) else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  mech — rotor-stress limit speed + critical speeds
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -716,7 +872,7 @@ def task_parallel(work: Path, a) -> None:
             threads = parts.pop(0).split("=", 1)[1]
         name = "_".join(p.replace("--", "") for p in parts)
         M = parts[parts.index("--machine") + 1] if "--machine" in parts else             next(iter(SPEC["machines"]))
-        ws = _task_ws(work, M, name, with_dies=(parts[0] in ("coupled", "cooling", "mech")))
+        ws = _task_ws(work, M, name, with_dies=(parts[0] in ("coupled", "cooling", "mech", "propanchor")))
         env = dict(os.environ, MOTOR_AI_SIM_CONFIG=str(ws / "motor_config.yaml"),
                    MKL_NUM_THREADS=threads, OMP_NUM_THREADS=threads,
                    OPENBLAS_NUM_THREADS=threads)
@@ -751,6 +907,9 @@ def main(argv=None) -> None:
     ap.add_argument("--length", type=float, default=None)
     ap.add_argument("--temp", type=float, default=None, help="magnet temperature (demagtemp)")
     ap.add_argument("--rpm", type=float, default=None, help="PWM anchor speed (default: the point's)")
+    ap.add_argument("--current", type=float, default=None,
+                    help="propanchor: phase current (default: the S1 model's at --rpm)")
+    ap.add_argument("--frame", default=None, help="propanchor: housed | open (default open)")
     ap.add_argument("rest", nargs="*")
     a = ap.parse_args(argv)
     _use_spec(a.spec)
@@ -760,6 +919,7 @@ def main(argv=None) -> None:
     (work / "out" / "full").mkdir(parents=True, exist_ok=True)
     fn = {"stage_a": task_stage_a, "coupled": task_coupled, "mech": task_mech,
           "pwm": task_pwm, "demagseq": task_demagseq, "cooling": task_cooling, "demagtemp": task_demagtemp,
+          "propanchor": task_propanchor,
           "parallel": task_parallel}[a.task]
     fn(work, a)
 

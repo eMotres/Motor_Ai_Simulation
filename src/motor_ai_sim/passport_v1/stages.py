@@ -614,7 +614,8 @@ def _reuse_or_job(R, prefix, n, I, g, how, b, snap, I0, set_name, extra_meta=Non
     steps = loss_steps(snap)
     for rid, rec in R.done.items():
         k = rec.get("kw") or {}
-        if (rec.get("meta") or {}).get("set") in ("loss", "loss2", "loss3", "loss_check", "loss_check2") \
+        if (rec.get("meta") or {}).get("set") in ("loss", "loss2", "loss3", "loss4",
+                                                  "loss_check", "loss_check2") \
                 and k.get("eddy") and k.get("demag") \
                 and abs(float(k.get("rpm", -1)) - n) < 1e-6 \
                 and abs(float(k.get("I_phase_rms", -1)) - I) < 1e-6 \
@@ -743,6 +744,53 @@ def stage_loss3(R, snap, st) -> None:
         st["mech"].setdefault(str(n), LS.mech_losses(rpm=n, bearings=snap["bearings"],
                                                      geometry=snap["geometry"], temp_c=None))
     print("  loss plan 3 (m %.2f): %d points, %d new jobs" % (m, len(plan), len(jl)),
+          [(p["rpm"], round(p["I"], 2), p["gamma"] and round(p["gamma"], 2), p.get("id"))
+           for p in plan], flush=True)
+    R.run(jl)
+
+
+def stage_loss4(R, snap, st) -> None:
+    """A bounded speed extension of the loss grid (2026-10-11, propeller S1
+    Stage B): the extra speeds × currents in ``st["loss4_request"]`` (set by
+    ``passport_pilot.py run --loss4-speeds/--loss4-currents``), solved exactly
+    like loss3 — the same hot temperatures, steps, controller margin and
+    operating-angle rule (MTPA, else fixed-current field weakening up to
+    80°); a (speed, current) the voltage limit cannot reach is recorded
+    infeasible, not solved.  ``loss_plan4`` lists the new points only;
+    ``loss_plan3`` is left as it is."""
+    from motor_ai_sim.passport_v1 import psimap as PM
+    req = st.get("loss4_request") or {}
+    speeds = sorted({float(n) for n in req.get("speeds") or []})
+    currents = sorted({float(i) for i in req.get("currents") or []})
+    if not speeds or not currents:
+        raise ValueError("loss4 needs --loss4-speeds and --loss4-currents")
+    b = _base(snap, st, static=False)
+    I0 = _I0(snap)
+    hm = hot_map(R, snap, st)
+    Rh = R_hot(R, st)
+    lp = st.get("loss_plan3") or st["loss_plan2"]
+    m = float(lp["m"])
+    vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), m)
+    plan, jl = [], []
+    for n in speeds:
+        for I in currents:
+            g, how = hm.operating_gamma(I, n, Rh, vlim)
+            row = {"rpm": n, "I": I, "gamma": g, "mode": how}
+            if g is not None:
+                jid, job = _reuse_or_job(R, "loss4", n, I, g, how, b, snap, I0, "loss4")
+                row["id"] = jid
+                if job:
+                    jl.append(job)
+            plan.append(row)
+    st["loss_plan4"] = {k: v for k, v in lp.items() if k not in ("points", "checks")}
+    st["loss_plan4"].update(speeds=speeds, currents=currents, points=plan,
+                            extended="2026-10-11: speed extension above the loss grid for the "
+                                     "propeller S1 model (%s)" % (req.get("reason") or "request"))
+    from motor_ai_sim.passport_v1 import losses as LS
+    for n in speeds:
+        st["mech"].setdefault(str(n), LS.mech_losses(rpm=n, bearings=snap["bearings"],
+                                                     geometry=snap["geometry"], temp_c=None))
+    print("  loss plan 4 (m %.2f): %d points, %d new jobs" % (m, len(plan), len(jl)),
           [(p["rpm"], round(p["I"], 2), p["gamma"] and round(p["gamma"], 2), p.get("id"))
            for p in plan], flush=True)
     R.run(jl)

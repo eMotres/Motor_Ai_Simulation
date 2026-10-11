@@ -176,6 +176,14 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
         if k not in LOSS_GROUPS:
             raise S1Error(f"model: unknown loss group {k!r} (use {LOSS_GROUPS})")
         grid["loss_W"][k] = _table(t, len(rpm), len(cur), f"grid.loss_W.{k}")
+    fl = g.get("I_floor_A")
+    if fl is not None:
+        if not isinstance(fl, list) or len(fl) != len(rpm):
+            raise S1Error("model: grid.I_floor_A must list one current per grid speed")
+        vals = [0.0 if x is None else _num(x) for x in fl]
+        if any(v is None or v < 0 for v in vals):
+            raise S1Error("model: grid.I_floor_A must be non-negative numbers (or null)")
+        grid["I_floor_A"] = vals
     m["grid"] = grid
     mech = raw.get("mech_W") or {}
     if mech:
@@ -198,6 +206,10 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
     lim = dict(raw.get("limits") or {})
     m["limits"] = lim
     m["torque_factor"] = _num(raw.get("torque_factor")) or 1.0
+    if raw.get("thermal_calibration") is not None:
+        if not isinstance(raw.get("thermal_calibration"), Mapping):
+            raise S1Error("model: thermal_calibration must be a mapping")
+        calibration_of(raw)
     m["flux_temp_coeff_per_K"] = _num(raw.get("flux_temp_coeff_per_K")) or 0.0
     return m
 
@@ -219,22 +231,36 @@ def _bracket(xs: Sequence[float], x: float) -> Tuple[int, int]:
 
 
 def _along_current(row: Sequence[Optional[float]], cur: Sequence[float], I: float,
-                   zero_at_zero: bool) -> Optional[float]:
+                   zero_at_zero: bool, floor: float = 0.0) -> Optional[float]:
     """Value of one speed row at current ``I`` (linear).  Below the first current:
     towards 0 at I = 0 (``zero_at_zero``, the torque) or the first interval's line
-    continued to I = 0 (losses, clamped at 0).  Above the last current: None."""
+    continued to I = 0 (losses, clamped at 0).  Above the last current: None.
+
+    ``floor`` > 0 (a speed above the no-load voltage limit): no current below it
+    can hold the voltage (None there), the row's first FEASIBLE cell takes the
+    place of the first current, and the torque goes to 0 at the floor instead of
+    at I = 0 (conservative: at the floor the current is nearly all d-axis)."""
     if I > cur[-1] + 1e-9:
         return None
-    if I <= cur[0]:
-        y0 = row[0]
+    k0 = 0
+    base = 0.0
+    if floor > 0.0:
+        if I < floor - 1e-9:
+            return None
+        k0 = next((k for k, y in enumerate(row) if y is not None), len(row))
+        if k0 >= len(row):
+            return None
+        base = floor
+    if I <= cur[k0]:
+        y0 = row[k0]
         if y0 is None:
             return None
         if zero_at_zero:
-            return y0 * I / cur[0] if cur[0] > 0 else y0
-        y1 = row[1]
+            return y0 * (I - base) / (cur[k0] - base) if cur[k0] > base else y0
+        y1 = row[k0 + 1] if k0 + 1 < len(row) else None
         if y1 is None:
             return max(y0, 0.0)
-        return max(y0 + (y1 - y0) * (I - cur[0]) / (cur[1] - cur[0]), 0.0)
+        return max(y0 + (y1 - y0) * (I - cur[k0]) / (cur[k0 + 1] - cur[k0]), 0.0)
     lo, hi = _bracket(cur, I)
     a, b = row[lo], row[hi]
     if a is None or b is None:
@@ -251,28 +277,32 @@ def _along_speed(x0: float, y0: float, x1: float, y1: float, x: float, power_law
 
 
 def grid_at(rpm_ax: Sequence[float], cur_ax: Sequence[float], table: Sequence[Sequence[Optional[float]]],
-            rpm: float, I: float, *, kind: str) -> Tuple[Optional[float], bool]:
+            rpm: float, I: float, *, kind: str, floors: Optional[Sequence[float]] = None
+            ) -> Tuple[Optional[float], bool]:
     """``(value, below_grid_speed)`` at (rpm, I); value None = outside / infeasible.
 
     ``kind`` = ``torque`` (linear in rpm, held below the first speed, 0 at I = 0)
     or ``loss`` (power law between speeds, the first interval's law continued below
-    the first speed, line to I = 0 below the first current)."""
+    the first speed, line to I = 0 below the first current).  ``floors`` = the
+    model's ``I_floor_A`` (one per speed row, see ``_along_current``).  At a grid
+    speed exactly, that row alone answers."""
     torque = kind == "torque"
     if rpm > rpm_ax[-1] + 1e-6 or rpm < 0:
         return None, False
+    f = list(floors) if floors else [0.0] * len(rpm_ax)
     below = rpm < rpm_ax[0]
     if below:
         i0, i1 = 0, 1
     else:
         i0, i1 = _bracket(rpm_ax, rpm)
-    y0 = _along_current(table[i0], cur_ax, I, torque)
+    y0 = _along_current(table[i0], cur_ax, I, torque, f[i0])
     if below and torque:
         return y0, True
-    y1 = _along_current(table[i1], cur_ax, I, torque)
+    if not below and rpm == rpm_ax[i0]:
+        return (y0 if (torque or y0 is None) else max(y0, 0.0)), below
+    y1 = _along_current(table[i1], cur_ax, I, torque, f[i1])
     if y0 is None or y1 is None:
         return None, below
-    if rpm == rpm_ax[i0]:
-        return y0, below
     v = _along_speed(rpm_ax[i0], y0, rpm_ax[i1], y1, rpm, power_law=not torque)
     return (max(v, 0.0) if not torque else v), below
 
@@ -320,9 +350,26 @@ def speed_cap(m: Mapping[str, Any]) -> float:
     return min(top, lim) if lim else top
 
 
+def floor_current(m: Mapping[str, Any], rpm: float) -> float:
+    """The smallest current the drive can run at ``rpm`` (``grid.I_floor_A``; 0
+    without one): the larger floor of the two speed rows the point lies between,
+    the row's own at a grid speed, the first row's below the grid."""
+    g = m["grid"]
+    fl = g.get("I_floor_A")
+    if not fl:
+        return 0.0
+    ax = g["rpm"]
+    if rpm <= ax[0]:
+        return float(fl[0])
+    if rpm >= ax[-1]:
+        return float(fl[-1])
+    i0, i1 = _bracket(ax, rpm)
+    return float(fl[i0]) if rpm == ax[i0] else max(float(fl[i0]), float(fl[i1]))
+
+
 def em_torque(m: Mapping[str, Any], rpm: float, I: float, t_magnet_c: float) -> Optional[float]:
     g = m["grid"]
-    t, _ = grid_at(g["rpm"], g["I_A"], g["T_Nm"], rpm, I, kind="torque")
+    t, _ = grid_at(g["rpm"], g["I_A"], g["T_Nm"], rpm, I, kind="torque", floors=g.get("I_floor_A"))
     if t is None:
         return None
     return float(m["torque_factor"]) * t * flux_factor(m, t_magnet_c)
@@ -337,12 +384,22 @@ def current_for_torque(m: Mapping[str, Any], rpm: float, need_Nm: float, t_magne
     below ``need_Nm`` (the grid's field-weakening cells at high speed collapse
     the torque at high current) or the needed current lies in cells the passport
     marks infeasible.  The SMALLEST current that makes the torque is returned
-    (the grid is walked segment by segment: torque is linear in I inside one)."""
-    if need_Nm <= 0:
-        return 0.0, "ok"
+    (the grid is walked segment by segment: torque is linear in I inside one).
+    Above the no-load voltage limit (``floor_current`` > 0) the walk starts at
+    the floor; ``fw_floor`` = the speed alone needs more current than the torque
+    does, and the floor current is returned (the d-axis current that holds the
+    voltage)."""
     cap = current_cap(m)
-    pts = [0.0] + [float(i) for i in m["grid"]["I_A"] if 0.0 < i < cap] + [cap]
-    vals = [0.0] + [em_torque(m, rpm, i, t_magnet_c) for i in pts[1:]]
+    fl = floor_current(m, rpm)
+    if need_Nm <= 0 and fl <= 0:
+        return 0.0, "ok"
+    if fl >= cap:
+        return None, "voltage"
+    pts = [fl] + [float(i) for i in m["grid"]["I_A"] if fl < i < cap] + [cap]
+    vals = [em_torque(m, rpm, fl, t_magnet_c) if fl > 0 else 0.0] \
+        + [em_torque(m, rpm, i, t_magnet_c) for i in pts[1:]]
+    if fl > 0 and vals[0] is not None and need_Nm <= vals[0]:
+        return fl, "fw_floor"
     best_i, best_t = 0, 0.0
     for k in range(1, len(pts)):
         a, b = vals[k - 1], vals[k]
@@ -373,7 +430,7 @@ def losses(m: Mapping[str, Any], rpm: float, I: float, t_winding_c: float) -> Di
         if t is None:
             out[k] = 0.0
             continue
-        v, b = grid_at(g["rpm"], g["I_A"], t, rpm, I, kind="loss")
+        v, b = grid_at(g["rpm"], g["I_A"], t, rpm, I, kind="loss", floors=g.get("I_floor_A"))
         below = below or b
         out[k] = 0.0 if v is None else v
     # resistance-limited eddy in the conductors goes with the conductivity
@@ -404,23 +461,73 @@ def housing_film(air_speed_ms: float, ambient_c: float, d_housing_m: float) -> f
                               d_housing_m=d_housing_m)["h_conv"])
 
 
+#: The calibration constants a model may carry (``thermal_calibration``), with
+#: the value that leaves Configure's network exactly as it is.
+CALIBRATION_KEYS = {"housing_film_factor": 1.0, "winding_air_area_m2": 0.0, "rotor_air_area_m2": 0.0}
+
+
+def calibration_of(m: Mapping[str, Any]) -> Dict[str, float]:
+    """The model's thermal calibration (``thermal_calibration``; absent = Configure's
+    network unchanged).  Every value must be finite and non-negative, the housing
+    factor positive."""
+    raw = m.get("thermal_calibration") or {}
+    out = dict(CALIBRATION_KEYS)
+    for k in CALIBRATION_KEYS:
+        if raw.get(k) is not None:
+            v = _num(raw.get(k))
+            if v is None or v < 0 or (k == "housing_film_factor" and v <= 0):
+                raise S1Error(f"model: thermal_calibration.{k} must be a finite number >= 0 "
+                              "(the housing factor > 0)")
+            out[k] = v
+    return out
+
+
 def temperatures(geom: Mapping[str, float], p_cu: float, p_rotor: float, p_total: float,
-                 h: float, ambient_c: float) -> Dict[str, float]:
+                 h: float, ambient_c: float, cal: Optional[Mapping[str, float]] = None
+                 ) -> Dict[str, float]:
+    """Steady temperatures of Configure's lumped network, optionally calibrated.
+
+    Uncalibrated (``cal`` None or the defaults) every watt leaves through the
+    housing surface (cylinder + both end discs) at the film ``h``: the housing
+    sits at ``T_amb + P/(h·A)``, the winding ``P_cu·R_w`` above it and the rotor
+    ``P_rotor·R_gap`` above it.  The calibration (fitted to coupled FEM anchors)
+    adds the two paths an open, propeller-washed machine has besides its outer
+    surface — the end turns / slot channels straight to the air
+    (``G_wa = h·A_w``) and the rotor faces / ventilated gap straight to the air
+    (``G_ra = h·A_r``) — and scales the housing film (``f_h``).  The three nodes
+    (housing, winding, rotor) are then one linear system; with A_w = A_r = 0 and
+    f_h = 1 it is the uncalibrated network exactly."""
     mm = lambda x: max(0.0, float(x or 0.0)) / 1000.0           # noqa: E731
     D = mm(geom["statorOD_mm"]) or 0.1
     L = mm(geom["stackLength_mm"]) or 0.03
     h = max(1.0, h)
     a_cyl = math.pi * D * L
     a_surf = a_cyl + 2.0 * math.pi * (D / 2.0) ** 2
-    t_h = ambient_c + p_total / (h * a_surf)
     a_slot = max(1e-4, (geom["numSlots"] or 12) * 2.0 * mm(geom["slotHeight_mm"]) * L)
     r_w = ((mm(geom["slotWidth_mm"]) * 0.5) / (K_SLOT * a_slot)
            + mm(geom["insulation_mm"]) / (K_INS * a_slot)
            + mm(geom["coreThickness_mm"]) / (K_IRON * max(1e-4, a_cyl)))
     a_gap = max(1e-4, math.pi * mm(geom["magnetOD_mm"]) * L)
     r_gap = mm(geom["airGap_mm"]) / (K_GAP * a_gap)
-    return {"housing": t_h, "winding": t_h + p_cu * r_w, "magnet": t_h + p_rotor * r_gap,
-            "A_surface_m2": a_surf, "R_winding_K_W": r_w, "R_gap_K_W": r_gap}
+    c = dict(CALIBRATION_KEYS)
+    c.update({k: float(v) for k, v in (cal or {}).items() if k in CALIBRATION_KEYS})
+    g_h = c["housing_film_factor"] * h * a_surf
+    g_wa = c["winding_air_area_m2"] * h
+    g_ra = c["rotor_air_area_m2"] * h
+    g_w, g_r = 1.0 / r_w, 1.0 / r_gap
+    p_h = p_total - p_cu - p_rotor                              # stator iron, PWM extra, bearings
+    # unknowns x = (T_h, T_w, T_r) - T_amb:  [housing; winding; rotor] balances
+    a11, a12, a13 = g_h + g_w + g_r, -g_w, -g_r
+    a21, a22 = -g_w, g_w + g_wa
+    a31, a33 = -g_r, g_r + g_ra
+    # eliminate the winding and rotor nodes into the housing balance
+    s = a11 - a12 * a21 / a22 - a13 * a31 / a33
+    x_h = (p_h - a12 * p_cu / a22 - a13 * p_rotor / a33) / s
+    x_w = (p_cu - a21 * x_h) / a22
+    x_r = (p_rotor - a31 * x_h) / a33
+    return {"housing": ambient_c + x_h, "winding": ambient_c + x_w, "magnet": ambient_c + x_r,
+            "A_surface_m2": a_surf, "R_winding_K_W": r_w, "R_gap_K_W": r_gap,
+            "G_winding_air_W_K": g_wa, "G_rotor_air_W_K": g_ra, "G_housing_W_K": g_h}
 
 
 # ---------------------------------------------------------------------------
@@ -459,16 +566,21 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         "current_A": None, "losses_W": None, "T_winding_C": None, "T_magnet_C": None,
         "T_housing_C": None, "margin_winding_K": None, "margin_magnet_K": None,
         "electrical_power_W": None, "battery_power_W": None, "controller_loss_W": None,
-        "converged": None, "iterations": 0, "below_loss_grid": False, "ok": False, "binding": None,
+        "converged": None, "iterations": 0, "below_loss_grid": False, "fw_floor": False, "ok": False,
+        "binding": None,
     }
     if rpm > lims["rpm_max"] + 1e-6:
         row["binding"] = "speed"
         return row
+    cal = calibration_of(m)
+    # above the no-load voltage limit the drive carries d-axis current at any load
+    row["fw_floor"] = floor_current(m, rpm) > 0.0
     t_w = t_m = float(ambient_c)
     damping, last_res = 1.0, float("inf")
     I = None
     for it in range(1, FIXED_POINT_MAX_IT + 1):
         I, status = current_for_torque(m, rpm, q_em, t_m)
+
         if I is None:
             # the torque is out of reach (at the current cap or the voltage limit).  When the
             # iterate is already past a temperature limit the motor overheats on the way there
@@ -479,7 +591,8 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
             return row
         ls = losses(m, rpm, I, t_w)
         p_rotor = ls["fe_rotor"] + ls["rotor_eddy"]
-        th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], p_rotor, ls["motor_total"], h, ambient_c)
+        th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], p_rotor, ls["motor_total"], h,
+                          ambient_c, cal)
         res = max(abs(th["winding"] - t_w), abs(th["magnet"] - t_m))
         if res > last_res * 0.999 and it > 3:
             damping = max(0.1, damping * 0.5)
@@ -498,7 +611,7 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         row["converged"] = False
     ls = losses(m, rpm, I, t_w)
     th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
-                      ls["motor_total"], h, ambient_c)
+                      ls["motor_total"], h, ambient_c, cal)
     p_in = op["shaft_power_W"] + ls["motor_total"]
     pc = controller_loss(m, rpm, I)
     row.update(current_A=I, T_winding_C=th["winding"], T_magnet_C=th["magnet"], T_housing_C=th["housing"],
@@ -600,7 +713,8 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
                  "T_winding_C": best["T_winding_C"], "T_magnet_C": best["T_magnet_C"],
                  "T_housing_C": best["T_housing_C"], "air_speed_ms": best["air_speed_ms"],
                  "binding": binding, "extrapolated": best["extrapolated"],
-                 "power_estimated": best["power_estimated"], "below_loss_grid": best["below_loss_grid"]}
+                 "power_estimated": best["power_estimated"], "below_loss_grid": best["below_loss_grid"],
+                 "fw_floor": bool(best.get("fw_floor"))}
         if binding == "speed_range":
             limit["range_end_basis"] = (lims["rpm_max_basis"] if hi >= lims["rpm_max"] - 1e-6
                                         else "1.5 x the propeller's highest tested rpm")
@@ -618,7 +732,9 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
                   "magnet_ref_temp_C": m.get("magnet_ref_temp_C"), "R_temp_C": m.get("R_temp_C"),
                   "flux_temp_coeff_per_K": m.get("flux_temp_coeff_per_K"),
                   "flux_coeff_basis": m.get("flux_coeff_basis"),
-                  "torque_factor": m.get("torque_factor"), "controller": (m.get("controller") or {}).get("variant")},
+                  "torque_factor": m.get("torque_factor"), "controller": (m.get("controller") or {}).get("variant"),
+                  "thermal_calibration": ({k: v for k, v in m["thermal_calibration"].items() if k != "anchors"}
+                                          if m.get("thermal_calibration") else None)},
         "method": "propeller Q(n) + bearing/windage -> current from the passport torque map at the magnet "
                   "temperature -> passport loss grid with R(T) -> slipstream film (outer_air) -> Configure's "
                   "lumped thermal estimate, iterated to the fixed point at each speed; limit by bisection",

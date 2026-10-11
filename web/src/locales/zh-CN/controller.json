@@ -558,6 +558,8 @@
     "s1FlagExtrapolated": "螺旋桨数据超出其测试转速范围（外推）。",
     "s1FlagEstimated": "螺旋桨功率为估算值。",
     "s1FlagBelowGrid": "低于护照最低转速的电机损耗为外推值。",
+    "s1FlagFwFloor": "高于空载电压极限：驱动器需提供弱磁电流。",
+    "s1FlagCalibrated": "集总热模型已按该冷却方式的耦合有限元计算校准。",
     "s1FlagBands": "非单调：部分较低转速超出限值。",
     "s1Marker": "S1",
     "curvesTitle": "螺旋桨曲线",

@@ -302,6 +302,11 @@ def cmd_run(a: argparse.Namespace) -> None:
     st = _state(od)
     from motor_ai_sim.passport_v1 import stages
     st.setdefault("baseline_runs", []).append(_baseline(work, a))
+    if getattr(a, "loss4_speeds", None):
+        # the bounded speed extension of stage loss4 (rpm list, current list in A)
+        st["loss4_request"] = {"speeds": [float(x) for x in a.loss4_speeds.split(",")],
+                               "currents": [float(x) for x in (a.loss4_currents or "").split(",") if x],
+                               "reason": a.loss4_reason or "request"}
     _save_state(od, st)
     R = Runner(od, snap, a.workers)
     t0 = time.time()
@@ -373,6 +378,9 @@ def main(argv=None) -> None:
     r.add_argument("--machine", required=True)
     r.add_argument("--stages", required=True)
     r.add_argument("--workers", type=int, default=WORKERS_DEFAULT)
+    r.add_argument("--loss4-speeds", default=None, help="stage loss4: extra speeds, rpm (comma list)")
+    r.add_argument("--loss4-currents", default=None, help="stage loss4: currents, A rms (comma list)")
+    r.add_argument("--loss4-reason", default=None, help="stage loss4: why (recorded in the state)")
     sub.add_parser("assemble")
     a = ap.parse_args(argv)
     _use_spec(a.spec)

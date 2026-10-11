@@ -32,6 +32,7 @@ from motor_ai_sim import sweep_journal as _sweep_journal
 from motor_ai_sim.config import get_config
 from motor_ai_sim.optimization import run_pareto_search
 from motor_ai_sim.optimization import pareto as _pareto
+from motor_ai_sim.optimization import eval_log as _eval_log
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/optimization", tags=["optimization"])
@@ -459,6 +460,10 @@ def _load_eval_cache() -> None:
                         continue
                     try:
                         rec = json.loads(line)
+                        if not _eval_log.servable_cache_record(rec):
+                            # schema 2: a failed / infeasible / value-less
+                            # line is a LOG row, never a cache hit.
+                            continue
                         if not _eval_healthy(rec["v"]):
                             n_bad += 1
                             continue
@@ -516,10 +521,50 @@ def _store_eval(key: str, res: Dict[str, Any]) -> None:
             return
         _EVAL_CACHE[key] = res
         try:
-            with open(_eval_cache_path(), "a", encoding="utf-8") as fh:
-                fh.write(json.dumps({"k": key, "v": res}, default=float) + "\n")
+            line = {"k": key, "v": res}
+            try:
+                # schema 2: provenance beside the value ("m"), optional for
+                # readers -- the cache itself only ever reads "k" and "v".
+                camp = _eval_log.current()
+                line["m"] = _eval_log.build_meta(
+                    status=_eval_log.STATUS_OK,
+                    camp=(camp.snapshot() if camp else None),
+                    res=(res.get("res") if isinstance(res.get("res"), dict)
+                         else res))
+                line["m"]["cfg_fp"] = _config_fingerprint()
+            except Exception:  # noqa: BLE001 — provenance must not lose the value
+                line.pop("m", None)
+            # already inside `with _eval_cache_lock` -- do not re-take it.
+            # "v" is stored verbatim (NaN/inf allowed, as before this change);
+            # only the "m" provenance block is strict-JSON (build_meta cleans it).
+            _eval_log.append_line(_eval_cache_path(), line, allow_nan=True)
         except Exception as _e:  # noqa: BLE001
             log.warning("could not persist eval: %s", _e)
+
+
+def _log_eval_failure_cache(key: str, out: Optional[Dict[str, Any]], *,
+                            overrides=None, current_a=None, gamma_deg=None,
+                            pre_solve: bool = False) -> None:
+    """Append a failed / infeasible sweep point to ``.scan_cache.jsonl`` as a
+    LOG line ``{"k", "m", "inputs"}`` -- no ``"v"``, so the cache loader skips it
+    and it can never be served as a hit.  Never enters ``_EVAL_CACHE``."""
+    try:
+        if isinstance(out, dict) and (out.get("ok") or out.get("cancelled")):
+            return
+        status, eclass = _eval_log.classify_result(out)
+        camp = _eval_log.current()
+        m = _eval_log.build_meta(
+            status=status, camp=(camp.snapshot() if camp else None),
+            error=(out or {}).get("error"), error_class=eclass,
+            pre_solve=pre_solve)
+        m["cfg_fp"] = _config_fingerprint()
+        line = {"k": key, "m": m,
+                "inputs": {"overrides": overrides, "current_a": current_a,
+                           "gamma_deg": gamma_deg}}
+        _eval_log.append_line(_eval_cache_path(), _eval_log.clean(line),
+                              lock=_eval_cache_lock)
+    except Exception as _e:  # noqa: BLE001
+        log.debug("could not log failed sweep point: %s", _e)
 
 
 _load_eval_cache()   # warm the cache from disk so it survives a backend restart
@@ -688,6 +733,7 @@ class _OptimizerJob:
         self.token: Optional[int] = None
         self.workers = 1
         self._ctx_tok = None
+        self._camp_cm = None
 
     def __enter__(self) -> "_OptimizerJob":
         with _opt_jobs_cond:
@@ -697,6 +743,13 @@ class _OptimizerJob:
             n = len(_opt_jobs_inflight)
         self.workers = _optimizer_share(n)
         self._ctx_tok = _OPT_JOB.set(self.token)
+        # One campaign id per optimisation / sweep run, visible to every pool
+        # worker (WorkspaceThreadPoolExecutor copies the whole context) so
+        # every eval row of the run carries it (eval_log, schema 2).
+        self._camp_cm = _eval_log.campaign(
+            self.kind, stage=(_eval_log.STAGE_SWEEP if self.kind == "scan"
+                              else _eval_log.STAGE_FREE))
+        self._camp_cm.__enter__()
         log.info("optimizer job %s started: %d concurrent optimizer job(s), "
                  "%d eval worker(s) for this one (budget %d%s)", self.kind, n,
                  self.workers, _optimizer_worker_budget(),
@@ -705,6 +758,12 @@ class _OptimizerJob:
         return self
 
     def __exit__(self, *exc) -> None:
+        if self._camp_cm is not None:
+            try:
+                self._camp_cm.__exit__(None, None, None)
+            except Exception:    # noqa: BLE001 — logging must never break a run
+                pass
+            self._camp_cm = None
         try:
             _OPT_JOB.reset(self._ctx_tok)
         except (ValueError, RuntimeError):    # reset from another context
@@ -1387,6 +1446,22 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                        **({} if connection is None
                           else {"connection": str(connection)})})
     import time as _t_eval
+    # What this eval was solved WITH -- provenance for the eval log (schema 2).
+    _solve_meta = {
+        "steps": int(steps), "n_periods": float(n_periods),
+        "coil_temp_c": float(coil_temp_c), "mesh_size_mm": float(mesh_size_mm),
+        "min_size_mm": float(min_size_mm), "n_sectors": int(n_sectors),
+        "gap_layers": _resolve_gap_layers(gap_layers)[0],
+        "end_winding_factor": float(end_winding_factor),
+        "rotor_eddy": bool(rotor_eddy), "hi_fidelity": bool(hi_fidelity),
+        "structured_gap": bool(structured_gap), "airgap_macro": bool(airgap_macro),
+        "iron_template": bool(iron_template), "geo_mesh": bool(geo_mesh),
+        "element_order": int(element_order),
+        "demag": (None if demag is None else bool(demag)),
+        "rpm": (None if rpm is None else float(rpm)),
+        "magnet_temp_c": (None if magnet_temp_c is None else float(magnet_temp_c)),
+        "n_parallel": n_parallel, "connection": connection,
+    }
     # One CPU budget across concurrent optimizer jobs (item 4): wait for this
     # job's slot BEFORE the clock starts, so a queued eval is neither timed nor
     # hang-capped for the time it spent waiting.
@@ -1554,7 +1629,9 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                             "gamma=%.3g deg overrides=%s",
                             _res.get("error"), current_a, gamma_deg, overrides)
             if _log:
-                _log_eval(overrides, current_a, gamma_deg, _res)   # accumulate surrogate dataset
+                _log_eval(overrides, current_a, gamma_deg, _res,   # accumulate surrogate dataset
+                          solve=_solve_meta, sampling_purpose=sampling_purpose,
+                          elapsed_s=_t_eval.monotonic() - _t0_eval)
             return _res
         # No @@RESULT@@: say HOW the worker ended.  The last stderr line used
         # to be reported alone, and on 2026-09-06 that was a geometry-sanitiser
@@ -1565,12 +1642,29 @@ def _subprocess_eval(overrides: Dict[str, float], current_a: float, steps: int,
                   and not ln.startswith("core loss")]
         _last = (_lines[-1] if _lines else "no stderr")[:160]
         _rc = getattr(proc, "returncode", None)
-        return {"ok": False,
-                "error": f"worker exited with code {_rc} without a result: {_last}"}
+        _fail = {"ok": False,
+                 "error": f"worker exited with code {_rc} without a result: {_last}"}
+        if _log:
+            _log_eval(overrides, current_a, gamma_deg, _fail, solve=_solve_meta,
+                      sampling_purpose=sampling_purpose,
+                      elapsed_s=_t_eval.monotonic() - _t0_eval)
+        return _fail
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": "timeout"}
+        _fail = {"ok": False, "error": "timeout"}
+        if _log:
+            _log_eval(overrides, current_a, gamma_deg, _fail, solve=_solve_meta,
+                      sampling_purpose=sampling_purpose,
+                      elapsed_s=_t_eval.monotonic() - _t0_eval,
+                      error_class="TimeoutExpired")
+        return _fail
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": str(e)}
+        _fail = {"ok": False, "error": str(e)}
+        if _log:
+            _log_eval(overrides, current_a, gamma_deg, _fail, solve=_solve_meta,
+                      sampling_purpose=sampling_purpose,
+                      elapsed_s=_t_eval.monotonic() - _t0_eval,
+                      error_class=type(e).__name__)
+        return _fail
     finally:
         _optimizer_slot_release(_slot)
 
@@ -1706,6 +1800,12 @@ def _refine_worker(designs: List[Dict[str, Any]], steps: int, coil_temp_c: float
                    run_id: str) -> None:
     """Evaluate each design in an ISOLATED subprocess (the FEM stack can crash
     the LLVM JIT; a subprocess crash yields a failed design, not a dead API)."""
+    with _eval_log.campaign("refine", stage=_eval_log.STAGE_FINAL):
+        _refine_worker_body(designs, steps, coil_temp_c, run_id)
+
+
+def _refine_worker_body(designs: List[Dict[str, Any]], steps: int,
+                        coil_temp_c: float, run_id: str) -> None:
     for i, dz in enumerate(designs):
         if _refine_state["cancel"]:
             break
@@ -2092,6 +2192,11 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                 out = {"ok": False, "error": "source config changed during FEM scan"}
             if out and out.get("ok"):
                 _store_eval(_cache_key(geo_ov, I, g, oprpm), out)   # cache successful evals only
+            else:
+                # The negative result goes to the LOG, never to the cache.
+                _log_eval_failure_cache(_cache_key(geo_ov, I, g, oprpm), out,
+                                        overrides=geo_ov, current_a=I,
+                                        gamma_deg=g)
             return i, _mk_point(out, ov, I, gi, oi, g, oprpm, fp_before)
 
         # PREFILL: instantly plot every point already in the cache (from prior
@@ -2118,6 +2223,7 @@ def _scan_worker(variables, operating_points, steps, coil_temp_c, ripple_max,
                              "feasible": False, "eligible": False,
                              "geometry_rejected": True, "error": _rej[gi]}
                 n_rejected += 1
+                _log_prefence_reject(geo_ov, I, g, _rej[gi])
                 continue
             out = _EVAL_CACHE.get(_cache_key(geo_ov, I, g, oprpm))
             if out is not None:
@@ -3028,37 +3134,65 @@ def _dataset_path() -> str:
     return _descent_store_path().replace(".last_descent.json", ".opt_dataset.jsonl")
 
 
-def _log_eval(overrides, current_a, gamma_deg, result) -> None:
-    """Append one FEM evaluation to the optimization dataset.  Thread-safe,
-    best-effort (never breaks an eval).  Called for every _subprocess_eval."""
+def _log_eval(overrides, current_a, gamma_deg, result, *, solve=None,
+              sampling_purpose=None, elapsed_s=None, error_class=None,
+              pre_solve=False) -> None:
+    """Append one evaluation to the optimization dataset.  Thread-safe,
+    append-only (one atomic line), best-effort (never breaks an eval).  Called
+    for every _subprocess_eval.
+
+    Schema 2 (eval_log): EVERY outcome is a row -- ``status`` ok | infeasible |
+    failed -- with the campaign id, stage, timestamp, objective, constraint
+    verdicts, build fingerprint and (for failures) a short sanitised error.  A
+    cancelled eval is a Stop, not a design, and is not logged.  The legacy
+    metric keys of an ok row are unchanged; a failed row has none of them, so
+    every consumer that needs metrics (surrogate, warm start) skips it."""
     try:
-        if not (result and result.get("ok")):
+        if isinstance(result, dict) and result.get("cancelled"):
             return
-        r = result.get("res") or {}
+        status, eclass = _eval_log.classify_result(result, error_class)
+        r = (result.get("res") if status == _eval_log.STATUS_OK else None) or {}
+        camp = _eval_log.current()
+        meta = _eval_log.build_meta(
+            status=status, camp=(camp.snapshot() if camp else None),
+            sampling_purpose=sampling_purpose, elapsed_s=elapsed_s,
+            error=(result or {}).get("error"),
+            error_class=eclass,
+            res=r, solve=solve, pre_solve=pre_solve)
         rec = {
             "overrides": overrides, "current_a": current_a, "gamma_deg": gamma_deg,
-            "ripple": r.get("T_ripple_pct"), "torque": r.get("T_em_Nm"),
-            "eff": r.get("efficiency"), "td": r.get("torque_per_mass_Nm_kg"),
-            "mass": r.get("mass_total_kg"), "v_peak": r.get("V_peak"),
-            "p_loss": r.get("P_loss_total_W"),
-            # Waveform quality (CIANO FOC spec) — lets the surrogate screen THD.
-            "thd_ll": r.get("THD_LL_pct"), "kt": r.get("Kt_Nm_per_Arms"),
-            # WHICH MACHINE produced this row.  ``overrides`` is a DELTA on the
-            # active baseline geometry, so without the baseline's fingerprint a
-            # row from a 40 mm motor is indistinguishable from a 30 mm one — and
-            # warm-starting a search from another machine's optimum is exactly
-            # the stale-machine failure this repo refuses everywhere else.  Same
-            # fingerprint the FEM eval cache is keyed by (geometry + winding +
-            # materials + magnet + speed; operating point deliberately excluded,
-            # it travels next to it as current_a / gamma_deg).
-            "cfg_fp": _config_fingerprint(),
         }
-        import json as _json_o
-        with _dataset_lock:
-            with open(_dataset_path(), "a", encoding="utf-8") as f:
-                f.write(_json_o.dumps(rec, default=float) + "\n")
+        if status == _eval_log.STATUS_OK:
+            rec.update({
+                "ripple": r.get("T_ripple_pct"), "torque": r.get("T_em_Nm"),
+                "eff": r.get("efficiency"), "td": r.get("torque_per_mass_Nm_kg"),
+                "mass": r.get("mass_total_kg"), "v_peak": r.get("V_peak"),
+                "p_loss": r.get("P_loss_total_W"),
+                # Waveform quality (CIANO FOC spec) — lets the surrogate screen THD.
+                "thd_ll": r.get("THD_LL_pct"), "kt": r.get("Kt_Nm_per_Arms"),
+            })
+        # WHICH MACHINE produced this row.  ``overrides`` is a DELTA on the
+        # active baseline geometry, so without the baseline's fingerprint a
+        # row from a 40 mm motor is indistinguishable from a 30 mm one — and
+        # warm-starting a search from another machine's optimum is exactly
+        # the stale-machine failure this repo refuses everywhere else.  Same
+        # fingerprint the FEM eval cache is keyed by (geometry + winding +
+        # materials + magnet + speed; operating point deliberately excluded,
+        # it travels next to it as current_a / gamma_deg).
+        rec["cfg_fp"] = _config_fingerprint()
+        rec.update(meta)
+        _eval_log.append_line(_dataset_path(), _eval_log.clean(rec),
+                              lock=_dataset_lock)
     except Exception:
         pass
+
+
+def _log_prefence_reject(overrides, current_a, gamma_deg, why) -> None:
+    """A candidate the in-process geometry screen refused BEFORE any FEM was
+    started is still a negative result: log it as ``infeasible``."""
+    _log_eval(overrides, current_a, gamma_deg,
+              {"ok": False, "error": "geometry violation: %s" % (why,)},
+              pre_solve=True)
 
 
 def _descent_json_default(o):
@@ -3158,6 +3292,8 @@ def _backfill_point_metrics(points: List[Dict[str, Any]]) -> int:
                     r = _json_o.loads(line)
                 except Exception:      # noqa: BLE001 — a torn last line
                     continue
+                if not (isinstance(r, dict) and _eval_log.is_ok_row(r)):
+                    continue           # schema 2: failed rows carry no metrics
                 cur = _pareto._f(r.get("current_a"))
                 if cur is None:
                     continue
@@ -4056,6 +4192,8 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
     from concurrent.futures import as_completed
     from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
                                         as ThreadPoolExecutor)
+    _eval_log.set_objective(str(objective))
+    _eval_log.set_limits(ripple_max_pct=ripple_max, v_peak_limit_v=v_peak_limit)
     try:
         cfg = get_config()
         geo0 = dict(cfg.get("geometry", {}))
@@ -4184,6 +4322,7 @@ def _descent_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
             _pub_pt(all_pts, bb, "baseline_bump")
             with _descent_lock:
                 _descent_state["baseline_line"] = dict(base["_bline"])
+                _eval_log.set_baseline_line(base["_bline"])
         cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
         best = {"x": dict(x), "metrics": base, "cost": cost0, "F": F0}   # descent iterate
         # best_seen = the GLOBALLY lowest-cost design over ALL evaluations (not just
@@ -4470,6 +4609,10 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
     from motor_ai_sim.workspace import (WorkspaceThreadPoolExecutor
                                         as ThreadPoolExecutor)
     import numpy as np
+    _eval_log.set_objective(str(objective))
+    _eval_log.set_limits(ripple_max_pct=ripple_max, v_peak_limit_v=v_peak_limit)
+    if surrogate_seed:
+        _eval_log.set_stage(_eval_log.STAGE_SEEDED)
     try:
         import cma
     except Exception as e:  # noqa: BLE001
@@ -4630,6 +4773,7 @@ def _cmaes_worker(var_specs, op, ripple_max, w_eff, w_td, lam,
                     _bb_pub = bb          # published below, next to point A
                     with _descent_lock:
                         _descent_state["baseline_line"] = dict(base["_bline"])
+                        _eval_log.set_baseline_line(base["_bline"])
                 cost0, F0 = _descent_cost(base, base, ripple_max, w_eff, w_td, lam, v_peak_limit)
                 best = {"x": to_geom(x0n), "metrics": base, "cost": cost0, "F": F0}
                 history.append(_hrow(0, base, cost0, F0, best["x"]))
@@ -6282,6 +6426,8 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     ripple_max = float(plan["ripple_max_pct"])
     budget = int(plan["budget_evals"])
     pop = int(plan["population"])
+    _eval_log.set_objective("baseline_line")      # STANDING RULE (see plan)
+    _eval_log.set_limits(ripple_max_pct=ripple_max)
 
     counts = {"ok": 0, "geometry": 0, "unconverged": 0, "mesh": 0,
               "timeout": 0, "other": 0,
@@ -6384,6 +6530,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             _pub_pt(all_pts, bb, "baseline_bump")   # point B is a measured design too
             with _descent_lock:
                 _descent_state["baseline_line"] = dict(base["_bline"])
+                _eval_log.set_baseline_line(base["_bline"])
         else:
             # Without point B there is no line, hence no perpendicular metric —
             # and the standing rule forbids silently falling back to another
@@ -6436,6 +6583,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                                  ripple_max, base,
                                  accept=lambda d: _auto_prefence(d) is None)
         if _seed:
+            _eval_log.set_stage(_eval_log.STAGE_SEEDED)
             x_start = list(_seed["x"])
             log.info("AUTO: seeded from %d cached evals (this machine, this "
                      "operating point) | seed F=%+.5g vs baseline 0 | %s",
@@ -6501,6 +6649,7 @@ def _auto_worker(plan: Dict[str, Any], run_id: str, bucket: str,
                 if why is None:
                     continue
                 gen_invalid += 1
+                _log_prefence_reject(to_geom(sols[i]), I, g, why)
                 for _try in range(_AUTO_RESAMPLE_TRIES):
                     cand = es.ask(1)[0]
                     if _auto_prefence(to_geom(cand)) is None:
@@ -6746,6 +6895,8 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
     conn = (op.get("connection") or None)
     ripple_max = float(plan["ripple_max_pct"])
     budget = int(plan["budget_evals"])
+    _eval_log.set_objective("baseline_line")      # STANDING RULE (see plan)
+    _eval_log.set_limits(ripple_max_pct=ripple_max)
 
     counts = {"ok": 0, "geometry": 0, "unconverged": 0, "mesh": 0,
               "timeout": 0, "other": 0, "resampled": 0, "prefenced": 0}
@@ -6869,6 +7020,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
             why = _auto_prefence(d)
             if why is not None:
                 counts["prefenced"] += 1
+                _log_prefence_reject(d, I, g, why)
                 memo[k] = None
                 log.info("SCREEN: candidate rejected before the FEM (%s)",
                          str(why)[:140])
@@ -6966,6 +7118,7 @@ def _screen_worker(plan: Dict[str, Any], run_id: str, bucket: str,
         _pub_pt(all_pts, bb, "baseline_bump")   # point B is a measured design too
         with _descent_lock:
             _descent_state["baseline_line"] = dict(base["_bline"])
+            _eval_log.set_baseline_line(base["_bline"])
 
         def _score(m: Optional[Dict[str, Any]]):
             """(cost, F) for one evaluated point — computed NOW, at the current

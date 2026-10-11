@@ -57,8 +57,13 @@ def dataset_path() -> str:
     return os.path.abspath(os.path.join(base, ".opt_dataset.jsonl"))
 
 
-def load_dataset(path: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Read the JSONL dataset; tolerant of partial/corrupt trailing lines."""
+def load_dataset(path: Optional[str] = None,
+                 include_failed: bool = False) -> List[Dict[str, Any]]:
+    """Read the JSONL dataset; tolerant of partial/corrupt trailing lines.
+
+    Schema-2 rows also log failed / infeasible evaluations (``status``); they
+    carry no metrics and are NOT training data, so they are dropped unless
+    ``include_failed``.  A row without ``status`` (schema 1) is ``ok``."""
     path = path or dataset_path()
     recs: List[Dict[str, Any]] = []
     if not os.path.exists(path):
@@ -69,9 +74,13 @@ def load_dataset(path: Optional[str] = None) -> List[Dict[str, Any]]:
             if not line:
                 continue
             try:
-                recs.append(json.loads(line))
+                rec = json.loads(line)
             except Exception:
-                pass
+                continue
+            if (not include_failed and isinstance(rec, dict)
+                    and rec.get("status") in ("failed", "infeasible")):
+                continue
+            recs.append(rec)
     return recs
 
 

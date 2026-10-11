@@ -733,4 +733,5 @@ if __name__ == "__main__":
                                                         False)))
         sys.stdout.write("@@RESULT@@" + json.dumps({"ok": True, "res": res}))
     except Exception as e:  # noqa: BLE001
-        sys.stdout.write("@@RESULT@@" + json.dumps({"ok": False, "error": str(e)}))
+        sys.stdout.write("@@RESULT@@" + json.dumps(
+            {"ok": False, "error": str(e), "error_class": type(e).__name__}))

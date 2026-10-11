@@ -1,4 +1,4 @@
-"""The pilot's computation stages (driven by scripts/passport_pilot_d40.py).
+"""The passport's computation stages (driven by scripts/passport_pilot.py + a spec).
 
 Each stage plans jobs from the frozen snapshot and the state of the previous
 stages, runs them through the runner's process pool and records what it
@@ -38,6 +38,44 @@ def _I0(snap) -> float:
 
 def _n0(snap) -> float:
     return float(snap["rated_duty"]["rpm"])
+
+
+#: Loss-trajectory speeds as multiples of the rated speed (the Ø40 pilot's
+#: default; a spec's ``plan.loss_speed_factors`` overrides it).
+LOSS_SPEED_FACTORS = (0.25, 0.5, 1.0, 1.5)
+
+
+def _speed_factors(snap) -> Tuple[float, ...]:
+    return tuple(float(f) for f in ((snap.get("plan") or {}).get("loss_speed_factors")
+                                    or LOSS_SPEED_FACTORS))
+
+
+def loss_steps(snap) -> int:
+    """Steps per period of the settled loss runs: the spec's
+    ``plan.loss_steps_per_period`` when set (Ø85: 60 against the duty's 120 —
+    a TDM loss point cost 27 min single-thread at 120; the B4 check re-solves
+    the rated trajectory point at the duty's own count), else the duty's."""
+    v = (snap.get("plan") or {}).get("loss_steps_per_period")
+    return int(v) if v else int(snap["rated_duty"]["steps_per_period"])
+
+
+def _n_mech(mech0: Mapping[str, Any]) -> float:
+    """The bearing speed limit, or +inf when no bearing names one (NaN-safe:
+    a machine with no bearings has NO mechanical limit from them, stated)."""
+    v = mech0.get("speed_limit_rpm")
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return float("inf")
+    return v if math.isfinite(v) and v > 0 else float("inf")
+
+
+def _audit(snap) -> bool:
+    """The Ø40 audit-2026-09-30 corners apply only where the spec asks for them."""
+    oi = snap.get("owner_inputs") or {}
+    if "audit" in oi:
+        return bool(oi["audit"])
+    return snap.get("tag") == "L12" and snap.get("die") == "CIANO14 40 new"
 
 
 def _base(snap, st, static: bool = True):
@@ -168,6 +206,41 @@ def stage_hot(R, snap, st) -> None:
         fixed.append(job(I, D_AXIS_ANCHOR, "d-axis anchor"))
     for fI in LEVELS[-2:]:
         fixed.append(job(fI * I0, -5.0, "gamma=-5 (saturation ridge shift)"))
+    gf = (snap.get("plan") or {}).get("fixed_gamma_deg")
+    if gf is not None:
+        # Owner-directed fixed operating angle (Ø85, 2026-10-10): one angle,
+        # selected once at the nominal point, at every loaded row.  Each level
+        # gets that angle plus +-MTPA_STEP map samples (the map stays dense
+        # around the operating line); the parabola through the three is kept
+        # as information only — it never moves the operating angle.
+        gf = round(float(gf), 4)
+        st["fixed_gamma_deg"] = gf
+        st["fixed_gamma_source"] = str((snap.get("plan") or {}).get("fixed_gamma_source") or "")
+        lv = []
+        for fI in LEVELS:
+            I = fI * I0
+            js = [job(I, round(gf - MTPA_STEP, 4), "fixed-angle map sample"),
+                  job(I, gf, "fixed operating angle"),
+                  job(I, round(gf + MTPA_STEP, 4), "fixed-angle map sample")]
+            lv.append((fI, I, js))
+        R.run(fixed + [j for _, _, js in lv for j in js])
+        mtpa_rec = []
+        for fI, I, js in lv:
+            gs = [float(j["meta"]["gamma"]) for j in js]
+            Ts = [float(R.done[j["id"]]["r"]["T_avg_Nm"]) for j in js]
+            gv, Tv, ok = PM.parabola_vertex(gs, Ts)
+            mtpa_rec.append({"fI": fI, "I": I, "gamma_mtpa": gf, "T_parabola": Ts[1],
+                             "conf_id": js[1]["id"], "bracket": gs, "T_bracket": Ts,
+                             "parabola_bracketed": ok, "T_fem_vertex": Ts[1],
+                             "vertex_vs_parabola_pct": 0.0, "vertex_ge_samples": None,
+                             "method": "fixed operating angle (owner 2026-10-10)",
+                             "info_parabola_vertex_deg": round(gv, 3),
+                             "info_parabola_T": Tv,
+                             "fixed_vs_vertex_pct": 100.0 * (Ts[1] - Tv) / Tv if Tv else None})
+            print("  level %.2f I0: fixed gamma %.3f°, T %.6g (vertex %.2f°, %.4g)"
+                  % (fI, gf, Ts[1], gv, Tv), flush=True)
+        st["hot_mtpa"] = mtpa_rec
+        return
     mtpa_rec = []
     g_hat = 0.0
     pending = list(fixed)
@@ -221,7 +294,8 @@ def pole_pairs(snap) -> int:
 def hot_map(R, snap, st):
     from motor_ai_sim.passport_v1 import psimap as PM
     pts = PM.points_from_records(R.done.values(), "hot")
-    return PM.PsiMap.build(pts, pole_pairs(snap), mtpa=PM.mtpa_table(st["hot_mtpa"]))
+    return PM.PsiMap.build(pts, pole_pairs(snap), mtpa=PM.mtpa_table(st["hot_mtpa"]),
+                           fixed_gamma=st.get("fixed_gamma_deg"))
 
 
 def R_hot(R, st) -> float:
@@ -257,7 +331,7 @@ def stage_demag(R, snap, st) -> None:
     Tm, Tc = _hot(snap)
     b = _base(snap, st, static=False)
     I0, n0 = _I0(snap), _n0(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = loss_steps(snap)
     jl = []
     mt = {round(m["fI"], 6): m for m in st["hot_mtpa"]}
     for fI, g in DEMAG_PROBES:
@@ -390,13 +464,14 @@ def stage_refine(R, snap, st) -> None:
     b = _base(snap, st)
     I0, n0 = _I0(snap), _n0(snap)
     jl = []
-    for fI, g in REFINE_POINTS:
+    pts = [tuple(x) for x in ((snap.get("plan") or {}).get("refine_points") or REFINE_POINTS)]
+    for fI, g in pts:
         jl.append(J.static_job("hot_I%.4g_g%s" % (fI, _g(g)), b, I_rms=fI * I0, gamma_deg=g,
                                magnet_temp_c=Tm, coil_temp_c=Tc, rpm=n0,
                                meta={"set": "hot", "fI": fI, "gamma": g,
                                      "role": "fw refinement (P04, after the first check pass)"}))
     R.run(jl)
-    st["refinement"] = {"points": [list(p) for p in REFINE_POINTS],
+    st["refinement"] = {"points": [list(p) for p in pts],
                         "reason": "first check pass: L20 (2.25·I0, 42.5°) ψ +1.0 %, "
                                   "(2.25·I0, 57.5°) ψ +0.52 % — FW arm 15° too coarse at "
                                   "the top levels; checks themselves are NOT added to the grid"}
@@ -434,7 +509,7 @@ def stage_extra(R, snap, st) -> None:
           and abs(p["I"] - I0) < 1e-6][0]
     jl.append(J.loss_job("xs_rated_nodemag", _base(snap, st, static=False), I_rms=I0,
                          gamma_deg=round(rp["gamma"], 3), rpm=n0, magnet_temp_c=Tm,
-                         coil_temp_c=Tc, steps=int(snap["rated_duty"]["steps_per_period"]),
+                         coil_temp_c=Tc, steps=loss_steps(snap),
                          demag=False,
                          meta={"set": "state_split", "rpm": n0, "I": I0,
                                "gamma": round(rp["gamma"], 3),
@@ -476,17 +551,20 @@ def stage_loss(R, snap, st) -> None:
     Tm, Tc = _hot(snap)
     b = _base(snap, st, static=False)
     I0, n0 = _I0(snap), _n0(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = loss_steps(snap)
     hm = hot_map(R, snap, st)
     Rh = R_hot(R, st)
-    vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), M_MARGIN)
+    # a spec may state the controller margin up front (Ø85: 0.89), so the first
+    # trajectory is already the one loss2/loss3 re-plan to (no duplicate FW points)
+    m0 = float((snap.get("plan") or {}).get("m_margin") or M_MARGIN)
+    vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), m0)
     I_pk, I_pk_src = _peak_current(snap, st)
     mech0 = LS.mech_losses(rpm=n0, bearings=snap["bearings"], geometry=snap["geometry"],
                            temp_c=None)
-    n_mech = float(mech0.get("speed_limit_rpm") or float("inf"))
+    n_mech = _n_mech(mech0)
     n_elec = hm.max_speed(Rh, vlim, I_pk)
     n_max = min(n_mech, n_elec)
-    speeds = sorted({round(f * n0, 3) for f in (0.25, 0.5, 1.0, 1.5)} | {round(n_max, 0)})
+    speeds = sorted({round(f * n0, 3) for f in _speed_factors(snap)} | {round(n_max, 0)})
     speeds = [n for n in speeds if n <= n_max + 1e-6]
     currents = sorted({round(0.5 * I0, 6), round(I0, 6), round(I_pk, 6)})
     plan = []
@@ -504,12 +582,14 @@ def stage_loss(R, snap, st) -> None:
                                            "gamma": round(g, 3), "mode": how}))
             plan.append(row)
     st["loss_plan"] = {
-        "bus": TRAJECTORY_BUS, "v_dc": bus(snap, TRAJECTORY_BUS), "m": M_MARGIN,
+        "bus": TRAJECTORY_BUS, "v_dc": bus(snap, TRAJECTORY_BUS), "m": m0,
         "v_phase_limit_V": vlim, "R_hot_ohm": Rh,
         "I_peak_rms": I_pk, "I_peak_source": I_pk_src,
         "n_mech_limit_rpm": n_mech, "n_mech_source":
-            "bearing speed limit (mech_losses / bearings library); critical speed and "
-            "rotor stress not computed in stage 1",
+            ("bearing speed limit (mech_losses / bearings library); critical speed and "
+             "rotor stress not computed in stage 1") if math.isfinite(n_mech) else
+            "no bearing named on the configuration — no bearing speed limit (stated, "
+            "not a measured +inf)",
         "n_elec_limit_rpm": n_elec, "n_max_rpm": n_max,
         "speeds": speeds, "currents": currents, "points": plan}
     st["mech"] = {str(n): LS.mech_losses(rpm=n, bearings=snap["bearings"],
@@ -531,7 +611,7 @@ def _reuse_or_job(R, prefix, n, I, g, how, b, snap, I0, set_name, extra_meta=Non
     """An existing settled point at the same (n, I, gamma) is reused, else a
     new job (the trajectory only moves where the margin moves the FW angle)."""
     Tm, Tc = _hot(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = loss_steps(snap)
     for rid, rec in R.done.items():
         k = rec.get("kw") or {}
         if (rec.get("meta") or {}).get("set") in ("loss", "loss2", "loss3", "loss_check", "loss_check2") \
@@ -564,7 +644,7 @@ def stage_loss2(R, snap, st) -> None:
     n_mech = float(lp0["n_mech_limit_rpm"])
     n_elec = hm.max_speed(Rh, vlim, I_pk)
     n_max = min(n_mech, n_elec)
-    speeds = sorted({round(f * n0, 3) for f in (0.25, 0.5, 1.0, 1.5)} | {round(n_max, 0)})
+    speeds = sorted({round(f * n0, 3) for f in _speed_factors(snap)} | {round(n_max, 0)})
     speeds = [n for n in speeds if n <= n_max + 1e-6]
     currents = sorted({round(0.5 * I0, 6), round(I0, 6), round(I_pk, 6)})
     plan, jl = [], []
@@ -630,8 +710,12 @@ def stage_loss3(R, snap, st) -> None:
     vlim = PM.v_phase_limit(bus(snap, TRAJECTORY_BUS), m)
     I_pk = float(lp2["I_peak_rms"])
     I_lim = float(st.get("demag_limit_I_rms") or LEVELS[-1] * I0)
+    # + the spec's floor levels (Ø85: 0.25·I0): Configure reads the variant grid down to
+    # them even where the demag limit sits below (those rows are then labelled by it)
+    floor = [float(f) for f in ((snap.get("plan") or {}).get("loss_floor_levels") or [])]
     currents = sorted({round(f * I0, 6) for f in LEVELS if f * I0 <= I_lim * (1 + 1e-9)}
-                      | {round(c, 6) for c in lp2["currents"]})
+                      | {round(c, 6) for c in lp2["currents"]}
+                      | {round(f * I0, 6) for f in floor})
     pk = snap.get("peak_duty")
     # + the peak duty's own speed: every node of the drive-variant grid is then
     # a settled FEM loss point (no speed extrapolation of a current row)
@@ -680,7 +764,7 @@ def stage_checks(R, snap, st) -> None:
     b = _base(snap, st)
     bl = _base(snap, st, static=False)
     I0, n0 = _I0(snap), _n0(snap)
-    steps = int(snap["rated_duty"]["steps_per_period"])
+    steps = loss_steps(snap)
     hm = hot_map(R, snap, st)
     lp = st["loss_plan"]
     Rh, vlim, I_pk = lp["R_hot_ohm"], lp["v_phase_limit_V"], lp["I_peak_rms"]
@@ -709,7 +793,7 @@ def stage_checks(R, snap, st) -> None:
     rd = snap["rated_duty"]
     st_pts.append(("chk_duty_rated_g", rd["current_arms"], rd["gamma_deg"],
                    "rated duty current at the duty's gamma"))
-    if snap["tag"] == "L12":
+    if _audit(snap):
         for f in (0.5, 1.0, 1.3):
             st_pts.append(("chk_audit_I%.1f" % f, AUDIT_I0 * f, AUDIT_GAMMA,
                            "audit 2026-09-30 corner I x%.1f (gamma 10°)" % f))
@@ -734,13 +818,15 @@ def stage_checks(R, snap, st) -> None:
                                  magnet_temp_c=Tm, coil_temp_c=Tc, steps=steps,
                                  meta={"set": "loss_check", "rpm": n, "I": I,
                                        "gamma": round(g, 3), "mode": how, "role": role}))
-    # (d) time step (B4): the rated trajectory point at 72 steps
+    # (d) time step (B4): the rated trajectory point at 72 steps — or, when the
+    #     loss runs use fewer steps than the duty, at the duty's own count
     g1, how1 = hm.operating_gamma(I0, n0, Rh, vlim)
+    s_chk = 72 if steps == int(snap["rated_duty"]["steps_per_period"])         else int(snap["rated_duty"]["steps_per_period"])
     jl.append(J.loss_job("lchk_rated_72steps", bl, I_rms=I0, gamma_deg=round(g1, 3), rpm=n0,
-                         magnet_temp_c=Tm, coil_temp_c=Tc, steps=72,
+                         magnet_temp_c=Tm, coil_temp_c=Tc, steps=s_chk,
                          meta={"set": "loss_check", "rpm": n0, "I": I0,
                                "gamma": round(g1, 3), "mode": how1,
-                               "role": "time-step check (72 vs %d steps)" % steps}))
+                               "role": "time-step check (%d vs %d steps)" % (s_chk, steps)}))
     # (e) the saved duties, re-solved today with their own settings
     duties = [("duty_rated", snap["rated_duty"])]
     if snap.get("peak_duty"):
@@ -754,8 +840,8 @@ def stage_checks(R, snap, st) -> None:
                              end_winding_factor=du["end_winding_factor"],
                              meta={"set": "duty", "rpm": du["rpm"], "I": du["current_arms"],
                                    "gamma": du["gamma_deg"], "role": "saved duty re-solved"}))
-    # (f) audit loss corners (L12 only; gamma 10°, off the MTPA trajectory)
-    if snap["tag"] == "L12":
+    # (f) audit loss corners (Ø40 L12 only; gamma 10°, off the MTPA trajectory)
+    if _audit(snap):
         for jid, n, I in (("audit_base", n0, AUDIT_I0), ("audit_rpm0.5", 0.5 * n0, AUDIT_I0),
                           ("audit_rpm1.5", 1.5 * n0, AUDIT_I0),
                           ("audit_I0.5", n0, 0.5 * AUDIT_I0), ("audit_I1.3", n0, 1.3 * AUDIT_I0)):

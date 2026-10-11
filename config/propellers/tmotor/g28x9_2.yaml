@@ -1,0 +1,69 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+# Added 2026-10-10 for the Ø85 die (CIANO28 85 20SW1200): the smallest G-series prop of the
+# 24-32 in range with a published torque column (U8 II KV100, 12S); tested 1896-3709 rpm.
+schema: propeller-1
+id: tmotor_g28x9_2
+vendor: T-MOTOR
+model: G28*9.2
+series: G series (glossy carbon fiber, 2 blades integrated)
+status: current
+product_url: https://www.ligpower.com/product/g28x9-2-glossy-carbon-fiber-propeller.html
+source_urls:
+- https://www.ligpower.com/product/g28x9-2-glossy-carbon-fiber-propeller.html
+- https://store.tmotor.com/goods.php?id=561
+accessed: '2026-10-10'
+geometry:
+  diameter_in: 28.0
+  diameter_mm: 711.2
+  pitch_in: 9.2
+  pitch_mm: 233.7
+  blades: 2
+material: CF+Epoxy, glossy
+mass_single_blade_g: 85   # 85±5 g as published
+published_limits:
+  optimum_rpm:
+  - 1500
+  - 3700
+  thrust_limit_kg: 27.5
+  ambient_temp_c: [-40, 65]
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests; the table notes ambient 27.81 °C for its temperature reading)
+  tables:
+    - id: u8ii_kv100_g28x9_2
+      source_url: https://store.tmotor.com/goods.php?id=561
+      accessed: '2026-10-10'
+      test_motor: "U8 II KV100 (12S, 48 V)"
+      prop_label_in_source: "T-MOTOR G28*9.2\" CF"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.01
+      columns_published: ["type", "voltage_V", "propeller", "throttle", "thrust_g", "torque_Nm", "current_A", "rpm", "power_W", "efficiency_g_per_W", "operating_temperature"]
+      note: "Voltage is published once for the table (12S, 48 V), not per row. Tested 1896-3709 rpm: below that the coefficients are held at the edge value (extrapolated)."
+      rows:
+      - {thr: 40, V: 48.0, I: 3.5, Pel: 168.0, rpm: 1896, thrust_g: 2243, torque_Nm: 0.77}
+      - {thr: 42, V: 48.0, I: 3.9, Pel: 187.0, rpm: 1964, thrust_g: 2401, torque_Nm: 0.82}
+      - {thr: 44, V: 48.0, I: 4.2, Pel: 202.0, rpm: 2020, thrust_g: 2555, torque_Nm: 0.85}
+      - {thr: 46, V: 48.0, I: 5.1, Pel: 245.0, rpm: 2144, thrust_g: 2881, torque_Nm: 0.99}
+      - {thr: 48, V: 48.0, I: 5.4, Pel: 259.0, rpm: 2190, thrust_g: 3008, torque_Nm: 1.01}
+      - {thr: 50, V: 48.0, I: 6.0, Pel: 288.0, rpm: 2268, thrust_g: 3231, torque_Nm: 1.08}
+      - {thr: 52, V: 48.0, I: 6.7, Pel: 322.0, rpm: 2339, thrust_g: 3370, torque_Nm: 1.16}
+      - {thr: 54, V: 48.0, I: 7.2, Pel: 346.0, rpm: 2415, thrust_g: 3624, torque_Nm: 1.21}
+      - {thr: 56, V: 48.0, I: 7.7, Pel: 370.0, rpm: 2462, thrust_g: 3803, torque_Nm: 1.25}
+      - {thr: 58, V: 48.0, I: 8.5, Pel: 408.0, rpm: 2540, thrust_g: 4033, torque_Nm: 1.33}
+      - {thr: 60, V: 48.0, I: 8.9, Pel: 427.0, rpm: 2581, thrust_g: 4201, torque_Nm: 1.35}
+      - {thr: 62, V: 48.0, I: 9.5, Pel: 456.0, rpm: 2647, thrust_g: 4353, torque_Nm: 1.4}
+      - {thr: 64, V: 48.0, I: 10.4, Pel: 499.0, rpm: 2694, thrust_g: 4593, torque_Nm: 1.49}
+      - {thr: 66, V: 48.0, I: 11.0, Pel: 528.0, rpm: 2755, thrust_g: 4791, torque_Nm: 1.53}
+      - {thr: 68, V: 48.0, I: 11.7, Pel: 562.0, rpm: 2812, thrust_g: 4988, torque_Nm: 1.58}
+      - {thr: 70, V: 48.0, I: 12.2, Pel: 586.0, rpm: 2858, thrust_g: 5153, torque_Nm: 1.6}
+      - {thr: 75, V: 48.0, I: 14.3, Pel: 686.0, rpm: 3002, thrust_g: 5696, torque_Nm: 1.76}
+      - {thr: 80, V: 48.0, I: 16.2, Pel: 778.0, rpm: 3122, thrust_g: 6171, torque_Nm: 1.87}
+      - {thr: 90, V: 48.0, I: 21.4, Pel: 1027.0, rpm: 3379, thrust_g: 7329, torque_Nm: 2.21}
+      - {thr: 100, V: 48.0, I: 29.3, Pel: 1406.0, rpm: 3709, thrust_g: 8716, torque_Nm: 2.73}
+notes:
+- T-Motor 'Power (W)' is electrical input power (motor + ESC); shaft power is derived from the published torque.
+- The page says the bench-test data are for reference only.

@@ -1,0 +1,56 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+# Added 2026-10-05 for the Ø85 die (CIANO28 85 20SW1200): large G-series props whose torque at
+# 1000-2400 rpm lies inside that motor's torque range.
+schema: propeller-1
+id: tmotor_g36x11_5
+vendor: T-MOTOR
+model: G36*11.5
+series: G series (glossy carbon fiber, 2 blades integrated)
+status: current
+product_url: https://store.tmotor.com/product/g36x11_5-prop-2pcs-1pair-glossy-carbon-fiber.html
+source_urls:
+- https://store.tmotor.com/product/g36x11_5-prop-2pcs-1pair-glossy-carbon-fiber.html
+- https://store.tmotor.com/product/u15-v2-motor-u-power-kv80.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 36.0
+  diameter_mm: 914.4
+  pitch_in: 11.5
+  pitch_mm: 292.1
+  blades: 2
+material: CF+Epoxy, glossy
+mass_single_blade_g: 193   # 193 g as published
+published_limits:
+  optimum_rpm:
+  - 1000
+  - 2800
+  thrust_limit_kg: 45
+  ambient_temp_c: [-40, 65]
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  tables:
+    - id: u15ii_kv100_g36x11_5_60v
+      source_url: https://store.tmotor.com/product/u15-v2-motor-u-power-kv80.html
+      accessed: '2026-10-05'
+      test_motor: "U15 II KV100 (60 V)"
+      prop_label_in_source: "T-MOTOR G36x11.5 CF"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.1
+      columns_published: ["item", "voltage_V", "propeller", "throttle", "current_A", "power_W", "thrust_g", "rpm", "efficiency_g_per_W", "torque_Nm", "operating_temperature"]
+      note: ""
+      rows:
+      - {thr: 50, V: 60.0, I: 27.6, Pel: 1656.0, rpm: 2595, thrust_g: 12000, torque_Nm: 5.1}
+      - {thr: 55, V: 60.0, I: 40.2, Pel: 2412.0, rpm: 2933, thrust_g: 15300, torque_Nm: 6.6}
+      - {thr: 60, V: 60.0, I: 51.3, Pel: 3078.0, rpm: 3160, thrust_g: 18300, torque_Nm: 7.9}
+      - {thr: 65, V: 60.0, I: 62.0, Pel: 3720.0, rpm: 3345, thrust_g: 20700, torque_Nm: 9.0}
+      - {thr: 75, V: 60.0, I: 86.1, Pel: 5166.0, rpm: 3700, thrust_g: 25600, torque_Nm: 11.4}
+      - {thr: 85, V: 60.0, I: 115.1, Pel: 6906.0, rpm: 3985, thrust_g: 30400, torque_Nm: 13.9}
+      - {thr: 100, V: 60.0, I: 165.7, Pel: 9942.0, rpm: 4328, thrust_g: 37000, torque_Nm: 17.0}
+notes:
+- T-Motor 'Power (W)' is electrical input power (motor + ESC); shaft power is derived from the published torque.
+- Torque is printed to 0.1 N*m (some rows as whole numbers, e.g. '4'); the fit skips rows below 5 x that resolution.

@@ -90,7 +90,8 @@ def _map(recs, st, set_name, mtpa_key, pp):
     # the zero-current anchor of the map is the 60°-window `hot_I0_anchor`
     pts = PM.points_from_records([v for k, v in recs.items()
                                   if k not in ("__failed__", "hot_noload")], set_name)
-    return pts, PM.PsiMap.build(pts, pp, mtpa=PM.mtpa_table(st[mtpa_key]))
+    fg = st.get("fixed_gamma_deg") if mtpa_key == "hot_mtpa" else None
+    return pts, PM.PsiMap.build(pts, pp, mtpa=PM.mtpa_table(st[mtpa_key]), fixed_gamma=fg)
 
 
 def static_check_rows(recs, st, hm: PM.PsiMap, I0: float) -> List[Dict[str, Any]]:
@@ -339,7 +340,7 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                                     hm.operating_gamma(I0, n0, R_hot, vl))),
             "torque_speed": [],
         }
-        for f in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0):
+        for f in (0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0, 4.0):
             n = f * n0
             mt = hm.max_torque_at(n, R_hot, vl, I_pk)
             env[which]["torque_speed"].append({"rpm": n, **mt})
@@ -438,8 +439,8 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                 / float(recs["xs_rated_nodemag"]["r"]["T_avg_Nm"]),
                 "runs": rated_id + ["xs_rated_nodemag"],
                 "method": "same settled TDM point with demag OFF: demag share = "
-                          "T(demag)/T(no demag); the rest (coupled eddy reaction, 36-step "
-                          "sampling, duty gap layers) = T(no demag)/T_map"}),
+                          "T(demag)/T(no demag); the rest (coupled eddy reaction, the duty's "
+                          "step count, duty gap layers) = T(no demag)/T_map"}),
         },
         "peak_point": {
             "rpm": n_pk, "I_rms": I_pk, "I_source": lp["I_peak_source"],
@@ -614,7 +615,8 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                          "(stator_fillet_r1 0.1 vs die 0.15 today on L12)"),
             }
     audit = None
-    if snap["tag"] == "L12":
+    from motor_ai_sim.passport_v1.stages import _audit
+    if _audit(snap):
         audit = {"reference": AUDIT, "static": [], "loss": []}
         for f, (g_a, T_a) in AUDIT["mtpa_static"].items():
             I = 40.659 * f

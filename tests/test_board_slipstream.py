@@ -154,3 +154,21 @@ def test_the_exported_block_agrees_with_the_board_model():
     fav = S3.board_block_limit(blk)
     assert fav <= S3.board_block_limit(blk, cls="slipstream", air_speed_ms=20.0) \
         <= 2.0 * fav + 1e-9
+
+
+def test_the_classes_offered_never_include_one_the_route_would_refuse():
+    """``propeller_s1.board_cooling_classes`` — what the UI may offer: the classes
+    the controller block carries, and ``slipstream`` ONLY where a ``board`` block
+    exists (it is evaluated from that block per operating point; without one the
+    route refuses it).  No controller block at all: no class is supported."""
+    from motor_ai_sim import propeller_s1 as S1
+    pre = {k: 1.0 for k in CARD}                       # precomputed limits only
+    assert S1.board_cooling_classes({"i_board_limit_A": pre}) == ["favourable", "weak", "hot_motor"]
+    c, d, b = _board()
+    blk = b.export_block(c, d, i_max_A=60.0, **KW)     # the exported block: all 6S classes
+    assert S1.board_cooling_classes({"board": blk}) == list(S1.BOARD_COOLING)
+    assert S1.board_cooling_classes({"i_board_limit_A": pre, "board": blk}) == list(S1.BOARD_COOLING)
+    # a board block with fewer classes offers those + slipstream
+    assert S1.board_cooling_classes({"board": {"classes": {"favourable": {}}}}) \
+        == ["favourable", "slipstream"]
+    assert S1.board_cooling_classes({}) == [] and S1.board_cooling_classes(None) == []

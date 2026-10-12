@@ -696,6 +696,19 @@ def _slipstream_block_of(ctrl: Mapping[str, Any], pre_basis: Any) -> Tuple[None,
                   "temperature and the propeller's wash speed (board model): %s" % pre_basis)
 
 
+def board_cooling_classes(ctrl: Optional[Mapping[str, Any]]) -> List[str]:
+    """The board cooling classes a controller block supports: the classes its
+    precomputed limits (``i_board_limit_A``) or its ``board`` block carry, plus
+    ``slipstream`` where the block exists (that class has no precomputed limit —
+    it is evaluated per operating point from the block, :func:`board_limit_A`).
+    Without a ``board`` block ``slipstream`` is NOT offered: the route refuses it
+    (:func:`_slipstream_block_of`), and the UI must not offer what cannot be run."""
+    c = ctrl or {}
+    have = set(c.get("i_board_limit_A") or {}) | set((c.get("board") or {}).get("classes") or {})
+    blk = bool(c.get("board"))
+    return [x for x in BOARD_COOLING if x in have or (x == "slipstream" and blk)]
+
+
 def board_limit_A(drive: Mapping[str, Any], *, ambient_c: float,
                   air_speed_ms: Optional[float] = None) -> Tuple[Optional[float], str]:
     """The drive's continuous board current at the S1's own air temperature:
@@ -732,7 +745,9 @@ def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
     propeller wash).  ``I_cont_A`` is the model's precomputed limit for the class
     (calibrated at 45 °C ambient); a model with a ``board`` block is re-evaluated
     at the S1's own air temperature per operating point (``board_limit_A``), and
-    ``slipstream`` is always per-point (``I_cont_A`` stays None here).
+    ``slipstream`` is always per-point (``I_cont_A`` stays None here).  The
+    returned ``board_cooling_classes`` lists the classes this controller block
+    supports (``board_cooling_classes``) — the UI offers only those.
 
     ``external_esc``: an ESC that is none of the passport's boards (a commercial FOC
     ESC, the one on the bench).  No board model and no board current from the
@@ -760,6 +775,7 @@ def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
             basis = "no ESC current given and the model carries no external ESC"
         return {"id": EXTERNAL_ESC, "kind": "external", "board_cooling": bc, "I_cont_A": iph,
                 "I_bus_cont_A": ibus, "I_cont_basis": basis,
+                "board_cooling_classes": [],     # an external ESC has no board of ours
                 "name": (None if given else blk.get("name")) or "external ESC",
                 "source": "caller" if given else ("model" if (ibus or iph) else None),
                 "bus_v": None if given else blk.get("bus_v"), "controller_loss_W": None,
@@ -773,6 +789,7 @@ def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
             lim, basis = _slipstream_block_of(sc, basis)
         return {"id": SINE, "kind": "sine", "board_cooling": bc, "I_cont_A": lim,
                 "I_cont_basis": basis, "board": sc.get("board"),
+                "board_cooling_classes": board_cooling_classes(sc),
                 "bus_v": sc.get("bus_v"), "controller_loss_W": None, "pwm_extra_W": None,
                 "device": None, "carrier_hz": None, "n_parallel": None}
     drives = m.get("drives") or {}
@@ -784,7 +801,8 @@ def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
              else "the variant carries no board continuous current")
     if bc == "slipstream":
         lim, basis = _slipstream_block_of(d, basis)
-    d.update(id=did, kind="pwm", board_cooling=bc, I_cont_A=lim, I_cont_basis=basis)
+    d.update(id=did, kind="pwm", board_cooling=bc, I_cont_A=lim, I_cont_basis=basis,
+             board_cooling_classes=board_cooling_classes(d))
     return d
 
 
@@ -1602,6 +1620,9 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
         "drive": {"id": drv["id"], "kind": drv["kind"], "device": drv.get("device"),
                   "technology": drv.get("technology"), "carrier_hz": drv.get("carrier_hz"),
                   "n_parallel": drv.get("n_parallel"), "board_cooling": drv["board_cooling"],
+                  # the board cooling classes this model / drive can run: the UI offers
+                  # only these (e.g. `slipstream` only where the model carries a board block)
+                  "board_cooling_classes": list(drv.get("board_cooling_classes") or []),
                   "I_cont_A": drv.get("I_cont_A"), "I_cont_basis": drv.get("I_cont_basis"),
                   "I_bus_cont_A": drv.get("I_bus_cont_A"), "name": drv.get("name"),
                   "source": drv.get("source"),

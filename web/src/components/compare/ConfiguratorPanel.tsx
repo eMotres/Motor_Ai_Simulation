@@ -52,7 +52,11 @@ import {
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
 import { fetchPropellers, fetchSeries, fetchPropellerS1 } from '../../lib/propellerApi';
-import { s1Line, s1DriveRequest, type S1Controller, type S1Result } from '../../lib/configuratorPropellerS1';
+import {
+  s1Line, s1DriveRequest, s1BoardBuilds, s1BoardBuildKey, s1BoardBuildOfId, s1BoardCoolingKey,
+  s1BoardCoolingChoice, s1BoardCoolingOptions, s1BuildDriveId, isBoardBuild, isBoardCooling, EXTERNAL_ESC,
+  type S1BoardBuild, type S1BoardCooling, type S1Controller, type S1Result,
+} from '../../lib/configuratorPropellerS1';
 import { activeDuty } from '../../lib/dutySettings';
 import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
 import { estimateThermal } from '../../lib/thermalEstimate';
@@ -1169,11 +1173,30 @@ const ConfiguratorPanel: React.FC = () => {
   const [s1Ctrl, setS1Ctrl] = useState<S1Controller>('drive');
   const [s1EscTxt, setS1EscTxt] = useState('');
   const [s1EscDeb, setS1EscDeb] = useState('');
+  /** the drive ids the last S1 answer offered (kept when a later request fails: a remembered
+   *  two-device build is never retried blindly on a model that carries none) */
+  const [s1Drives, setS1Drives] = useState<{ key: string; drives: string[] } | null>(null);
+  /** the board cooling classes the last S1 answer's model / drive runs (kept when a later request
+   *  fails): the Board cooling select offers only those, never what the route would refuse */
+  const [s1Classes, setS1Classes] = useState<{ key: string; classes: string[] } | null>(null);
   useEffect(() => {
     const t = setTimeout(() => setS1EscDeb(s1EscTxt), 400);
     return () => clearTimeout(t);
   }, [s1EscTxt]);
-  const s1Req = s1DriveRequest(s1Ctrl, driveOn && variant ? String(variant.id) : 'sine', s1EscDeb);
+  // the drive's BOARD: its cooling class and its build (the two-device builds are the S1 model's
+  // estimate variants of the Drive block's device — offered only where the model carries them)
+  const s1BaseDrive = driveOn && variant ? String(variant.id) : 'sine';
+  const s1ModelKey = `${s1Die}|${s1Config}`;
+  const s1Avail = s1Drives && s1Drives.key === s1ModelKey ? s1Drives.drives : null;
+  const s1Builds = s1BoardBuilds(s1Avail, s1BaseDrive);
+  const s1BuildWanted: S1BoardBuild = coolChoice.boardBuild ?? 'as_built';
+  const s1Build: S1BoardBuild = s1Builds.includes(s1BuildWanted) ? s1BuildWanted : 'as_built';
+  // the classes of the drive this request goes to (the build is inside its id); the remembered
+  // class is clamped to what the model supports — 'favourable' when it is not on offer there
+  const s1DriveId = s1Ctrl === 'external' ? EXTERNAL_ESC : s1BuildDriveId(s1BaseDrive, s1Build);
+  const s1ClassesHere = s1Classes && s1Classes.key === `${s1ModelKey}|${s1DriveId}` ? s1Classes.classes : null;
+  const s1Cool = s1BoardCoolingChoice(coolChoice.boardCooling, s1ClassesHere);
+  const s1Req = s1DriveRequest(s1Ctrl, s1BaseDrive, s1EscDeb, s1Cool, s1Build);
   const s1Drive = s1Req.drive;
   const s1PackMin = packWindow?.min ?? null;
   const s1PackMax = packWindow?.max ?? null;
@@ -1183,23 +1206,46 @@ const ConfiguratorPanel: React.FC = () => {
     if (!propellerCoolingActive || !propId || !s1Die || !s1Config) return;
     let dead = false;
     const pack = s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null;
-    void fetchPropellerS1(propId, s1Die, s1Config, ambient, s1Drive, pack, s1Req.escBusA).then((r) => { if (!dead) setS1(r); });
+    const ask = (cool: S1BoardCooling | null) =>
+      fetchPropellerS1(propId, s1Die, s1Config, ambient, s1Drive, pack, s1Req.escBusA, cool);
+    const accept = (r: S1Result | null) => {
+      const avail = r?.drives_available;
+      if (Array.isArray(avail)) setS1Drives({ key: s1ModelKey, drives: avail });
+      const cl = r?.drive?.board_cooling_classes;
+      if (Array.isArray(cl) && r?.drive?.kind !== 'external') setS1Classes({ key: `${s1ModelKey}|${s1Drive}`, classes: cl });
+      setS1(r);
+    };
+    void ask(s1Req.boardCooling).then((r) => {
+      if (dead) return;
+      if (r == null && s1Req.boardCooling && s1Req.boardCooling !== 'favourable') {
+        // the route refuses this class (e.g. an S1 model with no board block for 'slipstream'):
+        // fall back to favourable, as the select does, so the S1 line still answers
+        void ask('favourable').then((r2) => { if (!dead) accept(r2); });
+        return;
+      }
+      accept(r);
+    });
     return () => { dead = true; };
-  }, [propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA, s1Req.boardCooling]); // eslint-disable-line react-hooks/exhaustive-deps
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
   const s1Text: { text: string; tip: string } | null = (() => {
     if (!s1Info) return null;
     const prop = propSummary ? modelLabel(propSummary.model) : (propId ?? '');
+    // what the number was computed for: the board's cooling class and its build, one clause
+    const drv = s1?.drive;
+    const bld = s1BoardBuildOfId(drv?.id);
+    const boardTxt = `${tx(s1BoardBuildKey(bld))}${bld !== 'as_built' || drv?.board_cooling === 'slipstream' ? ` ${tx('configurePropeller.s1Estimate')}` : ''}`;
+    const boardTip = drv && drv.kind !== 'external'
+      ? [tx('configurePropeller.s1TipBoard', { cooling: tx(s1BoardCoolingKey(drv.board_cooling)), build: boardTxt })] : [];
     if (s1Info.kind === 'none') {
       return { text: tx('configurePropeller.s1None', { prop, binding: tx(s1Info.bindingKey) }),
-               tip: tx('configurePropeller.s1NoneTip', { ambient: fmt(ambient, 0) }) };
+               tip: [tx('configurePropeller.s1NoneTip', { ambient: fmt(ambient, 0) }), ...boardTip].join(' ') };
     }
     const L = s1Info.limit;
     const lim = s1?.limits;
     const n0 = (x: number | null | undefined) => (x == null ? '—' : fmt(x, 0));
     const vals = { prop, rpm: fmt(s1Info.rpm, 0), thrust: fmt(s1Info.thrust_kgf, 2), power: fmt(s1Info.shaft_W, 0) };
-    const drv = s1?.drive;
     return {
       // a scan that ended still passing is a LOWER bound: "≥ N rpm, limit not reached", never "up to"
       text: s1Info.lowerBound
@@ -1213,6 +1259,7 @@ const ConfiguratorPanel: React.FC = () => {
           position: L.cooling.slipstream_position ?? '—',
           drive: drv.kind === 'sine' ? tx('configurePropeller.s1DriveSine') : drv.kind === 'external' ? (drv.name ?? tx('configurePropeller.s1EscExternal')) : drv.id,
           ictl: drv.I_cont_A == null ? '—' : fmt(drv.I_cont_A, 1) })] : []),
+        ...boardTip,
         ...(drv?.kind === 'external' ? [tx('configurePropeller.s1TipEsc', {
           ibus: drv.I_bus_cont_A == null ? '—' : fmt(drv.I_bus_cont_A, 0),
           ibat: L.battery_current_A == null ? '—' : fmt(L.battery_current_A, 1) })] : []),
@@ -1832,7 +1879,7 @@ const ConfiguratorPanel: React.FC = () => {
               </Box>
               )}
               {cooled && propellerCoolingActive && (
-                <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: 0.5, flexWrap: 'nowrap', minHeight: 24 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mt: 0.5, flexWrap: 'wrap', minHeight: 24 }}>
                   <Typography sx={{ ...LABEL, flex: '0 0 auto' }} title={tx('configurePropeller.s1CtrlTip')}>{tx('configurePropeller.s1Ctrl')}</Typography>
                   <select value={s1Ctrl} aria-label={tx('configurePropeller.s1Ctrl')} title={tx('configurePropeller.s1CtrlTip')}
                     onChange={(e) => setS1Ctrl(e.target.value === 'external' ? 'external' : 'drive')}
@@ -1849,6 +1896,25 @@ const ConfiguratorPanel: React.FC = () => {
                       onChange={(e) => setS1EscTxt(e.target.value)}
                       style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
                     <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>{tx('configurePropeller.s1EscBusUnit')}</Box>
+                  </>)}
+                  {s1Ctrl === 'drive' && (<>
+                    <Typography sx={{ ...LABEL, fontSize: 12, flex: '0 0 auto' }} title={tx('configurePropeller.s1BoardCoolingTip')}>{tx('configurePropeller.s1BoardCooling')}</Typography>
+                    <select value={s1Cool} aria-label={tx('configurePropeller.s1BoardCooling')}
+                      title={tx('configurePropeller.s1BoardCoolingTip')}
+                      onChange={(e) => { const v = e.target.value; if (isBoardCooling(v)) updateCool({ boardCooling: v }); }}
+                      style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, padding: '1px 4px', flex: '0 1 auto', minWidth: 0 }}>
+                      {s1BoardCoolingOptions(s1ClassesHere).map((c) => (
+                        <option key={c} value={c} style={{ color: '#000' }}>{tx(s1BoardCoolingKey(c))}</option>))}
+                    </select>
+                    {s1Builds.length > 1 && (<>
+                      <Typography sx={{ ...LABEL, fontSize: 12, flex: '0 0 auto' }} title={tx('configurePropeller.s1BoardBuildTip')}>{tx('configurePropeller.s1BoardBuild')}</Typography>
+                      <select value={s1Build} aria-label={tx('configurePropeller.s1BoardBuild')}
+                        title={tx('configurePropeller.s1BoardBuildTip')}
+                        onChange={(e) => { const v = e.target.value; if (isBoardBuild(v)) updateCool({ boardBuild: v }); }}
+                        style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, padding: '1px 4px', flex: '0 1 auto', minWidth: 0 }}>
+                        {s1Builds.map((b) => (<option key={b} value={b} style={{ color: '#000' }}>{tx(s1BoardBuildKey(b))}</option>))}
+                      </select>
+                    </>)}
                   </>)}
                 </Box>
               )}

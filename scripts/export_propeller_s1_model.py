@@ -174,7 +174,11 @@ def _board_cal(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
             "T_amb_cal_C": float(b["T_amb_C"]), "T_hs_limit_C": float(b["T_hs_limit_C"]),
             "T_j_at_limit_C": float(b["T_j_at_limit_C"]), "T_j_derate_C": float(b["T_j_derate_C"]),
             "source": b.get("source"), "labels": b.get("labels"),
-            "K_board_cu_source": b.get("K_board_cu_source")}
+            "K_board_cu_source": b.get("K_board_cu_source"),
+            # the passport's own board scale (the Ø85: the Ø40 12S board x2, an
+            # estimate made in stage3) and its scaling note — the block must keep
+            # it and must never scale the classes twice
+            "board_scale": _val(b.get("board_scale")) or 1.0, "scaling": b.get("scaling")}
 
 
 def _board_block(d: Dict[str, Any], v: Optional[Dict[str, Any]], *, n_par: Optional[int] = None,
@@ -185,7 +189,11 @@ def _board_block(d: Dict[str, Any], v: Optional[Dict[str, Any]], *, n_par: Optio
 
     ``v`` = the store variant whose conditions the loss table is computed at
     (None = the Si build the calibration was made on: the sine controller's
-    board).  ``n_par`` / ``scale`` build the two-devices-per-switch estimates."""
+    board).  ``n_par`` / ``scale`` build the two-devices-per-switch estimates —
+    ``scale`` scales the passport's OWN board further (``*_x2_board2``); a
+    passport whose board is already a scaled one (the Ø85: the Ø40 12S board
+    x2, ``stage3.Board``'s own scaling) keeps that scale in the block and its
+    classes are never scaled twice."""
     S3, _ = _stage3()
     cal = _board_cal(d)
     if cal is None:
@@ -198,16 +206,20 @@ def _board_block(d: Dict[str, Any], v: Optional[Dict[str, Any]], *, n_par: Optio
         return None
     card, drv, f_sw, dead_s, v_dc = _variant_device(v)
     np_ = int(n_par if n_par is not None else (v.get("n_parallel") or 1))
+    base = float(cal.get("board_scale") or 1.0)     # the passport's own board
     if float(scale) != 1.0:
         cal = dict(cal, classes=S3.scaled_classes(cal["classes"], float(scale)))
     top = max(float(x) for x in v["grid"]["I_A"])
+    labels = ["estimate", "board parameters + analytical per-current inverter loss table"]
+    if float(scale) != 1.0:
+        labels.append("board scaled x%g (estimate): heat budget x%g, R_sys /%g, R_j-hs per device"
+                      % (float(scale), float(scale), float(scale)))
+    elif base != 1.0 and cal.get("scaling"):
+        labels.append(str(cal["scaling"]))          # the passport's own scaling note
     return S3.board_export_block(
-        cal, card=card, drv=drv, f_sw=f_sw, dead_s=dead_s, v_dc=v_dc, n_par=np_, scale=float(scale),
-        i_max_A=max(120.0, 10.0 * math.ceil(1.1 * top / 10.0)),
-        labels=(["estimate", "board parameters + analytical per-current inverter loss table"]
-                + ([] if float(scale) == 1.0 else [
-                    "board scaled x%g (estimate): heat budget x%g, R_sys /%g, R_j-hs per device"
-                    % (float(scale), float(scale), float(scale))])))
+        cal, card=card, drv=drv, f_sw=f_sw, dead_s=dead_s, v_dc=v_dc, n_par=np_,
+        scale=base * float(scale),
+        i_max_A=max(120.0, 10.0 * math.ceil(1.1 * top / 10.0)), labels=labels)
 
 
 def _drive(v: Dict[str, Any], board: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

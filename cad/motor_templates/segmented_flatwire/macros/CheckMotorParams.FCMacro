@@ -1,0 +1,41 @@
+# -*- coding: utf-8 -*-
+# CheckMotorParams - owner macro for the segmented_flatwire motor models (FreeCAD 1.0.2).
+# Macro -> Macros... -> add this folder (motor_templates/segmented_flatwire/macros) -> CheckMotorParams -> Execute.
+# Checks the ACTIVE document: 1) the validity domain of the Params sheet (pre-check, in words),
+# 2) the health gate (failed features / sketches, counts, stale geometry after a failed recompute).
+# Read-only: changes nothing in the document.
+import os
+import sys
+import FreeCAD as App
+
+doc = App.ActiveDocument
+if doc is None or doc.getObject("Params") is None:
+    raise SystemExit("Open a motor model with a Params sheet first.")
+# repository root = parent of the folder that holds the model (models/<motor>.FCStd)
+repo = os.path.dirname(os.path.dirname(os.path.abspath(doc.FileName))) if doc.FileName else os.getcwd()
+cands = [repo]
+if "__file__" in globals():
+    cands.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..")))
+for cand in cands:
+    if os.path.isdir(os.path.join(cand, "motor_templates")) and cand not in sys.path:
+        sys.path.insert(0, cand)
+from motor_templates.segmented_flatwire import health, params_sheet as ps  # noqa: E402
+
+sh = doc.getObject("Params")
+violations = health.precheck(lambda n: ps.pval(sh, n))
+gt = health.gate(doc) if doc.getObject("Core") is not None else dict(ok=True, errors=[])
+lines = []
+if violations:
+    lines.append("PARAMETERS OUTSIDE THE SUPPORTED DOMAIN:")
+    lines += ["  - " + v for v in violations]
+other = [e for e in gt["errors"] if not e.startswith("precheck:")]
+if other:
+    lines.append("MODEL NOT VALID (do not export / use):")
+    lines += ["  - " + e for e in other]
+text = "\n".join(lines) if lines else "OK: parameters inside the supported domain, model healthy (all sketches solved and " \
+                                     "fully constrained, counts and geometry match Params)."
+App.Console.PrintMessage(text + "\n")
+if App.GuiUp:
+    from PySide import QtGui
+    box = QtGui.QMessageBox.warning if lines else QtGui.QMessageBox.information
+    box(None, "Motor parameter check", text)

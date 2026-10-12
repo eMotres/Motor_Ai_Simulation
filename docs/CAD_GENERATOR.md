@@ -103,6 +103,51 @@ thread engagement in the back bosses (reported).  An overlap above 0.5 mm3 refus
 The STEP has `Mechanics/...` (36 solids, 58 in all) and the datums JSON a `mechanics` block (A_H measured on the solid,
 bearing seats, holder faces, shaft journals / flats / thread, bolt circle and angles, M3 holes, rings, Prop_fix, screws).
 
+Axial parameters (Fusion Sketch3 dimension names, not renamed; owner to confirm the meaning):
+
+| Param (Fusion dim) | What it is | L20 |
+|---|---|---|
+| `motor_length` (d7582) | stack, stator end faces at +-motor_length/2 | 20 |
+| `ring_h` (d11985), `ring_holder_gap` (d11987) | GFRP ring length from the stator face; gap ring -> holder flange | 1.8, 0.1 |
+| `holder_face_z` (derived) | holder inner faces = bearing inner faces = shaft shoulder (front) / 10 -> 8 step (back) | 11.9 |
+| `holder_flange_t` (d11698) | holder flange thickness (screw head seat front, boss start back) | 1.2 |
+| `bearing_w` (d11703, = card B) | bearing width = seat depth | 4 |
+| `holder_lip_t` (d11700), `holder_lip_r` (d11702) | lip behind each bearing, bore 14.6 | 0.8, 7.3 |
+| `shaft_front_overhang` (d11704) | journal beyond the front holder -> Prop_fix seat (z 20.7) | 4 |
+| `shaft_thread_len`, `shaft_tip_len` (d11705/6) | M5 section (4.95) and tip (4.9) lengths | 8, 8 |
+| `back_holder_len` (d11729) | back holder cylinder; A_H = -(holder_face_z + holder_flange_t + this) | 7 |
+| `back_holder_ref_r` (d11730), `back_holder_wall` (d11731, driven) | outer r = ref + (ref - seat r 8) = 12 | 10, 2 |
+| `holder_hub_wall` (d11752) | front hub r 8 -> 8.8 (also the spoke-root circle) | 0.8 |
+| `shaft_shoulder_len`, `shaft_shoulder_r` (d11689/95) | 9.4 shoulder against the front inner ring | 0.5, 4.7 |
+| `shaft_flange_step` (d11885) | flange r = rotor bore 5 + 3 (front rotor stop, z 10..11.4) | 3 |
+| `shaft_bore_r` (d11692, = seat r - shaft_height), `shaft_bore_tip_angle` (d11685) | bore 6, 45 deg end cone, apex at the journal end | 3, 45 deg |
+| `coil_holder_clearance` (d11980), `ring_t` (d11983) | flange r = coil corner 13.233 + 0.4; ring radial thickness | 0.4, 0.8 |
+| `ax_core_ref_inset` (d9633) | construction line only (role info) | 0.9 |
+
+Not dimensioned in Fusion (Sketch2 is not fully constrained), kept as read: `holder_bolt_r` 14.843191, `holder_window_r`
+1.460021.  Fusion's Chamfer7 at the journal end chamfers one of the two arcs left by the flats (edge picked after
+Extrude15); the template chamfers both.  Screw length `holder_screw_l = 2 holder_face_z + holder_flange_t` (L20 25 =
+91292A032 M2x25; L12 17).
+
+Verification of the mechanics (FreeCAD 1.1.3 server builds; the same numbers on 1.0.2):
+
+| Part vs Fusion (`mechanics_vs_reference.py`, reference profile) | dV | max surface deviation |
+|---|---|---|
+| Stator_holder, Stator_holder_back, Ring x2, Prop_fix, 618/8 rings x4 | <= 1e-6 | <= 1e-5 mm |
+| Shaft | -0.010 % | 0.141 mm (Fusion chamfers one arc of the journal end only; M5 cosmetic thread 4.901 vs 4.90) |
+| 618/8 balls x2 | -0.013 % | 0.88 mm (Fusion joins the balls by r 0.01 tori into one body) |
+| Screws x6 | +0.18 % | 0.18 mm (no 0.2 mm socket countersink) |
+
+44/44 sketches fully constrained, no redundant constraints; 58 STEP solids (re-import volume equal); models open ready to
+look at.  A_H measured on the back holder: z -20.1 (L20) / -16.1 (L12 = `Z_AH` of the full-stack study R42), area
+118.532 mm2 (= Fusion).  Fit table (L12, L20): every contact touches without overlap; holders-coils 0.89 mm, screws-core
+0.33 mm, rotor-holders 1.83 mm; screw thread engagement 2.9 mm; inherited from Fusion: the front ring overlaps the coil
+end-turn bridges by 0.0056 mm3 (ring outer r = coil corner r).  L12 against `CIANO14_40_system_R42_no_motor_nominal.step`:
+Stator_holder_back touches HS_PLATE on A_H, no mechanical overlap.  Owner edits (`owner_edits.py`, L12 and L20):
+`motor_length` 16 / 24, `shaft_height` 1.5, `rotor_house_height` 1.3, `bearing_B` 5, `holder_bolt_r` 15, `bolt_head_d` 4.2,
+`ring_h` 2 + `ring_holder_gap` 0.2 rebuild and pass the gate and the fit; `holder_bolt_r` 18 and `shaft_height` 0.5 are
+refused in words.
+
 Updating the owner repo (`CIANO14_40_motor_model`): motor_ai_sim's `cad/` is the one source.  `tools/update_from_motor_ai_sim.py`
 there copies `cad/motor_templates/segmented_flatwire/`, `cad/reference/` and the fc scripts from a motor_ai_sim checkout
 (path argument, default `../motor_ai_sim`), records the source commit in `motor_templates/SOURCE.json`, and never touches

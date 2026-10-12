@@ -60,7 +60,8 @@ import {
 import { activeDuty } from '../../lib/dutySettings';
 import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
 import { estimateThermal } from '../../lib/thermalEstimate';
-import ConfiguratorThermal from './ConfiguratorThermal';
+import { airH, getCoolingPayload, liqH } from '../thermal/api';
+import CoolingControls from '../thermal/CoolingControls';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
 import { useWireStock } from '../materials/useWireStock';
@@ -1224,19 +1225,51 @@ const ConfiguratorPanel: React.FC = () => {
   }), [ref, knobs.L_mm]);
   const tLimits = useMemo(() => tempLimits(currentContext?.thermal_limits), [currentContext]);
   const extraLossW = extraLossTile(driveMode, drv).value ?? 0;
-  /** winding / magnet / housing temperatures at the knobs (null while the propeller data is
-   *  not here, or while the load is refused — never numbers for a point that cannot be run) */
-  const thermal = useMemo(() => (
-    propellerCoolingActive && propPoint && propPoint.h_W_m2K != null && !loadRefused
-      ? estimateThermal(thermalGeom, { P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W, P_extra_W: extraLossW },
-        { h_Wm2K: propPoint.h_W_m2K, ambient_C: ambient })
-      : null), [propellerCoolingActive, propPoint, loadRefused, thermalGeom, result, extraLossW, ambient]);
+  // The typed cooling system (air speed or a liquid jacket) of a machine the registry gives no
+  // cooling for: `CoolingControls` persists it to localStorage `sim.cool.*` and fires
+  // `cooling:changed` — it is not React state, so read it again on that event.
+  const [coolTick, setCoolTick] = useState(0);
+  useEffect(() => {
+    const bump = () => setCoolTick((n) => n + 1);
+    window.addEventListener('cooling:changed', bump);
+    return () => window.removeEventListener('cooling:changed', bump);
+  }, []);
+  const coolPayload = useMemo(() => (hasPropellerControls ? null : getCoolingPayload()), [coolTick, hasPropellerControls]);
+  /** The cooling behind the ONE temperature row — the same lumped estimate in every mode: the
+   *  propeller's film h at this rpm, still air at the natural-convection floor, or the typed
+   *  air / liquid system.  (It replaces the removed "Estimated temperatures" block,
+   *  owner 2026-10-12.)  null = the point cannot be run and nothing may be shown for it. */
+  const cooling = useMemo((): { h_Wm2K: number; ambient_C: number; air_speed_ms: number | null } | null => {
+    const D = (thermalGeom.statorOD_mm || 150) / 1000;
+    if (propellerCoolingActive) {
+      return propPoint && propPoint.h_W_m2K != null && !loadRefused
+        ? { h_Wm2K: propPoint.h_W_m2K, ambient_C: ambient, air_speed_ms: propPoint.air_speed_ms ?? null }
+        : null;
+    }
+    if (optionalPropellerCooling) return { h_Wm2K: airH(0, D), ambient_C: ambient, air_speed_ms: 0 };   // still air (Robotics)
+    if (coolPayload) {
+      const isAir = coolPayload.cooling_mode === 'air';
+      return {
+        h_Wm2K: isAir ? airH(Number(coolPayload.air_speed_mps) || 0, D) : liqH(Number(coolPayload.flow_lpm) || 0),
+        ambient_C: Number(coolPayload.ambient_temp) || 25,
+        air_speed_ms: isAir ? Number(coolPayload.air_speed_mps) || 0 : null,
+      };
+    }
+    return null;
+  }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, propPoint, loadRefused, ambient, coolPayload]);
+  /** winding / magnet / housing temperatures at the knobs (null while the cooling data is not
+   *  here, or while the load is refused — never numbers for a point that cannot be run) */
+  const thermal = useMemo(() => (cooling
+    ? estimateThermal(thermalGeom, { P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W,
+        ...(hasPropellerControls ? { P_extra_W: extraLossW } : {}) },
+      { h_Wm2K: cooling.h_Wm2K, ambient_C: cooling.ambient_C })
+    : null), [cooling, thermalGeom, result, extraLossW, hasPropellerControls]);
   const verdict = thermal ? judgeTemps(thermal.T_winding_C, thermal.T_magnet_C, tLimits) : null;
   const overheats = !!verdict?.over;
-  /** the ONE red line above the results (fixed height, so it never moves the grid) */
+  /** the ONE red line above the results (fixed height, so it never moves the grid): the propeller's
+   *  own refusals first, and — in EVERY cooling mode — one short line when this point overheats */
   const propLine: { text: string; tip: string } | null = (() => {
-    if (!propellerCoolingActive) return null;
-    if (loadRefused && propLoadRes && !propLoadRes.ok && propLoadRes.kind === 'torque') {
+    if (propellerCoolingActive && loadRefused && propLoadRes && !propLoadRes.ok && propLoadRes.kind === 'torque') {
       return { text: tx('configurePropeller.refuseTorque', { need: fmt(propLoadRes.need_Nm, 3), rpm: fmt(knobs.rpm, 0), have: fmt(propLoadRes.have_Nm, 3), imax: fmt(ranges.I_A.max, 0) }),
                tip: tx('configurePropeller.refuseTorqueTip') };
     }
@@ -1245,18 +1278,19 @@ const ConfiguratorPanel: React.FC = () => {
                tip: [verdict.windingOver ? tx('configurePropeller.overWinding', { limit: fmt(tLimits.winding_C, 0), basis: tLimits.windingBasis }) : null,
                      verdict.magnetOver ? tx('configurePropeller.overMagnet', { limit: fmt(tLimits.magnet_C, 0) }) : null].filter(Boolean).join(' ') };
     }
-    if (propList && !allowedProps.length) return { text: tx('configurePropeller.noPropeller'), tip: tx('configurePropeller.noPropellerTip') };
+    if (propellerCoolingActive && propList && !allowedProps.length) return { text: tx('configurePropeller.noPropeller'), tip: tx('configurePropeller.noPropellerTip') };
     return null;
   })();
   const propBad = !!propLine && (loadRefused || overheats);
   const tempTiles = tempRowTiles(
-    thermal && propPoint ? { T_winding_C: thermal.T_winding_C, T_magnet_C: thermal.T_magnet_C, T_housing_C: thermal.T_housing_C,
-      air_speed_ms: propPoint.air_speed_ms, h_W_m2K: propPoint.h_W_m2K ?? 0 } : null, tLimits);
+    thermal && cooling ? { T_winding_C: thermal.T_winding_C, T_magnet_C: thermal.T_magnet_C, T_housing_C: thermal.T_housing_C,
+      air_speed_ms: cooling.air_speed_ms, h_W_m2K: cooling.h_Wm2K, surface_cm2: thermal.A_surface_m2 * 1e4 } : null, tLimits);
   const renderTemp = (t: TempTileSpec) => (
     <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} display={t.display} unit={t.unit} d={t.d} base={t.value ?? 0}
       absLevel={t.level} plain
       tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '',
-        air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—' })}
+        air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—',
+        surface: t.surface != null ? fmt(t.surface, 0) : '—' })}
       blankTip={tx(loadRefused ? 'configurePropeller.blankRefused' : 'configurePropeller.blankLoading')} />
   );
   /** thermal zones on the knobs: green = continuous below both limits with this propeller, red = beyond.
@@ -1758,6 +1792,12 @@ const ConfiguratorPanel: React.FC = () => {
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mt: 0, mb: 0.75 }}>{tx('configureLimits.operatingPoint')}</Typography>
           {/* rms is the knob; the PEAK rides beside it (user 2026-08-26) —
               inverters and datasheets are quoted in peak, the coil sees rms. */}
+          {/* The cooling system of a machine the registry gives no cooling for (typed air speed or
+              a liquid jacket).  It moved here from the removed "Estimated temperatures" block
+              (owner 2026-10-12) and feeds the ONE temperature row in the results. */}
+          {ctxDone && !hasPropellerControls && (
+            <CoolingControls diameterMm={thermalGeom.statorOD_mm} />
+          )}
           {/* Optional propeller cooling changes the thermal estimate only on mixed-cooling motors. */}
           {hasPropellerControls && (
             <Box sx={{ mb: 1.25 }}>
@@ -1971,8 +2011,9 @@ const ConfiguratorPanel: React.FC = () => {
               5 Ld · Lq · ψ_PM · Lq/Ld
               6 KV · Kt · Km · Km/mass
               7 demag koef · saturation koef · total koef */}
-          {/* ONE red line (fixed height: it never moves the grid) — only for a propeller-cooled machine */}
-          {cooled && (
+          {/* ONE red line (fixed height: it never moves the grid) — a propeller refusal, or the
+              one-line overheat warning in EVERY cooling mode (owner 2026-10-12) */}
+          {ctxDone && (
             <Typography sx={{ ...LABEL, fontSize: 11, lineHeight: '16px', height: 16, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
               color: '#f87171', mb: -0.5 }} title={propLine ? `${propLine.text}. ${propLine.tip}` : undefined}>
               {propLine ? `⚠ ${propLine.text}` : ''}
@@ -2016,8 +2057,9 @@ const ConfiguratorPanel: React.FC = () => {
             {lossTailTiles(driveMode, drv).map(renderSpec)}
             {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, motorEfficiency(driveMode, drv, result.P_mech_W, result.P_loss_W)).map(renderSpec)}
           </Box>
-          {/* ── TEMPERATURES — ONE row for a propeller-cooled machine, the same five tiles from the first render ── */}
-          {propellerOnly && cooled && (
+          {/* ── TEMPERATURES — ONE row in EVERY cooling mode (owner 2026-10-12: the separate
+              "Estimated temperatures" block is gone), the same tiles from the first render ── */}
+          {ctxDone && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {tempTiles.map(renderTemp)}
             </Box>
@@ -2257,29 +2299,6 @@ const ConfiguratorPanel: React.FC = () => {
           </Typography>
         </Box>
       ) : null}
-
-      {/* Generic cooling stays unchanged for ordinary motors. Optional mixed registry cooling
-          uses the same lumped estimator with an explicit still-air or propeller boundary. */}
-      {ctxDone && !propellerOnly && (
-        <Box sx={{ px: 2, pb: 1.5 }}>
-          <ConfiguratorThermal
-            geom={thermalGeom}
-            losses={{ P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W,
-              ...(optionalPropellerCooling ? { P_extra_W: extraLossW } : {}) }}
-            coolingEstimate={optionalPropellerCooling ? {
-              mode: propellerCoolingMode,
-              ambient_C: ambient,
-              air_speed_ms: propellerCoolingMode === 'robotics' ? 0 : propPoint?.air_speed_ms ?? null,
-              h_Wm2K: propellerCoolingMode === 'robotics' ? null : propPoint?.h_W_m2K ?? null,
-              temperatureLimits: {
-                winding_C: tLimits.winding_C,
-                magnet_C: tLimits.magnet_C,
-                windingBasis: tLimits.windingBasis,
-              },
-            } : undefined}
-          />
-        </Box>
-      )}
 
       {/* ── PERFORMANCE VS SPEED ── */}
       {SHOW_CONFIGURE_CHARTS && (

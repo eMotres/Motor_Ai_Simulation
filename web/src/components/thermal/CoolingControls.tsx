@@ -7,7 +7,9 @@
  *
  * Moved here from `simulation/CoolingControls` on 2026-09-07, when the thermal
  * solve left the Electromagnetic tab: this widget is thermal input, and its only
- * remaining host is `compare/ConfiguratorThermal`.  The localStorage keys are
+ * remaining host is the Operating point area of `compare/ConfiguratorPanel`
+ * (2026-10-12: the `compare/ConfiguratorThermal` block it used to sit in is
+ * gone — its temperatures live in the results row).  The localStorage keys are
  * UNCHANGED (`sim.cool.*`, read through `readCool`/`lsSetCool` in `./api`) —
  * they are the saved cooling system of every existing user, and renaming them
  * would silently reset all of them to the defaults.

@@ -103,7 +103,6 @@ export const TREE = [
   'components/compare/BatteryPanel.tsx',
   'components/compare/PerformanceCharts.tsx',
   'components/compare/EfficiencyMap.tsx',
-  'components/compare/ConfiguratorThermal.tsx',
   'components/compare/ChargePanel.tsx',
   'components/thermal/CoolingControls.tsx',
   'lib/configuratorDrive.ts',

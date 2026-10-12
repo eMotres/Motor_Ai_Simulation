@@ -71,11 +71,11 @@ t('TOTAL LOSS = motor losses + PWM extra + controller loss (Sine: the motor loss
   assert.equal(T.lossDensityShown(764, 74, 'pwm', null), null);
 });
 
-// ── the temperatures row (propeller-cooled machines) ─────────────────────────────────────────
+// ── the temperatures row (every cooling mode: propeller air, still air, typed air, liquid) ───
 const LIM = { winding_C: 200, magnet_C: 150 };   // the housing is judged against the winding's limit
-const TEMPS = { T_winding_C: 120, T_magnet_C: 100, T_housing_C: 60, air_speed_ms: 9.5, h_W_m2K: 61 };
+const TEMPS = { T_winding_C: 120, T_magnet_C: 100, T_housing_C: 60, air_speed_ms: 9.5, h_W_m2K: 61, surface_cm2: 120 };
 
-t('the temperatures are ONE fixed row of five tiles, present with or without data', () => {
+t('the temperatures are ONE fixed row of four tiles, present with or without data', () => {
   const want = [...T.TEMP_ROW_IDS];
   assert.deepEqual(want, ['tWinding', 'tMagnet', 'tHousing', 'airSpeed']);              // no film-h tile
   assert.deepEqual(T.tempRowTiles(null, LIM).map((x) => x.id), want);
@@ -84,17 +84,18 @@ t('the temperatures are ONE fixed row of five tiles, present with or without dat
   const row = Object.fromEntries(T.tempRowTiles(TEMPS, LIM).map((x) => [x.id, x]));
   assert.equal(row.tWinding.value, 120); assert.equal(row.tWinding.level, 'ok');
   assert.equal(row.airSpeed.value, 9.5); assert.equal(row.filmH, undefined);
-  // h and the air speed ride in the HOUSING tile's tooltip (one line each), in every state
-  assert.deepEqual([row.tHousing.air, row.tHousing.h], [9.5, 61]);
+  // h, the air speed and the surface ride in the HOUSING tile's tooltip (one clause each), in every state
+  assert.deepEqual([row.tHousing.air, row.tHousing.h, row.tHousing.surface], [9.5, 61, 120]);
   const none = T.tempRowTiles(null, LIM).find((x) => x.id === 'tHousing');
-  assert.deepEqual([none.air, none.h], [null, null]);
+  assert.deepEqual([none.air, none.h, none.surface], [null, null, null]);
   for (const l of ['en', 'zh-CN']) {
     const tip = loc(l).configurePropeller.tHousingTip;
-    assert.match(tip, /\{air\}/); assert.match(tip, /\{h\}/); assert.match(tip, /\{limit\}/);
-    assert.equal(tip.split('\n').length, 3, `${l}: the housing tooltip has the limit line, the air line and the h line`);
+    assert.match(tip, /\{air\}/); assert.match(tip, /\{h\}/); assert.match(tip, /\{limit\}/); assert.match(tip, /\{surface\}/);
+    assert.equal(tip.split('\n').length, 4, `${l}: the limit line, the air line, the h line and the surface line`);
     assert.equal(loc(l).configurePropeller.filmH, undefined); assert.equal(loc(l).configurePropeller.filmHTip, undefined);
   }
   assert.match(read('components/compare/ConfiguratorPanel.tsx'), /air: t\.air != null \? fmt\(t\.air, 1\)/);
+  assert.match(read('components/compare/ConfiguratorPanel.tsx'), /surface: t\.surface != null \? fmt\(t\.surface, 0\)/);
 });
 
 t('over the limit a temperature tile reads "> limit" in red, never the absurd number', () => {
@@ -108,6 +109,21 @@ t('over the limit a temperature tile reads "> limit" in red, never the absurd nu
   assert.equal(near.tWinding.level, 'warn'); assert.equal(near.tWinding.display, undefined);
   assert.equal(near.tMagnet.level, 'warn'); assert.equal(near.tMagnet.value, 150);
   assert.equal(near.tHousing.value, 185);
+});
+
+t('the still-air (Robotics) estimate lands in the same row: 0 m/s, h 7, absurd numbers read "> limit"', () => {
+  // the numbers the removed block used to print for Ø85 L13 in still air — they must never reappear
+  const row = Object.fromEntries(T.tempRowTiles({ T_winding_C: 1421, T_magnet_C: 1379, T_housing_C: 1377,
+    air_speed_ms: 0, h_W_m2K: 7, surface_cm2: 96 }, LIM).map((x) => [x.id, x]));
+  assert.equal(row.tWinding.display, '> 200'); assert.equal(row.tWinding.level, 'bad'); assert.equal(row.tWinding.value, null);
+  assert.equal(row.tMagnet.display, '> 150'); assert.equal(row.tMagnet.level, 'bad');
+  assert.equal(row.tHousing.display, '> 200'); assert.equal(row.tHousing.level, 'bad');
+  assert.equal(row.airSpeed.value, 0);                                       // still air is a real 0, not "—"
+  assert.deepEqual([row.tHousing.air, row.tHousing.h, row.tHousing.surface], [0, 7, 96]);
+  // a liquid jacket has no cooling air: the COOLING AIR tile is "—", the housing tooltip still carries h
+  const liq = Object.fromEntries(T.tempRowTiles({ ...TEMPS, air_speed_ms: null }, LIM).map((x) => [x.id, x]));
+  assert.equal(liq.airSpeed.value, null); assert.equal(liq.airSpeed.display, undefined);
+  assert.equal(liq.tHousing.air, null); assert.equal(liq.tHousing.h, 61);
 });
 
 // ── the panel renders ONLY these for the drive-dependent tiles ───────────────────────────────
@@ -146,10 +162,15 @@ for (const l of ['en', 'zh-CN']) {
       assert.doesNotMatch(c[k], bad, `${l} configure.${k} = "${c[k]}"`);
       assert.doesNotMatch(c[k], /\{basis\}/, k);
     }
-    // the title row of the panel and of the thermal block carry no method tag either
+    // the title row of the panel carries no method tag; the separate "Estimated temperatures" block is gone
     assert.doesNotMatch(c.subtitle, /FEM|有限元/);
-    assert.doesNotMatch(c.thermalTitle, /analytic|解析|lumped|集总/i);
-    assert.equal(c.thermalSub, undefined);
+    for (const k of ['thermalTitle', 'thermalHelp', 'thermalSub', 'hotWinding', 'hotMagnet', 'hotAdvice', 'hUsed', 'surface'])
+      assert.equal(c[k], undefined, `${l} configure.${k}`);
+    const p = loc(l).configurePropeller;
+    for (const k of ['estimateTitle', 'estimateTip', 'coolingAirSpeed', 'hotWinding', 'hotMagnet'])
+      assert.equal(p[k], undefined, `${l} configurePropeller.${k}`);
+    // `temperatureLimits` lives again: the Electromagnetic tab's tile panel (PR #139) shows the line
+    assert.ok(p.temperatureLimits, `${l} configurePropeller.temperatureLimits`);
     // the method moved into ONE tooltip line
     for (const k of ['ktTip3d', 'ktTipFlux', 'ktTip2d', 'tRippleTip', 'totalLossTip']) assert.ok(c[k], k);
     // the drive tiles are named for what they are in BOTH modes (no "(PWM)" tag on a tile that exists in Sine)
@@ -165,7 +186,7 @@ t('the source no longer prints the basis, the "instant" tag or the thermal tag',
   const panel = read('components/compare/ConfiguratorPanel.tsx');
   assert.doesNotMatch(panel, /KT_BASIS_LABEL|basis3d|basis2d/);
   assert.doesNotMatch(panel, /<Typography[^>]*>\{tx\('configure\.instant'\)\}/);
-  assert.doesNotMatch(read('components/compare/ConfiguratorThermal.tsx'), /thermalSub/);
+  assert.doesNotMatch(panel, /ConfiguratorThermal/);                           // the block file is deleted
 });
 
 // ── one contiguous controller group, short titles, no Greek capitals (owner 2026-10-05) ───────

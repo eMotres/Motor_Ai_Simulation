@@ -275,14 +275,14 @@ t('ZONES on the real motor: with the real propeller the speed knob goes green ->
   assert.ok(firstRed > 0 && firstRed < samples.length - 1);
 });
 
-t('the panel: thermal estimate is available for mixed cooling, while only propeller-only mode owns motor load', () => {
+t('the panel: ONE temperature row in every cooling mode, the still-air estimate included, no thermal block', () => {
   const panel = readFileSync(join(HERE, '..', '..', 'components', 'compare', 'ConfiguratorPanel.tsx'), 'utf8');
-  assert.match(panel, /\{ctxDone && !propellerOnly && \(\s*<Box sx=\{\{ px: 2, pb: 1\.5 \}\}>\s*<ConfiguratorThermal/);   // mixed and ordinary machines get the estimate
-  assert.equal((panel.match(/<ConfiguratorThermal/g) || []).length, 1);
-  assert.match(panel, /\{propellerOnly && cooled && \(\s*<Box sx=\{\{ display: 'flex', gap: 0\.75, flexWrap: 'wrap' \}\}>\s*\{tempTiles\.map\(renderTemp\)\}/);
-  assert.equal((panel.match(/tempTiles\.map\(renderTemp\)/g) || []).length, 1);                              // one propeller-only row
+  assert.doesNotMatch(panel, /ConfiguratorThermal/);                                                              // the separate block is gone
+  assert.match(panel, /\{ctxDone && \(\s*<Box sx=\{\{ display: 'flex', gap: 0\.75, flexWrap: 'wrap' \}\}>\s*\{tempTiles\.map\(renderTemp\)\}/);   // every mode, not propeller-only
+  assert.equal((panel.match(/tempTiles\.map\(renderTemp\)/g) || []).length, 1);                              // exactly one row
+  assert.match(panel, /if \(optionalPropellerCooling\) return \{ h_Wm2K: airH\(0, D\)/);                       // still air (Robotics) at the natural-convection floor
+  assert.match(panel, /<CoolingControls diameterMm=/);                                                         // the cooling basis inputs moved into Operating point
   assert.match(panel, /const propLoad = propellerOnly &&/);                                                     // mixed mode preserves manual current
-  assert.match(panel, /optionalPropellerCooling \? \{/);                                                       // mixed mode exposes its cooling estimate
   assert.match(panel, /currentForTorque\(propPoint\?\.torque_Nm \?\? null, torqueAtI\(knobs\), ranges\.I_A\.max\)/);
   assert.match(panel, /disabled=\{propLoad\}/);                                                              // the current is shown, not typed, in propeller mode
   assert.match(panel, /updateCool\(\{ load: v \}\)/);                                                       // the manual-load toggle

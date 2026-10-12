@@ -279,15 +279,22 @@ def test_current_ceiling_is_where_the_controller_puts_the_device_at_its_rating()
 
 
 def test_context_names_the_cooling_and_the_temperature_limits():
-    """The propeller picker, the dropped Thermal block and the red "> 180 degC" tiles all read
-    these (owner 2026-10-05): the die's cooling options, and the limits a temperature is judged
-    against — class H 180 degC for the winding (stated as a default), the magnet card's own limit."""
+    """The propeller picker, the dropped Thermal block and the red "> limit" tiles all read
+    these: the die's cooling options, and the limits a temperature is judged against — the
+    project's class N 200 degC for the winding (and the housing, which cannot be hotter),
+    the magnet card's own limit."""
     fam = {"die": "CIANO14 40 new", "name": "L12", "materials": {"magnet": "F52SH_120C"}}
     c = cl.context({"name": "CIANO14 40 new"}, fam)
     assert c["cooling"]["restricted"] and c["cooling"]["cooling_options"] == ["propeller_air"]
     assert c["cooling"]["die"] == "CIANO14 40 new" and c["cooling"]["config"] == "L12"
     assert "tmotor_p12x4" in c["cooling"]["propellers"]
-    assert c["thermal_limits"] == {"winding_C": 180.0, "winding_basis": "class H default",
+    # owner 2026-10-12: the winding limit is the project's class N 200 degC (PR #126),
+    # not the old class H 180 degC default the tiles printed "> 180" against — read
+    # from the ONE place that states it (coupled_time_to_limit.winding_limit)
+    from motor_ai_sim.coupled_time_to_limit import winding_limit
+    w_c, w_basis = winding_limit()
+    assert w_c == 200.0
+    assert c["thermal_limits"] == {"winding_C": 200.0, "winding_basis": w_basis,
                                    "magnet_C": 150.0, "magnet_card": "F52SH_120C"}
     # another die is unrestricted; no magnet named = no magnet limit invented
     free = cl.context(None, {"die": "CILN28", "name": "G2-L40"})

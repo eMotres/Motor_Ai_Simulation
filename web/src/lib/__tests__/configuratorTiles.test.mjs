@@ -72,7 +72,7 @@ t('TOTAL LOSS = motor losses + PWM extra + controller loss (Sine: the motor loss
 });
 
 // ── the temperatures row (propeller-cooled machines) ─────────────────────────────────────────
-const LIM = { winding_C: 200, magnet_C: 150 };
+const LIM = { winding_C: 200, magnet_C: 150 };   // the housing is judged against the winding's limit
 const TEMPS = { T_winding_C: 120, T_magnet_C: 100, T_housing_C: 60, air_speed_ms: 9.5, h_W_m2K: 61 };
 
 t('the temperatures are ONE fixed row of five tiles, present with or without data', () => {
@@ -98,13 +98,16 @@ t('the temperatures are ONE fixed row of five tiles, present with or without dat
 });
 
 t('over the limit a temperature tile reads "> limit" in red, never the absurd number', () => {
-  const row = Object.fromEntries(T.tempRowTiles({ ...TEMPS, T_winding_C: 2263, T_magnet_C: 151 }, LIM).map((x) => [x.id, x]));
+  const row = Object.fromEntries(T.tempRowTiles({ ...TEMPS, T_winding_C: 2263, T_magnet_C: 151, T_housing_C: 201 }, LIM).map((x) => [x.id, x]));
   assert.equal(row.tWinding.display, '> 200'); assert.equal(row.tWinding.level, 'bad'); assert.equal(row.tWinding.value, null);
   assert.equal(row.tMagnet.display, '> 150'); assert.equal(row.tMagnet.level, 'bad');
+  // the housing has no limit of its own: it is judged against the winding's (it cannot be hotter)
+  assert.equal(row.tHousing.display, '> 200'); assert.equal(row.tHousing.level, 'bad'); assert.equal(row.tHousing.limit, 200);
   // within 20 K of the limit: amber; exactly at the limit is still allowed
-  const near = Object.fromEntries(T.tempRowTiles({ ...TEMPS, T_winding_C: 185, T_magnet_C: 150 }, LIM).map((x) => [x.id, x]));
+  const near = Object.fromEntries(T.tempRowTiles({ ...TEMPS, T_winding_C: 185, T_magnet_C: 150, T_housing_C: 185 }, LIM).map((x) => [x.id, x]));
   assert.equal(near.tWinding.level, 'warn'); assert.equal(near.tWinding.display, undefined);
   assert.equal(near.tMagnet.level, 'warn'); assert.equal(near.tMagnet.value, 150);
+  assert.equal(near.tHousing.value, 185);
 });
 
 // ── the panel renders ONLY these for the drive-dependent tiles ───────────────────────────────
@@ -152,7 +155,7 @@ for (const l of ['en', 'zh-CN']) {
     assert.doesNotMatch(d.motorEff, /PWM/, `${l} motorEff`);
     assert.equal(d.driveEff, undefined);                                   // the duplicate "eta drive" tile is gone
     assert.equal(d.shaftEffPwm, undefined);
-    assert.match(d.invLoss, /Controller|控制器/);
+    assert.match(d.invLoss, /Ctrl|Controller|控制器/);
   });
 }
 
@@ -181,7 +184,7 @@ t('ONE contiguous controller group: PWM loss, controller loss, T_j, eta motor, P
   assert.equal((panel.match(/driveRowTiles\(driveMode, drv,/g) || []).length, 1);          // no second, separate drive row
 });
 
-for (const [l, max] of [['en', 17], ['zh-CN', 12]]) {
+for (const [l, max] of [['en', 11], ['zh-CN', 12]]) {
   t(`controller-group titles are short enough for the tile (no ellipsis) and the full name is in the tooltip (${l})`, () => {
     const d = loc(l).configureDrive;
     for (const k of ['motorLoss', 'invLoss', 'tj', 'motorEff', 'pContMax']) {
@@ -190,6 +193,13 @@ for (const [l, max] of [['en', 17], ['zh-CN', 12]]) {
     }
     assert.match(d.motorEffTip, /system|系统/i);                          // says what the Efficiency tile is
     assert.match(d.motorLossTip, /PWM/);
+    // the coefficient titles too: one short line at the 132 px tile, full name in the tooltip
+    const c = loc(l).configure;
+    const kMax = l === 'en' ? 11 : 12;
+    for (const k of ['demagKoef', 'saturationKoef', 'totalKoef']) {
+      assert.ok([...c[k]].length <= kMax, `${l} configure.${k} = "${c[k]}" (${[...c[k]].length} > ${kMax})`);
+      assert.ok(c[`${k}Tip`] && c[`${k}Tip`].length > c[k].length, `${k}Tip carries the full name`);
+    }
   });
 }
 

@@ -67,8 +67,8 @@ const PropellerCurves: React.FC<Props> = ({ series, rpm, rpmMin, rpmMax, powerEs
     return (
       <Paper key={kind} variant="outlined" sx={{ flex: '1 1 320px', minWidth: 0, bgcolor: 'var(--panel-2)', borderColor: 'var(--line-soft)', p: 1 }}>
         <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', mb: 0.25 }}>{titleText}</Typography>
-        {noData ? <Typography role="status" sx={{ height: 184, display: 'grid', placeItems: 'center', color: 'var(--text-4)', fontSize: 12 }}>{noData}</Typography> : (
-          <Box ref={(el: HTMLDivElement | null) => { pointerBox.current[kind] = el; }} sx={{ height: 184, position: 'relative', touchAction: 'none', cursor: 'crosshair', outlineOffset: 2 }}
+        {noData ? <Typography role="status" sx={{ height: 368, display: 'grid', placeItems: 'center', color: 'var(--text-4)', fontSize: 12 }}>{noData}</Typography> : (
+          <Box ref={(el: HTMLDivElement | null) => { pointerBox.current[kind] = el; }} sx={{ height: 368, position: 'relative', touchAction: 'none', cursor: 'crosshair', outlineOffset: 2 }}
             role="group" tabIndex={0} aria-label={tx(thrust ? 'configurePropeller.thrustCursor' : 'configurePropeller.powerCursor')}
             aria-valuetext={tx('configurePropeller.cursorAt', { rpm: Math.round(rpm) })}
             onKeyDown={(e) => {
@@ -87,7 +87,7 @@ const PropellerCurves: React.FC<Props> = ({ series, rpm, rpmMin, rpmMax, powerEs
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={curve!.points} margin={MARGIN}>
                 <CartesianGrid stroke="var(--panel)" strokeDasharray="3 3" />
-                <XAxis dataKey="rpm" type="number" domain={domain!} tick={{ fill: 'var(--text-4)', fontSize: 12 }} tickFormatter={(v) => Number(v).toLocaleString()} label={{ value: 'rpm', position: 'insideBottom', offset: -12, fill: 'var(--text-4)', fontSize: 12 }} />
+                <XAxis dataKey="rpm" type="number" domain={domain!} tick={{ fill: 'var(--text-4)', fontSize: 12 }} tickFormatter={(v) => Math.round(Number(v)).toLocaleString()} label={{ value: 'rpm', position: 'insideBottom', offset: -12, fill: 'var(--text-4)', fontSize: 12 }} />
                 <YAxis width={Y_AXIS_WIDTH} tick={{ fill: 'var(--text-4)', fontSize: 12 }} tickFormatter={(v) => Number(v).toLocaleString()} label={{ value: unit, angle: -90, position: 'insideLeft', fill: 'var(--text-4)', fontSize: 12 }} />
                 <RcTooltip formatter={(value, name) => [value == null ? '—' : `${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`, name]} labelFormatter={(v) => `${Number(v).toLocaleString()} rpm`} />
                 <Line type="monotone" dataKey={testedKey} name={tx('configurePropeller.tested')} stroke={CURVE_COLORS.tested} dot={false} connectNulls={false} isAnimationActive={false} strokeWidth={2} />

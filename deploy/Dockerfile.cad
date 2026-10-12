@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN micromamba install -y -n base -c conda-forge "freecad=1.1.3" pyyaml \
  && micromamba clean -a -y
 
+# FreeCAD resolves its home with getpwuid(): the service uid must have a passwd entry (docker run --user 10001:10001).
+RUN echo "motres:x:10001:10001:motres:/tmp:/usr/sbin/nologin" >> /etc/passwd  && echo "motres:x:10001:" >> /etc/group
+
 WORKDIR /app
 COPY cad/ cad/
 COPY src/motor_ai_sim/cad/ src/motor_ai_sim/cad/

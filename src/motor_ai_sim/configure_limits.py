@@ -206,18 +206,24 @@ def presets_for_die(docs: list, die_geometry: Optional[Dict[str, Any]] = None,
     return out
 
 
-#: Winding limit when the machine names none: insulation class H (owner 2026-10-05, "180 degC
-#: class H default"); an assumption, said so in ``thermal_limits.winding_basis``.
-WINDING_LIMIT_C = 180.0
+#: Winding limit fallback when the single source cannot be imported: the project's
+#: ONE insulation class, N (200 degC) — mirrors ``report.PROJECT_INSULATION_C``
+#: (owner 2026-10-12: the winding limit is 200 degC class N; the earlier "class H
+#: 180 degC default" of 2026-10-05 is stale and made the Configure tiles print
+#: "> 180").  Normally read from ``coupled_time_to_limit.winding_limit()``.
+WINDING_LIMIT_C = 200.0
 
 
 def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-    """The temperatures Configure judges the winding and the magnet against.
+    """The temperatures Configure judges the winding, the magnet and the housing against.
 
-    Winding: class H 180 degC (a stated default).  Magnet: the ``max_working_temp_c`` of the
-    magnet card the machine is assigned (``materials.magnet``); ``None`` when the machine names
-    no magnet or the card carries no limit - Configure then falls back to its own default and
-    says so."""
+    Winding: the project's class N 200 degC, read from the ONE place that states it
+    (``coupled_time_to_limit.winding_limit``).  Housing: the SAME limit — the housing
+    can never be hotter than the winding it carries, and drone housings run far
+    hotter than the robotics touch limit (review 2026-10-12).
+    Magnet: the ``max_working_temp_c`` of the magnet card the machine is assigned
+    (``materials.magnet``); ``None`` when the machine names no magnet or the card carries
+    no limit - Configure then falls back to its own default and says so."""
     fam = fam if isinstance(fam, dict) else {}
     mats = fam.get("materials") if isinstance(fam.get("materials"), dict) else {}
     name = mats.get("magnet")
@@ -228,7 +234,12 @@ def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
             mag = _pos(getattr(get_material("magnet", str(name)), "max_working_temp_c", None))
         except Exception:                                   # noqa: BLE001
             mag = None
-    return {"winding_C": WINDING_LIMIT_C, "winding_basis": "class H default",
+    try:
+        from motor_ai_sim.coupled_time_to_limit import winding_limit
+        w_c, w_basis = winding_limit()
+    except Exception:                                   # noqa: BLE001
+        w_c, w_basis = WINDING_LIMIT_C, "project insulation class N (200 °C)"
+    return {"winding_C": float(w_c), "winding_basis": w_basis,
             "magnet_C": mag, "magnet_card": str(name) if name else None}
 
 

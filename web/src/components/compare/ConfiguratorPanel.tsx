@@ -280,9 +280,9 @@ const MetricTile: React.FC<{
       title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : plain ? '' : changed
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
         : tx('configure.sameAsRef'))}>
-      <Typography title={label} sx={{ ...LABEL, fontSize: 12, lineHeight: '14px', height: 28,
-        color: labelColor ?? LABEL.color, overflow: 'hidden', display: '-webkit-box',
-        WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}><GreekLabel text={label} /></Typography>
+      <Typography title={label} sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
+        color: labelColor ?? LABEL.color, overflow: 'hidden', whiteSpace: 'nowrap',
+        textOverflow: 'ellipsis' }}><GreekLabel text={label} /></Typography>
       <Typography sx={{ fontSize: 16, fontWeight: 800,
         color: blank ? (blankColor ?? 'var(--text-3)') : absLevel
           ? (absLevel === 'bad' ? '#f87171' : absLevel === 'warn' ? '#fbbf24' : '#4ade80')
@@ -2060,7 +2060,8 @@ const ConfiguratorPanel: React.FC = () => {
                   title={tx('configure.leadCableTip', { strands: c.strands, area: c.area_mm2, section: A_phase_mm2.toFixed(2),
                       d: c.d_mm, od: c.od_mm, thk: c.thk_mm, r: c.r_ohm_km, irated: c.i_rated_A, imax: c.i_max_A, roll: c.roll_m })
                     + (c.suspect ? tx('configure.cableSuspectLine', { text: tx(c.awg === '10awg' ? 'configure.cableSuspect10' : 'configure.cableSuspect75') }) : '')}>
-                  <Typography sx={{ ...LABEL, fontSize: 9.5 }}>{tx('configure.leadCable')}</Typography>
+                  <Typography sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
+                    overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{tx('configure.leadCable')}</Typography>
                   <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)',
                     fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
                     {c.awg.replace('awg', ' AWG')}
@@ -2159,10 +2160,12 @@ const ConfiguratorPanel: React.FC = () => {
           ) : (result.demag_keep_pct != null || result.saturation_pct != null) && (
             <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
               {result.demag_keep_pct != null && (
-                <MetricTile label={tx('configure.demagKoef')} value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi />
+                <MetricTile label={tx('configure.demagKoef')} value={result.demag_keep_pct} unit="%" d={2} base={baseRes.demag_keep_pct ?? 100} goodHi
+                  tip={tx('configure.demagKoefTip')} />
               )}
               {result.saturation_pct != null && (
-                <MetricTile label={tx('configure.saturationKoef')} value={result.saturation_pct} unit="%" d={1} base={baseRes.saturation_pct ?? 100} goodHi />
+                <MetricTile label={tx('configure.saturationKoef')} value={result.saturation_pct} unit="%" d={1} base={baseRes.saturation_pct ?? 100} goodHi
+                  tip={tx('configure.saturationKoefTip')} />
               )}
               {result.demag_keep_pct != null && result.saturation_pct != null && (
                 <MetricTile label={tx('configure.totalKoef')} value={result.demag_keep_pct * result.saturation_pct / 100} unit="%" d={1}

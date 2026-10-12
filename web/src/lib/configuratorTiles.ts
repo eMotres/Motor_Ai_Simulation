@@ -155,18 +155,23 @@ export interface TempRowInput {
 
 const _n = (v: number) => String(Number(v.toFixed(0)));
 
+/** ONE temperature tile, judged the way every temperature tile in this app is judged: over the
+ *  limit it reads "> limit" in red (never the absurd number), within 20 K of it amber.
+ *  Shared by this row and the Electromagnetic tab's tile panel (lib/emResultTiles.ts), so the
+ *  two panels can never disagree on what a temperature means. */
+export function tempTileSpec(id: string, labelKey: string, tipKey: string, T: number | null, limit: number): TempTileSpec {
+  if (T == null || !Number.isFinite(T)) return { id, labelKey, tipKey, unit: '°C', d: 0, value: null, limit };
+  if (T > limit) return { id, labelKey, tipKey, unit: '°C', d: 0, value: null, display: `> ${_n(limit)}`, level: 'bad', limit };
+  return { id, labelKey, tipKey, unit: '°C', d: 0, value: T, level: T > limit - 20 ? 'warn' : 'ok', limit };
+}
+
 /** `null` input = nothing to show yet / refused: every tile is "—". */
 export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; magnet_C: number }): TempTileSpec[] {
-  const temp = (id: string, labelKey: string, tipKey: string, T: number | null, limit: number): TempTileSpec => {
-    if (T == null || !Number.isFinite(T)) return { id, labelKey, tipKey, unit: '°C', d: 0, value: null, limit };
-    if (T > limit) return { id, labelKey, tipKey, unit: '°C', d: 0, value: null, display: `> ${_n(limit)}`, level: 'bad', limit };
-    return { id, labelKey, tipKey, unit: '°C', d: 0, value: T, level: T > limit - 20 ? 'warn' : 'ok', limit };
-  };
   return [
-    temp('tWinding', 'configurePropeller.tWinding', 'configurePropeller.tWindingTip', t ? t.T_winding_C : null, lim.winding_C),
-    temp('tMagnet', 'configurePropeller.tMagnet', 'configurePropeller.tMagnetTip', t ? t.T_magnet_C : null, lim.magnet_C),
+    tempTileSpec('tWinding', 'configurePropeller.tWinding', 'configurePropeller.tWindingTip', t ? t.T_winding_C : null, lim.winding_C),
+    tempTileSpec('tMagnet', 'configurePropeller.tMagnet', 'configurePropeller.tMagnetTip', t ? t.T_magnet_C : null, lim.magnet_C),
     // the housing has no limit of its own, but it can never be hotter than the winding it carries
-    { ...temp('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip', t ? t.T_housing_C : null, lim.winding_C),
+    { ...tempTileSpec('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip', t ? t.T_housing_C : null, lim.winding_C),
       air: t ? t.air_speed_ms : null, h: t ? t.h_W_m2K : null },
     { id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: 'configurePropeller.airSpeedTip', unit: 'm/s', d: 1,
       value: t ? t.air_speed_ms : null },

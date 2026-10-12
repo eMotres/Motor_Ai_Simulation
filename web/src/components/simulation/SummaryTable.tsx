@@ -22,6 +22,7 @@ import { couplingLine, couplingTooltip, coupledStateLine,
          continuousRatingTip, s1ResultsAtLine, controllerTerm } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 import SineVsInverterTable from './SineVsInverterTable';
+import EmResultTiles from './EmResultTiles';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 
@@ -1319,6 +1320,16 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
           <SineVsInverterTable sc={s.coupling.sine_comparison}/>
         </Box>
       ) : null}
+
+      {/* ── THE RESULT TILES — Configure's panel, fed from this run ──────────
+          Owner 2026-10-12: «Сделай точно такую же панель в Electromagnetic» —
+          the compact tile block of Configure, at the top of the results, over
+          the SAME run summary the rows below read.  A tile whose value this
+          run lacks is omitted (never an empty tile, never a zero); the
+          detailed rows below are unchanged. */}
+      <Box sx={{ opacity: stale ? 0.55 : 1 }}>
+        <EmResultTiles summary={s} rf={rf} k3dBasis={apply3d && k3d != null ? ktBasis : null}/>
+      </Box>
 
       {/* ── Row 1 — torque, power, mass, efficiency, ripple ───────────────── */}
       <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>

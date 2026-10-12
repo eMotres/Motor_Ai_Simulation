@@ -24,7 +24,7 @@ import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import BoltIcon from '@mui/icons-material/Bolt';
 import { useMotorStore } from '../../stores/motorStore';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
-import { pickCable } from '../../lib/cableTable';
+import { fmt, pctDelta, PANEL, LABEL, MetricTile, LeadCableTile } from '../common/ResultTiles';
 import {
   scaleMotor, maxCurrent, type Passport, type Knobs, type ScaledResult, type PwmVariant,
 } from '../../lib/motorScaling';
@@ -136,12 +136,6 @@ interface SavedConfig {
 }
 
 const LS_KEY = 'configurator.configs.v1';
-const fmt = (v: number, d = 1) => (Number.isFinite(v) ? v.toFixed(d) : '—');
-const pctDelta = (cur: number, base: number) => (base ? ((cur - base) / base) * 100 : 0);
-
-// theme bits (match ComparePanel)
-const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1 } as const;
-const LABEL = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em' } as const;
 const TH = { px: 1.25, py: 0.7, fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.03em', whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel-2)' } as const;
 const TD = { px: 1.25, py: 0.5, fontSize: 12, whiteSpace: 'nowrap', textAlign: 'right', borderBottom: '1px solid var(--app-bg)', fontFamily: 'monospace', color: 'var(--text-1)' } as const;
 
@@ -235,69 +229,8 @@ const KnobSlider: React.FC<{
   );
 };
 
-/** the one width of every result tile */
-const TILE_W = 132;
-
-// ── one result tile: value + unit + Δ vs reference ──
-const MetricTile: React.FC<{
-  label: string; value: number | null; unit: string; d?: number; base: number; goodHi?: boolean;
-  /** why the value is "—" (shown in the tooltip instead of the vs-reference line) */
-  blankTip?: string;
-  /** printed instead of the number (a temperature over its limit reads "> 200") */
-  display?: string;
-  /** no "vs the reference design" line in the tooltip (a quantity with no reference, like a temperature) */
-  plain?: boolean;
-  /** ABSOLUTE colouring for quantities that have a meaning of their own
-   *  (current density): 'ok' | 'warn' | 'bad' overrides the vs-reference
-   *  colour, because 9 A/mm² is fine whether or not it grew (user
-   *  2026-08-26: "why is the current highlighted in red?"). */
-  absLevel?: 'ok' | 'warn' | 'bad';
-  /** What the number IS, when the label cannot say it (the heat split's
-   *  terms).  Prepended to the vs-reference line in the hover title. */
-  tip?: string;
-  /** Basis marker for an unavailable, explicitly temperature-qualified value. */
-  labelColor?: string;
-  blankColor?: string;
-  /** Explicit colour for a physical constant whose temperature basis is shown below. */
-  valueColor?: string;
-}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip, blankTip, display, plain, labelColor, blankColor, valueColor }) => {
-  const blank = value == null && display == null;
-  const delta = value == null ? 0 : pctDelta(value, base);
-  // No "% vs ref" line under every tile (user 2026-08-26) — the deltas are
-  // carried by COLOUR only; the header's Reset button returns to the
-  // reference design.
-  const show = false;
-  const good = goodHi === undefined ? null : goodHi ? delta > 0 : delta < 0;
-  const dColor = good === null ? 'var(--text-2)' : good ? '#4ade80' : '#f87171';
-  void show; void dColor;
-  // Compact (user 2026-08-25 "too spread out"): fixed narrow tiles in a
-  // dense wrap — the same visual weight as the Simulation summary cells.
-  // The tile shows the VALUE; how it moved against the reference design is
-  // told by the value's colour and by the tooltip (green = better, red =
-  // worse, grey = neutral quantity).
-  const changed = Math.abs(delta) >= 0.5;
-  const valueLineColor = valueColor ?? (changed && good !== null ? dColor : 'var(--text-0)');
-  return (
-    // ONE fixed width and a fixed value line: a number changing (or becoming "—") never moves
-    // another tile (owner 2026-10-05: the block must not jump when the drive is toggled)
-    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}
-      title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : plain ? '' : changed
-        ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
-        : tx('configure.sameAsRef'))}>
-      <Typography title={label} sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
-        color: labelColor ?? LABEL.color, overflow: 'hidden', whiteSpace: 'nowrap',
-        textOverflow: 'ellipsis' }}><GreekLabel text={label} /></Typography>
-      <Typography sx={{ fontSize: 16, fontWeight: 800,
-        color: blank ? (blankColor ?? 'var(--text-3)') : absLevel
-          ? (absLevel === 'bad' ? '#f87171' : absLevel === 'warn' ? '#fbbf24' : '#4ade80')
-          : valueLineColor,
-        fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap', minHeight: 19 }}>
-        {blank ? '—' : (display ?? fmt(value as number, d))}{!blank && <Box component="span" sx={{ fontSize: 10.5,
-          color: 'var(--text-3)', ml: 0.5 }}>{unit}</Box>}
-      </Typography>
-    </Box>
-  );
-};
+// The tile itself (MetricTile), the row wrapper and the lead-cable tile live in
+// ../common/ResultTiles.tsx — shared with the Electromagnetic tab (owner 2026-10-12).
 
 /** Tooltip of the torque / Kt / Km tiles (owner 2026-09-30): which 3-D factor
  *  they carry — one factor for all of them, so torque and Kt agree. */
@@ -2119,25 +2052,7 @@ const ConfiguratorPanel: React.FC = () => {
             )}
             {/* Nearest lead cable for that section (user 2026-08-26): gauge
                 number + bare conductor diameter. */}
-            {(() => {
-              const c = pickCable(A_phase_mm2);
-              return c ? (
-                <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}
-                  title={tx('configure.leadCableTip', { strands: c.strands, area: c.area_mm2, section: A_phase_mm2.toFixed(2),
-                      d: c.d_mm, od: c.od_mm, thk: c.thk_mm, r: c.r_ohm_km, irated: c.i_rated_A, imax: c.i_max_A, roll: c.roll_m })
-                    + (c.suspect ? tx('configure.cableSuspectLine', { text: tx(c.awg === '10awg' ? 'configure.cableSuspect10' : 'configure.cableSuspect75') }) : '')}>
-                  <Typography sx={{ ...LABEL, fontSize: 12, lineHeight: '14px',
-                    overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}>{tx('configure.leadCable')}</Typography>
-                  <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)',
-                    fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
-                    {c.awg.replace('awg', ' AWG')}
-                    <Box component="span" sx={{ fontSize: 10.5, color: 'var(--text-3)', ml: 0.5 }}>
-                      Ø{c.od_mm.toFixed(1)} mm
-                    </Box>
-                  </Typography>
-                </Box>
-              ) : null;
-            })()}
+            <LeadCableTile section_mm2={A_phase_mm2} />
             <MetricTile label={coldBasisLabel} value={result.R_ohm * 1000} unit="mΩ" d={1} base={baseRes.R_ohm * 1000}
               tip={tx('configure.rPhaseTip')} />
             <MetricTile label={coldLineBasisLabel} value={result.R_ohm * 2000} unit="mΩ" d={1} base={baseRes.R_ohm * 2000}

@@ -122,9 +122,11 @@ t('no results tile in the panel is conditional on the drive (no `drv &&` around 
   const i = panel.indexOf("tx('configure.lossDensity')");
   const j = panel.indexOf('lossTailTiles(driveMode, drv)', i);
   assert.ok(i > 0 && j > i && j - i < 700, 'directly after loss density');
-  // a fixed tile width: a number never resizes a tile
-  assert.match(panel, /width: TILE_W/);
-  assert.doesNotMatch(panel, /minWidth: 108, maxWidth: 168/);
+  // a fixed tile width: a number never resizes a tile (the tile itself moved to
+  // components/common/ResultTiles.tsx — shared with the Electromagnetic tab, 2026-10-12)
+  const tiles = read('components/common/ResultTiles.tsx');
+  assert.match(tiles, /width: TILE_W/);
+  assert.doesNotMatch(tiles, /minWidth: 108, maxWidth: 168/);
 });
 
 t('a refusal is a fixed slot, never a block that shifts the grid', () => {
@@ -210,9 +212,10 @@ t('Greek letters are protected from CSS uppercase (eta must not become the Latin
   assert.deepEqual(G.greekParts('T_j'), [{ text: 'T_j', greek: false }]);
   assert.deepEqual(G.greekParts('ψ_PM · η'), [{ text: 'ψ', greek: true }, { text: '_PM · ', greek: false }, { text: 'η', greek: true }]);
   assert.deepEqual(G.greekParts(''), []);
-  // the tile label and the table headers go through it
+  // the tile label and the table headers go through it (the tile label lives in
+  // components/common/ResultTiles.tsx since the Electromagnetic tab shares it)
   const panel = read('components/compare/ConfiguratorPanel.tsx');
-  assert.match(panel, /<GreekLabel text=\{label\} \/>/);
+  assert.match(read('components/common/ResultTiles.tsx'), /<GreekLabel text=\{label\} \/>/);
   assert.match(panel, /<GreekLabel text=\{k\.label\} \/>/);
   assert.match(panel, /<GreekLabel text=\{r\.label\} \/>/);
   assert.match(read('components/compare/GreekLabel.tsx'), /textTransform: 'none'/);

@@ -24,7 +24,7 @@ const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const load = (lng) => JSON.parse(readFileSync(join(SRC, 'locales', lng, 'controller.json'), 'utf8'));
 const EN = load('en');
 const ZH = load('zh-CN');
-const GROUPS = ['configureDrive', 'configureLimits', 'configure'];
+const GROUPS = ['configureDrive', 'configureLimits', 'configure', 'emTiles'];
 
 const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) =>
   v && typeof v === 'object' ? flat(v, p ? `${p}.${k}` : k) : [[p ? `${p}.${k}` : k, v]]);
@@ -37,8 +37,9 @@ const ALLOWED = new Set([
   'mm', 'cm', 'km', 'A', 'V', 'W', 'kW', 'rpm', 'kHz', 'Hz', 'ns', 'rms', 'K', 'N', 'm', 'k', 'kg', 'Ah', 'Wb', 'mWb', 'mH', 'L', 'min', 's',
   // an insulation class letter (class F)
   'F',
-  // quantity symbols (docs/I18N.md: never translated)
-  'T_j', 'Ld', 'Lq', 'KV', 'Kt', 'Km', 'PM', 'P', 'I', 'J', 'R', 'h', 'C', 'dq', 'ICU',
+  // quantity symbols (docs/I18N.md: never translated); Kv is the KV symbol in the casing the
+  // Limits copy uses (the tiles say KV)
+  'T_j', 'Ld', 'Lq', 'KV', 'Kv', 'Kt', 'Km', 'PM', 'P', 'I', 'J', 'R', 'h', 'C', 'dq', 'ICU',
 ]);
 const PART = /^[A-Z]{2,5}\d{2,}[A-Z0-9]*$/;                 // IQE018N06NM6SC, IGC016K10S2
 const SYMBOL = /^[A-Za-z]{1,2}(_[A-Za-z0-9]+)+$/;            // V_oc, R_pack, P_charge, k_T, k_flux
@@ -95,6 +96,7 @@ for (const g of GROUPS) {
 // ── the source of the whole Configure tree ──────────────────────────────────
 const read = (rel) => readFileSync(join(SRC, rel), 'utf8');
 export const TREE = [
+  'components/common/ResultTiles.tsx',
   'components/compare/ConfiguratorPanel.tsx',
   'components/compare/MyAgentDraftsBlock.tsx',
   'components/compare/GeometryProjections.tsx',
@@ -106,6 +108,8 @@ export const TREE = [
   'components/thermal/CoolingControls.tsx',
   'lib/configuratorDrive.ts',
   'lib/configuratorLimits.ts',
+  'lib/emResultTiles.ts',
+  'components/simulation/EmResultTiles.tsx',
 ];
 
 const stripComments = (code) => code
@@ -118,7 +122,7 @@ test('every tx() key used by the Configure tree exists in EN and ZH', () => {
     const code = stripComments(read(f));
     const keys = new Set();
     for (const m of code.matchAll(/\btx\(\s*'([A-Za-z0-9_.]+)'/g)) keys.add(m[1]);
-    for (const m of code.matchAll(/'(configure(?:Drive|Limits)?\.[A-Za-z0-9_.]+)'/g)) {
+    for (const m of code.matchAll(/'((?:configure(?:Drive|Limits|Propeller)?|emTiles)\.[A-Za-z0-9_.]+)'/g)) {
       if (!m[1].includes('myAgentDrafts')) keys.add(m[1]);      // that one is a localStorage key
     }
     for (const k of keys) {
@@ -136,7 +140,8 @@ const JS_WORDS = new Set(['else', 'return', 'const', 'let', 'if', 'for', 'try', 
 
 /** Hard-coded English in the SOURCE of one file (empty = clean). */
 export function hardCoded(code0) {
-  const code = stripComments(code0);
+  // grid area / track names are CSS identifiers, not user-facing text
+  const code = stripComments(code0).replace(/gridTemplate\w*\s*:\s*('[^']*'|"[^"]*"|`[^`]*`)/g, ' ');
   const found = [];
   const bad = (t) => stray(t.replace(/[⚠·×=—–●○→←∶:,.;()%+\-–]/g, ' ')).filter((w) => !JS_WORDS.has(w));
   // 1. JSX text: between '>' and '<' / '{' (or '}' and '<' / '{'), free of code punctuation

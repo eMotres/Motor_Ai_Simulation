@@ -121,7 +121,10 @@ def cooling_fields(s: Mapping[str, Any]) -> Dict[str, Any]:
     requested_cool = _mode(s.get("coolMode"), COOL_MODES, "air")
     source = str(s.get("airSpeedSource") or "manual").strip().lower()
     cool = "air" if source == "propeller" else requested_cool
-    bore = _mode(s.get("boreMode"), BORE_MODES, "none")
+    # Propeller-cooled machines have a solid shaft: a stale saved bore mode is
+    # never used (the router forces it too and reports `bore_ignored`).
+    bore = ("none" if source == "propeller"
+            else _mode(s.get("boreMode"), BORE_MODES, "none"))
     liquid = cool == "liquid"
     bore_liquid = bore == "liquid"
     # The exposed shaft is OFF at 0 mm, and off means neither shaft field is
@@ -206,7 +209,8 @@ def cooling_issue(s: Mapping[str, Any]) -> Optional[str]:
     if source not in ("manual", "propeller"):
         return "air speed source must be manual or propeller"
     cool = "air" if source == "propeller" else requested_cool
-    bore = _mode(s.get("boreMode"), BORE_MODES, "none")
+    bore = ("none" if source == "propeller"
+            else _mode(s.get("boreMode"), BORE_MODES, "none"))
     if cool == "liquid" and not _num(s.get("flowLpm"), 0.0) > 0:
         return "coolant flow must be greater than 0 L/min"
     if cool == "air" and str(s.get("airSpeedSource") or "manual").strip().lower() == "propeller" \

@@ -366,7 +366,16 @@ type CoolingRequest = Pick<ThermalRequest,
   | 'shaft_ext_length_mm' | 'shaft_ext_sides' | 'frame' | 'open_air_speed_mps'
   | 'emissivity' | 'end_faces' | 'end_face_sides' | 'heat_path'>;
 
-export function coolingFields(s: CoolingInputs): CoolingRequest {
+/** The bore mode a run actually uses.  A propeller-cooled machine has a SOLID
+ *  shaft (owner 2026-10-12): no bore flow, whatever a saved value from another
+ *  machine says.  Mirrors `thermal_settings.cooling_fields`. */
+export function effectiveBoreMode(
+  s: { airSpeedSource?: string; boreMode: BoreMode }): BoreMode {
+  return s.airSpeedSource === 'propeller' ? 'none' : s.boreMode;
+}
+
+export function coolingFields(s0: CoolingInputs): CoolingRequest {
+  const s: CoolingInputs = { ...s0, boreMode: effectiveBoreMode(s0) };
   const ambient = num(s.ambientT, 40);
   const outerMode: CoolMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
   const liquid = outerMode === 'liquid';
@@ -441,7 +450,8 @@ export function coolingFields(s: CoolingInputs): CoolingRequest {
  *  `null`.  Solve is DISABLED while this returns something: a client-facing tab
  *  validates its input loudly instead of sending an impossible machine and
  *  translating the solver's 422 afterwards. */
-export function coolingIssue(s: CoolingInputs): string | null {
+export function coolingIssue(s0: CoolingInputs): string | null {
+  const s: CoolingInputs = { ...s0, boreMode: effectiveBoreMode(s0) };
   const outerMode: CoolMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
   if (outerMode === 'liquid' && !(num(s.flowLpm, 0) > 0))
     return 'coolant flow must be greater than 0 L/min';

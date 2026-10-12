@@ -260,3 +260,43 @@ def test_coupled_iteration_forwards_propeller_to_each_field_pass(monkeypatch):
         assert kwargs["propeller_id"] == "tmotor_g32x11"
         assert kwargs["propeller_position"] == "behind_hub"
         assert kwargs["rpm"] == pytest.approx(3210.0)
+
+
+def test_propeller_forces_bore_off_and_reports_it():
+    from motor_ai_sim.routes import thermal as th
+    from motor_ai_sim.thermal_settings import cooling_fields, cooling_issue
+
+    assert th._force_bore_for_propeller("propeller", "air") == (
+        "none", th.BORE_IGNORED_PROPELLER)
+    assert th._force_bore_for_propeller("propeller", "none") == ("none", None)
+    assert th._force_bore_for_propeller("manual", "air") == ("air", None)
+    assert th._force_bore_for_propeller("", "liquid") == ("liquid", None)
+
+    stale = dict(PROP_SETTINGS, ambientT="27", boreMode="air",
+                 boreAirSpeed="20")
+    fields = cooling_fields(stale)
+    assert fields["bore_mode"] == "none" and "bore_air_speed_mps" not in fields
+    assert cooling_issue(dict(stale, boreMode="liquid", boreFlowLpm="0")) is None
+    # typed air keeps its bore
+    typed = cooling_fields({"coolMode": "air", "airSpeed": "5",
+                            "boreMode": "air", "boreAirSpeed": "20"})
+    assert typed["bore_mode"] == "air" and typed["bore_air_speed_mps"] == 20.0
+
+
+def test_cache_key_follows_the_forced_bore(monkeypatch):
+    from motor_ai_sim.routes import thermal as th
+    from motor_ai_sim.routes import simulation as sim
+
+    monkeypatch.setattr(sim, "_geometry_fingerprint", lambda _geo: "same-geo")
+    monkeypatch.setattr(sim, "_config_physics_fingerprint", lambda **_kw: "same-config")
+    monkeypatch.setattr(th, "_override_props", lambda: {})
+    monkeypatch.setattr(th, "_thermal_k", lambda _cat, _name, default: default)
+    monkeypatch.setattr(th, "_thermal_k_any", lambda _name, default: default)
+
+    def key(bore_in):
+        bore, _note = th._force_bore_for_propeller("propeller", bore_in)
+        return th._field_cache_key(None, {}, **{**_cache_args(),
+                                                "bore_mode": bore})
+
+    # a stale saved "air" shares the entry of the solid-shaft run
+    assert key("air") == key("none") == key("liquid")

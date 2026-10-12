@@ -17,7 +17,7 @@
 import { readMeshSettings, readSimSettings } from '../common/motorSettings';
 import { liveGeoSig } from '../common/geoSig';
 import { isStale, useMechanicalStore } from '../../stores/mechanicalStore';
-import { useThermalStore } from '../../stores/thermalStore';
+import { effectiveBoreMode, useThermalStore } from '../../stores/thermalStore';
 import { CONTACT_PAIRS } from '../mechanical/api';
 import { outerCooling } from '../thermal/types';
 import { mechanicalRowFromResult, thermalRowFromResult } from './resultRows';
@@ -339,7 +339,9 @@ export async function addThermalPointToCompare(name: string): Promise<void> {
   const outer = outerCooling(res.cooling);
   const inner = res.cooling?.inner;
   const outerMode = t(outer.mode) ?? st.coolMode;
-  const boreMode = t(inner?.mode) ?? st.boreMode;
+  // The solved bore mode; the fallback is the EFFECTIVE one (propeller → solid
+  // shaft), never a stale saved value.
+  const boreMode = t(inner?.mode) ?? effectiveBoreMode(st);
 
   const em = emSummaryIfLive();
   const params = {

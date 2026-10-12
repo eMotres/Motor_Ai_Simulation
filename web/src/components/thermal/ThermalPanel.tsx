@@ -23,7 +23,7 @@ import {
 } from '@mui/material';
 
 import { useMotorStore, useUIStore } from '../../stores/motorStore';
-import { coolingIssue, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
+import { coolingIssue, effectiveBoreMode, HEAT_PATHS, isStale, useThermalStore } from '../../stores/thermalStore';
 import type { HeatPath } from '../../stores/thermalStore';
 import { historyNoticeFor } from '../../lib/historyNotice';
 import AddResultToCompareButton from '../compare/AddResultToCompareButton';
@@ -634,12 +634,16 @@ const ThermalPanel: React.FC = () => {
   const st = useThermalStore();
   const {
     coolMode, ambientT, airSpeed, fluid, tIn, hConv, flowLpm,
-    boreMode, boreAirSpeed, boreFluid, boreTIn, boreFlowLpm,
+    boreAirSpeed, boreFluid, boreTIn, boreFlowLpm,
     shaftExtMm, shaftExtSides, frame,
     emissivity, heatPath,
     endFaces, endFaceSides,
     view, eqTemp, showFlux, geom, geomBusy, geomErr,
   } = st;
+  // A propeller-cooled machine has a solid shaft: the bore row is not offered
+  // and a stale saved mode is never used.
+  const solidShaft = st.airSpeedSource === 'propeller';
+  const boreMode = effectiveBoreMode(st);
   const res = st.field.data;
   const busy = st.field.busy;
   const err = st.field.err;
@@ -1374,6 +1378,11 @@ const ThermalPanel: React.FC = () => {
 
         {/* ── boundary 2: the INNER rotor bore ─────────────────────────────── */}
         <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap', mt: 1 }}>
+          {solidShaft ? (
+            <Tooltip {...TIP_PROPS} title={tx('solidShaftNoBoreTip')}>
+              <Typography sx={{ ...lbl, cursor: 'help' }}>{tx('solidShaftNoBore')}</Typography>
+            </Tooltip>
+          ) : (<>
           <RowLabel text={tx('rotorBore')}
             tip="The rotor's inner diameter — the hollow shaft. Cooling it is the only path that reaches the rotor and the magnets WITHOUT crossing the air gap, which is why it moves the magnet temperature far more than a bigger fan on the housing does. Off by default: most shafts are solid and nothing flows through them." />
           <Box sx={CTRL_ROW}>
@@ -1391,6 +1400,7 @@ const ThermalPanel: React.FC = () => {
             </Select>
             <HelpTip title={ROBOTICS_HELP.boreMode.tip} />
           </Box>
+          </>)}
 
           {boreMode === 'air' && (
             <SpeedSelect value={boreAirSpeed} onChange={(v) => setField('boreAirSpeed', v)}
@@ -1411,7 +1421,7 @@ const ThermalPanel: React.FC = () => {
             </>
           )}
 
-          {boreMode === 'none' && !(Number(shaftExtMm) > 0) && (
+          {boreMode === 'none' && !solidShaft && !(Number(shaftExtMm) > 0) && (
             <Tooltip {...TIP_PROPS} title={tx('nothingFlowsThroughTheBoreIt')}>
               <Typography sx={{ ...lbl, cursor: 'help' }}>{tx('adiabaticAllRotorHeatCrossesThe')}</Typography>
             </Tooltip>

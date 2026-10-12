@@ -4036,35 +4036,40 @@
   "2-D FEM loss grid (settled TDM, coupled eddy + demag) of the full v1 passport",
   "torque x k_T(3-D) 0.9795",
   "drive variants si_48k, gan_48k_IGC019S06S1, gan_48k_IGC016K10S2, gan_100k_IGC019S06S1, gan_100k_IGC016K10S2: controller loss, motor PWM extra loss and board continuous current on each variant's own grid",
-  "thermal network calibrated to coupled FEM anchors (2026-10-11)"
+  "thermal network calibrated to coupled FEM anchors (2026-10-12)"
  ],
  "thermal_calibration": {
-  "housing_film_factor": 0.172914,
-  "winding_air_area_m2": 0.004328,
-  "rotor_air_area_m2": 0.002615,
+  "housing_film_factor": 0.195771,
+  "winding_air_area_m2": 0.004314,
+  "rotor_air_area_m2": 0.002834,
   "anchor_air_speed_ms": [
    6.2302,
-   10.469
+   19.8043
   ],
   "anchor_rpm": [
    5935.0,
    8479.0,
-   9751.0
+   9751.0,
+   13196.0,
+   14400.0,
+   13196.0,
+   14400.0
   ],
   "fit_domain": {
    "air_speed_ms": [
     6.2302,
-    10.469
+    19.8043
    ],
    "rpm": [
     5935.0,
-    9751.0
+    14400.0
    ],
    "propellers": [
+    "motres_bench_hq1050_3",
     "tmotor_fpv_10x5"
    ],
-   "n": 3,
-   "max_residual_K": 0.91
+   "n": 7,
+   "max_residual_K": 10.87
   },
   "validation_domain": {
    "air_speed_ms": [
@@ -4079,11 +4084,11 @@
     "tmotor_fpv_10x5"
    ],
    "n": 1,
-   "max_residual_K": 2.09
+   "max_residual_K": 4.88
   },
   "form": "open",
-  "basis": "fitted 2026-10-11 to 3 coupled EM-thermal FEM anchors (propeller as load and cooling, air_speed_source propeller, slipstream factor 0.4 (behind_hub), the machine's own frame and Simulation settings, 25 C air): the lumped network fed each anchor's own losses, least squares on the winding hot spot, hottest magnet and stator mean (weights {'winding': 1.0, 'magnet': 1.0, 'housing': 0.5})",
-  "slipstream_factor_basis": "kept at 0.4 (behind_hub): the anchors use the same slipstream model, so they cannot constrain it",
+  "basis": "fitted 2026-10-12 to 7 coupled EM-thermal FEM anchors (propeller as load and cooling, air_speed_source propeller, slipstream factor 0.4 (behind_hub) for the 3 Stage B anchors, 0.40 / 0.55 with the bench thrust for the 4 bench-point anchors, the machine's own frame and Simulation settings, 25 C air): the lumped network fed each anchor's own losses, least squares on the winding hot spot, hottest magnet and stator mean (weights {'winding': 1.0, 'magnet': 1.0, 'housing': 0.5})",
+  "slipstream_factor_basis": "fitted 2026-10-12 to two MOTRES bench runs of this configuration (open frame, propeller HQ1050-3 = motres_bench_hq1050_3): the 30-min continuous run of 2026-06-23 (770 W shaft, 3455 g, 23.7 V / 43.85 A bus, 150 C 'stabilised', sensor not stated) and the 1 kW continuous run of 2026-08-13 (1014 W shaft, 4300 g, 14400 rpm, 24.6 V / 55 A bus, FOURnamics nCTRL FOC, 201 C IR maximum on the coil). The S1 fixed point driven with the bench shaft power at the bench rpm (06-23: 13196 rpm from the propeller's 06-16 curve) and the wake of the bench thrust, the passport's own losses, 30 C air (not logged; 06-16 was 31.3 C), the measured temperature taken as the winding hot spot, on the network refitted to 7 FEM anchors (incl. 4 at these two bench points); least squares over both points: residuals -3.6 / +1.8 K. Uncertainty +-0.04 (air 25-35 C, shaft power +-3 %, sensor 10 K below the hot spot); the coupled FEM alone reproduces the bench at about 0.51; if the motor losses were 20 % higher than the passport's, 0.73.",
   "anchors": [
    {
     "file": "anchor_L12_tmotor_fpv_10x5_n5935.json",
@@ -4110,9 +4115,9 @@
      "housing": 62.26090354977335
     },
     "lumped_after_C": {
-     "winding": 45.88291847935675,
-     "magnet": 41.988089355926675,
-     "housing": 46.604366173648266
+     "winding": 45.32053380491868,
+     "magnet": 41.11475678856421,
+     "housing": 45.94391569929594
     }
    },
    {
@@ -4140,9 +4145,9 @@
      "housing": 107.03999534378698
     },
     "lumped_after_C": {
-     "winding": 72.84606366782057,
-     "magnet": 59.37353503762205,
-     "housing": 72.34527668761626
+     "winding": 71.71596988121664,
+     "magnet": 57.51571481440049,
+     "housing": 70.96721163668548
     }
    },
    {
@@ -4170,9 +4175,129 @@
      "housing": 149.64351155065697
     },
     "lumped_after_C": {
-     "winding": 99.20718265580415,
-     "magnet": 74.78276326462056,
-     "housing": 96.68428668340681
+     "winding": 97.56747344379805,
+     "magnet": 72.0306054447673,
+     "housing": 94.6492387248396
+    }
+   },
+   {
+    "file": "anchor_L12_motres_bench_hq1050_3_n13196_benchA_f040.json",
+    "rpm": 13196.0,
+    "I_rms": 39.640244154332876,
+    "air_speed_ms": 12.910608263222542,
+    "h_W_m2K": 69.34,
+    "p_cu_W": 55.1,
+    "p_rotor_W": 3.978,
+    "p_total_W": 67.65,
+    "torque_miss": -0.0052714846609209776,
+    "role": "fit",
+    "propeller": "motres_bench_hq1050_3",
+    "fem_C": {
+     "winding": 179.2,
+     "magnet": 123.6,
+     "housing": 171.6,
+     "winding_avg": 177.4,
+     "magnet_avg": 123.0
+    },
+    "lumped_before_C": {
+     "winding": 316.39262846068345,
+     "magnet": 287.52253243350754,
+     "housing": 272.61861615244453
+    },
+    "lumped_after_C": {
+     "winding": 174.6429466164839,
+     "magnet": 116.47497485396329,
+     "housing": 165.2460695989482
+    }
+   },
+   {
+    "file": "anchor_L12_motres_bench_hq1050_3_n14400_benchB_f040.json",
+    "rpm": 14400.0,
+    "I_rms": 46.59259659354517,
+    "air_speed_ms": 14.403130836520075,
+    "h_W_m2K": 74.08,
+    "p_cu_W": 82.7,
+    "p_rotor_W": 4.52,
+    "p_total_W": 96.0,
+    "torque_miss": -0.1116157820199678,
+    "role": "fit",
+    "propeller": "motres_bench_hq1050_3",
+    "fem_C": {
+     "winding": 227.8,
+     "magnet": 145.0,
+     "housing": 213.9,
+     "winding_avg": 224.5,
+     "magnet_avg": 144.1
+    },
+    "lumped_before_C": {
+     "winding": 417.96371951936663,
+     "magnet": 369.19754423068485,
+     "housing": 352.26297872279025
+    },
+    "lumped_after_C": {
+     "winding": 225.44969227952672,
+     "magnet": 139.87515294090883,
+     "housing": 209.37669740882032
+    }
+   },
+   {
+    "file": "anchor_L12_motres_bench_hq1050_3_n13196_benchA_f055.json",
+    "rpm": 13196.0,
+    "I_rms": 39.17922633094092,
+    "air_speed_ms": 17.752086361930996,
+    "h_W_m2K": 84.2,
+    "p_cu_W": 49.9,
+    "p_rotor_W": 4.004,
+    "p_total_W": 62.91,
+    "torque_miss": 0.007030811465180475,
+    "role": "fit",
+    "propeller": "motres_bench_hq1050_3",
+    "fem_C": {
+     "winding": 138.1,
+     "magnet": 86.1,
+     "housing": 130.0,
+     "winding_avg": 136.0,
+     "magnet_avg": 85.7
+    },
+    "lumped_before_C": {
+     "winding": 255.44376302624303,
+     "magnet": 230.8022009752627,
+     "housing": 215.8008734766764
+    },
+    "lumped_after_C": {
+     "winding": 142.33518690398276,
+     "magnet": 93.41332365934964,
+     "housing": 135.11255703829065
+    }
+   },
+   {
+    "file": "anchor_L12_motres_bench_hq1050_3_n14400_benchB_f055.json",
+    "rpm": 14400.0,
+    "I_rms": 47.6076387086069,
+    "air_speed_ms": 19.804304900215104,
+    "h_W_m2K": 90.12,
+    "p_cu_W": 80.5,
+    "p_rotor_W": 4.841,
+    "p_total_W": 95.32,
+    "torque_miss": -0.002388214235537478,
+    "role": "fit",
+    "propeller": "motres_bench_hq1050_3",
+    "fem_C": {
+     "winding": 186.8,
+     "magnet": 104.2,
+     "housing": 172.1,
+     "winding_avg": 183.2,
+     "magnet_avg": 103.5
+    },
+    "lumped_before_C": {
+     "winding": 356.98157922668275,
+     "magnet": 311.1658405214768,
+     "housing": 293.02862113569853
+    },
+    "lumped_after_C": {
+     "winding": 192.19796296558746,
+     "magnet": 115.07076523048046,
+     "housing": 178.3470165870012
     }
    },
    {
@@ -4200,11 +4325,232 @@
      "housing": 249.76102221563715
     },
     "lumped_after_C": {
-     "winding": 162.3103421463186,
-     "magnet": 109.15114467634923,
-     "housing": 153.6224071389461
+     "winding": 159.52032871167432,
+     "magnet": 104.37072293183542,
+     "housing": 150.08390538712993
     }
    }
-  ]
+  ],
+  "slipstream_factor": 0.53,
+  "slipstream_factor_status": "bench",
+  "bench": {
+   "date": "2026-10-12",
+   "propeller": "motres_bench_hq1050_3",
+   "ambient_c_assumed": 30.0,
+   "sensor_mapping": "winding hot spot (lumped winding node; the FEM anchors fitted it to the FEM winding maximum)",
+   "points": [
+    {
+     "id": "2026-06-23_30min",
+     "source": "MOTRES_ProofOfTRL_CIANO14.pdf s6.1; emotres.com/news (23 Jun 2026)",
+     "rpm": 13196.2,
+     "rpm_basis": "not logged: the bench propeller's 2026-06-16 curve at 770 W",
+     "thrust_g": 3455.0,
+     "shaft_W": 770.0,
+     "bus_V": 23.7,
+     "bus_A": 43.85,
+     "T_measured_C": 150.0,
+     "sensor": "not stated ('max temperature, stabilised'; the test plan puts a thermocouple / PT100 on the end winding)",
+     "drive": "not stated (June campaign: 80 A trapezoidal ESC)",
+     "duration_min": 30,
+     "model_T_winding_C": 146.39,
+     "model_T_magnet_C": 95.924,
+     "model_I_rms_A": 38.864,
+     "air_speed_ms": 17.167,
+     "model_motor_loss_W": 63.895,
+     "bench_Pel_minus_Pshaft_W": 269.24
+    },
+    {
+     "id": "2026-08-13_1kW",
+     "source": "MOTRES_ProofOfTRL_CIANO14.pdf s6.2; emotres.com/news (13 Aug 2026)",
+     "rpm": 14400.0,
+     "thrust_g": 4300.0,
+     "shaft_W": 1014.0,
+     "bus_V": 24.6,
+     "bus_A": 55.0,
+     "T_measured_C": 201.0,
+     "sensor": "IR camera, maximum on the coil",
+     "drive": "FOURnamics nCTRL FOC",
+     "duration_min": null,
+     "model_T_winding_C": 202.826,
+     "model_T_magnet_C": 120.758,
+     "model_I_rms_A": 47.496,
+     "air_speed_ms": 19.152,
+     "model_motor_loss_W": 99.498,
+     "bench_Pel_minus_Pshaft_W": 339.0
+    }
+   ],
+   "fit_cases": [
+    {
+     "case": "nominal: 30 C air, model losses, sensor = winding hot spot",
+     "f_A": 0.51,
+     "f_B": 0.538,
+     "f_joint": 0.532,
+     "residual_K": {
+      "A_30min_2026-06-23": -3.61,
+      "B_1kW_2026-08-13": 1.83
+     }
+    },
+    {
+     "case": "ambient 25 C",
+     "f_A": 0.475,
+     "f_B": 0.512,
+     "f_joint": 0.501,
+     "residual_K": {
+      "A_30min_2026-06-23": -5.01,
+      "B_1kW_2026-08-13": 3.15
+     }
+    },
+    {
+     "case": "ambient 35 C",
+     "f_A": 0.55,
+     "f_B": 0.568,
+     "f_joint": 0.563,
+     "residual_K": {
+      "A_30min_2026-06-23": -1.88,
+      "B_1kW_2026-08-13": 1.16
+     }
+    },
+    {
+     "case": "shaft power -3 %",
+     "f_A": 0.469,
+     "f_B": 0.491,
+     "f_joint": 0.485,
+     "residual_K": {
+      "A_30min_2026-06-23": -2.96,
+      "B_1kW_2026-08-13": 1.82
+     }
+    },
+    {
+     "case": "shaft power +3 %",
+     "f_A": 0.555,
+     "f_B": 0.589,
+     "f_joint": 0.58,
+     "residual_K": {
+      "A_30min_2026-06-23": -3.97,
+      "B_1kW_2026-08-13": 2.36
+     }
+    },
+    {
+     "case": "A sensor 10 K below the hot spot (TC on an end turn)",
+     "f_A": 0.459,
+     "f_B": 0.538,
+     "f_joint": 0.516,
+     "residual_K": {
+      "A_30min_2026-06-23": -11.0,
+      "B_1kW_2026-08-13": 6.42
+     }
+    },
+    {
+     "case": "B IR 10 K below the hot spot",
+     "f_A": 0.51,
+     "f_B": 0.505,
+     "f_joint": 0.506,
+     "residual_K": {
+      "A_30min_2026-06-23": 0.75,
+      "B_1kW_2026-08-13": -0.44
+     }
+    },
+    {
+     "case": "motor losses +20 %",
+     "f_A": 0.703,
+     "f_B": 0.738,
+     "f_joint": 0.73,
+     "residual_K": {
+      "A_30min_2026-06-23": -3.43,
+      "B_1kW_2026-08-13": 1.62
+     }
+    },
+    {
+     "case": "extra 25 W in the winding at both points",
+     "f_A": 0.93,
+     "f_B": 0.806,
+     "f_joint": 0.843,
+     "residual_K": {
+      "A_30min_2026-06-23": 8.6,
+      "B_1kW_2026-08-13": -6.01
+     }
+    },
+    {
+     "case": "extra 50 W in the winding at both points",
+     "f_A": 1.43,
+     "f_B": 1.11,
+     "f_joint": 1.215,
+     "residual_K": {
+      "A_30min_2026-06-23": 14.58,
+      "B_1kW_2026-08-13": -11.42
+     }
+    },
+    {
+     "case": "extra 100 W in the winding at both points",
+     "f_A": null,
+     "f_B": null,
+     "f_joint": 1.5,
+     "residual_K": {
+      "A_30min_2026-06-23": 57.08,
+      "B_1kW_2026-08-13": 25.54
+     }
+    }
+   ],
+   "loss_check": "bench electrical input minus shaft power (motor + ESC) is 269 / 339 W against the passport's motor loss of 64 / 100 W at these points: with a 4 %% ESC loss ~165 / 185 W are not explained by the model. If that heat were in the motor no slipstream factor <= 1.5 reproduces the temperatures (fit case 'extra 100 W'), so the factor assumes the passport losses are right; the FOURnamics sweep of 2026-08-12 (same ESC, cold) agrees with them (977 W shaft, 143 W total).",
+   "fem_check": {
+    "how": "scripts/passport_full.py propanchor --factor F --ambient 30 --shaft-w P --thrust-g T (open frame, eddy / rotor eddy / demag on, 36 steps, sine current drive, one current correction when the 3-D torque missed the bench load by > 2 %)",
+    "runs": [
+     {
+      "point": "2026-06-23_30min",
+      "rpm": 13196,
+      "factor": 0.55,
+      "I_rms_A": 39.18,
+      "torque_miss": 0.007,
+      "P_loss_W": 62.9,
+      "T_winding_max_C": 138.1,
+      "T_magnet_max_C": 86.1,
+      "bench_C": 150.0
+     },
+     {
+      "point": "2026-06-23_30min",
+      "rpm": 13196,
+      "factor": 0.4,
+      "I_rms_A": 39.64,
+      "torque_miss": -0.0053,
+      "P_loss_W": 67.6,
+      "T_winding_max_C": 179.2,
+      "T_magnet_max_C": 123.6,
+      "bench_C": 150.0
+     },
+     {
+      "point": "2026-08-13_1kW",
+      "rpm": 14400,
+      "factor": 0.55,
+      "I_rms_A": 47.61,
+      "torque_miss": -0.0024,
+      "P_loss_W": 95.3,
+      "T_winding_max_C": 186.8,
+      "T_magnet_max_C": 104.2,
+      "br_kept_vol_pct": 99.32,
+      "bench_C": 201.0
+     },
+     {
+      "point": "2026-08-13_1kW",
+      "rpm": 14400,
+      "factor": 0.4,
+      "I_rms_A": 46.59,
+      "torque_miss": -0.1116,
+      "P_loss_W": 96.0,
+      "T_winding_max_C": 227.8,
+      "T_magnet_max_C": 145.0,
+      "bench_C": 201.0,
+      "note": "first pass (torque 11 % short: hot magnets); a converged thermal state with its own losses, used as a network anchor"
+     }
+    ],
+    "fem_factor_for_bench": "about 0.51 (linear in the factor between the 0.40 and 0.55 runs: 30-min point 0.51; 1 kW point 0.50-0.51)"
+   }
+  }
+ },
+ "external_esc": {
+  "name": "FOURnamics nCTRL (FOC), bench 2026-08-13",
+  "i_bus_cont_A": 55.0,
+  "i_phase_cont_A": null,
+  "basis": "demonstrated on the MOTRES bench 2026-08-13: 55 A bus at 24.6 V continuous (1 014 W shaft) - a demonstrated value, not a datasheet rating",
+  "bus_v": null
  }
 }

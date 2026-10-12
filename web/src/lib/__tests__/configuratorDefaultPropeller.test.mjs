@@ -29,7 +29,8 @@ const COOLING = { restricted: true, cooling_options: ['propeller_air'], propelle
   config: 'L12', default_propeller: 'tmotor_fpv_10x5', defaults: { L12: 'tmotor_fpv_10x5', L20: 'tmotor_p13x4_4' } };
 
 t('the repo yaml states the owner\'s defaults', () => {
-  assert.match(yaml, /defaults:\s*\n\s*L12: tmotor_fpv_10x5[^\n]*\n\s*L20: tmotor_p13x4_4/);
+  // L12 opens on the propeller it ran on the MOTRES bench (2026-10-12; was tmotor_fpv_10x5)
+  assert.match(yaml, /defaults:\s*\n\s*L12: motres_bench_hq1050_3[^\n]*\n\s*L20: tmotor_p13x4_4/);
 });
 
 t('each configuration opens on its own default', () => {

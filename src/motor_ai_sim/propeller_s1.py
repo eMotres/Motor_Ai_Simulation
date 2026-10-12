@@ -95,6 +95,9 @@ MU0 = 4e-7 * math.pi
 SQ2, SQ3 = math.sqrt(2.0), math.sqrt(3.0)
 
 SINE = "sine"
+#: an ESC that is not one of the passport's computed boards (the one on the bench, a
+#: commercial FOC ESC): no board model, its continuous current is the user's / the bench's
+EXTERNAL_ESC = "external_esc"
 #: the board cooling classes the passport rates its controllers for
 BOARD_COOLING = ("favourable", "weak", "hot_motor")
 DEFAULT_BOARD_COOLING = "favourable"
@@ -222,6 +225,8 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
     m["drives"] = {str(k): _drive_of(d, str(k)) for k, d in (raw.get("drives") or {}).items()}
     if raw.get("sine_controller") is not None:
         m["sine_controller"] = _controller_block(raw.get("sine_controller"), "sine_controller")
+    if raw.get("external_esc") is not None:
+        m["external_esc"] = _external_esc_block(raw.get("external_esc"))
     if raw.get("psi_map") is not None:
         m["psi_map"] = _psi_map_of(raw.get("psi_map"))
     dm = raw.get("demag")
@@ -259,6 +264,9 @@ def validate_model(raw: Mapping[str, Any]) -> Dict[str, Any]:
         if not isinstance(raw.get("thermal_calibration"), Mapping):
             raise S1Error("model: thermal_calibration must be a mapping")
         calibration_of(raw)
+        sf = raw["thermal_calibration"].get("slipstream_factor")
+        if sf is not None and not (0.0 < (_num(sf) or 0.0) <= 1.5):
+            raise S1Error("model: thermal_calibration.slipstream_factor must be in (0, 1.5]")
     m["flux_temp_coeff_per_K"] = _num(raw.get("flux_temp_coeff_per_K")) or 0.0
     return m
 
@@ -282,6 +290,21 @@ def _controller_block(c: Any, name: str) -> Dict[str, Any]:
             raise S1Error(f"model: {name}.i_board_limit_A must map cooling classes to positive currents")
         out["i_board_limit_A"] = {str(k): float(x) for k, x in lim.items()}
     out["bus_v"] = _bus(c.get("bus_v"), name)
+    return out
+
+
+def _external_esc_block(c: Any) -> Dict[str, Any]:
+    """The model's default external ESC (the one the configuration ran on the bench):
+    ``i_bus_cont_A`` / ``i_phase_cont_A`` (either may be absent), ``name``, ``basis``,
+    ``bus_v`` (optional, the ESC's rated bus range)."""
+    if not isinstance(c, Mapping):
+        raise S1Error("model: external_esc must be a mapping")
+    out = dict(c)
+    for k in ("i_bus_cont_A", "i_phase_cont_A"):
+        if c.get(k) is not None and not ((_num(c.get(k)) or 0) > 0):
+            raise S1Error(f"model: external_esc.{k} must be a positive current")
+        out[k] = _num(c.get(k))
+    out["bus_v"] = _bus(c.get("bus_v"), "external_esc")
     return out
 
 
@@ -618,15 +641,43 @@ def controller_loss(m: Mapping[str, Any], rpm: float, I: float,
 # ---------------------------------------------------------------------------
 
 def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
-                  board_cooling: Optional[str] = None) -> Dict[str, Any]:
+                  board_cooling: Optional[str] = None, esc_i_bus_A: Optional[float] = None,
+                  esc_i_phase_A: Optional[float] = None) -> Dict[str, Any]:
     """The selected drive: ``sine`` (default; the die's controller block bounds its
-    current) or one computed PWM variant id of ``m["drives"]`` (its board limit,
-    its controller-loss and motor-PWM-extra grids).  ``I_cont_A`` None = the
-    controller's continuous current is not known for this model."""
+    current), one computed PWM variant id of ``m["drives"]`` (its board limit,
+    its controller-loss and motor-PWM-extra grids) or ``external_esc``.  ``I_cont_A``
+    None = the controller's continuous (phase) current is not known for this model.
+
+    ``external_esc``: an ESC that is none of the passport's boards (a commercial FOC
+    ESC, the one on the bench).  No board model and no board current from the
+    passport: its continuous BUS current ``I_bus_cont_A`` (and/or phase current) is
+    the caller's (``esc_i_*``), else the model's ``external_esc`` block (what the bench
+    demonstrated).  Its losses and the motor's PWM extra loss are not known (flagged,
+    not counted)."""
     bc = board_cooling or DEFAULT_BOARD_COOLING
     if bc not in BOARD_COOLING:
         raise S1Error(f"board cooling must be one of {BOARD_COOLING}")
     did = str(drive or SINE)
+    if did == EXTERNAL_ESC:
+        blk = m.get("external_esc") or {}
+        for v, nm in ((esc_i_bus_A, "ESC bus current"), (esc_i_phase_A, "ESC phase current")):
+            if v is not None and not ((_num(v) or 0) > 0):
+                raise S1Error(f"{nm} must be a positive current")
+        given = esc_i_bus_A is not None or esc_i_phase_A is not None
+        ibus = _num(esc_i_bus_A) if given else blk.get("i_bus_cont_A")
+        iph = _num(esc_i_phase_A) if given else blk.get("i_phase_cont_A")
+        if given:
+            basis = "given by the user (external ESC)"
+        elif ibus is not None or iph is not None:
+            basis = str(blk.get("basis") or "the model's external ESC")
+        else:
+            basis = "no ESC current given and the model carries no external ESC"
+        return {"id": EXTERNAL_ESC, "kind": "external", "board_cooling": bc, "I_cont_A": iph,
+                "I_bus_cont_A": ibus, "I_cont_basis": basis,
+                "name": (None if given else blk.get("name")) or "external ESC",
+                "source": "caller" if given else ("model" if (ibus or iph) else None),
+                "bus_v": None if given else blk.get("bus_v"), "controller_loss_W": None,
+                "pwm_extra_W": None, "device": None, "carrier_hz": None, "n_parallel": None}
     if did == SINE:
         sc = m.get("sine_controller") or {}
         lim = (sc.get("i_board_limit_A") or {}).get(bc)
@@ -894,6 +945,21 @@ def calibration_of(m: Mapping[str, Any]) -> Dict[str, float]:
     return out
 
 
+def model_slipstream(m: Mapping[str, Any], position: Optional[str] = None,
+                     factor: Optional[float] = None) -> Tuple[Optional[str], Optional[float], str]:
+    """``(position, factor, source)`` the S1 uses for the air at the motor: the caller's
+    (``caller``), else the model's calibrated factor (``model``: fitted to bench runs of
+    this configuration, or transferred from a sibling with the same frame -
+    ``thermal_calibration.slipstream_factor_status``), else the propeller module's
+    default position (``default``, behind_hub 0.4, an assumption)."""
+    if factor is not None or position is not None:
+        return position, factor, "caller"
+    sf = _num((m.get("thermal_calibration") or {}).get("slipstream_factor"))
+    if sf:
+        return None, sf, "model"
+    return None, None, "default"
+
+
 def thermal_domain(m: Mapping[str, Any], air_speed_ms: Optional[float]) -> Optional[str]:
     """Where ``air_speed_ms`` lies against the calibration's anchors: ``fit`` (inside
     the slipstream speeds the network was fitted at), ``validated`` (outside them
@@ -1058,7 +1124,10 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
     their share of the limit); ``binding`` is the first of them."""
     drv = drive if isinstance(drive, Mapping) else resolve_drive(m, drive)
     pk = pack if pack is not None else resolve_pack(m)
+    position, factor, ss_src = model_slipstream(m, position, factor)
     op = pp.operating_point(prop, rpm, rho, position=position, factor=factor)
+    if ss_src == "model":
+        op = {**op, "slipstream_position": "calibrated"}
     w = 2.0 * math.pi * rpm / 60.0
     p_mech = _mech_W(m, rpm)
     q_em = op["torque_Nm"] + (p_mech / w if w > 0 else 0.0)
@@ -1069,11 +1138,13 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         "torque_em_Nm": q_em, "shaft_power_W": op["shaft_power_W"],
         "air_speed_ms": op["air_speed_ms"], "h_W_m2K": h,
         "slipstream_factor": op.get("slipstream_factor"), "slipstream_position": op.get("slipstream_position"),
+        "slipstream_source": ss_src,
         "extrapolated": bool(op["extrapolated"]), "power_estimated": bool(op["power_estimated"]),
         "current_A": None, "losses_W": None, "T_winding_C": None, "T_magnet_C": None,
         "T_housing_C": None, "margin_winding_K": None, "margin_magnet_K": None,
         "electrical_power_W": None, "battery_power_W": None, "controller_loss_W": None,
         "battery_current_A": None, "controller_limit_A": drv.get("I_cont_A"),
+        "controller_bus_limit_A": drv.get("I_bus_cont_A"),
         "demag_limit_A": None, "demag_basis": None, "voltage": None, "current_grid_A": None,
         "converged": None, "iterations": 0, "below_loss_grid": False, "below_loss_grid_speed": False,
         "below_loss_grid_current": False, "losses_unavailable": [], "drive_losses_unavailable": [],
@@ -1114,7 +1185,7 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
                       ls["motor_total"], h, ambient_c, cal)
     p_in = op["shaft_power_W"] + ls["motor_total"]
     pc = (controller_loss(m, rpm, I, drv if drv.get("kind") == "pwm" else None)
-          if (drv.get("kind") == "pwm" or m.get("controller")) else None)
+          if (drv.get("kind") == "pwm" or (m.get("controller") and drv.get("kind") == "sine")) else None)
     p_batt = (p_in + pc) if pc is not None else None
     i_batt = ((p_batt if p_batt is not None else p_in) / pk["v_min"]) if pk.get("v_min") else None
     i_dm, dm_basis = demag_limit_at(m, th["magnet"])
@@ -1139,6 +1210,14 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         viol.append(("demag", _exceed(I, i_dm, i_dm) if i_dm > 0 else float("inf")))
     if drv.get("I_cont_A") is not None and I > float(drv["I_cont_A"]) + 1e-9:
         viol.append(("controller", _exceed(I, float(drv["I_cont_A"]), float(drv["I_cont_A"]))))
+    ib = drv.get("I_bus_cont_A")
+    if ib is not None and i_batt is not None and i_batt > float(ib) + 1e-9:
+        # an external ESC rated by its continuous BUS current (at the pack's minimum voltage)
+        e = _exceed(i_batt, float(ib), float(ib))
+        if not any(k == "controller" for k, _ in viol):
+            viol.append(("controller", e))
+        else:
+            viol = [(k, max(v, e) if k == "controller" else v) for k, v in viol]
     if pk.get("i_max_A") is not None and i_batt is not None and i_batt > float(pk["i_max_A"]) + 1e-9:
         viol.append(("battery_current", _exceed(i_batt, float(pk["i_max_A"]), float(pk["i_max_A"]))))
     viol.sort(key=lambda kv: -kv[1])
@@ -1211,8 +1290,11 @@ def _flags(m: Mapping[str, Any], drv: Mapping[str, Any], pk: Mapping[str, Any],
     cal = m.get("thermal_calibration")
     td = thermal_domain(m, row.get("air_speed_ms")) if cal else None
     base_pwm = m["grid"]["loss_W"].get("pwm_extra") is not None
+    external = drv.get("kind") == "external"
     if drv.get("kind") == "sine":
         pwm = "included (passport drive variant)" if base_pwm else "zero (sine drive)"
+    elif external:
+        pwm = "included (passport drive variant)" if base_pwm else "omitted"
     elif base_pwm:
         pwm = "included (passport drive variant)"
     elif drv.get("pwm_extra_W") is None:
@@ -1229,7 +1311,8 @@ def _flags(m: Mapping[str, Any], drv: Mapping[str, Any], pk: Mapping[str, Any],
     demag = ("unknown" if row.get("demag_limit_A") is None
              else "reference temperature only" if dm_basis.startswith("reference temperature only")
              else "at temperature")
-    checks = {"controller": "checked" if drv.get("I_cont_A") is not None else "unknown",
+    bus_lim = drv.get("I_bus_cont_A") is not None and pk.get("v_min") is not None
+    checks = {"controller": "checked" if (drv.get("I_cont_A") is not None or bus_lim) else "unknown",
               "voltage_min_pack": "checked" if v in ("ok", "deeper_fw") else "unverified",
               "pack_bus_range": {True: "checked", False: "failed", None: "unknown"}[fits],
               "battery_current": "checked" if pk.get("i_max_A") is not None else "unknown",
@@ -1240,13 +1323,19 @@ def _flags(m: Mapping[str, Any], drv: Mapping[str, Any], pk: Mapping[str, Any],
         feas = "unknown"
     else:
         feas = "checked"
+    ss_model = row.get("slipstream_source") == "model"
+    ss_status = str((cal or {}).get("slipstream_factor_status") or "bench") if ss_model else None
     q = {"thermal": "calibrated" if cal else "uncalibrated", "thermal_domain": td,
          "slipstream": {"factor": row.get("slipstream_factor"), "position": row.get("slipstream_position"),
-                        "calibrated": False,
-                        "basis": (cal or {}).get("slipstream_factor_basis") or "assumed (propeller.py)"},
+                        "calibrated": ss_model, "status": ss_status or (
+                            "caller" if row.get("slipstream_source") == "caller" else "assumed"),
+                        "basis": ((cal or {}).get("slipstream_factor_basis") if ss_model else None)
+                        or ("given by the caller" if row.get("slipstream_source") == "caller"
+                            else "assumed (propeller.py)")},
          "propeller": {"extrapolated": bool(row.get("extrapolated")),
                        "power_estimated": bool(row.get("power_estimated"))},
-         "losses": {"pwm_extra": pwm, "mech": mech, "controller": ctrl},
+         "losses": {"pwm_extra": pwm, "mech": mech,
+                    "controller": "unknown (external ESC)" if external else ctrl},
          "loss_grid_extrapolated": {"speed": bool(row.get("below_loss_grid_speed")),
                                     "current": bool(row.get("below_loss_grid_current"))},
          "checks": checks, "drive_feasibility": feas,
@@ -1256,7 +1345,15 @@ def _flags(m: Mapping[str, Any], drv: Mapping[str, Any], pk: Mapping[str, Any],
         f.append("thermal_uncalibrated")
     elif td == "extrapolated":
         f.append("thermal_extrapolated")
-    f.append("slipstream_uncalibrated")
+    if ss_status == "transferred":
+        f.append("slipstream_transferred")
+    elif ss_model:
+        f.append("slipstream_bench")
+    else:
+        f.append("slipstream_uncalibrated")
+    if external:
+        f.append("esc_external")
+        f.append("esc_loss_omitted")
     if row.get("extrapolated"):
         f.append("prop_extrapolated")
     if row.get("power_estimated"):
@@ -1297,10 +1394,14 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
               winding_limit_c: Optional[float] = None, magnet_limit_c: Optional[float] = None,
               tol_rpm: float = 1.0, drive: Optional[str] = None, board_cooling: Optional[str] = None,
               pack_v_min: Optional[float] = None, pack_v_max: Optional[float] = None,
-              pack_i_max_A: Optional[float] = None) -> Dict[str, Any]:
+              pack_i_max_A: Optional[float] = None, esc_i_bus_A: Optional[float] = None,
+              esc_i_phase_A: Optional[float] = None) -> Dict[str, Any]:
     """Rows over speed and the continuous limit with propeller ``prop``, driven by
-    ``drive`` (``sine`` or a PWM variant id; the board at ``board_cooling``) from the
-    pack (``pack_*``; default the passport's battery).
+    ``drive`` (``sine``, a PWM variant id - the board at ``board_cooling`` - or
+    ``external_esc`` with its continuous bus / phase current ``esc_i_*``, default the
+    model's bench ESC) from the pack (``pack_*``; default the passport's battery).
+    With no ``factor`` / ``position`` the model's calibrated slipstream factor is used
+    when it has one (``model_slipstream``).
 
     The scan runs from ``rpm_min`` (default 10 % of the top) to ``rpm_max``
     (default: the motor's speed cap — the top of its characterised grid / voltage
@@ -1313,7 +1414,7 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
     ``range_end`` says why the scan stopped)."""
     if not prop.selectable:
         raise S1Error(f"{prop.id} has no usable thrust/power data")
-    drv = resolve_drive(m, drive, board_cooling)
+    drv = resolve_drive(m, drive, board_cooling, esc_i_bus_A, esc_i_phase_A)
     pk = resolve_pack(m, pack_v_min, pack_v_max, pack_i_max_A)
     lims = limits_of(m, winding_limit_c, magnet_limit_c)
     rho = pp.air_density(temp_c=ambient_c, altitude_m=altitude_m)
@@ -1373,10 +1474,13 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
                  "below_loss_grid_speed": best["below_loss_grid_speed"],
                  "below_loss_grid_current": best["below_loss_grid_current"],
                  "fw_floor": bool(best.get("fw_floor")),
-                 "controller_limit_A": best["controller_limit_A"], "demag_limit_A": best["demag_limit_A"],
+                 "controller_limit_A": best["controller_limit_A"],
+                 "controller_bus_limit_A": best.get("controller_bus_limit_A"),
+                 "demag_limit_A": best["demag_limit_A"],
                  "demag_basis": best["demag_basis"], "voltage": best["voltage"],
                  "cooling": {"slipstream_factor": best["slipstream_factor"],
                              "slipstream_position": best["slipstream_position"],
+                             "slipstream_source": best.get("slipstream_source"),
                              "air_speed_ms": best["air_speed_ms"], "h_W_m2K": best["h_W_m2K"]},
                  "thermal_domain": thermal_domain(m, best["air_speed_ms"]),
                  "calibration_in_range": calibration_covers(m, best["air_speed_ms"]),
@@ -1400,8 +1504,11 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
                   "technology": drv.get("technology"), "carrier_hz": drv.get("carrier_hz"),
                   "n_parallel": drv.get("n_parallel"), "board_cooling": drv["board_cooling"],
                   "I_cont_A": drv.get("I_cont_A"), "I_cont_basis": drv.get("I_cont_basis"),
+                  "I_bus_cont_A": drv.get("I_bus_cont_A"), "name": drv.get("name"),
+                  "source": drv.get("source"),
                   "bus_v": drv.get("bus_v"), "pack_fits": pack_fits_drive(drv, pk)},
-        "drives_available": [SINE] + sorted(m.get("drives") or {}),
+        "drives_available": [SINE] + sorted(m.get("drives") or {}) + [EXTERNAL_ESC],
+        "external_esc_default": m.get("external_esc"),
         "pack": pk,
         "limits": lims, "rows": rows,
         "refined": [{"rpm": r["rpm"], "ok": r["ok"], "binding": r["binding"]} for r in allr

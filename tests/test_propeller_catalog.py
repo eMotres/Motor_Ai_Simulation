@@ -552,19 +552,23 @@ def test_series_route_is_the_point_route_on_a_grid(client):
 
 
 # ---------------------------------------------------------------------------
-# 10. default propeller per configuration (owner 2026-10-05: L12 -> FPV 10x5, L20 -> P13x4.4)
+# 10. default propeller per configuration (owner 2026-10-05: L20 -> P13x4.4; L12 -> the MOTRES bench
+#     propeller HQ1050-3 since 2026-10-12, was FPV 10x5)
 # ---------------------------------------------------------------------------
 
 def test_repo_defaults_are_the_owners_and_are_allowed_and_computable():
     from motor_ai_sim.cooling_options import cooling_options
     cat = pp.load_catalog()
-    assert cooling_options("CIANO14 40 new", "L12")["default_propeller"] == "tmotor_fpv_10x5"
+    assert cooling_options("CIANO14 40 new", "L12")["default_propeller"] == "motres_bench_hq1050_3"
     assert cooling_options("CIANO14 40 new", "L20")["default_propeller"] == "tmotor_p13x4_4"
     o = cooling_options("CIANO14 40 new", "L12")
-    assert o["defaults"] == {"L12": "tmotor_fpv_10x5", "L20": "tmotor_p13x4_4"} and o["bad_defaults"] == {}
+    assert o["defaults"] == {"L12": "motres_bench_hq1050_3", "L20": "tmotor_p13x4_4"} and o["bad_defaults"] == {}
     for pid in o["defaults"].values():
         assert pid in o["propellers"] and cat[pid].selectable
     assert cat["tmotor_fpv_10x5"].diameter_nominal_in == 10 and cat["tmotor_fpv_10x5"].blades == 3
+    assert "tmotor_fpv_10x5" in o["propellers"]           # still offered beside the bench propeller
+    b = cat["motres_bench_hq1050_3"]
+    assert b.blades == 3 and b.power_data == "measured_torque" and b.raw.get("bench_measured") is True
     # no configuration asked: no single default (the map is still there); an unrestricted die has none
     assert cooling_options("CIANO14 40 new")["default_propeller"] is None
     free = cooling_options("CILN28", "G2-L40")
@@ -590,11 +594,11 @@ def test_default_must_be_allowed_for_its_own_configuration(tmp_path, monkeypatch
 
 def test_cooling_options_route_serves_default_propeller(client, tmp_path, monkeypatch):
     j = client.get("/api/propellers/cooling-options", params={"die": "CIANO14 40 new", "config": "L12"}).json()
-    assert j["default_propeller"] == "tmotor_fpv_10x5" and j["bad_defaults"] == {}
+    assert j["default_propeller"] == "motres_bench_hq1050_3" and j["bad_defaults"] == {}
     assert j["default_propeller"] in {d["id"] for d in j["propeller_details"]}
     j20 = client.get("/api/propellers/cooling-options", params={"die": "CIANO14 40 new", "config": "L20"}).json()
     assert j20["default_propeller"] == "tmotor_p13x4_4"
-    assert j20["defaults"] == {"L12": "tmotor_fpv_10x5", "L20": "tmotor_p13x4_4"}
+    assert j20["defaults"] == {"L12": "motres_bench_hq1050_3", "L20": "tmotor_p13x4_4"}
     nocfg = client.get("/api/propellers/cooling-options", params={"die": "CIANO14 40 new"}).json()
     assert nocfg["default_propeller"] is None
     free = client.get("/api/propellers/cooling-options", params={"die": "CILN28", "config": "G2-L40"}).json()
@@ -617,4 +621,4 @@ def test_configure_context_carries_the_defaults():
     from motor_ai_sim import configure_limits as cl
     c = cl.context({"name": "CIANO14 40 new"}, {"die": "CIANO14 40 new", "name": "L20"})
     assert c["cooling"]["default_propeller"] == "tmotor_p13x4_4"
-    assert c["cooling"]["defaults"]["L12"] == "tmotor_fpv_10x5"
+    assert c["cooling"]["defaults"]["L12"] == "motres_bench_hq1050_3"

@@ -101,3 +101,37 @@ t('the backend qualification codes become tooltip sentences, unknown codes are s
   const un = S.s1Line({ ...R, limit: { ...LIMIT, flags: ['thermal_uncalibrated', 'drive_failed'] } }, 'tmotor_fpv_10x5', 'L12');
   assert.deepEqual(un.flagKeys, ['configurePropeller.s1FlagThermalUncalibrated', 'configurePropeller.s1FlagDriveFailed']);
 });
+
+t('a bench-calibrated or transferred slipstream and an external ESC are stated', () => {
+  const flags = ['slipstream_bench', 'esc_external', 'esc_loss_omitted', 'pwm_omitted'];
+  const l = S.s1Line({ ...R, limit: { ...LIMIT, flags } }, 'tmotor_fpv_10x5', 'L12');
+  assert.deepEqual(l.flagKeys, ['configurePropeller.s1FlagSlipstreamBench', 'configurePropeller.s1FlagEscExternal',
+    'configurePropeller.s1FlagEscLoss', 'configurePropeller.s1FlagPwmOmitted']);
+  const tr = S.s1Line({ ...R, limit: { ...LIMIT, flags: ['slipstream_transferred'] } }, 'tmotor_fpv_10x5', 'L12');
+  assert.deepEqual(tr.flagKeys, ['configurePropeller.s1FlagSlipstreamTransferred']);
+});
+
+t('the S1 controller: the Drive block\'s drive, or an external ESC with its typed bus current', () => {
+  assert.deepEqual(S.s1DriveRequest('drive', 'si_48k', '40'), { drive: 'si_48k', escBusA: null });
+  assert.deepEqual(S.s1DriveRequest('drive', 'sine', null), { drive: 'sine', escBusA: null });
+  assert.deepEqual(S.s1DriveRequest('external', 'si_48k', '55'), { drive: S.EXTERNAL_ESC, escBusA: 55 });
+  assert.deepEqual(S.s1DriveRequest('external', 'sine', '62,5'), { drive: 'external_esc', escBusA: 62.5 });
+  // blank / nonsense / non-positive: no current sent, the backend takes the model's bench ESC
+  for (const x of ['', '  ', 'abc', '0', '-3', null, undefined]) {
+    assert.deepEqual(S.s1DriveRequest('external', 'sine', x), { drive: 'external_esc', escBusA: null });
+  }
+});
+
+t('every new S1 key exists in both locales', async () => {
+  const { readFileSync } = await import('node:fs');
+  const { join, dirname } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const here = dirname(fileURLToPath(import.meta.url));
+  const keys = ['s1FlagSlipstreamBench', 's1FlagSlipstreamTransferred', 's1FlagEscExternal', 's1FlagEscLoss',
+    's1Ctrl', 's1CtrlTip', 's1CtrlDrive', 's1EscExternal', 's1EscBus', 's1EscBusUnit', 's1EscBusTip',
+    's1EscBusTipDefault', 's1TipEsc'];
+  for (const loc of ['en', 'zh-CN']) {
+    const j = JSON.parse(readFileSync(join(here, '..', '..', 'locales', loc, 'controller.json'), 'utf8'));
+    for (const k of keys) assert.ok(typeof j.configurePropeller?.[k] === 'string' && j.configurePropeller[k], `${loc} ${k}`);
+  }
+});

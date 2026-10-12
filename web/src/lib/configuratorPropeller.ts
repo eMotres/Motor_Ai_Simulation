@@ -222,6 +222,9 @@ export interface CoolChoice {
   load?: 'prop' | 'manual';
   /** Configure-only boundary choice for mixed registries; does not alter the motor EM load. */
   cooling?: 'robotics' | 'propeller';
+  /** S1 controller board: its cooling class and the build (the two-device builds are estimates). */
+  boardCooling?: 'favourable' | 'weak' | 'hot_motor' | 'slipstream';
+  boardBuild?: 'as_built' | 'x2' | 'x2_board2';
 }
 
 /** The Thermal panel's shared-server record for its per-motor propeller choice.
@@ -266,6 +269,9 @@ export function readCoolChoice(raw: string | null, refId: string): CoolChoice {
     if (okAmbient(o.ambient)) out.ambient = o.ambient;
     if (o.load === 'prop' || o.load === 'manual') out.load = o.load;
     if (o.cooling === 'robotics' || o.cooling === 'propeller') out.cooling = o.cooling;
+    if (o.boardCooling === 'favourable' || o.boardCooling === 'weak' || o.boardCooling === 'hot_motor'
+        || o.boardCooling === 'slipstream') out.boardCooling = o.boardCooling;
+    if (o.boardBuild === 'as_built' || o.boardBuild === 'x2' || o.boardBuild === 'x2_board2') out.boardBuild = o.boardBuild;
     return out;
   } catch { return {}; }
 }

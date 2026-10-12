@@ -626,6 +626,24 @@ def test_the_board_limit_is_re_evaluated_at_the_s1_air_temperature(tmp_path):
         s1.resolve_drive(_sys_model(), "sine", "slipstream")
 
 
+def test_the_response_lists_the_board_cooling_classes_it_supports(tmp_path):
+    """``board_cooling_classes`` — what the UI may offer: the classes the controller
+    block carries, and ``slipstream`` ONLY where a ``board`` block exists (without
+    one the route refuses that class, so it must never be offered)."""
+    prop, m = _prop(tmp_path), _sys_model()
+    assert s1.board_cooling_classes(m["sine_controller"]) == ["favourable", "weak", "hot_motor"]
+    assert s1.resolve_drive(m, "sine")["board_cooling_classes"] == ["favourable", "weak", "hot_motor"]
+    assert s1.resolve_drive(m, "pwm_a")["board_cooling_classes"] == ["favourable"]  # that variant's one class
+    assert s1.resolve_drive(m, s1.EXTERNAL_ESC)["board_cooling_classes"] == []     # an external ESC has no board
+    assert _run(m, prop)["drive"]["board_cooling_classes"] == ["favourable", "weak", "hot_motor"]
+    mb = _sys_model_with_board()
+    assert s1.board_cooling_classes(mb["sine_controller"]) == list(s1.BOARD_COOLING)
+    assert s1.resolve_drive(mb, "sine", "slipstream")["board_cooling_classes"] == list(s1.BOARD_COOLING)
+    assert _run(mb, prop, board_cooling="slipstream")["drive"]["board_cooling_classes"] == list(s1.BOARD_COOLING)
+    # no controller block at all: no class is supported
+    assert s1.board_cooling_classes({}) == [] and s1.board_cooling_classes(None) == []
+
+
 def test_unknown_controller_is_a_motor_only_limit_and_says_so(tmp_path):
     L = _run(_model(), _prop(tmp_path))["limit"]
     assert L["drive_feasibility"] == "unknown"
@@ -939,6 +957,29 @@ def test_shipped_models_carry_the_system_data_and_qualify_their_limits():
     assert "mech_omitted" in L["flags"] and L["voltage"]["v_dc"] == 36.0
 
 
+def test_the_l20_and_l13_models_carry_board_blocks_and_offer_their_classes():
+    """Both re-exported models (2026-10-12) carry a ``board`` block on every
+    controller block, so ``slipstream`` is offered and runs there too.  The L13's
+    Ø85 board keeps its OWN x2 scale (the Ø40 12S board scaled x2 in the passport)
+    — its heat budget is x2, never x4."""
+    ms = {cfg: s1.load_model(die, cfg) for die, cfg in
+          (("CIANO14 40 new", "L20"), ("CIANO28 85 20SW1200", "L13"))}
+    for cfg, m in ms.items():
+        for ctrl in [m["sine_controller"]] + list(m["drives"].values()):
+            assert ctrl.get("board"), (cfg, ctrl.get("id") or "sine")
+            assert s1.board_cooling_classes(ctrl) == list(s1.BOARD_COOLING)
+            assert set(ctrl["board"]["classes"]) >= {"favourable", "weak", "hot_motor"}
+        assert s1.board_cooling_classes(m["sine_controller"]) == list(s1.BOARD_COOLING)
+    assert ms["L20"]["sine_controller"]["board"]["board_scale"] == 1.0
+    assert ms["L13"]["sine_controller"]["board"]["board_scale"] == 2.0
+    assert ms["L13"]["sine_controller"]["board"]["devices_per_switch"] == 2
+    q20 = ms["L20"]["sine_controller"]["board"]["classes"]
+    for k, v in ms["L13"]["sine_controller"]["board"]["classes"].items():
+        # the blocks carry the numbers sig-rounded to 6 digits (board_export_block)
+        assert v["Q_budget_W"] == pytest.approx(2.0 * q20[k]["Q_budget_W"], rel=1e-5)
+        assert v["R_sys_K_per_W"] == pytest.approx(q20[k]["R_sys_K_per_W"] / 2.0, rel=1e-5)
+
+
 def test_route_takes_the_drive_and_the_pack(client, wired):
     m = _sys_model()
     (wired / "s1" / "TEST DIE" / "L1.json").write_text(json.dumps(m), encoding="utf-8")
@@ -947,6 +988,7 @@ def test_route_takes_the_drive_and_the_pack(client, wired):
                                                          "pack_v_max": 400, "pack_i_max_A": 50}).json()
     assert j["drive"]["id"] == "pwm_a" and j["pack"]["v_min"] == 280.0 and j["pack"]["i_max_A"] == 50.0
     assert j["drives_available"] == [s1.SINE, "pwm_a", s1.EXTERNAL_ESC]
+    assert j["drive"]["board_cooling_classes"] == ["favourable"]   # pwm_a carries one class
     e = client.get("/api/propellers/syn_s1/s1", params={**q, "drive": s1.EXTERNAL_ESC,
                                                         "esc_i_bus_max_A": 42.5}).json()
     assert e["drive"]["kind"] == "external" and e["drive"]["I_bus_cont_A"] == 42.5
@@ -967,6 +1009,7 @@ def test_route_takes_the_board_cooling_class(client, wired):
     r2 = client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "slipstream"})
     assert r2.status_code == 200, r2.text
     j = r2.json()
+    assert j["drive"]["board_cooling_classes"] == list(s1.BOARD_COOLING)   # slipstream is on offer here
     assert all(row["controller_limit_A"] is not None for row in j["rows"])
     assert any("wash" in row["controller_limit_basis"] for row in j["rows"])
     assert j["limit"]["controller_limit_A"] is not None

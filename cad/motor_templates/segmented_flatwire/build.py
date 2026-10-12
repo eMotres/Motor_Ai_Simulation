@@ -7,6 +7,9 @@ Tree (FreeCAD 1.0.2):
   Rotor    (App::Part)  -> RotorCore(PartDesign Body)
   Magnets  (App::Part)  -> Magnet   (PartDesign Body, hidden base) + MagnetArray (Draft link polar array,
                                                                               num_seg*num_poles_per_segment)
+  Mechanics (App::Part) -> Shaft, Stator_holder, Stator_holder_back, Ring (+ Ring_back link), Prop_fix, Screw (hidden
+                           base) + Screws (array), Bearing_618_8 (Part: outer / inner ring, Bearing_ball + Balls array)
+                           + Bearing_618_8_back (link)                    [only when the profile has mechanics rows]
 Motor-specific metadata (motor id, variant, revision, materials, document name) comes from the profile (N02).
 Use prepare_document() + precheck before build_bodies(); call health.gate() before saving/exporting (B01).
 """
@@ -17,6 +20,7 @@ from .rotor import build_rotor
 from .magnet import build_magnet
 from .coil import build_coil
 from .sketchkit import check_sketch
+from . import mechanics
 
 
 def _polar_array(doc, base, count_expr, name):
@@ -75,6 +79,17 @@ def build_bodies(doc, sh, pj):
         report["sketches"][sk.Name] = check_sketch(sk)[1]
     for sk in r_coil["sketches"]:
         report["sketches"][sk.Name] = check_sketch(sk)[1]
+    if pj.get("named_parameters_mechanics"):
+        rep = mechanics.build_mechanics(doc, sh, _polar_array)
+        for b in mechanics.MECH_BODIES + mechanics.ARRAY_BASES:
+            o = doc.getObject(b)
+            if o is not None and b in mats:
+                o.addProperty("App::PropertyString", "MaterialName", "Motor", "material from the motor profile")
+                o.MaterialName = mats[b]
+        doc.recompute()
+        for part in rep.values():
+            for sk in part["sketches"]:
+                report["sketches"][sk.Name] = check_sketch(sk)[1]
     return report
 
 

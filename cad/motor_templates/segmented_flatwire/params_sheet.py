@@ -2,8 +2,8 @@
 
 Sheet `Params` (owner-editable, like Fusion user parameters):
   A: name   B: value (=expression, alias = name)   C: unit   D: role   E: comment / source
-Row colour = role:  input (green) and derived (pale green) drive the geometry; mechanics (blue) is reserved for the
-mechanical stages and has NO effect yet; info (grey) is reference only; unsupported (orange) is ignored by this
+Row colour = role:  input (green) and derived (pale green) drive the geometry; mechanics (blue) drives the mechanical
+parts (shaft, bearings, holders, rings, Prop_fix, screws) and has no simulation counterpart; info (grey) is reference only; unsupported (orange) is ignored by this
 template (pre-check demands its nominal value); foreign (dark grey) belongs to another design in the Fusion file.
 
 Round trip (M01): read_sheet() -> apply_sheet_to_profile() writes the owner's edits (expressions AND values, by
@@ -17,12 +17,13 @@ ROLE_COLOURS = {
     "input": (0.80, 0.94, 0.80), "derived": (0.90, 0.97, 0.90), "mechanics": (0.82, 0.88, 0.98),
     "info": (0.90, 0.90, 0.90), "unsupported": (1.00, 0.82, 0.60), "foreign": (0.75, 0.75, 0.75),
 }
-LIVE_ROLES = ("input", "derived")
-SECTIONS = ("user_parameters", "named_parameters_sketch3", "named_parameters_active_part")
+LIVE_ROLES = ("input", "derived", "mechanics")
+SECTIONS = ("user_parameters", "named_parameters_sketch3", "named_parameters_active_part", "named_parameters_mechanics")
 SECTION_TITLES = {
     "user_parameters": "Fusion user parameters",
-    "named_parameters_sketch3": "Axial layout - named fixed numbers of Fusion Sketch3 (mechanics, stage 3)",
+    "named_parameters_sketch3": "Axial layout - named fixed numbers of Fusion Sketch3 (mechanics)",
     "named_parameters_active_part": "Active part - fixed numbers inside Fusion features",
+    "named_parameters_mechanics": "Mechanics - bearing card, numbers of the Fusion mechanical features, axial chain (stage 3)",
 }
 
 
@@ -94,13 +95,20 @@ def make_params_sheet(doc, pj, name="Params"):
     sh.set("A%d" % r, "'%s  variant %s  revision %s  (profile JSON: params/%s.json)" % (
         prof.get("motor_id", "?"), prof.get("variant", "?"), prof.get("revision", "?"), prof.get("profile_file", prof.get("motor_id", "?"))))
     r += 1
-    for nm, ex, unit, role, com in _rows(pj):
+    rows = list(_rows(pj))
+    # pass 1: every alias first (a formula may use a row defined further down; FreeCAD binds names when the cell is set)
+    rr = r
+    for nm, ex, unit, role, com in rows:
+        if nm != "#":
+            sh.set("B%d" % rr, "0")
+            sh.setAlias("B%d" % rr, nm)
+        rr += 1
+    for nm, ex, unit, role, com in rows:
         if nm == "#":
             sh.set("A%d" % r, "'" + ex)
         else:
             sh.set("A%d" % r, "'" + nm)
             sh.set("B%d" % r, "=" + ex)
-            sh.setAlias("B%d" % r, nm)
             sh.set("C%d" % r, "'" + unit)
             sh.set("D%d" % r, "'" + role)
             if com:

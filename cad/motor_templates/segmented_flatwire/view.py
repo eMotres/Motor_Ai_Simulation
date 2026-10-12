@@ -10,17 +10,26 @@ that shows nothing.  Two steps, both done by the build:
 
 Rules: the bodies Core, Coil, RotorCore, Magnet, their Parts (Stator, Winding, Rotor, Magnets) and the two arrays
 (Coils, MagnetArray) are visible; a body shows only its Tip; sketches, intermediate features, Origins with their axes and
-planes and the Params sheet are hidden.
+planes and the Params sheet are hidden.  Mechanics (stage 3): the bodies Shaft, Stator_holder, Stator_holder_back, Ring,
+Prop_fix, Bearing_outer_ring, Bearing_inner_ring, the Parts Mechanics / Bearing_618_8, the arrays Balls / Screws and the
+links Bearing_618_8_back / Ring_back are visible; the array bases Bearing_ball / Screw are hidden.  Colours: steel shaft,
+light bearing steel, aluminium holders / Prop_fix, GFRP ring, dark screws.
 """
 import math
 
-BODIES = ("Core", "Coil", "RotorCore", "Magnet")
-PARTS = ("Stator", "Winding", "Rotor", "Magnets")
-ARRAYS = ("Coils", "MagnetArray")                      # labels of the Draft link arrays
+BODIES = ("Core", "Coil", "RotorCore", "Magnet",
+          "Shaft", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
+PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8")
+ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws")   # labels of the Draft link arrays
+LINKS = ("Bearing_618_8_back", "Ring_back")            # App::Link copies (Fusion occurrences)
 # per-part colours (r, g, b).  The template does not know the magnet polarity (all pockets are identical), so one colour.
 COLORS = {"Core": (0.62, 0.64, 0.67), "Coil": (0.80, 0.47, 0.22), "RotorCore": (0.27, 0.29, 0.33),
-          "Magnet": (0.20, 0.42, 0.78)}
-COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet"}
+          "Magnet": (0.20, 0.42, 0.78),
+          "Shaft": (0.50, 0.52, 0.55), "Bearing_outer_ring": (0.80, 0.81, 0.83), "Bearing_inner_ring": (0.80, 0.81, 0.83),
+          "Bearing_ball": (0.86, 0.87, 0.89), "Stator_holder": (0.75, 0.78, 0.82), "Stator_holder_back": (0.75, 0.78, 0.82),
+          "Prop_fix": (0.75, 0.78, 0.82), "Ring": (0.85, 0.78, 0.50), "Screw": (0.30, 0.31, 0.33)}
+COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet", "Balls": "Bearing_ball", "Screws": "Screw"}
+_ALL_BODIES = BODIES + ("Bearing_ball", "Screw")
 # FreeCAD "isometric" view orientation (SbRotation quaternion x, y, z, w)
 ISO_Q = (0.424707, 0.17592, 0.339851, 0.820473)
 
@@ -38,7 +47,7 @@ def set_visibility(doc):
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
             continue
-        if o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips:
+        if o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS:
             o.Visibility = True
         else:
             o.Visibility = False                       # sketches, intermediate features, origins, axes, planes, Params
@@ -54,7 +63,7 @@ def check_visibility(doc):
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
             continue
-        want = o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips
+        want = o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS
         if bool(o.Visibility) != want:
             bad.append("%s (%s) Visibility=%s, expected %s" % (o.Name, o.TypeId, o.Visibility, want))
     return bad
@@ -88,8 +97,13 @@ def camera_string(bbox):
 
 
 def model_bbox(doc):
-    boxes = [doc.getObject(n).Shape.BoundBox for n in ("Core", "RotorCore")]
+    boxes = [doc.getObject(n).Shape.BoundBox for n in BODIES if doc.getObject(n) is not None]
     boxes += [o.Shape.BoundBox for o in doc.Objects if o.Label in ARRAYS and o.Shape.BoundBox.isValid()]
+    try:
+        from . import mechanics
+        boxes += [s.BoundBox for s in mechanics.solids(doc).values()]
+    except Exception:
+        pass
     return (min(b.XMin for b in boxes), min(b.YMin for b in boxes), min(b.ZMin for b in boxes),
             max(b.XMax for b in boxes), max(b.YMax for b in boxes), max(b.ZMax for b in boxes))
 
@@ -114,14 +128,14 @@ def style_gui(doc, gdoc):
         if o.Label in ARRAYS:
             rep["arrays"][o.Label] = _attach_array_view(o)
     set_visibility(doc)
-    owner = {f.Name: n for n in BODIES if doc.getObject(n) is not None for f in doc.getObject(n).Group}
+    owner = {f.Name: n for n in _ALL_BODIES if doc.getObject(n) is not None for f in doc.getObject(n).Group}
     for o in doc.Objects:
         vo = gdoc.getObject(o.Name)
         if vo is None:
             continue
         if hasattr(o, "Visibility"):
             vo.Visibility = bool(o.Visibility)
-        key = COLOR_OF_ARRAY.get(o.Label) or (o.Name if o.Name in BODIES else owner.get(o.Name))
+        key = COLOR_OF_ARRAY.get(o.Label) or (o.Name if o.Name in _ALL_BODIES else owner.get(o.Name))
         if key and hasattr(vo, "ShapeColor"):
             vo.ShapeColor = COLORS[key]
             if hasattr(vo, "OverrideMaterial") and o.Label in ARRAYS:

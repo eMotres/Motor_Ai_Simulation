@@ -38,6 +38,9 @@ def main():
             solids["Coil_%d" % (i + 1)] = row(s)
         for i, s in enumerate([o for o in doc.Objects if o.Label == "MagnetArray"][0].Shape.Solids):
             solids["Magnet_%02d" % (i + 1)] = row(s)
+        from motor_templates.segmented_flatwire import mechanics
+        for k, s in mechanics.solids(doc).items():
+            solids[k] = row(s)
     else:
         import Import
         doc = App.newDocument("dump")

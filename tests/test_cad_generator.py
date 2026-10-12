@@ -145,7 +145,8 @@ def test_find_freecadcmd_env(monkeypatch, tmp_path):
 
 def _template_sources():
     d = os.path.join(CAD_DIR, "motor_templates", "segmented_flatwire")
-    return {f: open(os.path.join(d, f), encoding="utf-8").read() for f in ("core.py", "coil.py", "rotor.py", "magnet.py")}
+    return {f: open(os.path.join(d, f), encoding="utf-8").read() for f in ("core.py", "coil.py", "rotor.py", "magnet.py",
+                                                                           "mechanics.py")}
 
 
 def test_no_left_right_constraint_pairs_in_sketch_builders():
@@ -162,8 +163,7 @@ def test_no_left_right_constraint_pairs_in_sketch_builders():
 
 def test_feature_counts_are_named_derived_rows():
     base = json.load(open(store.BASE_PROFILE, encoding="utf-8"))
-    rows = {p["name"]: p for sec in ("user_parameters", "named_parameters_sketch3", "named_parameters_active_part")
-            for p in base[sec]}
+    rows = {p["name"]: p for sec in store.SECTIONS for p in base.get(sec, [])}
     want = ("core_sectors", "coil_count", "rotor_poles", "magnet_count", "coil_layer_copies", "coil_layer_span",
             "coil_layer_pitch", "coil_leg_length", "coil_x_in", "coil_top_y", "coil_bridge_length", "coil_lead_total")
     for n in want:
@@ -176,3 +176,69 @@ def test_feature_counts_are_named_derived_rows():
         assert inline not in src
     for n in ("core_sectors", "rotor_poles", "coil_count", "magnet_count", "coil_layer_copies"):
         assert n in src
+
+
+# ----------------------------------------------------------------------------------------------- stage 3: mechanics
+
+FUSION_MECH_VALUES = {   # the open Fusion model CIANO14 40 (read-only MCP dump 2026-10-12): Sketch3 / feature positions
+    "holder_face_z": 11.9, "holder_flange_z": 13.1, "bearing_out_z": 15.9, "front_holder_end_z": 16.7,
+    "shaft_journal_end_z": 20.7, "shaft_thread_end_z": 28.7, "shaft_front_end_z": 36.7, "back_holder_end_z": 20.1,
+    "holder_inner_r": 13.633268682, "holder_hub_r": 8.8, "back_holder_outer_r": 12.0, "ring_inner_r": 12.433268682,
+    "core_leg_outer_x": 6.09, "holder_screw_l": 25.0, "shaft_journal_r": 4.0, "shaft_bore_r": 3.0, "shaft_seat_r": 5.0,
+    "bearing_pitch_r": 6.0, "holder_bolt_count": 6, "holder_seat_z": 9.0, "back_holder_wall": 2.0}
+
+
+def test_mechanics_rows_reproduce_the_fusion_axial_chain():
+    base = json.load(open(store.BASE_PROFILE, encoding="utf-8"))
+    rows = {p["name"]: p for sec in store.SECTIONS for p in base.get(sec, [])}
+    vals = store.evaluate({n: p["freecad_expression"] for n, p in rows.items()})
+    for n, v in FUSION_MECH_VALUES.items():
+        assert abs(vals[n] - v) < 1e-6, (n, vals[n], v)
+    from motor_templates.segmented_flatwire import params_sheet as ps
+    assert ps.SECTIONS == store.SECTIONS and "mechanics" in ps.LIVE_ROLES
+    for n in ("motor_d", "glue", "housing_h", "offset_holder", "bearing_6005_d"):     # used by no Fusion motor feature
+        assert rows[n]["role"] == "info", n
+    for p in base["named_parameters_mechanics"]:
+        assert p["role"] in ("input", "derived", "mechanics") and p["comment"] and p["source"], p["name"]
+    assert rows["bearing_d"]["role"] == "input" and rows["shaft_journal_r"]["freecad_expression"] == "bearing_d / 2"
+
+
+def test_bearing_card_of_the_config_drives_the_bearing_rows(dies, tmp_path):
+    dd, lib = dies
+    cfg = os.path.join(dd, "TEST die", "L12.yaml")
+    y = yaml.safe_load(open(cfg))
+    y["bearings"] = {"A": {"card": "BRG/X"}, "B": {"card": "BRG/X"}}
+    open(cfg, "w").write(yaml.safe_dump(y))
+    blib = tmp_path / "bearings_library.yaml"
+    blib.write_text(yaml.safe_dump({"bearings": {"BRG/X": {"d": 10, "D": 19, "B": 5, "d_m": 14.5}}}))
+    eff = store.load_effective(dd, "TEST die", "L12", lib, str(blib))
+    assert eff["bearing_cards"]["BRG/X"]["D"] == 19 and "bearings_library.yaml" in eff["files"]
+    pj, rep = store.make_profile(eff, store.load_mapping(), stamp="t")
+    v = {p["name"]: p["value"] for sec in store.SECTIONS for p in pj.get(sec, [])}
+    assert v["bearing_d"] == 10 and v["shaft_journal_r"] == 5 and v["bearing_od_r"] == 9.5 and v["bearing_w"] == 5
+    assert v["bearing_out_z"] == v["holder_face_z"] + 5
+    assert all(r["card"] == "BRG/X" for r in rep["bearings"])
+    eff2 = store.load_effective(dd, "TEST die", "L12", lib, str(tmp_path / "missing.yaml"))
+    pj2, rep2 = store.make_profile(eff2, store.load_mapping(), stamp="t")
+    assert all("standard 618/8" in r["source"] for r in rep2["bearings"])          # stated fallback
+
+
+def test_back_lists_mechanics_rows_with_their_target(dies, tmp_path):
+    dd, lib = dies
+    eff = store.load_effective(dd, "TEST die", "L12", lib)
+    cells = {"motor_length": "12 mm", "air_gap": "0.2 mm", "insulation_thickness": "0.06 mm", "holder_bolt_r": "15 mm",
+             "ring_h": "1.8 mm"}
+    res = store.back(eff, store.load_mapping(), cells, str(tmp_path / "sync"), propose=True)
+    m = {x["name"]: x for x in res["mechanics"]}
+    assert set(m) == {"holder_bolt_r"} and "CAD reference profile" in m["holder_bolt_r"]["target"]
+    patch = [f for f in res["files"] if f.endswith(".patch.yaml")][0]
+    assert "holder_bolt_r: 15" in open(patch, encoding="utf-8").read()
+
+
+def test_mechanics_sketches_follow_the_owner_conventions():
+    src = _template_sources()["mechanics.py"]
+    assert "Symmetric" in src and "Equal" in src
+    for edge_ref in ("PartDesign::Chamfer", "PartDesign::Fillet"):      # sketch-based: no topological edge references
+        assert edge_ref not in src
+    for n in ("holder_bolt_count", "holder_face_z", "holder_boss_len", "holder_seat_z", "ring_back_dz", "screw_head_top_z"):
+        assert "\"%s\"" % n in src or "+ \"%s" % n in src or n in src

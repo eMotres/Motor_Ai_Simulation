@@ -6,7 +6,8 @@
 
 Outputs go to <out-root>/<die>/<config>/ (default /srv/motres/shared/cad on the server):
   <motor_id>.FCStd             parametric model, opens ready to look at (visibility, colours, isometric camera)
-  <motor_id>_active.step       full STEP (Stator/Core, Winding/Coils/Coil_n, Rotor/RotorCore, Magnets/Magnet_nn)
+  <motor_id>_active.step       full STEP (Stator/Core, Winding/Coils/Coil_n, Rotor/RotorCore, Magnets/Magnet_nn,
+                               Mechanics/Shaft, bearings, holders, rings, Prop_fix, Screws)
   <motor_id>_datums.json       frame, axial / radial datums, coil lead end faces
   params.json                  the FreeCAD profile built from the store (what the template was fed)
   pull_report.json             simulation vs CAD parameter table
@@ -64,7 +65,7 @@ def build(args):
             return 2
         dies = args.dies_dir or store.default_dies_dir()
         try:
-            eff = store.load_effective(dies, args.die, args.config, args.materials)
+            eff = store.load_effective(dies, args.die, args.config, args.materials, args.bearings)
         except FileNotFoundError as e:
             print(e)
             return 2
@@ -144,7 +145,7 @@ def build(args):
 
 def back(args):
     dies = args.dies_dir or store.default_dies_dir()
-    eff = store.load_effective(dies, args.die, args.config, args.materials)
+    eff = store.load_effective(dies, args.die, args.config, args.materials, args.bearings)
     cells = store.read_fcstd_params(args.fcstd)
     res = store.back(eff, store.load_mapping(), cells, args.out_dir or "sync", propose=args.propose, origin=args.fcstd)
     print(json.dumps({k: res[k] for k in ("die", "variant", "compared", "equal", "differences", "files")}, indent=1))
@@ -162,6 +163,7 @@ def main(argv=None):
     common.add_argument("--config", help="config in the die, e.g. L12 (or L12.yaml)")
     common.add_argument("--dies-dir", help="store of dies (default $MOTRES_DIES_DIR, /srv/motres/shared/dies, config/dies)")
     common.add_argument("--materials", help="materials library yaml (default $MOTRES_MATERIALS_LIBRARY or the server's)")
+    common.add_argument("--bearings", help="bearing library yaml (default $MOTRES_BEARINGS_LIBRARY, the server's, config/)")
     b = sub.add_parser("build", parents=[common], help="build FCStd + STEP + datums + manifest")
     b.add_argument("--out-root", help="default %s" % DEFAULT_OUT_ROOT)
     b.add_argument("--out-dir", help="exact output directory (overrides <out-root>/<die>/<config>)")

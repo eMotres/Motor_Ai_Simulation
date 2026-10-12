@@ -29,7 +29,7 @@ WORKDIR /app
 COPY cad/ cad/
 COPY src/motor_ai_sim/cad/ src/motor_ai_sim/cad/
 COPY src/motor_ai_sim/routes/_validation.py src/motor_ai_sim/routes/fusion.py src/motor_ai_sim/routes/
-COPY config/fusion_param_map.yaml config/motor_config.yaml config/
+COPY config/fusion_param_map.yaml config/motor_config.yaml config/bearings_library.yaml config/
 ARG GIT_SHA=unknown
 RUN echo "${GIT_SHA}" > /app/GIT_SHA
 
@@ -38,6 +38,7 @@ ENV QT_QPA_PLATFORM=offscreen \
     PYTHONUNBUFFERED=1 \
     MOTRES_DIES_DIR=/store/dies \
     MOTRES_MATERIALS_LIBRARY=/store/materials_library.yaml \
+    MOTRES_BEARINGS_LIBRARY=/store/bearings_library.yaml \
     HOME=/tmp
 
 # The micromamba entrypoint activates the environment; the default command is the builder.

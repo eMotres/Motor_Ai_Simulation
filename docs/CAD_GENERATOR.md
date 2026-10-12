@@ -11,8 +11,8 @@ envelope STEP before the NDA, full STEP after), (5) 3-D load FEM.
 | Path | What |
 |---|---|
 | `cad/motor_templates/segmented_flatwire/` | the FreeCAD template (PartDesign + Draft arrays), version-safe for FreeCAD 1.0.2 and 1.1. `TEMPLATE_VERSION` in its `__init__.py` goes into every manifest. |
-| `cad/reference/` | Fusion reference profile (`CIANO14_40_12.json`, the open Fusion model), its parameter values, `Coil_L20_fusion.step` (read-only Fusion export used for the coil check) |
-| `cad/fc_scripts/` | scripts that run inside FreeCAD: `build_model.py`, `gui_finish.py` (headless GUI: colours, camera), `check_gui.py`, `export_step.py`, `solids_dump.py`, `coil_vs_reference.py` |
+| `cad/reference/` | Fusion reference profile (`CIANO14_40_12.json`, the open Fusion model), its parameter values, `Coil_L20_fusion.step` (read-only Fusion export used for the coil check), `fusion_mechanics/` (read-only Fusion STEP + body/occurrence JSON of Shaft, 618_8, Stator_holder(+screws), Stator_holder_back, Ring, Prop_fix, 91292A032), `add_mechanics_rows.py` (adds the stage-3 rows to a profile) |
+| `cad/fc_scripts/` | scripts that run inside FreeCAD: `build_model.py`, `gui_finish.py` (headless GUI: colours, camera), `check_gui.py`, `export_step.py`, `solids_dump.py`, `coil_vs_reference.py`, `mechanics_vs_reference.py` (every mechanical part vs Fusion), `owner_edits.py` (Params edits on a built model + gate + fit) |
 | `src/motor_ai_sim/cad/` | `store.py` (store -> profile, name mapping, fingerprints, owner sync-back diff), `manifest.py`, `runner.py`, `build.py` (CLI). Stdlib + PyYAML only. |
 | `cad/run_build.py` | launcher without the FEM stack (used by the image) |
 | `deploy/Dockerfile.cad` | FreeCAD 1.1.3 (conda-forge) in its own image, `motres-cad:1.1.3` |
@@ -33,6 +33,7 @@ On the server (the image has no network need; the store is mounted read-only):
 docker run --rm --user 10001:10001 --cpus 2 \
   -v /srv/motres/shared/dies:/store/dies:ro \
   -v /srv/motres/shared/materials_library.yaml:/store/materials_library.yaml:ro \
+  -v /srv/motres/shared/bearings_library.yaml:/store/bearings_library.yaml:ro \
   -v /srv/motres/shared/cad:/out \
   motres-cad:1.1.3 build --die "CIANO14 40 new" --config L12 --out-root /out
 ```
@@ -63,6 +64,50 @@ coils copper, rotor iron dark, magnets one colour (the template does not know th
 the model in `GuiDocument.xml`. The colours and the camera are written by a headless FreeCAD GUI step
 (`QT_QPA_PLATFORM=offscreen`; `MOTRES_CAD_XVFB=1` uses `xvfb-run`); the rules are checked again through the GUI
 (`check_gui.py`) before the output is accepted.
+
+## Mechanics (owner-repo PLAN stage 3, 2026-10-12)
+
+Built like the Fusion model CIANO14 40 (read-only MCP dump 2026-10-12, `cad/reference/fusion_mechanics/`), in the App::Part
+`Mechanics` (`motor_templates/segmented_flatwire/mechanics.py`):
+
+| Body (Fusion component) | How it is built | Fusion features |
+|---|---|---|
+| `Shaft` | revolve of the half section + drive-flat pocket | Sketch3 profile 5, Revolve3, Extrude15 (Sketch10), Chamfer7 (in the sketch) |
+| `Bearing_618_8` (Part: `Bearing_outer_ring`, `Bearing_inner_ring`, `Bearing_ball` + `Balls`) and the link `Bearing_618_8_back` | revolves (edge radii, ball groove) | 618_8 import; d / D / B from the config's bearing card |
+| `Stator_holder` | revolve, window between the spokes (pocket), boss to the stator face, seat into the pocket between the core legs, seat chamfers (pocket), x `holder_bolt_count` | Sketch3 profile 0, Sketch2 profiles 16 / 9-11, Extrude42/45/47, Chamfer23, C-Pattern |
+| `Stator_holder_back` | revolve, through window, bosses / seats with M2 tap holes, six M3 holes in the A_H face, seat chamfers, spoke-end fillets (pocket), x `holder_bolt_count` | Sketch3 profile 6, Sketch2, Sketch7, Extrude41/42/43/47, Chamfer23, Fillet27 |
+| `Ring` + link `Ring_back` | revolve | Sketch3 profile 2, occurrences Ring:1 / Ring:3 |
+| `Prop_fix` | double-D hub on the flats + plate, hole faces offset by the clearance in the sketch | Sketch2, Extrude1/2, OffsetFaces1 |
+| `Screw` + `Screws` | M2 socket head screw on the bolt circle, polar array | 91292A032 in Stator_holder |
+
+Fusion builds every turned part from one axial sketch (Sketch3); a PartDesign body owns its sketches, so each body has its
+own half section, all dimensioned from the same Params rows: the Sketch3 dimension names (`named_parameters_sketch3`) and
+the named derived rows of the axial chain (`named_parameters_mechanics`: `holder_face_z = motor_length/2 + ring_h +
+ring_holder_gap`, `bearing_out_z`, `front_holder_end_z`, `shaft_journal_end_z`, `back_holder_end_z` (A_H at
+`-back_holder_end_z`), ...).  Role `mechanics` = drives the mechanical parts, CAD only (no simulation key); it is live now
+(`LIVE_ROLES`).  Fusion user parameters that no motor feature uses are role `info`.  Values from the simulation where it
+has them: `motor_length` (chain), rotor bore (`shaft_seat_r = rotor_down_r - rotor_house_height` = `rotor_inner_radius`),
+`shaft_height` (bore `shaft_bore_r = shaft_seat_r - shaft_height` = `shaft_inner_radius`), the bearing card of the config
+(`bearings.A.card` -> `bearings_library.yaml` d / D / B -> `bearing_d/D/B`; standard 618/8 8x16x4 if the store has no
+card, stated in `pull_report.json`), the shaft material (`materials.shaft`).
+
+Chamfers / fillets that Fusion applies to edges are sketch-based pockets here (no topological edge references: they survive
+every Params edit).  Every mechanical sketch is fully constrained (0 DOF, no redundant / partially redundant constraint);
+symmetric profiles are one dimensioned half + `Symmetric` (+ `Equal` for arcs / mirrored lines).  The health gate checks
+the bodies, the array counts (`Screws` = `holder_bolt_count`, `Balls` = `bearing_ball_count`), the links and the extents
+the Params demand (stale geometry), and `health.fit()` writes the interference / contact table (`build_report.json`
+`fit`): contacts that must touch without overlap (shaft / rotor bore, shaft / bearing bores, bearings / holder seats,
+holders and rings / stator, Prop_fix / shaft), clearances (holders, rings, screws vs coils / core / rotor) and the screw
+thread engagement in the back bosses (reported).  An overlap above 0.5 mm3 refuses the build.
+
+The STEP has `Mechanics/...` (36 solids, 58 in all) and the datums JSON a `mechanics` block (A_H measured on the solid,
+bearing seats, holder faces, shaft journals / flats / thread, bolt circle and angles, M3 holes, rings, Prop_fix, screws).
+
+Updating the owner repo (`CIANO14_40_motor_model`): motor_ai_sim's `cad/` is the one source.  `tools/update_from_motor_ai_sim.py`
+there copies `cad/motor_templates/segmented_flatwire/`, `cad/reference/` and the fc scripts from a motor_ai_sim checkout
+(path argument, default `../motor_ai_sim`), records the source commit in `motor_templates/SOURCE.json`, and never touches
+the owner's models or `params/`; the models in `models/` are refreshed from the server build (`Swap_in_new_models.cmd` if
+FreeCAD has them open).
 
 ## How the owner edits
 

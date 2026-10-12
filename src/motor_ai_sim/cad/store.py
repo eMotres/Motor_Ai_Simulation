@@ -31,9 +31,15 @@ BASE_PROFILE = os.path.join(CAD_DIR, "reference", "CIANO14_40_12.json")  # Fusio
 FUSION_VALUES = os.path.join(CAD_DIR, "reference", "user_parameters_values_2026-10-12.json")
 DEFAULT_SERVER_DIES = "/srv/motres/shared/dies"
 DEFAULT_SERVER_MATERIALS = "/srv/motres/shared/materials_library.yaml"
+DEFAULT_SERVER_BEARINGS = "/srv/motres/shared/bearings_library.yaml"
+SECTIONS = ("user_parameters", "named_parameters_sketch3", "named_parameters_active_part", "named_parameters_mechanics")
+# bearing card field -> CAD parameter (stage 3: the 618/8 seats and the bearing bodies follow the card of the config)
+BEARING_ROWS = {"d": "bearing_d", "D": "bearing_D", "B": "bearing_B"}
+# standard 618/8 dimensions (ISO 15 / SKF catalogue), used only when the store has no bearing card
+BEARING_618_8 = dict(d=8, D=16, B=4, d_m=12)
 
 # simulation material slot -> FreeCAD body
-MAT_BODIES = {"magnet": "Magnet", "stator_core": "Core", "rotor_core": "RotorCore", "slot": "Coil"}
+MAT_BODIES = {"magnet": "Magnet", "stator_core": "Core", "rotor_core": "RotorCore", "slot": "Coil", "shaft": "Shaft"}
 # simulation derived value -> equivalent FreeCAD expression (cross-check only)
 DERIVED_EQ = {"stator_outer_radius": "stator_up_r", "stator_inner_radius": "stator_down_r",
               "rotor_outer_radius": "rotor_up_r", "rotor_inner_radius": "rotor_down_r - rotor_house_height",
@@ -47,6 +53,12 @@ FUSION_MATS = {"Core": "20SW1200", "Coil": "Copper", "RotorCore": "Steel", "Magn
 def default_dies_dir():
     return os.environ.get("MOTRES_DIES_DIR") or (DEFAULT_SERVER_DIES if os.path.isdir(DEFAULT_SERVER_DIES)
                                                  else os.path.join(ROOT, "config", "dies"))
+
+
+def default_bearings_library():
+    return os.environ.get("MOTRES_BEARINGS_LIBRARY") or (
+        DEFAULT_SERVER_BEARINGS if os.path.exists(DEFAULT_SERVER_BEARINGS)
+        else os.path.join(ROOT, "config", "bearings_library.yaml"))
 
 
 def default_materials_library():
@@ -202,7 +214,7 @@ def list_configs(dies_dir, die):
     return sorted(f[:-5] for f in os.listdir(d) if f.lower().endswith(".yaml") and f != "die.yaml")
 
 
-def load_effective(dies_dir, die, config, materials_library=None):
+def load_effective(dies_dir, die, config, materials_library=None, bearings_library=None):
     """Effective machine of <die>/<config>: die geometry updated by the config's geometry_overrides, the config's
     materials (cards from the library) and winding.  Every input file is hashed."""
     import yaml
@@ -234,10 +246,28 @@ def load_effective(dies_dir, die, config, materials_library=None):
         files["materials_library.yaml"] = dict(sha256=sha256_file(lib_path), size=os.path.getsize(lib_path),
                                                mtime=datetime.datetime.fromtimestamp(os.path.getmtime(lib_path)).isoformat(timespec="seconds"),
                                                cards_used=sorted(cards))
+    bcards = {}
+    blib = bearings_library or default_bearings_library()
+    used = sorted({str(v.get("card")) for k, v in (cy.get("bearings") or {}).items() if isinstance(v, dict) and v.get("card")})
+    if used and os.path.exists(blib):
+        lib = yaml.safe_load(open(blib, encoding="utf-8")) or {}
+        flat = {}
+        for k, v in lib.items():
+            if isinstance(v, dict):
+                if any(c in v for c in used):
+                    flat.update({c: v[c] for c in used if c in v})
+                elif k in used:
+                    flat[k] = v
+        for c in used:
+            if c in flat and isinstance(flat[c], dict):
+                bcards[c] = {k: flat[c].get(k) for k in ("d", "D", "B", "d_m", "type", "description") if k in flat[c]}
+        files["bearings_library.yaml"] = dict(sha256=sha256_file(blib), size=os.path.getsize(blib),
+                                              mtime=datetime.datetime.fromtimestamp(os.path.getmtime(blib)).isoformat(timespec="seconds"),
+                                              cards_used=sorted(bcards))
     return dict(die=die, config=cfg_name, variant=config_stem(config), geometry=geo,
                 geometry_overrides=cy.get("geometry_overrides") or {}, die_geometry=dy.get("geometry") or {},
                 materials=mats, winding=cy.get("winding") or {}, bearings=cy.get("bearings") or {},
-                material_cards=cards, files=files, dies_dir=dies_dir)
+                bearing_cards=bcards, material_cards=cards, files=files, dies_dir=dies_dir)
 
 
 def parameter_fingerprint(eff, mp):
@@ -257,8 +287,7 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
     if fv and os.path.exists(fv):
         fus = {p["name"]: p["value"] for p in json.load(open(fv, encoding="utf-8"))}
     pj = copy.deepcopy(base)
-    params = {p["name"]: p for sec in ("user_parameters", "named_parameters_sketch3", "named_parameters_active_part")
-              for p in pj.get(sec, [])}
+    params = {p["name"]: p for sec in SECTIONS for p in pj.get(sec, [])}
     geo = eff["geometry"]
     rows = primary_rows(geo, mp)
     report = []
@@ -276,6 +305,7 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
                 p["freecad_expression"] = _fmt(v, unit)
             p["source"] = "simulation %s/%s:%s" % (eff["die"], row["sim_file"], key)
         report.append(row)
+    bearing_rows = bearing_profile_rows(eff, params, report)
     vals = evaluate({n: p["freecad_expression"] for n, p in params.items()})
     for n, p in params.items():
         p["value"] = round(vals[n], 9)
@@ -322,7 +352,7 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
                                                       for r in report if r.get("freecad_before") is not None
                                                       and not _eq(r["freecad_before"], r["freecad"])]))
     res = dict(die=eff["die"], variant=eff["variant"], motor_id=mid, generated=stamp, fingerprint=fp,
-               parameters=report, derived_cross_check=derived, excluded=excluded, materials=mat_rows,
+               parameters=report, derived_cross_check=derived, excluded=excluded, materials=mat_rows, bearings=bearing_rows,
                summary=dict(n=len(report),
                             freecad_equals_sim=all(r["status"].startswith("ok") for r in report if r.get("freecad") is not None),
                             changed_vs_fusion_reference=[r["name"] for r in report if r.get("freecad_before") is not None
@@ -332,6 +362,32 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
                             sim_only=[r["name"] for r in report if r.get("freecad") is None],
                             derived_all_equal=all(d["status"] == "ok" for d in derived)))
     return pj, res
+
+
+def bearing_profile_rows(eff, params, report):
+    """Stage 3: bearing_d / bearing_D / bearing_B from the bearing card of the config (bearings A; B must be the same card,
+    the template has one bearing type).  Without a card in the store: the standard 618/8 dimensions, stated."""
+    if "bearing_d" not in params:
+        return []
+    bear = eff.get("bearings") or {}
+    cards = [str(v.get("card")) for k, v in sorted(bear.items()) if isinstance(v, dict) and v.get("card")]
+    card = cards[0] if cards else None
+    data = (eff.get("bearing_cards") or {}).get(card) if card else None
+    rows = []
+    if data and all(data.get(k) is not None for k in BEARING_ROWS):
+        src = "simulation %s/%s bearings -> bearings_library.yaml %s" % (eff["die"], eff["config"], card)
+    else:
+        data, src = BEARING_618_8, "standard 618/8 dimensions (no bearing card in the store%s)" % (
+            " for %s" % card if card else "")
+    for key, name in BEARING_ROWS.items():
+        p = params[name]
+        before = p["freecad_expression"]
+        p["freecad_expression"] = "%g mm" % float(data[key])
+        p["source"] = src
+        rows.append(dict(card=card, field=key, name=name, value=float(data[key]), expression_before=before, source=src))
+    if len(set(cards)) > 1:
+        rows.append(dict(warning="bearings A and B use different cards (%s); the template builds both with %s" % (cards, card)))
+    return rows
 
 
 # ----------------------------------------------------------------------------------------------- back (owner edits)
@@ -371,14 +427,31 @@ def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):
                          expression=cells[fname],
                          target=("%s geometry_overrides" % eff["config"]) if key in eff["geometry_overrides"]
                          else "die.yaml geometry (affects every config of the die: %s)" % ", ".join(configs)))
-    base = {p["name"]: p for sec in ("user_parameters", "named_parameters_sketch3", "named_parameters_active_part")
+    base = {p["name"]: p for sec in SECTIONS
             for p in json.load(open(base_profile or BASE_PROFILE, encoding="utf-8")).get(sec, [])}
     mapped = {mp["map"].get(k, k) for k in geo}
     cad_only = [dict(name=n, freecad=round(vals[n], 9), role=base.get(n, {}).get("role", "added by owner"),
                      expression=cells[n]) for n in sorted(vals) if n not in mapped and n in cells
-                and base.get(n, {}).get("role") in ("input", None)]
+                and base.get(n, {}).get("role") in ("input", None) and n not in BEARING_ROWS.values()]
+    # mechanics rows (CAD only, no simulation key): differences against the CAD reference profile, target = that profile
+    bvals = evaluate({n: p["freecad_expression"] for n, p in base.items()})
+    mechanics = [dict(name=n, freecad=round(vals[n], 9), reference=round(bvals[n], 9), expression=cells[n],
+                      target="CAD reference profile cad/reference/%s (mechanics, not in the simulation)" % os.path.basename(
+                          base_profile or BASE_PROFILE))
+                 for n in sorted(vals) if n in cells and base.get(n, {}).get("role") == "mechanics" and not _eq(vals[n], bvals[n])]
+    cards = (eff.get("bearing_cards") or {})
+    bearing = []
+    for key, name in BEARING_ROWS.items():
+        if name in vals:
+            card = next(iter(sorted(cards)), None)
+            sim = float(cards[card][key]) if card and cards[card].get(key) is not None else float(BEARING_618_8[key])
+            if not _eq(vals[name], sim):
+                bearing.append(dict(name=name, freecad=round(vals[name], 9), card=card, card_value=sim,
+                                    target="config bearings: choose another card in bearings_library.yaml (cards are not edited "
+                                           "from CAD)"))
     res = dict(die=eff["die"], variant=eff["variant"], origin=origin, generated=stamp, store_files=eff["files"],
                compared=len(rows), equal=same, differences=diff, not_in_freecad=missing, cad_only_inputs=cad_only,
+               mechanics=mechanics, bearing=bearing,
                note="read-only: nothing was written to the simulation store; a proposal (if any) is applied by the "
                     "orchestrator after the owner confirms it")
     os.makedirs(out_dir, exist_ok=True)
@@ -390,7 +463,7 @@ def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):
             w.writerow([d["name"], d["sim_key"], "%g" % d["sim"], "%g" % d["freecad"], "%g" % d["delta"], d["unit"],
                         d["expression"], d["target"]])
     res["files"] = [stem + ".json", stem + ".csv"]
-    if propose and diff:
+    if propose and (diff or mechanics):
         prow = [(k, f, (vals[f] if f in vals else v), u, d) for k, f, v, u, d in rows]
         pstem = os.path.join(out_dir, "%s_proposal_%s" % (eff["variant"], stamp))
         fusion_csv(prow, pstem + "_fusion_params.csv")
@@ -408,6 +481,11 @@ def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):
             for d in ds:
                 L.append("      %s: %s   # was %s (FreeCAD expression: %s)" % (d["sim_key"], "%g" % d["freecad"], "%g" % d["sim"],
                                                                              d["expression"]))
+        if mechanics:
+            L += ["mechanics:   # CAD-only rows -> %s" % mechanics[0]["target"]]
+            for d in mechanics:
+                L.append("  %s: %s   # reference %s (FreeCAD expression: %s)" % (d["name"], "%g" % d["freecad"], "%g" % d["reference"],
+                                                                            d["expression"]))
         if any(sec == "geometry" for (_, sec) in by_file):
             L.append("warnings:\n  - die.yaml changes affect every configuration of the die (%s)" % ", ".join(configs))
         with open(pstem + ".patch.yaml", "w", encoding="utf-8") as fh:

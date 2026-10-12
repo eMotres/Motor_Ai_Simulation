@@ -6,11 +6,14 @@
 # The allowed propellers are the T-Motor entries of 10-13 in that have usable test
 # data (config/propellers/tmotor/); geometry-only entries are not offered.
 # Entries marked "estimated power" have thrust measured but C_P estimated.
+# motres_bench_hq1050_3 is the propeller the L12 ran on the MOTRES bench (HQ1050-3, measured
+# there, config/propellers/motres/); the L12's S1 slipstream factor is fitted on those runs.
 version: 1
 dies:
   "CIANO14 40 new":
     cooling_options: [propeller_air]
     propellers:
+      - motres_bench_hq1050_3  # 10.5 in, 3 blades, torque measured on the MOTRES bench
       - tmotor_fpv_10x5        # 10 in, 3 blades, torque measured
       - tmotor_cf10x3_3        # 10 in, thrust measured, estimated power
       - tmotor_cf11x3_7        # 11 in, thrust measured, estimated power
@@ -21,7 +24,7 @@ dies:
     # the propeller each configuration opens on (owner 2026-10-05); Configure's picker takes it on
     # loading the configuration and on "reset to preset", and still lets the user change it
     defaults:
-      L12: tmotor_fpv_10x5     # 6S: 10 in, 3 blades
+      L12: motres_bench_hq1050_3  # 6S: the bench propeller (2026-10-12; was tmotor_fpv_10x5)
       L20: tmotor_p13x4_4      # 12S: P13x4.4
 
   # CIANO28 85 20SW1200 (configuration L13, 12S): one motor, two uses (owner 2026-10-05,

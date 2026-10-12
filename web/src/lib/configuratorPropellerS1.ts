@@ -37,7 +37,20 @@ export interface S1Limit {
   flags?: string[];
   drive_feasibility?: 'checked' | 'unknown' | 'failed';
   controller_limit_A?: number | null;
-  cooling?: { slipstream_factor: number | null; slipstream_position: string | null };
+  /** an external ESC's continuous BUS current (checked against the battery current at the pack minimum) */
+  controller_bus_limit_A?: number | null;
+  battery_current_A?: number | null;
+  cooling?: { slipstream_factor: number | null; slipstream_position: string | null;
+              /** caller | model (bench-calibrated / transferred) | default (assumed 0.4) */
+              slipstream_source?: string | null };
+}
+
+/** The ESC the configuration ran on the bench (the model's default for the external-ESC drive). */
+export interface S1ExternalEsc {
+  name?: string | null;
+  i_bus_cont_A?: number | null;
+  i_phase_cont_A?: number | null;
+  basis?: string | null;
 }
 
 export interface S1Result {
@@ -51,12 +64,30 @@ export interface S1Result {
   monotone: boolean;
   limits: { winding_C: number; magnet_C: number; winding_basis: string; magnet_basis: string };
   /** the drive the limit was computed for (Configure's selected one) */
-  drive?: { id: string; kind: 'sine' | 'pwm'; board_cooling: string; I_cont_A: number | null };
+  drive?: { id: string; kind: 'sine' | 'pwm' | 'external'; board_cooling: string; I_cont_A: number | null;
+            I_bus_cont_A?: number | null; name?: string | null };
+  /** the model's bench ESC (null: the model carries none, the user must give the current) */
+  external_esc_default?: S1ExternalEsc | null;
   /** the motor model: a thermal calibration is present when the lumped network was fitted to FEM */
   model?: { thermal_calibration?: Record<string, unknown> | null };
 }
 
 const G0 = 9.80665;
+
+/** Which controller the S1 line is computed for: the Drive block's (sine / computed PWM variant) or
+ *  an EXTERNAL ESC (no board model; its continuous bus current is typed, else the model's bench ESC). */
+export type S1Controller = 'drive' | 'external';
+
+export const EXTERNAL_ESC = 'external_esc';
+
+/** The `drive` and the ESC bus current of the S1 request.  A blank / non-positive typed current sends
+ *  none, so the backend takes the model's bench ESC (or reports the limit as unknown). */
+export function s1DriveRequest(ctrl: S1Controller, driveBlockId: string, escBusTxt: string | null | undefined
+): { drive: string; escBusA: number | null } {
+  if (ctrl !== 'external') return { drive: driveBlockId, escBusA: null };
+  const v = parseFloat(String(escBusTxt ?? '').replace(',', '.'));
+  return { drive: EXTERNAL_ESC, escBusA: Number.isFinite(v) && v > 0 ? v : null };
+}
 
 /** The locale key of what stops the speed. */
 export function s1BindingKey(b: S1Binding | null | undefined): string {
@@ -90,6 +121,10 @@ const FLAG_KEYS: Record<string, string> = {
   thermal_uncalibrated: 'configurePropeller.s1FlagThermalUncalibrated',
   thermal_extrapolated: 'configurePropeller.s1FlagCalibratedOutside',
   slipstream_uncalibrated: 'configurePropeller.s1FlagSlipstream',
+  slipstream_bench: 'configurePropeller.s1FlagSlipstreamBench',
+  slipstream_transferred: 'configurePropeller.s1FlagSlipstreamTransferred',
+  esc_external: 'configurePropeller.s1FlagEscExternal',
+  esc_loss_omitted: 'configurePropeller.s1FlagEscLoss',
   prop_extrapolated: 'configurePropeller.s1FlagExtrapolated',
   prop_power_estimated: 'configurePropeller.s1FlagEstimated',
   below_loss_grid_speed: 'configurePropeller.s1FlagBelowGrid',

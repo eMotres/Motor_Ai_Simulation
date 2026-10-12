@@ -52,7 +52,7 @@ import {
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
 import { fetchPropellers, fetchSeries, fetchPropellerS1 } from '../../lib/propellerApi';
-import { s1Line, type S1Result } from '../../lib/configuratorPropellerS1';
+import { s1Line, s1DriveRequest, type S1Controller, type S1Result } from '../../lib/configuratorPropellerS1';
 import { activeDuty } from '../../lib/dutySettings';
 import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
 import { estimateThermal } from '../../lib/thermalEstimate';
@@ -1164,7 +1164,17 @@ const ConfiguratorPanel: React.FC = () => {
   const s1Config = baseConfig ?? currentContext?.cooling?.config ?? null;
   // ... with the drive picked in the Drive block (Sine, or the PWM variant: its controller's continuous
   // current binds) and the pack the Battery block shows (its minimum voltage binds the voltage)
-  const s1Drive = driveOn && variant ? String(variant.id) : 'sine';
+  // ... or for an EXTERNAL ESC (the one on the bench): no board model, its continuous bus current typed
+  // (blank = the model's bench ESC)
+  const [s1Ctrl, setS1Ctrl] = useState<S1Controller>('drive');
+  const [s1EscTxt, setS1EscTxt] = useState('');
+  const [s1EscDeb, setS1EscDeb] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setS1EscDeb(s1EscTxt), 400);
+    return () => clearTimeout(t);
+  }, [s1EscTxt]);
+  const s1Req = s1DriveRequest(s1Ctrl, driveOn && variant ? String(variant.id) : 'sine', s1EscDeb);
+  const s1Drive = s1Req.drive;
   const s1PackMin = packWindow?.min ?? null;
   const s1PackMax = packWindow?.max ?? null;
   const [s1, setS1] = useState<S1Result | null>(null);
@@ -1173,9 +1183,9 @@ const ConfiguratorPanel: React.FC = () => {
     if (!propellerCoolingActive || !propId || !s1Die || !s1Config) return;
     let dead = false;
     const pack = s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null;
-    void fetchPropellerS1(propId, s1Die, s1Config, ambient, s1Drive, pack).then((r) => { if (!dead) setS1(r); });
+    void fetchPropellerS1(propId, s1Die, s1Config, ambient, s1Drive, pack, s1Req.escBusA).then((r) => { if (!dead) setS1(r); });
     return () => { dead = true; };
-  }, [propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax]);
+  }, [propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
   const s1Text: { text: string; tip: string } | null = (() => {
@@ -1201,8 +1211,11 @@ const ConfiguratorPanel: React.FC = () => {
         ...(L.cooling && drv ? [tx('configurePropeller.s1TipSystem', {
           factor: L.cooling.slipstream_factor == null ? '—' : fmt(L.cooling.slipstream_factor, 2),
           position: L.cooling.slipstream_position ?? '—',
-          drive: drv.kind === 'sine' ? tx('configurePropeller.s1DriveSine') : drv.id,
+          drive: drv.kind === 'sine' ? tx('configurePropeller.s1DriveSine') : drv.kind === 'external' ? (drv.name ?? tx('configurePropeller.s1EscExternal')) : drv.id,
           ictl: drv.I_cont_A == null ? '—' : fmt(drv.I_cont_A, 1) })] : []),
+        ...(drv?.kind === 'external' ? [tx('configurePropeller.s1TipEsc', {
+          ibus: drv.I_bus_cont_A == null ? '—' : fmt(drv.I_bus_cont_A, 0),
+          ibat: L.battery_current_A == null ? '—' : fmt(L.battery_current_A, 1) })] : []),
         ...s1Info.flagKeys.map((k) => tx(k))].join(' '),
     };
   })();
@@ -1817,6 +1830,27 @@ const ConfiguratorPanel: React.FC = () => {
                   style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 13, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
                 <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>°C</Box>
               </Box>
+              )}
+              {cooled && propellerCoolingActive && (
+                <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: 0.5, flexWrap: 'nowrap', minHeight: 24 }}>
+                  <Typography sx={{ ...LABEL, flex: '0 0 auto' }} title={tx('configurePropeller.s1CtrlTip')}>{tx('configurePropeller.s1Ctrl')}</Typography>
+                  <select value={s1Ctrl} aria-label={tx('configurePropeller.s1Ctrl')} title={tx('configurePropeller.s1CtrlTip')}
+                    onChange={(e) => setS1Ctrl(e.target.value === 'external' ? 'external' : 'drive')}
+                    style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, padding: '1px 4px', flex: '0 1 auto', minWidth: 0 }}>
+                    <option value="drive" style={{ color: '#000' }}>{tx('configurePropeller.s1CtrlDrive')}</option>
+                    <option value="external" style={{ color: '#000' }}>{tx('configurePropeller.s1EscExternal')}</option>
+                  </select>
+                  {s1Ctrl === 'external' && (<>
+                    <input type="number" step={1} min={1} value={s1EscTxt} aria-label={tx('configurePropeller.s1EscBus')}
+                      placeholder={s1?.external_esc_default?.i_bus_cont_A != null ? String(s1.external_esc_default.i_bus_cont_A) : ''}
+                      title={s1?.external_esc_default?.i_bus_cont_A != null
+                        ? tx('configurePropeller.s1EscBusTipDefault', { name: s1.external_esc_default.name ?? '', amps: fmt(s1.external_esc_default.i_bus_cont_A, 0), basis: s1.external_esc_default.basis ?? '' })
+                        : tx('configurePropeller.s1EscBusTip')}
+                      onChange={(e) => setS1EscTxt(e.target.value)}
+                      style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
+                    <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>{tx('configurePropeller.s1EscBusUnit')}</Box>
+                  </>)}
+                </Box>
               )}
               {cooled && s1Text && (
                 <Typography title={s1Text.tip} sx={{ fontSize: 12, color: 'var(--text-2)', mt: 0.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'help' }}>

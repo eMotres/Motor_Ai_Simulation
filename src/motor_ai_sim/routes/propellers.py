@@ -166,7 +166,13 @@ def get_s1(prop_id: str,
            factor: Optional[float] = Query(default=None, gt=0.0, le=1.5),
            n: int = Query(default=41, ge=5, le=201, description="scan points"),
            drive: str = Query(default="sine", min_length=1, max_length=100,
-                              description="'sine' or a computed PWM variant id (Configure's selected drive)"),
+                              description="'sine', a computed PWM variant id (Configure's selected drive) "
+                                          "or 'external_esc'"),
+           esc_i_bus_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0,
+                                                    description="external_esc: continuous bus current [A]; "
+                                                                "default the model's bench ESC"),
+           esc_i_phase_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0,
+                                                      description="external_esc: continuous phase current [A rms]"),
            board_cooling: str = Query(default="favourable", description="favourable | weak | hot_motor"),
            pack_v_min: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
                                                description="pack minimum voltage [V]; default the passport's"),
@@ -204,7 +210,8 @@ def get_s1(prop_id: str,
         out = s1.s1_rating(model, prop, ambient_c=ambient_c, altitude_m=altitude_m,
                            position=position, factor=factor, n_points=n, drive=drive,
                            board_cooling=board_cooling, pack_v_min=pack_v_min, pack_v_max=pack_v_max,
-                           pack_i_max_A=pack_i_max_A)
+                           pack_i_max_A=pack_i_max_A, esc_i_bus_A=esc_i_bus_max_A,
+                           esc_i_phase_A=esc_i_phase_max_A)
     except s1.S1ModelNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     except (s1.S1Error, pp.PropellerDataError, ValueError) as exc:

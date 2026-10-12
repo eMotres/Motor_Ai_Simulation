@@ -2761,7 +2761,7 @@
   "validation_domain": null,
   "form": "open",
   "basis": "fitted 2026-10-11 to 3 coupled EM-thermal FEM anchors (propeller as load and cooling, air_speed_source propeller, slipstream factor 0.4 (behind_hub), the machine's own frame and Simulation settings, 25 C air): the lumped network fed each anchor's own losses, least squares on the winding hot spot, hottest magnet and stator mean (weights {'winding': 1.0, 'magnet': 1.0, 'housing': 0.5})",
-  "slipstream_factor_basis": "kept at 0.4 (behind_hub): the anchors use the same slipstream model, so they cannot constrain it",
+  "slipstream_factor_basis": "transferred 2026-10-12 from the L12 bench calibration (factor 0.53): same die 'CIANO14 40 new', same open frame, stator holder and coil exposure, so the same air at the motor relative to the propeller wake is assumed. Not measured on the L20: its propellers are larger (P13x4.4), which puts the 40 mm motor deeper into the hub's low-velocity core, so the true factor may be lower.",
   "anchors": [
    {
     "file": "anchor_L20_tmotor_p13x4_4_n6301.json",
@@ -2853,6 +2853,8 @@
      "housing": 95.8882802247766
     }
    }
-  ]
+  ],
+  "slipstream_factor": 0.53,
+  "slipstream_factor_status": "transferred"
  }
 }

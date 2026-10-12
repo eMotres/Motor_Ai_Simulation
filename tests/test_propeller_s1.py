@@ -592,6 +592,74 @@ def test_battery_current_binds_only_when_given(tmp_path):
     assert b["battery_current_A"] == pytest.approx(b["electrical_power_W"] / 300.0, rel=1e-9)
 
 
+def test_external_esc_bus_current_binds_and_says_what_it_omits(tmp_path):
+    """An ESC that is none of the passport's boards: its continuous BUS current (the
+    user's, else the model's bench ESC) is checked against the battery current at the
+    pack minimum; its losses and the motor PWM extra are unknown and flagged."""
+    prop = _prop(tmp_path)
+    m = _sys_model(external_esc={"name": "bench ESC", "i_bus_cont_A": 1000.0, "basis": "bench run"})
+    hot = dict(winding_limit_c=400.0, magnet_limit_c=400.0)
+    free = _run(m, prop, drive=s1.EXTERNAL_ESC, **hot)
+    F = free["limit"]
+    assert free["drive"]["kind"] == "external" and free["drive"]["I_bus_cont_A"] == 1000.0
+    assert free["drive"]["source"] == "model" and free["drive"]["name"] == "bench ESC"
+    assert F["binding"] != "controller" and F["controller_limit_A"] is None
+    assert {"esc_external", "esc_loss_omitted", "pwm_omitted"} <= set(F["flags"])
+    assert "drive_unknown" not in F["flags"] and F["qualification"]["checks"]["controller"] == "checked"
+    assert F["qualification"]["losses"]["controller"] == "unknown (external ESC)"
+    # the bus current: motor input over the pack minimum (no ESC loss known)
+    assert F["battery_current_A"] == pytest.approx(F["electrical_power_W"] / 300.0, rel=1e-9)
+    lim = 0.5 * F["battery_current_A"]
+    r = _run(m, prop, drive=s1.EXTERNAL_ESC, esc_i_bus_A=lim, **hot)
+    L = r["limit"]
+    assert r["drive"]["source"] == "caller" and r["drive"]["I_bus_cont_A"] == lim
+    assert L["binding"] == "controller" and L["battery_current_A"] <= lim + 1e-6
+    assert L["controller_bus_limit_A"] == lim and L["rpm"] < F["rpm"]
+    row = s1.solve_point(m, prop, 5000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(m),
+                         drive=s1.resolve_drive(m, s1.EXTERNAL_ESC))
+    assert row["controller_loss_W"] is None and row["losses_W"]["pwm_extra"] == 0.0
+    # a phase-current rating alone binds on the phase current
+    ph = _run(m, prop, drive=s1.EXTERNAL_ESC, esc_i_phase_A=10.0, **hot)["limit"]
+    assert ph["binding"] == "controller" and ph["current_A"] <= 10.0 + 1e-6
+    # no ESC current anywhere: the limit is motor-only and says so
+    bare = _run(_sys_model(), prop, drive=s1.EXTERNAL_ESC, **hot)
+    assert bare["drive"]["I_bus_cont_A"] is None and "drive_unknown" in bare["limit"]["flags"]
+    with pytest.raises(s1.S1Error):
+        s1.resolve_drive(m, s1.EXTERNAL_ESC, esc_i_bus_A=-5.0)
+    with pytest.raises(s1.S1Error):
+        _sys_model(external_esc={"i_bus_cont_A": 0.0})
+    assert free["drives_available"][-1] == s1.EXTERNAL_ESC and free["external_esc_default"]["name"] == "bench ESC"
+
+
+def test_model_slipstream_factor_is_the_default_air_and_is_qualified(tmp_path):
+    prop = _prop(tmp_path)
+    base = {"housing_film_factor": 1.0}
+    cal = {**base, "slipstream_factor": 0.8, "slipstream_factor_status": "bench",
+           "slipstream_factor_basis": "fitted to two bench runs"}
+    m, plain = _model(thermal_calibration=cal), _model(thermal_calibration=base)
+    kw = dict(ambient_c=25.0, rho=1.2, lims=s1.limits_of(m))
+    row = s1.solve_point(m, prop, 6000.0, **kw)
+    assert row["slipstream_factor"] == 0.8 and row["slipstream_source"] == "model"
+    assert row["slipstream_position"] == "calibrated"
+    ref = s1.solve_point(plain, prop, 6000.0, **kw)
+    assert ref["slipstream_factor"] == pp.POSITION_FACTORS[pp.DEFAULT_POSITION] and ref["slipstream_source"] == "default"
+    assert row["air_speed_ms"] == pytest.approx(ref["air_speed_ms"] * 0.8 / 0.4, rel=1e-9)
+    assert row["T_winding_C"] < ref["T_winding_C"]
+    # the caller's factor or position wins over the model's
+    assert s1.solve_point(m, prop, 6000.0, factor=0.3, **kw)["slipstream_factor"] == 0.3
+    assert s1.solve_point(m, prop, 6000.0, position="disc_plane", **kw)["slipstream_factor"] == 0.5
+    L = _run(m, prop)["limit"]
+    assert "slipstream_bench" in L["flags"] and "slipstream_uncalibrated" not in L["flags"]
+    q = L["qualification"]["slipstream"]
+    assert q["calibrated"] is True and q["status"] == "bench" and q["basis"] == "fitted to two bench runs"
+    assert L["cooling"]["slipstream_source"] == "model"
+    t = _run(_model(thermal_calibration={**cal, "slipstream_factor_status": "transferred"}), prop)["limit"]
+    assert "slipstream_transferred" in t["flags"] and "slipstream_bench" not in t["flags"]
+    assert "slipstream_uncalibrated" in _run(plain, prop)["limit"]["flags"]
+    with pytest.raises(s1.S1Error):
+        _model(thermal_calibration={**base, "slipstream_factor": 2.0})
+
+
 def test_voltage_is_rechecked_at_minimum_pack_voltage_and_hot_flux():
     m = _sys_model()
     r = s1.resistance(m, 20.0)
@@ -753,19 +821,35 @@ def test_shipped_models_carry_the_system_data_and_qualify_their_limits():
     assert l12["schema"] == s1.SCHEMA and "si_48k" in l12["drives"]
     assert l12["drives"]["si_48k"]["i_board_limit_A"]["favourable"] == pytest.approx(26.1, abs=0.01)
     cal = l12["thermal_calibration"]
-    assert cal["fit_domain"]["rpm"] == [5935.0, 9751.0] and cal["validation_domain"]["rpm"] == [11370.0, 11370.0]
+    # 2026-10-12: the network refitted with 4 FEM anchors at the two bench points (up to 19.8 m/s)
+    assert cal["fit_domain"]["rpm"] == [5935.0, 14400.0] and cal["validation_domain"]["rpm"] == [11370.0, 11370.0]
+    assert cal["fit_domain"]["air_speed_ms"][1] == pytest.approx(19.8, abs=0.1)
+    # the slipstream factor fitted to the two bench runs is the S1's default air
+    assert cal["slipstream_factor"] == pytest.approx(0.53) and cal["slipstream_factor_status"] == "bench"
+    assert [p["T_measured_C"] for p in cal["bench"]["points"]] == [150.0, 201.0]
+    assert all(abs(p["model_T_winding_C"] - p["T_measured_C"]) < 5.0 for p in cal["bench"]["points"])
     prop = pp.get_propeller("tmotor_fpv_10x5")
     for drive in ("sine", "si_48k"):
         L = s1.s1_rating(l12, prop, drive=drive)["limit"]
         assert L["binding"] == "controller" and 25.0 < L["current_A"] <= 26.11
-        assert L["drive_feasibility"] == "checked" and "slipstream_uncalibrated" in L["flags"]
+        assert L["drive_feasibility"] == "checked" and "slipstream_bench" in L["flags"]
+        assert "slipstream_uncalibrated" not in L["flags"] and L["cooling"]["slipstream_factor"] == pytest.approx(0.53)
         assert L["qualification"]["checks"]["voltage_min_pack"] == "checked"
-    # motor-only (no controller): the winding limit lies beyond the held-out 11 370 rpm check
-    bare = {k: v for k, v in l12.items() if k != "sine_controller"}
+    # motor-only (no controller): beyond the held-out 11 370 rpm check, inside the refitted domain
+    bare = {k: v for k, v in l12.items() if k not in ("sine_controller", "external_esc")}
     mo = s1.s1_rating(bare, prop)["limit"]
-    assert mo["rpm"] > 11370.0 and "thermal_extrapolated" in mo["flags"] and "drive_unknown" in mo["flags"]
-    l20 = s1.s1_rating(s1.load_model("CIANO14 40 new", "L20"), pp.get_propeller("tmotor_p13x4_4"))["limit"]
-    assert l20["lower_bound"] and l20["range_end"] == "propeller_data"
+    assert mo["rpm"] > 11370.0 and "thermal_extrapolated" not in mo["flags"] and "drive_unknown" in mo["flags"]
+    # the bench system: propeller HQ1050-3, the bench's ESC (55 A bus), 24.6 V -> near the 1 kW record
+    assert l12["external_esc"]["i_bus_cont_A"] == 55.0
+    b = s1.s1_rating(l12, pp.get_propeller("motres_bench_hq1050_3"), drive=s1.EXTERNAL_ESC,
+                     pack_v_min=24.6, pack_v_max=25.2)
+    B = b["limit"]
+    assert b["drive"]["source"] == "model" and 13500.0 < B["rpm"] < 14800.0
+    assert 900.0 < B["shaft_power_W"] < 1100.0 and B["battery_current_A"] < 55.0
+    l20m = s1.load_model("CIANO14 40 new", "L20")
+    assert l20m["thermal_calibration"]["slipstream_factor_status"] == "transferred" and "external_esc" not in l20m
+    l20 = s1.s1_rating(l20m, pp.get_propeller("tmotor_p13x4_4"))["limit"]
+    assert l20["lower_bound"] and l20["range_end"] == "propeller_data" and "slipstream_transferred" in l20["flags"]
     l13 = s1.load_model("CIANO28 85 20SW1200", "L13")
     assert l13["loss_groups"]["mech"]["status"] == "omitted"
     L = s1.s1_rating(l13, pp.get_propeller("tmotor_g32x11"))["limit"]
@@ -779,6 +863,11 @@ def test_route_takes_the_drive_and_the_pack(client, wired):
     j = client.get("/api/propellers/syn_s1/s1", params={**q, "drive": "pwm_a", "pack_v_min": 280,
                                                          "pack_v_max": 400, "pack_i_max_A": 50}).json()
     assert j["drive"]["id"] == "pwm_a" and j["pack"]["v_min"] == 280.0 and j["pack"]["i_max_A"] == 50.0
-    assert j["drives_available"] == [s1.SINE, "pwm_a"]
+    assert j["drives_available"] == [s1.SINE, "pwm_a", s1.EXTERNAL_ESC]
+    e = client.get("/api/propellers/syn_s1/s1", params={**q, "drive": s1.EXTERNAL_ESC,
+                                                        "esc_i_bus_max_A": 42.5}).json()
+    assert e["drive"]["kind"] == "external" and e["drive"]["I_bus_cont_A"] == 42.5
+    assert client.get("/api/propellers/syn_s1/s1", params={**q, "drive": s1.EXTERNAL_ESC,
+                                                           "esc_i_bus_max_A": -1}).status_code == 422
     assert client.get("/api/propellers/syn_s1/s1", params={**q, "drive": "nope"}).status_code == 422
     assert client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "arctic"}).status_code == 422

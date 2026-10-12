@@ -413,10 +413,15 @@ def task_propanchor(work: Path, a) -> None:
     R_hot = float(lp["R_hot_ohm"])
     model = S1.load_model(DIE, cfg)
     prop = PP.get_propeller(pid)
-    rho = PP.air_density(temp_c=ANCHOR_AMBIENT_C)
-    s1row = S1.solve_point(model, prop, n, ambient_c=ANCHOR_AMBIENT_C, rho=rho,
-                           lims=S1.limits_of(model))
+    amb = float(a.ambient) if a.ambient is not None else ANCHOR_AMBIENT_C
+    rho = PP.air_density(temp_c=amb)
+    s1row = S1.solve_point(model, prop, n, ambient_c=amb, rho=rho,
+                           lims=S1.limits_of(model), factor=a.factor)
     q_em = float(s1row["torque_em_Nm"])
+    w = 2.0 * math.pi * n / 60.0
+    if a.shaft_w:
+        # a BENCH point: the measured shaft power is the load (not the catalogue curve)
+        q_em = float(a.shaft_w) / w + S1._mech_W(model, n) / w
     k_T = float(model["torque_factor"])
     cfgp = os.environ.get("MOTOR_AI_SIM_CONFIG")
     simset = dict((yaml.safe_load(open(cfgp, encoding="utf-8")) or {}).get("simulation") or {}) \
@@ -424,7 +429,20 @@ def task_propanchor(work: Path, a) -> None:
     flags = {k: bool(simset.get(k, True)) for k in ("eddy", "rotor_eddy", "demag")}
     steps = int(simset.get("steps_per_period") or snap["rated_duty"]["steps_per_period"])
     frame = str(a.frame or "open")
-    th = anchor_panel(simset, pid, frame=frame)
+    th = anchor_panel(simset, pid, frame=frame, ambient_c=amb)
+    air_override = None
+    if a.factor is not None or a.thrust_g:
+        # another slipstream factor (or the bench thrust): the same air mode with the
+        # air speed typed in, v = factor · sqrt(2T/(rho A)) — what the propeller source
+        # computes at factor 0.4; bore none and the frame as above (identical solve)
+        f = float(a.factor) if a.factor is not None else PP.position_factor()[0]
+        T = (float(a.thrust_g) * PP.G0 / 1000.0) if a.thrust_g else PP.thrust_N(prop, n, rho)
+        v = f * math.sqrt(2.0 * T / (rho * prop.disc_area_m2))
+        th.update(airSpeedSource="manual", airSpeed="%.4f" % v)
+        th.pop("propellerId", None)
+        air_override = {"slipstream_factor": f, "thrust_N": T, "rho_kg_m3": rho,
+                        "disc_area_m2": prop.disc_area_m2, "air_speed_ms": v,
+                        "thrust_source": "bench (--thrust-g)" if a.thrust_g else "propeller curve"}
     th["maxIter"] = str(int(a.max_iter))
     # The propeller-context gate binds a Configure selection to a signed-in user's
     # loaded motor; this sandbox has neither, and the propeller is named here.
@@ -432,6 +450,9 @@ def task_propanchor(work: Path, a) -> None:
     set_request_materials({"assignment": _materials(snap), "materials": {}})
     m, rd = snap["mesh"], snap["rated_duty"]
     I = float(a.current) if a.current else float(s1row["current_A"] or 0.0)
+    if a.shaft_w and not a.current:
+        tm = float(s1row.get("T_magnet_C") or snap["temperatures"]["hot_magnet_c"])
+        I = float(S1.current_for_torque(model, n, q_em, tm)[0] or 0.0)
     if I <= 0:
         raise SystemExit("no S1 current at %g rpm (%s)" % (n, s1row.get("binding")))
     # start from the S1 model's temperatures, kept inside the material cards (the
@@ -497,9 +518,11 @@ def task_propanchor(work: Path, a) -> None:
              "coupling": cpl, "summary": ((out or {}).get("transient") or {}).get("summary"),
              "body": {kk: v for kk, v in body.items() if kk not in ("geo", "mat")}}
         passes.append(p)
-        _dump(_out(work, "anchor_%s_%s_n%.0f" % (M, pid, n)),
+        _dump(_out(work, "anchor_%s_%s_n%.0f%s" % (M, pid, n, ("_" + a.tag) if a.tag else "")),
               {"task": "propanchor", "machine": M, "die": DIE, "config": cfg, "propeller": pid,
-               "rpm": n, "ambient_c": ANCHOR_AMBIENT_C, "thermal_settings": th,
+               "rpm": n, "ambient_c": amb, "thermal_settings": th,
+               "bench_load": ({"shaft_W": float(a.shaft_w), "Q_em_Nm": q_em} if a.shaft_w else None),
+               "air_override": air_override,
                "sim_flags": flags, "steps_per_period": steps, "k_T": k_T,
                "stage_a_point": s1row, "passes": passes})
         if err or T3 is None or abs(T3 / q_em - 1.0) <= ANCHOR_TORQUE_TOL or k == 1:
@@ -912,6 +935,15 @@ def main(argv=None) -> None:
     ap.add_argument("--current", type=float, default=None,
                     help="propanchor: phase current (default: the S1 model's at --rpm)")
     ap.add_argument("--frame", default=None, help="propanchor: housed | open (default open)")
+    ap.add_argument("--factor", type=float, default=None,
+                    help="propanchor: slipstream factor (default the propeller's behind_hub 0.4)")
+    ap.add_argument("--ambient", type=float, default=None,
+                    help="propanchor: air temperature, C (default %g)" % ANCHOR_AMBIENT_C)
+    ap.add_argument("--shaft-w", type=float, default=None,
+                    help="propanchor: bench shaft power, W (the load; default the propeller curve)")
+    ap.add_argument("--thrust-g", type=float, default=None,
+                    help="propanchor: bench thrust, g (the slipstream; default the propeller curve)")
+    ap.add_argument("--tag", default=None, help="propanchor: suffix of the record name")
     ap.add_argument("rest", nargs="*")
     a = ap.parse_args(argv)
     _use_spec(a.spec)

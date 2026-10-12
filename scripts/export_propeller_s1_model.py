@@ -492,6 +492,9 @@ def _anchor_row(path: str, model: Dict[str, Any]) -> Dict[str, Any]:
     n, amb = float(a["rpm"]), float(a["ambient_c"])
     prop = PP.get_propeller(a["propeller"])
     op = PP.operating_point(prop, n, PP.air_density(temp_c=amb))
+    if a.get("air_override"):
+        # a run with another slipstream factor / the bench thrust: the air speed it solved with
+        op = {**op, "air_speed_ms": float(a["air_override"]["air_speed_ms"])}
     h = S1.housing_film(op["air_speed_ms"], amb, float(model["thermal_geom"]["statorOD_mm"]) / 1000.0)
     hb = (p.get("cooling") or {}).get("heat_budget") or {}
     em = (p.get("coupling") or {}).get("em") or {}
@@ -599,6 +602,18 @@ def calibrate(args) -> Dict[str, Any]:
         "slipstream_factor_basis": args.slipstream_basis,
         "anchors": table,
     }
+    bench = _load(args.bench) if getattr(args, "bench", None) else None
+    if bench:
+        # the slipstream factor fitted to (or transferred from) bench runs: the S1 uses it
+        # when the caller names no factor (propeller_s1.model_slipstream)
+        tc = m["thermal_calibration"]
+        tc["slipstream_factor"] = float(bench["slipstream_factor"])
+        tc["slipstream_factor_status"] = str(bench.get("status") or "bench")
+        tc["slipstream_factor_basis"] = str(bench["basis"])
+        if bench.get("bench") is not None:
+            tc["bench"] = bench["bench"]
+    if getattr(args, "external_esc", None):
+        m["external_esc"] = _load(args.external_esc)
     labels = [x for x in (m.get("labels") or []) if not x.startswith("thermal network calibrated")]
     labels.append("thermal network calibrated to coupled FEM anchors (%s)" % args.date)
     m["labels"] = labels
@@ -618,6 +633,10 @@ def main(argv=None) -> int:
     ap.add_argument("--slipstream-factor", default="0.4 (behind_hub)")
     ap.add_argument("--slipstream-basis", default="kept at 0.4 (behind_hub): the anchors use the same "
                                                   "slipstream model, so they cannot constrain it")
+    ap.add_argument("--bench", help="calibrate: JSON {slipstream_factor, status bench|transferred, basis, bench} "
+                                    "- the factor fitted to bench runs (the S1's default air)")
+    ap.add_argument("--external-esc", help="calibrate: JSON {name, i_bus_cont_A, i_phase_cont_A, basis, bus_v} "
+                                           "- the ESC the configuration ran on the bench")
     ap.add_argument("--store", help="passport store record (drive variants) for the full kind")
     ap.add_argument("--variant", help="drive variant id (default: the first, Configure's default)")
     ap.add_argument("--catalog")

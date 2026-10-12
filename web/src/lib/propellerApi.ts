@@ -56,13 +56,16 @@ const _s1 = new Map<string, Promise<S1Result | null>>();
  *  global fetch adds the token), for the selected drive (`sine` or a computed PWM variant id) and
  *  the pack's voltage window (null = the passport's own pack).  Cached per request; a failure is not. */
 export function fetchPropellerS1(id: string, die: string, config: string, ambientC: number,
-                                 drive = 'sine', pack: { min: number; max: number } | null = null
+                                 drive = 'sine', pack: { min: number; max: number } | null = null,
+                                 escBusA: number | null = null
 ): Promise<S1Result | null> {
-  const key = `${id}|${die}|${config}|${ambientC.toFixed(1)}|${drive}|${pack ? `${pack.min.toFixed(2)}-${pack.max.toFixed(2)}` : ''}`;
+  const key = `${id}|${die}|${config}|${ambientC.toFixed(1)}|${drive}|${pack ? `${pack.min.toFixed(2)}-${pack.max.toFixed(2)}` : ''}|${escBusA ?? ''}`;
   const hit = _s1.get(key);
   if (hit) return hit;
   const q = new URLSearchParams({ die, config, ambient_c: String(ambientC), drive });
   if (pack) { q.set('pack_v_min', String(pack.min)); q.set('pack_v_max', String(pack.max)); }
+  // an external ESC: its continuous bus current (none = the model's bench ESC)
+  if (escBusA != null) q.set('esc_i_bus_max_A', String(escBusA));
   const p = fetch(`${API}/api/propellers/${encodeURIComponent(id)}/s1?${q}`, { cache: 'no-store' })
     .then((r) => (r.ok ? (r.json() as Promise<S1Result>) : null))
     .catch(() => null)

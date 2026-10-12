@@ -282,7 +282,7 @@ t('the panel: ONE temperature row in every cooling mode, the still-air estimate 
   assert.equal((panel.match(/tempTiles\.map\(renderTemp\)/g) || []).length, 1);                              // exactly one row
   assert.match(panel, /if \(optionalPropellerCooling\) return \{ h_Wm2K: airH\(0, D\)/);                       // still air (Robotics) at the natural-convection floor
   assert.match(panel, /<CoolingControls diameterMm=/);                                                         // the cooling basis inputs moved into Operating point
-  assert.match(panel, /const propLoad = propellerOnly &&/);                                                     // mixed mode preserves manual current
+  assert.match(panel, /const propLoad = propellerCoolingActive &&/);                                             // the propeller is the load whenever its cooling is active
   assert.match(panel, /currentForTorque\(propPoint\?\.torque_Nm \?\? null, torqueAtI\(knobs\), ranges\.I_A\.max\)/);
   assert.match(panel, /disabled=\{propLoad\}/);                                                              // the current is shown, not typed, in propeller mode
   assert.match(panel, /updateCool\(\{ load: v \}\)/);                                                       // the manual-load toggle
@@ -290,6 +290,24 @@ t('the panel: ONE temperature row in every cooling mode, the still-air estimate 
   assert.match(panel, /zone=\{propLoad \? null : zones\.I\}/);                                               // and on the current knob in manual mode
   // power and efficiency go red on a refusal and carry the red line
   assert.equal((panel.match(/absLevel=\{propBad \? 'bad' : undefined\}/g) || []).length, 2);
+});
+
+t('one identical template: the propeller is the LOAD whenever its cooling is ACTIVE, never per die', () => {
+  // owner 2026-10-12: "one identical Configure template for every motor; differences only from
+  // data" — a mixed Robotics/propeller machine (D85) in propeller mode behaves exactly like the
+  // propeller-only one (L12): LOAD toggle (default Propeller), current from the propeller, the
+  // PropellerCurves chart with its S1 marker.  Robotics / still air: manual load, chart hidden.
+  const panel = readFileSync(join(HERE, '..', '..', 'components', 'compare', 'ConfiguratorPanel.tsx'), 'utf8');
+  assert.match(panel, /const propLoad = propellerCoolingActive && \(coolChoice\.load \?\? 'prop'\) === 'prop'/);
+  assert.match(panel, /\{propellerCoolingActive && <ToggleButtonGroup exclusive size="small" value=\{propLoad \? 'prop' : 'manual'\}/);
+  assert.match(panel, /disabled=\{!propLoad\}/);                                                    // the picker follows the load state
+  assert.doesNotMatch(panel, /propellerOnly &&/);                                                   // no render branch keys on the die shape
+  assert.match(panel, /\{cooled && propLoad && \(\s*<Box sx=\{\{ px: 2, pb: 1\.5 \}\}>\s*<PropellerCurves/);
+  assert.match(panel, /s1Rpm=\{s1Info\?\.kind === 'limit' \? s1Info\.rpm : null\}/);
+  assert.match(panel, /if \(!propellerCoolingActive \|\| !propId \|\| !s1Die \|\| !s1Config\) return;/);   // S1 only while the propeller cools
+  assert.match(panel, /if \(!propellerCoolingActive \|\| !propLoad \|\| !ctxDone/);                // the prop-rpm seed uses the same rule
+  assert.match(panel, /tx\(propLoad \? 'configurePropeller\.pickerTip' : 'configurePropeller\.coolingPickerTip'\)/);
+  assert.match(panel, /tx\(propLoad \? 'configurePropeller\.ambientTip' : 'configurePropeller\.coolingAmbientTip'\)/);
 });
 
 t('the zone calculation is cheap enough to follow the sliders (48 samples x a bisection)', () => {

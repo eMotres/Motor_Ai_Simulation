@@ -441,8 +441,13 @@ const ConfiguratorPanel: React.FC = () => {
       try {
         const rawChoice = localStorage.getItem(PROP_CHOICE_LS);
         const choiceKey = coolChoiceKey(identity, m?.id ?? refId, buildPreset?.config);
-        propLoadForMotor = isPropellerCooled(matchingCtx?.cooling)
-          && (readCoolChoice(rawChoice, choiceKey).load ?? 'prop') === 'prop';
+        const savedChoice = readCoolChoice(rawChoice, choiceKey);
+        // the SAME load rule as `propLoad` below (owner 2026-10-12: one identical Configure
+        // template for every motor, differences only from data): the propeller is the load
+        // whenever its cooling is ACTIVE — a mixed Robotics/propeller machine included
+        const propCoolingActiveHere = isPropellerCooled(matchingCtx?.cooling)
+          || (hasPropellerCooling(matchingCtx?.cooling) && (savedChoice.cooling ?? 'robotics') === 'propeller');
+        propLoadForMotor = propCoolingActiveHere && (savedChoice.load ?? 'prop') === 'prop';
       } catch { propLoadForMotor = isPropellerCooled(matchingCtx?.cooling); }
       const useCatalogPropRpm = propLoadForMotor && propRpmDefault.rpm != null && propRpmDefault.rpm > 0;
       const matchedId = m?.id ? (catalogIdOf(m.id) ?? m.id) : refId;
@@ -1052,9 +1057,10 @@ const ConfiguratorPanel: React.FC = () => {
   const propId = hasPropellerControls ? effectivePropeller(coolChoice, allowedProps, propDefaultFor(baseConfig)) : null;
   const propSummary = cooled ? (allowedProps.find((x) => x.id === propId) ?? null) : null;
   const ambient = coolChoice.ambient ?? DEFAULT_AMBIENT_C;
-  // Only a machine cooled solely by its propeller may use it as the load. Mixed
-  // Robotics/propeller machines always retain the engineer's current setting.
-  const propLoad = propellerOnly && (coolChoice.load ?? 'prop') === 'prop';
+  // The propeller is the load whenever the propeller cooling is ACTIVE (owner 2026-10-12:
+  // one identical Configure template for every motor — differences only from data, never
+  // from the die).  In Robotics / still-air mode the load is the engineer's own current.
+  const propLoad = propellerCoolingActive && (coolChoice.load ?? 'prop') === 'prop';
   const selectedDuty = activeDuty();
   const dutyPreset = presetOfBuild(currentContext?.presets ?? [], refKnobs ?? baseKnobs(p));
   const propRpmDefault = propellerDutyRpmDefault(dutyPreset, selectedDuty);
@@ -1064,14 +1070,14 @@ const ConfiguratorPanel: React.FC = () => {
   // context answers, seed Propeller mode exactly once for that machine/duty.
   // The loaded-geometry path above normally does this first.
   useEffect(() => {
-    if (!propellerOnly || !propLoad || !ctxDone || !currentContext || !dutyPreset
+    if (!propellerCoolingActive || !propLoad || !ctxDone || !currentContext || !dutyPreset
         || !propRpmSeedKey || propRpmDefault.rpm == null || propRpmDefault.rpm <= 0
         || propRpmSeedRef.current === propRpmSeedKey) return;
     propRpmSeedRef.current = propRpmSeedKey;
     propRpmManualEditRef.current = '';
     setKnobs((k) => ({ ...k, rpm: propRpmDefault.rpm! }));
     setRefKnobs((k) => ({ ...(k ?? baseKnobs(p)), rpm: propRpmDefault.rpm! }));
-  }, [propellerOnly, propLoad, ctxDone, currentContext, dutyPreset, propRpmSeedKey, propRpmDefault.rpm, p]);
+  }, [propellerCoolingActive, propLoad, ctxDone, currentContext, dutyPreset, propRpmSeedKey, propRpmDefault.rpm, p]);
   const propRpmReady = !propLoad || !propRpmSeedKey
     || propRpmSeedRef.current === propRpmSeedKey
     || propRpmManualEditRef.current === propRpmSeedKey;
@@ -1815,8 +1821,8 @@ const ConfiguratorPanel: React.FC = () => {
               )}
               {cooled && (
                 <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: optionalPropellerCooling ? 0.5 : 0, flexWrap: 'nowrap', minHeight: 28 }}>
-                  {propellerOnly && <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configurePropeller.loadTip')}>{tx('configurePropeller.load')}</Typography>}
-                  {propellerOnly && <ToggleButtonGroup exclusive size="small" value={propLoad ? 'prop' : 'manual'}
+                  {propellerCoolingActive && <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configurePropeller.loadTip')}>{tx('configurePropeller.load')}</Typography>}
+                  {propellerCoolingActive && <ToggleButtonGroup exclusive size="small" value={propLoad ? 'prop' : 'manual'}
                     onChange={(_, v) => { if (v === 'prop' || v === 'manual') updateCool({ load: v }); }}>
                     <ToggleButton value="prop" title={tx('configurePropeller.loadPropTip')}
                       sx={{ px: 1, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx('configurePropeller.loadProp')}</ToggleButton>
@@ -1827,13 +1833,13 @@ const ConfiguratorPanel: React.FC = () => {
               )}
               {(cooled || optionalPropellerCooling) && (
                 <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: 0.5, flexWrap: 'nowrap', minHeight: 28 }}>
-                {cooled && <Typography sx={{ ...LABEL, flex: '0 0 auto', opacity: propLoad ? 1 : 0.85 }} title={tx(optionalPropellerCooling ? 'configurePropeller.coolingPickerTip' : 'configurePropeller.pickerTip')}>{tx('configurePropeller.title')}</Typography>}
+                {cooled && <Typography sx={{ ...LABEL, flex: '0 0 auto', opacity: propLoad ? 1 : 0.85 }} title={tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip')}>{tx('configurePropeller.title')}</Typography>}
                 {cooled && (
                 <select value={propId ?? ''} aria-label={tx('configurePropeller.title')}
-                  disabled={propellerOnly && !propLoad}
+                  disabled={!propLoad}
                   onChange={(e) => updateCool({ propId: e.target.value })}
-                  title={propSummary && propSummary.power_data === 'estimated' ? tx('configurePropeller.estimatedTip') : tx(optionalPropellerCooling ? 'configurePropeller.coolingPickerTip' : 'configurePropeller.pickerTip')}
-                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260, opacity: propellerOnly && !propLoad ? 0.5 : 1, cursor: propellerOnly && !propLoad ? 'not-allowed' : 'pointer' }}>
+                  title={propSummary && propSummary.power_data === 'estimated' ? tx('configurePropeller.estimatedTip') : tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip')}
+                  style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260, opacity: !propLoad ? 0.5 : 1, cursor: !propLoad ? 'not-allowed' : 'pointer' }}>
                   {!allowedProps.length && <option value="" style={{ color: '#000' }}>…</option>}
                   {allowedProps.map((x) => (
                     <option key={x.id} value={x.id} disabled={!x.selectable} style={{ color: '#000' }}>
@@ -1844,7 +1850,7 @@ const ConfiguratorPanel: React.FC = () => {
                 </select>
                 )}
                 <input type="number" step={1} value={ambTxt ?? String(ambient)} aria-label={tx('configurePropeller.ambient')}
-                  title={tx(optionalPropellerCooling ? 'configurePropeller.coolingAmbientTip' : 'configurePropeller.ambientTip')}
+                  title={tx(propLoad ? 'configurePropeller.ambientTip' : 'configurePropeller.coolingAmbientTip')}
                   onChange={(e) => setAmbTxt(e.target.value)}
                   onBlur={() => setAmbTxt(null)}
                   style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 13, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />

@@ -329,10 +329,16 @@ def test_shipped_models_load_and_rate_with_their_default_propellers():
         lims = s1.limits_of(m)
         assert lims["winding_C"] == report.PROJECT_INSULATION_C == 200.0
         assert "class N" in lims["winding_basis"]
-    r = s1.s1_rating(s1.load_model("CIANO14 40 new", "L12"), pp.get_propeller("tmotor_fpv_10x5"))
-    # a system rating since 2026-10-11: the die's controller (26.1 A, favourable board) binds first
+    m = s1.load_model("CIANO14 40 new", "L12")
+    r = s1.s1_rating(m, pp.get_propeller("tmotor_fpv_10x5"))
+    # a system rating since 2026-10-11: the die's controller binds first — at the board
+    # model's limit for the S1 air temperature (25 °C here), which is above the 45 °C card
     assert r["limit"] and r["limit"]["binding"] == "controller"
     assert 3000.0 < r["limit"]["rpm"] < 20000.0
+    card = m["sine_controller"]["i_board_limit_A"]["favourable"]
+    assert card == pytest.approx(26.1, abs=0.01)         # the 45 °C card, unchanged
+    assert r["limit"]["current_A"] <= r["limit"]["controller_limit_A"] + 1e-6
+    assert r["limit"]["controller_limit_A"] > card       # 25 °C air on the board
 
 
 # ---------------------------------------------------------------------------
@@ -563,6 +569,61 @@ def test_controller_limit_binds_and_drive_variant_is_selected(tmp_path):
         s1.resolve_drive(m, "nope")
     with pytest.raises(s1.S1Error):
         s1.resolve_drive(m, "sine", "arctic")
+
+
+def _syn_board_block():
+    """A hand-made ``board`` block: P_inverter = 0.2*I, board copper 0.004*I^2,
+    heat budget 20 W -> a 50 A favourable limit at the 45 C calibration (the
+    loss table covers 0..120 A).  R_j-hs is small: only the heat budget binds."""
+    return {"T_amb_cal_C": 45.0, "T_hs_limit_C": 95.0, "T_j_at_limit_C": 110.0,
+            "T_j_derate_C": 140.0, "R_jhs_K_per_W": 1.0, "K_board_cu_W_per_A2": 0.004,
+            "devices_per_switch": 1, "board_scale": 1.0,
+            "classes": {"favourable": {"Q_budget_W": 20.0, "R_sys_K_per_W": 2.5},
+                        "weak": {"Q_budget_W": 12.0, "R_sys_K_per_W": 50.0 / 12.0},
+                        "hot_motor": {"Q_budget_W": 8.0, "R_sys_K_per_W": 6.25}},
+            "loss_table": {"I_A": [0.0, 20.0, 40.0, 60.0, 80.0, 100.0, 120.0],
+                           "P_inverter_W": [0.0, 4.0, 8.0, 12.0, 16.0, 20.0, 24.0],
+                           "P_device_W": [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0]},
+            "slipstream": {"class": "slipstream", "favourable_air_speed_ms": 2.0,
+                           "film_diameter_m": 0.03, "limit_cap_factor": 2.0}}
+
+
+def _sys_model_with_board(**over):
+    """The system model with the hand-made board block on the sine controller."""
+    return _sys_model(sine_controller={"i_board_limit_A": {"favourable": 50.0, "weak": 12.0,
+                                                           "hot_motor": 8.0},
+                                       "i_board_basis": "test board",
+                                       "bus_v": {"min": 250.0, "max": 450.0},
+                                       "board": _syn_board_block()}, **over)
+
+
+def test_the_board_limit_is_re_evaluated_at_the_s1_air_temperature(tmp_path):
+    """A model with a ``board`` block: every point's controller limit is the
+    board model at the S1 air temperature (and the wash speed for ``slipstream``);
+    the drive keeps the precomputed 45 C card."""
+    prop = _prop(tmp_path)
+    m = _sys_model_with_board()
+    d = s1.resolve_drive(m, "sine", "favourable")
+    assert d["I_cont_A"] == 50.0                       # the precomputed card, untouched
+    l45, _ = s1.board_limit_A(d, ambient_c=45.0)
+    l25, basis = s1.board_limit_A(d, ambient_c=25.0)
+    assert l45 == pytest.approx(50.0, abs=0.1) and l25 > l45
+    assert "board model" in basis and "25" in basis
+    # slipstream: no precomputed card, evaluated per point at the wash speed
+    ds = s1.resolve_drive(m, "sine", "slipstream")
+    assert ds["I_cont_A"] is None and "per operating point" in ds["I_cont_basis"]
+    fav = s1.board_limit_A(s1.resolve_drive(m, "sine", "favourable"), ambient_c=25.0)[0]
+    w = s1.board_limit_A(ds, ambient_c=25.0, air_speed_ms=10.0)[0]
+    assert fav < w <= 2.0 * fav + 1e-9
+    with pytest.raises(s1.S1Error):
+        s1.board_limit_A(ds, ambient_c=25.0)           # no wash speed to evaluate at
+    row = s1.solve_point(m, prop, 5000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(m), drive=ds)
+    assert row["controller_limit_A"] == pytest.approx(
+        s1.board_limit_A(ds, ambient_c=25.0, air_speed_ms=row["air_speed_ms"])[0], rel=1e-12)
+    assert "wash" in row["controller_limit_basis"]
+    # a model without board data refuses the class instead of guessing
+    with pytest.raises(s1.S1Error):
+        s1.resolve_drive(_sys_model(), "sine", "slipstream")
 
 
 def test_unknown_controller_is_a_motor_only_limit_and_says_so(tmp_path):
@@ -820,6 +881,26 @@ def test_shipped_models_carry_the_system_data_and_qualify_their_limits():
     l12 = s1.load_model("CIANO14 40 new", "L12")
     assert l12["schema"] == s1.SCHEMA and "si_48k" in l12["drives"]
     assert l12["drives"]["si_48k"]["i_board_limit_A"]["favourable"] == pytest.approx(26.1, abs=0.01)
+    # the board block (the passport's calibration + an analytical loss table) and the
+    # two-devices-per-switch ESTIMATE variants, re-exported 2026-10-12
+    from motor_ai_sim.passport_v1 import stage3 as S3
+    blk = l12["drives"]["si_48k"]["board"]
+    assert blk["T_amb_cal_C"] == 45.0 and blk["devices_per_switch"] == 1 and blk["board_scale"] == 1.0
+    assert S3.board_block_limit(blk, t_amb_c=45.0) == pytest.approx(26.1, abs=0.5)
+    assert S3.board_block_limit(blk, t_amb_c=25.0) > 26.1
+    assert S3.board_block_limit(blk, t_amb_c=25.0, cls="slipstream", air_speed_ms=15.0) \
+        > S3.board_block_limit(blk, t_amb_c=25.0)
+    assert l12["sine_controller"]["board"]["devices_per_switch"] == 1
+    base = l12["drives"]["si_48k"]["i_board_limit_A"]["favourable"]
+    for vid in ("si_48k_x2", "si_48k_x2_board2"):
+        v = l12["drives"][vid]
+        assert v["n_parallel"] == 2 and v["board"]["devices_per_switch"] == 2
+        assert v["i_board_limit_A"]["favourable"] > base
+        assert "estimate" in " ".join(v["labels"])
+    assert l12["drives"]["si_48k_x2"]["board_scale"] == 1.0
+    assert l12["drives"]["si_48k_x2_board2"]["board_scale"] == 2.0
+    assert l12["drives"]["si_48k_x2_board2"]["i_board_limit_A"]["favourable"] \
+        > l12["drives"]["si_48k_x2"]["i_board_limit_A"]["favourable"]
     cal = l12["thermal_calibration"]
     # 2026-10-12: the network refitted with 4 FEM anchors at the two bench points (up to 19.8 m/s)
     assert cal["fit_domain"]["rpm"] == [5935.0, 14400.0] and cal["validation_domain"]["rpm"] == [11370.0, 11370.0]
@@ -831,7 +912,9 @@ def test_shipped_models_carry_the_system_data_and_qualify_their_limits():
     prop = pp.get_propeller("tmotor_fpv_10x5")
     for drive in ("sine", "si_48k"):
         L = s1.s1_rating(l12, prop, drive=drive)["limit"]
-        assert L["binding"] == "controller" and 25.0 < L["current_A"] <= 26.11
+        # the controller binds at the board model's 25 °C limit (above the 45 °C card)
+        assert L["binding"] == "controller" and 25.0 < L["current_A"] <= L["controller_limit_A"] + 1e-6
+        assert L["controller_limit_A"] > 26.1
         assert L["drive_feasibility"] == "checked" and "slipstream_bench" in L["flags"]
         assert "slipstream_uncalibrated" not in L["flags"] and L["cooling"]["slipstream_factor"] == pytest.approx(0.53)
         assert L["qualification"]["checks"]["voltage_min_pack"] == "checked"
@@ -871,3 +954,19 @@ def test_route_takes_the_drive_and_the_pack(client, wired):
                                                            "esc_i_bus_max_A": -1}).status_code == 422
     assert client.get("/api/propellers/syn_s1/s1", params={**q, "drive": "nope"}).status_code == 422
     assert client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "arctic"}).status_code == 422
+
+
+def test_route_takes_the_board_cooling_class(client, wired):
+    q = {"die": "TEST DIE", "config": "L1", "n": 11}
+    # slipstream on a model without board data: refused with the reason, not guessed
+    r = client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "slipstream"})
+    assert r.status_code == 422 and "board" in r.json()["detail"]
+    # with a board block it is evaluated per point at the S1 air temperature
+    (wired / "s1" / "TEST DIE" / "L1.json").write_text(json.dumps(_sys_model_with_board()),
+                                                       encoding="utf-8")
+    r2 = client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "slipstream"})
+    assert r2.status_code == 200, r2.text
+    j = r2.json()
+    assert all(row["controller_limit_A"] is not None for row in j["rows"])
+    assert any("wash" in row["controller_limit_basis"] for row in j["rows"])
+    assert j["limit"]["controller_limit_A"] is not None

@@ -27,6 +27,18 @@ Sources, each one labelled on every number it produces:
   device on the same board is allowed the same Q* (one-node board model,
   T_ambient 45 °C, R_j-hs calibrated on the Si device at its rating).  An
   ESTIMATE on the controller project's numbers, labelled as such.
+
+The one-node model takes any board ambient (``t_amb_c``, default the calibrated
+45 °C, so the passport card is unchanged) and carries two extras for the S1
+propeller rating: a ``slipstream`` cooling class — the board in the propeller
+wash, its ``R_sys`` scaled by h(favourable)/h(slipstream) from the same
+``cooling_models.outer_air`` film the S1 uses (the heat budget scales with it:
+Q ≤ (T_hs_limit − t_amb)/R_sys, so the limit follows the wash speed), capped at
+:data:`SLIPSTREAM_LIMIT_CAP_FACTOR` × the favourable limit — and an exported
+parameter block (:meth:`Board.export_block`: R_sys / Q* per class, R_j-hs, and
+the per-current inverter loss table) that :func:`board_block_state` /
+:func:`board_block_limit` evaluate at any ambient without re-running the
+inverter model (that is what the S1 model JSON carries).
 """
 from __future__ import annotations
 
@@ -64,6 +76,21 @@ T_J_DERATE_C = 140.0           # README sensors: T_j (RT1 + model) 140 -> 160 °
 K_BOARD_CU = 0.00550864 * 1.3144 + 8.3 / 39.5 ** 2
 K_BOARD_CU_SOURCE = ("R30: 0.00551·I² W at 20 °C ×1.3144 (100 °C) + coil links 8.3 W at "
                      "39.5 A (README) — board copper, labelled scenario")
+
+#: ASSUMPTION: the air speed the ``favourable`` cooling class is credited with.
+#: The README's "favourable airflow" rating is not tied to a measured speed;
+#: 2 m/s is taken as a modest forced-convection value over the board — stated
+#: so the ``slipstream`` class's h-ratio has a defensible reference.
+FAVOURABLE_AIR_SPEED_MS = 2.0
+#: Characteristic size of the board for the film correlation
+#: (``cooling_models.outer_air``, cylinder in cross-flow).  Only the RATIO
+#: h(favourable)/h(slipstream) enters the ``slipstream`` class, which depends on
+#: this diameter only weakly.  ASSUMPTION.
+BOARD_FILM_DIAMETER_M = 0.03
+#: Stated clamp: the ``slipstream`` class is never credited more than this
+#: multiple of the favourable-class limit at the same ambient, whatever the wash
+#: speed (a stronger wash should not buy an unbounded board current).
+SLIPSTREAM_LIMIT_CAP_FACTOR = 2.0
 
 SI_DRIVE = {"v_gs_on_V": 12.0, "v_gs_off_V": 0.0, "pull_up_ohm": 1.3, "pull_down_ohm": 0.85,
             "l_sigma_nH": 3.0, "driver": "UCC27289 (12 V)"}
@@ -120,6 +147,25 @@ def inverter_losses(card, drv: Mapping[str, Any], *, I_rms: float, f_sw: float,
             "switching_basis": r.get("conduction_source"), "extrapolated": r["extrapolated"]}
 
 
+def board_air_film(air_speed_ms: float, t_amb_c: float,
+                   diameter_m: float = BOARD_FILM_DIAMETER_M) -> float:
+    """The board's film coefficient h, W/(m²·K), at an air speed — the S1's own
+    ``cooling_models.outer_air`` (Churchill–Bernstein cross-flow) on the board
+    diameter."""
+    from motor_ai_sim.simulation import cooling_models as cm
+    return float(cm.outer_air(air_speed_mps=float(air_speed_ms), t_ambient_c=float(t_amb_c),
+                              d_housing_m=float(diameter_m))["h_conv"])
+
+
+def slipstream_rsys_factor(air_speed_ms: float, t_amb_c: float, *,
+                           favourable_air_speed_ms: float = FAVOURABLE_AIR_SPEED_MS,
+                           diameter_m: float = BOARD_FILM_DIAMETER_M) -> float:
+    """h(favourable) / h(slipstream): the favourable class's board-to-air
+    resistance scaled to the wash air speed (R_sys ∝ 1/h)."""
+    return (board_air_film(favourable_air_speed_ms, t_amb_c, diameter_m)
+            / board_air_film(air_speed_ms, t_amb_c, diameter_m))
+
+
 class Board:
     """One-node board model calibrated on the Si build (see module doc).
 
@@ -151,25 +197,42 @@ class Board:
                 p_fav = inv["per_switch_W"]
         self.R_jhs = (T_J_AT_LIMIT_C - T_HS_LIMIT_C) / max(p_fav, 1e-9)
 
-    def state(self, card, drv, *, I_rms, f_sw, dead_s, v_dc, cls="favourable"):
+    def state(self, card, drv, *, I_rms, f_sw, dead_s, v_dc, cls="favourable",
+              t_amb_c: float = T_AMB_C, air_speed_ms: Optional[float] = None):
         """Steady state at one current.  A current beyond the board's
         continuous limit has no steady state on this board (the one-node
         model runs away): its losses are then evaluated at the controller's
         design T_j (110 °C, the board-limit junction temperature) and the
-        point is flagged ``continuous_ok: false``."""
-        c = self.classes[cls]
+        point is flagged ``continuous_ok: false``.
+
+        ``t_amb_c`` is the board's own ambient (default the calibrated 45 °C).
+        ``cls="slipstream"`` scales the favourable class's ``R_sys`` by
+        h(favourable)/h(slipstream) at ``air_speed_ms`` (required for that
+        class); the heat budget is what that ``R_sys`` allows at the heatsink
+        limit, Q ≤ (T_hs_limit − t_amb_c)/R_sys — Q*·(T_hs_limit − t_amb_c)/
+        (T_hs_limit − 45 °C) ÷ the R_sys factor, exactly Q* at the defaults."""
+        base = "favourable" if cls == "slipstream" else cls
+        c = self.classes[base]
+        r_sys, k = c["R_sys_K_per_W"], 1.0
+        if cls == "slipstream":
+            if air_speed_ms is None:
+                raise ValueError("the slipstream cooling class needs the board's air speed")
+            k = slipstream_rsys_factor(air_speed_ms, t_amb_c)
+            r_sys = r_sys * k
+        amb_scale = (T_HS_LIMIT_C - float(t_amb_c)) / (T_HS_LIMIT_C - T_AMB_C)
+        q_budget = c["Q_budget_W"] * amb_scale / k
         t_j = T_J_AT_LIMIT_C
         for _ in range(8):
             inv = inverter_losses(card, drv, I_rms=I_rms, f_sw=f_sw, dead_s=dead_s,
                                   v_dc=v_dc, t_j=t_j, n_par=self.n_par)
             Q = inv["total"] + K_BOARD_CU * I_rms ** 2
-            t_hs = T_AMB_C + c["R_sys_K_per_W"] * Q
+            t_hs = float(t_amb_c) + r_sys * Q
             t_new = t_hs + self.R_jhs * inv["per_switch_W"] / self.n_par
             if abs(t_new - t_j) < 0.05:
                 t_j = t_new
                 break
             t_j = t_new
-        board_ok = Q <= c["Q_budget_W"] + 1e-9
+        board_ok = Q <= q_budget + 1e-9
         tj_ok = t_j <= T_J_DERATE_C
         basis = "steady state, board model (%s airflow)" % cls
         if not (board_ok and tj_ok):
@@ -182,15 +245,25 @@ class Board:
         return {"inv": inv, "Q_W": Q, "t_hs_C": t_hs, "t_j_C": t_j, "tj_basis": basis,
                 "board_ok": board_ok, "tj_ok": tj_ok, "continuous_ok": board_ok and tj_ok}
 
-    def i_limit(self, card, drv, *, f_sw, dead_s, v_dc, cls="favourable", I_hi=200.0):
+    def i_limit(self, card, drv, *, f_sw, dead_s, v_dc, cls="favourable", I_hi=200.0,
+                t_amb_c: float = T_AMB_C, air_speed_ms: Optional[float] = None):
+        """The board's continuous current (A rms): the largest current whose
+        one-node state is continuous.  The ``slipstream`` class is capped at
+        :data:`SLIPSTREAM_LIMIT_CAP_FACTOR` × the favourable limit at the same
+        ambient (stated clamp)."""
         lo, hi = 0.0, float(I_hi)
         for _ in range(40):
             mid = 0.5 * (lo + hi)
-            s = self.state(card, drv, I_rms=mid, f_sw=f_sw, dead_s=dead_s, v_dc=v_dc, cls=cls)
+            s = self.state(card, drv, I_rms=mid, f_sw=f_sw, dead_s=dead_s, v_dc=v_dc, cls=cls,
+                           t_amb_c=t_amb_c, air_speed_ms=air_speed_ms)
             if s["board_ok"] and s["tj_ok"]:
                 lo = mid
             else:
                 hi = mid
+        if cls == "slipstream":
+            fav = self.i_limit(card, drv, f_sw=f_sw, dead_s=dead_s, v_dc=v_dc, cls="favourable",
+                               I_hi=I_hi, t_amb_c=t_amb_c)
+            lo = min(lo, SLIPSTREAM_LIMIT_CAP_FACTOR * fav)
         return lo
 
     def describe(self) -> Dict[str, Any]:
@@ -207,7 +280,193 @@ class Board:
                             "per device, board copper law unchanged" % (
                                 self.scale, self.scale, self.scale)),
                 "K_board_cu_source": K_BOARD_CU_SOURCE, "classes": self.classes,
+                "slipstream": _slipstream_block(),
                 "source": CTRL_SOURCE, "labels": ["estimate", "default pending owner"]}
+
+    def export_block(self, card, drv, *, f_sw, dead_s, v_dc,
+                     i_max_A: float = 120.0, di_A: float = 1.0) -> Dict[str, Any]:
+        """The board parameters + per-current inverter loss table (see
+        :func:`board_export_block`) on this board's own calibration."""
+        return board_export_block(
+            {"classes": self.classes, "R_jhs_K_per_W": self.R_jhs,
+             "K_board_cu_W_per_A2": K_BOARD_CU, "T_amb_cal_C": T_AMB_C,
+             "T_hs_limit_C": T_HS_LIMIT_C, "T_j_at_limit_C": T_J_AT_LIMIT_C,
+             "T_j_derate_C": T_J_DERATE_C},
+            card=card, drv=drv, f_sw=f_sw, dead_s=dead_s, v_dc=v_dc,
+            n_par=self.n_par, scale=self.scale, i_max_A=i_max_A, di_A=di_A,
+            labels=["estimate", "default pending owner"])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  the exported board block (what the S1 model JSON carries)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _sig(x) -> float:
+    return float("%.6g" % float(x))
+
+
+def _slipstream_block() -> Dict[str, Any]:
+    return {"class": "slipstream",
+            "R_sys": "R_sys(favourable) · h(favourable)/h(slipstream) at the wash air speed "
+                     "(cooling_models.outer_air, board diameter)",
+            "favourable_air_speed_ms": FAVOURABLE_AIR_SPEED_MS,
+            "film_diameter_m": BOARD_FILM_DIAMETER_M,
+            "limit_cap_factor": SLIPSTREAM_LIMIT_CAP_FACTOR,
+            "assumptions": "the favourable class's air speed (2 m/s) is an ASSUMPTION — the "
+                           "README's 'favourable airflow' rating is not tied to a measured "
+                           "speed; the cap keeps the class from buying an unbounded current "
+                           "from a stronger wash"}
+
+
+def _table_at(xs: Sequence[float], ys: Sequence[float], x: float) -> float:
+    """Linear interpolation on an exported loss table, clamped at its ends."""
+    x = float(x)
+    if x <= xs[0]:
+        return float(ys[0])
+    if x >= xs[-1]:
+        return float(ys[-1])
+    lo, hi = 0, len(xs) - 1
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if xs[mid] <= x:
+            lo = mid
+        else:
+            hi = mid
+    w = (x - xs[lo]) / (xs[hi] - xs[lo])
+    return float(ys[lo]) + w * (float(ys[hi]) - float(ys[lo]))
+
+
+def scaled_classes(classes: Mapping[str, Any], scale: float) -> Dict[str, Any]:
+    """The classes of a board ``scale`` times the calibrated one — the board
+    model's own scaling (:class:`Board`): heat budget ×scale, R_sys ÷scale,
+    R_j-hs per device, the board copper law unchanged."""
+    s = float(scale)
+    return {c: dict(d, Q_budget_W=float(d["Q_budget_W"]) * s,
+                    R_sys_K_per_W=float(d["R_sys_K_per_W"]) / s) for c, d in classes.items()}
+
+
+def board_export_block(cal: Mapping[str, Any], *, card, drv: Mapping[str, Any], f_sw: float,
+                       dead_s: float, v_dc: float, n_par: int = 1, scale: float = 1.0,
+                       i_max_A: float = 120.0, di_A: float = 1.0,
+                       labels: Optional[Sequence[str]] = None) -> Dict[str, Any]:
+    """The board parameters + per-current inverter loss table, as carried in the
+    S1 model JSON so the board limit can be re-evaluated at another ambient (or
+    wash speed) without re-running the inverter model — :func:`board_block_state`
+    / :func:`board_block_limit` evaluate it.
+
+    ``cal`` is the board calibration copied verbatim (its own ``classes`` with
+    Q* / R_sys per cooling class, ``R_jhs_K_per_W``, ``K_board_cu_W_per_A2`` and
+    the ``T_*`` limits, e.g. a passport's ``stage3_pwm_controller.board``).
+    ``loss_table``: the bridge's total loss (3 legs) and the per-DEVICE
+    switch-position loss, both at the design T_j 110 °C (the board-limit junction
+    temperature), ``di_A`` apart to ``i_max_A``, for ``n_par`` devices per switch.
+
+    Fixed-T_j losses at a current whose steady T_j runs hotter are a little
+    lower than the T_j-iterated ones, so a limit read off this table can sit a
+    fraction of an ampere above :meth:`Board.i_limit` — stated; the runtime
+    answer is self-consistent with the table.  Outside the table's current range
+    the losses are clamped to its end values (a limit beyond the table top comes
+    back as the top)."""
+    cur = [round(di_A * k, 6) for k in range(int(round(i_max_A / di_A)) + 1)]
+    p_inv: List[float] = []
+    p_dev: List[float] = []
+    for I in cur:
+        r = inverter_losses(card, drv, I_rms=I, f_sw=f_sw, dead_s=dead_s, v_dc=v_dc,
+                            t_j=T_J_AT_LIMIT_C, n_par=int(n_par))
+        p_inv.append(_sig(r["total"]))
+        p_dev.append(_sig(r["per_switch_W"] / max(int(n_par), 1)))
+    classes = {str(c): {k: (_sig(v) if isinstance(v, (int, float)) and not isinstance(v, bool)
+                            else v) for k, v in d.items()}
+               for c, d in cal["classes"].items()}
+    return {
+        "model": ("one-node board: T_hs = T_amb + R_sys·(P_inverter + P_board_cu); "
+                  "T_j = T_hs + R_j-hs·P_device; board limit = the Si build's heat "
+                  "budget at its rating (per cooling class), the budget at another "
+                  "ambient = Q*·(T_hs_limit − T_amb)/(T_hs_limit − T_amb_cal), and "
+                  "at the slipstream wash speed ÷ h(favourable)/h(slipstream)"),
+        "T_amb_cal_C": float(cal["T_amb_cal_C"]), "T_hs_limit_C": float(cal["T_hs_limit_C"]),
+        "T_j_at_limit_C": float(cal["T_j_at_limit_C"]), "T_j_derate_C": float(cal["T_j_derate_C"]),
+        "R_jhs_K_per_W": _sig(cal["R_jhs_K_per_W"]),
+        "K_board_cu_W_per_A2": float(cal["K_board_cu_W_per_A2"]),
+        "devices_per_switch": int(n_par), "board_scale": float(scale),
+        "classes": classes,
+        "loss_table": {
+            "I_A": cur, "P_inverter_W": p_inv, "P_device_W": p_dev,
+            "T_j_C": float(cal["T_j_at_limit_C"]),
+            "basis": ("inverter loss model at the design T_j %.0f °C: total bridge loss "
+                      "(3 legs) and per-device switch-position loss, %d device(s) per switch"
+                      % (float(cal["T_j_at_limit_C"]), max(int(n_par), 1)))},
+        "slipstream": _slipstream_block(),
+        "K_board_cu_source": cal.get("K_board_cu_source") or K_BOARD_CU_SOURCE,
+        "source": cal.get("source") or CTRL_SOURCE,
+        "labels": list(labels or cal.get("labels") or []),
+    }
+
+
+def board_block_state(block: Mapping[str, Any], *, I_rms: float, t_amb_c: float = T_AMB_C,
+                      cls: str = "favourable",
+                      air_speed_ms: Optional[float] = None) -> Dict[str, Any]:
+    """One-node board state at ``I_rms`` from an exported board block —
+    :meth:`Board.state`'s equations on the block's loss table (losses at the
+    design T_j, so a limit read here can sit a fraction of an ampere above
+    :meth:`Board.i_limit` — see :func:`board_export_block`)."""
+    base = "favourable" if cls == "slipstream" else cls
+    try:
+        c = block["classes"][base]
+    except (KeyError, TypeError):
+        raise ValueError("the board block has no cooling class %r" % base)
+    amb_cal = float(block["T_amb_cal_C"])
+    t_hs_lim = float(block["T_hs_limit_C"])
+    r_sys, k = float(c["R_sys_K_per_W"]), 1.0
+    if cls == "slipstream":
+        if air_speed_ms is None:
+            raise ValueError("the slipstream cooling class needs the board's air speed")
+        ss = block.get("slipstream") or {}
+        k = slipstream_rsys_factor(
+            air_speed_ms, t_amb_c,
+            favourable_air_speed_ms=float(ss.get("favourable_air_speed_ms")
+                                         or FAVOURABLE_AIR_SPEED_MS),
+            diameter_m=float(ss.get("film_diameter_m") or BOARD_FILM_DIAMETER_M))
+        r_sys = r_sys * k
+    tab = block["loss_table"]
+    p_inv = _table_at(tab["I_A"], tab["P_inverter_W"], I_rms)
+    p_dev = _table_at(tab["I_A"], tab["P_device_W"], I_rms)
+    Q = p_inv + float(block["K_board_cu_W_per_A2"]) * float(I_rms) ** 2
+    amb_scale = (t_hs_lim - float(t_amb_c)) / (t_hs_lim - amb_cal)
+    q_budget = float(c["Q_budget_W"]) * amb_scale / k
+    t_hs = float(t_amb_c) + r_sys * Q
+    t_j = t_hs + float(block["R_jhs_K_per_W"]) * p_dev
+    board_ok = Q <= q_budget + 1e-9
+    tj_ok = t_j <= float(block["T_j_derate_C"])
+    return {"I_A": float(I_rms), "P_inverter_W": p_inv, "P_device_W": p_dev, "Q_W": Q,
+            "Q_budget_W": q_budget, "R_sys_K_per_W": r_sys, "t_hs_C": t_hs, "t_j_C": t_j,
+            "board_ok": board_ok, "tj_ok": tj_ok, "continuous_ok": board_ok and tj_ok}
+
+
+def board_block_limit(block: Mapping[str, Any], *, t_amb_c: float = T_AMB_C,
+                      cls: str = "favourable", air_speed_ms: Optional[float] = None,
+                      tol_A: float = 1e-4) -> float:
+    """The board's continuous current (A rms) from an exported block: the
+    largest current whose one-node state is continuous, bisected over the loss
+    table's current range.  The ``slipstream`` class is capped at the block's
+    ``limit_cap_factor`` × the favourable limit at the same ambient (stated
+    clamp)."""
+    tab = block["loss_table"]
+    lo, hi = 0.0, float(tab["I_A"][-1])
+    while hi - lo > tol_A:
+        mid = 0.5 * (lo + hi)
+        s = board_block_state(block, I_rms=mid, t_amb_c=t_amb_c, cls=cls,
+                              air_speed_ms=air_speed_ms)
+        if s["continuous_ok"]:
+            lo = mid
+        else:
+            hi = mid
+    if cls == "slipstream":
+        cap = float((block.get("slipstream") or {}).get("limit_cap_factor")
+                    or SLIPSTREAM_LIMIT_CAP_FACTOR)
+        fav = board_block_limit(block, t_amb_c=t_amb_c, cls="favourable", tol_A=tol_A)
+        lo = min(lo, cap * fav)
+    return lo
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -173,7 +173,11 @@ def get_s1(prop_id: str,
                                                                 "default the model's bench ESC"),
            esc_i_phase_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0,
                                                       description="external_esc: continuous phase current [A rms]"),
-           board_cooling: str = Query(default="favourable", description="favourable | weak | hot_motor"),
+           board_cooling: str = Query(default="favourable",
+                                     description="board cooling class: favourable | weak | "
+                                                 "hot_motor | slipstream (the board in the "
+                                                 "propeller wash — evaluated per speed from "
+                                                 "the model's board parameters)"),
            pack_v_min: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
                                                description="pack minimum voltage [V]; default the passport's"),
            pack_v_max: Optional[float] = Query(default=None, gt=0.0, le=2000.0,

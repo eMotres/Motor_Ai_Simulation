@@ -34,6 +34,17 @@ limit with the magnet card's Br/HcJ temperature laws (``demag``), and the
 status of every loss group (``loss_groups``: a missing cell is ``null``, never 0).
 ``--geom-from`` takes ``thermal_geom`` from an existing model when the catalogue
 card is not at hand.
+
+Every controller block (``drives.*`` and ``sine_controller``) also carries a
+``board`` block: the passport's board calibration (heat budget / R_sys per
+cooling class, R_j-hs, the temperatures) copied verbatim, plus a per-current
+inverter loss table computed on the variant's own device and drive — so the S1
+solver can re-evaluate the board limit at its own air temperature (and, for the
+``slipstream`` cooling class, at the propeller's wash speed) instead of only
+reading the precomputed 45 °C card (``stage3.board_export_block``).  A ``full``
+export also adds the two-devices-per-switch ESTIMATES at 48 kHz (``*_x2`` on the
+board as-is, ``*_x2_board2`` on a board scaled x2 — inverter loss model + board
+model, the motor's PWM extra loss borrowed from the base variant).
 """
 from __future__ import annotations
 
@@ -131,7 +142,75 @@ def _thermal_geom(catalog: str, card_id: str, stack_mm: float) -> Dict[str, floa
             "magnetOD_mm": 2 * geo["rotorOR_mm"], "source": f"catalogue card {card_id} (passport fit/geo)"}
 
 
-def _drive(v: Dict[str, Any]) -> Dict[str, Any]:
+def _stage3():
+    """The passport's stage-3 board / inverter-loss model (imported on demand)."""
+    sys.path.insert(0, str(ROOT / "src"))
+    from motor_ai_sim.passport_v1 import stage3 as S3
+    from motor_ai_sim.inverter.devices import get_device
+    return S3, get_device
+
+
+def _variant_device(v: Dict[str, Any]):
+    """``(device card, drive dict, f_sw, dead_s, v_dc)`` of one store variant —
+    what the inverter loss model needs (the drive block rebuilt by the passport's
+    own ``drive_for`` from the variant's stored R_G)."""
+    S3, get_device = _stage3()
+    card = get_device(str(v["device"]))
+    gd = v.get("drive") or {}
+    tech = str(card.doc.get("technology") or "").lower()
+    r_g_si = None if tech.startswith("gan") else float(gd["r_g"]) - S3.SI_DRIVE["pull_up_ohm"]
+    return card, S3.drive_for(card, r_g_si), float(v["carrier_hz"]), float(v["dead_time_s"]), \
+        float((v.get("bus_v") or {}).get("nom"))
+
+
+def _board_cal(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The passport's board calibration (``stage3_pwm_controller.board``), copied
+    verbatim — never re-derived here."""
+    b = ((d.get("stage3_pwm_controller") or {}).get("board") or {})
+    if not b.get("classes") or _val(b.get("R_jhs_K_per_W")) is None or _val(b.get("T_amb_C")) is None:
+        return None
+    return {"classes": dict(b["classes"]), "R_jhs_K_per_W": float(b["R_jhs_K_per_W"]),
+            "K_board_cu_W_per_A2": float(b["K_board_cu_W_per_A2"]),
+            "T_amb_cal_C": float(b["T_amb_C"]), "T_hs_limit_C": float(b["T_hs_limit_C"]),
+            "T_j_at_limit_C": float(b["T_j_at_limit_C"]), "T_j_derate_C": float(b["T_j_derate_C"]),
+            "source": b.get("source"), "labels": b.get("labels"),
+            "K_board_cu_source": b.get("K_board_cu_source")}
+
+
+def _board_block(d: Dict[str, Any], v: Optional[Dict[str, Any]], *, n_par: Optional[int] = None,
+                 scale: float = 1.0) -> Optional[Dict[str, Any]]:
+    """The ``board`` block of a controller block: the passport's calibration
+    copied verbatim + an analytical per-current inverter loss table for the
+    variant's own device / drive / carrier / dead time (``stage3.board_export_block``).
+
+    ``v`` = the store variant whose conditions the loss table is computed at
+    (None = the Si build the calibration was made on: the sine controller's
+    board).  ``n_par`` / ``scale`` build the two-devices-per-switch estimates."""
+    S3, _ = _stage3()
+    cal = _board_cal(d)
+    if cal is None:
+        return None
+    if v is None:
+        v = next((x for x in d.get("pwm_variants") or []
+                  if isinstance(x, dict) and x.get("points")
+                  and str(x.get("technology") or "").lower() == "si"), None)
+    if v is None:
+        return None
+    card, drv, f_sw, dead_s, v_dc = _variant_device(v)
+    np_ = int(n_par if n_par is not None else (v.get("n_parallel") or 1))
+    if float(scale) != 1.0:
+        cal = dict(cal, classes=S3.scaled_classes(cal["classes"], float(scale)))
+    top = max(float(x) for x in v["grid"]["I_A"])
+    return S3.board_export_block(
+        cal, card=card, drv=drv, f_sw=f_sw, dead_s=dead_s, v_dc=v_dc, n_par=np_, scale=float(scale),
+        i_max_A=max(120.0, 10.0 * math.ceil(1.1 * top / 10.0)),
+        labels=(["estimate", "board parameters + analytical per-current inverter loss table"]
+                + ([] if float(scale) == 1.0 else [
+                    "board scaled x%g (estimate): heat budget x%g, R_sys /%g, R_j-hs per device"
+                    % (float(scale), float(scale), float(scale))])))
+
+
+def _drive(v: Dict[str, Any], board: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """One computed drive variant of the store record, on its OWN (rpm, I) grid:
     controller losses, the motor's PWM extra loss, the passport's per-point
     continuous / board / T_j verdicts (1 / 0 / null) and the board's continuous
@@ -141,26 +220,91 @@ def _drive(v: Dict[str, Any]) -> Dict[str, Any]:
     pwm = t["table"](lambda p: _val(p.get("motor_pwm_loss_W")))
     prov = v.get("provenance") or {}
     lim = {k: float(x) for k, x in (v.get("i_board_limit_A") or {}).items() if _val(x) is not None}
-    return {"id": v.get("id"), "device": v.get("device"), "technology": v.get("technology"),
-            "carrier_hz": _val(v.get("carrier_hz")), "n_parallel": v.get("n_parallel"),
-            "dead_time_s": v.get("dead_time_s"), "m_max": _val(v.get("m_max")),
-            "bus_v": v.get("bus_v"), "bus_evaluated": v.get("bus_evaluated"),
-            "i_board_limit_A": lim or None,
-            "i_board_basis": ("board continuous current of this build (all devices in parallel) per board "
-                              "cooling class: %s" % (prov.get("thermal") or "passport board model")),
-            "rpm": t["rpm"], "I_A": t["I_A"],
-            "controller_loss_W": t["ctrl"],
-            "pwm_extra_W": pwm if any(x is not None for r in pwm for x in r) else None,
-            "continuous_ok": flag("continuous_ok"), "board_ok": flag("board_ok"), "tj_ok": flag("tj_ok"),
-            "basis": "inverter conduction + switching + dead time + board copper; motor PWM extra loss "
-                     "(%s), passport drive variant" % (prov.get("motor_pwm") or "passport")}
+    out = {"id": v.get("id"), "device": v.get("device"), "technology": v.get("technology"),
+           "carrier_hz": _val(v.get("carrier_hz")), "n_parallel": v.get("n_parallel"),
+           "dead_time_s": v.get("dead_time_s"), "m_max": _val(v.get("m_max")),
+           "bus_v": v.get("bus_v"), "bus_evaluated": v.get("bus_evaluated"),
+           "i_board_limit_A": lim or None,
+           "i_board_basis": ("board continuous current of this build (all devices in parallel) per board "
+                             "cooling class: %s" % (prov.get("thermal") or "passport board model")),
+           "rpm": t["rpm"], "I_A": t["I_A"],
+           "controller_loss_W": t["ctrl"],
+           "pwm_extra_W": pwm if any(x is not None for r in pwm for x in r) else None,
+           "continuous_ok": flag("continuous_ok"), "board_ok": flag("board_ok"), "tj_ok": flag("tj_ok"),
+           "basis": "inverter conduction + switching + dead time + board copper; motor PWM extra loss "
+                    "(%s), passport drive variant" % (prov.get("motor_pwm") or "passport")}
+    if board is not None:
+        out["board"] = board
+    return out
 
 
-def _drives(store: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _drives(store: Optional[Dict[str, Any]], d: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if not store:
         return {}
-    return {v["id"]: _drive(v) for v in store.get("pwm_variants") or []
+    return {v["id"]: _drive(v, _board_block(d or {}, v)) for v in store.get("pwm_variants") or []
             if isinstance(v, dict) and v.get("points") and v.get("id")}
+
+
+def _drives_x2(d: Dict[str, Any], store: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Two devices per switch at 48 kHz — ``n_par = 2`` on the board as-is
+    (``*_x2``) and on a board scaled x2 (``*_x2_board2``), ESTIMATES computed on
+    the inverter loss model + the board model (no such build exists in the
+    passport).  The motor's PWM extra loss is BORROWED from the base variant
+    (same carrier, bus and modulation) — said on the variant."""
+    S3, _ = _stage3()
+    out: Dict[str, Any] = {}
+    if not store or _board_cal(d) is None:
+        return out
+    for v in store.get("pwm_variants") or []:
+        if not (isinstance(v, dict) and v.get("points") and v.get("id")):
+            continue
+        if _val(v.get("carrier_hz")) != 48000.0 or int(v.get("n_parallel") or 1) != 1:
+            continue
+        base = _drive(v, _board_block(d, v))
+        card, drv, f_sw, dead_s, v_dc = _variant_device(v)
+        for tag, scale in (("_x2", 1.0), ("_x2_board2", 2.0)):
+            board = _board_block(d, v, n_par=2, scale=scale)
+            if board is None:
+                continue
+            lim = {cls: float("%.6g" % S3.board_block_limit(
+                board, t_amb_c=board["T_amb_cal_C"], cls=cls)) for cls in board["classes"]}
+            col = [float(S3.inverter_losses(card, drv, I_rms=float(i), f_sw=f_sw, dead_s=dead_s,
+                                            v_dc=v_dc, t_j=board["T_j_at_limit_C"],
+                                            n_par=2)["total"])
+                   + S3.K_BOARD_CU * float(i) ** 2 for i in base["I_A"]]
+            st = [S3.board_block_state(board, I_rms=float(i), t_amb_c=board["T_amb_cal_C"])
+                  for i in base["I_A"]]
+
+            def flags(k, _st=st):
+                return [list(1 if s[k] else 0 for s in _st) for _ in base["rpm"]]
+            vid = str(base["id"]) + tag
+            out[vid] = {"id": vid, "device": base["device"], "technology": base["technology"],
+                        "carrier_hz": base["carrier_hz"], "n_parallel": 2,
+                        "dead_time_s": base["dead_time_s"], "m_max": base["m_max"],
+                        "bus_v": base["bus_v"], "bus_evaluated": base["bus_evaluated"],
+                        "board_scale": scale, "i_board_limit_A": lim or None,
+                        "i_board_basis": ("ESTIMATE: board continuous current of a build with two %s "
+                                          "devices in parallel%s, per board cooling class (inverter "
+                                          "loss model + board model, %.0f C ambient)"
+                                          % (base["device"],
+                                             "" if scale == 1.0 else " on a board scaled x2",
+                                             board["T_amb_cal_C"])),
+                        "rpm": base["rpm"], "I_A": base["I_A"],
+                        "controller_loss_W": [list(col) for _ in base["rpm"]],
+                        "pwm_extra_W": base.get("pwm_extra_W"),
+                        "continuous_ok": flags("continuous_ok"), "board_ok": flags("board_ok"),
+                        "tj_ok": flags("tj_ok"),
+                        "basis": ("ESTIMATE, not a computed passport variant: inverter conduction + "
+                                  "switching + dead time + board copper for two devices per switch at "
+                                  "the design T_j %.0f C; motor PWM extra loss BORROWED from %s "
+                                  "(same carrier, bus and modulation)"
+                                  % (board["T_j_at_limit_C"], base["id"])),
+                        "labels": ["estimate", "two devices per switch",
+                                   ("board as-is (board scale 1)" if scale == 1.0
+                                    else "board scaled x2 (no such board exists)"),
+                                   "motor PWM extra loss borrowed from %s" % base["id"]],
+                        "board": board}
+    return out
 
 
 def _sine_controller(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -172,13 +316,17 @@ def _sine_controller(d: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if not cl:
         return None
     bat = d["inputs"].get("battery") or {}
-    return {"i_board_limit_A": cl,
-            "i_board_basis": "the die's controller board, continuous current of its Si build per cooling class "
-                             "(%s)" % (b.get("model") or "passport board model"),
-            # the ratings were made for the passport's own pack
-            "bus_v": ({"min": bat.get("v_min"), "nom": bat.get("v_nom"), "max": bat.get("v_max")}
-                      if _val(bat.get("v_min")) and _val(bat.get("v_max")) else None),
-            "source": b.get("source"), "T_amb_C": _val(b.get("T_amb_C")), "labels": b.get("labels") or []}
+    out = {"i_board_limit_A": cl,
+           "i_board_basis": "the die's controller board, continuous current of its Si build per cooling class "
+                            "(%s)" % (b.get("model") or "passport board model"),
+           # the ratings were made for the passport's own pack
+           "bus_v": ({"min": bat.get("v_min"), "nom": bat.get("v_nom"), "max": bat.get("v_max")}
+                     if _val(bat.get("v_min")) and _val(bat.get("v_max")) else None),
+           "source": b.get("source"), "T_amb_C": _val(b.get("T_amb_C")), "labels": b.get("labels") or []}
+    blk = _board_block(d, None)                 # the Si build the ratings were made on
+    if blk is not None:
+        out["board"] = blk
+    return out
 
 
 def _pole_pairs(pts: List[Dict[str, Any]]) -> int:
@@ -326,10 +474,16 @@ def from_full(args) -> Dict[str, Any]:
                       if x is None and by.get(_key(rpm[a], cur[b])) is not None) for k, t in loss.items()}
     labels = ["2-D FEM loss grid (settled TDM, coupled eddy + demag) of the full v1 passport",
               f"torque x k_T(3-D) {(_val(d['stage2_3d']['k_T']) or 1.0):.4f}"]
-    drives = _drives(store)
+    drives = _drives(store, d)
     if drives:
         labels.append("drive variants %s: controller loss, motor PWM extra loss and board continuous current "
                       "on each variant's own grid" % ", ".join(drives))
+    x2 = _drives_x2(d, store)
+    if x2:
+        drives.update(x2)
+        labels.append("x2 drive variants %s: two devices per switch (board as-is / board scaled x2) — "
+                      "ESTIMATES on the inverter loss model + the board model; motor PWM extra loss "
+                      "borrowed from the base variant" % ", ".join(sorted(x2)))
     if extra:
         labels.append("loss grid extended to %s rpm by %d settled FEM points (passport stage loss4, "
                       "same hot temperatures / steps / operating-angle rule)"
@@ -464,7 +618,7 @@ def from_store(args) -> Dict[str, Any]:
                         "pwm_extra": {"status": "per drive"},
                         "mech": ({"status": "grid"} if any(x[1] > 0 for x in mech_pts)
                                  else {"status": "omitted", "note": "not in the store record"})},
-        "drives": _drives(s), "default_drive": v.get("id"),
+        "drives": _drives(s, s), "default_drive": v.get("id"),
         "limits": {"I_max_A": float(t["I_A"][-1]),
                    "I_max_basis": args.imax_basis,
                    "rpm_max": float(t["rpm"][-1]),

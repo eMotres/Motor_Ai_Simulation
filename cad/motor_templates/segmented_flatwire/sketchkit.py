@@ -117,4 +117,16 @@ def check_sketch(sk):
     rc = sk.solve()
     fc = bool(getattr(sk, "FullyConstrained", False))
     return rc == 0 and fc, dict(solve=rc, fully_constrained=fc, malformed=list(getattr(sk, "MalformedConstraints", [])),
-                                conflicting=list(getattr(sk, "Conflicting", [])), redundant=list(getattr(sk, "Redundant", [])))
+                                conflicting=list(_attr(sk, "ConflictingConstraints", "Conflicting")),
+                                redundant=list(_attr(sk, "RedundantConstraints", "Redundant")),
+                                partially_redundant=list(_attr(sk, "PartiallyRedundantConstraints")),
+                                dof=getattr(sk, "DoF", None))
+
+
+def _attr(sk, *names):
+    """Solver diagnostics: FreeCAD 1.0 / 1.1 call them RedundantConstraints, ConflictingConstraints, ... (an earlier
+    revision of this helper read Redundant / Conflicting, which do not exist, so that part of the check was empty)."""
+    for n in names:
+        if hasattr(sk, n):
+            return getattr(sk, n) or []
+    return []

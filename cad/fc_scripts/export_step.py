@@ -6,10 +6,14 @@ motor_ai_sim.cad.build.
 
 The model is opened, fully recomputed and must pass motor_templates/segmented_flatwire/health.gate(): any failed /
 not-recomputed object, sketch problem, wrong count, pre-check violation or stale geometry -> no STEP and no datums
-are written.  The STEP is written under a temporary name, re-imported and checked (22 solids, volume = model volume);
+are written.  The STEP is written under a temporary name, re-imported and checked (solid count, volume = model volume);
 only then it replaces the final name.
-STEP tree: <motor_id>_active / Stator / Core ; Winding / Coils / Coil_1..N ; Rotor / RotorCore ; Magnets / Magnet_01..M
-Datums: frame, axial and radial datums, and the end face of every coil lead (centre, section, normal).
+STEP tree: <motor_id>_active / Stator / Core ; Winding / Coils / Coil_1..N ; Rotor / RotorCore ; Magnets / Magnet_01..M ;
+           Mechanics / Shaft, Bearing_618_8_front / (outer_ring, inner_ring, ball_01..), Bearing_618_8_back / (...),
+                       Stator_holder, Stator_holder_back, Ring_front, Ring_back, Prop_fix, Screws / Screw_1..
+           (Mechanics only for profiles with the stage-3 rows)
+Datums: frame, axial and radial datums, the end face of every coil lead (centre, section, normal) and the mechanical
+datums (bearing seats, holder faces, A_H, shaft axis / journals / flats, Prop_fix seat, bolt circle).
 """
 import datetime, json, math, os, sys, traceback
 
@@ -17,7 +21,7 @@ ROOT = os.environ["FC_CAD_ROOT"]
 sys.path.insert(0, ROOT)
 import FreeCAD as App  # noqa: E402
 import Import  # noqa: E402
-from motor_templates.segmented_flatwire import params_sheet as ps, health  # noqa: E402
+from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics  # noqa: E402
 from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 
@@ -49,6 +53,66 @@ def lead_ends(solid, ytop0, pitch, wh, angle_deg):
     return out
 
 
+def _planar_face_at(shape, z, normal_z):
+    """Area and radial extent of the planar faces of shape at z whose outward normal is (0, 0, normal_z)."""
+    area, rmax, rmin = 0.0, 0.0, 1e9
+    for f in shape.Faces:
+        if f.Surface.__class__.__name__ != "Plane" or abs(f.CenterOfMass.z - z) > 1e-6:
+            continue
+        n = f.normalAt(*f.Surface.parameter(f.CenterOfMass))
+        if n.z * normal_z < 0.999:
+            continue
+        area += f.Area
+        for v in f.Vertexes:
+            r = math.hypot(v.Point.x, v.Point.y)
+            rmax, rmin = max(rmax, r), min(rmin, r)
+    return dict(area_mm2=r6(area), r_min=r6(rmin) if area else None, r_max=r6(rmax) if area else None)
+
+
+def mech_datums(g, mech):
+    """Mechanical datums (stage 3), named as in the Fusion model; the A_H face is measured on the exported solid."""
+    zf, zfl, zb = g("holder_face_z"), g("holder_flange_z"), g("bearing_out_z")
+    zah = -g("back_holder_end_z")
+    aw, n = g("angle_wire"), int(round(g("holder_bolt_count")))
+    return dict(
+        A_H=dict(z=r6(zah), outward_normal=[0, 0, -1],
+                 what="hub-boss plane: back end face of Stator_holder_back (heatsink boss seat, datum A_H of the full stack)",
+                 measured=_planar_face_at(mech["Stator_holder_back"], zah, -1)),
+        shaft=dict(axis="Z", back_end_z=r6(-zb), front_end_z=r6(g("shaft_front_end_z")),
+                   journal_r=r6(g("shaft_journal_r")), rotor_seat_r=r6(g("shaft_seat_r")), bore_r=r6(g("shaft_bore_r")),
+                   flange=dict(r=r6(g("shaft_seat_r") + g("shaft_flange_step")), z=[r6(g("rotor_w") / 2), r6(zf - g("shaft_shoulder_len"))]),
+                   shoulder=dict(r=r6(g("shaft_shoulder_r")), z=[r6(zf - g("shaft_shoulder_len")), r6(zf)]),
+                   journal_end_z=r6(g("shaft_journal_end_z")),
+                   flats=dict(width=r6(g("shaft_flat_w")), z=[r6(g("shaft_journal_end_z") - g("shaft_flat_len")), r6(g("shaft_journal_end_z"))],
+                              normals="+-X"),
+                   thread=dict(r=r6(g("shaft_thread_r")), z=[r6(g("shaft_journal_end_z")), r6(g("shaft_thread_end_z"))], note="M5x0.8 in Fusion"),
+                   tip=dict(r=r6(g("shaft_tip_r")), z=[r6(g("shaft_thread_end_z")), r6(g("shaft_front_end_z"))])),
+        bearings=dict(card="618/8 (d %g, D %g, B %g)" % (g("bearing_d"), g("bearing_D"), g("bearing_B")),
+                      front=dict(z=[r6(zf), r6(zb)]), back=dict(z=[r6(-zb), r6(-zf)]),
+                      seat_r=r6(g("bearing_od_r")), journal_r=r6(g("shaft_journal_r"))),
+        holders=dict(front_face_z=r6(zf), back_face_z=r6(-zf), front_flange_outer_z=r6(zfl), back_flange_outer_z=r6(-zfl),
+                     front_end_z=r6(g("front_holder_end_z")), back_end_z=r6(zah), flange_r=r6(g("holder_inner_r")),
+                     hub_r=r6(g("holder_hub_r")), back_outer_r=r6(g("back_holder_outer_r")), lip_r=r6(g("holder_lip_r")),
+                     seats=dict(z_front=[r6(g("holder_seat_z")), r6(g("motor_length") / 2)],
+                                z_back=[r6(-g("motor_length") / 2), r6(-g("holder_seat_z"))],
+                                core_leg_outer_x=r6(g("core_leg_outer_x"))),
+                     bolt_circle=dict(r=r6(g("holder_bolt_r")), count=n,
+                                      angles_from_y_deg=[r6(aw + 360.0 * k / n) for k in range(n)],
+                                      front_hole_d=r6(g("bolt_d")), back_tap_d=r6(g("holder_tap_d"))),
+                     back_m3=dict(r=r6(g("back_screw_r")), d=r6(g("back_screw_tap_d")),
+                                  angles_from_y_deg=[r6(g("back_screw_angle") + 360.0 * k / n) for k in range(n)])),
+        rings=dict(front_z=[r6(g("motor_length") / 2), r6(g("motor_length") / 2 + g("ring_h"))],
+                   back_z=[r6(-g("motor_length") / 2 - g("ring_h")), r6(-g("motor_length") / 2)],
+                   r=[r6(g("ring_inner_r")), r6(g("coil_corner_r"))]),
+        prop_fix=dict(seat_z=r6(g("shaft_journal_end_z")), z=[r6(g("shaft_journal_end_z") - g("prop_fix_hub_t")),
+                                                             r6(g("shaft_journal_end_z") + g("prop_fix_plate_t"))],
+                      d=r6(g("prop_fix_d"))),
+        screws=dict(count=n, length=r6(g("holder_screw_l")), head_seat_z=r6(zfl), tip_z=r6(zfl - g("holder_screw_l")),
+                    thread_engagement=r6(max(0.0, -g("holder_seat_z") - max(zfl - g("holder_screw_l"), -zfl)))),
+        note="z along the motor axis (+z propeller side); every value from the Params of this model; A_H measured on the "
+             "exported Stator_holder_back solid")
+
+
 def main():
     model = os.environ["FC_MODEL"]
     src = App.openDocument(model)
@@ -77,6 +141,7 @@ def main():
     rotor = src.getObject("RotorCore").Shape.copy()
     coils = [s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids]
     mags = [s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids]
+    mech = mechanics.solids(src)
     meta = dict(src.Meta or {})
     L = g("motor_length"); Lc = L + g("coil_straight_extra")
     pitch = g("wire_height") + g("wire_spacing_y")
@@ -108,6 +173,8 @@ def main():
         lead_section=dict(width=r6(g("wire_width")), height=r6(g("wire_height"))),
         note="Lead end faces measured on the exported solids (same frame as the STEP); lead start = layer 0 (outer, "
              "under the yoke), lead end = last layer (inner).")
+    if mech:
+        datums["mechanics"] = mech_datums(g, mech)
     App.closeDocument(src.Name)
 
     ex = App.newDocument("export")
@@ -127,6 +194,16 @@ def main():
     mg = part(root, "Magnets")
     for i, s in enumerate(mags):
         solid(mg, "Magnet_%02d" % (i + 1), s)
+    if mech:
+        mp = part(root, "Mechanics")
+        sub_parts = {}
+        for name, grp in mechanics.groups(list(mech)).items():
+            parent = mp
+            if grp:
+                if grp not in sub_parts:
+                    sub_parts[grp] = part(mp, grp)
+                parent = sub_parts[grp]
+            solid(parent, name, mech[name])
     ex.recompute()
     tmp = os.path.splitext(out)[0] + ".partial.step"      # written under a temporary name, moved after the check
     Import.export([root], tmp)
@@ -138,7 +215,7 @@ def main():
             if o.TypeId == "Part::Feature" and not o.Shape.isNull() and o.Shape.Solids]
     parts = sorted({o.Label for o in chk.Objects if o.TypeId == "App::Part"})
     App.closeDocument(chk.Name)
-    expv = core.Volume + rotor.Volume + sum(s.Volume for s in coils) + sum(s.Volume for s in mags)
+    expv = core.Volume + rotor.Volume + sum(s.Volume for s in coils) + sum(s.Volume for s in mags) + sum(s.Volume for s in mech.values())
     res = dict(step=os.path.basename(out), datums=os.path.basename(dat), freecad_version=".".join(str(x) for x in App.Version()[:3]), size_bytes=os.path.getsize(tmp), parts=parts,
                n_solid_objects=len(rows), total_volume=round(sum(r["volume"] for r in rows), 3), expected_total_volume=round(expv, 3),
                leads=len(leads), objects=rows)
@@ -148,7 +225,7 @@ def main():
     print(json.dumps({k: v for k, v in res.items() if k != "objects"}, indent=1))
     # re-import volume: relative 1e-6 (the coil transition lofts are B-splines; the STEP round trip moves ~1e-3 mm3)
     ok = abs(res["total_volume"] - res["expected_total_volume"]) < 1e-6 * res["expected_total_volume"] + 1e-3 \
-        and len(rows) == 2 + ncoil + len(mags) and len(leads) == 2 * ncoil
+        and len(rows) == 2 + ncoil + len(mags) + len(mech) and len(leads) == 2 * ncoil
     if ok:
         os.replace(tmp, out)
         with open(dat, "w", encoding="utf-8") as fh:

@@ -38,6 +38,12 @@ def main():
 
     report = build_bodies(doc, sh, pj)
     gt = health.gate(doc)
+    if gt["ok"] and doc.getObject("Mechanics") is not None:
+        ft = health.fit(doc)                       # stage 3: interference / contact table of the assembled motor
+        report["fit"] = ft["pairs"]
+        if ft["errors"]:
+            gt["errors"] += ft["errors"]
+            gt["ok"] = False
     report["gate"] = {k: v for k, v in gt.items() if k != "volumes"}
     report["volumes"] = {k: round(v, 4) for k, v in gt["volumes"].items()}
     direct, live = ps.live_parameters(doc)

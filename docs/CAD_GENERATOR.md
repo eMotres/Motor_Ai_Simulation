@@ -76,9 +76,58 @@ the model in `GuiDocument.xml`. The colours and the camera are written by a head
    config's `geometry_overrides`.
 5. Server rebuild (above). The new manifest carries the new `param_hash`.
 
+## Sketch conventions (owner rules 2026-10-12)
+
+* **Half plus mirror.** Core sector, rotor pole and magnet sketches dimension only the right half, against the symmetry axis
+  (half angles from the axis and half widths from the axis, as in the Fusion rotor sketch). The left half carries no
+  dimensions: one `Symmetric` constraint (about the sketch Y axis) per node and `Equal` radius per arc
+  (`SK.mirror_chain`). The coil has one leg per sketch (the legs are separate features so the body stays one solid after every
+  step), so its dimensions are one-sided by construction. No constraint name ends in `_L` / `_R` (a unit test checks).
+* **One radius per Fusion radius.** `stator_fillet_r1` (tooth-tip fillet) is the only dimension of the four small core fillets
+  (foot fillets and the mirrored ones are `Equal`); `stator_fillet_r` is the yoke fillet; `magnet_fill_radius` is the only
+  dimension of all six magnet fillets. The rotor pocket fillet (`magnet_fill_radius + offset_rotor`) and the notch (driven by
+  tangency, as in Fusion) are different radii and stay separate.
+* **Named derived rows for counts and computed lengths** (role `derived`, comment in the Params sheet): `core_sectors`
+  (= num_seg x 3), `coil_count`, `rotor_poles` (= num_seg x num_poles_per_segment), `magnet_count`, `coil_layer_copies`,
+  `coil_layer_span`, `coil_layer_pitch`, `coil_leg_length`, `coil_x_in`, `coil_top_y`, `coil_bridge_length`, `coil_lead_total`.
+  Features reference them (`Params.core_sectors`), never an inline formula.
+
+Renamed sketch constraints (old -> new):
+
+| Sketch | Old | New |
+|---|---|---|
+| Core sector | `tooth_half_width_R/L`, `slot_top_y_R/L`, `coil_w_R/L`, `cut_width_R/L`, `tooth2_width_R/L` | `tooth_half_width`, `slot_top_y`, `coil_w`, `cut_width`, `tooth2_width` |
+| | `tooth_tip_fillet_R/L`, `foot_fillet_R/L` | `stator_fillet_r1` (the other three are `Equal`) |
+| | `stator_fillet_r_R/L`, `foot_r_R/L` | `stator_fillet_r`, `foot_r` |
+| | `sector_boundary_angle_R/L` (angle from the horizontal) | `sector_half_angle` (boundary to the sector axis = `angle_wire`) |
+| Rotor pole | `rotor_down_r_R/L`, `rotor_up_r_U_R/L`, `rotor_up_r_R/L` | `rotor_down_r`, `rotor_up_r_U`, `rotor_up_r` |
+| | `magnet_fill_down_angle_R/L`, `magnet_fill_up_angle_R/L` | `magnet_fill_down_angle`, `magnet_fill_up_angle` (half angles from the pole axis) |
+| | `half_pole_angle_R/L`, `lip_x_R/L` | `half_pole_angle`, `lip_x` |
+| | `magnet_down_height_R/L`, `offset_rotor_lo/up_R/L`, `pocket_fillet_r_R/L`, `fillet_centre_r_R/L` | same names without the suffix |
+| Magnet | `rotor_down_r_R/L`, `rotor_up_r_R/L`, `magnet_fill_*_angle_R/L`, `magnet_side_angle_R/L`, `magnet_down_height_R/L` | `rotor_down_r`, `rotor_up_r`, `magnet_fill_down_angle`, `magnet_fill_up_angle`, `half_pole_angle`, `magnet_down_height` |
+| | `magnet_fillet_1/2/3_R/L` | `magnet_fill_radius` (the other five are `Equal`) |
+| Coil (one leg per sketch) | `wire_x_in_R/L`, `wire_width_R/L`, `wire_height_R/L`, `layer_top_y_R/L`, `bend_axis_x_R/L` | same names without the suffix |
+
 ## Verification (2026-10-12)
 
-See the PR description; evidence files `verify_*.json` next to the builds on the server (`/opt/motres/compute/cad-build/`).
+FreeCAD 1.1.3 in the server image vs the FreeCAD 1.0.2 builds of the old repo (old sketches, `CIANO14_40_motor_model`
+models and STEP). Compared per solid with `python -m motor_ai_sim.cad.compare` (22 solids each): largest differences
+
+| | volume (relative) | bounding box (mm) | centre of mass (mm) |
+|---|---|---|---|
+| L12 FCStd, server vs local | 1e-15 | 7e-14 | 8e-15 |
+| L12 STEP | 5e-14 | 1e-12 | 5e-13 |
+| L20 FCStd | 2e-15 | 7e-14 | 1e-14 |
+| L20 STEP | 4e-14 | 1e-12 | 5e-13 |
+| Fusion reference profile build (`CIANO14_40_12`) vs local reference model | 2e-15 | 7e-14 | 1e-14 |
+
+Coil vs Fusion (`Coil_L20_fusion.step`): volume +0.0644 % (641.8743 vs 641.4613 mm3), max surface deviation 0.0266 mm,
+the same numbers as the local 1.0.2 run. Every sketch is at 0 DOF with no redundant or conflicting constraints
+(`Sketch.solve() == 0`, `FullyConstrained`; the health gate refuses otherwise), the STEP re-import check passes
+(22 solids, volume = model volume), and the model opens ready to look at (`gui_check.json`).
+Typical Params edits rebuild (tooth_width, stator_fillet_r / stator_fillet_r1, magnet_fill_radius, motor_length,
+magnet_height, air_gap, magnet_fill_up) and one change of `stator_fillet_r1` / `magnet_fill_radius` moves every fillet of that
+radius. Unit tests: `tests/test_cad_generator.py` (12) pass in the deployed API image.
 
 ## What stage 3 / 4 need
 

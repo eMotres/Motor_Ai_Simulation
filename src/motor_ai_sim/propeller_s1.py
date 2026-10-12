@@ -98,8 +98,10 @@ SINE = "sine"
 #: an ESC that is not one of the passport's computed boards (the one on the bench, a
 #: commercial FOC ESC): no board model, its continuous current is the user's / the bench's
 EXTERNAL_ESC = "external_esc"
-#: the board cooling classes the passport rates its controllers for
-BOARD_COOLING = ("favourable", "weak", "hot_motor")
+#: the board cooling classes the passport rates its controllers for, plus the
+#: ``slipstream`` class — the board in the propeller wash: needs the model's
+#: board block and an air speed, so its limit is evaluated per operating point
+BOARD_COOLING = ("favourable", "weak", "hot_motor", "slipstream")
 DEFAULT_BOARD_COOLING = "favourable"
 
 # Configure's lumped conductivities (web/src/lib/thermalEstimate.ts) [W/m·K]
@@ -280,6 +282,46 @@ def _bus(v: Any, name: str) -> Optional[Dict[str, float]]:
     return {"min": lo, "nom": _num(v.get("nom")), "max": hi}
 
 
+def _board_block(b: Any, name: str) -> Dict[str, Any]:
+    """The board's thermal parameters + per-current inverter loss table (the
+    passport's ``stage3.Board.export_block``): everything the S1 needs to
+    re-evaluate the board limit at its own air temperature and wash speed."""
+    if not isinstance(b, Mapping):
+        raise S1Error(f"model: {name} must be a mapping")
+    out = dict(b)
+    for k in ("T_amb_cal_C", "T_hs_limit_C", "T_j_derate_C", "R_jhs_K_per_W", "K_board_cu_W_per_A2"):
+        v = _num(b.get(k))
+        if v is None or v < 0 or (v == 0 and k != "K_board_cu_W_per_A2"):
+            raise S1Error(f"model: {name}.{k} must be a non-negative number (positive for the temperatures and R)")
+    cls = b.get("classes")
+    if not isinstance(cls, Mapping) or not cls:
+        raise S1Error(f"model: {name}.classes must map cooling classes to Q_budget_W / R_sys_K_per_W")
+    classes: Dict[str, Any] = {}
+    for k, c in cls.items():
+        q, r = _num((c or {}).get("Q_budget_W")), _num((c or {}).get("R_sys_K_per_W"))
+        if q is None or r is None or q <= 0 or r <= 0:
+            raise S1Error(f"model: {name}.classes.{k} needs positive Q_budget_W and R_sys_K_per_W")
+        classes[str(k)] = {"Q_budget_W": q, "R_sys_K_per_W": r}
+    tab = b.get("loss_table")
+    if not isinstance(tab, Mapping):
+        raise S1Error(f"model: {name}.loss_table must be a mapping")
+    ii = tab.get("I_A")
+    ok = isinstance(ii, list) and len(ii) >= 2 and all(_num(x) is not None for x in ii)
+    if ok:
+        xs = [float(x) for x in ii]
+        ok = all(0.0 <= xs[i] < xs[i + 1] for i in range(len(xs) - 1))
+    if not ok:
+        raise S1Error(f"model: {name}.loss_table.I_A must be increasing non-negative numbers")
+    table: Dict[str, Any] = {"I_A": xs}
+    for k in ("P_inverter_W", "P_device_W"):
+        v = tab.get(k)
+        if not isinstance(v, list) or len(v) != len(xs) or any(_num(x) is None for x in v):
+            raise S1Error(f"model: {name}.loss_table.{k} must have one value per loss_table.I_A")
+        table[k] = [float(x) for x in v]
+    out["classes"], out["loss_table"] = classes, table
+    return out
+
+
 def _controller_block(c: Any, name: str) -> Dict[str, Any]:
     if not isinstance(c, Mapping):
         raise S1Error(f"model: {name} must be a mapping")
@@ -289,6 +331,8 @@ def _controller_block(c: Any, name: str) -> Dict[str, Any]:
         if not isinstance(lim, Mapping) or any(_num(x) is None or _num(x) <= 0 for x in lim.values()):
             raise S1Error(f"model: {name}.i_board_limit_A must map cooling classes to positive currents")
         out["i_board_limit_A"] = {str(k): float(x) for k, x in lim.items()}
+    if c.get("board") is not None:
+        out["board"] = _board_block(c.get("board"), f"{name}.board")
     out["bus_v"] = _bus(c.get("bus_v"), name)
     return out
 
@@ -640,6 +684,42 @@ def controller_loss(m: Mapping[str, Any], rpm: float, I: float,
 # The drive: controller envelope, pack
 # ---------------------------------------------------------------------------
 
+def _slipstream_block_of(ctrl: Mapping[str, Any], pre_basis: Any) -> Tuple[None, str]:
+    """``slipstream`` has no precomputed limit: it is evaluated per operating
+    point from the controller's ``board`` block (see :func:`board_limit_A`)."""
+    if not ctrl.get("board"):
+        raise S1Error("board cooling 'slipstream' needs the board's thermal parameters (the "
+                      "controller's `board` block) to evaluate its limit at the S1 air "
+                      "temperature and the propeller's wash speed: this model carries only "
+                      "precomputed limits at the passport's cooling classes")
+    return None, ("the slipstream class is evaluated per operating point, at the S1 air "
+                  "temperature and the propeller's wash speed (board model): %s" % pre_basis)
+
+
+def board_limit_A(drive: Mapping[str, Any], *, ambient_c: float,
+                  air_speed_ms: Optional[float] = None) -> Tuple[Optional[float], str]:
+    """The drive's continuous board current at the S1's own air temperature:
+    re-evaluated from the model's ``board`` block (the ``slipstream`` class at the
+    operating point's wash speed), else the precomputed limit the model carries
+    (calibrated at 45 °C ambient)."""
+    blk = drive.get("board")
+    if not blk:
+        return drive.get("I_cont_A"), str(drive.get("I_cont_basis")
+                        or "the model's precomputed board limit")
+    from motor_ai_sim.passport_v1 import stage3 as S3
+    bc = str(drive.get("board_cooling") or DEFAULT_BOARD_COOLING)
+    try:
+        i = S3.board_block_limit(blk, t_amb_c=float(ambient_c), cls=bc,
+                                 air_speed_ms=air_speed_ms)
+    except ValueError as exc:
+        raise S1Error(str(exc))
+    wash = (", wash %.2f m/s" % air_speed_ms) if (
+        bc == "slipstream" and air_speed_ms is not None) else ""
+    basis = ("board model re-evaluated at the S1 air temperature %.0f °C (class %s%s) from "
+             "the model's board parameters" % (ambient_c, bc, wash))
+    return i, basis
+
+
 def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
                   board_cooling: Optional[str] = None, esc_i_bus_A: Optional[float] = None,
                   esc_i_phase_A: Optional[float] = None) -> Dict[str, Any]:
@@ -647,6 +727,12 @@ def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
     current), one computed PWM variant id of ``m["drives"]`` (its board limit,
     its controller-loss and motor-PWM-extra grids) or ``external_esc``.  ``I_cont_A``
     None = the controller's continuous (phase) current is not known for this model.
+
+    ``board_cooling``: the board's cooling class (``slipstream`` = the board in the
+    propeller wash).  ``I_cont_A`` is the model's precomputed limit for the class
+    (calibrated at 45 °C ambient); a model with a ``board`` block is re-evaluated
+    at the S1's own air temperature per operating point (``board_limit_A``), and
+    ``slipstream`` is always per-point (``I_cont_A`` stays None here).
 
     ``external_esc``: an ESC that is none of the passport's boards (a commercial FOC
     ESC, the one on the bench).  No board model and no board current from the
@@ -681,9 +767,12 @@ def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
     if did == SINE:
         sc = m.get("sine_controller") or {}
         lim = (sc.get("i_board_limit_A") or {}).get(bc)
+        basis = (sc.get("i_board_basis") if lim is not None
+                 else "the model carries no controller block for a sine drive")
+        if bc == "slipstream":
+            lim, basis = _slipstream_block_of(sc, basis)
         return {"id": SINE, "kind": "sine", "board_cooling": bc, "I_cont_A": lim,
-                "I_cont_basis": (sc.get("i_board_basis") if lim is not None
-                                 else "the model carries no controller block for a sine drive"),
+                "I_cont_basis": basis, "board": sc.get("board"),
                 "bus_v": sc.get("bus_v"), "controller_loss_W": None, "pwm_extra_W": None,
                 "device": None, "carrier_hz": None, "n_parallel": None}
     drives = m.get("drives") or {}
@@ -691,9 +780,11 @@ def resolve_drive(m: Mapping[str, Any], drive: Optional[str] = None,
         raise S1Error(f"unknown drive {did!r}: use {SINE!r} or one of {sorted(drives)}")
     d = dict(drives[did])
     lim = (d.get("i_board_limit_A") or {}).get(bc)
-    d.update(id=did, kind="pwm", board_cooling=bc, I_cont_A=lim,
-             I_cont_basis=(d.get("i_board_basis") if lim is not None
-                           else "the variant carries no board continuous current"))
+    basis = (d.get("i_board_basis") if lim is not None
+             else "the variant carries no board continuous current")
+    if bc == "slipstream":
+        lim, basis = _slipstream_block_of(d, basis)
+    d.update(id=did, kind="pwm", board_cooling=bc, I_cont_A=lim, I_cont_basis=basis)
     return d
 
 
@@ -1133,6 +1224,10 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
     q_em = op["torque_Nm"] + (p_mech / w if w > 0 else 0.0)
     D = float(m["thermal_geom"]["statorOD_mm"]) / 1000.0
     h = housing_film(op["air_speed_ms"], ambient_c, D)
+    # the board limit at this speed's air: the S1 air temperature (and, for the
+    # slipstream class, the wash speed) — re-evaluated per point, not precomputed
+    i_cont, i_cont_basis = board_limit_A(drv, ambient_c=ambient_c,
+                                         air_speed_ms=op.get("air_speed_ms"))
     row: Dict[str, Any] = {
         "rpm": float(rpm), "thrust_N": op["thrust_N"], "torque_prop_Nm": op["torque_Nm"],
         "torque_em_Nm": q_em, "shaft_power_W": op["shaft_power_W"],
@@ -1143,7 +1238,8 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         "current_A": None, "losses_W": None, "T_winding_C": None, "T_magnet_C": None,
         "T_housing_C": None, "margin_winding_K": None, "margin_magnet_K": None,
         "electrical_power_W": None, "battery_power_W": None, "controller_loss_W": None,
-        "battery_current_A": None, "controller_limit_A": drv.get("I_cont_A"),
+        "battery_current_A": None, "controller_limit_A": i_cont,
+        "controller_limit_basis": i_cont_basis,
         "controller_bus_limit_A": drv.get("I_bus_cont_A"),
         "demag_limit_A": None, "demag_basis": None, "voltage": None, "current_grid_A": None,
         "converged": None, "iterations": 0, "below_loss_grid": False, "below_loss_grid_speed": False,
@@ -1208,8 +1304,9 @@ def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient
         viol.append(("magnet", _exceed(th["magnet"], lims["magnet_C"], lims["magnet_C"] - ambient_c)))
     if i_dm is not None and I > i_dm + 1e-9:
         viol.append(("demag", _exceed(I, i_dm, i_dm) if i_dm > 0 else float("inf")))
-    if drv.get("I_cont_A") is not None and I > float(drv["I_cont_A"]) + 1e-9:
-        viol.append(("controller", _exceed(I, float(drv["I_cont_A"]), float(drv["I_cont_A"]))))
+    if row["controller_limit_A"] is not None and I > float(row["controller_limit_A"]) + 1e-9:
+        viol.append(("controller", _exceed(I, float(row["controller_limit_A"]),
+                                           float(row["controller_limit_A"]))))
     ib = drv.get("I_bus_cont_A")
     if ib is not None and i_batt is not None and i_batt > float(ib) + 1e-9:
         # an external ESC rated by its continuous BUS current (at the pack's minimum voltage)
@@ -1312,7 +1409,8 @@ def _flags(m: Mapping[str, Any], drv: Mapping[str, Any], pk: Mapping[str, Any],
              else "reference temperature only" if dm_basis.startswith("reference temperature only")
              else "at temperature")
     bus_lim = drv.get("I_bus_cont_A") is not None and pk.get("v_min") is not None
-    checks = {"controller": "checked" if (drv.get("I_cont_A") is not None or bus_lim) else "unknown",
+    checks = {"controller": "checked" if (row.get("controller_limit_A") is not None or bus_lim)
+              else "unknown",
               "voltage_min_pack": "checked" if v in ("ok", "deeper_fw") else "unverified",
               "pack_bus_range": {True: "checked", False: "failed", None: "unknown"}[fits],
               "battery_current": "checked" if pk.get("i_max_A") is not None else "unknown",
@@ -1475,6 +1573,7 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
                  "below_loss_grid_current": best["below_loss_grid_current"],
                  "fw_floor": bool(best.get("fw_floor")),
                  "controller_limit_A": best["controller_limit_A"],
+                 "controller_limit_basis": best.get("controller_limit_basis"),
                  "controller_bus_limit_A": best.get("controller_bus_limit_A"),
                  "demag_limit_A": best["demag_limit_A"],
                  "demag_basis": best["demag_basis"], "voltage": best["voltage"],

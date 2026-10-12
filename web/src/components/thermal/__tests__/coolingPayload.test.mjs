@@ -127,7 +127,12 @@ const num = (v, def) => {
   return t !== '' && Number.isFinite(n) ? n : def;
 };
 
-function coolingFields(s) {
+function effectiveBoreMode(s) {
+  return s.airSpeedSource === 'propeller' ? 'none' : s.boreMode;
+}
+
+function coolingFields(s0) {
+  const s = { ...s0, boreMode: effectiveBoreMode(s0) };
   const ambient = num(s.ambientT, 40);
   const outerMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
   const liquid = outerMode === 'liquid';
@@ -184,7 +189,8 @@ function heatPathOf(saved) {
   return 'housing';
 }
 
-function coolingIssue(s) {
+function coolingIssue(s0) {
+  const s = { ...s0, boreMode: effectiveBoreMode(s0) };
   const outerMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
   if (outerMode === 'liquid' && !(num(s.flowLpm, 0) > 0))
     return 'coolant flow must be greater than 0 L/min';
@@ -268,14 +274,25 @@ test('choosing propeller cooling overrides a stored manual outer mode without ch
   assert.equal(r.propeller_id, 'tmotor_fpv_10x5');
   assert.equal(r.h_conv, undefined);
   assert.equal(r.air_speed_mps, undefined);
-  assert.equal(r.bore_mode, 'air');
-  assert.equal(r.bore_air_speed_mps, 3);
+  assert.equal(r.bore_mode, 'none');
+  assert.equal(r.bore_air_speed_mps, undefined);
   assert.equal(r.frame, 'open');
   assert.equal(r.shaft_ext_length_mm, 100);
   assert.equal(r.shaft_ext_sides, 1);
 });
 
-test('propeller source replaces the saved outer mode but keeps independent inner cooling', () => {
+test('propeller source ignores a stale saved bore: solid shaft, nothing bore-related is sent', () => {
+  const r = sent(coolingFields(inputs({ airSpeedSource: 'propeller', propellerId: 'x',
+    boreMode: 'air', boreAirSpeed: '20' })));
+  assert.equal(r.bore_mode, 'none');
+  assert.ok(!('bore_air_speed_mps' in r));
+  assert.equal(coolingIssue(inputs({ airSpeedSource: 'propeller', propellerId: 'x',
+    boreMode: 'liquid', boreFlowLpm: '' })), null);
+  // a typed-air machine keeps its bore
+  assert.equal(coolingFields(inputs({ boreMode: 'air', boreAirSpeed: '20' })).bore_mode, 'air');
+});
+
+test('propeller source replaces the saved outer mode and drops the outer liquid', () => {
   const r = sent(coolingFields(inputs({ coolMode: 'liquid', airSpeedSource: 'propeller', propellerId: 'x' })));
   assert.equal(r.cooling_mode, 'air');
   assert.equal(r.air_speed_source, 'propeller');

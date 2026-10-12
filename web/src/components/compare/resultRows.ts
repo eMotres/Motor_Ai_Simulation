@@ -431,6 +431,7 @@ export interface ThermalPanelInputs {
   boreTIn: string; boreFlowLpm: string;
   shaftExtMm: string; shaftExtSides: string;
   frame: string; openAirSpeed: string;
+  airSpeedSource?: string;
 }
 
 /**
@@ -452,7 +453,9 @@ export function thermalInputsFromResult(
   const outer = outerCooling(field?.cooling);
   const inner = field?.cooling?.inner;
   const mode = str(outer.mode) ?? st.coolMode;
-  const bore = str(inner?.mode) ?? st.boreMode;
+  // A propeller-cooled machine has a solid shaft: never a stale saved bore.
+  const bore = str(inner?.mode)
+    ?? (st.airSpeedSource === 'propeller' ? 'none' : st.boreMode);
 
   put(out, 'cool_mode', mode);
   // The ambient is the air BOTH air modes work against, so it is written

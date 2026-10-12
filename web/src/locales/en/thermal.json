@@ -30,6 +30,8 @@
   "lMin": "L/min",
   "adiabaticNothingLeavesThroughTheOuter": "Adiabatic: nothing leaves through the outer surface at all. Only meaningful with the bore cooled below — a machine with no cooled surface anywhere has no steady state, and Solve says so.",
   "rotorBore": "Rotor bore",
+  "solidShaftNoBore": "No bore: solid shaft (propeller-cooled)",
+  "solidShaftNoBoreTip": "The propeller-cooled machine has a solid shaft — no air flows through the rotor. In the open frame the slipstream reaches the magnets directly; in the housed frame the rotor heat leaves through the air gap to the stator and housing.",
   "airSpeedThroughTheBoreM": "Air speed through the bore, m/s, at the ambient temperature above (it is the same air). Internal flow, so the film follows a pipe correlation rather than the cross-flow one used on the housing.",
   "theBoreCoolantItsOwnLoop": "The bore coolant — its own loop, chosen independently of the outer one.",
   "borePumpLitresPerMinuteRequired": "Bore pump, litres per minute — required and greater than zero. A bore is a much smaller wetted area than the housing, so the litres buy less total heat here but land where the magnets are.",

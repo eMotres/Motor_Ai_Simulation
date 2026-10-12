@@ -375,6 +375,25 @@ def _apply_air_speed_source(air_speed_source: str, propeller_id: str,
     return float(info["air_speed_mps"]), info
 
 
+BORE_IGNORED_PROPELLER = "propeller cooling: solid shaft, no bore flow"
+
+
+def _force_bore_for_propeller(air_speed_source: str, bore_mode: str):
+    """Propeller-cooled machines have a solid shaft: no bore flow (2026-10-12).
+
+    Returns ``(bore_mode, bore_ignored)``.  With ``air_speed_source='propeller'``
+    the bore mode is forced to ``none`` whatever was sent (a stale saved
+    ``air`` / ``liquid`` / ``still`` from another machine must never reach the
+    solve or the cache key) and ``bore_ignored`` is the sentence to put in the
+    response when a different mode was actually dropped, else ``None``.
+    Any other source returns the caller's value untouched.
+    """
+    if str(air_speed_source or "manual").strip().lower() != "propeller":
+        return bore_mode, None
+    sent = str(bore_mode or "none").strip().lower()
+    return "none", (None if sent in ("none", "") else BORE_IGNORED_PROPELLER)
+
+
 def _thermal_air_source_kw(source: str, propeller_id: str,
                            propeller_position: str, propeller_context_key: str,
                            cooling_mode: str, authorization: Optional[str]) -> Dict[str, Any]:
@@ -4090,6 +4109,8 @@ def solve_thermal_field(
         air_speed_source, propeller_id, propeller_position, rpm=rpm,
         ambient_temp=ambient_temp, cooling_mode=cooling_mode,
         air_speed_mps=air_speed_mps)
+    bore_mode, _bore_ignored = _force_bore_for_propeller(
+        air_speed_source, bore_mode)
     cooling_mode, bore_mode = _validate_field_params(
         cooling_mode=cooling_mode, ambient_temp=ambient_temp, h_conv=h_conv,
         air_speed_mps=air_speed_mps, fluid=fluid,
@@ -4225,6 +4246,9 @@ def solve_thermal_field(
         out.pop("cooling_air_source", None)
         if _prop_cooling is not None:
             out["cooling_air_source"] = _prop_cooling
+        out.pop("bore_ignored", None)
+        if _bore_ignored:
+            out["bore_ignored"] = _bore_ignored
         return out
 
     # ── the step budget of this pass ────────────────────────────────────────
@@ -6610,6 +6634,8 @@ def solve_thermal_field(
     if _prop_cooling is not None:
         # a copy: the cached entry must not carry this request's propeller
         result = {**result, "cooling_air_source": _prop_cooling}
+    if _bore_ignored:
+        result = {**result, "bore_ignored": _bore_ignored}
     return result
 
 
@@ -7144,6 +7170,8 @@ def field(
     _source_kw = _thermal_air_source_kw(
         air_speed_source, propeller_id, propeller_position,
         propeller_context_key, cooling_mode, authorization)
+    bore_mode, _bore_ignored = _force_bore_for_propeller(
+        air_speed_source, bore_mode)
     _hist_params = _field_params(
         cooling_mode=cooling_mode, ambient_temp=ambient_temp, h_conv=h_conv,
         slot_k=slot_k, rpm=rpm, gamma_deg=gamma_deg,
@@ -7439,6 +7467,8 @@ def coupled(
             component_mesh = _pt["component_mesh"]
             _em_kw = {"_em_run": _em, "magnet_temp_c": _pt["magnet_temp_c"],
                       "op_mode": _pt["op_mode"]}
+        bore_mode, _bore_ignored = _force_bore_for_propeller(
+            air_speed_source, bore_mode)
         mode, bmode = _validate_field_params(
             cooling_mode=cooling_mode, ambient_temp=ambient_temp, h_conv=h_conv,
             air_speed_mps=air_speed_mps, fluid=fluid,
@@ -7523,6 +7553,9 @@ def coupled(
             out["cached"] = True
             out["elapsed_s"] = _elapsed(t0)
             _remember_last("coupled", hit, _params, hit.get("geometry_fingerprint"))
+            out.pop("bore_ignored", None)
+            if _bore_ignored:
+                out["bore_ignored"] = _bore_ignored
             return _note_verify_em_ignored(out, verify_em)
 
         out = solve_coupled(
@@ -7536,6 +7569,8 @@ def coupled(
             progress=_progress.callback(), **_cool_kw, **_em_kw)
         _cache_put(_COUPLED_CACHE, key, out, _COUPLED_CACHE_MAX)
         _remember_last("coupled", out, _params, out.get("geometry_fingerprint"))
+        if _bore_ignored:
+            out = {**out, "bore_ignored": _bore_ignored}
         return _note_verify_em_ignored(out, verify_em)
     finally:
         # Unconditional: an exception on any path must not leave

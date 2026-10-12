@@ -6,7 +6,7 @@ the point of rotor_up_r at magnet_fill_up*angle_mag/2, top arc rotor_up_r - magn
 magnet_fill_radius.
 """
 import math
-from .sketchkit import Chain, SK
+from .sketchkit import Chain, SK, V_AXIS
 from .params_sheet import pval
 from .common import P, M, xy_sketch, fillet_center_circle_line, foot_point, corner_center, rotor_numbers
 
@@ -37,48 +37,45 @@ def build_magnet(doc, sh, body):
     R["up"] = c.line(b_up1, b_up2, joint="T")
     R["f3"] = c.arc(c_top, r, b_up2, s_top, ccw=True, joint="T")
     top = c.arc((0, 0), n["Rtop"], s_top, M(s_top), ccw=True, joint="T")
-    L["f3"] = c.arc(M(c_top), r, M(s_top), M(b_up2), ccw=True, joint="T")
-    L["up"] = c.line(M(b_up2), M(b_up1), joint="T")
-    L["f2"] = c.arc(M(c_knee), r, M(b_up1), M(b_lo2), ccw=True, joint="T")
-    L["lo"] = c.line(M(b_lo2), M(b_lo1), joint="T")
+    L["f3"] = c.arc(M(c_top), r, M(s_top), M(b_up2), ccw=True, joint="C")
+    L["up"] = c.line(M(b_up2), M(b_up1), joint="C")
+    L["f2"] = c.arc(M(c_knee), r, M(b_up1), M(b_lo2), ccw=True, joint="C")
+    L["lo"] = c.line(M(b_lo2), M(b_lo1), joint="C")
     L["f1"] = c.arc(M(c_bot), r, M(b_lo1), M(b_bot), ccw=True, joint="T")
     c.close()
     s = SK(sk)
+    # Only the right half is dimensioned (against the pole axis, half angles as in the Fusion rotor sketch); the left half is
+    # its mirror image: Symmetric per node, Equal radius per arc.  The bottom chord crosses the axis: horizontal (its ends are
+    # symmetric through the mirrored, tangent fillets).
+    s.mirror_chain(c, R, {k: L[k] for k in R})
     s.con("Horizontal", bot)
     s.con("Coincident", top, 3, -1, 1)
     s.con("Radius", top, n["Rtop"], name="magnet_top_r", expr=P + "rotor_up_r - " + P + "magnet_up_gap")
     ang_fd = P + "magnet_fill_down * " + P + "angle_mag / 2"
     ang_fu = P + "magnet_fill_up * " + P + "angle_mag / 2"
-    for side, G in (("R", R), ("L", L)):
-        right = side == "R"
-        sg = 1 if right else -1
-        r4 = s.cline((0, 0), (sg * P4[0], P4[1]))
-        rU = s.cline((0, 0), (sg * U[0], U[1]))
-        mlo = s.cline((sg * P4[0], P4[1]), (sg * K[0], K[1]))
-        mup = s.cline((sg * K[0], K[1]), (sg * U[0], U[1]))
-        s.con("Coincident", r4, 1, -1, 1)
-        s.con("Coincident", rU, 1, -1, 1)
-        s.con("Coincident", mlo, 1, r4, 2)
-        s.con("Coincident", mup, 1, mlo, 2)
-        s.con("Coincident", mup, 2, rU, 2)
-        s.con("Distance", r4, n["Rdn"], name="rotor_down_r_" + side, expr=P + "rotor_down_r")
-        s.con("Distance", rU, n["Rup"], name="rotor_up_r_" + side, expr=P + "rotor_up_r")
-        if right:
-            s.con("Angle", r4, math.radians(90 - n["fd"]), name="magnet_fill_down_angle_R", expr="90 deg - " + ang_fd)
-            s.con("Angle", rU, math.radians(90 - n["fu"]), name="magnet_fill_up_angle_R", expr="90 deg - " + ang_fu)
-            s.con("Angle", mlo, math.radians(90 - n["a"]), name="magnet_side_angle_R", expr="90 deg - " + P + "angle_mag / 2")
-            s.con("PointOnObject", r4, 2, bot)
-        else:
-            s.con("Angle", r4, math.radians(90 + n["fd"]), name="magnet_fill_down_angle_L", expr="90 deg + " + ang_fd)
-            s.con("Angle", rU, math.radians(90 + n["fu"]), name="magnet_fill_up_angle_L", expr="90 deg + " + ang_fu)
-            s.con("Angle", mlo, math.radians(90 + n["a"]), name="magnet_side_angle_L", expr="90 deg + " + P + "angle_mag / 2")
-        s.con("Distance", mlo, n["mdh"], name="magnet_down_height_" + side, expr=P + "magnet_down_height")
-        s.con("PointOnObject", G["lo"], 1, mlo)
-        s.con("PointOnObject", G["lo"], 2, mlo)
-        s.con("PointOnObject", G["up"], 1, mup)
-        s.con("PointOnObject", G["up"], 2, mup)
-        for i, k in enumerate(("f1", "f2", "f3")):
-            s.con("Radius", G[k], r, name="magnet_fillet_%d_%s" % (i + 1, side), expr=P + "magnet_fill_radius")
+    r4 = s.cline((0, 0), (P4[0], P4[1]))
+    rU = s.cline((0, 0), (U[0], U[1]))
+    mlo = s.cline((P4[0], P4[1]), (K[0], K[1]))
+    mup = s.cline((K[0], K[1]), (U[0], U[1]))
+    s.con("Coincident", r4, 1, -1, 1)
+    s.con("Coincident", rU, 1, -1, 1)
+    s.con("Coincident", mlo, 1, r4, 2)
+    s.con("Coincident", mup, 1, mlo, 2)
+    s.con("Coincident", mup, 2, rU, 2)
+    s.con("Distance", r4, n["Rdn"], name="rotor_down_r", expr=P + "rotor_down_r")
+    s.con("Distance", rU, n["Rup"], name="rotor_up_r", expr=P + "rotor_up_r")
+    s.con("Angle", r4, V_AXIS, math.radians(n["fd"]), name="magnet_fill_down_angle", expr=ang_fd)
+    s.con("Angle", rU, V_AXIS, math.radians(n["fu"]), name="magnet_fill_up_angle", expr=ang_fu)
+    s.con("Angle", mlo, V_AXIS, math.radians(n["a"]), name="half_pole_angle", expr=P + "angle_mag / 2")
+    s.con("PointOnObject", r4, 2, bot)
+    s.con("Distance", mlo, n["mdh"], name="magnet_down_height", expr=P + "magnet_down_height")
+    s.con("PointOnObject", R["lo"], 1, mlo)
+    s.con("PointOnObject", R["lo"], 2, mlo)
+    s.con("PointOnObject", R["up"], 1, mup)
+    s.con("PointOnObject", R["up"], 2, mup)
+    s.con("Radius", R["f1"], r, name="magnet_fill_radius", expr=P + "magnet_fill_radius")     # all magnet fillets are equal
+    s.con("Equal", R["f1"], R["f2"])
+    s.con("Equal", R["f1"], R["f3"])
     doc.recompute()
 
     pad = body.newObject("PartDesign::Pad", "MagnetPad")

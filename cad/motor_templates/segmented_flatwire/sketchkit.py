@@ -21,11 +21,16 @@ class Chain:
     def __init__(self, sk):
         self.sk = sk
         self.segs = []          # dicts: geo, entry_pos, exit_pos
+        self.by_geo = {}
         self.joints = []        # joint type between seg i and seg i+1 (last one closes the loop)
 
-    def line(self, p_in, p_out, joint="C", construction=False):
-        g = self.sk.addGeometry(Part.LineSegment(V(*p_in, 0), V(*p_out, 0)), construction)
-        self.segs.append(dict(geo=g, entry=1, exit=2))
+    def line(self, p_in, p_out, joint="C", construction=False, rev=False):
+        """Line from p_in to p_out in loop order.  rev=True creates the geometry pointing the other way (start at p_out) so
+        that two mirrored lines of a loop point the same way and an Angle between them is the included angle."""
+        a, b = (p_out, p_in) if rev else (p_in, p_out)
+        g = self.sk.addGeometry(Part.LineSegment(V(*a, 0), V(*b, 0)), construction)
+        self.segs.append(dict(geo=g, entry=2 if rev else 1, exit=1 if rev else 2))
+        self.by_geo[g] = self.segs[-1]
         self.joints.append(joint)
         return g
 
@@ -39,6 +44,7 @@ class Chain:
         circ = Part.Circle(V(center[0], center[1], 0), V(0, 0, 1), r)
         g = self.sk.addGeometry(Part.ArcOfCircle(circ, a1, a2), construction)
         self.segs.append(dict(geo=g, entry=1 if ccw else 2, exit=2 if ccw else 1))
+        self.by_geo[g] = self.segs[-1]
         self.joints.append(joint)
         return g
 
@@ -55,6 +61,22 @@ class SK:
     def __init__(self, sk):
         self.s = sk
         self.n = 0
+
+    def mirror_chain(self, chain, right, left):
+        """Make the left half of a loop the mirror image (about the sketch Y axis) of the right half with Symmetric
+        constraints.  `right` / `left` are {name: geo id} of the same entities in the loop order of `chain` (the left half runs
+        the opposite way).  Every inner node between two consecutive right entities gets ONE Symmetric constraint to the
+        matching left node (the left entities are joined by the chain's coincident joints); every left arc gets Equal
+        radius with its right twin (its two nodes alone leave the radius free).  The two nodes where the halves meet the
+        central entities are not tied: they are constrained by the chain's joints and the central entity."""
+        names = [n for n in right]                       # loop order of the right half
+        for n in names[:-1]:
+            r = chain.by_geo[right[n]]
+            l = chain.by_geo[left[n]]
+            self.con("Symmetric", right[n], r["exit"], left[n], l["entry"], V_AXIS)
+        for n in names:
+            if isinstance(self.s.Geometry[left[n]], Part.ArcOfCircle):
+                self.con("Equal", right[n], left[n])
 
     def con(self, *args, name=None, expr=None):
         i = self.s.addConstraint(Sketcher.Constraint(*args))

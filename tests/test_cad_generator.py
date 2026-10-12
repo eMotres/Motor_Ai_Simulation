@@ -141,3 +141,38 @@ def test_camera_sits_on_the_iso_diagonal_at_a_fixed_distance():
 def test_find_freecadcmd_env(monkeypatch, tmp_path):
     monkeypatch.setenv("FREECADCMD", str(tmp_path / "fc"))
     assert runner.find_freecadcmd() == str(tmp_path / "fc")
+
+
+def _template_sources():
+    d = os.path.join(CAD_DIR, "motor_templates", "segmented_flatwire")
+    return {f: open(os.path.join(d, f), encoding="utf-8").read() for f in ("core.py", "coil.py", "rotor.py", "magnet.py")}
+
+
+def test_no_left_right_constraint_pairs_in_sketch_builders():
+    """Owner rule 2026-10-12: one half is dimensioned, the other half is a Symmetric mirror - no _L/_R dimension pairs."""
+    import re
+    for f, src in _template_sources().items():
+        names = re.findall(r'name="([A-Za-z0-9_]+)"', src)
+        assert names, f
+        bad = [n for n in names if re.search(r"_(L|R)$", n)]
+        assert not bad, (f, bad)
+    for f in ("core.py", "rotor.py", "magnet.py"):
+        assert 'mirror_chain' in _template_sources()[f]          # half + mirror pattern
+
+
+def test_feature_counts_are_named_derived_rows():
+    base = json.load(open(store.BASE_PROFILE, encoding="utf-8"))
+    rows = {p["name"]: p for sec in ("user_parameters", "named_parameters_sketch3", "named_parameters_active_part")
+            for p in base[sec]}
+    want = ("core_sectors", "coil_count", "rotor_poles", "magnet_count", "coil_layer_copies", "coil_layer_span",
+            "coil_layer_pitch", "coil_leg_length", "coil_x_in", "coil_top_y", "coil_bridge_length", "coil_lead_total")
+    for n in want:
+        assert rows[n]["role"] == "derived" and rows[n]["comment"], n
+    vals = store.evaluate({n: p["freecad_expression"] for n, p in rows.items()})
+    assert vals["core_sectors"] == 6 and vals["rotor_poles"] == 14 and vals["coil_layer_copies"] == 6
+    src = "".join(_template_sources().values()) + open(os.path.join(CAD_DIR, "motor_templates", "segmented_flatwire", "build.py"),
+                                                      encoding="utf-8").read()
+    for inline in ('"num_seg * 3"', 'P + "num_seg * "', '"Params.num_seg * 3"'):
+        assert inline not in src
+    for n in ("core_sectors", "rotor_poles", "coil_count", "magnet_count", "coil_layer_copies"):
+        assert n in src

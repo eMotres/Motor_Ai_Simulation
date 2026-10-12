@@ -8,7 +8,7 @@ top fillet = magnet_fill_radius + offset_rotor about the nominal fillet centre. 
 OffsetFaces6 have no effect in the open model (error state, no faces) and are not modelled.
 """
 import math
-from .sketchkit import Chain, SK
+from .sketchkit import Chain, SK, V_AXIS
 from .params_sheet import pval
 from .common import P, M, xy_sketch, line_offset, pad_symmetric, intersect, fillet_center_circle_line, rotor_numbers
 
@@ -49,66 +49,56 @@ def build_rotor(doc, sh, body):
     R["fil"] = c.arc(cfil, rf, Fu, Lb, ccw=True, joint="C")
     R["lip"] = c.line(Lb, Lt, joint="C")
     R["outer"] = c.arc((0, 0), n["Rup"], Lt, Pp, ccw=False, joint="C")
-    R["pole"] = c.line(Pp, Ph, joint="C")
+    R["pole"] = c.line(Pp, Ph, joint="C", rev=True)          # drawn hub -> outer so its angle to the pole axis is +half_pole_angle
     hub = c.arc((0, 0), n["Rhub"], Ph, M(Ph), ccw=True, joint="C")
     L["pole"] = c.line(M(Ph), M(Pp), joint="C")
     L["outer"] = c.arc((0, 0), n["Rup"], M(Pp), M(Lt), ccw=False, joint="C")
     L["lip"] = c.line(M(Lt), M(Lb), joint="C")
-    L["fil"] = c.arc(M(cfil), rf, M(Lb), M(Fu), ccw=True, joint="T")
+    L["fil"] = c.arc(M(cfil), rf, M(Lb), M(Fu), ccw=True, joint="C")
     L["pup"] = c.line(M(Fu), M(Kp), joint="C")
     L["plo"] = c.line(M(Kp), M(Bp), joint="C")
     c.close()
     s = SK(sk)
-    s.con("Horizontal", chord)
+    # The right half carries the dimensions; the left half is its mirror image about the pole axis (Y): one Symmetric
+    # constraint per node, Equal radius per arc.  The chord is symmetric about Y (its ends), not "horizontal".
+    s.mirror_chain(c, R, {k: L[k] for k in R})
+    s.con("Symmetric", chord, 1, chord, 2, V_AXIS)           # the chord crosses the axis: symmetric ends, no dimension
     s.con("Coincident", hub, 3, -1, 1)
     s.con("Radius", hub, n["Rhub"], name="rotor_hub_r", expr=P + "rotor_down_r - " + P + "rotor_house_height")
-    ang_fd = P + "magnet_fill_down * " + P + "angle_mag / 2"
+    ang_fd = P + "magnet_fill_down * " + P + "angle_mag / 2"       # half angles from the pole axis, as in the Fusion sketch
     ang_fu = P + "magnet_fill_up * " + P + "angle_mag / 2"
     lip_expr = P + "rotor_up_r * sin(" + P + "magnet_fill_up * " + P + "angle_mag * " + P + "rotor_hole / 2)"
-    for side, G in (("R", R), ("L", L)):
-        right = side == "R"
-        sg = 1 if right else -1
-        # construction: nominal magnet sides (radial lines to the lower and upper side end points)
-        r4 = s.cline((0, 0), (sg * P4[0], P4[1]))
-        rU = s.cline((0, 0), (sg * U[0], U[1]))
-        mlo = s.cline((sg * P4[0], P4[1]), (sg * K[0], K[1]))
-        mup = s.cline((sg * K[0], K[1]), (sg * U[0], U[1]))
-        s.con("Coincident", r4, 1, -1, 1)
-        s.con("Coincident", rU, 1, -1, 1)
-        s.con("Coincident", mlo, 1, r4, 2)
-        s.con("Coincident", mup, 1, mlo, 2)
-        s.con("Coincident", mup, 2, rU, 2)
-        s.con("Distance", r4, n["Rdn"], name="rotor_down_r_" + side, expr=P + "rotor_down_r")
-        s.con("Distance", rU, n["Rup"], name="rotor_up_r_U_" + side, expr=P + "rotor_up_r")
-        if right:
-            s.con("Angle", r4, math.radians(90 - n["fd"]), name="magnet_fill_down_angle_R", expr="90 deg - " + ang_fd)
-            s.con("Angle", rU, math.radians(90 - n["fu"]), name="magnet_fill_up_angle_R", expr="90 deg - " + ang_fu)
-        else:
-            s.con("Angle", r4, math.radians(90 + n["fd"]), name="magnet_fill_down_angle_L", expr="90 deg + " + ang_fd)
-            s.con("Angle", rU, math.radians(90 + n["fu"]), name="magnet_fill_up_angle_L", expr="90 deg + " + ang_fu)
-        s.con("Parallel", mlo, G["pole"])
-        s.con("Distance", mlo, n["mdh"], name="magnet_down_height_" + side, expr=P + "magnet_down_height")
-        if right:
-            s.con("PointOnObject", r4, 2, chord)
-        s.con("Parallel", G["plo"], mlo)
-        s.con("Distance", G["plo"], 1, mlo, off, name="offset_rotor_lo_" + side, expr=P + "offset_rotor")
-        s.con("Parallel", G["pup"], mup)
-        s.con("Distance", G["pup"], 1, mup, off, name="offset_rotor_up_" + side, expr=P + "offset_rotor")
-        s.con("Radius", G["fil"], rf, name="pocket_fillet_r_" + side, expr=P + "magnet_fill_radius + " + P + "offset_rotor")
-        s.con("Distance", -1, 1, G["fil"], 3, n["Rtop"] - n["mfr"], name="fillet_centre_r_" + side,
-              expr=P + "rotor_up_r - " + P + "magnet_up_gap - " + P + "magnet_fill_radius")
-        s.con("Vertical", G["lip"])
-        if right:
-            s.con("DistanceX", -1, 1, G["lip"], 1, xl, name="lip_x_R", expr=lip_expr)
-        else:
-            s.con("DistanceX", G["lip"], 1, -1, 1, xl, name="lip_x_L", expr=lip_expr)
-        s.con("Coincident", G["outer"], 3, -1, 1)
-        s.con("Radius", G["outer"], n["Rup"], name="rotor_up_r_" + side, expr=P + "rotor_up_r")
-        s.con("PointOnObject", -1, 1, G["pole"])
-        if right:   # right pole line runs outer -> hub
-            s.con("Angle", G["pole"], math.radians(270 - a_deg), name="half_pole_angle_R", expr="270 deg - " + P + "angle_mag / 2")
-        else:       # left pole line runs hub -> outer
-            s.con("Angle", G["pole"], math.radians(90 + a_deg), name="half_pole_angle_L", expr="90 deg + " + P + "angle_mag / 2")
+    # construction: nominal magnet sides of the right half (radial lines to the lower and upper side end points)
+    r4 = s.cline((0, 0), (P4[0], P4[1]))
+    rU = s.cline((0, 0), (U[0], U[1]))
+    mlo = s.cline((P4[0], P4[1]), (K[0], K[1]))
+    mup = s.cline((K[0], K[1]), (U[0], U[1]))
+    s.con("Coincident", r4, 1, -1, 1)
+    s.con("Coincident", rU, 1, -1, 1)
+    s.con("Coincident", mlo, 1, r4, 2)
+    s.con("Coincident", mup, 1, mlo, 2)
+    s.con("Coincident", mup, 2, rU, 2)
+    s.con("Distance", r4, n["Rdn"], name="rotor_down_r", expr=P + "rotor_down_r")
+    s.con("Distance", rU, n["Rup"], name="rotor_up_r_U", expr=P + "rotor_up_r")
+    s.con("Angle", r4, V_AXIS, math.radians(n["fd"]), name="magnet_fill_down_angle", expr=ang_fd)
+    s.con("Angle", rU, V_AXIS, math.radians(n["fu"]), name="magnet_fill_up_angle", expr=ang_fu)
+    s.con("Parallel", mlo, R["pole"])
+    s.con("Distance", mlo, n["mdh"], name="magnet_down_height", expr=P + "magnet_down_height")
+    s.con("PointOnObject", r4, 2, chord)
+    s.con("Parallel", R["plo"], mlo)
+    s.con("Distance", R["plo"], 1, mlo, off, name="offset_rotor_lo", expr=P + "offset_rotor")
+    s.con("Parallel", R["pup"], mup)
+    s.con("Distance", R["pup"], 1, mup, off, name="offset_rotor_up", expr=P + "offset_rotor")
+    s.con("Radius", R["fil"], rf, name="pocket_fillet_r", expr=P + "magnet_fill_radius + " + P + "offset_rotor")
+    s.con("Distance", -1, 1, R["fil"], 3, n["Rtop"] - n["mfr"], name="fillet_centre_r",
+          expr=P + "rotor_up_r - " + P + "magnet_up_gap - " + P + "magnet_fill_radius")
+    s.con("Vertical", R["lip"])
+    s.con("DistanceX", -1, 1, R["lip"], 1, xl, name="lip_x", expr=lip_expr)
+    s.con("Coincident", R["outer"], 3, -1, 1)
+    s.con("Radius", R["outer"], n["Rup"], name="rotor_up_r", expr=P + "rotor_up_r")
+    s.con("PointOnObject", -1, 1, R["pole"])
+    s.con("PointOnObject", -1, 1, L["pole"])                  # the mirrored pole line also runs through the axis origin
+    s.con("Angle", R["pole"], V_AXIS, math.radians(a_deg), name="half_pole_angle", expr=P + "angle_mag / 2")
     doc.recompute()
 
     pad = body.newObject("PartDesign::Pad", "RotorPad")
@@ -119,7 +109,7 @@ def build_rotor(doc, sh, body):
     pp.Originals = [pad]
     pp.Axis = (sk, ["N_Axis"])
     pp.Angle = 360
-    pp.setExpression("Occurrences", P + "num_seg * " + P + "num_poles_per_segment")
+    pp.setExpression("Occurrences", P + "rotor_poles")
     pp.Refine = True
     body.Tip = pp
     sk.Visibility = False

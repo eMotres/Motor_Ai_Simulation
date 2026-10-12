@@ -15,9 +15,13 @@ from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 
 def row(s):
-    b, c = s.BoundBox, s.CenterOfMass
+    """volume, area, bbox, centre of mass (volume-weighted over the solids of a compound)."""
+    sols = s.Solids or [s]
+    vol = sum(x.Volume for x in sols)
+    com = [sum(x.Volume * x.CenterOfMass[i] for x in sols) / vol for i in range(3)]
+    b = s.BoundBox
     return dict(volume=s.Volume, area=s.Area, bbox=[b.XMin, b.YMin, b.ZMin, b.XMax, b.YMax, b.ZMax],
-                com=[c.x, c.y, c.z], faces=len(s.Faces))
+                com=com, faces=len(s.Faces))
 
 
 def main():

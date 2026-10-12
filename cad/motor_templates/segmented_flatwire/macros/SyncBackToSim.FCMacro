@@ -1,5 +1,5 @@
-# FreeCAD 1.0.2 macro: compare the Params of the OPEN model (CIANO14_40_L12 / _L20) with the simulation die/config and
-# write review files to <repo>/sync/ ; on request also a PROPOSAL for the simulation side (Fusion CSV + YAML patch).
+# FreeCAD macro (1.0.2 / 1.1): compare the Params of the OPEN model with the simulation die/config (store copy in
+# $MOTRES_DIES_DIR or <model folder>/sim_snapshot) and write review files to <model folder>/sync/ ; on request also a PROPOSAL for the simulation side (Fusion CSV + YAML patch).
 # Never writes to the simulation server - the orchestrator applies a proposal after the owner confirms it.
 # Run: File > Open this file, then Macro > Execute macro (or the green Run button of the macro editor).
 import os, sys
@@ -7,14 +7,11 @@ import FreeCAD as App
 
 doc = App.ActiveDocument
 if doc is None or doc.getObject("Params") is None:
-    raise SystemExit("Open models/CIANO14_40_L12.FCStd or models/CIANO14_40_L20.FCStd first")
-REPO_DEFAULT = r"C:\Users\vadim\Projects\CIANO14_40_motor_model"
+    raise SystemExit("Open a model built by motor_ai_sim.cad.build (e.g. CIANO14_40_new_L12.FCStd) first")
 try:
-    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))   # <repo>/motor_templates/.../macros
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))   # <repo>/cad/motor_templates/.../macros
 except NameError:
-    repo = REPO_DEFAULT
-if not os.path.exists(os.path.join(repo, "tools", "sim_sync.py")):
-    repo = REPO_DEFAULT
+    repo = os.path.abspath(os.environ.get("MOTRES_CAD_ROOT", "."))                    # set MOTRES_CAD_ROOT=<repo>/cad if run from the editor
 if repo not in sys.path:
     sys.path.insert(0, repo)
 import importlib

@@ -62,8 +62,8 @@ def build_bodies(doc, sh, pj):
     mag = doc.addObject("PartDesign::Body", "Magnet"); magnets.addObject(mag)
     r_mag = build_magnet(doc, sh, mag)
     doc.recompute()
-    coils = _polar_array(doc, coil, "Params.num_seg * 3", "Coils"); winding.addObject(coils)
-    marr = _polar_array(doc, mag, "Params.num_seg * Params.num_poles_per_segment", "MagnetArray"); magnets.addObject(marr)
+    coils = _polar_array(doc, coil, "Params.coil_count", "Coils"); winding.addObject(coils)
+    marr = _polar_array(doc, mag, "Params.magnet_count", "MagnetArray"); magnets.addObject(marr)
     mats = prof.get("materials", {})
     for b in (core, coil, rot, mag):
         if b.Name in mats:

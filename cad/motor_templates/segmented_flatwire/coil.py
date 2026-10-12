@@ -22,10 +22,10 @@ from .sketchkit import SK
 from .params_sheet import pval
 from .common import P, xy_sketch, origin_feature, pad_symmetric
 
-X1 = P + "tooth_width / 2 + " + P + "insulation_thickness + " + P + "wire_spacing_x / 2"
-YTOP = P + "stator_up_r - " + P + "core_thickness - " + P + "insulation_thickness - " + P + "wire_spacing_y / 2"
-PITCH = "(" + P + "wire_height + " + P + "wire_spacing_y)"
-LC = "(" + P + "motor_length + " + P + "coil_straight_extra)"
+X1 = P + "coil_x_in"
+YTOP = P + "coil_top_y"
+PITCH = P + "coil_layer_pitch"
+LC = P + "coil_leg_length"
 AX = P + "coil_bend_axis_dx"
 # (angle on the centre line [deg], fraction of the layer pitch dropped) - Fusion Loft1 measured on the Fusion STEP
 # (fusion_source/Coil_L20_fusion.step, symmetric mean of both halves); linear would be (30, 1/6), (60, 1/3) ...
@@ -47,7 +47,9 @@ def _ytop_expr(layer_expr, extra=None):
 
 
 def _layer_rects(sk, g, layer_expr, layer_val, sides=("R", "L"), tag="", drop=0.0):
-    """Wire cross-section rectangles of one layer (right and/or left leg) with Params-driven constraints.
+    """Wire cross-section rectangle of one leg of one layer with Params-driven constraints.  Every coil sketch holds ONE
+    leg (the legs are separate features so the body stays one solid after every step), so there are no left / right
+    dimension pairs: the one-sided distance from the axis is `wire_x_in`.
     drop = extra fraction of a pitch (loft sections).  Returns {side: geo ids}."""
     s = SK(sk)
     x1 = g("tooth_width") / 2 + g("insulation_thickness") + g("wire_spacing_x") / 2
@@ -58,13 +60,13 @@ def _layer_rects(sk, g, layer_expr, layer_val, sides=("R", "L"), tag="", drop=0.
     for side in sides:
         if side == "R":
             gid = s.rect(x1, ytop - wh, x1 + ww, ytop)
-            s.con("DistanceX", -1, 1, gid[3], 1, x1, name="wire_x_in_R" + tag, expr=X1)
+            s.con("DistanceX", -1, 1, gid[3], 1, x1, name="wire_x_in" + tag, expr=X1)
         else:
             gid = s.rect(-x1 - ww, ytop - wh, -x1, ytop)
-            s.con("DistanceX", gid[1], 1, -1, 1, x1, name="wire_x_in_L" + tag, expr=X1)
-        s.con("Distance", gid[0], ww, name="wire_width_" + side + tag, expr=P + "wire_width")
-        s.con("DistanceY", -1, 1, gid[2], 1, ytop, name="layer_top_y_" + side + tag, expr=ytop_expr)
-        s.con("Distance", gid[1], wh, name="wire_height_" + side + tag, expr=P + "wire_height")
+            s.con("DistanceX", gid[1], 1, -1, 1, x1, name="wire_x_in" + tag, expr=X1)
+        s.con("Distance", gid[0], ww, name="wire_width" + tag, expr=P + "wire_width")
+        s.con("DistanceY", -1, 1, gid[2], 1, ytop, name="layer_top_y" + tag, expr=ytop_expr)
+        s.con("Distance", gid[1], wh, name="wire_height" + tag, expr=P + "wire_height")
         out[side] = gid
     return out
 
@@ -81,9 +83,9 @@ def _bend_axis(sk, g, rect, side, tag):
     sk.addConstraint(Sketcher.Constraint("PointOnObject", ln, 1, rect[0]))
     sk.addConstraint(Sketcher.Constraint("PointOnObject", ln, 2, rect[2]))
     if side == "R":
-        s.con("DistanceX", -1, 1, ln, 1, ax, name="bend_axis_x_R" + tag, expr=AX)
+        s.con("DistanceX", -1, 1, ln, 1, ax, name="bend_axis_x" + tag, expr=AX)
     else:
-        s.con("DistanceX", ln, 1, -1, 1, -ax, name="bend_axis_x_L" + tag, expr=AX)
+        s.con("DistanceX", ln, 1, -1, 1, -ax, name="bend_axis_x" + tag, expr=AX)
     return ln
 
 
@@ -137,7 +139,7 @@ def build_coil(doc, sh, body):
         pad = body.newObject("PartDesign::Pad", name)
         pad.Profile = sk
         pad_symmetric(pad)
-        pad.setExpression("Length", "2 * " + AX)
+        pad.setExpression("Length", P + "coil_bridge_length")
         return pad
 
     def end_turn(prefix, layer_expr, layer_val, tag, first="R"):
@@ -147,7 +149,7 @@ def build_coil(doc, sh, body):
             if part == "B":
                 out.append(bridge(prefix + "Bridge", layer_expr, layer_val, tag))
             else:
-                out.append(bend(prefix + "Bend" + part, part, layer_expr, layer_val, tag + "_" + part))
+                out.append(bend(prefix + "Bend" + part, part, layer_expr, layer_val, tag))
             doc.recompute()
         return out
 
@@ -180,8 +182,8 @@ def build_coil(doc, sh, body):
     lp.Originals = [r0] + et0 + [l0, tr]
     lp.Direction = (r0.Profile[0], ["V_Axis"])
     lp.Reversed = True
-    lp.setExpression("Length", "(" + P + "num_wires_per_slot - 2) * " + PITCH)
-    lp.setExpression("Occurrences", P + "num_wires_per_slot - 1")
+    lp.setExpression("Length", P + "coil_layer_span")
+    lp.setExpression("Occurrences", P + "coil_layer_copies")
     body.Tip = lp
     doc.recompute()
     feats.append(lp)
@@ -192,7 +194,7 @@ def build_coil(doc, sh, body):
     lr = leg("CoilLastRightLeg", "R", last, n - 1, "_last")
     feats += [ll] + etl + [lr]
     # leads at -z: layer 0 left leg, last layer right leg
-    lead_len = P + "coil_lead_ext + " + P + "coil_lead_len"
+    lead_len = P + "coil_lead_total"
     sk_li = xy_sketch(body, "CoilLeadInSketch", z_expr="-" + LC + " / 2")
     _layer_rects(sk_li, g, "0", 0, sides=("L",), tag="_lead")
     li = body.newObject("PartDesign::Pad", "CoilLeadIn")

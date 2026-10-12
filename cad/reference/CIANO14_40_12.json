@@ -1160,6 +1160,126 @@
    "comment": "Rotor: key depth below the bore (suppressed in Fusion; not modelled)",
    "role": "unsupported",
    "role_note": "rotor key not modelled (suppressed in Fusion)"
+  },
+  {
+   "name": "core_sectors",
+   "fusion_expression": null,
+   "freecad_expression": "num_seg * 3",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Stator sectors = 3 phases x num_seg (CoreSectors polar pattern)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_count",
+   "fusion_expression": null,
+   "freecad_expression": "core_sectors",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Coil copies = one wound tooth per stator sector (Coils array)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "rotor_poles",
+   "fusion_expression": null,
+   "freecad_expression": "num_seg * num_poles_per_segment",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Rotor poles = num_seg x num_poles_per_segment (RotorPoles polar pattern)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "magnet_count",
+   "fusion_expression": null,
+   "freecad_expression": "rotor_poles",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Magnet copies = one per rotor pole (MagnetArray)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_pitch",
+   "fusion_expression": null,
+   "freecad_expression": "wire_height + wire_spacing_y",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Layer pitch of the winding = wire_height + wire_spacing_y",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_copies",
+   "fusion_expression": null,
+   "freecad_expression": "num_wires_per_slot - 1",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Layers made by the pattern (the last layer is added separately) = num_wires_per_slot - 1 (CoilLayers)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_span",
+   "fusion_expression": null,
+   "freecad_expression": "(num_wires_per_slot - 2) * coil_layer_pitch",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Pattern length of CoilLayers: first to last patterned layer",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_leg_length",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length + coil_straight_extra",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Straight coil leg length = motor_length + coil_straight_extra",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_x_in",
+   "fusion_expression": null,
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Inner x of a coil leg (centre line of the tooth to the wire)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_top_y",
+   "fusion_expression": null,
+   "freecad_expression": "stator_up_r - core_thickness - insulation_thickness - wire_spacing_y / 2",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "y of the top of layer 0 (under the yoke)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_bridge_length",
+   "fusion_expression": null,
+   "freecad_expression": "2 * coil_bend_axis_dx",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Straight bridge of the end turn between the two bend axes",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_lead_total",
+   "fusion_expression": null,
+   "freecad_expression": "coil_lead_ext + coil_lead_len",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Lead length beyond the straight leg = coil_lead_ext + coil_lead_len",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
   }
  ]
 }

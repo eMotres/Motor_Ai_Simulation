@@ -1,0 +1,38 @@
+# FreeCAD macro (1.0.2 / 1.1): compare the Params of the OPEN model with the simulation die/config (store copy in
+# $MOTRES_DIES_DIR or <model folder>/sim_snapshot) and write review files to <model folder>/sync/ ; on request also a PROPOSAL for the simulation side (Fusion CSV + YAML patch).
+# Never writes to the simulation server - the orchestrator applies a proposal after the owner confirms it.
+# Run: File > Open this file, then Macro > Execute macro (or the green Run button of the macro editor).
+import os, sys
+import FreeCAD as App
+
+doc = App.ActiveDocument
+if doc is None or doc.getObject("Params") is None:
+    raise SystemExit("Open a model built by motor_ai_sim.cad.build (e.g. CIANO14_40_new_L12.FCStd) first")
+try:
+    repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))   # <repo>/cad/motor_templates/.../macros
+except NameError:
+    repo = os.path.abspath(os.environ.get("MOTRES_CAD_ROOT", "."))                    # set MOTRES_CAD_ROOT=<repo>/cad if run from the editor
+if repo not in sys.path:
+    sys.path.insert(0, repo)
+import importlib
+from motor_templates.segmented_flatwire import syncback
+importlib.reload(syncback)
+
+propose = False
+try:
+    from PySide import QtGui
+    gui = App.GuiUp
+except Exception:
+    gui = False
+if gui:
+    propose = QtGui.QMessageBox.question(
+        None, "Sync back to simulation",
+        "Compare the Params of %s with the simulation die/config?\n\n"
+        "Yes = also write a PROPOSAL for the simulation side (Fusion CSV + YAML patch, applied only after you confirm).\n"
+        "No = only the comparison." % doc.Label,
+        QtGui.QMessageBox.Yes | QtGui.QMessageBox.No) == QtGui.QMessageBox.Yes
+res, gt = syncback.run(doc, propose=propose)
+text = syncback.summary(res, gt)
+App.Console.PrintMessage(text + "\n")
+if gui:
+    QtGui.QMessageBox.information(None, "Sync back to simulation", text)

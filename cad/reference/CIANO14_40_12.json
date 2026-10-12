@@ -1,0 +1,1285 @@
+{
+ "schema": "segmented_flatwire/profile/2",
+ "profile": {
+  "motor_id": "CIANO14_40_12",
+  "profile_file": "CIANO14_40_12",
+  "motor": "CIANO14 40/12",
+  "template": "segmented_flatwire",
+  "variant": "L20_fusion_open_2026-10-12",
+  "revision": "A.2",
+  "status": "validated against Fusion",
+  "source": {
+   "fusion_document": "CIANO14 40",
+   "read": "2026-10-12",
+   "method": "local Fusion MCP, readOnly scripts (tools/fusion_scripts)",
+   "note": "The OPEN Fusion model is the source. It differs from CIANO14 12_40_fusion_params_20260925-1136.csv: motor_length 20 (CSV 10), magnet_height 5.7 (4.2), num_wires_per_slot 7 (6), insulation_thickness 0.07 (0.05), magnet_fill_up 0.34 (0.38)."
+  },
+  "doc_name": "CIANO14_40_12",
+  "materials": {
+   "Core": "20SW1200",
+   "Coil": "Copper",
+   "RotorCore": "Steel",
+   "Magnet": "NdFeB (Steel in Fusion) - grade TBD"
+  },
+  "frame": "Fusion root frame: Z = motor axis (+z = propeller/front side), first core tooth / coil / magnet centred on +Y, mm",
+  "generated": "2026-10-12T16:12:33"
+ },
+ "units": {
+  "length": "mm",
+  "angle": "deg"
+ },
+ "roles": {
+  "input": "drives geometry (constant)",
+  "derived": "drives geometry (formula of others)",
+  "mechanics": "reserved for mechanical / board stages - no effect yet",
+  "info": "reference only",
+  "unsupported": "ignored by the template; pre-check requires nominal",
+  "foreign": "other design in the Fusion file"
+ },
+ "user_parameters": [
+  {
+   "name": "motor_d",
+   "fusion_expression": "( stator_up_r + housing_h ) * 2",
+   "freecad_expression": "( stator_up_r + housing_h ) * 2",
+   "value": 52.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "rotor_r",
+   "fusion_expression": "motor_d / 2",
+   "freecad_expression": "motor_d / 2",
+   "value": 26.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "rotor_h",
+   "fusion_expression": "magnet_height",
+   "freecad_expression": "magnet_height",
+   "value": 5.7,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "rotor_w",
+   "fusion_expression": "motor_length",
+   "freecad_expression": "motor_length",
+   "value": 20.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "magnet_height",
+   "fusion_expression": "5.7 mm",
+   "freecad_expression": "5.7 mm",
+   "value": 5.7,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "magnet_w",
+   "fusion_expression": "rotor_w",
+   "freecad_expression": "rotor_w",
+   "value": 20.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "air_gap",
+   "fusion_expression": "0.2 mm",
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "motor_length",
+   "fusion_expression": "20 mm",
+   "freecad_expression": "20 mm",
+   "value": 20.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "stator_up_r",
+   "fusion_expression": "stator_diameter / 2",
+   "freecad_expression": "stator_diameter / 2",
+   "value": 20.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "stator_mid_r",
+   "fusion_expression": "stator_up_r - slot_height - core_thickness / 2",
+   "freecad_expression": "stator_up_r - slot_height - core_thickness / 2",
+   "value": 12.95,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "slot_height",
+   "fusion_expression": "6.1 mm",
+   "freecad_expression": "6.1 mm",
+   "value": 6.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "core_thickness",
+   "fusion_expression": "1.9 mm",
+   "freecad_expression": "1.9 mm",
+   "value": 1.9,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "stator_down_r",
+   "fusion_expression": "stator_up_r - slot_height - core_thickness",
+   "freecad_expression": "stator_up_r - slot_height - core_thickness",
+   "value": 12.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "rotor_down_h",
+   "fusion_expression": "0.5 mm",
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "rotor_down_r",
+   "fusion_expression": "rotor_up_r - rotor_h",
+   "freecad_expression": "rotor_up_r - rotor_h",
+   "value": 6.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "glue",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "magnet_fill_up",
+   "fusion_expression": "0.34",
+   "freecad_expression": "0.34",
+   "value": 0.34,
+   "unit": "",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "num_seg",
+   "fusion_expression": "2",
+   "freecad_expression": "2",
+   "value": 2.0,
+   "unit": "",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "angle",
+   "fusion_expression": "( 360 / num_seg ) * 1 deg",
+   "freecad_expression": "( 360 / num_seg ) * 1 deg",
+   "value": 180.0,
+   "unit": "deg",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "angle_wire",
+   "fusion_expression": "( 360 / ( num_seg * 6 ) ) * 1 deg",
+   "freecad_expression": "( 360 / ( num_seg * 6 ) ) * 1 deg",
+   "value": 30.0,
+   "unit": "deg",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "angle_mag",
+   "fusion_expression": "( ( 360 / ( num_seg * num_poles_per_segment ) ) * 1 deg )",
+   "freecad_expression": "( ( 360 / ( num_seg * num_poles_per_segment ) ) * 1 deg )",
+   "value": 25.714285714,
+   "unit": "deg",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "bearing_6005_d",
+   "fusion_expression": "30 mm",
+   "freecad_expression": "30 mm",
+   "value": 30.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "resolver_w",
+   "fusion_expression": "16 mm",
+   "freecad_expression": "16 mm",
+   "value": 16.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "sealing_ring_d",
+   "fusion_expression": "0.9 mm",
+   "freecad_expression": "0.9 mm",
+   "value": 0.9,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "wire_spacing_y",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "insulation_thickness",
+   "fusion_expression": "0.07 mm",
+   "freecad_expression": "0.07 mm",
+   "value": 0.07,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "slot_hs",
+   "fusion_expression": "0.15",
+   "freecad_expression": "0.15",
+   "value": 0.15,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "magnet_fill_radius",
+   "fusion_expression": "0.2 mm",
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "slot_r",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "slot_up_r",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "tooth_width",
+   "fusion_expression": "3.3 mm",
+   "freecad_expression": "3.3 mm",
+   "value": 3.3,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "slot_ds",
+   "fusion_expression": "0.8",
+   "freecad_expression": "0.8",
+   "value": 0.8,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "slot_hs1",
+   "fusion_expression": "0.02",
+   "freecad_expression": "0.02",
+   "value": 0.02,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "housing_h",
+   "fusion_expression": "6 mm",
+   "freecad_expression": "6 mm",
+   "value": 6.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "magnet_fill_down",
+   "fusion_expression": "0.85",
+   "freecad_expression": "0.85",
+   "value": 0.85,
+   "unit": "",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "rotor_up_r",
+   "fusion_expression": "stator_down_r - air_gap",
+   "freecad_expression": "stator_down_r - air_gap",
+   "value": 11.8,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "rotor_house_height",
+   "fusion_expression": "1.1 mm",
+   "freecad_expression": "1.1 mm",
+   "value": 1.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "arc",
+   "fusion_expression": "stator_down_r * 2 * PI * ( angle_wire / 360 deg ) - tooth_width",
+   "freecad_expression": "stator_down_r * 2 * pi * ( angle_wire / 360 deg ) - tooth_width",
+   "value": 2.983185307,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "wire_height",
+   "fusion_expression": "0.6 mm",
+   "freecad_expression": "0.6 mm",
+   "value": 0.6,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "wire_width",
+   "fusion_expression": "2.5 mm",
+   "freecad_expression": "2.5 mm",
+   "value": 2.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "bolt_head_d",
+   "fusion_expression": "4 mm",
+   "freecad_expression": "4 mm",
+   "value": 4.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "offset_core",
+   "fusion_expression": "0.006 mm",
+   "freecad_expression": "0.006 mm",
+   "value": 0.006,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "num_wires_per_slot",
+   "fusion_expression": "7",
+   "freecad_expression": "7",
+   "value": 7.0,
+   "unit": "",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "dov_d",
+   "fusion_expression": "3 mm",
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "wire_beng_r",
+   "fusion_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - 0.05 mm",
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - 0.05 mm",
+   "value": 1.72,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "bolt_h",
+   "fusion_expression": "3 mm",
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "bolt_d",
+   "fusion_expression": "2 mm",
+   "freecad_expression": "2 mm",
+   "value": 2.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "offset_tooth",
+   "fusion_expression": "0.009 mm",
+   "freecad_expression": "0.009 mm",
+   "value": 0.009,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "tooth_r",
+   "fusion_expression": "wire_beng_r - 0.5 mm",
+   "freecad_expression": "wire_beng_r - 0.5 mm",
+   "value": 1.22,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "AWG",
+   "fusion_expression": "5.8 mm + 0.2 mm",
+   "freecad_expression": "5.8 mm + 0.2 mm",
+   "value": 6.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "offset_rotor",
+   "fusion_expression": "0.035 mm",
+   "freecad_expression": "0.035 mm",
+   "value": 0.035,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "offset_bearing",
+   "fusion_expression": "0.04 mm",
+   "freecad_expression": "0.04 mm",
+   "value": 0.04,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "offset_radiator",
+   "fusion_expression": "0.15 mm",
+   "freecad_expression": "0.15 mm",
+   "value": 0.15,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "offset_holder",
+   "fusion_expression": "0.08 mm",
+   "freecad_expression": "0.08 mm",
+   "value": 0.08,
+   "unit": "mm",
+   "comment": "",
+   "role": "mechanics",
+   "role_note": "reserved for the mechanical / board stages - no effect on the active part yet"
+  },
+  {
+   "name": "coil_w",
+   "fusion_expression": "wire_width + insulation_thickness * 2 + wire_spacing_x",
+   "freecad_expression": "wire_width + insulation_thickness * 2 + wire_spacing_x",
+   "value": 2.74,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "wire_spacing_x",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "stator_fillet_r",
+   "fusion_expression": "1.1 mm",
+   "freecad_expression": "1.1 mm",
+   "value": 1.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "magnet_up_gap",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "rotor_hole",
+   "fusion_expression": "0.9",
+   "freecad_expression": "0.9",
+   "value": 0.9,
+   "unit": "",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "tooth2_width",
+   "fusion_expression": "1.7 mm",
+   "freecad_expression": "1.7 mm",
+   "value": 1.7,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "cut_width",
+   "fusion_expression": "1 mm",
+   "freecad_expression": "1 mm",
+   "value": 1.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "magnet_down_height",
+   "fusion_expression": "1 mm",
+   "freecad_expression": "1 mm",
+   "value": 1.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "mag_step",
+   "fusion_expression": "motor_length",
+   "freecad_expression": "motor_length",
+   "value": 20.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived"
+  },
+  {
+   "name": "num_poles_per_segment",
+   "fusion_expression": "7",
+   "freecad_expression": "7",
+   "value": 7.0,
+   "unit": "",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "prop_D",
+   "fusion_expression": "2540.00 mm",
+   "freecad_expression": "2540.00 mm",
+   "value": 2540.0,
+   "unit": "mm",
+   "comment": "propeller diameter",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design"
+  },
+  {
+   "name": "prop_pitch",
+   "fusion_expression": "1270.00 mm",
+   "freecad_expression": "1270.00 mm",
+   "value": 1270.0,
+   "unit": "mm",
+   "comment": "geometric pitch",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design"
+  },
+  {
+   "name": "hub_D",
+   "fusion_expression": "400.00 mm",
+   "freecad_expression": "400.00 mm",
+   "value": 400.0,
+   "unit": "mm",
+   "comment": "hub diameter",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design"
+  },
+  {
+   "name": "hub_H",
+   "fusion_expression": "160.00 mm",
+   "freecad_expression": "160.00 mm",
+   "value": 160.0,
+   "unit": "mm",
+   "comment": "hub height",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design"
+  },
+  {
+   "name": "bore_D",
+   "fusion_expression": "80.00 mm",
+   "freecad_expression": "80.00 mm",
+   "value": 80.0,
+   "unit": "mm",
+   "comment": "shaft bore",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design"
+  },
+  {
+   "name": "bolt_PCD",
+   "fusion_expression": "250.00 mm",
+   "freecad_expression": "250.00 mm",
+   "value": 250.0,
+   "unit": "mm",
+   "comment": "bolt circle dia",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design"
+  },
+  {
+   "name": "bolt_D",
+   "fusion_expression": "32.00 mm",
+   "freecad_expression": "32.00 mm",
+   "value": 32.0,
+   "unit": "mm",
+   "comment": "bolt hole dia",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design"
+  },
+  {
+   "name": "stator_fillet_r1",
+   "fusion_expression": "0.15 mm",
+   "freecad_expression": "0.15 mm",
+   "value": 0.15,
+   "unit": "mm",
+   "comment": "",
+   "role": "input"
+  },
+  {
+   "name": "rotor_fill_r",
+   "fusion_expression": "0 mm",
+   "freecad_expression": "0 mm",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "unsupported",
+   "role_note": "rotor pole fillet not modelled (must be 0)"
+  },
+  {
+   "name": "num_slots_per_segment",
+   "fusion_expression": "6",
+   "freecad_expression": "6",
+   "value": 6.0,
+   "unit": "",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "unsupported",
+   "role_note": "template has 6 slots (3 wound teeth) per segment; angle_wire = 360/(num_seg*6) as in Fusion"
+  },
+  {
+   "name": "shaft_height",
+   "fusion_expression": "2 mm",
+   "freecad_expression": "2 mm",
+   "value": 2.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature"
+  },
+  {
+   "name": "sleeve_thickness",
+   "fusion_expression": "0 mm",
+   "freecad_expression": "0 mm",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "unsupported",
+   "role_note": "no rotor sleeve (must be 0)"
+  },
+  {
+   "name": "stator_diameter",
+   "fusion_expression": "40 mm",
+   "freecad_expression": "40 mm",
+   "value": 40.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "input"
+  },
+  {
+   "name": "magnet_lamination",
+   "fusion_expression": "0 mm",
+   "freecad_expression": "0 mm",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "unsupported",
+   "role_note": "no axial magnet segmentation (must be 0)"
+  }
+ ],
+ "named_parameters_sketch3": [
+  {
+   "name": "ax_core_ref_inset",
+   "source": "CIANO14 40/Sketch3 d9633",
+   "fusion_expression": "core_thickness - 0.9 mm",
+   "fusion_dimension_value": 1.0,
+   "freecad_expression": "0.9 mm",
+   "value": 0.9,
+   "unit": "mm",
+   "comment": "Sketch3: construction line r = stator_up_r - (core_thickness - ax_core_ref_inset) (r=19); reference only",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_bore_tip_angle",
+   "source": "CIANO14 40/Sketch3 d11685",
+   "fusion_expression": "45 deg",
+   "fusion_dimension_value": 45.0,
+   "freecad_expression": "45 deg",
+   "value": 45,
+   "unit": "deg",
+   "comment": "Shaft: cone at the front end of the Ø6 bore (bore ends z=17.7, cone apex on axis z=20.7)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_journal_r",
+   "source": "CIANO14 40/Sketch3 d11687",
+   "fusion_expression": "4 mm",
+   "fusion_dimension_value": 4.0,
+   "freecad_expression": "4 mm",
+   "value": 4,
+   "unit": "mm",
+   "comment": "Shaft: journal radius under the 618/8 bearings (Ø8), front z 11.9..20.7, back z -15.9..-11.9",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_shoulder_len",
+   "source": "CIANO14 40/Sketch3 d11689",
+   "fusion_expression": "0.5 mm",
+   "fusion_dimension_value": 0.5,
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "Shaft: axial length of the Ø9.4 shoulder (z 11.4..11.9)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_tip_r",
+   "source": "CIANO14 40/Sketch3 d11691",
+   "fusion_expression": "( 4.9 / 2 ) * 1 mm",
+   "fusion_dimension_value": 2.45,
+   "freecad_expression": "4.9 mm / 2",
+   "value": 2.45,
+   "unit": "mm",
+   "comment": "Shaft: tip radius (Ø4.9), z 28.7..36.7",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_bore_r",
+   "source": "CIANO14 40/Sketch3 d11692",
+   "fusion_expression": "3 mm",
+   "fusion_dimension_value": 3.0,
+   "freecad_expression": "3 mm",
+   "value": 3,
+   "unit": "mm",
+   "comment": "Shaft: bore radius (Ø6), z -15.9..17.7",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_shoulder_r",
+   "source": "CIANO14 40/Sketch3 d11695",
+   "fusion_expression": "( 9.4 / 2 ) * 1 mm",
+   "fusion_dimension_value": 4.7,
+   "freecad_expression": "9.4 mm / 2",
+   "value": 4.7,
+   "unit": "mm",
+   "comment": "Shaft: shoulder radius (Ø9.4) against the front bearing inner ring",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "holder_flange_t",
+   "source": "CIANO14 40/Sketch3 d11698",
+   "fusion_expression": "1.2 mm",
+   "fusion_dimension_value": 1.2,
+   "freecad_expression": "1.2 mm",
+   "value": 1.2,
+   "unit": "mm",
+   "comment": "Front holder: flange thickness z 11.9..13.1 (back holder flange z -13.1..-11.9 same value by symmetry)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "holder_lip_t",
+   "source": "CIANO14 40/Sketch3 d11700",
+   "fusion_expression": "0.8 mm",
+   "fusion_dimension_value": 0.8,
+   "freecad_expression": "0.8 mm",
+   "value": 0.8,
+   "unit": "mm",
+   "comment": "Front holder: bearing retaining lip thickness z 15.9..16.7",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "bearing_od_r",
+   "source": "CIANO14 40/Sketch3 d11701",
+   "fusion_expression": "( 16 / 2 ) * 1 mm",
+   "fusion_dimension_value": 8.0,
+   "freecad_expression": "16 mm / 2",
+   "value": 8.0,
+   "unit": "mm",
+   "comment": "618/8 bearing outer radius (Ø16) = holder bearing seat radius",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "holder_lip_r",
+   "source": "CIANO14 40/Sketch3 d11702",
+   "fusion_expression": "( 14.6 / 2 ) * 1 mm",
+   "fusion_dimension_value": 7.3,
+   "freecad_expression": "14.6 mm / 2",
+   "value": 7.3,
+   "unit": "mm",
+   "comment": "Holder: bearing retaining lip inner radius (Ø14.6), front and back",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "bearing_w",
+   "source": "CIANO14 40/Sketch3 d11703",
+   "fusion_expression": "4 mm",
+   "fusion_dimension_value": 4.0,
+   "freecad_expression": "4 mm",
+   "value": 4,
+   "unit": "mm",
+   "comment": "618/8 bearing width; front seat z 11.9..15.9",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_front_overhang",
+   "source": "CIANO14 40/Sketch3 d11704",
+   "fusion_expression": "4 mm",
+   "fusion_dimension_value": 4.0,
+   "freecad_expression": "4 mm",
+   "value": 4,
+   "unit": "mm",
+   "comment": "Shaft: from front holder face z=16.7 to the Ø8 -> Ø4.95 step z=20.7",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_thread_len",
+   "source": "CIANO14 40/Sketch3 d11705",
+   "fusion_expression": "8 mm",
+   "fusion_dimension_value": 8.0,
+   "freecad_expression": "8 mm",
+   "value": 8,
+   "unit": "mm",
+   "comment": "Shaft: length of the Ø4.95 (thread) section z 20.7..28.7",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_tip_len",
+   "source": "CIANO14 40/Sketch3 d11706",
+   "fusion_expression": "8 mm",
+   "fusion_dimension_value": 8.0,
+   "freecad_expression": "8 mm",
+   "value": 8,
+   "unit": "mm",
+   "comment": "Shaft: length of the Ø4.9 tip z 28.7..36.7",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "back_holder_len",
+   "source": "CIANO14 40/Sketch3 d11729",
+   "fusion_expression": "7 mm",
+   "fusion_dimension_value": 7.0,
+   "freecad_expression": "7 mm",
+   "value": 7,
+   "unit": "mm",
+   "comment": "Back holder: outer cylinder r=12 length z -20.1..-13.1",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "back_holder_ref_r",
+   "source": "CIANO14 40/Sketch3 d11730",
+   "fusion_expression": "10 mm",
+   "fusion_dimension_value": 10.0,
+   "freecad_expression": "10 mm",
+   "value": 10,
+   "unit": "mm",
+   "comment": "Back holder: construction radius r=10 (outer r = ref + wall, seat r = ref - wall)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "back_holder_wall",
+   "source": "CIANO14 40/Sketch3 d11731",
+   "fusion_expression": "2.00 mm",
+   "fusion_dimension_value": 2.0,
+   "freecad_expression": "2 mm",
+   "value": 2,
+   "unit": "mm",
+   "comment": "Back holder: wall 2 mm each side of r=10 (seat r=8, outer r=12); d11877 = d11731",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "holder_hub_wall",
+   "source": "CIANO14 40/Sketch3 d11752",
+   "fusion_expression": "0.8 mm",
+   "fusion_dimension_value": 0.8,
+   "freecad_expression": "0.8 mm",
+   "value": 0.8,
+   "unit": "mm",
+   "comment": "Front holder: hub wall r 8..8.8 (z 13.1..16.7)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_thread_r",
+   "source": "CIANO14 40/Sketch3 d11881",
+   "fusion_expression": "( 4.95 / 2 ) * 1 mm",
+   "fusion_dimension_value": 2.475,
+   "freecad_expression": "4.95 mm / 2",
+   "value": 2.475,
+   "unit": "mm",
+   "comment": "Shaft: thread section radius (Ø4.95), z 20.7..28.7",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "shaft_flange_step",
+   "source": "CIANO14 40/Sketch3 d11885",
+   "fusion_expression": "3 mm",
+   "fusion_dimension_value": 3.0,
+   "freecad_expression": "3 mm",
+   "value": 3,
+   "unit": "mm",
+   "comment": "Shaft: flange r = rotor bore r (5) + 3 = 8, z 10..11.4 (front rotor stop)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "coil_holder_clearance",
+   "source": "CIANO14 40/Sketch3 d11980",
+   "fusion_expression": "0.4 mm",
+   "fusion_dimension_value": 0.4,
+   "freecad_expression": "0.4 mm",
+   "value": 0.4,
+   "unit": "mm",
+   "comment": "Holders: inner radius = coil corner radius (d11979) + 0.4 (r=13.633)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "ring_t",
+   "source": "CIANO14 40/Sketch3 d11983",
+   "fusion_expression": "0.8 mm",
+   "fusion_dimension_value": 0.8,
+   "freecad_expression": "0.8 mm",
+   "value": 0.8,
+   "unit": "mm",
+   "comment": "GFRP ring: radial thickness r 12.433..13.233",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "ring_h",
+   "source": "CIANO14 40/Sketch3 d11985",
+   "fusion_expression": "1.8 mm",
+   "fusion_dimension_value": 1.8,
+   "freecad_expression": "1.8 mm",
+   "value": 1.8,
+   "unit": "mm",
+   "comment": "GFRP ring: axial length z 10..11.8 (front; back ring mirrored)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "ring_holder_gap",
+   "source": "CIANO14 40/Sketch3 d11987",
+   "fusion_expression": "0.1 mm",
+   "fusion_dimension_value": 0.1,
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "Axial gap ring -> holder flange (z 11.8..11.9)",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  },
+  {
+   "name": "coil_corner_r",
+   "source": "CIANO14 40/Sketch3 d11979",
+   "fusion_expression": "sqrt(( tooth_width / 2 ) ^ 2 + ( stator_up_r - core_thickness - ( insulation_thickness + ( wire_height + wire_spacing_y ) * num_wires_per_slot ) ) ^ 2)",
+   "fusion_dimension_value": 13.233269,
+   "freecad_expression": "sqrt((tooth_width / 2) ^ 2 + (stator_up_r - core_thickness - (insulation_thickness + (wire_height + wire_spacing_y) * num_wires_per_slot)) ^ 2)",
+   "value": 13.233269,
+   "unit": "mm",
+   "comment": "Sketch3: radius of the inner corner of the winding stack (13.233); holders and ring are dimensioned from it",
+   "role": "mechanics",
+   "role_note": "axial layout for shaft / holders / ring (stage 3) - no effect yet"
+  }
+ ],
+ "named_parameters_active_part": [
+  {
+   "name": "coil_straight_extra",
+   "source": "Coil/Extrude1",
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "Coil straight legs are motor_length + coil_straight_extra long (symmetric)",
+   "role": "input"
+  },
+  {
+   "name": "coil_bend_axis_dx",
+   "source": "Coil/Sketch1 L1/L3",
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - wire_beng_r",
+   "value": 0.05,
+   "unit": "mm",
+   "comment": "x of the two end-turn bend axes (+-), = half the straight bridge between the 90-deg bends (Coil/Sketch1 L1/L3)",
+   "role": "derived"
+  },
+  {
+   "name": "coil_lead_ext",
+   "source": "Coil/Extrude6",
+   "freecad_expression": "4.1 mm",
+   "value": 4.1,
+   "unit": "mm",
+   "comment": "Leads: first-layer left leg and last-layer right leg extended by this beyond the coil straight end (-z)",
+   "role": "input"
+  },
+  {
+   "name": "coil_lead_len",
+   "source": "Coil/Extrude7",
+   "freecad_expression": "5 mm",
+   "value": 5.0,
+   "unit": "mm",
+   "comment": "Leads: separate lead stubs after the extension (-z), same section wire_width x wire_height",
+   "role": "input"
+  },
+  {
+   "name": "magnet_edge_fillet",
+   "source": "Magnet/Fillet1",
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "Magnet axial-edge fillet in Fusion (no volume effect in the open model; not modelled)",
+   "role": "unsupported",
+   "role_note": "magnet edge fillet not modelled (no volume effect in Fusion)"
+  },
+  {
+   "name": "rotor_key_w",
+   "source": "Rotor/Sketch1 d11350",
+   "freecad_expression": "1 mm",
+   "value": 1.0,
+   "unit": "mm",
+   "comment": "Rotor: key width (key profile only used by suppressed Extrude5; not modelled)",
+   "role": "unsupported",
+   "role_note": "rotor key not modelled (suppressed in Fusion)"
+  },
+  {
+   "name": "rotor_key_h",
+   "source": "Rotor/Sketch1 d10896",
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "Rotor: key depth below the bore (suppressed in Fusion; not modelled)",
+   "role": "unsupported",
+   "role_note": "rotor key not modelled (suppressed in Fusion)"
+  },
+  {
+   "name": "core_sectors",
+   "fusion_expression": null,
+   "freecad_expression": "num_seg * 3",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Stator sectors = 3 phases x num_seg (CoreSectors polar pattern)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_count",
+   "fusion_expression": null,
+   "freecad_expression": "core_sectors",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Coil copies = one wound tooth per stator sector (Coils array)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "rotor_poles",
+   "fusion_expression": null,
+   "freecad_expression": "num_seg * num_poles_per_segment",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Rotor poles = num_seg x num_poles_per_segment (RotorPoles polar pattern)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "magnet_count",
+   "fusion_expression": null,
+   "freecad_expression": "rotor_poles",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Magnet copies = one per rotor pole (MagnetArray)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_pitch",
+   "fusion_expression": null,
+   "freecad_expression": "wire_height + wire_spacing_y",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Layer pitch of the winding = wire_height + wire_spacing_y",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_copies",
+   "fusion_expression": null,
+   "freecad_expression": "num_wires_per_slot - 1",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Layers made by the pattern (the last layer is added separately) = num_wires_per_slot - 1 (CoilLayers)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_span",
+   "fusion_expression": null,
+   "freecad_expression": "(num_wires_per_slot - 2) * coil_layer_pitch",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Pattern length of CoilLayers: first to last patterned layer",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_leg_length",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length + coil_straight_extra",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Straight coil leg length = motor_length + coil_straight_extra",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_x_in",
+   "fusion_expression": null,
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Inner x of a coil leg (centre line of the tooth to the wire)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_top_y",
+   "fusion_expression": null,
+   "freecad_expression": "stator_up_r - core_thickness - insulation_thickness - wire_spacing_y / 2",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "y of the top of layer 0 (under the yoke)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_bridge_length",
+   "fusion_expression": null,
+   "freecad_expression": "2 * coil_bend_axis_dx",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Straight bridge of the end turn between the two bend axes",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_lead_total",
+   "fusion_expression": null,
+   "freecad_expression": "coil_lead_ext + coil_lead_len",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "Lead length beyond the straight leg = coil_lead_ext + coil_lead_len",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  }
+ ]
+}

@@ -1,0 +1,704 @@
+[
+ {
+  "name": "motor_d",
+  "expression": "( stator_up_r + housing_h ) * 2",
+  "unit": "mm",
+  "value": 52.0,
+  "value_unit": "mm",
+  "value_internal": 5.2,
+  "comment": ""
+ },
+ {
+  "name": "rotor_r",
+  "expression": "motor_d / 2",
+  "unit": "mm",
+  "value": 26.0,
+  "value_unit": "mm",
+  "value_internal": 2.6,
+  "comment": ""
+ },
+ {
+  "name": "rotor_h",
+  "expression": "magnet_height",
+  "unit": "mm",
+  "value": 5.700000000000001,
+  "value_unit": "mm",
+  "value_internal": 0.5700000000000001,
+  "comment": ""
+ },
+ {
+  "name": "rotor_w",
+  "expression": "motor_length",
+  "unit": "mm",
+  "value": 20.0,
+  "value_unit": "mm",
+  "value_internal": 2.0,
+  "comment": ""
+ },
+ {
+  "name": "magnet_height",
+  "expression": "5.7 mm",
+  "unit": "mm",
+  "value": 5.700000000000001,
+  "value_unit": "mm",
+  "value_internal": 0.5700000000000001,
+  "comment": ""
+ },
+ {
+  "name": "magnet_w",
+  "expression": "rotor_w",
+  "unit": "mm",
+  "value": 20.0,
+  "value_unit": "mm",
+  "value_internal": 2.0,
+  "comment": ""
+ },
+ {
+  "name": "air_gap",
+  "expression": "0.2 mm",
+  "unit": "mm",
+  "value": 0.20000000000000004,
+  "value_unit": "mm",
+  "value_internal": 0.020000000000000004,
+  "comment": ""
+ },
+ {
+  "name": "motor_length",
+  "expression": "20 mm",
+  "unit": "mm",
+  "value": 20.0,
+  "value_unit": "mm",
+  "value_internal": 2.0,
+  "comment": ""
+ },
+ {
+  "name": "stator_up_r",
+  "expression": "stator_diameter / 2",
+  "unit": "mm",
+  "value": 20.0,
+  "value_unit": "mm",
+  "value_internal": 2.0,
+  "comment": ""
+ },
+ {
+  "name": "stator_mid_r",
+  "expression": "stator_up_r - slot_height - core_thickness / 2",
+  "unit": "mm",
+  "value": 12.950000000000001,
+  "value_unit": "mm",
+  "value_internal": 1.2950000000000002,
+  "comment": ""
+ },
+ {
+  "name": "slot_height",
+  "expression": "6.1 mm",
+  "unit": "mm",
+  "value": 6.1,
+  "value_unit": "mm",
+  "value_internal": 0.61,
+  "comment": ""
+ },
+ {
+  "name": "core_thickness",
+  "expression": "1.9 mm",
+  "unit": "mm",
+  "value": 1.9,
+  "value_unit": "mm",
+  "value_internal": 0.19,
+  "comment": ""
+ },
+ {
+  "name": "stator_down_r",
+  "expression": "stator_up_r - slot_height - core_thickness",
+  "unit": "mm",
+  "value": 12.000000000000002,
+  "value_unit": "mm",
+  "value_internal": 1.2000000000000002,
+  "comment": ""
+ },
+ {
+  "name": "rotor_down_h",
+  "expression": "0.5 mm",
+  "unit": "mm",
+  "value": 0.5,
+  "value_unit": "mm",
+  "value_internal": 0.05,
+  "comment": ""
+ },
+ {
+  "name": "rotor_down_r",
+  "expression": "rotor_up_r - rotor_h",
+  "unit": "mm",
+  "value": 6.100000000000001,
+  "value_unit": "mm",
+  "value_internal": 0.6100000000000001,
+  "comment": ""
+ },
+ {
+  "name": "glue",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.010000000000000002,
+  "comment": ""
+ },
+ {
+  "name": "magnet_fill_up",
+  "expression": "0.34",
+  "unit": "",
+  "value": 0.34,
+  "value_unit": "",
+  "value_internal": 0.34,
+  "comment": ""
+ },
+ {
+  "name": "num_seg",
+  "expression": "2",
+  "unit": "",
+  "value": 2.0,
+  "value_unit": "",
+  "value_internal": 2.0,
+  "comment": ""
+ },
+ {
+  "name": "angle",
+  "expression": "( 360 / num_seg ) * 1 deg",
+  "unit": "deg",
+  "value": 180.0,
+  "value_unit": "deg",
+  "value_internal": 3.141592653589793,
+  "comment": ""
+ },
+ {
+  "name": "angle_wire",
+  "expression": "( 360 / ( num_seg * 6 ) ) * 1 deg",
+  "unit": "deg",
+  "value": 29.999999999999996,
+  "value_unit": "deg",
+  "value_internal": 0.5235987755982988,
+  "comment": ""
+ },
+ {
+  "name": "angle_mag",
+  "expression": "( ( 360 / ( num_seg * num_poles_per_segment ) ) * 1 deg )",
+  "unit": "deg",
+  "value": 25.714285714285715,
+  "value_unit": "deg",
+  "value_internal": 0.4487989505128276,
+  "comment": ""
+ },
+ {
+  "name": "bearing_6005_d",
+  "expression": "30 mm",
+  "unit": "mm",
+  "value": 30.0,
+  "value_unit": "mm",
+  "value_internal": 3.0,
+  "comment": ""
+ },
+ {
+  "name": "resolver_w",
+  "expression": "16 mm",
+  "unit": "mm",
+  "value": 16.0,
+  "value_unit": "mm",
+  "value_internal": 1.6,
+  "comment": ""
+ },
+ {
+  "name": "sealing_ring_d",
+  "expression": "0.9 mm",
+  "unit": "mm",
+  "value": 0.9000000000000001,
+  "value_unit": "mm",
+  "value_internal": 0.09000000000000001,
+  "comment": ""
+ },
+ {
+  "name": "wire_spacing_y",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.010000000000000002,
+  "comment": ""
+ },
+ {
+  "name": "insulation_thickness",
+  "expression": "0.07 mm",
+  "unit": "mm",
+  "value": 0.07,
+  "value_unit": "mm",
+  "value_internal": 0.007000000000000001,
+  "comment": ""
+ },
+ {
+  "name": "slot_hs",
+  "expression": "0.15",
+  "unit": "",
+  "value": 0.15,
+  "value_unit": "",
+  "value_internal": 0.15,
+  "comment": ""
+ },
+ {
+  "name": "magnet_fill_radius",
+  "expression": "0.2 mm",
+  "unit": "mm",
+  "value": 0.20000000000000004,
+  "value_unit": "mm",
+  "value_internal": 0.020000000000000004,
+  "comment": ""
+ },
+ {
+  "name": "slot_r",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.010000000000000002,
+  "comment": ""
+ },
+ {
+  "name": "slot_up_r",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.010000000000000002,
+  "comment": ""
+ },
+ {
+  "name": "tooth_width",
+  "expression": "3.3 mm",
+  "unit": "mm",
+  "value": 3.3000000000000003,
+  "value_unit": "mm",
+  "value_internal": 0.33,
+  "comment": ""
+ },
+ {
+  "name": "slot_ds",
+  "expression": "0.8",
+  "unit": "",
+  "value": 0.8,
+  "value_unit": "",
+  "value_internal": 0.8,
+  "comment": ""
+ },
+ {
+  "name": "slot_hs1",
+  "expression": "0.02",
+  "unit": "",
+  "value": 0.02,
+  "value_unit": "",
+  "value_internal": 0.02,
+  "comment": ""
+ },
+ {
+  "name": "housing_h",
+  "expression": "6 mm",
+  "unit": "mm",
+  "value": 6.000000000000001,
+  "value_unit": "mm",
+  "value_internal": 0.6000000000000001,
+  "comment": ""
+ },
+ {
+  "name": "magnet_fill_down",
+  "expression": "0.85",
+  "unit": "",
+  "value": 0.85,
+  "value_unit": "",
+  "value_internal": 0.85,
+  "comment": ""
+ },
+ {
+  "name": "rotor_up_r",
+  "expression": "stator_down_r - air_gap",
+  "unit": "mm",
+  "value": 11.8,
+  "value_unit": "mm",
+  "value_internal": 1.1800000000000002,
+  "comment": ""
+ },
+ {
+  "name": "rotor_house_height",
+  "expression": "1.1 mm",
+  "unit": "mm",
+  "value": 1.1,
+  "value_unit": "mm",
+  "value_internal": 0.11000000000000001,
+  "comment": ""
+ },
+ {
+  "name": "arc",
+  "expression": "stator_down_r * 2 * PI * ( angle_wire / 360 deg ) - tooth_width",
+  "unit": "mm",
+  "value": 2.983185307179586,
+  "value_unit": "mm",
+  "value_internal": 0.2983185307179586,
+  "comment": ""
+ },
+ {
+  "name": "wire_height",
+  "expression": "0.6 mm",
+  "unit": "mm",
+  "value": 0.6,
+  "value_unit": "mm",
+  "value_internal": 0.06,
+  "comment": ""
+ },
+ {
+  "name": "wire_width",
+  "expression": "2.5 mm",
+  "unit": "mm",
+  "value": 2.5,
+  "value_unit": "mm",
+  "value_internal": 0.25,
+  "comment": ""
+ },
+ {
+  "name": "bolt_head_d",
+  "expression": "4 mm",
+  "unit": "mm",
+  "value": 4.0,
+  "value_unit": "mm",
+  "value_internal": 0.4,
+  "comment": ""
+ },
+ {
+  "name": "offset_core",
+  "expression": "0.006 mm",
+  "unit": "mm",
+  "value": 0.006,
+  "value_unit": "mm",
+  "value_internal": 0.0006000000000000001,
+  "comment": ""
+ },
+ {
+  "name": "num_wires_per_slot",
+  "expression": "7",
+  "unit": "",
+  "value": 7.0,
+  "value_unit": "",
+  "value_internal": 7.0,
+  "comment": ""
+ },
+ {
+  "name": "dov_d",
+  "expression": "3 mm",
+  "unit": "mm",
+  "value": 3.0000000000000004,
+  "value_unit": "mm",
+  "value_internal": 0.30000000000000004,
+  "comment": ""
+ },
+ {
+  "name": "wire_beng_r",
+  "expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - 0.05 mm",
+  "unit": "mm",
+  "value": 1.7200000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.17200000000000001,
+  "comment": ""
+ },
+ {
+  "name": "bolt_h",
+  "expression": "3 mm",
+  "unit": "mm",
+  "value": 3.0000000000000004,
+  "value_unit": "mm",
+  "value_internal": 0.30000000000000004,
+  "comment": ""
+ },
+ {
+  "name": "bolt_d",
+  "expression": "2 mm",
+  "unit": "mm",
+  "value": 2.0,
+  "value_unit": "mm",
+  "value_internal": 0.2,
+  "comment": ""
+ },
+ {
+  "name": "offset_tooth",
+  "expression": "0.009 mm",
+  "unit": "mm",
+  "value": 0.009,
+  "value_unit": "mm",
+  "value_internal": 0.0009,
+  "comment": ""
+ },
+ {
+  "name": "tooth_r",
+  "expression": "wire_beng_r - 0.5 mm",
+  "unit": "mm",
+  "value": 1.2200000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.12200000000000001,
+  "comment": ""
+ },
+ {
+  "name": "AWG",
+  "expression": "5.8 mm + 0.2 mm",
+  "unit": "mm",
+  "value": 6.0,
+  "value_unit": "mm",
+  "value_internal": 0.6,
+  "comment": ""
+ },
+ {
+  "name": "offset_rotor",
+  "expression": "0.035 mm",
+  "unit": "mm",
+  "value": 0.035,
+  "value_unit": "mm",
+  "value_internal": 0.0035000000000000005,
+  "comment": ""
+ },
+ {
+  "name": "offset_bearing",
+  "expression": "0.04 mm",
+  "unit": "mm",
+  "value": 0.04,
+  "value_unit": "mm",
+  "value_internal": 0.004,
+  "comment": ""
+ },
+ {
+  "name": "offset_radiator",
+  "expression": "0.15 mm",
+  "unit": "mm",
+  "value": 0.15,
+  "value_unit": "mm",
+  "value_internal": 0.015,
+  "comment": ""
+ },
+ {
+  "name": "offset_holder",
+  "expression": "0.08 mm",
+  "unit": "mm",
+  "value": 0.08,
+  "value_unit": "mm",
+  "value_internal": 0.008,
+  "comment": ""
+ },
+ {
+  "name": "coil_w",
+  "expression": "wire_width + insulation_thickness * 2 + wire_spacing_x",
+  "unit": "mm",
+  "value": 2.74,
+  "value_unit": "mm",
+  "value_internal": 0.274,
+  "comment": ""
+ },
+ {
+  "name": "wire_spacing_x",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.010000000000000002,
+  "comment": ""
+ },
+ {
+  "name": "stator_fillet_r",
+  "expression": "1.1 mm",
+  "unit": "mm",
+  "value": 1.1,
+  "value_unit": "mm",
+  "value_internal": 0.11000000000000001,
+  "comment": ""
+ },
+ {
+  "name": "magnet_up_gap",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.010000000000000002,
+  "comment": ""
+ },
+ {
+  "name": "rotor_hole",
+  "expression": "0.9",
+  "unit": "",
+  "value": 0.9,
+  "value_unit": "",
+  "value_internal": 0.9,
+  "comment": ""
+ },
+ {
+  "name": "tooth2_width",
+  "expression": "1.7 mm",
+  "unit": "mm",
+  "value": 1.7000000000000002,
+  "value_unit": "mm",
+  "value_internal": 0.17,
+  "comment": ""
+ },
+ {
+  "name": "cut_width",
+  "expression": "1 mm",
+  "unit": "mm",
+  "value": 1.0,
+  "value_unit": "mm",
+  "value_internal": 0.1,
+  "comment": ""
+ },
+ {
+  "name": "magnet_down_height",
+  "expression": "1 mm",
+  "unit": "mm",
+  "value": 1.0,
+  "value_unit": "mm",
+  "value_internal": 0.1,
+  "comment": ""
+ },
+ {
+  "name": "mag_step",
+  "expression": "motor_length",
+  "unit": "mm",
+  "value": 20.0,
+  "value_unit": "mm",
+  "value_internal": 2.0,
+  "comment": ""
+ },
+ {
+  "name": "num_poles_per_segment",
+  "expression": "7",
+  "unit": "",
+  "value": 7.0,
+  "value_unit": "",
+  "value_internal": 7.0,
+  "comment": ""
+ },
+ {
+  "name": "prop_D",
+  "expression": "2540.00 mm",
+  "unit": "mm",
+  "value": 2540.0,
+  "value_unit": "mm",
+  "value_internal": 254.0,
+  "comment": "propeller diameter"
+ },
+ {
+  "name": "prop_pitch",
+  "expression": "1270.00 mm",
+  "unit": "mm",
+  "value": 1270.0,
+  "value_unit": "mm",
+  "value_internal": 127.0,
+  "comment": "geometric pitch"
+ },
+ {
+  "name": "hub_D",
+  "expression": "400.00 mm",
+  "unit": "mm",
+  "value": 400.0,
+  "value_unit": "mm",
+  "value_internal": 40.0,
+  "comment": "hub diameter"
+ },
+ {
+  "name": "hub_H",
+  "expression": "160.00 mm",
+  "unit": "mm",
+  "value": 160.0,
+  "value_unit": "mm",
+  "value_internal": 16.0,
+  "comment": "hub height"
+ },
+ {
+  "name": "bore_D",
+  "expression": "80.00 mm",
+  "unit": "mm",
+  "value": 80.0,
+  "value_unit": "mm",
+  "value_internal": 8.0,
+  "comment": "shaft bore"
+ },
+ {
+  "name": "bolt_PCD",
+  "expression": "250.00 mm",
+  "unit": "mm",
+  "value": 250.0,
+  "value_unit": "mm",
+  "value_internal": 25.0,
+  "comment": "bolt circle dia"
+ },
+ {
+  "name": "bolt_D",
+  "expression": "32.00 mm",
+  "unit": "mm",
+  "value": 32.0,
+  "value_unit": "mm",
+  "value_internal": 3.2,
+  "comment": "bolt hole dia"
+ },
+ {
+  "name": "stator_fillet_r1",
+  "expression": "0.15 mm",
+  "unit": "mm",
+  "value": 0.15,
+  "value_unit": "mm",
+  "value_internal": 0.015,
+  "comment": ""
+ },
+ {
+  "name": "rotor_fill_r",
+  "expression": "0 mm",
+  "unit": "mm",
+  "value": 0.0,
+  "value_unit": "mm",
+  "value_internal": 0.0,
+  "comment": ""
+ },
+ {
+  "name": "num_slots_per_segment",
+  "expression": "6",
+  "unit": "",
+  "value": 6.0,
+  "value_unit": "",
+  "value_internal": 6.0,
+  "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)"
+ },
+ {
+  "name": "shaft_height",
+  "expression": "2 mm",
+  "unit": "mm",
+  "value": 2.0,
+  "value_unit": "mm",
+  "value_internal": 0.2,
+  "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)"
+ },
+ {
+  "name": "sleeve_thickness",
+  "expression": "0 mm",
+  "unit": "mm",
+  "value": 0.0,
+  "value_unit": "mm",
+  "value_internal": 0.0,
+  "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)"
+ },
+ {
+  "name": "stator_diameter",
+  "expression": "40 mm",
+  "unit": "mm",
+  "value": 40.0,
+  "value_unit": "mm",
+  "value_internal": 4.0,
+  "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)"
+ },
+ {
+  "name": "magnet_lamination",
+  "expression": "0 mm",
+  "unit": "mm",
+  "value": 0.0,
+  "value_unit": "mm",
+  "value_internal": 0.0,
+  "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)"
+ }
+]

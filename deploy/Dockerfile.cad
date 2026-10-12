@@ -1,0 +1,45 @@
+# motor_ai_sim CAD runtime - FreeCAD 1.1 (conda-forge, Linux) in its OWN image, not the API image.
+#
+# Builds the parametric motor models from the simulation store: die + config -> .FCStd + full STEP + datums + manifest
+# (python cad/run_build.py build ..., see docs/CAD_GENERATOR.md).  No FEM stack inside: ~ FreeCAD + python only.
+#
+# Build from the REPO ROOT (context filtered by deploy/Dockerfile.cad.dockerignore):
+#   docker build -f deploy/Dockerfile.cad --build-arg GIT_SHA=$(git rev-parse HEAD) -t motres-cad:1.1.3 .
+# Run (the store is mounted read-only, the output directory read-write; uid 10001 = the 'motres' service account):
+#   docker run --rm --user 10001:10001 --cpus 2 \
+#     -v /srv/motres/shared/dies:/store/dies:ro -v /srv/motres/shared/materials_library.yaml:/store/materials_library.yaml:ro \
+#     -v /srv/motres/shared/cad:/out motres-cad:1.1.3 build --die "CIANO14 40 new" --config L12 --out-root /out
+FROM mambaorg/micromamba:2.0-debian12-slim
+
+USER root
+# xvfb-run is the fallback for the headless GUI step (QT_QPA_PLATFORM=offscreen is the default); the rest are the X/GL
+# client libraries the conda Qt plugin dlopen()s.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        xvfb xauth libgl1 libegl1 libglx-mesa0 libxkbcommon-x11-0 libxcb-cursor0 libdbus-1-3 fontconfig fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# FreeCAD 1.1.3 from conda-forge, pinned (the weekly 2026.* dev builds are not used).  PyYAML for the store reader.
+RUN micromamba install -y -n base -c conda-forge "freecad=1.1.3" pyyaml \
+ && micromamba clean -a -y
+
+# FreeCAD resolves its home with getpwuid(): the service uid must have a passwd entry (docker run --user 10001:10001).
+RUN echo "motres:x:10001:10001:motres:/tmp:/usr/sbin/nologin" >> /etc/passwd  && echo "motres:x:10001:" >> /etc/group
+
+WORKDIR /app
+COPY cad/ cad/
+COPY src/motor_ai_sim/cad/ src/motor_ai_sim/cad/
+COPY src/motor_ai_sim/routes/_validation.py src/motor_ai_sim/routes/fusion.py src/motor_ai_sim/routes/
+COPY config/fusion_param_map.yaml config/motor_config.yaml config/
+ARG GIT_SHA=unknown
+RUN echo "${GIT_SHA}" > /app/GIT_SHA
+
+ENV QT_QPA_PLATFORM=offscreen \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    MOTRES_DIES_DIR=/store/dies \
+    MOTRES_MATERIALS_LIBRARY=/store/materials_library.yaml \
+    HOME=/tmp
+
+# The micromamba entrypoint activates the environment; the default command is the builder.
+ENTRYPOINT ["/usr/local/bin/_entrypoint.sh", "python", "/app/cad/run_build.py"]
+CMD ["--help"]

@@ -128,10 +128,11 @@ export function motorEfficiency(mode: DriveMode, drv: VariantReading | null, P_s
   return P_shaft_W > 0 ? (100 * P_shaft_W) / (P_shaft_W + P_loss_W + e) : 0;
 }
 
-// ── the temperatures row (propeller-cooled machines) ─────────────────────────────────────────
-// ONE row in the results block, the same five tiles from the first render on: while the
-// propeller data is loading, or the load is refused, they read "—" (a block never appears
-// later and pushes the grid down).
+// ── the temperatures row (EVERY cooling mode: propeller air, still air, typed air, liquid) ──
+// ONE row in the results block — the only place Configure shows temperatures (owner 2026-10-12:
+// the separate "Estimated temperatures" block is gone).  The same four tiles from the first
+// render on: while the cooling data is loading, or the load is refused, they read "—" (a block
+// never appears later and pushes the grid down).
 export const TEMP_ROW_IDS = ['tWinding', 'tMagnet', 'tHousing', 'airSpeed'] as const;
 
 export interface TempTileSpec {
@@ -142,15 +143,20 @@ export interface TempTileSpec {
   level?: 'ok' | 'warn' | 'bad';
   /** the limit the tile is judged against (for its tooltip) */
   limit?: number;
-  /** the cooling air speed [m/s] and the housing film coefficient h [W/m2K] behind a housing tile: they are
-   *  printed in ITS tooltip (one line each), not as tiles (owner 2026-10-05) */
+  /** the cooling air speed [m/s], the housing film coefficient h [W/m2K] and the cooling surface [cm²]
+   *  behind a housing tile: they are printed in ITS tooltip (one clause each), not as tiles
+   *  (owner 2026-10-05 for air and h, 2026-10-12 for the surface — it left the removed block) */
   air?: number | null;
   h?: number | null;
+  surface?: number | null;
 }
 
 export interface TempRowInput {
   T_winding_C: number; T_magnet_C: number; T_housing_C: number;
-  air_speed_ms: number; h_W_m2K: number;
+  /** null = no cooling air over the housing (a liquid jacket) */
+  air_speed_ms: number | null;
+  h_W_m2K: number;
+  surface_cm2: number;
 }
 
 const _n = (v: number) => String(Number(v.toFixed(0)));
@@ -172,7 +178,8 @@ export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; m
     tempTileSpec('tMagnet', 'configurePropeller.tMagnet', 'configurePropeller.tMagnetTip', t ? t.T_magnet_C : null, lim.magnet_C),
     // the housing has no limit of its own, but it can never be hotter than the winding it carries
     { ...tempTileSpec('tHousing', 'configurePropeller.tHousing', 'configurePropeller.tHousingTip', t ? t.T_housing_C : null, lim.winding_C),
-      air: t ? t.air_speed_ms : null, h: t ? t.h_W_m2K : null },
+      air: t ? t.air_speed_ms : null, h: t ? t.h_W_m2K : null, surface: t ? t.surface_cm2 : null },
+    // COOLING AIR: the air speed over the housing (0 m/s in still air, "—" with a liquid jacket)
     { id: 'airSpeed', labelKey: 'configurePropeller.airSpeed', tipKey: 'configurePropeller.airSpeedTip', unit: 'm/s', d: 1,
       value: t ? t.air_speed_ms : null },
   ];

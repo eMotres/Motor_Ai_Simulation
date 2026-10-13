@@ -34,6 +34,8 @@ import { mayFollowSharedContext, uiCanWrite } from '../../lib/accessUi';
 import { controllerMirrorApplies, type ControllerMirror } from '../controller/controllerApi';
 import { useAuth } from '../../contexts/AuthContext';
 import { useLastMotorState } from '../../lib/lastMotor';
+import { fetchFamilyTree } from '../../lib/familyTree';
+import { modeNames, type RowDie } from '../../lib/catalogRows';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -122,6 +124,9 @@ const ActiveFamilyStrip: React.FC = () => {
   // configuration's name, or the "discard and reload" confirmation.
   const [askDie, setAskDie] = useState<TextPromptState | null>(null);
   const [askReload, setAskReload] = useState<ConfirmState | null>(null);
+  // The MODE dropdown (owner 2026-10-13): the loaded configuration's duties.
+  const [modes, setModes] = useState<string[]>([]);
+  const [askSwitch, setAskSwitch] = useState<ConfirmState | null>(null);
   // ticks so the drift marker re-evaluates while the user types in the panel
   const [, setTick] = useState(0);
 
@@ -225,6 +230,19 @@ const ActiveFamilyStrip: React.FC = () => {
     })();
   }, [ctx, resolved, enforced, isAdmin]);
 
+  // The modes of the loaded configuration, re-read when the context or the catalog changes.
+  useEffect(() => {
+    if (!ctx?.active || !ctx.die || !ctx.config) { setModes([]); return; }
+    let alive = true;
+    const read = (fresh: boolean) => fetchFamilyTree({ fresh })
+      .then((t) => { if (alive) setModes(modeNames(t.dies as RowDie[], ctx.die, ctx.config)); })
+      .catch(() => { /* keep the last list; the name stays readable */ });
+    void read(false);
+    const onChanged = () => { void read(true); };
+    window.addEventListener('family-changed', onChanged);
+    return () => { alive = false; window.removeEventListener('family-changed', onChanged); };
+  }, [ctx?.active, ctx?.die, ctx?.config]);
+
   // Has the Simulation panel drifted off the loaded duty's operating point?
   // (`ctx` may still be null or RELEASED here — the released branch renders
   // below, after the save closures it shares are defined.)
@@ -239,6 +257,47 @@ const ActiveFamilyStrip: React.FC = () => {
     near(cur, p.current_arms, Math.max(0.05, 0.001 * p.current_arms))
     && near(rpm, p.rpm, 0.5) && near(gam, p.gamma_deg, 0.01)
     && mode === p.mode);
+
+  // Switch to another mode of the same configuration: loads that mode's point, materials
+  // and last STORED results through the ▶ load (nothing is solved).  A panel that has drifted
+  // off its point asks first - the load replaces it.
+  const switchMode = (name: string) => {
+    if (!ctx?.die || !ctx.config || name === ctx.duty) return;
+    const go = async () => {
+      setBusy(true); setMsg(null);
+      try {
+        const done = await applyDutyEverywhere(String(ctx.die), String(ctx.config), name, !!ctx.can_write);
+        setMsg(`✓ ${name} — ${done.message}`);
+        window.dispatchEvent(new CustomEvent('family-changed'));
+      } catch (e: any) { setMsg(`✗ ${e?.message ?? e}`); }
+      setBusy(false);
+    };
+    if (drifted) {
+      setAskSwitch({
+        title: `Load mode '${name}'?`,
+        body: 'The panel is off the current mode’s point; loading replaces it. Use Save first to keep it.',
+        onConfirm: () => { void go(); },
+      });
+    } else void go();
+  };
+  // "+ new mode": a duty from the CURRENT point, through the same save as "Save to duty"
+  // (it upserts by name), then it becomes the loaded mode.
+  const newMode = () => setAskCfg({
+    title: `New mode under ${ctx?.die} / ${ctx?.config}`,
+    label: 'Mode name',
+    hint: 'Captures the CURRENT point (and the last run when it matches) as a new mode',
+    onSubmit: (n) => {
+      const name = n.trim();
+      if (!name) return;
+      void (async () => {
+        await save({ duty: name });
+        try {
+          await applyDutyEverywhere(String(ctx?.die), String(ctx?.config), name, !!ctx?.can_write);
+        } catch { /* saved; loading it is a convenience */ }
+        window.dispatchEvent(new CustomEvent('family-changed'));
+      })();
+    },
+  });
 
   const lockGlyph = ctx?.die_locked && ctx?.config_locked ? '🔒🔒'
                   : ctx?.die_locked ? '🔒' : '🔓';
@@ -911,7 +970,19 @@ const ActiveFamilyStrip: React.FC = () => {
             {' / '}{drifted2
               ? <Tooltip title={tip}><span style={{ cursor: 'help' }}>{cfgEl}</span></Tooltip>
               : cfgEl}
-            {ctx.duty ? <>{' / '}<b style={{ color: '#60a5fa' }}>{ctx.duty}</b></> : null}
+            {ctx.duty && !ctx.can_write ? <>{' / '}<b style={{ color: '#60a5fa' }}>{ctx.duty}</b></> : null}
+            {ctx.duty && ctx.can_write ? <>{' / '}
+              <Tooltip title="Mode of this configuration — pick another to load its point and last stored results (nothing is solved)">
+                <select value={ctx.duty} disabled={busy}
+                  onChange={(e) => { if (e.target.value === '__new__') newMode(); else switchMode(e.target.value); }}
+                  style={{ fontSize: 12, fontWeight: 700, color: '#60a5fa', background: 'transparent',
+                           border: '1px solid var(--line-soft)', borderRadius: 4, padding: '0 2px' }}>
+                  {(modes.includes(ctx.duty) ? modes : [ctx.duty, ...modes]).map((m) => (
+                    <option key={m} value={m}>{m}</option>
+                  ))}
+                  <option value="__new__">{'＋ new mode'}</option>
+                </select>
+              </Tooltip></> : null}
           </Typography>
         );
       })()}
@@ -989,6 +1060,7 @@ const ActiveFamilyStrip: React.FC = () => {
         </Button>
       )}
       <TextPromptDialog state={askCfg} onClose={() => setAskCfg(null)} />
+      <ConfirmDialog state={askSwitch} onClose={() => setAskSwitch(null)} />
       {/* Mounted once here (this strip is on screen whenever a duty could be
           loaded); lib/dutyApply's applyDutyEverywhere — the Motors catalog's
           ▶ included — awaits it through lib/dutyGeometryDialogService. */}

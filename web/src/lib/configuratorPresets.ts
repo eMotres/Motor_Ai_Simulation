@@ -23,7 +23,11 @@ export interface PresetPack {
   v_cell_min?: number | null; v_cell_nom?: number | null; v_cell_max?: number | null;
 }
 
-export interface PresetDutyPoint { name: string; current_A: number | null; rpm: number | null; }
+export interface PresetDutyPoint {
+  name: string; current_A: number | null; rpm: number | null;
+  /** current angle and motor/generator role of the saved mode (absent on older servers) */
+  gamma_deg?: number | null; mode?: string | null;
+}
 
 export interface Preset {
   config: string;

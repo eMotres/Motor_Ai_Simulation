@@ -977,6 +977,28 @@ def _config_role(c: dict) -> tuple:
     return ("mixed", "duties")
 
 
+def config_default_duty(c: dict) -> Optional[str]:
+    """The mode the catalog shows (and loads) for a configuration — owner
+    2026-10-13: one row per motor outside, only the DEFAULT mode in it.
+
+    The per-config flag ``default_duty`` (default ``rated``) names it.  A flag
+    that points at no existing duty (deleted, renamed, never saved) is not an
+    error: the rule falls back, in order, to a duty named exactly ``rated``,
+    the first duty whose name starts with ``rated`` (``rated 0.5x9 mm``), then
+    the first duty.  ``None`` only when the configuration has no duties."""
+    names = [str(d.get("name")) for d in (c.get("duties") or [])
+             if isinstance(d, dict) and d.get("name")]
+    if not names:
+        return None
+    want = str(c.get("default_duty") or "rated").strip()
+    if want in names:
+        return want
+    if "rated" in names:
+        return "rated"
+    low = [n for n in names if n.lower().startswith("rated")]
+    return low[0] if low else names[0]
+
+
 def _build_sig(die_doc: dict, cfg_doc: dict) -> str:
     """Fingerprint of the BUILD a result was computed on: the die's stamped
     geometry + the configuration's free-key overrides + winding + materials.
@@ -2126,6 +2148,11 @@ def tree(response: Response, authorization: str = Header(default=None)):
                 # customer supplies, so the catalog row can say so.
                 "parts": c.get("parts") or {},
                 "build_sig": _bsig,
+                # The mode the Motors row shows and loads (owner 2026-10-13);
+                # `default_duty_stored` is what the yaml says, kept visible
+                # when it names a duty that no longer exists.
+                "default_duty": config_default_duty(c),
+                "default_duty_stored": c.get("default_duty"),
                 "battery": c.get("battery"),
                 # The bearings, exactly the way the battery rides here: a
                 # property of the MACHINE, so the catalog row, the Mechanical
@@ -3329,6 +3356,8 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     # (a rename that orphaned the PWM payload would be a silent data loss).
     _move_duty_runs(die, src, cfg, new, copy=False)
     src["name"] = new
+    if c.get("default_duty") == duty:
+        c["default_duty"] = new
     # Every duty cycle that NAMED this duty follows the rename — its own, and
     # any other duty resting at it.  A cycle left pointing at a name that no
     # longer exists would be refused on the next save with a message about a
@@ -4473,6 +4502,28 @@ def lock_config(die: str, cfg: str, req: LockPatch,
     log.info("family: configuration '%s/%s' %s", die, cfg,
              "locked" if req.locked else "UNLOCKED")
     return {"ok": True, "locked": bool(req.locked)}
+
+
+class DefaultDutyPatch(BaseModel):
+    duty: str
+
+
+@router.patch("/config/{die}/{cfg}/default_duty")
+def set_default_duty(die: str, cfg: str, req: DefaultDutyPatch,
+                     _w: dict = Depends(require_catalog_write)):
+    """Choose which mode the Motors row shows and loads for this configuration
+    (owner 2026-10-13).  Must name an existing duty."""
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    _require_die_write(die, _w)
+    c = _load_yaml(_cfg_file(die, cfg), "configuration")
+    name = str(req.duty or "").strip()
+    if not any(isinstance(d, dict) and d.get("name") == name
+               for d in (c.get("duties") or [])):
+        raise HTTPException(404, detail=f"duty '{name}' not found in {die}/{cfg}")
+    c["default_duty"] = name
+    _save_yaml(_cfg_file(die, cfg), c)
+    log.info("family: default duty of '%s/%s' is now '%s'", die, cfg, name)
+    return {"ok": True, "default_duty": name}
 
 
 class BatteryPatch(BaseModel):

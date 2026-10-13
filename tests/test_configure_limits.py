@@ -125,10 +125,12 @@ def test_presets_are_the_dies_configurations_one_each_never_a_fixed_list():
     k = out[0]["knobs"]
     assert (k["L_mm"], k["N"], k["wireH_mm"], k["nP"], k["split"]) == (30, 6, 0.5, 1, 1)
     assert (k["I_A"], k["rpm"]) == (55, 7000) and out[0]["duty"] == "rated"      # the "rated" duty
-    assert out[0]["duty_points"] == [
+    assert [{k: p[k] for k in ("name", "current_A", "rpm")} for p in out[0]["duty_points"]] == [
         {"name": "peak", "current_A": 70.0, "rpm": 9000.0},
         {"name": "rated", "current_A": 55.0, "rpm": 7000.0},
     ]
+    # gamma + mode ride along for Configure's configuration x mode buttons (2026-10-13)
+    assert all({"gamma_deg", "mode"} <= set(p) for p in out[0]["duty_points"])
     assert out[0]["battery"]["cells"] == 6 and out[0]["battery"]["v_max"] == 25.2
 
     three = [_cfg("B", 20, 8, 0.45, 2, [("peak", 25000, 80)], S12),
@@ -176,7 +178,7 @@ def test_the_context_route_lists_the_dies_presets_and_their_own_variants(tmp_pat
     assert all(v["build"]["length_mm"] == 20.0 for v in pr[1]["pwm_variants"])
     assert pr[0]["drive_variant"] == "si_48k" and pr[0]["battery"]["cells"] == 6
     assert pr[1]["battery"]["cells"] == 12 and pr[1]["knobs"]["nP"] == 2
-    assert pr[0]["duty_points"] == [
+    assert [{k: p[k] for k in ("name", "current_A", "rpm")} for p in pr[0]["duty_points"]] == [
         {"name": "peak", "current_A": 48.79, "rpm": 14400.0},
         {"name": "rated", "current_A": 42.78, "rpm": 13000.0},
     ]

@@ -4,6 +4,7 @@
     "geometry": "几何",
     "materials": "材料",
     "mesh": "网格",
+    "simulations": "仿真",
     "simulation": "电磁",
     "static3d": "3D",
     "mechanical": "机械",

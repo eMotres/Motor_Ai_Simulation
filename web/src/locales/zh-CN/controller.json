@@ -471,6 +471,7 @@
     "packEdited": "已修改",
     "preset": "预设",
     "presetModified": "已偏离预设 {config}",
+    "changedFrom": "已偏离 {mode}",
     "presetTip": "将所有旋钮恢复到该电机的这一真实配置：叠厚、匝数、线材、接法、电流、转速、电池组和驱动。",
     "saveTitle": "保存配置",
     "packStock": "通用默认电池组 — 此电机未保存电池组",

@@ -78,6 +78,14 @@ export function configClickPlan(buttons: readonly ConfigButton[], config: string
   return { pick: config, load: b.duty, refuse: null };
 }
 
+/** Where a load opens the view, at once and before the load finishes (owner 2026-10-13): the
+ *  Geometry tab for an account that has it, Configure for a standard user (only Motors +
+ *  Configure).  `canWrite`: may write the shared config (the owner path). */
+export type LoadTargetTab = 'geometry' | 'compare';
+export function loadTargetTab(canWrite: boolean, standardUser: boolean): LoadTargetTab {
+  return !standardUser && canWrite ? 'geometry' : 'compare';
+}
+
 const modeRank = (name: string): number => {
   const n = name.trim().toLowerCase();
   return n.startsWith('rated') ? 0 : n.startsWith('peak') ? 1 : 2;

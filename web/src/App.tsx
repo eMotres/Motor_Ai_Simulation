@@ -37,6 +37,7 @@ import MotorScene from './components/viewer3d/MotorScene';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
+import FamilyLoadBanner from './components/common/FamilyLoadBanner';
 import AuthButton from './components/auth/AuthButton';
 import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
@@ -750,6 +751,8 @@ function App() {
 
         {/* ── What is loaded: die / configuration / duty + save-back ── */}
         <ActiveFamilyStrip />
+        {/* A motor loading in the background (its tab is already open) / why it failed */}
+        <FamilyLoadBanner />
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>

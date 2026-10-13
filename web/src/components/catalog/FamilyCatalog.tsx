@@ -8,7 +8,7 @@
  * same endpoints the rest of the app already uses; this panel writes nothing
  * of its own into the live config.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Box, Paper, Typography, Button, Chip, Tooltip, IconButton, CircularProgress,
 } from '@mui/material';
@@ -42,7 +42,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
 import { isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
-import { configButtons, configClickPlan, selectedConfig } from '../../lib/catalogRows';
+import { configButtons, configClickPlan, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
+import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -227,6 +228,9 @@ const FamilyCatalog: React.FC<{
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [dies, setDies] = useState<Die[]>([]);
   const [busy, setBusy] = useState<string | null>(null);   // what is being applied/created
+  // A load started from this panel outlives it (the view switches at once): while one runs
+  // anywhere, no second load starts.
+  const loadRunning = useSyncExternalStore(subscribeFamilyLoad, () => getFamilyLoad().status === 'loading');
   const [msg,  setMsg]  = useState<string | null>(null);   // last outcome (ok or error)
   // Clients browse and LOAD; editing the family catalog is the vendor's job.
   // The backend enforces this on every mutating endpoint — this flag only
@@ -681,14 +685,21 @@ const FamilyCatalog: React.FC<{
   const applyDuty = async (die: string, cfg: string, duty: string) => {
     const label = `${cfg} / ${duty}`;
     setBusy(label); setMsg(null);
+    // The view opens AT ONCE (owner 2026-10-13: the load takes seconds, the click must not
+    // wait for it): the owner lands on the Geometry tab, a standard account (Motors +
+    // Configure only) on Configure.  The load goes on behind it; lib/familyLoad carries the
+    // progress line - and the failure, which this panel (unmounted by the switch) cannot.
+    const token = beginFamilyLoad(die, cfg, duty);
+    setActiveTab(loadTargetTab(canWrite, standardUser));
     try {
       const done = await applyDutyEverywhere(die, cfg, duty, canWrite);
       setMsg(`✓ applied ${label} — ${done.message}`);
-      // Straight to the machine the user just loaded (user request).
-      // The owner lands on the Geometry tab; a standard account has Motors +
-      // Configure only, so the machine opens in Configure.
-      setActiveTab(canWrite ? 'geometry' : 'compare');
-    } catch (e: any) { setMsg(`✗ apply ${label}: ${e?.message ?? e}`); }
+      finishFamilyLoad(token);
+    } catch (e: any) {
+      const why = String(e?.message ?? e);
+      setMsg(`✗ apply ${label}: ${why}`);
+      failFamilyLoad(token, why);
+    }
     setBusy(null);
   };
 
@@ -770,7 +781,7 @@ const FamilyCatalog: React.FC<{
                             onClick={() => {
                               // pick it AND load its default mode; a click that cannot load says why
                               const plan = configClickPlan(btns, b.config,
-                                active?.die === die.name ? active.config ?? null : null, !!busy);
+                                active?.die === die.name ? active.config ?? null : null, !!busy || loadRunning);
                               setPicked((m) => ({ ...m, [die.name]: plan.pick }));
                               if (plan.refuse) setMsg(`✗ ${tx(plan.refuse === 'busy' ? 'configClickBusy' : 'configClickNoMode', { config: b.config })}`);
                               else if (plan.load) void applyDuty(die.name, plan.pick, plan.load);
@@ -795,7 +806,7 @@ const FamilyCatalog: React.FC<{
                       {cur.duty && (
                         <Tooltip title={tx('loadDefaultModeTip', { config: cur.config, duty: cur.duty })}>
                           <span>
-                            <IconButton size="small" disabled={!!busy}
+                            <IconButton size="small" disabled={!!busy || loadRunning}
                               onClick={() => applyDuty(die.name, cur.config, cur.duty!)}
                               sx={{ fontSize: 13, p: 0.3, color: '#34d399' }}>
                               {busy === `${cur.config} / ${cur.duty}` ? '\u2026' : '\u25b6'}

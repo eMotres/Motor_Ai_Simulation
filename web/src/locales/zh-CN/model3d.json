@@ -1,0 +1,40 @@
+{
+  "motor": "电机",
+  "none": "您的电机暂无可用的 3D 模型。",
+  "variant": {
+    "envelope": "简化外形",
+    "full": "完整"
+  },
+  "variantHelp": {
+    "envelope": "简化外形模型：定子和支架的外轮廓、带轴承位和螺纹段的轴、安装孔和螺栓圆、带针脚位置的相线板外形，不含内部结构。签署保密协议后可使用完整模型。",
+    "full": "完整模型：所有零件，带颜色。仅限所有者和已签署保密协议的账户。"
+  },
+  "parts": "零件",
+  "part": {
+    "Housing": "定子外形与支架",
+    "Core": "定子铁芯",
+    "Coils": "线圈",
+    "Rotor": "转子",
+    "Magnets": "磁钢",
+    "Shaft": "轴",
+    "Bearings_front": "轴承（前）",
+    "Bearings_back": "轴承（后）",
+    "Holder_front": "支架（前）",
+    "Holder_back": "支架（后）",
+    "Ring_front": "环（前）",
+    "Ring_back": "环（后）",
+    "Screws": "螺钉",
+    "Prop_fix": "螺旋桨转接件",
+    "PhaseBoard": "相线板"
+  },
+  "explode": "爆炸视图",
+  "section": "剖切面",
+  "sectionEnvelope": "简化外形模型没有内部结构，无需剖切。",
+  "measure": "测量",
+  "measureHint": "在模型上点击两个点",
+  "downloadStep": "下载 STEP（{variant}）",
+  "fit": "适应视图",
+  "version": "模板 {template}，构建于 {built}，参数 {hash}",
+  "stamped": "您的姓名和日期会写入文件名和 STEP 文件头。每次下载都有记录。",
+  "contextLost": "3D 视图丢失了图形上下文，请刷新页面。"
+}

@@ -8,10 +8,10 @@ let A = null;
 try { A = await import('../accessUi.ts'); } catch { /* old Node */ }
 const t = A ? test : test.skip;
 
-t('a standard user gets exactly Motors and Configure', () => {
+t('a standard user gets exactly Motors, Configure and 3D model', () => {
   const all = ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'static3d', 'mechanical',
-    'thermal', 'controller', 'sweep', 'comparePoints', 'cost', 'compare', 'admin'];
-  assert.deepEqual(all.filter((id) => A.tabAllowed(id, true)), ['motors', 'compare']);
+    'thermal', 'controller', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'admin'];
+  assert.deepEqual(all.filter((id) => A.tabAllowed(id, true)), ['motors', 'compare', 'model3d']);
   assert.deepEqual(all.filter((id) => A.tabAllowed(id, false)), all);
 });
 

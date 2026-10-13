@@ -3,8 +3,8 @@
 One parameter source: the simulation die/config (`/srv/motres/shared/dies/<die>/{die.yaml, L*.yaml}` and the
 materials library). The generator reads it, never writes it, and builds the motor model with FreeCAD 1.1 on the server.
 
-Roadmap: (1) model done, (2) this generator + server build per die/config, (3) BOM (done, section below), (4) STEP download (simplified
-envelope STEP before the NDA, full STEP after), (5) 3-D load FEM.
+Roadmap: (1) model done, (2) this generator + server build per die/config, (3) BOM (done, section below), (4) STEP download + the web "3D model" menu (done, section below: simplified
+envelope STEP / GLB before the NDA, full STEP / GLB after), (5) 3-D load FEM.
 
 ## Layout
 
@@ -230,9 +230,7 @@ radius. Unit tests: `tests/test_cad_generator.py` (12) pass in the deployed API 
 
 * Stage 3 (BOM): read `manifest.json` + `<motor_id>_datums.json` + `build_report.json` volumes; materials are in
   `params.json` (`profile.materials`, card data in `profile.material_cards`).
-* Stage 4 (STEP download): a route that serves the `.step` of a die/config after checking the user's NDA state. The
-  simplified envelope STEP before the NDA is not generated yet (would be a small template-side export: stator and rotor
-  envelopes, no coils / magnets); the manifest's `param_hash` is the cache key.
+* Stage 4 (STEP download): done, see "3D model menu" below; the manifest's `param_hash` is the cache key.
 * Rebuild trigger: compare `geo_sig_hash` / `param_hash` of the store with `manifest.json`; rebuild on mismatch.
 
 ## Bill of materials (roadmap stage 3)
@@ -282,3 +280,43 @@ shaft, `Thread12` M3x0.5 6H and `Thread14` M2x0.4 6H in the back holder are all 
 the screw component is `91292A032_NO THREADS`.  They are reproduced the same way: the geometry stays the core / tap diameter
 (shaft r 2.4505, tap holes), the thread faces carry the amber thread colour (`view.THREAD_COLOUR`, checked by `check_gui.py`)
 and the datums JSON lists them (`mechanics.threads`).  Volumes and the 1.0.2 / 1.1 compatibility are unchanged (no geometry change).
+
+
+## 3D model menu: viewer outputs, access rule, download log (2026-10-13)
+
+`cad/fc_scripts/export_models.py` runs after the STEP export of every store build (skip with `--no-models`) and writes, next to the
+STEP, three more files that the manifest lists with SHA-256 (`models3d` block: triangle counts, envelope solids, tessellation, worst
+mesh-vs-solid volume error):
+
+| File | What |
+|---|---|
+| `<motor_id>_full.glb` | the FULL model for the web viewer: one coloured node per part (`Core`, `Coils/Coil_nn`, `Rotor`, `Magnets/Magnet_nn`, `Shaft`, `Bearings_front/back`, `Holder_front/back`, `Ring_front/back`, `Screws/Screw_n`, `Prop_fix`, `PhaseBoard_FR4/copper/other/pins`); node `extras` carry `family` (the viewer's toggle) and `explode` (axial factor of the exploded view, in motor lengths). Colours = `view.COLORS`. |
+| `<motor_id>_envelope.step`, `<motor_id>_envelope.glb` | the SIMPLIFIED ENVELOPE, built from the same Params: the stator outer cylinder (radius `stator_up_r`, length `motor_length`) fused with both rings and both holders into ONE solid (the holders keep their mounting holes and the bolt circle, nothing of the stator interior is left on a surface), the shaft with its seats and thread section, Prop_fix, the phase board OUTLINE (FR4 outline and its large cut-outs, no copper, no vias or lead holes) and the three pins. No core slots, coils, rotor, magnets, bearings, screws. 7 solids. |
+| `<motor_id>_models3d.json` | evidence of the export (per-solid mesh volume check, envelope solid volumes) |
+
+`glb_writer.py` (pure Python, no numpy) writes the GLB: millimetres, +Z = motor axis, smooth normals inside a face and hard edges between
+faces; per-solid triangle budgets keep balls, screws, pins and board copper small (L12: full 4.6 MB / 135 k triangles, envelope 0.7 MB / 18 k).
+The export refuses the build if a mesh differs from its solid by more than 3 % in volume (measured 0.4 %), if the envelope STEP re-imports
+with another volume or solid count, or if a part of the interior would be in the envelope.
+
+Routes (`routes/model3d.py`, `model3d.py`), all authenticated, motor access = `motor_access` (granted die or per-die visibility; an ungranted or
+unbuilt motor is a 404):
+
+| Route | |
+|---|---|
+| `GET /api/model3d/models` | the built models of the caller's motors and the variant the caller gets (no BOM, no prices) |
+| `GET /api/model3d/<die>/<config>/model.glb` | the GLB of the caller's variant (`X-Model-Variant`) |
+| `GET /api/model3d/<die>/<config>/model.step` | the STEP of the caller's variant, header and file name stamped with the customer name and the date; one line in the download log |
+| `GET /api/model3d/downloads` | admin: the download log, newest first |
+
+Audience (`model3d.variant_for`, the only place): the owner / admin and accounts with `nda.signed` get the **full** model (`_full.glb`, `_active.step`);
+every other signed-in account gets the **envelope**; the URL names the motor, never a variant or a file. The NDA flag is a field of the user record
+(`nda: {signed, date, by}`), set in Admin -> Users -> user drawer (switch + date; `PATCH /api/auth/users/<email>` with `nda_signed`, `nda_date`; audited as `user.nda`).
+
+STEP stamp: the HEADER section is rewritten (description, file name, author = customer, organisation = MOTRES d.o.o., a comment line with the
+variant, template version, build date), the DATA section is copied byte for byte; file name `<motor_id>_<variant>_<customer-slug>_<YYYYMMDD>.step`.
+Download log: `cad_downloads.jsonl` beside `users.json` (0600): user, name, time, file, variant, motor, die/config, template version, build time,
+parameter hash, SHA-256 of the source file and of the stamped file, IP.  A download whose line cannot be written is refused (503).
+
+Deploying: the CAD image must be rebuilt from this commit (`export_models.py`, `glb_writer.py` are under `cad/`), then rebuild the configs
+(`docker run ... motres-cad:<tag> build --die ... --config ...`, same command as above); the API only reads `<shared>/cad`.

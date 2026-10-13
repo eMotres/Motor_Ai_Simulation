@@ -2,7 +2,7 @@
 // table row itself stays a single compact line.
 import React, { useEffect, useState } from 'react';
 import {
-  Drawer, Box, Typography, Select, MenuItem, Button, Chip, Divider, CircularProgress,
+  Drawer, Box, Typography, Select, MenuItem, Button, Chip, Divider, CircularProgress, Switch, TextField,
 } from '@mui/material';
 import KeyIcon from '@mui/icons-material/Key';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
@@ -40,10 +40,11 @@ const UserDrawer: React.FC<{
   onDelete: () => void;
   onResetPassword: () => void;
   onOpenMotors: () => void;
+  onNda: (signed: boolean, date?: string) => void;
   onRevokeAllSessions: () => void;
 }> = ({
   user, liveSessions, lastLogin, cpuH30d, jobs30d, onClose, busy,
-  onRole, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onRevokeAllSessions,
+  onRole, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions,
 }) => {
   const [revoking, setRevoking] = useState(false);
   useEffect(() => setRevoking(false), [user?.email]);
@@ -88,6 +89,22 @@ const UserDrawer: React.FC<{
               <Button size="small" onClick={onOpenMotors} sx={{ textTransform: 'none', fontSize: 11 }}>Change…</Button>
             )}
           </Box>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>NDA signed</Typography>
+            <HelpTip title="3D model menu: with the NDA signed the account sees and downloads the FULL model (view + STEP); without it only the simplified envelope. Every download is logged." />
+          </Box>
+          {user.role === 'admin' ? (
+            <Typography sx={{ fontSize: 13, color: 'var(--text-0)', mb: 2 }}>full model (admin)</Typography>
+          ) : (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+              <Switch size="small" checked={!!user.nda?.signed} disabled={busy}
+                onChange={(_, on) => onNda(on, on ? (user.nda?.date || undefined) : undefined)} />
+              <TextField size="small" type="date" disabled={busy || !user.nda?.signed} value={user.nda?.date ?? ''}
+                onChange={(e) => e.target.value && onNda(true, e.target.value)}
+                inputProps={{ 'aria-label': 'NDA date' }} sx={{ '& input': { fontSize: 12.5, py: 0.5 } }} />
+            </Box>
+          )}
 
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', mb: 1 }}>Actions</Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>

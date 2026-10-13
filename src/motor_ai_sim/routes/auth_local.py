@@ -452,6 +452,8 @@ class PatchReq(BaseModel):
     disabled: Optional[bool] = None
     name: Optional[str] = None
     password: Optional[str] = None      # admin reset
+    nda_signed: Optional[bool] = None   # 3D model menu: full model + STEP only when True
+    nda_date: Optional[str] = None      # YYYY-MM-DD (default today)
 
 
 @router.patch("/users/{email}")
@@ -460,6 +462,10 @@ def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)
     try:
         if req.password is not None:
             U.set_password(email, req.password)
+        if req.nda_signed is not None:
+            _AA.record(_AA.actor_of(_admin), "user.nda", str(email), subject=str(email),
+                       details={"signed": req.nda_signed, "date": req.nda_date})
+            U.set_nda(email, req.nda_signed, req.nda_date, by=_AA.actor_of(_admin))
         out = U.update_user(email, role=req.role, disabled=req.disabled,
                             name=req.name)
         log.info("auth: user %s updated (%s)", email,

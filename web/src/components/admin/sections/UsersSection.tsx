@@ -251,6 +251,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         onDelete={() => selected && deleteUser(selected)}
         onResetPassword={() => selected && setResetFor(selected)}
         onOpenMotors={() => selectedUser && setMotorsFor(selectedUser)}
+        onNda={(signed, date) => void patchUser(selected!, { nda_signed: signed, ...(date ? { nda_date: date } : {}) })}
         onRevokeAllSessions={() => selected && void revokeAllSessions(selected)}
       />
 

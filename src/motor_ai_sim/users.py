@@ -30,6 +30,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import secrets
 import threading
 import time
@@ -571,7 +572,46 @@ def public_user(email: str) -> dict:
             # Which catalog motors this account may open (see below).  Shipped
             # with the record so the admin table draws the count without a
             # second round trip per user.
-            "motors": normalize_grants(u.get("motors"))}
+            "motors": normalize_grants(u.get("motors")),
+            # NDA state (3D model menu): an account without it is served the simplified envelope only.
+            "nda": normalize_nda(u.get("nda"))}
+
+
+# ── NDA flag (3D model menu) ─────────────────────────────────────────────────
+# `nda: {"signed": bool, "date": "YYYY-MM-DD", "by": admin}` on the user record, set by an admin only (Admin -> Users).
+# Before it is signed the 3D model menu serves the simplified envelope model; after it, the full model and STEP.
+
+def normalize_nda(raw) -> dict:
+    if not isinstance(raw, dict):
+        return {"signed": False, "date": "", "by": ""}
+    signed = bool(raw.get("signed"))
+    date = str(raw.get("date") or "").strip()
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+        date = ""
+    return {"signed": signed, "date": date if signed else "", "by": str(raw.get("by") or "")[:200] if signed else ""}
+
+
+def get_nda(email: str) -> dict:
+    rec = _load_soft().get(_norm(email))
+    return normalize_nda(rec.get("nda") if isinstance(rec, dict) else None)
+
+
+def set_nda(email: str, signed: bool, date: Optional[str] = None, by: str = "") -> dict:
+    """Mark the NDA of an account as signed (on `date`, default today UTC) or not signed.  Admin routes only."""
+    email = _norm(email)
+    if date is not None and date != "" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(date)):
+        raise ValueError("date must be YYYY-MM-DD")
+    with _LOCK:
+        users = _load()
+        if email not in users:
+            raise KeyError(email)
+        if signed:
+            day = str(date) if date else time.strftime("%Y-%m-%d", time.gmtime())
+            users[email]["nda"] = {"signed": True, "date": day, "by": str(by or "")}
+        else:
+            users[email].pop("nda", None)
+        _save(users)
+    return get_nda(email)
 
 
 # ── per-user motor grants ────────────────────────────────────────────────────

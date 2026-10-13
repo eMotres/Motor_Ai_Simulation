@@ -1,6 +1,6 @@
 // What a STANDARD (role "user") account sees and may do in the web.
 //
-// Owner 2026-10-05: a standard user has only two menus - Motors and Configure.
+// Owner 2026-10-05: a standard user has only two menus - Motors and Configure; 2026-10-13 adds "3D model".
 // Both read the catalogue (tree, payload, references, configure_context); neither
 // needs a write to the shared or the personal config, so the server gate is NOT
 // widened.  Hiding tabs is UI only: every gated route stays gated server-side
@@ -8,8 +8,8 @@
 //
 // Pure, no runtime imports: web/src/lib/__tests__/accessUi.test.mjs imports it.
 
-/** The tab ids a standard user gets ('compare' is the Configure tab's id). */
-export const STANDARD_USER_TABS: readonly string[] = ['motors', 'compare'];
+/** The tab ids a standard user gets ('compare' is the Configure tab's id; 'model3d' serves the envelope or, with NDA, the full model). */
+export const STANDARD_USER_TABS: readonly string[] = ['motors', 'compare', 'model3d'];
 
 /** A signed-in, non-admin account on a backend that enforces auth. */
 export const isStandardUser = (enforced: boolean, isAdmin: boolean, role: string): boolean =>

@@ -167,10 +167,20 @@ def colour_phase_board(doc, gdoc):
     finally:
         App.closeDocument(tmp.Name)
     default = (0.6, 0.6, 0.6, 0.0)
+    # a few faces differ in the importer's healing (no key match): they take the majority colour of their own solid
+    import collections
+    missing = 0
+    for s in f.Shape.Solids:
+        keys = [_face_key(face) for face in s.Faces]
+        found = [table[k] for k in keys if k in table]
+        fallback = collections.Counter(found).most_common(1)[0][0] if found else default
+        for k in keys:
+            if k not in table:
+                table[k] = fallback
+                missing += 1
     cols = [table.get(_face_key(face), default) for face in f.Shape.Faces]
-    missing = sum(1 for face in f.Shape.Faces if _face_key(face) not in table)
     vo.DiffuseColor = cols
-    return dict(faces=len(cols), missing=missing, distinct=sorted({tuple(round(x, 2) for x in c[:3]) for c in cols}))
+    return dict(faces=len(cols), missing_filled_from_solid=missing, distinct=sorted({tuple(round(x, 2) for x in c[:3]) for c in cols}))
 
 
 def thread_face_indices(doc):

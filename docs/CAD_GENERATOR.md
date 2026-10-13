@@ -150,8 +150,10 @@ end-turn bridges by 0.0056 mm3 (ring outer r = coil corner r).  L12 against `CIA
 Stator_holder_back touches HS_PLATE on A_H, no mechanical overlap.  Owner edits (`owner_edits.py`, L12 and L20):
 `motor_length` 16 / 24, `shaft_height` 1.5, `rotor_house_height` 1.3, `bearing_B` 5, `holder_bolt_r` 15, `bolt_head_d` 4.2,
 `ring_h` 2 + `ring_holder_gap` 0.2 rebuild and pass the gate and the fit; `holder_bolt_r` 18 and `shaft_height` 0.5 are
-refused in words.  L12 with `motor_length` 24 is refused by the gate because the stage-A coil body breaks (13 solids);
-the mechanics follow (L20 -> 24 and L12 -> 16 pass) - open item of the coil builder.
+refused in words.  L12 with `motor_length` 24 builds (re-tested 2026-10-13 on the A.4.0 image and on the stock-screw image, with
+the old and the new coil straight rule: the old "13 solids" refusal no longer reproduces).  With the stock-rounded screw
+(2026-10-13) L12 -> 16 is refused in words: the required 21 mm rounds up to M2 x 25 and its tip would break through the back
+flange (no stock M2 length fits); 17 -> 18, 25 -> 25, 29 -> 30 do fit.
 
 Updating the owner repo (`CIANO14_40_motor_model`): motor_ai_sim's `cad/` is the one source.  `tools/update_from_motor_ai_sim.py`
 there copies `cad/motor_templates/segmented_flatwire/`, `cad/reference/` and the fc scripts from a motor_ai_sim checkout

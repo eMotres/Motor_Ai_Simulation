@@ -1,0 +1,666 @@
+"""Bill of materials of a generated motor model (CIANO14 40 family, template segmented_flatwire).
+
+ONE module, two homes with identical content: the owner repo (tools/bom_core.py, driven by tools/make_bom.py) and the
+server generator (motor_ai_sim src/motor_ai_sim/cad/bom.py, called after the STEP export).  Stdlib only; openpyxl is
+needed only for the .xlsx writer, PyYAML only for `sim_components_from_config`.  NO commercial data here: extra columns / sheets
+are added by the caller (hooks `extra_columns` / `extra_sheets`).
+
+Inputs (all plain data, assembled by the caller):
+  dump      JSON of fc_scripts/bom_dump.py: BOM-relevant objects of the FCStd (volumes, bboxes, arrays, links) + Params
+  inputs    dict(die, config, motor_id, materials {body: name}, cards {sim card name: card}, bearing_card, wire_stock [..],
+            sim_materials {slot: card}, sim_components [..], sim_total_kg, sim_source, provenance {..})
+Output of `build_bom`: dict(lines, totals, comparison, to_be_specified, warnings, unclassified, header).
+Masses: model volume x density (laminations x stacking factor); unit g.  Every density says where it comes from.
+"""
+import csv
+import datetime
+import json
+import math
+import re
+
+TEMPLATE = "bom/1"
+# purchased / standard parts the model does not carry as solids (nominal data from the PCB project and the stock tables)
+M2_STOCK_LENGTHS = [3, 4, 5, 6, 8, 10, 12, 16, 20, 25, 30, 35, 40, 45, 50, 55, 60]     # ISO 4762 / DIN 912, M2
+ASSUMED_DENSITY = {            # kg/m3, used only when the simulation library has no card (stated in the line notes)
+    "GFRP": (1900, "assumed: glass-fibre / epoxy laminate (G10-type) 1.8-2.0 g/cm3"),
+    "Steel (bearing)": (7830, "assumed: bearing steel 100Cr6"),
+    "18-8 Stainless Steel": (7930, "assumed: A2 / 18-8 stainless"),
+    "Copper": (8933, "simulation library card 'copper'"),
+    "Aluminum 6061": (2700, "simulation library card 'Aluminium_6061'"),
+    "Steel": (7850, "simulation library card 'Steel_42CrMo4_QT'"),
+}
+PIN_DENSITY = (8900, "assumed: CuCrZr C18150")
+BOARD_NOMINAL = dict(area_mm2=764.0, thickness_mm=1.6, mass_g=4.0,
+                     basis="estimate: 4 layers x 0.21 mm Cu (about 50 % coverage) + 3 x 0.25 mm FR-4, ENIG, mask; "
+                           "+-40 %, replace with a weighed sample")
+PIN_NOMINAL = dict(d=2.0, tail=2.05, mating=2.70, collar_d=3.0, collar_h=1.15)             # phase board README rev C / pin rev 7
+
+
+# ------------------------------------------------------------------------------------------------------ helpers
+def _r(x, n=3):
+    return None if x is None else round(float(x), n)
+
+
+def _num(x, n=3):
+    s = ("%." + str(n) + "f") % x
+    return s.rstrip("0").rstrip(".") if "." in s else s
+
+
+def _bb(e):
+    b = e["bbox"]
+    return b[3] - b[0], b[4] - b[1], b[5] - b[2]
+
+
+def nearest_m2_stock(length):
+    return min(M2_STOCK_LENGTHS, key=lambda s: (abs(s - length), s))
+
+
+def _card_density(cards, *names):
+    for n in names:
+        c = cards.get(n)
+        if c and c.get("density"):
+            return float(c["density"]), "simulation library card '%s'" % n
+    return None, None
+
+
+def density_of(material, inputs):
+    """kg/m3 and the source text for a profile material name."""
+    cards = inputs.get("cards", {})
+    pick = {"Copper": ("copper",), "Aluminum 6061": ("Aluminium_6061",), "Steel": ("Steel_42CrMo4_QT",)}
+    d, src = _card_density(cards, *pick.get(material, (material,)))
+    if d:
+        return d, src
+    if material in ASSUMED_DENSITY:
+        return ASSUMED_DENSITY[material]
+    raise KeyError("no density for material %r" % material)
+
+
+# ------------------------------------------------------------------------------------------------------ model reading
+class Model:
+    """Dump entries by role: bodies, array instances, placed copies; anything unclaimed stays in `unclaimed`."""
+
+    def __init__(self, dump):
+        self.entries = list(dump["entries"])
+        self.params = dict(dump.get("params") or {})
+        self.by_label = {e["label"]: e for e in self.entries}
+        self.claimed = set()
+
+    def get(self, label, claim=True):
+        e = self.by_label.get(label)
+        if e is not None and claim:
+            self.claimed.add(label)
+        return e
+
+    def instances(self, label):
+        """The entry whose solids are the instances of body `label` (a Draft array on it) or the body itself."""
+        for e in self.entries:
+            if e.get("base") == label:
+                self.claimed.add(e["label"])
+                self.claimed.add(label)
+                return e
+        return self.get(label)
+
+    def copies(self, label):
+        """Number of placed copies (App::Link) of a body or of its parent part."""
+        n = 0
+        for e in self.entries:
+            if e.get("linked") == label:
+                self.claimed.add(e["label"])
+                n += 1
+        return n
+
+    def p(self, name, default=None):
+        v = self.params.get(name, default)
+        if v is None:
+            raise KeyError("Params row %r missing in the model" % name)
+        return float(v)
+
+    def unclaimed(self):
+        return [e for e in self.entries if e["label"] not in self.claimed]
+
+
+def _extra(model, pattern):
+    """Entries (not yet claimed) whose label matches `pattern` - parts the template does not know yet (board, pins)."""
+    rx = re.compile(pattern, re.I)
+    return [e for e in model.entries if e["label"] not in model.claimed and rx.search(e["label"])]
+
+
+# ------------------------------------------------------------------------------------------------------ the BOM
+def build_bom(dump, inputs):
+    m = Model(dump)
+    cfg = inputs["config"]
+    mats = inputs["materials"]
+    cards = inputs.get("cards", {})
+    warns, tbs, lines = [], [], []
+    src_model = "model volume (%s)" % dump.get("model", "FCStd")
+
+    def add(key, name, typ, qty, unit, material, dims, unit_g=None, source="", notes="", sim_g=None, in_total=True,
+            tbs_text=None, formula=None):
+        lines.append(dict(key=key, part=name, type=typ, qty=qty, unit=unit, material=material, dimensions=dims,
+                          unit_mass_g=_r(unit_g, 4), total_mass_g=_r(unit_g * qty, 3) if unit_g is not None else None,
+                          sim_mass_g=_r(sim_g, 2), source=source, notes=notes, in_total=in_total,
+                          to_be_specified=bool(tbs_text)))
+        if tbs_text:
+            tbs.append("%s: %s" % (name, tbs_text))
+
+    for e in dump["entries"]:
+        if e.get("state"):
+            warns.append("model object %s is %s - shapes may be stale" % (e["label"], "/".join(e["state"])))
+
+    # ---- laminations -------------------------------------------------------------------------------------------
+    L = m.p("motor_length")
+    steel = inputs["sim_materials"].get("stator_core") or "20SW1200"
+    sc = cards.get(steel, {})
+    kf = float(sc.get("stacking_factor") or 0.95)
+    rho_fe = float(sc.get("density") or 7650)
+    t_sheet = _sheet_thickness(sc)
+    n_sheets = int(round(L * kf / t_sheet))
+    if abs(L * kf / t_sheet - n_sheets) > 0.05:
+        warns.append("stack %.2f mm x k_f %.3f / %.2f mm = %.2f sheets, rounded to %d" % (L, kf, t_sheet, L * kf / t_sheet, n_sheets))
+    lam_note = ("%d sheets = round(L %.0f mm x k_f %.2f / %.2f mm); k_f %.2f = stacking_factor of card %s in "
+                "materials_library.yaml (the factor the simulation masses use), real coating thickness gives %.3f mm per "
+                "sheet incl. coating; mass = model solid x k_f x %.0f kg/m3 (%s)" % (
+                    n_sheets, L, kf, t_sheet, kf, steel, L / n_sheets, rho_fe, steel))
+    sim = {c["name"].split(" (")[0]: c for c in inputs.get("sim_components", [])}
+    simg = lambda k: (sim[k]["mass_kg"] * 1000.0) if k in sim else None
+
+    core = m.get("Core")
+    if core:
+        mass = core["volume"] * kf * rho_fe * 1e-6
+        so = _num(2 * m.p("stator_up_r"), 2)
+        bore = _num(2 * m.p("stator_down_r"), 2)
+        add("stator_lam", "Stator lamination (laser-cut / stamped, stacked)", "manufactured", n_sheets, "pcs", steel,
+            "OD %s mm, bore %s mm, %d slots, sheet %.2f mm, stack %.0f mm" % (so, bore, round(m.p("num_seg") * 6), t_sheet, L),
+            mass / n_sheets, "JFE 20SW1200 non-oriented, 0.20 mm", lam_note + "; model 'Core' = one solid, %d electrical segments "
+            "(num_seg) - segmenting / bonding of the stack: to be specified" % round(m.p("num_seg")),
+            sim_g=simg("Stator core"), tbs_text="stack bonding / segment joining (welding, cleat, bonding varnish) not named in the model or the simulation")
+    rot = m.get("RotorCore")
+    if rot:
+        mass = rot["volume"] * kf * rho_fe * 1e-6
+        steel_r = inputs["sim_materials"].get("rotor_core") or steel
+        add("rotor_lam", "Rotor lamination (magnet pockets, key), stacked", "manufactured", n_sheets, "pcs", steel_r,
+            "OD %s mm, bore %s mm, %d magnet pockets, sheet %.2f mm, stack %.0f mm" % (
+                _num(2 * m.p("rotor_up_r"), 2), _num(2 * m.p("shaft_seat_r"), 2), round(m.p("rotor_poles")), t_sheet, L),
+            mass / n_sheets, "JFE 20SW1200 non-oriented, 0.20 mm", lam_note, sim_g=simg("Rotor back-iron"))
+
+    # ---- magnets -----------------------------------------------------------------------------------------------
+    mag_label = "Magnet"
+    mag = m.get(mag_label)
+    mags = m.instances(mag_label)
+    if mag and mags:
+        mcard = inputs["sim_materials"].get("magnet", "?")
+        rho_m, rho_src = _card_density(cards, mcard)
+        rho_m = rho_m or 7500.0
+        w, h, ln = _bb(mag)
+        sec = mag["volume"] / ln
+        seg = m.params.get("magnet_lamination", 0)
+        add("magnets", "Permanent magnet (sintered NdFeB, ground, coated)", "manufactured (custom shape)", mags["n_solids"], "pcs", mcard,
+            "%.2f x %.2f x %.0f mm bounding box (width x radial x length), wedge section %.2f mm2, edge fillet %.1f mm, %d poles" % (
+                w, h, ln, sec, m.params.get("magnet_edge_fillet", 0.2), round(m.p("rotor_poles"))),
+            mag["volume"] * rho_m * 1e-6, "simulation magnet card %s (Br at 120 C)" % mcard,
+            "one piece per pole over the full stack length %.0f mm; segmentation: %s; density %.0f kg/m3 (%s); coating, "
+            "magnetisation direction and tolerances: to be specified" % (
+                ln, "none (magnet_lamination = 0, solid magnet in the simulation)" if not seg else "%.0f" % seg, rho_m, rho_src),
+            sim_g=simg("Magnets"), tbs_text="magnet coating / tolerance / magnetisation / grading (model gives the shape only)")
+
+    # ---- coils / wire ------------------------------------------------------------------------------------------
+    coil = m.get("Coil")
+    coils = m.instances("Coil")
+    if coil and coils:
+        ww, wh = m.p("wire_width"), m.p("wire_height")
+        ins = m.p("insulation_thickness")
+        turns = round(m.p("num_wires_per_slot"))
+        rho_cu, cu_src = density_of(mats.get("Coil", "Copper"), inputs)
+        cu_vol = coil["volume"]
+        length = cu_vol / (ww * wh)
+        n_coils = coils["n_solids"]
+        enam_sec = (ww + 2 * ins) * (wh + 2 * ins) - ww * wh
+        rho_en, _ = _card_density(cards, "polyimide")
+        rho_en = rho_en or 1420.0
+        cu_g = cu_vol * rho_cu * 1e-6
+        en_g = length * enam_sec * rho_en * 1e-6
+        stock = _wire_stock_item(inputs.get("wire_stock") or [], ww, wh)
+        w = inputs.get("winding", {})
+        add("coils", "Coil (edge-wound flat wire, formed, with two leads)", "manufactured", n_coils, "pcs", "Copper, enamel AIW class 200",
+            "%d turns of %.1f x %.1f mm bare wire (enamel %.2f mm per side), conductor length %.1f mm per coil incl. leads" % (
+                turns, ww, wh, ins, length),
+            cu_g + en_g, "CAD coil solid; winding %s" % (w.get("connection", "?")),
+            "total conductor length %.2f m for %d coils; copper %.2f g (rho %.0f, %s) + enamel %.2f g (polyimide %.0f kg/m3); "
+            "simulation lists %d coils/phase (coil sides), CAD has %d coils of %d turns (single-layer, 2 per phase); "
+            "length = coil volume / (%.1f x %.1f); lead trimming, insulation of joints, lead ends: to be specified" % (
+                length * n_coils / 1000.0, n_coils, cu_g * n_coils, rho_cu, cu_src, en_g * n_coils, rho_en,
+                w.get("n_coils_per_phase", 0), n_coils, turns, ww, wh),
+            sim_g=simg("Copper windings"), tbs_text=None)
+        lines[-1]["_cu_g_unit"] = cu_g
+        lines[-1]["_length_mm"] = length
+        add("wire", "Enamelled flat copper wire (for the coils above)", "material", _r(length * n_coils / 1000.0, 3), "m",
+            "Copper, polyamide-imide (AIW) enamel, class N 200 C",
+            "%.1f x %.1f mm bare (nominal size of the stock item), enamelled build %.2f per side" % (ww, wh, ins),
+            None, ("stock item %s (%s), %.1f kg in stock on 2026-09-20" % (stock["code"], stock["spec"], stock["stock_kg"]))
+            if stock else "no matching item in wire_stock.yaml",
+            "copper %.2f g + enamel %.2f g for the %d coils = %.2f g; mass already counted in the coil line (not added again); "
+            "scrap allowance: to be specified; the stock spec carries no '/200' mark - class 200 follows from the AIW enamel type" % (
+                cu_g * n_coils, en_g * n_coils, n_coils, (cu_g + en_g) * n_coils), in_total=False)
+
+    # ---- shaft -------------------------------------------------------------------------------------------------
+    sh = m.get("Shaft")
+    if sh:
+        w, h, ln = _bb(sh)
+        mat = mats.get("Shaft", "Steel")
+        rho, rs = density_of(mat, inputs)
+        sim_mat = inputs["sim_materials"].get("shaft")
+        add("shaft", "Shaft (stepped, drive flats, M-thread tip)", "manufactured", 1, "pcs", sim_mat or "42CrMo4 QT (assumed, profile says '%s')" % mat,
+            "length %.1f mm, max Ø%.2f mm, journal Ø%.1f, bore Ø%.1f, drive flats %.1f mm across x %.1f long, chamfers %.1f mm" % (
+                ln, w, m.p("bearing_d"), 2 * (m.p("shaft_seat_r") - m.p("shaft_height")),
+                m.p("shaft_flat_w"), m.p("shaft_flat_len"), m.p("shaft_chamfer")),
+            sh["volume"] * rho * 1e-6, "model; simulation shaft slot " + ("= %s" % sim_mat if sim_mat else "not set in %s.yaml" % cfg),
+            "density %.0f (%s); simulation shaft is a hollow tube 50 mm2 x stack and sits outside the active mass; thread pitch / "
+            "heat treatment / surface: to be specified" % (rho, rs), sim_g=simg("Shaft"),
+            tbs_text="thread type and pitch on the tip, heat treatment, surface finish")
+
+    # ---- holders, rings, Prop_fix -----------------------------------------------------------------------------------
+    for key, label, title in (("holder_front", "Stator_holder", "Stator holder, front (propeller side)"),
+                              ("holder_back", "Stator_holder_back", "Stator holder, back (A_H hub face, six M3 tapped holes)")):
+        e = m.get(label)
+        if e:
+            w, h, ln = _bb(e)
+            mat = mats.get(label, "Aluminum 6061")
+            rho, rs = density_of(mat, inputs)
+            add(key, title, "manufactured", 1, "pcs", mat, "envelope %.1f x %.1f x %.1f mm, volume %.1f mm3, %d spokes, M2 %s" % (
+                w, h, ln, e["volume"], round(m.p("holder_bolt_count")), "clearance holes" if key == "holder_front" else "tapped holes 1.623 mm (minor)"),
+                e["volume"] * rho * 1e-6, "model", "density %.0f (%s); machining, anodising / finish: to be specified" % (rho, rs),
+                tbs_text="finish (anodising) and tolerances of the holder")
+    ring = m.get("Ring")
+    if ring:
+        n_ring = 1 + m.copies("Ring")
+        w, h, ln = _bb(ring)
+        mat = mats.get("Ring", "GFRP")
+        rho, rs = density_of(mat, inputs)
+        add("rings", "Ring (glass-fibre)", "manufactured", n_ring, "pcs", mat,
+            "OD %.2f mm, ID %.2f mm, thickness %.1f mm" % (w, 2 * m.p("ring_inner_r"), ln), ring["volume"] * rho * 1e-6, "model",
+            "front and back copy; density %.0f (%s); laminate type / fibre orientation: to be specified" % (rho, rs),
+            tbs_text="glass-fibre ring laminate (resin, thickness tolerance)")
+    pf = m.get("Prop_fix")
+    if pf:
+        w, h, ln = _bb(pf)
+        mat = mats.get("Prop_fix", "Aluminum 6061")
+        rho, rs = density_of(mat, inputs)
+        add("prop_fix", "Prop_fix (propeller fixing, double-D plate)", "manufactured", 1, "pcs", mat,
+            "Ø%.1f x %.1f mm, double-D hole on the shaft flats (clearance %.2f mm)" % (w, ln, m.p("prop_fix_clearance")),
+            pf["volume"] * rho * 1e-6, "model", "density %.0f (%s)" % (rho, rs))
+
+    # ---- bearings ----------------------------------------------------------------------------------------------
+    bo, bi = m.get("Bearing_outer_ring"), m.get("Bearing_inner_ring")
+    balls = m.instances("Bearing_ball")
+    if bo and bi and balls:
+        nb = 1 + m.copies("Bearing_618_8")
+        brg = mats.get("Bearing_outer_ring", "Steel (bearing)")
+        rho, rs = density_of(brg, inputs)
+        v = bo["volume"] + bi["volume"] + balls["volume"]
+        card = inputs.get("bearing_card") or {}
+        add("bearings", "Ball bearing 618/8-2Z (SKF 618/8-2Z, shielded)", "purchased", nb, "pcs", "bearing steel, shields both sides",
+            "d %.0f x D %.0f x B %.0f mm, %d balls Ø%.0f mm" % (m.p("bearing_d"), m.p("bearing_D"), m.p("bearing_B"),
+                                                                round(m.p("bearing_ball_count")), m.p("bearing_ball_d")),
+            v * rho * 1e-6, "ISO 15 series 618; card %s in bearings_library.yaml (C %.2f kN, C0 %.3f kN, grease limit %s rpm)" % (
+                card.get("catalog", {}).get("part_number", "618/8-2Z"), card.get("C_kn", 0), card.get("C0_kn", 0),
+                card.get("n_limit_grease_rpm", "?")),
+            "front + back copy; mass from the modelled rings and balls only (shields and cage not modelled, so the real part is "
+            "about the same or slightly heavier); density %.0f (%s); grease / clearance class: to be specified" % (rho, rs),
+            tbs_text="bearing grease and internal clearance class (C3?)")
+
+    # ---- screws -------------------------------------------------------------------------------------------------
+    scr_i = m.instances("Screw")
+    m.get("Screw")
+    if scr_i:
+        ln = m.p("holder_screw_l")
+        mat = mats.get("Screw", "18-8 Stainless Steel")
+        rho, rs = density_of(mat, inputs)
+        stock = nearest_m2_stock(ln)
+        flag = abs(stock - ln) > 0.01
+        one = scr_i["volume"] / scr_i["n_solids"]
+        note = "model is a plain Ø2 shank (thread not modelled); density %.0f (%s); CAD reference part McMaster 91292A032 " \
+               "(M2 x 0.4); head Ø%.1f x %.1f, hex socket %.1f" % (rho, rs, m.p("screw_head_d"), m.p("screw_head_h"), m.p("screw_socket_af"))
+        if flag:
+            lo = max([s for s in M2_STOCK_LENGTHS if s <= ln] or [stock])
+            hi = min([s for s in M2_STOCK_LENGTHS if s >= ln] or [stock])
+            warns.append("M2 screw length %.1f mm is not a stock length; nearest stock M2 x %d" % (ln, stock))
+            note = ("NON-STOCK LENGTH %.1f mm (model length under the head: front flange face to the back holder face). "
+                    "Nearest stock: M2 x %d (%+.1f mm; shorter by %.1f mm = less thread engagement in the back boss - check "
+                    "the M2 tap depth); next longer M2 x %d protrudes %.1f mm past the back holder face - check clearance. "
+                    "Proposed: M2 x %d. " % (ln, stock, stock - ln, ln - stock if stock < ln else 0.0, hi, hi - ln, stock)) + note
+        add("screws", "Screw M2 x %s socket head cap%s" % (_num(ln, 1), " (NON-STOCK length)" if flag else ""), "purchased",
+            scr_i["n_solids"], "pcs", mat, "M2 x 0.4 x %s mm, head Ø%.1f x %.1f, one per sector boundary on the bolt circle R%.2f" % (
+                _num(ln, 1), m.p("screw_head_d"), m.p("screw_head_h"), m.p("holder_bolt_r")),
+            one * rho * 1e-6, "ISO 4762 / DIN 912, A2-70", note,
+            tbs_text=("screw length %s mm is not a stock length - choose M2 x %d (or x %d)" % (_num(ln, 1), stock, nearest_m2_stock(ln + 3)))
+            if flag else None)
+
+    # ---- phase board and pins (model objects when present, else nominal data) -------------------------------------
+    pn = PIN_NOMINAL
+    pin_vol = math.pi * (pn["d"] / 2) ** 2 * (pn["tail"] + pn["mating"]) + math.pi * (pn["collar_d"] / 2) ** 2 * pn["collar_h"]
+    boards = _extra(m, r"board|pcb")
+    model_pins = []
+    for e in boards:
+        m.claimed.add(e["label"])
+        model_pins += [v for v in e["solid_volumes"] if abs(v - pin_vol) < 0.08 * pin_vol]
+    b_note = ("model object(s) %s: %d solids, %.1f mm3 in total, of which %d pin solids (%.2f mm3 each) and the notch-wall models; "
+              "mass kept at the nominal estimate" % (
+                  ", ".join(e["label"] for e in boards), sum(e["n_solids"] for e in boards), sum(e["volume"] for e in boards),
+                  len(model_pins), (sum(model_pins) / len(model_pins)) if model_pins else 0.0)
+              if boards else "not in the model yet - nominal data from the PCB project")
+    add("board", "Phase board rev C (coil connection, 4 layers x 6 oz)", "purchased", 1, "pcs", "FR-4 Tg>=170, Cu 4 x 0.21 mm, ENIG",
+        "Ø40.05 mm, window Ø24.5, thickness 1.6 mm (1.44-1.76), 6 plated U-notches, 3 pin holes Ø2.20",
+        BOARD_NOMINAL["mass_g"], "PCB_CIANO14_40 RELEASE_2026-10-11_FAB_4L_6OZ, ciano40_4L_revC.kicad_pcb sha256 b80d7b91...",
+        "%s; %s; the controller is NOT part of this BOM" % (b_note, BOARD_NOMINAL["basis"]),
+        tbs_text="fab confirmation of 0.35 mm copper clearance and 35 um notch plating (DFM answer pending)")
+    pins = _extra(m, r"pin|_pin|^pin")
+    for e in pins:
+        m.claimed.add(e["label"])
+    pin_one = (sum(model_pins) / len(model_pins)) if model_pins else pin_vol
+    add("pins", "Phase pin CIANO40-PIN-C rev 7", "purchased (custom turned)", 3, "pcs", "CuCrZr C18150 (rev 5 requirement), Ni + Ag plated",
+        "Ø%.1f body, collar Ø%.1f x %.2f, tail %.2f, mating %.2f mm" % (pn["d"], pn["collar_d"], pn["collar_h"], pn["tail"], pn["mating"]),
+        pin_one * PIN_DENSITY[0] * 1e-6, "PIN_CIANO40-PIN-C requirements (PCB project); dimensions of rev 7 from the phase board README",
+        "mass from the %s (%.2f mm3), %s%s; mating socket belongs to the controller (not in this BOM)" % (
+            "model pin solids" if model_pins else "nominal turned shape", pin_one, PIN_DENSITY[1],
+            "; model objects: " + ", ".join(e["label"] for e in pins) if pins else ""),
+        tbs_text="pin/socket pair not selected yet, pins not ordered (PCB release notes); material of rev 7 to be confirmed")
+
+    # ---- consumables the model or the simulation names ----------------------------------------------------------------
+    glue = m.params.get("glue")
+    add("adhesive", "Adhesive (magnet / coil / lamination bonding)", "material", 1, "set", "to be specified",
+        ("model parameter 'glue' = %.2f mm (info row)" % glue) if glue is not None else "not named", None, "model Params",
+        "no adhesive type named in the simulation or the CAD", tbs_text="adhesive type and amount (model carries only a glue-layer parameter)")
+    add("varnish", "Impregnation varnish", "material", 1, "set", "to be specified", "-", None, "-",
+        "not named in the model or the simulation", tbs_text="impregnation / varnish")
+    slot_ins = inputs["sim_materials"].get("slot_insulation")
+    add("slot_liner", "Slot insulation sheet", "material", 1, "set", slot_ins or "to be specified",
+        "thickness not given; no liner in the CAD", None, "simulation config " + cfg,
+        ("simulation names %s as slot liner" % slot_ins) if slot_ins else "%s.yaml names no slot liner" % cfg,
+        tbs_text="slot liner material and thickness" + (" (%s.yaml names %s, no thickness)" % (cfg, slot_ins) if slot_ins else ""))
+    sleeve = inputs["sim_materials"].get("sleeve")
+    if sleeve:
+        add("sleeve", "Rotor sleeve", "manufactured", 0, "pcs", sleeve, "sleeve_thickness = %s mm in the model" % _num(m.params.get("sleeve_thickness", 0)),
+            None, "simulation config " + cfg, "%s.yaml names sleeve material %s but the thickness is 0: no sleeve in the CAD or here" % (cfg, sleeve),
+            tbs_text="%s.yaml names rotor sleeve %s with zero thickness - confirm that no sleeve is wanted" % (cfg, sleeve))
+    add("leads", "Power leads / soldering", "material", 1, "set", "to be specified", "-", None, "PCB project ASSEMBLY_NOTES_MOTOR",
+        "PCB notes: a 12 AWG wire soldered onto each pin in the MOTOR build; not in the CAD", tbs_text="power leads (wire, length, termination) and solder")
+
+    # ---- anything the rules did not claim -------------------------------------------------------------------------------
+    unclassified = []
+    skip_templates = {e.get("base") for e in m.entries if e.get("base")}
+    for e in m.unclaimed():
+        if e["label"] in skip_templates:
+            continue
+        unclassified.append(e)
+        warns.append("model object %s (%d solid(s), %.1f mm3) has no BOM rule - listed as unclassified" % (e["label"], e["n_solids"], e["volume"]))
+        add("x_" + e["label"], "UNCLASSIFIED model object: " + e["label"], "unknown", e["n_solids"], "solids", "?",
+            "volume %.1f mm3, bbox %s" % (e["volume"], [round(x, 2) for x in e["bbox"]]), None, "model",
+            "no rule in bom_core.build_bom: add one (material, source)", tbs_text="classify model object " + e["label"])
+
+    for i, ln_ in enumerate(lines, 1):
+        ln_["item"] = i
+
+    totals = _totals(lines)
+    comparison = _compare(lines, inputs, totals)
+    comparison["explain"] = _explain(lines, comparison, inputs, m)
+    return dict(header=_header(dump, inputs), lines=lines, totals=totals, comparison=comparison,
+                to_be_specified=tbs, warnings=warns, unclassified=[e["label"] for e in unclassified])
+
+
+def _sheet_thickness(card):
+    if card.get("sheet_thickness_mm"):
+        return float(card["sheet_thickness_mm"])
+    mt = re.search(r"(\d\.\d+)\s*mm", card.get("description") or "")
+    return float(mt.group(1)) if mt else 0.2
+
+
+def _wire_stock_item(stock, w, h):
+    for s in stock:
+        if abs(s.get("width_mm", 0) - w) < 1e-6 and abs(s.get("thickness_mm", 0) - h) < 1e-6 and s.get("insulation") == "AIW":
+            return s
+    return None
+
+
+def _totals(lines):
+    tm = sum(l["total_mass_g"] or 0.0 for l in lines if l["in_total"] and l["total_mass_g"] is not None)
+    return dict(n_lines=len(lines), motor_mass_g=_r(tm, 2), mass_lines=sum(1 for l in lines if l["in_total"] and l["total_mass_g"] is not None))
+
+
+def _compare(lines, inputs, totals):
+    """BOM lines vs the simulation mass components of the saved duty (stator, copper, magnets, rotor, shaft)."""
+    by = {l["key"]: l for l in lines}
+    rows = []
+    pairs = (("Stator core", "stator_lam"), ("Copper windings", "coils"), ("Magnets", "magnets"), ("Rotor back-iron", "rotor_lam"),
+             ("Shaft", "shaft"))
+    sim = {c["name"].split(" (")[0]: c for c in inputs.get("sim_components", [])}
+    s_sum = b_sum = 0.0
+    for sname, key in pairs:
+        if sname not in sim or key not in by:
+            continue
+        s = sim[sname]["mass_kg"] * 1000.0
+        if key == "coils":
+            b = by[key]["_cu_g_unit"] * by[key]["qty"]          # the simulation copper mass is copper only (no enamel)
+            basis = "copper only"
+        else:
+            b = by[key]["total_mass_g"]
+            basis = ""
+        rows.append(dict(component=sname, sim_g=_r(s, 2), bom_g=_r(b, 2), diff_g=_r(b - s, 2), diff_pct=_r(100 * (b - s) / s, 1) if s else None, basis=basis))
+        s_sum += s
+        b_sum += b
+    rows.append(dict(component="Sum of the five simulation components", sim_g=_r(s_sum, 2), bom_g=_r(b_sum, 2), diff_g=_r(b_sum - s_sum, 2),
+                     diff_pct=_r(100 * (b_sum - s_sum) / s_sum, 1) if s_sum else None, basis=""))
+    sim_total = (inputs.get("sim_total_kg") or 0) * 1000.0
+    return dict(rows=rows, sim_total_g=_r(sim_total, 1), bom_total_g=totals["motor_mass_g"],
+                extra_parts_g=_r(totals["motor_mass_g"] - b_sum, 2), sim_source=inputs.get("sim_source", ""))
+
+
+def _explain(lines, comp, inputs, m):
+    by = {l["key"]: l for l in lines}
+    rows = {r["component"]: r for r in comp["rows"]}
+    out = []
+    d_tot = comp["bom_total_g"] - comp["sim_total_g"]
+    five = rows.get("Sum of the five simulation components")
+    if five:
+        out.append("Total: BOM %.1f g vs simulation %.1f g = %+.1f g, made of %+.1f g in the five components the simulation counts "
+                   "and %+.1f g of parts it does not model." % (comp["bom_total_g"], comp["sim_total_g"], d_tot, five["diff_g"], comp["extra_parts_g"]))
+    sh = rows.get("Shaft")
+    if sh and "shaft" in by:
+        out.append("Shaft %+.1f g: the simulation shaft is a hollow tube of 50 mm2 section x stack length (%.1f g); the CAD shaft is the real stepped "
+                   "part (%s), so the CAD value is the one to buy against." % (sh["diff_g"], sh["sim_g"], by["shaft"]["dimensions"].split(", journal")[0]))
+    cu = rows.get("Copper windings")
+    if cu and "coils" in by:
+        ln = by["coils"]["_length_mm"]
+        out.append("Copper %+.1f g (%+.1f %%): the simulation takes the straight slot copper (126 mm2 x stack) times an end-winding factor; the CAD coil is the "
+                   "modelled conductor, %.1f mm per turn incl. the two leads." % (cu["diff_g"], cu["diff_pct"], ln / max(1, round(m.p("num_wires_per_slot")))))
+    for nm in ("Stator core", "Rotor back-iron", "Magnets"):
+        r = rows.get(nm)
+        if r:
+            out.append("%s %+.1f g (%+.1f %%): simulation masses come from CAD polygon sections at the geometry saved with the duty and are rounded to "
+                       "1 g; the BOM uses the current model solid (air gap, fillets, key)." % (nm, r["diff_g"], r["diff_pct"]))
+    out.append("Parts without a simulation mass: " + ", ".join("%s %.1f g" % (by[k]["part"].split(" (")[0], by[k]["total_mass_g"])
+               for k in ("holder_front", "holder_back", "rings", "prop_fix", "bearings", "screws", "board", "pins") if k in by and by[k]["total_mass_g"]) + ".")
+    return out
+
+
+def _header(dump, inputs):
+    h = dict(die=inputs.get("die"), config=inputs.get("config"), motor_id=inputs.get("motor_id"), model=dump.get("model"),
+             freecad_version=dump.get("freecad_version"), template_meta=dump.get("meta"), generated=datetime.datetime.now().isoformat(timespec="seconds"),
+             bom_format=TEMPLATE)
+    h.update(inputs.get("provenance") or {})
+    return h
+
+
+# ------------------------------------------------------------------------------------------------------ simulation side
+def sim_components_from_config(path):
+    """(components, total_kg, source text) of the LAST saved duty summary with mass_components in a config yaml."""
+    import yaml
+    d = yaml.safe_load(open(path, encoding="utf-8"))
+    found = []
+
+    def walk(o, p):
+        if isinstance(o, dict):
+            if "mass_components" in o:
+                found.append((p, o))
+            for k, v in o.items():
+                walk(v, "%s/%s" % (p, k))
+        elif isinstance(o, list):
+            for i, v in enumerate(o):
+                walk(v, "%s[%d]" % (p, i))
+    walk(d, "")
+    if not found:
+        return [], None, "no mass_components in " + str(path)
+    p, o = found[-1]
+    return o["mass_components"], o.get("mass_total_kg"), "%s%s (mass_total_kg %s)" % (str(path).replace("\\", "/").split("/")[-1], p, o.get("mass_total_kg"))
+
+
+# ------------------------------------------------------------------------------------------------------ writers
+CSV_COLUMNS = [("item", "item"), ("part", "part"), ("type", "type"), ("qty", "qty"), ("unit", "unit"), ("material", "material / grade"),
+               ("dimensions", "key dimensions"), ("unit_mass_g", "unit mass g"), ("total_mass_g", "total mass g"),
+               ("sim_mass_g", "simulation mass g"), ("source", "source / standard"), ("notes", "notes"), ("tbs", "to be specified")]
+
+
+def _csv_value(l, k):
+    if k == "tbs":
+        return "yes" if l["to_be_specified"] else ""
+    v = l.get(k)
+    if k == "total_mass_g" and not l["in_total"] and v is not None:
+        return ""
+    return "" if v is None else v
+
+
+def write_csv(bom, path, extra_columns=None):
+    """extra_columns: {'col title': {line key: value}} appended after the standard columns (a caller may add its own columns)."""
+    extra_columns = extra_columns or {}
+    keys = [k for k, _ in CSV_COLUMNS]
+
+    def row(d, extra=None):
+        return [d.get(k, "") for k in keys] + [(extra or {}).get(c, "") for c in extra_columns]
+    t, c = bom["totals"], bom["comparison"]
+    with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow([title for _, title in CSV_COLUMNS] + list(extra_columns))
+        for l in bom["lines"]:
+            w.writerow([_csv_value(l, k) for k in keys] + [extra_columns[col].get(l["key"], "") for col in extra_columns])
+        w.writerow(row(dict(item="T1", part="TOTAL mass of the BOM lines (model)", type="total", unit="g", total_mass_g=t["motor_mass_g"])))
+        w.writerow(row(dict(item="T2", part="Simulation passport mass (%s)" % c["sim_source"], type="total", unit="g", sim_mass_g=c["sim_total_g"])))
+        for r in c["rows"]:
+            w.writerow(row(dict(item="C", part="compare %s: BOM vs simulation %s %% %s" % (r["component"], r["diff_pct"], r["basis"]),
+                                type="comparison", unit="g", total_mass_g=r["bom_g"], sim_mass_g=r["sim_g"])))
+        w.writerow(row(dict(item="C", part="parts the simulation mass does not contain", type="comparison", unit="g", total_mass_g=c["extra_parts_g"])))
+        for ex in c.get("explain", []):
+            w.writerow(row(dict(item="E", part=ex, type="difference explained")))
+
+
+def write_xlsx(bom, path, banner="", extra_sheets=None, sheet_name=None):
+    """One sheet per config.  banner: text in row 1 of every sheet (e.g. INTERNAL - not for distribution).
+    extra_sheets: callables f(workbook, bom, banner) that add caller-specific sheets."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+    from openpyxl.utils import get_column_letter
+    wb = Workbook()
+    ws = wb.active
+    ws.title = sheet_name or (bom["header"].get("config") or "BOM")
+    thin = Side(style="thin", color="BBBBBB")
+    box = Border(left=thin, right=thin, top=thin, bottom=thin)
+    head_fill = PatternFill("solid", fgColor="1F3A5F")
+    warn_fill = PatternFill("solid", fgColor="FFF2CC")
+    flag_fill = PatternFill("solid", fgColor="FCE4D6")
+    r = 1
+    if banner:
+        ws.cell(r, 1, banner).font = Font(bold=True, color="C00000", size=12)
+        r += 1
+    h = bom["header"]
+    ws.cell(r, 1, "Bill of materials - %s (%s / %s)" % (h.get("motor_id"), h.get("die"), h.get("config"))).font = Font(bold=True, size=14)
+    r += 1
+    ws.cell(r, 1, "Generated %s from %s (FreeCAD %s); masses = model volume x density, laminations x stacking factor." % (
+        h.get("generated"), h.get("model"), h.get("freecad_version"))).font = Font(italic=True, color="555555")
+    r += 2
+    ws.cell(r, 1, "TO BE SPECIFIED (%d)" % len(bom["to_be_specified"])).font = Font(bold=True, size=12, color="9C5700")
+    r += 1
+    for t in bom["to_be_specified"]:
+        c = ws.cell(r, 1, "- " + t)
+        c.fill = warn_fill
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=len(CSV_COLUMNS))
+        c.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.row_dimensions[r].height = 15 if len(t) < 150 else 30
+        r += 1
+    if bom["warnings"]:
+        r += 1
+        ws.cell(r, 1, "FLAGS").font = Font(bold=True, size=12, color="C00000")
+        r += 1
+        for t in bom["warnings"]:
+            c = ws.cell(r, 1, "! " + t)
+            c.fill = flag_fill
+            ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=len(CSV_COLUMNS))
+            r += 1
+    r += 1
+    hdr = r
+    for j, (_, title) in enumerate(CSV_COLUMNS, 1):
+        c = ws.cell(r, j, title)
+        c.font = Font(bold=True, color="FFFFFF")
+        c.fill = head_fill
+        c.alignment = Alignment(wrap_text=True, vertical="center")
+        c.border = box
+    r += 1
+    first = r
+    for l in bom["lines"]:
+        for j, (k, _) in enumerate(CSV_COLUMNS, 1):
+            c = ws.cell(r, j, _csv_value(l, k))
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            c.border = box
+            if k == "tbs" and l["to_be_specified"]:
+                c.fill = warn_fill
+            if k in ("unit_mass_g", "total_mass_g", "sim_mass_g") and isinstance(c.value, (int, float)):
+                c.number_format = "0.00"
+        if not l["in_total"]:
+            ws.cell(r, 9, "(in coils)").font = Font(italic=True, color="777777")
+        if "NON-STOCK" in l["part"]:
+            for j in range(1, len(CSV_COLUMNS) + 1):
+                ws.cell(r, j).fill = flag_fill
+        r += 1
+    last = r - 1
+    t, c = bom["totals"], bom["comparison"]
+    r += 1
+    ws.cell(r, 2, "Total mass of the BOM lines (model)").font = Font(bold=True)
+    ws.cell(r, 9, "=SUMPRODUCT(--ISNUMBER(I%d:I%d),I%d:I%d)" % (first, last, first, last)).number_format = "0.0"
+    ws.cell(r, 10, "g")
+    r += 1
+    ws.cell(r, 2, "Simulation passport mass (%s)" % c["sim_source"]).font = Font(bold=True)
+    ws.cell(r, 9, c["sim_total_g"]).number_format = "0.0"
+    ws.cell(r, 10, "g")
+    r += 2
+    ws.cell(r, 2, "Comparison with the simulation mass components").font = Font(bold=True)
+    r += 1
+    for j, tt in enumerate(["component", "simulation g", "BOM g", "difference g", "difference %", "basis"], 2):
+        cc = ws.cell(r, j, tt)
+        cc.font = Font(bold=True, color="FFFFFF")
+        cc.fill = head_fill
+    r += 1
+    for row in c["rows"]:
+        for j, k in enumerate(["component", "sim_g", "bom_g", "diff_g", "diff_pct", "basis"], 2):
+            ws.cell(r, j, row[k])
+        r += 1
+    ws.cell(r, 2, "Parts the simulation mass does not contain (holders, rings, bearings, Prop_fix, screws, board, pins; shaft/enamel basis)")
+    ws.cell(r, 4, c["extra_parts_g"])
+    ws.cell(r, 5, "g")
+    r += 2
+    ws.cell(r, 2, "Difference explained").font = Font(bold=True)
+    for ex in c.get("explain", []):
+        r += 1
+        cc = ws.cell(r, 2, ex)
+        cc.alignment = Alignment(wrap_text=True, vertical="top")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=12)
+        ws.row_dimensions[r].height = 30
+    widths = [6, 38, 16, 7, 7, 26, 52, 11, 11, 11, 40, 80, 9]
+    for j, wd in enumerate(widths, 1):
+        ws.column_dimensions[get_column_letter(j)].width = wd
+    ws.freeze_panes = ws.cell(hdr + 1, 3)
+    ws.sheet_view.zoomScale = 90
+    for fn in extra_sheets or []:
+        fn(wb, bom, banner)
+    wb.save(path)
+
+
+def write_dump(dump, path):
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(dump, fh, indent=1)

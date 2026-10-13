@@ -49,6 +49,23 @@ def _fc(script, env, args, gui=False):
     return code, st
 
 
+def _bom(work, mid, fcstd, eff, pj, args):
+    """Bill of materials next to the STEP (bom.py / bom_store.py).  Never refuses the build: a failure is recorded in the manifest."""
+    from . import bom_store
+    dump = os.path.join(work, mid + "_bom_model_dump.json")
+    code, st = _fc("bom_dump.py", dict(FC_MODEL=fcstd, FC_OUT=dump), args)
+    if code:
+        print("BOM skipped: model dump failed (%s): %s" % (code, st.get("message")))
+        return dict(ok=False, message=st.get("message"))
+    try:
+        info = bom_store.write(dump, eff, pj, os.path.join(work, mid))
+    except Exception as e:                                           # a BOM problem must not lose a good model
+        print("BOM skipped: %s: %s" % (type(e).__name__, e))
+        return dict(ok=False, message="%s: %s" % (type(e).__name__, e))
+    info["ok"] = True
+    return info
+
+
 def build(args):
     t0 = time.time()
     if args.profile_file:                                     # explicit profile (e.g. the Fusion reference profile)
@@ -114,17 +131,23 @@ def build(args):
             if code:
                 print("STEP export refused/failed (%s): %s" % (code, st.get("message")))
                 return code
+        bom_info = None
+        if kind == "store" and not args.no_bom and not args.no_step:
+            bom_info = _bom(work, mid, fcstd, eff, pj, args)
         build_report = _read(os.path.join(work, "build_report.json"))
         step_check = _read(os.path.join(work, "step_check.json"))
         gui_report = _read(os.path.join(work, "gui_report.json"))
         gui_check = _read(os.path.join(work, "gui_check.json"))
         names = [mid + ".FCStd", mid + "_active.step", mid + "_datums.json", "params.json", "pull_report.json",
                  "build_report.json", "step_check.json", "gui_report.json", "gui_check.json"]
+        if bom_info and bom_info.get("files"):
+            names += bom_info["files"] + [mid + "_bom_model_dump.json"]
         m = mf.build_manifest(eff, pj, pull, build_report, step_check, mf.file_rows(work, names),
                               build_report.get("freecad_version") or step_check.get("freecad_version"),
                               round(time.time() - t0, 1), kind=kind)
         m["gui"] = dict(done=bool(gui_report.get("ok")), camera=gui_report.get("camera"), freecad_version=gui_report.get("freecad_version"),
                         opens_ready=bool(gui_check.get("ok")), visible_objects=gui_check.get("visible"))
+        m["bom"] = bom_info
         _write(os.path.join(work, "manifest.json"), m)
         if os.path.exists(out_dir):
             old = out_dir + ".old-%d" % os.getpid()
@@ -173,6 +196,7 @@ def main(argv=None):
     b.add_argument("--set", help="what-if overrides 'name=expr;name2=expr' (tests; manifest then differs from the store)")
     b.add_argument("--no-gui", action="store_true", help="skip the headless GUI step (no GuiDocument.xml)")
     b.add_argument("--no-step", action="store_true")
+    b.add_argument("--no-bom", action="store_true", help="skip the bill of materials (<motor_id>_BOM.csv / .xlsx)")
     b.add_argument("--dry-run", action="store_true", help="only write params.json / pull_report.json")
     b.add_argument("--normal-priority", action="store_true", help="do not lower the FreeCAD process priority")
     b.add_argument("-v", "--verbose", action="store_true")

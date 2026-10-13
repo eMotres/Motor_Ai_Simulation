@@ -3,7 +3,7 @@
 One parameter source: the simulation die/config (`/srv/motres/shared/dies/<die>/{die.yaml, L*.yaml}` and the
 materials library). The generator reads it, never writes it, and builds the motor model with FreeCAD 1.1 on the server.
 
-Roadmap: (1) model done, (2) this generator + server build per die/config, (3) BOM, (4) STEP download (simplified
+Roadmap: (1) model done, (2) this generator + server build per die/config, (3) BOM (done, section below), (4) STEP download (simplified
 envelope STEP before the NDA, full STEP after), (5) 3-D load FEM.
 
 ## Layout
@@ -228,6 +228,22 @@ radius. Unit tests: `tests/test_cad_generator.py` (12) pass in the deployed API 
   simplified envelope STEP before the NDA is not generated yet (would be a small template-side export: stator and rotor
   envelopes, no coils / magnets); the manifest's `param_hash` is the cache key.
 * Rebuild trigger: compare `geo_sig_hash` / `param_hash` of the store with `manifest.json`; rebuild on mismatch.
+
+## Bill of materials (roadmap stage 3)
+
+Written next to the STEP by every store build: `<motor_id>_BOM.csv` (always) and `<motor_id>_BOM.xlsx` (when openpyxl is installed),
+plus the evidence `<motor_id>_bom_model_dump.json`; the manifest has a `bom` block (line count, masses, flags) and lists the files with their
+SHA-256.  Skip with `--no-bom`.  A BOM failure never refuses a build.
+
+| Piece | What |
+|---|---|
+| `cad/fc_scripts/bom_dump.py` | FreeCAD script: reads the model AS SAVED (no recompute) and dumps every body, placed copy, array and imported part with its volume, bounding box and solid volumes, plus the Params sheet. Generic: parts added to the template later appear without editing the script. |
+| `src/motor_ai_sim/cad/bom.py` | the BOM (pure data, stdlib; openpyxl only for the xlsx): lamination sheets from stack length x stacking factor / sheet thickness (`round(L x k_f / t)`, k_f and density from the lamination card), magnets, coils with conductor length per coil and total, wire stock item, shaft, holders, rings, Prop_fix, bearings, M2 screws with a stock-length check (ISO 4762 lengths), phase board, pins, and the consumables the model or the simulation names (otherwise "to be specified"). Masses = model volume x density; the comparison with the simulation `mass_components` of the config's last saved duty explains the difference. Objects no rule knows are listed as UNCLASSIFIED, never dropped. |
+| `src/motor_ai_sim/cad/bom_store.py` | assembles the inputs from the store files the generator already reads (effective machine, materials library, bearings library, `wire_stock.yaml`) and writes the files. |
+
+The BOM carries no commercial data; callers can add columns / sheets through `write_csv(extra_columns=...)` and `write_xlsx(extra_sheets=...)`.
+Tests: `tests/test_cad_bom.py` (dumps of the server-built L12 / L20 models in `tests/fixtures/`).
+
 
 ## Electronics: the phase (coil-connection) board (2026-10-13)
 

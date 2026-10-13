@@ -12,14 +12,16 @@ Rules: the bodies Core, Coil, RotorCore, Magnet, their Parts (Stator, Winding, R
 (Coils, MagnetArray) are visible; a body shows only its Tip; sketches, intermediate features, Origins with their axes and
 planes and the Params sheet are hidden.  Mechanics (stage 3): the bodies Shaft, Stator_holder, Stator_holder_back, Ring,
 Prop_fix, Bearing_outer_ring, Bearing_inner_ring, the Parts Mechanics / Bearing_618_8, the arrays Balls / Screws and the
-links Bearing_618_8_back / Ring_back are visible; the array bases Bearing_ball / Screw are hidden.  Colours: steel shaft,
+links Bearing_618_8_back / Ring_back are visible; the array bases Bearing_ball / Screw are hidden.  Electronics: the Part Electronics and the Part::Feature PhaseBoard (imported STEP, per-face colours from the STEP: mask green,
+FR4, ENIG gold, pins grey) are visible.  Colours: steel shaft,
 light bearing steel, aluminium holders / Prop_fix, GFRP ring, dark screws.
 """
 import math
 
 BODIES = ("Core", "Coil", "RotorCore", "Magnet",
           "Shaft", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
-PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8")
+PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8", "Electronics")
+SHAPES = ("PhaseBoard",)                               # imported reference body (Part::Feature, per-face STEP colours)
 ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws")   # labels of the Draft link arrays
 LINKS = ("Bearing_618_8_back", "Ring_back")            # App::Link copies (Fusion occurrences)
 # per-part colours (r, g, b).  The template does not know the magnet polarity (all pockets are identical), so one colour.
@@ -27,7 +29,10 @@ COLORS = {"Core": (0.62, 0.64, 0.67), "Coil": (0.80, 0.47, 0.22), "RotorCore": (
           "Magnet": (0.20, 0.42, 0.78),
           "Shaft": (0.50, 0.52, 0.55), "Bearing_outer_ring": (0.80, 0.81, 0.83), "Bearing_inner_ring": (0.80, 0.81, 0.83),
           "Bearing_ball": (0.86, 0.87, 0.89), "Stator_holder": (0.75, 0.78, 0.82), "Stator_holder_back": (0.75, 0.78, 0.82),
-          "Prop_fix": (0.75, 0.78, 0.82), "Ring": (0.85, 0.78, 0.50), "Screw": (0.30, 0.31, 0.33)}
+          "Prop_fix": (0.75, 0.78, 0.82), "Ring": (0.85, 0.78, 0.50), "Screw": (0.90, 0.91, 0.93)}
+# Fusion threads Thread9 (shaft M5x0.8 6g), Thread12 (back holder M3x0.5 6H), Thread14 (back holder M2x0.4 6H) are COSMETIC there
+# (modeled = False, full length): here the thread faces carry this colour band, the geometry is the plain core / tap diameter.
+THREAD_COLOUR = (0.93, 0.62, 0.10)
 COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet", "Balls": "Bearing_ball", "Screws": "Screw"}
 _ALL_BODIES = BODIES + ("Bearing_ball", "Screw")
 # FreeCAD "isometric" view orientation (SbRotation quaternion x, y, z, w)
@@ -47,7 +52,7 @@ def set_visibility(doc):
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
             continue
-        if o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS:
+        if o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS or o.Name in SHAPES:
             o.Visibility = True
         else:
             o.Visibility = False                       # sketches, intermediate features, origins, axes, planes, Params
@@ -63,7 +68,8 @@ def check_visibility(doc):
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
             continue
-        want = o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS
+        want = (o.Name in BODIES or o.Name in PARTS or o.Label in ARRAYS or o.Name in tips or o.Name in LINKS
+                or o.Name in SHAPES)
         if bool(o.Visibility) != want:
             bad.append("%s (%s) Visibility=%s, expected %s" % (o.Name, o.TypeId, o.Visibility, want))
     return bad
@@ -104,6 +110,12 @@ def model_bbox(doc):
         boxes += [s.BoundBox for s in mechanics.solids(doc).values()]
     except Exception:
         pass
+    try:
+        from . import electronics
+        if electronics.has_board(doc):
+            boxes.append(electronics.board_shape(doc).BoundBox)
+    except Exception:
+        pass
     return (min(b.XMin for b in boxes), min(b.YMin for b in boxes), min(b.ZMin for b in boxes),
             max(b.XMax for b in boxes), max(b.YMax for b in boxes), max(b.ZMax for b in boxes))
 
@@ -119,6 +131,77 @@ def _attach_array_view(o):
         from DraftGui import ViewProviderDraftArray  # older layouts
     ViewProviderDraftArray(vo)
     return "attached"
+
+
+def _face_key(f):
+    c = f.CenterOfMass
+    return (round(c.x, 3), round(c.y, 3), round(c.z, 3), round(f.Area, 3))
+
+
+def colour_phase_board(doc, gdoc):
+    """Per-face colours of the imported phase board: the STEP is read once more through the GUI importer (which keeps the
+    STEP colours), the colour of every face is looked up by centre of mass + area and written as the DiffuseColor list of the
+    PhaseBoard view object (saved in GuiDocument.xml, like the colours of the other bodies)."""
+    import FreeCAD as App
+    import FreeCADGui as Gui
+    import ImportGui
+    from . import electronics
+    f, vo = doc.getObject("PhaseBoard"), gdoc.getObject("PhaseBoard")
+    path = electronics.find_step()
+    tmp = App.newDocument("_board_colours")
+    table = {}
+    try:
+        ImportGui.insert(path, tmp.Name)
+        tg = Gui.getDocument(tmp.Name)
+        for o in tmp.Objects:
+            v = tg.getObject(o.Name)
+            if v is None or not hasattr(o, "Shape") or o.Shape.isNull() or not o.Shape.Faces or not hasattr(v, "DiffuseColor"):
+                continue
+            s = o.Shape.copy()
+            s.Placement = o.getGlobalPlacement()
+            dc = list(v.DiffuseColor)
+            if len(dc) == 1:
+                dc = dc * len(s.Faces)
+            for face, c in zip(s.Faces, dc):
+                table[_face_key(face)] = tuple(c)
+    finally:
+        App.closeDocument(tmp.Name)
+    default = (0.6, 0.6, 0.6, 0.0)
+    cols = [table.get(_face_key(face), default) for face in f.Shape.Faces]
+    missing = sum(1 for face in f.Shape.Faces if _face_key(face) not in table)
+    vo.DiffuseColor = cols
+    return dict(faces=len(cols), missing=missing, distinct=sorted({tuple(round(x, 2) for x in c[:3]) for c in cols}))
+
+
+def thread_face_indices(doc):
+    """{body: [face indices]} of the cosmetic thread faces: the M5 section of the shaft, the M3 and M2 tap holes of the back
+    holder (cylinders of exactly those radii)."""
+    from . import params_sheet as ps
+    sh = doc.getObject("Params")
+    g = lambda n: ps.pval(sh, n)
+    want = {"Shaft": [g("shaft_thread_r")], "Stator_holder_back": [g("holder_tap_d") / 2, g("back_screw_tap_d") / 2]}
+    out = {}
+    for bn, radii in want.items():
+        b = doc.getObject(bn)
+        if b is None:
+            continue
+        out[bn] = [i for i, f in enumerate(b.Shape.Faces) if f.Surface.__class__.__name__ == "Cylinder"
+                   and any(abs(f.Surface.Radius - r) < 1e-6 for r in radii)]
+    return out
+
+
+def colour_threads(doc, gdoc):
+    rep = {}
+    for bn, idx in thread_face_indices(doc).items():
+        vo = gdoc.getObject(bn)
+        n = len(doc.getObject(bn).Shape.Faces)
+        base = tuple(COLORS[bn]) + (0.0,)
+        cols = [base] * n
+        for i in idx:
+            cols[i] = tuple(THREAD_COLOUR) + (0.0,)
+        vo.DiffuseColor = cols
+        rep[bn] = len(idx)
+    return rep
 
 
 def style_gui(doc, gdoc):
@@ -141,4 +224,7 @@ def style_gui(doc, gdoc):
             if hasattr(vo, "OverrideMaterial") and o.Label in ARRAYS:
                 vo.OverrideMaterial = True
             rep["colours"][o.Name] = key
+    rep["thread_faces"] = colour_threads(doc, gdoc)
+    if doc.getObject("PhaseBoard") is not None:
+        rep["phase_board"] = colour_phase_board(doc, gdoc)
     return rep

@@ -20,7 +20,7 @@ from .rotor import build_rotor
 from .magnet import build_magnet
 from .coil import build_coil
 from .sketchkit import check_sketch
-from . import mechanics
+from . import mechanics, electronics
 
 
 def _polar_array(doc, base, count_expr, name):
@@ -90,6 +90,9 @@ def build_bodies(doc, sh, pj):
         for part in rep.values():
             for sk in part["sketches"]:
                 report["sketches"][sk.Name] = check_sketch(sk)[1]
+    if any(p["name"] == "phase_board_z" for _, p in ps.all_params(pj)):
+        report["phase_board_import"] = electronics.build_electronics(doc, sh)
+        doc.recompute()
     return report
 
 

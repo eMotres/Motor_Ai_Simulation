@@ -242,3 +242,59 @@ def test_mechanics_sketches_follow_the_owner_conventions():
         assert edge_ref not in src
     for n in ("holder_bolt_count", "holder_face_z", "holder_boss_len", "holder_seat_z", "ring_back_dz", "screw_head_top_z"):
         assert "\"%s\"" % n in src or "+ \"%s" % n in src or n in src
+
+
+# ----------------------------------------------------------------------------------- phase board + electronics (stage 4)
+
+
+def _base_rows():
+    base = json.load(open(store.BASE_PROFILE, encoding="utf-8"))
+    return {p["name"]: p for sec in store.SECTIONS for p in base.get(sec, [])}
+
+
+def _eval_with(motor_length):
+    rows = _base_rows()
+    expr = {n: p["freecad_expression"] for n, p in rows.items()}
+    expr["motor_length"] = "%g mm" % motor_length
+    return store.evaluate(expr), rows
+
+
+def test_phase_board_rows_are_named_mechanics_rows_with_comments():
+    rows = _base_rows()
+    for n in ("phase_board_n_offset", "phase_board_n_z0", "phase_board_x", "phase_board_y", "phase_board_z"):
+        assert rows[n]["comment"] and rows[n]["source"] and rows[n]["role"] in ("mechanics", "derived"), n
+    assert rows["phase_board_n_offset"]["role"] == "mechanics" and "2.525" in rows["phase_board_n_offset"]["freecad_expression"]
+    assert rows["phase_board_x"]["freecad_expression"] == "-100 mm" and rows["phase_board_y"]["freecad_expression"] == "100 mm"
+    assert "coil_lead_total" in rows["phase_board_z"]["freecad_expression"]       # the axial chain, not a number
+
+
+@pytest.mark.parametrize("length,tz,n_copper", [(12, -12.615, -12.825), (20, -16.615, -16.825), (16, -14.615, -14.825)])
+def test_phase_board_z_follows_the_coil_lead_end_datum(length, tz, n_copper):
+    v, _ = _eval_with(length)
+    lead_end = -(v["coil_leg_length"] / 2 + v["coil_lead_total"])
+    assert abs(v["phase_board_z"] - tz) < 1e-9
+    assert abs(v["phase_board_z"] + v["phase_board_n_z0"] - n_copper) < 1e-9          # N copper of the STEP at -0.21
+    assert abs(n_copper - (lead_end + v["phase_board_n_offset"])) < 1e-9
+    assert (v["phase_board_x"], v["phase_board_y"]) == (-100.0, 100.0)
+    if length in (12, 20):
+        assert abs(lead_end - {12: -15.35, 20: -19.35}[length]) < 1e-9                 # coil_lead_end_z of the datums JSON
+
+
+def test_phase_board_placement_is_an_expression_of_the_params_rows():
+    d = os.path.join(CAD_DIR, "motor_templates", "segmented_flatwire")
+    src = open(os.path.join(d, "electronics.py"), encoding="utf-8").read()
+    assert 'part.setExpression(".Placement.Base.%s" % axis, "%sphase_board_%s" % (P, axis))' in src
+    assert "build_electronics" in open(os.path.join(d, "build.py"), encoding="utf-8").read()
+    assert "electronics.gate" in open(os.path.join(d, "health.py"), encoding="utf-8").read()
+
+
+def test_phase_board_step_has_the_colours_and_pin_j13_lands_where_the_pcb_session_says():
+    import re
+    p = os.path.join(CAD_DIR, "reference", "phase_board", "CIANO14_40_phase_board_revC_colour.step")
+    t = open(p, encoding="latin-1").read()
+    assert len(set(re.findall(r"COLOUR_RGB\('',([^)]*)\)", t))) >= 4                   # mask, FR4, ENIG, pins / walls
+    pts = [(float(a), float(b)) for a, b in re.findall(r"CARTESIAN_POINT\('[^']*',\(([-\d.E+]+),([-\d.E+]+),[-\d.E+]+\)\)", t)]
+    x, y = 106.605562 - 100.0, -87.035855 + 100.0                                      # + the translation (-100, +100)
+    assert any(abs(a - 106.605562) < 1e-5 and abs(b + 87.035855) < 1e-5 for a, b in pts)
+    assert abs(x - 6.606) < 0.01 and abs(y - 12.964) < 0.01 and abs(math.hypot(x, y) - 14.55) < 0.01
+    assert abs(math.degrees(math.atan2(y, x)) - 63.0) < 0.05

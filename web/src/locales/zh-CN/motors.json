@@ -13,6 +13,8 @@
   "configButtonTip": "{config}：以默认模式（{duty}）载入；已保存 {n} 个模式",
   "defaultModeNumbersTip": "默认模式（{duty}）的数值。展开详情查看全部模式。",
   "loadDefaultModeTip": "以默认模式（{duty}）载入 {config}",
+  "configClickBusy": "{config}：另一项载入仍在进行，请稍后再试",
+  "configClickNoMode": "{config}：没有已保存的模式，无可载入",
   "setDefaultModeTip": "设为该行显示的默认模式",
   "detailsShow": "详情",
   "detailsHide": "收起",

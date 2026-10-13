@@ -42,7 +42,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
 import { isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
-import { configButtons, selectedConfig } from '../../lib/catalogRows';
+import { configButtons, configClickPlan, selectedConfig } from '../../lib/catalogRows';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -767,7 +767,14 @@ const FamilyCatalog: React.FC<{
                       return (
                         <Tooltip key={b.config} title={tx('configButtonTip', { config: b.config, duty: b.duty ?? '\u2014', n: b.modes })}>
                           <Button size="small" variant={b.config === sel ? 'contained' : 'outlined'}
-                            onClick={() => setPicked((m) => ({ ...m, [die.name]: b.config }))}
+                            onClick={() => {
+                              // pick it AND load its default mode; a click that cannot load says why
+                              const plan = configClickPlan(btns, b.config,
+                                active?.die === die.name ? active.config ?? null : null, !!busy);
+                              setPicked((m) => ({ ...m, [die.name]: plan.pick }));
+                              if (plan.refuse) setMsg(`✗ ${tx(plan.refuse === 'busy' ? 'configClickBusy' : 'configClickNoMode', { config: b.config })}`);
+                              else if (plan.load) void applyDuty(die.name, plan.pick, plan.load);
+                            }}
                             sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.9, minWidth: 0, minHeight: 22,
                                   ...(loaded && b.config !== sel ? { borderColor: '#60a5fa', color: '#60a5fa' } : {}) }}>
                             {b.config}{loaded ? ' \u25cf' : ''}

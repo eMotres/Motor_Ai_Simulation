@@ -59,3 +59,34 @@ t('header dropdown: the modes of the loaded configuration, rated then peak then 
   assert.deepEqual(C.modeNames([die], 'CIANO14 40', 'nope'), []);
   assert.deepEqual(C.modeNames([die], 'other', 'L12'), []);
 });
+
+// ---- incident 2026-10-13: clicking "L155 motor" loaded nothing (it only picked the button) ----
+const l155 = {
+  name: 'CIANO10 200 opt',
+  configs: [
+    { name: 'L155 motor', default_duty: 'rated 1x9 mm', duties: [duty('rated 1x9 mm', 267.07, 179.9, 14200, 27.559), duty('peak 1x9 mm', 480.2, 230, 20000, 27.559)] },
+    { name: 'L180 gen', default_duty: 'rated 0.5x9 mm', duties: [duty('rated 0.5x9 mm', 250, 170, 14000, 29), duty('peak 0.5x9 mm', 400, 200, 20000, 29)] },
+    { name: 'Empty cfg', duties: [] },
+  ],
+};
+
+t('a click on L155 motor LOADS its default mode (names with spaces pass through)', () => {
+  const btns = C.configButtons(l155);
+  // the owner was on the 40 mm die: nothing of this die is loaded
+  const plan = C.configClickPlan(btns, 'L155 motor', null, false);
+  assert.deepEqual(plan, { pick: 'L155 motor', load: 'rated 1x9 mm', refuse: null });
+  assert.equal(C.configClickPlan(btns, 'L180 gen', 'L155 motor', false).load, 'rated 0.5x9 mm');
+});
+
+t('the loaded configuration is only picked again; the play glyph reloads it', () => {
+  const plan = C.configClickPlan(C.configButtons(l155), 'L155 motor', 'L155 motor', false);
+  assert.deepEqual(plan, { pick: 'L155 motor', load: null, refuse: null });
+});
+
+t('a click that cannot load is never silent: it names the reason', () => {
+  const btns = C.configButtons(l155);
+  assert.equal(C.configClickPlan(btns, 'Empty cfg', null, false).refuse, 'noMode');
+  assert.equal(C.configClickPlan(btns, 'Gone', null, false).refuse, 'noMode');
+  const busy = C.configClickPlan(btns, 'L155 motor', null, true);
+  assert.equal(busy.load, null); assert.equal(busy.refuse, 'busy');
+});

@@ -1,14 +1,6 @@
 {
   "motor": "Motor",
   "none": "No 3D model is available for your motors yet.",
-  "variant": {
-    "envelope": "Complete (before NDA)",
-    "full": "Full"
-  },
-  "variantHelp": {
-    "envelope": "Before NDA: the complete motor model (stator, coils, rotor, magnets, holders, bearings, screws, shaft). The phase-board copper layout is shared after the NDA is signed; until then the board is a plain FR-4 disc with the 3 phase pins.",
-    "full": "Full model: the complete motor with the phase-board copper layout. Available to the owner and to accounts with a signed NDA."
-  },
   "parts": "Parts",
   "part": {
     "Core": "Stator core",
@@ -30,9 +22,11 @@
   "section": "Section plane",
   "measure": "Measure",
   "measureHint": "Click two points on the model",
-  "downloadStep": "Download STEP ({variant})",
+  "downloadStep": "Download STEP",
   "fit": "Fit to view",
   "version": "Template {template}, built {built}, parameters {hash}",
   "stamped": "Your name and the date are written into the file name and the STEP header. Every download is logged.",
-  "contextLost": "The 3D view lost its graphics context. Reload the page to continue."
+  "contextLost": "The 3D view lost its graphics context. Reload the page to continue.",
+  "downloadLocked": "Download after NDA",
+  "downloadLockedHelp": "You can view, rotate, section and measure the model. The STEP download is available after the NDA is signed; ask us to sign it. Every download is logged and the file carries your name and the date."
 }

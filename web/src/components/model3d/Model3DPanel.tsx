@@ -1,11 +1,11 @@
 // The "3D model" tab: look at, rotate, section and download the 3D model of a granted motor.
 //
-// What is shown is decided by the SERVER (routes/model3d.py): an account without NDA gets the complete motor with a plain
-// FR-4 phase board (no copper); the owner and "NDA signed" accounts get the full model with the copper board.
-// This panel only names the variant and offers the controls.  No bill of materials, no prices.
+// One model for everybody (owner 2026-10-13): every signed-in user who may see the motor can view, rotate, section, explode
+// and measure it.  Downloading the STEP is the NDA gate, enforced by the SERVER (403); this panel only shows the button to
+// NDA accounts and the owner and a one-line note to everybody else.  No bill of materials, no prices.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, MenuItem, Select, Slider, Switch,
+  Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, MenuItem, Select, Slider, Switch,
   ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -14,8 +14,8 @@ import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { ModelViewer } from './modelViewer';
 import {
-  filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, pickModel, togglesOf, variantKey,
-  type Axis, type ModelInfo, type PartGroup, type Variant,
+  filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, pickModel, togglesOf,
+  type Axis, type ModelInfo, type PartGroup,
 } from '../../lib/model3d';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
@@ -39,7 +39,7 @@ const Model3DPanel: React.FC = () => {
   const tRef = useRef(t);
   tRef.current = t;
   const [models, setModels] = useState<ModelInfo[] | null>(null);
-  const [variant, setVariant] = useState<Variant>('envelope');
+  const [canDownload, setCanDownload] = useState(false);
   const [key, setKey] = useState<string>('');
   const [groups, setGroups] = useState<PartGroup[]>([]);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
@@ -63,7 +63,7 @@ const Model3DPanel: React.FC = () => {
         if (!r.ok) { if (live) setErr(await detail(r)); return; }
         const j = await r.json();
         if (!live) return;
-        setVariant(j.variant === 'full' ? 'full' : 'envelope');
+        setCanDownload(j.can_download === true);
         setModels(j.models as ModelInfo[]);
         const pick = pickModel(j.models as ModelInfo[], rd(REMEMBER));
         setKey(pick ? modelKey(pick) : '');
@@ -92,10 +92,8 @@ const Model3DPanel: React.FC = () => {
       try {
         const r = await fetch(`${base(model)}/model.glb`);
         if (!r.ok) { if (live) setErr(await detail(r)); return; }
-        const served = (r.headers.get('X-Model-Variant') as Variant | null) ?? variant;
         const { groups: gs } = await v.load(await r.arrayBuffer());
         if (!live) return;
-        setVariant(served === 'full' ? 'full' : 'envelope');
         setGroups(gs); setHidden(new Set()); setExplode(0); setMeasure(false); setMm(null);
         const rg = v.sectionRange('x');
         setRange(rg);
@@ -133,7 +131,6 @@ const Model3DPanel: React.FC = () => {
     } catch (e: any) { setErr(e?.message ?? String(e)); } finally { setDl('idle'); }
   };
 
-  const vk = variantKey(variant);
   return (
     <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0 }}>
       <Box sx={{ width: 290, flexShrink: 0, p: 1.5, overflowY: 'auto', borderRight: '1px solid var(--line-soft)', bgcolor: 'var(--panel)',
@@ -146,12 +143,6 @@ const Model3DPanel: React.FC = () => {
             {(models ?? []).map((m) => <MenuItem key={modelKey(m)} value={modelKey(m)} sx={{ fontSize: 13 }}>{modelLabel(m)}</MenuItem>)}
           </Select>
           {models && !models.length && <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mt: 0.5 }}>{t('none')}</Typography>}
-        </Box>
-
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-          <Chip size="small" label={t(`variant.${vk}`)}
-            sx={{ height: 20, fontSize: 11, fontWeight: 700, bgcolor: 'var(--panel-2)', color: vk === 'full' ? '#4ade80' : '#fbbf24' }} />
-          <HelpTip title={t(`variantHelp.${vk}`)} />
         </Box>
 
         <Box>
@@ -197,11 +188,18 @@ const Model3DPanel: React.FC = () => {
         </Box>
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 'auto' }}>
-          <Button size="small" variant="contained" disabled={!model?.step_available || dl === 'busy'}
-            startIcon={dl === 'busy' ? <CircularProgress size={14} /> : <DownloadIcon sx={{ fontSize: 16 }} />}
-            onClick={() => void download()} sx={{ textTransform: 'none', fontSize: 12.5 }}>
-            {t('downloadStep', { variant: t(`variant.${vk}`) })}{model?.step_bytes ? ` (${formatBytes(model.step_bytes)})` : ''}
-          </Button>
+          {canDownload ? (
+            <Button size="small" variant="contained" disabled={!model?.step_available || dl === 'busy'}
+              startIcon={dl === 'busy' ? <CircularProgress size={14} /> : <DownloadIcon sx={{ fontSize: 16 }} />}
+              onClick={() => void download()} sx={{ textTransform: 'none', fontSize: 12.5 }}>
+              {t('downloadStep')}{model?.step_bytes ? ` (${formatBytes(model.step_bytes)})` : ''}
+            </Button>
+          ) : (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography>
+              <HelpTip title={t('downloadLockedHelp')} />
+            </Box>
+          )}
           <Button size="small" onClick={() => viewer.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
             sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{t('fit')}</Button>
           {model?.version && (
@@ -209,7 +207,7 @@ const Model3DPanel: React.FC = () => {
               {t('version', { template: model.version.template ?? '?', built: (model.version.built_at ?? '').slice(0, 10), hash: model.version.param_hash ?? '' })}
             </Typography>
           )}
-          <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>{t('stamped')}</Typography>
+          {canDownload && <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>{t('stamped')}</Typography>}
         </Box>
       </Box>
 

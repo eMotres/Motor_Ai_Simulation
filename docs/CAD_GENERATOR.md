@@ -3,8 +3,8 @@
 One parameter source: the simulation die/config (`/srv/motres/shared/dies/<die>/{die.yaml, L*.yaml}` and the
 materials library). The generator reads it, never writes it, and builds the motor model with FreeCAD 1.1 on the server.
 
-Roadmap: (1) model done, (2) this generator + server build per die/config, (3) BOM (done, section below), (4) STEP download + the web "3D model" menu (done, section below: simplified
-envelope STEP / GLB before the NDA, full STEP / GLB after), (5) 3-D load FEM.
+Roadmap: (1) model done, (2) this generator + server build per die/config, (3) BOM (done, section below), (4) STEP download + the web "3D model" menu (done, section below: view for
+everyone, STEP download under NDA), (5) 3-D load FEM.
 
 ## Layout
 
@@ -276,41 +276,43 @@ the screw component is `91292A032_NO THREADS`.  They are reproduced the same way
 and the datums JSON lists them (`mechanics.threads`).  Volumes and the 1.0.2 / 1.1 compatibility are unchanged (no geometry change).
 
 
-## 3D model menu: viewer outputs, access rule, download log (2026-10-13)
+## 3D model menu: viewer model, access rule, download log (2026-10-13)
 
-`cad/fc_scripts/export_models.py` runs after the STEP export of every store build (skip with `--no-models`) and writes, next to the
-STEP, three more files that the manifest lists with SHA-256 (`models3d` block: triangle counts, envelope solids, tessellation, worst
-mesh-vs-solid volume error):
+One model for everybody (owner decision 2026-10-13: "look and rotate for all, download under NDA"): every signed-in user who may see a
+motor can view, rotate, section, explode and measure the full model, copper board included; the STEP download is for accounts flagged
+"NDA signed" and the owner / admin only.  (Earlier drafts had a simplified pre-NDA "envelope" variant; it is gone, nothing builds or serves it.)
+
+`cad/fc_scripts/export_models.py` runs after the STEP export of every store build (skip with `--no-models`) and writes, next to the STEP,
+two more files that the manifest lists with SHA-256 (`models3d` block: triangle count, tessellation, worst mesh-vs-solid volume error):
 
 | File | What |
 |---|---|
-| `<motor_id>_full.glb` | the FULL model for the web viewer: one coloured node per part (`Core`, `Coils/Coil_nn`, `Rotor`, `Magnets/Magnet_nn`, `Shaft`, `Bearings_front/back`, `Holder_front/back`, `Ring_front/back`, `Screws/Screw_n`, `Prop_fix`, `PhaseBoard_FR4/copper/other/pins`); node `extras` carry `family` (the viewer's toggle) and `explode` (axial factor of the exploded view, in motor lengths). Colours = `view.COLORS`. |
-| `<motor_id>_envelope.step`, `<motor_id>_envelope.glb` | the PRE-NDA model (the file names keep the word "envelope"; manifests and routes use it): the COMPLETE motor model, since the owner decided on 2026-10-13 that rotor core and magnets carry no patent value, so there is one model for everyone (the cut-outs of the stator are the look of the AeroStator Core). Stator, coils, rotor core, magnets, rings, holders, bearings, screws, shaft, Prop_fix; colours as in the full model. The ONLY difference to the full model is the phase board: a plain FR-4 disc (outline, notches, holes) with the 3 phase pins and NO copper (the copper layout is shared after the NDA); the board's notch-wall / mask solids are left out too. Before NDA: complete motor model; the phase-board copper layout is shared after NDA. |
-| `<motor_id>_models3d.json` | evidence of the export (per-solid mesh volume check, envelope solid volumes) |
+| `<motor_id>_full.glb` | the model for the web viewer: one coloured node per part (`Core`, `Coils/Coil_nn`, `Rotor`, `Magnets/Magnet_nn`, `Shaft`, `Bearings_front/back`, `Holder_front/back`, `Ring_front/back`, `Screws/Screw_n`, `Prop_fix`, `PhaseBoard_FR4/copper/other/pins`); node `extras` carry `family` (the viewer's toggle) and `explode` (axial factor of the exploded view, in motor lengths). Colours = `view.COLORS`. |
+| `<motor_id>_models3d.json` | evidence of the export (per-solid mesh volume check) |
 
 `glb_writer.py` (pure Python, no numpy) writes the GLB: millimetres, +Z = motor axis, smooth normals inside a face and hard edges between
-faces; per-solid triangle budgets keep balls, screws, pins and board copper small (L12: full 4.6 MB / 135 k triangles, pre-NDA model about 0.7 MB smaller: the board has no copper).
-The export refuses the build if a mesh differs from its solid by more than 3 % in volume (measured 0.4 %), if the envelope STEP re-imports
-with another volume or solid count, or if the pre-NDA model lacks the rotor core or a magnet or contains any board copper.
+faces; per-solid triangle budgets keep balls, screws, pins and board copper small (L12: 4.6 MB, 135 k triangles).  The export refuses the build
+if a mesh differs from its solid by more than 3 % in volume (measured 0.4 %) or if the model has a board without copper.
 
 Routes (`routes/model3d.py`, `model3d.py`), all authenticated, motor access = `motor_access` (granted die or per-die visibility; an ungranted or
 unbuilt motor is a 404):
 
 | Route | |
 |---|---|
-| `GET /api/model3d/models` | the built models of the caller's motors and the variant the caller gets (no BOM, no prices) |
-| `GET /api/model3d/<die>/<config>/model.glb` | the GLB of the caller's variant (`X-Model-Variant`) |
-| `GET /api/model3d/<die>/<config>/model.step` | the STEP of the caller's variant, header and file name stamped with the customer name and the date; one line in the download log |
+| `GET /api/model3d/models` | the built models of the caller's motors and `can_download` (no BOM, no prices) |
+| `GET /api/model3d/<die>/<config>/model.glb` | the GLB, for every caller who may see the motor |
+| `GET /api/model3d/<die>/<config>/model.step` | `<motor_id>_active.step`, 403 without NDA; header and file name stamped with the customer name and the date; one line in the download log |
 | `GET /api/model3d/downloads` | admin: the download log, newest first |
 
-Audience (`model3d.variant_for`, the only place): the owner / admin and accounts with `nda.signed` get the **full** model (`_full.glb`, `_active.step`, copper board);
-every other signed-in account gets the **pre-NDA** model (`_envelope.*`: the same motor with a plain FR-4 board); the URL names the motor, never a variant or a file. The NDA flag is a field of the user record
-(`nda: {signed, date, by}`), set in Admin -> Users -> user drawer (switch + date; `PATCH /api/auth/users/<email>` with `nda_signed`, `nda_date`; audited as `user.nda`).
+The download rule is `model3d.can_download`, the only place: the owner / admin and accounts with `nda.signed`.  The NDA flag is a field of the
+user record (`nda: {signed, date, by}`), set in Admin -> Users -> user drawer (switch + date; `PATCH /api/auth/users/<email>` with `nda_signed`,
+`nda_date`; audited as `user.nda`).  The web tab shows the Download button to those accounts and the note "Download after NDA" (with a tooltip) to the rest.
 
 STEP stamp: the HEADER section is rewritten (description, file name, author = customer, organisation = MOTRES d.o.o., a comment line with the
-variant, template version, build date), the DATA section is copied byte for byte; file name `<motor_id>_<variant>_<customer-slug>_<YYYYMMDD>.step`.
-Download log: `cad_downloads.jsonl` beside `users.json` (0600): user, name, time, file, variant, motor, die/config, template version, build time,
+template version and build date), the DATA section is copied byte for byte; file name `<motor_id>_<customer-slug>_<YYYYMMDD>.step`.
+Download log: `cad_downloads.jsonl` beside `users.json` (0600): user, name, time, file, motor, die/config, template version, build time,
 parameter hash, SHA-256 of the source file and of the stamped file, IP.  A download whose line cannot be written is refused (503).
 
 Deploying: the CAD image must be rebuilt from this commit (`export_models.py`, `glb_writer.py` are under `cad/`), then rebuild the configs
-(`docker run ... motres-cad:<tag> build --die ... --config ...`, same command as above); the API only reads `<shared>/cad`.
+(`docker run ... motres-cad:<tag> build --die ... --config ...`, same command as above; a rebuild replaces the whole output directory, so old
+`<motor_id>_envelope.*` files disappear); the API only reads `<shared>/cad`.

@@ -8,8 +8,8 @@ try { L = await import('../model3d.ts'); } catch { /* old Node */ }
 const t = L ? test : test.skip;
 
 const models = [
-  { die: 'CIANO14 40 new', config: 'L12', motor_id: 'a', variant: 'envelope' },
-  { die: 'CIANO14 40 new', config: 'L20', motor_id: 'b', variant: 'envelope' },
+  { die: 'CIANO14 40 new', config: 'L12', motor_id: 'a' },
+  { die: 'CIANO14 40 new', config: 'L20', motor_id: 'b' },
 ];
 
 t('the picker opens on the remembered model when it is still offered, else the first, else nothing', () => {
@@ -18,11 +18,6 @@ t('the picker opens on the remembered model when it is still offered, else the f
   assert.equal(L.pickModel(models, null).config, 'L12');
   assert.equal(L.pickModel([], 'x'), null);
   assert.equal(L.modelLabel(models[0]), 'CIANO14 40 new · L12');
-});
-
-t('only "full" is full: anything else is shown as the envelope', () => {
-  assert.equal(L.variantKey('full'), 'full');
-  for (const v of ['envelope', '', null, undefined, 'FULL', 'x']) assert.equal(L.variantKey(v), 'envelope');
 });
 
 t('part toggles group nodes by family in file order, and a hidden family hides all its nodes', () => {
@@ -70,8 +65,8 @@ t('measure: distance, formatting and the box of a point list', () => {
 
 t('download names come from the server stamp; a hostile or missing header falls back', () => {
   const fb = 'fallback.step';
-  assert.equal(L.filenameFromDisposition('attachment; filename="CIANO14_40_new_L12_envelope_ann-muller_20261013.step"', fb),
-    'CIANO14_40_new_L12_envelope_ann-muller_20261013.step');
+  assert.equal(L.filenameFromDisposition('attachment; filename="CIANO14_40_new_L12_ann-muller_20261013.step"', fb),
+    'CIANO14_40_new_L12_ann-muller_20261013.step');
   assert.equal(L.filenameFromDisposition(null, fb), fb);
   assert.equal(L.filenameFromDisposition('attachment; filename="../../evil.step"', fb), fb);
   assert.equal(L.filenameFromDisposition('attachment', fb), fb);

@@ -1,9 +1,9 @@
 """3D model menu routes: list the models a caller may see, serve the GLB, download the stamped STEP.
 
-Access is the same as for the other motor routes (``motor_access``: admin / granted dies / per-die visibility) plus the NDA
-rule of :mod:`motor_ai_sim.model3d`: an account without "NDA signed" is served the simplified envelope only, whatever it asks
-for.  The URL names the motor, never a variant or a file: the server picks the variant from the caller.  Nothing priced and no
-bill of materials is served here.
+ONE model for everybody (owner 2026-10-13): every signed-in user who may see a motor (``motor_access``: admin / granted dies /
+per-die visibility) can view it - the GLB is the full model, copper board included.  Downloading the STEP is the NDA gate:
+only accounts flagged "NDA signed" and the owner / admin get it; everybody else gets 403.  The URL names the motor, never a
+file.  Nothing priced and no bill of materials is served here.
 """
 from __future__ import annotations
 
@@ -43,54 +43,52 @@ def _entry_for(authorization: Optional[str], die: str, config: str) -> dict:
 
 @router.get("/models")
 def list_models(authorization: Optional[str] = Header(default=None)):
-    """The built models of the motors this caller may open, with the variant (``envelope`` / ``full``) it will get."""
+    """The built models of the motors this caller may open, and whether this caller may download the STEP."""
     who, rec = _caller(authorization)
-    variant = M.variant_for(who, rec)
     from motor_ai_sim import motor_access as MA
     access = MA.catalog_access(authorization)
-    models = [M.model_info(e, variant) for e in M.scan() if MA.may_see_die(access, e["die"])]
-    return {"variant": variant, "models": [m for m in models if m["available"]]}
+    models = [M.model_info(e) for e in M.scan() if MA.may_see_die(access, e["die"])]
+    return {"can_download": M.can_download(who, rec), "models": [m for m in models if m["available"]]}
 
 
 @router.get("/{die}/{config}/model.glb")
 def get_glb(die: str, config: str, authorization: Optional[str] = Header(default=None)):
-    who, rec = _caller(authorization)
+    _caller(authorization)
     e = _entry_for(authorization, die, config)
-    variant = M.variant_for(who, rec)
-    row = M.file_row(e, variant, "glb")
+    row = M.file_row(e, "glb")
     if row is None:
         raise HTTPException(status_code=404, detail="This model has not been built yet.")
     return FileResponse(row["path"], media_type="model/gltf-binary",
-                        headers={"X-Model-Variant": variant, "ETag": '"%s"' % row["sha256"],
-                                 "Cache-Control": "private, max-age=0, must-revalidate"})
+                        headers={"ETag": '"%s"' % row["sha256"], "Cache-Control": "private, max-age=0, must-revalidate"})
 
 
 @router.get("/{die}/{config}/model.step")
 def get_step(die: str, config: str, request: Request, authorization: Optional[str] = Header(default=None)):
-    """The STEP of the caller's variant with the customer name and the date in its header and file name.  Logged."""
+    """The STEP with the customer name and the date in its header and file name.  NDA accounts and the owner only; logged."""
     who, rec = _caller(authorization)
     e = _entry_for(authorization, die, config)
-    variant = M.variant_for(who, rec)
-    row = M.file_row(e, variant, "step")
+    if not M.can_download(who, rec):
+        raise HTTPException(status_code=403, detail="Download is available after the NDA is signed.")
+    row = M.file_row(e, "step")
     if row is None:
         raise HTTPException(status_code=404, detail="This model has not been built yet.")
     customer = M.customer_name(who, rec)
     day = datetime.datetime.now(datetime.timezone.utc).date()
-    name = M.download_name(e["motor_id"], variant, customer, day)
+    name = M.download_name(e["motor_id"], customer, day)
     m = e["manifest"]
     version = "template %s, built %s, param %s" % ((m.get("template") or {}).get("version", "?"), m.get("built_at", "?"),
                                                   (m.get("param_hash") or "")[:12])
     with open(row["path"], "rb") as fh:
         src = fh.read()
-    data = M.stamp_step(src, filename=name, customer=customer, day=day, variant=variant, motor_id=e["motor_id"], version=version)
+    data = M.stamp_step(src, filename=name, customer=customer, day=day, motor_id=e["motor_id"], version=version)
     try:
         from motor_ai_sim.client_ip import from_request
         ip = from_request(request)
     except Exception:                                       # noqa: BLE001
         ip = "?"
     try:
-        M.log_download(dict(user=who["id"], name=customer, role=who.get("role"), nda=variant == M.VARIANT_FULL and not who.get("is_admin"),
-                            die=die, config=config, motor_id=e["motor_id"], variant=variant, kind="step", file=name,
+        M.log_download(dict(user=who["id"], name=customer, role=who.get("role"), nda=not who.get("is_admin"),
+                            die=die, config=config, motor_id=e["motor_id"], kind="step", file=name,
                             source_file=row["name"], source_sha256=row["sha256"], sha256=M.sha256_bytes(data), bytes=len(data),
                             template=(m.get("template") or {}).get("version"), built_at=m.get("built_at"),
                             param_hash=m.get("param_hash"), ip=ip))
@@ -98,8 +96,7 @@ def get_step(die: str, config: str, request: Request, authorization: Optional[st
         log.error("model3d: download log not writable (%s) - download refused", ex)
         raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
     return Response(content=data, media_type="model/step",
-                    headers={"Content-Disposition": 'attachment; filename="%s"' % name, "X-Model-Variant": variant,
-                             "Cache-Control": "no-store"})
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
 
 
 @router.get("/downloads")

@@ -9,9 +9,8 @@ Outputs go to <out-root>/<die>/<config>/ (default /srv/motres/shared/cad on the 
   <motor_id>_active.step       full STEP (Stator/Core, Winding/Coils/Coil_n, Rotor/RotorCore, Magnets/Magnet_nn,
                                Mechanics/Shaft, bearings, holders, rings, Prop_fix, Screws)
   <motor_id>_datums.json       frame, axial / radial datums, coil lead end faces
-  <motor_id>_full.glb          the full model for the web viewer (one coloured node per part); NDA / owner only
-  <motor_id>_envelope.step/.glb  simplified envelope (outer contour, shaft, holders with mounting holes, phase board outline, no
-                               internals): the only model a user without NDA may see or download
+  <motor_id>_full.glb          the model for the web viewer (one coloured node per part): viewing is open to every signed-in user who
+                               may see the motor; the STEP download (<motor_id>_active.step) is for NDA accounts and the owner
   params.json                  the FreeCAD profile built from the store (what the template was fed)
   pull_report.json             simulation vs CAD parameter table
   build_report.json / step_check.json / gui_report.json / gui_check.json
@@ -70,17 +69,14 @@ def _bom(work, mid, fcstd, eff, pj, args):
 
 
 def _models3d(work, mid, fcstd, args):
-    """3D-viewer outputs (export_models.py): full GLB, simplified envelope STEP + GLB.  A failure of the CHECKS refuses the
-    build (the envelope is the only thing a customer without NDA may get, it must never be a guess); returns (code, info)."""
+    """3D-viewer model (export_models.py): the full GLB.  A failure of its checks refuses the build; returns (code, info)."""
     rep = os.path.join(work, mid + "_models3d.json")
     code, st = _fc("export_models.py", dict(FC_MODEL=fcstd, FC_OUT_DIR=work, FC_MOTOR_ID=mid, FC_REPORT=rep), args)
     if code:
         print("3D models refused/failed (%s): %s" % (code, st.get("message")))
         return code, None
     r = _read(rep)
-    return 0, dict(ok=True, full_glb=r["full"]["glb"], envelope_glb=r["envelope"]["glb"], envelope_step=r["envelope"]["step"],
-                   full_triangles=r["full"]["triangles"], envelope_triangles=r["envelope"]["triangles"],
-                   envelope_solids=r["envelope"]["solids"], tessellation_mm=r["tessellation_mm"],
+    return 0, dict(ok=True, full_glb=r["glb"], triangles=r["triangles"], tessellation_mm=r["tessellation_mm"],
                    worst_mesh_volume_error=r["worst_mesh_volume_error"])
 
 
@@ -164,7 +160,7 @@ def build(args):
         names = [mid + ".FCStd", mid + "_active.step", mid + "_datums.json", "params.json", "pull_report.json",
                  "build_report.json", "step_check.json", "gui_report.json", "gui_check.json"]
         if models3d:
-            names += [models3d["full_glb"], models3d["envelope_glb"], models3d["envelope_step"], mid + "_models3d.json"]
+            names += [models3d["full_glb"], mid + "_models3d.json"]
         if bom_info and bom_info.get("files"):
             names += bom_info["files"] + [mid + "_bom_model_dump.json"]
         m = mf.build_manifest(eff, pj, pull, build_report, step_check, mf.file_rows(work, names),
@@ -223,7 +219,7 @@ def main(argv=None):
     b.add_argument("--no-gui", action="store_true", help="skip the headless GUI step (no GuiDocument.xml)")
     b.add_argument("--no-step", action="store_true")
     b.add_argument("--no-bom", action="store_true", help="skip the bill of materials (<motor_id>_BOM.csv / .xlsx)")
-    b.add_argument("--no-models", action="store_true", help="skip the 3D-viewer outputs (<motor_id>_full.glb, _envelope.step / .glb)")
+    b.add_argument("--no-models", action="store_true", help="skip the 3D-viewer model (<motor_id>_full.glb)")
     b.add_argument("--dry-run", action="store_true", help="only write params.json / pull_report.json")
     b.add_argument("--normal-priority", action="store_true", help="do not lower the FreeCAD process priority")
     b.add_argument("-v", "--verbose", action="store_true")

@@ -1,14 +1,6 @@
 {
   "motor": "电机",
   "none": "您的电机暂无可用的 3D 模型。",
-  "variant": {
-    "envelope": "完整（保密协议前）",
-    "full": "完整"
-  },
-  "variantHelp": {
-    "envelope": "签署保密协议前：完整的电机模型（定子、线圈、转子、磁钢、支架、轴承、螺钉、轴）。相线板的铜层布局在签署保密协议后提供；在此之前相线板为不含铜的 FR-4 圆盘，带 3 个相线针脚。",
-    "full": "完整模型：完整电机，含相线板铜层布局。仅限所有者和已签署保密协议的账户。"
-  },
   "parts": "零件",
   "part": {
     "Core": "定子铁芯",
@@ -30,9 +22,11 @@
   "section": "剖切面",
   "measure": "测量",
   "measureHint": "在模型上点击两个点",
-  "downloadStep": "下载 STEP（{variant}）",
+  "downloadStep": "下载 STEP",
   "fit": "适应视图",
   "version": "模板 {template}，构建于 {built}，参数 {hash}",
   "stamped": "您的姓名和日期会写入文件名和 STEP 文件头。每次下载都有记录。",
-  "contextLost": "3D 视图丢失了图形上下文，请刷新页面。"
+  "contextLost": "3D 视图丢失了图形上下文，请刷新页面。",
+  "downloadLocked": "签署保密协议后可下载",
+  "downloadLockedHelp": "您可以查看、旋转、剖切和测量模型。签署保密协议后即可下载 STEP 文件，请联系我们签署。每次下载都有记录，文件中会写入您的姓名和日期。"
 }

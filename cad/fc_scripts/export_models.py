@@ -1,22 +1,19 @@
-"""freecadcmd script (FreeCAD 1.0.2 / 1.1): the 3D-viewer outputs of a built motor model.  Started by motor_ai_sim.cad.build
-after the STEP export.
+"""freecadcmd script (FreeCAD 1.0.2 / 1.1): the 3D-viewer model of a built motor.  Started by motor_ai_sim.cad.build after the
+STEP export.
 
   environment: FC_CAD_ROOT (cad/ dir), FC_MODEL (FCStd), FC_OUT_DIR (directory), FC_MOTOR_ID, FC_REPORT (JSON),
                FC_STATUS, FC_SET (what-if overrides, tests)
 
-Writes into FC_OUT_DIR (each under a temporary name first, moved only after its check passed):
-  <motor_id>_full.glb          the FULL model: every part of the active STEP plus the phase board, one coloured node per part
-                               (Core, Coils/Coil_nn, Rotor, Magnets/Magnet_nn, Shaft, Bearings_front/back, Holder_front/back,
-                               Ring_front/back, Screws/Screw_n, Prop_fix, PhaseBoard*); node extras carry the exploded-view axial factor
-  <motor_id>_envelope.step     the PRE-NDA model (what a customer without NDA may see and download; owner 2026-10-13: rotor and magnets
-                               carry no patent value, so it is the COMPLETE motor model: stator, coils, rotor core, magnets, rings, holders,
-                               bearings, screws, shaft, Prop_fix).  The only difference to the full model is the phase board: a plain FR-4
-                               disc (outline, notches, holes) with the 3 phase pins and NO copper; the copper layout is shared after the NDA.
-                               (The file keeps the name "envelope" for the routes and manifests that already use it.)
-  <motor_id>_envelope.glb      the same pre-NDA model as GLB
-  <motor_id>_models3d.json     evidence: solids, volumes, triangle counts, mesh-vs-solid volume check, sha-free (the manifest holds hashes)
+Writes into FC_OUT_DIR (under a temporary name first, moved only after its check passed):
+  <motor_id>_full.glb          the model for the web viewer, ONE model for everybody (owner 2026-10-13): every part of the active
+                               STEP plus the phase board with its copper, one coloured node per part (Core, Coils/Coil_nn, Rotor,
+                               Magnets/Magnet_nn, Shaft, Bearings_front/back, Holder_front/back, Ring_front/back, Screws/Screw_n,
+                               Prop_fix, PhaseBoard*); node extras carry the exploded-view axial factor.  Viewing is open to every
+                               signed-in user who may see the motor; the STEP download is for NDA accounts and the owner only.
+  <motor_id>_models3d.json     evidence: triangle counts and the mesh-vs-solid volume check (the manifest holds the hashes)
 
-The model is opened, fully recomputed and must pass health.gate() like the STEP export.
+The model is opened, fully recomputed and must pass health.gate() like the STEP export; the export refuses if a mesh differs
+from its solid by more than 3 % in volume.
 """
 import json, math, os, sys, traceback
 
@@ -24,8 +21,6 @@ ROOT = os.environ["FC_CAD_ROOT"]
 sys.path.insert(0, ROOT)
 sys.path.insert(0, os.path.join(ROOT, "fc_scripts"))
 import FreeCAD as App  # noqa: E402
-import Import  # noqa: E402
-import Part  # noqa: E402
 import MeshPart  # noqa: E402
 import glb_writer as G  # noqa: E402
 from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, electronics, view  # noqa: E402
@@ -37,12 +32,10 @@ EXPLODE = {"Core": 0.0, "Coils": -0.35, "Rotor": 0.9, "Magnets": 0.9, "Shaft": 2
            "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
 BOARD_COLOURS = {"PhaseBoard_FR4": (0.16, 0.42, 0.24), "PhaseBoard_copper": (0.86, 0.66, 0.22),
                  "PhaseBoard_pins": (0.62, 0.64, 0.66), "PhaseBoard_other": (0.45, 0.47, 0.45)}
-ENVELOPE_COLOUR = (0.66, 0.68, 0.72)
-MIN_CUTOUT_AREA = 2.0           # mm2: every notch / hole of the board outline counts; the pre-NDA board is a plain FR-4 disc: no copper, no vias
 VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny parts are limited by the tessellation tolerance)
-
-
 ANG = 0.3                       # angular deflection (rad) of the viewer meshes
+ORDER = ["Core", "Coils", "Rotor", "Magnets", "Shaft", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back",
+         "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
 
 
 def _mesh(sol, tol):
@@ -102,35 +95,26 @@ def tessellate(shape, tol):
 
 
 class Collector:
-    """Groups of one GLB with the mesh-vs-solid volume check."""
+    """Groups of the GLB with the mesh-vs-solid volume check."""
 
     def __init__(self, tol):
         self.tol = tol
         self.groups = {}
         self.checks = []
-        self.solids = {}                # node name -> shape (the envelope STEP tree)
-
-    def group(self, name, colour, family=None, explode=None):
-        g = self.groups.get(name)
-        if g is None:
-            g = self.groups[name] = G.Group(name, colour, extras=dict(
-                family=family or name, explode=EXPLODE.get(family or name, 0.0) if explode is None else explode))
-        return g
 
     def add(self, gname, node, shape, colour, family=None, check=True):
-        g = self.group(gname, colour, family)
+        g = self.groups.get(gname)
+        if g is None:
+            fam = family or gname
+            g = self.groups[gname] = G.Group(gname, colour, extras=dict(family=fam, explode=EXPLODE.get(fam, 0.0)))
         b = budget_of(node)
         patches, vol = tessellate(shape, budgeted_tol(shape, self.tol, b) if b else self.tol)
         g.add(node, patches)
-        self.solids[node] = shape
         if check and shape.Volume > 0:
-            err = abs(vol - shape.Volume) / shape.Volume
-            self.checks.append((node, round(shape.Volume, 4), round(vol, 4), err))
-        return patches
+            self.checks.append((node, round(shape.Volume, 4), round(vol, 4), abs(vol - shape.Volume) / shape.Volume))
 
-    def glb(self, order, asset_extras):
-        gs = [self.groups[n] for n in order if n in self.groups]
-        return G.build_glb(gs, asset_extras)
+    def glb(self, asset_extras):
+        return G.build_glb([self.groups[n] for n in ORDER if n in self.groups], asset_extras)
 
 
 def classify_board(shape):
@@ -146,38 +130,10 @@ def classify_board(shape):
             out["PhaseBoard_copper"].append(s)
         else:
             out["PhaseBoard_other"].append(s)
-    return out, fr4
+    return out
 
 
-def board_outline(fr4):
-    """FR4 outline slab: the outer wire and the cut-outs larger than MIN_CUTOUT_AREA of the biggest planar face, extruded
-    over the FR4 thickness.  Small holes (vias, lead pass-throughs) are dropped: the pre-NDA model shows the board, not its routing."""
-    best = None
-    for f in fr4.Faces:
-        if f.Surface.__class__.__name__ != "Plane":
-            continue
-        n = f.normalAt(0, 0)
-        if abs(abs(n.z) - 1.0) < 1e-6 and (best is None or f.Area > best.Area):
-            best = f
-    if best is None:
-        raise RuntimeError("phase board FR4 has no planar face")
-    ow = best.OuterWire
-    face = Part.Face(ow)
-    for w in best.Wires:
-        if w.isSame(ow):
-            continue
-        hole = Part.Face(w)
-        if hole.Area >= MIN_CUTOUT_AREA:
-            face = face.cut(hole)
-    bb = fr4.BoundBox
-    face.translate(App.Vector(0, 0, bb.ZMin - best.BoundBox.ZMin))
-    slab = face.extrude(App.Vector(0, 0, bb.ZLength))
-    return slab
-
-
-def add_motor(col, envelope, parts, g):
-    """The same parts for both models; `envelope` (the pre-NDA model) differs only in the phase board: a plain FR-4 disc
-    (outline, notches, holes) with the 3 pins and no copper, the full model keeps the copper layout."""
+def add_motor(col, parts):
     core, rotor, coils, mags, mech, board = (parts[k] for k in ("core", "rotor", "coils", "mags", "mech", "board"))
     col.add("Core", "Core", core, view.COLORS["Core"])
     for i, s in enumerate(coils):
@@ -204,15 +160,11 @@ def add_motor(col, envelope, parts, g):
             col.add("Screws", name, s, view.COLORS["Screw"], check=False)
     info = None
     if board is not None:
-        bp, fr4 = classify_board(board)
-        if envelope:
-            bp["PhaseBoard_FR4"] = [board_outline(fr4)]
-            bp["PhaseBoard_copper"] = []            # owner 2026-10-13: plain FR-4 disc, no copper at all
-            bp["PhaseBoard_other"] = []             # notch walls / mask: not part of a plain disc
-        for gname, sols in bp.items():
+        info = {}
+        for gname, sols in classify_board(board).items():
+            info[gname] = len(sols)
             for i, s in enumerate(sols):
                 col.add(gname, "%s_%03d" % (gname, i + 1), s, BOARD_COLOURS[gname], family="PhaseBoard", check=False)
-        info = {k: len(v) for k, v in bp.items()}
     return info
 
 
@@ -233,8 +185,7 @@ def main():
     gt = health.gate(src)
     if not gt["ok"]:
         App.closeDocument(src.Name)
-        return finish(False, "health gate failed - NO 3D models written: " + " | ".join(gt["errors"][:8]), gate=gt["errors"])
-    g = lambda n: ps.pval(sh, n)
+        return finish(False, "health gate failed - NO 3D model written: " + " | ".join(gt["errors"][:8]), gate=gt["errors"])
     meta = dict(src.Meta or {})
     parts = dict(
         core=src.getObject("Core").Shape.copy(), rotor=src.getObject("RotorCore").Shape.copy(),
@@ -247,90 +198,25 @@ def main():
     tol = min(0.2, max(0.01, 0.0006 * diag))
     asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), template=meta.get("motor_template"),
                  tessellation_mm=round(tol, 4))
-    order = ["Core", "Coils", "Rotor", "Magnets", "Shaft", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back",
-             "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
+    col = Collector(tol)
+    board_info = add_motor(col, parts)
+    glb, st = col.glb(asset)
+    App.closeDocument(src.Name)
 
-    full = Collector(tol)
-    board_info = add_motor(full, False, parts, g)
-    glb_full, st_full = full.glb(order, dict(asset, variant="full"))
-    env = Collector(tol)
-    env_board = add_motor(env, True, parts, g)
-    glb_env, st_env = env.glb(order, dict(asset, variant="envelope"))
-    env_solids = env.solids
-
-    # ---------------------------------------------------------------- envelope STEP (+ re-import check)
-    ex = App.newDocument("envelope")
-    root = ex.addObject("App::Part", mid + "_envelope")
-
-    def part(parent, name):
-        p = ex.addObject("App::Part", name); p.Label = name; parent.addObject(p); return p
-
-    def solid(parent, name, shape):
-        f = ex.addObject("Part::Feature", name); f.Label = name; f.Shape = shape; parent.addObject(f); return f
-
-    stator, wind, rotor_p, mech_p, elec = part(root, "Stator"), part(root, "Winding"), part(root, "Rotor"), part(root, "Mechanics"), None
-    subs = {}
-    magp = None
-    for name, shp in env_solids.items():
-        if name == "Core":
-            solid(stator, name, shp)
-        elif name.startswith("Coil_"):
-            solid(wind, name, shp)
-        elif name == "RotorCore":
-            solid(rotor_p, name, shp)
-        elif name.startswith("Magnet_"):
-            magp = magp or part(root, "Magnets")
-            solid(magp, name, shp)
-        elif name.startswith("PhaseBoard"):
-            elec = elec or part(root, "Electronics")
-            solid(elec, name, shp)
-        else:
-            grp = mechanics.groups([name])[name]
-            parent = mech_p
-            if grp:
-                subs[grp] = subs.get(grp) or part(mech_p, grp)
-                parent = subs[grp]
-            solid(parent, name, shp)
-    ex.recompute()
+    worst = max([c[3] for c in col.checks] or [0.0])
+    ok = worst < VOL_TOL and (board_info is None or board_info.get("PhaseBoard_copper", 0) > 0)   # the copper board is in the model
+    rep = dict(motor_id=mid, tessellation_mm=round(tol, 4), glb=mid + "_full.glb", bytes=len(glb), board=board_info,
+               worst_mesh_volume_error=round(worst, 5), freecad_version=".".join(str(x) for x in App.Version()[:3]), ok=ok, **st,
+               mesh_checks=[dict(node=c[0], solid_volume=c[1], mesh_volume=c[2], rel_error=round(c[3], 5)) for c in col.checks])
     os.makedirs(out_dir, exist_ok=True)
-    tmp_step = os.path.join(out_dir, mid + "_envelope.partial.step")
-    Import.export([root], tmp_step)
-    App.closeDocument(ex.Name)
-    chk = App.newDocument("check")
-    Import.insert(tmp_step, chk.Name)
-    rows = [dict(label=o.Label, volume=round(o.Shape.Volume, 4)) for o in chk.Objects
-            if o.TypeId == "Part::Feature" and not o.Shape.isNull() and o.Shape.Solids]
-    App.closeDocument(chk.Name)
-    expv = sum(s.Volume for s in env_solids.values())
-    got = sum(r["volume"] for r in rows)
-    step_ok = abs(got - expv) < 1e-6 * expv + 1e-3 and len(rows) == len(env_solids)
-
-    # ---------------------------------------------------------------- checks and writes
-    worst = max([c[3] for c in full.checks + env.checks] or [0.0])
-    missing = [n for n in ("RotorCore", "Magnet_01") if n not in env_solids]         # the pre-NDA model is the complete motor
-    inner_cu = True if not board_info else (env_board.get("PhaseBoard_copper", 0) == 0 and env_board.get("PhaseBoard_other", 0) == 0)
-    ok = step_ok and worst < VOL_TOL and not missing and inner_cu
-    rep = dict(motor_id=mid, tessellation_mm=round(tol, 4), full=dict(glb=mid + "_full.glb", bytes=len(glb_full), **st_full),
-               envelope=dict(glb=mid + "_envelope.glb", step=mid + "_envelope.step", glb_bytes=len(glb_env),
-                             step_bytes=os.path.getsize(tmp_step), step_solids=len(rows), step_volume=round(got, 3),
-                             expected_volume=round(expv, 3), solids=len(env_solids), board=env_board, **st_env),
-               board=board_info, worst_mesh_volume_error=round(worst, 5),
-               mesh_checks=[dict(node=c[0], solid_volume=c[1], mesh_volume=c[2], rel_error=round(c[3], 5)) for c in full.checks + env.checks],
-               freecad_version=".".join(str(x) for x in App.Version()[:3]), ok=ok)
     with open(os.environ["FC_REPORT"], "w", encoding="utf-8") as fh:
         json.dump(rep, fh, indent=1)
     print(json.dumps({k: v for k, v in rep.items() if k != "mesh_checks"}, indent=1))
-    App.closeDocument(src.Name)
     if not ok:
-        os.remove(tmp_step)
-        return finish(False, "3D model check failed: step_ok=%s worst_mesh_volume_error=%.4f missing_motor_part=%s board_without_copper=%s"
-                      % (step_ok, worst, missing, inner_cu))
-    os.replace(tmp_step, os.path.join(out_dir, mid + "_envelope.step"))
-    for name, data in ((mid + "_full.glb", glb_full), (mid + "_envelope.glb", glb_env)):
-        with open(os.path.join(out_dir, name), "wb") as fh:
-            fh.write(data)
-    return finish(True, "3D models written: full GLB %d bytes, envelope GLB %d bytes, envelope STEP %d solids" % (
-        len(glb_full), len(glb_env), len(rows)))
+        return finish(False, "3D model check failed: worst_mesh_volume_error=%.4f board=%s" % (worst, board_info))
+    with open(os.path.join(out_dir, mid + "_full.glb"), "wb") as fh:
+        fh.write(glb)
+    return finish(True, "3D model written: %d bytes, %d triangles" % (len(glb), st["triangles"]))
 
 
 try:

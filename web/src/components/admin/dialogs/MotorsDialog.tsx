@@ -15,6 +15,8 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 export interface RegistryUser {
   email: string; role: string; name: string; disabled: boolean; created?: string | null;
   motors?: MotorGrants;
+  /** NDA state (3D model menu): signed accounts get the full model and STEP, the rest the envelope. */
+  nda?: { signed: boolean; date: string; by: string };
 }
 
 /** The dies a default may name: every die for an "all" grant, else the picked ones. */

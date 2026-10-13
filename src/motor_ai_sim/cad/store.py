@@ -88,7 +88,7 @@ def sha256_file(path):
 # ----------------------------------------------------------------------------------------------- expression evaluator
 _UNIT = {"mm": 1.0, "cm": 10.0, "m": 1000.0, "um": 1e-3, "deg": 1.0, "rad": 180.0 / math.pi, "in": 25.4}
 _NUM_UNIT = re.compile(r"(\d+\.?\d*(?:[eE][-+]?\d+)?)\s*(mm|cm|um|deg|rad|in|m)\b")
-_FUN = dict(pi=math.pi, sqrt=math.sqrt, abs=abs, min=min, max=max, sin=lambda d: math.sin(math.radians(d)),
+_FUN = dict(pi=math.pi, sqrt=math.sqrt, abs=abs, min=min, max=max, ceil=math.ceil, floor=math.floor, sin=lambda d: math.sin(math.radians(d)),
             cos=lambda d: math.cos(math.radians(d)), tan=lambda d: math.tan(math.radians(d)))
 
 

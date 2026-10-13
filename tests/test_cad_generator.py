@@ -268,7 +268,7 @@ def test_phase_board_rows_are_named_mechanics_rows_with_comments():
     assert "coil_lead_total" in rows["phase_board_z"]["freecad_expression"]       # the axial chain, not a number
 
 
-@pytest.mark.parametrize("length,tz,n_copper", [(12, -12.615, -12.825), (20, -16.615, -16.825), (16, -14.615, -14.825)])
+@pytest.mark.parametrize("length,tz,n_copper", [(12, -12.865, -13.075), (20, -16.865, -17.075), (16, -14.865, -15.075)])
 def test_phase_board_z_follows_the_coil_lead_end_datum(length, tz, n_copper):
     v, _ = _eval_with(length)
     lead_end = -(v["coil_leg_length"] / 2 + v["coil_lead_total"])
@@ -277,7 +277,7 @@ def test_phase_board_z_follows_the_coil_lead_end_datum(length, tz, n_copper):
     assert abs(n_copper - (lead_end + v["phase_board_n_offset"])) < 1e-9
     assert (v["phase_board_x"], v["phase_board_y"]) == (-100.0, 100.0)
     if length in (12, 20):
-        assert abs(lead_end - {12: -15.35, 20: -19.35}[length]) < 1e-9                 # coil_lead_end_z of the datums JSON
+        assert abs(lead_end - {12: -15.6, 20: -19.6}[length]) < 1e-9                  # coil_lead_end_z of the datums JSON (coil straight length = stack + 1 mm, owner 2026-10-13)
 
 
 def test_phase_board_placement_is_an_expression_of_the_params_rows():
@@ -298,3 +298,10 @@ def test_phase_board_step_has_the_colours_and_pin_j13_lands_where_the_pcb_sessio
     assert any(abs(a - 106.605562) < 1e-5 and abs(b + 87.035855) < 1e-5 for a, b in pts)
     assert abs(x - 6.606) < 0.01 and abs(y - 12.964) < 0.01 and abs(math.hypot(x, y) - 14.55) < 0.01
     assert abs(math.degrees(math.atan2(y, x)) - 63.0) < 0.05
+
+
+@pytest.mark.parametrize("length,req,screw", [(12, 17.0, 18.0), (20, 25.0, 25.0), (16, 21.0, 25.0), (24, 29.0, 30.0)])
+def test_screw_length_is_stock_rounded_and_coil_straight_is_stack_plus_1(length, req, screw):
+    v, _ = _eval_with(length)
+    assert abs(v["holder_screw_req"] - req) < 1e-9 and abs(v["holder_screw_l"] - screw) < 1e-9
+    assert abs(v["coil_straight_len"] - (length + 1)) < 1e-9 and abs(v["coil_leg_length"] - (length + 1)) < 1e-9

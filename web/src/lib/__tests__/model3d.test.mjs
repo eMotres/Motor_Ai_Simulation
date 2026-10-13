@@ -2,6 +2,7 @@
 // section plane, measure, download names.  Imports the .ts itself (Node >= 22.18 / 24; else skipped).
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 let L = null;
 try { L = await import('../model3d.ts'); } catch { /* old Node */ }
@@ -73,4 +74,39 @@ t('download names come from the server stamp; a hostile or missing header falls 
   assert.equal(L.formatBytes(4647560), '4.4 MB');
   assert.equal(L.formatBytes(2048), '2 kB');
   assert.equal(L.formatBytes(null), '');
+});
+
+// -- what the tab shows: ONE flag (can_download) decides ---------------------------------------------
+
+const TOOLS = ['parts', 'explode', 'section', 'measure'];
+
+t('without NDA: the model, the picker, Fit, the note and the Sign button - no side panel, no tools, no download', () => {
+  const p = L.panelParts(false);
+  assert.deepEqual(p, ['viewer', 'motor', 'fit', 'signNote', 'signButton']);
+  for (const x of [...TOOLS, 'download', 'yourNda', 'version']) assert.ok(!p.includes(x), x);
+});
+
+t('with NDA (and owner): the full panel plus the download, no sign note or button', () => {
+  const p = L.panelParts(true);
+  for (const x of ['viewer', 'motor', 'fit', ...TOOLS, 'download', 'yourNda', 'version']) assert.ok(p.includes(x), x);
+  assert.ok(!p.includes('signNote') && !p.includes('signButton'));
+});
+
+t('the scene gets the plain model without NDA, whatever tool state is left over (a revoked NDA resets at once)', () => {
+  const s = { hidden: new Set(['Coils']), explode: 0.7, section: { on: true, axis: 'y', position: 3 }, measure: true };
+  assert.deepEqual(L.effectiveSettings(true, s), s);
+  const plain = L.effectiveSettings(false, s);
+  assert.equal(plain.hidden.size, 0);
+  assert.equal(plain.explode, 0);
+  assert.equal(plain.section.on, false);
+  assert.equal(plain.measure, false);
+  assert.deepEqual(s.hidden, new Set(['Coils']));                       // the input is not mutated
+});
+
+t('no "Envelope" wording is left in the tab, its viewer, its locale files or its library', () => {
+  const read = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
+  for (const f of ['../../components/model3d/Model3DPanel.tsx', '../../components/model3d/modelViewer.ts', '../model3d.ts',
+    '../../locales/en/model3d.json', '../../locales/zh-CN/model3d.json']) {
+    assert.ok(!/envelope/i.test(read(f)), f);
+  }
 });

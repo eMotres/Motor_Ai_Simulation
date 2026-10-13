@@ -5,6 +5,31 @@
 
 export type Axis = 'x' | 'y' | 'z';
 
+// What the tab shows (owner 2026-10-13: "all this beauty after the NDA, together with the download; without NDA just a 3D model you
+// can rotate").  ONE flag decides, the server's `can_download`; there is no second permission.  Without it: the viewer (orbit, zoom,
+// pan), the motor picker, the fit button, the "Download after NDA" note and the Sign button - no side panel, no tools.
+export type PanelPart = 'viewer' | 'motor' | 'fit' | 'signNote' | 'signButton'
+  | 'parts' | 'explode' | 'section' | 'measure' | 'download' | 'yourNda' | 'version';
+
+export function panelParts(canDownload: boolean): PanelPart[] {
+  const base: PanelPart[] = ['viewer', 'motor', 'fit'];
+  return canDownload
+    ? [...base, 'parts', 'explode', 'section', 'measure', 'download', 'yourNda', 'version']
+    : [...base, 'signNote', 'signButton'];
+}
+
+export interface ViewerSettings {
+  hidden: ReadonlySet<string>;
+  explode: number;
+  section: { on: boolean; axis: Axis; position: number };
+  measure: boolean;
+}
+
+/** The settings the scene gets: the user's tool state with NDA, the plain model without it (a revoked NDA resets the tools at once). */
+export function effectiveSettings(canDownload: boolean, s: ViewerSettings): ViewerSettings {
+  return canDownload ? s : { hidden: new Set(), explode: 0, section: { ...s.section, on: false }, measure: false };
+}
+
 export interface ModelInfo {
   die: string;
   config: string;

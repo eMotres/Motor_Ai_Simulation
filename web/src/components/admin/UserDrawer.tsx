@@ -93,7 +93,7 @@ const UserDrawer: React.FC<{
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>NDA signed</Typography>
-            <HelpTip title="3D model menu: with the NDA signed the account sees and downloads the FULL model (view + STEP); without it only the simplified envelope. Every download is logged." />
+            <HelpTip title="3D model menu: everybody can look at and rotate the model; with the NDA signed the account also gets the tools (parts, exploded view, section, measure) and the STEP download. Every download is logged." />
           </Box>
           {user.role === 'admin' ? (
             <Typography sx={{ fontSize: 13, color: 'var(--text-0)', mb: 2 }}>download open (admin)</Typography>

@@ -609,7 +609,7 @@ function App() {
       render: () => <CostPanel /> },
     { id: 'compare', label: 'Configure', order: 75, gate: 'signedIn', showViewer: false,
       render: () => <CompareTab /> },
-    // 3D model (owner 2026-10-13): view / rotate / download the motor model; the SERVER picks envelope vs full (NDA).
+    // 3D model (owner 2026-10-13): look at and rotate the motor model; tools and STEP download come with the NDA (server flag can_download).
     { id: 'model3d', label: '3D model', order: 76, gate: 'signedIn', showViewer: false,
       render: () => <Model3DPanel /> },
     { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: 'admin', showViewer: false,

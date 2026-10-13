@@ -44,7 +44,7 @@ def _excitation_args(sim: Dict[str, Any]) -> Dict[str, Any]:
         # A PWM candidate needs ≥4 solve steps per carrier (the route refuses
         # less — the ripple would sit at its Nyquist edge and average out),
         # i.e. hundreds of steps per period plus a settle prefix, against the
-        # optimizer's tens.  Measured 2026-09-02 on CILN28/G2-L40: 40 steps
+        # optimizer's tens.  Measured 2026-09-02 on large reference die: 40 steps
         # over 26 carriers → every candidate 422'd and the study produced
         # nothing.  So the candidates are scored on the SINUSOIDAL current
         # drive at the same operating point, and the log says so; the PWM

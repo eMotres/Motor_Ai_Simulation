@@ -299,7 +299,7 @@ def test_context_names_the_cooling_and_the_temperature_limits():
     assert c["thermal_limits"] == {"winding_C": 200.0, "winding_basis": w_basis,
                                    "magnet_C": 150.0, "magnet_card": "F52SH_120C"}
     # another die is unrestricted; no magnet named = no magnet limit invented
-    free = cl.context(None, {"die": "CILN28", "name": "G2-L40"})
+    free = cl.context(None, {"die": "100 mm · 24s-28p mid-torque", "name": "L15"})
     assert free["cooling"]["restricted"] is False and free["cooling"]["cooling_options"] is None
     assert free["thermal_limits"]["magnet_C"] is None and free["thermal_limits"]["magnet_card"] is None
     # no family document at all: still a complete answer

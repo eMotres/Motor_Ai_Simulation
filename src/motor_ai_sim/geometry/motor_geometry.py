@@ -243,7 +243,7 @@ def refresh_derived_geometry(g: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     motor_config.yaml ``geometry:`` block): a derived field is a function of
     the primaries and the stored copy is never trusted — it went stale on most
     dies (2026-09-30: CIANO14 40 new stored bore radius 12.1 for inputs that
-    give 12.0, CILN28 carried a 30 mm machine's 9.2/9/3.7 on a Ø160 die), and
+    give 12.0, large reference die carried a 30 mm machine's 9.2/9/3.7 on a Ø160 die), and
     the duty-load guard then reported a "different geometry" for a duty whose
     inputs were identical.
 

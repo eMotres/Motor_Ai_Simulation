@@ -72,9 +72,13 @@ def test_g_the_live_generator_configuration_reads_as_one():
 
     import yaml
 
-    p = pathlib.Path("config/dies/CIANO10 200 opt/L180 gen.yaml")
-    if not p.exists():
-        pytest.skip("the live generator configuration is not in this checkout")
+    from motor_ai_sim.private_data import private_path
+
+    # the live generator configuration is private data (not in the public repository)
+    p = private_path("config", "dies", "CIANO10 200 opt", "L180 gen.yaml")
+    if p is None:
+        pytest.skip("the live generator configuration is private data; set "
+                    "MOTOR_AI_SIM_PRIVATE_DATA to the private data checkout")
     c = yaml.safe_load(io.open(p, encoding="utf-8"))
     role, src = _config_role(c)
     assert (role, src) == ("generator", "duties"), (role, src, c.get("role"))

@@ -519,7 +519,7 @@ def test_cooling_options_route(client):
     assert j["restricted"] and j["cooling_options"] == ["propeller_air"]
     assert j["unknown_propellers"] == []
     assert {d["id"] for d in j["propeller_details"]} == set(j["propellers"])
-    free = client.get("/api/propellers/cooling-options", params={"die": "CILN28"}).json()
+    free = client.get("/api/propellers/cooling-options", params={"die": "100 mm · 24s-28p mid-torque"}).json()
     assert free["restricted"] is False and free["propeller_details"] == []
 
 
@@ -571,7 +571,7 @@ def test_repo_defaults_are_the_owners_and_are_allowed_and_computable():
     assert b.blades == 3 and b.power_data == "measured_torque" and b.raw.get("bench_measured") is True
     # no configuration asked: no single default (the map is still there); an unrestricted die has none
     assert cooling_options("CIANO14 40 new")["default_propeller"] is None
-    free = cooling_options("CILN28", "G2-L40")
+    free = cooling_options("100 mm · 24s-28p mid-torque", "L15")
     assert free["default_propeller"] is None and free["defaults"] == {}
 
 
@@ -601,7 +601,7 @@ def test_cooling_options_route_serves_default_propeller(client, tmp_path, monkey
     assert j20["defaults"] == {"L12": "motres_bench_hq1050_3", "L20": "tmotor_p13x4_4"}
     nocfg = client.get("/api/propellers/cooling-options", params={"die": "CIANO14 40 new"}).json()
     assert nocfg["default_propeller"] is None
-    free = client.get("/api/propellers/cooling-options", params={"die": "CILN28", "config": "G2-L40"}).json()
+    free = client.get("/api/propellers/cooling-options", params={"die": "100 mm · 24s-28p mid-torque", "config": "L15"}).json()
     assert free["default_propeller"] is None
     # a default the catalogue cannot compute (geometry only) is withheld by the route
     from motor_ai_sim import cooling_options as co

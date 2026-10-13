@@ -71,11 +71,11 @@ ELEMENT_ORDER = 2
 J_LIMIT_A_MM2 = 35.0      # the house rule used to synthesise a missing current
 TIMEOUT_S = 30 * 60       # kill a motor that hangs longer than this
 VARIANT_BASE_FE16N2 = "ciano14_40_12_fe₁₆n₂"   # the unicode preset key
-# HYPOTHESIS, not stored data: the 200 mm presets carry no winding connection,
+# HYPOTHESIS, not stored data: the large-format presets (private data) carry no winding connection,
 # and their stored torque is ~half of what the solver produces when the whole
 # phase current is driven through one path.  This runs the same geometry at
 # I/2 to TEST whether a 2-parallel-path winding is what those numbers assume.
-INFERRED_NPAR = {"m200_20kw_base": 2}
+INFERRED_NPAR: dict = {}   # preset key -> inferred parallel paths (the private presets are not listed here)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

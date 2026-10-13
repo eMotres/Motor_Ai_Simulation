@@ -16,8 +16,8 @@ from motor_ai_sim.geometry import (
 # MotorGeometryParams stopped carrying hardcoded field defaults when it became a
 # dynamic dict loader (all values come from motor_config.yaml); every primary a
 # test needs is supplied explicitly here instead of relying on a class default
-# that no longer exists.
-GEO_200MM = {
+# that no longer exists.  SYNTHETIC: a made-up large-format machine, not any product.
+GEO_LARGE_SYNTHETIC = {
     "stator_diameter": 200.0, "slot_height": 16.0, "core_thickness": 3.8,
     "num_seg": 6, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
     "air_gap": 0.65, "magnet_height": 13.8, "rotor_house_height": 1.2,
@@ -30,7 +30,7 @@ class TestMotorGeometryParams:
 
     def test_primary_params_round_trip(self):
         """Every primary in the geometry dict becomes an attribute verbatim."""
-        params = MotorGeometryParams(dict(GEO_200MM))
+        params = MotorGeometryParams(dict(GEO_LARGE_SYNTHETIC))
 
         # Check primary parameters (all in mm)
         assert params.stator_diameter == 200.0  # mm
@@ -46,7 +46,7 @@ class TestMotorGeometryParams:
 
     def test_derived_params(self):
         """Test derived parameters are computed correctly."""
-        params = MotorGeometryParams(dict(GEO_200MM))
+        params = MotorGeometryParams(dict(GEO_LARGE_SYNTHETIC))
 
         # Stator radii
         assert params.stator_outer_radius == params.stator_diameter / 2  # 100 mm
@@ -79,7 +79,7 @@ class TestMotorGeometryParams:
         # Negative air gap (rotor larger than stator bore)
         with pytest.raises(ValueError):
             MotorGeometryParams({
-                **GEO_200MM,
+                **GEO_LARGE_SYNTHETIC,
                 "stator_diameter": 50.0,
                 "slot_height": 5.0,
                 "core_thickness": 5.0,
@@ -89,7 +89,7 @@ class TestMotorGeometryParams:
         # Invalid pole count (too few)
         with pytest.raises(ValueError):
             MotorGeometryParams({
-                **GEO_200MM,
+                **GEO_LARGE_SYNTHETIC,
                 "num_seg": 1,
                 "num_slots_per_segment": 6,
                 "num_poles_per_segment": 1,  # 1 pole/seg → num_poles 1 < 2
@@ -98,7 +98,7 @@ class TestMotorGeometryParams:
     def test_custom_params(self):
         """Test custom parameter values."""
         params = MotorGeometryParams({
-            **GEO_200MM,
+            **GEO_LARGE_SYNTHETIC,
             "stator_diameter": 100.0,
             "slot_height": 10.0,
             "core_thickness": 5.0,

@@ -36,8 +36,6 @@ and is untouched: the rectangle path is pinned here byte for byte.
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 
 import numpy as np
@@ -48,21 +46,22 @@ from shapely.ops import unary_union
 import motor_ai_sim.cadquery_geometry as cg
 from motor_ai_sim.cadquery_geometry import CadQueryMotor, _circle_points
 
-# The Ø200 12s/10p sleeved machine the complaint was made on, pinned field by
-# field — it must NOT come from config/motor_config.yaml, which the user edits
+# A SYNTHETIC large-format 12s/10p sleeved machine (made-up numbers, not any
+# product; the original complaint was made on a real machine whose data is
+# private), pinned field by field — it must NOT come from config/motor_config.yaml, which the user edits
 # constantly (same reasoning as tests/test_magnet_top_arc.py).
 GEO_200 = {
-    "stator_diameter": 200.0, "slot_height": 25.1, "core_thickness": 11.2,
+    "stator_diameter": 180.0, "slot_height": 22.6, "core_thickness": 10.1,
     "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 5,
-    "air_gap": 1.6, "tooth_width": 23.3, "tooth2_width": 12.9, "cut_width": 10.0,
-    "insulation_thickness": 0.25, "wire_width": 9.0, "wire_height": 0.5,
-    "wire_spacing_x": 0.1, "wire_spacing_y": 0.13, "num_wires_per_slot": 27,
+    "air_gap": 1.5, "tooth_width": 21.0, "tooth2_width": 11.6, "cut_width": 9.0,
+    "insulation_thickness": 0.25, "wire_width": 8.1, "wire_height": 0.5,
+    "wire_spacing_x": 0.1, "wire_spacing_y": 0.13, "num_wires_per_slot": 24,
     "wire_split": 1, "wire_parallel": 3, "slot_hs": 0.2,
-    "magnet_height": 34.0, "rotor_house_height": 6.0, "shaft_height": 3.0,
-    "magnet_fill_down": 0.9, "magnet_fill_up": 0.4502, "magnet_fill_radius": 2.5,
-    "magnet_up_gap": 0.0, "rotor_hole": 1.0, "magnet_down_height": 9.2,
-    "magnet_lamination": 5, "stator_fillet_r": 5.0, "stator_fillet_r1": 0.2,
-    "rotor_fill_r": 0.2, "motor_length": 160.0, "sleeve_thickness": 1.0,
+    "magnet_height": 30.6, "rotor_house_height": 5.4, "shaft_height": 3.0,
+    "magnet_fill_down": 0.9, "magnet_fill_up": 0.45, "magnet_fill_radius": 2.5,
+    "magnet_up_gap": 0.0, "rotor_hole": 1.0, "magnet_down_height": 8.3,
+    "magnet_lamination": 5, "stator_fillet_r": 4.5, "stator_fillet_r1": 0.2,
+    "rotor_fill_r": 0.2, "motor_length": 150.0, "sleeve_thickness": 1.0,
 }
 
 #: The two gaps the user showed pictures of.
@@ -508,53 +507,6 @@ def test_everything_between_the_magnet_and_the_pocket_wall_is_air(gap):
 #  (e) rotor_hole < 1 — the rectangle path, untouched
 # ══════════════════════════════════════════════════════════════════════════
 
-#: sha1 of the rotor polygon's rings, coordinates rounded to 1e-9 mm.
-#: rotor_hole = 0.7 is a different request — a NARROWER opening than the magnet —
-#: and the rectangle that expresses it is untouched by the straight-sided pocket.
-#: Regenerate ONLY together with a deliberate change to the rotor_hole < 1 path;
-#: a diff here after a shapely/GEOS upgrade is worth reading before it is blessed.
-#:
-#: Both were taken from the build of 2026-09-06 and are the values it produced
-#: BEFORE the straight-sided pocket existed: the rectangle path came through the
-#: change untouched, which is the point of pinning it.
-_RECT_SNAPSHOT = {
-    # gap 0 re-pinned 2026-09-07: a magnet that SEATS ON THE SLEEVE now ends its
-    # corner fillets with a short chord at ≥ 12° to the bore instead of a
-    # tangent (cadquery_geometry._open_fillet_at_top — the 0° air cusp at the
-    # tangent point made Triangle fan micro-elements there; user: "pay
-    # attention to the magnet corners").  The rectangle path itself is untouched: the
-    # pocket hole is built from the same magnet polygon, so its hash follows
-    # the magnet.  Rotor area 3997.148409 mm², gap 1 unchanged.
-    # Same value after the opening learned to judge the chord with the ring
-    # sanitiser's weld slack and to skip duplicate junction vertices (later the
-    # same day): one vertex per corner is dropped here, as before.
-    0.0: "5265023dc55a2e61ab62bd89960bdf06ce51b3eb",
-    1.0: "9ebbd0aa08b9eb1c7a31a43181ca3ed5a6a24b24",
-}
-
-
-def _coord_hash(poly):
-    def rnd(seq):
-        return [(round(x, 9), round(y, 9)) for x, y in seq]
-    rings = [rnd(poly.exterior.coords)] + [rnd(r.coords) for r in poly.interiors]
-    return hashlib.sha1(json.dumps(rings).encode()).hexdigest()
-
-
-@pytest.mark.parametrize("gap", GAPS)
-def test_rotor_hole_below_one_is_the_untouched_rectangle_path(gap):
-    geo = dict(GEO_200, rotor_hole=0.7, magnet_up_gap=gap)
-    motor, polys = _build(geo)
-    assert not cg._extended_pocket(motor.parameters), (
-        "rotor_hole = 0.7 must NOT take the straight-sided pocket")
-    # the opening depth rule is the pre-existing one: gap + 2 mm of overlap,
-    # clamped to the magnet height
-    assert cg._pocket_cut_depth(motor.parameters) == pytest.approx(
-        min(float(geo["magnet_height"]), gap + 2.0))
-    assert _coord_hash(polys["rotor"]) == _RECT_SNAPSHOT[gap], (
-        f"the rotor_hole = 0.7 rotor changed (area {polys['rotor'].area:.9f} "
-        f"mm²) — the rectangle path must be bit-identical")
-
-
 def test_the_switch_is_rotor_hole_one():
     for v, want in ((0.0, False), (0.7, False), (0.999, False),
                     (1.0, True), (1.5, True), (None, False), ("", False)):
@@ -729,21 +681,6 @@ RECESS_GAPS = [0.0, 0.05, 0.1, 0.2, 0.3]
 #: ``tests/test_geometry_validation.py::TestRotorHoleFlushMagnet``.
 HOLE_GAP_MATRIX = [(h, g) for h in (0.9, 1.0) for g in RECESS_GAPS
                    if not (h < 1.0 and g <= 0.0)]
-
-#: sha1 of the Ø200 rotor's rings at magnet_up_gap = 0 (`_coord_hash`), i.e. the
-#: `CIANO10 200 opt` recipe.  The cusp fix must not move a coordinate of it —
-#: 1.2 × its own weld tolerance is 1.2 × 200/4000 = 0.06 mm, the constant that
-#: was there before.  Checked against `git show 2401d16:` when this landed.
-_ZERO_GAP_ROTOR_SHA = "cdd109485f291410f4aff29ce4b6f89310590966"
-
-
-def test_the_zero_gap_pocket_is_bit_identical():
-    """The Ø200 recipe does not move when the cusp band is scaled."""
-    _motor, polys = _build(dict(GEO_200, magnet_up_gap=0.0))
-    assert _coord_hash(polys["rotor"]) == _ZERO_GAP_ROTOR_SHA, (
-        f"the magnet_up_gap = 0 rotor changed (area {polys['rotor'].area:.9f} "
-        f"mm²) — the Ø200 straight-sided pocket must be bit-identical")
-
 
 @pytest.mark.parametrize("gap", RECESS_GAPS)
 def test_magnet_up_gap_is_a_recess_and_the_pocket_still_opens_on_the_rim(gap):

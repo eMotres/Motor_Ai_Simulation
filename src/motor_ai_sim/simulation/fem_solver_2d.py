@@ -278,12 +278,12 @@ DAXIS_SHIFT_DEG = 108.0   # LEGACY CONSTANT, and wrong for EVERY topology
 # `_calibrate_daxis`, 24 frames, disk off; base N52UH_150C + B10AHV900M, then
 # magnet -> F52SH_120C, then both cores -> 20SW1200):
 #     40 mm 12s/14p:  60.0228 / 60.0071 / 60.0154 deg
-#     L155  12s/10p: 120.0144 / 120.0121 / 120.0132 deg
+#     reference motor  12s/10p: 120.0144 / 120.0121 / 120.0132 deg
 # i.e. mesh noise, the same spread as three cross-sections of one family, and
 # worth < 0.01 % of torque (dT/dγ at the rated γ: -0.26 %/deg on the 40 mm,
-# -0.41 %/deg on L155).  Keying on materials would re-run a 24-frame
+# -0.41 %/deg on reference motor).  Keying on materials would re-run a 24-frame
 # calibration after every material edit and buy nothing.  ψ_PM, which DOES
-# scale with the cards (+1.3 % / +4.2 % on the 40 mm, +3.2 % / +1.3 % on L155
+# scale with the cards (+1.3 % / +4.2 % on the 40 mm, +3.2 % / +1.3 % on reference motor
 # for the same two swaps), is keyed on them: see `psipm_cache_key`.
 from motor_ai_sim import workspace as _WSD
 #: Entries are one float each; the cap is a safety valve against a sweep that
@@ -299,7 +299,7 @@ _DAXIS_CACHE = _WSD.ws_map("fem_solver_2d.daxis_cache", _DAXIS_CACHE_MAX,
 # suppresses it for every OTHER solve running at the same time too, and those
 # get the legacy 108° constant instead of their own q-axis.
 #
-# Measured on the 200 mm 24s/28p with the panel open (its field view solves on
+# Measured on the large-format machine 24s/28p with the panel open (its field view solves on
 # its own): change wire_width 8.1 -> 8.0, and the runs after the calibration
 # came back at daxis 108.0000 and T = 401.88 Nm against the correct 59.99 and
 # 821.52 — the torque halves because γ sits 48° off the q-axis, and nothing on
@@ -525,7 +525,7 @@ def psipm_cache_key(geo, wind, connection=None, materials=None) -> str:
     # flux through the iron, so it scales with the magnet's Br and with how hard
     # the steel saturates; v2 keyed on geometry and winding only and served one
     # card set's ψ_PM (and, through the "ldq0_v*_" prefix, its catalogue Ld/Lq)
-    # to the same cross-section with another.  Measured 2026-09-30, L155 at its
+    # to the same cross-section with another.  Measured 2026-09-30, reference motor at its
     # rated point: N52UH_150C -> F52SH_120C moves ψ_PM +3.2 % and
     # B10AHV900M -> 20SW1200 +1.3 %, and the chord Ld = (ψd − ψ_PM)/i_d
     # divides that error by a small i_d — a stale ψ_PM put Ld 29 % and 17 %
@@ -628,7 +628,7 @@ def _calibration_sector_count(num_slots, num_poles, wind):
 #: slot harmonics, so ONE position is not the machine's inductance; four evenly
 #: spaced positions average that modulation out and — because the four are
 #: kept — also MEASURE it (``spread_pct`` below).  Four extra linear back-solves
-#: on a matrix the frame already assembled is ~1 s on the 200 mm mesh, against a
+#: on a matrix the frame already assembled is ~1 s on the large-format machine mesh, against a
 #: run of minutes.
 _INC_LDQ_SAMPLES = 4
 
@@ -1435,7 +1435,7 @@ _SLIP_PER_PERIOD_OVERRIDE = int(_os_sb.environ.get("SB_SLIP_PER_PERIOD", "0") or
 #
 # The ripple IS regenerated in a couple of carriers; what the old two-CARRIER
 # pre-roll got wrong is the DC the turn-on leaves behind (about half the ripple
-# amplitude), which decays with τ_e — ~27 electrical periods on the L155 — and
+# amplitude), which decays with τ_e — ~27 electrical periods on the reference motor — and
 # therefore does not decay at all inside the reported window.  The fine part of
 # the settle is now whole PERIODS, so the flux drift over one is an exact
 # measurement of that DC and the DC-orbit solve takes it out at the end of the
@@ -3576,7 +3576,7 @@ def _demag_corner_diag(rotor_mesh, mag_idx, brm, ar_mag, mags):
     """The worst demagnetised element as a flagged CORNER diagnostic.
 
     ``100·min(Br factor)`` sits on the material curve's floor at every magnet
-    mesh on Ø40/L13 and swings 98 → 79 % with the mesh on L155 (NO_FILTERS
+    mesh on Ø40/L13 and swings 98 → 79 % with the mesh on reference motor (NO_FILTERS
     §3): it is the field singularity at a sharp magnet corner, the demag twin
     of the mechanical module's unaveraged peak stress.  So it ships with WHERE
     it is and how little of the magnet it covers, flagged, and never under a
@@ -3764,7 +3764,7 @@ def _drop_attempt(exc: BaseException) -> Tuple[Dict[str, Any], str, Dict[str, An
     message and its retry hint, as plain data — and NOTHING else (second Codex
     review, finding 9).  The exception's traceback holds every frame of the
     failed solve, and with them its meshes, factors, orbit and Jacobians (peak
-    RSS up to 4.5 GB on the L155); its ``__cause__`` / ``__context__`` hold the
+    RSS up to 4.5 GB on the reference motor); its ``__cause__`` / ``__context__`` hold the
     inner failure's frames as well.  Those frames' locals are cleared and every
     link to them cut BEFORE the next attempt starts, so the retry and the march
     never run beside the failed attempt's arrays."""
@@ -4281,7 +4281,7 @@ def _fem_transient_sliding_band_once(
     # (T 0.52, KV 484, 175 % ripple); it only plateaus at mesh ≲ slot_width/3
     # (T≈0.565, KV≈585, 11 % ripple from 1.0→0.5 mm).  So clamp the target to
     # resolve the smallest in-plane feature (slot or tooth) with ≥4 elements.
-    # This only ever REFINES (min) — motors with large features (e.g. 200 mm)
+    # This only ever REFINES (min) — motors with large features (e.g. a large-format machine)
     # keep their coarser mesh.  Radial air-gap resolution is separate
     # (gap_layers).  No operating-point tuning — pure geometric element sizing.
     # slot_width is DERIVED (wire pitch); it is honest here only because `geo`
@@ -4491,7 +4491,7 @@ def _fem_transient_sliding_band_once(
     # true q-axis and γ equals the physical current angle from the q-axis (=commercial FEM
     # el_deg).  Cached per topology; the I=0 calibration run is recursion-guarded.
     # …and it is REPORTED while it runs.  On a geometry the cache has not seen
-    # it is a 24-frame no-load solve — measured 39 s on the 200 mm 24s/28p —
+    # it is a 24-frame no-load solve — measured 39 s on the large-format machine 24s/28p —
     # during which the progress bar showed nothing at all, so pressing Run
     # looked like pressing nothing.  It is not overhead to hide: it is what
     # gives the user's γ a zero to be measured from.
@@ -5681,7 +5681,7 @@ def _fem_transient_sliding_band_once(
               "temp": round(float(coil_temp_c), 1),
               "mscale": float(magnet_scale)}
     # The eddy TIME SCHEME is part of the discretisation too: a backward-Euler
-    # state (and its same-angle loss reference, ~10 % lower on the L155
+    # state (and its same-angle loss reference, ~10 % lower on the reference motor
     # magnets) is not the BDF2 orbit.  Only the BDF2 key carries it, so a
     # backward-Euler run (SB_EDDY_BE=1) reads and writes exactly the old key.
     if bool(eddy) and _os_sb.environ.get("SB_EDDY_BE") != "1":
@@ -5918,7 +5918,7 @@ def _fem_transient_sliding_band_once(
             # CARRIERS carved out of the last coarse period.  It cannot work:
             # the modulator turning on injects a DC of about half the ripple
             # amplitude, τ_e is ~27 electrical periods on this class of machine
-            # (measured, L155), so nothing decays — and a window two carriers
+            # (measured, reference motor), so nothing decays — and a window two carriers
             # wide is not a whole electrical period, so the DC in it cannot even
             # be MEASURED (every estimator has to compare against an
             # interpolated orbit, which is what made SB_PWM_HANDOVER_DC
@@ -6951,7 +6951,7 @@ def _fem_transient_sliding_band_once(
         # coarse:fine ratio on the mixed PWM one — where using the fine dt put
         # ψ_prev |ψ|·ω·(ratio−1)·dt_f off the orbit and, over the operating-
         # point inductance, started the march with a 42 A DC that τ_e ≈ 27
-        # electrical periods then could not shed (measured, L155 72-step
+        # electrical periods then could not shed (measured, reference motor 72-step
         # diagnostic: 41.5 A at ratio 2).  Set after the settle adaptation
         # below, because that can rebuild the schedule.  (B5 / PWM study
         # 2026-09-13.)
@@ -6967,7 +6967,7 @@ def _fem_transient_sliding_band_once(
                                         L_d=float(_Ldd), L_q=float(_Lqq))
         # ── SETTLE ADAPTED TO THIS MACHINE'S L/R (user 2026-09-02) ──────
         # The PWM settle used to be a flat 2 periods, validated on a machine
-        # whose L/R was ~0.75 electrical period.  On CILN28/G2-L40 (L/R = 4.8
+        # whose L/R was ~0.75 electrical period.  On large reference die (L/R = 4.8
         # periods at 3000 rpm) that left a 9 A DC in the phase currents after
         # the settle — a 10.7 N·m first-order torque pulsation reported as
         # 44 % "ripple" (machine's own: 6 %).  Now: periods = ceil(k·τ_e/T_e)
@@ -7163,7 +7163,7 @@ def _fem_transient_sliding_band_once(
     # ── HONEST SETTLING (no-filter pass, 2026-09-24) ─────────────────────────
     # Measured on the owner's duties: the 3-sample probe above read "settled"
     # on L13 / Ø40 (0.7-1.3 %) while the shaft loss of the same run, marched 5
-    # continuous periods, came out HALF (L13 without demag 0.83 -> 0.41 W; L155
+    # continuous periods, came out HALF (L13 without demag 0.83 -> 0.41 W; reference motor
     # rated 29.1 -> 15.0 W with the old one-period extension).  Two defects:
     #  (1) the gauge: three samples, or block means over half a period of the
     #      magnet+shaft SUM, cannot see a slow body (the shaft ring, τ ≈ 1-3 ms)
@@ -7184,7 +7184,7 @@ def _fem_transient_sliding_band_once(
     # the periodic accelerator MEASURES it on the state (λ per period, τ =
     # −1/ln λ periods), decays slower than the normal cap is long may march
     # up to SB_EDDY_MAX_PERIODS_SLOW (24) periods.  Criterion: τ > the normal
-    # cap (L155 shaft λ 0.942 → τ 16.7 > 16).  A fast machine never gets a λ
+    # cap (reference motor shaft λ 0.942 → τ 16.7 > 16).  A fast machine never gets a λ
     # from the accelerator, keeps the normal cap and is bit-identical.  An
     # explicit SB_EDDY_MAX_PERIODS pin is a pin: never raised.
     _EDDY_MAX_WARM_PERIODS_SLOW = max(_EDDY_MAX_WARM_PERIODS, int(
@@ -7198,7 +7198,7 @@ def _fem_transient_sliding_band_once(
     _warm_gauge: Dict[str, Any] = {}          # the verdict's own numbers
     _shift_cache: Dict[str, Any] = {}
     # ── PERIODIC-STATE ACCELERATOR (2026-09-26, periodic_accel.py) ──────────
-    # A slow rotor conductor (L155 shaft wall, τ ≈ 17-18 periods via μ(B))
+    # A slow rotor conductor (reference motor shaft wall, τ ≈ 17-18 periods via μ(B))
     # cannot settle inside the cap by marching.  At the end of every extension
     # period the rotor-conductor state (both BDF2 levels, carried across the
     # period by the exact pole-pair map) is one iterate of the period map; RRE
@@ -7233,7 +7233,7 @@ def _fem_transient_sliding_band_once(
     # ── DC ERROR CORRECTION of slow solid rings (2026-09-29) ────────────────
     # docs/EDDY_SHAFT_SETTLE_2026-09-29.md.  After the extension periods in
     # SB_EDDY_EEC_AT (default "2,4") the rotor-frame DC error of a slow ring
-    # conductor (the L155 shaft wall: DC diffusion, τ ≈ 21 periods) is
+    # conductor (the reference motor shaft wall: DC diffusion, τ ≈ 21 periods) is
     # corrected by ONE static solve of the Jacobian (unclamped tangent)
     # averaged over the period just marched
     # (periodic_accel.dc_error_correction, TP-EEC), then
@@ -7310,7 +7310,7 @@ def _fem_transient_sliding_band_once(
         (slotting and MMF harmonics at that angle) into the whole conductor.
         In a solid magnetic shaft that imprint is a set of rotor-fixed DC
         patterns (the S-eigen-sectors m ≠ 0) that decay only by DC diffusion
-        through the wall — measured on the L155: |λ| = 0.963-0.967 per period
+        through the wall — measured on the reference motor: |λ| = 0.963-0.967 per period
         (τ ≈ 28 periods), turning exactly 2π/5 per period under the
         relabelling, and 15-50× the pole-pair-periodic change in the σ-norm.
         Its loss is a 1.2·f_e line that no whole-period mean cancels: the
@@ -7318,7 +7318,7 @@ def _fem_transient_sliding_band_once(
         Starting from the image mean removes that imprint and nothing the
         orbit's slow part has (the invariant sector is untouched).  Magnets are
         left as they are: they settle inside a period (τ ≈ 0.1 period on the
-        L155) and averaging their history only kicked them (Ø40: one more
+        reference motor) and averaging their history only kicked them (Ø40: one more
         warm-up period, measured)."""
         _cm = None
         for _gk in ("shaft", "sleeve"):
@@ -7328,7 +7328,7 @@ def _fem_transient_sliding_band_once(
         if _cm is not None and "mag" in _Msig_grp:
             # dofs shared with a magnet keep the static value: averaging them
             # would move the magnet's own history at its face (measured: a
-            # 4.9 kW one-frame kick in the L155 magnets)
+            # 4.9 kW one-frame kick in the reference motor magnets)
             _cm = _cm & ~(np.asarray(_Msig_grp["mag"].diagonal()).ravel() > 0.0)
         _period_shift(np.zeros(N2))              # builds the map
         _m = _shift_cache.get("map")
@@ -7392,7 +7392,7 @@ def _fem_transient_sliding_band_once(
     _warm_quiet = None
     # ── THE Br RATCHET MAY ONLY SEE A SETTLED FIELD ──────────────────────────
     # User, 2026-09-05: "the second run always differs from the first".  Two
-    # identical Runs of the Ø200 12s/10p at 470.2 A / 20000 rpm / 36 steps with
+    # identical Runs of the large-format machine 12s/10p at 470.2 A / 20000 rpm / 36 steps with
     # coupled eddy + demag gave T_avg 237.22 vs 244.61 N·m (+3.1 %), Br kept
     # 91.4 vs 98.5 %, Ld 0.055 vs 0.044 mH, rotor heat 837 vs 713 W; a third run
     # gave 232.49.  CAUSE: the irreversible ratchet (`_dmst.update`) ran on
@@ -7719,7 +7719,7 @@ def _fem_transient_sliding_band_once(
     _Aed_prev = (_Aop.copy() if (eddy and _vdrive) else np.zeros(N2))
     # ── SECOND-ORDER TIME INTEGRATION OF σ·∂A/∂t (2026-09-25) ────────────────
     # Backward Euler read every conductive-body loss low at the default 36
-    # steps/period, by O(Δt): L155 rated magnets −10.5 % against the Δt → 0
+    # steps/period, by O(Δt): reference motor rated magnets −10.5 % against the Δt → 0
     # extrapolation, sleeve −4 %, copper AC −2.5 %, torque ripple 25-30 % low
     # (docs/CONDUCTIVE_BODY_MESH_CONVERGENCE_2026-09-24.md §7.1).  The eddy term
     # is now BDF2 on the ACTUAL step sequence (variable-step coefficients, see
@@ -7735,7 +7735,7 @@ def _fem_transient_sliding_band_once(
     # docs/EDDY_TIME_INTEGRATION_2026-09-25.md.
     _eddy_bdf2 = bool(eddy) and _os_sb.environ.get("SB_EDDY_BE") != "1"
     # WHERE THE JOULE LOSS IS SAMPLED.  BDF2's own derivative at t_k over-reads
-    # |∂A/∂t| of an under-resolved harmonic by ~(ωΔt)²/3 (L155 rated magnets
+    # |∂A/∂t| of an under-resolved harmonic by ~(ωΔt)²/3 (reference motor rated magnets
     # +7 % at 36 steps/period).  The loss is therefore sampled at the step
     # MIDPOINT t_{k−½}: ∂A/∂t by the centred difference (A_k − A_{k−1})/Δt of
     # the BDF2 states, U_b from the body's own constraint at that instant
@@ -7914,7 +7914,7 @@ def _fem_transient_sliding_band_once(
                     # the march only when the magnet source AND the operators
                     # are anti-symmetric under "one pole back, negated" EXACTLY.
                     # A discretisation asymmetry (the fixture's magnet source
-                    # 7.8e-6, L155 2.2e-5) is not round-off, and there the half
+                    # 7.8e-6, reference motor 2.2e-5) is not round-off, and there the half
                     # period moved the fixture's shaft loss +0.56 %; so the
                     # source, the stiffness, the sigma-mass, the conductor bodies
                     # and the constrained spaces must all match to
@@ -8992,7 +8992,7 @@ def _fem_transient_sliding_band_once(
     # frame is the ∂A/∂t = 0 field one step before it, so the rotor-frame DC
     # flux is already in the conducting shaft/magnets (as on the periodic
     # orbit) instead of being switched on in one Δt and left to diffuse — on
-    # the L155's steel shaft that diffusion alone would take hundreds of
+    # the reference motor's steel shaft that diffusion alone would take hundreds of
     # electrical periods.  Seeded runs keep their seed; frozen-ν runs keep the
     # reference-frame semantics; voltage runs already start from the phasor
     # initialiser's operating field.
@@ -9074,7 +9074,7 @@ def _fem_transient_sliding_band_once(
             # THE WARM-UP IS WORK, AND IT MUST LOOK LIKE WORK.  Its frames carry
             # NEGATIVE k, and this used to report max(k, 0) — so the bar stood at
             # 0/40 for as long as the σ·∂A/∂t transient took to go quiet
-            # (measured on the 200 mm 24s/28p: 73 s of "nothing happening"
+            # (measured on the large-format machine 24s/28p: 73 s of "nothing happening"
             # before the counter moved, i.e. 43 real solved frames reported as
             # zero).  A progress bar that does not move is read as a hung run.
             # The warm-up gets its own counter and its own phase; its total is
@@ -10785,7 +10785,7 @@ def _fem_transient_sliding_band_once(
             # The phasor init lands NEAR the orbit, not on it, and the
             # modulator turning on kicks the state off it again by about half
             # the ripple amplitude.  Both leave a stationary-frame DC that
-            # decays with τ_e — 27 electrical periods on the L155 — so neither
+            # decays with τ_e — 27 electrical periods on the reference motor — so neither
             # a 12-period settle nor a 2-carrier pre-roll sheds it (B5: the
             # window opened with 43 A of DC on a 433 A fundamental).
             #
@@ -10822,7 +10822,7 @@ def _fem_transient_sliding_band_once(
                 # …and the SOURCE's own feedback on the previous step's
                 # current (the controller bridge's dead time + device drop —
                 # a real DC-mode resistance; missing it made the Newton
-                # over-shoot and diverge on the L180 delta, 2026-09-28).
+                # over-shoot and diverge on the reference generator delta, 2026-09-28).
                 _dc_orbit.frame(_ll_inductance(_qaL, _qbL), _dt_k,
                                 getattr(_src, "ll_feedback_gain", None))
             if _dc_orbit is not None and k in _dc_win:
@@ -11937,7 +11937,7 @@ def _fem_transient_sliding_band_once(
             # This route used μ_r = 1 in the shaft (losses.rotor_mu_lookup:
             # "shaft aluminium"), ONE mean μ_r for the whole back iron, a
             # ∫J = 0 row on the half shaft and Neumann on the cut — none of
-            # which is the machine the coupled solve models, and on the L155
+            # which is the machine the coupled solve models, and on the reference motor
             # it read 82 W of shaft loss against 3.9 W coupled
             # (docs/CONDUCTIVE_BODY_MESH_CONVERGENCE_2026-09-24.md §5).  Now:
             # the window-mean per-element ν the solve converged (frozen
@@ -13070,7 +13070,7 @@ def _fem_transient_sliding_band_once(
         "P_cu_W": P_cu_ser2, "P_fe_W": P_fe_ser2,
         "P_mag_eddy_W": P_mag_ser2, "P_shaft_eddy_W": P_shaft_ser2,
         # Retaining sleeve — all zeros (and absent from the loss map) on the
-        # machines that have none, which is all of them but the Ø200.
+        # machines that have none, which is all of them but the large-format machine.
         "P_sleeve_eddy_W": P_sleeve_ser2,
         "P_loss_total_W": P_tot_ser2,
         "P_cu_dc_W": P_cu_dc2, "P_cu_ac_W": P_cu_ac_ser2,
@@ -13690,7 +13690,7 @@ def _solve_with_gap_refinement(kw: dict, gap_refine: bool = True) -> Dict:
     harmonic macro gap and ``SB_GAP_REFINE=0``.
 
     An eddy run whose warm-up did NOT settle is refined like any other
-    (changed 2026-09-30): the time-periodic (TDM) solve of L155 at 2/side,
+    (changed 2026-09-30): the time-periodic (TDM) solve of reference motor at 2/side,
     fully converged, read the same 18 % self-check and +4.1 % iron loss as
     the unsettled march — a property of that mesh, not a leftover transient.
     ``eddy_unsettled`` records it.

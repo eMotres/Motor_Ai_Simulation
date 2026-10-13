@@ -38,6 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CASES = {
     "d40": ("d40", "L12", "rated"),
     "l13": ("l13", "L13", "rated"),
+    # "l155" needs the private dies (see scripts/gap_layers_study/coul_common.py)
     "l155": ("l155", "L155 motor", "rated 1x9 mm"),
 }
 

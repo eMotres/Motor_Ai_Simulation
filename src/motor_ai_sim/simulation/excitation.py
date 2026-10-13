@@ -96,7 +96,7 @@ _SETTLE_MAX = max(1, int(os.environ.get("SB_V_SETTLE_MAX", "12") or 12))
 # (SB_PWM_HANDOVER_DC is gone.  It removed the switching turn-on DC at the
 # pre-roll -> window handover by comparing the rippled current against a
 # trigonometric interpolant of the last COARSE settle period, and it
-# over-corrected on CILN28/G2-L40 (residual +3.3 A -> -15.6 A, ripple 50 ->
+# over-corrected on large reference die (residual +3.3 A -> -15.6 A, ripple 50 ->
 # 89 %) because the interpolant leaks ripple into the estimate.  Superseded by
 # the period-mean DC anchor (B5 / PWM study 2026-09-13), itself superseded by
 # SettlePolicy.dc_orbit_solve — simulation/dc_orbit.py, 2026-09-26.)
@@ -538,7 +538,7 @@ class PwmVoltageSource(_VoltageSourceBase):
             # phase's boundary flux as a SCALAR geometric sequence and fires
             # only past its guards.  The DC-orbit solve below solves the same
             # fixed point as a 2×2 map, verified.  (The Δ² anchor never fired
-            # here anyway — v_anchor_applied 0 of 3 on the L155 diagnostics.)
+            # here anyway — v_anchor_applied 0 of 3 on the reference motor diagnostics.)
             # The sinusoidal drive keeps it: every pinned number was made with
             # it.
             aitken=False,

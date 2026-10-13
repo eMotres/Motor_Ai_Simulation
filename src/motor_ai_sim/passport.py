@@ -106,7 +106,7 @@ def ac_copper_factor(P_cu_solved_W: float, I_terminal_A: float,
     3·I_line²·R_w instead (the code before 2026-09-30) stored every delta
     cell 3× too low, below 1, and the tuner's proximity term
     (``dc·(cuAC − 1)``, floored at 0) then dropped the whole AC copper
-    (L155: 897 W → 0 W)."""
+    (reference motor: 897 W → 0 W)."""
     dc = dc_copper_W(I_terminal_A, R_winding_ohm, star_delta)
     return (P_cu_solved_W / dc) if dc > 1e-9 else 1.0
 
@@ -174,7 +174,7 @@ def emf_fundamental(d: Dict[str, Any]) -> Optional[float]:
     0.955 at 6 steps, 0.997 at 24 — so fitting ITS fundamental does not remove
     the coarse-step error).  Fallbacks, in order: the voltage-series
     fundamental divided by that same sinc; None.  The waveform PEAK of a coarse
-    run is not an EMF (audit 2026-09-30, L155 coarse passport: −14.2 %)."""
+    run is not an EMF (audit 2026-09-30, reference motor coarse passport: −14.2 %)."""
     fe = _f_elec(d)
     psi1 = flux_fundamental(d)
     if psi1 and fe > 0:
@@ -197,7 +197,7 @@ def generate_passport(
     # shared config's mode when nobody passes one, and that made a passport
     # depend on which way the engineer had left the Simulation tab — a
     # generator characterised while the panel said "motor" is a different
-    # operating point (measured 2026-08-30 on CILN28 G2-L40: 58.74 -> 57.18 N·m,
+    # operating point (measured 2026-08-30 on large reference die: 58.74 -> 57.18 N·m,
     # terminal 175.2 -> 219.2 V, iron +20 %, magnets +53 %).
     mode: str = "motor",
     # The pack on the DC link, as the family yaml stores it ({chemistry, cells,
@@ -393,7 +393,7 @@ def generate_passport(
             # The MACHINE'S calibrated d-axis (from its die), not a per-run
             # auto-calibration: without it the solver can settle on the other
             # branch and the passport torque comes out with the wrong sign
-            # (measured 2026-08-26 on the CILN28 series).
+            # (measured 2026-08-26 on the large reference die series).
             **({"daxis_deg": float(daxis_deg)} if daxis_deg is not None else {}),
         )
 
@@ -440,7 +440,7 @@ def generate_passport(
     # k_end (an older solver) falls back to measuring R at 1.5·L0 with the SAME
     # end-turn length (end_factor_at).
     # the solver's own unrounded value first: the summary rounds it to 0.01
-    # for display (L155: 1.355 -> 1.35, a 1 % error in the end share).
+    # for display (reference motor: 1.355 -> 1.35, a 1 % error in the end share).
     try:
         _k_used = float(A.get("end_winding_factor")
                         or (A.get("summary") or {}).get("end_winding_factor")

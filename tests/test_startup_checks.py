@@ -4,7 +4,7 @@ WHAT THESE TESTS ARE FOR
 ========================
 The case-collision check is the only piece of Stage 6 that cannot be exercised
 by running it: it fires on a condition NTFS is physically unable to represent,
-so on this workstation ``CILN28`` and ``ciln28`` are one directory and the real
+so on this workstation ``LARGEDIE`` and ``largedie`` are one directory and the real
 tree can never trip it.  Every assertion about it therefore has to be made
 against a *constructed* input — a dict of names, not a pair of folders — which
 is exactly why :func:`case_collisions` takes a directory and the grouping logic
@@ -49,7 +49,7 @@ def case_sensitive_fs(tmp_path: Path) -> bool:
 
 def test_clean_catalog_has_no_findings(tmp_path: Path):
     dies = tmp_path / "dies"
-    for n in ("CILN28", "CIANO10 200", "100 mm · 24s-28p mid-torque"):
+    for n in ("LARGEDIE", "MidDie", "100 mm · 24s-28p mid-torque"):
         make_die(dies, n)
     assert SC.case_collisions(dies) == []
     assert SC.check_die_case([dies]) == []
@@ -71,7 +71,7 @@ def test_non_ascii_die_names_are_not_collisions(tmp_path: Path):
 def test_only_folders_with_die_yaml_count(tmp_path: Path):
     """A stray ``runs`` and a ``RUNS`` backup must not fail a boot."""
     dies = tmp_path / "dies"
-    make_die(dies, "CILN28")
+    make_die(dies, "LARGEDIE")
     (dies / "runs").mkdir()
     (dies / "RUNS").mkdir(exist_ok=True)
     (dies / "notes.txt").write_text("x", encoding="utf-8")
@@ -88,18 +88,18 @@ def test_two_dies_differing_by_case_are_fatal(tmp_path: Path, case_sensitive_fs)
         pytest.skip("case-insensitive filesystem: the condition cannot exist "
                     "here — this is the Linux-only half of the check")
     dies = tmp_path / "dies"
-    make_die(dies, "CILN28")
-    make_die(dies, "ciln28")
+    make_die(dies, "LARGEDIE")
+    make_die(dies, "largedie")
 
     found = SC.case_collisions(dies)
     assert len(found) == 1
-    assert found[0][0] == "ciln28"
-    assert found[0][1] == ["CILN28", "ciln28"]
+    assert found[0][0] == "largedie"
+    assert found[0][1] == ["LARGEDIE", "largedie"]
 
     findings = SC.check_die_case([dies])
     assert [f.level for f in findings] == ["fatal"]
     assert findings[0].code == "die_case_collision"
-    assert "CILN28" in findings[0].message and "ciln28" in findings[0].message
+    assert "LARGEDIE" in findings[0].message and "largedie" in findings[0].message
 
 
 def test_grouping_is_by_simple_lowercase():
@@ -109,8 +109,8 @@ def test_grouping_is_by_simple_lowercase():
     the part that has to be right, and it is the part NTFS cannot be asked
     about.  Handing it the two names directly fakes nothing that matters.
     """
-    assert SC.group_by_case(["CILN28", "ciln28", "CIANO10", "unique"]) == [
-        ("ciln28", ["CILN28", "ciln28"])]
+    assert SC.group_by_case(["LARGEDIE", "largedie", "OTHERDIE", "unique"]) == [
+        ("largedie", ["LARGEDIE", "largedie"])]
     # three-way, and the group is sorted so the message is stable
     assert SC.group_by_case(["A", "a", "A ", "b"]) == [("a", ["A", "a"])]
     assert SC.group_by_case([]) == []

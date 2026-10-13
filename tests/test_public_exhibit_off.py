@@ -54,12 +54,12 @@ client = TestClient(app)
 # routes/auth_local.py.
 CLOSED: list[tuple[str, str]] = [
     ("GET",  "/api/family/tree"),
-    ("GET",  "/api/family/payload/CILN28/G2-L40"),
-    ("GET",  "/api/family/datasheet/CILN28/G2-L40"),
-    ("GET",  "/api/family/report/CILN28/G2-L40"),
+    ("GET",  "/api/family/payload/ExampleDie/ExampleConfig"),
+    ("GET",  "/api/family/datasheet/ExampleDie/ExampleConfig"),
+    ("GET",  "/api/family/report/ExampleDie/ExampleConfig"),
     ("GET",  "/api/family/context"),
     ("GET",  "/api/family/community"),
-    ("GET",  "/api/family/duty_results/CILN28/G2-L40"),
+    ("GET",  "/api/family/duty_results/ExampleDie/ExampleConfig"),
     ("POST", "/api/family/activate"),
     ("GET",  "/api/geometry"),
     ("GET",  "/api/geometry/summary"),

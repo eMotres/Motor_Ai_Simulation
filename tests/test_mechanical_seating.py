@@ -43,7 +43,8 @@ bug.  The pocket floor is 75 µm inside the magnet, so "fall until you touch
 something" stopped 34 µm short of clearing it; and the pocket has EXPANDED and
 been sheared by the torque, so no slide fits a rigid magnet into it at all.  The
 G2 tests at the end of this file are the ones that would have caught both, and
-they are built from ``config/dies/CILN28`` rather than from the live config —
+they are built from a private catalog die (``$MOTOR_AI_SIM_PRIVATE_DATA/config/dies``;
+skipped when it is absent) rather than from the live config —
 the live one is whatever is on screen this minute, and these numbers have to mean
 the same thing tomorrow.
 
@@ -552,7 +553,8 @@ def test_a_part_with_no_net_load_is_never_called_loose():
 # ---------------------------------------------------------------------------
 # (g) THE MACHINE — the live G2-L40 cross-section, from the CATALOG (2026-09-09)
 # ---------------------------------------------------------------------------
-# READ-ONLY: the die and the machine override are read from config/dies/CILN28
+# READ-ONLY: the die and the machine override are read from the private data
+# checkout (config/dies/<G2_DIE>; the tests skip without it)
 # and a CadQueryMotor is built from a COPY of the merged geometry dict.  Nothing
 # under config/ is written, no route is called, no cache is touched — the
 # project's standing rule that verification never goes through a persisting path.
@@ -577,7 +579,13 @@ def _g2_polys():
 
     from motor_ai_sim.cadquery_geometry import CadQueryMotor
 
-    die_dir = Path(__file__).resolve().parents[1] / "config" / "dies" / G2_DIE
+    from motor_ai_sim.private_data import ENV_VAR, private_path
+
+    # The die is private reference data (not in the public repository).
+    die_dir = private_path("config", "dies", G2_DIE)
+    if die_dir is None:
+        pytest.skip(f"the {G2_DIE} die is private data; set {ENV_VAR} to the "
+                    "private data checkout to run the G2 cross-section tests")
     geo = dict(yaml.safe_load(
         (die_dir / "die.yaml").read_text(encoding="utf-8"))["geometry"])
     geo.update(yaml.safe_load(

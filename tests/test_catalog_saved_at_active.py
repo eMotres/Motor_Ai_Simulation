@@ -193,9 +193,9 @@ def test_is_active_ignores_names_and_follows_the_stamp(stores, monkeypatch):
 
     _set_live_geometry(monkeypatch, GEO_A)
     pre_mod.save_current_as_preset(pre_mod.SavePresetRequest(
-        id="twin_a", name="CIANO 150_40", geometry=GEO_A))
+        id="twin_a", name="Twin machine", geometry=GEO_A))
     pre_mod.save_current_as_preset(pre_mod.SavePresetRequest(
-        id="twin_b", name="CIANO 150_40", geometry=GEO_B))
+        id="twin_b", name="Twin machine", geometry=GEO_B))
 
     flags = {m["id"]: m["is_active"] for m in cat_mod.get_catalog()["motors"]}
     assert flags == {"cat_twin_a": True, "cat_twin_b": False}

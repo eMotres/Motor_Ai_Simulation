@@ -1,8 +1,9 @@
 // The "3D model" tab: look at, rotate, section and download the 3D model of a granted motor.
 //
-// One model for everybody (owner 2026-10-13): every signed-in user who may see the motor can view, rotate, section, explode
-// and measure it.  Downloading the STEP is the NDA gate, enforced by the SERVER (403); this panel only shows the button to
-// NDA accounts and the owner and a one-line note to everybody else.  No bill of materials, no prices.
+// One model for everybody (owner 2026-10-13): every signed-in user who may see the motor can look at it and rotate it.  The
+// tools (parts, exploded view, section, measure) and the STEP download come together with the NDA: ONE flag, the server's
+// `can_download` (403 on the STEP without it), decides what this panel shows (lib/model3d.ts panelParts).  Without NDA:
+// the model, the motor picker, Fit, the "Download after NDA" note and the Sign button.  No bill of materials, no prices.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, MenuItem, Select, Slider, Switch,
@@ -15,7 +16,7 @@ import HelpTip from '../common/HelpTip';
 import NdaDialog from './NdaDialog';
 import { ModelViewer } from './modelViewer';
 import {
-  filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, pickModel, togglesOf,
+  effectiveSettings, filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, panelParts, pickModel, togglesOf,
   type Axis, type ModelInfo, type PartGroup,
 } from '../../lib/model3d';
 
@@ -118,8 +119,10 @@ const Model3DPanel: React.FC = () => {
 
   // push the controls into the scene
   useEffect(() => {
-    viewer.current?.apply({ hidden, explode, section: { ...sec, on: sec.on }, measure });
-  }, [hidden, explode, sec, measure, groups]);
+    viewer.current?.apply(effectiveSettings(canDownload, { hidden, explode, section: sec, measure }));
+  }, [hidden, explode, sec, measure, groups, canDownload]);
+
+  const show = useMemo(() => new Set(panelParts(canDownload)), [canDownload]);
 
   const toggles = useMemo(() => togglesOf(groups), [groups]);
   const setAxis = useCallback((axis: Axis) => {
@@ -155,18 +158,22 @@ const Model3DPanel: React.FC = () => {
     } catch (e: any) { setErr(e?.message ?? String(e)); }
   };
 
+  const picker = (
+    <Select size="small" fullWidth value={key} displayEmpty disabled={!models?.length}
+      onChange={(e) => { setKey(String(e.target.value)); wr(REMEMBER, String(e.target.value)); }} sx={{ fontSize: 13 }}>
+      {(models ?? []).map((m) => <MenuItem key={modelKey(m)} value={modelKey(m)} sx={{ fontSize: 13 }}>{modelLabel(m)}</MenuItem>)}
+    </Select>
+  );
+
   return (
     <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0 }}>
       <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => { setCanDownload(true); void loadMine(); }} />
+      {show.has('parts') && (
       <Box sx={{ width: 290, flexShrink: 0, p: 1.5, overflowY: 'auto', borderRight: '1px solid var(--line-soft)', bgcolor: 'var(--panel)',
         display: 'flex', flexDirection: 'column', gap: 1.25 }}>
         <Box>
           <Typography sx={lbl}>{t('motor')}</Typography>
-          <Select size="small" fullWidth value={key} displayEmpty disabled={!models?.length}
-            onChange={(e) => { setKey(String(e.target.value)); wr(REMEMBER, String(e.target.value)); }}
-            sx={{ fontSize: 13 }}>
-            {(models ?? []).map((m) => <MenuItem key={modelKey(m)} value={modelKey(m)} sx={{ fontSize: 13 }}>{modelLabel(m)}</MenuItem>)}
-          </Select>
+          {picker}
           {models && !models.length && <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mt: 0.5 }}>{t('none')}</Typography>}
         </Box>
 
@@ -213,23 +220,11 @@ const Model3DPanel: React.FC = () => {
         </Box>
 
         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 'auto' }}>
-          {canDownload ? (
-            <Button size="small" variant="contained" disabled={!model?.step_available || dl === 'busy'}
-              startIcon={dl === 'busy' ? <CircularProgress size={14} /> : <DownloadIcon sx={{ fontSize: 16 }} />}
-              onClick={() => void download()} sx={{ textTransform: 'none', fontSize: 12.5 }}>
-              {t('downloadStep')}{model?.step_bytes ? ` (${formatBytes(model.step_bytes)})` : ''}
-            </Button>
-          ) : (
-            <>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography>
-                <HelpTip title={t('downloadLockedHelp')} />
-              </Box>
-              <Button size="small" variant="contained" onClick={() => setNdaOpen(true)} sx={{ textTransform: 'none', fontSize: 12.5 }}>
-                {t('nda.sign')}
-              </Button>
-            </>
-          )}
+          <Button size="small" variant="contained" disabled={!model?.step_available || dl === 'busy'}
+            startIcon={dl === 'busy' ? <CircularProgress size={14} /> : <DownloadIcon sx={{ fontSize: 16 }} />}
+            onClick={() => void download()} sx={{ textTransform: 'none', fontSize: 12.5 }}>
+            {t('downloadStep')}{model?.step_bytes ? ` (${formatBytes(model.step_bytes)})` : ''}
+          </Button>
           {hasPdf && (
             <Button size="small" onClick={() => void downloadPdf()} sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>
               {t('nda.yourNda')}
@@ -242,12 +237,31 @@ const Model3DPanel: React.FC = () => {
               {t('version', { template: model.version.template ?? '?', built: (model.version.built_at ?? '').slice(0, 10), hash: model.version.param_hash ?? '' })}
             </Typography>
           )}
-          {canDownload && <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>{t('stamped')}</Typography>}
+          <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>{t('stamped')}</Typography>
         </Box>
       </Box>
+      )}
 
       <Box sx={{ position: 'relative', flex: 1, minWidth: 0 }}>
         <Box ref={host} sx={{ position: 'absolute', inset: 0 }} />
+        {!show.has('parts') && (
+          <>
+            <Box sx={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 1, zIndex: 1 }}>
+              {models && models.length > 1 && <Box sx={{ minWidth: 220, bgcolor: 'var(--panel)', borderRadius: 1 }}>{picker}</Box>}
+              <Button size="small" onClick={() => viewer.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
+                sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)', bgcolor: 'var(--panel)' }}>{t('fit')}</Button>
+            </Box>
+            {models && !models.length && <Typography sx={{ position: 'absolute', top: 54, left: 12, fontSize: 12, color: 'var(--text-3)' }}>{t('none')}</Typography>}
+            <Box sx={{ position: 'absolute', left: 10, bottom: 10, display: 'flex', alignItems: 'center', gap: 1, p: 0.75, borderRadius: 1,
+              bgcolor: 'var(--panel)', zIndex: 1 }}>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography>
+              <HelpTip title={t('downloadLockedHelp')} />
+              <Button size="small" variant="contained" onClick={() => setNdaOpen(true)} sx={{ textTransform: 'none', fontSize: 12.5 }}>
+                {t('nda.sign')}
+              </Button>
+            </Box>
+          </>
+        )}
         {loading && <Box sx={{ position: 'absolute', top: 12, left: 12 }}><CircularProgress size={22} /></Box>}
         {err && <Alert severity="error" sx={{ position: 'absolute', top: 8, left: 8, right: 8, fontSize: 12 }} onClose={() => setErr(null)}>{err}</Alert>}
       </Box>

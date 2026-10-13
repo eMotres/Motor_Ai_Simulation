@@ -8,7 +8,7 @@
 //
 // Pure, no runtime imports: web/src/lib/__tests__/accessUi.test.mjs imports it.
 
-/** The tab ids a standard user gets ('compare' is the Configure tab's id; 'model3d' serves the envelope or, with NDA, the full model). */
+/** The tab ids a standard user gets ('compare' is the Configure tab's id; 'model3d': everybody looks at the model, tools and STEP download come with the NDA). */
 export const STANDARD_USER_TABS: readonly string[] = ['motors', 'compare', 'model3d'];
 
 /** A signed-in, non-admin account on a backend that enforces auth. */

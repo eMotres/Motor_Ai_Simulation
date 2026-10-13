@@ -647,6 +647,7 @@ def build_full(work: Path, repo: Path, M: str, machine_meta: Mapping[str, Any],
     od = work / "out" / M
     full = work / "out" / "full"
     snap = json.loads((od / "snapshot.json").read_text(encoding="utf-8"))
+    PM.set_winding_basis(snap)
     st = json.loads((od / "state.json").read_text(encoding="utf-8"))
     rec = C.build_record(od, snap, st, machine_meta=machine_meta)
     recs = C.load_records(od)

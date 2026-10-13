@@ -115,7 +115,7 @@ def test_a_magnet_floating_short_of_its_pocket_bottom_is_refused():
 def test_the_same_pocket_loosened_by_HEAT_seats_instead_of_running_away():
     """The G2-L40's case, and the counterpart of the test above (2026-09-09).
 
-    Cut the pocket to the magnet — the zero die clearance the CILN28 has — and
+    Cut the pocket to the magnet — the zero die clearance a large production die has — and
     open it with TEMPERATURE instead of with a pencil: the iron grows 12 ppm/K
     against the magnet's 5, every pair goes tensile, and the magnet is loose by
     tens of microns.  That clearance is on a SHARED boundary, so the pair the

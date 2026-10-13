@@ -7,10 +7,10 @@ named points (current / rpm / mode / gamma) — those are DUTIES.
 
 Storage is one folder per die under config/dies/:
 
-    config/dies/D200-24s28p/
+    config/dies/<die>/
         die.yaml            # the stamped geometry (all 44 keys) + lock
-        M1-L200.yaml        # configuration: free geometry keys + winding + duties
-        G1-L160.yaml
+        <config>.yaml       # configuration: free geometry keys + winding + duties
+        <config2>.yaml
 
 This router only reads/writes THESE files.  Applying a duty to the live
 motor is the frontend's job through the existing endpoints (geometry PUT,
@@ -150,7 +150,7 @@ def refuse_die_defining_variables(names, allow_new_lamination: bool) -> None:
 #: catalog stores the three parts a build is defined by (magnet, the two core
 #: steels); the liner and the enamel are the project's standard on every
 #: machine — and a load that says nothing about them leaves the previously
-#: loaded machine's picks in the shared config (2026-09-09: the Ø200's Al2O3
+#: loaded machine's picks in the shared config (2026-09-09: the large-format machine's Al2O3
 #: ceramic liner, tried on 2026-09-07/08, sat on every motor loaded after it —
 #: user: "why did the insulation material change on all motors, it was always Nomex").
 _ABSENT_MATERIALS: Dict[str, str] = {
@@ -186,7 +186,7 @@ _ABSENT_MEANS: Dict[str, Any] = {
 
 # Display names double as file/dir names, so the charset is "safe on every
 # filesystem": letters, digits, space and light punctuation.  Real product
-# names have spaces ("CILN28 200", "CIANO14 30_10").  "Ø" joined the set
+# names have spaces ("Example Die 1", "CIANO14 30_10").  "Ø" joined the set
 # 2026-09-20: the auto-transition's own names carry it (a diameter change
 # reads "CIANO14 edited Ø60 12s14p") and it is safe on every filesystem too.
 _NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.,()#+°·Ø\- ]{0,63}$")
@@ -944,7 +944,7 @@ def _config_role(c: dict) -> tuple:
     """WHAT THIS CONFIGURATION IS, read off its duties.
 
     User 2026-09-10: *"why does it say motor here, when it's a generator"* — the chip said
-    `motor` on a configuration named "L180 gen" whose every duty is a generator
+    `motor` on a configuration named "reference generator" whose every duty is a generator
     duty.  `role` was captured ONCE, at creation, from whatever the Simulation
     panel's mode toggle happened to be, written into the yaml and never looked
     at again; nothing kept it in step with the duties that were then saved
@@ -1351,7 +1351,7 @@ def _store_run(die: str, cfg: str, cfg_doc: dict, entry: dict, drive: str, *,
         # Inherit the previous sidecar ONLY while it is the same run.  A save
         # that brings a new summary and no waveforms used to keep the old
         # file under the new `recorded_at`: on 2026-09-13 both duties of the
-        # Ø200 carried today's numbers over waveforms of 2026-09-11 (a STAR
+        # a large-format machine carried today's numbers over waveforms of 2026-09-11 (a STAR
         # run at 672 A) and 2026-09-12 — the report drew "line voltages —
         # peak 674 V" beside a 702 V table.  Same run = same operating point
         # and the same phase-voltage peak; anything else and the pointer is
@@ -2579,7 +2579,7 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
 
 
 # ── L-name ↔ stack consistency ───────────────────────────────────────────────
-# A configuration named "L15" / "G1-L160" declares its stack in the name, and
+# A configuration named "L15" / "reference configuration" declares its stack in the name, and
 # the name must TRACK the build (user's rule 2026-08-24: "this needs to be
 # tracked and renamed") — an L15 holding a 13 mm build misled for a
 # whole session before it was caught by hand.
@@ -2837,7 +2837,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
                     # measured on: after a stack/wire change it is a different
                     # winding, and keeping the old number silently mis-scales
                     # R, copper loss and copper mass (found live 2026-08-31:
-                    # the 200 mm parent's 1.144 rode a 40 mm child whose real
+                    # the large-format machine parent's 1.144 rode a 40 mm child whose real
                     # factor is 1.72).  Drop it — absent means "derive from
                     # the geometry", which every consumer already handles.
                     if c.pop("end_winding_factor", None) is not None:
@@ -3051,7 +3051,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
     # A configuration written before `star_delta` existed names no terminal
     # connection; the live winding this duty was just solved with does.  Fill
     # it ONCE (never overwrite a stated one) so the next ▶ restores the same
-    # connection the results were computed with (2026-09-13: the Ø200 peak
+    # connection the results were computed with (2026-09-13: the large-format machine peak
     # point ran in star twice because this key was missing).
     try:
         _lw_sd = (_plain(_live_cfg().get("winding")) or {}).get("star_delta")
@@ -3379,7 +3379,7 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     # by its NAME — `duty_results` by the key itself, `duty_fields` by the
     # folder the name hashes to — and this route moved neither, so a rename
     # silently orphaned every thermal, mechanical, coupled and duty-cycle row
-    # and all four stored maps.  Found on CIANO10 200 opt / L180 gen, where
+    # and all four stored maps.  Found on large reference die, where
     # 'rated 0.5x9 mm' → 'rated 1x9 mm' carried the two run payloads and left
     # the results keyed under the old name and the em / thermal / rotor_stress
     # / modes npz in the old duty's folder: the next report would have printed
@@ -3843,8 +3843,8 @@ def sync_active_die_geometry(saved_geo: dict,
     # by definition (a catalog/preset load landing while this die's context
     # was still active), whatever `prev_geo` says or does not say.  Measured
     # 2026-09-01 22:33:59: the stranger guard below did not fire and the 85 mm
-    # die '20SW1200' was overwritten with a 200 mm motor — the catalog then
-    # filed it under Ø 200 and its three duties "vanished" for the user.
+    # die '20SW1200' was overwritten with a large-format machine motor — the catalog then
+    # filed it under a large diameter and its three duties "vanished" for the user.
     _die_g0 = d.get("geometry") or {}
     _diffs = die_identity_diffs(_die_g0, geo)
     if _diffs:
@@ -4144,7 +4144,7 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
     # (2026-09-09).  A browser adopts that block ONCE at boot
     # (web/src/lib/meshConfigSync.ts) — so a duty loaded through the API or
     # picked up by the follower left the server saying "4 sectors, 2.97 mm"
-    # from the Ø200 while the 40 mm was live, and the user's next boot solved
+    # from the large-format machine while the 40 mm was live, and the user's next boot solved
     # a 12/14 machine with n_sectors = 4 ("n_sectors=4 is not a symmetry of
     # this machine").  The duty's block is the machine's own statement of how
     # it is run; the Mesh tab's later saves still overwrite it as before.
@@ -4994,8 +4994,8 @@ def geometry_lock_check(update: dict) -> Optional[dict]:
             # A die lock stops the DIE's geometry being edited; it was reading
             # the die's value as the only value a locked key may hold, which
             # made a configuration unloadable the moment it overrode anything
-            # outside the three free keys.  On the Ø200 the die still carries
-            # the old 4.5 x 1 mm strip winding and every L180 configuration
+            # outside the three free keys.  On the large-format machine the die still carries
+            # the old 4.5 x 1 mm strip winding and every reference generator configuration
             # overrides it with 9 x 0.5 mm: loading one was refused key by key
             # (423), the live machine kept the DIE's wire, and the user got a
             # panel showing "wire split 2 / parallel 3" for a machine wound
@@ -5247,9 +5247,9 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     # A key the die never carried is a key the frontend's PUT leaves at the
     # PREVIOUS machine's value — PUT /api/geometry merges over what is loaded.
     # Eleven of thirteen dies predate `sleeve_thickness`, so loading any of
-    # them from a sleeved Ø200 kept its 2.5 mm band and the PUT was refused
+    # them from a sleeved large-format machine kept its 2.5 mm band and the PUT was refused
     # ("not thinner than air_gap (0.65 mm)" — user 2026-09-08: "I want to load
-    # G2-L40, and it won't load"); a stray `wire_parallel: 3` would likewise have
+    # reference configuration, and it won't load"); a stray `wire_parallel: 3` would likewise have
     # turned a 21-turn machine into a 7-turn one without a word.  Say what
     # absence MEANS, explicitly, so the payload describes the whole machine.
     for _k, _v in _ABSENT_MEANS.items():
@@ -5304,7 +5304,7 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
             # The terminal connection: the configuration's winding block, else
             # the DUTY's own saved panel setting, and "star" only when neither
             # says.  A configuration written before `star_delta` existed
-            # carried no key, so every ▶ reset the panel to star — the Ø200's
+            # carried no key, so every ▶ reset the panel to star — the large-format machine's
             # peak point ran twice in star on 2026-09-13 (586.9 A in the
             # winding instead of 338.85, copper ×3, 272 °C, loop refused).
             "star_delta": _star_delta_of(c, duty),

@@ -223,6 +223,12 @@ def test_dev_route_builder_works_for_every_catalog_die(die_name, fmt):
         key=lambda g: g["order"])
 
     die_path = _ROOT / "config" / "dies" / die_name / "die.yaml"
+    if not die_path.exists():
+        # a private die (the large-format one): read from the private data checkout
+        from motor_ai_sim.private_data import ENV_VAR, private_path
+        die_path = private_path("config", "dies", die_name, "die.yaml")
+        if die_path is None:
+            pytest.skip(f"the {die_name} die is private data; set {ENV_VAR} to the private data checkout")
     die = yaml.safe_load(die_path.read_text(encoding="utf-8"))
     geo = MotorGeometryParams(dict(die["geometry"]), {}).to_dict()
 

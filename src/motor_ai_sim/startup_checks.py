@@ -5,7 +5,7 @@ WHY
 All three are Linux-port failures that Windows hides (migration plan §3):
 
 1. **Two dies differing only by case.**  ``routes/family._die_dir()`` does an
-   exact-name lookup, and on NTFS ``CILN28`` and ``ciln28`` are *one* folder —
+   exact-name lookup, and on NTFS ``Die28`` and ``die28`` are *one* folder —
    so the ambiguity cannot even be expressed here.  On ext4 they are two, and
    the pair behaves like a single die that intermittently answers with the
    other one's geometry: the write goes to whichever name the request spelled
@@ -85,8 +85,8 @@ def group_by_case(names: Iterable[str]) -> List[Tuple[str, List[str]]]:
     """``[(lowercased name, [the real names]), …]`` for the ambiguous ones only.
 
     Split out from :func:`case_collisions` because it is the half that can be
-    TESTED on the machine this was written on: NTFS cannot hold ``CILN28`` and
-    ``ciln28`` side by side, so the only honest way to pin the rule here is to
+    TESTED on the machine this was written on: NTFS cannot hold ``Die28`` and
+    ``die28`` side by side, so the only honest way to pin the rule here is to
     hand it the two names directly.
 
     Case-folding with ``str.lower()`` and not ``casefold()`` on purpose: the

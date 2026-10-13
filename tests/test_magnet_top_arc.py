@@ -46,23 +46,24 @@ from motor_ai_sim.cadquery_geometry import CadQueryMotor, _circle_points
 _ROOT = Path(__file__).resolve().parents[1]
 _PRESETS = json.loads((_ROOT / "config" / "motor_presets.json").read_text(encoding="utf-8"))
 
-# The Ø200 12s/10p sleeved machine the complaint was made on, pinned field by
-# field.  It must NOT come from config/motor_config.yaml — the user edits that
+# A SYNTHETIC large-format 12s/10p sleeved machine (made-up numbers, not any
+# product; the original complaint was made on a real machine whose data is
+# private), pinned field by field.  It must NOT come from config/motor_config.yaml — the user edits that
 # constantly (same reasoning as tests/test_cad_polygon_quality.py).  The two
 # values that matter for the complaint are magnet_up_gap = 0 (the user "removed
 # everything") and rotor_hole = 1 (the pocket opening as wide as the magnet).
 GEO_200_SLEEVED = {
-    "stator_diameter": 200.0, "slot_height": 25.1, "core_thickness": 11.2,
+    "stator_diameter": 180.0, "slot_height": 22.6, "core_thickness": 10.1,
     "num_seg": 2, "num_slots_per_segment": 6, "num_poles_per_segment": 5,
-    "air_gap": 1.6, "tooth_width": 23.3, "tooth2_width": 12.9, "cut_width": 10.0,
-    "insulation_thickness": 0.25, "wire_width": 9.0, "wire_height": 0.5,
-    "wire_spacing_x": 0.1, "wire_spacing_y": 0.13, "num_wires_per_slot": 27,
+    "air_gap": 1.5, "tooth_width": 21.0, "tooth2_width": 11.6, "cut_width": 9.0,
+    "insulation_thickness": 0.25, "wire_width": 8.1, "wire_height": 0.5,
+    "wire_spacing_x": 0.1, "wire_spacing_y": 0.13, "num_wires_per_slot": 24,
     "wire_split": 1, "wire_parallel": 3, "slot_hs": 0.2,
-    "magnet_height": 34.0, "rotor_house_height": 6.0, "shaft_height": 3.0,
-    "magnet_fill_down": 0.9, "magnet_fill_up": 0.4502, "magnet_fill_radius": 2.5,
-    "magnet_up_gap": 0.0, "rotor_hole": 1.0, "magnet_down_height": 9.2,
-    "magnet_lamination": 5, "stator_fillet_r": 5.0, "stator_fillet_r1": 0.2,
-    "rotor_fill_r": 0.2, "motor_length": 160.0, "sleeve_thickness": 1.0,
+    "magnet_height": 30.6, "rotor_house_height": 5.4, "shaft_height": 3.0,
+    "magnet_fill_down": 0.9, "magnet_fill_up": 0.45, "magnet_fill_radius": 2.5,
+    "magnet_up_gap": 0.0, "rotor_hole": 1.0, "magnet_down_height": 8.3,
+    "magnet_lamination": 5, "stator_fillet_r": 4.5, "stator_fillet_r1": 0.2,
+    "rotor_fill_r": 0.2, "motor_length": 150.0, "sleeve_thickness": 1.0,
 }
 
 #: A vertex "is a vertex of the sleeve bore ring" at this tolerance.  The arc
@@ -71,11 +72,10 @@ GEO_200_SLEEVED = {
 _ON_RING_MM = 1e-6
 
 _PRESET_CASES = [
-    ("200 mm sleeved (the machine the complaint was made on)", GEO_200_SLEEVED),
+    ("large-format sleeved (synthetic)", GEO_200_SLEEVED),
     ("preset my_40mm_last", _PRESETS["my_40mm_last"]["geometry"]),
     ("preset ciano14_30_10", _PRESETS["ciano14_30_10"]["geometry"]),
     ("preset motor_100mm", _PRESETS["motor_100mm"]["geometry"]),
-    ("preset m200_20kw_base", _PRESETS["m200_20kw_base"]["geometry"]),
 ]
 
 

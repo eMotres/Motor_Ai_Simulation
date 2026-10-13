@@ -33,7 +33,7 @@ ACCEPT = "application/json, text/event-stream"
 
 _REPO_DIES = Path(__file__).resolve().parents[1] / "config" / "dies"
 #: two real dies from the repo catalog, copied into tmp (the test sandbox has none)
-_PICK = ("CILN28", "CIANO14 40_12")
+_PICK = ("100 mm · 24s-28p mid-torque", "CIANO14 40_12")
 
 
 def _die_names():

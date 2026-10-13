@@ -264,7 +264,7 @@ def _densify(coords, max_edge: float) -> np.ndarray:
 # ── structured (template) mesh in the copper ─────────────────────────────────
 # The winding is N COPIES OF ONE RECTANGLE (7 x 0.6 mm strands, 0.13 mm apart).
 # Fed to the CDT as bare outlines they were filled independently, so nominally
-# identical wires got different, ragged triangulations (CILN28: coil edge p10
+# identical wires got different, ragged triangulations (large reference die: coil edge p10
 # 0.29 / median 0.42 / p90 0.59 mm) — the per-wire eddy solve then sees N
 # slightly different discrete conductors where the machine has N identical ones.
 # So: mesh ONE wire like a template and stamp it into all of them — boundary
@@ -306,10 +306,10 @@ _WIRE_PATCH = os.environ.get("SB_WIRE_PATCH", "1").lower() not in ("0", "false")
 #     already forbids Steiner points on input segments — it splits NOTHING, so
 #     grading can only add triangles;
 #   * the whole-ring CDT fallback (SB_GEO_TILE=0) asked for 14 splits over 504
-#     wires on CILN28 and 233 over 84 on CIANO14 (0.11 mm to the tooth) — no
+#     wires on large reference die and 233 over 84 on CIANO14 (0.11 mm to the tooth) — no
 #     cascade, because the 0.13 mm slivers that used to drive it now live INSIDE
 #     the patch;
-#   * grading instead is worse on BOTH counts — CILN28 whole ring 49 501 →
+#   * grading instead is worse on BOTH counts — large reference die whole ring 49 501 →
 #     53 409 tris with copper AR_max 4.3 → 5.3, CIANO14 10 750 → 11 612 tris with
 #     copper AR_max 8.3 → 17.8 (f = 1.0: 14 066 tris, AR_max 38.6) — because a
 #     transition fan lands on EVERY wire and destroys the h x h square it was
@@ -991,7 +991,7 @@ def _split_at_t_junctions(V: np.ndarray, S: np.ndarray, tol: float) -> np.ndarra
     at a point that is on it in exact arithmetic; a vertex 1e-10 mm off (the
     fillet's tangent point, computed separately from the wall) is left dangling
     inside the segment, and Triangle then answers with a fan of micro-elements
-    (391 triangles down to 1e-7 mm² per corner on the Ø200 at 4 mm mesh).
+    (391 triangles down to 1e-7 mm² per corner on the large-format machine at 4 mm mesh).
     Splitting the segment at that vertex gives one conforming chain; nothing
     moves (the vertex keeps its coordinates, the split changes the outline by
     less than `tol` = 6 µm)."""
@@ -1152,12 +1152,12 @@ def _blunt_cusps(V, S, min_deg: float = 3.0, max_drop: int = 12):
     # sliver is a closed lens (wall chord on one side, the arc on the other,
     # cusps at BOTH ends), so dropping its arc points collapsed the lens onto
     # the chord — a duplicated segment and a zero-area region (measured on the
-    # Ø200: 6 drops → 0.000°).  Vertices are now MOVED, never removed: the arc
+    # large-format machine: 6 drops → 0.000°).  Vertices are now MOVED, never removed: the arc
     # vertex next to the cusp is rotated about the tangent point, away from the
     # wall, until the angle clears `min_deg`.  On a 0.2 mm first chord that is
     # a ≤ 12 µm displacement — below the builder's weld tolerance — and no
     # segment, region or vertex count changes.
-    # Measured on that Ø200 input (tri_input_03, 313 vertices): NUDGING the
+    # Measured on that large-format machine input (tri_input_03, 313 vertices): NUDGING the
     # arc vertex to 3.5–10° still segfaults or exhausts Triangle's precision —
     # the wedge stays microns thin at its tip; DROPPING the arc vertices next
     # to the cusp (never past the lens's last chord, so the lens can never
@@ -1421,7 +1421,7 @@ def _triangulate(V, S, area: float, quality: int = _Q, hole: bool = True,
     # pocket wall (rotor_hole = 1 build), so the pocket-air sliver between them
     # is a cusp: two input segments meeting at ~0°.  Triangle's quality
     # refinement with boundary splitting allowed (plain -Y or none) can chase
-    # that cusp until it corrupts its own memory — the Ø200 sweep point
+    # that cusp until it corrupts its own memory — the large-format machine sweep point
     # air_gap 2.6 / magnet_height 24 died with an ACCESS VIOLATION (0xC0000005,
     # no Python traceback) inside `triangulate("pq20AaS6000Y")` on a PSLG whose
     # smallest input angle was 0.575°; the same input under -YY (no Steiner
@@ -1804,7 +1804,7 @@ def _sleeve_radii(polys: Dict) -> Tuple[float, float]:
 # A solid, conductive (and on most machines magnetic) shaft carries its eddy
 # current in a skin layer δ = sqrt(2/(ω μ σ)) under the surface that faces the
 # rotor iron — 0.05-0.5 mm on a 42CrMo4 shaft at the rotor-frame slot frequency.
-# The CDT meshes the tube wall at half its thickness (2.5 mm cells on the L155's
+# The CDT meshes the tube wall at half its thickness (2.5 mm cells on the reference motor's
 # 5 mm wall, 3.3 mm chords on its OD), i.e. 5-50 δ per element: the current
 # cannot be represented where it flows and the solved σE² reads LOW (1-D P2
 # check: 17 δ-thick cells give 0.48 of the exact surface loss, one-δ cells
@@ -2514,7 +2514,7 @@ def _mesh_rotor_sector(polys, r_od, r_shaft, n_slip, span, area, air_mm, quality
     # the rotor|sleeve seam, which is drawn on the slip grid (n_slip nodes,
     # 0.36°) while the magnet top is the CAD 256-gon (1.41°).  Two polylines of
     # the same circle with different node sets node into 0.03°-spaced vertex
-    # clusters and hairline slivers: on the Ø200 at air_gap 2.6 that was a
+    # clusters and hairline slivers: on the large-format machine at air_gap 2.6 that was a
     # 0.575° cusp Triangle died on (0xC0000005) or filled with 1 675 triangles
     # of area < 1e-6 mm² (bordered Newton rrel = 1.0 after one iteration).
     # Resampling the magnet tops onto the SAME grid as the iron makes the seam
@@ -2912,7 +2912,7 @@ def geo_mesh_halves(p: Dict, polys: Dict, outer_air_factor: float = 1.2,
             "FEM time is spent.".format(len(Ts), len(Tr), int(_cap)))
     # Prune UNREFERENCED vertices (Triangle keeps every input point in the output
     # even when no triangle uses it — seen on the sector cut chains in the outer
-    # air).  An unreferenced vertex is a zero stiffness row; on the 200 mm they
+    # air).  An unreferenced vertex is a zero stiffness row; on the large-format machine they
     # happened to be killed by the outer-circle Dirichlet or merged into a live
     # cut partner, but on the 40/100 mm at least one stayed free → singular
     # matrix ("failed to factorize").  Dropping them is exact: they carry no FEM

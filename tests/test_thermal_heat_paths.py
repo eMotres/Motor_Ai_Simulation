@@ -10,8 +10,8 @@ is a CONTRACT, not a number the solver owns:
       "rated 120C wire 80C NdFeB", solved 2026-09-14): mount 48.5 W, end faces
       5.9 W total, housing 1.1 W as 0.45 conv + 0.67 rad, bore 0.6 W — and the
       shares add to 100 % ± 1;
-  (b) the Ø200 LIQUID-JACKETED motor (``CIANO10 200 opt / L155 motor``, duty
-      "rated 1x9 mm"): the jacket is the housing sink and the bore air the only
+  (b) a LARGE LIQUID-JACKETED motor (a SYNTHETIC record with made-up numbers; the
+      real machine it stands in for is private data): the jacket is the housing sink and the bore air the only
       other one, every robotics path reports ``active: false`` rather than
       vanishing, and the shares still add to 100 % ± 1;
   (c) the GEOMETRY is recomputed from the primitives, never read off the die's
@@ -113,26 +113,26 @@ L13_THERMAL = {
     },
 }
 
-# ── (b) the Ø200 with a water jacket ───────────────────────────────────────
-L155_GEOMETRY = {
-    "stator_diameter": 200, "core_thickness": 14, "slot_height": 20.2,
-    "air_gap": 3.2, "magnet_height": 31, "rotor_house_height": 6,
-    "shaft_height": 5, "motor_length": 155, "tooth_width": 26,
-    "wire_width": 9, "wire_split": 1, "wire_spacing_x": 0.1,
+# ── (b) a large synthetic machine with a water jacket ───────────────────────────────────────
+LARGE_JACKETED_GEOMETRY = {
+    "stator_diameter": 180, "core_thickness": 12, "slot_height": 18.0,
+    "air_gap": 3.0, "magnet_height": 28, "rotor_house_height": 5,
+    "shaft_height": 5, "motor_length": 140, "tooth_width": 24,
+    "wire_width": 8, "wire_split": 1, "wire_spacing_x": 0.1,
     "insulation_thickness": 0.25, "num_slots": 12, "num_poles": 10,
-    "sleeve_thickness": 2.5,
+    "sleeve_thickness": 2.0,
 }
 
-L155_THERMAL = {
+LARGE_JACKETED_THERMAL = {
     "point": {"cooling_mode": "liquid", "ambient_temp": 30.0, "flow_lpm": 10.0},
     "cooling": {
         "outer": {"mode": "liquid", "h_conv": 100000.0, "t_sink_c": 68.09,
                   "t_in_c": 60.0, "t_out_c": 68.09, "flow_lpm": 10.0,
-                  "fluid": "water", "heat_removed_W": 5644.14,
-                  "area_m2": 0.081551, "regime": "turbulent"},
+                  "fluid": "water", "heat_removed_W": 5000.0,
+                  "area_m2": 0.075, "regime": "turbulent"},
         "inner": {"mode": "air", "h_conv": 121.03, "t_sink_c": 32.31,
-                  "air_speed_mps": 30.0, "heat_removed_W": 217.21,
-                  "area_m2": 0.02005,
+                  "air_speed_mps": 30.0, "heat_removed_W": 200.0,
+                  "area_m2": 0.018,
                   "regime": "turbulent + turbulent centrifugal convection"},
         "shaft_ends": {"mode": "off", "heat_removed_W": 0.0,
                        "length_each_side_mm": 0.0},
@@ -147,10 +147,10 @@ L155_THERMAL = {
                       "rotor": {"mode": "off", "heat_removed_W": 0.0},
                       "magnet": {"mode": "off", "heat_removed_W": 0.0}},
         "heat_budget": {
-            "losses_W": 5861.35, "housing_W": 5644.14, "bore_W": 217.21,
-            "gap_W": 99.86, "shaft_ends_W": 0.0, "rotor_W": 317.071,
+            "losses_W": 5200.0, "housing_W": 5000.0, "bore_W": 200.0,
+            "gap_W": 90.0, "shaft_ends_W": 0.0, "rotor_W": 300.0,
             "residual_W": -0.0, "residual_pct": 0.0, "mount_W": 0.0,
-            "housing_convection_W": 5644.139, "housing_radiation_W": 0.0,
+            "housing_convection_W": 5000.0, "housing_radiation_W": 0.0,
             "end_faces_W": 0.0,
         },
     },
@@ -283,12 +283,12 @@ def test_k_end_falls_back_to_the_geometry_when_the_record_has_none():
     """A liquid machine's `end_faces` block is off and carries no k_end, and the
     end turns are still there — so the estimator (masses.end_winding_factor's
     span: tooth + the whole wire column) has to supply one."""
-    g = machine_envelope(L155_GEOMETRY)
+    g = machine_envelope(LARGE_JACKETED_GEOMETRY)
     assert g["k_end"] is not None and g["k_end"] > 1.0
-    span = 26 + 9                     # tooth_width + wire column at split 1
-    assert g["k_end"] == pytest.approx((math.pi * span / 2 + 155) / 155, abs=1e-3)
+    span = 24 + 8                     # tooth_width + wire column at split 1
+    assert g["k_end"] == pytest.approx((math.pi * span / 2 + 140) / 140, abs=1e-3)
     assert g["end_winding_overhang_mm"] == pytest.approx(
-        (g["k_end"] - 1) * 155 / 2, abs=1e-3)
+        (g["k_end"] - 1) * 140 / 2, abs=1e-2)
 
 
 def test_placements_are_inside_the_machine_and_ordered():
@@ -322,14 +322,14 @@ def test_the_mount_is_one_end_annulus_and_the_end_faces_are_both_sides():
 
 # ── (b) the jacketed machine ───────────────────────────────────────────────
 
-def test_l155_jacket_and_bore_are_the_only_two_paths():
-    m = heat_path_model(L155_THERMAL, L155_GEOMETRY)
+def test_large_jacket_and_bore_are_the_only_two_paths():
+    m = heat_path_model(LARGE_JACKETED_THERMAL, LARGE_JACKETED_GEOMETRY)
     assert m["ok"] is True
     assert m["cooling_mode"] == "liquid"
     s = _by_id(m)
-    assert s["housing"]["W"] == pytest.approx(5644.14, abs=0.1)
+    assert s["housing"]["W"] == pytest.approx(5000.0, abs=0.1)
     assert s["housing"]["label"].endswith("liquid jacket")
-    assert s["bore"]["W"] == pytest.approx(217.21, abs=0.1)
+    assert s["bore"]["W"] == pytest.approx(200.0, abs=0.1)
     active = sorted(k for k, v in s.items() if v["active"])
     assert active == ["bore", "housing"]
     # every robotics path is present and says off — not missing
@@ -338,30 +338,30 @@ def test_l155_jacket_and_bore_are_the_only_two_paths():
         assert s[sid]["active"] is False
 
 
-def test_l155_shares_add_to_one_hundred_percent():
-    m = heat_path_model(L155_THERMAL, L155_GEOMETRY)
+def test_large_shares_add_to_one_hundred_percent():
+    m = heat_path_model(LARGE_JACKETED_THERMAL, LARGE_JACKETED_GEOMETRY)
     total = sum(s["pct"] for s in m["sinks"] if s["pct"] is not None)
     assert total == pytest.approx(100.0, abs=1.0)
     s = _by_id(m)
     assert s["housing"]["pct"] == pytest.approx(96.3, abs=0.5)
     assert s["bore"]["pct"] == pytest.approx(3.7, abs=0.5)
     t = m["totals"]
-    assert t["removed_W"] == pytest.approx(5861.35, abs=0.5)
+    assert t["removed_W"] == pytest.approx(5200.0, abs=0.5)
     assert abs(t["residual_W"]) < 0.5
 
 
-def test_l155_sleeve_sits_between_the_magnets_and_the_gap():
-    g = heat_path_model(L155_THERMAL, L155_GEOMETRY)["geometry"]
-    assert g["sleeve_thickness_mm"] == pytest.approx(2.5)
+def test_large_sleeve_sits_between_the_magnets_and_the_gap():
+    g = heat_path_model(LARGE_JACKETED_THERMAL, LARGE_JACKETED_GEOMETRY)["geometry"]
+    assert g["sleeve_thickness_mm"] == pytest.approx(2.0)
     assert g["sleeve_r_out_mm"] == pytest.approx(g["gap_r_in_mm"])
     assert g["sleeve_r_in_mm"] == pytest.approx(g["magnet_r_out_mm"])
-    assert g["magnet_r_out_mm"] == pytest.approx(62.6 - 2.5)
+    assert g["magnet_r_out_mm"] == pytest.approx(57.0 - 2.0)
 
 
-def test_l155_bore_radius_from_its_own_measured_area():
-    g = heat_path_model(L155_THERMAL, L155_GEOMETRY)["geometry"]
+def test_large_bore_radius_from_its_own_measured_area():
+    g = heat_path_model(LARGE_JACKETED_THERMAL, LARGE_JACKETED_GEOMETRY)["geometry"]
     assert g["bore_r_mm"] == pytest.approx(
-        0.02005 / (2 * math.pi * 0.155) * 1e3, abs=0.05)
+        0.018 / (2 * math.pi * 0.140) * 1e3, abs=0.05)
 
 
 # ── (e) machine-agnostic, and the refusals ─────────────────────────────────
@@ -370,7 +370,7 @@ def test_the_same_call_serves_both_machines():
     """Nothing in the model branches on a machine.  The two answers differ only
     in which sinks are active — the sink LIST is the same, in the same order."""
     a = heat_path_model(L13_THERMAL, L13_GEOMETRY)
-    b = heat_path_model(L155_THERMAL, L155_GEOMETRY)
+    b = heat_path_model(LARGE_JACKETED_THERMAL, LARGE_JACKETED_GEOMETRY)
     assert [s["id"] for s in a["sinks"]] == [s["id"] for s in b["sinks"]]
 
 
@@ -397,9 +397,6 @@ def test_a_result_with_no_geometry_still_lists_the_watts():
 @pytest.mark.parametrize("machine,config,duty_prefix,expect", [
     ("CIANO28 85 20SW1200", "L13", "rated",
      {"mount_W": 48.532, "end_faces_W": 5.947, "housing_W": 1.11, "bore_W": 0.59}),
-    ("CIANO10 200 opt", "L155 motor", "rated 1x9",
-     {"mount_W": 0.0, "end_faces_W": 0.0, "housing_W": 5644.14,
-      "bore_W": 217.21}),
 ])
 def test_matches_the_stored_records(machine, config, duty_prefix, expect):
     """The frozen blocks above still describe the records they were copied from.

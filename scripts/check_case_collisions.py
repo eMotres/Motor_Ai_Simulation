@@ -2,8 +2,8 @@
 
 WHY
 ===
-``routes/family._die_dir()`` looks a die up by exact name.  On NTFS ``CILN28``
-and ``ciln28`` are one directory, so the question never arises; on ext4 they
+``routes/family._die_dir()`` looks a die up by exact name.  On NTFS ``Die28``
+and ``die28`` are one directory, so the question never arises; on ext4 they
 are two, and the pair behaves like a single die that intermittently answers
 with the other one's geometry.  ``startup_checks.check_die_case`` refuses to
 boot a server in that state — this script asks the same question *before* the
@@ -19,7 +19,7 @@ TWO QUESTIONS, NOT ONE
   impossible, so a hit here means the tree was built somewhere else.
 * **Across the layers** (workspace / published / shared) — a *latent*
   collision.  ``resolve_die_dir`` reads through the layers by exact name, so
-  ``shared/dies/CILN28`` and a workspace's ``ciln28`` are, on Linux, two
+  ``shared/dies/Die28`` and a workspace's ``die28`` are, on Linux, two
   different dies with one Windows history.  Reported as a warning: it is not
   wrong, but it is never intentional.
 

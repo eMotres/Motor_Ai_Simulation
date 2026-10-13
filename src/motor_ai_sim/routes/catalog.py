@@ -531,7 +531,7 @@ def _family_doc_of_motor(motor: dict,
         # fails and the machine silently loses its pack and its role.  One
         # configuration under that die is unambiguous; several are separated by
         # the STACK LENGTH, which is what a configuration of a shared die is
-        # (the CILN28 series: 40 / 160 / 220 mm on one lamination).  Still
+        # (the large reference die series: 40 / 160 / 220 mm on one lamination).  Still
         # ambiguous → None, because guessing which pack a card runs on is
         # exactly the kind of silent substitution a passport must not make.
         got = by_die.get(name) or []
@@ -643,7 +643,7 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
         # back to the shared config's mode when the caller stays silent, so a
         # passport used to depend on which way the engineer had left the
         # Simulation tab (measured 2026-08-30: the whole catalog was
-        # regenerated as motors while two CILN28 machines are generators).
+        # regenerated as motors while two large reference die machines are generators).
         _fam = _family_doc_of_motor(motor, machine["geometry"]) or {}
         _role = str(_fam.get("role") or "").strip().lower() or None
         if _role not in ("motor", "generator"):

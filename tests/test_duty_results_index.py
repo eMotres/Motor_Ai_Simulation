@@ -29,7 +29,7 @@ import pytest
 
 from motor_ai_sim import duty_results as dr
 
-DIE = "CIANO10 200 opt"
+DIE = "Example large die"
 CFG = "L13"
 DUTY = "peak"
 
@@ -282,7 +282,7 @@ def catalog(store, monkeypatch):
     (dies / DIE / "die.yaml").write_text(yaml.safe_dump(
         {"name": DIE, "locked": False,
          "geometry": {"num_slots": 24, "num_poles": 28,
-                      "stator_diameter": 200.0}}), encoding="utf-8")
+                      "stator_diameter": 180.0}}), encoding="utf-8")
     (dies / DIE / f"{CFG}.yaml").write_text(yaml.safe_dump(
         {"name": CFG, "die": DIE,
          "duties": [{"name": DUTY, "mode": "motor"},

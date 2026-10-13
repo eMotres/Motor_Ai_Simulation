@@ -135,8 +135,8 @@ def test_a_description_may_contain_brackets_and_raw_newlines():
 
 def test_a_key_value_marker_is_accepted_too():
     clean, d = support.parse_ticket_draft(
-        'ok [[TICKET_DRAFT type="account"; title="Need the CILN28"; description="no access"]]')
-    assert d == {"type": "account", "title": "Need the CILN28", "description": "no access"}
+        'ok [[TICKET_DRAFT type="account"; title="Need the LARGE28"; description="no access"]]')
+    assert d == {"type": "account", "title": "Need the LARGE28", "description": "no access"}
     assert "TICKET_DRAFT" not in clean
 
 

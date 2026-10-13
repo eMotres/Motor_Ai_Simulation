@@ -101,7 +101,6 @@ def _cases():
         ("preset my_40mm_last", _PRESETS["my_40mm_last"]["geometry"]),
         ("preset ciano14_30_10", _PRESETS["ciano14_30_10"]["geometry"]),
         ("preset motor_100mm", _PRESETS["motor_100mm"]["geometry"]),
-        ("preset m200_20kw_base", _PRESETS["m200_20kw_base"]["geometry"]),
     ]
 
 

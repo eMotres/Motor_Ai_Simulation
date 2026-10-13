@@ -521,7 +521,7 @@ def _with_coupled_bearings(brg: Optional[Dict[str, Any]],
     out = dict(brg)
     # THE SEAT TEMPERATURE COMES WITH THE WATTS (BL-3 / MJ-11, audit v6).  The
     # totals were lifted to the coupled loop's and the temperature was left at
-    # the assigned one, so section 1's grease row judged the L155 rated duty on
+    # the assigned one, so section 1's grease row judged the reference motor rated duty on
     # 97.3 °C and passed it green while the loop beside it says 122.9 °C, past
     # the LGLT_2 range.  `recompute(temp_c)` re-runs the same SKF model at the
     # converged seat, so the per-end moments belong to the watts above them.
@@ -674,7 +674,7 @@ MAP_PX = 1400
 MAP_BAR_K = 1.14
 
 #: …plus the room `savefig(bbox_inches="tight")` adds AROUND the figure for the
-#: bigger labels.  Measured at 8 % on the Ø200's maps; 10 % is the margin that
+#: bigger labels.  Measured at 8 % on the large-format machine's maps; 10 % is the margin that
 #: keeps the printed size on the right side of `FIG_MIN_PT`.
 MAP_BBOX_K = 1.10
 
@@ -769,7 +769,7 @@ def _map_png(verts: Any, tris: Any, values: Any, *, label: str,
     ``range_from='nodal'`` takes the colour range from the field that is DRAWN
     — the per-class nodal average — instead of from the element values it is
     averaged from.  That is what the viewer does (2026-09-10), and the two
-    differ by more than rounding: on the Ø200 the band's element peak is
+    differ by more than rounding: on the large-format machine the band's element peak is
     1770 MPa and its nodal one 1558, so a document scaled to the first and a
     screen scaled to the second put the same stress in different colours.  With
     it, ``vmax_pct`` still applies as a CAP (2026-09-14) — averaging tames a
@@ -2938,7 +2938,7 @@ def _currents_png(wf: Dict[str, Any], width_cm: float = 22.0,
         # THE CURRENT THE RUN SOLVED, not the one it was asked for (2026-09-16).
         # A voltage-fed run keeps its SETPOINT in `I_winding_rms_A` /
         # `I_terminal_rms_A` and its answer in `I_phase_rms_solved_A` /
-        # `I_line_rms_A`, and this title took the setpoint: the L180 gen 'rated'
+        # `I_line_rms_A`, and this title took the setpoint: the reference generator 'rated'
         # panel said "346.6 A rms (line 600.4 A)" over a trace whose own rms is
         # 335.9 A, under a caption, a comparison table and a warnings section
         # that all say 581.8 A line.  The picture and its title are one run.
@@ -3154,7 +3154,7 @@ def bridge_pulse_thd_pct(wf: Any, col: Optional[Dict[str, Any]] = None
 
     MJ-1 (audit v7).  The row and the §8 finding named "Line voltage THD at the
     bridge (pulse train)" printed ``THD_LL_pct``, which is the FEM's
-    carrier-averaged WINDING line voltage: 32.28 % on the L155 rated duty,
+    carrier-averaged WINDING line voltage: 32.28 % on the reference motor rated duty,
     43.35 % on the peak one, under the bridge's name and beside a figure whose
     own spectrum panel says 115 % and 74.8 %.  A three-level pulse train on a
     24 kHz carrier really does distort by that much, and the two numbers were
@@ -3546,7 +3546,7 @@ def heat_not_in_map_w(res: Dict[str, Any],
     ``windage_not_modelled_W``); a record that carries neither — which is every
     record this project has written so far — is asked the same question the
     other way round: the whole mechanical loss minus the share that IS inside
-    the section.  On the L155 rated duty that is 437.7 − 61 = 376.7 W, 9.7 % of
+    the section.  On the reference motor rated duty that is 437.7 − 61 = 376.7 W, 9.7 % of
     the map, and the waterfall drew none of it under a caption describing a
     hatched bar that was not there (reviewer 2026-09-14, B2).
 
@@ -3726,7 +3726,7 @@ def _mass_inertia_png(em: Dict[str, Any], width_cm: float = 20.0,
     """Two pies side by side: where the kilograms are, and where the spinning
     inertia is.
 
-    They are different questions with different answers — on the Ø200 the
+    They are different questions with different answers — on the large-format machine the
     magnets are a fifth of the mass and two thirds of the inertia — and putting
     them next to each other is what makes that visible (user 2026-09-11).
     """
@@ -4207,7 +4207,7 @@ def _report_fingerprint(die: str, cfg: str,
     stored answer against ``_live_fingerprint()`` — the machine the SERVER has
     loaded.  With the Ø85 robot motor loaded, the Ø85's own thermal and
     mechanical tab stores matched "live" exactly, nothing was dropped, and
-    sections 6 and 7 of a Ø200 client report printed another motor's 408.8 °C
+    sections 6 and 7 of a large-format machine client report printed another motor's 408.8 °C
     winding and SF 32.46 rotor beside this machine's 124.8 °C and 0.55.
 
     A report is about a configuration, so the fingerprint it judges against is
@@ -4619,7 +4619,7 @@ def report_geometry(geo_live: Dict[str, Any], em: Dict[str, Any],
     (see below) — and a fingerprint is still recovered off whichever record
     carries one, so §1 is never blank.
 
-    THE MECHANICAL RECORD IS NEVER A SOURCE OF DESIGN GEOMETRY (L155/L180
+    THE MECHANICAL RECORD IS NEVER A SOURCE OF DESIGN GEOMETRY (reference machine
     audits, 2026-09-20 — the regression this replaces).  A sleeved rotor's
     ``rotor_stress`` result carries an ``air_gap`` block whose
     ``rotor_r_mm``/``bore_r_mm`` are the AS-ASSEMBLED sleeve OD and stator
@@ -4677,7 +4677,7 @@ def report_geometry(geo_live: Dict[str, Any], em: Dict[str, Any],
 def mechanical_assembly_rows(mech: Optional[Dict[str, Any]]
                              ) -> List[List[str]]:
     """The AS-ASSEMBLED sleeve dimensions, as their OWN two rows — never
-    blended into the design geometry table (L155/L180 audits, 2026-09-20).
+    blended into the design geometry table (reference machine audits, 2026-09-20).
 
     A sleeved rotor's own rotor-stress record keeps the sleeve OD and the
     stator bore radius it was actually meshed with
@@ -5059,7 +5059,7 @@ def dc_link_vs_pack_rule(ctx: Dict[str, Any], duty: Any) -> Dict[str, Any]:
 
     Green while the link is at or under the pack's nominal — a pack at any
     state of charge above half can hold it.  AMBER above nominal, because the
-    duty then exists only while the pack is full: the L180 'peak' duty was
+    duty then exists only while the pack is full: the reference generator 'peak' duty was
     solved on 1,049.8 V, which is the pack MAXIMUM, and no page of the document
     said that its 500 kW is a fully-charged-pack number.  Red outside the pack
     altogether — the duty was solved on a supply this machine does not have.
@@ -5108,7 +5108,7 @@ OPEN_FRACTION_LIMIT_PCT = 50.0
 #:
 #: The rotor's contact solve reports every separation pair it meshed, and until
 #: now the retention verdict took the WORST of them.  On a banded rotor that is
-#: the wrong pair almost every time.  Measured on the live Ø200:
+#: the wrong pair almost every time.  Measured on the live large-format machine:
 #:
 #:   sleeve-magnet   open 0.0 %,  gap 0 um,   pressure 13.2 MPa at the weakest
 #:                   facet                                    -> held, everywhere
@@ -5154,7 +5154,7 @@ DEMAG_LOSS_LIMIT_PCT = 1.0
 #: (The worst SINGLE element used to carry red/amber bands of its own here —
 #: 80 / 90 %, reviewer 2026-09-14, B6.  It is a sharp-corner singularity that
 #: does not converge with the mesh — 11.7 % at every magnet mesh on Ø40/L13,
-#: 98 → 79 % with the mesh on L155 (docs/NO_FILTERS_2026-09-24.md §3) — so a
+#: 98 → 79 % with the mesh on reference motor (docs/NO_FILTERS_2026-09-24.md §3) — so a
 #: band on it judged the mesh, not the magnet.  It is now a flagged corner
 #: diagnostic with its location and no limit, like the mechanical table's
 #: unaveraged peak stress; the magnet's figure is the volume-weighted Br kept.)
@@ -5248,7 +5248,7 @@ def overspeed_remedy_clause(factor: Any, case: Any = None) -> str:
     sized until there is one.
 
     ``case`` CLOSES THE OTHER HALF OF IT (BT-8, 2026-09-16).  A factor above 1
-    says the case exists; it does not say this document reports it.  The L180
+    says the case exists; it does not say this document reports it.  The reference generator
     gen record carries ``overspeed_factor 1.2`` and ``case "rated"`` — the
     solve ran three cases and filed the rated one — so two red remedies pointed
     a client at an overspeed case that appears on no page of the report.  The
@@ -5520,7 +5520,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
             "rule": "carrier_ripple", "level": "info", "duty": duty,
             # …AND THE RUN'S OWN CAVEAT IS IN THE COLUMN THE READER SEES
             # (2026-09-16).  The warnings table prints no note, so a figure the
-            # record itself marks as not quotable — the L180 gen 'peak' pass
+            # record itself marks as not quotable — the reference generator 'peak' pass
             # ended with −1 A of DC in the phase current against a ± 0.5 A band
             # — has to say so in its own name or not at all.
             "quantity": ("Torque ripple at the carrier"
@@ -5538,7 +5538,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
                      # offset in the phase current reports a ripple that partly
                      # belongs to the offset; section 5 said so and this row,
                      # which is where the figure is quoted as a finding, did
-                     # not (L180 gen 'peak', −1 A against a ± 0.5 A band).
+                     # not (reference generator 'peak', −1 A against a ± 0.5 A band).
                      + ("" if ctx.get("carrier_ripple_quotable") is not False
                         else (" — this run ended with a DC offset of %s in the "
                               "phase current%s, so part of this figure belongs "
@@ -5551,7 +5551,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
     # …and what the BRIDGE's ripple is once the carrier is filtered out (BT-6,
     # 2026-09-16).  The gate above is judged on the sinusoidal run and stays
     # there — skew and a pole arc change that ripple and nothing else — but the
-    # PWM run's own filtered figure is a different number and the L180 gen peak
+    # PWM run's own filtered figure is a different number and the reference generator peak
     # duty's is 6.1 %, past the 5 % gate, printed on no page while the gate's
     # own row read 1.6 % green with 68 % of margin.  Informational, because the
     # rule's basis is the sinusoid and because a pass that ended with a DC
@@ -5785,7 +5785,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
            rotor_bridge_remedy(ctx.get("sf_min_part"), ctx)),
         kind="min",
         note=_sf_note + rotor_bridge_note(ctx.get("sf_min_part"), ctx)))
-    # …and every OTHER part beside the worst one.  On the L155 peak duty the
+    # …and every OTHER part beside the worst one.  On the reference motor peak duty the
     # magnet's own SF is 2.05 against an acceptance level of 2 — the
     # second-tightest number in the document — and nothing fired on it,
     # because only the minimum was ever checked (B5).
@@ -5920,7 +5920,7 @@ def duty_warnings(ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
               + time_to_limit_clause({"time_to_limit": _ttl}, "bearing"))))
 
     # ── a ring mode sitting on an excitation line ───────────────────────────
-    # Reviewer 2026-09-14: the L155 peak's mode 3 is 24,028 Hz against a
+    # Reviewer 2026-09-14: the reference motor peak's mode 3 is 24,028 Hz against a
     # 24,000 Hz carrier — 0.1 % — and the warnings section did not mention it.
     # A mode ON the carrier is an acoustic and a fatigue problem, so it is a
     # rule of its own: amber inside 10 % (the modal solver's own flag band),
@@ -6282,7 +6282,7 @@ def demag_corner_stats(die: str, cfg: str,
     stored demagnetisation field.
 
     WHY (user 2026-09-14).  The summary card carries one number — the worst
-    single element, ``demag.br_worst_pct``, 18.4 % on the L155 peak duty — and a
+    single element, ``demag.br_worst_pct``, 18.4 % on the reference motor peak duty — and a
     reader cannot tell a pole that is gone from a corner that is.  Verified on
     the stored field: it is the KEPT fraction (``fem_solver_2d`` writes
     ``100 × min(Br factor)``), the minimum really is 18.4 %, and it is a corner —
@@ -6475,7 +6475,7 @@ def _duty_map_sources(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]
 
     # WHEN EACH MAP WAS SOLVED, kept beside the arrays (reviewer 2026-09-15).
     # A field and the record the tables beside it are built from are two
-    # different answers, and on the L180 gen report they were two different
+    # different answers, and on the reference generator report they were two different
     # SOLVES — a sinusoidal map of 2026-09-13 under a PWM table of 2026-09-16,
     # with nothing on the page saying so.  The captions compare these.
     meta: Dict[str, Any] = {}
@@ -6544,7 +6544,7 @@ def _duty_map_sources(die: str, cfg: str, duty: Optional[str]) -> Dict[str, Any]
 # ---------------------------------------------------------------------------
 # A map is an npz the solve filed; the table beside it is the compact record
 # the same tab filed.  They are normally one answer stored twice — and they are
-# NOT when a later run refreshed the record and not the field.  On the L180 gen
+# NOT when a later run refreshed the record and not the field.  On the reference generator
 # report the thermal maps were the sinusoidal solve of 2026-09-13 (hottest
 # solid 153.9 / 168.4 °C) and every table on the page was the PWM run of
 # 2026-09-16 (175.2 / 219.0 °C).  Both are honest numbers of two different
@@ -6706,7 +6706,7 @@ def _match_duty_by_point(duties: List[Dict[str, Any]],
     A stored answer belongs to a duty of THIS configuration when its speed and
     its phase current are that duty's, and no other duty's.  PER KIND, because
     the three stores are filled at different moments and need not agree: on the
-    G2-L40 the last thermal map was solved at 2 200 rpm and the last rotor
+    reference configuration the last thermal map was solved at 2 200 rpm and the last rotor
     stress at 3 000, which is two duties, not an ambiguity — one owns the
     temperatures, the other the stresses, and each column says so.
     """
@@ -6757,7 +6757,7 @@ def _duty_columns(die: str, cfg: str, cfg_doc: Dict[str, Any],
         # stores hold the LIVE machine's last solve; a report of a configuration
         # whose geometry differs from what is loaded must attribute none of them
         # to it, however well a speed happens to line up (2026-09-09: the G2's
-        # report was written while the editor had the Ø200 open, and the Ø200's
+        # report was written while the editor had the large-format machine open, and the large-format machine's
         # 20,900 rpm map is not any G2 duty's).
         owners = (_match_duty_by_point(duties, last) if same_machine else {})
         why = ("matched by the operating point it was solved at — the editor "
@@ -6866,7 +6866,7 @@ PWM_RUN_DRIVE = "pwm_voltage"
 #: against inductances filed as ``Ld_mH`` / ``Lq_mH`` / ``Ld_eq_star_mH`` /
 #: ``Lq_eq_star_mH`` / ``L0_mH``, and ``"saliency_ratio"`` against
 #: ``saliency_Lq_over_Ld``.  So section 4 printed the SINUSOID's Ld beside the
-#: PWM run's Lq in one table — the rated L180 gen duty read Ld 0.0976 mH,
+#: PWM run's Lq in one table — the rated reference generator duty read Ld 0.0976 mH,
 #: Lq 0.0718 mH and "Saliency Lq/Ld 0.71", three numbers that do not close
 #: (0.0718/0.0976 = 0.736) — under a closing sentence stating that every
 #: constant in the table is the sinusoidal run's.  Ld survived only because the
@@ -7047,7 +7047,7 @@ def _pwm_solved_current(out: Dict[str, Any], sine: Dict[str, Any],
     summary it is saved with carries the COMMANDED value in ``I_phase_rms_A``
     and ``I_winding_rms_A`` (they are copied from the request) and the solved
     one in ``I_line_rms_A`` / ``I_phase_rms_solved_A``.  The report read the
-    commanded key, so 562.1 A appeared twenty-four times in the L155 rated
+    commanded key, so 562.1 A appeared twenty-four times in the reference motor rated
     document — cover, overview, comparison, operating point, every pair caption
     and the current-density rule — while the run it describes settled at
     544.3 A line / 314.25 A in the winding, 3.16 % short of its setpoint.  Every
@@ -7668,7 +7668,7 @@ def duty_point_error(col: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """By how much a voltage-fed duty's SOLVED current missed its setpoint.
 
     ``None`` on a current-fed duty and on a voltage-fed one that landed on its
-    point.  The L155 rated duty settled at 544.3 A line against a commanded
+    point.  The reference motor rated duty settled at 544.3 A line against a commanded
     562.1 A — 3.16 % low — and the document said so nowhere (BL-2, audit v6).
     """
     if duty_drive(col) != "pwm":
@@ -7701,7 +7701,7 @@ def duty_point_error(col: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 #:
 #: IT DESCRIBES THE REGULATOR, not a fixed voltage (2026-09-16).  The clause
 #: used to say the first pass's fundamental "was held for the passes after it",
-#: which is not what the loop does and not what these records show: the L180 gen
+#: which is not what the loop does and not what these records show: the reference generator
 #: 'rated' duty was re-aimed 729.6 → 743.2 → 747.18 V and the 'peak' duty
 #: 789.7 → 825.0 → 863.7 V.  The loop stops when the current meets the setpoint,
 #: when the passes run out, or when the bridge reaches its modulation ceiling.
@@ -8068,7 +8068,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # arc — which is what skew and a re-cut arc can change and what a joint or a
     # spindle feels.  A two-level bridge adds ripple at the carrier, tens of per
     # cent of it on this machine, and the rotor inertia filters all of it: on
-    # the L155 peak duty a 44 % carrier figure would have failed a design whose
+    # the reference motor peak duty a 44 % carrier figure would have failed a design whose
     # low-order ripple is under 1 %.  So the rule reads the SINUSOIDAL run, and
     # the carrier's own figure gets an informational row with no limit.
     # …AND ONLY ON A PWM DUTY (F2/N7, round 3).  `em_sine` is now filled on
@@ -8094,7 +8094,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
         # 2026-09-16).  The 5 % gate is judged on the sinusoidal run, which is
         # right — it is the geometry's ripple — but the PWM run measures its
         # own carrier-filtered figure and it is not the sinusoid's: 6.1 % on
-        # the L180 gen peak duty against the 1.6 % the gate saw, past the gate,
+        # the reference generator peak duty against the 1.6 % the gate saw, past the gate,
         # and it appeared nowhere in the document.
         ctx["carrier_ripple_filt_pct"] = _numf(em.get("T_ripple_filt_pct"))
         ctx["carrier_thd_i_pct"] = _numf(em.get("THD_I_pct")
@@ -8111,7 +8111,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     #
     # …AND IT SPLITS EXACTLY AS THE RIPPLE DOES (reviewer 2026-09-15).  The
     # 10 % gate is about the MACHINE's distortion; on a PWM duty `THD_LL_pct`
-    # is the BRIDGE's pulse train — 44.7 % on the L180 rated duty, which failed
+    # is the BRIDGE's pulse train — 44.7 % on the reference generator rated duty, which failed
     # a machine whose own back-EMF distorts by 1.17 %.  So the rule reads the
     # sinusoidal run, and the bridge's figure gets an informational row, with
     # the current THD beside it because that is what the winding lets through.
@@ -8149,7 +8149,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # ── the pack, and the speed an uncontrolled machine runs away at ────────
     # THE 3-D END-EFFECT FACTOR, read before the first voltage that needs it.
     # Every flux-proportional number in this document carries k_3d, and the
-    # waveform-peak rule did not: the L155 peak duty was failed on its 2-D
+    # waveform-peak rule did not: the reference motor peak duty was failed on its 2-D
     # 563.4 V while the detail table cleared it at 539.5 V and the modulation
     # row beside it was already ×k (reviewer 2026-09-14, A2).  One k, both
     # voltage rules.
@@ -8205,7 +8205,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # exact fundamental amplitude of the terminal waveform, triplen-free in
     # delta.  It is flux-proportional, so it carries k_3d like every other
     # voltage on these pages, and it is compared against 0.9959 x the pack
-    # floor.  Measured on the L155 peak duty: waveform peak passes, m = 1.15+.
+    # floor.  Measured on the reference motor peak duty: waveform peak passes, m = 1.15+.
     v1_ll = _numf(em.get("V1_LL_V"))
     if v1_ll is not None and _k3 and 0.5 < _k3 <= 1.0:
         v1_ll = v1_ll * float(_k3)
@@ -8246,7 +8246,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
                                         * math.sqrt(3.0) / 2.0)
         # …AND THE CEILING THE RUN ACTUALLY HAD (2026-09-16).  m is the index of
         # the modulator's REFERENCE and the clamp is on the fundamental it
-        # APPLIES, which is smaller by the sampled-reference gain: the L180 gen
+        # APPLIES, which is smaller by the sampled-reference gain: the reference generator
         # 'rated' duty sat exactly on its 747.18 V ceiling and this row, rebuilt
         # from m alone, read 787.71 V against 795.95 V — "1 % of margin left",
         # in a document whose coupled block says the point is inverter-limited
@@ -8339,7 +8339,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # ── the ring modes against the excitation lines ─────────────────────────
     # RE-JUDGED HERE, against THIS duty's own carrier (reviewer 2026-09-14, A1).
     # The stored `tightest` carries the carrier the server happened to hold
-    # when the modal step ran — for the L155's rated duty a Ø85 machine's
+    # when the modal step ran — for the reference motor's rated duty a Ø85 machine's
     # 48 kHz — and the frequencies are the rotor's, so the two duties of one
     # machine came out with two different verdicts about one rotor.  The
     # frequencies are read back from whatever the record kept; the lines are
@@ -8348,7 +8348,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
     # …AND AGAINST THE CARRIER THE RUN REALLY SWITCHED AT (A2-1, second button
     # audit 2026-09-16).  `sim.fSwitch` is what the panel ASKED for; the
     # modulator is synchronous and locks an integer count of carriers to the
-    # electrical period, so the L180 gen's two duties, both asked for 24 kHz,
+    # electrical period, so the reference generator's two duties, both asked for 24 kHz,
     # switched at 24,383 Hz (14) and 24,808 Hz (13).  Judged against the
     # request, mode #6 at 24,028 Hz came out 0.12 % away and red on both
     # duties; against the carriers the runs used it is 1.5 % and 3.1 % away.
@@ -8404,7 +8404,7 @@ def _warning_context(col: Dict[str, Any], *, mats: Dict[str, Any],
             ctx["bearing_name"] = worst[1]
             ctx["bearing_rpm"] = rpm
         # THE GREASE HAS A TEMPERATURE LIMIT TOO (user 2026-09-14).  The seat
-        # reaches 155.6 °C on the L155 peak duty and the only bearing rule was
+        # reaches 155.6 °C on the reference motor peak duty and the only bearing rule was
         # the speed one; the lubricant cards carry `temp_range_c` and nothing
         # read it.  The base-oil viscosity behind M_rr is extrapolated to the
         # seat temperature by Walther whether or not the grease could survive
@@ -8482,7 +8482,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # die's stored radii were stale on most dies, and this table printed them:
     # "Rotor outer radius" and "Shaft seat Ø" (2 × rotor_inner_radius) of the
     # CIANO28 85 20SW1200 read 32.80 / 50.0 mm for inputs that give 32.40 /
-    # 49.2, and CILN28 (Ø160) printed a 30 mm machine's 9.00 / 7.4.
+    # 49.2, and large reference die (Ø160) printed a 30 mm machine's 9.00 / 7.4.
     from motor_ai_sim.geometry.motor_geometry import refresh_derived_geometry
     geo = refresh_derived_geometry(geo)
     wind = cfg_doc.get("winding") or {}
@@ -8713,7 +8713,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # `_geoSig` at all can still recover a DESIGN snapshot from a record's
     # own `geometry` dict where one exists (`_record_geometry_for_v2`) —
     # never from `_cov_mech` above, which is mechanical, not design,
-    # geometry (L155/L180 audits, 2026-09-20).
+    # geometry (reference machine audits, 2026-09-20).
     geo_report, geo_hash, geo_mismatch, geo_no_snapshot = report_geometry(
         geo, em, mech=_cov_mech, report_fp=report_fp, live_fp=live_fp,
         res=(_cov or {}).get("res"))
@@ -9013,7 +9013,7 @@ def gather_report_data(*, die: str, cfg: str, die_doc: Dict[str, Any],
                                          d_duty.get("name")),
         "wind": wind, "mats": mats, "slot": slot,
         # THE COVER DUTY'S OWN rotor-stress record — §1's "as assembled"
-        # sleeve rows read this, never the design geometry (L155/L180
+        # sleeve rows read this, never the design geometry (reference machine
         # audits, 2026-09-20).  Same value `report_geometry` was called
         # with above, kept for the renderers under its own name.
         "mech_geo": _cov_mech,
@@ -9714,7 +9714,7 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
 
     out.append(_para("Geometry", st["h2"]))
     if geo_no_snapshot:
-        # F1 (L13 server audit 2026-09-19), FIXED 2026-09-20 (L155/L180
+        # F1 (L13 server audit 2026-09-19), FIXED 2026-09-20 (reference machine
         # audits): this note used to sit in an `elif` AFTER `geo_hash`, and a
         # run's own fingerprint — recovered from the mechanical or
         # electromagnetic record even with no design snapshot at all — made
@@ -9759,7 +9759,7 @@ def _machine_page(st, die_doc, geo, wind, mats, slot, brg_assign, brg,
     if em_source_note_text:
         out.append(_para(em_source_note_text, st["note"]))
     # THE DESIGN TABLE, plus — when a rotor-stress record is on hand — the
-    # AS-ASSEMBLED sleeve dimensions as their own rows (L155/L180 audits,
+    # AS-ASSEMBLED sleeve dimensions as their own rows (reference machine audits,
     # 2026-09-20): never blended into "Air gap"/"Rotor outer radius" above,
     # which stay the magnetic (design) dimensions.
     rows = geometry_rows(geo, wind, slot, em) + mechanical_assembly_rows(mech)
@@ -9857,7 +9857,7 @@ def _layers_words(wind: Dict[str, Any]) -> str:
         return "—"
     # The number and the word only.  The old gloss ("coils on alternate
     # teeth" / "every tooth wound") described a topology this field does not
-    # select — the Ø200 winds every one of its 12 teeth and printed
+    # select — the large-format machine winds every one of its 12 teeth and printed
     # "alternate teeth" (user 2026-09-13: "throw that out of the report").
     if int(n) <= 1:
         return "1 — single-layer"
@@ -9886,7 +9886,7 @@ def geometry_rows(geo: Dict[str, Any], wind: Dict[str, Any],
         # geometry page rather than in a note somewhere.
         ["Stack length", _f("motor_length"), "mm",
          "Turns per slot", winding_words(geo), ""],
-        # THE MAGNETIC gap, named as such (L155/L180 audits, 2026-09-20): on
+        # THE MAGNETIC gap, named as such (reference machine audits, 2026-09-20): on
         # a sleeved rotor this is magnet OD to stator bore, WITH the
         # non-magnetic sleeve inside it — a different number from the
         # mechanical clearance under the sleeve, which prints as its own row
@@ -10528,7 +10528,7 @@ def bearing_lubricant(brg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The grease (or oil) these bearings run on and the TOP of its stated
     temperature range, or ``None`` when neither can be resolved.
 
-    WHY (user 2026-09-14).  The bearing seat reaches 155.6 °C on the L155 peak
+    WHY (user 2026-09-14).  The bearing seat reaches 155.6 °C on the reference motor peak
     duty and nothing in the document said what the lubricant is rated for — the
     library carries ``temp_range_c`` on every card and no rule read it.
 
@@ -11101,7 +11101,7 @@ def saliency_note(ratio: Any) -> str:
     """What Lq/Ld MEANS on this machine — read off the number, not assumed.
 
     The note used to say "below 1 here" on every report, including the ones
-    printing 1.228 (reviewer 2026-09-14, the L155 rated duty): the same
+    printing 1.228 (reviewer 2026-09-14, the reference motor rated duty): the same
     configuration is inverse-salient at one operating point and salient at
     another, because the saturation moves with the current.  So the sentence is
     chosen by the value it sits beside.
@@ -11266,7 +11266,7 @@ def em_constant_rows(em: Dict[str, Any],
 
     * **the saturation droop** (MJ-3) is a property of the iron at this point,
       measured against an unsaturated dq twin of the SAME run.  Formed on the
-      PWM torque it read 19.87 % on the L155 peak duty — 204.935 N·m against a
+      PWM torque it read 19.87 % on the reference motor peak duty — 204.935 N·m against a
       255.739 N·m reference — where the sinusoidal torque at that point is
       239.972 N·m, so about 13.7 points of what the row called saturation were
       carrier loss and the −1.18 % point miss.  It is taken on the sinusoidal
@@ -11357,7 +11357,7 @@ def em_constant_rows(em: Dict[str, Any],
     # `Lq_mH` / `saliency_Lq_over_Ld` under these same key names, but as the
     # OLD chord values — that run never wrote `Ld_inc_mH` / `Lq_inc_mH` at
     # all.  Reading `Ld_mH` etc. unconditionally would silently reprint the
-    # very chord-derived saliency (0.71 on the L180) the client questioned,
+    # very chord-derived saliency (0.71 on the reference generator) the client questioned,
     # now mislabelled as the incremental one.  `Ld_inc_mH` / `Lq_inc_mH` only
     # ever get written together with the incremental block (routes/
     # simulation.py), so their presence is the one reliable signal that this
@@ -11440,7 +11440,7 @@ def em_constant_rows(em: Dict[str, Any],
     # iron state (the `bench_ldq` block, a 2 A rms probe).  The stored number is
     # floored at zero on two paths, so a printed "0 %" can mean either "no
     # droop" or "the measured torque came out ABOVE its own unsaturated
-    # reference" — the L155 rated duty is the second, 187.855 N·m against a
+    # reference" — the reference motor rated duty is the second, 187.855 N·m against a
     # 184.946 N·m reference.  That is the reference's resolution, not a finding,
     # and it is printed as "not measured" rather than as a zero.
     # …AND IT IS THE SINUSOIDAL RUN'S, like every other constant of this table
@@ -11619,7 +11619,7 @@ def em_demag_text(em: Dict[str, Any],
     # THE WORST ELEMENT IS A FRACTION KEPT, and the reader is told how much of
     # the magnet is with it (user 2026-09-14).  `br_worst_pct` is
     # 100 × min(Br factor) — what the element KEPT, not what it lost — and the
-    # stored field says the 18.4 % of the L155 peak duty is 160 of 1380 elements
+    # stored field says the 18.4 % of the reference motor peak duty is 160 of 1380 elements
     # under 80 %, 2.05 % of the magnet area.
     _corner = demag_corner_clause(corner)
     # I1 (L13 server audit round 4): these figures are RECOMPUTED from the
@@ -11735,7 +11735,7 @@ def em_map_numbers(key: str, maps: Dict[str, Any],
                                          "demag")) or {}).get("br_pct"))
         r_worst = _numf((br_corner_of(_g((right_side or {}).get("em") or {},
                                          "demag")) or {}).get("br_pct"))
-        # SAME ROUNDING AS THE TABLE (L155 audit, 2026-09-20, CS-1): at one
+        # SAME ROUNDING AS THE TABLE (reference motor audit, 2026-09-20, CS-1): at one
         # decimal place `_fmt` strips a trailing ".0", so 6.95 rounds to
         # "7.0" and then prints as bare "7" — a different-LOOKING number
         # from the §5/§8 tables' own "6.95 %" of the identical stored
@@ -11793,7 +11793,7 @@ def em_map_figures(maps: Dict[str, Any],
     # per-side clause at the end of the caption — one number each, not one
     # number that could be read as belonging to both pictures.
     if maps.get("demag_min_pct") is not None and not other:
-        # SAME ROUNDING AS THE TABLE (CS-1, L155 audit 2026-09-20) — see
+        # SAME ROUNDING AS THE TABLE (CS-1, reference motor audit 2026-09-20) — see
         # `em_map_numbers`'s own note.
         demag_cap += (" Corner diagnostic (worst element, not the magnet's "
                       "figure) keeps %s of Br." % _fmt(
@@ -11994,7 +11994,7 @@ def _em_page(st, em, em_src, d_duty, brg, snap, em_run, geo, mats,
     # THE LEAD-IN LEADS (MJ-6, audit v5): the sentence that says which side is
     # which used to be appended after the last figure of the section, two pages
     # below the first pair it introduces.
-    # L180 M-3 (audit 2026-09-20): §6/§7 carry a "Per-duty numbers are in
+    # reference generator M-3 (audit 2026-09-20): §6/§7 carry a "Per-duty numbers are in
     # the comparison table in section N" signpost on their PAIRED lead-in
     # too (`pair_owner_tail`); §4's own paired lead-in — the one every
     # figure with two duties on it actually uses — carried none at all, so
@@ -12175,7 +12175,7 @@ def map_owner_text(map_duty: Optional[str], em: Dict[str, Any],
     duty, which is a different feature and is deliberately not built here.  So
     the maps are one duty's, and this line says which one and at what point.
 
-    L180 M-3 (audit 2026-09-20): §6 (thermal) and §7 (mechanical) each carry
+    reference generator M-3 (audit 2026-09-20): §6 (thermal) and §7 (mechanical) each carry
     a "Per-duty numbers are in the comparison table in section N" signpost
     (``thermal_map_owner_text``/``mech_map_owner_text``) so a reader who
     lands on §4 knowing only the PICTURE duty's point can find the other
@@ -12445,7 +12445,7 @@ def thermal_source_text(th: Dict[str, Any], entry: Dict[str, Any],
                 "temperatures at that instant (the map's own shape frozen)")
     else:
         state = "steady state"
-        # L180 M-2 (audit 2026-09-20): a bare `cp.get("converged")` flag
+        # reference generator M-2 (audit 2026-09-20): a bare `cp.get("converged")` flag
         # conflates the TEMPERATURES with the OPERATING POINT — a duty whose
         # temperatures settled while only the point is inverter-limited
         # (`converged_words`'s own three-way split, item M-2's own case)
@@ -12459,7 +12459,7 @@ def thermal_source_text(th: Dict[str, Any], entry: Dict[str, Any],
             conv = "converged" if _cw == "yes" else _cw
         built = "the cycle-averaged loss map, solved to a steady balance"
     bits = ["Source: %s." % who, "State: %s (%s)." % (state, conv)]
-    # L155 MAJOR (audit 2026-09-20): `point.I_phase_rms` is the REQUEST the
+    # reference motor MAJOR (audit 2026-09-20): `point.I_phase_rms` is the REQUEST the
     # thermal solve was given — on a voltage-fed (PWM) duty that is the
     # COMMANDED current (`duty_results._pick`), not the one the bridge
     # actually converged to (`_pwm_solved_current`, BL-2).  The 'em' summary
@@ -12498,7 +12498,7 @@ def thermal_pair_source_lines(pair: Optional[Dict[str, Any]],
     for the report's own duty when there is no pair.
 
     ``em`` is the REPORT duty's own electromagnetic summary (solved current,
-    never the setpoint — L155 audit, 2026-09-20); on a pair each side reads
+    never the setpoint — reference motor audit, 2026-09-20); on a pair each side reads
     its own ``em`` off the side dict instead, so a PWM duty's Point line
     never quotes the other side's current.
 
@@ -12618,7 +12618,7 @@ def thermal_solid_min_c(inner: Dict[str, Any]) -> Optional[float]:
     ``T_min`` as the solver stores it is the minimum over the whole solved
     mesh, air and coolant cut included, and a report that quotes it beside a
     jacket wall temperature invites "no interior node can be below the wall"
-    (reviewer 2026-09-14, C2).  On the L155 the two answers turn out to be the
+    (reviewer 2026-09-14, C2).  On the reference motor the two answers turn out to be the
     same node — the coolest point IS solid, the outermost stator node under the
     jacket — but the document should be able to say so rather than assume it.
     """
@@ -12978,7 +12978,7 @@ def thermal_budget_reconcile_text(res: Dict[str, Any], inner: Dict[str, Any],
     # 630.9 W against 581.6 W and called the 49.3 W difference gap windage
     # while the map's own rotor loss is 539.2 W and the windage credited to the
     # rotor surface is 91.7 W — under-stated 1.9× and contradicting an adjacent
-    # row of the same table (L180 gen 'rated').  The band is subtracted here
+    # row of the same table (reference generator 'rated').  The band is subtracted here
     # and both halves are named.
     tail = ""
     sp = budget.get("rotor_heat_split")
@@ -13024,7 +13024,7 @@ def coupled_loop_text(cp: Dict[str, Any]) -> str:
     THREE VERDICTS, NOT TWO (2026-09-16).  ``converged`` is an AND of the
     temperatures and the operating point, and this sentence printed it as
     "NOT converged" in front of the very residuals — 0.15 K, 0.26 K, 0.1 K
-    against ± 2 K and ± 5 K — that say the temperatures converged (L180 gen
+    against ± 2 K and ± 5 K — that say the temperatures converged (reference generator
     'rated').  What did not converge there is the point, and the flagged
     sentence under this one says so; this one answers for the temperatures it
     is about.
@@ -13096,7 +13096,7 @@ def _pwm_record(col: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 
 # ── THE STUDY'S POINT IS NOT ALWAYS THE REPORT'S POINT ──────────────────────
-# Client review, 2026-09-14.  The carrier study of the L155 was measured at the
+# Client review, 2026-09-14.  The carrier study of the reference motor was measured at the
 # duty's THEN-saved point — 750.9 A line, 134.7 °C winding, 7,689.3 W of
 # sinusoidal loss — and the duty has since been re-saved 2.6 % higher, at
 # 770.5 A / 139.2 °C, where sections 3 and 4 print 7,851.8 W.  A reader who took
@@ -13275,7 +13275,7 @@ def pwm_sine_em_eta(col: Dict[str, Any]) -> Optional[float]:
     state it — :func:`shaft_view` on the duty's own saved run (MJ-2).
 
     The carrier study's baseline ``eta_em`` was measured at the study's own
-    point, which on the L155 peak duty is 750.9 A against this report's 770.5 A;
+    point, which on the reference motor peak duty is 750.9 A against this report's 770.5 A;
     printing it in a column headed "sinusoid" put 98.406 % under a label section
     3 answers with 98.39 %.  The study's baseline still forms every DELTA in the
     table — what transfers between two points is the drop, which is the rule the
@@ -13704,7 +13704,7 @@ def _pwm_bus_pair(cases: List[Dict[str, Any]]):
 #:
 #: …AND IT PROMISES A SETPOINT, NOT A SOLVED POINT (BT-4, 2026-09-16).  It said
 #: "the same point": the two columns are aimed at one current setpoint, which
-#: is true, but a voltage-fed run reaches it or does not, and on the L180 gen
+#: is true, but a voltage-fed run reaches it or does not, and on the reference generator
 #: peak duty it did not — 176.679 N·m against the sinusoid's 238.467.  Where
 #: the two columns really are not one point, the block below says so and names
 #: the cause (:func:`pwm_same_point_note`).
@@ -13739,7 +13739,7 @@ def pwm_same_point_note(t_sine: Any, t_pwm: Any, inv: Any,
     when they are.
 
     The section's intro promises "the same machine, the same setpoint" and every
-    delta in the table is billed to the carrier.  On the L180 gen PEAK duty the
+    delta in the table is billed to the carrier.  On the reference generator PEAK duty the
     sinusoid solves 238.467 N·m and the bridge 176.679 N·m — 26 % apart — with
     19.17 % of Br lost on the PWM run against 2.07 % on the sinusoid, so
     "+3,456 W (+41.1 %)" and "shaft efficiency falls 98.17 → 96.70 %" compared a
@@ -13884,7 +13884,7 @@ def _cpl_shaft_view(col: Dict[str, Any], rec: Any,
 
     The block used to print each record's own stored ``efficiency`` /
     ``efficiency_shaft`` while every other section of the document states the
-    same two quantities through ``shaft_view`` — so the L155 rated duty carried
+    same two quantities through ``shaft_view`` — so the reference motor rated duty carried
     97.86 % / 97.71 % in section 5 and 97.77 % / 97.61 % on page 1, in section 3
     and in section 4, under identical labels.  One balance, everywhere.
     """
@@ -14181,7 +14181,7 @@ def pwm_duty_text(col: Dict[str, Any], sec: Optional[Dict[str, int]] = None,
 
     A2-2 (second button audit, 2026-09-16).  Section 5 used to print every
     duty's table under its own ``Duty '…'`` heading and then, in one trailing
-    loop, every duty's prose: on the L180 gen the rated duty's three paragraphs
+    loop, every duty's prose: on the reference generator the rated duty's three paragraphs
     sat under the heading "Duty 'peak 1x9 mm'", so a client reading the peak
     block read the rated conclusions first.  The prose is per-duty, so it is
     built per duty and the renderers put it where its table is.
@@ -14307,7 +14307,7 @@ def _thermal_page(st, th, cp, map_duty: Optional[str] = None,
     # user then asked for found the real one, and it was not a reporting
     # question at all: the field-view payload the thermal solve reads took
     # `P_cu_total_solve_W`, the coupled solve's 2-D integral, which is the
-    # ACTIVE LENGTH only.  The end windings — 542.7 W of the Ø200's 3,443.1 W,
+    # ACTIVE LENGTH only.  The end windings — 542.7 W of the large-format machine's 3,443.1 W,
     # 18.7 % — never reached the temperature field.  Fixed at source in
     # `routes/simulation.py` (the payload now takes the `P_cu_W` series, which
     # carries k_end); a thermal result solved before that fix still shows the
@@ -15812,7 +15812,7 @@ MODES_CAPTION = (
 
 def modes_heading(res: Optional[Dict[str, Any]]) -> str:
     """Which body the modes belong to — the fixed 'stator' heading was wrong
-    for a rotor solve (the live Ø200's modal result IS the rotor)."""
+    for a rotor solve (the live large-format machine's modal result IS the rotor)."""
     body = str((res or {}).get("body") or "").lower()
     return {"rotor": "Rotor ring modes", "stator": MODES_HEADING}.get(
         body, "Ring modes")
@@ -15863,7 +15863,7 @@ def excitation_lines(rpm: Any, slots: Any, f_switch_hz: Any,
     mechanical rotation).  Same names and same arithmetic as
     ``simulation.mechanical.modal.excitation_orders``, rebuilt here because the
     stored answer's carrier is the one the SERVER happened to hold when the
-    modal step ran, not the duty's own: the L155's rated duty was solved while
+    modal step ran, not the duty's own: the reference motor's rated duty was solved while
     a Ø85 machine was loaded and every one of its twelve modes came out judged
     against that machine's 48 kHz carrier (reviewer 2026-09-14, A1).  A mode is
     a property of the rotor, the carrier is a property of the duty, and the
@@ -16774,7 +16774,7 @@ def _mech_page(st, me, map_duty: Optional[str] = None,
 
     # ── rotordynamics ───────────────────────────────────────────────────────
     # The heading, the table, the verdict and the Campbell diagram travel as
-    # ONE block: on the live Ø200 the diagram alone was pushed onto an
+    # ONE block: on the live large-format machine the diagram alone was pushed onto an
     # otherwise empty page 7 (2026-09-08).
     blk: list = [_para("Critical speeds", st["h2"])]
     crit_entry = me.get("critical_speeds")
@@ -17238,7 +17238,7 @@ def dc_link_above_nominal_text(cols: Optional[List[Dict[str, Any]]] = None,
     """WHY a duty was solved above the pack's nominal link — ``""`` when none
     was (2026-09-16).
 
-    The L180 gen 'peak' duty is billed on the pack's TOP OF CHARGE, 1,049.8 V,
+    The reference generator 'peak' duty is billed on the pack's TOP OF CHARGE, 1,049.8 V,
     while its sister duty runs on the 799.2 V nominal, and no page said why the
     two differ.  The reason is arithmetic the record carries: at the fundamental
     this duty needs, the nominal link would have to be modulated past the
@@ -17366,7 +17366,7 @@ def _kv_duty_cell(c: Dict[str, Any], kv_card: Any, grade: Optional[str]) -> str:
 
 #: Two duties of ONE build may not disagree about its mass by more than this.
 #: Asked for as half a per cent (2026-09-14) — but the defect that prompted the
-#: rule is 0.37 % (27.457 against 27.559 kg on the L155), which half a per cent
+#: rule is 0.37 % (27.457 against 27.559 kg on the reference motor), which half a per cent
 #: would have let through.  A tenth is what the gate is, and it is still 25×
 #: the gram of rounding two mass tables can legitimately differ by.
 MASS_DUTY_SPREAD_PCT = 0.1
@@ -17397,7 +17397,7 @@ def mass_consistency(cols: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     ``None`` when they agree (or when fewer than two carry a mass).  One build
     has one mass; two columns printing 27.457 and 27.559 kg are not two designs
     but one design solved twice with different end-winding factors — 1.287 and
-    1.355 on the L155 (user's own data defect, 2026-09-14).  The report must
+    1.355 on the reference motor (user's own data defect, 2026-09-14).  The report must
     not print both and say nothing, so this is what the flagged row, the cover
     line and the amber warning all read from.
     """
@@ -17466,7 +17466,7 @@ def _mass_cause_text(got: List[Tuple[str, float, Any, Dict[str, Any]]],
     The sentence used to blame the end-winding factor unconditionally — "k_end
     1.355 / 1.355 — the duties were solved with different end-winding factors"
     — while printing two factors that are the same number, and sent the reader
-    to re-run for a cause that was not there.  On the L155 the real cause is in
+    to re-run for a cause that was not there.  On the reference motor the real cause is in
     the mass table two pages earlier: the 0.883 kg shaft is carried as a
     REFERENCE part (customer-supplied) in the run one duty was saved from and
     counted in the other's.  The factors are compared first, the part states
@@ -17613,7 +17613,7 @@ def em_compare_rows(cols: List[Dict[str, Any]], batt: Dict[str, Any]
             else "Phase (Y) / line (Δ) current [A rms]"),
       lambda c: _e(c, "I_phase_rms_A") or c["d"].get("current_arms"), 1)
     # …AND HOW CLOSE THAT CURRENT IS TO THE ONE THE DUTY ASKED FOR (BL-2).  A
-    # voltage-fed run solves for a current; the rated duty of the L155 settled
+    # voltage-fed run solves for a current; the rated duty of the reference motor settled
     # 3.16 % under its setpoint and no page of the document said so.
     if any(duty_point_error(c) for c in cols):
         rows.append(["Operating point vs the duty's setpoint"]
@@ -18470,7 +18470,7 @@ def coupled_temps_settled(rec: Optional[Dict[str, Any]]) -> Optional[bool]:
     operating point, so a run that settled its temperatures perfectly and then
     stopped because the bridge ran out of voltage stores ``converged: false``.
     Printing that as "NOT converged" beside residuals of 0.15 K against ± 2 K
-    is a contradiction the reader has to resolve for himself (L180 gen 'rated',
+    is a contradiction the reader has to resolve for himself (reference generator 'rated',
     2026-09-16), so every sentence about the loop asks this first.
     """
     if not isinstance(rec, dict):
@@ -18521,7 +18521,7 @@ def coupled_refusal_reason(rec: Optional[Dict[str, Any]]) -> Tuple[Any, str]:
     """``(pass number, reason)`` of a coupled run whose PASS was refused.
 
     The record's ``warning_code`` first; records written before it existed
-    (2026-09-15 and earlier — the L180 gen duties among them) are read from the
+    (2026-09-15 and earlier — the reference generator duties among them) are read from the
     refusal sentence itself, which is the route's own wording and names both.
     ``(None, "")`` when the loop simply ran out of iterations.
 
@@ -18529,7 +18529,7 @@ def coupled_refusal_reason(rec: Optional[Dict[str, Any]]) -> Tuple[Any, str]:
     route says so by name.  A point held at the modulation ceiling is NOT a
     refusal — every pass of it solved — and it used to be reported as
     "pass 5 refused" because the reason was inferred from the run count
-    (L180 gen 'rated', 2026-09-16): :func:`coupled_modulation_limit` is what
+    (reference generator 'rated', 2026-09-16): :func:`coupled_modulation_limit` is what
     answers for that state now.
     """
     if not isinstance(rec, dict):
@@ -19085,7 +19085,7 @@ def coupled_warning_words(rec: Optional[Dict[str, Any]],
         if runs and pct is not None:
             # …AND ONLY WHEN THEY DID (2026-09-16).  The route writes "the
             # temperatures settled but the operating point did not" whenever
-            # the point is the thing it was regulating, and on the L180 gen
+            # the point is the thing it was regulating, and on the reference generator
             # 'peak' duty it wrote that over residuals of 8.92 K, 15.08 K and
             # 12.9 K against ± 2 K and ± 5 K — three rows above, in the same
             # table.  The residuals decide which sentence this is.
@@ -19113,7 +19113,7 @@ def converged_words(rec: Optional[Dict[str, Any]],
     """The "Converged" cell — ``"yes"``, a runaway, or WHY it is not yes.
 
     A bare "no" under a table of temperatures says nothing a client can act on
-    (reviewer 2026-09-15): the L180 'rated' duty stopped because the bridge
+    (reviewer 2026-09-15): the reference generator 'rated' duty stopped because the bridge
     could not build a bigger fundamental on its link, and that is the sentence,
     not "no".
 
@@ -19319,7 +19319,7 @@ def coupled_compare_rows(cols: List[Dict[str, Any]]
         if runs is None:
             return src
         # …AND "converged" ONLY WHEN IT CONVERGED (2026-09-16).  A second pass
-        # feeds the seat back; it does not make the feedback settle.  The L180
+        # feeds the seat back; it does not make the feedback settle.  The reference generator
         # gen 'peak' loop ran four passes and left the seat 12.9 K out of its
         # ± 5 K tolerance — the row two above this one — while this cell said
         # the seat "was converged and fed back".
@@ -19418,7 +19418,7 @@ def cross_duty_warnings(cols: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 #: 2026-09-16).  The runaway speed is built from the machine's no-load KV and
 #: the pack minimum — neither is a duty's — and it is checked against the
 #: FASTEST duty of the configuration, so the identical row
-#: (17,985.2 rpm · 22,900 rpm · −21.5 %) printed under both L180 gen duties,
+#: (17,985.2 rpm · 22,900 rpm · −21.5 %) printed under both reference generator duties,
 #: each duty-tagged.  A reader comparing the two could only conclude that the
 #: 20,900 rpm duty had been judged at its own speed, which it had not.
 CONFIG_LEVEL_RULES: Tuple[str, ...] = ("runaway_speed",)

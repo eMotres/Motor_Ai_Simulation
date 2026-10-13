@@ -38,7 +38,7 @@ A = "alice@example.com"
 B = "bob@example.com"
 ACCEPT = "application/json, text/event-stream"
 _REPO = Path(__file__).resolve().parents[1]
-_PICK = ("CILN28", "CIANO14 40_12")
+_PICK = ("100 mm · 24s-28p mid-torque", "CIANO14 40_12")
 ALL = ["catalog:read", "machines:read", "designs:write", "simulate"]
 REQ = {"torque_nm": 0.5, "speed_rpm": 10000, "dc_bus_v": 48, "cooling": "air",
        "duty": "S1"}
@@ -68,7 +68,7 @@ def env(tmp_path, monkeypatch):
     live.mkdir()
     shutil.copy2(Path(str(CFG.DEFAULT_CONFIG_PATH)), live / "motor_config.yaml")
     (live / ".family_context.json").write_text(
-        json.dumps({"die": "CILN28", "config": "G2-L40", "duty": "peak"}), encoding="utf-8")
+        json.dumps({"die": "100 mm · 24s-28p mid-torque", "config": "L15", "duty": "peak"}), encoding="utf-8")
     monkeypatch.setattr(CFG, "DEFAULT_CONFIG_PATH", live / "motor_config.yaml")
     from motor_ai_sim.routes import family as fam
     dd = live / "dies"
@@ -78,7 +78,7 @@ def env(tmp_path, monkeypatch):
     for e in (A, B):
         U.create_user(e, "pw-" + e, role="user")
     U.set_motor_grants(A, all_motors=False, dies=["CIANO14 40_12"])
-    U.set_motor_grants(B, all_motors=False, dies=["CILN28"])
+    U.set_motor_grants(B, all_motors=False, dies=["100 mm · 24s-28p mid-torque"])
     K.reset_quotas()
     K._touched.clear()
     J.reset_queue(J.InProcessQueue(workers=2, per_user=0))

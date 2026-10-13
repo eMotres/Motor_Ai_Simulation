@@ -88,7 +88,7 @@ catalog_sources:
     url: "https://www.skf.com/group/products/rolling-bearings/ball-bearings/deep-groove-ball-bearings/productid-W%20638%2F2-2Z"
     read: "2026-09-28"
   task_ac_constants:
-    doc: "Angular-contact friction constants supplied with the Ø200 design task (SKF table 2 row, not yet checked against the table)"
+    doc: "Angular-contact friction constants supplied with a large-format design task (SKF table 2 row, not yet checked against the table)"
   skf_greases:
     doc: "SKF lubricant datasheets (LGMT 2, LGHP 2, LGLT 2; MT47 standard fill)"
     url: "https://www.skf.com/group/products/lubrication-solutions/lubricants"
@@ -487,7 +487,7 @@ bearings:
       SKF-published specifically for W 638/2-2Z.
 
   # ────────────────────────────────────────────────────────────────────────
-  # HOLLOW-SHAFT 200 mm CANDIDATES, 20 000 - 23 000 rpm
+  # HOLLOW-SHAFT LARGE-FORMAT CANDIDATES, high speed
   # Shaft bore 43, rotor seat 53 -> a 50 or 55 mm bearing bore.
   # SKF super-precision, hybrid (Si3N4 balls), 15 deg contact angle, open,
   # grease LGLT 2 or oil-air.  All five share the same friction constants:

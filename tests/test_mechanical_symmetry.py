@@ -591,7 +591,13 @@ def _g2_polys():
 
     from motor_ai_sim.cadquery_geometry import CadQueryMotor
 
-    die_dir = Path(__file__).resolve().parents[1] / "config" / "dies" / G2_DIE
+    from motor_ai_sim.private_data import ENV_VAR, private_path
+
+    # The die is private reference data (not in the public repository).
+    die_dir = private_path("config", "dies", G2_DIE)
+    if die_dir is None:
+        pytest.skip(f"the {G2_DIE} die is private data; set {ENV_VAR} to the "
+                    "private data checkout to run the G2 cross-section tests")
     geo = dict(yaml.safe_load(
         (die_dir / "die.yaml").read_text(encoding="utf-8"))["geometry"])
     geo.update(yaml.safe_load(

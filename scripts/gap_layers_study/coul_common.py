@@ -11,6 +11,8 @@ import time
 
 import yaml
 
+# "l155" is a large-format machine whose inputs are private data: point --inputs at a
+# checkout of the private repository (scripts/gap_layers_study/inputs/l155).
 MACHINES = {"d40": ("d40", "L12"), "l13": ("l13", "L13"), "l155": ("l155", "L155 motor")}
 DUTY_NAMES = {("d40", "rated"): "rated", ("l13", "rated"): "rated",
               ("l155", "rated"): "rated 1x9 mm"}

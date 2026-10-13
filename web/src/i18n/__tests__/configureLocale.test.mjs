@@ -33,6 +33,8 @@ const get = (o, key) => key.split('.').reduce((a, k) => (a == null ? a : a[k]), 
 const ALLOWED = new Set([
   // technologies / standards / chemistries
   'PWM', 'SVPWM', 'MOSFET', 'Si', 'SiC', 'GaN', 'AWG', 'NMC', 'LFP', 'LiFePO', 'XY', 'TS',
+  // a bearing maker's model, a loss-model author, a drawing format (named in the Electromagnetic tiles' tooltips)
+  'SKF', 'Bertotti', 'CAD',
   // units
   'mm', 'cm', 'km', 'A', 'V', 'W', 'kW', 'rpm', 'kHz', 'Hz', 'ns', 'rms', 'K', 'N', 'm', 'k', 'kg', 'Ah', 'Wb', 'mWb', 'mH', 'L', 'min', 's',
   // an insulation class letter (class F)

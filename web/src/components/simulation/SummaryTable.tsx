@@ -6,23 +6,23 @@
  * /fem_transient → summary, so every value here is a REAL FEM result
  * (not analytical).
  */
-import { sixPhaseCells, type SixPhaseResult } from './sixPhase';
+import type { SixPhaseResult } from './sixPhase';
 import React from 'react';
 import { Box, Button, Chip, Paper, Typography, Tooltip } from '@mui/material';
 import AddToCompareButton from '../compare/AddToCompareButton';
 import { geoSignature } from '../common/geoSig';
 import { currentMatJson } from '../../lib/apiAuth';
 import { assignmentSignature } from '../../lib/dutyMaterials';
-import { pickCable } from '../../lib/cableTable';
 import { fetchBearingLosses } from '../../lib/machineBearings';
 import type { BearingLosses } from '../../lib/machineBearings';
 import { useMotorStore } from '../../stores/motorStore';
 import { couplingLine, couplingTooltip, coupledStateLine,
          coupledStateTip, continuousRatingLine,
-         continuousRatingTip, s1ResultsAtLine, controllerTerm } from './coupledApi';
+         continuousRatingTip, s1ResultsAtLine } from './coupledApi';
 import type { CouplingBlock } from './coupledApi';
 import SineVsInverterTable from './SineVsInverterTable';
 import EmResultTiles from './EmResultTiles';
+import type { EmMech } from '../../lib/emResultTiles';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 
@@ -443,68 +443,6 @@ interface Props {
   liveOp?: { current?: number; gamma?: number; connection?: string; rpm?: number };
 }
 
-/** "  stator 67.3 W (hyst 33.9 / eddy 17.6 / excess 15.8, k_f 0.92); rotor …"
- *  — the split behind the Core tile, appended to its HelpTip.  Empty string
- *  when the run predates the split, so old stored summaries still read. */
-function coreSplit(t?: TransientSummary['P_core_terms']): string {
-  const parts = Object.entries(t ?? {}).map(([half, v]) => {
-    const tot = v.hysteresis_W + v.eddy_W + v.excess_W;
-    return `${half} ${tot.toFixed(1)} W (hyst ${v.hysteresis_W.toFixed(1)}`
-         + ` / eddy ${v.eddy_W.toFixed(1)} / excess ${v.excess_W.toFixed(1)},`
-         + ` k_f ${v.k_f.toFixed(3)})`;
-  });
-  return parts.length ? `  Split: ${parts.join('; ')}.` : '';
-}
-
-/** True when any half of this run went through the measured P(B, f) surface.
- *  The tile must not describe the model it did not use. */
-function usesSurface(t?: TransientSummary['P_core_terms']): boolean {
-  return Object.values(t ?? {}).some(v => v.model === 'measured_surface');
-}
-
-/** The Core tile's HelpTip — one text per loss model, because the two differ in
- *  what they claim: the surface path IS the manufacturer's measurement inside
- *  the measured (B, f) envelope, the Bertotti path is three coefficients fitted
- *  to it.  Both carry the same stated under-reads (alternating-axis basis,
- *  no manufacturing degradation, no correction coefficient anywhere). */
-function coreTooltip(t?: TransientSummary['P_core_terms']): string {
-  const head = usesSurface(t)
-    ? 'Core loss in stator + rotor steel from the manufacturer\'s MEASURED '
-      + 'P(B, f) table, interpolated directly and summed over the harmonics of '
-      + 'each element\'s flux locus — no B² law, so the saturation upturn is '
-      + 'followed.  Past the table\'s edge it blends into the fitted Bertotti '
-      + 'extrapolation; the run log says how much of the answer came from '
-      + 'there.  The steel carries B/k_f over k_f of the section (lamination).  '
-      + 'In the split below only eddy is separately computed (from the true '
-      + 'dB/dt series) — hysteresis/excess are the fit\'s proportion of the '
-      + 'measured total.'
-    : 'Bertotti loss in stator + rotor steel — kh·f·B² + kc·(f·B)² + '
-      + 'ke·(f·B)^1.5, period mean.  Coefficients are fitted to the material\'s '
-      + 'measured loss curves at every frequency; the steel carries B/k_f over '
-      + 'k_f of the section (lamination).';
-  return head + coreSplit(t)
-       + '  Alternating-axis basis: a rotating B locus (tooth roots) reads low, '
-       + 'and manufacturing degradation (punching, stacking, welding — '
-       + 'typically 1.5-2×) is NOT included.  This is the raw calculation, with '
-       + 'no correction coefficient.';
-}
-
-/** The sentence the Solid (magnets) tile appends when the magnets are SLICED
- *  axially.  Both eddy routes are 2-D (axially infinite magnet), so the slicing
- *  is a correction applied on top — and it is a MODEL, which the text says. */
-function magnetSegNote(m?: TransientSummary['magnet_segmentation']): string {
-  const f = m?.factor;
-  if (f == null || !(m?.slice_mm)) return '';
-  if (f >= 0.999) return '';
-  return `  Magnets are SLICED axially: ${m.slice_mm} mm slices of a `
-       + `${m.stack_mm} mm stack, eddy loop width ${m.width_mm} mm → the 2-D magnet `
-       + `eddy loss (which assumes an axially infinite magnet) is multiplied by `
-       + `${f.toPrecision(3)}. Russell-Norsworthy resistance-limited end effect, `
-       + `normalised to the solid stack so a solid magnet is unchanged. This is a `
-       + `MODEL pending 3-D validation and a LOWER bracket — inter-slice coupling `
-       + `and the return current's own reaction field are not in it.`;
-}
-
 /** Short label of a run's torque method (its own stored label). */
 function torqueMethodShort(m: string): string {
   if (m === 'coulomb_virtual_work') return 'Torque: Coulomb';
@@ -721,11 +659,6 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const kTmeas = kTraw != null && kTraw > 0.5 && kTraw <= 1.2 ? kTraw : null;
   const kTq = kTmeas ?? k3d;
   const ktBasis = kTmeas != null ? '3-D' : '3-D flux';
-  const ktBasisTip = !(apply3d && k3d != null) ? ''
-    : kTmeas != null
-      ? `3-D corrected with the measured torque factor k_T = ${kTmeas.toFixed(4)}`
-        + (summary.end3d?.k_T_inherited ? ' (measured on an earlier geometry of this machine)' : '') + '. '
-      : `3-D with the flux factor k_flux = ${(k3d ?? 1).toFixed(4)} — k_T not measured for this machine. `;
   const s = (() => {
     if (!apply3d || k3d == null) return summary;
     const k = k3d;
@@ -803,15 +736,6 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
     } as TransientSummary;
   })();
   const fmt = (n: number, d = 2) => Number(n).toFixed(d);
-  const fmtK = (n: number) => n >= 1000 ? `${fmt(n / 1000, 2)}k` : fmt(n, 0);
-  // The mechanical cells read an OPTIONAL analytic payload, so their tooltips
-  // need a formatter that survives a missing field instead of writing "NaN"
-  // into the middle of a sentence.
-  const fmtN = (n: number | null | undefined, d = 2) =>
-    (n == null || !Number.isFinite(Number(n))) ? '—' : Number(n).toFixed(d);
-  // Share of the total loss, for the heat-split cells' unit line ("W · 71 %").
-  const pctOfLoss = (n: number, tot: number) =>
-    tot > 0 ? `${fmt(100 * n / tot, 0)} %` : '—';
 
   // Copper ρ(T) ratio for the R@25°C view (0.393 %/°C, referenced to 20 °C).
   const solveT = s.coil_temp_C ?? null;
@@ -866,92 +790,21 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   const pWind = fromRun ? s.P_windage_W : mech?.P_windage_W;
   const pExtra = fromRun ? Number(s.P_mech_extra_W ?? 0)
                : (mech?.has_bearings ? Number(mech?.P_mech_extra_W ?? 0) : null);
-  const lossAll = pExtra != null ? s.P_loss_total_W + pExtra : null;
   const brgTempC = fromRun ? s.bearing_temp_c : mech?.temp_c;
   const brgWind = fromRun ? runMech?.windage : mech?.windage;
-  const brgMoment = fromRun ? runMech?.M_bearings_Nm : mech?.M_bearings_Nm;
-  // ONE energy balance, three tiles (user 2026-09-09: "need to add electric
-  // power next to Mech power: mechanical + all losses for a motor,
-  // mechanical − all losses for a generator"; "all losses
-  // are summed, efficiency is sought at the shaft").  The mechanical losses sit BETWEEN the
-  // rotor and the coupling, so
-  //   shaft power  = rotor T·ω − (bearings + windage)   motoring
-  //                = rotor T·ω + (bearings + windage)   generating (what the
-  //                                                     coupling must supply)
-  //   elec power   = shaft + ALL losses  (motor)  = rotor T·ω + EM losses
-  //                = shaft − ALL losses  (generator) = rotor T·ω − EM losses
-  //   efficiency   = shaft / elec (motor);  elec / shaft (generator)
-  // — exactly `efficiency_shaft` of routes/simulation.py, computed HERE from
-  // the numbers on the card so the three tiles can never disagree (under the
-  // 3D toggle the rotor power has moved while the stored value has not).  The
-  // direction comes from the run's own `op_mode`: generator numbers are quoted
-  // POSITIVE on this card, so the sign of P_mech says nothing.  No bearings on
-  // the machine = the mechanical term is UNKNOWN, not zero: the tiles then
-  // fall back to the rotor power and the electromagnetic η, and say so.
-  const pMechAbs = Math.abs(s.P_mech_W || 0);
-  const xMech = (pExtra != null && pMechAbs > 0) ? pExtra / pMechAbs : null;
-  const genMode = s.op_mode === 'generator';
-  const mechKnown = pExtra != null;
-  const pShaft = mechKnown
-    ? (genMode ? pMechAbs + pExtra : Math.max(0, pMechAbs - pExtra))
-    : pMechAbs;
-  const pElec = genMode ? Math.max(0, pMechAbs - s.P_loss_total_W)
-                        : pMechAbs + s.P_loss_total_W;
-  const etaEm = pMechAbs > 0
-    ? (genMode ? Math.max(0, pMechAbs - s.P_loss_total_W) / pMechAbs
-               : pMechAbs / (pMechAbs + s.P_loss_total_W))
-    : s.efficiency;
-  const etaShaft = !mechKnown ? null
-    : (genMode ? (pShaft > 0 ? pElec / pShaft : 0)
-               : (pElec > 0 ? pShaft / pElec : 0));
-  const etaOne = etaShaft ?? etaEm;
-  const accentOne: 'green' | 'amber' | 'red' = etaOne >= 0.92 ? 'green'
-                                             : etaOne >= 0.85 ? 'amber' : 'red';
   const brgNames = fromRun ? (runMech?.cards ?? [])
                            : (mech?.bearings ?? []).map(b => b.bearing);
   const brgLabel = brgNames.length === 2 && brgNames[0] === brgNames[1]
     ? `2 × ${brgNames[0]}` : brgNames.join(' / ');
-  const NO_BRG = 'No bearings on this machine, so the mechanical loss is UNKNOWN '
-    + '— not zero. Assign them in Mechanical → Shaft & bearings and this card '
-    + 'fills in.'
-    + (pWind != null ? `  (Windage alone, which needs no bearings, would be `
-                       + `${fmtN(pWind, 2)} W at this speed.)` : '');
-  // WHERE the bearing temperature came from — M_rr goes as ν^0.6, so a grease
-  // quoted at 40 °C running at 90 °C is a factor of two on the rolling term.
-  const brgTempFrom = ({ thermal: 'from Thermal', coupled: 'converged by the '
-    + 'coupled run', assigned: 'set on this machine',
-    default: 'ASSUMED — nothing on this machine says' } as Record<string, string>)
-    [s.bearing_temp_source ?? ''] ?? '';
-  const MECH_SRC = fromRun
-    ? ` SKF analytic${brgTempC != null ? `, bearing at ${fmtN(brgTempC, 0)} °C`
-        + `${brgTempFrom ? ` ${brgTempFrom}` : ''}` : ''} — stored WITH this run, `
-      + 'so the datasheet, the report and the coupled loop quote the same watts. '
-      + 'NOT FEM, and not part of the solved efficiency beside it.'
-    : ' Analytic SKF frictional-moment model + windage, ESTIMATED IN THE BROWSER '
-      + 'at this card\'s speed and current bearing assignment — this run predates '
-      + 'the server-side mechanical block (2026-09-08), so re-run to store it '
-      + 'with the result. NOT FEM, and not part of the solved efficiency beside '
-      + 'it.';
-  // Narrowed local for the demag cell: TS cannot narrow s.demag through the
-  // optional chains inside JSX, and the headline falls back to the Br-based
-  // loss for pre-energy-coefficient payloads.
-  const dm = s.demag ?? null;
-  // Headline = the TORQUE criterion (user's call 2026-08-23): loss_pct is the
-  // volume-weighted Br deficit, the first-order bound on the torque/EMF drop
-  // (T ∝ ∫Br·dA) — verified against an exact two-solve measurement on the
-  // 85 mm (bound 0.55 % vs measured 0.10 %, correctly conservative).  The
-  // energy/(BH) view and the effective grade stay in the tooltip.
-  const dmLoss = dm ? dm.loss_pct : null;
-  // Displayed as the KEPT coefficient (user's call: "should be 99.74, not
-  // 0.26") — the retention reads naturally as a health figure: 100 % = intact.
-  const dmKept = dmLoss != null ? 100 - dmLoss : null;
-  // The worst element as the flagged corner diagnostic (legacy payloads carry
-  // only the value, as br_worst_pct).
-  const dmCorner: BrCorner | null = dm?.br_corner
-    ?? (dm?.br_worst_pct != null ? { flag: 'corner', br_pct: dm.br_worst_pct } : null);
-  const accentRipple: 'green' | 'amber' | 'red' = s.T_ripple_pct <= 5 ? 'green'
-                                                : s.T_ripple_pct <= 15 ? 'amber'
-                                                : 'red';
+  // ONE energy balance, at the SHAFT (lib/shaftBalance.ts = report.shaft_view), built inside the
+  // tile panel from this block: POWER = rotor T·ω ∓ (bearings + windage), TOTAL LOSS = every loss,
+  // EFFICIENCY = the shaft's.  `extra_W: null` = the machine has no bearings, so the friction is
+  // UNKNOWN (not zero) and the tiles say so.  The block is analytic (SKF + windage), never FEM.
+  const mechView: EmMech = {
+    bearings_W: pBrg, windage_W: pWind ?? null, extra_W: pExtra,
+    cards: brgLabel || null, temp_C: brgTempC ?? null,
+    gap_W: brgWind?.P_gap_W ?? null, faces_W: brgWind?.P_faces_W ?? null,
+  };
 
   // Stale-operating-point guard: these numbers were computed at the summary's own
   // current / γ.  If the inputs have since changed (the optimizer already uses the
@@ -1046,14 +899,6 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
   })();
   const matStale = matDiffs.length > 0;
   const stale = opStale || geoStale || matStale;
-  // Ld/Lq of this run are the differential (small-signal) values — false on a
-  // run solved before 2026-10-11, whose values are the frozen-permeability secant.
-  const diffLdq = (s.ldq_method ?? '').startsWith('differential') && !s.ldq_tangent_clamped;
-  const LDQ_SCOPE = ' 2-D magnetostatic, per winding: no end-winding inductance, no 3-D correction, no frequency-dependent eddy effect.';
-  // Terminal connection this run was SOLVED with (the summary stamps it) —
-  // the line cells below change meaning with it, not just their factor.
-  const isDelta = String(s.star_delta ?? 'star').toLowerCase().startsWith('d');
-
   return (
     <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', p: 2,
       display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -1321,589 +1166,17 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         </Box>
       ) : null}
 
-      {/* ── THE RESULT TILES — Configure's panel, fed from this run ──────────
-          Owner 2026-10-12: «Сделай точно такую же панель в Electromagnetic» —
-          the compact tile block of Configure, at the top of the results, over
-          the SAME run summary the rows below read.  A tile whose value this
-          run lacks is omitted (never an empty tile, never a zero); the
-          detailed rows below are unchanged. */}
+      {/* ── THE RESULT TILES — the ONE results panel of this tab ─────────────
+          Configure's compact tile block, fed from this run (owner 2026-10-12).
+          The old card of small cells that used to sit below it is GONE (owner
+          2026-10-13: two panels showed the same results one above the other);
+          everything it carried lives in these tiles, down to the part-mass row.
+          A tile whose value this run lacks is omitted (never an empty tile,
+          never a zero).  ONE efficiency, at the shaft: the bearings + windage
+          block is passed in so POWER, TOTAL LOSS and EFFICIENCY are the shaft's. */}
       <Box sx={{ opacity: stale ? 0.55 : 1 }}>
-        <EmResultTiles summary={s} rf={rf} k3dBasis={apply3d && k3d != null ? ktBasis : null}/>
+        <EmResultTiles summary={s} rf={rf} k3dBasis={apply3d && k3d != null ? ktBasis : null} mech={mechView}/>
       </Box>
-
-      {/* ── Row 1 — torque, power, mass, efficiency, ripple ───────────────── */}
-      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        <Cell label={apply3d && k3d != null ? `Torque T_em · ${ktBasis}` : 'Torque T_em'}
-          value={fmt(s.T_em_avg_Nm, Math.abs(s.T_em_avg_Nm) < 0.1 ? 4 : 2)}
-          unit="N·m" accent="blue"
-          tooltip={ktBasisTip + "Average electromagnetic torque over one electrical period."}/>
-        <Cell label={tx('mechPower')} value={`${fmt(pShaft / 1000, 3)}`} unit="kW"
-          accent="blue"
-          tooltip={mechKnown
-            ? `At the COUPLING — ${genMode ? 'what the shaft must supply' : 'what leaves the shaft'}: `
-              + `rotor T·ω ${fmt(pMechAbs / 1000, 3)} kW ${genMode ? 'plus' : 'minus'} `
-              + `${fmtN(pExtra, 1)} W of bearing friction and windage (${brgLabel || 'the assigned pair'}), `
-              + `which sit between the rotor and the coupling.` + MECH_SRC
-            : `Rotor power T·ω from the energy balance. No bearings on this machine, so the `
-              + `shaft's own friction is UNKNOWN, not zero — assign them in Mechanical → `
-              + `Shaft & bearings and this becomes the coupling's number.`}/>
-        <Cell label={tx('elecPower')} value={`${fmt(pElec / 1000, 3)}`} unit="kW"
-          accent="blue"
-          tooltip={(genMode
-            ? `At the TERMINALS (output) = mechanical power ${fmt(pShaft / 1000, 3)} kW − all losses `
-            : `At the TERMINALS (input) = mechanical power ${fmt(pShaft / 1000, 3)} kW + all losses `)
-            + `${fmtN(lossAll ?? s.P_loss_total_W, 1)} W (electromagnetic ${fmtN(s.P_loss_total_W, 1)}`
-            + (mechKnown ? ` + bearings and windage ${fmtN(pExtra, 1)}` : '') + ` W). `
-            + `Equivalently rotor T·ω ${genMode ? '−' : '+'} the electromagnetic losses`
-            + (s.P_elec_in_solved_W != null
-                ? `; the solved circuit's own terminal power ${fmt(Number(s.P_elec_in_solved_W) / 1000, 3)} kW `
-                  + `carries only the losses inside the field solve and is a balance diagnostic, not this number`
-                : '') + '.'}/>
-        {/* 3 decimals: a 30 mm machine weighs ~0.05 kg, so 2 decimals showed a
-            single significant digit and hid every change during optimization.
-            Matches the per-component breakdown below, which already uses 3. */}
-        {/* ONE mass (user 2026-09-10: "we only have one mass") — the total,
-            because it is what every N·m/kg and kW/kg in this app divides by.
-            The electromagnetic subset moved into the tooltip: it is no longer
-            the same quantity commercial FEM prints under "active mass" either, since
-            the band was folded into it. */}
-        <Cell label={tx('mass')}
-          value={fmt(s.mass_total_kg ?? s.mass_active_kg, 3)} unit="kg"
-          tooltip={"IN: stator iron + rotor iron (× lamination k_f) + copper (× k_end) + magnets "
-                 + "+ retaining band + shaft. OUT: housing, bearings. CAD sections × stack × the "
-                 + "assigned material's density; this is the divisor of every N·m/kg and kW/kg here"
-                 + `${s.mass_active_kg ? `. Electromagnetically active part alone: ${fmt(s.mass_active_kg, 3)} kg` : ''}.`}/>
-        {/* ONE efficiency, at the shaft (user 2026-09-09).  The electromagnetic
-            figure the optimizer and Compare use is in the tooltip, not a
-            second tile. */}
-        <Cell label={tx('efficiency')}
-          value={fmt(etaOne * 100, 2) + (s.solid_loss_not_solved || !mechKnown ? '*' : '')} unit="%"
-          accent={s.solid_loss_not_solved || !mechKnown ? 'amber' : accentOne}
-          tooltip={(s.solid_loss_not_solved
-            ? '* PARTIAL: magnet/shaft eddy losses are not solvable on an imposed-voltage '
-              + 'run yet and are missing from the denominator — this η is optimistic and '
-              + 'must not be compared against a current-drive run. '
-            : '')
-            + (mechKnown
-              ? `${genMode ? 'Electrical out / mechanical in, both at the SHAFT' : 'Shaft out / electrical in'}: `
-                + `${fmt(pShaft / 1000, 3)} and ${fmt(pElec / 1000, 3)} kW — what a dynamometer reads. `
-                + `ALL losses are in it: electromagnetic ${fmtN(s.P_loss_total_W, 1)} W `
-                + `+ bearings and windage ${fmtN(pExtra, 1)} W (${brgLabel || 'the assigned pair'}, `
-                + `${fmtN((xMech ?? 0) * 100, 2)} % of the rotor power). `
-                + `Electromagnetic only it would read ${fmt(etaEm * 100, 2)} % — the figure the `
-                + `optimizer's metric and the Compare row use.` + MECH_SRC
-              : `* ELECTROMAGNETIC only: rotor T·ω against T·ω ${genMode ? '−' : '+'} every solved loss `
-                + `(copper, iron, eddy). ${NO_BRG} The shaft efficiency is LOWER than this by an amount `
-                + `nobody can see until they are.`)}/>
-        {/* THE CONTROLLER'S SECOND EFFICIENCY (Stage 2, drive='inverter' —
-            2026-09-22): a SECOND, NAMED tile beside the shaft's, never folded
-            into it — inverter η × shaft η is a DIFFERENT quantity from either
-            one alone.  Present exactly when this run carries a controller
-            block; absent on every sine / ideal-PWM run, which is what
-            "nothing else changed" looks like here. */}
-        {s.coupling?.controller && (
-          <Cell label={tx('wallToShaft')}
-            value={fmt((s.coupling.controller.efficiency?.wall_to_shaft ?? 0) * 100, 2)}
-            unit="%"
-            accent={s.coupling.controller.limits_verdict === 'fail' ? 'red' : 'blue'}
-            tooltip={'Inverter efficiency × shaft efficiency — the power stage on '
-              + `top of the machine's ONE shaft efficiency beside it. `
-              + `${controllerTerm(s.coupling.controller) ?? ''}`
-              + (s.coupling.controller.device ? ` Device ${s.coupling.controller.device}.` : '')
-              + (s.coupling.controller.efficiency?.inverter != null
-                ? ` Inverter alone: ${fmt(s.coupling.controller.efficiency.inverter * 100, 2)} %.`
-                : '')
-              + (s.coupling.controller.limits_verdict === 'fail'
-                ? ' At least one of the datasheet limits FAILED on this run — see the Controller tab.'
-                : '')}/>
-        )}
-        <Cell label={tx('tRipple')} value={fmt(s.T_ripple_pct, 1)} unit="%"
-          accent={accentRipple}
-          tooltip={`Torque ripple (T_max − T_min)/|T_avg| over the solved window, raw samples. `
-                   + (s.torque_method ? torqueMethodTooltip(s.torque_method) : '')}/>
-        <Cell label={tx('torqueDensity')} value={fmt(s.torque_per_mass_Nm_kg, 3)} unit="N·m/kg"
-          tooltip="T_em / total mass (EM-active + shaft) — figure of merit for motor compactness"/>
-        <Cell label={tx('powerDensity')} value={fmt(s.power_per_mass_W_kg / 1000, 3)} unit="kW/kg"
-          tooltip="P_mech / total mass (EM-active + shaft)"/>
-      </Box>
-
-      {/* ── Row 2 — losses + heat per side ────────────────────────────────── */}
-      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        <Cell label={tx('emLosses')} value={fmtK(s.P_loss_total_W)} unit="W"
-          accent="amber"
-          tooltip={"The ELECTROMAGNETIC losses — Cu + Fe (Bertotti) + magnet eddy + shaft eddy"
-                 + (s.P_sleeve_W != null ? " + sleeve eddy" : "") + " — period means. "
-                 + "Bearings and windage are their own cells to the right; All losses is the sum."}/>
-        <Cell label={tx('coreLamination')} value={fmtK(s.P_core_W)} unit="W"
-          tooltip={coreTooltip(s.P_core_terms)}/>
-        <Cell label={tx('strandedCopper')} value={fmtK(s.P_stranded_W)} unit="W"
-          tooltip={"I²R (DC) + AC eddy/proximity share in the coil windings, incl. "
-                 + "end-winding resistance (k_end) and ρ_Cu(T)"
-                 + ((s.wire_split ?? 1) > 1
-                    ? `  wire_split = ${s.wire_split}: each wire row is ${s.wire_split} `
-                      + `strips of wire_width laid side by side, 2×wire_spacing_x apart. `
-                      + `They are drawn, meshed and solved as separate conductors, so the `
-                      + `AC share is the honest loss of the narrow strips. The strips are `
-                      + `wired in SERIES — each one is its own turn, at the full branch `
-                      + `current — so the DC share carries ${s.wire_split}× the copper.`
-                    : '')
-                 + (s.cu_ac_solved_ignores_wire_split
-                    ? `  THIS STORED RUN PREDATES THE DRAWN SPLIT: its AC copper was solved `
-                      + `on the whole bar while the loss model described strips, so it is an `
-                      + `OVER-read (up to wire_split² on the width-direction term). Re-run to `
-                      + `replace it.`
-                    : '')}/>
-        {/* UNSETTLED (2026-09-07): the eddy warm-up ended at its cap with the
-            start-up transient still running, so THIS number and the efficiency
-            beside it are start-up values, not physics.  One marker + the
-            residual in the tooltip — the tile stays one tile. */}
-        {/* No ⚠ on the number (user 2026-09-09: "the exclamation mark
-            needs to go"): an unsettled eddy start-up is said in the tooltip and by
-            the amber colour, not by a mark inside the value. */}
-        <Cell label={tx('solidMagnets')}
-          value={s.solid_loss_not_solved ? '—' : fmtK(s.P_solid_W)} unit="W"
-          accent={(s.solid_loss_not_solved || s.eddy_settled === false)
-                  ? 'amber' : 'default'}
-          tooltip={s.solid_loss_not_solved
-            ? 'NOT SOLVED on this run: rotor eddy was disabled (checkbox off, or the '
-              + 'SB_VDRIVE_ROTOR_EDDY=0 hatch), so magnet and shaft eddy losses are missing '
-              + 'from this card — the efficiency beside it is optimistic by exactly those '
-              + 'watts. Voltage and PWM drives DO solve the conducting rotor now; rerun with '
-              + 'field losses on for the full picture.'
-            : ("Magnet + shaft eddy from the coupled conducting-rotor field solve "
-                 + "(with per-magnet ∫J=0 and lamination factor); the d²/12 slab estimate "
-                 + "is used only when field losses are off.")
-                 + magnetSegNote(s.magnet_segmentation)
-                 + (s.eddy_warmup_frames
-                    // "over a SETTLED window" is a CLAIM, and until 2026-09-07
-                    // it was made unconditionally off the frame count alone —
-                    // which says what the warm-up cost, not whether it worked.
-                    ? (s.eddy_settled === false
-                       ? `  ${s.eddy_warmup_frames} warm-up frame(s) were solved and `
-                         + `discarded before the reported window — and were NOT enough:`
-                       : `  Cycle mean over a SETTLED window: ${s.eddy_warmup_frames} warm-up `
-                         + `frame(s) were solved and discarded first (a probe march at θ<0 on `
-                         + `current drive; the settling-prefix periods on voltage/PWM), so no `
-                         + `σ·∂A/∂t start-up transient is averaged into it.`)
-                      + (s.demag_prepass_frames
-                         ? `  ${s.demag_prepass_frames} of them are the demag pre-pass — one `
-                           + `further period on the settled field, where the irreversible Br `
-                           + `ratchet is allowed to look (it is frozen through the warm-up, `
-                           + `whose transient is not a field the machine was ever in).`
-                         : '')
-                    : '')
-                 + (s.eddy_settled !== false && s.eddy_settled_via_accelerator
-                    ? '  Settled via accelerator jumps (warm-up prefix only; ≥ 4 periods marched after the last jump).'
-                    : '')
-                 + (s.eddy_settled === false
-                    ? `  ⚠ NOT SETTLED: `
-                      + (s.eddy_capped
-                         ? `the warm-up march ended at its cap (one electrical period) `
-                         : `the handoff was taken `)
-                      + `with the σ·∂A/∂t start-up transient still running — `
-                      + (s.eddy_settle_residual != null
-                         ? `${(s.eddy_settle_residual * 100).toFixed(1)} % of this `
-                           + `number was still decaying start-up transient at the handoff `
-                           + `(tolerance ${((s.eddy_settle_tol ?? 0.02) * 100).toFixed(1)} %). `
-                         : 'the residual could not even be measured (the march was too short). ')
-                      + `Magnet/shaft eddy watts and the efficiency are over-read by roughly `
-                      + `that much; raise steps/period or re-run without the sweep's warm seed.`
-                    : '')}/>
-        {s.P_shaft_W != null && (
-          <Cell label={tx('shaftLoss')} value={fmt(s.P_shaft_W, 1)} unit="W"
-            tooltip={"Eddy-current loss in the SHAFT over the cycle (period mean) — the solid conductor inside the rotor yoke that the slot harmonics reach. On a sleeved surface-PM machine it is the rotor's largest single heat source, and it has to leave through the shaft bore or across the gap; the Thermal tab reads it from this run. Part of P_solid_W above."} />
-        )}
-        {s.P_mag_W != null && (
-          <Cell label={tx('magnetLoss')} value={fmt(s.P_mag_W, 1)} unit="W"
-            tooltip={"Eddy-current loss in the magnets over the cycle (period mean), with the axial segmentation model applied. Heats the magnets directly — the number behind the magnet temperature on the Thermal tab. Part of P_solid_W above."} />
-        )}
-        {s.P_sleeve_W != null && (
-          <Cell label={tx('sleeveLoss')} value={fmt(s.P_sleeve_W, 4)} unit="W"
-            tooltip={"Eddy loss solved in the carbon-fibre retaining ring, inside the same coupled "
-                   + "σ·∂A/∂t system as the magnets. It is milliwatts on purpose: a hoop-wound UD "
-                   + "sleeve conducts ~3e4 S/m ALONG the fibres but only ~80 S/m ACROSS them, and "
-                   + "the 2-D induced current is AXIAL — transverse to every fibre. It is inside "
-                   + "the Solid (magnets) total and the efficiency above."}/>
-        )}
-        <Cell label={tx('lossDensity')} value={fmt(s.loss_density_W_kg, 1)} unit="W/kg"
-          tooltip="P_loss / mass — thermal stress indicator. Electromagnetic only: the bearings are not in the active mass."/>
-      </Box>
-
-      {/* ── Row 2b — heat per side + the mechanical half ─────────────────
-          Its own row (user 2026-09-08: "move it to another row, it's
-          cramped with the losses"): thirteen cells on one grid row squeezed the
-          labels to three letters. */}
-      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        {/* ── HEAT TO REMOVE, per side ─────────────────────────────────
-            Losses stay 2-D under the 3D toggle (same rule as the tiles
-            above), so these read off `s` unchanged. */}
-        {s.P_loss_stator_W != null && (
-          <Cell label={tx('statorHeat')} value={fmtK(s.P_loss_stator_W)}
-            unit={`W · ${pctOfLoss(s.P_loss_stator_W, s.P_loss_total_W)}`}
-            tooltip={"Heat the STATOR has to shed: stator iron loss "
-              + `(${fmt(s.P_core_stator_W ?? s.P_core_W, 1)} W) + all copper `
-              + `(${fmt(s.P_stranded_W, 1)} W — I²R incl. end-winding + AC/proximity). `
-              + "It leaves through the housing, the jacket or the fan."
-              + (s.P_loss_split_measured === false
-                 ? "  NB this run carries no per-half iron breakdown, so the WHOLE "
-                   + "core loss is billed here — rerun to get the solved split."
-                 : "")}/>
-        )}
-        {s.P_loss_rotor_W != null && (
-          <Cell label={tx('rotorHeat')} value={fmtK(s.P_loss_rotor_W)}
-            unit={`W · ${pctOfLoss(s.P_loss_rotor_W, s.P_loss_total_W)}`}
-            accent={s.P_loss_split_measured === false ? 'amber' : 'default'}
-            tooltip={"Heat the ROTOR has to shed: rotor back-iron loss "
-              + `(${fmt(s.P_core_rotor_W ?? 0, 1)} W) + magnet, shaft and sleeve `
-              + `eddy (${fmt(s.P_solid_W, 1)} W). It can only leave across the air `
-              + "gap, through the shaft, or by windage. Stator + rotor = the Total "
-              + "loss tile, exactly."
-              + (s.P_loss_split_measured === false
-                 ? "  NB this run carries no per-half iron breakdown, so the rotor "
-                   + "IRON share is missing here and sits on the stator side."
-                 : "")}/>
-        )}
-        {/* ── THE MECHANICAL HALF (analytic, never from the field solve) ──
-            Three cells so the card finally shows ONE full loss picture:
-            electromagnetic + mechanical. They are '—' when the machine has no
-            bearings, because an unknown loss must not be printed as zero. */}
-        <Cell label={tx('bearings')} value={pBrg == null ? '—' : fmtK(pBrg)} unit="W"
-          accent={pBrg == null ? 'default' : 'amber'}
-          tooltip={pBrg == null ? NO_BRG
-            : `${brgLabel} by the SKF frictional-moment model: rolling + sliding + `
-              + `seal drag at ${fmtN(brgTempC, 0)} °C, carrying the rotor's own `
-              + `weight plus any preload. Torque ${fmtN(brgMoment, 4)} N·m `
-              + `for the pair.`
-              + ` Unbalanced magnetic pull, coupling side loads and any shaft seal `
-              + `are NOT modelled.` + MECH_SRC}/>
-        <Cell label={tx('windage')}
-          value={pWind != null ? fmtN(pWind, 2) : '—'} unit="W"
-          tooltip={pWind != null
-            ? `Air drag on the rotor: gap Couette friction `
-              + `${fmtN(brgWind?.P_gap_W, 2)} W (${brgWind?.gap_regime}) `
-              + `plus the two end faces as rotating discs `
-              + `${fmtN(brgWind?.P_faces_W, 2)} W (${brgWind?.face_regime}), `
-              + `at the MECHANICAL clearance ${fmtN(brgWind?.delta_mm, 2)} mm `
-              + `(stator bore − rotor OD including any sleeve).`
-              + (fromRun ? `  The gap-shear half is a heat SOURCE in the Thermal `
-                           + `tab's map; the end faces are out along the axis and `
-                           + `are reported there as not modelled.` : '')
-              + MECH_SRC
-            : NO_BRG}/>
-        <Cell label={tx('allLosses')}
-          value={lossAll == null ? '—' : fmtK(lossAll)} unit="W"
-          accent={lossAll == null ? 'default' : 'amber'}
-          tooltip={lossAll == null ? NO_BRG
-            : `EVERYTHING: the ${fmt(s.P_loss_total_W, 1)} W of solved `
-              + `electromagnetic loss in the EM losses cell plus `
-              + `${fmtN(pExtra, 1)} W of bearings and windage. This is the loss of `
-              + `the assembled machine — the number between Mech power and Elec `
-              + `power, and the one the Efficiency η tile is computed from.` + MECH_SRC}/>
-      </Box>
-
-      {/* ── Row 3 — voltages + coil current density ───────────────────────── */}
-      {/* (isDelta is derived at the top of the component from s.star_delta) */}
-      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        <Cell label="V_phase peak" value={fmt(s.V_phase_peak_V, 1)} unit="V"
-          tooltip={isDelta
-            ? "DELTA: the winding's own EMF peak (R·I + dψ/dt), triplen INCLUDED — what you would measure with the delta opened at one corner. It is LARGER than the line peak beside it: the three windings' triplen EMFs are in phase and add round the closed loop, the circulating current they drive drops exactly that part across each winding, and the terminals (whose three line-line voltages sum to zero identically) never see it."
-            : "Max |V_A|, |V_B|, |V_C| of the actual waveform (R·I + dψ/dt) — includes harmonics"}/>
-        {/* The solver's own per-connection number wins when the run carries
-            it: a result restored from before the route learned about delta
-            still holds the star mapping in V_line_peak_V. */}
-        <Cell label={`V_line peak ${isDelta ? 'Δ' : 'Y'}`}
-          value={fmt(s.V_line_peak_solved_V ?? s.V_line_peak_V, 1)} unit="V"
-          tooltip={isDelta
-            ? "DELTA: the winding IS the line, so this is the phase waveform minus its zero-sequence part (the triplen EMF drives the circulating current round the closed loop and never reaches the terminals). This is what the DC bus / battery must cover — NOT √3×phase and NOT the raw phase peak."
-            : "STAR: max of the ACTUAL |V_A−V_B|, |V_B−V_C|, |V_C−V_A| waveforms (triplens cancel line-to-line, so this is LESS than √3×phase peak). This is what the DC bus / battery must cover."}/>
-        <Cell label="V_phase RMS" value={fmt(s.V_phase_rms_V, 1)} unit="V"
-          tooltip="True RMS of the phase waveform (not peak/√2 — harmonics included)"/>
-        <Cell label="V_line RMS"
-          value={s.V_line_rms_solved_V != null ? fmt(s.V_line_rms_solved_V, 1)
-                 : isDelta ? '—' : fmt(s.V_line_rms_V, 1)} unit="V"
-          tooltip={isDelta
-            ? (s.V_line_rms_solved_V != null
-               ? "True RMS of the winding voltage minus its zero-sequence part — in delta that is the line-to-line RMS"
-               : "This result predates the delta mapping and carries only the star line RMS, which is wrong here — press Run.")
-            : "True RMS of the line-to-line waveforms (mean of the 3 pairs)"}/>
-        {isDelta && s.I_winding_rms_A != null && (
-          <Cell label="I_winding RMS Δ" value={fmt(s.I_winding_rms_A, 1)} unit="A"
-            accent="amber"
-            tooltip={`DELTA: the current in ONE winding = the line setpoint (${fmt(s.I_phase_rms_A, 1)} A on the three leads) ÷ √3. This is what the field was driven with and what J coil is billed on. The inverter never sees it.`}/>
-        )}
-        <Cell label={tx('jCoil')} value={s.J_coil_A_per_mm2 != null ? fmt(s.J_coil_A_per_mm2, 1) : '—'} unit="A/mm²"
-          accent={s.J_coil_A_per_mm2 == null ? 'default'
-                  : s.J_coil_A_per_mm2 <= 20 ? 'green'
-                  : s.J_coil_A_per_mm2 <= 40 ? 'amber' : 'red'}
-          tooltip="Coil current density = I_phase RMS / (a_parallel × strand copper section, wire_width × wire_height — one STRIP when the wire is split). a_parallel counts the connection's paths TIMES the strands in hand (wire_parallel), because those are the conductors sharing one turn's current. wire_split is NOT in it: a row's strips are consecutive SERIES turns and each carries the branch current whole, so splitting a bar into N narrower strips leaves J where the unsplit row had it. The thermal-loading figure of merit: ~5–15 A/mm² continuous (natural/liquid cooling), 20–40+ for short peak / forced cooling."/>
-      </Box>
-
-      {/* ── Row 4 — winding: section, fill, lead, resistance ──────────────── */}
-      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        {s.A_phase_mm2 != null && (
-          <Cell label={tx('phaseSection')} value={fmt(s.A_phase_mm2, 2)} unit="mm²"
-            tooltip={"Copper cross-section the PHASE current flows through: one strand (wire_width × wire_height — one STRIP when the wire is split) × the parallel paths × the strands in hand. A split row's strips are SERIES turns, not extra paths, so they are not in it. I_phase / this area is exactly the J coil cell above — the two cross-check each other. Nearest lead cable: "
-              + (pickCable(s.A_phase_mm2)?.awg ?? '—')}/>
-        )}
-        {s.slot_fill_pct != null && (
-          <Cell label={tx('fillFactor')} value={fmt(s.slot_fill_pct, 1)} unit="%"
-            accent={s.slot_fill_pct <= 60 ? 'green' : s.slot_fill_pct <= 75 ? 'amber' : 'red'}
-            tooltip={`Measured conductor area over the winding window the teeth leave — both taken from the CAD polygons the mesher receives, not from a nominal slot rectangle. ${s.A_copper_slotted_mm2?.toFixed(0) ?? '—'} mm² of copper in a ${s.A_slot_mm2?.toFixed(0) ?? '—'} mm² window. Rectangular wire wound by hand reaches ~45–60 %; above ~75 % the winding stops being buildable, and the remainder is insulation, wire spacing and the space the winder needs.`}/>
-        )}
-        {s.A_phase_mm2 != null && (() => {
-          const c = pickCable(s.A_phase_mm2);
-          return c ? (
-            <Cell label={tx('leadCable')} value={c.awg.replace('awg', ' AWG')} unit={`Ø${c.od_mm.toFixed(1)} mm`}
-              tooltip={`Catalogue silicone lead (${c.strands}): ${c.area_mm2} mm² copper — the first size at or above the winding's ${s.A_phase_mm2!.toFixed(2)} mm² (a conductor is never rounded down). Conductor Ø${c.d_mm} mm, insulation O.D. Ø${c.od_mm}±0.1 mm (wall ${c.thk_mm} mm), ${c.r_ohm_km} Ω/km, rated ${c.i_rated_A} A continuous / ${c.i_max_A} A peak, ${c.roll_m} m per roll.`
-                + (c.suspect ? ` ⚠ supplier sheet: ${c.suspect}.` : '')}/>
-          ) : null;
-        })()}
-        {/* R with end-winding — shown when the run carries it (old stored
-            runs simply lack the cells). */}
-        {s.R_phase_ohm != null && (
-          <Cell label={tx('rPhase')} value={fmt(s.R_phase_ohm * 1000 * rf, 2)} unit="mΩ"
-            tooltip={(r25 && solveT != null
-              ? `At 25 °C (bench-check view; solved at ${fmt(solveT, 0)} °C — copper ρ scaled by 0.393 %/°C). `
-              : 'At the coil temperature of this solve. ')
-              + 'END-WINDING INCLUDED: R = P_cu/(3·I²) with P_cu = ρ_Cu(T)·J²·V_cu·k_end. The same R the copper-loss cell is billed from.'}/>
-        )}
-        {s.R_line_line_ohm != null && (
-          <Cell label={tx('rLineLine')} value={fmt(s.R_line_line_ohm * 1000 * rf, 2)} unit="mΩ"
-            tooltip={(r25 && solveT != null ? `At 25 °C (bench-check view). ` : '')
-              + (isDelta
-                 ? '⅔ × R_winding — one winding in parallel with the other two in series. What an ohmmeter across two leads of the delta reads. Star-equivalent per-phase R = R_winding / 3.'
-                 : '2 × R_phase — the terminal-to-terminal resistance of the isolated-neutral star this machine is driven as (the voltage circuit is line-to-line for the same reason). What an ohmmeter across two leads reads.')}/>
-        )}
-        {((s.wire_parallel ?? 1) > 1 || (s.wire_split ?? 1) > 1) && (
-          <Cell label={tx('turnsCoil')} value={fmt(s.turns_per_coil ?? 0, 0)}
-            unit={[(s.wire_parallel ?? 1) > 1 ? `${s.wire_parallel} in hand` : '',
-                   (s.wire_split ?? 1) > 1
-                     ? `${s.wire_split} strips in series`
-                     : ''].filter(Boolean).join(' · ')}
-            tooltip={((s.wire_parallel ?? 1) > 1
-                      ? `Wound ${s.wire_parallel} wires in hand: the slot still holds all its physical wire rows (same copper, same wire coating, same mass), but ${s.wire_parallel} of them make each turn. Against one wire in hand: ψ, back-EMF, V and Kt divide by ${s.wire_parallel}, KV multiplies by ${s.wire_parallel}, and R_phase, Ld and Lq divide by ${(s.wire_parallel ?? 1) ** 2}. `
-                      : '')
-                   + ((s.wire_split ?? 1) > 1
-                      ? `wire_split = ${s.wire_split}: every wire row is ${s.wire_split} strips of wire_width side by side, wired in SERIES — each strip is its own turn, so the coil has ${s.wire_split}× the turns of the same rows unsplit: ψ, back-EMF and V ×${s.wire_split}, KV ÷${s.wire_split}, R_phase, Ld and Lq ×${(s.wire_split ?? 1) ** 2}, and every strip carries the full branch current. Set the phase current yourself: the same torque comes back at I ÷ ${s.wire_split}. `
-                      : '')
-                   + `The coil is ${s.turns_per_coil} series turns and the phase current splits over ${s.n_parallel_eff ?? '—'} conductors.`}/>
-        )}
-      </Box>
-
-      {/* ── Row 5 — dq inductances ────────────────────────────────────────── */}
-      {(s.Ld_mH != null || s.Lq_mH != null || s.bench_ldq != null || s.psi_pm_Wb != null) && (
-      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        {/* Ld / Lq / Lq/Ld — ALWAYS a number when one exists, never advice
-            text in the value slot (user's call).  Since 2026-09-20 the value
-            is the INCREMENTAL inductance of this point; since 2026-10-11 the
-            DIFFERENTIAL one (a unit d/q current solved on the tangent
-            reluctivity of the converged loaded field), with the frozen-
-            permeability secant value in the tooltip. The chord divided by a
-            NO-LOAD ψ_PM and read Ld > Lq on a machine whose Lq is the larger
-            (client review of the L180 report). Fallback order is unchanged:
-            this run's value, else the bench small-signal probe. */}
-        <Cell label="Ld"
-          value={s.Ld_mH != null ? fmt(s.Ld_mH, 3)
-            : (s.bench_ldq ? fmt(s.bench_ldq.Ld_mH, 3) : '—')} unit="mH"
-          accent="blue"
-          tooltip={(s.Ld_mH != null
-            ? (diffLdq
-              ? 'd-axis DIFFERENTIAL (small-signal) inductance at THIS operating point, ∂ψd/∂i_d on the tangent reluctivity of the loaded iron: what a current loop and the PWM ripple see.' + LDQ_SCOPE
-                + (s.Ld_fp_secant_mH != null ? ` Frozen-permeability secant: ${fmt(s.Ld_fp_secant_mH, 3)} mH.` : '')
-              : 'd-axis inductance at THIS operating point by frozen permeability (secant ν) — this run predates the differential measurement, and the secant over-reads the small-signal value; re-run to measure it.')
-            : 'BENCH value — small-signal Ld at the I≈0 iron state, rotor locked on a magnet: what an LCR meter on the terminals reads. This run predates the incremental measurement; re-run to measure it at the point.')
-            + (s.Ldq_inc_mH != null ? ` Cross term ∂ψd/∂i_q = ${fmt(s.Ldq_inc_mH, 3)} mH.` : '')
-            + (s.bench_ldq && s.Ld_mH != null ? ` Bench (small-signal): ${fmt(s.bench_ldq.Ld_mH, 3)} mH.` : '')
-            + (s.Ld_chord_mH != null ? ` Chord (ψd − ψ_PM)/i_d for comparison: ${fmt(s.Ld_chord_mH, 3)} mH — not an inductance under saturation.` : '')
-            + (s.dq_note ? ' — ' + s.dq_note : '')}/>
-        <Cell label="Lq" value={s.Lq_mH != null ? fmt(s.Lq_mH, 3) : '—'} unit="mH"
-          accent="blue"
-          tooltip={(diffLdq
-              ? 'q-axis DIFFERENTIAL (small-signal) inductance under load, ∂ψq/∂i_q on the tangent reluctivity (same solve as Ld).' + LDQ_SCOPE
-                + (s.Lq_fp_secant_mH != null ? ` Frozen-permeability secant: ${fmt(s.Lq_fp_secant_mH, 3)} mH.` : '')
-              : 'q-axis inductance under load by frozen permeability (secant ν, same solve as Ld).')
-            + (s.bench_ldq ? ` Bench (small-signal, rotor between magnets): ${fmt(s.bench_ldq.Lq_mH, 3)} mH.` : '')
-            + (s.Lq_chord_mH != null ? ` Chord ψq/i_q for comparison: ${fmt(s.Lq_chord_mH, 3)} mH.` : '')
-            + (s.dq_note ? ' — ' + s.dq_note : '')}/>
-        <Cell label="ψ_PM" value={s.psi_pm_Wb != null ? fmt(s.psi_pm_Wb * 1000, 2) : '—'} unit="mWb"
-          tooltip={'Magnet flux linkage (phase, peak) measured at I = 0 — one cheap no-load solve, cached per geometry. The PM term of ψd = ψ_PM + Ld·i_d.'
-            + (s.psi_pm_frozen_Wb != null
-              ? ` In the LOADED iron the magnets link ${fmt(s.psi_pm_frozen_Wb * 1000, 2)} mWb (${fmt(-(s.psi_pm_sag_pct ?? 0), 1)}%) — measured on a frozen-permeability solve of that iron. That difference is what the old chord Ld divided by i_d and called an inductance.`
-              : '')}/>
-        {s.B_gap_mean_T != null && (
-          <Cell label={tx('bGapMean')} value={fmt(s.B_gap_mean_T, 3)} unit="T"
-            tooltip={'Mean |B| over the AIR-GAP clearance, averaged over the electrical period. Area-weighted over the elements between the outermost rotating metal and the stator bore — a mean of the field, not of the mesh. It is the whole gap under load, magnet flux and armature reaction together, so it is not the no-load fundamental B_g1 a sizing formula asks for.'}/>
-        )}
-        <Cell label="Lq/Ld"
-          value={s.saliency_Lq_over_Ld != null ? fmt(s.saliency_Lq_over_Ld, 2)
-            : (s.bench_ldq?.Lq_over_Ld != null ? fmt(s.bench_ldq.Lq_over_Ld, 2) : '—')}
-          tooltip={(s.saliency_Lq_over_Ld != null
-            ? `Saliency at this load point, from the two ${diffLdq ? 'DIFFERENTIAL' : 'frozen-permeability'} inductances. The dq frame behind these cells is self-checked every run: T = 1.5·p·(ψd·iq − ψq·id) must reproduce the energy-method torque, or the inductances are withheld rather than shown wrong.`
-            : 'Saliency from the BENCH (small-signal) frame — both axes measured the LCR way at I≈0, so the ratio is cross-saturation-free.')}/>
-        {(() => {
-          const c6 = sixPhaseCells(s.six_phase);
-          if (!c6) return null;
-          const ind = s.six_phase?.inductances;
-          return (<>
-            <Cell label="L_xy" value={c6.lxy} unit="mH" accent="blue"
-              tooltip={'Six-phase: the inductance between the two sets driven AGAINST each other '
-                + '(circulating x-y current) — only this limits PWM current that flows from one '
-                + 'inverter into the other. Frozen permeability at this operating point, full ring. '
-                + (c6.lxyPct ? c6.lxyPct + '. ' : '')
-                + (ind?.Ld_set_mH != null ? `Per-set L_d ${ind.Ld_set_mH.toFixed(4)} mH (air-gap plane). ` : '')
-                + (ind?.Lxy_min_mH != null ? `Range ${ind.Lxy_min_mH.toFixed(4)}–${(ind.Lxy_max_mH ?? 0).toFixed(4)} mH. ` : '')
-                + (s.six_phase?.inductances_error ? 'Not measured: ' + s.six_phase.inductances_error : '')
-                + 'The Controller ripple takes it automatically.'}/>
-            <Cell label={tx('perSet')} value={c6.perSet}
-              tooltip={'Each of the two in-phase sets: half the phase current, the full phase '
-                + `voltage (fundamental peak). Set 1 = path ${(s.six_phase?.set1_paths ?? []).join(', ')}, `
-                + `set 2 = path ${(s.six_phase?.set2_paths ?? []).join(', ')}; each on its own inverter.`}/>
-          </>);
-        })()}
-      </Box>
-      )}
-
-      {/* ── Row 6 — machine constants + rotor mechanics ───────────────────── */}
-      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        <Cell label={kvNl && s.KV_noload_rpm_per_V_line != null ? 'KV no-load' : 'KV (line)'}
-          value={kvNl && s.KV_noload_rpm_per_V_line != null
-            ? fmt(s.KV_noload_rpm_per_V_line, 1) : fmt(s.KV_rpm_per_V_line, 1)} unit="rpm/V"
-          tooltip={kvNl && s.KV_noload_rpm_per_V_line != null
-            ? 'NO-LOAD KV: rpm / (√3·ω_e·ψ_PM) — back-EMF fundamental from the run\'s cached I=0 probe; what spinning the motor on the bench reads. Harmonics excluded (fundamental convention). Loaded KV: '
-              + fmt(s.KV_rpm_per_V_line, 1) + ' rpm/V.'
-            : 'rpm / V_LINE PEAK — the max/max convention, the same peak shown in the voltage row above (and the one a commercial FEM induced-voltage table reports). Loaded voltage: at field-weakening γ it differs from the no-load back-EMF KV'
-              + (s.KV_noload_rpm_per_V_line != null ? ` (${fmt(s.KV_noload_rpm_per_V_line, 1)} rpm/V — toggle in the header).` : '.')}/>
-        {(() => {
-          // Kt beside KV — the other controller-facing constant.  Measured at
-          // THIS point (T/I_rms), so load saturation is inside it; the k3d
-          // toggle scales it with the torque automatically (T is taken off the
-          // rescaled copy `s`).  No cell at I=0 — T/0 is not a constant.
-          // Kt from the 2-D torque × the MEASURED k_T only (owner 2026-09-30).
-          const kt = (summary.T_em_avg_Nm != null && s.I_phase_rms_A > 0)
-            ? s.T_em_avg_Nm / s.I_phase_rms_A : null;
-          return kt != null && Number.isFinite(kt) ? (
-            <Cell label={apply3d && k3d != null ? `Kt · ${ktBasis}` : 'Kt'}
-              value={fmt(kt, kt < 0.1 ? 4 : 3)} unit="N·m/A"
-              tooltip={ktBasisTip + (isDelta ? 'DELTA: per LINE amp — the current on the three leads, what the inverter rating is set against. Per WINDING amp it is √3 larger: '
-                                  + fmt(kt * Math.sqrt(3), 4) + ' N·m/A. ' : '')
-                + 'Torque constant at THIS operating point: T / I_phase_rms = '
-                + fmt(s.T_em_avg_Nm, 3) + ' / ' + fmt(s.I_phase_rms_A, 1)
-                + '. Measured, so iron saturation is included (the Saturation koef '
-                + 'tile says how much) — the low-current bench Kt sits above this. '
-                + 'RMS convention: multiply by √2 for N·m per A peak.'}/>
-          ) : null;
-        })()}
-        {s.Km_Nm_sqrtW != null && (
-          <Cell label={apply3d && k3d != null ? `Km · ${ktBasis}` : 'Km'}
-            value={fmt(s.Km_Nm_sqrtW, 3)} unit="N·m/√W"
-            tooltip={ktBasisTip + "Motor constant Km = T_em / √P_cu_DC — torque per square root of the ohmic loss paid for it. "
-                   + "Operating-point-independent while the iron is unsaturated (T ∝ I, P_cu ∝ I²): the robotics "
-                   + "sizing constant. Uses the DC (I²R) copper loss only — the AC add-on is speed-dependent and "
-                   + "would make Km a function of rpm. Computed at the solved coil temperature: R grows ≈39 %/100 °C, "
-                   + "so a cold-datasheet Km reads higher than the same machine hot."}/>
-        )}
-        {s.Km_per_mass_Nm_sqrtW_kg != null && (
-          <Cell label={apply3d && k3d != null ? `${tx('kmMass')} · ${ktBasis}` : tx('kmMass')}
-            value={fmt(s.Km_per_mass_Nm_sqrtW_kg, 3)} unit="N·m/(√W·kg)"
-            tooltip={ktBasisTip + "Specific motor constant Km / total mass (EM-active + shaft) — the actuator figure of merit "
-                   + "that survives scaling: torque density says how much torque per kg, Km/m says how much of it "
-                   + "you can HOLD continuously per kg for a given copper heat budget."}/>
-        )}
-        {s.rotor_inertia?.J_kg_m2 != null && (
-          <Cell label={tx('rotorInertia')} value={fmt(s.rotor_inertia.J_kg_cm2, 2)} unit="kg·cm²"
-            tooltip={"Rotor moment of inertia J about the shaft axis — ∬r²·dA over the same CAD polygons the mass uses "
-                   + "(rotor iron × lamination k_f, magnets and shaft solid) × stack × density. "
-                   + `= ${Number(s.rotor_inertia.J_kg_m2).toExponential(3)} kg·m². Breakdown: iron ${fmt(s.rotor_inertia.rotor_iron * 1e4, 2)}, `
-                   + `magnets ${fmt(s.rotor_inertia.magnet * 1e4, 2)}, shaft ${fmt(s.rotor_inertia.shaft * 1e4, 2)}`
-                   + (s.rotor_inertia.sleeve ? `, sleeve ${fmt(s.rotor_inertia.sleeve * 1e4, 3)}` : '')
-                   + ` kg·cm². `
-                   + "Drive sizing: t_accel = J·Δω/T; mechanical time constant τ = J·ω/T at the operating point."}/>
-        )}
-        {/* The analytic sleeve hoop σ (ρω²r², own mass only) left this card on
-            2026-09-07 — the Mechanical tab solves the real one, with the magnet
-            pressure the ring exists to carry; a lower bound that gates nothing
-            beside it only invited comparison with the wrong number. */}
-      </Box>
-
-      {/* ── Row 7 — retention coefficients ────────────────────────────────── */}
-      {(dmKept != null || s.saturation?.droop_pct != null || s.end3d?.k_flux != null) && (
-      <Box sx={{ ...ROW, opacity: stale ? 0.55 : 1 }}>
-        {dm != null && dmLoss != null && dmKept != null && (
-          <Cell label={tx('demagKoef')} value={`≥ ${fmt(dmKept, 2)}`} unit="%"
-            accent={dmLoss < 1 ? 'green' : dmLoss < 5 ? 'amber' : 'red'}
-            tooltip={`Torque RETAINED after irreversible demag: 100 % = magnets intact (loss ≤ ${fmt(dmLoss, 2)} %). `
-                   + "Demagnetisation coefficient — the TORQUE the motor loses to irreversible demag: the "
-                   + "volume-weighted Br deficit of all magnets, and T ∝ ∫Br·dA, so this bounds the torque/EMF "
-                   + "drop from above (checked against an exact double-solve: the bound is conservative because "
-                   + "most de-rated area sits in weakly-coupled leakage corners). "
-                   + (dm.bh_loss_pct != null
-                       ? `Energy view ((BH)max ∝ Br²): −${fmt(dm.bh_loss_pct, 2)} %`
-                         + (dm.energy_lost_J != null
-                             ? ` = ${fmt(dm.energy_lost_J, 2)} J of ${fmt(dm.energy_total_J ?? 0, 1)} J`
-                             : '')
-                         + (dm.grade_effective != null
-                             ? `; ${dm.magnet_name ?? 'magnet'} is effectively grade ${fmt(dm.grade_effective, 1)} of nominal ${fmt(dm.grade_nominal ?? 0, 0)}`
-                             : '')
-                         + '. '
-                       : '')
-                   + `${fmt(dm.area_derated_pct, 1)} % of magnet area de-rated. `
-                   + "Knee from the ASSIGNED grade at its record temperature — pick the _30C/_80C/_120C variant "
-                   + "matching the real magnet temperature. Shown only when the run modelled demag."}/>
-        )}
-        {dmCorner != null && (
-          <Cell label={tx('brCorner')} value={fmt(dmCorner.br_pct, 1)} unit="%"
-            tooltip={'Worst single magnet element — a corner flag, not the magnet\'s figure (that is Demag koef). '
-                   + 'A sharp-corner value that does not converge with mesh refinement'
-                   + (dmCorner.r_mm != null && dmCorner.theta_deg != null
-                       ? `; at r ${fmt(dmCorner.r_mm, 2)} mm, ${fmt(dmCorner.theta_deg, 1)}° (rotor frame)`
-                       : '')
-                   + '.'}/>
-        )}
-        {s.saturation?.droop_pct != null && (
-          <Cell label={tx('saturationKoef')}
-            value={fmt(Math.min(100, 100 - s.saturation.droop_pct), 1)} unit="%"
-            accent={s.saturation.droop_pct < 5 ? 'green' : s.saturation.droop_pct < 15 ? 'amber' : 'red'}
-            tooltip={`Torque RETAINED against iron SATURATION at this operating point: 100 % = linear iron `
-                   + `(loss ${fmt(s.saturation.droop_pct, 1)} %). Same retention convention as Demag koef beside it — `
-                   + "that one is the magnets' doing, this one is the iron's, so the two torque-eaters never conflate. "
-                   + `Reference: the unsaturated linear torque = ${fmt(s.saturation.T_linear_Nm, 2)} N·m — `
-                   + "1.5·p·ψ_PM·i_q (ψ_PM from the measured no-load solve, i_q from this run's dq frame)"
-                   + (s.saturation.T_reluctance_Nm != null
-                       ? ` PLUS the reluctance term 1.5·p·(Ld−Lq)·i_d·i_q = ${fmt(s.saturation.T_reluctance_Nm, 3)} N·m `
-                         + 'off the bench (unsaturated) Ld/Lq, so at γ ≠ 0 on this salient rotor the ratio still measures '
-                         + 'IRON SATURATION alone — never above 100 %. '
-                       : ' (no bench Ld/Lq for this machine yet, so the reference is PM-only and the value is clamped at 100 %). ')
-                   + "Saturation is REVERSIBLE (drop the current, it returns) and grows with current — compare operating "
-                   + "points, not machines."}/>
-        )}
-        {s.end3d?.k_flux != null && (
-          <Cell label={s.end3d.inherited ? '3D end-effect ⚠' : '3D end-effect'} value={`×${fmt(s.end3d.k_flux, 3)}`}
-            accent={s.end3d.inherited ? 'amber' : s.end3d.k_flux > 0.97 ? 'green' : s.end3d.k_flux > 0.93 ? 'amber' : 'red'}
-            tooltip={"Axial end-effect correction from the 3D static Stage A solve of THIS machine (matched by geometry "
-                   + "fingerprint — it can never show another motor's number). A 2D solve assumes the field fills the "
-                   + "stack uniformly; in reality it spills past the laminations, and the shorter the stack the worse. "
-                   + `Multiply 2D flux/EMF/torque by ${fmt(s.end3d.k_flux, 3)}: corrected T ≈ ${fmt(s.end3d.T_corrected_Nm, 2)} N·m`
-                   + (s.end3d.V_line_peak_corrected_V != null
-                       ? `, V_line peak ≈ ${fmt(s.end3d.V_line_peak_corrected_V, 1)} V` : '')
-                   + `. Pure axial spill ×${fmt(s.end3d.k_flux_self, 3)}; the rest is 3D-vs-2D model disagreement. `
-                   + `Solve rung: ${s.end3d.fidelity}.`}/>
-        )}
-        {dmKept != null && s.saturation?.droop_pct != null && (() => {
-          // Product of the two retentions: how much of the IDEAL machine —
-          // linear iron, fresh magnets — this operating point delivers.
-          const total = dmKept / 100 * (100 - s.saturation.droop_pct);
-          return (
-            <Cell label={tx('totalKoef')} value={fmt(total, 1)} unit="%"
-              accent={total > 95 ? 'green' : total > 85 ? 'amber' : 'red'}
-              tooltip={"Overall torque retention vs the IDEAL machine — linear iron AND fresh magnets: "
-                     + `Demag koef × Saturation koef = ${fmt(dmKept, 2)} % × ${fmt(100 - s.saturation.droop_pct, 1)} % `
-                     + `= ${fmt(total, 1)} %. The single figure for how far this operating point sits from the `
-                     + "linear no-loss ideal; the two neighbouring cells say who is to blame — the magnets "
-                     + "(irreversible) or the iron (reversible, current-dependent)."}/>
-          );
-        })()}
-      </Box>
-      )}
 
       {/* ── CHARGING: generator → battery through the PWM bridge ─────────
            Present only when the run carried a battery AND was driven from an
@@ -2022,37 +1295,6 @@ const SummaryTable: React.FC<Props> = ({ summary, loading, fromSweep, liveOp }) 
         );
       })()}
 
-      {/* ── Mass component breakdown ───────────────────────────────────── */}
-      <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>
-        {s.mass_components.map((c, i) => {
-          const pct = (c.mass_kg / s.mass_total_kg * 100);
-          // A `reference` part is the CUSTOMER's (a frameless motor's shaft):
-          // it is in the field and its losses are in P_loss, but it is not in
-          // this mass, this inertia or any N·m/kg.  The row stays — dropping it
-          // silently would leave the reader to wonder where the shaft went —
-          // and says so, with what it was modelled at.
-          const isRef = c.state === 'reference';
-          return (
-            <Box key={i} title={c.note} sx={{
-              flex: '1 1 0', minWidth: 0,
-              px: 1, py: 0.4,
-              bgcolor: 'var(--panel-2)',
-              border: `1px solid ${isRef ? 'rgba(56,189,248,0.35)' : 'var(--app-bg)'}`,
-              borderRadius: 1 }}>
-              <Typography sx={{ fontSize: 9, color: isRef ? '#38bdf8' : 'var(--text-3)',
-                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {c.name}
-              </Typography>
-              <Typography sx={{ fontSize: 11, fontFamily: 'monospace',
-                color: isRef ? 'var(--text-3)' : 'var(--text-1)' }}>
-                {isRef
-                  ? <>not billed · <b>{fmt(c.mass_modelled_kg ?? 0, 3)} kg</b> {tx('modelled')}</>
-                  : <><b>{fmt(c.mass_kg, 3)} kg</b> · {fmt(pct, 1)}%</>}
-              </Typography>
-            </Box>
-          );
-        })}
-      </Box>
     </Paper>
   );
 };

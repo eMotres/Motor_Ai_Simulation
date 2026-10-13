@@ -28,5 +28,30 @@
   "stamped": "Your name and the date are written into the file name and the STEP header. Every download is logged.",
   "contextLost": "The 3D view lost its graphics context. Reload the page to continue.",
   "downloadLocked": "Download after NDA",
-  "downloadLockedHelp": "You can view, rotate, section and measure the model. The STEP download is available after the NDA is signed; ask us to sign it. Every download is logged and the file carries your name and the date."
+  "downloadLockedHelp": "You can view, rotate, section and measure the model. The STEP download opens when the NDA is signed; sign it online in one minute. Every download is logged and the file carries your name and the date.",
+  "nda": {
+    "sign": "Sign NDA online",
+    "title": "Non-disclosure agreement",
+    "company": "Company",
+    "regNo": "Registration no.",
+    "country": "Country",
+    "address": "Address",
+    "signatory": "Signatory full name",
+    "titleField": "Title",
+    "email": "E-mail",
+    "accept": "I have read and accept the agreement and am authorised to sign for the company",
+    "typeName": "Type your full name to sign",
+    "submit": "Sign",
+    "cancel": "Cancel",
+    "version": "Version {version}",
+    "disabled": "Online signing is not open yet.",
+    "disabledHelp": "The agreement text is still a draft. It will open as soon as the final text is published.",
+    "yourNda": "Your signed NDA",
+    "errors": {
+      "required": "Required",
+      "country": "Choose a country from the list",
+      "name": "Must match the signatory name",
+      "accept": "Tick the box to accept"
+    }
+  }
 }

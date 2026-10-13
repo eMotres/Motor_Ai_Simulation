@@ -28,5 +28,30 @@
   "stamped": "您的姓名和日期会写入文件名和 STEP 文件头。每次下载都有记录。",
   "contextLost": "3D 视图丢失了图形上下文，请刷新页面。",
   "downloadLocked": "签署保密协议后可下载",
-  "downloadLockedHelp": "您可以查看、旋转、剖切和测量模型。签署保密协议后即可下载 STEP 文件，请联系我们签署。每次下载都有记录，文件中会写入您的姓名和日期。"
+  "downloadLockedHelp": "您可以查看、旋转、剖切和测量模型。签署保密协议后即可下载 STEP 文件，可在线一分钟完成签署。每次下载都有记录，文件中会写入您的姓名和日期。",
+  "nda": {
+    "sign": "在线签署保密协议",
+    "title": "保密协议",
+    "company": "公司",
+    "regNo": "注册号",
+    "country": "国家/地区",
+    "address": "地址",
+    "signatory": "签署人全名",
+    "titleField": "职务",
+    "email": "电子邮箱",
+    "accept": "我已阅读并接受本协议，并有权代表公司签署",
+    "typeName": "输入您的全名以签署",
+    "submit": "签署",
+    "cancel": "取消",
+    "version": "版本 {version}",
+    "disabled": "在线签署尚未开放。",
+    "disabledHelp": "协议文本仍为草稿，正式文本发布后即可签署。",
+    "yourNda": "您已签署的保密协议",
+    "errors": {
+      "required": "必填",
+      "country": "请从列表中选择国家/地区",
+      "name": "必须与签署人姓名一致",
+      "accept": "请勾选以接受"
+    }
+  }
 }

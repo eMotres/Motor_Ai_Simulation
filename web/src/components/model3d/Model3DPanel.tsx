@@ -12,6 +12,7 @@ import DownloadIcon from '@mui/icons-material/Download';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
+import NdaDialog from './NdaDialog';
 import { ModelViewer } from './modelViewer';
 import {
   filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, pickModel, togglesOf,
@@ -40,6 +41,8 @@ const Model3DPanel: React.FC = () => {
   tRef.current = t;
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [canDownload, setCanDownload] = useState(false);
+  const [ndaOpen, setNdaOpen] = useState(false);
+  const [hasPdf, setHasPdf] = useState(false);
   const [key, setKey] = useState<string>('');
   const [groups, setGroups] = useState<PartGroup[]>([]);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
@@ -71,6 +74,15 @@ const Model3DPanel: React.FC = () => {
     })();
     return () => { live = false; };
   }, []);
+
+  // does this account have a signed NDA PDF on file ("Your signed NDA")
+  const loadMine = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/api/nda/mine`);
+      if (r.ok) setHasPdf(((await r.json()) as { has_pdf?: boolean }).has_pdf === true);
+    } catch { /* the link just stays hidden */ }
+  }, []);
+  useEffect(() => { void loadMine(); }, [loadMine]);
 
   // the viewer lives as long as the panel
   useEffect(() => {
@@ -131,8 +143,21 @@ const Model3DPanel: React.FC = () => {
     } catch (e: any) { setErr(e?.message ?? String(e)); } finally { setDl('idle'); }
   };
 
+  const downloadPdf = async () => {
+    try {
+      const r = await fetch(`${API}/api/nda/mine/pdf`);
+      if (!r.ok) { setErr(await detail(r)); return; }
+      const href = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = href; a.download = filenameFromDisposition(r.headers.get('Content-Disposition'), 'NDA.pdf');
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 10_000);
+    } catch (e: any) { setErr(e?.message ?? String(e)); }
+  };
+
   return (
     <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0 }}>
+      <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => { setCanDownload(true); void loadMine(); }} />
       <Box sx={{ width: 290, flexShrink: 0, p: 1.5, overflowY: 'auto', borderRight: '1px solid var(--line-soft)', bgcolor: 'var(--panel)',
         display: 'flex', flexDirection: 'column', gap: 1.25 }}>
         <Box>
@@ -195,10 +220,20 @@ const Model3DPanel: React.FC = () => {
               {t('downloadStep')}{model?.step_bytes ? ` (${formatBytes(model.step_bytes)})` : ''}
             </Button>
           ) : (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-              <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography>
-              <HelpTip title={t('downloadLockedHelp')} />
-            </Box>
+            <>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography>
+                <HelpTip title={t('downloadLockedHelp')} />
+              </Box>
+              <Button size="small" variant="contained" onClick={() => setNdaOpen(true)} sx={{ textTransform: 'none', fontSize: 12.5 }}>
+                {t('nda.sign')}
+              </Button>
+            </>
+          )}
+          {hasPdf && (
+            <Button size="small" onClick={() => void downloadPdf()} sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>
+              {t('nda.yourNda')}
+            </Button>
           )}
           <Button size="small" onClick={() => viewer.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
             sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{t('fit')}</Button>

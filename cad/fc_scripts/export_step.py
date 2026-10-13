@@ -107,6 +107,14 @@ def mech_datums(g, mech):
         prop_fix=dict(seat_z=r6(g("shaft_journal_end_z")), z=[r6(g("shaft_journal_end_z") - g("prop_fix_hub_t")),
                                                              r6(g("shaft_journal_end_z") + g("prop_fix_plate_t"))],
                       d=r6(g("prop_fix_d"))),
+        threads=dict(
+            note="Fusion threads are COSMETIC (ThreadFeature modeled = False, full length, read 2026-10-12 from the Fusion model): "
+                 "geometry is the core / tap diameter, the thread faces are coloured in the model",
+            shaft=dict(designation="M5x0.8 6g (Thread9)", modeled=False, r=r6(g("shaft_thread_r")),
+                       z=[r6(g("shaft_journal_end_z")), r6(g("shaft_thread_end_z"))]),
+            back_holder_M3=dict(designation="M3x0.5 6H (Thread12)", modeled=False, tap_r=r6(g("back_screw_tap_d") / 2), count=n),
+            back_holder_M2=dict(designation="M2x0.4 6H (Thread14)", modeled=False, tap_r=r6(g("holder_tap_d") / 2), count=n),
+            screws="no thread: the Fusion component is '91292A032_NO THREADS' (shank r 1.0)"),
         screws=dict(count=n, length=r6(g("holder_screw_l")), head_seat_z=r6(zfl), tip_z=r6(zfl - g("holder_screw_l")),
                     thread_engagement=r6(max(0.0, -g("holder_seat_z") - max(zfl - g("holder_screw_l"), -zfl)))),
         note="z along the motor axis (+z propeller side); every value from the Params of this model; A_H measured on the "
@@ -175,6 +183,9 @@ def main():
              "under the yoke), lead end = last layer (inner).")
     if mech:
         datums["mechanics"] = mech_datums(g, mech)
+    if src.getObject("Electronics") is not None:
+        from motor_templates.segmented_flatwire import electronics
+        datums["phase_board"] = electronics.datums(src, g)
     App.closeDocument(src.Name)
 
     ex = App.newDocument("export")

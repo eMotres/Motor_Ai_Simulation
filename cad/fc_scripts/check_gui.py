@@ -36,6 +36,21 @@ try:
         if c != tuple(round(x, 2) for x in view.COLORS[n]):
             bad.append("%s colour %s != %s" % (n, c, view.COLORS[n]))
     out["body_colours"] = cols
+    th = view.thread_face_indices(doc)
+    out["thread_faces"] = {k: len(v) for k, v in th.items()}
+    for bn, idx in th.items():                           # cosmetic threads (Fusion: modeled = False): coloured faces
+        dc = [tuple(round(x, 2) for x in c[:3]) for c in gdoc.getObject(bn).DiffuseColor]
+        got = sum(1 for i in idx if i < len(dc) and dc[i] == tuple(round(x, 2) for x in view.THREAD_COLOUR))
+        if not idx or got != len(idx) or len(dc) != len(doc.getObject(bn).Shape.Faces):
+            bad.append("%s: %d of %d thread faces carry the thread colour (%d colours for %d faces)" % (
+                bn, got, len(idx), len(dc), len(doc.getObject(bn).Shape.Faces)))
+    pb = gdoc.getObject("PhaseBoard")
+    if pb is not None:                                   # the STEP colours must have reached the view object
+        dc = list(pb.DiffuseColor)
+        distinct = sorted({tuple(round(x, 2) for x in c[:3]) for c in dc})
+        out["phase_board_colours"] = dict(faces=len(dc), distinct=len(distinct))
+        if len(dc) != len(doc.getObject("PhaseBoard").Shape.Faces) or len(distinct) < 4:
+            bad.append("PhaseBoard colours: %d per-face colours (%d distinct), the STEP has 4 colour families" % (len(dc), len(distinct)))
     out["visible"] = sorted(n for n, v in gui_vis.items() if v)
     out["hidden_count"] = sum(1 for v in gui_vis.values() if not v)
     out["violations"] = bad

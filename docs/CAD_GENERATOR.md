@@ -244,3 +244,35 @@ SHA-256.  Skip with `--no-bom`.  A BOM failure never refuses a build.
 The BOM carries no commercial data; callers can add columns / sheets through `write_csv(extra_columns=...)` and `write_xlsx(extra_sheets=...)`.
 Tests: `tests/test_cad_bom.py` (dumps of the server-built L12 / L20 models in `tests/fixtures/`).
 
+
+## Electronics: the phase (coil-connection) board (2026-10-13)
+
+App::Part `Electronics` -> `PhaseBoard` (Part::Feature): the coloured STEP of the frozen PCB release rev C
+(`cad/reference/phase_board/CIANO14_40_phase_board_revC_colour.step`, README next to it; 110 solids: FR4, four 6 oz copper layers,
+mask, 3 phase pins CIANO40-PIN-C rev 7, 6 notch walls).  Imported once at build time, NOT parametric (the shape is stored in the
+model, the STEP is not needed to open it); the **placement** is parametric, a pure translation:
+
+| Params row | Role | Value |
+|---|---|---|
+| `phase_board_n_offset` | mechanics | 2.525 mm: N-side copper surface above the coil lead end datum (the board grows toward the motor, N stays fixed) |
+| `phase_board_n_z0` | mechanics | -0.21 mm: Z of the N copper in the STEP frame (property of the STEP) |
+| `phase_board_x`, `phase_board_y` | mechanics | -100, +100 mm: KiCad absolute board centre (100, -100) -> motor axis |
+| `phase_board_z` | derived | `-(coil_leg_length / 2 + coil_lead_total) + phase_board_n_offset - phase_board_n_z0`: L12 -12.615, L20 -16.615 |
+
+`Electronics.Placement.Base.x/y/z` are expressions of these rows, so the board follows `motor_length`.  Gate: placement = rows,
+N copper measured on the solid = lead end + offset, pin J13 at (6.606, 12.964) +-0.01 (r 14.55 at 63 deg).  The STEP colours
+(mask green, FR4, ENIG gold, pins / walls grey) are looked up per face through the GUI importer and stored as the `DiffuseColor` of the
+view object (GuiDocument.xml); `check_gui.py` verifies them.  `build_report.json` -> `phase_board`: minimum clearance and overlap
+of the board (and of its pins alone) against Coils, Core, RotorCore, Magnets, Shaft, both holders, Rings, Bearings, Screws, Prop_fix, and
+for each of the 12 coil lead ends the overlap / clearance of the lead stub against the board (reported, not refused: the pin tail is
+provisional); the manifest carries a summary.  The datums JSON has a `phase_board` block.  The active-part STEP is unchanged (58 solids).
+
+## Screws and threads (2026-10-13)
+
+The 6 M2 socket head screws were always in `Mechanics/Screws` and visible (hex socket AF 1.5, depth 1, conical bottom; only the
+0.2 mm mouth countersink of Fusion is not modelled); they were dark grey (0.30) and small, now bright stainless.  Fusion's
+threads, read from the Fusion model (`fusion_source/sketches/*_features_bodies.json`, 2026-10-12): `Thread9` M5x0.8 6g on the
+shaft, `Thread12` M3x0.5 6H and `Thread14` M2x0.4 6H in the back holder are all **cosmetic** (`modeled = False`, full length), and
+the screw component is `91292A032_NO THREADS`.  They are reproduced the same way: the geometry stays the core / tap diameter
+(shaft r 2.4505, tap holes), the thread faces carry the amber thread colour (`view.THREAD_COLOUR`, checked by `check_gui.py`)
+and the datums JSON lists them (`mechanics.threads`).  Volumes and the 1.0.2 / 1.1 compatibility are unchanged (no geometry change).

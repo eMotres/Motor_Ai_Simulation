@@ -1101,8 +1101,8 @@
    "value": 1.0,
    "unit": "mm",
    "comment": "Coil straight legs stick out of the stack by this much in total (= coil_straight_len - motor_length = 1 mm, 0.5 mm per side)",
-   "role": "derived",
-   "role_note": "named derived row used by a feature expression (owner rule 2026-10-13: straight length = stack + 1 mm)"
+   "role": "info",
+   "role_note": "read by the template code (zend, gate), not by a feature expression; derived from coil_straight_len"
   },
   {
    "name": "coil_bend_axis_dx",

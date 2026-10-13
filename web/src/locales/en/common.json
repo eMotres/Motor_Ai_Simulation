@@ -4,6 +4,7 @@
     "geometry": "Geometry",
     "materials": "Materials",
     "mesh": "Mesh",
+    "simulations": "Simulations",
     "simulation": "Electromagnetic",
     "static3d": "3D",
     "mechanical": "Mechanical",

@@ -71,6 +71,7 @@ import {
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
 import { presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
+import { buildModePresets, baseModeLabel, modeOfPoint, type ModePreset } from '../../lib/configuratorModes';
 import {
   physicalRanges, narrowRange, speedLimit, overflows, lineVoltageWarning,
   readOverrides, writeOverrides, speedLimitNote, propellerCurrentNote, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
@@ -669,6 +670,8 @@ const ConfiguratorPanel: React.FC = () => {
   // ── PRESETS: the configurations of this machine's die (owner 2026-10-05), read from the
   //    machines themselves by the server; `baseConfig` is the one the knobs are measured against.
   const [baseConfig, setBaseConfig] = useState<string | null>(null);
+  // the MODE (rated, peak ...) the base was taken at: presets are configuration x mode
+  const [baseMode, setBaseMode] = useState<string | null>(null);
   const [limitMsg, setLimitMsg] = useState<string | null>(null);
   // `ctxDone`: the context has been ANSWERED (or there is none to ask for) — blocks that depend on
   // it (the Thermal block for a die that is not propeller-cooled) wait for it instead of flashing.
@@ -684,7 +687,7 @@ const ConfiguratorPanel: React.FC = () => {
     setCtxDone(true);
   }, [catId, identity]);
   useEffect(() => {
-    setCtxState({ identity, value: null }); setCtxDone(false); setLimitMsg(null); setBaseConfig(null);
+    setCtxState({ identity, value: null }); setCtxDone(false); setLimitMsg(null); setBaseConfig(null); setBaseMode(null);
     void loadCtx();
     return () => contextRequestGuard.current.invalidate();
   }, [loadCtx]);
@@ -701,11 +704,18 @@ const ConfiguratorPanel: React.FC = () => {
   }, [loadCtx]);
   const presets: Preset[] = currentContext?.presets ?? [];
   const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
+  // One button per configuration x mode that has data (lib/configuratorModes); the build is the
+  // configuration's, the current and speed are the mode's.
+  const modePresets: ModePreset[] = useMemo(() => buildModePresets(presets), [presets]);
   // a freshly loaded machine starts on the configuration whose build it is
   useEffect(() => {
     if (baseConfig != null || !presets.length) return;
     const m = presetOfBuild(presets, refKnobs ?? baseKnobs(p));
-    if (m) setBaseConfig(m.config);
+    if (m) {
+      setBaseConfig(m.config);
+      const k0 = refKnobs ?? baseKnobs(p);
+      setBaseMode(modeOfPoint(modePresets, m.config, k0.I_A, k0.rpm));
+    }
   }, [presets, refKnobs, baseConfig]); // eslint-disable-line react-hooks/exhaustive-deps
   // ── DEFAULT MOTOR: open on it when there is no choice of his own yet, and
   //    "Reset to my default" at any time.  The reference is the catalogue card of
@@ -741,7 +751,8 @@ const ConfiguratorPanel: React.FC = () => {
   // the preset can only be applied once THIS machine's context has arrived
   useEffect(() => {
     if (!pendingDefault || !currentContext) return;
-    const pr = (currentContext.presets ?? []).find((x) => x.config === pendingDefault);
+    // the default motor opens at its first mode (rated, else peak, else the saved order)
+    const pr = buildModePresets(currentContext.presets ?? []).find((x) => x.config === pendingDefault);
     setPendingDefault(null);
     if (pr) applyPreset(pr);
   }, [pendingDefault, currentContext]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1434,12 +1445,13 @@ const ConfiguratorPanel: React.FC = () => {
   // Reset leaves it where it is.
   /** Restore EVERYTHING to a real configuration of the die: every knob, its saved pack, its
    *  default drive.  The user's battery edit for this machine is dropped (the pack is the preset's). */
-  const applyPreset = (pr: Preset) => {
+  const applyPreset = (pr: Preset | ModePreset) => {
     const catalogPoint = cooled && propLoad ? propellerDutyRpmDefault(pr, activeDuty()) : null;
     const nk0 = presetKnobs(knobs, pr);
     const nk = { ...nk0, rpm: initialRpmForLoadMode(propLoad ? 'prop' : 'manual', nk0.rpm,
       nk0.rpm, catalogPoint?.rpm ?? null) };
     setKnobs(nk); setRefKnobs(nk); setBaseConfig(pr.config);
+    setBaseMode('key' in pr && pr.duty ? pr.duty : null);
     if (cooled && propLoad) {
       propRpmSeedRef.current = `${catId ?? refId}|${catalogPoint?.key ?? propellerDutyRpmDefault(pr, null).key}`;
       propRpmManualEditRef.current = '';
@@ -1454,12 +1466,15 @@ const ConfiguratorPanel: React.FC = () => {
     if (cooled) updateCool({ propId: null });
   };
   // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
-  const matchedConfig = presets.find((pr) => presetDiff(pr, knobs, battery, batteryFromPack(pr.battery),
-    cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined).length === 0)?.config ?? null;
+  const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, battery, batteryFromPack(pr.battery),
+    cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined).length === 0)?.key ?? null;
+  // the button the state started from - "changed from L12 · rated" names it
+  const baseModePreset = modePresets.find((m) => m.config === baseConfig && m.duty === baseMode) ?? null;
+  const baseLabel = baseModeLabel(modePresets, baseConfig, baseMode);
   // The drive is a choice of the user, not part of the reference design, so Reset leaves it
   // where it is — unless a preset is the base: then Reset is "reset to preset" and restores all.
   const reset = () => {
-    if (basePreset) { applyPreset(basePreset); return; }
+    if (baseModePreset ?? basePreset) { applyPreset((baseModePreset ?? basePreset)!); return; }
     setKnobs((s) => ({ ...(refKnobs ?? baseKnobs(p)), ...pickDrive(s) }));
     if (cooled) updateCool({ propId: null });
   };
@@ -1717,7 +1732,7 @@ const ConfiguratorPanel: React.FC = () => {
                 {tx('configure.preset')}
                 {basePreset && modified && (
                   <Box component="span" sx={{ color: '#fbbf24' }}>
-                    {' · '}{tx('configure.presetModified', { config: basePreset.config })}
+                    {' · '}{tx('configure.changedFrom', { mode: baseLabel ?? basePreset.config })}
                   </Box>
                 )}
               </Typography>
@@ -1728,13 +1743,13 @@ const ConfiguratorPanel: React.FC = () => {
                   {tx('configure.resetToDefault')}
                 </Button>
               )}
-              <ToggleButtonGroup exclusive size="small" value={matchedConfig} sx={{ ml: 'auto', flexWrap: 'wrap' }}>
-                {presets.map((pr) => (
-                  <ToggleButton key={pr.config} value={pr.config} onClick={() => applyPreset(pr)}
+              <ToggleButtonGroup exclusive size="small" value={matchedKey} sx={{ ml: 'auto', flexWrap: 'wrap' }}>
+                {modePresets.map((pr) => (
+                  <ToggleButton key={pr.key} value={pr.key} onClick={() => applyPreset(pr)}
                     title={tx('configure.presetTip')}
                     sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)',
                       '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
-                    {pr.config}{pr.card_date && <Box component="span" sx={{ ml: 0.75 }}><CardBadge date={pr.card_date} /></Box>}
+                    {pr.label}{pr.card_date && <Box component="span" sx={{ ml: 0.75 }}><CardBadge date={pr.card_date} /></Box>}
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>

@@ -42,6 +42,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
 import { isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
+import { configButtons, selectedConfig } from '../../lib/catalogRows';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -132,6 +133,8 @@ interface Cfg {
   /** what the yaml still says, kept visible when it disagrees. */
   role_stored?: string;
   battery?: Battery | null;
+  /** the mode the row shows and loads (server-resolved; owner 2026-10-13) */
+  default_duty?: string | null;
   stack_mm: number | null;
   wire_height_mm: number | null; wire_width_mm: number | null;
   turns: number | null; connection: string | null; star_delta?: string | null;
@@ -231,6 +234,11 @@ const FamilyCatalog: React.FC<{
   const [canWrite, setCanWrite] = useState(false);
   const { enforced, isAdmin, role } = useAuth();
   const standardUser = isStandardUser(enforced, isAdmin, role);
+
+  // ONE ROW PER MOTOR (owner 2026-10-13): which configuration button is picked on each die's
+  // row, and which dies show the full configuration/mode tables underneath.
+  const [picked, setPicked] = useState<Record<string, string>>({});
+  const [openDie, setOpenDie] = useState<Record<string, boolean>>({});
 
   // What is loaded in the editor — its die/config/duty rows get highlighted.
   const [active, setActive] = useState<{ die?: string; config?: string;
@@ -684,6 +692,14 @@ const FamilyCatalog: React.FC<{
     setBusy(null);
   };
 
+  /** Make `duty` the mode the Motors row shows and loads for this configuration. */
+  const setDefaultDuty = (die: string, cfg: string, duty: string) =>
+    mutate(`default mode of '${cfg}' is now '${duty}'`, () =>
+      fetch(`${API}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/default_duty`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duty }),
+      }));
+
   const roleColor = (role: string) =>
     role === 'generator' ? '#38bdf8' : role === 'mixed' ? '#a78bfa' : '#f59e0b';
   /** Where the chip's word came from.  The role is READ OFF THE DUTIES since
@@ -727,7 +743,7 @@ const FamilyCatalog: React.FC<{
         <Box key={die.name} sx={{
           border: `1px solid ${active?.die === die.name ? '#60a5fa88' : 'var(--line-soft)'}`,
           borderRadius: 1, p: 1.2, display: 'flex', flexDirection: 'column', gap: 0.8 }}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.2, flexWrap: 'wrap' }}>
             <Box sx={{ flexShrink: 0, lineHeight: 0 }}>
               <MotorThumbnail slots={die.slots} poles={die.poles} size={56}
                 thumbSvg={die.thumb_svg ?? undefined} />
@@ -736,6 +752,60 @@ const FamilyCatalog: React.FC<{
               {die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
             <CardSummary cards={die.cards ?? 0} total={die.config_count ?? die.configs.length} />
+            {(() => {
+              // The configurations as small buttons; the numbers beside them are those of
+              // the picked configuration's DEFAULT mode (lib/catalogRows).
+              const btns = configButtons(die as never);
+              const sel = selectedConfig(btns, active?.die === die.name ? active.config ?? null : null,
+                                         picked[die.name] ?? null);
+              const cur = btns.find((b) => b.config === sel) ?? null;
+              return (
+                <>
+                  <Box sx={{ display: 'inline-flex', gap: 0.4, flexWrap: 'wrap' }}>
+                    {btns.map((b) => {
+                      const loaded = active?.die === die.name && active?.config === b.config;
+                      return (
+                        <Tooltip key={b.config} title={tx('configButtonTip', { config: b.config, duty: b.duty ?? '\u2014', n: b.modes })}>
+                          <Button size="small" variant={b.config === sel ? 'contained' : 'outlined'}
+                            onClick={() => setPicked((m) => ({ ...m, [die.name]: b.config }))}
+                            sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.9, minWidth: 0, minHeight: 22,
+                                  ...(loaded && b.config !== sel ? { borderColor: '#60a5fa', color: '#60a5fa' } : {}) }}>
+                            {b.config}{loaded ? ' \u25cf' : ''}
+                          </Button>
+                        </Tooltip>
+                      );
+                    })}
+                  </Box>
+                  {cur && (
+                    <>
+                      <CardBadge date={cur.card_date} />
+                      <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
+                        <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
+                                                          fontVariantNumeric: 'tabular-nums' }}>
+                          {cur.duty ? `${cur.duty}: ` : ''}{fmt(cur.power_kw, 2)} kW · {fmt(cur.torque_nm, 2)} Nm · {fmt(cur.mass_kg, 2)} kg
+                        </Typography>
+                      </Tooltip>
+                      {cur.duty && (
+                        <Tooltip title={tx('loadDefaultModeTip', { config: cur.config, duty: cur.duty })}>
+                          <span>
+                            <IconButton size="small" disabled={!!busy}
+                              onClick={() => applyDuty(die.name, cur.config, cur.duty!)}
+                              sx={{ fontSize: 13, p: 0.3, color: '#34d399' }}>
+                              {busy === `${cur.config} / ${cur.duty}` ? '\u2026' : '\u25b6'}
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      )}
+                    </>
+                  )}
+                  <Button size="small" onClick={() => setOpenDie((m) => ({ ...m, [die.name]: !m[die.name] }))}
+                    aria-expanded={!!openDie[die.name]}
+                    sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.6, minWidth: 0, color: 'var(--text-3)' }}>
+                    {openDie[die.name] ? tx('detailsHide') : tx('detailsShow')}
+                  </Button>
+                </>
+              );
+            })()}
             {canWrite && (
               <Tooltip title={tx('renameDie')}>
                 <span>
@@ -818,7 +888,7 @@ const FamilyCatalog: React.FC<{
             )}
           </Box>
 
-          {die.configs.map(c => (
+          {openDie[die.name] && die.configs.map(c => (
             <Box key={c.name} sx={{ pl: 1, py: 0.3, borderTop: '1px solid var(--panel)' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.8, flexWrap: 'wrap' }}>
                 <Typography sx={{ fontSize: 12.5, fontWeight: 600, minWidth: 84,
@@ -1081,7 +1151,7 @@ const FamilyCatalog: React.FC<{
                                      + (staleRes ? ' · ⚠ results computed on an OLDER build — load (▶), Run, then Save' : '')}>
                               <span style={{ color: roleColor(d.mode), fontWeight: 600,
                                              cursor: 'help' }}>
-                                {staleRes ? '⚠ ' : ''}{d.name}
+                                {staleRes ? '⚠ ' : ''}{d.name}{(c.default_duty ?? null) === d.name ? ' ★' : ''}
                                 {d.saved_at && (
                                   <span style={{ color: 'var(--text-4)', fontWeight: 400,
                                                  fontSize: 10, marginLeft: 6 }}>
@@ -1224,6 +1294,15 @@ const FamilyCatalog: React.FC<{
                                 </IconButton>
                               </span>
                             </Tooltip>
+                            {canWrite && (c.default_duty ?? null) !== d.name && (
+                              <Tooltip title={tx('setDefaultModeTip')}>
+                                <span>
+                                  <IconButton size="small" disabled={!!busy}
+                                    onClick={() => setDefaultDuty(die.name, c.name, d.name)}
+                                    sx={{ fontSize: 12, p: 0.2, ml: 0.5, color: 'var(--text-3)' }}>☆</IconButton>
+                                </span>
+                              </Tooltip>
+                            )}
                             {canWrite && (
                               <Tooltip title={tx('renameDuty')}>
                                 <span>

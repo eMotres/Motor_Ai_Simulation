@@ -12,6 +12,8 @@ import {
   Tooltip,
   Chip,
   Badge,
+  Menu,
+  MenuItem,
   CircularProgress,
   ToggleButtonGroup,
   ToggleButton,
@@ -73,6 +75,7 @@ import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
 import { isStandardUser, landingTabForUser, tabAllowed } from './lib/accessUi';
+import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { useServerLocale } from './i18n/persist';
@@ -625,6 +628,11 @@ function App() {
     .filter((t) => t.gate === 'always' || (t.gate === 'signedIn' && signedIn) || (t.gate === 'fullUI' && fullUI) || (t.gate === 'admin' && isAdmin))
     .sort((a, b) => a.order - b.order);
   const showViewer = !!tabs.find((t) => t.id === activeTab)?.showViewer;
+  // The bar: Electromagnetic / Thermal / Mechanical collapse into ONE "Simulations"
+  // dropdown (owner 2026-10-13).  Every panel keeps its own tab id, gate and mount
+  // rule above; only the bar is drawn differently (lib/simulationsMenu).
+  const entries = barEntries(tabs);
+  const [simAnchor, setSimAnchor] = useState<HTMLElement | null>(null);
 
   return (
     <ThemeProvider theme={appTheme}>
@@ -690,12 +698,19 @@ function App() {
         {/* ── Full-width Navigation Tabs ── */}
         <Box sx={{ bgcolor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}>
           <Tabs
-            value={activeTab}
-            onChange={(_, v) => setActiveTab(v)}
+            value={barValue(activeTab)}
+            onChange={(_, v) => { if (v !== SIMULATIONS_BAR_ID) setActiveTab(v); }}
             variant="fullWidth"
             sx={{ minHeight: 40 }}
           >
-            {tabs.map((t) => (
+            {entries.map((e) => e.kind === 'simulations' ? (
+              <Tab key={e.id} value={e.id}
+                label={`${simulationsLabel(tr('tabs.simulations', { defaultValue: 'Simulations' }), activeTab, e.members)} ▾`}
+                onClick={(ev) => setSimAnchor(ev.currentTarget)}
+                aria-haspopup="menu" aria-expanded={!!simAnchor}
+                sx={{ minHeight: 40, fontSize: '0.8rem', textTransform: 'none',
+                  px: 0.75, minWidth: 0, letterSpacing: 0 }} />
+            ) : (() => { const t = tabs.find((x) => x.id === e.id)!; return (
               <Tab key={t.id} value={t.id}
                 /* The badge rides on the RENDERED label, never on the registry
                    literal above: tests/test_support_chat_limits.py regexes the
@@ -716,8 +731,17 @@ function App() {
                   px: 0.75, minWidth: 0, letterSpacing: 0,
                   ...(t.id === 'motors' ? { fontWeight: 700 } : {}),
                   ...(t.id === 'admin' ? { fontWeight: 700, color: '#fbbf24' } : {}) }} />
-            ))}
+            ); })())}
           </Tabs>
+          <Menu anchorEl={simAnchor} open={!!simAnchor} onClose={() => setSimAnchor(null)}>
+            {(entries.find((e) => e.kind === 'simulations') as
+              { members: { id: string; label: string }[] } | undefined)?.members.map((m) => (
+              <MenuItem key={m.id} selected={activeTab === m.id} sx={{ fontSize: '0.85rem' }}
+                onClick={() => { setSimAnchor(null); setActiveTab(m.id as never); }}>
+                {m.label}
+              </MenuItem>
+            ))}
+          </Menu>
         </Box>
 
         {/* ── What is loaded: die / configuration / duty + save-back ── */}

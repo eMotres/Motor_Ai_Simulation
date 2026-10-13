@@ -179,7 +179,11 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
         "duty_points": [
             {"name": str(d.get("name") or ""),
              "current_A": _num(d.get("current_arms")),
-             "rpm": _num(d.get("rpm"))}
+             "rpm": _num(d.get("rpm")),
+             # the rest of the saved point, for Configure's configuration x mode
+             # buttons (owner 2026-10-13)
+             "gamma_deg": _num(d.get("gamma_deg")),
+             "mode": str(d.get("mode") or "motor")}
             for d in duties if d.get("name")
         ],
         "battery": pack(doc.get("battery")),

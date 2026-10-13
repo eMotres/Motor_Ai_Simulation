@@ -6,4 +6,5 @@
 !src/motor_ai_sim/routes/fusion.py
 !config/fusion_param_map.yaml
 !config/motor_config.yaml
+!config/bearings_library.yaml
 **/__pycache__

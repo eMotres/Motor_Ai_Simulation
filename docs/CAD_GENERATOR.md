@@ -285,13 +285,13 @@ mesh-vs-solid volume error):
 | File | What |
 |---|---|
 | `<motor_id>_full.glb` | the FULL model for the web viewer: one coloured node per part (`Core`, `Coils/Coil_nn`, `Rotor`, `Magnets/Magnet_nn`, `Shaft`, `Bearings_front/back`, `Holder_front/back`, `Ring_front/back`, `Screws/Screw_n`, `Prop_fix`, `PhaseBoard_FR4/copper/other/pins`); node `extras` carry `family` (the viewer's toggle) and `explode` (axial factor of the exploded view, in motor lengths). Colours = `view.COLORS`. |
-| `<motor_id>_envelope.step`, `<motor_id>_envelope.glb` | the ENVELOPE: the motor as seen from OUTSIDE (owner 2026-10-13: the cut-outs are the look of the AeroStator Core). Real stator outer contour (lobes, gaps, coil windows) over the real stack length, the coils in those windows, both rings, both holders (spoke windows, bosses, mounting holes, bolt circle), bearings, screws, shaft with seats and thread section, Prop_fix, the phase board as a plain FR-4 disc (outline, notches and holes) with the 3 phase pins (owner 2026-10-13: no copper in the envelope, outer layers included; the coils stay as they are, they are standard); colours as in the full model. Left out: rotor core, magnets and pockets (the bore is a plain cylinder at the rotor outer diameter, `rotor_up_r`) and all board copper and the board's notch walls / mask solids. |
+| `<motor_id>_envelope.step`, `<motor_id>_envelope.glb` | the PRE-NDA model (the file names keep the word "envelope"; manifests and routes use it): the COMPLETE motor model, since the owner decided on 2026-10-13 that rotor core and magnets carry no patent value, so there is one model for everyone (the cut-outs of the stator are the look of the AeroStator Core). Stator, coils, rotor core, magnets, rings, holders, bearings, screws, shaft, Prop_fix; colours as in the full model. The ONLY difference to the full model is the phase board: a plain FR-4 disc (outline, notches, holes) with the 3 phase pins and NO copper (the copper layout is shared after the NDA); the board's notch-wall / mask solids are left out too. Before NDA: complete motor model; the phase-board copper layout is shared after NDA. |
 | `<motor_id>_models3d.json` | evidence of the export (per-solid mesh volume check, envelope solid volumes) |
 
 `glb_writer.py` (pure Python, no numpy) writes the GLB: millimetres, +Z = motor axis, smooth normals inside a face and hard edges between
-faces; per-solid triangle budgets keep balls, screws, pins and board copper small (L12: full 4.6 MB / 135 k triangles, envelope 0.7 MB / 18 k).
+faces; per-solid triangle budgets keep balls, screws, pins and board copper small (L12: full 4.6 MB / 135 k triangles, pre-NDA model about 0.7 MB smaller: the board has no copper).
 The export refuses the build if a mesh differs from its solid by more than 3 % in volume (measured 0.4 %), if the envelope STEP re-imports
-with another volume or solid count, or if the rotor core, a magnet or any board copper is in the envelope.
+with another volume or solid count, or if the pre-NDA model lacks the rotor core or a magnet or contains any board copper.
 
 Routes (`routes/model3d.py`, `model3d.py`), all authenticated, motor access = `motor_access` (granted die or per-die visibility; an ungranted or
 unbuilt motor is a 404):
@@ -303,8 +303,8 @@ unbuilt motor is a 404):
 | `GET /api/model3d/<die>/<config>/model.step` | the STEP of the caller's variant, header and file name stamped with the customer name and the date; one line in the download log |
 | `GET /api/model3d/downloads` | admin: the download log, newest first |
 
-Audience (`model3d.variant_for`, the only place): the owner / admin and accounts with `nda.signed` get the **full** model (`_full.glb`, `_active.step`);
-every other signed-in account gets the **envelope**; the URL names the motor, never a variant or a file. The NDA flag is a field of the user record
+Audience (`model3d.variant_for`, the only place): the owner / admin and accounts with `nda.signed` get the **full** model (`_full.glb`, `_active.step`, copper board);
+every other signed-in account gets the **pre-NDA** model (`_envelope.*`: the same motor with a plain FR-4 board); the URL names the motor, never a variant or a file. The NDA flag is a field of the user record
 (`nda: {signed, date, by}`), set in Admin -> Users -> user drawer (switch + date; `PATCH /api/auth/users/<email>` with `nda_signed`, `nda_date`; audited as `user.nda`).
 
 STEP stamp: the HEADER section is rewritten (description, file name, author = customer, organisation = MOTRES d.o.o., a comment line with the

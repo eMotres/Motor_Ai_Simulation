@@ -2,12 +2,12 @@
   "motor": "Motor",
   "none": "No 3D model is available for your motors yet.",
   "variant": {
-    "envelope": "Envelope",
+    "envelope": "Complete (before NDA)",
     "full": "Full"
   },
   "variantHelp": {
-    "envelope": "Envelope model: the motor as seen from outside - the stator with its real outer contour and the coils in its windows, rings, holders with their spoke windows, bosses, mounting holes and bolt circle, bearings, screws, the shaft with its seats and thread section, the propeller adapter, the phase board outline with notches and pins. No rotor core, magnets or inner board layers. The full model is available after the NDA is signed.",
-    "full": "Full model: every part, with colours. Available to the owner and to accounts with a signed NDA."
+    "envelope": "Before NDA: the complete motor model (stator, coils, rotor, magnets, holders, bearings, screws, shaft). The phase-board copper layout is shared after the NDA is signed; until then the board is a plain FR-4 disc with the 3 phase pins.",
+    "full": "Full model: the complete motor with the phase-board copper layout. Available to the owner and to accounts with a signed NDA."
   },
   "parts": "Parts",
   "part": {
@@ -24,12 +24,10 @@
     "Ring_back": "Ring (back)",
     "Screws": "Screws",
     "Prop_fix": "Propeller adapter",
-    "PhaseBoard": "Phase board",
-    "RotorFill": "Rotor outline"
+    "PhaseBoard": "Phase board"
   },
   "explode": "Exploded view",
   "section": "Section plane",
-  "sectionEnvelope": "The envelope model shows the outside of the motor only, so there is nothing to cut.",
   "measure": "Measure",
   "measureHint": "Click two points on the model",
   "downloadStep": "Download STEP ({variant})",

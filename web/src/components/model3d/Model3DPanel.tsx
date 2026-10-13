@@ -1,9 +1,8 @@
 // The "3D model" tab: look at, rotate, section and download the 3D model of a granted motor.
 //
-// What is shown is decided by the SERVER (routes/model3d.py): an account without NDA gets the simplified envelope (outer
-// contour, shaft, mounting holes, phase board outline, no internals); the owner and "NDA signed" accounts get the full
-// model.  This panel only names the variant and offers the controls; the section plane is off for the envelope because
-// there is nothing inside to cut.  No bill of materials, no prices.
+// What is shown is decided by the SERVER (routes/model3d.py): an account without NDA gets the complete motor with a plain
+// FR-4 phase board (no copper); the owner and "NDA signed" accounts get the full model with the copper board.
+// This panel only names the variant and offers the controls.  No bill of materials, no prices.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, Chip, CircularProgress, FormControlLabel, MenuItem, Select, Slider, Switch,
@@ -54,7 +53,6 @@ const Model3DPanel: React.FC = () => {
   const [dl, setDl] = useState<'idle' | 'busy'>('idle');
 
   const model = useMemo(() => models?.find((m) => modelKey(m) === key) ?? null, [models, key]);
-  const full = variant === 'full';
 
   // the list of models this account may open
   useEffect(() => {
@@ -110,8 +108,8 @@ const Model3DPanel: React.FC = () => {
 
   // push the controls into the scene
   useEffect(() => {
-    viewer.current?.apply({ hidden, explode, section: { ...sec, on: sec.on && full }, measure });
-  }, [hidden, explode, sec, measure, full, groups]);
+    viewer.current?.apply({ hidden, explode, section: { ...sec, on: sec.on }, measure });
+  }, [hidden, explode, sec, measure, groups]);
 
   const toggles = useMemo(() => togglesOf(groups), [groups]);
   const setAxis = useCallback((axis: Axis) => {
@@ -173,17 +171,16 @@ const Model3DPanel: React.FC = () => {
           <Slider size="small" min={0} max={1} step={0.01} value={explode} onChange={(_, v) => setExplode(v as number)} />
         </Box>
 
-        <Box sx={{ opacity: full ? 1 : 0.55 }}>
+        <Box>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
             <Typography sx={lbl}>{t('section')}</Typography>
-            {!full && <HelpTip title={t('sectionEnvelope')} />}
-            <Switch size="small" disabled={!full} checked={sec.on && full} onChange={(_, on) => setSec((s) => ({ ...s, on }))} />
+            <Switch size="small" checked={sec.on} onChange={(_, on) => setSec((s) => ({ ...s, on }))} />
           </Box>
-          <ToggleButtonGroup size="small" exclusive value={sec.axis} disabled={!full || !sec.on}
+          <ToggleButtonGroup size="small" exclusive value={sec.axis} disabled={!sec.on}
             onChange={(_, a) => a && setAxis(a as Axis)} sx={{ mb: 0.5 }}>
             {(['x', 'y', 'z'] as const).map((a) => <ToggleButton key={a} value={a} sx={{ px: 1.25, py: 0.1, fontSize: 12 }}>{a.toUpperCase()}</ToggleButton>)}
           </ToggleButtonGroup>
-          <Slider size="small" disabled={!full || !sec.on} min={range.min} max={range.max} step={(range.max - range.min) / 400}
+          <Slider size="small" disabled={!sec.on} min={range.min} max={range.max} step={(range.max - range.min) / 400}
             value={sec.position} onChange={(_, v) => setSec((s) => ({ ...s, position: v as number }))} />
         </Box>
 

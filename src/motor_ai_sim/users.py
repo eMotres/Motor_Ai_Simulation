@@ -578,8 +578,10 @@ def public_user(email: str) -> dict:
 
 
 # ── NDA flag (3D model menu) ─────────────────────────────────────────────────
-# `nda: {"signed": bool, "date": "YYYY-MM-DD", "by": admin}` on the user record, set by an admin only (Admin -> Users).
-# Before it is signed the 3D model menu serves the simplified envelope model; after it, the full model and STEP.
+# `nda: {"signed": bool, "date": "YYYY-MM-DD", "by": admin email | "online"}` on the user record: set by an admin (Admin -> Users)
+# or by the account itself through the online click-through (motor_ai_sim.nda), which also stores `version`, `company` and
+# `record_id` (the line in legal/nda_signatures.jsonl).  Signed = the STEP download of the 3D model menu is open.
+# Revoking keeps `version` / `company` / `record_id` of an online signature (the record itself is never touched) with signed False.
 
 def normalize_nda(raw) -> dict:
     if not isinstance(raw, dict):
@@ -588,7 +590,12 @@ def normalize_nda(raw) -> dict:
     date = str(raw.get("date") or "").strip()
     if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
         date = ""
-    return {"signed": signed, "date": date if signed else "", "by": str(raw.get("by") or "")[:200] if signed else ""}
+    out = {"signed": signed, "date": date if signed else "", "by": str(raw.get("by") or "")[:200] if signed else ""}
+    for k in ("version", "company", "record_id", "revoked"):
+        v = str(raw.get(k) or "").strip()[:300]
+        if v:
+            out[k] = v
+    return out
 
 
 def get_nda(email: str) -> dict:
@@ -596,8 +603,10 @@ def get_nda(email: str) -> dict:
     return normalize_nda(rec.get("nda") if isinstance(rec, dict) else None)
 
 
-def set_nda(email: str, signed: bool, date: Optional[str] = None, by: str = "") -> dict:
-    """Mark the NDA of an account as signed (on `date`, default today UTC) or not signed.  Admin routes only."""
+def set_nda(email: str, signed: bool, date: Optional[str] = None, by: str = "", *, version: str = "", company: str = "",
+            record_id: str = "") -> dict:
+    """Mark the NDA of an account as signed (on `date`, default today UTC) or not signed.  Admin routes, and the online signing
+    (``by="online"`` with version / company / record_id).  An admin editing the date of an online signature keeps its source."""
     email = _norm(email)
     if date is not None and date != "" and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(date)):
         raise ValueError("date must be YYYY-MM-DD")
@@ -605,9 +614,20 @@ def set_nda(email: str, signed: bool, date: Optional[str] = None, by: str = "") 
         users = _load()
         if email not in users:
             raise KeyError(email)
+        old = normalize_nda(users[email].get("nda"))
+        today = time.strftime("%Y-%m-%d", time.gmtime())
         if signed:
-            day = str(date) if date else time.strftime("%Y-%m-%d", time.gmtime())
-            users[email]["nda"] = {"signed": True, "date": day, "by": str(by or "")}
+            day = str(date) if date else today
+            if old["signed"] and by != "online" and old.get("record_id"):
+                users[email]["nda"] = dict(users[email]["nda"], date=day)          # keep the online source and its record
+            else:
+                nda = {"signed": True, "date": day, "by": str(by or "")}
+                if version or company or record_id:
+                    nda.update(version=version, company=company, record_id=record_id)
+                users[email]["nda"] = nda
+        elif old.get("record_id"):
+            users[email]["nda"] = {"signed": False, "version": old.get("version", ""), "company": old.get("company", ""),
+                                   "record_id": old["record_id"], "revoked": today}
         else:
             users[email].pop("nda", None)
         _save(users)

@@ -9,6 +9,7 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import BlockIcon from '@mui/icons-material/Block';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import HelpTip from '../common/HelpTip';
+import { openNdaPdf } from './ndaPdf';
 import { ROLES } from './dialogs/InviteDialog';
 import type { RegistryUser } from './dialogs/MotorsDialog';
 
@@ -95,14 +96,25 @@ const UserDrawer: React.FC<{
             <HelpTip title="3D model menu: with the NDA signed the account sees and downloads the FULL model (view + STEP); without it only the simplified envelope. Every download is logged." />
           </Box>
           {user.role === 'admin' ? (
-            <Typography sx={{ fontSize: 13, color: 'var(--text-0)', mb: 2 }}>full model (admin)</Typography>
+            <Typography sx={{ fontSize: 13, color: 'var(--text-0)', mb: 2 }}>download open (admin)</Typography>
           ) : (
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+            <Box sx={{ mb: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
               <Switch size="small" checked={!!user.nda?.signed} disabled={busy}
                 onChange={(_, on) => onNda(on, on ? (user.nda?.date || undefined) : undefined)} />
               <TextField size="small" type="date" disabled={busy || !user.nda?.signed} value={user.nda?.date ?? ''}
                 onChange={(e) => e.target.value && onNda(true, e.target.value)}
                 inputProps={{ 'aria-label': 'NDA date' }} sx={{ '& input': { fontSize: 12.5, py: 0.5 } }} />
+            </Box>
+            {(user.nda?.signed || user.nda?.record_id) && (
+              <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mt: 0.5 }}>
+                {user.nda?.signed ? (user.nda.by === 'online' ? 'signed online' : 'set by admin') : `revoked ${user.nda?.revoked ?? ''}`}
+                {user.nda?.version ? ` · ${user.nda.version}` : ''}{user.nda?.company ? ` · ${user.nda.company}` : ''}
+                {user.nda?.record_id && (
+                  <Button size="small" onClick={() => void openNdaPdf(user.nda!.record_id!)} sx={{ textTransform: 'none', fontSize: 11, ml: 0.5, minWidth: 0 }}>PDF</Button>
+                )}
+              </Typography>
+            )}
             </Box>
           )}
 

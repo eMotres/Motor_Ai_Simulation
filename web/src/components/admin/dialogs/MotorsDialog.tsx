@@ -16,7 +16,7 @@ export interface RegistryUser {
   email: string; role: string; name: string; disabled: boolean; created?: string | null;
   motors?: MotorGrants;
   /** NDA state (3D model menu): signed accounts get the full model and STEP, the rest the envelope. */
-  nda?: { signed: boolean; date: string; by: string };
+  nda?: { signed: boolean; date: string; by: string; version?: string; company?: string; record_id?: string; revoked?: string };
 }
 
 /** The dies a default may name: every die for an "all" grant, else the picked ones. */

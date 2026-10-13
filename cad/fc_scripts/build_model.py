@@ -44,6 +44,10 @@ def main():
         if ft["errors"]:
             gt["errors"] += ft["errors"]
             gt["ok"] = False
+    if gt["ok"] and doc.getObject("Electronics") is not None:
+        from motor_templates.segmented_flatwire import electronics
+        pb = electronics.fit(doc, electronics.motor_groups(doc))       # clearances + lead ends vs the board (reported, not refused)
+        report["phase_board"] = dict(pb, import_=report.get("phase_board_import"))
     report["gate"] = {k: v for k, v in gt.items() if k != "volumes"}
     report["volumes"] = {k: round(v, 4) for k, v in gt["volumes"].items()}
     direct, live = ps.live_parameters(doc)

@@ -233,6 +233,9 @@ def gate(doc, sheet_name="Params"):
             vols[label] = arr[0].Shape.Volume
     if doc.getObject("Mechanics") is not None:
         errors += _gate_mechanics(doc, g, exp, counts, vols)
+    if doc.getObject("Electronics") is not None:
+        from . import electronics
+        errors += electronics.gate(doc, g)
     # stale-geometry invariants (a failed feature keeps its previous shape) - always evaluated
     try:
         L = g("motor_length")

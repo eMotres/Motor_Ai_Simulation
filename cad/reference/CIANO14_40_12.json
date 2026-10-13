@@ -1810,6 +1810,56 @@
    "unit": "mm",
    "comment": "Length of the straight chamfer tools (symmetric about y = 0): long enough to cross every seat edge",
    "role": "derived"
+  },
+  {
+   "name": "phase_board_n_offset",
+   "source": "PCB_CIANO14_40 rev C",
+   "fusion_expression": "-",
+   "freecad_expression": "2.525 mm",
+   "value": 2.525,
+   "unit": "mm",
+   "comment": "Phase board: N-side copper surface sits this far ABOVE the coil lead end datum (coil_lead_end_z = -(coil_leg_length / 2 + coil_lead_total)), toward the motor, so the lead ends stand out of the board by 2.525 mm.  The board thickness (1.6 +-10 %) grows toward the motor: the N side stays fixed",
+   "role": "mechanics"
+  },
+  {
+   "name": "phase_board_n_z0",
+   "source": "PCB_CIANO14_40 rev C STEP",
+   "fusion_expression": "-",
+   "freecad_expression": "-0.21 mm",
+   "value": -0.21,
+   "unit": "mm",
+   "comment": "Phase board STEP frame (KiCad absolute, +Z = layer A facing the motor): Z of the N-side copper surface.  A property of the STEP file, change it only with a new board export",
+   "role": "mechanics"
+  },
+  {
+   "name": "phase_board_x",
+   "source": "PCB_CIANO14_40 rev C STEP",
+   "fusion_expression": "-",
+   "freecad_expression": "-100 mm",
+   "value": -100.0,
+   "unit": "mm",
+   "comment": "Phase board STEP frame offset X: the KiCad board centre is at X 100, so the translation to the motor axis is -100",
+   "role": "mechanics"
+  },
+  {
+   "name": "phase_board_y",
+   "source": "PCB_CIANO14_40 rev C STEP",
+   "fusion_expression": "-",
+   "freecad_expression": "100 mm",
+   "value": 100.0,
+   "unit": "mm",
+   "comment": "Phase board STEP frame offset Y: the KiCad board centre is at Y -100 (Y flipped), so the translation to the motor axis is +100",
+   "role": "mechanics"
+  },
+  {
+   "name": "phase_board_z",
+   "source": "axial chain",
+   "fusion_expression": "-",
+   "freecad_expression": "-(coil_leg_length / 2 + coil_lead_total) + phase_board_n_offset - phase_board_n_z0",
+   "value": -16.615,
+   "unit": "mm",
+   "comment": "Phase board placement Z (translation, no rotation): N copper at coil lead end + phase_board_n_offset.  L12 -12.615 (N copper -12.825), L20 -16.615 (N copper -16.825)",
+   "role": "derived"
   }
  ]
 }

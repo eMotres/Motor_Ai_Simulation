@@ -53,6 +53,18 @@ def file_rows(out_dir, names):
     return rows
 
 
+def _board_summary(pb):
+    """Phase board evidence in the manifest: STEP hash, J13 error, clashes, minimum clearances, lead fit."""
+    if not pb:
+        return None
+    imp = pb.get("import_") or {}
+    return dict(step=imp.get("step"), step_sha256=imp.get("sha256"), solids=imp.get("solids"), j13_error_mm=pb.get("j13_error_mm"),
+                clashes=[r["group"] for r in pb.get("groups", []) if r.get("status") == "CLASH"],
+                min_distance_mm={r["group"]: r["min_distance_mm"] for r in pb.get("groups", [])},
+                lead_overlaps=[(l["coil"], l["lead"]) for l in pb.get("leads", []) if l["overlap_mm3"] > 1e-6],
+                min_lead_clearance_mm=min([l["clearance_to_board_mm"] for l in pb.get("leads", []) if l["clearance_to_board_mm"] is not None] or [None]))
+
+
 def build_manifest(eff, profile, pull_report, build_report, step_check, files, freecad_version, seconds, kind="store"):
     """eff = None for a build from an explicit profile file (kind 'profile_file')."""
     sim = (profile.get("profile", {}).get("source", {}) or {}).get("simulation", {}) or {}
@@ -83,5 +95,6 @@ def build_manifest(eff, profile, pull_report, build_report, step_check, files, f
             step_total_volume=step_check.get("total_volume"),
             step_expected_volume=step_check.get("expected_total_volume"),
             coil_leads=step_check.get("leads"),
+            phase_board=_board_summary(build_report.get("phase_board")),
             summary=pull_report.get("summary")),
         files=files)

@@ -7,6 +7,7 @@ import { autoSaveAppliedDesign } from '../lib/appliedAutoSave';
 import type { AppliedSaveResult, ApplyMode } from '../lib/appliedAutoSave';
 import { geoSignature, setGeoSigGetter } from '../components/common/geoSig';
 import { geometryApplyOutcome } from '../lib/geometryApplyOutcome';
+import { dutyApplyInProgress } from '../lib/familyFollow';
 import type { GeometryApplyOutcome } from '../lib/geometryApplyOutcome';
 import type {
   MotorGeometryParams,
@@ -419,6 +420,11 @@ export const useMotorStore = create<MotorState>()(
           // A request issued for the previous signed-in account must never
           // replace the new account's locally restored geometry.
           if (storedIdentity() !== requestedIdentity) return;
+          // A motor load is rewriting the live machine right now (the target tab opens
+          // BEFORE it finishes and mounts its own geometry fetch): this answer may predate
+          // the load's PUT, and adopting it would put the OLD machine back over the new one.
+          // The load's own PUT answer is the truth; it sets the geometry itself.
+          if (dutyApplyInProgress()) { set({ isLoading: false, connectedToApi: true }); return; }
           set({
             geometry: data as MotorGeometryParams,
             isLoading: false,

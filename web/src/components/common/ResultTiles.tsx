@@ -43,7 +43,9 @@ export const MetricTile: React.FC<{
   blankColor?: string;
   /** Explicit colour for a physical constant whose temperature basis is shown below. */
   valueColor?: string;
-}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip, blankTip, display, plain, labelColor, blankColor, valueColor }) => {
+  /** a wider tile (the part-mass row: a part name with its material needs two columns) */
+  width?: number;
+}> = ({ label, value, unit, d = 1, base, goodHi, absLevel, tip, blankTip, display, plain, labelColor, blankColor, valueColor, width }) => {
   const blank = value == null && display == null;
   const delta = value == null ? 0 : pctDelta(value, base);
   // No "% vs ref" line under every tile (user 2026-08-26) — the deltas are
@@ -63,7 +65,7 @@ export const MetricTile: React.FC<{
   return (
     // ONE fixed width and a fixed value line: a number changing (or becoming "—") never moves
     // another tile (owner 2026-10-05: the block must not jump when the drive is toggled)
-    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: TILE_W, boxSizing: 'border-box' }}
+    <Box sx={{ ...PANEL, p: 0.9, flex: '0 0 auto', width: width ?? TILE_W, boxSizing: 'border-box' }}
       title={(tip ? `${tip}  ` : '') + (blank ? (blankTip ?? '') : plain ? '' : changed
         ? tx('configure.vsRef', { delta: `${delta > 0 ? '+' : ''}${fmt(delta, 1)}`, base: fmt(base, d), unit })
         : tx('configure.sameAsRef'))}>

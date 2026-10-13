@@ -13,6 +13,8 @@
   "configButtonTip": "{config}: loads at its default mode ({duty}); {n} mode(s) saved",
   "defaultModeNumbersTip": "Numbers of the default mode ({duty}). Open details for every mode.",
   "loadDefaultModeTip": "Load {config} at its default mode ({duty})",
+  "configClickBusy": "{config}: another load is still running - try again in a moment",
+  "configClickNoMode": "{config}: no saved mode, nothing to load",
   "setDefaultModeTip": "Make this the default mode shown in the row",
   "detailsShow": "details",
   "detailsHide": "hide",

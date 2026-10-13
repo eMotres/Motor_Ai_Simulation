@@ -58,6 +58,26 @@ export function selectedConfig(buttons: readonly ConfigButton[], active: string 
   return buttons[0]?.config ?? null;
 }
 
+/** What a click on a configuration button does.  The button's tooltip promises "loads at its
+ *  default mode", so the click LOADS that mode (incident 2026-10-13: it only picked the
+ *  button, the owner clicked "L155 motor" and nothing loaded - the load sat behind the small
+ *  play glyph).  `refuse` is the reason a click that cannot load must SAY, never swallow. */
+export interface ConfigClickPlan {
+  pick: string;
+  load: string | null;
+  refuse: 'busy' | 'noMode' | null;
+}
+
+export function configClickPlan(buttons: readonly ConfigButton[], config: string,
+                                loaded: string | null, busy: boolean): ConfigClickPlan {
+  const b = buttons.find((x) => x.config === config);
+  if (busy) return { pick: config, load: null, refuse: 'busy' };
+  if (!b || !b.duty) return { pick: config, load: null, refuse: 'noMode' };
+  // the machine that is already loaded: the click only picks it (the play glyph reloads)
+  if (loaded === config) return { pick: config, load: null, refuse: null };
+  return { pick: config, load: b.duty, refuse: null };
+}
+
 const modeRank = (name: string): number => {
   const n = name.trim().toLowerCase();
   return n.startsWith('rated') ? 0 : n.startsWith('peak') ? 1 : 2;

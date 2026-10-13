@@ -124,8 +124,8 @@ Axial parameters (Fusion Sketch3 dimension names, not renamed; owner to confirm 
 | `coil_holder_clearance` (d11980), `ring_t` (d11983) | flange r = coil corner 13.233 + 0.4; ring radial thickness | 0.4, 0.8 |
 | `ax_core_ref_inset` (d9633) | construction line only (role info) | 0.9 |
 
-Not dimensioned in Fusion (Sketch2 is not fully constrained), kept as read: `holder_bolt_r` 14.843191, `holder_window_r`
-1.460021.  Fusion's Chamfer7 at the journal end chamfers one of the two arcs left by the flats (edge picked after
+Not dimensioned in Fusion (Sketch2 is not fully constrained), read as 14.843191 / 1.460021 and rounded by the owner
+2026-10-13 (Fusion not dimensioned): `holder_bolt_r` 14.85, `holder_window_r` 1.46.  Fusion's Chamfer7 at the journal end chamfers one of the two arcs left by the flats (edge picked after
 Extrude15); the template chamfers both.  Screw length `holder_screw_l = 2 holder_face_z + holder_flange_t` (L20 25 =
 91292A032 M2x25; L12 17).
 

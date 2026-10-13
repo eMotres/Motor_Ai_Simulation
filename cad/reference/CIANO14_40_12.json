@@ -1565,10 +1565,10 @@
    "name": "holder_bolt_r",
    "source": "Stator_holder/Sketch2 C0/C1 centre",
    "fusion_expression": "not dimensioned",
-   "freecad_expression": "14.843191 mm",
-   "value": 14.843191,
+   "freecad_expression": "14.85 mm",
+   "value": 14.85,
    "unit": "mm",
-   "comment": "Bolt circle radius (screws, bosses).  NOT dimensioned in Fusion (Sketch2 is not fully constrained): value read from the model",
+   "comment": "Bolt circle radius (screws, bosses).  NOT dimensioned in Fusion (Sketch2 is not fully constrained): 14.843191 read from the model, rounded by the owner 2026-10-13 (Fusion not dimensioned)",
    "role": "mechanics"
   },
   {
@@ -1578,7 +1578,7 @@
    "freecad_expression": "1.46 mm",
    "value": 1.46,
    "unit": "mm",
-   "comment": "Window fillet radius at the spoke roots.  NOT dimensioned in Fusion: 1.460021 read from the model",
+   "comment": "Window fillet radius at the spoke roots.  NOT dimensioned in Fusion: 1.460021 read from the model, rounded by the owner 2026-10-13 (Fusion not dimensioned)",
    "role": "mechanics"
   },
   {

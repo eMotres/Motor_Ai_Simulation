@@ -285,13 +285,13 @@ mesh-vs-solid volume error):
 | File | What |
 |---|---|
 | `<motor_id>_full.glb` | the FULL model for the web viewer: one coloured node per part (`Core`, `Coils/Coil_nn`, `Rotor`, `Magnets/Magnet_nn`, `Shaft`, `Bearings_front/back`, `Holder_front/back`, `Ring_front/back`, `Screws/Screw_n`, `Prop_fix`, `PhaseBoard_FR4/copper/other/pins`); node `extras` carry `family` (the viewer's toggle) and `explode` (axial factor of the exploded view, in motor lengths). Colours = `view.COLORS`. |
-| `<motor_id>_envelope.step`, `<motor_id>_envelope.glb` | the SIMPLIFIED ENVELOPE, built from the same Params: the stator outer cylinder (radius `stator_up_r`, length `motor_length`) fused with both rings and both holders into ONE solid (the holders keep their mounting holes and the bolt circle, nothing of the stator interior is left on a surface), the shaft with its seats and thread section, Prop_fix, the phase board OUTLINE (FR4 outline and its large cut-outs, no copper, no vias or lead holes) and the three pins. No core slots, coils, rotor, magnets, bearings, screws. 7 solids. |
+| `<motor_id>_envelope.step`, `<motor_id>_envelope.glb` | the ENVELOPE: the motor as seen from OUTSIDE (owner 2026-10-13: the cut-outs are the look of the AeroStator Core). Real stator outer contour (lobes, gaps, coil windows) over the real stack length, the coils in those windows, both rings, both holders (spoke windows, bosses, mounting holes, bolt circle), bearings, screws, shaft with seats and thread section, Prop_fix, the phase board OUTLINE with its notches, the OUTER copper layers (51 of 91 copper solids on L12) and the pins; colours as in the full model. Left out: rotor core, magnets and pockets (the bore is a plain cylinder at the rotor outer diameter, `rotor_up_r`) and the inner copper layers. 114 solids on L12 (envelope GLB 3.7 MB, STEP 6.0 MB). |
 | `<motor_id>_models3d.json` | evidence of the export (per-solid mesh volume check, envelope solid volumes) |
 
 `glb_writer.py` (pure Python, no numpy) writes the GLB: millimetres, +Z = motor axis, smooth normals inside a face and hard edges between
 faces; per-solid triangle budgets keep balls, screws, pins and board copper small (L12: full 4.6 MB / 135 k triangles, envelope 0.7 MB / 18 k).
 The export refuses the build if a mesh differs from its solid by more than 3 % in volume (measured 0.4 %), if the envelope STEP re-imports
-with another volume or solid count, or if a part of the interior would be in the envelope.
+with another volume or solid count, or if the rotor core / a magnet / an inner copper layer is in the envelope.
 
 Routes (`routes/model3d.py`, `model3d.py`), all authenticated, motor access = `motor_access` (granted die or per-die visibility; an ungranted or
 unbuilt motor is a 404):

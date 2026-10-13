@@ -8,11 +8,11 @@ Writes into FC_OUT_DIR (each under a temporary name first, moved only after its 
   <motor_id>_full.glb          the FULL model: every part of the active STEP plus the phase board, one coloured node per part
                                (Core, Coils/Coil_nn, Rotor, Magnets/Magnet_nn, Shaft, Bearings_front/back, Holder_front/back,
                                Ring_front/back, Screws/Screw_n, Prop_fix, PhaseBoard*); node extras carry the exploded-view axial factor
-  <motor_id>_envelope.step     the SIMPLIFIED ENVELOPE (what a customer without NDA may see and download): the outer contour of the
-                               stator (a plain cylinder of the stator outer radius, rings and both holders fused with it, so nothing inside
-                               is left on any surface), both holders with their mounting holes / bolt circle, the shaft with its seats
-                               and thread section, Prop_fix, the phase board OUTLINE (FR4 outline and its large cut-outs, no copper, no
-                               vias) and the three pins.  No core slots, coils, rotor, magnets, bearings, screws, copper routing.
+  <motor_id>_envelope.step     the ENVELOPE (what a customer without NDA may see and download): the motor as seen from OUTSIDE - the
+                               stator with its real outer contour and the coils in its windows, rings, holders (spoke windows, bosses,
+                               mounting holes, bolt circle), bearings, screws, shaft with seats and thread, Prop_fix, the phase board
+                               outline with its notches, the outer copper layers and the pins.  Left out: rotor core, magnets and pockets
+                               (the bore is closed by a plain cylinder at the rotor outer diameter) and the inner copper layers of the board.
   <motor_id>_envelope.glb      the same envelope as GLB
   <motor_id>_models3d.json     evidence: solids, volumes, triangle counts, mesh-vs-solid volume check, sha-free (the manifest holds hashes)
 
@@ -38,7 +38,7 @@ EXPLODE = {"Core": 0.0, "Coils": -0.35, "Rotor": 0.9, "Magnets": 0.9, "Shaft": 2
 BOARD_COLOURS = {"PhaseBoard_FR4": (0.16, 0.42, 0.24), "PhaseBoard_copper": (0.86, 0.66, 0.22),
                  "PhaseBoard_pins": (0.62, 0.64, 0.66), "PhaseBoard_other": (0.45, 0.47, 0.45)}
 ENVELOPE_COLOUR = (0.66, 0.68, 0.72)
-MIN_CUTOUT_AREA = 10.0          # mm2: board cut-outs smaller than this (vias, lead holes) are not part of the outline
+MIN_CUTOUT_AREA = 2.0           # mm2: every notch / hole of the board outline counts; vias and inner copper are not in the envelope
 VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny parts are limited by the tessellation tolerance)
 
 
@@ -108,6 +108,7 @@ class Collector:
         self.tol = tol
         self.groups = {}
         self.checks = []
+        self.solids = {}                # node name -> shape (the envelope STEP tree)
 
     def group(self, name, colour, family=None, explode=None):
         g = self.groups.get(name)
@@ -121,6 +122,7 @@ class Collector:
         b = budget_of(node)
         patches, vol = tessellate(shape, budgeted_tol(shape, self.tol, b) if b else self.tol)
         g.add(node, patches)
+        self.solids[node] = shape
         if check and shape.Volume > 0:
             err = abs(vol - shape.Volume) / shape.Volume
             self.checks.append((node, round(shape.Volume, 4), round(vol, 4), err))
@@ -173,17 +175,57 @@ def board_outline(fr4):
     return slab
 
 
-def fused_housing(g, mech, tol_len):
-    """Stator outer cylinder + both rings + both holders as ONE solid: no surface of the stator interior remains."""
-    L = g("motor_length")
-    cyl = Part.makeCylinder(g("stator_up_r"), L, App.Vector(0, 0, -L / 2), App.Vector(0, 0, 1))
-    parts = [cyl, mech["Ring_front"], mech["Ring_back"], mech["Stator_holder"], mech["Stator_holder_back"]]
-    fused = parts[0].fuse(parts[1:])
-    fused = fused.removeSplitter()
-    sols = fused.Solids
-    if not fused.isValid() or not sols:
-        raise RuntimeError("envelope housing fuse is not a valid solid")
-    return fused, parts
+def outer_copper(copper, fr4):
+    """Copper solids on the outer faces of the board (visible from outside); inner layers are dropped."""
+    lo, hi = fr4.BoundBox.ZMin, fr4.BoundBox.ZMax
+    return [c for c in copper if c.BoundBox.ZMax <= lo + 0.011 or c.BoundBox.ZMin >= hi - 0.011]
+
+
+def add_motor(col, envelope, parts, g):
+    """The same parts for both models.  Envelope = everything visible from outside: the stator with its real outer contour and
+    the coils in its windows, rings, holders, bearings, screws, shaft, Prop_fix, the board outline with notches, outer copper
+    and pins; WITHOUT rotor core, magnets, pockets and the inner copper layers; the bore is closed by a plain cylinder at the
+    rotor outer diameter."""
+    core, rotor, coils, mags, mech, board = (parts[k] for k in ("core", "rotor", "coils", "mags", "mech", "board"))
+    col.add("Core", "Core", core, view.COLORS["Core"])
+    for i, s in enumerate(coils):
+        col.add("Coils", "Coil_%02d" % (i + 1), s, view.COLORS["Coil"], check=i < 2)
+    if envelope:
+        z0, z1 = rotor.BoundBox.ZMin, rotor.BoundBox.ZMax
+        fill = Part.makeCylinder(g("rotor_up_r"), z1 - z0, App.Vector(0, 0, z0), App.Vector(0, 0, 1))
+        col.add("RotorFill", "RotorFill", fill, view.COLORS["RotorCore"])
+    else:
+        col.add("Rotor", "RotorCore", rotor, view.COLORS["RotorCore"])
+        for i, s in enumerate(mags):
+            col.add("Magnets", "Magnet_%02d" % (i + 1), s, view.COLORS["Magnet"], check=i < 2)
+    for name, s in mech.items():
+        if name == "Shaft":
+            col.add("Shaft", name, s, view.COLORS["Shaft"])
+        elif name.startswith("Bearing_618_8_"):
+            side = "front" if "_front_" in name else "back"
+            c = view.COLORS["Bearing_ball"] if "_ball_" in name else view.COLORS["Bearing_outer_ring"]
+            col.add("Bearings_" + side, name, s, c, check="_ball_" not in name)
+        elif name == "Stator_holder":
+            col.add("Holder_front", name, s, view.COLORS["Stator_holder"])
+        elif name == "Stator_holder_back":
+            col.add("Holder_back", name, s, view.COLORS["Stator_holder_back"])
+        elif name in ("Ring_front", "Ring_back"):
+            col.add(name, name, s, view.COLORS["Ring"])
+        elif name == "Prop_fix":
+            col.add("Prop_fix", name, s, view.COLORS["Prop_fix"])
+        elif name.startswith("Screw_"):
+            col.add("Screws", name, s, view.COLORS["Screw"], check=False)
+    info = None
+    if board is not None:
+        bp, fr4 = classify_board(board)
+        if envelope:
+            bp["PhaseBoard_FR4"] = [board_outline(fr4)]
+            bp["PhaseBoard_copper"] = outer_copper(bp["PhaseBoard_copper"], fr4)
+        for gname, sols in bp.items():
+            for i, s in enumerate(sols):
+                col.add(gname, "%s_%03d" % (gname, i + 1), s, BOARD_COLOURS[gname], family="PhaseBoard", check=False)
+        info = {k: len(v) for k, v in bp.items()}
+    return info
 
 
 def main():
@@ -206,79 +248,28 @@ def main():
         return finish(False, "health gate failed - NO 3D models written: " + " | ".join(gt["errors"][:8]), gate=gt["errors"])
     g = lambda n: ps.pval(sh, n)
     meta = dict(src.Meta or {})
-    core = src.getObject("Core").Shape.copy()
-    rotor = src.getObject("RotorCore").Shape.copy()
-    coils = [s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids]
-    mags = [s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids]
-    mech = mechanics.solids(src)
-    board = electronics.board_shape(src) if electronics.has_board(src) else None
-    allbb = [core.BoundBox, rotor.BoundBox] + [s.BoundBox for s in mech.values()] + ([board.BoundBox] if board else [])
+    parts = dict(
+        core=src.getObject("Core").Shape.copy(), rotor=src.getObject("RotorCore").Shape.copy(),
+        coils=[s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids],
+        mags=[s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids],
+        mech=mechanics.solids(src), board=electronics.board_shape(src) if electronics.has_board(src) else None)
+    allbb = [parts["core"].BoundBox, parts["rotor"].BoundBox] + [s.BoundBox for s in parts["mech"].values()] \
+        + ([parts["board"].BoundBox] if parts["board"] else [])
     diag = math.sqrt(sum((max(getattr(b, a + "Max") for b in allbb) - min(getattr(b, a + "Min") for b in allbb)) ** 2 for a in "XYZ"))
     tol = min(0.2, max(0.01, 0.0006 * diag))
     asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), template=meta.get("motor_template"),
                  tessellation_mm=round(tol, 4))
-
-    # ---------------------------------------------------------------- full model
-    full = Collector(tol)
-    full.add("Core", "Core", core, view.COLORS["Core"])
-    for i, s in enumerate(coils):
-        full.add("Coils", "Coil_%02d" % (i + 1), s, view.COLORS["Coil"], check=i < 2)
-    full.add("Rotor", "RotorCore", rotor, view.COLORS["RotorCore"])
-    for i, s in enumerate(mags):
-        full.add("Magnets", "Magnet_%02d" % (i + 1), s, view.COLORS["Magnet"], check=i < 2)
-    for name, s in mech.items():
-        if name == "Shaft":
-            full.add("Shaft", name, s, view.COLORS["Shaft"])
-        elif name.startswith("Bearing_618_8_"):
-            side = "front" if "_front_" in name else "back"
-            col = view.COLORS["Bearing_ball"] if "_ball_" in name else view.COLORS["Bearing_outer_ring"]
-            full.add("Bearings_" + side, name, s, col, check="_ball_" not in name)
-        elif name == "Stator_holder":
-            full.add("Holder_front", name, s, view.COLORS["Stator_holder"])
-        elif name == "Stator_holder_back":
-            full.add("Holder_back", name, s, view.COLORS["Stator_holder_back"])
-        elif name in ("Ring_front", "Ring_back"):
-            full.add(name, name, s, view.COLORS["Ring"])
-        elif name == "Prop_fix":
-            full.add("Prop_fix", name, s, view.COLORS["Prop_fix"])
-        elif name.startswith("Screw_"):
-            full.add("Screws", name, s, view.COLORS["Screw"], check=False)
-    board_info = None
-    if board is not None:
-        parts, fr4 = classify_board(board)
-        for gname, sols in parts.items():
-            for i, s in enumerate(sols):
-                full.add(gname, "%s_%03d" % (gname, i + 1), s, BOARD_COLOURS[gname], family="PhaseBoard", check=False)
-        board_info = {k: len(v) for k, v in parts.items()}
-    order = ["Core", "Coils", "Rotor", "Magnets", "Shaft", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back",
+    order = ["Core", "Coils", "Rotor", "RotorFill", "Magnets", "Shaft", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back",
              "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
-    glb_full, st_full = full.glb(order, dict(asset, variant="full"))
 
-    # ---------------------------------------------------------------- simplified envelope
-    env_solids = {}
-    housing, hparts = fused_housing(g, mech, tol)
-    env_solids["Housing"] = housing
-    env_solids["Shaft"] = mech["Shaft"]
-    env_solids["Prop_fix"] = mech["Prop_fix"]
-    if board is not None:
-        env_solids["PhaseBoard_outline"] = board_outline(fr4)
-        for i, p in enumerate(electronics.pins(board)):
-            env_solids["PhaseBoard_pin_%d" % (i + 1)] = p.copy()
+    full = Collector(tol)
+    board_info = add_motor(full, False, parts, g)
+    glb_full, st_full = full.glb(order, dict(asset, variant="full"))
     env = Collector(tol)
-    for name, s in env_solids.items():
-        if name.startswith("PhaseBoard_pin"):
-            env.add("PhaseBoard_pins", name, s, BOARD_COLOURS["PhaseBoard_pins"], family="PhaseBoard")
-        elif name == "PhaseBoard_outline":
-            env.add("PhaseBoard", name, s, BOARD_COLOURS["PhaseBoard_FR4"], family="PhaseBoard")
-        else:
-            env.add(name, name, s, ENVELOPE_COLOUR if name == "Housing" else view.COLORS[name], family=name)
-    env.groups["Housing"].extras["explode"] = 0.0
-    env.groups["Shaft"].extras["explode"] = 2.2
-    env.groups["Prop_fix"].extras["explode"] = 3.2
-    env.groups["PhaseBoard"].extras["explode"] = -2.2
-    if "PhaseBoard_pins" in env.groups:
-        env.groups["PhaseBoard_pins"].extras["explode"] = -2.2
-    glb_env, st_env = env.glb(["Housing", "Shaft", "Prop_fix", "PhaseBoard", "PhaseBoard_pins"], dict(asset, variant="envelope"))
+    env_board = add_motor(env, True, parts, g)
+    env.groups["RotorFill"].extras["explode"] = EXPLODE["Rotor"]
+    glb_env, st_env = env.glb(order, dict(asset, variant="envelope"))
+    env_solids = env.solids
 
     # ---------------------------------------------------------------- envelope STEP (+ re-import check)
     ex = App.newDocument("envelope")
@@ -290,15 +281,25 @@ def main():
     def solid(parent, name, shape):
         f = ex.addObject("Part::Feature", name); f.Label = name; f.Shape = shape; parent.addObject(f); return f
 
-    solid(part(root, "Stator_outline"), "Housing", env_solids["Housing"])
-    solid(part(root, "Mechanics"), "Shaft", env_solids["Shaft"])
-    solid(ex.getObject("Mechanics"), "Prop_fix", env_solids["Prop_fix"])
-    if board is not None:
-        bp = part(root, "Electronics")
-        solid(bp, "PhaseBoard_outline", env_solids["PhaseBoard_outline"])
-        for n, s in env_solids.items():
-            if n.startswith("PhaseBoard_pin"):
-                solid(bp, n, s)
+    stator, wind, rotor_p, mech_p, elec = part(root, "Stator"), part(root, "Winding"), part(root, "Rotor"), part(root, "Mechanics"), None
+    subs = {}
+    for name, shp in env_solids.items():
+        if name == "Core":
+            solid(stator, name, shp)
+        elif name.startswith("Coil_"):
+            solid(wind, name, shp)
+        elif name == "RotorFill":
+            solid(rotor_p, name, shp)
+        elif name.startswith("PhaseBoard"):
+            elec = elec or part(root, "Electronics")
+            solid(elec, name, shp)
+        else:
+            grp = mechanics.groups([name])[name]
+            parent = mech_p
+            if grp:
+                subs[grp] = subs.get(grp) or part(mech_p, grp)
+                parent = subs[grp]
+            solid(parent, name, shp)
     ex.recompute()
     os.makedirs(out_dir, exist_ok=True)
     tmp_step = os.path.join(out_dir, mid + "_envelope.partial.step")
@@ -315,14 +316,13 @@ def main():
 
     # ---------------------------------------------------------------- checks and writes
     worst = max([c[3] for c in full.checks + env.checks] or [0.0])
-    env_bb = max((s.BoundBox for s in env_solids.values()), key=lambda b: b.DiagonalLength)
-    secret = [n for n in env.groups if n in ("Core", "Coils", "Rotor", "Magnets", "Screws", "Bearings_front", "Bearings_back")]
-    ok = step_ok and worst < VOL_TOL and not secret
+    hidden = [n for n in env_solids if n == "RotorCore" or n.startswith("Magnet_")]
+    inner_cu = True if not board_info else env_board.get("PhaseBoard_copper", 0) < board_info.get("PhaseBoard_copper", 0)
+    ok = step_ok and worst < VOL_TOL and not hidden and inner_cu
     rep = dict(motor_id=mid, tessellation_mm=round(tol, 4), full=dict(glb=mid + "_full.glb", bytes=len(glb_full), **st_full),
                envelope=dict(glb=mid + "_envelope.glb", step=mid + "_envelope.step", glb_bytes=len(glb_env),
                              step_bytes=os.path.getsize(tmp_step), step_solids=len(rows), step_volume=round(got, 3),
-                             expected_volume=round(expv, 3), solids={k: round(v.Volume, 3) for k, v in env_solids.items()},
-                             housing_solids=len(housing.Solids), **st_env),
+                             expected_volume=round(expv, 3), solids=len(env_solids), board=env_board, **st_env),
                board=board_info, worst_mesh_volume_error=round(worst, 5),
                mesh_checks=[dict(node=c[0], solid_volume=c[1], mesh_volume=c[2], rel_error=round(c[3], 5)) for c in full.checks + env.checks],
                freecad_version=".".join(str(x) for x in App.Version()[:3]), ok=ok)
@@ -332,7 +332,8 @@ def main():
     App.closeDocument(src.Name)
     if not ok:
         os.remove(tmp_step)
-        return finish(False, "3D model check failed: step_ok=%s worst_mesh_volume_error=%.4f envelope_leak=%s" % (step_ok, worst, secret))
+        return finish(False, "3D model check failed: step_ok=%s worst_mesh_volume_error=%.4f hidden_part_in_envelope=%s inner_copper_dropped=%s"
+                      % (step_ok, worst, hidden, inner_cu))
     os.replace(tmp_step, os.path.join(out_dir, mid + "_envelope.step"))
     for name, data in ((mid + "_full.glb", glb_full), (mid + "_envelope.glb", glb_env)):
         with open(os.path.join(out_dir, name), "wb") as fh:

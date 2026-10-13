@@ -6,12 +6,11 @@
     "full": "Full"
   },
   "variantHelp": {
-    "envelope": "Simplified envelope model: outer contour of the stator and holders, the shaft with its seats and thread section, the mounting holes and bolt circle, the phase board outline with the pin positions. No internals. The full model is available after the NDA is signed.",
+    "envelope": "Envelope model: the motor as seen from outside - the stator with its real outer contour and the coils in its windows, rings, holders with their spoke windows, bosses, mounting holes and bolt circle, bearings, screws, the shaft with its seats and thread section, the propeller adapter, the phase board outline with notches and pins. No rotor core, magnets or inner board layers. The full model is available after the NDA is signed.",
     "full": "Full model: every part, with colours. Available to the owner and to accounts with a signed NDA."
   },
   "parts": "Parts",
   "part": {
-    "Housing": "Stator outline and holders",
     "Core": "Stator core",
     "Coils": "Coils",
     "Rotor": "Rotor",
@@ -25,11 +24,12 @@
     "Ring_back": "Ring (back)",
     "Screws": "Screws",
     "Prop_fix": "Propeller adapter",
-    "PhaseBoard": "Phase board"
+    "PhaseBoard": "Phase board",
+    "RotorFill": "Rotor outline"
   },
   "explode": "Exploded view",
   "section": "Section plane",
-  "sectionEnvelope": "The envelope model has no internals, so there is nothing to cut.",
+  "sectionEnvelope": "The envelope model shows the outside of the motor only, so there is nothing to cut.",
   "measure": "Measure",
   "measureHint": "Click two points on the model",
   "downloadStep": "Download STEP ({variant})",

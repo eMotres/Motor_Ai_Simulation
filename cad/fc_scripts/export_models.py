@@ -11,8 +11,8 @@ Writes into FC_OUT_DIR (each under a temporary name first, moved only after its 
   <motor_id>_envelope.step     the ENVELOPE (what a customer without NDA may see and download): the motor as seen from OUTSIDE - the
                                stator with its real outer contour and the coils in its windows, rings, holders (spoke windows, bosses,
                                mounting holes, bolt circle), bearings, screws, shaft with seats and thread, Prop_fix, the phase board
-                               outline with its notches, the outer copper layers and the pins.  Left out: rotor core, magnets and pockets
-                               (the bore is closed by a plain cylinder at the rotor outer diameter) and the inner copper layers of the board.
+                               outline with its notches and holes as a plain FR-4 disc, and the 3 phase pins.  Left out: rotor core, magnets and pockets
+                               (the bore is closed by a plain cylinder at the rotor outer diameter) and ALL copper of the board.
   <motor_id>_envelope.glb      the same envelope as GLB
   <motor_id>_models3d.json     evidence: solids, volumes, triangle counts, mesh-vs-solid volume check, sha-free (the manifest holds hashes)
 
@@ -38,7 +38,7 @@ EXPLODE = {"Core": 0.0, "Coils": -0.35, "Rotor": 0.9, "Magnets": 0.9, "Shaft": 2
 BOARD_COLOURS = {"PhaseBoard_FR4": (0.16, 0.42, 0.24), "PhaseBoard_copper": (0.86, 0.66, 0.22),
                  "PhaseBoard_pins": (0.62, 0.64, 0.66), "PhaseBoard_other": (0.45, 0.47, 0.45)}
 ENVELOPE_COLOUR = (0.66, 0.68, 0.72)
-MIN_CUTOUT_AREA = 2.0           # mm2: every notch / hole of the board outline counts; vias and inner copper are not in the envelope
+MIN_CUTOUT_AREA = 2.0           # mm2: every notch / hole of the board outline counts; the envelope board carries no copper and no vias
 VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny parts are limited by the tessellation tolerance)
 
 
@@ -175,16 +175,10 @@ def board_outline(fr4):
     return slab
 
 
-def outer_copper(copper, fr4):
-    """Copper solids on the outer faces of the board (visible from outside); inner layers are dropped."""
-    lo, hi = fr4.BoundBox.ZMin, fr4.BoundBox.ZMax
-    return [c for c in copper if c.BoundBox.ZMax <= lo + 0.011 or c.BoundBox.ZMin >= hi - 0.011]
-
-
 def add_motor(col, envelope, parts, g):
     """The same parts for both models.  Envelope = everything visible from outside: the stator with its real outer contour and
-    the coils in its windows, rings, holders, bearings, screws, shaft, Prop_fix, the board outline with notches, outer copper
-    and pins; WITHOUT rotor core, magnets, pockets and the inner copper layers; the bore is closed by a plain cylinder at the
+    the coils in its windows, rings, holders, bearings, screws, shaft, Prop_fix, the board as a plain FR-4 disc (outline, notches, holes)
+    and the 3 pins; WITHOUT rotor core, magnets, pockets and any board copper; the bore is closed by a plain cylinder at the
     rotor outer diameter."""
     core, rotor, coils, mags, mech, board = (parts[k] for k in ("core", "rotor", "coils", "mags", "mech", "board"))
     col.add("Core", "Core", core, view.COLORS["Core"])
@@ -220,7 +214,8 @@ def add_motor(col, envelope, parts, g):
         bp, fr4 = classify_board(board)
         if envelope:
             bp["PhaseBoard_FR4"] = [board_outline(fr4)]
-            bp["PhaseBoard_copper"] = outer_copper(bp["PhaseBoard_copper"], fr4)
+            bp["PhaseBoard_copper"] = []            # owner 2026-10-13: plain FR-4 disc, no copper at all
+            bp["PhaseBoard_other"] = []             # notch walls / mask: not part of a plain disc
         for gname, sols in bp.items():
             for i, s in enumerate(sols):
                 col.add(gname, "%s_%03d" % (gname, i + 1), s, BOARD_COLOURS[gname], family="PhaseBoard", check=False)
@@ -317,7 +312,7 @@ def main():
     # ---------------------------------------------------------------- checks and writes
     worst = max([c[3] for c in full.checks + env.checks] or [0.0])
     hidden = [n for n in env_solids if n == "RotorCore" or n.startswith("Magnet_")]
-    inner_cu = True if not board_info else env_board.get("PhaseBoard_copper", 0) < board_info.get("PhaseBoard_copper", 0)
+    inner_cu = True if not board_info else (env_board.get("PhaseBoard_copper", 0) == 0 and env_board.get("PhaseBoard_other", 0) == 0)
     ok = step_ok and worst < VOL_TOL and not hidden and inner_cu
     rep = dict(motor_id=mid, tessellation_mm=round(tol, 4), full=dict(glb=mid + "_full.glb", bytes=len(glb_full), **st_full),
                envelope=dict(glb=mid + "_envelope.glb", step=mid + "_envelope.step", glb_bytes=len(glb_env),
@@ -332,7 +327,7 @@ def main():
     App.closeDocument(src.Name)
     if not ok:
         os.remove(tmp_step)
-        return finish(False, "3D model check failed: step_ok=%s worst_mesh_volume_error=%.4f hidden_part_in_envelope=%s inner_copper_dropped=%s"
+        return finish(False, "3D model check failed: step_ok=%s worst_mesh_volume_error=%.4f hidden_part_in_envelope=%s board_without_copper=%s"
                       % (step_ok, worst, hidden, inner_cu))
     os.replace(tmp_step, os.path.join(out_dir, mid + "_envelope.step"))
     for name, data in ((mid + "_full.glb", glb_full), (mid + "_envelope.glb", glb_env)):

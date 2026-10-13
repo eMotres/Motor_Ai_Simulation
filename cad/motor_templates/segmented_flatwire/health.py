@@ -386,7 +386,10 @@ FIT_PAIRS = [
     ("MagnetArray", "Stator_holder_back", "clear"), ("RotorCore", "Ring_front", "clear"), ("RotorCore", "Ring_back", "clear"),
     ("Shaft", "Stator_holder", "clear"), ("Shaft", "Stator_holder_back", "clear"), ("Screws", "Core", "clear"),
     ("Screws", "Coils", "clear"), ("Screws", "Stator_holder", "contact"), ("Screws", "Stator_holder_back", "thread"),
+    ("Screws", "Shaft", "clear"), ("Screws", "RotorCore", "clear"), ("Screws", "MagnetArray", "clear"),
+    ("Screws", "Ring_front", "clear"), ("Screws", "Ring_back", "clear"),
 ]
+SCREW_ENGAGE_MIN_D = 1.5     # thread engagement in the back boss: at least 1.5 x screw diameter (owner 2026-10-13, reported)
 FIT_REFUSE_MM3 = 0.5        # an overlap above this (outside "thread") refuses the build: a part runs into another one
 
 
@@ -418,4 +421,28 @@ def fit(doc):
         rows.append(row)
         if kind != "thread" and ov > FIT_REFUSE_MM3:
             errors.append("fit: %s runs into %s (overlap %.3f mm3)" % (a, b, ov))
-    return dict(pairs=rows, errors=errors)
+    return dict(pairs=rows, errors=errors, screw=_screw_check(doc, so, errors))
+
+
+def _screw_check(doc, so, errors):
+    """Screw tip position and thread engagement in the back boss (measured on the solids).  The tip must stay inside the back
+    holder flange (not break through its outer face); the engagement (z extent of the screw inside the back holder) should be
+    >= SCREW_ENGAGE_MIN_D x bolt_d - reported as `engagement_ok`, not refused."""
+    from .params_sheet import pval
+    sh = doc.getObject("Params")
+    s1, back = so.get("Screw_1"), so.get("Stator_holder_back")
+    if sh is None or s1 is None or back is None:
+        return None
+    g = lambda n: pval(sh, n)
+    com = s1.common(back)
+    eng = com.BoundBox.ZLength if not com.isNull() and com.Volume > 1e-9 else 0.0
+    tip = s1.BoundBox.ZMin
+    outer = -g("holder_flange_z")                  # outer face of the back flange
+    need_eng = SCREW_ENGAGE_MIN_D * g("bolt_d")
+    r = dict(length=round(g("holder_screw_l"), 6), length_required=round(g("holder_screw_req"), 6), tip_z=round(tip, 6),
+             back_flange_outer_z=round(outer, 6), tip_margin_to_outer_face=round(tip - outer, 6),
+             engagement=round(eng, 6), engagement_min=round(need_eng, 6), engagement_ok=eng >= need_eng - 1e-6,
+             tip_inside_holder=tip > outer + 1e-6)
+    if not r["tip_inside_holder"]:
+        errors.append("fit: screw tip z %.3f breaks through the back flange outer face z %.3f" % (tip, outer))
+    return r

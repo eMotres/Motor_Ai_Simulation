@@ -126,8 +126,12 @@ Axial parameters (Fusion Sketch3 dimension names, not renamed; owner to confirm 
 
 Not dimensioned in Fusion (Sketch2 is not fully constrained), read as 14.843191 / 1.460021 and rounded by the owner
 2026-10-13 (Fusion not dimensioned): `holder_bolt_r` 14.85, `holder_window_r` 1.46.  Fusion's Chamfer7 at the journal end chamfers one of the two arcs left by the flats (edge picked after
-Extrude15); the template chamfers both.  Screw length `holder_screw_l = 2 holder_face_z + holder_flange_t` (L20 25 =
-91292A032 M2x25; L12 17).
+Extrude15); the template chamfers both.  Screw length: `holder_screw_req = 2 holder_face_z + holder_flange_t` (L20 25, L12 17), `holder_screw_l` = that rounded UP to
+a stock M2 length (even mm up to 20, then 25, 30, ...; owner 2026-10-13: L12 M2x18, L20 M2x25 = 91292A032).  `fit()` writes
+`screw_check` to `build_report.json` (tip z, margin to the back flange outer face - the tip must stay inside the flange, else
+the build is refused - and the thread engagement in the back holder, reported against 1.5 x bolt_d).
+Coil straight length (owner 2026-10-13): `coil_straight_len = motor_length + 1 mm` (L12 13, L20 21; each stack length has its
+own coil), `coil_leg_length = coil_straight_len`, `coil_straight_extra = coil_straight_len - motor_length`.
 
 Verification of the mechanics (FreeCAD 1.1.3 server builds; the same numbers on 1.0.2):
 

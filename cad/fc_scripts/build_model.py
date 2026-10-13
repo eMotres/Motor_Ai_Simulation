@@ -41,6 +41,7 @@ def main():
     if gt["ok"] and doc.getObject("Mechanics") is not None:
         ft = health.fit(doc)                       # stage 3: interference / contact table of the assembled motor
         report["fit"] = ft["pairs"]
+        report["screw_check"] = ft.get("screw")
         if ft["errors"]:
             gt["errors"] += ft["errors"]
             gt["ok"] = False

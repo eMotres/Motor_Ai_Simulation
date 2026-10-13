@@ -808,7 +808,7 @@
    "freecad_expression": "45 deg",
    "value": 45.0,
    "unit": "deg",
-   "comment": "Shaft: cone at the front end of the Ø6 bore (bore ends z=17.7, cone apex on axis z=20.7)",
+   "comment": "Shaft: cone at the front end of the \u00d86 bore (bore ends z=17.7, cone apex on axis z=20.7)",
    "role": "mechanics"
   },
   {
@@ -819,7 +819,7 @@
    "freecad_expression": "bearing_d / 2",
    "value": 4.0,
    "unit": "mm",
-   "comment": "Shaft: journal radius under the 618/8 bearings (Ø8), front z 11.9..20.7, back z -15.9..-11.9",
+   "comment": "Shaft: journal radius under the 618/8 bearings (\u00d88), front z 11.9..20.7, back z -15.9..-11.9",
    "role": "derived",
    "role_note": "Fusion '4 mm'; = bore of the bearing card (simulation config bearings)"
   },
@@ -831,7 +831,7 @@
    "freecad_expression": "0.5 mm",
    "value": 0.5,
    "unit": "mm",
-   "comment": "Shaft: axial length of the Ø9.4 shoulder (z 11.4..11.9)",
+   "comment": "Shaft: axial length of the \u00d89.4 shoulder (z 11.4..11.9)",
    "role": "mechanics"
   },
   {
@@ -842,7 +842,7 @@
    "freecad_expression": "4.9 mm / 2",
    "value": 2.45,
    "unit": "mm",
-   "comment": "Shaft: tip radius (Ø4.9), z 28.7..36.7",
+   "comment": "Shaft: tip radius (\u00d84.9), z 28.7..36.7",
    "role": "mechanics"
   },
   {
@@ -853,7 +853,7 @@
    "freecad_expression": "shaft_seat_r - shaft_height",
    "value": 3.0,
    "unit": "mm",
-   "comment": "Shaft: bore radius (Ø6), z -15.9..17.7",
+   "comment": "Shaft: bore radius (\u00d86), z -15.9..17.7",
    "role": "derived",
    "role_note": "Fusion '3 mm'; = simulation shaft_inner_radius = rotor_inner_radius - shaft_height"
   },
@@ -865,7 +865,7 @@
    "freecad_expression": "9.4 mm / 2",
    "value": 4.7,
    "unit": "mm",
-   "comment": "Shaft: shoulder radius (Ø9.4) against the front bearing inner ring",
+   "comment": "Shaft: shoulder radius (\u00d89.4) against the front bearing inner ring",
    "role": "mechanics"
   },
   {
@@ -898,7 +898,7 @@
    "freecad_expression": "bearing_D / 2",
    "value": 8.0,
    "unit": "mm",
-   "comment": "618/8 bearing outer radius (Ø16) = holder bearing seat radius",
+   "comment": "618/8 bearing outer radius (\u00d816) = holder bearing seat radius",
    "role": "derived",
    "role_note": "Fusion '16 mm / 2'; = outer diameter of the bearing card"
   },
@@ -910,7 +910,7 @@
    "freecad_expression": "14.6 mm / 2",
    "value": 7.3,
    "unit": "mm",
-   "comment": "Holder: bearing retaining lip inner radius (Ø14.6), front and back",
+   "comment": "Holder: bearing retaining lip inner radius (\u00d814.6), front and back",
    "role": "mechanics"
   },
   {
@@ -933,7 +933,7 @@
    "freecad_expression": "4 mm",
    "value": 4.0,
    "unit": "mm",
-   "comment": "Shaft: from front holder face z=16.7 to the Ø8 -> Ø4.95 step z=20.7",
+   "comment": "Shaft: from front holder face z=16.7 to the \u00d88 -> \u00d84.95 step z=20.7",
    "role": "mechanics"
   },
   {
@@ -944,7 +944,7 @@
    "freecad_expression": "8 mm",
    "value": 8.0,
    "unit": "mm",
-   "comment": "Shaft: length of the Ø4.95 (thread) section z 20.7..28.7",
+   "comment": "Shaft: length of the \u00d84.95 (thread) section z 20.7..28.7",
    "role": "mechanics"
   },
   {
@@ -955,7 +955,7 @@
    "freecad_expression": "8 mm",
    "value": 8.0,
    "unit": "mm",
-   "comment": "Shaft: length of the Ø4.9 tip z 28.7..36.7",
+   "comment": "Shaft: length of the \u00d84.9 tip z 28.7..36.7",
    "role": "mechanics"
   },
   {
@@ -1011,7 +1011,7 @@
    "freecad_expression": "4.95 mm / 2",
    "value": 2.475,
    "unit": "mm",
-   "comment": "Shaft: thread section radius (Ø4.95), z 20.7..28.7",
+   "comment": "Shaft: thread section radius (\u00d84.95), z 20.7..28.7",
    "role": "mechanics"
   },
   {
@@ -1084,13 +1084,25 @@
  ],
  "named_parameters_active_part": [
   {
+   "name": "coil_straight_len",
+   "source": "owner rule 2026-10-13 (Coil/Extrude1)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length + 1 mm",
+   "value": 21.0,
+   "unit": "mm",
+   "comment": "Straight coil length up to the bend = stack length + 1 mm (each stack length has its own coil: L12 -> 13, L20 -> 21); drives coil_leg_length",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (owner rule 2026-10-13)"
+  },
+  {
    "name": "coil_straight_extra",
    "source": "Coil/Extrude1",
-   "freecad_expression": "0.5 mm",
-   "value": 0.5,
+   "freecad_expression": "coil_straight_len - motor_length",
+   "value": 1.0,
    "unit": "mm",
-   "comment": "Coil straight legs are motor_length + coil_straight_extra long (symmetric)",
-   "role": "input"
+   "comment": "Coil straight legs stick out of the stack by this much in total (= coil_straight_len - motor_length = 1 mm, 0.5 mm per side)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (owner rule 2026-10-13: straight length = stack + 1 mm)"
   },
   {
    "name": "coil_bend_axis_dx",
@@ -1222,10 +1234,10 @@
   {
    "name": "coil_leg_length",
    "fusion_expression": null,
-   "freecad_expression": "motor_length + coil_straight_extra",
+   "freecad_expression": "coil_straight_len",
    "value": 20.5,
    "unit": "mm",
-   "comment": "Straight coil leg length = motor_length + coil_straight_extra",
+   "comment": "Straight coil leg length = coil_straight_len = motor_length + 1 mm",
    "role": "derived",
    "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
   },
@@ -1702,13 +1714,23 @@
    "role": "mechanics"
   },
   {
-   "name": "holder_screw_l",
-   "source": "91292A032 (M2 x 25) in Stator_holder",
-   "fusion_expression": "25 mm",
+   "name": "holder_screw_req",
+   "source": "Stator_holder / Stator_holder_back",
+   "fusion_expression": null,
    "freecad_expression": "2 * holder_face_z + holder_flange_t",
    "value": 25.0,
    "unit": "mm",
-   "comment": "Screw length under the head: front flange face to the back holder face (Fusion L20 uses M2x25; pick the catalogue length)",
+   "comment": "Required screw length under the head: front flange outer face to the back holder inner face (L12 17.0, L20 25.0)",
+   "role": "derived"
+  },
+  {
+   "name": "holder_screw_l",
+   "source": "91292A032 family (M2 x 25 on L20, M2 x 18 on L12) in Stator_holder",
+   "fusion_expression": "25 mm",
+   "freecad_expression": "2 * ceil(min(holder_screw_req, 20 mm) / 2 mm - 0.000001) * 1 mm + 5 * ceil(max(holder_screw_req, 20 mm) / 5 mm - 0.000001) * 1 mm - 20 mm",
+   "value": 25.0,
+   "unit": "mm",
+   "comment": "Screw length under the head = holder_screw_req rounded UP to a stock M2 length (even mm up to 20, then 25, 30, ...); owner 2026-10-13: L12 M2x18, L20 M2x25",
    "role": "derived"
   },
   {

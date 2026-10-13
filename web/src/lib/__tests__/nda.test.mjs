@@ -31,7 +31,9 @@ t('a blank form shows underscores so the preview reads, the flag follows the cou
 });
 
 t('the drafted agreement renders both variants cleanly, same rule as the server (fixture shared with the python test)', () => {
-  const text = readFileSync(new URL('../../../../tests/fixtures/nda/model_nda_en.md', import.meta.url), 'utf8');
+  const text = readFileSync(new URL('../../../../tests/fixtures/nda/model_nda_en.md', import.meta.url), 'utf8').replace(/
+/g, '
+');
   const cn = L.renderNda(text, L.values({ ...form, country: 'CN' }, 'e@x.de', '2026-10-13', 'v3'));
   const si = L.renderNda(text, L.values({ ...form, country: 'SI' }, 'e@x.de', '2026-10-13', 'v3'));
   for (const r of [cn, si]) { assert.ok(!r.includes('{{')); assert.ok(!/\n{3,}/.test(r)); assert.ok(r.includes('Acme Drones Ltd')); }
@@ -74,7 +76,9 @@ t('the client render hashes to the SAME value as the python renderer (cross-lang
   };
   for (const [key, want] of Object.entries(expect)) {
     const [lang, country] = key.split(' ');
-    const text = readFileSync(new URL(`../../../../tests/fixtures/nda/model_nda_${lang}.md`, import.meta.url), 'utf8');
+    const text = readFileSync(new URL(`../../../../tests/fixtures/nda/model_nda_${lang}.md`, import.meta.url), 'utf8').replace(/
+/g, '
+');
     assert.equal(h(L.renderNda(text, L.values({ ...f, country }, 'e@x.de', '2026-10-13', 'v3'))), want, key);
   }
 });

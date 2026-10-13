@@ -1,16 +1,14 @@
 // 3D model menu: the pure helpers behind the viewer (no three.js, no React, no fetch) so node --test can pin them.
 //
-// The server decides what a caller may see (routes/model3d.py): `variant` is "envelope" for an account without NDA and
-// "full" for the owner and for accounts flagged "NDA signed".  Nothing here widens that; the UI only names it.
+// One model for everybody (owner 2026-10-13): every signed-in user who may see a motor can view it; the STEP download is for
+// NDA accounts and the owner (the server answers 403 otherwise, `can_download` on the list says which).
 
-export type Variant = 'envelope' | 'full';
 export type Axis = 'x' | 'y' | 'z';
 
 export interface ModelInfo {
   die: string;
   config: string;
   motor_id: string;
-  variant: Variant;
   glb_bytes?: number | null;
   glb_sha256?: string | null;
   step_available?: boolean;
@@ -34,9 +32,6 @@ export interface Box { min: Vec3; max: Vec3 }
 export const modelKey = (m: Pick<ModelInfo, 'die' | 'config'>): string => `${m.die}\u0000${m.config}`;
 
 export const modelLabel = (m: Pick<ModelInfo, 'die' | 'config'>): string => `${m.die} · ${m.config}`;
-
-/** i18n key suffix of the variant label shown on the Download button and the badge. */
-export const variantKey = (v: Variant | string | null | undefined): 'envelope' | 'full' => (v === 'full' ? 'full' : 'envelope');
 
 /** Which model the picker opens on: the remembered one when it is still offered, else the first. */
 export function pickModel<T extends Pick<ModelInfo, 'die' | 'config'>>(models: readonly T[], remembered?: string | null): T | null {

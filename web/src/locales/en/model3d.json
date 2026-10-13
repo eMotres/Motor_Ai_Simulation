@@ -1,17 +1,8 @@
 {
   "motor": "Motor",
   "none": "No 3D model is available for your motors yet.",
-  "variant": {
-    "envelope": "Envelope",
-    "full": "Full"
-  },
-  "variantHelp": {
-    "envelope": "Simplified envelope model: outer contour of the stator and holders, the shaft with its seats and thread section, the mounting holes and bolt circle, the phase board outline with the pin positions. No internals. The full model is available after the NDA is signed.",
-    "full": "Full model: every part, with colours. Available to the owner and to accounts with a signed NDA."
-  },
   "parts": "Parts",
   "part": {
-    "Housing": "Stator outline and holders",
     "Core": "Stator core",
     "Coils": "Coils",
     "Rotor": "Rotor",
@@ -29,12 +20,13 @@
   },
   "explode": "Exploded view",
   "section": "Section plane",
-  "sectionEnvelope": "The envelope model has no internals, so there is nothing to cut.",
   "measure": "Measure",
   "measureHint": "Click two points on the model",
-  "downloadStep": "Download STEP ({variant})",
+  "downloadStep": "Download STEP",
   "fit": "Fit to view",
   "version": "Template {template}, built {built}, parameters {hash}",
   "stamped": "Your name and the date are written into the file name and the STEP header. Every download is logged.",
-  "contextLost": "The 3D view lost its graphics context. Reload the page to continue."
+  "contextLost": "The 3D view lost its graphics context. Reload the page to continue.",
+  "downloadLocked": "Download after NDA",
+  "downloadLockedHelp": "You can view, rotate, section and measure the model. The STEP download is available after the NDA is signed; ask us to sign it. Every download is logged and the file carries your name and the date."
 }

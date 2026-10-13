@@ -1,6 +1,6 @@
 """GLB writer of the 3D model menu (cad/fc_scripts/glb_writer.py) and the server outputs it feeds: pure Python, no FreeCAD.
 
-The FreeCAD side (export_models.py: tessellation, envelope solids, STEP re-import check) is verified on the server build,
+The FreeCAD side (export_models.py: tessellation, mesh-vs-solid volume check) is verified on the server build,
 see docs/CAD_GENERATOR.md; here: the file format, the normals, the node tree with its extras, the manifest listing.
 """
 import json
@@ -59,7 +59,7 @@ def test_glb_roundtrip_nodes_extras_materials():
     g2.add("Coil_02", [square_face(5)])
     g3 = G.Group("Empty", (1, 1, 1))
     g3.add("Nothing", [G.Mesh([], [])])
-    data, st = G.build_glb([g1, g2, g3], {"motor_id": "X_L12", "variant": "full"})
+    data, st = G.build_glb([g1, g2, g3], {"motor_id": "X_L12"})
     assert len(data) % 4 == 0
     doc, blob = G.parse_glb(data)
     assert doc["asset"]["version"] == "2.0" and doc["asset"]["extras"]["motor_id"] == "X_L12"
@@ -104,15 +104,15 @@ def test_parse_rejects_garbage():
 
 
 def test_manifest_lists_the_viewer_files_with_sha256(tmp_path):
-    for n, b in (("m_full.glb", b"1"), ("m_envelope.glb", b"22"), ("m_envelope.step", b"333")):
+    for n, b in (("m_full.glb", b"1"), ("m_active.step", b"22"), ("m_models3d.json", b"333")):
         (tmp_path / n).write_bytes(b)
-    rows = manifest.file_rows(str(tmp_path), ["m_full.glb", "m_envelope.glb", "m_envelope.step", "missing.glb"])
-    assert set(rows) == {"m_full.glb", "m_envelope.glb", "m_envelope.step"}
-    assert rows["m_envelope.step"]["bytes"] == 3 and len(rows["m_envelope.glb"]["sha256"]) == 64
+    rows = manifest.file_rows(str(tmp_path), ["m_full.glb", "m_active.step", "m_models3d.json", "missing.glb"])
+    assert set(rows) == {"m_full.glb", "m_active.step", "m_models3d.json"}
+    assert rows["m_models3d.json"]["bytes"] == 3 and len(rows["m_active.step"]["sha256"]) == 64
 
 
 def test_build_cli_has_the_models_switch():
     from motor_ai_sim.cad import build
     src = open(build.__file__, encoding="utf-8").read()
-    assert "--no-models" in src and "export_models.py" in src and "_envelope.step" in src
+    assert "--no-models" in src and "export_models.py" in src and "envelope" not in src
     assert os.path.isfile(os.path.join(store.CAD_DIR, "fc_scripts", "export_models.py"))

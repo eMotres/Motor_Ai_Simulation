@@ -2,15 +2,13 @@
 
 The generator (``motor_ai_sim.cad``) writes, per die/config, into ``<shared>/cad/<die>/<config>/``:
 
-    <motor_id>_full.glb           the full model for the viewer        -> owner / admin and accounts flagged "NDA signed"
-    <motor_id>_active.step        the full STEP                         -> same audience
-    <motor_id>_envelope.glb/.step the simplified envelope (outer contour, shaft, holders with mounting holes, phase board
-                                  outline with the pins, no internals) -> everybody else who may see the motor
+    <motor_id>_full.glb           the model for the viewer             -> every signed-in user who may see the motor
+    <motor_id>_active.step        the full STEP                         -> download: NDA accounts and the owner / admin only
     manifest.json                 SHA-256 of every file
 
-The audience rule lives in :func:`variant_for` and nowhere else.  A caller without NDA is never offered, and never served,
-a path of the full model: :func:`resolve_file` takes the variant, not a file name.  The bill of materials and anything
-priced are not served by this module at all.
+ONE model (owner 2026-10-13): everybody who may see a motor can view, rotate and section it; downloading it is the NDA
+gate.  The rule lives in :func:`can_download` and nowhere else; the URL names the motor, never a file.  The bill of
+materials and anything priced are not served by this module at all.
 
 Every STEP download is stamped (customer name and date in the STEP header and in the file name) and logged
 (``cad_downloads.jsonl`` beside ``users.json``: user, time, file, version, hashes).
@@ -29,14 +27,11 @@ from typing import Optional
 
 from motor_ai_sim.private_files import ensure_private_dir, open_private
 
-VARIANT_FULL = "full"
-VARIANT_ENVELOPE = "envelope"
 ORGANISATION = "MOTRES d.o.o."
 _LOCK = threading.RLock()
 
-#: manifest file key per (variant, kind); the envelope STEP and both GLBs are written by cad/fc_scripts/export_models.py
-_SUFFIX = {(VARIANT_FULL, "glb"): "_full.glb", (VARIANT_FULL, "step"): "_active.step",
-           (VARIANT_ENVELOPE, "glb"): "_envelope.glb", (VARIANT_ENVELOPE, "step"): "_envelope.step"}
+#: file name suffix per kind; the GLB is written by cad/fc_scripts/export_models.py, the STEP by export_step.py
+_SUFFIX = {"glb": "_full.glb", "step": "_active.step"}
 
 
 # ── where things are ────────────────────────────────────────────────────────
@@ -60,13 +55,13 @@ def download_log_path() -> Path:
 
 # ── who sees what ───────────────────────────────────────────────────────────
 
-def variant_for(identity: dict, user_rec: Optional[dict] = None) -> str:
-    """``full`` for an admin / the owner and for an account flagged "NDA signed" in Admin, otherwise ``envelope``."""
+def can_download(identity: dict, user_rec: Optional[dict] = None) -> bool:
+    """May this caller download the STEP?  The owner / admin and accounts flagged "NDA signed" in Admin; viewing is open."""
     if identity.get("is_admin"):
-        return VARIANT_FULL
+        return True
     rec = user_rec or {}
     nda = rec.get("nda") if isinstance(rec.get("nda"), dict) else {}
-    return VARIANT_FULL if nda.get("signed") else VARIANT_ENVELOPE
+    return bool(nda.get("signed"))
 
 
 def customer_name(identity: dict, user_rec: Optional[dict] = None) -> str:
@@ -86,7 +81,7 @@ def _read_json(p: Path) -> dict:
 
 
 def scan(root: Optional[Path] = None) -> list[dict]:
-    """Every built config with a manifest that lists the viewer files: ``[{die, config, motor_id, dir, manifest}]``."""
+    """Every built config with a manifest that lists the viewer model: ``[{die, config, motor_id, dir, manifest}]``."""
     root = Path(root) if root else cad_root()
     out = []
     if not root.is_dir():
@@ -98,7 +93,7 @@ def scan(root: Optional[Path] = None) -> list[dict]:
             m = _read_json(c / "manifest.json")
             mid = m.get("motor_id")
             files = m.get("files") or {}
-            if not mid or not any(k.endswith("_envelope.glb") for k in files):
+            if not mid or not any(k.endswith("_full.glb") for k in files):
                 continue
             out.append(dict(die=d.name, config=c.name, motor_id=mid, dir=c, manifest=m))
     return out
@@ -112,9 +107,9 @@ def find(die: str, config: str, root: Optional[Path] = None) -> Optional[dict]:
     return None
 
 
-def file_row(entry: dict, variant: str, kind: str) -> Optional[dict]:
-    """``{path, name, sha256, bytes}`` of one output, or None when the manifest does not list it / it is missing."""
-    name = entry["motor_id"] + _SUFFIX[(variant, kind)]
+def file_row(entry: dict, kind: str) -> Optional[dict]:
+    """``{path, name, sha256, bytes}`` of one output (``glb`` / ``step``), or None when the manifest does not list it / it is missing."""
+    name = entry["motor_id"] + _SUFFIX[kind]
     row = (entry["manifest"].get("files") or {}).get(name)
     p = Path(entry["dir"]) / name
     if not row or not p.is_file():
@@ -122,11 +117,11 @@ def file_row(entry: dict, variant: str, kind: str) -> Optional[dict]:
     return dict(path=p, name=name, sha256=row.get("sha256"), bytes=p.stat().st_size)
 
 
-def model_info(entry: dict, variant: str) -> dict:
-    """What the list route says about one model for a caller of `variant` (no BOM, no prices, no store hashes)."""
+def model_info(entry: dict) -> dict:
+    """What the list route says about one model (no BOM, no prices, no store hashes)."""
     m = entry["manifest"]
-    glb, step = file_row(entry, variant, "glb"), file_row(entry, variant, "step")
-    return dict(die=entry["die"], config=entry["config"], motor_id=entry["motor_id"], variant=variant,
+    glb, step = file_row(entry, "glb"), file_row(entry, "step")
+    return dict(die=entry["die"], config=entry["config"], motor_id=entry["motor_id"],
                 available=bool(glb), glb_bytes=glb and glb["bytes"], glb_sha256=glb and glb["sha256"],
                 step_available=bool(step), step_bytes=step and step["bytes"],
                 version=dict(template=(m.get("template") or {}).get("version"), built_at=m.get("built_at"),
@@ -148,14 +143,14 @@ def _slug(s: str, limit: int = 32) -> str:
     return t[:limit].strip("-") or "customer"
 
 
-def download_name(motor_id: str, variant: str, customer: str, day: datetime.date, ext: str = "step") -> str:
-    return "%s_%s_%s_%s.%s" % (motor_id, variant, _slug(customer), day.strftime("%Y%m%d"), ext)
+def download_name(motor_id: str, customer: str, day: datetime.date, ext: str = "step") -> str:
+    return "%s_%s_%s.%s" % (motor_id, _slug(customer), day.strftime("%Y%m%d"), ext)
 
 
-def stamp_step(data: bytes, *, filename: str, customer: str, day: datetime.date, variant: str, motor_id: str,
+def stamp_step(data: bytes, *, filename: str, customer: str, day: datetime.date, motor_id: str,
                version: str = "", when: Optional[datetime.datetime] = None) -> bytes:
     """Rewrite the ISO 10303-21 HEADER section: description, file name, author and organisation carry the customer name, the
-    date, the variant and the model version.  The DATA section is copied byte for byte."""
+    date and the model version.  The DATA section is copied byte for byte."""
     mark = data.find(b"ENDSEC;")
     if not data.lstrip().startswith(b"ISO-10303-21;") or mark < 0:
         raise ValueError("not an ISO 10303-21 STEP file")
@@ -166,8 +161,8 @@ def stamp_step(data: bytes, *, filename: str, customer: str, day: datetime.date,
     q = lambda s, n=120: ascii_text(s, n).replace("'", "''")
     cust, org = q(customer), q(ORGANISATION)
     ts = (when or datetime.datetime.now(datetime.timezone.utc)).strftime("%Y-%m-%dT%H:%M:%S")
-    desc = "MOTRES AeroStator %s model %s%s. Licensed to %s on %s. Not for redistribution." % (
-        variant, motor_id, (" " + version) if version else "", customer, day.isoformat())
+    desc = "MOTRES AeroStator model %s%s. Licensed to %s on %s. Not for redistribution." % (
+        motor_id, (" " + version) if version else "", customer, day.isoformat())
     new = ("ISO-10303-21;\nHEADER;\n/* %s */\n" % q(desc, 400)
            + "FILE_DESCRIPTION(('%s'),'2;1');\n" % q(desc, 400)
            + "FILE_NAME('%s','%s',('%s'),('%s'),'Open CASCADE STEP processor','FreeCAD','Licensed to %s %s');\n" % (

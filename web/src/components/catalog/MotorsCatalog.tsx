@@ -12,12 +12,13 @@
  * UI here any more.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import { Box, Typography, Button } from '@mui/material';
+import { Box, Typography, Button, Tooltip } from '@mui/material';
 import FamilyCatalog from './FamilyCatalog';
 import MyMotorsPanel from './MyMotorsPanel';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
+import { APPLICATIONS, filterDiesByApplication, parseApplicationFilter, type ApplicationFilter } from '../../lib/applications';
 import { useScrollMemory } from '../../lib/scrollMemory';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -50,6 +51,16 @@ const MotorsCatalog: React.FC = () => {
   });
   // Ø sections come from the dies themselves.
   const [diams, setDiams] = useState<number[]>([]);
+  // Application filter (owner 2026-10-13): all / propeller / robot / aviation / marine.
+  const [appFilter, setAppFilter] = useState<ApplicationFilter>(() => {
+    try { return parseApplicationFilter(localStorage.getItem('motors.application')); } catch { return 'all'; }
+  });
+  const [allDies, setAllDies] = useState<{ name: string; stator_diameter: number; configs: { name: string; applications?: unknown }[] }[]>([]);
+  const pickFilter = (v: string) => {
+    const f = parseApplicationFilter(v);
+    setAppFilter(f);
+    try { localStorage.setItem('motors.application', f); } catch { /* storage blocked */ }
+  };
   const [canWrite, setCanWrite] = useState(false);
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — shown instead of the vendor's "no dies yet".
@@ -63,10 +74,7 @@ const MotorsCatalog: React.FC = () => {
         // may write the SHARED config (admin / local dev) - not merely "a copy into my own workspace"
         setCanWrite(uiCanWrite(t.can_write, canWriteServer()));
         setNote(typeof t.note === 'string' ? t.note : null);
-        setDiams(Array.from(new Set(
-          ((t.dies || []) as { stator_diameter: number }[])
-            .map(d => Number(d.stator_diameter)).filter(Number.isFinite),
-        )).sort((a, b) => a - b));
+        setAllDies((t.dies || []) as never);
       })
       .catch((e: { status?: number }) => {
         setDiams([]);
@@ -80,6 +88,13 @@ const MotorsCatalog: React.FC = () => {
         // 2026-08-25: "I don't see the lock icons").
         setTimeout(() => { void load(true); }, 3000);
       });
+  // Ø sections come from the dies that survive the application filter
+  useEffect(() => {
+    setDiams(Array.from(new Set(
+      filterDiesByApplication(allDies, appFilter)
+        .map(d => Number(d.stator_diameter)).filter(Number.isFinite),
+    )).sort((a, b) => a - b));
+  }, [allDies, appFilter]);
   useEffect(() => {
     load();
     const onChanged = () => { void load(true); };
@@ -115,6 +130,14 @@ const MotorsCatalog: React.FC = () => {
         </Typography>
         <HelpTip title={tx('everythingGroupedByStatorDiameterA')} />
         <Box sx={{ flex: 1 }} />
+        <Tooltip title={tx('applications.filterTip')}>
+          <select value={appFilter} onChange={(e) => pickFilter(e.target.value)} aria-label={tx('applications.label')}
+            style={{ fontSize: 11, padding: '1px 4px', background: 'transparent', color: 'var(--text-2)',
+                     border: '1px solid var(--line-soft)', borderRadius: 4 }}>
+            <option value="all">{tx('applications.all')}</option>
+            {APPLICATIONS.map((a) => <option key={a} value={a}>{tx(`applications.${a}`)}</option>)}
+          </select>
+        </Tooltip>
         {dieMsg && (
           <Typography sx={{ fontSize: 11,
             color: dieMsg.startsWith('✗') ? '#fca5a5' : '#34d399' }}>{dieMsg}</Typography>
@@ -154,7 +177,7 @@ const MotorsCatalog: React.FC = () => {
             </Typography>
             <Box sx={{ flex: 1, height: '1px', bgcolor: 'var(--panel)' }} />
           </Box>
-          {!folded[String(d)] && <FamilyCatalog embedded diameter={d} />}
+          {!folded[String(d)] && <FamilyCatalog embedded diameter={d} application={appFilter} />}
         </Box>
       ))}
     </Box>

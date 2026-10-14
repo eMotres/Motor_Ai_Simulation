@@ -43,6 +43,7 @@ import { canWriteServer } from '../../lib/localAuth';
 import { isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
 import { configButtons, configClickPlan, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
+import { cleanApplications, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
@@ -133,6 +134,10 @@ interface Cfg {
   role_source?: string;
   /** what the yaml still says, kept visible when it disagrees. */
   role_stored?: string;
+  /** what the configuration is for (first = default); [] = not set */
+  applications?: string[];
+  application?: string | null;
+  applications_error?: string | null;
   battery?: Battery | null;
   /** the mode the row shows and loads (server-resolved; owner 2026-10-13) */
   default_duty?: string | null;
@@ -218,12 +223,37 @@ const ReportRing: React.FC<{ ring: ReportRing; size?: number }> = ({ ring, size 
   </Box>
 );
 
+/** The configuration's application as a small badge (owner 2026-10-13); a configuration with no
+ *  list shows nothing here (Admin flags it), a malformed one shows a red "?" with the reason. */
+const ApplicationBadge: React.FC<{ cfg?: Cfg }> = ({ cfg }) => {
+  if (!cfg) return null;
+  const apps = cleanApplications(cfg.applications);
+  if (cfg.applications_error) {
+    return (
+      <Tooltip title={tx('applications.invalidTip', { error: cfg.applications_error })}>
+        <Chip size="small" label="?" sx={{ height: 16, fontSize: 10, color: '#f87171', bgcolor: 'transparent',
+                                         border: '1px solid #f8717155', cursor: 'help' }} />
+      </Tooltip>
+    );
+  }
+  if (!apps.length) return null;
+  return (
+    <Tooltip title={tx('applications.badgeTip', { application: apps.map((a) => tx(`applications.${a}`)).join(', ') })}>
+      <Chip size="small" label={tx(`applications.${apps[0]}`)}
+        sx={{ height: 16, fontSize: 10, color: 'var(--text-3)', bgcolor: 'transparent',
+              border: '1px solid var(--line-soft)', cursor: 'help' }} />
+    </Tooltip>
+  );
+};
+
 const FamilyCatalog: React.FC<{
   /** Show only dies of this stator diameter (the page groups by Ø). */
   diameter?: number;
   /** Render bare die blocks (no panel, no header) for embedding in a Ø group. */
   embedded?: boolean;
-}> = ({ diameter, embedded }) => {
+  /** Motors application filter (all / propeller / robot / aviation / marine). */
+  application?: ApplicationFilter;
+}> = ({ diameter, embedded, application = 'all' }) => {
   useTranslation('motors'); // re-render on language change; lazy-loads the namespace
   const setActiveTab = useUIStore((s) => s.setActiveTab);
   const [dies, setDies] = useState<Die[]>([]);
@@ -728,7 +758,7 @@ const FamilyCatalog: React.FC<{
           : '')
       : 'No duties saved yet, so this is the Simulation mode that was set when the configuration was created. It follows the duties as soon as there is one.');
 
-  const shown = dies.filter(d =>
+  const shown = filterDiesByApplication(dies, application).filter(d =>
     diameter == null || Number(d.stator_diameter) === Number(diameter));
   if (embedded && shown.length === 0 && !msg) return null;
 
@@ -797,6 +827,7 @@ const FamilyCatalog: React.FC<{
                   {cur && (
                     <>
                       <CardBadge date={cur.card_date} />
+                      <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} />
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
                         <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
                                                           fontVariantNumeric: 'tabular-nums' }}>
@@ -1057,6 +1088,7 @@ const FamilyCatalog: React.FC<{
                     </span>
                   </Tooltip>
                 )}
+                <ApplicationBadge cfg={c} />
                 <Tooltip title={roleTip(c)}>
                   <Chip size="small" label={c.role}
                     sx={{ height: 18, fontSize: 10, color: roleColor(c.role),

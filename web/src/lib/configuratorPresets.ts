@@ -43,6 +43,9 @@ export interface Preset {
   drive_variant: string | null;
   /** date of this configuration's FULL passport card; null/absent = none */
   card_date?: string | null;
+  /** what this configuration is for (`applications` in its yaml, first = default); [] = not set */
+  applications?: string[];
+  application?: string | null;
 }
 
 /** The slice of the tuner's knobs the presets speak about. */

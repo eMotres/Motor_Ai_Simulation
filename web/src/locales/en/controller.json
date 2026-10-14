@@ -705,5 +705,13 @@
     "partRefTip": "Customer-supplied part: it is in the field and in the losses but not billed in the mass; shown at the mass it was modelled at.",
     "ironSplitStator": "Stator iron {st} W: hysteresis {sh} / eddy {se} / excess {sx} W.",
     "ironSplitRotor": "Rotor iron {rt} W: hysteresis {rh} / eddy {re} / excess {rx} W."
+  },
+  "configureApplication": {
+    "label": "Application",
+    "tip": "What this machine is used for. It decides whether the propeller controls are offered.",
+    "propeller": "Propeller",
+    "robot": "Robot",
+    "aviation": "Aviation",
+    "marine": "Marine"
   }
 }

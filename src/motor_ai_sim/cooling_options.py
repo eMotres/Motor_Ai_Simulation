@@ -85,8 +85,26 @@ def _clean_list(v: Any) -> Optional[List[str]]:
     return [str(x).strip() for x in v if str(x).strip()]
 
 
-def cooling_options(die: str, config: Optional[str] = None) -> Dict[str, Any]:
+def _applications_of(die: str, cfg: str) -> List[str]:
+    """The ``applications`` stored on the configuration, ``[]`` when unset or unreadable."""
+    if not (die and cfg):
+        return []
+    try:
+        from motor_ai_sim.applications import config_applications
+        from motor_ai_sim.routes.family import config_doc
+        return config_applications(config_doc(die, cfg))[0]
+    except Exception:                                       # noqa: BLE001 — a reader, not a gate
+        return []
+
+
+def cooling_options(die: str, config: Optional[str] = None,
+                    applications: Optional[List[str]] = None) -> Dict[str, Any]:
     """The cooling options for ``die`` (and ``config``, when given).
+
+    The configuration's application (``motor_ai_sim.applications``) is applied last: a
+    configuration whose ``applications`` do not include ``propeller`` gets no propeller
+    cooling and no propeller list, whatever the registry file says.  ``applications`` may be
+    passed by a caller that already holds the configuration document; ``None`` reads it.
 
     ``cooling_options`` / ``propellers`` are ``None`` when nothing restricts the
     die; ``restricted`` says so in one flag.  ``source`` names the layer the entry
@@ -123,7 +141,10 @@ def cooling_options(die: str, config: Optional[str] = None) -> Dict[str, Any]:
         # a default counts only if ITS configuration may actually use that propeller
         for c, pid in defaults.items():
             (ok if pid in set(_eff(c)["props"] or []) else bad)[c] = pid
-    return {"die": die, "config": cfg or None, "cooling_options": opts,
-            "propellers": props, "restricted": opts is not None, "source": source,
-            "default_propeller": ok.get(cfg) if cfg else None,
-            "defaults": ok, "bad_defaults": bad}
+    out = {"die": die, "config": cfg or None, "cooling_options": opts,
+           "propellers": props, "restricted": opts is not None, "source": source,
+           "default_propeller": ok.get(cfg) if cfg else None,
+           "defaults": ok, "bad_defaults": bad}
+    from motor_ai_sim.applications import restrict_cooling
+    apps = list(applications) if applications is not None else _applications_of(die, cfg)
+    return restrict_cooling(out, apps)

@@ -4,10 +4,12 @@ import React from 'react';
 import { Box, Typography } from '@mui/material';
 import PassportManager from '../PassportManager';
 import ModulesPanel from '../ModulesPanel';
+import ApplicationsPanel from '../ApplicationsPanel';
 
 const CatalogsSection: React.FC = () => (
   <Box>
     <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)', mb: 1.5 }}>Catalogs</Typography>
+    <ApplicationsPanel />
     <PassportManager />
     <ModulesPanel />
   </Box>

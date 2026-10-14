@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   Alert, Box, CircularProgress, FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, TextField,
-  ToggleButton, ToggleButtonGroup, Tooltip, Typography, useTheme,
+  ThemeProvider, ToggleButton, ToggleButtonGroup, Tooltip, Typography, createTheme,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
 import {
@@ -26,8 +26,8 @@ import { activeDuty } from '../../lib/dutySettings';
 import { fetchFamilyTree } from '../../lib/familyTree';
 import { STATE_COLORS, formatTime, kindColor, loopBadge, typeColor } from '../../lib/systemGraph';
 import type { SgDoc, SgEdge, SgLoop, SgNode } from '../../lib/systemGraph';
-import { badgeOf, buildView, chipCounts, laneCounts, neighbours } from '../../lib/systemGraphView';
-import type { Badge, Chip, View as GraphView, Wire } from '../../lib/systemGraphView';
+import { badgeOf, buildView, chipCounts, conditionText, exitGroups, laneCounts, loopHead, loopText, neighbours } from '../../lib/systemGraphView';
+import type { Badge, Chip, ExitGroup, LoopText, View as GraphView, Wire } from '../../lib/systemGraphView';
 import { NODE_W, blockHeight, layoutGraph, roundedPath, routeWires } from '../../lib/systemGraphLayout';
 import type { Layout, Pt } from '../../lib/systemGraphLayout';
 
@@ -36,7 +36,11 @@ const VIEW_KEY = 'system.view';
 const ALL_KEY = 'system.showAll';
 const MOTOR_KEY = 'system.motor';
 type ViewName = 'modules' | 'propeller_s1';
-const LOOP_COLORS = ['#f59e0b', '#0ea5e9', '#a855f7', '#10b981'];
+// text-safe on white (>= 4.5:1)
+const LOOP_COLORS = ['#b45309', '#0369a1', '#7e22ce', '#047857'];
+const TONE_COLORS = { ok: '#047857', warn: '#b45309', fail: '#b91c1c' } as const;
+// the graph is ALWAYS drawn in the light style, whatever the app theme is (owner 2026-10-14)
+const LIGHT = createTheme({ palette: { mode: 'light', background: { default: '#ffffff', paper: '#ffffff' } } });
 
 const read = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
 const write = (k: string, v: string) => { try { localStorage.setItem(k, v); } catch { /* a convenience */ } };
@@ -58,9 +62,11 @@ type Tr = (k: string, o?: Record<string, unknown>) => string;
 interface ChipView { chip: Chip; text: string; tip: string }
 interface BlockData extends Record<string, unknown> {
   node: SgNode; title: string; tip: ReactNode; badge: Badge; badgeText: string; noRunTip: string;
-  chips: ChipView[]; dim: boolean; rings: string[]; dots: string[];
+  chips: ChipView[]; dim: boolean; rings: string[]; dots: string[]; condition: string;
 }
-interface LoopData extends Record<string, unknown> { title: string; badge: string; color: string; tip: ReactNode }
+interface LoopData extends Record<string, unknown> {
+  text: LoopText; color: string; tip: ReactNode; exits: Array<{ tone: ExitGroup['tone']; label: string; tip: string }>;
+}
 
 const PICK_SX = { '& .MuiInputBase-root': { fontSize: 13, height: 32 }, '& .MuiInputLabel-root': { fontSize: 12 } } as const;
 const hidden = { opacity: 0, pointerEvents: 'none' } as const;
@@ -88,6 +94,9 @@ function BlockNode({ data }: NodeProps<Node<BlockData>>) {
           <Typography variant="caption" noWrap sx={{ color: 'text.secondary', fontFamily: 'monospace', fontSize: 10.5 }}>
             {n.source?.function ?? n.capability ?? n.id}
           </Typography>
+        )}
+        {!compact && data.condition && (
+          <Typography variant="caption" noWrap sx={{ fontSize: 10.5, fontWeight: 600, color: 'error.dark' }}>{data.condition}</Typography>
         )}
         {!compact && b.kind === 'norun' && (
           <Tooltip title={data.noRunTip} placement="bottom">
@@ -126,16 +135,27 @@ function BlockNode({ data }: NodeProps<Node<BlockData>>) {
 }
 
 function LoopNode({ data, width, height }: NodeProps<Node<LoopData>>) {
+  const t = data.text;
   return (
     <Box sx={{
       width: width ?? '100%', height: height ?? '100%', boxSizing: 'border-box', borderRadius: 2,
-      border: `2px dashed ${data.color}`, bgcolor: `${data.color}12`, pointerEvents: 'none',
+      border: `2px dashed ${data.color}`, bgcolor: `${data.color}10`, pointerEvents: 'none',
     }}>
-      <Tooltip arrow placement="top" title={data.tip}>
-        <Box sx={{ pointerEvents: 'auto', display: 'inline-flex', gap: 0.75, alignItems: 'center', px: 1, py: 0.2,
-          color: data.color, fontSize: 11.5, fontWeight: 600, cursor: 'help' }}>
-          <span>{'↻'} {data.title}</span>
-          {data.badge && <span style={{ fontWeight: 400 }}>{data.badge}</span>}
+      <Tooltip arrow placement="top" title={data.tip} slotProps={{ tooltip: { sx: { maxWidth: 520 } } }}>
+        <Box sx={{ pointerEvents: 'auto', px: 1, pt: 0.4, cursor: 'help', color: data.color, lineHeight: 1.35 }}>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <Box sx={{ fontSize: 12, fontWeight: 700, whiteSpace: 'nowrap' }}>{'\u21bb'} {t.title}</Box>
+            <Box sx={{ flex: 1 }} />
+            {data.exits.map((x, i) => (
+              <Tooltip key={i} title={x.tip} placement="bottom">
+                <Box sx={{ fontSize: 10.5, fontWeight: 600, px: 0.8, borderRadius: 8, whiteSpace: 'nowrap', color: '#fff',
+                  bgcolor: TONE_COLORS[x.tone] }}>{x.label}</Box>
+              </Tooltip>
+            ))}
+          </Stack>
+          {t.rule && <Box sx={{ fontSize: 11, color: 'text.primary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.rule}</Box>}
+          {t.steps && <Box sx={{ fontSize: 11, color: 'text.primary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.steps}</Box>}
+          {t.last && <Box sx={{ fontSize: 11, fontWeight: 600, color: 'text.primary', whiteSpace: 'nowrap' }}>{t.last}</Box>}
         </Box>
       </Tooltip>
     </Box>
@@ -178,7 +198,6 @@ interface FamilyDie { name: string; configs?: Array<{ name: string; duties?: Arr
 
 export default function SystemPanel() {
   const { t: tr } = useTranslation('common');
-  const theme = useTheme();
   const [view, setView] = useState<ViewName>(() => (read(VIEW_KEY) === 'propeller_s1' ? 'propeller_s1' : 'modules'));
   const [showAll, setShowAll] = useState<boolean>(() => read(ALL_KEY) === '1');
   const [motor, setMotor] = useState<Motor | null>(savedMotor);
@@ -190,6 +209,7 @@ export default function SystemPanel() {
   const [focus, setFocus] = useState<string | null>(null);
   const [tick, setTick] = useState(0);
   const box = useRef<HTMLDivElement | null>(null);
+  const card = useRef<HTMLDivElement | null>(null);
   const rf = useRef<ReactFlowInstance | null>(null);
 
   useEffect(() => {
@@ -233,10 +253,11 @@ export default function SystemPanel() {
     if (!inst || !el || !graph) return;
     const L = graph.layout;
     // fit to width; when that would push the graph out of view, fit the height as well
-    const zw = (el.clientWidth - 48) / L.width, zh = (el.clientHeight - 80) / L.height;
+    const topPad = (card.current?.offsetHeight ?? 0) + 22;              // keep the graph below the legend card
+    const zw = (el.clientWidth - 48) / L.width, zh = (el.clientHeight - topPad - 24) / L.height;
     const z = Math.min(1.1, Math.max(0.05, Math.min(zw, Math.max(zh, 0.3))));
     const h = L.height * z;
-    inst.setViewport({ x: 24 - L.left * z, y: Math.max(64, (el.clientHeight - h) / 2) - L.top * z, zoom: z });
+    inst.setViewport({ x: 24 - L.left * z, y: topPad + Math.max(0, (el.clientHeight - topPad - 24 - h) / 2) - L.top * z, zoom: z });
   }, [graph]);
   useEffect(() => { fit(); }, [fit]);
 
@@ -256,7 +277,8 @@ export default function SystemPanel() {
   const cfgObj = dieObj?.configs?.find((c) => c.name === motor?.config);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
+    <ThemeProvider theme={LIGHT}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#ffffff', color: '#111827' }}>
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap', rowGap: 1 }}>
         <ToggleButtonGroup size="small" exclusive value={view} onChange={onView}>
           <ToggleButton value="modules">{tr('system.view.modules')}</ToggleButton>
@@ -306,7 +328,7 @@ export default function SystemPanel() {
           <ReactFlow
             key={`${doc?.view}:${showAll}`}
             nodes={nodes} edges={edges} nodeTypes={NODE_TYPES} edgeTypes={EDGE_TYPES}
-            colorMode={theme.palette.mode === 'dark' ? 'dark' : 'light'}
+            colorMode="light"
             nodesDraggable={false} nodesConnectable={false} elementsSelectable={false}
             onInit={(inst) => { rf.current = inst; fit(); }}
             minZoom={0.05} maxZoom={2}
@@ -322,7 +344,7 @@ export default function SystemPanel() {
           </ReactFlow>
         )}
         {doc && (
-          <Paper elevation={2} sx={{ position: 'absolute', left: 12, top: 10, zIndex: 5, px: 1.25, py: 0.75, maxWidth: 'min(620px, 72%)' }}>
+          <Paper ref={card} elevation={2} sx={{ position: 'absolute', left: 12, top: 10, zIndex: 5, px: 1.25, py: 0.75, maxWidth: 'min(620px, 72%)' }}>
             <Stack direction="row" spacing={1.25} useFlexGap flexWrap="wrap" alignItems="center">
               {types.map((ty) => (
                 <Stack key={ty} direction="row" spacing={0.5} alignItems="center">
@@ -334,10 +356,24 @@ export default function SystemPanel() {
             <Typography variant="caption" component="div" sx={{ mt: 0.5, minHeight: 16, color: hover ? 'text.primary' : 'text.secondary' }}>
               {hover ? wireLines(hover, tr) : tr('system.hoverWire')}
             </Typography>
+            {graph && graph.ringed.length > 0 && (
+              <Box sx={{ mt: 0.75, pt: 0.5, borderTop: '1px solid', borderColor: 'divider' }}>
+                {graph.ringed.map((r) => (
+                  <Tooltip key={r.id} title={r.tip} placement="right">
+                    <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'baseline', cursor: 'help' }}>
+                      <Box sx={{ width: 9, height: 9, borderRadius: '50%', border: `2px solid ${r.color}`, flexShrink: 0, alignSelf: 'center' }} />
+                      <Typography variant="caption" sx={{ fontWeight: 700, color: r.color }}>{'\u21bb'} {r.text.title}</Typography>
+                      <Typography variant="caption" sx={{ color: 'text.secondary' }}>{[r.text.rule, r.text.last].filter(Boolean).join(' \u00b7 ')}</Typography>
+                    </Box>
+                  </Tooltip>
+                ))}
+              </Box>
+            )}
           </Paper>
         )}
       </Box>
     </Box>
+    </ThemeProvider>
   );
 }
 
@@ -375,26 +411,46 @@ function nodeTip(n: SgNode, title: string, badgeText: string, tr: Tr): ReactNode
   );
 }
 
-function loopTip(l: SgLoop, tr: Tr): ReactNode {
-  const d = l.detail ?? {};
+function loopTip(l: SgLoop, text: LoopText, tr: Tr): ReactNode {
   return (
     <Box sx={{ fontSize: 12 }}>
-      <Box sx={{ fontWeight: 700 }}>{l.title}</Box>
-      <Box>{tr(`system.loopKind.${l.kind}`)}{loopBadge(l) ? ` · ${loopBadge(l)}` : ''}</Box>
-      {typeof d.what === 'string' && <Box>{d.what}</Box>}
-      {l.source && <Box sx={{ fontFamily: 'monospace', mt: 0.5 }}>{`${l.source.function} · ${l.source.file}:${l.source.line}`}</Box>}
+      <Box sx={{ fontWeight: 700 }}>{text.title}</Box>
+      {text.rule && <Box>{text.rule}</Box>}
+      {text.steps && <Box>{text.steps}</Box>}
+      {text.last && <Box sx={{ fontWeight: 600 }}>{text.last}</Box>}
+      {text.tip.map((x, i) => <Box key={i} sx={{ mt: 0.5 }}>{x}</Box>)}
+      <Box sx={{ mt: 0.5, color: 'text.secondary' }}>{tr(`system.loopKind.${l.kind}`)}{loopBadge(l) ? ` \u00b7 ${loopBadge(l)}` : ''}</Box>
+      {l.source && <Box sx={{ fontFamily: 'monospace', mt: 0.5 }}>{`${l.source.function} \u00b7 ${l.source.file}:${l.source.line}`}</Box>}
     </Box>
   );
 }
 
-interface Built { nodes: Node[]; edges: Edge[]; layout: Layout; view: GraphView }
+/** The exit tags of a loop: the way on, the flagged ones, one red tag for everything that fails the point. */
+function exitTags(l: SgLoop, tr: Tr): LoopData['exits'] {
+  return exitGroups(l).map((g) => {
+    const reasons = g.exits.map((e) => tr(`system.exit.${e.kind === 'warn' ? e.id + 'Warn' : e.id === 'runaway' && e.param ? 'runawayAbove' : e.id}`, { above: e.param?.above_C }));
+    if (g.tone === 'fail') {
+      return { tone: g.tone, label: `\u2717 ${tr('system.exit.failPoint')}: ${reasons.join(' \u00b7 ')}`, tip: reasons.map((r) => `${tr('system.exit.failPoint')}: ${r}`).join('\n') };
+    }
+    return { tone: g.tone, label: `${g.tone === 'ok' ? '\u2713' : '!'} ${reasons.join(' \u00b7 ')}`, tip: reasons.join('\n') };
+  });
+}
+
+interface Built {
+  nodes: Node[]; edges: Edge[]; layout: Layout; view: GraphView;
+  /** loops drawn as a ring (no box): described in the legend card */
+  ringed: Array<{ id: string; color: string; text: LoopText; tip: ReactNode }>;
+}
 
 function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean): Built {
   const view = buildView(doc, showAll);
   const counts = chipCounts(doc, view);
   const heights: Record<string, number> = {};
   for (const n of doc.nodes) heights[n.id] = blockHeight(n, counts[n.id] ?? 0);
-  const lay = layoutGraph(doc, { heights, lanes: laneCounts(doc.loops, view.wires) });
+  const ltext: Record<string, LoopText> = {};
+  const heads: Record<string, number> = {};
+  for (const l of doc.loops) { ltext[l.id] = loopText(l, tr); heads[l.id] = loopHead(ltext[l.id].lines); }
+  const lay = layoutGraph(doc, { heights, lanes: laneCounts(doc.loops, view.wires), heads });
   const { routes, top, height } = routeWires(lay, doc.loops, view.wires);
   const layout = { ...lay, top, height };
 
@@ -414,7 +470,7 @@ function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean): Built {
     nodes.push({
       id: `loop:${l.id}`, type: 'loop', position: { x: b.x, y: b.y }, width: b.w, height: b.h, zIndex: -1,
       selectable: false, draggable: false, focusable: false,
-      data: { title: tr(`system.loops.${l.id}`, { defaultValue: l.title }), badge: loopBadge(l), color: color[l.id], tip: loopTip(l, tr) },
+      data: { text: ltext[l.id], color: color[l.id], tip: loopTip(l, ltext[l.id], tr), exits: exitTags(l, tr) } satisfies LoopData,
     });
   }
   if (lay.inputs) {
@@ -438,6 +494,7 @@ function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean): Built {
         node: n, title: t, tip: nodeTip(n, t, badgeText, tr), badge, badgeText, noRunTip: tr('system.noRunTip'),
         chips: chips.map((c) => ({ ...c, tip: c.tip })), dim: false, rings: rings[n.id] ?? [],
         dots: n.context ? [...new Set(n.outputs.map((p) => p.type))].map(typeColor) : [],
+        condition: conditionText(n, tr),
       } satisfies BlockData,
     });
   }
@@ -452,5 +509,9 @@ function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean): Built {
       data: { path: roundedPath(r.points), color: c, feedback: w.feedback, dim: false, lit: false, count: w.count, label: r.label, wire: w } satisfies WireData,
     });
   }
-  return { nodes, edges, layout, view };
+  const ringed = lay.unboxed.map((id) => {
+    const l = doc.loops.find((x) => x.id === id)!;
+    return { id, color: color[id], text: ltext[id], tip: loopTip(l, ltext[id], tr) };
+  });
+  return { nodes, edges, layout, view, ringed };
 }

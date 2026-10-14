@@ -44,6 +44,7 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
 | `source` | `{function, file, line}` of the code the node stands for (the hover). Resolved with `ast` on every request, so the line follows the code; a function that is gone makes the route answer 500 instead of showing a stale hover. |
 | `status` | `{state, time_s, finished_at, summary, source, values}`; `state` is `done`, `running`, `error`, `cached` (a stored result exists) or `unknown`. |
 | `context` | `true` for a parameter source that feeds many blocks (motor model, limits, ambient, drive, ...): the view draws it in a compact **Inputs** column and shows chips on its consumers instead of wires. |
+| `condition` | Limit checks only: `{key, params}`, the one-line condition the block prints (`winding <= 200 C (class N)`, `I <= demag limit(T_magnet)`, ...). The numbers are read from the code (the project insulation class) or, with a motor selected, from that motor's model. |
 | `layout` | Optional `{col, row}` grid hint (row 1 = one block pitch; the main chain is row 0). When every non-context node has one the view uses it, otherwise it falls back to an automatic layout (dagre). |
 | module only | `capability`, `version`, `trust` (core / reference / community / ...), `roadmap` (a registered stub). |
 
@@ -71,7 +72,17 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
 * `max_iterations`, `tolerance` come from the code constants and defaults, read with `ast` (never typed twice):
   `FIXED_POINT_MAX_IT` / `FIXED_POINT_TOL_K` in `propeller_s1.py`, `solve_coupled(max_iter, tol_c)` in
   `routes/thermal.py`, `DEFAULT_MAX_ITER` / `DEFAULT_TOL_K` in `routes/coupled.py`. `null` = the code states none.
-* `convergence`: reserved for stage 2 (`{iterations, residual}` of the last run, when a record carries it).
+* `rule`: what the loop does, every number read from the code with `ast` (never typed twice): `iterates` (id of the
+  explanation text), `stop` (`max_delta` with the tolerance, `all_pass`, or `budget`), `limit.max`, `damping`
+  (`start`, halving `factor` and `min`), `fallback` (`damping`, `max`: the retry the code makes when the first run does
+  not settle), `steps` (the speed search: scan points, refinement passes, bisection tolerance) and `exits`
+  (`continue` / `warn` / `fail`, with the runaway temperature). The sources: `FIXED_POINT_*`, `RUNAWAY_C` and the
+  `_fixed_point(...)` calls in `solve_point`, the `damping = max(MIN, damping * F)` line and the returned `state`
+  values in `propeller_s1._fixed_point`, the `n_points` / `tol_rpm` defaults and the refinement `range(N)` in
+  `s1_rating`; `solve_coupled` and `routes/coupled.py` for the EM <-> thermal loops.
+* `convergence`: `{iterations, max_iterations, converged, residual, unit}` of the newest stored run of the selected
+  motor (read from the run history, which is not touched), else `null`. Only the `/api/coupled` loop has one today;
+  the S1 rating is computed on demand and leaves no record.
 * Loops that nest cleanly are drawn as nested boxes; two loops that overlap only partly (the modules view's two
   EM <-> thermal loops share the thermal solver) are drawn as a coloured ring on their members.
 
@@ -86,6 +97,14 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
   end's height, so wires do not cross at the ports; a wire's vertical run sits next to its target or its source,
   whichever keeps the horizontal run clear of blocks. Feedback wires (and `route: lane`) leave the bottom of the block, run
   in a lane at the bottom of the enclosing loop group (longest span lowest) and enter the bottom of the target.
+* **Loop groups say what happens.** The header gives, in one line each: what iterates, the stop condition, the limit, the
+  damping, the fallback, and (when a stored run exists) what that run did, e.g. "converged in 3 / 6, dT 0.9 K". The exits
+  are small labelled tags at the right edge of the header: the way on (green), flagged outcomes (amber) and one red tag
+  for everything that fails the point (runaway, no current, loss data, not converged). The tooltip holds the longer
+  explanation. A loop that overlaps another only partly is drawn as a ring on its members and described in the legend card.
+  Each limit-check block prints its condition under its name.
+* **Always light.** The canvas, its panel and its tooltips are drawn in the light style whatever the app theme is; the
+  wire, chip and status colours are chosen for contrast on white (>= 3:1 for graphics, >= 4.5:1 for text).
 * **Hover focus.** Hovering a block lights its wires and its chip sources and dims the rest.
 * **View.** The graph is fitted to the width of the pane (and to the height when the width alone would push it out of view).
 * **Status wording.** Pick a motor (die / config / duty, the lists of the Motors catalogue) at the top of the view: with no

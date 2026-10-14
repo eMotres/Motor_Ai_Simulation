@@ -33,6 +33,8 @@ export interface SgNode {
   context?: boolean;
   /** optional layout hint: column and row (1 row = one block pitch); every non-context node needs one for the manual layout */
   layout?: { col: number; row: number } | null;
+  /** a limit check's condition: i18n key + numbers read from the code (or from the selected motor's model) */
+  condition?: { key: string; params: Record<string, string | number> } | null;
 }
 export interface SgEnd { node: string; port: string | null }
 export interface SgEdge {
@@ -60,8 +62,20 @@ export interface SgLoop {
   tolerance_unit: string | null;
   detail?: Record<string, unknown>;
   source?: SgSource | null;
-  /** stage 2: the iteration count / residual of the last run, when a record carries it */
-  convergence?: { iterations?: number; residual?: number } | null;
+  /** what the loop does, read from the code (see SgRule); null for a loop the code does not describe */
+  rule?: SgRule | null;
+  /** iteration count and final residual of the newest stored run of the selected motor, when there is one */
+  convergence?: { iterations?: number; max_iterations?: number | null; converged?: boolean; residual?: number | null; unit?: string } | null;
+}
+export interface SgExit { id: string; kind: 'continue' | 'warn' | 'fail'; param?: Record<string, number> }
+export interface SgRule {
+  iterates: string;
+  stop?: { kind: 'max_delta' | 'all_pass' | 'budget'; quantity?: string; value?: number; unit?: string; bearing_K?: number; duty_ratio_pct?: number } | null;
+  limit?: { max: number } | null;
+  damping?: { start: number; factor?: number; min?: number } | null;
+  fallback?: { damping: number; max: number } | null;
+  steps?: { scan_points: number; refinement_passes: number; tolerance: number; unit: string } | null;
+  exits: SgExit[];
 }
 export interface SgDoc {
   version: string;
@@ -75,19 +89,19 @@ export interface SgDoc {
 }
 
 export const STATE_COLORS: Readonly<Record<SgState, string>> = {
-  done: '#22c55e', running: '#3b82f6', error: '#ef4444', cached: '#a78bfa', unknown: '#9ca3af',
+  done: '#15803d', running: '#2563eb', error: '#dc2626', cached: '#7c3aed', unknown: '#6b7280',
 };
 
 /** Wire colours by contract / data type; any other type gets a stable hue from its name. */
 const TYPE_COLORS: Readonly<Record<string, string>> = {
-  GeometryIR: '#0ea5e9', MeshIR: '#14b8a6', ResultIR: '#f59e0b', MachineState: '#ec4899',
-  ControlSignal: '#f43f5e', ParameterSet: '#8b5cf6', Excitation: '#84cc16', CostIR: '#eab308',
-  MaterialIR: '#a16207', TransmissionIR: '#64748b', dependency: '#94a3b8',
-  rpm: '#6366f1', torque: '#f97316', current: '#ef4444', temperature: '#f43f5e', loss_W: '#d946ef',
-  power: '#eab308', air_speed: '#06b6d4', heat_transfer: '#22d3ee', air_density: '#38bdf8',
-  slipstream_factor: '#0891b2', passport_grid: '#10b981', thermal_geometry: '#65a30d',
+  GeometryIR: '#0d9edf', MeshIR: '#12a595', ResultIR: '#cd8409', MachineState: '#ec4899',
+  ControlSignal: '#f43f5e', ParameterSet: '#8b5cf6', Excitation: '#69a311', CostIR: '#b68b06',
+  MaterialIR: '#a16207', TransmissionIR: '#64748b', dependency: '#8895a9',
+  rpm: '#6366f1', torque: '#ef6e15', current: '#ef4444', temperature: '#f43f5e', loss_W: '#d946ef',
+  power: '#b68b06', air_speed: '#05a3be', heat_transfer: '#19a0b4', air_density: '#2f9ed0',
+  slipstream_factor: '#0891b2', passport_grid: '#0ea674', thermal_geometry: '#65a30d',
   thermal_calibration: '#16a34a', limits: '#dc2626', limit: '#dc2626', drive: '#7c3aed', pack: '#a855f7',
-  verdict: '#475569', s1_rating: '#2563eb', mixed: '#94a3b8',
+  verdict: '#475569', s1_rating: '#2563eb', mixed: '#8895a9',
 };
 
 export function typeColor(type: string): string {
@@ -95,12 +109,12 @@ export function typeColor(type: string): string {
   if (c) return c;
   let h = 0;
   for (let i = 0; i < type.length; i++) h = (h * 31 + type.charCodeAt(i)) % 360;
-  return `hsl(${h} 60% 50%)`;
+  return `hsl(${h} 65% 38%)`;
 }
 
 export const KIND_COLORS: Readonly<Record<string, string>> = {
-  compute: '#3b82f6', ui: '#94a3b8', input: '#10b981', data: '#10b981', limit: '#ef4444',
-  search: '#f59e0b', output: '#8b5cf6',
+  compute: '#3b82f6', ui: '#8895a9', input: '#0ea674', data: '#0ea674', limit: '#ef4444',
+  search: '#cd8409', output: '#8b5cf6',
 };
 export const kindColor = (kind: string): string => KIND_COLORS[kind] ?? '#64748b';
 

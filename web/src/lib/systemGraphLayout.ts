@@ -20,6 +20,7 @@ import type { Wire } from './systemGraphView.ts';
 export const NODE_W = 200;
 export const NODE_H = 62;
 export const CHIP_ROW = 20;
+export const COND_ROW = 14;
 export const COMPACT_H = 40;
 export const COL_PITCH = 262;
 export const ROW_PITCH = 100;
@@ -28,9 +29,9 @@ const HEAD = 24;      // the loop's label strip
 const CTX_PITCH = COMPACT_H + 12;
 
 /** Height of a block: context blocks are compact, others grow by one row per two chips. */
-export function blockHeight(n: Pick<SgNode, 'context'>, chips: number): number {
+export function blockHeight(n: Pick<SgNode, 'context' | 'condition'>, chips: number): number {
   if (n.context) return COMPACT_H;
-  return NODE_H + (chips > 0 ? Math.ceil(chips / 2) * CHIP_ROW : 0);
+  return NODE_H + (n.condition ? COND_ROW : 0) + (chips > 0 ? Math.ceil(chips / 2) * CHIP_ROW : 0);
 }
 
 export interface LayoutOpts {
@@ -38,6 +39,8 @@ export interface LayoutOpts {
   heights?: Record<string, number>;
   /** loop id -> number of lane wires under it */
   lanes?: Record<string, number>;
+  /** loop id -> height of its header strip (the rule text lines) */
+  heads?: Record<string, number>;
 }
 
 export interface Layout {
@@ -77,7 +80,7 @@ const union = (rs: Box[]): Box => {
 
 /** Boxes of the loops around already placed blocks: a loop's box holds its members and its child loops' boxes,
  *  with a label strip on top and a lane strip at the bottom (`lanes` wires, 12 px each). */
-function boxLoops(boxed: SgLoop[], nodes: Record<string, Box>, lanes: Record<string, number>): Record<string, Box> {
+function boxLoops(boxed: SgLoop[], nodes: Record<string, Box>, lanes: Record<string, number>, heads: Record<string, number>): Record<string, Box> {
   const lv = levels(boxed);
   const out: Record<string, Box> = {};
   for (const l of [...boxed].sort((a, b) => lv[a.id] - lv[b.id])) {
@@ -88,7 +91,8 @@ function boxLoops(boxed: SgLoop[], nodes: Record<string, Box>, lanes: Record<str
     const u = union(rs);
     const side = 18 + 10 * lv[l.id];
     const strip = lanes[l.id] ? 16 + 12 * lanes[l.id] : 0;
-    out[l.id] = { x: u.x - side, y: u.y - side - HEAD, w: u.w + 2 * side, h: u.h + 2 * side + HEAD + strip };
+    const head = heads[l.id] ?? HEAD;
+    out[l.id] = { x: u.x - side, y: u.y - side - head, w: u.w + 2 * side, h: u.h + 2 * side + head + strip };
   }
   return out;
 }
@@ -122,7 +126,7 @@ function place(items: Item[], links: Array<[string, string]>): { pos: Record<str
   return { pos, w, h };
 }
 
-function level(doc: SgDoc, skip: Set<string>, hs: Record<string, number>, loop: SgLoop | null, boxed: SgLoop[],
+function level(doc: SgDoc, skip: Set<string>, hs: Record<string, number>, heads: Record<string, number>, loop: SgLoop | null, boxed: SgLoop[],
                parent: Record<string, string | null>): Sub {
   const members = loop ? new Set(loop.nodes) : new Set(doc.nodes.map((n) => n.id));
   const kids = boxed.filter((l) => (parent[l.id] ?? null) === (loop ? loop.id : null));
@@ -132,8 +136,8 @@ function level(doc: SgDoc, skip: Set<string>, hs: Record<string, number>, loop: 
   const items: Item[] = [];
   for (const n of doc.nodes) if (members.has(n.id) && !inKid[n.id] && !skip.has(n.id)) items.push({ id: n.id, w: NODE_W, h: hs[n.id] ?? NODE_H });
   for (const k of kids) {
-    subs[k.id] = level(doc, skip, hs, k, boxed, parent);
-    items.push({ id: `loop:${k.id}`, w: subs[k.id].w + 2 * PAD, h: subs[k.id].h + 2 * PAD + HEAD });
+    subs[k.id] = level(doc, skip, hs, heads, k, boxed, parent);
+    items.push({ id: `loop:${k.id}`, w: subs[k.id].w + 2 * PAD, h: subs[k.id].h + 2 * PAD + (heads[k.id] ?? HEAD) });
   }
   const itemOf = (id: string): string | null => (!members.has(id) || skip.has(id) ? null : inKid[id] ? `loop:${inKid[id]}` : id);
   const links: Array<[string, string]> = [];
@@ -149,7 +153,7 @@ function level(doc: SgDoc, skip: Set<string>, hs: Record<string, number>, loop: 
     if (it.id.startsWith('loop:')) {
       const id = it.id.slice(5);
       out.loops[id] = { x: p.x, y: p.y, w: it.w, h: it.h };
-      const dx = p.x + PAD, dy = p.y + PAD + HEAD;
+      const dx = p.x + PAD, dy = p.y + PAD + (heads[id] ?? HEAD);
       for (const [nid, b] of Object.entries(subs[id].nodes)) out.nodes[nid] = { ...b, x: b.x + dx, y: b.y + dy };
       for (const [lid, b] of Object.entries(subs[id].loops)) out.loops[lid] = { ...b, x: b.x + dx, y: b.y + dy };
     } else {
@@ -178,11 +182,11 @@ export function layoutGraph(doc: SgDoc, opts: LayoutOpts = {}): Layout {
     const y0 = -(ctx.length * CTX_PITCH) / 2;
     ctx.forEach((n, i) => { nodes[n.id] = { x: 0, y: y0 + i * CTX_PITCH, w: NODE_W, h: COMPACT_H }; });
     if (ctx.length) inputs = { x: 0, y: y0 - 22 };
-    loops = boxLoops(boxed, nodes, lanes);
+    loops = boxLoops(boxed, nodes, lanes, opts.heads ?? {});
   } else {
     const skip = new Set(ctx.map((n) => n.id));
     const { parent } = nesting(boxed);
-    const top = level(doc, skip, hs, null, boxed, parent);
+    const top = level(doc, skip, hs, opts.heads ?? {}, null, boxed, parent);
     const dx = ctx.length ? NODE_W + 70 : 0;
     for (const [id, b] of Object.entries(top.nodes)) nodes[id] = { ...b, x: b.x + dx };
     for (const [id, b] of Object.entries(top.loops)) loops[id] = { ...b, x: b.x + dx };

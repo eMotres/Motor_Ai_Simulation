@@ -1,7 +1,7 @@
 // What the System view draws, derived from the backend graph: one WIRE per block pair (parallel edges merged,
 // with a count), parameter-like links turned into CHIPS on the consuming block, and the status wording.
 // Pure: web/src/lib/__tests__/systemGraphView.test.mjs imports this file.
-import type { SgDoc, SgEdge, SgLoop, SgNode, SgStatus } from './systemGraph.ts';
+import type { SgDoc, SgEdge, SgExit, SgLoop, SgNode, SgStatus } from './systemGraph.ts';
 
 export interface Wire {
   id: string;
@@ -124,3 +124,84 @@ export function badgeOf(status: SgStatus | undefined, hasMotor: boolean): Badge 
 }
 
 export const blockHasStatus = (n: SgNode): boolean => !!n.status && n.status.state !== 'unknown';
+
+// -- what a loop group says about itself --------------------------------------------------------------------
+
+export type T = (key: string, params?: Record<string, unknown>) => string;
+
+export interface LoopText {
+  /** line 1: what iterates */
+  title: string;
+  /** the one-line rule (stop, limit, damping, fallback); `steps` the scan steps; `last` the stored run, when there is one */
+  rule: string;
+  steps: string;
+  last: string;
+  /** the longer explanation (tooltip) */
+  tip: string[];
+  /** lines drawn in the header (the title + the non-empty ones) */
+  lines: number;
+}
+
+/** The numbers every rule text may use (flat, for ICU params). */
+function ruleParams(l: SgLoop): Record<string, unknown> {
+  const r = l.rule;
+  return {
+    tol: r?.stop?.value, unit: r?.stop?.unit, max: r?.limit?.max, start: r?.damping?.start, min: r?.damping?.min,
+    factor: r?.damping?.factor, fbDamping: r?.fallback?.damping, fbMax: r?.fallback?.max, bearing: r?.stop?.bearing_K,
+    duty: r?.stop?.duty_ratio_pct, scan: r?.steps?.scan_points, passes: r?.steps?.refinement_passes,
+    rpmTol: r?.steps?.tolerance, above: r?.exits.find((e) => e.id === 'runaway')?.param?.above_C,
+  };
+}
+
+const fmt = (v: number | null | undefined): string => (v == null ? '' : String(+Number(v).toPrecision(3)));
+
+/** The header text of a loop: what iterates, the stop condition, the limit, the damping, the fallback and, when a stored
+ *  run exists, what it actually did.  Numbers come from the backend (read from the code); the words from `t`. */
+export function loopText(l: SgLoop, t: T): LoopText {
+  const r = l.rule;
+  const title = t(`system.loops.${l.id}`, { defaultValue: l.title });
+  if (!r) return { title, rule: '', steps: '', last: '', tip: [], lines: 1 };
+  const p = ruleParams(l);
+  const parts: string[] = [];
+  if (r.stop?.kind === 'max_delta') parts.push(t('system.rule.stopMaxDelta', { value: fmt(r.stop.value), unit: r.stop.unit }));
+  else if (r.stop?.kind === 'all_pass') parts.push(t('system.rule.stopAllPass'));
+  else if (r.stop?.kind === 'budget') parts.push(t('system.rule.stopBudget'));
+  if (r.limit) parts.push(t('system.rule.limit', { n: r.limit.max }));
+  if (r.damping) parts.push(t('system.rule.damping', { start: fmt(r.damping.start) }));
+  if (r.fallback) parts.push(t('system.rule.fallback', { damping: fmt(r.fallback.damping), max: r.fallback.max }));
+  const steps = r.steps ? t('system.rule.steps', { n: r.steps.scan_points, tol: fmt(r.steps.tolerance), unit: r.steps.unit }) : '';
+  const c = l.convergence;
+  let last = '';
+  if (c && c.iterations != null) {
+    last = t(c.converged ? 'system.rule.lastConverged' : 'system.rule.lastNot', { n: c.iterations, max: c.max_iterations ?? '?' });
+    if (c.residual != null) last += t('system.rule.residual', { res: fmt(c.residual), unit: c.unit ?? 'K' });
+  }
+  const tip = [t(`system.ruleTip.${l.id}`, { ...p, defaultValue: '' }), ...(r.stop?.bearing_K != null ? [t('system.rule.stopExtra', p)] : [])].filter(Boolean);
+  const rule = parts.join(' · ');
+  return { title, rule, steps, last, tip, lines: 1 + (rule ? 1 : 0) + (steps ? 1 : 0) + (last ? 1 : 0) };
+}
+
+/** Height of a loop group's header strip for that many text lines. */
+export const loopHead = (lines: number): number => 10 + 15 * lines;
+
+export interface ExitGroup { tone: 'ok' | 'warn' | 'fail'; exits: SgExit[] }
+
+/** The exits of a loop as the tags drawn at its edge: the way on, the flagged ones, and ONE tag for everything that fails the point. */
+export function exitGroups(l: SgLoop): ExitGroup[] {
+  const ex = l.rule?.exits ?? [];
+  const out: ExitGroup[] = [];
+  for (const [kind, tone] of [['continue', 'ok'], ['warn', 'warn'], ['fail', 'fail']] as const) {
+    const g = ex.filter((e) => e.kind === kind);
+    if (g.length) out.push({ tone, exits: g });
+  }
+  return out;
+}
+
+/** The one-line condition of a limit check, e.g. "winding <= 200 C (class N)". */
+export function conditionText(n: SgNode, t: T): string {
+  const c = n.condition;
+  if (!c) return '';
+  const lim = c.params.limit_C;
+  if (lim == null) return t(`system.cond.${c.key}`);
+  return t(`system.cond.${c.key}Limit`, { limit: lim, basis: c.params.basis ? t(`system.basis.${c.params.basis}`) : '' });
+}

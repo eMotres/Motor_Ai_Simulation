@@ -59,8 +59,8 @@ replaces the old output only when every check passed.
 | `build_report.json`, `step_check.json`, `gui_report.json`, `gui_check.json` | evidence of the checks |
 
 The model opens ready to look at: bodies Core, Coil, RotorCore, Magnet, their Parts and the two arrays visible (a body
-shows its Tip only); sketches, intermediate features, origins, axes, planes and the Params sheet hidden; core grey,
-coils copper, rotor iron dark, magnets one colour (the template does not know the polarity); isometric camera fitted to
+shows its Tip only); sketches, intermediate features, origins, axes, planes and the Params sheet hidden; colours from the single palette
+(`palette.py`: see "One colour palette" below; magnets alternate by index); isometric camera fitted to
 the model in `GuiDocument.xml`. The colours and the camera are written by a headless FreeCAD GUI step
 (`QT_QPA_PLATFORM=offscreen`; `MOTRES_CAD_XVFB=1` uses `xvfb-run`); the rules are checked again through the GUI
 (`check_gui.py`) before the output is accepted.
@@ -274,11 +274,11 @@ provisional); the manifest carries a summary.  The datums JSON has a `phase_boar
 ## Screws and threads (2026-10-13)
 
 The 6 M2 socket head screws were always in `Mechanics/Screws` and visible (hex socket AF 1.5, depth 1, conical bottom; only the
-0.2 mm mouth countersink of Fusion is not modelled); they were dark grey (0.30) and small, now bright stainless.  Fusion's
+0.2 mm mouth countersink of Fusion is not modelled); they were dark grey (0.30) and small, now nickel-plated (`screw` in `palette.py`).  Fusion's
 threads, read from the Fusion model (`fusion_source/sketches/*_features_bodies.json`, 2026-10-12): `Thread9` M5x0.8 6g on the
 shaft, `Thread12` M3x0.5 6H and `Thread14` M2x0.4 6H in the back holder are all **cosmetic** (`modeled = False`, full length), and
 the screw component is `91292A032_NO THREADS`.  They are reproduced the same way: the geometry stays the core / tap diameter
-(shaft r 2.4505, tap holes), the thread faces carry the amber thread colour (`view.THREAD_COLOUR`, checked by `check_gui.py`)
+(shaft r 2.4505, tap holes), the thread faces carry the host colour darkened by `THREAD_DARKEN` in `palette.py` (checked by `check_gui.py`)
 and the datums JSON lists them (`mechanics.threads`).  Volumes and the 1.0.2 / 1.1 compatibility are unchanged (no geometry change).
 
 

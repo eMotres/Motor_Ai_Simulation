@@ -25,6 +25,19 @@ PROV = Provenance(module="test", contracts_version="0.1.0")
 
 # -- tiny synthetic cards for the mismatch tests ------------------------------------------------
 
+
+@pytest.fixture(scope="module", autouse=True)
+def stand_in_dies(tmp_path_factory):
+    """The motors' mass comes from the app's mass model on their die: give it a stand-in catalog (tests/_component_dies.py)."""
+    from tests._component_dies import make_dies
+    mp = pytest.MonkeyPatch()
+    mp.setenv("MOTRES_DIES_DIR", str(make_dies(tmp_path_factory.mktemp("catalog"))))
+    L.get_library(refresh=True)
+    yield
+    mp.undo()
+    L._LIB = None                                                         # noqa: SLF001
+
+
 def _card(cid, kind, ports, mass=None, model=None) -> ComponentCard:
     mp = None if mass is None else MassProperties(mass_kg=mass, inertia_kg_m2=diag_inertia(0.01, 0.01, 0.01), basis="t")
     if kind in ("frame", "link", "wheel") and mp is None:
@@ -215,6 +228,23 @@ def test_unknown_mass_is_refused_not_zero():
         mass_properties(asm, {nomass.component_id: nomass})
 
 
+def _app_mass(die: str, cfg: str) -> float:
+    """The motor mass by calling the app's mass model directly on the stand-in die (an independent path)."""
+    import os
+    import yaml
+    from motor_ai_sim.masses import compute_masses
+    from motor_ai_sim.simulation.geometry_2d import _cfg_path, merge_geo_override, params_from_config
+    d = Path(os.environ["MOTRES_DIES_DIR"]) / die
+    geo = dict(yaml.safe_load((d / "die.yaml").read_text())["geometry"])
+    cy = yaml.safe_load((d / f"{cfg}.yaml").read_text())
+    geo.update(cy["geometry_overrides"])
+    base = yaml.safe_load(Path(_cfg_path()).read_text())
+    mats = {k: v for k, v in base["materials"].items() if k in ("stator_core", "rotor_core", "magnet", "slot", "shaft")}
+    mats.update(cy["materials"])
+    return float(compute_masses(params_from_config(geo_override=geo), merge_geo_override(dict(base["geometry"]), geo),
+                                k_end=0.0, materials=mats)["total"])
+
+
 # -- the quadcopter example -------------------------------------------------------------------------
 
 @pytest.fixture(scope="module")
@@ -244,7 +274,10 @@ def test_example_mass_properties_equal_a_hand_sum(example):
     m = lambda cid: cards[cid].mass_properties.mass_kg                                # noqa: E731
     total = (m("example_quad_frame_450") + m("pack_ciano14_40_new_l12_example")
              + 4 * (m("motor_ciano14_40_new_l12") + m("tmotor_fpv_10x5") + m("ctrl_ciano14_40_new_l12_si_48k")))
-    assert total == pytest.approx(0.25 + 0.85 + 4 * (0.09 + 0.0265 + 0.015)) == pytest.approx(1.626)
+    # the motor mass is the app's (compute_masses of the stand-in die); frame, pack and controller are placeholders
+    m_motor = m("motor_ciano14_40_new_l12")
+    assert m_motor == pytest.approx(_app_mass("CIANO14 40 new", "L12"), rel=1e-12)
+    assert total == pytest.approx(0.25 + 0.85 + 4 * (m_motor + 0.0265 + 0.015))
     assert res.mass_kg == pytest.approx(total)
     # centre of mass: x, y vanish by the four-fold symmetry; z is the mass-weighted height, by hand
     z = {c.instance: c.placement.position_mm[2] / 1000.0 for c in example.components}
@@ -261,3 +294,17 @@ def test_example_mass_properties_equal_a_hand_sum(example):
     # the file is valid JSON of the documented shape
     doc = json.loads(EXAMPLE.read_text(encoding="utf-8"))
     assert doc["ir_schema"] == "assembly-1" and len(doc["connections"]) == 21
+
+
+def test_example_lists_parts_and_materials_that_add_up_to_the_mass(example):
+    from motor_ai_sim import part_materials as pm
+    from motor_ai_sim.contracts.assembly_ir import parts_summary
+    ps = parts_summary(example, L.resolve)
+    assert ps.without_parts == []                                        # every component lists its parts
+    total = mass_properties(example, L.resolve).mass_kg
+    assert ps.counted_kg == pytest.approx(total, rel=1e-6)               # the parts ARE the assembly mass
+    assert sum(ps.by_material.values()) == pytest.approx(total, rel=1e-6)
+    assert all(pm.exists(mid) for mid in ps.by_material)                 # and every material resolves to a card
+    assert {"20SW1200", "F52SH_120C", "copper", "PA66_GF30", "CFRP_QI_T800_epoxy"} <= set(ps.by_material)
+    # the four motors are 4 x the same parts: 4 stator cores in the table
+    assert sum(1 for r in ps.rows if r["part"] == "Stator core") == 4

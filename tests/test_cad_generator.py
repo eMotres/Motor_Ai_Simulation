@@ -235,6 +235,42 @@ def test_back_lists_mechanics_rows_with_their_target(dies, tmp_path):
     assert "holder_bolt_r: 15" in open(patch, encoding="utf-8").read()
 
 
+def test_assembly_clearances_are_cad_only_never_a_difference_or_a_proposal(dies, tmp_path):
+    """Owner 2026-10-14: offset_rotor (magnet pocket offset) and the other fit clearances exist only in the 3-D model.
+    They are classified, never reported as a mismatch and never proposed back to the simulation."""
+    dd, lib = dies
+    eff = store.load_effective(dd, "TEST die", "L12", lib)
+    # the owner changed the magnet offset and the bearing seat clearance in his model
+    cells = {"motor_length": "12 mm", "air_gap": "0.2 mm", "insulation_thickness": "0.06 mm",
+             "offset_rotor": "0.05 mm", "offset_bearing": "0.1 mm", "holder_bolt_r": "15 mm"}
+    res = store.back(eff, store.load_mapping(), cells, str(tmp_path / "sync"), propose=True)
+    ac = {x["name"]: x for x in res["assembly_clearances"]}
+    assert set(ac) == {"offset_rotor", "offset_bearing"}
+    assert all(x["classification"] == "CAD-only assembly clearance (not simulated by design)" for x in ac.values())
+    assert ac["offset_rotor"]["freecad"] == 0.05
+    # not a difference, not a CAD-only input to adopt, not a mechanics row, not in the proposal
+    assert not res["differences"]
+    assert "offset_rotor" not in {x["name"] for x in res["cad_only_inputs"] + res["mechanics"] + res["differences"]}
+    for f in res["files"]:
+        txt = open(f, encoding="utf-8-sig").read() if os.path.exists(f) and not f.endswith(".json") else ""
+        assert "offset_rotor" not in txt and "offset_bearing" not in txt, f
+    # a clearance is never a simulation row, even if a die carried a key of that name
+    assert "offset_rotor" in store.CAD_ONLY_CLEARANCES
+    assert "offset_rotor" not in {r[0] for r in store.primary_rows({"offset_rotor": 0.05, "air_gap": 0.2},
+                                                                  store.load_mapping())}
+    # the pocket fillet is magnet_fill_radius + offset_rotor: the note says so
+    assert "magnet_fill_radius + offset_rotor" in store.CAD_ONLY_CLEARANCES["offset_rotor"]
+
+
+def test_profile_report_lists_the_clearances_as_cad_only(dies):
+    dd, lib = dies
+    eff = store.load_effective(dd, "TEST die", "L12", lib)
+    _, rep = store.make_profile(eff, store.load_mapping(), stamp="t")
+    ac = {x["name"]: x for x in rep["assembly_clearances"]}
+    assert ac["offset_rotor"]["classification"].startswith("CAD-only assembly clearance")
+    assert all(r["sim_key"] != "offset_rotor" for r in rep["parameters"])
+
+
 def test_mechanics_sketches_follow_the_owner_conventions():
     src = _template_sources()["mechanics.py"]
     assert "Symmetric" in src and "Equal" in src

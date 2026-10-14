@@ -11,6 +11,10 @@ Served by ``GET /api/components`` and ``GET /api/components/{id}`` (routes/compo
 and registered as the module ``component-library`` (capability ``component.library``), so
 the System graph shows it with the other modules.
 
+MOTOR MASS.  A motor card carries the mass the APP computes (``masses.compute_masses`` on the passport's die and
+configuration, ``modules/motor_mass.py``) with a material + mass breakdown per part; never a duty-record number.
+Where the die is not in this catalog the card is listed with the flag ``mass_unknown`` and no mass.
+
 EXAMPLE parts.  The stores hold no mass for a battery pack, a controller board or a frame.
 The library therefore lists clearly labelled PLACEHOLDERS (``flags`` = ``placeholder``) so
 that an assembly has numbers to add up: ``example_quad_frame_450``, one ``pack_*`` per
@@ -31,18 +35,14 @@ from ..contracts.assembly_ir import CardRef
 from ..contracts.component_ir import (ComponentCard, Envelope, Frame, MassProperties, box_inertia, card_digest)
 from ..contracts.conformance import assert_component_card
 from .base import ModuleManifest
-from .component_adapters import (battery_card_from_block, controller_card_from_drive, motor_card_from_s1_model,
-                                 propeller_card, rigid_body_card, transmission_card)
+from .component_adapters import (battery_card_from_block, controller_card_from_drive, motor_card,
+                                 motor_card_from_s1_model, propeller_card, rigid_body_card, split_parts,
+                                 transmission_card)
+from .motor_mass import MotorMassError
 
 log = logging.getLogger(__name__)
 
 _REPO_CONFIG = Path(__file__).resolve().parents[3] / "config"
-
-#: Where a passport model's catalogue mass comes from: (die, config) -> (catalogue die, config).
-#: The catalogue duty record of that build carries ``result.mass_kg``; the passport carries none.
-_MASS_SOURCES: Dict[Tuple[str, str], Tuple[str, str]] = {
-    ("CIANO14 40 new", "L12"): ("CIANO14 40_12", "L12"),
-}
 
 CONTROLLER_BOARD_MASS_KG = 0.015            # PLACEHOLDER (a small FOC board); owner to supply the real mass
 EXAMPLE_PACK = dict(n_parallel=2, capacity_ah_per_string=5.0, i_continuous_A=70.0, i_peak_A=100.0, mass_kg=0.85,
@@ -87,6 +87,8 @@ def summary(e: Entry) -> Dict[str, Any]:
         "component_id": c.component_id, "kind": c.kind, "name": c.name, "version": c.version, "licence": c.licence,
         "model": c.model.ir_schema, "mass_kg": mp.mass_kg if mp else None,
         "mass_estimated": mp.estimated if mp else None, "flags": list(e.flags), "digest": card_digest(c),
+        "parts": [{"name": p.name, "material_id": p.material_id, "mass_kg": p.mass_kg, "role": p.role,
+                   "status": p.status, "counted": p.counted} for p in c.parts],
         "ports": [{"name": p.name, "type": p.type, "direction": p.direction, "required": p.required}
                   for p in c.ports],
     }
@@ -95,24 +97,6 @@ def summary(e: Entry) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 # building
 # ---------------------------------------------------------------------------
-
-def _catalogue_mass(die: str, config: str) -> Tuple[Optional[float], str]:
-    src = _MASS_SOURCES.get((die, config))
-    if not src:
-        return None, ""
-    path = _REPO_CONFIG / "dies" / src[0] / f"{src[1]}.yaml"
-    try:
-        import yaml
-        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-        for duty in doc.get("duties") or []:
-            mass = (duty.get("result") or {}).get("mass_kg")
-            if isinstance(mass, (int, float)) and mass > 0:
-                return float(mass), (f"catalogue duty record of the same build ({src[0]} / {src[1]}, duty "
-                                     f"{duty.get('name')!r}, result.mass_kg); the passport itself carries no mass")
-    except Exception as exc:                                    # noqa: BLE001
-        log.warning("catalogue mass of %s %s unreadable: %s", die, config, exc)
-    return None, ""
-
 
 def _passport_models() -> List[Mapping[str, Any]]:
     seen, out = set(), []
@@ -146,11 +130,17 @@ def example_frame() -> ComponentCard:
         mounts += [f"arm_{k}", f"esc_{k}"]
     frames.append(Frame(name="battery", position_mm=(0.0, 0.0, -10.0), note="battery mount under the plate"))
     mounts.append("battery")
+    parts = split_parts(mass, [("Carbon-fibre plates and arms", "CFRP_QI_T800_epoxy", "structural", 0.80),
+                               ("Aluminium standoffs and motor mounts", "Aluminium_6061", "structural", 0.16),
+                               ("Screws", "Stainless_A2_70", "fastener", 0.04)],
+                        status="placeholder",
+                        basis="PLACEHOLDER split of the example frame: carbon/epoxy plates, aluminium standoffs, "
+                              "stainless screws; not a real part")
     return rigid_body_card(
         component_id="example_quad_frame_450", kind="frame", name="Example quadcopter frame 450 (placeholder)",
         mass=mp, envelope=Envelope(shape="box", size_mm=(450.0, 450.0, 20.0),
                                    basis="PLACEHOLDER plate of the diagonal"),
-        frames=frames, mount_ports=mounts, placeholder=True,
+        frames=frames, mount_ports=mounts, placeholder=True, parts=parts,
         basis_note="PLACEHOLDER example frame: not a real part",
         description="PLACEHOLDER rigid body for the quadcopter example: four arm mounts, four controller mounts "
                     "and a battery mount. Mass and inertia are example values.")
@@ -160,9 +150,13 @@ def build_library() -> ComponentLibrary:
     lib = ComponentLibrary()
     for m in _passport_models():
         die, cfg = str(m.get("die")), str(m.get("config"))
-        mass, basis = _catalogue_mass(die, cfg)
         try:
-            lib.add(motor_card_from_s1_model(m, mass_kg=mass, mass_basis=basis), die=die)
+            try:
+                lib.add(motor_card(m), die=die)
+            except MotorMassError as exc:
+                # the die is not in this catalog: the mass is UNKNOWN (never a placeholder); the card is still listed
+                log.warning("motor %s %s listed without a mass: %s", die, cfg, exc)
+                lib.add(motor_card_from_s1_model(m), die=die, flags=["mass_unknown"])
         except Exception as exc:                                # noqa: BLE001
             lib.rejected.append({"component_id": f"motor {die} {cfg}", "reason": str(exc)})
         try:

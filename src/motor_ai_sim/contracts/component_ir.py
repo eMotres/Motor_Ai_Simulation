@@ -12,8 +12,12 @@ Reused, not duplicated: ``MotorPerformanceIR``, ``TransmissionIR``, ``PropulsorI
 and ``ShaftLoadIR`` come from ``drivetrain_ir``; new here are ``BatteryIR``,
 ``ControllerIR`` and ``RigidBodyIR``.
 
-PRIVACY (motors).  A motor card carries performance, mass properties and the OUTER
-ENVELOPE only.  There is no field for stator, rotor or winding design anywhere in
+PARTS (schema 0.2.0).  A card lists its ``parts``: name, ``material_id`` (resolved by
+``motor_ai_sim.part_materials`` to a material card with mechanical and thermal properties and a
+source for every value), mass and role.  The counted parts add up to the card mass.
+
+PRIVACY (motors).  A motor card carries performance, mass properties, the OUTER
+ENVELOPE and, per part, material + mass only (no volume, no dimension).  There is no field for stator, rotor or winding design anywhere in
 this module (``extra="forbid"`` everywhere) and no field is called ``geometry``
 (that key is on the project's denylist, ``mcp_tools.GEOMETRY_DENYLIST``, which the
 conformance gate walks).  CAD of a motor can be referenced only as ``access="nda"``.
@@ -39,10 +43,15 @@ from .drivetrain_ir import (UNITS_TAG, ModelSource, MotorPerformanceIR, Propulso
                             ShaftLoadIR, TransmissionIR, Validity, interp1, _check_axis)
 
 #: Version of the card schema itself (semver).  Same major = readable.
-CARD_SCHEMA_VERSION = "0.1.0"
+CARD_SCHEMA_VERSION = "0.2.0"          # 0.2.0: ``parts`` (material + mass per part)
 
 ComponentKind = Literal["motor", "propeller", "transmission", "controller", "battery", "frame", "link",
                         "wheel", "other"]
+PartRole = Literal["structural", "magnetic", "conductor", "insulation", "fastener", "electronic", "cell", "other"]
+#: how a part's mass and material are known: ``computed`` (the app's own mass model), ``catalogue`` (a vendor's
+#: published figure), ``measured``, ``assumed`` (a documented default, e.g. a material by vendor/series),
+#: ``placeholder`` (an example number until real data exist).
+PartStatus = Literal["computed", "catalogue", "measured", "assumed", "placeholder"]
 PortType = Literal["shaft", "dc_bus", "phase_ac", "thermal", "signal", "mount"]
 PortDirection = Literal["in", "out", "bidirectional"]
 
@@ -221,6 +230,28 @@ def cylinder_inertia(mass_kg: float, diameter_m: float, length_m: float, axis: s
     d = {"x": (ia, it, it), "y": (it, ia, it), "z": (it, it, ia)}[axis]
     return diag_inertia(*d)
 
+
+
+# ---------------------------------------------------------------------------
+# parts: material + mass (for load simulation: stress, vibration, thermal)
+# ---------------------------------------------------------------------------
+
+class ComponentPart(BaseModel):
+    """One physical part of a component: WHAT it is made of and how heavy it is.  ``material_id`` resolves to a
+    material card (``motor_ai_sim.part_materials.resolve``: density, E, nu, strengths, thermal properties, each
+    with its source).  No dimensions, no topology: a motor card lists material + mass only (privacy rule)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=80)
+    material_id: str = Field(min_length=1, max_length=96)
+    mass_kg: float = Field(gt=0, le=1e5)
+    volume_cm3: Optional[float] = Field(default=None, gt=0)       # not set on motor parts
+    role: PartRole
+    status: PartStatus = "assumed"
+    counted: bool = Field(default=True, description="False = a real part of the component that is NOT inside "
+                                                    "``mass_properties.mass_kg`` (listed so a load study knows it exists)")
+    basis: str = ""
 
 # ---------------------------------------------------------------------------
 # ports
@@ -489,6 +520,7 @@ class ComponentCard(BaseModel):
     envelope: Optional[Envelope] = None
     frames: List[Frame] = Field(default_factory=list)
     mass_properties: Optional[MassProperties] = None
+    parts: List[ComponentPart] = Field(default_factory=list)
     # connections and behaviour
     ports: List[Port] = Field(default_factory=list)
     model: ComponentModel
@@ -525,6 +557,17 @@ class ComponentCard(BaseModel):
         for p in self.ports:
             if p.frame is not None and p.frame not in names:
                 raise ValueError(f"port {p.name!r} refers to the unknown frame {p.frame!r}")
+        part_names = [p.name for p in self.parts]
+        if len(set(part_names)) != len(part_names):
+            raise ValueError("part names must be unique")
+        counted = sum(p.mass_kg for p in self.parts if p.counted)
+        if self.parts and self.mass_properties is not None and counted > 0:
+            m = self.mass_properties.mass_kg
+            if abs(counted - m) > 0.02 * m + 1e-9:
+                raise ValueError(f"the counted parts add up to {counted:.6g} kg but mass_properties.mass_kg is {m:.6g} kg "
+                                 "(parts must add up to the card mass within 2 %; use counted=false for a part outside it)")
+        if self.parts and self.mass_properties is None and any(p.counted for p in self.parts):
+            raise ValueError("counted parts need mass_properties on the card")
         if self.kind in ("frame", "link", "wheel") and self.mass_properties is None:
             raise ValueError(f"a {self.kind} card needs mass_properties (its model carries nothing else)")
         return self

@@ -8,8 +8,8 @@
  * most link-preview fetchers) therefore saw an empty page (2026-10-14).
  *
  * WHAT.  After `vite build` this script, with no dependency beyond Node:
- *   - writes dist/index.html (English, served at /) and dist/zh/index.html
- *     (Simplified Chinese, served at /zh/): the same file Vite wrote, with
+ *   - writes dist/index.html (English, served at /) and dist/zh-cn/index.html
+ *     (Simplified Chinese, served at /zh-cn/): the same file Vite wrote, with
  *       * an accurate <title>, description, canonical, hreflang, Open Graph,
  *         Twitter card and JSON-LD (Organization + SoftwareApplication) in <head>,
  *       * the landing text as plain semantic HTML inside <div id="root">;
@@ -65,7 +65,7 @@ export const FEATURES = [
 /** The two public pages.  `path` is the canonical URL path. */
 export const LOCALES = [
   { id: 'en', lang: 'en', path: '/', file: 'index.html', ogLocale: 'en_US', label: 'English' },
-  { id: 'zh-CN', lang: 'zh-CN', path: '/zh/', file: 'zh/index.html', ogLocale: 'zh_CN', label: '简体中文' },
+  { id: 'zh-CN', lang: 'zh-CN', path: '/zh-cn/', file: 'zh-cn/index.html', ogLocale: 'zh_CN', label: '简体中文' },
 ];
 
 /** AI and search crawlers named explicitly in robots.txt. */

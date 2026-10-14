@@ -9,7 +9,7 @@ The platform covers five steps: design (motor geometry for your task), simulatio
 ## Start here
 
 - [Landing page (English)](https://aerostator.com/): what the platform is and how to start
-- [Landing page (Simplified Chinese)](https://aerostator.com/zh/): the same page in 简体中文
+- [Landing page (Simplified Chinese)](https://aerostator.com/zh-cn/): the same page in 简体中文
 - [Source code on GitHub](https://github.com/eMotres/Motor_Ai_Simulation): Apache-2.0, fork it, run it yourself
 
 ## For developers and AI agents

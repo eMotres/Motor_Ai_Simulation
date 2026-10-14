@@ -50,11 +50,11 @@ export function writeStoredLocale(loc: Locale, storage: StorageLike = safeStorag
   try { storage?.setItem(STORAGE_KEY, loc); } catch { /* private window / blocked storage */ }
 }
 
-/** The pre-rendered Chinese landing lives at /zh/ (scripts/prerender-landing.mjs):
+/** The pre-rendered Chinese landing lives at /zh-cn/ (scripts/prerender-landing.mjs):
  *  someone who opened that address wants Chinese unless they chose otherwise.
  *  Not persisted, so the next visit at `/` is detected as usual. */
 export function localeFromPath(pathname: unknown): Locale | null {
-  return typeof pathname === 'string' && /^\/zh(\/|$)/i.test(pathname) ? 'zh-CN' : null;
+  return typeof pathname === 'string' && /^\/zh-cn(\/|$)/i.test(pathname) ? 'zh-CN' : null;
 }
 
 function livePathname(): string | null {

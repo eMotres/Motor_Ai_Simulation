@@ -45,7 +45,7 @@ function buildFixture() {
 
 const targets = [{ name: 'fixture', dist: buildFixture() }];
 const realDist = path.join(WEB, 'dist');
-if (fs.existsSync(path.join(realDist, 'zh', 'index.html'))) targets.push({ name: 'dist', dist: realDist });
+if (fs.existsSync(path.join(realDist, 'zh-cn', 'index.html'))) targets.push({ name: 'dist', dist: realDist });
 
 const rootBody = (html) => html.slice(html.indexOf('<div id="root">'), html.indexOf('</body>'));
 const textOf = (html) => rootBody(html).replace(/<style>[\s\S]*?<\/style>/g, '').replace(/<[^>]+>/g, ' ');
@@ -67,13 +67,13 @@ for (const { name, dist } of targets) {
   });
 
   test(`${name}: Chinese page is in Chinese, with its own head`, () => {
-    const html = fs.readFileSync(path.join(dist, 'zh', 'index.html'), 'utf8');
+    const html = fs.readFileSync(path.join(dist, 'zh-cn', 'index.html'), 'utf8');
     const text = textOf(html);
     for (const k of SECTION_KEYS) assert.ok(text.includes(dig(zh, k)), `ZH page lacks ${k}`);
     assert.ok(!text.includes('From idea to product, together'));
     assert.match(html, /<html lang="zh-CN"/);
     assert.ok(html.includes(`<title>${zh.meta.title}</title>`));
-    assert.ok(html.includes('<link rel="canonical" href="https://aerostator.com/zh/" />'));
+    assert.ok(html.includes('<link rel="canonical" href="https://aerostator.com/zh-cn/" />'));
   });
 
   test(`${name}: head has title, description, canonical, hreflang, OG, Twitter`, () => {
@@ -91,7 +91,7 @@ for (const { name, dist } of targets) {
   });
 
   test(`${name}: JSON-LD parses (Organization + SoftwareApplication), never says patented`, () => {
-    for (const f of ['index.html', 'zh/index.html']) {
+    for (const f of ['index.html', 'zh-cn/index.html']) {
       const html = fs.readFileSync(path.join(dist, f), 'utf8');
       const blocks = jsonLdBlocks(html).flat();
       const org = blocks.find((b) => b['@type'] === 'Organization');
@@ -117,7 +117,7 @@ for (const { name, dist } of targets) {
     assert.match(robots, /^Sitemap: https:\/\/aerostator\.com\/sitemap\.xml$/m);
     const sm = fs.readFileSync(path.join(dist, 'sitemap.xml'), 'utf8');
     assert.ok(sm.includes('<loc>https://aerostator.com/</loc>'));
-    assert.ok(sm.includes('<loc>https://aerostator.com/zh/</loc>'));
+    assert.ok(sm.includes('<loc>https://aerostator.com/zh-cn/</loc>'));
     assert.equal((sm.match(/<loc>/g) || []).length, 2, 'public pages only');
     assert.ok(!sm.includes('/api') && !sm.includes('agent-consent'));
     const llms = fs.existsSync(path.join(dist, 'llms.txt'))
@@ -147,7 +147,7 @@ test('static page id lists match the app (landingLinks.ts, conceptLayout.ts)', (
   for (const [, src] of mod.FEATURES) assert.ok(landing.includes(`'${src}'`), src);
 });
 
-test('browser tab titles equal the pre-rendered titles; /zh/ opens in Chinese', () => {
+test('browser tab titles equal the pre-rendered titles; /zh-cn/ opens in Chinese', () => {
   const locale = read('src/i18n/locale.ts');
   assert.ok(locale.includes(`en: '${en.meta.title}'`));
   assert.ok(locale.includes(`'zh-CN': '${zh.meta.title}'`));
@@ -156,7 +156,7 @@ test('browser tab titles equal the pre-rendered titles; /zh/ opens in Chinese', 
 
 test('nginx serves crawler files as real files and keeps API routes out of indexes', () => {
   const nginx = fs.readFileSync(path.join(WEB, '..', 'deploy', 'nginx.conf'), 'utf8');
-  assert.ok(/location = \/zh\/ \{/.test(nginx) && /try_files \/zh\/index\.html/.test(nginx));
+  assert.ok(/location = \/zh-cn\/ \{/.test(nginx) && /try_files \/zh-cn\/index\.html/.test(nginx));
   assert.ok(!/location = \/llms\.txt/.test(nginx), '/llms.txt must be the static file');
   for (const loc of ['/api/', '= /mcp', '/oauth/', '= /agent-consent']) {
     const re = new RegExp(`location ${loc.replace(/\//g, '\\/')} \\{[\\s\\S]*?\\n    \\}`);

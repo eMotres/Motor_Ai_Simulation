@@ -31,7 +31,8 @@ import yaml
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "src"))
-from motor_ai_sim.applications import APPLICATIONS, validate_applications  # noqa: E402
+from motor_ai_sim.applications import (APPLICATIONS, edit_applications_line,  # noqa: E402
+                                        validate_applications)
 
 #: die -> (applications, configurations).  ``None`` configurations = every configuration of the die.
 RULES: Dict[str, Tuple[List[str], Optional[List[str]]]] = {
@@ -53,21 +54,6 @@ for _die, (_apps, _cfgs) in RULES.items():          # the table itself must be v
     validate_applications(_apps)
 
 
-def _insert_line(text: str, apps: List[str]) -> str:
-    """``text`` with a top-level ``applications: [...]`` line added after ``die:`` / ``name:``."""
-    nl = "\r\n" if "\r\n" in text else "\n"
-    lines = text.split(nl)
-    line = "applications: [" + ", ".join(apps) + "]"
-    at = 0
-    for key in ("role:", "die:", "name:"):
-        hit = next((i for i, ln in enumerate(lines) if ln.startswith(key)), None)
-        if hit is not None:
-            at = hit + 1
-            break
-    lines.insert(at, line)
-    return nl.join(lines)
-
-
 def plan_file(path: Path, want: List[str]) -> Tuple[str, Optional[str]]:
     """``(status, new_text)``; status is ``set`` | ``ok`` | ``keeps`` | ``error: ...``."""
     raw = path.read_bytes().decode("utf-8")
@@ -83,7 +69,7 @@ def plan_file(path: Path, want: List[str]) -> Tuple[str, Optional[str]]:
         except ValueError as exc:
             return f"error: existing value invalid ({exc})", None
         return ("ok" if have == want else "keeps"), None
-    new = _insert_line(raw, want)
+    new = edit_applications_line(raw, want)
     after = yaml.safe_load(new)
     expected = dict(doc)
     expected["applications"] = want

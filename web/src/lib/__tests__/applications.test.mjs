@@ -82,3 +82,32 @@ t('the admin audit flags a missing or malformed list', () => {
   const by = Object.fromEntries(rows.map((r) => [`${r.die}/${r.config}`, r.state]));
   assert.deepEqual(by, { 'A/L1': 'set', 'A/L2': 'set', 'B/L3': 'set', 'B/L4': 'notSet', 'C/L5': 'invalid' });
 });
+
+t('editor state: tick appends, the last one cannot be unticked, default moves to the front', () => {
+  assert.deepEqual(A.toggleApplication(['robot'], 'aviation'), ['robot', 'aviation']);
+  assert.deepEqual(A.toggleApplication(['robot', 'aviation'], 'robot'), ['aviation']);
+  assert.deepEqual(A.toggleApplication(['robot'], 'robot'), ['robot']);
+  assert.deepEqual(A.setDefaultApplication(['robot', 'aviation', 'marine'], 'marine'), ['marine', 'robot', 'aviation']);
+  assert.deepEqual(A.setDefaultApplication(['robot'], 'marine'), ['robot']);
+});
+
+t('editor state: Save needs a real change (content or default), never an empty list', () => {
+  assert.equal(A.canSaveApplications(['robot'], ['robot']), false);
+  assert.equal(A.canSaveApplications(['robot'], ['aviation']), true);
+  assert.equal(A.canSaveApplications(['robot', 'aviation'], ['aviation', 'robot']), true);
+  assert.equal(A.canSaveApplications([], ['robot']), true);
+  assert.equal(A.canSaveApplications(['robot'], []), false);
+});
+
+t('saveApplications PUTs the list and surfaces the server reason on a 422', async () => {
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push([url, init.method, init.body]);
+    return JSON.parse(init.body).applications[0] === 'bad'
+      ? { ok: false, status: 422, json: async () => ({ detail: 'unknown application' }) }
+      : { ok: true, status: 200, json: async () => ({ applications: JSON.parse(init.body).applications }) };
+  };
+  assert.deepEqual(await A.saveApplications('http://x', 'D 1', 'L12', ['aviation']), ['aviation']);
+  assert.deepEqual(calls[0], ['http://x/api/family/config/D%201/L12/applications', 'PUT', '{"applications":["aviation"]}']);
+  await assert.rejects(A.saveApplications('http://x', 'D', 'L', ['bad']), /unknown application/);
+});

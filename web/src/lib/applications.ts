@@ -96,3 +96,35 @@ export function applicationAudit(dies: readonly AppDie[]): AuditRow[] {
   }
   return out;
 }
+
+// ── editor state (Admin > Applications, Motors pencil) ───────────────────────────────────
+/** Tick or untick one application.  Ticking appends (the default stays the first); unticking the
+ *  last remaining one is refused (a configuration keeps at least one), returning the list as is. */
+export function toggleApplication(list: readonly Application[], app: Application): Application[] {
+  if (list.includes(app)) return list.length > 1 ? list.filter((a) => a !== app) : [...list];
+  return [...list, app];
+}
+
+/** Make a ticked application the default: it moves to the front, the others keep their order. */
+export function setDefaultApplication(list: readonly Application[], app: Application): Application[] {
+  return list.includes(app) ? [app, ...list.filter((a) => a !== app)] : [...list];
+}
+
+/** Save is offered when the edited list is non-empty and differs (in content or order) from the saved one. */
+export function canSaveApplications(saved: unknown, edited: readonly Application[]): boolean {
+  const s = cleanApplications(saved);
+  return edited.length > 0 && (s.length !== edited.length || s.some((a, i) => a !== edited[i]));
+}
+
+/** `PUT /api/family/config/{die}/{cfg}/applications`; resolves with the saved list, rejects with the
+ *  server's reason (loud 422 text included). */
+export async function saveApplications(api: string, die: string, cfg: string,
+                                       applications: readonly Application[]): Promise<Application[]> {
+  const r = await fetch(`${api}/api/family/config/${encodeURIComponent(die)}/${encodeURIComponent(cfg)}/applications`, {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ applications }),
+  });
+  const b = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof b?.detail === 'string' ? b.detail : `HTTP ${r.status}`);
+  return cleanApplications(b.applications);
+}

@@ -30,7 +30,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
 
 from motor_ai_sim import auth as _auth
-from motor_ai_sim.applications import config_applications, default_application
+from motor_ai_sim.applications import APPLICATIONS, config_applications, default_application
 from motor_ai_sim.auth import caller_identity, require_admin
 from motor_ai_sim.config import get_config
 from motor_ai_sim import workspace as _WS
@@ -4540,6 +4540,46 @@ def set_default_duty(die: str, cfg: str, req: DefaultDutyPatch,
     _save_yaml(_cfg_file(die, cfg), c)
     log.info("family: default duty of '%s/%s' is now '%s'", die, cfg, name)
     return {"ok": True, "default_duty": name}
+
+
+class ApplicationsPut(BaseModel):
+    applications: List[str]              # the first entry is the default application
+
+
+@router.put("/config/{die}/{cfg}/applications")
+def set_config_applications(die: str, cfg: str, req: ApplicationsPut,
+                            _w: dict = Depends(require_catalog_write)):
+    """Admin: set what a configuration is for (owner 2026-10-13).  Edits ONLY the
+    ``applications`` line of the file the configuration actually lives in (the same resolution
+    as every family read), atomically and keeping the file's mode, after a backup, and records
+    it in the admin audit.  The first entry of the list is the default application."""
+    from motor_ai_sim import admin_audit as _AA
+    from motor_ai_sim.applications import (ApplicationsError, validate_applications,
+                                           write_applications_file)
+    if not _w.get("is_admin"):
+        raise HTTPException(403, detail="only an admin may change a configuration's applications")
+    die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
+    try:
+        apps = validate_applications(req.applications)
+        if not apps:
+            raise ApplicationsError("applications must list at least one of "
+                                    + ", ".join(APPLICATIONS))
+    except ApplicationsError as exc:
+        raise HTTPException(422, detail=str(exc))
+    p = _cfg_file(die, cfg)
+    if not p.is_file():
+        raise HTTPException(404, detail=f"configuration '{cfg}' not found under die '{die}'")
+    try:
+        old, backup = write_applications_file(p, apps)
+    except ApplicationsError as exc:
+        raise HTTPException(422, detail=str(exc))
+    if backup:
+        actor = str((_w.get("user") or {}).get("email") or "local-dev").strip().lower()
+        _AA.record(actor, "config.applications", f"{die}/{cfg}",
+                   details={"from": old, "to": apps, "file": str(p)})
+        log.info("family: applications of '%s/%s' %s -> %s", die, cfg, old, apps)
+    return {"ok": True, "die": die, "config": cfg, "applications": apps,
+            "application": apps[0], "changed": bool(backup)}
 
 
 class BatteryPatch(BaseModel):

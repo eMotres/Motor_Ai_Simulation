@@ -2,10 +2,11 @@
 // (owner 2026-10-13).  Read-only: the list is edited in the configuration file / by
 // scripts/set_applications.py.  A configuration without the field behaves as before.
 import React, { useEffect, useState } from 'react';
-import { Box, Typography, Tooltip } from '@mui/material';
+import { Box, Typography, Tooltip, IconButton } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import { fetchFamilyTree } from '../../lib/familyTree';
+import ApplicationEditor from './ApplicationEditor';
 import { applicationAudit, type AppDie, type AuditRow } from '../../lib/applications';
 
 const tx = nsT('motors');
@@ -13,12 +14,16 @@ const tx = nsT('motors');
 const ApplicationsPanel: React.FC = () => {
   useTranslation('motors');
   const [rows, setRows] = useState<AuditRow[] | null>(null);
+  const [editing, setEditing] = useState<string | null>(null);
   useEffect(() => {
     let dead = false;
-    fetchFamilyTree({ fresh: true })
+    const load = () => fetchFamilyTree({ fresh: true })
       .then((t) => { if (!dead) setRows(applicationAudit((t.dies || []) as unknown as AppDie[])); })
       .catch(() => { if (!dead) setRows([]); });
-    return () => { dead = true; };
+    void load();
+    // a save elsewhere (Motors pencil) or here refreshes the list
+    window.addEventListener('family-changed', load);
+    return () => { dead = true; window.removeEventListener('family-changed', load); };
   }, []);
   if (rows == null) return null;
   const bad = rows.filter((r) => r.state !== 'set');
@@ -35,7 +40,7 @@ const ApplicationsPanel: React.FC = () => {
         </Typography>
       </Box>
       {rows.map((r) => (
-        <Box key={`${r.die}/${r.config}`} sx={{ display: 'flex', gap: 1, fontSize: 11, py: 0.1 }}>
+        <Box key={`${r.die}/${r.config}/${r.applications.join(',')}`} sx={{ display: 'flex', gap: 1, fontSize: 11, py: 0.1, alignItems: 'center', flexWrap: 'wrap' }}>
           <Typography component="span" sx={{ fontSize: 11, color: 'var(--text-2)', minWidth: 260 }}>
             {r.die} / {r.config}
           </Typography>
@@ -50,6 +55,15 @@ const ApplicationsPanel: React.FC = () => {
                 color: r.state === 'invalid' ? '#f87171' : '#f59e0b' }}>
                 {tx('applications.notSet')}
               </Typography>
+            </Tooltip>
+          )}
+          {editing === `${r.die}/${r.config}` ? (
+            <ApplicationEditor die={r.die} config={r.config} applications={r.applications}
+              onDone={() => setEditing(null)} />
+          ) : (
+            <Tooltip title={tx('applications.edit')}>
+              <IconButton size="small" onClick={() => setEditing(`${r.die}/${r.config}`)}
+                sx={{ fontSize: 11, p: 0.2, color: 'var(--text-4)' }}>✎</IconButton>
             </Tooltip>
           )}
         </Box>

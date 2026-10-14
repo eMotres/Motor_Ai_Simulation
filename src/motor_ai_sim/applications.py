@@ -74,6 +74,86 @@ def config_applications(c: Optional[dict]) -> Tuple[List[str], Optional[str]]:
         return [], str(exc)
 
 
+def edit_applications_line(text: str, apps: List[str]) -> str:
+    """``text`` with ONLY the top-level ``applications`` entry added or replaced.
+
+    The rest of the file is byte-identical and keeps its line endings.  An existing entry is
+    replaced whether it is written inline (``applications: [robot]``) or as a block list.  A new
+    one goes after ``role:`` / ``die:`` / ``name:``.  The caller re-parses the result and compares
+    it with the intended document before writing anything."""
+    nl = "\r\n" if "\r\n" in text else "\n"
+    lines = text.split(nl)
+    new = "applications: [" + ", ".join(apps) + "]"
+    at = next((i for i, ln in enumerate(lines) if ln.startswith("applications:")), None)
+    if at is not None:
+        end = at + 1
+        while end < len(lines) and (lines[end].startswith((" ", "\t")) or lines[end].startswith("- ")):
+            end += 1
+        lines[at:end] = [new]
+        return nl.join(lines)
+    at = 0
+    for key in ("role:", "die:", "name:"):
+        hit = next((i for i, ln in enumerate(lines) if ln.startswith(key)), None)
+        if hit is not None:
+            at = hit + 1
+            break
+    lines.insert(at, new)
+    return nl.join(lines)
+
+
+def write_applications_file(path, apps: List[str]) -> Tuple[List[str], Optional[str]]:
+    """Set ``applications`` in the configuration file ``path`` and nothing else.
+
+    Returns ``(previous_list, backup_path)``; ``backup_path`` is None when nothing changed.
+    The file is read as bytes, only the one entry is edited (``edit_applications_line``), the
+    result is re-parsed and must equal the old document plus the new list, a backup is copied
+    beside it (``<name>.bak-applications-<stamp>``), and the new bytes replace the file
+    ATOMICALLY (temp file in the same directory, original mode copied, ``os.replace``).  A
+    read-only (0444) seeded file therefore stays read-only: it is replaced, never chmod-ed.
+    Raises ``ApplicationsError`` for a bad list or if the edit would change anything else."""
+    import os
+    import shutil
+    import tempfile
+    from datetime import datetime
+    from pathlib import Path
+
+    import yaml
+
+    apps = validate_applications(apps)
+    if not apps:
+        raise ApplicationsError("applications must list at least one of " + ", ".join(APPLICATIONS))
+    p = Path(path)
+    raw = p.read_bytes().decode("utf-8")
+    doc = yaml.safe_load(raw) or {}
+    if not isinstance(doc, dict):
+        raise ApplicationsError(f"{p.name} is not a mapping")
+    old, _err = config_applications(doc)
+    if old == apps and "applications" in doc:
+        return old, None
+    new = edit_applications_line(raw, apps)
+    expected = dict(doc)
+    expected["applications"] = apps
+    if yaml.safe_load(new) != expected:
+        raise ApplicationsError(f"refusing to edit {p.name}: the line edit would change other content")
+    backup = p.with_name(f"{p.name}.bak-applications-{datetime.now().strftime('%Y%m%d-%H%M%S-%f')}")
+    shutil.copy2(p, backup)
+    fd, tmp = tempfile.mkstemp(prefix=p.name + ".", suffix=".tmp", dir=str(p.parent))
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(new.encode("utf-8"))
+            f.flush()
+            os.fsync(f.fileno())
+        shutil.copymode(p, tmp)
+        os.replace(tmp, p)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return old, str(backup)
+
+
 def default_application(applications: List[str]) -> Optional[str]:
     return applications[0] if applications else None
 

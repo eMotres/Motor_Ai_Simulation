@@ -11,6 +11,7 @@
 import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import {
   Box, Paper, Typography, Button, Chip, Tooltip, IconButton, CircularProgress,
+  Dialog, DialogTitle, DialogContent,
 } from '@mui/material';
 import { useUIStore } from '../../stores/motorStore';
 import MotorThumbnail from './MotorThumbnail';
@@ -43,6 +44,7 @@ import { canWriteServer } from '../../lib/localAuth';
 import { isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
 import { configButtons, configClickPlan, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
+import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 
@@ -225,7 +227,8 @@ const ReportRing: React.FC<{ ring: ReportRing; size?: number }> = ({ ring, size 
 
 /** The configuration's application as a small badge (owner 2026-10-13); a configuration with no
  *  list shows nothing here (Admin flags it), a malformed one shows a red "?" with the reason. */
-const ApplicationBadge: React.FC<{ cfg?: Cfg }> = ({ cfg }) => {
+const ApplicationBadge: React.FC<{ cfg?: Cfg; die?: string; canEdit?: boolean }> = ({ cfg, die, canEdit }) => {
+  const [editing, setEditing] = useState(false);
   if (!cfg) return null;
   const apps = cleanApplications(cfg.applications);
   if (cfg.applications_error) {
@@ -236,13 +239,33 @@ const ApplicationBadge: React.FC<{ cfg?: Cfg }> = ({ cfg }) => {
       </Tooltip>
     );
   }
-  if (!apps.length) return null;
+  // admin / owner only: a small pencil next to the badge opens the editor
+  const pencil = canEdit && die ? (
+    <>
+      <Tooltip title={tx('applications.edit')}>
+        <IconButton size="small" onClick={() => setEditing(true)} sx={{ fontSize: 10, p: 0.1, color: 'var(--text-4)' }}>✎</IconButton>
+      </Tooltip>
+      {editing && (
+        <Dialog open onClose={() => setEditing(false)}>
+          <DialogTitle sx={{ fontSize: 13 }}>{die} / {cfg.name} · {tx('applications.label')}</DialogTitle>
+          <DialogContent>
+            <ApplicationEditor die={die} config={cfg.name} applications={cfg.applications}
+              onDone={() => setEditing(false)} />
+          </DialogContent>
+        </Dialog>
+      )}
+    </>
+  ) : null;
+  if (!apps.length) return pencil;
   return (
-    <Tooltip title={tx('applications.badgeTip', { application: apps.map((a) => tx(`applications.${a}`)).join(', ') })}>
-      <Chip size="small" label={tx(`applications.${apps[0]}`)}
-        sx={{ height: 16, fontSize: 10, color: 'var(--text-3)', bgcolor: 'transparent',
-              border: '1px solid var(--line-soft)', cursor: 'help' }} />
-    </Tooltip>
+    <>
+      <Tooltip title={tx('applications.badgeTip', { application: apps.map((a) => tx(`applications.${a}`)).join(', ') })}>
+        <Chip size="small" label={tx(`applications.${apps[0]}`)}
+          sx={{ height: 16, fontSize: 10, color: 'var(--text-3)', bgcolor: 'transparent',
+                border: '1px solid var(--line-soft)', cursor: 'help' }} />
+      </Tooltip>
+      {pencil}
+    </>
   );
 };
 
@@ -827,7 +850,7 @@ const FamilyCatalog: React.FC<{
                   {cur && (
                     <>
                       <CardBadge date={cur.card_date} />
-                      <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} />
+                      <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} die={die.name} canEdit={canWrite} />
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
                         <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
                                                           fontVariantNumeric: 'tabular-nums' }}>
@@ -1088,7 +1111,7 @@ const FamilyCatalog: React.FC<{
                     </span>
                   </Tooltip>
                 )}
-                <ApplicationBadge cfg={c} />
+                <ApplicationBadge cfg={c} die={die.name} canEdit={canWrite} />
                 <Tooltip title={roleTip(c)}>
                   <Chip size="small" label={c.role}
                     sx={{ height: 18, fontSize: 10, color: roleColor(c.role),

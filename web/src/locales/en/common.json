@@ -215,10 +215,6 @@
     "hint": "Read-only map of how the simulations are chained.",
     "hintTip": "Blocks are modules (or the steps of the S1 rating), wires carry data types, dashed groups are feedback loops. Hover a block or a wire for details. Nothing here runs or edits a model.",
     "hoverWire": "Hover a wire to see its data.",
-    "statusFor": "Last run: {die} · {config} · {duty}",
-    "statusForTip": "Block status comes from existing run records of this duty. A block without a record is unknown; nothing is computed here.",
-    "noDuty": "No duty selected",
-    "noDutyTip": "Select a duty in Motors to see the last-run status of each block.",
     "refresh": "Reload the graph",
     "failed": "Could not load the graph",
     "in": "In",
@@ -229,8 +225,7 @@
       "done": "done",
       "running": "running",
       "error": "error",
-      "cached": "stored result",
-      "unknown": "unknown"
+      "cached": "stored result"
     },
     "loopKind": {
       "fixed_point": "Fixed-point iteration",
@@ -283,6 +278,25 @@
       "materials-library": "Materials",
       "users": "Users",
       "transmission-gearbox-single-stage": "Gearbox (single stage)"
+    },
+    "showAll": "Show all wires",
+    "showAllTip": "Parameter sources (motor model, limits, ambient, drive) are shown as chips on the blocks that use them. Switch on to draw every wire.",
+    "inputs": "Inputs",
+    "pick": {
+      "die": "Die",
+      "config": "Config",
+      "duty": "Duty",
+      "none": "No motor",
+      "anyDuty": "Any duty"
+    },
+    "pickTip": "Pick a motor to see the stored result of each block. With no motor selected no status is shown.",
+    "noRun": "no run yet",
+    "noRunTip": "No stored result for this motor; run it in its Simulation tab.",
+    "chips": {
+      "rpm": "rpm",
+      "shaft_power": "shaft power",
+      "air_speed": "air speed",
+      "converged_current": "converged current"
     }
   }
 }

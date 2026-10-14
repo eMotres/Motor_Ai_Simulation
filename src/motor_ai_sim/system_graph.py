@@ -120,9 +120,13 @@ def _port(name: str, typ: str) -> Dict[str, str]:
 
 
 def _node(id_: str, kind: str, title: str, summary: str, *, ins=(), outs=(), source=None,
-          group: Optional[str] = None, **extra: Any) -> Dict[str, Any]:
+          group: Optional[str] = None, context: bool = False, at: Optional[Tuple[float, float]] = None,
+          **extra: Any) -> Dict[str, Any]:
+    """``context``: a parameter source feeding many blocks - the view draws it in an Inputs column and puts chips on
+    its consumers instead of wires.  ``at`` = (col, row): the layout hint (the main chain on row 0)."""
     n: Dict[str, Any] = {"id": id_, "kind": kind, "title": title, "summary": summary,
-                         "group": group or kind,
+                         "group": group or kind, "context": bool(context),
+                         "layout": ({"col": at[0], "row": at[1]} if at else None),
                          "inputs": [_port(*p) for p in ins], "outputs": [_port(*p) for p in outs],
                          "source": source, "status": {"state": "unknown"}}
     n.update(extra)
@@ -130,11 +134,15 @@ def _node(id_: str, kind: str, title: str, summary: str, *, ins=(), outs=(), sou
 
 
 def _edge(src_node: str, src_port: Optional[str], dst_node: str, dst_port: Optional[str], typ: str,
-          *, label: Optional[str] = None, feedback: bool = False, via: str = "data") -> Dict[str, Any]:
+          *, label: Optional[str] = None, feedback: bool = False, via: str = "data", minor: bool = False,
+          lane: bool = False) -> Dict[str, Any]:
+    """``minor``: a parameter-like link (drawn as a chip on the target unless all wires are shown); ``lane``: routed
+    under the loop group like a feedback wire instead of across the blocks."""
     e: Dict[str, Any] = {
         "id": f"{src_node}.{src_port or '*'}->{dst_node}.{dst_port or '*'}",
         "from": {"node": src_node, "port": src_port}, "to": {"node": dst_node, "port": dst_port},
-        "type": typ, "feedback": bool(feedback), "via": via}
+        "type": typ, "feedback": bool(feedback), "via": via, "minor": bool(minor),
+        "route": "lane" if lane else "direct"}
     if label:
         e["label"] = label
     return e
@@ -257,6 +265,24 @@ def build_modules_graph() -> Dict[str, Any]:
     for lp in loops:                                           # a loop owns the edges that stay inside it
         members = set(lp["nodes"])
         lp["edges"] = [e["id"] for e in edges if e["from"]["node"] in members and e["to"]["node"] in members]
+    for n in nodes:                                            # cross-cutting services nobody is wired to
+        n["context"] = n["id"] in ("users", "materials-library")
+    # layout hints (col, row): the geometry -> mesh -> EM -> thermal chain on row 0; a module that is not listed
+    # (a plugin) makes the view fall back to the automatic layout
+    at = {"geometry-2d-ring-spm": (1, -1.5), "geometry-2d-aerostator": (1, 0), "surrogate-rf": (2, 2.8),
+          "cost-basic": (2, -2.4), "geometry-3d-aerostator": (2, -1.2), "mesh-skfem": (2, 0),
+          "mechanical-stub": (3, -2.4), "solver-mechanical": (3, -2.4), "solver-em-static": (3, -1.2),
+          "solver-em-transient": (3, 0), "optimization-descent": (3, 1.5),
+          "controller-foc": (4, -1.2), "solver-thermal": (4, 0), "solver-em-thermal": (5, 0),
+          "transmission-gearbox-single-stage": (5, 1.5)}
+    for n in nodes:
+        if n["id"] in at:
+            n["layout"] = {"col": at[n["id"]][0], "row": at[n["id"]][1]}
+    for e in edges:                                            # the mesh handed to a solver that also needs another upstream
+        if e["via"] == "port_type" and e["type"] == "MeshIR":
+            e["minor"], e["label"] = True, "mesh"
+        if e["via"] == "port_type" and e["to"]["node"] == "geometry-2d-ring-spm":   # the alternative geometry provider
+            e["minor"], e["label"] = True, e["type"]
     notes = ["Edges come from the modules' manifests: `depends_on` capabilities (an extension such as "
              "geometry.2d.ring_spm is an alternative provider of its base capability) and, for an input no "
              "dependency covers, the module that outputs that contract type.",
@@ -435,6 +461,34 @@ def build_propeller_s1_graph() -> Dict[str, Any]:
         _edge("verdict", "verdict", "rpm_search", "verdict", "verdict", feedback=True, label="pass / fail + cause"),
         _edge("rpm_search", "rating", "result", "rating", "s1_rating"),
     ]
+    # How the chain is drawn (the view reads these hints; the data above is untouched).  Row 0 is the main chain
+    # speed search -> propeller load -> shaft torque -> current -> voltage -> losses -> thermal network -> limit
+    # checks (a column in front of the verdict) -> point verdict -> rating; helper blocks sit above / below it.
+    at = {"rpm_search": (1, 0), "propeller": (2, 0), "torque_demand": (3, 0), "housing_film": (3, -1.5),
+          "current": (4, 0), "voltage": (5, 0), "losses": (6, 0), "thermal": (7, 0),
+          "demag_limit": (8, -1), "board_limit": (8, 1), "powers": (8, 2),
+          "chk_winding": (9, -2), "chk_magnet": (9, -1), "chk_demag": (9, 0), "chk_controller": (9, 1),
+          "chk_battery": (9, 2), "verdict": (10, 0), "result": (11, 0)}
+    context = {"conditions", "model", "limits", "drive", "slipstream"}      # parameter sources: chips, not wires
+    minor = {"rpm_search.rpm->torque_demand.rpm": "rpm", "rpm_search.rpm->current.rpm": "rpm",
+             "rpm_search.rpm->voltage.rpm": "rpm", "rpm_search.rpm->losses.rpm": "rpm",
+             "propeller.shaft_power->powers.shaft_power": "shaft power",
+             "propeller.air_speed->board_limit.air_speed": "air speed",
+             "voltage.I->chk_demag.I": "converged current", "voltage.I->chk_controller.I": "converged current"}
+    lane = {"rpm_search.rating->result.rating"}
+    for n in N:
+        if n["id"] in at:
+            n["layout"] = {"col": at[n["id"]][0], "row": at[n["id"]][1]}
+        n["context"] = n["id"] in context
+    for e in E:
+        if e["id"] in minor:
+            e["minor"], e["label"] = True, minor[e["id"]]
+        if e["id"] in lane:
+            e["route"] = "lane"
+    missing = (set(at) | context) - {n["id"] for n in N}
+    stale = (set(minor) | lane) - {e["id"] for e in E}
+    if missing or stale:
+        raise LookupError(f"system graph layout hints name unknown nodes/edges: {sorted(missing | stale)}")
     tol_k, tol_l = const(_S1, "FIXED_POINT_TOL_K")
     max_it, it_l = const(_S1, "FIXED_POINT_MAX_IT")
     runaway, _ = const(_S1, "RUNAWAY_C")

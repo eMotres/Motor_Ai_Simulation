@@ -215,10 +215,6 @@
     "hint": "只读：仿真之间如何串联。",
     "hintTip": "方块是模块（或 S1 额定的各步骤），连线表示数据类型，虚线框是反馈回路。将鼠标悬停在方块或连线上查看详情。此处不运行也不修改任何模型。",
     "hoverWire": "将鼠标悬停在连线上查看其数据。",
-    "statusFor": "最近一次运行：{die} · {config} · {duty}",
-    "statusForTip": "方块状态来自此工况已有的运行记录。没有记录的方块显示未知；此处不做任何计算。",
-    "noDuty": "未选择工况",
-    "noDutyTip": "在“电机”页选择一个工况，即可查看各方块最近一次运行的状态。",
     "refresh": "重新加载图",
     "failed": "无法加载图",
     "in": "输入",
@@ -229,8 +225,7 @@
       "done": "完成",
       "running": "运行中",
       "error": "错误",
-      "cached": "已存结果",
-      "unknown": "未知"
+      "cached": "已存结果"
     },
     "loopKind": {
       "fixed_point": "不动点迭代",
@@ -283,6 +278,25 @@
       "materials-library": "材料",
       "users": "用户",
       "transmission-gearbox-single-stage": "减速器（单级）"
+    },
+    "showAll": "显示全部连线",
+    "showAllTip": "参数来源（电机模型、限值、环境、驱动）显示为使用它们的方块上的标签。打开后绘制全部连线。",
+    "inputs": "输入",
+    "pick": {
+      "die": "冲片",
+      "config": "配置",
+      "duty": "工况",
+      "none": "未选电机",
+      "anyDuty": "任意工况"
+    },
+    "pickTip": "选择一个电机即可查看各方块的已存结果。未选择电机时不显示状态。",
+    "noRun": "尚未运行",
+    "noRunTip": "此电机没有已存结果；请在其仿真页中运行。",
+    "chips": {
+      "rpm": "转速",
+      "shaft_power": "轴功率",
+      "air_speed": "风速",
+      "converged_current": "收敛电流"
     }
   }
 }

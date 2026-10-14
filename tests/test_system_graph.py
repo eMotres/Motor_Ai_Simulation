@@ -133,6 +133,44 @@ def test_anchor_that_is_gone_fails_loudly():
         SG.src("propeller_s1.py", "solve_point", "text that is not in the function")
 
 
+# -- drawing hints (context inputs, layout grid, minor / lane wires) ----------------------------------
+
+@pytest.mark.parametrize("view", SG.VIEWS)
+def test_hints_are_complete_and_consistent(view):
+    doc = SG.build(view)
+    ids = {n["id"] for n in doc["nodes"]}
+    cells = {}
+    for n in doc["nodes"]:
+        assert isinstance(n["context"], bool)
+        if n["context"]:
+            continue
+        assert n["layout"] and {"col", "row"} <= set(n["layout"]), f"{n['id']} has no layout hint"
+        cell = (n["layout"]["col"], n["layout"]["row"])
+        assert cell not in cells, f"{n['id']} and {cells[cell]} share a cell"
+        cells[cell] = n["id"]
+    for e in doc["edges"]:
+        assert isinstance(e["minor"], bool) and e["route"] in ("direct", "lane")
+        assert e["from"]["node"] in ids
+    ctx = {n["id"] for n in doc["nodes"] if n["context"]}
+    assert not any(e["to"]["node"] in ctx and e["from"]["node"] not in ctx for e in doc["edges"])
+
+
+def test_propeller_s1_chain_row_and_context():
+    doc = SG.build("propeller_s1")
+    by = {n["id"]: n for n in doc["nodes"]}
+    assert {i for i, n in by.items() if n["context"]} == {"conditions", "model", "limits", "drive", "slipstream"}
+    chain = ["rpm_search", "propeller", "torque_demand", "current", "voltage", "losses", "thermal", "verdict", "result"]
+    assert {by[i]["layout"]["row"] for i in chain} == {0}
+    cols = [by[i]["layout"]["col"] for i in chain]
+    assert cols == sorted(cols) and len(set(cols)) == len(cols)
+    checks = [by[i]["layout"] for i in ("chk_winding", "chk_magnet", "chk_demag", "chk_controller", "chk_battery")]
+    assert len({c["col"] for c in checks}) == 1 and checks[0]["col"] < by["verdict"]["layout"]["col"]
+    assert [c["row"] for c in checks] == sorted(c["row"] for c in checks)
+    lane = [e["id"] for e in doc["edges"] if e["route"] == "lane"]
+    assert lane == ["rpm_search.rating->result.rating"]
+    assert {e["label"] for e in doc["edges"] if e["minor"]} == {"rpm", "shaft power", "air speed", "converged current"}
+
+
 # -- status layer ----------------------------------------------------------------------------------
 
 def test_status_reads_the_model_and_never_computes():

@@ -43,11 +43,13 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
 | `inputs`, `outputs` | `[{port, type}]`. For a module the port name is the contract/IR type from its manifest. |
 | `source` | `{function, file, line}` of the code the node stands for (the hover). Resolved with `ast` on every request, so the line follows the code; a function that is gone makes the route answer 500 instead of showing a stale hover. |
 | `status` | `{state, time_s, finished_at, summary, source, values}`; `state` is `done`, `running`, `error`, `cached` (a stored result exists) or `unknown`. |
+| `context` | `true` for a parameter source that feeds many blocks (motor model, limits, ambient, drive, ...): the view draws it in a compact **Inputs** column and shows chips on its consumers instead of wires. |
+| `layout` | Optional `{col, row}` grid hint (row 1 = one block pitch; the main chain is row 0). When every non-context node has one the view uses it, otherwise it falls back to an automatic layout (dagre). |
 | module only | `capability`, `version`, `trust` (core / reference / community / ...), `roadmap` (a registered stub). |
 
 ### Edge
 
-`{id, from: {node, port}, to: {node, port}, type, feedback, via, label?, values?}`.
+`{id, from: {node, port}, to: {node, port}, type, feedback, via, minor, route, label?, values?}`.
 
 * `type` colours the wire: a contract type (`GeometryIR`, `MeshIR`, `ResultIR`, ...), a physical quantity in the S1
   view (`rpm`, `torque`, `current`, `temperature`, `loss_W`, ...) or `dependency` (a capability the target calls
@@ -57,6 +59,8 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
   module that outputs that type; never creates a two-node cycle), `data` (S1 view).
 * `values`: optional; shown when the wire is hovered. Today only the S1 view fills it, from the motor model when
   `die` and `config` are given (the slipstream factor on the calibration wire).
+* `minor: true`: a parameter-like link (the search speed, the converged current, ...) shown as a chip on the target, like the links from a `context` node; "Show all wires" draws it as a wire. `label` names the chip.
+* `route: "lane"`: routed under the loop group like a feedback wire, for a link that would otherwise run across the blocks (the S1 rating returned to the result block).
 * `port: null` means the edge attaches to the node, not to a port.
 
 ### Loop
@@ -70,6 +74,24 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
 * `convergence`: reserved for stage 2 (`{iterations, residual}` of the last run, when a record carries it).
 * Loops that nest cleanly are drawn as nested boxes; two loops that overlap only partly (the modules view's two
   EM <-> thermal loops share the thermal solver) are drawn as a coloured ring on their members.
+
+## How the view draws it
+
+* **One wire per block pair.** Parallel edges between the same two blocks are merged into one wire with a count badge;
+  hovering the wire lists the data items. A wire has one colour when its items share a type, grey otherwise.
+* **Context inputs are chips.** Edges from a `context` node (and `minor` edges) are not wires: the consuming block shows
+  a small chip per source (coloured by the data type, the hover lists the items). The switch **Show all wires** draws every
+  link as a wire (the Inputs column stays).
+* **Right-angle routing.** Outputs leave the right side and inputs enter the left side at handles ordered by the other
+  end's height, so wires do not cross at the ports; a wire's vertical run sits next to its target or its source,
+  whichever keeps the horizontal run clear of blocks. Feedback wires (and `route: lane`) leave the bottom of the block, run
+  in a lane at the bottom of the enclosing loop group (longest span lowest) and enter the bottom of the target.
+* **Hover focus.** Hovering a block lights its wires and its chip sources and dims the rest.
+* **View.** The graph is fitted to the width of the pane (and to the height when the width alone would push it out of view).
+* **Status wording.** Pick a motor (die / config / duty, the lists of the Motors catalogue) at the top of the view: with no
+  motor selected no status badge is shown at all. With a motor, a block shows `done` / `running` / `error` / `stored
+  result` with its time, or a grey **no run yet** (hover: no stored result for this motor, run it in its Simulation tab)
+  when it has no record. The API still answers `state: "unknown"` for such a node; the word is not shown.
 
 ## How a module appears in the graph
 

@@ -29,6 +29,10 @@ export interface SgNode {
   capability?: string;
   trust?: string;
   roadmap?: boolean;
+  /** a parameter source feeding many blocks (motor model, limits, ...): drawn in the Inputs column, chips on its consumers */
+  context?: boolean;
+  /** optional layout hint: column and row (1 row = one block pitch); every non-context node needs one for the manual layout */
+  layout?: { col: number; row: number } | null;
 }
 export interface SgEnd { node: string; port: string | null }
 export interface SgEdge {
@@ -40,6 +44,10 @@ export interface SgEdge {
   via: string;
   label?: string;
   values?: Record<string, unknown>;
+  /** a parameter-like link drawn as a chip on the target unless all wires are shown */
+  minor?: boolean;
+  /** `lane`: routed under the loop group (like a feedback wire) instead of across the blocks */
+  route?: 'direct' | 'lane';
 }
 export interface SgLoop {
   id: string;
@@ -79,7 +87,7 @@ const TYPE_COLORS: Readonly<Record<string, string>> = {
   power: '#eab308', air_speed: '#06b6d4', heat_transfer: '#22d3ee', air_density: '#38bdf8',
   slipstream_factor: '#0891b2', passport_grid: '#10b981', thermal_geometry: '#65a30d',
   thermal_calibration: '#16a34a', limits: '#dc2626', limit: '#dc2626', drive: '#7c3aed', pack: '#a855f7',
-  verdict: '#475569', s1_rating: '#2563eb',
+  verdict: '#475569', s1_rating: '#2563eb', mixed: '#94a3b8',
 };
 
 export function typeColor(type: string): string {

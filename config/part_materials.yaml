@@ -34,10 +34,6 @@ sources:
     doc: "ASM Handbook Vol. 2 (1990), Properties of Wrought Aluminum and Aluminum Alloys: 6061-T6 (Rm 310 MPa, fatigue 96.5 MPa at 5e8 cycles R=-1), 7075-T6 (Rm 572 MPa, fatigue 159 MPa at 5e8 cycles R=-1)"
   en10083_3:
     doc: "EN 10083-3 Steels for quenching and tempering - alloy steels: 42CrMo4 +QT, 16 < d <= 40 mm: Rm 900-1100 MPa, Rp0.2 >= 750 MPa"
-  astm_a240_316:
-    doc: "ASTM A240/A240M, UNS S31600 (AISI 316, EN 1.4401) plate/sheet/strip, annealed: Rp0.2 >= 205 MPa, Rm >= 515 MPa"
-  asm_v1_316:
-    doc: "ASM Handbook Vol. 1 (1990), wrought austenitic stainless steel 316: 8.0 g/cm3, E 193 GPa, 16.0e-6/K (0-100 C), 16.3 W/mK at 100 C, 500 J/kgK, resistivity 74 uOhm cm, relative permeability about 1.02 (annealed, non-magnetic)"
   iso683_17:
     doc: "ISO 683-17 Heat-treated steels, alloy steels and free-cutting steels - ball and roller bearing steels: 100Cr6 (through-hardening bearing steel)"
   skf_catalogue:
@@ -76,20 +72,8 @@ materials:
       specific_heat_J_kgK:  {v: 500, src: asm_v1_ss, type: handbook, verify: true}
       max_service_temp_C:   {v: 300, src: iso3506_1, type: estimate, verify: true, note: "strength is reduced above about 300 C (ISO 3506-1 annex on elevated temperature); the figure is a conservative design limit"}
   # -- shafts ---------------------------------------------------------------
-  Stainless_316:
-    name: "Stainless steel AISI 316 (EN 1.4401), austenitic, non-magnetic"
-    category: stainless_steel
-    notes: "PROVISIONAL shaft material of the smallest motors (owner 2026-10-14: stainless, grade 'probably 316', to be confirmed): NOT assigned to any die yet. Annealed values; a cold-worked or turned shaft is stronger and slightly more magnetic. Prepared EM change: scripts/shaft_material_proposal.py."
-    props:
-      density_kg_m3:        {v: 8000, src: asm_v1_316, type: handbook, verify: true}
-      youngs_modulus_GPa:   {v: 193, src: asm_v1_316, type: handbook, verify: true}
-      poisson_ratio:        {v: 0.30, src: asm_v1_316, type: handbook, verify: true, note: "handbook range 0.27-0.30"}
-      yield_MPa:            {v: 205, src: astm_a240_316, type: standard, verify: true, note: "Rp0.2 minimum, annealed"}
-      ultimate_MPa:         {v: 515, src: astm_a240_316, type: standard, verify: true, note: "Rm minimum, annealed"}
-      cte_ppm_K:            {v: 16.0, src: asm_v1_316, type: handbook, verify: true}
-      conductivity_W_mK:    {v: 16.3, src: asm_v1_316, type: handbook, verify: true}
-      specific_heat_J_kgK:  {v: 500, src: asm_v1_316, type: handbook, verify: true}
-      max_service_temp_C:   {v: 400, src: astm_a240_316, type: estimate, verify: true, note: "conservative design limit for a loaded shaft (the alloy resists scaling far higher)"}
+  # (the provisional stainless shaft card, AISI 316, lives in config/materials_library.yaml as `Stainless_316`: the shaft is
+  #  an electromagnetic part, so its card is the solver's one card - not assigned to any die yet)
   # -- bearings ------------------------------------------------------------
   Bearing_steel_100Cr6:
     name: "Bearing steel 100Cr6 (SAE 52100), through-hardened"

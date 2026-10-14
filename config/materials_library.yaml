@@ -3479,6 +3479,35 @@ conductor:
     permeability: 1.005         # annealed austenite; cold work can raise it to ~1.1
     wire_type: rectangular
     thermal_alpha: 0.00094      # 1/K  resistivity temperature coefficient
+  Stainless_316:
+    # -- PROVISIONAL shaft material of the smallest motors (owner 2026-10-14: stainless, grade "probably 316", to be
+    # confirmed).  NOT assigned to any die yet; the prepared change is scripts/shaft_material_proposal.py.  Same family as
+    # Stainless_316L (identical electrical and thermal figures); only the strengths differ (ASTM A240: 316 is the higher-
+    # carbon grade).  envelope rule: a field with no prov entry is `datasheet` from sources[0] --
+    sources:
+      - {"id": "astm_a240_316", "doc": "ASTM A240/A240M, UNS S31600 (AISI 316, EN 1.4401), annealed: Rp0.2 >= 205 MPa, Rm >= 515 MPa", "read": "2026-10-14"}
+      - {"id": "asm_v1_316", "doc": "ASM Handbook Vol. 1 (1990), wrought austenitic stainless steel 316: 8.0 g/cm3, 74 uOhm cm (1.35 MS/m), 16.3 W/mK at 100 C, 500 J/kgK, 16.0e-6/K (0-100 C), E 193 GPa, relative permeability about 1.02 (annealed)", "read": "2026-10-14"}
+    prov:
+      yield_strength_mpa: {"type": "datasheet", "src": "astm_a240_316", "verify": true}
+      tensile_strength_mpa: {"type": "datasheet", "src": "astm_a240_316", "verify": true}
+      max_service_temp_c: {"type": "estimate", "note": "conservative design limit of a loaded shaft", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "datasheet", "src": "asm_v1_316", "note": "handbook range 0.27-0.30", "verify": true}
+      permeability: {"type": "estimate", "note": "annealed austenite mu_r ~1.005-1.02; cold work (a turned shaft) raises it", "verify": true, "source": "none"}
+      thermal_alpha: {"type": "estimate", "note": "resistivity temperature coefficient not in the sources read", "verify": true, "source": "none"}
+    description: "Stainless steel 316 (EN 1.4401, austenitic, NON-magnetic) - PROVISIONAL shaft of the Ø30 / Ø40 motors (not assigned yet)"
+    sigma: 1350000     # S/m at 20 °C  (resistivity 0.74 µΩ·m)
+    density: 8000      # kg/m³
+    youngs_modulus_gpa: 193        # GPa
+    poisson_ratio: 0.30            # -
+    cte_ppm_k: 16.0   # ppm/K  (20-100 °C)
+    yield_strength_mpa: 205   # MPa  annealed, 0.2 % proof
+    tensile_strength_mpa: 515 # MPa  annealed minimum
+    max_service_temp_c: 400   # °C   design limit
+    thermal_conductivity: 16.3  # W/(m·K)
+    specific_heat: 500          # J/(kg·K)
+    permeability: 1.005         # annealed austenite; cold work can raise it to ~1.1
+    wire_type: rectangular
+    thermal_alpha: 0.00094      # 1/K  resistivity temperature coefficient
   Titanium_Ti6Al4V:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --

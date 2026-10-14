@@ -41,7 +41,7 @@ def stand_in_dies(tmp_path_factory):
 
 # -- the material cards ------------------------------------------------------------------------------
 
-NEW_CARDS = ["Stainless_A2_70", "Stainless_316", "Bearing_steel_100Cr6", "FR4_glass_epoxy", "CFRP_QI_T800_epoxy", "PA66_GF30",
+NEW_CARDS = ["Stainless_A2_70", "Bearing_steel_100Cr6", "FR4_glass_epoxy", "CFRP_QI_T800_epoxy", "PA66_GF30",
              "PA66_CF30", "Li_ion_pouch_cell_effective"]
 
 
@@ -341,7 +341,11 @@ def test_owner_aluminium_rule_in_the_full_assignment_defaults():
         assert defs[k]["material"] == "Aluminium_6061", k
     assert not any(d["material"] == "Aluminium_7075" for d in defs.values())
     assert {d["material"] for k, d in structural.items() if k not in ("rings", "bearings")} == {"Aluminium_6061"}
-    # the provisional stainless shaft card exists with sources, but nothing is assigned to it
+    # the provisional stainless shaft card (AISI 316) is the solver library's card, with sources, and NOTHING is assigned to it
     ss = pm.resolve("Stainless_316")
-    assert ss.get("density_kg_m3") == 8000 and all(v.verify for v in ss.props.values() if v.type != "standard") 
+    assert ss.origin == "materials_library" and ss.get("density_kg_m3") == 8000 and ss.get("yield_MPa") == 205
+    assert ss.get("ultimate_MPa") == 515 and ss.props["yield_MPa"].source == "astm_a240_316" and ss.props["yield_MPa"].verify
     assert not any(d["material"] == "Stainless_316" for d in defs.values())
+    import yaml as _y
+    for f in list((REPO / "config" / "dies").glob("*/*.yaml")) + [REPO / "config" / "motor_config.yaml"]:
+        assert "Stainless_316" not in f.read_text(encoding="utf-8").replace("Stainless_316L", ""), f   # not assigned anywhere

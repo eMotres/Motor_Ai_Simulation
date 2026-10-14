@@ -246,6 +246,10 @@ _GATED: dict[tuple[str, str], str] = {
     # solve, i.e. the one moment the user most needs to see something.
     ("GET",  "/api/simulation/mesh/build2d"): "user",
     ("GET",  "/api/simulation/mesh/build2d_sliding_band"): "user",
+    # The component library (product composer, stage 1): ComponentCards built read-only from the
+    # existing stores - the Simulation menus' audience, like the System graph.  The per-card
+    # route /api/components/{id} is in _GATED_PREFIX below.
+    ("GET",  "/api/components"): "engineer",
     # NOT listed since 2026-09-17: POST /api/support/chat.  It was "free" —
     # "calls the paid provider API, so require a signed-in account so an
     # anonymous visitor can't run up the bill" — which is the right worry and
@@ -267,6 +271,7 @@ _GATED: dict[tuple[str, str], str] = {
 # family.py / presets.py / admin.py / auth_local.py protect themselves with
 # require_admin already — entries here are the belt for the rest.
 _GATED_PREFIX: list[tuple[str, str, str]] = [
+    ("GET",    "/api/components/", "engineer"),
     # a tab's remembered input fields — per signed-in user, the same tier as
     # the solves whose inputs they are
     ("GET",    "/api/panel_settings", "user"),

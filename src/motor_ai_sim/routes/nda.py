@@ -79,7 +79,8 @@ def sign(request: Request, body: dict = Body(default={}), authorization: Optiona
     except Exception:                                       # noqa: BLE001
         ip = "?"
     try:
-        r = N.sign(user=who["id"], email=who["id"], fields=fields, cur=cur, ip=ip, user_agent=request.headers.get("user-agent", ""))
+        r = N.sign(user=who["id"], email=who["id"], fields=fields, cur=cur, ip=ip, user_agent=request.headers.get("user-agent", ""),
+                   data_sharing=body.get("data_sharing") is True)
     except OSError as e:
         log.error("nda: cannot store the signature (%s)", e)
         raise HTTPException(status_code=503, detail="The signature could not be stored; nothing was signed. Try again later.")
@@ -88,7 +89,15 @@ def sign(request: Request, body: dict = Body(default={}), authorization: Optiona
     AA.record(who["id"], "user.nda", who["id"], subject=who["id"],
               details={"signed": True, "source": "online", "version": r["version"], "record": r["id"]})
     N.mail_copies(r, pdf)
-    return {"ok": True, "record_id": r["id"], "version": r["version"], "can_download": True}
+    # the optional dataset consent: its own audit line and user flag; a failure here never undoes the signature (fail-closed:
+    # without the audit line the export filter refuses the data)
+    from motor_ai_sim import data_sharing as DS
+    try:
+        ds = DS.set_consent(who["id"], r["data_sharing"]["consent"], source="nda_sign", ip=ip, record_id=r["id"], log_unchanged=True)
+    except (OSError, KeyError) as e:
+        log.error("nda: dataset consent of %s could not be stored (%s)", r["id"], e)
+        ds = DS.state(who["id"])
+    return {"ok": True, "record_id": r["id"], "version": r["version"], "can_download": True, "data_sharing": ds}
 
 
 @router.get("/mine/pdf")
@@ -104,7 +113,12 @@ def mine_pdf(authorization: Optional[str] = Header(default=None)):
 
 @router.get("/signatures")
 def signatures(limit: int = 100, _admin: dict = Depends(require_admin)):
-    return {"signatures": [N.public_record(r) for r in N.read_records(max(1, min(int(limit), 1000)))]}
+    from motor_ai_sim import data_sharing as DS
+    from motor_ai_sim import users as U
+    rows = [N.public_record(r) for r in N.read_records(max(1, min(int(limit), 1000)))]
+    for row in rows:                                         # the consent NOW (the record keeps the one given at signing)
+        row["data_sharing_now"] = bool(U.get_data_sharing(row["user"]).get("consent"))
+    return {"signatures": rows, "consenting_users": len(DS.consenting_users())}
 
 
 @router.get("/{record_id}/pdf")

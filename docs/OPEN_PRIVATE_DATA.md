@@ -22,6 +22,14 @@ is enforced, not just a convention:
 - `nda` / `confidential` tags block publication (open). An NDA-covered MOTRES
   die may stay in the private repository.
 
+**Customer dataset consent (optional, 2026-10-14).** The git rules above are unchanged: customer data
+never enters a git repository, consent or not. The separate engineering **dataset** export of workspace data
+(`motor_ai_sim.data_sharing.filter_for_dataset`) includes a customer's record only when the account's current
+consent (`data_sharing_consent_v1`, NDA dialog or account menu, default off) is true **and** was true when the
+record was created (append-only `legal/data_sharing_audit.jsonl`). It always strips names, e-mails, company names
+and account identifiers, and never exports Restricted Material (`restricted`, `nda`, `confidential`). Without
+consent the `customer` block stays. Counsel draft: `legal_review_2026-10-13/output/v5/Data_Sharing_Consent_v1_DRAFT.md`.
+
 The data set is **not** the same thing as *visibility* (Admin → Motors access:
 Private / Public / Selected clients). Visibility decides who can see a die on
 this server; the data set decides which git repository holds its files.

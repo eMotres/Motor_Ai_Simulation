@@ -635,7 +635,9 @@ def public_user(email: str) -> dict:
             # second round trip per user.
             "motors": normalize_grants(u.get("motors")),
             # NDA state (3D model menu): an account without it is served the simplified envelope only.
-            "nda": normalize_nda(u.get("nda"))}
+            "nda": normalize_nda(u.get("nda")),
+            # consent to share my own data with the engineering dataset (motor_ai_sim.data_sharing); default False
+            "data_sharing": normalize_data_sharing(u.get("data_sharing"))}
 
 
 # ── NDA flag (3D model menu) ─────────────────────────────────────────────────
@@ -693,6 +695,34 @@ def set_nda(email: str, signed: bool, date: Optional[str] = None, by: str = "", 
             users[email].pop("nda", None)
         _save(users)
     return get_nda(email)
+
+
+# ── data-sharing consent (engineering dataset) ───────────────────────────────
+# `data_sharing: {"consent": bool, "version": "data_sharing_consent_v1", "time": ISO UTC}` on the user record, SEPARATE from the NDA
+# (set_nda never touches it).  Only the account itself changes it (NDA dialog, account menu), through motor_ai_sim.data_sharing,
+# which appends the audit line.  Absent = no consent.
+
+def normalize_data_sharing(raw) -> dict:
+    if not isinstance(raw, dict):
+        return {"consent": False, "version": "", "time": ""}
+    return {"consent": raw.get("consent") is True, "version": str(raw.get("version") or "")[:80],
+            "time": str(raw.get("time") or "")[:40]}
+
+
+def get_data_sharing(email: str) -> dict:
+    rec = _load_soft().get(_norm(email))
+    return normalize_data_sharing(rec.get("data_sharing") if isinstance(rec, dict) else None)
+
+
+def set_data_sharing(email: str, consent: bool, version: str, time_iso: str) -> dict:
+    email = _norm(email)
+    with _LOCK:
+        users = _load()
+        if email not in users:
+            raise KeyError(email)
+        users[email]["data_sharing"] = {"consent": bool(consent), "version": str(version), "time": str(time_iso)}
+        _save(users)
+    return get_data_sharing(email)
 
 
 # ── per-user motor grants ────────────────────────────────────────────────────

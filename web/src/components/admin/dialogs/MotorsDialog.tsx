@@ -18,6 +18,7 @@ export interface RegistryUser {
   /** Optional CPU-hour allowance per month (null = not set; stored only, nothing is blocked by it) and the hours used this UTC month (null = unknown). */
   sim_quota_cpu_h_month?: number | null; cpu_h_month?: number | null;
   /** NDA state (3D model menu): signed accounts get the 3D tools and the STEP download. */
+  data_sharing?: { consent: boolean; version: string; time: string };
   nda?: { signed: boolean; date: string; by: string; version?: string; company?: string; record_id?: string; revoked?: string };
 }
 

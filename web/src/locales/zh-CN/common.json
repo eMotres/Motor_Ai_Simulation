@@ -50,6 +50,25 @@
     "notifications": "通知",
     "computeNodes": "我的计算节点"
   },
+  "dataSharing": {
+    "version": "data_sharing_consent_v1",
+    "label": "可选：同意将我的仿真数据共享至 AeroStator 数据集",
+    "separate": "与保密协议相互独立。不勾选不影响签署。",
+    "scopeTitle": "适用范围",
+    "scopeData": "您在自己的工作空间中创建的仿真输入与结果、设计方案和工作点。",
+    "scopePurpose": "用于面向 AeroStator 社区共享的工程数据集，服务于研究、验证以及工程模型的训练。",
+    "scopeAnon": "纳入之前，姓名、电子邮箱和公司名称均会被删除。",
+    "scopeRestricted": "MOTRES 向您提供的受限资料绝不会被纳入。",
+    "withdraw": "您可随时在账户菜单中撤回同意。撤回后，今后的数据不再纳入；已在数据集发布版本中公开的数据无法收回。",
+    "menu": "将我的数据共享至 AeroStator 数据集",
+    "dialogTitle": "将我的数据共享至数据集",
+    "toggle": "将我的数据共享至 AeroStator 数据集",
+    "on": "自 {time} 起开启",
+    "off": "关闭",
+    "textVersion": "同意文本 {version}",
+    "saveError": "未能保存您的选择：{message}",
+    "close": "关闭"
+  },
   "nodes": {
     "hint": "有限元计算负载较重；日常工作请连接您自己的服务器",
     "hintTip": "您自己的服务器使用相同的求解器版本运行您的任务。它仅通过 HTTPS 主动外连，无需开放任何端口，其 CPU 时间不计入合理使用额度。",

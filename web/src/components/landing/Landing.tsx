@@ -37,6 +37,7 @@ import { useTranslation } from 'react-i18next';
 import { GOOGLE_CLIENT_ID } from '../../lib/localAuth';
 import { useAuth } from '../../contexts/AuthContext';
 import LanguageSwitcher from '../common/LanguageSwitcher';
+import BrandLogo from '../common/BrandLogo';
 import ConceptDiagram from './ConceptDiagram';
 import { STEP_IDS } from './conceptLayout';
 import { BoatIcon, DroneIcon, PlusIcon, RobotIcon } from './landingIcons';
@@ -81,20 +82,6 @@ export function shouldShowLanding(enforced: boolean, hasUser: boolean): boolean 
 
 const mailto = (subject: string) =>
   `mailto:${REQUEST_ACCESS_EMAIL}?subject=${encodeURIComponent(subject)}`;
-
-/** The AeroStator mark: a stator ring with its teeth (inherits the theme colour). */
-const StatorMark: React.FC<{ size?: number }> = ({ size = 44 }) => (
-  <Box component="svg" viewBox="0 0 100 100" width={size} height={size}
-    aria-hidden="true" focusable="false" sx={{ flexShrink: 0, color: 'primary.main' }}>
-    <circle cx="50" cy="50" r="45" fill="none" stroke="currentColor"
-      strokeWidth="5" opacity={0.28} />
-    {Array.from({ length: 12 }, (_, i) => (
-      <rect key={i} x="47.5" y="9" width="5" height="15" rx="2" fill="currentColor"
-        transform={`rotate(${i * 30} 50 50)`} />
-    ))}
-    <circle cx="50" cy="50" r="21" fill="none" stroke="currentColor" strokeWidth="5" />
-  </Box>
-);
 
 /** Google's mark, on the button that opens OUR dialog.  Decoration only. */
 const GoogleMark: React.FC = () => (
@@ -251,7 +238,7 @@ const Landing: React.FC = () => {
         <Box sx={{ textAlign: 'center' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5,
             mb: { xs: 3, sm: 4 } }}>
-            <StatorMark />
+            <BrandLogo size={56} />
             <Typography component="span" sx={{
               fontSize: { xs: '1.5rem', sm: '1.8rem' }, fontWeight: 700,
               letterSpacing: '-0.01em', lineHeight: 1,
@@ -265,6 +252,18 @@ const Landing: React.FC = () => {
             letterSpacing: '-0.025em', lineHeight: 1.12, mb: 1.75, maxWidth: 900, mx: 'auto',
           }}>
             {t('hero.title')}
+          </Typography>
+          <Typography component="h2" data-testid="hero-agents" sx={{
+            fontSize: { xs: '1.2rem', sm: '1.7rem' }, fontWeight: 600, color: 'text.secondary',
+            letterSpacing: '-0.015em', lineHeight: 1.2, mb: 1.75, maxWidth: 900, mx: 'auto',
+          }}>
+            {t('hero.agents')}{' '}
+            <Link href="#developers" underline="hover" sx={{
+              fontSize: '0.6em', fontWeight: 600, letterSpacing: 0, whiteSpace: 'nowrap',
+              verticalAlign: 'middle',
+            }}>
+              {t('hero.agentsHow')} →
+            </Link>
           </Typography>
           <Typography component="p" sx={{
             fontSize: { xs: '1rem', sm: '1.15rem' }, color: 'text.secondary',
@@ -384,7 +383,7 @@ const Landing: React.FC = () => {
                 {t('start.engineers.link')}
               </Link>
             </Box>
-            <Box sx={cardSx}>
+            <Box id="developers" sx={{ ...cardSx, scrollMarginTop: 24 }}>
               <Typography component="h3" sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
                 {t('start.developers.title')}
               </Typography>

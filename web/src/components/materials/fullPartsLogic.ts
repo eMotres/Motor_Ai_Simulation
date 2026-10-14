@@ -50,9 +50,14 @@ export interface FullPartsPayload {
   config: string;
   available: boolean;
   reason?: string;
-  source?: 'app' | 'app+cad_bom' | 'app+config';
+  source?: 'cad_bom' | 'active_only' | 'active_only+config';
+  /** true = no CAD model yet: the mass is the active mass only ("partial mass (no CAD model yet)"). */
+  partial?: boolean;
   can_write?: boolean;
+  /** THE motor mass: the full assembled mass (partial: the active mass). */
   total_kg?: number;
+  active_kg?: number;
+  rotating_kg?: number;
   parts: FullPartRow[];
   choices?: MaterialChoice[];
   non_active_keys?: string[];
@@ -127,4 +132,9 @@ export const OVERLAY_KEY = 'materials.partOverlay.v1';
 /** Overlay storage key per die (the choice belongs to the die). */
 export function overlayKey(die: string): string {
   return `${OVERLAY_KEY}.${die}`;
+}
+
+/** Mass of the parts that count in the motor mass (the stand-in shaft tube of a carrier motor does not). */
+export function countedMassKg(rows: FullPartRow[]): number {
+  return rows.reduce((t, r) => t + (r.counted && r.mass_kg != null ? r.mass_kg : 0), 0);
 }

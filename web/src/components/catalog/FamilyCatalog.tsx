@@ -86,7 +86,7 @@ function subscribeFamilyCatalogRefresh(refresh: () => void): () => void {
 interface DutyResult {
   efficiency_pct?: number; ripple_pct?: number; v_ll_peak_v?: number;
   loss_w?: number; loss_mech_w?: number; loss_mech_derived?: boolean;
-  mass_kg?: number; recorded_at?: string;
+  mass_kg?: number; mass_active_kg?: number; mass_partial?: boolean; recorded_at?: string;
   p_core_w?: number; p_stranded_w?: number; p_solid_w?: number;
   v_phase_peak_v?: number; j_coil_a_mm2?: number;
   build_sig?: string;
@@ -860,7 +860,7 @@ const FamilyCatalog: React.FC<{
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
                         <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
                                                           fontVariantNumeric: 'tabular-nums' }}>
-                          {cur.duty ? `${cur.duty}: ` : ''}{fmt(cur.power_kw, 2)} kW · {fmt(cur.torque_nm, 2)} Nm · {fmt(cur.mass_kg, 2)} kg
+                          {cur.duty ? `${cur.duty}: ` : ''}{fmt(cur.power_kw, 2)} kW · {fmt(cur.torque_nm, 2)} Nm · {fmt(cur.mass_kg, 2)} kg{cur.mass_partial ? ` (${tx('massPartialShort')})` : ''}
                         </Typography>
                       </Tooltip>
                       {cur.duty && (
@@ -1344,7 +1344,7 @@ const FamilyCatalog: React.FC<{
                               {r.loss_mech_w == null ? ' *' : ''}
                             </td>
                           </Tooltip>
-                          <td style={staleRes ? { color: '#fbbf24' } : undefined}>{fmt(r.mass_kg, 2)}</td>
+                          <td style={staleRes ? { color: '#fbbf24' } : undefined} title={r.mass_partial ? tx('massPartialTip') : tx('massFullTip', { active: fmt(r.mass_active_kg, 3) })}>{fmt(r.mass_kg, 2)}{r.mass_partial ? '*' : ''}</td>
                           {/* KV instead of γ (user 2026-08-25) — rpm per volt
                               of the recorded LINE PEAK, the same max/max
                               convention as the Simulation tile; γ moved into

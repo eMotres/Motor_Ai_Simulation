@@ -12,7 +12,7 @@ import { useLastMotorState } from '../../lib/lastMotor';
 import MaterialPickerPopover from './MaterialPickerPopover';
 import { useFullParts } from './useFullParts';
 import {
-  formatMass, GROUP_LABEL_KEYS, groupChoices, isEditable, rowTag, rowsForMode,
+  countedMassKg, formatMass, GROUP_LABEL_KEYS, groupChoices, isEditable, rowTag, rowsForMode,
   type FullPartRow, type MaterialChoice,
 } from './fullPartsLogic';
 
@@ -39,7 +39,8 @@ const FullPartsPanel: React.FC = () => {
   })), [choices]);
 
   const ordered = rowsForMode(rows, 'full');
-  const totalKg = ordered.reduce((s, r) => s + (r.mass_kg ?? 0), 0);
+  const totalKg = countedMassKg(ordered);
+  const partial = !!payload?.partial;
   const nonEm = ordered.some((r) => !r.em);
 
   let body: React.ReactNode;
@@ -110,7 +111,7 @@ const FullPartsPanel: React.FC = () => {
                     </Box>
                   </Tooltip>
                 </td>
-                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatMass(r.mass_kg)}</td>
+                <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums', opacity: r.counted || r.mass_kg == null ? 1 : 0.5 }}>{formatMass(r.mass_kg)}</td>
               </tr>
             );
           })}
@@ -118,10 +119,20 @@ const FullPartsPanel: React.FC = () => {
         <tfoot>
           <tr>
             <td colSpan={3} style={{ color: 'var(--text-3)' }}>
-              <Tooltip title={tx('materialsFullTotalTip')}><span>{tx('materialsFullTotal')}</span></Tooltip>
+              <Tooltip title={tx(partial ? 'materialsFullPartialTip' : 'materialsFullTotalTip')}>
+                <span>{tx(partial ? 'materialsFullPartial' : 'materialsFullTotal')}</span>
+              </Tooltip>
             </td>
             <td style={{ textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{formatMass(totalKg)}</td>
           </tr>
+          {!partial && payload?.active_kg != null && (
+            <tr>
+              <td colSpan={3} style={{ color: 'var(--text-3)' }}>
+                <Tooltip title={tx('materialsFullActiveTip')}><span>{tx('materialsFullActive')}</span></Tooltip>
+              </td>
+              <td style={{ textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatMass(payload.active_kg)}</td>
+            </tr>
+          )}
         </tfoot>
       </Box>);
   }
@@ -138,7 +149,7 @@ const FullPartsPanel: React.FC = () => {
           <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>{tx('materialsFullLocal')}</Typography>)}
       </Box>
       {body}
-      {payload?.available && payload.source === 'app' && (
+      {payload?.available && payload.partial && (
         <Typography sx={{ px: 1.5, py: 1, fontSize: 11, color: 'var(--text-4)' }}>{tx('materialsFullNoCad')}</Typography>)}
       <MaterialPickerPopover
         open={!!anchor && !!picking}

@@ -174,11 +174,11 @@
   "materialsFullDefaultTip": "Documented default. Pick another material to change it.",
   "materialsFullChosenTip": "Chosen for this die. Pick the default again to reset.",
   "materialsFullAssumedTip": "The default is an assumption (the CAD names no grade).",
-  "materialsFullTotal": "Listed mass",
-  "materialsFullTotalTip": "Sum of the parts with a mass. Active parts are the app's motor mass; the others come from the CAD bill of materials.",
+  "materialsFullTotal": "Motor mass",
+  "materialsFullTotalTip": "The full assembled motor: the app's active parts + shaft or carrier, holders, rings, bearings, screws, board, pins, enamel. Every per-kg figure divides by it.",
   "materialsFullNoMotor": "Load a motor to see its parts.",
   "materialsFullUnavailable": "No part list for this motor here.",
-  "materialsFullNoCad": "No CAD part list is built for this motor: only the parts its configuration names are listed.",
+  "materialsFullNoCad": "Partial mass (no CAD model yet): only the active parts and what the configuration names are listed.",
   "materialsFullLoading": "Loading parts",
   "materialsFullSaved": "Saved with the die",
   "materialsFullLocal": "Kept in this browser",
@@ -213,5 +213,12 @@
   "materialsPart_bearings": "Bearings",
   "materialsPart_screws": "Screws",
   "materialsPart_board": "Phase board",
-  "materialsPart_pins": "Phase pins"
+  "materialsPart_pins": "Phase pins",
+  "massPartialShort": "partial mass",
+  "massPartialTip": "Partial mass (no CAD model yet): the active parts only.",
+  "massFullTip": "Full assembled motor mass. Active mass (EM parts): {active} kg.",
+  "materialsFullPartial": "Motor mass (partial)",
+  "materialsFullPartialTip": "Partial mass (no CAD model yet): the active parts only. It becomes the full mass when the CAD model is built.",
+  "materialsFullActive": "Active mass (EM parts)",
+  "materialsFullActiveTip": "Iron, copper, magnets and shaft tube: what the electromagnetic simulation and the optimizer use."
 }

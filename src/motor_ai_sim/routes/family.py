@@ -1975,6 +1975,37 @@ def _tree_signature(with_catalog: bool) -> tuple:
     return tuple(sig)
 
 
+def _overlay_mass(die: str, cfg: dict) -> dict:
+    """THE motor mass of a configuration is the FULL assembled mass (owner 2026-10-14): the app's active parts + the CAD
+    bill of materials' shaft/carrier, holders, rings, bearings, screws, board, pins and enamel
+    (``modules.motor_mass.full_mass``).  Stamped on a COPY of the configuration, after the tree memo: ``mass`` =
+    ``{full_kg, active_kg, rotating_kg, partial, source}`` and every duty's ``result.mass_kg`` becomes the full mass, the
+    saved run's own (active) mass moving to ``result.mass_active_kg``.  A motor with no built CAD BOM, or a die the
+    catalog cannot weigh here, keeps the active mass it had and says ``partial`` - the two are never mixed."""
+    name = str(cfg.get("name"))
+    try:
+        from motor_ai_sim.modules import motor_mass as _mm
+        summ = _mm.mass_summary(die, name, dies_dir=_die_dir(die).parent)
+    except Exception:                                      # noqa: BLE001 - a mass hiccup never breaks the catalog
+        summ = None
+    if summ is None:
+        mass = {"full_kg": None, "active_kg": None, "rotating_kg": None, "partial": True, "source": "stored"}
+        duties = [{**d, "result": {**(d.get("result") or {}), "mass_partial": True}} for d in (cfg.get("duties") or [])]
+        return {**cfg, "mass": mass, "duties": duties}
+    duties = []
+    for d in cfg.get("duties") or []:
+        r = dict(d.get("result") or {})
+        if r.get("mass_kg") is not None:
+            r["mass_active_kg"] = r["mass_kg"]
+        if not summ["partial"]:
+            r["mass_kg"] = round(summ["full_kg"], 4)
+        elif r.get("mass_kg") is None:
+            r["mass_kg"] = round(summ["active_kg"], 4)
+        r["mass_partial"] = bool(summ["partial"])
+        duties.append({**d, "result": r})
+    return {**cfg, "mass": summ, "duties": duties}
+
+
 def _stamp_cards(dies: list) -> list:
     """Copy of the tree's dies with the FULL-passport-card flag on every
     configuration (``card_date``: the card's date or None) and the die-level
@@ -1989,7 +2020,7 @@ def _stamp_cards(dies: list) -> list:
     out = []
     for d in dies:
         have = idx.get(str(d.get("name")), {})
-        cfgs = [{**c, "card_date": have.get(str(c.get("name")))}
+        cfgs = [_overlay_mass(str(d.get("name")), {**c, "card_date": have.get(str(c.get("name")))})
                 for c in (d.get("configs") or [])]
         out.append({**d, "configs": cfgs,
                     "cards": sum(1 for c in cfgs if c["card_date"]),
@@ -5340,8 +5371,19 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
                     if isinstance(v, dict) and isinstance(v.get("coupled"), dict)}
         except Exception:                                     # noqa: BLE001
             _cpl = None
+        # THE motor mass on the card is the FULL assembled mass (owner 2026-10-14); a motor with no built CAD
+        # bill of materials keeps the active mass and the card says so.
+        _mass = None
+        try:
+            from motor_ai_sim.modules import motor_mass as _mm
+            _fm = _mm.full_mass(die, cfg, dies_dir=_die_dir(die).parent)
+            _mass = {"full_kg": _fm.total_kg, "active_kg": _fm.active_kg, "partial": _fm.partial,
+                     "rotating_kg": _fm.rotating_kg,
+                     "parts": [(p.name, p.material_id, p.mass_kg) for p in _fm.parts if p.counted and p.mass_kg]}
+        except Exception:                                     # noqa: BLE001 - the card never fails for a mass
+            _mass = None
         blob = build_datasheet(die=die, cfg=cfg, die_doc=d, cfg_doc=c,
-                               passport=passport, slot=_slot, coupled=_cpl)
+                               passport=passport, slot=_slot, coupled=_cpl, mass_info=_mass)
     except Exception as e:                                    # noqa: BLE001
         log.exception("datasheet build failed for %s/%s", die, cfg)
         raise HTTPException(500, detail=f"datasheet build failed: {e}")

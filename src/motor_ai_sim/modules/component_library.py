@@ -11,9 +11,11 @@ Served by ``GET /api/components`` and ``GET /api/components/{id}`` (routes/compo
 and registered as the module ``component-library`` (capability ``component.library``), so
 the System graph shows it with the other modules.
 
-MOTOR MASS.  A motor card carries the mass the APP computes (``masses.compute_masses`` on the passport's die and
-configuration, ``modules/motor_mass.py``) with a material + mass breakdown per part; never a duty-record number.
-Where the die is not in this catalog the card is listed with the flag ``mass_unknown`` and no mass.
+MOTOR MASS.  A motor card carries the FULL assembled mass (owner 2026-10-14): the app's active parts plus the CAD bill of
+materials' shaft/carrier, holders, rings, bearings, screws, board, pins and enamel (``modules/motor_mass.py``), with a
+material + mass breakdown per part; never a duty-record number.  Without a built CAD BOM the card carries the active mass
+and the flag ``mass_partial`` ("partial mass (no CAD model yet)").  Where the die is not in this catalog the card is
+listed with the flag ``mass_unknown`` and no mass.
 
 EXAMPLE parts.  The stores hold no mass for a battery pack, a controller board or a frame.
 The library therefore lists clearly labelled PLACEHOLDERS (``flags`` = ``placeholder``) so
@@ -152,7 +154,9 @@ def build_library() -> ComponentLibrary:
         die, cfg = str(m.get("die")), str(m.get("config"))
         try:
             try:
-                lib.add(motor_card(m), die=die)
+                card = motor_card(m)
+                partial = "PARTIAL MASS" in card.mass_properties.basis       # no CAD bill of materials built yet
+                lib.add(card, die=die, flags=["mass_partial"] if partial else [])
             except MotorMassError as exc:
                 # the die is not in this catalog: the mass is UNKNOWN (never a placeholder); the card is still listed
                 log.warning("motor %s %s listed without a mass: %s", die, cfg, exc)

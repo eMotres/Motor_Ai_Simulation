@@ -258,7 +258,7 @@ export function emTileRows(s: EmTileSummary, view: EmTileView = {}): EmTileSpec[
       tipKey: bal?.gen ? 'emTiles.elecPowerTipGen' : 'emTiles.elecPowerTipMotor',
       tipExtraKeys: mechKnown ? undefined : ['emTiles.elecPowerNoMech'], unit: 'kW', d: 2,
       value: bal?.pElec != null ? bal.pElec / 1000 : null }),
-    tile({ id: 'mass', labelKey: 'configure.mass', tipKey: 'emTiles.massTip',
+    tile({ id: 'mass', labelKey: 'configure.massActive', tipKey: 'emTiles.massTip',
       tipVars: { active: num(s.mass_active_kg) != null ? _n2(num(s.mass_active_kg) as number) : '—' }, unit: 'kg', d: 2,
       value: num(s.mass_total_kg) ?? num(s.mass_active_kg) }),
     tile({ id: 'efficiency', labelKey: 'configure.efficiency',

@@ -4,7 +4,7 @@
   "units": "SI-rpm-v1",
   "id": "quadcopter_ciano14_40",
   "name": "Quadcopter, 4 x CIANO14 40 L12 + FPV 10x5 (example)",
-  "description": "Example for docs/COMPONENT_CARD.md: the motor mass is the app's own mass model (masses.compute_masses) with its material + mass per part; the propeller mass and material are the catalogue's (material grade assumed); frame, battery and controller masses and material splits are PLACEHOLDERS (see the cards). parts_summary() lists every part and the mass per material.",
+  "description": "Example for docs/COMPONENT_CARD.md: the motor mass is the FULL assembled mass (the app's active parts + the CAD bill of materials' shaft, holders, rings, bearings, screws, board, pins and enamel; the active mass only, flagged partial, when no CAD model is built) with its material + mass per part; the propeller mass and material are the catalogue's (material grade assumed); frame, battery and controller masses and material splits are PLACEHOLDERS (see the cards). parts_summary() lists every part and the mass per material.",
   "components": [
     {
       "instance": "frame",

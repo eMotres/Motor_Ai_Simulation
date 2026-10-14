@@ -516,7 +516,11 @@ def _scale(req: Dict[str, Any], m: Dict[str, Any], d: Dict[str, Any],
         warnings.append(f"speed {n_max:.0f} rpm is above the fastest verified "
                         f"duty of this machine ({max_rpm_cfg:.0f} rpm): rotor "
                         "stress and bearings are not verified")
-    mass = m0 * k_L if m0 else None
+    # THE motor mass is the full assembled mass (owner 2026-10-14); only its ACTIVE part grows with the stack, the
+    # holders, bearings, board ... do not.  A partial mass (no CAD model yet) is all active.
+    _act = d.get("mass_active_kg")
+    _fixed = max(m0 - _act, 0.0) if (m0 and _act and not d.get("mass_partial")) else 0.0
+    mass = ((m0 - _fixed) * k_L + _fixed) if m0 else None
     if req.get("max_mass_kg") and mass and mass > req["max_mass_kg"]:
         reasons.append(f"estimated mass {mass:.3g} kg > {req['max_mass_kg']:g} kg")
     out.update(ok=not reasons, k_stack=k_L, k_current=k_I, k_turns=k_T,

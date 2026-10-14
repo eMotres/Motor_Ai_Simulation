@@ -301,7 +301,11 @@ def _duty_headline(d: dict) -> Dict[str, Any]:
             "phase_current_a_rms": _f(d.get("current_arms")),
             "efficiency_pct": _f(r.get("efficiency_pct"), 2),
             "line_voltage_peak_v": _f(r.get("v_ll_peak_v"), 1),
+            # THE motor mass is the FULL assembled mass (owner 2026-10-14); the active (EM parts) mass is the
+            # separate row the electromagnetic model uses.  `mass_partial` = no CAD model yet: the active mass only.
             "mass_kg": _f(r.get("mass_kg")),
+            "mass_active_kg": _f(r.get("mass_active_kg")),
+            "mass_partial": bool(r.get("mass_partial", False)),
             "connection": d.get("star_delta") or None,
             "saved_at": d.get("saved_at")}
 
@@ -321,6 +325,8 @@ def _machines() -> List[Dict[str, Any]]:
                 "outer_diameter_mm": _f(die.get("stator_diameter")),
                 "active_length_mm": _f(c.get("stack_mm")),
                 "mass_kg": masses[0] if masses else None,
+                "mass_active_kg": _f((c.get("mass") or {}).get("active_kg")),
+                "mass_partial": bool((c.get("mass") or {}).get("partial", True)),
                 "slots": die.get("slots"), "poles": die.get("poles"),
                 "magnet": c.get("magnet"), "core_steel": c.get("steel"),
                 **_battery_v(c),

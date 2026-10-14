@@ -1,5 +1,16 @@
 """Single source of truth for motor component masses.
 
+ACTIVE mass vs the FULL assembled mass (owner 2026-10-14).  Everything in this module is the ACTIVE mass: the parts the
+electromagnetic simulation sees (stator iron, rotor iron, magnets, winding copper with the end windings, the simulation's
+shaft TUBE and the sleeve).  It is what the field solve, the passport, the optimizer and the sweep use, and none of that
+changes.  The motor mass SHOWN anywhere (catalog, datasheet, report, Configure, the component card, the API) is the FULL
+assembled mass - these parts plus the real shaft or rotor carrier, holders, rings, bearings, screws, board, pins and enamel
+from the CAD bill of materials - built by the component library's mass module from this module's numbers; without a built CAD
+model it is this active mass, flagged "partial mass (no CAD model yet)".  ``rotor_inertia_kg_m2`` below keeps its meaning: the
+inertia of the ACTIVE rotor (rotor iron + magnets + shaft tube + sleeve) about the shaft axis, from the CAD polygons.  The BOM
+carries no polar moments, so the full list's ``rotating_kg`` (rotor, magnets, shaft or carrier, rings, propeller plate) is a
+mass for mechanics (bearing load, spin-up energy), not an inertia.
+
 EVERY mass computation in the app must go through ``compute_masses`` so the mass —
 and therefore torque-density (N·m/kg) and the iron-loss base — is IDENTICAL in
 Simulation, the parameter sweep, and all three optimizers (descent / surrogate /

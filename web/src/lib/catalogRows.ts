@@ -9,7 +9,7 @@
 export interface RowDuty {
   name: string; mode?: string; power_kw?: number | null; torque_nm?: number | null;
   rpm?: number | null; current_arms?: number | null;
-  result?: { mass_kg?: number | null } | null;
+  result?: { mass_kg?: number | null; mass_active_kg?: number | null; mass_partial?: boolean | null } | null;
 }
 export interface RowCfg {
   name: string; default_duty?: string | null; duties: RowDuty[];
@@ -29,6 +29,10 @@ export function defaultDutyOf(c: RowCfg): RowDuty | null {
 export interface ConfigButton {
   config: string; duty: string | null;
   power_kw: number | null; torque_nm: number | null; mass_kg: number | null; rpm: number | null;
+  /** THE motor mass is the FULL assembled mass (owner 2026-10-14); true = no CAD model yet, so the mass is the active
+   *  mass only ("partial mass (no CAD model yet)") - the row says so, never silently mixing the two. */
+  mass_partial: boolean;
+  mass_active_kg: number | null;
   card_date: string | null; modes: number;
 }
 
@@ -43,6 +47,7 @@ export function configButtons(die: RowDie): ConfigButton[] {
       config: c.name, duty: d ? d.name : null,
       power_kw: num(d?.power_kw), torque_nm: num(d?.torque_nm),
       mass_kg: num(d?.result?.mass_kg), rpm: num(d?.rpm),
+      mass_partial: d?.result?.mass_partial !== false, mass_active_kg: num(d?.result?.mass_active_kg),
       card_date: c.card_date ?? null, modes: (c.duties ?? []).length,
     };
   });

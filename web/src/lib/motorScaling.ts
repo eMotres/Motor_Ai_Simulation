@@ -84,7 +84,14 @@ export interface Passport {
   P_fe_stator0_W?: number | null;
   P_fe_rotor0_W?: number | null;
   Pmag0_W: number;     // base magnet eddy loss
-  mass0_kg: number;    // base active mass
+  mass0_kg: number;    // base active mass (the EM parts; scales with the stack)
+  /** THE MOTOR MASS IS THE FULL ASSEMBLED MASS (owner 2026-10-14): the parts that do NOT scale with the stack - the real
+   *  shaft/carrier, holders, rings, bearings, screws, board, pins, enamel of the CAD bill of materials - added to the
+   *  scaled active mass.  Served by GET /api/catalog/references.  Absent/0 with `mass_partial` = no CAD model yet. */
+  mass_fixed_kg?: number | null;
+  /** true = no CAD model yet: the mass shown is the active mass only ("partial mass (no CAD model yet)").  Absent =
+   *  an older server / the built-in seed passports: treated as partial too, never silently as full. */
+  mass_partial?: boolean | null;
   /** Rated-point torque ripple [%] from the fine (48-step) base solve — a
    *  datasheet figure of the base operating point; never rescaled by knobs. */
   ripple0_pct?: number | null;
@@ -240,7 +247,9 @@ export interface ScaledResult {
    *  was billed to the stator (an assumption — regenerate the passport). */
   loss_split_measured: boolean;
   efficiency: number;   // 0..1
-  mass_kg: number;
+  mass_kg: number;                 // THE motor mass: full when a CAD model exists, else the active mass
+  mass_active_kg: number;          // the active (EM parts) mass
+  mass_partial: boolean;           // true = no CAD model yet
   torque_per_mass: number;
   /** 3D end-effect factor applied to T/EMF at this length (null = not measured,
    *  values are pure 2D). */
@@ -490,7 +499,11 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   const P_loss_rotor = P_loss - P_loss_stator;
 
   const eff = P_mech > 0 ? P_mech / (P_mech + P_loss) : 0;
-  const mass = p.mass0_kg * fL;
+  // THE MOTOR MASS (owner 2026-10-14): the active mass scales with the stack, the fixed parts do not.  Every per-kg figure
+  // below divides by it.  Without a CAD model (`mass_partial`) it is the active mass and the result says so.
+  const massActive = p.mass0_kg * fL;
+  const massPartial = p.mass_partial !== false || !(Number(p.mass_fixed_kg) > 0);
+  const mass = massActive + (massPartial ? 0 : Number(p.mass_fixed_kg));
 
   // No-load KV, the drone-bench convention: rpm per volt of LINE peak EMF —
   // the FUNDAMENTAL on a passport of extraction_rev ≥ 2.
@@ -525,7 +538,7 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     P_cu_W: P_cu, P_fe_W: P_fe_t, P_mag_W: P_mag_t, P_loss_W: P_loss,
     P_loss_stator_W: P_loss_stator, P_loss_rotor_W: P_loss_rotor,
     loss_split_measured: feSplit,
-    efficiency: eff, mass_kg: mass,
+    efficiency: eff, mass_kg: mass, mass_active_kg: massActive, mass_partial: massPartial,
     torque_per_mass: mass > 0 ? T / mass : 0,
     k_end3d: kEnd,
     power_per_mass_W_kg: mass > 0 ? P_mech / mass : 0,

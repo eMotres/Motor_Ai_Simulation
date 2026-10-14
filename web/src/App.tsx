@@ -48,6 +48,7 @@ import { useAuth } from './contexts/AuthContext';
 import AdminPanel from './components/admin/AdminPanel';
 import SupportWidget from './components/support/SupportWidget';
 import AnalyticsConsent from './components/common/AnalyticsConsent';
+import ActivityBeat from './components/common/ActivityBeat';
 import MaterialOverrideSync from './components/materials/MaterialOverrideSync';
 import MaterialControls from './components/parameters/MaterialControls';
 import SaveToMotorButton from './components/common/SaveToMotorButton';
@@ -789,6 +790,8 @@ function App() {
       <SupportWidget />
       {/* Consent bar + GA4 (lib/analytics.ts): loads only after mount, idle and Accept; never for China */}
       <AnalyticsConsent />
+      {/* Working-time heartbeat: signed-in accounts only, tab id only (lib/activityBeat.ts) */}
+      {user && <ActivityBeat />}
       {/* Publishes the per-user material override to the fetch interceptor (Stage 2b) */}
       <MaterialOverrideSync />
     </ThemeProvider>

@@ -13,7 +13,8 @@
     "newsletter": "通讯与通知",
     "logs": "日志 / 事件",
     "downloads3d": "3D 下载",
-    "analytics": "访问统计"
+    "analytics": "访问统计",
+    "activity": "使用时长"
   },
   "motors": {
     "title": "电机 — {email}",
@@ -56,5 +57,41 @@
     "unavailable": "统计后端未配置或无法访问。请让服务器管理员设置 Umami 环境变量。",
     "forbidden": "需要管理员权限才能查看统计。",
     "error": "无法加载统计数据。"
+  },
+  "activity": {
+    "title": "使用时长",
+    "line": "账号在应用打开、使用且可见时的活跃时间（服务器时钟）。",
+    "help": "标签页可见且用户在最近 5 分钟内有操作时，每 60 秒记录一次心跳；间隔或空闲时段不计时。仅记录标签页 ID。每日汇总保留 13 个月，之后仅保留聚合数据。运行次数 = 使用记录中已完成的任务（7 天 / 30 天）。点击某行查看每日图表。",
+    "refresh": "刷新",
+    "user": "账号",
+    "today": "今天",
+    "d7": "7 天",
+    "d30": "30 天",
+    "sessions7": "7 天会话数",
+    "lastSeen": "最近访问",
+    "topTabs": "常用标签页（30 天）",
+    "runs": "运行 7 天 / 30 天",
+    "empty": "尚无活动记录。",
+    "error": "无法加载活动数据。",
+    "detailLine": "最近 30 天：活跃 {total}",
+    "minutes": "活跃分钟数",
+    "tabs": {
+      "motors": "电机",
+      "compare": "配置",
+      "model3d": "3D 模型",
+      "geometry": "几何",
+      "materials": "材料",
+      "mesh": "网格",
+      "simulation": "电磁",
+      "static3d": "3D",
+      "mechanical": "机械",
+      "thermal": "热",
+      "controller": "控制器",
+      "system": "系统",
+      "sweep": "优化",
+      "comparePoints": "对比",
+      "cost": "成本",
+      "admin": "管理"
+    }
   }
 }

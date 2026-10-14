@@ -275,8 +275,13 @@ def get_record(record_id: str) -> Optional[dict]:
     return next((r for r in read_records(100000) if r.get("id") == record_id), None)
 
 
-def sign(*, user: str, email: str, fields: dict, cur: dict, ip: str, user_agent: str) -> dict:
-    """Render, write the PDF, append the record.  -> the record.  Raises OSError when the legal directory is not writable."""
+def sign(*, user: str, email: str, fields: dict, cur: dict, ip: str, user_agent: str, data_sharing: bool = False) -> dict:
+    """Render, write the PDF, append the record.  -> the record.  Raises OSError when the legal directory is not writable.
+
+    ``data_sharing`` is the SEPARATE, optional consent to share the customer's own data with the engineering dataset
+    (motor_ai_sim.data_sharing); it is stored in the record as ``data_sharing: {consent, version, time}`` and is not part of the
+    agreement text, the hash or the PDF."""
+    from motor_ai_sim.data_sharing import CONSENT_VERSION
     from motor_ai_sim.private_files import ensure_private_dir, open_private
     root = legal_root()
     if not root.is_dir():
@@ -287,7 +292,8 @@ def sign(*, user: str, email: str, fields: dict, cur: dict, ip: str, user_agent:
     rid = new_record_id(now)
     rec = dict(id=rid, ts=round(now.timestamp(), 3), iso=now.strftime("%Y-%m-%dT%H:%M:%SZ"), user=user, email=email, **fields,
                version=cur["version"], lang=cur["lang"], template_sha256=cur["sha256"], text_sha256=sha256_text(rendered),
-               ip=ip, user_agent=(user_agent or "")[:300], pdf=rid + ".pdf", free_mail=free_mail(email))
+               ip=ip, user_agent=(user_agent or "")[:300], pdf=rid + ".pdf", free_mail=free_mail(email),
+               data_sharing=dict(consent=data_sharing is True, version=CONSENT_VERSION, time=now.strftime("%Y-%m-%dT%H:%M:%SZ")))
     pdf = build_pdf(rendered, rec)
     with _LOCK:
         d = ensure_private_dir(root / "nda_signed")
@@ -341,4 +347,12 @@ def mail_copies(rec: dict, pdf: bytes) -> bool:
 def public_record(r: dict) -> dict:
     """Admin overview row (no user agent, no hashes of the user's agent)."""
     return {k: r.get(k) for k in ("id", "iso", "user", "email", "company", "reg_no", "country", "signatory", "title", "version",
-                                  "lang", "free_mail", "ip")}
+                                  "lang", "free_mail", "ip")} | {"data_sharing": _consent_of(r)}
+
+
+def _consent_of(r: dict) -> dict:
+    """Consent as it was ticked at signing (older records: none = false)."""
+    ds = r.get("data_sharing")
+    return {"consent": isinstance(ds, dict) and ds.get("consent") is True,
+            "version": str((ds or {}).get("version") or "") if isinstance(ds, dict) else "",
+            "time": str((ds or {}).get("time") or "") if isinstance(ds, dict) else ""}

@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
+import DataSharingConsent from '../common/DataSharingConsent';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   NDA_FIELDS, emptyForm, formErrors, mdBlocks, renderNda, utcToday, values, type NdaField, type NdaForm,
@@ -31,6 +32,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
   const [form, setForm] = useState<NdaForm>(emptyForm());
   const [accepted, setAccepted] = useState(false);
   const [typed, setTyped] = useState('');
+  const [share, setShare] = useState(false);          // optional dataset consent, separate from the NDA; starts at the current choice
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
   const [srvErr, setSrvErr] = useState<string | null>(null);
@@ -40,6 +42,8 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
     if (!open) return undefined;
     let live = true;
     setCur(null); setLoadErr(null); setTried(false); setSrvErr(null); setSrvFields({});
+    fetch(`${API}/api/data-sharing/mine`).then((r) => (r.ok ? r.json() : null))
+      .then((j: { consent?: boolean } | null) => { if (live) setShare(j?.consent === true); }).catch(() => { /* default: unticked */ });
     (async () => {
       try {
         const r = await fetch(`${API}/api/nda/current?lang=${lang}`);
@@ -68,7 +72,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
     try {
       const r = await fetch(`${API}/api/nda/sign`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, lang: cur.lang, version: cur.version, accept: accepted, typed_name: typed }),
+        body: JSON.stringify({ ...form, lang: cur.lang, version: cur.version, accept: accepted, typed_name: typed, data_sharing: share }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -129,6 +133,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
                 label={t('nda.accept')} />
               {err('accept') && <Typography sx={{ fontSize: 11, color: 'error.main', ml: 3.5 }}>{err('accept')}</Typography>}
             </Box>
+            <DataSharingConsent checked={share} onChange={setShare} disabled={busy} />
             <TextField size="small" required label={t('nda.typeName')} value={typed} onChange={(e) => setTyped(e.target.value)}
               error={!!err('typed_name')} helperText={err('typed_name')} autoComplete="off" />
             {srvErr && <Alert severity="error" sx={{ fontSize: 12 }}>{srvErr}</Alert>}

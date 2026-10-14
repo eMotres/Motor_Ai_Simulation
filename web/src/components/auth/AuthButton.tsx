@@ -7,6 +7,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import SessionsDialog from './SessionsDialog';
 import AgentKeysDialog from './AgentKeysDialog';
 import AccountDataDialog from './AccountDataDialog';
+import DataSharingDialog from './DataSharingDialog';
+import DatasetIcon from '@mui/icons-material/Dataset';
 import FolderZipIcon from '@mui/icons-material/FolderZip';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
 import NotificationsIcon from '@mui/icons-material/NotificationsNone';
@@ -27,6 +29,7 @@ const AuthButton: React.FC = () => {
   const [agentsOpen, setAgentsOpen] = React.useState(false);
   const [notifOpen, setNotifOpen] = React.useState(false);
   const [dataOpen, setDataOpen] = React.useState(false);
+  const [shareOpen, setShareOpen] = React.useState(false);
   const [nodesOpen, setNodesOpen] = React.useState(false);
   const [noticeKey, setNoticeKey] = React.useState(0);
   // The "connect your own server" hint on the simulation tabs opens this dialog.
@@ -97,6 +100,11 @@ const AuthButton: React.FC = () => {
           <ListItemIcon><FolderZipIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           My data
         </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setShareOpen(true); }}>
+          <ListItemIcon><DatasetIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          {t('dataSharing.menu')}
+        </MenuItem>
         <Divider />
         <MenuItem disabled sx={{ fontSize: 11, opacity: '0.7 !important', minHeight: 0, py: 0.25 }}>
           {t('language.label')}
@@ -110,6 +118,7 @@ const AuthButton: React.FC = () => {
         onSignedOut={() => { void logout(); }} />
       <AgentKeysDialog open={agentsOpen} onClose={() => setAgentsOpen(false)} />
       <AccountDataDialog open={dataOpen} onClose={() => setDataOpen(false)} />
+      <DataSharingDialog open={shareOpen} onClose={() => setShareOpen(false)} />
       <ComputeNodesDialog open={nodesOpen} onClose={() => setNodesOpen(false)} />
     </Box>
   );

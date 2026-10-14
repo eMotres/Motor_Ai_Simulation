@@ -143,6 +143,16 @@ const UserDrawer: React.FC<{
             </Box>
           )}
 
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>Dataset sharing</Typography>
+            <HelpTip title="The account's own choice (NDA dialog or account menu), off by default and separate from the NDA. Only the account can change it; every change is an audit line. Data is exported to the dataset only while it is on and was created while it was on." />
+          </Box>
+          <Typography data-testid="data-sharing-state" sx={{ fontSize: 13, color: 'var(--text-0)', mb: 2 }}>
+            {user.data_sharing?.consent ? 'consent given' : 'no consent'}
+            {user.data_sharing?.consent && user.data_sharing.version ? ` · ${user.data_sharing.version}` : ''}
+            {user.data_sharing?.consent && user.data_sharing.time ? ` · ${user.data_sharing.time.replace('T', ' ').replace('Z', ' UTC')}` : ''}
+          </Typography>
+
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', mb: 1 }}>Actions</Typography>
           <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75 }}>
             <Button size="small" disabled={busy} onClick={onToggleDisabled}

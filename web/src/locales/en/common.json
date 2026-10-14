@@ -50,6 +50,25 @@
     "notifications": "Notifications",
     "computeNodes": "My compute nodes"
   },
+  "dataSharing": {
+    "version": "data_sharing_consent_v1",
+    "label": "Optional: share my simulation data with the AeroStator dataset",
+    "separate": "Separate from the NDA. Leave it unticked and signing works the same.",
+    "scopeTitle": "What this covers",
+    "scopeData": "The simulation inputs and results, design variants and operating points you create in your workspace.",
+    "scopePurpose": "Used in an engineering dataset shared with the AeroStator community, for research, validation and training of engineering models.",
+    "scopeAnon": "Names, e-mail addresses and company names are removed before anything is included.",
+    "scopeRestricted": "Restricted Material that MOTRES supplied to you is never included.",
+    "withdraw": "You can withdraw at any time in the account menu. Withdrawal stops future inclusion; data already published in a dataset release cannot be recalled.",
+    "menu": "Share my data with the AeroStator dataset",
+    "dialogTitle": "Share my data with the dataset",
+    "toggle": "Share my data with the AeroStator dataset",
+    "on": "On since {time}",
+    "off": "Off",
+    "textVersion": "Consent text {version}",
+    "saveError": "The choice was not saved: {message}",
+    "close": "Close"
+  },
   "nodes": {
     "hint": "FEM runs are heavy; for regular work connect your own server",
     "hintTip": "Your own server runs your jobs with the same solver version. It connects out over HTTPS, so there are no ports to open, and its CPU time does not count against fair use.",

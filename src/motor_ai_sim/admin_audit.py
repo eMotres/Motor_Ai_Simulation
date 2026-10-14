@@ -53,7 +53,7 @@ ACTIONS = frozenset({
     # accounts
     "user.create", "user.update", "user.role", "user.tier", "user.disable", "user.delete",
     "user.delete_scheduled", "user.delete_cancelled", "user.approve",
-    "user.invite", "user.invite_revoke", "user.motors", "user.nda", "nda.pdf", "user.export",
+    "user.invite", "user.invite_revoke", "user.motors", "user.nda", "user.data_sharing", "nda.pdf", "user.export",
     "user.password_reset",
     # sessions / auth
     "session.list", "session.revoke", "session.revoke_all", "auth_events.read",

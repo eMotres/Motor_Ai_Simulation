@@ -42,7 +42,7 @@ try:
     out["thread_faces"] = {k: len(v) for k, v in th.items()}
     for bn, idx in th.items():                           # cosmetic threads (Fusion: modeled = False): coloured faces
         dc = [tuple(round(x, 2) for x in c[:3]) for c in gdoc.getObject(bn).DiffuseColor]
-        got = sum(1 for i in idx if i < len(dc) and dc[i] == tuple(round(x, 2) for x in view.THREAD_COLOUR))
+        got = sum(1 for i in idx if i < len(dc) and dc[i] == tuple(round(x, 2) for x in view.THREAD_COLOURS[bn]))
         if not idx or got != len(idx) or len(dc) != len(doc.getObject(bn).Shape.Faces):
             bad.append("%s: %d of %d thread faces carry the thread colour (%d colours for %d faces)" % (
                 bn, got, len(idx), len(dc), len(doc.getObject(bn).Shape.Faces)))

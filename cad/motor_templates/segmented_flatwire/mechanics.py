@@ -29,7 +29,7 @@ import FreeCAD as App
 import Part
 import Sketcher
 from .sketchkit import Chain, SK, V_AXIS, H_AXIS
-from .params_sheet import pval
+from .params_sheet import pval, has_param
 from .common import P, origin_feature, pad_symmetric
 
 V = App.Vector
@@ -704,7 +704,9 @@ def build_prop_fix(doc, sh, body):
 def build_screw(doc, sh, body):
     """Socket head screw on the bolt circle at angle_wire (body rotated by angle_wire), head on the front flange face."""
     g = _g(sh)
-    a, rs, rh, hh = g("holder_bolt_r"), g("bolt_d") / 2, g("screw_head_d") / 2, g("screw_head_h")
+    shank_row = has_param(sh, "screw_shank_d")                 # CIANO28 85: the screw shank differs from the hole (bolt_d)
+    shank_expr = P + ("screw_shank_d" if shank_row else "bolt_d") + " / 2"
+    a, rs, rh, hh = g("holder_bolt_r"), g("screw_shank_d" if shank_row else "bolt_d") / 2, g("screw_head_d") / 2, g("screw_head_h")
     f, ct, af2, dep = g("screw_head_fillet"), g("screw_tip_chamfer"), g("screw_socket_af") / 2, g("screw_socket_depth")
     zf = g("holder_flange_z")
     zt, zh = zf - g("holder_screw_l"), zf + hh
@@ -719,7 +721,7 @@ def build_screw(doc, sh, body):
     G = pl.g
     s.con("Vertical", G[0]); s.con("DistanceX", ORIGIN, 1, G[0], 1, a, name="holder_bolt_r", expr=P + "holder_bolt_r")
     s.con("Horizontal", G[1])
-    s.con("Vertical", G[3]); s.con("DistanceX", G[0], 1, G[3], 1, rs, name="bolt_r", expr=P + "bolt_d / 2")
+    s.con("Vertical", G[3]); s.con("DistanceX", G[0], 1, G[3], 1, rs, name="bolt_r", expr=shank_expr)
     s.con("Horizontal", G[4]); s.con("DistanceY", ORIGIN, 1, G[4], 1, zf, name="holder_flange_z", expr=P + "holder_flange_z")
     s.con("DistanceY", G[1], 1, G[4], 1, zf - zt, name="holder_screw_l", expr=P + "holder_screw_l")
     s.con("Vertical", G[5]); s.con("DistanceX", G[0], 1, G[5], 1, rh, name="screw_head_r", expr=P + "screw_head_d / 2")
@@ -764,7 +766,7 @@ def build_screw(doc, sh, body):
 # --------------------------------------------------------------------------------------------- assembly
 
 
-MECH_BODIES = ("Shaft", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
+MECH_BODIES = ("Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
 ARRAY_BASES = ("Bearing_ball", "Screw")
 MECH_PARTS = ("Mechanics", "Bearing_618_8")
 MECH_LINKS = ("Bearing_618_8_back", "Ring_back")
@@ -790,7 +792,14 @@ def build_mechanics(doc, sh, polar_array):
         b = doc.addObject("PartDesign::Body", name); b.Label = name
         return b
 
-    b = body("Shaft"); mech.addObject(b); rep["Shaft"] = build_shaft(doc, sh, b)
+    carrier = has_param(sh, "carrier_bore_r")                  # profile mechanics = ring_carrier (CIANO28 85)
+    b = body("Shaft"); mech.addObject(b)
+    if carrier:
+        from .mechanics_carrier import build_carrier
+        rep["Shaft"] = build_carrier(doc, sh, b)
+        b = body("Shaft_rear"); mech.addObject(b); rep["Shaft_rear"] = build_carrier(doc, sh, b, rear=True)
+    else:
+        rep["Shaft"] = build_shaft(doc, sh, b)
     brg = doc.addObject("App::Part", "Bearing_618_8"); brg.Label = "Bearing_618_8"; mech.addObject(brg)
     o, i, ba = body("Bearing_outer_ring"), body("Bearing_inner_ring"), body("Bearing_ball")
     for x in (o, i, ba):
@@ -800,7 +809,8 @@ def build_mechanics(doc, sh, polar_array):
     b = body("Stator_holder"); mech.addObject(b); rep["Stator_holder"] = build_holder_front(doc, sh, b)
     b = body("Stator_holder_back"); mech.addObject(b); rep["Stator_holder_back"] = build_holder_back(doc, sh, b)
     b = body("Ring"); mech.addObject(b); rep["Ring"] = build_ring(doc, sh, b)
-    b = body("Prop_fix"); mech.addObject(b); rep["Prop_fix"] = build_prop_fix(doc, sh, b)
+    if not carrier:
+        b = body("Prop_fix"); mech.addObject(b); rep["Prop_fix"] = build_prop_fix(doc, sh, b)
     sc = body("Screw"); mech.addObject(sc); rep["Screw"] = build_screw(doc, sh, sc)
     doc.recompute()
     balls = polar_array(doc, ba, P + "bearing_ball_count", "Balls"); brg.addObject(balls)
@@ -836,6 +846,8 @@ def solids(doc):
         return out
     gs = lambda n: doc.getObject(n).Shape
     out["Shaft"] = gs("Shaft").copy()
+    if doc.getObject("Shaft_rear") is not None:
+        out["Shaft_rear"] = gs("Shaft_rear").copy()
     brg = doc.getObject("Bearing_618_8")
     back = doc.getObject("Bearing_618_8_back")
     balls = [o for o in doc.Objects if o.Label == "Balls"][0].Shape.Solids
@@ -848,7 +860,8 @@ def solids(doc):
     out["Stator_holder_back"] = gs("Stator_holder_back").copy()
     out["Ring_front"] = gs("Ring").copy()
     out["Ring_back"] = _placed(gs("Ring"), doc.getObject("Ring_back").Placement)
-    out["Prop_fix"] = gs("Prop_fix").copy()
+    if doc.getObject("Prop_fix") is not None:
+        out["Prop_fix"] = gs("Prop_fix").copy()
     for i, s in enumerate([o for o in doc.Objects if o.Label == "Screws"][0].Shape.Solids):
         out["Screw_%d" % (i + 1)] = s.copy()
     return out

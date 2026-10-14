@@ -215,10 +215,6 @@
     "hint": "只读：仿真之间如何串联。",
     "hintTip": "方块是模块（或 S1 额定的各步骤），连线表示数据类型，虚线框是反馈回路。将鼠标悬停在方块或连线上查看详情。此处不运行也不修改任何模型。",
     "hoverWire": "将鼠标悬停在连线上查看其数据。",
-    "statusFor": "最近一次运行：{die} · {config} · {duty}",
-    "statusForTip": "方块状态来自此工况已有的运行记录。没有记录的方块显示未知；此处不做任何计算。",
-    "noDuty": "未选择工况",
-    "noDutyTip": "在“电机”页选择一个工况，即可查看各方块最近一次运行的状态。",
     "refresh": "重新加载图",
     "failed": "无法加载图",
     "in": "输入",
@@ -229,18 +225,17 @@
       "done": "完成",
       "running": "运行中",
       "error": "错误",
-      "cached": "已存结果",
-      "unknown": "未知"
+      "cached": "已存结果"
     },
     "loopKind": {
       "fixed_point": "不动点迭代",
       "search": "搜索"
     },
     "loops": {
-      "thermal_fixed_point": "电流 – 损耗 – 温度",
+      "thermal_fixed_point": "电流 ⇄ 损耗 ⇄ 温度",
       "speed_search": "转速搜索",
-      "em_thermal_module": "电磁 ↔ 热（模块）",
-      "em_thermal_orchestrator": "电磁 ↔ 热（耦合运行）",
+      "em_thermal_module": "电磁 ⇄ 热（模块）",
+      "em_thermal_orchestrator": "电磁 ⇄ 热（耦合运行）",
       "design_search": "设计搜索"
     },
     "nodes": {
@@ -283,6 +278,70 @@
       "materials-library": "材料",
       "users": "用户",
       "transmission-gearbox-single-stage": "减速器（单级）"
+    },
+    "showAll": "显示全部连线",
+    "showAllTip": "参数来源（电机模型、限值、环境、驱动）显示为使用它们的方块上的标签。打开后绘制全部连线。",
+    "inputs": "输入",
+    "pick": {
+      "die": "冲片",
+      "config": "配置",
+      "duty": "工况",
+      "none": "未选电机",
+      "anyDuty": "任意工况"
+    },
+    "pickTip": "选择一个电机即可查看各方块的已存结果。未选择电机时不显示状态。",
+    "noRun": "尚未运行",
+    "noRunTip": "此电机没有已存结果；请在其仿真页中运行。",
+    "chips": {
+      "rpm": "转速",
+      "shaft_power": "轴功率",
+      "air_speed": "风速",
+      "converged_current": "收敛电流"
+    },
+    "rule": {
+      "stopMaxDelta": "当 max |ΔT| < {value} {unit} 时停止",
+      "stopAllPass": "条件：所有限值检查通过",
+      "stopBudget": "停止：本次运行的评估预算",
+      "limit": "最多 {n} 次迭代",
+      "damping": "阻尼 {start}",
+      "fallback": "未收敛则：以阻尼 {damping} 重试，最多 {max} 次",
+      "steps": "扫描 {n} 个转速 + 每个网格断点两侧 → 对每个通过/失败边界二分至 {tol} {unit} → 取最高通过区间的上沿",
+      "lastConverged": "最近一次运行：{n} / {max} 次迭代后收敛",
+      "lastNot": "最近一次运行：未收敛，已用 {n} / {max} 次迭代",
+      "residual": "，ΔT {res} {unit}",
+      "stopExtra": "每轮之间，轴承座温度变化还须小于 {bearing} K，冲击工作比变化小于 {duty} 个百分点。"
+    },
+    "ruleTip": {
+      "thermal_fixed_point": "每一轮：按磁钢温度求出产生轴转矩所需的电流，复核电压，按绕组温度计算损耗，并求解热网络；新的绕组和磁钢温度进入下一轮。阻尼从 {start} 开始，残差停滞时减半（不低于 {min}）。若第一次运行未收敛，再以阻尼 {fbDamping}、最多 {fbMax} 次迭代运行一次；之后才判定为未收敛。",
+      "speed_search": "转速是变量：每个转速都运行左侧的整条链。扫描覆盖 {scan} 个转速，外加护照网格变化处的两侧；每个通过/失败边界二分至 {rpmTol} rpm（{passes} 轮细化）。S1 限值是最高通过区间的上沿；若扫描结束时仍通过，则限值只是下限。",
+      "em_thermal_module": "电磁损耗场在某一绕组温度下求解；热求解返回新的绕组温度并反馈回去（松弛 {start}），直到变化小于 {tol} {unit}，最多 {max} 轮。损耗单向传递，温度反向传递。",
+      "em_thermal_orchestrator": "电磁运行给出损耗图，热求解给出线圈、磁钢和轴承温度，并成为下一次运行的工作温度。两轮之间变化小于 {tol} {unit} 即收敛（最多 {max} 轮）。损耗单向传递，温度反向传递。",
+      "design_search": "优化器提出一组参数，构建几何和网格，由有限元确认；结果指导下一次提议。评估次数由每次运行设定。"
+    },
+    "exit": {
+      "failPoint": "工作点失败",
+      "converged": "收敛 → 继续",
+      "limit_found": "找到限值 → S1 额定",
+      "lower_boundWarn": "扫描结束仍通过 → 下限",
+      "nonconvergedWarn": "未收敛 → 带标记",
+      "no_current": "无可用电流",
+      "loss_data": "缺少损耗数据",
+      "runaway": "热失控",
+      "runawayAbove": "热失控 > {above} °C",
+      "nonconverged": "未收敛"
+    },
+    "cond": {
+      "winding": "绕组 ≤ 限值",
+      "windingLimit": "绕组 ≤ {limit} °C（{basis}）",
+      "magnet": "磁钢 ≤ 磁钢牌号限值",
+      "magnetLimit": "磁钢 ≤ {limit} °C",
+      "demag": "I ≤ 退磁限值(T_magnet)",
+      "controller": "I ≤ 控制器连续限值",
+      "battery": "电池电流 ≤ 限值"
+    },
+    "basis": {
+      "project_class": "N 级",
+      "model": "模型限值"
     }
   }
 }

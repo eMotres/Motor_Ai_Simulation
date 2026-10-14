@@ -133,6 +133,44 @@ def test_anchor_that_is_gone_fails_loudly():
         SG.src("propeller_s1.py", "solve_point", "text that is not in the function")
 
 
+# -- drawing hints (context inputs, layout grid, minor / lane wires) ----------------------------------
+
+@pytest.mark.parametrize("view", SG.VIEWS)
+def test_hints_are_complete_and_consistent(view):
+    doc = SG.build(view)
+    ids = {n["id"] for n in doc["nodes"]}
+    cells = {}
+    for n in doc["nodes"]:
+        assert isinstance(n["context"], bool)
+        if n["context"]:
+            continue
+        assert n["layout"] and {"col", "row"} <= set(n["layout"]), f"{n['id']} has no layout hint"
+        cell = (n["layout"]["col"], n["layout"]["row"])
+        assert cell not in cells, f"{n['id']} and {cells[cell]} share a cell"
+        cells[cell] = n["id"]
+    for e in doc["edges"]:
+        assert isinstance(e["minor"], bool) and e["route"] in ("direct", "lane")
+        assert e["from"]["node"] in ids
+    ctx = {n["id"] for n in doc["nodes"] if n["context"]}
+    assert not any(e["to"]["node"] in ctx and e["from"]["node"] not in ctx for e in doc["edges"])
+
+
+def test_propeller_s1_chain_row_and_context():
+    doc = SG.build("propeller_s1")
+    by = {n["id"]: n for n in doc["nodes"]}
+    assert {i for i, n in by.items() if n["context"]} == {"conditions", "model", "limits", "drive", "slipstream"}
+    chain = ["rpm_search", "propeller", "torque_demand", "current", "voltage", "losses", "thermal", "verdict", "result"]
+    assert {by[i]["layout"]["row"] for i in chain} == {0}
+    cols = [by[i]["layout"]["col"] for i in chain]
+    assert cols == sorted(cols) and len(set(cols)) == len(cols)
+    checks = [by[i]["layout"] for i in ("chk_winding", "chk_magnet", "chk_demag", "chk_controller", "chk_battery")]
+    assert len({c["col"] for c in checks}) == 1 and checks[0]["col"] < by["verdict"]["layout"]["col"]
+    assert [c["row"] for c in checks] == sorted(c["row"] for c in checks)
+    lane = [e["id"] for e in doc["edges"] if e["route"] == "lane"]
+    assert lane == ["rpm_search.rating->result.rating"]
+    assert {e["label"] for e in doc["edges"] if e["minor"]} == {"rpm", "shaft power", "air speed", "converged current"}
+
+
 # -- status layer ----------------------------------------------------------------------------------
 
 def test_status_reads_the_model_and_never_computes():
@@ -201,3 +239,70 @@ def test_gate_engineer_and_admin_only(accounts):
     assert client.get(url, headers=accounts["admin"]).status_code == 200
     assert client.get(url, headers=accounts["user"]).status_code == 403
     assert client.get(url).status_code == 401
+
+
+# -- loop rules and check conditions (read from the code) ---------------------------------------------
+
+def test_s1_loop_rules_come_from_the_code():
+    import inspect
+    doc = SG.build("propeller_s1")
+    lp = {x["id"]: x for x in doc["loops"]}
+    fp = lp["thermal_fixed_point"]["rule"]
+    assert fp["stop"] == {"kind": "max_delta", "quantity": "T", "value": S1.FIXED_POINT_TOL_K, "unit": "K"}
+    assert fp["limit"] == {"max": S1.FIXED_POINT_MAX_IT}
+    assert fp["damping"] == {"start": 1.0, "factor": 0.5, "min": 0.05}
+    assert fp["fallback"] == {"damping": 0.2, "max": 3 * S1.FIXED_POINT_MAX_IT}
+    assert [e["id"] for e in fp["exits"]][0] == "converged"
+    assert {e["id"] for e in fp["exits"] if e["kind"] == "fail"} == {"no_current", "loss_data", "runaway", "nonconverged"}
+    assert [e for e in fp["exits"] if e["id"] == "runaway"][0]["param"] == {"above_C": S1.RUNAWAY_C}
+    sp = lp["speed_search"]["rule"]
+    sig = inspect.signature(S1.s1_rating).parameters
+    assert sp["steps"]["scan_points"] == sig["n_points"].default == 41
+    assert sp["steps"]["tolerance"] == sig["tol_rpm"].default
+    assert sp["steps"]["refinement_passes"] == 2 and sp["stop"] == {"kind": "all_pass"}
+
+
+def test_modules_loop_rules_carry_the_constants():
+    from motor_ai_sim.routes import coupled as C
+    from motor_ai_sim.routes import thermal as T
+    lp = {x["id"]: x for x in SG.build("modules")["loops"]}
+    m, o = lp["em_thermal_module"]["rule"], lp["em_thermal_orchestrator"]["rule"]
+    assert (m["limit"]["max"], m["stop"]["value"], m["damping"]["start"]) == (12, T.COUPLED_TOL_C, 0.6)
+    assert (o["limit"]["max"], o["stop"]["value"], o["stop"]["bearing_K"]) == (C.DEFAULT_MAX_ITER, C.DEFAULT_TOL_K, C.BEARING_TOL_K)
+    assert all(x["rule"]["iterates"] == x["id"] for x in lp.values())
+
+
+def test_check_blocks_state_their_condition():
+    from motor_ai_sim.report import PROJECT_INSULATION_C
+    by = {n["id"]: n for n in SG.build("propeller_s1")["nodes"]}
+    assert [by[i]["condition"]["key"] for i in ("chk_winding", "chk_magnet", "chk_demag", "chk_controller", "chk_battery")] == [
+        "winding", "magnet", "demag", "controller", "battery"]
+    assert by["chk_winding"]["condition"]["params"] == {"limit_C": PROJECT_INSULATION_C, "basis": "project_class"}
+    # with a motor the limits are that motor's
+    by = {n["id"]: n for n in SG.build("propeller_s1", die="CIANO14 40 new", config="L12")["nodes"]}
+    assert by["chk_magnet"]["condition"]["params"] == {"limit_C": 150.0}
+    assert by["chk_winding"]["condition"]["params"]["limit_C"] == PROJECT_INSULATION_C
+
+
+def test_coupled_convergence_is_read_from_the_stored_run_without_touching_it(monkeypatch, tmp_path):
+    import pickle
+    from motor_ai_sim import run_history as RH
+    pay = tmp_path / "p.pkl"
+    pay.write_bytes(pickle.dumps({"coupling": {"iterations": 3, "max_iter": 6, "converged": True,
+                                                "residual_coil_K": 0.4, "residual_magnet_K": 0.9}}))
+
+    class Fake:
+        def list(self, limit=None):
+            return [{"key": "k1", "params": {"die": "D", "config": "C"}, "computed_at": "t"}]
+
+        def _payload_path(self, key):
+            return pay
+    monkeypatch.setattr(RH, "history_for", lambda kind, cap=0: Fake())
+    c = SG._coupled_convergence({"die": "D", "config": "C", "duty": None})
+    assert c == {"iterations": 3, "max_iterations": 6, "converged": True, "residual": 0.9, "unit": "K",
+                 "finished_at": "t", "source": "run_history:coupled.run"}
+    assert SG._coupled_convergence({"die": "other", "config": None, "duty": None}) is None
+    monkeypatch.setattr(SG, "_job_status", lambda want: {})
+    monkeypatch.setattr(SG, "_history_status", lambda want: {})
+    doc = SG.build("modules", die="D", config="C")
+    assert {x["id"]: x["convergence"] for x in doc["loops"]}["em_thermal_orchestrator"]["iterations"] == 3

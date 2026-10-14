@@ -215,10 +215,6 @@
     "hint": "Read-only map of how the simulations are chained.",
     "hintTip": "Blocks are modules (or the steps of the S1 rating), wires carry data types, dashed groups are feedback loops. Hover a block or a wire for details. Nothing here runs or edits a model.",
     "hoverWire": "Hover a wire to see its data.",
-    "statusFor": "Last run: {die} · {config} · {duty}",
-    "statusForTip": "Block status comes from existing run records of this duty. A block without a record is unknown; nothing is computed here.",
-    "noDuty": "No duty selected",
-    "noDutyTip": "Select a duty in Motors to see the last-run status of each block.",
     "refresh": "Reload the graph",
     "failed": "Could not load the graph",
     "in": "In",
@@ -229,18 +225,17 @@
       "done": "done",
       "running": "running",
       "error": "error",
-      "cached": "stored result",
-      "unknown": "unknown"
+      "cached": "stored result"
     },
     "loopKind": {
       "fixed_point": "Fixed-point iteration",
       "search": "Search"
     },
     "loops": {
-      "thermal_fixed_point": "Current – losses – temperature",
+      "thermal_fixed_point": "Current ⇄ losses ⇄ temperature",
       "speed_search": "Speed search",
-      "em_thermal_module": "EM ↔ thermal (module)",
-      "em_thermal_orchestrator": "EM ↔ thermal (coupled run)",
+      "em_thermal_module": "EM ⇄ thermal (module)",
+      "em_thermal_orchestrator": "EM ⇄ thermal (coupled run)",
       "design_search": "Design search"
     },
     "nodes": {
@@ -283,6 +278,70 @@
       "materials-library": "Materials",
       "users": "Users",
       "transmission-gearbox-single-stage": "Gearbox (single stage)"
+    },
+    "showAll": "Show all wires",
+    "showAllTip": "Parameter sources (motor model, limits, ambient, drive) are shown as chips on the blocks that use them. Switch on to draw every wire.",
+    "inputs": "Inputs",
+    "pick": {
+      "die": "Die",
+      "config": "Config",
+      "duty": "Duty",
+      "none": "No motor",
+      "anyDuty": "Any duty"
+    },
+    "pickTip": "Pick a motor to see the stored result of each block. With no motor selected no status is shown.",
+    "noRun": "no run yet",
+    "noRunTip": "No stored result for this motor; run it in its Simulation tab.",
+    "chips": {
+      "rpm": "rpm",
+      "shaft_power": "shaft power",
+      "air_speed": "air speed",
+      "converged_current": "converged current"
+    },
+    "rule": {
+      "stopMaxDelta": "stop when max |ΔT| < {value} {unit}",
+      "stopAllPass": "condition: all limit checks pass",
+      "stopBudget": "stop: the run's evaluation budget",
+      "limit": "max {n} iterations",
+      "damping": "damping {start}",
+      "fallback": "if not converged: retry with damping {damping}, max {max}",
+      "steps": "scan {n} speeds + both sides of each grid breakpoint → bisect each pass/fail edge to {tol} {unit} → take the upper edge of the highest passing band",
+      "lastConverged": "last run: converged in {n} / {max}",
+      "lastNot": "last run: NOT converged, {n} / {max} iterations used",
+      "residual": ", ΔT {res} {unit}",
+      "stopExtra": "Between passes the bearing seat must also move less than {bearing} K and the impulse-duty ratio less than {duty} point."
+    },
+    "ruleTip": {
+      "thermal_fixed_point": "Each pass takes the current that makes the shaft torque at the magnet temperature, re-checks the voltage, evaluates the losses at the winding temperature and solves the thermal network; the new winding and magnet temperatures go back into the next pass. Damping starts at {start} and is halved (not below {min}) while the residual stalls. If the first run does not settle, one more run starts with damping {fbDamping} and up to {fbMax} iterations; only then is the point called not converged.",
+      "speed_search": "The speed is the variable: every speed runs the whole chain on the left. The scan covers {scan} speeds plus both sides of every speed where the passport grids change; every pass/fail edge is bisected to {rpmTol} rpm ({passes} refinement passes). The S1 limit is the upper edge of the highest passing band; if the scan ends still passing the limit is only a lower bound.",
+      "em_thermal_module": "The electromagnetic loss field is solved at a winding temperature; the thermal solve returns a new winding temperature, which is fed back (relaxation {start}) until it moves less than {tol} {unit}, at most {max} passes. Losses go one way, temperatures the other.",
+      "em_thermal_orchestrator": "The electromagnetic run gives the loss map, the thermal solve gives coil, magnet and bearing temperatures, which become the next run's operating temperatures. Converged when they move less than {tol} {unit} between passes (at most {max} passes). Losses go one way, temperatures the other.",
+      "design_search": "The optimizer proposes a parameter set, the geometry and mesh are built and the FEM confirms it; the result guides the next proposal. The number of evaluations is set per run."
+    },
+    "exit": {
+      "failPoint": "point fails",
+      "converged": "converged → continue",
+      "limit_found": "limit found → S1 rating",
+      "lower_boundWarn": "scan ends passing → lower bound",
+      "nonconvergedWarn": "not converged → flagged",
+      "no_current": "no current",
+      "loss_data": "loss data",
+      "runaway": "runaway",
+      "runawayAbove": "runaway > {above} °C",
+      "nonconverged": "not converged"
+    },
+    "cond": {
+      "winding": "winding ≤ limit",
+      "windingLimit": "winding ≤ {limit} °C ({basis})",
+      "magnet": "magnet ≤ magnet-card limit",
+      "magnetLimit": "magnet ≤ {limit} °C",
+      "demag": "I ≤ demag limit(T_magnet)",
+      "controller": "I ≤ controller continuous limit",
+      "battery": "battery current ≤ limit"
+    },
+    "basis": {
+      "project_class": "class N",
+      "model": "model limit"
     }
   }
 }

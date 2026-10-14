@@ -111,6 +111,68 @@ def default_arg(rel_in_pkg: str, function: str, arg: str) -> Any:
     raise LookupError(f"{rel_in_pkg}:{function}: no literal default for {arg!r}")
 
 
+def _eval(node: ast.AST, rel: str) -> Any:
+    """A literal, a module constant or a product / sum of them (``3 * FIXED_POINT_MAX_IT``)."""
+    if isinstance(node, ast.Constant):
+        return node.value
+    if isinstance(node, ast.Name):
+        return const(rel, node.id)[0]
+    if isinstance(node, ast.BinOp) and isinstance(node.op, (ast.Mult, ast.Add)):
+        a, b = _eval(node.left, rel), _eval(node.right, rel)
+        return a * b if isinstance(node.op, ast.Mult) else a + b
+    raise LookupError(f"{rel}: expression not readable: {ast.dump(node)[:60]}")
+
+
+def _function(rel: str, function: str):
+    tree, _ = _parse(rel)
+    d = _find_def(tree, function)
+    if d is None:
+        raise LookupError(f"{rel}: no function {function!r}")
+    return d
+
+
+def call_args(rel: str, function: str, callee: str, last: int = 2) -> List[List[Any]]:
+    """The last ``last`` positional arguments (evaluated) of every call to ``callee`` inside ``function``, in source order."""
+    calls = sorted((n for n in ast.walk(_function(rel, function))
+                    if isinstance(n, ast.Call) and isinstance(n.func, ast.Name) and n.func.id == callee),
+                   key=lambda n: (n.lineno, n.col_offset))
+    return [[_eval(a, rel) for a in n.args[-last:]] for n in calls]
+
+
+def for_ranges(rel: str, function: str) -> List[int]:
+    """``N`` of every ``for ... in range(N)`` with a literal N inside ``function``, in source order."""
+    fs = sorted((n for n in ast.walk(_function(rel, function)) if isinstance(n, ast.For) and isinstance(n.iter, ast.Call)
+                 and isinstance(n.iter.func, ast.Name) and n.iter.func.id == "range" and len(n.iter.args) == 1
+                 and isinstance(n.iter.args[0], ast.Constant)), key=lambda n: n.lineno)
+    return [int(f.iter.args[0].value) for f in fs]
+
+
+def damping_rule(rel: str, function: str, name: str = "damping") -> Dict[str, float]:
+    """The halving rule ``<name> = max(MIN, <name> * FACTOR)`` of a damped iteration inside ``function``."""
+    for n in ast.walk(_function(rel, function)):
+        if (isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == name for t in n.targets)
+                and isinstance(n.value, ast.Call) and isinstance(n.value.func, ast.Name) and n.value.func.id == "max"
+                and len(n.value.args) == 2 and isinstance(n.value.args[0], ast.Constant)
+                and isinstance(n.value.args[1], ast.BinOp) and isinstance(n.value.args[1].right, ast.Constant)):
+            return {"min": float(n.value.args[0].value), "factor": float(n.value.args[1].right.value)}
+    raise LookupError(f"{rel}:{function}: no damping halving rule for {name!r}")
+
+
+def state_values(rel: str, function: str, key: str = "state") -> List[str]:
+    """The string values of ``{"state": "..."}`` dict literals in ``function``, in source order, unique."""
+    found: List[Tuple[int, str]] = []
+    for n in ast.walk(_function(rel, function)):
+        if isinstance(n, ast.Dict):
+            for k, v in zip(n.keys, n.values):
+                if isinstance(k, ast.Constant) and k.value == key and isinstance(v, ast.Constant) and isinstance(v.value, str):
+                    found.append((n.lineno, v.value))
+    out: List[str] = []
+    for _, v in sorted(found):
+        if v not in out:
+            out.append(v)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Small constructors (the schema in one place)
 # ---------------------------------------------------------------------------
@@ -120,9 +182,13 @@ def _port(name: str, typ: str) -> Dict[str, str]:
 
 
 def _node(id_: str, kind: str, title: str, summary: str, *, ins=(), outs=(), source=None,
-          group: Optional[str] = None, **extra: Any) -> Dict[str, Any]:
+          group: Optional[str] = None, context: bool = False, at: Optional[Tuple[float, float]] = None,
+          **extra: Any) -> Dict[str, Any]:
+    """``context``: a parameter source feeding many blocks - the view draws it in an Inputs column and puts chips on
+    its consumers instead of wires.  ``at`` = (col, row): the layout hint (the main chain on row 0)."""
     n: Dict[str, Any] = {"id": id_, "kind": kind, "title": title, "summary": summary,
-                         "group": group or kind,
+                         "group": group or kind, "context": bool(context),
+                         "layout": ({"col": at[0], "row": at[1]} if at else None),
                          "inputs": [_port(*p) for p in ins], "outputs": [_port(*p) for p in outs],
                          "source": source, "status": {"state": "unknown"}}
     n.update(extra)
@@ -130,11 +196,15 @@ def _node(id_: str, kind: str, title: str, summary: str, *, ins=(), outs=(), sou
 
 
 def _edge(src_node: str, src_port: Optional[str], dst_node: str, dst_port: Optional[str], typ: str,
-          *, label: Optional[str] = None, feedback: bool = False, via: str = "data") -> Dict[str, Any]:
+          *, label: Optional[str] = None, feedback: bool = False, via: str = "data", minor: bool = False,
+          lane: bool = False) -> Dict[str, Any]:
+    """``minor``: a parameter-like link (drawn as a chip on the target unless all wires are shown); ``lane``: routed
+    under the loop group like a feedback wire instead of across the blocks."""
     e: Dict[str, Any] = {
         "id": f"{src_node}.{src_port or '*'}->{dst_node}.{dst_port or '*'}",
         "from": {"node": src_node, "port": src_port}, "to": {"node": dst_node, "port": dst_port},
-        "type": typ, "feedback": bool(feedback), "via": via}
+        "type": typ, "feedback": bool(feedback), "via": via, "minor": bool(minor),
+        "route": "lane" if lane else "direct"}
     if label:
         e["label"] = label
     return e
@@ -232,6 +302,10 @@ def build_modules_graph() -> Dict[str, Any]:
             "title": "EM <-> thermal (module)", "nodes": ["solver-thermal", "solver-em-thermal"],
             "edges": [], "max_iterations": mx, "tolerance": tol_c, "tolerance_unit": "K",
             "detail": {"relaxation": relax, "what": "winding temperature fed back into the loss map"},
+            "rule": {"iterates": "em_thermal_module",
+                     "stop": {"kind": "max_delta", "quantity": "T", "value": tol_c, "unit": "K"},
+                     "limit": {"max": mx}, "damping": {"start": relax}, "fallback": None,
+                     "exits": [{"id": "converged", "kind": "continue"}, {"id": "nonconverged", "kind": "warn"}]},
             "source": src("routes/thermal.py", "solve_coupled"), "convergence": None})
         t2, _ = const("routes/coupled.py", "DEFAULT_TOL_K")
         bt, _ = const("routes/coupled.py", "BEARING_TOL_K")
@@ -243,6 +317,12 @@ def build_modules_graph() -> Dict[str, Any]:
             "edges": [], "max_iterations": mi, "tolerance": t2, "tolerance_unit": "K",
             "detail": {"bearing_tolerance_K": bt, "duty_ratio_tolerance_pct": ed,
                        "what": "coil / magnet / bearing temperatures (and the impulse-duty ratio) to the fixed point"},
+            "rule": {"iterates": "em_thermal_orchestrator",
+                     "stop": {"kind": "max_delta", "quantity": "T", "value": t2, "unit": "K",
+                              "bearing_K": bt, "duty_ratio_pct": ed},
+                     "limit": {"max": mi}, "damping": None, "fallback": None,
+                     "exits": [{"id": "converged", "kind": "continue"}, {"id": "nonconverged", "kind": "warn"},
+                               {"id": "runaway", "kind": "fail"}]},
             "source": src("routes/coupled.py", "_run"), "convergence": None})
     except LookupError as exc:                                 # a moved constant must not take the page down
         log.warning("system graph: coupling loop not described: %s", exc)
@@ -253,10 +333,30 @@ def build_modules_graph() -> Dict[str, Any]:
             "title": "Design search", "nodes": sorted(names), "edges": [],
             "max_iterations": None, "tolerance": None, "tolerance_unit": None,
             "detail": {"what": "the optimizer proposes a ParameterSet, the FEM confirms it (budget set per run)"},
+            "rule": {"iterates": "design_search", "stop": {"kind": "budget"}, "limit": None, "damping": None,
+                     "fallback": None, "exits": []},
             "source": src("modules/optimization.py", "Optimizer"), "convergence": None})
     for lp in loops:                                           # a loop owns the edges that stay inside it
         members = set(lp["nodes"])
         lp["edges"] = [e["id"] for e in edges if e["from"]["node"] in members and e["to"]["node"] in members]
+    for n in nodes:                                            # cross-cutting services nobody is wired to
+        n["context"] = n["id"] in ("users", "materials-library")
+    # layout hints (col, row): the geometry -> mesh -> EM -> thermal chain on row 0; a module that is not listed
+    # (a plugin) makes the view fall back to the automatic layout
+    at = {"geometry-2d-ring-spm": (1, -1.9), "geometry-2d-aerostator": (1, 0), "surrogate-rf": (2, 2.8),
+          "cost-basic": (2, -3.1), "geometry-3d-aerostator": (2, -1.7), "mesh-skfem": (2, 0),
+          "solver-mechanical": (3, -3.1), "solver-em-static": (3, -1.7),
+          "solver-em-transient": (3, 0), "optimization-descent": (3, 1.5),
+          "controller-foc": (4, -1.7), "solver-thermal": (4, 0), "solver-em-thermal": (5, 0),
+          "transmission-gearbox-single-stage": (5, 1.5)}
+    for n in nodes:
+        if n["id"] in at:
+            n["layout"] = {"col": at[n["id"]][0], "row": at[n["id"]][1]}
+    for e in edges:                                            # the mesh handed to a solver that also needs another upstream
+        if e["via"] == "port_type" and e["type"] == "MeshIR":
+            e["minor"], e["label"] = True, "mesh"
+        if e["via"] == "port_type" and e["to"]["node"] == "geometry-2d-ring-spm":   # the alternative geometry provider
+            e["minor"], e["label"] = True, e["type"]
     notes = ["Edges come from the modules' manifests: `depends_on` capabilities (an extension such as "
              "geometry.2d.ring_spm is an alternative provider of its base capability) and, for an input no "
              "dependency covers, the module that outputs that contract type.",
@@ -435,26 +535,82 @@ def build_propeller_s1_graph() -> Dict[str, Any]:
         _edge("verdict", "verdict", "rpm_search", "verdict", "verdict", feedback=True, label="pass / fail + cause"),
         _edge("rpm_search", "rating", "result", "rating", "s1_rating"),
     ]
+    # How the chain is drawn (the view reads these hints; the data above is untouched).  Row 0 is the main chain
+    # speed search -> propeller load -> shaft torque -> current -> voltage -> losses -> thermal network -> limit
+    # checks (a column in front of the verdict) -> point verdict -> rating; helper blocks sit above / below it.
+    at = {"rpm_search": (1, 0), "propeller": (2, 0), "torque_demand": (3, 0), "housing_film": (3, -1.5),
+          "current": (4, 0), "voltage": (5, 0), "losses": (6, 0), "thermal": (7, 0),
+          "demag_limit": (8, -1), "board_limit": (8, 1), "powers": (8, 2),
+          "chk_winding": (9, -2), "chk_magnet": (9, -1), "chk_demag": (9, 0), "chk_controller": (9, 1),
+          "chk_battery": (9, 2), "verdict": (10, 0), "result": (11, 0)}
+    context = {"conditions", "model", "limits", "drive", "slipstream"}      # parameter sources: chips, not wires
+    minor = {"rpm_search.rpm->torque_demand.rpm": "rpm", "rpm_search.rpm->current.rpm": "rpm",
+             "rpm_search.rpm->voltage.rpm": "rpm", "rpm_search.rpm->losses.rpm": "rpm",
+             "propeller.shaft_power->powers.shaft_power": "shaft power",
+             "propeller.air_speed->board_limit.air_speed": "air speed",
+             "voltage.I->chk_demag.I": "converged current", "voltage.I->chk_controller.I": "converged current"}
+    lane = {"rpm_search.rating->result.rating"}
+    for n in N:
+        if n["id"] in at:
+            n["layout"] = {"col": at[n["id"]][0], "row": at[n["id"]][1]}
+        n["context"] = n["id"] in context
+    for e in E:
+        if e["id"] in minor:
+            e["minor"], e["label"] = True, minor[e["id"]]
+        if e["id"] in lane:
+            e["route"] = "lane"
+    winding_c, _ = const("report.py", "PROJECT_INSULATION_C")
+    cond = {"chk_winding": {"key": "winding", "params": {"limit_C": winding_c, "basis": "project_class"}},
+            "chk_magnet": {"key": "magnet", "params": {}},
+            "chk_demag": {"key": "demag", "params": {}},
+            "chk_controller": {"key": "controller", "params": {}},
+            "chk_battery": {"key": "battery", "params": {}}}
+    for n in N:
+        if n["id"] in cond:
+            n["condition"] = cond[n["id"]]
+    missing = (set(at) | context | set(cond)) - {n["id"] for n in N}
+    stale = (set(minor) | lane) - {e["id"] for e in E}
+    if missing or stale:
+        raise LookupError(f"system graph layout hints name unknown nodes/edges: {sorted(missing | stale)}")
     tol_k, tol_l = const(_S1, "FIXED_POINT_TOL_K")
     max_it, it_l = const(_S1, "FIXED_POINT_MAX_IT")
     runaway, _ = const(_S1, "RUNAWAY_C")
+    first_call, retry_call = call_args(_S1, "solve_point", "_fixed_point")[:2]
+    damp0 = float(first_call[0])
+    halving = damping_rule(_S1, "_fixed_point")
+    states = state_values(_S1, "_fixed_point")
+    n_scan = default_arg(_S1, "s1_rating", "n_points")
+    tol_rpm = default_arg(_S1, "s1_rating", "tol_rpm")
+    passes = for_ranges(_S1, "s1_rating")[0]
     fp_nodes = ["current", "voltage", "losses", "thermal"]
     fp_edges = [e["id"] for e in E if e["feedback"] and e["to"]["node"] in fp_nodes] + [
         "current.I->voltage.I", "voltage.I->losses.I", "losses.losses->thermal.losses"]
+    exits = [{"id": "converged", "kind": "continue"}] + [
+        {"id": st, "kind": "fail", **({"param": {"above_C": runaway}} if st == "runaway" else {})}
+        for st in states if st != "converged"]
     loops = [
         {"id": "thermal_fixed_point", "kind": "fixed_point", "title": "Current - losses - temperature",
          "nodes": fp_nodes, "edges": fp_edges, "max_iterations": max_it, "tolerance": tol_k,
          "tolerance_unit": "K",
-         "detail": {"start_damping": 1.0, "damping_halved_when_residual_stalls": True, "min_damping": 0.05,
-                    "retry_if_not_converged": {"damping": 0.2, "max_iterations": 3 * max_it},
-                    "runaway_above_C": runaway,
-                    "outcomes": ["converged", "no_current", "loss_data", "runaway", "nonconverged"]},
+         "detail": {"start_damping": damp0, "damping_halved_when_residual_stalls": True, "min_damping": halving["min"],
+                    "retry_if_not_converged": {"damping": retry_call[0], "max_iterations": retry_call[1]},
+                    "runaway_above_C": runaway, "outcomes": states},
+         "rule": {"iterates": "thermal_fixed_point",
+                  "stop": {"kind": "max_delta", "quantity": "T", "value": tol_k, "unit": "K"},
+                  "limit": {"max": max_it},
+                  "damping": {"start": damp0, "factor": halving["factor"], "min": halving["min"]},
+                  "fallback": {"damping": retry_call[0], "max": retry_call[1]},
+                  "exits": exits},
          "source": S("_fixed_point"), "convergence": None},
         {"id": "speed_search", "kind": "search", "title": "Speed search",
          "nodes": [n["id"] for n in N if n["id"] not in ("conditions", "model", "limits", "drive", "slipstream", "result")],
-         "edges": [], "max_iterations": None, "tolerance": 1.0, "tolerance_unit": "rpm",
-         "detail": {"scan_points": 41, "refinement_passes": 2, "bisection": "every pass/fail edge to the tolerance",
+         "edges": [], "max_iterations": None, "tolerance": tol_rpm, "tolerance_unit": "rpm",
+         "detail": {"scan_points": n_scan, "refinement_passes": passes, "bisection": "every pass/fail edge to the tolerance",
                     "limit": "upper edge of the highest passing band; lower bound if the scan ends passing"},
+         "rule": {"iterates": "speed_search",
+                  "steps": {"scan_points": n_scan, "refinement_passes": passes, "tolerance": tol_rpm, "unit": "rpm"},
+                  "stop": {"kind": "all_pass"}, "limit": None, "damping": None, "fallback": None,
+                  "exits": [{"id": "limit_found", "kind": "continue"}, {"id": "lower_bound", "kind": "warn"}]},
          "source": S("s1_rating"), "convergence": None},
     ]
     for lp in loops[1:]:
@@ -531,6 +687,32 @@ def _history_status(want) -> Dict[str, Dict[str, Any]]:
     return out
 
 
+def _coupled_convergence(want) -> Optional[Dict[str, Any]]:
+    """Iterations and final residual of the newest stored coupled run of this motor (read only: the history is not
+    touched); None when there is none."""
+    try:
+        import pickle
+        from motor_ai_sim import run_history as _RH
+        h = _RH.history_for("coupled.run")
+        for e in h.list(limit=20):
+            if not _matches(e.get("params"), want):
+                continue
+            path = h._payload_path(str(e.get("key")))
+            if not path.is_file():
+                continue
+            with open(path, "rb") as fh:
+                cp = (pickle.load(fh) or {}).get("coupling") or {}
+            if cp.get("iterations") is None:
+                continue
+            res = [v for v in (cp.get("residual_coil_K"), cp.get("residual_magnet_K")) if v is not None]
+            return {"iterations": int(cp["iterations"]), "max_iterations": cp.get("max_iter"),
+                    "converged": bool(cp.get("converged")), "residual": max(res) if res else None, "unit": "K",
+                    "finished_at": e.get("computed_at"), "source": "run_history:coupled.run"}
+    except Exception as exc:                        # noqa: BLE001
+        log.debug("system graph: no coupled convergence: %s", exc)
+    return None
+
+
 def _s1_model_status(die: str, config: str) -> Dict[str, Dict[str, Any]]:
     try:
         from motor_ai_sim import propeller_s1 as S1
@@ -538,12 +720,17 @@ def _s1_model_status(die: str, config: str) -> Dict[str, Dict[str, Any]]:
     except Exception as exc:                        # noqa: BLE001 - no model for this machine
         return {"model": {"state": "unknown", "summary": str(exc)[:160]}}
     cal = m.get("thermal_calibration") or {}
+    try:
+        lim = S1.limits_of(m)
+    except Exception:                               # noqa: BLE001 - a model without a magnet limit
+        lim = {}
     return {"model": {
         "state": "cached", "source": "propeller_s1.load_model", "summary": f"{die} {config}",
         "values": {"schema": m.get("schema"), "R_phase_ohm": m.get("R_phase_ohm"),
                    "slipstream_factor": cal.get("slipstream_factor"),
                    "slipstream_factor_status": cal.get("slipstream_factor_status"),
-                   "magnet_limit_C": (m.get("limits") or {}).get("magnet_C")}}}
+                   "magnet_limit_C": (m.get("limits") or {}).get("magnet_C"),
+                   "winding_limit_C": lim.get("winding_C"), "winding_basis": lim.get("winding_basis")}}}
 
 
 def attach_status(doc: Dict[str, Any], die: Optional[str] = None, config: Optional[str] = None,
@@ -561,6 +748,19 @@ def attach_status(doc: Dict[str, Any], die: Optional[str] = None, config: Option
         st = found.get(n["id"])
         n["status"] = st if st else {"state": "unknown"}
     mv = (found.get("model") or {}).get("values")
+    if doc["view"] == "propeller_s1" and mv:                   # the limits of THIS motor into the checks' conditions
+        for n in doc["nodes"]:
+            c = n.get("condition")
+            if n["id"] == "chk_winding" and mv.get("winding_limit_C") is not None:
+                c["params"] = {"limit_C": mv["winding_limit_C"],
+                               "basis": "project_class" if "project" in str(mv.get("winding_basis")) else "model"}
+            if n["id"] == "chk_magnet" and mv.get("magnet_limit_C") is not None:
+                c["params"] = {"limit_C": mv["magnet_limit_C"]}
+    if doc["view"] == "modules":
+        conv = _coupled_convergence(want)
+        for lp in doc["loops"]:
+            if lp["id"] == "em_thermal_orchestrator" and conv:
+                lp["convergence"] = conv
     if doc["view"] == "propeller_s1" and mv:                   # what the model hands over, on the wires it travels
         vals = {"model.calibration->slipstream.calibration":
                     {"slipstream_factor": mv.get("slipstream_factor"), "status": mv.get("slipstream_factor_status")},

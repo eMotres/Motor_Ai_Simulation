@@ -65,6 +65,13 @@ SourceType = Literal["standard", "datasheet", "handbook", "derived", "estimate"]
 
 _REPO_CONFIG = Path(__file__).resolve().parents[2] / "config"
 _PART_FILE = _REPO_CONFIG / "part_materials.yaml"
+#: the API image keeps config/ as a read-only SEED at <app>/config-seed (deploy/Dockerfile.api), never at <app>/config
+_SEED_FILE = Path(__file__).resolve().parents[2] / "config-seed" / "part_materials.yaml"
+
+
+class PartMaterialsUnavailable(FileNotFoundError):
+    """``part_materials.yaml`` is nowhere to be found.  LOUD on purpose: an empty answer here once let the server weigh a
+    motor without a single holder, bearing or screw (every mechanical part silently fell out of the list)."""
 
 
 class PropertyValue(BaseModel):
@@ -119,18 +126,44 @@ _LOCK = threading.Lock()
 _CACHE: Dict[str, Any] = {}
 
 
-def _part_file() -> Path:
+def part_file_candidates() -> List[Path]:
+    """Where ``part_materials.yaml`` is looked for, in order: ``MOTRES_PART_MATERIALS``; the shared catalog root (like the
+    materials library); the repository's ``config/``; the image's ``config-seed/``; beside the process's config file."""
+    out: List[Path] = []
     env = os.environ.get("MOTRES_PART_MATERIALS", "").strip()
-    return Path(env) if env else _PART_FILE
+    if env:
+        return [Path(env)]
+    try:
+        from .workspace import shared_root
+        out.append(Path(str(shared_root())) / "part_materials.yaml")
+    except Exception:                                                  # noqa: BLE001
+        pass
+    out += [_PART_FILE, _SEED_FILE]
+    try:
+        from .config import DEFAULT_CONFIG_PATH
+        out.append(Path(str(DEFAULT_CONFIG_PATH)).parent / "part_materials.yaml")
+    except Exception:                                                  # noqa: BLE001
+        pass
+    return out
+
+
+def _part_file() -> Path:
+    cands = part_file_candidates()
+    for c in cands:
+        if c.is_file():
+            return c
+    raise PartMaterialsUnavailable("part_materials.yaml not found (looked in: " + "; ".join(str(c) for c in cands) + ")")
 
 
 def _part_doc() -> dict:
     p = _part_file()
-    key = f"{p}:{p.stat().st_mtime_ns if p.exists() else 0}"
+    key = f"{p}:{p.stat().st_mtime_ns}"
     with _LOCK:
         if _CACHE.get("key") != key:
-            doc = yaml.safe_load(p.read_text(encoding="utf-8")) if p.exists() else {}
-            _CACHE.update(key=key, doc=doc or {})
+            doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+            if not (doc.get("materials") and doc.get("mechanical_parts")):
+                raise PartMaterialsUnavailable(f"{p} has no materials / mechanical_parts section")
+            _CACHE.update(key=key, doc=doc)
         return _CACHE["doc"]
 
 
@@ -283,7 +316,7 @@ def choices() -> List[Dict[str, Any]]:
             except UnknownPartMaterial:
                 continue
             group = _GROUP_OF_CATEGORY.get(card.category, "other")
-            if group == "coolant":
+            if group == "coolant" or card.get("density_kg_m3") is None:
                 continue
             out.append({"id": mid, "name": card.name, "group": group, "origin": origin,
                         "density_kg_m3": card.get("density_kg_m3")})

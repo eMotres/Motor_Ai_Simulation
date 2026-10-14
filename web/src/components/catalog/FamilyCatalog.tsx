@@ -86,7 +86,7 @@ function subscribeFamilyCatalogRefresh(refresh: () => void): () => void {
 interface DutyResult {
   efficiency_pct?: number; ripple_pct?: number; v_ll_peak_v?: number;
   loss_w?: number; loss_mech_w?: number; loss_mech_derived?: boolean;
-  mass_kg?: number; mass_active_kg?: number; mass_partial?: boolean; recorded_at?: string;
+  mass_kg?: number; mass_active_kg?: number; mass_partial?: boolean; mass_partial_reason?: string; recorded_at?: string;
   p_core_w?: number; p_stranded_w?: number; p_solid_w?: number;
   v_phase_peak_v?: number; j_coil_a_mm2?: number;
   build_sig?: string;
@@ -1344,7 +1344,7 @@ const FamilyCatalog: React.FC<{
                               {r.loss_mech_w == null ? ' *' : ''}
                             </td>
                           </Tooltip>
-                          <td style={staleRes ? { color: '#fbbf24' } : undefined} title={r.mass_partial ? tx('massPartialTip') : tx('massFullTip', { active: fmt(r.mass_active_kg, 3) })}>{fmt(r.mass_kg, 2)}{r.mass_partial ? '*' : ''}</td>
+                          <td style={staleRes ? { color: '#fbbf24' } : undefined} title={r.mass_partial ? `${tx('massPartialTip')}${r.mass_partial_reason ? ` (${r.mass_partial_reason})` : ''}` : tx('massFullTip', { active: fmt(r.mass_active_kg, 3) })}>{fmt(r.mass_kg, 2)}{r.mass_partial ? '*' : ''}</td>
                           {/* KV instead of γ (user 2026-08-25) — rpm per volt
                               of the recorded LINE PEAK, the same max/max
                               convention as the Simulation tile; γ moved into

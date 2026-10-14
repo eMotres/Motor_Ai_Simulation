@@ -56,6 +56,12 @@ sources:
     doc: "Project winding-insulation class N (200 C), owner decision 2026-09-11 (single source report.PROJECT_INSULATION_C)"
 
 materials:
+  # -- a BOM row nobody has classified ----------------------------------------------
+  Unspecified_BOM_part:
+    name: "Part of the CAD bill of materials whose material is not identified"
+    category: other
+    notes: "No property is known. A CAD BOM row the part rules do not recognise is COUNTED in the full mass at the BOM's own mass (never silently dropped) and carries this card until somebody names its material; it cannot be picked in a material picker."
+    props: {}
   # -- fasteners ---------------------------------------------------------
   Stainless_A2_70:
     name: "Stainless steel A2-70 (18-8 / 304) fastener grade"

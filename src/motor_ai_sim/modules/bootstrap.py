@@ -59,5 +59,13 @@ def default_registry() -> ModuleRegistry:
     from .geometry_plugins import discover_geometry_plugins
     for plug in discover_geometry_plugins():
         reg.register(plug)
+    # Component SDK: drive-train components (transmission.<id>, load.<id>) dropped into
+    # modules/component_plugins/. Registered only if they pass their conformance gate;
+    # the rest are listed in reg.rejected - see docs/COMPONENT_SDK.md.
+    from .component_plugins import discover_component_plugins
+    accepted, rejected = discover_component_plugins()
+    for comp in accepted:
+        reg.register(comp)
+    reg.rejected.extend(rejected)
     reg.check_dependencies()
     return reg

@@ -42,6 +42,15 @@ matching its author.
    `npx tsc -p tsconfig.app.json --noEmit` and `npm run lint`.
 5. Open the pull request with a short description of *what* and *why*.
 
+## Contributing a module
+
+A propeller, gearbox or belt of your own, or a motor geometry: build it as a module
+and we check and connect it. Start with [docs/COMPONENT_SDK.md](docs/COMPONENT_SDK.md)
+(drive-train components) or [docs/PLUGIN_SDK.md](docs/PLUGIN_SDK.md) (geometry), and
+read [docs/MODULE_CONTRIBUTION_RULES.md](docs/MODULE_CONTRIBUTION_RULES.md): the status
+ladder, what a module pull request must contain, the rules for AI agents, and where
+community modules live (the separate `aerostator-modules` repository).
+
 ## Code style
 
 - Python >= 3.10, formatted with `black`, linted with `ruff`; type hints on new

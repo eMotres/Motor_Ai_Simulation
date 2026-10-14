@@ -1223,18 +1223,25 @@ def _exceed(value: float, limit: float, span: float) -> float:
 def solve_point(m: Mapping[str, Any], prop: pp.Propeller, rpm: float, *, ambient_c: float,
                 rho: float, lims: Mapping[str, Any], position: Optional[str] = None,
                 factor: Optional[float] = None, drive: Any = None,
-                pack: Optional[Mapping[str, Any]] = None) -> Dict[str, Any]:
+                pack: Optional[Mapping[str, Any]] = None,
+                load: Optional[Callable[..., Dict[str, Any]]] = None) -> Dict[str, Any]:
     """Everything at one propeller speed: load, current, losses, air, temperatures,
     margins and what (if anything) stops it.  ``drive`` = a ``resolve_drive`` dict
     or id (default sine), ``pack`` = a ``resolve_pack`` dict (default the passport's).
 
     ``violations`` lists every limit the converged point breaks, worst first
     (temperatures by their share of the limit's rise over ambient, currents by
-    their share of the limit); ``binding`` is the first of them."""
+    their share of the limit); ``binding`` is the first of them.
+
+    ``load`` (default None = the propeller, unchanged): a callable
+    ``load(rpm, rho, position, factor)`` returning the ``propeller.operating_point``
+    keys for the load seen at the MOTOR shaft - used by the drive-train system solve
+    (modules/drivetrain) to put a transmission between motor and propeller."""
     drv = drive if isinstance(drive, Mapping) else resolve_drive(m, drive)
     pk = pack if pack is not None else resolve_pack(m)
     position, factor, ss_src = model_slipstream(m, position, factor)
-    op = pp.operating_point(prop, rpm, rho, position=position, factor=factor)
+    op = (load(rpm, rho, position, factor) if load is not None
+          else pp.operating_point(prop, rpm, rho, position=position, factor=factor))
     if ss_src == "model":
         op = {**op, "slipstream_position": "calibrated"}
     w = 2.0 * math.pi * rpm / 60.0

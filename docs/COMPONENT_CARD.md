@@ -145,8 +145,8 @@ modulus here. The quasi-isotropic carbon laminate is derived from the library la
 
 | Component | Parts and masses | Status |
 |---|---|---|
-| Motor | the **app's own mass model** (`masses.compute_masses` on the passport's die and configuration, `modules/motor_mass.py`): stator core, rotor core, magnets, winding copper, shaft, retaining sleeve, each with the material the configuration assigns (a part it does not name takes the shipped default of `config/motor_config.yaml`, and the part says so). The card mass is the total the app shows in Configure and the datasheet. | `computed` |
-| Motor, beyond the app mass | holders, rings, bearings, screws, phase board, pins, propeller fixing plate - only where the server has built a CAD bill of materials (`<cad>/<die>/<config>/*_BOM.csv`); only part name, material and mass are read. Listed with `counted = false`. | `computed` / `assumed` |
+| Motor | the **FULL assembled mass** (owner 2026-10-14, "the full mass must now be used everywhere"): the app's active parts (`masses.compute_masses`: stator core, rotor core, magnets, winding copper with the end windings, sleeve) + the CAD bill of materials' real shaft or rotor carrier, holders, rings, bearings, screws, phase board, pins and the wire enamel, each with the material of the die's Full assignment (`modules/motor_mass.py` `full_mass`). A CAD mass is rescaled by the density ratio when the assigned material differs from the one the CAD used. The card mass, the catalog rows, the datasheet and report mass rows, Configure (mass and every per-kg figure), the assembly, the MCP/API outputs all show this number. | `computed` / `assumed` |
+| Motor, no CAD model yet | the **active mass** only, flagged `mass_partial` - "partial mass (no CAD model yet)" - in the card basis, the library flags, the tree (`mass.partial`, `result.mass_partial`), the datasheet and report lines, Configure's tile and the catalog row. The two masses are never mixed. | `computed` |
 | Propeller | catalogue `mass_g`, or single-blade mass x blades; the material from the catalogue's `material` text (`glass fiber nylon` -> `PA66_GF30`, `CF+Epoxy` -> `CFRP_QI_T800_epoxy`, `polymer + carbon fiber` -> `PA66_CF30`), the grade or layup **assumed**; no statement -> a default by vendor/series, flagged in the basis. No catalogue mass -> no mass and no parts. | `assumed` |
 | Gearbox, battery, controller, frame | documented splits of the placeholder total (housing / gears / bearings; cells / wiring / case; board / copper / heat spreader; plates / standoffs / screws) | `placeholder` |
 
@@ -159,10 +159,21 @@ default materials in `config/part_materials.yaml` `mechanical_parts`); a motor w
 configuration names (its bearings card), never an invented part. A choice is saved **per die** (`die.yaml` `part_materials`, the
 block the electromagnetic solver never reads) through `PUT /api/family/die/{die}/part_materials` (same permission rule as every
 catalog write; `GET` lists the rows and the choices). The CAD volume is fixed, so a part given another material changes its mass
-by the density ratio. The motor card's `parts` and mass breakdown use this Full assignment (the card mass is still the app's
-active mass; the non-active parts stay `counted = false`). Test: `tests/test_family_part_materials.py` (route, persistence,
+by the density ratio. The motor card's `parts` and mass breakdown use this Full assignment: the card mass is the FULL mass and every
+CAD part is counted in it (see "Full mass versus active mass" below). Test: `tests/test_family_part_materials.py` (route, persistence,
 and the isolation test that a non-active choice changes no electromagnetic input: geometry, its signature, the CAD parameter
 fingerprint, the active assignment, the active masses, the configuration file).
+
+**Full mass versus active mass.** The ACTIVE mass (`app_motor_mass().total_kg`: iron, copper, magnets, shaft tube, sleeve) is what the
+electromagnetic simulation, the passport, the sweep and the optimizer use, and nothing there changes (a test compares
+`compute_masses` bit for bit with and without the full mass and asserts that no solver, optimizer or simulation module imports it).
+It stays a separate, labelled row: "Active mass (EM parts)" in the datasheet, the report table and cover, Configure ("Active mass"
+tile), the tree (`result.mass_active_kg`, `mass.active_kg`) and the MCP output (`mass_active_kg`). The Simulation tab's own
+tiles and the Compare tab's saved-simulation rows (a geometry variant has no CAD model) are labelled "Active mass".
+**Rotating mass** (mechanics: bearing load, spin-up energy): the rotating parts of the full list (`ROTATING_KEYS`: rotor core,
+magnets, shaft or rotor carrier, sleeve, glass-fibre rings, propeller plate); the datasheet and the report use it for the
+bearing load when a CAD model exists. `masses.rotor_inertia_kg_m2` keeps its meaning (the active rotor about the shaft axis, from the
+CAD polygons); the BOM has no polar moments, so the rotating mass is a mass, not an inertia.
 
 A die that is not in the catalog (a private die on a public checkout) gives a motor card **without mass and parts** and the
 library flag `mass_unknown`; the mass is never a duty-record number and never a placeholder.

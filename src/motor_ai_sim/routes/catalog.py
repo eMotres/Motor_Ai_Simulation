@@ -329,6 +329,30 @@ def _l0_mm(card: dict) -> Optional[float]:
         return None
 
 
+def _with_full_mass(outer: dict, card: Optional[dict]) -> dict:
+    """THE MOTOR MASS IS THE FULL ASSEMBLED MASS (owner 2026-10-14).  The passport's ``mass0_kg`` is the ACTIVE mass of its
+    base solve (it scales with the stack length); Configure adds ``mass_fixed_kg`` - the parts that do not scale with the
+    stack (shaft difference, holders, rings, bearings, screws, board, pins, enamel; the CAD bill of materials) - to show
+    the full motor mass and every per-kg figure.  No CAD model yet: ``mass_partial = true`` and nothing is added, so
+    Configure shows the active mass and says so.  A copy; the cached card is never mutated."""
+    inner = outer.get("passport") if isinstance(outer, dict) else None
+    if not isinstance(inner, dict):
+        return outer
+    summ = None
+    if card and card.get("die") and card.get("config"):
+        try:
+            from motor_ai_sim.modules import motor_mass as _mm
+            summ = _mm.mass_summary(str(card["die"]), str(card["config"]))
+        except Exception:                                  # noqa: BLE001 - never fail the references for a mass
+            summ = None
+    if summ is None or summ["partial"]:
+        extra = {"mass_partial": True}
+    else:
+        extra = {"mass_partial": False, "mass_fixed_kg": round(summ["full_kg"] - summ["active_kg"], 5),
+                 "mass_active_base_kg": round(summ["active_kg"], 5), "mass_rotating_kg": round(summ["rotating_kg"], 5)}
+    return {**outer, "passport": {**inner, **extra}}
+
+
 @router.get("/references")
 def get_references(authorization: Optional[str] = Header(default=None)):
     """Configure's reference motors — ONLY the cards that carry a passport, and
@@ -361,6 +385,8 @@ def get_references(authorization: Optional[str] = Header(default=None)):
             # the FULL passport card behind this machine ({die, config, date}) or None
             "card": _ps.card_of(m.get("name"), _l0_mm(m)),
             "passport": m["passport"]} for m in cards]        # new dicts: the cache is never mutated
+    for o in out:
+        o["passport"] = _with_full_mass(o["passport"], o.get("card"))
     _ps.attach(out)
     return {"motors": out}
 

@@ -71,14 +71,16 @@ def _rows(h, cfg=CFG):
 
 def test_full_list_is_the_active_parts_plus_every_cad_part_with_defaults(accounts):
     out = _rows(accounts["admin"])
-    assert out["available"] and out["source"] == "app+cad_bom"
+    assert out["available"] and out["source"] == "cad_bom" and out["partial"] is False
     by = {p["key"]: p for p in out["parts"]}
     active = [p for p in out["parts"] if p["em"]]
     assert {"stator_core", "rotor_core", "magnet", "slot", "shaft"} <= set(by)
-    assert all(p["em"] and p["counted"] for p in active if p["mass_kg"])        # the app mass
+    # the stand-in die has a steel-free aluminium shaft tube: the CAD's real shaft replaces it in the full mass
+    assert all(p["em"] and p["counted"] for p in active if p["mass_kg"] and p["key"] != "shaft")
+    assert by["shaft"]["counted"] and by["wire_insulation"]["counted"] and by["wire_insulation"]["mass_kg"] > 0
     for k in ("holder_front", "holder_back", "rings", "prop_fix", "bearings", "screws", "board", "pins"):
         p = by[k]
-        assert p["em"] is False and p["counted"] is False and p["mass_kg"] > 0 and not p["user_set"], k
+        assert p["em"] is False and p["counted"] is True and p["mass_kg"] > 0 and not p["user_set"], k
         assert p["material_id"] == p["default_material_id"]
     assert by["holder_front"]["material_id"] == "Aluminium_6061" and by["screws"]["material_id"] == "Stainless_A2_70"
     assert by["board"]["material_id"] == "FR4_glass_epoxy" and by["bearings"]["material_id"] == "Bearing_steel_100Cr6"
@@ -98,7 +100,7 @@ def test_put_saves_per_die_and_rescales_the_mass_by_density(accounts, catalog):
     assert after["holder_front"]["material_id"] == "Aluminium_7075" and after["holder_front"]["user_set"]
     assert after["holder_front"]["default_material_id"] == "Aluminium_6061"
     assert after["holder_front"]["mass_kg"] == pytest.approx(before["holder_front"]["mass_kg"] * 2810 / 2700, rel=1e-9)
-    assert "scaled by density" in after["holder_front"]["basis"]
+    assert "mass scaled" in after["holder_front"]["basis"]
     assert after["holder_back"]["material_id"] == "Aluminium_6061"                 # the others are untouched
     # the choice is the die's: another configuration of the die sees it too
     assert {p["key"]: p for p in _rows(h, "L20")["parts"]}["holder_front"]["material_id"] == "Aluminium_7075"
@@ -168,28 +170,31 @@ def test_the_component_card_uses_the_full_assignment(accounts):
     from motor_ai_sim.modules.component_adapters import motor_card
     h = accounts["admin"]
     model = s1.load_model(DIE, CFG)
-    base = {p.name: p for p in motor_card(model).parts}
+    base_card = motor_card(model)
+    base = {p.name: p for p in base_card.parts}
+    base_total = base_card.mass_properties.mass_kg
     assert base["Stator holder, front"].material_id == "Aluminium_6061"
     assert client.put(URL, json={"part": "holder_front", "material": "Aluminium_7075"}, headers=h).status_code == 200
     card = motor_card(model)
     assert_component_card(card)
     got = {p.name: p for p in card.parts}
-    assert got["Stator holder, front"].material_id == "Aluminium_7075" and not got["Stator holder, front"].counted
+    assert got["Stator holder, front"].material_id == "Aluminium_7075" and got["Stator holder, front"].counted
     assert got["Stator holder, front"].mass_kg == pytest.approx(base["Stator holder, front"].mass_kg * 2810 / 2700)
-    # the card's own mass is still the app's active mass, whatever the non-active choices
-    assert card.mass_properties.mass_kg == pytest.approx(motor_card(model).mass_properties.mass_kg)
+    # the card mass is the FULL mass: it follows the non-active choice by exactly the density ratio of that part
+    assert card.mass_properties.mass_kg == pytest.approx(
+        base_total + base["Stator holder, front"].mass_kg * (2810 / 2700 - 1))
 
 
 def test_a_motor_without_a_bom_lists_only_what_its_configuration_names(accounts, catalog, monkeypatch):
     monkeypatch.setenv("MOTRES_CAD_DIR", str(catalog.parent / "empty"))
     cfg = yaml.safe_load((catalog / DIE / "L12.yaml").read_text("utf-8"))
     out = _rows(accounts["admin"])
-    assert out["source"] == "app" and not [p for p in out["parts"] if not p["em"]]       # nothing invented
+    assert out["source"] == "active_only" and out["partial"] and not [p for p in out["parts"] if not p["em"]]       # nothing invented
     cfg["bearings"] = {"A": {"card": "618/8-2Z"}, "B": {"card": "618/8-2Z"}}
     (catalog / DIE / "L12.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
     out = _rows(accounts["admin"])
     extra = [p for p in out["parts"] if not p["em"]]
-    assert out["source"] == "app+config" and [p["key"] for p in extra] == ["bearings"] and extra[0]["mass_kg"] is None
+    assert out["source"] == "active_only+config" and [p["key"] for p in extra] == ["bearings"] and extra[0]["mass_kg"] is None
 
 
 def test_a_die_that_is_not_there_is_reported_not_invented(accounts):

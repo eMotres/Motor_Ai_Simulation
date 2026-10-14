@@ -565,6 +565,11 @@ def _rotating_mass_kg(summary: Dict[str, Any]) -> float:
     it still spins and still loads the bearings, so its modelled mass is used —
     the same rule ``datasheet._rotating_mass_kg`` follows.
     """
+    # THE FULL MASS (owner 2026-10-14): when the document carries the CAD bill of materials, the rotating mass is the
+    # rotating parts of that list (rotor, magnets, shaft or rotor carrier, rings ...), set by `_inject_full_mass`.
+    _rm = _numf(_g(summary, "rotating_mass_kg"))
+    if _rm:
+        return float(_rm)
     tot = 0.0
     for c in (_g(summary, "mass_components") or []):
         if not isinstance(c, dict):
@@ -7474,6 +7479,56 @@ def em_source_note(kind: Any, duty: Any = None) -> str:
     return ""
 
 
+def _inject_full_mass(em: Dict[str, Any], die: str, cfg: str) -> None:
+    """THE MOTOR MASS IS THE FULL ASSEMBLED MASS (owner 2026-10-14, "the full mass must now be used everywhere").
+
+    Done on the one ``em`` every table, total, per-mass figure and pie of the document reads, so the report can never
+    carry two motor masses: ``mass_total_kg`` becomes the full mass (active parts + the CAD bill of materials' shaft or
+    carrier, holders, rings, bearings, screws, board, pins, enamel; ``modules.motor_mass.full_mass``), the mass rows
+    become the full part list, and the run's own active mass is kept as ``mass_active_total_kg`` (the table prints it as
+    "Active mass (electromagnetic parts only)").  ``rotating_mass_kg`` is the rotating parts of that list.  A motor with
+    no built CAD model keeps the active mass and carries ``mass_partial`` - "partial mass (no CAD model yet)" - on the
+    cover and in the table, never mixed.  Nothing electromagnetic is touched: the stored losses, torque and the
+    optimizer's mass are the run's own."""
+    if not em or not isinstance(em, dict) or not die or not cfg:
+        return
+    try:
+        from motor_ai_sim.modules import motor_mass as _mm
+        fm = _mm.full_mass(die, cfg)
+    except Exception:                                                  # noqa: BLE001 - a mass hiccup never fails a report
+        em["mass_partial"] = True
+        return
+    em["mass_partial"] = bool(fm.partial)
+    if fm.partial:
+        return
+    try:
+        from motor_ai_sim import part_materials as _pm
+    except Exception:                                                  # noqa: BLE001
+        _pm = None
+    rows = []
+    for p in fm.parts:
+        if not p.counted or not p.mass_kg:
+            continue
+        rho = None
+        cat = p.role
+        if _pm is not None:
+            try:
+                card = _pm.resolve(p.material_id)
+                rho, cat = card.get("density_kg_m3"), card.category
+            except Exception:                                          # noqa: BLE001
+                pass
+        rows.append({"name": f"{p.name} ({p.material_id})", "material": cat, "density_kg_m3": rho,
+                     "volume_cm3": round(p.mass_kg / rho * 1e6, 2) if rho else None, "mass_kg": round(p.mass_kg, 4),
+                     "note": p.basis})
+    if not rows:
+        return
+    em["mass_active_total_kg"] = em.get("mass_total_kg")
+    em["mass_total_kg"] = fm.total_kg
+    em["mass_full_kg"] = fm.total_kg
+    em["mass_components"] = rows
+    em["rotating_mass_kg"] = fm.rotating_kg
+
+
 def duty_em_source(die: str, cfg: str, duty: Optional[str],
                    cfg_doc: Optional[Dict[str, Any]] = None,
                    d: Optional[Dict[str, Any]] = None,
@@ -7562,6 +7617,7 @@ def duty_em_source(die: str, cfg: str, duty: Optional[str],
         if _mats:
             out["em"]["mass_components"] = mass_components_live(out["em"],
                                                                 _mats)
+    _inject_full_mass(out["em"], die, cfg)
     out["words"] = EM_SOURCE_WORDS[out["kind"]]
     out["fp"] = _any_fp(out["em"])
     _r = d.get("result") if isinstance(d.get("result"), dict) else {}
@@ -9580,8 +9636,15 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
         [eta_row[0], _fmt(eta_row[1], 2, "%"), eta_row[2]],
         # ITEM 7 (owner review 2026-09-19): built from this run's own parts,
         # never a hardcoded list — see `mass_composition_words`.
-        ["Mass", _fmt(m_tot, 3, "kg"), mass_composition_words(em)],
+        ["Mass" + (" (partial)" if _g(em, "mass_partial") else ""), _fmt(m_tot, 3, "kg"),
+         (("partial mass (no CAD model yet): the active parts only - " if _g(em, "mass_partial") else
+           "full assembled motor - ") + mass_composition_words(em))],
     ]
+    _mat_ = _numf(_g(em, "mass_active_total_kg"))
+    if _mat_ and m_tot and abs(float(_mat_) - float(m_tot)) > MASS_SUM_TOL_KG:
+        headline.append(["Active mass (EM parts)", _fmt(_mat_, 3, "kg"),
+                         "iron, copper, magnets and shaft over the active length - what the electromagnetic model and "
+                         "the optimizer use"])
     # WHAT FEEDS IT (2026-09-14).  Every number above belongs to a supply, and
     # until tonight the document only said so in section 5.  A duty whose
     # coupled answer was reached on the inverter is a PWM machine on every page,
@@ -10317,7 +10380,9 @@ def mass_rows(em: Dict[str, Any],
         # …AND THE ACTIVE (electromagnetic-only) MASS, on the rare machine
         # where it differs from the TOTAL above — most configurations carry
         # one mass and this row does not print.
-        _act = _numf(_g(em, "mass_active_kg"))
+        if _g(em, "mass_partial"):
+            rows.append(["Partial mass (no CAD model yet)", "", "", "", ""])
+        _act = _numf(_g(em, "mass_active_total_kg")) or _numf(_g(em, "mass_active_kg"))
         if (_act is not None and _mtt is not None
                 and abs(_act - _mtt) > MASS_SUM_TOL_KG):
             rows.append(["Active mass (electromagnetic parts only)", "", "",

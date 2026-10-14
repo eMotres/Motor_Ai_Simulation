@@ -177,7 +177,10 @@ const RESULT_COLS: ResultCol[] = [
     derive: r => Number(r.T_em_avg_Nm) * 2 * Math.PI * Number(r.rpm) / 60 / Number(r.mass_total_kg) },
   // Mass (total = EM-active + shaft) is what TD/PD above divide by; EM-active
   // drops the shaft and is the basis a commercial FEM active-mass expression quotes.
-  { key: 'mass_total_kg',        label: 'Mass',        unit: 'kg',     d: 3, better: 'lo' },
+  // THE motor mass is the FULL assembled mass everywhere a motor is shown (owner 2026-10-14); a saved-simulation row is
+  // a geometry VARIANT with no CAD model, so its mass is the ACTIVE mass (EM parts + shaft tube) - labelled as such, with
+  // TD / PD dividing by it ("partial mass (no CAD model yet)"), never silently mixed with a full mass.
+  { key: 'mass_total_kg',        label: 'Active mass', unit: 'kg',     d: 3, better: 'lo' },
   { key: 'mass_active_kg',       label: 'EM-active',   unit: 'kg',     d: 3, better: 'lo' },
   { key: 'P_loss_total_W',       label: 'Loss total',  unit: 'W',      d: 1, better: 'lo' },
   { key: 'KV_rpm_per_V_line',    label: 'KV (line)',   unit: 'rpm/V',  d: 1 },

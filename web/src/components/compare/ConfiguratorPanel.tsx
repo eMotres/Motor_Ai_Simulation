@@ -2100,7 +2100,13 @@ const ConfiguratorPanel: React.FC = () => {
               tip={KT_BASIS_TIP(result.kt_km_basis)} />
             <MetricTile label={tx('configure.power')} value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi
               absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} />
-            <MetricTile label={tx('configure.mass')} value={result.mass_kg} unit="kg" d={2} base={baseRes.mass_kg} goodHi={false} />
+            <MetricTile label={tx(result.mass_partial ? 'configure.massPartial' : 'configure.mass')} value={result.mass_kg} unit="kg" d={2}
+              base={baseRes.mass_kg} goodHi={false}
+              tip={tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')} />
+            {!result.mass_partial && (
+              <MetricTile label={tx('configure.massActive')} value={result.mass_active_kg} unit="kg" d={2}
+                base={baseRes.mass_active_kg} goodHi={false} tip={tx('configure.massActiveTip')} />
+            )}
             <MetricTile label={tx('configure.efficiency')} value={sysEff.value} unit="%" d={1} base={baseSysEff} goodHi
               absLevel={propBad ? 'bad' : undefined}
               tip={`${tx('configure.efficiencyTip')}${propBad && propLine ? ` ${propLine.text}` : ''}`}

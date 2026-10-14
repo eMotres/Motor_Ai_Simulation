@@ -135,23 +135,23 @@ def motor_card_from_s1_model(m: Mapping[str, Any], *, mass_kg: Optional[float] =
 
 def motor_card(m: Mapping[str, Any], *, dies_dir: Optional[Any] = None, cad_dir: Optional[Any] = None,
                component_id: Optional[str] = None, name: str = "") -> ComponentCard:
-    """The motor card with the APP's mass (``masses.compute_masses`` of the passport's die/configuration), the
-    per-part material + mass breakdown, and - where the server has built a CAD bill of materials - the parts the app
-    mass does not hold (holders, rings, bearings, screws, board), listed as NOT counted in the card mass.
+    """The motor card with the FULL assembled mass (owner 2026-10-14: "the full mass must be used everywhere"): the app's
+    active parts + the CAD bill of materials' shaft or rotor carrier, holders, rings, bearings, screws, phase board, pins
+    and wire enamel, each with the material of the die's Full assignment (``modules.motor_mass.full_mass``).  A motor with
+    no built CAD BOM carries the active mass and says so ("partial mass (no CAD model yet)"); the two are never mixed.
     Raises ``MotorMassError`` when the die is not available: the mass is then unknown, never a placeholder."""
-    from .motor_mass import APP_MASS_BASIS, app_motor_mass, bom_extra_parts, die_part_choices, find_die_dir
+    from .motor_mass import PARTIAL_LABEL, full_mass
     die, cfg = str(m.get("die") or ""), str(m.get("config") or "")
-    mm = app_motor_mass(die, cfg, dies_dir=dies_dir)
-    # the FULL assignment: the active parts above, plus the die's own material choice for every other part
-    choices = die_part_choices(find_die_dir(die, dies_dir))
+    fm = full_mass(die, cfg, dies_dir=dies_dir, cad_dir=cad_dir)
     parts = [ComponentPart(name=p.name, material_id=p.material_id, mass_kg=p.mass_kg, role=p.role, status=p.status,
-                           counted=p.counted, basis=p.basis) for p in mm.parts]
-    parts += [ComponentPart(name=p.name, material_id=p.material_id, mass_kg=p.mass_kg, role=p.role, status=p.status,
-                            counted=False, basis=p.basis) for p in bom_extra_parts(die, cfg, cad_dir=cad_dir, choices=choices)]
+                           counted=p.counted, basis=p.basis) for p in fm.parts if p.mass_kg]
     counted = sum(p.mass_kg for p in parts if p.counted)
-    if abs(counted - mm.total_kg) > 1e-9 + 1e-6 * mm.total_kg:
-        raise ValueError(f"motor parts ({counted:.6g} kg) and the app mass ({mm.total_kg:.6g} kg) disagree")
-    return motor_card_from_s1_model(m, mass_kg=mm.total_kg, mass_basis=APP_MASS_BASIS, component_id=component_id,
+    if abs(counted - fm.total_kg) > 1e-9 + 1e-6 * fm.total_kg:
+        raise ValueError(f"motor parts ({counted:.6g} kg) and the full mass ({fm.total_kg:.6g} kg) disagree")
+    basis = fm.basis + f" Active mass (EM parts, used by the simulation and the optimizer): {fm.active_kg * 1000:.1f} g."
+    if fm.partial:
+        basis = PARTIAL_LABEL.upper() + ". " + basis
+    return motor_card_from_s1_model(m, mass_kg=fm.total_kg, mass_basis=basis, component_id=component_id,
                                     name=name, parts=parts)
 
 

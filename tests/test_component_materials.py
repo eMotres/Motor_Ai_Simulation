@@ -216,26 +216,28 @@ def test_cad_only_clearances_are_not_in_the_motor_mass(tmp_path):
 
 # -- the CAD bill of materials extras -----------------------------------------------------------------
 
-def test_bom_extras_are_listed_but_not_counted(tmp_path):
+def test_bom_parts_are_counted_in_the_full_motor_mass(tmp_path):
     from motor_ai_sim.cad import bom
     from tests.test_cad_bom import make
     b, _ = make("L12")
     out = tmp_path / "CIANO14 40 new" / "L12"
     out.mkdir(parents=True)
     bom.write_csv(b, str(out / "CIANO14_40_new_L12_BOM.csv"))
-    extra = MM.bom_extra_parts("CIANO14 40 new", "L12", cad_dir=tmp_path)
-    names = {p.name for p in extra}
-    assert {"Bearings", "Screws", "Glass-fibre rings", "Phase board"} <= names
-    assert not any("lamination" in n.lower() or n == "Shaft" for n in names)       # the app mass covers those
-    assert all(not p.counted and pm.exists(p.material_id) for p in extra)
     card = A.motor_card(s1.load_model("CIANO14 40 new", "L12"), cad_dir=tmp_path)
     assert_component_card(card)
-    unc = [p for p in card.parts if not p.counted]
-    assert {p.name for p in unc} == names
-    counted = sum(p.mass_kg for p in card.parts if p.counted)
-    assert counted == pytest.approx(card.mass_properties.mass_kg)                  # the card mass is still the app's
+    names = {p.name for p in card.parts}
+    assert {"Bearings", "Screws", "Glass-fibre rings", "Phase board", "Wire enamel", "Shaft"} <= names
+    assert all(p.counted and pm.exists(p.material_id) for p in card.parts)
+    # the card mass IS the sum of its parts, and it is larger than the app's active mass
+    mm = MM.app_motor_mass("CIANO14 40 new", "L12")
+    assert sum(p.mass_kg for p in card.parts) == pytest.approx(card.mass_properties.mass_kg)
+    assert card.mass_properties.mass_kg > mm.total_kg * 1.15
+    assert "FULL assembled motor" in card.mass_properties.basis and "PARTIAL" not in card.mass_properties.basis
     assert "CNY" not in str([p.model_dump() for p in card.parts])                 # no price column is ever read
-    assert MM.bom_extra_parts("CIANO14 40 new", "L12", cad_dir=tmp_path / "empty") == []
+    # without a built BOM the card is the active mass and says PARTIAL (never mixed)
+    part = A.motor_card(s1.load_model("CIANO14 40 new", "L12"), cad_dir=tmp_path / "empty")
+    assert part.mass_properties.mass_kg == pytest.approx(mm.total_kg)
+    assert part.mass_properties.basis.startswith("PARTIAL MASS (NO CAD MODEL YET)")
 
 
 # -- propellers ------------------------------------------------------------------------------------------------
@@ -309,3 +311,41 @@ def test_material_routes(accounts):
     assert client.get("/api/components/materials").status_code == 401
     card = client.get("/api/components/motor_ciano14_40_new_l12", headers=accounts["admin"]).json()["card"]
     assert card["parts"] and ComponentCard.model_validate(card).parts[0].material_id
+
+
+def test_coil_copper_is_pure_copper_with_its_sources():
+    """Owner 2026-10-14: "the copper in the coils is pure 0.999".  The card the solver and the masses use for the coils
+    (``slot`` -> library ``copper``) is pure copper: IEC 60028 resistivity 1/58 Ohm mm2/m, alpha 0.00393 1/K."""
+    import yaml as _y
+    from motor_ai_sim import materials as mat
+    c = mat.get_material("conductor", "copper")
+    assert "Pure copper" in c.description
+    assert 1.0 / c.sigma == pytest.approx(1.72e-8, rel=0.005)             # 1.724e-8 at 20 C (annealed copper standard)
+    assert c.thermal_alpha == 0.00393
+    assert c.density == pytest.approx(8940, rel=0.01)                      # 8890 here (CDA C11000): within 0.6 % of 8.94 g/cm3
+    card = pm.resolve("copper")
+    assert {"iec60028", "cda_c11000"} <= set(card.sources)
+    # every shipped default and every tracked configuration weighs and solves its coils with that card
+    base = _y.safe_load((REPO / "config" / "motor_config.yaml").read_text(encoding="utf-8"))
+    assert base["materials"]["slot"] == "copper"
+    for f in (REPO / "config" / "dies").glob("*/L*.yaml"):
+        assert (_y.safe_load(f.read_text(encoding="utf-8")).get("materials") or {}).get("slot", "copper") == "copper", f
+
+
+def test_owner_aluminium_rule_in_the_full_assignment_defaults():
+    """Owner 2026-10-14: every wall, holder, housing, plate and every shaft is aluminium 6061-T6 (the Ø30 / Ø40 shafts are
+    stainless 316, provisional, not assigned yet); no 7075 unless a part is explicitly different."""
+    defs = pm.mechanical_parts()
+    structural = {k: d for k, d in defs.items() if d["role"] == "structural"}
+    for k in ("holder", "holder_front", "holder_back", "carrier_front", "carrier_rear", "prop_fix"):
+        assert defs[k]["material"] == "Aluminium_6061", k
+    assert not any(d["material"] == "Aluminium_7075" for d in defs.values())
+    assert {d["material"] for k, d in structural.items() if k not in ("rings", "bearings")} == {"Aluminium_6061"}
+    # the provisional stainless shaft card (AISI 316) is the solver library's card, with sources, and NOTHING is assigned to it
+    ss = pm.resolve("Stainless_316")
+    assert ss.origin == "materials_library" and ss.get("density_kg_m3") == 8000 and ss.get("yield_MPa") == 205
+    assert ss.get("ultimate_MPa") == 515 and ss.props["yield_MPa"].source == "astm_a240_316" and ss.props["yield_MPa"].verify
+    assert not any(d["material"] == "Stainless_316" for d in defs.values())
+    import yaml as _y
+    for f in list((REPO / "config" / "dies").glob("*/*.yaml")) + [REPO / "config" / "motor_config.yaml"]:
+        assert "Stainless_316" not in f.read_text(encoding="utf-8").replace("Stainless_316L", ""), f   # not assigned anywhere

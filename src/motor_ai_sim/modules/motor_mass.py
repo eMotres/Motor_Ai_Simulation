@@ -173,11 +173,50 @@ def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
 
 
 # ---------------------------------------------------------------------------
-# parts that exist only in the CAD bill of materials
+# the CAD bill of materials and the FULL motor mass
 # ---------------------------------------------------------------------------
+#
+# OWNER DECISION 2026-10-14 ("the FULL mass must now be used everywhere"): the motor mass shown or used anywhere is the
+# FULL assembled mass - the app's active parts (stator iron, rotor iron, magnets, winding copper, sleeve) + the real shaft
+# (or rotor carrier) + holders, rings, bearings, screws, phase board, pins + the wire enamel - with the CAD BOM's masses
+# and the die's own Full material assignment.  The ACTIVE mass (``app_motor_mass().total_kg``: what the electromagnetic
+# simulation, the optimizer and the passport use) stays a separate, labelled number.  A motor with no built CAD BOM has
+# only the active mass, and says so: ``partial = True`` ("partial mass (no CAD model yet)") - the two are never mixed.
+#
+# Rotating mass (mechanics: bearing load, spin-up energy, critical speeds): the rotating parts of the full list
+# (``ROTATING_KEYS``).  ``masses.rotor_inertia_kg_m2`` keeps its meaning - the ACTIVE rotor (rotor iron + magnets + the
+# simulation shaft tube + sleeve) about the shaft axis, from the CAD polygons; the BOM carries no polar moments, so the
+# rotating mass below is a mass, not an inertia.
 
-#: BOM lines the app mass already covers (never listed twice)
-_BOM_COVERED = re.compile(r"^(stator lamination|rotor lamination|permanent magnet|coil|enamelled|shaft|rotor sleeve)", re.I)
+#: parts of the full list that turn with the rotor (rotor iron, magnets, shaft or rotor carrier, sleeve, glass-fibre rings,
+#: the propeller fixing plate).  Bearings are not listed: half of each turns, and the app has no split.
+ROTATING_KEYS = ("rotor_core", "magnet", "shaft", "sleeve", "carrier_front", "carrier_rear", "rings", "prop_fix")
+
+PARTIAL_LABEL = "partial mass (no CAD model yet)"
+
+FULL_MASS_BASIS = ("the FULL assembled motor: the app's active parts (masses.compute_masses: stator iron, rotor iron, "
+                   "magnets, winding copper, sleeve) + the CAD bill of materials' shaft or rotor carrier, holders, rings, "
+                   "bearings, screws, phase board, pins and wire enamel, each with the material of the die's Full "
+                   "assignment (a CAD mass is scaled by the density ratio when the material differs from the CAD's). "
+                   "Magnets are the nominal magnet (CAD-only assembly clearances are air).")
+
+_BOM_NUM = re.compile(r"density\s+(\d+(?:\.\d+)?)")
+_BOM_COIL = re.compile(r"copper\s+(\d+(?:\.\d+)?)\s*g.*?enamel\s+(\d+(?:\.\d+)?)\s*g", re.I | re.S)
+
+
+@dataclass
+class BomLine:
+    item: str
+    part: str
+    material: str
+    grams: float
+    notes: str
+
+    @property
+    def density(self) -> Optional[float]:
+        """The density the CAD mass was computed with (the BOM states it in its notes), kg/m3."""
+        m = _BOM_NUM.search(self.notes or "")
+        return float(m.group(1)) if m else None
 
 
 def _cad_dirs() -> List[Path]:
@@ -191,6 +230,37 @@ def _cad_dirs() -> List[Path]:
         out.append(Path(str(shared_root())) / "cad")
     except Exception:                                                      # noqa: BLE001
         pass
+    return out
+
+
+def find_bom_file(die: str, config: str, cad_dir: Optional[os.PathLike] = None) -> Optional[Path]:
+    """``<cad>/<die>/<config>/*_BOM.csv`` written by the CAD build, or ``None`` (no CAD model built yet)."""
+    for root in ([Path(cad_dir)] if cad_dir is not None else _cad_dirs()):
+        d = root / die / config
+        files = sorted(d.glob("*_BOM.csv")) if d.is_dir() else []
+        if files:
+            return files[0]
+    return None
+
+
+def read_bom(path: os.PathLike) -> List[BomLine]:
+    """The lines of a BOM file that carry a mass (item number, part, material, total mass g, notes).  Prices and
+    suppliers are never read."""
+    out: List[BomLine] = []
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        for row in csv.DictReader(fh):
+            item = (row.get("item") or "").strip()
+            part = (row.get("part") or "").strip()
+            mass_g = (row.get("total mass g") or "").strip()
+            if not item.isdigit() or not part or not mass_g:
+                continue
+            try:
+                grams = float(mass_g)
+            except ValueError:
+                continue
+            if grams > 0:
+                out.append(BomLine(item, part, (row.get("material / grade") or "").strip(), grams,
+                                   (row.get("notes") or "").strip()))
     return out
 
 
@@ -208,20 +278,6 @@ def die_part_choices(die_dir: Optional[os.PathLike]) -> Dict[str, str]:
     return {str(k): str(v) for k, v in pm.items() if v} if isinstance(pm, dict) else {}
 
 
-def bom_extra_parts(die: str, config: str, *, cad_dir: Optional[os.PathLike] = None,
-                    choices: Optional[Dict[str, str]] = None) -> List[MotorPart]:
-    """Parts of the CAD BOM that the app mass does not contain, ``counted=False``.  Empty when the server has built
-    no BOM for this die/configuration.  Only the part name, material and total mass are read from the file.
-    ``choices`` = the die's own material choices (``die_part_choices``)."""
-    roots = [Path(cad_dir)] if cad_dir is not None else _cad_dirs()
-    for root in roots:
-        d = root / die / config
-        files = sorted(d.glob("*_BOM.csv")) if d.is_dir() else []
-        if files:
-            return parts_from_bom_csv(files[0], choices=choices)
-    return []
-
-
 def _density(material_id: str) -> Optional[float]:
     from motor_ai_sim import part_materials as pm
     try:
@@ -230,45 +286,174 @@ def _density(material_id: str) -> Optional[float]:
         return None
 
 
-def parts_from_bom_csv(path: os.PathLike, *, choices: Optional[Dict[str, str]] = None) -> List[MotorPart]:
-    """The non-active parts of a BOM file.  A part's material is the die's choice when there is one (the BOM mass, a
-    CAD volume times the default density, is then scaled by the density ratio), else the documented default."""
+def _scaled(grams: float, bom_density: Optional[float], material: str, default: str) -> Tuple[float, str]:
+    """(kg, note): a CAD mass moved to ``material`` by the density ratio (the CAD volume is fixed).  The reference is the
+    density the BOM itself used (stated in its notes), else that of the documented default material."""
+    kg = grams / 1000.0
+    r0 = bom_density or _density(default)
+    r1 = _density(material)
+    if not (r0 and r1):
+        return kg, ("" if material == default else "; material chosen for this die (density unknown: CAD mass kept)")
+    if abs(r1 / r0 - 1.0) < 0.005:
+        return kg, ""
+    return kg * r1 / r0, f"; mass scaled from the CAD's density ({r0:.0f} kg/m3) to {material} ({r1:.0f} kg/m3)"
+
+
+def _classify(defs: Dict[str, Dict[str, Any]], part: str) -> Optional[str]:
+    """Key of a non-active part (``mechanical_parts``) by the BOM part name, else ``None``."""
+    for k, d in defs.items():
+        if re.search(d["match"], part, re.I):
+            return k
+    return None
+
+
+#: BOM lines the app mass already covers (the active parts) - their mass is the app's, never the BOM's
+_BOM_ACTIVE = re.compile(r"^(stator lamination|rotor lamination|permanent magnet|enamelled|rotor sleeve)", re.I)
+_BOM_COIL_LINE = re.compile(r"^coil", re.I)
+_BOM_SHAFT = re.compile(r"^shaft", re.I)
+
+
+@dataclass
+class FullMass:
+    die: str
+    config: str
+    total_kg: float                        # THE motor mass (partial = the active mass only)
+    active_kg: float                       # the app's active mass: what the EM simulation / optimizer use
+    rotating_kg: float
+    partial: bool
+    source: str                            # "cad_bom" | "active_only"
+    parts: List[MotorPart] = field(default_factory=list)
+    basis: str = ""
+    bom_file: Optional[str] = None
+
+
+_FULL_CACHE: Dict[Tuple, FullMass] = {}
+
+
+def full_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
+              cad_dir: Optional[os.PathLike] = None) -> FullMass:
+    """The FULL assembled motor mass of ``die`` / ``config`` (see the header).  Raises ``MotorMassError`` when the die
+    is not available.  Without a built CAD BOM the answer is the active mass with ``partial = True``."""
+    from dataclasses import replace
+    from motor_ai_sim import part_materials as pm
+    ddir = find_die_dir(die, dies_dir)
+    mm = app_motor_mass(die, config, dies_dir=dies_dir)
+    bom = find_bom_file(die, config, cad_dir)
+    choices = die_part_choices(ddir)
+    key = (str(ddir), config, (ddir / "die.yaml").stat().st_mtime_ns, (ddir / f"{config}.yaml").stat().st_mtime_ns,
+           str(bom), bom.stat().st_mtime_ns if bom else 0, mm.total_kg)
+    if key in _FULL_CACHE:
+        return _FULL_CACHE[key]
+    app = {p.key: p for p in mm.parts}
+    try:
+        cy = yaml.safe_load((ddir / f"{config}.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:                                                      # noqa: BLE001
+        cy = {}
+    em_mats = cy.get("materials") or {}
+    lines = read_bom(bom) if bom else []
+    parts: List[MotorPart] = []
+    if not lines:
+        parts = [replace(p, basis=(p.basis + "; " if p.basis else "") + PARTIAL_LABEL) for p in mm.parts]
+        out = FullMass(die, config, mm.total_kg, mm.total_kg, 0.0, True, "active_only", parts,
+                       APP_MASS_BASIS + " " + PARTIAL_LABEL + ": no CAD bill of materials has been built for this motor.")
+    else:
+        defs = pm.mechanical_parts()
+        keyed: Dict[str, BomLine] = {}
+        shaft_line = coil_line = None
+        for ln in lines:
+            if _BOM_ACTIVE.search(ln.part):
+                continue
+            if _BOM_COIL_LINE.search(ln.part):
+                coil_line = ln
+            elif _BOM_SHAFT.search(ln.part):
+                shaft_line = ln
+            else:
+                k = _classify(defs, ln.part)
+                if k and k not in keyed:
+                    keyed[k] = ln
+        has_carrier = "carrier_front" in keyed or "carrier_rear" in keyed
+        for k in ("stator_core", "rotor_core", "magnet", "slot", "sleeve"):
+            if k in app:
+                parts.append(app[k])
+        sh = app.get("shaft")
+        if has_carrier and sh is not None:
+            parts.append(replace(sh, counted=False, basis="simulation stand-in (hollow tube) of the rotor carrier below; "
+                                                          "not counted in the full mass"))
+        elif shaft_line is not None and sh is not None:
+            kg, note = _scaled(shaft_line.grams, shaft_line.density, sh.material_id, sh.material_id)
+            r1, r0 = _density(sh.material_id), shaft_line.density
+            if r0 and r1:
+                kg = shaft_line.grams / 1000.0 * r1 / r0
+                note = f"; mass scaled from the CAD's density ({r0:.0f} kg/m3) to {sh.material_id} ({r1:.0f} kg/m3)"
+            parts.append(MotorPart("Shaft", sh.material_id, kg, "structural", True, "computed",
+                                   "CAD bill of materials (the real stepped shaft), material of the EM shaft assignment" + note,
+                                   key="shaft"))
+        elif sh is not None:
+            parts.append(sh)
+        if coil_line is not None:
+            m = _BOM_COIL.search(coil_line.notes or "")
+            if m:
+                enamel_g = float(m.group(2))
+                parts.append(MotorPart("Wire enamel", str(em_mats.get("wire_insulation") or "polyimide"), enamel_g / 1000.0,
+                                       "insulation", True, "computed", "CAD bill of materials (coil enamel)",
+                                       key="wire_insulation"))
+        for k, ln in keyed.items():
+            d = defs[k]
+            default = str(d["material"])
+            mat = choices.get(k) or default
+            kg, note = _scaled(ln.grams, ln.density, mat, default)
+            parts.append(MotorPart(d["name"] if k != "holder" else ln.part.split(" (")[0], mat, kg, str(d["role"]), True,
+                                   str(d.get("status", "computed")),
+                                   "CAD bill of materials" + (f"; {d['note']}" if d.get("note") else "") + note,
+                                   key=k, em=False, default_material_id=default, user_set=k in choices))
+        total = sum(p.mass_kg for p in parts if p.counted and p.mass_kg)
+        rot = sum(p.mass_kg for p in parts if p.counted and p.mass_kg and p.key in ROTATING_KEYS)
+        out = FullMass(die, config, total, mm.total_kg, rot, False, "cad_bom", parts, FULL_MASS_BASIS, str(bom))
+    if out.partial:
+        out.rotating_kg = sum(p.mass_kg for p in out.parts if p.counted and p.mass_kg and p.key in ROTATING_KEYS)
+    with _LOCK:
+        if len(_FULL_CACHE) > 256:
+            _FULL_CACHE.clear()
+        _FULL_CACHE[key] = out
+    return out
+
+
+def mass_summary(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
+                 cad_dir: Optional[os.PathLike] = None) -> Optional[Dict[str, Any]]:
+    """The mass numbers every surface shows: ``{full_kg, active_kg, rotating_kg, partial, source}`` or ``None`` when the
+    die is not available (the caller keeps what it had and flags it partial)."""
+    try:
+        fm = full_mass(die, config, dies_dir=dies_dir, cad_dir=cad_dir)
+    except (MotorMassError, OSError):
+        return None
+    return {"full_kg": fm.total_kg, "active_kg": fm.active_kg, "rotating_kg": fm.rotating_kg, "partial": fm.partial,
+            "source": fm.source, "non_active_kg": fm.total_kg - fm.active_kg}
+
+
+def bom_extra_parts(die: str, config: str, *, cad_dir: Optional[os.PathLike] = None,
+                    choices: Optional[Dict[str, str]] = None) -> List[MotorPart]:
+    """The non-active parts of the CAD BOM (kept for callers that want only those): empty without a BOM."""
+    ddir = find_die_dir(die)
+    bom = find_bom_file(die, config, cad_dir)
+    if not bom:
+        return []
     from motor_ai_sim import part_materials as pm
     defs = pm.mechanical_parts()
-    rx = {k: re.compile(v["match"], re.I) for k, v in defs.items()}
     choices = choices or {}
     out: List[MotorPart] = []
-    with open(path, encoding="utf-8-sig", newline="") as fh:
-        for row in csv.DictReader(fh):
-            item = (row.get("item") or "").strip()
-            part = (row.get("part") or "").strip()
-            mass_g = (row.get("total mass g") or "").strip()
-            if not item.isdigit() or not part or not mass_g or _BOM_COVERED.search(part):
-                continue
-            try:
-                grams = float(mass_g)
-            except ValueError:
-                continue
-            if grams <= 0:
-                continue
-            key = next((k for k, r in rx.items() if r.search(part)), None)
-            if key is None:
-                continue
-            d = defs[key]
-            default = str(d["material"])
-            mat = choices.get(key) or default
-            mass = grams / 1000.0
-            note = "CAD bill of materials, not in the app mass" + (f"; {d['note']}" if d.get("note") else "")
-            if mat != default:
-                r0, r1 = _density(default), _density(mat)
-                if r0 and r1:
-                    mass *= r1 / r0
-                    note += f"; material chosen for this die, mass scaled by density ({r1:.0f}/{r0:.0f})"
-                else:
-                    note += "; material chosen for this die (density unknown: BOM mass kept)"
-            name = d["name"] if key != "holder" else part.split(" (")[0]
-            out.append(MotorPart(name, mat, mass, str(d["role"]), False, str(d.get("status", "computed")), note,
-                                 key=key, em=False, default_material_id=default, user_set=key in choices))
+    for ln in read_bom(bom):
+        if _BOM_ACTIVE.search(ln.part) or _BOM_COIL_LINE.search(ln.part) or _BOM_SHAFT.search(ln.part):
+            continue
+        k = _classify(defs, ln.part)
+        if not k:
+            continue
+        d = defs[k]
+        default = str(d["material"])
+        mat = choices.get(k) or default
+        kg, note = _scaled(ln.grams, ln.density, mat, default)
+        out.append(MotorPart(d["name"] if k != "holder" else ln.part.split(" (")[0], mat, kg, str(d["role"]), True,
+                             str(d.get("status", "computed")), "CAD bill of materials" + note, key=k, em=False,
+                             default_material_id=default, user_set=k in choices))
     return out
 
 
@@ -286,37 +471,34 @@ def config_bearing_cards(die_dir: Path, config: str) -> List[str]:
 
 def full_part_list(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
                    cad_dir: Optional[os.PathLike] = None) -> Dict[str, Any]:
-    """The whole motor, part by part (Materials tab "Full"): the ACTIVE parts (the electromagnetic assignment, read
-    only here) plus every non-active part the CAD bill of materials lists, each with its material and mass.  A motor
-    without a built BOM lists only what its configuration names (its bearings card) - no part is invented.
-    Raises ``MotorMassError`` when the die is not available."""
+    """The whole motor, part by part (Materials tab "Full"): the parts of ``full_mass`` plus the insulation the app does
+    not weigh.  A motor without a built BOM lists the active parts (partial) and what its configuration names (its
+    bearings card, no mass) - no part is invented.  Raises ``MotorMassError`` when the die is not available."""
     from motor_ai_sim import part_materials as pm
     ddir = find_die_dir(die, dies_dir)
-    mm = app_motor_mass(die, config, dies_dir=dies_dir)
+    fm = full_mass(die, config, dies_dir=dies_dir, cad_dir=cad_dir)
     choices = die_part_choices(ddir)
-    rows: List[MotorPart] = list(mm.parts)
+    rows: List[MotorPart] = list(fm.parts)
     try:
         cy = yaml.safe_load((ddir / f"{config}.yaml").read_text(encoding="utf-8")) or {}
     except Exception:                                                      # noqa: BLE001
         cy = {}
-    # insulation is assigned (a thermal / EM role) but the app does not weigh it
+    have = {p.key for p in rows}
     for akey, name in (("slot_insulation", "Slot insulation"), ("wire_insulation", "Wire enamel")):
         mat = (cy.get("materials") or {}).get(akey)
-        if mat:
+        if mat and akey not in have:
             rows.append(MotorPart(name, str(mat), None, "insulation", False, "computed",
-                                  "assigned for the simulation; the app does not weigh it", key=akey))
-    extras = bom_extra_parts(die, config, cad_dir=cad_dir, choices=choices)
-    source = "app+cad_bom" if extras else "app"
-    if not extras and config_bearing_cards(ddir, config):
+                                  "assigned for the simulation; no mass is known for it", key=akey))
+    source = fm.source
+    if fm.partial and config_bearing_cards(ddir, config):
         d = pm.mechanical_parts()["bearings"]
         rows.append(MotorPart("Bearings", choices.get("bearings") or d["material"], None, d["role"], False,
                               d.get("status", "computed"),
                               "named by the configuration's bearings; no CAD bill of materials built yet, so no mass",
-                              key="bearings", em=False, default_material_id=d["material"],
-                              user_set="bearings" in choices))
-        source = "app+config"
-    rows += extras
-    return {"die": die, "config": config, "source": source, "total_kg": mm.total_kg, "mass_basis": mm.basis,
+                              key="bearings", em=False, default_material_id=d["material"], user_set="bearings" in choices))
+        source = "active_only+config"
+    return {"die": die, "config": config, "source": source, "partial": fm.partial, "total_kg": fm.total_kg,
+            "active_kg": fm.active_kg, "rotating_kg": fm.rotating_kg, "mass_basis": fm.basis,
             "parts": [dict(key=p.key, name=p.name, role=p.role, em=p.em, material_id=p.material_id,
                            default_material_id=p.default_material_id, user_set=p.user_set, mass_kg=p.mass_kg,
                            counted=p.counted, status=p.status, basis=p.basis) for p in rows]}

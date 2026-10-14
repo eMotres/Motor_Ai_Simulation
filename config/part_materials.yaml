@@ -71,6 +71,9 @@ materials:
       conductivity_W_mK:    {v: 16.2, src: asm_v1_ss, type: handbook, verify: true}
       specific_heat_J_kgK:  {v: 500, src: asm_v1_ss, type: handbook, verify: true}
       max_service_temp_C:   {v: 300, src: iso3506_1, type: estimate, verify: true, note: "strength is reduced above about 300 C (ISO 3506-1 annex on elevated temperature); the figure is a conservative design limit"}
+  # -- shafts ---------------------------------------------------------------
+  # (the provisional stainless shaft card, AISI 316, lives in config/materials_library.yaml as `Stainless_316`: the shaft is
+  #  an electromagnetic part, so its card is the solver's one card - not assigned to any die yet)
   # -- bearings ------------------------------------------------------------
   Bearing_steel_100Cr6:
     name: "Bearing steel 100Cr6 (SAE 52100), through-hardened"
@@ -181,13 +184,15 @@ library_extensions:
 # a motor without a built BOM lists none of these (no part is invented).  This table says how a BOM line is recognised
 # (``match``: regex on the BOM part name, case-insensitive), what the part is called, its role and the DEFAULT material
 # card the Materials tab starts from.  The user's choice per die overrides the default (die.yaml ``part_materials``) and
-# scales the BOM mass with the density ratio (the CAD volume is fixed).  ``status`` = how sure the default is.
+# scales the BOM mass with the density ratio (the CAD volume is fixed).
+# OWNER RULE 2026-10-14: every structural wall / holder / housing / plate and every shaft is aluminium 6061-T6, except the
+# Ø30 and Ø40 shafts (stainless steel, grade 316 provisional, awaiting his confirmation).  ``status`` = how sure the default is.
 mechanical_parts:
   holder_front:  {name: "Stator holder, front", match: "^stator holder, front", role: structural, material: Aluminium_6061, status: computed}
   holder_back:   {name: "Stator holder, back", match: "^stator holder, back", role: structural, material: Aluminium_6061, status: computed}
   holder:        {name: "Stator holder", match: "^stator holder", role: structural, material: Aluminium_6061, status: computed}
-  carrier_front: {name: "Rotor carrier, front", match: "^rotor carrier, front", role: structural, material: Steel_42CrMo4_QT, status: computed,
-                  note: "the simulation shaft is the electromagnetic stand-in of this carrier"}
+  carrier_front: {name: "Rotor carrier, front", match: "^rotor carrier, front", role: structural, material: Aluminium_6061, status: computed,
+                  note: "aluminium 6061-T6 (owner 2026-10-14: walls and shafts are aluminium 6061); the simulation shaft is the electromagnetic stand-in of this carrier"}
   carrier_rear:  {name: "Rotor carrier, rear", match: "^rotor carrier, rear", role: structural, material: Aluminium_6061, status: computed}
   rings:         {name: "Glass-fibre rings", match: "^ring", role: structural, material: FR4_glass_epoxy, status: assumed,
                   note: "the BOM says GFRP (G10-type); FR-4 is the flame-retardant grade of the same laminate"}

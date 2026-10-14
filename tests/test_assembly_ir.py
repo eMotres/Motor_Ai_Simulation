@@ -308,3 +308,36 @@ def test_example_lists_parts_and_materials_that_add_up_to_the_mass(example):
     assert {"20SW1200", "F52SH_120C", "copper", "PA66_GF30", "CFRP_QI_T800_epoxy"} <= set(ps.by_material)
     # the four motors are 4 x the same parts: 4 stator cores in the table
     assert sum(1 for r in ps.rows if r["part"] == "Stator core") == 4
+
+
+def test_example_uses_the_full_motor_mass_when_a_cad_model_exists(tmp_path, monkeypatch):
+    """Owner 2026-10-14: the motor mass in an assembly is the FULL assembled mass; the hand sum follows it."""
+    from motor_ai_sim.cad import bom
+    from motor_ai_sim.modules import motor_mass as MM
+    from tests.test_cad_bom import make
+    out = tmp_path / "cad" / "CIANO14 40 new" / "L12"
+    out.mkdir(parents=True)
+    b, _ = make("L12")
+    bom.write_csv(b, str(out / "CIANO14_40_new_L12_BOM.csv"))
+    monkeypatch.setenv("MOTRES_CAD_DIR", str(tmp_path / "cad"))
+    MM._FULL_CACHE.clear()                                                # noqa: SLF001
+    try:
+        lib = L.get_library(refresh=True)
+        example = AssemblyIR.model_validate_json(EXAMPLE.read_text(encoding="utf-8"))
+        motor = lib.get("motor_ciano14_40_new_l12")
+        full = MM.full_mass("CIANO14 40 new", "L12")
+        active = MM.app_motor_mass("CIANO14 40 new", "L12").total_kg
+        assert motor.mass_properties.mass_kg == pytest.approx(full.total_kg) and full.total_kg > 1.15 * active
+        assert "mass_partial" not in lib.entries["motor_ciano14_40_new_l12"].flags
+        cards = lib.cards()
+        total = (cards["example_quad_frame_450"].mass_properties.mass_kg
+                 + cards["pack_ciano14_40_new_l12_example"].mass_properties.mass_kg
+                 + 4 * (full.total_kg + cards["tmotor_fpv_10x5"].mass_properties.mass_kg
+                        + cards["ctrl_ciano14_40_new_l12_si_48k"].mass_properties.mass_kg))
+        assert mass_properties(example, L.resolve).mass_kg == pytest.approx(total)
+    finally:
+        monkeypatch.undo()
+        MM._FULL_CACHE.clear()                                            # noqa: SLF001
+        L.get_library(refresh=True)
+    # without a CAD model the library flags the motor card partial (the active mass, never mixed)
+    assert "mass_partial" in L.get_library().entries["motor_ciano14_40_new_l12"].flags

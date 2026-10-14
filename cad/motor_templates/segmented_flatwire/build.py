@@ -75,8 +75,8 @@ def build_bodies(doc, sh, pj):
             b.MaterialName = mats[b.Name]
     doc.recompute()
     for r in (r_core, r_rot, r_mag):
-        sk = r["sketch"]
-        report["sketches"][sk.Name] = check_sketch(sk)[1]
+        for sk in [r["sketch"]] + list(r.get("extra_sketches", [])):
+            report["sketches"][sk.Name] = check_sketch(sk)[1]
     for sk in r_coil["sketches"]:
         report["sketches"][sk.Name] = check_sketch(sk)[1]
     if pj.get("named_parameters_mechanics"):

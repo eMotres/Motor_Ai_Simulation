@@ -17,6 +17,14 @@ def _num(g, name):
     return float(g(name))
 
 
+def _opt(g, name, default):
+    """Optional parameter of newer profiles (a Params row that older profiles do not have)."""
+    try:
+        return float(g(name))
+    except Exception:
+        return default
+
+
 def precheck(g):
     """Necessary conditions for this template; each violation is a sentence naming the parameters."""
     v = []
@@ -34,8 +42,24 @@ def precheck(g):
     need(round(_num(g, "num_slots_per_segment")) == 6,
          "num_slots_per_segment = %g is not supported: the template (like the Fusion model, angle_wire = 360/(num_seg*6)) "
          "has 6 slots = 3 wound teeth per segment" % _num(g, "num_slots_per_segment"))
-    for n in ("magnet_lamination", "sleeve_thickness", "rotor_fill_r"):
+    for n in ("magnet_lamination", "sleeve_thickness"):
         need(abs(_num(g, n)) < 1e-12, "%s = %g is not supported by the template (must be 0)" % (n, _num(g, n)))
+    nkey = _opt(g, "rotor_key_count", 0)
+    need(abs(nkey - round(nkey)) < 1e-9 and nkey >= 0, "rotor_key_count = %g must be an integer >= 0" % nkey)
+    if round(nkey) == 0:
+        need(abs(_num(g, "rotor_fill_r")) < 1e-12, "rotor_fill_r = %g needs rotor keys (rotor_key_count > 0): it rounds the key "
+                                                   "edges and has no other use (must be 0 without keys)" % _num(g, "rotor_fill_r"))
+    else:
+        kw, kh, ko, kf = _num(g, "rotor_key_w"), _num(g, "rotor_key_h"), _num(g, "rotor_key_offset"), _num(g, "rotor_fill_r")
+        Rb_ = _num(g, "rotor_down_r") - _num(g, "rotor_house_height")
+        w2_ = kw / 2 - ko
+        need(ko >= 0 and kf > 0 and w2_ > 2 * kf and kh - ko > 2 * kf,
+             "rotor key: width/2 - offset (%.3f) and depth - offset (%.3f) must both exceed 2 x rotor_fill_r (%.3f), "
+             "rotor_key_offset >= 0" % (w2_, kh - ko, kf))
+        need(Rb_ - kh > 0 and (Rb_ - kf) ** 2 > (w2_ + kf) ** 2, "rotor key deeper than the bore radius or too wide for the bore")
+        need(round(nkey) * 2 * math.asin(min(1.0, (w2_ + kf) / Rb_)) < 2 * math.pi,
+             "rotor keys overlap each other: reduce rotor_key_count or rotor_key_w")
+        need(_num(g, "rotor_down_r") > Rb_ + 0.05, "rotor hub ring thinner than 0.05 mm: the key cannot be fused")
 
     # stator core sector
     R_in, R_out = _num(g, "stator_down_r"), _num(g, "stator_up_r")
@@ -259,11 +283,17 @@ def gate(doc, sheet_name="Params"):
             Rup, Rhub = g("rotor_up_r"), g("rotor_down_r") - g("rotor_house_height")
             p_in = App.Vector((Rup - 0.01) * math.cos(a), (Rup - 0.01) * math.sin(a), 0)
             p_out = App.Vector((Rup + 0.01) * math.cos(a), (Rup + 0.01) * math.sin(a), 0)
-            h_in = App.Vector(0, Rhub + 0.01, 0); h_out = App.Vector(0, Rhub - 0.01, 0)
+            ab = math.radians(90 - g("angle_mag") / 2)          # at the pole boundary: a key (pole axis) is not in the way
+            h_in = App.Vector((Rhub + 0.01) * math.cos(ab), (Rhub + 0.01) * math.sin(ab), 0)
+            h_out = App.Vector((Rhub - 0.01) * math.cos(ab), (Rhub - 0.01) * math.sin(ab), 0)
             if not (s.isInside(p_in, 1e-6, True) and not s.isInside(p_out, 1e-6, True)):
                 errors.append("stale/incorrect Rotor: outer radius is not rotor_up_r = %.4f" % Rup)
             if not (s.isInside(h_in, 1e-6, True) and not s.isInside(h_out, 1e-6, True)):
                 errors.append("stale/incorrect Rotor: bore radius is not rotor_down_r - rotor_house_height = %.4f" % Rhub)
+            if _opt(g, "rotor_key_count", 0) > 0:                    # keys: tip at bore radius - rotor_key_h + rotor_key_offset
+                yt = Rhub - g("rotor_key_h") + g("rotor_key_offset")
+                if not (s.isInside(App.Vector(0, yt + 0.01, 0), 1e-6, True) and not s.isInside(App.Vector(0, yt - 0.01, 0), 1e-6, True)):
+                    errors.append("stale/incorrect Rotor key: tip is not at bore radius - rotor_key_h + rotor_key_offset = %.4f" % yt)
         if "Magnet" in shapes:
             b = _bb(shapes["Magnet"])
             inv += [("Magnet z length = mag_step", b.ZLength, g("mag_step")),

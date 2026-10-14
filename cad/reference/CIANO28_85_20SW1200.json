@@ -1,0 +1,1244 @@
+{
+ "schema": "segmented_flatwire/profile/2",
+ "profile": {
+  "motor_id": "CIANO28_85_13_fusion",
+  "profile_file": "CIANO28_85_13_fusion",
+  "motor": "CIANO28 85/L13",
+  "template": "segmented_flatwire",
+  "variant": "Fusion reference of the open design (~recovered), 2026-10-14",
+  "revision": "A.0",
+  "status": "Fusion reference values, active part only (validation of the template; not a simulation profile)",
+  "source": {
+   "fusion_document": "CIANO28 85_13 (~recovered)",
+   "read": "2026-10-14",
+   "method": "local Fusion MCP, readOnly scripts (tools/fusion_scripts)"
+  },
+  "doc_name": "CIANO28_85_13_fusion",
+  "materials": {
+   "Core": "20SW1200",
+   "Coil": "Copper",
+   "RotorCore": "Steel",
+   "Magnet": "NdFeB (Steel in Fusion) - grade TBD",
+   "Shaft": "Steel",
+   "Stator_holder": "Aluminum 6061",
+   "Stator_holder_back": "Aluminum 6061",
+   "Ring": "GFRP",
+   "Prop_fix": "Aluminum 6061",
+   "Bearing_outer_ring": "Steel (bearing)",
+   "Bearing_inner_ring": "Steel (bearing)",
+   "Bearing_ball": "Steel (bearing)",
+   "Screw": "18-8 Stainless Steel"
+  },
+  "frame": "Fusion root frame: Z = motor axis (+z = propeller/front side), first core tooth / coil / magnet centred on +Y, mm",
+  "generated": "2026-10-12T16:12:33"
+ },
+ "units": {
+  "length": "mm",
+  "angle": "deg"
+ },
+ "roles": {
+  "input": "drives geometry (constant)",
+  "derived": "drives geometry (formula of others)",
+  "mechanics": "drives the mechanical parts (shaft, bearings, holders, rings, Prop_fix, screws); CAD only, not in the simulation",
+  "info": "reference only",
+  "unsupported": "ignored by the template; pre-check requires nominal",
+  "foreign": "other design in the Fusion file"
+ },
+ "user_parameters": [
+  {
+   "name": "motor_d",
+   "fusion_expression": "( stator_up_r + housing_h ) * 2",
+   "freecad_expression": "( stator_up_r + housing_h ) * 2",
+   "value": 97.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_r",
+   "fusion_expression": "motor_d / 2",
+   "freecad_expression": "motor_d / 2",
+   "value": 48.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_h",
+   "fusion_expression": "magnet_height",
+   "freecad_expression": "magnet_height",
+   "value": 7.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_w",
+   "fusion_expression": "motor_length",
+   "freecad_expression": "motor_length",
+   "value": 13.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "magnet_height",
+   "fusion_expression": "7 mm",
+   "freecad_expression": "7 mm",
+   "value": 7.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "magnet_w",
+   "fusion_expression": "rotor_w",
+   "freecad_expression": "rotor_w",
+   "value": 13.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "air_gap",
+   "fusion_expression": "0.3 mm",
+   "freecad_expression": "0.3 mm",
+   "value": 0.3,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "motor_length",
+   "fusion_expression": "13 mm",
+   "freecad_expression": "13 mm",
+   "value": 13.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "stator_up_r",
+   "fusion_expression": "stator_diameter / 2",
+   "freecad_expression": "stator_diameter / 2",
+   "value": 42.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "stator_mid_r",
+   "fusion_expression": "stator_up_r - slot_height - core_thickness / 2",
+   "freecad_expression": "stator_up_r - slot_height - core_thickness / 2",
+   "value": 33.9,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "slot_height",
+   "fusion_expression": "7.4 mm",
+   "freecad_expression": "7.4 mm",
+   "value": 7.4,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "core_thickness",
+   "fusion_expression": "2.4 mm",
+   "freecad_expression": "2.4 mm",
+   "value": 2.4,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "stator_down_r",
+   "fusion_expression": "stator_up_r - slot_height - core_thickness",
+   "freecad_expression": "stator_up_r - slot_height - core_thickness",
+   "value": 32.7,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_down_h",
+   "fusion_expression": "0.5 mm",
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_down_r",
+   "fusion_expression": "rotor_up_r - rotor_h",
+   "freecad_expression": "rotor_up_r - rotor_h",
+   "value": 25.4,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "glue",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "magnet_fill_up",
+   "fusion_expression": "0.22",
+   "freecad_expression": "0.22",
+   "value": 0.22,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "num_seg",
+   "fusion_expression": "4",
+   "freecad_expression": "4",
+   "value": 4.0,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "angle",
+   "fusion_expression": "( 360 / num_seg ) * 1 deg",
+   "freecad_expression": "( 360 / num_seg ) * 1 deg",
+   "value": 90.0,
+   "unit": "deg",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "angle_wire",
+   "fusion_expression": "( 360 / ( num_seg * 6 ) ) * 1 deg",
+   "freecad_expression": "( 360 / ( num_seg * 6 ) ) * 1 deg",
+   "value": 15.0,
+   "unit": "deg",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "angle_mag",
+   "fusion_expression": "( ( 360 / ( num_seg * num_poles_per_segment ) ) * 1 deg )",
+   "freecad_expression": "( ( 360 / ( num_seg * num_poles_per_segment ) ) * 1 deg )",
+   "value": 12.857142857,
+   "unit": "deg",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "bearing_6005_d",
+   "fusion_expression": "30 mm",
+   "freecad_expression": "30 mm",
+   "value": 30.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "resolver_w",
+   "fusion_expression": "16 mm",
+   "freecad_expression": "16 mm",
+   "value": 16.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "sealing_ring_d",
+   "fusion_expression": "0.9 mm",
+   "freecad_expression": "0.9 mm",
+   "value": 0.9,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "wire_spacing_y",
+   "fusion_expression": "0.07 mm",
+   "freecad_expression": "0.07 mm",
+   "value": 0.07,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "insulation_thickness",
+   "fusion_expression": "0.06 mm",
+   "freecad_expression": "0.06 mm",
+   "value": 0.06,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "slot_hs",
+   "fusion_expression": "0.15",
+   "freecad_expression": "0.15",
+   "value": 0.15,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "magnet_fill_radius",
+   "fusion_expression": "0.4 mm",
+   "freecad_expression": "0.4 mm",
+   "value": 0.4,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "slot_r",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "slot_up_r",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "tooth_width",
+   "fusion_expression": "5 mm",
+   "freecad_expression": "5 mm",
+   "value": 5.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "slot_ds",
+   "fusion_expression": "0.8",
+   "freecad_expression": "0.8",
+   "value": 0.8,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "slot_hs1",
+   "fusion_expression": "0.02",
+   "freecad_expression": "0.02",
+   "value": 0.02,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "housing_h",
+   "fusion_expression": "6 mm",
+   "freecad_expression": "6 mm",
+   "value": 6.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "magnet_fill_down",
+   "fusion_expression": "0.92",
+   "freecad_expression": "0.92",
+   "value": 0.92,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_up_r",
+   "fusion_expression": "stator_down_r - air_gap",
+   "freecad_expression": "stator_down_r - air_gap",
+   "value": 32.4,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_house_height",
+   "fusion_expression": "0.8 mm",
+   "freecad_expression": "0.8 mm",
+   "value": 0.8,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "arc",
+   "fusion_expression": "stator_down_r * 2 * PI * ( angle_wire / 360 deg ) - tooth_width",
+   "freecad_expression": "stator_down_r * 2 * pi * ( angle_wire / 360 deg ) - tooth_width",
+   "value": 3.560839981,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "wire_height",
+   "fusion_expression": "0.3 mm",
+   "freecad_expression": "0.3 mm",
+   "value": 0.3,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "wire_width",
+   "fusion_expression": "3.5 mm",
+   "freecad_expression": "3.5 mm",
+   "value": 3.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "bolt_head_d",
+   "fusion_expression": "4.6 mm",
+   "freecad_expression": "4.6 mm",
+   "value": 4.6,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14",
+   "role_note": "mechanics not built in the active-part profile (stage 3)"
+  },
+  {
+   "name": "offset_core",
+   "fusion_expression": "0.006 mm",
+   "freecad_expression": "0.006 mm",
+   "value": 0.006,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "num_wires_per_slot",
+   "fusion_expression": "18",
+   "freecad_expression": "18",
+   "value": 18.0,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "dov_d",
+   "fusion_expression": "3 mm",
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "wire_beng_r",
+   "fusion_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - 0.05 mm",
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - 0.05 mm",
+   "value": 2.56,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "bolt_h",
+   "fusion_expression": "3 mm",
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "bolt_d",
+   "fusion_expression": "2.5 mm",
+   "freecad_expression": "2.5 mm",
+   "value": 2.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14",
+   "role_note": "mechanics not built in the active-part profile (stage 3)"
+  },
+  {
+   "name": "offset_tooth",
+   "fusion_expression": "0.009 mm",
+   "freecad_expression": "0.009 mm",
+   "value": 0.009,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "tooth_r",
+   "fusion_expression": "wire_beng_r - 0.5 mm",
+   "freecad_expression": "wire_beng_r - 0.5 mm",
+   "value": 2.06,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "AWG",
+   "fusion_expression": "5.8 mm + 0.2 mm",
+   "freecad_expression": "5.8 mm + 0.2 mm",
+   "value": 6.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "offset_rotor",
+   "fusion_expression": "0.035 mm",
+   "freecad_expression": "0.035 mm",
+   "value": 0.035,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "offset_bearing",
+   "fusion_expression": "0.04 mm",
+   "freecad_expression": "0.04 mm",
+   "value": 0.04,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "offset_radiator",
+   "fusion_expression": "0.15 mm",
+   "freecad_expression": "0.15 mm",
+   "value": 0.15,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "offset_holder",
+   "fusion_expression": "0.08 mm",
+   "freecad_expression": "0.08 mm",
+   "value": 0.08,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "coil_w",
+   "fusion_expression": "wire_width + insulation_thickness * 2 + wire_spacing_x",
+   "freecad_expression": "wire_width + insulation_thickness * 2 + wire_spacing_x",
+   "value": 3.72,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "wire_spacing_x",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "stator_fillet_r",
+   "fusion_expression": "1.2 mm",
+   "freecad_expression": "1.2 mm",
+   "value": 1.2,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "magnet_up_gap",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_hole",
+   "fusion_expression": "0.9",
+   "freecad_expression": "0.9",
+   "value": 0.9,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "tooth2_width",
+   "fusion_expression": "2.2 mm",
+   "freecad_expression": "2.2 mm",
+   "value": 2.2,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "cut_width",
+   "fusion_expression": "1.5 mm",
+   "freecad_expression": "1.5 mm",
+   "value": 1.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "magnet_down_height",
+   "fusion_expression": "0.6 mm",
+   "freecad_expression": "0.6 mm",
+   "value": 0.6,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "mag_step",
+   "fusion_expression": "motor_length",
+   "freecad_expression": "motor_length",
+   "value": 13.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "num_poles_per_segment",
+   "fusion_expression": "7",
+   "freecad_expression": "7",
+   "value": 7.0,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "prop_D",
+   "fusion_expression": "2540.00 mm",
+   "freecad_expression": "2540.00 mm",
+   "value": 2540.0,
+   "unit": "mm",
+   "comment": "propeller diameter",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "prop_pitch",
+   "fusion_expression": "1270.00 mm",
+   "freecad_expression": "1270.00 mm",
+   "value": 1270.0,
+   "unit": "mm",
+   "comment": "geometric pitch",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "hub_D",
+   "fusion_expression": "400.00 mm",
+   "freecad_expression": "400.00 mm",
+   "value": 400.0,
+   "unit": "mm",
+   "comment": "hub diameter",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "hub_H",
+   "fusion_expression": "160.00 mm",
+   "freecad_expression": "160.00 mm",
+   "value": 160.0,
+   "unit": "mm",
+   "comment": "hub height",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "bore_D",
+   "fusion_expression": "80.00 mm",
+   "freecad_expression": "80.00 mm",
+   "value": 80.0,
+   "unit": "mm",
+   "comment": "shaft bore",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "bolt_PCD",
+   "fusion_expression": "250.00 mm",
+   "freecad_expression": "250.00 mm",
+   "value": 250.0,
+   "unit": "mm",
+   "comment": "bolt circle dia",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "bolt_D",
+   "fusion_expression": "32.00 mm",
+   "freecad_expression": "32.00 mm",
+   "value": 32.0,
+   "unit": "mm",
+   "comment": "bolt hole dia",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "stator_fillet_r1",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "rotor_fill_r",
+   "fusion_expression": "0.2 mm",
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "role_note": "Fusion Fillet7: rounds the rotor key edges (rotor_key_count > 0)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "num_slots_per_segment",
+   "fusion_expression": "6",
+   "freecad_expression": "6",
+   "value": 6.0,
+   "unit": "",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "unsupported",
+   "role_note": "template has 6 slots (3 wound teeth) per segment; angle_wire = 360/(num_seg*6) as in Fusion",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "shaft_height",
+   "fusion_expression": "2 mm",
+   "freecad_expression": "2 mm",
+   "value": 2.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "info",
+   "role_note": "drives the shaft only (stage 3: mechanics are not built in the active-part profile)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "sleeve_thickness",
+   "fusion_expression": "0",
+   "freecad_expression": "0",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "unsupported",
+   "role_note": "no rotor sleeve (must be 0)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "stator_diameter",
+   "fusion_expression": "85 mm",
+   "freecad_expression": "85 mm",
+   "value": 85.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "input",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  },
+  {
+   "name": "magnet_lamination",
+   "fusion_expression": "0 mm",
+   "freecad_expression": "0 mm",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "unsupported",
+   "role_note": "no axial magnet segmentation (must be 0)",
+   "source": "Fusion CIANO28 85_13 (~recovered), read 2026-10-14"
+  }
+ ],
+ "named_parameters_sketch3": [],
+ "named_parameters_active_part": [
+  {
+   "name": "coil_straight_len",
+   "source": "owner rule 2026-10-13 (Coil/Extrude1)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length + 0.5 mm",
+   "value": 13.5,
+   "unit": "mm",
+   "comment": "Straight coil length up to the bend = Coil/Extrude1 'motor_length + 0.5 mm' of the 85 Fusion model (measured on the Fusion bodies: legs z +-6.75 at motor_length 13)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (owner rule 2026-10-13)"
+  },
+  {
+   "name": "coil_straight_extra",
+   "source": "Coil/Extrude1",
+   "freecad_expression": "coil_straight_len - motor_length",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "Coil straight legs stick out of the stack by this much in total (= coil_straight_len - motor_length = 1 mm, 0.5 mm per side)",
+   "role": "info",
+   "role_note": "read by the template code (zend, gate), not by a feature expression; derived from coil_straight_len"
+  },
+  {
+   "name": "coil_bend_axis_dx",
+   "source": "Coil/Sketch1 L1/L3",
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - wire_beng_r",
+   "value": 0.05,
+   "unit": "mm",
+   "comment": "x of the two end-turn bend axes (+-), = half the straight bridge between the 90-deg bends (Coil/Sketch1 L1/L3)",
+   "role": "derived"
+  },
+  {
+   "name": "coil_lead_ext",
+   "source": "Coil/Extrude6",
+   "freecad_expression": "6 mm",
+   "value": 6.0,
+   "unit": "mm",
+   "comment": "Leads: leg extension beyond the straight end (-z): lead stubs of the 85 Fusion coil start at z -12.75 = -(6.75 + 6)",
+   "role": "input"
+  },
+  {
+   "name": "coil_lead_len",
+   "source": "Coil/Extrude7",
+   "freecad_expression": "5 mm",
+   "value": 5.0,
+   "unit": "mm",
+   "comment": "Leads: separate lead stubs after the extension (-z), same section wire_width x wire_height",
+   "role": "input"
+  },
+  {
+   "name": "magnet_edge_fillet",
+   "source": "Magnet/Fillet1",
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "Magnet axial-edge fillet in Fusion (no volume effect in the open model; not modelled)",
+   "role": "unsupported",
+   "role_note": "magnet edge fillet not modelled (no volume effect in Fusion)"
+  },
+  {
+   "name": "core_sectors",
+   "fusion_expression": null,
+   "freecad_expression": "num_seg * 3",
+   "value": 12.0,
+   "unit": "",
+   "comment": "Stator sectors = 3 phases x num_seg (CoreSectors polar pattern)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_count",
+   "fusion_expression": null,
+   "freecad_expression": "core_sectors",
+   "value": 12.0,
+   "unit": "",
+   "comment": "Coil copies = one wound tooth per stator sector (Coils array)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "rotor_poles",
+   "fusion_expression": null,
+   "freecad_expression": "num_seg * num_poles_per_segment",
+   "value": 28.0,
+   "unit": "",
+   "comment": "Rotor poles = num_seg x num_poles_per_segment (RotorPoles polar pattern)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "magnet_count",
+   "fusion_expression": null,
+   "freecad_expression": "rotor_poles",
+   "value": 28.0,
+   "unit": "",
+   "comment": "Magnet copies = one per rotor pole (MagnetArray)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_pitch",
+   "fusion_expression": null,
+   "freecad_expression": "wire_height + wire_spacing_y",
+   "value": 0.37,
+   "unit": "mm",
+   "comment": "Layer pitch of the winding = wire_height + wire_spacing_y",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_copies",
+   "fusion_expression": null,
+   "freecad_expression": "num_wires_per_slot - 1",
+   "value": 17.0,
+   "unit": "",
+   "comment": "Layers made by the pattern (the last layer is added separately) = num_wires_per_slot - 1 (CoilLayers)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_span",
+   "fusion_expression": null,
+   "freecad_expression": "(num_wires_per_slot - 2) * coil_layer_pitch",
+   "value": 5.92,
+   "unit": "mm",
+   "comment": "Pattern length of CoilLayers: first to last patterned layer",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_leg_length",
+   "fusion_expression": null,
+   "freecad_expression": "coil_straight_len",
+   "value": 13.5,
+   "unit": "mm",
+   "comment": "Straight coil leg length = coil_straight_len = motor_length + 1 mm",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_x_in",
+   "fusion_expression": null,
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2",
+   "value": 2.61,
+   "unit": "mm",
+   "comment": "Inner x of a coil leg (centre line of the tooth to the wire)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_top_y",
+   "fusion_expression": null,
+   "freecad_expression": "stator_up_r - core_thickness - insulation_thickness - wire_spacing_y / 2",
+   "value": 40.005,
+   "unit": "mm",
+   "comment": "y of the top of layer 0 (under the yoke)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_bridge_length",
+   "fusion_expression": null,
+   "freecad_expression": "2 * coil_bend_axis_dx",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "Straight bridge of the end turn between the two bend axes",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_lead_total",
+   "fusion_expression": null,
+   "freecad_expression": "coil_lead_ext + coil_lead_len",
+   "value": 11.0,
+   "unit": "mm",
+   "comment": "Lead length beyond the straight leg = coil_lead_ext + coil_lead_len",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "rotor_key_count",
+   "source": "CIANO28 85_13 Fusion read 2026-10-14",
+   "fusion_expression": null,
+   "freecad_expression": "4",
+   "value": 4.0,
+   "unit": "",
+   "comment": "Rotor: number of keys in the bore (Fusion Rotor/C-Pattern5 = 4, one at +Y and every 90 deg = pole centres); 0 = no key (\u00d840)",
+   "role": "input",
+   "role_note": "Rotor: number of keys in the bore (Fusion Rotor/C-Pattern5 = 4, one at +Y and every 90 deg = pole centres); 0 = no key (\u00d840)"
+  },
+  {
+   "name": "rotor_key_w",
+   "source": "CIANO28 85_13 Fusion read 2026-10-14",
+   "fusion_expression": null,
+   "freecad_expression": "2 mm",
+   "value": 2.0,
+   "unit": "mm",
+   "comment": "Rotor key width (Fusion Rotor/Sketch1 key loop x = +-1)",
+   "role": "input",
+   "role_note": "Rotor key width (Fusion Rotor/Sketch1 key loop x = +-1)"
+  },
+  {
+   "name": "rotor_key_h",
+   "source": "CIANO28 85_13 Fusion read 2026-10-14",
+   "fusion_expression": null,
+   "freecad_expression": "1 mm",
+   "value": 1.0,
+   "unit": "mm",
+   "comment": "Rotor key height below the bore radius (Fusion: key tip y = 23.6 at bore r 24.6)",
+   "role": "input",
+   "role_note": "Rotor key height below the bore radius (Fusion: key tip y = 23.6 at bore r 24.6)"
+  },
+  {
+   "name": "rotor_key_offset",
+   "source": "CIANO28 85_13 Fusion read 2026-10-14",
+   "fusion_expression": null,
+   "freecad_expression": "0.02 mm",
+   "value": 0.02,
+   "unit": "mm",
+   "comment": "Fusion OffsetFaces6: key sides and tip moved inwards by this (clearance to the shaft key way)",
+   "role": "input",
+   "role_note": "Fusion OffsetFaces6: key sides and tip moved inwards by this (clearance to the shaft key way)"
+  },
+  {
+   "name": "magnet_lower_fill_r",
+   "source": "CIANO28 85_13 Fusion read 2026-10-14",
+   "fusion_expression": null,
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "Magnet bottom and knee fillets (Fusion Magnet/Sketch1 arcs r 0.2); the top fillets use magnet_fill_radius",
+   "role": "input",
+   "role_note": "Magnet bottom and knee fillets (Fusion Magnet/Sketch1 arcs r 0.2); the top fillets use magnet_fill_radius"
+  }
+ ],
+ "named_parameters_mechanics": [],
+ "history": [
+  {
+   "date": "2026-10-14",
+   "action": "tools/build_params_85.py from the \u00d840 reference + Fusion 85 dump",
+   "changes": [
+    [
+     "magnet_height",
+     "5.7 mm",
+     "7 mm"
+    ],
+    [
+     "air_gap",
+     "0.2 mm",
+     "0.3 mm"
+    ],
+    [
+     "motor_length",
+     "20 mm",
+     "13 mm"
+    ],
+    [
+     "slot_height",
+     "6.1 mm",
+     "7.4 mm"
+    ],
+    [
+     "core_thickness",
+     "1.9 mm",
+     "2.4 mm"
+    ],
+    [
+     "magnet_fill_up",
+     "0.34",
+     "0.22"
+    ],
+    [
+     "num_seg",
+     "2",
+     "4"
+    ],
+    [
+     "wire_spacing_y",
+     "0.1 mm",
+     "0.07 mm"
+    ],
+    [
+     "insulation_thickness",
+     "0.07 mm",
+     "0.06 mm"
+    ],
+    [
+     "magnet_fill_radius",
+     "0.2 mm",
+     "0.4 mm"
+    ],
+    [
+     "tooth_width",
+     "3.3 mm",
+     "5 mm"
+    ],
+    [
+     "magnet_fill_down",
+     "0.85",
+     "0.92"
+    ],
+    [
+     "rotor_house_height",
+     "1.1 mm",
+     "0.8 mm"
+    ],
+    [
+     "wire_height",
+     "0.6 mm",
+     "0.3 mm"
+    ],
+    [
+     "wire_width",
+     "2.5 mm",
+     "3.5 mm"
+    ],
+    [
+     "bolt_head_d",
+     "4 mm",
+     "4.6 mm"
+    ],
+    [
+     "num_wires_per_slot",
+     "7",
+     "18"
+    ],
+    [
+     "bolt_d",
+     "2 mm",
+     "2.5 mm"
+    ],
+    [
+     "stator_fillet_r",
+     "1.1 mm",
+     "1.2 mm"
+    ],
+    [
+     "tooth2_width",
+     "1.7 mm",
+     "2.2 mm"
+    ],
+    [
+     "cut_width",
+     "1 mm",
+     "1.5 mm"
+    ],
+    [
+     "magnet_down_height",
+     "1 mm",
+     "0.6 mm"
+    ],
+    [
+     "stator_fillet_r1",
+     "0.15 mm",
+     "0.1 mm"
+    ],
+    [
+     "rotor_fill_r",
+     "0 mm",
+     "0.2 mm"
+    ],
+    [
+     "sleeve_thickness",
+     "0 mm",
+     "0"
+    ],
+    [
+     "stator_diameter",
+     "40 mm",
+     "85 mm"
+    ]
+   ]
+  }
+ ]
+}

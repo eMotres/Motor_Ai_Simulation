@@ -3,11 +3,12 @@
 Outline = nominal pocket shape of the rotor sketch (Fusion Magnet/Sketch1): bottom chord through the point of
 rotor_down_r at magnet_fill_down*angle_mag/2, lower side parallel to the pole line (magnet_down_height), upper side to
 the point of rotor_up_r at magnet_fill_up*angle_mag/2, top arc rotor_up_r - magnet_up_gap, all corners filleted with
-magnet_fill_radius.
+magnet_fill_radius.  A profile with the row `magnet_lower_fill_r` (template A.5.0, CIANO28 85: Fusion sketch arcs 0.2 below,
+0.4 on top) rounds the bottom and knee corners with it instead; the two lower fillets share that one dimension (Equal).
 """
 import math
 from .sketchkit import Chain, SK, V_AXIS
-from .params_sheet import pval
+from .params_sheet import pval, has_param
 from .common import P, M, xy_sketch, fillet_center_circle_line, foot_point, corner_center, rotor_numbers
 
 
@@ -15,9 +16,11 @@ def build_magnet(doc, sh, body):
     g = lambda n: pval(sh, n)
     n = rotor_numbers(g)
     P4, K, U, r = n["P4"], n["K"], n["U"], n["mfr"]
+    lower_row = has_param(sh, "magnet_lower_fill_r")
+    rl = g("magnet_lower_fill_r") if lower_row else r                  # bottom and knee fillets
     yb = P4[1]
-    c_bot = corner_center((0, yb), P4, K, r)
-    c_knee = corner_center(P4, K, U, r)
+    c_bot = corner_center((0, yb), P4, K, rl)
+    c_knee = corner_center(P4, K, U, rl)
     c_top = fillet_center_circle_line(n["Rtop"] - r, K, U, r)
     b_bot = (c_bot[0], yb)
     b_lo1 = foot_point(c_bot, P4, K)
@@ -31,17 +34,17 @@ def build_magnet(doc, sh, body):
     c = Chain(sk)
     bot = c.line(M(b_bot), b_bot, joint="T")
     R, L = {}, {}
-    R["f1"] = c.arc(c_bot, r, b_bot, b_lo1, ccw=True, joint="T")
+    R["f1"] = c.arc(c_bot, rl, b_bot, b_lo1, ccw=True, joint="T")
     R["lo"] = c.line(b_lo1, b_lo2, joint="T")
-    R["f2"] = c.arc(c_knee, r, b_lo2, b_up1, ccw=True, joint="T")
+    R["f2"] = c.arc(c_knee, rl, b_lo2, b_up1, ccw=True, joint="T")
     R["up"] = c.line(b_up1, b_up2, joint="T")
     R["f3"] = c.arc(c_top, r, b_up2, s_top, ccw=True, joint="T")
     top = c.arc((0, 0), n["Rtop"], s_top, M(s_top), ccw=True, joint="T")
     L["f3"] = c.arc(M(c_top), r, M(s_top), M(b_up2), ccw=True, joint="C")
     L["up"] = c.line(M(b_up2), M(b_up1), joint="C")
-    L["f2"] = c.arc(M(c_knee), r, M(b_up1), M(b_lo2), ccw=True, joint="C")
+    L["f2"] = c.arc(M(c_knee), rl, M(b_up1), M(b_lo2), ccw=True, joint="C")
     L["lo"] = c.line(M(b_lo2), M(b_lo1), joint="C")
-    L["f1"] = c.arc(M(c_bot), r, M(b_lo1), M(b_bot), ccw=True, joint="T")
+    L["f1"] = c.arc(M(c_bot), rl, M(b_lo1), M(b_bot), ccw=True, joint="T")
     c.close()
     s = SK(sk)
     # Only the right half is dimensioned (against the pole axis, half angles as in the Fusion rotor sketch); the left half is
@@ -73,9 +76,14 @@ def build_magnet(doc, sh, body):
     s.con("PointOnObject", R["lo"], 2, mlo)
     s.con("PointOnObject", R["up"], 1, mup)
     s.con("PointOnObject", R["up"], 2, mup)
-    s.con("Radius", R["f1"], r, name="magnet_fill_radius", expr=P + "magnet_fill_radius")     # all magnet fillets are equal
-    s.con("Equal", R["f1"], R["f2"])
-    s.con("Equal", R["f1"], R["f3"])
+    if lower_row:
+        s.con("Radius", R["f3"], r, name="magnet_fill_radius", expr=P + "magnet_fill_radius")      # top fillets
+        s.con("Radius", R["f1"], rl, name="magnet_lower_fill_r", expr=P + "magnet_lower_fill_r")   # bottom + knee fillets
+        s.con("Equal", R["f1"], R["f2"])
+    else:
+        s.con("Radius", R["f1"], r, name="magnet_fill_radius", expr=P + "magnet_fill_radius")     # all magnet fillets are equal
+        s.con("Equal", R["f1"], R["f2"])
+        s.con("Equal", R["f1"], R["f3"])
     doc.recompute()
 
     pad = body.newObject("PartDesign::Pad", "MagnetPad")

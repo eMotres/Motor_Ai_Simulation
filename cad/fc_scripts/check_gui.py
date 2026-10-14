@@ -47,7 +47,7 @@ try:
             bad.append("%s: %d of %d thread faces carry the thread colour (%d colours for %d faces)" % (
                 bn, got, len(idx), len(dc), len(doc.getObject(bn).Shape.Faces)))
     pb = gdoc.getObject("PhaseBoard")
-    if pb is not None:                                   # the STEP colours must have reached the view object
+    if pb is not None and doc.getObject("PhaseBoard").TypeId == "Part::Feature":                                   # the STEP colours must have reached the view object
         dc = list(pb.DiffuseColor)
         distinct = sorted({tuple(round(x, 2) for x in c[:3]) for c in dc})
         out["phase_board_colours"] = dict(faces=len(dc), distinct=len(distinct))

@@ -388,6 +388,13 @@ def bearing_profile_rows(eff, params, report):
     rows = []
     if data and all(data.get(k) is not None for k in BEARING_ROWS):
         src = "simulation %s/%s bearings -> bearings_library.yaml %s" % (eff["die"], eff["config"], card)
+    elif reference_for(eff["die"])[0] != BASE_PROFILE:
+        # the die has its own Fusion reference (e.g. CIANO28 85: bearing 61707-2RS1, not in the bearings library): its bearing rows stay
+        for key, name in BEARING_ROWS.items():
+            params[name]["source"] = "die Fusion reference (no bearing card in the store%s)" % (" for %s" % card if card else "")
+            rows.append(dict(card=card, field=key, name=name, value=None, expression_before=params[name]["freecad_expression"],
+                             source=params[name]["source"]))
+        return rows
     else:
         data, src = BEARING_618_8, "standard 618/8 dimensions (no bearing card in the store%s)" % (
             " for %s" % card if card else "")

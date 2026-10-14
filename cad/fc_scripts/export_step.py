@@ -74,11 +74,20 @@ def mech_datums(g, mech):
     zf, zfl, zb = g("holder_face_z"), g("holder_flange_z"), g("bearing_out_z")
     zah = -g("back_holder_end_z")
     aw, n = g("angle_wire"), int(round(g("holder_bolt_count")))
-    return dict(
-        A_H=dict(z=r6(zah), outward_normal=[0, 0, -1],
-                 what="hub-boss plane: back end face of Stator_holder_back (heatsink boss seat, datum A_H of the full stack)",
-                 measured=_planar_face_at(mech["Stator_holder_back"], zah, -1)),
-        shaft=dict(axis="Z", back_end_z=r6(-zb), front_end_z=r6(g("shaft_front_end_z")),
+    carrier = _has(g, "carrier_bore_r")
+    if carrier:        # ring carrier (CIANO28 85): front Shaft + Shaft_rear
+        shaft_block = dict(
+            kind="ring carrier", axis="Z", rotor_seat_r=r6(g("shaft_seat_r")), journal_r=r6(g("shaft_journal_r")),
+            front=dict(z=[r6(g("carrier_rim_end_z")), r6(g("shaft_journal_end_z"))], bore_r=r6(g("carrier_bore_r")),
+                       flange=dict(r=r6(g("carrier_flange_r")), z=[r6(g("rotor_w") / 2), r6(g("carrier_flange_front_z"))]),
+                       shoulder=dict(r=r6(g("shaft_shoulder_r")), z=[r6(g("carrier_flange_front_z")), r6(zf)]),
+                       rim=dict(inner_r=r6(g("carrier_rim_in_r")), z=[r6(g("carrier_rim_end_z")), r6(g("carrier_web_z"))]),
+                       hub_holes=dict(pitch_r=r6(g("carrier_hole_pcd_r")), d=r6(g("carrier_hole_d")),
+                                      count=int(round(g("carrier_hole_count"))), note="M3, cosmetic thread in Fusion")),
+            rear=dict(z=[r6(-zb), r6(-g("carrier_rim_end_z"))], hub_floor_r=r6(g("carrier_floor_r"))),
+            keys=dict(count=int(round(g("rotor_key_count"))), slot_w=r6(g("rotor_key_w"))))
+    else:
+        shaft_block = dict(axis="Z", back_end_z=r6(-zb), front_end_z=r6(g("shaft_front_end_z")),
                    journal_r=r6(g("shaft_journal_r")), rotor_seat_r=r6(g("shaft_seat_r")), bore_r=r6(g("shaft_bore_r")),
                    flange=dict(r=r6(g("shaft_seat_r") + g("shaft_flange_step")), z=[r6(g("rotor_w") / 2), r6(zf - g("shaft_shoulder_len"))]),
                    shoulder=dict(r=r6(g("shaft_shoulder_r")), z=[r6(zf - g("shaft_shoulder_len")), r6(zf)]),
@@ -86,8 +95,13 @@ def mech_datums(g, mech):
                    flats=dict(width=r6(g("shaft_flat_w")), z=[r6(g("shaft_journal_end_z") - g("shaft_flat_len")), r6(g("shaft_journal_end_z"))],
                               normals="+-X"),
                    thread=dict(r=r6(g("shaft_thread_r")), z=[r6(g("shaft_journal_end_z")), r6(g("shaft_thread_end_z"))], note="M5x0.8 in Fusion"),
-                   tip=dict(r=r6(g("shaft_tip_r")), z=[r6(g("shaft_thread_end_z")), r6(g("shaft_front_end_z"))])),
-        bearings=dict(card="618/8 (d %g, D %g, B %g)" % (g("bearing_d"), g("bearing_D"), g("bearing_B")),
+                   tip=dict(r=r6(g("shaft_tip_r")), z=[r6(g("shaft_thread_end_z")), r6(g("shaft_front_end_z"))]))
+    res = dict(
+        A_H=dict(z=r6(zah), outward_normal=[0, 0, -1],
+                 what="hub-boss plane: back end face of Stator_holder_back (heatsink boss seat, datum A_H of the full stack)",
+                 measured=_planar_face_at(mech["Stator_holder_back"], zah, -1)),
+        shaft=shaft_block,
+        bearings=dict(card=("61707-2RS1 " if carrier else "618/8 ") + "(d %g, D %g, B %g)" % (g("bearing_d"), g("bearing_D"), g("bearing_B")),
                       front=dict(z=[r6(zf), r6(zb)]), back=dict(z=[r6(-zb), r6(-zf)]),
                       seat_r=r6(g("bearing_od_r")), journal_r=r6(g("shaft_journal_r"))),
         holders=dict(front_face_z=r6(zf), back_face_z=r6(-zf), front_flange_outer_z=r6(zfl), back_flange_outer_z=r6(-zfl),
@@ -104,21 +118,25 @@ def mech_datums(g, mech):
         rings=dict(front_z=[r6(g("motor_length") / 2), r6(g("motor_length") / 2 + g("ring_h"))],
                    back_z=[r6(-g("motor_length") / 2 - g("ring_h")), r6(-g("motor_length") / 2)],
                    r=[r6(g("ring_inner_r")), r6(g("coil_corner_r"))]),
-        prop_fix=dict(seat_z=r6(g("shaft_journal_end_z")), z=[r6(g("shaft_journal_end_z") - g("prop_fix_hub_t")),
-                                                             r6(g("shaft_journal_end_z") + g("prop_fix_plate_t"))],
-                      d=r6(g("prop_fix_d"))),
         threads=dict(
-            note="Fusion threads are COSMETIC (ThreadFeature modeled = False, full length, read 2026-10-12 from the Fusion model): "
+            note="Fusion threads are COSMETIC (ThreadFeature modeled = False, full length, read from the Fusion model): "
                  "geometry is the core / tap diameter, the thread faces are coloured in the model",
-            shaft=dict(designation="M5x0.8 6g (Thread9)", modeled=False, r=r6(g("shaft_thread_r")),
-                       z=[r6(g("shaft_journal_end_z")), r6(g("shaft_thread_end_z"))]),
-            back_holder_M3=dict(designation="M3x0.5 6H (Thread12)", modeled=False, tap_r=r6(g("back_screw_tap_d") / 2), count=n),
-            back_holder_M2=dict(designation="M2x0.4 6H (Thread14)", modeled=False, tap_r=r6(g("holder_tap_d") / 2), count=n),
-            screws="no thread: the Fusion component is '91292A032_NO THREADS' (shank r 1.0)"),
-        screws=dict(count=n, length=r6(g("holder_screw_l")), head_seat_z=r6(zfl), tip_z=r6(zfl - g("holder_screw_l")),
+            back_holder_M3=dict(designation="M3x0.5 6H", modeled=False, tap_r=r6(g("back_screw_tap_d") / 2), count=n),
+            back_holder_screw_tap=dict(designation=("M2.5x0.45 6H" if carrier else "M2x0.4 6H (Thread14)"), modeled=False,
+                                       tap_r=r6(g("holder_tap_d") / 2), count=n)),
+        screws=dict(designation=("DIN 912 M2.5x%g" % g("holder_screw_l")) if carrier else "91292A032", count=n, length=r6(g("holder_screw_l")), head_seat_z=r6(zfl), tip_z=r6(zfl - g("holder_screw_l")),
                     thread_engagement=r6(max(0.0, -g("holder_seat_z") - max(zfl - g("holder_screw_l"), -zfl)))),
         note="z along the motor axis (+z propeller side); every value from the Params of this model; A_H measured on the "
              "exported Stator_holder_back solid")
+    return res
+
+
+def _has(g, name):
+    try:
+        g(name)
+        return True
+    except Exception:
+        return False
 
 
 def main():

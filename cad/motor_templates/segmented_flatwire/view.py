@@ -19,10 +19,10 @@ light bearing steel, aluminium holders / Prop_fix, GFRP ring, dark screws.
 import math
 
 BODIES = ("Core", "Coil", "RotorCore", "Magnet",
-          "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_seal")
+          "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_seal", "PhaseBoard")
 PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8", "Electronics")
 SHAPES = ("PhaseBoard",)                               # imported reference body (Part::Feature, per-face STEP colours)
-ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws")   # labels of the Draft link arrays
+ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws", "BoardPinsA", "BoardPinsB")   # labels of the Draft link arrays
 LINKS = ("Bearing_618_8_back", "Ring_back", "Bearing_seal_2")            # App::Link copies (Fusion occurrences)
 # per-part colours (r, g, b) from THE palette (palette.py: one source for the GUI finish, the GLB exporter and the web viewer).
 # The template does not know the magnet polarity per pocket: the FCStd array has one colour (N), the GLB / array elements
@@ -32,8 +32,9 @@ COLORS = {n: palette.body_colour(n) for n in palette.BODY_ROLE}
 # Fusion threads (shaft M5, back holder M3 / M2.5) are COSMETIC there (modeled = False): here the thread faces carry the host
 # colour, a little darker; the geometry is the plain core / tap diameter.
 THREAD_COLOURS = {bn: palette.thread_colour(COLORS[bn]) for bn in ("Shaft", "Stator_holder_back")}
-COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet", "Balls": "Bearing_ball", "Screws": "Screw"}
-_ALL_BODIES = BODIES + ("Bearing_ball", "Screw")
+COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet", "Balls": "Bearing_ball", "Screws": "Screw",
+                  "BoardPinsA": "PhaseBoardPins", "BoardPinsB": "PhaseBoardPins"}
+_ALL_BODIES = BODIES + ("Bearing_ball", "Screw", "PhaseBoardPins")
 # FreeCAD "isometric" view orientation (SbRotation quaternion x, y, z, w)
 ISO_Q = (0.424707, 0.17592, 0.339851, 0.820473)
 
@@ -231,7 +232,9 @@ def thread_face_indices(doc):
         return {}
     sh = doc.getObject("Params")
     g = lambda n: ps.pval(sh, n)
-    want = {"Shaft": [g("shaft_thread_r")], "Stator_holder_back": [g("holder_tap_d") / 2, g("back_screw_tap_d") / 2]}
+    from .params_sheet import has_param
+    shaft_thread = g("shaft_thread_r") if has_param(sh, "shaft_thread_r") else g("carrier_hole_d") / 2   # carrier: the M3 hub holes
+    want = {"Shaft": [shaft_thread], "Stator_holder_back": [g("holder_tap_d") / 2, g("back_screw_tap_d") / 2]}
     out = {}
     for bn, radii in want.items():
         b = doc.getObject(bn)
@@ -322,6 +325,7 @@ def style_gui(doc, gdoc):
     rep["thread_faces"] = colour_threads(doc, gdoc)
     rep["magnet_colours"] = colour_magnet_array(doc, gdoc)
     rep["appearance"] = apply_appearance(doc, gdoc)
-    if doc.getObject("PhaseBoard") is not None:
+    pbo = doc.getObject("PhaseBoard")
+    if pbo is not None and pbo.TypeId == "Part::Feature":        # the imported board (CIANO14 40); the CIANO28 85 plate uses the palette bodies
         rep["phase_board"] = colour_phase_board(doc, gdoc)
     return rep

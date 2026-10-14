@@ -134,24 +134,28 @@ def precheck_mechanics(g):
         if not cond:
             v.append(text)
 
-    rb, rj, rs, rsh = _num(g, "shaft_bore_r"), _num(g, "shaft_journal_r"), _num(g, "shaft_seat_r"), _num(g, "shaft_shoulder_r")
-    ch, rt, rtip = _num(g, "shaft_chamfer"), _num(g, "shaft_thread_r"), _num(g, "shaft_tip_r")
-    rfl = rs + _num(g, "shaft_flange_step")
-    need(0 < rb < rj - ch, "shaft bore radius (shaft_seat_r - shaft_height = %.3f) must be > 0 and < journal radius - chamfer "
-                           "(%.3f): the shaft wall vanishes" % (rb, rj - ch))
-    need(rj < rsh < rfl, "shaft shoulder radius %.3f must lie between the journal (%.3f) and the flange (%.3f)" % (rsh, rj, rfl))
-    need(rj + ch < rs, "bearing bore / 2 (%.3f) + chamfer must be < the rotor seat radius (rotor_down_r - rotor_house_height = "
-                       "%.3f)" % (rj, rs))
-    need(rtip <= rt < rj - ch, "thread radius %.3f must be >= tip radius %.3f and < journal radius - chamfer" % (rt, rtip))
-    need(_num(g, "shaft_flat_w") / 2 < rj, "drive flats (shaft_flat_w / 2 = %.3f) must cut the journal (r %.3f)"
-         % (_num(g, "shaft_flat_w") / 2, rj))
-    zj = _num(g, "shaft_journal_end_z")
-    zbore = zj - rb / math.tan(math.radians(_num(g, "shaft_bore_tip_angle")))
-    need(zbore > _num(g, "holder_face_z"), "the bore tip cone (bore ends at z %.3f) must end in front of the front bearing (z %.3f)"
-         % (zbore, _num(g, "holder_face_z")))
-    need(_num(g, "shaft_flat_len") < zj - _num(g, "front_holder_end_z"),
-         "drive flats (%.3f long) must stay in front of the front holder (journal end %.3f, holder end %.3f)"
-         % (_num(g, "shaft_flat_len"), zj, _num(g, "front_holder_end_z")))
+    carrier = _opt(g, "carrier_bore_r", None) is not None            # ring-carrier variant (CIANO28 85)
+    if carrier:
+        v += precheck_carrier(g)
+    else:
+        rb, rj, rs, rsh = _num(g, "shaft_bore_r"), _num(g, "shaft_journal_r"), _num(g, "shaft_seat_r"), _num(g, "shaft_shoulder_r")
+        ch, rt, rtip = _num(g, "shaft_chamfer"), _num(g, "shaft_thread_r"), _num(g, "shaft_tip_r")
+        rfl = rs + _num(g, "shaft_flange_step")
+        need(0 < rb < rj - ch, "shaft bore radius (shaft_seat_r - shaft_height = %.3f) must be > 0 and < journal radius - chamfer "
+                               "(%.3f): the shaft wall vanishes" % (rb, rj - ch))
+        need(rj < rsh < rfl, "shaft shoulder radius %.3f must lie between the journal (%.3f) and the flange (%.3f)" % (rsh, rj, rfl))
+        need(rj + ch < rs, "bearing bore / 2 (%.3f) + chamfer must be < the rotor seat radius (rotor_down_r - rotor_house_height = "
+                           "%.3f)" % (rj, rs))
+        need(rtip <= rt < rj - ch, "thread radius %.3f must be >= tip radius %.3f and < journal radius - chamfer" % (rt, rtip))
+        need(_num(g, "shaft_flat_w") / 2 < rj, "drive flats (shaft_flat_w / 2 = %.3f) must cut the journal (r %.3f)"
+             % (_num(g, "shaft_flat_w") / 2, rj))
+        zj = _num(g, "shaft_journal_end_z")
+        zbore = zj - rb / math.tan(math.radians(_num(g, "shaft_bore_tip_angle")))
+        need(zbore > _num(g, "holder_face_z"), "the bore tip cone (bore ends at z %.3f) must end in front of the front bearing (z %.3f)"
+             % (zbore, _num(g, "holder_face_z")))
+        need(_num(g, "shaft_flat_len") < zj - _num(g, "front_holder_end_z"),
+             "drive flats (%.3f long) must stay in front of the front holder (journal end %.3f, holder end %.3f)"
+             % (_num(g, "shaft_flat_len"), zj, _num(g, "front_holder_end_z")))
     d, D, B = _num(g, "bearing_d"), _num(g, "bearing_D"), _num(g, "bearing_B")
     li, lo, bd = _num(g, "bearing_inner_land_d") / 2, _num(g, "bearing_outer_land_d") / 2, _num(g, "bearing_ball_d") / 2
     pr, e = (d + D) / 4, _num(g, "bearing_edge_r")
@@ -163,14 +167,16 @@ def precheck_mechanics(g):
          "bearing_ball_count = %g: must be an integer >= 3 and the balls must not overlap on the pitch circle" % n)
     Ri, Rh, R8 = _num(g, "holder_inner_r"), _num(g, "holder_hub_r"), _num(g, "bearing_od_r")
     aw = _num(g, "angle_wire")
+    sa = _opt(g, "holder_spoke_angle", aw)                          # window axis -> spoke axis (= angle_wire on the CIANO14 40)
     w, bolt_r, hb = _num(g, "bolt_head_d") / 2, _num(g, "holder_bolt_r"), _num(g, "bolt_d") / 2
     rf = _num(g, "holder_window_r")
     need(R8 < Rh < Ri, "holder radii: bearing seat %.3f < hub %.3f < flange %.3f" % (R8, Rh, Ri))
     need(_num(g, "holder_lip_r") < R8, "holder lip radius must be < the bearing seat radius")
-    need((Rh + rf) * math.sin(math.radians(aw)) > w + rf,
+    need((Rh + rf) * math.sin(math.radians(sa)) > w + rf,
          "the window fillets do not fit between the spokes: spokes too wide (bolt_head_d) or angle_wire too small")
-    need(bolt_r - w < Ri < bolt_r, "bolt circle %.3f: the boss (head circle radius %.3f) must straddle the flange radius %.3f"
-         % (bolt_r, w, Ri))
+    need(math.sqrt(max(Ri * Ri - w * w, 0.0)) < bolt_r and bolt_r - 3 * w < Ri,
+         "bolt circle %.3f: the boss (head circle radius %.3f) must reach the flange radius %.3f (tangent spoke lines from the flange "
+         "arc to the head circle)" % (bolt_r, w, Ri))
     leg = bolt_r * math.sin(math.radians(aw)) - _num(g, "core_leg_outer_x")
     need(max(hb, _num(g, "holder_tap_d") / 2) < leg < w,
          "seat: the bolt axis is %.3f mm from the core leg face; it must be more than the hole radius and less than "
@@ -186,7 +192,40 @@ def precheck_mechanics(g):
          % (_num(g, "ring_inner_r"), _num(g, "stator_down_r")))
     need(_num(g, "holder_screw_l") > _num(g, "holder_flange_z") + _num(g, "motor_length") / 2,
          "holder screw (%.3f) must reach the back bosses" % _num(g, "holder_screw_l"))
-    need(_num(g, "prop_fix_d") / 2 > rj + _num(g, "prop_fix_relief_r"), "Prop_fix diameter too small for the hole")
+    if not carrier:
+        need(_num(g, "prop_fix_d") / 2 > rj + _num(g, "prop_fix_relief_r"), "Prop_fix diameter too small for the hole")
+    return v
+
+
+def precheck_carrier(g):
+    """Ring carrier (Shaft + Shaft_rear, CIANO28 85): the rectilinear half section must keep its order, the rim tab / slot and the
+    hub holes must fit."""
+    v = []
+
+    def need(cond, text):
+        if not cond:
+            v.append(text)
+
+    bore, floor, jr, shr, fl = (_num(g, n) for n in ("carrier_bore_r", "carrier_floor_r", "shaft_journal_r", "shaft_shoulder_r",
+                                                      "carrier_flange_r"))
+    rin, seat = _num(g, "carrier_rim_in_r"), _num(g, "shaft_seat_r")
+    need(0 < bore < floor < jr < shr < rin < seat < fl,
+         "carrier radii out of order: bore %.3f < hub floor %.3f < journal %.3f < shoulder %.3f < rim inner %.3f < rotor seat %.3f < "
+         "flange %.3f" % (bore, floor, jr, shr, rin, seat, fl))
+    zr, zfl, zweb, zrim = (_num(g, n) for n in ("rotor_w", "carrier_flange_front_z", "carrier_web_z", "carrier_rim_end_z"))
+    need(zrim < zweb < zfl, "carrier axial order: rim end %.3f < web %.3f < flange face %.3f (rotor face %.3f)" % (zrim, zweb, zfl, zr / 2))
+    need(_num(g, "holder_face_z") > zfl, "bearing inner face z %.3f must be beyond the carrier flange face %.3f" % (
+        _num(g, "holder_face_z"), zfl))
+    nk = _opt(g, "rotor_key_count", 0)
+    kw = _num(g, "rotor_key_w") / 2
+    rc, rf = _num(g, "carrier_tab_cap_r"), _num(g, "carrier_tab_fillet_r")
+    need(nk >= 1, "the carrier key tabs need rotor_key_count >= 1")
+    need(rc > kw > 0 and rf > 0 and rin - rf > 0,
+         "carrier tab: cap radius %.3f must exceed the slot half width %.3f; flank radius %.3f must be > 0" % (rc, kw, rf))
+    pcd, hd = _num(g, "carrier_hole_pcd_r"), _num(g, "carrier_hole_d") / 2
+    need(bore + hd < pcd < jr - hd, "carrier hub holes (pitch radius %.3f, r %.3f) must lie between the bore %.3f and the journal %.3f"
+         % (pcd, hd, bore, jr))
+    need(_num(g, "shaft_journal_end_z") > zfl, "hub end z %.3f must be beyond the flange face %.3f" % (_num(g, "shaft_journal_end_z"), zfl))
     return v
 
 
@@ -195,7 +234,7 @@ def expected_counts(g):
     out = dict(core_sectors=ns * 3, coils=ns * 3, magnets=ns * int(round(_num(g, "num_poles_per_segment"))),
                layers=int(round(_num(g, "num_wires_per_slot"))))
     try:
-        out.update(screws=ns * 3, balls=int(round(_num(g, "bearing_ball_count"))))
+        out.update(screws=int(round(_opt(g, "holder_bolt_count", ns * 3))), balls=int(round(_num(g, "bearing_ball_count"))))
     except Exception:
         pass
     return out
@@ -324,6 +363,8 @@ def gate(doc, sheet_name="Params"):
 
 MECH_BODIES = ("Shaft", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring",
                "Bearing_ball", "Screw")
+MECH_BODIES_CARRIER = ("Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Bearing_outer_ring",
+                       "Bearing_inner_ring", "Bearing_seal", "Bearing_ball", "Screw")
 
 
 def _gate_mechanics(doc, g, exp, counts, vols):
@@ -331,7 +372,8 @@ def _gate_mechanics(doc, g, exp, counts, vols):
     current Params demand)."""
     from . import mechanics
     errors = []
-    for bn in MECH_BODIES:
+    carrier = doc.getObject("Shaft_rear") is not None
+    for bn in (MECH_BODIES_CARRIER if carrier else MECH_BODIES):
         b = doc.getObject(bn)
         if b is None:
             errors.append("body %s missing" % bn)
@@ -347,7 +389,7 @@ def _gate_mechanics(doc, g, exp, counts, vols):
         counts[key] = n
         if n != exp.get(key):
             errors.append("array %s has %d solids, Params require %s" % (label, n, exp.get(key)))
-    for ln in ("Bearing_618_8_back", "Ring_back"):
+    for ln in ("Bearing_618_8_back", "Ring_back") + (("Bearing_seal_2",) if carrier else ()):
         lk = doc.getObject(ln)
         if lk is None or lk.LinkedObject is None:
             errors.append("link %s missing or empty" % ln)
@@ -355,32 +397,46 @@ def _gate_mechanics(doc, g, exp, counts, vols):
         return errors
     so = mechanics.solids(doc)
     zf, zfl, zb = g("holder_face_z"), g("holder_flange_z"), g("bearing_out_z")
-    inv = [("Shaft back end z = -bearing_out_z", _bb(so["Shaft"]).ZMin, -zb),
-           ("Shaft front end z = shaft_front_end_z", _bb(so["Shaft"]).ZMax, g("shaft_front_end_z")),
-           ("Shaft flange radius", _bb(so["Shaft"]).XMax, g("shaft_seat_r") + g("shaft_flange_step")),
-           ("front bearing inner face z", _bb(so["Bearing_618_8_front_outer_ring"]).ZMin, zf),
-           ("front bearing outer face z", _bb(so["Bearing_618_8_front_outer_ring"]).ZMax, zb),
-           ("back bearing inner face z", _bb(so["Bearing_618_8_back_outer_ring"]).ZMax, -zf),
-           ("bearing outer radius", _bb(so["Bearing_618_8_front_outer_ring"]).XMax, g("bearing_D") / 2),
-           ("Stator_holder z min = seat bottom", _bb(so["Stator_holder"]).ZMin, g("holder_seat_z")),
-           ("Stator_holder z max = front_holder_end_z", _bb(so["Stator_holder"]).ZMax, g("front_holder_end_z")),
-           ("Stator_holder_back z min = A_H = -back_holder_end_z", _bb(so["Stator_holder_back"]).ZMin, -g("back_holder_end_z")),
-           ("Stator_holder_back z max = -seat bottom", _bb(so["Stator_holder_back"]).ZMax, -g("holder_seat_z")),
-           ("Ring_front z", _bb(so["Ring_front"]).ZMin, g("motor_length") / 2),
-           ("Ring_back z", _bb(so["Ring_back"]).ZMax, -g("motor_length") / 2),
-           ("Prop_fix z min", _bb(so["Prop_fix"]).ZMin, g("shaft_journal_end_z") - g("prop_fix_hub_t")),
-           ("Prop_fix z max", _bb(so["Prop_fix"]).ZMax, g("shaft_journal_end_z") + g("prop_fix_plate_t")),
-           ("Screw head top z", _bb(so["Screw_1"]).ZMax, g("screw_head_top_z")),
-           ("Screw tip z", _bb(so["Screw_1"]).ZMin, zfl - g("holder_screw_l"))]
+    if carrier:
+        inv = [("Shaft rim end z = carrier_rim_end_z", _bb(so["Shaft"]).ZMin, g("carrier_rim_end_z")),
+               ("Shaft hub end z = shaft_journal_end_z", _bb(so["Shaft"]).ZMax, g("shaft_journal_end_z")),
+               ("Shaft flange radius", _bb(so["Shaft"]).XMax, g("carrier_flange_r")),
+               ("Shaft_rear hub end z = -bearing_out_z", _bb(so["Shaft_rear"]).ZMin, -zb),
+               ("Shaft_rear rim end z = -carrier_rim_end_z", _bb(so["Shaft_rear"]).ZMax, -g("carrier_rim_end_z")),
+               ("Shaft_rear flange radius", _bb(so["Shaft_rear"]).XMax, g("carrier_flange_r"))]
+    else:
+        inv = [("Shaft back end z = -bearing_out_z", _bb(so["Shaft"]).ZMin, -zb),
+               ("Shaft front end z = shaft_front_end_z", _bb(so["Shaft"]).ZMax, g("shaft_front_end_z")),
+               ("Shaft flange radius", _bb(so["Shaft"]).XMax, g("shaft_seat_r") + g("shaft_flange_step")),
+               ("Prop_fix z min", _bb(so["Prop_fix"]).ZMin, g("shaft_journal_end_z") - g("prop_fix_hub_t")),
+               ("Prop_fix z max", _bb(so["Prop_fix"]).ZMax, g("shaft_journal_end_z") + g("prop_fix_plate_t"))]
+    inv += [("front bearing inner face z", _bb(so["Bearing_618_8_front_outer_ring"]).ZMin, zf),
+            ("front bearing outer face z", _bb(so["Bearing_618_8_front_outer_ring"]).ZMax, zb),
+            ("back bearing inner face z", _bb(so["Bearing_618_8_back_outer_ring"]).ZMax, -zf),
+            ("bearing outer radius", _bb(so["Bearing_618_8_front_outer_ring"]).XMax, g("bearing_D") / 2),
+            ("Stator_holder z min = seat bottom", _bb(so["Stator_holder"]).ZMin, g("holder_seat_z")),
+            ("Stator_holder z max = front_holder_end_z", _bb(so["Stator_holder"]).ZMax, g("front_holder_end_z")),
+            ("Stator_holder_back z min = A_H = -back_holder_end_z", _bb(so["Stator_holder_back"]).ZMin, -g("back_holder_end_z")),
+            ("Stator_holder_back z max = -seat bottom", _bb(so["Stator_holder_back"]).ZMax, -g("holder_seat_z")),
+            ("Ring_front z", _bb(so["Ring_front"]).ZMin, g("motor_length") / 2),
+            ("Ring_back z", _bb(so["Ring_back"]).ZMax, -g("motor_length") / 2),
+            ("Screw head top z", _bb(so["Screw_1"]).ZMax, g("screw_head_top_z")),
+            ("Screw tip z", _bb(so["Screw_1"]).ZMin, zfl - g("holder_screw_l"))]
     for name, got, want in inv:
         if abs(got - want) > max(TOL, 1e-7 * abs(want)):
             errors.append("stale/incorrect geometry: %s: model %.6f, Params require %.6f" % (name, got, want))
     # every patterned feature present (a tool that stops cutting after an edit keeps the body valid but wrong)
     n = int(round(g("holder_bolt_count")))
-    want = {("Stator_holder", "chamfer45"): 2 * n, ("Stator_holder", g("holder_window_r")): 2 * n,
-            ("Stator_holder_back", "chamfer45"): 2 * n, ("Stator_holder_back", g("holder_window_r")): 2 * n,
-            ("Stator_holder_back", g("back_holder_fillet_r")): 2 * n, ("Stator_holder_back", g("back_screw_tap_d") / 2): n,
-            ("Stator_holder", g("bolt_d") / 2): n, ("Stator_holder_back", g("holder_tap_d") / 2): n}
+    if carrier:        # CIANO28 85 counts: window fillets + rib fillets (4 per spoke), one chamfer per spoke
+        want = {("Stator_holder", "chamfer45"): n, ("Stator_holder", g("holder_window_r")): 4 * n,
+                ("Stator_holder_back", "chamfer45"): n, ("Stator_holder_back", g("holder_window_r")): 4 * n,
+                ("Stator_holder_back", g("back_holder_fillet_r")): 2 * n, ("Stator_holder_back", g("back_screw_tap_d") / 2): n,
+                ("Stator_holder", g("bolt_d") / 2): n, ("Stator_holder_back", g("holder_tap_d") / 2): n}
+    else:
+        want = {("Stator_holder", "chamfer45"): 2 * n, ("Stator_holder", g("holder_window_r")): 2 * n,
+                ("Stator_holder_back", "chamfer45"): 2 * n, ("Stator_holder_back", g("holder_window_r")): 2 * n,
+                ("Stator_holder_back", g("back_holder_fillet_r")): 2 * n, ("Stator_holder_back", g("back_screw_tap_d") / 2): n,
+                ("Stator_holder", g("bolt_d") / 2): n, ("Stator_holder_back", g("holder_tap_d") / 2): n}
     for (body, kind), cnt in want.items():
         got = _feature_count(so[body], kind)
         if got != cnt:
@@ -419,6 +475,13 @@ FIT_PAIRS = [
     ("Screws", "Shaft", "clear"), ("Screws", "RotorCore", "clear"), ("Screws", "MagnetArray", "clear"),
     ("Screws", "Ring_front", "clear"), ("Screws", "Ring_back", "clear"),
 ]
+FIT_PAIRS_CARRIER = [(a, b, k) for a, b, k in FIT_PAIRS if "Prop_fix" not in (a, b) and a != "Shaft"
+                     and not (b == "Shaft" and a == "Screws")] + [
+    ("Shaft", "RotorCore", "contact"), ("Shaft_rear", "RotorCore", "contact"),
+    ("Shaft", "Bearing_618_8_front_inner_ring", "contact"), ("Shaft_rear", "Bearing_618_8_back_inner_ring", "contact"),
+    ("Shaft", "Stator_holder", "clear"), ("Shaft_rear", "Stator_holder_back", "clear"),
+    ("Shaft", "Stator_holder_back", "clear"), ("Shaft_rear", "Stator_holder", "clear"),
+    ("Shaft", "Ring_front", "clear"), ("Shaft_rear", "Ring_back", "clear"), ("Screws", "Shaft", "clear"), ("Screws", "Shaft_rear", "clear")]
 SCREW_ENGAGE_MIN_D = 1.5     # thread engagement in the back boss: at least 1.5 x screw diameter (owner 2026-10-13, reported)
 FIT_REFUSE_MM3 = 0.5        # an overlap above this (outside "thread") refuses the build: a part runs into another one
 
@@ -433,7 +496,8 @@ def fit(doc):
         act[lbl] = [o for o in doc.Objects if o.Label == lbl][0].Shape
     act["Screws"] = Part.makeCompound([v for k, v in so.items() if k.startswith("Screw_")])
     rows, errors = [], []
-    for a, b, kind in FIT_PAIRS:
+    pairs = FIT_PAIRS_CARRIER if doc.getObject("Shaft_rear") is not None else FIT_PAIRS
+    for a, b, kind in pairs:
         sa, sb = so.get(a, act.get(a)), so.get(b, act.get(b))
         if sa is None or sb is None:
             continue
@@ -468,6 +532,10 @@ def _screw_check(doc, so, errors):
     eng = com.BoundBox.ZLength if not com.isNull() and com.Volume > 1e-9 else 0.0
     tip = s1.BoundBox.ZMin
     outer = -g("holder_flange_z")                  # outer face of the back flange
+    try:
+        outer -= g("holder_rib_h")                 # CIANO28 85: the spoke ribs continue the flange outwards (Fusion screw tip z -10.4)
+    except Exception:
+        pass
     need_eng = SCREW_ENGAGE_MIN_D * g("bolt_d")
     r = dict(length=round(g("holder_screw_l"), 6), length_required=round(g("holder_screw_req"), 6), tip_z=round(tip, 6),
              back_flange_outer_z=round(outer, 6), tip_margin_to_outer_face=round(tip - outer, 6),

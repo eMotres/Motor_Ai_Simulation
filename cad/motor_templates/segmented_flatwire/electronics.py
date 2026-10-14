@@ -59,6 +59,9 @@ def has_board(doc):
 def build_electronics(doc, sh):
     """Adds the Electronics part with the PhaseBoard body.  Returns a small report."""
     import Part
+    from .params_sheet import has_param
+    if has_param(sh, "board_outer_r"):
+        return build_board_plate(doc, sh)
     path = find_step()
     if path is None:
         raise RuntimeError("phase board STEP %s not found (cad/reference/phase_board/ or $FC_PHASE_BOARD_STEP)" % STEP_NAME)
@@ -81,6 +84,159 @@ def build_electronics(doc, sh):
     return dict(step=STEP_NAME, sha256=f.SourceSHA256, solids=len(shape.Solids), faces=len(shape.Faces))
 
 
+# ---------------------------------------------------------------------------------------------------- plate board (CIANO28 85)
+# "PCB 85 serial" of the Fusion model, reduced to what the fit needs (owner brief: outline, holes and pin positions only):
+# a ring plate (PartDesign Body PhaseBoard: outer / inner radius, thickness board_t, a lead slot per coil lead, polar pattern) and
+# the lead sleeves (Body PhaseBoardPins: a rectangular sleeve around every coil lead stub, same pattern).  Everything is a named
+# Params row (board_*): the board follows the coil leads (board_top_z = lead end of the straight legs + board_gap).
+PLATE_PINS = "PhaseBoardPinA"                  # base body of the lead A sleeve (B: PhaseBoardPinB); arrays BoardPinsA / BoardPinsB
+
+
+def is_plate(doc):
+    return doc.getObject(PLATE_PINS) is not None
+
+
+def plate_pin_solids(doc):
+    """The lead sleeves (Draft link arrays BoardPinsA / BoardPinsB) in the motor frame."""
+    out = []
+    for lbl in ("BoardPinsA", "BoardPinsB"):
+        for o in doc.Objects:
+            if o.Label == lbl:
+                out += [x.copy() for x in o.Shape.Solids]
+    return out
+
+
+def build_board_plate(doc, sh):
+    from .params_sheet import pval
+    from .sketchkit import SK
+    from .common import xy_sketch
+    from .mechanics import polar, _pad, _pocket, ORIGIN
+    from .build import _polar_array
+    import Part
+    g = lambda n: pval(sh, n)
+    part = doc.addObject("App::Part", PART)
+    part.Label = PART
+    plate = doc.addObject("PartDesign::Body", BODY)
+    plate.Label = BODY
+    part.addObject(plate)
+    V = App.Vector
+
+    def lead_loops(sk, s, tags, with_inner):
+        """Rectangles of board_pin_w x board_pin_t centred on the coil lead stubs (lead A on -x, lead B on +x) and, for the sleeves,
+        the stub section wire_width x wire_height as the inner loop."""
+        lx, ay, by = g("board_lead_x"), g("board_lead_a_y"), g("board_lead_b_y")
+        pw, pt, ww, wh = g("board_pin_w"), g("board_pin_t"), g("wire_width"), g("wire_height")
+        for tag, cx, cy, cxe, cye in (("a", -lx, ay, "-" + P + "board_lead_x", P + "board_lead_a_y"),
+                                      ("b", lx, by, P + "board_lead_x", P + "board_lead_b_y")):
+            if tag not in tags:
+                continue
+            loops = [("pin", pw, pt, P + "board_pin_w", P + "board_pin_t")]
+            if with_inner:
+                loops.append(("stub", ww, wh, P + "wire_width", P + "wire_height"))
+            for kind, w, h, we, he in loops:
+                gg = s.rect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+                n = "%s_%s" % (kind, tag)
+                s.con("DistanceX", ORIGIN, 1, gg[0], 1, cx - w / 2, name=n + "_x", expr="%s - (%s) / 2" % (cxe, we))
+                s.con("DistanceY", ORIGIN, 1, gg[0], 1, cy - h / 2, name=n + "_y", expr="%s - (%s) / 2" % (cye, he))
+                s.con("DistanceX", gg[0], 1, gg[0], 2, w, name=n + "_w", expr=we)
+                s.con("DistanceY", gg[1], 1, gg[1], 2, h, name=n + "_h", expr=he)
+
+    # plate: ring -> pad, lead slots -> pocket through, polar pattern
+    rk = xy_sketch(plate, "BoardRingSketch", P + "board_bottom_z")
+    s = SK(rk)
+    co = rk.addGeometry(Part.Circle(V(0, 0, 0), V(0, 0, 1), g("board_outer_r")), False)
+    ci = rk.addGeometry(Part.Circle(V(0, 0, 0), V(0, 0, 1), g("board_inner_r")), False)
+    s.con("Coincident", co, 3, ORIGIN, 1)
+    s.con("Coincident", ci, 3, ORIGIN, 1)
+    s.con("Radius", co, g("board_outer_r"), name="board_outer_r", expr=P + "board_outer_r")
+    s.con("Radius", ci, g("board_inner_r"), name="board_inner_r", expr=P + "board_inner_r")
+    doc.recompute()
+    ring = _pad(plate, rk, "BoardRing", P + "board_t")
+    doc.recompute()
+    sk1 = xy_sketch(plate, "BoardLeadSlotSketch", P + "board_top_z")
+    lead_loops(sk1, SK(sk1), ("a", "b"), False)
+    doc.recompute()
+    slots = _pocket(plate, sk1, "BoardLeadSlots", P + "board_t")
+    doc.recompute()
+    pp1 = polar(plate, [slots], sk1, P + "coil_count", "BoardLeadSlotsPattern")
+    pp1.Refine = True
+    plate.Tip = pp1
+    sketches = [rk, sk1]
+    # lead sleeves: one body per lead (a PartDesign body keeps ONE solid), each patterned like the coils (Draft link array)
+    for tag in ("a", "b"):
+        pb = doc.addObject("PartDesign::Body", "PhaseBoardPin" + tag.upper())
+        pb.Label = pb.Name
+        part.addObject(pb)
+        sk2 = xy_sketch(pb, "BoardPinSketch" + tag.upper(), P + "board_bottom_z")
+        lead_loops(sk2, SK(sk2), (tag,), True)
+        doc.recompute()
+        pad = _pad(pb, sk2, "BoardPin" + tag.upper(), P + "board_t")
+        pb.Tip = pad
+        doc.recompute()
+        arr = _polar_array(doc, pb, P + "coil_count", "BoardPins" + tag.upper())
+        part.addObject(arr)
+        sketches.append(sk2)
+    doc.recompute()
+    return dict(step=None, kind="plate", sketches=sketches, solids=len(plate.Shape.Solids) + len(plate_pin_solids(doc)))
+
+
+def plate_gate(doc, g):
+    errors = []
+    plate = doc.getObject(BODY)
+    n = int(round(g("coil_count")))
+    if plate is None or plate.Shape.isNull() or not plate.Shape.isValid() or plate.Shape.Volume <= 0:
+        return ["PhaseBoard: missing / null / invalid"]
+    if len(plate.Shape.Solids) != 1:
+        errors.append("PhaseBoard plate has %d solids, expected 1" % len(plate.Shape.Solids))
+    sl = plate_pin_solids(doc)
+    if len(sl) != 2 * n:
+        errors.append("the board has %d lead sleeves, Params require %d (2 per coil)" % (len(sl), 2 * n))
+    bb = plate.Shape.optimalBoundingBox(False, False)
+    for name, got, want in (("board outer radius", bb.XMax, g("board_outer_r")), ("board top z", bb.ZMax, g("board_top_z")),
+                            ("board bottom z", bb.ZMin, g("board_bottom_z"))):
+        if abs(got - want) > 1e-4:
+            errors.append("stale/incorrect geometry: %s: model %.5f, Params require %.5f" % (name, got, want))
+    lead_end = -(g("coil_leg_length") / 2 + g("coil_lead_ext"))
+    if abs(g("board_top_z") - (lead_end - g("board_gap"))) > 1e-6:
+        errors.append("board_top_z is not the straight-leg end + lead extension + gap")
+    return errors
+
+
+def plate_fit(doc, motor_groups):
+    import Part
+    plate = doc.getObject(BODY).Shape
+    sleeves = plate_pin_solids(doc)
+    rows, errors = [], []
+    for name, grp in motor_groups.items():
+        d_pl, ov_pl = distance_overlap([plate], grp)
+        d_pn, ov_pn = distance_overlap(sleeves, grp)
+        ds = [x for x in (d_pl, d_pn) if x is not None]
+        rows.append(dict(group=name, overlap_mm3=round(ov_pl + ov_pn, 6), min_distance_mm=_r(min(ds)) if ds else None,
+                         board_overlap_mm3=round(ov_pl, 6), board_min_distance_mm=_r(d_pl),
+                         pins_overlap_mm3=round(ov_pn, 6), pins_min_distance_mm=_r(d_pn),
+                         status="CLASH" if (ov_pl + ov_pn) > 1e-6 else "clear"))
+    leads = []
+    coils = motor_groups.get("Coils", [])
+    zt = plate.BoundBox.ZMax
+    for ci, name, face in lead_ends(coils):
+        z0 = face.CenterOfMass.z
+        prism = face.extrude(App.Vector(0, 0, zt + 1.0 - z0))
+        d_p, ov_p = distance_overlap([prism.Solids[0]], [plate])
+        d_s, ov_s = distance_overlap([prism.Solids[0]], sleeves)
+        c = face.CenterOfMass
+        leads.append(dict(coil=ci, lead=name, centre=[round(c.x, 3), round(c.y, 3), round(c.z, 3)], r=round(math.hypot(c.x, c.y), 3),
+                          stands_out_of_board_mm=round(zt - z0, 4), overlap_plate_mm3=round(ov_p, 6), overlap_sleeve_mm3=round(ov_s, 6),
+                          overlap_mm3=round(ov_p + ov_s, 6),
+                          clearance_to_board_mm=_r(min([x for x in (d_p, d_s) if x is not None] or [None]) if (d_p is not None or d_s is not None) else None),
+                          clearance_to_plate_mm=_r(d_p), clearance_to_sleeve_mm=_r(d_s)))
+        if ov_p > 1e-6 or ov_s > 1e-6:
+            errors.append("coil %d lead '%s' runs into the board (plate %.4f, sleeve %.4f mm3)" % (ci, name, ov_p, ov_s))
+    bb = plate.BoundBox
+    return dict(kind="plate", groups=rows, leads=leads, pins=[[round(x.BoundBox.Center.x, 4), round(x.BoundBox.Center.y, 4)]
+                                                              for x in sleeves],
+                board_bbox=[round(v, 4) for v in (bb.XMin, bb.YMin, bb.ZMin, bb.XMax, bb.YMax, bb.ZMax)], errors=errors)
+
+
 # ---------------------------------------------------------------------------------------------------- geometry in the motor frame
 
 
@@ -89,14 +245,21 @@ def placement(doc):
 
 
 def board_shape(doc):
-    """The imported compound in the motor frame."""
+    """The imported compound (plate variant: plate + sleeves) in the motor frame."""
+    if is_plate(doc):
+        import Part
+        return Part.makeCompound([doc.getObject(BODY).Shape.copy()] + plate_pin_solids(doc))
     s = doc.getObject(BODY).Shape.copy()
     s.Placement = doc.getObject(PART).Placement.multiply(s.Placement)
     return s
 
 
 def pins(shape):
-    return [s for s in shape.Solids if s.BoundBox.ZLength > PIN_MIN_Z_LENGTH]
+    tall = [s for s in shape.Solids if s.BoundBox.ZLength > PIN_MIN_Z_LENGTH]
+    if tall:
+        return tall
+    vmax = max([s.Volume for s in shape.Solids] or [0.0])             # plate variant: the lead sleeves are the small solids
+    return [s for s in shape.Solids if s.Volume < 0.05 * vmax] if len(shape.Solids) > 1 else []
 
 
 def n_copper_z(shape):
@@ -121,6 +284,8 @@ def gate(doc, g):
     f, part = doc.getObject(BODY), doc.getObject(PART)
     if f is None or part is None:
         return ["Electronics / PhaseBoard missing"]
+    if is_plate(doc):
+        return plate_gate(doc, g)
     s = f.Shape
     if s.isNull() or not s.isValid() or s.Volume <= 0:
         return ["PhaseBoard: null / invalid / volume<=0"]
@@ -233,7 +398,7 @@ def motor_groups(doc):
     lbl = lambda n: [o for o in doc.Objects if o.Label == n][0].Shape.Solids
     pick = lambda *names: [so[n] for n in names if n in so]
     return {"Coils": lbl("Coils"), "Core": doc.getObject("Core").Shape.Solids, "RotorCore": doc.getObject("RotorCore").Shape.Solids,
-            "Magnets": lbl("MagnetArray"), "Shaft": pick("Shaft"),
+            "Magnets": lbl("MagnetArray"), "Shaft": pick("Shaft", "Shaft_rear"),
             "Stator_holder (front)": pick("Stator_holder"), "Stator_holder_back (A_H)": pick("Stator_holder_back"),
             "Rings": pick("Ring_front", "Ring_back"),
             "Bearings": [v for k, v in so.items() if k.startswith("Bearing_618_8")],
@@ -247,6 +412,8 @@ def fit(doc, motor_groups):
     Returns dict(groups, leads, pins, errors).  Errors only for structural problems (a lead stub running into the board);
     overlaps of the board with motor parts are REPORTED (status 'CLASH'), not refused: the pin tail is provisional."""
     import Part
+    if is_plate(doc):
+        return plate_fit(doc, motor_groups)
     bs = board_shape(doc)
     sol = list(bs.Solids)
     pn = pins(bs)
@@ -284,6 +451,15 @@ def fit(doc, motor_groups):
 
 def datums(doc, g):
     """Block for the datums JSON (same frame as the STEP of the active part)."""
+    if is_plate(doc):
+        bs = board_shape(doc)
+        pb = doc.getObject(BODY).Shape.BoundBox
+        return dict(what="phase (coil-connection) board 85, reduced to outline, lead slots and lead sleeves (parametric plate)",
+                    solids=len(bs.Solids), board_outer_r=g("board_outer_r"), board_inner_r=g("board_inner_r"),
+                    board_top_z=round(pb.ZMax, 6), board_bottom_z=round(pb.ZMin, 6),
+                    coil_lead_end_z=round(-(g("coil_leg_length") / 2 + g("coil_lead_total")), 6),
+                    pins_xy=[[round(x, 4), round(y, 4)] for x, y in pin_positions(bs)],
+                    note="board_top_z = end of the straight legs + coil_lead_ext + board_gap; the sleeves sit on the coil lead stubs")
     bs = board_shape(doc)
     pl = placement(doc)
     return dict(

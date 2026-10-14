@@ -244,6 +244,22 @@ def build_bom(dump, inputs):
 
     # ---- shaft -------------------------------------------------------------------------------------------------
     sh = m.get("Shaft")
+    sh_rear = m.get("Shaft_rear")
+    if sh and sh_rear:                                    # ring carrier (CIANO28 85): front steel hub + rear aluminium hub
+        for key, label, title, dflt in (("shaft", "Shaft", "Rotor carrier, front (hub with 4 M3 end-face holes, rotor seat, bearing journal)", "Steel"),
+                                        ("shaft_rear", "Shaft_rear", "Rotor carrier, rear (hub tube, rotor seat, bearing journal)", "Aluminum 6061")):
+            e = m.get(label)
+            w, h, ln = _bb(e)
+            mat = mats.get(label, dflt)
+            rho, rs = density_of(mat, inputs)
+            sim_mat = inputs["sim_materials"].get("shaft") if label == "Shaft" else None
+            add(key, title, "manufactured", 1, "pcs", sim_mat or mat,
+                "length %.1f mm, max Ø%.2f mm, rotor seat Ø%.1f, journal Ø%.1f, %d key slots %.1f wide in the rim" % (
+                    ln, w, 2 * m.p("shaft_seat_r"), m.p("bearing_d"), round(m.p("rotor_key_count")), m.p("rotor_key_w")),
+                e["volume"] * rho * 1e-6, "model" + ("; simulation shaft slot = %s" % sim_mat if sim_mat else ""),
+                "density %.0f (%s); the rotor keys engage the rim slots; machining, finish, M3 thread depth: to be specified" % (rho, rs),
+                sim_g=simg("Shaft") if label == "Shaft" else None, tbs_text="material / heat treatment / finish of the rotor carrier")
+        sh = None
     if sh:
         w, h, ln = _bb(sh)
         mat = mats.get("Shaft", "Steel")
@@ -266,8 +282,9 @@ def build_bom(dump, inputs):
             w, h, ln = _bb(e)
             mat = mats.get(label, "Aluminum 6061")
             rho, rs = density_of(mat, inputs)
-            add(key, title, "manufactured", 1, "pcs", mat, "envelope %.1f x %.1f x %.1f mm, volume %.1f mm3, %d spokes, M2 %s" % (
-                w, h, ln, e["volume"], round(m.p("holder_bolt_count")), "clearance holes" if key == "holder_front" else "tapped holes 1.623 mm (minor)"),
+            add(key, title, "manufactured", 1, "pcs", mat, "envelope %.1f x %.1f x %.1f mm, volume %.1f mm3, %d spokes, M%g %s" % (
+                w, h, ln, e["volume"], round(m.p("holder_bolt_count")), m.p("bolt_d"),
+                "clearance holes" if key == "holder_front" else "tapped holes %.3f mm (minor)" % m.p("holder_tap_d")),
                 e["volume"] * rho * 1e-6, "model", "density %.0f (%s); machining, anodising / finish: to be specified" % (rho, rs),
                 tbs_text="finish (anodising) and tolerances of the holder")
     ring = m.get("Ring")
@@ -298,7 +315,18 @@ def build_bom(dump, inputs):
         rho, rs = density_of(brg, inputs)
         v = bo["volume"] + bi["volume"] + balls["volume"]
         card = inputs.get("bearing_card") or {}
-        add("bearings", "Ball bearing 618/8-2Z (SKF 618/8-2Z, shielded)", "purchased", nb, "pcs", "bearing steel, shields both sides",
+        seal = m.get("Bearing_seal")
+        m.claimed.add("Bearing_seal_2")                   # the turned-over copy of the seal inside each bearing
+        if seal:                                          # 61707-2RS1 (CIANO28 85): sealed, not in the bearings library
+            rho_seal = 1200.0                              # NBR seal (assumed)
+            add("bearings", "Ball bearing 61707-2RS1 (35 x 44 x 5, rubber sealed)", "purchased", nb, "pcs", "bearing steel, NBR seals both sides",
+                "d %.0f x D %.0f x B %.0f mm, %d balls Ø%.0f mm" % (m.p("bearing_d"), m.p("bearing_D"), m.p("bearing_B"),
+                                                                    round(m.p("bearing_ball_count")), m.p("bearing_ball_d")),
+                (v * rho + 2 * seal["volume"] * rho_seal) * 1e-6, "ISO 15 series 617; Fusion component w_61707-2rs1 (not in bearings_library.yaml)",
+                "front + back copy; mass = rings + balls (density %.0f, %s) + two seals (volume-equivalent model, NBR %.0f assumed); cage not "
+                "modelled; grease / clearance class: to be specified" % (rho, rs, rho_seal), tbs_text="bearing grease, clearance class, seal material")
+        else:
+          add("bearings", "Ball bearing 618/8-2Z (SKF 618/8-2Z, shielded)", "purchased", nb, "pcs", "bearing steel, shields both sides",
             "d %.0f x D %.0f x B %.0f mm, %d balls Ø%.0f mm" % (m.p("bearing_d"), m.p("bearing_D"), m.p("bearing_B"),
                                                                 round(m.p("bearing_ball_count")), m.p("bearing_ball_d")),
             v * rho * 1e-6, "ISO 15 series 618; card %s in bearings_library.yaml (C %.2f kN, C0 %.3f kN, grease limit %s rpm)" % (
@@ -318,52 +346,70 @@ def build_bom(dump, inputs):
         stock = nearest_m2_stock(ln)
         flag = abs(stock - ln) > 0.01
         one = scr_i["volume"] / scr_i["n_solids"]
-        note = "model is a plain Ø2 shank (thread not modelled); density %.0f (%s); CAD reference part McMaster 91292A032 " \
-               "(M2 x 0.4); head Ø%.1f x %.1f, hex socket %.1f" % (rho, rs, m.p("screw_head_d"), m.p("screw_head_h"), m.p("screw_socket_af"))
+        sz = "M%g" % m.p("bolt_d")
+        ref = "McMaster 91292A032 (M2 x 0.4)" if sz == "M2" else "DIN 912 %s x 0.45 (Fusion component)" % sz
+        note = "model is a plain shank (thread not modelled); density %.0f (%s); CAD reference part %s; head Ø%.1f x %.1f, hex socket %.1f" % (
+            rho, rs, ref, m.p("screw_head_d"), m.p("screw_head_h"), m.p("screw_socket_af"))
         if flag:
             lo = max([s for s in M2_STOCK_LENGTHS if s <= ln] or [stock])
             hi = min([s for s in M2_STOCK_LENGTHS if s >= ln] or [stock])
-            warns.append("M2 screw length %.1f mm is not a stock length; nearest stock M2 x %d" % (ln, stock))
+            warns.append("%s screw length %.1f mm is not a stock length; nearest stock %s x %d" % (sz, ln, sz, stock))
             note = ("NON-STOCK LENGTH %.1f mm (model length under the head: front flange face to the back holder face). "
-                    "Nearest stock: M2 x %d (%+.1f mm; shorter by %.1f mm = less thread engagement in the back boss - check "
-                    "the M2 tap depth); next longer M2 x %d protrudes %.1f mm past the back holder face - check clearance. "
-                    "Proposed: M2 x %d. " % (ln, stock, stock - ln, ln - stock if stock < ln else 0.0, hi, hi - ln, stock)) + note
-        add("screws", "Screw M2 x %s socket head cap%s" % (_num(ln, 1), " (NON-STOCK length)" if flag else ""), "purchased",
-            scr_i["n_solids"], "pcs", mat, "M2 x 0.4 x %s mm, head Ø%.1f x %.1f, one per sector boundary on the bolt circle R%.2f" % (
-                _num(ln, 1), m.p("screw_head_d"), m.p("screw_head_h"), m.p("holder_bolt_r")),
+                    "Nearest stock: %s x %d (%+.1f mm; shorter by %.1f mm = less thread engagement in the back boss - check "
+                    "the tap depth); next longer %s x %d protrudes %.1f mm past the back holder face - check clearance. "
+                    "Proposed: %s x %d. " % (ln, sz, stock, stock - ln, ln - stock if stock < ln else 0.0, sz, hi, hi - ln, sz, stock)) + note
+        add("screws", "Screw %s x %s socket head cap%s" % (sz, _num(ln, 1), " (NON-STOCK length)" if flag else ""), "purchased",
+            scr_i["n_solids"], "pcs", mat, "%s x %s mm, head Ø%.1f x %.1f, one per holder spoke on the bolt circle R%.2f" % (
+                sz, _num(ln, 1), m.p("screw_head_d"), m.p("screw_head_h"), m.p("holder_bolt_r")),
             one * rho * 1e-6, "ISO 4762 / DIN 912, A2-70", note,
-            tbs_text=("screw length %s mm is not a stock length - choose M2 x %d (or x %d)" % (_num(ln, 1), stock, nearest_m2_stock(ln + 3)))
+            tbs_text=("screw length %s mm is not a stock length - choose %s x %d (or x %d)" % (_num(ln, 1), sz, stock, nearest_m2_stock(ln + 3)))
             if flag else None)
 
     # ---- phase board and pins (model objects when present, else nominal data) -------------------------------------
+    carrier_board = bool(m.get("Shaft_rear"))
+    if carrier_board:                                     # CIANO28 85: simplified plate + lead sleeves in the model, Fusion bodies for the mass
+        for e in _extra(m, r"board|pcb|pin"):
+            m.claimed.add(e["label"])
+        ins_mm3, cu_mm3 = 5 * 432.313, 1560.7              # Fusion PCB 85 serial: 5 insulation discs, copper layers + pins + pads (2026-10-14 dump)
+        mass85 = ins_mm3 * 1.85e-3 + cu_mm3 * 8.933e-3
+        add("board", "Phase board 85 (coil connection, 4 copper layers + 5 insulation layers)", "purchased (custom)", 1, "pcs",
+            "insulation (FR-4 / GFRP, 1.85 g/cm3 assumed), copper",
+            "outer Ø%.1f, inner Ø%.2f, stack %.1f mm, %d coil-lead slots %.1f x %.1f mm" % (
+                2 * m.p("board_outer_r"), 2 * m.p("board_inner_r"), m.p("board_t"), round(2 * m.p("coil_count")), m.p("board_pin_w"), m.p("board_pin_t")),
+            mass85, "Fusion component PCB 85 serial (read-only dump 2026-10-14)",
+            "the model has a simplified envelope (ring plate + %d lead sleeves, positions exact); mass from the Fusion board bodies: insulation "
+            "%.0f mm3 x 1.85 + copper %.0f mm3 x 8.933 g/cm3 (pins, pads and layers); the controller is NOT part of this BOM" % (
+                round(2 * m.p("coil_count")), ins_mm3, cu_mm3),
+            tbs_text="board stack-up, copper weight, lead terminations and fabrication data of the 85 phase board")
     pn = PIN_NOMINAL
     pin_vol = math.pi * (pn["d"] / 2) ** 2 * (pn["tail"] + pn["mating"]) + math.pi * (pn["collar_d"] / 2) ** 2 * pn["collar_h"]
-    boards = _extra(m, r"board|pcb")
-    model_pins = []
-    for e in boards:
-        m.claimed.add(e["label"])
-        model_pins += [v for v in e["solid_volumes"] if abs(v - pin_vol) < 0.08 * pin_vol]
-    b_note = ("model object(s) %s: %d solids, %.1f mm3 in total, of which %d pin solids (%.2f mm3 each) and the notch-wall models; "
-              "mass kept at the nominal estimate" % (
-                  ", ".join(e["label"] for e in boards), sum(e["n_solids"] for e in boards), sum(e["volume"] for e in boards),
-                  len(model_pins), (sum(model_pins) / len(model_pins)) if model_pins else 0.0)
-              if boards else "not in the model yet - nominal data from the PCB project")
-    add("board", "Phase board rev C (coil connection, 4 layers x 6 oz)", "purchased", 1, "pcs", "FR-4 Tg>=170, Cu 4 x 0.21 mm, ENIG",
-        "Ø40.05 mm, window Ø24.5, thickness 1.6 mm (1.44-1.76), 6 plated U-notches, 3 pin holes Ø2.20",
-        BOARD_NOMINAL["mass_g"], "PCB_CIANO14_40 RELEASE_2026-10-11_FAB_4L_6OZ, ciano40_4L_revC.kicad_pcb sha256 b80d7b91...",
-        "%s; %s; the controller is NOT part of this BOM" % (b_note, BOARD_NOMINAL["basis"]),
-        tbs_text="fab confirmation of 0.35 mm copper clearance and 35 um notch plating (DFM answer pending)")
-    pins = _extra(m, r"pin|_pin|^pin")
-    for e in pins:
-        m.claimed.add(e["label"])
-    pin_one = (sum(model_pins) / len(model_pins)) if model_pins else pin_vol
-    add("pins", "Phase pin CIANO40-PIN-C rev 7", "purchased (custom turned)", 3, "pcs", "CuCrZr C18150 (rev 5 requirement), Ni + Ag plated",
-        "Ø%.1f body, collar Ø%.1f x %.2f, tail %.2f, mating %.2f mm" % (pn["d"], pn["collar_d"], pn["collar_h"], pn["tail"], pn["mating"]),
-        pin_one * PIN_DENSITY[0] * 1e-6, "PIN_CIANO40-PIN-C requirements (PCB project); dimensions of rev 7 from the phase board README",
-        "mass from the %s (%.2f mm3), %s%s; mating socket belongs to the controller (not in this BOM)" % (
-            "model pin solids" if model_pins else "nominal turned shape", pin_one, PIN_DENSITY[1],
-            "; model objects: " + ", ".join(e["label"] for e in pins) if pins else ""),
-        tbs_text="pin/socket pair not selected yet, pins not ordered (PCB release notes); material of rev 7 to be confirmed")
+    if not carrier_board:
+        boards = _extra(m, r"board|pcb")
+        model_pins = []
+        for e in boards:
+            m.claimed.add(e["label"])
+            model_pins += [v for v in e["solid_volumes"] if abs(v - pin_vol) < 0.08 * pin_vol]
+        b_note = ("model object(s) %s: %d solids, %.1f mm3 in total, of which %d pin solids (%.2f mm3 each) and the notch-wall models; "
+                  "mass kept at the nominal estimate" % (
+                      ", ".join(e["label"] for e in boards), sum(e["n_solids"] for e in boards), sum(e["volume"] for e in boards),
+                      len(model_pins), (sum(model_pins) / len(model_pins)) if model_pins else 0.0)
+                  if boards else "not in the model yet - nominal data from the PCB project")
+        add("board", "Phase board rev C (coil connection, 4 layers x 6 oz)", "purchased", 1, "pcs", "FR-4 Tg>=170, Cu 4 x 0.21 mm, ENIG",
+            "Ø40.05 mm, window Ø24.5, thickness 1.6 mm (1.44-1.76), 6 plated U-notches, 3 pin holes Ø2.20",
+            BOARD_NOMINAL["mass_g"], "PCB_CIANO14_40 RELEASE_2026-10-11_FAB_4L_6OZ, ciano40_4L_revC.kicad_pcb sha256 b80d7b91...",
+            "%s; %s; the controller is NOT part of this BOM" % (b_note, BOARD_NOMINAL["basis"]),
+            tbs_text="fab confirmation of 0.35 mm copper clearance and 35 um notch plating (DFM answer pending)")
+        pins = _extra(m, r"pin|_pin|^pin")
+        for e in pins:
+            m.claimed.add(e["label"])
+        pin_one = (sum(model_pins) / len(model_pins)) if model_pins else pin_vol
+        add("pins", "Phase pin CIANO40-PIN-C rev 7", "purchased (custom turned)", 3, "pcs", "CuCrZr C18150 (rev 5 requirement), Ni + Ag plated",
+            "Ø%.1f body, collar Ø%.1f x %.2f, tail %.2f, mating %.2f mm" % (pn["d"], pn["collar_d"], pn["collar_h"], pn["tail"], pn["mating"]),
+            pin_one * PIN_DENSITY[0] * 1e-6, "PIN_CIANO40-PIN-C requirements (PCB project); dimensions of rev 7 from the phase board README",
+            "mass from the %s (%.2f mm3), %s%s; mating socket belongs to the controller (not in this BOM)" % (
+                "model pin solids" if model_pins else "nominal turned shape", pin_one, PIN_DENSITY[1],
+                "; model objects: " + ", ".join(e["label"] for e in pins) if pins else ""),
+            tbs_text="pin/socket pair not selected yet, pins not ordered (PCB release notes); material of rev 7 to be confirmed")
 
     # ---- consumables the model or the simulation names ----------------------------------------------------------------
     glue = m.params.get("glue")

@@ -90,7 +90,7 @@ def build_bodies(doc, sh, pj):
         for part in rep.values():
             for sk in part["sketches"]:
                 report["sketches"][sk.Name] = check_sketch(sk)[1]
-    if any(p["name"] == "phase_board_z" for _, p in ps.all_params(pj)):
+    if any(p["name"] in ("phase_board_z", "board_outer_r") for _, p in ps.all_params(pj)):
         report["phase_board_import"] = electronics.build_electronics(doc, sh)
         doc.recompute()
     return report

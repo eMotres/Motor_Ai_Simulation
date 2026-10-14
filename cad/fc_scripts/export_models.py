@@ -36,8 +36,8 @@ BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask"), "PhaseBoard_copper":
                  "PhaseBoard_pins": palette.rgb("pcb_pins"), "PhaseBoard_other": palette.rgb("pcb_fr4")}
 VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny parts are limited by the tessellation tolerance)
 ANG = 0.3                       # angular deflection (rad) of the viewer meshes
-ORDER = ["Core", "Coils", "Rotor", "Magnets", "Magnets_S", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_front_balls",
-         "Bearings_back", "Bearings_back_balls", "Holder_front", "Holder_back",
+ORDER = ["Core", "Coils", "Rotor", "Magnets", "Magnets_S", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_front_balls", "Bearings_front_seals",
+         "Bearings_back", "Bearings_back_balls", "Bearings_back_seals", "Holder_front", "Holder_back",
          "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
 
 
@@ -154,10 +154,10 @@ def add_motor(col, parts):
             col.add("Shaft_rear", name, s, view.COLORS["Shaft_rear"])
         elif name.startswith("Bearing_618_8_"):
             side = "front" if "_front_" in name else "back"
-            ball = "_ball_" in name
-            col.add("Bearings_" + side + ("_balls" if ball else ""), name, s,
-                    view.COLORS["Bearing_ball"] if ball else view.COLORS["Bearing_outer_ring"], family="Bearings_" + side,
-                    check=not ball)
+            ball, seal = "_ball_" in name, "_seal_" in name
+            col.add("Bearings_" + side + ("_balls" if ball else "_seals" if seal else ""), name, s,
+                    view.COLORS["Bearing_ball"] if ball else view.COLORS["Bearing_seal"] if seal else view.COLORS["Bearing_outer_ring"],
+                    family="Bearings_" + side, check=not ball)
         elif name == "Stator_holder":
             col.add("Holder_front", name, s, view.COLORS["Stator_holder"])
         elif name == "Stator_holder_back":
@@ -211,10 +211,12 @@ def main():
     col = Collector(tol)
     board_info = add_motor(col, parts)
     glb, st = col.glb(asset)
+    plate_board = electronics.has_board(src) and electronics.is_plate(src)
     App.closeDocument(src.Name)
 
     worst = max([c[3] for c in col.checks] or [0.0])
-    ok = worst < VOL_TOL and (board_info is None or board_info.get("PhaseBoard_copper", 0) > 0)   # the copper board is in the model
+    ok = worst < VOL_TOL and (board_info is None or board_info.get("PhaseBoard_copper", 0) > 0          # the copper board is in the model
+                              or (plate_board and board_info.get("PhaseBoard_pins", 0) > 0))               # (CIANO28 85: plate + lead sleeves)
     rep = dict(motor_id=mid, tessellation_mm=round(tol, 4), glb=mid + "_full.glb", bytes=len(glb), board=board_info,
                worst_mesh_volume_error=round(worst, 5), freecad_version=".".join(str(x) for x in App.Version()[:3]), ok=ok, **st,
                mesh_checks=[dict(node=c[0], solid_volume=c[1], mesh_volume=c[2], rel_error=round(c[3], 5)) for c in col.checks])

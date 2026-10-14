@@ -4,16 +4,13 @@
  * Shows the current assigned material and lets the user reassign it.
  */
 import React, { useState, useRef, useEffect } from 'react';
-import {
-  Box, Typography, Chip, Popover, List, ListItem, ListItemButton,
-  ListItemText, Divider, IconButton, Tooltip, CircularProgress,
-} from '@mui/material';
+import { Box, Typography, IconButton, Tooltip, CircularProgress } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
-import CheckIcon from '@mui/icons-material/Check';
 import { useUIStore, type CompKey } from '../../stores/motorStore';
 import { useMotorAssignments } from '../materials/useMotorAssignments';
 import { useMaterialsLibrary } from '../materials/useMaterialsLibrary';
+import MaterialPickerPopover from '../materials/MaterialPickerPopover';
 import type { MaterialCategory } from '../materials/useMaterialsLibrary';
 import type { MotorAssignments } from '../materials/useMotorAssignments';
 import { PART_COLORS } from '../../lib/partColors';
@@ -163,88 +160,17 @@ const MaterialBar: React.FC = () => {
         </Tooltip>
       </Box>
 
-      {/* ── Material picker popover ── */}
-      <Popover
+      {/* ── Material picker popover (shared with the Materials tab "Full" list) ── */}
+      <MaterialPickerPopover
         open={open}
         anchorEl={anchorEl}
         onClose={() => setAnchorEl(null)}
-        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
-        transformOrigin={{ vertical: 'bottom', horizontal: 'center' }}
-        slotProps={{
-          paper: {
-            sx: {
-              bgcolor: 'var(--panel-2)',
-              border: '1px solid var(--line-soft)',
-              borderRadius: 2,
-              minWidth: 260,
-              maxHeight: 520,
-              overflow: 'hidden',
-              boxShadow: '0 8px 32px var(--overlay)',
-            },
-          },
-        }}
-      >
-        {/* Header */}
-        <Box sx={{ px: 2, py: 1, borderBottom: '1px solid var(--line-soft)' }}>
-          <Typography sx={{ fontSize: 10, fontWeight: 700, color: 'var(--text-4)', letterSpacing: 1 }}>
-            MATERIALS — {cfg.label.toUpperCase()}
-          </Typography>
-        </Box>
-
-        {/* Material list — all categories grouped */}
-        <List dense disablePadding sx={{ overflowY: 'auto', maxHeight: 460 }}>
-          {groupedMats.map((group, gi) => (
-            <React.Fragment key={group.key}>
-              {/* Category section header */}
-              <Box sx={{
-                px: 2, py: '4px',
-                bgcolor: 'var(--panel-2)',
-                borderLeft: `2px solid ${group.color}`,
-                mx: 1, mt: gi > 0 ? 0.5 : 0, borderRadius: '2px',
-              }}>
-                <Typography sx={{ fontSize: 9, fontWeight: 700, color: group.color, letterSpacing: 1 }}>
-                  {group.label.toUpperCase()}
-                </Typography>
-              </Box>
-
-              {group.names.map((name, i) => {
-                const isActive = name === current;
-                return (
-                  <React.Fragment key={name}>
-                    {i > 0 && <Divider sx={{ borderColor: 'var(--app-bg)' }} />}
-                    <ListItemButton
-                      onClick={() => { assign(cfg.assignKey, name); setAnchorEl(null); }}
-                      disabled={saving}
-                      sx={{
-                        py: 0.75, px: 2,
-                        bgcolor: isActive ? `${group.color}18` : 'transparent',
-                        '&:hover': { bgcolor: `${group.color}28` },
-                      }}
-                    >
-                      <ListItemText
-                        primary={name.replace(/_/g, ' ')}
-                        primaryTypographyProps={{
-                          sx: {
-                            fontSize: 11,
-                            fontWeight: isActive ? 700 : 400,
-                            color: isActive ? group.color : 'var(--text-1)',
-                          },
-                        }}
-                      />
-                      {isActive && <CheckIcon sx={{ fontSize: 14, color: group.color, ml: 1 }} />}
-                    </ListItemButton>
-                  </React.Fragment>
-                );
-              })}
-            </React.Fragment>
-          ))}
-          {groupedMats.length === 0 && (
-            <ListItem>
-              <ListItemText primary="No materials available" primaryTypographyProps={{ sx: { fontSize: 11, color: 'var(--text-4)' } }} />
-            </ListItem>
-          )}
-        </List>
-      </Popover>
+        title={`MATERIALS — ${cfg.label.toUpperCase()}`}
+        groups={groupedMats.map(g => ({ key: g.key, label: g.label, color: g.color, items: g.names.map(id => ({ id })) }))}
+        current={current}
+        disabled={saving}
+        onPick={name => { assign(cfg.assignKey, name); setAnchorEl(null); }}
+      />
     </>
   );
 };

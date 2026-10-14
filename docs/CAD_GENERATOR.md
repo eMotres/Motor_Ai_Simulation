@@ -173,6 +173,21 @@ FreeCAD has them open).
    config's `geometry_overrides`.
 5. Server rebuild (above). The new manifest carries the new `param_hash`.
 
+## CAD-only assembly clearances (owner 2026-10-14)
+
+The 3-D model carries small offsets around the magnets and at the fits: `offset_rotor` (the magnet pocket offset; the pocket
+fillet is `magnet_fill_radius + offset_rotor`), `offset_core`, `offset_tooth`, `offset_bearing`, `offset_radiator`,
+`offset_holder`. They exist so that a magnet and the other parts can surely be inserted at our manufacturing tolerances.
+**The simulation deliberately does not include them**; they make no practical difference to the results.
+
+* `motor_ai_sim.cad.store.CAD_ONLY_CLEARANCES` lists them. In the review report of `make_profile` and of `back` they appear
+  under `assembly_clearances`, classified "CAD-only assembly clearance (not simulated by design)".
+* They are never a difference against the store, never in `cad_only_inputs` or `mechanics`, never in a proposal
+  (`.patch.yaml`, Fusion CSV), and `primary_rows` never offers them as a simulation row.
+* Masses (`masses.compute_masses`, the component card) use the nominal magnet; the clearance is air.
+* Test: `tests/test_cad_generator.py::test_assembly_clearances_are_cad_only_never_a_difference_or_a_proposal`.
+  Private rule: `motor-ai-sim-private/docs/DESIGN_RULES.md` F11.
+
 ## Sketch conventions (owner rules 2026-10-12)
 
 * **Half plus mirror.** Core sector, rotor pole and magnet sketches dimension only the right half, against the symmetry axis

@@ -74,6 +74,7 @@ def assert_component_card(card: ComponentCard) -> None:
     if mp is not None and model_mass is not None:
         _req(math.isclose(mp.mass_kg, model_mass, rel_tol=1e-6),
              f"card mass {mp.mass_kg:g} kg and model mass {model_mass:g} kg disagree")
+    _check_parts(card)
     for p in card.ports:
         _req(p.type != "shaft" or p.max_speed_rpm <= 1e6, f"port {p.name}: max_speed_rpm is implausible")
     # the IR it carries must pass its own gate
@@ -93,6 +94,25 @@ def assert_component_card(card: ComponentCard) -> None:
         _motor_privacy(card)
 
 
+def _check_parts(card: ComponentCard) -> None:
+    """Every part names a material that resolves to a card (no default is ever substituted); when a part also
+    states its volume, mass / volume must be a density of the same order as the material's."""
+    if not card.parts:
+        return
+    from motor_ai_sim import part_materials as pm
+    for part in card.parts:
+        try:
+            mat = pm.resolve(part.material_id)
+        except pm.UnknownPartMaterial as exc:
+            raise ConformanceError(f"part {part.name!r}: {exc}") from None
+        _req(1e-7 <= part.mass_kg <= 1e5, f"part {part.name!r}: mass_kg = {part.mass_kg:g} is implausible (units?)")
+        if part.volume_cm3 is not None and mat.get("density_kg_m3"):
+            rho = part.mass_kg / (part.volume_cm3 * 1e-6)
+            _req(0.2 <= rho / mat.get("density_kg_m3") <= 5.0,
+                 f"part {part.name!r}: mass / volume = {rho:.0f} kg/m3 is far from the density of "
+                 f"{part.material_id} ({mat.get('density_kg_m3'):.0f} kg/m3)")
+
+
 def _motor_privacy(card: ComponentCard) -> None:
     """A motor card: performance, mass properties, outer envelope - nothing else."""
     _no_geometry_keys(card.model_dump(mode="json"))
@@ -104,3 +124,7 @@ def _motor_privacy(card: ComponentCard) -> None:
     if card.envelope is not None:
         _req(card.envelope.shape in ("box", "cylinder"), "a motor envelope is a plain box or cylinder")
     _req(len(card.frames) <= 8, "a motor card lists mounting frames only (at most 8)")
+    # parts: material + mass only - no volume (which would give away a section), no free-text geometry
+    for part in card.parts:
+        _req(part.volume_cm3 is None, f"motor part {part.name!r}: a motor part carries material and mass only (no volume)")
+        _req(len(part.basis) <= 400 and len(part.name) <= 80, f"motor part {part.name!r}: name/basis too long")

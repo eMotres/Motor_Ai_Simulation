@@ -38,6 +38,23 @@ BEARING_ROWS = {"d": "bearing_d", "D": "bearing_D", "B": "bearing_B"}
 # standard 618/8 dimensions (ISO 15 / SKF catalogue), used only when the store has no bearing card
 BEARING_618_8 = dict(d=8, D=16, B=4, d_m=12)
 
+# CAD-ONLY ASSEMBLY CLEARANCES (owner 2026-10-14).  The 3-D model carries small offsets so that a magnet (and the other parts)
+# can surely be inserted at our manufacturing tolerances: ``offset_rotor`` widens the magnet pocket (the pocket fillet is
+# ``magnet_fill_radius + offset_rotor``), the others are the matching fit clearances of the core, the teeth, the bearing seats,
+# the radiator and the holders.  The simulation deliberately does NOT include them - they make no practical difference to
+# the results.  They are therefore never a mismatch, never listed as a CAD-only input to adopt, and never proposed back to the
+# simulation; masses use the nominal magnet (the clearance is air).  Private rule: motor-ai-sim-private docs/DESIGN_RULES.md F11.
+CAD_ONLY_CLEARANCE_LABEL = "CAD-only assembly clearance (not simulated by design)"
+CAD_ONLY_CLEARANCES = {
+    "offset_rotor": "magnet pocket offset (pocket fillet = magnet_fill_radius + offset_rotor): lets a magnet be inserted at "
+                    "manufacturing tolerance",
+    "offset_core": "stator core fit clearance",
+    "offset_tooth": "tooth fit clearance",
+    "offset_bearing": "bearing seat fit clearance",
+    "offset_radiator": "radiator fit clearance",
+    "offset_holder": "holder fit clearance",
+}
+
 # simulation material slot -> FreeCAD body
 MAT_BODIES = {"magnet": "Magnet", "stator_core": "Core", "rotor_core": "RotorCore", "slot": "Coil", "shaft": "Shaft"}
 # simulation derived value -> equivalent FreeCAD expression (cross-check only)
@@ -176,7 +193,7 @@ def primary_rows(geo, mp):
         v = geo[k]
         if not isinstance(v, (int, float)) or isinstance(v, bool):
             continue
-        if k in mp["derived"] or k in mp["fusion_excluded"]:
+        if k in mp["derived"] or k in mp["fusion_excluded"] or k in CAD_ONLY_CLEARANCES:
             continue
         sc = mp["schema"].get(k, {})
         out.append((k, mp["map"].get(k, k), float(v), "mm" if sc.get("unit") == "mm" else "", sc.get("description", "")))
@@ -281,6 +298,20 @@ def load_effective(dies_dir, die, config, materials_library=None, bearings_libra
                 bearing_cards=bcards, material_cards=cards, files=files, dies_dir=dies_dir)
 
 
+def clearance_rows(values, reference=None):
+    """The CAD-only assembly clearances among ``values`` ({name: mm}), each classified as
+    ``CAD_ONLY_CLEARANCE_LABEL`` - informational rows of the review report, never a difference."""
+    out = []
+    for name in sorted(CAD_ONLY_CLEARANCES):
+        if name in values:
+            row = dict(name=name, freecad=round(values[name], 9), classification=CAD_ONLY_CLEARANCE_LABEL,
+                       note=CAD_ONLY_CLEARANCES[name])
+            if reference is not None and name in reference:
+                row["reference"] = round(reference[name], 9)
+            out.append(row)
+    return out
+
+
 def parameter_fingerprint(eff, mp):
     """What the CAD depends on: the primary geometry rows + materials + winding.  Same store values -> same hash."""
     rows = {k: v for k, _f, v, _u, _d in primary_rows(eff["geometry"], mp)}
@@ -365,6 +396,7 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
                                                       and not _eq(r["freecad_before"], r["freecad"])]))
     res = dict(die=eff["die"], variant=eff["variant"], motor_id=mid, generated=stamp, fingerprint=fp,
                parameters=report, derived_cross_check=derived, excluded=excluded, materials=mat_rows, bearings=bearing_rows,
+               assembly_clearances=clearance_rows(vals),
                summary=dict(n=len(report),
                             freecad_equals_sim=all(r["status"].startswith("ok") for r in report if r.get("freecad") is not None),
                             changed_vs_fusion_reference=[r["name"] for r in report if r.get("freecad_before") is not None
@@ -452,13 +484,15 @@ def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):
     mapped = {mp["map"].get(k, k) for k in geo}
     cad_only = [dict(name=n, freecad=round(vals[n], 9), role=base.get(n, {}).get("role", "added by owner"),
                      expression=cells[n]) for n in sorted(vals) if n not in mapped and n in cells
-                and base.get(n, {}).get("role") in ("input", None) and n not in BEARING_ROWS.values()]
+                and base.get(n, {}).get("role") in ("input", None) and n not in BEARING_ROWS.values()
+                and n not in CAD_ONLY_CLEARANCES]
     # mechanics rows (CAD only, no simulation key): differences against the CAD reference profile, target = that profile
     bvals = evaluate({n: p["freecad_expression"] for n, p in base.items()})
     mechanics = [dict(name=n, freecad=round(vals[n], 9), reference=round(bvals[n], 9), expression=cells[n],
                       target="CAD reference profile cad/reference/%s (mechanics, not in the simulation)" % os.path.basename(
                           base_profile))
-                 for n in sorted(vals) if n in cells and base.get(n, {}).get("role") == "mechanics" and not _eq(vals[n], bvals[n])]
+                 for n in sorted(vals) if n in cells and base.get(n, {}).get("role") == "mechanics" and not _eq(vals[n], bvals[n])
+                 and n not in CAD_ONLY_CLEARANCES]
     cards = (eff.get("bearing_cards") or {})
     bearing = []
     for key, name in BEARING_ROWS.items():
@@ -472,6 +506,7 @@ def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):
     res = dict(die=eff["die"], variant=eff["variant"], origin=origin, generated=stamp, store_files=eff["files"],
                compared=len(rows), equal=same, differences=diff, not_in_freecad=missing, cad_only_inputs=cad_only,
                mechanics=mechanics, bearing=bearing,
+               assembly_clearances=clearance_rows({n: vals[n] for n in vals if n in cells}, bvals),
                note="read-only: nothing was written to the simulation store; a proposal (if any) is applied by the "
                     "orchestrator after the owner confirms it")
     os.makedirs(out_dir, exist_ok=True)

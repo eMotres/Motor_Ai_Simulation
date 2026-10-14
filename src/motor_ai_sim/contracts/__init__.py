@@ -21,7 +21,7 @@ from .result_ir import FieldArray, FieldResults, ResultIR, ScalarResults, Series
 from .cost_ir import CostIR, CostLine
 from .material_ir import MaterialIR, MaterialProps
 from .signals import ControlSignal, Excitation, MachineState
-from .component_ir import (BatteryIR, ComponentCard, ControllerIR, MassProperties, Port, RigidBodyIR)
+from .component_ir import (BatteryIR, ComponentCard, ComponentPart, ControllerIR, MassProperties, Port, RigidBodyIR)
 from .drivetrain_ir import (EfficiencyMap, ModelSource, MotorLimits, MotorPerformanceIR, OutOfValidity,
                             PropulsorIR, ShaftInterface, ShaftLoadIR, TransmissionIR, TransmissionLimits,
                             Validity)
@@ -37,5 +37,5 @@ __all__ = [
     "Excitation", "ControlSignal", "MachineState",
     "MotorPerformanceIR", "TransmissionIR", "ShaftLoadIR", "PropulsorIR", "EfficiencyMap", "MotorLimits",
     "TransmissionLimits", "ShaftInterface", "ModelSource", "Validity", "OutOfValidity",
-    "ComponentCard", "BatteryIR", "ControllerIR", "RigidBodyIR", "MassProperties", "Port",
+    "ComponentCard", "ComponentPart", "BatteryIR", "ControllerIR", "RigidBodyIR", "MassProperties", "Port",
 ]

@@ -361,3 +361,42 @@ def mass_properties(asm: AssemblyIR, cards: Resolver) -> AssemblyMass:
                 inertia[a][b] += i[a][b] + m * ((d2 if a == b else 0.0) - d[a] * d[b])
     return AssemblyMass(mass_kg=total, com_m=(com[0], com[1], com[2]),
                         inertia_kg_m2=tuple(tuple(r) for r in inertia))      # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# parts and materials of the whole assembly (pure bookkeeping)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AssemblyParts:
+    """Every part of every instance (``rows``) and the mass per ``material_id`` (``by_material``).  Only parts
+    counted in their card's mass enter the totals; ``uncounted`` lists the parts a card names that its mass does
+    not contain (holders, rings, bearings of a motor: real, but outside the app's motor mass)."""
+
+    rows: List[Dict[str, object]] = field(default_factory=list)
+    by_material: Dict[str, float] = field(default_factory=dict)
+    counted_kg: float = 0.0
+    uncounted_kg: float = 0.0
+    without_parts: List[str] = field(default_factory=list)       # instances whose card lists no parts
+
+
+def parts_summary(asm: AssemblyIR, cards: Resolver) -> AssemblyParts:
+    """Parts and materials of an assembly, from the cards' ``parts`` (the input of a later stress / vibration / thermal
+    study).  An instance whose card has no parts is listed under ``without_parts``, never silently dropped."""
+    out = AssemblyParts()
+    for c in asm.components:
+        card = _resolve(cards, c.card)
+        if card is None:
+            raise KeyError(f"{c.instance}: no card {c.card.component_id!r}")
+        if not card.parts:
+            out.without_parts.append(c.instance)
+            continue
+        for p in card.parts:
+            out.rows.append(dict(instance=c.instance, part=p.name, material_id=p.material_id, mass_kg=p.mass_kg,
+                                 role=p.role, status=p.status, counted=p.counted))
+            if p.counted:
+                out.counted_kg += p.mass_kg
+                out.by_material[p.material_id] = out.by_material.get(p.material_id, 0.0) + p.mass_kg
+            else:
+                out.uncounted_kg += p.mass_kg
+    return out

@@ -46,8 +46,9 @@ against one `ComponentCard` schema, and the component library lists them.
 **Status:** the software foundation is in place (`contracts/component_ir.py` `ComponentCard`, `contracts/assembly_ir.py`
 `AssemblyIR` with `validate_assembly` and `mass_properties`, adapters for motor, propeller, gearbox, battery and controller,
 `GET /api/components`, the example `docs/examples/quadcopter_ciano14_40.assembly.json`); see
-[COMPONENT_CARD.md](COMPONENT_CARD.md). Open: real masses for the battery, controller and frame placeholders, CAD references
-(STEP after the NDA, glTF), and the card editor in the UI.
+[COMPONENT_CARD.md](COMPONENT_CARD.md). Since 2026-10-14 every card lists its parts with materials (`parts`, material cards with sources; COMPONENT_CARD.md section 7) and a
+motor card carries the mass the app computes. Open: real masses and materials for the battery, controller, gearbox and frame
+placeholders, `verify` checks of the new material cards, CAD references (STEP after the NDA, glTF), and the card editor in the UI.
 
 ### Stage 2: assembly
 The System graph becomes an editor:

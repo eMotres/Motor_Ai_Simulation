@@ -258,16 +258,16 @@ construction helpers) and get a proposed `mech_`-prefixed name, Fusion-only.
 | `housing_h` | `mech_housing_h` (Fusion-only) | mm | leaf constant "6 mm", feeds `motor_d`; overall housing wall, not modeled by the solver |
 | `arc` | `mech_slot_arc_w` (Fusion-only, derived) | mm | `stator_down_r*2*PI*(angle_wire/360deg) - teeth_w` — slot arc-width construction helper. Canonical expression: `stator_inner_radius * 2 * PI * (angle_slot/360deg) - tooth_width` |
 | `bolt_head_d` | `mech_bolt_head_d` (Fusion-only) | mm | leaf constant "8.8 mm" |
-| `offset_core` | `mech_offset_core` (Fusion-only) | mm | leaf constant "0.006 mm" — CAD fit tolerance |
+| `offset_core` | `mech_offset_core` (Fusion-only) | mm | leaf constant "0.006 mm" — CAD fit tolerance; CAD-only assembly clearance (not simulated by design) |
 | `dov_d` | `mech_dowel_d` (Fusion-only) | mm | leaf constant "3 mm"; "dov" reads as "dowel" |
 | `wire_beng_r` | `mech_wire_bend_r` (Fusion-only, derived) | mm | `wire_h * 2` — wire bend-radius manufacturing constraint. Canonical expression: `2 * wire_height` |
 | `bolt_h` | `mech_bolt_h` (Fusion-only) | mm | leaf constant "3 mm" |
 | `bolt_d` | `mech_bolt_d` (Fusion-only) | mm | leaf constant "2.5 mm" |
-| `offset_tooth` | `mech_offset_tooth` (Fusion-only) | mm | leaf constant "0.009 mm" — CAD fit tolerance |
-| `offset_rotor` | `mech_offset_rotor` (Fusion-only) | mm | leaf constant "0.025 mm" |
-| `offset_bearing` | `mech_offset_bearing` (Fusion-only) | mm | leaf constant "0.04 mm" |
-| `offset_radiator` | `mech_offset_radiator` (Fusion-only) | mm | leaf constant "0.15 mm" |
-| `offset_holder` | `mech_offset_holder` (Fusion-only) | mm | leaf constant "0.08 mm" |
+| `offset_tooth` | `mech_offset_tooth` (Fusion-only) | mm | leaf constant "0.009 mm" — CAD fit tolerance; CAD-only assembly clearance (not simulated by design) |
+| `offset_rotor` | `mech_offset_rotor` (Fusion-only) | mm | leaf constant "0.025 mm"; CAD-only assembly clearance (not simulated by design) |
+| `offset_bearing` | `mech_offset_bearing` (Fusion-only) | mm | leaf constant "0.04 mm"; CAD-only assembly clearance (not simulated by design) |
+| `offset_radiator` | `mech_offset_radiator` (Fusion-only) | mm | leaf constant "0.15 mm"; CAD-only assembly clearance (not simulated by design) |
+| `offset_holder` | `mech_offset_holder` (Fusion-only) | mm | leaf constant "0.08 mm"; CAD-only assembly clearance (not simulated by design) |
 | `stator_r` | `stator_fillet_r` | mm | leaf constant "0.5 mm"; the "other" fillet name, complementing `slot_r`/`slot_up_r` (air-gap side) as the outer-corner one |
 | `mag_hole` | `rotor_hole` | ratio | leaf constant "0.7"; unitless ratio, name meaning ("hole ratio") matches schema label "Rotor Hole" |
 | `cut_down` | `cut_width` | mm | leaf constant "1 mm"; name differs ("down" vs. "width") but both describe the same slot-opening "cut" feature |
@@ -290,6 +290,13 @@ section:
 `mech_offset_core` (← `offset_core`), `mech_offset_tooth` (← `offset_tooth`),
 `mech_offset_rotor` (← `offset_rotor`), `mech_offset_bearing` (← `offset_bearing`),
 `mech_offset_radiator` (← `offset_radiator`), `mech_offset_holder` (← `offset_holder`).
+
+**CAD-only assembly clearances (owner 2026-10-14).** The six `offset_*` rows above (`offset_rotor` is the magnet pocket
+offset, and the pocket fillet is `magnet_fill_radius + offset_rotor`) are fit clearances of the 3-D model so that a magnet and
+the other parts can surely be inserted at our manufacturing tolerances. The simulation deliberately does not include them;
+they make no practical difference to the results. They are classified "CAD-only assembly clearance (not simulated by design)"
+(`motor_ai_sim.cad.store.CAD_ONLY_CLEARANCES`): never a mismatch, never a CAD-only input to adopt, never proposed back
+to the simulation, and the magnet mass is the nominal magnet (the clearance is air).
 
 Plus the seven "unsure but almost certainly Fusion-only" rows from the top
 table (`mech_bearing_6005_seat_d`, `mech_sealing_ring_w`,

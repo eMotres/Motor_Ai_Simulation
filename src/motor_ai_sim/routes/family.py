@@ -4520,6 +4520,76 @@ def lock_config(die: str, cfg: str, req: LockPatch,
     return {"ok": True, "locked": bool(req.locked)}
 
 
+class PartMaterialPut(BaseModel):
+    part: str
+    material: Optional[str] = None       # None / "" = back to the documented default
+
+
+@router.get("/die/{die}/part_materials")
+def get_part_materials(die: str, config: Optional[str] = None, authorization: str = Header(default=None)):
+    """Materials tab "Full" (owner 2026-10-14): the WHOLE motor part by part.  The ACTIVE parts (the electromagnetic
+    assignment of the configuration, shown read-only here) plus every non-active part the motor's CAD bill of materials
+    lists (holders, rings, carrier, bearings, screws, phase board), each with its material, mass and role.  A motor with
+    no built BOM lists only what its configuration names; no part is invented.  ``choices`` = the materials a part may
+    be given.  Nothing is written."""
+    from motor_ai_sim import part_materials as _pm
+    from motor_ai_sim.modules import motor_mass as _mm
+    die = _check_name(die, "die")
+    who = _require_die_access(die, authorization)
+    ddir = _die_dir(die)
+    cfg = _check_name(config, "configuration") if config else None
+    if cfg is None:
+        names = sorted(p.stem for p in ddir.glob("*.yaml") if p.name != "die.yaml")
+        if not names:
+            raise HTTPException(404, detail=f"die '{die}' has no configuration")
+        cfg = names[0]
+    out: dict = {"die": die, "config": cfg, "can_write": _can_write_catalog(who)}
+    try:
+        out.update(_mm.full_part_list(die, cfg, dies_dir=ddir.parent))
+    except _mm.MotorMassError as exc:
+        out.update({"available": False, "reason": str(exc), "parts": []})
+        return out
+    out["available"] = True
+    out["choices"] = _pm.choices()
+    out["non_active_keys"] = sorted(_pm.mechanical_parts())
+    return out
+
+
+@router.put("/die/{die}/part_materials")
+def put_part_material(die: str, req: PartMaterialPut, _w: dict = Depends(require_catalog_write)):
+    """Choose the material of ONE non-active part, saved with the DIE (``die.yaml`` ``part_materials``) - the same
+    permission rule as every catalog write.  The electromagnetic simulation never reads this block: it keeps the
+    configuration's active assignment, the geometry and its signature untouched."""
+    from motor_ai_sim import part_materials as _pm
+    die = _check_name(die, "die")
+    _require_die_write(die, _w)
+    part = str(req.part or "").strip()
+    if part not in _pm.mechanical_parts():
+        raise HTTPException(400, detail=f"'{part}' is not a non-active part (valid: {sorted(_pm.mechanical_parts())}); "
+                                        "the active parts are assigned through the material assignment")
+    mat = (req.material or "").strip()
+    if mat:
+        try:
+            card = _pm.resolve(mat)
+        except _pm.UnknownPartMaterial:
+            raise HTTPException(422, detail=f"unknown material '{mat}'")
+        if card.category == "coolant" or card.get("density_kg_m3") is None:
+            raise HTTPException(422, detail=f"'{mat}' cannot be the material of a solid part")
+    d = _load_yaml(_die_file(die), "die")
+    pmats = dict(d.get("part_materials") or {})
+    if mat:
+        pmats[part] = mat
+    else:
+        pmats.pop(part, None)
+    if pmats:
+        d["part_materials"] = pmats
+    else:
+        d.pop("part_materials", None)
+    _save_yaml(_die_file(die), d)
+    log.info("family: die '%s' part '%s' material -> %s", die, part, mat or "(default)")
+    return {"ok": True, "die": die, "part": part, "material": mat or None, "part_materials": pmats}
+
+
 class DefaultDutyPatch(BaseModel):
     duty: str
 

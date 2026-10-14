@@ -30,6 +30,19 @@ from motor_ai_sim.modules.component_plugins.gearbox_single_stage import GearboxS
 client = TestClient(app)
 
 
+
+@pytest.fixture(scope="module", autouse=True)
+def stand_in_dies(tmp_path_factory):
+    """The motors' mass comes from the app's mass model on their die: give it a stand-in catalog (tests/_component_dies.py)."""
+    from tests._component_dies import make_dies
+    mp = pytest.MonkeyPatch()
+    mp.setenv("MOTRES_DIES_DIR", str(make_dies(tmp_path_factory.mktemp("catalog"))))
+    L.get_library(refresh=True)
+    yield
+    mp.undo()
+    L._LIB = None                                                         # noqa: SLF001
+
+
 @pytest.fixture(scope="module")
 def model():
     return s1.load_model("CIANO14 40 new", "L12")
@@ -167,14 +180,18 @@ def test_library_lists_every_adapter_and_rejects_nothing():
     kinds = {e.card.kind for e in lib.entries.values()}
     assert {"motor", "propeller", "transmission", "controller", "battery", "frame"} <= kinds
     assert "motor_ciano14_40_new_l12" in lib.entries and "tmotor_fpv_10x5" in lib.entries
-    assert lib.entries["motor_ciano14_40_new_l12"].card.mass_properties.mass_kg == pytest.approx(0.09)
     assert lib.entries["motor_ciano14_40_new_l12"].die == "CIANO14 40 new"
+    # the motor mass is the APP's mass (stand-in catalog here): known, and it grows with the stack length
+    m12 = lib.entries["motor_ciano14_40_new_l12"].card.mass_properties
+    m20 = lib.entries["motor_ciano14_40_new_l20"].card.mass_properties
+    assert m12 is not None and m20 is not None and m20.mass_kg > m12.mass_kg > 0.05
     for e in lib.entries.values():
         _roundtrip(e.card)
     # the placeholders are marked
     assert "placeholder" in lib.entries["example_quad_frame_450"].flags
-    # a motor whose mass the stores do not hold has no mass properties: unknown, never 0
-    assert lib.entries["motor_ciano14_40_new_l20"].card.mass_properties is None
+    # a die that is not in the catalog: the card is listed with NO mass and the flag (unknown, never 0)
+    d85 = lib.entries["motor_ciano28_85_20sw1200_l13"]
+    assert d85.card.mass_properties is None and "mass_unknown" in d85.flags and not d85.card.parts
 
 
 # -- the schema ----------------------------------------------------------------------------------

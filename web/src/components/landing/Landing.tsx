@@ -1,65 +1,45 @@
 /**
- * The page a signed-out visitor lands on (user 2026-09-16: *"we need a nice
- * splash screen at entry, even before the client registers"*).
+ * The public first page of aerostator.com: the whole project concept in one
+ * scroll (owner 2026-10-14: "put the whole concept on the first page as graphs
+ * and pictures, so that everything is clear").
  *
- * Before this, a visitor to https://emotres.com got the header and one grey
- * line — "Sign in to see the motor catalog" — because the production backend
- * runs PUBLIC_EXHIBIT=0 and publishes nothing to the public.  That is an empty
- * shell, not a front door.
+ * Order of importance: what it is and the slogan, the concept diagram (idea to
+ * product around the AeroStator Core machine, the open ecosystem as the outer
+ * ring), the simulation pictures, why it is open and free, applications, how to
+ * start.  Sign in and Request access are at the top and again at the end.
  *
- * WHAT IT MAY TOUCH.  Nothing.  The landing renders from static props and the
- * three PNGs in `public/landing/`; the only network the page can cause is the
- * header's own `/api/me` + `/api/version` and, when the visitor presses the
- * button, the login endpoints.  That is deliberate — every other `/api/*` route
- * answers 401 to an anonymous caller, and a landing page that fires them is a
- * console full of red on the first impression.
+ * WHAT IT MAY TOUCH.  Nothing.  The page renders from static props, inline SVG
+ * and the three PNGs in `public/landing/`; the only network the page can cause
+ * is the header's own `/api/me` + `/api/version` and, when the visitor presses
+ * the button, the login endpoints (every other `/api/*` route answers 401 to an
+ * anonymous caller, and a landing that fires them is a console full of red).
  *
  * ONE AUTH PATH.  The button calls `useAuth().signIn()`, which opens the same
- * `LoginDialog` the header's Sign in button opens — the official Google
- * Identity Services button lives there and nowhere else.  This component never
- * loads GIS itself; it only *labels* the button after the client id, so a
- * deployment without one does not promise Google and then show a password form.
+ * `LoginDialog` the header's Sign in button opens; this component never loads
+ * GIS itself and only *labels* the button after the client id.
  *
- * THE PICTURES ARE OURS.  All three are `report.py`'s own figures, rendered
- * off the stored per-duty fields (`motor_ai_sim.duty_fields`) — not stock art,
- * not a redraw.  `scripts/landing_images.py` is what draws them, and
- * `python scripts/landing_images.py --check` redraws them somewhere else and
- * says whether the committed bytes still match:
- *
+ * THE PICTURES ARE OURS.  `scripts/landing_images.py` redraws them from the
+ * stored per-duty fields (`--check` says whether the committed bytes match):
  *   em-field.png            report._em_maps(...)["b"]
  *   thermal-map.png         report._thermal_map(...)
  *   rotor-displacement.png  report._mech_extra_maps(...)["disp"]
+ * all three off one machine at one operating point, the whole 360 degree ring,
+ * drawn on white (the report's own ground) and shown on a white tile in both
+ * themes.  No new physics images are generated for this page.
  *
- * all three off CIANO10 200 opt / "L155 motor" / rated 1x9 mm, so the three
- * cards are one machine at one operating point rather than three unrelated
- * pretty pictures.
- *
- * ONE CUT, THE WHOLE MACHINE (user 2026-09-16).  The mechanical solve is a full
- * 360° ring; the electromagnetic and thermal ones are stored as HALF models —
- * this machine is 12 slots / 10 poles, so its smallest periodic sector is a
- * half, and their figures came out 2.2:1 beside a round rotor.  The generator
- * completes those two to the full ring by ROTATING the solved half 180°, which
- * is the periodic continuation the solve itself assumed — its docstring is
- * where that argument is made in full; |B| is a magnitude and
- * T is a scalar, so both survive the sign flip an anti-periodic boundary would
- * carry, and the seam nodes are merged so the ring closes with no hairline.
- * Nothing in report.py changes: the report still prints the half it solved.
- *
- * WITH THE FE MESH OVER THEM (user 2026-09-16: "add the mesh to these
- * pictures").  `report._map_png` has always drawn it — `mesh=True` is its
- * default — but at the size a report places a figure its hairline is 0.12 pt at
- * alpha 0.35, and on a 442 px card that disappears, so the first cards looked
- * like flat colour.  The generator lifts the weight of that one call for these
- * three pictures only; report.py still prints its own hairline.
- *
- * They are drawn on white — the report's own background — and sit on a white
- * tile in both themes, so the figure looks the same here as it does on the page
- * it is printed on.
+ * PUBLIC-SAFE ONLY.  The technology is "patent pending" (never "patented"), no
+ * application numbers, and nothing about unpublished design details.  The texts
+ * live in the `landing` locale namespace (EN source, full zh-CN mirror).
  */
 import React from 'react';
 import { Box, Button, Link, Tooltip, Typography } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import { GOOGLE_CLIENT_ID } from '../../lib/localAuth';
 import { useAuth } from '../../contexts/AuthContext';
+import ConceptDiagram from './ConceptDiagram';
+import { STEP_IDS } from './conceptLayout';
+import { BoatIcon, DroneIcon, PlusIcon, RobotIcon } from './landingIcons';
+import { APP_IDS, CHAIN_IDS, DEV_LINKS, OPEN_IDS } from './landingLinks';
 
 /** Where a visitor without an account writes. */
 export const REQUEST_ACCESS_EMAIL = 'vadim@motresres.com';
@@ -69,68 +49,39 @@ export const COMPANY = 'MOTRES d.o.o.';
 export const SHOP_URL = 'https://aerostator.com';
 
 export interface Feature {
-  /** The card's label — SHORT (project rule: one short line, detail in a tooltip). */
-  label: string;
+  /** Key under `sim.` in the `landing` namespace (label, `<key>Alt`, `<key>Hint`). */
+  key: 'em' | 'thermal' | 'mech';
   /** Path under `public/`, served from the site root. */
   src: string;
-  /** What the picture is, for a reader who cannot see it. */
-  alt: string;
-  /** The tooltip — where the picture came from. */
-  hint: string;
 }
 
-/** The three cards, in order.  Exported so the test can check them without a DOM. */
+/** The three simulation pictures, in order.  Exported so the test can check them without a DOM. */
 export const FEATURES: Feature[] = [
-  {
-    label: 'Electromagnetic FEM',
-    src: '/landing/em-field.png',
-    alt: 'Flux-density map of a permanent-magnet machine: the whole '
-      + 'cross-section, twelve slots around ten magnets, coloured by |B| from '
-      + '0 to 2.4 tesla, the finite-element mesh drawn over it, and the colour '
-      + 'bar beside it.',
-    hint: 'Flux density |B| of a 200 mm machine at its rated duty, with the FE '
-      + 'mesh it was solved on — the solved half repeated to the full ring, '
-      + 'which is the periodicity the solve itself assumed.',
-  },
-  {
-    label: 'Thermal & duty cycle',
-    src: '/landing/thermal-map.png',
-    alt: 'Temperature map of the same whole cross-section, from 69 °C at the '
-      + 'outer housing to 135 °C in the rotor, the finite-element mesh drawn '
-      + 'over it, and the colour bar beside it.',
-    hint: 'Temperature of the same machine with the FE mesh over it, coupled '
-      + 'to the losses of the same run — the solved half repeated to the full '
-      + 'ring, as above.',
-  },
-  {
-    label: 'Mechanical simulation',
-    src: '/landing/rotor-displacement.png',
-    alt: 'Deformation map of the same rotor under its retaining sleeve: the '
-      + 'whole ring — sleeve, magnets, rotor iron — coloured by how far each '
-      + 'point moves at speed, 7 to 146 micrometres, the finite-element mesh '
-      + 'drawn over it, the colour bar beside it and the shape exaggerated so '
-      + 'the bending is visible.',
-    hint: 'The rotor and its sleeve at speed with the FE mesh over them, '
-      + 'coloured by displacement |u| — the shape is exaggerated 22x so the '
-      + 'bending can be seen.',
-  },
+  { key: 'em', src: '/landing/em-field.png' },
+  { key: 'thermal', src: '/landing/thermal-map.png' },
+  { key: 'mech', src: '/landing/rotor-displacement.png' },
 ];
 
 /** The button's words.  Only a deployment that HAS a Google client id may
- *  promise Google — everywhere else the same dialog offers a password. */
-export function signInLabel(clientId: string | undefined | null): string {
-  return clientId ? 'Sign in with Google' : 'Sign in';
+ *  promise Google; everywhere else the same dialog offers a password. */
+export function signInLabel(
+  clientId: string | undefined | null,
+  labels: { google: string; plain: string } = { google: 'Sign in with Google', plain: 'Sign in' },
+): string {
+  return clientId ? labels.google : labels.plain;
 }
 
 /** Is this the visitor the landing is for?  The signed-out half of App's
- *  `signedIn = !enforced || !!user` — an unenforced backend (local dev) is
+ *  `signedIn = !enforced || !!user`: an unenforced backend (local dev) is
  *  never shown the landing, so the dev server boots exactly as it did. */
 export function shouldShowLanding(enforced: boolean, hasUser: boolean): boolean {
   return enforced && !hasUser;
 }
 
-/** The AeroStator mark: a stator ring with its teeth.  Inline, not an asset —
- *  it inherits `currentColor`, so it is right in both themes by construction. */
+const mailto = (subject: string) =>
+  `mailto:${REQUEST_ACCESS_EMAIL}?subject=${encodeURIComponent(subject)}`;
+
+/** The AeroStator mark: a stator ring with its teeth (inherits the theme colour). */
 const StatorMark: React.FC<{ size?: number }> = ({ size = 44 }) => (
   <Box component="svg" viewBox="0 0 100 100" width={size} height={size}
     aria-hidden="true" focusable="false" sx={{ flexShrink: 0, color: 'primary.main' }}>
@@ -144,8 +95,7 @@ const StatorMark: React.FC<{ size?: number }> = ({ size = 44 }) => (
   </Box>
 );
 
-/** Google's mark, on the button that opens OUR dialog (which renders Google's
- *  own button).  Decoration only — no script, no second sign-in path. */
+/** Google's mark, on the button that opens OUR dialog.  Decoration only. */
 const GoogleMark: React.FC = () => (
   <Box component="svg" viewBox="0 0 48 48" width={17} height={17}
     aria-hidden="true" focusable="false">
@@ -156,168 +106,322 @@ const GoogleMark: React.FC = () => (
   </Box>
 );
 
-const FeatureCard: React.FC<{ feature: Feature }> = ({ feature }) => (
-  <Tooltip title={feature.hint} arrow>
-    <Box
-      sx={{
-        borderRadius: 2,
-        border: '1px solid',
-        borderColor: 'divider',
-        bgcolor: 'background.paper',
-        overflow: 'hidden',
-        display: 'flex',
-        flexDirection: 'column',
-        transition: 'border-color .15s, transform .15s',
-        '&:hover': { borderColor: 'primary.main', transform: 'translateY(-2px)' },
-      }}
-    >
-      {/* The figure keeps the report's own white ground in both themes, so the
-          picture on the card and the picture on the page are one picture.
-          THE PICTURE IS THE CARD (user 2026-09-16, on the first live page: the
-          images were ~180 px tall and he wanted them to dominate).  All three
-          are now the SAME CUT of the machine — the whole 360° ring, 1.15:1 —
-          so 1.25:1 is a box they all very nearly fill, ~354 px tall at 1440.
-          They were not always: the electromagnetic and thermal solves are
-          stored as half models and their pictures came out 2.2:1 beside a
-          round rotor (user, on the second live page: the three must show the
-          same section).  The halves are repeated to the full ring when the
-          PNGs are generated — by ROTATING 180°, which is the periodicity the
-          solve itself assumed, not by mirroring — and never in the report,
-          which still prints the half it solved. */}
-      <Box sx={{
-        bgcolor: '#ffffff', aspectRatio: '1.25 / 1', p: 0.75,
-        // `minHeight: 0` or the flex box's automatic minimum lets a picture
-        // TALLER than the declared ratio push the box past its own
-        // aspect ratio — which is how the third card came out 80 px taller
-        // than the other two, with white under their labels to match.
-        minHeight: 0, overflow: 'hidden',
-      }}>
-        <Box component="img" src={feature.src} alt={feature.alt} loading="lazy"
-          sx={{ width: '100%', height: '100%', objectFit: 'contain',
-            display: 'block' }} />
-      </Box>
-      <Typography component="h3" sx={{
-        px: 1.75, py: 1.25, fontSize: '0.9rem', fontWeight: 600,
-        letterSpacing: 0.1, borderTop: '1px solid', borderColor: 'divider',
-      }}>
-        {feature.label}
-      </Typography>
+/** Sign in + Request access: at the top and again at the end. */
+const AuthButtons: React.FC = () => {
+  const { t } = useTranslation('landing');
+  const { signIn } = useAuth();
+  const label = signInLabel(GOOGLE_CLIENT_ID, {
+    google: t('hero.signInGoogle'), plain: t('hero.signIn'),
+  });
+  return (
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 1.5 }}>
+      <Button variant="contained" size="large"
+        onClick={() => { void signIn().catch(() => {}); }}
+        startIcon={GOOGLE_CLIENT_ID ? <GoogleMark /> : undefined}
+        sx={{ textTransform: 'none', fontSize: '1rem', fontWeight: 600, px: 3.5, py: 1.25,
+          borderRadius: 2 }}>
+        {label}
+      </Button>
+      <Button variant="outlined" size="large" component="a"
+        href={mailto('AeroStator Core access')}
+        sx={{ textTransform: 'none', fontSize: '1rem', fontWeight: 600, px: 3.5, py: 1.25,
+          borderRadius: 2 }}>
+        {t('hero.request')}
+      </Button>
     </Box>
-  </Tooltip>
+  );
+};
+
+/** The slogan's arrow: idea, the five steps, product.  Same order and colours as the diagram. */
+const HeroChain: React.FC = () => {
+  const { t } = useTranslation('landing');
+  return (
+    <Box component="ol" aria-label={t('chain.label')} sx={{
+      listStyle: 'none', m: 0, p: 0, display: 'flex', flexWrap: 'wrap',
+      justifyContent: 'center', alignItems: 'center', gap: { xs: 0.75, sm: 1 },
+    }}>
+      {CHAIN_IDS.map((id, i) => {
+        const end = id === 'idea' || id === 'product';
+        return (
+          <Box component="li" key={id} sx={{ display: 'flex', alignItems: 'center', gap: { xs: 0.75, sm: 1 } }}>
+            <Box component="span" sx={{
+              px: { xs: 1.1, md: 1.5 }, py: 0.5, borderRadius: 99,
+              fontSize: { xs: '0.78rem', sm: '0.82rem', md: '0.9rem' },
+              fontWeight: 600, border: '1.5px solid', borderColor: 'primary.main',
+              ...(end
+                ? { bgcolor: 'primary.main', color: '#fff' }
+                : { color: 'text.primary', bgcolor: 'background.paper' }),
+            }}>
+              {t(`chain.${id}`)}
+            </Box>
+            {i < CHAIN_IDS.length - 1 && (
+              <Box component="svg" viewBox="0 0 16 10" width={16} height={10} aria-hidden="true"
+                focusable="false" sx={{ color: 'primary.main', flexShrink: 0 }}>
+                <path d="M0 5h13M9 1l5 4-5 4" fill="none" stroke="currentColor" strokeWidth="2"
+                  strokeLinecap="round" strokeLinejoin="round" />
+              </Box>
+            )}
+          </Box>
+        );
+      })}
+    </Box>
+  );
+};
+
+const Section: React.FC<{ id: string; title: string; sub?: string; children: React.ReactNode }> = ({
+  id, title, sub, children,
+}) => (
+  <Box component="section" aria-labelledby={`${id}-h`} sx={{ mt: { xs: 6, sm: 9 } }}>
+    <Typography component="h2" id={`${id}-h`} sx={{
+      fontSize: { xs: '1.5rem', sm: '2rem' }, fontWeight: 700, letterSpacing: '-0.01em',
+      textAlign: 'center', mb: sub ? 0.75 : 3,
+    }}>
+      {title}
+    </Typography>
+    {sub && (
+      <Typography component="p" sx={{
+        textAlign: 'center', color: 'text.secondary', maxWidth: 720, mx: 'auto',
+        mb: 3.5, fontSize: { xs: '0.95rem', sm: '1.02rem' },
+      }}>
+        {sub}
+      </Typography>
+    )}
+    {children}
+  </Box>
 );
 
+const cardSx = {
+  borderRadius: 2, border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper',
+  p: 2.25, display: 'flex', flexDirection: 'column', gap: 1, textAlign: 'left',
+} as const;
+
+const PictureCard: React.FC<{ feature: Feature }> = ({ feature }) => {
+  const { t } = useTranslation('landing');
+  return (
+    <Tooltip title={t(`sim.${feature.key}Hint`)} arrow>
+      <Box sx={{
+        borderRadius: 2, border: '1px solid', borderColor: 'divider',
+        bgcolor: 'background.paper', overflow: 'hidden', display: 'flex',
+        flexDirection: 'column',
+      }}>
+        {/* The figure keeps the report's own white ground in both themes.  All
+            three are the same cut of the machine (the whole ring), so 1.25:1
+            is a box they all nearly fill.  `minHeight: 0` or a picture taller
+            than the ratio pushes its box past it. */}
+        <Box sx={{ bgcolor: '#ffffff', aspectRatio: '1.25 / 1', p: 0.75, minHeight: 0,
+          overflow: 'hidden' }}>
+          <Box component="img" src={feature.src} alt={t(`sim.${feature.key}Alt`)} loading="lazy"
+            sx={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
+        </Box>
+        <Typography component="h3" sx={{
+          px: 1.75, py: 1.25, fontSize: '0.95rem', fontWeight: 600,
+          borderTop: '1px solid', borderColor: 'divider',
+        }}>
+          {t(`sim.${feature.key}`)}
+        </Typography>
+      </Box>
+    </Tooltip>
+  );
+};
+
+const APP_ICONS: Record<(typeof APP_IDS)[number], React.ReactNode> = {
+  aviation: <DroneIcon />, robotics: <RobotIcon />, marine: <BoatIcon />, yours: <PlusIcon />,
+};
+
 const Landing: React.FC = () => {
-  const { signIn } = useAuth();
-  const label = signInLabel(GOOGLE_CLIENT_ID);
+  const { t } = useTranslation('landing');
 
   return (
-    <Box
-      component="main"
-      sx={{
-        // It is a flex child of the app's column shell (header above it), so it
-        // takes the rest of the window and scrolls inside itself — `height:
-        // 100%` alone left it sized to its content with dead space under it.
-        flex: '1 1 auto',
-        minHeight: 0,
-        overflowY: 'auto',
-        bgcolor: 'background.default',
-        // One soft brand wash behind the hero — the only decoration on the page.
-        backgroundImage: (t) =>
-          `radial-gradient(1100px 420px at 50% -120px, ${t.palette.primary.main}22, transparent 70%)`,
-      }}
-    >
-      {/* `minHeight: 100%` + centring, not `height` — the page sits in the
-          middle of a tall window and still SCROLLS on a short one. */}
-      <Box sx={{
-        // 1400, not 1040: the pictures are the page, and three of them across a
-        // 1040 row came out 340 px wide (user 2026-09-16 on the live page).  The
-        // HEADLINE keeps its own narrower measure below — a line of type this
-        // size is unreadable at 1400.
-        maxWidth: 1400, mx: 'auto', px: { xs: 2.5, sm: 4 },
-        py: { xs: 5, sm: 7 }, textAlign: 'center',
-        minHeight: '100%', display: 'flex', flexDirection: 'column',
-        justifyContent: 'center',
-      }}>
-        {/* ── Brand ── */}
-        <Box sx={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center',
-          gap: 1.5, mb: { xs: 3, sm: 4 },
-        }}>
-          <StatorMark />
-          <Typography component="span" sx={{
-            fontSize: { xs: '1.5rem', sm: '1.8rem' }, fontWeight: 700,
-            letterSpacing: '-0.01em', lineHeight: 1,
+    <Box component="main" sx={{
+      // A flex child of the app's column shell (header above it): it takes the
+      // rest of the window and scrolls inside itself.
+      flex: '1 1 auto', minHeight: 0, overflowY: 'auto', overflowX: 'hidden',
+      bgcolor: 'background.default',
+      backgroundImage: (th) =>
+        `radial-gradient(1100px 420px at 50% -120px, ${th.palette.primary.main}22, transparent 70%)`,
+    }}>
+      <Box sx={{ maxWidth: 1200, mx: 'auto', px: { xs: 2, sm: 4 }, pt: { xs: 5, sm: 7 }, pb: 4 }}>
+        {/* ── Hero: brand, slogan, one line of what it is, the way in ── */}
+        <Box sx={{ textAlign: 'center' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5,
+            mb: { xs: 3, sm: 4 } }}>
+            <StatorMark />
+            <Typography component="span" sx={{
+              fontSize: { xs: '1.5rem', sm: '1.8rem' }, fontWeight: 700,
+              letterSpacing: '-0.01em', lineHeight: 1,
+            }}>
+              AeroStator{' '}
+              <Box component="span" sx={{ fontWeight: 300, opacity: 0.65 }}>Core</Box>
+            </Typography>
+          </Box>
+          <Typography component="h1" sx={{
+            fontSize: { xs: '2rem', sm: '3.2rem' }, fontWeight: 800,
+            letterSpacing: '-0.025em', lineHeight: 1.12, mb: 1.75, maxWidth: 900, mx: 'auto',
           }}>
-            AeroStator{' '}
-            <Box component="span" sx={{ fontWeight: 300, opacity: 0.65 }}>Core</Box>
+            {t('hero.title')}
           </Typography>
+          <Typography component="p" sx={{
+            fontSize: { xs: '1rem', sm: '1.15rem' }, color: 'text.secondary',
+            maxWidth: 720, mx: 'auto', mb: 3,
+          }}>
+            {t('hero.sub')}
+          </Typography>
+          <Box sx={{ mb: 3.5 }}><HeroChain /></Box>
+          <AuthButtons />
         </Box>
 
-        {/* ── One headline, one supporting line ── */}
-        <Typography component="h1" sx={{
-          fontSize: { xs: '1.75rem', sm: '2.6rem' }, fontWeight: 700,
-          letterSpacing: '-0.02em', lineHeight: 1.15, mb: 1.5,
-          maxWidth: 1100, mx: 'auto',
-        }}>
-          Design, simulate and document electric motors
-        </Typography>
-        <Typography component="p" sx={{
-          fontSize: { xs: '0.95rem', sm: '1.05rem' }, color: 'text.secondary',
-          maxWidth: 620, mx: 'auto', mb: { xs: 3.5, sm: 4.5 },
-        }}>
-          Coupled electromagnetic, thermal and mechanical FEM — from geometry to a
-          signed datasheet, in the browser.
-        </Typography>
+        {/* ── The concept diagram (wide screens) / the same five steps as cards ── */}
+        <Section id="concept" title={t('concept.title')} sub={t('concept.sub')}>
+          <Box sx={{ display: 'none', '@media (min-width:700px)': { display: 'block' },
+            maxWidth: 1100, mx: 'auto', mb: 4 }}
+            data-testid="concept-diagram">
+            <ConceptDiagram />
+          </Box>
+          <Box component="ol" sx={{
+            listStyle: 'none', m: 0, p: 0, display: 'grid', gap: 2,
+            gridTemplateColumns: {
+              xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(5, 1fr)',
+            },
+          }}>
+            {STEP_IDS.map((id, i) => (
+              <Box component="li" key={id} sx={cardSx}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.25 }}>
+                  <Box component="span" aria-hidden="true" sx={{
+                    width: 28, height: 28, borderRadius: '50%', bgcolor: 'primary.main',
+                    color: '#fff', display: 'inline-flex', alignItems: 'center',
+                    justifyContent: 'center', fontWeight: 700, fontSize: '0.9rem', flexShrink: 0,
+                  }}>{i + 1}</Box>
+                  <Typography component="h3" sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
+                    {t(`chain.${id}`)}
+                  </Typography>
+                </Box>
+                <Typography component="p" sx={{ fontSize: '0.92rem', color: 'text.secondary' }}>
+                  {t(`steps.${id}`)}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Section>
 
-        {/* ── The one door in.  Same dialog as the header's Sign in button. ── */}
-        <Button
-          variant="contained"
-          size="large"
-          onClick={() => { void signIn().catch(() => {}); }}
-          startIcon={GOOGLE_CLIENT_ID ? <GoogleMark /> : undefined}
-          sx={{
-            // `alignSelf`, because the column above is a flex box and a button
-            // stretched across the whole row is not a button, it is a bar.
-            alignSelf: 'center',
-            textTransform: 'none', fontSize: '1rem', fontWeight: 600,
-            px: 3.5, py: 1.25, borderRadius: 2,
-          }}
-        >
-          {label}
-        </Button>
+        {/* ── Step 2 in pictures: the simulation renders ── */}
+        <Section id="sim" title={t('sim.title')} sub={t('sim.sub')}>
+          <Box sx={{
+            display: 'grid', gap: { xs: 2, sm: 2.5 },
+            gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' },
+          }}>
+            {FEATURES.map((f) => <PictureCard key={f.key} feature={f} />)}
+          </Box>
+        </Section>
 
-        {/* ── Three cards, stacked on a phone ── */}
-        <Box sx={{
-          mt: { xs: 5, sm: 7 },
-          display: 'grid',
-          gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' },
-          gap: { xs: 2, sm: 2.5 },
-          textAlign: 'left',
-        }}>
-          {FEATURES.map((f) => <FeatureCard key={f.label} feature={f} />)}
+        {/* ── Open and free ── */}
+        <Section id="open" title={t('open.title')} sub={t('open.sub')}>
+          <Box sx={{
+            display: 'grid', gap: 2,
+            gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
+          }}>
+            {OPEN_IDS.map((id) => (
+              <Box key={id} sx={{ ...cardSx, borderTop: '3px solid', borderTopColor: 'secondary.main' }}>
+                <Typography component="h3" sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
+                  {t(`open.${id}.title`)}
+                </Typography>
+                <Typography component="p" sx={{ fontSize: '0.92rem', color: 'text.secondary' }}>
+                  {t(`open.${id}.text`)}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Section>
+
+        {/* ── Applications ── */}
+        <Section id="apps" title={t('apps.title')} sub={t('apps.sub')}>
+          <Box sx={{
+            display: 'grid', gap: 2,
+            gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
+          }}>
+            {APP_IDS.map((id) => (
+              <Box key={id} sx={cardSx}>
+                {APP_ICONS[id]}
+                <Typography component="h3" sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
+                  {t(`apps.${id}.title`)}
+                </Typography>
+                <Typography component="p" sx={{ fontSize: '0.92rem', color: 'text.secondary' }}>
+                  {t(`apps.${id}.text`)}
+                </Typography>
+              </Box>
+            ))}
+          </Box>
+        </Section>
+
+        {/* ── How to start ── */}
+        <Section id="start" title={t('start.title')}>
+          <Box sx={{
+            display: 'grid', gap: 2,
+            gridTemplateColumns: { xs: '1fr', md: 'repeat(3, 1fr)' },
+          }}>
+            <Box sx={cardSx}>
+              <Typography component="h3" sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
+                {t('start.everyone.title')}
+              </Typography>
+              <Typography component="p" sx={{ fontSize: '0.92rem', color: 'text.secondary' }}>
+                {t('start.everyone.text')}
+              </Typography>
+            </Box>
+            <Box sx={cardSx}>
+              <Typography component="h3" sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
+                {t('start.engineers.title')}
+              </Typography>
+              <Typography component="p" sx={{ fontSize: '0.92rem', color: 'text.secondary' }}>
+                {t('start.engineers.text')}
+              </Typography>
+              <Link href={mailto('AeroStator Core engineer role')} underline="hover"
+                sx={{ fontWeight: 600, fontSize: '0.92rem' }}>
+                {t('start.engineers.link')}
+              </Link>
+            </Box>
+            <Box sx={cardSx}>
+              <Typography component="h3" sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
+                {t('start.developers.title')}
+              </Typography>
+              <Box component="ul" sx={{ m: 0, pl: 2.25, display: 'grid', gap: 0.5 }}>
+                {DEV_LINKS.map((l) => (
+                  <li key={l.id}>
+                    <Link href={l.href} target="_blank" rel="noopener noreferrer" underline="hover"
+                      sx={{ fontWeight: 600, fontSize: '0.92rem' }}>
+                      {t(`start.links.${l.id}`)}
+                    </Link>
+                  </li>
+                ))}
+              </Box>
+            </Box>
+          </Box>
+        </Section>
+
+        {/* ── The way in, once more ── */}
+        <Box component="section" aria-labelledby="cta-h" sx={{ mt: { xs: 6, sm: 9 }, textAlign: 'center' }}>
+          <Typography component="h2" id="cta-h" sx={{
+            fontSize: { xs: '1.5rem', sm: '2rem' }, fontWeight: 700, mb: 2.5,
+            letterSpacing: '-0.01em',
+          }}>
+            {t('cta.title')}
+          </Typography>
+          <AuthButtons />
         </Box>
-
-        {/* ── No account yet ── */}
-        <Typography component="p" sx={{
-          mt: { xs: 4, sm: 5 }, fontSize: '0.85rem', color: 'text.secondary',
-        }}>
-          No account yet?{' '}
-          <Link href={`mailto:${REQUEST_ACCESS_EMAIL}?subject=AeroStator%20Core%20access`}
-            underline="hover" sx={{ fontWeight: 600 }}>
-            Request access
-          </Link>
-        </Typography>
 
         {/* ── Footer ── */}
         <Box component="footer" sx={{
-          mt: { xs: 4, sm: 6 }, pt: 2.5, borderTop: '1px solid',
-          borderColor: 'divider', fontSize: '0.78rem', color: 'text.secondary',
+          mt: { xs: 6, sm: 8 }, pt: 2.5, borderTop: '1px solid', borderColor: 'divider',
+          fontSize: '0.82rem', color: 'text.secondary', textAlign: 'center',
         }}>
-          {COMPANY}{' · '}
-          <Link href={SHOP_URL} target="_blank" rel="noopener noreferrer"
-            underline="hover" color="inherit">
-            aerostator.com
-          </Link>
+          <Typography component="p" sx={{ fontSize: 'inherit', mb: 0.75 }}>
+            {t('footer.licence')}
+          </Typography>
+          <Typography component="p" sx={{ fontSize: 'inherit' }}>
+            {COMPANY}{' · '}
+            <Link href={SHOP_URL} target="_blank" rel="noopener noreferrer"
+              underline="hover" color="inherit">
+              aerostator.com
+            </Link>
+          </Typography>
         </Box>
       </Box>
     </Box>

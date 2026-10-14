@@ -13,7 +13,8 @@
     "newsletter": "Newsletter & notices",
     "logs": "Logs / Events",
     "downloads3d": "3D downloads",
-    "analytics": "Analytics"
+    "analytics": "Analytics",
+    "activity": "Activity"
   },
   "motors": {
     "title": "Motors — {email}",
@@ -56,5 +57,41 @@
     "unavailable": "Analytics backend not configured or not reachable. Ask the server owner to set the Umami environment variables.",
     "forbidden": "Admin access is required to see analytics.",
     "error": "Could not load analytics."
+  },
+  "activity": {
+    "title": "Activity",
+    "line": "Active time per account while the app is open, in use and visible (server clock).",
+    "help": "Counted from a heartbeat every 60 s while the tab is visible and the user touched it in the last 5 minutes; a gap or an idle spell counts nothing. Only the tab id is recorded. Daily totals are kept 13 months, then aggregate-only. Runs = finished jobs from the usage records (7 d / 30 d). Click a row for the daily chart.",
+    "refresh": "Refresh",
+    "user": "Account",
+    "today": "Today",
+    "d7": "7 d",
+    "d30": "30 d",
+    "sessions7": "Sessions 7 d",
+    "lastSeen": "Last seen",
+    "topTabs": "Top tabs (30 d)",
+    "runs": "Runs 7 d / 30 d",
+    "empty": "No activity recorded yet.",
+    "error": "Could not load activity.",
+    "detailLine": "Last 30 days: {total} active",
+    "minutes": "Active minutes",
+    "tabs": {
+      "motors": "Motors",
+      "compare": "Configure",
+      "model3d": "3D model",
+      "geometry": "Geometry",
+      "materials": "Materials",
+      "mesh": "Mesh",
+      "simulation": "Electromagnetic",
+      "static3d": "3D",
+      "mechanical": "Mechanical",
+      "thermal": "Thermal",
+      "controller": "Controller",
+      "system": "System",
+      "sweep": "Optimization",
+      "comparePoints": "Compare",
+      "cost": "Cost",
+      "admin": "Admin"
+    }
   }
 }

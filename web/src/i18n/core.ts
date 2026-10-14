@@ -11,7 +11,7 @@ import i18next, { type i18n as I18n, type Resource } from 'i18next';
 import ICU from 'i18next-icu';
 import resourcesToBackend from 'i18next-resources-to-backend';
 import { initReactI18next } from 'react-i18next';
-import { DEFAULT_LOCALE, SUPPORTED_LOCALES } from './locale';
+import { DEFAULT_LOCALE, DOCUMENT_TITLES, SUPPORTED_LOCALES, normalizeLocale } from './locale';
 
 export const NAMESPACES = ['common', 'errors', 'help', 'motors', 'geometry', 'simulation',
   'results', 'controller', 'thermal', 'admin', 'support', 'model3d', 'landing'] as const;
@@ -71,9 +71,15 @@ export function createI18n(opts: { lng?: string; resources?: Resource; dev?: boo
         void inst.loadLanguages(DEFAULT_LOCALE).then(() => warnMissingAgainstEnglish(inst, lng, ns));
       }
   });
-  // <html lang> follows the interface: screen readers + CJK font selection.
-  inst.on('languageChanged', (lng) => {
-    try { document.documentElement.lang = lng; } catch { /* no DOM (tests) */ }
-  });
+  // <html lang> and the tab title follow the interface: screen readers, CJK
+  // font selection, bookmarks.  Also applied once now for the first language.
+  const applyDocument = (lng: string) => {
+    try {
+      document.documentElement.lang = lng;
+      document.title = DOCUMENT_TITLES[normalizeLocale(lng) ?? DEFAULT_LOCALE];
+    } catch { /* no DOM (tests) */ }
+  };
+  inst.on('languageChanged', applyDocument);
+  applyDocument(opts.lng ?? DEFAULT_LOCALE);
   return inst;
 }

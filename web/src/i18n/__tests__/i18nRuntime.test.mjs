@@ -68,12 +68,12 @@ test('locale detection: storage, then browser languages, then EN', () => {
   assert.equal(m.normalizeLocale('zh-TW'), 'zh-CN');
   assert.equal(m.normalizeLocale('en_GB'), 'en');
   assert.equal(m.normalizeLocale('de'), null);
-  assert.equal(m.detectLocale({ storage: null, languages: ['de-DE', 'zh-Hans-CN'] }), 'zh-CN');
-  assert.equal(m.detectLocale({ storage: null, languages: ['fr'] }), 'en');
+  assert.equal(m.detectLocale({ storage: null, languages: ['de-DE', 'zh-Hans-CN'], timeZone: null }), 'zh-CN');
+  assert.equal(m.detectLocale({ storage: null, languages: ['fr'], timeZone: null }), 'en');
   const s = memStore(); s.setItem('ui.locale', 'zh-CN');
-  assert.equal(m.detectLocale({ storage: s, languages: ['en-US'] }), 'zh-CN');
+  assert.equal(m.detectLocale({ storage: s, languages: ['en-US'], timeZone: null }), 'zh-CN');
   const broken = { getItem() { throw new Error('SecurityError'); }, setItem() { throw new Error('x'); } };
-  assert.equal(m.detectLocale({ storage: broken, languages: [] }), 'en');
+  assert.equal(m.detectLocale({ storage: broken, languages: [], timeZone: null }), 'en');
 });
 
 test('the switcher persists: storage + server PUT; a failing PUT still switches', async () => {

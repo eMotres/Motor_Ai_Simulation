@@ -10,7 +10,7 @@
     "typecheck": "tsc -b",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:i18n": "node --test src/i18n/__tests__/i18nParity.test.mjs src/i18n/__tests__/i18nRuntime.test.mjs",
+    "test:i18n": "node --test src/i18n/__tests__/i18nParity.test.mjs src/i18n/__tests__/i18nRuntime.test.mjs src/i18n/__tests__/detectInitialLanguage.test.mjs",
     "i18n:coverage": "node scripts/i18n-coverage.mjs --files"
   },
   "dependencies": {

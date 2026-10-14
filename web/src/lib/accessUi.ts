@@ -32,7 +32,7 @@ export const roleLabel = (role: string): string => ROLE_LABELS[role as AccountRo
 export type TabGate = 'always' | 'signedIn' | 'fullUI' | 'admin';
 export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   motors: 'always', geometry: 'fullUI', materials: 'fullUI', mesh: 'fullUI', simulation: 'fullUI',
-  static3d: 'admin', mechanical: 'fullUI', thermal: 'fullUI', controller: 'fullUI', sweep: 'admin',
+  static3d: 'admin', mechanical: 'fullUI', thermal: 'fullUI', controller: 'fullUI', system: 'fullUI', sweep: 'admin',
   comparePoints: 'fullUI', cost: 'admin', compare: 'signedIn', model3d: 'signedIn', admin: 'admin',
 };
 export interface GateCtx { signedIn: boolean; fullUI: boolean; isAdmin: boolean }

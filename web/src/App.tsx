@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ThemeProvider,
   CssBaseline,
@@ -66,6 +66,7 @@ import { pageVisible } from './lib/pageVisible';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import Static3DPanel from './components/static3d/Static3DPanel';
 import MechanicalPanel from './components/mechanical/MechanicalPanel';
+const SystemPanel = lazy(() => import('./components/system/SystemPanel'));
 import ThermalPanel from './components/thermal/ThermalPanel';
 import ControllerPanel from './components/controller/ControllerPanel';
 import { syncMeshConfigFromServer } from './lib/meshConfigSync';
@@ -598,6 +599,11 @@ function App() {
     // The optimizer/sweep burns the whole machine on the shared config —
     // server-side it is admin-only since the deploy hardening, so showing the
     // tab to pro users would only offer buttons that 403.
+    // System (owner 2026-10-14): the view-only graph of how the simulations are chained (modules, data flow,
+    // coupling loops; the propeller S1 chain).  Engineer + admin, in the Simulations dropdown; lazy, the graph
+    // libraries are only fetched when the tab is opened.
+    { id: 'system', label: 'System', order: 61, gate: TAB_GATES.system, showViewer: false,
+      render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><SystemPanel /></Suspense> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: TAB_GATES.sweep, showViewer: false,
       render: () => <SweepConfigPanel /> },
     // Compare writes the SHARED saved-sims store and Cost studies run on the

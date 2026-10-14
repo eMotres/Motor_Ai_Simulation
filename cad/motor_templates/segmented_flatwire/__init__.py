@@ -5,4 +5,4 @@ CIANO14_40_motor_model repo).  Bump TEMPLATE_VERSION whenever the geometry or th
 every build manifest.
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.4.0"
+TEMPLATE_VERSION = "A.5.0"

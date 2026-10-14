@@ -23,18 +23,21 @@ sys.path.insert(0, os.path.join(ROOT, "fc_scripts"))
 import FreeCAD as App  # noqa: E402
 import MeshPart  # noqa: E402
 import glb_writer as G  # noqa: E402
-from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, electronics, view  # noqa: E402
+from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, electronics, view, palette  # noqa: E402
 from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 # axial factor of the viewer's exploded view (units of the motor length; + = propeller side): physical order along the axis
 EXPLODE = {"Core": 0.0, "Coils": -0.35, "Rotor": 0.9, "Magnets": 0.9, "Shaft": 2.2,
            "Ring_back": -0.7, "Holder_back": -1.15, "Bearings_back": -1.55, "PhaseBoard": -2.2,
            "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
-BOARD_COLOURS = {"PhaseBoard_FR4": (0.16, 0.42, 0.24), "PhaseBoard_copper": (0.86, 0.66, 0.22),
-                 "PhaseBoard_pins": (0.62, 0.64, 0.66), "PhaseBoard_other": (0.45, 0.47, 0.45)}
+# board groups use THE palette (palette.py): the board body is the solder-mask green, copper layers + pads gold, pins brass, the
+# remaining solids (notch walls) the FR4 edge colour
+BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask"), "PhaseBoard_copper": palette.rgb("pcb_gold"),
+                 "PhaseBoard_pins": palette.rgb("pcb_pins"), "PhaseBoard_other": palette.rgb("pcb_fr4")}
 VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny parts are limited by the tessellation tolerance)
 ANG = 0.3                       # angular deflection (rad) of the viewer meshes
-ORDER = ["Core", "Coils", "Rotor", "Magnets", "Shaft", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back",
+ORDER = ["Core", "Coils", "Rotor", "Magnets", "Magnets_S", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_front_balls", "Bearings_front_seals",
+         "Bearings_back", "Bearings_back_balls", "Bearings_back_seals", "Holder_front", "Holder_back",
          "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
 
 
@@ -106,7 +109,9 @@ class Collector:
         g = self.groups.get(gname)
         if g is None:
             fam = family or gname
-            g = self.groups[gname] = G.Group(gname, colour, extras=dict(family=fam, explode=EXPLODE.get(fam, 0.0)))
+            metallic, roughness = palette.group_material(gname)
+            g = self.groups[gname] = G.Group(gname, colour, extras=dict(family=fam, explode=EXPLODE.get(fam, 0.0)),
+                                             metallic=metallic, roughness=roughness)
         b = budget_of(node)
         patches, vol = tessellate(shape, budgeted_tol(shape, self.tol, b) if b else self.tol)
         g.add(node, patches)
@@ -139,15 +144,20 @@ def add_motor(col, parts):
     for i, s in enumerate(coils):
         col.add("Coils", "Coil_%02d" % (i + 1), s, view.COLORS["Coil"], check=i < 2)
     col.add("Rotor", "RotorCore", rotor, view.COLORS["RotorCore"])
-    for i, s in enumerate(mags):
-        col.add("Magnets", "Magnet_%02d" % (i + 1), s, view.COLORS["Magnet"], check=i < 2)
+    for i, s in enumerate(mags):                                  # alternating poles N red / S blue (palette.magnet_colour)
+        col.add("Magnets" if i % 2 == 0 else "Magnets_S", "Magnet_%02d" % (i + 1), s, palette.magnet_colour(i),
+                family="Magnets", check=i < 2)
     for name, s in mech.items():
         if name == "Shaft":
             col.add("Shaft", name, s, view.COLORS["Shaft"])
+        elif name == "Shaft_rear":
+            col.add("Shaft_rear", name, s, view.COLORS["Shaft_rear"])
         elif name.startswith("Bearing_618_8_"):
             side = "front" if "_front_" in name else "back"
-            c = view.COLORS["Bearing_ball"] if "_ball_" in name else view.COLORS["Bearing_outer_ring"]
-            col.add("Bearings_" + side, name, s, c, check="_ball_" not in name)
+            ball, seal = "_ball_" in name, "_seal_" in name
+            col.add("Bearings_" + side + ("_balls" if ball else "_seals" if seal else ""), name, s,
+                    view.COLORS["Bearing_ball"] if ball else view.COLORS["Bearing_seal"] if seal else view.COLORS["Bearing_outer_ring"],
+                    family="Bearings_" + side, check=not ball)
         elif name == "Stator_holder":
             col.add("Holder_front", name, s, view.COLORS["Stator_holder"])
         elif name == "Stator_holder_back":
@@ -201,10 +211,12 @@ def main():
     col = Collector(tol)
     board_info = add_motor(col, parts)
     glb, st = col.glb(asset)
+    plate_board = electronics.has_board(src) and electronics.is_plate(src)
     App.closeDocument(src.Name)
 
     worst = max([c[3] for c in col.checks] or [0.0])
-    ok = worst < VOL_TOL and (board_info is None or board_info.get("PhaseBoard_copper", 0) > 0)   # the copper board is in the model
+    ok = worst < VOL_TOL and (board_info is None or board_info.get("PhaseBoard_copper", 0) > 0          # the copper board is in the model
+                              or (plate_board and board_info.get("PhaseBoard_pins", 0) > 0))               # (CIANO28 85: plate + lead sleeves)
     rep = dict(motor_id=mid, tessellation_mm=round(tol, 4), glb=mid + "_full.glb", bytes=len(glb), board=board_info,
                worst_mesh_volume_error=round(worst, 5), freecad_version=".".join(str(x) for x in App.Version()[:3]), ok=ok, **st,
                mesh_checks=[dict(node=c[0], solid_volume=c[1], mesh_volume=c[2], rel_error=round(c[3], 5)) for c in col.checks])

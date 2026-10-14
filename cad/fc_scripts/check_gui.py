@@ -30,6 +30,8 @@ try:
             bad.append("%s: document Visibility %s but view provider %s" % (o.Name, o.Visibility, gui_vis[o.Name]))
     cols = {}
     for n in view.BODIES:
+        if doc.getObject(n) is None or doc.getObject(n).TypeId == "Part::Feature":   # no such body / the imported board (per-face colours)
+            continue
         vo = gdoc.getObject(n)
         c = tuple(round(x, 2) for x in vo.ShapeColor[:3])
         cols[n] = c
@@ -40,17 +42,18 @@ try:
     out["thread_faces"] = {k: len(v) for k, v in th.items()}
     for bn, idx in th.items():                           # cosmetic threads (Fusion: modeled = False): coloured faces
         dc = [tuple(round(x, 2) for x in c[:3]) for c in gdoc.getObject(bn).DiffuseColor]
-        got = sum(1 for i in idx if i < len(dc) and dc[i] == tuple(round(x, 2) for x in view.THREAD_COLOUR))
+        got = sum(1 for i in idx if i < len(dc) and dc[i] == tuple(round(x, 2) for x in view.THREAD_COLOURS[bn]))
         if not idx or got != len(idx) or len(dc) != len(doc.getObject(bn).Shape.Faces):
             bad.append("%s: %d of %d thread faces carry the thread colour (%d colours for %d faces)" % (
                 bn, got, len(idx), len(dc), len(doc.getObject(bn).Shape.Faces)))
     pb = gdoc.getObject("PhaseBoard")
-    if pb is not None:                                   # the STEP colours must have reached the view object
+    if pb is not None and doc.getObject("PhaseBoard").TypeId == "Part::Feature":                                   # the STEP colours must have reached the view object
         dc = list(pb.DiffuseColor)
         distinct = sorted({tuple(round(x, 2) for x in c[:3]) for c in dc})
         out["phase_board_colours"] = dict(faces=len(dc), distinct=len(distinct))
         if len(dc) != len(doc.getObject("PhaseBoard").Shape.Faces) or len(distinct) < 4:
             bad.append("PhaseBoard colours: %d per-face colours (%d distinct), the STEP has 4 colour families" % (len(dc), len(distinct)))
+    bad += view.check_opaque(doc, gdoc)                  # no visible body may be (partly) transparent
     out["visible"] = sorted(n for n, v in gui_vis.items() if v)
     out["hidden_count"] = sum(1 for v in gui_vis.values() if not v)
     out["violations"] = bad

@@ -4,12 +4,18 @@ Pole pitch (angle_mag, centred on +Y = magnet centre line): hub ring segment (ro
 rotor_down_r), two half poles up to rotor_up_r, magnet pocket open to the air gap between lips at
 +-rotor_up_r*sin(magnet_fill_up*angle_mag*rotor_hole/2).  Pocket sides = nominal magnet sides offset outwards by
 offset_rotor (Fusion OffsetFaces3); pocket bottom and lips are not offset (checked against the Fusion B-rep faces);
-top fillet = magnet_fill_radius + offset_rotor about the nominal fillet centre.  Fusion Fillet7 (0.1) and
-OffsetFaces6 have no effect in the open model (error state, no faces) and are not modelled.
+top fillet = magnet_fill_radius + offset_rotor about the nominal fillet centre.
+
+Keys (template A.5.0, CIANO28 85: Fusion Extrude5 + Fillet7 + OffsetFaces6 + C-Pattern5): `rotor_key_count` > 0 adds keys in
+the bore - one sketch (half profile + mirror: tip line, tip corner fillets, key side, base fillets into the bore circle,
+bore arc) -> Pad (symmetric rotor_w) -> PolarPattern (rotor_key_count, first key on the +Y pole axis).  Key width
+`rotor_key_w` and depth `rotor_key_h` are nominal; the three faces (sides, tip) are moved inwards by `rotor_key_offset`
+(Fusion OffsetFaces6); all four fillets have the radius `rotor_fill_r` (one dimension + Equal).  Profiles without
+`rotor_key_count` (CIANO14 40: Fusion Extrude5 suppressed, Fillet7 / OffsetFaces6 without effect) get no key.
 """
 import math
 from .sketchkit import Chain, SK, V_AXIS
-from .params_sheet import pval
+from .params_sheet import pval, has_param
 from .common import P, M, xy_sketch, line_offset, pad_symmetric, intersect, fillet_center_circle_line, rotor_numbers
 
 
@@ -113,4 +119,67 @@ def build_rotor(doc, sh, body):
     pp.Refine = True
     body.Tip = pp
     sk.Visibility = False
-    return dict(sketch=sk, features=[pad, pp])
+    out = dict(sketch=sk, features=[pad, pp], extra_sketches=[])
+    if has_param(sh, "rotor_key_count") and round(g("rotor_key_count")) > 0:
+        ksk, kfeat = build_keys(doc, sh, body, g)
+        out["extra_sketches"].append(ksk)
+        out["features"] += kfeat
+    return out
+
+
+def build_keys(doc, sh, body, g):
+    """Rotor keys: see the module docstring.  Right half is dimensioned, the left half is its mirror (Symmetric / Equal)."""
+    Rb = g("rotor_down_r") - g("rotor_house_height")                  # bore radius (= hub inner radius)
+    koff, kw, kh, fr = g("rotor_key_offset"), g("rotor_key_w"), g("rotor_key_h"), g("rotor_fill_r")
+    w2, yt = kw / 2 - koff, Rb - kh + koff                              # side x, tip y after the offset
+    A = (w2 - fr, yt)                                                   # tip line end / tip fillet start
+    C1 = (w2 - fr, yt + fr)
+    B = (w2, yt + fr)                                                   # tip fillet end / side start
+    C2y = math.sqrt((Rb - fr) ** 2 - (w2 + fr) ** 2)
+    C2 = (w2 + fr, C2y)                                                 # base fillet centre (tangent to the side and the bore circle)
+    S = (w2, C2y)                                                       # side end / base fillet start
+    k = (Rb) / math.hypot(*C2)
+    E = (C2[0] * k, C2[1] * k)                                          # base fillet end on the bore circle
+
+    sk = xy_sketch(body, "RotorKeySketch")
+    c = Chain(sk)
+    tip = c.line(M(A), A, joint="T")
+    R, L = {}, {}
+    R["f1"] = c.arc(C1, fr, A, B, ccw=True, joint="T")
+    R["side"] = c.line(B, S, joint="T")
+    R["f2"] = c.arc(C2, fr, S, E, ccw=False, joint="T")
+    bore = c.arc((0, 0), Rb, E, M(E), ccw=True, joint="T")
+    L["f2"] = c.arc(M(C2), fr, M(E), M(S), ccw=False, joint="T")
+    L["side"] = c.line(M(S), M(B), joint="T")
+    L["f1"] = c.arc(M(C1), fr, M(B), M(A), ccw=True, joint="T")
+    c.close()
+    s = SK(sk)
+    s.mirror_chain(c, R, {k_: L[k_] for k_ in R})
+    # the left base fillet is fixed by its two symmetric end nodes and the bore tangency: its Equal would be redundant
+    for i, cn in enumerate(sk.Constraints):
+        if cn.Type == "Equal" and {cn.First, cn.Second} == {R["f2"], L["f2"]}:
+            sk.delConstraint(i)
+            break
+    s.con("Coincident", bore, 3, -1, 1)          # (the tip line is horizontal through the mirrored, tangent tip fillets)
+    s.con("Radius", bore, Rb, name="key_bore_r", expr=P + "rotor_down_r - " + P + "rotor_house_height")
+    s.con("DistanceY", -1, 1, tip, 1, yt, name="key_tip_y",
+          expr=P + "rotor_down_r - " + P + "rotor_house_height - " + P + "rotor_key_h + " + P + "rotor_key_offset")
+    s.con("Vertical", R["side"])
+    s.con("DistanceX", -1, 1, R["side"], 1, w2, name="key_side_x", expr=P + "rotor_key_w / 2 - " + P + "rotor_key_offset")
+    s.con("Radius", R["f1"], fr, name="rotor_fill_r", expr=P + "rotor_fill_r")           # one fillet dimension
+    s.con("Equal", R["f1"], R["f2"])
+    doc.recompute()
+    pad = body.newObject("PartDesign::Pad", "RotorKeyPad")
+    pad.Profile = sk
+    pad_symmetric(pad)
+    pad.setExpression("Length", P + "rotor_w")
+    pad.Refine = True
+    pp = body.newObject("PartDesign::PolarPattern", "RotorKeys")
+    pp.Originals = [pad]
+    pp.Axis = (sk, ["N_Axis"])
+    pp.Angle = 360
+    pp.setExpression("Occurrences", P + "rotor_key_count")
+    pp.Refine = True
+    body.Tip = pp
+    sk.Visibility = False
+    return sk, [pad, pp]

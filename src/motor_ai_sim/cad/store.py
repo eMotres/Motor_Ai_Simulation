@@ -50,6 +50,17 @@ NO_CAD = {"wire_split": "strips across the wire width (CAD draws one strip; temp
 FUSION_MATS = {"Core": "20SW1200", "Coil": "Copper", "RotorCore": "Steel", "Magnet": "Steel (placeholder)"}
 
 
+def reference_for(die):
+    """(base profile, Fusion values file) of a die: `cad/reference/<die slug>.json` (+ `<slug>_fusion_values.json`) when the
+    die has its own Fusion reference (e.g. CIANO28_85_20SW1200), else the CIANO14 40 reference (the first template)."""
+    sl = slug(die)
+    own = os.path.join(CAD_DIR, "reference", sl + ".json")
+    if os.path.exists(own):
+        fv = os.path.join(CAD_DIR, "reference", sl + "_fusion_values.json")
+        return own, (fv if os.path.exists(fv) else FUSION_VALUES)
+    return BASE_PROFILE, FUSION_VALUES
+
+
 def default_dies_dir():
     return os.environ.get("MOTRES_DIES_DIR") or (DEFAULT_SERVER_DIES if os.path.isdir(DEFAULT_SERVER_DIES)
                                                  else os.path.join(ROOT, "config", "dies"))
@@ -281,9 +292,10 @@ def parameter_fingerprint(eff, mp):
 def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, motor_id=None):
     """Store -> (profile dict for the FreeCAD template, review report).  Where a formula of the Fusion reference
     profile already gives the simulation value it is kept (Fusion intent); any other value becomes a constant."""
-    base = json.load(open(base_profile or BASE_PROFILE, encoding="utf-8"))
+    ref_base, ref_fv = reference_for(eff["die"])
+    base = json.load(open(base_profile or ref_base, encoding="utf-8"))
     fus = {}
-    fv = fusion_values or FUSION_VALUES
+    fv = fusion_values or ref_fv
     if fv and os.path.exists(fv):
         fus = {p["name"]: p["value"] for p in json.load(open(fv, encoding="utf-8"))}
     pj = copy.deepcopy(base)
@@ -376,6 +388,13 @@ def bearing_profile_rows(eff, params, report):
     rows = []
     if data and all(data.get(k) is not None for k in BEARING_ROWS):
         src = "simulation %s/%s bearings -> bearings_library.yaml %s" % (eff["die"], eff["config"], card)
+    elif reference_for(eff["die"])[0] != BASE_PROFILE:
+        # the die has its own Fusion reference (e.g. CIANO28 85: bearing 61707-2RS1, not in the bearings library): its bearing rows stay
+        for key, name in BEARING_ROWS.items():
+            params[name]["source"] = "die Fusion reference (no bearing card in the store%s)" % (" for %s" % card if card else "")
+            rows.append(dict(card=card, field=key, name=name, value=None, expression_before=params[name]["freecad_expression"],
+                             source=params[name]["source"]))
+        return rows
     else:
         data, src = BEARING_618_8, "standard 618/8 dimensions (no bearing card in the store%s)" % (
             " for %s" % card if card else "")
@@ -427,8 +446,9 @@ def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):
                          expression=cells[fname],
                          target=("%s geometry_overrides" % eff["config"]) if key in eff["geometry_overrides"]
                          else "die.yaml geometry (affects every config of the die: %s)" % ", ".join(configs)))
+    base_profile = base_profile or reference_for(eff["die"])[0]
     base = {p["name"]: p for sec in SECTIONS
-            for p in json.load(open(base_profile or BASE_PROFILE, encoding="utf-8")).get(sec, [])}
+            for p in json.load(open(base_profile, encoding="utf-8")).get(sec, [])}
     mapped = {mp["map"].get(k, k) for k in geo}
     cad_only = [dict(name=n, freecad=round(vals[n], 9), role=base.get(n, {}).get("role", "added by owner"),
                      expression=cells[n]) for n in sorted(vals) if n not in mapped and n in cells
@@ -437,7 +457,7 @@ def back(eff, mp, cells, out_dir, propose=False, origin="?", base_profile=None):
     bvals = evaluate({n: p["freecad_expression"] for n, p in base.items()})
     mechanics = [dict(name=n, freecad=round(vals[n], 9), reference=round(bvals[n], 9), expression=cells[n],
                       target="CAD reference profile cad/reference/%s (mechanics, not in the simulation)" % os.path.basename(
-                          base_profile or BASE_PROFILE))
+                          base_profile))
                  for n in sorted(vals) if n in cells and base.get(n, {}).get("role") == "mechanics" and not _eq(vals[n], bvals[n])]
     cards = (eff.get("bearing_cards") or {})
     bearing = []

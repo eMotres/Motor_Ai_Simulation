@@ -130,6 +130,14 @@ def pval(sh, name):
     return float(v.Value) if hasattr(v, "Value") else float(v)
 
 
+def has_param(sh, name):
+    """True when the Params sheet has a cell with this alias (optional rows of newer profiles)."""
+    try:
+        return bool(sh.getCellFromAlias(name))
+    except Exception:
+        return False
+
+
 def set_param(sh, name, expr):
     """Change a parameter like the owner would (cell keeps its alias)."""
     cell = sh.getCellFromAlias(name)

@@ -322,3 +322,31 @@ parameter hash, SHA-256 of the source file and of the stamped file, IP.  A downl
 Deploying: the CAD image must be rebuilt from this commit (`export_models.py`, `glb_writer.py` are under `cad/`), then rebuild the configs
 (`docker run ... motres-cad:<tag> build --die ... --config ...`, same command as above; a rebuild replaces the whole output directory, so old
 `<motor_id>_envelope.*` files disappear); the API only reads `<shared>/cad`.
+
+## Ring-carrier variant and the CIANO28 85 (template A.5.0, 2026-10-14)
+
+The CIANO28 85 20SW1200 / L13 is built by the same template as the CIANO14 40; what differs is selected by profile rows (a profile
+without them builds exactly as before; the CIANO14 40 volumes were checked bit-identical against A.4.0).
+
+| Row(s) | What it switches |
+|---|---|
+| `rotor_key_count`, `rotor_key_w/h/offset`, `rotor_fill_r` | rotor keys in the bore (Fusion Extrude5 / Fillet7 / OffsetFaces6 / C-Pattern5): one sketch, Pad, PolarPattern |
+| `magnet_lower_fill_r` | magnet bottom / knee fillets differ from the top fillets (`magnet_fill_radius`) |
+| `carrier_*` (e.g. `carrier_bore_r`) | mechanics variant `ring_carrier` (`mechanics_carrier.py`): front `Shaft` (hub, 4 M3 holes) + `Shaft_rear`, rim key tabs and slots, no Prop_fix; gate / fit / precheck / datums / BOM have carrier branches |
+| `bearing_seal_*` | 2RS1 bearing: seal notch + lip groove + cone in the outer ring (revolved cuts) and two seals (volume-equivalent L section) |
+| `holder_spoke_angle`, `holder_window_rot`, `holder_rib_*`, `holder_bolt_count` | holders with 6 spokes on 12 sectors, spoke ribs |
+| `board_*` | parametric phase board: ring plate + 24 lead slots + 24 lead sleeves (`electronics.build_board_plate`), follows the coil leads |
+
+Per-die Fusion reference: `cad/reference/<die slug>.json` (+ `<slug>_fusion_values.json`) is used instead of the CIANO14 40 reference
+(`store.reference_for`); its bearing rows stay when the store has no bearing card for the die.
+
+Volumes vs the Fusion bodies (Fusion-values profile): Core 0.000 %, RotorCore +0.006 %, Magnet 0.000 %, Coil +0.345 %, Shaft +0.005 %,
+Shaft_rear +0.007 %, Stator_holder +0.005 %, Stator_holder_back +0.241 %, Ring 0.000 %, bearing outer / inner ring +0.006 % / 0.000 %, seal
++0.030 %, balls -0.021 %, Screw +0.004 % (CIANO14 repo `validation/ciano28_85_13/`).  Not modelled: the Fusion slot-edge fillet of the
+carrier (r 0.15), the cone stack of the bearing seal, copper layers of the 85 board (envelope only).
+
+## One colour palette (2026-10-14)
+
+`cad/motor_templates/segmented_flatwire/palette.py` (+ `palette.json`) is the single source of the colours of the FreeCAD GUI finish and
+of the GLB exporter (sRGB values; glTF base colours are written linear).  Everything is opaque; the GUI finish refuses a model with a visible
+transparent body (`view.check_opaque`).

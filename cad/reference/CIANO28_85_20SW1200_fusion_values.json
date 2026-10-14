@@ -1,0 +1,674 @@
+[
+ {
+  "name": "motor_d",
+  "expression": "( stator_up_r + housing_h ) * 2",
+  "unit": "mm",
+  "value": 97.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_r",
+  "expression": "motor_d / 2",
+  "unit": "mm",
+  "value": 48.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_h",
+  "expression": "magnet_height",
+  "unit": "mm",
+  "value": 7.000000000000001,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_w",
+  "expression": "motor_length",
+  "unit": "mm",
+  "value": 13.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "magnet_height",
+  "expression": "7 mm",
+  "unit": "mm",
+  "value": 7.000000000000001,
+  "value_unit": "mm",
+  "comment": "Height/thickness of permanent magnets"
+ },
+ {
+  "name": "magnet_w",
+  "expression": "rotor_w",
+  "unit": "mm",
+  "value": 13.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "air_gap",
+  "expression": "0.3 mm",
+  "unit": "mm",
+  "value": 0.3,
+  "value_unit": "mm",
+  "comment": "Air gap between stator and rotor"
+ },
+ {
+  "name": "motor_length",
+  "expression": "13 mm",
+  "unit": "mm",
+  "value": 13.0,
+  "value_unit": "mm",
+  "comment": "Axial stack length \u2014 scales FEM torque/loss/mass + drives all 3D extrusion"
+ },
+ {
+  "name": "stator_up_r",
+  "expression": "stator_diameter / 2",
+  "unit": "mm",
+  "value": 42.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "stator_mid_r",
+  "expression": "stator_up_r - slot_height - core_thickness / 2",
+  "unit": "mm",
+  "value": 33.9,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "slot_height",
+  "expression": "7.4 mm",
+  "unit": "mm",
+  "value": 7.400000000000001,
+  "value_unit": "mm",
+  "comment": "Height of stator slots"
+ },
+ {
+  "name": "core_thickness",
+  "expression": "2.4 mm",
+  "unit": "mm",
+  "value": 2.4,
+  "value_unit": "mm",
+  "comment": "Thickness of stator core (back iron)"
+ },
+ {
+  "name": "stator_down_r",
+  "expression": "stator_up_r - slot_height - core_thickness",
+  "unit": "mm",
+  "value": 32.699999999999996,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_down_h",
+  "expression": "0.5 mm",
+  "unit": "mm",
+  "value": 0.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_down_r",
+  "expression": "rotor_up_r - rotor_h",
+  "unit": "mm",
+  "value": 25.399999999999995,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "glue",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "magnet_fill_up",
+  "expression": "0.22",
+  "unit": "",
+  "value": 0.22,
+  "value_unit": "",
+  "comment": "Up fill ratio of the magnet"
+ },
+ {
+  "name": "num_seg",
+  "expression": "4",
+  "unit": "",
+  "value": 4.0,
+  "value_unit": "",
+  "comment": "Number of segments in stator"
+ },
+ {
+  "name": "angle",
+  "expression": "( 360 / num_seg ) * 1 deg",
+  "unit": "deg",
+  "value": 90.0,
+  "value_unit": "deg",
+  "comment": ""
+ },
+ {
+  "name": "angle_wire",
+  "expression": "( 360 / ( num_seg * 6 ) ) * 1 deg",
+  "unit": "deg",
+  "value": 14.999999999999998,
+  "value_unit": "deg",
+  "comment": ""
+ },
+ {
+  "name": "angle_mag",
+  "expression": "( ( 360 / ( num_seg * num_poles_per_segment ) ) * 1 deg )",
+  "unit": "deg",
+  "value": 12.857142857142858,
+  "value_unit": "deg",
+  "comment": ""
+ },
+ {
+  "name": "bearing_6005_d",
+  "expression": "30 mm",
+  "unit": "mm",
+  "value": 30.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "resolver_w",
+  "expression": "16 mm",
+  "unit": "mm",
+  "value": 16.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "sealing_ring_d",
+  "expression": "0.9 mm",
+  "unit": "mm",
+  "value": 0.9000000000000001,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_spacing_y",
+  "expression": "0.07 mm",
+  "unit": "mm",
+  "value": 0.07,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "insulation_thickness",
+  "expression": "0.06 mm",
+  "unit": "mm",
+  "value": 0.06,
+  "value_unit": "mm",
+  "comment": "Insulation between stator core and slot"
+ },
+ {
+  "name": "slot_hs",
+  "expression": "0.15",
+  "unit": "",
+  "value": 0.15,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "magnet_fill_radius",
+  "expression": "0.4 mm",
+  "unit": "mm",
+  "value": 0.4000000000000001,
+  "value_unit": "mm",
+  "comment": "Magnet fillet radius"
+ },
+ {
+  "name": "slot_r",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "slot_up_r",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "tooth_width",
+  "expression": "5 mm",
+  "unit": "mm",
+  "value": 5.0,
+  "value_unit": "mm",
+  "comment": "Tooth width at the stator outer radius"
+ },
+ {
+  "name": "slot_ds",
+  "expression": "0.8",
+  "unit": "",
+  "value": 0.8,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "slot_hs1",
+  "expression": "0.02",
+  "unit": "",
+  "value": 0.02,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "housing_h",
+  "expression": "6 mm",
+  "unit": "mm",
+  "value": 6.000000000000001,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "magnet_fill_down",
+  "expression": "0.92",
+  "unit": "",
+  "value": 0.92,
+  "value_unit": "",
+  "comment": "Down fill ratio of the magnet"
+ },
+ {
+  "name": "rotor_up_r",
+  "expression": "stator_down_r - air_gap",
+  "unit": "mm",
+  "value": 32.4,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_house_height",
+  "expression": "0.8 mm",
+  "unit": "mm",
+  "value": 0.8000000000000002,
+  "value_unit": "mm",
+  "comment": "Thickness of rotor housing"
+ },
+ {
+  "name": "arc",
+  "expression": "stator_down_r * 2 * PI * ( angle_wire / 360 deg ) - tooth_width",
+  "unit": "mm",
+  "value": 3.5608399810321845,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_height",
+  "expression": "0.3 mm",
+  "unit": "mm",
+  "value": 0.3,
+  "value_unit": "mm",
+  "comment": "Height of the wire in the slot"
+ },
+ {
+  "name": "wire_width",
+  "expression": "3.5 mm",
+  "unit": "mm",
+  "value": 3.5000000000000004,
+  "value_unit": "mm",
+  "comment": "Width of the wire in the slot"
+ },
+ {
+  "name": "bolt_head_d",
+  "expression": "4.6 mm",
+  "unit": "mm",
+  "value": 4.6,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_core",
+  "expression": "0.006 mm",
+  "unit": "mm",
+  "value": 0.006,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "num_wires_per_slot",
+  "expression": "18",
+  "unit": "",
+  "value": 18.0,
+  "value_unit": "",
+  "comment": "Number of wires per slot"
+ },
+ {
+  "name": "dov_d",
+  "expression": "3 mm",
+  "unit": "mm",
+  "value": 3.0000000000000004,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_beng_r",
+  "expression": "tooth_width / 2 + insulation_thickness + wire_dist_x / 2 - 0.05 mm",
+  "unit": "mm",
+  "value": 2.56,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "bolt_h",
+  "expression": "3 mm",
+  "unit": "mm",
+  "value": 3.0000000000000004,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "bolt_d",
+  "expression": "2.5 mm",
+  "unit": "mm",
+  "value": 2.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_tooth",
+  "expression": "0.009 mm",
+  "unit": "mm",
+  "value": 0.009,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "tooth_r",
+  "expression": "wire_beng_r - 0.5 mm",
+  "unit": "mm",
+  "value": 2.06,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "AWG",
+  "expression": "5.8 mm + 0.2 mm",
+  "unit": "mm",
+  "value": 6.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_rotor",
+  "expression": "0.035 mm",
+  "unit": "mm",
+  "value": 0.035,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_bearing",
+  "expression": "0.04 mm",
+  "unit": "mm",
+  "value": 0.04,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_radiator",
+  "expression": "0.15 mm",
+  "unit": "mm",
+  "value": 0.15,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_holder",
+  "expression": "0.08 mm",
+  "unit": "mm",
+  "value": 0.08,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "coil_w",
+  "expression": "wire_width + insulation_thickness * 2 + wire_dist_x",
+  "unit": "mm",
+  "value": 3.7200000000000006,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_spacing_x",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "stator_fillet_r",
+  "expression": "1.2 mm",
+  "unit": "mm",
+  "value": 1.2,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "magnet_up_gap",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": "Radial distance from the rotor outer surface to the magnet top (the top follows the rotor circle); 0 = magnet seats on the retaining sleeve"
+ },
+ {
+  "name": "rotor_hole",
+  "expression": "0.9",
+  "unit": "",
+  "value": 0.9,
+  "value_unit": "",
+  "comment": "Rotor hole ratio"
+ },
+ {
+  "name": "tooth2_width",
+  "expression": "2.2 mm",
+  "unit": "mm",
+  "value": 2.2,
+  "value_unit": "mm",
+  "comment": "Tooth width at out side of the coils"
+ },
+ {
+  "name": "cut_width",
+  "expression": "1.5 mm",
+  "unit": "mm",
+  "value": 1.5000000000000002,
+  "value_unit": "mm",
+  "comment": "The thickness of the jumper between air and gap"
+ },
+ {
+  "name": "magnet_down_height",
+  "expression": "0.6 mm",
+  "unit": "mm",
+  "value": 0.6,
+  "value_unit": "mm",
+  "comment": "Magnet down height"
+ },
+ {
+  "name": "mag_step",
+  "expression": "motor_length",
+  "unit": "mm",
+  "value": 13.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "num_poles_per_segment",
+  "expression": "7",
+  "unit": "",
+  "value": 7.0,
+  "value_unit": "",
+  "comment": "Number of poles per segment"
+ },
+ {
+  "name": "prop_D",
+  "expression": "2540.00 mm",
+  "unit": "mm",
+  "value": 2540.0,
+  "value_unit": "mm",
+  "comment": "propeller diameter"
+ },
+ {
+  "name": "prop_pitch",
+  "expression": "1270.00 mm",
+  "unit": "mm",
+  "value": 1270.0,
+  "value_unit": "mm",
+  "comment": "geometric pitch"
+ },
+ {
+  "name": "hub_D",
+  "expression": "400.00 mm",
+  "unit": "mm",
+  "value": 400.0,
+  "value_unit": "mm",
+  "comment": "hub diameter"
+ },
+ {
+  "name": "hub_H",
+  "expression": "160.00 mm",
+  "unit": "mm",
+  "value": 160.0,
+  "value_unit": "mm",
+  "comment": "hub height"
+ },
+ {
+  "name": "bore_D",
+  "expression": "80.00 mm",
+  "unit": "mm",
+  "value": 80.0,
+  "value_unit": "mm",
+  "comment": "shaft bore"
+ },
+ {
+  "name": "bolt_PCD",
+  "expression": "250.00 mm",
+  "unit": "mm",
+  "value": 250.0,
+  "value_unit": "mm",
+  "comment": "bolt circle dia"
+ },
+ {
+  "name": "bolt_D",
+  "expression": "32.00 mm",
+  "unit": "mm",
+  "value": 32.0,
+  "value_unit": "mm",
+  "comment": "bolt hole dia"
+ },
+ {
+  "name": "stator_fillet_r1",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_fill_r",
+  "expression": "0.2 mm",
+  "unit": "mm",
+  "value": 0.20000000000000004,
+  "value_unit": "mm",
+  "comment": "Fillet radius rounding every sharp rotor corner at the air gap"
+ },
+ {
+  "name": "magnet_lamination",
+  "expression": "0 mm",
+  "unit": "mm",
+  "value": 0.0,
+  "value_unit": "mm",
+  "comment": "Axial magnet slice length (along the stack); 0 = solid magnet. E.g. 180 mm stack / 10 mm lamination = 18 insulated slices per magnet. Applied as the analytic eddy-loss factor k = l^2/(l^2 + w^2) on the magnet loss (axial cuts cannot be meshed in the 2-D cross-section). Field, torque, mass unchanged."
+ },
+ {
+  "name": "num_slots_per_segment",
+  "expression": "6",
+  "unit": "",
+  "value": 6.0,
+  "value_unit": "",
+  "comment": "Number of slots per segment"
+ },
+ {
+  "name": "shaft_height",
+  "expression": "2 mm",
+  "unit": "mm",
+  "value": 2.0,
+  "value_unit": "mm",
+  "comment": "Height of the shaft"
+ },
+ {
+  "name": "sleeve_thickness",
+  "expression": "0",
+  "unit": "",
+  "value": 0.0,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "stator_diameter",
+  "expression": "85 mm",
+  "unit": "mm",
+  "value": 85.0,
+  "value_unit": "mm",
+  "comment": "Outer diameter of the stator"
+ },
+ {
+  "name": "stator_fillet_r",
+  "expression": "1.2 mm",
+  "unit": "mm",
+  "value": 1.2,
+  "value_unit": "mm",
+  "comment": "Fillet radius on the OUTER-ring corners of the stator (near the OD). Does NOT round the slot pocket \u2014 only the outer profile corners."
+ },
+ {
+  "name": "stator_fillet_r1",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": "Fillet radius on the INNER / air-gap-side corners (tooth tips, slot mouths near the bore). Does NOT round the deep slot pocket."
+ },
+ {
+  "name": "wire_parallel",
+  "expression": "1",
+  "unit": "",
+  "value": 1.0,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "wire_spacing_x",
+  "expression": "0.1 mm",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": "Spacing between wires in x direction"
+ },
+ {
+  "name": "wire_spacing_y",
+  "expression": "0.07 mm",
+  "unit": "mm",
+  "value": 0.07,
+  "value_unit": "mm",
+  "comment": "Spacing between wires in y direction"
+ },
+ {
+  "name": "wire_split",
+  "expression": "1",
+  "unit": "",
+  "value": 1.0,
+  "value_unit": "",
+  "comment": "Parallel insulated strips across the wire WIDTH (transposed), like splitting the bar in ANSYS. Cuts the width-direction eddy/proximity copper loss by ~N^2 (strip width = wire_width/N, still capped at 2 skin depths). 1 = solid bar. Field and torque unchanged."
+ }
+]

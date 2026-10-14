@@ -120,10 +120,15 @@ def build_glb(groups, asset_extras=None, generator="motor_ai_sim.cad"):
         views.append(dict(buffer=0, byteOffset=off, byteLength=len(data), target=target))
         return len(views) - 1
 
+    def _linear(c):
+        """Group colours are sRGB (the palette hex values); glTF baseColorFactor is LINEAR: without this the viewer shows every
+        colour paler than its hex value (the washed-out look)."""
+        return c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4
+
     for g in groups:
         mat = len(materials)
         materials.append(dict(name=g.name, pbrMetallicRoughness=dict(
-            baseColorFactor=[round(c, 4) for c in g.colour] + [g.alpha], metallicFactor=g.metallic, roughnessFactor=g.roughness),
+            baseColorFactor=[round(_linear(c), 4) for c in g.colour] + [g.alpha], metallicFactor=g.metallic, roughnessFactor=g.roughness),
             doubleSided=True, **({"alphaMode": "BLEND"} if g.alpha < 1.0 else {})))
         child_ids = []
         ntri = 0

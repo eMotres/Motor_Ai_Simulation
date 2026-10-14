@@ -19,22 +19,22 @@ light bearing steel, aluminium holders / Prop_fix, GFRP ring, dark screws.
 import math
 
 BODIES = ("Core", "Coil", "RotorCore", "Magnet",
-          "Shaft", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
+          "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_seal", "PhaseBoard")
 PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8", "Electronics")
 SHAPES = ("PhaseBoard",)                               # imported reference body (Part::Feature, per-face STEP colours)
-ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws")   # labels of the Draft link arrays
-LINKS = ("Bearing_618_8_back", "Ring_back")            # App::Link copies (Fusion occurrences)
-# per-part colours (r, g, b).  The template does not know the magnet polarity (all pockets are identical), so one colour.
-COLORS = {"Core": (0.62, 0.64, 0.67), "Coil": (0.80, 0.47, 0.22), "RotorCore": (0.27, 0.29, 0.33),
-          "Magnet": (0.20, 0.42, 0.78),
-          "Shaft": (0.50, 0.52, 0.55), "Bearing_outer_ring": (0.80, 0.81, 0.83), "Bearing_inner_ring": (0.80, 0.81, 0.83),
-          "Bearing_ball": (0.86, 0.87, 0.89), "Stator_holder": (0.75, 0.78, 0.82), "Stator_holder_back": (0.75, 0.78, 0.82),
-          "Prop_fix": (0.75, 0.78, 0.82), "Ring": (0.85, 0.78, 0.50), "Screw": (0.90, 0.91, 0.93)}
-# Fusion threads Thread9 (shaft M5x0.8 6g), Thread12 (back holder M3x0.5 6H), Thread14 (back holder M2x0.4 6H) are COSMETIC there
-# (modeled = False, full length): here the thread faces carry this colour band, the geometry is the plain core / tap diameter.
-THREAD_COLOUR = (0.93, 0.62, 0.10)
-COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet", "Balls": "Bearing_ball", "Screws": "Screw"}
-_ALL_BODIES = BODIES + ("Bearing_ball", "Screw")
+ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws", "BoardPinsA", "BoardPinsB")   # labels of the Draft link arrays
+LINKS = ("Bearing_618_8_back", "Ring_back", "Bearing_seal_2")            # App::Link copies (Fusion occurrences)
+# per-part colours (r, g, b) from THE palette (palette.py: one source for the GUI finish, the GLB exporter and the web viewer).
+# The template does not know the magnet polarity per pocket: the FCStd array has one colour (N), the GLB / array elements
+# alternate N / S by index (palette.magnet_colour).
+from . import palette
+COLORS = {n: palette.body_colour(n) for n in palette.BODY_ROLE}
+# Fusion threads (shaft M5, back holder M3 / M2.5) are COSMETIC there (modeled = False): here the thread faces carry the host
+# colour, a little darker; the geometry is the plain core / tap diameter.
+THREAD_COLOURS = {bn: palette.thread_colour(COLORS[bn]) for bn in ("Shaft", "Stator_holder_back")}
+COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet", "Balls": "Bearing_ball", "Screws": "Screw",
+                  "BoardPinsA": "PhaseBoardPins", "BoardPinsB": "PhaseBoardPins"}
+_ALL_BODIES = BODIES + ("Bearing_ball", "Screw", "PhaseBoardPins")
 # FreeCAD "isometric" view orientation (SbRotation quaternion x, y, z, w)
 ISO_Q = (0.424707, 0.17592, 0.339851, 0.820473)
 
@@ -64,7 +64,8 @@ def set_visibility(doc):
 
 def check_visibility(doc):
     bad = []
-    tips = {doc.getObject(n).Tip.Name for n in BODIES if doc.getObject(n) is not None and doc.getObject(n).Tip is not None}
+    tips = {doc.getObject(n).Tip.Name for n in BODIES
+            if doc.getObject(n) is not None and getattr(doc.getObject(n), "Tip", None) is not None}
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
             continue
@@ -162,11 +163,12 @@ def colour_phase_board(doc, gdoc):
             dc = list(v.DiffuseColor)
             if len(dc) == 1:
                 dc = dc * len(s.Faces)
-            for face, c in zip(s.Faces, dc):
-                table[_face_key(face)] = tuple(c)
+            alpha = opaque_alpha()           # the STEP's translucent mask colours (alpha 0.83) make Coin3D show the triangulation of
+            for face, c in zip(s.Faces, dc):   # large planar faces on / near the copper: the palette colour of the face family, opaque
+                table[_face_key(face)] = palette.rgb(palette.pcb_role(c)) + (alpha,)
     finally:
         App.closeDocument(tmp.Name)
-    default = (0.6, 0.6, 0.6, 0.0)
+    default = palette.rgb("pcb_fr4") + (opaque_alpha(vo),)
     # a few faces differ in the importer's healing (no key match): they take the majority colour of their own solid
     import collections
     missing = 0
@@ -183,13 +185,57 @@ def colour_phase_board(doc, gdoc):
     return dict(faces=len(cols), missing_filled_from_solid=missing, distinct=sorted({tuple(round(x, 2) for x in c[:3]) for c in cols}))
 
 
+_OPAQUE = []
+
+
+def opaque_alpha(vo=None):
+    """4th component of a DiffuseColor entry that means 'opaque' in the running FreeCAD.  It is an opacity in FreeCAD 1.1
+    (1.0 = opaque; 0.0 = fully transparent, the bug that made Shaft / Stator_holder_back invisible) and was a transparency
+    in 0.x / 1.0 (0.0 = opaque).  It is read from a fresh view object on a scratch document (never from the model's own
+    view object: a model saved with the old bug carries alpha 0.0 there)."""
+    if not _OPAQUE:
+        import FreeCAD as App
+        import FreeCADGui as Gui
+        d = App.newDocument("_alpha_probe")
+        try:
+            d.addObject("Part::Box", "B")
+            d.recompute()
+            _OPAQUE.append(float(list(Gui.getDocument(d.Name).getObject("B").DiffuseColor)[0][3]))
+        except Exception:
+            _OPAQUE.append(1.0)
+        finally:
+            App.closeDocument(d.Name)
+    return _OPAQUE[0]
+
+
+def check_opaque(doc, gdoc):
+    """Violations: a visible body / array / part with Transparency > 0 or with a DiffuseColor alpha that differs from the opaque
+    default (nothing in this template is transparent on purpose).  Used by gui_finish (refuses) and check_gui."""
+    bad = []
+    for o in doc.Objects:
+        vo = gdoc.getObject(o.Name)
+        if vo is None or not getattr(vo, "Visibility", False) or not hasattr(vo, "Transparency"):
+            continue
+        if vo.Transparency > 0:
+            bad.append("%s: Transparency %d (must be opaque)" % (o.Name, vo.Transparency))
+        if hasattr(vo, "DiffuseColor") and hasattr(o, "Shape") and not o.Shape.isNull() and len(list(vo.DiffuseColor)) > 1:
+            al = {round(float(c[3]), 3) for c in vo.DiffuseColor if len(c) > 3}
+            if len(al) > 1 or (al and al != {round(opaque_alpha(), 3)}):
+                bad.append("%s: per-face colours with alpha %s (not the opaque value)" % (o.Name, sorted(al)))
+    return bad
+
+
 def thread_face_indices(doc):
     """{body: [face indices]} of the cosmetic thread faces: the M5 section of the shaft, the M3 and M2 tap holes of the back
     holder (cylinders of exactly those radii)."""
     from . import params_sheet as ps
+    if doc.getObject("Shaft") is None:             # active-part profile without mechanics
+        return {}
     sh = doc.getObject("Params")
     g = lambda n: ps.pval(sh, n)
-    want = {"Shaft": [g("shaft_thread_r")], "Stator_holder_back": [g("holder_tap_d") / 2, g("back_screw_tap_d") / 2]}
+    from .params_sheet import has_param
+    shaft_thread = g("shaft_thread_r") if has_param(sh, "shaft_thread_r") else g("carrier_hole_d") / 2   # carrier: the M3 hub holes
+    want = {"Shaft": [shaft_thread], "Stator_holder_back": [g("holder_tap_d") / 2, g("back_screw_tap_d") / 2]}
     out = {}
     for bn, radii in want.items():
         b = doc.getObject(bn)
@@ -205,13 +251,56 @@ def colour_threads(doc, gdoc):
     for bn, idx in thread_face_indices(doc).items():
         vo = gdoc.getObject(bn)
         n = len(doc.getObject(bn).Shape.Faces)
-        base = tuple(COLORS[bn]) + (0.0,)
+        alpha = opaque_alpha(vo)                  # NOT 0.0: in FreeCAD 1.1 the 4th component is the opacity
+        base = tuple(COLORS[bn]) + (alpha,)
         cols = [base] * n
         for i in idx:
-            cols[i] = tuple(THREAD_COLOUR) + (0.0,)
+            cols[i] = tuple(THREAD_COLOURS[bn]) + (alpha,)
         vo.DiffuseColor = cols
         rep[bn] = len(idx)
     return rep
+
+
+def apply_appearance(doc, gdoc):
+    """ShapeAppearance (diffuse / specular / shininess) of the bodies whose palette role has its own material, so the GUI reads
+    like the web viewer.  Per-face colours (thread bodies) keep their diffuse list."""
+    import FreeCAD as App
+    done = []
+    for bn, role in palette.BODY_ROLE.items():
+        if role not in palette.MATERIAL:
+            continue
+        for name in (bn, {"Screw": "Screws"}.get(bn)):
+            o = doc.getObject(name) if name else None
+            if o is None:
+                for x in doc.Objects:
+                    if x.Label == name:
+                        o = x
+            vo = gdoc.getObject(o.Name) if o is not None else None
+            if vo is None or not hasattr(vo, "ShapeAppearance"):
+                continue
+            sp, sh = palette.specular_shininess(role)
+            try:
+                n = len(list(vo.DiffuseColor)) if hasattr(vo, "DiffuseColor") else 1
+                dc = list(vo.DiffuseColor) if n > 1 else [COLORS[bn] + (opaque_alpha(vo),)]
+                vo.ShapeAppearance = [App.Material(DiffuseColor=tuple(c), SpecularColor=sp, Shininess=sh) for c in dc]
+                done.append(o.Name)
+            except Exception:
+                pass
+    return done
+
+
+def colour_magnet_array(doc, gdoc):
+    """Alternating N / S colours on the link array elements (view property OverrideColorList of the Draft link array)."""
+    for o in doc.Objects:
+        if o.Label == "MagnetArray":
+            vo = gdoc.getObject(o.Name)
+            n = int(getattr(o, "NumberPolar", 0) or 0)
+            try:
+                vo.OverrideColorList = [palette.magnet_colour(i) + (opaque_alpha(vo),) for i in range(n)]
+                return "alternating N/S, %d elements" % n
+            except Exception as e:                      # not supported by this FreeCAD / array: single colour (N)
+                return "single colour (%s)" % str(e)[:60]
+    return "no array"
 
 
 def style_gui(doc, gdoc):
@@ -221,7 +310,7 @@ def style_gui(doc, gdoc):
         if o.Label in ARRAYS:
             rep["arrays"][o.Label] = _attach_array_view(o)
     set_visibility(doc)
-    owner = {f.Name: n for n in _ALL_BODIES if doc.getObject(n) is not None for f in doc.getObject(n).Group}
+    owner = {f.Name: n for n in _ALL_BODIES if doc.getObject(n) is not None for f in getattr(doc.getObject(n), "Group", [])}
     for o in doc.Objects:
         vo = gdoc.getObject(o.Name)
         if vo is None:
@@ -235,6 +324,9 @@ def style_gui(doc, gdoc):
                 vo.OverrideMaterial = True
             rep["colours"][o.Name] = key
     rep["thread_faces"] = colour_threads(doc, gdoc)
-    if doc.getObject("PhaseBoard") is not None:
+    rep["magnet_colours"] = colour_magnet_array(doc, gdoc)
+    rep["appearance"] = apply_appearance(doc, gdoc)
+    pbo = doc.getObject("PhaseBoard")
+    if pbo is not None and pbo.TypeId == "Part::Feature":        # the imported board (CIANO14 40); the CIANO28 85 plate uses the palette bodies
         rep["phase_board"] = colour_phase_board(doc, gdoc)
     return rep

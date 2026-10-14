@@ -284,5 +284,13 @@
       "users": "用户",
       "transmission-gearbox-single-stage": "减速器（单级）"
     }
+  },
+  "cookies": {
+    "title": "Cookie",
+    "text": "经您同意，我们使用匿名使用统计（Google Analytics）来改进 AeroStator。",
+    "privacy": "隐私",
+    "accept": "接受",
+    "decline": "拒绝",
+    "settings": "Cookie 设置"
   }
 }

@@ -47,6 +47,7 @@ import { backendReachable } from './lib/version';
 import { useAuth } from './contexts/AuthContext';
 import AdminPanel from './components/admin/AdminPanel';
 import SupportWidget from './components/support/SupportWidget';
+import AnalyticsConsent from './components/common/AnalyticsConsent';
 import MaterialOverrideSync from './components/materials/MaterialOverrideSync';
 import MaterialControls from './components/parameters/MaterialControls';
 import SaveToMotorButton from './components/common/SaveToMotorButton';
@@ -786,6 +787,8 @@ function App() {
       {/* Floating help/feedback — available to every user, on every tab */}
       <RefusedNotice />
       <SupportWidget />
+      {/* Consent bar + GA4 (lib/analytics.ts): loads only after mount, idle and Accept; never for China */}
+      <AnalyticsConsent />
       {/* Publishes the per-user material override to the fetch interceptor (Stage 2b) */}
       <MaterialOverrideSync />
     </ThemeProvider>

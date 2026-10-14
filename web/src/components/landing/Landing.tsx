@@ -38,6 +38,7 @@ import { GOOGLE_CLIENT_ID } from '../../lib/localAuth';
 import { useAuth } from '../../contexts/AuthContext';
 import LanguageSwitcher from '../common/LanguageSwitcher';
 import BrandLogo from '../common/BrandLogo';
+import CookieSettingsLink from '../common/CookieSettingsLink';
 import ConceptDiagram from './ConceptDiagram';
 import { STEP_IDS } from './conceptLayout';
 import { BoatIcon, DroneIcon, PlusIcon, RobotIcon } from './landingIcons';
@@ -441,6 +442,7 @@ const Landing: React.FC = () => {
               underline="hover" color="inherit">
               aerostator.com
             </Link>
+            <CookieSettingsLink prefix=" · " />
           </Typography>
         </Box>
       </Box>

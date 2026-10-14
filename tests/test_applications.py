@@ -241,3 +241,77 @@ def test_script_table_matches_the_owner_decision():
     assert R["CIANO28 85 20SW1200"] == (["robot"], ["L13"])
     assert R["CIANO10 200 opt"][0] == ["aviation"] and R["CILN28"][0] == ["marine"]
     assert R["M1 850Nm"] == (["marine"], None)
+
+
+# -- admin editor endpoint ---------------------------------------------------------
+
+def _put(h, cfg, apps, die=DIE):
+    return client.put(f"/api/family/config/{die}/{cfg}/applications", headers=h,
+                      json={"applications": apps})
+
+
+@pytest.fixture()
+def audit(tmp_path, monkeypatch):
+    f = tmp_path / "admin_audit.jsonl"
+    monkeypatch.setenv("ADMIN_AUDIT_FILE", str(f))
+    return f
+
+
+def test_put_replaces_only_the_applications_line_and_audits(dies, granted, audit):
+    p = dies / DIE / "L12.yaml"
+    before = p.read_text("utf-8").replace("\n", "\r\n")          # a CRLF file
+    p.write_bytes(before.encode("utf-8"))
+    r = _put(granted, "L12", ["aviation", "propeller"])
+    assert r.status_code == 200, r.text
+    assert r.json()["applications"] == ["aviation", "propeller"] and r.json()["application"] == "aviation"
+    after = p.read_bytes().decode("utf-8")
+    assert before.replace("applications:\r\n- robot\r\n", "applications: [aviation, propeller]\r\n") == after
+    assert "\n" not in after.replace("\r\n", "")                    # still CRLF only
+    assert _cfgs(granted)["L12"]["applications"] == ["aviation", "propeller"]
+    assert len(list((dies / DIE).glob("L12.yaml.bak-applications-*"))) == 1
+    rec = [__import__("json").loads(x) for x in audit.read_text("utf-8").splitlines()]
+    assert rec[-1]["action"] == "config.applications" and rec[-1]["target"] == f"{DIE}/L12"
+    assert rec[-1]["details"]["from"] == ["robot"] and rec[-1]["details"]["to"] == ["aviation", "propeller"]
+
+
+def test_put_inserts_when_unset_and_is_a_noop_when_unchanged(dies, granted, audit):
+    assert _put(granted, "L20", ["marine"]).status_code == 200
+    assert yaml.safe_load((dies / DIE / "L20.yaml").read_text("utf-8"))["applications"] == ["marine"]
+    r = _put(granted, "L20", ["marine"])
+    assert r.status_code == 200 and r.json()["changed"] is False
+    assert len(list((dies / DIE).glob("L20.yaml.bak-applications-*"))) == 1
+
+
+def test_put_rejects_bad_values_loudly(dies, granted, audit):
+    before = (dies / DIE / "L12.yaml").read_bytes()
+    for bad in (["rocket"], [], ["robot", "robot"]):
+        r = _put(granted, "L12", bad)
+        assert r.status_code == 422, bad
+    assert _put(granted, "NOPE", ["robot"]).status_code in (404, 422)
+    assert (dies / DIE / "L12.yaml").read_bytes() == before
+
+
+def test_put_is_admin_only(dies):
+    from motor_ai_sim.routes import family as fam
+    with pytest.raises(HTTPException) as e:
+        fam.set_config_applications(DIE, "L12", fam.ApplicationsPut(applications=["marine"]),
+                                    _w={"is_admin": False, "user": {"email": "u@example.com"}})
+    assert e.value.status_code == 403
+
+
+@pytest.mark.skipif(__import__("os").name == "nt", reason="os.replace over a read-only file needs POSIX")
+def test_put_keeps_the_mode_of_a_read_only_seeded_file(dies, granted, audit):
+    import os
+    import stat
+    p = dies / DIE / "L12.yaml"
+    os.chmod(p, 0o444)
+    assert _put(granted, "L12", ["marine"]).status_code == 200
+    assert stat.S_IMODE(os.stat(p).st_mode) == 0o444
+    assert yaml.safe_load(p.read_text("utf-8"))["applications"] == ["marine"]
+
+
+def test_edit_line_handles_inline_block_and_missing_forms():
+    f = A.edit_applications_line
+    assert f("name: x\napplications: [robot]\nduties: []\n", ["marine"]) == "name: x\napplications: [marine]\nduties: []\n"
+    assert f("name: x\napplications:\n  - robot\n  - marine\nduties: []\n", ["marine"]) == "name: x\napplications: [marine]\nduties: []\n"
+    assert f("name: x\ndie: d\n", ["robot", "marine"]) == "name: x\ndie: d\napplications: [robot, marine]\n"

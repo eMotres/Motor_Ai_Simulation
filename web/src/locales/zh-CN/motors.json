@@ -145,6 +145,11 @@
     "adminTitle": "应用",
     "adminTip": "每个配置所面向的应用。第一项为默认值。",
     "adminAllSet": "所有配置都已设置应用。",
-    "adminCount": "{n} 个未设置"
+    "adminCount": "{n} 个未设置",
+    "edit": "编辑应用",
+    "save": "保存",
+    "cancel": "取消",
+    "default": "默认",
+    "defaultTip": "默认应用是列表中的第一项，即 Configure 打开时使用的应用。"
   }
 }

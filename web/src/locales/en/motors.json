@@ -145,6 +145,11 @@
     "adminTitle": "Applications",
     "adminTip": "The application each configuration is built for. The first entry is the default.",
     "adminAllSet": "Every configuration has an application.",
-    "adminCount": "{n} not set"
+    "adminCount": "{n} not set",
+    "edit": "Edit applications",
+    "save": "Save",
+    "cancel": "Cancel",
+    "default": "default",
+    "defaultTip": "The default application is the first in the list: the one Configure opens on."
   }
 }

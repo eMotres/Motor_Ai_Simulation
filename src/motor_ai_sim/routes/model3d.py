@@ -3,7 +3,8 @@
 ONE model for everybody (owner 2026-10-13): every signed-in user who may see a motor (``motor_access``: admin / granted dies /
 per-die visibility) can view it - the GLB is the full model, copper board included.  Downloading the STEP is the NDA gate:
 only accounts flagged "NDA signed" and the owner / admin get it; everybody else gets 403.  The URL names the motor, never a
-file.  Nothing priced and no bill of materials is served here.
+file.  Every download carries a download id and the NDA it rests on (STEP header + the append-only log); the admin can list
+the downloads and trace a file by id or sha256.  Nothing priced and no bill of materials is served here.
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ import datetime
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 
 from motor_ai_sim import model3d as M
@@ -73,25 +74,31 @@ def get_step(die: str, config: str, request: Request, authorization: Optional[st
     if row is None:
         raise HTTPException(status_code=404, detail="This model has not been built yet.")
     customer = M.customer_name(who, rec)
-    day = datetime.datetime.now(datetime.timezone.utc).date()
+    now = datetime.datetime.now(datetime.timezone.utc)
+    day = now.date()
     name = M.download_name(e["motor_id"], customer, day)
     m = e["manifest"]
     version = "template %s, built %s, param %s" % ((m.get("template") or {}).get("version", "?"), m.get("built_at", "?"),
                                                   (m.get("param_hash") or "")[:12])
+    basis = M.nda_basis(who, rec)
+    who_for = M.recipient_of(who, rec, basis)
+    download_id = M.new_download_id(now)
+    stamp = M.build_stamp(download_id=download_id, motor_id=e["motor_id"], version=version, day=day, recipient=who_for, basis=basis)
     with open(row["path"], "rb") as fh:
         src = fh.read()
-    data = M.stamp_step(src, filename=name, customer=customer, day=day, motor_id=e["motor_id"], version=version)
+    data = M.stamp_step(src, filename=name, customer=customer, day=day, motor_id=e["motor_id"], version=version, stamp=stamp)
     try:
         from motor_ai_sim.client_ip import from_request
         ip = from_request(request)
     except Exception:                                       # noqa: BLE001
         ip = "?"
     try:
-        M.log_download(dict(user=who["id"], name=customer, role=who.get("role"), nda=not who.get("is_admin"),
+        M.log_download(dict(download_id=download_id, user=who["id"], email=who_for["email"], name=customer, role=who.get("role"),
+                            company=who_for["company"], nda=basis["type"] != "internal", nda_basis=basis,
                             die=die, config=config, motor_id=e["motor_id"], kind="step", file=name,
                             source_file=row["name"], source_sha256=row["sha256"], sha256=M.sha256_bytes(data), bytes=len(data),
                             template=(m.get("template") or {}).get("version"), built_at=m.get("built_at"),
-                            param_hash=m.get("param_hash"), ip=ip))
+                            param_hash=m.get("param_hash"), ip=ip, user_agent=request.headers.get("user-agent", "")[:300]))
     except OSError as ex:
         log.error("model3d: download log not writable (%s) - download refused", ex)
         raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
@@ -100,6 +107,15 @@ def get_step(die: str, config: str, request: Request, authorization: Optional[st
 
 
 @router.get("/downloads")
-def downloads(limit: int = 200, _admin: dict = Depends(require_admin)):
-    """Admin: the most recent downloads, newest first."""
-    return {"downloads": M.read_log(max(1, min(int(limit), 2000)))}
+def downloads(limit: int = 200, user: str = "", company: str = "", motor: str = "", nda_version: str = "",
+              _admin: dict = Depends(require_admin)):
+    """Admin: the most recent downloads, newest first; optional case-insensitive filters (user, company, motor, NDA version)."""
+    return {"downloads": M.read_log(max(1, min(int(limit), 2000)), user=user, company=company, motor=motor,
+                                    nda_version=nda_version)}
+
+
+@router.post("/trace")
+def trace(body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
+    """Admin: which download is this file?  ``{"text": ...}`` is a STEP header line, a download id or a sha256 (the page hashes an
+    uploaded file in the browser and sends its sha256 and the id found in its header; the file itself never leaves the browser)."""
+    return M.trace(str(body.get("text") or "")[:20000])

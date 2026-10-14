@@ -11,7 +11,8 @@
     "catalogs": "Catalogs",
     "motorsAccess": "Motors access",
     "newsletter": "Newsletter & notices",
-    "logs": "Logs / Events"
+    "logs": "Logs / Events",
+    "downloads3d": "3D downloads"
   },
   "motors": {
     "title": "Motors — {email}",

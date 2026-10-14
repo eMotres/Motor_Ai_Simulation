@@ -229,3 +229,110 @@ def test_nda_default_date_is_today(env):
     from motor_ai_sim import users as U
     got = U.set_nda(OTHER, True)
     assert got["signed"] and got["date"] == datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+
+
+# -- NDA basis in the file and in the log, admin table, trace ------------------
+
+REC_ID = "n20261012-0123456789ab"
+
+
+def _online(env, monkeypatch, tmp_path, email=USER):
+    """USER signs the NDA online: a record in the (append-only) signature file and the NDA state on the account."""
+    from motor_ai_sim import users as U
+    legal = tmp_path / "legal"
+    legal.mkdir()
+    rec = dict(id=REC_ID, iso="2026-10-12T09:30:00Z", user=email, email=email, company="Acme GmbH", signatory="Ann Mueller",
+               version="v1.0", text_sha256="ab" * 32)
+    (legal / "nda_signatures.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+    monkeypatch.setenv("MOTRES_LEGAL_ROOT", str(legal))
+    U.set_nda(email, True, "2026-10-12", by="online", version="v1.0", company="Acme GmbH", record_id=REC_ID)
+
+
+def _head(content):
+    return content[:content.find(b"ENDSEC;")].decode("latin-1")
+
+
+def test_online_nda_download_row_and_header(env, monkeypatch, tmp_path):
+    _online(env, monkeypatch, tmp_path)
+    r = client.get(env["url"] + "/model.step", headers=env["user"])
+    assert r.status_code == 200
+    (row,) = _log(env)
+    assert row["user"] == USER and row["email"] == USER and row["role"] == "user" and row["company"] == "Acme GmbH"
+    b = row["nda_basis"]
+    assert (b["type"], b["version"], b["record_id"], b["text_sha256"], b["company"], b["signatory"]) == (
+        "online", "v1.0", REC_ID, "ab" * 32, "Acme GmbH", "Ann Mueller")
+    assert row["download_id"].startswith("d") and row["sha256"] == _sha(r.content) and row["kind"] == "step"
+    assert row["ip"] and "user_agent" in row and row["iso"].endswith("Z")
+    head = _head(r.content)
+    assert "Download ID: " + row["download_id"] in head
+    assert "NDA reference: v1.0 record " + REC_ID in head
+    assert "Acme GmbH" in head and "CONFIDENTIAL - MOTRES Model Access and NDA v1.0" in head
+    assert M.stamp_of(r.content)["download_id"] == row["download_id"]
+
+
+def test_admin_flag_and_internal_rows(env):
+    r = client.get(env["url"] + "/model.step", headers=env["nda"])               # flag set by ADMIN on 2026-10-01
+    a = _log(env)[-1]
+    assert a["nda_basis"] == dict(type="admin", ref="admin-flag 2026-10-01", label="admin-flag 2026-10-01",
+                                  set_by=ADMIN, date="2026-10-01")
+    assert "NDA reference: admin-flag 2026-10-01" in _head(r.content)
+    assert "NDA admin-flag 2026-10-01" in _head(r.content)
+    r2 = client.get(env["url"] + "/model.step", headers=env["admin"])
+    i = _log(env)[-1]
+    assert i["nda_basis"]["type"] == "internal" and i["nda"] is False and i["role"] == "admin"
+    assert "NDA reference: internal" in _head(r2.content) and "MOTRES Model Access and NDA internal" in _head(r2.content)
+    assert len({x["download_id"] for x in _log(env)}) == 2                      # unique ids
+
+
+def test_stamped_step_is_valid_and_geometry_unchanged(env):
+    r = client.get(env["url"] + "/model.step", headers=env["nda"])
+    c = r.content
+    assert c.startswith(b"ISO-10303-21;\nHEADER;\n") and c.endswith(b"END-ISO-10303-21;\n")
+    assert c[c.find(b"ENDSEC;"):] == STEP[STEP.find(b"ENDSEC;"):]                 # DATA section byte for byte
+    head = _head(c)
+    for ent in ("FILE_DESCRIPTION(", "FILE_NAME(", "FILE_SCHEMA("):
+        assert head.count(ent) == 1
+    assert head.count("'") % 2 == 0                                              # quotes balanced (apostrophes doubled)
+    assert head.count("(") == head.count(")")
+
+
+def test_log_is_append_only(env):
+    client.get(env["url"] + "/model.step", headers=env["nda"])
+    first = env["log"].read_bytes()
+    client.get(env["url"] + "/model.step", headers=env["admin"])
+    assert env["log"].read_bytes().startswith(first)                             # the earlier line is untouched
+
+
+def test_downloads_filters(env, monkeypatch, tmp_path):
+    _online(env, monkeypatch, tmp_path)
+    for h in ("user", "nda", "admin"):
+        client.get(env["url"] + "/model.step", headers=env[h])
+
+    def ids(**q):
+        return [r["user"] for r in client.get("/api/model3d/downloads", params=q, headers=env["admin"]).json()["downloads"]]
+    assert ids() == [ADMIN, NDA_USER, USER]                                      # newest first
+    assert ids(user="client") == [USER]
+    assert ids(company="acme") == [USER]
+    assert ids(motor="ciano14") == [ADMIN, NDA_USER, USER]
+    assert ids(motor="nothing") == []
+    assert ids(nda_version="v1.0") == [USER]
+    assert ids(nda_version="admin-flag") == [NDA_USER]
+    assert ids(nda_version="internal") == [ADMIN]
+
+
+def test_trace_by_id_by_hash_and_pasted_header(env):
+    r = client.get(env["url"] + "/model.step", headers=env["nda"])
+    client.get(env["url"] + "/model.step", headers=env["admin"])
+    row = _log(env)[0]
+
+    def tr(text, who="admin"):
+        return client.post("/api/model3d/trace", json={"text": text}, headers=env[who])
+    by_id = tr("Download ID: " + row["download_id"]).json()
+    assert [m["download_id"] for m in by_id["matches"]] == [row["download_id"]] and by_id["ids"] == [row["download_id"]]
+    by_hash = tr(_sha(r.content)).json()
+    assert [m["user"] for m in by_hash["matches"]] == [NDA_USER] and by_hash["hashes"] == [_sha(r.content)]
+    pasted = tr("FILE_DESCRIPTION(('x','" + _head(r.content).split("Download ID: ")[1].split("'")[0] + "'),'2;1');").json()
+    assert [m["user"] for m in pasted["matches"]] == [NDA_USER]
+    assert tr("nothing to find here").json()["matches"] == []
+    assert tr("d20990101-ffffffffffff " + "0" * 64).json()["matches"] == []
+    assert tr(row["download_id"], "user").status_code == 403

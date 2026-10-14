@@ -19,6 +19,7 @@ import AgentActivitySection from './sections/AgentActivitySection';
 import CatalogsSection from './sections/CatalogsSection';
 import MotorsAccessSection from './sections/MotorsAccessSection';
 import LogsSection from './sections/LogsSection';
+import Downloads3dSection from './sections/Downloads3dSection';
 import NewsletterSection from './NewsletterSection';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -49,6 +50,7 @@ const AdminPanel: React.FC = () => {
       case 'motorsAccess': return <MotorsAccessSection />;
       case 'newsletter': return <NewsletterSection />;
       case 'logs': return <LogsSection />;
+      case 'downloads3d': return <Downloads3dSection />;
       default: return null;
     }
   };

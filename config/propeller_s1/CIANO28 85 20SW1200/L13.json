@@ -1376,7 +1376,7 @@
     "T_hs_limit_C": 95.0,
     "T_j_at_limit_C": 110.0,
     "T_j_derate_C": 140.0,
-    "R_jhs_K_per_W": 10.5693,
+    "R_jhs_K_per_W": 11.481,
     "K_board_cu_W_per_A2": 0.012560216726847623,
     "devices_per_switch": 2,
     "board_scale": 2.0,
@@ -1384,22 +1384,22 @@
      "favourable": {
       "I_rating_si_A": 20.2,
       "P_rating_W": 959.0,
-      "Q_budget_W": 27.2806,
-      "R_sys_K_per_W": 1.8328,
+      "Q_budget_W": 25.9282,
+      "R_sys_K_per_W": 1.9284,
       "calibration": "one-device Si board at 20.20 A × 2 (scaled)"
      },
      "weak": {
       "I_rating_si_A": 17.3775,
       "P_rating_W": 825.0,
-      "Q_budget_W": 20.8989,
-      "R_sys_K_per_W": 2.39247,
+      "Q_budget_W": 19.5949,
+      "R_sys_K_per_W": 2.55169,
       "calibration": "one-device Si board at 17.38 A × 2 (scaled)"
      },
      "hot_motor": {
       "I_rating_si_A": 11.7956,
       "P_rating_W": 560.0,
-      "Q_budget_W": 10.8709,
-      "R_sys_K_per_W": 4.59942,
+      "Q_budget_W": 9.68801,
+      "R_sys_K_per_W": 5.16102,
       "calibration": "one-device Si board at 11.80 A × 2 (scaled)"
      }
     },
@@ -2148,7 +2148,7 @@
     "T_hs_limit_C": 95.0,
     "T_j_at_limit_C": 110.0,
     "T_j_derate_C": 140.0,
-    "R_jhs_K_per_W": 10.5693,
+    "R_jhs_K_per_W": 11.481,
     "K_board_cu_W_per_A2": 0.012560216726847623,
     "devices_per_switch": 2,
     "board_scale": 2.0,
@@ -2156,22 +2156,22 @@
      "favourable": {
       "I_rating_si_A": 20.2,
       "P_rating_W": 959.0,
-      "Q_budget_W": 27.2806,
-      "R_sys_K_per_W": 1.8328,
+      "Q_budget_W": 25.9282,
+      "R_sys_K_per_W": 1.9284,
       "calibration": "one-device Si board at 20.20 A × 2 (scaled)"
      },
      "weak": {
       "I_rating_si_A": 17.3775,
       "P_rating_W": 825.0,
-      "Q_budget_W": 20.8989,
-      "R_sys_K_per_W": 2.39247,
+      "Q_budget_W": 19.5949,
+      "R_sys_K_per_W": 2.55169,
       "calibration": "one-device Si board at 17.38 A × 2 (scaled)"
      },
      "hot_motor": {
       "I_rating_si_A": 11.7956,
       "P_rating_W": 560.0,
-      "Q_budget_W": 10.8709,
-      "R_sys_K_per_W": 4.59942,
+      "Q_budget_W": 9.68801,
+      "R_sys_K_per_W": 5.16102,
       "calibration": "one-device Si board at 11.80 A × 2 (scaled)"
      }
     },
@@ -2920,7 +2920,7 @@
     "T_hs_limit_C": 95.0,
     "T_j_at_limit_C": 110.0,
     "T_j_derate_C": 140.0,
-    "R_jhs_K_per_W": 10.5693,
+    "R_jhs_K_per_W": 11.481,
     "K_board_cu_W_per_A2": 0.012560216726847623,
     "devices_per_switch": 2,
     "board_scale": 2.0,
@@ -2928,22 +2928,22 @@
      "favourable": {
       "I_rating_si_A": 20.2,
       "P_rating_W": 959.0,
-      "Q_budget_W": 27.2806,
-      "R_sys_K_per_W": 1.8328,
+      "Q_budget_W": 25.9282,
+      "R_sys_K_per_W": 1.9284,
       "calibration": "one-device Si board at 20.20 A × 2 (scaled)"
      },
      "weak": {
       "I_rating_si_A": 17.3775,
       "P_rating_W": 825.0,
-      "Q_budget_W": 20.8989,
-      "R_sys_K_per_W": 2.39247,
+      "Q_budget_W": 19.5949,
+      "R_sys_K_per_W": 2.55169,
       "calibration": "one-device Si board at 17.38 A × 2 (scaled)"
      },
      "hot_motor": {
       "I_rating_si_A": 11.7956,
       "P_rating_W": 560.0,
-      "Q_budget_W": 10.8709,
-      "R_sys_K_per_W": 4.59942,
+      "Q_budget_W": 9.68801,
+      "R_sys_K_per_W": 5.16102,
       "calibration": "one-device Si board at 11.80 A × 2 (scaled)"
      }
     },
@@ -3363,7 +3363,7 @@
    "T_hs_limit_C": 95.0,
    "T_j_at_limit_C": 110.0,
    "T_j_derate_C": 140.0,
-   "R_jhs_K_per_W": 10.5693,
+   "R_jhs_K_per_W": 11.481,
    "K_board_cu_W_per_A2": 0.012560216726847623,
    "devices_per_switch": 2,
    "board_scale": 2.0,
@@ -3371,22 +3371,22 @@
     "favourable": {
      "I_rating_si_A": 20.2,
      "P_rating_W": 959.0,
-     "Q_budget_W": 27.2806,
-     "R_sys_K_per_W": 1.8328,
+     "Q_budget_W": 25.9282,
+     "R_sys_K_per_W": 1.9284,
      "calibration": "one-device Si board at 20.20 A × 2 (scaled)"
     },
     "weak": {
      "I_rating_si_A": 17.3775,
      "P_rating_W": 825.0,
-     "Q_budget_W": 20.8989,
-     "R_sys_K_per_W": 2.39247,
+     "Q_budget_W": 19.5949,
+     "R_sys_K_per_W": 2.55169,
      "calibration": "one-device Si board at 17.38 A × 2 (scaled)"
     },
     "hot_motor": {
      "I_rating_si_A": 11.7956,
      "P_rating_W": 560.0,
-     "Q_budget_W": 10.8709,
-     "R_sys_K_per_W": 4.59942,
+     "Q_budget_W": 9.68801,
+     "R_sys_K_per_W": 5.16102,
      "calibration": "one-device Si board at 11.80 A × 2 (scaled)"
     }
    },

@@ -24,12 +24,14 @@ import { useTranslation } from 'react-i18next';
 import { formatApiErrorDetail } from '../../lib/apiErrorDetail';
 import { activeDuty } from '../../lib/dutySettings';
 import { fetchFamilyTree } from '../../lib/familyTree';
-import { STATE_COLORS, formatTime, kindColor, loopBadge, typeColor } from '../../lib/systemGraph';
+import { STATE_COLORS, formatTime, kindColor, loopBadge, splitLoops, typeColor } from '../../lib/systemGraph';
 import type { SgDoc, SgEdge, SgLoop, SgNode } from '../../lib/systemGraph';
 import { badgeOf, buildView, chipCounts, conditionText, exitGroups, laneCounts, loopHead, loopText, neighbours } from '../../lib/systemGraphView';
 import type { Badge, Chip, ExitGroup, LoopText, View as GraphView, Wire } from '../../lib/systemGraphView';
-import { NODE_W, blockHeight, layoutGraph, roundedPath, routeWires } from '../../lib/systemGraphLayout';
-import type { Layout, Pt } from '../../lib/systemGraphLayout';
+import { NODE_W, blockHeight } from '../../lib/systemGraphLayout';
+import type { Layout } from '../../lib/systemGraphLayout';
+import { buildWiring, roundedPath, summarize, validateWiring } from '../../lib/systemGraphRoute';
+import type { Pt, Route, Violation } from '../../lib/systemGraphRoute';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const VIEW_KEY = 'system.view';
@@ -246,6 +248,12 @@ export default function SystemPanel() {
   }, []);
 
   const graph = useMemo(() => (doc ? build(doc, showAll, tr, !!motor) : null), [doc, showAll, tr, motor]);
+  // dev only: the wiring check.  With "Show all wires" on the count is only reported.
+  useEffect(() => {
+    if (!graph || !import.meta.env.DEV || graph.violations.length === 0) return;
+    console.warn(`[system graph] ${graph.violations.length} wiring violation(s)${showAll ? ' (show-all view: reported only)' : ''}`,
+      summarize(graph.violations), graph.violations.slice(0, 20));
+  }, [graph, showAll]);
 
   // fit to width when a graph (re)appears
   const fit = useCallback(() => {
@@ -257,7 +265,14 @@ export default function SystemPanel() {
     const zw = (el.clientWidth - 48) / L.width, zh = (el.clientHeight - topPad - 24) / L.height;
     const z = Math.min(1.1, Math.max(0.05, Math.min(zw, Math.max(zh, 0.3))));
     const h = L.height * z;
-    inst.setViewport({ x: 24 - L.left * z, y: topPad + Math.max(0, (el.clientHeight - topPad - 24 - h) / 2) - L.top * z, zoom: z });
+    const vx = 24 - L.left * z, vy = topPad + Math.max(0, (el.clientHeight - topPad - 24 - h) / 2) - L.top * z;
+    inst.setViewport({ x: vx, y: vy, zoom: z });
+    if (import.meta.env.DEV && card.current) {              // dev only: the legend card is an obstacle too (it is drawn over the canvas)
+      const c = { id: 'legend', box: { x: (12 - vx) / z, y: (10 - vy) / z, w: card.current.offsetWidth / z, h: card.current.offsetHeight / z } };
+      const hits = validateWiring(L, graph.loops, graph.view.wires, graph.routes, { extra: [c], ringed: graph.ringed0 }).filter((v) => v.kind === 'extra');
+      const blocks = Object.entries(L.nodes).filter(([, b]) => b.x < c.box.x + c.box.w && b.x + b.w > c.box.x && b.y < c.box.y + c.box.h && b.y + b.h > c.box.y);
+      if (hits.length || blocks.length) console.warn('[system graph] the legend card covers part of the graph', hits.length, blocks.map(([id]) => id));
+    }
   }, [graph]);
   useEffect(() => { fit(); }, [fit]);
 
@@ -437,7 +452,8 @@ function exitTags(l: SgLoop, tr: Tr): LoopData['exits'] {
 }
 
 interface Built {
-  nodes: Node[]; edges: Edge[]; layout: Layout; view: GraphView;
+  nodes: Node[]; edges: Edge[]; layout: Layout; view: GraphView; violations: Violation[]; widened: number;
+  routes: Record<string, Route>; loops: SgLoop[]; ringed0: string[];
   /** loops drawn as a ring (no box): described in the legend card */
   ringed: Array<{ id: string; color: string; text: LoopText; tip: ReactNode }>;
 }
@@ -450,9 +466,12 @@ function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean): Built {
   const ltext: Record<string, LoopText> = {};
   const heads: Record<string, number> = {};
   for (const l of doc.loops) { ltext[l.id] = loopText(l, tr); heads[l.id] = loopHead(ltext[l.id].lines); }
-  const lay = layoutGraph(doc, { heights, lanes: laneCounts(doc.loops, view.wires), heads });
-  const { routes, top, height } = routeWires(lay, doc.loops, view.wires);
-  const layout = { ...lay, top, height };
+  // lay out, route and check: nothing is drawn through a block, a loop header or another wire's line
+  const wiring = buildWiring(doc, view, { heights, lanes: laneCounts(doc.loops, view.wires), heads },
+    { ringed: splitLoops(doc.loops).unboxed.map((l) => l.id) }, showAll ? 1 : 4);
+  const lay = wiring.layout;
+  const routes = wiring.routes;
+  const layout = lay;
 
   const title = (n: SgNode) => tr(`system.nodes.${n.id}`, { defaultValue: n.title });
   const byId = Object.fromEntries(doc.nodes.map((n) => [n.id, n]));
@@ -513,5 +532,8 @@ function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean): Built {
     const l = doc.loops.find((x) => x.id === id)!;
     return { id, color: color[id], text: ltext[id], tip: loopTip(l, ltext[id], tr) };
   });
-  return { nodes, edges, layout, view, ringed };
+  return {
+    nodes, edges, layout, view, ringed, violations: wiring.violations, widened: wiring.widened,
+    routes, loops: doc.loops, ringed0: lay.unboxed,
+  };
 }

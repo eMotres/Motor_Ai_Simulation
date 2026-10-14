@@ -93,18 +93,24 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
 * **Context inputs are chips.** Edges from a `context` node (and `minor` edges) are not wires: the consuming block shows
   a small chip per source (coloured by the data type, the hover lists the items). The switch **Show all wires** draws every
   link as a wire (the Inputs column stays).
-* **Right-angle routing.** Outputs leave the right side and inputs enter the left side at handles ordered by the other
-  end's height, so wires do not cross at the ports; a wire's vertical run sits next to its target or its source,
-  whichever keeps the horizontal run clear of blocks. Feedback wires (and `route: lane`) leave the bottom of the block, run
-  in a lane at the bottom of the enclosing loop group (longest span lowest) and enter the bottom of the target.
-* **Loop groups say what happens.** The header gives, in one line each: what iterates, the stop condition, the limit, the
-  damping, the fallback, and (when a stored run exists) what that run did, e.g. "converged in 3 / 6, dT 0.9 K". The exits
-  are small labelled tags at the right edge of the header: the way on (green), flagged outcomes (amber) and one red tag
-  for everything that fails the point (runaway, no current, loss data, not converged). The tooltip holds the longer
-  explanation. A loop that overlaps another only partly is drawn as a ring on its members and described in the legend card.
-  Each limit-check block prints its condition under its name.
-* **Always light.** The canvas, its panel and its tooltips are drawn in the light style whatever the app theme is; the
-  wire, chip and status colours are chosen for contrast on white (>= 3:1 for graphics, >= 4.5:1 for text).
+* **Right-angle routing that never crosses what is drawn.** Outputs leave the right side and inputs enter the left side at
+  handles ordered by the other end's height, so wires do not cross at the ports. Wires are routed by A* over the grid lines
+  of the obstacle edges, 8 px away from every obstacle; a bend, a run on another net's line and a crossing of another wire
+  cost extra, so wires keep to their own lines. Obstacles are everything that is drawn: every block (a wire touches only its
+  own source and target), every loop group's **header band** (title, rule lines, exit tags), a loop box for a wire with
+  neither end inside it (a wire may cross a box only to reach a member, through the border, never through the header),
+  the Inputs label, the rings of ring-drawn loops, and the legend card. Feedback wires (and `route: lane`) leave the bottom
+  of the block, run in a lane at the bottom of the enclosing loop group (longest span lowest) and enter the bottom of the
+  target; wires between stacked blocks (the Inputs column) are brackets on their right side. When a wire finds no clean
+  route the layout is widened (columns and rows) and everything is routed again.
+* **The check.** `validateWiring(layout, loops, wires, routes)` (web/src/lib/systemGraphRoute.ts) returns every wire
+  segment that touches an obstacle it must not touch (`block`, `header`, `loop`, `label`, `extra`), every wire that found no
+  route (`unrouted`) and every collinear overlap of two wires of different nets (`overlap`; wires from one source share an
+  output bus). The node tests require an empty list on both real views (fixtures of the live graph, with and without a motor
+  selected, "Show all wires" off); with "Show all wires" on the count is only reported. In a dev build the app prints a
+  console warning when the check finds anything, or when the legend card covers part of the graph. A module without a
+  `layout` hint is placed in a row under the hinted ones (the rest of the grid is kept); a backend test fails when a registered
+  module has no hint, so a new module gets one.
 * **Hover focus.** Hovering a block lights its wires and its chip sources and dims the rest.
 * **View.** The graph is fitted to the width of the pane (and to the height when the width alone would push it out of view).
 * **Status wording.** Pick a motor (die / config / duty, the lists of the Motors catalogue) at the top of the view: with no

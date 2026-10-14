@@ -348,7 +348,7 @@ def build_modules_graph() -> Dict[str, Any]:
           "solver-mechanical": (3, -3.1), "solver-em-static": (3, -1.7),
           "solver-em-transient": (3, 0), "optimization-descent": (3, 1.5),
           "controller-foc": (4, -1.7), "solver-thermal": (4, 0), "solver-em-thermal": (5, 0),
-          "transmission-gearbox-single-stage": (5, 1.5)}
+          "transmission-gearbox-single-stage": (5, 1.5), "component-library": (5, 3.0)}
     for n in nodes:
         if n["id"] in at:
             n["layout"] = {"col": at[n["id"]][0], "row": at[n["id"]][1]}

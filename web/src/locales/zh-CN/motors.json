@@ -36,6 +36,8 @@
   "sharedByOthers": "他人共享",
   "everythingGroupedByStatorDiameterA": "全部按定子外径分组。🔒 冲片表示已冲压定型的叠片：配置（叠厚、导线、绕组、材料）位于其下，每个配置有自己的工况表——点击工况上的 ▶ 即可将整台电机载入仿真。＋ 按钮在各层级保存当前状态的快照。",
   "catalog": "目录",
+  "catalogLoading": "正在加载目录…",
+  "catalogUnreachable": "服务器未响应，正在重试…",
   "materialsViewMenu": "材料与零件目录",
   "materialsViewMaterials": "材料",
   "materialsViewBearings": "轴承",

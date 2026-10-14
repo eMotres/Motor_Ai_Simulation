@@ -64,6 +64,19 @@ export function pickModel<T extends Pick<ModelInfo, 'die' | 'config'>>(models: r
   return models.find((m) => modelKey(m) === remembered) ?? models[0];
 }
 
+/** What the tab opens on.  `wanted` is the motor the person has open in Configure (die + configuration): its model when one is
+ *  built, else NO model and `preparing: true` (the tab says so in one line instead of showing some other motor's model or a blank
+ *  canvas).  With no motor chosen it is the remembered model, else the first. */
+export function resolveModel<T extends Pick<ModelInfo, 'die' | 'config'>>(
+  models: readonly T[], remembered?: string | null, wanted?: Pick<ModelInfo, 'die' | 'config'> | null,
+): { model: T | null; preparing: boolean } {
+  if (wanted?.die && wanted?.config) {
+    const hit = models.find((m) => modelKey(m) === modelKey(wanted));
+    return hit ? { model: hit, preparing: false } : { model: null, preparing: models.length > 0 };
+  }
+  return { model: pickModel(models, remembered), preparing: false };
+}
+
 /** Toggle families, in the order the GLB lists its groups, each with the node names it switches. */
 export function togglesOf(groups: readonly PartGroup[]): Array<{ family: string; nodes: string[] }> {
   const out: Array<{ family: string; nodes: string[] }> = [];

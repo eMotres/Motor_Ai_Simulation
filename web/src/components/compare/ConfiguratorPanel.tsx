@@ -16,7 +16,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Slider, ToggleButton, ToggleButtonGroup, Button,
-  IconButton, Alert, CircularProgress,
+  IconButton, Alert, CircularProgress, useMediaQuery,
 } from '@mui/material';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import AddIcon from '@mui/icons-material/Add';
@@ -44,10 +44,10 @@ import PerformanceCharts from './PerformanceCharts';
 import PropellerCurves from './PropellerCurves';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import {
-  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, tempRowTiles, type DriveTileSpec, type TempTileSpec,
+  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
-  isPropellerCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
+  isPropellerCooled, isRoboticsCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
   seriesAt, currentForTorque, tempLimits, judgeTemps, zoneGradient, zoneSamples, modelLabel, vendorLabel,
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
@@ -1065,6 +1065,8 @@ const ConfiguratorPanel: React.FC = () => {
   const propellerOnly = isPropellerCooled(effCooling);
   const hasPropellerOption = hasPropellerCooling(effCooling);
   const hasPropellerControls = propellerOnly || hasPropellerOption;
+  // A ROBOT application (server restrict_cooling -> [robotics]): still air + radiation + mount, never a typed air speed.
+  const roboticsOnly = !hasPropellerControls && isRoboticsCooled(effCooling);
   const [propList, setPropList] = useState<PropSummary[] | null>(null);
   useEffect(() => {
     if (!hasPropellerControls) return;
@@ -1276,7 +1278,7 @@ const ConfiguratorPanel: React.FC = () => {
     window.addEventListener('cooling:changed', bump);
     return () => window.removeEventListener('cooling:changed', bump);
   }, []);
-  const coolPayload = useMemo(() => (hasPropellerControls ? null : getCoolingPayload()), [coolTick, hasPropellerControls]);
+  const coolPayload = useMemo(() => (hasPropellerControls || roboticsOnly ? null : getCoolingPayload()), [coolTick, hasPropellerControls, roboticsOnly]);
   /** The cooling behind the ONE temperature row — the same lumped estimate in every mode: the
    *  propeller's film h at this rpm, still air at the natural-convection floor, or the typed
    *  air / liquid system.  (It replaces the removed "Estimated temperatures" block,
@@ -1288,7 +1290,7 @@ const ConfiguratorPanel: React.FC = () => {
         ? { h_Wm2K: propPoint.h_W_m2K, ambient_C: ambient, air_speed_ms: propPoint.air_speed_ms ?? null }
         : null;
     }
-    if (optionalPropellerCooling) return { h_Wm2K: airH(0, D), ambient_C: ambient, air_speed_ms: 0 };   // still air (Robotics)
+    if (optionalPropellerCooling || roboticsOnly) return { h_Wm2K: airH(0, D), ambient_C: ambient, air_speed_ms: 0 };   // still air (Robotics)
     if (coolPayload) {
       const isAir = coolPayload.cooling_mode === 'air';
       return {
@@ -1298,7 +1300,7 @@ const ConfiguratorPanel: React.FC = () => {
       };
     }
     return null;
-  }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, propPoint, loadRefused, ambient, coolPayload]);
+  }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, roboticsOnly, propPoint, loadRefused, ambient, coolPayload]);
   /** winding / magnet / housing temperatures at the knobs (null while the cooling data is not
    *  here, or while the load is refused — never numbers for a point that cannot be run) */
   const thermal = useMemo(() => (cooling
@@ -1327,6 +1329,10 @@ const ConfiguratorPanel: React.FC = () => {
   const tempTiles = tempRowTiles(
     thermal && cooling ? { T_winding_C: thermal.T_winding_C, T_magnet_C: thermal.T_magnet_C, T_housing_C: thermal.T_housing_C,
       air_speed_ms: cooling.air_speed_ms, h_W_m2K: cooling.h_Wm2K, surface_cm2: thermal.A_surface_m2 * 1e4 } : null, tLimits);
+  // Narrow screens (< COMPACT_BAR_MAX_PX): the knobs are on top and the numbers they move far below, so a one-line results
+  // bar stays pinned to the bottom edge and follows every slider (the full tiles are unchanged on a wide screen).
+  const narrow = useMediaQuery(`(max-width:${COMPACT_BAR_MAX_PX - 0.05}px)`);
+  const compactTiles = compactResultTiles({ T_Nm: result.T_Nm, P_kW: result.P_mech_W / 1000, eff_pct: sysEff.value, temps: tempTiles });
   const renderTemp = (t: TempTileSpec) => (
     <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} display={t.display} unit={t.unit} d={t.d} base={t.value ?? 0}
       absLevel={t.level} plain
@@ -1853,8 +1859,20 @@ const ConfiguratorPanel: React.FC = () => {
               </ToggleButtonGroup>
             </Box>
           )}
-          {ctxDone && !hasPropellerControls && (
+          {ctxDone && !hasPropellerControls && !roboticsOnly && (
             <CoolingControls diameterMm={thermalGeom.statorOD_mm} />
+          )}
+          {/* A robot: the robotics mode only - still air, one ambient field, no air speed or liquid system. */}
+          {ctxDone && roboticsOnly && (
+            <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mb: 1.25, minHeight: 30 }}>
+              <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configurePropeller.roboticsTip')}>{tx('configurePropeller.roboticsLabel')}</Typography>
+              <input type="number" step={1} value={ambTxt ?? String(ambient)} aria-label={tx('configurePropeller.ambient')}
+                title={tx('configurePropeller.coolingAmbientTip')}
+                onChange={(e) => setAmbTxt(e.target.value)}
+                onBlur={() => setAmbTxt(null)}
+                style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 13, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
+              <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>°C</Box>
+            </Box>
           )}
           {/* Optional propeller cooling changes the thermal estimate only on mixed-cooling motors. */}
           {hasPropellerControls && (
@@ -2362,6 +2380,31 @@ const ConfiguratorPanel: React.FC = () => {
       {SHOW_CONFIGURE_CHARTS && (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <PerformanceCharts p={p} knobs={scaleKnobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
+        </Box>
+      )}
+      {narrow && (
+        <Box role="status" aria-live="off" title={tx('configure.compactBarTip')}
+          sx={{ position: 'sticky', bottom: 0, zIndex: 5, flex: '0 0 auto', display: 'flex', flexWrap: 'wrap', alignItems: 'center',
+                columnGap: 1.75, rowGap: 0.25, px: 1.5, py: 0.6, bgcolor: 'var(--panel)', borderTop: '1px solid var(--line)',
+                boxShadow: '0 -2px 8px rgba(0,0,0,0.18)' }}>
+          {compactTiles.map((c) => (
+            <Box key={c.id} sx={{ display: 'flex', alignItems: 'baseline', gap: 0.5, minWidth: 0 }}>
+              <Typography sx={{ ...LABEL, fontSize: 10.5, lineHeight: 1 }}>{tx(c.labelKey)}</Typography>
+              <Typography sx={{ fontSize: 14, fontWeight: 800, fontFamily: 'monospace', lineHeight: 1.2, whiteSpace: 'nowrap',
+                color: c.value == null && c.display == null ? 'var(--text-3)'
+                  : c.level === 'bad' ? '#f87171' : c.level === 'warn' ? '#fbbf24' : 'var(--text-0)' }}>
+                {c.value == null && c.display == null ? '—' : (c.display ?? fmt(c.value as number, c.d))}
+                {(c.value != null || c.display != null) && <Box component="span" sx={{ fontSize: 10, color: 'var(--text-3)', ml: 0.4 }}>{c.unit}</Box>}
+              </Typography>
+            </Box>
+          ))}
+          {propLine && (
+            <Typography title={`${propLine.text}. ${propLine.tip}`}
+              sx={{ fontSize: 11, fontWeight: 700, color: propBad ? '#f87171' : '#fbbf24', flex: '1 1 100%', minWidth: 0,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+              {`⚠ ${propLine.text}`}
+            </Typography>
+          )}
         </Box>
       )}
       </>

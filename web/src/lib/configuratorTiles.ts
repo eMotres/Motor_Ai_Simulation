@@ -171,6 +171,34 @@ export function tempTileSpec(id: string, labelKey: string, tipKey: string, T: nu
   return { id, labelKey, tipKey, unit: '°C', d: 0, value: T, level: T > limit - 20 ? 'warn' : 'ok', limit };
 }
 
+// ── the compact results bar (owner 2026-10-14: on a narrow screen the sliders sit on top and the numbers they move are far below) ──
+/** Below this viewport width Configure pins a one-line results bar to the bottom edge. */
+export const COMPACT_BAR_MAX_PX = 1280;
+/** Is the viewport narrow enough for the compact bar?  (`width` = window.innerWidth.) */
+export const compactBarApplies = (width: number): boolean => Number.isFinite(width) && width > 0 && width < COMPACT_BAR_MAX_PX;
+
+export interface CompactTile {
+  id: string; labelKey: string; unit: string; d: number;
+  value: number | null; display?: string; level?: 'ok' | 'warn' | 'bad';
+}
+
+/** The key results the bar shows, from the SAME numbers the full tiles print: torque, power, efficiency, winding and magnet
+ *  temperature (judged exactly like the temperature row: "> limit" in red).  A value that is not available reads "—". */
+export function compactResultTiles(i: { T_Nm: number | null; P_kW: number | null; eff_pct: number | null; temps: readonly TempTileSpec[] }): CompactTile[] {
+  const fin = (v: number | null) => (v != null && Number.isFinite(v) ? v : null);
+  const temp = (id: string) => i.temps.find((t) => t.id === id);
+  const winding = temp('tWinding'), magnet = temp('tMagnet');
+  const t = (s: TempTileSpec | undefined, id: string, labelKey: string): CompactTile =>
+    ({ id, labelKey, unit: '°C', d: 0, value: s?.value ?? null, display: s?.display, level: s?.level });
+  return [
+    { id: 'torque', labelKey: 'configure.torque', unit: 'N·m', d: 1, value: fin(i.T_Nm) },
+    { id: 'power', labelKey: 'configure.power', unit: 'kW', d: 2, value: fin(i.P_kW) },
+    { id: 'efficiency', labelKey: 'configure.efficiency', unit: '%', d: 1, value: fin(i.eff_pct) },
+    t(winding, 'tWinding', 'configurePropeller.tWinding'),
+    t(magnet, 'tMagnet', 'configurePropeller.tMagnet'),
+  ];
+}
+
 /** `null` input = nothing to show yet / refused: every tile is "—". */
 export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; magnet_C: number }): TempTileSpec[] {
   return [

@@ -41,11 +41,11 @@ import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
-import { emptyCatalogHintApplies, isStandardUser, uiCanWrite } from '../../lib/accessUi';
+import { emptyCatalogLine, isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
 import { configButtons, configClickPlan, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
-import { cleanApplications, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
+import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
@@ -315,6 +315,7 @@ const FamilyCatalog: React.FC<{
   // 2026-08-24: the user read it as their catalog being gone), so a failed
   // load now says so and RETRIES until the backend answers.
   const [loadFailed, setLoadFailed] = useState(false);
+  const [treeLoaded, setTreeLoaded] = useState(false);   // the tree has answered once
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — an empty page tells that user nothing.
   const [note, setNote] = useState<string | null>(null);
@@ -331,14 +332,14 @@ const FamilyCatalog: React.FC<{
       setNote(typeof t.note === 'string' ? t.note : null);
       const c = await (await fetch(`${API}/api/family/context`, { cache: 'no-store' })).json();
       setActive(c?.active ? c : null);
-      setLoadFailed(false);
+      setLoadFailed(false); setTreeLoaded(true);
     } catch (e) {
       // 401: the server publishes nothing to anonymous visitors
       // (PUBLIC_EXHIBIT=0).  That is an answer, not an outage — no retry loop,
       // no red "load failed", just the line that tells the user to sign in.
       if ((e as { status?: number })?.status === 401) {
         setDies([]); setCanWrite(false); setActive(null);
-        setLoadFailed(false); setMsg(null); setNote(SIGN_IN_NOTE);
+        setLoadFailed(false); setTreeLoaded(true); setMsg(null); setNote(SIGN_IN_NOTE);
         return;
       }
       setLoadFailed(true); setMsg(`catalog load failed: ${e}`);
@@ -781,8 +782,7 @@ const FamilyCatalog: React.FC<{
           : '')
       : 'No duties saved yet, so this is the Simulation mode that was set when the configuration was created. It follows the duties as soon as there is one.');
 
-  const shown = filterDiesByApplication(dies, application).filter(d =>
-    diameter == null || Number(d.stator_diameter) === Number(diameter));
+  const shown = diameter == null ? filterDiesByApplication(dies, application) : diesOfDiameter(dies, application, diameter);
   if (embedded && shown.length === 0 && !msg) return null;
 
   const body = (
@@ -799,7 +799,13 @@ const FamilyCatalog: React.FC<{
       )}
       {!embedded && shown.length === 0 && !msg && !loadFailed && (
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
-          {note ?? (emptyCatalogHintApplies(enforced, isAdmin) ? tx('noMotorsAssigned') : 'no dies yet — freeze the current geometry with the button above')}
+          {(() => {
+            const line = emptyCatalogLine({ loaded: treeLoaded, failed: loadFailed, note, canWrite });
+            return line === 'loading' ? tx('catalogLoading')
+              : line === 'note' ? note
+              : line === 'noMotors' ? tx('noMotorsAssigned')
+              : 'no dies yet — freeze the current geometry with the button above';
+          })()}
         </Typography>
       )}
 

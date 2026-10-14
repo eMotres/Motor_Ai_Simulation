@@ -11,19 +11,20 @@
  * preset backend still exists for auto-save flows, it just has no separate
  * UI here any more.
  */
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Box, Typography, Button, Tooltip } from '@mui/material';
 import FamilyCatalog from './FamilyCatalog';
 import MyMotorsPanel from './MyMotorsPanel';
 import HelpTip from '../common/HelpTip';
 import { TextPromptDialog, type TextPromptState } from '../common/PromptDialogs';
 import { fetchFamilyTree, SIGN_IN_NOTE } from '../../lib/familyTree';
-import { APPLICATIONS, filterDiesByApplication, parseApplicationFilter, type ApplicationFilter } from '../../lib/applications';
+import { APPLICATIONS, catalogDiameters, parseApplicationFilter, type ApplicationFilter } from '../../lib/applications';
 import { useScrollMemory } from '../../lib/scrollMemory';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import { canWriteServer } from '../../lib/localAuth';
-import { uiCanWrite } from '../../lib/accessUi';
+import { emptyCatalogLine, uiCanWrite } from '../../lib/accessUi';
+import { useAuth } from '../../contexts/AuthContext';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -49,8 +50,6 @@ const MotorsCatalog: React.FC = () => {
     try { localStorage.setItem('motors.folded', JSON.stringify(next)); } catch { /* storage blocked */ }
     return next;
   });
-  // Ø sections come from the dies themselves.
-  const [diams, setDiams] = useState<number[]>([]);
   // Application filter (owner 2026-10-13): all / propeller / robot / aviation / marine.
   const [appFilter, setAppFilter] = useState<ApplicationFilter>(() => {
     try { return parseApplicationFilter(localStorage.getItem('motors.application')); } catch { return 'all'; }
@@ -62,6 +61,9 @@ const MotorsCatalog: React.FC = () => {
     try { localStorage.setItem('motors.application', f); } catch { /* storage blocked */ }
   };
   const [canWrite, setCanWrite] = useState(false);
+  // `loaded` = the tree has ANSWERED once; `failed` = the last attempt did not.  Until then the page must not claim "no motors".
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
   // The backend's one-line reason for an empty catalog (a signed-in account
   // with no motors granted yet) — shown instead of the vendor's "no dies yet".
   const [note, setNote] = useState<string | null>(null);
@@ -75,13 +77,15 @@ const MotorsCatalog: React.FC = () => {
         setCanWrite(uiCanWrite(t.can_write, canWriteServer()));
         setNote(typeof t.note === 'string' ? t.note : null);
         setAllDies((t.dies || []) as never);
+        setLoaded(true); setFailed(false);
       })
       .catch((e: { status?: number }) => {
-        setDiams([]);
         // 401 = this server keeps nothing public (PUBLIC_EXHIBIT=0) and nobody
         // is signed in.  Say so and STOP: retrying every 3 s cannot mint a
         // session, it just hammers the door while the user reads the message.
-        if (e?.status === 401) { setCanWrite(false); setNote(SIGN_IN_NOTE); return; }
+        if (e?.status === 401) { setCanWrite(false); setAllDies([]); setLoaded(true); setFailed(false); setNote(SIGN_IN_NOTE); return; }
+        // Any other failure keeps the dies already on screen (a failed REFRESH used to blank the page) and retries.
+        setFailed(true);
         // Backend away (a restart window): retry instead of freezing a wrong
         // answer — a failed first load left an ADMIN's catalog stripped of
         // its lock/duplicate buttons until a manual F5 (measured live
@@ -89,12 +93,17 @@ const MotorsCatalog: React.FC = () => {
         setTimeout(() => { void load(true); }, 3000);
       });
   // Ø sections come from the dies that survive the application filter
+  const diams = useMemo(() => catalogDiameters(allDies, appFilter), [allDies, appFilter]);
+  // The page can mount BEFORE /api/me has answered, or outlive a sign-in / sign-out: the tree is per account, so a change of
+  // identity re-reads it (and tells the Ø sections, which hold their own copy, through the same event as every mutation).
+  const { user, role, isAdmin, enforced, resolved } = useAuth();
+  const identity = `${user?.email ?? ''}|${role}|${isAdmin}|${enforced}|${resolved}`;
+  const lastIdentity = useRef(identity);
   useEffect(() => {
-    setDiams(Array.from(new Set(
-      filterDiesByApplication(allDies, appFilter)
-        .map(d => Number(d.stator_diameter)).filter(Number.isFinite),
-    )).sort((a, b) => a - b));
-  }, [allDies, appFilter]);
+    if (lastIdentity.current === identity) return;
+    lastIdentity.current = identity;
+    try { window.dispatchEvent(new CustomEvent('family-changed')); } catch { /* SSR */ }
+  }, [identity]);
   useEffect(() => {
     load();
     const onChanged = () => { void load(true); };
@@ -159,11 +168,18 @@ const MotorsCatalog: React.FC = () => {
           Configure ("My agent drafts"), and every account's drafts + runs are
           in Admin -> Agent activity. */}
 
-      {diams.length === 0 && (
-        <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
-          {note ?? 'no dies yet — freeze the current geometry with the button above'}
-        </Typography>
-      )}
+      {diams.length === 0 && (() => {
+        const line = emptyCatalogLine({ loaded, failed, note, canWrite });
+        return (
+          <Typography sx={{ fontSize: 11, color: line === 'unreachable' ? '#f59e0b' : 'var(--text-4)' }}>
+            {line === 'loading' ? tx('catalogLoading')
+              : line === 'unreachable' ? tx('catalogUnreachable')
+              : line === 'note' ? note
+              : line === 'noMotors' ? tx('noMotorsAssigned')
+              : 'no dies yet — freeze the current geometry with the button above'}
+          </Typography>
+        );
+      })()}
 
       {diams.map(d => (
         <Box key={d} sx={{ p: 2, mb: 2, borderRadius: 2,

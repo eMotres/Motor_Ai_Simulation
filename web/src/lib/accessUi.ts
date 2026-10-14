@@ -43,6 +43,17 @@ export const tabVisible = (id: string, c: GateCtx): boolean => gateOpen(TAB_GATE
 /** One line for a non-admin account whose catalogue is empty (no motor granted yet). */
 export const emptyCatalogHintApplies = (enforced: boolean, isAdmin: boolean): boolean => enforced && !isAdmin;
 
+/** Which one line an EMPTY Motors catalog shows.  The developer hint ("freeze the current geometry") is for a session that may
+ *  write the shared catalog (admin / local dev) and only once the tree has answered; a role-user account never reads it - it
+ *  gets the backend's own note or a plain line.  Until the first answer (or after a failed one) nothing claims "no motors". */
+export type EmptyCatalogLine = 'loading' | 'unreachable' | 'note' | 'noMotors' | 'vendorHint';
+export function emptyCatalogLine(s: { loaded: boolean; failed: boolean; note: string | null; canWrite: boolean }): EmptyCatalogLine {
+  if (s.failed) return 'unreachable';
+  if (!s.loaded) return 'loading';
+  if (s.note) return 'note';
+  return s.canWrite ? 'vendorHint' : 'noMotors';
+}
+
 /** May this tab be shown?  Admins and an unenforced (local) backend see everything. */
 export const tabAllowed = (id: string, standardUser: boolean): boolean =>
   !standardUser || STANDARD_USER_TABS.includes(id);

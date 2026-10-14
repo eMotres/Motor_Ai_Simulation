@@ -47,7 +47,45 @@
     "avatarTooltip": "{email} · {role} — click for sessions",
     "sessions": "Sessions",
     "agents": "Access for agents",
-    "notifications": "Notifications"
+    "notifications": "Notifications",
+    "computeNodes": "My compute nodes"
+  },
+  "nodes": {
+    "hint": "FEM runs are heavy; for regular work connect your own server",
+    "hintTip": "Your own server runs your jobs with the same solver version. It connects out over HTTPS, so there are no ports to open, and its CPU time does not count against fair use.",
+    "hintNodes": "My compute nodes",
+    "hintDocs": "Install docs",
+    "share": {
+      "label": "Share idle time with MOTRES",
+      "tip": "Off by default. When on, MOTRES may run its own jobs on this node while you have nothing queued: only MOTRES catalog work (for example passport computations of catalog motors) that an admin marked shareable, signed and version-pinned like your own jobs. Never the job of another customer, never confidential or NDA data. Shared jobs run at the lowest priority (nice 19, idle IO) within the core and RAM caps below. Your own jobs always go first: a shared job stops within seconds when you submit one, and is re-queued, not failed.",
+      "maxCores": "Max cores for MOTRES jobs",
+      "maxRam": "Max RAM for MOTRES jobs (GB)",
+      "capsTip": "Default: half of the cores and half of the RAM.",
+      "save": "Save",
+      "stopNow": "Stop sharing now",
+      "stopTip": "Turns sharing off and ends the MOTRES job running on this node within seconds; the job is re-queued elsewhere.",
+      "column": "Idle sharing",
+      "on": "on",
+      "off": "off",
+      "title": "MOTRES jobs that ran on my nodes",
+      "summary": "{runs} runs, {cpuHours} CPU-hours",
+      "none": "None yet.",
+      "colNode": "Node",
+      "colJob": "Job",
+      "colStarted": "Started",
+      "colDuration": "Duration",
+      "colCpuHours": "CPU-hours",
+      "colOutcome": "Outcome",
+      "outcome": {
+        "done": "done",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "lost": "node went offline",
+        "owner_job": "handed back for your job",
+        "stop_sharing": "handed back, sharing stopped",
+        "ram_cap": "stopped at the RAM cap"
+      }
+    }
   },
   "auth": {
     "title": {

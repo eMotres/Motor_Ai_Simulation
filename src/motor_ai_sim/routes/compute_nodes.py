@@ -10,7 +10,12 @@ Three audiences, three auth rules:
   only (let past the anonymous door by ``auth._NODE_AGENT_PATH``); a node
   sees only its owner's jobs, and an unknown or foreign run is a 404;
 * the admin (``/api/admin/user-nodes...``): every node, every remote job,
-  the audit log.
+  the audit log, the nodes that offer idle time;
+* idle sharing (docs/BYO_COMPUTE.md section 14): the node owner's opt-in and
+  caps (``PUT /{id}/share``), "stop sharing now" (``POST /{id}/share/stop``),
+  what ran on the node (``GET /shared-runs``); an admin queues a MOTRES job
+  as shareable (``POST /jobs/submit-shared``); the worker hands a shared job
+  back with ``POST /jobs/{id}/release``.
 """
 from __future__ import annotations
 
@@ -88,7 +93,8 @@ def my_nodes(authorization: Optional[str] = Header(default=None)) -> Dict[str, A
     who = _me(authorization)
     return {"nodes": CN.list_nodes(who["id"]), "pref": CN.get_pref(who["id"]),
             "prefs": list(CN.PREFS), "platform_version": CN.platform_version(),
-            "remotable_kinds": CN.remotable_kinds()}
+            "remotable_kinds": CN.remotable_kinds(),
+            "shared": CN.shared_summary(who["id"])}
 
 
 @router.post("")
@@ -137,6 +143,70 @@ def put_pref(body: dict = Body(default={}),
         return {"pref": CN.set_pref(who["id"], str(body.get("pref") or ""))}
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/{nid}/share")
+def put_share(nid: str, body: dict = Body(default={}),
+              authorization: Optional[str] = Header(default=None)):
+    """The OWNER's idle-sharing setting for one node (opt-in is off by default;
+    caps default to half the cores and half the RAM).  Owner only: an admin
+    cannot opt somebody else's server in."""
+    who = _me(authorization)
+    kw: Dict[str, Any] = {}
+    if "enabled" in body:
+        if not isinstance(body["enabled"], bool):
+            raise HTTPException(status_code=400, detail="enabled must be true or false")
+        kw["enabled"] = body["enabled"]
+    for k in ("max_cores", "max_ram_mb"):
+        if k in body:
+            kw[k] = body[k]
+    try:
+        return CN.set_share(nid, who["id"], **kw)
+    except CN.Refused as e:
+        _refused(e)
+
+
+@router.post("/{nid}/share/stop")
+def stop_share(nid: str, authorization: Optional[str] = Header(default=None)):
+    who = _me(authorization)
+    try:
+        return CN.stop_sharing(nid, who["id"])
+    except CN.Refused as e:
+        _refused(e)
+
+
+@router.get("/shared-runs")
+def shared_runs(node: str = "", limit: int = 100,
+                authorization: Optional[str] = Header(default=None)):
+    """The shared jobs that ran on the caller's nodes (time, duration,
+    CPU-hours).  Never the job body or who submitted it."""
+    who = _me(authorization)
+    return {"runs": CN.shared_runs(who["id"], node or None, min(limit, 1000)),
+            "summary": CN.shared_summary(who["id"])}
+
+
+@router.post("/jobs/submit-shared")
+def submit_shared(body: dict = Body(default={}),
+                  authorization: Optional[str] = Header(default=None)):
+    """Admin only: queue one MOTRES job (e.g. a passport task of a catalog
+    motor) that opted-in idle nodes may run.  Refused when the body carries a
+    customer / nda / confidential marker or names a die that is not curated
+    MOTRES reference data."""
+    from motor_ai_sim import workspace as _WSP
+    who = _me(authorization)
+    if not who["is_admin"]:
+        raise HTTPException(status_code=403, detail="admin only")
+    kind = str(body.get("kind") or "")
+    if kind not in CN.remotable_kinds():
+        raise HTTPException(status_code=400, detail="unknown job kind")
+    args = body.get("body") if isinstance(body.get("body"), dict) else {}
+    ws = _WSP.workspace_for_identity(who["id"])
+    try:
+        rec = CN.submit(who["id"], ws.id, str(ws.root), kind, args,
+                        shareable=True, owner_is_admin=True)
+    except CN.Refused as e:
+        _refused(e)
+    return CN.public(rec)
 
 
 @router.get("/jobs/mine")
@@ -221,6 +291,22 @@ async def fail(run_id: str, request: Request,
         _refused(e)
 
 
+@router.post("/jobs/{run_id}/release")
+async def release(run_id: str, request: Request,
+                  authorization: Optional[str] = Header(default=None)):
+    """A shared job handed back (the owner needs the node / sharing stopped):
+    re-queued, not a failure."""
+    nid, n = _node(authorization)
+    data = await _json(request)
+    cpu = data.get("cpu_s")
+    try:
+        return CN.release(nid, n, run_id, str(data.get("reason") or ""),
+                          float(cpu) if isinstance(cpu, (int, float)) else 0.0,
+                          data.get("checkpoint"))
+    except CN.Refused as e:
+        _refused(e)
+
+
 @router.get("/worker/{fname}")
 def worker_file(fname: str):
     if fname not in ("install.sh", "motres_compute_worker.py"):
@@ -240,6 +326,12 @@ def all_nodes(_admin: dict = Depends(require_admin)):
 @admin_router.get("/jobs")
 def all_jobs(limit: int = 200, _admin: dict = Depends(require_admin)):
     return {"jobs": CN.list_jobs(None, limit=min(limit, 2000))}
+
+
+@admin_router.get("/sharing")
+def sharing(_admin: dict = Depends(require_admin)):
+    """The nodes that currently offer idle time to MOTRES."""
+    return {"nodes": CN.sharing_nodes()}
 
 
 @admin_router.get("/audit")

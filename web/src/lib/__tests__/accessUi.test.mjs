@@ -120,3 +120,26 @@ t('the empty-catalogue hint is for non-admin accounts on an enforcing backend', 
   assert.equal(A.emptyCatalogHintApplies(true, true), false);
   assert.equal(A.emptyCatalogHintApplies(false, true), false);
 });
+
+t('My compute nodes is reachable for every signed-in role, engineer included', () => {
+  assert.equal(A.computeNodesReachable(true), true);
+  assert.equal(A.computeNodesReachable(false), false);
+  assert.ok(A.ROLE_VALUES.every((r) => A.computeNodesReachable(r !== 'anon')));
+});
+
+t('the compute hint: user and engineer on a simulation tab of an enforcing backend only', () => {
+  for (const tab of A.COMPUTE_HINT_TABS) {
+    assert.equal(A.computeHintApplies(tab, true, false, 'engineer'), true, tab);
+    assert.equal(A.computeHintApplies(tab, true, false, 'user'), true, tab);
+    assert.equal(A.computeHintApplies(tab, true, true, 'admin'), false, tab);
+    assert.equal(A.computeHintApplies(tab, false, true, 'admin'), false, tab);
+    assert.equal(A.computeHintApplies(tab, true, false, 'anon'), false, tab);
+  }
+  for (const tab of ['motors', 'compare', 'model3d', 'admin', 'sweep', 'geometry']) {
+    assert.equal(A.computeHintApplies(tab, true, false, 'engineer'), false, tab);
+  }
+  // every hint tab is one an engineer actually sees
+  const ctx = { signedIn: true, fullUI: true, isAdmin: false };
+  assert.ok(A.COMPUTE_HINT_TABS.every((id) => A.tabVisible(id, ctx)));
+  assert.match(A.COMPUTE_WORKER_DOCS_URL, /BYO_COMPUTE\.md#9-install$/);
+});

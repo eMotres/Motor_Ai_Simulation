@@ -1,6 +1,6 @@
 # Bring your own compute: user-owned compute nodes
 
-Status: design + Stage 1 implementation (2026-09-29).
+Status: design + Stage 1 implementation (2026-09-29); idle sharing (Stage 2, section 14) 2026-10-14.
 Code: `src/motor_ai_sim/compute_nodes.py`, `src/motor_ai_sim/routes/compute_nodes.py`,
 `deploy/compute-worker/`, `web/src/components/auth/ComputeNodesDialog.tsx`,
 tests in `tests/test_compute_nodes.py`.
@@ -222,7 +222,7 @@ serves three kinds of nodes:
   lease/progress/complete/fail/cancel routes, HMAC-signed bundles and results,
   version pinning, result filing in the owner's workspace, usage with
   `own_node`, job table `where`, admin view of all nodes/jobs/audit.
-* **Stage 2.** Published worker image + digest provenance, container
+* **Stage 2 (idle sharing: section 14, done).** Still open from the list below: published worker image + digest provenance, container
   isolation per job, Ed25519 platform signing key, several concurrent slots per
   node, `own_first` queue-time fallback, progress streaming into the normal
   progress registry (so the Simulation strip shows node jobs live), large-result
@@ -250,3 +250,29 @@ Admin: `GET /api/admin/user-nodes`, `GET /api/admin/user-nodes/jobs`,
 Jobs table: `GET /api/jobs` now includes node jobs, and every row has
 `where` = `platform` or `node:<id>`; `POST /api/jobs/{id}/cancel` stops node
 jobs too.
+
+## 14. Idle sharing with MOTRES (Stage 2, owner decision 2026-10-14)
+
+No monetisation: a user who needs FEM rents or provides a server and connects it.
+A node owner MAY additionally lend the node's idle time to MOTRES. The rules, and
+where each is enforced (`src/motor_ai_sim/compute_nodes.py` unless noted):
+
+| rule | enforcement |
+|---|---|
+| Opt-in per node, off by default; the tooltip says exactly what can run | `user_nodes.json: share_idle` (False on create); `set_share`, owner only (`PUT /api/nodes/{id}/share`); `lease` reads `node["share_idle"] is True` |
+| Only MOTRES's own jobs on someone else's node | `submit(..., shareable=True)` needs `owner_is_admin` (the server's finding about the caller, `POST /api/nodes/jobs/submit-shared`, admin only); `_shared_candidate` requires `shareable is True` and `owner_is_admin is True` and a different owner; any other job is only ever leased to its own owner; every cross-owner lease writes `job.lease.shared` (`cross_owner`, `job_owner`) to `node_audit.jsonl` |
+| Confidential / NDA never in a shared bundle | `confidential_reason(body)`: `tags` / `customer` / `confidential` / `nda` markers anywhere in the body, and every named `die` must be a curated MOTRES die (`owner_org: MOTRES`, `data_sources.CONFIDENTIAL_TAGS` on die.yaml and the named configuration); unreadable or unknown die = refused. Checked at submit AND at every lease; a failing job is `blocked` and audited once (`lease.refused_confidential`) |
+| Owner jobs first | `lease`: the owner's queued jobs are taken first and a shared job only when none is queued; `progress` answers `preempt: owner_job` while the owner has a job queued |
+| Shared job stops promptly, is re-queued, never a failure | the worker polls shared jobs every `SHARED_PROGRESS_S` (3 s); on `preempt` it kills the child and calls `release`; `release` puts the job back in the queue and does not count the attempt (`PREEMPT_RAM_CAP` does, so a job that never fits cannot loop); resumed from `checkpoint` for kinds in `CHECKPOINT_KINDS` (handlers call `compute_nodes.checkpoint(obj)`; the next bundle carries `resume_from`), else restarted |
+| Low priority, owner-set caps | the bundle carries `limits {max_cores, max_ram_mb, nice: 19, ionice: idle}`; default half the cores and half the RAM from the node's heartbeat; the worker (`ProcessRunner`) runs the job in a child process with `nice 19`, `ionice -c3`, CPU affinity of at most `max_cores`, thread env vars set, and kills and releases it when its RSS passes `max_ram_mb` |
+| Transparency | `GET /api/nodes/shared-runs` (from `shared_ledger.jsonl`: time, duration, CPU-hours, outcome; never the body or the submitter); `POST /api/nodes/{id}/share/stop` ("stop sharing now": opt-out plus the running shared job is handed back on the next progress call); admin `GET /api/admin/user-nodes/sharing` |
+
+The bundle of a shared job is signed with the same HMAC scheme as an owner bundle and the
+worker verifies it (and the platform version) before running it. Ed25519 platform signing is
+NOT part of this stage (it needs the `cryptography` package on the stdlib-only worker plus key
+distribution): TODO Stage 3.
+
+Not in this stage: a scheduler that fills the shared queue (an admin submits through
+`submit-shared` today), spot-check re-verification of shared results, per-job shared quotas,
+and moving the child process into the pinned container.
+

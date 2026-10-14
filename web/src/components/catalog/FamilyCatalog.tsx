@@ -41,7 +41,7 @@ import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
-import { isStandardUser, uiCanWrite } from '../../lib/accessUi';
+import { emptyCatalogHintApplies, isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
 import { configButtons, configClickPlan, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
@@ -799,7 +799,7 @@ const FamilyCatalog: React.FC<{
       )}
       {!embedded && shown.length === 0 && !msg && !loadFailed && (
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>
-          {note ?? 'no dies yet — freeze the current geometry with the button above'}
+          {note ?? (emptyCatalogHintApplies(enforced, isAdmin) ? tx('noMotorsAssigned') : 'no dies yet — freeze the current geometry with the button above')}
         </Typography>
       )}
 

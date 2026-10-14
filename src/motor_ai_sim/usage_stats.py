@@ -213,7 +213,7 @@ def account_attrs(email: str, registry: Optional[Dict[str, Dict[str, Any]]] = No
         is_admin = e in _ADMIN_EMAILS or e == (ADMIN_OWNER or "").lower() or u.get("role") == "admin"
     except Exception:                                   # noqa: BLE001
         is_admin = u.get("role") == "admin"
-    return {"role": "admin" if is_admin else "user",
+    return {"role": "admin" if is_admin else ("engineer" if u.get("role") == "engineer" else "user"),
             "domain": e.split("@", 1)[1] if "@" in e else "",
             "created": u.get("created")}
 
@@ -320,6 +320,21 @@ def _logins(start: float, end: float) -> Dict[str, int]:
     except Exception:                                   # noqa: BLE001
         pass
     return out
+
+
+def month_cpu_h_by_user(month: Optional[str] = None) -> Optional[Dict[str, float]]:
+    """CPU-hours used in a month (default: the current UTC month) per account, from the finished-job records (``usage.cpu_s``).
+    None when the usage store cannot be read - the caller shows "-"."""
+    month = month or time.strftime("%Y-%m", time.gmtime())
+    start, end = month_bounds(month)
+    try:
+        out: Dict[str, float] = {}
+        for r in _jobs(start, end):
+            u = str(r.get("user") or "").lower()
+            out[u] = out.get(u, 0.0) + float(r.get("cpu_s") or 0.0) / 3600.0
+        return {u: round(v, 3) for u, v in out.items()}
+    except Exception:                                   # noqa: BLE001
+        return None
 
 
 def monthly(month: str,

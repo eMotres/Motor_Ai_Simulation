@@ -345,9 +345,9 @@ def current_role() -> str:
 
 
 #: Roles with no claim on the front of the queue.  ``user`` is what every
-#: invited and every self-registered account starts as; ``anon`` can only appear
+#: invited and every self-registered account starts as, ``engineer`` is a user with the simulation UI (it queues like one); ``anon`` can only appear
 #: on a host that still has the public exhibit open.
-_BASE_ROLES = frozenset({"user", "anon"})
+_BASE_ROLES = frozenset({"user", "engineer", "anon"})
 #: The job KINDS that are somebody's campaign — matched on the family (the part
 #: before the first dot), so ``optimizer.scan`` / ``optimizer.doe`` /
 #: ``optimizer.descent`` need no list to maintain.

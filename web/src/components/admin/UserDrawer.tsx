@@ -11,10 +11,11 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle';
 import HelpTip from '../common/HelpTip';
 import { openNdaPdf } from './ndaPdf';
 import { ROLES } from './dialogs/InviteDialog';
+import { roleLabel } from '../../lib/accessUi';
 import type { RegistryUser } from './dialogs/MotorsDialog';
 
 const ROLE_COLOR: Record<string, string> = {
-  anon: 'var(--text-4)', user: 'var(--text-3)', admin: '#fbbf24',
+  anon: 'var(--text-4)', user: 'var(--text-3)', engineer: '#60a5fa', admin: '#fbbf24',
 };
 
 const fmt = (iso?: string | null) =>
@@ -37,6 +38,7 @@ const UserDrawer: React.FC<{
   onClose: () => void;
   busy: boolean;
   onRole: (role: string) => void;
+  onQuota: (hours: number | null) => void;
   onToggleDisabled: () => void;
   onDelete: () => void;
   onResetPassword: () => void;
@@ -45,10 +47,18 @@ const UserDrawer: React.FC<{
   onRevokeAllSessions: () => void;
 }> = ({
   user, liveSessions, lastLogin, cpuH30d, jobs30d, onClose, busy,
-  onRole, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions,
+  onRole, onQuota, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions,
 }) => {
   const [revoking, setRevoking] = useState(false);
-  useEffect(() => setRevoking(false), [user?.email]);
+  const [quota, setQuota] = useState('');
+  useEffect(() => { setRevoking(false); setQuota(user?.sim_quota_cpu_h_month != null ? String(user.sim_quota_cpu_h_month) : ''); },
+    [user?.email, user?.sim_quota_cpu_h_month]);
+  const saveQuota = () => {
+    const t = quota.trim();
+    if (t === '') { if (user?.sim_quota_cpu_h_month != null) onQuota(null); return; }
+    const v = Number(t);
+    if (Number.isFinite(v) && v >= 0 && v !== user?.sim_quota_cpu_h_month) onQuota(v);
+  };
 
   const g = user?.motors;
   const motorsLabel = user?.role === 'admin' ? 'all (admin)' : g?.all ? 'all' : g?.dies?.length ? `${g.dies.length} granted` : 'none';
@@ -62,12 +72,27 @@ const UserDrawer: React.FC<{
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, mb: 0.5 }}>
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>Role</Typography>
-            <HelpTip title="Changing this takes effect on the account's next request." />
+            <HelpTip title={`Configure: Motors, Configure and the 3D model. Simulation: the whole simulation UI on the account's own workspace and granted motors, no admin sections. Admin: everything. Takes effect on the account's next request.`} />
           </Box>
           <Select size="small" value={user.role} disabled={busy} onChange={(e) => onRole(e.target.value)}
             sx={{ fontSize: 13, fontWeight: 700, color: ROLE_COLOR[user.role] ?? 'var(--text-2)', width: '100%' }}>
-            {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13, color: ROLE_COLOR[r] }}>{r}</MenuItem>)}
+            {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13, color: ROLE_COLOR[r] }}>{roleLabel(r)}</MenuItem>)}
           </Select>
+
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, mb: 0.5 }}>
+            <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>CPU quota (h / month)</Typography>
+            <HelpTip title="Preparation only: the number is stored but no job is blocked by it yet. Empty means not set." />
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <TextField size="small" type="number" value={quota} disabled={busy} placeholder="not set"
+              onChange={(e) => setQuota(e.target.value)} onBlur={saveQuota}
+              onKeyDown={(e) => { if (e.key === 'Enter') saveQuota(); }}
+              inputProps={{ min: 0, step: 1, 'aria-label': 'CPU quota hours per month' }}
+              sx={{ width: 120, '& input': { fontSize: 12.5, py: 0.5 } }} />
+            <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>
+              used this month: {user.cpu_h_month != null ? `${user.cpu_h_month.toFixed(2)} h` : '—'}
+            </Typography>
+          </Box>
 
           <Box sx={{ mt: 2 }}>
             <InfoRow label="Created" value={fmt(user.created)} />

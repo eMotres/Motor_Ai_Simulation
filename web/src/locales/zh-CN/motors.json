@@ -5,6 +5,7 @@
   "renameConfiguration": "重命名配置",
   "duplicateCopyThisConfigurationWithAll": "复制——连同全部工况复制此配置（作为变型方案的起点）",
   "downloadTheDatasheetXlsxEveryDuty": "下载数据表 (.xlsx)——每个工况一列，含设计和电池数据块、截面图、实测曲线以及逐项说明页。可用 Google Sheets 或 Excel 打开。",
+  "noMotorsAssigned": "您的账户尚未分配任何电机。请联系 MOTRES 申请访问权限。",
   "copyThisMachineIntoMyMotors": "将此电机复制到“我的电机”——您的私有空间，在您分享之前仅您可见",
   "nameStack": "⚠ 名称 ≠ 叠厚",
   "setTheSupplyBatteryDutiesWill": "设置供电电池——各工况将按其电压范围评判",

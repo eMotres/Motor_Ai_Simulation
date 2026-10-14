@@ -434,7 +434,14 @@ class CreateReq(BaseModel):
 
 @router.get("/users")
 def users_list(_admin: dict = Depends(require_admin)):
-    return {"users": U.list_users()}
+    """Every account; ``cpu_h_month`` = CPU-hours the account's finished jobs used this UTC month (None when the usage store
+    cannot be read)."""
+    from motor_ai_sim import usage_stats as US
+    used = US.month_cpu_h_by_user()
+    rows = U.list_users()
+    for r in rows:
+        r["cpu_h_month"] = None if used is None else used.get(r["email"], 0.0)
+    return {"users": rows}
 
 
 @router.post("/users")
@@ -454,26 +461,35 @@ class PatchReq(BaseModel):
     password: Optional[str] = None      # admin reset
     nda_signed: Optional[bool] = None   # 3D model menu: full model + STEP only when True
     nda_date: Optional[str] = None      # YYYY-MM-DD (default today)
+    sim_quota_cpu_h_month: Optional[float] = None   # CPU-hours per month; send null to clear (stored only, not enforced)
 
 
 @router.patch("/users/{email}")
 def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)):
     _AA.record(_AA.actor_of(_admin), "user.update", str(email), subject=str(email), details={k: v for k, v in req.model_dump().items() if v is not None and k != "password"} | {"password_reset": req.password is not None})
     try:
+        before = (U.get_user(email) or {}).get("role", "user")
         if req.password is not None:
             U.set_password(email, req.password)
         if req.nda_signed is not None:
             _AA.record(_AA.actor_of(_admin), "user.nda", str(email), subject=str(email),
                        details={"signed": req.nda_signed, "date": req.nda_date})
             U.set_nda(email, req.nda_signed, req.nda_date, by=_AA.actor_of(_admin))
+        quota = ({"sim_quota_cpu_h_month": req.sim_quota_cpu_h_month}
+                 if "sim_quota_cpu_h_month" in req.model_fields_set else {})
         out = U.update_user(email, role=req.role, disabled=req.disabled,
-                            name=req.name)
+                            name=req.name, **quota)
+        if req.role is not None and out["role"] != before:
+            _AA.record(_AA.actor_of(_admin), "user.role", str(email), subject=str(email),
+                       details={"from": before, "to": out["role"]})
         log.info("auth: user %s updated (%s)", email,
                  {k: v for k, v in req.model_dump().items()
                   if v is not None and k != "password"})
         return {"ok": True, "user": out}
     except KeyError:
         raise HTTPException(404, detail=f"user '{email}' not found")
+    except U.RoleProtected as e:
+        raise HTTPException(409, detail=str(e))
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
 

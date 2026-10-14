@@ -53,13 +53,54 @@ _TOKEN_TTL_S = 30 * 24 * 3600          # 30 days
 #: Inside this window before `exp`, /api/me hands back a renewed token with the
 #: SAME sid — a session that is actively used never expires under the user.
 RENEW_WINDOW_S = 7 * 24 * 3600         # 7 days
-ROLES = ("user", "admin")
+#: "user" = Configure only (Motors + Configure); "engineer" = the whole simulation UI on the account's OWN workspace and the dies it
+#: is granted (no admin sections, no user management, no shared stores); "admin" = everything.  (Owner 2026-10-14.)
+ROLES = ("user", "engineer", "admin")
+
+#: Optional per-account CPU-hour allowance per month (owner 2026-10-14).  PREPARATION ONLY: stored and shown in Admin; no job is
+#: blocked by it.  ``None`` = not set.
+QUOTA_MAX_CPU_H = 1_000_000.0
+
+
+class RoleProtected(ValueError):
+    """A role change the registry refuses: the owner's own account, or the last admin."""
+
+
+def normalize_quota(raw) -> Optional[float]:
+    """``sim_quota_cpu_h_month`` as stored: None for empty / unset, else a float >= 0.  Anything else raises ValueError."""
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        return None
+    if isinstance(raw, bool):
+        raise ValueError("CPU quota must be a number of hours")
+    try:
+        v = float(raw)
+    except (TypeError, ValueError):
+        raise ValueError("CPU quota must be a number of hours")
+    if v != v or v < 0 or v > QUOTA_MAX_CPU_H:
+        raise ValueError("CPU quota must be between 0 and %d hours" % int(QUOTA_MAX_CPU_H))
+    return round(v, 3)
+
+
+def _check_role_change(users: dict, email: str, new_role: str) -> None:
+    """Refuse to take admin away from the owner's own account (``ADMIN_EMAILS``) or from the last admin.  Called under the lock
+    with the loaded registry, by every writer of a role."""
+    if new_role == "admin" or (users.get(email) or {}).get("role") == new_role:
+        return
+    from motor_ai_sim import auth as _auth
+    if email in _auth._ADMIN_EMAILS:
+        raise RoleProtected("the owner's account is always admin and cannot be changed")
+    if (users.get(email) or {}).get("role") != "admin":
+        return
+    others = [e for e, r in users.items() if e != email and r.get("role") == "admin" and not r.get("disabled")]
+    others += [e for e in _auth._ADMIN_EMAILS if e != email and e not in others]
+    if not others:
+        raise RoleProtected("this is the last admin; make another account admin first")
 
 
 def _migrate_role(rec: dict) -> str:
     """Old free/pro/team/internal/etc. tiers collapse to user; admin stays admin."""
     v = rec.get("role") or rec.get("tier") or "user"
-    return "admin" if str(v) == "admin" else "user"
+    return str(v) if str(v) in ("admin", "engineer") else "user"
 
 #: Every possible outcome of verifying a bearer token.  Only the first is a
 #: success; only `store_unavailable` is NOT the client's fault and must never
@@ -523,9 +564,13 @@ def reset_password(email: str, password: str) -> None:
         _save(users)
 
 
+_UNSET = object()
+
+
 def update_user(email: str, *, role: Optional[str] = None,
                 disabled: Optional[bool] = None,
-                name: Optional[str] = None) -> dict:
+                name: Optional[str] = None,
+                sim_quota_cpu_h_month=_UNSET) -> dict:
     email = _norm(email)
     with _LOCK:
         users = _load()
@@ -534,7 +579,14 @@ def update_user(email: str, *, role: Optional[str] = None,
         if role is not None:
             if role not in ROLES:
                 raise ValueError(f"role must be one of {ROLES}")
+            _check_role_change(users, email, role)
             users[email]["role"] = role
+        if sim_quota_cpu_h_month is not _UNSET:
+            q = normalize_quota(sim_quota_cpu_h_month)
+            if q is None:
+                users[email].pop("sim_quota_cpu_h_month", None)
+            else:
+                users[email]["sim_quota_cpu_h_month"] = q
         if disabled is not None:
             users[email]["disabled"] = bool(disabled)
         if name is not None:
@@ -561,11 +613,20 @@ def list_users() -> list[dict]:
     return [public_user(e) for e in sorted(_load_soft().keys())]
 
 
+def _quota_of(u: dict) -> Optional[float]:
+    try:
+        return normalize_quota(u.get("sim_quota_cpu_h_month"))
+    except ValueError:
+        return None
+
+
 def public_user(email: str) -> dict:
     u = _load_soft().get(_norm(email)) or {}
     return {"email": _norm(email), "role": u.get("role", "user"),
             "name": u.get("name", ""), "disabled": bool(u.get("disabled")),
             "created": u.get("created"),
+            # monthly CPU-hour allowance (None = not set); stored only, no job is blocked by it
+            "sim_quota_cpu_h_month": _quota_of(u),
             # False only for a self-registered account whose link was never
             # used (absent on older records = verified).
             "email_verified": is_verified(u) if u else True,
@@ -804,6 +865,7 @@ def invite_user(email: str, *, role: str = "user", name: str = "",
             _apply_pw(rec, secrets.token_urlsafe(32))
             users[email] = rec
         else:
+            _check_role_change(users, email, role)
             rec["role"] = role
             rec["disabled"] = False
             if name:

@@ -69,3 +69,54 @@ t('card summary: none / partial / all', () => {
   assert.deepEqual(A.cardSummary(1, 2), { text: '1/2', state: 'partial' });
   assert.deepEqual(A.cardSummary(2, 2), { text: '2/2', state: 'all' });
 });
+
+// -- role "engineer" (owner 2026-10-14): Configure only, or the whole simulation ------------------------------------------
+
+const ALL_TABS = ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'static3d', 'mechanical',
+  'thermal', 'controller', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'admin'];
+
+// what App.tsx computes for a session: signedIn, fullUI (hasSimulationUI) and isAdmin
+const visible = (enforced, isAdmin, role) => {
+  const ctx = { signedIn: true, fullUI: A.hasSimulationUI(enforced, isAdmin, role), isAdmin };
+  return ALL_TABS.filter((id) => A.tabVisible(id, ctx));
+};
+
+t('role user: Motors, Configure, 3D model - nothing else', () => {
+  assert.deepEqual(visible(true, false, 'user'), ['motors', 'compare', 'model3d']);
+});
+
+t('role engineer: the whole simulation UI, no admin sections', () => {
+  assert.deepEqual(visible(true, false, 'engineer'), ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'mechanical',
+    'thermal', 'controller', 'comparePoints', 'compare', 'model3d']);
+  for (const id of ['admin', 'sweep', 'cost', 'static3d']) assert.equal(visible(true, false, 'engineer').includes(id), false, id);
+});
+
+t('role admin and the local backend see every tab', () => {
+  assert.deepEqual(visible(true, true, 'admin'), ALL_TABS);
+  assert.deepEqual(visible(false, true, 'admin'), ALL_TABS);
+});
+
+t('an engineer is not a standard user and gets no user-only landing', () => {
+  assert.equal(A.isStandardUser(true, false, 'engineer'), false);
+  assert.equal(A.isStandardUser(true, false, 'user'), true);
+  assert.equal(A.hasSimulationUI(true, false, 'user'), false);
+  assert.equal(A.hasSimulationUI(true, false, 'engineer'), true);
+  assert.equal(A.hasSimulationUI(true, false, 'anon'), false);
+});
+
+t('every tab App.tsx draws has a gate, unknown tabs are admin only', () => {
+  assert.deepEqual(Object.keys(A.TAB_GATES).sort(), [...ALL_TABS].sort());
+  assert.equal(A.tabVisible('somethingNew', { signedIn: true, fullUI: true, isAdmin: false }), false);
+});
+
+t('the role select: Configure / Simulation / Admin for user / engineer / admin', () => {
+  assert.deepEqual([...A.ROLE_VALUES], ['user', 'engineer', 'admin']);
+  assert.deepEqual(A.ROLE_VALUES.map(A.roleLabel), ['Configure', 'Simulation', 'Admin']);
+  assert.equal(A.roleLabel('staff'), 'staff');
+});
+
+t('the empty-catalogue hint is for non-admin accounts on an enforcing backend', () => {
+  assert.equal(A.emptyCatalogHintApplies(true, false), true);
+  assert.equal(A.emptyCatalogHintApplies(true, true), false);
+  assert.equal(A.emptyCatalogHintApplies(false, true), false);
+});

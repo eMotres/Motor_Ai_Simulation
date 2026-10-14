@@ -15,6 +15,7 @@ import { ConfirmDialog, type ConfirmState } from '../../common/PromptDialogs';
 import { CreateUserDialog, ResetPasswordDialog } from '../dialogs/AccountDialogs';
 import MotorsDialog, { type RegistryUser } from '../dialogs/MotorsDialog';
 import { ROLES } from '../dialogs/InviteDialog';
+import { roleLabel } from '../../../lib/accessUi';
 import UserDrawer from '../UserDrawer';
 import { useTranslation } from 'react-i18next';
 
@@ -85,6 +86,11 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
       if (r.ok) {
         const j = await r.json();
         setUsers((us) => us.map((u) => (u.email === email ? { ...u, ...j.user } : u)));
+        setError(null);
+      } else {
+        let why = `HTTP ${r.status}`;
+        try { const j = await r.json(); if (typeof j?.detail === 'string') why = j.detail; } catch { /* keep the status */ }
+        setError(why);
       }
     } catch { /* keep prior state */ } finally { setBusy(null); }
   };
@@ -154,7 +160,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
           onChange={(e) => setSearch(e.target.value)} sx={{ minWidth: 200, '& .MuiInputBase-input': { fontSize: 12.5, py: 0.6 } }} />
         <Select size="small" value={roleFilter} onChange={(e) => setRoleFilter(e.target.value)} sx={{ fontSize: 12.5 }}>
           <MenuItem value="all" sx={{ fontSize: 12.5 }}>All roles</MenuItem>
-          {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 12.5 }}>{r}</MenuItem>)}
+          {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 12.5 }}>{roleLabel(r)}</MenuItem>)}
         </Select>
         <Button size="small" startIcon={<MailOutlineIcon sx={{ fontSize: 16 }} />} onClick={() => onInvite()}
           variant="outlined" sx={{ textTransform: 'none', fontSize: 12 }}>Invite</Button>
@@ -208,7 +214,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                       <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{u.email}</Typography>
                     </TableCell>
                     <TableCell>
-                      <Chip size="small" label={u.role} sx={{ height: 18, fontSize: 11, fontWeight: 700, bgcolor: 'var(--panel)', color: ROLE_COLOR[u.role] ?? 'var(--text-2)' }} />
+                      <Chip size="small" label={roleLabel(u.role)} sx={{ height: 18, fontSize: 11, fontWeight: 700, bgcolor: 'var(--panel)', color: ROLE_COLOR[u.role] ?? 'var(--text-2)' }} />
                     </TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>{fmtCreated(u.created)}</TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>{last ? new Date(last * 1000).toLocaleDateString() : '—'}</TableCell>
@@ -247,6 +253,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         busy={busy === selected}
         onClose={() => setSelected(null)}
         onRole={(role) => void patchUser(selected!, { role })}
+        onQuota={(q) => void patchUser(selected!, { sim_quota_cpu_h_month: q })}
         onToggleDisabled={() => void patchUser(selected!, { disabled: !selectedUser?.disabled })}
         onDelete={() => selected && deleteUser(selected)}
         onResetPassword={() => selected && setResetFor(selected)}

@@ -17,7 +17,7 @@ import {
   type AdminStatus, type Campaign, type Subscriber, type AdminNotice, type Draft,
 } from '../../lib/newsletterApi';
 
-const ROLES = ['user', 'admin'];
+const ROLES = ['user', 'engineer', 'admin'];
 const card = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.5, mb: 2 };
 const head = { fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' as const, letterSpacing: '0.04em' };
 const tbl = { '& td, & th': { borderColor: 'var(--panel)', fontSize: 12.5 } };

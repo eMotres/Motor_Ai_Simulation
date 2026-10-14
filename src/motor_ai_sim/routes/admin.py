@@ -25,7 +25,7 @@ from motor_ai_sim.auth import require_admin, require_admin_or_token
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-_VALID_ROLES = ("user", "admin")
+_VALID_ROLES = ("user", "engineer", "admin")
 _DAY_MS = 86_400_000.0
 
 #: ``source`` of the real user list (the self-hosted registry).
@@ -192,7 +192,6 @@ def stats(_admin: dict = Depends(require_admin)):
 @router.post("/users/{uid}/role")
 def set_role(uid: str, body: dict = Body(default={}), _admin: dict = Depends(require_admin)):
     """Set an account's role in the self-hosted registry (``uid`` = its e-mail)."""
-    _AA.record(_AA.actor_of(_admin), "user.role", str(uid), subject=str(uid), details={"role": (body or {}).get("role")})
     role = (body or {}).get("role")
     if role not in _VALID_ROLES:
         raise HTTPException(status_code=400, detail=f"role must be one of {_VALID_ROLES}")
@@ -203,6 +202,9 @@ def set_role(uid: str, body: dict = Body(default={}), _admin: dict = Depends(req
         _U.update_user(uid, role=role)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"user '{uid}' not found")
+    except _U.RoleProtected as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    _AA.record(_AA.actor_of(_admin), "user.role", str(uid), subject=str(uid), details={"role": role})
     return {"ok": True, "source": _USERS_SOURCE, "uid": uid, "role": role}
 
 

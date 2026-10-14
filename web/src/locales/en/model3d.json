@@ -25,7 +25,7 @@
   "downloadStep": "Download STEP",
   "fit": "Fit to view",
   "version": "Template {template}, built {built}, parameters {hash}",
-  "stamped": "Your name and the date are written into the file name and the STEP header. Every download is logged.",
+  "stamped": "Your name, company, the date and your NDA are written into the file name and the STEP header. Every download is logged.",
   "contextLost": "The 3D view lost its graphics context. Reload the page to continue.",
   "downloadLocked": "Download after NDA",
   "downloadLockedHelp": "You can view, rotate, section and measure the model. The STEP download opens when the NDA is signed; sign it online in one minute. Every download is logged and the file carries your name and the date.",

@@ -11,7 +11,8 @@
     "catalogs": "目录",
     "motorsAccess": "电机访问权限",
     "newsletter": "通讯与通知",
-    "logs": "日志 / 事件"
+    "logs": "日志 / 事件",
+    "downloads3d": "3D 下载"
   },
   "motors": {
     "title": "电机 — {email}",

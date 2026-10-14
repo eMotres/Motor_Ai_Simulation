@@ -1989,8 +1989,11 @@ def _overlay_mass(die: str, cfg: dict) -> dict:
     except Exception:                                      # noqa: BLE001 - a mass hiccup never breaks the catalog
         summ = None
     if summ is None:
-        mass = {"full_kg": None, "active_kg": None, "rotating_kg": None, "partial": True, "source": "stored"}
-        duties = [{**d, "result": {**(d.get("result") or {}), "mass_partial": True}} for d in (cfg.get("duties") or [])]
+        why = "the catalog cannot weigh this die here"
+        mass = {"full_kg": None, "active_kg": None, "rotating_kg": None, "partial": True, "source": "stored",
+                "partial_reason": why}
+        duties = [{**d, "result": {**(d.get("result") or {}), "mass_partial": True, "mass_partial_reason": why}}
+                  for d in (cfg.get("duties") or [])]
         return {**cfg, "mass": mass, "duties": duties}
     duties = []
     for d in cfg.get("duties") or []:
@@ -2002,6 +2005,8 @@ def _overlay_mass(die: str, cfg: dict) -> dict:
         elif r.get("mass_kg") is None:
             r["mass_kg"] = round(summ["active_kg"], 4)
         r["mass_partial"] = bool(summ["partial"])
+        if summ["partial"]:
+            r["mass_partial_reason"] = summ.get("partial_reason") or ""
         duties.append({**d, "result": r})
     return {**cfg, "mass": summ, "duties": duties}
 

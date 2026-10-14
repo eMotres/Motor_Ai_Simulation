@@ -47,7 +47,7 @@ NEW_CARDS = ["Stainless_A2_70", "Bearing_steel_100Cr6", "FR4_glass_epoxy", "CFRP
 
 def test_every_new_card_value_has_a_source_a_type_and_a_unit():
     doc = yaml.safe_load((REPO / "config" / "part_materials.yaml").read_text(encoding="utf-8"))
-    assert set(NEW_CARDS) == set(doc["materials"])
+    assert set(NEW_CARDS) | {"Unspecified_BOM_part"} == set(doc["materials"])      # the placeholder card has no property at all
     for mid in NEW_CARDS:
         card = pm.resolve(mid)
         assert card.origin == "part_materials" and card.get("density_kg_m3") > 0

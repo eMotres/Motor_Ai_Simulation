@@ -7500,6 +7500,7 @@ def _inject_full_mass(em: Dict[str, Any], die: str, cfg: str) -> None:
         return
     em["mass_partial"] = bool(fm.partial)
     if fm.partial:
+        em["mass_partial_reason"] = fm.partial_reason
         return
     try:
         from motor_ai_sim import part_materials as _pm

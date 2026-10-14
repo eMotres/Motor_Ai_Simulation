@@ -194,6 +194,10 @@ ROTATING_KEYS = ("rotor_core", "magnet", "shaft", "sleeve", "carrier_front", "ca
 
 PARTIAL_LABEL = "partial mass (no CAD model yet)"
 
+#: the consistency guard: the non-active parts counted must be at least this fraction of what the BOM itself lists beyond the
+#: simulation (its own "parts the simulation mass does not contain" row), else the mass is flagged partial
+GUARD_FRACTION = 0.5
+
 FULL_MASS_BASIS = ("the FULL assembled motor: the app's active parts (masses.compute_masses: stator iron, rotor iron, "
                    "magnets, winding copper, sleeve) + the CAD bill of materials' shaft or rotor carrier, holders, rings, "
                    "bearings, screws, phase board, pins and wire enamel, each with the material of the die's Full "
@@ -209,8 +213,38 @@ class BomLine:
     item: str
     part: str
     material: str
-    grams: float
+    grams: float                           # the file's ``total mass g`` (unit mass x qty, as the file defines it)
     notes: str
+    qty: Optional[float] = None
+    unit_g: Optional[float] = None
+
+    @property
+    def density(self) -> Optional[float]:
+        """The density the CAD mass was computed with (the BOM states it in its notes), kg/m3."""
+        m = _BOM_NUM.search(self.notes or "")
+        return float(m.group(1)) if m else None
+
+    @property
+    def name(self) -> str:
+        """The part's name: the first line of a (possibly multi-line) cell, whitespace collapsed, at most 80 characters."""
+        first = (self.part or "").strip().splitlines()[0] if (self.part or "").strip() else ""
+        return re.sub(r"\s+", " ", first).strip()[:80]
+
+    @property
+    def mass_consistent(self) -> bool:
+        """unit mass x qty = total mass (the file's own definition), within rounding."""
+        if self.qty is None or self.unit_g is None:
+            return True
+        return abs(self.unit_g * self.qty - self.grams) <= 0.02 * max(self.grams, 1e-9) + 0.01
+
+
+@dataclass
+class BomFile:
+    path: str
+    lines: List[BomLine] = field(default_factory=list)        # every numbered row WITH a mass
+    unmassed: List[str] = field(default_factory=list)         # numbered rows with no mass (adhesive, varnish, liner ...)
+    total_g: Optional[float] = None                           # the file's T1 row: total mass of the BOM lines
+    non_sim_g: Optional[float] = None                         # the file's C row: "parts the simulation mass does not contain"
 
     @property
     def density(self) -> Optional[float]:
@@ -243,25 +277,42 @@ def find_bom_file(die: str, config: str, cad_dir: Optional[os.PathLike] = None) 
     return None
 
 
-def read_bom(path: os.PathLike) -> List[BomLine]:
-    """The lines of a BOM file that carry a mass (item number, part, material, total mass g, notes).  Prices and
-    suppliers are never read."""
-    out: List[BomLine] = []
+def _num(v: Any) -> Optional[float]:
+    try:
+        return float(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def read_bom_file(path: os.PathLike) -> BomFile:
+    """Parse a server BOM file (``bom.write_csv``): a BOM-encoded header, multi-line quoted cells, numbered part rows, then the
+    ``T`` (totals), ``C`` (comparison) and ``E`` (explanation) rows.  A numbered row with a mass is a part; one without
+    (adhesive, varnish, slot liner, power leads) is listed in ``unmassed``; T / C / E rows are never parts (only the two numbers
+    the consistency guard needs are read from them).  Prices and suppliers are never read."""
+    out = BomFile(path=str(path))
     with open(path, encoding="utf-8-sig", newline="") as fh:
         for row in csv.DictReader(fh):
             item = (row.get("item") or "").strip()
             part = (row.get("part") or "").strip()
-            mass_g = (row.get("total mass g") or "").strip()
-            if not item.isdigit() or not part or not mass_g:
+            grams = _num(row.get("total mass g"))
+            if item == "T1" and grams is not None:
+                out.total_g = grams
+            elif item == "C" and part.lower().startswith("parts the simulation mass does not contain") and grams is not None:
+                out.non_sim_g = grams
+            if not item.isdigit() or not part:
                 continue
-            try:
-                grams = float(mass_g)
-            except ValueError:
+            if grams is None or grams <= 0:
+                if not part.lower().startswith("enamelled"):      # the wire row: its mass is inside the coil line
+                    out.unmassed.append(" ".join(part.split())[:80])
                 continue
-            if grams > 0:
-                out.append(BomLine(item, part, (row.get("material / grade") or "").strip(), grams,
-                                   (row.get("notes") or "").strip()))
+            out.lines.append(BomLine(item, part, (row.get("material / grade") or "").strip(), grams,
+                                     (row.get("notes") or "").strip(), _num(row.get("qty")), _num(row.get("unit mass g"))))
     return out
+
+
+def read_bom(path: os.PathLike) -> List[BomLine]:
+    """The lines of a BOM file that carry a mass (see ``read_bom_file``)."""
+    return read_bom_file(path).lines
 
 
 def die_part_choices(die_dir: Optional[os.PathLike]) -> Dict[str, str]:
@@ -325,13 +376,16 @@ class FullMass:
     parts: List[MotorPart] = field(default_factory=list)
     basis: str = ""
     bom_file: Optional[str] = None
+    partial_reason: str = ""               # why the mass is partial (no BOM, rows not accounted for, rules unavailable)
+    others: List[str] = field(default_factory=list)     # BOM rows no part rule recognised: COUNTED as "other"
+    unmassed: List[str] = field(default_factory=list)   # BOM rows with no mass (adhesive, varnish, liner, leads)
 
 
 _FULL_CACHE: Dict[Tuple, FullMass] = {}
 
 
-def full_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
-              cad_dir: Optional[os.PathLike] = None) -> FullMass:
+def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
+                    cad_dir: Optional[os.PathLike] = None) -> FullMass:
     """The FULL assembled motor mass of ``die`` / ``config`` (see the header).  Raises ``MotorMassError`` when the die
     is not available.  Without a built CAD BOM the answer is the active mass with ``partial = True``."""
     from dataclasses import replace
@@ -350,27 +404,34 @@ def full_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
     except Exception:                                                      # noqa: BLE001
         cy = {}
     em_mats = cy.get("materials") or {}
-    lines = read_bom(bom) if bom else []
+    bf = read_bom_file(bom) if bom else None
+    lines = bf.lines if bf else []
     parts: List[MotorPart] = []
     if not lines:
         parts = [replace(p, basis=(p.basis + "; " if p.basis else "") + PARTIAL_LABEL) for p in mm.parts]
+        why = ("no CAD bill of materials has been built for this motor" if bf is None
+               else "the CAD bill of materials carries no part with a mass")
         out = FullMass(die, config, mm.total_kg, mm.total_kg, 0.0, True, "active_only", parts,
-                       APP_MASS_BASIS + " " + PARTIAL_LABEL + ": no CAD bill of materials has been built for this motor.")
+                       APP_MASS_BASIS + " " + PARTIAL_LABEL + ": " + why + ".", partial_reason=why,
+                       unmassed=list(bf.unmassed) if bf else [])
     else:
         defs = pm.mechanical_parts()
         keyed: Dict[str, BomLine] = {}
+        others: List[BomLine] = []
         shaft_line = coil_line = None
         for ln in lines:
             if _BOM_ACTIVE.search(ln.part):
                 continue
-            if _BOM_COIL_LINE.search(ln.part):
+            if _BOM_COIL_LINE.search(ln.part) and coil_line is None:
                 coil_line = ln
-            elif _BOM_SHAFT.search(ln.part):
+            elif _BOM_SHAFT.search(ln.part) and shaft_line is None:
                 shaft_line = ln
             else:
                 k = _classify(defs, ln.part)
                 if k and k not in keyed:
                     keyed[k] = ln
+                else:
+                    others.append(ln)          # unknown (or a second row of a known part): counted as "other", never dropped
         has_carrier = "carrier_front" in keyed or "carrier_rear" in keyed
         for k in ("stator_core", "rotor_core", "magnet", "slot", "sleeve"):
             if k in app:
@@ -406,9 +467,36 @@ def full_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
                                    str(d.get("status", "computed")),
                                    "CAD bill of materials" + (f"; {d['note']}" if d.get("note") else "") + note,
                                    key=k, em=False, default_material_id=default, user_set=k in choices))
+        for ln in others:
+            parts.append(MotorPart(ln.name or f"BOM row {ln.item}", "Unspecified_BOM_part", ln.grams / 1000.0, "other", True,
+                                   "assumed", "CAD bill of materials row no part rule recognises: counted as 'other' at the "
+                                              "BOM's own mass; its material is not identified", key=f"other_{ln.item}",
+                                   em=False))
         total = sum(p.mass_kg for p in parts if p.counted and p.mass_kg)
         rot = sum(p.mass_kg for p in parts if p.counted and p.mass_kg and p.key in ROTATING_KEYS)
-        out = FullMass(die, config, total, mm.total_kg, rot, False, "cad_bom", parts, FULL_MASS_BASIS, str(bom))
+        # CONSISTENCY GUARD: the non-active parts counted here must be most of what the BOM itself says the simulation
+        # does not model (its own "parts the simulation mass does not contain" row).  If not, the matcher missed rows (or the
+        # rules were unavailable): say partial, with the reason, instead of claiming a full mass.
+        counted_extra_g = 1000.0 * sum(p.mass_kg for p in parts if p.counted and p.mass_kg
+                                       and (not p.em or p.key == "wire_insulation") and p.key != "carrier_front")
+        ref_g = bf.non_sim_g if bf and bf.non_sim_g else None
+        if ref_g is None:                                     # no C row: the same sum from the file's own massed lines
+            act = sum(ln.grams for ln in lines if _BOM_ACTIVE.search(ln.part))
+            shaft_g = (shaft_line.grams if shaft_line else (keyed["carrier_front"].grams if "carrier_front" in keyed else 0.0))
+            enamel_m = _BOM_COIL.search(coil_line.notes or "") if coil_line else None
+            copper_g = (coil_line.grams - (float(enamel_m.group(2)) if enamel_m else 0.0)) if coil_line else 0.0
+            ref_g = sum(ln.grams for ln in lines) - act - shaft_g - copper_g
+        if ref_g > 1.0 and counted_extra_g < GUARD_FRACTION * ref_g:
+            why = (f"only {counted_extra_g:.1f} g of the {ref_g:.1f} g of parts the CAD bill of materials lists beyond "
+                   f"the simulation could be accounted for")
+            log.error("full mass of %s %s is PARTIAL: %s", die, config, why)
+            parts = [replace(p, basis=(p.basis + "; " if p.basis else "") + PARTIAL_LABEL) for p in mm.parts]
+            out = FullMass(die, config, mm.total_kg, mm.total_kg, 0.0, True, "active_only", parts,
+                           APP_MASS_BASIS + " " + PARTIAL_LABEL + ": " + why + ".", str(bom), why,
+                           [ln.name for ln in others], list(bf.unmassed))
+        else:
+            out = FullMass(die, config, total, mm.total_kg, rot, False, "cad_bom", parts, FULL_MASS_BASIS, str(bom), "",
+                           [ln.name for ln in others], list(bf.unmassed))
     if out.partial:
         out.rotating_kg = sum(p.mass_kg for p in out.parts if p.counted and p.mass_kg and p.key in ROTATING_KEYS)
     with _LOCK:
@@ -416,6 +504,22 @@ def full_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
             _FULL_CACHE.clear()
         _FULL_CACHE[key] = out
     return out
+
+
+def full_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
+              cad_dir: Optional[os.PathLike] = None) -> FullMass:
+    """The FULL assembled motor mass of ``die`` / ``config`` (see the header).  Raises ``MotorMassError`` when the die
+    is not available.  Without a built CAD BOM - or when the BOM cannot be accounted for (consistency guard) or the part rules
+    are unavailable - the answer is the active mass with ``partial = True`` and the REASON in ``partial_reason``."""
+    from motor_ai_sim.part_materials import PartMaterialsUnavailable
+    try:
+        return _full_mass_impl(die, config, dies_dir=dies_dir, cad_dir=cad_dir)
+    except PartMaterialsUnavailable as exc:
+        log.error("full mass of %s %s is PARTIAL: part-material rules unavailable: %s", die, config, exc)
+        mm = app_motor_mass(die, config, dies_dir=dies_dir)
+        why = f"the part-material rules are unavailable ({exc})"
+        return FullMass(die, config, mm.total_kg, mm.total_kg, 0.0, True, "active_only", list(mm.parts),
+                        APP_MASS_BASIS + " " + PARTIAL_LABEL + ": " + why, partial_reason=why)
 
 
 def mass_summary(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
@@ -427,6 +531,7 @@ def mass_summary(die: str, config: str, *, dies_dir: Optional[os.PathLike] = Non
     except (MotorMassError, OSError):
         return None
     return {"full_kg": fm.total_kg, "active_kg": fm.active_kg, "rotating_kg": fm.rotating_kg, "partial": fm.partial,
+            "partial_reason": fm.partial_reason, "others": list(fm.others), "unmassed": list(fm.unmassed),
             "source": fm.source, "non_active_kg": fm.total_kg - fm.active_kg}
 
 

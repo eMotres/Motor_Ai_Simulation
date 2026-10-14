@@ -109,7 +109,9 @@ class Collector:
         g = self.groups.get(gname)
         if g is None:
             fam = family or gname
-            g = self.groups[gname] = G.Group(gname, colour, extras=dict(family=fam, explode=EXPLODE.get(fam, 0.0)))
+            metallic, roughness = palette.group_material(gname)
+            g = self.groups[gname] = G.Group(gname, colour, extras=dict(family=fam, explode=EXPLODE.get(fam, 0.0)),
+                                             metallic=metallic, roughness=roughness)
         b = budget_of(node)
         patches, vol = tessellate(shape, budgeted_tol(shape, self.tol, b) if b else self.tol)
         g.add(node, patches)

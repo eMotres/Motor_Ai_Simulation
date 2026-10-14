@@ -7,12 +7,12 @@
   "coil": "#C8642A",
   "magnet_n": "#D7263D",
   "magnet_s": "#1B6EF3",
-  "shaft": "#A7B0B8",
+  "shaft": "#3C4147",
   "aluminium": "#7F8C99",
   "ring": "#E0B341",
   "bearing_ring": "#C0C6CC",
   "bearing_ball": "#E3E6E9",
-  "screw": "#5E646B",
+  "screw": "#D9DCDF",
   "pcb_mask": "#1E7A3B",
   "pcb_gold": "#D4AF37",
   "pcb_fr4": "#C9B27C",
@@ -36,6 +36,43 @@
   "Screw": "screw"
  },
  "thread_darken": 0.72,
+ "material": {
+  "shaft": {
+   "metallic": 0.3,
+   "roughness": 0.8
+  },
+  "screw": {
+   "metallic": 0.9,
+   "roughness": 0.25
+  }
+ },
+ "default_material": {
+  "metallic": 0.1,
+  "roughness": 0.55
+ },
+ "group_role": {
+  "Core": "core",
+  "Coils": "coil",
+  "Rotor": "rotor_core",
+  "Magnets": "magnet_n",
+  "Magnets_S": "magnet_s",
+  "Shaft": "shaft",
+  "Shaft_rear": "aluminium",
+  "Bearings_front": "bearing_ring",
+  "Bearings_back": "bearing_ring",
+  "Bearings_front_balls": "bearing_ball",
+  "Bearings_back_balls": "bearing_ball",
+  "Holder_front": "aluminium",
+  "Holder_back": "aluminium",
+  "Ring_front": "ring",
+  "Ring_back": "ring",
+  "Screws": "screw",
+  "Prop_fix": "aluminium",
+  "PhaseBoard_FR4": "pcb_mask",
+  "PhaseBoard_copper": "pcb_gold",
+  "PhaseBoard_pins": "pcb_pins",
+  "PhaseBoard_other": "pcb_fr4"
+ },
  "magnet_alternate": [
   "magnet_n",
   "magnet_s"

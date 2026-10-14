@@ -19,12 +19,12 @@ PALETTE = {
     "coil": "#C8642A",             # vivid copper
     "magnet_n": "#D7263D",         # magnets alternate by index: N red ...
     "magnet_s": "#1B6EF3",         # ... S blue
-    "shaft": "#A7B0B8",            # polished steel
+    "shaft": "#3C4147",            # steel parts: dark grey (owner 2026-10-14)
     "aluminium": "#7F8C99",        # anodised aluminium: holders, Prop_fix, carriers (clearly different from the core)
     "ring": "#E0B341",             # GFRP ring: amber
     "bearing_ring": "#C0C6CC",
     "bearing_ball": "#E3E6E9",
-    "screw": "#5E646B",            # dark zinc
+    "screw": "#D9DCDF",            # nickel-plated: bright, slightly warm silver (owner 2026-10-14)
     "pcb_mask": "#1E7A3B",         # solder mask green
     "pcb_gold": "#D4AF37",         # copper pads / plated copper
     "pcb_fr4": "#C9B27C",          # FR4 edge
@@ -39,6 +39,15 @@ BODY_ROLE = {
     "Bearing_outer_ring": "bearing_ring", "Bearing_inner_ring": "bearing_ring", "Bearing_ball": "bearing_ball",
     "Stator_holder": "aluminium", "Stator_holder_back": "aluminium", "Ring": "ring", "Prop_fix": "aluminium", "Screw": "screw",
 }
+# role -> (metallic, roughness) of the GLB material and, via appearance(), of the FreeCAD ShapeAppearance; default (0.1, 0.55)
+MATERIAL = {"shaft": (0.3, 0.8), "screw": (0.9, 0.25)}      # steel: matte (owner); screws: nickel, shiny
+DEFAULT_MATERIAL = (0.1, 0.55)
+# GLB group name -> palette role (export_models.py)
+GROUP_ROLE = {"Core": "core", "Coils": "coil", "Rotor": "rotor_core", "Magnets": "magnet_n", "Magnets_S": "magnet_s",
+              "Shaft": "shaft", "Shaft_rear": "aluminium", "Bearings_front": "bearing_ring", "Bearings_back": "bearing_ring",
+              "Bearings_front_balls": "bearing_ball", "Bearings_back_balls": "bearing_ball", "Holder_front": "aluminium",
+              "Holder_back": "aluminium", "Ring_front": "ring", "Ring_back": "ring", "Screws": "screw", "Prop_fix": "aluminium",
+              "PhaseBoard_FR4": "pcb_mask", "PhaseBoard_copper": "pcb_gold", "PhaseBoard_pins": "pcb_pins", "PhaseBoard_other": "pcb_fr4"}
 THREAD_DARKEN = 0.72               # cosmetic thread faces: the host colour, a little darker
 
 
@@ -53,6 +62,22 @@ def rgb(role):
 
 def body_colour(name):
     return rgb(BODY_ROLE.get(name, ""))
+
+
+def material(role):
+    return MATERIAL.get(role, DEFAULT_MATERIAL)
+
+
+def group_material(gname):
+    return material(GROUP_ROLE.get(gname, ""))
+
+
+def specular_shininess(role):
+    """FreeCAD ShapeAppearance values that read like the GLB material: specular grows with metallic and smoothness (low for matte
+    steel, high for the nickel screws), shininess = 1 - roughness."""
+    m, r = material(role)
+    sp = round(0.05 + 0.7 * m * (1.0 - r), 3)
+    return (sp, sp, sp), round(1.0 - r, 3)
 
 
 def thread_colour(host_rgb):
@@ -80,6 +105,8 @@ def pcb_role(rgb3):
 def as_dict():
     return dict(version=1, note="single colour palette of all motor models (opaque); see palette.py",
                 hex=dict(PALETTE), default=DEFAULT, body_role=dict(BODY_ROLE), thread_darken=THREAD_DARKEN,
+                material={k: dict(metallic=v[0], roughness=v[1]) for k, v in MATERIAL.items()}, default_material=dict(metallic=0.1, roughness=0.55),
+                group_role=dict(GROUP_ROLE),
                 magnet_alternate=["magnet_n", "magnet_s"])
 
 

@@ -257,6 +257,34 @@ def colour_threads(doc, gdoc):
     return rep
 
 
+def apply_appearance(doc, gdoc):
+    """ShapeAppearance (diffuse / specular / shininess) of the bodies whose palette role has its own material, so the GUI reads
+    like the web viewer.  Per-face colours (thread bodies) keep their diffuse list."""
+    import FreeCAD as App
+    done = []
+    for bn, role in palette.BODY_ROLE.items():
+        if role not in palette.MATERIAL:
+            continue
+        for name in (bn, {"Screw": "Screws"}.get(bn)):
+            o = doc.getObject(name) if name else None
+            if o is None:
+                for x in doc.Objects:
+                    if x.Label == name:
+                        o = x
+            vo = gdoc.getObject(o.Name) if o is not None else None
+            if vo is None or not hasattr(vo, "ShapeAppearance"):
+                continue
+            sp, sh = palette.specular_shininess(role)
+            try:
+                n = len(list(vo.DiffuseColor)) if hasattr(vo, "DiffuseColor") else 1
+                dc = list(vo.DiffuseColor) if n > 1 else [COLORS[bn] + (opaque_alpha(vo),)]
+                vo.ShapeAppearance = [App.Material(DiffuseColor=tuple(c), SpecularColor=sp, Shininess=sh) for c in dc]
+                done.append(o.Name)
+            except Exception:
+                pass
+    return done
+
+
 def colour_magnet_array(doc, gdoc):
     """Alternating N / S colours on the link array elements (view property OverrideColorList of the Draft link array)."""
     for o in doc.Objects:
@@ -293,6 +321,7 @@ def style_gui(doc, gdoc):
             rep["colours"][o.Name] = key
     rep["thread_faces"] = colour_threads(doc, gdoc)
     rep["magnet_colours"] = colour_magnet_array(doc, gdoc)
+    rep["appearance"] = apply_appearance(doc, gdoc)
     if doc.getObject("PhaseBoard") is not None:
         rep["phase_board"] = colour_phase_board(doc, gdoc)
     return rep

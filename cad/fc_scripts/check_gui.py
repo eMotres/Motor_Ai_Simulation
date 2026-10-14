@@ -30,6 +30,8 @@ try:
             bad.append("%s: document Visibility %s but view provider %s" % (o.Name, o.Visibility, gui_vis[o.Name]))
     cols = {}
     for n in view.BODIES:
+        if doc.getObject(n) is None:               # active-part profile without mechanics
+            continue
         vo = gdoc.getObject(n)
         c = tuple(round(x, 2) for x in vo.ShapeColor[:3])
         cols[n] = c

@@ -229,6 +229,8 @@ def thread_face_indices(doc):
     """{body: [face indices]} of the cosmetic thread faces: the M5 section of the shaft, the M3 and M2 tap holes of the back
     holder (cylinders of exactly those radii)."""
     from . import params_sheet as ps
+    if doc.getObject("Shaft") is None:             # active-part profile without mechanics
+        return {}
     sh = doc.getObject("Params")
     g = lambda n: ps.pval(sh, n)
     want = {"Shaft": [g("shaft_thread_r")], "Stator_holder_back": [g("holder_tap_d") / 2, g("back_screw_tap_d") / 2]}

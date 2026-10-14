@@ -1,0 +1,28 @@
+# AeroStator
+
+> AeroStator is an open-source (Apache-2.0) platform to design, simulate and prepare production of drive components built on AeroStator Core permanent-magnet motors. People and their AI agents work on the same platform: from idea to product, together.
+
+AeroStator is run by MOTRES d.o.o. The software is Apache-2.0. The AeroStator Core motor technology is patent pending; manufacturing requires a licence from MOTRES (non-exclusive manufacturing licences are available). Applications: aviation and drones, robotics, marine, and your own.
+
+The platform covers five steps: design (motor geometry for your task), simulation (coupled electromagnetic, thermal and mechanical finite-element analysis), configure (choose a motor for your operating point, cooling, propeller, battery and controller), 3D model (viewable by everyone, tools and STEP files after an NDA) and production (order motors from MOTRES or take a manufacturing licence). Signed-in work, simulations and motor design data are private to their owners.
+
+## Start here
+
+- [Landing page (English)](https://aerostator.com/): what the platform is and how to start
+- [Landing page (Simplified Chinese)](https://aerostator.com/zh/): the same page in 简体中文
+- [Source code on GitHub](https://github.com/eMotres/Motor_Ai_Simulation): Apache-2.0, fork it, run it yourself
+
+## For developers and AI agents
+
+- [Component SDK](https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/COMPONENT_SDK.md): add a propeller, gearbox, controller, battery or your own module
+- [Module contribution rules](https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MODULE_CONTRIBUTION_RULES.md): what a community module must provide
+- [Bring your own compute](https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/BYO_COMPUTE.md): run heavy simulations on your own server
+- [MCP discovery and auth](https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/MCP_DISCOVERY.md): how an agent connects (OAuth sign-in by the user)
+- [MCP endpoint](https://aerostator.com/mcp): Model Context Protocol, streamable HTTP, JSON-RPC 2.0; a plain GET returns the service card
+- [MCP server card](https://aerostator.com/.well-known/mcp.json): machine-readable description
+- [Full MCP tool catalogue](https://aerostator.com/llms-full.txt): every tool, the public ones that need no sign-in, and how to add the server to Claude Code
+
+## Access and contact
+
+- Anyone can sign in with Google on https://aerostator.com/ and pick a motor in Configure.
+- To ask for the engineer role (run your own simulations), a manufacturing licence, or to ask anything else: vadim@motresres.com

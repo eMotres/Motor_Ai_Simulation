@@ -1,7 +1,7 @@
 {
   "name": "AeroStator Core",
   "short_name": "AeroStator",
-  "description": "Select, configure, price and order high-performance electric motors.",
+  "description": "Open-source platform to design, simulate and prepare production of drive components on AeroStator Core motors.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f172a",

@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "title": "AeroStator Core — From idea to product, together",
+    "description": "Open-source (Apache-2.0) platform to design, simulate and prepare production of drive components built on AeroStator Core motors. For aviation and drones, robotics and marine. Connect your AI agents."
+  },
   "hero": {
     "title": "From idea to product, together",
     "agents": "Connect your AI agents and build together",

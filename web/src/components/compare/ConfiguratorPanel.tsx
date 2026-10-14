@@ -72,6 +72,7 @@ import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/
 import { listDevices } from '../controller/controllerApi';
 import { presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
 import { buildModePresets, baseModeLabel, modeOfPoint, type ModePreset } from '../../lib/configuratorModes';
+import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
   physicalRanges, narrowRange, speedLimit, overflows, lineVoltageWarning,
   readOverrides, writeOverrides, speedLimitNote, propellerCurrentNote, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
@@ -104,6 +105,13 @@ const tx = nsT('controller');   // every user-visible string (EN source, ZH mirr
 /** In Chinese the captions keep their unit symbols as written (mm, rpm, ns), not MM / RPM. */
 const unitCase = () => (i18n.language?.startsWith('zh') ? { textTransform: 'none' as const } : undefined);
 const n0f = (x: number) => String(Number(x.toFixed(0)));
+
+/** The application the user switched to, per machine + configuration (only used when a
+ *  configuration lists more than one application). */
+const APP_CHOICE_LS = 'configurator.application.v1';
+const readAppChoices = (): Record<string, string> => {
+  try { return JSON.parse(localStorage.getItem(APP_CHOICE_LS) || '{}') || {}; } catch { return {}; }
+};
 
 /** The machine's remembered drive choice (Sine | PWM + variant), laid over
  *  `k`.  Nothing remembered = `k` itself, so Sine stays exactly as it was. */
@@ -446,8 +454,11 @@ const ConfiguratorPanel: React.FC = () => {
         // the SAME load rule as `propLoad` below (owner 2026-10-12: one identical Configure
         // template for every motor, differences only from data): the propeller is the load
         // whenever its cooling is ACTIVE — a mixed Robotics/propeller machine included
-        const propCoolingActiveHere = isPropellerCooled(matchingCtx?.cooling)
-          || (hasPropellerCooling(matchingCtx?.cooling) && (savedChoice.cooling ?? 'robotics') === 'propeller');
+        // the machine's application gates the propeller first (a robot has none)
+        const appCooling = coolingForApplication(matchingCtx?.cooling,
+          selectedApplication(buildPreset?.applications?.length ? buildPreset.applications : matchingCtx?.applications));
+        const propCoolingActiveHere = isPropellerCooled(appCooling)
+          || (hasPropellerCooling(appCooling) && (savedChoice.cooling ?? 'robotics') === 'propeller');
         propLoadForMotor = propCoolingActiveHere && (savedChoice.load ?? 'prop') === 'prop';
       } catch { propLoadForMotor = isPropellerCooled(matchingCtx?.cooling); }
       const useCatalogPropRpm = propLoadForMotor && propRpmDefault.rpm != null && propRpmDefault.rpm > 0;
@@ -1037,8 +1048,22 @@ const ConfiguratorPanel: React.FC = () => {
   // air over the housing (so the temperatures follow).  Every propeller number is the backend's
   // (`/api/propellers/{id}/series`); here it is only interpolated.  "Manual load" gives the
   // current back to the engineer.
-  const propellerOnly = isPropellerCooled(currentContext?.cooling);
-  const hasPropellerOption = hasPropellerCooling(currentContext?.cooling);
+  // The configuration's APPLICATION decides whether any propeller control exists (owner
+  // 2026-10-13): propeller = today's behaviour; robot / aviation / marine = none of the
+  // propeller picker, prop-wash cooling, propeller S1 or thrust (stored propeller data stays,
+  // hidden).  A configuration listing two applications gets a switch; the first is the default.
+  const appList = cleanApplications(basePreset?.applications?.length ? basePreset.applications : currentContext?.applications);
+  const appStoreKey = `${refId}|${baseConfig ?? ''}`;
+  const [appChoice, setAppChoice] = useState<string | null>(() => readAppChoices()[appStoreKey] ?? null);
+  useEffect(() => { setAppChoice(readAppChoices()[appStoreKey] ?? null); }, [appStoreKey]);
+  const pickApplication = (v: string) => {
+    setAppChoice(v);
+    try { localStorage.setItem(APP_CHOICE_LS, JSON.stringify({ ...readAppChoices(), [appStoreKey]: v })); } catch { /* ignore */ }
+  };
+  const application = selectedApplication(appList, appChoice);
+  const effCooling = useMemo(() => coolingForApplication(currentContext?.cooling, application), [currentContext, application]);
+  const propellerOnly = isPropellerCooled(effCooling);
+  const hasPropellerOption = hasPropellerCooling(effCooling);
   const hasPropellerControls = propellerOnly || hasPropellerOption;
   const [propList, setPropList] = useState<PropSummary[] | null>(null);
   useEffect(() => {
@@ -1048,7 +1073,7 @@ const ConfiguratorPanel: React.FC = () => {
     go();
     return () => { dead = true; };
   }, [hasPropellerControls]);
-  const allowedProps = useMemo(() => allowedPropellers(currentContext?.cooling, propList ?? []), [currentContext, propList]);
+  const allowedProps = useMemo(() => allowedPropellers(effCooling, propList ?? []), [effCooling, propList]);
   const coolKey = coolChoiceKey(identity, refId, baseConfig);
   const [coolChoice, setCoolChoice] = useState<CoolChoice>(() => {
     try { return readCoolChoice(localStorage.getItem(PROP_CHOICE_LS), coolKey); } catch { return {}; }
@@ -1816,6 +1841,18 @@ const ConfiguratorPanel: React.FC = () => {
           {/* The cooling system of a machine the registry gives no cooling for (typed air speed or
               a liquid jacket).  It moved here from the removed "Estimated temperatures" block
               (owner 2026-10-12) and feeds the ONE temperature row in the results. */}
+          {hasApplicationSwitch(appList) && (
+            <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mb: 0.75 }}>
+              <Typography sx={{ ...LABEL, flex: '1 1 auto', minWidth: 0 }} title={tx('configureApplication.tip')}>{tx('configureApplication.label')}</Typography>
+              <ToggleButtonGroup exclusive size="small" value={application}
+                onChange={(_, v) => { if (v) pickApplication(v); }}>
+                {APPLICATIONS.filter((a) => appList.includes(a)).map((a) => (
+                  <ToggleButton key={a} value={a} title={tx('configureApplication.tip')}
+                    sx={{ px: 1, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)', '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>{tx(`configureApplication.${a}`)}</ToggleButton>
+                ))}
+              </ToggleButtonGroup>
+            </Box>
+          )}
           {ctxDone && !hasPropellerControls && (
             <CoolingControls diameterMm={thermalGeom.statorOD_mm} />
           )}

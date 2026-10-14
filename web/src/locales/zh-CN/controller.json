@@ -705,5 +705,13 @@
     "partRefTip": "客户自备部件：参与场计算和损耗，但不计入质量；按其建模质量显示。",
     "ironSplitStator": "定子铁损 {st} W：磁滞 {sh} / 涡流 {se} / 附加 {sx} W。",
     "ironSplitRotor": "转子铁损 {rt} W：磁滞 {rh} / 涡流 {re} / 附加 {rx} W。"
+  },
+  "configureApplication": {
+    "label": "应用",
+    "tip": "该电机的用途。它决定是否提供螺旋桨相关控件。",
+    "propeller": "螺旋桨",
+    "robot": "机器人",
+    "aviation": "航空",
+    "marine": "船舶"
   }
 }

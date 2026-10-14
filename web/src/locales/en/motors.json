@@ -129,5 +129,22 @@
   "usedBy": "Used by",
   "fields": "Fields",
   "close": "Close",
-  "compare": "Compare"
+  "compare": "Compare",
+  "applications": {
+    "label": "Application",
+    "all": "All applications",
+    "propeller": "Propeller",
+    "robot": "Robot",
+    "aviation": "Aviation",
+    "marine": "Marine",
+    "filterTip": "Show only the configurations built for one application.",
+    "badgeTip": "Built for: {application}.",
+    "notSet": "Application not set",
+    "notSetTip": "This configuration has no applications list, so it behaves as before. Set applications in its configuration file.",
+    "invalidTip": "The applications value is invalid: {error}",
+    "adminTitle": "Applications",
+    "adminTip": "The application each configuration is built for. The first entry is the default.",
+    "adminAllSet": "Every configuration has an application.",
+    "adminCount": "{n} not set"
+  }
 }

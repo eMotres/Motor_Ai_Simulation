@@ -129,5 +129,22 @@
   "usedBy": "使用方",
   "fields": "字段",
   "close": "关闭",
-  "compare": "对比"
+  "compare": "对比",
+  "applications": {
+    "label": "应用",
+    "all": "全部应用",
+    "propeller": "螺旋桨",
+    "robot": "机器人",
+    "aviation": "航空",
+    "marine": "船舶",
+    "filterTip": "只显示面向某一应用的配置。",
+    "badgeTip": "适用于：{application}。",
+    "notSet": "未设置应用",
+    "notSetTip": "该配置没有应用列表，行为与之前相同。请在其配置文件中设置 applications。",
+    "invalidTip": "应用取值无效：{error}",
+    "adminTitle": "应用",
+    "adminTip": "每个配置所面向的应用。第一项为默认值。",
+    "adminAllSet": "所有配置都已设置应用。",
+    "adminCount": "{n} 个未设置"
+  }
 }

@@ -142,6 +142,9 @@ def _num(v: Any) -> Optional[float]:
     return x if math.isfinite(x) else None
 
 
+from motor_ai_sim.applications import config_applications, default_application  # noqa: E402
+
+
 def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None,
               variants: Optional[list] = None) -> Dict[str, Any]:
     """One configuration of a die as a Configure PRESET: every knob the tuner has, read from
@@ -189,6 +192,9 @@ def preset_of(doc: Dict[str, Any], die_geometry: Optional[Dict[str, Any]] = None
         "battery": pack(doc.get("battery")),
         "device": (str(ctrl.get("device")).strip() or None) if ctrl.get("device") else None,
         "pwm_variants": vs,
+        # the configuration's own application list (a die can mix applications)
+        "applications": config_applications(doc)[0],
+        "application": default_application(config_applications(doc)[0]),
         # the drive a preset opens on: its first computed variant, else Sine
         "drive_variant": vs[0]["id"] if vs else None,
     }
@@ -254,7 +260,8 @@ def cooling(fam: Optional[Dict[str, Any]], card: Optional[Dict[str, Any]] = None
     fam = fam if isinstance(fam, dict) else {}
     die = str(fam.get("die") or (card or {}).get("name") or "").strip()
     cfg = str(fam.get("name") or "").strip() or None
-    return cooling_options(die, cfg)
+    from motor_ai_sim.applications import config_applications
+    return cooling_options(die, cfg, applications=config_applications(fam)[0])
 
 
 def context(card: Optional[Dict[str, Any]], family_doc: Optional[Dict[str, Any]]
@@ -262,7 +269,13 @@ def context(card: Optional[Dict[str, Any]], family_doc: Optional[Dict[str, Any]]
     """Everything Configure reads about one machine's physical limits."""
     fam = family_doc if isinstance(family_doc, dict) else {}
     ctrl = fam.get("controller") if isinstance(fam.get("controller"), dict) else {}
+    from motor_ai_sim.applications import config_applications, default_application
+    apps, apps_err = config_applications(fam)
     return {
+        # what the machine is for (owner 2026-10-13); the first entry is the default
+        "applications": apps,
+        "application": default_application(apps),
+        "applications_error": apps_err,
         "limits": hand_limits(card),
         "current": current_limit(ctrl),
         "modulation": modulation(ctrl),

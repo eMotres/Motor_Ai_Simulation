@@ -21,6 +21,11 @@ export interface ConfigureContext {
     v_cell_min?: number | null; v_cell_nom?: number | null; v_cell_max?: number | null;
   } | null;
   has_family_doc: boolean;
+  /** what the machine is for (owner 2026-10-13): the configuration's `applications`, first = default;
+   *  `[]` = not set (today's behaviour).  `applications_error` names a malformed value. */
+  applications?: string[];
+  application?: string | null;
+  applications_error?: string | null;
   /** what cooling the die may offer (config/cooling_options.yaml) — `propeller_air` for the Ø40 drone motors */
   cooling?: import('./configuratorPropeller').CoolingInfo;
   /** the temperatures a winding / magnet is judged against */

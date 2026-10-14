@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
 
 from motor_ai_sim import auth as _auth
+from motor_ai_sim.applications import config_applications, default_application
 from motor_ai_sim.auth import caller_identity, require_admin
 from motor_ai_sim.config import get_config
 from motor_ai_sim import workspace as _WS
@@ -801,6 +802,13 @@ def _save_yaml(p: Path, d: dict) -> None:
     # redirected the other way.  With layering off this is a no-op.
     p = _write_target(p)
     p.parent.mkdir(parents=True, exist_ok=True)
+    # An unknown `applications` value is refused loudly, never written (owner 2026-10-13).
+    if isinstance(d, dict) and "applications" in d:
+        from motor_ai_sim.applications import ApplicationsError, validate_applications
+        try:
+            validate_applications(d.get("applications"))
+        except ApplicationsError as exc:
+            raise HTTPException(422, detail=f"{p.name}: {exc}")
     # Derived geometry is never written stale (2026-09-30): a die document's
     # `geometry` and a configuration's `geometry_overrides` get every derived
     # field they carry recomputed from their own inputs.  Behind the same
@@ -2121,8 +2129,16 @@ def tree(response: Response, authorization: str = Header(default=None)):
             w = c.get("winding") or {}
             _bsig = _build_sig(die, c)
             _role, _role_src = _config_role(c)
+            _apps, _apps_err = config_applications(c)
             cfgs.append({
                 "name": cf.stem,
+                # What the machine is for (owner 2026-10-13): the first entry is the
+                # default.  `application_set` False = the yaml has no usable list (Admin
+                # flags it); `applications_error` names a malformed value.
+                "applications": _apps,
+                "application": default_application(_apps),
+                "application_set": bool(_apps),
+                "applications_error": _apps_err,
                 # Derived from the duties, not from the creation-time toggle —
                 # see `_config_role`.  `role_stored` is kept beside it so a
                 # stale yaml value is visible rather than silently replaced.

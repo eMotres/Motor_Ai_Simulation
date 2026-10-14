@@ -5,6 +5,8 @@ fastapi==0.129.0
 uvicorn[standard]==0.41.0
 pydantic==2.12.5
 python-multipart>=0.0.9
+# Admin > Analytics calls the self-hosted Umami REST API server-side (routes/admin_analytics.py).
+httpx==0.28.1
 numpy==2.4.4
 scipy==1.17.1
 shapely==2.1.2

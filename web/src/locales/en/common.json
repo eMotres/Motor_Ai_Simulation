@@ -70,6 +70,47 @@
     "saveError": "The choice was not saved: {message}",
     "close": "Close"
   },
+  "commPrefs": {
+    "title": "Communication preferences",
+    "menu": "E-mail preferences",
+    "intro": "Send me e-mail about (optional, you can change this at any time):",
+    "introHelp": "Nothing is ticked for you. We write to you about a topic only if you tick it. You can change your mind here at any time, or with the unsubscribe link in every e-mail. Messages about your account and security are not affected.",
+    "topics": {
+      "product_updates": "Product updates: release notes and new features",
+      "new_motors": "New motors: additions to the catalogue and new passports",
+      "engineering_content": "Engineering content: articles, webinars and case studies",
+      "co_development": "Co-development: beta programmes and invitations to build modules together"
+    },
+    "for": "Preferences for {account}",
+    "save": "Save",
+    "saved": "Saved.",
+    "saveError": "Not saved: {message}",
+    "loadError": "Could not load your preferences: {message}",
+    "unsubscribeAll": "Unsubscribe from all",
+    "unsubscribeAllHelp": "Switches every topic off at once. You can tick topics again later.",
+    "unsubscribed": "You are unsubscribed. We will not send you any updates.",
+    "invalidLink": "This link is not valid or has expired. Sign in and open E-mail preferences from the account menu.",
+    "signInHint": "Sign in to see your preferences.",
+    "signIn": "Sign in",
+    "legal": "We use this choice only to decide which e-mails you receive. Legal basis: your consent, withdrawable at any time.",
+    "privacy": "Privacy notice",
+    "textVersion": "Wording {version}",
+    "openApp": "Open AeroStator",
+    "dataSharing": "Dataset sharing settings",
+    "nda": {
+      "title": "NDA, 3-D tools and STEP",
+      "intro": "The 3-D tools and the STEP download open after the NDA.",
+      "signed": "Your NDA is signed. The 3-D tools and STEP downloads are open.",
+      "sign": "Sign the NDA online",
+      "signHelp": "Takes about a minute. Unlocks the 3-D tools and STEP.",
+      "request": "Request the NDA",
+      "requestHelp": "Online signing is not open yet. We will send you the agreement.",
+      "requested": "Requested. We will contact you.",
+      "requestError": "The request was not sent: {message}",
+      "signinSign": "Sign in to sign the NDA online",
+      "signinRequest": "Sign in to request the NDA"
+    }
+  },
   "nodes": {
     "hint": "FEM runs are heavy; for regular work connect your own server",
     "hintTip": "Your own server runs your jobs with the same solver version. It connects out over HTTPS, so there are no ports to open, and its CPU time does not count against fair use.",

@@ -19,6 +19,7 @@ import { NoticeBell, NewsletterLinkHandler } from './NoticeBell';
 import { useTranslation } from 'react-i18next';
 import LanguageSwitcher from '../common/LanguageSwitcher';
 import CookieIcon from '@mui/icons-material/Cookie';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
 import { openCookieSettings, useAnalyticsState } from '../common/AnalyticsConsent';
 import { OPEN_COMPUTE_NODES_EVENT } from '../../lib/accessUi';
 
@@ -107,6 +108,10 @@ const AuthButton: React.FC = () => {
           onClick={() => { setAnchor(null); setShareOpen(true); }}>
           <ListItemIcon><DatasetIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           {t('dataSharing.menu')}
+        </MenuItem>
+        <MenuItem component="a" href="/preferences" sx={{ fontSize: 12.5 }} onClick={() => setAnchor(null)}>
+          <ListItemIcon><MailOutlineIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          {t('commPrefs.menu')}
         </MenuItem>
         {analyticsState !== 'blocked' && (
           <MenuItem sx={{ fontSize: 12.5 }}

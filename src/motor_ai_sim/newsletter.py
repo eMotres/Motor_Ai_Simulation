@@ -289,8 +289,11 @@ def confirm(token: str) -> Optional[str]:
     return email
 
 
-def unsubscribe(email: str, *, source: str, campaign: str = "") -> bool:
-    """Instant.  Returns True when a subscription/pending consent ended."""
+def unsubscribe(email: str, *, source: str, campaign: str = "", propagate: bool = True) -> bool:
+    """Instant.  Returns True when a subscription/pending consent ended.
+
+    ``propagate``: an unsubscribe is a wish to hear nothing more, so it also switches off every topic of the communication
+    preferences (``comm_prefs``); that module passes False when it is the one calling."""
     email = U._norm(email)
     with _LOCK:
         d = _load()
@@ -305,6 +308,12 @@ def unsubscribe(email: str, *, source: str, campaign: str = "") -> bool:
             camp["unsubscribes"] = int(camp.get("unsubscribes") or 0) + 1
         _save(d)
     log.info("newsletter: unsubscribed via %s", source)
+    if propagate:
+        try:
+            from motor_ai_sim import comm_prefs as CP
+            CP.unsubscribe_all(email, source="prefs_page" if source == "settings" else "unsubscribe")
+        except Exception as e:                               # noqa: BLE001 - the newsletter record is already saved
+            log.warning("newsletter: comm_prefs unsubscribe failed: %s", type(e).__name__)
     return True
 
 

@@ -137,7 +137,11 @@ _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/account/export/download",
                      # double opt-in + one-click unsubscribe (mail clients POST
                      # without a session; rate-limited in routes/newsletter.py)
-                     "/api/newsletter/confirm", "/api/newsletter/unsubscribe")
+                     "/api/newsletter/confirm", "/api/newsletter/unsubscribe",
+                     # communication preferences by signed e-mail link and the
+                     # RFC 8058 one-click POST (the token is the credential;
+                     # failures are rate-limited in routes/comm_prefs.py)
+                     "/api/comm-prefs")
 
 
 #: The worker-facing routes of docs/BYO_COMPUTE.md (heartbeat, lease, progress,

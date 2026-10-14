@@ -75,7 +75,7 @@ export const BOTS = [
   'Applebot', 'DuckDuckBot', 'CCBot', 'Bytespider', 'Baiduspider',
 ];
 /** Never indexed: the API, OAuth, the MCP endpoint and the consent page. */
-export const DISALLOW = ['/api/', '/oauth/', '/mcp', '/agent-consent'];
+export const DISALLOW = ['/api/', '/oauth/', '/mcp', '/agent-consent', '/preferences', '/zh-cn/preferences'];
 
 const esc = (s) => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');

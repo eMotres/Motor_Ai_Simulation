@@ -165,6 +165,10 @@ class RegisterReq(BaseModel):
     password: str
     name: str = ""
     newsletter: bool = False        # the sign-up checkbox (unchecked default)
+    #: The four opt-in topics of the communication preferences ({topic: bool}, all unticked by default) and the language the
+    #: wording was shown in; recorded with the consent proof (motor_ai_sim.comm_prefs) once the account exists.
+    comm_prefs: Optional[dict] = None
+    lang: str = "en"
     #: Sign-up started inside an OAuth authorization window (MCP connector):
     #: the consent-page path ``/agent-consent?request=<id>``.  A NEW account
     #: then gets a single-use continuation bound to {request, this address};
@@ -205,6 +209,27 @@ def _continuation_path(rid: Optional[str], email: str) -> tuple[str, str]:
     return O.consent_path(rid) + "&" + urlencode({"continue": secret}), host
 
 
+def _comm_prefs_ticked(raw) -> dict:
+    """The topics the sign-up form ticked ({topic: True}); loud 422 for anything that is not {known topic: bool}."""
+    if raw in (None, {}):
+        return {}
+    from motor_ai_sim import comm_prefs as CP
+    try:
+        checked = CP._check(raw)
+    except ValueError as e:
+        raise HTTPException(422, detail=str(e))
+    return {t: True for t, v in checked.items() if v}
+
+
+def _record_signup_topics(email: str, topics: dict, source: str, ip: str, lang: str) -> None:
+    """Consent given at sign-up; a failure to store it never blocks the account (the user can tick the boxes again)."""
+    try:
+        from motor_ai_sim import comm_prefs as CP
+        CP.set_topics(email, topics, source=source, ip=ip, lang=lang)
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("comm_prefs: sign-up consent of a new account was not stored (%s)", type(e).__name__)
+
+
 def _newsletter_after_proof(email: str) -> None:
     """The address is proven now: mail the newsletter double opt-in link if
     the sign-up checkbox was ticked (one mail at a time, never both at once)."""
@@ -236,6 +261,7 @@ def register(req: RegisterReq, request: Request):
     if E.SIGNUP_IP.blocked(ip):
         raise HTTPException(429, detail="too many sign-ups from this network — try again later")
     rid = _oauth_rid(req.return_to)
+    topics = _comm_prefs_ticked(req.comm_prefs)
     E.SIGNUP_IP.hit(ip)
     may_mail = _mail_allowed(email, ip)
     outcome = U.register_self(email, req.password, req.name.strip())
@@ -246,6 +272,9 @@ def register(req: RegisterReq, request: Request):
         # proof (/verify or admin approval).  Existing accounts: ignored.
         from motor_ai_sim import newsletter as N
         N.record_pending(email, source="signup", ip=ip)
+    if outcome == "created" and topics:
+        # The ticked topics are recorded with the wording shown; mailing needs the verified address anyway.
+        _record_signup_topics(email, topics, "signup", ip, req.lang)
     if may_mail:
         if outcome == "created":
             # Only a row THIS request created gets the continuation: an older
@@ -383,6 +412,8 @@ def pending_approve(email: str, _admin: dict = Depends(require_admin)):
 class GoogleReq(BaseModel):
     credential: str            # the GIS ID token from the Google button
     newsletter: bool = False   # checkbox under the button; FIRST sign-in only
+    comm_prefs: Optional[dict] = None   # the four opt-in topics under the button; FIRST sign-in only
+    lang: str = "en"
 
 
 @router.post("/google")
@@ -402,6 +433,7 @@ def google_login(req: GoogleReq, request: Request):
         raise HTTPException(403, detail="Google account email is not verified")
     email = (claims.get("email") or "").strip().lower()
     first_sign_in = U.get_user(email) is None
+    topics = _comm_prefs_ticked(req.comm_prefs) if first_sign_in else {}
     role = _registry_role(email)
     if role == "__disabled__":
         raise HTTPException(403, detail="this account is disabled")
@@ -410,6 +442,8 @@ def google_login(req: GoogleReq, request: Request):
     # unproven password — see users.link_google).
     U.link_google(email)
     token = _start_session(email, method="google", request=request)
+    if topics:
+        _record_signup_topics(email, topics, "google", _ip(request), req.lang)
     if first_sign_in and req.newsletter:
         # Google proved the mailbox; the newsletter still needs its own
         # double opt-in click (consent != mailbox ownership).

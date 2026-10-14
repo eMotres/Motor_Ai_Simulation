@@ -36,6 +36,7 @@ import { Box, Button, Link, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { GOOGLE_CLIENT_ID } from '../../lib/localAuth';
 import { useAuth } from '../../contexts/AuthContext';
+import LanguageSwitcher from '../common/LanguageSwitcher';
 import ConceptDiagram from './ConceptDiagram';
 import { STEP_IDS } from './conceptLayout';
 import { BoatIcon, DroneIcon, PlusIcon, RobotIcon } from './landingIcons';
@@ -240,7 +241,12 @@ const Landing: React.FC = () => {
       backgroundImage: (th) =>
         `radial-gradient(1100px 420px at 50% -120px, ${th.palette.primary.main}22, transparent 70%)`,
     }}>
-      <Box sx={{ maxWidth: 1200, mx: 'auto', px: { xs: 2, sm: 4 }, pt: { xs: 5, sm: 7 }, pb: 4 }}>
+      <Box sx={{ maxWidth: 1200, mx: 'auto', px: { xs: 2, sm: 4 }, pt: { xs: 5, sm: 7 }, pb: 4,
+        position: 'relative' }}>
+        {/* Language, visible before sign-in (the first visit is auto-detected). */}
+        <Box sx={{ position: 'absolute', top: { xs: 8, sm: 12 }, right: { xs: 16, sm: 32 } }}>
+          <LanguageSwitcher variant="inline" />
+        </Box>
         {/* ── Hero: brand, slogan, one line of what it is, the way in ── */}
         <Box sx={{ textAlign: 'center' }}>
           <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 1.5,

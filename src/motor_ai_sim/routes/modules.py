@@ -33,4 +33,6 @@ def list_modules() -> Dict[str, Any]:
         "modules": manifests,
         "capabilities": reg.capabilities(),
         "count": len(manifests),
+        # drive-train components that failed their conformance gate (name + reason)
+        "rejected_components": list(reg.rejected),
     }

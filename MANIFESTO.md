@@ -137,6 +137,10 @@ Stages, in order; we commit only to "next", not to dates.
 - **Discussions** — ideas for modules, ports and formats.
 - **Pull requests** — welcome; every commit is signed off under the Developer
   Certificate of Origin (`git commit -s`).
+- **Modules** — build your own propeller, gearbox or other component and have it
+  checked and connected to our motors: [docs/COMPONENT_SDK.md](docs/COMPONENT_SDK.md)
+  (the interface) and [docs/MODULE_CONTRIBUTION_RULES.md](docs/MODULE_CONTRIBUTION_RULES.md)
+  (the rules for contributors and their AI agents).
 
 ## Licence
 

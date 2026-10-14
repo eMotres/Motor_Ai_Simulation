@@ -21,6 +21,9 @@ from .result_ir import FieldArray, FieldResults, ResultIR, ScalarResults, Series
 from .cost_ir import CostIR, CostLine
 from .material_ir import MaterialIR, MaterialProps
 from .signals import ControlSignal, Excitation, MachineState
+from .drivetrain_ir import (EfficiencyMap, ModelSource, MotorLimits, MotorPerformanceIR, OutOfValidity,
+                            PropulsorIR, ShaftInterface, ShaftLoadIR, TransmissionIR, TransmissionLimits,
+                            Validity)
 
 __all__ = [
     "CONTRACTS_VERSION",
@@ -31,4 +34,6 @@ __all__ = [
     "CostIR", "CostLine",
     "MaterialIR", "MaterialProps",
     "Excitation", "ControlSignal", "MachineState",
+    "MotorPerformanceIR", "TransmissionIR", "ShaftLoadIR", "PropulsorIR", "EfficiencyMap", "MotorLimits",
+    "TransmissionLimits", "ShaftInterface", "ModelSource", "Validity", "OutOfValidity",
 ]

@@ -1,0 +1,10 @@
+{
+  "id": "my_belt_drive",
+  "capability": "transmission.my_belt_drive",
+  "version": "0.1.0",
+  "author": "TODO name <contact>",
+  "licence": "Apache-2.0",
+  "agent": null,
+  "requested_status": "community",
+  "core_contracts_version": "0.1.0"
+}

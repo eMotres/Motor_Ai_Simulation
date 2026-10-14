@@ -8,6 +8,13 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **Component SDK for drive-train modules** (owner 2026-10-14). Contracts `MotorPerformanceIR`, `TransmissionIR`,
+  `ShaftLoadIR` / `PropulsorIR`, their conformance gates, registry discovery of `transmission.<id>` / `load.<id>`
+  (`modules/component_plugins/`), one reference single-stage gearbox, and a system solve (operating point and
+  propeller S1 through a gearbox) in `modules/drivetrain/`. `ModuleManifest` gained `status` and `author`;
+  `GET /api/modules` lists components and `rejected_components`; `propeller_s1.solve_point` gained an optional
+  `load` hook (default unchanged). No Configure or result changes. Docs: `docs/COMPONENT_SDK.md`,
+  `docs/MODULE_CONTRIBUTION_RULES.md`, `docs/module_template/`.
 - **The help assistant takes every question and bug** (owner 2026-10-05). The separate Report form is gone: the user
   writes, the assistant answers, asks for what is missing and, for a bug, a feature request, an account problem or a
   question it cannot answer, proposes a ticket (type, title, description) that the user checks, edits and sends with

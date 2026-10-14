@@ -44,6 +44,10 @@ class ModuleManifest(BaseModel):
     contracts_version: str
     summary: str = ""
     ui: Optional[UIContribution] = None
+    # Trust level (docs/MODULE_CONTRIBUTION_RULES.md): "core" for the portal's own modules; for
+    # drive-train components "reference" | "community" | "verified" | "integrated".
+    status: str = "core"
+    author: Optional[str] = None               # who maintains it (components); None for core modules
 
 
 @runtime_checkable

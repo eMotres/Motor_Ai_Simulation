@@ -1,0 +1,28 @@
+# Copy to .github/workflows/conformance.yml in aerostator-modules.
+name: conformance
+on:
+  pull_request:
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install the core contracts at the pinned release
+        run: |
+          pip install pytest
+          pip install "git+https://github.com/eMotres/Motor_Ai_Simulation.git@${CORE_REF}"
+        env:
+          CORE_REF: v0.1.0   # TODO: the tag of the core release that defines the contracts you target
+      - name: One module per pull request
+        run: |
+          changed=$(git diff --name-only origin/${{ github.base_ref }}...HEAD | grep '^modules/' | cut -d/ -f2 | sort -u | wc -l)
+          test "$changed" -le 1 || { echo "one module per pull request ($changed changed)"; exit 1; }
+      - name: No binary blobs, no TODO left
+        run: |
+          ! git diff --numstat origin/${{ github.base_ref }}...HEAD | grep -P '^-\t-\t' || { echo "binary file in the diff"; exit 1; }
+          ! grep -rn "TODO" modules/*/module.py modules/*/PROVENANCE.md || { echo "unfilled TODO"; exit 1; }
+      - name: Conformance and module tests
+        run: |
+          for d in modules/*/; do (cd "$d" && PYTHONPATH=. python -m pytest -q test_module.py) || exit 1; done

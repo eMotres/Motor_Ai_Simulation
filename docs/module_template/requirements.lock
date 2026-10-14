@@ -1,0 +1,3 @@
+# Pinned runtime dependencies of THIS module, free licences only (MIT, BSD, Apache-2.0, ISC, PSF).
+# Empty is the best answer: the contracts need nothing beyond the core.
+# Example line (delete): somepackage==1.2.3   # MIT

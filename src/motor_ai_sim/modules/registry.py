@@ -7,7 +7,7 @@ geometry.2d provider is present).
 """
 from __future__ import annotations
 
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from .base import Module, ModuleManifest
 
@@ -20,6 +20,9 @@ class ModuleRegistry:
     def __init__(self) -> None:
         self._by_name: Dict[str, Module] = {}
         self._providers: Dict[str, List[Module]] = {}
+        # components dropped in component_plugins/ that FAILED their conformance gate:
+        # [{"module": ..., "capability": ..., "reason": ...}] - shown by /api/modules
+        self.rejected: List[Dict[str, str]] = []
 
     def register(self, module: Module) -> "ModuleRegistry":
         man = module.manifest()
@@ -42,6 +45,20 @@ class ModuleRegistry:
         if len(ps) != 1:
             raise DependencyError(f"expected exactly 1 provider of {capability!r}, found {len(ps)}")
         return ps[0]
+
+    def providers_with_prefix(self, prefix: str) -> List[Module]:
+        """All providers whose capability starts with prefix (e.g. "transmission.":
+        every gearbox/belt module, whatever its id) - the drive-train component lookup."""
+        return [m for cap in sorted(self._providers) if cap.startswith(prefix) for m in self._providers[cap]]
+
+    def components(self, status: Optional[str] = None) -> List[ModuleManifest]:
+        """Manifests of drive-train components (capability transmission.* / load.*),
+        optionally only those at one trust level (docs/MODULE_CONTRIBUTION_RULES.md)."""
+        from ..contracts.conformance import COMPONENT_PREFIXES
+        out: List[ModuleManifest] = []
+        for p in COMPONENT_PREFIXES:
+            out += [m.manifest() for m in self.providers_with_prefix(p)]
+        return [m for m in out if status is None or m.status == status]
 
     def manifests(self) -> List[ModuleManifest]:
         return [m.manifest() for m in self._by_name.values()]

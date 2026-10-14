@@ -180,10 +180,10 @@ async function postPlain(path: string, body: unknown): Promise<{ message?: strin
  *  `returnTo`: the OAuth consent page (`/agent-consent?request=…`) when the
  *  sign-up started inside an AI app's authorization window — the mailed link
  *  then opens that page again and the pending authorization is kept alive. */
-export function registerAccount(email: string, password: string, name: string, newsletter = false,
-  returnTo?: string) {
+export function registerAccount(email: string, password: string, name: string, commPrefs: Partial<Record<string, boolean>> = {},
+  lang = 'en', returnTo?: string) {
   return postPlain('/api/auth/register', {
-    email, password, name, newsletter, ...(returnTo ? { return_to: returnTo } : {}),
+    email, password, name, comm_prefs: commPrefs, lang, ...(returnTo ? { return_to: returnTo } : {}),
   });
 }
 
@@ -256,10 +256,10 @@ export function clearEmailLink(): void {
 }
 
 /** GIS ID token (1-hour life) → our 30-day token. */
-/** `newsletter` = the consent box under the button; the server applies it on
- *  the FIRST sign-in only (and then mails a double opt-in link). */
-export function googleExchange(credential: string, newsletter = false) {
-  return post('/api/auth/google', { credential, newsletter });
+/** `commPrefs` = the e-mail opt-in boxes under the button (only the ticked ones); the server applies them on the FIRST
+ *  sign-in only and records them with the wording shown in `lang` (comm_prefs.py). */
+export function googleExchange(credential: string, commPrefs: Partial<Record<string, boolean>> = {}, lang = 'en') {
+  return post('/api/auth/google', { credential, comm_prefs: commPrefs, lang });
 }
 
 /** Best-effort decode of a JWT payload (display-only fields like name/picture). */

@@ -120,6 +120,7 @@ from motor_ai_sim.routes.report import router as report_router
 from motor_ai_sim.routes.my_motors import router as my_motors_router
 from motor_ai_sim.routes.auth_local import router as auth_local_router
 from motor_ai_sim.routes.newsletter import router as newsletter_router, notices_router
+from motor_ai_sim.routes.comm_prefs import router_me as comm_prefs_me_router, router_token as comm_prefs_token_router, router_admin as comm_prefs_admin_router
 from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.routes.account import router as account_router
 from motor_ai_sim.routes.account_data import router as account_data_router
@@ -332,6 +333,9 @@ app.include_router(my_motors_router)
 app.include_router(auth_local_router)
 app.include_router(newsletter_router)
 app.include_router(notices_router)
+app.include_router(comm_prefs_me_router)
+app.include_router(comm_prefs_token_router)
+app.include_router(comm_prefs_admin_router)
 app.include_router(sweep_config_router)
 app.include_router(account_router)
 app.include_router(account_data_router)

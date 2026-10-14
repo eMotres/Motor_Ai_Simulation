@@ -7,9 +7,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, Box, TextField, Button,
-  Typography, CircularProgress, Tabs, Tab, Link, FormControlLabel, Checkbox,
+  Typography, CircularProgress, Tabs, Tab, Link,
 } from '@mui/material';
-import { CONSENT_LINE, CONSENT_HELP } from '../../lib/newsletterApi';
 import {
   decodeJwtPayload, googleExchange, loadGis, GisUnreachableError, passwordLogin,
   registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset,
@@ -18,6 +17,8 @@ import {
 } from '../../lib/localAuth';
 import { isChineseVisitor } from '../../i18n/detectInitialLanguage';
 import HelpTip from '../common/HelpTip';
+import CommPrefsBoxes from '../common/CommPrefsBoxes';
+import { emptyTopics, tickedTopics, type Topics } from '../../lib/commPrefsLogic';
 import { useTranslation } from 'react-i18next';
 
 interface Props {
@@ -41,7 +42,7 @@ const defaultTab = (): 'google' | 'email' =>
   GOOGLE_CLIENT_ID && !isChineseVisitor() ? 'google' : 'email';
 
 const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, initialTab, returnTo }) => {
-  const { t } = useTranslation('common');
+  const { t, i18n } = useTranslation('common');
   const min = PASSWORD_MIN_LEN;
   const [tab, setTab] = useState<'google' | 'email'>(
     () => (GOOGLE_CLIENT_ID ? (initialTab ?? defaultTab()) : 'email'));
@@ -60,22 +61,16 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   const [touched, setTouched] = useState(false);
   const [gisErr, setGisErr] = useState<string | null>(null);
   const gButtonRef = useRef<HTMLDivElement>(null);
-  // Newsletter consent: UNCHECKED by default (GDPR); a ref so the GIS callback
-  // registered once still reads the current box.
-  const [newsletter, setNewsletter] = useState(false);
-  const newsletterRef = useRef(false);
-  newsletterRef.current = newsletter;
+  // E-mail opt-in topics (communication preferences): every box UNTICKED by default (GDPR); a ref so the GIS callback
+  // registered once still reads the current boxes.  The server records them with the wording shown (comm_prefs.py).
+  const [topics, setTopics] = useState<Topics>(emptyTopics());
+  const topicsRef = useRef<Topics>(topics);
+  topicsRef.current = topics;
+  const uiLang = (i18n.resolvedLanguage ?? 'en') === 'zh-CN' ? 'zh-CN' : 'en';
+  const langRef = useRef(uiLang);
+  langRef.current = uiLang;
 
-  const consentBox = (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-      <FormControlLabel
-        control={<Checkbox size="small" checked={newsletter}
-          onChange={(e) => setNewsletter(e.target.checked)} />}
-        label={<Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{t('auth.consent.line', { defaultValue: CONSENT_LINE })}</Typography>}
-        sx={{ mr: 0 }} />
-      <HelpTip i18nKey="auth.consent.help" ns="common" title={CONSENT_HELP} />
-    </Box>
-  );
+  const consentBox = <CommPrefsBoxes value={topics} onChange={setTopics} compact />;
 
   // Creating an account (form or first Google sign-in) accepts the terms.
   const termsLine = (
@@ -138,7 +133,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
           callback: (resp: { credential?: string }) => {
             if (!resp.credential) return;
             const claims = decodeJwtPayload(resp.credential);
-            void googleExchange(resp.credential, newsletterRef.current)
+            void googleExchange(resp.credential, tickedTopics(topicsRef.current), langRef.current)
               .then(({ token, user }) => onSignedIn(token, {
                 ...user,
                 name: user.name || String(claims.name ?? ''),
@@ -189,8 +184,8 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         setEmail(''); setPassword('');
         onSignedIn(token, user);
       } else if (mode === 'register') {
-        const j = await registerAccount(email.trim(), password, name.trim(), newsletter, returnTo);
-        setPassword(''); setPassword2(''); setTouched(false); setNewsletter(false);
+        const j = await registerAccount(email.trim(), password, name.trim(), tickedTopics(topics), uiLang, returnTo);
+        setPassword(''); setPassword2(''); setTouched(false); setTopics(emptyTopics());
         setMode('signin');
         setInfo(returnTo ? t('auth.info.checkConfirmationReturn')
           : (j.message || t('auth.info.checkConfirmation')));

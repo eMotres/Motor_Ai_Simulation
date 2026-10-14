@@ -5,6 +5,8 @@ import './index.css'
 import './i18n'
 import App from './App.tsx'
 import OAuthConsent from './components/auth/OAuthConsent'
+import CommPrefsPage from './components/auth/CommPrefsPage'
+import { isPreferencesPath } from './lib/commPrefsLogic'
 import { AuthProvider } from './contexts/AuthContext'
 import { loadThemeMode } from './theme'
 
@@ -92,7 +94,9 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
       {/* OAuth consent for MCP connectors (docs/MCP_2026-09-28.md): a page of its own */}
-      {window.location.pathname === '/agent-consent' ? <OAuthConsent /> : <App />}
+      {/* Communication preferences (mailed link, account menu): a page of its own */}
+      {window.location.pathname === '/agent-consent' ? <OAuthConsent />
+        : isPreferencesPath(window.location.pathname) ? <CommPrefsPage /> : <App />}
     </AuthProvider>
   </StrictMode>,
 )

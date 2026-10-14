@@ -23,6 +23,8 @@ published/<ws_id>           removed (the person's published designs)
 agent_keys.json             every key of the account removed
 oauth_grants.json           grants, codes and pending requests removed
 newsletter.json             subscriber record + notice reads removed
+comm_prefs.json             communication-preference state removed; the consent
+                            history (comm_prefs_history.jsonl) is pseudonymised (proof of consent kept)
 support access requests     removed (contact data the person gave us)
 mcp_audit.jsonl             e-mail -> subject hash (security log, kept)
 auth_events.jsonl           e-mail -> subject hash, IP re-hashed (kept)
@@ -369,6 +371,10 @@ def purge(email: str, *, actor: str, reason: str = "") -> Dict[str, Any]:
             mutate_json(O.store_path(), _fn, default={})
         return n["n"]
 
+    def _comm_prefs():
+        from motor_ai_sim import comm_prefs as CP
+        return CP.erase(email, subj)
+
     def _newsletter():
         from motor_ai_sim import newsletter as N
         with N._LOCK:
@@ -481,6 +487,7 @@ def purge(email: str, *, actor: str, reason: str = "") -> Dict[str, Any]:
 
     for name, fn in (("deletion_request", _request), ("sessions", _sessions), ("agent_keys", _agent_keys),
                      ("oauth", _oauth), ("newsletter", _newsletter),
+                     ("comm_prefs", _comm_prefs),
                      ("support_requests", _support), ("mcp_audit", _mcp_audit),
                      ("auth_events", _auth_events), ("usage", _usage),
                      ("admin_audit", _admin_audit), ("workspace", _workspace),
@@ -701,6 +708,11 @@ def build_export(email: str, dest: Optional[Path] = None) -> Path:
             "published/          what you published to other users\n"))
         zf.writestr("account.json", js(account))
         zf.writestr("consents.json", js(nl))
+        try:
+            from motor_ai_sim import comm_prefs as _CP
+            zf.writestr("communication_preferences.json", js(_CP.export_for(email)))
+        except Exception:                                   # noqa: BLE001 - the rest of the export must still be built
+            pass
         zf.writestr("deletion.json", js(pending(email)))
         zf.writestr("sessions.json", js([S.public(r) for r in S.list_for(email)]))
         zf.writestr("agent_keys.json", js(K.list_keys(email)))

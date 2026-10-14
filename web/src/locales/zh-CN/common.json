@@ -70,6 +70,47 @@
     "saveError": "未能保存您的选择：{message}",
     "close": "关闭"
   },
+  "commPrefs": {
+    "title": "通信偏好设置",
+    "menu": "邮件偏好设置",
+    "intro": "请通过电子邮件向我发送以下内容（可选，随时可更改）：",
+    "introHelp": "所有选项都不会替您勾选。只有您勾选的主题，我们才会写信给您。您可以随时在此处更改，也可以使用每封邮件中的退订链接。与账户和安全相关的邮件不受影响。",
+    "topics": {
+      "product_updates": "产品更新：版本说明和新功能",
+      "new_motors": "新电机：目录新增电机和新的性能档案",
+      "engineering_content": "工程内容：文章、网络研讨会和案例研究",
+      "co_development": "共同开发：测试计划及共同开发模块的邀请"
+    },
+    "for": "{account} 的偏好设置",
+    "save": "保存",
+    "saved": "已保存。",
+    "saveError": "未保存：{message}",
+    "loadError": "无法加载您的偏好设置：{message}",
+    "unsubscribeAll": "全部退订",
+    "unsubscribeAllHelp": "一次关闭所有主题。以后可以再次勾选。",
+    "unsubscribed": "您已退订。我们不会再向您发送任何更新。",
+    "invalidLink": "此链接无效或已过期。请登录后，从账户菜单打开“邮件偏好设置”。",
+    "signInHint": "请登录以查看您的偏好设置。",
+    "signIn": "登录",
+    "legal": "此选择仅用于决定您会收到哪些邮件。法律依据：您的同意，可随时撤回。",
+    "privacy": "隐私声明",
+    "textVersion": "文本版本 {version}",
+    "openApp": "打开 AeroStator",
+    "dataSharing": "数据集共享设置",
+    "nda": {
+      "title": "保密协议、三维工具与 STEP",
+      "intro": "签署保密协议后，即可使用三维工具并下载 STEP 文件。",
+      "signed": "您的保密协议已签署。三维工具和 STEP 下载已开放。",
+      "sign": "在线签署保密协议",
+      "signHelp": "约需一分钟。可解锁三维工具和 STEP。",
+      "request": "申请保密协议",
+      "requestHelp": "在线签署尚未开放。我们会把协议发送给您。",
+      "requested": "已提交申请。我们会与您联系。",
+      "requestError": "申请未发送：{message}",
+      "signinSign": "登录后在线签署保密协议",
+      "signinRequest": "登录后申请保密协议"
+    }
+  },
   "nodes": {
     "hint": "有限元计算负载较重；日常工作请连接您自己的服务器",
     "hintTip": "您自己的服务器使用相同的求解器版本运行您的任务。它仅通过 HTTPS 主动外连，无需开放任何端口，其 CPU 时间不计入合理使用额度。",

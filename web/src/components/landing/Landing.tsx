@@ -94,26 +94,41 @@ const GoogleMark: React.FC = () => (
   </Box>
 );
 
-/** Sign in + Request access: at the top and again at the end. */
+/** Sign in + Request access: at the top and again at the end.
+ *  E-mail is a first-class method next to Google (Google is blocked in mainland
+ *  China): "Request access" opens the create-account form (confirmation link by
+ *  e-mail, admin approval when mail is down) instead of a mailto: that does nothing
+ *  inside WeChat's browser. */
 const AuthButtons: React.FC = () => {
   const { t } = useTranslation('landing');
   const { signIn } = useAuth();
-  const label = signInLabel(GOOGLE_CLIENT_ID, {
-    google: t('hero.signInGoogle'), plain: t('hero.signIn'),
-  });
+  const btn = { textTransform: 'none', fontSize: '1rem', fontWeight: 600, px: 3.5, py: 1.25,
+    borderRadius: 2 } as const;
   return (
     <Box sx={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 1.5 }}>
-      <Button variant="contained" size="large"
-        onClick={() => { void signIn().catch(() => {}); }}
-        startIcon={GOOGLE_CLIENT_ID ? <GoogleMark /> : undefined}
-        sx={{ textTransform: 'none', fontSize: '1rem', fontWeight: 600, px: 3.5, py: 1.25,
-          borderRadius: 2 }}>
-        {label}
-      </Button>
-      <Button variant="outlined" size="large" component="a"
-        href={mailto('AeroStator Core access')}
-        sx={{ textTransform: 'none', fontSize: '1rem', fontWeight: 600, px: 3.5, py: 1.25,
-          borderRadius: 2 }}>
+      {GOOGLE_CLIENT_ID ? (
+        <>
+          <Button variant="contained" size="large"
+            onClick={() => { void signIn({ tab: 'google' }).catch(() => {}); }}
+            startIcon={<GoogleMark />} sx={btn}>
+            {signInLabel(GOOGLE_CLIENT_ID, { google: t('hero.signInGoogle'), plain: t('hero.signIn') })}
+          </Button>
+          <Button variant="outlined" size="large"
+            onClick={() => { void signIn({ tab: 'email', mode: 'signin' }).catch(() => {}); }}
+            sx={btn}>
+            {t('hero.signInEmail')}
+          </Button>
+        </>
+      ) : (
+        <Button variant="contained" size="large"
+          onClick={() => { void signIn({ tab: 'email', mode: 'signin' }).catch(() => {}); }}
+          sx={btn}>
+          {signInLabel(GOOGLE_CLIENT_ID, { google: t('hero.signInGoogle'), plain: t('hero.signIn') })}
+        </Button>
+      )}
+      <Button variant="outlined" size="large"
+        onClick={() => { void signIn({ tab: 'email', mode: 'register' }).catch(() => {}); }}
+        sx={btn}>
         {t('hero.request')}
       </Button>
     </Box>

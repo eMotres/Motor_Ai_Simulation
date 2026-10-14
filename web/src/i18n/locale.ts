@@ -63,11 +63,11 @@ function livePathname(): string | null {
 
 export function detectLocale(opts: {
   storage?: StorageLike; languages?: readonly string[] | null; timeZone?: string | null;
-  pathname?: string | null;
+  pathname?: string | null; userAgent?: string | null;
 } = {}): Locale {
   const stored = readStoredLocale(opts.storage === undefined ? safeStorage() : opts.storage);
   if (stored) return stored;
   const fromPath = localeFromPath(opts.pathname === undefined ? livePathname() : opts.pathname);
   if (fromPath) return fromPath;
-  return detectInitialLanguage({ languages: opts.languages, timeZone: opts.timeZone });
+  return detectInitialLanguage({ languages: opts.languages, timeZone: opts.timeZone, userAgent: opts.userAgent });
 }

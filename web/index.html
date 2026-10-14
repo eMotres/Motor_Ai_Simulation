@@ -8,15 +8,57 @@
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#0f172a" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <!-- Inter — the eMotres / aerostator.com brand font (site loads it via next/font) -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    <!-- First visit with a Chinese browser (WeChat, zh language list or a China time zone):
+         go from / to the pre-rendered Chinese page BEFORE the bundle loads, so even the
+         static block is Chinese when the bundle is slow or blocked.  A saved choice
+         (localStorage ui.locale) wins; ?lang=en saves "en" and stays.  Only "/" is ever
+         redirected and the target is /zh-cn/, so it can never loop.  Plain ES5 on purpose;
+         src/i18n/__tests__/chinaAccess.test.mjs runs this exact text from the built page. -->
+    <script data-first-visit-redirect>
+      (function () {
+        try {
+          var loc = window.location;
+          if (loc.pathname !== '/') return;
+          var q = loc.search || '';
+          if (/[?&]lang=en(&|$)/.test(q)) {
+            try { localStorage.setItem('ui.locale', 'en'); } catch (e) {}
+            return;
+          }
+          var saved = null;
+          try { saved = localStorage.getItem('ui.locale'); } catch (e) {}
+          if (saved) return;
+          if (/[?&](verify|reset|continue|signin|signup)=/.test(q)) return;
+          var zh = /(^|[^a-z])Language\/zh/i.test(navigator.userAgent || '');
+          var langs = navigator.languages && navigator.languages.length
+            ? navigator.languages : [navigator.language || ''];
+          for (var i = 0; !zh && i < langs.length; i++) {
+            zh = /^zh([-_]|$)/i.test(String(langs[i]).replace(/^\s+|\s+$/g, ''));
+          }
+          if (!zh) {
+            var tz = '';
+            try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (e) {}
+            zh = /^Asia\/(Shanghai|Chongqing|Harbin|Urumqi|Kashgar|Hong_Kong|Macau)$/.test(tz);
+          }
+          if (zh) loc.replace('/zh-cn/' + q + (loc.hash || ''));
+        } catch (e) {}
+      })();
+    </script>
+    <!-- Inter is self-hosted (public/fonts, @font-face in src/index.css): nothing here may
+         depend on a third-party host, many of which are blocked in some countries. -->
+    <link rel="preload" href="/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
     <title>AeroStator Core — Motor Technology Portal</title>
     <meta name="description" content="AeroStator Core — select, configure, price and order high-performance electric motors for aerospace, robotics, EV and marine applications." />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <!-- If the bundle has not replaced the pre-rendered block after 8 s, say so (the block
+         stays readable and its links work); the app removes #seo-landing when it mounts. -->
+    <script data-mount-watch>
+      setTimeout(function () {
+        var s = document.getElementById('seo-landing');
+        if (s) s.className = (s.className ? s.className + ' ' : '') + 'slow';
+      }, 8000);
+    </script>
   </body>
 </html>

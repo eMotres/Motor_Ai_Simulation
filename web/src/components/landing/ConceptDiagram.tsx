@@ -35,7 +35,7 @@ const ConceptDiagram: React.FC = () => {
   const steps = stepBoxes();
   const ends = endBoxes();
   const tags = ringTags();
-  const font = '"Inter", "Roboto", "Helvetica", "Arial", sans-serif';
+  const font = '"Inter", "Roboto", "Helvetica", "Arial", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif';
 
   return (
     <svg viewBox={`0 0 ${VIEW.w} ${VIEW.h}`} role="img" aria-label={t('concept.diagramAlt')}

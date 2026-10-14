@@ -11,6 +11,7 @@
     "lint": "eslint .",
     "preview": "vite preview",
     "test:i18n": "node --test src/i18n/__tests__/i18nParity.test.mjs src/i18n/__tests__/i18nRuntime.test.mjs src/i18n/__tests__/detectInitialLanguage.test.mjs",
+    "test:china": "node --test src/i18n/__tests__/chinaAccess.test.mjs",
     "test:seo": "node --test src/components/landing/__tests__/seo.test.mjs",
     "i18n:coverage": "node scripts/i18n-coverage.mjs --files"
   },

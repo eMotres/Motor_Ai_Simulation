@@ -164,6 +164,11 @@
       "forgot": "Forgot password?",
       "back": "Back to sign in"
     },
+    "gisUnreachable": "Google sign-in is not reachable from your network; use e-mail sign-in",
+    "google": {
+      "signIn": "Sign in with Google",
+      "useEmail": "Use e-mail sign-in"
+    },
     "consent": {
       "line": "Send me product news and updates",
       "help": "Product news and updates, at most 2 per month; unsubscribe in one click. We mail a confirmation link first.",

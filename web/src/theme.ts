@@ -59,7 +59,7 @@ export function buildAppTheme(mode: AppMode): Theme {
         : {}),
     },
     typography: {
-      fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", sans-serif',
+      fontFamily: '"Inter", "Roboto", "Helvetica", "Arial", "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif',
     },
     shape: { borderRadius: 8 },
     components: {

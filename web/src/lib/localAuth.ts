@@ -270,34 +270,70 @@ export function decodeJwtPayload(token: string): Record<string, unknown> {
   } catch { return {}; }
 }
 
-// ── Google Identity Services script (loaded once, on demand) ────────────────
+// ── Google Identity Services script (loaded once, ONLY on a click) ───────────
+// accounts.google.com is blocked in mainland China.  Nothing at page load, in a
+// render effect or in a dialog's mount may call loadGis(): only a click on a
+// "Sign in with Google" button does (LoginDialog, AccountDataDialog), so a
+// blocked Google host can never delay the app.  A host that neither answers nor
+// refuses is cut off after GIS_TIMEOUT_MS and reported as GisUnreachableError.
 type GisId = {
   initialize: (cfg: object) => void;
   renderButton: (el: HTMLElement, cfg: object) => void;
+  prompt?: () => void;
   disableAutoSelect: () => void;
 };
 
+export const GIS_SRC = 'https://accounts.google.com/gsi/client';
+export const GIS_TIMEOUT_MS = 8000;
+
+/** Google's script cannot be reached from this network (blocked, offline or too slow). */
+export class GisUnreachableError extends Error {
+  constructor(message = 'Google sign-in is not reachable from your network') {
+    super(message);
+    this.name = 'GisUnreachableError';
+  }
+}
+
 let gisPromise: Promise<GisId> | null = null;
 
-export function loadGis(): Promise<GisId> {
+function currentGis(): GisId | undefined {
+  return (window as unknown as { google?: { accounts?: { id?: GisId } } }).google?.accounts?.id;
+}
+
+/** True once the script has been loaded in this page (never loads it). */
+export function isGisLoaded(): boolean { return !!currentGis(); }
+
+export function loadGis(timeoutMs: number = GIS_TIMEOUT_MS): Promise<GisId> {
   if (!GOOGLE_CLIENT_ID) return Promise.reject(new Error('VITE_GOOGLE_CLIENT_ID is not set'));
   if (gisPromise) return gisPromise;
-  gisPromise = new Promise((resolve, reject) => {
-    const w = window as unknown as { google?: { accounts?: { id?: GisId } } };
-    if (w.google?.accounts?.id) { resolve(w.google.accounts.id); return; }
+  const p = new Promise<GisId>((resolve, reject) => {
+    const have = currentGis();
+    if (have) { resolve(have); return; }
     const s = document.createElement('script');
-    s.src = 'https://accounts.google.com/gsi/client';
+    let done = false;
+    const fail = (e: Error) => {
+      if (done) return;
+      done = true;
+      window.clearTimeout(timer);
+      s.remove();
+      gisPromise = null;            // a later click may try again
+      reject(e);
+    };
+    const timer = window.setTimeout(() => fail(new GisUnreachableError()), timeoutMs);
+    s.src = GIS_SRC;
     s.async = true;
     s.onload = () => {
-      const id = (window as unknown as { google?: { accounts?: { id?: GisId } } })
-        .google?.accounts?.id;
-      if (id) resolve(id);
-      else reject(new Error('GIS script loaded but google.accounts.id is missing'));
+      const id = currentGis();
+      if (!id) { fail(new GisUnreachableError()); return; }
+      done = true;
+      window.clearTimeout(timer);
+      resolve(id);
     };
-    s.onerror = () => { gisPromise = null; reject(new Error('failed to load Google sign-in script')); };
+    s.onerror = () => fail(new GisUnreachableError());
     document.head.appendChild(s);
   });
-  return gisPromise;
+  gisPromise = p;
+  return p;
 }
 
 // ── my data: export + account deletion (GDPR; routes/account_data.py) ───────

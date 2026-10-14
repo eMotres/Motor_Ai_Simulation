@@ -12,7 +12,8 @@
     "motorsAccess": "Motors access",
     "newsletter": "Newsletter & notices",
     "logs": "Logs / Events",
-    "downloads3d": "3D downloads"
+    "downloads3d": "3D downloads",
+    "analytics": "Analytics"
   },
   "motors": {
     "title": "Motors — {email}",
@@ -30,5 +31,30 @@
     "cancel": "Cancel",
     "save": "Save",
     "colDefault": "Default motor"
+  },
+  "analytics": {
+    "title": "Analytics",
+    "range": {
+      "24h": "24 h",
+      "7d": "7 days",
+      "30d": "30 days"
+    },
+    "visitors": "Visitors",
+    "visits": "Visits",
+    "pageviews": "Page views",
+    "bounce": "Bounce rate",
+    "avgVisit": "Avg. visit time",
+    "chartDaily": "Page views and visitors per day",
+    "chartHourly": "Page views and visitors per hour",
+    "topPages": "Top pages",
+    "countries": "Countries",
+    "referrers": "Referrers",
+    "browsers": "Browsers",
+    "os": "Operating systems",
+    "devices": "Devices",
+    "noData": "No data in this range.",
+    "unavailable": "Analytics backend not configured or not reachable. Ask the server owner to set the Umami environment variables.",
+    "forbidden": "Admin access is required to see analytics.",
+    "error": "Could not load analytics."
   }
 }

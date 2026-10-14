@@ -124,6 +124,7 @@ from motor_ai_sim.routes.sweep_config import router as sweep_config_router
 from motor_ai_sim.routes.account import router as account_router
 from motor_ai_sim.routes.account_data import router as account_data_router
 from motor_ai_sim.routes.admin import router as admin_router
+from motor_ai_sim.routes.admin_analytics import router as admin_analytics_router
 from motor_ai_sim.routes.model3d import router as model3d_router
 from motor_ai_sim.routes.nda import router as nda_router
 from motor_ai_sim.routes.data_sharing import router as data_sharing_router
@@ -334,6 +335,7 @@ app.include_router(sweep_config_router)
 app.include_router(account_router)
 app.include_router(account_data_router)
 app.include_router(admin_router)
+app.include_router(admin_analytics_router)
 app.include_router(model3d_router)
 app.include_router(nda_router)
 app.include_router(data_sharing_router)

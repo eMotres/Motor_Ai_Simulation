@@ -343,5 +343,13 @@
       "project_class": "class N",
       "model": "model limit"
     }
+  },
+  "cookies": {
+    "title": "Cookies",
+    "text": "We use anonymous usage statistics (Google Analytics) to improve AeroStator, only with your consent.",
+    "privacy": "Privacy",
+    "accept": "Accept",
+    "decline": "Decline",
+    "settings": "Cookie settings"
   }
 }

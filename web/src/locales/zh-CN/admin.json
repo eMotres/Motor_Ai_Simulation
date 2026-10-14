@@ -12,7 +12,8 @@
     "motorsAccess": "电机访问权限",
     "newsletter": "通讯与通知",
     "logs": "日志 / 事件",
-    "downloads3d": "3D 下载"
+    "downloads3d": "3D 下载",
+    "analytics": "访问统计"
   },
   "motors": {
     "title": "电机 — {email}",
@@ -30,5 +31,30 @@
     "cancel": "取消",
     "save": "保存",
     "colDefault": "默认电机"
+  },
+  "analytics": {
+    "title": "访问统计",
+    "range": {
+      "24h": "24 小时",
+      "7d": "7 天",
+      "30d": "30 天"
+    },
+    "visitors": "访客",
+    "visits": "访问次数",
+    "pageviews": "页面浏览量",
+    "bounce": "跳出率",
+    "avgVisit": "平均访问时长",
+    "chartDaily": "每日页面浏览量与访客",
+    "chartHourly": "每小时页面浏览量与访客",
+    "topPages": "热门页面",
+    "countries": "国家/地区",
+    "referrers": "来源",
+    "browsers": "浏览器",
+    "os": "操作系统",
+    "devices": "设备",
+    "noData": "此时间范围内没有数据。",
+    "unavailable": "统计后端未配置或无法访问。请让服务器管理员设置 Umami 环境变量。",
+    "forbidden": "需要管理员权限才能查看统计。",
+    "error": "无法加载统计数据。"
   }
 }

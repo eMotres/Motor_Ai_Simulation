@@ -18,12 +18,15 @@ import DnsIcon from '@mui/icons-material/Dns';
 import { NoticeBell, NewsletterLinkHandler } from './NoticeBell';
 import { useTranslation } from 'react-i18next';
 import LanguageSwitcher from '../common/LanguageSwitcher';
+import CookieIcon from '@mui/icons-material/Cookie';
+import { openCookieSettings, useAnalyticsState } from '../common/AnalyticsConsent';
 import { OPEN_COMPUTE_NODES_EVENT } from '../../lib/accessUi';
 
 /** Header login/logout control (self-hosted auth — see contexts/AuthContext). */
 const AuthButton: React.FC = () => {
   const { user, role, signIn, logout } = useAuth();
   const { t } = useTranslation('common');
+  const analyticsState = useAnalyticsState();
   const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
   const [agentsOpen, setAgentsOpen] = React.useState(false);
@@ -105,6 +108,13 @@ const AuthButton: React.FC = () => {
           <ListItemIcon><DatasetIcon sx={{ fontSize: 16 }} /></ListItemIcon>
           {t('dataSharing.menu')}
         </MenuItem>
+        {analyticsState !== 'blocked' && (
+          <MenuItem sx={{ fontSize: 12.5 }}
+            onClick={() => { setAnchor(null); openCookieSettings(); }}>
+            <ListItemIcon><CookieIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+            {t('cookies.settings')}
+          </MenuItem>
+        )}
         <Divider />
         <MenuItem disabled sx={{ fontSize: 11, opacity: '0.7 !important', minHeight: 0, py: 0.25 }}>
           {t('language.label')}

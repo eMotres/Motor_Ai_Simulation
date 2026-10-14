@@ -59,6 +59,9 @@ try:
         out.update(ok=False, message="health gate failed, GUI data NOT written: " + " | ".join(gt["errors"][:6]))
     else:
         out["styling"] = view.style_gui(doc, gdoc)
+        opaque_bad = view.check_opaque(doc, gdoc)             # 2026-10-14: DiffuseColor alpha 0.0 = fully transparent in FreeCAD 1.1
+        if opaque_bad:
+            raise RuntimeError("transparent visible objects, model NOT saved: " + " | ".join(opaque_bad[:6]))
         bbox = view.model_bbox(doc)
         out["bbox"] = bbox
         doc.save()

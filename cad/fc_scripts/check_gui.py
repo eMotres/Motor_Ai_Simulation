@@ -51,6 +51,7 @@ try:
         out["phase_board_colours"] = dict(faces=len(dc), distinct=len(distinct))
         if len(dc) != len(doc.getObject("PhaseBoard").Shape.Faces) or len(distinct) < 4:
             bad.append("PhaseBoard colours: %d per-face colours (%d distinct), the STEP has 4 colour families" % (len(dc), len(distinct)))
+    bad += view.check_opaque(doc, gdoc)                  # no visible body may be (partly) transparent
     out["visible"] = sorted(n for n, v in gui_vis.items() if v)
     out["hidden_count"] = sum(1 for v in gui_vis.values() if not v)
     out["violations"] = bad

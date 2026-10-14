@@ -166,7 +166,7 @@ def colour_phase_board(doc, gdoc):
                 table[_face_key(face)] = tuple(c)
     finally:
         App.closeDocument(tmp.Name)
-    default = (0.6, 0.6, 0.6, 0.0)
+    default = (0.6, 0.6, 0.6, opaque_alpha(vo))
     # a few faces differ in the importer's healing (no key match): they take the majority colour of their own solid
     import collections
     missing = 0
@@ -181,6 +181,48 @@ def colour_phase_board(doc, gdoc):
     cols = [table.get(_face_key(face), default) for face in f.Shape.Faces]
     vo.DiffuseColor = cols
     return dict(faces=len(cols), missing_filled_from_solid=missing, distinct=sorted({tuple(round(x, 2) for x in c[:3]) for c in cols}))
+
+
+_OPAQUE = []
+
+
+def opaque_alpha(vo=None):
+    """4th component of a DiffuseColor entry that means 'opaque' in the running FreeCAD.  It is an opacity in FreeCAD 1.1
+    (1.0 = opaque; 0.0 = fully transparent, the bug that made Shaft / Stator_holder_back invisible) and was a transparency
+    in 0.x / 1.0 (0.0 = opaque).  It is read from a fresh view object on a scratch document (never from the model's own
+    view object: a model saved with the old bug carries alpha 0.0 there)."""
+    if not _OPAQUE:
+        import FreeCAD as App
+        import FreeCADGui as Gui
+        d = App.newDocument("_alpha_probe")
+        try:
+            d.addObject("Part::Box", "B")
+            d.recompute()
+            _OPAQUE.append(float(list(Gui.getDocument(d.Name).getObject("B").DiffuseColor)[0][3]))
+        except Exception:
+            _OPAQUE.append(1.0)
+        finally:
+            App.closeDocument(d.Name)
+    return _OPAQUE[0]
+
+
+def check_opaque(doc, gdoc):
+    """Violations: a visible body / array / part with Transparency > 0 or with a DiffuseColor alpha that differs from the opaque
+    default (nothing in this template is transparent on purpose).  Used by gui_finish (refuses) and check_gui."""
+    bad = []
+    for o in doc.Objects:
+        vo = gdoc.getObject(o.Name)
+        if vo is None or not getattr(vo, "Visibility", False) or not hasattr(vo, "Transparency"):
+            continue
+        if vo.Transparency > 0:
+            bad.append("%s: Transparency %d (must be opaque)" % (o.Name, vo.Transparency))
+        if o.Name == "PhaseBoard":                      # intended: the board's STEP colours keep their own alpha (solder mask 0.83)
+            continue
+        if hasattr(vo, "DiffuseColor") and hasattr(o, "Shape") and not o.Shape.isNull() and len(list(vo.DiffuseColor)) > 1:
+            al = {round(float(c[3]), 3) for c in vo.DiffuseColor if len(c) > 3}
+            if len(al) > 1 or (al and al != {round(opaque_alpha(), 3)}):
+                bad.append("%s: per-face colours with alpha %s (not the opaque value)" % (o.Name, sorted(al)))
+    return bad
 
 
 def thread_face_indices(doc):
@@ -205,10 +247,11 @@ def colour_threads(doc, gdoc):
     for bn, idx in thread_face_indices(doc).items():
         vo = gdoc.getObject(bn)
         n = len(doc.getObject(bn).Shape.Faces)
-        base = tuple(COLORS[bn]) + (0.0,)
+        alpha = opaque_alpha(vo)                  # NOT 0.0: in FreeCAD 1.1 the 4th component is the opacity
+        base = tuple(COLORS[bn]) + (alpha,)
         cols = [base] * n
         for i in idx:
-            cols[i] = tuple(THREAD_COLOUR) + (0.0,)
+            cols[i] = tuple(THREAD_COLOUR) + (alpha,)
         vo.DiffuseColor = cols
         rep[bn] = len(idx)
     return rep

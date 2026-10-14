@@ -116,4 +116,4 @@ export const computeHintApplies = (tabId: string, enforced: boolean, isAdmin: bo
 export const OPEN_COMPUTE_NODES_EVENT = 'motres:open-compute-nodes';
 
 /** The worker install docs (section 9 of the design doc). */
-export const COMPUTE_WORKER_DOCS_URL = 'https://github.com/eMotres/Motor_Ai_Simulation/blob/main/docs/BYO_COMPUTE.md#9-install';
+export const COMPUTE_WORKER_DOCS_URL = 'https://github.com/eMotres/Motor_Ai_Simulation/blob/pre-migration-freeze-2026-09-15/docs/BYO_COMPUTE.md#9-install';

@@ -16,6 +16,7 @@
     "i18n:coverage": "node scripts/i18n-coverage.mjs --files"
   },
   "dependencies": {
+    "@dagrejs/dagre": "^1.1.8",
     "@emotion/react": "^11.14.0",
     "@emotion/styled": "^11.14.1",
     "@hookform/resolvers": "^5.2.2",
@@ -24,6 +25,7 @@
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.5.0",
     "@react-three/postprocessing": "^3.0.4",
+    "@xyflow/react": "^12.12.0",
     "firebase": "^12.14.0",
     "i18next": "^26.4.2",
     "i18next-icu": "^2.4.4",

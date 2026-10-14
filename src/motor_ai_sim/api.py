@@ -132,6 +132,7 @@ from motor_ai_sim.routes.compute_nodes import (
     router as compute_nodes_router, admin_router as compute_nodes_admin_router)
 from motor_ai_sim.routes.support import router as support_router
 from motor_ai_sim.routes.modules import router as modules_router
+from motor_ai_sim.routes.system_graph import router as system_graph_router
 from motor_ai_sim.routes.kernel import router as kernel_router
 from motor_ai_sim.routes.jobs_api import router as jobs_router
 from motor_ai_sim.routes.history import router as history_router
@@ -340,6 +341,8 @@ app.include_router(compute_nodes_router)
 app.include_router(compute_nodes_admin_router)
 app.include_router(support_router)
 app.include_router(modules_router)
+# /api/system/graph - the Simulations > System view (engineer + admin, read-only)
+app.include_router(system_graph_router)
 app.include_router(kernel_router)
 # Stage 4: the queue's own surface — what is running, queued and finished FOR
 # THIS CALLER, and the one owner-checked cancel every Stop button delegates to.

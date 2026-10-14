@@ -18,8 +18,8 @@ export const STORAGE_KEY = 'ui.locale';
 
 /** Browser-tab title per language (set with <html lang> on every switch). */
 export const DOCUMENT_TITLES: Record<Locale, string> = {
-  en: 'AeroStator Core — Motor Technology Portal',
-  'zh-CN': 'AeroStator Core — 电机技术平台',
+  en: 'AeroStator Core — From idea to product, together',
+  'zh-CN': 'AeroStator Core — 从构想到产品，携手同行',
 };
 
 /** Endonyms for the switcher — each language names itself. */
@@ -50,10 +50,24 @@ export function writeStoredLocale(loc: Locale, storage: StorageLike = safeStorag
   try { storage?.setItem(STORAGE_KEY, loc); } catch { /* private window / blocked storage */ }
 }
 
+/** The pre-rendered Chinese landing lives at /zh-cn/ (scripts/prerender-landing.mjs):
+ *  someone who opened that address wants Chinese unless they chose otherwise.
+ *  Not persisted, so the next visit at `/` is detected as usual. */
+export function localeFromPath(pathname: unknown): Locale | null {
+  return typeof pathname === 'string' && /^\/zh-cn(\/|$)/i.test(pathname) ? 'zh-CN' : null;
+}
+
+function livePathname(): string | null {
+  try { return typeof location === 'undefined' ? null : location.pathname; } catch { return null; }
+}
+
 export function detectLocale(opts: {
   storage?: StorageLike; languages?: readonly string[] | null; timeZone?: string | null;
+  pathname?: string | null;
 } = {}): Locale {
   const stored = readStoredLocale(opts.storage === undefined ? safeStorage() : opts.storage);
   if (stored) return stored;
+  const fromPath = localeFromPath(opts.pathname === undefined ? livePathname() : opts.pathname);
+  if (fromPath) return fromPath;
   return detectInitialLanguage({ languages: opts.languages, timeZone: opts.timeZone });
 }

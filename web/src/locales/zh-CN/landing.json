@@ -1,4 +1,8 @@
 {
+  "meta": {
+    "title": "AeroStator Core — 从构想到产品，携手同行",
+    "description": "基于 AeroStator Core 电机的驱动部件设计、仿真与生产准备平台，开源（Apache-2.0），适用于航空与无人机、机器人和船舶，可接入您的 AI 智能体。"
+  },
   "hero": {
     "title": "从构想到产品，携手同行",
     "agents": "接入您的 AI 智能体，一起共建",

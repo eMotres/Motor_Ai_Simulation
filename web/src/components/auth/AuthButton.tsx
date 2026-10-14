@@ -16,6 +16,7 @@ import DnsIcon from '@mui/icons-material/Dns';
 import { NoticeBell, NewsletterLinkHandler } from './NoticeBell';
 import { useTranslation } from 'react-i18next';
 import LanguageSwitcher from '../common/LanguageSwitcher';
+import { OPEN_COMPUTE_NODES_EVENT } from '../../lib/accessUi';
 
 /** Header login/logout control (self-hosted auth — see contexts/AuthContext). */
 const AuthButton: React.FC = () => {
@@ -28,6 +29,12 @@ const AuthButton: React.FC = () => {
   const [dataOpen, setDataOpen] = React.useState(false);
   const [nodesOpen, setNodesOpen] = React.useState(false);
   const [noticeKey, setNoticeKey] = React.useState(0);
+  // The "connect your own server" hint on the simulation tabs opens this dialog.
+  React.useEffect(() => {
+    const open = () => setNodesOpen(true);
+    window.addEventListener(OPEN_COMPUTE_NODES_EVENT, open);
+    return () => window.removeEventListener(OPEN_COMPUTE_NODES_EVENT, open);
+  }, []);
 
   if (!user) {
     return (
@@ -78,7 +85,7 @@ const AuthButton: React.FC = () => {
         <MenuItem sx={{ fontSize: 12.5 }}
           onClick={() => { setAnchor(null); setNodesOpen(true); }}>
           <ListItemIcon><DnsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
-          My compute nodes
+          {t('account.computeNodes')}
         </MenuItem>
         <MenuItem sx={{ fontSize: 12.5 }}
           onClick={() => { setAnchor(null); setNotifOpen(true); }}>

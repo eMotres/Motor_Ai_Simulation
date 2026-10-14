@@ -143,7 +143,7 @@ _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
 #: The worker-facing routes of docs/BYO_COMPUTE.md (heartbeat, lease, progress,
 #: complete, fail) and the public worker installer files.
 _NODE_AGENT_PATH = re.compile(
-    r"^/api/nodes/(heartbeat|jobs/lease|jobs/[A-Za-z0-9_.-]+/(progress|complete|fail)"
+    r"^/api/nodes/(heartbeat|jobs/lease|jobs/[A-Za-z0-9_.-]+/(progress|complete|fail|release)"
     r"|worker/(install\.sh|motres_compute_worker\.py))$")
 
 

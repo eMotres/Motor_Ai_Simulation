@@ -47,7 +47,45 @@
     "avatarTooltip": "{email} · {role} — 点击查看会话",
     "sessions": "会话",
     "agents": "智能体访问",
-    "notifications": "通知"
+    "notifications": "通知",
+    "computeNodes": "我的计算节点"
+  },
+  "nodes": {
+    "hint": "有限元计算负载较重；日常工作请连接您自己的服务器",
+    "hintTip": "您自己的服务器使用相同的求解器版本运行您的任务。它仅通过 HTTPS 主动外连，无需开放任何端口，其 CPU 时间不计入合理使用额度。",
+    "hintNodes": "我的计算节点",
+    "hintDocs": "安装文档",
+    "share": {
+      "label": "向 MOTRES 共享空闲时间",
+      "tip": "默认关闭。开启后，在您没有排队任务时，MOTRES 可在此节点上运行其自有任务：仅限管理员标记为可共享的 MOTRES 目录任务（例如目录电机的参数图谱计算），与您自己的任务一样经过签名并锁定版本。绝不运行其他客户的任务，绝不包含机密或 NDA 数据。共享任务以最低优先级（nice 19、空闲 IO）运行，并受下方核心数和内存上限约束。您自己的任务始终优先：您提交任务时，共享任务会在数秒内停止并重新排队，不会记为失败。",
+      "maxCores": "MOTRES 任务的最大核心数",
+      "maxRam": "MOTRES 任务的最大内存（GB）",
+      "capsTip": "默认：一半的核心数和一半的内存。",
+      "save": "保存",
+      "stopNow": "立即停止共享",
+      "stopTip": "关闭共享，并在数秒内结束此节点上正在运行的 MOTRES 任务；该任务将在其他位置重新排队。",
+      "column": "空闲共享",
+      "on": "开",
+      "off": "关",
+      "title": "在我的节点上运行过的 MOTRES 任务",
+      "summary": "{runs} 次运行，{cpuHours} CPU 小时",
+      "none": "暂无。",
+      "colNode": "节点",
+      "colJob": "任务",
+      "colStarted": "开始时间",
+      "colDuration": "时长",
+      "colCpuHours": "CPU 小时",
+      "colOutcome": "结果",
+      "outcome": {
+        "done": "已完成",
+        "failed": "失败",
+        "cancelled": "已取消",
+        "lost": "节点离线",
+        "owner_job": "为您的任务让出",
+        "stop_sharing": "已让出，共享已停止",
+        "ram_cap": "达到内存上限而停止"
+      }
+    }
   },
   "auth": {
     "title": {

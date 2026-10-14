@@ -38,6 +38,7 @@ import ParameterVariationTable from './components/sweep/ParameterVariationTable'
 import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import FamilyLoadBanner from './components/common/FamilyLoadBanner';
+import ComputeNodesHint from './components/common/ComputeNodesHint';
 import AuthButton from './components/auth/AuthButton';
 import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
@@ -76,7 +77,7 @@ import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
-import { gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, tabAllowed, TAB_GATES } from './lib/accessUi';
+import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
@@ -753,6 +754,8 @@ function App() {
         <ActiveFamilyStrip />
         {/* A motor loading in the background (its tab is already open) / why it failed */}
         <FamilyLoadBanner />
+        {/* Heavy FEM tabs: one line pointing a user / engineer at their own server (docs/BYO_COMPUTE.md) */}
+        {computeHintApplies(activeTab, enforced, isAdmin, role) && <ComputeNodesHint />}
 
         {/* ── Main Content ── */}
         <Box sx={{ flex: 1, overflow: 'hidden' }}>

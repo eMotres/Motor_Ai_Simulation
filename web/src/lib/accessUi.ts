@@ -99,3 +99,21 @@ export function referenceOfDefault<R extends { id: string; name: string;
 /** "2/3 configs" summary of a die: `cards` full cards over `total` configurations. */
 export const cardSummary = (cards: number, total: number): { text: string; state: 'none' | 'partial' | 'all' } =>
   ({ text: `${cards}/${total}`, state: cards <= 0 ? 'none' : cards >= total ? 'all' : 'partial' });
+
+/** "My compute nodes" (docs/BYO_COMPUTE.md) lives in the account menu: every SIGNED-IN account reaches it - user, engineer and
+ *  admin alike (the server routes /api/nodes are not role-gated, they are scoped to the caller). */
+export const computeNodesReachable = (signedIn: boolean): boolean => signedIn;
+
+/** The simulation tabs that start a (heavy) FEM run; they carry the "connect your own server" line. */
+export const COMPUTE_HINT_TABS: readonly string[] = ['simulation', 'mesh', 'thermal', 'mechanical', 'controller', 'comparePoints'];
+
+/** The one-line "FEM runs are heavy; connect your own server" hint: for the user and engineer roles on an enforcing backend,
+ *  on a simulation tab.  Admins (they own the platform) and the unenforced local dev backend never see it. */
+export const computeHintApplies = (tabId: string, enforced: boolean, isAdmin: boolean, role: string): boolean =>
+  enforced && !isAdmin && (role === 'user' || role === 'engineer') && COMPUTE_HINT_TABS.includes(tabId);
+
+/** The window event the hint fires and the account menu answers by opening "My compute nodes". */
+export const OPEN_COMPUTE_NODES_EVENT = 'motres:open-compute-nodes';
+
+/** The worker install docs (section 9 of the design doc). */
+export const COMPUTE_WORKER_DOCS_URL = 'https://github.com/eMotres/Motor_Ai_Simulation/blob/main/docs/BYO_COMPUTE.md#9-install';

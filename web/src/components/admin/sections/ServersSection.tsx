@@ -11,6 +11,7 @@ const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\
 interface UserNode {
   id: string; name: string; owner: string; status: string; version: string;
   version_ok: boolean; cores: number; cpu_pct: number | null; last_seen: number | null;
+  share_idle?: boolean; share_max_cores?: number | null; share_max_ram_mb?: number | null;
 }
 
 const UserNodesTable: React.FC = () => {
@@ -25,13 +26,18 @@ const UserNodesTable: React.FC = () => {
   }, []);
   return (
     <Box sx={{ mt: 3 }}>
-      <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)', mb: 0.5 }}>User-owned compute nodes</Typography>
+      <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)', mb: 0.5 }}>
+        User-owned compute nodes
+        <Typography component="span" sx={{ ml: 1, fontSize: 11, fontWeight: 400, color: 'var(--text-3)' }}>
+          {rows.filter((n) => n.share_idle).length} offer idle time to MOTRES
+        </Typography>
+      </Typography>
       {err && <Typography variant="caption" color="error">{err}</Typography>}
       <Table size="small" sx={{ '& td, & th': { fontSize: 12 } }}>
         <TableHead><TableRow>
           <TableCell>Node</TableCell><TableCell>Owner</TableCell><TableCell>Status</TableCell>
           <TableCell>Cores</TableCell><TableCell>CPU</TableCell><TableCell>Version</TableCell>
-          <TableCell>Last seen</TableCell>
+          <TableCell>Last seen</TableCell><TableCell>Idle time for MOTRES</TableCell>
         </TableRow></TableHead>
         <TableBody>
           {rows.map((n) => (
@@ -41,10 +47,13 @@ const UserNodesTable: React.FC = () => {
               <TableCell>{n.cpu_pct != null ? `${Math.round(n.cpu_pct)} %` : '—'}</TableCell>
               <TableCell sx={{ color: n.version && !n.version_ok ? '#f87171' : undefined }}>{n.version || '—'}</TableCell>
               <TableCell>{n.last_seen ? new Date(n.last_seen * 1000).toLocaleString() : '—'}</TableCell>
+              <TableCell>{n.share_idle
+                ? `on · ≤ ${n.share_max_cores ?? '?'} cores · ≤ ${n.share_max_ram_mb ? (n.share_max_ram_mb / 1024).toFixed(1) : '?'} GB`
+                : '—'}</TableCell>
             </TableRow>
           ))}
           {rows.length === 0 && !err && (
-            <TableRow><TableCell colSpan={7} sx={{ color: 'var(--text-4)' }}>No user nodes.</TableCell></TableRow>
+            <TableRow><TableCell colSpan={8} sx={{ color: 'var(--text-4)' }}>No user nodes.</TableCell></TableRow>
           )}
         </TableBody>
       </Table>

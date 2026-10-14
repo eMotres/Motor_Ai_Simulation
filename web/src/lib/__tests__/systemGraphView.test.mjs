@@ -5,8 +5,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 
-let V = null; let L = null;
-try { V = await import('../systemGraphView.ts'); L = await import('../systemGraphLayout.ts'); } catch { /* old Node */ }
+let V = null; let L = null; let R = null;
+try { V = await import('../systemGraphView.ts'); L = await import('../systemGraphLayout.ts'); R = await import('../systemGraphRoute.ts'); } catch { /* old Node */ }
 const t = V ? test : test.skip;
 const fx = (n) => JSON.parse(fs.readFileSync(new URL(`./fixtures/${n}.json`, import.meta.url), 'utf8'));
 
@@ -85,9 +85,8 @@ const prep = (name, showAll) => {
   const cc = V.chipCounts(d, v);
   const hs = {};
   for (const n of d.nodes) hs[n.id] = L.blockHeight(n, cc[n.id]);
-  const lay = L.layoutGraph(d, { heights: hs, lanes: V.laneCounts(d.loops, v.wires) });
-  const r = L.routeWires(lay, d.loops, v.wires);
-  return { d, v, lay, r };
+  const w = R.buildWiring(d, v, { heights: hs, lanes: V.laneCounts(d.loops, v.wires) });
+  return { d, v, lay: w.layout, r: { routes: w.routes } };
 };
 const through = (pts, box) => pts.slice(1).some((b, i) => {
   const a = pts[i];

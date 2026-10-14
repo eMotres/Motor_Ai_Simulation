@@ -34,8 +34,8 @@ const WEB = path.resolve(HERE, '..', '..', '..', '..');
 
 /* ── verbatim copies of the shipped helpers ──────────────────────────────── */
 
-function signInLabel(clientId) {
-  return clientId ? 'Sign in with Google' : 'Sign in';
+function signInLabel(clientId, labels = { google: 'Sign in with Google', plain: 'Sign in' }) {
+  return clientId ? labels.google : labels.plain;
 }
 
 function shouldShowLanding(enforced, hasUser) {
@@ -56,12 +56,12 @@ function apiReady(resolved, hasUser, enforced) {
   return !enforced || hasUser;
 }
 
-/** The card list, kept in step with Landing.tsx's `FEATURES` (labels + srcs;
- *  the alt/hint prose lives in the component and is checked there by eye). */
+/** The card list, kept in step with Landing.tsx's `FEATURES` (key + src; the
+ *  label, alt and hint prose live in locales/<lng>/landing.json). */
 const FEATURES = [
-  { label: 'Electromagnetic FEM', src: '/landing/em-field.png' },
-  { label: 'Thermal & duty cycle', src: '/landing/thermal-map.png' },
-  { label: 'Mechanical simulation', src: '/landing/rotor-displacement.png' },
+  { key: 'em', src: '/landing/em-field.png' },
+  { key: 'thermal', src: '/landing/thermal-map.png' },
+  { key: 'mech', src: '/landing/rotor-displacement.png' },
 ];
 
 /* ── who gets the landing ────────────────────────────────────────────────── */
@@ -134,12 +134,22 @@ test('without one it promises nothing it cannot do', () => {
 
 /* ── the pictures are really shipped ─────────────────────────────────────── */
 
-test('three cards, each with a short label', () => {
+test('three cards, each with a short label in both locales', () => {
   assert.equal(FEATURES.length, 3);
-  for (const f of FEATURES) {
-    assert.ok(f.label.length > 0 && f.label.length <= 24,
-      `"${f.label}" is not a short label`);
+  for (const lng of ['en', 'zh-CN']) {
+    const sim = JSON.parse(fs.readFileSync(
+      path.join(WEB, 'src', 'locales', lng, 'landing.json'), 'utf8')).sim;
+    for (const f of FEATURES) {
+      const label = sim[f.key];
+      assert.ok(label && label.length <= 24, `${lng}: "${label}" is not a short label`);
+      assert.ok(sim[f.key + 'Alt'] && sim[f.key + 'Hint'], `${lng}: ${f.key} lacks alt/hint`);
+    }
   }
+});
+
+test('the label is translated when the caller passes translations', () => {
+  assert.equal(signInLabel('id', { google: '使用 Google 登录', plain: '登录' }), '使用 Google 登录');
+  assert.equal(signInLabel('', { google: '使用 Google 登录', plain: '登录' }), '登录');
 });
 
 test('every card picture exists under public/ and is under 300 KB', () => {

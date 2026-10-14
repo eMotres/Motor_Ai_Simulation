@@ -2,12 +2,12 @@
  "version": 1,
  "note": "single colour palette of all motor models (opaque); see palette.py",
  "hex": {
-  "core": "#4A5560",
-  "rotor_core": "#2E343B",
+  "core": "#5D6974",
+  "rotor_core": "#424A53",
   "coil": "#C8642A",
   "magnet_n": "#D7263D",
   "magnet_s": "#1B6EF3",
-  "shaft": "#3C4147",
+  "shaft": "#9AA3AB",
   "aluminium": "#7F8C99",
   "ring": "#E0B341",
   "bearing_ring": "#C0C6CC",
@@ -38,8 +38,8 @@
  "thread_darken": 0.72,
  "material": {
   "shaft": {
-   "metallic": 0.3,
-   "roughness": 0.8
+   "metallic": 0.4,
+   "roughness": 0.6
   },
   "screw": {
    "metallic": 0.9,

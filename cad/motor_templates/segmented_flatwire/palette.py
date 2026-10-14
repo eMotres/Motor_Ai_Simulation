@@ -14,12 +14,12 @@ import os
 
 # role -> hex
 PALETTE = {
-    "core": "#4A5560",             # stator laminations: dark steel
-    "rotor_core": "#2E343B",       # rotor laminations: darker steel
+    "core": "#5D6974",             # stator laminations: iron (owner 2026-10-14: a bit lighter)
+    "rotor_core": "#424A53",       # rotor laminations: iron, darker than the stator
     "coil": "#C8642A",             # vivid copper
     "magnet_n": "#D7263D",         # magnets alternate by index: N red ...
     "magnet_s": "#1B6EF3",         # ... S blue
-    "shaft": "#3C4147",            # steel parts: dark grey (owner 2026-10-14)
+    "shaft": "#9AA3AB",            # stainless steel (shaft): light, matte (owner 2026-10-14)
     "aluminium": "#7F8C99",        # anodised aluminium: holders, Prop_fix, carriers (clearly different from the core)
     "ring": "#E0B341",             # GFRP ring: amber
     "bearing_ring": "#C0C6CC",
@@ -40,7 +40,7 @@ BODY_ROLE = {
     "Stator_holder": "aluminium", "Stator_holder_back": "aluminium", "Ring": "ring", "Prop_fix": "aluminium", "Screw": "screw",
 }
 # role -> (metallic, roughness) of the GLB material and, via appearance(), of the FreeCAD ShapeAppearance; default (0.1, 0.55)
-MATERIAL = {"shaft": (0.3, 0.8), "screw": (0.9, 0.25)}      # steel: matte (owner); screws: nickel, shiny
+MATERIAL = {"shaft": (0.4, 0.6), "screw": (0.9, 0.25)}      # stainless steel: matte (owner); screws: nickel, shiny
 DEFAULT_MATERIAL = (0.1, 0.55)
 # GLB group name -> palette role (export_models.py)
 GROUP_ROLE = {"Core": "core", "Coils": "coil", "Rotor": "rotor_core", "Magnets": "magnet_n", "Magnets_S": "magnet_s",

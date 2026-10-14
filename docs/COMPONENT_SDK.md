@@ -7,6 +7,10 @@ connect it to our motors. The rules for contributors and their AI agents are in
 [MODULE_CONTRIBUTION_RULES.md](MODULE_CONTRIBUTION_RULES.md); a copy-and-fill
 template is in [module_template/](module_template/).
 
+**Component cards.** Every part of a product, including the drive-train IRs below, is also described by one
+[component card](COMPONENT_CARD.md) (identity, envelope, mass properties, typed ports, the reduced-order model);
+the card embeds these IRs and adds `BatteryIR`, `ControllerIR` and `RigidBodyIR`.
+
 Status of this document: contracts `0.1.0`, **motoring only** (power flows motor to
 load). Nothing here changes Configure or any existing result; integration into
 Configure comes later (section 9).

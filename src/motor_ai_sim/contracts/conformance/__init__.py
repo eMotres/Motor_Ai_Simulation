@@ -10,12 +10,14 @@ from .drivetrain import (COMPONENT_PREFIXES, COMPONENT_STATUSES, ConformanceErro
                          assert_load_ir, assert_load_provider, assert_motor_performance_ir,
                          assert_propulsor_ir, assert_shaft_load_ir, assert_transmission_ir,
                          assert_transmission_provider)
+from .component import assert_battery_ir, assert_component_card, assert_controller_ir
 from .geometry import assert_geometry_ir, assert_geometry_provider
 from .materials import assert_material_ir, assert_materials_provider
 from .mesh import assert_mesh_ir, assert_mesh_provider
 from .result import assert_result_ir
 
 __all__ = [
+    "assert_component_card", "assert_battery_ir", "assert_controller_ir",
     "assert_geometry_ir", "assert_geometry_provider",
     "assert_material_ir", "assert_materials_provider",
     "assert_mesh_ir", "assert_mesh_provider",

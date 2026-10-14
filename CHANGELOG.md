@@ -8,6 +8,7 @@ cut a release with `scripts/release.ps1` (see `docs/RELEASES.md`).
 ## [Unreleased]
 
 ### Added
+- **Component card and assembly seed (product composer, stage 1)** (owner 2026-10-14). One `ComponentCard` (`contracts/component_ir.py`) for motor, propeller, transmission, controller, battery, frame, link and wheel: identity, envelope, named mounting frames, mass properties (mass, centre of mass, inertia tensor), typed ports (shaft, dc_bus, phase_ac, thermal, signal, mount) and a reduced-order model that reuses the drive-train IRs and adds `BatteryIR`, `ControllerIR` and `RigidBodyIR`. Conformance gate `assert_component_card` (a motor card carries performance, mass and the outer envelope only). `AssemblyIR` with `validate_assembly` and `mass_properties` (`contracts/assembly_ir.py`, data and pure math, no solver). Adapters from the passport, propeller catalogue, gearbox plugin, battery block and controller drive variant; module `component-library` and read-only `GET /api/components` (engineer and admin). No change to any solver, passport or result. Docs: `docs/COMPONENT_CARD.md`, example `docs/examples/quadcopter_ciano14_40.assembly.json`.
 - **Component SDK for drive-train modules** (owner 2026-10-14). Contracts `MotorPerformanceIR`, `TransmissionIR`,
   `ShaftLoadIR` / `PropulsorIR`, their conformance gates, registry discovery of `transmission.<id>` / `load.<id>`
   (`modules/component_plugins/`), one reference single-stage gearbox, and a system solve (operating point and

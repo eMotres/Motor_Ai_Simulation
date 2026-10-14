@@ -43,6 +43,12 @@ Every component, ours or contributed, is described by the same card:
 Done when: the existing IRs (motor, transmission, propeller) plus new ones (battery, controller, frame/link) validate
 against one `ComponentCard` schema, and the component library lists them.
 
+**Status:** the software foundation is in place (`contracts/component_ir.py` `ComponentCard`, `contracts/assembly_ir.py`
+`AssemblyIR` with `validate_assembly` and `mass_properties`, adapters for motor, propeller, gearbox, battery and controller,
+`GET /api/components`, the example `docs/examples/quadcopter_ciano14_40.assembly.json`); see
+[COMPONENT_CARD.md](COMPONENT_CARD.md). Open: real masses for the battery, controller and frame placeholders, CAD references
+(STEP after the NDA, glTF), and the card editor in the UI.
+
 ### Stage 2: assembly
 The System graph becomes an editor:
 

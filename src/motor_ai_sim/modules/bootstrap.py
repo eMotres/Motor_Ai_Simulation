@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from ..contracts import CONTRACTS_VERSION
 from .base import ModuleManifest, StubModule, UIContribution
+from .component_library import ComponentLibraryModule
 from .controller import FocController
 from .cost import BasicCost
 from .geometry_2d import AeroStatorGeometry2D
@@ -51,6 +52,7 @@ def default_registry() -> ModuleRegistry:
         BasicCost(),              # cost         -> geometry.2d
         MaterialsModule(),        # materials    (library + assignment -> MaterialIR)
         UsersModule(),            # users
+        ComponentLibraryModule(),  # component.library  (ComponentCard list; read-only)
     ):
         reg.register(module)
     # Plugin-SDK: auto-register external geometry providers dropped into

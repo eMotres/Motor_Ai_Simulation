@@ -1,5 +1,7 @@
-// Sign-in dialog: tabs "Google | E-mail". Google = the official GIS button
-// (when VITE_GOOGLE_CLIENT_ID is set). E-mail = sign in / create account /
+// Sign-in dialog: tabs "Google | E-mail". Google = a plain "Sign in with Google"
+// button of OURS; Google's script is fetched only when it is clicked (it is
+// blocked in mainland China and must never delay the app), then the official
+// GIS button appears in its place. E-mail = sign in / create account /
 // forgot password, plus the two mailed links (?verify=, ?reset=). Every path
 // ends in OUR backend token — see lib/localAuth.ts.
 import React, { useEffect, useRef, useState } from 'react';
@@ -9,11 +11,12 @@ import {
 } from '@mui/material';
 import { CONSENT_LINE, CONSENT_HELP } from '../../lib/newsletterApi';
 import {
-  decodeJwtPayload, googleExchange, loadGis, passwordLogin,
+  decodeJwtPayload, googleExchange, loadGis, GisUnreachableError, passwordLogin,
   registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset,
   pendingEmailLink, clearEmailLink, pendingContinuation, PASSWORD_MIN_LEN,
   GOOGLE_CLIENT_ID, TERMS_URL, PRIVACY_URL, SOURCE_URL, type SessionUser,
 } from '../../lib/localAuth';
+import { isChineseVisitor } from '../../i18n/detectInitialLanguage';
 import HelpTip from '../common/HelpTip';
 import { useTranslation } from 'react-i18next';
 
@@ -23,6 +26,8 @@ interface Props {
   onSignedIn: (token: string, user: SessionUser) => void;
   /** Open on "Create account" instead of "Sign in". */
   initialMode?: 'signin' | 'register';
+  /** Open on this method; default = e-mail for a Chinese browser, else Google when configured. */
+  initialTab?: 'google' | 'email';
   /** OAuth consent page to come back to after the e-mail confirmation. */
   returnTo?: string;
 }
@@ -31,10 +36,18 @@ type Mode = 'signin' | 'register' | 'forgot' | 'reset';
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, returnTo }) => {
+/** Google first, except where Google is unreachable by default (mainland China). */
+const defaultTab = (): 'google' | 'email' =>
+  GOOGLE_CLIENT_ID && !isChineseVisitor() ? 'google' : 'email';
+
+const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, initialTab, returnTo }) => {
   const { t } = useTranslation('common');
   const min = PASSWORD_MIN_LEN;
-  const [tab, setTab] = useState<'google' | 'email'>(GOOGLE_CLIENT_ID ? 'google' : 'email');
+  const [tab, setTab] = useState<'google' | 'email'>(
+    () => (GOOGLE_CLIENT_ID ? (initialTab ?? defaultTab()) : 'email'));
+  // 'idle' = nothing fetched yet; 'loading' = the click is waiting for Google's script;
+  // 'ready' = Google's own button is shown; 'unreachable' = blocked / too slow.
+  const [gisState, setGisState] = useState<'idle' | 'loading' | 'ready' | 'unreachable'>('idle');
   const [mode, setMode] = useState<Mode>('signin');
   const [email, setEmail] = useState('');
   const [name, setName] = useState('');
@@ -81,9 +94,11 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   // from the OAuth consent page).
   useEffect(() => {
     if (!open) return;
+    if (initialTab && (initialTab === 'email' || GOOGLE_CLIENT_ID)) setTab(initialTab);
     const link = pendingEmailLink();
     if (!link) {
       if (initialMode === 'register') { setTab('email'); setMode('register'); setErr(null); setInfo(null); }
+      else if (initialMode === 'signin') { setMode('signin'); setErr(null); setInfo(null); }
       return;
     }
     const continuation = pendingContinuation();
@@ -109,15 +124,15 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
       })
       .catch((e: Error) => setErr(e.message))
       .finally(() => setBusy(false));
-  }, [open, initialMode]);
+  }, [open, initialMode, initialTab]);
 
-  // Render the official Google button whenever the Google tab is shown.
-  useEffect(() => {
-    if (!open || !GOOGLE_CLIENT_ID || tab !== 'google') return;
-    let cancelled = false;
+  // The Google script is fetched HERE and nowhere else: on the click, with a
+  // timeout.  When it arrives, Google's own button replaces ours (one more click).
+  const startGoogle = () => {
+    if (!GOOGLE_CLIENT_ID || gisState === 'loading') return;
+    setGisState('loading'); setErr(null); setGisErr(null);
     void loadGis()
       .then((gis) => {
-        if (cancelled || !gButtonRef.current) return;
         gis.initialize({
           client_id: GOOGLE_CLIENT_ID,
           callback: (resp: { credential?: string }) => {
@@ -132,15 +147,21 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
               .catch((e: Error) => setErr(e.message));
           },
         });
-        gButtonRef.current.innerHTML = '';
-        gis.renderButton(gButtonRef.current, {
-          theme: 'outline', size: 'large', width: 280, text: 'signin_with',
-        });
-        setGisErr(null);
+        if (gButtonRef.current) {
+          gButtonRef.current.innerHTML = '';
+          gis.renderButton(gButtonRef.current, {
+            theme: 'outline', size: 'large', width: 280, text: 'signin_with',
+          });
+        }
+        setGisState('ready');
+        try { gis.prompt?.(); } catch { /* One Tap is optional */ }
       })
-      .catch((e: Error) => { if (!cancelled) setGisErr(e.message); });
-    return () => { cancelled = true; };
-  }, [open, onSignedIn, tab]);
+      .catch((e: Error) => {
+        setGisState('unreachable');
+        setGisErr(e instanceof GisUnreachableError || /load|script|google/i.test(e.message)
+          ? t('auth.gisUnreachable') : e.message);
+      });
+  };
 
   const switchMode = (m: Mode) => {
     setMode(m); setErr(null); setInfo(null); setTouched(false);
@@ -213,10 +234,24 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         {tab === 'google' && GOOGLE_CLIENT_ID ? (
           <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, py: 1 }}>
             <div ref={gButtonRef} />
+            {gisState !== 'ready' && (
+              <Button variant="outlined" onClick={startGoogle} disabled={gisState === 'loading'}
+                data-testid="google-signin"
+                sx={{ textTransform: 'none', width: 280, py: 1, fontWeight: 600 }}>
+                {gisState === 'loading' ? <CircularProgress size={18} sx={{ color: 'inherit' }} /> : t('auth.google.signIn')}
+              </Button>
+            )}
             {consentBox}
             <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: -0.75 }}>{t('auth.consent.newAccountOnly')}</Typography>
             {termsLine}
-            {gisErr && <Typography variant="caption" color="error">{gisErr}</Typography>}
+            {gisErr && (
+              <Typography variant="caption" color="error" role="alert">
+                {gisErr}{' '}
+                <Link component="button" type="button" onClick={() => { setTab('email'); setErr(null); }}>
+                  {t('auth.google.useEmail')}
+                </Link>
+              </Typography>
+            )}
             {err && <Typography variant="caption" color="error">{err}</Typography>}
           </Box>
         ) : (

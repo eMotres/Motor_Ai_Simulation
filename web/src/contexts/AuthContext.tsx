@@ -7,7 +7,7 @@ import Snackbar from '@mui/material/Snackbar';
 import Alert from '@mui/material/Alert';
 import { installFetchAuth, setTokenGetter } from '../lib/apiAuth';
 import {
-  clearSession, getStoredToken, getStoredUser, loadGis, storeSession,
+  clearSession, getStoredToken, getStoredUser, isGisLoaded, loadGis, storeSession,
   setSessionRole, serverLogout, updateToken, GOOGLE_CLIENT_ID, type SessionUser,
 } from '../lib/localAuth';
 import LoginDialog from '../components/auth/LoginDialog';
@@ -34,6 +34,9 @@ export interface AuthUser {
 
 export interface SignInOptions {
   mode?: 'signin' | 'register';
+  /** Which sign-in method the dialog opens on (default: e-mail for Chinese browsers,
+   *  Google elsewhere when a client id is configured). */
+  tab?: 'google' | 'email';
   returnTo?: string;
 }
 
@@ -202,7 +205,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [loadRole]);
 
   const signIn = useCallback(async (opts?: SignInOptions) => {
-    setLoginOpts({ mode: opts?.mode ?? 'signin', returnTo: opts?.returnTo });
+    setLoginOpts({ mode: opts?.mode ?? 'signin', tab: opts?.tab, returnTo: opts?.returnTo });
     setLoginOpen(true);
   }, []);
 
@@ -212,8 +215,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     await serverLogout();
     clearSession('user_signed_out');
     setUser(null);
-    if (GOOGLE_CLIENT_ID) {
-      // Stop Google from silently re-selecting this account next time.
+    if (GOOGLE_CLIENT_ID && isGisLoaded()) {
+      // Stop Google from silently re-selecting this account next time.  Only if
+      // the script is already on the page: logging out must never fetch it.
       try { (await loadGis()).disableAutoSelect(); } catch { /* not loaded — fine */ }
     }
     void loadRole();
@@ -225,7 +229,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, defaultMotor, resolved, signIn, logout, getToken }}>
       {children}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn}
-        initialMode={loginOpts.mode} returnTo={loginOpts.returnTo} />
+        initialMode={loginOpts.mode} initialTab={loginOpts.tab} returnTo={loginOpts.returnTo} />
       <Snackbar open={storeBusy} anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}>
         <Alert severity="warning" variant="outlined" sx={{ fontSize: 12, py: 0.25 }}>
           Auth store busy — retrying, your session is kept.

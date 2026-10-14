@@ -92,25 +92,43 @@ function get(tree, dotted) {
 }
 
 const STYLE = `
-#seo-landing{font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans SC","PingFang SC","Microsoft YaHei",sans-serif;max-width:1100px;margin:0 auto;padding:20px 16px 48px;color:#0f172a;line-height:1.5}
+html,body,#root{height:auto;overflow:auto}
+body{margin:0;background:#fff}
+#seo-landing{font-family:Inter,-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",Roboto,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;font-size:16px;max-width:1100px;margin:0 auto;padding:20px 16px 48px;background:#fff;color:#0f172a;line-height:1.6;-webkit-text-size-adjust:100%}
 #seo-landing a{color:#1d4ed8}
 #seo-landing header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px}
 #seo-landing .brand{display:flex;align-items:center;gap:10px;font-size:1.5rem;font-weight:700;text-decoration:none;color:inherit}
 #seo-landing nav a{margin-left:12px}
-#seo-landing h1{font-size:2.4rem;line-height:1.15;margin:32px 0 12px;text-align:center}
-#seo-landing h2{font-size:1.6rem;margin:48px 0 8px;text-align:center}
-#seo-landing .lead{text-align:center;color:#475569;max-width:760px;margin:0 auto 16px}
+#seo-landing h1{font-size:2rem;line-height:1.2;margin:28px 0 12px;text-align:center;color:#0f172a}
+#seo-landing h2{font-size:1.5rem;margin:44px 0 8px;text-align:center;color:#0f172a}
+#seo-landing h3{font-size:1.1rem;margin:0 0 6px;color:#0f172a}
+#seo-landing .lead{text-align:center;color:#1e293b;max-width:760px;margin:0 auto 16px}
+#seo-landing .auth{display:flex;flex-wrap:wrap;justify-content:center;gap:12px;margin:20px 0}
+#seo-landing .auth a{display:inline-block;padding:11px 26px;border-radius:8px;border:2px solid #1d4ed8;font-weight:600;text-decoration:none;background:#1d4ed8;color:#fff}
+#seo-landing .auth a.alt{background:#fff;color:#1d4ed8}
+#seo-landing .slow-note{display:none;margin:16px 0;padding:12px 16px;border:1px solid #b45309;border-radius:8px;background:#fffbeb;color:#451a03}
+#seo-landing.slow .slow-note{display:block}
 #seo-landing ol.chain{list-style:none;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;padding:0}
 #seo-landing ol.chain li{border:1.5px solid #1d4ed8;border-radius:99px;padding:3px 12px;font-weight:600}
 #seo-landing .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));list-style:none;padding:0}
-#seo-landing .grid>*{border:1px solid #cbd5e1;border-radius:8px;padding:14px}
-#seo-landing h3{font-size:1.05rem;margin:0 0 6px}
-#seo-landing figure{margin:0;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;background:#fff}
+#seo-landing .grid>*{border:1px solid #94a3b8;border-radius:8px;padding:14px}
+#seo-landing figure{margin:0;border:1px solid #94a3b8;border-radius:8px;overflow:hidden;background:#fff}
 #seo-landing figure img{display:block;width:100%;height:auto}
-#seo-landing figcaption{padding:8px 12px;font-weight:600;border-top:1px solid #cbd5e1;background:#f8fafc}
-#seo-landing footer{margin-top:48px;padding-top:16px;border-top:1px solid #cbd5e1;text-align:center;font-size:.85rem;color:#475569}
-@media (prefers-color-scheme:dark){#seo-landing{color:#e2e8f0}#seo-landing a{color:#93c5fd}#seo-landing .lead,#seo-landing footer{color:#94a3b8}#seo-landing .grid>*,#seo-landing footer{border-color:#334155}}
+#seo-landing figcaption{padding:8px 12px;font-weight:600;border-top:1px solid #94a3b8;background:#f1f5f9}
+#seo-landing footer{margin-top:48px;padding-top:16px;border-top:1px solid #94a3b8;text-align:center;font-size:.9rem;color:#334155}
+@media (prefers-color-scheme:dark){body{background:#0f172a}#seo-landing{background:#0f172a;color:#f1f5f9}#seo-landing a{color:#93c5fd}#seo-landing h1,#seo-landing h2,#seo-landing h3{color:#f8fafc}#seo-landing .lead{color:#e2e8f0}#seo-landing footer{color:#cbd5e1}#seo-landing .auth a{background:#3b82f6;border-color:#3b82f6;color:#0f172a}#seo-landing .auth a.alt{background:#0f172a;color:#93c5fd;border-color:#93c5fd}#seo-landing .grid>*,#seo-landing footer,#seo-landing figure,#seo-landing figcaption{border-color:#475569}#seo-landing figure,#seo-landing figcaption{background:#1e293b}#seo-landing .slow-note{background:#451a03;color:#fef3c7;border-color:#f59e0b}}
+@media (min-width:700px){#seo-landing h1{font-size:2.4rem}}
 `.trim();
+
+/** Sign in + Request access as plain links: they open the app's e-mail dialog once the
+ *  bundle runs (?signin=1 / ?signup=1, see requestedAuthMode in lib/localAuth.ts) and
+ *  stay visible and readable when it never does.  Same locale path, so a Chinese page
+ *  stays Chinese. */
+export function authLinks(L, loc) {
+  const t = (k) => esc(get(L, k));
+  return `<p class="auth"><a href="${loc.path}?signin=1">${t('hero.signIn')}</a>`
+    + `<a class="alt" href="${loc.path}?signup=1">${t('hero.request')}</a></p>`;
+}
 
 /** The landing text as semantic HTML (what Landing.tsx shows, without the widgets). */
 export function renderBody(L, loc) {
@@ -122,15 +140,18 @@ export function renderBody(L, loc) {
   out.push(`<style>${STYLE}</style>`);
   out.push('<header>');
   out.push(`<a class="brand" href="${loc.path}"><img src="/brand/aerostator-logo-64.png" width="40" height="40" alt="AeroStator logo"><span>AeroStator Core</span></a>`);
+  // The English link carries ?lang=en: the first-visit script (index.html) saves "en" and
+  // stays, so a visitor who picks English is not sent back to /zh-cn/.
   out.push('<nav aria-label="Language">' + LOCALES.map((l) =>
-    `<a href="${l.path}" hreflang="${l.lang}" lang="${l.lang}">${esc(l.label)}</a>`).join('') + '</nav>');
+    `<a href="${l.path === '/' ? '/?lang=en' : l.path}" hreflang="${l.lang}" lang="${l.lang}">${esc(l.label)}</a>`).join('') + '</nav>');
   out.push('</header>');
+  out.push(`<p class="slow-note" role="status">${t('static.slow')} <a href="mailto:${REQUEST_ACCESS_EMAIL}">${esc(REQUEST_ACCESS_EMAIL)}</a></p>`);
   out.push('<main>');
   out.push(`<h1>${t('hero.title')}</h1>`);
   out.push(`<h2 style="margin-top:0;font-size:1.3rem">${t('hero.agents')}</h2>`);
   out.push(`<p class="lead">${t('hero.sub')}</p>`);
   out.push(`<ol class="chain" aria-label="${t('chain.label')}">${li(CHAIN_IDS.map((id) => t(`chain.${id}`)))}</ol>`);
-  out.push(`<p class="lead"><a href="mailto:${REQUEST_ACCESS_EMAIL}?subject=${encodeURIComponent('AeroStator Core access')}">${t('hero.request')}</a></p>`);
+  out.push(authLinks(L, loc));
 
   out.push(`<section aria-labelledby="concept-h"><h2 id="concept-h">${t('concept.title')}</h2>`);
   out.push(`<p class="lead">${t('concept.sub')}</p><p class="lead">${t('concept.diagramAlt')}</p>`);
@@ -155,7 +176,7 @@ export function renderBody(L, loc) {
     '</ul></li></ul></section>');
 
   out.push(`<section aria-labelledby="cta-h"><h2 id="cta-h">${t('cta.title')}</h2>`);
-  out.push(`<p class="lead"><a href="mailto:${REQUEST_ACCESS_EMAIL}?subject=${encodeURIComponent('AeroStator Core access')}">${t('hero.request')}</a></p></section>`);
+  out.push(`${authLinks(L, loc)}</section>`);
   out.push('</main>');
   out.push(`<footer><p>${t('footer.licence')}</p><p>${esc(COMPANY)} · <a href="${SITE}">aerostator.com</a></p></footer>`);
   out.push('</div>');

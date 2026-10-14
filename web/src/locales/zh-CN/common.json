@@ -164,6 +164,11 @@
       "forgot": "忘记密码？",
       "back": "返回登录"
     },
+    "gisUnreachable": "您的网络无法访问 Google 登录；请使用邮箱登录",
+    "google": {
+      "signIn": "使用 Google 登录",
+      "useEmail": "使用邮箱登录"
+    },
     "consent": {
       "line": "向我发送产品新闻和更新",
       "help": "产品新闻和更新，每月最多 2 封；一键退订。我们会先发送确认链接。",

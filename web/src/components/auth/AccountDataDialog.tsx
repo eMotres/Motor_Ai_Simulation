@@ -36,21 +36,21 @@ const AccountDataDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ o
   }, []);
 
   // Google accounts confirm with a fresh Google credential instead of a password.
-  useEffect(() => {
-    if (!open || !GOOGLE_CLIENT_ID || state?.pending) return;
-    let live = true;
+  // Google's script is fetched only when this button is clicked (blocked in China).
+  const confirmWithGoogle = () => {
+    setMsg(null);
     loadGis().then((gis) => {
-      if (!live || !gRef.current) return;
+      if (!gRef.current) return;
       gis.initialize({
         client_id: GOOGLE_CLIENT_ID,
         callback: (resp: { credential?: string }) => {
           if (resp.credential) void schedule({ google_credential: resp.credential });
         },
       });
+      gRef.current.innerHTML = '';
       gis.renderButton(gRef.current, { size: 'small', text: 'continue_with' });
-    }).catch(() => {});
-    return () => { live = false; };
-  }, [open, state?.pending, schedule]);
+    }).catch(() => setMsg({ kind: 'error', text: 'Google is not reachable from your network; confirm with your password instead.' }));
+  };
 
   const doExport = async () => {
     setBusy(true); setMsg(null);
@@ -101,6 +101,8 @@ const AccountDataDialog: React.FC<{ open: boolean; onClose: () => void }> = ({ o
               {GOOGLE_CLIENT_ID && (
                 <Box sx={{ mt: 1 }}>
                   <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mb: 0.5 }}>Google account? Confirm with Google:</Typography>
+                  <Button size="small" variant="outlined" onClick={confirmWithGoogle}
+                    sx={{ textTransform: 'none' }}>Confirm with Google</Button>
                   <div ref={gRef} />
                 </Box>
               )}

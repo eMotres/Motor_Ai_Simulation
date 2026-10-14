@@ -3,7 +3,8 @@
 //
 // A visitor with no saved choice gets zh-CN when
 //   (a) any of navigator.languages / navigator.language is a Chinese tag, or
-//   (b) the browser time zone is a China time zone;
+//   (b) the browser time zone is a China time zone, or
+//   (c) the user agent says so: WeChat's in-app browser sends "Language/zh_CN";
 // everyone else gets English.  A saved choice always wins (see locale.ts).
 
 export type InitialLanguage = 'en' | 'zh-CN';
@@ -25,6 +26,15 @@ export function isChinaTimeZone(tz: unknown): boolean {
   return typeof tz === 'string' && CHINA_TIME_ZONES.includes(tz.trim());
 }
 
+/** WeChat / Chinese in-app browsers put the app language in the UA ("... Language/zh_CN"). */
+export function isChineseUserAgent(ua: unknown): boolean {
+  return typeof ua === 'string' && /(^|[^a-z])Language\/zh/i.test(ua);
+}
+
+function browserUserAgent(): string | null {
+  try { return typeof navigator === 'undefined' ? null : navigator.userAgent || null; } catch { return null; }
+}
+
 /** The browser's time zone, or null when Intl is missing or throws. */
 export function browserTimeZone(): string | null {
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { return null; }
@@ -42,10 +52,17 @@ export function browserLanguages(): string[] {
 
 /** `languages` / `timeZone` default to the live browser values (tests pass them). */
 export function detectInitialLanguage(opts: {
-  languages?: readonly string[] | null; timeZone?: string | null;
+  languages?: readonly string[] | null; timeZone?: string | null; userAgent?: string | null;
 } = {}): InitialLanguage {
   const langs = opts.languages === undefined ? browserLanguages() : (opts.languages ?? []);
   if (langs.some(isChineseTag)) return 'zh-CN';
+  if (isChineseUserAgent(opts.userAgent === undefined ? browserUserAgent() : opts.userAgent)) return 'zh-CN';
   const tz = opts.timeZone === undefined ? browserTimeZone() : opts.timeZone;
   return isChinaTimeZone(tz) ? 'zh-CN' : 'en';
+}
+
+/** Is this visitor (by the browser's own signals) likely in China?  Used to
+ *  open the sign-in dialog on e-mail instead of Google, which is blocked there. */
+export function isChineseVisitor(): boolean {
+  return detectInitialLanguage() === 'zh-CN';
 }

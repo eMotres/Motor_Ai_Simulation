@@ -113,6 +113,11 @@ here, audited from the resolved dependency closure of `requirements.txt` on
 | zod | 4.3.6 | MIT |
 | zustand | 5.0.11 | MIT |
 
+Font served with the web app: Inter (variable, latin and latin-ext subsets from
+`@fontsource-variable/inter` 5.3.0, `web/public/fonts/`), SIL Open Font License 1.1,
+copyright The Inter Project Authors; the licence text ships as
+`web/public/fonts/Inter-OFL.txt`.
+
 Transitive npm production dependencies (`web/package-lock.json`, non-dev
 entries, re-audited 2026-10-03, 285 packages): MIT 183, Apache-2.0 58, ISC 22,
 BSD-3-Clause 18, and one each of MIT AND ISC (victory-vendor), Zlib, 0BSD and

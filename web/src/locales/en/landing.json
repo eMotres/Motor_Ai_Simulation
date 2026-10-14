@@ -10,6 +10,7 @@
     "sub": "Design, simulate and prepare production of drive components built on AeroStator Core motors.",
     "signInGoogle": "Sign in with Google",
     "signIn": "Sign in",
+    "signInEmail": "Sign in with e-mail",
     "request": "Request access"
   },
   "chain": {
@@ -90,5 +91,8 @@
   "footer": {
     "licence": "Software Apache-2.0. AeroStator Core motor technology is patent pending; manufacturing requires a licence from MOTRES.",
     "company": "MOTRES d.o.o."
+  },
+  "static": {
+    "slow": "The interactive app is taking a long time to load. This page works without it: use the links above, reload, or write to"
   }
 }

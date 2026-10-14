@@ -10,6 +10,7 @@
     "sub": "基于 AeroStator Core 电机，完成驱动部件的设计、仿真与生产准备。",
     "signInGoogle": "使用 Google 登录",
     "signIn": "登录",
+    "signInEmail": "邮箱登录",
     "request": "申请访问"
   },
   "chain": {
@@ -90,5 +91,8 @@
   "footer": {
     "licence": "软件采用 Apache-2.0。AeroStator Core 电机技术正在申请专利；制造需获得 MOTRES 的许可。",
     "company": "MOTRES d.o.o."
+  },
+  "static": {
+    "slow": "交互式应用加载时间较长。本页无需它也可使用：请点击上方链接、刷新页面，或发送邮件至"
   }
 }

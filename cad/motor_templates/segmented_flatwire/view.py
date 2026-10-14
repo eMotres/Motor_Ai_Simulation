@@ -19,11 +19,11 @@ light bearing steel, aluminium holders / Prop_fix, GFRP ring, dark screws.
 import math
 
 BODIES = ("Core", "Coil", "RotorCore", "Magnet",
-          "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
+          "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_seal")
 PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8", "Electronics")
 SHAPES = ("PhaseBoard",)                               # imported reference body (Part::Feature, per-face STEP colours)
 ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws")   # labels of the Draft link arrays
-LINKS = ("Bearing_618_8_back", "Ring_back")            # App::Link copies (Fusion occurrences)
+LINKS = ("Bearing_618_8_back", "Ring_back", "Bearing_seal_2")            # App::Link copies (Fusion occurrences)
 # per-part colours (r, g, b) from THE palette (palette.py: one source for the GUI finish, the GLB exporter and the web viewer).
 # The template does not know the magnet polarity per pocket: the FCStd array has one colour (N), the GLB / array elements
 # alternate N / S by index (palette.magnet_colour).

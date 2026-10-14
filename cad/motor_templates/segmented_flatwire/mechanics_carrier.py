@@ -35,6 +35,7 @@ def _hub_holes(doc, body, sh, g, rv):
     doc.recompute()
     pp = polar(body, [pk], hk, P + "carrier_hole_count", "CarrierHoles")
     pp.Refine = True
+    body.Tip = pp            # the next features (key tab / slot) build on the patterned holes
     return hk, pk, pp
 
 
@@ -120,13 +121,14 @@ def build_carrier(doc, sh, body, rear=False):
     ga = pk.addGeometry(Part.ArcOfCircle(Part.Circle(V(0, rin, 0), V(0, 0, 1), kw), math.pi, 2 * math.pi), False)   # bottom, right to left
     gr = pk.addGeometry(Part.LineSegment(V(-kw, rin, 0), V(-kw, yt, 0)), False)  # left side, up
     gt = pk.addGeometry(Part.LineSegment(V(-kw, yt, 0), V(kw, yt, 0)), False)    # top
-    s2.con("Coincident", gl, 2, ga, 2); s2.con("Coincident", ga, 1, gr, 1)
+    s2.con("Tangent", gl, 2, ga, 2); s2.con("Tangent", ga, 1, gr, 1)          # side lines run tangent into the round bottom
     s2.con("Coincident", gr, 2, gt, 1); s2.con("Coincident", gt, 2, gl, 1)
-    s2.con("Vertical", gl); s2.con("Vertical", gr); s2.con("Horizontal", gt)
+    s2.con("Vertical", gl)
+    s2.con("Symmetric", gl, 1, gt, 1, V_AXIS)                  # the two top corners are mirror images (top line horizontal)
     s2.con("PointOnObject", ga, 3, V_AXIS)
     s2.con("DistanceY", ORIGIN, 1, ga, 3, rin, name="carrier_slot_bottom_y", expr=P + "carrier_rim_in_r")
     s2.con("DistanceX", ORIGIN, 1, gl, 1, kw, name="carrier_slot_half_w", expr=P + "rotor_key_w / 2")
-    s2.con("DistanceY", ORIGIN, 1, gt, 1, yt, name="carrier_slot_top_y", expr=P + "carrier_flange_r")
+    s2.con("DistanceY", ORIGIN, 1, gl, 1, yt, name="carrier_slot_top_y", expr=P + "carrier_flange_r")
     doc.recompute()
     slot = _pocket(body, pk, "CarrierSlot", P + "rotor_w / 2 - " + P + "carrier_rim_end_z", reversed_=rear)
     doc.recompute()

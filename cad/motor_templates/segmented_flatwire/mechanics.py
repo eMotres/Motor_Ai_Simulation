@@ -289,6 +289,11 @@ def build_bearing(doc, sh, outer, inner, ball):
     doc.recompute()
     out["outer"] = (sk, revolve(outer, sk, "OuterRingRevolve"))
     outer.Tip = out["outer"][1]
+    seal_sketches, seal_feats = [], []
+    if has_param(sh, "bearing_seal_notch_r"):                    # 2RS1: seal notch + lip groove + cone at both ends
+        for top in (False, True):
+            gk, gf = _seal_groove(doc, sh, outer, top)
+            seal_sketches.append(gk); seal_feats.append(gf)
 
     # inner ring: bore (d/2) with rounded corners, land (li) with the groove
     sk = plane_sketch(inner, "InnerRingSketch", "XZ_Plane")
@@ -333,7 +338,73 @@ def build_bearing(doc, sh, outer, inner, ball):
     rv = revolve(ball, sk, "BallRevolve", axis="Edge2")
     ball.Tip = rv
     out["ball"] = (sk, rv)
-    return dict(sketches=[out["outer"][0], out["inner"][0], sk], features=[out["outer"][1], out["inner"][1], rv])
+    return dict(sketches=[out["outer"][0], out["inner"][0], sk] + seal_sketches,
+                features=[out["outer"][1], out["inner"][1], rv] + seal_feats)
+
+
+def _seal_groove(doc, sh, outer, top):
+    """2RS1 outer ring end detail (Fusion w_61707-2rs1 Body1): from the end face the bore steps out to bearing_seal_notch_r for
+    bearing_seal_notch_t, a half-round lip groove (radius bearing_seal_groove_r) and a short cone back to the land.  One revolved
+    cut per end (sketch of the removed region; the top one is the bottom one mirrored about z = B / 2)."""
+    g = _g(sh)
+    B, lo, rn, t, gr, dz = g("bearing_B"), g("bearing_outer_land_d") / 2, g("bearing_seal_notch_r"), g("bearing_seal_notch_t"),         g("bearing_seal_groove_r"), g("bearing_seal_cone_dz")
+    sg = -1.0 if top else 1.0
+    E = B if top else 0.0
+    nm = "Top" if top else "Bottom"
+    sk = plane_sketch(outer, "SealGroove%sSketch" % nm, "XZ_Plane")
+    s = SK(sk)
+    z1, z2, z3, z4 = E + sg * t, E + sg * (t + gr), E + sg * (t + 2 * gr), E + sg * (t + 2 * gr + dz)
+    la = sk.addGeometry(Part.LineSegment(V(lo, E, 0), V(rn, E, 0)), False)
+    lb = sk.addGeometry(Part.LineSegment(V(rn, E, 0), V(rn, z1, 0)), False)
+    ar = sk.addGeometry(Part.ArcOfCircle(Part.Circle(V(rn, z2, 0), V(0, 0, 1), gr), -math.pi / 2, math.pi / 2), False)
+    lc = sk.addGeometry(Part.LineSegment(V(rn, z3, 0), V(lo, z4, 0)), False)
+    ld = sk.addGeometry(Part.LineSegment(V(lo, z4, 0), V(lo, E, 0)), False)
+    lower, upper = (1, 2)                                              # arc ends: pos 1 = lower z, pos 2 = upper z
+    b_end, c_start = (lower, upper) if not top else (upper, lower)
+    for a, ap, b, bp in ((la, 2, lb, 1), (lb, 2, ar, b_end), (ar, c_start, lc, 1), (lc, 2, ld, 1), (ld, 2, la, 1)):
+        s.con("Coincident", a, ap, b, bp)
+    s.con("Horizontal", la)
+    s.con("DistanceX", ORIGIN, 1, la, 1, lo, name="seal_groove_land_r", expr=P + "bearing_outer_land_d / 2")
+    if top:
+        s.con("DistanceY", ORIGIN, 1, la, 1, B, name="seal_groove_end_z", expr=P + "bearing_B")
+    else:
+        s.con("PointOnObject", la, 1, H_AXIS)
+    s.con("DistanceX", ORIGIN, 1, la, 2, rn, name="seal_notch_r", expr=P + "bearing_seal_notch_r")
+    s.con("Vertical", lb)
+    s.con("DistanceY", lb, 1, lb, 2, sg * t, name="seal_notch_t", expr=("-" if top else "") + P + "bearing_seal_notch_t")
+    s.con("Radius", ar, gr, name="seal_groove_r", expr=P + "bearing_seal_groove_r")
+    s.con("Vertical", ar, 3, ar, 1)                                    # half circle: both ends vertically in line with the centre
+    s.con("Vertical", ar, 3, ar, 2)
+    s.con("DistanceY", lc, 1, lc, 2, sg * dz, name="seal_cone_dz", expr=("-" if top else "") + P + "bearing_seal_cone_dz")
+    s.con("Vertical", ld)
+    doc.recompute()
+    gv = outer.newObject("PartDesign::Groove", "SealGroove" + nm)
+    gv.Profile = sk
+    gv.ReferenceAxis = (sk, ["V_Axis"])
+    gv.Angle = 360
+    gv.Refine = True
+    sk.Visibility = False
+    outer.Tip = gv
+    return sk, gv
+
+
+def build_bearing_seal(doc, sh, body):
+    """Seal of the 2RS1 bearing (Fusion Body3 / Body4): the bearing-local seal at z = bearing_seal_z0 .. z1; the second seal is the
+    same body turned over (App::Link, 180 deg about X).  Fusion's profile is a stack of 45 deg cones: here an L section with the
+    same radial / axial envelope and the same volume (outer flange thickness bearing_seal_t is the volume-matching value)."""
+    g = _g(sh)
+    ri, rm, ro, z0, z1, t = (g(n) for n in ("bearing_seal_ri", "bearing_seal_rm", "bearing_seal_ro", "bearing_seal_z0",
+                                           "bearing_seal_z1", "bearing_seal_t"))
+    sk = plane_sketch(body, "SealSection", "XZ_Plane")
+    pts = [(ri, z0), (ro, z0), (ro, z0 + t), (rm, z0 + t), (rm, z1), (ri, z1)]
+    spec = [("y", P + "bearing_seal_z0", "seal_z0"), ("x", P + "bearing_seal_ro", "seal_outer_r"),
+            ("yrel", 0, P + "bearing_seal_t", "seal_flange_t"), ("x", P + "bearing_seal_rm", "seal_lip_start_r"),
+            ("y", P + "bearing_seal_z1", "seal_z1"), ("x", P + "bearing_seal_ri", "seal_inner_r")]
+    Poly(sk, pts, spec)
+    doc.recompute()
+    rv = revolve(body, sk, "SealRevolve")
+    body.Tip = rv
+    return dict(sketches=[sk], features=[rv])
 
 
 # --------------------------------------------------------------------------------------------- holders
@@ -342,7 +413,12 @@ def build_bearing(doc, sh, outer, inner, ball):
 def _window_sketch(body, sh, name, z_expr):
     """Window between two spokes, centred on +Y (sector axis), symmetric: hub arc, fillet, spoke edge, outer arc."""
     g = _g(sh)
-    aw = math.radians(g("angle_wire"))
+    # window axis -> spoke axis angle: half the spoke pitch.  CIANO14 40: = angle_wire (6 spokes on 6 sectors, window on the sector
+    # axis).  CIANO28 85: 6 spokes on 12 sectors: holder_spoke_angle = 180 deg / holder_bolt_count, the window axis is turned by
+    # holder_window_rot = holder_spoke_angle - angle_wire (counter-clockwise) so that the spokes stay on the bolt axes (angle_wire from the sector axis)
+    sa_row = has_param(sh, "holder_spoke_angle")
+    sa_name = "holder_spoke_angle" if sa_row else "angle_wire"
+    aw = math.radians(g(sa_name))
     Rh, rf, w, Ri = g("holder_hub_r"), g("holder_window_r"), g("bolt_head_d") / 2, g("holder_inner_r")
     u = (math.sin(aw), math.cos(aw)); n = (-math.cos(aw), math.sin(aw))
     sc = math.sqrt((Rh + rf) ** 2 - (w + rf) ** 2)
@@ -353,7 +429,7 @@ def _window_sketch(body, sh, name, z_expr):
     te = math.sqrt(Ri * Ri - w * w)
     E = (w * n[0] + te * u[0], w * n[1] + te * u[1])
     M = lambda p: (-p[0], p[1])
-    sk = plane_sketch(body, name, "XY_Plane", z_expr=z_expr)
+    sk = plane_sketch(body, name, "XY_Plane", z_expr=z_expr, rot_expr=(P + "holder_window_rot") if has_param(sh, "holder_window_rot") else None)
     ch = Chain(sk)
     hub = ch.arc((0, 0), Rh, M(TH), TH, ccw=False, joint="T")
     fr = ch.arc(c, rf, TH, TE, ccw=True, joint="T")
@@ -368,7 +444,7 @@ def _window_sketch(body, sh, name, z_expr):
     s.con("Coincident", out, 3, ORIGIN, 1)
     s.con("Radius", out, Ri, name="holder_inner_r", expr=P + "holder_inner_r")
     s.con("Radius", fr, rf, name="holder_window_r", expr=P + "holder_window_r")
-    s.con("Angle", er, V_AXIS, aw, name="spoke_angle", expr=P + "angle_wire")
+    s.con("Angle", er, V_AXIS, aw, name="spoke_angle", expr=P + sa_name)
     s.con("Distance", ORIGIN, 1, er, w, name="spoke_half_width", expr=P + "bolt_head_d / 2")
     s.con("Symmetric", fr, ch.by_geo[fr]["exit"], fl, ch.by_geo[fl]["entry"], V_AXIS)
     s.con("Equal", fr, fl)
@@ -491,7 +567,7 @@ def _seat_chamfer_sketch(body, sh, name, back=False):
     return sk
 
 
-def _spoke_end_fillet_sketch(body, sh, name):
+def _spoke_end_fillet_sketch(body, sh, name, z_expr=None):
     """Fillet27 as a pocket: the two cusps between a spoke side (bolt_head_d / 2 from the spoke axis), the back holder
     outer radius and the fillet arc tangent to both (frame rotated by angle_wire: spoke axis on +Y)."""
     g = _g(sh)
@@ -501,7 +577,7 @@ def _spoke_end_fillet_sketch(body, sh, name):
     K = (w, math.sqrt(R * R - w * w))
     Tc = (c[0] * R / (R - rf), c[1] * R / (R - rf))
     M = lambda p: (-p[0], p[1])
-    sk = plane_sketch(body, name, "XY_Plane", z_expr="-" + P + "back_holder_end_z", rot_expr="-" + P + "angle_wire")
+    sk = plane_sketch(body, name, "XY_Plane", z_expr=z_expr or ("-" + P + "back_holder_end_z"), rot_expr="-" + P + "angle_wire")
     s = SK(sk)
     cr = Chain(sk)
     lr = cr.line(Tl, K, joint="C")
@@ -535,6 +611,38 @@ def _pocket(body, sk, name, length_expr, reversed_=False):
     return pk
 
 
+def _rib_sketch(body, sh, name, z_expr):
+    """Spoke rib (Fusion Extrude50 / Extrude49), bolt axis on +Y: a strip of half width holder_rib_half_w from the hub circle
+    (concave fillets of radius holder_window_r, one dimension + Equal) up to the head circle around the bolt."""
+    g = _g(sh)
+    a, rf, h, b, Rh = g("holder_rib_half_w"), g("holder_window_r"), g("bolt_head_d") / 2, g("holder_bolt_r"), g("holder_hub_r")
+    vc = math.sqrt((Rh + rf) ** 2 - (a + rf) ** 2)
+    k = Rh / (Rh + rf)
+    Th = ((a + rf) * k, vc * k)
+    ye = b - math.sqrt(h * h - a * a)
+    M = lambda p: (-p[0], p[1])
+    sk = plane_sketch(body, name, "XY_Plane", z_expr=z_expr, rot_expr="-" + P + "angle_wire")
+    ch = Chain(sk)
+    rl = ch.line((a, ye), (a, vc), joint="T")
+    rfil = ch.arc((a + rf, vc), rf, (a, vc), Th, ccw=True, joint="T")
+    hub = ch.arc((0, 0), Rh, Th, M(Th), ccw=True, joint="T")
+    lfil = ch.arc((-a - rf, vc), rf, M(Th), (-a, vc), ccw=True, joint="T")
+    ll = ch.line((-a, vc), (-a, ye), joint="C")
+    top = ch.arc((0, b), h, (-a, ye), (a, ye), ccw=True, joint="C")
+    ch.close()
+    s = SK(sk)
+    s.con("Coincident", hub, 3, ORIGIN, 1)
+    s.con("Radius", hub, Rh, name="holder_hub_r", expr=P + "holder_hub_r")
+    s.con("DistanceY", ORIGIN, 1, top, 3, b, name="holder_bolt_r", expr=P + "holder_bolt_r")
+    s.con("Radius", top, h, name="bolt_head_r", expr=P + "bolt_head_d / 2")
+    s.con("Vertical", rl)
+    s.con("DistanceX", ORIGIN, 1, rl, 1, a, name="rib_half_width", expr=P + "holder_rib_half_w")
+    s.con("Radius", rfil, rf, name="holder_window_r", expr=P + "holder_window_r")
+    s.con("Symmetric", rl, 1, ll, 2, V_AXIS)           # (the left fillet radius follows: tangent to the mirrored line and the hub circle)
+    s.con("Symmetric", rl, 2, ll, 1, V_AXIS)
+    return sk
+
+
 def build_holder_front(doc, sh, body):
     g = _g(sh)
     zf, zfl, zb, ze = g("holder_face_z"), g("holder_flange_z"), g("bearing_out_z"), g("front_holder_end_z")
@@ -561,11 +669,17 @@ def build_holder_front(doc, sh, body):
     doc.recompute()
     chf = _symmetric_pocket(body, ck, "HolderSeatChamfer", P + "seat_chamfer_tool_len")
     doc.recompute()
-    pp = polar(body, [win, boss, seat, chf], wk, P + "holder_bolt_count", "HolderSpokes")
+    extra_s, extra_f = [], []
+    if has_param(sh, "holder_rib_h"):                                   # CIANO28 85: ribs on the spokes (z flange face .. + holder_rib_h)
+        rk = _rib_sketch(body, sh, "HolderRibSketch", P + "holder_flange_z")
+        doc.recompute()
+        rib = _pad(body, rk, "HolderRib", P + "holder_rib_h")
+        extra_s.append(rk); extra_f.append(rib)
+    pp = polar(body, [win, boss, seat, chf] + extra_f, wk, P + "holder_bolt_count", "HolderSpokes")
     pp.Refine = True
     body.Tip = pp
     doc.recompute()
-    return dict(sketches=[sk, wk, bk, tk, ck], features=[rv, win, boss, seat, chf, pp])
+    return dict(sketches=[sk, wk, bk, tk, ck] + extra_s, features=[rv, win, boss, seat, chf] + extra_f + [pp])
 
 
 def build_holder_back(doc, sh, body):
@@ -606,15 +720,26 @@ def build_holder_back(doc, sh, body):
     ck = _seat_chamfer_sketch(body, sh, "HolderBackSeatChamferSketch", back=True)
     doc.recompute()
     chf = _symmetric_pocket(body, ck, "HolderBackSeatChamfer", P + "seat_chamfer_tool_len")
-    fk = _spoke_end_fillet_sketch(body, sh, "HolderBackSpokeFilletSketch")
+    if has_param(sh, "holder_rib_h"):         # CIANO28 85: the spoke-end fillets (Fusion Fillet27, r 2) exist in the rib zone only
+        fk = _spoke_end_fillet_sketch(body, sh, "HolderBackSpokeFilletSketch", z_expr="-" + P + "holder_flange_z")
+        doc.recompute()
+        fil = _pocket(body, fk, "HolderBackSpokeFillet", P + "holder_rib_h")
+    else:
+        fk = _spoke_end_fillet_sketch(body, sh, "HolderBackSpokeFilletSketch")
+        doc.recompute()
+        fil = _pocket(body, fk, "HolderBackSpokeFillet", P + "back_holder_len", reversed_=True)
     doc.recompute()
-    fil = _pocket(body, fk, "HolderBackSpokeFillet", P + "back_holder_len", reversed_=True)
-    doc.recompute()
-    pp = polar(body, [win, boss, seat, m3, chf, fil], wk, P + "holder_bolt_count", "HolderBackSpokes")
+    extra_s, extra_f = [], []
+    if has_param(sh, "holder_rib_h"):
+        rk = _rib_sketch(body, sh, "HolderBackRibSketch", "-" + P + "holder_flange_z")
+        doc.recompute()
+        rib = _pad(body, rk, "HolderBackRib", P + "holder_rib_h", reversed_=True)
+        extra_s.append(rk); extra_f.append(rib)
+    pp = polar(body, [win, boss, seat, m3, chf, fil] + extra_f, wk, P + "holder_bolt_count", "HolderBackSpokes")
     pp.Refine = True
     body.Tip = pp
     doc.recompute()
-    return dict(sketches=[sk, wk, bk, tk, mk, ck, fk], features=[rv, win, boss, seat, m3, chf, fil, pp])
+    return dict(sketches=[sk, wk, bk, tk, mk, ck, fk] + extra_s, features=[rv, win, boss, seat, m3, chf, fil] + extra_f + [pp])
 
 
 # --------------------------------------------------------------------------------------------- ring, Prop_fix, screw
@@ -766,10 +891,10 @@ def build_screw(doc, sh, body):
 # --------------------------------------------------------------------------------------------- assembly
 
 
-MECH_BODIES = ("Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
+MECH_BODIES = ("Shaft", "Shaft_rear", "Bearing_seal", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
 ARRAY_BASES = ("Bearing_ball", "Screw")
 MECH_PARTS = ("Mechanics", "Bearing_618_8")
-MECH_LINKS = ("Bearing_618_8_back", "Ring_back")
+MECH_LINKS = ("Bearing_618_8_back", "Ring_back", "Bearing_seal_2")
 MECH_ARRAYS = ("Balls", "Screws")
 
 
@@ -780,6 +905,10 @@ def _link(doc, target, name, z_expr, parent):
     lk.setExpression(".Placement.Base.z", z_expr)
     parent.addObject(lk)
     return lk
+
+
+def g_B(sh):
+    return pval(sh, "bearing_B")
 
 
 def build_mechanics(doc, sh, polar_array):
@@ -805,6 +934,13 @@ def build_mechanics(doc, sh, polar_array):
     for x in (o, i, ba):
         brg.addObject(x)
     rep["Bearing"] = build_bearing(doc, sh, o, i, ba)
+    if has_param(sh, "bearing_seal_ri"):
+        sl = body("Bearing_seal"); brg.addObject(sl)
+        rep["Bearing_seal"] = build_bearing_seal(doc, sh, sl)
+        lk = doc.addObject("App::Link", "Bearing_seal_2"); lk.Label = "Bearing_seal_2"; lk.LinkedObject = sl
+        lk.Placement = App.Placement(V(0, 0, g_B(sh)), App.Rotation(V(1, 0, 0), 180))
+        lk.setExpression(".Placement.Base.z", P + "bearing_B")
+        brg.addObject(lk)
     brg.setExpression(".Placement.Base.z", P + "holder_face_z")
     b = body("Stator_holder"); mech.addObject(b); rep["Stator_holder"] = build_holder_front(doc, sh, b)
     b = body("Stator_holder_back"); mech.addObject(b); rep["Stator_holder_back"] = build_holder_back(doc, sh, b)
@@ -856,6 +992,9 @@ def solids(doc):
         out["Bearing_618_8_%s_inner_ring" % tag] = _placed(gs("Bearing_inner_ring"), pl)
         for i, b in enumerate(balls):
             out["Bearing_618_8_%s_ball_%02d" % (tag, i + 1)] = _placed(b, pl)
+        if doc.getObject("Bearing_seal") is not None:
+            out["Bearing_618_8_%s_seal_1" % tag] = _placed(gs("Bearing_seal"), pl)
+            out["Bearing_618_8_%s_seal_2" % tag] = _placed(gs("Bearing_seal"), pl, doc.getObject("Bearing_seal_2").Placement)
     out["Stator_holder"] = gs("Stator_holder").copy()
     out["Stator_holder_back"] = gs("Stator_holder_back").copy()
     out["Ring_front"] = gs("Ring").copy()

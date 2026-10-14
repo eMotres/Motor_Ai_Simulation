@@ -24,6 +24,7 @@ PALETTE = {
     "ring": "#E0B341",             # GFRP ring: amber
     "bearing_ring": "#C0C6CC",
     "bearing_ball": "#E3E6E9",
+    "bearing_seal": "#26292D",     # rubber seal
     "screw": "#D9DCDF",            # nickel-plated: bright, slightly warm silver (owner 2026-10-14)
     "pcb_mask": "#1E7A3B",         # solder mask green
     "pcb_gold": "#D4AF37",         # copper pads / plated copper
@@ -36,7 +37,7 @@ DEFAULT = "#9AA3AB"
 BODY_ROLE = {
     "Core": "core", "Coil": "coil", "RotorCore": "rotor_core", "Magnet": "magnet_n",
     "Shaft": "shaft", "Shaft_rear": "aluminium",
-    "Bearing_outer_ring": "bearing_ring", "Bearing_inner_ring": "bearing_ring", "Bearing_ball": "bearing_ball",
+    "Bearing_outer_ring": "bearing_ring", "Bearing_inner_ring": "bearing_ring", "Bearing_ball": "bearing_ball", "Bearing_seal": "bearing_seal",
     "Stator_holder": "aluminium", "Stator_holder_back": "aluminium", "Ring": "ring", "Prop_fix": "aluminium", "Screw": "screw",
 }
 # role -> (metallic, roughness) of the GLB material and, via appearance(), of the FreeCAD ShapeAppearance; default (0.1, 0.55)

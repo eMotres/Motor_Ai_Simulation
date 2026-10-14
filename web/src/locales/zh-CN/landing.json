@@ -1,6 +1,8 @@
 {
   "hero": {
     "title": "从构想到产品，携手同行",
+    "agents": "接入您的 AI 智能体，一起共建",
+    "agentsHow": "了解方式",
     "sub": "基于 AeroStator Core 电机，完成驱动部件的设计、仿真与生产准备。",
     "signInGoogle": "使用 Google 登录",
     "signIn": "登录",

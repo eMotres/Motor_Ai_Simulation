@@ -34,6 +34,7 @@ import {
 } from '@mui/icons-material';
 import { buildAppTheme, loadThemeMode, saveThemeMode, type AppMode } from './theme';
 import MotorScene from './components/viewer3d/MotorScene';
+import BrandLogo from './components/common/BrandLogo';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
@@ -652,6 +653,7 @@ function App() {
           sx={{ backgroundColor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}
         >
           <Toolbar variant="dense" sx={{ gap: 1 }}>
+            <BrandLogo size={28} />
             <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3 }}>
               AeroStator{' '}
               <Box component="span" sx={{ fontWeight: 300, opacity: 0.7 }}>Core</Box>

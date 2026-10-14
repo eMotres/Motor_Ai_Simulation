@@ -1,0 +1,43 @@
+<!-- Offline render of public/landing/core-l12.webp: the CIANO14 40 L12 server-built model (_full.glb,
+     read-only copy) drawn once with three.js as an isometric, transparent 1024 px PNG.  Serve this file next to
+     three/ and model.glb (Z-up GLB, rotated here), open /index.html?az=38&el=28, call window.__save(name).
+     The GLB is never shipped: only the finished image is. -->
+<!doctype html><meta charset=utf-8><body style="margin:0;background:#888">
+<script type="importmap">{"imports":{"three":"/three/build/three.module.js","three/addons/":"/three/examples/jsm/"}}</script>
+<script type="module">
+import * as THREE from 'three';
+import {GLTFLoader} from 'three/addons/loaders/GLTFLoader.js';
+import {RoomEnvironment} from 'three/addons/environments/RoomEnvironment.js';
+const P=new URLSearchParams(location.search);
+const az=+(P.get('az')||38), el=+(P.get('el')||30), S=1024;
+const r=new THREE.WebGLRenderer({antialias:true,alpha:true,preserveDrawingBuffer:true});
+r.setPixelRatio(1); r.setSize(S,S); r.setClearColor(0,0);
+r.toneMapping=THREE.ACESFilmicToneMapping; r.toneMappingExposure=0.75; r.outputColorSpace=THREE.SRGBColorSpace;
+document.body.appendChild(r.domElement);
+const scene=new THREE.Scene();
+const pm=new THREE.PMREMGenerator(r); scene.environment=pm.fromScene(new RoomEnvironment(),0.04).texture; scene.environmentIntensity=0.45;
+const key=new THREE.DirectionalLight(0xffffff,1.5); key.position.set(-3,5,4); scene.add(key);
+const fill=new THREE.DirectionalLight(0xdbe7ff,0.35); fill.position.set(4,1,-2); scene.add(fill);
+new GLTFLoader().load('/model.glb',g=>{
+  const m=g.scene; m.rotation.x=-Math.PI/2; scene.add(m);
+  // GLB is Y-up (glTF) ; find the long (shaft) axis by bbox
+  const box=new THREE.Box3().setFromObject(m); const sz=box.getSize(new THREE.Vector3());
+  window.__info={size:sz.toArray(),min:box.min.toArray(),max:box.max.toArray()};
+  const c=box.getCenter(new THREE.Vector3());
+  const cam=new THREE.OrthographicCamera(-1,1,1,-1,0.01,10000);
+  const d=Math.max(sz.x,sz.y,sz.z)*3, a=az*Math.PI/180, e=el*Math.PI/180;
+  cam.position.set(c.x+d*Math.cos(e)*Math.sin(a), c.y+d*Math.sin(e), c.z+d*Math.cos(e)*Math.cos(a));
+  cam.lookAt(c); cam.updateMatrixWorld(); 
+  // project all vertices to find the enclosing circle
+  const inv=cam.matrixWorldInverse; const v=new THREE.Vector3(); let pts=[];
+  m.updateMatrixWorld(true);
+  m.traverse(o=>{ if(o.isMesh){ const p=o.geometry.attributes.position; for(let i=0;i<p.count;i+=3){ v.fromBufferAttribute(p,i).applyMatrix4(o.matrixWorld).applyMatrix4(inv); pts.push(v.x,v.y);} }});
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9; for(let i=0;i<pts.length;i+=2){x0=Math.min(x0,pts[i]);x1=Math.max(x1,pts[i]);y0=Math.min(y0,pts[i+1]);y1=Math.max(y1,pts[i+1]);}
+  const cx=(x0+x1)/2, cy=(y0+y1)/2; let R=0; for(let i=0;i<pts.length;i+=2){R=Math.max(R,Math.hypot(pts[i]-cx,pts[i+1]-cy));}
+  const fit=+(P.get('fit')||0.93); const h=R/fit; // half-size of the view
+  cam.left=cx-h;cam.right=cx+h;cam.top=cy+h;cam.bottom=cy-h; cam.updateProjectionMatrix();
+  window.__info.proj=[x0,x1,y0,y1,R];
+  r.render(scene,cam); window.__done=true;
+});
+window.__save=async(name)=>{ const b=await new Promise(res=>r.domElement.toBlob(res,'image/png')); const f=await fetch('/'+name,{method:'POST',body:b}); return f.status; };
+</script>

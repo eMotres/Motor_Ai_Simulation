@@ -177,6 +177,11 @@ test('nothing is left behind in public/landing', () => {
   // next reader cannot tell whether it is dead or a card someone forgot.
   const dir = path.join(WEB, 'public', 'landing');
   const named = new Set(FEATURES.map((f) => path.basename(f.src)));
+  // The concept diagram's centre is a static render of the CIANO14 40 L12 model
+  // (never the GLB itself): it must be named by ConceptDiagram.tsx.
+  const diagram = fs.readFileSync(path.join(WEB, 'src', 'components', 'landing', 'ConceptDiagram.tsx'), 'utf8');
+  assert.ok(diagram.includes('/landing/core-l12.webp'), 'ConceptDiagram must show core-l12.webp');
+  named.add('core-l12.webp');
   for (const f of fs.readdirSync(dir)) {
     assert.ok(named.has(f), `${f} is in public/landing but no card names it`);
   }

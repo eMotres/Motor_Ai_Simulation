@@ -1,6 +1,7 @@
 /**
- * The concept diagram: the AeroStator Core machine in the middle (the real
- * flux-density picture from `public/landing/em-field.png`), the five steps from
+ * The concept diagram: the AeroStator Core machine in the middle (a static,
+ * pre-rendered isometric image of the CIANO14 40 L12 model,
+ * `public/landing/core-l12.webp`; never the 3D file itself), the five steps from
  * idea to product around it, and the open ecosystem as the outer ring.
  *
  * One inline SVG that scales with its container.  Colours come from the MUI
@@ -16,7 +17,8 @@ import {
   type StepId, type TagId,
 } from './conceptLayout';
 
-const EM_PIC = { src: '/landing/em-field.png', w: 884, h: 766, mx: 390, my: 383, mr: 375 };
+// 512 px square, transparent, the motor centred and spanning ~93 % of the width.
+const CORE_PIC = { src: '/landing/core-l12.webp', size: 2 * (CORE_R - 1) };
 
 const ConceptDiagram: React.FC = () => {
   const { t } = useTranslation('landing');
@@ -33,7 +35,6 @@ const ConceptDiagram: React.FC = () => {
   const steps = stepBoxes();
   const ends = endBoxes();
   const tags = ringTags();
-  const scale = CORE_R / EM_PIC.mr;
   const font = '"Inter", "Roboto", "Helvetica", "Arial", sans-serif';
 
   return (
@@ -68,10 +69,11 @@ const ConceptDiagram: React.FC = () => {
       {/* centre: the machine */}
       <circle cx={VIEW.cx} cy={VIEW.cy} r={CORE_R + 10} fill={c.paper} stroke={c.brand}
         strokeWidth={3} />
-      <circle cx={VIEW.cx} cy={VIEW.cy} r={CORE_R - 3} fill="#ffffff" />
-      <image href={EM_PIC.src} clipPath="url(#core-clip)"
-        x={VIEW.cx - EM_PIC.mx * scale} y={VIEW.cy - EM_PIC.my * scale}
-        width={EM_PIC.w * scale} height={EM_PIC.h * scale} aria-hidden="true" />
+      <circle cx={VIEW.cx} cy={VIEW.cy} r={CORE_R - 3}
+        fill={theme.palette.mode === 'dark' ? '#1c2433' : '#f3f6fb'} />
+      <image href={CORE_PIC.src} clipPath="url(#core-clip)"
+        x={VIEW.cx - CORE_PIC.size / 2} y={VIEW.cy - CORE_PIC.size / 2}
+        width={CORE_PIC.size} height={CORE_PIC.size} aria-hidden="true" />
       <text x={VIEW.cx} y={VIEW.cy + CORE_R + 30} textAnchor="middle" fontSize={19}
         fontWeight={700} fill={c.ink}>{t('concept.core')}</text>
 

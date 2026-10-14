@@ -1,6 +1,8 @@
 {
   "hero": {
     "title": "From idea to product, together",
+    "agents": "Connect your AI agents and build together",
+    "agentsHow": "How",
     "sub": "Design, simulate and prepare production of drive components built on AeroStator Core motors.",
     "signInGoogle": "Sign in with Google",
     "signIn": "Sign in",

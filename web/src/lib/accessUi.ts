@@ -11,9 +11,37 @@
 /** The tab ids a standard user gets ('compare' is the Configure tab's id; 'model3d': everybody looks at the model, tools and STEP download come with the NDA). */
 export const STANDARD_USER_TABS: readonly string[] = ['motors', 'compare', 'model3d'];
 
-/** A signed-in, non-admin account on a backend that enforces auth. */
+/** A signed-in account on a backend that enforces auth whose role is "user" (Configure only).  An "engineer" (the whole
+ *  simulation UI, owner 2026-10-14) is NOT a standard user. */
 export const isStandardUser = (enforced: boolean, isAdmin: boolean, role: string): boolean =>
-  enforced && !isAdmin && role !== 'anon';
+  enforced && !isAdmin && role !== 'anon' && role !== 'engineer';
+
+/** Does this session get the simulation UI (Geometry, Materials, Mesh, Electromagnetic, Thermal, Mechanical, Controller, Compare)?
+ *  Admins, engineers and an unenforced (local) backend. */
+export const hasSimulationUI = (enforced: boolean, isAdmin: boolean, role: string): boolean =>
+  !enforced || isAdmin || role === 'engineer';
+
+/** The account roles (the server's users.ROLES) and what the Admin role select calls them (owner 2026-10-14). */
+export const ROLE_VALUES = ['user', 'engineer', 'admin'] as const;
+export type AccountRole = typeof ROLE_VALUES[number];
+export const ROLE_LABELS: Readonly<Record<AccountRole, string>> = { user: 'Configure', engineer: 'Simulation', admin: 'Admin' };
+export const roleLabel = (role: string): string => ROLE_LABELS[role as AccountRole] ?? role;
+
+/** Who may see a tab: 'always' everyone, 'signedIn' any signed-in session, 'fullUI' the simulation UI (admin, engineer, local
+ *  dev), 'admin' admins only (and the local dev backend, which is admin). */
+export type TabGate = 'always' | 'signedIn' | 'fullUI' | 'admin';
+export const TAB_GATES: Readonly<Record<string, TabGate>> = {
+  motors: 'always', geometry: 'fullUI', materials: 'fullUI', mesh: 'fullUI', simulation: 'fullUI',
+  static3d: 'admin', mechanical: 'fullUI', thermal: 'fullUI', controller: 'fullUI', sweep: 'admin',
+  comparePoints: 'fullUI', cost: 'admin', compare: 'signedIn', model3d: 'signedIn', admin: 'admin',
+};
+export interface GateCtx { signedIn: boolean; fullUI: boolean; isAdmin: boolean }
+export const gateOpen = (gate: TabGate, c: GateCtx): boolean =>
+  gate === 'always' || (gate === 'signedIn' && c.signedIn) || (gate === 'fullUI' && c.fullUI) || (gate === 'admin' && c.isAdmin);
+export const tabVisible = (id: string, c: GateCtx): boolean => gateOpen(TAB_GATES[id] ?? 'admin', c);
+
+/** One line for a non-admin account whose catalogue is empty (no motor granted yet). */
+export const emptyCatalogHintApplies = (enforced: boolean, isAdmin: boolean): boolean => enforced && !isAdmin;
 
 /** May this tab be shown?  Admins and an unenforced (local) backend see everything. */
 export const tabAllowed = (id: string, standardUser: boolean): boolean =>

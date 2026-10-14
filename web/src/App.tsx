@@ -76,7 +76,7 @@ import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
-import { isStandardUser, landingTabForUser, tabAllowed } from './lib/accessUi';
+import { gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
@@ -215,14 +215,14 @@ function App() {
   // comes back from localStorage synchronously — so a signed-in boot is
   // exactly what it was, and only an anonymous one waits.
   const authPending = !authResolved && !user;
-  // THE FULL ENGINEERING UI is the admin's (and the local, unenforced dev
-  // server's).  A standard account (role "user", owner 2026-10-05) has exactly
+  // THE FULL ENGINEERING UI is the admin's, an ENGINEER's (role "engineer", owner 2026-10-14: Configure only, or the whole
+  // simulation) and the local, unenforced dev server's.  A standard account (role "user", owner 2026-10-05) has exactly
   // two menus - Motors and Configure - because both only READ the catalogue; the
   // writer routes stay admin-only in the gate.  Until /api/me has answered we do
   // not know the role, so the answer is the NARROW one: a hidden tab is never
   // mounted, and a mounted Simulation panel is what fired the 403s on
   // /api/simulation/caches for a regular account.
-  const fullUI   = authResolved && (!enforced || isAdmin);
+  const fullUI   = authResolved && hasSimulationUI(enforced, isAdmin, role);
   const standardUser = isStandardUser(enforced, isAdmin, role);
   const newRequests = useNewRequestCount(isAdmin);
   const [panelWidth, setPanelWidth] = React.useState(300);
@@ -472,13 +472,13 @@ function App() {
     gate: 'always' | 'signedIn' | 'fullUI' | 'admin'; showViewer: boolean; keepMounted?: boolean;
     render: () => React.ReactNode;
   }> = [
-    { id: 'motors', label: 'Motors', order: 0, gate: 'always', showViewer: false,
+    { id: 'motors', label: 'Motors', order: 0, gate: TAB_GATES.motors, showViewer: false,
       render: () => (
         <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
           <MotorsCatalog />
         </Box>
       ) },
-    { id: 'geometry', label: 'Geometry', order: 20, panelId: 'geometry', gate: 'fullUI', showViewer: true,
+    { id: 'geometry', label: 'Geometry', order: 20, panelId: 'geometry', gate: TAB_GATES.geometry, showViewer: true,
       render: () => (
         <Box sx={{ display: 'flex', height: '100%' }}>
           <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', p: 1.5 }}>
@@ -534,7 +534,7 @@ function App() {
           </Box>
         </Box>
       ) },
-    { id: 'materials', label: 'Materials', order: 30, gate: 'fullUI', showViewer: true,
+    { id: 'materials', label: 'Materials', order: 30, gate: TAB_GATES.materials, showViewer: true,
       render: () => (
         <MaterialsCatalogPanel materialView={
           <Box sx={{ display: 'flex', height: '100%' }}>
@@ -561,21 +561,21 @@ function App() {
           </Box>
         } />
       ) },
-    { id: 'mesh', label: 'Mesh', order: 40, panelId: 'mesh', gate: 'fullUI', showViewer: true,
+    { id: 'mesh', label: 'Mesh', order: 40, panelId: 'mesh', gate: TAB_GATES.mesh, showViewer: true,
       render: () => <MeshPanel /> },
-    { id: 'simulation', label: 'Electromagnetic', order: 50, panelId: 'simulation', gate: 'fullUI', showViewer: true, keepMounted: true,
+    { id: 'simulation', label: 'Electromagnetic', order: 50, panelId: 'simulation', gate: TAB_GATES.simulation, showViewer: true, keepMounted: true,
       render: () => <SimulationPanel active={activeTab === 'simulation'} /> },
     // The 3D end-effect model gets its own scene (its own camera fit, its own
     // cut planes), so it does NOT take the AppBar's viewer cluster — those
     // controls drive MotorScene, and wiring them to a second canvas would make
     // the grid/axes toggles lie about which scene they act on.
     // 3D static solves are the owner's passport tool (admin-only server-side).
-    { id: 'static3d', label: '3D', order: 55, gate: 'admin', showViewer: false,
+    { id: 'static3d', label: '3D', order: 55, gate: TAB_GATES.static3d, showViewer: false,
       render: () => <Static3DPanel /> },
     // Rotor centrifugal stress / retaining-sleeve sizing.  Like the 3D tab it
     // draws its own picture (the deformed rotor cross-section), so it does not
     // take the AppBar's viewer cluster — those controls drive MotorScene.
-    { id: 'mechanical', label: 'Mechanical', order: 57, gate: 'admin', showViewer: false,
+    { id: 'mechanical', label: 'Mechanical', order: 57, gate: TAB_GATES.mechanical, showViewer: false,
       render: () => <MechanicalPanel /> },
     // The steady-state temperature map and the coupled EM↔thermal loop.  Split
     // out of the Simulation tab's field viewer on 2026-09-07: a conduction
@@ -583,7 +583,7 @@ function App() {
     // CPU, and it drew its own picture inside an electromagnetic output menu.
     // Like Mechanical it does NOT take the AppBar's viewer cluster — those
     // controls drive MotorScene.
-    { id: 'thermal', label: 'Thermal', order: 58, gate: 'admin', showViewer: false,
+    { id: 'thermal', label: 'Thermal', order: 58, gate: TAB_GATES.thermal, showViewer: false,
       render: () => <ThermalPanel /> },
     // The INVERTER (2026-09-22): the device, the coil->bridge map, the losses
     // with the MOSFET coldplate and the waveform the motor will be fed with.
@@ -591,12 +591,12 @@ function App() {
     // take the AppBar's viewer cluster.  Admin-only for now: it writes the
     // duty's `controller` block on the shared store, exactly as the coupled
     // loop does.
-    { id: 'controller', label: 'Controller', order: 59, gate: 'admin', showViewer: false,
+    { id: 'controller', label: 'Controller', order: 59, gate: TAB_GATES.controller, showViewer: false,
       render: () => <ControllerPanel /> },
     // The optimizer/sweep burns the whole machine on the shared config —
     // server-side it is admin-only since the deploy hardening, so showing the
     // tab to pro users would only offer buttons that 403.
-    { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: 'admin', showViewer: false,
+    { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: TAB_GATES.sweep, showViewer: false,
       render: () => <SweepConfigPanel /> },
     // Compare writes the SHARED saved-sims store and Cost studies run on the
     // shared config (kernel/study carries no per-user geometry yet) — both are
@@ -604,16 +604,16 @@ function App() {
     // Compare is the ENGINEER'S tab again (user 2026-08-25: the client
     // compares saved configurations inside Configure instead — one place,
     // no second menu).
-    { id: 'comparePoints', label: 'Compare', order: 65, gate: 'fullUI', showViewer: false,
+    { id: 'comparePoints', label: 'Compare', order: 65, gate: TAB_GATES.comparePoints, showViewer: false,
       render: () => <ComparePanel /> },
-    { id: 'cost', label: 'Cost', order: 70, panelId: 'cost', gate: 'admin', showViewer: false,
+    { id: 'cost', label: 'Cost', order: 70, panelId: 'cost', gate: TAB_GATES.cost, showViewer: false,
       render: () => <CostPanel /> },
-    { id: 'compare', label: 'Configure', order: 75, gate: 'signedIn', showViewer: false,
+    { id: 'compare', label: 'Configure', order: 75, gate: TAB_GATES.compare, showViewer: false,
       render: () => <CompareTab /> },
     // 3D model (owner 2026-10-13): look at and rotate the motor model; tools and STEP download come with the NDA (server flag can_download).
-    { id: 'model3d', label: '3D model', order: 76, gate: 'signedIn', showViewer: false,
+    { id: 'model3d', label: '3D model', order: 76, gate: TAB_GATES.model3d, showViewer: false,
       render: () => <Model3DPanel /> },
-    { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: 'admin', showViewer: false,
+    { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: TAB_GATES.admin, showViewer: false,
       render: () => <AdminPanel /> },
   ];
   const tabs = tabDefs
@@ -630,7 +630,7 @@ function App() {
       // below failed to type-check (TS2362/2363).
       order: (t.panelId ? panels[t.panelId]?.order : undefined) ?? t.order,
     }))
-    .filter((t) => t.gate === 'always' || (t.gate === 'signedIn' && signedIn) || (t.gate === 'fullUI' && fullUI) || (t.gate === 'admin' && isAdmin))
+    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin }))
     .sort((a, b) => a.order - b.order);
   const showViewer = !!tabs.find((t) => t.id === activeTab)?.showViewer;
   // The bar: Electromagnetic / Thermal / Mechanical collapse into ONE "Simulations"

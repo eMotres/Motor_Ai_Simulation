@@ -1,4 +1,5 @@
 // Admin · account dialogs — create a password account, reset a password.
+import { roleLabel } from '../../../lib/accessUi';
 import React, { useEffect, useState } from 'react';
 import {
   Button, Dialog, DialogTitle, DialogContent, DialogActions, TextField, Select, MenuItem, Typography,
@@ -40,7 +41,7 @@ export const CreateUserDialog: React.FC<{
         <TextField size="small" label="Password (min 8 chars)" type="password" value={password} onChange={(e) => setPassword(e.target.value)} />
         <TextField size="small" label="Name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
         <Select size="small" value={role} onChange={(e) => setRole(e.target.value)}>
-          {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13 }}>{r}</MenuItem>)}
+          {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13 }}>{roleLabel(r)}</MenuItem>)}
         </Select>
         {err && <Typography variant="caption" color="error">{err}</Typography>}
       </DialogContent>

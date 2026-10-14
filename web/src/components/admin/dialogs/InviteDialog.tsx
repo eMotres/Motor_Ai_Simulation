@@ -3,6 +3,7 @@
 // the messenger, which is why the dialog says so instead of implying delivery.
 // Shared by the Users section ("Invite" button) and the Sign-ups section
 // (VisitorRequests "Invite" on a visitor request) — one dialog, one behavior.
+import { ROLE_VALUES, roleLabel } from '../../../lib/accessUi';
 import React, { useEffect, useState } from 'react';
 import {
   Box, Button, Dialog, DialogTitle, DialogContent, DialogActions,
@@ -12,7 +13,7 @@ import HelpTip from '../../common/HelpTip';
 import { MotorPicker, useCatalog } from './MotorPicker';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
-export const ROLES = ['user', 'admin'] as const;
+export const ROLES = ROLE_VALUES;
 
 const InviteDialog: React.FC<{
   open: boolean; onClose: () => void; onInvited: (msg: string) => void;
@@ -73,8 +74,8 @@ const InviteDialog: React.FC<{
             <TextField size="small" label="Email" type="email" value={email} autoFocus
               onChange={(e) => setEmail(e.target.value)} sx={{ flex: '2 1 220px' }} />
           </Tooltip>
-          <Select size="small" value={role} onChange={(e) => setRole(e.target.value)} sx={{ flex: '0 0 110px' }}>
-            {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13 }}>{r}</MenuItem>)}
+          <Select size="small" value={role} onChange={(e) => setRole(e.target.value)} sx={{ flex: '0 0 130px' }}>
+            {ROLES.map((r) => <MenuItem key={r} value={r} sx={{ fontSize: 13 }}>{roleLabel(r)}</MenuItem>)}
           </Select>
           <TextField size="small" label="Note (optional)" value={note}
             onChange={(e) => setNote(e.target.value)} sx={{ flex: '2 1 200px' }} />

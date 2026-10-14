@@ -64,7 +64,9 @@ _ADMIN_EMAILS = {
 # endpoints without a Firebase session. NEVER honour it on mutating endpoints.
 ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 
-_ROLE_RANK = {"anon": -1, "user": 0, "admin": 1}
+#: "engineer" (owner 2026-10-14) sits between: every route a "user" may call, plus the per-workspace ones in
+#: ``_ENGINEER_WORKSPACE_GATES`` below; never an "admin" route.
+_ROLE_RANK = {"anon": -1, "user": 0, "engineer": 1, "admin": 2}
 
 # ── PUBLIC_EXHIBIT — is there an anonymous audience at all? ──────────────────
 #
@@ -327,6 +329,16 @@ _WORKSPACE_STORE_PREFIXES = frozenset({
 #: What those writes require instead: a REGISTERED account (anonymous not).
 WORKSPACE_STORE_MIN_ROLE = "user"
 
+#: Admin routes that an ENGINEER may call once the per-user workspaces are on: the run ledger of the History popover.  The ledger
+#: lives under ``workspace.root()``, so with ``WORKSPACES_ROOT`` set it is the caller's own; with it unset it is the owner's single
+#: ledger and these stay admin.  (Everything else admin-gated - optimizer, 3-D passports, pipeline, physics caches, the legacy
+#: PINN run, the machine-wide libraries and every ``require_admin`` route - stays admin for an engineer.)
+_ENGINEER_WORKSPACE_GATES = frozenset({
+    ("GET", "/api/simulation/ledger"), ("DELETE", "/api/simulation/ledger"), ("GET", "/api/simulation/ledger/recent"),
+    ("POST", "/api/simulation/ledger/"), ("DELETE", "/api/simulation/ledger/"),
+})
+ENGINEER_WORKSPACE_MIN_ROLE = "engineer"
+
 
 def _layering_on() -> bool:
     """Is the per-user workspace layering active?  Late import on purpose:
@@ -347,12 +359,16 @@ def required_role(method: str, path: str) -> Optional[str]:
     """
     need = _GATED.get((method, path))
     if need is not None:
+        if need == "admin" and (method, path) in _ENGINEER_WORKSPACE_GATES and _layering_on():
+            return ENGINEER_WORKSPACE_MIN_ROLE
         return need
     for _m, _pfx, _role in _GATED_PREFIX:
         if method == _m and path.startswith(_pfx):
             if (_role == "admin" and _pfx in _WORKSPACE_STORE_PREFIXES
                     and _layering_on()):
                 return WORKSPACE_STORE_MIN_ROLE
+            if _role == "admin" and (_m, _pfx) in _ENGINEER_WORKSPACE_GATES and _layering_on():
+                return ENGINEER_WORKSPACE_MIN_ROLE
             return _role
     return None
 
@@ -715,7 +731,8 @@ class RoleGateMiddleware(BaseHTTPMiddleware):
                                 "detail": (
                                     "Sign in to use this feature."
                                     if user is None
-                                    else "This feature requires an admin account."
+                                    else ("This feature requires an admin account." if need == "admin"
+                                          else "This feature requires a simulation (engineer) account.")
                                 ),
                                 "required_role": need,
                                 "your_role": role,

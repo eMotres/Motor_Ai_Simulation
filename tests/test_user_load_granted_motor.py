@@ -161,8 +161,10 @@ def test_regular_user_is_refused_with_a_readable_reason(env, method, path, body)
                        **({"json": body} if body is not None else {}))
     assert r.status_code == 403, (method, path, r.text)
     j = r.json()
-    assert j["required_role"] == "admin" and j["your_role"] == "user"
-    assert "admin" in j["detail"].lower()
+    # the run-ledger routes are an ENGINEER's once the per-user workspaces are on (this fixture); every other writer is admin-only
+    need = "engineer" if path == "/api/simulation/ledger" else "admin"
+    assert j["required_role"] == need and j["your_role"] == "user"
+    assert need in j["detail"].lower()
 
 
 @pytest.mark.parametrize("method,path,body", _WRITERS)

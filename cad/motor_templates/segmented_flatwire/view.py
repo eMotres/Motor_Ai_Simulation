@@ -64,7 +64,8 @@ def set_visibility(doc):
 
 def check_visibility(doc):
     bad = []
-    tips = {doc.getObject(n).Tip.Name for n in BODIES if doc.getObject(n) is not None and doc.getObject(n).Tip is not None}
+    tips = {doc.getObject(n).Tip.Name for n in BODIES
+            if doc.getObject(n) is not None and getattr(doc.getObject(n), "Tip", None) is not None}
     for o in doc.Objects:
         if not hasattr(o, "Visibility"):
             continue
@@ -309,7 +310,7 @@ def style_gui(doc, gdoc):
         if o.Label in ARRAYS:
             rep["arrays"][o.Label] = _attach_array_view(o)
     set_visibility(doc)
-    owner = {f.Name: n for n in _ALL_BODIES if doc.getObject(n) is not None for f in doc.getObject(n).Group}
+    owner = {f.Name: n for n in _ALL_BODIES if doc.getObject(n) is not None for f in getattr(doc.getObject(n), "Group", [])}
     for o in doc.Objects:
         vo = gdoc.getObject(o.Name)
         if vo is None:

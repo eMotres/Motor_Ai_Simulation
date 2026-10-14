@@ -110,3 +110,34 @@ t('no "Envelope" wording is left in the tab, its viewer, its locale files or its
     assert.ok(!/envelope/i.test(read(f)), f);
   }
 });
+
+// -- the tab opens on the motor open in Configure (client-view batch 2026-10-14) ------------
+t('resolveModel: the open motor\'s model, or "in preparation" - never another motor\'s canvas', () => {
+  const built = [{ die: 'CIANO14 40 new', config: 'L12' }, { die: 'CIANO14 40 new', config: 'L20' }];
+  assert.deepEqual(L.resolveModel(built, null, { die: 'CIANO14 40 new', config: 'L20' }),
+    { model: built[1], preparing: false });
+  // CIANO28 85 L13 has no built model
+  assert.deepEqual(L.resolveModel(built, null, { die: 'CIANO28 85 20SW1200', config: 'L13' }),
+    { model: null, preparing: true });
+  // no motor open: remembered, else first (unchanged behaviour)
+  assert.equal(L.resolveModel(built, L.modelKey(built[1]), null).model, built[1]);
+  assert.equal(L.resolveModel(built, null, null).model, built[0]);
+  // nothing built at all: the "none" line, not "in preparation"
+  assert.deepEqual(L.resolveModel([], null, { die: 'A', config: 'B' }), { model: null, preparing: false });
+});
+
+t('every key the 3D model tab prints exists in en and zh-CN (no raw "downloadLocked" / "nda.sign")', () => {
+  const dir = new URL('../../', import.meta.url);
+  const read = (p) => readFileSync(new URL(p, dir), 'utf8');
+  const flat = (o, pre = '') => Object.entries(o).flatMap(([k, v]) => (v && typeof v === 'object' ? flat(v, `${pre}${k}.`) : [`${pre}${k}`]));
+  const en = new Set(flat(JSON.parse(read('locales/en/model3d.json'))));
+  const zh = new Set(flat(JSON.parse(read('locales/zh-CN/model3d.json'))));
+  const used = new Set();
+  for (const f of ['components/model3d/Model3DPanel.tsx', 'components/model3d/NdaDialog.tsx'])
+    for (const m of read(f).matchAll(/\bt\('([A-Za-z0-9_.]+)'/g)) used.add(m[1]);
+  assert.ok(used.has('downloadLocked') && used.has('nda.sign') && used.has('inPreparation'));
+  for (const k of used) {
+    assert.ok(en.has(k), `en/model3d.json lacks ${k}`);
+    assert.ok(zh.has(k), `zh-CN/model3d.json lacks ${k}`);
+  }
+});

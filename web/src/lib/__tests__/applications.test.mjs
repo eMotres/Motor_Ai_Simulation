@@ -111,3 +111,47 @@ t('saveApplications PUTs the list and surfaces the server reason on a 422', asyn
   assert.deepEqual(calls[0], ['http://x/api/family/config/D%201/L12/applications', 'PUT', '{"applications":["aviation"]}']);
   await assert.rejects(A.saveApplications('http://x', 'D', 'L', ['bad']), /unknown application/);
 });
+
+// -- Motors catalog for a role-user account (client-view batch 2026-10-14) --------------------
+// The exact tree GET /api/family/tree returned for vadshe@gmail.com (role "user"): two dies.
+const USER_TREE = { can_write: false, dies: [
+  { name: 'CIANO14 40 new', stator_diameter: 40, layer: 'shared', read_only: true,
+    configs: [{ name: 'L12', applications: ['propeller'], application: 'propeller', application_set: true, applications_error: null },
+              { name: 'L20', applications: ['propeller'], application: 'propeller', application_set: true, applications_error: null }] },
+  { name: 'CIANO28 85 20SW1200', stator_diameter: 85, layer: 'shared', read_only: true,
+    configs: [{ name: 'L13', applications: ['robot'], application: 'robot', application_set: true, applications_error: null }] },
+] };
+
+t('role user: both dies render, one Motors section per diameter', () => {
+  const all = A.catalogDiameters(USER_TREE.dies, 'all');
+  assert.deepEqual(all, [40, 85]);
+  const names = all.flatMap((d) => A.diesOfDiameter(USER_TREE.dies, 'all', d).map((x) => x.name));
+  assert.deepEqual(names, ['CIANO14 40 new', 'CIANO28 85 20SW1200']);
+  assert.equal(A.diesOfDiameter(USER_TREE.dies, 'all', 40)[0].configs.length, 2);
+});
+
+t('the application filter narrows the sections and never empties an "all" view', () => {
+  assert.deepEqual(A.catalogDiameters(USER_TREE.dies, 'robot'), [85]);
+  assert.deepEqual(A.catalogDiameters(USER_TREE.dies, 'propeller'), [40]);
+  assert.deepEqual(A.catalogDiameters(USER_TREE.dies, 'marine'), []);
+  assert.deepEqual(A.catalogDiameters([], 'all'), []);
+  assert.deepEqual(A.diesOfDiameter(USER_TREE.dies, 'robot', 40), []);
+});
+
+t('a die with no readable diameter gets no section (not a crash)', () => {
+  assert.deepEqual(A.catalogDiameters([{ name: 'x', stator_diameter: undefined, configs: [] }], 'all'), []);
+});
+
+// -- robot cooling: the robotics mode only (client-view batch) -------------------------------
+t('a robot configuration is robotics-only cooling; a mixed or propeller one is not', () => {
+  const robot = { restricted: true, cooling_options: ['robotics'], propellers: [], default_propeller: null, defaults: {} };
+  assert.equal(P.isRoboticsCooled(robot), true);
+  assert.equal(P.isRoboticsCooled({ ...robot, cooling_options: ['robotics', 'propeller_air'] }), false);
+  assert.equal(P.isRoboticsCooled({ ...robot, cooling_options: ['propeller_air'] }), false);
+  assert.equal(P.isRoboticsCooled({ ...robot, cooling_options: null }), false);
+  assert.equal(P.isRoboticsCooled(null), false);
+  // the application gate on a mixed registry entry ends in exactly this state
+  const mixed = { restricted: true, cooling_options: ['robotics', 'propeller_air'], propellers: ['p1'], default_propeller: 'p1', defaults: { L13: 'p1' } };
+  assert.equal(P.isRoboticsCooled(A.coolingForApplication(mixed, 'robot')), true);
+  assert.equal(P.isRoboticsCooled(A.coolingForApplication(mixed, 'propeller')), false);
+});

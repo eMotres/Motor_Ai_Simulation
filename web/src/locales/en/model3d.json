@@ -1,6 +1,7 @@
 {
   "motor": "Motor",
   "none": "No 3D model is available for your motors yet.",
+  "inPreparation": "3D model for this motor is in preparation.",
   "parts": "Parts",
   "part": {
     "Core": "Stator core",

@@ -143,3 +143,18 @@ t('the compute hint: user and engineer on a simulation tab of an enforcing backe
   assert.ok(A.COMPUTE_HINT_TABS.every((id) => A.tabVisible(id, ctx)));
   assert.match(A.COMPUTE_WORKER_DOCS_URL, /BYO_COMPUTE\.md#9-install$/);
 });
+
+// -- the empty Motors catalog line (client-view batch 2026-10-14) ---------------------------
+t('an empty catalog never shows developer text to a role-user account', () => {
+  assert.equal(A.emptyCatalogLine({ loaded: false, failed: false, note: null, canWrite: false }), 'loading');
+  assert.equal(A.emptyCatalogLine({ loaded: true, failed: false, note: null, canWrite: false }), 'noMotors');
+  assert.equal(A.emptyCatalogLine({ loaded: true, failed: false, note: 'no motors granted yet', canWrite: false }), 'note');
+  assert.equal(A.emptyCatalogLine({ loaded: true, failed: true, note: null, canWrite: false }), 'unreachable');
+  for (const loaded of [true, false]) for (const failed of [true, false]) for (const note of [null, 'n'])
+    assert.notEqual(A.emptyCatalogLine({ loaded, failed, note, canWrite: false }), 'vendorHint');
+});
+
+t('the "freeze the geometry" hint is the vendor\'s, and only once the tree has answered empty', () => {
+  assert.equal(A.emptyCatalogLine({ loaded: true, failed: false, note: null, canWrite: true }), 'vendorHint');
+  assert.equal(A.emptyCatalogLine({ loaded: false, failed: false, note: null, canWrite: true }), 'loading');
+});

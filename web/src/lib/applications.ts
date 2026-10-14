@@ -75,6 +75,20 @@ export function filterDiesByApplication<D extends AppDie>(dies: readonly D[], fi
     .filter((d) => d.configs.length > 0);
 }
 
+/** The stator diameters (mm, ascending) of the dies that survive the filter: one Motors section each.  A die whose diameter is
+ *  not a finite number has no section to sit in. */
+export function catalogDiameters(dies: readonly (AppDie & { stator_diameter?: unknown })[], filter: ApplicationFilter): number[] {
+  return Array.from(new Set(
+    filterDiesByApplication(dies, filter).map((d) => Number(d.stator_diameter)).filter(Number.isFinite),
+  )).sort((a, b) => a - b);
+}
+
+/** The dies of one Motors section (stator diameter `d` mm) under the filter. */
+export function diesOfDiameter<D extends AppDie & { stator_diameter?: unknown }>(
+  dies: readonly D[], filter: ApplicationFilter, d: number): D[] {
+  return filterDiesByApplication(dies, filter).filter((x) => Number(x.stator_diameter) === Number(d));
+}
+
 /** Reads a stored filter back; anything unknown is "all". */
 export const parseApplicationFilter = (v: unknown): ApplicationFilter =>
   isApplication(v) ? v : 'all';

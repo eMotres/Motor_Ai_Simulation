@@ -36,6 +36,8 @@
   "sharedByOthers": "Shared by others",
   "everythingGroupedByStatorDiameterA": "Everything grouped by stator diameter. A 🔒 die is a stamped lamination: configurations (stack, wire, winding, materials) live under it, and each configuration has its duty table — click ▶ on a duty to load the whole machine into Simulation. ＋ buttons snapshot the CURRENT state at each level.",
   "catalog": "Catalog",
+  "catalogLoading": "Loading the catalog…",
+  "catalogUnreachable": "The server did not answer; retrying…",
   "materialsViewMenu": "Materials and part catalogues",
   "materialsViewMaterials": "Materials",
   "materialsViewBearings": "Bearings",

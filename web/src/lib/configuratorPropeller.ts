@@ -75,6 +75,14 @@ export function isPropellerCooled(c: CoolingInfo | null | undefined): boolean {
   return !!c?.restricted && Array.isArray(o) && o.length > 0 && o.every((x) => x === 'propeller_air');
 }
 
+/** True when the robotics mode (still air + radiation + mount + end faces) is the machine's ONLY
+ *  cooling: a robot application (server `restrict_cooling`).  Configure then shows no air-speed or
+ *  liquid controls - a forced-air figure for a robot joint is wrong. */
+export function isRoboticsCooled(c: CoolingInfo | null | undefined): boolean {
+  const o = c?.cooling_options;
+  return Array.isArray(o) && o.length > 0 && o.every((x) => x === 'robotics');
+}
+
 /** Whether this exact die/config may use propeller slipstream for its housing.
  * Mixed registries may offer this thermal boundary without making the propeller
  * the Configure load/current. */

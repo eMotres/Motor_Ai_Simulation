@@ -327,3 +327,32 @@ t('the panel: EFFICIENCY is the system, the saved column and the ranking follow 
     assert.match(c.configure.efficiencyTip, /controller|控制器/i);
   }
 });
+
+// -- the compact results bar on narrow screens (client-view batch 2026-10-14) ----------------
+t('the compact bar applies below 1280 px only', () => {
+  assert.equal(T.compactBarApplies(800), true);
+  assert.equal(T.compactBarApplies(1279), true);
+  assert.equal(T.compactBarApplies(1280), false);
+  assert.equal(T.compactBarApplies(1920), false);
+  assert.equal(T.compactBarApplies(0), false);
+});
+
+t('the compact bar carries torque, power, efficiency, winding and magnet, and follows the numbers', () => {
+  const temps = T.tempRowTiles({ T_winding_C: 90, T_magnet_C: 60, T_housing_C: 70, air_speed_ms: 0, h_W_m2K: 5, surface_cm2: 100 },
+    { winding_C: 200, magnet_C: 150 });
+  const a = T.compactResultTiles({ T_Nm: 5.5, P_kW: 0.57, eff_pct: 81.3, temps });
+  assert.deepEqual(a.map((x) => x.id), ['torque', 'power', 'efficiency', 'tWinding', 'tMagnet']);
+  assert.equal(a[0].value, 5.5);
+  assert.equal(a[3].value, 90);
+  // a slider moves: the next call carries the new numbers; an overheating winding reads "> limit" in red
+  const hot = T.tempRowTiles({ T_winding_C: 260, T_magnet_C: 60, T_housing_C: 70, air_speed_ms: 0, h_W_m2K: 5, surface_cm2: 100 },
+    { winding_C: 200, magnet_C: 150 });
+  const b = T.compactResultTiles({ T_Nm: 6.1, P_kW: 0.64, eff_pct: null, temps: hot });
+  assert.equal(b[0].value, 6.1);
+  assert.equal(b[2].value, null);
+  assert.equal(b[3].display, '> 200');
+  assert.equal(b[3].level, 'bad');
+  // no thermal data yet: every temperature is blank, never invented
+  const c = T.compactResultTiles({ T_Nm: 1, P_kW: 1, eff_pct: 90, temps: [] });
+  assert.equal(c[3].value, null);
+});

@@ -13,10 +13,11 @@ import DownloadIcon from '@mui/icons-material/Download';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
+import { useLastMotorState } from '../../lib/lastMotor';
 import NdaDialog from './NdaDialog';
 import { ModelViewer } from './modelViewer';
 import {
-  effectiveSettings, filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, panelParts, pickModel, togglesOf,
+  effectiveSettings, filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, panelParts, resolveModel, togglesOf,
   type Axis, type ModelInfo, type PartGroup,
 } from '../../lib/model3d';
 
@@ -35,7 +36,9 @@ async function detail(r: Response): Promise<string> {
 }
 
 const Model3DPanel: React.FC = () => {
-  const { t } = useTranslation('model3d');
+  // `ready` = the lazy namespace has arrived: until then t() would print the raw key ("downloadLocked", "nda.sign").
+  const { t, ready } = useTranslation('model3d');
+  const { selection: openMotor } = useLastMotorState();
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<ModelViewer | null>(null);
   const tRef = useRef(t);
@@ -45,6 +48,8 @@ const Model3DPanel: React.FC = () => {
   const [ndaOpen, setNdaOpen] = useState(false);
   const [hasPdf, setHasPdf] = useState(false);
   const [key, setKey] = useState<string>('');
+  // the motor open in Configure has no built model (only some motors have one yet)
+  const [preparing, setPreparing] = useState(false);
   const [groups, setGroups] = useState<PartGroup[]>([]);
   const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
   const [explode, setExplode] = useState(0);
@@ -69,12 +74,19 @@ const Model3DPanel: React.FC = () => {
         if (!live) return;
         setCanDownload(j.can_download === true);
         setModels(j.models as ModelInfo[]);
-        const pick = pickModel(j.models as ModelInfo[], rd(REMEMBER));
-        setKey(pick ? modelKey(pick) : '');
       } catch (e: any) { if (live) setErr(e?.message ?? String(e)); }
     })();
     return () => { live = false; };
   }, []);
+
+  // what the tab opens on: the motor open in Configure, until the person picks one here himself
+  const pickedHere = useRef(false);
+  useEffect(() => {
+    if (!models || pickedHere.current) return;
+    const pick = resolveModel(models, rd(REMEMBER), openMotor);
+    setKey(pick.model ? modelKey(pick.model) : '');
+    setPreparing(pick.preparing);
+  }, [models, openMotor?.die, openMotor?.config]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // does this account have a signed NDA PDF on file ("Your signed NDA")
   const loadMine = useCallback(async () => {
@@ -160,7 +172,9 @@ const Model3DPanel: React.FC = () => {
 
   const picker = (
     <Select size="small" fullWidth value={key} displayEmpty disabled={!models?.length}
-      onChange={(e) => { setKey(String(e.target.value)); wr(REMEMBER, String(e.target.value)); }} sx={{ fontSize: 13 }}>
+      onChange={(e) => { pickedHere.current = true; setKey(String(e.target.value)); setPreparing(false); wr(REMEMBER, String(e.target.value)); }}
+      renderValue={(v) => (v ? modelLabel(models?.find((m) => modelKey(m) === v) ?? { die: '', config: '' }) : (openMotor ? `${openMotor.die} · ${openMotor.config}` : ''))}
+      sx={{ fontSize: 13 }}>
       {(models ?? []).map((m) => <MenuItem key={modelKey(m)} value={modelKey(m)} sx={{ fontSize: 13 }}>{modelLabel(m)}</MenuItem>)}
     </Select>
   );
@@ -168,7 +182,7 @@ const Model3DPanel: React.FC = () => {
   return (
     <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0 }}>
       <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => { setCanDownload(true); void loadMine(); }} />
-      {show.has('parts') && (
+      {ready && show.has('parts') && (
       <Box sx={{ width: 290, flexShrink: 0, p: 1.5, overflowY: 'auto', borderRight: '1px solid var(--line-soft)', bgcolor: 'var(--panel)',
         display: 'flex', flexDirection: 'column', gap: 1.25 }}>
         <Box>
@@ -244,10 +258,10 @@ const Model3DPanel: React.FC = () => {
 
       <Box sx={{ position: 'relative', flex: 1, minWidth: 0 }}>
         <Box ref={host} sx={{ position: 'absolute', inset: 0 }} />
-        {!show.has('parts') && (
+        {ready && !show.has('parts') && (
           <>
             <Box sx={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 1, zIndex: 1 }}>
-              {models && models.length > 1 && <Box sx={{ minWidth: 220, bgcolor: 'var(--panel)', borderRadius: 1 }}>{picker}</Box>}
+              {models && (models.length > 1 || preparing) && <Box sx={{ minWidth: 220, bgcolor: 'var(--panel)', borderRadius: 1 }}>{picker}</Box>}
               <Button size="small" onClick={() => viewer.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
                 sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)', bgcolor: 'var(--panel)' }}>{t('fit')}</Button>
             </Box>
@@ -261,6 +275,9 @@ const Model3DPanel: React.FC = () => {
               </Button>
             </Box>
           </>
+        )}
+        {ready && preparing && !model && (
+          <Typography sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>{t('inPreparation')}</Typography>
         )}
         {loading && <Box sx={{ position: 'absolute', top: 12, left: 12 }}><CircularProgress size={22} /></Box>}
         {err && <Alert severity="error" sx={{ position: 'absolute', top: 8, left: 8, right: 8, fontSize: 12 }} onClose={() => setErr(null)}>{err}</Alert>}

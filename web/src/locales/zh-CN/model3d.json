@@ -1,5 +1,6 @@
 {
   "motor": "电机",
+  "inPreparation": "此电机的 3D 模型正在准备中。",
   "none": "您的电机暂无可用的 3D 模型。",
   "parts": "零件",
   "part": {

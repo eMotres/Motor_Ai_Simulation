@@ -1,0 +1,84 @@
+// node --test - the pure rules of lib/thermalMotorCooling.ts (the cooling
+// fields belong to the MOTOR, 2026-10-15).
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  adoptableCoolingFields, coolingMismatch, coolingSourceLine, fieldsMode,
+  isCoolingSource, parseMotorCooling, splitMotorKey,
+} from '../thermalMotorCooling.ts';
+
+const L155 = { die: 'CIANO10 200 opt', config: 'L155 motor' };
+
+test('the motor key splits on the last bar and refuses a malformed one', () => {
+  assert.deepEqual(splitMotorKey('CIANO10 200 opt|L155 motor'), L155);
+  assert.deepEqual(splitMotorKey('a|b|c'), { die: 'a|b', config: 'c' });
+  for (const bad of [null, undefined, 42, '', 'nobar', '|cfg', 'die|']) {
+    assert.equal(splitMotorKey(bad), null);
+  }
+});
+
+test('a follow answer with fields is adopted; one without is not', () => {
+  const ans = {
+    changed: true, motor_changed: true, source: 'application', application: 'aviation',
+    fields: { coolMode: 'liquid', frame: 'housed', boreMode: 'none', flowLpm: '8', junk: 3 },
+  };
+  const mc = parseMotorCooling(ans);
+  assert.equal(mc.source, 'application');
+  assert.equal(mc.application, 'aviation');
+  assert.deepEqual(mc.fields, { coolMode: 'liquid', frame: 'housed', boreMode: 'none', flowLpm: '8' });
+  assert.equal(parseMotorCooling({ changed: false, fields: null }), null);
+  assert.equal(parseMotorCooling({ fields: {} }), null);
+  assert.equal(parseMotorCooling(null), null);
+  // an unknown source is shown as the honest "last used", never as "saved"
+  assert.equal(parseMotorCooling({ fields: { frame: 'open' }, source: 'bogus' }).source, 'last_used');
+});
+
+test('only the cooling fields the panel holds are adopted', () => {
+  const f = adoptableCoolingFields({
+    frame: 'open', boreMode: 'air', boreAirSpeed: '20', airSpeedSource: 'propeller',
+    propellerId: 'x', propellerContextKey: 'k', maxIter: '9', coolMode: 'air',
+  });
+  assert.deepEqual(f, { coolMode: 'air', boreMode: 'air', boreAirSpeed: '20', frame: 'open' });
+});
+
+test('the source line names the motor and the source', () => {
+  assert.deepEqual(coolingSourceLine(L155, 'saved', null),
+    { key: 'coolingSourceSaved', args: { motor: 'CIANO10 200 opt L155 motor', app: '-' } });
+  assert.equal(coolingSourceLine(L155, 'config', null).key, 'coolingSourceConfig');
+  const app = coolingSourceLine(L155, 'application', 'aviation');
+  assert.equal(app.key, 'coolingSourceApplication');
+  assert.equal(app.args.app, 'aviation');
+  assert.equal(coolingSourceLine(null, 'saved', null), null);
+  assert.equal(coolingSourceLine(L155, null, null), null);
+  assert.ok(['saved', 'config', 'application', 'last_used'].every(isCoolingSource));
+  assert.equal(isCoolingSource('request'), false);
+});
+
+test('a propeller source is air and anything but open is housed', () => {
+  assert.deepEqual(fieldsMode({ coolMode: 'liquid', airSpeedSource: 'propeller', frame: 'open' }),
+    { mode: 'air', frame: 'open' });
+  assert.deepEqual(fieldsMode({ coolMode: 'liquid', airSpeedSource: 'manual', frame: 'x' }),
+    { mode: 'liquid', frame: 'housed' });
+});
+
+test('the loud warning: result solved air/open, fields now liquid/housed', () => {
+  const result = { cooling: { outer: { mode: 'air' }, frame: 'open' } };
+  const now = { coolMode: 'liquid', airSpeedSource: 'manual', frame: 'housed' };
+  assert.deepEqual(coolingMismatch(result, now), { solved: 'air/open', now: 'liquid/housed' });
+  // only the frame differs
+  assert.deepEqual(
+    coolingMismatch({ cooling: { outer: { mode: 'liquid' }, frame: 'open' } }, now),
+    { solved: 'liquid/open', now: 'liquid/housed' });
+});
+
+test('no warning when the result matches, or says nothing', () => {
+  const now = { coolMode: 'liquid', airSpeedSource: 'manual', frame: 'housed' };
+  assert.equal(coolingMismatch({ cooling: { outer: { mode: 'liquid' }, frame: 'housed' } }, now), null);
+  // a result from before the frame was reported is a housed machine
+  assert.equal(coolingMismatch({ cooling: { outer: { mode: 'liquid' } } }, now), null);
+  assert.equal(coolingMismatch({ cooling: {} }, now), null);
+  assert.equal(coolingMismatch(null, now), null);
+  // a propeller source solved as air is the same cooling
+  assert.equal(coolingMismatch({ cooling: { outer: { mode: 'air' }, frame: 'open' } },
+    { coolMode: 'liquid', airSpeedSource: 'propeller', frame: 'open' }), null);
+});

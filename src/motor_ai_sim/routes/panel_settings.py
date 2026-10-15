@@ -15,6 +15,20 @@ stores — app state, not user configuration), keyed by panel and by the calling
 user's e-mail (``shared`` when the caller is anonymous, i.e. auth not enforced).
 Values are stored as the panel sends them (strings for the text fields), so the
 panel's own migration/validation stays the single place that interprets them.
+
+THE THERMAL PANEL IS REMEMBERED PER MOTOR TOO (2026-10-15).  The cooling fields
+belong to the machine they were typed for: a liquid jacket on the 200 mm L155 is
+not the open frame and 20 m/s bore air of the 40 mm propeller motor.  The
+``thermal`` entry of a user therefore carries, beside the top-level ``settings``
+(= "last used", kept for everything that already reads it)::
+
+    {"settings": {...}, "updated_at": "...",
+     "motor": "<die>|<config>",            # which motor ``settings`` belong to
+     "source": "saved|config|application", # where they came from
+     "by_motor": {"<die>|<config>": {"settings": {...}, "updated_at": "..."}}}
+
+A save from the panel writes ``by_motor`` for the motor it names (``motor`` in the
+body) or, when it names none, for the motor the account has loaded.
 """
 from __future__ import annotations
 
@@ -32,6 +46,15 @@ _LOCK = threading.Lock()
 _PANELS = ("mechanical", "thermal", "simulation", "mesh", "sweep")
 _MAX_KEYS = 200
 _MAX_BYTES = 64 * 1024
+#: Motors one account's Thermal panel remembers; the least recently saved goes.
+_MAX_MOTORS = 200
+
+
+def motor_key(die: Any, config: Any) -> str:
+    """The key a motor's Thermal record is stored under: ``"<die>|<config>"``
+    (``""`` when either name is missing)."""
+    d, c = str(die or "").strip(), str(config or "").strip()
+    return "%s|%s" % (d, c) if d and c else ""
 
 
 def _store_path() -> str:
@@ -97,8 +120,15 @@ def get_panel_settings(panel: str = Path(...),
     with _LOCK:
         d = _load()
     entry = ((d.get(panel) or {}).get(who)) or {}
-    return {"panel": panel, "user": who, "settings": entry.get("settings") or {},
-            "updated_at": entry.get("updated_at")}
+    out = {"panel": panel, "user": who, "settings": entry.get("settings") or {},
+           "updated_at": entry.get("updated_at")}
+    if panel == "thermal":
+        # Which motor the fields belong to and where they came from, so the
+        # panel can say so; absent on a record saved before 2026-10-15.
+        for k in ("motor", "source", "application"):
+            if entry.get(k):
+                out[k] = entry[k]
+    return out
 
 
 @router.put("/{panel}")
@@ -130,8 +160,58 @@ def put_panel_settings(panel: str = Path(...),
             "invalid_parameters": ["settings"]})
     who = _who(authorization)
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "+00:00"
+    key = _thermal_save_key(body, authorization) if panel == "thermal" else ""
     with _LOCK:
         d = _load()
-        d.setdefault(panel, {})[who] = {"settings": s, "updated_at": stamp}
+        prev = (d.get(panel) or {}).get(who) or {}
+        entry: Dict[str, Any] = {"settings": s, "updated_at": stamp}
+        if panel == "thermal":
+            entry.update(_thermal_entry_extras(prev, s, key, stamp))
+        d.setdefault(panel, {})[who] = entry
         _save(d)
-    return {"panel": panel, "user": who, "settings": s, "updated_at": stamp}
+    out = {"panel": panel, "user": who, "settings": s, "updated_at": stamp}
+    if key:
+        out["motor"] = key
+    return out
+
+
+def _thermal_save_key(body: Dict[str, Any], authorization: Optional[str]) -> str:
+    """The motor a Thermal save belongs to: the one the panel names (it knows
+    which motor its fields were loaded for), else the account's loaded motor,
+    else ``""`` (nothing per-motor is written)."""
+    m = body.get("motor") if isinstance(body, dict) else None
+    if isinstance(m, dict):
+        key = motor_key(m.get("die"), m.get("config"))
+        if key:
+            return key
+    try:
+        from motor_ai_sim.routes.account import get_last_motor
+        sel = (get_last_motor(authorization=authorization) or {}).get("selection")
+        if isinstance(sel, dict):
+            return motor_key(sel.get("die"), sel.get("config"))
+    except Exception:  # noqa: BLE001 — anonymous / unreadable: no per-motor record
+        pass
+    return ""
+
+
+def _thermal_entry_extras(prev: Dict[str, Any], s: Dict[str, Any], key: str,
+                          stamp: str) -> Dict[str, Any]:
+    """What a Thermal save keeps from the previous entry and adds for ``key``:
+    every other motor's record untouched, this motor's record replaced."""
+    by_motor = {k: v for k, v in (prev.get("by_motor") or {}).items()
+                if isinstance(v, dict)} if isinstance(prev.get("by_motor"), dict) else {}
+    extras: Dict[str, Any] = {}
+    if key:
+        by_motor[key] = {"settings": s, "updated_at": stamp}
+        if len(by_motor) > _MAX_MOTORS:
+            oldest = sorted(by_motor, key=lambda k: str(by_motor[k].get("updated_at") or ""))
+            for k in oldest[:len(by_motor) - _MAX_MOTORS]:
+                by_motor.pop(k, None)
+        extras.update(motor=key, source="saved")
+    elif prev.get("motor"):
+        # A save that names no motor changes the last-used fields only; they no
+        # longer provably belong to the motor the entry named.
+        extras.update(motor=prev.get("motor"), source=prev.get("source") or "saved")
+    if by_motor:
+        extras["by_motor"] = by_motor
+    return extras

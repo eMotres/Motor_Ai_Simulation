@@ -4884,9 +4884,9 @@ def _run(body: Dict[str, Any],
     from motor_ai_sim.routes.thermal import RUNAWAY_C
     from motor_ai_sim.thermal_settings import (cooling_fields, cooling_issue,
                                                coupled_iteration_settings,
+                                               motor_thermal_settings,
                                                propeller_cooling_context_issue,
-                                               settle_application_cooling,
-                                               thermal_panel_settings)
+                                               settle_application_cooling)
 
     # Per-request materials through the BODY, the kernel's transport: the router
     # dependency only ever sees `?mat=`, and a user working on their own copy of
@@ -4908,14 +4908,38 @@ def _run(body: Dict[str, Any],
     # store is keyed per user, and a body without `thermal_settings` used to be
     # solved with whatever the shared entry held — still air at h = 7 W/m²K on
     # a 6 kW machine, an 8 500 °C "runaway" on 2026-09-08 13:54.
-    stored = thermal_panel_settings(authorization)
+    #
+    # THE MOTOR BEING SOLVED owns its cooling (2026-10-15): the record of the
+    # machine named by the body (`die` / `config`) or, as ever, the one the
+    # catalogue has loaded - never the fields last used on another motor, which
+    # is how a 200 mm liquid-cooled machine was solved with a 40 mm open frame.
+    solved_die = str(body.get("die") or "").strip()
+    solved_cfg = str(body.get("config") or "").strip()
     raw = body.get("thermal_settings")
-    settings = dict(raw) if isinstance(raw, dict) else dict(stored)
+    if isinstance(raw, dict):
+        settings = dict(raw)
+        cooling_source: Dict[str, Any] = {"source": "request", "motor": "",
+                                          "application": None, "note": None}
+    else:
+        stored, cooling_source = motor_thermal_settings(
+            authorization, solved_die or None, solved_cfg or None)
+        settings = dict(stored)
+        if cooling_source.get("note"):
+            log.info("coupled: %s", cooling_source["note"])
+    # The motor the guards below judge the propeller against: the one named in
+    # the body, else the catalogue's (what `motor_thermal_settings` resolved).
+    _sm = str(cooling_source.get("motor") or "").split("|")
+    guard_die = solved_die or (_sm[0] if len(_sm) == 2 else "")
+    guard_cfg = solved_cfg or (_sm[1] if len(_sm) == 2 else "")
     # A propeller source left over from another motor, on a motor whose
     # application has no propeller (a robot), is switched to that application's
     # cooling - not refused (2026-10-15).
-    settings, _cooling_note = settle_application_cooling(settings, authorization)
-    prop_issue = propeller_cooling_context_issue(settings, authorization)
+    settings, _cooling_note = settle_application_cooling(
+        settings, authorization, expected_die=guard_die or None,
+        expected_config=guard_cfg or None)
+    prop_issue = propeller_cooling_context_issue(
+        settings, authorization, expected_die=solved_die or None,
+        expected_config=solved_cfg or None)
     if prop_issue:
         raise _refuse(prop_issue, ["thermal_settings"],
                       code="propeller_cooling_context")
@@ -6716,6 +6740,11 @@ def _run(body: Dict[str, Any],
         # decide whether the numbers may be quoted must read `mode` instead.
         "solve_to": solve_to,
         "mode": ("limited" if limited else "steady"),
+        # WHICH COOLING FIELDS this answer was solved with (2026-10-15): the
+        # motor's own saved settings, its configuration's defaults, its
+        # application's rule, or the request's.  `note` is set only when the
+        # motor had no saved record and a default stood in for it.
+        "cooling_source": cooling_source,
         **({"limited": limited} if limited else {}),
         # THE CATALOGUE CONSTANTS (owner 2026-09-18): KV, Kt, Km and Km/kg of
         # this machine at 20 °C, for comparison with any other manufacturer's

@@ -200,6 +200,8 @@ const Section: React.FC<{ id: string; title: string; sub?: string; children: Rea
 const cardSx = {
   borderRadius: 2, border: '1px solid', borderColor: 'divider', bgcolor: 'background.paper',
   p: 2.25, display: 'flex', flexDirection: 'column', gap: 1, textAlign: 'left',
+  // the green top accent on EVERY card of the page (owner 2026-10-15)
+  borderTop: '3px solid', borderTopColor: 'secondary.main',
 } as const;
 
 const PictureCard: React.FC<{ feature: Feature }> = ({ feature }) => {
@@ -208,6 +210,7 @@ const PictureCard: React.FC<{ feature: Feature }> = ({ feature }) => {
     <Tooltip title={t(`sim.${feature.key}Hint`)} arrow>
       <Box sx={{
         borderRadius: 2, border: '1px solid', borderColor: 'divider',
+        borderTop: '3px solid', borderTopColor: 'secondary.main',
         bgcolor: 'background.paper', overflow: 'hidden', display: 'flex',
         flexDirection: 'column',
       }}>
@@ -345,7 +348,7 @@ const Landing: React.FC = () => {
             gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', md: 'repeat(4, 1fr)' },
           }}>
             {OPEN_IDS.map((id) => (
-              <Box key={id} sx={{ ...cardSx, borderTop: '3px solid', borderTopColor: 'secondary.main' }}>
+              <Box key={id} sx={cardSx}>
                 <Typography component="h3" sx={{ fontSize: '1.05rem', fontWeight: 700 }}>
                   {t(`open.${id}.title`)}
                 </Typography>

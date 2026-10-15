@@ -86,9 +86,10 @@ def _smtp_on(env):
 
 
 def _token_from(mail: dict, kind: str) -> str:
-    import urllib.parse
-    line = next(ln for ln in mail["body"].splitlines() if f"?{kind}=" in ln)
-    return urllib.parse.unquote(line.split(f"?{kind}=", 1)[1].strip())
+    """The short id in the mailed link (``/api/auth/link/v/<id>`` to confirm, ``/link/r/<id>`` to reset)."""
+    marker = "/api/auth/link/%s/" % ("v" if kind == "verify" else "r")
+    line = next(ln for ln in mail["body"].splitlines() if marker in ln)
+    return line.split(marker, 1)[1].strip()
 
 
 def _register(email=NEW, pw=PW, name="New Person", ip="203.0.113.5"):

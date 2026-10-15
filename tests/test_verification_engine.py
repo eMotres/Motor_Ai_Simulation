@@ -173,6 +173,36 @@ def test_domain_mismatch_is_asked_about():
     assert req["params"]["addresses"] == ["e@other-domain.com"] and req["params"]["domain"] == "siemens.com"
 
 
+def test_linked_unverified_work_address_is_requested_and_does_not_count_as_a_person_signal():
+    addr = "erika@motresres.com"
+    evs = [ev(EV.CHECK_EMAIL_VERIFIED, EV.FAIL, EV.EMAIL, value=addr, source="email"),
+           ev(EV.CHECK_EMAIL_CORPORATE, EV.PASS, EV.EMAIL, value=addr, source="email"),
+           ev(EV.CHECK_DOMAIN_MATCH, EV.PASS, EV.DOMAIN, value=addr, source="domain",
+              summary="matching MX and official-site contact mention", detail={"how": "matching_mx_plus_website_mention"})]
+    d = status(dict(work_email=addr), registry(), site(), *evs)
+    req = next(r for r in d.requests if r["code"] == ENG.REQ_CORPORATE_EMAIL)
+    assert req["params"] == {"address": addr, "domain": "motresres.com", "linked": True, "website_domain": "siemens.com"}
+    assert [s["family"] for s in d.signals] == []
+    from motor_ai_sim.verification import texts as TX
+    line = TX.ask_line(ENG.REQ_CORPORATE_EMAIL, req["params"])
+    assert addr in line and "linked to the company website domain siemens.com" in line
+
+
+def test_linked_unverified_work_address_wins_over_verified_mismatched_account_email():
+    acct = "erika@old-company.example"
+    addr = "erika@motresres.com"
+    evs = [ev(EV.CHECK_EMAIL_VERIFIED, EV.PASS, EV.EMAIL, value=acct, source="email"),
+           ev(EV.CHECK_EMAIL_CORPORATE, EV.PASS, EV.EMAIL, value=acct, source="email"),
+           ev(EV.CHECK_DOMAIN_MATCH, EV.FAIL, EV.DOMAIN, value=acct, source="domain"),
+           ev(EV.CHECK_EMAIL_VERIFIED, EV.FAIL, EV.EMAIL, value=addr, source="email"),
+           ev(EV.CHECK_EMAIL_CORPORATE, EV.PASS, EV.EMAIL, value=addr, source="email"),
+           ev(EV.CHECK_DOMAIN_MATCH, EV.PASS, EV.DOMAIN, value=addr, source="domain")]
+    d = status(None, registry(), site(), *evs)
+    req = next(r for r in d.requests if r["code"] == ENG.REQ_CORPORATE_EMAIL)
+    assert req["params"]["address"] == addr and req["params"]["linked"] is True
+    assert not any(r["code"] == ENG.REQ_DOMAIN_MISMATCH for r in d.requests)
+
+
 def test_an_unverified_account_email_is_asked_to_be_confirmed():
     d = status(None, registry(), email(verified=False), site())
     assert d.status == ENG.MORE_INFORMATION_REQUIRED and ENG.REQ_ACCOUNT_EMAIL in [r["code"] for r in d.requests]

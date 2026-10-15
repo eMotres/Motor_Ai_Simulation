@@ -7,7 +7,7 @@ from motor_ai_sim.verification import engine as ENG
 #: one line per request code; {placeholders} come from the request's params
 ASK = {
     "en": {
-        ENG.REQ_CORPORATE_EMAIL: "Please confirm a corporate e-mail address{on_domain}. Add it on the page below and we send a six-digit code to it.",
+        ENG.REQ_CORPORATE_EMAIL: "Please confirm a corporate e-mail address{on_domain}{linked_address}. Add it on the page below and we send a six-digit code to it.",
         ENG.REQ_PERSON_PAGE: "Please send a link to a page of your company that lists you (team, contact or staff page), or to your professional profile.",
         ENG.REQ_WEBSITE: "Please give the address of your company's official website.",
         ENG.REQ_REG_NO: "Please give your company's official registration number.",
@@ -34,8 +34,12 @@ ASK = {
 
 
 def ask_line(code: str, params: dict, lang: str = "en") -> str:
+    if (params or {}).get("linked"):
+        lang = "en"
     tpl = ASK.get(lang, ASK["en"]).get(code) or ASK["en"].get(code) or code
     p = dict(params or {})
+    p["linked_address"] = (" (%s is linked to the company website domain %s)" % (p.get("address"), p.get("website_domain"))
+                           if p.get("linked") and p.get("address") else "")
     p["on_domain"] = (" on %s" % p["domain"] if lang == "en" else "（%s）" % p["domain"]) if p.get("domain") else ""
     if isinstance(p.get("addresses"), list):
         p["addresses"] = ", ".join(p["addresses"])

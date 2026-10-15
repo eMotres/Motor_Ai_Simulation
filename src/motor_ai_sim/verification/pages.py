@@ -6,6 +6,7 @@ from __future__ import annotations
 import html
 from motor_ai_sim import link_pages as LP
 from motor_ai_sim.verification import config as C
+from motor_ai_sim.verification import engine as ENG
 from motor_ai_sim.verification import texts as TX
 
 STR = {
@@ -84,6 +85,8 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
             needs = "<p>%s</p>" % _e(s["nothing"])
     forms = ""
     if state not in ("ok", "denied"):
+        suggested_email = next((str(r.get("params", {}).get("address") or "") for r in requests
+                                if r.get("code") == ENG.REQ_CORPORATE_EMAIL and r.get("params", {}).get("linked")), "")
         code_form = ""
         if pending_email:
             code_form = ('<form method="post" action="%s"><input type="hidden" name="action" value="confirm_email"><input type="hidden" name="email" value="%s">'
@@ -92,7 +95,7 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
                                                                        _e(s["code_label"]), _e(s["code_go"]))
         forms = (
             '<form method="post" action="%s"><input type="hidden" name="action" value="add_email"><h2>%s</h2>'
-            '<label for="em">%s</label><input id="em" name="email" type="email" required autocomplete="email"><button type="submit">%s</button></form>%s'
+            '<label for="em">%s</label><input id="em" name="email" type="email" value="%s" required autocomplete="email"><button type="submit">%s</button></form>%s'
             '<form method="post" action="%s"><input type="hidden" name="action" value="reply"><h2>%s</h2>'
             '<label for="ur">%s</label><textarea id="ur" name="urls" rows="3"></textarea>'
             '<label for="st">%s</label><input id="st" name="website" value="%s" autocomplete="url">'
@@ -101,7 +104,7 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
             '<label for="nt">%s</label><textarea id="nt" name="note" rows="3" maxlength="%d"></textarea><button type="submit">%s</button></form>'
             '<form method="post" action="%s/document" enctype="multipart/form-data"><h2>%s</h2><p class="muted">%s</p>'
             '<input name="file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" required><button type="submit">%s</button></form>'
-        ) % (_e(base), _e(s["email_h"]), _e(s["email_label"]), _e(s["email_go"]), code_form,
+        ) % (_e(base), _e(s["email_h"]), _e(s["email_label"]), _e(suggested_email), _e(s["email_go"]), code_form,
              _e(base), _e(s["links_h"]), _e(s["urls_label"]), _e(s["site_label"]), _e(app.get("website", "")), _e(s["reg_label"]), _e(app.get("reg_no", "")),
              _e(s["vat_label"]), _e(app.get("vat_no", "")), _e(s["note_label"]), C.MAX_NOTE_CHARS, _e(s["links_go"]),
              _e(base), _e(s["doc_h"]), _e(s["doc_hint"]), _e(s["doc_go"]))

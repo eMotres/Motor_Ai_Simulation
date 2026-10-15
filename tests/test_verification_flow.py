@@ -277,6 +277,47 @@ def _code_from_mail(env, to):
     return re.search(r"code is (\d{6})", m["body"]).group(1)
 
 
+def test_linked_work_email_is_requested_and_otp_is_sent_to_that_applicant_address(env):
+    applicant = "erika@motresres.com"
+    site = "https://emotres.com"
+    routes = {
+        "https://api.gleif.org/api/v1/lei-records": {"data": [{"id": "5299000TESTLEI000000", "attributes": {"entity": {
+            "legalName": {"name": "Acme Drones Ltd"}, "legalAddress": {"country": "DE", "city": "Berlin"},
+            "registeredAs": "HRB 12345", "jurisdiction": "DE", "status": "ACTIVE", "registeredAt": {"id": "RA000242"}}}}]},
+        site + "/": "<html><body>Acme Drones Ltd, HRB 12345. Contact: owner@motresres.com.</body></html>",
+    }
+    network(routes)
+    NET.set_mx(lambda domain: [(10, "aspmx.l.google.com")] if domain in ("motresres.com", "emotres.com") else None)
+    sign(env, who="corp", website=site, work_email=applicant)
+    c = case_of(CORP)
+    req = next(r for r in c["requests"] if r["code"] == "corporate_email")
+    assert req["params"]["address"] == applicant and req["params"]["linked"] is True
+    initial_decision = [e for e in ST.events_of(c["id"]) if e["type"] == "check_run"][-1]["data"]["decision"]
+    assert not any(s["family"] == "email" for s in initial_decision["signals"])
+    tok = token_of(c)
+    page = client.get(f"/api/verification/reply/{tok}").text
+    assert applicant in page and f'value="{applicant}"' in page
+    assert "linked to the company website domain emotres.com" in page
+
+    r = client.post(f"/api/verification/reply/{tok}", data={"action": "add_email", "email": applicant})
+    assert f"We sent a code to {applicant}" in r.text
+    assert any(mail["to"] == applicant and "confirmation code" in mail["subject"] for mail in env["mail"])
+    assert not any(mail["to"] == "owner@emotres.com" and "confirmation code" in mail["subject"] for mail in env["mail"])
+    code = _code_from_mail(env, applicant)
+    ok = client.post(f"/api/verification/reply/{tok}", data={"action": "confirm_email", "email": applicant, "code": code})
+    assert "is confirmed" in ok.text
+    c = case_of(CORP)
+    linked = next(e for e in c["evidence"] if e["check"] == "domain.match_website" and e["value"] == applicant)
+    assert linked["result"] == "pass" and linked["strength"] == "none"
+    assert linked["source_url"] == site + "/"
+    assert linked["detail"]["how"] == "matching_mx_plus_website_mention"
+    assert any(p["type"] == "visible_domain_text" and p["matched"] == "motresres.com" for p in linked["detail"]["evidence"]["proofs"])
+    decision = [e for e in ST.events_of(c["id"]) if e["type"] == "check_run"][-1]["data"]["decision"]
+    assert [s["family"] for s in decision["signals"]].count("email") == 1
+    assert not any(r["code"] == ENG.REQ_DOMAIN_MISMATCH for r in decision["requests"])
+    assert c["status"] == ENG.MORE_INFORMATION_REQUIRED and step(env, "corp").status_code == 403
+
+
 def test_corporate_email_with_a_one_time_code_then_a_link_verifies_the_applicant(env):
     network(NET_OK)
     sign(env, who="gmail", signatory="Erika Mustermann", typed_name="Erika Mustermann")

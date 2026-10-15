@@ -29,6 +29,33 @@ def reg_in_text(reg_no: str, text: str) -> bool:
     return n in T.norm_reg_no(text)
 
 
+def read_site_pages(site: str, ctx: Context) -> dict:
+    """Fetch official pages once per case cache; both website and email checks consume the same visible content."""
+    u = urllib.parse.urlsplit(site)
+    base = "%s://%s" % (u.scheme, u.netloc)
+
+    def fetch():
+        pages: list[dict] = []
+        first_err = ""
+        robots: dict = {}
+        seen_urls: set[str] = set()
+        for i, path in enumerate(C.SITE_PAGES[: C.SITE_MAX_PAGES]):
+            url = site if path == "/" and u.path not in ("", "/") else base + path
+            if url in seen_urls:
+                continue
+            seen_urls.add(url)
+            p = NET.fetch_page(url, ctx.http, robots)
+            if p.ok and p.text:
+                pages.append({"url": p.url, "text": p.text, "redirects": p.redirects, "canonical_url": p.canonical_url, "mailto": p.mailto})
+            elif i == 0:
+                first_err = p.error or "no content"
+                if p.error in ("robots",) or p.error.startswith("blocked:") or p.status == 0:
+                    break
+        return {"pages": pages, "error": first_err}
+
+    return ctx.shared("official-site-pages|" + site, fetch, cache_if=lambda material: bool(material.get("pages")))
+
+
 class WebsiteSource(VerificationSource):
     name = "website"
 
@@ -42,23 +69,10 @@ class WebsiteSource(VerificationSource):
                           lambda: self._run(app, site, ctx))
 
     def _run(self, app: dict, site: str, ctx: Context) -> list[Evidence]:
-        u = urllib.parse.urlsplit(site)
-        base = "%s://%s" % (u.scheme, u.netloc)
         legal, person, reg, vat = app.get("legal_name") or "", app.get("applicant_name") or "", app.get("reg_no") or "", app.get("vat_no") or ""
-        pages: list[tuple[str, str]] = []
-        first_err = ""
-        robots: dict = {}
-        for i, path in enumerate(C.SITE_PAGES[: C.SITE_MAX_PAGES]):              # a budget of requests, whether they succeed or not
-            url = site if path == "/" and u.path not in ("", "/") else base + path
-            p = NET.fetch_page(url, ctx.http, robots)
-            if p.ok and p.text:
-                pages.append((p.url, p.text))
-            elif i == 0:
-                first_err = p.error or "no content"
-                if p.error in ("robots",) or p.error.startswith("blocked:") or p.status == 0:
-                    break                                             # nothing to read here
-            if pages and any(company_in_text(legal, t) for _u, t in pages) and (not person or any(T.name_in_text(person, t) for _u, t in pages))                     and (not (reg or vat) or any(reg_in_text(reg, t) or reg_in_text(vat, t) for _u, t in pages)):
-                break                                                 # everything we look for is found: stop reading
+        material = read_site_pages(site, ctx)
+        pages: list[tuple[str, str]] = [(p["url"], p["text"]) for p in material["pages"]]
+        first_err = material["error"]
         out: list[Evidence] = []
         if not pages:
             out.append(Evidence("website", EV.CHECK_SITE_RESOLVES, EV.DOMAIN, EV.UNKNOWN if first_err in ("robots",) or first_err.startswith("blocked:") else EV.FAIL,

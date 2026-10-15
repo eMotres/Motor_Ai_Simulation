@@ -109,7 +109,8 @@
       "requestError": "The request was not sent: {message}",
       "signinSign": "Sign in to sign the NDA online",
       "signinRequest": "Sign in to request the NDA"
-    }
+    },
+    "newsletterRetired": "The newsletter has been replaced by E-mail preferences. Sign in and choose what you want to receive in the account menu."
   },
   "nodes": {
     "hint": "FEM runs are heavy; for regular work connect your own server",
@@ -212,8 +213,6 @@
       "useEmail": "Use e-mail sign-in"
     },
     "consent": {
-      "line": "Send me product news and updates",
-      "help": "Product news and updates, at most 2 per month; unsubscribe in one click. We mail a confirmation link first.",
       "newAccountOnly": "applies to a new account only"
     }
   },

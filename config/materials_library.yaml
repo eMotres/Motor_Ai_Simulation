@@ -3357,9 +3357,11 @@ conductor:
     # -- provenance (independent-source audit 2026-09-29; envelope rule:
     # a field with no prov entry is `datasheet` from sources[0]) --
     sources:
-      - {"id": "iec60028", "doc": "IEC 60028:1925 International standard of resistance for copper: annealed copper at 20 C has resistivity 1/58 Ohm mm2/m (58.0 MS/m), density 8.89 g/cm3, constant-mass temperature coefficient 0.00393 1/K at 20 C", "read": "2026-09-29"}
+      - {"id": "iec60028", "doc": "IEC 60028:1925 International standard of resistance for copper: annealed copper at 20 C has resistivity 1/58 Ohm mm2/m (58.0 MS/m), constant-mass temperature coefficient 0.00393 1/K at 20 C", "read": "2026-09-29"}
+      - {"id": "cda_c10200", "doc": "UNS C10200 (CW008A, oxygen-free, Cu 99.95 %): density 0.323 lb/in3 = 8.94 g/cm3 (0.323 x 27.68); Copper Development Association data as reproduced by Fisk Alloy (https://fiskalloy.com/product/c10200-of/); ETP C11000 is quoted at 0.321 lb/in3 = 8.89 g/cm3 with its oxide content", "url": "https://fiskalloy.com/product/c10200-of/", "read": "2026-10-15"}
       - {"id": "cda_c11000", "doc": "Copper Development Association, UNS C11000 (ETP) typical properties: density 0.321 lb/in3, thermal conductivity 226 Btu ft/(h ft2 F) = 391 W/mK, E 17 000 ksi = 117 GPa, specific heat 0.092 Btu/lb F = 385 J/kgK, annealed yield ~10 ksi = 69 MPa (as reproduced by AZoM article 6312)", "url": "https://www.azom.com/article.aspx?ArticleID=6312", "read": "2026-09-29"}
     prov:
+      density: {"type": "datasheet", "src": "cda_c10200", "note": "8940 kg/m3 (owner 2026-10-15): pure Cu 99.9 %, Cu-ETP/OF; was 8890 (IEC 60028 annealed standard copper, 8.89 g/cm3); +0.56 % copper mass; sigma 58 MS/m and alpha 0.00393/K unchanged"}
       youngs_modulus_gpa: {"type": "datasheet", "src": "cda_c11000", "note": "17 000 ksi = 117 GPa (matches)"}
       yield_strength_mpa: {"type": "datasheet", "src": "cda_c11000", "note": "annealed ~69 MPa (matches 70)"}
       specific_heat: {"type": "datasheet", "src": "cda_c11000", "note": "385 (matches)"}
@@ -3369,7 +3371,7 @@ conductor:
       permeability: {"type": "estimate", "note": "diamagnetic copper, mu_r ~ 0.99999; value kept", "verify": true, "source": "none"}
     description: "Pure copper — rectangular Litz wire"
     sigma: 58000000    # S/m at 20 °C
-    density: 8890
+    density: 8940    # kg/m3, pure Cu 99.9 % (owner 2026-10-15; was 8890, IEC 60028 annealed standard copper)
     # --- mechanical (added 2026-09-05 for the rotor structural solve) ---
     youngs_modulus_gpa: 117        # GPa  annealed C11000
     poisson_ratio: 0.34            # -

@@ -270,9 +270,8 @@ def test_one_click_unsubscribe_switches_everything_off(env):
 
 def test_unsubscribe_ends_a_legacy_newsletter_subscription_and_back(env):
     CP, N = env["CP"], env["N"]
-    N.record_pending(ANNA, source="settings")
     d = N._load()
-    d["subscribers"][ANNA].update(status="confirmed")
+    d["subscribers"][ANNA] = {"status": "confirmed", "source": "settings", "history": []}      # an old newsletter record
     N._save(d)
     CP.set_topics(ANNA, {"new_motors": True}, source="prefs_page")
     client.post(f"/api/comm-prefs/{CP.make_token(ANNA)}/unsubscribe")

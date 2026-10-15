@@ -1,13 +1,13 @@
-"""Newsletter consent (GDPR double opt-in), campaigns queue, in-app notices.
+"""The RETIRED newsletter (2026-10-15): no subscribe / confirm / campaign code, the old flag is ignored, nobody is moved into
+the new topics, old unsubscribe links still work and switch the new topics off, the old records stay readable by an admin;
+in-app notices.
 
-Everything runs against tmp_path with a fake SMTP; the live registry and
-config/newsletter.json must stay untouched.
+Everything runs against tmp_path with a fake SMTP; the live registry and config/newsletter.json must stay untouched.
 """
 from __future__ import annotations
 
 import smtplib
 import time
-import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -78,11 +78,6 @@ def env(tmp_path, monkeypatch):
     N.LINK_IP.reset_all()
 
 
-def _tok(body: str, kind: str) -> str:
-    line = next(ln for ln in body.splitlines() if f"?{kind}=" in ln)
-    return urllib.parse.unquote(line.split(f"?{kind}=", 1)[1].strip())
-
-
 def _login(email, pw, ip="203.0.113.5"):
     r = client.post("/api/auth/login", json={"email": email, "password": pw},
                     headers={"X-Forwarded-For": ip})
@@ -95,202 +90,127 @@ def _user(env, email, role="user"):
     return _login(email, "password-" + email.split("@")[0], ip="198.51.100.9")
 
 
-def _subscribe_confirmed(env, email, role="user"):
-    h = _user(env, email, role)
-    assert client.post("/api/newsletter/me", json={"subscribe": True}, headers=h).status_code == 200
-    tok = _tok(env["outbox"][-1]["body"], "nl_confirm")
-    assert client.post("/api/newsletter/confirm", json={"token": tok}).status_code == 200
-    return h
-
-
-# ── consent ─────────────────────────────────────────────────────────────────
-
-def test_default_unchecked_signup_does_not_subscribe(env):
-    r = client.post("/api/auth/register", json={"email": NEW, "password": PW, "name": "N"})
-    assert r.status_code == 202
-    assert env["N"].status(NEW)["status"] == "none"
-    tok = _tok(env["outbox"][-1]["body"], "verify")
-    client.post("/api/auth/verify", json={"token": tok})
-    assert env["N"].status(NEW)["status"] == "none"
-    assert not any("subscription" in m["subject"] for m in env["outbox"])
-
-
-def test_signup_double_opt_in(env):
+def _legacy_subscriber(env, email, status="confirmed"):
+    """A record written by the old newsletter (consent wording of 2026-09-29)."""
     N = env["N"]
-    r = client.post("/api/auth/register",
-                    json={"email": NEW, "password": PW, "name": "N", "newsletter": True},
+    d = N._load()
+    d["subscribers"][email] = {"status": status, "source": "settings", "text_version": "2026-09-29.1",
+                               "consent_at": time.time() - 86400, "confirmed_at": time.time() - 86000,
+                               "history": [{"ts": time.time() - 86000, "event": "confirmed", "source": "settings"}]}
+    d["campaigns"]["c1"] = {"id": "c1", "subject": "Old news", "body_md": "b", "roles": [], "author": ADMIN,
+                            "created": time.time() - 5000, "status": "done", "scheduled_at": None, "started_at": None,
+                            "finished_at": None, "recipients": {email: {"status": "sent"}}, "unsubscribes": 0}
+    N._save(d)
+
+
+# -- the old subscribe / confirm / campaign surface is gone ----------------------------------------------
+
+def test_old_flag_is_accepted_and_ignored_and_nothing_new_is_mapped_from_it(env):
+    r = client.post("/api/auth/register", json={"email": NEW, "password": PW, "name": "N", "newsletter": True},
                     headers={"X-Forwarded-For": "203.0.113.77"})
     assert r.status_code == 202
-    st = N._load()["subscribers"][NEW]
-    assert st["status"] == "pending" and st["source"] == "signup"
-    assert st["text_version"] == N.CONSENT_TEXT_VERSION
-    assert st["ip_hash"] and "203.0.113.77" not in str(st)
-    assert len(env["outbox"]) == 1                     # only the account link yet
-    client.post("/api/auth/verify", json={"token": _tok(env["outbox"][0]["body"], "verify")})
-    assert env["outbox"][-1]["subject"] == "Confirm your subscription"
-    assert not N.is_confirmed(NEW)                     # not before the click
-    ctok = _tok(env["outbox"][-1]["body"], "nl_confirm")
-    assert client.post("/api/newsletter/confirm", json={"token": ctok}).status_code == 200
-    assert N.is_confirmed(NEW)
-    assert client.post("/api/newsletter/confirm", json={"token": ctok}).status_code == 400
-    assert client.post("/api/newsletter/confirm", json={"token": "forged"}).status_code == 400
+    assert env["N"].status(NEW)["status"] == "none" and NEW not in env["N"]._load()["subscribers"]
+    from motor_ai_sim import comm_prefs as CP
+    assert CP.get(NEW)["topics"] == {t: False for t in CP.TOPICS} and CP.history(NEW) == []
+    assert len(env["outbox"]) == 1 and env["outbox"][0]["subject"] == "Confirm your e-mail address"   # only the account link, no second mail
+    client.post("/api/auth/verify", json={"token": env["outbox"][0]["body"].split("?verify=")[1].split()[0]})
+    assert len(env["outbox"]) == 1                                                            # still no newsletter confirmation
 
 
-def test_google_first_sign_in_consent(env):
+def test_google_first_sign_in_with_the_old_flag_subscribes_nobody(env):
     A = env["A"]
     env["mp"].setattr(A, "GOOGLE_CLIENT_ID", "test-client")
-    env["mp"].setattr(A, "_verify_google_token",
-                      lambda cred: {"email": "g@example.com", "email_verified": True, "sub": "g"})
+    env["mp"].setattr(A, "_verify_google_token", lambda cred: {"email": "g@example.com", "email_verified": True, "sub": "g"})
     r = client.post("/api/auth/google", json={"credential": "x", "newsletter": True})
     assert r.status_code == 200, r.text
-    rec = env["N"]._load()["subscribers"]["g@example.com"]
-    assert rec["status"] == "pending" and rec["source"] == "google"
-    assert env["outbox"][-1]["subject"] == "Confirm your subscription"
+    assert "g@example.com" not in env["N"]._load()["subscribers"] and env["outbox"] == []
 
 
-def test_existing_users_are_not_subscribed(env):
+def test_subscribe_confirm_and_campaign_routes_are_gone(env):
+    ah = _login(ADMIN, "password-admin", ip="198.51.100.1")
+    h = _user(env, "someone@example.com")
+    assert client.post("/api/newsletter/me", json={"subscribe": True}, headers=h).status_code in (404, 405)
+    assert client.get("/api/newsletter/me", headers=h).status_code in (404, 405)
+    assert client.post("/api/newsletter/confirm", json={"token": "x"}).status_code in (404, 405)
+    for path in ("campaigns", "preview", "test"):
+        assert client.post(f"/api/newsletter/admin/{path}", json={"subject": "s", "body_md": "b"}, headers=ah).status_code in (404, 405)
+    assert client.post("/api/newsletter/admin/campaigns/c1/send", json={}, headers=ah).status_code in (404, 405)
+    assert env["outbox"] == [] and env["delivered"] == []
+    N = env["N"]
+    for gone in ("request_subscribe", "record_pending", "confirm", "send_confirmation", "create_campaign", "schedule", "pump",
+                 "build_message", "render", "start_worker", "audience"):
+        assert not hasattr(N, gone), gone
+
+
+def test_existing_users_are_not_subscribed_to_anything(env):
     env["U"].create_user("old@example.com", "password-old", role="user")
     assert env["N"].status("old@example.com")["subscribed"] is False
-    assert env["N"].audience() == []
-    # an existing account signing in with Google + ticked box is NOT opted in
     A = env["A"]
     env["mp"].setattr(A, "GOOGLE_CLIENT_ID", "test-client")
-    env["mp"].setattr(A, "_verify_google_token",
-                      lambda cred: {"email": "old@example.com", "email_verified": True, "sub": "o"})
+    env["mp"].setattr(A, "_verify_google_token", lambda cred: {"email": "old@example.com", "email_verified": True, "sub": "o"})
     client.post("/api/auth/google", json={"credential": "x", "newsletter": True})
     assert env["N"].status("old@example.com")["status"] == "none"
 
 
-# ── unsubscribe ─────────────────────────────────────────────────────────────
+# -- legacy subscribers: untouched, not migrated; old unsubscribe links still work -----------------------------
 
-def test_unsubscribe_link_and_headers(env):
+def test_legacy_subscribers_stay_as_they_are_and_are_not_opted_into_the_new_topics(env):
+    from motor_ai_sim import comm_prefs as CP
+    _legacy_subscriber(env, "sub@example.com")
+    env["U"].create_user("sub@example.com", "password-sub")
+    assert env["N"].is_confirmed("sub@example.com")                         # the old record is left alone
+    assert CP.get("sub@example.com")["topics"] == {t: False for t in CP.TOPICS}
+    assert not any(CP.opted_in("sub@example.com", t) for t in CP.TOPICS)    # the old wording is not consent to the new topics
+
+
+def test_old_unsubscribe_link_and_header_still_work_and_switch_the_new_topics_off(env):
+    from motor_ai_sim import comm_prefs as CP
     N = env["N"]
-    h = _subscribe_confirmed(env, "sub@example.com")
-    msg = N.build_message("sub@example.com", "Hello", "Body **bold**", "c1")
-    assert msg["List-Unsubscribe-Post"] == "List-Unsubscribe=One-Click"
-    lu = msg["List-Unsubscribe"]
-    assert lu.startswith("<https://app.example.com/api/newsletter/unsubscribe?t=")
-    html = msg.get_body(("html",)).get_content()
-    text = msg.get_body(("plain",)).get_content()
-    assert "<strong>bold</strong>" in html and "Kotnikova 34" in html
-    assert "?unsubscribe=" in text and "Kotnikova 34" in text
-    # RFC 8058: the provider POSTs a form to the header URL
-    url = lu.strip("<>").replace("https://app.example.com", "")
-    r = client.post(url, data={"List-Unsubscribe": "One-Click"})
+    _legacy_subscriber(env, "sub@example.com")
+    env["U"].create_user("sub@example.com", "password-sub")
+    CP.set_topics("sub@example.com", {"new_motors": True}, source="prefs_page")
+    tok = N.unsubscribe_token("sub@example.com", "c1")
+    # RFC 8058: the provider of an old mail POSTs a form to the ?t= URL
+    r = client.post(f"/api/newsletter/unsubscribe?t={tok}", data={"List-Unsubscribe": "One-Click"})
     assert r.status_code == 200, r.text
     assert not N.is_confirmed("sub@example.com")
     hist = N._load()["subscribers"]["sub@example.com"]["history"]
     assert hist[-1]["event"] == "unsubscribed" and hist[-1]["source"] == "link"
-    # idempotent, and a bad token says nothing
-    assert client.post(url).status_code == 200
+    st = CP.get("sub@example.com")
+    assert st["unsubscribed_all"] is True and not any(st["topics"].values())
+    assert client.post(f"/api/newsletter/unsubscribe?t={tok}").status_code == 200            # idempotent
     assert client.post("/api/newsletter/unsubscribe", json={"token": "nope"}).status_code == 400
-    # settings toggle
-    assert client.get("/api/newsletter/me", headers=h).json()["subscribed"] is False
 
 
-def test_settings_toggle_off_is_instant(env):
-    h = _subscribe_confirmed(env, "t@example.com")
-    r = client.post("/api/newsletter/me", json={"subscribe": False}, headers=h)
-    assert r.json()["status"] == "unsubscribed"
-    assert env["N"].audience() == []
-
-
-def test_link_endpoints_rate_limited(env):
-    codes = [client.post("/api/newsletter/confirm", json={"token": "x"},
-                         headers={"X-Forwarded-For": "192.0.2.50"}).status_code
+def test_link_endpoint_rate_limited(env):
+    codes = [client.post("/api/newsletter/unsubscribe", json={"token": "x"}, headers={"X-Forwarded-For": "192.0.2.50"}).status_code
              for _ in range(35)]
     assert 429 in codes
 
 
-# ── campaigns ───────────────────────────────────────────────────────────────
-
-def test_campaign_only_to_confirmed_and_throttled(env):
-    N = env["N"]
-    _subscribe_confirmed(env, "a@example.com")
-    _subscribe_confirmed(env, "b@example.com", role="user")
-    _subscribe_confirmed(env, "c@example.com")
-    _user(env, "none@example.com")                       # never opted in
-    hp = _user(env, "pend@example.com")                  # pending, never clicked
-    client.post("/api/newsletter/me", json={"subscribe": True}, headers=hp)
-    env["mp"].setenv("NEWSLETTER_RATE_PER_MIN", "2")
-    ah = _login(ADMIN, "password-admin", ip="198.51.100.1")
-    c = client.post("/api/newsletter/admin/campaigns",
-                    json={"subject": "News", "body_md": "# Hi\n\ntext"}, headers=ah).json()
-    assert client.post(f"/api/newsletter/admin/campaigns/{c['id']}/send",
-                       json={}, headers=ah).status_code == 200
-    sent: list = []
-    t0 = time.time() + 1
-    assert N.pump(now=t0, sender=sent.append) == 2         # rate 2/min
-    assert N.pump(now=t0 + 10, sender=sent.append) == 0
-    assert N.pump(now=t0 + 61, sender=sent.append) == 1
-    assert sorted(m["To"] for m in sent) == ["a@example.com", "b@example.com", "c@example.com"]
-    st = N.get_campaign(c["id"])
-    assert st["stats"]["sent"] == 3
-    N.pump(now=t0 + 200, sender=sent.append)
-    assert N.get_campaign(c["id"])["status"] == "done"
-
-
-def test_role_filter_bounce_and_unsubscribe_mid_campaign(env):
-    N = env["N"]
-    _subscribe_confirmed(env, "a@example.com", role="user")
-    hb = _subscribe_confirmed(env, "b@example.com", role="user")
-    _subscribe_confirmed(env, "c@example.com", role="admin")
-    c = N.create_campaign("S", "body", roles=["user"])
-    N.schedule(c["id"])
-    env["mp"].setenv("NEWSLETTER_RATE_PER_MIN", "1")
-
-    def sender(msg):
-        raise smtplib.SMTPRecipientsRefused({msg["To"]: (550, b"no such user")})
-
-    t0 = time.time() + 1
-    assert N.pump(now=t0, sender=sender) == 1                # a -> bounced
-    # b unsubscribes while the campaign is running: honoured before its send
-    client.post("/api/newsletter/me", json={"subscribe": False}, headers=hb)
-    assert N.pump(now=t0 + 61, sender=sender) == 0
-    s = N.get_campaign(c["id"])["stats"]
-    assert s["total"] == 2 and s["bounced"] == 1 and s["skipped"] == 1
-
-
-def test_scheduled_campaign_waits_and_resume_after_restart(env):
-    N = env["N"]
-    _subscribe_confirmed(env, "a@example.com")
-    c = N.create_campaign("S", "body")
-    N.schedule(c["id"], at=5_000_000.0)
-    assert N.pump(now=4_999_000.0, sender=lambda m: None) == 0
-    # simulate a crash mid-send: a claimed recipient becomes failed, not resent
-    d = N._load()
-    d["campaigns"][c["id"]].update(status="sending", recipients={"a@example.com": {"status": "sending"}})
-    N._save(d)
-    assert N.recover_interrupted() == 1
-    assert N.get_campaign(c["id"])["stats"]["failed"] == 1
-
+# -- admin: read-only history -------------------------------------------------------------------------------------
 
 def test_admin_only(env):
     h = _user(env, "plain@example.com")
-    for method, path in [("get", "/api/newsletter/admin/status"),
-                         ("get", "/api/newsletter/admin/subscribers"),
-                         ("get", "/api/newsletter/admin/campaigns"),
-                         ("post", "/api/newsletter/admin/campaigns"),
-                         ("post", "/api/newsletter/admin/test"),
-                         ("get", "/api/notices/admin"),
-                         ("post", "/api/notices/admin")]:
-        kw = {"json": {"subject": "s", "body_md": "b", "title": "t"}} if method == "post" else {}
+    for method, path in [("get", "/api/newsletter/admin/status"), ("get", "/api/newsletter/admin/subscribers"),
+                         ("get", "/api/newsletter/admin/campaigns"), ("get", "/api/admin/comm-prefs/summary"),
+                         ("get", "/api/notices/admin"), ("post", "/api/notices/admin")]:
+        kw = {"json": {"title": "t"}} if method == "post" else {}
         r = getattr(client, method)(path, headers=h, **kw)
         assert r.status_code == 403, (path, r.status_code)
 
 
-def test_admin_csv_and_preview(env):
-    _subscribe_confirmed(env, "a@example.com")
+def test_admin_reads_the_legacy_history_and_the_mailing_summary_carries_the_counts(env):
+    _legacy_subscriber(env, "a@example.com")
+    _legacy_subscriber(env, "b@example.com", status="unsubscribed")
     ah = _login(ADMIN, "password-admin", ip="198.51.100.1")
     r = client.get("/api/newsletter/admin/subscribers?format=csv", headers=ah)
     assert r.status_code == 200 and "a@example.com,confirmed" in r.text
-    p = client.post("/api/newsletter/admin/preview",
-                    json={"subject": "S", "body_md": "<script>x</script> [l](https://x.io)"},
-                    headers=ah).json()
-    assert "<script>" not in p["html"] and '<a href="https://x.io"' in p["html"]
-    assert p["audience"] == 1
-    t = client.post("/api/newsletter/admin/test", json={"subject": "S", "body_md": "b"}, headers=ah)
-    assert t.status_code == 200 and env["delivered"][-1]["To"] == ADMIN
+    assert client.get("/api/newsletter/admin/status", headers=ah).json() == {"confirmed": 1, "pending": 0, "unsubscribed": 1}
+    camps = client.get("/api/newsletter/admin/campaigns", headers=ah).json()["campaigns"]
+    assert [c["subject"] for c in camps] == ["Old news"]
+    s = client.get("/api/admin/comm-prefs/summary", headers=ah).json()
+    assert s["legacy_newsletter"] == {"confirmed": 1, "pending": 0, "unsubscribed": 1, "campaigns": 1}
 
 
 # ── in-app notices ──────────────────────────────────────────────────────────

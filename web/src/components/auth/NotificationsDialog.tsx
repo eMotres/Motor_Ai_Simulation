@@ -1,14 +1,10 @@
-// Account menu → Notifications: the newsletter opt-in/out toggle (e-mail,
-// double opt-in) and the list of in-app product notices with read state.
+// Account menu → Notifications: the list of in-app product notices with read state.
+// (The old newsletter toggle is retired: e-mail is chosen on the Communication preferences page, account menu → E-mail preferences.)
 import React, { useCallback, useEffect, useState } from 'react';
 import {
-  Dialog, DialogTitle, DialogContent, Box, Typography, Switch, Button, Divider,
+  Dialog, DialogTitle, DialogContent, Box, Typography, Button,
 } from '@mui/material';
-import HelpTip from '../common/HelpTip';
-import {
-  getMyNewsletter, setMyNewsletter, getNotices, markNoticeRead,
-  CONSENT_LINE, CONSENT_HELP, type NewsletterStatus, type Notice,
-} from '../../lib/newsletterApi';
+import { getNotices, markNoticeRead, type Notice } from '../../lib/newsletterApi';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 
@@ -17,33 +13,17 @@ const tx = nsT('common');
 
 interface Props { open: boolean; onClose: () => void; onRead?: () => void }
 
-const STATE: Record<string, string> = {
-  none: 'Not subscribed.',
-  pending: 'Check your inbox — confirm the link we sent.',
-  confirmed: 'Subscribed.',
-  unsubscribed: 'Unsubscribed.',
-};
-
 const NotificationsDialog: React.FC<Props> = ({ open, onClose, onRead }) => {
   useTranslation('common'); // re-render on language change; lazy-loads the namespace
-  const [st, setSt] = useState<NewsletterStatus | null>(null);
   const [notices, setNotices] = useState<Notice[]>([]);
-  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [s, n] = await Promise.all([getMyNewsletter(), getNotices()]);
-      setSt(s); setNotices(n.notices); setErr(null);
+      setNotices((await getNotices()).notices); setErr(null);
     } catch (e) { setErr((e as Error).message); }
   }, []);
   useEffect(() => { if (open) void load(); }, [open, load]);
-
-  const toggle = async (on: boolean) => {
-    setBusy(true); setErr(null);
-    try { setSt(await setMyNewsletter(on)); } catch (e) { setErr((e as Error).message); }
-    finally { setBusy(false); }
-  };
 
   const read = async (id: string) => {
     try {
@@ -53,21 +33,11 @@ const NotificationsDialog: React.FC<Props> = ({ open, onClose, onRead }) => {
     } catch (e) { setErr((e as Error).message); }
   };
 
-  const on = st?.status === 'confirmed' || st?.status === 'pending';
-
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
       <DialogTitle sx={{ fontSize: '1rem', pb: 0.5 }}>{tx('notifications')}</DialogTitle>
       <DialogContent>
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-          <Typography sx={{ fontSize: 13, flex: 1 }}>{CONSENT_LINE}</Typography>
-          <HelpTip title={CONSENT_HELP} />
-          <Switch size="small" checked={on} disabled={busy || !st}
-            onChange={(e) => void toggle(e.target.checked)} />
-        </Box>
-        <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{st ? STATE[st.status] ?? st.status : '…'}</Typography>
-        {err && <Typography sx={{ fontSize: 12, color: '#f87171', mt: 0.5 }}>{err}</Typography>}
-        <Divider sx={{ my: 1.5 }} />
+        {err && <Typography sx={{ fontSize: 12, color: '#f87171', mb: 0.5 }}>{err}</Typography>}
         <Typography sx={{ fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', mb: 0.5 }}>
           {tx('notices')}
         </Typography>

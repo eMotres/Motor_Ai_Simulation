@@ -1,15 +1,16 @@
-"""Newsletter consent + campaigns, and in-app notices (see newsletter.py).
+"""Legacy newsletter records (read-only) and in-app notices (see newsletter.py).
+
+The newsletter opt-in is RETIRED (2026-10-15): there is no subscribe / confirm / campaign route any more; the Communication
+preferences page is the only place to choose e-mail (``routes/comm_prefs.py``).
 
 Anonymous (rate-limited per IP, never reveal whether an address exists):
-- POST /api/newsletter/confirm        {token}  — double opt-in link
-- POST /api/newsletter/unsubscribe    ?t= or {token}; also the RFC 8058
-                                      one-click POST from mailbox providers
+- POST /api/newsletter/unsubscribe    ?t= or {token}; also the RFC 8058 one-click POST from mailbox providers, for the links
+                                      and headers of mails sent BEFORE the retirement.  Also switches every new topic off.
 Signed in:
-- GET/POST /api/newsletter/me         — status / opt in (mails a link) / out
 - GET /api/notices, POST /api/notices/{id}/read
 Admin only (require_admin):
-- /api/newsletter/admin/*             — status, subscribers (+CSV), campaigns
-- /api/notices/admin                  — post / list / withdraw notices
+- GET /api/newsletter/admin/status, /subscribers (+CSV), /campaigns   read-only history of the old newsletter
+- /api/notices/admin                  post / list / withdraw notices
 """
 from __future__ import annotations
 
@@ -22,7 +23,6 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from motor_ai_sim import auth_email as E
 from motor_ai_sim import newsletter as N
 from motor_ai_sim.auth import require_admin, resolve_user
 
@@ -50,21 +50,7 @@ def _me(authorization: Optional[str]) -> dict:
     return me
 
 
-# ── consent (public / self) ─────────────────────────────────────────────────
-
-class TokenReq(BaseModel):
-    token: str
-
-
-@router.post("/confirm")
-def confirm(req: TokenReq, request: Request):
-    _limit(request)
-    if not N.confirm(req.token):
-        raise HTTPException(400, detail=(
-            "this link is invalid, already used or expired — subscribe again "
-            "from Notifications in your account menu"))
-    return {"ok": True}
-
+# ── unsubscribe (links of mails sent before the retirement) ────────────────
 
 @router.post("/unsubscribe")
 async def unsubscribe(request: Request, t: str = ""):
@@ -83,44 +69,14 @@ async def unsubscribe(request: Request, t: str = ""):
     return {"ok": True}
 
 
-@router.get("/me")
-def my_status(authorization: str = Header(default=None)):
-    me = _me(authorization)
-    return N.status(me["email"])
-
-
-class MeReq(BaseModel):
-    subscribe: bool
-
-
-@router.post("/me")
-def set_mine(req: MeReq, request: Request,
-             authorization: str = Header(default=None)):
-    me = _me(authorization)
-    if req.subscribe:
-        if not E.smtp_configured():
-            raise HTTPException(503, detail="e-mail is not configured on this server")
-        if E.MAIL_ACCOUNT.blocked(me["email"]):
-            raise HTTPException(429, detail="too many requests — try again later")
-        E.MAIL_ACCOUNT.hit(me["email"])
-        outcome = N.request_subscribe(me["email"], source="settings", ip=_ip(request))
-        return N.status(me["email"]) | {"outcome": outcome}
-    N.unsubscribe(me["email"], source="settings")
-    return N.status(me["email"]) | {"outcome": "unsubscribed"}
-
-
 # ── admin ───────────────────────────────────────────────────────────────────
 
 @router.get("/admin/status")
 def admin_status(_a: dict = Depends(require_admin)):
     subs = N.subscribers()
-    return {"smtp": E.smtp_configured(), "rate_per_min": N.rate_per_min(),
-            "daily_cap": N.daily_cap(), "sent_24h": N.sent_last_24h(),
-            "confirmed": sum(1 for s in subs if s["status"] == "confirmed"),
+    return {"confirmed": sum(1 for s in subs if s["status"] == "confirmed"),
             "pending": sum(1 for s in subs if s["status"] == "pending"),
-            "unsubscribed": sum(1 for s in subs if s["status"] == "unsubscribed"),
-            "consent_text": N.CONSENT_TEXT,
-            "consent_version": N.CONSENT_TEXT_VERSION}
+            "unsubscribed": sum(1 for s in subs if s["status"] == "unsubscribed")}
 
 
 @router.get("/admin/subscribers")
@@ -139,85 +95,9 @@ def admin_subscribers(format: str = "json", _a: dict = Depends(require_admin)):
         "Content-Disposition": 'attachment; filename="subscribers.csv"'})
 
 
-class CampaignReq(BaseModel):
-    subject: str
-    body_md: str
-    roles: list[str] = []
-
-
-class CampaignPatch(BaseModel):
-    subject: Optional[str] = None
-    body_md: Optional[str] = None
-    roles: Optional[list[str]] = None
-
-
 @router.get("/admin/campaigns")
 def admin_campaigns(_a: dict = Depends(require_admin)):
     return {"campaigns": N.list_campaigns()}
-
-
-@router.post("/admin/campaigns")
-def admin_create(req: CampaignReq, a: dict = Depends(require_admin)):
-    try:
-        return N.create_campaign(req.subject, req.body_md, req.roles,
-                                 author=(a or {}).get("email") or "")
-    except ValueError as e:
-        raise HTTPException(422, detail=str(e))
-
-
-@router.put("/admin/campaigns/{cid}")
-def admin_update(cid: str, req: CampaignPatch, _a: dict = Depends(require_admin)):
-    try:
-        return N.update_campaign(cid, req.subject, req.body_md, req.roles)
-    except KeyError:
-        raise HTTPException(404, detail="no such campaign")
-    except ValueError as e:
-        raise HTTPException(409, detail=str(e))
-
-
-@router.post("/admin/preview")
-def admin_preview(req: CampaignReq, a: dict = Depends(require_admin)):
-    who = (a or {}).get("email") or "preview@example.com"
-    h, t = N.render(req.subject, req.body_md, N.unsubscribe_url(who))
-    return {"html": h, "text": t, "audience": len(N.audience(req.roles))}
-
-
-@router.post("/admin/test")
-def admin_test(req: CampaignReq, a: dict = Depends(require_admin)):
-    to = (a or {}).get("email")
-    if not to:
-        raise HTTPException(422, detail="your admin session has no e-mail address")
-    if not E.smtp_configured():
-        raise HTTPException(503, detail="SMTP is not configured")
-    try:
-        N.send_test(to, req.subject, req.body_md)
-    except Exception as e:                                   # noqa: BLE001
-        raise HTTPException(502, detail=f"SMTP: {type(e).__name__}")
-    return {"ok": True, "to": to}
-
-
-class SendReq(BaseModel):
-    at: Optional[float] = None       # UNIX seconds; None = now
-
-
-@router.post("/admin/campaigns/{cid}/send")
-def admin_send(cid: str, req: SendReq, _a: dict = Depends(require_admin)):
-    try:
-        return N.schedule(cid, req.at)
-    except KeyError:
-        raise HTTPException(404, detail="no such campaign")
-    except ValueError as e:
-        raise HTTPException(409, detail=str(e))
-
-
-@router.post("/admin/campaigns/{cid}/cancel")
-def admin_cancel(cid: str, _a: dict = Depends(require_admin)):
-    try:
-        return N.cancel(cid)
-    except KeyError:
-        raise HTTPException(404, detail="no such campaign")
-    except ValueError as e:
-        raise HTTPException(409, detail=str(e))
 
 
 # ── in-app notices ──────────────────────────────────────────────────────────

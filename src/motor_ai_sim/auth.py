@@ -135,9 +135,10 @@ _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      # the data-export ZIP: the signed single-use token in the
                      # query IS the credential (routes/account_data.py)
                      "/api/account/export/download",
-                     # double opt-in + one-click unsubscribe (mail clients POST
-                     # without a session; rate-limited in routes/newsletter.py)
-                     "/api/newsletter/confirm", "/api/newsletter/unsubscribe",
+                     # one-click unsubscribe of mails sent before the newsletter was
+                     # retired (mail clients POST without a session; rate-limited in
+                     # routes/newsletter.py)
+                     "/api/newsletter/unsubscribe",
                      # communication preferences by signed e-mail link and the
                      # RFC 8058 one-click POST (the token is the credential;
                      # failures are rate-limited in routes/comm_prefs.py)

@@ -99,3 +99,11 @@ def test_store_assemble_reads_cards_and_wire_stock(tmp_path):
     inp = bom_store.assemble(eff, {"profile": {"motor_id": "D_L12", "materials": MATS}}, materials_library=str(lib), wire_stock=str(ws))
     assert inp["cards"]["copper"]["density"] == 8933 and "bh_curve" not in inp["cards"]["copper"] and inp["cards"]["Aluminium_6061"]
     assert inp["wire_stock"][0]["code"] == "010119" and inp["sim_total_kg"] == 0.095
+
+
+@pytest.mark.parametrize("v", ["L12", "L20"])
+def test_screw_and_tapped_hole_rows_state_the_thread(v):
+    b, _ = make(v)
+    k = {l["key"]: l for l in b["lines"]}
+    assert "thread M2x0.4 (ISO 261)" in k["screws"]["dimensions"]
+    assert "thread M2x0.4 (ISO 261)" in k["holder_back"]["dimensions"]

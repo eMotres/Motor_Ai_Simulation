@@ -23,11 +23,13 @@ export interface ViewerSettings {
   explode: number;
   section: { on: boolean; axis: Axis; position: number };
   measure: boolean;
+  /** part hints (thread size under the pointer): NDA view only */
+  hints?: boolean;
 }
 
 /** The settings the scene gets: the user's tool state with NDA, the plain model without it (a revoked NDA resets the tools at once). */
 export function effectiveSettings(canDownload: boolean, s: ViewerSettings): ViewerSettings {
-  return canDownload ? s : { hidden: new Set(), explode: 0, section: { ...s.section, on: false }, measure: false };
+  return canDownload ? { ...s, hints: true } : { hidden: new Set(), explode: 0, section: { ...s.section, on: false }, measure: false, hints: false };
 }
 
 export interface ModelInfo {

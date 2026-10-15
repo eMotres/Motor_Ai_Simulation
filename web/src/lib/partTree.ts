@@ -56,14 +56,6 @@ export function partsOfGroup(tree: PartTreeData, groupId: string): TreePart[] {
   return (g?.parts ?? []).map((id) => by.get(id)).filter((p): p is TreePart => !!p);
 }
 
-/** Viewer highlight of a selected part: its GLB nodes, or the nodes of every part of a selected group. */
-export function highlightNodes(tree: PartTreeData | null | undefined, selection: { part?: string | null; group?: string | null }): string[] {
-  if (!tree) return [];
-  if (selection.part) return [...(tree.parts.find((p) => p.id === selection.part)?.glb ?? [])];
-  if (selection.group) return partsOfGroup(tree, selection.group).flatMap((p) => p.glb);
-  return [];
-}
-
 /** Mass of a group (counted parts only); null when no part of it has a known mass. */
 export function groupMassKg(tree: PartTreeData, groupId: string): number | null {
   const ps = partsOfGroup(tree, groupId).filter((p) => p.counted && p.mass_kg != null);
@@ -73,9 +65,4 @@ export function groupMassKg(tree: PartTreeData, groupId: string): number | null 
 /** The ids in display order (group by group) - what "the same order everywhere" is tested against. */
 export function orderedIds(tree: PartTreeData): string[] {
   return tree.groups.flatMap((g) => g.parts);
-}
-
-/** The initial open/closed state of the groups: all open. */
-export function initialOpen(tree: PartTreeData): Record<string, boolean> {
-  return Object.fromEntries(tree.groups.map((g) => [g.id, true]));
 }

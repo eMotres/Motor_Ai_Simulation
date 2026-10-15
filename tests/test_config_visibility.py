@@ -320,12 +320,16 @@ READ_ROUTES = {          # (method, path template) -> request builder key
     ("GET", "/api/family/report/{die}/{cfg}"): "plain",
     ("GET", "/api/family/history/{die}"): "query-config",
     ("GET", "/api/family/die/{die}/part_materials"): "query-config",
+    ("GET", "/api/family/die/{die}/part_tree"): "query-config",
+    ("GET", "/api/family/config/{die}/{cfg}/cad_params"): "plain",
 }
 WRITE_ROUTES = {         # layered-only (a registered account writes into its own workspace); flat = admin-only
     ("PATCH", "/api/family/config/{die}/{cfg}"): {"name": "Lx"},
     ("POST", "/api/family/config/{die}/{cfg}/duplicate"): {"name": "Lcopy"},
     ("DELETE", "/api/family/config/{die}/{cfg}"): None,
     ("PATCH", "/api/family/config/{die}/{cfg}/lock"): {"locked": True},
+    ("PUT", "/api/family/config/{die}/{cfg}/cad_params"): {"values": {}},
+    ("POST", "/api/family/config/{die}/{cfg}/cad_rebuild"): None,
     ("PATCH", "/api/family/config/{die}/{cfg}/default_duty"): {"duty": DUTY},
     ("PUT", "/api/family/config/{die}/{cfg}/applications"): {"applications": ["propeller"]},
     ("PATCH", "/api/family/config/{die}/{cfg}/battery"): {"cells": 6, "v_cell_min": 3.0, "v_cell_max": 4.2},
@@ -353,6 +357,11 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("GET", "/api/bearings/losses"), ("GET", "/api/controller/cooling_from_thermal"), ("GET", "/api/controller/devices"),
     ("GET", "/api/controller/point"), ("GET", "/api/controller/settings"), ("GET", "/api/controller/thermal_cooling"),
     ("GET", "/api/model3d/{die}/{config}/model.glb"), ("GET", "/api/model3d/{die}/{config}/model.step"),
+    # Geometry Full files: the same 404 as model.glb (`_entry_for`), tested in tests/test_construction_params.py
+    ("GET", "/api/model3d/{die}/{config}/parts"), ("GET", "/api/model3d/{die}/{config}/bom.csv"),
+    ("GET", "/api/model3d/{die}/{config}/bom.xlsx"), ("GET", "/api/model3d/{die}/{config}/params.csv"),
+    ("GET", "/api/model3d/{die}/{config}/model.fcstd"),
+    ("POST", "/api/family/config/{die}/{cfg}/cad_params/import"),       # multipart; tested in tests/test_construction_params.py
     ("GET", "/api/propellers/cooling-options"), ("GET", "/api/propellers/{prop_id}/s1"), ("GET", "/api/system/graph"),
 }
 NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog configuration

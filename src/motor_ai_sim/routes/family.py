@@ -4663,7 +4663,15 @@ def get_part_materials(die: str, config: Optional[str] = None, authorization: st
         if config and not config_allowed(who, die, cfg):
             # a PRIVATE configuration reads exactly like a missing one
             raise _mm.MotorMassError(f"configuration {cfg!r} of die {die!r} not found")
-        out.update(_mm.full_part_list(die, cfg, dies_dir=ddir.parent))
+        fl = _mm.full_part_list(die, cfg, dies_dir=ddir.parent)
+        # THE part tree (motor_ai_sim.part_tree): the same ids / names / groups / order in every surface
+        from motor_ai_sim import part_tree as _pt
+        tree = _pt.build(fl["parts"], kit=bool(fl.get("kit")))
+        by_id = {p["id"]: p for p in tree["parts"]}
+        out.update(fl)
+        out["parts"] = [{**r, **{k: by_id[r["key"]][k] for k in ("id", "name", "group", "names", "glb", "order")}}
+                        for r in sorted((r for r in fl["parts"] if r["key"] in by_id), key=lambda r: by_id[r["key"]]["order"])]
+        out["groups"] = tree["groups"]
     except _mm.MotorMassError as exc:
         out.update({"available": False, "reason": str(exc), "parts": []})
         return out

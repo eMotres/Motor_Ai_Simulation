@@ -426,3 +426,49 @@ the lists (a full BOM stays in use); the CAD build of an old image ignores the k
 `cad/motor_templates/segmented_flatwire/palette.py` (+ `palette.json`) is the single source of the colours of the FreeCAD GUI finish and
 of the GLB exporter (sRGB values; glTF base colours are written linear).  Everything is opaque; the GUI finish refuses a model with a visible
 transparent body (`view.check_opaque`).
+
+
+## Geometry tab "Full": CAD-only edits, the rebuild queue and the part tree (owner 2026-10-15)
+
+The Geometry tab has a switch **Active | Full** (the same state as Materials). Active is the electromagnetic construction. Full shows
+the CAD model, THE part tree and the construction parameters of this template that the simulation does not read - walls, shafts,
+holders, rings, bearings, phase board, screws, leads, `offset_rotor` - editable.
+
+**Where an edit lives.** `<config>.yaml` gets a `cad_overrides:` block (`{parameter: number}`, plus `bearing_card: <card of
+bearings_library.yaml>`). Nothing else reads it: the electromagnetic solver, the passport and `_geoSig` ignore it (a test pins that
+the EM rows of the profile and the geometry signature are identical with and without it). `cad/store.py` reads it in
+`load_effective`, applies it in `make_profile` AFTER the simulation rows (the expression a parameter had is kept as
+`reference_expression`, so an override can be reverted from the built `params.json`), and records `cad_overrides_hash` in the
+manifest. Editable names are exactly `src/motor_ai_sim/cad_params.py` `CATALOGUE` (group, unit, limits, EN / zh-CN tooltip) intersected
+with the `mechanics` / `input` rows of the built model; the catalogue never contains a name the simulation maps.
+
+**Validation.** `PUT /api/family/config/{die}/{cfg}/cad_params` checks ranges and integers, then applies the edit to the built model's
+parameter set, evaluates every expression and runs the template's own `health.precheck` (loaded by path; the API image copies that one
+file). The violations come back in the template's words (422) and nothing is saved. The build repeats the pre-check and the health gate;
+a refusal at build time is shown in the model's badge. Permission = every other die/configuration write (`require_catalog_write` +
+`_require_die_write`: the admin on the shared catalog, any registered account in its own workspace copy under the layering); a save is
+written to the admin audit (`cad.params`).
+
+**Rebuild.** The API image has no FreeCAD. A save (or `POST .../cad_rebuild`) writes `<cad root>/.rebuild/<id>.json` (state `pending`).
+The worker next to the CAD runtime builds the pending requests of the shared catalog, one at a time at low priority:
+
+```bash
+python -m motor_ai_sim.cad.rebuild_queue run --root /srv/motres/shared/cad          # one pass; --loop polls every 30 s
+python -m motor_ai_sim.cad.rebuild_queue list --root /srv/motres/shared/cad         # what waits
+```
+
+(inside the `motres-cad` image, with the store mounted as in "Rebuild" above). Requests of a user's workspace die are listed but not
+built unless the worker is given `--include-layer`. The UI compares the manifest's `cad_overrides_hash` with the saved overrides: a model
+that does not carry them yet stays on screen with the badge "rebuild queued" / "rebuilding" / "model out of date" (with a "Rebuild now"
+button) / "rebuild failed" (with the build's message); when the new model passes every check the badge goes away and the viewer loads
+the new GLB (it reloads on a changed `glb_sha256`).
+
+**THE part tree** is `src/motor_ai_sim/part_tree.py`: ids, EN / zh-CN names, groups and order of every part, and the GLB nodes that draw it.
+Geometry Full, Materials Full, the 3-D model's parts list (`GET /api/model3d/{die}/{config}/parts`, names only, after the NDA), the
+component card (`parts[].part_id`, `group`) and the BOM export all read it. `GET /api/family/die/{die}/part_tree` serves the full form.
+
+**Files menu (Full).** `GET /api/model3d/{die}/{config}/` `model.step`, `bom.csv`, `bom.xlsx` (part list with materials and masses, no prices
+or suppliers), `params.csv` (the full parameter set, EM + CAD-only, Fusion Parameter I/O dialect; the download id is written into every
+Comment) and `model.fcstd` (engineer / admin with the NDA only). All are NDA-gated for non-admins, stamped and logged in
+`cad_downloads.jsonl` (`kind` = step / bom_csv / bom_xlsx / params_csv / fcstd). CAD parameters come back in through
+`POST /api/family/config/{die}/{cfg}/cad_params/import?dry_run=1|0` (Fusion CSV or FreeCAD file; electromagnetic rows are ignored).

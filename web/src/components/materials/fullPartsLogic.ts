@@ -7,24 +7,24 @@
  *           bearings, screws, the phase board ...) with a material and a mass each.  The extra parts are NOT used
  *           by the electromagnetic simulation; their choice is saved with the die (PUT .../part_materials).
  *
+ * The Active | Full switch itself is the SHARED construction scope (lib/constructionScope.ts, one state with the Geometry tab).
+ *
  * The part list comes from the server (GET /api/family/die/{die}/part_materials): the CAD bill of materials of the
  * motor where one has been built, never an invented part.
  */
 
-export type MaterialsMode = 'active' | 'full';
-export const MATERIALS_MODES: ReadonlyArray<{ id: MaterialsMode; labelKey: string }> = [
-  { id: 'active', labelKey: 'materialsModeActive' },
-  { id: 'full', labelKey: 'materialsModeFull' },
-];
-export const MODE_STORAGE_KEY = 'materials.mode';
+import type { ConstructionScope } from '../../lib/constructionScope';
 
-/** Anything but 'full' is Active: the tab opens as it always did. */
-export function parseMode(raw: unknown): MaterialsMode {
-  return raw === 'full' ? 'full' : 'active';
-}
+export type MaterialsMode = ConstructionScope;
 
 export interface FullPartRow {
   key: string;
+  /** THE part tree's fields (motor_ai_sim/part_tree.py): the same id / group / names / viewer nodes / order everywhere */
+  id?: string;
+  group?: string;
+  names?: { en: string; zh: string };
+  glb?: string[];
+  order?: number;
   name: string;
   role: string;
   em: boolean;                       // true = used by the electromagnetic simulation (the active assignment)
@@ -63,6 +63,8 @@ export interface FullPartsPayload {
   active_kg?: number;
   rotating_kg?: number;
   parts: FullPartRow[];
+  /** the part-tree groups, in display order */
+  groups?: Array<{ id: string; name: { en: string; zh: string }; parts: string[] }>;
   choices?: MaterialChoice[];
   non_active_keys?: string[];
 }

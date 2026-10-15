@@ -17,6 +17,10 @@ import {
 
 export interface ViewerState {
   hidden: ReadonlySet<string>;
+  /** GLB node names hidden individually (a part switched off in THE part tree) */
+  hiddenNodes?: ReadonlySet<string>;
+  /** GLB node names to highlight (a part selected in THE part tree); the rest is dimmed.  Empty / absent = no highlight. */
+  highlight?: ReadonlySet<string>;
   explode: number;             // 0..1
   section: { on: boolean; axis: Axis; position: number };
   measure: boolean;
@@ -121,9 +125,10 @@ export class ModelViewer {
 
   apply(s: ViewerState): void {
     for (const g of this.groups) {
-      g.node.visible = !s.hidden.has(g.part.family);
+      g.node.visible = !s.hidden.has(g.part.family) && !s.hiddenNodes?.has(g.part.name);
       g.node.position.z = explodeShift(g.part.explode, this.motorLength, s.explode);
     }
+    this.applyHighlight(s.highlight);
     const p = sectionPlane(s.section.axis, s.section.position);
     this.plane.normal.set(...p.normal);
     this.plane.constant = s.section.on ? p.constant : 1e9;      // a plane far outside the model clips nothing
@@ -133,6 +138,33 @@ export class ModelViewer {
   }
 
   private measuring = false;
+
+  /** Highlight the nodes in `names` (selected part): they glow, every other node is dimmed; an empty set restores the model. */
+  private applyHighlight(names: ReadonlySet<string> | undefined): void {
+    const on = !!names && names.size > 0;
+    for (const g of this.groups) {
+      const hit = on && names!.has(g.part.name);
+      g.node.traverse((o) => {
+        const m = o as Mesh;
+        if (!m.isMesh) return;
+        for (const mt of Array.isArray(m.material) ? m.material : [m.material]) {
+          const mm = mt as Material & { emissive?: Color; emissiveIntensity?: number };
+          const keep = (mm.userData ??= {}) as { orig?: { transparent: boolean; opacity: number; depthWrite: boolean; emissive?: number; intensity?: number } };
+          keep.orig ??= { transparent: mm.transparent, opacity: mm.opacity, depthWrite: mm.depthWrite,
+            emissive: mm.emissive?.getHex(), intensity: mm.emissiveIntensity };
+          const o0 = keep.orig;
+          mm.transparent = on && !hit ? true : o0.transparent;
+          mm.opacity = on && !hit ? 0.14 : o0.opacity;
+          mm.depthWrite = on && !hit ? false : o0.depthWrite;
+          if (mm.emissive) {
+            if (on && hit) { mm.emissive.setHex(0x2563eb); mm.emissiveIntensity = 0.55; }
+            else { mm.emissive.setHex(o0.emissive ?? 0x000000); mm.emissiveIntensity = o0.intensity ?? 1; }
+          }
+          mm.needsUpdate = true;
+        }
+      });
+    }
+  }
 
   sectionRange(axis: Axis): { min: number; max: number } { return sectionRange(this.box, axis); }
 

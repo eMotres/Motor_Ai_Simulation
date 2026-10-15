@@ -36,6 +36,8 @@ export interface ModelInfo {
   motor_id: string;
   glb_bytes?: number | null;
   glb_sha256?: string | null;
+  /** 'full' | 'frameless' (the CAD assembly variant; a frameless kit has no housing, holders, bearings, shaft, screws) */
+  assembly?: string;
   step_available?: boolean;
   step_bytes?: number | null;
   version?: { template?: string | null; built_at?: string | null; param_hash?: string };

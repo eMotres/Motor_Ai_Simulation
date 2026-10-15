@@ -77,6 +77,7 @@ def build_manifest(eff, profile, pull_report, build_report, step_check, files, f
         motor_id=profile["profile"]["motor_id"],
         cad_variant=profile["profile"].get("cad_variant") or "full",
         param_hash=fp.get("cad_param_hash"),
+        cad_overrides_hash=fp.get("cad_overrides_hash") or "none",
         geo_sig=fp.get("geo_sig"),
         geo_sig_hash=fp.get("geo_sig_hash"),
         store_files=(eff or {}).get("files") or sim.get("files"),

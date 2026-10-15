@@ -866,3 +866,21 @@ def test_u4_legacy_inlet_completion_carries_the_ambient_exactly(world):
         assert ts.cooling_fields(f)["bore_fluid_temp_in_c"] == 30.123456789
     # a blank / unparsable ambient keeps the mapper's own 40
     assert ts.solver_effective_cooling({"ambientT": "x"})["tIn"] == "40"
+
+
+def test_v1_legacy_mount_fields_become_the_heat_path_before_any_filtering(world):
+    """A robot whose old entry switched the mount off (mountG 0) must keep
+    heatPath none through the recovery read and the follow, not gain 'housing'."""
+    legacy = {"coolMode": "robotics", "airSpeedSource": "manual", "ambientT": "22",
+              "mountG": "0", "emissivity": "0.8"}
+    _seed(legacy)
+    world["selection"] = dict(ROBOT)
+    assert ts.heat_path_of(legacy) == "none"
+    read = ts.current_cooling_answer(None)["thermal"]["fields"]
+    assert read["heatPath"] == "none"
+    assert ts.cooling_fields(read) == ts.cooling_fields(legacy)
+    out = _load(world, ROBOT, ROBOT)
+    assert out["fields"]["heatPath"] == "none"
+    assert ts.cooling_fields(out["fields"]) == ts.cooling_fields(legacy)
+    # a positive mount is the housing path, as before
+    assert ts.solver_effective_cooling({"coolMode": "robotics", "mountG": "2"})["heatPath"] == "housing"

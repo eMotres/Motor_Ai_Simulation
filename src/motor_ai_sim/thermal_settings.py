@@ -1131,7 +1131,10 @@ def current_cooling_answer(authorization: Optional[str] = None) -> Dict[str, Any
         settings, info = motor_thermal_settings(authorization, die, config)
         if not info.get("motor"):
             return out
-        full = solver_effective_cooling(_cooling_of(settings))
+        # the WHOLE settings: the legacy mount fields (not cooling keys) must reach
+        # `heat_path_of` before anything is filtered, or a switched-off mount
+        # becomes a housing conduction path
+        full = solver_effective_cooling(settings)
         options = _cooling_options_for(die, config, authorization) or {}
         th = out["thermal"]
         th.update(motor=info["motor"], source=info["source"],

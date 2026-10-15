@@ -111,29 +111,23 @@ t('a bench-calibrated or transferred slipstream and an external ESC are stated',
   assert.deepEqual(tr.flagKeys, ['configurePropeller.s1FlagSlipstreamTransferred']);
 });
 
-t('the S1 controller: the Drive block\'s drive, or an external ESC with its typed bus current', () => {
-  assert.deepEqual(S.s1DriveRequest('drive', 'si_48k', '40'), { drive: 'si_48k', escBusA: null, boardCooling: 'favourable' });
-  assert.deepEqual(S.s1DriveRequest('drive', 'sine', null), { drive: 'sine', escBusA: null, boardCooling: 'favourable' });
-  assert.deepEqual(S.s1DriveRequest('external', 'si_48k', '55'), { drive: S.EXTERNAL_ESC, escBusA: 55, boardCooling: null });
-  assert.deepEqual(S.s1DriveRequest('external', 'sine', '62,5'), { drive: 'external_esc', escBusA: 62.5, boardCooling: null });
+t('the S1 controller: the Drive block drive, or an external ESC with its typed bus current', () => {
+  // the board cooling is never part of the request: the server decides it from the machine
+  assert.deepEqual(S.s1DriveRequest('drive', 'si_48k', '40'), { drive: 'si_48k', escBusA: null });
+  assert.deepEqual(S.s1DriveRequest('drive', 'sine', null), { drive: 'sine', escBusA: null });
+  assert.deepEqual(S.s1DriveRequest('external', 'si_48k', '55'), { drive: S.EXTERNAL_ESC, escBusA: 55 });
+  assert.deepEqual(S.s1DriveRequest('external', 'sine', '62,5'), { drive: 'external_esc', escBusA: 62.5 });
   // blank / nonsense / non-positive: no current sent, the backend takes the model's bench ESC
   for (const x of ['', '  ', 'abc', '0', '-3', null, undefined]) {
-    assert.deepEqual(S.s1DriveRequest('external', 'sine', x), { drive: 'external_esc', escBusA: null, boardCooling: null });
+    assert.deepEqual(S.s1DriveRequest('external', 'sine', x), { drive: 'external_esc', escBusA: null });
   }
 });
 
-t('the board cooling and the board build ride in the request (the build is a drive id)', () => {
-  assert.deepEqual(S.s1DriveRequest('drive', 'si_48k', null, 'slipstream'),
-    { drive: 'si_48k', escBusA: null, boardCooling: 'slipstream' });
-  assert.deepEqual(S.s1DriveRequest('drive', 'si_48k', null, 'weak', 'x2'),
-    { drive: 'si_48k_x2', escBusA: null, boardCooling: 'weak' });
-  assert.deepEqual(S.s1DriveRequest('drive', 'si_48k', '40', 'hot_motor', 'x2_board2'),
-    { drive: 'si_48k_x2_board2', escBusA: null, boardCooling: 'hot_motor' });
-  assert.deepEqual(S.s1DriveRequest('drive', 'sine', null, 'favourable', 'x2_board2'),
-    { drive: 'sine_x2_board2', escBusA: null, boardCooling: 'favourable' });
-  // an external ESC has no board: no board cooling is sent and the build is not used
-  assert.deepEqual(S.s1DriveRequest('external', 'si_48k', '55', 'slipstream', 'x2'),
-    { drive: 'external_esc', escBusA: 55, boardCooling: null });
+t('the board build rides in the request as a drive id; an external ESC ignores it', () => {
+  assert.deepEqual(S.s1DriveRequest('drive', 'si_48k', null, 'x2'), { drive: 'si_48k_x2', escBusA: null });
+  assert.deepEqual(S.s1DriveRequest('drive', 'si_48k', '40', 'x2_board2'), { drive: 'si_48k_x2_board2', escBusA: null });
+  assert.deepEqual(S.s1DriveRequest('drive', 'sine', null, 'x2_board2'), { drive: 'sine_x2_board2', escBusA: null });
+  assert.deepEqual(S.s1DriveRequest('external', 'si_48k', '55', 'x2'), { drive: 'external_esc', escBusA: 55 });
 });
 
 t('the two-device builds are offered only where the S1 model carries their drive ids', () => {
@@ -155,41 +149,24 @@ t('the two-device builds are offered only where the S1 model carries their drive
   assert.equal(S.s1BoardBuildOfId(null), 'as_built');
 });
 
-t('the Board cooling select offers only the classes the model supports, and falls back to favourable', () => {
-  // the response's classes: only these are on offer (slipstream only where a board block exists)
-  assert.deepEqual(S.s1BoardCoolingOptions(['favourable', 'weak', 'hot_motor']), ['favourable', 'weak', 'hot_motor']);
-  assert.deepEqual(S.s1BoardCoolingOptions(['favourable', 'weak', 'hot_motor', 'slipstream']), S.S1_BOARD_COOLING);
-  // nothing learned yet (before the first answer): all four; explicitly none: favourable only
-  assert.deepEqual(S.s1BoardCoolingOptions(null), S.S1_BOARD_COOLING);
-  assert.deepEqual(S.s1BoardCoolingOptions(undefined), S.S1_BOARD_COOLING);
-  assert.deepEqual(S.s1BoardCoolingOptions([]), ['favourable']);
-  assert.deepEqual(S.s1BoardCoolingOptions(['weak']), ['weak']);
-  // a remembered choice the model does not carry falls back to favourable (the backend default)
-  assert.equal(S.s1BoardCoolingChoice('slipstream', ['favourable', 'weak', 'hot_motor']), 'favourable');
-  assert.equal(S.s1BoardCoolingChoice('slipstream', ['favourable', 'weak', 'hot_motor', 'slipstream']), 'slipstream');
-  assert.equal(S.s1BoardCoolingChoice('weak', ['favourable', 'weak', 'hot_motor']), 'weak');
-  // nothing learned yet: the remembered choice stands; nonsense / none: favourable
-  assert.equal(S.s1BoardCoolingChoice('slipstream', null), 'slipstream');
-  assert.equal(S.s1BoardCoolingChoice('nonsense', ['favourable', 'weak']), 'favourable');
-  assert.equal(S.s1BoardCoolingChoice(null, ['favourable', 'weak']), 'favourable');
-  assert.equal(S.s1BoardCoolingChoice(null, []), 'favourable');
-  // a single supported class: that one
-  assert.equal(S.s1BoardCoolingChoice('slipstream', ['weak']), 'weak');
+t('there is no board cooling choice: no option helpers, only the label of the server class', () => {
+  assert.equal(S.s1BoardCoolingOptions, undefined);
+  assert.equal(S.s1BoardCoolingChoice, undefined);
+  assert.equal(S.isBoardCooling, undefined);
+  assert.equal(S.s1BoardCoolingKey('slipstream'), 'configurePropeller.s1CoolSlipstream');
+  assert.equal(S.s1BoardCoolingKey('favourable'), 'configurePropeller.s1CoolFavourable');
+  assert.equal(S.s1BoardCoolingKey(null), 'configurePropeller.s1CoolFavourable');
 });
 
 t('the cache key follows every parameter that changes the answer', () => {
-  const k = (drive = 'si_48k', cooling = 'favourable', escBusA = null, pack = { min: 18, max: 25.2 }) =>
-    S.s1CacheKey('tmotor_fpv_10x5', 'CIANO14 40 new', 'L12', 25, drive, pack, escBusA, cooling);
-  assert.equal(k(), k('si_48k', 'favourable', null, { min: 18, max: 25.2 }));
-  assert.notEqual(k(), k('si_48k', 'slipstream'));           // board cooling
+  const k = (drive = 'si_48k', escBusA = null, pack = { min: 18, max: 25.2 }) =>
+    S.s1CacheKey('tmotor_fpv_10x5', 'CIANO14 40 new', 'L12', 25, drive, pack, escBusA);
+  assert.equal(k(), k('si_48k', null, { min: 18, max: 25.2 }));
   assert.notEqual(k(), k('si_48k_x2'));                      // the board build's drive id
-  assert.notEqual(k(), k('si_48k', 'favourable', 55));       // the external ESC's bus current
-  assert.notEqual(k(), k('si_48k', 'favourable', null, null));   // no pack window
-  assert.notEqual(S.s1CacheKey('tmotor_fpv_10x5', 'CIANO14 40 new', 'L12', 25, 'si_48k', null, null, null),
-    S.s1CacheKey('tmotor_fpv_10x5', 'CIANO14 40 new', 'L20', 25, 'si_48k', null, null, null));
-  // the ESC path sends no board cooling: its key differs from the same drive with one
-  assert.notEqual(S.s1CacheKey('tmotor_fpv_10x5', 'CIANO14 40 new', 'L12', 25, 'external_esc', null, 55, null),
-    S.s1CacheKey('tmotor_fpv_10x5', 'CIANO14 40 new', 'L12', 25, 'external_esc', null, 55, 'favourable'));
+  assert.notEqual(k(), k('si_48k', 55));                     // the external ESC's bus current
+  assert.notEqual(k(), k('si_48k', null, null));             // no pack window
+  assert.notEqual(S.s1CacheKey('tmotor_fpv_10x5', 'CIANO14 40 new', 'L12', 25, 'si_48k', null, null),
+    S.s1CacheKey('tmotor_fpv_10x5', 'CIANO14 40 new', 'L20', 25, 'si_48k', null, null));
 });
 
 t('every new S1 key exists in both locales', async () => {
@@ -200,7 +177,7 @@ t('every new S1 key exists in both locales', async () => {
   const keys = ['s1FlagSlipstreamBench', 's1FlagSlipstreamTransferred', 's1FlagEscExternal', 's1FlagEscLoss',
     's1Ctrl', 's1CtrlTip', 's1CtrlDrive', 's1EscExternal', 's1EscBus', 's1EscBusUnit', 's1EscBusTip',
     's1EscBusTipDefault', 's1TipEsc',
-    's1BoardCooling', 's1BoardCoolingTip', 's1CoolFavourable', 's1CoolWeak', 's1CoolHotMotor', 's1CoolSlipstream',
+    's1BoardCooling', 's1BoardCoolingTip', 's1CoolFavourable', 's1CoolSlipstream',
     's1BoardBuild', 's1BoardBuildTip', 's1BuildX1', 's1BuildX2', 's1BuildX2Board2', 's1Estimate', 's1TipBoard'];
   for (const loc of ['en', 'zh-CN']) {
     const j = JSON.parse(readFileSync(join(here, '..', '..', 'locales', loc, 'controller.json'), 'utf8'));

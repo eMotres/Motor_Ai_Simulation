@@ -2,7 +2,7 @@
 // read-only, ungated.  Configure asks for the list once and for one `/series` per
 // (propeller, ambient, housing) — the propeller physics lives only in the backend.
 import { SERIES_N, SERIES_RPM_MAX, type CoolingInfo, type PropSeries, type PropSummary } from './configuratorPropeller';
-import { s1CacheKey, type S1BoardCooling, type S1Result } from './configuratorPropellerS1';
+import { s1CacheKey, type S1Result } from './configuratorPropellerS1';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -54,22 +54,20 @@ const _s1 = new Map<string, Promise<S1Result | null>>();
 
 /** The continuous (S1) limit of one die/configuration with this propeller (signed-in; the
  *  global fetch adds the token), for the selected drive (`sine` or a computed PWM variant id — the
- *  board build is its `_x2` / `_x2_board2` estimate variant), its board cooling class and the
+ *  board build is its `_x2` / `_x2_board2` estimate variant) and the
  *  pack's voltage window (null = the passport's own pack).  Cached per request; a failure is not. */
 export function fetchPropellerS1(id: string, die: string, config: string, ambientC: number,
                                  drive = 'sine', pack: { min: number; max: number } | null = null,
-                                 escBusA: number | null = null,
-                                 boardCooling: S1BoardCooling | null = null
+                                 escBusA: number | null = null
 ): Promise<S1Result | null> {
-  const key = s1CacheKey(id, die, config, ambientC, drive, pack, escBusA, boardCooling);
+  const key = s1CacheKey(id, die, config, ambientC, drive, pack, escBusA);
   const hit = _s1.get(key);
   if (hit) return hit;
   const q = new URLSearchParams({ die, config, ambient_c: String(ambientC), drive });
   if (pack) { q.set('pack_v_min', String(pack.min)); q.set('pack_v_max', String(pack.max)); }
   // an external ESC: its continuous bus current (none = the model's bench ESC)
   if (escBusA != null) q.set('esc_i_bus_max_A', String(escBusA));
-  // the controller board's cooling class (none = the backend's `favourable`)
-  if (boardCooling != null) q.set('board_cooling', boardCooling);
+  // the board's cooling class is decided by the server from the machine: never sent
   const p = fetch(`${API}/api/propellers/${encodeURIComponent(id)}/s1?${q}`, { cache: 'no-store' })
     .then((r) => (r.ok ? (r.json() as Promise<S1Result>) : null))
     .catch(() => null)

@@ -218,7 +218,7 @@ def solve_s1(model: Mapping[str, Any], transmission: Optional[TransmissionIR], l
              cooling_air_ms: float = 0.0, position: Optional[str] = None, factor: Optional[float] = None,
              n_points: int = 41, rpm_min: Optional[float] = None, rpm_max: Optional[float] = None,
              tol_rpm: float = 1.0, winding_limit_c: Optional[float] = None, magnet_limit_c: Optional[float] = None,
-             drive: Optional[str] = None, board_cooling: Optional[str] = None,
+             drive: Optional[str] = None,
              pack_v_min: Optional[float] = None, pack_v_max: Optional[float] = None,
              pack_i_max_A: Optional[float] = None) -> Dict[str, Any]:
     """Continuous (S1) limit of the chain.  ``model`` = a validated passport S1 model
@@ -226,7 +226,9 @@ def solve_s1(model: Mapping[str, Any], transmission: Optional[TransmissionIR], l
     motor holds (``propeller_s1.solve_point``) AND the transmission holds its ratings
     (torque, speed, heat).  The limit is the upper edge of the highest passing band.
     The transmission's heat is NOT fed into the motor's thermal network (separate body)."""
-    drv = s1.resolve_drive(model, drive, board_cooling)
+    # the board's cooling class follows from the machine (a propeller load = the wash), never a choice
+    bc, bc_basis = s1.effective_board_cooling(model, drive, "propeller" if isinstance(load, PropulsorIR) else None)
+    drv = s1.resolve_drive(model, drive, bc)
     pk = s1.resolve_pack(model, pack_v_min, pack_v_max, pack_i_max_A)
     lims = s1.limits_of(model, winding_limit_c, magnet_limit_c)
     rho = pp.air_density(temp_c=ambient_c, altitude_m=altitude_m)
@@ -295,6 +297,7 @@ def solve_s1(model: Mapping[str, Any], transmission: Optional[TransmissionIR], l
     return {
         "schema": SCHEMA, "kind": "s1", "transmission_id": transmission.id if transmission else None,
         "load_id": load.id, "die": model.get("die"), "config": model.get("config"),
+        "board_cooling": bc, "board_cooling_basis": bc_basis,
         "environment": {"ambient_c": ambient_c, "altitude_m": altitude_m, "rho_kg_m3": rho, "airspeed_ms": airspeed_ms},
         "rows": rows, "refined": [{"rpm": r["rpm"], "ok": r["ok"], "binding": r["binding"]} for r in allr
                                   if not any(r is x for x in rows)],

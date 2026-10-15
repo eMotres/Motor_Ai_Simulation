@@ -76,35 +76,104 @@ def build_monolith(core, rotor, magnets, r_stator_out, r_rotor_out):
     return sol[0], rep
 
 
-def coil_block(coil, ytop, wire_h, pitch, n_layers):
-    """ONE thick turn of the base coil (local frame, centred on +Y): the outline of the winding in the plane of a middle turn,
-    extruded from the bottom turn to the top turn, plus the terminal stubs (first and last turn) at their own place."""
+def _turn_faces(coil, ytop, wire_h, pitch, ks, sub=2):
+    """The outline faces of the turns ``ks``: the sections of the coil in the plane of every turn AND in the gap planes between them
+    (``sub`` planes per pitch), all moved into the plane y = 0.  The winding steps over to the next turn through a sloping transition at
+    the rear end turn, so ONE turn's plane section is OPEN there (legs ending apart with a gap) and only the sections between the turns
+    close the arc: the union of all of them is the envelope."""
     import Part
+    out = []
+    for k in ks:
+        for j in range(sub):
+            y = ytop - wire_h / 2.0 - (k + j / float(sub)) * pitch
+            wires = [w for w in coil.slice(_V(0, 1, 0), y) if w.isClosed()]
+            if not wires:
+                if j == 0:
+                    raise ValueError("turn %d has no section" % k)
+                continue
+            f = Part.Face(max(wires, key=lambda w: Part.Face(w).Area)).copy()
+            f.translate(_V(0, -y, 0))
+            out.append(f)
+    return out
+
+
+def _union_face(faces):
+    """The union of coplanar faces as ONE face (outline + the tooth opening); specks below 0.5 % of the area are dropped."""
+    u = faces[0]
+    for f in faces[1:]:
+        u = u.fuse(f)
+    u = u.removeSplitter()
+    fs = sorted(u.Faces, key=lambda f: -f.Area)
+    if len(fs) > 1 and sum(f.Area for f in fs[1:]) > 0.005 * fs[0].Area:
+        raise ValueError("the turns do not form one region (%d faces)" % len(fs))
+    return fs[0]
+
+
+def coil_block(coil, ytop, wire_h, pitch, n_layers):
+    """ONE thick turn of the base coil (local frame, centred on +Y): the ENVELOPE of the winding - the union of the outlines of all
+    inner turns, so both end turns are closed arcs around the tooth as in the real coil - extruded from the bottom turn to the top
+    turn, plus the terminal stubs (first and last turn: their own outline, at their own place) where the leads leave."""
     y_hi = ytop
     y_lo = ytop - wire_h - (n_layers - 1) * pitch
 
-    def outline(k):
-        y = ytop - wire_h / 2.0 - k * pitch
-        wires = [w for w in coil.slice(_V(0, 1, 0), y) if w.isClosed()]
-        if not wires:
-            raise ValueError("turn %d has no section" % k)
-        w = max(wires, key=lambda w: Part.Face(w).Area)
-        return Part.Face(w), y
-
-    def slab(face, y, lo, hi):
+    def slab(face, lo, hi):
         f = face.copy()
-        f.translate(_V(0, lo - y, 0))
+        f.translate(_V(0, lo, 0))
         return f.extrude(_V(0, hi - lo, 0))
 
-    mid, ym = outline(min(1, n_layers - 1))
-    body = slab(mid, ym, y_lo, y_hi)
-    for k in (0, n_layers - 1):                                   # the terminals: the first and the last turn leave the block
-        fk, yk = outline(k)
-        body = body.fuse(slab(fk, yk, yk - wire_h / 2.0, yk + wire_h / 2.0))
+    inner = list(range(1, n_layers - 1)) or [0]
+    body = slab(_union_face(_turn_faces(coil, ytop, wire_h, pitch, inner)), y_lo, y_hi)
+    for k in sorted({0, n_layers - 1}):                           # the terminals: the first and the last turn leave the block
+        yk = ytop - wire_h / 2.0 - k * pitch
+        body = body.fuse(slab(_turn_faces(coil, ytop, wire_h, pitch, [k], sub=1)[0], yk - wire_h / 2.0, yk + wire_h / 2.0))
     body = body.removeSplitter()
     if len(body.Solids) != 1:
         raise ValueError("the coil block is %d solids" % len(body.Solids))
     return body.Solids[0]
+
+
+CONTAIN_TOL = 0.002            # relative volume of the REAL coil that may lie outside its block
+BAR_ZONE = (0.2, 0.7)          # mm above the lowest / below the highest point of the outline: the end-turn bar that must be ONE piece
+
+
+def _bar_pieces(face, z0, z1):
+    import Part
+    bb = face.BoundBox
+    return len(face.common(Part.makeBox(bb.XLength + 2, 1.0, z1 - z0, _V(bb.XMin - 1, -0.5, z0))).Faces)
+
+
+def check_coil(block, coil, ytop, wire_h, pitch, n_layers):
+    """[] when the block IS the envelope of the real coil at BOTH ends (the 2026-10-15 defect: the rear end turn was open, the legs ending
+    apart with a round notch and a gap):
+      * the mid section of the block is ONE region with exactly two closed wires - the outline and the tooth opening: a ring round the tooth;
+      * the end-turn bar at the rear and at the front is ONE piece (an open end turn has two);
+      * the REAL coil (all turns, transitions, leads) lies inside block (volume outside < CONTAIN_TOL): nothing of the winding sticks out."""
+    import Part
+    bad = []
+    ym = ytop - (wire_h + (n_layers - 1) * pitch) / 2.0                  # the middle of the winding height: only the prism is cut
+    ws = [w for w in block.slice(_V(0, 1, 0), ym) if w.isClosed()]
+    if not ws:
+        return ["coil block has no section at mid height"]
+    ws.sort(key=lambda w: -Part.Face(w).Area)
+    sec = Part.Face(ws[0])
+    for h in ws[1:]:
+        sec = sec.cut(Part.Face(h))
+    sec = sec.copy()
+    sec.translate(_V(0, -ym, 0))
+    if len(sec.Faces) != 1 or len(ws) != 2:
+        bad.append("coil block: the outline is %d region(s) with %d closed wire(s); a ring round the tooth is ONE region with 2 (outline + tooth opening)" % (
+            len(sec.Faces), len(ws)))
+    bb = sec.BoundBox
+    lo = _bar_pieces(sec, bb.ZMin + BAR_ZONE[0], bb.ZMin + BAR_ZONE[1])
+    hi = _bar_pieces(sec, bb.ZMax - BAR_ZONE[1], bb.ZMax - BAR_ZONE[0])
+    if lo != 1:
+        bad.append("coil block: the REAR end turn is open - its bar is %d pieces (legs ending apart with a gap), the real coil's is closed" % lo)
+    if hi != 1:
+        bad.append("coil block: the FRONT end turn is open - its bar is %d pieces, the real coil's is closed" % hi)
+    out = coil.cut(block).Volume
+    if out > CONTAIN_TOL * coil.Volume:
+        bad.append("coil block: %.2f mm3 (%.2f %%) of the real coil lies outside the block: it is not the envelope of the winding" % (out, 100 * out / coil.Volume))
+    return bad
 
 
 def bearing_ring(outer_ring, d, z_range=None):
@@ -259,7 +328,7 @@ def check_board(board, brep):
     return bad
 
 
-def check(monolith, rep, coil_blocks, board=None, board_rep=None):
+def check(monolith, rep, coil_blocks, board=None, board_rep=None, coil_ref=None):
     """The patent-hygiene gate: [] when the simplified solids are envelope only, else the reasons."""
     import math as _m
     bad = []
@@ -288,4 +357,6 @@ def check(monolith, rep, coil_blocks, board=None, board_rep=None):
             break
     if board is not None:
         bad += check_board(board, board_rep)
+    if coil_ref is not None and coil_blocks:                         # the closure test: block 1 against the real coil (all blocks are copies)
+        bad += check_coil(coil_blocks[0], coil_ref["coil"], coil_ref["ytop"], coil_ref["wire_h"], coil_ref["pitch"], coil_ref["n"])
     return bad

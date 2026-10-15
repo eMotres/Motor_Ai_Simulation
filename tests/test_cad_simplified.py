@@ -94,6 +94,17 @@ def test_the_hygiene_gate_refuses_a_board_with_pins_or_curved_extras(synthetic):
     assert r["board_bad_whole"]                                                          # body + copper + pin + silkscreen fused: not a plain piece
 
 
+def test_the_coil_block_is_closed_at_both_end_turns_like_the_real_coil(synthetic):
+    """Owner 2026-10-15: the live simplified coil was open at the rear (legs ending apart, a notch and a gap) while the real coil is closed.
+    One turn's plane section is open there (the winding steps to the next turn), so the block is made from the union of the turns."""
+    r = synthetic
+    assert r["coil_bad"] == [] and r["bad"] == []                                  # the block, and the export gate with the coil closure test in it
+    assert r["coil_bad_open"], "the old block (ONE turn's section) must fail the closure test"
+    msg = " ".join(r["coil_bad_open"])
+    assert "REAR end turn is open" in msg and "2 pieces" in msg                    # the exact defect of the screenshot
+    assert "FRONT" not in msg                                                       # the front end turn of the old block was closed
+
+
 # -- the build wiring ------------------------------------------------------------------------------------------------------------
 
 def test_the_build_writes_the_simplified_files_for_every_config_and_lists_them():
@@ -125,7 +136,7 @@ def test_the_script_keeps_what_a_customer_integrates_and_drops_the_rest():
     assert 'if name.startswith("Bearing_618_8_"):' in s and 'S.bearing_ring(outer, g("bearing_d"))' in s     # one ring per bearing
     assert "terminals" in s and "mounting" in s and "mass=None" in s
     assert "S.board_plate(" in s and "PhaseBoard_pins" not in s                                       # the board is ONE piece: no pin group, no copper
-    assert "S.check(monolith, rep, coil_blocks, board, brep)" in s
+    assert "S.check(monolith, rep, coil_blocks, board, brep, coil_ref)" in s
     assert "simplified model refused" in s                                                           # a failed gate writes nothing
 
 

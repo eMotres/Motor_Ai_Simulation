@@ -11,6 +11,7 @@ rows screw_tip_margin, holder_screw_max); L12 / L20 / CIANO28 85 L13 keep their 
 A.7.0 (2026-10-15): the SIMPLIFIED envelope-only model (simplified.py, fc_scripts/export_simplified.py) is written for every config next to the real one;
 the geometry of the real model is unchanged.
 A.7.1 (2026-10-15): the GFRP Ring (body Ring, link Ring_back) is removed from every construction; the holders keep their position (ring_h + ring_holder_gap stay in the axial chain).
+A.7.2 (2026-10-15): the simplified coil block is the envelope of ALL inner turns (the rear end turn is closed like the real one) and the export gate tests it.
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.7.1"
+TEMPLATE_VERSION = "A.7.2"

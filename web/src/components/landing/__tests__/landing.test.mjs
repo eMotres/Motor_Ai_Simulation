@@ -59,9 +59,9 @@ function apiReady(resolved, hasUser, enforced) {
 /** The card list, kept in step with Landing.tsx's `FEATURES` (key + src; the
  *  label, alt and hint prose live in locales/<lng>/landing.json). */
 const FEATURES = [
-  { key: 'em', src: '/landing/em-field.png' },
-  { key: 'thermal', src: '/landing/thermal-map.png' },
-  { key: 'mech', src: '/landing/rotor-displacement.png' },
+  { key: 'em', src: '/landing/em-field.webp', w: 884, h: 766 },
+  { key: 'thermal', src: '/landing/thermal-map.webp', w: 884, h: 767 },
+  { key: 'mech', src: '/landing/rotor-displacement.webp', w: 884, h: 767 },
 ];
 
 /* ── who gets the landing ────────────────────────────────────────────────── */
@@ -152,17 +152,25 @@ test('the label is translated when the caller passes translations', () => {
   assert.equal(signInLabel('', { google: '使用 Google 登录', plain: '登录' }), '登录');
 });
 
-test('every card picture exists under public/ and is under 300 KB', () => {
+test('every card picture exists under public/, is a WebP under 150 KB and matches its declared size', async () => {
+  const { webpSize } = await import('../../../../scripts/prerender-landing.mjs');
   for (const f of FEATURES) {
     assert.ok(f.src.startsWith('/landing/'), `${f.src} is not served from /landing/`);
+    assert.ok(f.src.endsWith('.webp'), `${f.src} is not a WebP`);
     const p = path.join(WEB, 'public', f.src.replace(/^\//, ''));
     assert.ok(fs.existsSync(p), `missing asset: ${p}`);
-    const kb = fs.statSync(p).size / 1024;
-    assert.ok(kb <= 300, `${f.src} is ${kb.toFixed(0)} KB — over the 300 KB budget`);
-    // A PNG, not an HTML error page renamed: the 8-byte signature.
-    const sig = fs.readFileSync(p).subarray(0, 8);
-    assert.deepEqual([...sig], [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
-      `${f.src} is not a PNG`);
+    const buf = fs.readFileSync(p);
+    const kb = buf.length / 1024;
+    assert.ok(kb <= 150, `${f.src} is ${kb.toFixed(0)} KB, over the 150 KB budget`);
+    // A WebP, not an HTML error page renamed: RIFF....WEBP, and the size the <img> declares.
+    assert.equal(buf.toString('latin1', 0, 4), 'RIFF');
+    assert.equal(buf.toString('latin1', 8, 12), 'WEBP');
+    assert.deepEqual(webpSize(buf), { w: f.w, h: f.h }, `${f.src}: Landing.tsx declares another size`);
+  }
+  // Landing.tsx lists exactly these files with exactly these sizes.
+  const tsx = fs.readFileSync(path.join(WEB, 'src', 'components', 'landing', 'Landing.tsx'), 'utf8');
+  for (const f of FEATURES) {
+    assert.ok(tsx.includes(`src: '${f.src}', w: ${f.w}, h: ${f.h}`), `Landing.tsx FEATURES out of step for ${f.key}`);
   }
 });
 
@@ -212,4 +220,39 @@ test('the first-load bundle: main.tsx imports only Root; App and the heavy tabs 
   for (const heavy of ['three', 'recharts', '@xyflow', 'motorStore', 'AdminPanel', 'MotorScene']) {
     assert.ok(!imports.includes(heavy), `LandingShell must not import ${heavy}`);
   }
+});
+
+/* ── /api/me cannot be read: never Local Mode for a signed-out visitor in production ── */
+const { meFailureAction, meRetryDelayMs, meResponseUsable } = await import('../../../lib/authFallback.ts');
+
+test('/api/me failure: a production build retries (landing stays), only a dev build goes Local Mode', () => {
+  assert.equal(meFailureAction(false), 'retry', 'production: no invented answer');
+  assert.equal(meFailureAction(true), 'local-mode', 'dev server keeps working without the API');
+});
+
+test('/api/me failure keeps a signed-out visitor on the landing, with a backoff that is capped', () => {
+  // unresolved + no user -> landing shell, whatever the retry count is
+  assert.equal(showsLandingShell(false, false, false), true);
+  assert.deepEqual([0, 1, 2, 3, 4, 5, 9].map(meRetryDelayMs), [2000, 4000, 8000, 16000, 30000, 30000, 30000]);
+  assert.equal(meRetryDelayMs(-3), 2000);
+});
+
+test('/api/me: a gateway error is a failure, an explicit {enforced:false} answer is a real answer', () => {
+  for (const st of [500, 502, 503, 504]) assert.equal(meResponseUsable(st), false, String(st));
+  for (const st of [200, 401, 403]) assert.equal(meResponseUsable(st), true, String(st));
+  // the server's own explicit unenforced answer (resolved=true, enforced=false) opens the workspace
+  assert.equal(showsLandingShell(false, true, false), false);
+});
+
+test('AuthContext: the catch branch asks authFallback; Local Mode is not a network-failure fallback', () => {
+  const src = fs.readFileSync(path.join(WEB, 'src', 'contexts', 'AuthContext.tsx'), 'utf8');
+  const catchAt = src.search(/\} catch \{\s*\/\/ COULD NOT ASK/);
+  assert.ok(catchAt > 0, 'the catch that decides the failure is missing');
+  const block = src.slice(catchAt, src.indexOf('}, []);', catchAt));
+  assert.match(block, /meFailureAction\(import\.meta\.env\.DEV\) === 'local-mode'/);
+  assert.match(block, /meRetryDelayMs\(/);
+  // setEnforced(false)+setResolved(true) only inside the dev-only branch
+  const unconditional = block.replace(/if \(meFailureAction[\s\S]*?\} else \{/, '');
+  assert.ok(!/setEnforced\(false\)/.test(unconditional), 'setEnforced(false) outside the dev-only branch');
+  assert.match(src, /meResponseUsable\(r\.status\)/);
 });

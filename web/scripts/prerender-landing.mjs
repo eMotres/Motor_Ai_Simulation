@@ -69,9 +69,9 @@ export const STEP_IDS = ['design', 'simulation', 'configure', 'model3d', 'produc
 export const OPEN_IDS = ['source', 'agents', 'modules', 'compute'];
 export const APP_IDS = ['aviation', 'robotics', 'marine', 'yours'];
 export const FEATURES = [
-  ['em', '/landing/em-field.png'],
-  ['thermal', '/landing/thermal-map.png'],
-  ['mech', '/landing/rotor-displacement.png'],
+  ['em', '/landing/em-field.webp'],
+  ['thermal', '/landing/thermal-map.webp'],
+  ['mech', '/landing/rotor-displacement.webp'],
 ];
 
 /** The two public pages.  `path` is the canonical URL path. */
@@ -88,6 +88,22 @@ export const BOTS = [
 ];
 /** Never indexed: the API, OAuth, the MCP endpoint and the consent page. */
 export const DISALLOW = ['/api/', '/oauth/', '/mcp', '/agent-consent', '/preferences', '/zh-cn/preferences'];
+
+/** Pixel size of a WebP file (lossy 'VP8 ', lossless 'VP8L' or extended 'VP8X'), read from
+ *  its header, so the static <img> can carry width/height and the card does not shift. */
+export function webpSize(buf) {
+  if (buf.toString('latin1', 0, 4) !== 'RIFF' || buf.toString('latin1', 8, 12) !== 'WEBP') {
+    throw new Error('not a WebP file');
+  }
+  const kind = buf.toString('latin1', 12, 16);
+  if (kind === 'VP8 ') return { w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff };
+  if (kind === 'VP8L') {
+    const b = buf.readUInt32LE(21);
+    return { w: (b & 0x3fff) + 1, h: ((b >> 14) & 0x3fff) + 1 };
+  }
+  if (kind === 'VP8X') return { w: buf.readUIntLE(24, 3) + 1, h: buf.readUIntLE(27, 3) + 1 };
+  throw new Error(`unknown WebP chunk ${kind}`);
+}
 
 const esc = (s) => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -204,8 +220,10 @@ export function renderBody(L, loc, webDir = WEB) {
   out.push(`<ol class="grid steps">${STEP_IDS.map((id) => card(t(`chain.${id}`), t(`steps.${id}`))).join('')}</ol></section>`);
 
   out.push(`<section aria-labelledby="sim-h"><h2 id="sim-h">${t('sim.title')}</h2><p class="lead">${t('sim.sub')}</p>`);
-  out.push('<div class="grid">' + FEATURES.map(([k, src]) =>
-    `<figure><img src="${src}" loading="lazy" decoding="async" fetchpriority="low" alt="${t(`sim.${k}`)}"><figcaption>${t(`sim.${k}`)}</figcaption></figure>`).join('') + '</div></section>');
+  out.push('<div class="grid">' + FEATURES.map(([k, src]) => {
+    const { w, h } = webpSize(fs.readFileSync(path.join(webDir, 'public', src)));
+    return `<figure><img src="${src}" width="${w}" height="${h}" loading="lazy" decoding="async" fetchpriority="low" alt="${t(`sim.${k}`)}"><figcaption>${t(`sim.${k}`)}</figcaption></figure>`;
+  }).join('') + '</div></section>');
 
   out.push(`<section aria-labelledby="open-h"><h2 id="open-h">${t('open.title')}</h2><p class="lead">${t('open.sub')}</p>`);
   out.push(`<ul class="grid">${OPEN_IDS.map((id) => card(t(`open.${id}.title`), t(`open.${id}.text`))).join('')}</ul></section>`);

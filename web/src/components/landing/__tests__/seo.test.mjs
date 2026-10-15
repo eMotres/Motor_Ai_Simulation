@@ -207,3 +207,21 @@ for (const { name, dist } of targets) {
     });
   }
 }
+
+// ── the three simulation pictures: WebP, with their size, lazy and low priority ──
+for (const { name, dist } of targets) {
+  test(`${name}: simulation pictures are WebP <img>s with width/height, lazy and fetchpriority=low`, () => {
+    for (const file of ['index.html', path.join('zh-cn', 'index.html')]) {
+      const html = fs.readFileSync(path.join(dist, file), 'utf8');
+      const figs = [...html.matchAll(/<figure><img ([^>]*)>/g)].map((m) => m[1]);
+      assert.equal(figs.length, 3, `${file}: three figures`);
+      for (const a of figs) {
+        assert.match(a, /src="\/landing\/[a-z-]+\.webp"/);
+        assert.match(a, /width="884" height="76[67]"/);
+        assert.match(a, /loading="lazy"/);
+        assert.match(a, /fetchpriority="low"/);
+      }
+      assert.doesNotMatch(html, /\/landing\/[a-z-]+\.png/);
+    }
+  });
+}

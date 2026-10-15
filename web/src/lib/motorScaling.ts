@@ -74,6 +74,8 @@ export interface Passport {
   /** passport extraction revision (absent = before the 2026-09-30 fixes) */
   extraction_rev?: number | null;
   R0_ohm: number;      // base phase resistance
+  /** Reference temperature for R0, when supplied by the catalog passport. */
+  R_temp_C?: number | null;
   endWindFrac: number; // 0..1 fraction of R0 that is end-winding (does NOT scale with L)
   Pfe0_W: number;      // base iron (core) loss
   /** The BASE POINT's iron loss per half [W].  The loss grid scales ONE core

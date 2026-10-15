@@ -82,6 +82,7 @@ import {
 } from '../../lib/configureContextApi';
 import { ConfigureContextRequestGuard, contextForIdentity } from '../../lib/configureContextRequest';
 import { configuratorReferenceTemperatureBasis } from '../../lib/configuratorReferenceTemperature';
+import { catalogCopperBreakdown } from '../../lib/catalogCopperBreakdown';
 import { stackCoefficientReferenceOnly } from '../../lib/stackCoefficientBasis.mjs';
 import { coldConstantsUnavailableForCard } from '../../lib/coldConstantsGuard.mjs';
 import { useTranslation } from 'react-i18next';
@@ -800,6 +801,18 @@ const ConfiguratorPanel: React.FC = () => {
   // the one name the charts and the result use for "the knobs the model reads".
   const scaleKnobs = knobs;
   const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
+  const copperBreakdown = catalogCopperBreakdown(scaleKnobs.I_A, result.R_ohm, result.P_cu_W);
+  const copperResistanceTempC = p.R_temp_C ?? referenceTemperatureBasis?.windingC ?? null;
+  const copperResistanceBasis = copperResistanceTempC == null
+    ? tx('emTiles.copperResistanceTempUnknown')
+    : tx('emTiles.copperResistanceTemp', { temp: fmt(copperResistanceTempC, 0) });
+  const copperBreakdownTip = copperBreakdown
+    ? tx('emTiles.copperLossBreakdownTip', {
+        current: fmt(scaleKnobs.I_A, 2), resistance: fmt(result.R_ohm * 1000, 3),
+        basis: copperResistanceBasis, dc: fmt(copperBreakdown.dcW, 1),
+        total: fmt(result.P_cu_W, 1), ac: fmt(copperBreakdown.acProximityW, 1),
+      })
+    : tx('emTiles.copperLossBreakdownUnavailable');
   // The winding must fit ACROSS the slot (owner 2026-10-15: a wire wider than the slot mouth
   // draws the stator with a lobe).  Wire WIDTH is fixed per machine in Configure (only turns and
   // wire thickness are knobs), so there is nothing to clamp here: the line names the limit, and
@@ -2146,7 +2159,7 @@ ${s1Text.tip}` : '';
             <MetricTile label={tx('configure.totalLoss')} value={totalLossShown(result.P_loss_W, driveMode, drv)} unit="W" d={0}
               base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')} blankTip={tx('configure.totalLossBlankTip')} />
             <MetricTile label={tx('configure.ironLoss')} value={result.P_fe_W} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false} />
-            <MetricTile label={tx('configure.copperLoss')} value={result.P_cu_W} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} />
+            <MetricTile label={tx('configure.copperLoss')} value={result.P_cu_W} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip} />
             <MetricTile label={tx('configure.magnetLoss')} value={result.P_mag_W} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}
             <MetricTile label={tx('configure.statorHeat')} value={result.P_loss_stator_W} unit="W" d={0}

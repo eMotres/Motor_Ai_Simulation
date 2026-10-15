@@ -259,8 +259,12 @@
     "badge": "card",
     "tip": "Full passport card · {date}",
     "tipNoDate": "Full passport card",
+    "olderBuild": "older build",
+    "someDuty": "at least one duty",
+    "olderBuildTip": "Duty results ({duties}) were computed on an older build. Load the current build, rerun and save them.",
     "summary": "{cards}/{total} cards",
-    "summaryTip": "{cards} of {total} configurations have a full passport card"
+    "summaryTip": "{cards} of {total} configurations have a full passport card. This count does not show whether results use the current build.",
+    "summaryOlderBuildTip": "{cards} of {total} configurations have a full passport card. Duty results on {configs} were computed on an older build. Load the current build, rerun and save them."
   },
   "system": {
     "view": {

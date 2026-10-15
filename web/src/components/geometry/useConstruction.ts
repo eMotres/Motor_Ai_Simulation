@@ -7,6 +7,7 @@ import { useApiReady } from '../../contexts/AuthContext';
 import { refusalLines, shouldPoll, type CadParamsData } from '../../lib/cadParams';
 import type { ModelInfo } from '../../lib/model3d';
 import type { PartTreeData } from '../../lib/partTree';
+import { parseAccess, type AccessInfo } from '../../lib/verification';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 const enc = encodeURIComponent;
@@ -38,11 +39,13 @@ export function useOpenMotor(): OpenMotor | null {
   return selection ? { die: selection.die, config: selection.config } : ctx;
 }
 
-/** The built models the account may open, and whether it may download (the server's `can_download`). */
+/** The built models the account may open, whether it may download (the server's `can_download`) and why not (`access`: the NDA, or the
+ *  applicant verification behind it). */
 export function useModelList(refreshKey: string | number = 0) {
   const ready = useApiReady();
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [canDownload, setCanDownload] = useState(false);
+  const [access, setAccess] = useState<AccessInfo>({ state: 'nda', nda_signed: false });
   useEffect(() => {
     if (!ready) return undefined;
     let live = true;
@@ -53,12 +56,13 @@ export function useModelList(refreshKey: string | number = 0) {
         const j = await r.json();
         if (!live) return;
         setCanDownload(j.can_download === true);
+        setAccess(parseAccess(j.access, j.can_download === true));
         setModels(j.models as ModelInfo[]);
       } catch { if (live) setModels([]); }
     })();
     return () => { live = false; };
   }, [ready, refreshKey]);
-  return { models, canDownload };
+  return { models, canDownload, access };
 }
 
 /** THE part tree of die/config.  `source`: 'family' (Geometry / Materials, with materials + masses) or 'model3d' (the 3-D tab, names only). */

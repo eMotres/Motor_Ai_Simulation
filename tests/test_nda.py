@@ -128,7 +128,8 @@ def test_typed_name_must_match_country_must_be_listed_and_box_ticked(env):
 def test_signing_writes_the_record_unlocks_the_step_and_stores_the_pdf(env):
     assert client.get(env["url"] + "/model.step", headers=env["user"]).status_code == 403
     r = sign(env)
-    assert r.status_code == 200 and r.json()["can_download"] is True
+    assert r.status_code == 200 and r.json()["can_download"] is False          # the signature alone no longer opens the STEP
+    assert r.json()["access"]["state"] in ("in_progress", "need_info")
     (rec,) = records(env)
     assert rec["id"] == r.json()["record_id"] and rec["user"] == USER and rec["email"] == USER
     assert rec["company"] == "Acme Drones Ltd" and rec["country"] == "DE" and rec["signatory"] == "Erika Mustermann"
@@ -146,7 +147,11 @@ def test_signing_writes_the_record_unlocks_the_step_and_stores_the_pdf(env):
     nda = U.get_nda(USER)
     assert nda["signed"] and nda["by"] == "online" and nda["version"] == "v1-2026-10" and nda["company"] == "Acme Drones Ltd"
     assert nda["record_id"] == rec["id"] and nda["date"] == today
-    # the download is open at once, stamped and logged as usual
+    # the STEP stays closed until the verification case is VERIFIED (here: an administrator approves it), then stamped and logged as usual
+    assert client.get(env["url"] + "/model.step", headers=env["user"]).status_code == 403
+    from motor_ai_sim.verification import store as VS
+    (case,) = VS.cases_of(USER)
+    assert client.post(f"/api/admin/verification/{case['id']}/approve", json={"reason": "known customer"}, headers=env["admin"]).status_code == 200
     s = client.get(env["url"] + "/model.step", headers=env["user"])
     assert s.status_code == 200 and b"Licensed to Erika" in s.content
     assert client.get("/api/model3d/models", headers=env["user"]).json()["can_download"] is True
@@ -233,6 +238,8 @@ def test_admin_date_edit_keeps_the_online_source(env):
 
 def test_a_newer_version_does_not_invalidate_an_older_signature(env):
     sign(env)
+    from motor_ai_sim.verification import store as VS
+    client.post(f"/api/admin/verification/{VS.cases_of(USER)[0]['id']}/approve", json={"reason": "known customer"}, headers=env["admin"])
     install(env["legal"], "v2-2027-01")
     cur = client.get("/api/nda/current", headers=env["user"]).json()
     assert cur["version"] == "v2-2027-01"

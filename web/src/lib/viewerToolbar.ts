@@ -22,7 +22,7 @@ export function drawerStartsOpen(stored: string | null | undefined): boolean {
 /** Drawer width in px: 420 on a wide screen, the whole width (minus a gutter) on a phone. */
 export const drawerWidth = (viewport: number): number => Math.max(260, Math.min(420, viewport - 16));
 
-export type Model3DItem = 'motor' | 'fit' | 'explode' | 'section' | 'measure' | 'download' | 'yourNda' | 'info' | 'ndaNote' | 'sign';
+export type Model3DItem = 'motor' | 'fit' | 'explode' | 'section' | 'measure' | 'download' | 'yourNda' | 'info' | 'ndaNote' | 'sign' | 'verify';
 
 export interface Model3DToolbarCtx {
   /** the server flag: NDA signed (or admin) - the only permission the 3-D tab has */
@@ -35,17 +35,21 @@ export interface Model3DToolbarCtx {
   stepAvailable: boolean;
   /** a signed NDA PDF is on file ("Your signed NDA") */
   hasPdf: boolean;
+  /** the NDA is signed but the applicant verification is not complete (server `access`): the toolbar shows its status, not "Sign" */
+  ndaSigned?: boolean;
 }
 
 export interface ToolbarEntry { id: Model3DItem; enabled: boolean }
 
 /** The items of the 3-D model toolbar, in order.  Without the NDA: the motor picker (only when there is a choice), Fit, and the
- *  "Download after NDA" note with the Sign button - no tool.  With it: the picker, Fit, exploded view, section, measure, the STEP
+ *  "Download after NDA" note with the Sign button (or, with the NDA signed, the verification status) - no tool.  With it: the picker, Fit, exploded view, section, measure, the STEP
  *  download (disabled when the model has no STEP), the signed-NDA link when a PDF exists, and the info icon. */
 export function model3dToolbar(c: Model3DToolbarCtx): ToolbarEntry[] {
   const e = (id: Model3DItem, enabled = true): ToolbarEntry => ({ id, enabled });
   if (!c.canDownload) {
-    return [...(c.models > 1 || c.preparing ? [e('motor')] : []), e('fit'), e('ndaNote'), e('sign')];
+    const pick = c.models > 1 || c.preparing ? [e('motor')] : [];
+    // signing the NDA does not open the tools by itself (applicant verification): once signed, the status line replaces the Sign button
+    return c.ndaSigned ? [...pick, e('fit'), e('verify')] : [...pick, e('fit'), e('ndaNote'), e('sign')];
   }
   return [e('motor', c.models > 0), e('fit'), e('explode'), e('section'), e('measure'), e('download', c.stepAvailable),
     ...(c.hasPdf ? [e('yourNda')] : []), e('info')];

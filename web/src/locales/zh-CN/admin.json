@@ -14,7 +14,8 @@
     "logs": "日志 / 事件",
     "downloads3d": "3D 下载",
     "analytics": "访问统计",
-    "activity": "使用时长"
+    "activity": "使用时长",
+    "verification": "身份核实"
   },
   "motors": {
     "title": "电机 — {email}",
@@ -102,5 +103,73 @@
       "cost": "成本",
       "admin": "管理"
     }
+  },
+  "verification": {
+    "title": "身份核实",
+    "all": "全部",
+    "refresh": "刷新",
+    "empty": "暂无申请。",
+    "back": "队列",
+    "help": "在线签署模型保密协议的申请人。已通过核实即开放 3D 工具和 STEP 下载；人工审核需要人工处理；需补充信息表示等待申请人回复。公司必须由注册机构级来源（GLEIF、英国公司注册处、VIES）确认，且至少有两个独立信号（其中至少一个强信号）将申请人与公司关联。",
+    "status": {
+      "MORE_INFORMATION_REQUIRED": "需补充信息",
+      "MANUAL_REVIEW": "人工审核",
+      "PENDING": "核对中",
+      "VERIFIED": "已核实",
+      "DENIED": "已拒绝"
+    },
+    "col": {
+      "updated": "更新时间",
+      "company": "公司",
+      "country": "国家/地区",
+      "applicant": "申请人",
+      "account": "账户",
+      "status": "状态",
+      "signals": "信号",
+      "source": "来源",
+      "check": "检查项",
+      "result": "结果",
+      "strength": "强度",
+      "summary": "结论",
+      "when": "时间 (UTC)"
+    },
+    "field": {
+      "applicant_name": "申请人",
+      "title": "职务",
+      "work_email": "工作邮箱",
+      "country": "国家/地区",
+      "reg_no": "注册号",
+      "vat_no": "增值税号",
+      "website": "网站",
+      "purpose": "用途",
+      "address": "地址",
+      "account": "账户"
+    },
+    "application": "申请信息",
+    "verifiedEmails": "已确认的邮箱",
+    "decision": "结论",
+    "asked": "已询问",
+    "company": "公司",
+    "confirmedBy": "已由以下来源确认",
+    "notConfirmed": "尚无注册机构级来源确认",
+    "access": "权限",
+    "granted": "已开通",
+    "closed": "未开通",
+    "actions": "操作",
+    "actionsHelp": "批准将开放 3D 工具和 STEP 下载；补充信息会把您的文字以模板邮件发送给申请人；拒绝将关闭申请；重新检查会重复所有检查。必须填写理由；所有操作均有审计记录。",
+    "reasonPlaceholder": "理由，或向申请人提出的问题",
+    "approve": "批准",
+    "requestInfo": "要求补充",
+    "deny": "拒绝",
+    "rerun": "重新检查",
+    "replyPage": "申请人回复页面",
+    "evidence": "检查记录",
+    "source": "来源",
+    "raw": "原始返回",
+    "correspondence": "往来邮件",
+    "notSent": "未发送",
+    "applicant": "申请人",
+    "downloads": "下载记录",
+    "timeline": "时间线"
   }
 }

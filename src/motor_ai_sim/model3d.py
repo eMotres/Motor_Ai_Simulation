@@ -22,6 +22,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import logging
 import os
 import re
 import secrets
@@ -31,6 +32,8 @@ from pathlib import Path
 from typing import Optional
 
 from motor_ai_sim.private_files import ensure_private_dir, open_private
+
+log = logging.getLogger(__name__)
 
 ORGANISATION = "MOTRES d.o.o."
 _LOCK = threading.RLock()
@@ -65,12 +68,21 @@ def download_log_path() -> Path:
 # ── who sees what ───────────────────────────────────────────────────────────
 
 def can_download(identity: dict, user_rec: Optional[dict] = None) -> bool:
-    """May this caller download the STEP?  The owner / admin and accounts flagged "NDA signed" in Admin; viewing is open."""
-    if identity.get("is_admin"):
-        return True
-    rec = user_rec or {}
-    nda = rec.get("nda") if isinstance(rec.get("nda"), dict) else {}
-    return bool(nda.get("signed"))
+    """May this caller download the STEP and use the 3-D tools?  The owner / admin; an account flagged "NDA signed" by an
+    administrator; an account that signed the NDA online ONLY once its applicant verification is VERIFIED (or an administrator
+    approved it) - the signature alone no longer opens it (motor_ai_sim.verification, owner 2026-10-15).  Viewing is open."""
+    from motor_ai_sim import verification as V
+    return V.access_ok(identity, user_rec)
+
+
+def denial_detail(identity: dict, user_rec: Optional[dict] = None) -> str:
+    """The 403 text for a caller who may not use the confidential files: names what is missing (the NDA, or the verification)."""
+    from motor_ai_sim import verification as V
+    nda = (user_rec or {}).get("nda") if isinstance((user_rec or {}).get("nda"), dict) else {}
+    if nda.get("signed") and nda.get("by") == "online":
+        st = V.public_access(identity, user_rec or {}, create=False).get("state")
+        return ("Access is not open: your verification is not complete (state: %s). Open the 3D model tab to see what is needed." % st)
+    return "Download is available after the NDA is signed."
 
 
 def customer_name(identity: dict, user_rec: Optional[dict] = None) -> str:
@@ -182,9 +194,17 @@ def nda_basis(identity: dict, user_rec: Optional[dict] = None) -> dict:
         return dict(type="online", ref="%s record %s" % (ver, rid), label=ver, version=ver, record_id=rid,
                     text_sha256=rec.get("text_sha256"), company=rec.get("company") or nda.get("company") or "",
                     signatory=rec.get("signatory") or "", signed_at=rec.get("iso") or nda.get("date") or "",
-                    record_found=bool(rec))
+                    record_found=bool(rec), verification=_verification_basis(identity))
     day = str(nda.get("date") or "?")
     return dict(type="admin", ref="admin-flag %s" % day, label="admin-flag %s" % day, set_by=str(nda.get("by") or ""), date=day)
+
+
+def _verification_basis(identity: dict) -> dict:
+    try:
+        from motor_ai_sim import verification as V
+        return V.basis_of(identity.get("id") or "")
+    except Exception:                                       # noqa: BLE001 - the log line is written even if the case cannot be read
+        return {}
 
 
 def recipient_of(identity: dict, user_rec: Optional[dict], basis: dict) -> dict:
@@ -269,6 +289,12 @@ def log_download(rec: dict) -> dict:
         ensure_private_dir(p.parent)
         with open_private(p, "a") as fh:
             fh.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
+    if row.get("nda") is True:                              # into the verification case timeline too (this log stays the master)
+        try:
+            from motor_ai_sim import verification as V
+            V.note_download(row)
+        except Exception as e:                              # noqa: BLE001 - the delivery is already logged; the case timeline is a copy
+            log.warning("verification: download %s not noted in its case (%s)", row.get("download_id"), type(e).__name__)
     return row
 
 

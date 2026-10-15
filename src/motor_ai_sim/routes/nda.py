@@ -2,7 +2,8 @@
 
 * ``GET  /api/nda/current?lang=``   the current agreement text with its SHA-256 (the hash of exactly the text served)
 * ``GET  /api/nda/mine``            the caller's NDA state (source, version, company, record id)
-* ``POST /api/nda/sign``            validate, store the append-only record and the signed PDF, unlock the STEP download
+* ``POST /api/nda/sign``            validate, store the append-only record and the signed PDF, open a verification case (the STEP opens
+                                   when the case is VERIFIED, see motor_ai_sim.verification)
 * ``GET  /api/nda/mine/pdf``        the caller's signed PDF
 * ``GET  /api/nda/signatures``      admin: recent online signatures (company, user, country, free-mail flag)
 * ``GET  /api/nda/{record_id}/pdf`` admin: any signed PDF
@@ -46,7 +47,8 @@ def mine(authorization: Optional[str] = Header(default=None)):
     from motor_ai_sim import users as U
     nda = U.normalize_nda(rec.get("nda"))
     cur = N.current("en")
-    return dict(signed=nda["signed"] or bool(who.get("is_admin")), nda=nda,
+    from motor_ai_sim import verification as V
+    return dict(signed=nda["signed"] or bool(who.get("is_admin")), nda=nda, access=V.public_access(who, rec, create=False),
                 source=("online" if nda.get("by") == "online" else "admin") if nda["signed"] else None,
                 has_pdf=bool(nda.get("record_id") and N.pdf_path(nda["record_id"])),
                 current_version=cur["version"] if cur else None, signable=bool(cur and cur["signable"]))
@@ -71,6 +73,9 @@ def sign(request: Request, body: dict = Body(default={}), authorization: Optiona
     if old["signed"] and old.get("version") == cur["version"]:
         raise HTTPException(status_code=409, detail="You have already signed version %s." % cur["version"])
     fields, errors = N.validate(body)
+    from motor_ai_sim import verification as V
+    _intake, intake_errors = V.validate_intake(body, who["id"])
+    errors = {**intake_errors, **errors}
     if errors:
         raise HTTPException(status_code=422, detail={"error": "Check the highlighted fields.", "errors": errors})
     try:
@@ -89,6 +94,12 @@ def sign(request: Request, body: dict = Body(default={}), authorization: Optiona
     AA.record(who["id"], "user.nda", who["id"], subject=who["id"],
               details={"signed": True, "source": "online", "version": r["version"], "record": r["id"]})
     N.mail_copies(r, pdf)
+    # applicant verification: the signature opens a CASE, it no longer opens the STEP by itself (motor_ai_sim.verification).  A failure
+    # here never undoes the signature: the account then shows "we need one more thing" and the case is opened on its first look.
+    try:
+        V.on_nda_signed(who["id"], r, body, lang)
+    except Exception:                                       # noqa: BLE001
+        log.exception("nda: the verification case of %s could not be opened", r["id"])
     # the optional dataset consent: its own audit line and user flag; a failure here never undoes the signature (fail-closed:
     # without the audit line the export filter refuses the data)
     from motor_ai_sim import data_sharing as DS
@@ -97,7 +108,10 @@ def sign(request: Request, body: dict = Body(default={}), authorization: Optiona
     except (OSError, KeyError) as e:
         log.error("nda: dataset consent of %s could not be stored (%s)", r["id"], e)
         ds = DS.state(who["id"])
-    return {"ok": True, "record_id": r["id"], "version": r["version"], "can_download": True, "data_sharing": ds}
+    from motor_ai_sim import model3d as M
+    acc = V.public_access(who, U.get_user(who["id"]) or {})
+    return {"ok": True, "record_id": r["id"], "version": r["version"], "can_download": M.can_download(who, U.get_user(who["id"]) or {}),
+            "access": acc, "data_sharing": ds}
 
 
 @router.get("/mine/pdf")

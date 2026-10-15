@@ -72,6 +72,8 @@ ACTIONS = frozenset({
     "audit.read", "audit.pseudonymise",
     # retention
     "retention.run",
+    # applicant verification (motor_ai_sim.verification): queue / case reads, decisions, the uploaded documents
+    "verification.read", "verification.approve", "verification.deny", "verification.request", "verification.rerun", "verification.document",
 })
 
 _SECRETISH = ("password", "secret", "token", "key", "authorization", "cookie",

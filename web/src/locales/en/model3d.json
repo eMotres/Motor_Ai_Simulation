@@ -29,7 +29,7 @@
   "stamped": "Your name, company, the date and your NDA are written into the file name and the STEP header. Every download is logged.",
   "contextLost": "The 3D view lost its graphics context. Reload the page to continue.",
   "downloadLocked": "Download after NDA",
-  "downloadLockedHelp": "You can view, rotate, section and measure the model. The STEP download opens when the NDA is signed; sign it online in one minute. Every download is logged and the file carries your name and the date.",
+  "downloadLockedHelp": "You can view, rotate, section and measure the model. The tools and the STEP download open when the NDA is signed and we have checked who is asking (usually a few minutes; no passport or ID is needed). Every download is logged and the file carries your name and the date.",
   "nda": {
     "sign": "Sign NDA online",
     "title": "Non-disclosure agreement",
@@ -52,8 +52,26 @@
       "required": "Required",
       "country": "Choose a country from the list",
       "name": "Must match the signatory name",
-      "accept": "Tick the box to accept"
-    }
+      "accept": "Tick the box to accept",
+      "invalid": "Not valid"
+    },
+    "website": "Official website",
+    "workEmail": "Work e-mail (default: your account address)",
+    "purpose": "Purpose of your request",
+    "vatNo": "VAT number (optional)",
+    "verifyHeading": "Who is asking",
+    "verifyHelp": "Before the 3-D tools and the STEP download open we check the company and the person - a routine step that protects our customers' designs. It usually takes a few minutes; if we need more, we write to you. We never ask for a passport or an ID."
   },
-  "infoTip": "Model version and file stamp"
+  "infoTip": "Model version and file stamp",
+  "verification": {
+    "title": "Verification",
+    "inProgress": "Verification in progress",
+    "inProgressHelp": "You signed the NDA. We are checking the company and your details, or our team is looking at them. The 3-D tools and the STEP download open as soon as this is done; we write to you if we need anything.",
+    "needInfo": "We need one more thing from you",
+    "needInfoHelp": "We need a specific proof to finish the check - for example a corporate e-mail address or a link to a page of your company that lists you. Open the page to see what and answer there; no sign-in is needed.",
+    "denied": "Access was not approved",
+    "deniedHelp": "We could not open the 3-D tools for this account. If you think this is a mistake, reply to our e-mail or contact support.",
+    "open": "Answer here",
+    "details": "Details"
+  }
 }

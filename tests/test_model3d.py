@@ -246,6 +246,11 @@ def _online(env, monkeypatch, tmp_path, email=USER):
     (legal / "nda_signatures.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
     monkeypatch.setenv("MOTRES_LEGAL_ROOT", str(legal))
     U.set_nda(email, True, "2026-10-12", by="online", version="v1.0", company="Acme GmbH", record_id=REC_ID)
+    # an online signature opens the STEP only once the applicant verification is VERIFIED (motor_ai_sim.verification): approve a case
+    from motor_ai_sim.verification import service as SV
+    monkeypatch.setenv("MOTRES_VERIFICATION_ROOT", str(tmp_path / "verification"))
+    case = SV.start_case(email, SV.application_from_nda(rec, {}), nda=rec, notify=False)
+    SV.admin_approve(case["id"], ADMIN, "test fixture: verified")
 
 
 def _head(content):

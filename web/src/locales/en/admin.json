@@ -14,7 +14,8 @@
     "logs": "Logs / Events",
     "downloads3d": "3D downloads",
     "analytics": "Analytics",
-    "activity": "Activity"
+    "activity": "Activity",
+    "verification": "Verification"
   },
   "motors": {
     "title": "Motors — {email}",
@@ -102,5 +103,73 @@
       "cost": "Cost",
       "admin": "Admin"
     }
+  },
+  "verification": {
+    "title": "Verification",
+    "all": "All",
+    "refresh": "Refresh",
+    "empty": "No applications yet.",
+    "back": "Queue",
+    "help": "Applicants who signed the model NDA online. VERIFIED opens the 3-D tools and the STEP download. MANUAL_REVIEW needs a person; MORE_INFORMATION_REQUIRED waits for the applicant. A registry-grade source (GLEIF, Companies House, VIES) must confirm the company and at least two independent signals, one of them strong, must link the person.",
+    "status": {
+      "MORE_INFORMATION_REQUIRED": "More info",
+      "MANUAL_REVIEW": "Manual review",
+      "PENDING": "Running",
+      "VERIFIED": "Verified",
+      "DENIED": "Denied"
+    },
+    "col": {
+      "updated": "Updated",
+      "company": "Company",
+      "country": "Country",
+      "applicant": "Applicant",
+      "account": "Account",
+      "status": "Status",
+      "signals": "Signals",
+      "source": "Source",
+      "check": "Check",
+      "result": "Result",
+      "strength": "Strength",
+      "summary": "Finding",
+      "when": "When (UTC)"
+    },
+    "field": {
+      "applicant_name": "Applicant",
+      "title": "Title",
+      "work_email": "Work e-mail",
+      "country": "Country",
+      "reg_no": "Registration no.",
+      "vat_no": "VAT no.",
+      "website": "Website",
+      "purpose": "Purpose",
+      "address": "Address",
+      "account": "Account"
+    },
+    "application": "Application",
+    "verifiedEmails": "Confirmed e-mails",
+    "decision": "Decision",
+    "asked": "Asked",
+    "company": "Company",
+    "confirmedBy": "confirmed by",
+    "notConfirmed": "not confirmed by a registry-grade source",
+    "access": "Access",
+    "granted": "open",
+    "closed": "closed",
+    "actions": "Actions",
+    "actionsHelp": "Approve opens the 3-D tools and the STEP download. Ask for more sends your text to the applicant as a templated mail. Deny closes the request. Re-run repeats every check. A reason is required; every action is audited.",
+    "reasonPlaceholder": "Reason, or the question for the applicant",
+    "approve": "Approve",
+    "requestInfo": "Ask for more",
+    "deny": "Deny",
+    "rerun": "Re-run checks",
+    "replyPage": "Applicant's reply page",
+    "evidence": "Checks",
+    "source": "source",
+    "raw": "raw answer",
+    "correspondence": "Correspondence",
+    "notSent": "not sent",
+    "applicant": "applicant",
+    "downloads": "Downloads",
+    "timeline": "Timeline"
   }
 }

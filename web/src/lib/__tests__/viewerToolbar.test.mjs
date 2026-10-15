@@ -24,6 +24,15 @@ t('without the NDA there is no tool: picker only when there is a choice, Fit, th
   assert.ok(!ids({ ...no, hasPdf: true }).includes('yourNda'));
 });
 
+t('with the NDA signed but the verification open, the status line replaces the Sign button and there is still no tool', () => {
+  const v = { ...ctx, canDownload: false, ndaSigned: true };
+  assert.deepEqual(ids({ ...v, models: 1 }), ['fit', 'verify']);
+  assert.deepEqual(ids({ ...v, models: 2 }), ['motor', 'fit', 'verify']);
+  for (const x of ['sign', 'ndaNote', 'explode', 'section', 'measure', 'download', 'yourNda']) assert.ok(!ids(v).includes(x), x);
+  // verified: ndaSigned no longer matters, the tools are back
+  assert.ok(ids({ ...ctx, ndaSigned: true }).includes('download'));
+});
+
 t('the STEP download is disabled when the model has no STEP; the picker is disabled with no model', () => {
   const by = (c) => Object.fromEntries(V.model3dToolbar(c).map((e) => [e.id, e.enabled]));
   assert.equal(by({ ...ctx, stepAvailable: false }).download, false);

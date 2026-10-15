@@ -185,7 +185,8 @@ def _gen_thumb_svg(geo: dict):
         if _sl is not None:
             out.append(f'<path d="{_thumb_path_d(_sl, C, s)}" '
                        f'fill="{COL["sleeve"]}" fill-rule="evenodd"/>')
-        out.append(f'<path d="{_thumb_path_d(P["shaft"], C, s)}" fill="{COL["shaft"]}"/>')
+        # No shaft (owner 2026-10-15): every catalog picture shows the same white rotor bore, whatever the shaft
+        # (solid, tube, reference or none) - the pictures must look alike across the catalog.
         out.append("</svg>")
         return "".join(out)
     except Exception:

@@ -3,7 +3,7 @@
  *
  *   Active  the tab exactly as it was: the parts the electromagnetic simulation uses (stator core, rotor core,
  *           magnets, winding copper, insulation, shaft), assigned in the 3-D viewer and the library tree.
- *   Full    the whole motor: those parts PLUS every other part of the assembled motor (holders, rings, carrier,
+ *   Full    the whole motor: those parts PLUS every other part of the assembled motor (holders, carrier,
  *           bearings, screws, the phase board ...) with a material and a mass each.  The extra parts are NOT used
  *           by the electromagnetic simulation; their choice is saved with the die (PUT .../part_materials).
  *

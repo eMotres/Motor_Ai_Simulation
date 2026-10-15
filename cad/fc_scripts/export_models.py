@@ -7,7 +7,7 @@ STEP export.
 Writes into FC_OUT_DIR (under a temporary name first, moved only after its check passed):
   <motor_id>_full.glb          the model for the web viewer, ONE model for everybody (owner 2026-10-13): every part of the active
                                STEP plus the phase board with its copper, one coloured node per part (Core, Coils/Coil_nn, Rotor,
-                               Magnets/Magnet_nn, Shaft, Bearings_front/back, Holder_front/back, Ring_front/back, Screws/Screw_n,
+                               Magnets/Magnet_nn, Shaft, Bearings_front/back, Holder_front/back, Screws/Screw_n,
                                Prop_fix, PhaseBoard*); node extras carry the exploded-view axial factor.  Viewing is open to every
                                signed-in user who may see the motor; the STEP download is for NDA accounts and the owner only.
   <motor_id>_models3d.json     evidence: triangle counts and the mesh-vs-solid volume check (the manifest holds the hashes)
@@ -34,8 +34,8 @@ from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 # axial factor of the viewer's exploded view (units of the motor length; + = propeller side): physical order along the axis
 EXPLODE = {"Core": 0.0, "Coils": -0.35, "Rotor": 0.9, "Magnets": 0.9, "Shaft": 2.2,
-           "Ring_back": -0.7, "Holder_back": -1.15, "Bearings_back": -1.55, "PhaseBoard": -2.2,
-           "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
+           "Holder_back": -1.15, "Bearings_back": -1.55, "PhaseBoard": -2.2,
+           "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
 # board groups use THE palette (palette.py): the board body is the solder-mask green, copper layers + pads gold, pins brass, the
 # remaining solids (notch walls) the FR4 edge colour
 BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask"), "PhaseBoard_copper": palette.rgb("pcb_gold"),
@@ -44,7 +44,7 @@ VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny pa
 ANG = 0.3                       # angular deflection (rad) of the viewer meshes
 ORDER = ["Core", "Coils", "Rotor", "Magnets", "Magnets_S", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_front_balls", "Bearings_front_seals",
          "Bearings_back", "Bearings_back_balls", "Bearings_back_seals", "Holder_front", "Holder_back",
-         "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
+         "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
 
 
 def _mesh(sol, tol):
@@ -247,8 +247,6 @@ def add_motor(col, parts):
             col.add("Holder_front", name, s, view.COLORS["Stator_holder"])
         elif name == "Stator_holder_back":
             col.add("Holder_back", name, s, view.COLORS["Stator_holder_back"])
-        elif name in ("Ring_front", "Ring_back"):
-            col.add(name, name, s, view.COLORS["Ring"])
         elif name == "Prop_fix":
             col.add("Prop_fix", name, s, view.COLORS["Prop_fix"])
         elif name.startswith("Screw_"):

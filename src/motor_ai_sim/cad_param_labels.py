@@ -58,9 +58,8 @@ back_screw_r|Back holder - M3 hole circle radius|后支架 - M3孔分布半径
 back_screw_tap_d|Back holder - M3 hole diameter|后支架 - M3孔直径
 coil_holder_clearance|Stator holder - coil clearance|定子支架 - 线圈间隙
 bolt_head_d|Stator holder - boss head diameter|定子支架 - 凸台头部直径
-ring_t|Glass-fibre ring - thickness|玻璃纤维环 - 厚度
-ring_h|Glass-fibre ring - length|玻璃纤维环 - 长度
-ring_holder_gap|Glass-fibre ring - gap to holder|玻璃纤维环 - 与支架间隙
+ring_h|Stator holders - offset from the stator face|定子支架 - 距定子端面偏移
+ring_holder_gap|Stator holders - extra gap to the flange|定子支架 - 法兰附加间隙
 prop_fix_d|Propeller plate - diameter|螺旋桨板 - 直径
 prop_fix_relief_r|Propeller plate - corner relief radius|螺旋桨板 - 拐角卸荷半径
 prop_fix_hub_t|Propeller plate - hub thickness|螺旋桨板 - 轮毂厚度

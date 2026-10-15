@@ -50,7 +50,7 @@ export interface Instance { name: string; label: string; colour?: string }
 const num = (s: string): number => Number(s);
 
 /** The row label of one drawn node.  Patterns of the CAD exporter (cad/fc_scripts/export_models.py): Coil_01, Magnet_01 (odd = N,
- *  even = S), Screw_1, Bearings_front[_balls|_seals], Ring_front, PhaseBoard_pins_001 ...  Anything else keeps its name, readable. */
+ *  even = S), Screw_1, Bearings_front[_balls|_seals], Holder_front, PhaseBoard_pins_001 ...  Anything else keeps its name, readable. */
 export function instanceLabel(name: string, fmt: Fmt): string {
   let m = /^Coil_0*(\d+)$/.exec(name);
   if (m) return fmt('assemblyCoil', { n: num(m[1]) }, `Coil ${num(m[1])}`);
@@ -71,7 +71,7 @@ export function instanceLabel(name: string, fmt: Fmt): string {
     const fallback = `${what === 'bearing' ? 'Bearing' : what === 'balls' ? 'Balls' : 'Seals'}, ${side}`;
     return fmt(`assembly_${what}_${side}`, {}, fallback);
   }
-  m = /^(Ring|Holder)_(front|back)$/.exec(name);
+  m = /^(Holder)_(front|back)$/.exec(name);
   if (m) {
     const side = m[2] === 'front' ? 'front' : 'rear';
     return fmt(`assembly_${m[1].toLowerCase()}_${side}`, {}, `${m[1]}, ${side}`);
@@ -86,7 +86,7 @@ const trailingNumber = (name: string): number => {
 };
 
 /** The instances of a part: its GLB nodes that hold several drawn objects expand into one row each (Coil 1..12); a part drawn by
- *  several nodes (the bearings, the rings) lists the nodes themselves.  A part drawn by one single object has no instance rows. */
+ *  several nodes (the bearings, the holders) lists the nodes themselves.  A part drawn by one single object has no instance rows. */
 export function instancesOf(part: Pick<TreePart, 'glb'>, nodes: readonly PartGroup[], fmt: Fmt): Instance[] {
   const present = part.glb.map((n) => nodes.find((g) => g.name === n)).filter((g): g is PartGroup => !!g);
   const multi = present.filter((g) => (g.children?.length ?? 0) > 1);

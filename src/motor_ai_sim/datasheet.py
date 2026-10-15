@@ -1048,7 +1048,7 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         error is small and it is stated rather than guessed.
         """
         # THE FULL MASS (owner 2026-10-14): with a CAD bill of materials the rotating mass is the rotating parts of
-        # that list (rotor, magnets, shaft or rotor carrier, rings ...).
+        # that list (rotor, magnets, shaft or rotor carrier ...).
         if mass_info and not mass_info.get("partial") and mass_info.get("rotating_kg"):
             return float(mass_info["rotating_kg"])
         tot = 0.0
@@ -1530,8 +1530,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
         ("partial mass (no CAD model yet): the active parts only - iron + copper + magnets + shaft over the active length"
          if _partial else
          ("FRAMELESS KIT: stator iron, rotor iron, magnets, winding copper, enamel and the phase board; no housing, holders, "
-          "carriers, bearings, shaft, screws, rings or propeller plate" if _kit else
-          "full assembled motor: active parts + shaft/carrier, holders, rings, bearings, screws, board, pins, enamel")), 3)
+          "carriers, bearings, shaft, screws or propeller plate" if _kit else
+          "full assembled motor: active parts + shaft/carrier, holders, bearings, screws, board, pins, enamel")), 3)
     one("Active mass, EM parts (kg)", next((m for m in mass_active if m), None),
         "iron + copper + magnets + shaft tube over the active length - what the electromagnetic model and the optimizer use", 3)
     one("Cooling", cfg_doc.get("cooling") or die_doc.get("cooling") or "air",

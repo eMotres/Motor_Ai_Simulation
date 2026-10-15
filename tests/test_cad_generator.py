@@ -183,7 +183,7 @@ def test_feature_counts_are_named_derived_rows():
 FUSION_MECH_VALUES = {   # the open Fusion model CIANO14 40 (read-only MCP dump 2026-10-12): Sketch3 / feature positions
     "holder_face_z": 11.9, "holder_flange_z": 13.1, "bearing_out_z": 15.9, "front_holder_end_z": 16.7,
     "shaft_journal_end_z": 20.7, "shaft_thread_end_z": 28.7, "shaft_front_end_z": 36.7, "back_holder_end_z": 20.1,
-    "holder_inner_r": 13.633268682, "holder_hub_r": 8.8, "back_holder_outer_r": 12.0, "ring_inner_r": 12.433268682,
+    "holder_inner_r": 13.633268682, "holder_hub_r": 8.8, "back_holder_outer_r": 12.0,
     "core_leg_outer_x": 6.09, "holder_screw_l": 25.0, "shaft_journal_r": 4.0, "shaft_bore_r": 3.0, "shaft_seat_r": 5.0,
     "bearing_pitch_r": 6.0, "holder_bolt_count": 6, "holder_seat_z": 9.0, "back_holder_wall": 2.0}
 
@@ -276,7 +276,7 @@ def test_mechanics_sketches_follow_the_owner_conventions():
     assert "Symmetric" in src and "Equal" in src
     for edge_ref in ("PartDesign::Chamfer", "PartDesign::Fillet"):      # sketch-based: no topological edge references
         assert edge_ref not in src
-    for n in ("holder_bolt_count", "holder_face_z", "holder_boss_len", "holder_seat_z", "ring_back_dz", "screw_head_top_z"):
+    for n in ("holder_bolt_count", "holder_face_z", "holder_boss_len", "holder_seat_z", "screw_head_top_z"):
         assert "\"%s\"" % n in src or "+ \"%s" % n in src or n in src
 
 

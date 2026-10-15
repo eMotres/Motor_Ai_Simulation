@@ -107,7 +107,6 @@
   "shaft_thread_r": 2.475,
   "shaft_flange_step": 3.0,
   "coil_holder_clearance": 0.4,
-  "ring_t": 0.8,
   "ring_h": 1.8,
   "ring_holder_gap": 0.1,
   "coil_corner_r": 13.233268681622091,
@@ -152,11 +151,9 @@
   "shaft_front_end_z": 36.7,
   "back_holder_end_z": 20.1,
   "holder_boss_len": 3.0999999999999996,
-  "ring_back_dz": -21.8,
   "holder_inner_r": 13.633268681622091,
   "holder_hub_r": 8.8,
   "back_holder_outer_r": 12.0,
-  "ring_inner_r": 12.43326868162209,
   "core_leg_outer_x": 6.090000000000001,
   "holder_bolt_count": 6.0,
   "holder_bolt_r": 14.843191,
@@ -546,34 +543,6 @@
    ]
   },
   {
-   "name": "Ring",
-   "label": "Ring",
-   "type": "PartDesign::Body",
-   "parent": "Mechanics",
-   "linked": null,
-   "base": null,
-   "state": [],
-   "n_solids": 1,
-   "volume": 116.11267952177661,
-   "area": 419.2957871619707,
-   "bbox": [
-    -13.233268681622091,
-    -13.23326868162209,
-    9.999999999999996,
-    13.233268681622091,
-    13.233268681622093,
-    11.800000000000004
-   ],
-   "com": [
-    2.1540373025380714e-14,
-    1.7906041099266915e-15,
-    10.90000000000001
-   ],
-   "solid_volumes": [
-    116.11268
-   ]
-  },
-  {
    "name": "Prop_fix",
    "label": "Prop_fix",
    "type": "PartDesign::Body",
@@ -736,34 +705,6 @@
     4.18879,
     4.18879,
     4.18879
-   ]
-  },
-  {
-   "name": "Ring_back",
-   "label": "Ring_back",
-   "type": "App::Link",
-   "parent": "Mechanics",
-   "linked": "Ring",
-   "base": null,
-   "state": [],
-   "n_solids": 1,
-   "volume": 116.11267952177661,
-   "area": 419.2957871619707,
-   "bbox": [
-    -13.233268681622091,
-    -13.23326868162209,
-    -11.800000000000004,
-    13.233268681622091,
-    13.233268681622093,
-    -9.999999999999996
-   ],
-   "com": [
-    1.958215729580065e-14,
-    1.6704494976182398e-15,
-    -10.899999999999999
-   ],
-   "solid_volumes": [
-    116.11268
    ]
   },
   {

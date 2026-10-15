@@ -10,6 +10,7 @@ A.6.1 (2026-10-15): the holder screw length follows the stack (longest stock len
 rows screw_tip_margin, holder_screw_max); L12 / L20 / CIANO28 85 L13 keep their lengths.
 A.7.0 (2026-10-15): the SIMPLIFIED envelope-only model (simplified.py, fc_scripts/export_simplified.py) is written for every config next to the real one;
 the geometry of the real model is unchanged.
+A.7.1 (2026-10-15): the GFRP Ring (body Ring, link Ring_back) is removed from every construction; the holders keep their position (ring_h + ring_holder_gap stay in the axial chain).
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.7.0"
+TEMPLATE_VERSION = "A.7.1"

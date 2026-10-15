@@ -40,7 +40,7 @@ import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import FamilyLoadBanner from './components/common/FamilyLoadBanner';
 import ComputeNodesHint from './components/common/ComputeNodesHint';
-import AuthButton from './components/auth/AuthButton';
+import AuthButton, { preloadAuthMenu } from './components/auth/AuthButton';
 import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
 import { backendReachable } from './lib/version';
@@ -87,6 +87,10 @@ import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { useServerLocale } from './i18n/persist';
 import { clearLiveDutyContext, invalidateLastMotorOperations, restoreLastMotor, setLastMotorState } from './lib/lastMotor';
+
+// The signed-in account menu is its own chunk (AuthButton lazy-loads it); start fetching it
+// together with the workspace so the avatar does not pop in late.
+preloadAuthMenu();
 
 // Theme is built from the shared eMotres/aerostator design tokens — see
 // src/theme.ts.  Light is the default (matches the marketing site); dark

@@ -3,10 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 // i18n before App: the first render already speaks the detected language (docs/I18N.md)
 import './i18n'
-import App from './App.tsx'
-import OAuthConsent from './components/auth/OAuthConsent'
-import CommPrefsPage from './components/auth/CommPrefsPage'
-import { isPreferencesPath } from './lib/commPrefsLogic'
+import Root from './Root'
 import { AuthProvider } from './contexts/AuthContext'
 import { loadThemeMode } from './theme'
 
@@ -93,10 +90,8 @@ console.warn = (...args) => {
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <AuthProvider>
-      {/* OAuth consent for MCP connectors (docs/MCP_2026-09-28.md): a page of its own */}
-      {/* Communication preferences (mailed link, account menu): a page of its own */}
-      {window.location.pathname === '/agent-consent' ? <OAuthConsent />
-        : isPreferencesPath(window.location.pathname) ? <CommPrefsPage /> : <App />}
+      {/* Root: the landing for a signed-out visitor, the lazy workspace for everybody else */}
+      <Root />
     </AuthProvider>
   </StrictMode>,
 )

@@ -23,7 +23,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import SendIcon from '@mui/icons-material/Send';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../../contexts/AuthContext';
-import { useUIStore } from '../../stores/motorStore';
+import { useUIStore } from '../../stores/uiStore';
 import { APP_VERSION, APP_GIT_SHA } from '../../lib/version';
 import { askAssistant, submitTicket, listMyTickets, type Ticket } from '../../lib/support';
 import {

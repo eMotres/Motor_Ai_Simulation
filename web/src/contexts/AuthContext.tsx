@@ -12,6 +12,7 @@ import {
 } from '../lib/localAuth';
 import LoginDialog from '../components/auth/LoginDialog';
 import { pendingEmailLink, requestedAuthMode } from '../lib/localAuth';
+import { meFailureAction, meResponseUsable, meRetryDelayMs } from '../lib/authFallback';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -137,9 +138,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Also our expiry check: a token the backend SAW and refused (expired / user
   // disabled / secret rotated) signs the session out — see the flags below.
   const loadRoleRef = React.useRef<(() => Promise<void>) | null>(null);
+  const meFailuresRef = React.useRef(0);
   const loadRole = useCallback(async () => {
     try {
-      const j = await fetch(`${API}/api/me`).then((r) => r.json());
+      // A hung request is a failure too (a cross-border link can stall for minutes).
+      const j = await fetch(`${API}/api/me`, { signal: typeof AbortSignal !== 'undefined' && 'timeout' in AbortSignal ? AbortSignal.timeout(15_000) : undefined }).then((r) => {
+        if (!meResponseUsable(r.status)) throw new Error(`/api/me ${r.status}`);
+        return r.json();
+      });
+      meFailuresRef.current = 0;
       // The backend could not READ users.json / .sessions.json / .auth_secret
       // (a Windows file lock during the atomic replace, an antivirus hold).
       // It never verified our token, so it cannot have rejected it: KEEP the
@@ -189,7 +196,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           + 'presented — keeping the session; retrying role resolution.');
         setTimeout(() => { void loadRoleRef.current?.(); }, 1500);
       }
-    } catch { setRole('anon'); setIsAdmin(false); setEnforced(false); setResolved(true); }
+    } catch {
+      // COULD NOT ASK is not "not enforced" (lib/authFallback.ts): only a dev build falls
+      // back to Local Mode.  A production build stays unresolved - the signed-out visitor
+      // keeps the landing, a restored session keeps its restored user - and asks again.
+      if (meFailureAction(import.meta.env.DEV) === 'local-mode') {
+        setRole('anon'); setIsAdmin(false); setEnforced(false); setResolved(true);
+      } else {
+        const wait = meRetryDelayMs(meFailuresRef.current++);
+        setTimeout(() => { void loadRoleRef.current?.(); }, wait);
+      }
+    }
   }, []);
   loadRoleRef.current = loadRole;
 

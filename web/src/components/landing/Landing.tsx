@@ -9,7 +9,7 @@
  * start.  Sign in and Request access are at the top and again at the end.
  *
  * WHAT IT MAY TOUCH.  Nothing.  The page renders from static props, inline SVG
- * and the three PNGs in `public/landing/`; the only network the page can cause
+ * and the three WebPs in `public/landing/`; the only network the page can cause
  * is the header's own `/api/me` + `/api/version` and, when the visitor presses
  * the button, the login endpoints (every other `/api/*` route answers 401 to an
  * anonymous caller, and a landing that fires them is a console full of red).
@@ -20,9 +20,9 @@
  *
  * THE PICTURES ARE OURS.  `scripts/landing_images.py` redraws them from the
  * stored per-duty fields (`--check` says whether the committed bytes match):
- *   em-field.png            report._em_maps(...)["b"]
- *   thermal-map.png         report._thermal_map(...)
- *   rotor-displacement.png  report._mech_extra_maps(...)["disp"]
+ *   em-field.webp           report._em_maps(...)["b"]
+ *   thermal-map.webp        report._thermal_map(...)
+ *   rotor-displacement.webp report._mech_extra_maps(...)["disp"]
  * all three off one machine at one operating point, the whole 360 degree ring,
  * drawn on white (the report's own ground) and shown on a white tile in both
  * themes.  No new physics images are generated for this page.
@@ -56,13 +56,16 @@ export interface Feature {
   key: 'em' | 'thermal' | 'mech';
   /** Path under `public/`, served from the site root. */
   src: string;
+  /** Pixel size of the file (the `<img>` carries it, so the card does not shift while it loads). */
+  w: number;
+  h: number;
 }
 
 /** The three simulation pictures, in order.  Exported so the test can check them without a DOM. */
 export const FEATURES: Feature[] = [
-  { key: 'em', src: '/landing/em-field.png' },
-  { key: 'thermal', src: '/landing/thermal-map.png' },
-  { key: 'mech', src: '/landing/rotor-displacement.png' },
+  { key: 'em', src: '/landing/em-field.webp', w: 884, h: 766 },
+  { key: 'thermal', src: '/landing/thermal-map.webp', w: 884, h: 767 },
+  { key: 'mech', src: '/landing/rotor-displacement.webp', w: 884, h: 767 },
 ];
 
 /** The button's words.  Only a deployment that HAS a Google client id may
@@ -214,7 +217,8 @@ const PictureCard: React.FC<{ feature: Feature }> = ({ feature }) => {
             than the ratio pushes its box past it. */}
         <Box sx={{ bgcolor: '#ffffff', aspectRatio: '1.25 / 1', p: 0.75, minHeight: 0,
           overflow: 'hidden' }}>
-          <Box component="img" src={feature.src} alt={t(`sim.${feature.key}Alt`)} loading="lazy"
+          <Box component="img" src={feature.src} alt={t(`sim.${feature.key}Alt`)} width={feature.w} height={feature.h}
+            loading="lazy" decoding="async" fetchPriority="low"
             sx={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
         </Box>
         <Typography component="h3" sx={{

@@ -6,8 +6,18 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/brand/aerostator-logo-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/brand/apple-touch-icon.png" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#f7f6f3" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Theme before first paint: the app is LIGHT unless the visitor chose dark (theme.ts
+         loadThemeMode, key app.themeMode).  The pre-rendered block and index.css both key on
+         html[data-theme]; neither follows the OS colour scheme, so nothing flips on mount. -->
+    <script data-theme-init>
+      (function () {
+        var dark = false;
+        try { dark = localStorage.getItem('app.themeMode') === 'dark'; } catch (e) {}
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+      })();
+    </script>
     <!-- First visit with a Chinese browser (WeChat, zh language list or a China time zone):
          go from / to the pre-rendered Chinese page BEFORE the bundle loads, so even the
          static block is Chinese when the bundle is slow or blocked.  A saved choice

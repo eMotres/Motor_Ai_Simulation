@@ -1588,7 +1588,7 @@ ${s1Text.tip}` : '';
     { key: 'eff',  label: tx('configure.colEta'),       unit: '%',   d: 1, get: (c) => (c.drive?.mode === 'pwm' ? (c.drive.eta_drive_pct ?? NaN) : c.result.efficiency * 100) },
     { key: 'loss', label: tx('configure.colLosses'),  unit: 'W',   d: 0, get: (c) => c.result.P_loss_W },
     { key: 'J',    label: tx('configure.colJ'),       unit: 'A/mm²', d: 1, get: (c) => (c.knobs.I_A / Math.max(1, c.knobs.nP)) / Math.max(1e-6, ref.fit.wireWidth_mm * c.knobs.wireH_mm) },
-    { key: 'mass', label: tx('configure.colMass'),    unit: 'kg',  d: 2, get: (c) => c.result.mass_kg },
+    { key: 'mass', label: tx('configure.colMass'),    unit: 'kg',  d: 3, get: (c) => c.result.mass_kg },
     { key: 'tm',   label: tx('configure.colTPerMass'),  unit: '',    d: 2, get: (c) => c.result.torque_per_mass },
   ];
   const KNB_COLS: { label: string; get: (c: SavedConfig) => string }[] = [
@@ -2060,11 +2060,11 @@ ${s1Text.tip}` : '';
               tip={KT_BASIS_TIP(result.kt_km_basis)} />
             <MetricTile label={tx('configure.power')} value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi
               absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} />
-            <MetricTile label={tx(result.mass_partial ? 'configure.massPartial' : 'configure.mass')} value={result.mass_kg} unit="kg" d={2}
+            <MetricTile label={tx(result.mass_partial ? 'configure.massPartial' : 'configure.mass')} value={result.mass_kg} unit="kg" d={3}
               base={baseRes.mass_kg} goodHi={false}
               tip={tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')} />
             {!result.mass_partial && (
-              <MetricTile label={tx('configure.massActive')} value={result.mass_active_kg} unit="kg" d={2}
+              <MetricTile label={tx('configure.massActive')} value={result.mass_active_kg} unit="kg" d={3}
                 base={baseRes.mass_active_kg} goodHi={false} tip={tx('configure.massActiveTip')} />
             )}
             <MetricTile label={tx('configure.efficiency')} value={sysEff.value} unit="%" d={1} base={baseSysEff} goodHi

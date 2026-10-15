@@ -39,6 +39,9 @@ PLACEHOLDERS = ("company", "reg_no", "country", "address", "signatory", "title",
 FIELDS = ("company", "reg_no", "country", "address", "signatory", "title")
 PLACEHOLDER_VERSION_PREFIX = "v0-placeholder"
 PLACEHOLDER_MARK = "NOT FOR SIGNATURE"
+SPECIMEN_BLANK = "________"
+SPECIMEN_HEADER = "SPECIMEN - NOT SIGNED - for review only"
+SPECIMEN_WATERMARK = "SPECIMEN - NOT SIGNED"
 _LOCK = threading.RLock()
 _VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 _ID_RE = re.compile(r"^n[0-9]{8}-[0-9a-f]{12}$")
@@ -196,8 +199,8 @@ def _inline(s: str) -> str:
     return re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<i>\1</i>", t, flags=re.S)
 
 
-def build_pdf(rendered: str, rec: dict, *, compress: bool = True) -> bytes:
-    """The filled agreement text plus the acceptance block (name, title, company, time UTC, IP, version, text hash, record id)."""
+def build_pdf(rendered: str, rec: dict, *, compress: bool = True, specimen: bool = False) -> bytes:
+    """The filled agreement text plus the acceptance block (or, when ``specimen=True``, the unsigned review specimen)."""
     from xml.sax.saxutils import escape
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -205,10 +208,13 @@ def build_pdf(rendered: str, rec: dict, *, compress: bool = True) -> bytes:
     from reportlab.lib.units import mm
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-    block = [("Signatory", rec["signatory"]), ("Title", rec["title"]), ("Company", rec["company"]),
-             ("Registration no.", rec["reg_no"]), ("Country", rec["country"]), ("Address", rec["address"]),
-             ("E-mail", rec["email"]), ("Signed (UTC)", rec["iso"]), ("IP address", rec.get("ip") or "?"),
-             ("Agreement version", rec["version"]), ("Text SHA-256", rec["text_sha256"]), ("Record ID", rec["id"])]
+    if specimen:
+        block = [("Status", SPECIMEN_HEADER), ("Agreement version", rec["version"]), ("Text SHA-256", rec["text_sha256"])]
+    else:
+        block = [("Signatory", rec["signatory"]), ("Title", rec["title"]), ("Company", rec["company"]),
+                 ("Registration no.", rec["reg_no"]), ("Country", rec["country"]), ("Address", rec["address"]),
+                 ("E-mail", rec["email"]), ("Signed (UTC)", rec["iso"]), ("IP address", rec.get("ip") or "?"),
+                 ("Agreement version", rec["version"]), ("Text SHA-256", rec["text_sha256"]), ("Record ID", rec["id"])]
     reg, bold = _pdf_font(rendered, *[str(v) for _, v in block])
     cjk = reg == "STSong-Light"
     wrap = {"wordWrap": "CJK"} if cjk else {}
@@ -216,7 +222,10 @@ def build_pdf(rendered: str, rec: dict, *, compress: bool = True) -> bytes:
     head = ParagraphStyle("h", parent=body, fontName=bold, fontSize=11.5, leading=15, spaceBefore=6, spaceAfter=4)
     title = ParagraphStyle("t", parent=head, fontSize=15, leading=19, spaceAfter=10)
     cell = ParagraphStyle("c", parent=body, fontSize=8.5, leading=11, spaceAfter=0, **wrap)
-    story = []
+    tbl = Table([[Paragraph(escape(k), cell), Paragraph(escape(str(v)), cell)] for k, v in block], colWidths=[40 * mm, 125 * mm])
+    tbl.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                             ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke)]))
+    story = [tbl, Spacer(1, 8)] if specimen else []
     for chunk in re.split(r"\n\s*\n", rendered.strip()):
         line = chunk.strip()
         if not line:
@@ -226,16 +235,45 @@ def build_pdf(rendered: str, rec: dict, *, compress: bool = True) -> bytes:
             story.append(Paragraph(_inline(m.group(2).strip()), title if len(m.group(1)) == 1 else head))
         else:
             story.append(Paragraph(_inline(line), body))
-    story += [Spacer(1, 8), Paragraph("Acceptance record", head)]
-    tbl = Table([[Paragraph(escape(k), cell), Paragraph(escape(str(v)), cell)] for k, v in block], colWidths=[40 * mm, 125 * mm])
-    tbl.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                             ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke)]))
-    story += [tbl, Spacer(1, 6), Paragraph(escape("Accepted online by typing the signatory name. The SHA-256 above is the hash of the exact text "
-                                                  "shown to the signatory at the time of signing."), cell)]
+    if not specimen:
+        story += [Spacer(1, 8), Paragraph("Acceptance record", head), tbl, Spacer(1, 6),
+                  Paragraph(escape("Accepted online by typing the signatory name. The SHA-256 above is the hash of the exact text "
+                                   "shown to the signatory at the time of signing."), cell)]
     buf = io.BytesIO()
-    SimpleDocTemplate(buf, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
-                      title="NDA %s" % rec["id"], author="MOTRES d.o.o.", pageCompression=1 if compress else 0).build(story)
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
+                            title=("NDA %s SPECIMEN" % rec["version"]) if specimen else ("NDA %s" % rec["id"]),
+                            author="MOTRES d.o.o.", pageCompression=1 if compress else 0)
+    if specimen:
+        def _specimen_page(canvas, _doc):
+            canvas.saveState()
+            canvas.setFont("Helvetica-Bold", 9)
+            canvas.setFillColor(colors.Color(0.45, 0.45, 0.45))
+            canvas.drawCentredString(A4[0] / 2, A4[1] - 11 * mm, SPECIMEN_HEADER)
+            canvas.translate(A4[0] / 2, A4[1] / 2)
+            canvas.rotate(38)
+            canvas.setFont("Helvetica-Bold", 42)
+            canvas.setFillColor(colors.Color(0.85, 0.85, 0.85, alpha=0.35))
+            canvas.drawCentredString(0, 0, SPECIMEN_WATERMARK)
+            canvas.restoreState()
+
+        doc.build(story, onFirstPage=_specimen_page, onLaterPages=_specimen_page)
+    else:
+        doc.build(story)
     return buf.getvalue()
+
+
+def build_specimen_pdf(cur_or_lang: dict | str = "en", *, compress: bool = True) -> bytes:
+    """Render the current agreement (EN or zh-CN) as an unsigned PDF specimen with blank fields; nothing is stored."""
+    cur = current(cur_or_lang) if isinstance(cur_or_lang, str) else cur_or_lang
+    if cur is None:
+        raise FileNotFoundError("The agreement text is not installed.")
+    blanks = {k: SPECIMEN_BLANK for k in FIELDS}
+    values = template_values(blanks, SPECIMEN_BLANK, SPECIMEN_BLANK, cur["version"])
+    rendered = render(cur["text"], values)
+    return build_pdf(rendered, dict(version=cur["version"], text_sha256=cur["sha256"]), compress=compress, specimen=True)
+
+
+specimen_pdf = build_specimen_pdf
 
 
 # -- records ------------------------------------------------------------------

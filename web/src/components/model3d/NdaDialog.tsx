@@ -5,12 +5,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem,
-  TextField, Typography,
+  TextField, Tooltip, Typography,
 } from '@mui/material';
+import DownloadIcon from '@mui/icons-material/Download';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import DataSharingConsent from '../common/DataSharingConsent';
 import { useAuth } from '../../contexts/AuthContext';
+import { filenameFromDisposition } from '../../lib/model3d';
 import {
   NDA_FIELDS, emptyForm, formErrors, mdBlocks, renderNda, utcToday, values, type NdaField, type NdaForm,
 } from '../../lib/nda';
@@ -38,6 +40,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
   const [share, setShare] = useState(false);          // optional dataset consent, separate from the NDA; starts at the current choice
   const [tried, setTried] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [dlBusy, setDlBusy] = useState(false);
   const [srvErr, setSrvErr] = useState<string | null>(null);
   const [srvFields, setSrvFields] = useState<Record<string, string>>({});
 
@@ -69,6 +72,26 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
   const errors: Record<string, string> = { ...baseErrors, ...iErrors };
   const shown = (k: string) => (tried ? (errors[k] ?? srvFields[k]) : srvFields[k]);
   const text = useMemo(() => (cur ? renderNda(cur.text, values(form, email, utcToday(), cur.version, '______')) : ''), [cur, form, email]);
+
+  const downloadSpecimen = async () => {
+    if (!cur) return;
+    setDlBusy(true); setSrvErr(null);
+    try {
+      const r = await fetch(`${API}/api/nda/current/pdf?lang=${encodeURIComponent(cur.lang)}`);
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { detail?: string };
+        setSrvErr(j.detail ?? String(r.status));
+        return;
+      }
+      const fallback = `AeroStator_Core_Model_NDA_${cur.version}_${cur.lang}_SPECIMEN.pdf`;
+      const href = URL.createObjectURL(await r.blob());
+      const a = document.createElement('a');
+      a.href = href;
+      a.download = filenameFromDisposition(r.headers.get('Content-Disposition'), fallback);
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(href), 10_000);
+    } catch (e: any) { setSrvErr(e?.message ?? String(e)); } finally { setDlBusy(false); }
+  };
 
   const submit = async () => {
     setTried(true); setSrvErr(null); setSrvFields({});
@@ -144,12 +167,25 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
               </Box>
             </Box>
 
-            <Box sx={{ maxHeight: 280, overflowY: 'auto', p: 1.5, border: '1px solid var(--line-soft)', borderRadius: 1, bgcolor: 'var(--panel-2)' }}>
-              {mdBlocks(text).map((b, i) => (
-                <Typography key={i} sx={{ fontSize: b.kind === 'h1' ? 15 : 12.5, fontWeight: b.kind === 'p' ? 400 : 800, mb: 1, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>
-                  {b.runs.map((r, j) => <span key={j} style={{ fontWeight: r.bold ? 700 : undefined, fontStyle: r.italic ? 'italic' : undefined }}>{r.text}</span>)}
-                </Typography>
-              ))}
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 0.5 }}>
+                <Tooltip title={t('nda.downloadSpecimenHelp')}>
+                  <span>
+                    <Button size="small" onClick={() => void downloadSpecimen()} disabled={dlBusy}
+                      startIcon={dlBusy ? <CircularProgress size={14} /> : <DownloadIcon sx={{ fontSize: 15 }} />}
+                      sx={{ textTransform: 'none', fontSize: 12 }}>
+                      {t('nda.downloadSpecimen')}
+                    </Button>
+                  </span>
+                </Tooltip>
+              </Box>
+              <Box sx={{ maxHeight: 280, overflowY: 'auto', p: 1.5, border: '1px solid var(--line-soft)', borderRadius: 1, bgcolor: 'var(--panel-2)' }}>
+                {mdBlocks(text).map((b, i) => (
+                  <Typography key={i} sx={{ fontSize: b.kind === 'h1' ? 15 : 12.5, fontWeight: b.kind === 'p' ? 400 : 800, mb: 1, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>
+                    {b.runs.map((r, j) => <span key={j} style={{ fontWeight: r.bold ? 700 : undefined, fontStyle: r.italic ? 'italic' : undefined }}>{r.text}</span>)}
+                  </Typography>
+                ))}
+              </Box>
             </Box>
 
             <Box>

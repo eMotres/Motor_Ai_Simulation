@@ -1,12 +1,13 @@
 """Online NDA click-through routes (see :mod:`motor_ai_sim.nda`).
 
-* ``GET  /api/nda/current?lang=``   the current agreement text with its SHA-256 (the hash of exactly the text served)
-* ``GET  /api/nda/mine``            the caller's NDA state (source, version, company, record id)
-* ``POST /api/nda/sign``            validate, store the append-only record and the signed PDF, open a verification case (the STEP opens
-                                   when the case is VERIFIED, see motor_ai_sim.verification)
-* ``GET  /api/nda/mine/pdf``        the caller's signed PDF
-* ``GET  /api/nda/signatures``      admin: recent online signatures (company, user, country, free-mail flag)
-* ``GET  /api/nda/{record_id}/pdf`` admin: any signed PDF
+* ``GET  /api/nda/current?lang=``       the current agreement text with its SHA-256 (the hash of exactly the text served)
+* ``GET  /api/nda/current/pdf?lang=``   unsigned specimen PDF of the current agreement for legal review (nothing stored)
+* ``GET  /api/nda/mine``                the caller's NDA state (source, version, company, record id)
+* ``POST /api/nda/sign``                validate, store the append-only record and the signed PDF, open a verification case (the STEP opens
+                                       when the case is VERIFIED, see motor_ai_sim.verification)
+* ``GET  /api/nda/mine/pdf``            the caller's signed PDF
+* ``GET  /api/nda/signatures``          admin: recent online signatures (company, user, country, free-mail flag)
+* ``GET  /api/nda/{record_id}/pdf``     admin: any signed PDF
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 
 from motor_ai_sim import nda as N
 from motor_ai_sim.auth import ANON_OWNER, caller_identity, require_admin
@@ -39,6 +40,24 @@ def get_current(lang: str = "en", authorization: Optional[str] = Header(default=
     if cur is None:
         raise HTTPException(status_code=503, detail="The agreement text is not installed on this server.")
     return cur
+
+
+@router.get("/current/pdf")
+def get_current_pdf(lang: str = "en", authorization: Optional[str] = Header(default=None)):
+    _caller(authorization)
+    cur = N.current(lang)
+    if cur is None:
+        raise HTTPException(status_code=503, detail="The agreement text is not installed on this server.")
+    pdf = N.build_specimen_pdf(cur)
+    fname = "AeroStator_Core_Model_NDA_%s_%s_SPECIMEN.pdf" % (cur["version"], cur["lang"])
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": 'attachment; filename="%s"' % fname,
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @router.get("/mine")

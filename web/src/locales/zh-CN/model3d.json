@@ -47,6 +47,8 @@
     "version": "版本 {version}",
     "disabled": "在线签署尚未开放。",
     "disabledHelp": "协议文本仍为草稿，正式文本发布后即可签署。",
+    "downloadSpecimen": "下载 PDF 供审阅",
+    "downloadSpecimenHelp": "供法务团队审阅的未签署样本",
     "yourNda": "您已签署的保密协议",
     "errors": {
       "required": "必填",

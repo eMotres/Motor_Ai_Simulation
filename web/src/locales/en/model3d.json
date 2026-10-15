@@ -49,6 +49,8 @@
     "version": "Version {version}",
     "disabled": "Online signing is not open yet.",
     "disabledHelp": "The agreement text is still a draft. It will open as soon as the final text is published.",
+    "downloadSpecimen": "Download PDF for review",
+    "downloadSpecimenHelp": "Unsigned specimen for your legal team",
     "yourNda": "Your signed NDA",
     "errors": {
       "required": "Required",

@@ -323,6 +323,11 @@ _CAUSES: Dict[str, List[str]] = {
         "wire_split", "wire_width", "wire_spacing_x", "tooth_width",
         "tooth2_width", "insulation_thickness", "cut_width",
         "num_slots_per_segment", "num_seg"],
+    # The stator comes out as several pieces: the notches between the slot-pair
+    # units cut through the lamination.
+    "stator_not_one_piece": [
+        "cut_width", "tooth2_width", "tooth_width", "wire_width",
+        "slot_height", "core_thickness", "stator_fillet_r"],
     "winding_clipped_by_slot": [
         "wire_width", "wire_height", "num_wires_per_slot",
         "slot_height", "wire_spacing_y", "insulation_thickness"],
@@ -594,6 +599,36 @@ def split_width_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, float]]:
             "wire_width must be {:.4f} mm or less here."
             .format(ww, cut_x, cut_x_max, over, w_max),
             float(w_max))
+
+
+def stator_pieces_violation(stator, min_rel: float = 1e-4) -> Optional[Dict[str, Any]]:
+    """``{"n", "areas", "message"}`` when the stator polygon is not ONE piece.
+
+    A lamination is one piece.  Fragments under ``min_rel`` of the largest piece
+    are rounding residue (the builder already drops them, ``_drop_slivers``), so
+    only a real split counts: the notches cut through the iron.  ``None`` for a
+    single Polygon (the case for every catalog machine).  Measured 2026-10-15:
+    a THIN wire (CIANO14 30_10, wire_width <= 1.2) only ever produced residue
+    — the notch radius grows, the joint neck stays ``cut_width`` thick, and the
+    area falls smoothly — so no upper bound on the notch is needed; this is the
+    belt-and-braces refusal should some other input ever split the iron.
+    """
+    if stator is None or getattr(stator, "is_empty", True):
+        return None
+    if getattr(stator, "geom_type", "") != "MultiPolygon":
+        return None
+    areas = sorted((float(g.area) for g in stator.geoms), reverse=True)
+    if not areas:
+        return None
+    big = [a for a in areas if a >= min_rel * areas[0]]
+    if len(big) < 2:
+        return None
+    return {"n": len(big), "areas": big,
+            "message": ("the stator is {:d} separate pieces ({}) — the notches "
+                        "between the slot units cut right through the lamination, "
+                        "so it is not one part. Make cut_width (the neck that joins "
+                        "the units) or tooth2_width larger, or the slots narrower."
+                        .format(len(big), ", ".join("{:.3f} mm²".format(a) for a in big)))}
 
 
 def slot_mouth_infeasibility(geo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -886,6 +921,16 @@ def validate_polygons(polys: Dict[str, Any],
                                   max(0.0, _strip - (_cut_x - _cut_x_max)))
                               if _strip > 0.0 else ""))),
             measured_mm=float(_cut_x - _cut_x_max), likely_params=_causes))
+
+    # ── 1b'. the stator is ONE piece ─────────────────────────────────────────
+    checks.append("stator_one_piece")
+    _pieces = stator_pieces_violation(polys.get("stator"))
+    if _pieces is not None:
+        col.add(Violation(
+            code="stator_not_one_piece", severity=_SEV_ERROR,
+            part_a="The stator", part_b="",
+            message=_pieces["message"],
+            likely_params=list(_CAUSES["stator_not_one_piece"])))
 
     # ── 1c. conductor cross-section actually delivered ───────────────────────
     # ``winding_does_not_fit`` only catches a stack that would CROSS THE BORE —

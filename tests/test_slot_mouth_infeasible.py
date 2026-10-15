@@ -79,3 +79,52 @@ def test_solver_gate_names_the_same_limit():
     assert not res.ok
     text = res.summary()
     assert "Wire too wide for this slot: max wire width 2.30 mm." in text
+
+
+# ── the other degenerate case: a THIN wire (large notch radius) ──────────────
+
+def _stator(g):
+    import contextlib
+    import io
+    import logging
+    from motor_ai_sim.cadquery_geometry import CadQueryMotor
+    m = CadQueryMotor()
+    m.set_parameters(g)
+    logging.disable(logging.CRITICAL)
+    try:
+        with contextlib.redirect_stdout(io.StringIO()):
+            return (m.get_2d_polygons()["stator"],
+                    m.get_2d_mesh_data()["stator_core"])
+    finally:
+        logging.disable(logging.NOTSET)
+
+
+@pytest.mark.parametrize("w", [0.5, 0.6, 0.8, 1.0, 1.2, 1.3])
+def test_thin_wire_is_still_one_valid_stator_piece(w):
+    """wire_width <= 1.2 on 30_10 used to return the body plus 0.0001 mm2 ghost
+    pieces from the OD-corner fillet (fill radius 2.2..3.6 mm); a notch that large
+    is a legitimate machine (the joint neck stays cut_width thick), so it is
+    drawn — as ONE piece."""
+    poly, mesh = _stator({**_GEO, "wire_width": w})
+    assert poly.geom_type == "Polygon" and poly.is_valid, (w, poly.geom_type)
+    assert slot_mouth_infeasibility({**_GEO, "wire_width": w}) is None
+    assert len(mesh["faces"]) > 100
+
+
+def test_notch_grows_and_area_falls_smoothly_with_thinner_wire():
+    areas = [_stator({**_GEO, "wire_width": w})[0].area
+             for w in (2.0, 1.5, 1.0, 0.5)]
+    assert areas == sorted(areas)                    # thinner wire -> bigger notch -> ... area rises
+    assert max(areas) - min(areas) < 12.0            # ... but only by the notch, no collapse
+
+
+def test_stator_pieces_violation_flags_a_real_split_only():
+    from shapely.geometry import MultiPolygon, box
+    from motor_ai_sim.geometry_validation import stator_pieces_violation
+    body = box(0, 0, 10, 10)
+    assert stator_pieces_violation(body) is None
+    ghost = box(20, 0, 20.01, 0.01)                  # 1e-4 mm2: residue, not a piece
+    assert stator_pieces_violation(MultiPolygon([body, ghost])) is None
+    real = box(20, 0, 24, 4)
+    v = stator_pieces_violation(MultiPolygon([body, real]))
+    assert v is not None and v["n"] == 2 and "separate pieces" in v["message"]

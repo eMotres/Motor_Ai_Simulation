@@ -674,7 +674,7 @@ function App() {
           elevation={0}
           sx={{ backgroundColor: 'background.paper', borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0 }}
         >
-          <Toolbar variant="dense" sx={{ gap: 1 }}>
+          <Toolbar variant="dense" sx={{ gap: 1, flexWrap: 'wrap', py: 0.5, minHeight: 'auto' }}>
             <BrandLogo size={28} />
             <Typography variant="h6" sx={{ mr: 1, letterSpacing: 0.3 }}>
               AeroStator{' '}

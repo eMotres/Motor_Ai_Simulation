@@ -6,6 +6,7 @@
  * recording the last run's results too when that run matches the point.
  */
 import React, { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { Box, Typography, Button, Tooltip, CircularProgress } from '@mui/material';
 import { useMotorStore } from '../../stores/motorStore';
 import { pageVisible } from '../../lib/pageVisible';
@@ -110,9 +111,16 @@ const hhmm = (ms: number) => {
 
 const ActiveFamilyStrip: React.FC = () => {
   const { user, enforced, isAdmin, resolved } = useAuth();
+  const { t: tc } = useTranslation('common');
   const identity = user?.email?.trim().toLowerCase() ?? null;
   const lastMotor = useLastMotorState();
   const [ctx, setCtx] = useState<Ctx | null>(null);
+  const [viewedModel, setViewedModel] = useState<string | null>(null);
+  useEffect(() => {
+    const onViewed = (e: Event) => setViewedModel((e as CustomEvent<{ name?: string | null }>).detail?.name || null);
+    window.addEventListener('model3d-view-selected', onViewed);
+    return () => window.removeEventListener('model3d-view-selected', onViewed);
+  }, []);
   const liveGeometry = useMotorStore(s => s.geometry) as Record<string, unknown>;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -835,6 +843,15 @@ const ActiveFamilyStrip: React.FC = () => {
     setBusy(false);
   };
 
+  if (viewedModel) {
+    return (
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.25,
+                 color: 'var(--text-2)', borderBottom: '1px solid var(--line-soft)' }}>
+        <Typography sx={{ fontSize: 12 }}>{tc('model3dViewed', { name: viewedModel })}</Typography>
+      </Box>
+    );
+  }
+
   if (!ctx?.active) {
     // RELEASED context (the identity guard, a Compare / My-motors / preset
     // load): never a dead end (2026-09-20).  One line saying WHAT changed,
@@ -919,11 +936,13 @@ const ActiveFamilyStrip: React.FC = () => {
     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.5, py: 0.35,
                bgcolor: 'var(--panel-2)', borderBottom: '1px solid var(--line-soft)',
                flexShrink: 0, minHeight: 28 }}>
-      <Tooltip title={lockTip}>
-        <Typography component="span" sx={{ fontSize: 12, cursor: 'help' }}>
-          {lockGlyph}
-        </Typography>
-      </Tooltip>
+      {ctx?.can_write === true && (
+        <Tooltip title={lockTip}>
+          <Typography component="span" sx={{ fontSize: 12, cursor: 'help' }}>
+            {lockGlyph}
+          </Typography>
+        </Tooltip>
+      )}
       {(() => {
         // EFFECTIVE config name from the LIVE geometry: change the stack in
         // Geometry and the strip reads M1-L220 (amber = unsaved) at once —

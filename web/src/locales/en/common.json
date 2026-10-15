@@ -99,10 +99,10 @@
     "dataSharing": "Dataset sharing settings",
     "nda": {
       "title": "NDA, 3-D tools and STEP",
-      "intro": "The 3-D tools and the STEP download open after the NDA.",
-      "signed": "Your NDA is signed. The 3-D tools and STEP downloads are open.",
+      "intro": "The simplified model and STEP are available now. The full construction, 3-D tools and full STEP open after the NDA and account verification.",
+      "signed": "Your NDA is signed. The full construction, 3-D tools and full STEP require account verification; the simplified STEP is available now.",
       "sign": "Sign the NDA online",
-      "signHelp": "Takes about a minute. Unlocks the 3-D tools and STEP.",
+      "signHelp": "Sign the NDA; account verification is also required for the full construction and full STEP.",
       "request": "Request the NDA",
       "requestHelp": "Online signing is not open yet. We will send you the agreement.",
       "requested": "Requested. We will contact you.",
@@ -410,5 +410,6 @@
     "accept": "Accept",
     "decline": "Decline",
     "settings": "Cookie settings"
-  }
+  },
+  "model3dViewed": "Viewing 3D model: {name}"
 }

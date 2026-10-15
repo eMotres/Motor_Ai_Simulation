@@ -261,3 +261,60 @@ def test_rotor_inertia_keeps_its_meaning_documented():
     no polar moments, so the full list's rotating mass is a MASS, not an inertia - and the docstring says so."""
     text = (_ROOT / "src" / "motor_ai_sim" / "masses.py").read_text(encoding="utf-8")
     assert "FULL assembled" in text and "rotating_kg" in text
+
+
+def test_catalog_passport_copper_mass_is_request_isolated_and_requires_end_fraction(catalog, monkeypatch):
+    from motor_ai_sim.material_context import get_request_materials, set_request_materials
+    from motor_ai_sim.routes import catalog as C
+
+    passport = {"L0_mm": 12.0, "N0": 7, "wireH0_mm": 0.6, "endWindFrac": 0.3}
+    card = {"die": DIE, "config": CFG}
+    clean = C._passport_copper_mass(card, passport)
+    assert clean is not None and clean > 0
+
+    captured = {}
+    from motor_ai_sim.simulation import geometry_2d as G
+    real_params = G.params_from_config
+    def capture_params(*args, **kwargs):
+        captured.update(kwargs["geo_override"])
+        return real_params(*args, **kwargs)
+    monkeypatch.setattr(G, "params_from_config", capture_params)
+
+    # Use the actual default/card-assigned slot material and override its
+    # density in ambient request context to expose any leaked override.
+    import yaml
+    from motor_ai_sim.modules import motor_mass as MM
+    die_dir = MM.find_die_dir(DIE)
+    config_doc = yaml.safe_load((die_dir / f"{CFG}.yaml").read_text(encoding="utf-8"))
+    cfg_doc = MM._default_config_doc()
+    assigned_materials = dict(cfg_doc.get("materials") or {})
+    assigned_materials.update(config_doc.get("materials") or {})
+    assigned_slot = assigned_materials["slot"]
+    conflicting = {"assignment": {"slot": assigned_slot},
+                   "materials": {assigned_slot: {"category": "conductor", "density_kg_m3": 1}},
+                   "parts": {"slot": "excluded"}}
+    set_request_materials(conflicting)
+    try:
+        assert C._passport_copper_mass(card, passport) == pytest.approx(clean, rel=1e-12)
+        assert get_request_materials() == conflicting
+        assert captured["motor_length"] == passport["L0_mm"]
+        assert captured["num_wires_per_slot"] == passport["N0"]
+        assert captured["wire_height"] == passport["wireH0_mm"]
+        assert get_request_materials() == conflicting
+
+        from motor_ai_sim import masses as Masses
+        real_compute = Masses.compute_masses
+        def fail_compute(*args, **kwargs):
+            raise RuntimeError("intentional mass calculation failure")
+        monkeypatch.setattr(Masses, "compute_masses", fail_compute)
+        assert C._passport_copper_mass(card, passport) is None
+        assert get_request_materials() == conflicting
+        monkeypatch.setattr(Masses, "compute_masses", real_compute)
+
+        for invalid in (None, "unknown", -0.1, 1, 1.1):
+            assert C._passport_copper_mass(card, {**passport, "endWindFrac": invalid}) is None
+            assert get_request_materials() == conflicting
+        assert C._passport_copper_mass(card, {k: v for k, v in passport.items() if k != "endWindFrac"}) is None
+        assert get_request_materials() == conflicting
+    finally:
+        set_request_materials(None)

@@ -44,3 +44,31 @@ t('a frameless kit is LIGHTER than the active mass (no shaft tube): a negative f
     assert.equal(M.scaleMotor({ ...P, mass_partial: false, mass_fixed_kg: bad }, K(12), 14).mass_partial, true);
   }
 });
+
+t('copper mass follows wire rows, wire height, stack and fixed end turns; full mass keeps CAD rest', () => {
+  const p = { ...P, mass_partial: false, mass_fixed_kg: 0.024, mass_cu0_kg: 0.02 };
+  const base = M.scaleMotor(p, K(12), 14);
+  const longer = M.scaleMotor(p, { ...K(12), L_mm: 24 }, 14);
+  const thinner = M.scaleMotor(p, { ...K(12), wireH_mm: 0.3 }, 14);
+  const moreRows = M.scaleMotor(p, { ...K(12), N: 8 }, 14);
+  assert.ok(Math.abs(base.mass_kg - 0.114) < 1e-12);
+  assert.ok(Math.abs(longer.mass_active_kg - 0.174) < 1e-12);
+  assert.ok(Math.abs(longer.mass_kg - 0.198) < 1e-12);
+  assert.ok(Math.abs(thinner.mass_kg - 0.104) < 1e-12);
+  assert.ok(Math.abs(moreRows.mass_kg - (0.07 + 0.02 * 8 / 7 + 0.024)) < 1e-12);
+  assert.ok(Math.abs(thinner.power_per_mass_W_kg - thinner.P_mech_W / thinner.mass_kg) < 1e-9);
+});
+
+t('a missing/null copper mass does not get misread as a measured zero', () => {
+  for (const missing of [undefined, null]) {
+    const r = M.scaleMotor({ ...P, mass_partial: false, mass_fixed_kg: 0.024, mass_cu0_kg: missing }, K(24), 14);
+    assert.ok(Math.abs(r.mass_active_kg - 0.18) < 1e-12);
+  }
+});
+
+t('a legacy passport flags the winding mass basis only after wire geometry changes', () => {
+  assert.equal(M.scaleMotor(P, K(24), 14).mass_winding_known, true);
+  assert.equal(M.scaleMotor(P, { ...K(12), N: 8 }, 14).mass_winding_known, false);
+  assert.equal(M.scaleMotor(P, { ...K(12), wireH_mm: 0.5 }, 14).mass_winding_known, false);
+  assert.equal(M.scaleMotor({ ...P, mass_cu0_kg: 0.02 }, { ...K(12), N: 8 }, 14).mass_winding_known, true);
+});

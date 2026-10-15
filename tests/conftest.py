@@ -253,3 +253,16 @@ def _clear_run_history():
         pass
     yield
 
+
+
+@pytest.fixture(autouse=True)
+def _no_dns_in_tests(monkeypatch):
+    """Sign-up / reset check that the e-mail domain exists (email_domain.py).  The suite must never wait for a real resolver or
+    depend on the network: every domain "exists" unless a test sets its own resolver (tests/test_email_domain.py)."""
+    try:
+        from motor_ai_sim import email_domain as _ed
+        monkeypatch.setattr(_ed, "_exists", lambda domain, timeout: "yes")
+        _ed.clear_cache()
+    except Exception:                                       # noqa: BLE001
+        pass
+    yield

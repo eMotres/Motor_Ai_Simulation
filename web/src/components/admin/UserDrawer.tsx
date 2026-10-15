@@ -13,6 +13,7 @@ import { openNdaPdf } from './ndaPdf';
 import { ROLES } from './dialogs/InviteDialog';
 import { roleLabel } from '../../lib/accessUi';
 import type { RegistryUser } from './dialogs/MotorsDialog';
+import { canEditEmail, lastMailText } from './userMail';
 
 const ROLE_COLOR: Record<string, string> = {
   anon: 'var(--text-4)', user: 'var(--text-3)', engineer: '#60a5fa', admin: '#fbbf24',
@@ -44,13 +45,16 @@ const UserDrawer: React.FC<{
   onResetPassword: () => void;
   onOpenMotors: () => void;
   onNda: (signed: boolean, date?: string) => void;
+  onChangeEmail: (newEmail: string) => void;
   onRevokeAllSessions: () => void;
 }> = ({
   user, liveSessions, lastLogin, cpuH30d, jobs30d, onClose, busy,
-  onRole, onQuota, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions,
+  onRole, onQuota, onToggleDisabled, onDelete, onResetPassword, onOpenMotors, onNda, onRevokeAllSessions, onChangeEmail,
 }) => {
   const [revoking, setRevoking] = useState(false);
   const [quota, setQuota] = useState('');
+  const [newEmail, setNewEmail] = useState('');
+  useEffect(() => setNewEmail(''), [user?.email]);
   useEffect(() => { setRevoking(false); setQuota(user?.sim_quota_cpu_h_month != null ? String(user.sim_quota_cpu_h_month) : ''); },
     [user?.email, user?.sim_quota_cpu_h_month]);
   const saveQuota = () => {
@@ -69,6 +73,25 @@ const UserDrawer: React.FC<{
         <>
           <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)', wordBreak: 'break-all' }}>{user.email}</Typography>
           {user.name && <Typography sx={{ fontSize: 12, color: 'var(--text-4)', mb: 1 }}>{user.name}</Typography>}
+
+          {canEditEmail(user) && (
+            <Box sx={{ mt: 1, p: 1, border: '1px solid var(--line-soft)', borderRadius: 1 }} data-testid="unverified-box">
+              <Typography sx={{ fontSize: 12, color: '#fbbf24', fontWeight: 700 }}>E-mail not confirmed</Typography>
+              <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)', mb: 0.75 }}>{lastMailText(user.last_mail)}</Typography>
+              <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center' }}>
+                <TextField size="small" type="email" placeholder="correct e-mail address" value={newEmail} disabled={busy}
+                  onChange={(e) => setNewEmail(e.target.value)} inputProps={{ 'aria-label': 'new e-mail address' }}
+                  sx={{ flex: 1, '& input': { fontSize: 12.5, py: 0.5 } }} />
+                <Button size="small" variant="outlined" disabled={busy || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(newEmail.trim())}
+                  onClick={() => onChangeEmail(newEmail.trim())} sx={{ textTransform: 'none', fontSize: 12 }}>
+                  Change
+                </Button>
+              </Box>
+              <Typography sx={{ fontSize: 11, color: 'var(--text-4)', mt: 0.5 }}>
+                Fixes a typo at sign-up: the account moves to the new address and a new confirmation link is mailed there.
+              </Typography>
+            </Box>
+          )}
 
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 1.5, mb: 0.5 }}>
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>Role</Typography>

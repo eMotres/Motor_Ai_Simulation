@@ -11,7 +11,7 @@ import {
 } from '@mui/material';
 import {
   decodeJwtPayload, googleExchange, loadGis, GisUnreachableError, passwordLogin,
-  registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset,
+  registerAccount, verifyEmail, requestPasswordReset, confirmPasswordReset, resendVerification, changeSignupEmail, ApiErr,
   pendingEmailLink, clearEmailLink, pendingContinuation, PASSWORD_MIN_LEN,
   GOOGLE_CLIENT_ID, TERMS_URL, PRIVACY_URL, SOURCE_URL, type SessionUser,
 } from '../../lib/localAuth';
@@ -42,7 +42,7 @@ const defaultTab = (): 'google' | 'email' =>
   GOOGLE_CLIENT_ID && !isChineseVisitor() ? 'google' : 'email';
 
 const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, initialTab, returnTo }) => {
-  const { t, i18n } = useTranslation('common');
+  const { t, i18n } = useTranslation(['common', 'errors']);
   const min = PASSWORD_MIN_LEN;
   const [tab, setTab] = useState<'google' | 'email'>(
     () => (GOOGLE_CLIENT_ID ? (initialTab ?? defaultTab()) : 'email'));
@@ -60,6 +60,25 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   const [info, setInfo] = useState<string | null>(null);
   const [touched, setTouched] = useState(false);
   const [gisErr, setGisErr] = useState<string | null>(null);
+  // After sign-up: the "check your inbox" screen (resend, or fix a mistyped address).
+  const [sent, setSent] = useState<{ email: string; ok: string | null } | null>(null);
+  const [changing, setChanging] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [cooldown, setCooldown] = useState(0);
+  useEffect(() => { if (!open) { setSent(null); setChanging(false); } }, [open]);
+  useEffect(() => {
+    if (cooldown <= 0) return undefined;
+    const id = window.setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => window.clearTimeout(id);
+  }, [cooldown]);
+  // an error from the API in the interface language (the server adds a stable code + params beside the English text)
+  const errText = (e: unknown): string => {
+    const x = e as ApiErr;
+    if (x && x.code && !x.code.startsWith('http.')) {
+      return t(x.code, { ns: 'errors', ...(x.params ?? {}), defaultValue: x.message }) as string;
+    }
+    return (e as Error).message;
+  };
   const gButtonRef = useRef<HTMLDivElement>(null);
   // E-mail opt-in topics (communication preferences): every box UNTICKED by default (GDPR); a ref so the GIS callback
   // registered once still reads the current boxes.  The server records them with the wording shown (comm_prefs.py).
@@ -161,6 +180,7 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
   const switchMode = (m: Mode) => {
     setMode(m); setErr(null); setInfo(null); setTouched(false);
     setPassword(''); setPassword2('');
+    setSent(null); setChanging(false);
   };
 
   // Loud, field-level validation (shown after the first submit attempt).
@@ -184,11 +204,11 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         setEmail(''); setPassword('');
         onSignedIn(token, user);
       } else if (mode === 'register') {
-        const j = await registerAccount(email.trim(), password, name.trim(), tickedTopics(topics), uiLang, returnTo);
+        await registerAccount(email.trim(), password, name.trim(), tickedTopics(topics), uiLang, returnTo);
         setPassword(''); setPassword2(''); setTouched(false); setTopics(emptyTopics());
         setMode('signin');
-        setInfo(returnTo ? t('auth.info.checkConfirmationReturn')
-          : (j.message || t('auth.info.checkConfirmation')));
+        setSent({ email: email.trim(), ok: null }); setChanging(false); setNewEmail(''); setCooldown(60);
+        setInfo(null);
       } else if (mode === 'forgot') {
         const j = await requestPasswordReset(email.trim());
         setTouched(false);
@@ -202,14 +222,34 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         setInfo(t('auth.info.passwordChanged'));
       }
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(errText(e));
     } finally {
       setBusy(false);
     }
   };
 
+  const resend = async () => {
+    if (!sent || busy || cooldown > 0) return;
+    setBusy(true); setErr(null);
+    try {
+      await resendVerification(sent.email);
+      setSent({ ...sent, ok: t('auth.sent.resent') }); setCooldown(60);
+    } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
+  };
+
+  const changeAddress = async () => {
+    if (!sent || busy) return;
+    if (!EMAIL_RE.test(newEmail.trim()) || !password) { setTouched(true); return; }
+    setBusy(true); setErr(null);
+    try {
+      await changeSignupEmail(sent.email, password, newEmail.trim(), i18n.resolvedLanguage === 'zh-CN' ? 'zh-CN' : 'en');
+      setSent({ email: newEmail.trim(), ok: t('auth.sent.changed', { email: newEmail.trim() }) });
+      setChanging(false); setNewEmail(''); setPassword(''); setTouched(false); setCooldown(60);
+    } catch (e) { setErr(errText(e)); } finally { setBusy(false); }
+  };
+
   const show = (msg: string) => (touched && msg ? msg : undefined);
-  const title = t(`auth.title.${mode}`);
+  const title = sent && mode === 'signin' ? t('auth.sent.title') : t(`auth.title.${mode}`);
   const cta = t(`auth.cta.${mode}`);
 
   return (
@@ -248,6 +288,46 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
               </Typography>
             )}
             {err && <Typography variant="caption" color="error">{err}</Typography>}
+          </Box>
+        ) : sent && mode === 'signin' ? (
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25, pt: 0.5 }} data-testid="signup-sent">
+            <Typography sx={{ fontSize: 13 }}>
+              {t(returnTo ? 'auth.sent.textReturn' : 'auth.sent.text', { email: sent.email })}
+            </Typography>
+            <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('auth.sent.spam')}</Typography>
+            {sent.ok && <Typography variant="caption" sx={{ color: '#34d399' }} role="status">{sent.ok}</Typography>}
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+              <Button size="small" variant="outlined" disabled={busy || cooldown > 0} onClick={() => void resend()}
+                sx={{ textTransform: 'none' }}>
+                {cooldown > 0 ? t('auth.sent.resendWait', { seconds: cooldown }) : t('auth.sent.resend')}
+              </Button>
+              <Link component="button" type="button" sx={{ fontSize: 12 }}
+                onClick={() => { setChanging((c) => !c); setErr(null); setNewEmail(''); setPassword(''); setTouched(false); }}>
+                {t('auth.sent.wrong')}
+              </Link>
+            </Box>
+            {changing && (
+              <Box component="form" noValidate onSubmit={(e) => { e.preventDefault(); void changeAddress(); }}
+                sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                  <Typography sx={{ fontSize: 12, color: 'var(--text-3)', flex: 1 }}>{t('auth.sent.newEmail')}</Typography>
+                  <HelpTip title={t('auth.sent.changeHelp')} />
+                </Box>
+                <TextField size="small" type="email" autoComplete="off" value={newEmail} required fullWidth
+                  label={t('auth.sent.newEmail')} onChange={(e) => setNewEmail(e.target.value)}
+                  error={touched && !EMAIL_RE.test(newEmail.trim())} />
+                <TextField size="small" type="password" autoComplete="current-password" value={password} required fullWidth
+                  label={t('auth.sent.password')} onChange={(e) => setPassword(e.target.value)}
+                  error={touched && !password} />
+                <Button type="submit" variant="contained" size="small" disabled={busy} sx={{ textTransform: 'none' }}>
+                  {busy ? <CircularProgress size={16} sx={{ color: 'inherit' }} /> : t('auth.sent.change')}
+                </Button>
+              </Box>
+            )}
+            {err && <Typography variant="caption" color="error" role="alert">{err}</Typography>}
+            <Box sx={{ fontSize: 12 }}>
+              <Link component="button" type="button" onClick={() => switchMode('signin')}>{t('auth.link.back')}</Link>
+            </Box>
           </Box>
         ) : (
           <Box component="form" noValidate

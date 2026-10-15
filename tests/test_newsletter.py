@@ -64,7 +64,7 @@ def env(tmp_path, monkeypatch):
 
     outbox: list[dict] = []
 
-    def fake_send(to, subject, body, *, block=False):
+    def fake_send(to, subject, body, *, block=False, **kw):
         outbox.append({"to": to, "subject": subject, "body": body})
         return True
 

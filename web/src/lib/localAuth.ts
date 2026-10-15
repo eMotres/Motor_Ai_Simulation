@@ -165,6 +165,13 @@ export function passwordLogin(email: string, password: string) {
   return post('/api/auth/login', { email, password });
 }
 
+/** An API error with the stable `code` + `params` the backend adds beside the English detail (api_errors.py), so the dialog can
+ *  show it in the interface language. */
+export class ApiErr extends Error {
+  code?: string;
+  params?: Record<string, unknown>;
+}
+
 async function postPlain(path: string, body: unknown): Promise<{ message?: string; email?: string }> {
   const r = await fetch(`${API}${path}`, {
     method: 'POST',
@@ -172,7 +179,12 @@ async function postPlain(path: string, body: unknown): Promise<{ message?: strin
     body: JSON.stringify(body),
   });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error((j as { detail?: string }).detail || `request failed (${r.status})`);
+  if (!r.ok) {
+    const e = new ApiErr((j as { detail?: string }).detail || `request failed (${r.status})`);
+    e.code = (j as { code?: string }).code;
+    e.params = (j as { params?: Record<string, unknown> }).params;
+    throw e;
+  }
   return j as { message?: string; email?: string };
 }
 
@@ -185,6 +197,16 @@ export function registerAccount(email: string, password: string, name: string, c
   return postPlain('/api/auth/register', {
     email, password, name, comm_prefs: commPrefs, lang, ...(returnTo ? { return_to: returnTo } : {}),
   });
+}
+
+/** Mail the confirmation link again (the server limits it to 3 an hour per address and answers the same whatever the address is). */
+export function resendVerification(email: string) {
+  return postPlain('/api/auth/register/resend', { email });
+}
+
+/** An unconfirmed account fixes a mistyped address; the password it was registered with proves it is theirs. */
+export function changeSignupEmail(email: string, password: string, newEmail: string, lang = 'en') {
+  return postPlain('/api/auth/register/change-email', { email, password, new_email: newEmail, lang });
 }
 
 /** Consume the mailed confirmation link.  `continuation`: the link's

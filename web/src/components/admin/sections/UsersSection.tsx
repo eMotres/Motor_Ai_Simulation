@@ -5,7 +5,7 @@
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Box, Typography, Paper, Chip, Button, CircularProgress, Select, MenuItem,
+  Box, Typography, Paper, Chip, Button, CircularProgress, Select, MenuItem, Tooltip,
   Table, TableBody, TableCell, TableHead, TableRow, TextField, TableSortLabel,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -19,6 +19,7 @@ import { roleLabel } from '../../../lib/accessUi';
 import UserDrawer from '../UserDrawer';
 import { useTranslation } from 'react-i18next';
 
+import { lastMailText } from '../userMail';
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const ROLE_COLOR: Record<string, string> = {
   anon: 'var(--text-4)', user: 'var(--text-3)', admin: '#fbbf24',
@@ -86,6 +87,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
       if (r.ok) {
         const j = await r.json();
         setUsers((us) => us.map((u) => (u.email === email ? { ...u, ...j.user } : u)));
+        if (j.user?.email && j.user.email !== email) setSelected(j.user.email);      // an unverified account's address was corrected
         setError(null);
       } else {
         let why = `HTTP ${r.status}`;
@@ -224,8 +226,15 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
                       {g?.default ? `${g.default.die} / ${g.default.config}` : '—'}
                     </TableCell>
                     <TableCell align="center">
-                      <Chip size="small" label={u.disabled ? 'disabled' : 'active'}
-                        sx={{ height: 18, fontSize: 10, bgcolor: 'var(--panel)', color: u.disabled ? '#f87171' : '#4ade80' }} />
+                      {u.email_verified === false ? (
+                        <Tooltip title={`E-mail not confirmed. ${lastMailText(u.last_mail)}`} arrow>
+                          <Chip size="small" label="unverified" data-testid="unverified-chip"
+                            sx={{ height: 18, fontSize: 10, bgcolor: 'var(--panel)', color: u.last_mail && !u.last_mail.ok ? '#f87171' : '#fbbf24' }} />
+                        </Tooltip>
+                      ) : (
+                        <Chip size="small" label={u.disabled ? 'disabled' : 'active'}
+                          sx={{ height: 18, fontSize: 10, bgcolor: 'var(--panel)', color: u.disabled ? '#f87171' : '#4ade80' }} />
+                      )}
                     </TableCell>
                   </TableRow>
                 );
@@ -258,6 +267,7 @@ const UsersSection: React.FC<{ onInvite: (email?: string) => void; notice: strin
         onDelete={() => selected && deleteUser(selected)}
         onResetPassword={() => selected && setResetFor(selected)}
         onOpenMotors={() => selectedUser && setMotorsFor(selectedUser)}
+        onChangeEmail={(newEmail) => void patchUser(selected!, { new_email: newEmail })}
         onNda={(signed, date) => void patchUser(selected!, { nda_signed: signed, ...(date ? { nda_date: date } : {}) })}
         onRevokeAllSessions={() => selected && void revokeAllSessions(selected)}
       />

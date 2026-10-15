@@ -1,7 +1,9 @@
 {
   "auth": {
     "sign_in_required": "Sign in first.",
-    "account_disabled": "This account is disabled."
+    "account_disabled": "This account is disabled.",
+    "email_domain_unknown": "The domain {domain} does not exist - please check the address.",
+    "email_domain_unknown_suggest": "The domain {domain} does not exist - please check the address (did you mean {suggestion}?)."
   },
   "rate_limited": "Too many requests — try again later.",
   "material": {

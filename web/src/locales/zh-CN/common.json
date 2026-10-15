@@ -214,6 +214,21 @@
     },
     "consent": {
       "newAccountOnly": "仅适用于新账户"
+    },
+    "sent": {
+      "title": "请查收邮件",
+      "text": "我们已向 {email} 发送了确认链接。打开链接即可激活账户。",
+      "textReturn": "我们已向 {email} 发送了确认链接。打开链接即可完成 AI 应用的连接。",
+      "spam": "没有收到？请查看垃圾邮件文件夹，或重新发送链接。",
+      "resend": "重新发送链接",
+      "resendWait": "{seconds} 秒后可重新发送",
+      "resent": "已重新发送，请查收。",
+      "wrong": "地址有误？更换邮箱",
+      "newEmail": "正确的邮箱地址",
+      "password": "注册时使用的密码",
+      "change": "更换并重新发送",
+      "changed": "邮箱已更换，确认链接已发送到 {email}。",
+      "changeHelp": "密码用于证明账户属于您。只有尚未确认的账户才能更换邮箱地址。"
     }
   },
   "units": {

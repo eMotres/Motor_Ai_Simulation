@@ -83,9 +83,8 @@ const MotorThumbnail: React.FC<Props> = ({ slots, poles, size = 92, motorId, thu
       {/* rotor iron */}
       <circle cx={C} cy={C} r={R_ROTOR} fill="url(#tn-rotor)" stroke="#3b4d68" strokeWidth={0.8} />
       {magEls}
-      {/* shaft */}
-      <circle cx={C} cy={C} r={R_SHAFT} fill="var(--text-4)" stroke="var(--text-3)" strokeWidth={0.8} />
-      <circle cx={C} cy={C} r={R_SHAFT * 0.45} fill="var(--panel)" />
+      {/* no shaft: the same white rotor bore on every card (owner 2026-10-15) */}
+      <circle cx={C} cy={C} r={R_SHAFT} fill="#ffffff" />
     </svg>
   );
 };

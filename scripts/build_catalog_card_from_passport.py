@@ -29,7 +29,7 @@ import argparse
 import json
 import math
 import sys
-from typing import Any, Dict, List
+from typing import Optional, Any, Dict, List
 
 #: fields copied unchanged from the static (same-build) card block
 STATIC_KEYS = ("N0", "L0_mm", "wireH0_mm", "I0_A", "rpm0", "nP0", "wire_parallel0",
@@ -152,8 +152,9 @@ def build_block(full: Dict[str, Any], static: Dict[str, Any],
 
 
 def build_card(full: Dict[str, Any], static_card: Dict[str, Any], card_id: str, name: str,
-               owner: str) -> Dict[str, Any]:
-    block = build_block(full, static_card)
+               owner: str, block: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """``block``: an already built passport block (e.g. with its own loss-grid speeds); built here when omitted."""
+    block = block if block is not None else build_block(full, static_card)
     sp = static_card["passport"]
     return {"id": card_id, "name": name, "diameter_mm": static_card["diameter_mm"], "owner": owner,
             "poles": static_card["poles"], "slots": static_card["slots"],

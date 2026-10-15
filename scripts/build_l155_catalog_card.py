@@ -130,8 +130,7 @@ def build(full: Dict[str, Any], snap: Dict[str, Any], owner: str) -> Dict[str, A
     block["source_note"] += ("; delta machine stored as its equivalent star (I = terminal x sqrt3, V and psi / sqrt3, "
                              "R and L / 3 of the winding-basis passport); loss-grid columns = speeds settled at every "
                              "current row: %s rpm" % ", ".join("%g" % r for r in rpms))
-    card = D85.build_card(eq, static, CARD_ID, CARD_NAME, owner)
-    card["passport"]["passport"] = block
+    card = D85.build_card(eq, static, CARD_ID, CARD_NAME, owner, block=block)
     card["visibility_note"] = "PRIVATE: owner-only card, not published (owner approval pending)"
     return card
 

@@ -4,6 +4,7 @@ The generator (``motor_ai_sim.cad``) writes, per die/config, into ``<shared>/cad
 
     <motor_id>_full.glb           the model for the viewer             -> every signed-in user who may see the motor
     <motor_id>_active.step        the full STEP                         -> download: NDA accounts and the owner / admin only
+    <motor_id>_simplified.step    the SIMPLIFIED envelope-only model (+ .glb, .json)  -> every signed-in user, NO NDA (owner 2026-10-15)
     manifest.json                 SHA-256 of every file
 
 ONE model (owner 2026-10-13): everybody who may see a motor can view, rotate and section it; downloading it is the NDA
@@ -39,7 +40,11 @@ ORGANISATION = "MOTRES d.o.o."
 _LOCK = threading.RLock()
 
 #: file name suffix per kind; the GLB is written by cad/fc_scripts/export_models.py, the STEP by export_step.py
-_SUFFIX = {"glb": "_full.glb", "step": "_active.step"}
+_SUFFIX = {"glb": "_full.glb", "step": "_active.step",
+           # the SIMPLIFIED model (owner 2026-10-15): envelope only, no NDA, written by cad/fc_scripts/export_simplified.py
+           "simplified_step": "_simplified.step", "simplified_glb": "_simplified.glb", "simplified_json": "_simplified.json"}
+
+SIMPLIFIED_NOTICE = "SIMPLIFIED - envelope only"
 
 #: a download id: d<UTC day>-<12 hex>; what the trace tool looks for in pasted headers and properties
 ID_RE = re.compile(r"\bd[0-9]{8}-[0-9a-f]{12}\b")
@@ -142,10 +147,14 @@ def model_info(entry: dict) -> dict:
     """What the list route says about one model (no BOM, no prices, no store hashes)."""
     m = entry["manifest"]
     glb, step = file_row(entry, "glb"), file_row(entry, "step")
+    s_step, s_glb = file_row(entry, "simplified_step"), file_row(entry, "simplified_glb")
     return dict(die=entry["die"], config=entry["config"], motor_id=entry["motor_id"],
                 assembly=m.get("cad_variant") or "full",              # "full" | "frameless" (no envelope / simplified variants are served)
                 available=bool(glb), glb_bytes=glb and glb["bytes"], glb_sha256=glb and glb["sha256"],
                 step_available=bool(step), step_bytes=step and step["bytes"],
+                # the simplified model needs a signed-in user and the right to see the motor - nothing else (no NDA, no verification)
+                simplified_available=bool(s_step), simplified_step_bytes=s_step and s_step["bytes"],
+                simplified_glb_bytes=s_glb and s_glb["bytes"],
                 version=dict(template=(m.get("template") or {}).get("version"), built_at=m.get("built_at"),
                              param_hash=(m.get("param_hash") or "")[:12]))
 
@@ -227,6 +236,19 @@ def build_stamp(*, download_id: str, motor_id: str, version: str, day: datetime.
 
 # ── STEP stamp ──────────────────────────────────────────────────────────────
 
+def build_simplified_stamp(*, download_id: str, motor_id: str, version: str, day: datetime.date, recipient: dict, mass: str = "") -> dict:
+    """The stamp of a SIMPLIFIED download: same keys as :func:`build_stamp`, no NDA reference - the model is envelope only.  ``mass`` is
+    the text of the total mass of the real model (written into the STEP header)."""
+    notice = "%s - not for manufacture; no electromagnetic construction detail" % SIMPLIFIED_NOTICE
+    who = recipient["name"] + (", " + recipient["company"] if recipient.get("company") else "")
+    line = ("AeroStator download %s; SIMPLIFIED model %s%s; recipient %s <%s>; no NDA required (envelope only); date %s%s; %s" % (
+        download_id, motor_id, (" (" + version + ")") if version else "", who, recipient["email"], day.isoformat(),
+        ("; mass " + mass) if mass else "", notice))
+    return dict(download_id=download_id, motor_id=motor_id, version=version, date=day.isoformat(), recipient=recipient["name"],
+                email=recipient["email"], company=recipient.get("company") or "", nda_ref="none (simplified model)", notice=notice,
+                line=line, simplified=True, mass=mass)
+
+
 def stamp_step(data: bytes, *, filename: str, customer: str, day: datetime.date, motor_id: str,
                version: str = "", when: Optional[datetime.datetime] = None, stamp: Optional[dict] = None) -> bytes:
     """Rewrite the ISO 10303-21 HEADER section: description, file name, author and organisation carry the customer name, the
@@ -245,13 +267,18 @@ def stamp_step(data: bytes, *, filename: str, customer: str, day: datetime.date,
     desc = "MOTRES AeroStator model %s%s. Licensed to %s on %s. Not for redistribution." % (
         motor_id, (" " + version) if version else "", customer, day.isoformat())
     if stamp:
+        if stamp.get("simplified"):
+            desc = "MOTRES AeroStator SIMPLIFIED model %s%s (envelope only). Downloaded by %s on %s." % (
+                motor_id, (" " + version) if version else "", customer, day.isoformat())
         descs = [stamp["notice"], desc,
                  "Download ID: %s" % stamp["download_id"],
                  "Recipient: %s%s <%s>" % (stamp["recipient"], (", " + stamp["company"]) if stamp["company"] else "", stamp["email"]),
                  "NDA reference: %s" % stamp["nda_ref"],
-                 "Date: %s" % stamp["date"]]
+                 "Date: %s" % stamp["date"]] + (["Mass of the real model: %s" % stamp["mass"]] if stamp.get("mass") else [])
         authors = "'%s'%s" % (cust, (",'" + q(stamp["company"]) + "'") if stamp["company"] else "")
-        authorisation = "Licensed to %s %s; download %s; NDA %s" % (customer, day.isoformat(), stamp["download_id"], stamp["nda_ref"])
+        authorisation = ("Downloaded by %s %s; download %s; SIMPLIFIED - envelope only" if stamp.get("simplified")
+                         else "Licensed to %s %s; download %s; NDA %s") % ((customer, day.isoformat(), stamp["download_id"])
+                                                                         + (() if stamp.get("simplified") else (stamp["nda_ref"],)))
         fdesc = "FILE_DESCRIPTION((%s),'2;1');\n" % ",".join("'%s'" % q(d, 400) for d in descs)
         comment = "/* %s */\n" % q(stamp["line"], 700)
     else:

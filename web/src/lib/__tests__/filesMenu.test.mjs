@@ -52,7 +52,7 @@ t('Full: the construction files need the NDA; the FreeCAD file is not offered to
 });
 
 t('Full: admins need no NDA; with no built model nothing downloads', () => {
-  const adm = by(F.filesMenu({ ...base, isAdmin: true, role: 'admin', canDownload: true, canWrite: true }));
+  const adm = by(F.filesMenu({ ...base, isAdmin: true, role: 'admin', canDownload: true, canWrite: true, simplifiedBuilt: true }));
   assert.ok(Object.values(adm).every((i) => i.enabled));
   const none = by(F.filesMenu({ ...base, isAdmin: true, role: 'admin', canDownload: true, canWrite: true, modelBuilt: false }));
   assert.ok(Object.values(none).every((i) => !i.enabled && i.reason === 'noModel'));
@@ -79,4 +79,26 @@ t('every Full download has a server path; the menu is sections of export then im
   assert.deepEqual(kit.map((i) => i.id), m.map((i) => i.id));
   assert.deepEqual(kit.filter((i) => i.labelKey.endsWith('Kit')).map((i) => i.id), ['step', 'bomCsv', 'bomXlsx']);
   assert.equal(kit.find((i) => i.id === 'paramsCsv').labelKey, 'files_paramsCsv');
+});
+
+t('the SIMPLIFIED STEP needs only a signed-in account and a built simplified model: no NDA, no verification (owner 2026-10-15)', () => {
+  for (const c of [{ ...base, canDownload: false }, { ...base, canDownload: true }, { ...base, role: 'user', canDownload: false }]) {
+    const m = by(F.filesMenu({ ...c, simplifiedBuilt: true }));
+    assert.equal(m.stepSimplified.enabled, true);
+    assert.equal(m.stepSimplified.section, 'export');
+    assert.equal(m.stepSimplified.labelKey, 'files_stepSimplified');
+  }
+  // while the full STEP stays behind the NDA
+  assert.equal(by(F.filesMenu({ ...base, simplifiedBuilt: true })).step.enabled, false);
+  assert.equal(by(F.filesMenu({ ...base, simplifiedBuilt: true })).step.reason, 'nda');
+  // the kit label of the full STEP does not touch the simplified one
+  assert.equal(by(F.filesMenu({ ...base, simplifiedBuilt: true, kit: true })).stepSimplified.labelKey, 'files_stepSimplified');
+  assert.equal(F.FULL_DOWNLOADS.stepSimplified.path, 'simplified.step');
+});
+
+t('the simplified STEP is disabled with its own reason when the files are missing, offline or without a model; it is not in the Active menu', () => {
+  assert.equal(by(F.filesMenu(base)).stepSimplified.reason, 'noSimplified');
+  assert.equal(by(F.filesMenu({ ...base, modelBuilt: false, simplifiedBuilt: true })).stepSimplified.reason, 'noModel');
+  assert.equal(by(F.filesMenu({ ...base, connectedToApi: false, simplifiedBuilt: true })).stepSimplified.reason, 'offline');
+  assert.ok(!F.filesMenu({ ...base, scope: 'active', simplifiedBuilt: true }).some((i) => i.id === 'stepSimplified'));
 });

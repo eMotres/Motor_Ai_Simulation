@@ -113,13 +113,13 @@ const Model3DPanel: React.FC = () => {
     setSec((s) => ({ ...s, axis, position: (rg.min + rg.max) / 2 }));
   }, [range]);
 
-  const download = async () => {
+  const download = async (file = 'model.step') => {
     if (!model) return;
     setDl('busy'); setErr(null);
     try {
-      const r = await fetch(`${base(model)}/model.step`);
+      const r = await fetch(`${base(model)}/${file}`);
       if (!r.ok) { setErr(await detail(r)); return; }
-      const name = filenameFromDisposition(r.headers.get('Content-Disposition'), `${model.motor_id}.step`);
+      const name = filenameFromDisposition(r.headers.get('Content-Disposition'), `${model.motor_id}${file === 'simplified.step' ? '_simplified' : ''}.step`);
       const href = URL.createObjectURL(await r.blob());
       const a = document.createElement('a');
       a.href = href; a.download = name;
@@ -149,7 +149,7 @@ const Model3DPanel: React.FC = () => {
     </Select>
   );
 
-  const entries = model3dToolbar({ canDownload, models: models?.length ?? 0, preparing, stepAvailable: !!model?.step_available, hasPdf,
+  const entries = model3dToolbar({ canDownload, models: models?.length ?? 0, preparing, stepAvailable: !!model?.step_available, hasPdf, simplified: !!model?.simplified_available,
     ndaSigned: lockedKind(access) === 'verification' });
   const has = (id: Model3DItem) => entries.some((e) => e.id === id);
   const enabled = (id: Model3DItem) => entries.find((e) => e.id === id)?.enabled !== false;
@@ -208,6 +208,17 @@ const Model3DPanel: React.FC = () => {
               onClick={() => void download()} sx={{ textTransform: 'none', fontSize: 12.5 }}>
               {t('downloadStep')}{model?.step_bytes ? ` (${formatBytes(model.step_bytes)})` : ''}
             </Button>
+          )}
+          {has('simplified') && (
+            <Tooltip title={t('downloadSimplifiedTip')}>
+              <span>
+                <Button size="small" variant="outlined" disabled={!enabled('simplified') || dl === 'busy'} data-testid="tool-download-simplified"
+                  startIcon={<DownloadIcon sx={{ fontSize: 16 }} />} onClick={() => void download('simplified.step')}
+                  sx={{ textTransform: 'none', fontSize: 12.5 }}>
+                  {t('downloadSimplified')}{model?.simplified_step_bytes ? ` (${formatBytes(model.simplified_step_bytes)})` : ''}
+                </Button>
+              </span>
+            </Tooltip>
           )}
           {has('yourNda') && (
             <Button size="small" onClick={() => void downloadPdf()} sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>

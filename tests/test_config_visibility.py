@@ -361,6 +361,9 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("GET", "/api/model3d/{die}/{config}/parts"), ("GET", "/api/model3d/{die}/{config}/bom.csv"),
     ("GET", "/api/model3d/{die}/{config}/bom.xlsx"), ("GET", "/api/model3d/{die}/{config}/params.csv"),
     ("GET", "/api/model3d/{die}/{config}/model.fcstd"),
+    # the SIMPLIFIED model (open to every signed-in user, no NDA): the same 404 as model.glb (`_entry_for`), tested in tests/test_cad_simplified_access.py
+    ("GET", "/api/model3d/{die}/{config}/simplified.step"), ("GET", "/api/model3d/{die}/{config}/simplified.glb"),
+    ("GET", "/api/model3d/{die}/{config}/simplified.json"),
     ("POST", "/api/family/config/{die}/{cfg}/cad_params/import"),       # multipart; tested in tests/test_construction_params.py
     ("GET", "/api/propellers/cooling-options"), ("GET", "/api/propellers/{prop_id}/s1"), ("GET", "/api/system/graph"),
 }

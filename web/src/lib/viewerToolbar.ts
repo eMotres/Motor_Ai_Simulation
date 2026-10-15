@@ -22,7 +22,7 @@ export function drawerStartsOpen(stored: string | null | undefined): boolean {
 /** Drawer width in px: 420 on a wide screen, the whole width (minus a gutter) on a phone. */
 export const drawerWidth = (viewport: number): number => Math.max(260, Math.min(420, viewport - 16));
 
-export type Model3DItem = 'motor' | 'fit' | 'explode' | 'section' | 'measure' | 'download' | 'yourNda' | 'info' | 'ndaNote' | 'sign' | 'verify';
+export type Model3DItem = 'motor' | 'fit' | 'explode' | 'section' | 'measure' | 'download' | 'simplified' | 'yourNda' | 'info' | 'ndaNote' | 'sign' | 'verify';
 
 export interface Model3DToolbarCtx {
   /** the server flag: NDA signed (or admin) - the only permission the 3-D tab has */
@@ -37,6 +37,9 @@ export interface Model3DToolbarCtx {
   hasPdf: boolean;
   /** the NDA is signed but the applicant verification is not complete (server `access`): the toolbar shows its status, not "Sign" */
   ndaSigned?: boolean;
+  /** the SIMPLIFIED envelope-only model (owner 2026-10-15): whether the open model has its files; undefined = the item is not offered.
+   *  It needs only a signed-in account (no NDA, no verification), so it is in BOTH toolbars. */
+  simplified?: boolean;
 }
 
 export interface ToolbarEntry { id: Model3DItem; enabled: boolean }
@@ -46,12 +49,13 @@ export interface ToolbarEntry { id: Model3DItem; enabled: boolean }
  *  download (disabled when the model has no STEP), the signed-NDA link when a PDF exists, and the info icon. */
 export function model3dToolbar(c: Model3DToolbarCtx): ToolbarEntry[] {
   const e = (id: Model3DItem, enabled = true): ToolbarEntry => ({ id, enabled });
+  const simple = c.simplified === undefined ? [] : [e('simplified', c.simplified)];
   if (!c.canDownload) {
     const pick = c.models > 1 || c.preparing ? [e('motor')] : [];
     // signing the NDA does not open the tools by itself (applicant verification): once signed, the status line replaces the Sign button
-    return c.ndaSigned ? [...pick, e('fit'), e('verify')] : [...pick, e('fit'), e('ndaNote'), e('sign')];
+    return c.ndaSigned ? [...pick, e('fit'), ...simple, e('verify')] : [...pick, e('fit'), ...simple, e('ndaNote'), e('sign')];
   }
-  return [e('motor', c.models > 0), e('fit'), e('explode'), e('section'), e('measure'), e('download', c.stepAvailable),
+  return [e('motor', c.models > 0), e('fit'), e('explode'), e('section'), e('measure'), e('download', c.stepAvailable), ...simple,
     ...(c.hasPdf ? [e('yourNda')] : []), e('info')];
 }
 

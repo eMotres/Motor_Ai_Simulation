@@ -15,6 +15,9 @@ Outputs go to <out-root>/<die>/<config>/ (default /srv/motres/shared/cad on the 
   <motor_id>_active.step       full STEP (Stator/Core, Winding/Coils/Coil_n, Rotor/RotorCore, Magnets/Magnet_nn,
                                Mechanics/Shaft, bearings, holders, rings, Prop_fix, Screws)
   <motor_id>_datums.json       frame, axial / radial datums, coil lead end faces
+  <motor_id>_simplified.step   SIMPLIFIED model (envelope only; stator + rotor + magnets ONE monolith, every coil ONE thick turn, every bearing one
+  <motor_id>_simplified.glb    ring): downloadable by every signed-in user without the NDA (stamped "SIMPLIFIED - envelope only"); .json = its envelope,
+  <motor_id>_simplified.json   mounting interface, board terminals and the mass.  Written for every config, full and frameless alike.
   <motor_id>_full.glb          the model for the web viewer (one coloured node per part): viewing is open to every signed-in user who
                                may see the motor; the STEP download (<motor_id>_active.step) is for NDA accounts and the owner
   params.json                  the FreeCAD profile built from the store (what the template was fed)
@@ -84,6 +87,33 @@ def _models3d(work, mid, fcstd, args):
     r = _read(rep)
     return 0, dict(ok=True, full_glb=r["glb"], triangles=r["triangles"], tessellation_mm=r["tessellation_mm"],
                    worst_mesh_volume_error=r["worst_mesh_volume_error"])
+
+
+def _simplified(work, mid, fcstd, args):
+    """SIMPLIFIED model (export_simplified.py): envelope-only STEP + GLB + a tiny JSON, for every config (owner 2026-10-15).  Downloadable
+    without the NDA, so its patent-hygiene gate is inside the script; a failure never refuses the build - the files are simply not
+    written and the manifest says why.  Returns a manifest block."""
+    rep = os.path.join(work, mid + "_simplified_report.json")
+    code, st = _fc("export_simplified.py", dict(FC_MODEL=fcstd, FC_OUT_DIR=work, FC_MOTOR_ID=mid, FC_REPORT=rep), args)
+    if code:
+        print("simplified model not written (%s): %s" % (code, st.get("message")))
+        return dict(ok=False, message=st.get("message"))
+    r = _read(rep)
+    return dict(ok=True, triangles=r.get("triangles"), step_solids=r.get("step_solids"), monolith_faces=(r.get("monolith") or {}).get("bore_edges"),
+                worst_mesh_volume_error=r.get("worst_mesh_volume_error"))
+
+
+def _simplified_mass(work, mid, bom_info):
+    """Put the mass of the REAL model (the bill of materials total) into the simplified JSON: total mass on the metadata."""
+    path = os.path.join(work, mid + "_simplified.json")
+    info = _read(path)
+    if not info:
+        return
+    if bom_info and bom_info.get("ok") and bom_info.get("mass_g") is not None:
+        kit = info.get("cad_variant") == "frameless"
+        info["mass"] = dict(total_g=bom_info["mass_g"], scope="frameless kit" if kit else "full motor",
+                            basis="bill of materials total of the real model (model solids x densities)")
+    _write(path, info)
 
 
 def build(args):
@@ -161,6 +191,11 @@ def build(args):
         bom_info = None
         if kind == "store" and not args.no_bom and not args.no_step:
             bom_info = _bom(work, mid, fcstd, eff, pj, args)
+        simp = None
+        if not args.no_simplified and not args.no_step:
+            simp = _simplified(work, mid, fcstd, args)
+            if simp.get("ok"):
+                _simplified_mass(work, mid, bom_info)
         build_report = _read(os.path.join(work, "build_report.json"))
         step_check = _read(os.path.join(work, "step_check.json"))
         gui_report = _read(os.path.join(work, "gui_report.json"))
@@ -171,6 +206,8 @@ def build(args):
             names += [models3d["full_glb"], mid + "_models3d.json"]
         if bom_info and bom_info.get("files"):
             names += bom_info["files"] + [mid + "_bom_model_dump.json"]
+        if simp and simp.get("ok"):
+            names += [mid + "_simplified.step", mid + "_simplified.glb", mid + "_simplified.json", mid + "_simplified_report.json"]
         m = mf.build_manifest(eff, pj, pull, build_report, step_check, mf.file_rows(work, names),
                               build_report.get("freecad_version") or step_check.get("freecad_version"),
                               round(time.time() - t0, 1), kind=kind)
@@ -179,6 +216,7 @@ def build(args):
                         opens_ready=bool(gui_check.get("ok")), visible_objects=gui_check.get("visible"))
         m["bom"] = bom_info
         m["models3d"] = models3d
+        m["simplified"] = simp
         _write(os.path.join(work, "manifest.json"), m)
         if os.path.exists(out_dir):
             old = out_dir + ".old-%d" % os.getpid()
@@ -230,6 +268,7 @@ def main(argv=None):
     b.add_argument("--no-gui", action="store_true", help="skip the headless GUI step (no GuiDocument.xml)")
     b.add_argument("--no-step", action="store_true")
     b.add_argument("--no-bom", action="store_true", help="skip the bill of materials (<motor_id>_BOM.csv / .xlsx)")
+    b.add_argument("--no-simplified", action="store_true", help="skip the simplified envelope-only model (<motor_id>_simplified.step / .glb / .json)")
     b.add_argument("--no-models", action="store_true", help="skip the 3D-viewer model (<motor_id>_full.glb)")
     b.add_argument("--dry-run", action="store_true", help="only write params.json / pull_report.json")
     b.add_argument("--normal-priority", action="store_true", help="do not lower the FreeCAD process priority")

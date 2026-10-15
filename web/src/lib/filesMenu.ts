@@ -13,9 +13,9 @@ import type { ConstructionScope } from './constructionScope';
 
 export type FileItemId =
   | 'fusionCsvEm' | 'freecadEm' | 'fusionCsvEmImport' | 'freecadEmImport'
-  | 'step' | 'bomCsv' | 'bomXlsx' | 'paramsCsv' | 'fcstd' | 'paramsImport' | 'fcstdImport';
+  | 'step' | 'stepSimplified' | 'bomCsv' | 'bomXlsx' | 'paramsCsv' | 'fcstd' | 'paramsImport' | 'fcstdImport';
 
-export type DisabledReason = 'offline' | 'nda' | 'adminOnly' | 'noModel' | 'readOnly';
+export type DisabledReason = 'offline' | 'nda' | 'adminOnly' | 'noModel' | 'readOnly' | 'noSimplified';
 
 export interface FilesCtx {
   scope: ConstructionScope;
@@ -30,6 +30,8 @@ export interface FilesCtx {
   modelBuilt: boolean;
   /** may this session write the open die/configuration (the server's `can_write`) */
   canWrite: boolean;
+  /** the SIMPLIFIED envelope-only STEP of the open motor exists (needs a signed-in account only: no NDA, no verification) */
+  simplifiedBuilt?: boolean;
   /** the open model is a frameless kit: STEP and BOM are those of the kit (labels say so) */
   kit?: boolean;
 }
@@ -65,7 +67,11 @@ export function filesMenu(c: FilesCtx): FileItem[] {
   const imp = (id: FileItemId): FileItem => (!c.connectedToApi ? item(id, 'import', false, 'offline')
     : !c.modelBuilt ? item(id, 'import', false, 'noModel')
       : !c.canWrite ? item(id, 'import', false, 'readOnly') : item(id, 'import', true));
-  const list: FileItem[] = [dl('step'), dl('bomCsv'), dl('bomXlsx'), dl('paramsCsv')];
+  // the simplified STEP is the one export that is never behind the NDA (owner 2026-10-15): it needs the API, a built model and the files
+  const simple: FileItem = !c.connectedToApi ? item('stepSimplified', 'export', false, 'offline')
+    : !c.modelBuilt ? item('stepSimplified', 'export', false, 'noModel')
+      : !c.simplifiedBuilt ? item('stepSimplified', 'export', false, 'noSimplified') : item('stepSimplified', 'export', true);
+  const list: FileItem[] = [dl('step'), simple, dl('bomCsv'), dl('bomXlsx'), dl('paramsCsv')];
   if (mayHaveFreecadFile(c)) list.push(dl('fcstd'));
   list.push(imp('paramsImport'));
   if (mayHaveFreecadFile(c)) list.push(imp('fcstdImport'));
@@ -75,6 +81,7 @@ export function filesMenu(c: FilesCtx): FileItem[] {
 /** Server path (below /api/model3d/{die}/{config}) and the fallback file name of a Full download. */
 export const FULL_DOWNLOADS: Readonly<Partial<Record<FileItemId, { path: string; fallback: string }>>> = {
   step: { path: 'model.step', fallback: 'model.step' },
+  stepSimplified: { path: 'simplified.step', fallback: 'simplified.step' },
   bomCsv: { path: 'bom.csv', fallback: 'bom.csv' },
   bomXlsx: { path: 'bom.xlsx', fallback: 'bom.xlsx' },
   paramsCsv: { path: 'params.csv', fallback: 'params.csv' },

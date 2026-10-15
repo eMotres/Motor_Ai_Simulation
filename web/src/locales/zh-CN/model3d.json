@@ -24,6 +24,8 @@
   "measure": "测量",
   "measureHint": "在模型上点击两个点",
   "downloadStep": "下载 STEP",
+  "downloadSimplified": "下载简化版STEP",
+  "downloadSimplifiedTip": "仅外形的简化模型：定子、转子和磁钢为一个实体，每个线圈为一个块，轴承为环。所有已登录用户均可下载，无需保密协议。文件带有“SIMPLIFIED - envelope only”标记，下载会被记录。",
   "fit": "适应视图",
   "version": "模板 {template}，构建于 {built}，参数 {hash}",
   "stamped": "您的姓名、公司、日期和所签保密协议会写入文件名和 STEP 文件头。每次下载都有记录。",

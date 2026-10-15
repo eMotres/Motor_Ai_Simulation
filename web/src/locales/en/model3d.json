@@ -24,6 +24,8 @@
   "measure": "Measure",
   "measureHint": "Click two points on the model",
   "downloadStep": "Download STEP",
+  "downloadSimplified": "Download simplified STEP",
+  "downloadSimplifiedTip": "The envelope-only model: stator, rotor and magnets as one solid, each coil as one block, bearings as rings. Open to every signed-in user, no NDA. The file is stamped \"SIMPLIFIED - envelope only\" and the download is logged.",
   "fit": "Fit to view",
   "version": "Template {template}, built {built}, parameters {hash}",
   "stamped": "Your name, company, the date and your NDA are written into the file name and the STEP header. Every download is logged.",

@@ -148,7 +148,7 @@ def test_the_ninth_message_from_one_ip_is_the_canned_reply(env):
     assert r.status_code == 429
     j = r.json()
     assert j["source"] == "rate_limited" and j["limit"] == "ip_burst"
-    assert "vadim@motresres.com" in j["reply"]
+    assert "support@aerostator.com" in j["reply"]
     assert r.headers.get("Retry-After") == str(int(support.ANON_BURST_WINDOW_S))
 
 
@@ -189,7 +189,7 @@ def test_the_global_daily_cap_catches_a_thousand_addresses(env, monkeypatch):
         assert ask(ip=f"203.0.113.{i}").status_code == 200
     r = ask(ip="203.0.113.200")
     assert r.status_code == 429 and r.json()["limit"] == "global_day"
-    assert "vadim@motresres.com" in r.json()["reply"]
+    assert "support@aerostator.com" in r.json()["reply"]
 
 
 def test_a_refusal_costs_nothing(env, monkeypatch):
@@ -296,7 +296,7 @@ def test_the_visitor_note_is_injected_only_for_a_visitor(recorded, env):
 def test_the_visitor_note_says_what_a_visitor_needs(env):
     note = support.VISITOR_NOTE
     assert "Request access" in note
-    assert "vadim@motresres.com" in note
+    assert "support@aerostator.com" in note
     assert "invitation" in note.lower()
     for forbidden in ("customer machine", "catalog's contents"):
         assert forbidden in note, "the note must forbid internal data explicitly"
@@ -312,7 +312,7 @@ def test_the_prompt_no_longer_sells_a_plan():
     for stale in ("$19", "$99", "Pro (", "Team (", "up to 3 designs",
                   "My designs", "for free", "Free —"):
         assert stale not in p, f"the stale plan text is back: {stale!r}"
-    assert "vadim@motresres.com" in p
+    assert "support@aerostator.com" in p
     assert "invitation" in p.lower()
     assert "Request access" in p
 
@@ -401,10 +401,10 @@ def test_a_failed_call_never_sends_anyone_to_a_tab_that_does_not_exist(env, monk
     monkeypatch.setattr(support, "_gemini_reply", exhausted)
     visitor = ask().json()
     assert visitor["source"] == "error"
-    assert "vadim@motresres.com" in visitor["reply"]
+    assert "support@aerostator.com" in visitor["reply"]
     assert "Report" not in visitor["reply"]
     signed_in = ask(headers=env["client"]).json()
-    assert "vadim@motresres.com" in signed_in["reply"]
+    assert "support@aerostator.com" in signed_in["reply"]
     assert "Report" not in signed_in["reply"]
 
 

@@ -9,7 +9,7 @@
   "send": "发送消息",
   "thinking": "正在思考…",
   "demo": "演示模式：此服务器尚未配置 AI 助手。",
-  "failed": "抱歉，我暂时无法回答。请稍后重试，或写信给 vadim@motresres.com。",
+  "failed": "抱歉，我暂时无法回答。请稍后重试，或写信给 support@aerostator.com。",
   "draft": {
     "heading": "给团队的工单",
     "ready": "我已准备好一张工单。请检查并按需修改，然后点击发送。",

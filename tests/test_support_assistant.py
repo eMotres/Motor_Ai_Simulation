@@ -444,7 +444,7 @@ def test_the_configure_section_has_no_stale_controls():
 
 def test_the_prompts_keep_the_commercial_rules():
     for p in (P.USER_PROMPT, P.STAFF_PROMPT):
-        assert "vadim@motresres.com" in p and "invitation" in p.lower()
+        assert "support@aerostator.com" in p and "invitation" in p.lower()
         assert "NEVER name a price" in p and "Never invent a price" in p
         assert "SAME language" in p
         assert "Never discuss how this assistant itself is built" in p

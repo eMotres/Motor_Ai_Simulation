@@ -76,9 +76,9 @@
       "role": "user",
       "question": "My colleague can open the LARGE28 motors but I cannot see them. How do I get access?",
       "context": {"tab": "motors", "tabLabel": "Motors"},
-      "canned": "Access is granted per account by the team. I have prepared a request, check it and press **Send**, or write to vadim@motresres.com.\n[[TICKET_DRAFT {\"type\": \"account\", \"title\": \"Grant access to the LARGE28 motors\", \"description\": \"The user cannot see the LARGE28 motors in the Motors tab, a colleague can. Please grant this account the same motors.\"}]]",
+      "canned": "Access is granted per account by the team. I have prepared a request, check it and press **Send**, or write to support@aerostator.com.\n[[TICKET_DRAFT {\"type\": \"account\", \"title\": \"Grant access to the LARGE28 motors\", \"description\": \"The user cannot see the LARGE28 motors in the Motors tab, a colleague can. Please grant this account the same motors.\"}]]",
       "draft": {"type": "account", "title_contains": "LARGE28"},
-      "must_contain_any": ["vadim@motresres.com"],
+      "must_contain_any": ["support@aerostator.com"],
       "must_contain_all": []
     },
     {

@@ -146,6 +146,9 @@ def env(request, tmp_path, monkeypatch):
         monkeypatch.setenv("SHARED_ROOT", str(shared))
         monkeypatch.setenv("PUBLISHED_ROOT", str(published))
         monkeypatch.delitem(fam.__dict__, "_DIES_DIR", raising=False)
+        # (the per-call resolvers must not be pinned by an earlier flat test: delete the module-dict overrides)
+        monkeypatch.delitem(cat.__dict__, "_CATALOG_PATH", raising=False)
+        monkeypatch.delitem(pre.__dict__, "_PRESETS_PATH", raising=False)
         monkeypatch.setattr("motor_ai_sim.config.DEFAULT_CONFIG_PATH", str(tmp_path / "identity" / "motor_config.yaml"))
         (tmp_path / "identity").mkdir(exist_ok=True)
         dies_dir = shared / "dies"
@@ -154,9 +157,9 @@ def env(request, tmp_path, monkeypatch):
         dies_dir.mkdir()
         _write_catalog(dies_dir)
         monkeypatch.setattr(fam, "_DIES_DIR", dies_dir)
-        monkeypatch.setattr(cat, "_CATALOG_PATH", tmp_path / "motor_catalog.json", raising=False)
+        monkeypatch.setitem(cat.__dict__, "_CATALOG_PATH", tmp_path / "motor_catalog.json")
         (tmp_path / "motor_catalog.json").write_text(json.dumps(_cards()), encoding="utf-8")
-        monkeypatch.setattr(pre, "_PRESETS_PATH", tmp_path / "motor_presets.json", raising=False)
+        monkeypatch.setitem(pre.__dict__, "_PRESETS_PATH", tmp_path / "motor_presets.json")
         (tmp_path / "motor_presets.json").write_text(json.dumps(_presets()), encoding="utf-8")
     cat._REF_CACHE.update({"key": None, "cards": []})
 

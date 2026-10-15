@@ -404,6 +404,18 @@ def may_see_config(access: dict, die: str, cfg: Optional[str]) -> bool:
     return config_grant_key(str(die), str(cfg)) in (access.get("configs") or frozenset())
 
 
+def config_allowed(access: dict, die: str, cfg: Optional[str]) -> bool:
+    """The CONFIGURATION half of :func:`may_see_config` alone (admin / public / granted),
+    for a caller that has settled the die question itself - the published (community)
+    layer is open to every registered account, so ``may_see_die`` would be the wrong
+    question there."""
+    if not cfg or access.get("is_admin"):
+        return True
+    if config_visibility(die, cfg) != CFG_PRIVATE:
+        return True
+    return config_grant_key(str(die), str(cfg)) in (access.get("configs") or frozenset())
+
+
 def may_see_config_file(access: dict, die: str, cfg: str, path) -> bool:
     """:func:`may_see_config` for a caller that already holds the file ``path``
     (the tree walks every file once; no second resolution per row)."""
@@ -549,7 +561,8 @@ def _config_path_check(request) -> None:
         return
     from fastapi import HTTPException
     acc = catalog_access(request.headers.get("authorization"))
-    if may_see_config(acc, str(die), str(cfg)):
+    # (the die question belongs to the route: a published die is open to every registered account)
+    if config_allowed(acc, str(die), str(cfg)):
         return
     if path.startswith("/api/family/config/"):
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")

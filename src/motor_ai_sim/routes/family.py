@@ -38,7 +38,7 @@ from motor_ai_sim.workspace import layering as _ws_layering
 from motor_ai_sim.workspace import resolve_die_dir as _ws_resolve_die_dir
 from motor_ai_sim.workspace import root as _ws_root_f
 from motor_ai_sim.motor_access import (MODE_ANONYMOUS, MODE_GRANTED,
-                                       catalog_access, may_see_config,
+                                       catalog_access, config_allowed, may_see_config,
                                        may_see_config_file, may_see_die)
 
 log = logging.getLogger(__name__)
@@ -619,7 +619,7 @@ def _require_config_visible(acc: dict, die: str, cfg: Optional[str],
                             style: str = "file") -> None:
     """404 unless the caller may see configuration ``cfg`` of ``die``
     (``motor_access.may_see_config``) — indistinguishable from a missing one."""
-    if cfg and not may_see_config(acc, str(die), str(cfg)):
+    if cfg and not config_allowed(acc, str(die), str(cfg)):
         raise HTTPException(404, detail=_config_missing_detail(die, cfg, style))
 
 
@@ -4653,7 +4653,7 @@ def get_part_materials(die: str, config: Optional[str] = None, authorization: st
         cfg = names[0]
     out: dict = {"die": die, "config": cfg, "can_write": _can_write_catalog(who)}
     try:
-        if config and not may_see_config(who, die, cfg):
+        if config and not config_allowed(who, die, cfg):
             # a PRIVATE configuration reads exactly like a missing one
             raise _mm.MotorMassError(f"configuration {cfg!r} of die {die!r} not found")
         out.update(_mm.full_part_list(die, cfg, dies_dir=ddir.parent))
@@ -5725,7 +5725,7 @@ def configuration_history(die: str, config: Optional[str] = None,
     timestamp."""
     acc = _require_die_access(die, authorization)
     is_die = config is None
-    if config and not may_see_config(acc, die, config):
+    if config and not config_allowed(acc, die, config):
         # a PRIVATE configuration has no history the caller can see: the answer
         # a configuration that never existed gets
         return {"die": die, "config": config, "file": f"{config}.yaml", "snapshots": []}
@@ -5774,7 +5774,7 @@ def configuration_history_restore(req: HistoryRestore,
     hdir = _hist_dir(req.die)
     cand = (sorted(hdir.glob("%s.%s*.yaml" % (stem, req.stamp)))
             if hdir.is_dir() else [])
-    if req.config and not may_see_config(acc, req.die, req.config):
+    if req.config and not config_allowed(acc, req.die, req.config):
         cand = []          # a PRIVATE configuration has no snapshot the caller can restore
     if len(cand) != 1:
         raise HTTPException(404, detail="no such snapshot: %s at %s (%d match)"

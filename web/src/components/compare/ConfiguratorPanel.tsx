@@ -1195,6 +1195,12 @@ const ConfiguratorPanel: React.FC = () => {
     });
     return () => { dead = true; };
   }, [propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
+  // no visible line (owner 2026-10-15): the board cooling class the server decided, and why, ride in the
+  // tooltip of the S1 controller control
+  const s1Cool = s1?.drive?.board_cooling;
+  const s1CtrlTitle = s1Cool
+    ? `${tx('configurePropeller.s1CtrlTip')} ${tx('configurePropeller.s1BoardCooling')}: ${tx(s1BoardCoolingKey(s1Cool))}. ${s1?.drive?.board_cooling_basis ?? ''}`.trim()
+    : tx('configurePropeller.s1CtrlTip');
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
   const s1Text: { text: string; tip: string } | null = (() => {
@@ -1234,6 +1240,15 @@ const ConfiguratorPanel: React.FC = () => {
         ...s1Info.flagKeys.map((k) => tx(k))].join(' '),
     };
   })();
+  // no visible S1 line (owner 2026-10-15): the continuous-limit sentence and its tip ride in the
+  // tooltip of the propeller label / select
+  const s1Tail = s1Text ? `
+${s1Text.text}
+${s1Text.tip}` : '';
+  const propTip = tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip') + s1Tail;
+  const propSelTip = (propSummary && propSummary.power_data === 'estimated'
+    ? tx('configurePropeller.estimatedTip')
+    : tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip')) + s1Tail;
   /** the torque of the passport at a current — every other knob as given */
   const torqueAtI = (k: Knobs) => (I: number) => scaleMotor(p, { ...k, I_A: I }, ref.poles).T_Nm;
   const propLoadRes = useMemo(
@@ -1900,12 +1915,12 @@ const ConfiguratorPanel: React.FC = () => {
               )}
               {(cooled || optionalPropellerCooling) && (
                 <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, mt: 0.5, flexWrap: 'nowrap', minHeight: 28 }}>
-                {cooled && <Typography sx={{ ...LABEL, flex: '0 0 auto', opacity: propLoad ? 1 : 0.85 }} title={tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip')}>{tx('configurePropeller.title')}</Typography>}
+                {cooled && <Typography sx={{ ...LABEL, flex: '0 0 auto', opacity: propLoad ? 1 : 0.85 }} title={propTip}>{tx('configurePropeller.title')}</Typography>}
                 {cooled && (
                 <select value={propId ?? ''} aria-label={tx('configurePropeller.title')}
                   disabled={!propLoad}
                   onChange={(e) => updateCool({ propId: e.target.value })}
-                  title={propSummary && propSummary.power_data === 'estimated' ? tx('configurePropeller.estimatedTip') : tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip')}
+                  title={propSelTip}
                   style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260, opacity: !propLoad ? 0.5 : 1, cursor: !propLoad ? 'not-allowed' : 'pointer' }}>
                   {!allowedProps.length && <option value="" style={{ color: '#000' }}>…</option>}
                   {allowedProps.map((x) => (
@@ -1926,8 +1941,8 @@ const ConfiguratorPanel: React.FC = () => {
               )}
               {cooled && propellerCoolingActive && (
                 <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mt: 0.5, flexWrap: 'wrap', minHeight: 24 }}>
-                  <Typography sx={{ ...LABEL, flex: '0 0 auto' }} title={tx('configurePropeller.s1CtrlTip')}>{tx('configurePropeller.s1Ctrl')}</Typography>
-                  <select value={s1Ctrl} aria-label={tx('configurePropeller.s1Ctrl')} title={tx('configurePropeller.s1CtrlTip')}
+                  <Typography sx={{ ...LABEL, flex: '0 0 auto', cursor: 'help' }} title={s1CtrlTitle}>{tx('configurePropeller.s1Ctrl')}</Typography>
+                  <select value={s1Ctrl} aria-label={tx('configurePropeller.s1Ctrl')} title={s1CtrlTitle}
                     onChange={(e) => setS1Ctrl(e.target.value === 'external' ? 'external' : 'drive')}
                     style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, padding: '1px 4px', flex: '0 1 auto', minWidth: 0 }}>
                     <option value="drive" style={{ color: '#000' }}>{tx('configurePropeller.s1CtrlDrive')}</option>
@@ -1944,12 +1959,6 @@ const ConfiguratorPanel: React.FC = () => {
                     <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>{tx('configurePropeller.s1EscBusUnit')}</Box>
                   </>)}
                   {s1Ctrl === 'drive' && (<>
-                    <Typography sx={{ ...LABEL, fontSize: 12, flex: '0 0 auto' }} title={tx('configurePropeller.s1BoardCoolingTip')}>{tx('configurePropeller.s1BoardCooling')}</Typography>
-                    {s1?.drive?.board_cooling && (
-                      <Box component="span" title={s1.drive.board_cooling_basis || tx('configurePropeller.s1BoardCoolingTip')}
-                        sx={{ fontSize: 12, color: 'var(--text-1)', flex: '0 1 auto', minWidth: 0, cursor: 'help' }}>
-                        {tx(s1BoardCoolingKey(s1.drive.board_cooling))}
-                      </Box>)}
                     {s1Builds.length > 1 && (<>
                       <Typography sx={{ ...LABEL, fontSize: 12, flex: '0 0 auto' }} title={tx('configurePropeller.s1BoardBuildTip')}>{tx('configurePropeller.s1BoardBuild')}</Typography>
                       <select value={s1Build} aria-label={tx('configurePropeller.s1BoardBuild')}
@@ -1961,11 +1970,6 @@ const ConfiguratorPanel: React.FC = () => {
                     </>)}
                   </>)}
                 </Box>
-              )}
-              {cooled && s1Text && (
-                <Typography title={s1Text.tip} sx={{ fontSize: 12, color: 'var(--text-2)', mt: 0.5, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', cursor: 'help' }}>
-                  {s1Text.text}
-                </Typography>
               )}
             </Box>
           )}

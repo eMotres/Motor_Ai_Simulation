@@ -177,7 +177,7 @@ t('every new S1 key exists in both locales', async () => {
   const keys = ['s1FlagSlipstreamBench', 's1FlagSlipstreamTransferred', 's1FlagEscExternal', 's1FlagEscLoss',
     's1Ctrl', 's1CtrlTip', 's1CtrlDrive', 's1EscExternal', 's1EscBus', 's1EscBusUnit', 's1EscBusTip',
     's1EscBusTipDefault', 's1TipEsc',
-    's1BoardCooling', 's1BoardCoolingTip', 's1CoolFavourable', 's1CoolSlipstream',
+    's1BoardCooling', 's1CoolFavourable', 's1CoolSlipstream',
     's1BoardBuild', 's1BoardBuildTip', 's1BuildX1', 's1BuildX2', 's1BuildX2Board2', 's1Estimate', 's1TipBoard'];
   for (const loc of ['en', 'zh-CN']) {
     const j = JSON.parse(readFileSync(join(here, '..', '..', 'locales', loc, 'controller.json'), 'utf8'));

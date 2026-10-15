@@ -609,7 +609,6 @@
     "s1EscBusTipDefault": "电调的连续母线（电池侧）电流，A。留空：{name}，{amps} A（{basis}）。",
     "s1TipEsc": "外部电调连续母线电流 {ibus} A；电池最低电压下的母线电流 {ibat} A。",
     "s1BoardCooling": "板卡散热",
-    "s1BoardCoolingTip": "驱动板卡的散热由机器本身决定，不可选择：位于螺旋桨滑流中（按各工作点的滑流风速计算限值 —— 估算值），否则采用护照额定该板卡限值时的通风等级。",
     "s1CoolFavourable": "额定通风（护照）",
     "s1CoolSlipstream": "螺旋桨滑流",
     "s1BoardBuild": "板卡构型",

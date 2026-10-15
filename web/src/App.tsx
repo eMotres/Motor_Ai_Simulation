@@ -84,6 +84,7 @@ import { useApiReady } from './contexts/AuthContext';
 import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
 import RefusedNotice from './components/common/RefusedNotice';
+import UnverifiedBar from './components/auth/UnverifiedBar';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { useServerLocale } from './i18n/persist';
 import { clearLiveDutyContext, invalidateLastMotorOperations, restoreLastMotor, setLastMotorState } from './lib/lastMotor';
@@ -653,6 +654,9 @@ function App() {
     <ThemeProvider theme={appTheme}>
       <CssBaseline />
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
+
+        {/* thin banner while the account's e-mail is not confirmed (it works; a short list of actions waits for the link) */}
+        <UnverifiedBar />
 
         {/* ── AppBar ── */}
         <AppBar

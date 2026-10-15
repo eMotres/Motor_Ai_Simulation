@@ -23,6 +23,8 @@ export interface SessionUser {
   name: string;
   picture?: string;
   role: string;
+  /** False for a password account whose e-mail is not confirmed yet (it works, with a short list of limits). */
+  email_verified?: boolean;
 }
 
 export function getStoredToken(): string | null {

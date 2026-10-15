@@ -5,6 +5,7 @@
 // Scoped strictly to the backend API base, so Firebase SDK / third-party calls
 // are never touched. No-op when signed out (free endpoints stay anonymous).
 import { refusalReasonKey } from './accessUi';
+import { UNVERIFIED_EVENT, unverifiedRefusal } from './unverified';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
@@ -131,6 +132,8 @@ export function installFetchAuth(): void {
         void res.clone().json().then((b) => {
           const key = refusalReasonKey(res.status, b);
           if (key) window.dispatchEvent(new CustomEvent('api-refused', { detail: { key } }));
+          const unv = unverifiedRefusal(res.status, b);
+          if (unv) window.dispatchEvent(new CustomEvent(UNVERIFIED_EVENT, { detail: unv }));
         }).catch(() => { /* not JSON */ });
       }
     } catch { /* a notice must never break a request */ }

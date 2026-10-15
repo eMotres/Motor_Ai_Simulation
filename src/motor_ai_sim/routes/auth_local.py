@@ -600,6 +600,8 @@ def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)
         raise HTTPException(404, detail=f"user '{email}' not found")
     except U.RoleProtected as e:
         raise HTTPException(409, detail=str(e))
+    except U.EmailUnverified as e:
+        raise ApiError(409, "email_unverified", str(e), {"email": U._norm(email), "gate": "role"})
     except ValueError as e:
         raise HTTPException(422, detail=str(e))
 

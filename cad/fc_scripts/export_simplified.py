@@ -10,8 +10,8 @@ Writes into FC_OUT_DIR (under temporary names first, moved only after every chec
 
 The simplified model (owner 2026-10-15; patent hygiene in motor_templates/segmented_flatwire/simplified.py): stator + rotor + magnets are ONE
 monolithic solid (outer envelope, rotor bore with keys, end faces exactly; everything inside filled), every coil is ONE thick turn, every
-bearing ONE solid ring d x D x B; shaft / carrier, holders (outer shape, mounting holes), rings, Prop_fix, screws, the phase board outline
-and its terminals stay as built.  The model is opened, recomputed and must pass health.gate(); simplified.check() refuses the files when
+bearing ONE solid ring d x D x B; shaft / carrier, holders (outer shape, mounting holes), rings, Prop_fix, screws stay as built; the phase board is ONE plain piece (its outline
+extruded to the board thickness, with its through holes: no pins, components, copper, pads; the terminal positions go into the JSON).  The model is opened, recomputed and must pass health.gate(); simplified.check() refuses the files when
 internal detail would be left.
 """
 import json, math, os, sys, traceback
@@ -31,9 +31,9 @@ VOL_TOL = 0.03
 ANG = 0.3
 EXPLODE = {"Monolith": 0.0, "Coils": -0.35, "Shaft": 2.2, "Ring_back": -0.7, "Holder_back": -1.15, "Bearings_back": -1.55,
            "PhaseBoard": -2.2, "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
-BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask"), "PhaseBoard_pins": palette.rgb("pcb_pins")}
+BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask")}
 ORDER = ["Monolith", "Coils", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back", "Ring_front",
-         "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_pins"]
+         "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4"]
 
 
 def r6(v):
@@ -63,17 +63,18 @@ def tessellate(shape, tol):
     return patches, vol
 
 
-def board_solids(doc):
-    """The phase board as the simplified model keeps it: the plate board (ring + lead sleeves) whole; an imported board as its body and pins."""
+def board_parts(doc):
+    """The phase board's raw parts: dict(body, pins, thickness_solids) - the plate board (ring plate with its lead slots; the lead sleeves
+    are its "pins"), or an imported board (the FR4 body, the pins; mask / copper / walls only count for the thickness) - or None."""
     if not electronics.has_board(doc):
-        return []
+        return None
     bs = electronics.board_shape(doc)
     if electronics.is_plate(doc):
-        return [("PhaseBoard_FR4", s) for s in bs.Solids[:1]] + [("PhaseBoard_pins", s) for s in bs.Solids[1:]]
+        plate, sleeves = bs.Solids[0], list(bs.Solids[1:])
+        return dict(body=plate, pins=sleeves, thickness_solids=[plate])
     pins = electronics.pins(bs)
     rest = [s for s in bs.Solids if all(not s.isSame(p) for p in pins)]
-    body = max(rest, key=lambda s: s.Volume)
-    return [("PhaseBoard_FR4", body)] + [("PhaseBoard_pins", p) for p in pins]
+    return dict(body=max(rest, key=lambda s: s.Volume), pins=list(pins), thickness_solids=rest)
 
 
 def pick(g, sh, names):
@@ -107,7 +108,7 @@ def main():
     coil_base = src.getObject("Coil").Shape.copy()
     ncoil = int(round(g("coil_count"))) if ps.has_param(sh, "coil_count") else len([o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids)
     mech = mechanics.solids(src)
-    board = board_solids(src)
+    braw = board_parts(src)
 
     monolith, rep = S.build_monolith(core, rotor, mags, g("stator_up_r"), g("rotor_up_r"))
     ytop = g("stator_up_r") - g("core_thickness") - g("insulation_thickness") - g("wire_spacing_y") / 2
@@ -129,7 +130,8 @@ def main():
         outer = mech.get("Bearing_618_8_%s_outer_ring" % side)
         if outer is not None:
             keep["Bearing_%s" % side] = S.bearing_ring(outer, g("bearing_d"))
-    bad = S.check(monolith, rep, coil_blocks)
+    board, brep = S.board_plate(braw["body"], braw["thickness_solids"]) if braw else (None, None)
+    bad = S.check(monolith, rep, coil_blocks, board, brep)
     for name, s in keep.items():
         if not s.isValid() or len(s.Solids) != 1:
             bad.append("%s is not one valid solid" % name)
@@ -140,7 +142,7 @@ def main():
         return finish(False, "simplified model refused - internal detail would be left: " + " | ".join(bad[:6]), checks=bad)
 
     # ---- JSON: envelope, mounting interface, terminals ----------------------------------------------------------
-    allsol = [monolith] + coil_blocks + list(keep.values()) + [s for _, s in board]
+    allsol = [monolith] + coil_blocks + list(keep.values()) + ([board] if board is not None else [])
     bb = [min(getattr(s.BoundBox, a + "Min") for s in allsol) for a in "XYZ"] + [max(getattr(s.BoundBox, a + "Max") for s in allsol) for a in "XYZ"]
     mounting = dict(
         stator=dict(outer_diameter=r6(2 * g("stator_up_r")), z=[r6(core.BoundBox.ZMin), r6(core.BoundBox.ZMax)]),
@@ -158,20 +160,20 @@ def main():
         for k in ("Shaft", "Shaft_rear"):
             if k in keep:
                 mounting["shaft"][k + "_z"] = [r6(keep[k].BoundBox.ZMin), r6(keep[k].BoundBox.ZMax)]
-    pins = [s for n, s in board if n == "PhaseBoard_pins"]
     boardinfo = None
-    if board:
-        bsh = Part.makeCompound([s for _, s in board])
-        boardinfo = dict(outline_bbox=[r6(bsh.BoundBox.XMin), r6(bsh.BoundBox.YMin), r6(bsh.BoundBox.ZMin), r6(bsh.BoundBox.XMax), r6(bsh.BoundBox.YMax), r6(bsh.BoundBox.ZMax)],
-                         terminals=[[r6(p.BoundBox.Center.x), r6(p.BoundBox.Center.y), r6(p.BoundBox.ZMax)] for p in pins],
-                         kind="plate with lead sleeves" if electronics.is_plate(src) else "board body and phase pins",
+    if braw:
+        bb_ = board.BoundBox
+        boardinfo = dict(outline_bbox=[r6(bb_.XMin), r6(bb_.YMin), r6(bb_.ZMin), r6(bb_.XMax), r6(bb_.YMax), r6(bb_.ZMax)],
+                         thickness=r6(brep["z"][1] - brep["z"][0]), through_holes=brep["holes"],
+                         terminals=[[r6(p.BoundBox.Center.x), r6(p.BoundBox.Center.y), r6(p.BoundBox.ZMax)] for p in braw["pins"]],
+                         kind="one plain piece: outline extruded to the board thickness with its through holes (no pins, components, copper, pads)",
                          **pick(g, sh, ("board_outer_r", "board_inner_r", "board_top_z", "board_bottom_z", "phase_board_z")))
     info = dict(schema="motres-cad-simplified/1", motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"),
                 cad_variant="frameless" if kit else "full", kind="SIMPLIFIED - envelope only",
                 units="mm", frame="+Z = motor axis (+z = propeller / front side), origin at the axial centre of the stator stack",
                 envelope=dict(bbox=[r6(x) for x in bb], size=[r6(bb[3] - bb[0]), r6(bb[4] - bb[1]), r6(bb[5] - bb[2])]),
                 mounting=mounting, board=boardinfo,
-                solids=dict(monolith=1, coils=len(coil_blocks), mechanics=len(keep), board=len(board)),
+                solids=dict(monolith=1, coils=len(coil_blocks), mechanics=len(keep), board=1 if board is not None else 0),
                 monolith=dict(volume_mm3=r6(monolith.Volume), faces=len(monolith.Faces)), mass=None,
                 note="Envelope model for integration: stator, rotor and magnets are one filled solid, every coil is one thick turn, every "
                      "bearing one ring. The coil blocks lie inside the filled slots (the solids overlap by design). It carries no "
@@ -198,10 +200,8 @@ def main():
     wg = part(part(root, "Winding"), "Coils")
     for i, s in enumerate(coil_blocks):
         solid(wg, "Coil_%d" % (i + 1), s)
-    if board:
-        ep = part(root, "Electronics")
-        for i, (n, s) in enumerate(board):
-            solid(ep, "PhaseBoard_%03d" % (i + 1), s)
+    if board is not None:
+        solid(part(root, "Electronics"), "PhaseBoard", board)
     if keep:
         mp = part(root, "Mechanics")
         subs = {}
@@ -222,8 +222,8 @@ def main():
     rows = [o for o in chk.Objects if o.TypeId == "Part::Feature" and not o.Shape.isNull() and o.Shape.Solids]
     n_back, vol_back = len(rows), sum(o.Shape.Volume for o in rows)
     App.closeDocument(chk.Name)
-    exp_n = 1 + len(coil_blocks) + len(board) + len(keep)
-    exp_v = monolith.Volume + sum(s.Volume for s in coil_blocks) + sum(s.Volume for _, s in board) + sum(s.Volume for s in keep.values())
+    exp_n = 1 + len(coil_blocks) + (1 if board is not None else 0) + len(keep)
+    exp_v = monolith.Volume + sum(s.Volume for s in coil_blocks) + (board.Volume if board is not None else 0.0) + sum(s.Volume for s in keep.values())
     step_ok = n_back == exp_n and abs(vol_back - exp_v) < 1e-6 * exp_v + 1e-3
 
     # ---- GLB ----------------------------------------------------------------------------------------------------
@@ -261,8 +261,8 @@ def main():
             add(name, name, s, view.COLORS["Prop_fix"])
         elif name.startswith("Screw_"):
             add("Screws", name, s, view.COLORS["Screw"])
-    for i, (n, s) in enumerate(board):
-        add(n, "%s_%03d" % (n, i + 1), s, BOARD_COLOURS[n], family="PhaseBoard")
+    if board is not None:
+        add("PhaseBoard_FR4", "PhaseBoard", board, BOARD_COLOURS["PhaseBoard_FR4"], family="PhaseBoard")
     asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), cad_variant=info["cad_variant"],
                  kind="SIMPLIFIED - envelope only", tessellation_mm=round(tol, 4))
     glb, st = G.build_glb([groups[n] for n in ORDER if n in groups], asset)

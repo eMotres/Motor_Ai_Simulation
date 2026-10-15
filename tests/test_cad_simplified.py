@@ -73,6 +73,27 @@ def test_a_coil_is_one_thick_turn_from_the_bottom_turn_to_the_top(synthetic):
     assert r["block_volume"] > r["turns_volume"]                                   # the gaps between the turns are filled
 
 
+def test_the_pcb_is_one_plain_piece_with_holes_and_nothing_else(synthetic):
+    r = synthetic
+    assert r["board_bad"] == [] and r["bad"] == []                                   # the export gate passes with the board in it
+    assert r["board_solids"] == 1 and r["board_shells"] == 1                         # one piece: no pins, copper layers, silkscreen, body
+    assert set(r["board_types"]) <= {"Plane", "Cylinder"}
+    assert r["board_cyl"] == 5 and r["board_holes"] == 5                             # 3 holes, the window and the D-shaped hole stay through holes ...
+    assert r["board_faces_in"] > 1000 and r["board_faces"] <= 40                      # ... but the window / D hole drawn as ~1100 short lines become ONE arc each
+    assert r["board_z"] == [pytest.approx(0.0), pytest.approx(1.6)]                  # the whole board thickness (body + copper), not the body only
+    assert r["board_bbox"][2] == pytest.approx(1.6)
+    assert r["board_faces"] == 2 + 8 + (3 + 1 + 2)                                  # two sides + 8 outline edges (4 sides and the notch) + 3 holes, the window, the D (arc + chord)
+    assert r["board_volume"] == pytest.approx(r["board_area"] * 1.6, rel=1e-6)       # net outline area x thickness: no pad, no trace, no relief
+    assert r["board_area"] == pytest.approx(40 * 40 - 10 * 3 - 3.141592653589793 * (3 * 1.1 ** 2 + 8 ** 2 + 3 ** 2 / 2), rel=1e-5)   # notch 10 x 3 inside the board
+
+
+def test_the_hygiene_gate_refuses_a_board_with_pins_or_curved_extras(synthetic):
+    r = synthetic
+    assert r["board_bad_pin"] and any("solids" in b for b in r["board_bad_pin"])         # board + pin = two solids
+    assert r["board_bad_sphere"] and any("Sphere" in b for b in r["board_bad_sphere"])   # only planes and cylinders
+    assert r["board_bad_whole"]                                                          # body + copper + pin + silkscreen fused: not a plain piece
+
+
 # -- the build wiring ------------------------------------------------------------------------------------------------------------
 
 def test_the_build_writes_the_simplified_files_for_every_config_and_lists_them():
@@ -102,8 +123,9 @@ def test_the_total_mass_goes_onto_the_metadata(tmp_path):
 def test_the_script_keeps_what_a_customer_integrates_and_drops_the_rest():
     s = (SCRIPTS / "export_simplified.py").read_text(encoding="utf-8")
     assert 'if name.startswith("Bearing_618_8_"):' in s and 'S.bearing_ring(outer, g("bearing_d"))' in s     # one ring per bearing
-    assert "PhaseBoard_pins" in s and "terminals" in s and "mounting" in s and "mass=None" in s
-    assert "S.check(monolith, rep, coil_blocks)" in s
+    assert "terminals" in s and "mounting" in s and "mass=None" in s
+    assert "S.board_plate(" in s and "PhaseBoard_pins" not in s                                       # the board is ONE piece: no pin group, no copper
+    assert "S.check(monolith, rep, coil_blocks, board, brep)" in s
     assert "simplified model refused" in s                                                           # a failed gate writes nothing
 
 

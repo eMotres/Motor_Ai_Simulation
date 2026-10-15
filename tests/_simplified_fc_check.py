@@ -43,10 +43,36 @@ coil = turns[0]
 for t in turns[1:]:
     coil = coil.fuse(t)
 
+# phase board: FR4 body with an outline notch, a window and 3 holes; copper layers on both sides, pins, a silkscreen-like sliver (all must vanish)
+def polygon_prism(points, z0, z1):
+    f = Part.Face(Part.makePolygon(points + [points[0]]))
+    f.translate(V(0, 0, z0 - 1))
+    return f.extrude(V(0, 0, z1 - z0 + 2))
+
+
+WINDOW = [V(8 * math.cos(2 * math.pi * k / 720), 8 * math.sin(2 * math.pi * k / 720), 0) for k in range(720)]      # a round window drawn as 720 lines
+HALF_DISC = [V(12 + 3 * math.cos(math.pi * k / 360), 12 + 3 * math.sin(math.pi * k / 360), 0) for k in range(361)]  # a D-shaped hole: 360 lines + a chord
+
+
+def pcb_cut(solid, z0, z1):
+    for (x, y, r) in ((-12, -12, 1.1), (12, -12, 1.1), (0, 14, 1.1)):
+        solid = solid.cut(Part.makeCylinder(r, z1 - z0 + 2, V(x, y, z0 - 1)))
+    solid = solid.cut(polygon_prism(WINDOW, z0, z1)).cut(polygon_prism(HALF_DISC, z0, z1))
+    return solid.cut(Part.makeBox(10, 6, z1 - z0 + 2, V(-5, 17, z0 - 1)))          # a notch open to the outline
+fr4 = pcb_cut(Part.makeBox(40, 40, 1.2, V(-20, -20, 0.2)), 0.2, 1.4)
+cu_top = pcb_cut(Part.makeBox(40, 40, 0.2, V(-20, -20, 1.4)), 1.4, 1.6)
+cu_bot = pcb_cut(Part.makeBox(40, 40, 0.2, V(-20, -20, 0.0)), 0.0, 0.2)
+pin = Part.makeCylinder(1.0, 6.0, V(12, -12, -4))
+silk = Part.makeBox(5, 1, 0.02, V(-3, 3, 1.6))
+board, brep = S.board_plate(fr4, [fr4, cu_top, cu_bot])      # the pins and the silkscreen are not part of the board thickness
+board_bad = S.check_board(board, brep)
+board_bad_pin = S.check_board(Part.makeCompound([board, pin]), brep)
+board_bad_sphere = S.check_board(Part.makeSphere(5), brep)
+board_bad_whole = S.check_board(fr4.fuse(cu_top).fuse(pin).fuse(silk), brep)
 mono, rep = S.build_monolith(stator, rotor, mags, RO, RR)
 block = S.coil_block(coil, ytop, wh, pitch, n)
 blocks = [block]
-bad = S.check(mono, rep, blocks)
+bad = S.check(mono, rep, blocks, board, brep)
 # the check must REFUSE the real, un-filled stator (slots, cut-outs) and a coil kept as separate turns
 bad_slotted = S.check(stator, dict(rep, stepped=False), blocks)
 bad_coil = S.check(mono, rep, [coil])
@@ -56,6 +82,11 @@ out = dict(bad=bad, bad_slotted=bad_slotted, bad_turns=bad_coil, mono_solids=len
            envelope_volume=math.pi * RO ** 2 * L - rep["bore_area_mm2"] * L, stator_faces=len(stator.Faces), rotor_faces=len(rotor.Faces),
            coil_faces=len(coil.Faces), block_faces=len(block.Faces), block_solids=len(block.Solids), block_volume=block.Volume,
            turns_volume=coil.Volume, block_bbox=[block.BoundBox.YMin, block.BoundBox.YMax],
-           mono_bbox=[mono.BoundBox.XMin, mono.BoundBox.XMax, mono.BoundBox.ZMin, mono.BoundBox.ZMax], stepped=rep["stepped"])
+           mono_bbox=[mono.BoundBox.XMin, mono.BoundBox.XMax, mono.BoundBox.ZMin, mono.BoundBox.ZMax], stepped=rep["stepped"],
+           board_bad=board_bad, board_bad_pin=board_bad_pin, board_bad_sphere=board_bad_sphere, board_bad_whole=board_bad_whole,
+           board_solids=len(board.Solids), board_shells=len(board.Shells), board_faces=len(board.Faces), board_volume=board.Volume,
+           board_types=sorted({f.Surface.__class__.__name__ for f in board.Faces}), board_cyl=sum(1 for f in board.Faces if f.Surface.__class__.__name__ == "Cylinder"), board_faces_in=len(fr4.Faces),
+           board_holes=brep["holes"], board_z=brep["z"], board_area=brep["area_mm2"], board_bbox=[board.BoundBox.XLength, board.BoundBox.YLength, board.BoundBox.ZLength],
+           board_parts_in=dict(fr4=len(fr4.Faces), cu_top=len(cu_top.Faces)))
 json.dump(out, open(os.environ["FC_REPORT"], "w"))
 finish(True, "synthetic simplified model built")

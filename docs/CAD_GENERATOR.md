@@ -486,15 +486,20 @@ What it is made of:
   included) plus the two terminal stubs where the first and the last turn leave it. No single turns, no wire. The blocks lie inside the filled slots:
   the solids overlap by design (an envelope model, not an assembly for interference checks).
 * **Every bearing = ONE ring** d x D x B (no balls, cage or seals).
-* **As built:** shaft or rotor carrier, stator holders (outer shape and mounting holes), glass-fibre rings, Prop_fix, screws (full variant); the phase board
-  outline with its terminals (a plate board whole; an imported board as its body and the pins - the copper layers are dropped). A frameless kit has
+* **The phase board = ONE plain solid piece with holes** (owner amendment 2026-10-15): the board outline extruded to the board thickness (body, mask and copper
+  together, not the pins), with its through holes - mounting holes, the holes the coil terminals pass through, windows, notches of the outline. No pins,
+  components, copper, pads, silkscreen, mask or imported board body (the terminal positions go into the JSON; the coil terminal stubs may still pass through the
+  holes). The outline and holes are the closed wires of the board body sliced at mid thickness.
+* **As built:** shaft or rotor carrier, stator holders (outer shape and mounting holes), glass-fibre rings, Prop_fix, screws (full variant). A frameless kit has
   the monolith, the coil blocks and the board only.
 
 **Patent hygiene.** The model must not disclose the AeroStator Core internals (slot / yoke topology, magnet pocket geometry, coil construction).
 `simplified.check()` is a gate the export runs before it writes anything: the monolith is one solid with one shell (an internal cavity would be a
 second shell), has at most 3 + (bore profile edges) faces, only planes and cylinders, no cylinder between the bore and the outer circle, a volume equal to the
-envelope volume within 1e-6; every coil block is one solid with at most 60 faces. Tests: `tests/test_cad_simplified.py` runs a synthetic slotted /
-pocketed motor through the real builders in FreeCAD and also proves that the gate refuses an un-filled stator and a coil of single turns.
+envelope volume within 1e-6; every coil block is one solid with at most 60 faces; the board (`simplified.check_board`) is one solid with one shell, planes and cylinders only, at most
+2 + (outline and hole edges) faces and a volume of net outline area x thickness. Tests: `tests/test_cad_simplified.py` runs a synthetic slotted /
+pocketed motor with a notched PCB (copper layers, pins, silkscreen) through the real builders in FreeCAD and proves that the gate refuses an un-filled stator,
+a coil of single turns, and a board with pins, a curved extra or fused components.
 
 **Access** (`routes/model3d.py`): `GET /api/model3d/<die>/<config>/simplified.step | .glb | .json` - any signed-in account that may see the motor
 (`motor_access.may_see_config`, so a hidden configuration is the same 404 as for the viewer); NO NDA and NO verification; anonymous 401. The STEP header is

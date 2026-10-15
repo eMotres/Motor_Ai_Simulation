@@ -734,7 +734,7 @@ def _s1_model_status(die: str, config: str) -> Dict[str, Dict[str, Any]]:
 
 
 def attach_status(doc: Dict[str, Any], die: Optional[str] = None, config: Optional[str] = None,
-                  duty: Optional[str] = None) -> Dict[str, Any]:
+                  duty: Optional[str] = None, visible: bool = True) -> Dict[str, Any]:
     """Fill ``node['status']`` from existing records.  Never computes; no record = ``unknown``."""
     want = {"die": die, "config": config, "duty": duty}
     doc["status_context"] = {k: v for k, v in want.items() if v} or None
@@ -743,7 +743,12 @@ def attach_status(doc: Dict[str, Any], die: Optional[str] = None, config: Option
         found.update(_history_status(want))
         found.update(_job_status(want))             # a job (running / finished / failed) is fresher than a stored result
     elif die and config:
-        found.update(_s1_model_status(die, config))
+        if visible:
+            found.update(_s1_model_status(die, config))
+        else:
+            # a configuration the caller may not see answers like a missing model
+            found.update({"model": {"state": "unknown",
+                                    "summary": f"no propeller S1 model for {die} {config}"[:160]}})
     for n in doc["nodes"]:
         st = found.get(n["id"])
         n["status"] = st if st else {"state": "unknown"}
@@ -773,7 +778,7 @@ def attach_status(doc: Dict[str, Any], die: Optional[str] = None, config: Option
 
 
 def build(view: str = "modules", die: Optional[str] = None, config: Optional[str] = None,
-          duty: Optional[str] = None) -> Dict[str, Any]:
+          duty: Optional[str] = None, visible: bool = True) -> Dict[str, Any]:
     if view == "modules":
         doc = build_modules_graph()
     elif view == "propeller_s1":
@@ -781,5 +786,5 @@ def build(view: str = "modules", die: Optional[str] = None, config: Optional[str
     else:
         raise ValueError(f"unknown view {view!r}; one of {VIEWS}")
     if die or config or duty:
-        attach_status(doc, die, config, duty)
+        attach_status(doc, die, config, duty, visible=visible)
     return doc

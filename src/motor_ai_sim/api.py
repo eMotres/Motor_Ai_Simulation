@@ -196,11 +196,18 @@ async def _lifespan(_app):
                 pass
 
 
+from fastapi import Depends as _Depends
+from motor_ai_sim.motor_access import config_path_gate as _config_path_gate
+
 app = FastAPI(
     title="Motor Geometry API",
     description="REST API for electric motor geometry parameters",
     version="0.1.0",
     lifespan=_lifespan,
+    # A PRIVATE configuration is a 404 on every route that names it in the path
+    # or the query (motor_access.config_path_gate) - the net under the per-route
+    # gates, so a route added later cannot forget the rule.
+    dependencies=[_Depends(_config_path_gate)],
 )
 
 import os as _os

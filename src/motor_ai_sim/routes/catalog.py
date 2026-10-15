@@ -239,7 +239,9 @@ def _grant_visible_cards(cards: list, authorization: Optional[str]) -> list:
     from motor_ai_sim import motor_access as _ma
     access = _ma.catalog_access(authorization)
     if access.get("mode") != _ma.MODE_GRANTED:
-        return cards
+        # not grant-filtered, but a card of a PRIVATE configuration still needs
+        # a config grant (admins keep everything)
+        return _ma.drop_private_config_cards(cards, access)
     from motor_ai_sim.routes.presets import _owner_of as _own
     me = _caller_identity(authorization).get("id")
     index = _machine_die_index()
@@ -250,7 +252,7 @@ def _grant_visible_cards(cards: list, authorization: Optional[str]) -> list:
             keep.append(m)
         elif die is None and (m.get("visibility") or "public") == "private"                 and _own(_backing_entry(m)) == me:
             keep.append(m)
-    return keep
+    return _ma.drop_private_config_cards(keep, access)
 
 
 #: Source metadata -> the passport-carrying cards across the effective catalogues.
@@ -391,13 +393,52 @@ def get_references(authorization: Optional[str] = Header(default=None)):
     return {"motors": out}
 
 
+def hidden_preset_view(authorization: Optional[str]) -> tuple:
+    """``(preset ids, casefolded names)`` of the presets that describe a PRIVATE
+    configuration the caller holds no grant for - found through the catalog cards
+    named ``"<die> <config>"`` and through a preset carrying that name itself.
+    ``(set(), set())`` for admins and when nothing is private (the common case:
+    one cached stat per configuration file)."""
+    from motor_ai_sim import motor_access as _ma
+    access = _ma.catalog_access(authorization)
+    if access.get("is_admin"):
+        return set(), set()
+    idx = _ma.private_config_index()
+    if not idx:
+        return set(), set()
+    granted = access.get("configs") or frozenset()
+    names = {n for n, hit in idx.items() if _ma.config_grant_key(*hit) not in granted}
+    if not names:
+        return set(), set()
+    ids: set = set()
+    paths = list(_reference_catalog_paths())
+    try:
+        paths.append(_read_path())
+    except Exception:                                           # noqa: BLE001
+        pass
+    for path in paths:
+        cat = _read_json(path, {"tiers": [], "diameters_mm": [], "motors": []})
+        for m in cat.get("motors", []):
+            if str(m.get("name") or "").strip().casefold() in names and m.get("preset"):
+                ids.add(str(m["preset"]))
+    return ids, names
+
+
+def _config_hidden_card(motor: dict, authorization: Optional[str]) -> bool:
+    """True when the card describes a PRIVATE configuration the caller holds no
+    grant for (motor_access.drop_private_config_cards) - such a card is, for
+    them, a card that does not exist."""
+    from motor_ai_sim import motor_access as _ma
+    return not _ma.drop_private_config_cards([motor], _ma.catalog_access(authorization))
+
+
 @router.post("/{motor_id}/load")
 def load_motor(motor_id: str,
                authorization: Optional[str] = Header(default=None)):
     """Load a catalog motor into the app by applying its underlying preset."""
     cat = _load()
     motor = next((m for m in cat.get("motors", []) if m.get("id") == motor_id), None)
-    if not motor:
+    if not motor or _config_hidden_card(motor, authorization):
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
     preset_id = motor.get("preset")
     if not preset_id:
@@ -425,7 +466,7 @@ def duplicate_motor(motor_id: str, body: Optional[dict] = None,
                             detail="sign in to duplicate a motor into your space")
     cat = _load()
     src = next((m for m in cat.get("motors", []) if m.get("id") == motor_id), None)
-    if not src:
+    if not src or _config_hidden_card(src, authorization):
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
     if (src.get("visibility") or "public") == "private":
         from motor_ai_sim.routes.presets import _owner_of as _own
@@ -862,11 +903,12 @@ def generate_motor_passport(motor_id: str, coarse: bool = False,
 
 
 @router.get("/{motor_id}/passport")
-def get_motor_passport(motor_id: str):
+def get_motor_passport(motor_id: str,
+                       authorization: Optional[str] = Header(default=None)):
     """Return a motor's stored passport (404 if it hasn't been generated yet)."""
     cat = _load()
     motor = next((m for m in cat.get("motors", []) if m.get("id") == motor_id), None)
-    if not motor:
+    if not motor or _config_hidden_card(motor, authorization):
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
     passport = motor.get("passport")
     if not passport:
@@ -900,9 +942,13 @@ def _die_docs_of(fam: Optional[dict]) -> tuple:
             except Exception:                                   # noqa: BLE001
                 dy = {}
             docs = []
+            from motor_ai_sim import motor_access as _ma
+            _acc = _ma.catalog_access(None)
             for f in sorted(d.glob("*.yaml")):
                 if f.name == "die.yaml":
                     continue
+                if not _ma.may_see_config_file(_acc, str(e.get("name") or die), f.stem, f):
+                    continue         # a PRIVATE sibling configuration is not part of this die for the caller
                 c = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
                 if isinstance(c, dict) and c.get("name"):
                     c.setdefault("die", die)

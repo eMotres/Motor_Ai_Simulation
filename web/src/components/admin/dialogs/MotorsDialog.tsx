@@ -8,7 +8,8 @@ import {
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../common/HelpTip';
 import { CardBadge } from '../../common/CardBadge';
-import { MotorPicker, useCatalog, type CatalogDie, type MotorGrants } from './MotorPicker';
+import { MotorPicker, ConfigGrantPicker, useCatalog, type CatalogDie, type MotorGrants } from './MotorPicker';
+import { motorsPutBody } from '../configVisibility';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -36,6 +37,7 @@ const MotorsDialog: React.FC<{
   const [picked, setPicked] = useState<Set<string>>(new Set());
   const [defDie, setDefDie] = useState('');
   const [defCfg, setDefCfg] = useState('');
+  const [cfgGrants, setCfgGrants] = useState<Set<string>>(new Set());
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -46,6 +48,7 @@ const MotorsDialog: React.FC<{
     setPicked(new Set(user.motors?.dies ?? []));
     setDefDie(user.motors?.default?.die ?? '');
     setDefCfg(user.motors?.default?.config ?? '');
+    setCfgGrants(new Set(user.motors?.configs ?? []));
   }, [user]);
 
   const toggle = (name: string) => setPicked((s) => {
@@ -70,10 +73,10 @@ const MotorsDialog: React.FC<{
     try {
       const r = await fetch(`${API}/api/admin/users/${encodeURIComponent(user.email)}/motors`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          all, dies: [...picked],
-          default: defDie && defCfg ? { die: defDie, config: defCfg } : null,
-        }),
+        body: JSON.stringify(motorsPutBody({
+          all, dies: picked, configs: cfgGrants,
+          defaultMotor: defDie && defCfg ? { die: defDie, config: defCfg } : null,
+        })),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) { setErr(j.detail ?? `HTTP ${r.status}`); return; }
@@ -90,6 +93,7 @@ const MotorsDialog: React.FC<{
       </DialogTitle>
       <DialogContent sx={{ pt: '8px !important' }}>
         <MotorPicker dies={dies} all={all} picked={picked} onAll={setAll} onToggle={toggle} />
+        <ConfigGrantPicker dies={dies} granted={cfgGrants} onChange={setCfgGrants} />
 
         <Box sx={{ mt: 2.5, display: 'flex', alignItems: 'center', gap: 0.75 }}>
           <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>

@@ -523,6 +523,9 @@ def get(die: str, cfg: str) -> Dict[str, Dict[str, Any]]:
     have not re-solved still show the author's.
     """
     try:
+        from motor_ai_sim.motor_access import hidden_for_request
+        if hidden_for_request(str(die), str(cfg)):
+            return {}      # a PRIVATE configuration the caller has no grant for
         out: Dict[str, Dict[str, Any]] = {}
         for p in _fallback_stores(die):
             out.update(_node(_read_store(p), die, cfg))

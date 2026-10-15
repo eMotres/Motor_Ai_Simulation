@@ -57,6 +57,7 @@ class Entry:
     card: ComponentCard
     die: Optional[str] = None                                  # catalogue die a motor card belongs to (access control)
     flags: List[str] = field(default_factory=list)            # "placeholder": numbers the stores do not hold
+    config: Optional[str] = None                               # configuration of that die (a PRIVATE one is hidden: motor_access.may_see_config)
 
 
 @dataclass
@@ -64,7 +65,8 @@ class ComponentLibrary:
     entries: Dict[str, Entry] = field(default_factory=dict)
     rejected: List[Dict[str, str]] = field(default_factory=list)
 
-    def add(self, card: ComponentCard, *, die: Optional[str] = None, flags: Optional[List[str]] = None) -> None:
+    def add(self, card: ComponentCard, *, die: Optional[str] = None, flags: Optional[List[str]] = None,
+            config: Optional[str] = None) -> None:
         try:
             assert_component_card(card)
         except AssertionError as exc:
@@ -73,7 +75,7 @@ class ComponentLibrary:
         if card.component_id in self.entries:
             self.rejected.append({"component_id": card.component_id, "reason": "duplicate component_id"})
             return
-        self.entries[card.component_id] = Entry(card, die, list(flags or []))
+        self.entries[card.component_id] = Entry(card, die, list(flags or []), config)
 
     def get(self, component_id: str) -> ComponentCard:
         return self.entries[component_id].card
@@ -156,17 +158,17 @@ def build_library() -> ComponentLibrary:
             try:
                 card = motor_card(m)
                 partial = "PARTIAL MASS" in card.mass_properties.basis       # no CAD bill of materials built yet
-                lib.add(card, die=die, flags=["mass_partial"] if partial else [])
+                lib.add(card, die=die, flags=["mass_partial"] if partial else [], config=cfg)
             except MotorMassError as exc:
                 # the die is not in this catalog: the mass is UNKNOWN (never a placeholder); the card is still listed
                 log.warning("motor %s %s listed without a mass: %s", die, cfg, exc)
-                lib.add(motor_card_from_s1_model(m), die=die, flags=["mass_unknown"])
+                lib.add(motor_card_from_s1_model(m), die=die, flags=["mass_unknown"], config=cfg)
         except Exception as exc:                                # noqa: BLE001
             lib.rejected.append({"component_id": f"motor {die} {cfg}", "reason": str(exc)})
         try:
             lib.add(controller_card_from_drive(
                 m, mass_kg=CONTROLLER_BOARD_MASS_KG,
-                mass_basis="PLACEHOLDER board mass (not measured)"), flags=["placeholder"])
+                mass_basis="PLACEHOLDER board mass (not measured)"), die=die, flags=["placeholder"], config=cfg)
         except Exception as exc:                                # noqa: BLE001
             lib.rejected.append({"component_id": f"controller {die} {cfg}", "reason": str(exc)})
         if m.get("battery"):
@@ -178,7 +180,7 @@ def build_library() -> ComponentLibrary:
                     mass_basis="PLACEHOLDER pack mass (not measured)",
                     placeholder_note="PLACEHOLDER: strings in parallel, capacity, discharge current and mass are "
                                      "example values for a 21700 high-drain NMC pack, not a real product.",
-                    **EXAMPLE_PACK), flags=["placeholder"])
+                    **EXAMPLE_PACK), die=die, flags=["placeholder"], config=cfg)
             except Exception as exc:                            # noqa: BLE001
                 lib.rejected.append({"component_id": f"battery {die} {cfg}", "reason": str(exc)})
     try:
@@ -236,7 +238,20 @@ class ComponentLibraryModule:
         """payload: ``{"id": ...}`` -> that ``ComponentCard``; ``{"kind": ...}`` or nothing -> the list of summaries."""
         p = payload or {}
         lib = get_library(bool(p.get("refresh")))
+        # Same visibility rule as GET /api/components (a machine's card follows
+        # the machine's die and configuration access) - this capability is also
+        # reachable through POST /api/kernel/run.  No caller (a script): all.
+        from motor_ai_sim import motor_access as _ma
+        acc = _ma.catalog_access(None) if _ma.request_is_bound() else None
+
+        def _vis(e: Entry) -> bool:
+            return acc is None or e.die is None or _ma.may_see_config(acc, e.die, e.config)
+
         if p.get("id"):
-            return lib.get(str(p["id"]))
+            e = lib.entries[str(p["id"])]          # KeyError = unknown, as before
+            if not _vis(e):
+                raise KeyError(str(p["id"]))
+            return e.card
         kind = p.get("kind")
-        return [summary(e) for e in lib.entries.values() if not kind or e.card.kind == kind]
+        return [summary(e) for e in lib.entries.values()
+                if (not kind or e.card.kind == kind) and _vis(e)]

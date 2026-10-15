@@ -761,9 +761,31 @@ def normalize_grants(raw) -> dict:
     all_motors = bool(raw.get("all"))
     default = _norm_default(raw.get("default"))
     out = {"all": all_motors, "dies": dies}
+    # CONFIGURATION grants (owner 2026-10-15): "<die>/<config>" entries that open
+    # a PRIVATE configuration of a die the account can already see.  Key present
+    # ONLY when an admin set one, so every pre-existing record round-trips
+    # byte-identical.
+    cfgs = normalize_config_grants(raw.get("configs"))
+    if cfgs:
+        out["configs"] = cfgs
     if _default_allowed(all_motors, dies, default):
         out["default"] = default
     return out
+
+
+def normalize_config_grants(raw) -> list:
+    """Any stored shape -> sorted unique ``["<die>/<config>", ...]``.  An entry
+    must name both parts; a malformed one is dropped (never guessed)."""
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    out = set()
+    for item in raw:
+        s = str(item or "").strip()
+        die, sep, cfg = s.rpartition("/")
+        die, cfg = die.strip(), cfg.strip()
+        if sep and die and cfg:
+            out.add(f"{die}/{cfg}")
+    return sorted(out)
 
 
 _BASELINE_DIE = "CIANO14 40 new"
@@ -821,7 +843,8 @@ _KEEP = object()
 
 
 def set_motor_grants(email: str, *, all_motors: bool,
-                     dies: Optional[list] = None, default=_KEEP) -> dict:
+                     dies: Optional[list] = None, default=_KEEP,
+                     configs=_KEEP) -> dict:
     """Replace an account's grants.  Written through the same atomic _save as
     every other registry change — never a second writer on users.json.
 
@@ -840,8 +863,11 @@ def set_motor_grants(email: str, *, all_motors: bool,
                                     if isinstance(users[email].get("motors"), dict) else None)
         else:
             default = _norm_default(default)
+        if configs is _KEEP:
+            configs = (users[email].get("motors") or {}).get("configs")                 if isinstance(users[email].get("motors"), dict) else None
         users[email]["motors"] = normalize_grants(
-            {"all": all_motors, "dies": list(dies or []), "default": default})
+            {"all": all_motors, "dies": list(dies or []), "default": default,
+             "configs": configs})
         _save(users)
     return get_stored_motor_grants(email)
 

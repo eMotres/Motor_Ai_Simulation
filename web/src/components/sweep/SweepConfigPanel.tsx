@@ -17,11 +17,15 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  Snackbar,
 } from '@mui/material';
+import { useTranslation } from 'react-i18next';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import UndoIcon      from '@mui/icons-material/Undo';
+import RedoIcon      from '@mui/icons-material/Redo';
 import { useMotorStore } from '../../stores/motorStore';
 import AutoOptimizePanel from './AutoOptimizePanel';
 import DescentPanel from './DescentPanel';
@@ -32,6 +36,24 @@ import HelpTip from '../common/HelpTip';
 import SectionLabel from '../common/SectionLabel';
 import { useDieContext } from '../common/useDieContext';
 import { dieDefiningSelected, dieKeyLabel } from '../../lib/releasedContext';
+import { nsT } from '../../i18n/nsT';
+import {
+  emptyHistory, record, undo as histUndo, redo as histRedo,
+  canUndo, canRedo, undoLabel, redoLabel, undoKeyAction,
+} from '../../lib/optVarsHistory';
+import type { History } from '../../lib/optVarsHistory';
+import {
+  bracketRange, identityScope, outOfRangeNames, reuseRemembered, isUsableRange,
+} from '../../lib/optVarRanges';
+import type { ParameterVariation } from '../../types/motor';
+
+const tx = nsT('simulation');
+
+// Undo history of the variables list, one per algorithm (each algorithm keeps
+// its own variable set).  Module-level so it survives a tab switch (the panel
+// re-mounts) but not a reload - in-memory by design.
+type AlgoKey = 'optimize' | 'sweep' | 'doe';
+const _optHist: Partial<Record<AlgoKey, History>> = {};
 
 // Non-geometry variables (selected outside the Geometry tab) need their own
 // display label/unit since they are absent from the geometry parameter schema.
@@ -60,6 +82,8 @@ interface SweepVarCardProps {
   label: string;
   unit?: string;
   optimize?: boolean;   // Optimize mode → "value + ± change" instead of min/max/step
+  /** Every edit goes through the panel so it lands in the undo history. */
+  onEdit: (patch: Partial<ParameterVariation>, kind: 'edit' | 'remove') => void;
 }
 
 // string-backed number field — a leading "-" (or "0." mid-typing) isn't clobbered
@@ -110,8 +134,8 @@ const useFeasBound = (paramName: string, geometry: any) => {
   return b;
 };
 
-const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, optimize }) => {
-  const { sweepConfig, updateVariation, geometry, parameterSchema } = useMotorStore();
+const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, optimize, onEdit }) => {
+  const { sweepConfig, geometry, parameterSchema } = useMotorStore();
   const feas = useFeasBound(paramName, geometry);
   // Phase current: the user works in PEAK amps, the backend (and every stored
   // range) speaks RMS — so the card offers the unit as a CHOICE and converts at
@@ -175,7 +199,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
               ))}
             </Box>
           )}
-          <IconButton size="small" onClick={() => updateVariation(paramName, { mode: 'fixed' })} sx={{ p: 0.25 }}>
+          <IconButton size="small" onClick={() => onEdit({ mode: 'fixed' }, 'remove')} sx={{ p: 0.25 }}>
             <CloseIcon sx={{ fontSize: 14 }} />
           </IconButton>
         </Box>
@@ -222,7 +246,7 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
             <RangeField label="± change" value={half}
               onChange={d => {
                 const a = Math.abs(d);
-                updateVariation(paramName, { min: snap(anchor - a) / kU, max: snap(anchor + a) / kU });
+                onEdit({ min: snap(anchor - a) / kU, max: snap(anchor + a) / kU }, 'edit');
               }} />
             <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', flexShrink: 0 }}>
               → {fmt(anchor - half)} … {fmt(anchor + half)}{unitShown ? ` ${unitShown}` : ''}
@@ -230,9 +254,9 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, opt
           </Box>
         ) : (
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
-            <RangeField label="min"  value={snap(Number(v.min) * kU)}  onChange={n => updateVariation(paramName, { min: n / kU })} />
-            <RangeField label="max"  value={snap(Number(v.max) * kU)}  onChange={n => updateVariation(paramName, { max: n / kU })} />
-            <RangeField label="step" value={snap(Number(v.step) * kU)} onChange={n => updateVariation(paramName, { step: n / kU })} />
+            <RangeField label="min"  value={snap(Number(v.min) * kU)}  onChange={n => onEdit({ min: n / kU }, 'edit')} />
+            <RangeField label="max"  value={snap(Number(v.max) * kU)}  onChange={n => onEdit({ max: n / kU }, 'edit')} />
+            <RangeField label="step" value={snap(Number(v.step) * kU)} onChange={n => onEdit({ step: n / kU }, 'edit')} />
           </Box>
         )}
       </CardContent>
@@ -293,14 +317,21 @@ const SweepConfigPanel: React.FC = () => {
   const dieHits = dieCtx.active
     ? dieDefiningSelected(sweepEntries.map(([n]) => n), dieCtx.dieKeys) : [];
 
+  // Algorithm sub-menu state (declared here: the undo history is per algorithm)
+  const [algoTab, setAlgoTab] = useState<'optimize' | 'sweep' | 'doe'>(() => {
+    try { const t = localStorage.getItem('opt.algoTab'); return (t === 'sweep' || t === 'doe') ? t : 'optimize'; }
+    catch { return 'optimize'; }
+  });
+
   // ── Add-variable dropdown: make the tab self-contained (no need to hunt
   //    chart-icons in the Geometry/Simulation tabs).  Adds as an optimize var.
   const DEFAULT_RANGE: Record<string, { min: number; max: number; step: number }> = {
     gamma_deg: { min: 0, max: 40, step: 2 },   // post-calibration: q-axis = 0, MTPA ~+28
   };
   // Default search window for a variable: operating-point specials, else the
-  // CURRENT value ±25 % clamped to the schema (int-aware).  Shared by the
-  // dropdown, "Add all", and "Apply DOE importance" so they all seed alike.
+  // CURRENT geometry value of the loaded motor +-10 % (integers +-1..2), rounded
+  // outward to the step and clamped to the schema (lib/optVarRanges.bracketRange).
+  // Shared by the dropdown, "Add all", "Apply DOE importance" and "Reset ranges".
   const defaultWindow = (name: string): { min: number; max: number; step: number } => {
     const sch = schemaMap[name];
     let def = DEFAULT_RANGE[name];
@@ -308,35 +339,82 @@ const SweepConfigPanel: React.FC = () => {
       const i = Math.max(10, Math.round(Number(readSim('current', 100))));
       def = { min: Math.round(i * 0.6), max: Math.round(i * 1.4), step: Math.max(5, Math.round(i * 0.1)) };
     }
-    const step = def?.step ?? sch?.step ?? 0.1;
-    if (def) return { min: def.min, max: def.max, step };
-    // Geometry var → window centred on where the design is NOW (not full schema).
-    const lo = sch?.min, hi = sch?.max;
-    const cur = Number(geometry?.[name] ?? (lo != null && hi != null ? (Number(lo) + Number(hi)) / 2 : 0));
-    const dev = Math.abs(cur) * 0.25 || (lo != null && hi != null ? (Number(hi) - Number(lo)) * 0.1 : 1);
-    let min = cur - dev, max = cur + dev;
-    if (lo != null) min = Math.max(min, Number(lo));
-    if (hi != null) max = Math.min(max, Number(hi));
-    if (sch?.type === 'int') { min = Math.round(min); max = Math.round(max); if (max <= min) max = min + 1; }
-    else { min = Math.round(min * 100) / 100; max = Math.round(max * 100) / 100; }
-    return { min, max, step };
+    if (def) return { min: def.min, max: def.max, step: def.step ?? sch?.step ?? 0.1 };
+    return bracketRange(Number(geometry?.[name]), sch);
   };
+  // Which motor the ranges are being set for (die + configuration + lamination).
+  const scope = identityScope(geometry as unknown as Record<string, unknown>, dieCtx.die, dieCtx.config);
+  const varLabel = (name: string) => schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name;
+
+  // ── Undo / redo of the variables list ───────────────────────────────────────
+  // Every change to the list goes through commitEdit: it snapshots the list
+  // BEFORE the change.  A change that turns out to be a no-op is not recorded.
+  useTranslation('simulation');   // re-render on language change; lazy-loads the namespace
+  const [, bump] = useState(0);
+  const [snack, setSnack] = useState<string | null>(null);
+  const hist = _optHist[algoTab] ?? emptyHistory();
+  const commitEdit = (label: string, apply: () => void, key?: string) => {
+    setSnack(null);   // a snackbar Undo must always mean the NEWEST action
+    const before = useMotorStore.getState().sweepConfig.variations;
+    const prevH = _optHist[algoTab] ?? emptyHistory();
+    _optHist[algoTab] = record(prevH, before, label, { key });
+    apply();
+    if (useMotorStore.getState().sweepConfig.variations === before) _optHist[algoTab] = prevH;
+    bump(n => n + 1);
+  };
+  const stepHistory = (dir: 'undo' | 'redo') => {
+    const h = _optHist[algoTab] ?? emptyHistory();
+    const cur = useMotorStore.getState().sweepConfig.variations;
+    const st = dir === 'undo' ? histUndo(h, cur) : histRedo(h, cur);
+    if (!st) return;
+    _optHist[algoTab] = st.history;
+    setVariations(st.vars as typeof cur);
+    setSnack(null);
+    bump(n => n + 1);
+  };
+  // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y while focus is inside the panel - but never
+  // inside a text field, where the browser's own undo applies.
+  const onPanelKeyDown = (e: React.KeyboardEvent) => {
+    const act = undoKeyAction(e, e.target as unknown as { tagName?: string; type?: string; isContentEditable?: boolean; disabled?: boolean });
+    if (!act) return;
+    e.preventDefault();
+    stepHistory(act);
+  };
+
   // A variable REMEMBERS the range it last ran with.  Removing it from the
-  // set only flips mode to 'fixed' — min/max/step stay in the store (and the
-  // store survives reloads and follows the user across browsers) — so
-  // re-adding restores the numbers the user last typed instead of clobbering
-  // them with the default window.  The default is only for a variable that was
-  // never configured: the schema seeds min === max (a degenerate stamp, not a
-  // usable range), which is exactly the test.
-  const addVariable = (name: string) => {
+  // set only flips mode to 'fixed' - min/max/step stay in the store (and the
+  // store survives reloads and follows the user across browsers) - so
+  // re-adding restores the numbers the user last typed.  BUT the config is one
+  // per account, not per motor: ranges typed for a smaller motor came back for
+  // the CIANO28 85 (live 2026-10-15: Slot Height 3.9-4 at 7.4 mm).  A
+  // remembered range is therefore reused only if it was not stamped for a
+  // different motor AND still contains the loaded motor's current value;
+  // otherwise it is re-bracketed around that value.
+  const addVariableRaw = (name: string) => {
     if (!name) return;
     const prev = sweepConfig.variations[name];
-    const remembered = !!prev
-      && Number.isFinite(Number(prev.min)) && Number.isFinite(Number(prev.max))
-      && Number(prev.max) > Number(prev.min) && Number(prev.step) > 0;
+    const isOp = name === 'gamma_deg' || name === 'current_a';
+    const remembered = isOp
+      ? isUsableRange(prev)
+      : reuseRemembered(prev, Number(geometry?.[name]), scope);
     updateVariation(name, remembered
-      ? { mode: 'optimize' }
-      : { mode: 'optimize', ...defaultWindow(name) });
+      ? { mode: 'optimize', scope }
+      : { mode: 'optimize', ...defaultWindow(name), scope });
+  };
+  const addVariable = (name: string) => {
+    if (!name) return;
+    commitEdit(tx('optVarsActAdd', { name: varLabel(name) }), () => addVariableRaw(name));
+  };
+  // One card edit (range field, step, ± change, the x button).
+  const editVar = (name: string, patch: Partial<ParameterVariation>, kind: 'edit' | 'remove') => {
+    const lbl = varLabel(name);
+    if (kind === 'remove') {
+      commitEdit(tx('optVarsActRemove', { name: lbl }), () => updateVariation(name, patch));
+    } else {
+      commitEdit(tx('optVarsActEdit', { name: lbl }),
+        () => updateVariation(name, { ...patch, scope }),
+        `${name}:${Object.keys(patch).join(',')}`);
+    }
   };
   const activeNames   = new Set(sweepEntries.map(([n]) => n));
   // Only params MARKED for optimization (schema.optimizable !== false) — same
@@ -348,13 +426,34 @@ const SweepConfigPanel: React.FC = () => {
   ].filter(n => !activeNames.has(n));
 
   // Bulk actions: add every available GEOMETRY var (NOT the operating-point γ /
-  // phase current), or clear all selected variables back to fixed.
+  // phase current), or clear all selected variables back to fixed.  Both are
+  // one undo step and offer an Undo snackbar - no confirmation dialog.
   const geomAvailable = availableVars.filter(n => n !== 'gamma_deg' && n !== 'current_a');
-  const addAll = () => geomAvailable.forEach(addVariable);
+  const addAll = () => {
+    const n = geomAvailable.length;
+    if (!n) return;
+    commitEdit(tx('optVarsActAddAll', { count: n }), () => geomAvailable.forEach(addVariableRaw));
+    setSnack(tx('optVarsSnackAdded', { count: n }));
+  };
   const removeAll = () => {
-    const v = { ...sweepConfig.variations };
-    for (const k of Object.keys(v)) v[k] = { ...v[k], mode: 'fixed' };
-    setVariations(v);
+    const n = sweepEntries.length;
+    if (!n) return;
+    commitEdit(tx('optVarsActRemoveAll', { count: n }), () => {
+      const v = { ...sweepConfig.variations };
+      for (const k of Object.keys(v)) v[k] = { ...v[k], mode: 'fixed' };
+      setVariations(v);
+    });
+    setSnack(tx('optVarsSnackRemoved', { count: n }));
+  };
+  // Selected geometry variables whose range does not contain the loaded
+  // motor's current value (typically ranges left over from another motor):
+  // one click re-brackets them around it.
+  const staleNames = outOfRangeNames(sweepConfig.variations as never, geometry as unknown as Record<string, unknown>);
+  const resetRanges = () => {
+    const names = staleNames;
+    commitEdit(tx('optVarsActReset', { count: names.length }), () => {
+      for (const n of names) updateVariation(n, { ...defaultWindow(n), scope });
+    });
   };
 
   // ── DOE → variable screening (close the loop the user asked for) ─────────────
@@ -374,6 +473,9 @@ const SweepConfigPanel: React.FC = () => {
   const applyDoeImportance = () => {
     const imp = readDoeImp();
     if (!imp?.ok || !imp.targets) return;
+    commitEdit(tx('optVarsActDoe'), () => applyDoeImportanceNow(imp));
+  };
+  const applyDoeImportanceNow = (imp: any) => {
     const score: Record<string, number> = {};
     for (const t of ['eff', 'td', 'ripple'])
       for (const row of (imp.targets[t]?.ranking || []))
@@ -388,7 +490,7 @@ const SweepConfigPanel: React.FC = () => {
         kept++;
         const c = next[n];
         next[n] = (c && c.mode !== 'fixed') ? { ...c, mode: 'optimize' }
-                                            : { ...(c || {}), mode: 'optimize', ...defaultWindow(n) };
+                                            : { ...(c || {}), mode: 'optimize', ...defaultWindow(n), scope };
       } else if (next[n]) {
         next[n] = { ...next[n], mode: 'fixed' };
       }
@@ -400,10 +502,6 @@ const SweepConfigPanel: React.FC = () => {
   // Algorithm sub-menu: Optimize (CMA-ES/Gradient) · Sweep study · DOE/Importance.
   // Optimization Variables + Operating Point stay on top (shared); the sub-menu
   // switches only the algorithm panel below.
-  const [algoTab, setAlgoTab] = useState<'optimize' | 'sweep' | 'doe'>(() => {
-    try { const t = localStorage.getItem('opt.algoTab'); return (t === 'sweep' || t === 'doe') ? t : 'optimize'; }
-    catch { return 'optimize'; }
-  });
   // Each algorithm keeps its OWN variable set.  On switch: stash the current
   // algo's variables, then load the target algo's (seeded from the current set
   // the first time it's opened, so nothing silently disappears).  The active set
@@ -430,7 +528,8 @@ const SweepConfigPanel: React.FC = () => {
   // range themselves if they want the optimizer to explore around it.
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Box onKeyDown={onPanelKeyDown} tabIndex={-1}
+      sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', outline: 'none' }}>
 
       {/* ── Header ── */}
       <Box sx={{
@@ -533,7 +632,40 @@ const SweepConfigPanel: React.FC = () => {
               sx={{ textTransform: 'none', fontSize: 11 }}>
               Remove all
             </Button>
+            {/* Undo / redo of the variables list (also Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
+                while focus is in this panel, outside text fields). */}
+            <Tooltip title={canUndo(hist) ? tx('optVarsUndoTip', { action: undoLabel(hist) ?? '' }) : tx('optVarsNothingToUndo')}>
+              <span>
+                <Button size="small" variant="text" color="inherit" onClick={() => stepHistory('undo')}
+                  disabled={!canUndo(hist)} startIcon={<UndoIcon sx={{ fontSize: 14 }} />}
+                  sx={{ textTransform: 'none', fontSize: 11 }}>
+                  {tx('optVarsUndo')}
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={canRedo(hist) ? tx('optVarsRedoTip', { action: redoLabel(hist) ?? '' }) : tx('optVarsNothingToRedo')}>
+              <span>
+                <Button size="small" variant="text" color="inherit" onClick={() => stepHistory('redo')}
+                  disabled={!canRedo(hist)} startIcon={<RedoIcon sx={{ fontSize: 14 }} />}
+                  sx={{ textTransform: 'none', fontSize: 11 }}>
+                  {tx('optVarsRedo')}
+                </Button>
+              </span>
+            </Tooltip>
           </Box>
+
+          {/* Ranges that do not contain the loaded motor's current value
+              (typically left over from another motor): one click re-centres them. */}
+          {staleNames.length > 0 && (
+            <Box sx={{ mb: 1.5, mt: -0.5 }}>
+              <Tooltip title={tx('optVarsResetTip')}>
+                <Button size="small" variant="outlined" color="warning" onClick={resetRanges}
+                  sx={{ textTransform: 'none', fontSize: 11 }}>
+                  {tx('optVarsResetButton', { count: staleNames.length })}
+                </Button>
+              </Tooltip>
+            </Box>
+          )}
 
           {/* DOE → screening: keep the vars DOE flagged as objective / constraint drivers, fix the rest */}
           {algoTab === 'optimize' && (
@@ -577,6 +709,7 @@ const SweepConfigPanel: React.FC = () => {
                     + (schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name)}
                   unit={schemaMap[name]?.unit ?? SPECIAL_VARS[name]?.unit}
                   optimize={algoTab === 'optimize'}
+                  onEdit={(patch, kind) => editVar(name, patch, kind)}
                 />
               ))}
             </Box>
@@ -623,6 +756,17 @@ const SweepConfigPanel: React.FC = () => {
         {/* DOE = Latin-Hypercube screening → unbiased variable importance */}
         {algoTab === 'doe' && <DOEPanel />}
       </Box>
+
+      {/* After a bulk change: a short way back, no confirmation dialog. */}
+      <Snackbar open={snack !== null} autoHideDuration={7000}
+        onClose={(_, reason) => { if (reason !== 'clickaway') setSnack(null); }}
+        message={snack ?? ''}
+        action={
+          <Button color="secondary" size="small" onClick={() => stepHistory('undo')}
+            sx={{ textTransform: 'none' }}>
+            {tx('optVarsUndo')}
+          </Button>
+        } />
     </Box>
   );
 };

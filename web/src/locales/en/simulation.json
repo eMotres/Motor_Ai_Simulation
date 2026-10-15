@@ -56,5 +56,22 @@
   "powerBalance": "Power Balance",
   "losses": "Losses",
   "windingComputed": "Winding (computed)",
-  "magneticField": "Magnetic Field"
+  "magneticField": "Magnetic Field",
+  "optVarsUndo": "Undo",
+  "optVarsRedo": "Redo",
+  "optVarsUndoTip": "Undo: {action}",
+  "optVarsRedoTip": "Redo: {action}",
+  "optVarsNothingToUndo": "Nothing to undo (Ctrl+Z)",
+  "optVarsNothingToRedo": "Nothing to redo (Ctrl+Shift+Z)",
+  "optVarsActAdd": "Add {name}",
+  "optVarsActRemove": "Remove {name}",
+  "optVarsActAddAll": "Add all geometry ({count, plural, one {# variable} other {# variables}})",
+  "optVarsActRemoveAll": "Remove all ({count, plural, one {# variable} other {# variables}})",
+  "optVarsActEdit": "Edit {name} range",
+  "optVarsActReset": "Reset ranges to current ±10 % ({count, plural, one {# variable} other {# variables}})",
+  "optVarsActDoe": "Apply DOE importance",
+  "optVarsSnackAdded": "{count, plural, one {Added # variable} other {Added # variables}}",
+  "optVarsSnackRemoved": "{count, plural, one {Removed # variable} other {Removed # variables}}",
+  "optVarsResetButton": "Reset {count, plural, one {# out-of-range variable} other {# out-of-range variables}} to current ±10 %",
+  "optVarsResetTip": "These ranges do not contain the current value of the loaded motor (they may have been set for another motor). One click re-centres them on the current value ±10 %. Undo brings them back."
 }

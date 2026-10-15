@@ -56,5 +56,22 @@
   "powerBalance": "功率平衡",
   "losses": "损耗",
   "windingComputed": "绕组（计算值）",
-  "magneticField": "磁场"
+  "magneticField": "磁场",
+  "optVarsUndo": "撤销",
+  "optVarsRedo": "重做",
+  "optVarsUndoTip": "撤销：{action}",
+  "optVarsRedoTip": "重做：{action}",
+  "optVarsNothingToUndo": "没有可撤销的操作（Ctrl+Z）",
+  "optVarsNothingToRedo": "没有可重做的操作（Ctrl+Shift+Z）",
+  "optVarsActAdd": "添加 {name}",
+  "optVarsActRemove": "移除 {name}",
+  "optVarsActAddAll": "添加全部几何参数（{count} 个变量）",
+  "optVarsActRemoveAll": "全部移除（{count} 个变量）",
+  "optVarsActEdit": "修改 {name} 的范围",
+  "optVarsActReset": "将范围重置为当前值 ±10 %（{count} 个变量）",
+  "optVarsActDoe": "应用 DOE 重要性",
+  "optVarsSnackAdded": "已添加 {count} 个变量",
+  "optVarsSnackRemoved": "已移除 {count} 个变量",
+  "optVarsResetButton": "将 {count} 个超出范围的变量重置为当前值 ±10 %",
+  "optVarsResetTip": "这些范围不包含当前电机的当前值（可能是为另一台电机设置的）。一键即可重新以当前值 ±10 % 为中心。可撤销。"
 }

@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
   adoptableCoolingFields, coolingMismatch, coolingSourceLine, fieldsMode,
   hydrationIsStale, isCoolingSource, ownershipIssue, parseMotorCooling, sameMotor,
-  splitMotorKey, withoutMotorOwned,
+  shouldAdoptMotorCooling, splitMotorKey, withoutMotorOwned,
 } from '../thermalMotorCooling.ts';
 
 const L155 = { die: 'CIANO10 200 opt', config: 'L155 motor' };
@@ -90,8 +90,11 @@ const A = { die: 'CIANO14 40 new', config: 'L12' };
 
 test('a solve under the wrong motor cooling fields is refused by name', () => {
   assert.equal(ownershipIssue(L155, L155), null);
-  assert.equal(ownershipIssue(null, L155), null);           // nothing hydrated yet
   assert.equal(ownershipIssue(A, null), null);              // no motor loaded
+  // UNKNOWN ownership with a motor loaded is not acceptable (hydration in flight,
+  // or its fetch failed): the solve waits / the backend resolves the record
+  assert.match(ownershipIssue(null, L155), /not loaded yet/);
+  assert.match(ownershipIssue(undefined, L155), /CIANO10 200 opt L155 motor/);
   const issue = ownershipIssue(A, L155);
   assert.match(issue, /CIANO14 40 new L12/);
   assert.match(issue, /CIANO10 200 opt L155 motor/);
@@ -117,4 +120,22 @@ test('a stale hydration keeps its account-level fields and none of the cooling',
     propellerId: 'x', propellerContextKey: 'k', maxIter: '9', view: 'flux',
   };
   assert.deepEqual(withoutMotorOwned(adopted), { maxIter: '9', view: 'flux' });
+});
+
+// ── second review, R5: a lost follow answer is recoverable by reloading ────────
+
+const FIELDS = { coolMode: 'liquid', frame: 'housed', boreMode: 'none' };
+
+test('an unchanged answer still resynchronises a browser that holds the wrong motor fields', () => {
+  const unchanged = { changed: false, motor_changed: false, fields: FIELDS, source: 'saved' };
+  // the answer for B was lost: the browser still owns A -> adopt on the reload
+  assert.equal(shouldAdoptMotorCooling(unchanged, A, L155), true);
+  assert.equal(shouldAdoptMotorCooling(unchanged, null, L155), true);
+  // the browser already owns B: keep whatever the user is typing
+  assert.equal(shouldAdoptMotorCooling(unchanged, L155, L155), false);
+  // a motor change or a server repair always adopts
+  assert.equal(shouldAdoptMotorCooling({ ...unchanged, motor_changed: true }, L155, L155), true);
+  assert.equal(shouldAdoptMotorCooling({ ...unchanged, changed: true }, L155, L155), true);
+  // nothing to adopt without fields
+  assert.equal(shouldAdoptMotorCooling({ changed: true, fields: null }, A, L155), false);
 });

@@ -606,7 +606,14 @@ def _thermal_saved_cooling(die: Optional[str], cfg: Optional[str],
     None)`` when there is none.  The FALLBACK tier: only consulted when the
     live Thermal panel is set to a different mode than the one being asked
     for (see :func:`_thermal_cooling_for_mode`)."""
-    if not (die and cfg and duty):
+    if die and cfg and not duty:
+        # a motor was named without a duty: the active duty counts only if it is
+        # this motor's - never another motor's saved record
+        ctx = _DR.active_context()
+        if not ctx or (ctx[0], ctx[1]) != (die, cfg):
+            return {}, None
+        duty = ctx[2]
+    elif not (die and cfg and duty):
         ctx = _DR.active_context()
         if not ctx:
             return {}, None
@@ -1006,8 +1013,15 @@ def get_thermal_cooling(die: Optional[str] = Query(None), config: Optional[str] 
     once and shows whichever entry matches the Mode selector, so a field's
     "from Thermal" chip and placeholder are never a stale snapshot from a
     button press.  See :func:`_thermal_cooling_for_mode`."""
-    if die and config and duty:
+    if die and config:
+        # The motor the caller NAMED is kept whether or not it named a duty
+        # (the duty is optional, `controllerApi.ts`): replacing it with the
+        # active context would hand B's preview A's cooling.  A duty omitted is
+        # taken from the active context only when that context IS this motor.
         d, c, u = die, config, duty
+        if not u:
+            ctx = _DR.active_context()
+            u = ctx[2] if ctx and (ctx[0], ctx[1]) == (die, config) else None
     else:
         d, c, u = _DR.active_context() or (None, None, None)
     modes = {m: _thermal_cooling_for_mode(m, d, c, u, authorization)

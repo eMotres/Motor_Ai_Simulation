@@ -141,18 +141,42 @@ export function sameMotor(a: MotorIdentity | null | undefined, b: MotorIdentity 
 
 /** Why a solve must not use the panel's cooling fields, or `null`.
  *
- *  The fields are tagged with the motor they belong to (`fieldsMotor`).  A solve
- *  of the LOADED motor under the fields of ANOTHER one - a slow hydration that
- *  landed after a motor change, a follow that never arrived - would solve one
+ *  The fields are tagged with the motor they belong to (`fieldsMotor`).  With a
+ *  motor loaded the tag must be KNOWN and be that motor: a solve of the loaded
+ *  motor under the fields of ANOTHER one - a slow hydration, a follow that never
+ *  arrived - or under fields nobody has yet verified (localStorage's snapshot
+ *  while the server's answer is on its way, or after it failed) would solve one
  *  machine under another's boundary conditions, and the result-vs-fields warning
- *  cannot see it (both would read the same mode and frame).  Unknown on either
- *  side (no motor loaded, nothing hydrated yet) is not a mismatch. */
+ *  cannot see it (both would read the same mode and frame).  Callers that let the
+ *  backend resolve the motor's own record send nothing instead of the fields; the
+ *  direct Thermal solve refuses.  With NO motor loaded there is nothing to be
+ *  wrong about. */
 export function ownershipIssue(
   fieldsMotor: MotorIdentity | null | undefined, loaded: MotorIdentity | null | undefined,
 ): string | null {
-  if (!fieldsMotor || !loaded || sameMotor(fieldsMotor, loaded)) return null;
+  if (!loaded) return null;
+  if (!fieldsMotor) {
+    return `the cooling of ${loaded.die} ${loaded.config} is not loaded yet - `
+      + 'wait a moment, or reload the motor';
+  }
+  if (sameMotor(fieldsMotor, loaded)) return null;
   return `the cooling fields shown belong to ${fieldsMotor.die} ${fieldsMotor.config}, `
     + `not to the loaded ${loaded.die} ${loaded.config} - reload the motor to get its cooling`;
+}
+
+/** Should the answer of `PUT /api/me/last_motor` replace the panel's cooling
+ *  fields?  Yes when it carries them AND the motor changed (or the server
+ *  repaired the record), or the browser's own fields are not the loaded motor's -
+ *  the recovery path of a lost answer: reloading the motor resynchronises even
+ *  though the server had nothing left to change.  A reload of the same motor
+ *  whose fields the browser already owns keeps the user's unsaved typing. */
+export function shouldAdoptMotorCooling(
+  answer: unknown, fieldsMotor: MotorIdentity | null | undefined,
+  loaded: MotorIdentity | null | undefined,
+): boolean {
+  if (!parseMotorCooling(answer)) return false;
+  const a = answer as { motor_changed?: unknown; changed?: unknown };
+  return a.motor_changed === true || a.changed === true || !sameMotor(fieldsMotor, loaded);
 }
 
 /** A hydration response is stale when a motor change adopted fields while it was

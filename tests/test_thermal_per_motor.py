@@ -211,7 +211,9 @@ def test_same_motor_reloaded_keeps_the_users_edits(world):
     again = _load(world, L155, L155)
     s = _stored()
     assert again["motor_changed"] is False and again["changed"] is False
-    assert again["fields"] is None
+    # nothing changed, but the answer still carries the motor's fields, so a
+    # browser that lost an earlier answer can resynchronise from it
+    assert again["fields"]["flowLpm"] == "12" and again["fields"]["boreMode"] == "liquid"
     assert (s["flowLpm"], s["tIn"], s["boreMode"]) == ("12", "35", "liquid")
     # even when only the catalogue reference differs, the saved record is what
     # comes back - the edits survive
@@ -599,3 +601,132 @@ def test_f9_backend_keeps_the_accounts_current_max_iter(world):
     assert info["source"] == "saved" and s["boreAirSpeed"] == "9"
     assert s["maxIter"] == "6"
     assert ts.coupled_iteration_settings(s)["max_iter"] == 6
+
+
+# ═══ second review of PR #218 (f3f4b95e): one test per remaining finding ═════════
+
+def test_r1_a_saved_zero_flow_is_refused_not_repaired(world):
+    """R1: flowLpm 0 (or blank) in a record stays what it is; validation refuses it
+    by name - the saved record and an explicit request behave the same."""
+    for bad in ("0", "-3", ""):
+        world["selection"] = dict(L155)
+        _user_saves({"coolMode": "liquid", "airSpeedSource": "manual", "tIn": "50",
+                     "flowLpm": bad}, MOTOR_L155)
+        s, info = ts.motor_thermal_settings(None, "CIANO10 200 opt", "L155 motor")
+        assert info["source"] == "saved"
+        assert s["flowLpm"] == bad
+        assert "flow must be greater than 0" in ts.cooling_issue(s)
+        assert ts.cooling_issue({"coolMode": "liquid", "flowLpm": bad}) == ts.cooling_issue(s)
+        # loading the motor again does not invent a flow either
+        _load(world, PROP, L155)
+        assert _stored()["flowLpm"] == bad
+    # an ABSENT flow is still the panel default
+    from motor_ai_sim.routes import panel_settings as ps
+    d = ps._load()
+    rec = d["thermal"][EMAIL]["by_motor"][MOTOR_L155]["settings"]
+    rec.pop("flowLpm")
+    ps._save(d)
+    assert ts.motor_thermal_settings(None, "CIANO10 200 opt", "L155 motor")[0]["flowLpm"] == "8"
+
+
+def test_r3_a_follow_never_overwrites_a_newer_saved_record(world, monkeypatch):
+    """R3: B's record is read, a second tab saves flow 20, then the follow resumes
+    with its stale snapshot - the 20 L/min edit must survive."""
+    from motor_ai_sim.routes import panel_settings as ps
+    world["selection"] = dict(L155)
+    _user_saves({"coolMode": "liquid", "airSpeedSource": "manual", "tIn": "50",
+                 "flowLpm": "8"}, MOTOR_L155)
+    _seed_active = _stored()
+    world["selection"] = dict(PROP)
+    ps_entry = ps._load()
+    ps_entry["thermal"][EMAIL]["motor"] = MOTOR_PROP        # A is the active one
+    ps._save(ps_entry)
+
+    real = ts.resolve_motor_settings
+    calls = {"n": 0}
+
+    def interleaved(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:                                # the other tab saves in between
+            world["selection"] = dict(L155)
+            _user_saves({"coolMode": "liquid", "airSpeedSource": "manual", "tIn": "50",
+                         "flowLpm": "20"}, MOTOR_L155)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ts, "resolve_motor_settings", interleaved)
+    world["selection"] = dict(L155)
+    out = ts.follow_loaded_motor(EMAIL, L155, PROP)
+    assert calls["n"] == 2                                  # resolved again from the fresh entry
+    assert out["fields"]["flowLpm"] == "20"
+    assert _stored()["flowLpm"] == "20"
+    entry = ps._load()["thermal"][EMAIL]
+    assert entry["by_motor"][MOTOR_L155]["settings"]["flowLpm"] == "20"
+
+
+def test_r3_a_superseded_follow_writes_nothing(world):
+    """...and a follow whose selection is no longer the loaded one does not write."""
+    _seed(FORTY_MM, motor=MOTOR_PROP)
+    world["selection"] = dict(ROBOT)                         # a newer selection won
+    out = ts.follow_loaded_motor(EMAIL, L155, PROP)
+    assert out["fields"] is None
+    assert _stored()["frame"] == "open"                      # untouched
+
+
+def test_r4_an_unchanged_sparse_legacy_entry_keeps_its_effective_cooling(world):
+    """R4: no airSpeed in an old entry meant 0 m/s and no tIn the ambient; neither
+    becomes a panel default for a motor nobody touched."""
+    legacy_air = {"coolMode": "air", "airSpeedSource": "manual", "ambientT": "30"}
+    _seed(legacy_air)                                        # no marker, no by_motor
+    world["selection"] = dict(PROP)
+    s, info = ts.motor_thermal_settings(None)
+    assert s == legacy_air and info["source"] == "last_used"
+    assert ts.cooling_fields(s) == ts.cooling_fields(legacy_air)
+    assert ts.cooling_fields(s)["air_speed_mps"] == 0.0
+    # the same machine reloaded (the legacy claim) does not materialise defaults
+    out = _load(world, PROP, PROP)
+    assert out["motor_changed"] is False
+    assert {k: v for k, v in _stored().items()} == legacy_air
+    assert ts.motor_thermal_settings(None)[0] == legacy_air
+    legacy_liquid = {"coolMode": "liquid", "ambientT": "30", "flowLpm": "5"}
+    _seed(legacy_liquid)
+    s, _info = ts.motor_thermal_settings(None)
+    assert ts.cooling_fields(s)["fluid_temp_in_c"] == 30.0   # the ambient, not 40
+    assert ts.cooling_fields(s) == ts.cooling_fields(legacy_liquid)
+
+
+def test_r5_reloading_the_motor_after_a_lost_answer_returns_its_fields(world):
+    """R5 (server half): the follow for B was written but its answer was lost; the
+    reload finds nothing to change and must still return B's complete cooling."""
+    _seed(FORTY_MM, motor=MOTOR_PROP)
+    world["selection"] = dict(PROP)
+    _load(world, PROP, L155)                                 # answer discarded by the test
+    again = _load(world, L155, L155)
+    assert again["motor_changed"] is False and again["changed"] is False
+    assert again["fields"] == ts._fields_of(_stored())
+    assert (again["fields"]["coolMode"], again["fields"]["frame"]) == ("liquid", "housed")
+    assert again["source"] == "application"
+
+
+def test_r6_controller_preview_keeps_the_requested_motor_without_a_duty(world):
+    """R6: A active (liquid 60 degC, 2 L/min); the preview for B with no duty
+    returns B's cooling - and never A's saved duty record."""
+    from motor_ai_sim.routes import controller as rc
+    _seed({"coolMode": "liquid", "airSpeedSource": "manual", "fluid": "water",
+           "tIn": "60", "flowLpm": "2"}, motor=MOTOR_L155)
+    world["selection"] = dict(L155)
+    _user_saves({"coolMode": "liquid", "airSpeedSource": "manual", "fluid": "water",
+                 "tIn": "25", "flowLpm": "20"}, MOTOR_ROBOT)
+    out = rc.get_thermal_cooling(die="CIANO28 85", config="L13", duty=None,
+                                 authorization=None)
+    assert (out["die"], out["config"]) == ("CIANO28 85", "L13")
+    assert out["duty"] is None                               # the active duty is A's
+    assert out["modes"]["liquid"]["fields"] == {
+        "coolant": "water", "flow_lpm": 20.0, "t_in_c": 25.0}
+    # a mode B is not set to falls back to B's saved duty record only; with no
+    # duty named it has none, and A's must not appear
+    air = out["modes"]["air_forced"]
+    assert air["fields"] == {} and air["source"] is None
+    # no motor named: the active one, as before
+    own = rc.get_thermal_cooling(die=None, config=None, duty=None, authorization=None)
+    assert (own["die"], own["config"], own["duty"]) == ("CIANO10 200 opt", "L155 motor", "rated")
+    assert own["modes"]["liquid"]["fields"]["t_in_c"] == 60.0

@@ -661,6 +661,14 @@ def _stamp() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "+00:00"
 
 
+def _rev(entry: Mapping[str, Any]) -> int:
+    """The entry's write counter (0 for one written before it existed)."""
+    try:
+        return int(entry.get("rev") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _save_thermal_patch(email: str, patch: Mapping[str, str],
                         motor: str = "") -> Dict[str, Any]:
     """Merge ``patch`` into the account's stored Thermal fields; return them.
@@ -684,24 +692,33 @@ def _save_thermal_patch(email: str, patch: Mapping[str, str],
         if motor and isinstance(by, dict) and isinstance(by.get(motor), dict):
             rec = dict(by[motor].get("settings") or {})
             by[motor] = {"settings": {**rec, **patch}, "updated_at": stamp}
+        entry["rev"] = _rev(entry) + 1
         d.setdefault("thermal", {})[email] = entry
         ps._save(d)
     return new
 
 
 def _write_followed(email: str, settings: Mapping[str, Any], motor: str,
-                    source: str, application: Optional[str]) -> None:
+                    source: str, application: Optional[str],
+                    expected_rev: Optional[int] = None) -> bool:
     """Make ``settings`` the account's last-used fields for ``motor`` (keeping
     every motor's saved record) and note where they came from.
 
     A record the account already has for ``motor`` gets the resolved cooling too:
     it is completed (a partial record is filled from the rules) and a repaired
     propeller binding is stored, so a solve that reads the record sees exactly
-    what the panel was given.  A record is never CREATED here."""
+    what the panel was given.  A record is never CREATED here.
+
+    COMPARE-AND-SET: with ``expected_rev`` the write happens only if the entry is
+    still the revision the caller resolved from; ``False`` = something else wrote
+    meanwhile (a save from another tab, another follow) and the caller must
+    resolve again from the fresh entry, not overwrite it with a stale snapshot."""
     from motor_ai_sim.routes import panel_settings as ps
     with ps._LOCK:
         d = ps._load()
         entry = dict((d.get("thermal") or {}).get(email) or {})
+        if expected_rev is not None and _rev(entry) != expected_rev:
+            return False
         entry.update(settings=dict(settings), updated_at=_stamp(), motor=motor,
                      source=source)
         if application:
@@ -713,8 +730,10 @@ def _write_followed(email: str, settings: Mapping[str, Any], motor: str,
             rec = dict(by[motor].get("settings") or {})
             by[motor] = {"settings": {**rec, **_cooling_of(settings)},
                          "updated_at": by[motor].get("updated_at") or _stamp()}
+        entry["rev"] = _rev(entry) + 1
         d.setdefault("thermal", {})[email] = entry
         ps._save(d)
+    return True
 
 
 def _same_motor(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
@@ -837,8 +856,9 @@ def complete_cooling(options: Mapping[str, Any], key: str, *,
     if "airSpeedSource" in explicit and cool["airSpeedSource"] != "propeller":
         cool["airSpeedSource"] = "manual"
         cool["propellerId"] = cool["propellerContextKey"] = ""
-    if cool.get("coolMode") == "liquid" and not _num(cool.get("flowLpm"), 0.0) > 0:
-        cool["flowLpm"] = "8"
+    # NOTHING is repaired here: a value the record or the defaults hold - zero
+    # flow, a blank - stays exactly that and is refused by name downstream
+    # (`cooling_issue`).  The canonical flow already covers an ABSENT one.
     return {k: _text(v) for k, v in _repair_for_motor(options, cool, key).items()}, source
 
 
@@ -937,9 +957,14 @@ def motor_thermal_settings(authorization: Optional[str] = None,
         elif marker == motor or (not marker and last and loaded):
             # The last-used fields ARE this motor's (the entry names it, or an
             # entry from before motors were recorded and this is the loaded one).
-            rec = _cooling_of(last)
+            # They are returned AS THEY ARE: a key an old entry lacks keeps the
+            # meaning the solver always gave it (`cooling_fields`: no airSpeed is
+            # 0 m/s, no inlet is the ambient), not a panel default that would
+            # change the physics of a motor nobody touched.
             src = str(entry.get("source") or "") if marker else ""
             info["source"] = src if src in SOURCE_WORDS else "last_used"
+            info["application"] = options.get("application")
+            return dict(last), info
         cool, source = complete_cooling(options, key, record=rec, defaults=defaults,
                                         frame_open=frame_open)
         if not rec:
@@ -973,8 +998,9 @@ def follow_loaded_motor(email: str, selection: Mapping[str, Any],
     motor load.  Returns ``{"changed", "application", "settings",
     "allowed_propellers", "motor_changed", "motor", "source", "fields"}``:
     ``settings`` is the effective :data:`FOLLOW_KEYS` after the call; ``fields``
-    is every :data:`COOLING_KEYS` value (present when the motor was initialised
-    or a repair was made - the open panel adopts it as it is, already stored);
+    is EVERY :data:`COOLING_KEYS` value the motor now has, also when nothing
+    changed - a browser that lost an earlier answer resynchronises from it (the
+    open panel adopts it as it is, already stored);
     ``source`` is one of :data:`SOURCE_WORDS`.
     """
     out: Dict[str, Any] = {"changed": False, "application": None,
@@ -988,40 +1014,55 @@ def follow_loaded_motor(email: str, selection: Mapping[str, Any],
         if not email or not die or not config or options is None:
             return out
         motor = _motor_key(die, config)
-        entry = _entry_of(email)
-        cur = dict(entry.get("settings") or {})
-        marker = str(entry.get("motor") or "")
-        same_family = (isinstance(previous, Mapping)
-                       and (previous.get("die") or None) == (die or None)
-                       and (previous.get("config") or None) == (config or None))
-        legacy_same = (not marker) and bool(cur) and same_family
-        ref_changed = isinstance(previous, Mapping) and not _same_motor(previous, selection)
-        motor_changed = (marker != motor and not legacy_same) or (marker == motor and ref_changed)
         key = context_key(email, die, config, selection.get("ref_id"))
         app = options.get("application")
-        out.update(application=app, motor=motor, motor_changed=motor_changed,
+        out.update(application=app, motor=motor,
                    allowed_propellers=_selectable_propellers(options))
-        if motor_changed:
-            new, source = resolve_motor_settings(
-                options, cur, key, record=_motor_record(entry, motor),
-                defaults=config_thermal_defaults(die, config),
-                frame_open=_config_says_open(die, config))
-            _write_followed(email, new, motor, source, app)
-            out.update(changed=_fields_of(new) != _fields_of(cur),
-                       source=source, fields=_fields_of(new))
-        else:
-            patch = motor_cooling_patch(options, cur, key, motor_changed=False)
-            if legacy_same:
-                new = {**cur, **patch}
-                _write_followed(email, new, motor, "last_used", app)
-                src = "last_used"
+        # READ - RESOLVE - COMPARE-AND-SET.  Another tab's save, or another
+        # follow, may write between the read and the write; the write then
+        # refuses (the entry's revision moved) and the whole step is done again
+        # from the fresh entry, so a newer record is never overwritten by a
+        # snapshot taken before it.
+        for _attempt in range(5):
+            entry = _entry_of(email)
+            rev = _rev(entry)
+            cur = dict(entry.get("settings") or {})
+            marker = str(entry.get("motor") or "")
+            same_family = (isinstance(previous, Mapping)
+                           and (previous.get("die") or None) == (die or None)
+                           and (previous.get("config") or None) == (config or None))
+            legacy_same = (not marker) and bool(cur) and same_family
+            ref_changed = isinstance(previous, Mapping) and not _same_motor(previous, selection)
+            motor_changed = ((marker != motor and not legacy_same)
+                             or (marker == motor and ref_changed))
+            out["motor_changed"] = motor_changed
+            if motor_changed:
+                new, source = resolve_motor_settings(
+                    options, cur, key, record=_motor_record(entry, motor),
+                    defaults=config_thermal_defaults(die, config),
+                    frame_open=_config_says_open(die, config))
+                write = (new, source)
             else:
-                new = _save_thermal_patch(email, patch, motor) if patch else cur
-                src = str(entry.get("source") or "") if marker == motor else ""
-            out.update(changed=bool(patch),
-                       source=src if src in SOURCE_WORDS else "last_used",
-                       fields=_fields_of(new) if patch else None)
-        out["settings"] = {k: str(new.get(k) or "") for k in FOLLOW_KEYS}
+                patch = motor_cooling_patch(options, cur, key, motor_changed=False)
+                new = {**cur, **patch}
+                src = "last_used" if legacy_same else (
+                    str(entry.get("source") or "") if marker == motor else "")
+                source = src if src in SOURCE_WORDS else "last_used"
+                write = (new, source) if (patch or legacy_same) else None
+            if write is not None:
+                # A newer selection supersedes this follow: never write the
+                # fields of a motor that is no longer the loaded one.
+                _e, l_die, l_cfg, _r = _loaded_motor(authorization)
+                if l_die and (l_die, l_cfg) != (die, config):
+                    return out
+                if not _write_followed(email, write[0], motor, write[1], app,
+                                       expected_rev=rev):
+                    continue
+            out.update(changed=_fields_of(new) != _fields_of(cur), source=source,
+                       fields=_fields_of(new))
+            out["settings"] = {k: str(new.get(k) or "") for k in FOLLOW_KEYS}
+            return out
+        log.warning("thermal cooling follow gave up after concurrent writes")
     except Exception:  # noqa: BLE001
         log.warning("thermal cooling could not follow the loaded motor", exc_info=True)
     return out
@@ -1064,6 +1105,7 @@ def apply_thermal_save(prev: Mapping[str, Any], incoming: Dict[str, Any], motor:
       cannot be told, the entry's own marker decides.
     """
     entry: Dict[str, Any] = dict(prev)
+    entry["rev"] = _rev(prev) + 1
     by = {k: v for k, v in (prev.get("by_motor") or {}).items() if isinstance(v, dict)} \
         if isinstance(prev.get("by_motor"), dict) else {}
     marker = str(prev.get("motor") or "")

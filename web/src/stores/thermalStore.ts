@@ -31,7 +31,7 @@ import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
 import {
   adoptableCoolingFields, hydrationIsStale, isCoolingSource, ownershipIssue,
-  parseMotorCooling, splitMotorKey, withoutMotorOwned,
+  parseMotorCooling, shouldAdoptMotorCooling, splitMotorKey, withoutMotorOwned,
 } from '../lib/thermalMotorCooling';
 import type { CoolingSource, MotorIdentity } from '../lib/thermalMotorCooling';
 // `registerThermalPanelBlock` — the Electromagnetic tab's OWN coupled Run
@@ -813,8 +813,10 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // record from before per-motor settings names none, and the loaded motor
       // (the one it was last used with) stands in for it.  A solve of any other
       // loaded motor is refused until the fields are that motor's (`ownershipIssue`).
-      if (!stale) {
-        const motor = splitMotorKey(srv?.motor) ?? loadedMotorIdentity();
+      // A FAILED settings fetch (`srv` null) assigns no identity: the fields stay
+      // unverified and a loaded motor's solve is held back (`ownershipIssue`).
+      if (!stale && srv) {
+        const motor = splitMotorKey(srv.motor) ?? loadedMotorIdentity();
         set({
           fieldsMotor: motor,
           coolingSource: isCoolingSource(srv?.source) ? (srv?.source as CoolingSource) : (motor ? 'last_used' : null),
@@ -1033,7 +1035,8 @@ registerThermalFollow((answer) => {
   // Thermal record, with the frame and the bore reset instead of inherited.
   // Adopt them as they are and do NOT save them back: a default must not turn
   // into "your saved settings" just because it was shown.
-  const mc = parseMotorCooling(answer);
+  const mc = shouldAdoptMotorCooling(answer, st.fieldsMotor, loadedMotorIdentity())
+    ? parseMotorCooling(answer) : null;
   if (mc) {
     followEpoch += 1;
     const f = adoptableCoolingFields(mc.fields);

@@ -127,6 +127,10 @@ def _validate_last_motor(selection: object, authorization: Optional[str]) -> dic
     die = family._check_name(die, "die")
     config = family._check_name(config, "configuration")
     family._require_die_access(die, authorization)
+    # a PRIVATE configuration the account holds no grant for reads as a missing one
+    from motor_ai_sim import motor_access as _ma
+    if not _ma.may_see_config(_ma.catalog_access(authorization), die, config):
+        raise HTTPException(404, detail=f"configuration not found: {config}.yaml")
     cfg = family._load_yaml(family._cfg_file(die, config), "configuration")
     if duty is not None:
         duty = family._check_name(duty, "duty")

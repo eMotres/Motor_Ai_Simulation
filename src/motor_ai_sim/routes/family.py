@@ -38,7 +38,8 @@ from motor_ai_sim.workspace import layering as _ws_layering
 from motor_ai_sim.workspace import resolve_die_dir as _ws_resolve_die_dir
 from motor_ai_sim.workspace import root as _ws_root_f
 from motor_ai_sim.motor_access import (MODE_ANONYMOUS, MODE_GRANTED,
-                                       catalog_access, may_see_die)
+                                       catalog_access, config_allowed, may_see_config,
+                                       may_see_config_file, may_see_die)
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/family", tags=["family"])
@@ -415,9 +416,15 @@ def _copy_on_write(src_dir: Path, addressed: str) -> Path:
     dst = _dies_dir() / addressed
     dst.mkdir(parents=True, exist_ok=True)
     copied = 0
+    _acc = catalog_access(None)
     for p in sorted(src_dir.glob("*.yaml")):
         q = dst / p.name
         if q.exists():
+            continue
+        # A PRIVATE configuration the caller may not see is never forked into
+        # their workspace (it would become "theirs" and readable).
+        if p.name != "die.yaml" and not may_see_config_file(
+                _acc, addressed, p.stem, p):
             continue
         import shutil as _sh
         _sh.copy2(p, q)
@@ -597,8 +604,30 @@ def _iter_die_entries() -> list:
     return out
 
 
-def _require_die_access(die: str, authorization) -> dict:
-    """404 unless the caller may read this die (motor_access.may_see_die).
+def _config_missing_detail(die: str, cfg: str, style: str = "file") -> str:
+    """The text a NON-EXISTENT configuration gets, so a hidden one gets the same.
+
+    ``file``  — what ``_load_yaml`` says ("configuration not found: L9.yaml");
+    ``pair``  — what the structural routes (rename / duplicate / delete /
+                publish) say ("configuration 'die/L9' not found")."""
+    if style == "pair":
+        return f"configuration '{die}/{cfg}' not found"
+    return f"configuration not found: {cfg}.yaml"
+
+
+def _require_config_visible(acc: dict, die: str, cfg: Optional[str],
+                            style: str = "file") -> None:
+    """404 unless the caller may see configuration ``cfg`` of ``die``
+    (``motor_access.may_see_config``) — indistinguishable from a missing one."""
+    if cfg and not config_allowed(acc, str(die), str(cfg)):
+        raise HTTPException(404, detail=_config_missing_detail(die, cfg, style))
+
+
+def _require_die_access(die: str, authorization, cfg: Optional[str] = None,
+                        style: str = "file") -> dict:
+    """404 unless the caller may read this die (motor_access.may_see_die) — and,
+    when ``cfg`` is given, that configuration (``may_see_config``: a PRIVATE
+    configuration of a visible die is invisible without a config grant).
 
     404 and not 403 on purpose: a motor an account was never granted must not
     be distinguishable from one that does not exist.  Hiding a die from the
@@ -618,9 +647,11 @@ def _require_die_access(die: str, authorization) -> dict:
         if lay == _WS.LAYER_PUBLISHED:
             if acc["mode"] == MODE_ANONYMOUS:
                 raise HTTPException(404, detail=f"die '{die}' not found")
+            _require_config_visible(acc, die, cfg, style)
             return acc
     if not may_see_die(acc, die):
         raise HTTPException(404, detail=f"die '{die}' not found")
+    _require_config_visible(acc, die, cfg, style)
     return acc
 
 
@@ -698,7 +729,8 @@ def require_catalog_write(authorization: str = Header(default=None)) -> dict:
     return {"user": user, "is_admin": False, "authorization": authorization}
 
 
-def _require_die_write(die: str, who: dict) -> None:
+def _require_die_write(die: str, who: dict, cfg: Optional[str] = None,
+                       style: str = "file") -> None:
     """May this caller write the named die?  The READ question, deliberately.
 
     A die in the caller's own workspace is theirs by construction; a PUBLISHED
@@ -714,7 +746,7 @@ def _require_die_write(die: str, who: dict) -> None:
     """
     if not _ws_layering() or who.get("is_admin"):
         return
-    _require_die_access(str(die), who.get("authorization"))
+    _require_die_access(str(die), who.get("authorization"), cfg, style)
 
 
 def _can_write_catalog(who: dict) -> bool:
@@ -1817,6 +1849,14 @@ def config_doc(die: str, cfg: str) -> Optional[dict]:
     cannot read: a solver must never fail because the catalog was mid-rename.
     """
     try:
+        # Not an access gate for a die - but a PRIVATE configuration (owner
+        # 2026-10-15) is invisible to a request whose caller holds no grant:
+        # every solve / report / controller route that reaches a configuration
+        # by name through this reader reads it as a missing file.  Outside a
+        # request (a CLI, a background pass) there is no caller to refuse.
+        from motor_ai_sim.motor_access import hidden_for_request
+        if hidden_for_request(str(die), str(cfg)):
+            return None
         return _load_yaml(_cfg_file(_check_name(die, "die"),
                                     _check_name(cfg, "configuration")),
                           "configuration")
@@ -2113,10 +2153,16 @@ def tree(response: Response, authorization: str = Header(default=None)):
     from motor_ai_sim import motor_access as _ma
     _sel_present = _acc["mode"] == MODE_GRANTED and any(
         v.get("visibility") == _ma.VIS_SELECTED for v in _ma.all_die_access().values())
+    # PRIVATE configurations (owner 2026-10-15): the rows differ per account that
+    # holds a config grant, and admin differs from an ``all``-granted account
+    # (both are mode ALL) - both belong in the key or one would be served the
+    # other's memo.
+    _cfg_grants = tuple(sorted(str(x) for x in (_acc.get("configs") or ())))
     _key = (str(_acc["mode"]), tuple(sorted(str(x) for x in (_acc.get("dies") or ()))),
             _can_write, _client_filter, _WS.workspace().id,
             _WS.is_verified_admin_request(),
-            _acc.get("email") if _sel_present else None)
+            _acc.get("email") if _sel_present else None,
+            bool(_acc.get("is_admin")), _cfg_grants)
     _sig = _tree_signature(_client_filter)
     _hit = _TREE_CACHE.get(_key)
     if _sig and _hit is not None and _hit[0] == _sig:
@@ -2158,6 +2204,13 @@ def tree(response: Response, authorization: str = Header(default=None)):
         cfgs = []
         for cf in sorted(dd.glob("*.yaml")):
             if cf.name == "die.yaml":
+                continue
+            # A PRIVATE configuration is not a row at all for a caller without
+            # access: not listed, not counted (config_count / cards below are
+            # computed from what is left).  The caller's own workspace copy is
+            # theirs (layering on), whatever the file says.
+            if not (_layer == _WS.LAYER_WORKSPACE and _ws_layering()
+                    ) and not may_see_config_file(_acc, _die_name, cf.stem, cf):
                 continue
             c = _load_yaml(cf, "configuration")
             _dr_cfg = _dr_die.get(cf.stem) or {}
@@ -2561,7 +2614,10 @@ def create_config(req: ConfigCreate, _w: dict = Depends(require_catalog_write)):
         raise HTTPException(404, detail=f"die '{die}' not found")
     if name == "die":
         raise HTTPException(422, detail="'die' is reserved")
-    if _cfg_file(die, name).exists():
+    if _cfg_file(die, name).exists() and may_see_config(
+            catalog_access(_w.get("authorization")), die, name):
+        # (a PRIVATE configuration the caller cannot see does not "exist" for
+        # them: the save lands in their own workspace, never on the hidden one)
         raise HTTPException(409, detail=f"configuration '{name}' already exists "
                                         f"under die '{die}'")
     if req.role not in ("motor", "generator"):
@@ -2593,7 +2649,8 @@ def _config_doc_from_live(die: str, name: str, role: str, live: dict) -> tuple:
     # carries the correction so the UI can show what happened.
     _fixed = _lname_fix(name, geo.get("motor_length"))
     if _fixed:
-        if _cfg_file(die, _fixed).exists():
+        if _cfg_file(die, _fixed).exists() and may_see_config(
+                catalog_access(None), die, _fixed):
             raise HTTPException(409, detail=(
                 f"the live stack is {geo.get('motor_length'):g} mm, so this "
                 f"configuration would be named '{_fixed}' — which already "
@@ -2661,7 +2718,7 @@ def rename_config(die: str, cfg: str, req: ConfigRename, _w: dict = Depends(requ
     """Rename a configuration (its file moves with it; duties ride along)."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     new = _check_name(req.name, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg, "pair")
     if new == "die":
         raise HTTPException(422, detail="'die' is reserved")
     src = _cfg_file(die, cfg)
@@ -2728,9 +2785,12 @@ def duplicate_die(die: str, req: DieDuplicate,
     d["created"] = datetime.now().isoformat(timespec="seconds")
     _save_yaml(dst_dir / "die.yaml", d)
     cfgs = []
+    _acc = catalog_access(_w.get("authorization"))
     for p in sorted(src_dir.glob("*.yaml")):
         if p.name == "die.yaml":
             continue
+        if not may_see_config_file(_acc, die, p.stem, p):
+            continue          # a private configuration is not copied to a caller who cannot see it
         c = _load_yaml(p, "configuration")
         c["die"] = new
         _save_yaml(dst_dir / p.name, c)
@@ -2740,7 +2800,13 @@ def duplicate_die(die: str, req: DieDuplicate,
     # PWM/BLDC results exactly as the original's do.
     if (src_dir / "runs").is_dir():
         import shutil as _sh
-        _sh.copytree(src_dir / "runs", dst_dir / "runs", dirs_exist_ok=True)
+        _skip = {p.stem for p in src_dir.glob("*.yaml")
+                 if p.name != "die.yaml"
+                 and not may_see_config_file(_acc, die, p.stem, p)}
+        _runs = src_dir / "runs"
+        _sh.copytree(_runs, dst_dir / "runs", dirs_exist_ok=True,
+                     ignore=lambda d, names: [n for n in names
+                                              if Path(d) == _runs and n in _skip])
     log.info("family: die '%s' duplicated as '%s' (%d configuration(s))",
              die, new, len(cfgs))
     return {"ok": True, "die": new, "configs": cfgs}
@@ -2760,7 +2826,7 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
     on the copy's own build (they carry the ORIGINAL's signature)."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
     new = _check_name(req.name, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg, "pair")
     if new == "die":
         raise HTTPException(422, detail="'die' is reserved")
     src = _cfg_file(die, cfg)
@@ -2786,7 +2852,7 @@ def duplicate_config(die: str, cfg: str, req: ConfigDuplicate,
 @router.delete("/config/{die}/{cfg}")
 def delete_config(die: str, cfg: str, _w: dict = Depends(require_catalog_write)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg, "pair")
     p = _cfg_file(die, cfg)
     if not p.is_file():
         raise HTTPException(404, detail=f"configuration '{die}/{cfg}' not found")
@@ -2810,7 +2876,7 @@ def upsert_duty(req: DutyCreate, _w: dict = Depends(require_catalog_write)):
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
     dname = _check_name(req.duty.name, "duty")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     d = req.duty
@@ -3157,7 +3223,7 @@ def record_duty_result(req: DutyResult, _w: dict = Depends(require_catalog_write
     validates shape and stores."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     found = next((x for x in (c.get("duties") or [])
@@ -3225,7 +3291,7 @@ def record_duty_run(req: DutyRunSave, _w: dict = Depends(require_catalog_write))
     an engineer cannot open in an editor stops being a catalog."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     drive = _run_drive(req.drive)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
@@ -3266,7 +3332,7 @@ def get_duty_runs(die: str, cfg: str, duty: str,
     a 48-step transient are ~2 MB gunzipped — the same order as the duty
     payload this sits beside."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_access(die, authorization)
+    _require_die_access(die, authorization, cfg)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     entry = next((x for x in (c.get("duties") or [])
@@ -3309,7 +3375,7 @@ def get_duty_run(die: str, cfg: str, duty: str, drive: str,
     numbers and the gunzipped waveforms.  Loading this is what makes a
     twelve-minute PWM solve a click instead of a wait."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_access(die, authorization)
+    _require_die_access(die, authorization, cfg)
     drive = _run_drive(drive)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
@@ -3351,7 +3417,7 @@ def duplicate_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     configuration the copy is exactly as valid as the original; only the
     saved_at stamp is fresh, marking when the copy was made."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     new = _delookalike_duty_name(str(req.name or "").strip())
     if not new:
         raise HTTPException(422, detail="give the copy a name")
@@ -3391,7 +3457,7 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
     'peak'): a name slip must be a two-click fix, not delete-and-redo that
     would throw the recorded result away."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     new = _delookalike_duty_name(str(req.name or "").strip())
     if not new:
         raise HTTPException(422, detail="give the duty a name")
@@ -3460,7 +3526,7 @@ def rename_duty(die: str, cfg: str, duty: str, req: DutyDuplicate,
 @router.delete("/duty/{die}/{cfg}/{duty}")
 def delete_duty(die: str, cfg: str, duty: str, _w: dict = Depends(require_catalog_write)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     p = _cfg_file(die, cfg)
     c = _load_yaml(p, "configuration")
     before = c.get("duties") or []
@@ -4152,7 +4218,7 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
     until the caller says ``geometry_choice`` = keep_die | apply_duty."""
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     choice = (req.geometry_choice or "").strip() or None
@@ -4308,7 +4374,7 @@ def reattach(req: Reattach, _w: dict = Depends(require_catalog_write)):
     """
     die = _check_name(req.die, "die")
     cfg = _check_name(req.config, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     duty = None
@@ -4476,6 +4542,11 @@ def context(response: Response, authorization: str = Header(default=None)):
     # its build and operating point.
     if not may_see_die(catalog_access(authorization), die):
         return {"active": False, "can_write": _can_write_catalog(who)}
+    if not may_see_config(catalog_access(authorization), die, cfg):
+        # a private configuration is, for this caller, a deleted one - the
+        # same answer the next lines give for a missing file
+        return {"active": False, "can_write": _can_write_catalog(who),
+                "note": "context points at a deleted die/configuration"}
     try:
         d = _load_yaml(_die_file(die), "die")
         c = _load_yaml(_cfg_file(die, cfg), "configuration")
@@ -4547,7 +4618,7 @@ def lock_die(die: str, req: LockPatch, _w: dict = Depends(require_catalog_write)
 def lock_config(die: str, cfg: str, req: LockPatch,
                 _w: dict = Depends(require_catalog_write)):
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     c["locked"] = bool(req.locked)
     _save_yaml(_cfg_file(die, cfg), c)
@@ -4575,12 +4646,16 @@ def get_part_materials(die: str, config: Optional[str] = None, authorization: st
     ddir = _die_dir(die)
     cfg = _check_name(config, "configuration") if config else None
     if cfg is None:
-        names = sorted(p.stem for p in ddir.glob("*.yaml") if p.name != "die.yaml")
+        names = sorted(p.stem for p in ddir.glob("*.yaml")
+                       if p.name != "die.yaml" and may_see_config_file(who, die, p.stem, p))
         if not names:
             raise HTTPException(404, detail=f"die '{die}' has no configuration")
         cfg = names[0]
     out: dict = {"die": die, "config": cfg, "can_write": _can_write_catalog(who)}
     try:
+        if config and not config_allowed(who, die, cfg):
+            # a PRIVATE configuration reads exactly like a missing one
+            raise _mm.MotorMassError(f"configuration {cfg!r} of die {die!r} not found")
         out.update(_mm.full_part_list(die, cfg, dies_dir=ddir.parent))
     except _mm.MotorMassError as exc:
         out.update({"available": False, "reason": str(exc), "parts": []})
@@ -4636,7 +4711,7 @@ def set_default_duty(die: str, cfg: str, req: DefaultDutyPatch,
     """Choose which mode the Motors row shows and loads for this configuration
     (owner 2026-10-13).  Must name an existing duty."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     name = str(req.duty or "").strip()
     if not any(isinstance(d, dict) and d.get("name") == name
@@ -4721,7 +4796,7 @@ def set_battery(die: str, cfg: str, req: BatteryPatch,
     through the bridge, V_bus = V_oc + I_charge·R_pack, and the C-rate is the
     number that says whether the pack will accept what the machine can make."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     if not (req.cells >= 1):
         raise HTTPException(422, detail=f"cell count must be >= 1, got {req.cells}")
     if not (req.v_cell_max >= req.v_cell_min > 0):
@@ -4898,7 +4973,7 @@ def set_controller(die: str, cfg: str, req: ControllerPatch,
     ``GET /settings``).
     """
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
     if not (int(req.devices_parallel) >= 1):
         raise HTTPException(422, detail=(
             f"controller.devices_parallel must be at least 1, got "
@@ -5026,7 +5101,7 @@ def set_bearings(die: str, cfg: str, req: BearingsPatch,
     half-updated pair (a new A against a stale B) is a shaft line nobody drew.
     """
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_write(die, _w)
+    _require_die_write(die, _w, cfg)
 
     lub = (req.lubrication or "grease").strip()
     if lub not in ("grease", "oil_air"):
@@ -5215,7 +5290,7 @@ def duty_results(die: str, cfg: str, response: Response,
     from motor_ai_sim import duty_results as dr
 
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_access(die, authorization)
+    _require_die_access(die, authorization, cfg)
     response.headers["Cache-Control"] = "no-store"
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     stored = dr.get(die, cfg)
@@ -5271,7 +5346,7 @@ def duty_fields(die: str, cfg: str, response: Response,
     from motor_ai_sim import duty_fields as dfl
 
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_access(die, authorization)
+    _require_die_access(die, authorization, cfg)
     response.headers["Cache-Control"] = "no-store"
     # The configuration must EXIST — same gate as /duty_results.  A listing that
     # answered "nothing stored" for a mistyped name would read as "solve it
@@ -5307,7 +5382,7 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
     from fastapi.responses import Response
 
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_access(die, authorization)
+    _require_die_access(die, authorization, cfg)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     if not (c.get("duties") or []):
@@ -5409,7 +5484,7 @@ def payload(die: str, cfg: str, duty: Optional[str] = None,
     duty) through the EXISTING endpoints: merged geometry, winding, sim values.
     Nothing is written here."""
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_access(die, authorization)
+    _require_die_access(die, authorization, cfg)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     geo = dict(d.get("geometry") or {})
@@ -5648,8 +5723,12 @@ def configuration_history(die: str, config: Optional[str] = None,
     `config` is omitted), newest first, each with the lines that differ from
     what is on disk NOW — a row reads "wire_height: 0.5 -> 1.0", not just a
     timestamp."""
-    _require_die_access(die, authorization)
+    acc = _require_die_access(die, authorization)
     is_die = config is None
+    if config and not config_allowed(acc, die, config):
+        # a PRIVATE configuration has no history the caller can see: the answer
+        # a configuration that never existed gets
+        return {"die": die, "config": config, "file": f"{config}.yaml", "snapshots": []}
     stem = _hist_stem(die, config)
     cur_p = _die_file(die) if is_die else _cfg_file(die, config)
     cur = (_hist_essentials(_load_yaml(cur_p, "die" if is_die else "configuration"),
@@ -5690,11 +5769,13 @@ def configuration_history_restore(req: HistoryRestore,
     """Put a snapshot back as the configuration (or die) file.  The version
     being replaced is snapshotted first by `_save_yaml`, so this is undoable
     by restoring the newest entry."""
-    _require_die_access(req.die, authorization)
+    acc = _require_die_access(req.die, authorization)
     stem = _hist_stem(req.die, req.config)
     hdir = _hist_dir(req.die)
     cand = (sorted(hdir.glob("%s.%s*.yaml" % (stem, req.stamp)))
             if hdir.is_dir() else [])
+    if req.config and not config_allowed(acc, req.die, req.config):
+        cand = []          # a PRIVATE configuration has no snapshot the caller can restore
     if len(cand) != 1:
         raise HTTPException(404, detail="no such snapshot: %s at %s (%d match)"
                             % (stem, req.stamp, len(cand)))
@@ -6051,6 +6132,8 @@ def community(response: Response, authorization: str = Header(default=None)):
             for cf in sorted(dd.glob("*.yaml")):
                 if cf.name == "die.yaml":
                     continue
+                if lay.owner_id != me and not may_see_config_file(acc, dd.name, cf.stem, cf):
+                    continue     # a private configuration is not in the community listing
                 try:
                     c = _load_yaml(cf, "configuration")
                 except HTTPException:

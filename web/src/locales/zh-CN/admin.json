@@ -31,7 +31,16 @@
     "none": "无",
     "cancel": "取消",
     "save": "保存",
-    "colDefault": "默认电机"
+    "colDefault": "默认电机",
+    "configsTitle": "配置",
+    "configsTip": "私有配置对所有人隐藏，只有管理员和被授权的账号（用户、电机）可见。冲片及其他配置保持不变。",
+    "configPrivate": "私有",
+    "configPrivateTip": "隐藏此配置：除管理员和被点名授权的账号外，其他人无法在列表中看到、计数、打开、下载或搜索到它。",
+    "configToggleFailed": "无法修改 {config}：{reason}",
+    "grantTitle": "私有配置",
+    "grantTip": "该账号已可见冲片中的私有配置。勾选后账号即可打开；管理员始终可见全部。",
+    "grantNowPublic": "现已公开",
+    "grantUnknown": "未找到"
   },
   "analytics": {
     "title": "访问统计",

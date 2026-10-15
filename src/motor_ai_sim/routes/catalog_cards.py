@@ -15,9 +15,9 @@ as before.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 
 from motor_ai_sim import catalog as _cat
 from motor_ai_sim.auth import require_admin
@@ -61,9 +61,16 @@ def get_one(kind: str, id: str = Query(..., description="the card id")) -> Dict[
 
 
 @router.get("/{kind}/used_by")
-def get_used_by(kind: str, id: str = Query(...)) -> Dict[str, Any]:
+def get_used_by(kind: str, id: str = Query(...),
+                authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     _kind(kind)
-    return {"kind": kind, "id": id, "machines": _used_by(kind, id)}
+    # A machine the caller may not see - a die they hold no grant for, or a PRIVATE
+    # configuration - is not named here (motor_access.may_see_config).
+    from motor_ai_sim import motor_access as _ma
+    access = _ma.catalog_access(authorization)
+    machines = [m for m in _used_by(kind, id)
+                if _ma.may_see_config(access, str(m.get("die")), str(m.get("config")))]
+    return {"kind": kind, "id": id, "machines": machines}
 
 
 @router.post("/device")

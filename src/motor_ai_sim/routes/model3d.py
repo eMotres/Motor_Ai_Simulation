@@ -36,8 +36,9 @@ def _caller(authorization: Optional[str]) -> tuple[dict, dict]:
 def _entry_for(authorization: Optional[str], die: str, config: str) -> dict:
     from motor_ai_sim import motor_access as MA
     e = M.find(die, config)
-    # 404 for "not granted" and "not built" alike: the list does not reveal motors the caller may not see
-    if e is None or not MA.may_see_die(MA.catalog_access(authorization), die):
+    # 404 for "not granted" and "not built" alike: the list does not reveal motors the caller may not see.
+    # A PRIVATE configuration of a visible die is "not granted" too (motor_access.may_see_config).
+    if e is None or not MA.may_see_config(MA.catalog_access(authorization), die, config):
         raise HTTPException(status_code=404, detail="No 3D model for this motor.")
     return e
 
@@ -48,7 +49,7 @@ def list_models(authorization: Optional[str] = Header(default=None)):
     who, rec = _caller(authorization)
     from motor_ai_sim import motor_access as MA
     access = MA.catalog_access(authorization)
-    models = [M.model_info(e) for e in M.scan() if MA.may_see_die(access, e["die"])]
+    models = [M.model_info(e) for e in M.scan() if MA.may_see_config(access, e["die"], e["config"])]
     return {"can_download": M.can_download(who, rec), "models": [m for m in models if m["available"]]}
 
 

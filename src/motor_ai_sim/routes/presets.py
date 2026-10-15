@@ -730,20 +730,37 @@ class SettingsPatch(BaseModel):
     geo_sig: Optional[str] = None
 
 
+def _is_hidden_preset(p: dict, view: tuple) -> bool:
+    """A preset that describes a PRIVATE configuration the caller has no grant for
+    (see ``catalog.hidden_preset_view``) does not exist for them."""
+    ids, names = view
+    return bool(p) and (str(p.get("id")) in ids
+                        or str(p.get("name") or "").strip().casefold() in names)
+
+
+def _hidden_view(authorization):
+    try:
+        from motor_ai_sim.routes.catalog import hidden_preset_view
+        return hidden_preset_view(authorization)
+    except Exception:                                           # noqa: BLE001 - never break the list
+        return set(), set()
+
+
 @router.get("")
-def list_presets():
+def list_presets(authorization: Optional[str] = Header(default=None)):
     """List all saved motor presets (sorted by order)."""
     _backfill_owners()
     presets = _with_shared(_load_presets())
-    items = [_summary(p) for p in presets.values()]
+    _hv = _hidden_view(authorization)
+    items = [_summary(p) for p in presets.values() if not _is_hidden_preset(p, _hv)]
     items.sort(key=lambda x: (x["order"], x["name"]))
     return {"presets": items}
 
 
 @router.get("/{preset_id}")
-def get_preset(preset_id: str):
+def get_preset(preset_id: str, authorization: Optional[str] = Header(default=None)):
     p = _with_shared(_load_presets()).get(preset_id)
-    if not p:
+    if not p or _is_hidden_preset(p, _hidden_view(authorization)):
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
     return p
 
@@ -759,7 +776,7 @@ def apply_preset(preset_id: str,
     else's motor as a read-only working copy instead of auto-saving into it and
     collecting a 403 every 0.9 s."""
     p = _with_shared(_load_presets()).get(preset_id)
-    if not p:
+    if not p or _is_hidden_preset(p, _hidden_view(authorization)):
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
 
     geometry = p.get("geometry", {}) or {}
@@ -1328,7 +1345,7 @@ def open_motor(preset_id: str,
     _backfill_owners()
     presets = _load_presets()
     src = presets.get(preset_id)
-    if not src:
+    if not src or _is_hidden_preset(src, _hidden_view(authorization)):
         raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
     ident = _caller_identity(authorization)
     if not _is_template(src) and _can_write(src, ident):

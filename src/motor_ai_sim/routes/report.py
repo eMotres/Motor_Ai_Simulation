@@ -110,7 +110,7 @@ def report(die: str, cfg: str, duty: Optional[str] = Query(default=None),
                     % (format,))}])
 
     die, cfg = _check_name(die, "die"), _check_name(cfg, "configuration")
-    _require_die_access(die, authorization)
+    _require_die_access(die, authorization, cfg)
     d = _load_yaml(_die_file(die), "die")
     c = _load_yaml(_cfg_file(die, cfg), "configuration")
     if duty:

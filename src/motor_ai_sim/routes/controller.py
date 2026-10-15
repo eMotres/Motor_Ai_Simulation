@@ -146,6 +146,20 @@ def _point_label(coupled: Dict[str, Any], kind: str) -> str:
     return "the duty"
 
 
+def _hidden_config(die: Optional[str], cfg: Optional[str]) -> bool:
+    """True when ``<die>/<cfg>`` is a PRIVATE configuration the caller has no
+    grant for (``motor_access.may_see_config``).  The controller routes then
+    answer exactly as for a machine that has nothing stored: empty settings, no
+    saved record - never an error that tells the two apart."""
+    if not (die and cfg):
+        return False
+    try:
+        from motor_ai_sim import motor_access as _ma
+        return _ma.hidden_for_request(str(die), str(cfg))
+    except Exception:                                       # noqa: BLE001
+        return False
+
+
 def _duty_defaults(die: Optional[str], cfg: Optional[str],
                    duty: Optional[str]) -> Dict[str, Any]:
     """The duty's own operating point and inverter block, or ``{}``.
@@ -198,6 +212,8 @@ def _duty_defaults(die: Optional[str], cfg: Optional[str],
         die, cfg, duty = ctx
     die, cfg, duty = str(die), str(cfg), str(duty)
     try:
+        # (a PRIVATE configuration reads as one with nothing stored: duty_results.get
+        # and family.config_doc already answer {} / None for it)
         node = (_DR.get(die, cfg) or {}).get(duty) or {}
     except Exception:                                       # noqa: BLE001
         node = {}
@@ -463,7 +479,8 @@ def _cooling_from_thermal(die: Optional[str], cfg: Optional[str],
         die, cfg, duty = ctx
     die, cfg, duty = str(die), str(cfg), str(duty)
     try:
-        node = (_DR.get(die, cfg) or {}).get(duty) or {}
+        node = ({} if _hidden_config(die, cfg)
+                else (_DR.get(die, cfg) or {}).get(duty) or {})
     except Exception:                                       # noqa: BLE001
         node = {}
     thermal = node.get("thermal") if isinstance(node, dict) else None
@@ -591,7 +608,8 @@ def _thermal_saved_cooling(die: Optional[str], cfg: Optional[str],
             return {}, None
         die, cfg, duty = ctx
     try:
-        node = (_DR.get(str(die), str(cfg)) or {}).get(str(duty)) or {}
+        node = ({} if _hidden_config(die, cfg)
+                else (_DR.get(str(die), str(cfg)) or {}).get(str(duty)) or {})
     except Exception:                                       # noqa: BLE001
         node = {}
     thermal = node.get("thermal") if isinstance(node, dict) else None
@@ -852,6 +870,8 @@ def _config_doc_for(die: Optional[str], cfg: Optional[str]) -> Dict[str, Any]:
             return {}
         d, cf = ctx[0], ctx[1]
     try:
+        # (family.config_doc itself reads a PRIVATE configuration the caller has
+        # no grant for as a missing file - the same ``{}`` the except returns)
         from motor_ai_sim.routes import family as _fam
         doc = _fam.config_doc(str(d), str(cf))
     except Exception:                                       # noqa: BLE001

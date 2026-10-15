@@ -242,7 +242,7 @@ export function renderBody(L, loc, webDir = WEB) {
   out.push(`<section aria-labelledby="cta-h"><h2 id="cta-h">${t('cta.title')}</h2>`);
   out.push(`${authLinks(L, loc)}</section>`);
   out.push('</main>');
-  out.push(`<footer><p>${t('footer.licence')}</p><p>${esc(COMPANY)} · <a href="${SITE}">aerostator.com</a></p></footer>`);
+  out.push(`<footer><p>${t('footer.licence')}</p><p>${esc(COMPANY)} · <a href="${SITE}">aerostator.com</a> · <a href="/terms">${t('footer.terms')}</a> · <a href="/privacy">${t('footer.privacy')}</a></p></footer>`);
   out.push('</div>');
   return out.join('\n');
 }

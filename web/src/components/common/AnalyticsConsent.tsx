@@ -2,12 +2,10 @@ import React from 'react';
 import { Box, Button, Link, Paper, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../stores/uiStore';
+import { PRIVACY_URL } from '../../lib/localAuth';
 import {
   getAnalytics, pageViewPath, OPEN_COOKIE_SETTINGS_EVENT, type AnalyticsState,
 } from '../../lib/analytics';
-
-/** Where the privacy information lives (the app has no privacy page of its own). */
-const PRIVACY_URL = 'https://emotres.com';
 
 /** Live analytics state (re-read on every consent change and when the UI language changes). */
 export function useAnalyticsState(): AnalyticsState {

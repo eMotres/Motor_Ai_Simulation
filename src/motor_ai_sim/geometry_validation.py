@@ -596,6 +596,49 @@ def split_width_error(geo: Dict[str, Any]) -> Optional[Tuple[str, str, float]]:
             float(w_max))
 
 
+def slot_mouth_infeasibility(geo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The slot-mouth (fill radius <= 0) refusal in the USER's terms, or ``None``.
+
+    The builder rounds the slot mouth with ``fill_r = (cut_x_max - cut_x) /
+    (1 - sin(slot_angle/2))`` (see ``slot_cut_limits``).  At ``fill_r <= 0`` the
+    wire column no longer fits across the slot, the cutter (trapezoid + circle)
+    degenerates and ``buffer(0)`` keeps or drops a lobe unevenly: the stator
+    drawn is not a lamination (owner report 2026-10-15: an outward arc lobe with
+    a round notch at the top of the CIANO14 30_10 cross-section, reached from
+    Configure by widening the wire).  A machine like that is NEVER drawn or
+    solved; the refusal names the limit.
+
+    Returns ``{"code", "field", "value", "message", "max", "turns", "fill_r_mm"}``
+    where ``max`` is the largest ``wire_width`` [mm] (solving ``fill_r = 0``) or,
+    with a split, the largest strip count — the same bound ``split_width_error``
+    gives the parameter validator.
+    """
+    lim = slot_cut_limits(geo)
+    if lim is None:
+        return None
+    cut_x, cut_x_max, n_split = lim
+    if cut_x < cut_x_max - 1e-9:
+        return None
+    err = split_width_error(geo)
+    if err is None:                       # pragma: no cover - same predicate
+        return None
+    field, _long, bound = err
+    turns = int(round(_num(geo.get("num_wires_per_slot")) or 0))
+    at = " at {:d} turn{}".format(turns, "" if turns == 1 else "s") if turns > 0 else ""
+    half = max(1, int(round(_num(geo.get("num_slots")) or 2)) // 2)
+    s2 = math.sin(math.radians(360.0 / half / 2.0))
+    fill_r = (cut_x_max - cut_x) / (1.0 - s2) if s2 < 1.0 else float("nan")
+    if field == "wire_width":
+        msg = ("wire too wide for this slot: max wire width {:.2f} mm{}"
+               .format(bound, at))
+    else:
+        msg = ("wire split too wide for this slot: max {:d} strip{} of the "
+               "current wire width{}".format(int(bound), "" if int(bound) == 1 else "s", at))
+    return {"code": "wire_too_wide_for_slot", "field": field,
+            "value": _num(geo.get(field)), "message": msg,
+            "max": float(bound), "turns": turns, "fill_r_mm": float(fill_r)}
+
+
 def weld_tol_mm(params: Optional[Dict[str, Any]] = None,
                 polys: Optional[Dict[str, Any]] = None) -> float:
     """The tolerance the polygons were BUILT to — machine diameter / _WELD_DIV.
@@ -836,7 +879,12 @@ def validate_polygons(polys: Dict[str, Any],
                                  max(0.0, _strip
                                      - (_cut_x - _cut_x_max) / _n_split),
                                  _n_split)
-                             if _n_split > 1 and _strip > 0.0 else "")),
+                             if _n_split > 1 and _strip > 0.0 else
+                             # an unsplit wire: the limit in the user's terms
+                             (" Wire too wide for this slot: max wire width "
+                              "{:.2f} mm.".format(
+                                  max(0.0, _strip - (_cut_x - _cut_x_max)))
+                              if _strip > 0.0 else ""))),
             measured_mm=float(_cut_x - _cut_x_max), likely_params=_causes))
 
     # ── 1c. conductor cross-section actually delivered ───────────────────────

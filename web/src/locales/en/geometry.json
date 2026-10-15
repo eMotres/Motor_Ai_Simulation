@@ -22,5 +22,8 @@
   "float": "Float",
   "integer": "Integer",
   "cancel": "Cancel",
-  "newMotorName": "New motor name…"
+  "newMotorName": "New motor name…",
+  "slotWireTooWide": "wire too wide for this slot: max wire width {max} mm at {turns} turns",
+  "slotSplitTooWide": "wire split too wide for this slot: max {n} strips of the current wire width at {turns} turns",
+  "slotValueClamped": "{field} limited to {value}: a wider wire would not fit across the slot"
 }

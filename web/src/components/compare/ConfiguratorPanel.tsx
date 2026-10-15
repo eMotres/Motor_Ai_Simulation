@@ -87,6 +87,7 @@ import { stackCoefficientReferenceOnly } from '../../lib/stackCoefficientBasis.m
 import { coldConstantsUnavailableForCard } from '../../lib/coldConstantsGuard.mjs';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
+import { slotMouthLimit } from '../../lib/slotMouthFit';
 import i18n from '../../i18n';
 import {
   usableVariants, variantFacts, readVariant, buildTuned, limitProblems,
@@ -789,6 +790,14 @@ const ConfiguratorPanel: React.FC = () => {
   // the one name the charts and the result use for "the knobs the model reads".
   const scaleKnobs = knobs;
   const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
+  // The winding must fit ACROSS the slot (owner 2026-10-15: a wire wider than the slot mouth
+  // draws the stator with a lobe).  Wire WIDTH is fixed per machine in Configure (only turns and
+  // wire thickness are knobs), so there is nothing to clamp here: the line names the limit, and
+  // the cross-section shows "infeasible geometry" instead of drawing the broken stator.
+  const slotFit = useMemo(() => {
+    const l = slotMouthLimit(liveGeoRaw ? { ...liveGeoRaw, num_wires_per_slot: knobs.N } : null);
+    return l && !l.feasible ? l : null;
+  }, [liveGeoRaw, knobs.N]);
 
   // ── RANGES = PHYSICAL LIMITS (owner 2026-10-05) ───────────────────────────
   // Per machine, live with the knobs they depend on (lib/configuratorLimits.ts):
@@ -1795,6 +1804,13 @@ const ConfiguratorPanel: React.FC = () => {
             limitNote={limitNote('N')} />
           <KnobSlider label={tx('configureLimits.wireThickness')} unit="mm" value={knobs.wireH_mm} base={p.wireH0_mm} min={ranges.wireH_mm.min} max={wireSliderMax} step={WIRE_STEP_MM} d={1} onChange={set('wireH_mm')} onRangeChange={isAdmin ? setRange('wireH_mm') : undefined} warn={overFit}
             limitNote={limitNote('wireH_mm')} />
+          {slotFit && (
+            <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 1 }} title={tx('configure.slotMouthTip')}>
+              ⚠ {slotFit.field === 'wire_width'
+                ? tx('configure.slotWireTooWide', { max: slotFit.maxWireWidthMm.toFixed(2), turns: slotFit.turns })
+                : tx('configure.slotSplitTooWide', { n: slotFit.maxStrips, turns: slotFit.turns })}
+            </Typography>
+          )}
           {overFit ? (
             <Typography sx={{ fontSize: 11, color: '#f87171', mt: -0.5, mb: 1 }}
               title={tx('configureLimits.overFitTip', { n: knobs.N, wire: fmt(knobs.wireH_mm, 2), gap: fmt(ref.fit.wireSpacingY_mm, 2), stack: fmt(stackHeight_mm, 1), slot: fmt(ref.fit.slotHeight_mm, 1), ins: fmt(ref.fit.insulation_mm, 2), avail: fmt(availStack_mm, 1) })}>

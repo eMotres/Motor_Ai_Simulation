@@ -22,5 +22,8 @@
   "float": "浮点数",
   "integer": "整数",
   "cancel": "取消",
-  "newMotorName": "新电机名称…"
+  "newMotorName": "新电机名称…",
+  "slotWireTooWide": "线材对该槽过宽：在 {turns} 匝下最大线宽 {max} mm",
+  "slotSplitTooWide": "线材分股对该槽过宽：在 {turns} 匝下，按当前线宽最多 {n} 股",
+  "slotValueClamped": "{field} 已限制为 {value}：更宽的线材放不进槽内"
 }

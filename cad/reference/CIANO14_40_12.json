@@ -1724,13 +1724,33 @@
    "role": "derived"
   },
   {
+   "name": "screw_tip_margin",
+   "source": "mechanics rule (owner 2026-10-15)",
+   "fusion_expression": null,
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "Least distance of the screw tip from the back flange outer face (the L12 M2x18 as built has 0.2 mm)",
+   "role": "mechanics"
+  },
+  {
+   "name": "holder_screw_max",
+   "source": "mechanics rule (owner 2026-10-15)",
+   "fusion_expression": null,
+   "freecad_expression": "holder_screw_req + holder_flange_t - screw_tip_margin",
+   "value": 26.0,
+   "unit": "mm",
+   "comment": "Longest screw (length under the head) whose tip stays screw_tip_margin inside the back flange outer face (= clamp length + back flange thickness [+ rib] - margin)",
+   "role": "derived"
+  },
+  {
    "name": "holder_screw_l",
    "source": "91292A032 family (M2 x 25 on L20, M2 x 18 on L12) in Stator_holder",
    "fusion_expression": "25 mm",
-   "freecad_expression": "2 * ceil(min(holder_screw_req, 20 mm) / 2 mm - 0.000001) * 1 mm + 5 * ceil(max(holder_screw_req, 20 mm) / 5 mm - 0.000001) * 1 mm - 20 mm",
+   "freecad_expression": "2 * floor(min((holder_screw_max + 0.000001 mm), 20 mm) / 2 mm) * 1 mm + 2 * min(1, floor((holder_screw_max + 0.000001 mm) / 22 mm)) * 1 mm + 3 * min(1, floor((holder_screw_max + 0.000001 mm) / 25 mm)) * 1 mm + 5 * floor(max((holder_screw_max + 0.000001 mm), 25 mm) / 5 mm) * 1 mm - 25 mm",
    "value": 25.0,
    "unit": "mm",
-   "comment": "Screw length under the head = holder_screw_req rounded UP to a stock M2 length (even mm up to 20, then 25, 30, ...); owner 2026-10-13: L12 M2x18, L20 M2x25",
+   "comment": "Screw length under the head = the LONGEST stock length (even mm up to 20, then 22, 25, 30, ...) that fits: <= holder_screw_max (tip inside the back flange); health.precheck refuses when it is shorter than holder_screw_req (clamp length). Owner 2026-10-13: L12 M2x18, L20 M2x25; 2026-10-15: longer stacks follow (85 L15: 22)",
    "role": "derived"
   },
   {

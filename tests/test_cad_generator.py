@@ -336,8 +336,47 @@ def test_phase_board_step_has_the_colours_and_pin_j13_lands_where_the_pcb_sessio
     assert abs(math.degrees(math.atan2(y, x)) - 63.0) < 0.05
 
 
-@pytest.mark.parametrize("length,req,screw", [(12, 17.0, 18.0), (20, 25.0, 25.0), (16, 21.0, 25.0), (24, 29.0, 30.0)])
+@pytest.mark.parametrize("length,req,screw", [(12, 17.0, 18.0), (20, 25.0, 25.0), (16, 21.0, 22.0), (24, 29.0, 30.0)])
 def test_screw_length_is_stock_rounded_and_coil_straight_is_stack_plus_1(length, req, screw):
     v, _ = _eval_with(length)
     assert abs(v["holder_screw_req"] - req) < 1e-9 and abs(v["holder_screw_l"] - screw) < 1e-9
     assert abs(v["coil_straight_len"] - (length + 1)) < 1e-9 and abs(v["coil_leg_length"] - (length + 1)) < 1e-9
+
+
+def _rows_of(profile):
+    base = json.load(open(os.path.join(CAD_DIR, "reference", profile), encoding="utf-8"))
+    return {p["name"]: p["freecad_expression"] for sec in store.SECTIONS for p in base.get(sec, [])}
+
+
+@pytest.mark.parametrize("profile,length,screw,tip_margin", [
+    ("CIANO14_40_12.json", 12, 18.0, 0.2), ("CIANO14_40_12.json", 20, 25.0, 1.2),                  # as built before (owner 2026-10-13)
+    ("CIANO28_85_20SW1200.json", 13, 20.0, 1.2),                                                    # L13 as built (Fusion M2.5 x 20)
+    ("CIANO28_85_20SW1200.json", 15, 22.0, 1.2),                                                    # L15: 25 broke through the flange, 22 fits
+    ("CIANO14_40_12.json", 16, 22.0, 0.2)])
+def test_screw_length_follows_the_stack_the_longest_stock_length_that_keeps_the_tip_inside(profile, length, screw, tip_margin):
+    from motor_templates.segmented_flatwire import health
+    expr = _rows_of(profile)
+    expr["motor_length"] = "%g mm" % length
+    v = store.evaluate(expr)
+    assert v["holder_screw_l"] == pytest.approx(screw) and v["holder_screw_l"] >= v["holder_screw_req"]
+    outer = -(v["holder_flange_z"] + v.get("holder_rib_h", 0.0))                     # outer face of the back flange (ribs continue it)
+    tip = v["holder_flange_z"] - v["holder_screw_l"]
+    assert tip - outer == pytest.approx(tip_margin) and tip - outer >= v["screw_tip_margin"] - 1e-9
+    assert not [t for t in health.precheck(lambda n: v[n]) if "screw" in t]
+    longer = [s for s in (22, 25, 30, 35) if s > screw]                              # the next stock length would break through
+    assert all(v["holder_flange_z"] - s < outer + v["screw_tip_margin"] - 1e-9 for s in longer[:1])
+
+
+def test_no_stock_screw_fits_is_refused_in_words():
+    from motor_templates.segmented_flatwire import health
+    expr = _rows_of("CIANO14_40_12.json")
+    expr["motor_length"] = "22 mm"                                                   # clamp 27 mm, the tip limit 28 mm: no stock length between
+    v = store.evaluate(expr)
+    assert v["holder_screw_req"] == pytest.approx(27.0) and v["holder_screw_l"] == pytest.approx(25.0)
+    msgs = [t for t in health.precheck(lambda n: v[n]) if "stock screw" in t]
+    assert msgs and "27.000" in msgs[0] and "25.000" in msgs[0]
+
+
+def test_the_bom_knows_the_new_stock_length():
+    from motor_ai_sim.cad import bom
+    assert 22 in bom.M2_STOCK_LENGTHS and bom.nearest_m2_stock(22.0) == 22

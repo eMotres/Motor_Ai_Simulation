@@ -128,6 +128,7 @@ from motor_ai_sim.routes.admin import router as admin_router
 from motor_ai_sim.routes.admin_analytics import router as admin_analytics_router
 from motor_ai_sim.routes.activity import router as activity_router, admin_router as activity_admin_router
 from motor_ai_sim.routes.model3d import router as model3d_router
+from motor_ai_sim.routes.construction import router as construction_router
 from motor_ai_sim.routes.nda import router as nda_router
 from motor_ai_sim.routes.data_sharing import router as data_sharing_router
 from motor_ai_sim.routes.cluster import router as cluster_router
@@ -340,6 +341,7 @@ app.include_router(admin_analytics_router)
 app.include_router(activity_router)
 app.include_router(activity_admin_router)
 app.include_router(model3d_router)
+app.include_router(construction_router)
 app.include_router(nda_router)
 app.include_router(data_sharing_router)
 app.include_router(cluster_router)

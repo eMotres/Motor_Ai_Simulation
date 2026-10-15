@@ -1,18 +1,17 @@
-// FreeCAD round-trip buttons — export the ACTIVE machine as a .FCStd project
-// (solids + Parameters spreadsheet) and import an edited one back.  The import
-// goes through the SAME PUT-geometry path as manual edits (validator, family
-// locks, clamp report), so refusals surface exactly like a typed value would.
-// One shared component: it first shipped inside GeometryForm, which turned out
-// to be DEAD code — the Geometry tab actually renders ParameterVariationTable
-// (found live 2026-08-23: "I don't see the export button").
-import React, { useState } from 'react';
-import { Box, Button, Typography } from '@mui/material';
+// FreeCAD round-trip of the ACTIVE machine - export it as a .FCStd project (solids + Parameters spreadsheet) and import an edited
+// one back.  The import goes through the SAME PUT-geometry path as manual edits (validator, family locks, clamp report), so
+// refusals surface exactly like a typed value would.
+//
+// Since 2026-10-15 these are actions of the Geometry tab's "Files" menu (components/geometry/FilesMenu.tsx), not a button row:
+// this module is the hook behind the Active items.  (It first shipped inside GeometryForm, which turned out to be DEAD code - the
+// Geometry tab renders ParameterVariationTable - found live 2026-08-23.)
+import { useState } from 'react';
 import { useMotorStore } from '../../stores/motorStore';
 import { formatApiErrorDetail } from '../../lib/apiErrorDetail';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
-const FreeCADRoundTrip: React.FC = () => {
+export function useFreeCADRoundTrip() {
   const { connectedToApi, fetchGeometryFromApi } = useMotorStore();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -53,25 +52,5 @@ const FreeCADRoundTrip: React.FC = () => {
     finally { setBusy(false); }
   };
 
-  return (
-    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mb: 1 }}>
-      <Button size="small" variant="outlined" disabled={!connectedToApi || busy}
-        sx={{ fontSize: 11, textTransform: 'none' }} onClick={doExport}>
-        ⇩ Export FreeCAD
-      </Button>
-      <Button size="small" variant="outlined" component="label"
-        disabled={!connectedToApi || busy}
-        sx={{ fontSize: 11, textTransform: 'none' }}>
-        ⇧ Import FreeCAD
-        <input type="file" accept=".FCStd,.fcstd,.zip" hidden
-          onChange={(e) => {
-            const f = e.target.files?.[0]; e.target.value = '';
-            if (f) void doImport(f);
-          }} />
-      </Button>
-      {msg && <Typography variant="caption" color="text.secondary">{msg}</Typography>}
-    </Box>
-  );
-};
-
-export default FreeCADRoundTrip;
+  return { connectedToApi, busy, msg, setMsg, doExport, doImport };
+}

@@ -6,7 +6,7 @@
 // the model, the motor picker, Fit, the "Download after NDA" note and the Sign button.  No bill of materials, no prices.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, Checkbox, CircularProgress, FormControlLabel, MenuItem, Select, Slider, Switch,
+  Alert, Box, Button, CircularProgress, MenuItem, Select, Slider, Switch,
   ToggleButton, ToggleButtonGroup, Typography,
 } from '@mui/material';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -15,10 +15,13 @@ import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { useLastMotorState } from '../../lib/lastMotor';
 import NdaDialog from './NdaDialog';
-import { ModelViewer } from './modelViewer';
+import PartTree from '../common/PartTree';
+import ModelCanvas, { modelBase as base, responseDetail as detail, type CanvasTools, type ModelCanvasHandle } from './ModelCanvas';
+import { usePartTreeData } from '../geometry/useConstruction';
+import { highlightNodes } from '../../lib/partTree';
 import {
-  effectiveSettings, filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, panelParts, resolveModel, togglesOf,
-  type Axis, type ModelInfo, type PartGroup,
+  filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, panelParts, resolveModel,
+  type Axis, type ModelInfo,
 } from '../../lib/model3d';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
@@ -28,21 +31,11 @@ const lbl = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransfo
 const rd = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
 const wr = (k: string, v: string): void => { try { localStorage.setItem(k, v); } catch { /* private window */ } };
 
-const base = (m: Pick<ModelInfo, 'die' | 'config'>) =>
-  `${API}/api/model3d/${encodeURIComponent(m.die)}/${encodeURIComponent(m.config)}`;
-
-async function detail(r: Response): Promise<string> {
-  try { const j = await r.json(); return typeof j?.detail === 'string' ? j.detail : JSON.stringify(j?.detail ?? j); } catch { return String(r.status); }
-}
-
 const Model3DPanel: React.FC = () => {
   // `ready` = the lazy namespace has arrived: until then t() would print the raw key ("downloadLocked", "nda.sign").
   const { t, ready } = useTranslation('model3d');
   const { selection: openMotor } = useLastMotorState();
-  const host = useRef<HTMLDivElement>(null);
-  const viewer = useRef<ModelViewer | null>(null);
-  const tRef = useRef(t);
-  tRef.current = t;
+  const canvas = useRef<ModelCanvasHandle>(null);
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [canDownload, setCanDownload] = useState(false);
   const [ndaOpen, setNdaOpen] = useState(false);
@@ -50,14 +43,14 @@ const Model3DPanel: React.FC = () => {
   const [key, setKey] = useState<string>('');
   // the motor open in Configure has no built model (only some motors have one yet)
   const [preparing, setPreparing] = useState(false);
-  const [groups, setGroups] = useState<PartGroup[]>([]);
-  const [hidden, setHidden] = useState<ReadonlySet<string>>(new Set());
+  const [hiddenParts, setHiddenParts] = useState<ReadonlySet<string>>(new Set());
+  const [selPart, setSelPart] = useState<string | null>(null);
+  const [selGroup, setSelGroup] = useState<string | null>(null);
   const [explode, setExplode] = useState(0);
   const [sec, setSec] = useState<{ on: boolean; axis: Axis; position: number }>({ on: false, axis: 'x', position: 0 });
   const [range, setRange] = useState({ min: -1, max: 1 });
   const [measure, setMeasure] = useState(false);
   const [mm, setMm] = useState<number | null>(null);
-  const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [dl, setDl] = useState<'idle' | 'busy'>('idle');
 
@@ -97,48 +90,18 @@ const Model3DPanel: React.FC = () => {
   }, []);
   useEffect(() => { void loadMine(); }, [loadMine]);
 
-  // the viewer lives as long as the panel
-  useEffect(() => {
-    if (!host.current) return undefined;
-    const v = new ModelViewer(host.current);
-    v.onMeasure = setMm;
-    v.onContextLost = () => setErr(tRef.current('contextLost'));
-    viewer.current = v;
-    return () => { v.dispose(); viewer.current = null; };
-  }, []);
+  // THE part tree of the open motor (names only, after the NDA) - the same tree as Geometry > Full and Materials > Full
+  const { tree } = usePartTreeData(model?.die ?? null, model?.config ?? null, 'model3d', !!model && canDownload, model?.glb_sha256 ?? 0);
+  const hiddenNodes = useMemo(() => new Set((tree?.parts ?? []).filter((p) => hiddenParts.has(p.id)).flatMap((p) => p.glb)), [tree, hiddenParts]);
+  const highlight = useMemo(() => new Set(highlightNodes(tree, { part: selPart, group: selGroup })), [tree, selPart, selGroup]);
+  const toggleHidden = useCallback((id: string) => setHiddenParts((h) => { const n = new Set(h); if (n.has(id)) n.delete(id); else n.add(id); return n; }), []);
 
-  // load the chosen model
-  useEffect(() => {
-    const v = viewer.current;
-    if (!model || !v) return undefined;
-    let live = true;
-    setLoading(true); setErr(null);
-    (async () => {
-      try {
-        const r = await fetch(`${base(model)}/model.glb`);
-        if (!r.ok) { if (live) setErr(await detail(r)); return; }
-        const { groups: gs } = await v.load(await r.arrayBuffer());
-        if (!live) return;
-        setGroups(gs); setHidden(new Set()); setExplode(0); setMeasure(false); setMm(null);
-        const rg = v.sectionRange('x');
-        setRange(rg);
-        setSec({ on: false, axis: 'x', position: (rg.min + rg.max) / 2 });
-      } catch (e: any) { if (live) setErr(e?.message ?? String(e)); } finally { if (live) setLoading(false); }
-    })();
-    return () => { live = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [model]);
-
-  // push the controls into the scene
-  useEffect(() => {
-    viewer.current?.apply(effectiveSettings(canDownload, { hidden, explode, section: sec, measure }));
-  }, [hidden, explode, sec, measure, groups, canDownload]);
+  const tools: CanvasTools = useMemo(() => ({ hidden: new Set<string>(), explode, section: sec, measure }), [explode, sec, measure]);
 
   const show = useMemo(() => new Set(panelParts(canDownload)), [canDownload]);
 
-  const toggles = useMemo(() => togglesOf(groups), [groups]);
   const setAxis = useCallback((axis: Axis) => {
-    const rg = viewer.current?.sectionRange(axis) ?? range;
+    const rg = canvas.current?.sectionRange(axis) ?? range;
     setRange(rg);
     setSec((s) => ({ ...s, axis, position: (rg.min + rg.max) / 2 }));
   }, [range]);
@@ -193,14 +156,10 @@ const Model3DPanel: React.FC = () => {
 
         <Box>
           <Typography sx={lbl}>{t('parts')}</Typography>
-          <Box sx={{ display: 'flex', flexDirection: 'column' }}>
-            {toggles.map((row) => (
-              <FormControlLabel key={row.family} sx={{ m: 0, '& .MuiFormControlLabel-label': { fontSize: 12.5 } }}
-                control={<Checkbox size="small" sx={{ p: 0.5 }} checked={!hidden.has(row.family)}
-                  onChange={(_, on) => setHidden((h) => { const n = new Set(h); if (on) n.delete(row.family); else n.add(row.family); return n; })} />}
-                label={t(`part.${row.family}`, { defaultValue: row.family.replace(/_/g, ' ') })} />
-            ))}
-          </Box>
+          {tree && tree.groups.length > 0 && (
+            <PartTree tree={tree} selectedPart={selPart} selectedGroup={selGroup} onSelectPart={setSelPart} onSelectGroup={setSelGroup}
+              visibility={{ hidden: hiddenParts, onToggle: toggleHidden }} testId="model3d-part-tree" />
+          )}
         </Box>
 
         <Box>
@@ -244,7 +203,7 @@ const Model3DPanel: React.FC = () => {
               {t('nda.yourNda')}
             </Button>
           )}
-          <Button size="small" onClick={() => viewer.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
+          <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
             sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{t('fit')}</Button>
           {model?.version && (
             <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>
@@ -257,12 +216,18 @@ const Model3DPanel: React.FC = () => {
       )}
 
       <Box sx={{ position: 'relative', flex: 1, minWidth: 0 }}>
-        <Box ref={host} sx={{ position: 'absolute', inset: 0 }} />
+        <ModelCanvas ref={canvas} model={model} tools={tools} canUseTools={canDownload} highlight={highlight} hiddenNodes={hiddenNodes}
+          contextLostText={t('contextLost')} onMeasure={setMm}
+          onLoaded={({ range: rg }) => {
+            setHiddenParts(new Set()); setSelPart(null); setSelGroup(null); setExplode(0); setMeasure(false); setMm(null);
+            setRange(rg);
+            setSec({ on: false, axis: 'x', position: (rg.min + rg.max) / 2 });
+          }} />
         {ready && !show.has('parts') && (
           <>
             <Box sx={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 1, zIndex: 1 }}>
               {models && (models.length > 1 || preparing) && <Box sx={{ minWidth: 220, bgcolor: 'var(--panel)', borderRadius: 1 }}>{picker}</Box>}
-              <Button size="small" onClick={() => viewer.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
+              <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
                 sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)', bgcolor: 'var(--panel)' }}>{t('fit')}</Button>
             </Box>
             {models && !models.length && <Typography sx={{ position: 'absolute', top: 54, left: 12, fontSize: 12, color: 'var(--text-3)' }}>{t('none')}</Typography>}
@@ -276,11 +241,10 @@ const Model3DPanel: React.FC = () => {
             </Box>
           </>
         )}
+        {err && <Alert severity="error" sx={{ position: 'absolute', bottom: 8, left: 8, right: 8, fontSize: 12, zIndex: 3 }} onClose={() => setErr(null)}>{err}</Alert>}
         {ready && preparing && !model && (
           <Typography sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>{t('inPreparation')}</Typography>
         )}
-        {loading && <Box sx={{ position: 'absolute', top: 12, left: 12 }}><CircularProgress size={22} /></Box>}
-        {err && <Alert severity="error" sx={{ position: 'absolute', top: 8, left: 8, right: 8, fontSize: 12 }} onClose={() => setErr(null)}>{err}</Alert>}
       </Box>
     </Box>
   );

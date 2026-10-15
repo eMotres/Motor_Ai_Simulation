@@ -4,9 +4,10 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  MATERIALS_MODES, formatMass, groupChoices, isEditable, mergeOverlay, overlayKey, parseMode, rowTag,
+  formatMass, groupChoices, isEditable, mergeOverlay, overlayKey, rowTag,
   rowsForMode, scaledMass,
 } from '../fullPartsLogic.ts';
+import { SCOPES, parseScope } from '../../../lib/constructionScope.ts';
 
 const row = (key, em, over = {}) => ({
   key, name: key, role: 'structural', em, material_id: em ? '20SW1200' : 'Aluminium_6061',
@@ -16,12 +17,12 @@ const row = (key, em, over = {}) => ({
 const ROWS = [row('holder_front', false), row('stator_core', true), row('screws', false, { material_id: 'Stainless_A2_70', default_material_id: 'Stainless_A2_70' }),
   row('magnet', true)];
 
-test('the mode switch has exactly Active and Full and defaults to Active', () => {
-  assert.deepEqual(MATERIALS_MODES.map((m) => m.id), ['active', 'full']);
-  assert.equal(parseMode(undefined), 'active');
-  assert.equal(parseMode(null), 'active');
-  assert.equal(parseMode('garbage'), 'active');
-  assert.equal(parseMode('full'), 'full');
+test('the mode switch is the shared construction scope: exactly Active and Full, Active by default', () => {
+  assert.deepEqual(SCOPES.map((m) => m.id), ['active', 'full']);
+  assert.equal(parseScope(undefined), 'active');
+  assert.equal(parseScope(null), 'active');
+  assert.equal(parseScope('garbage'), 'active');
+  assert.equal(parseScope('full'), 'full');
 });
 
 test('Active shows only the electromagnetic parts, Full shows the whole motor with the EM parts first', () => {

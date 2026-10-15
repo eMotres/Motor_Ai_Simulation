@@ -64,6 +64,8 @@ ACTIONS = frozenset({
     # catalog / workspaces
     "die.access", "die.retire", "die.restore", "workspace.read", "workspace.export",
     "config.applications",
+    # Geometry tab Full: CAD-only construction edits and the server CAD rebuild they request
+    "cad.params", "cad.rebuild",
     # agent drafts (MCP Stage 3) — cross-account reads/writes
     "agent_design.read", "agent_design.delete",
     # the log itself

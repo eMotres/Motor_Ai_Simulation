@@ -113,7 +113,7 @@ def test_old_flag_is_accepted_and_ignored_and_nothing_new_is_mapped_from_it(env)
     from motor_ai_sim import comm_prefs as CP
     assert CP.get(NEW)["topics"] == {t: False for t in CP.TOPICS} and CP.history(NEW) == []
     assert len(env["outbox"]) == 1 and env["outbox"][0]["subject"] == "Confirm your e-mail address"   # only the account link, no second mail
-    client.post("/api/auth/verify", json={"token": env["outbox"][0]["body"].split("?verify=")[1].split()[0]})
+    client.post("/api/auth/verify", json={"token": env["outbox"][0]["body"].split("/api/auth/link/v/")[1].split()[0]})
     assert len(env["outbox"]) == 1                                                            # still no newsletter confirmation
 
 

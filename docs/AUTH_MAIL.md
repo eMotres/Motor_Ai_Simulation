@@ -33,3 +33,25 @@ reveal whether an account exists.  Verdicts are cached for ten minutes; MX recor
   the mail server; a later bounce is not tracked)" or "FAILED ..."), and its drawer can change the address
   (`PATCH /api/auth/users/{email}` with `new_email`); the new address is mailed a confirmation link.  The last mail is recorded on the
   account (`last_mail` in `users.json`: kind, time, accepted or refused by SMTP).
+
+## The links in the mails need no JavaScript (2026-10-15)
+
+A visitor in China clicked the confirmation link, but the single-page app's ~1.2 MB bundle aborted twice on the China -> Germany line,
+so the browser-side confirmation call was never made.  The mails now carry a short link to a SERVER route and the server does the
+work:
+
+* Confirm: `GET /api/auth/link/v/<16-char id>` (about 55 characters, on a line of its own).  The server confirms the address and
+  answers with a tiny self-contained page (`link_pages.py`: inline CSS, no script, no external asset, about 2 kB, EN or zh-CN) with
+  "E-mail confirmed" and buttons Open AeroStator / Sign in.  A second click, or a mail scanner that opened it first, shows "Already
+  confirmed".  Expired, used or forged: the same small page with a plain HTML form (POST `/api/auth/link/resend`, 3 an hour per
+  address) that asks for a new link.  A sign-up started in an AI app's authorization window also resumes that authorization (the
+  page's button returns to the consent page).
+* Reset: `GET /api/auth/link/r/<id>` shows a plain HTML form (new password + repeat, POST `/api/auth/link/reset`); the link is
+  burnt only when the password is accepted, and every other session is signed out.
+* Only the SHA-256 of an id is stored (on the account, up to three live ones per purpose, so a resend does not kill the first mail).
+* Old mails: nginx redirects `/?verify=<token>`, `/?reset=<token>` and the old consent-page confirmation to
+  `/api/auth/link/verify|reset?t=...` before any JavaScript (`deploy/nginx.conf`); the single-page app's handler and the JSON
+  endpoints (`/api/auth/verify`, `/api/auth/reset/confirm`, which also accept a short id) stay as a fallback.
+* Language of a page: `?lang=` (the page has an "English / 中文" switch), a stored Chinese choice, the browser's Accept-Language,
+  a Chinese mail provider, else English.  The mails carry the Chinese lines under the English ones when the account language is
+  Chinese or the address is at qq.com / 163.com / 126.com / sina.com / aliyun.com / foxmail.com ... (or any .cn).

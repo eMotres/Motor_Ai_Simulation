@@ -35,6 +35,7 @@ class Context:
         self.ttl = ttl
         self.now = now
         self._http = http
+        self._shared_local: dict = {}
 
     @property
     def http(self):
@@ -49,6 +50,20 @@ class Context:
         if self.ttl > 0 and ev and all(e.result != EV.UNKNOWN for e in ev):
             self.cache[key] = {"at": self.now(), "ev": [e.to_dict() for e in ev]}
         return ev
+
+    def shared(self, key: str, fn: Callable[[], object], cache_if: Optional[Callable[[object], bool]] = None) -> object:
+        """Share fetched material between sources and source order without serializing it as evidence."""
+        if key in self._shared_local:
+            return self._shared_local[key]
+        hit = self.cache.get("shared:" + key)
+        if hit and self.ttl > 0 and self.now() - hit["at"] < self.ttl:
+            self._shared_local[key] = hit["value"]
+            return hit["value"]
+        value = fn()
+        self._shared_local[key] = value
+        if self.ttl > 0 and value and (cache_if is None or cache_if(value)):
+            self.cache["shared:" + key] = {"at": self.now(), "value": value}
+        return value
 
 
 class VerificationSource:

@@ -12,6 +12,9 @@ STEP tree: <motor_id>_active / Stator / Core ; Winding / Coils / Coil_1..N ; Rot
            Mechanics / Shaft, Bearing_618_8_front / (outer_ring, inner_ring, ball_01..), Bearing_618_8_back / (...),
                        Stator_holder, Stator_holder_back, Ring_front, Ring_back, Prop_fix, Screws / Screw_1..
            (Mechanics only for profiles with the stage-3 rows)
+Frameless kit (cad_variant = frameless, template A.6.0): Stator / Core ; Winding / Coils / Coil_1..N ; Rotor / RotorCore ; Magnets / Magnet_01..M ;
+           Electronics / PhaseBoard_001.. (the phase board: plate + lead sleeves, or the imported board's solids); no Mechanics.
+           The datums JSON gets a `frameless` block (kit contents, mounting datums).
 Datums: frame, axial and radial datums, the end face of every coil lead (centre, section, normal) and the mechanical
 datums (bearing seats, holder faces, A_H, shaft axis / journals / flats, Prop_fix seat, bolt circle).
 """
@@ -21,7 +24,7 @@ ROOT = os.environ["FC_CAD_ROOT"]
 sys.path.insert(0, ROOT)
 import FreeCAD as App  # noqa: E402
 import Import  # noqa: E402
-from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics  # noqa: E402
+from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, frameless  # noqa: E402
 from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 
@@ -139,6 +142,11 @@ def _has(g, name):
         return False
 
 
+def electronics_board(doc):
+    from motor_templates.segmented_flatwire import electronics
+    return electronics.board_shape(doc)
+
+
 def main():
     model = os.environ["FC_MODEL"]
     src = App.openDocument(model)
@@ -168,6 +176,8 @@ def main():
     coils = [s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids]
     mags = [s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids]
     mech = mechanics.solids(src)
+    kit = frameless.is_frameless(src)
+    board = [s.copy() for s in electronics_board(src).Solids] if kit and src.getObject("Electronics") is not None else []
     meta = dict(src.Meta or {})
     L = g("motor_length"); Lc = L + g("coil_straight_extra")
     pitch = g("wire_height") + g("wire_spacing_y")
@@ -199,8 +209,11 @@ def main():
         lead_section=dict(width=r6(g("wire_width")), height=r6(g("wire_height"))),
         note="Lead end faces measured on the exported solids (same frame as the STEP); lead start = layer 0 (outer, "
              "under the yoke), lead end = last layer (inner).")
+    datums["cad_variant"] = "frameless" if kit else "full"
     if mech:
         datums["mechanics"] = mech_datums(g, mech)
+    if kit:
+        datums["frameless"] = frameless.datums_block(src, g)
     if src.getObject("Electronics") is not None:
         from motor_templates.segmented_flatwire import electronics
         datums["phase_board"] = electronics.datums(src, g)
@@ -223,6 +236,10 @@ def main():
     mg = part(root, "Magnets")
     for i, s in enumerate(mags):
         solid(mg, "Magnet_%02d" % (i + 1), s)
+    if board:
+        ep = part(root, "Electronics")
+        for i, s in enumerate(board):
+            solid(ep, "PhaseBoard_%03d" % (i + 1), s)
     if mech:
         mp = part(root, "Mechanics")
         sub_parts = {}
@@ -244,7 +261,7 @@ def main():
             if o.TypeId == "Part::Feature" and not o.Shape.isNull() and o.Shape.Solids]
     parts = sorted({o.Label for o in chk.Objects if o.TypeId == "App::Part"})
     App.closeDocument(chk.Name)
-    expv = core.Volume + rotor.Volume + sum(s.Volume for s in coils) + sum(s.Volume for s in mags) + sum(s.Volume for s in mech.values())
+    expv = core.Volume + rotor.Volume + sum(s.Volume for s in coils) + sum(s.Volume for s in mags) + sum(s.Volume for s in mech.values()) + sum(s.Volume for s in board)
     res = dict(step=os.path.basename(out), datums=os.path.basename(dat), freecad_version=".".join(str(x) for x in App.Version()[:3]), size_bytes=os.path.getsize(tmp), parts=parts,
                n_solid_objects=len(rows), total_volume=round(sum(r["volume"] for r in rows), 3), expected_total_volume=round(expv, 3),
                leads=len(leads), objects=rows)
@@ -254,7 +271,7 @@ def main():
     print(json.dumps({k: v for k, v in res.items() if k != "objects"}, indent=1))
     # re-import volume: relative 1e-6 (the coil transition lofts are B-splines; the STEP round trip moves ~1e-3 mm3)
     ok = abs(res["total_volume"] - res["expected_total_volume"]) < 1e-6 * res["expected_total_volume"] + 1e-3 \
-        and len(rows) == 2 + ncoil + len(mags) + len(mech) and len(leads) == 2 * ncoil
+        and len(rows) == 2 + ncoil + len(mags) + len(mech) + len(board) and len(leads) == 2 * ncoil
     if ok:
         os.replace(tmp, out)
         with open(dat, "w", encoding="utf-8") as fh:

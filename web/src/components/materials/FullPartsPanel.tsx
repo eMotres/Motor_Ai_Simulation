@@ -41,6 +41,7 @@ const FullPartsPanel: React.FC = () => {
   const ordered = rowsForMode(rows, 'full');
   const totalKg = countedMassKg(ordered);
   const partial = !!payload?.partial;
+  const kit = !!payload?.kit;
   const nonEm = ordered.some((r) => !r.em);
 
   let body: React.ReactNode;
@@ -119,8 +120,8 @@ const FullPartsPanel: React.FC = () => {
         <tfoot>
           <tr>
             <td colSpan={3} style={{ color: 'var(--text-3)' }}>
-              <Tooltip title={tx(partial ? 'materialsFullPartialTip' : 'materialsFullTotalTip')}>
-                <span>{tx(partial ? 'materialsFullPartial' : 'materialsFullTotal')}</span>
+              <Tooltip title={tx(partial ? 'materialsFullPartialTip' : kit ? 'materialsFullTotalKitTip' : 'materialsFullTotalTip')}>
+                <span>{tx(partial ? 'materialsFullPartial' : kit ? 'materialsFullTotalKit' : 'materialsFullTotal')}</span>
               </Tooltip>
             </td>
             <td style={{ textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{formatMass(totalKg)}</td>

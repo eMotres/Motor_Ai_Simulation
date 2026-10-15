@@ -502,8 +502,11 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // THE MOTOR MASS (owner 2026-10-14): the active mass scales with the stack, the fixed parts do not.  Every per-kg figure
   // below divides by it.  Without a CAD model (`mass_partial`) it is the active mass and the result says so.
   const massActive = p.mass0_kg * fL;
-  const massPartial = p.mass_partial !== false || !(Number(p.mass_fixed_kg) > 0);
-  const mass = massActive + (massPartial ? 0 : Number(p.mass_fixed_kg));
+  // The fixed part may be NEGATIVE: a frameless kit (owner 2026-10-15) has no shaft tube, so its mass is lighter than the active mass
+  // by the tube and heavier by the board - only a missing / zero value means "no CAD model".
+  const fixedKg = p.mass_fixed_kg == null ? NaN : Number(p.mass_fixed_kg);
+  const massPartial = p.mass_partial !== false || !Number.isFinite(fixedKg) || fixedKg === 0;
+  const mass = massActive + (massPartial ? 0 : fixedKg);
 
   // No-load KV, the drone-bench convention: rpm per volt of LINE peak EMF —
   // the FUNDAMENTAL on a passport of extraction_rev ≥ 2.

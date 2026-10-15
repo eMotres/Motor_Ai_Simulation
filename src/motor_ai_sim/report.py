@@ -7499,6 +7499,7 @@ def _inject_full_mass(em: Dict[str, Any], die: str, cfg: str) -> None:
         em["mass_partial"] = True
         return
     em["mass_partial"] = bool(fm.partial)
+    em["mass_scope"] = fm.scope                       # "full motor" | "frameless kit" (owner 2026-10-15): what mass_total_kg is the mass OF
     if fm.partial:
         em["mass_partial_reason"] = fm.partial_reason
         return
@@ -9637,9 +9638,11 @@ def headline_rows(role: str, d_duty: Dict[str, Any], em: Dict[str, Any],
         [eta_row[0], _fmt(eta_row[1], 2, "%"), eta_row[2]],
         # ITEM 7 (owner review 2026-09-19): built from this run's own parts,
         # never a hardcoded list — see `mass_composition_words`.
-        ["Mass" + (" (partial)" if _g(em, "mass_partial") else ""), _fmt(m_tot, 3, "kg"),
+        ["Mass" + (" (frameless kit)" if _g(em, "mass_scope") == "frameless kit" else "")
+         + (" (partial)" if _g(em, "mass_partial") else ""), _fmt(m_tot, 3, "kg"),
          (("partial mass (no CAD model yet): the active parts only - " if _g(em, "mass_partial") else
-           "full assembled motor - ") + mass_composition_words(em))],
+           ("frameless kit (stator, coils, phase board, rotor, magnets; no housing, bearings, shaft) - "
+            if _g(em, "mass_scope") == "frameless kit" else "full assembled motor - ")) + mass_composition_words(em))],
     ]
     _mat_ = _numf(_g(em, "mass_active_total_kg"))
     if _mat_ and m_tot and abs(float(_mat_) - float(m_tot)) > MASS_SUM_TOL_KG:

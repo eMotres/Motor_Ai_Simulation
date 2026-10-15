@@ -55,6 +55,25 @@ CAD_ONLY_CLEARANCES = {
     "offset_holder": "holder fit clearance",
 }
 
+# ASSEMBLY VARIANT (owner 2026-10-15).  ``cad_variant`` is a top-level key of the configuration yaml (``L13.yaml``): ``full`` (default) builds
+# the whole motor, ``frameless`` builds the kit a robot builder integrates into his own frame - stator with coils and the phase board +
+# rotor with magnets - and leaves out housing, holders, rotor carriers, bearings, shaft, screws, rings and the propeller plate.  The
+# build call may override it (``--variant``).  It is the same parametric model with parts omitted (docs/CAD_GENERATOR.md).
+CAD_VARIANTS = ("full", "frameless")
+DEFAULT_CAD_VARIANT = "full"
+FRAMELESS_LABEL = "frameless kit"
+
+
+def check_variant(value, where="cad_variant"):
+    """The variant name (``None`` / empty -> ``full``); anything but full | frameless is an error in words."""
+    if value is None or value == "":
+        return DEFAULT_CAD_VARIANT
+    v = str(value).strip().lower()
+    if v not in CAD_VARIANTS:
+        raise ValueError("%s = %r is not one of %s" % (where, value, " | ".join(CAD_VARIANTS)))
+    return v
+
+
 # simulation material slot -> FreeCAD body
 MAT_BODIES = {"magnet": "Magnet", "stator_core": "Core", "rotor_core": "RotorCore", "slot": "Coil", "shaft": "Shaft"}
 # simulation derived value -> equivalent FreeCAD expression (cross-check only)
@@ -242,9 +261,10 @@ def list_configs(dies_dir, die):
     return sorted(f[:-5] for f in os.listdir(d) if f.lower().endswith(".yaml") and f != "die.yaml")
 
 
-def load_effective(dies_dir, die, config, materials_library=None, bearings_library=None):
+def load_effective(dies_dir, die, config, materials_library=None, bearings_library=None, cad_variant=None):
     """Effective machine of <die>/<config>: die geometry updated by the config's geometry_overrides, the config's
-    materials (cards from the library) and winding.  Every input file is hashed."""
+    materials (cards from the library) and winding.  Every input file is hashed.  ``cad_variant`` (full | frameless) is the
+    configuration's top-level key of that name, unless the caller overrides it."""
     import yaml
     cfg_name = config_stem(config) + ".yaml"
     ddir = os.path.join(dies_dir, die)
@@ -257,6 +277,10 @@ def load_effective(dies_dir, die, config, materials_library=None, bearings_libra
     cy = yaml.safe_load(open(cfg_file, encoding="utf-8")) or {}
     geo = dict(dy.get("geometry") or {})
     geo.update(cy.get("geometry_overrides") or {})
+    if cad_variant:
+        variant, variant_from = check_variant(cad_variant, "--variant"), "build option"
+    else:
+        variant, variant_from = check_variant(cy.get("cad_variant"), "%s: cad_variant" % cfg_name), cfg_name if cy.get("cad_variant") else "default"
     files = {}
     for p in (die_file, cfg_file):
         st = os.stat(p)
@@ -292,7 +316,7 @@ def load_effective(dies_dir, die, config, materials_library=None, bearings_libra
         files["bearings_library.yaml"] = dict(sha256=sha256_file(blib), size=os.path.getsize(blib),
                                               mtime=datetime.datetime.fromtimestamp(os.path.getmtime(blib)).isoformat(timespec="seconds"),
                                               cards_used=sorted(bcards))
-    return dict(die=die, config=cfg_name, variant=config_stem(config), geometry=geo,
+    return dict(die=die, config=cfg_name, variant=config_stem(config), cad_variant=variant, cad_variant_from=variant_from, geometry=geo,
                 geometry_overrides=cy.get("geometry_overrides") or {}, die_geometry=dy.get("geometry") or {},
                 materials=mats, winding=cy.get("winding") or {}, bearings=cy.get("bearings") or {},
                 bearing_cards=bcards, material_cards=cards, files=files, dies_dir=dies_dir)
@@ -315,8 +339,11 @@ def clearance_rows(values, reference=None):
 def parameter_fingerprint(eff, mp):
     """What the CAD depends on: the primary geometry rows + materials + winding.  Same store values -> same hash."""
     rows = {k: v for k, _f, v, _u, _d in primary_rows(eff["geometry"], mp)}
+    what = dict(rows=rows, materials=eff["materials"], winding=eff["winding"])
+    if eff.get("cad_variant", DEFAULT_CAD_VARIANT) != DEFAULT_CAD_VARIANT:       # a full build keeps its hash (no rebuild of full models)
+        what["cad_variant"] = eff["cad_variant"]
     return dict(geo_sig=geo_sig(eff["geometry"]), geo_sig_hash=geo_sig_hash(geo_sig(eff["geometry"])),
-                cad_param_hash=canonical_hash(dict(rows=rows, materials=eff["materials"], winding=eff["winding"])))
+                cad_param_hash=canonical_hash(what), cad_variant=eff.get("cad_variant", DEFAULT_CAD_VARIANT))
 
 
 # ----------------------------------------------------------------------------------------------- profile (pull)
@@ -380,8 +407,11 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
     mid = motor_id or "%s_%s" % (slug(eff["die"]), eff["variant"])
     stamp = stamp or datetime.datetime.now().isoformat(timespec="seconds")
     fp = parameter_fingerprint(eff, mp)
+    kit = eff.get("cad_variant", DEFAULT_CAD_VARIANT) == "frameless"
+    if kit:
+        prof["cad_variant"] = "frameless"                    # only a frameless profile carries the key: full profiles are unchanged
     prof.update(motor_id=mid, profile_file=mid, doc_name=mid,
-                variant="%s (simulation die %s, config %s)" % (eff["variant"], eff["die"], eff["config"]),
+                variant="%s (simulation die %s, config %s)%s" % (eff["variant"], eff["die"], eff["config"], " [" + FRAMELESS_LABEL + "]" if kit else ""),
                 revision="B.0", status="parameters from the simulation store; geometry template validated against Fusion",
                 materials=mats, material_cards={c: eff["material_cards"][c] for c in eff["materials"].values()
                                                 if c in eff["material_cards"]},

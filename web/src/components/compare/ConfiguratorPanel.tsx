@@ -53,7 +53,6 @@ import {
 import { fetchPropellers, fetchSeries, fetchPropellerS1 } from '../../lib/propellerApi';
 import {
   s1Line, s1DriveRequest, s1BoardBuilds, s1BoardBuildKey, s1BoardBuildOfId, s1BoardCoolingKey,
-  isBoardBuild,
   type S1BoardBuild, type S1Controller, type S1Result,
 } from '../../lib/configuratorPropellerS1';
 import { activeDuty } from '../../lib/dutySettings';
@@ -1156,8 +1155,8 @@ const ConfiguratorPanel: React.FC = () => {
   // current binds) and the pack the Battery block shows (its minimum voltage binds the voltage)
   // ... or for an EXTERNAL ESC (the one on the bench): no board model, its continuous bus current typed
   // (blank = the model's bench ESC)
-  const [s1Ctrl, setS1Ctrl] = useState<S1Controller>('drive');
-  const [s1EscTxt, setS1EscTxt] = useState('');
+  const s1Ctrl: S1Controller = 'drive';   // our drive block, no user choice (owner 2026-10-15)
+  const s1EscTxt = '';
   const [s1EscDeb, setS1EscDeb] = useState('');
   /** the drive ids the last S1 answer offered (kept when a later request fails: a remembered
    *  two-device build is never retried blindly on a model that carries none) */
@@ -1172,7 +1171,7 @@ const ConfiguratorPanel: React.FC = () => {
   const s1ModelKey = `${s1Die}|${s1Config}`;
   const s1Avail = s1Drives && s1Drives.key === s1ModelKey ? s1Drives.drives : null;
   const s1Builds = s1BoardBuilds(s1Avail, s1BaseDrive);
-  const s1BuildWanted: S1BoardBuild = coolChoice.boardBuild ?? 'as_built';
+  const s1BuildWanted: S1BoardBuild = 'as_built'   // no user choice (owner 2026-10-15);
   const s1Build: S1BoardBuild = s1Builds.includes(s1BuildWanted) ? s1BuildWanted : 'as_built';
   // the board's cooling class is not asked of the user or the request: the server decides it
   // from the machine (propeller wash where the board is modelled, else the passport's rating)
@@ -1194,12 +1193,6 @@ const ConfiguratorPanel: React.FC = () => {
     });
     return () => { dead = true; };
   }, [propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
-  // no visible line (owner 2026-10-15): the board cooling class the server decided, and why, ride in the
-  // tooltip of the S1 controller control
-  const s1Cool = s1?.drive?.board_cooling;
-  const s1CtrlTitle = s1Cool
-    ? `${tx('configurePropeller.s1CtrlTip')} ${tx('configurePropeller.s1BoardCooling')}: ${tx(s1BoardCoolingKey(s1Cool))}. ${s1?.drive?.board_cooling_basis ?? ''}`.trim()
-    : tx('configurePropeller.s1CtrlTip');
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
   const s1Text: { text: string; tip: string } | null = (() => {
@@ -1938,38 +1931,7 @@ ${s1Text.tip}` : '';
                 <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>°C</Box>
               </Box>
               )}
-              {cooled && propellerCoolingActive && (
-                <Box sx={{ display: 'flex', alignItems: 'center', columnGap: 1, rowGap: 0.5, mt: 0.5, flexWrap: 'wrap', minHeight: 24 }}>
-                  <Typography sx={{ ...LABEL, flex: '0 0 auto', cursor: 'help' }} title={s1CtrlTitle}>{tx('configurePropeller.s1Ctrl')}</Typography>
-                  <select value={s1Ctrl} aria-label={tx('configurePropeller.s1Ctrl')} title={s1CtrlTitle}
-                    onChange={(e) => setS1Ctrl(e.target.value === 'external' ? 'external' : 'drive')}
-                    style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, padding: '1px 4px', flex: '0 1 auto', minWidth: 0 }}>
-                    <option value="drive" style={{ color: '#000' }}>{tx('configurePropeller.s1CtrlDrive')}</option>
-                    <option value="external" style={{ color: '#000' }}>{tx('configurePropeller.s1EscExternal')}</option>
-                  </select>
-                  {s1Ctrl === 'external' && (<>
-                    <input type="number" step={1} min={1} value={s1EscTxt} aria-label={tx('configurePropeller.s1EscBus')}
-                      placeholder={s1?.external_esc_default?.i_bus_cont_A != null ? String(s1.external_esc_default.i_bus_cont_A) : ''}
-                      title={s1?.external_esc_default?.i_bus_cont_A != null
-                        ? tx('configurePropeller.s1EscBusTipDefault', { name: s1.external_esc_default.name ?? '', amps: fmt(s1.external_esc_default.i_bus_cont_A, 0), basis: s1.external_esc_default.basis ?? '' })
-                        : tx('configurePropeller.s1EscBusTip')}
-                      onChange={(e) => setS1EscTxt(e.target.value)}
-                      style={{ width: 52, flex: '0 0 auto', background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
-                    <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)', flex: '0 0 auto' }}>{tx('configurePropeller.s1EscBusUnit')}</Box>
-                  </>)}
-                  {s1Ctrl === 'drive' && (<>
-                    {s1Builds.length > 1 && (<>
-                      <Typography sx={{ ...LABEL, fontSize: 12, flex: '0 0 auto' }} title={tx('configurePropeller.s1BoardBuildTip')}>{tx('configurePropeller.s1BoardBuild')}</Typography>
-                      <select value={s1Build} aria-label={tx('configurePropeller.s1BoardBuild')}
-                        title={tx('configurePropeller.s1BoardBuildTip')}
-                        onChange={(e) => { const v = e.target.value; if (isBoardBuild(v)) updateCool({ boardBuild: v }); }}
-                        style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, padding: '1px 4px', flex: '0 1 auto', minWidth: 0 }}>
-                        {s1Builds.map((b) => (<option key={b} value={b} style={{ color: '#000' }}>{tx(s1BoardBuildKey(b))}</option>))}
-                      </select>
-                    </>)}
-                  </>)}
-                </Box>
-              )}
+              {/* S1 controller / board build / board cooling: no user choice (owner 2026-10-15) - our drive block, as built, in the same propeller wash as the motor */}
             </Box>
           )}
           <KnobSlider label={tx('configureLimits.phaseCurrent')} unit="A" value={knobs.I_A} base={p.I0_A}

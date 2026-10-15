@@ -20,7 +20,7 @@ card are in mm (frames, envelope); the centre of mass is in m. Every field name 
 | identity | `component_id` (lower snake / dots / dashes), `kind`, `name`, `version` (semver), `licence` (SPDX expression), `description`, `provenance` |
 | kinds | `motor`, `propeller`, `transmission`, `controller`, `battery`, `frame`, `link`, `wheel`, `other` |
 | shape | `cad` (optional `step`, `gltf`: `uri`, `sha256`, `access`), `envelope` (a `box` or a `cylinder`, mm), `frames` (named; `position_mm` and `rotation_wxyz`, a unit quaternion) |
-| parts | `parts`: list of `ComponentPart` (section 7): name, `material_id`, `mass_kg`, `role`, `status`, `counted`; the parts add up to the card mass |
+| parts | `parts`: list of `ComponentPart` (section 7): name, `material_id`, `mass_kg`, `role`, `status`, `counted`, and for a motor `part_id` + `group` (THE part tree, `part_tree.py`: the same ids, names, groups and order as Geometry Full, Materials Full, the 3-D model and the BOM export); the parts add up to the card mass |
 | mass | `mass_properties`: `mass_kg`, `com_m`, `inertia_kg_m2` (3 x 3 about the centre of mass, axes parallel to the body frame), `estimated`, `basis`. Validated: symmetric, positive definite, principal moments obey Ia + Ib >= Ic |
 | ports | list of `Port` (section 2) |
 | model | the reduced-order model, one of the tagged IRs below (`ir_schema` selects it) |

@@ -1,17 +1,17 @@
-// Fusion 360 parameter round-trip — the geometry as a Parameter I/O CSV.
-// Export: download the CSV, then in Fusion: Parameter I/O → Import (existing
-// user parameters are updated, missing ones created).  Import: Parameter I/O
-// → Export in Fusion, upload here — the changes are shown BEFORE they land
-// (dry run), and applied only on confirmation, through the same geometry write
-// path the form uses.  Names follow config/fusion_param_map.yaml.
-import React, { useState } from 'react';
-import { Box, Button, Typography } from '@mui/material';
+// Fusion 360 parameter round-trip of the ACTIVE machine - the geometry as a Parameter I/O CSV.
+// Export: download the CSV, then in Fusion: Parameter I/O → Import (existing user parameters are updated, missing ones created).
+// Import: Parameter I/O → Export in Fusion, upload here - the changes are shown BEFORE they land (dry run), and applied only on
+// confirmation, through the same geometry write path the form uses.  Names follow config/fusion_param_map.yaml.
+//
+// Since 2026-10-15 these are actions of the Geometry tab's "Files" menu (components/geometry/FilesMenu.tsx): this module is the hook
+// behind the Active items.
+import { useState } from 'react';
 import { useMotorStore } from '../../stores/motorStore';
 import { formatApiErrorDetail } from '../../lib/apiErrorDetail';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
-const Fusion360RoundTrip: React.FC = () => {
+export function useFusion360RoundTrip() {
   const { connectedToApi, fetchGeometryFromApi } = useMotorStore();
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -78,27 +78,5 @@ const Fusion360RoundTrip: React.FC = () => {
     setBusy(false);
   };
 
-  return (
-    <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mb: 1 }}>
-      <Button size="small" variant="outlined" disabled={!connectedToApi || busy}
-        sx={{ fontSize: 11, textTransform: 'none' }} onClick={doExport}
-        title="Download the geometry as a Parameter I/O CSV (the add-in's six columns: Name, Unit, Expression, Value, Comment, Favorite). In Fusion: Parameter I/O → Import — user parameters are updated or created and the model rebuilds. Names per config/fusion_param_map.yaml.">
-        ⇩ Fusion CSV
-      </Button>
-      <Button size="small" variant="outlined" component="label"
-        disabled={!connectedToApi || busy}
-        sx={{ fontSize: 11, textTransform: 'none' }}
-        title="Upload a CSV exported by Parameter I/O in Fusion. Changes are listed first (dry run) and applied only on confirmation, through the same write path as the form — validator, locks and the die snapshot all fire.">
-        ⇧ Fusion CSV
-        <input type="file" accept=".csv,text/csv" hidden
-          onChange={(e) => {
-            const f = e.target.files?.[0]; e.target.value = '';
-            if (f) void doImport(f);
-          }} />
-      </Button>
-      {msg && <Typography variant="caption" color="text.secondary">{msg}</Typography>}
-    </Box>
-  );
-};
-
-export default Fusion360RoundTrip;
+  return { connectedToApi, busy, msg, setMsg, doExport, doImport };
+}

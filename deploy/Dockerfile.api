@@ -138,6 +138,9 @@ RUN set -eu; \
     echo "build guard ok: no intel-openmp, no intel-cmplr-lib-ur, no libiomp5.so"
 
 COPY src/ src/
+# Geometry tab "Full" (owner 2026-10-15): a CAD-only edit is validated with the CAD template's own pre-check (cad_params.py loads this
+# one pure-Python file by path).  Without it saving an edit is refused loudly (503), nothing else breaks.
+COPY cad/motor_templates/segmented_flatwire/health.py cad/motor_templates/segmented_flatwire/health.py
 # GET /api/version reads the repo-root VERSION three parents above api.py, i.e.
 # /app/VERSION — never copied, so the API reported "0.0.0" and the frontend's
 # skew check compared 0.1.9 against it and would have flagged a mismatch on

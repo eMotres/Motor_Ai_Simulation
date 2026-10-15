@@ -296,6 +296,31 @@ the screw component is `91292A032_NO THREADS`.  They are reproduced the same way
 (shaft r 2.4505, tap holes), the thread faces carry the host colour darkened by `THREAD_DARKEN` in `palette.py` (checked by `check_gui.py`)
 and the datums JSON lists them (`mechanics.threads`).  Volumes and the 1.0.2 / 1.1 compatibility are unchanged (no geometry change).
 
+### Thread texture in the web viewer (owner 2026-10-15)
+
+The CAD model and the STEP keep every thread **smooth** (a plain cylinder, light STEP); the thread size lives as data and the web viewer
+draws the relief as a texture, like Fusion's cosmetic thread.  `export_models.py` splits the threaded cylindrical face of a screw shank
+(`Screw_n`, external), a tapped hole (`Stator_holder_back`, internal: the M2 / M2.5 screw taps and the six M3 holes) and the shaft thread
+(`Shaft`, external M5; on the ring carrier the internal M3 hub holes) into its own glTF node `<solid>_thread<k>` in the same group (same
+material, so the same colour) and gives the node `extras.thread`:
+
+```json
+{"thread": {"kind": "external", "d_mm": 2.0, "pitch_mm": 0.4, "length_mm": 24.6, "standard": "ISO 261", "designation": "M2x0.4",
+            "radius_mm": 1.0, "axis": [0, 0, 1], "origin": [7.425, 12.86, -11.5], "hand": "right"}}
+```
+
+`d_mm` is the nominal size, found from the modelled cylinder (shank radius -> nearest ISO coarse size, tapping-hole radius -> the size whose
+minor diameter D1 is nearest) and `pitch_mm` comes from the ISO 261 coarse table in `cad/fc_scripts/threads.py` (the template states no
+pitch); `axis` is a unit vector (first non-zero component positive), `origin` the axis point where the threaded `length_mm` starts.  A
+radius that matches no coarse size gets no record (a smooth face).  The BOM rows of the screws and of the back holder state the same thread
+(`thread M2x0.4 (ISO 261)`).  The meshes are the same triangles as before: `geometry_sha256` (asset extras and `_models3d.json`) is a hash
+over the sorted triangles per group, unchanged by the split; `FC_THREADS=0` writes the file without the thread nodes for comparison.
+
+The viewer (`web/src/lib/threadTexture.ts`, `components/model3d/modelViewer.ts`) gives each such mesh cylindrical texture coordinates
+(u = angle round the axis, v = axial distance / pitch, so the pitch is exact) and ONE shared procedurally generated normal map (128 x 128,
+mipmapped, nothing loaded from outside): a right-hand ISO profile as the diagonal pattern h(v - u); `normalScale` corrects the helix
+angle to the radius.  Colour, metalness and roughness stay those of the file; a GLB without the extras renders as before.  In the NDA view
+the pointer over a thread shows its size ("M2x0.4, ISO 261").  Old GLBs get thread nodes after the next CAD rebuild of the motor.
 
 ## 3D model menu: viewer model, access rule, download log (2026-10-13)
 

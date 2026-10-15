@@ -12,6 +12,11 @@ Writes into FC_OUT_DIR (under a temporary name first, moved only after its check
                                signed-in user who may see the motor; the STEP download is for NDA accounts and the owner only.
   <motor_id>_models3d.json     evidence: triangle counts and the mesh-vs-solid volume check (the manifest holds the hashes)
 
+Threads are SMOOTH in the model (owner 2026-10-15).  The cylindrical face of a screw shank, a tapped hole or the shaft thread is split off
+into its own node `<solid>_thread<k>` whose glTF `extras.thread` carries kind / nominal d / ISO 261 coarse pitch / length / axis
+(threads.py); the web viewer draws the helical relief as a normal map.  The geometry is identical with or without the split
+(`geometry_sha256` in the GLB asset extras and the report; FC_THREADS=0 writes the file without the thread nodes, for the comparison).
+
 The model is opened, fully recomputed and must pass health.gate() like the STEP export; the export refuses if a mesh differs
 from its solid by more than 3 % in volume.
 """
@@ -23,6 +28,7 @@ sys.path.insert(0, os.path.join(ROOT, "fc_scripts"))
 import FreeCAD as App  # noqa: E402
 import MeshPart  # noqa: E402
 import glb_writer as G  # noqa: E402
+import threads as TH  # noqa: E402
 from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, electronics, view, palette  # noqa: E402
 from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
@@ -74,9 +80,11 @@ def budget_of(node):
     return None
 
 
-def tessellate(shape, tol):
-    """-> ([G.Mesh per face, ...], mesh volume).  One patch per face: hard edges between faces."""
-    patches, vol = [], 0.0
+def tessellate(shape, tol, thread_of=None):
+    """-> ([G.Mesh per face, ...], mesh volume, [(G.Mesh, thread extras), ...]).  One patch per face: hard edges between faces.
+    `thread_of(face)` returns the `extras` dict of a threaded cylinder face (or None): such faces are returned separately in the
+    third list instead of the first; the meshes themselves are the same."""
+    patches, tpatches, vol = [], [], 0.0
     for sol in shape.Solids:
         _mesh(sol, tol)
         sv = 0.0
@@ -86,24 +94,70 @@ def tessellate(shape, tol):
             if not tris:
                 continue
             v = [(p.x, p.y, p.z) for p in verts]
-            sp.append(G.Mesh(v, [tuple(t) for t in tris]))
+            sp.append((G.Mesh(v, [tuple(t) for t in tris]), thread_of(f) if thread_of else None))
             sv += G.signed_volume(v, tris)
         if sv < 0:                                      # inward winding: flip this solid
-            for m in sp:
+            for m, _ in sp:
                 m.triangles = [(a, c, b) for a, b, c in m.triangles]
             sv = -sv
-        patches += sp
+        patches += [m for m, ex in sp if ex is None]
+        tpatches += [(m, ex) for m, ex in sp if ex is not None]
         vol += sv
-    return patches, vol
+    return patches, vol, tpatches
+
+
+def face_axis_extent(f):
+    """(axis, origin, length) of a cylindrical face: the axis direction, the point of the axis where the face starts and the
+    face's length along the axis (from its vertices, which lie on the two end circles)."""
+    s = f.Surface
+    ax = s.Axis
+    c = s.Center
+    ts = [(v.Point - c).dot(ax) for v in f.Vertexes] or [0.0]
+    t0 = min(ts)
+    o = c + ax * t0
+    return (ax.x, ax.y, ax.z), (o.x, o.y, o.z), max(ts) - t0
+
+
+def thread_rules(src):
+    """{solid name or 'Screw_' prefix: [(kind, cylinder radius)]}: which smooth cylinders carry a thread (the same faces the GUI
+    finish colours as cosmetic threads, view.thread_face_indices): the screw shanks (external, shank radius), the tapped holes of
+    the back holder (internal, tap radius), the shaft thread M5 (external) or, on the ring carrier, its M3 hub holes (internal)."""
+    sh = src.getObject("Params")
+    g = lambda n: ps.pval(sh, n)
+    carrier = not ps.has_param(sh, "shaft_thread_r")
+    shank = g("screw_shank_d") if ps.has_param(sh, "screw_shank_d") else g("bolt_d")
+    rules = {"Screw_": [("external", shank / 2)],
+             "Stator_holder_back": [("internal", g("holder_tap_d") / 2), ("internal", g("back_screw_tap_d") / 2)],
+             "Shaft": [("internal", g("carrier_hole_d") / 2)] if carrier else [("external", g("shaft_thread_r"))]}
+    return rules
+
+
+def thread_finder(rules, node):
+    """thread_of(face) for the solid `node`, or None when the solid has no thread rules."""
+    rs = rules.get(node) or next((v for k, v in rules.items() if k.endswith("_") and node.startswith(k)), None)
+    if not rs:
+        return None
+
+    def thread_of(f):
+        if f.Surface.__class__.__name__ != "Cylinder":
+            return None
+        for kind, r in rs:
+            if abs(f.Surface.Radius - r) < 1e-6:
+                ax, o, ln = face_axis_extent(f)
+                return TH.thread_extras(kind, r, ln, ax, o)
+        return None
+    return thread_of
 
 
 class Collector:
     """Groups of the GLB with the mesh-vs-solid volume check."""
 
-    def __init__(self, tol):
+    def __init__(self, tol, rules=None):
         self.tol = tol
         self.groups = {}
         self.checks = []
+        self.rules = rules or {}
+        self.threads = []                                   # evidence: (solid, extras.thread) of every thread node
 
     def add(self, gname, node, shape, colour, family=None, check=True):
         g = self.groups.get(gname)
@@ -113,13 +167,23 @@ class Collector:
             g = self.groups[gname] = G.Group(gname, colour, extras=dict(family=fam, explode=EXPLODE.get(fam, 0.0)),
                                              metallic=metallic, roughness=roughness)
         b = budget_of(node)
-        patches, vol = tessellate(shape, budgeted_tol(shape, self.tol, b) if b else self.tol)
+        patches, vol, tpatches = tessellate(shape, budgeted_tol(shape, self.tol, b) if b else self.tol,
+                                            thread_finder(self.rules, node))
         g.add(node, patches)
+        for k, (m, ex) in enumerate(tpatches):
+            g.add("%s_thread%d" % (node, k + 1), [m], ex)
+            self.threads.append((node, ex["thread"]))
         if check and shape.Volume > 0:
             self.checks.append((node, round(shape.Volume, 4), round(vol, 4), abs(vol - shape.Volume) / shape.Volume))
 
+    def ordered(self):
+        return [self.groups[n] for n in ORDER if n in self.groups]
+
+    def geometry_sha256(self):
+        return G.geometry_hash(self.ordered())
+
     def glb(self, asset_extras):
-        return G.build_glb([self.groups[n] for n in ORDER if n in self.groups], asset_extras)
+        return G.build_glb(self.ordered(), dict(asset_extras, geometry_sha256=self.geometry_sha256()))
 
 
 def classify_board(shape):
@@ -208,9 +272,10 @@ def main():
     tol = min(0.2, max(0.01, 0.0006 * diag))
     asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), template=meta.get("motor_template"),
                  tessellation_mm=round(tol, 4))
-    col = Collector(tol)
+    col = Collector(tol, thread_rules(src) if os.environ.get("FC_THREADS", "1") != "0" else None)
     board_info = add_motor(col, parts)
     glb, st = col.glb(asset)
+    gsha = col.geometry_sha256()
     plate_board = electronics.has_board(src) and electronics.is_plate(src)
     App.closeDocument(src.Name)
 
@@ -218,6 +283,7 @@ def main():
     ok = worst < VOL_TOL and (board_info is None or board_info.get("PhaseBoard_copper", 0) > 0          # the copper board is in the model
                               or (plate_board and board_info.get("PhaseBoard_pins", 0) > 0))               # (CIANO28 85: plate + lead sleeves)
     rep = dict(motor_id=mid, tessellation_mm=round(tol, 4), glb=mid + "_full.glb", bytes=len(glb), board=board_info,
+               geometry_sha256=gsha, threads=[dict(solid=n, **t) for n, t in col.threads],
                worst_mesh_volume_error=round(worst, 5), freecad_version=".".join(str(x) for x in App.Version()[:3]), ok=ok, **st,
                mesh_checks=[dict(node=c[0], solid_volume=c[1], mesh_volume=c[2], rel_error=round(c[3], 5)) for c in col.checks])
     os.makedirs(out_dir, exist_ok=True)

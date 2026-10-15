@@ -11,6 +11,7 @@ mesh (Coil_01 ... Coil_12); all meshes of a group share one material.  Units are
     glb = build_glb([g], asset_extras={"motor_id": "..."})
 """
 import array
+import hashlib
 import json
 import math
 import struct
@@ -41,10 +42,11 @@ class Group:
         self.metallic = metallic
         self.roughness = roughness
         self.alpha = alpha
-        self.items = []                     # [(node name, [Mesh, ...])]
+        self.items = []                     # [(node name, [Mesh, ...], node extras or None)]
 
-    def add(self, name, patches):
-        self.items.append((name, list(patches)))
+    def add(self, name, patches, extras=None):
+        """One mesh node.  `extras` (a dict) go into the glTF node's extras, e.g. {"thread": {...}} (cad/fc_scripts/threads.py)."""
+        self.items.append((name, list(patches), dict(extras) if extras else None))
 
 
 def smooth_normals(vertices, triangles):
@@ -106,6 +108,26 @@ def _merge(patches):
     return pos, nor, idx, lo, hi
 
 
+def geometry_hash(groups):
+    """SHA-256 of the GEOMETRY of the groups, independent of how the meshes are split into nodes: per group (in order) the sorted
+    set of triangles, each as its three vertices rounded to 1e-4 mm, started at the smallest vertex (the winding is kept).  Splitting a
+    face off into its own node (the thread nodes) leaves it unchanged; moving a vertex or dropping a triangle does not."""
+    h = hashlib.sha256()
+    for g in groups:
+        tris = []
+        for item in g.items:
+            for p in item[1]:
+                vs = [tuple(round(c, 4) + 0.0 for c in v) for v in p.vertices]
+                for i, j, k in p.triangles:
+                    t = (vs[i], vs[j], vs[k])
+                    m = t.index(min(t))
+                    tris.append(t[m:] + t[:m])
+        tris.sort()
+        h.update(g.name.encode("utf-8"))
+        h.update(repr(tris).encode("ascii"))
+    return h.hexdigest()
+
+
 def build_glb(groups, asset_extras=None, generator="motor_ai_sim.cad"):
     """GLB bytes.  Node tree: scene -> `Model` (the root node) -> one node per group -> one node per mesh."""
     bin_parts = []                  # (bytes, target)
@@ -132,7 +154,7 @@ def build_glb(groups, asset_extras=None, generator="motor_ai_sim.cad"):
             doubleSided=True, **({"alphaMode": "BLEND"} if g.alpha < 1.0 else {})))
         child_ids = []
         ntri = 0
-        for name, patches in g.items:
+        for name, patches, node_extras in g.items:
             pos, nor, idx, lo, hi = _merge(patches)
             if not len(idx):
                 continue
@@ -145,7 +167,7 @@ def build_glb(groups, asset_extras=None, generator="motor_ai_sim.cad"):
             accessors.append(dict(bufferView=add_view(idx.tobytes(), ELEMENT_ARRAY_BUFFER), componentType=UINT, count=len(idx), type="SCALAR"))
             meshes.append(dict(name=name, primitives=[dict(attributes=dict(POSITION=a_pos, NORMAL=a_pos + 1), indices=a_pos + 2,
                                                            material=mat, mode=4)]))
-            nodes.append(dict(name=name, mesh=len(meshes) - 1))
+            nodes.append(dict(name=name, mesh=len(meshes) - 1, **({"extras": node_extras} if node_extras else {})))
             child_ids.append(len(nodes) - 1)
             ntri += len(idx) // 3
             stats["vertices"] += len(pos) // 3
@@ -167,6 +189,69 @@ def build_glb(groups, asset_extras=None, generator="motor_ai_sim.cad"):
     out = struct.pack("<III", GLB_MAGIC, 2, total) + struct.pack("<II", len(js), CHUNK_JSON) + js \
         + struct.pack("<II", len(blob), CHUNK_BIN) + blob
     return out, stats
+
+
+def glb_geometry_hash(data):
+    """Same idea as `geometry_hash`, read back from a GLB file (positions are float32 there): per group node of `Model`, the sorted
+    triangles of all its mesh children.  Two files that differ only in how faces are split into nodes (or in node extras) give the same
+    value; used to prove that the thread nodes leave the geometry as it was."""
+    doc, blob = parse_glb(data)
+    nodes = doc["nodes"]
+    h = hashlib.sha256()
+
+    def acc(i):
+        a = doc["accessors"][i]
+        bv = doc["bufferViews"][a["bufferView"]]
+        n = {"VEC3": 3, "SCALAR": 1}[a["type"]]
+        fmt = {FLOAT: "f", UINT: "I"}[a["componentType"]]
+        return struct.unpack_from("<%d%s" % (a["count"] * n, fmt), blob, bv["byteOffset"])
+
+    model = next(n for n in nodes if n["name"] == "Model")
+    for gi in model["children"]:
+        g = nodes[gi]
+        tris = []
+        for ci in g["children"]:
+            prim = doc["meshes"][nodes[ci]["mesh"]]["primitives"][0]
+            pos = acc(prim["attributes"]["POSITION"])
+            idx = acc(prim["indices"])
+            vs = [tuple(round(pos[3 * k + c], 4) + 0.0 for c in range(3)) for k in range(len(pos) // 3)]
+            for t in range(0, len(idx), 3):
+                tri = (vs[idx[t]], vs[idx[t + 1]], vs[idx[t + 2]])
+                m = tri.index(min(tri))
+                tris.append(tri[m:] + tri[:m])
+        tris.sort()
+        h.update(g["name"].encode("utf-8"))
+        h.update(repr(tris).encode("ascii"))
+    return h.hexdigest()
+
+
+def glb_group_signature(data):
+    """{group name: (triangles, unique vertices, volume, vertex-set hash)} of a GLB.  Looser than `glb_geometry_hash`: the diagonals
+    OCC picks inside a planar face may differ from run to run (seen on the CIANO28 85 holders), the vertices, the triangle counts and
+    the enclosed volume do not.  The thread export test compares this between a build with and without the thread nodes."""
+    doc, blob = parse_glb(data)
+    nodes = doc["nodes"]
+    out = {}
+
+    def acc(i):
+        a = doc["accessors"][i]
+        bv = doc["bufferViews"][a["bufferView"]]
+        n = {"VEC3": 3, "SCALAR": 1}[a["type"]]
+        fmt = {FLOAT: "f", UINT: "I"}[a["componentType"]]
+        return struct.unpack_from("<%d%s" % (a["count"] * n, fmt), blob, bv["byteOffset"])
+
+    for gi in next(n for n in nodes if n["name"] == "Model")["children"]:
+        g = nodes[gi]
+        vs, nt, vol = set(), 0, 0.0
+        for ci in g["children"]:
+            prim = doc["meshes"][nodes[ci]["mesh"]]["primitives"][0]
+            pos, idx = acc(prim["attributes"]["POSITION"]), acc(prim["indices"])
+            pts = [tuple(pos[3 * k:3 * k + 3]) for k in range(len(pos) // 3)]
+            vs.update(tuple(round(c, 4) + 0.0 for c in p) for p in pts)
+            nt += len(idx) // 3
+            vol += signed_volume(pts, [tuple(idx[t:t + 3]) for t in range(0, len(idx), 3)])
+        out[g["name"]] = (nt, len(vs), round(vol, 2), hashlib.sha256(repr(sorted(vs)).encode("ascii")).hexdigest()[:16])
+    return out
 
 
 def parse_glb(data):

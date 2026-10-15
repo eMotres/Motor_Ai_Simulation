@@ -34,7 +34,7 @@
 import React from 'react';
 import { Box, Button, Link, Tooltip, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import { GOOGLE_CLIENT_ID } from '../../lib/localAuth';
+import { GOOGLE_CLIENT_ID, PRIVACY_URL, TERMS_URL } from '../../lib/localAuth';
 import { useAuth } from '../../contexts/AuthContext';
 import LanguageSwitcher from '../common/LanguageSwitcher';
 import BrandLogo from '../common/BrandLogo';
@@ -445,6 +445,14 @@ const Landing: React.FC = () => {
             <Link href={SHOP_URL} target="_blank" rel="noopener noreferrer"
               underline="hover" color="inherit">
               aerostator.com
+            </Link>
+            {' · '}
+            <Link href={TERMS_URL} underline="hover" color="inherit">
+              {t('footer.terms')}
+            </Link>
+            {' · '}
+            <Link href={PRIVACY_URL} underline="hover" color="inherit">
+              {t('footer.privacy')}
             </Link>
             <CookieSettingsLink prefix=" · " />
           </Typography>

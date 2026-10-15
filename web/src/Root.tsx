@@ -17,12 +17,14 @@
 import React, { Suspense, lazy } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { isPreferencesPath } from './lib/commPrefsLogic';
+import { matchLegalPage } from './lib/legalLogic';
 import LandingShell from './components/landing/LandingShell';
 import { showsLandingShell } from './lib/rootGate';
 
 const App = lazy(() => import('./App'));
 const OAuthConsent = lazy(() => import('./components/auth/OAuthConsent'));
 const CommPrefsPage = lazy(() => import('./components/auth/CommPrefsPage'));
+const LegalPage = lazy(() => import('./components/auth/LegalPage'));
 
 const Loading: React.FC = () => (
   <div role="status" aria-live="polite" style={{
@@ -36,10 +38,12 @@ const Loading: React.FC = () => (
 const Root: React.FC = () => {
   const { user, resolved, enforced } = useAuth();
   const path = window.location.pathname;
-  // OAuth consent for MCP connectors (docs/MCP_2026-09-28.md) and the communication
-  // preferences (mailed link, account menu) are pages of their own.
+  const legalKind = matchLegalPage(path);
+  // OAuth consent for MCP connectors (docs/MCP_2026-09-28.md), communication
+  // preferences (mailed link, account menu) and legal pages are pages of their own.
   if (path === '/agent-consent') return <Suspense fallback={<Loading />}><OAuthConsent /></Suspense>;
   if (isPreferencesPath(path)) return <Suspense fallback={<Loading />}><CommPrefsPage /></Suspense>;
+  if (legalKind) return <Suspense fallback={<Loading />}><LegalPage kind={legalKind} /></Suspense>;
   if (showsLandingShell(!!user, resolved, enforced)) return <LandingShell />;
   return <Suspense fallback={<Loading />}><App /></Suspense>;
 };

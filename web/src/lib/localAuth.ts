@@ -5,6 +5,8 @@
 // 30-day HS256 token (POST /api/auth/google | /api/auth/login), which is what
 // every API call carries. Rights (role/admin) always live server-side in
 // config/users.json + ADMIN_EMAILS — nothing here is trusted for authorization.
+import { resolvePrivacyUrl, resolveTermsUrl } from './legalLogic';
+
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
 export const GOOGLE_CLIENT_ID =
@@ -237,9 +239,9 @@ export function requestedAuthMode(): 'register' | 'signin' | null {
 }
 
 /** Public legal / source links shown under the sign-up form (build-time
- *  overridable; the MCP discovery tools quote the same pages). */
-export const TERMS_URL = (import.meta.env.VITE_TERMS_URL as string | undefined) ?? 'https://emotres.com/terms-conditions';
-export const PRIVACY_URL = (import.meta.env.VITE_PRIVACY_URL as string | undefined) ?? 'https://emotres.com/privacy-policy';
+ *  overridable; defaults point to the in-app /terms and /privacy pages). */
+export const TERMS_URL = resolveTermsUrl(import.meta.env.VITE_TERMS_URL);
+export const PRIVACY_URL = resolvePrivacyUrl(import.meta.env.VITE_PRIVACY_URL);
 export const SOURCE_URL = (import.meta.env.VITE_SOURCE_URL as string | undefined) ?? 'https://github.com/eMotres/Motor_Ai_Simulation';
 
 /** Ask for a reset link (also how a Google-only account gets a password). */

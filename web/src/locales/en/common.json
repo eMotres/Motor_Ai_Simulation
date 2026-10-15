@@ -406,5 +406,118 @@
     "accept": "Accept",
     "decline": "Decline",
     "settings": "Cookie settings"
+  },
+  "legal": {
+    "lastUpdated": "Last updated: October 2026",
+    "privacy": {
+      "title": "Privacy Policy",
+      "sections": {
+        "controller": {
+          "title": "Data Controller",
+          "body": "Your personal data is processed by MOTRES d.o.o., Kotnikova 34, Ljubljana 1000, Slovenia (EU), Registration No. 7255691000, VAT SI22399933. Contact: support@aerostator.com."
+        },
+        "data": {
+          "title": "Data We Collect",
+          "body": "When you use AeroStator (aerostator.com) or contact us, we collect: (a) account data (name, e-mail address, and authentication records when you sign in with e-mail/password or Google); (b) simulation data, motor configurations, and models you create or save in your workspace; (c) per-user active working time in the app, recorded for the administrator view; (d) signed non-disclosure agreements (NDAs, including company details, signatory name, title, e-mail, IP address, user-agent, timestamp, and text hash) and logs of 3-D model / STEP downloads; (e) your communication preferences and opt-in launch mailing choices; (f) support messages, quote requests, and technical server logs (IP address, browser type, session identifiers)."
+        },
+        "analytics": {
+          "title": "Analytics and Cookies",
+          "body": "We use self-hosted Umami analytics, which is cookieless and collects no personal identifiers. Google Analytics (GA4) runs only after you give cookie consent in the cookie banner, and is never loaded for visitors from China (mainland, Hong Kong, Macau), in Chinese interface mode, or when Do Not Track / Global Privacy Control is enabled. You can change your cookie choice at any time via Cookie settings."
+        },
+        "purpose": {
+          "title": "Purpose and Legal Basis",
+          "body": "Providing your account, workspace simulations, NDA access, and fulfilling orders: performance of a contract and pre-contractual measures (Art. 6(1)(b) GDPR) and legal obligations (Art. 6(1)(c) GDPR). Security, abuse prevention, cookieless Umami statistics, and per-user activity time for the admin view: legitimate interest in operating and securing the platform (Art. 6(1)(f) GDPR). Google Analytics cookies, optional dataset sharing, and opt-in launch or topic e-mails managed at /preferences: your explicit consent (Art. 6(1)(a) GDPR), which you may withdraw at any time."
+        },
+        "storage": {
+          "title": "Hosting Location and Data Retention",
+          "body": "Account data, simulation data, and models are stored on our servers in Germany (Hetzner Online GmbH, EU). Workspace and account data are kept while your account is active; you may export your data (ZIP) or request account deletion (with a 7-day cancellation grace period) from the account menu. Enquiry data is retained for up to 3 years after last contact, and invoice/order records for 10 years under Slovenian accounting law. Signed NDA records and model download logs are retained to evidence IP protection and compliance."
+        },
+        "sharing": {
+          "title": "Data Sharing",
+          "body": "We do not sell or rent your personal data. Data may be processed by: Hetzner Online GmbH (server hosting in Germany, EU); Google LLC (only if you choose Google sign-in or accept Google Analytics cookies outside China); shipping partners (GLS, DHL) for physical motor deliveries; and accounting or legal advisers under confidentiality. Simulation data is included in the anonymised AeroStator community dataset only if you explicitly opt in."
+        },
+        "rights": {
+          "title": "Your Rights (GDPR)",
+          "body": "Under GDPR you have the right to access, rectify, erase, restrict, or port your personal data, to object to processing based on legitimate interest, and to withdraw consent at any time (including e-mail preferences at /preferences, dataset sharing, and Cookie settings). You can export your data or request account deletion directly in the app, or write to support@aerostator.com. You also have the right to lodge a complaint with the Slovenian Information Commissioner (ip-rs.si)."
+        },
+        "security": {
+          "title": "Security",
+          "body": "We use industry-standard measures to protect your data, including HTTPS encryption, hashed passwords, scoped session tokens, and audited administrator access. No method of transmission over the internet is 100% secure, so we cannot guarantee absolute security."
+        },
+        "changes": {
+          "title": "Changes to This Policy",
+          "body": "We may update this Privacy Policy from time to time. The Last updated date at the top of this page reflects the most recent revision."
+        },
+        "contact": {
+          "title": "Contact",
+          "body": "For any privacy-related questions or requests, please contact MOTRES d.o.o. at the address or e-mail below."
+        }
+      }
+    },
+    "terms": {
+      "title": "Terms & Conditions",
+      "sections": {
+        "company": {
+          "title": "Company Information",
+          "body": "These Terms & Conditions govern your use of the AeroStator web application at aerostator.com and the purchase of products from MOTRES d.o.o., Kotnikova 34, Ljubljana 1000, Slovenia (EU), Registration No. 7255691000, VAT SI22399933. Contact: support@aerostator.com."
+        },
+        "scope": {
+          "title": "Application and Simulation Results",
+          "body": "AeroStator provides motor catalogue browsing, configuration, and finite-element (EM, thermal, mechanical) simulation tools. Simulation results are engineering estimates provided \"as is\" without warranty of fitness for a particular application; you remain responsible for verifying and testing any physical drive or safety-critical system."
+        },
+        "accounts": {
+          "title": "Accounts and Acceptable Use",
+          "body": "You may sign in using an e-mail address and password or Google sign-in. You must keep your credentials and any agent API keys secure, not misuse shared compute resources or attempt to bypass access controls, and use the service in compliance with applicable law. Optional product and launch e-mails are sent only if you opt in and can be managed at /preferences."
+        },
+        "license": {
+          "title": "Open-Source Software and Motor Intellectual Property",
+          "body": "The AeroStator platform software is open source under the Apache License 2.0. This software licence does not grant any licence to MOTRES patents, patent-pending AeroStator Core motor technology, trademarks, or restricted 3-D CAD geometry. All motor designs, patents, and technical documentation remain the property of MOTRES d.o.o.; commercial manufacture of AeroStator Core motors requires a licence from MOTRES."
+        },
+        "nda": {
+          "title": "Non-Disclosure Agreement and 3-D Models",
+          "body": "Detailed 3-D tools and STEP model downloads require signing the AeroStator Model Access and Non-Disclosure Agreement (NDA). Signed NDAs and all model downloads are logged. Where you have signed an NDA with MOTRES d.o.o., its terms govern confidential technical data and prevail over these general Terms in case of conflict."
+        },
+        "orders": {
+          "title": "Products and Orders",
+          "body": "All physical motors are made to order. By submitting a quote request or placing an order, you confirm that the specifications provided are correct. Orders are confirmed only upon receipt of a signed purchase order and deposit payment. Prices are quoted in EUR and exclude VAT unless stated otherwise."
+        },
+        "leadTimes": {
+          "title": "Lead Times",
+          "body": "Standard lead time for physical motors is approximately 2 months from order confirmation. Lead times are estimates and may vary depending on component availability and order volume. We will notify you promptly of any significant delays."
+        },
+        "payment": {
+          "title": "Payment Terms",
+          "body": "Payment is made by bank transfer against invoice. A deposit of 50% is required to confirm an order, and the remaining balance is due before shipment. All bank charges outside Slovenia are borne by the buyer."
+        },
+        "shipping": {
+          "title": "Shipping",
+          "body": "Shipments within the EU are handled by GLS; international shipments are handled by DHL. Shipping costs are calculated at the time of quotation. Risk of loss passes to the buyer upon handover to the carrier. Import duties and taxes outside the EU are the buyer's responsibility."
+        },
+        "warranty": {
+          "title": "Warranty",
+          "body": "All physical motors carry a 1-year warranty from the date of delivery against defects in materials and workmanship under normal use. The warranty does not cover damage from misuse, overloading, improper installation, normal wear and tear, unapproved modifications, or operation outside specified voltage or temperature ranges. Warranty claims must be sent to support@aerostator.com with a defect description and proof of purchase; we will repair or replace the defective unit at our discretion."
+        },
+        "returns": {
+          "title": "Returns and Cancellations",
+          "body": "Because all physical motors are custom-made to order, cancellations after order confirmation may result in forfeiture of the deposit. Returns of custom products are not accepted unless the product is defective."
+        },
+        "liability": {
+          "title": "Limitation of Liability",
+          "body": "To the maximum extent permitted by law, MOTRES d.o.o. shall not be liable for indirect, incidental, or consequential damages arising from the use of or inability to use the AeroStator application, simulation outputs, or our products. For physical products, our total liability shall not exceed the purchase price of the specific product giving rise to the claim."
+        },
+        "governingLaw": {
+          "title": "Governing Law",
+          "body": "Unless a separate written agreement or signed NDA specifies otherwise, these Terms are governed by the laws of the Republic of Slovenia, and any disputes shall be subject to the exclusive jurisdiction of the courts of Ljubljana, Slovenia."
+        },
+        "changes": {
+          "title": "Changes to Terms",
+          "body": "We reserve the right to update these Terms & Conditions at any time. Orders placed before an update are governed by the Terms in effect at the time of order."
+        },
+        "contact": {
+          "title": "Contact",
+          "body": "For any questions regarding these Terms, please contact MOTRES d.o.o. at the address or e-mail below."
+        }
+      }
+    }
   }
 }

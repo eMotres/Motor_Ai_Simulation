@@ -64,7 +64,7 @@ def senv(tmp_path, monkeypatch):
     O._touched.clear()
     outbox: list = []
 
-    def fake_send(to, subject, body, *, block=False):
+    def fake_send(to, subject, body, *, block=False, **kw):
         outbox.append({"to": to, "subject": subject, "body": body})
         return True
     monkeypatch.setattr(E, "send", fake_send)

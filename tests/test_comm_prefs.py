@@ -81,7 +81,7 @@ def env(tmp_path, monkeypatch):
     delivered: list = []
     monkeypatch.setattr(E, "deliver", lambda msg: delivered.append(msg))
     outbox: list = []
-    monkeypatch.setattr(E, "send", lambda to, subject, body, *, block=False: outbox.append((to, subject, body)) or True)
+    monkeypatch.setattr(E, "send", lambda to, subject, body, *, block=False, **kw: outbox.append((to, subject, body)) or True)
 
     def no_smtp(*a, **k):
         raise AssertionError("a test reached a real SMTP connection")

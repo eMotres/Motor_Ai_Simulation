@@ -15,12 +15,16 @@ from a password account below; RIGHTS always come from our registry
 - POST /api/auth/logout       — revoke the session this request is using
 - POST /api/auth/register     — self-service e-mail/password sign-up (unverified)
 - POST /api/auth/verify       — consume the e-mail confirmation link
+- POST /api/auth/register/resend        — mail the confirmation link again (rate-limited)
+- POST /api/auth/register/change-email  — an unverified account fixes a mistyped address (password proves it is theirs)
 - POST /api/auth/reset/request, /reset/confirm — password reset by link
 - GET  /api/auth/methods      — which sign-in methods the form may offer
 - GET  /api/auth/pending, POST /api/auth/pending/{email}/approve — admin
 
 Login is rate-limited in-memory per account and per IP (auth_email.Limiter);
-register/reset answers never reveal whether an address has an account.
+register/reset answers never reveal whether an address has an account.  The one thing they DO say, because it depends on the
+input alone, is that the DOMAIN of the address does not exist (email_domain.py): a mistyped domain bounces every mail and locks the
+person out, so it is refused before anything is sent.
 
 Every sign-in now creates a SERVER-SIDE session (sessions.py) whose sid rides
 in the token, and appends a line to logs/auth_events.jsonl.  Before that, a
@@ -41,6 +45,8 @@ from motor_ai_sim import auth_email as E
 from motor_ai_sim import sessions as S
 from motor_ai_sim import users as U
 from motor_ai_sim import admin_audit as _AA
+from motor_ai_sim import email_domain as ED
+from motor_ai_sim.api_errors import ApiError
 from motor_ai_sim.auth import require_admin, resolve_user, resolve_user_detail
 
 log = logging.getLogger(__name__)
@@ -140,10 +146,19 @@ def _mail_allowed(email: str, ip: str) -> bool:
     return True
 
 
+def _check_domain(email: str) -> None:
+    """422 when the domain of the address is known not to exist (nothing is sent, nothing is created).  A resolver that cannot
+    tell (timeout, no network) never blocks: the mail is sent."""
+    c = ED.check(email)
+    if not c.ok:
+        code = "auth.email_domain_unknown_suggest" if c.suggestion else "auth.email_domain_unknown"
+        raise ApiError(422, code, ED.message(c), {"domain": c.domain, "suggestion": c.suggestion})
+
+
 def _send_verification(email: str, return_path: str = "", return_host: str = "") -> None:
     token = U.issue_link_token(email, "verify")
     subj, body = E.verify_mail(email, token, return_path, return_host)
-    if not E.send(email, subj, body):
+    if not E.send(email, subj, body, kind="verify"):
         U.mark_pending_approval(email, "smtp_not_configured")
         log.warning("auth: SMTP not configured — verification link for %s "
                     "(or approve in Admin -> Pending sign-ups): %s",
@@ -247,6 +262,7 @@ def register(req: RegisterReq, request: Request):
         raise HTTPException(422, detail=str(e))
     if not (req.name or "").strip():
         raise HTTPException(422, detail="enter your name")
+    _check_domain(email)
     if E.SIGNUP_IP.blocked(ip):
         raise HTTPException(429, detail="too many sign-ups from this network — try again later")
     rid = _oauth_rid(req.return_to)
@@ -272,6 +288,74 @@ def register(req: RegisterReq, request: Request):
     elif outcome == "created":
         # Throttled address, fresh row: still make it reachable for the admin.
         U.mark_pending_approval(email, "mail_throttled")
+    return _ACCEPTED
+
+
+class ResendReq(BaseModel):
+    email: str
+
+
+@router.post("/register/resend", status_code=202)
+def register_resend(req: ResendReq, request: Request):
+    """Mail the confirmation link again to an unconfirmed account.  Same answer whatever the address is; limited per address
+    (E.MAIL_ACCOUNT, 3 an hour) and per IP."""
+    ip = _ip(request)
+    email = U._norm(req.email)
+    if not _valid_email(email):
+        raise HTTPException(422, detail="enter a valid e-mail address")
+    may_mail = _mail_allowed(email, ip)
+    rec = U.get_user(email)
+    if may_mail and rec is not None and not U.is_verified(rec) and not rec.get("disabled"):
+        _send_verification(email)
+    return _ACCEPTED
+
+
+class ChangeEmailReq(BaseModel):
+    email: str          # the address the account was registered with (a typo)
+    password: str       # proves the account is the caller's
+    new_email: str
+    lang: str = "en"
+
+
+@router.post("/register/change-email", status_code=202)
+def register_change_email(req: ChangeEmailReq, request: Request):
+    """An UNCONFIRMED account fixes a mistyped address and gets a new confirmation link there.
+
+    The password proves the account is the caller's (failures count against the same limits as a sign-in).  A new address that
+    already has an account changes nothing and gets the usual "someone tried to register" note - the answer is the same either
+    way."""
+    ip = _ip(request)
+    old, new = U._norm(req.email), U._norm(req.new_email)
+    if not _valid_email(old) or not _valid_email(new):
+        raise HTTPException(422, detail="enter a valid e-mail address")
+    _locked(old, ip)
+    _check_domain(new)
+    rec = U.get_user(old)
+    if rec is None or U.is_verified(rec) or rec.get("disabled") or not U._verify_pw(rec, req.password):
+        E.LOGIN_ACCOUNT.hit(old)
+        E.LOGIN_IP.hit(ip)
+        raise HTTPException(400, detail="could not change the address: check the e-mail and the password you registered with")
+    if new == old:
+        if _mail_allowed(old, ip):
+            _send_verification(old)
+        return _ACCEPTED
+    if not _mail_allowed(new, ip):
+        return _ACCEPTED
+    if U.get_user(new) is not None:
+        subj, body = E.exists_mail(new)
+        E.send(new, subj, body)
+        return _ACCEPTED
+    try:
+        U.change_unverified_email(old, new)
+    except (KeyError, ValueError):
+        raise HTTPException(400, detail="could not change the address: check the e-mail and the password you registered with")
+    try:
+        from motor_ai_sim import comm_prefs as CP
+        CP.move(old, new, ip=ip)
+    except Exception as e:                                   # noqa: BLE001 - the choices can be ticked again
+        log.warning("comm_prefs: sign-up choices did not follow the address change (%s)", type(e).__name__)
+    S.record_event("email_changed", email=new, reason="signup_typo", ip=ip, path="/api/auth/register/change-email")
+    _send_verification(new)
     return _ACCEPTED
 
 
@@ -320,12 +404,13 @@ def reset_request(req: EmailReq, request: Request):
     email = U._norm(req.email)
     if not _valid_email(email):
         raise HTTPException(422, detail="enter a valid e-mail address")
+    _check_domain(email)
     may_mail = _mail_allowed(email, ip)
     rec = U.get_user(email)
     if may_mail and rec is not None and not rec.get("disabled"):
         token = U.issue_link_token(email, "reset")
         subj, body = E.reset_mail(email, token)
-        if not E.send(email, subj, body):
+        if not E.send(email, subj, body, kind="reset"):
             log.warning("auth: SMTP not configured — password-reset link for "
                         "%s: %s", email, E.link("reset", token))
         S.record_event("reset_requested", email=email, ip=ip,
@@ -467,6 +552,7 @@ class PatchReq(BaseModel):
     disabled: Optional[bool] = None
     name: Optional[str] = None
     password: Optional[str] = None      # admin reset
+    new_email: Optional[str] = None     # an UNVERIFIED account's address (a typo at sign-up); a new confirmation link is mailed there
     nda_signed: Optional[bool] = None   # 3D model menu: full model + STEP only when True
     nda_date: Optional[str] = None      # YYYY-MM-DD (default today)
     sim_quota_cpu_h_month: Optional[float] = None   # CPU-hours per month; send null to clear (stored only, not enforced)
@@ -476,6 +562,22 @@ class PatchReq(BaseModel):
 def users_patch(email: str, req: PatchReq, _admin: dict = Depends(require_admin)):
     _AA.record(_AA.actor_of(_admin), "user.update", str(email), subject=str(email), details={k: v for k, v in req.model_dump().items() if v is not None and k != "password"} | {"password_reset": req.password is not None})
     try:
+        if req.new_email is not None:
+            new = U._norm(req.new_email)
+            if not _valid_email(new):
+                raise HTTPException(422, detail="enter a valid e-mail address")
+            _check_domain(new)
+            try:
+                old_email, email = email, U.change_unverified_email(email, new)
+            except ValueError as e:
+                raise HTTPException(409, detail=str(e))
+            if email != U._norm(old_email):
+                try:
+                    from motor_ai_sim import comm_prefs as CP
+                    CP.move(old_email, email)
+                except Exception:                              # noqa: BLE001
+                    log.warning("comm_prefs: sign-up choices did not follow the admin's address change")
+                _send_verification(email)
         before = (U.get_user(email) or {}).get("role", "user")
         if req.password is not None:
             U.set_password(email, req.password)

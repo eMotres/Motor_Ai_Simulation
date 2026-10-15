@@ -504,6 +504,49 @@ def mark_pending_approval(email: str, reason: str = "smtp_not_configured") -> No
             _save(users)
 
 
+def record_mail(email: str, kind: str, ok: bool, error: str = "") -> None:
+    """Remember the last auth mail handed to the SMTP server for an account ({kind: verify|reset, ts, ok}); shown to the admin.
+    ``ok`` means the server ACCEPTED the message: a later bounce is not knowable here.  Never raises."""
+    email = _norm(email)
+    try:
+        with _LOCK:
+            users = _load()
+            if email in users:
+                users[email]["last_mail"] = {"kind": kind, "ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "ok": bool(ok),
+                                             **({"error": error[:80]} if error else {})}
+                _save(users)
+    except Exception:                                        # noqa: BLE001 - a log line must not break the sign-up
+        log.warning("users: could not record the last mail of an account")
+
+
+def change_unverified_email(old: str, new: str) -> str:
+    """Move an UNVERIFIED password account to another address (a typo at sign-up).  -> the new normalised address.
+
+    KeyError: no such account.  ValueError: the account is verified (its address is proven, never edited here), the new address
+    is invalid or already registered.  Outstanding links die with the old address (they name it); the signup consent
+    (communication preferences) follows the account."""
+    old, new = _norm(old), _norm(new)
+    if not new or "@" not in new or any(c.isspace() for c in new) or len(new) > 254:
+        raise ValueError(f"'{new}' is not an email address")
+    with _LOCK:
+        users = _load()
+        if old not in users:
+            raise KeyError(old)
+        if is_verified(users[old]):
+            raise ValueError("only an account whose address is not yet confirmed can change it")
+        if new == old:
+            return new
+        if new in users:
+            raise ValueError("this address is already registered")
+        rec = users.pop(old)
+        rec.pop("link_nonces", None)
+        rec.pop("pending_approval", None)
+        rec.pop("last_mail", None)
+        users[new] = rec
+        _save(users)
+    return new
+
+
 def list_pending() -> list[dict]:
     """Every account that cannot sign in yet because its e-mail is unproven."""
     out = []
@@ -630,6 +673,8 @@ def public_user(email: str) -> dict:
             # False only for a self-registered account whose link was never
             # used (absent on older records = verified).
             "email_verified": is_verified(u) if u else True,
+            # last auth mail handed to SMTP ({kind, ts, ok}); None when none was recorded
+            "last_mail": u.get("last_mail") if isinstance(u.get("last_mail"), dict) else None,
             # Which catalog motors this account may open (see below).  Shipped
             # with the record so the admin table draws the count without a
             # second round trip per user.

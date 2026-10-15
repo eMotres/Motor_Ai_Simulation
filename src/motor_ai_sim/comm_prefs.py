@@ -49,7 +49,7 @@ from motor_ai_sim.config import DEFAULT_CONFIG_PATH
 log = logging.getLogger(__name__)
 
 TOPICS = ("product_updates", "new_motors", "engineering_content", "co_development")
-SOURCES = ("prefs_page", "email_link", "unsubscribe", "signup", "google")
+SOURCES = ("prefs_page", "email_link", "unsubscribe", "signup", "google", "email_change")
 LANGS = ("en", "zh-CN")
 
 #: Bump the version whenever ANY wording below changes (the hash would change anyway, the version makes it readable).
@@ -277,6 +277,31 @@ def _legacy_newsletter_off(email: str, source: str) -> None:
         N.unsubscribe(email, source="link" if source != "prefs_page" else "settings", propagate=False)
     except Exception as e:                                   # noqa: BLE001 - the new store is the record
         log.warning("comm_prefs: legacy newsletter unsubscribe failed: %s", type(e).__name__)
+
+
+def move(old: str, new: str, *, ip: str = "") -> None:
+    """The sign-up address was a typo and the (unverified) account moved to ``new``: what the person ticked follows, recorded as
+    fresh ``email_change`` lines under the new address; the old address keeps its own history (it is what that address ticked)."""
+    old, new = _norm(old), _norm(new)
+    with _LOCK:
+        d = _load()
+        rec = d.get(old)
+        if rec is None or old == new:
+            return
+        st = _view(rec)
+        now = time.time()
+        rows = [_line(new, "set", t, True, False, source="email_change", ip=ip, lang=history_lang(old), now=now)
+                for t in TOPICS if st["topics"][t]]
+        _append_history(rows)
+        d.pop(old)
+        if rows:
+            st["updated"] = _iso(now)
+            d[new] = {k: v for k, v in st.items() if k != "unsubscribed_at" or st["unsubscribed_all"]}
+        _save(d)
+
+
+def history_lang(email: str) -> str:
+    return last_lang(email) or "en"
 
 
 def is_unsubscribed_all(email: str) -> bool:

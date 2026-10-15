@@ -99,7 +99,18 @@ def deliver(msg: EmailMessage) -> None:
             s.send_message(msg)
 
 
-def _send(to: str, subject: str, body: str) -> bool:
+def _note(to: str, kind: str, ok: bool, error: str = "") -> None:
+    """Record the outcome on the account (admin sees "verify mail sent 14:02" or "failed")."""
+    if not kind:
+        return
+    try:
+        from motor_ai_sim import users as U
+        U.record_mail(to, kind, ok, error)
+    except Exception:                                        # noqa: BLE001
+        pass
+
+
+def _send(to: str, subject: str, body: str, kind: str = "") -> bool:
     user, password = _env("SMTP_USER"), _smtp_pass()
     if not (user and password):
         return False
@@ -113,22 +124,24 @@ def _send(to: str, subject: str, body: str) -> bool:
     try:
         deliver(msg)
         log.info("auth-mail: sent %r to %s", subject, to)
+        _note(to, kind, True)
         return True
     except Exception as e:                                   # noqa: BLE001
         log.warning("auth-mail: SMTP send to %s failed via %s:%s (%s: %s)",
                     to, host, port, type(e).__name__, str(e)[:160])
+        _note(to, kind, False, type(e).__name__)
         return False
 
 
-def send(to: str, subject: str, body: str, *, block: bool = False) -> bool:
+def send(to: str, subject: str, body: str, *, block: bool = False, kind: str = "") -> bool:
     """Send in a daemon thread (the HTTP answer never waits on — or reveals
     anything through the timing of — a TLS handshake).  Returns False when
     SMTP is not configured, True when a send was started / succeeded."""
     if not smtp_configured():
         return False
     if block:
-        return _send(to, subject, body)
-    threading.Thread(target=_send, args=(to, subject, body), daemon=True,
+        return _send(to, subject, body, kind)
+    threading.Thread(target=_send, args=(to, subject, body, kind), daemon=True,
                      name="auth-mail").start()
     return True
 

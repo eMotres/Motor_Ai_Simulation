@@ -12,9 +12,10 @@ import {
 } from '@mui/material';
 import HelpTip from '../common/HelpTip';
 
+import { lastMailText, type LastMail } from './userMail';
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
-interface PendingRow { email: string; name: string; created: string | null; reason: string }
+interface PendingRow { email: string; name: string; created: string | null; reason: string; last_mail?: LastMail | null }
 
 const REASON: Record<string, string> = {
   smtp_not_configured: 'no SMTP — link only in server log',
@@ -74,7 +75,7 @@ const PendingSignups: React.FC<{ onChanged?: () => void }> = ({ onChanged }) => 
                 <TableCell>{r.email}</TableCell>
                 <TableCell>{r.name}</TableCell>
                 <TableCell>{(r.created ?? '').replace('T', ' ').slice(0, 16)}</TableCell>
-                <TableCell>{REASON[r.reason] ?? r.reason}</TableCell>
+                <TableCell>{REASON[r.reason] ?? r.reason}<Typography component="div" sx={{ fontSize: 11, color: 'var(--text-4)' }}>{lastMailText(r.last_mail)}</Typography></TableCell>
                 <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
                   {busy === r.email ? <CircularProgress size={14} /> : (
                     <>

@@ -214,6 +214,21 @@
     },
     "consent": {
       "newAccountOnly": "applies to a new account only"
+    },
+    "sent": {
+      "title": "Check your inbox",
+      "text": "We sent a confirmation link to {email}. Open it to activate your account.",
+      "textReturn": "We sent a confirmation link to {email}. Open it to finish connecting your AI app.",
+      "spam": "Nothing there? Look in the spam folder, or resend the link.",
+      "resend": "Resend the link",
+      "resendWait": "Resend in {seconds} s",
+      "resent": "Sent again. Check your inbox.",
+      "wrong": "Wrong address? Change e-mail",
+      "newEmail": "Correct e-mail address",
+      "password": "Password you registered with",
+      "change": "Change and resend",
+      "changed": "Address changed. We sent the confirmation link to {email}.",
+      "changeHelp": "Your password proves the account is yours. Only an account that is not confirmed yet can change its address."
     }
   },
   "units": {

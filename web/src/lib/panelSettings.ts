@@ -22,7 +22,17 @@ export type PanelName = 'mechanical' | 'thermal' | 'simulation' | 'mesh' | 'swee
 export interface PanelSettings {
   settings: Record<string, unknown>;
   updated_at: string | null;
+  /** Thermal only (2026-10-15): the motor `"<die>|<config>"` the fields belong to,
+   *  where they came from, and that motor's application - absent on a record
+   *  from before the fields were remembered per motor. */
+  motor?: string | null;
+  source?: string | null;
+  application?: string | null;
 }
+
+/** The motor a panel's fields were loaded for; sent with a save so the server
+ *  files them under that motor and not under whichever motor is loaded by then. */
+export interface PanelMotor { die: string; config: string }
 
 /** Read the caller's remembered fields; `null` when the server cannot answer
  *  (offline, not signed in) — never throws. */
@@ -30,8 +40,14 @@ export async function loadPanelSettings(panel: PanelName): Promise<PanelSettings
   try {
     const r = await fetch(`${BASE}/${panel}`, { cache: 'no-store' });
     if (!r.ok) return null;
-    const j = await r.json() as { settings?: Record<string, unknown>; updated_at?: string | null };
-    return { settings: j.settings ?? {}, updated_at: j.updated_at ?? null };
+    const j = await r.json() as {
+      settings?: Record<string, unknown>; updated_at?: string | null;
+      motor?: string | null; source?: string | null; application?: string | null;
+    };
+    return {
+      settings: j.settings ?? {}, updated_at: j.updated_at ?? null,
+      motor: j.motor ?? null, source: j.source ?? null, application: j.application ?? null,
+    };
   } catch {
     return null;
   }
@@ -39,21 +55,25 @@ export async function loadPanelSettings(panel: PanelName): Promise<PanelSettings
 
 const _timers: Partial<Record<PanelName, number>> = {};
 const _pending: Partial<Record<PanelName, Record<string, unknown>>> = {};
+const _pendingMotor: Partial<Record<PanelName, PanelMotor | null>> = {};
 
 /** Queue a save of the panel's persisted fields; coalesced per panel so a
  *  field typed digit by digit is one PUT, not five.  The LAST snapshot wins. */
 export function savePanelSettings(panel: PanelName, settings: Record<string, unknown>,
-                                  delayMs = 700): void {
+                                  delayMs = 700, motor: PanelMotor | null = null): void {
   _pending[panel] = settings;
+  _pendingMotor[panel] = motor;
   if (_timers[panel]) window.clearTimeout(_timers[panel]);
   _timers[panel] = window.setTimeout(() => {
     _timers[panel] = undefined;
     const body = _pending[panel];
+    const motorOf = _pendingMotor[panel] ?? null;
     _pending[panel] = undefined;
+    _pendingMotor[panel] = undefined;
     if (!body) return;
     void fetch(`${BASE}/${panel}`, {
       method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ settings: body }),
+      body: JSON.stringify(motorOf ? { settings: body, motor: motorOf } : { settings: body }),
     }).catch(() => { /* offline: the browser copy is what we have */ });
   }, delayMs);
 }

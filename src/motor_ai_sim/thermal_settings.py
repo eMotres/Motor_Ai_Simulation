@@ -35,7 +35,10 @@ __all__ = ["COOL_MODES", "BORE_MODES", "END_FACE_MODES", "HEAT_PATHS",
            "heat_path_of", "cooling_fields",
            "cooling_issue", "thermal_panel_settings",
            "coupled_iteration_settings", "motor_cooling_patch",
-           "follow_loaded_motor", "settle_application_cooling"]
+           "follow_loaded_motor", "settle_application_cooling",
+           "motor_thermal_settings", "resolve_motor_settings",
+           "config_thermal_defaults", "SOURCE_WORDS", "complete_cooling",
+           "apply_thermal_save", "CANONICAL_COOLING"]
 
 #: The outer stator surface's boundary conditions (routes.thermal).
 #: ``robotics`` (2026-09-14) is ONE mode and not four fields, by the user's
@@ -316,15 +319,26 @@ def coupled_iteration_settings(s: Mapping[str, Any]) -> Dict[str, Any]:
     return {"max_iter": max(1, min(40, n))}
 
 
-def thermal_panel_settings(authorization: Optional[str] = None) -> Dict[str, Any]:
-    """The caller's remembered Thermal-tab fields, or ``{}``.
+def thermal_panel_settings(authorization: Optional[str] = None, *,
+                           die: Optional[str] = None,
+                           config: Optional[str] = None) -> Dict[str, Any]:
+    """The Thermal-tab fields to solve with, or ``{}``.
 
-    Goes through ``routes.panel_settings.get_panel_settings`` rather than reading
-    the JSON here, so the per-user keying (and the "shared" bucket when auth is
-    not enforced) has exactly one implementation.  A store that cannot be read is
-    an EMPTY store, never a 500: the panel's own defaults are then used, which is
-    the same machine the Thermal tab would show.
+    Without ``die`` / ``config`` this is the caller's LAST-USED fields, as it
+    always was.  With them (or, when a solve names none, with the machine the
+    catalogue has loaded) it is the record of THAT motor - see
+    :func:`motor_thermal_settings`, which also says where the fields came from.
+
+    Goes through ``routes.panel_settings`` rather than reading the JSON here, so
+    the per-user keying (and the "shared" bucket when auth is not enforced) has
+    exactly one implementation.  A store that cannot be read is an EMPTY store,
+    never a 500: the panel's own defaults are then used, which is the same
+    machine the Thermal tab would show.
     """
+    return motor_thermal_settings(authorization, die, config)[0]
+
+
+def _last_used_settings(authorization: Optional[str]) -> Dict[str, Any]:
     try:
         from motor_ai_sim.routes.panel_settings import get_panel_settings
         out = get_panel_settings(panel="thermal", authorization=authorization)
@@ -560,29 +574,438 @@ def motor_cooling_patch(options: Mapping[str, Any], settings: Mapping[str, Any],
             if str(settings.get(k) if settings.get(k) is not None else "") != v}
 
 
-def _save_thermal_patch(email: str, patch: Mapping[str, str]) -> Dict[str, Any]:
-    """Merge ``patch`` into the account's stored Thermal fields; return them."""
-    import time
+#: The panel fields that describe HOW THE MACHINE IS COOLED.  These are the ones
+#: that follow the motor (a per-motor record, a configuration's defaults, the
+#: application's rule); the panel's other fields (``maxIter``, the view, the
+#: comparison rows) stay the account's.
+COOLING_KEYS = (
+    "coolMode", "ambientT", "airSpeed", "airSpeedSource", "propellerId",
+    "propellerContextKey", "fluid", "tIn", "hConv", "flowLpm",
+    "boreMode", "boreAirSpeed", "boreFluid", "boreTIn", "boreFlowLpm",
+    "shaftExtMm", "shaftExtSides", "frame", "openAirSpeed",
+    "emissivity", "heatPath", "endFaces", "endFaceSides")
+
+#: What a configuration's ``thermal_defaults:`` block may set.  The propeller
+#: binding is the loaded motor's own business (a default cannot name another
+#: account's propeller), so only ``airSpeedSource: manual`` is accepted of it.
+_DEFAULT_KEYS = tuple(k for k in COOLING_KEYS
+                      if k not in ("propellerId", "propellerContextKey"))
+
+#: How each source of a motor's cooling fields is worded (the note a solve
+#: carries; the panel has its own translated words for the same four).
+SOURCE_WORDS = {
+    "saved": "your saved settings",
+    "config": "configuration defaults",
+    "application": "application default",
+    "last_used": "your last-used settings",
+}
+
+
+#: A COMPLETE cooling description - the panel's own defaults for every cooling
+#: field.  A motor's cooling is always built on this, never on the previous
+#: motor's fields, so a field that no rule, default or saved record names takes
+#: the panel default instead of leaking in from another machine (open frame,
+#: bore airflow, exposed shaft ...).
+CANONICAL_COOLING: Dict[str, str] = {
+    "coolMode": "air", "ambientT": "40", "airSpeed": "10",
+    "airSpeedSource": "manual", "propellerId": "", "propellerContextKey": "",
+    "fluid": "water", "tIn": "40", "hConv": "50", "flowLpm": "8",
+    "boreMode": "none", "boreAirSpeed": "10", "boreFluid": "water",
+    "boreTIn": "40", "boreFlowLpm": "4",
+    "shaftExtMm": "0", "shaftExtSides": "2",
+    "frame": "housed", "openAirSpeed": "0",
+    "emissivity": "0.9", "heatPath": "housing",
+    "endFaces": "still", "endFaceSides": "2",
+}
+assert set(CANONICAL_COOLING) == set(COOLING_KEYS)
+
+
+def _cooling_of(settings: Mapping[str, Any]) -> Dict[str, Any]:
+    """Only the cooling fields of ``settings``."""
+    return {k: settings[k] for k in COOLING_KEYS if k in settings}
+
+
+def _account_prefs(settings: Mapping[str, Any]) -> Dict[str, Any]:
+    """Everything that is NOT cooling (``maxIter``, the view, the comparison
+    rows ...): the account's, whichever motor is loaded."""
+    return {k: v for k, v in settings.items() if k not in COOLING_KEYS}
+
+
+def _text(v: Any) -> str:
+    return "" if v is None else str(v).strip()
+
+
+def _entry_of(email: str) -> Dict[str, Any]:
+    """The account's whole Thermal entry (``settings``, ``by_motor``, ...)."""
     from motor_ai_sim.routes import panel_settings as ps
-    stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "+00:00"
     with ps._LOCK:
         d = ps._load()
-        cur = (((d.get("thermal") or {}).get(email) or {}).get("settings")) or {}
-        new = {**cur, **patch}
-        d.setdefault("thermal", {})[email] = {"settings": new, "updated_at": stamp}
+    e = (d.get("thermal") or {}).get(email)
+    return dict(e) if isinstance(e, dict) else {}
+
+
+def _stored_thermal(email: str) -> Dict[str, Any]:
+    return dict(_entry_of(email).get("settings") or {})
+
+
+def _motor_record(entry: Mapping[str, Any], motor: str) -> Optional[Dict[str, Any]]:
+    """The account's own saved Thermal fields for ``motor``, or ``None``."""
+    by = entry.get("by_motor")
+    rec = by.get(motor) if isinstance(by, dict) and motor else None
+    s = rec.get("settings") if isinstance(rec, dict) else None
+    return dict(s) if isinstance(s, dict) and s else None
+
+
+def _stamp() -> str:
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "+00:00"
+
+
+def _rev(entry: Mapping[str, Any]) -> int:
+    """The entry's write counter (0 for one written before it existed)."""
+    try:
+        return int(entry.get("rev") or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _save_thermal_patch(email: str, patch: Mapping[str, str],
+                        motor: str = "") -> Dict[str, Any]:
+    """Merge ``patch`` into the account's stored Thermal fields; return them.
+
+    The last-used ``settings`` take the patch unless they are known to belong to
+    another motor than ``motor``; the motor's own saved record (when it has one)
+    takes it too.  Every other key of the entry (``by_motor`` above all) is kept.
+    """
+    from motor_ai_sim.routes import panel_settings as ps
+    stamp = _stamp()
+    with ps._LOCK:
+        d = ps._load()
+        entry = dict((d.get("thermal") or {}).get(email) or {})
+        cur = dict(entry.get("settings") or {})
+        marker = str(entry.get("motor") or "")
+        new = cur
+        if not motor or not marker or marker == motor:
+            new = {**cur, **patch}
+            entry.update(settings=new, updated_at=stamp)
+        by = entry.get("by_motor")
+        if motor and isinstance(by, dict) and isinstance(by.get(motor), dict):
+            rec = dict(by[motor].get("settings") or {})
+            by[motor] = {"settings": {**rec, **patch}, "updated_at": stamp}
+        entry["rev"] = _rev(entry) + 1
+        d.setdefault("thermal", {})[email] = entry
         ps._save(d)
     return new
 
 
-def _stored_thermal(email: str) -> Dict[str, Any]:
+def _write_followed(email: str, settings: Mapping[str, Any], motor: str,
+                    source: str, application: Optional[str],
+                    expected_rev: Optional[int] = None) -> bool:
+    """Make ``settings`` the account's last-used fields for ``motor`` (keeping
+    every motor's saved record) and note where they came from.
+
+    A record the account already has for ``motor`` gets the resolved cooling too:
+    it is completed (a partial record is filled from the rules) and a repaired
+    propeller binding is stored, so a solve that reads the record sees exactly
+    what the panel was given.  A record is never CREATED here.
+
+    COMPARE-AND-SET: with ``expected_rev`` the write happens only if the entry is
+    still the revision the caller resolved from; ``False`` = something else wrote
+    meanwhile (a save from another tab, another follow) and the caller must
+    resolve again from the fresh entry, not overwrite it with a stale snapshot."""
     from motor_ai_sim.routes import panel_settings as ps
     with ps._LOCK:
         d = ps._load()
-    return dict((((d.get("thermal") or {}).get(email) or {}).get("settings")) or {})
+        entry = dict((d.get("thermal") or {}).get(email) or {})
+        if expected_rev is not None and _rev(entry) != expected_rev:
+            return False
+        entry.update(settings=dict(settings), updated_at=_stamp(), motor=motor,
+                     source=source)
+        if application:
+            entry["application"] = application
+        else:
+            entry.pop("application", None)
+        by = entry.get("by_motor")
+        if motor and isinstance(by, dict) and isinstance(by.get(motor), dict):
+            rec = dict(by[motor].get("settings") or {})
+            by[motor] = {"settings": {**rec, **_cooling_of(settings)},
+                         "updated_at": by[motor].get("updated_at") or _stamp()}
+        entry["rev"] = _rev(entry) + 1
+        d.setdefault("thermal", {})[email] = entry
+        ps._save(d)
+    return True
 
 
 def _same_motor(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
     return all((a.get(k) or None) == (b.get(k) or None) for k in ("die", "config", "ref_id"))
+
+
+def _motor_key(die: Any, config: Any) -> str:
+    from motor_ai_sim.routes.panel_settings import motor_key
+    return motor_key(die, config)
+
+
+# ── the cooling belongs to the MOTOR (2026-10-15) ─────────────────────────────
+#
+# 2026-10-15 incident: after the 40 mm propeller motor (frame open, bore air
+# 20 m/s) the 200 mm liquid-cooled L155 was solved with the open frame and the
+# 40 mm bore air, because only FOLLOW_KEYS moved with the motor and everything
+# else stayed from the previous one.  Now the fields a motor was last saved with
+# come back when it is loaded (``by_motor``), a configuration may declare its own
+# in a ``thermal_defaults:`` block, and a motor with neither starts from its
+# application's rule with the frame and bore RESET rather than inherited.
+
+def config_thermal_defaults(die: str, config: str) -> Dict[str, str]:
+    """The ``thermal_defaults:`` block of ``<die>/<config>.yaml`` as panel
+    strings, ``{}`` when there is none.
+
+    Only the cooling fields the panel has (see :data:`COOLING_KEYS`) are taken;
+    a value that is not a plain scalar, or a key the panel does not know, is
+    ignored with a log line (a typo must be visible, not silently half-applied).
+    ``airSpeedSource`` is accepted as ``manual`` only - the propeller binding
+    belongs to the loaded motor.
+    """
+    try:
+        from motor_ai_sim.routes.family import config_doc
+        blk = (config_doc(die, config) or {}).get("thermal_defaults")
+    except Exception:  # noqa: BLE001 — a reader, not a gate
+        return {}
+    if not isinstance(blk, Mapping):
+        return {}
+    out: Dict[str, str] = {}
+    for k, v in blk.items():
+        k = str(k)
+        if (k not in _DEFAULT_KEYS or isinstance(v, bool)
+                or not isinstance(v, (str, int, float))):
+            log.warning("thermal_defaults of %s %s: ignored %r", die, config, k)
+            continue
+        text = ("%g" % v) if isinstance(v, (int, float)) else str(v).strip()
+        if k == "airSpeedSource" and text != "manual":
+            log.warning("thermal_defaults of %s %s: airSpeedSource must be manual", die, config)
+            continue
+        out[k] = text
+    return out
+
+
+def _config_says_open(die: str, config: str) -> bool:
+    """A propeller configuration that declares ``frame: open`` (the Ø40 drone
+    motor has no housing).  Anything else is a housed machine."""
+    try:
+        from motor_ai_sim.routes.family import config_doc
+        return str((config_doc(die, config) or {}).get("frame") or "").strip().lower() == "open"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _propeller_ok(options: Mapping[str, Any]) -> bool:
+    apps = list(options.get("applications") or [])
+    return (_PROPELLER_AIR in (options.get("cooling_options") or [])
+            and bool(_selectable_propellers(options))
+            and (not apps or "propeller" in apps))
+
+
+def _repair_for_motor(options: Mapping[str, Any], settings: Mapping[str, Any],
+                      key: str) -> Dict[str, Any]:
+    """``settings`` made consistent with the motor behind ``options`` without
+    overwriting a deliberate choice: a propeller the registry still allows is
+    re-bound to this motor's fresh context key, anything contradictory (a
+    propeller on a robot) is moved to the application's cooling."""
+    out = dict(settings)
+    pid = str(out.get("propellerId") or "").strip()
+    if (str(out.get("airSpeedSource") or "manual").strip().lower() == "propeller"
+            and _propeller_ok(options) and pid in _selectable_propellers(options)):
+        out["propellerContextKey"] = key
+        return out
+    out.update(motor_cooling_patch(options, out, key, motor_changed=False))
+    return out
+
+
+def complete_cooling(options: Mapping[str, Any], key: str, *,
+                     record: Optional[Mapping[str, Any]] = None,
+                     defaults: Optional[Mapping[str, str]] = None,
+                     frame_open: bool = False) -> Tuple[Dict[str, str], str]:
+    """The COMPLETE cooling of a motor, and where it came from.
+
+    Pure.  Built from the panel defaults (:data:`CANONICAL_COOLING`), never from
+    another motor's fields, then, lowest to highest priority:
+
+    * the application's rule (:func:`motor_cooling_patch`; robot -> robotics,
+      aviation/marine -> liquid, propeller -> air from the propeller) with the
+      FRAME housed (``open`` for a propeller configuration that says so) and
+      the BORE ``none`` (``still`` for robotics, the open bore that mode
+      means); source ``application``;
+    * ``defaults`` - the configuration's ``thermal_defaults:``; source ``config``;
+    * ``record`` - the account's own saved fields for this motor; source
+      ``saved``.  A field the record lacks is filled from the layers above.
+    """
+    cool = dict(CANONICAL_COOLING)
+    cool.update(motor_cooling_patch(options, cool, key, motor_changed=True))
+    cool["frame"] = ("open" if (options.get("application") == "propeller" and frame_open)
+                     else "housed")
+    explicit: Dict[str, str] = {}
+    source = "application"
+    if defaults:
+        explicit.update({k: _text(v) for k, v in defaults.items() if k in COOLING_KEYS})
+        source = "config"
+    if record:
+        explicit.update({k: _text(v) for k, v in record.items() if k in COOLING_KEYS})
+        source = "saved"
+    cool.update(explicit)
+    if "boreMode" not in explicit:
+        cool["boreMode"] = "still" if cool.get("coolMode") == "robotics" else "none"
+    if "airSpeedSource" in explicit and cool["airSpeedSource"] != "propeller":
+        cool["airSpeedSource"] = "manual"
+        cool["propellerId"] = cool["propellerContextKey"] = ""
+    # NOTHING is repaired here: a value the record or the defaults hold - zero
+    # flow, a blank - stays exactly that and is refused by name downstream
+    # (`cooling_issue`).  The canonical flow already covers an ABSENT one.
+    return {k: _text(v) for k, v in _repair_for_motor(options, cool, key).items()}, source
+
+
+def resolve_motor_settings(options: Mapping[str, Any], base: Mapping[str, Any],
+                           key: str, *, record: Optional[Mapping[str, Any]] = None,
+                           defaults: Optional[Mapping[str, str]] = None,
+                           frame_open: bool = False) -> Tuple[Dict[str, Any], str]:
+    """The Thermal fields a motor starts with, and where they came from.
+
+    :func:`complete_cooling` for the cooling, laid over ``base``'s NON-cooling
+    fields (the account's own preferences: iteration limit, view, comparison
+    rows).  Nothing of ``base``'s cooling survives.
+    """
+    cool, source = complete_cooling(options, key, record=record, defaults=defaults,
+                                    frame_open=frame_open)
+    return {**_account_prefs(base), **cool}, source
+
+
+def solver_effective_cooling(settings: Mapping[str, Any]) -> Dict[str, str]:
+    """``settings`` with every ABSENT cooling field filled by what the solver
+    always took for it (:func:`cooling_fields`: no ``airSpeed`` is 0 m/s, no
+    inlet temperature is the ambient, no frame is housed ...).
+
+    Values the entry holds - blank or zero included - are untouched, so the
+    physics of an old, sparse entry is bit-identical; only the description
+    becomes complete (a browser can adopt it as the motor's own fields without
+    inventing a panel default or keeping another motor's)."""
+    # The derived inlets carry the ambient EXACTLY as stored (its own text): a
+    # formatted copy would round it and change a solver and cache input.
+    raw_amb = _text(settings.get("ambientT"))
+    try:
+        float(raw_amb)
+        ambient_text = raw_amb if _num(raw_amb, 40.0) == float(raw_amb) else "40"
+    except ValueError:
+        ambient_text = "40"
+    fill = {
+        "coolMode": "air", "ambientT": "40", "airSpeed": "0",
+        "airSpeedSource": "manual", "propellerId": "", "propellerContextKey": "",
+        "fluid": "water", "tIn": ambient_text, "hConv": "50", "flowLpm": "8",
+        "boreMode": "none", "boreAirSpeed": "0", "boreFluid": "water",
+        "boreTIn": ambient_text, "boreFlowLpm": "4",
+        "shaftExtMm": "0", "shaftExtSides": "2",
+        "frame": "housed", "openAirSpeed": "0",
+        "emissivity": "0.9", "heatPath": heat_path_of(settings),
+        "endFaces": "still", "endFaceSides": "2",
+    }
+    return {**{k: v for k, v in fill.items() if k not in settings}, **settings}
+
+
+def _fields_of(settings: Mapping[str, Any]) -> Dict[str, str]:
+    """The cooling fields as the panel adopts them (strings)."""
+    return {k: ("" if settings.get(k) is None else str(settings.get(k)))
+            for k in COOLING_KEYS if k in settings}
+
+
+def _loaded_motor(authorization: Optional[str]) -> Tuple[str, str, str, str]:
+    """``(email, die, config, ref_id)`` of the account's loaded motor ("" when
+    unknown)."""
+    try:
+        from motor_ai_sim.routes.account import get_last_motor
+        cur = get_last_motor(authorization=authorization) or {}
+        sel = cur.get("selection") if isinstance(cur.get("selection"), Mapping) else {}
+        return (str(cur.get("user") or "").strip().lower(), str(sel.get("die") or ""),
+                str(sel.get("config") or ""), str(sel.get("ref_id") or ""))
+    except Exception:  # noqa: BLE001
+        return "", "", "", ""
+
+
+def _family_motor() -> Tuple[str, str]:
+    """``(die, config)`` the catalogue's family context has loaded - a duty is NOT
+    required (an API workflow may activate a machine without one)."""
+    try:
+        from motor_ai_sim.routes.family import _read_ctx
+        ctx = _read_ctx() or {}
+        die, config = str(ctx.get("die") or ""), str(ctx.get("config") or "")
+        return (die, config) if die and config else ("", "")
+    except Exception:  # noqa: BLE001
+        return "", ""
+
+
+def motor_thermal_settings(authorization: Optional[str] = None,
+                           die: Optional[str] = None,
+                           config: Optional[str] = None
+                           ) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """The Thermal fields to SOLVE a motor with, and where they came from.
+
+    ``die`` / ``config`` name the motor being solved; without them the machine
+    the catalogue's family context has loaded is meant (with or without a duty),
+    else the account's last-loaded motor.  Returns ``(settings, info)`` where
+    ``info`` is ``{"source", "motor", "application", "note"}`` and ``source`` is
+    one of :data:`SOURCE_WORDS`.
+
+    The cooling is always that motor's COMPLETE cooling (:func:`complete_cooling`),
+    exactly what the panel shows after loading it; the account's non-cooling
+    preferences (``maxIter`` ...) come from the last-used fields.  Never another
+    motor's cooling: a motor with no saved record gets its configuration's
+    defaults or its application's rule, and ``note`` says so.  The last-used
+    fields are returned as they are only when no motor can be named at all.
+    """
+    info: Dict[str, Any] = {"source": "last_used", "motor": "",
+                            "application": None, "note": None}
+    try:
+        from motor_ai_sim.routes.panel_settings import _who
+        who = _who(authorization)
+        entry = _entry_of(who)
+        last = dict(entry.get("settings") or {})
+        l_email, l_die, l_cfg, l_ref = _loaded_motor(authorization)
+        die, config = str(die or "").strip(), str(config or "").strip()
+        if not (die and config):
+            die, config = _family_motor()
+        if not (die and config):
+            die, config = l_die, l_cfg
+        motor = _motor_key(die, config)
+        if not motor:
+            return last, info
+        info["motor"] = motor
+        options = _cooling_options_for(die, config, authorization) or {}
+        info["application"] = options.get("application")
+        loaded = (die, config) == (l_die, l_cfg)
+        key = context_key(l_email or who, die, config, l_ref if loaded else "")
+        defaults = config_thermal_defaults(die, config)
+        frame_open = _config_says_open(die, config)
+        rec = _motor_record(entry, motor)
+        marker = str(entry.get("motor") or "")
+        if rec:
+            info["source"] = "saved"
+        elif marker == motor or (not marker and last and loaded):
+            # The last-used fields ARE this motor's (the entry names it, or an
+            # entry from before motors were recorded and this is the loaded one).
+            # They are returned AS THEY ARE: a key an old entry lacks keeps the
+            # meaning the solver always gave it (`cooling_fields`: no airSpeed is
+            # 0 m/s, no inlet is the ambient), not a panel default that would
+            # change the physics of a motor nobody touched.
+            src = str(entry.get("source") or "") if marker else ""
+            info["source"] = src if src in SOURCE_WORDS else "last_used"
+            info["application"] = options.get("application")
+            return dict(last), info
+        cool, source = complete_cooling(options, key, record=rec, defaults=defaults,
+                                        frame_open=frame_open)
+        if not rec:
+            info.update(source=source,
+                        note="No saved Thermal settings for %s %s: solved with %s."
+                             % (die, config, SOURCE_WORDS[source]))
+        return {**_account_prefs(last), **cool}, info
+    except Exception:  # noqa: BLE001 — a store that cannot be read is an empty store
+        log.warning("thermal settings of the solved motor could not be read", exc_info=True)
+        return _last_used_settings(authorization), info
 
 
 def follow_loaded_motor(email: str, selection: Mapping[str, Any],
@@ -592,34 +1015,211 @@ def follow_loaded_motor(email: str, selection: Mapping[str, Any],
 
     Called by ``PUT /api/me/last_motor`` after the selection is remembered.
     ``previous`` is the selection that was remembered before (``None`` = none
-    yet).  The cooling is moved to the motor's application only when the motor
-    CHANGED (die, configuration or catalogue reference); loading the same motor
-    again repairs a contradictory record but keeps the user's manual edits.
+    yet).  The motor is INITIALISED - its cooling fields become its saved record,
+    else its configuration's defaults, else its application's rule
+    (:func:`complete_cooling`), and the entry is marked as its - whenever the
+    entry does not already belong to it (the first load of an account included)
+    or the catalogue reference changed.  The one exception is an entry from
+    before motors were recorded when the SAME motor is loaded again: its fields
+    are kept as the user's and only claimed for the motor.  Loading the same,
+    already initialised motor again only repairs a record that contradicts the
+    motor and keeps the user's manual edits.
 
     Never raises: a Thermal record that cannot be adjusted must not fail the
     motor load.  Returns ``{"changed", "application", "settings",
-    "allowed_propellers"}`` where ``settings`` is the effective
-    :data:`FOLLOW_KEYS` after the call.
+    "allowed_propellers", "motor_changed", "motor", "source", "fields"}``:
+    ``settings`` is the effective :data:`FOLLOW_KEYS` after the call; ``fields``
+    is EVERY :data:`COOLING_KEYS` value the motor now has, also when nothing
+    changed - a browser that lost an earlier answer resynchronises from it (the
+    open panel adopts it as it is, already stored);
+    ``source`` is one of :data:`SOURCE_WORDS`.
     """
     out: Dict[str, Any] = {"changed": False, "application": None,
-                           "settings": {}, "allowed_propellers": []}
+                           "settings": {}, "allowed_propellers": [],
+                           "motor_changed": False, "motor": "", "source": None,
+                           "fields": None}
     try:
         email = str(email or "").strip().lower()
         die, config = str(selection.get("die") or ""), str(selection.get("config") or "")
         options = _cooling_options_for(die, config, authorization)
         if not email or not die or not config or options is None:
             return out
-        changed = isinstance(previous, Mapping) and not _same_motor(previous, selection)
+        motor = _motor_key(die, config)
         key = context_key(email, die, config, selection.get("ref_id"))
-        cur = _stored_thermal(email)
-        patch = motor_cooling_patch(options, cur, key, motor_changed=bool(changed))
-        new = _save_thermal_patch(email, patch) if patch else cur
-        out.update(changed=bool(patch), application=options.get("application"),
-                   settings={k: str(new.get(k) or "") for k in FOLLOW_KEYS},
+        app = options.get("application")
+        out.update(application=app, motor=motor,
                    allowed_propellers=_selectable_propellers(options))
+        # READ - RESOLVE - COMPARE-AND-SET.  Another tab's save, or another
+        # follow, may write between the read and the write; the write then
+        # refuses (the entry's revision moved) and the whole step is done again
+        # from the fresh entry, so a newer record is never overwritten by a
+        # snapshot taken before it.
+        for _attempt in range(5):
+            entry = _entry_of(email)
+            rev = _rev(entry)
+            cur = dict(entry.get("settings") or {})
+            marker = str(entry.get("motor") or "")
+            same_family = (isinstance(previous, Mapping)
+                           and (previous.get("die") or None) == (die or None)
+                           and (previous.get("config") or None) == (config or None))
+            legacy_same = (not marker) and bool(cur) and same_family
+            ref_changed = isinstance(previous, Mapping) and not _same_motor(previous, selection)
+            motor_changed = ((marker != motor and not legacy_same)
+                             or (marker == motor and ref_changed))
+            out["motor_changed"] = motor_changed
+            if motor_changed:
+                new, source = resolve_motor_settings(
+                    options, cur, key, record=_motor_record(entry, motor),
+                    defaults=config_thermal_defaults(die, config),
+                    frame_open=_config_says_open(die, config))
+                write = (new, source)
+            else:
+                patch = motor_cooling_patch(options, cur, key, motor_changed=False)
+                # The entry is this motor's own; a sparse (old) one is made
+                # COMPLETE with the solver's own meanings so the browser can adopt
+                # it as the motor's fields (no panel default, no other motor's).
+                full = solver_effective_cooling(cur)
+                new = {**full, **patch}
+                src = "last_used" if legacy_same else (
+                    str(entry.get("source") or "") if marker == motor else "")
+                source = src if src in SOURCE_WORDS else "last_used"
+                write = (new, source) if (patch or legacy_same or full != cur) else None
+            if write is not None:
+                # A newer selection supersedes this follow: never write the
+                # fields of a motor (or of a catalogue reference of it, whose
+                # propeller binding differs) that is no longer the loaded one.
+                _e, l_die, l_cfg, l_ref = _loaded_motor(authorization)
+                if l_die and (l_die, l_cfg, l_ref) != (
+                        die, config, str(selection.get("ref_id") or "")):
+                    return out
+                if not _write_followed(email, write[0], motor, write[1], app,
+                                       expected_rev=rev):
+                    continue
+            out.update(changed=_fields_of(new) != _fields_of(cur), source=source,
+                       fields=_fields_of(new))
+            out["settings"] = {k: str(new.get(k) or "") for k in FOLLOW_KEYS}
+            return out
+        log.warning("thermal cooling follow gave up after concurrent writes")
     except Exception:  # noqa: BLE001
         log.warning("thermal cooling could not follow the loaded motor", exc_info=True)
     return out
+
+
+def current_cooling_answer(authorization: Optional[str] = None) -> Dict[str, Any]:
+    """The cooling of the motor the ACCOUNT has loaded right now, in the shape of a
+    follow answer - a READ.  It writes nothing and never changes the account's
+    selection: a stale browser tab that only needs to learn its motor's complete
+    fields asks this instead of repeating a ``PUT /api/me/last_motor`` (which
+    would reselect that tab's motor for the account).
+
+    ``{"selection", "thermal"}``; ``selection`` is the account's (``None`` when it
+    has none), ``thermal`` carries ``motor``, ``fields`` (COMPLETE, the solver's
+    own meaning for what an old entry lacks), ``source``, ``application``,
+    ``allowed_propellers`` and ``settings``; ``thermal.fields`` is ``None`` when it
+    cannot be resolved."""
+    out: Dict[str, Any] = {"selection": None, "thermal": {
+        "changed": False, "motor_changed": False, "motor": "", "source": None,
+        "application": None, "fields": None, "settings": {}, "allowed_propellers": []}}
+    try:
+        from motor_ai_sim.routes.account import get_last_motor
+        cur = get_last_motor(authorization=authorization) or {}
+        sel = cur.get("selection")
+        if not isinstance(sel, Mapping):
+            return out
+        out["selection"] = dict(sel)
+        die, config = str(sel.get("die") or ""), str(sel.get("config") or "")
+        settings, info = motor_thermal_settings(authorization, die, config)
+        if not info.get("motor"):
+            return out
+        # the WHOLE settings: the legacy mount fields (not cooling keys) must reach
+        # `heat_path_of` before anything is filtered, or a switched-off mount
+        # becomes a housing conduction path
+        full = solver_effective_cooling(settings)
+        options = _cooling_options_for(die, config, authorization) or {}
+        th = out["thermal"]
+        th.update(motor=info["motor"], source=info["source"],
+                  application=info.get("application"), fields=_fields_of(full),
+                  settings={k: str(full.get(k) or "") for k in FOLLOW_KEYS},
+                  allowed_propellers=_selectable_propellers(options))
+    except Exception:  # noqa: BLE001
+        log.warning("current thermal cooling could not be read", exc_info=True)
+    return out
+
+
+def _effective_cooling(entry: Mapping[str, Any], motor: str, email: str,
+                       authorization: Optional[str]) -> Dict[str, str]:
+    """The complete cooling the panel of ``motor`` holds right now if the user
+    has changed nothing - the baseline a save is compared with."""
+    rec = _motor_record(entry, motor)
+    src_rec = rec if rec else (_cooling_of(entry.get("settings") or {})
+                               if str(entry.get("motor") or "") == motor else None)
+    die, _, config = motor.rpartition("|")
+    options = _cooling_options_for(die, config, authorization) or {}
+    key = context_key(email, die, config, "")
+    cool, _src = complete_cooling(options, key, record=src_rec,
+                                  defaults=config_thermal_defaults(die, config),
+                                  frame_open=_config_says_open(die, config))
+    return cool
+
+
+def apply_thermal_save(prev: Mapping[str, Any], incoming: Dict[str, Any], motor: str,
+                       stamp: str, email: str,
+                       authorization: Optional[str] = None) -> Dict[str, Any]:
+    """The Thermal entry after the panel saved ``incoming`` for ``motor``.
+
+    ``motor`` is the ``"<die>|<config>"`` the panel says its fields belong to
+    (``""`` = an old client that names none).  Rules:
+
+    * a save that names NO motor is never attributed to one: it can not write a
+      motor record, and on an entry that already knows its motor it changes only
+      the account-level fields (iteration limit, view ...), not the cooling;
+    * the named motor's record is written only when the user has changed a
+      cooling field (compared with what the panel held for that motor), or when
+      the motor already has a record - an edit of the view, the iteration limit
+      or a comparison row keeps a default a default;
+    * the saved fields become the account's active (last-used) settings only when
+      the named motor is the loaded one, so a delayed save of motor A can never
+      replace the settings of motor B loaded meanwhile.  Where the loaded motor
+      cannot be told, the entry's own marker decides.
+    """
+    entry: Dict[str, Any] = dict(prev)
+    entry["rev"] = _rev(prev) + 1
+    by = {k: v for k, v in (prev.get("by_motor") or {}).items() if isinstance(v, dict)} \
+        if isinstance(prev.get("by_motor"), dict) else {}
+    marker = str(prev.get("motor") or "")
+    cur = dict(prev.get("settings") or {})
+    if not motor:
+        if marker:
+            entry.update(settings={**cur, **_account_prefs(incoming)}, updated_at=stamp)
+        else:
+            entry.update(settings=incoming, updated_at=stamp)
+        if by:
+            entry["by_motor"] = by
+        return entry
+    l_email, l_die, l_cfg, _ref = _loaded_motor(authorization)
+    loaded = _motor_key(l_die, l_cfg)
+    promote = (motor == loaded) if loaded else (not marker or marker == motor)
+    baseline = _effective_cooling(prev, motor, email, authorization)
+    changed = any(_text(v) != _text(baseline.get(k))
+                  for k, v in _cooling_of(incoming).items()
+                  if k != "propellerContextKey")
+    saved = changed or motor in by
+    if saved:
+        by[motor] = {"settings": incoming, "updated_at": stamp}
+        if len(by) > 200:
+            for k in sorted(by, key=lambda k: str(by[k].get("updated_at") or ""))[:len(by) - 200]:
+                by.pop(k, None)
+    if promote:
+        entry.update(settings=incoming, updated_at=stamp, motor=motor)
+        if saved:
+            entry["source"] = "saved"
+        elif marker != motor:
+            entry["source"] = "last_used"
+    else:
+        entry.update(settings={**cur, **_account_prefs(incoming)}, updated_at=stamp)
+    if by:
+        entry["by_motor"] = by
+    return entry
 
 
 def settle_application_cooling(
@@ -660,7 +1260,7 @@ def settle_application_cooling(
         _liquid_needs_flow(patch, settings)
     if email:
         try:
-            _save_thermal_patch(email, patch)
+            _save_thermal_patch(email, patch, _motor_key(die, config))
         except Exception:  # noqa: BLE001 — the run still proceeds with the switched copy
             log.warning("could not store the corrected Thermal cooling", exc_info=True)
     note = _application_message(die, config, options, switched=True)

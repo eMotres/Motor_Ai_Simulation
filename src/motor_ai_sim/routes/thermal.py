@@ -8040,8 +8040,8 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                                                  steady_state, time_to_limit)
     from motor_ai_sim.thermal_settings import (cooling_fields, cooling_issue,
                                                propeller_cooling_context_issue,
-                                               settle_application_cooling,
-                                               thermal_panel_settings)
+                                               motor_thermal_settings,
+                                               settle_application_cooling)
 
     t0 = time.time()
     body = dict(body or {})
@@ -8108,8 +8108,15 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
 
     # ── 2. THE BOUNDARY CONDITIONS ──────────────────────────────────────────
     raw = body.get("thermal_settings")
-    settings = dict(raw) if isinstance(raw, dict) else dict(
-        thermal_panel_settings(authorization))
+    if isinstance(raw, dict):
+        settings = dict(raw)
+        cooling_source: Dict[str, Any] = {"source": "request", "motor": "",
+                                          "application": None, "note": None}
+    else:
+        # The record of the motor this duty belongs to, never the fields last
+        # used on another motor (2026-10-15).
+        stored, cooling_source = motor_thermal_settings(authorization, die, cfg)
+        settings = dict(stored)
     settings, _cooling_note = settle_application_cooling(
         settings, authorization, expected_die=die, expected_config=cfg)
     prop_issue = propeller_cooling_context_issue(
@@ -8588,6 +8595,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
             "solve_time_s": round(time.time() - t_cycle, 3),
             "cached": cached,
             "geometry_fingerprint": fp,
+            "cooling_source": cooling_source,
         }
         _remember_last("duty_cycle", record,
                        {"die": die, "config": cfg, "duty": duty_name,

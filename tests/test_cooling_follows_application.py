@@ -80,8 +80,9 @@ def _runs(store) -> dict:
 
 
 def test_propeller_motor_then_robot_motor_runs_with_robotics_cooling(store):
-    # first ever load of a propeller motor with a manual record: left alone
-    assert _load(store, None, PROP)["changed"] is False
+    # the first ever load initialises the cooling from the application's rule
+    first = _load(store, None, PROP)
+    assert first["source"] == "application" and first["motor_changed"] is True
     # the user binds the propeller motor the way the Thermal tab does
     ts._save_thermal_patch(EMAIL, {"coolMode": "air", "airSpeedSource": "propeller",
                                    "propellerId": "fpv_10x5",
@@ -95,8 +96,9 @@ def test_propeller_motor_then_robot_motor_runs_with_robotics_cooling(store):
     cooling = _runs(store)
     assert cooling["cooling_mode"] == "robotics"
     assert "air_speed_source" not in cooling and "propeller_id" not in cooling
-    # only the application's fields moved; what the user typed stays
-    assert ts._stored_thermal(EMAIL)["ambientT"] == "30"
+    # the robot starts from the panel defaults, not from the propeller motor's
+    # fields: nothing the previous motor typed leaks in (2026-10-15 review)
+    assert ts._stored_thermal(EMAIL)["ambientT"] == "40"
 
 
 def test_robot_motor_then_propeller_motor_gets_its_default_propeller_and_fresh_key(store):

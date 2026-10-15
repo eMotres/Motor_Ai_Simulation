@@ -29,6 +29,11 @@ import { liveGeoSig } from '../components/common/geoSig';
 import { normalizeLocalRows } from '../components/compare/resultRows';
 import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
+import {
+  adoptableCoolingFields, followAdoption, hydrationIsStale, hydrationPlan,
+  isCoolingSource, ownershipIssue, resyncAnswer, sameSelection, withoutMotorOwned,
+} from '../lib/thermalMotorCooling';
+import type { CoolingSource, MotorIdentity } from '../lib/thermalMotorCooling';
 // `registerThermalPanelBlock` — the Electromagnetic tab's OWN coupled Run
 // reads this tab's cooling through it.  Nothing here calls the orchestrator
 // any more: the thermal side of this app never launches an electromagnetic
@@ -50,6 +55,7 @@ import { tileFullRing } from '../components/thermal/types';
 import { readMeshSettings } from '../components/common/motorSettings';
 import {
   configureRefIdForSelection, getLastMotorState, isCurrentLastMotorUser, registerThermalFollow,
+  currentLastMotorEpoch, fetchLastMotorCooling, isCurrentLastMotorOperation,
 } from '../lib/lastMotor';
 import {
   PROP_CHOICE_LS, coolChoiceKey, propellerContextKey, readCoolChoice,
@@ -154,6 +160,17 @@ export interface ThermalState {
   /** Server settings read has completed (or failed offline); propeller binding
    *  waits for this so a local default cannot race a cross-browser saved ID. */
   serverSettingsLoaded: boolean;
+  /** THE COOLING BELONGS TO THE MOTOR (2026-10-15): the motor the cooling
+   *  fields below were loaded for, where they came from (the account's own
+   *  saved record, the configuration's defaults, the application's rule, or
+   *  the last-used fields of a record that predates per-motor settings) and
+   *  that motor's application.  A save files the fields under THIS motor. */
+  fieldsMotor: MotorIdentity | null;
+  /** this tab shows another motor (or catalogue reference) than the account has
+   *  loaded - its cooling fields are not the account's, solves are refused */
+  tabStale: boolean;
+  coolingSource: CoolingSource | null;
+  coolingApp: string | null;
 
   field: Slice<ThermalField>;
   coupled: Slice<CoupledResult>;
@@ -323,6 +340,20 @@ const PERSISTED: (keyof ThermalState)[] = [
 const COOLING_INHERITANCE_KEYS = new Set<string>([
   'coolMode', 'ambientT', 'airSpeed', 'fluid', 'tIn', 'flowLpm',
 ]);
+
+/** The persisted keys that describe how the machine is COOLED: an edit of one
+ *  makes the fields the account's own saved record of the loaded motor. */
+const COOLING_PERSISTED = new Set<string>([
+  'coolMode', 'ambientT', 'airSpeed', 'fluid', 'tIn', 'hConv', 'flowLpm',
+  'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
+  'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
+  'emissivity', 'heatPath', 'endFaces', 'endFaceSides',
+]);
+
+/** Bumped every time the server's fields for a newly loaded motor are adopted.
+ *  A hydration that started before the bump is OLD: it carries the fields of the
+ *  motor that was loaded when it asked, and must not reinstall them. */
+let followEpoch = 0;
 
 /** Remember how long this kind of solve took, so the NEXT one can say "~40 s".
  *
@@ -572,7 +603,10 @@ function panelCooling(s: ThermalState): Record<string, string> {
  *  panel (the same rule `registerThermalPanelBlock` below follows). */
 export function thermalPanelBlock(): Record<string, string> | null {
   const s = useThermalStore.getState();
-  return s.hydrated ? panelCooling(s) : null;
+  // Fields tagged with ANOTHER motor are not sent: the backend then resolves the
+  // loaded motor's own record (2026-10-15).
+  if (!s.hydrated || fieldsBlockIssue(s)) return null;
+  return panelCooling(s);
 }
 
 /** The Electromagnetic tab's coupled Run reads the cooling from HERE too
@@ -582,7 +616,7 @@ export function thermalPanelBlock(): Record<string, string> | null {
  *  old per-key `therm.*` read shipped a `liquid` mode without its flow. */
 registerThermalPanelBlock(() => {
   const s = useThermalStore.getState();
-  if (!s.hydrated) return null;
+  if (!s.hydrated || fieldsBlockIssue(s)) return null;
   const out = panelCooling(s);
   const it = String(s.maxIter ?? '').trim();
   if (it !== '') out.maxIter = it;
@@ -592,6 +626,10 @@ registerThermalPanelBlock(() => {
 export const useThermalStore = create<ThermalState>()((set, get) => ({
   hydrated: false,
   serverSettingsLoaded: false,
+  fieldsMotor: null,
+  tabStale: false,
+  coolingSource: null,
+  coolingApp: null,
   field: { ...EMPTY } as Slice<ThermalField>,
   coupled: { ...EMPTY } as Slice<CoupledResult>,
   emMissing: null,
@@ -678,10 +716,12 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // explicit propeller source with no ID and are refused by the mapper.
       return savePanelSettings('thermal', thermalServerSettingsSnapshot(
         snap, st.airSpeedSource, st.propellerId, st.propellerContextKey,
-        livePropellerContextKey()));
+        livePropellerContextKey()), 700, st.fieldsMotor);
     };
     if (PERSISTED.includes(k)) {
       writeTherm(k as string, v);
+      // An edit of a cooling field is the account's own record of this motor now.
+      if (COOLING_PERSISTED.has(k as string) && get().fieldsMotor) set({ coolingSource: 'saved' });
       // …and to the SERVER, the memory every browser shares — the same bargain
       // the Electromagnetic tab has with the config (user 2026-09-07: "remember all
       // the latest settings … the same way for every simulation").
@@ -710,7 +750,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
     void savePanelSettings('thermal', thermalServerSettingsSnapshot(
       snap, st.airSpeedSource, st.propellerId, st.propellerContextKey,
-      livePropellerContextKey()));
+      livePropellerContextKey()), 700, st.fieldsMotor);
+    if (st.fieldsMotor) set({ coolingSource: 'saved' });
     try { window.dispatchEvent(new CustomEvent('thermal-cooling-saved')); }
     catch { /* SSR/no-window */ }
   },
@@ -733,6 +774,10 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     // browser, solved or not.  Written straight into state (not via `set`) so
     // the adoption does not echo back as a save.
     try {
+      // The motor and the follow epoch this request is made for: a response that
+      // arrives after another motor's fields were adopted is stale.
+      const epoch0 = followEpoch;
+      const motor0 = loadedMotorIdentity();
       const srv = await loadPanelSettings('thermal');
       const adopted = adoptSettings(get() as unknown as Record<string, unknown>, srv?.settings, PERSISTED as string[]);
       // The stack is a LIST of objects, not a text field: what the server holds
@@ -763,7 +808,31 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       if (srvS && ('heatPath' in srvS || 'mountG' in srvS || 'mountMode' in srvS)) {
         (adopted as Record<string, unknown>).heatPath = heatPathOf(srvS);
       }
-      if (Object.keys(adopted).length) set(adopted as Partial<ThermalState>);
+      // A STALE response (a motor change adopted its own fields while this was in
+      // flight) keeps only the account-level fields: its cooling is the previous
+      // motor's and must not be reinstalled over the new one's.
+      const stale = hydrationIsStale(epoch0, followEpoch, motor0, loadedMotorIdentity());
+      // What the read ESTABLISHES (`hydrationPlan`): only a complete cooling bound
+      // to a motor is adopted; a sparse / empty / unbound response keeps the
+      // browser's fields UNVERIFIED and leaves the resolution to the server's
+      // follow answer (below) - never to values localStorage kept from another motor.
+      const plan = hydrationPlan(srv, loadedMotorIdentity());
+      const toSet = (stale || !plan.adoptCooling) ? withoutMotorOwned(adopted) : adopted;
+      if (Object.keys(toSet).length) set(toSet as Partial<ThermalState>);
+      // WHICH MOTOR these fields are for (2026-10-15) - the server says; a
+      // record from before per-motor settings names none, and the loaded motor
+      // (the one it was last used with) stands in for it.  A solve of any other
+      // loaded motor is refused until the fields are that motor's (`ownershipIssue`).
+      // A FAILED settings fetch (`srv` null) assigns no identity: the fields stay
+      // unverified and a loaded motor's solve is held back (`ownershipIssue`).
+      if (!stale && srv && plan.owner) {
+        set({
+          fieldsMotor: plan.owner,
+          coolingSource: isCoolingSource(srv.source) ? (srv.source as CoolingSource) : 'last_used',
+          coolingApp: srv.application ?? null,
+        });
+      }
+      if (!stale && plan.needsResync) void resyncLoadedMotorCooling();
     } catch { /* offline: localStorage already seeded the state */ }
     set({ serverSettingsLoaded: true });
     try {
@@ -881,7 +950,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     // Never send a boundary condition that cannot be solved (a liquid loop with
     // no pump, no cooled surface at all): the panel disables Solve on the same
     // verdict, and this is the second lock on the same door.
-    const bad = coolingIssue(s) ?? propellerContextIssue(s);
+    const bad = coolingIssue(s) ?? propellerContextIssue(s)
+      ?? fieldsBlockIssue(s);
     if (bad) { set({ field: { ...s.field, busy: false, err: bad } }); return; }
     set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() },
           emMissing: null, emMissingReason: null });
@@ -920,7 +990,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
    *  `emMissing`, exactly as the field Solve's does. */
   solveCoupled: async () => {
     const s = get();
-    const bad = coolingIssue(s) ?? propellerContextIssue(s);
+    const bad = coolingIssue(s) ?? propellerContextIssue(s)
+      ?? fieldsBlockIssue(s);
     if (bad) { set({ coupled: { ...s.coupled, busy: false, err: bad } }); return; }
     set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() },
           emMissing: null, emMissingReason: null });
@@ -956,7 +1027,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
    never sends the previous motor's propeller source: a robot motor gets
    Robotics, a propeller motor its propeller with a fresh key.  A store that has
    not hydrated yet reads the already-followed server copy when it does. */
-registerThermalFollow((answer) => {
+function adoptFollowAnswer(answer: unknown): void {
   const st = useThermalStore.getState();
   if (!st.hydrated) return;
   const motor = getLastMotorState();
@@ -968,10 +1039,95 @@ registerThermalFollow((answer) => {
         motor.email, refId ?? `die:${motor.selection.die}`, motor.selection.config)).propId ?? null;
     } catch { /* browser storage is a convenience */ }
   }
+  // THE MOTOR'S OWN FIELDS (2026-10-15).  When the motor changed, the server has
+  // already put the fields of the new motor - its saved record, its
+  // configuration's defaults or its application's rule - in the account's
+  // Thermal record, with the frame and the bore reset instead of inherited.
+  // Adopt them as they are and do NOT save them back: a default must not turn
+  // into "your saved settings" just because it was shown.
+  const mc = followAdoption(answer, st.fieldsMotor, loadedMotorIdentity());
+  if (mc) {
+    followEpoch += 1;
+    const f = adoptableCoolingFields(mc.fields);
+    const next: Partial<ThermalState> = {
+      tabStale: false,
+      ...(f as unknown as Partial<ThermalState>),
+      fieldsMotor: mc.motor,
+      coolingSource: mc.source,
+      coolingApp: mc.application,
+    };
+    if ('heatPath' in f) next.heatPath = heatPathOf({ heatPath: f.heatPath });
+    const propSource = mc.fields.airSpeedSource === 'propeller' ? 'propeller' : 'manual';
+    next.airSpeedSource = propSource;
+    next.propellerId = propSource === 'propeller' ? (mc.fields.propellerId ?? '') : '';
+    next.propellerContextKey = propSource === 'propeller' ? (mc.fields.propellerContextKey ?? '') : '';
+    useThermalStore.setState(next);
+    for (const [k, v] of Object.entries(f)) {
+      if (PERSISTED.includes(k as keyof ThermalState)) writeTherm(k, v);
+    }
+    writeTherm('airSpeedSource', propSource);
+    try { window.dispatchEvent(new CustomEvent('thermal-cooling-saved')); }
+    catch { /* SSR/no-window */ }
+    // A propeller this browser remembers for the motor wins over the server's
+    // pick when the registry still allows it - that is the user's own choice.
+    const allowed = ((answer as { allowed_propellers?: unknown })?.allowed_propellers ?? []) as string[];
+    if (propSource === 'propeller' && remembered && remembered !== next.propellerId
+        && allowed.includes(remembered)) {
+      st.setPropellerCooling('propeller', remembered, next.propellerContextKey ?? '');
+    }
+    return;
+  }
+  // An answer that carries fields but was not adopted (already owned, incomplete,
+  // or for another motor) is not a reason to run the old key-by-key path.
+  if ((answer as { fields?: unknown } | null)?.fields) return;
   const f = thermalFollowFields(answer, remembered);
   if (!f) return;
   useThermalStore.setState({ coolMode: f.coolMode as CoolMode });
   writeTherm('coolMode', f.coolMode);
   // One write carries the new mode, source and propeller to the server copy.
   st.setPropellerCooling(f.airSpeedSource, f.propellerId, f.propellerContextKey);
-});
+}
+registerThermalFollow(adoptFollowAnswer);
+
+/** Why the cooling fields must not be used for a solve right now, or `null`. */
+function fieldsBlockIssue(s: ThermalState): string | null {
+  const m = loadedMotorIdentity();
+  if (s.tabStale && m) {
+    return `this tab shows ${m.die} ${m.config}, which is no longer the motor the account has loaded - reload`;
+  }
+  return ownershipIssue(s.fieldsMotor, m);
+}
+
+/** The motor the account has loaded, as the cooling record names it. */
+function loadedMotorIdentity(): MotorIdentity | null {
+  const m = getLastMotorState();
+  return m.status === 'loaded' && m.selection
+    ? { die: m.selection.die, config: m.selection.config } : null;
+}
+
+/** Ask the server for the cooling of the motor the ACCOUNT has loaded - a READ,
+ *  never a PUT, so a stale tab can not reselect its motor for the account - and
+ *  adopt the COMPLETE answer if it is for the motor THIS tab shows.  The recovery
+ *  of a hydration that could not establish ownership (a failed, empty, sparse or
+ *  unbound read) or of a follow answer that was lost.
+ *
+ *  A response is dropped when a newer selection happened meanwhile (the selection
+ *  generation moved - another reference, A -> B -> A) or a follow adopted other
+ *  fields (`followEpoch`).  When the account's motor is not this tab's, the tab is
+ *  stale: nothing is adopted and its solves are refused. */
+async function resyncLoadedMotorCooling(): Promise<void> {
+  const m = getLastMotorState();
+  if (m.status !== 'loaded' || !m.email || !m.selection) return;
+  const selection = m.selection;
+  const gen = currentLastMotorEpoch();
+  const follow0 = followEpoch;
+  try {
+    const read = await fetchLastMotorCooling(m.email);
+    if (!isCurrentLastMotorOperation(m.email, gen) || followEpoch !== follow0) return;
+    const now = getLastMotorState();
+    if (now.status !== 'loaded' || !sameSelection(now.selection, selection)) return;
+    const { thermal, accountDiffers } = resyncAnswer(read, selection);
+    if (accountDiffers) { useThermalStore.setState({ tabStale: true }); return; }
+    if (thermal) adoptFollowAnswer(thermal);
+  } catch { /* stays unverified: the solve is held back, the backend resolves */ }
+}

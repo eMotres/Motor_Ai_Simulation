@@ -62,6 +62,7 @@ import {
   setLastMotorState, useLastMotorState, configureRefIdForSelection,
 } from '../../lib/lastMotor';
 import { selectionMatchesActiveFamily, type ActiveFamilyContext } from './thermalLastMotor';
+import { coolingMismatch, coolingSourceLine } from '../../lib/thermalMotorCooling';
 import {
   allowedPropellers, coolChoiceKey, defaultPropellerFor, effectivePropeller, propellerContextKey,
   hasPropellerCooling, modelLabel, readCoolChoice, restoredThermalPropeller,
@@ -855,6 +856,14 @@ const ThermalPanel: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [res, st.field.geoSig, st.field.backendStale, liveGeometry]);
   const staleNote = stale ? 'result is for a previous geometry — re-Solve' : null;
+  // The result was solved with another outer cooling mode / frame than the
+  // fields hold now (2026-10-15): the 200 mm L155 once read as solved "air/open"
+  // while its jacket fields said liquid.  Loud, next to the geometry note.
+  const coolMismatch = useMemo(
+    () => coolingMismatch(res, { coolMode: st.coolMode, airSpeedSource: st.airSpeedSource,
+                                 frame: st.frame }),
+    [res, st.coolMode, st.airSpeedSource, st.frame]);
+  const coolSrc = coolingSourceLine(st.fieldsMotor, st.coolingSource, st.coolingApp);
   const staleTip = st.field.backendStale === true
     ? `The backend fingerprinted the machine this was solved on (${res?.geometry_fingerprint ?? '—'}) and it is not the one loaded now. Every temperature below, and the picture, describe the previous cross-section. Press Solve to recompute them for this machine.${st.field.restoredAt ? ` Solved ${st.field.restoredAt}.` : ''}`
     : 'The geometry changed after this result was solved, so the temperatures and the picture below belong to the previous cross-section. Press Solve to recompute them for the machine currently loaded.';
@@ -1136,6 +1145,13 @@ const ThermalPanel: React.FC = () => {
               <Typography sx={{ ...warn, fontWeight: 700 }}>⚠ {staleNote}</Typography>
             </Tooltip>
           )}
+          {coolMismatch && (
+            <Tooltip {...TIP_PROPS} title={tx('coolingMismatchTip')}>
+              <Typography sx={{ ...bad, fontWeight: 700 }}>
+                ⚠ {tx('coolingMismatch', coolMismatch)}
+              </Typography>
+            </Tooltip>
+          )}
           {/* "Loaded from history — computed …" (2026-09-22) — same one line
               + Recompute as the Mechanical tab's, same shape as staleNote. */}
           {!staleNote && historyNoticeFor(res) && (
@@ -1199,6 +1215,16 @@ const ThermalPanel: React.FC = () => {
               </Box>
             </Collapse>
           </Box>
+        )}
+
+        {/* WHOSE cooling this is (2026-10-15): the fields are remembered per
+            motor - one short line, the rule in the tooltip. */}
+        {coolSrc && (
+          <Tooltip {...TIP_PROPS} title={tx('coolingSourceTip')}>
+            <Typography sx={{ ...lbl, mt: 1, cursor: 'help' }}>
+              {tx(coolSrc.key, { ...coolSrc.args, interpolation: { escapeValue: false } })}
+            </Typography>
+          </Tooltip>
         )}
 
         {/* ── boundary 1: the OUTER stator surface ──────────────────────────

@@ -45,6 +45,8 @@ t('a partial geometry is not judged', () => {
 t("the server's 422 is recognised", () => {
   assert.equal(S.refusedReason({ detail: { error: 'infeasible geometry - wire too wide for this slot: max wire width 2.30 mm at 6 turns' } }),
     'wire too wide for this slot: max wire width 2.30 mm at 6 turns');
+  const lobe = 'stator outline not symmetric (construction failed) - the 6 slot-pair sectors differ by 18.7 % in area';
+  assert.equal(S.refusedReason({ detail: { error: lobe } }), lobe);
   assert.equal(S.refusedReason({ detail: 'boom' }), null);
   assert.equal(S.refusedReason(null), null);
 });

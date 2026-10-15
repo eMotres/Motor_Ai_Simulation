@@ -62,6 +62,18 @@ _VARIANTS = {
         stator_fillet_r=1.1, stator_fillet_r1=0.15, wire_width=2.5,
         insulation_thickness=0.06, air_gap=0.25, rotor_outer_radius=11.75,
         rotor_inner_radius=4.95, magnet_height=5.7),
+    # The die as the owner had it live on 2026-10-15 (insulation 0.07, L20): on the
+    # server the cascaded union of the slot cutters DROPPED one cutter for exactly
+    # this input and one 60-degree sector came out +23 % (a lobe with a round
+    # notch).  Fixed in cadquery_geometry._union_cutters; see
+    # tests/test_stator_cutter_union.py for the deterministic replay.
+    "40 new L20 ins 0.07 (live 2026-10-15)": dict(
+        stator_diameter=40, stator_outer_radius=20, stator_inner_radius=12.0,
+        slot_height=6.1, tooth_width=3.3, tooth2_width=1.7, cut_width=1,
+        stator_fillet_r=1.1, stator_fillet_r1=0.15, wire_width=2.5,
+        insulation_thickness=0.07, air_gap=0.25, rotor_outer_radius=11.75,
+        rotor_inner_radius=4.95, magnet_height=5.7, motor_length=20,
+        num_wires_per_slot=7, wire_height=0.6),
     "85 mm (num_seg 4, r1 = 0.1)": dict(
         stator_diameter=85, stator_outer_radius=42.5, stator_inner_radius=33.1,
         num_seg=4, num_slots=24, num_poles=28, slot_height=7, core_thickness=2.4,
@@ -100,6 +112,22 @@ def _build(overrides):
     return m.parameters, poly, mesh
 
 
+def _sector_areas(poly, R, half):
+    """Area of the stator inside each slot-pair unit's wedge (unit 0 at the top)."""
+    reach = 3.0 * R
+    areas = []
+    for i in range(half):
+        a0 = math.radians(90 + i * 360 / half - 180 / half)
+        a1 = a0 + 2 * math.pi / half
+        am = 0.5 * (a0 + a1)
+        wedge = Polygon([(0, 0),
+                         (reach * math.cos(a0), reach * math.sin(a0)),
+                         (reach * math.cos(am), reach * math.sin(am)),
+                         (reach * math.cos(a1), reach * math.sin(a1))])
+        areas.append(poly.intersection(wedge).area)
+    return areas
+
+
 @pytest.mark.parametrize("name", list(_VARIANTS))
 def test_stator_outline_has_no_lobe(name):
     p, poly, mesh = _build(_VARIANTS[name])
@@ -114,17 +142,7 @@ def test_stator_outline_has_no_lobe(name):
     assert rmax <= R * 1.003, f"{name}: vertex at r = {rmax:.4f} > R = {R}"
 
     # every slot-pair unit has the same area
-    reach = 3.0 * R
-    areas = []
-    for i in range(half):
-        a0 = math.radians(90 + i * 360 / half - 180 / half)
-        a1 = a0 + 2 * math.pi / half
-        am = 0.5 * (a0 + a1)
-        wedge = Polygon([(0, 0),
-                         (reach * math.cos(a0), reach * math.sin(a0)),
-                         (reach * math.cos(am), reach * math.sin(am)),
-                         (reach * math.cos(a1), reach * math.sin(a1))])
-        areas.append(poly.intersection(wedge).area)
+    areas = _sector_areas(poly, R, half)
     spread = (max(areas) - min(areas)) / max(areas)
     assert spread < 0.005, f"{name}: sector areas differ by {spread:.2%}: {areas}"
 
@@ -136,3 +154,38 @@ def test_stator_outline_has_no_lobe(name):
                          - (V[c][0] - V[a][0]) * (V[b][1] - V[a][1]))
     assert tri == pytest.approx(poly.area, rel=1e-6), (tri, poly.area)
     assert max(math.hypot(v[0], v[1]) for v in V) <= R * 1.003
+
+
+# ── sweep: every case is either symmetric or refused BY NAME ─────────────────
+# Nothing in between: a lobe must never be drawn.  The 40 new die over the
+# insulation and wire widths the owner can reach from Configure (2.8 mm is past
+# the slot mouth for insulation >= 0.075, so the refusal branch runs too).
+
+_NEW40 = _VARIANTS["40 new L20 ins 0.07 (live 2026-10-15)"]
+_INS = [0.04, 0.05, 0.06, 0.07, 0.08, 0.09, 0.10]
+_WW = [2.0, 2.2, 2.4, 2.5, 2.6, 2.8]
+
+
+@pytest.mark.parametrize("ins", _INS)
+def test_40_new_sweep_symmetric_or_refused_by_name(ins):
+    from motor_ai_sim.geometry_validation import (
+        slot_mouth_infeasibility, stator_outline_violation)
+    seen = {"drawn": 0, "refused": 0}
+    for ww in _WW:
+        g = {**_BASE, **_NEW40, "insulation_thickness": ins, "wire_width": ww}
+        refusal = slot_mouth_infeasibility(g)
+        if refusal is not None:                       # refused by name, with the maximum
+            assert refusal["code"] == "wire_too_wide_for_slot"
+            assert refusal["message"].startswith("wire too wide for this slot: max wire width")
+            seen["refused"] += 1
+            continue
+        p, poly, mesh = _build({"insulation_thickness": ins, "wire_width": ww, **{
+            k: v for k, v in _NEW40.items() if k not in ("insulation_thickness", "wire_width")}})
+        half = int(p["num_slots"]) // 2
+        assert poly.is_valid and poly.geom_type == "Polygon", (ins, ww, poly.geom_type)
+        areas = _sector_areas(poly, float(p["stator_outer_radius"]), half)
+        spread = (max(areas) - min(areas)) / max(areas)
+        assert spread < 0.005, f"ins {ins} ww {ww}: sectors differ by {spread:.2%}: {areas}"
+        assert stator_outline_violation(poly, p) is None
+        seen["drawn"] += 1
+    assert seen["drawn"] >= 5

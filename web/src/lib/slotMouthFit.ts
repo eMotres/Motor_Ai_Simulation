@@ -84,10 +84,13 @@ export function crossSectionState(geo: Record<string, unknown> | null | undefine
   return l && !l.feasible ? { kind: 'infeasible', limit: l } : { kind: 'ok' };
 }
 
-/** The server's 422 body -> the reason after "infeasible geometry - ", or null for any other failure. */
+/** The server's 422 body -> the reason after "infeasible geometry - ", or null for any other failure.
+ *  A failed construction ("stator outline not symmetric (construction failed) - ...") is an answer
+ *  too: it is shown whole, never drawn as a lobe. */
 export function refusedReason(body: unknown): string | null {
   const d = (body as { detail?: { error?: unknown } } | null)?.detail;
   const e = typeof d?.error === 'string' ? d.error : '';
   const m = /^infeasible geometry - (.+)$/.exec(e);
-  return m ? m[1] : null;
+  if (m) return m[1];
+  return /^stator outline not symmetric \(construction failed\) - .+$/.test(e) ? e : null;
 }

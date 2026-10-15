@@ -855,6 +855,28 @@ def _refuse_infeasible_section(params_dict: dict) -> None:
                      max=bad["max"], turns=bad["turns"])])
 
 
+#: Bump when the cross-section builder changes what a given geometry draws, so
+#: a payload cached (memory slot or disk) by the old builder is not served again.
+#: 2026-10-15: the stator slot-cutter union could drop a cutter (lobe) - a lobed
+#: section cached under the live geometry's hash must not outlive the fix.
+_MESH_BUILD_REV = "stator-cutter-union-v2"
+
+
+def _refuse_bad_outline(motor) -> None:
+    """422 instead of drawing a stator whose construction failed.
+
+    The 2-D builder measures its own stator (same in every slot-pair unit, inside
+    the outer circle); a miss means the construction broke, not that the machine
+    is impossible, and a lobe must never reach the cross-section."""
+    bad = getattr(motor, "_stator_outline_violation", None)
+    if not bad:
+        return
+    raise reject(
+        bad["message"],
+        [param_error("stator", None, "stator_outline_not_symmetric",
+                     bad["message"])])
+
+
 #: mesh-data key → the part whose accounting state governs it.  ``coil_7``,
 #: ``magnet_3`` etc. are matched by prefix (see ``_part_of_mesh_key``).
 _MESH_KEY_PART = {
@@ -992,7 +1014,7 @@ def get_geometry_mesh2d(geo: Optional[str] = None):
         _refuse_infeasible_section(params_dict)
         params_hash = hashlib.md5(
             (json.dumps(params_dict, sort_keys=True)
-             + _part_state_cache_tag()).encode()).hexdigest()
+             + _part_state_cache_tag() + _MESH_BUILD_REV).encode()).hexdigest()
 
         if _mesh2d_cache["hash"] == params_hash and _mesh2d_cache["data"] is not None:
             return _mesh2d_cache["data"]
@@ -1007,6 +1029,7 @@ def get_geometry_mesh2d(geo: Optional[str] = None):
         motor.set_parameters(params_dict)
         t0 = time.perf_counter()
         data = _drop_excluded_meshes(motor.get_2d_mesh_data())
+        _refuse_bad_outline(motor)
         build_time = time.perf_counter() - t0
 
         _mesh2d_cache["hash"] = params_hash
@@ -1037,7 +1060,7 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str]
         _refuse_infeasible_section(params_dict)
         cache_key = hashlib.md5(
             (json.dumps({**params_dict, "_depth": depth}, sort_keys=True)
-             + _part_state_cache_tag()).encode()
+             + _part_state_cache_tag() + _MESH_BUILD_REV).encode()
         ).hexdigest()
 
         if _mesh_extruded_cache["hash"] == cache_key and _mesh_extruded_cache["data"] is not None:
@@ -1048,6 +1071,7 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str]
 
         t0 = time.perf_counter()
         data = _drop_excluded_meshes(motor.get_extruded_mesh_data(depth=depth))
+        _refuse_bad_outline(motor)
         build_time = round(time.perf_counter() - t0, 3)
         # An EMPTY build is a failure, not a payload: the 2-D builder used to
         # return {} on a missing native triangulator and this route cached the

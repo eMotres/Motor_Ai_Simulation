@@ -1510,6 +1510,76 @@ def _round_corners_vertex(poly, r, ang_min_deg=8.0, ang_max_deg=168.0,
     return _fillet_ring_corners(poly, r, _sel, ang_min_deg, ang_max_deg, scale_mm)
 
 
+def _tool_covers(tool, parts, rel: float = 1e-7) -> bool:
+    """True when ``tool`` is a faithful union of ``parts``.
+
+    Every part must lie inside ``tool`` (what sticks out is at most ``rel`` of
+    the part's area, i.e. float noise from the noding) and the union can never
+    be larger than the parts added up.  A union that DROPPED a whole part fails
+    the first test by the part's full area."""
+    import shapely
+    try:
+        arr = list(parts)
+        areas = shapely.area(arr)
+        miss = shapely.area(shapely.difference(arr, tool))
+        if not bool((miss <= rel * areas + 1e-12).all()):
+            return False
+        return float(tool.area) <= float(areas.sum()) * (1.0 + rel) + 1e-9
+    except Exception:                       # noqa: BLE001 - a failing check is a failed union
+        return False
+
+
+def _union_cutters(cutters, scale_mm: float):
+    """``unary_union`` of the slot cutters of the stator, VERIFIED.
+
+    The cutters of two neighbouring slot-pair units share the ray at the half
+    slot angle EXACTLY (their mouth-fillet circles even have the same centre),
+    each rotated by a different multiple of the slot angle, so the shared edges
+    and circles are only equal to the last bit.  GEOS's cascaded union is not
+    robust to that: for some inputs it silently DROPS a whole cutter (measured
+    2026-10-15 on CIANO14 40 new / L20 at insulation 0.07 on the server: a
+    247.9 mm2 cutter missing from a 3359 mm2 union), and the stator keeps the
+    iron of that slot as a lobe with a round notch (+23 % in one 60-degree
+    sector).  Which inputs fail depends on the last bit of sin/cos, so it
+    differs between machines, and the same machine is fine for a neighbouring
+    insulation or wire width.
+
+    The plain union is returned unchanged whenever it checks out (every
+    geometry that was drawn correctly stays bit-identical); only a union that
+    lost a part is redone on a snapped grid (1e-9, 1e-8, 1e-7 of the machine
+    diameter), then part by part.  If nothing checks out, the plain union is
+    returned and the stator outline check (`validate_geometry`, the mesh
+    routes) refuses the result by name.
+    """
+    from shapely.ops import unary_union
+    import shapely
+    cutters = list(cutters)
+    tool = unary_union(cutters)
+    if _tool_covers(tool, cutters):
+        return tool
+    log.warning("stator slot cutters: the cascaded union lost part of a cutter "
+                "- redoing it on a snapped grid")
+    scale = float(scale_mm) if scale_mm and scale_mm > 0 else _DEFAULT_SCALE_MM
+    for rel in (1e-9, 1e-8, 1e-7):
+        try:
+            cand = shapely.union_all(cutters, grid_size=scale * rel)
+        except Exception:                   # noqa: BLE001
+            continue
+        if _tool_covers(cand, cutters):
+            return cand
+    try:
+        cand = None
+        for c in cutters:
+            cand = c if cand is None else cand.union(c)
+        cand = shapely.union_all([g for g in shapely.get_parts(cand)
+                                  if getattr(g, "geom_type", "") == "Polygon"])
+        if _tool_covers(cand, cutters):
+            return cand
+    except Exception:                       # noqa: BLE001
+        pass
+    return tool
+
+
 #: a fragment smaller than this fraction of the largest piece of the STATOR is
 #: rounding residue, not lamination (see `_drop_slivers`)
 _SLIVER_REL = 1e-4
@@ -2776,7 +2846,7 @@ class CadQueryMotor:
                           (-rx0 - slot_w, ry0 - slot_h*2), (-rx0, ry0 - slot_h*2)]
             cutters.append(SPoly([_rot(*pt, a) for pt in rect_pts_n]))
 
-        tool = unary_union(cutters)
+        tool = _union_cutters(cutters, scale_mm)
         stator_poly = stator_poly.difference(tool)
         # Filter any zero-area ghost fragments produced by Shapely difference
         # when tool boundaries are tangent to the stator ring boundary
@@ -2802,6 +2872,16 @@ class CadQueryMotor:
             stator_poly = _round_corners_at_radius(stator_poly, inner_r, 1.0,
                                                    fillet_r1, scale_mm)
         stator_poly = _drop_slivers(stator_poly)
+        # SAFETY NET: a stator that is not the same in every slot-pair unit (or
+        # leaves its outer circle) is a failed construction, never a design.  The
+        # mesh routes read this and answer 422 instead of drawing a lobe.
+        self._stator_outline_violation = None
+        try:
+            from motor_ai_sim.geometry_validation import stator_outline_violation
+            self._stator_outline_violation = stator_outline_violation(
+                stator_poly, self.parameters)
+        except Exception as _oe:        # noqa: BLE001 - the net must never break a build
+            log.debug("stator outline check skipped: %s", _oe)
         stator_poly = _sanitize_geom(stator_poly, scale_mm, "mesh.stator")
 
         r = _tri(stator_poly, z=Z_STATOR)
@@ -3389,7 +3469,7 @@ class CadQueryMotor:
             cutters.append(SPoly([_rot(*pt, a) for pt in
                 [(-rx0,ry0),(-rx0-slot_w_c,ry0),(-rx0-slot_w_c,ry0-slot_h_c*2),(-rx0,ry0-slot_h_c*2)]]))
 
-        tool = unary_union(cutters)
+        tool = _union_cutters(cutters, scale_mm)
         stator_poly = stator_poly_base.difference(tool)
         if isinstance(stator_poly, SMPoly):
             parts = [g for g in stator_poly.geoms if g.area > 0.1]

@@ -72,8 +72,8 @@ def mail_from() -> str:
 
 def deliver(msg: EmailMessage) -> None:
     """Hand one prepared message to the configured SMTP server.  RAISES on
-    any failure (the newsletter queue classifies the exception as a bounce
-    or a transient failure); `_send` below is the forgiving wrapper."""
+    any failure (the mailing tool logs it as a failed send); `_send` below
+    is the forgiving wrapper."""
     user, password = _env("SMTP_USER"), _smtp_pass()
     if not (user and password):
         raise RuntimeError("SMTP is not configured")

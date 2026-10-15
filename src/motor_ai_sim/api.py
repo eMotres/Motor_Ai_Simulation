@@ -168,12 +168,6 @@ async def _lifespan(_app):
     except Exception as _e:
         logging.getLogger(__name__).warning("sweep resumption failed: %s", _e)
     _watchdog.start()
-    # Newsletter send queue (throttled, resumes after a restart).
-    try:
-        from motor_ai_sim import newsletter as _nl
-        _nl.start_worker()
-    except Exception as _e:                              # noqa: BLE001
-        logging.getLogger(__name__).error("newsletter queue not started: %s", _e)
     # MCP server for external AI agents (Stage 1, docs/MCP_2026-09-28.md): the
     # SDK's session manager lives for the whole process.  A missing `mcp`
     # package must not take the API down — /mcp then answers 404.
@@ -189,11 +183,6 @@ async def _lifespan(_app):
             yield
         finally:
             _watchdog.stop()
-            try:
-                from motor_ai_sim import newsletter as _nl
-                _nl.stop_worker()
-            except Exception:                            # noqa: BLE001
-                pass
 
 
 app = FastAPI(

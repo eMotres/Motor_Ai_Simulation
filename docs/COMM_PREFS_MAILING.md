@@ -34,8 +34,14 @@ to `users.json`):
   `comm_prefs.py`; the SHA-256 is of the canonical JSON of the server constants and `tests/test_comm_prefs.py` fails when the two
   differ, so the hash always names the text on screen.  Bump `TEXT_VERSION` when any wording changes.
 * "Unsubscribe from all" switches every topic off and sets `unsubscribed_all` (also stored when nothing was ticked).  Ticking a topic
-  later is a fresh consent and clears the flag.  It also ends a legacy newsletter subscription (`newsletter.py`) of the same
-  address, and an unsubscribe from the legacy newsletter switches the topics off, so the two stores never disagree.
+  later is a fresh consent and clears the flag.
+* **The old single Newsletter is retired (2026-10-15).**  There is no Newsletter toggle (account menu > Notifications now lists
+  only in-app notices), no subscribe / confirm route, no campaign composer, no send queue.  The sign-up forms and the API still
+  accept the old `newsletter` flag but ignore it.  The old `newsletter.json` records stay as READ-ONLY history in the Admin
+  "Mailing" card (counts, past campaigns, CSV of the old consent records).  Legacy subscribers are NOT moved into the new topics
+  (their consent wording differs); the launch e-mail invites them to choose.  The one-click unsubscribe of OLD mails still works
+  (`POST /api/newsletter/unsubscribe`) and also switches every new topic off; an unsubscribe on the new side ends the old record
+  too, so the two stores never disagree.  In-app notices (the bell) are unaffected: they are not marketing.
 * Account deletion removes the state and pseudonymises the history (address -> `subj_...`, IP hashed): the proof of consent
   stays, the person does not.  The data export contains `communication_preferences.json`.
 
@@ -88,4 +94,4 @@ On the server run it with the API's environment (`MOTOR_AI_SIM_CONFIG`, `SMTP_*`
   skipped, never retried blindly; `--retry-failed` retries only definite failures.
 * 3 seconds between messages (`--delay`), stops after 5 failures in a row, refuses to start while a `.lock` of the same campaign
   exists, refuses without SMTP settings.
-* Admin > Newsletter & notices shows the **Mailing** card: opt-ins per topic, unsubscribed count, last campaign (from the log).
+* Admin > Mailing & notices shows the **Mailing** card (opt-ins per topic, unsubscribed count, last campaign from the log, the old newsletter as history) and the in-app notices panel.

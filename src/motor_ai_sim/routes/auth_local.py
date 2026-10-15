@@ -164,7 +164,7 @@ class RegisterReq(BaseModel):
     email: str
     password: str
     name: str = ""
-    newsletter: bool = False        # the sign-up checkbox (unchecked default)
+    newsletter: bool = False        # RETIRED: accepted for old clients, ignored (see comm_prefs below)
     #: The four opt-in topics of the communication preferences ({topic: bool}, all unticked by default) and the language the
     #: wording was shown in; recorded with the consent proof (motor_ai_sim.comm_prefs) once the account exists.
     comm_prefs: Optional[dict] = None
@@ -230,17 +230,6 @@ def _record_signup_topics(email: str, topics: dict, source: str, ip: str, lang: 
         log.warning("comm_prefs: sign-up consent of a new account was not stored (%s)", type(e).__name__)
 
 
-def _newsletter_after_proof(email: str) -> None:
-    """The address is proven now: mail the newsletter double opt-in link if
-    the sign-up checkbox was ticked (one mail at a time, never both at once)."""
-    try:
-        from motor_ai_sim import newsletter as N
-        if N.has_unsent_pending(email):
-            N.send_confirmation(email)
-    except Exception as e:                                   # noqa: BLE001
-        log.warning("newsletter: confirmation after sign-up failed: %s", e)
-
-
 @router.post("/register", status_code=202)
 def register(req: RegisterReq, request: Request):
     """Create an unverified account and mail the confirmation link.
@@ -267,11 +256,6 @@ def register(req: RegisterReq, request: Request):
     outcome = U.register_self(email, req.password, req.name.strip())
     S.record_event("register", email=email, reason=outcome, ip=ip,
                    path="/api/auth/register")
-    if outcome == "created" and req.newsletter:
-        # Consent recorded now; the confirmation mail follows the address
-        # proof (/verify or admin approval).  Existing accounts: ignored.
-        from motor_ai_sim import newsletter as N
-        N.record_pending(email, source="signup", ip=ip)
     if outcome == "created" and topics:
         # The ticked topics are recorded with the wording shown; mailing needs the verified address anyway.
         _record_signup_topics(email, topics, "signup", ip, req.lang)
@@ -312,7 +296,6 @@ def verify_email(req: VerifyReq, request: Request):
     U.mark_verified(email, by="link")
     S.record_event("verified", email=email, reason="link", ip=_ip(request),
                    path="/api/auth/verify")
-    _newsletter_after_proof(email)
     out = {"ok": True, "email": email}
     if req.continuation:
         # Only the continuation minted for THIS address at sign-up resumes an
@@ -404,14 +387,13 @@ def pending_approve(email: str, _admin: dict = Depends(require_admin)):
     U.mark_verified(email, by="admin")
     S.record_event("verified", email=U._norm(email), reason="admin",
                    path="/api/auth/pending/approve")
-    _newsletter_after_proof(U._norm(email))
     log.info("auth: %s approved by admin %s", email, (_admin or {}).get("email"))
     return {"ok": True, "user": U.public_user(email)}
 
 
 class GoogleReq(BaseModel):
     credential: str            # the GIS ID token from the Google button
-    newsletter: bool = False   # checkbox under the button; FIRST sign-in only
+    newsletter: bool = False   # RETIRED: accepted for old clients, ignored
     comm_prefs: Optional[dict] = None   # the four opt-in topics under the button; FIRST sign-in only
     lang: str = "en"
 
@@ -444,14 +426,6 @@ def google_login(req: GoogleReq, request: Request):
     token = _start_session(email, method="google", request=request)
     if topics:
         _record_signup_topics(email, topics, "google", _ip(request), req.lang)
-    if first_sign_in and req.newsletter:
-        # Google proved the mailbox; the newsletter still needs its own
-        # double opt-in click (consent != mailbox ownership).
-        try:
-            from motor_ai_sim import newsletter as N
-            N.request_subscribe(email, source="google", ip=_ip(request))
-        except Exception as e:                               # noqa: BLE001
-            log.warning("newsletter: google sign-up consent failed: %s", e)
     ip = (request.client.host if request and request.client else "?")
     log.info("auth: Google login ok for %s (role %s) from %s", email, role, ip)
     return {"token": token,

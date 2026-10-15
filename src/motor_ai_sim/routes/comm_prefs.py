@@ -151,5 +151,12 @@ def admin_summary(_a: dict = Depends(require_admin)):
     out = CP.summary(users_total=len(rows))
     out["verified_users"] = sum(1 for r in rows if r.get("email_verified") and not r.get("disabled"))
     out["campaign"] = M.last_campaign_status()
+    # the retired single newsletter: read-only history, nobody is moved into the new topics
+    from motor_ai_sim import newsletter as N
+    subs = N.subscribers()
+    out["legacy_newsletter"] = {"confirmed": sum(1 for r in subs if r["status"] == "confirmed"),
+                                "pending": sum(1 for r in subs if r["status"] == "pending"),
+                                "unsubscribed": sum(1 for r in subs if r["status"] == "unsubscribed"),
+                                "campaigns": len(N.list_campaigns())}
     out["smtp"] = E.smtp_configured()
     return out

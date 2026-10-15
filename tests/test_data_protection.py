@@ -296,7 +296,9 @@ def _seed_person(env, email: str) -> dict:
     (pub / "x.txt").write_text("published", encoding="utf-8")
     K.create_key(email, "k")
     K.audit(principal=K.Principal(email=email, credential_id="c1"), method="tools/list")
-    N.record_pending(email, source="settings", ip="203.0.113.9")
+    d = N._load()                                         # a record of the retired newsletter (read-only history)
+    d["subscribers"][email] = {"status": "confirmed", "source": "settings", "history": []}
+    N._save(d)
     SS.file_access_request(email=email, name="N", ip="203.0.113.9")
     US.note(email, "catalog_view", "x")
     return h

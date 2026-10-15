@@ -110,7 +110,8 @@ const ComponentTree: React.FC = () => {
       },
       onIsolate: (key) => isolateComponent(key as CompKey),
       onShowAll: showAllComponents,
-      onSelect: (key) => setSelectedPart(selectedPart === key ? null : key as CompKey),
+      // instance rows (coil:3, magnet:1) are not selectable parts; only the component rows are
+      onSelect: (key) => { if (key.includes(':')) return; setSelectedPart(selectedPart === key ? null : key as CompKey); },
     };
   }, [componentVisibility, coilVisibility, magnetVisibility, coilCount,
       magnetCount, hasSleeve, allVisible, selectedPart, toggleComponentVisibility,

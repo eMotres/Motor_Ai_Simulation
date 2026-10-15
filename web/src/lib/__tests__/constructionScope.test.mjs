@@ -70,7 +70,7 @@ const tree = {
   ],
 };
 
-t('part tree helpers: names by language, order, group mass, viewer highlight', () => {
+t('part tree helpers: names by language, order, group mass', () => {
   assert.equal(P.nameOf(tree.parts[0].names, 'zh-CN'), '定子铁芯');
   assert.equal(P.nameOf(tree.parts[0].names, 'en'), 'Stator core');
   assert.equal(P.nameOf(tree.parts[0].names, 'de'), 'Stator core');
@@ -78,9 +78,4 @@ t('part tree helpers: names by language, order, group mass, viewer highlight', (
   assert.deepEqual(P.orderedIds(tree), ['stator_core', 'holder_front', 'rings']);
   assert.equal(P.groupMassKg(tree, 'housing'), 0.005);
   assert.equal(P.groupMassKg({ ...tree, parts: [] }, 'housing'), null);
-  assert.deepEqual(P.highlightNodes(tree, { part: 'rings' }), ['Ring_front', 'Ring_back']);
-  assert.deepEqual(P.highlightNodes(tree, { group: 'housing' }), ['Holder_front', 'Ring_front', 'Ring_back']);
-  assert.deepEqual(P.highlightNodes(tree, {}), []);
-  assert.deepEqual(P.highlightNodes(null, { part: 'rings' }), []);
-  assert.deepEqual(P.initialOpen(tree), { stator: true, housing: true });
 });

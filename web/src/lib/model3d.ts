@@ -52,6 +52,10 @@ export interface PartGroup {
   family: string;
   /** axial factor of the exploded view, in motor lengths (+ = propeller side) */
   explode: number;
+  /** names of the nodes inside the group (Coil_01 ... Coil_12): the per-instance rows of the assembly tree */
+  children?: string[];
+  /** the colour the group is drawn with (#rrggbb) - the swatch of its tree row */
+  colour?: string;
 }
 
 export type Vec3 = [number, number, number];

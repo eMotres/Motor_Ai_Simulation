@@ -100,7 +100,8 @@ export class ModelViewer {
     const model = gltf.scene.getObjectByName('Model') ?? gltf.scene;
     for (const node of model.children) {
       const ex = (node.userData ?? {}) as { family?: string; explode?: number };
-      this.groups.push({ node, part: { name: node.name, family: ex.family ?? node.name, explode: Number(ex.explode ?? 0) } });
+      this.groups.push({ node, part: { name: node.name, family: ex.family ?? node.name, explode: Number(ex.explode ?? 0),
+        children: node.children.map((c) => c.name), colour: this.colourOf(node) } });
     }
     this.applyThreads(this.root);
     this.root.traverse((o) => {
@@ -117,6 +118,18 @@ export class ModelViewer {
     this.motorLength = Math.max(1, cb.max.z - cb.min.z);
     this.fit();
     return { groups: this.groups.map((g) => g.part), box: this.box };
+  }
+
+  /** The #rrggbb colour of the first mesh of a node (its tree swatch), or undefined. */
+  private colourOf(node: Object3D): string | undefined {
+    let hex: string | undefined;
+    node.traverse((o) => {
+      const m = o as Mesh;
+      if (hex || !m.isMesh) return;
+      const mt = (Array.isArray(m.material) ? m.material[0] : m.material) as Material & { color?: Color };
+      if (mt?.color) hex = '#' + mt.color.getHexString();
+    });
+    return hex;
   }
 
   private clear(): void {
@@ -198,6 +211,7 @@ export class ModelViewer {
   apply(s: ViewerState): void {
     for (const g of this.groups) {
       g.node.visible = !s.hidden.has(g.part.family) && !s.hiddenNodes?.has(g.part.name);
+      for (const c of g.node.children) c.visible = !s.hiddenNodes?.has(c.name);          // one instance (Coil 3, Screw 2 ...)
       g.node.position.z = explodeShift(g.part.explode, this.motorLength, s.explode);
     }
     this.applyHighlight(s.highlight);
@@ -217,10 +231,13 @@ export class ModelViewer {
   private applyHighlight(names: ReadonlySet<string> | undefined): void {
     const on = !!names && names.size > 0;
     for (const g of this.groups) {
-      const hit = on && names!.has(g.part.name);
+      const groupHit = on && names!.has(g.part.name);
       g.node.traverse((o) => {
         const m = o as Mesh;
         if (!m.isMesh) return;
+        // a mesh is highlighted when its group or any node between it and the group (a single Coil, a single Screw) is named
+        let hit = groupHit;
+        for (let n: Object3D | null = m; on && !hit && n && n !== g.node.parent; n = n.parent) hit = names!.has(n.name);
         for (const mt of Array.isArray(m.material) ? m.material : [m.material]) {
           const mm = mt as Material & { emissive?: Color; emissiveIntensity?: number };
           const keep = (mm.userData ??= {}) as { orig?: { transparent: boolean; opacity: number; depthWrite: boolean; emissive?: number; intensity?: number } };

@@ -19,6 +19,7 @@
  * completely different notions of a part.
  */
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import { usePartStates, PART_STATES, MAGNETICALLY_ACTIVE_PARTS,
          type PartState } from '../materials/usePartStates';
 
@@ -38,8 +39,15 @@ export interface TreeRow {
    *  inert rather than dropped, so the tree does not reshuffle under the cursor
    *  every time the output changes. */
   present?: boolean;
-  /** children (individual coils / magnets) — makes this an expandable group */
+  /** children (groups > parts > individual coils / magnets / screws) - makes this an expandable group; nests to any depth */
   group?: TreeRow[];
+  /** a subtle tag after the label (the part tree EM / not EM) */
+  tag?: string;
+  tagTip?: string;
+  /** host content at the right end of the row (mass, the material picker of Materials > Full) */
+  extra?: React.ReactNode;
+  /** a group row that starts expanded (the part tree groups); the default is collapsed */
+  defaultOpen?: boolean;
   /** material-accounting key: draws the INC / REF / OFF chip.  Only the 3-D
    *  binding sets it — a field picture has no accounting to change. */
   partKey?: string;
@@ -167,6 +175,12 @@ const rowStyle = (hovered: boolean, selected: boolean, indent: number = 0): Reac
   cursor: 'pointer',
 });
 
+// The part tree EM / not-EM tag: a subtle word, not a chip that competes with the swatch and the eye.
+const TagChip: React.FC<{ text: string; tip?: string; dim: boolean }> = ({ text, tip, dim }) => (
+  <span title={tip} style={{ flexShrink: 0, fontSize: 8, lineHeight: 1.4, letterSpacing: 0.3, color: 'var(--text-4)',
+    border: '1px solid var(--line)', borderRadius: 3, padding: '0 3px', opacity: dim ? 0.5 : 0.85 }}>{text}</span>
+);
+
 // ─── Simple leaf row (Stator, Rotor, Shaft) ───────────────────────────────────
 
 interface LeafRowProps {
@@ -180,12 +194,16 @@ interface LeafRowProps {
   absent?: boolean;
   /** Material-assignment part key, when this row carries an accounting state. */
   partKey?: string;
+  tag?: string;
+  tagTip?: string;
+  extra?: React.ReactNode;
   onToggle: () => void;
   onSelect?: () => void;
   onIsolate?: () => void;
 }
 
-const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent = 0, selected = false, absent = false, partKey, onToggle, onSelect, onIsolate }) => {
+const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent = 0, selected = false, absent = false, partKey, tag, tagTip, extra, onToggle, onSelect, onIsolate }) => {
+  const { t } = useTranslation('geometry');
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -234,12 +252,15 @@ const LeafRow: React.FC<LeafRowProps> = ({ label, color, visible, isLast, indent
         {label}
       </span>
 
+      {tag && <TagChip text={tag} tip={tagTip} dim={!visible} />}
+      {extra}
+
       {partKey && <PartStateBadge part={partKey} hovered={hovered} />}
 
       {onIsolate && !absent && (
         <button
-          onClick={onIsolate}
-          title="Isolate"
+          onClick={e => { e.stopPropagation(); onIsolate(); }}
+          title={t('assemblyIsolate')}
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
             padding: '0 2px', flexShrink: 0,
@@ -265,10 +286,14 @@ interface GroupRowProps {
   expanded: boolean;
   isLast: boolean;
   hiddenChildCount: number;
+  indent?: number;
   selected?: boolean;
   absent?: boolean;
   /** Material-assignment part key, when this row carries an accounting state. */
   partKey?: string;
+  tag?: string;
+  tagTip?: string;
+  extra?: React.ReactNode;
   onToggleGroup: () => void;
   onToggleExpand: () => void;
   onSelect?: () => void;
@@ -278,8 +303,9 @@ interface GroupRowProps {
 
 const GroupRow: React.FC<GroupRowProps> = ({
   label, color, groupVisible, expanded, isLast,
-  hiddenChildCount, selected = false, absent = false, partKey, onToggleGroup, onToggleExpand, onSelect, onIsolate, children,
+  hiddenChildCount, selected = false, absent = false, partKey, tag, tagTip, extra, indent = 0, onToggleGroup, onToggleExpand, onSelect, onIsolate, children,
 }) => {
+  const { t } = useTranslation('geometry');
   const [hovered, setHovered] = useState(false);
 
   return (
@@ -289,7 +315,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
         onMouseLeave={() => setHovered(false)}
         onClick={absent ? undefined : onSelect}
         title={absent ? 'Not drawn on this output' : undefined}
-        style={{ ...rowStyle(hovered && !absent, selected),
+        style={{ ...rowStyle(hovered && !absent, selected, indent),
           ...(absent ? { opacity: 0.4, cursor: 'default' } : null) }}
       >
         {/* Tree connector */}
@@ -348,17 +374,20 @@ const GroupRow: React.FC<GroupRowProps> = ({
               background: 'rgba(71,85,105,0.25)',
               borderRadius: 3, padding: '0 3px',
             }}>
-              {hiddenChildCount} hidden
+              {t('assemblyHidden', { n: hiddenChildCount })}
             </span>
           )}
         </span>
+
+        {tag && <TagChip text={tag} tip={tagTip} dim={!groupVisible} />}
+        {extra}
 
         {partKey && <PartStateBadge part={partKey} hovered={hovered} />}
 
         {/* Isolate */}
         <button
-          onClick={onIsolate}
-          title="Isolate"
+          onClick={e => { e.stopPropagation(); onIsolate(); }}
+          title={t('assemblyIsolate')}
           style={{
             background: 'none', border: 'none', cursor: 'pointer',
             padding: '0 2px', flexShrink: 0,
@@ -385,7 +414,7 @@ const GroupRow: React.FC<GroupRowProps> = ({
 
 export interface ComponentTreeViewProps {
   model: TreeModel;
-  /** header text — "Motor Assembly" everywhere so the two hosts read as one UI */
+  /** header text - "Motor assembly" everywhere (geometry:assemblyTitle) so every host reads as one UI */
   title?: string;
   /** where the panel sits; the default is the 3-D viewport's top-left corner */
   style?: React.CSSProperties;
@@ -396,17 +425,71 @@ export interface ComponentTreeViewProps {
 }
 
 const ComponentTreeView: React.FC<ComponentTreeViewProps> = ({
-  model, title = 'Motor Assembly', style, rowsMaxHeight = 'calc(100vh - 120px)',
+  model, title, style, rowsMaxHeight = 'calc(100vh - 120px)',
   defaultCollapsed = false,
 }) => {
+  const { t } = useTranslation('geometry');
   const [collapsed, setCollapsed] = useState(defaultCollapsed);
   // Expansion is pure presentation, so it lives here and not in any model.
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const isOpen = (row: TreeRow): boolean => expanded[row.key] ?? !!row.defaultOpen;
 
   const { rows } = model;
 
+  // One recursive renderer: groups > parts > instances, to any depth (the Active tree has two levels, the part tree three).
+  const renderRows = (rs: TreeRow[], depth: number): React.ReactNode => rs.map((row, i) => {
+    const isLast = i === rs.length - 1;
+    const absent = row.present === false;
+    if (row.group) {
+      return (
+        <GroupRow
+          key={row.key}
+          label={row.label}
+          color={row.colour}
+          groupVisible={row.visible}
+          expanded={isOpen(row)}
+          isLast={isLast}
+          indent={depth * 8}
+          hiddenChildCount={row.group.filter(c => !c.visible).length}
+          selected={model.selected === row.key}
+          absent={absent}
+          partKey={row.partKey}
+          tag={row.tag}
+          tagTip={row.tagTip}
+          extra={row.extra}
+          onToggleGroup={() => model.onToggle(row.key)}
+          onToggleExpand={() => setExpanded(e => ({ ...e, [row.key]: !isOpen(row) }))}
+          onSelect={model.onSelect ? () => model.onSelect!(row.key) : undefined}
+          onIsolate={() => model.onIsolate(row.key)}
+        >
+          {renderRows(row.group, depth + 1)}
+        </GroupRow>
+      );
+    }
+    return (
+      <LeafRow
+        key={row.key}
+        label={row.label}
+        color={row.colour}
+        visible={row.visible}
+        isLast={isLast}
+        indent={depth * 8}
+        selected={model.selected === row.key}
+        absent={absent}
+        partKey={row.partKey}
+        tag={row.tag}
+        tagTip={row.tagTip}
+        extra={row.extra}
+        onToggle={() => model.onToggle(row.key)}
+        onSelect={model.onSelect ? () => model.onSelect!(row.key) : undefined}
+        onIsolate={depth === 0 ? () => model.onIsolate(row.key) : undefined}
+      />
+    );
+  });
+
   return (
     <div
+      data-testid="assembly-tree"
       style={{
         position: 'absolute',
         top: 48,
@@ -439,7 +522,7 @@ const ComponentTreeView: React.FC<ComponentTreeViewProps> = ({
         </span>
         <MotorIcon />
         <span style={{ flex: 1, fontWeight: 600, color: 'var(--text-0)', fontSize: 11 }}>
-          {title}
+          {title ?? t('assemblyTitle')}
         </span>
         {!collapsed && !model.allVisible && (
           <button
@@ -455,7 +538,7 @@ const ComponentTreeView: React.FC<ComponentTreeViewProps> = ({
               lineHeight: 1.4,
             }}
           >
-            Show All
+            {t('assemblyShowAll')}
           </button>
         )}
       </div>
@@ -463,58 +546,7 @@ const ComponentTreeView: React.FC<ComponentTreeViewProps> = ({
       {/* ── Rows ── */}
       {!collapsed && (
         <div style={{ padding: '3px 0 4px', maxHeight: rowsMaxHeight, overflowY: 'auto' }}>
-          {rows.map((row, i) => {
-            const isLast = i === rows.length - 1;
-            const absent = row.present === false;
-            if (row.group) {
-              return (
-                <GroupRow
-                  key={row.key}
-                  label={row.label}
-                  color={row.colour}
-                  groupVisible={row.visible}
-                  expanded={!!expanded[row.key]}
-                  isLast={isLast}
-                  hiddenChildCount={row.group.filter(c => !c.visible).length}
-                  selected={model.selected === row.key}
-                  absent={absent}
-                  partKey={row.partKey}
-                  onToggleGroup={() => model.onToggle(row.key)}
-                  onToggleExpand={() => setExpanded(e => ({ ...e, [row.key]: !e[row.key] }))}
-                  onSelect={model.onSelect ? () => model.onSelect!(row.key) : undefined}
-                  onIsolate={() => model.onIsolate(row.key)}
-                >
-                  {row.group.map((child, j) => (
-                    <LeafRow
-                      key={child.key}
-                      label={child.label}
-                      color={child.colour}
-                      visible={child.visible}
-                      isLast={j === row.group!.length - 1}
-                      indent={8}
-                      absent={child.present === false}
-                      onToggle={() => model.onToggle(child.key)}
-                    />
-                  ))}
-                </GroupRow>
-              );
-            }
-            return (
-              <LeafRow
-                key={row.key}
-                label={row.label}
-                color={row.colour}
-                visible={row.visible}
-                isLast={isLast}
-                selected={model.selected === row.key}
-                absent={absent}
-                partKey={row.partKey}
-                onToggle={() => model.onToggle(row.key)}
-                onSelect={model.onSelect ? () => model.onSelect!(row.key) : undefined}
-                onIsolate={() => model.onIsolate(row.key)}
-              />
-            );
-          })}
+          {renderRows(rows, 0)}
         </div>
       )}
     </div>

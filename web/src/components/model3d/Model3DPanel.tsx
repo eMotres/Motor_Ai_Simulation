@@ -15,13 +15,13 @@ import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { useLastMotorState } from '../../lib/lastMotor';
 import NdaDialog from './NdaDialog';
-import PartTree from '../common/PartTree';
+import ComponentTreeView from '../viewer3d/ComponentTreeView';
+import { useAssemblyTree } from '../common/useAssemblyTree';
 import ModelCanvas, { modelBase as base, responseDetail as detail, type CanvasTools, type ModelCanvasHandle } from './ModelCanvas';
 import { usePartTreeData } from '../geometry/useConstruction';
-import { highlightNodes } from '../../lib/partTree';
 import {
   filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, panelParts, resolveModel,
-  type Axis, type ModelInfo,
+  type Axis, type ModelInfo, type PartGroup,
 } from '../../lib/model3d';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
@@ -43,9 +43,7 @@ const Model3DPanel: React.FC = () => {
   const [key, setKey] = useState<string>('');
   // the motor open in Configure has no built model (only some motors have one yet)
   const [preparing, setPreparing] = useState(false);
-  const [hiddenParts, setHiddenParts] = useState<ReadonlySet<string>>(new Set());
-  const [selPart, setSelPart] = useState<string | null>(null);
-  const [selGroup, setSelGroup] = useState<string | null>(null);
+  const [nodes, setNodes] = useState<PartGroup[]>([]);
   const [explode, setExplode] = useState(0);
   const [sec, setSec] = useState<{ on: boolean; axis: Axis; position: number }>({ on: false, axis: 'x', position: 0 });
   const [range, setRange] = useState({ min: -1, max: 1 });
@@ -92,9 +90,8 @@ const Model3DPanel: React.FC = () => {
 
   // THE part tree of the open motor (names only, after the NDA) - the same tree as Geometry > Full and Materials > Full
   const { tree } = usePartTreeData(model?.die ?? null, model?.config ?? null, 'model3d', !!model && canDownload, model?.glb_sha256 ?? 0);
-  const hiddenNodes = useMemo(() => new Set((tree?.parts ?? []).filter((p) => hiddenParts.has(p.id)).flatMap((p) => p.glb)), [tree, hiddenParts]);
-  const highlight = useMemo(() => new Set(highlightNodes(tree, { part: selPart, group: selGroup })), [tree, selPart, selGroup]);
-  const toggleHidden = useCallback((id: string) => setHiddenParts((h) => { const n = new Set(h); if (n.has(id)) n.delete(id); else n.add(id); return n; }), []);
+  // THE tree: the "Motor Assembly" panel over the viewer (eye toggles, swatches, Coil n / Magnet n N|S ...), only after the NDA
+  const { model: assembly, hiddenNodes, highlight } = useAssemblyTree(tree, nodes, { resetKey: model ? modelKey(model) : '' });
 
   const tools: CanvasTools = useMemo(() => ({ hidden: new Set<string>(), explode, section: sec, measure }), [explode, sec, measure]);
 
@@ -155,14 +152,6 @@ const Model3DPanel: React.FC = () => {
         </Box>
 
         <Box>
-          <Typography sx={lbl}>{t('parts')}</Typography>
-          {tree && tree.groups.length > 0 && (
-            <PartTree tree={tree} selectedPart={selPart} selectedGroup={selGroup} onSelectPart={setSelPart} onSelectGroup={setSelGroup}
-              visibility={{ hidden: hiddenParts, onToggle: toggleHidden }} testId="model3d-part-tree" />
-          )}
-        </Box>
-
-        <Box>
           <Typography sx={lbl}>{t('explode')}</Typography>
           <Slider size="small" min={0} max={1} step={0.01} value={explode} onChange={(_, v) => setExplode(v as number)} />
         </Box>
@@ -218,11 +207,14 @@ const Model3DPanel: React.FC = () => {
       <Box sx={{ position: 'relative', flex: 1, minWidth: 0 }}>
         <ModelCanvas ref={canvas} model={model} tools={tools} canUseTools={canDownload} highlight={highlight} hiddenNodes={hiddenNodes}
           contextLostText={t('contextLost')} onMeasure={setMm}
-          onLoaded={({ range: rg }) => {
-            setHiddenParts(new Set()); setSelPart(null); setSelGroup(null); setExplode(0); setMeasure(false); setMm(null);
+          onLoaded={({ groups, range: rg }) => {
+            setNodes(groups); setExplode(0); setMeasure(false); setMm(null);
             setRange(rg);
             setSec({ on: false, axis: 'x', position: (rg.min + rg.max) / 2 });
           }} />
+        {ready && canDownload && assembly.rows.length > 0 && (
+          <ComponentTreeView model={assembly} style={{ top: 8, left: 8, zIndex: 4, width: 230 }} rowsMaxHeight="calc(100% - 40px)" />
+        )}
         {ready && !show.has('parts') && (
           <>
             <Box sx={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 1, zIndex: 1 }}>

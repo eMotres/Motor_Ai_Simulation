@@ -17,11 +17,13 @@ import SaveIcon from '@mui/icons-material/Save';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import SectionLabel from '../common/SectionLabel';
-import PartTree from '../common/PartTree';
+import ComponentTreeView from '../viewer3d/ComponentTreeView';
+import { useAssemblyTree } from '../common/useAssemblyTree';
 import HelpTip from '../common/HelpTip';
 import ModelCanvas, { type ModelCanvasHandle } from '../model3d/ModelCanvas';
-import { modelKey, type ModelInfo } from '../../lib/model3d';
-import { highlightNodes, nameOf } from '../../lib/partTree';
+import { modelKey, type ModelInfo, type PartGroup } from '../../lib/model3d';
+import { groupMassKg, nameOf } from '../../lib/partTree';
+import { formatMass } from '../materials/fullPartsLogic';
 import {
   changesOf, draftError, formatValue, invalidDrafts, modelBadge, rowsOfGroup, type CadRow,
 } from '../../lib/cadParams';
@@ -52,8 +54,7 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
   const { data, loading, saving, save, chooseBearing, requestRebuild } = cad;
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [selPart, setSelPart] = useState<string | null>(null);
-  const [selGroup, setSelGroup] = useState<string | null>(null);
+  const [nodes, setNodes] = useState<PartGroup[]>([]);
   const [problems, setProblems] = useState<string[]>([]);
   const canvas = useRef<ModelCanvasHandle>(null);
 
@@ -63,7 +64,17 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
   const dirty = Object.keys(changes).length;
   const canWrite = !!data?.can_write;
   const badge = modelBadge(data?.rebuild);
-  const highlight = useMemo(() => new Set(highlightNodes(tree, { part: selPart, group: selGroup })), [tree, selPart, selGroup]);
+  // THE tree: the "Motor Assembly" panel over the viewer; the mass of every part and group is its extra column
+  const massOf = useMemo(() => new Map((tree?.parts ?? []).map((p) => [p.id, p])), [tree]);
+  const extraFor = useCallback((id: string) => {
+    const p = massOf.get(id);
+    return p?.mass_kg != null ? <span style={{ fontSize: 10, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums', opacity: p.counted === false ? 0.5 : 1 }}>{formatMass(p.mass_kg)}</span> : null;
+  }, [massOf]);
+  const groupExtraFor = useCallback((gid: string) => {
+    const g = tree ? groupMassKg(tree, gid) : null;
+    return g != null ? <span style={{ fontSize: 10, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{formatMass(g)}</span> : null;
+  }, [tree]);
+  const { model: assembly, hiddenNodes, highlight } = useAssemblyTree(tree, nodes, { extraFor, groupExtraFor, resetKey: `${die}/${config}` });
 
   const onSave = useCallback(async () => {
     setProblems([]);
@@ -119,19 +130,12 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
 
   const leftBody = (
     <>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-        <SectionLabel sx={{ px: 0.5, py: 0.5 }}>{tx('fullPartsTitle')}</SectionLabel>
-        {(tree?.kit || model?.assembly === 'frameless') && (
+      {(tree?.kit || model?.assembly === 'frameless') && (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5, py: 0.5 }}>
           <Tooltip title={tx('fullKitTip')}><Chip size="small" data-testid="kit-chip" label={tx('fullKitChip')}
             sx={{ height: 18, fontSize: 10, bgcolor: 'transparent', border: '1px solid var(--line)' }} /></Tooltip>
-        )}
-      </Box>
-      <Box sx={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--line-soft)', borderRadius: 1, mb: 1 }}>
-        {treeLoading && !tree ? <Box sx={{ p: 1 }}><CircularProgress size={14} /></Box>
-          : tree && tree.available !== false && tree.groups.length ? (
-            <PartTree tree={tree} selectedPart={selPart} selectedGroup={selGroup} onSelectPart={setSelPart} onSelectGroup={setSelGroup} showMass />
-          ) : <Typography sx={{ p: 1, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoTree')}</Typography>}
-      </Box>
+        </Box>
+      )}
       {tree?.partial && <Typography sx={{ px: 0.5, mb: 1, fontSize: 11, color: 'var(--text-4)' }}>{tx('fullPartialNote')}</Typography>}
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5, mb: 0.75 }}>
@@ -196,7 +200,8 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
       {divider}
       <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0 }}>
         {model ? (
-          <ModelCanvas ref={canvas} model={model} highlight={highlight} contextLostText={tx('contextLost')}>
+          <ModelCanvas ref={canvas} model={model} highlight={highlight} hiddenNodes={hiddenNodes} contextLostText={tx('contextLost')}
+            onLoaded={({ groups }) => setNodes(groups)}>
             <Box sx={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 1, zIndex: 2, pointerEvents: 'none' }}>
               {badge !== 'none' && (
                 <Chip data-testid="model-badge" icon={badge === 'failed' || badge === 'stale' ? undefined : <CircularProgress size={12} />}
@@ -228,6 +233,12 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
             {models === null ? tx('filesWorking') : tx('fullNoModel')}
           </Typography>
         )}
+        {(treeLoading && !tree) ? <Box sx={{ position: 'absolute', top: 44, left: 8 }}><CircularProgress size={14} /></Box>
+          : assembly.rows.length > 0 ? (
+            <ComponentTreeView model={assembly} style={{ top: 44, left: 8, zIndex: 4, width: 300 }} rowsMaxHeight="calc(100% - 110px)" />
+          ) : (
+            <Typography sx={{ position: 'absolute', top: 44, left: 12, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoTree')}</Typography>
+          )}
       </Box>
     </Box>
   );

@@ -1,0 +1,38 @@
+{
+ "Steel_42CrMo4_QT": {
+  "psi_PM cold [mWb]": 8.72089879755457,
+  "back-EMF @1000 rpm [V pk]": 174.73121828186845,
+  "cogging p-p cold [mN.m]": 348.54366223078046,
+  "T rated static [N.m]": 6.427302333834137,
+  "Kt rated [N.m/A rms]": 0.24835016745881522,
+  "ripple p-p rated static [mN.m]": 477.08561898806414,
+  "T peak static [N.m]": 10.668705673779833,
+  "T operating @rated [N.m]": 6.370235844803316,
+  "ripple p-p @rated [mN.m]": 463.9604972136562,
+  "P_shaft eddy @rated [W]": 0.47853160409405965,
+  "P_magnet eddy @rated [W]": 0.49956415205391114,
+  "P_iron stator @rated [W]": 2.7740741897177834,
+  "P_iron rotor @rated [W]": 0.24691759454424922,
+  "P_copper @rated [W]": 168.02395150053272,
+  "P_loss total @rated [W]": 172.02303904094273,
+  "eta @rated [%]": 79.49940880346463
+ },
+ "Aluminium_6061": {
+  "psi_PM cold [mWb]": 8.816844158283132,
+  "back-EMF @1000 rpm [V pk]": 176.1931612005282,
+  "cogging p-p cold [mN.m]": 391.83174853978875,
+  "T rated static [N.m]": 6.532739675742685,
+  "Kt rated [N.m/A rms]": 0.25242425331308677,
+  "ripple p-p rated static [mN.m]": 464.61200859171026,
+  "T peak static [N.m]": 10.971610783733666,
+  "T operating @rated [N.m]": 6.475257332333382,
+  "ripple p-p @rated [mN.m]": 448.66834277187985,
+  "P_shaft eddy @rated [W]": 2.316513209007902,
+  "P_magnet eddy @rated [W]": 0.5744454632577588,
+  "P_iron stator @rated [W]": 2.846727248729262,
+  "P_iron rotor @rated [W]": 0.21205417313092223,
+  "P_copper @rated [W]": 168.35497969878728,
+  "P_loss total @rated [W]": 174.3047197929131,
+  "eta @rated [%]": 79.55110993174252
+ }
+}

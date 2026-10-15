@@ -334,14 +334,14 @@ def test_coil_copper_is_pure_copper_with_its_sources():
 
 def test_owner_aluminium_rule_in_the_full_assignment_defaults():
     """Owner 2026-10-14: every wall, holder, housing, plate and every shaft is aluminium 6061-T6 (the Ø30 / Ø40 shafts are
-    stainless 316, provisional, not assigned yet); no 7075 unless a part is explicitly different."""
+    stainless 420, confirmed 2026-10-15, not assigned yet); no 7075 unless a part is explicitly different."""
     defs = pm.mechanical_parts()
     structural = {k: d for k, d in defs.items() if d["role"] == "structural"}
     for k in ("holder", "holder_front", "holder_back", "carrier_front", "carrier_rear", "prop_fix"):
         assert defs[k]["material"] == "Aluminium_6061", k
     assert not any(d["material"] == "Aluminium_7075" for d in defs.values())
     assert {d["material"] for k, d in structural.items() if k not in ("rings", "bearings")} == {"Aluminium_6061"}
-    # the provisional stainless shaft card (AISI 316) is the solver library's card, with sources, and NOTHING is assigned to it
+    # the superseded provisional stainless card (AISI 316, now the non-magnetic option) is the solver library's card, with sources, and NOTHING is assigned to it
     ss = pm.resolve("Stainless_316")
     assert ss.origin == "materials_library" and ss.get("density_kg_m3") == 8000 and ss.get("yield_MPa") == 205
     assert ss.get("ultimate_MPa") == 515 and ss.props["yield_MPa"].source == "astm_a240_316" and ss.props["yield_MPa"].verify

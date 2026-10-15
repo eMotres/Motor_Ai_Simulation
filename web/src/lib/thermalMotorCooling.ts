@@ -160,8 +160,8 @@ export function ownershipIssue(
       + 'wait a moment, or reload the motor';
   }
   if (sameMotor(fieldsMotor, loaded)) return null;
-  return `the cooling fields shown belong to ${fieldsMotor.die} ${fieldsMotor.config}, `
-    + `not to the loaded ${loaded.die} ${loaded.config} - reload the motor to get its cooling`;
+  return `this tab shows ${loaded.die} ${loaded.config} but the cooling fields belong to `
+    + `${fieldsMotor.die} ${fieldsMotor.config} - reload the motor`;
 }
 
 /** Should the answer of `PUT /api/me/last_motor` replace the panel's cooling
@@ -254,8 +254,41 @@ export function hydrationPlan(
   srv: HydrationInput | null | undefined, loaded: MotorIdentity | null | undefined,
 ): HydrationPlan {
   const owner = splitMotorKey(srv?.motor);
+  // NO motor loaded: nothing can contradict the account's saved cooling, so a
+  // successful read is adopted as it is (server first), owned by its motor only
+  // if it names one and is complete.  Without it the saved fields would be
+  // replaced by local defaults and a display-only save would write those back.
+  if (srv && !loaded) {
+    const bound = owner && isCompleteCooling(srv.settings as Record<string, unknown>);
+    return { adoptCooling: true, owner: bound ? owner : null, needsResync: false };
+  }
   if (srv && owner && isCompleteCooling(srv.settings as Record<string, unknown>)) {
     return { adoptCooling: true, owner, needsResync: !!loaded && !sameMotor(owner, loaded) };
   }
   return { adoptCooling: false, owner: null, needsResync: !!loaded };
+}
+
+export interface SelectionIdentity { die: string; config: string; ref_id?: string | null }
+
+/** The FULL selection identity - die, configuration AND catalogue reference. */
+export function sameSelection(
+  a: SelectionIdentity | null | undefined, b: SelectionIdentity | null | undefined,
+): boolean {
+  return !!a && !!b && a.die === b.die && a.config === b.config
+    && (a.ref_id || null) === (b.ref_id || null);
+}
+
+/** The cooling answer of `GET /api/me/last_motor/cooling` to adopt for a tab that
+ *  shows `tab`, or why not.  `accountDiffers`: the account has loaded another
+ *  motor (or reference) than this tab shows - the tab is stale, nothing is
+ *  adopted and its solves are refused.  The answer is for the account's motor, so
+ *  it is adopted only when that IS the tab's selection. */
+export function resyncAnswer(
+  read: { selection?: SelectionIdentity | null; thermal?: unknown } | null | undefined,
+  tab: SelectionIdentity | null | undefined,
+): { thermal: unknown | null; accountDiffers: boolean } {
+  if (!read || !tab) return { thermal: null, accountDiffers: false };
+  if (!read.selection) return { thermal: null, accountDiffers: false };
+  if (!sameSelection(read.selection, tab)) return { thermal: null, accountDiffers: true };
+  return { thermal: read.thermal ?? null, accountDiffers: false };
 }

@@ -99,6 +99,10 @@ export function beginLastMotorSelection(email: string | null | undefined): numbe
 
 export function invalidateLastMotorOperations(): void { selectionEpoch += 1; }
 
+/** The current selection generation: a slow answer captured before a newer load
+ *  (another reference, A -> B -> A) is recognised by `isCurrentLastMotorOperation`. */
+export const currentLastMotorEpoch = (): number => selectionEpoch;
+
 export const isCurrentLastMotorOperation = (email: string, epoch: number) =>
   isCurrentLastMotorUser(email) && epoch === selectionEpoch;
 
@@ -164,6 +168,23 @@ export async function rememberLoadedMotor(email: string, die: string,
   if (!isCurrentLastMotorOperation(identity, epoch)) return;
   try { thermalFollow?.(thermal); } catch { /* the server copy is already followed */ }
   window.dispatchEvent(new CustomEvent('family-changed'));
+}
+
+/** The Thermal cooling of the motor the ACCOUNT has loaded - a READ
+ *  (`GET /api/me/last_motor/cooling`).  Unlike `rememberLastMotor` it never
+ *  reselects: a stale tab asks it for the account's motor and learns whether it
+ *  shows a different one. */
+export async function fetchLastMotorCooling(email: string): Promise<{
+  selection: LastMotorSelection | null; thermal: unknown;
+} | null> {
+  if (!isCurrentLastMotorUser(email)) return null;
+  const token = getStoredToken();
+  const r = await fetch(`${API}/api/me/last_motor/cooling`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {}, cache: 'no-store',
+  });
+  if (!isCurrentLastMotorUser(email) || !r.ok) return null;
+  const body = await r.json() as { selection?: LastMotorSelection | null; thermal?: unknown };
+  return { selection: body.selection ?? null, thermal: body.thermal ?? null };
 }
 
 export async function restoreLastMotor(email: string): Promise<LastMotorState> {

@@ -173,6 +173,19 @@ def get_last_motor(authorization: Optional[str] = Header(default=None)):
     return {"user": who, "selection": selection, "unavailable": False}
 
 
+@router.get("/api/me/last_motor/cooling")
+def get_last_motor_cooling(authorization: Optional[str] = Header(default=None)):
+    """The Thermal cooling of the motor this account has loaded - a READ.
+
+    A tab that must learn its motor's complete cooling fields (hydration that
+    could not establish ownership) asks here instead of repeating the PUT above:
+    the PUT reselects, and a stale tab would pull the account back to the motor it
+    shows.  Nothing is written and the selection is never changed."""
+    _last_motor_user(authorization)
+    from motor_ai_sim.thermal_settings import current_cooling_answer
+    return current_cooling_answer(authorization)
+
+
 @router.put("/api/me/last_motor")
 def put_last_motor(body: dict = Body(...),
                    authorization: Optional[str] = Header(default=None)):

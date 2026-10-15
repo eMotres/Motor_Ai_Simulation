@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   adoptableCoolingFields, coolingMismatch, coolingSourceLine, fieldsMode,
-  followAdoption, hydrationIsStale, hydrationPlan, isCompleteCooling, isCoolingSource, ownershipIssue, parseMotorCooling, sameMotor,
+  followAdoption, hydrationIsStale, hydrationPlan, isCompleteCooling, isCoolingSource, resyncAnswer, sameSelection, ownershipIssue, parseMotorCooling, sameMotor,
   shouldAdoptMotorCooling, splitMotorKey, withoutMotorOwned,
 } from '../thermalMotorCooling.ts';
 
@@ -195,4 +195,49 @@ test('follow: only a complete answer for the loaded motor is adopted, with owner
   assert.equal(followAdoption({ ...answer, motor: undefined }, A, L155), null);
   // already owned and unchanged: keep the user's typing
   assert.equal(followAdoption(answer, L155, L155), null);
+});
+
+// ── fourth review: U1 no motor loaded, U2/U3 recovery is a gated READ ───────────
+
+test('U1: with no motor loaded a successful read is adopted as it is, owned only if bound', () => {
+  const liquid = { ...COMPLETE, coolMode: 'liquid', flowLpm: '20', tIn: '35' };
+  assert.deepEqual(hydrationPlan({ settings: liquid, motor: null }, null),
+    { adoptCooling: true, owner: null, needsResync: false });
+  assert.deepEqual(hydrationPlan({ settings: { coolMode: 'liquid' }, motor: null }, null),
+    { adoptCooling: true, owner: null, needsResync: false });
+  assert.deepEqual(hydrationPlan({ settings: liquid, motor: MKEY }, null),
+    { adoptCooling: true, owner: L155, needsResync: false });
+  // with a motor loaded the same unbound record is still NOT trusted
+  assert.equal(hydrationPlan({ settings: liquid, motor: null }, L155).adoptCooling, false);
+  // a failed read adopts nothing
+  assert.equal(hydrationPlan(null, null).adoptCooling, false);
+});
+
+test('U3: the recovery answer is for the account motor; a different one makes the tab stale', () => {
+  const sel = (o) => ({ ref_id: 'R1', ...L155, ...o });
+  const thermal = { motor: MKEY, fields: COMPLETE };
+  assert.deepEqual(resyncAnswer({ selection: sel(), thermal }, sel()), { thermal, accountDiffers: false });
+  // the account moved to another motor, or another reference of this one
+  assert.deepEqual(resyncAnswer({ selection: sel({ die: 'OTHER' }), thermal }, sel()),
+    { thermal: null, accountDiffers: true });
+  assert.deepEqual(resyncAnswer({ selection: sel({ ref_id: 'R2' }), thermal }, sel()),
+    { thermal: null, accountDiffers: true });
+  // nothing to say
+  assert.deepEqual(resyncAnswer({ selection: null, thermal }, sel()), { thermal: null, accountDiffers: false });
+  assert.deepEqual(resyncAnswer(null, sel()), { thermal: null, accountDiffers: false });
+  assert.deepEqual(resyncAnswer({ selection: sel(), thermal }, null), { thermal: null, accountDiffers: false });
+});
+
+test('U2: selection identity includes the catalogue reference', () => {
+  assert.equal(sameSelection({ ...L155, ref_id: 'R1' }, { ...L155, ref_id: 'R1' }), true);
+  assert.equal(sameSelection({ ...L155, ref_id: 'R1' }, { ...L155, ref_id: 'R2' }), false);
+  assert.equal(sameSelection({ ...L155, ref_id: null }, { ...L155 }), true);
+  assert.equal(sameSelection(L155, null), false);
+});
+
+test('U3: the stale-tab refusal names both motors and says reload', () => {
+  const msg = ownershipIssue(A, L155);
+  assert.match(msg, /this tab shows CIANO10 200 opt L155 motor/);
+  assert.match(msg, /CIANO14 40 new L12/);
+  assert.match(msg, /reload/);
 });

@@ -84,3 +84,14 @@ fields of the motor being SOLVED and `{source, motor, application, note}`:
 The result carries `cooling_source`; the field result already carries `cooling.frame`
 and `cooling.outer.mode`, which the Thermal panel compares with its fields (the
 "solved with ..., fields now ... - re-Solve" warning).
+
+## Browser recovery is a read
+
+A tab that cannot establish which motor its cooling fields belong to (a failed, empty, sparse or
+unbound settings read) asks `GET /api/me/last_motor/cooling` for the COMPLETE cooling of the
+motor the account has loaded. It writes nothing and never changes the account's selection (the
+`PUT /api/me/last_motor` would reselect a stale tab's motor). The answer is adopted only when the
+account's selection equals the tab's (die, configuration and reference), the selection generation
+has not moved and no newer follow was adopted; otherwise the tab is stale and its solves are
+refused ("this tab shows ... - reload"). With no motor loaded, a successful read is adopted as it
+is (an unbound record is returned complete, with the solver's meaning for absent fields).

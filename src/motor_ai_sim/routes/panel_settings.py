@@ -121,6 +121,14 @@ def get_panel_settings(panel: str = Path(...),
     entry = ((d.get(panel) or {}).get(who)) or {}
     out = {"panel": panel, "user": who, "settings": entry.get("settings") or {},
            "updated_at": entry.get("updated_at")}
+    if panel == "thermal" and out["settings"] and not entry.get("motor"):
+        # An entry no motor owns (an account that never loaded one, or an old
+        # entry) is returned COMPLETE with the solver's own meaning for every
+        # field it lacks, so the browser shows - and may save back - exactly the
+        # values the solver always used, never local defaults.  The stored entry
+        # is not changed.
+        from motor_ai_sim.thermal_settings import solver_effective_cooling
+        out["settings"] = solver_effective_cooling(out["settings"])
     if panel == "thermal":
         # Which motor the fields belong to and where they came from, so the
         # panel can say so; absent on a record saved before 2026-10-15.

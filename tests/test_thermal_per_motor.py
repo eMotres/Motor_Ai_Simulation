@@ -752,11 +752,15 @@ def test_t1_a_sparse_legacy_entry_is_answered_complete_with_the_solvers_meanings
     assert (f["airSpeed"], f["frame"], f["boreMode"], f["boreAirSpeed"]) == ("0", "housed", "none", "0")
     assert f["tIn"] == "30" and f["boreTIn"] == "30"           # the ambient, as the mapper did
     assert ts.cooling_fields(f) == ts.cooling_fields(legacy)
-    # a sparse GET response is exactly what the browser must NOT trust
+    # an UNBOUND GET names no motor, so the browser can not take it for a motor's
+    # fields; it is complete, with the solver's meaning for what the entry lacks
     from motor_ai_sim.routes import panel_settings as ps
     sparse = {"coolMode": "air", "airSpeedSource": "manual", "ambientT": "30"}
     _seed(sparse)
-    assert set(ps.get_panel_settings(panel="thermal", authorization=None)["settings"])         < set(ts.COOLING_KEYS)
+    got = ps.get_panel_settings(panel="thermal", authorization=None)
+    assert "motor" not in got and set(ts.COOLING_KEYS) <= set(got["settings"])
+    assert ts.cooling_fields(got["settings"]) == ts.cooling_fields(sparse)
+    assert ps._load()["thermal"][EMAIL]["settings"] == sparse
 
 
 def test_t2_an_older_reference_load_cannot_revive_its_propeller_binding(world, monkeypatch):
@@ -788,3 +792,77 @@ def test_t2_an_older_reference_load_cannot_revive_its_propeller_binding(world, m
     assert _stored()["propellerContextKey"] == key2
     entry = ps._load()["thermal"][EMAIL]
     assert entry["by_motor"][MOTOR_PROP]["settings"]["propellerContextKey"] == key2
+
+
+# ═══ fourth review of PR #218 (45770f43) ══════════════════════════════════════════
+
+def test_u1_an_unbound_account_record_is_returned_complete_and_unchanged(world):
+    """U1: an account that never loaded a motor saved manual liquid cooling; the GET
+    gives the browser exactly those values (completed with the solver's meanings
+    for what an old entry lacks), and a display-only save writes nothing else."""
+    from motor_ai_sim.routes import panel_settings as ps
+    liquid = {"coolMode": "liquid", "airSpeedSource": "manual", "fluid": "water",
+              "tIn": "35", "flowLpm": "20", "ambientT": "25"}
+    _seed(liquid)                                          # no marker: never bound to a motor
+    got = ps.get_panel_settings(panel="thermal", authorization=None)["settings"]
+    assert {k: got[k] for k in liquid} == liquid
+    assert set(ts.COOLING_KEYS) <= set(got)
+    assert ts.cooling_fields(got) == ts.cooling_fields(liquid)
+    # the stored entry itself is not rewritten by a read
+    assert ps._load()["thermal"][EMAIL]["settings"] == liquid
+    # the browser holds the server values, so its display-only save writes them back
+    _user_saves({**got, "view": "flux"})
+    saved = ps._load()["thermal"][EMAIL]["settings"]
+    assert {k: saved[k] for k in liquid} == liquid and saved["view"] == "flux"
+    assert ts.cooling_fields(saved) == ts.cooling_fields(liquid)
+
+
+def test_u3_the_cooling_read_never_changes_the_accounts_selection_or_store(world):
+    """U3: a stale tab's recovery is a READ of the account's loaded motor."""
+    from motor_ai_sim.routes import panel_settings as ps
+    _seed(FORTY_MM, motor=MOTOR_PROP)
+    world["selection"] = dict(PROP)
+    _load(world, PROP, L155)                               # the account now has the L155
+    before = open(ps._store_path(), encoding="utf-8").read()
+    selection_before = dict(world["selection"])
+    ans = ts.current_cooling_answer(None)
+    assert open(ps._store_path(), encoding="utf-8").read() == before     # nothing written
+    assert world["selection"] == selection_before                         # nothing reselected
+    assert ans["selection"]["die"] == "CIANO10 200 opt"
+    th = ans["thermal"]
+    assert th["motor"] == MOTOR_L155 and set(th["fields"]) == set(ts.COOLING_KEYS)
+    assert (th["fields"]["coolMode"], th["fields"]["frame"]) == ("liquid", "housed")
+    assert th["motor_changed"] is False and th["changed"] is False
+
+
+def test_u3_the_cooling_read_completes_a_sparse_legacy_entry_without_writing(world):
+    from motor_ai_sim.routes import panel_settings as ps
+    legacy = {"coolMode": "air", "airSpeedSource": "manual", "ambientT": "30"}
+    _seed(legacy)
+    world["selection"] = dict(PROP)
+    ans = ts.current_cooling_answer(None)
+    f = ans["thermal"]["fields"]
+    assert set(f) == set(ts.COOLING_KEYS) and f["airSpeed"] == "0"
+    assert ts.cooling_fields(f) == ts.cooling_fields(legacy)
+    assert ps._load()["thermal"][EMAIL]["settings"] == legacy
+    # no motor on the account: nothing to resolve
+    world["selection"] = None
+    assert ts.current_cooling_answer(None)["thermal"]["fields"] is None
+
+
+def test_u4_legacy_inlet_completion_carries_the_ambient_exactly(world):
+    """U4: ambient 30.123456 (more than six significant figures) must not become
+    30.1235 in the derived inlets."""
+    for cool in ("liquid",):
+        legacy = {"coolMode": cool, "ambientT": "30.123456789", "flowLpm": "5",
+                  "boreMode": "liquid", "boreFlowLpm": "3"}
+        _seed(legacy)
+        world["selection"] = dict(L155)
+        out = _load(world, L155, L155)                     # legacy claim: completion
+        f = out["fields"]
+        assert f["tIn"] == "30.123456789" and f["boreTIn"] == "30.123456789"
+        assert ts.cooling_fields(f) == ts.cooling_fields(legacy)
+        assert ts.cooling_fields(f)["fluid_temp_in_c"] == 30.123456789
+        assert ts.cooling_fields(f)["bore_fluid_temp_in_c"] == 30.123456789
+    # a blank / unparsable ambient keeps the mapper's own 40
+    assert ts.solver_effective_cooling({"ambientT": "x"})["tIn"] == "40"

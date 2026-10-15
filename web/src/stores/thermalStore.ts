@@ -31,7 +31,7 @@ import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
 import {
   adoptableCoolingFields, followAdoption, hydrationIsStale, hydrationPlan,
-  isCoolingSource, ownershipIssue, withoutMotorOwned,
+  isCoolingSource, ownershipIssue, resyncAnswer, sameSelection, withoutMotorOwned,
 } from '../lib/thermalMotorCooling';
 import type { CoolingSource, MotorIdentity } from '../lib/thermalMotorCooling';
 // `registerThermalPanelBlock` — the Electromagnetic tab's OWN coupled Run
@@ -55,7 +55,7 @@ import { tileFullRing } from '../components/thermal/types';
 import { readMeshSettings } from '../components/common/motorSettings';
 import {
   configureRefIdForSelection, getLastMotorState, isCurrentLastMotorUser, registerThermalFollow,
-  rememberLastMotor,
+  currentLastMotorEpoch, fetchLastMotorCooling, isCurrentLastMotorOperation,
 } from '../lib/lastMotor';
 import {
   PROP_CHOICE_LS, coolChoiceKey, propellerContextKey, readCoolChoice,
@@ -166,6 +166,9 @@ export interface ThermalState {
    *  the last-used fields of a record that predates per-motor settings) and
    *  that motor's application.  A save files the fields under THIS motor. */
   fieldsMotor: MotorIdentity | null;
+  /** this tab shows another motor (or catalogue reference) than the account has
+   *  loaded - its cooling fields are not the account's, solves are refused */
+  tabStale: boolean;
   coolingSource: CoolingSource | null;
   coolingApp: string | null;
 
@@ -602,7 +605,7 @@ export function thermalPanelBlock(): Record<string, string> | null {
   const s = useThermalStore.getState();
   // Fields tagged with ANOTHER motor are not sent: the backend then resolves the
   // loaded motor's own record (2026-10-15).
-  if (!s.hydrated || ownershipIssue(s.fieldsMotor, loadedMotorIdentity())) return null;
+  if (!s.hydrated || fieldsBlockIssue(s)) return null;
   return panelCooling(s);
 }
 
@@ -613,7 +616,7 @@ export function thermalPanelBlock(): Record<string, string> | null {
  *  old per-key `therm.*` read shipped a `liquid` mode without its flow. */
 registerThermalPanelBlock(() => {
   const s = useThermalStore.getState();
-  if (!s.hydrated || ownershipIssue(s.fieldsMotor, loadedMotorIdentity())) return null;
+  if (!s.hydrated || fieldsBlockIssue(s)) return null;
   const out = panelCooling(s);
   const it = String(s.maxIter ?? '').trim();
   if (it !== '') out.maxIter = it;
@@ -624,6 +627,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   hydrated: false,
   serverSettingsLoaded: false,
   fieldsMotor: null,
+  tabStale: false,
   coolingSource: null,
   coolingApp: null,
   field: { ...EMPTY } as Slice<ThermalField>,
@@ -947,7 +951,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     // no pump, no cooled surface at all): the panel disables Solve on the same
     // verdict, and this is the second lock on the same door.
     const bad = coolingIssue(s) ?? propellerContextIssue(s)
-      ?? ownershipIssue(s.fieldsMotor, loadedMotorIdentity());
+      ?? fieldsBlockIssue(s);
     if (bad) { set({ field: { ...s.field, busy: false, err: bad } }); return; }
     set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() },
           emMissing: null, emMissingReason: null });
@@ -987,7 +991,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
   solveCoupled: async () => {
     const s = get();
     const bad = coolingIssue(s) ?? propellerContextIssue(s)
-      ?? ownershipIssue(s.fieldsMotor, loadedMotorIdentity());
+      ?? fieldsBlockIssue(s);
     if (bad) { set({ coupled: { ...s.coupled, busy: false, err: bad } }); return; }
     set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() },
           emMissing: null, emMissingReason: null });
@@ -1046,6 +1050,7 @@ function adoptFollowAnswer(answer: unknown): void {
     followEpoch += 1;
     const f = adoptableCoolingFields(mc.fields);
     const next: Partial<ThermalState> = {
+      tabStale: false,
       ...(f as unknown as Partial<ThermalState>),
       fieldsMotor: mc.motor,
       coolingSource: mc.source,
@@ -1084,6 +1089,15 @@ function adoptFollowAnswer(answer: unknown): void {
 }
 registerThermalFollow(adoptFollowAnswer);
 
+/** Why the cooling fields must not be used for a solve right now, or `null`. */
+function fieldsBlockIssue(s: ThermalState): string | null {
+  const m = loadedMotorIdentity();
+  if (s.tabStale && m) {
+    return `this tab shows ${m.die} ${m.config}, which is no longer the motor the account has loaded - reload`;
+  }
+  return ownershipIssue(s.fieldsMotor, m);
+}
+
 /** The motor the account has loaded, as the cooling record names it. */
 function loadedMotorIdentity(): MotorIdentity | null {
   const m = getLastMotorState();
@@ -1091,15 +1105,29 @@ function loadedMotorIdentity(): MotorIdentity | null {
     ? { die: m.selection.die, config: m.selection.config } : null;
 }
 
-/** Ask the server to resolve the loaded motor's cooling and adopt its COMPLETE
- *  answer - the recovery of a hydration that could not establish ownership (a
- *  failed, empty, sparse or unbound read) or of a follow answer that was lost.
- *  The same selection again is idempotent on the server. */
+/** Ask the server for the cooling of the motor the ACCOUNT has loaded - a READ,
+ *  never a PUT, so a stale tab can not reselect its motor for the account - and
+ *  adopt the COMPLETE answer if it is for the motor THIS tab shows.  The recovery
+ *  of a hydration that could not establish ownership (a failed, empty, sparse or
+ *  unbound read) or of a follow answer that was lost.
+ *
+ *  A response is dropped when a newer selection happened meanwhile (the selection
+ *  generation moved - another reference, A -> B -> A) or a follow adopted other
+ *  fields (`followEpoch`).  When the account's motor is not this tab's, the tab is
+ *  stale: nothing is adopted and its solves are refused. */
 async function resyncLoadedMotorCooling(): Promise<void> {
   const m = getLastMotorState();
   if (m.status !== 'loaded' || !m.email || !m.selection) return;
+  const selection = m.selection;
+  const gen = currentLastMotorEpoch();
+  const follow0 = followEpoch;
   try {
-    const answer = await rememberLastMotor(m.email, m.selection);
-    adoptFollowAnswer(answer);
+    const read = await fetchLastMotorCooling(m.email);
+    if (!isCurrentLastMotorOperation(m.email, gen) || followEpoch !== follow0) return;
+    const now = getLastMotorState();
+    if (now.status !== 'loaded' || !sameSelection(now.selection, selection)) return;
+    const { thermal, accountDiffers } = resyncAnswer(read, selection);
+    if (accountDiffers) { useThermalStore.setState({ tabStale: true }); return; }
+    if (thermal) adoptFollowAnswer(thermal);
   } catch { /* stays unverified: the solve is held back, the backend resolves */ }
 }

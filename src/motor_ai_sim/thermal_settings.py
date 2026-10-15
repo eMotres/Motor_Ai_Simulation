@@ -886,13 +886,20 @@ def solver_effective_cooling(settings: Mapping[str, Any]) -> Dict[str, str]:
     physics of an old, sparse entry is bit-identical; only the description
     becomes complete (a browser can adopt it as the motor's own fields without
     inventing a panel default or keeping another motor's)."""
-    ambient = _num(settings.get("ambientT"), 40.0)
+    # The derived inlets carry the ambient EXACTLY as stored (its own text): a
+    # formatted copy would round it and change a solver and cache input.
+    raw_amb = _text(settings.get("ambientT"))
+    try:
+        float(raw_amb)
+        ambient_text = raw_amb if _num(raw_amb, 40.0) == float(raw_amb) else "40"
+    except ValueError:
+        ambient_text = "40"
     fill = {
         "coolMode": "air", "ambientT": "40", "airSpeed": "0",
         "airSpeedSource": "manual", "propellerId": "", "propellerContextKey": "",
-        "fluid": "water", "tIn": "%g" % ambient, "hConv": "50", "flowLpm": "8",
+        "fluid": "water", "tIn": ambient_text, "hConv": "50", "flowLpm": "8",
         "boreMode": "none", "boreAirSpeed": "0", "boreFluid": "water",
-        "boreTIn": "%g" % ambient, "boreFlowLpm": "4",
+        "boreTIn": ambient_text, "boreFlowLpm": "4",
         "shaftExtMm": "0", "shaftExtSides": "2",
         "frame": "housed", "openAirSpeed": "0",
         "emissivity": "0.9", "heatPath": heat_path_of(settings),
@@ -1095,6 +1102,44 @@ def follow_loaded_motor(email: str, selection: Mapping[str, Any],
         log.warning("thermal cooling follow gave up after concurrent writes")
     except Exception:  # noqa: BLE001
         log.warning("thermal cooling could not follow the loaded motor", exc_info=True)
+    return out
+
+
+def current_cooling_answer(authorization: Optional[str] = None) -> Dict[str, Any]:
+    """The cooling of the motor the ACCOUNT has loaded right now, in the shape of a
+    follow answer - a READ.  It writes nothing and never changes the account's
+    selection: a stale browser tab that only needs to learn its motor's complete
+    fields asks this instead of repeating a ``PUT /api/me/last_motor`` (which
+    would reselect that tab's motor for the account).
+
+    ``{"selection", "thermal"}``; ``selection`` is the account's (``None`` when it
+    has none), ``thermal`` carries ``motor``, ``fields`` (COMPLETE, the solver's
+    own meaning for what an old entry lacks), ``source``, ``application``,
+    ``allowed_propellers`` and ``settings``; ``thermal.fields`` is ``None`` when it
+    cannot be resolved."""
+    out: Dict[str, Any] = {"selection": None, "thermal": {
+        "changed": False, "motor_changed": False, "motor": "", "source": None,
+        "application": None, "fields": None, "settings": {}, "allowed_propellers": []}}
+    try:
+        from motor_ai_sim.routes.account import get_last_motor
+        cur = get_last_motor(authorization=authorization) or {}
+        sel = cur.get("selection")
+        if not isinstance(sel, Mapping):
+            return out
+        out["selection"] = dict(sel)
+        die, config = str(sel.get("die") or ""), str(sel.get("config") or "")
+        settings, info = motor_thermal_settings(authorization, die, config)
+        if not info.get("motor"):
+            return out
+        full = solver_effective_cooling(_cooling_of(settings))
+        options = _cooling_options_for(die, config, authorization) or {}
+        th = out["thermal"]
+        th.update(motor=info["motor"], source=info["source"],
+                  application=info.get("application"), fields=_fields_of(full),
+                  settings={k: str(full.get(k) or "") for k in FOLLOW_KEYS},
+                  allowed_propellers=_selectable_propellers(options))
+    except Exception:  # noqa: BLE001
+        log.warning("current thermal cooling could not be read", exc_info=True)
     return out
 
 

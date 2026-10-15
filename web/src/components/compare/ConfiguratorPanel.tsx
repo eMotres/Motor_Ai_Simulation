@@ -69,7 +69,8 @@ import {
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
 import { presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
-import { buildModePresets, baseModeLabel, modeOfPoint, type ModePreset } from '../../lib/configuratorModes';
+import { buildModePresets, baseModeLabel, type ModePreset } from '../../lib/configuratorModes';
+import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
   physicalRanges, narrowRange, speedLimit, overflows, lineVoltageWarning,
@@ -530,14 +531,15 @@ const ConfiguratorPanel: React.FC = () => {
     : tx('configure.rLineLine');
   const p = ref.passport;
   const [knobs, setKnobs] = useState<Knobs>(() => {
-    try { const r = localStorage.getItem(KNOBS_LS); if (r) { const k = JSON.parse(r); if (k && typeof k.N === 'number') return k as Knobs; } } catch { /* ignore */ }
+    // the remembered tuning is restored only for the machine it was made on (owner 2026-10-15)
+    try { const k = readStampedKnobs<Knobs>(localStorage.getItem(KNOBS_LS), refId); if (k) return k; } catch { /* ignore */ }
     return baseKnobs(p);
   });
   const stackCoefficientsUnavailable = stackCoefficientReferenceOnly(
     catId, knobs.L_mm, referenceTemperatureBasis,
   );
   // remember the user's tuning across reloads
-  useEffect(() => { try { localStorage.setItem(KNOBS_LS, JSON.stringify(knobs)); } catch { /* ignore */ } }, [knobs]);
+  useEffect(() => { try { localStorage.setItem(KNOBS_LS, stampKnobs(knobs, refId)); } catch { /* ignore */ } }, [knobs]); // eslint-disable-line react-hooks/exhaustive-deps
   const skipReset = React.useRef(false);
   const lastRefId = React.useRef(refId);
   // reset knobs only when the reference ACTUALLY changes — compare to the last
@@ -682,6 +684,12 @@ const ConfiguratorPanel: React.FC = () => {
   const [baseConfig, setBaseConfig] = useState<string | null>(null);
   // the MODE (rated, peak ...) the base was taken at: presets are configuration x mode
   const [baseMode, setBaseMode] = useState<string | null>(null);
+  // a restored state that did not fit its pack was replaced by the reference: say so, once
+  const [reconciledKey, setReconciledKey] = useState('');
+  // the base of THIS machine was named from the loaded selection (a key is `${refId}|...`)
+  const reconciledHere = !!reconciledKey && reconciledKey.startsWith(`${refId}|`);
+  const [restoreMisfitNote, setRestoreMisfitNote] = useState<{ what: Misfit[]; line: number; nominal: number | null;
+    rpm: number; max: number | null; mode: string } | null>(null);
   const [limitMsg, setLimitMsg] = useState<string | null>(null);
   // `ctxDone`: the context has been ANSWERED (or there is none to ask for) — blocks that depend on
   // it (the Thermal block for a die that is not propeller-cooled) wait for it instead of flashing.
@@ -717,16 +725,20 @@ const ConfiguratorPanel: React.FC = () => {
   // One button per configuration x mode that has data (lib/configuratorModes); the build is the
   // configuration's, the current and speed are the mode's.
   const modePresets: ModePreset[] = useMemo(() => buildModePresets(presets), [presets]);
-  // a freshly loaded machine starts on the configuration whose build it is
+  // The base is the configuration whose build the REFERENCE knobs hold, and it follows them
+  // (owner 2026-10-15: on reload the context could answer before the loaded L20 build was adopted;
+  // the base was then taken from the passport's L12 point and stayed - L12's pack, "changed from
+  // L12").  While a loaded machine is still to be adopted (live geometry, no reference knobs yet)
+  // nothing is guessed.  A configuration the user CHOSE (a preset button) is never re-derived.
+  const explicitKnobsRef = React.useRef<Knobs | null>(null);
   useEffect(() => {
-    if (baseConfig != null || !presets.length) return;
-    const m = presetOfBuild(presets, refKnobs ?? baseKnobs(p));
-    if (m) {
-      setBaseConfig(m.config);
-      const k0 = refKnobs ?? baseKnobs(p);
-      setBaseMode(modeOfPoint(modePresets, m.config, k0.I_A, k0.rpm));
-    }
-  }, [presets, refKnobs, baseConfig]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (!presets.length) return;
+    const k0 = refKnobs ?? (liveGeo ? null : baseKnobs(p));
+    if (!k0 || reconciledHere || (refKnobs && refKnobs === explicitKnobsRef.current)) return;
+    const s0 = seedBase(presets, k0, activeDuty());
+    if (!s0 || s0.config === baseConfig) return;
+    setBaseConfig(s0.config); setBaseMode(s0.mode);
+  }, [presets, refKnobs, baseConfig, liveGeo, reconciledHere]); // eslint-disable-line react-hooks/exhaustive-deps
   // ── DEFAULT MOTOR: open on it when there is no choice of his own yet, and
   //    "Reset to my default" at any time.  The reference is the catalogue card of
   //    the default die + configuration; the configuration's preset then restores
@@ -1462,8 +1474,9 @@ ${s1Text.tip}` : '';
   const turnsSliderMax = ranges.N.max;
   const wireSliderMax  = ranges.wireH_mm.max;
 
-  const set = (k: keyof Knobs) => (v: number) => setKnobs((s) => ({ ...s, [k]: v }));
+  const set = (k: keyof Knobs) => (v: number) => { setRestoreMisfitNote(null); setKnobs((s) => ({ ...s, [k]: v })); };
   const setRpm = (v: number) => {
+    setRestoreMisfitNote(null);
     if (propLoad && propRpmSeedKey) propRpmManualEditRef.current = propRpmSeedKey;
     setKnobs((s) => ({ ...s, rpm: v }));
   };
@@ -1478,8 +1491,10 @@ ${s1Text.tip}` : '';
     const nk0 = presetKnobs(knobs, pr);
     const nk = { ...nk0, rpm: initialRpmForLoadMode(propLoad ? 'prop' : 'manual', nk0.rpm,
       nk0.rpm, catalogPoint?.rpm ?? null) };
+    explicitKnobsRef.current = nk;
     setKnobs(nk); setRefKnobs(nk); setBaseConfig(pr.config);
     setBaseMode('key' in pr && pr.duty ? pr.duty : null);
+    setRestoreMisfitNote(null);
     if (cooled && propLoad) {
       propRpmSeedRef.current = `${catId ?? refId}|${catalogPoint?.key ?? propellerDutyRpmDefault(pr, null).key}`;
       propRpmManualEditRef.current = '';
@@ -1494,8 +1509,10 @@ ${s1Text.tip}` : '';
     if (cooled) updateCool({ propId: null });
   };
   // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
+  // (with a propeller as the load the current is the propeller's, not a setting)
   const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, battery, batteryFromPack(pr.battery),
-    cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined).length === 0)?.key ?? null;
+    cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined,
+    { ignoreCurrent: propLoad }).length === 0)?.key ?? null;
   // the button the state started from - "changed from L12 · rated" names it
   const baseModePreset = modePresets.find((m) => m.config === baseConfig && m.duty === baseMode) ?? null;
   const baseLabel = baseModeLabel(modePresets, baseConfig, baseMode);
@@ -1524,6 +1541,42 @@ ${s1Text.tip}` : '';
                     > 1e-6 * Math.max(1, Math.abs(Number(r0[kk]))));
   })();
   const tuned = modified;
+
+  // ── RELOAD / MOTOR LOAD = ONE CONSISTENT STATE (owner 2026-10-15) ──────────────────────────
+  // The configuration the account has loaded IS the reference: once its machine's context has
+  // answered, the base (configuration + mode) is named from the selection, and a state that holds
+  // another build (the sliders or the reference still on a guess from before the machine arrived)
+  // is replaced by that configuration's whole preset - its pack, point and drive.  Once per load.
+  const loadedSel = restoreMatchesIdentity && lastMotor.status === 'loaded' ? lastMotor.selection : null;
+  useEffect(() => {
+    if (!loadedSel || draftOpen || !ctxDone || !currentContext || !modePresets.length) return;
+    const key = `${refId}|${loadedSel.die}|${loadedSel.config}|${loadedSel.duty ?? ''}`;
+    if (reconciledKey === key) return;
+    const plan = reconcilePlan(modePresets, loadedSel, knobs, refKnobs);
+    if (!plan) return;                       // the selection names no configuration of this machine
+    setReconciledKey(key);
+    if (plan.action === 'apply') { applyPreset(plan.preset); return; }
+    explicitKnobsRef.current = refKnobs;
+    setBaseConfig(plan.preset.config); setBaseMode(plan.preset.duty || null);
+  }, [loadedSel, draftOpen, ctxDone, currentContext, modePresets, refId, refKnobs, knobs, reconciledKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // ... and if the state it restored still does not fit its pack (line voltage above the nominal,
+  // speed above the full-pack maximum) it is not painted red and left: the reference is shown, with
+  // one line saying so.  Checked once, when the load has settled; the user's later tuning is free.
+  const fitCheckedRef = React.useRef('');
+  const loadSettled = reconciledHere && !!basePreset && contextMatchesMotor && propRpmReady
+    && sameBattery(battery, batteryForDisplay(batteryEdit, machinePack))
+    && (!propLoad || (!!propLoadRes && 'I_A' in propLoadRes && Math.abs(propLoadRes.I_A - knobs.I_A) < 1e-3));
+  useEffect(() => {
+    if (!loadSettled || fitCheckedRef.current === reconciledKey) return;
+    fitCheckedRef.current = reconciledKey;
+    const what = restoreMisfit({ lineVpeak: result.Vline_peak_V, packNomV, rpm: knobs.rpm, speedMaxRpm: speedLim.rpm });
+    const target = baseModePreset ?? basePreset;
+    if (!what.length || !target || !modified) return;
+    const shown = { what, line: result.Vline_peak_V, nominal: packNomV, rpm: knobs.rpm, max: speedLim.rpm,
+      mode: baseLabel ?? target.config };
+    applyPreset(target);
+    setRestoreMisfitNote(shown);
+  }, [loadSettled, reconciledKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addConfig = () => {
     const n = configs.filter((c) => c.refId === refId).length + 1;
@@ -1782,6 +1835,17 @@ ${s1Text.tip}` : '';
                 ))}
               </ToggleButtonGroup>
             </Box>
+          )}
+          {restoreMisfitNote && (
+            <Typography sx={{ fontSize: 11, color: '#fbbf24', mt: -0.75, mb: 1 }}
+              title={tx('configure.restoreFallbackTip', { why: [
+                restoreMisfitNote.what.includes('voltage')
+                  ? tx('configure.restoreWhyVoltage', { line: fmt(restoreMisfitNote.line, 1), nominal: fmt(restoreMisfitNote.nominal ?? NaN, 1) }) : '',
+                restoreMisfitNote.what.includes('speed')
+                  ? tx('configure.restoreWhySpeed', { rpm: fmt(restoreMisfitNote.rpm, 0), max: fmt(restoreMisfitNote.max ?? NaN, 0) }) : '',
+              ].filter(Boolean).join('; ') })}>
+              {tx('configure.restoreFallback', { mode: restoreMisfitNote.mode })}
+            </Typography>
           )}
           <Typography sx={{ ...LABEL, color: 'var(--text-4)', mb: 0.75 }}>{tx('configureLimits.build')}</Typography>
           <KnobSlider label={tx('configureLimits.stackLength')} unit="mm" value={knobs.L_mm} base={p.L0_mm} min={ranges.L_mm.min} max={ranges.L_mm.max} step={1} d={0}

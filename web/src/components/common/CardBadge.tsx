@@ -14,25 +14,39 @@ const AMBER = { bgcolor: 'rgba(251,191,36,0.16)', color: '#fbbf24' } as const;
 const CHIP = { height: 18, fontSize: 11, fontWeight: 700, '& .MuiChip-label': { px: 0.75 } } as const;
 
 /** One configuration: a check mark and "card"; the tooltip carries the date. */
-export const CardBadge: React.FC<{ date?: string | null }> = ({ date }) => {
+export const CardBadge: React.FC<{ date?: string | null; olderBuild?: boolean; staleDuties?: readonly string[] }> = ({ date, olderBuild = false, staleDuties = [] }) => {
   const { t } = useTranslation('common');
   if (!date) return null;
+  const title = olderBuild
+    ? t('card.olderBuildTip', { duties: staleDuties.join(', ') || t('card.someDuty') })
+    : (date === '-' ? t('card.tipNoDate') : t('card.tip', { date }));
   return (
-    <Tooltip title={date === '-' ? t('card.tipNoDate') : t('card.tip', { date })}>
-      <Chip size="small" label={`✓ ${t('card.badge')}`} sx={{ ...CHIP, ...GREEN }} />
+    <Tooltip title={title}>
+      <Chip size="small"
+        label={olderBuild ? `${t('card.badge')} \u00b7 ${t('card.olderBuild')}` : `\u2713 ${t('card.badge')}`}
+        sx={{ ...CHIP, ...(olderBuild ? AMBER : GREEN) }} />
     </Tooltip>
   );
 };
-
-/** One die: "n/m cards" - green when every configuration has one, amber when partial. */
-export const CardSummary: React.FC<{ cards: number; total: number }> = ({ cards, total }) => {
+/** One die: completeness and result currency remain separately visible. */
+export const CardSummary: React.FC<{
+  cards: number;
+  total: number;
+  olderBuildConfigs?: readonly string[];
+}> = ({ cards, total, olderBuildConfigs = [] }) => {
   const { t } = useTranslation('common');
   const s = cardSummary(cards, total);
+  const olderBuild = olderBuildConfigs.length > 0;
   if (s.state === 'none') return null;
+  const title = olderBuild
+    ? t('card.summaryOlderBuildTip', { cards, total, configs: olderBuildConfigs.join(', ') })
+    : t('card.summaryTip', { cards, total });
+  const label = `${olderBuild ? '' : '\u2713 '}${t('card.summary', { cards, total })}`
+    + (olderBuild ? ` \u00b7 ${t('card.olderBuild')}` : '');
   return (
-    <Tooltip title={t('card.summaryTip', { cards, total })}>
-      <Chip size="small" label={`✓ ${t('card.summary', { cards, total })}`}
-        sx={{ ...CHIP, ...(s.state === 'all' ? GREEN : AMBER) }} />
+    <Tooltip title={title}>
+      <Chip size="small" label={label}
+        sx={{ ...CHIP, ...(s.state === 'all' && !olderBuild ? GREEN : AMBER) }} />
     </Tooltip>
   );
 };

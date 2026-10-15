@@ -139,5 +139,7 @@
   "assembly_holder_rear": "Holder, rear",
   "assemblyNode_PhaseBoard_FR4": "FR4 board",
   "assemblyNode_PhaseBoard_copper": "Copper layers",
-  "assemblyNode_PhaseBoard_other": "Board, other"
+  "assemblyNode_PhaseBoard_other": "Board, other",
+  "cadDrawer": "CAD parameters",
+  "cadDrawerClose": "Close the parameter panel"
 }

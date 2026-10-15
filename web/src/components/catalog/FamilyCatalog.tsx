@@ -880,17 +880,7 @@ const FamilyCatalog: React.FC<{
                           {cur.duty ? `${cur.duty}: ` : ''}{fmt(cur.power_kw, 2)} kW · {fmt(cur.torque_nm, 2)} Nm · {fmt(cur.mass_kg, 2)} kg{cur.mass_partial ? ` (${tx('massPartialShort')})` : ''}
                         </Typography>
                       </Tooltip>
-                      {cur.duty && (
-                        <Tooltip title={tx('loadDefaultModeTip', { config: cur.config, duty: cur.duty })}>
-                          <span>
-                            <IconButton size="small" disabled={!!busy || loadRunning}
-                              onClick={() => applyDuty(die.name, cur.config, cur.duty!)}
-                              sx={{ fontSize: 13, p: 0.3, color: '#34d399' }}>
-                              {busy === `${cur.config} / ${cur.duty}` ? '\u2026' : '\u25b6'}
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                      )}
+                      {/* no load arrow here (owner 2026-10-15): the configuration buttons load the motor */}
                     </>
                   )}
                   <Button size="small" onClick={() => setOpenDie((m) => ({ ...m, [die.name]: !m[die.name] }))}

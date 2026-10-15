@@ -87,14 +87,17 @@ export function presetDiff(pr: Preset, k: KnobsLike, battery: BatteryCmp | null,
                            presetBattery: BatteryCmp | null,
                            /** the propeller in use and the one this preset opens on — given only for a
                             *  propeller-cooled machine; a different one makes the state "modified" */
-                           prop?: { current: string | null; wanted: string | null }): string[] {
+                           prop?: { current: string | null; wanted: string | null },
+                           /** `ignoreCurrent`: a propeller is the load, so the current FOLLOWS the propeller
+                            *  and is not a setting that can differ from the preset */
+                           opts?: { ignoreCurrent?: boolean }): string[] {
   // the drive is the (transistor, frequency) PAIR: two ids of one pair are the same drive
   const out: string[] = [];
   const p = pr.knobs;
   const diff = (a: number, b: number | null) => b != null && !close(a, b);
   if (diff(k.L_mm, p.L_mm) || diff(k.N, p.N) || diff(k.wireH_mm, p.wireH_mm)
       || diff(k.nP, p.nP) || (p.split != null && diff(k.split ?? 1, p.split))) out.push('build');
-  if (diff(k.I_A, p.I_A)) out.push('current');
+  if (!opts?.ignoreCurrent && diff(k.I_A, p.I_A)) out.push('current');
   if (diff(k.rpm, p.rpm)) out.push('speed');
   if (presetBattery && battery) {
     if (battery.cells !== presetBattery.cells || !close(battery.nom, presetBattery.nom)

@@ -869,6 +869,14 @@ def account_info(authorization: Optional[str], *, ip: str = "",
         try:
             from motor_ai_sim import users as _users
             out["defaultMotor"] = _users.get_default_motor(user["email"])
+            # A default that names a PRIVATE configuration the account holds no
+            # grant for must not announce it (motor_access.may_see_config).
+            dm = out["defaultMotor"]
+            if isinstance(dm, dict):
+                from motor_ai_sim import motor_access as _ma
+                if not _ma.may_see_config(_ma.catalog_access(authorization),
+                                          str(dm.get("die")), str(dm.get("config"))):
+                    out["defaultMotor"] = None
         except Exception:                                   # noqa: BLE001
             out["defaultMotor"] = None
     if det.get("renewedToken"):

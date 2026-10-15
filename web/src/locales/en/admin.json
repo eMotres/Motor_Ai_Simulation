@@ -31,7 +31,16 @@
     "none": "None",
     "cancel": "Cancel",
     "save": "Save",
-    "colDefault": "Default motor"
+    "colDefault": "Default motor",
+    "configsTitle": "Configurations",
+    "configsTip": "A private configuration is hidden from everyone except admins and the accounts you grant it to (Users, Motors). The die and its other configurations stay as they are.",
+    "configPrivate": "Private",
+    "configPrivateTip": "Hide this configuration: it is not listed, counted, opened, downloaded or found by anyone except admins and accounts granted it by name.",
+    "configToggleFailed": "Could not change {config}: {reason}",
+    "grantTitle": "Private configurations",
+    "grantTip": "Private configurations of dies this account can already see. Tick one to let the account open it; admins always see everything.",
+    "grantNowPublic": "now public",
+    "grantUnknown": "not found"
   },
   "analytics": {
     "title": "Analytics",

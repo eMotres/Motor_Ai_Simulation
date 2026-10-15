@@ -111,7 +111,22 @@ _ENTRY_ORDER = _WSP.ws_list("static3d.entry_order")
 
 def _load_presets() -> dict:
     from motor_ai_sim.json_store import read_json
-    return read_json(str(_PRESETS_PATH), {}) or {}
+    presets = read_json(str(_PRESETS_PATH), {}) or {}
+    # A preset that describes a PRIVATE configuration the caller holds no grant for
+    # does not exist for them (routes.catalog.hidden_preset_view); neither does its
+    # name in the "known:" list of the 404 below.
+    try:
+        from motor_ai_sim.motor_access import request_is_bound
+        if request_is_bound():
+            from motor_ai_sim.routes.catalog import hidden_preset_view
+            ids, names = hidden_preset_view(None)
+            if ids or names:
+                presets = {k: v for k, v in presets.items()
+                           if str(k) not in ids
+                           and str((v or {}).get("name") or "").strip().casefold() not in names}
+    except Exception:                                       # noqa: BLE001 - never break the solver on a lookup
+        pass
+    return presets
 
 
 def _preset_geometry(name: str) -> dict:

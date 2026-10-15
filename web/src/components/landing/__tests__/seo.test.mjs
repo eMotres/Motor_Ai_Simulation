@@ -164,3 +164,46 @@ test('nginx serves crawler files as real files and keeps API routes out of index
     assert.ok(m && /X-Robots-Tag "noindex, nofollow"/.test(m[0]), `${loc} needs X-Robots-Tag`);
   }
 });
+
+// ── the static concept diagram (no JavaScript needed) ───────────────────────────
+// A visitor on a slow cross-border link saw the hero text and the step pills but NO
+// diagram until the 1.2 MB bundle ran (owner screenshot, 2026-10-15).  The pre-render now
+// renders the app's own ConceptDiagramView to inline SVG; these checks hold it there.
+const STEP_LABEL_IDS = ['design', 'simulation', 'configure', 'model3d', 'production'];
+const RING_IDS = ['open', 'agents', 'modules', 'compute'];
+
+for (const { name, dist } of targets) {
+  for (const [file, L, lang] of [['index.html', en, 'EN'], [path.join('zh-cn', 'index.html'), zh, 'ZH']]) {
+    test(`${name}: ${lang} page carries the concept diagram as inline SVG, in its own language`, () => {
+      const html = fs.readFileSync(path.join(dist, file), 'utf8');
+      const m = html.match(/<div class="concept" data-testid="concept-diagram">([\s\S]*?)<\/div>\s*<p class="sr-only">/);
+      assert.ok(m, `${file}: no static diagram block`);
+      const block = m[1];
+      assert.match(block, /<svg [^>]*viewBox="0 0 1200 760"[^>]*role="img"/);
+      for (const id of STEP_LABEL_IDS) {
+        assert.ok(block.includes(`>${L.chain[id]}</text>`), `${lang}: step label ${id}`);
+        assert.ok(block.includes(`>${L.concept[id].sub}</text>`), `${lang}: step sub ${id}`);
+      }
+      for (const id of ['idea', 'product']) assert.ok(block.includes(`>${L.chain[id]}</text>`), `${lang}: ${id}`);
+      for (const id of RING_IDS) {
+        assert.ok(block.includes(`>${L.concept[id].title}</text>`), `${lang}: ring ${id}`);
+        assert.ok(block.includes(`>${L.concept[id].sub}</text>`), `${lang}: ring sub ${id}`);
+      }
+      assert.ok(block.includes(`>${L.concept.core}</text>`), `${lang}: core label`);
+      // the motor render is a plain same-origin <img>, and the description stays for bots / readers
+      assert.match(block, /<img src="\/landing\/core-l12\.webp"/);
+      assert.ok(html.includes(`<p class="sr-only">${L.concept.diagramAlt}</p>`), `${lang}: text description`);
+      // the other language's labels are not in this page's diagram
+      const other = L === en ? zh : en;
+      assert.ok(!block.includes(`>${other.chain.design}</text>`), 'wrong-language label');
+    });
+
+    test(`${name}: ${lang} static page is LIGHT unless the visitor chose dark (no prefers-color-scheme flash)`, () => {
+      const html = fs.readFileSync(path.join(dist, file), 'utf8');
+      assert.doesNotMatch(html, /prefers-color-scheme/, 'the static block must not follow the OS scheme');
+      assert.match(html, /#seo-landing\{[^}]*background:#f7f6f3/);
+      assert.match(html, /html\[data-theme="dark"\] #seo-landing\{/);
+      assert.match(html, /<script data-theme-init>[\s\S]*app\.themeMode/);
+    });
+  }
+}

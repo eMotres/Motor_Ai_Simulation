@@ -214,7 +214,7 @@ const PictureCard: React.FC<{ feature: Feature }> = ({ feature }) => {
             than the ratio pushes its box past it. */}
         <Box sx={{ bgcolor: '#ffffff', aspectRatio: '1.25 / 1', p: 0.75, minHeight: 0,
           overflow: 'hidden' }}>
-          <Box component="img" src={feature.src} alt={t(`sim.${feature.key}Alt`)} loading="lazy"
+          <Box component="img" src={feature.src} alt={t(`sim.${feature.key}Alt`)} loading="lazy" decoding="async" fetchPriority="low"
             sx={{ width: '100%', height: '100%', objectFit: 'contain', display: 'block' }} />
         </Box>
         <Typography component="h3" sx={{

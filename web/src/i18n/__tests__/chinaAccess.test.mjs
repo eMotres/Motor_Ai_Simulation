@@ -251,7 +251,7 @@ test('every page ships the same redirect script; the English link keeps the choi
 test('static block: readable colours, scrollable page, Sign in / Request access, slow note', () => {
   for (const loc of LOCALES) {
     const html = renderPage(read(path.join(WEB, 'index.html')), loadLocale(loc.id, WEB), loc);
-    assert.match(html, /#seo-landing\{[^}]*background:#fff;color:#0f172a/, 'explicit dark-on-white pair');
+    assert.match(html, /#seo-landing\{[^}]*background:#f7f6f3;color:#0f172a/, 'explicit dark-on-light pair (the light default)');
     assert.match(html, /html,body,#root\{height:auto;overflow:auto\}/, 'scrolls without the app');
     assert.match(html, new RegExp(`<a href="${loc.path}\\?signin=1">`));
     assert.match(html, new RegExp(`<a class="alt" href="${loc.path}\\?signup=1">`));

@@ -186,3 +186,30 @@ test('nothing is left behind in public/landing', () => {
     assert.ok(named.has(f), `${f} is in public/landing but no card names it`);
   }
 });
+
+/* ── Root: the small landing shell vs the lazy workspace ─────────────────── */
+const { showsLandingShell } = await import('../../../lib/rootGate.ts');
+
+test('Root: a signed-out visitor boots the landing shell, before and after /api/me', () => {
+  assert.equal(showsLandingShell(false, false, false), true, 'before the answer: landing at once');
+  assert.equal(showsLandingShell(false, true, true), true, 'enforced backend: landing stays');
+});
+
+test('Root: a signed-in user and the unenforced dev server get the (lazy) workspace', () => {
+  assert.equal(showsLandingShell(true, false, false), false, 'restored session: no wait');
+  assert.equal(showsLandingShell(true, true, true), false);
+  assert.equal(showsLandingShell(false, true, false), false, 'local dev server');
+});
+
+test('the first-load bundle: main.tsx imports only Root; App and the heavy tabs are lazy', () => {
+  const main = fs.readFileSync(path.join(WEB, 'src', 'main.tsx'), 'utf8');
+  assert.match(main, /from '\.\/Root'/);
+  assert.doesNotMatch(main, /from '\.\/App/);
+  const root = fs.readFileSync(path.join(WEB, 'src', 'Root.tsx'), 'utf8');
+  assert.match(root, /lazy\(\(\) => import\('\.\/App'\)\)/);
+  const shell = fs.readFileSync(path.join(WEB, 'src', 'components', 'landing', 'LandingShell.tsx'), 'utf8');
+  const imports = [...shell.matchAll(/^import[^;]*from '([^']+)'/gm)].map((m) => m[1]).join(' ');
+  for (const heavy of ['three', 'recharts', '@xyflow', 'motorStore', 'AdminPanel', 'MotorScene']) {
+    assert.ok(!imports.includes(heavy), `LandingShell must not import ${heavy}`);
+  }
+});

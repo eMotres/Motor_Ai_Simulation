@@ -116,6 +116,8 @@ const BatteryPanel: React.FC<{
             <stop offset="0%" stopColor="#b45309" /><stop offset="50%" stopColor="#ca8a04" /><stop offset="100%" stopColor="#16a34a" />
           </linearGradient>
         </defs>
+        {/* below empty (0 -> pack min): the range the pack never supplies, own colour (owner 2026-10-15) */}
+        <rect x={X(0)} y={barY} width={Math.max(0, X(packMin) - X(0))} height={barH} rx={3} fill="#64748b" opacity={0.28} stroke="var(--line)" />
         <rect x={X(packMin)} y={barY} width={Math.max(1, X(packMax) - X(packMin))} height={barH} rx={3} fill="url(#batgrad)" opacity={0.55} stroke="var(--line)" />
         {/* nominal tick */}
         <line x1={X(packNom)} y1={barY - 5} x2={X(packNom)} y2={barY + barH + 5} stroke="#22c55e" strokeWidth={1} strokeDasharray="3 2" />

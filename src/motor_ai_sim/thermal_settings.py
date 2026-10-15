@@ -877,6 +877,30 @@ def resolve_motor_settings(options: Mapping[str, Any], base: Mapping[str, Any],
     return {**_account_prefs(base), **cool}, source
 
 
+def solver_effective_cooling(settings: Mapping[str, Any]) -> Dict[str, str]:
+    """``settings`` with every ABSENT cooling field filled by what the solver
+    always took for it (:func:`cooling_fields`: no ``airSpeed`` is 0 m/s, no
+    inlet temperature is the ambient, no frame is housed ...).
+
+    Values the entry holds - blank or zero included - are untouched, so the
+    physics of an old, sparse entry is bit-identical; only the description
+    becomes complete (a browser can adopt it as the motor's own fields without
+    inventing a panel default or keeping another motor's)."""
+    ambient = _num(settings.get("ambientT"), 40.0)
+    fill = {
+        "coolMode": "air", "ambientT": "40", "airSpeed": "0",
+        "airSpeedSource": "manual", "propellerId": "", "propellerContextKey": "",
+        "fluid": "water", "tIn": "%g" % ambient, "hConv": "50", "flowLpm": "8",
+        "boreMode": "none", "boreAirSpeed": "0", "boreFluid": "water",
+        "boreTIn": "%g" % ambient, "boreFlowLpm": "4",
+        "shaftExtMm": "0", "shaftExtSides": "2",
+        "frame": "housed", "openAirSpeed": "0",
+        "emissivity": "0.9", "heatPath": heat_path_of(settings),
+        "endFaces": "still", "endFaceSides": "2",
+    }
+    return {**{k: v for k, v in fill.items() if k not in settings}, **settings}
+
+
 def _fields_of(settings: Mapping[str, Any]) -> Dict[str, str]:
     """The cooling fields as the panel adopts them (strings)."""
     return {k: ("" if settings.get(k) is None else str(settings.get(k)))
@@ -1044,16 +1068,22 @@ def follow_loaded_motor(email: str, selection: Mapping[str, Any],
                 write = (new, source)
             else:
                 patch = motor_cooling_patch(options, cur, key, motor_changed=False)
-                new = {**cur, **patch}
+                # The entry is this motor's own; a sparse (old) one is made
+                # COMPLETE with the solver's own meanings so the browser can adopt
+                # it as the motor's fields (no panel default, no other motor's).
+                full = solver_effective_cooling(cur)
+                new = {**full, **patch}
                 src = "last_used" if legacy_same else (
                     str(entry.get("source") or "") if marker == motor else "")
                 source = src if src in SOURCE_WORDS else "last_used"
-                write = (new, source) if (patch or legacy_same) else None
+                write = (new, source) if (patch or legacy_same or full != cur) else None
             if write is not None:
                 # A newer selection supersedes this follow: never write the
-                # fields of a motor that is no longer the loaded one.
-                _e, l_die, l_cfg, _r = _loaded_motor(authorization)
-                if l_die and (l_die, l_cfg) != (die, config):
+                # fields of a motor (or of a catalogue reference of it, whose
+                # propeller binding differs) that is no longer the loaded one.
+                _e, l_die, l_cfg, l_ref = _loaded_motor(authorization)
+                if l_die and (l_die, l_cfg, l_ref) != (
+                        die, config, str(selection.get("ref_id") or "")):
                     return out
                 if not _write_followed(email, write[0], motor, write[1], app,
                                        expected_rev=rev):

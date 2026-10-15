@@ -200,3 +200,62 @@ export function withoutMotorOwned<T extends Record<string, unknown>>(adopted: T)
   }
   return out as Partial<T>;
 }
+
+// ── a motor's cooling is adopted COMPLETE, from the server, or not at all ────────
+
+/** The fields that make a cooling description complete: every cooling key and the
+ *  source.  A response lacking one leaves it to whatever the browser held before
+ *  (another motor's localStorage snapshot), so it can not establish ownership. */
+export const REQUIRED_COOLING_KEYS: readonly string[] = [...COOLING_FIELD_KEYS, 'airSpeedSource'];
+
+export function isCompleteCooling(fields: Record<string, unknown> | null | undefined): boolean {
+  if (!fields || typeof fields !== 'object') return false;
+  return REQUIRED_COOLING_KEYS.every((k) => typeof fields[k] === 'string');
+}
+
+export interface FollowAdoption extends MotorCooling { motor: MotorIdentity }
+
+/** The cooling to adopt from a `PUT /api/me/last_motor` answer, or `null`.
+ *  It must (1) carry the motor's COMPLETE fields, (2) be an answer for the motor
+ *  that is loaded NOW (a late answer for a previous one is dropped) and (3) be
+ *  wanted (`shouldAdoptMotorCooling`).  Ownership is assigned from these fields
+ *  only - never to browser-local values the answer did not replace. */
+export function followAdoption(
+  answer: unknown, fieldsMotor: MotorIdentity | null | undefined,
+  loaded: MotorIdentity | null | undefined,
+): FollowAdoption | null {
+  const mc = parseMotorCooling(answer);
+  if (!mc || !isCompleteCooling(mc.fields)) return null;
+  const motor = splitMotorKey((answer as { motor?: unknown }).motor);
+  if (!motor || !loaded || !sameMotor(motor, loaded)) return null;
+  if (!shouldAdoptMotorCooling(answer, fieldsMotor, loaded)) return null;
+  return { ...mc, motor };
+}
+
+export interface HydrationInput {
+  settings?: Record<string, unknown> | null;
+  motor?: string | null;
+}
+
+export interface HydrationPlan {
+  /** adopt the server's cooling fields (complete, and bound to a motor) */
+  adoptCooling: boolean;
+  /** the motor those fields belong to - `null` = ownership stays UNVERIFIED */
+  owner: MotorIdentity | null;
+  /** ask the server to resolve the loaded motor's fields (a same-motor follow) */
+  needsResync: boolean;
+}
+
+/** What a settings read establishes.  A failed read, an empty or sparse response,
+ *  or one that names no motor establishes NOTHING: the browser's cooling fields
+ *  stay unverified (a loaded motor's solve is held back) until a motor-specific
+ *  resolution - the follow answer's complete `fields` - replaces them. */
+export function hydrationPlan(
+  srv: HydrationInput | null | undefined, loaded: MotorIdentity | null | undefined,
+): HydrationPlan {
+  const owner = splitMotorKey(srv?.motor);
+  if (srv && owner && isCompleteCooling(srv.settings as Record<string, unknown>)) {
+    return { adoptCooling: true, owner, needsResync: !!loaded && !sameMotor(owner, loaded) };
+  }
+  return { adoptCooling: false, owner: null, needsResync: !!loaded };
+}

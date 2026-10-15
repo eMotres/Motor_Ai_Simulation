@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   adoptableCoolingFields, coolingMismatch, coolingSourceLine, fieldsMode,
-  hydrationIsStale, isCoolingSource, ownershipIssue, parseMotorCooling, sameMotor,
+  followAdoption, hydrationIsStale, hydrationPlan, isCompleteCooling, isCoolingSource, ownershipIssue, parseMotorCooling, sameMotor,
   shouldAdoptMotorCooling, splitMotorKey, withoutMotorOwned,
 } from '../thermalMotorCooling.ts';
 
@@ -138,4 +138,61 @@ test('an unchanged answer still resynchronises a browser that holds the wrong mo
   assert.equal(shouldAdoptMotorCooling({ ...unchanged, changed: true }, L155, L155), true);
   // nothing to adopt without fields
   assert.equal(shouldAdoptMotorCooling({ changed: true, fields: null }, A, L155), false);
+});
+
+// ── third review, T1: ownership only from COMPLETE server fields ────────────────
+
+const COMPLETE = {
+  coolMode: 'air', ambientT: '30', airSpeed: '0', fluid: 'water', tIn: '30', hConv: '50',
+  flowLpm: '8', boreMode: 'none', boreAirSpeed: '0', boreFluid: 'water', boreTIn: '30',
+  boreFlowLpm: '4', shaftExtMm: '0', shaftExtSides: '2', frame: 'housed', openAirSpeed: '0',
+  emissivity: '0.9', heatPath: 'housing', endFaces: 'still', endFaceSides: '2',
+  airSpeedSource: 'manual', propellerId: '', propellerContextKey: '',
+};
+const MKEY = 'CIANO10 200 opt|L155 motor';
+
+test('completeness: every cooling key and the source, as strings', () => {
+  assert.equal(isCompleteCooling(COMPLETE), true);
+  assert.equal(isCompleteCooling({ ...COMPLETE, frame: undefined }), false);
+  assert.equal(isCompleteCooling({ coolMode: 'air', airSpeedSource: 'manual', ambientT: '30' }), false);
+  assert.equal(isCompleteCooling({}), false);
+  assert.equal(isCompleteCooling(null), false);
+});
+
+test('hydration: a sparse, empty, unbound or failed read establishes no ownership', () => {
+  const sparse = { settings: { coolMode: 'air', airSpeedSource: 'manual', ambientT: '30' }, motor: MKEY };
+  const planSparse = hydrationPlan(sparse, L155);
+  assert.deepEqual(planSparse, { adoptCooling: false, owner: null, needsResync: true });
+  // successful but EMPTY while a follow is pending
+  assert.deepEqual(hydrationPlan({ settings: {}, motor: null }, L155),
+    { adoptCooling: false, owner: null, needsResync: true });
+  // complete but naming no motor (an unbound / legacy record)
+  assert.equal(hydrationPlan({ settings: COMPLETE, motor: null }, L155).owner, null);
+  // failed read
+  assert.deepEqual(hydrationPlan(null, L155), { adoptCooling: false, owner: null, needsResync: true });
+  // nothing loaded: nothing to resync
+  assert.equal(hydrationPlan(null, null).needsResync, false);
+});
+
+test('hydration: a complete record bound to a motor is adopted; another motor asks for a resync', () => {
+  const own = hydrationPlan({ settings: COMPLETE, motor: MKEY }, L155);
+  assert.deepEqual(own, { adoptCooling: true, owner: L155, needsResync: false });
+  const other = hydrationPlan({ settings: COMPLETE, motor: 'CIANO14 40 new|L12' }, L155);
+  assert.equal(other.adoptCooling, true);
+  assert.equal(other.needsResync, true);
+});
+
+test('follow: only a complete answer for the loaded motor is adopted, with ownership from it', () => {
+  const answer = { motor: MKEY, motor_changed: false, changed: false, fields: COMPLETE, source: 'last_used' };
+  const got = followAdoption(answer, A, L155);          // the browser held A's fields
+  assert.deepEqual(got.motor, L155);
+  assert.equal(got.fields.airSpeed, '0');               // the server's, not the browser's
+  // an incomplete answer never establishes ownership
+  const partial = { ...answer, fields: { coolMode: 'air', airSpeedSource: 'manual' } };
+  assert.equal(followAdoption(partial, A, L155), null);
+  // a late answer for the motor that is no longer loaded is dropped
+  assert.equal(followAdoption({ ...answer, motor: 'CIANO14 40 new|L12' }, A, L155), null);
+  assert.equal(followAdoption({ ...answer, motor: undefined }, A, L155), null);
+  // already owned and unchanged: keep the user's typing
+  assert.equal(followAdoption(answer, L155, L155), null);
 });

@@ -30,8 +30,8 @@ import { normalizeLocalRows } from '../components/compare/resultRows';
 import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
 import {
-  adoptableCoolingFields, hydrationIsStale, isCoolingSource, ownershipIssue,
-  parseMotorCooling, shouldAdoptMotorCooling, splitMotorKey, withoutMotorOwned,
+  adoptableCoolingFields, followAdoption, hydrationIsStale, hydrationPlan,
+  isCoolingSource, ownershipIssue, withoutMotorOwned,
 } from '../lib/thermalMotorCooling';
 import type { CoolingSource, MotorIdentity } from '../lib/thermalMotorCooling';
 // `registerThermalPanelBlock` — the Electromagnetic tab's OWN coupled Run
@@ -55,6 +55,7 @@ import { tileFullRing } from '../components/thermal/types';
 import { readMeshSettings } from '../components/common/motorSettings';
 import {
   configureRefIdForSelection, getLastMotorState, isCurrentLastMotorUser, registerThermalFollow,
+  rememberLastMotor,
 } from '../lib/lastMotor';
 import {
   PROP_CHOICE_LS, coolChoiceKey, propellerContextKey, readCoolChoice,
@@ -807,7 +808,12 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // flight) keeps only the account-level fields: its cooling is the previous
       // motor's and must not be reinstalled over the new one's.
       const stale = hydrationIsStale(epoch0, followEpoch, motor0, loadedMotorIdentity());
-      const toSet = stale ? withoutMotorOwned(adopted) : adopted;
+      // What the read ESTABLISHES (`hydrationPlan`): only a complete cooling bound
+      // to a motor is adopted; a sparse / empty / unbound response keeps the
+      // browser's fields UNVERIFIED and leaves the resolution to the server's
+      // follow answer (below) - never to values localStorage kept from another motor.
+      const plan = hydrationPlan(srv, loadedMotorIdentity());
+      const toSet = (stale || !plan.adoptCooling) ? withoutMotorOwned(adopted) : adopted;
       if (Object.keys(toSet).length) set(toSet as Partial<ThermalState>);
       // WHICH MOTOR these fields are for (2026-10-15) - the server says; a
       // record from before per-motor settings names none, and the loaded motor
@@ -815,14 +821,14 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       // loaded motor is refused until the fields are that motor's (`ownershipIssue`).
       // A FAILED settings fetch (`srv` null) assigns no identity: the fields stay
       // unverified and a loaded motor's solve is held back (`ownershipIssue`).
-      if (!stale && srv) {
-        const motor = splitMotorKey(srv.motor) ?? loadedMotorIdentity();
+      if (!stale && srv && plan.owner) {
         set({
-          fieldsMotor: motor,
-          coolingSource: isCoolingSource(srv?.source) ? (srv?.source as CoolingSource) : (motor ? 'last_used' : null),
-          coolingApp: srv?.application ?? null,
+          fieldsMotor: plan.owner,
+          coolingSource: isCoolingSource(srv.source) ? (srv.source as CoolingSource) : 'last_used',
+          coolingApp: srv.application ?? null,
         });
       }
+      if (!stale && plan.needsResync) void resyncLoadedMotorCooling();
     } catch { /* offline: localStorage already seeded the state */ }
     set({ serverSettingsLoaded: true });
     try {
@@ -1017,7 +1023,7 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
    never sends the previous motor's propeller source: a robot motor gets
    Robotics, a propeller motor its propeller with a fresh key.  A store that has
    not hydrated yet reads the already-followed server copy when it does. */
-registerThermalFollow((answer) => {
+function adoptFollowAnswer(answer: unknown): void {
   const st = useThermalStore.getState();
   if (!st.hydrated) return;
   const motor = getLastMotorState();
@@ -1035,15 +1041,13 @@ registerThermalFollow((answer) => {
   // Thermal record, with the frame and the bore reset instead of inherited.
   // Adopt them as they are and do NOT save them back: a default must not turn
   // into "your saved settings" just because it was shown.
-  const mc = shouldAdoptMotorCooling(answer, st.fieldsMotor, loadedMotorIdentity())
-    ? parseMotorCooling(answer) : null;
+  const mc = followAdoption(answer, st.fieldsMotor, loadedMotorIdentity());
   if (mc) {
     followEpoch += 1;
     const f = adoptableCoolingFields(mc.fields);
     const next: Partial<ThermalState> = {
       ...(f as unknown as Partial<ThermalState>),
-      fieldsMotor: motor.status === 'loaded' && motor.selection
-        ? { die: motor.selection.die, config: motor.selection.config } : st.fieldsMotor,
+      fieldsMotor: mc.motor,
       coolingSource: mc.source,
       coolingApp: mc.application,
     };
@@ -1068,17 +1072,34 @@ registerThermalFollow((answer) => {
     }
     return;
   }
+  // An answer that carries fields but was not adopted (already owned, incomplete,
+  // or for another motor) is not a reason to run the old key-by-key path.
+  if ((answer as { fields?: unknown } | null)?.fields) return;
   const f = thermalFollowFields(answer, remembered);
   if (!f) return;
   useThermalStore.setState({ coolMode: f.coolMode as CoolMode });
   writeTherm('coolMode', f.coolMode);
   // One write carries the new mode, source and propeller to the server copy.
   st.setPropellerCooling(f.airSpeedSource, f.propellerId, f.propellerContextKey);
-});
+}
+registerThermalFollow(adoptFollowAnswer);
 
 /** The motor the account has loaded, as the cooling record names it. */
 function loadedMotorIdentity(): MotorIdentity | null {
   const m = getLastMotorState();
   return m.status === 'loaded' && m.selection
     ? { die: m.selection.die, config: m.selection.config } : null;
+}
+
+/** Ask the server to resolve the loaded motor's cooling and adopt its COMPLETE
+ *  answer - the recovery of a hydration that could not establish ownership (a
+ *  failed, empty, sparse or unbound read) or of a follow answer that was lost.
+ *  The same selection again is idempotent on the server. */
+async function resyncLoadedMotorCooling(): Promise<void> {
+  const m = getLastMotorState();
+  if (m.status !== 'loaded' || !m.email || !m.selection) return;
+  try {
+    const answer = await rememberLastMotor(m.email, m.selection);
+    adoptFollowAnswer(answer);
+  } catch { /* stays unverified: the solve is held back, the backend resolves */ }
 }

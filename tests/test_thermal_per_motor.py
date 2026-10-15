@@ -685,8 +685,13 @@ def test_r4_an_unchanged_sparse_legacy_entry_keeps_its_effective_cooling(world):
     # the same machine reloaded (the legacy claim) does not materialise defaults
     out = _load(world, PROP, PROP)
     assert out["motor_changed"] is False
-    assert {k: v for k, v in _stored().items()} == legacy_air
-    assert ts.motor_thermal_settings(None)[0] == legacy_air
+    # the entry is now DESCRIBED completely (with the solver's own meanings for
+    # what it lacked) and the physics is bit-identical
+    assert set(ts.COOLING_KEYS) <= set(_stored())
+    assert {k: _stored()[k] for k in legacy_air} == legacy_air
+    assert ts.cooling_fields(_stored()) == ts.cooling_fields(legacy_air)
+    assert ts.cooling_fields(ts.motor_thermal_settings(None)[0]) == ts.cooling_fields(legacy_air)
+    assert out["fields"] == ts._fields_of(_stored()) and set(out["fields"]) == set(ts.COOLING_KEYS)
     legacy_liquid = {"coolMode": "liquid", "ambientT": "30", "flowLpm": "5"}
     _seed(legacy_liquid)
     s, _info = ts.motor_thermal_settings(None)
@@ -730,3 +735,56 @@ def test_r6_controller_preview_keeps_the_requested_motor_without_a_duty(world):
     own = rc.get_thermal_cooling(die=None, config=None, duty=None, authorization=None)
     assert (own["die"], own["config"], own["duty"]) == ("CIANO10 200 opt", "L155 motor", "rated")
     assert own["modes"]["liquid"]["fields"]["t_in_c"] == 60.0
+
+
+# ═══ third review of PR #218 (de6561d9) ═══════════════════════════════════════════
+
+def test_t1_a_sparse_legacy_entry_is_answered_complete_with_the_solvers_meanings(world):
+    """T1 (server half): the follow answer for a sparse legacy motor carries EVERY
+    cooling key, with the solver's old meaning for each absent one - the browser
+    adopts these, never its own localStorage values."""
+    legacy = {"coolMode": "air", "airSpeedSource": "manual", "ambientT": "30"}
+    _seed(legacy)
+    world["selection"] = dict(L155)
+    out = _load(world, L155, L155)
+    f = out["fields"]
+    assert set(f) == set(ts.COOLING_KEYS)
+    assert (f["airSpeed"], f["frame"], f["boreMode"], f["boreAirSpeed"]) == ("0", "housed", "none", "0")
+    assert f["tIn"] == "30" and f["boreTIn"] == "30"           # the ambient, as the mapper did
+    assert ts.cooling_fields(f) == ts.cooling_fields(legacy)
+    # a sparse GET response is exactly what the browser must NOT trust
+    from motor_ai_sim.routes import panel_settings as ps
+    sparse = {"coolMode": "air", "airSpeedSource": "manual", "ambientT": "30"}
+    _seed(sparse)
+    assert set(ps.get_panel_settings(panel="thermal", authorization=None)["settings"])         < set(ts.COOLING_KEYS)
+
+
+def test_t2_an_older_reference_load_cannot_revive_its_propeller_binding(world, monkeypatch):
+    """T2: the follow for reference R1 pauses; R2 of the SAME die/config is loaded and
+    its follow finishes; R1 resumes - it must write nothing."""
+    from motor_ai_sim.routes import panel_settings as ps
+    r1, r2 = {**PROP, "ref_id": "R1"}, {**PROP, "ref_id": "R2"}
+    key1 = "%s|CIANO14 40 new|L12|R1" % EMAIL
+    key2 = "%s|CIANO14 40 new|L12|R2" % EMAIL
+    world["selection"] = dict(r1)
+    _user_saves({**FORTY_MM, "propellerId": "fpv_10x5", "propellerContextKey": key1,
+                 "boreAirSpeed": "5"}, MOTOR_PROP)
+    _load(world, r1, ROBOT)                                  # ROBOT active; the PROP record exists
+
+    real = ts.resolve_motor_settings
+    calls = {"n": 0}
+
+    def interleaved(*a, **kw):
+        calls["n"] += 1
+        if calls["n"] == 1:                                  # the newer load runs to completion
+            world["selection"] = dict(r2)
+            ts.follow_loaded_motor(EMAIL, r2, r1)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ts, "resolve_motor_settings", interleaved)
+    world["selection"] = dict(r1)
+    old = ts.follow_loaded_motor(EMAIL, r1, ROBOT)
+    assert old["fields"] is None                             # superseded: no answer, no write
+    assert _stored()["propellerContextKey"] == key2
+    entry = ps._load()["thermal"][EMAIL]
+    assert entry["by_motor"][MOTOR_PROP]["settings"]["propellerContextKey"] == key2

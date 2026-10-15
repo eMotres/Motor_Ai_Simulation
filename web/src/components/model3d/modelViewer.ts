@@ -5,15 +5,21 @@
 // group per part with `extras` {family, explode} (cad/fc_scripts/glb_writer.py); the viewer never shows more than the file
 // contains - what a caller may see is decided on the server.
 import {
-  AmbientLight, Box3, BufferGeometry, Color, DirectionalLight, DoubleSide, Float32BufferAttribute, Group,
-  HemisphereLight, Line, LineBasicMaterial, Material, Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, Plane,
-  Raycaster, Scene, SphereGeometry, Vector2, Vector3, WebGLRenderer,
+  AmbientLight, Box3, BufferGeometry, Color, DataTexture, DirectionalLight, DoubleSide, Float32BufferAttribute, Group,
+  HemisphereLight, Line, LineBasicMaterial, LinearMipmapLinearFilter, LinearFilter, Material, Mesh, MeshBasicMaterial,
+  MeshStandardMaterial, Object3D, PerspectiveCamera, Plane, Raycaster, RepeatWrapping, RGBAFormat, Scene, SphereGeometry,
+  UnsignedByteType, Vector2, Vector3, WebGLRenderer,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
   distance, explodeShift, sectionPlane, sectionRange, type Axis, type Box, type PartGroup, type Vec3,
 } from '../../lib/model3d';
+import {
+  buildThreadNormalMap, normalScaleFor, parseThread, resolveAxis, threadLabel, threadUVs, type ThreadInfo,
+} from '../../lib/threadTexture';
+
+const THREAD_MAP_SIZE = 128;
 
 export interface ViewerState {
   hidden: ReadonlySet<string>;
@@ -24,6 +30,8 @@ export interface ViewerState {
   explode: number;             // 0..1
   section: { on: boolean; axis: Axis; position: number };
   measure: boolean;
+  /** show part hints (the thread size under the pointer); the NDA view only */
+  hints?: boolean;
 }
 
 export class ModelViewer {
@@ -41,6 +49,10 @@ export class ModelViewer {
   private dirty = true;
   private ro: ResizeObserver;
   private disposed = false;
+  private threadMap: DataTexture | null = null;       // ONE shared normal map for every thread of the model
+  private threadMeshes: Array<{ mesh: Mesh; info: ThreadInfo }> = [];
+  private hints = false;
+  private hoverText = '';
   private down = new Vector2();
   box: Box = { min: [-1, -1, -1], max: [1, 1, 1] };
   motorLength = 12;
@@ -68,6 +80,7 @@ export class ModelViewer {
     const el = this.renderer.domElement;
     el.addEventListener('pointerdown', (e) => this.down.set(e.clientX, e.clientY));
     el.addEventListener('pointerup', (e) => this.onPointerUp(e));
+    el.addEventListener('pointermove', (e) => this.onPointerMove(e));
     el.addEventListener('webglcontextlost', (e) => { e.preventDefault(); this.onContextLost(); });
     el.addEventListener('webglcontextrestored', () => this.invalidate());
     this.ro = new ResizeObserver(() => this.resize());
@@ -89,6 +102,7 @@ export class ModelViewer {
       const ex = (node.userData ?? {}) as { family?: string; explode?: number };
       this.groups.push({ node, part: { name: node.name, family: ex.family ?? node.name, explode: Number(ex.explode ?? 0) } });
     }
+    this.applyThreads(this.root);
     this.root.traverse((o) => {
       const m = o as Mesh;
       if (m.isMesh) {
@@ -118,7 +132,65 @@ export class ModelViewer {
     }
     this.root = null;
     this.groups = [];
+    this.threadMeshes = [];
     this.clearMarks();
+  }
+
+  // ---------------------------------------------------------------- threads
+
+  /** Meshes whose node carries `extras.thread` (cad/fc_scripts/threads.py) get cylindrical texture coordinates along the thread
+   *  axis and the shared helical normal map; the colour and the other material settings stay those of the file.  A GLB without
+   *  the extras renders exactly as before. */
+  private applyThreads(root: Object3D): void {
+    this.threadMeshes = [];
+    root.traverse((o) => {
+      const m = o as Mesh;
+      if (!m.isMesh || m.userData?.thread === undefined) return;
+      const info = parseThread(m.userData);
+      const base = Array.isArray(m.material) ? m.material[0] : m.material;
+      if (!info || !(base as MeshStandardMaterial).isMeshStandardMaterial) return;
+      const flat = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry;
+      const pos = flat.getAttribute('position');
+      if (!pos || pos.count % 3 !== 0) return;
+      const { axis, origin } = resolveAxis(info, pos.array);
+      flat.setAttribute('uv', new Float32BufferAttribute(threadUVs(pos.array, axis, origin, info.pitch_mm, info.hand), 2));
+      if (flat !== m.geometry) m.geometry.dispose();
+      m.geometry = flat;
+      if (!this.threadMap) {
+        const t = new DataTexture(buildThreadNormalMap(THREAD_MAP_SIZE), THREAD_MAP_SIZE, THREAD_MAP_SIZE, RGBAFormat, UnsignedByteType);
+        t.wrapS = t.wrapT = RepeatWrapping;
+        t.magFilter = LinearFilter;
+        t.minFilter = LinearMipmapLinearFilter;
+        t.generateMipmaps = true;
+        t.anisotropy = Math.min(8, this.renderer.capabilities.getMaxAnisotropy());
+        t.needsUpdate = true;
+        this.threadMap = t;
+      }
+      const mat = (base as MeshStandardMaterial).clone();
+      mat.normalMap = this.threadMap;
+      const r = info.radius_mm ?? info.d_mm / 2;
+      const [sx, sy] = normalScaleFor(r, info.pitch_mm, info.hand);
+      mat.normalScale.set(sx, sy);
+      m.material = mat;
+      this.threadMeshes.push({ mesh: m, info });
+    });
+  }
+
+  private onPointerMove(e: PointerEvent): void {
+    if (!this.hints || !this.threadMeshes.length || e.buttons) return;
+    const r = this.renderer.domElement.getBoundingClientRect();
+    this.ray.setFromCamera(new Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), this.camera);
+    const hits = this.ray.intersectObjects(this.threadMeshes.map((t) => t.mesh), false).filter((h) => {
+      let o: Object3D | null = h.object;
+      while (o) { if (!o.visible) return false; o = o.parent; }
+      return this.plane.distanceToPoint(h.point) >= 0 || this.plane.constant > 1e8;
+    });
+    const hit = hits.length ? this.threadMeshes.find((t) => t.mesh === hits[0].object) : undefined;
+    const text = hit ? threadLabel(hit.info) : '';
+    if (text !== this.hoverText) {
+      this.hoverText = text;
+      if (text) this.renderer.domElement.title = text; else this.renderer.domElement.removeAttribute('title');
+    }
   }
 
   // ---------------------------------------------------------------- state
@@ -134,6 +206,8 @@ export class ModelViewer {
     this.plane.constant = s.section.on ? p.constant : 1e9;      // a plane far outside the model clips nothing
     if (!s.measure) this.clearMarks();
     this.measuring = s.measure;
+    this.hints = !!s.hints;
+    if (!this.hints && this.hoverText) { this.hoverText = ''; this.renderer.domElement.removeAttribute('title'); }
     this.invalidate();
   }
 
@@ -253,6 +327,8 @@ export class ModelViewer {
     this.ro.disconnect();
     this.controls.dispose();
     this.clear();
+    this.threadMap?.dispose();
+    this.threadMap = null;
     this.renderer.dispose();
     this.renderer.forceContextLoss();
     this.renderer.domElement.remove();

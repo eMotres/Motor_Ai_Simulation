@@ -16,6 +16,7 @@ import csv
 import datetime
 import json
 import math
+import os
 import re
 
 TEMPLATE = "bom/1"
@@ -50,6 +51,21 @@ def is_frameless(dump, inputs):
 
 
 # ------------------------------------------------------------------------------------------------------ helpers
+def thread_name(kind, radius_mm):
+    """ISO 261 coarse designation of a smooth cylinder that carries a thread ("M2x0.4"), '' when it matches no size or the table
+    (cad/fc_scripts/threads.py, the one the 3D-viewer export uses) is not in this image."""
+    try:
+        import importlib.util
+        from . import store
+        spec = importlib.util.spec_from_file_location("_motor_threads", os.path.join(store.CAD_DIR, "fc_scripts", "threads.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        t = mod.thread_for(kind, radius_mm)
+        return mod.designation(*t) if t else ""
+    except Exception:
+        return ""
+
+
 def _r(x, n=3):
     return None if x is None else round(float(x), n)
 
@@ -298,7 +314,8 @@ def build_bom(dump, inputs):
             rho, rs = density_of(mat, inputs)
             add(key, title, "manufactured", 1, "pcs", mat, "envelope %.1f x %.1f x %.1f mm, volume %.1f mm3, %d spokes, M%g %s" % (
                 w, h, ln, e["volume"], round(m.p("holder_bolt_count")), m.p("bolt_d"),
-                "clearance holes" if key == "holder_front" else "tapped holes %.3f mm (minor)" % m.p("holder_tap_d")),
+                "clearance holes" if key == "holder_front" else "tapped holes %.3f mm (minor)%s" % (
+                    m.p("holder_tap_d"), (", thread " + tn + " (ISO 261)") if (tn := thread_name("internal", m.p("holder_tap_d") / 2)) else "")),
                 e["volume"] * rho * 1e-6, "model", "density %.0f (%s); machining, anodising / finish: to be specified" % (rho, rs),
                 tbs_text="finish (anodising) and tolerances of the holder")
     ring = m.get("Ring")
@@ -373,8 +390,9 @@ def build_bom(dump, inputs):
                     "the tap depth); next longer %s x %d protrudes %.1f mm past the back holder face - check clearance. "
                     "Proposed: %s x %d. " % (ln, sz, stock, stock - ln, ln - stock if stock < ln else 0.0, sz, hi, hi - ln, sz, stock)) + note
         add("screws", "Screw %s x %s socket head cap%s" % (sz, _num(ln, 1), " (NON-STOCK length)" if flag else ""), "purchased",
-            scr_i["n_solids"], "pcs", mat, "%s x %s mm, head Ø%.1f x %.1f, one per holder spoke on the bolt circle R%.2f" % (
-                sz, _num(ln, 1), m.p("screw_head_d"), m.p("screw_head_h"), m.p("holder_bolt_r")),
+            scr_i["n_solids"], "pcs", mat, "%s x %s mm%s, head Ø%.1f x %.1f, one per holder spoke on the bolt circle R%.2f" % (
+                sz, _num(ln, 1), (", thread " + tn + " (ISO 261)") if (tn := thread_name("external", m.p("screw_shank_d" if "screw_shank_d" in m.params else "bolt_d") / 2)) else "",
+                m.p("screw_head_d"), m.p("screw_head_h"), m.p("holder_bolt_r")),
             one * rho * 1e-6, "ISO 4762 / DIN 912, A2-70", note,
             tbs_text=("screw length %s mm is not a stock length - choose %s x %d (or x %d)" % (_num(ln, 1), sz, stock, nearest_m2_stock(ln + 3)))
             if flag else None)

@@ -94,12 +94,13 @@ t('with NDA (and owner): the full panel plus the download, no sign note or butto
 
 t('the scene gets the plain model without NDA, whatever tool state is left over (a revoked NDA resets at once)', () => {
   const s = { hidden: new Set(['Coils']), explode: 0.7, section: { on: true, axis: 'y', position: 3 }, measure: true };
-  assert.deepEqual(L.effectiveSettings(true, s), s);
+  assert.deepEqual(L.effectiveSettings(true, s), { ...s, hints: true });
   const plain = L.effectiveSettings(false, s);
   assert.equal(plain.hidden.size, 0);
   assert.equal(plain.explode, 0);
   assert.equal(plain.section.on, false);
   assert.equal(plain.measure, false);
+  assert.equal(plain.hints, false);
   assert.deepEqual(s.hidden, new Set(['Coils']));                       // the input is not mutated
 });
 

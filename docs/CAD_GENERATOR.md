@@ -126,8 +126,13 @@ Axial parameters (Fusion Sketch3 dimension names, not renamed; owner to confirm 
 
 Not dimensioned in Fusion (Sketch2 is not fully constrained), read as 14.843191 / 1.460021 and rounded by the owner
 2026-10-13 (Fusion not dimensioned): `holder_bolt_r` 14.85, `holder_window_r` 1.46.  Fusion's Chamfer7 at the journal end chamfers one of the two arcs left by the flats (edge picked after
-Extrude15); the template chamfers both.  Screw length: `holder_screw_req = 2 holder_face_z + holder_flange_t` (L20 25, L12 17), `holder_screw_l` = that rounded UP to
-a stock M2 length (even mm up to 20, then 25, 30, ...; owner 2026-10-13: L12 M2x18, L20 M2x25 = 91292A032).  `fit()` writes
+Extrude15); the template chamfers both.  Screw length: `holder_screw_req = 2 holder_face_z + holder_flange_t` (L20 25, L12 17), `holder_screw_l` = the LONGEST stock length (even mm up to 20, then 22, 25, 30, ...; M2 and M2.5 alike) that keeps the tip `screw_tip_margin`
+(0.2 mm, as the L12 M2x18 has) inside the back flange outer face: `holder_screw_max = 2 holder_flange_z [+ holder_rib_h on the 85] - screw_tip_margin`
+(template A.6.1, 2026-10-15; before, the length was the next stock length above `holder_screw_req`, which broke through the flange on the 85 L15:
+25 instead of 22).  L12 M2x18, L20 M2x25, 85 L13 M2.5x20 are unchanged (profile values identical), 85 L15 (15 mm stack) gets M2.5x22, L12 with a 16 mm
+stack M2x22.  When no stock length lies between `holder_screw_req` and the tip limit the pre-check refuses in words (e.g. 40 mm die, 22 mm stack: needs 27, the
+longest that fits is 25).  The thread engagement stays REPORTED against 1.5 x bolt_d (L20's 2.9 mm is below it as built).  The BOM row names the chosen
+length and checks it against the stock list (22 is a catalogue size).  `fit()` writes
 `screw_check` to `build_report.json` (tip z, margin to the back flange outer face - the tip must stay inside the flange, else
 the build is refused - and the thread engagement in the back holder, reported against 1.5 x bolt_d).
 Coil straight length (owner 2026-10-13): `coil_straight_len = motor_length + 1 mm` (L12 13, L20 21; each stack length has its
@@ -152,8 +157,9 @@ Stator_holder_back touches HS_PLATE on A_H, no mechanical overlap.  Owner edits 
 `ring_h` 2 + `ring_holder_gap` 0.2 rebuild and pass the gate and the fit; `holder_bolt_r` 18 and `shaft_height` 0.5 are
 refused in words.  L12 with `motor_length` 24 builds (re-tested 2026-10-13 on the A.4.0 image and on the stock-screw image, with
 the old and the new coil straight rule: the old "13 solids" refusal no longer reproduces).  With the stock-rounded screw
-(2026-10-13) L12 -> 16 is refused in words: the required 21 mm rounds up to M2 x 25 and its tip would break through the back
-flange (no stock M2 length fits); 17 -> 18, 25 -> 25, 29 -> 30 do fit.
+(2026-10-13) L12 -> 16 was refused (the required 21 mm rounded up to M2 x 25, whose tip broke through the back flange); since A.6.1 the screw
+follows the stack and L12 -> 16 builds with M2 x 22 (17 -> 18, 25 -> 25, 29 -> 30 unchanged); a stack with no stock length between the clamp length and the
+tip limit (40 mm die: 22 mm) is still refused in words.
 
 Updating the owner repo (`CIANO14_40_motor_model`): motor_ai_sim's `cad/` is the one source.  `tools/update_from_motor_ai_sim.py`
 there copies `cad/motor_templates/segmented_flatwire/`, `cad/reference/` and the fc scripts from a motor_ai_sim checkout

@@ -280,7 +280,7 @@ t('the panel: ONE temperature row in every cooling mode, the still-air estimate 
   assert.doesNotMatch(panel, /ConfiguratorThermal/);                                                              // the separate block is gone
   assert.match(panel, /\{ctxDone && \(\s*<Box sx=\{\{ display: 'flex', gap: 0\.75, flexWrap: 'wrap' \}\}>\s*\{tempTiles\.map\(renderTemp\)\}/);   // every mode, not propeller-only
   assert.equal((panel.match(/tempTiles\.map\(renderTemp\)/g) || []).length, 1);                              // exactly one row
-  assert.match(panel, /if \(optionalPropellerCooling\) return \{ h_Wm2K: airH\(0, D\)/);                       // still air (Robotics) at the natural-convection floor
+  assert.match(panel, /if \(optionalPropellerCooling \|\| roboticsOnly\) return \{ h_Wm2K: airH\(0, D\)/);                       // still air (Robotics) at the natural-convection floor
   assert.match(panel, /<CoolingControls diameterMm=/);                                                         // the cooling basis inputs moved into Operating point
   assert.match(panel, /const propLoad = propellerCoolingActive &&/);                                             // the propeller is the load whenever its cooling is active
   assert.match(panel, /currentForTorque\(propPoint\?\.torque_Nm \?\? null, torqueAtI\(knobs\), ranges\.I_A\.max\)/);
@@ -343,7 +343,8 @@ t('Thermal follows the loaded motor: robot gets Robotics, a propeller motor its 
 
 t('the Thermal store adopts the motor-load answer in one write and only when hydrated', () => {
   const store = readFileSync(join(HERE, '..', '..', 'stores', 'thermalStore.ts'), 'utf8');
-  assert.match(store, /registerThermalFollow\(\(answer\) => \{[\s\S]*?if \(!st\.hydrated\) return;/);
+  assert.match(store, /function adoptFollowAnswer\(answer: unknown\): void \{[\s\S]*?if \(!st\.hydrated\) return;/);
+  assert.match(store, /registerThermalFollow\(adoptFollowAnswer\)/);
   assert.match(store, /thermalFollowFields\(answer, remembered\)/);
   assert.match(store, /st\.setPropellerCooling\(f\.airSpeedSource, f\.propellerId, f\.propellerContextKey\)/);
 });

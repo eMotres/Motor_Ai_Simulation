@@ -169,6 +169,15 @@ const LoginDialog: React.FC<Props> = ({ open, onClose, onSignedIn, initialMode, 
         }
         setGisState('ready');
         try { gis.prompt?.(); } catch { /* One Tap is optional */ }
+        // Google's renderButton can fail silently (blocked iframe, origin, FedCM): an empty box would leave
+        // NO way in (ours is hidden once 'ready').  If nothing was drawn, say so and offer e-mail (owner 2026-10-15).
+        window.setTimeout(() => {
+          const box = gButtonRef.current;
+          if (box && !box.querySelector('iframe, [role="button"]') && box.getBoundingClientRect().height < 10) {
+            setGisState('unreachable');
+            setGisErr(t('auth.gisUnreachable'));
+          }
+        }, 2500);
       })
       .catch((e: Error) => {
         setGisState('unreachable');

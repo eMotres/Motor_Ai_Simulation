@@ -39,7 +39,6 @@ import { referenceOfDefault } from '../../lib/accessUi';
 import { readConfigureRefId, writeConfigureRefId, isOwnChoice } from './configureChoice';
 import { useLastMotorState } from '../../lib/lastMotor';
 import { getStoredUser } from '../../lib/localAuth';
-import { CardBadge } from '../common/CardBadge';
 import PerformanceCharts from './PerformanceCharts';
 import PropellerCurves from './PropellerCurves';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
@@ -1789,7 +1788,7 @@ const ConfiguratorPanel: React.FC = () => {
                     title={tx('configure.presetTip')}
                     sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)',
                       '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
-                    {pr.label}{pr.card_date && <Box component="span" sx={{ ml: 0.75 }}><CardBadge date={pr.card_date} /></Box>}
+                    {pr.label}
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>

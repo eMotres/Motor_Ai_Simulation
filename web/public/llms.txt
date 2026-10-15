@@ -25,4 +25,4 @@ The platform covers five steps: design (motor geometry for your task), simulatio
 ## Access and contact
 
 - Anyone can sign in with Google on https://aerostator.com/ and pick a motor in Configure.
-- To ask for the engineer role (run your own simulations), a manufacturing licence, or to ask anything else: vadim@motresres.com
+- To ask for the engineer role (run your own simulations), a manufacturing licence, or to ask anything else: support@aerostator.com

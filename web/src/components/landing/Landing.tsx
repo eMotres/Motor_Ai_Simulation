@@ -45,7 +45,7 @@ import { BoatIcon, DroneIcon, PlusIcon, RobotIcon } from './landingIcons';
 import { APP_IDS, CHAIN_IDS, DEV_LINKS, OPEN_IDS } from './landingLinks';
 
 /** Where a visitor without an account writes. */
-export const REQUEST_ACCESS_EMAIL = 'vadim@motresres.com';
+export const REQUEST_ACCESS_EMAIL = 'support@aerostator.com';
 
 /** The company line and the shop, in the footer. */
 export const COMPANY = 'MOTRES d.o.o.';

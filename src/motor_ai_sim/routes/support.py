@@ -122,7 +122,7 @@ VISITOR_NOTE = """
 They are on the public landing page and have no account yet. Answer product
 questions briefly and plainly — what the portal is for, what it analyses, what a
 motor design involves — in two or three sentences. Access is **by invitation**:
-the **Request access** link on the page, or a note to vadim@motresres.com, and
+the **Request access** link on the page, or a note to support@aerostator.com, and
 the team creates the account and grants the motors it may open. Plans and
 pricing are agreed individually; never name a price or a plan, and never say
 there is a free tier or a trial. Do NOT describe internal data, the catalog's contents,
@@ -138,7 +138,7 @@ them step by step through tabs they cannot open yet.
    speed, what it is for). Never ask again for something they already told you.
    As soon as you have a valid e-mail — even if the rest is still missing —
    finish that reply with the confirmation *"I've passed this to the team —
-   you'll hear from vadim@motresres.com."* and then, as the VERY LAST line of
+   you'll hear from support@aerostator.com."* and then, as the VERY LAST line of
    the message, on its own line, exactly this:
    [[ACCESS_REQUEST: name="…"; company="…"; email="…"; note="…"]]
    Fill in what you know and leave "" for what you do not. Write it at most ONCE
@@ -184,7 +184,7 @@ _FIELDS = ("name", "company", "email", "note")
 #: bubble would tell the visitor their details went nowhere.
 ACCESS_CONFIRMATION = (
     "Thank you — I've passed this to the team. You'll hear from "
-    "vadim@motresres.com."
+    "support@aerostator.com."
 )
 
 
@@ -735,17 +735,17 @@ _LIMIT_REPLIES = {
         "I've answered as many questions as I can from this connection for the "
         "moment — please try again in a few minutes.\n\n"
         "If you're after access: the portal is invitation-only. Use the "
-        "**Request access** link on this page, or write to vadim@motresres.com, "
+        "**Request access** link on this page, or write to support@aerostator.com, "
         "and we'll set you up."
     ),
     "ip_day": (
         "That's my daily limit for questions from this connection. Please write "
-        "to vadim@motresres.com — access to the portal is by invitation and we "
+        "to support@aerostator.com — access to the portal is by invitation and we "
         "answer every request personally."
     ),
     "global_day": (
         "The assistant has reached today's limit for visitors. Please write to "
-        "vadim@motresres.com — access to the portal is by invitation, and we "
+        "support@aerostator.com — access to the portal is by invitation, and we "
         "answer every request personally."
     ),
 }
@@ -836,7 +836,7 @@ def _mock_reply(messages: list[dict]) -> str:
         "(no API key configured). Once it's enabled I'll answer questions about the "
         "Configurator, motor parameters, the catalog and how the app works.\n\n"
         + (f'You asked: "{last[:200]}".\n\n' if last else "")
-        + "In the meantime, write to vadim@motresres.com."
+        + "In the meantime, write to support@aerostator.com."
     )
 
 
@@ -985,10 +985,10 @@ def chat(request: Request, body: dict = Body(default={}),
                        " [anonymous]" if anon else "")
         # There is no model to draft a ticket right now, so everybody gets the
         # address; a visitor's is also the way in.
-        where = ("write to vadim@motresres.com — access is by invitation and we "
+        where = ("write to support@aerostator.com — access is by invitation and we "
                  "answer every request personally"
                  if anon else
-                 "write to vadim@motresres.com")
+                 "write to support@aerostator.com")
         return deliver(
             (f"The assistant is busy right now (usage limit reached). Please try "
              f"again in a minute — or {where}."

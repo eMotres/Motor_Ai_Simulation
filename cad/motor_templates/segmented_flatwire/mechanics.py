@@ -15,7 +15,6 @@ edit moves every part together, as in Fusion.
                         Chamfer23 on the seat edges along the core legs
   Stator_holder_back    revolve of Sketch3 profile 6, the same window (through the whole part), bosses / seats with the M2
                         tap holes, the six M3 holes of the A_H face (Sketch7), Fillet27 at the spoke ends
-  Ring                  GFRP ring (Sketch3 profile 2); back copy = App::Link (Fusion occurrence Ring:3)
   Prop_fix              double-D hub on the flats + plate (Sketch2, Extrude1/2), hole faces offset by the clearance
                         (OffsetFaces1 modelled in the sketch)
   Screw / Screws        M2 socket head screw (McMaster 91292A032 in Fusion) + polar array, one per sector boundary
@@ -742,20 +741,8 @@ def build_holder_back(doc, sh, body):
     return dict(sketches=[sk, wk, bk, tk, mk, ck, fk] + extra_s, features=[rv, win, boss, seat, m3, chf, fil] + extra_f + [pp])
 
 
-# --------------------------------------------------------------------------------------------- ring, Prop_fix, screw
-
-
-def build_ring(doc, sh, body):
-    g = _g(sh)
-    r0, r1, z0, z1 = g("ring_inner_r"), g("coil_corner_r"), g("motor_length") / 2, g("motor_length") / 2 + g("ring_h")
-    sk = plane_sketch(body, "RingSection", "XZ_Plane")
-    Poly(sk, [(r0, z0), (r1, z0), (r1, z1), (r0, z1)],
-         [("y", P + "motor_length / 2", "stator_face_z"), ("x", P + "coil_corner_r", "coil_corner_r"),
-          ("yrel", 0, P + "ring_h", "ring_h"), ("x", P + "ring_inner_r", "ring_inner_r")])
-    doc.recompute()
-    rv = revolve(body, sk, "RingRevolve")
-    body.Tip = rv
-    return dict(sketches=[sk], features=[rv])
+# --------------------------------------------------------------------------------------------- Prop_fix, screw
+# (the GFRP ring and its back copy were removed from every construction, owner 2026-10-15; template A.7.1)
 
 
 def build_prop_fix(doc, sh, body):
@@ -891,10 +878,10 @@ def build_screw(doc, sh, body):
 # --------------------------------------------------------------------------------------------- assembly
 
 
-MECH_BODIES = ("Shaft", "Shaft_rear", "Bearing_seal", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
+MECH_BODIES = ("Shaft", "Shaft_rear", "Bearing_seal", "Stator_holder", "Stator_holder_back", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring")
 ARRAY_BASES = ("Bearing_ball", "Screw")
 MECH_PARTS = ("Mechanics", "Bearing_618_8")
-MECH_LINKS = ("Bearing_618_8_back", "Ring_back", "Bearing_seal_2")
+MECH_LINKS = ("Bearing_618_8_back", "Bearing_seal_2")
 MECH_ARRAYS = ("Balls", "Screws")
 
 
@@ -944,7 +931,6 @@ def build_mechanics(doc, sh, polar_array):
     brg.setExpression(".Placement.Base.z", P + "holder_face_z")
     b = body("Stator_holder"); mech.addObject(b); rep["Stator_holder"] = build_holder_front(doc, sh, b)
     b = body("Stator_holder_back"); mech.addObject(b); rep["Stator_holder_back"] = build_holder_back(doc, sh, b)
-    b = body("Ring"); mech.addObject(b); rep["Ring"] = build_ring(doc, sh, b)
     if not carrier:
         b = body("Prop_fix"); mech.addObject(b); rep["Prop_fix"] = build_prop_fix(doc, sh, b)
     sc = body("Screw"); mech.addObject(sc); rep["Screw"] = build_screw(doc, sh, sc)
@@ -952,7 +938,6 @@ def build_mechanics(doc, sh, polar_array):
     balls = polar_array(doc, ba, P + "bearing_ball_count", "Balls"); brg.addObject(balls)
     screws = polar_array(doc, sc, P + "holder_bolt_count", "Screws"); mech.addObject(screws)
     _link(doc, brg, "Bearing_618_8_back", "-" + P + "bearing_out_z", mech)
-    _link(doc, doc.getObject("Ring"), "Ring_back", P + "ring_back_dz", mech)
     doc.recompute()
     return rep
 
@@ -997,8 +982,6 @@ def solids(doc):
             out["Bearing_618_8_%s_seal_2" % tag] = _placed(gs("Bearing_seal"), pl, doc.getObject("Bearing_seal_2").Placement)
     out["Stator_holder"] = gs("Stator_holder").copy()
     out["Stator_holder_back"] = gs("Stator_holder_back").copy()
-    out["Ring_front"] = gs("Ring").copy()
-    out["Ring_back"] = _placed(gs("Ring"), doc.getObject("Ring_back").Placement)
     if doc.getObject("Prop_fix") is not None:
         out["Prop_fix"] = gs("Prop_fix").copy()
     for i, s in enumerate([o for o in doc.Objects if o.Label == "Screws"][0].Shape.Solids):

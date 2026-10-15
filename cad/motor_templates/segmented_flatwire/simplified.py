@@ -14,7 +14,7 @@ Built by ``cad/fc_scripts/export_simplified.py`` from the built, gated model (fu
   * the phase board  ->  ONE plain solid piece: the board outline extruded to the board thickness, with its through holes (mounting
     holes, the holes the coil terminals pass through, windows, notches of the outline).  No pins, components, copper, pads,
     silkscreen, mask or imported board body; the terminal positions go into the JSON.
-  * what a customer integrates stays as built: shaft / rotor carrier, stator holders (outer shape and mounting holes), rings,
+  * what a customer integrates stays as built: shaft / rotor carrier, stator holders (outer shape and mounting holes),
     Prop_fix, screws (the full variant).
 
 ``check()`` is the patent-hygiene gate the export runs before it writes a file: the monolith is a single solid whose faces are

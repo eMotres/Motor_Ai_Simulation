@@ -6,14 +6,14 @@
 
 Assembly variant (owner 2026-10-15): the configuration's top-level key `cad_variant: full | frameless` (default full) decides what
 is built; `--variant` overrides it for one build.  `frameless` = stator + coils + phase board + rotor + magnets (+ mounting datums);
-no housing, holders, carriers, bearings, shaft, screws, rings, Prop_fix.  Same file names; the manifest, the BOM, the datums JSON
+no housing, holders, carriers, bearings, shaft, screws, Prop_fix.  Same file names; the manifest, the BOM, the datums JSON
 and the GLB say which variant they are.
   python -m motor_ai_sim.cad.build back --die "CIANO14 40 new" --config L20 --fcstd my_copy.FCStd [--propose]
 
 Outputs go to <out-root>/<die>/<config>/ (default /srv/motres/shared/cad on the server):
   <motor_id>.FCStd             parametric model, opens ready to look at (visibility, colours, isometric camera)
   <motor_id>_active.step       full STEP (Stator/Core, Winding/Coils/Coil_n, Rotor/RotorCore, Magnets/Magnet_nn,
-                               Mechanics/Shaft, bearings, holders, rings, Prop_fix, Screws)
+                               Mechanics/Shaft, bearings, holders, Prop_fix, Screws)
   <motor_id>_datums.json       frame, axial / radial datums, coil lead end faces
   <motor_id>_simplified.step   SIMPLIFIED model (envelope only; stator + rotor + magnets ONE monolith, every coil ONE thick turn, every bearing one
   <motor_id>_simplified.glb    ring): downloadable by every signed-in user without the NDA (stamped "SIMPLIFIED - envelope only"); .json = its envelope,

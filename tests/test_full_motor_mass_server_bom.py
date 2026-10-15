@@ -102,7 +102,8 @@ def test_l13_full_mass_is_the_bom_with_the_front_carrier_rescaled_to_aluminium_6
     for key, item in (("carrier_rear", "7"), ("holder_front", "8"), ("holder_back", "9"), ("bearings", "11"), ("screws", "12"),
                       ("board", "13")):
         assert by[key].mass_kg * 1000 == pytest.approx(_g(rows[item]), rel=0.01), key
-    assert by["rings"].mass_kg * 1000 == pytest.approx(_g(rows["10"]) * 1850 / 1900, rel=0.01)    # rescaled glass-fibre -> FR-4
+    # the real file is a BOM built BEFORE the GFRP ring was removed (owner 2026-10-15): its Ring row is ignored - not counted, not "other"
+    assert "rings" not in by and fm.others == [] and not any("ring (glass" in p.name.lower() for p in fm.parts)
     assert by["wire_insulation"].mass_kg == pytest.approx(0.00945, abs=1e-5)                    # the coil enamel of the notes
     # the front carrier: CAD at steel density 7850, owner rule aluminium 6061 -> x 2700 / 7850
     front = by["carrier_front"]
@@ -112,10 +113,10 @@ def test_l13_full_mass_is_the_bom_with_the_front_carrier_rescaled_to_aluminium_6
     assert by["shaft"].counted is False
     # expected total by hand: the app's four active parts + the BOM's non-active rows with the carrier rescaled
     expect = (126.09 + 64.13 + 70.49 + 106.26 + 9.45 + 46.624 * 2700 / 7850 + _g(rows["7"]) + _g(rows["8"]) + _g(rows["9"])
-              + _g(rows["10"]) * 1850 / 1900 + _g(rows["11"]) + _g(rows["12"]) + _g(rows["13"]))
+              + _g(rows["11"]) + _g(rows["12"]) + _g(rows["13"]))
     assert fm.total_kg * 1000 == pytest.approx(expect, rel=0.002)
-    assert 465 < fm.total_kg * 1000 < 480                                                    # the coordinator's ~474 g
-    assert fm.total_kg * 1000 == pytest.approx(503.62 - (46.624 - front.mass_kg * 1000) - (122.607 - 106.26 - 9.45) -
+    assert 464 < fm.total_kg * 1000 < 479                                                    # ~473 g without the ring (474 g with it)
+    assert fm.total_kg * 1000 == pytest.approx(503.62 - _g(rows["10"]) - (46.624 - front.mass_kg * 1000) - (122.607 - 106.26 - 9.45) -
                                                (124.177 - 126.09) - (62.879 - 64.13) - (70.19 - 70.49), abs=2.5)
 
 
@@ -129,7 +130,8 @@ def test_l12_and_l20_count_every_non_active_row(tmp_path, monkeypatch, name, act
     assert not fm.partial and fm.others == []                   # every row of the real file is recognised by a part rule
     non_active = sum(p.mass_kg for p in fm.parts if p.counted and (not p.em or p.key == "wire_insulation")) * 1000
     bf = MM.read_bom_file(FIX / FILES[name])
-    assert non_active == pytest.approx(bf.non_sim_g, abs=0.2)                                 # = the BOM's own "not in the simulation"
+    ring_g = sum(_g(r) for r in rows.values() if r["part"].startswith("Ring"))               # a pre-removal BOM: its Ring row is ignored
+    assert ring_g > 0 and non_active == pytest.approx(bf.non_sim_g - ring_g, abs=0.2)         # = the BOM's own "not in the simulation" minus the ring
     by = {p.key: p for p in fm.parts}
     assert by["shaft"].counted and by["shaft"].material_id == "Aluminium_6061"
     shaft_row = next(r for r in rows.values() if r["part"].startswith("Shaft"))

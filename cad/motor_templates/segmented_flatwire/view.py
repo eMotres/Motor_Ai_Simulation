@@ -10,20 +10,20 @@ that shows nothing.  Two steps, both done by the build:
 
 Rules: the bodies Core, Coil, RotorCore, Magnet, their Parts (Stator, Winding, Rotor, Magnets) and the two arrays
 (Coils, MagnetArray) are visible; a body shows only its Tip; sketches, intermediate features, Origins with their axes and
-planes and the Params sheet are hidden.  Mechanics (stage 3): the bodies Shaft, Stator_holder, Stator_holder_back, Ring,
+planes and the Params sheet are hidden.  Mechanics (stage 3): the bodies Shaft, Stator_holder, Stator_holder_back,
 Prop_fix, Bearing_outer_ring, Bearing_inner_ring, the Parts Mechanics / Bearing_618_8, the arrays Balls / Screws and the
-links Bearing_618_8_back / Ring_back are visible; the array bases Bearing_ball / Screw are hidden.  Electronics: the Part Electronics and the Part::Feature PhaseBoard (imported STEP, per-face colours from the STEP: mask green,
+link Bearing_618_8_back is visible; the array bases Bearing_ball / Screw are hidden.  Electronics: the Part Electronics and the Part::Feature PhaseBoard (imported STEP, per-face colours from the STEP: mask green,
 FR4, ENIG gold, pins grey) are visible.  Colours: steel shaft,
-light bearing steel, aluminium holders / Prop_fix, GFRP ring, dark screws.
+light bearing steel, aluminium holders / Prop_fix, dark screws.
 """
 import math
 
 BODIES = ("Core", "Coil", "RotorCore", "Magnet",
-          "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_seal", "PhaseBoard")
+          "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_seal", "PhaseBoard")
 PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8", "Electronics")
 SHAPES = ("PhaseBoard",)                               # imported reference body (Part::Feature, per-face STEP colours)
 ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws", "BoardPinsA", "BoardPinsB")   # labels of the Draft link arrays
-LINKS = ("Bearing_618_8_back", "Ring_back", "Bearing_seal_2")            # App::Link copies (Fusion occurrences)
+LINKS = ("Bearing_618_8_back", "Bearing_seal_2")            # App::Link copies (Fusion occurrences)
 # per-part colours (r, g, b) from THE palette (palette.py: one source for the GUI finish, the GLB exporter and the web viewer).
 # The template does not know the magnet polarity per pocket: the FCStd array has one colour (N), the GLB / array elements
 # alternate N / S by index (palette.magnet_colour).

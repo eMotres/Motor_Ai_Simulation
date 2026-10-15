@@ -1,6 +1,6 @@
 // Geometry > Full (owner 2026-10-15): the FULL construction of the motor.
 //   left   THE part tree (the same tree as Materials > Full and the 3-D model) and the construction parameters of the CAD template -
-//          walls, shafts, holders, rings, bearings, the phase board, screws, leads, CAD-only clearances - EDITABLE, grouped by the
+//          walls, shafts, holders, bearings, the phase board, screws, leads, CAD-only clearances - EDITABLE, grouped by the
 //          part-tree groups, with units, limits and tooltips (EN / zh-CN).  Every one of them is "CAD only, not simulated".
 //   right  the server-built CAD model in the same viewer as the 3-D model tab; the part selected in the tree is highlighted.
 //

@@ -12,7 +12,7 @@ and registered as the module ``component-library`` (capability ``component.libra
 the System graph shows it with the other modules.
 
 MOTOR MASS.  A motor card carries the FULL assembled mass (owner 2026-10-14): the app's active parts plus the CAD bill of
-materials' shaft/carrier, holders, rings, bearings, screws, board, pins and enamel (``modules/motor_mass.py``), with a
+materials' shaft/carrier, holders, bearings, screws, board, pins and enamel (``modules/motor_mass.py``), with a
 material + mass breakdown per part; never a duty-record number.  Without a built CAD BOM the card carries the active mass
 and the flag ``mass_partial`` ("partial mass (no CAD model yet)").  Where the die is not in this catalog the card is
 listed with the flag ``mass_unknown`` and no mass.

@@ -10,7 +10,7 @@ Writes into FC_OUT_DIR (under temporary names first, moved only after every chec
 
 The simplified model (owner 2026-10-15; patent hygiene in motor_templates/segmented_flatwire/simplified.py): stator + rotor + magnets are ONE
 monolithic solid (outer envelope, rotor bore with keys, end faces exactly; everything inside filled), every coil is ONE thick turn, every
-bearing ONE solid ring d x D x B; shaft / carrier, holders (outer shape, mounting holes), rings, Prop_fix, screws stay as built; the phase board is ONE plain piece (its outline
+bearing ONE solid ring d x D x B; shaft / carrier, holders (outer shape, mounting holes), Prop_fix, screws stay as built; the phase board is ONE plain piece (its outline
 extruded to the board thickness, with its through holes: no pins, components, copper, pads; the terminal positions go into the JSON).  The model is opened, recomputed and must pass health.gate(); simplified.check() refuses the files when
 internal detail would be left.
 """
@@ -29,11 +29,11 @@ from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 VOL_TOL = 0.03
 ANG = 0.3
-EXPLODE = {"Monolith": 0.0, "Coils": -0.35, "Shaft": 2.2, "Ring_back": -0.7, "Holder_back": -1.15, "Bearings_back": -1.55,
-           "PhaseBoard": -2.2, "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
+EXPLODE = {"Monolith": 0.0, "Coils": -0.35, "Shaft": 2.2, "Holder_back": -1.15, "Bearings_back": -1.55,
+           "PhaseBoard": -2.2, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
 BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask")}
-ORDER = ["Monolith", "Coils", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back", "Ring_front",
-         "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4"]
+ORDER = ["Monolith", "Coils", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_back", "Holder_front", "Holder_back",
+         "Screws", "Prop_fix", "PhaseBoard_FR4"]
 
 
 def r6(v):
@@ -255,8 +255,6 @@ def main():
             add("Holder_front", name, s, view.COLORS["Stator_holder"])
         elif name == "Stator_holder_back":
             add("Holder_back", name, s, view.COLORS["Stator_holder_back"])
-        elif name in ("Ring_front", "Ring_back"):
-            add(name, name, s, view.COLORS["Ring"])
         elif name == "Prop_fix":
             add(name, name, s, view.COLORS["Prop_fix"])
         elif name.startswith("Screw_"):

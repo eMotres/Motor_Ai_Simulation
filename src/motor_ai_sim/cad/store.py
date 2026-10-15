@@ -57,7 +57,7 @@ CAD_ONLY_CLEARANCES = {
 
 # ASSEMBLY VARIANT (owner 2026-10-15).  ``cad_variant`` is a top-level key of the configuration yaml (``L13.yaml``): ``full`` (default) builds
 # the whole motor, ``frameless`` builds the kit a robot builder integrates into his own frame - stator with coils and the phase board +
-# rotor with magnets - and leaves out housing, holders, rotor carriers, bearings, shaft, screws, rings and the propeller plate.  The
+# rotor with magnets - and leaves out housing, holders, rotor carriers, bearings, shaft, screws and the propeller plate.  The
 # build call may override it (``--variant``).  It is the same parametric model with parts omitted (docs/CAD_GENERATOR.md).
 CAD_VARIANTS = ("full", "frameless")
 DEFAULT_CAD_VARIANT = "full"
@@ -252,7 +252,7 @@ def geo_sig_hash(sig):
 
 
 # ----------------------------------------------------------------------------------------------- CAD-only overrides
-# Geometry tab "Full" (owner 2026-10-15): construction parameters the simulation does not read (walls, shafts, holders, rings,
+# Geometry tab "Full" (owner 2026-10-15): construction parameters the simulation does not read (walls, shafts, holders,
 # bearings, the phase board, screws, leads, CAD-only clearances) are edited per die/config and saved as the configuration's
 # ``cad_overrides`` block.  They are applied to the profile AFTER the simulation rows, so they can never change an EM input;
 # the catalogue of editable names lives in motor_ai_sim/cad_params.py.

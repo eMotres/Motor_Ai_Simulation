@@ -69,15 +69,12 @@ MECH = [
      "Axial chain: back end of the back holder = hub-boss plane A_H at z = -this"),
     ("holder_boss_len", "holder_flange_z - motor_length / 2", "mm", "derived", "Stator_holder/Extrude47", "to stator face",
      "Bosses run from the flange outer face to the stator end face"),
-    ("ring_back_dz", "-(motor_length + ring_h)", "mm", "derived", "Ring:3 occurrence", "-21.8 mm",
-     "Shift of the back ring copy (Fusion occurrence Ring:3)"),
     ("holder_inner_r", "coil_corner_r + coil_holder_clearance", "mm", "derived", "CIANO14 40/Sketch3 L44", "13.633 mm",
      "Holder flange outer radius = coil corner + clearance"),
     ("holder_hub_r", "bearing_od_r + holder_hub_wall", "mm", "derived", "CIANO14 40/Sketch3 L33", "8.8 mm",
      "Holder hub outer radius (front hub, spoke roots)"),
     ("back_holder_outer_r", "back_holder_ref_r + back_holder_wall", "mm", "derived", "CIANO14 40/Sketch3 L40", "12 mm",
      "Back holder outer radius"),
-    ("ring_inner_r", "coil_corner_r - ring_t", "mm", "derived", "CIANO14 40/Sketch3 L50", "12.433 mm", "GFRP ring inner radius"),
     ("core_leg_outer_x", "tooth_width / 2 + coil_w + tooth2_width", "mm", "derived", "Stator_holder/Sketch2 L0/L1 (projected core)",
      "6.09 mm", "Outer side of the core half leg (x from the sector axis) = side of the boss seat"),
     ("holder_bolt_count", "core_sectors", "", "derived", "C-Pattern28/17/18/30/33", "6",
@@ -122,7 +119,7 @@ MECH = [
 
 
 # Fusion materials of the mechanical bodies (the shaft takes the simulation's shaft card when the store has one)
-MECH_MATERIALS = {"Shaft": "Steel", "Stator_holder": "Aluminum 6061", "Stator_holder_back": "Aluminum 6061", "Ring": "GFRP",
+MECH_MATERIALS = {"Shaft": "Steel", "Stator_holder": "Aluminum 6061", "Stator_holder_back": "Aluminum 6061",
                   "Prop_fix": "Aluminum 6061", "Bearing_outer_ring": "Steel (bearing)", "Bearing_inner_ring": "Steel (bearing)",
                   "Bearing_ball": "Steel (bearing)", "Screw": "18-8 Stainless Steel"}
 
@@ -166,7 +163,7 @@ def migrate(pj):
     mats = pj.setdefault("profile", {}).setdefault("materials", {})
     for body, mat in MECH_MATERIALS.items():
         mats.setdefault(body, mat)
-    pj.setdefault("roles", {})["mechanics"] = ("drives the mechanical parts (shaft, bearings, holders, rings, Prop_fix, "
+    pj.setdefault("roles", {})["mechanics"] = ("drives the mechanical parts (shaft, bearings, holders, Prop_fix, "
                                                "screws); CAD only, not in the simulation")
     return pj
 

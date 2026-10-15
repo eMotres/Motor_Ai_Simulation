@@ -21,7 +21,6 @@ PALETTE = {
     "magnet_s": "#1B6EF3",         # ... S blue
     "shaft": "#9AA3AB",            # stainless steel (shaft): light, matte (owner 2026-10-14)
     "aluminium": "#7F8C99",        # anodised aluminium: holders, Prop_fix, carriers (clearly different from the core)
-    "ring": "#E0B341",             # GFRP ring: amber
     "bearing_ring": "#C0C6CC",
     "bearing_ball": "#E3E6E9",
     "bearing_seal": "#26292D",     # rubber seal
@@ -39,7 +38,7 @@ BODY_ROLE = {
     "Shaft": "shaft", "Shaft_rear": "aluminium",
     "Bearing_outer_ring": "bearing_ring", "Bearing_inner_ring": "bearing_ring", "Bearing_ball": "bearing_ball", "Bearing_seal": "bearing_seal",
     "PhaseBoard": "pcb_mask", "PhaseBoardPins": "pcb_pins",
-    "Stator_holder": "aluminium", "Stator_holder_back": "aluminium", "Ring": "ring", "Prop_fix": "aluminium", "Screw": "screw",
+    "Stator_holder": "aluminium", "Stator_holder_back": "aluminium", "Prop_fix": "aluminium", "Screw": "screw",
 }
 # role -> (metallic, roughness) of the GLB material and, via appearance(), of the FreeCAD ShapeAppearance; default (0.1, 0.55)
 MATERIAL = {"shaft": (0.4, 0.6), "screw": (0.9, 0.25)}      # stainless steel: matte (owner); screws: nickel, shiny
@@ -48,7 +47,7 @@ DEFAULT_MATERIAL = (0.1, 0.55)
 GROUP_ROLE = {"Core": "core", "Coils": "coil", "Rotor": "rotor_core", "Magnets": "magnet_n", "Magnets_S": "magnet_s",
               "Shaft": "shaft", "Shaft_rear": "aluminium", "Bearings_front": "bearing_ring", "Bearings_back": "bearing_ring",
               "Bearings_front_balls": "bearing_ball", "Bearings_back_balls": "bearing_ball", "Holder_front": "aluminium",
-              "Holder_back": "aluminium", "Bearings_front_seals": "bearing_seal", "Bearings_back_seals": "bearing_seal", "Ring_front": "ring", "Ring_back": "ring", "Screws": "screw", "Prop_fix": "aluminium",
+              "Holder_back": "aluminium", "Bearings_front_seals": "bearing_seal", "Bearings_back_seals": "bearing_seal", "Screws": "screw", "Prop_fix": "aluminium",
               "PhaseBoard_FR4": "pcb_mask", "PhaseBoard_copper": "pcb_gold", "PhaseBoard_pins": "pcb_pins", "PhaseBoard_other": "pcb_fr4"}
 THREAD_DARKEN = 0.72               # cosmetic thread faces: the host colour, a little darker
 

@@ -86,7 +86,7 @@ export interface Passport {
   Pmag0_W: number;     // base magnet eddy loss
   mass0_kg: number;    // base active mass (the EM parts; scales with the stack)
   /** THE MOTOR MASS IS THE FULL ASSEMBLED MASS (owner 2026-10-14): the parts that do NOT scale with the stack - the real
-   *  shaft/carrier, holders, rings, bearings, screws, board, pins, enamel of the CAD bill of materials - added to the
+   *  shaft/carrier, holders, bearings, screws, board, pins, enamel of the CAD bill of materials - added to the
    *  scaled active mass.  Served by GET /api/catalog/references.  Absent/0 with `mass_partial` = no CAD model yet. */
   mass_fixed_kg?: number | null;
   /** true = no CAD model yet: the mass shown is the active mass only ("partial mass (no CAD model yet)").  Absent =

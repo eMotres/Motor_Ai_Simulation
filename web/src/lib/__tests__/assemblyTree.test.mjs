@@ -18,7 +18,7 @@ const TREE = {
     { id: 'stator', name: { en: 'Stator', zh: '定子' }, parts: ['stator_core'] },
     { id: 'winding', name: { en: 'Winding', zh: '绕组' }, parts: ['slot'] },
     { id: 'magnets', name: { en: 'Magnets', zh: '磁钢' }, parts: ['magnet'] },
-    { id: 'housing', name: { en: 'Housing & holders', zh: '外壳与支架' }, parts: ['rings'] },
+    { id: 'housing', name: { en: 'Housing & holders', zh: '外壳与支架' }, parts: ['holder'] },
     { id: 'bearings', name: { en: 'Bearings', zh: '轴承' }, parts: ['bearings'] },
     { id: 'fasteners', name: { en: 'Fasteners', zh: '紧固件' }, parts: ['screws'] },
   ],
@@ -26,7 +26,7 @@ const TREE = {
     P('stator_core', 'stator', 'Stator core', true, ['Core']),
     P('slot', 'winding', 'Winding copper', true, ['Coils']),
     P('magnet', 'magnets', 'Magnets', true, ['Magnets', 'Magnets_S']),
-    P('rings', 'housing', 'Glass-fibre rings', false, ['Ring_front', 'Ring_back']),
+    P('holder', 'housing', 'Stator holder', false, ['Holder_front', 'Holder_back']),
     P('bearings', 'bearings', 'Bearings', false, ['Bearings_front', 'Bearings_front_balls', 'Bearings_back']),
     P('screws', 'fasteners', 'Screws', false, ['Screws']),
   ],
@@ -37,8 +37,8 @@ const NODES = [
   { name: 'Coils', family: 'Coils', explode: 0, children: kids('Coil', 6), colour: '#e0821a' },
   { name: 'Magnets', family: 'Magnets', explode: 0, children: kids('Magnet', 14).filter((_, i) => i % 2 === 0), colour: '#e02718' },
   { name: 'Magnets_S', family: 'Magnets', explode: 0, children: kids('Magnet', 14).filter((_, i) => i % 2 === 1), colour: '#2e86ff' },
-  { name: 'Ring_front', family: 'Ring_front', explode: 0, children: ['Ring_front'], colour: '#d9cf73' },
-  { name: 'Ring_back', family: 'Ring_back', explode: 0, children: ['Ring_back'], colour: '#d9cf73' },
+  { name: 'Holder_front', family: 'Holder_front', explode: 0, children: ['Holder_front'], colour: '#d9cf73' },
+  { name: 'Holder_back', family: 'Holder_back', explode: 0, children: ['Holder_back'], colour: '#d9cf73' },
   { name: 'Bearings_front', family: 'Bearings_front', explode: 0, children: ['x'], colour: '#777' },
   { name: 'Bearings_front_balls', family: 'Bearings_front', explode: 0, children: ['y'], colour: '#777' },
   { name: 'Bearings_back', family: 'Bearings_back', explode: 0, children: ['z'], colour: '#777' },
@@ -53,8 +53,8 @@ t('the rows are the server groups > parts in the server order, groups open, part
   assert.deepEqual(rs.map((r) => r.label), ['Stator', 'Winding', 'Magnets', 'Housing & holders', 'Bearings', 'Fasteners']);
   assert.ok(rs.every((r) => r.defaultOpen && r.visible));
   assert.deepEqual(rs[0].group.map((p) => [p.key, p.tag]), [['stator_core', 'EM']]);
-  assert.equal(find(rs, 'rings').tag, 'notEM');
-  assert.equal(find(rs, 'rings').partId, 'rings');
+  assert.equal(find(rs, 'holder').tag, 'notEM');
+  assert.equal(find(rs, 'holder').partId, 'holder');
   // zh-CN names come from the same tree
   const zh = A.buildAssemblyRows(TREE, NODES, { lang: 'zh-CN', fmt, hidden: new Set() });
   assert.equal(zh[0].label, '定子');
@@ -71,7 +71,7 @@ t('per-instance children come from the GLB nodes: Coil n, Magnet n N|S, Screw n,
   assert.equal(find(rs, 'magnet').group[1].colour, '#2e86ff');
   assert.deepEqual(find(rs, 'screws').group.map((c) => c.label), ['Screw 1', 'Screw 2', 'Screw 3', 'Screw 4', 'Screw 5', 'Screw 6']);
   assert.deepEqual(find(rs, 'bearings').group.map((c) => c.label), ['Bearing, front', 'Balls, front', 'Bearing, rear']);
-  assert.deepEqual(find(rs, 'rings').group.map((c) => c.label), ['Ring, front', 'Ring, rear']);
+  assert.deepEqual(find(rs, 'holder').group.map((c) => c.label), ['Holder, front', 'Holder, rear']);
   assert.equal(find(rs, 'stator_core').group, undefined);                                       // one drawn object: no instance rows
   assert.equal(find(rs, 'stator_core').colour, '#999999');                                      // the swatch is the colour the model draws
   assert.equal(find(rs, 'slot').group[0].key, 'n:Coil_01');
@@ -93,7 +93,7 @@ t('a frameless kit tree (the server filtered it) shows only the kit groups; noth
 
 t('visibility is a set of hidden keys; a hidden group / part / instance hides exactly its GLB nodes', () => {
   assert.deepEqual([...A.hiddenNodeNames(TREE, new Set())], []);
-  assert.deepEqual([...A.hiddenNodeNames(TREE, new Set(['g:housing']))], ['Ring_front', 'Ring_back']);
+  assert.deepEqual([...A.hiddenNodeNames(TREE, new Set(['g:housing']))], ['Holder_front', 'Holder_back']);
   assert.deepEqual([...A.hiddenNodeNames(TREE, new Set(['magnet']))].sort(), ['Magnets', 'Magnets_S']);
   assert.deepEqual([...A.hiddenNodeNames(TREE, new Set(['n:Coil_03']))], ['Coil_03']);
   assert.deepEqual([...A.hiddenNodeNames(null, new Set(['magnet']))], []);

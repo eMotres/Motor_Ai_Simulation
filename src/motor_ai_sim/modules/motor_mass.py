@@ -6,7 +6,7 @@ Owner decision 2026-10-14: the card's motor mass is NOT a duty-record number and
 is ``masses.compute_masses`` evaluated on the die + configuration the passport belongs to: the number
 Configure and the datasheet show as "Active material mass" (= ``mass_total_kg`` of a run).  That total
 holds the stator iron, rotor iron, magnets, winding copper (end windings included), the shaft tube
-and the retaining sleeve.  It does NOT hold holders, rings, bearings, screws, the phase board or
+and the retaining sleeve.  It does NOT hold holders, bearings, screws, the phase board or
 insulation: those exist only in the CAD bill of materials (``cad/bom.py``).  ``bom_extra_parts`` reads
 that BOM file when the server has built one and lists those parts as NOT counted in the card mass.
 
@@ -44,7 +44,7 @@ _APP_PARTS: Tuple[Tuple[str, str, str, str], ...] = (
 APP_MASS_BASIS = ("the app's mass model masses.compute_masses (CAD section x stack length x lamination fill x density of "
                   "the assigned material; copper with the end-winding factor) - the number Configure and the datasheet "
                   "show as the motor mass. It holds stator iron, rotor iron, magnets, winding copper, shaft and "
-                  "retaining sleeve only; holders, rings, bearings, screws, board and insulation are not in it. "
+                  "retaining sleeve only; holders, bearings, screws, board and insulation are not in it. "
                   "Magnets are the nominal magnet (CAD-only assembly clearances are air).")
 
 
@@ -178,7 +178,7 @@ def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
 #
 # OWNER DECISION 2026-10-14 ("the FULL mass must now be used everywhere"): the motor mass shown or used anywhere is the
 # FULL assembled mass - the app's active parts (stator iron, rotor iron, magnets, winding copper, sleeve) + the real shaft
-# (or rotor carrier) + holders, rings, bearings, screws, phase board, pins + the wire enamel - with the CAD BOM's masses
+# (or rotor carrier) + holders, bearings, screws, phase board, pins + the wire enamel - with the CAD BOM's masses
 # and the die's own Full material assignment.  The ACTIVE mass (``app_motor_mass().total_kg``: what the electromagnetic
 # simulation, the optimizer and the passport use) stays a separate, labelled number.  A motor with no built CAD BOM has
 # only the active mass, and says so: ``partial = True`` ("partial mass (no CAD model yet)") - the two are never mixed.
@@ -188,15 +188,15 @@ def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
 # simulation shaft tube + sleeve) about the shaft axis, from the CAD polygons; the BOM carries no polar moments, so the
 # rotating mass below is a mass, not an inertia.
 
-#: parts of the full list that turn with the rotor (rotor iron, magnets, shaft or rotor carrier, sleeve, glass-fibre rings,
+#: parts of the full list that turn with the rotor (rotor iron, magnets, shaft or rotor carrier, sleeve,
 #: the propeller fixing plate).  Bearings are not listed: half of each turns, and the app has no split.
-ROTATING_KEYS = ("rotor_core", "magnet", "shaft", "sleeve", "carrier_front", "carrier_rear", "rings", "prop_fix")
+ROTATING_KEYS = ("rotor_core", "magnet", "shaft", "sleeve", "carrier_front", "carrier_rear", "prop_fix")
 
 PARTIAL_LABEL = "partial mass (no CAD model yet)"
 
 #: ASSEMBLY VARIANT (owner 2026-10-15).  A configuration with the top-level key ``cad_variant: frameless`` is the FRAMELESS KIT for
 #: robots - stator with coils and the phase board + rotor with magnets.  Its "full motor mass" is the KIT mass, labelled
-#: ``SCOPE_KIT``: housing, holders, rotor carriers / hub, bearings, shaft, screws, housing rings and the propeller plate are not in
+#: ``SCOPE_KIT``: housing, holders, rotor carriers / hub, bearings, shaft, screws and the propeller plate are not in
 #: it, whatever an older full CAD BOM still lists.  Everything else (``full_kg``, ``partial`` ...) keeps its meaning.
 SCOPE_FULL = "full motor"
 SCOPE_KIT = "frameless kit"
@@ -207,7 +207,7 @@ KIT_APP_EXCLUDED = ("shaft",)
 
 FRAMELESS_MASS_BASIS = ("the FRAMELESS KIT: the app's active parts without the shaft (masses.compute_masses: stator iron, rotor iron, "
                         "magnets, winding copper, sleeve) + the CAD bill of materials' phase board, pins and wire enamel. Housing, "
-                        "holders, rotor carriers / hub, bearings, shaft, screws, housing rings and the propeller plate are not "
+                        "holders, rotor carriers / hub, bearings, shaft, screws and the propeller plate are not "
                         "included. Magnets are the nominal magnet (CAD-only assembly clearances are air).")
 
 
@@ -228,7 +228,7 @@ def config_cad_variant(ddir: Optional[os.PathLike], config: str) -> str:
 GUARD_FRACTION = 0.5
 
 FULL_MASS_BASIS = ("the FULL assembled motor: the app's active parts (masses.compute_masses: stator iron, rotor iron, "
-                   "magnets, winding copper, sleeve) + the CAD bill of materials' shaft or rotor carrier, holders, rings, "
+                   "magnets, winding copper, sleeve) + the CAD bill of materials' shaft or rotor carrier, holders, "
                    "bearings, screws, phase board, pins and wire enamel, each with the material of the die's Full "
                    "assignment (a CAD mass is scaled by the density ratio when the material differs from the CAD's). "
                    "Magnets are the nominal magnet (CAD-only assembly clearances are air).")
@@ -387,6 +387,9 @@ def _classify(defs: Dict[str, Dict[str, Any]], part: str) -> Optional[str]:
     return None
 
 
+#: BOM rows of a part that no longer exists: the GFRP ring was removed from every construction (owner 2026-10-15).  A BOM built before
+#: that still lists it - the row is ignored (not counted, not "other") until the motor's CAD model is rebuilt.
+_BOM_RETIRED = re.compile(r"^ring[^a-z]|^ring$", re.I)
 #: BOM lines the app mass already covers (the active parts) - their mass is the app's, never the BOM's
 _BOM_ACTIVE = re.compile(r"^(stator lamination|rotor lamination|permanent magnet|enamelled|rotor sleeve)", re.I)
 _BOM_COIL_LINE = re.compile(r"^coil", re.I)
@@ -472,7 +475,7 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
         others: List[BomLine] = []
         shaft_line = coil_line = None
         for ln in lines:
-            if _BOM_ACTIVE.search(ln.part):
+            if _BOM_ACTIVE.search(ln.part) or _BOM_RETIRED.search(ln.part):
                 continue
             if _BOM_COIL_LINE.search(ln.part) and coil_line is None:
                 coil_line = ln
@@ -608,7 +611,8 @@ def bom_extra_parts(die: str, config: str, *, cad_dir: Optional[os.PathLike] = N
     choices = choices or {}
     out: List[MotorPart] = []
     for ln in read_bom(bom):
-        if _BOM_ACTIVE.search(ln.part) or _BOM_COIL_LINE.search(ln.part) or _BOM_SHAFT.search(ln.part):
+        if (_BOM_ACTIVE.search(ln.part) or _BOM_COIL_LINE.search(ln.part) or _BOM_SHAFT.search(ln.part)
+                or _BOM_RETIRED.search(ln.part)):
             continue
         k = _classify(defs, ln.part)
         if not k:

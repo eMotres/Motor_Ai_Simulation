@@ -6,7 +6,7 @@
 
 Per part: volume (model, Fusion body volume, STEP solid volume), bounding box, the symmetric-difference volume
 vol(A) + vol(B) - 2 vol(A & B) (0 = the same solid) and the two-sided surface deviation (points on every face of one
-solid -> distance to the other solid's boundary).  Fusion occurrences (618_8:1/2, Ring:1/3, the six screws) are placed
+solid -> distance to the other solid's boundary).  Fusion occurrences (618_8:1/2, the six screws) are placed
 with their Fusion matrices.
 """
 import json, math, os, sys, time, traceback
@@ -108,9 +108,6 @@ def main():
         fv = meta["bodies"][0]["volume_mm3"]
         body = min(sols, key=lambda x: abs(x.Volume - fv))          # the Stator_holder STEP also carries its six screws
         rows.append(compare(mine, my[mine], placed(body, m), fv))
-    sols, meta = ref_solids(ref_dir, "Ring")
-    for occ, mine in zip(meta["occurrences"], ("Ring_front", "Ring_back")):
-        rows.append(compare(mine, my[mine], placed(sols[0], occ["matrix"]), meta["bodies"][0]["volume_mm3"]))
     sols, meta = ref_solids(ref_dir, "618_8")
     vols = {b["body"]: b["volume_mm3"] for b in meta["bodies"]}
     by_vol = sorted(sols, key=lambda s: -s.Volume)                    # outer ring, inner ring, balls

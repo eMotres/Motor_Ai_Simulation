@@ -20,6 +20,7 @@ import CatalogsSection from './sections/CatalogsSection';
 import MotorsAccessSection from './sections/MotorsAccessSection';
 import LogsSection from './sections/LogsSection';
 import Downloads3dSection from './sections/Downloads3dSection';
+import VerificationSection from './sections/VerificationSection';
 import AnalyticsSection from './sections/AnalyticsSection';
 import ActivitySection from './sections/ActivitySection';
 import MailingCard from './MailingCard';
@@ -54,6 +55,7 @@ const AdminPanel: React.FC = () => {
       case 'mailing': return <><MailingCard /><NoticesPanel /></>;
       case 'logs': return <LogsSection />;
       case 'downloads3d': return <Downloads3dSection />;
+      case 'verification': return <VerificationSection />;
       case 'analytics': return <AnalyticsSection />;
       case 'activity': return <ActivitySection />;
       default: return null;

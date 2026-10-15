@@ -8,6 +8,8 @@ import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import ConstructionScopeSwitch, { useConstructionScope } from '../common/ConstructionScopeSwitch';
 import NdaDialog from '../model3d/NdaDialog';
+import VerificationNotice from '../model3d/VerificationNotice';
+import { lockedKind } from '../../lib/verification';
 import FilesMenu from './FilesMenu';
 import GeometryFullPanel from './GeometryFullPanel';
 import { useCadParams, useModelList, useOpenMotor } from './useConstruction';
@@ -22,9 +24,10 @@ const GeometryTab: React.FC<{ active: React.ReactNode }> = ({ active }) => {
   const die = openMotor?.die ?? null;
   const config = openMotor?.config ?? null;
   const [refresh, setRefresh] = useState(0);
-  const { models, canDownload } = useModelList(refresh);
+  const { models, canDownload, access } = useModelList(refresh);
   const cad = useCadParams(die, config, scope === 'full', () => setRefresh((n) => n + 1));
   const [ndaOpen, setNdaOpen] = useState(false);
+  const [noticeOpen, setNoticeOpen] = useState(false);
   const model = useMemo(
     () => models?.find((m) => !!die && modelKey(m) === modelKey({ die, config: config ?? '' })) ?? null, [models, die, config]);
 
@@ -33,7 +36,7 @@ const GeometryTab: React.FC<{ active: React.ReactNode }> = ({ active }) => {
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, px: 1.5, py: 0.5, flexShrink: 0, borderBottom: '1px solid var(--line-soft)' }}>
         <ConstructionScopeSwitch testIdPrefix="geometry-scope" />
         <FilesMenu scope={scope} model={model} canDownload={canDownload} canWrite={!!cad.data?.can_write}
-          importFull={cad.importFile} onNeedNda={() => setNdaOpen(true)} />
+          importFull={cad.importFile} onNeedNda={() => (lockedKind(access) === 'verification' ? setNoticeOpen(true) : setNdaOpen(true))} />
         <Box sx={{ flex: 1 }} />
         <Typography sx={{ fontSize: 11, color: 'var(--text-4)', display: { xs: 'none', md: 'block' } }}>
           {scope === 'full' ? tx('scopeFullHint') : tx('scopeActiveHint')}
@@ -45,6 +48,7 @@ const GeometryTab: React.FC<{ active: React.ReactNode }> = ({ active }) => {
           : active}
       </Box>
       <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => setRefresh((n) => n + 1)} />
+      <VerificationNotice open={noticeOpen} onClose={() => setNoticeOpen(false)} access={access} />
     </Box>
   );
 };

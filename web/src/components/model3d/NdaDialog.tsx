@@ -1,6 +1,7 @@
 // Online NDA click-through: company fields, the CURRENT agreement text with the placeholders filled live (only the variant of
 // the selected country), the acceptance box and "type your full name to sign".  The server validates again, stores the record
-// and the signed PDF and opens the STEP download at once (routes/nda.py).  One short line per control, help in tooltips.
+// and the signed PDF and opens an applicant-verification case; the STEP opens when it is VERIFIED (routes/nda.py,
+// docs/APPLICANT_VERIFICATION.md).  One short line per control, help in tooltips.
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, MenuItem,
@@ -13,6 +14,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import {
   NDA_FIELDS, emptyForm, formErrors, mdBlocks, renderNda, utcToday, values, type NdaField, type NdaForm,
 } from '../../lib/nda';
+import { emptyIntake, intakeBody, intakeErrors, type IntakeForm } from '../../lib/verification';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 
@@ -30,6 +32,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
   const [cur, setCur] = useState<Current | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [form, setForm] = useState<NdaForm>(emptyForm());
+  const [intake, setIntake] = useState<IntakeForm>(emptyIntake());      // for the applicant verification that follows the signature
   const [accepted, setAccepted] = useState(false);
   const [typed, setTyped] = useState('');
   const [share, setShare] = useState(false);          // optional dataset consent, separate from the NDA; starts at the current choice
@@ -61,7 +64,9 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
   }, [lang]);
   const countries = useMemo(() => (cur?.countries ?? []).map((c) => ({ code: c, name: names(c) })).sort((a, b) => a.name.localeCompare(b.name, lang)), [cur, names, lang]);
 
-  const errors = useMemo(() => formErrors(form, cur?.countries ?? [], typed, accepted), [form, cur, typed, accepted]);
+  const baseErrors = useMemo(() => formErrors(form, cur?.countries ?? [], typed, accepted), [form, cur, typed, accepted]);
+  const iErrors = useMemo(() => intakeErrors(intake), [intake]);
+  const errors: Record<string, string> = { ...baseErrors, ...iErrors };
   const shown = (k: string) => (tried ? (errors[k] ?? srvFields[k]) : srvFields[k]);
   const text = useMemo(() => (cur ? renderNda(cur.text, values(form, email, utcToday(), cur.version, '______')) : ''), [cur, form, email]);
 
@@ -72,7 +77,7 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
     try {
       const r = await fetch(`${API}/api/nda/sign`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...form, lang: cur.lang, version: cur.version, accept: accepted, typed_name: typed, data_sharing: share }),
+        body: JSON.stringify({ ...form, ...intakeBody(intake), lang: cur.lang, version: cur.version, accept: accepted, typed_name: typed, data_sharing: share }),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -117,6 +122,26 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
                   inputProps={{ maxLength: 300 }} />
               ))}
               <TextField size="small" label={t('nda.email')} value={email} disabled InputProps={{ readOnly: true }} />
+            </Box>
+
+            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+                <Typography sx={{ fontSize: 12.5, fontWeight: 800, color: 'var(--text-1)' }}>{t('nda.verifyHeading')}</Typography>
+                <HelpTip title={t('nda.verifyHelp')} />
+              </Box>
+              <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, gap: 1.25 }}>
+                <TextField size="small" required label={t('nda.website')} value={intake.website} placeholder="https://" autoComplete="url"
+                  onChange={(e) => setIntake((f) => ({ ...f, website: e.target.value }))} error={!!err('website')} helperText={err('website')}
+                  inputProps={{ maxLength: 300 }} />
+                <TextField size="small" label={t('nda.workEmail')} value={intake.work_email} placeholder={email} autoComplete="email"
+                  onChange={(e) => setIntake((f) => ({ ...f, work_email: e.target.value }))} error={!!err('work_email')} helperText={err('work_email')}
+                  inputProps={{ maxLength: 254 }} />
+                <TextField size="small" required label={t('nda.purpose')} value={intake.purpose} multiline minRows={2} sx={{ gridColumn: { sm: '1 / -1' } }}
+                  onChange={(e) => setIntake((f) => ({ ...f, purpose: e.target.value }))} error={!!err('purpose')} helperText={err('purpose')}
+                  inputProps={{ maxLength: 1000 }} />
+                <TextField size="small" label={t('nda.vatNo')} value={intake.vat_no}
+                  onChange={(e) => setIntake((f) => ({ ...f, vat_no: e.target.value }))} inputProps={{ maxLength: 30 }} />
+              </Box>
             </Box>
 
             <Box sx={{ maxHeight: 280, overflowY: 'auto', p: 1.5, border: '1px solid var(--line-soft)', borderRadius: 1, bgcolor: 'var(--panel-2)' }}>

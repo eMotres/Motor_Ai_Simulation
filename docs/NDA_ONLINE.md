@@ -1,7 +1,9 @@
 # Online NDA click-through (3D model download)
 
 A user without NDA can view the 3D model but not download the STEP.  In the "3D model" tab such a user sees "Download after NDA" and the
-button **Sign NDA online**; signing unlocks the download at once, without the owner.
+button **Sign NDA online**.  Since 2026-10-15 signing no longer unlocks the tools and the STEP by itself: it opens an applicant-verification case and the
+tools open when the case is VERIFIED (or an administrator approves it) - see `docs/APPLICANT_VERIFICATION.md`.  An account whose NDA flag an administrator set
+in Admin > Users stays open (the administrator vouched for it).
 
 ## Flow
 

@@ -266,3 +266,35 @@ def _no_dns_in_tests(monkeypatch):
     except Exception:                                       # noqa: BLE001
         pass
     yield
+
+
+@pytest.fixture(autouse=True)
+def _no_network_in_verification_tests(monkeypatch):
+    """Applicant verification (motor_ai_sim.verification) talks to registries and company websites.  No test may reach the
+    network or start a background thread: the HTTP client is replaced by an offline one (every request is an error = "unknown"),
+    the MX lookup answers "could not tell", and the checks run inline.  tests/test_verification_*.py install their own fakes."""
+    try:
+        from motor_ai_sim.verification import net as _vnet
+        from motor_ai_sim.verification import service as _vsvc
+        from motor_ai_sim.verification.net import HttpResult as _HR
+
+        class _Offline:
+            def get(self, url, **kw):
+                return _HR(url, 0, error="offline (tests)")
+
+            post_json = get
+
+        before = _vnet.get_http()
+        _vnet.set_http(_Offline())
+        _vnet.set_mx(lambda d: None)
+        monkeypatch.setattr(_vsvc, "BACKGROUND", False)
+        _vsvc._CACHE.clear()
+    except Exception:                                       # noqa: BLE001
+        before = None
+    yield
+    try:
+        if before is not None:
+            _vnet.set_http(before)
+        _vnet.set_mx(None)
+    except Exception:                                       # noqa: BLE001
+        pass

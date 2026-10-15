@@ -16,6 +16,8 @@ import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { useLastMotorState } from '../../lib/lastMotor';
 import NdaDialog from './NdaDialog';
+import VerificationStatus from './VerificationStatus';
+import { lockedKind, parseAccess, type AccessInfo } from '../../lib/verification';
 import ComponentTreeView from '../viewer3d/ComponentTreeView';
 import { useViewportWidth } from '../common/useNarrow';
 import { model3dToolbar, treeStartsCollapsed, type Model3DItem } from '../../lib/viewerToolbar';
@@ -41,6 +43,9 @@ const Model3DPanel: React.FC = () => {
   const canvas = useRef<ModelCanvasHandle>(null);
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [canDownload, setCanDownload] = useState(false);
+  // the applicant verification behind it: signing the NDA opens a case, the tools open when it is VERIFIED (server `access`)
+  const [access, setAccess] = useState<AccessInfo>({ state: 'nda', nda_signed: false });
+  const [reload, setReload] = useState(0);
   const [ndaOpen, setNdaOpen] = useState(false);
   const [hasPdf, setHasPdf] = useState(false);
   const [key, setKey] = useState<string>('');
@@ -67,11 +72,12 @@ const Model3DPanel: React.FC = () => {
         const j = await r.json();
         if (!live) return;
         setCanDownload(j.can_download === true);
+        setAccess(parseAccess(j.access, j.can_download === true));
         setModels(j.models as ModelInfo[]);
       } catch (e: any) { if (live) setErr(e?.message ?? String(e)); }
     })();
     return () => { live = false; };
-  }, []);
+  }, [reload]);
 
   // what the tab opens on: the motor open in Configure, until the person picks one here himself
   const pickedHere = useRef(false);
@@ -143,7 +149,8 @@ const Model3DPanel: React.FC = () => {
     </Select>
   );
 
-  const entries = model3dToolbar({ canDownload, models: models?.length ?? 0, preparing, stepAvailable: !!model?.step_available, hasPdf });
+  const entries = model3dToolbar({ canDownload, models: models?.length ?? 0, preparing, stepAvailable: !!model?.step_available, hasPdf,
+    ndaSigned: lockedKind(access) === 'verification' });
   const has = (id: Model3DItem) => entries.some((e) => e.id === id);
   const enabled = (id: Model3DItem) => entries.find((e) => e.id === id)?.enabled !== false;
   const inline = { display: 'flex', alignItems: 'center', gap: 0.75 } as const;
@@ -152,7 +159,7 @@ const Model3DPanel: React.FC = () => {
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
-      <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => { setCanDownload(true); void loadMine(); }} />
+      <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => { setReload((n) => n + 1); void loadMine(); }} />
 
       {/* ONE compact toolbar on top (it wraps on a narrow screen); the viewer below takes the whole width and height */}
       {ready && (
@@ -213,6 +220,7 @@ const Model3DPanel: React.FC = () => {
               <HelpTip title={t('downloadLockedHelp')} />
             </Box>
           )}
+          {has('verify') && <VerificationStatus access={access} />}
           {has('sign') && (
             <Button size="small" variant="contained" onClick={() => setNdaOpen(true)} sx={{ textTransform: 'none', fontSize: 12.5 }}>
               {t('nda.sign')}

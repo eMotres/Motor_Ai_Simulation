@@ -144,7 +144,10 @@ _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      # communication preferences by signed e-mail link and the
                      # RFC 8058 one-click POST (the token is the credential;
                      # failures are rate-limited in routes/comm_prefs.py)
-                     "/api/comm-prefs")
+                     "/api/comm-prefs",
+                     # the applicant's personal reply page (no session: the signed token in the path is the credential; bad tokens are
+                     # rate-limited in routes/verification.py).  /api/verification/mine and the admin routes keep their own checks.
+                     "/api/verification/reply")
 
 
 #: The worker-facing routes of docs/BYO_COMPUTE.md (heartbeat, lease, progress,

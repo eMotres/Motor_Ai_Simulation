@@ -56,7 +56,8 @@ def list_models(authorization: Optional[str] = Header(default=None)):
     from motor_ai_sim import motor_access as MA
     access = MA.catalog_access(authorization)
     models = [M.model_info(e) for e in M.scan() if MA.may_see_config(access, e["die"], e["config"])]
-    return {"can_download": M.can_download(who, rec), "models": [m for m in models if m["available"]]}
+    from motor_ai_sim import verification as V
+    return {"can_download": M.can_download(who, rec), "access": V.public_access(who, rec), "models": [m for m in models if m["available"]]}
 
 
 @router.get("/{die}/{config}/model.glb")
@@ -76,7 +77,7 @@ def get_step(die: str, config: str, request: Request, authorization: Optional[st
     who, rec = _caller(authorization)
     e = _entry_for(authorization, die, config)
     if not M.can_download(who, rec):
-        raise HTTPException(status_code=403, detail="Download is available after the NDA is signed.")
+        raise HTTPException(status_code=403, detail=M.denial_detail(who, rec))
     row = M.file_row(e, "step")
     if row is None:
         raise HTTPException(status_code=404, detail="This model has not been built yet.")
@@ -147,7 +148,7 @@ def get_parts(die: str, config: str, authorization: Optional[str] = Header(defau
     who, rec = _caller(authorization)
     _entry_for(authorization, die, config)
     if not M.can_download(who, rec):
-        raise HTTPException(status_code=403, detail="The parts list is available after the NDA is signed.")
+        raise HTTPException(status_code=403, detail=M.denial_detail(who, rec))
     return _tree_of(die, config, brief=True)
 
 
@@ -190,7 +191,7 @@ def _nda_gate(authorization: Optional[str], die: str, config: str, need_engineer
     who, rec = _caller(authorization)
     e = _entry_for(authorization, die, config)
     if not M.can_download(who, rec):
-        raise HTTPException(status_code=403, detail="Download is available after the NDA is signed.")
+        raise HTTPException(status_code=403, detail=M.denial_detail(who, rec))
     if need_engineer and not who.get("is_admin") and str(who.get("role") or rec.get("role") or "user") not in ("engineer", "admin"):
         raise HTTPException(status_code=403, detail="The FreeCAD model is not available for this account type; the STEP is.")
     return who, rec, e

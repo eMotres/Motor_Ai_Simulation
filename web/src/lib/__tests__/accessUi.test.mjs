@@ -85,15 +85,26 @@ t('role user: Motors, Configure, 3D model - nothing else', () => {
   assert.deepEqual(visible(true, false, 'user'), ['motors', 'compare', 'model3d']);
 });
 
-t('role engineer: the whole simulation UI, no admin sections', () => {
+t('role engineer: the whole simulation UI, no admin sections, and NO separate 3D model tab (it is Geometry > Full)', () => {
   assert.deepEqual(visible(true, false, 'engineer'), ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'mechanical',
-    'thermal', 'controller', 'system', 'comparePoints', 'compare', 'model3d']);
+    'thermal', 'controller', 'system', 'comparePoints', 'compare']);
+  assert.equal(visible(true, false, 'engineer').includes('model3d'), false);
   for (const id of ['admin', 'sweep', 'cost', 'static3d']) assert.equal(visible(true, false, 'engineer').includes(id), false, id);
 });
 
-t('role admin and the local backend see every tab', () => {
-  assert.deepEqual(visible(true, true, 'admin'), ALL_TABS);
-  assert.deepEqual(visible(false, true, 'admin'), ALL_TABS);
+t('role admin and the local backend see every tab except the user-only 3D model tab', () => {
+  const all = ALL_TABS.filter((id) => id !== 'model3d');
+  assert.deepEqual(visible(true, true, 'admin'), all);
+  assert.deepEqual(visible(false, true, 'admin'), all);
+});
+
+t('the 3D model tab is the simplified Configure workflow (role user) only; anonymous sees nothing of it', () => {
+  assert.equal(A.TAB_GATES.model3d, 'standard');
+  assert.equal(A.tabVisible('model3d', { signedIn: true, fullUI: false, isAdmin: false }), true);
+  assert.equal(A.tabVisible('model3d', { signedIn: true, fullUI: true, isAdmin: false }), false);
+  assert.equal(A.tabVisible('model3d', { signedIn: true, fullUI: true, isAdmin: true }), false);
+  assert.equal(A.tabVisible('model3d', { signedIn: false, fullUI: false, isAdmin: false }), false);
+  assert.ok(A.STANDARD_USER_TABS.includes('model3d'));
 });
 
 t('an engineer is not a standard user and gets no user-only landing', () => {

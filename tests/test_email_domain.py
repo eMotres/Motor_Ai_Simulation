@@ -216,7 +216,7 @@ def test_change_email_moves_the_account_and_mails_the_new_address(cp):
     assert _change(old="d.xu@movigor.tech", new="d.xu@movigor.com").status_code == 202
     assert env["U"].get_user("d.xu@movigor.tech") is None and env["U"].get_user("d.xu@movigor.com")["name"] == "D Xu"
     mail = env["outbox"][-1]
-    assert mail["to"] == "d.xu@movigor.com" and mail["subject"] == "Confirm your e-mail address"
+    assert mail["to"] == "d.xu@movigor.com" and mail["subject"].startswith("Confirm your e-mail address")
     # the old link names the old address: dead; the new one works and the account can sign in
     assert client.post("/api/auth/verify", json={"token": old_tok}).status_code == 400
     assert client.post("/api/auth/verify", json={"token": _token_from(mail, "verify")}).status_code == 200

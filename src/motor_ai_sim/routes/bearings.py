@@ -123,7 +123,13 @@ def get_losses(
             "error": f"lubrication must be 'grease' or 'oil_air'; got '{lubrication}'",
             "invalid_parameters": ["lubrication"]})
 
-    assignment, d, c = _machine_bearings(die, cfg)
+    from motor_ai_sim import motor_access as _ma
+    if die and cfg and not _ma.may_see_config(_ma.catalog_access(authorization), die, cfg):
+        # a PRIVATE configuration reads as one whose file cannot be loaded:
+        # no bearings assigned (never an error that tells it apart)
+        assignment, d, c = None, die, cfg
+    else:
+        assignment, d, c = _machine_bearings(die, cfg)
     geo = _live_geometry()
     preview = False
     if card_a or card_b:

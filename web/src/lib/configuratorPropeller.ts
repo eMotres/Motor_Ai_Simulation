@@ -263,6 +263,47 @@ export function thermalServerSettingsSnapshot<T extends Record<string, unknown>>
   };
 }
 
+/** What `PUT /api/me/last_motor` answers about the account's Thermal cooling
+ *  after a motor is loaded (`thermal_settings.follow_loaded_motor`). */
+export interface ThermalFollowAnswer {
+  changed: boolean;
+  application: string | null;
+  settings: { coolMode: string; airSpeedSource: string; propellerId: string; propellerContextKey: string };
+  allowed_propellers: string[];
+}
+
+export interface ThermalFollowFields {
+  coolMode: string;
+  airSpeedSource: 'manual' | 'propeller';
+  propellerId: string;
+  propellerContextKey: string;
+}
+
+const FOLLOW_COOL_MODES = ['air', 'liquid', 'manual', 'none', 'robotics'];
+
+/** The Thermal fields to adopt after the server moved the cooling to the loaded
+ *  motor's application, or `null` when nothing changed / the answer is not
+ *  usable.  A propeller this browser remembers for the motor wins over the
+ *  server's default when the registry still allows it. */
+export function thermalFollowFields(answer: unknown,
+                                    rememberedPropId?: string | null): ThermalFollowFields | null {
+  const a = answer as Partial<ThermalFollowAnswer> | null | undefined;
+  if (!a || a.changed !== true || !a.settings) return null;
+  const st = a.settings;
+  if (!FOLLOW_COOL_MODES.includes(String(st.coolMode))) return null;
+  if (st.airSpeedSource !== 'propeller') {
+    return { coolMode: String(st.coolMode), airSpeedSource: 'manual',
+      propellerId: '', propellerContextKey: '' };
+  }
+  const allowed = Array.isArray(a.allowed_propellers) ? a.allowed_propellers : [];
+  const id = rememberedPropId && allowed.includes(rememberedPropId)
+    ? rememberedPropId : String(st.propellerId || '');
+  const key = String(st.propellerContextKey || '');
+  if (!id || !key) return null;
+  return { coolMode: String(st.coolMode), airSpeedSource: 'propeller',
+    propellerId: id, propellerContextKey: key };
+}
+
 const okAmbient = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= -60 && v <= 80;
 
 /** The remembered propeller / ambient air / load mode of ONE machine ({} when none). */

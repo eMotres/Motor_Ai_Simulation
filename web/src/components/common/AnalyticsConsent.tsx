@@ -1,7 +1,7 @@
 import React from 'react';
 import { Box, Button, Link, Paper, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import { useUIStore } from '../../stores/motorStore';
+import { useUIStore } from '../../stores/uiStore';
 import {
   getAnalytics, pageViewPath, OPEN_COOKIE_SETTINGS_EVENT, type AnalyticsState,
 } from '../../lib/analytics';

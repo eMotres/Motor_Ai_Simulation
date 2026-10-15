@@ -19,7 +19,7 @@ import json, os, sys, time, traceback
 ROOT = os.environ["FC_CAD_ROOT"]
 sys.path.insert(0, ROOT)
 import FreeCAD as App  # noqa: E402,F401
-from motor_templates.segmented_flatwire import params_sheet as ps, health, view  # noqa: E402
+from motor_templates.segmented_flatwire import params_sheet as ps, health, view, frameless  # noqa: E402
 from motor_templates.segmented_flatwire.build import prepare_document, build_bodies  # noqa: E402
 from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
@@ -31,14 +31,15 @@ def main():
     overrides = ps.parse_overrides(os.environ.get("FC_SET", ""))
     if overrides:
         pj = ps.apply_overrides(pj, overrides)
+    kit = frameless.variant_of_profile(pj) == "frameless"
     doc, sh = prepare_document(pj)
-    viol = health.precheck(lambda n: ps.pval(sh, n))
+    viol = health.precheck(lambda n: ps.pval(sh, n), frameless=kit)
     if viol and os.environ.get("FC_SKIP_PRECHECK") != "1":
         return finish(False, "pre-check failed, nothing built: " + " | ".join(viol), precheck=viol, overrides=overrides)
 
     report = build_bodies(doc, sh, pj)
     gt = health.gate(doc)
-    if gt["ok"] and doc.getObject("Mechanics") is not None:
+    if gt["ok"] and doc.getObject("Mechanics") is not None and not kit:
         ft = health.fit(doc)                       # stage 3: interference / contact table of the assembled motor
         report["fit"] = ft["pairs"]
         report["screw_check"] = ft.get("screw")
@@ -56,6 +57,9 @@ def main():
     declared = {n for n, r in roles.items() if r in ps.LIVE_ROLES}
     report["roles_check"] = dict(live_in_model=len(live), declared_live=len(declared),
                                  live_but_not_declared=sorted(live - declared), declared_but_dead=sorted(declared - live))
+    if kit:                     # the rows that only the omitted housing / mechanics use are dead by design in the frameless kit
+        report["roles_check"]["omitted_with_housing"] = report["roles_check"].pop("declared_but_dead")
+        report["roles_check"]["declared_but_dead"] = []
     if report["roles_check"]["live_but_not_declared"] or report["roles_check"]["declared_but_dead"]:
         gt["errors"].append("parameter roles out of date: %s" % report["roles_check"])
         gt["ok"] = False
@@ -77,6 +81,7 @@ def main():
     report["expressions"] = {o.Name: len(o.ExpressionEngine) for o in doc.Objects if getattr(o, "ExpressionEngine", None)}
     report["freecad_version"] = ".".join(str(x) for x in App.Version()[:3])
     report["profile"] = pj.get("profile", {})
+    report["cad_variant"] = "frameless" if kit else "full"
     if os.environ.get("FC_REPORT"):
         with open(os.environ["FC_REPORT"], "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=1, default=str)

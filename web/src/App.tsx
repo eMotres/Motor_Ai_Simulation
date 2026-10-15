@@ -40,7 +40,7 @@ import MotorsCatalog from './components/catalog/MotorsCatalog';
 import ActiveFamilyStrip from './components/common/ActiveFamilyStrip';
 import FamilyLoadBanner from './components/common/FamilyLoadBanner';
 import ComputeNodesHint from './components/common/ComputeNodesHint';
-import AuthButton from './components/auth/AuthButton';
+import AuthButton, { preloadAuthMenu } from './components/auth/AuthButton';
 import Landing from './components/landing/Landing';
 import { VersionBadge } from './components/VersionBadge';
 import { backendReachable } from './lib/version';
@@ -74,6 +74,7 @@ import ControllerPanel from './components/controller/ControllerPanel';
 import { syncMeshConfigFromServer } from './lib/meshConfigSync';
 import CompareTab from './components/compare/CompareTab';
 import Model3DPanel from './components/model3d/Model3DPanel';
+import GeometryTab from './components/geometry/GeometryTab';
 import ComparePanel from './components/compare/ComparePanel';
 import MeshPanel from './components/mesh/MeshPanel';
 import CostPanel from './components/cost/CostPanel';
@@ -87,6 +88,10 @@ import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { useServerLocale } from './i18n/persist';
 import { clearLiveDutyContext, invalidateLastMotorOperations, restoreLastMotor, setLastMotorState } from './lib/lastMotor';
+
+// The signed-in account menu is its own chunk (AuthButton lazy-loads it); start fetching it
+// together with the workspace so the avatar does not pop in late.
+preloadAuthMenu();
 
 // Theme is built from the shared eMotres/aerostator design tokens — see
 // src/theme.ts.  Light is the default (matches the marketing site); dark
@@ -474,7 +479,7 @@ function App() {
   const panels = useModulePanels();
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
-    gate: 'always' | 'signedIn' | 'fullUI' | 'admin'; showViewer: boolean; keepMounted?: boolean;
+    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin'; showViewer: boolean; keepMounted?: boolean;
     render: () => React.ReactNode;
   }> = [
     { id: 'motors', label: 'Motors', order: 0, gate: TAB_GATES.motors, showViewer: false,
@@ -485,59 +490,66 @@ function App() {
       ) },
     { id: 'geometry', label: 'Geometry', order: 20, panelId: 'geometry', gate: TAB_GATES.geometry, showViewer: true,
       render: () => (
-        <Box sx={{ display: 'flex', height: '100%' }}>
-          <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', p: 1.5 }}>
-            <Box sx={{ mb: 1.5 }}><SaveToMotorButton /></Box>
-            <ParameterVariationTable />
-          </Box>
-          <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
-            bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
-          <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-            {/* Viewer controls live WITH the viewer they drive (moved out of
-                the AppBar — user request): grid, axes, render mode, STL
-                build, cache rebuild. */}
-            <Box sx={{ position: 'absolute', top: 40, right: 8, zIndex: 12,
-                       display: 'flex', alignItems: 'center', gap: 0.5,
-                       bgcolor: 'background.paper', border: '1px solid',
-                       borderColor: 'divider', borderRadius: 1, px: 0.5, py: 0.25 }}>
-              <Tooltip title={showGrid ? tr('viewer.hideGrid') : tr('viewer.showGrid')}>
-                <IconButton size="small" color={showGrid ? 'primary' : 'default'} onClick={toggleGrid}>
-                  <GridOnIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title={showAxes ? tr('viewer.hideAxes') : tr('viewer.showAxes')}>
-                <IconButton size="small" color={showAxes ? 'primary' : 'default'} onClick={toggleAxes}>
-                  <ThreeDRotationIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <ToggleButtonGroup
-                value={viewMode}
-                exclusive
-                onChange={(_, m) => m && setViewMode(m)}
-                size="small"
-                sx={{ mx: 0.5 }}
-              >
-                <ToggleButton value="solid" sx={{ px: 1 }}>
-                  <Tooltip title={tr('viewer.solidMesh')}><SquareIcon fontSize="small" /></Tooltip>
-                </ToggleButton>
-                <ToggleButton value="stl" sx={{ px: 1 }}>
-                  <Tooltip title={tr('viewer.stl')}><ViewInArIcon fontSize="small" /></Tooltip>
-                </ToggleButton>
-              </ToggleButtonGroup>
-              <Tooltip title={tr('viewer.generateStl')}>
-                <IconButton size="small" onClick={() => runPipeline(geometry)}>
-                  <BuildIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
-              <Tooltip title={tr('viewer.clearCache')}>
-                <IconButton size="small" onClick={async () => { await clearStlCache(); runPipeline(geometry); }}>
-                  <DeleteSweepIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
+        <GeometryTab panelWidth={panelWidth}
+          divider={(
+            <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
+              bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
+          )}
+          active={(
+          <Box sx={{ display: 'flex', height: '100%' }}>
+            <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', p: 1.5 }}>
+              <Box sx={{ mb: 1.5 }}><SaveToMotorButton /></Box>
+              <ParameterVariationTable />
             </Box>
-            <MaterialControls /><MotorScene /><GeometryBuildTimer />
+            <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
+              bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
+            <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+              {/* Viewer controls live WITH the viewer they drive (moved out of
+                  the AppBar — user request): grid, axes, render mode, STL
+                  build, cache rebuild. */}
+              <Box sx={{ position: 'absolute', top: 40, right: 8, zIndex: 12,
+                         display: 'flex', alignItems: 'center', gap: 0.5,
+                         bgcolor: 'background.paper', border: '1px solid',
+                         borderColor: 'divider', borderRadius: 1, px: 0.5, py: 0.25 }}>
+                <Tooltip title={showGrid ? tr('viewer.hideGrid') : tr('viewer.showGrid')}>
+                  <IconButton size="small" color={showGrid ? 'primary' : 'default'} onClick={toggleGrid}>
+                    <GridOnIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={showAxes ? tr('viewer.hideAxes') : tr('viewer.showAxes')}>
+                  <IconButton size="small" color={showAxes ? 'primary' : 'default'} onClick={toggleAxes}>
+                    <ThreeDRotationIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <ToggleButtonGroup
+                  value={viewMode}
+                  exclusive
+                  onChange={(_, m) => m && setViewMode(m)}
+                  size="small"
+                  sx={{ mx: 0.5 }}
+                >
+                  <ToggleButton value="solid" sx={{ px: 1 }}>
+                    <Tooltip title={tr('viewer.solidMesh')}><SquareIcon fontSize="small" /></Tooltip>
+                  </ToggleButton>
+                  <ToggleButton value="stl" sx={{ px: 1 }}>
+                    <Tooltip title={tr('viewer.stl')}><ViewInArIcon fontSize="small" /></Tooltip>
+                  </ToggleButton>
+                </ToggleButtonGroup>
+                <Tooltip title={tr('viewer.generateStl')}>
+                  <IconButton size="small" onClick={() => runPipeline(geometry)}>
+                    <BuildIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+                <Tooltip title={tr('viewer.clearCache')}>
+                  <IconButton size="small" onClick={async () => { await clearStlCache(); runPipeline(geometry); }}>
+                    <DeleteSweepIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </Box>
+              <MaterialControls /><MotorScene /><GeometryBuildTimer />
+            </Box>
           </Box>
-        </Box>
+          )} />
       ) },
     { id: 'materials', label: 'Materials', order: 30, gate: TAB_GATES.materials, showViewer: true,
       render: () => (
@@ -643,6 +655,12 @@ function App() {
     .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin }))
     .sort((a, b) => a.order - b.order);
   const showViewer = !!tabs.find((t) => t.id === activeTab)?.showViewer;
+  // A tab this account no longer has (a remembered "3D model" tab of an engineer: the model lives in Geometry > Full for the simulation
+  // UI, owner 2026-10-15) lands on the first tab it has - never on an empty body.
+  useEffect(() => {
+    if (!authResolved || !signedIn || tabs.length === 0) return;
+    if (!tabs.some((x) => x.id === activeTab)) setActiveTab((fullUI ? 'geometry' : 'motors') as never);
+  }, [authResolved, signedIn, fullUI, activeTab, tabs.length]); // eslint-disable-line react-hooks/exhaustive-deps
   // The bar: Electromagnetic / Thermal / Mechanical collapse into ONE "Simulations"
   // dropdown (owner 2026-10-13).  Every panel keeps its own tab id, gate and mount
   // rule above; only the bar is drawn differently (lib/simulationsMenu).

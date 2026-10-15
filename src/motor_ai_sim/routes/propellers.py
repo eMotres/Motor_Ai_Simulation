@@ -68,7 +68,8 @@ def list_catalog(selectable_only: bool = Query(
 
 @router.get("/cooling-options")
 def get_cooling_options(die: str = Query(..., description="die name"),
-                        config: Optional[str] = Query(default=None, description="configuration, e.g. L12")
+                        config: Optional[str] = Query(default=None, description="configuration, e.g. L12"),
+                        authorization: Optional[str] = Header(default=None)
                         ) -> Dict[str, Any]:
     """The cooling options the UI may offer for ``die`` / ``config``.
 
@@ -82,8 +83,23 @@ def get_cooling_options(die: str = Query(..., description="die name"),
     is withheld and named in ``bad_defaults``.  ``None`` = take the first allowed propeller with
     torque data.
     """
+    from motor_ai_sim import motor_access as ma
     from motor_ai_sim.cooling_options import cooling_options
-    out = cooling_options(die, config)
+    access = ma.catalog_access(authorization)
+    # A PRIVATE configuration answers exactly like one that does not exist (no
+    # application, die-level options), and no configuration the caller cannot
+    # see is named in the die's per-configuration defaults.
+    hidden = bool(config) and not ma.may_see_config(access, die, config)
+    if hidden:
+        # asked with a name no file can carry, so nothing of the hidden
+        # configuration's own override / default / application is read
+        out = cooling_options(die, "__no_such_configuration__", applications=[])
+        out["config"] = config
+    else:
+        out = cooling_options(die, config)
+    for _k in ("defaults", "bad_defaults"):
+        if isinstance(out.get(_k), dict):
+            out[_k] = {c: v for c, v in out[_k].items() if ma.may_see_config(access, die, c)}
     ids = out.get("propellers")
     details, unknown = [], []
     if ids:
@@ -203,7 +219,7 @@ def get_s1(prop_id: str,
     access = ma.catalog_access(authorization)
     if access.get("mode") == ma.MODE_ANONYMOUS:
         raise HTTPException(status_code=401, detail="Sign in required.")
-    if not ma.may_see_die(access, die):
+    if not ma.may_see_config(access, die, config):
         raise HTTPException(status_code=404, detail=f"no propeller S1 model for {die} {config}")
     allowed = cooling_options(die, config).get("propellers")
     if allowed is not None and prop_id not in allowed:

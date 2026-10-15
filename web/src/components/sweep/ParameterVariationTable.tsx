@@ -20,8 +20,6 @@ import CircularProgress from '@mui/material/CircularProgress';
 import { useMotorStore } from '../../stores/motorStore';
 import { pageVisible } from '../../lib/pageVisible';
 import AddParameterDialog from '../parameters/AddParameterDialog';
-import FreeCADRoundTrip from '../common/FreeCADRoundTrip';
-import Fusion360RoundTrip from '../common/Fusion360RoundTrip';
 import SectionLabel from '../common/SectionLabel';
 import HelpTip from '../common/HelpTip';
 import { useDieContext } from '../common/useDieContext';
@@ -327,32 +325,29 @@ const ParameterVariationTable: React.FC = () => {
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
 
-      {/* ── Header ── */}
-      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1, px: 0.5, gap: 1 }}>
+      {/* ── Header: one tidy line (count, help, add, reload).  The file round-trips (Fusion CSV, FreeCAD) moved into the
+          Geometry tab's "Files" menu next to the Active | Full switch (components/geometry/FilesMenu.tsx). ── */}
+      <Box sx={{ display: 'flex', alignItems: 'center', mb: 1, px: 0.5, gap: 0.75, minWidth: 0 }} data-testid="geometry-param-header">
         <Chip
-          label={`${parameterSchema.length} parameters`}
+          label={tx('paramCount', { n: parameterSchema.length })}
           size="small"
           variant="outlined"
           sx={{ fontSize: 10, height: 20 }}
         />
+        <Tooltip title={tx('helpDimensionsTip')}>
+          <IconButton size="small" onClick={handleHelpClick} aria-label={tx('helpDimensions')} data-testid="geometry-help-dimensions"
+            sx={{ p: 0.4 }}>
+            <HelpOutlineIcon sx={{ fontSize: 16 }} />
+          </IconButton>
+        </Tooltip>
         <Box sx={{ flex: 1 }} />
-        <Button
-          size="small"
-          startIcon={<HelpOutlineIcon sx={{ fontSize: 14 }} />}
-          onClick={handleHelpClick}
-          sx={{ fontSize: 11, py: 0.25, px: 1, minHeight: 24 }}
-        >
-          Help — dimensions
-        </Button>
-        <HelpTip title="Opens a picture of the machine with every parameter's
-          name pointing at the dimension it controls, in a new window." />
         <Button
           size="small"
           startIcon={<AddIcon sx={{ fontSize: 14 }} />}
           onClick={() => setDialogOpen(true)}
           sx={{ fontSize: 11, py: 0.25, px: 1, minHeight: 24 }}
         >
-          Add
+          {tx('addParameter')}
         </Button>
         <Tooltip title={tx('reloadSchemaFromApi')}>
           <IconButton
@@ -363,13 +358,6 @@ const ParameterVariationTable: React.FC = () => {
             <RefreshIcon sx={{ fontSize: 15 }} />
           </IconButton>
         </Tooltip>
-      </Box>
-
-      {/* FreeCAD round-trip: .FCStd with solids + parameter spreadsheet out,
-          edited parameters back in through the normal geometry PUT guards. */}
-      <Box sx={{ px: 0.5 }}>
-        <FreeCADRoundTrip />
-        <Fusion360RoundTrip />
       </Box>
 
       {/* ── RECALCULATE button ── */}

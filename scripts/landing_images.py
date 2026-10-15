@@ -1,6 +1,6 @@
 """The three pictures on the signed-out landing page, redrawn from our own fields.
 
-`web/public/landing/*.png` are committed binaries, and a committed binary whose
+`web/public/landing/*.webp` are committed binaries, and a committed binary whose
 generator lives in somebody's scratchpad is a picture nobody can check and
 nobody can reproduce.  This is that generator.
 
@@ -11,9 +11,9 @@ ways and not three unrelated pretty pictures.  Each picture comes out of
 `motor_ai_sim.duty_fields`, so what the landing shows is what the report
 prints:
 
-    em-field.png            report._em_maps(...)["b"]              |B|  [T]
-    thermal-map.png         report._thermal_map(...)               temperature  [degC]
-    rotor-displacement.png  report._mech_extra_maps(...)["disp"]   displacement |u|  [um]
+    em-field.webp            report._em_maps(...)["b"]              |B|  [T]
+    thermal-map.webp         report._thermal_map(...)               temperature  [degC]
+    rotor-displacement.webp  report._mech_extra_maps(...)["disp"]   displacement |u|  [um]
 
 The third is the rotor WITH ITS SLEEVE, drawn deformed at the report's own
 exaggeration (~22x) and coloured by the true |u| — the mechanical section's
@@ -70,10 +70,14 @@ SIZE.  Each card places a picture at ~442 CSS px, so the file is rendered at
 exactly twice that (:data:`CARD_PX`): a 2x screen gets its own pixels, and at
 1x the browser folds two source pixels into one, which keeps a 2 px mesh line a
 1 px mesh line.  A round 1000 px was a 2.26x reduction and put the line on 0.44
-of a pixel.  The palette steps down until the file clears
-:data:`TARGET_BYTES`; the hard ceiling is :data:`MAX_BYTES` (300 KB, the
-landing's budget, enforced by the test beside the component) and the target is
-lower on purpose, so a later tweak cannot quietly blow it.  All three are
+of a pixel.
+
+FORMAT (2026-10-15).  WebP, lossy, quality :data:`WEBP_QUALITY` (80), the same
+pixel size as before.  The three PNGs were ~250 KB each (750 KB on a slow
+cross-border link, fetched at the same time as the page's JavaScript); the WebPs
+are a fraction of that.  The quality steps down only if a file is over
+:data:`TARGET_BYTES`; the hard ceiling is :data:`MAX_BYTES` (enforced again by
+the test beside the component).  All three are
 placed at one width (:data:`PLACE_CM`), which is what gives the three colour
 bars the same size of tick label.
 
@@ -81,10 +85,18 @@ Run it STANDALONE — never against the live API on 8001.  It imports the solver
 package in-process and reads the npz stores directly; it starts no server and
 calls none::
 
-    python scripts/landing_images.py            # rewrite web/public/landing/*.png
-    python scripts/landing_images.py --check     # redraw elsewhere and compare
+    python scripts/landing_images.py            # rewrite web/public/landing/*.webp
+    python scripts/landing_images.py --check     # --verify, then redraw elsewhere and compare
+    python scripts/landing_images.py --verify    # offline: format, size and pixel width of the shipped files
+    python scripts/landing_images.py --from-png [DIR]   # offline: convert the old PNGs (no solver store needed)
     python scripts/landing_images.py --no-mesh   # the fields with no mesh over them
     python scripts/landing_images.py --preview DIR   # also save the 442 px card view
+
+``--from-png`` exists for a machine without the solver stores: it encodes the
+PNGs found in DIR (default: the landing folder) with the very same
+:func:`encode`, so the shipped bytes come from one code path.  The PNGs it reads
+were palette-quantised, so a conversion is one lossy step on top of that; the
+next full run redraws from the fields and replaces them.
 
 ``--check`` writes nothing into the repo: it redraws into a temporary directory
 and reports, per file, whether the bytes still match what is committed.  A
@@ -115,9 +127,14 @@ from motor_ai_sim import report                             # noqa: E402
 OUT_DIR = ROOT / "web" / "public" / "landing"
 
 #: The landing's budget, checked again by web/src/components/landing/__tests__.
-MAX_BYTES = 300 * 1024
-#: What the palette search actually aims at — see SIZE above.
-TARGET_BYTES = 255 * 1024
+MAX_BYTES = 150 * 1024
+#: What the quality search actually aims at — see FORMAT above.
+TARGET_BYTES = 110 * 1024
+#: WebP quality (lossy) and the steps tried if a picture is over TARGET_BYTES.
+WEBP_QUALITY = 80
+WEBP_STEPS = (80, 76, 72, 68, 64)
+#: The names of the shipped files, in card order.
+NAMES = ("em-field.webp", "thermal-map.webp", "rotor-displacement.webp")
 #: Device pixels across: EXACTLY twice the ~442 px the card places the picture
 #: at.  A round 1000 was a 2.26x reduction at 1x DPR and a mesh line landed on
 #: 0.44 of a pixel; at 2x the browser folds two source pixels into one, so a
@@ -264,16 +281,15 @@ def to_full(verts: Any, tris: Any,
 # ── the file ────────────────────────────────────────────────────────────────
 
 def encode(png: bytes, max_w: int = CARD_PX) -> bytes:
-    """One builder's PNG, downscaled and palette-quantised to the budget."""
+    """One builder's PNG, downscaled and encoded as lossy WebP within the budget."""
     im = Image.open(io.BytesIO(png)).convert("RGB")
     if im.width > max_w:
         im = im.resize((max_w, round(im.height * max_w / im.width)),
                        Image.LANCZOS)
     data = b""
-    for colors in (256, 192, 128, 96, 64):
+    for q in WEBP_STEPS:
         buf = io.BytesIO()
-        im.convert("P", palette=Image.ADAPTIVE, colors=colors).save(
-            buf, format="PNG", optimize=True)
+        im.save(buf, format="WEBP", quality=q, method=6)
         data = buf.getvalue()
         if len(data) <= TARGET_BYTES:
             break
@@ -281,6 +297,42 @@ def encode(png: bytes, max_w: int = CARD_PX) -> bytes:
         raise SystemExit("picture is %d B, over the %d B budget"
                          % (len(data), MAX_BYTES))
     return data
+
+
+def verify(directory: Path = OUT_DIR) -> bool:
+    """Offline check of the shipped files: they exist, are WebP, are CARD_PX wide
+    and inside the byte budget.  Needs no solver store."""
+    ok = True
+    for name in NAMES:
+        f = directory / name
+        if not f.exists():
+            print("%-26s MISSING" % name)
+            ok = False
+            continue
+        raw = f.read_bytes()
+        try:
+            im = Image.open(io.BytesIO(raw))
+            fmt, size = im.format, im.size
+        except Exception as exc:                          # noqa: BLE001
+            print("%-26s unreadable: %s" % (name, exc))
+            ok = False
+            continue
+        good = fmt == "WEBP" and size[0] == CARD_PX and len(raw) <= MAX_BYTES
+        ok = ok and good
+        print("%-26s %-5s %dx%d %6.0f KB  %s" % (
+            name, fmt, size[0], size[1], len(raw) / 1024, "ok" if good else "BAD"))
+    return ok
+
+
+def from_png(src: Path) -> Dict[str, bytes]:
+    """``{filename: webp bytes}`` from the PNGs of the same names in ``src``."""
+    out: Dict[str, bytes] = {}
+    for name in NAMES:
+        png = src / name.replace(".webp", ".png")
+        if not png.exists():
+            raise SystemExit("no %s to convert" % png)
+        out[name] = encode(png.read_bytes())
+    return out
 
 
 # ── the three pictures ──────────────────────────────────────────────────────
@@ -302,7 +354,7 @@ def build(mesh: bool = True) -> Dict[str, bytes]:
         raise SystemExit("the |B| map did not render")
     print("             |B| max %.3f T, bar capped at %.3f T"
           % (maps.get("b_max_T") or 0.0, maps.get("b_cap_T") or 0.0))
-    out["em-field.png"] = encode(maps["b"])
+    out["em-field.webp"] = encode(maps["b"])
 
     th = df.load(DIE, CFG, DUTY, "thermal")
     if th is None or th.get("temperature_per_node") is None:
@@ -318,7 +370,7 @@ def build(mesh: bool = True) -> Dict[str, bytes]:
         }}, width_cm=PLACE_CM)
     if not png:
         raise SystemExit("the temperature map did not render")
-    out["thermal-map.png"] = encode(png)
+    out["thermal-map.webp"] = encode(png)
 
     src = report._duty_map_sources(DIE, CFG, DUTY)
     rs: Optional[Dict[str, Any]] = src.get("rotor_stress")
@@ -331,7 +383,7 @@ def build(mesh: bool = True) -> Dict[str, bytes]:
         raise SystemExit("the displacement map did not render "
                          "(this duty stored no u_mag_per_node)")
     print("             shape exaggerated x%s" % mech.get("disp_exagg"))
-    out["rotor-displacement.png"] = encode(mech["disp"])
+    out["rotor-displacement.webp"] = encode(mech["disp"])
     return out
 
 
@@ -346,11 +398,24 @@ def main(argv: List[str]) -> int:
             raise SystemExit("--preview needs a directory")
         preview = Path(args[i + 1])
         del args[i:i + 2]
+    if "--verify" in args:
+        return 0 if verify() else 1
+    convert: Optional[Path] = None
+    if "--from-png" in args:
+        i = args.index("--from-png")
+        convert = OUT_DIR
+        if i + 1 < len(args) and not args[i + 1].startswith("--"):
+            convert = Path(args[i + 1])
+            del args[i:i + 2]
+        else:
+            del args[i:i + 1]
     unknown = [a for a in args if a not in ("--check", "--no-mesh")]
     if unknown:
         raise SystemExit("unknown argument(s): %s" % " ".join(unknown))
 
-    pics = build(mesh=mesh)
+    if check and not verify():
+        return 1
+    pics = from_png(convert) if convert is not None else build(mesh=mesh)
     # A bare-field run is a comparison, not the shipped set: it never writes
     # into the repo, whether or not --check was asked for.
     dest = (Path(tempfile.mkdtemp(prefix="landing-check-"))
@@ -379,7 +444,7 @@ def main(argv: List[str]) -> int:
             im = im.resize((PREVIEW_PX,
                             round(im.height * PREVIEW_PX / im.width)),
                            Image.LANCZOS)
-            im.save(preview / ("landing_preview_442_%s" % name))
+            im.save(preview / ("landing_preview_442_%s.png" % name.rsplit(".", 1)[0]))
     if dest is not OUT_DIR:
         print("\nredrawn into %s (nothing in the repo was touched)" % dest)
         return 0 if (same or not mesh) else 1

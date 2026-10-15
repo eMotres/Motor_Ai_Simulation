@@ -10,6 +10,8 @@ Tree (FreeCAD 1.0.2):
   Mechanics (App::Part) -> Shaft, Stator_holder, Stator_holder_back, Ring (+ Ring_back link), Prop_fix, Screw (hidden
                            base) + Screws (array), Bearing_618_8 (Part: outer / inner ring, Bearing_ball + Balls array)
                            + Bearing_618_8_back (link)                    [only when the profile has mechanics rows]
+cad_variant = frameless (profile.cad_variant, frameless.py) omits Mechanics as a whole (housing, bearings, shaft, screws, rings, Prop_fix)
+and adds the App::DocumentObjectGroup Mounting_datums; stator, coils, phase board, rotor and magnets are built exactly as in the full model.
 Motor-specific metadata (motor id, variant, revision, materials, document name) comes from the profile (N02).
 Use prepare_document() + precheck before build_bodies(); call health.gate() before saving/exporting (B01).
 """
@@ -20,7 +22,7 @@ from .rotor import build_rotor
 from .magnet import build_magnet
 from .coil import build_coil
 from .sketchkit import check_sketch
-from . import mechanics, electronics
+from . import mechanics, electronics, frameless
 
 
 def _polar_array(doc, base, count_expr, name):
@@ -41,6 +43,7 @@ def prepare_document(pj, doc_name=None):
     try:
         meta = dict(doc.Meta)
         meta.update({"motor_" + k: str(prof.get(k, "")) for k in ("motor_id", "variant", "revision")})
+        meta["motor_cad_variant"] = frameless.variant_of_profile(pj)
         doc.Meta = meta
     except Exception:
         pass
@@ -49,7 +52,8 @@ def prepare_document(pj, doc_name=None):
 
 def build_bodies(doc, sh, pj):
     prof = pj.get("profile", {})
-    report = dict(param_mismatches=ps.compare_with_json(sh, pj), sketches={})
+    kit = frameless.variant_of_profile(pj) == "frameless"
+    report = dict(param_mismatches=ps.compare_with_json(sh, pj), sketches={}, cad_variant="frameless" if kit else "full")
 
     def part(name):
         p = doc.addObject("App::Part", name)
@@ -79,7 +83,7 @@ def build_bodies(doc, sh, pj):
             report["sketches"][sk.Name] = check_sketch(sk)[1]
     for sk in r_coil["sketches"]:
         report["sketches"][sk.Name] = check_sketch(sk)[1]
-    if pj.get("named_parameters_mechanics"):
+    if pj.get("named_parameters_mechanics") and not kit:
         rep = mechanics.build_mechanics(doc, sh, _polar_array)
         for b in mechanics.MECH_BODIES + mechanics.ARRAY_BASES:
             o = doc.getObject(b)
@@ -93,6 +97,8 @@ def build_bodies(doc, sh, pj):
     if any(p["name"] in ("phase_board_z", "board_outer_r") for _, p in ps.all_params(pj)):
         report["phase_board_import"] = electronics.build_electronics(doc, sh)
         doc.recompute()
+    if kit:
+        report["mounting_datums"] = frameless.build_mounting_datums(doc, sh)
     return report
 
 

@@ -14,6 +14,16 @@
  *         Twitter card and JSON-LD (Organization + SoftwareApplication) in <head>,
  *       * the landing text as plain semantic HTML inside <div id="root">;
  *   - writes dist/robots.txt and dist/sitemap.xml.
+ * The concept diagram (the "circle": five steps around the AeroStator Core render, the
+ * open ecosystem as the outer ring) is in the static page too, as inline SVG plus a plain
+ * <img> of the machine: it is rendered here by the SAME React view the app uses
+ * (src/components/landing/ConceptDiagram.tsx -> ConceptDiagramView, via scripts/diagram-ssr.tsx
+ * bundled with esbuild and run through react-dom/server), so a visitor whose JavaScript is
+ * slow or blocked (mainland China) sees it before any script runs.
+ * THEME.  The static block is LIGHT, like the app's default (src/theme.ts loadThemeMode); it
+ * turns dark only when localStorage says the visitor chose dark (index.html stamps
+ * html[data-theme] before first paint).  It never follows prefers-color-scheme, because the
+ * app does not, and a dark page that flips to light when the bundle mounts is a flash.
  * React's `createRoot().render()` empties #root on mount, so every visitor that
  * runs JavaScript gets the real app exactly as before (signed-in users, the
  * first-visit language auto-detect, the sign-in dialog).  The static block is
@@ -30,8 +40,10 @@
  * Usage: node scripts/prerender-landing.mjs [distDir]   (default: ./dist)
  */
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildSync } from 'esbuild';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 export const WEB = path.resolve(HERE, '..');
@@ -57,9 +69,9 @@ export const STEP_IDS = ['design', 'simulation', 'configure', 'model3d', 'produc
 export const OPEN_IDS = ['source', 'agents', 'modules', 'compute'];
 export const APP_IDS = ['aviation', 'robotics', 'marine', 'yours'];
 export const FEATURES = [
-  ['em', '/landing/em-field.png'],
-  ['thermal', '/landing/thermal-map.png'],
-  ['mech', '/landing/rotor-displacement.png'],
+  ['em', '/landing/em-field.webp'],
+  ['thermal', '/landing/thermal-map.webp'],
+  ['mech', '/landing/rotor-displacement.webp'],
 ];
 
 /** The two public pages.  `path` is the canonical URL path. */
@@ -77,8 +89,50 @@ export const BOTS = [
 /** Never indexed: the API, OAuth, the MCP endpoint and the consent page. */
 export const DISALLOW = ['/api/', '/oauth/', '/mcp', '/agent-consent', '/preferences', '/zh-cn/preferences'];
 
+/** Pixel size of a WebP file (lossy 'VP8 ', lossless 'VP8L' or extended 'VP8X'), read from
+ *  its header, so the static <img> can carry width/height and the card does not shift. */
+export function webpSize(buf) {
+  if (buf.toString('latin1', 0, 4) !== 'RIFF' || buf.toString('latin1', 8, 12) !== 'WEBP') {
+    throw new Error('not a WebP file');
+  }
+  const kind = buf.toString('latin1', 12, 16);
+  if (kind === 'VP8 ') return { w: buf.readUInt16LE(26) & 0x3fff, h: buf.readUInt16LE(28) & 0x3fff };
+  if (kind === 'VP8L') {
+    const b = buf.readUInt32LE(21);
+    return { w: (b & 0x3fff) + 1, h: ((b >> 14) & 0x3fff) + 1 };
+  }
+  if (kind === 'VP8X') return { w: buf.readUIntLE(24, 3) + 1, h: buf.readUIntLE(27, 3) + 1 };
+  throw new Error(`unknown WebP chunk ${kind}`);
+}
+
 const esc = (s) => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+/** Bundle the app's own diagram view for Node (once per process) and return `renderDiagram`. */
+let diagramRenderer = null;
+function loadDiagramRenderer(webDir) {
+  if (diagramRenderer) return diagramRenderer;
+  const outDir = path.join(webDir, 'node_modules', '.cache', 'landing-ssr');
+  fs.mkdirSync(outDir, { recursive: true });
+  const outfile = path.join(outDir, 'diagram.cjs');
+  buildSync({
+    entryPoints: [path.join(webDir, 'scripts', 'diagram-ssr.tsx')],
+    outfile,
+    bundle: true,
+    format: 'cjs',
+    platform: 'node',
+    packages: 'external', // react, react-dom, @mui/material resolve from web/node_modules
+    jsx: 'automatic',
+    logLevel: 'silent',
+  });
+  diagramRenderer = createRequire(outfile)(outfile).renderDiagram;
+  return diagramRenderer;
+}
+
+/** The concept diagram as static SVG + <img> markup, in the locale's words, LIGHT theme. */
+export function renderDiagramMarkup(L, webDir = WEB) {
+  return loadDiagramRenderer(webDir)(L, 'light');
+}
 
 export function loadLocale(id, webDir = WEB) {
   const file = path.join(webDir, 'src', 'locales', id, 'landing.json');
@@ -93,8 +147,8 @@ function get(tree, dotted) {
 
 const STYLE = `
 html,body,#root{height:auto;overflow:auto}
-body{margin:0;background:#fff}
-#seo-landing{font-family:Inter,-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",Roboto,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;font-size:16px;max-width:1100px;margin:0 auto;padding:20px 16px 48px;background:#fff;color:#0f172a;line-height:1.6;-webkit-text-size-adjust:100%}
+body{margin:0;background:#f7f6f3}
+#seo-landing{box-sizing:border-box;font-family:Inter,-apple-system,BlinkMacSystemFont,system-ui,"Segoe UI",Roboto,"PingFang SC","Noto Sans SC","Microsoft YaHei",sans-serif;font-size:16px;max-width:1200px;margin:0 auto;padding:20px 16px 48px;background:#f7f6f3;color:#0f172a;line-height:1.6;-webkit-text-size-adjust:100%}
 #seo-landing a{color:#1d4ed8}
 #seo-landing header{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:12px}
 #seo-landing .brand{display:flex;align-items:center;gap:10px;font-size:1.5rem;font-weight:700;text-decoration:none;color:inherit}
@@ -109,15 +163,19 @@ body{margin:0;background:#fff}
 #seo-landing .slow-note{display:none;margin:16px 0;padding:12px 16px;border:1px solid #b45309;border-radius:8px;background:#fffbeb;color:#451a03}
 #seo-landing.slow .slow-note{display:block}
 #seo-landing ol.chain{list-style:none;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;padding:0}
-#seo-landing ol.chain li{border:1.5px solid #1d4ed8;border-radius:99px;padding:3px 12px;font-weight:600}
+#seo-landing ol.chain li{border:1.5px solid #1d4ed8;border-radius:99px;padding:3px 12px;font-weight:600;background:#fff}
 #seo-landing .grid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));list-style:none;padding:0}
-#seo-landing .grid>*{border:1px solid #94a3b8;border-radius:8px;padding:14px}
+#seo-landing .grid>*{border:1px solid #94a3b8;border-radius:8px;padding:14px;background:#fff}
+#seo-landing .concept{display:none;max-width:1100px;margin:0 auto 32px}
+#seo-landing .sr-only{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
 #seo-landing figure{margin:0;border:1px solid #94a3b8;border-radius:8px;overflow:hidden;background:#fff}
 #seo-landing figure img{display:block;width:100%;height:auto}
 #seo-landing figcaption{padding:8px 12px;font-weight:600;border-top:1px solid #94a3b8;background:#f1f5f9}
 #seo-landing footer{margin-top:48px;padding-top:16px;border-top:1px solid #94a3b8;text-align:center;font-size:.9rem;color:#334155}
-@media (prefers-color-scheme:dark){body{background:#0f172a}#seo-landing{background:#0f172a;color:#f1f5f9}#seo-landing a{color:#93c5fd}#seo-landing h1,#seo-landing h2,#seo-landing h3{color:#f8fafc}#seo-landing .lead{color:#e2e8f0}#seo-landing footer{color:#cbd5e1}#seo-landing .auth a{background:#3b82f6;border-color:#3b82f6;color:#0f172a}#seo-landing .auth a.alt{background:#0f172a;color:#93c5fd;border-color:#93c5fd}#seo-landing .grid>*,#seo-landing footer,#seo-landing figure,#seo-landing figcaption{border-color:#475569}#seo-landing figure,#seo-landing figcaption{background:#1e293b}#seo-landing .slow-note{background:#451a03;color:#fef3c7;border-color:#f59e0b}}
-@media (min-width:700px){#seo-landing h1{font-size:2.4rem}}
+html[data-theme="dark"] body{background:#0f172a}html[data-theme="dark"] #seo-landing{background:#0f172a;color:#f1f5f9}html[data-theme="dark"] #seo-landing a{color:#93c5fd}html[data-theme="dark"] #seo-landing h1,html[data-theme="dark"] #seo-landing h2,html[data-theme="dark"] #seo-landing h3{color:#f8fafc}html[data-theme="dark"] #seo-landing .lead{color:#e2e8f0}html[data-theme="dark"] #seo-landing footer{color:#cbd5e1}html[data-theme="dark"] #seo-landing .auth a{background:#3b82f6;border-color:#3b82f6;color:#0f172a}html[data-theme="dark"] #seo-landing .auth a.alt{background:#0f172a;color:#93c5fd;border-color:#93c5fd}html[data-theme="dark"] #seo-landing .grid>*,html[data-theme="dark"] #seo-landing footer,html[data-theme="dark"] #seo-landing figure,html[data-theme="dark"] #seo-landing figcaption{border-color:#475569}html[data-theme="dark"] #seo-landing .grid>*,html[data-theme="dark"] #seo-landing figure,html[data-theme="dark"] #seo-landing figcaption,html[data-theme="dark"] #seo-landing ol.chain li{background:#1e293b}html[data-theme="dark"] #seo-landing .slow-note{background:#451a03;color:#fef3c7;border-color:#f59e0b}html[data-theme="dark"] #seo-landing .concept{background:#fff;border-radius:12px;padding:8px}
+@media (min-width:600px){#seo-landing{padding-left:32px;padding-right:32px}}
+@media (min-width:700px){#seo-landing h1{font-size:2.4rem}#seo-landing .concept{display:block}}
+@media (min-width:900px){#seo-landing .grid.steps{grid-template-columns:repeat(5,1fr)}}
 `.trim();
 
 /** Sign in + Request access as plain links: they open the app's e-mail dialog once the
@@ -131,7 +189,7 @@ export function authLinks(L, loc) {
 }
 
 /** The landing text as semantic HTML (what Landing.tsx shows, without the widgets). */
-export function renderBody(L, loc) {
+export function renderBody(L, loc, webDir = WEB) {
   const t = (k) => esc(get(L, k));
   const li = (items) => items.map((s) => `<li>${s}</li>`).join('');
   const card = (h, p) => `<li><h3>${h}</h3><p>${p}</p></li>`;
@@ -154,12 +212,18 @@ export function renderBody(L, loc) {
   out.push(authLinks(L, loc));
 
   out.push(`<section aria-labelledby="concept-h"><h2 id="concept-h">${t('concept.title')}</h2>`);
-  out.push(`<p class="lead">${t('concept.sub')}</p><p class="lead">${t('concept.diagramAlt')}</p>`);
-  out.push(`<ol class="grid">${STEP_IDS.map((id) => card(t(`chain.${id}`), t(`steps.${id}`))).join('')}</ol></section>`);
+  // The diagram shows from 700 px up (below that the step cards say the same, as in the app);
+  // its text description stays in the HTML for screen readers and bots.
+  out.push(`<p class="lead">${t('concept.sub')}</p>`);
+  out.push(`<div class="concept" data-testid="concept-diagram">${renderDiagramMarkup(L, webDir)}</div>`);
+  out.push(`<p class="sr-only">${t('concept.diagramAlt')}</p>`);
+  out.push(`<ol class="grid steps">${STEP_IDS.map((id) => card(t(`chain.${id}`), t(`steps.${id}`))).join('')}</ol></section>`);
 
   out.push(`<section aria-labelledby="sim-h"><h2 id="sim-h">${t('sim.title')}</h2><p class="lead">${t('sim.sub')}</p>`);
-  out.push('<div class="grid">' + FEATURES.map(([k, src]) =>
-    `<figure><img src="${src}" loading="lazy" alt="${t(`sim.${k}`)}"><figcaption>${t(`sim.${k}`)}</figcaption></figure>`).join('') + '</div></section>');
+  out.push('<div class="grid">' + FEATURES.map(([k, src]) => {
+    const { w, h } = webpSize(fs.readFileSync(path.join(webDir, 'public', src)));
+    return `<figure><img src="${src}" width="${w}" height="${h}" loading="lazy" decoding="async" fetchpriority="low" alt="${t(`sim.${k}`)}"><figcaption>${t(`sim.${k}`)}</figcaption></figure>`;
+  }).join('') + '</div></section>');
 
   out.push(`<section aria-labelledby="open-h"><h2 id="open-h">${t('open.title')}</h2><p class="lead">${t('open.sub')}</p>`);
   out.push(`<ul class="grid">${OPEN_IDS.map((id) => card(t(`open.${id}.title`), t(`open.${id}.text`))).join('')}</ul></section>`);
@@ -246,7 +310,7 @@ export function renderHead(L, loc) {
 }
 
 /** Turn Vite's index.html into the crawlable page of one locale. */
-export function renderPage(template, L, loc) {
+export function renderPage(template, L, loc, webDir = WEB) {
   let html = template;
   html = html.replace(/<html lang="[^"]*"/, `<html lang="${loc.lang}"`);
   html = html.replace(/[ \t]*<title>[\s\S]*?<\/title>\r?\n?/, '');
@@ -255,7 +319,7 @@ export function renderPage(template, L, loc) {
   // Function replacers: the text may contain "$" sequences that String.replace would expand.
   html = html.replace(/[ \t]*<\/head>/, () => `    ${renderHead(L, loc)}\n  </head>`);
   if (!/<div id="root"><\/div>/.test(html)) throw new Error('template has no empty <div id="root"></div>');
-  html = html.replace('<div id="root"></div>', () => `<div id="root">${renderBody(L, loc)}</div>`);
+  html = html.replace('<div id="root"></div>', () => `<div id="root">${renderBody(L, loc, webDir)}</div>`);
   return html;
 }
 
@@ -288,7 +352,7 @@ export function prerender(dist, { webDir = WEB, now = new Date() } = {}) {
   const template = fs.readFileSync(tplPath, 'utf8');
   const written = [];
   for (const loc of LOCALES) {
-    const html = renderPage(template, loadLocale(loc.id, webDir), loc);
+    const html = renderPage(template, loadLocale(loc.id, webDir), loc, webDir);
     const out = path.join(dist, loc.file);
     fs.mkdirSync(path.dirname(out), { recursive: true });
     fs.writeFileSync(out, html);

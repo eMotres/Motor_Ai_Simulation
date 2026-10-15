@@ -252,6 +252,11 @@ class ComponentPart(BaseModel):
     counted: bool = Field(default=True, description="False = a real part of the component that is NOT inside "
                                                     "``mass_properties.mass_kg`` (listed so a load study knows it exists)")
     basis: str = ""
+    part_id: Optional[str] = Field(default=None, max_length=64, description="the id of the part in THE part tree "
+                                   "(``motor_ai_sim.part_tree``): the same id, name and group in Geometry, Materials, the 3-D model "
+                                   "and the BOM export (motor parts only)")
+    group: Optional[str] = Field(default=None, max_length=32, description="part-tree group: stator, winding, rotor, magnets, shaft, "
+                                 "housing, bearings, electronics, fasteners or other")
 
 # ---------------------------------------------------------------------------
 # ports

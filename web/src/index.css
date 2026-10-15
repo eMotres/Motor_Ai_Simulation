@@ -28,8 +28,9 @@
    Light values mirror the aerostator.com (eMotres) site design system
    (see eMotres/src/app/globals.css); dark values are the app's original
    palette.  Components reference ONLY these vars — never raw hex — so the
-   whole app flips with html[data-theme]. */
-:root,
+   whole app flips with html[data-theme].  LIGHT is the default (no attribute yet = light),
+   exactly like theme.ts loadThemeMode(); only data-theme="dark" switches to the dark set.
+   (The page used to start dark and flip to light when the bundle mounted.) */
 html[data-theme='dark'] {
   --app-bg: #0f172a;            /* page background */
   --panel: #1e293b;             /* elevated surface (Paper) */
@@ -52,6 +53,7 @@ html[data-theme='dark'] {
   --scroll-thumb-hover: #64748b;
 }
 
+:root,
 html[data-theme='light'] {
   --app-bg: #f7f6f3;
   --panel: #ffffff;

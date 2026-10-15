@@ -141,7 +141,7 @@ def _thumb_path_d(geom, c: float, s: float) -> str:
 #: current one and redraw it; see `report.thumb_svg_for`.
 #:
 #: 1 = the original palette, no band.  2 = app colours + the retaining band.
-THUMB_SVG_VERSION = 2
+THUMB_SVG_VERSION = 3
 
 
 def _gen_thumb_svg(geo: dict):
@@ -185,7 +185,15 @@ def _gen_thumb_svg(geo: dict):
         if _sl is not None:
             out.append(f'<path d="{_thumb_path_d(_sl, C, s)}" '
                        f'fill="{COL["sleeve"]}" fill-rule="evenodd"/>')
-        out.append(f'<path d="{_thumb_path_d(P["shaft"], C, s)}" fill="{COL["shaft"]}"/>')
+        # No shaft (owner 2026-10-15): every catalog picture shows the same white rotor bore, whatever the shaft
+        # (solid, tube, reference or none) - the pictures must look alike across the catalog.  Some rotors are
+        # built solid down to the shaft, so the bore is painted white explicitly at the rotor's inner radius.
+        try:
+            r_in = float(m.parameters.get("rotor_inner_radius") or 0.0)
+        except (TypeError, ValueError):
+            r_in = 0.0
+        if r_in > 0:
+            out.append(f'<circle cx="{C:.2f}" cy="{C:.2f}" r="{r_in * s:.3f}" fill="#ffffff"/>')
         out.append("</svg>")
         return "".join(out)
     except Exception:
@@ -730,20 +738,37 @@ class SettingsPatch(BaseModel):
     geo_sig: Optional[str] = None
 
 
+def _is_hidden_preset(p: dict, view: tuple) -> bool:
+    """A preset that describes a PRIVATE configuration the caller has no grant for
+    (see ``catalog.hidden_preset_view``) does not exist for them."""
+    ids, names = view
+    return bool(p) and (str(p.get("id")) in ids
+                        or str(p.get("name") or "").strip().casefold() in names)
+
+
+def _hidden_view(authorization):
+    try:
+        from motor_ai_sim.routes.catalog import hidden_preset_view
+        return hidden_preset_view(authorization)
+    except Exception:                                           # noqa: BLE001 - never break the list
+        return set(), set()
+
+
 @router.get("")
-def list_presets():
+def list_presets(authorization: Optional[str] = Header(default=None)):
     """List all saved motor presets (sorted by order)."""
     _backfill_owners()
     presets = _with_shared(_load_presets())
-    items = [_summary(p) for p in presets.values()]
+    _hv = _hidden_view(authorization)
+    items = [_summary(p) for p in presets.values() if not _is_hidden_preset(p, _hv)]
     items.sort(key=lambda x: (x["order"], x["name"]))
     return {"presets": items}
 
 
 @router.get("/{preset_id}")
-def get_preset(preset_id: str):
+def get_preset(preset_id: str, authorization: Optional[str] = Header(default=None)):
     p = _with_shared(_load_presets()).get(preset_id)
-    if not p:
+    if not p or _is_hidden_preset(p, _hidden_view(authorization)):
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
     return p
 
@@ -759,7 +784,7 @@ def apply_preset(preset_id: str,
     else's motor as a read-only working copy instead of auto-saving into it and
     collecting a 403 every 0.9 s."""
     p = _with_shared(_load_presets()).get(preset_id)
-    if not p:
+    if not p or _is_hidden_preset(p, _hidden_view(authorization)):
         raise HTTPException(status_code=404, detail=f"preset '{preset_id}' not found")
 
     geometry = p.get("geometry", {}) or {}
@@ -1328,7 +1353,7 @@ def open_motor(preset_id: str,
     _backfill_owners()
     presets = _load_presets()
     src = presets.get(preset_id)
-    if not src:
+    if not src or _is_hidden_preset(src, _hidden_view(authorization)):
         raise HTTPException(status_code=404, detail=f"motor '{preset_id}' not found")
     ident = _caller_identity(authorization)
     if not _is_template(src) and _can_write(src, ident):

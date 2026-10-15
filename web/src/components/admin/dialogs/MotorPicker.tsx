@@ -5,11 +5,17 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Typography, CircularProgress, FormControlLabel, Switch, Checkbox } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { CardBadge, CardSummary } from '../../common/CardBadge';
+import HelpTip from '../../common/HelpTip';
+import { grantRows, toggleKey } from '../configVisibility';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const LABEL = { fontSize: 10, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em' } as const;
 
-export interface MotorGrants { all: boolean; dies: string[]; default?: { die: string; config: string } | null }
+export interface MotorGrants {
+  all: boolean; dies: string[]; default?: { die: string; config: string } | null;
+  /** "<die>/<config>" grants that open PRIVATE configurations (absent = none) */
+  configs?: string[];
+}
 export interface CatalogDie {
   name: string; stator_diameter: number | null;
   slots?: number | null; poles?: number | null;
@@ -18,6 +24,8 @@ export interface CatalogDie {
   config_names?: string[];
   /** {configuration: date} of those that have a FULL passport card (v1 record) */
   cards?: Record<string, string>;
+  /** configurations marked `visibility: private` (hidden from everybody but admins and config grants) */
+  private_configs?: string[];
 }
 
 /** Load the catalog once per dialog opening. */
@@ -93,5 +101,34 @@ export const MotorPicker: React.FC<{
         </Typography>
       )}
     </>
+  );
+};
+
+/** Per-user CONFIG grants: the private configurations (and any grant the account already holds) as tick boxes.
+ *  Admins always see everything; a grant opens ONE private configuration of a die the account can already see. */
+export const ConfigGrantPicker: React.FC<{
+  dies: CatalogDie[] | null; granted: ReadonlySet<string>; onChange: (next: Set<string>) => void;
+}> = ({ dies, granted, onChange }) => {
+  const { t } = useTranslation('admin');
+  const rows = useMemo(() => grantRows(dies, granted), [dies, granted]);
+  if (dies === null || rows.length === 0) return null;
+  return (
+    <Box sx={{ mt: 2.5 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+        <Typography sx={{ fontSize: 14, fontWeight: 700, color: 'var(--text-1)' }}>{t('motors.grantTitle')}</Typography>
+        <HelpTip title={t('motors.grantTip')} />
+      </Box>
+      {rows.map((r) => (
+        <FormControlLabel key={r.key} sx={{ display: 'flex', ml: 0 }}
+          control={<Checkbox size="small" checked={granted.has(r.key)} sx={{ py: 0.25 }}
+            onChange={() => onChange(toggleKey(granted, r.key))} />}
+          label={
+            <Typography sx={{ fontSize: 12.5, color: 'var(--text-1)' }}>
+              {r.die} <span style={{ color: 'var(--text-3)' }}>/ {r.config}</span>
+              {!r.exists && <span style={{ color: '#f87171' }}>{'  '}· {t('motors.grantUnknown')}</span>}
+              {r.exists && !r.isPrivate && <span style={{ color: 'var(--text-4)' }}>{'  '}· {t('motors.grantNowPublic')}</span>}
+            </Typography>} />
+      ))}
+    </Box>
   );
 };

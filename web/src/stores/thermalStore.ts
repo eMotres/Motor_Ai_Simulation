@@ -48,8 +48,13 @@ import type {
 } from '../components/thermal/api';
 import { tileFullRing } from '../components/thermal/types';
 import { readMeshSettings } from '../components/common/motorSettings';
-import { getLastMotorState, isCurrentLastMotorUser } from '../lib/lastMotor';
-import { propellerContextKey, thermalServerSettingsSnapshot } from '../lib/configuratorPropeller';
+import {
+  configureRefIdForSelection, getLastMotorState, isCurrentLastMotorUser, registerThermalFollow,
+} from '../lib/lastMotor';
+import {
+  PROP_CHOICE_LS, coolChoiceKey, propellerContextKey, readCoolChoice,
+  thermalFollowFields, thermalServerSettingsSnapshot,
+} from '../lib/configuratorPropeller';
 
 /* The staleness test is IMPORTED, not re-implemented: "the result on screen is
    of a different machine" must mean exactly one thing across the app, and this
@@ -943,3 +948,30 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     }
   },
 }));
+
+/* ── the cooling follows the loaded motor (2026-10-15) ────────────────────────
+   Loading a different motor moves the account's Thermal cooling to that motor's
+   application ON THE SERVER (`PUT /api/me/last_motor` answers with what it
+   did).  This store adopts that answer so a Run from the Electromagnetic tab
+   never sends the previous motor's propeller source: a robot motor gets
+   Robotics, a propeller motor its propeller with a fresh key.  A store that has
+   not hydrated yet reads the already-followed server copy when it does. */
+registerThermalFollow((answer) => {
+  const st = useThermalStore.getState();
+  if (!st.hydrated) return;
+  const motor = getLastMotorState();
+  let remembered: string | null = null;
+  if (motor.status === 'loaded' && motor.email && motor.selection) {
+    const refId = configureRefIdForSelection(motor.selection);
+    try {
+      remembered = readCoolChoice(localStorage.getItem(PROP_CHOICE_LS), coolChoiceKey(
+        motor.email, refId ?? `die:${motor.selection.die}`, motor.selection.config)).propId ?? null;
+    } catch { /* browser storage is a convenience */ }
+  }
+  const f = thermalFollowFields(answer, remembered);
+  if (!f) return;
+  useThermalStore.setState({ coolMode: f.coolMode as CoolMode });
+  writeTherm('coolMode', f.coolMode);
+  // One write carries the new mode, source and propeller to the server copy.
+  st.setPropellerCooling(f.airSpeedSource, f.propellerId, f.propellerContextKey);
+});

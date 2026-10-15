@@ -128,6 +128,7 @@ from motor_ai_sim.routes.admin import router as admin_router
 from motor_ai_sim.routes.admin_analytics import router as admin_analytics_router
 from motor_ai_sim.routes.activity import router as activity_router, admin_router as activity_admin_router
 from motor_ai_sim.routes.model3d import router as model3d_router
+from motor_ai_sim.routes.construction import router as construction_router
 from motor_ai_sim.routes.nda import router as nda_router
 from motor_ai_sim.routes.data_sharing import router as data_sharing_router
 from motor_ai_sim.routes.cluster import router as cluster_router
@@ -185,11 +186,18 @@ async def _lifespan(_app):
             _watchdog.stop()
 
 
+from fastapi import Depends as _Depends
+from motor_ai_sim.motor_access import config_path_gate as _config_path_gate
+
 app = FastAPI(
     title="Motor Geometry API",
     description="REST API for electric motor geometry parameters",
     version="0.1.0",
     lifespan=_lifespan,
+    # A PRIVATE configuration is a 404 on every route that names it in the path
+    # or the query (motor_access.config_path_gate) - the net under the per-route
+    # gates, so a route added later cannot forget the rule.
+    dependencies=[_Depends(_config_path_gate)],
 )
 
 import os as _os
@@ -333,6 +341,7 @@ app.include_router(admin_analytics_router)
 app.include_router(activity_router)
 app.include_router(activity_admin_router)
 app.include_router(model3d_router)
+app.include_router(construction_router)
 app.include_router(nda_router)
 app.include_router(data_sharing_router)
 app.include_router(cluster_router)

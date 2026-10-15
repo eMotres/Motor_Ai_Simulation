@@ -38,7 +38,8 @@ import threading
 import time
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Form, Header, HTTPException, Request
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from motor_ai_sim import auth_email as E
@@ -155,14 +156,19 @@ def _check_domain(email: str) -> None:
         raise ApiError(422, code, ED.message(c), {"domain": c.domain, "suggestion": c.suggestion})
 
 
-def _send_verification(email: str, return_path: str = "", return_host: str = "") -> None:
-    token = U.issue_link_token(email, "verify")
-    subj, body = E.verify_mail(email, token, return_path, return_host)
+def _stored_lang(email: str) -> str:
+    rec = U.get_user(email) or {}
+    return str(rec.get("lang") or "")
+
+
+def _send_verification(email: str, return_path: str = "", return_host: str = "", lang: str = "") -> None:
+    sid = U.issue_short_link(email, "verify", return_path=return_path)
+    url = E.short_link("verify", sid)
+    subj, body = E.verify_mail(email, url, return_path, return_host, zh=E.wants_zh(lang or _stored_lang(email), email))
     if not E.send(email, subj, body, kind="verify"):
         U.mark_pending_approval(email, "smtp_not_configured")
-        log.warning("auth: SMTP not configured — verification link for %s "
-                    "(or approve in Admin -> Pending sign-ups): %s",
-                    email, E.link("verify", token))
+        log.warning("auth: SMTP not configured - verification link for %s "
+                    "(or approve in Admin -> Pending sign-ups): %s", email, url)
 
 
 def _valid_email(email: str) -> bool:
@@ -272,6 +278,8 @@ def register(req: RegisterReq, request: Request):
     outcome = U.register_self(email, req.password, req.name.strip())
     S.record_event("register", email=email, reason=outcome, ip=ip,
                    path="/api/auth/register")
+    if outcome == "created" and req.lang:
+        U.set_lang(email, req.lang)
     if outcome == "created" and topics:
         # The ticked topics are recorded with the wording shown; mailing needs the verified address anyway.
         _record_signup_topics(email, topics, "signup", ip, req.lang)
@@ -279,7 +287,7 @@ def register(req: RegisterReq, request: Request):
         if outcome == "created":
             # Only a row THIS request created gets the continuation: an older
             # pending row was not necessarily registered by this browser.
-            _send_verification(email, *_continuation_path(rid, email))
+            _send_verification(email, *_continuation_path(rid, email), lang=req.lang)
         elif outcome == "exists_unverified":
             _send_verification(email)
         else:
@@ -372,7 +380,7 @@ class VerifyReq(TokenReq):
 
 @router.post("/verify")
 def verify_email(req: VerifyReq, request: Request):
-    email = U.consume_link_token(req.token, "verify")
+    email = U.consume_link_token(req.token, "verify") or U.consume_short_link(req.token, "verify")
     if not email:
         raise HTTPException(400, detail=(
             "this link is invalid, already used or expired — sign up again "
@@ -392,6 +400,14 @@ def verify_email(req: VerifyReq, request: Request):
     return out
 
 
+def _send_reset_mail(email: str) -> None:
+    sid = U.issue_short_link(email, "reset")
+    url = E.short_link("reset", sid)
+    subj, body = E.reset_mail(email, url, zh=E.wants_zh(_stored_lang(email), email))
+    if not E.send(email, subj, body, kind="reset"):
+        log.warning("auth: SMTP not configured - password-reset link for %s: %s", email, url)
+
+
 class EmailReq(BaseModel):
     email: str
 
@@ -408,11 +424,7 @@ def reset_request(req: EmailReq, request: Request):
     may_mail = _mail_allowed(email, ip)
     rec = U.get_user(email)
     if may_mail and rec is not None and not rec.get("disabled"):
-        token = U.issue_link_token(email, "reset")
-        subj, body = E.reset_mail(email, token)
-        if not E.send(email, subj, body, kind="reset"):
-            log.warning("auth: SMTP not configured — password-reset link for "
-                        "%s: %s", email, E.link("reset", token))
+        _send_reset_mail(email)
         S.record_event("reset_requested", email=email, ip=ip,
                        path="/api/auth/reset/request")
     return _ACCEPTED
@@ -430,7 +442,7 @@ def reset_confirm(req: ResetReq, request: Request):
         U.check_password_policy(req.password)
     except U.PasswordPolicyError as e:
         raise HTTPException(422, detail=str(e))
-    email = U.consume_link_token(req.token, "reset")
+    email = U.consume_link_token(req.token, "reset") or U.consume_short_link(req.token, "reset")
     if not email:
         raise HTTPException(400, detail=(
             "this link is invalid, already used or expired — ask for a new one"))
@@ -446,6 +458,205 @@ def reset_confirm(req: ResetReq, request: Request):
                    ip=_ip(request), path="/api/auth/reset/confirm")
     log.info("auth: password reset for %s, %d session(s) revoked", email, n)
     return {"ok": True, "email": email}
+
+
+# ── the links in the account mails: tiny server-rendered pages, no JavaScript ─────────────────────────
+# A visitor in China (2026-10-15) opened the confirmation link, but the single-page app's 1.2 MB bundle aborted on the China ->
+# Germany line, so the browser-side confirmation call never ran.  These routes confirm / reset on the server and answer with a
+# page of a few kB (link_pages.py) that works in any in-app browser and with scripts off.  A second click (or a mail scanner that
+# opened the link first) just says "already confirmed".
+
+_LINK_HEADERS = {
+    "Cache-Control": "no-store", "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY", "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+}
+
+
+def _html(content: str, status: int = 200) -> HTMLResponse:
+    return HTMLResponse(content, status_code=status, headers=_LINK_HEADERS)
+
+
+def _link_lang(request: Request, email: str = "") -> str:
+    from motor_ai_sim import link_pages as LP
+    return LP.pick_lang(query=request.query_params.get("lang", ""), stored=_stored_lang(email) if email else "",
+                        accept_language=request.headers.get("accept-language", ""), email=email)
+
+
+def _switch(request: Request, lang: str) -> str:
+    """The same page in the other language (GET pages only; a spent link then says "already confirmed", which is fine)."""
+    from urllib.parse import urlencode
+    other = "en" if lang == "zh-CN" else "zh"
+    q = {k: v for k, v in request.query_params.items() if k != "lang"}
+    q["lang"] = other
+    return request.url.path + "?" + urlencode(q)
+
+
+def _urls(lang: str) -> tuple[str, str]:
+    base = E.app_url()
+    home = base + ("/zh-cn/" if lang == "zh-CN" else "/")
+    return home, home + "?signin=1"
+
+
+def _link_guard(request: Request) -> None:
+    if E.LINK_IP.blocked(_ip(request)):
+        raise HTTPException(429, detail="too many requests - try again later")
+
+
+def _bad_link(request: Request) -> None:
+    E.LINK_IP.hit(_ip(request))
+
+
+def _continue_url(return_path: str, secret: str, email: str) -> str:
+    """After a sign-up started in an AI app's authorization window: the consent page the confirmation resumes (None-safe)."""
+    from urllib.parse import parse_qs, urlsplit
+    secret = secret or (parse_qs(urlsplit(return_path or "").query).get("continue") or [""])[0]
+    if not secret:
+        return ""
+    try:
+        from motor_ai_sim import oauth as O
+        rid = O.consume_continuation(secret, email)
+        return E.app_url() + O.consent_path(rid) if rid else ""
+    except Exception:                                        # noqa: BLE001
+        return ""
+
+
+def _confirmed_page(request: Request, email: str, *, already: bool, return_path: str = "", secret: str = "") -> HTMLResponse:
+    from motor_ai_sim import link_pages as LP
+    lang = _link_lang(request, email)
+    home, signin = _urls(lang)
+    cont = "" if already else _continue_url(return_path, secret, email)
+    return _html(LP.verified(lang, email, already=already, open_url=home, signin_url=signin, continue_url=cont,
+                             switch_url=_switch(request, lang)))
+
+
+def _invalid_page(request: Request, kind: str, email: str = "") -> HTMLResponse:
+    from motor_ai_sim import link_pages as LP
+    _bad_link(request)
+    lang = _link_lang(request, email)
+    return _html(LP.invalid(lang, kind=kind, email=email, action="/api/auth/link/resend", switch_url=_switch(request, lang)))
+
+
+def _do_verify(request: Request, email: str, sid: str = "") -> None:
+    U.mark_verified(email, by="link")
+    if sid:
+        U.spend_short_links(email, "verify", sid)
+    S.record_event("verified", email=email, reason="link", ip=_ip(request), path="/api/auth/link")
+
+
+@router.get("/link/v/{sid}")
+def link_verify(sid: str, request: Request):
+    """The confirmation link of a mail (short id).  Confirms the address and answers with a small page; idempotent."""
+    _link_guard(request)
+    info = U.find_short_link(sid, "verify")
+    if info is None:
+        return _invalid_page(request, "verify")
+    email, rec = info["email"], U.get_user(info["email"])
+    if rec is None:
+        return _invalid_page(request, "verify")
+    if info["state"] == "valid" and not U.is_verified(rec):
+        _do_verify(request, email, sid)
+        return _confirmed_page(request, email, already=False, return_path=info.get("return_path", ""))
+    if U.is_verified(rec):
+        return _confirmed_page(request, email, already=True)
+    return _invalid_page(request, "verify", email)
+
+
+@router.get("/link/verify")
+def link_verify_legacy(request: Request, t: str = ""):
+    """The long link of a mail sent before the short ones (``/?verify=<token>``; nginx redirects the old SPA URL here)."""
+    _link_guard(request)
+    secret = request.query_params.get("continue", "")
+    email = U.consume_link_token(t, "verify")
+    if email:
+        _do_verify(request, email)
+        return _confirmed_page(request, email, already=False, secret=secret)
+    sub = U.link_token_subject(t)
+    rec = U.get_user(sub) if sub else None
+    if rec is not None and U.is_verified(rec):
+        return _confirmed_page(request, sub, already=True)
+    return _invalid_page(request, "verify", sub)
+
+
+def _reset_page(request: Request, email: str, fields: dict, error: str = "") -> HTMLResponse:
+    from motor_ai_sim import link_pages as LP
+    lang = _link_lang(request, email)
+    return _html(LP.reset_form(lang, email=email, action="/api/auth/link/reset", fields=fields, error=error,
+                               switch_url=_switch(request, lang) if request.method == "GET" else ""))
+
+
+@router.get("/link/r/{sid}")
+def link_reset_form(sid: str, request: Request):
+    _link_guard(request)
+    info = U.find_short_link(sid, "reset")
+    if info is None or info["state"] != "valid":
+        return _invalid_page(request, "reset", (info or {}).get("email", ""))
+    return _reset_page(request, info["email"], {"id": sid})
+
+
+@router.get("/link/reset")
+def link_reset_form_legacy(request: Request, t: str = ""):
+    """The long reset link of an older mail (``/?reset=<token>``; nginx redirects the old SPA URL here)."""
+    _link_guard(request)
+    email = U.peek_link_token(t, "reset")
+    if not email:
+        return _invalid_page(request, "reset", U.link_token_subject(t))
+    return _reset_page(request, email, {"t": t})
+
+
+@router.post("/link/reset")
+def link_reset_submit(request: Request, id: str = Form(""), t: str = Form(""), password: str = Form(""), password2: str = Form("")):
+    """The new-password form (a plain HTML POST).  The link is checked first and burned only when the password is accepted."""
+    from motor_ai_sim import link_pages as LP
+    _link_guard(request)
+    if id:
+        info = U.find_short_link(id, "reset")
+        email = info["email"] if info and info["state"] == "valid" else ""
+        fields = {"id": id}
+    else:
+        email = U.peek_link_token(t, "reset") or ""
+        fields = {"t": t}
+    if not email:
+        return _invalid_page(request, "reset")
+    lang = _link_lang(request, email)
+    if password != password2:
+        return _reset_page(request, email, fields, LP.STRINGS[lang]["mismatch"])
+    try:
+        U.check_password_policy(password, email)
+    except U.PasswordPolicyError as e:
+        return _reset_page(request, email, fields, LP.policy_message(lang, str(e)))
+    if not id and U.consume_link_token(t, "reset") != email:
+        return _invalid_page(request, "reset", email)
+    try:
+        U.reset_password(email, password)
+    except (U.PasswordPolicyError, KeyError):
+        return _invalid_page(request, "reset", email)
+    n = S.revoke_all(email)
+    E.LOGIN_ACCOUNT.clear(email)
+    S.record_event("password_reset", email=email, reason=f"revoked {n}", ip=_ip(request), path="/api/auth/link/reset")
+    home, signin = _urls(lang)
+    return _html(LP.reset_done(lang, signin_url=signin, open_url=home))
+
+
+@router.post("/link/resend")
+def link_resend(request: Request, email: str = Form(""), kind: str = Form("verify")):
+    """The "send a new link" form of an expired-link page (a plain HTML POST).  The answer is the same page whatever the address."""
+    from motor_ai_sim import link_pages as LP
+    _link_guard(request)
+    ip = _ip(request)
+    addr = U._norm(email)
+    lang = _link_lang(request, addr)
+    home, _signin = _urls(lang)
+    if not _valid_email(addr):
+        return _html(LP.invalid(lang, kind=kind, email=email, action="/api/auth/link/resend"))
+    if _mail_allowed(addr, ip):
+        rec = U.get_user(addr)
+        if rec is not None and not rec.get("disabled"):
+            if kind == "reset":
+                _send_reset_mail(addr)
+                S.record_event("reset_requested", email=addr, ip=ip, path="/api/auth/link/resend")
+            elif not U.is_verified(rec):
+                _send_verification(addr)
+    return _html(LP.sent(lang, open_url=home))
 
 
 @router.get("/methods")

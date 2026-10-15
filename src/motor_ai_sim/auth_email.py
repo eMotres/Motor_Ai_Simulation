@@ -148,18 +148,36 @@ def send(to: str, subject: str, body: str, *, block: bool = False, kind: str = "
 
 # ── message texts ────────────────────────────────────────────────────────────
 
-def verify_mail(to: str, token: str, return_path: str = "",
-                return_host: str = "") -> tuple[str, str]:
-    url = link("verify", token, return_path)
+def short_link(kind: str, sid: str) -> str:
+    """The URL a mail carries: ``/api/auth/link/v/<id>`` (confirm) or ``/link/r/<id>`` (reset), about 55 characters.  The server
+    answers with a small page that needs no JavaScript (link_pages.py)."""
+    return f"{app_url()}/api/auth/link/{'v' if kind == 'verify' else 'r'}/{sid}"
+
+
+def wants_zh(lang: str = "", to: str = "") -> bool:
+    """Should the mail carry a Chinese line under the English one?  A Chinese language (stored or given), or a Chinese mail provider
+    (qq.com, 163.com, ...): a bilingual mail never hurts there, and the sign-up form always sends the interface language."""
+    from motor_ai_sim import link_pages as LP
+    return (bool(lang) and LP.norm_lang(lang) == "zh-CN") or LP.mail_domain_is_chinese(to)
+
+
+def verify_mail(to: str, url: str, return_path: str = "",
+                return_host: str = "", zh: bool = False) -> tuple[str, str]:
+    """``url`` is the ready link (``short_link``); it sits on a line of its own."""
     where = f" (it will return to {return_host})" if return_host else ""
     cont = ("\nIt also brings you back to the page where you were connecting "
             f"an AI app{where}, to finish that. If you did not start "
             "connecting an AI app yourself just now, do not allow it there.\n"
             if return_path else "")
-    return ("Confirm your e-mail address",
-            "Hello,\n\nconfirm this address to activate your account:\n\n"
+    zh_cont = ("\n它还会带您回到刚才连接 AI 应用的页面以完成连接。如果刚才不是您本人在连接 AI 应用，请不要在那里授权。\n"
+               if return_path else "")
+    body = ("Hello,\n\nconfirm this address to activate your account:\n\n"
             f"{url}\n{cont}\nThe link works once and expires in 24 hours. If you did "
             "not sign up, ignore this message.\n")
+    if zh:
+        body += ("\n---\n您好，\n\n请点击上面的链接确认此邮箱并激活账户。链接仅可使用一次，24 小时内有效。"
+                 f"如果这不是您本人的操作，请忽略此邮件。\n{zh_cont}")
+    return ("Confirm your e-mail address" + (" / 请确认您的邮箱" if zh else ""), body)
 
 
 def exists_mail(to: str) -> tuple[str, str]:
@@ -171,13 +189,16 @@ def exists_mail(to: str) -> tuple[str, str]:
             "If it was not you, no action is needed.\n")
 
 
-def reset_mail(to: str, token: str) -> tuple[str, str]:
-    url = link("reset", token)
-    return ("Reset your password",
-            "Hello,\n\nuse this link to set a new password:\n\n"
+def reset_mail(to: str, url: str, zh: bool = False) -> tuple[str, str]:
+    """``url`` is the ready link (``short_link``); it sits on a line of its own."""
+    body = ("Hello,\n\nuse this link to set a new password:\n\n"
             f"{url}\n\nThe link works once and expires in 24 hours; setting a "
             "new password signs out every other session. If you did not ask "
             "for this, ignore this message.\n")
+    if zh:
+        body += ("\n---\n您好，\n\n请点击上面的链接设置新密码。链接仅可使用一次，24 小时内有效；"
+                 "设置新密码后，其他所有登录会话将退出。如果这不是您本人的操作，请忽略此邮件。\n")
+    return ("Reset your password" + (" / 重置密码" if zh else ""), body)
 
 
 # ── rate limiting ────────────────────────────────────────────────────────────
@@ -221,6 +242,8 @@ class Limiter:
 #: Login failures: per account (any IP) and per IP (any account).
 LOGIN_ACCOUNT = Limiter(max_hits=8, window_s=900.0, lock_s=900.0)
 LOGIN_IP = Limiter(max_hits=30, window_s=900.0, lock_s=900.0)
+#: Bad / expired mailed links and link-page form posts, per IP.
+LINK_IP = Limiter(max_hits=30, window_s=600.0, lock_s=600.0)
 #: Mail-sending requests (register, resend, reset request).
 MAIL_IP = Limiter(max_hits=10, window_s=3600.0, lock_s=3600.0)
 MAIL_ACCOUNT = Limiter(max_hits=3, window_s=3600.0, lock_s=3600.0)
@@ -231,5 +254,5 @@ SIGNUP_IP = Limiter(max_hits=5, window_s=3600.0, lock_s=3600.0)
 
 
 def reset_limits() -> None:
-    for lim in (LOGIN_ACCOUNT, LOGIN_IP, MAIL_IP, MAIL_ACCOUNT, SIGNUP_IP):
+    for lim in (LOGIN_ACCOUNT, LOGIN_IP, MAIL_IP, MAIL_ACCOUNT, SIGNUP_IP, LINK_IP):
         lim.reset_all()

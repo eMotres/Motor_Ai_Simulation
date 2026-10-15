@@ -106,7 +106,13 @@ def _start_authorization(c):
 
 
 def _link_from(mail) -> str:
-    return next(ln.strip() for ln in mail["body"].splitlines() if "verify=" in ln)
+    return next(ln.strip() for ln in mail["body"].splitlines() if "/api/auth/link/v/" in ln)
+
+
+def _continuation_of(senv, email=NEW):
+    """The single-use continuation secret behind the mailed link (it is stored with the short link, never printed in the mail)."""
+    rp = senv["U"].get_user(email)["short_links"][-1].get("rp", "")
+    return (parse_qs(urlsplit(rp).query).get("continue") or [None])[0]
 
 
 def _register(c, return_to=None, email=NEW, ip="203.0.113.40"):
@@ -144,18 +150,19 @@ def test_authorize_signup_verify_consent_token(senv):
     assert mail["to"] == NEW
     link = _link_from(mail)
     u = urlsplit(link)
-    assert f"{u.scheme}://{u.netloc}" == BASE and u.path == "/agent-consent"
-    q = parse_qs(u.query)
-    assert q["request"] == [rid]                  # back into the SAME authorization
-    token, cont = q["verify"][0], q["continue"][0]
+    assert f"{u.scheme}://{u.netloc}" == BASE and u.path.startswith("/api/auth/link/v/")   # a short link; nothing else in the URL
+    assert u.query == "" and len(link) <= 70
+    cont = _continuation_of(senv)
     assert len(cont) >= 40                        # high-entropy continuation secret
     raw = O.store_path().read_text(encoding="utf-8")
     assert cont not in raw                        # stored hashed only
-    # 5. the link opens (maybe in another tab): the web posts token + secret;
-    #    the server derives where to go back from the secret's own record
-    v = c.post("/api/auth/verify", json={"token": token, "continuation": cont})
-    assert v.status_code == 200 and v.json()["authorization_pending"] is True
-    assert v.json()["return_to"] == consent
+    assert cont not in mail["body"]
+    # 5. the link opens (maybe in a WeChat browser): the SERVER confirms the address and resumes the SAME authorization;
+    #    the page's button goes back to the consent page it derived from the secret's own record
+    v = c.get(u.path)
+    assert v.status_code == 200 and "E-mail confirmed" in v.text
+    assert f'href="{BASE}{consent}"' in v.text.replace("&amp;", "&") and "Continue connecting your AI app" in v.text
+    assert O._load()["requests"][rid]["bound_email"] == NEW
     # 6. sign in, see the request, allow
     s = _login(c)
     assert s.status_code == 200, s.text
@@ -196,7 +203,7 @@ def test_return_to_must_be_our_consent_page(senv):
     assert senv["outbox"] == []
     # without return_to the link goes to the home page as before
     assert _register(c).status_code == 202
-    assert urlsplit(_link_from(senv["outbox"][-1])).path == "/"
+    assert urlsplit(_link_from(senv["outbox"][-1])).path.startswith("/api/auth/link/v/")
 
 
 def test_pending_request_ttl(senv, monkeypatch):
@@ -272,8 +279,8 @@ def _signup_link(senv, consent=None, email=NEW, ip="203.0.113.40"):
     assert _register(senv["c"], return_to=consent, email=email, ip=ip).status_code == 202
     mail = senv["outbox"][-1]
     assert mail["to"] == email
-    q = parse_qs(urlsplit(_link_from(mail)).query)
-    return q["verify"][0], (q.get("continue") or [None])[0]
+    sid = urlsplit(_link_from(mail)).path.rsplit("/", 1)[1]
+    return sid, _continuation_of(senv, email)
 
 
 def test_verify_ignores_a_swapped_return_to(senv):

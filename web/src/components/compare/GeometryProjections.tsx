@@ -17,6 +17,7 @@ import type { ReferenceMotor } from '../../lib/referencePassports';
 import { useMotorStore } from '../../stores/motorStore';
 import { nsT } from '../../i18n/nsT';
 import i18n from '../../i18n';
+import { crossSectionState, refusedReason, type SlotMouthLimit } from '../../lib/slotMouthFit';
 
 const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
@@ -29,6 +30,12 @@ type Comp = { vertices: number[][]; faces: number[][] };
 type Mesh2D = Record<string, Comp>;
 
 const meshCache = new Map<string, Mesh2D>();
+
+/** The one line a refused (impossible) geometry shows instead of a drawing. */
+const infeasibleLine = (l: SlotMouthLimit): string =>
+  l.field === 'wire_width'
+    ? tx('configure.slotWireTooWide', { max: l.maxWireWidthMm.toFixed(2), turns: l.turns })
+    : tx('configure.slotSplitTooWide', { n: l.maxStrips, turns: l.turns });
 
 const colorFor = (key: string): string => {
   if (key === 'shaft') return SHAFT;
@@ -51,23 +58,41 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [mesh, setMesh] = useState<Mesh2D | null>(meshCache.get(geoStr) ?? null);
   const [state, setState] = useState<'idle' | 'loading' | 'error'>(meshCache.has(geoStr) ? 'idle' : 'loading');
+  // An impossible machine is never drawn: judged here before the request (the
+  // server refuses it with the same words, 422 "infeasible geometry - …").
+  const geoObj = useMemo(() => { try { return JSON.parse(geoStr) as Record<string, unknown>; } catch { return null; } }, [geoStr]);
+  const feas = useMemo(() => crossSectionState(geoObj), [geoObj]);
+  const [refused, setRefused] = useState<string | null>(null);
 
   useEffect(() => {
+    setRefused(null);
+    if (feas.kind === 'infeasible') { setMesh(null); setState('idle'); return; }
     const cached = meshCache.get(geoStr);
     if (cached) { setMesh(cached); setState('idle'); return; }
     let cancel = false;
     setState('loading');
     const t = setTimeout(() => {
       fetch(`${API}/api/geometry/mesh2d?geo=${encodeURIComponent(geoStr)}`)
-        .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json() as Promise<Mesh2D>; })
-        .then((d) => { if (cancel) return; if (!d || Object.keys(d).length === 0) throw new Error('empty'); meshCache.set(geoStr, d); setMesh(d); setState('idle'); })
+        .then(async (r) => {
+          if (!r.ok) {
+            // a 422 "infeasible geometry - <reason>" is an answer, not a broken backend
+            const why = r.status === 422 ? refusedReason(await r.json().catch(() => null)) : null;
+            if (why) { if (!cancel) { setRefused(why); setMesh(null); setState('idle'); } return null; }
+            throw new Error(`HTTP ${r.status}`);
+          }
+          return r.json() as Promise<Mesh2D>;
+        })
+        .then((d) => { if (cancel || d === null) return; if (!d || Object.keys(d).length === 0) throw new Error('empty'); meshCache.set(geoStr, d); setMesh(d); setState('idle'); })
         .catch(() => { if (!cancel) setState('error'); });
     }, 280);
     return () => { cancel = true; clearTimeout(t); };
-  }, [geoStr]);
+  }, [geoStr, feas.kind]);
 
   useEffect(() => {
-    const cv = canvasRef.current; if (!cv || !mesh) return;
+    const cv = canvasRef.current; if (!cv || !mesh || feas.kind === 'infeasible' || refused) {
+      if (cv) cv.getContext('2d')?.clearRect(0, 0, cv.width, cv.height);
+      return;
+    }
     const ctx = cv.getContext('2d'); if (!ctx) return;
     const W = cv.width, H = cv.height;
     ctx.clearRect(0, 0, W, H);
@@ -98,13 +123,21 @@ const CrossSectionReal: React.FC<{ geoStr: string }> = ({ geoStr }) => {
       }
       ctx.fill();
     }
-  }, [mesh]);
+  }, [mesh, feas.kind, refused]);
+
+  const reason = feas.kind === 'infeasible' ? infeasibleLine(feas.limit) : refused;
 
   return (
     <Box sx={{ position: 'relative', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
       <canvas ref={canvasRef} width={720} height={720} style={{ height: '100%', width: 'auto', maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', aspectRatio: '1 / 1', display: 'block', opacity: state === 'loading' ? 0.4 : 1, transition: 'opacity .15s' }} />
       {state === 'loading' && <CircularProgress size={20} sx={{ color: '#3b82f6', position: 'absolute', top: '50%', left: '50%', mt: '-10px', ml: '-10px' }} />}
-      {state === 'error' && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>{tx('configure.previewNeedsBackend')}</Typography>}
+      {reason && (
+        <Typography title={tx('configure.slotMouthTip')}
+          sx={{ fontSize: 12, fontWeight: 700, color: '#f87171', position: 'absolute', top: '44%', left: 8, right: 8, textAlign: 'center' }}>
+          ⚠ {tx('configure.infeasibleState', { reason })}
+        </Typography>
+      )}
+      {state === 'error' && !reason && <Typography sx={{ fontSize: 11, color: '#f87171', position: 'absolute', top: '46%', left: 0, right: 0 }}>{tx('configure.previewNeedsBackend')}</Typography>}
     </Box>
   );
 };

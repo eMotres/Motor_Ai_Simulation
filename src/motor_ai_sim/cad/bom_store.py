@@ -44,6 +44,7 @@ def assemble(eff, profile, materials_library=None, bearings_library=None, wire_s
     if os.path.exists(cfg_file):
         comps, total, src = bom.sim_components_from_config(cfg_file)
     return dict(die=eff["die"], config=eff["variant"], motor_id=profile["profile"]["motor_id"], materials=profile["profile"]["materials"],
+                cad_variant=(profile["profile"].get("cad_variant") or eff.get("cad_variant") or "full"),
                 cards=cards, bearing_card=bcard, wire_stock=stock, winding=eff.get("winding"), sim_materials=eff.get("materials") or {},
                 sim_components=comps, sim_total_kg=total, sim_source=src,
                 provenance=dict(store_files={k: v["sha256"][:12] for k, v in (eff.get("files") or {}).items()}))
@@ -62,5 +63,6 @@ def write(dump_path, eff, profile, out_prefix, **kw):
     except ImportError:
         pass
     return dict(files=[os.path.basename(f) for f in files], lines=len(b["lines"]), mass_g=b["totals"]["motor_mass_g"],
+                scope=b["totals"].get("scope", "full motor"), cad_variant=b["header"].get("cad_variant", "full"),
                 sim_mass_g=b["comparison"]["sim_total_g"], to_be_specified=len(b["to_be_specified"]), warnings=b["warnings"],
                 unclassified=b["unclassified"])

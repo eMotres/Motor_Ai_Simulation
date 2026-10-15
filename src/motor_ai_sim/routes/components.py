@@ -10,7 +10,7 @@
 Engineer and admin only (``auth._GATED``: the Simulation menus' audience).  Nothing here
 solves or writes anything; the cards are built by the adapters from the existing stores
 (``modules/component_library.py``).  A motor card is performance + mass + outer envelope
-only, and a motor of a die the caller may not see (``motor_access.may_see_die``) is neither
+only, and a motor of a die or configuration the caller may not see (``motor_access.may_see_config``) is neither
 listed nor served (404).
 """
 from __future__ import annotations
@@ -29,7 +29,9 @@ KINDS = ("motor", "propeller", "transmission", "controller", "battery", "frame",
 
 
 def _visible(entry: _lib.Entry, access: dict) -> bool:
-    return entry.die is None or _ma.may_see_die(access, entry.die)
+    # a controller / pack example derived from a machine follows that machine's
+    # access; a PRIVATE configuration needs its config grant (may_see_config)
+    return entry.die is None or _ma.may_see_config(access, entry.die, entry.config)
 
 
 @router.get("")

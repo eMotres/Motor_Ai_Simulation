@@ -540,6 +540,14 @@ def move_blockers(die_dir: Path, target: str) -> List[Dict[str, str]]:
     why = confidential_reason(die_dir)
     if why and not any(b["reason"] == why for b in out):
         out.append({"kind": "confidential", "name": die_dir.name, "reason": why})
+    # A PRIVATE configuration (``visibility: private``, owner 2026-10-15) must never
+    # reach the public repository with the rest of its die.
+    from motor_ai_sim.motor_access import CFG_PRIVATE, file_visibility
+    for f in sorted(die_dir.glob("*.yaml")):
+        if f.name != "die.yaml" and file_visibility(f) == CFG_PRIVATE:
+            out.append({"kind": "private_configuration", "name": f.stem,
+                        "reason": "the configuration is marked private - make it public "
+                                  "(Admin, Motors access) or keep the die private"})
     try:
         mats, devs = referenced_materials(die_dir), referenced_devices(die_dir)
     except DataError as exc:

@@ -446,6 +446,137 @@ def consume_link_token(token: str, purpose: str) -> Optional[str]:
     return email
 
 
+# ── short links (the mailed URL is ~55 characters and needs no JavaScript) ────
+# The mail carries `/api/auth/link/v/<id>` (confirm) or `/link/r/<id>` (reset): a 16-character opaque id.  Only its SHA-256 is
+# stored on the account record, under `short_links` (up to three live ones per purpose, so a resend does not kill the first
+# mail), with its expiry and, for a sign-up started in an AI app's authorization window, the consent-page path to go back to.
+# A spent id is remembered in `short_used`, so a second click (or a mail scanner that opened the link first) can say "already
+# confirmed" instead of "invalid".  The old long JWT links keep working (`consume_link_token`).
+
+SHORT_LINK_LIVE = 3
+_SHORT_USED_KEEP = 8
+
+
+def _sid_digest(sid: str) -> str:
+    return hashlib.sha256(("short-link|" + str(sid)).encode("utf-8")).hexdigest()
+
+
+def issue_short_link(email: str, purpose: str, ttl_s: int = LINK_TTL_S, return_path: str = "") -> str:
+    """Mint a short single-use link id for `email` / `purpose`; KeyError for an unknown account."""
+    if purpose not in LINK_PURPOSES:
+        raise ValueError(purpose)
+    email = _norm(email)
+    sid = secrets.token_urlsafe(12)                      # 16 URL-safe characters, 96 bits
+    with _LOCK:
+        users = _load()
+        if email not in users:
+            raise KeyError(email)
+        now = int(time.time())
+        live = [r for r in (users[email].get("short_links") or []) if isinstance(r, dict) and r.get("exp", 0) > now]
+        same = [r for r in live if r.get("p") == purpose][-(SHORT_LINK_LIVE - 1):]
+        live = [r for r in live if r.get("p") != purpose] + same
+        row = {"p": purpose, "d": _sid_digest(sid), "exp": now + int(ttl_s)}
+        if return_path:
+            row["rp"] = str(return_path)[:300]
+        live.append(row)
+        users[email]["short_links"] = live
+        _save(users)
+    return sid
+
+
+def find_short_link(sid: str, purpose: str) -> Optional[dict]:
+    """Look a short id up WITHOUT burning it.  -> {email, state, return_path} with state "valid" | "used" | "expired", or None when
+    the id is unknown (never issued, or long forgotten)."""
+    if not isinstance(sid, str) or not (8 <= len(sid) <= 64):
+        return None
+    d = _sid_digest(sid)
+    now = int(time.time())
+    for email, rec in _load_soft().items():
+        if not isinstance(rec, dict):
+            continue
+        for r in rec.get("short_links") or []:
+            if isinstance(r, dict) and r.get("p") == purpose and hmac.compare_digest(str(r.get("d") or ""), d):
+                return {"email": email, "state": "valid" if r.get("exp", 0) > now else "expired", "return_path": r.get("rp", "")}
+        if (rec.get("short_used") or {}).get(d) == purpose:
+            return {"email": email, "state": "used", "return_path": ""}
+    return None
+
+
+def spend_short_links(email: str, purpose: str, sid: str = "") -> None:
+    """After the link was used: forget every live id of this purpose and remember the spent one(s)."""
+    email = _norm(email)
+    with _LOCK:
+        users = _load()
+        rec = users.get(email)
+        if rec is None:
+            return
+        used = dict(rec.get("short_used") or {})
+        keep = []
+        for r in rec.get("short_links") or []:
+            if isinstance(r, dict) and r.get("p") == purpose:
+                used[str(r.get("d"))] = purpose
+            else:
+                keep.append(r)
+        if sid:
+            used[_sid_digest(sid)] = purpose
+        for k in list(used)[:-_SHORT_USED_KEEP]:
+            used.pop(k, None)
+        rec["short_links"] = keep
+        rec["short_used"] = used
+        _save(users)
+
+
+def consume_short_link(sid: str, purpose: str) -> Optional[str]:
+    """Spend a short id: the address when it was valid (and is now burnt with its siblings), else None.  For the JSON endpoints
+    (``/api/auth/verify``, ``/api/auth/reset/confirm``), which take either a long token or a short id."""
+    info = find_short_link(sid, purpose)
+    if info is None or info["state"] != "valid":
+        return None
+    spend_short_links(info["email"], purpose, sid)
+    return info["email"]
+
+
+def peek_link_token(token: str, purpose: str) -> Optional[str]:
+    """The address of a long (JWT) link that is still valid, WITHOUT burning it (the reset form checks it before the new password
+    is accepted); None for anything `consume_link_token` would refuse."""
+    try:
+        claims = jwt.decode(token or "", _link_key(), algorithms=["HS256"], issuer=_LINK_ISS,
+                            options={"require": ["exp", "sub", "nonce"]})
+    except Exception:
+        return None
+    if claims.get("purpose") != purpose:
+        return None
+    email = _norm(claims.get("sub") or "")
+    rec = _load_soft().get(email)
+    if rec is None:
+        return None
+    ln = rec.get("link_nonces") if isinstance(rec.get("link_nonces"), dict) else {}
+    want, got = ln.get(purpose) or "", _nonce_digest(str(claims.get("nonce") or ""))
+    return email if want and hmac.compare_digest(want, got) else None
+
+
+def link_token_subject(token: str) -> str:
+    """The address named by a long link whose SIGNATURE is genuine, even if it expired or was used ('' otherwise).  Only for
+    saying "already confirmed" and prefilling the resend form; it proves nothing."""
+    try:
+        claims = jwt.decode(token or "", _link_key(), algorithms=["HS256"], issuer=_LINK_ISS,
+                            options={"verify_exp": False, "require": ["sub"]})
+    except Exception:
+        return ""
+    return _norm(claims.get("sub") or "")
+
+
+def set_lang(email: str, lang: str) -> None:
+    """Remember the language an account signed up in ('en' | 'zh-CN'); drives the language of its mails and link pages."""
+    email = _norm(email)
+    lang = "zh-CN" if str(lang or "").lower().replace("_", "-").startswith("zh") else "en"
+    with _LOCK:
+        users = _load()
+        if email in users:
+            users[email]["lang"] = lang
+            _save(users)
+
+
 def register_self(email: str, password: str, name: str = "") -> str:
     """Create an UNVERIFIED password account.
 
@@ -491,6 +622,7 @@ def mark_verified(email: str, *, by: str = "link") -> bool:
             ln = dict(ln)
             ln.pop("verify", None)
             rec["link_nonces"] = ln
+        rec["short_links"] = [r for r in (rec.get("short_links") or []) if not (isinstance(r, dict) and r.get("p") == "verify")]
         _save(users)
     return True
 
@@ -540,6 +672,7 @@ def change_unverified_email(old: str, new: str) -> str:
             raise ValueError("this address is already registered")
         rec = users.pop(old)
         rec.pop("link_nonces", None)
+        rec.pop("short_links", None)
         rec.pop("pending_approval", None)
         rec.pop("last_mail", None)
         users[new] = rec
@@ -604,6 +737,7 @@ def reset_password(email: str, password: str) -> None:
             rec["verified_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
             rec.pop("pending_approval", None)
         rec["link_nonces"] = {}
+        rec["short_links"] = []
         _save(users)
 
 
@@ -806,9 +940,31 @@ def normalize_grants(raw) -> dict:
     all_motors = bool(raw.get("all"))
     default = _norm_default(raw.get("default"))
     out = {"all": all_motors, "dies": dies}
+    # CONFIGURATION grants (owner 2026-10-15): "<die>/<config>" entries that open
+    # a PRIVATE configuration of a die the account can already see.  Key present
+    # ONLY when an admin set one, so every pre-existing record round-trips
+    # byte-identical.
+    cfgs = normalize_config_grants(raw.get("configs"))
+    if cfgs:
+        out["configs"] = cfgs
     if _default_allowed(all_motors, dies, default):
         out["default"] = default
     return out
+
+
+def normalize_config_grants(raw) -> list:
+    """Any stored shape -> sorted unique ``["<die>/<config>", ...]``.  An entry
+    must name both parts; a malformed one is dropped (never guessed)."""
+    if not isinstance(raw, (list, tuple, set)):
+        return []
+    out = set()
+    for item in raw:
+        s = str(item or "").strip()
+        die, sep, cfg = s.rpartition("/")
+        die, cfg = die.strip(), cfg.strip()
+        if sep and die and cfg:
+            out.add(f"{die}/{cfg}")
+    return sorted(out)
 
 
 _BASELINE_DIE = "CIANO14 40 new"
@@ -866,7 +1022,8 @@ _KEEP = object()
 
 
 def set_motor_grants(email: str, *, all_motors: bool,
-                     dies: Optional[list] = None, default=_KEEP) -> dict:
+                     dies: Optional[list] = None, default=_KEEP,
+                     configs=_KEEP) -> dict:
     """Replace an account's grants.  Written through the same atomic _save as
     every other registry change — never a second writer on users.json.
 
@@ -885,8 +1042,11 @@ def set_motor_grants(email: str, *, all_motors: bool,
                                     if isinstance(users[email].get("motors"), dict) else None)
         else:
             default = _norm_default(default)
+        if configs is _KEEP:
+            configs = (users[email].get("motors") or {}).get("configs")                 if isinstance(users[email].get("motors"), dict) else None
         users[email]["motors"] = normalize_grants(
-            {"all": all_motors, "dies": list(dies or []), "default": default})
+            {"all": all_motors, "dies": list(dies or []), "default": default,
+             "configs": configs})
         _save(users)
     return get_stored_motor_grants(email)
 

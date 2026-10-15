@@ -38,6 +38,11 @@ export function renderNda(text: string, v: NdaValues): string {
   return t.replace(/\n{3,}/g, '\n\n').replace(/^\n+|\n+$/g, '') + '\n';
 }
 
+export type NdaLanguage = 'en' | 'zh-CN';
+export function renderNdaLanguages(texts: Record<NdaLanguage, string>, v: NdaValues): { lang: NdaLanguage; text: string }[] {
+  return (['en', 'zh-CN'] as const).map((lang) => ({ lang, text: renderNda(texts[lang], v) }));
+}
+
 export type NdaError = 'required' | 'country' | 'name' | 'accept';
 
 /** Field errors of the dialog (keys are field names plus `typed_name` / `accept`); empty = may press Sign. */

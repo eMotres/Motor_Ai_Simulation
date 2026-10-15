@@ -52,6 +52,8 @@
     "disabledHelp": "The agreement text is still a draft. It will open as soon as the final text is published.",
     "downloadSpecimen": "Download PDF for review",
     "downloadSpecimenHelp": "Unsigned specimen for your legal team",
+    "english": "English",
+    "chineseSimplified": "Simplified Chinese (zh-CN)",
     "yourNda": "Your signed NDA",
     "errors": {
       "required": "Required",

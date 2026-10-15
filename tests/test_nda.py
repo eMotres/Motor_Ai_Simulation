@@ -29,6 +29,25 @@ STEP = ("ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'2;1');\nFILE_NAME('a','
 
 client = TestClient(app)
 
+
+def extract_pdf_text(pdf):
+    try:
+        import fitz
+    except ImportError:
+        return None, False
+    with fitz.open(stream=pdf, filetype="pdf") as doc:
+        pages = list(doc)
+        text = "\n".join(page.get_text() for page in pages)
+        zh_mark = "保密协议" if "保密协议" in text else "当事方"
+        has_cjk_font = any(zh_mark in page.get_text() and any("STSong-Light" in font[3] for font in page.get_fonts(full=True))
+                           for page in pages)
+        return text, has_cjk_font
+
+
+def cid_pdf_marker(text):
+    from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+    return UnicodeCIDFont("STSong-Light").formatForPdf(text).encode("ascii")
+
 GOOD = dict(lang="en", company="Acme Drones Ltd", reg_no="HRB 12345", country="DE", address="Hauptstr. 1, 10115 Berlin",
             signatory="Erika Mustermann", title="CTO", accept=True, typed_name="erika  mustermann")
 
@@ -89,6 +108,8 @@ def test_current_text_hash_matches_what_is_served(env):
     r = client.get("/api/nda/current?lang=en", headers=env["user"]).json()
     assert r["version"] == "v1-2026-10" and r["lang"] == "en" and r["text"] == TEXT_EN and r["signable"] is True
     assert r["sha256"] == N.sha256_text(r["text"]) and "DE" in r["countries"] and "CN" in r["countries"]
+    assert r["texts"] == {"en": TEXT_EN, "zh-CN": TEXT_ZH}
+    assert r["sha256s"] == {"en": N.sha256_text(TEXT_EN), "zh-CN": N.sha256_text(TEXT_ZH)}
     zh = client.get("/api/nda/current?lang=zh-CN", headers=env["user"]).json()
     assert zh["lang"] == "zh-CN" and zh["sha256"] == N.sha256_text(TEXT_ZH)
     assert client.get("/api/nda/current?lang=fr", headers=env["user"]).json()["lang"] == "en"
@@ -125,7 +146,10 @@ def test_typed_name_must_match_country_must_be_listed_and_box_ticked(env):
 
 # -- signing: record, flag, unlock, PDF ----------------------------------------
 
-def test_signing_writes_the_record_unlocks_the_step_and_stores_the_pdf(env):
+def test_signing_writes_the_record_unlocks_the_step_and_stores_the_pdf(env, monkeypatch):
+    real = N.build_pdf
+    monkeypatch.setattr(N, "build_pdf", lambda rendered, rec, *, compress=True, specimen=False:
+                        real(rendered, rec, compress=False, specimen=specimen))
     assert client.get(env["url"] + "/model.step", headers=env["user"]).status_code == 403
     r = sign(env)
     assert r.status_code == 200 and r.json()["can_download"] is False          # the signature alone no longer opens the STEP
@@ -139,9 +163,23 @@ def test_signing_writes_the_record_unlocks_the_step_and_stores_the_pdf(env):
                                                       address="Hauptstr. 1, 10115 Berlin", signatory="Erika Mustermann", title="CTO"),
                                                  USER, today, "v1-2026-10"))
     assert rec["text_sha256"] == N.sha256_text(expect) and rec["template_sha256"] == N.sha256_text(TEXT_EN)
+    rendered_zh = N.render(TEXT_ZH, N.template_values(dict(company="Acme Drones Ltd", reg_no="HRB 12345", country="DE",
+                                                            address="Hauptstr. 1, 10115 Berlin", signatory="Erika Mustermann", title="CTO"),
+                                                        USER, today, "v1-2026-10"))
+    assert rec["text_sha256s"] == {"en": N.sha256_text(expect), "zh-CN": N.sha256_text(rendered_zh)}
+    assert rec["template_sha256s"] == {"en": N.sha256_text(TEXT_EN), "zh-CN": N.sha256_text(TEXT_ZH)}
     assert "{{" not in expect
     pdf = (env["legal"] / "nda_signed" / (rec["id"] + ".pdf")).read_bytes()
     assert pdf.startswith(b"%PDF") and pdf.rstrip().endswith(b"%%EOF")
+    pdf_text, has_cjk_font = extract_pdf_text(pdf)
+    if pdf_text is None:
+        zh_marker = cid_pdf_marker("保密协议")
+        assert b"English (EN)" in pdf and zh_marker in pdf and pdf.index(b"English (EN)") < pdf.index(zh_marker)
+        assert b"/STSong-Light" in pdf
+    else:
+        assert "Between MOTRES d.o.o." in pdf_text and "保密协议" in pdf_text
+        assert pdf_text.index("Between MOTRES d.o.o.") < pdf_text.index("保密协议")
+        assert has_cjk_font
     # the user flag
     from motor_ai_sim import users as U
     nda = U.get_nda(USER)
@@ -320,10 +358,25 @@ def test_signing_stores_the_hash_of_exactly_the_rendered_variant_and_the_pdf_has
         rendered = N.render(served["text"], N.template_values(
             {k: GOOD[k] for k in ("company", "reg_no", "address", "signatory", "title")} | {"country": country}, USER, rec["iso"][:10], ver))
         assert "{{" not in rendered and rec["text_sha256"] == N.sha256_text(rendered)
+        assert rec["text_sha256s"][lang] == N.sha256_text(rendered)
+        assert rec["template_sha256"] == served["sha256"]
+        templates = {code: (FIXTURES / f"model_nda_{code}.md").read_text(encoding="utf-8") for code in ("en", "zh-CN")}
+        assert rec["template_sha256s"] == {code: N.sha256_text(text) for code, text in templates.items()}
         if lang == "en":
             assert has in rendered and hasnot not in rendered
-            pdf = (env["legal"] / "nda_signed" / rec["pdf"]).read_bytes()
-            assert has.encode() in pdf and hasnot.encode() not in pdf and rec["id"].encode() in pdf
+        pdf = (env["legal"] / "nda_signed" / rec["pdf"]).read_bytes()
+        pdf_text, has_cjk_font = extract_pdf_text(pdf)
+        if pdf_text is None:
+            zh_marker = cid_pdf_marker("当事方")
+            assert b"English (EN)" in pdf and zh_marker in pdf and pdf.index(b"English (EN)") < pdf.index(zh_marker)
+            assert b"/STSong-Light" in pdf
+        else:
+            assert "Parties." in pdf_text and "当事方" in pdf_text
+            assert pdf_text.index("Parties.") < pdf_text.index("当事方")
+            assert has in pdf_text and hasnot not in pdf_text
+            assert has_cjk_font
+        assert rec["id"] in pdf.decode("latin-1")
+        assert set(rec["text_sha256s"]) == {"en", "zh-CN"}
         # revoke, so the next language can sign again
         client.patch(f"/api/auth/users/{USER}", json={"nda_signed": False}, headers=env["admin"])
 

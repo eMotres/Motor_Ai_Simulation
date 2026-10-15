@@ -1,5 +1,5 @@
-// Online NDA click-through: company fields, the CURRENT agreement text with the placeholders filled live (only the variant of
-// the selected country), the acceptance box and "type your full name to sign".  The server validates again, stores the record
+// Online NDA click-through: company fields, both current agreement texts with placeholders filled live (EN then zh-CN),
+// the acceptance box and "type your full name to sign". The server validates again, stores the record
 // and the signed PDF and opens an applicant-verification case; the STEP opens when it is VERIFIED (routes/nda.py,
 // docs/APPLICANT_VERIFICATION.md).  One short line per control, help in tooltips.
 import React, { useEffect, useMemo, useState } from 'react';
@@ -14,13 +14,16 @@ import DataSharingConsent from '../common/DataSharingConsent';
 import { useAuth } from '../../contexts/AuthContext';
 import { filenameFromDisposition } from '../../lib/model3d';
 import {
-  NDA_FIELDS, emptyForm, formErrors, mdBlocks, renderNda, utcToday, values, type NdaField, type NdaForm,
+  NDA_FIELDS, emptyForm, formErrors, mdBlocks, renderNdaLanguages, utcToday, values, type NdaField, type NdaForm,
 } from '../../lib/nda';
 import { emptyIntake, intakeBody, intakeErrors, type IntakeForm } from '../../lib/verification';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 
-interface Current { version: string; lang: string; text: string; sha256: string; signable: boolean; countries: string[] }
+interface Current {
+  version: string; lang: string; text: string; sha256: string; texts: Record<'en' | 'zh-CN', string>;
+  sha256s: Record<'en' | 'zh-CN', string>; signable: boolean; countries: string[];
+}
 
 const FIELD_KEY: Record<NdaField, string> = {
   company: 'company', reg_no: 'regNo', country: 'country', address: 'address', signatory: 'signatory', title: 'titleField',
@@ -54,7 +57,12 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
       try {
         const r = await fetch(`${API}/api/nda/current?lang=${lang}`);
         if (!r.ok) throw new Error(((await r.json().catch(() => ({}))) as { detail?: string }).detail ?? String(r.status));
-        if (live) setCur(await r.json() as Current);
+        const data = await r.json() as Partial<Current>;
+        if (!data.texts || typeof data.texts.en !== 'string' || typeof data.texts['zh-CN'] !== 'string'
+            || !data.sha256s || typeof data.sha256s.en !== 'string' || typeof data.sha256s['zh-CN'] !== 'string') {
+          throw new Error('The agreement must include English and Simplified Chinese.');
+        }
+        if (live) setCur(data as Current);
       } catch (e: any) { if (live) setLoadErr(e?.message ?? String(e)); }
     })();
     return () => { live = false; };
@@ -71,7 +79,11 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
   const iErrors = useMemo(() => intakeErrors(intake), [intake]);
   const errors: Record<string, string> = { ...baseErrors, ...iErrors };
   const shown = (k: string) => (tried ? (errors[k] ?? srvFields[k]) : srvFields[k]);
-  const text = useMemo(() => (cur ? renderNda(cur.text, values(form, email, utcToday(), cur.version, '______')) : ''), [cur, form, email]);
+  const renderedTexts = useMemo(() => {
+    if (!cur) return null;
+    const v = values(form, email, utcToday(), cur.version, '______');
+    return renderNdaLanguages(cur.texts, v);
+  }, [cur, form, email]);
 
   const downloadSpecimen = async () => {
     if (!cur) return;
@@ -179,11 +191,18 @@ const NdaDialog: React.FC<{ open: boolean; onClose: () => void; onSigned: () => 
                   </span>
                 </Tooltip>
               </Box>
-              <Box sx={{ maxHeight: 280, overflowY: 'auto', p: 1.5, border: '1px solid var(--line-soft)', borderRadius: 1, bgcolor: 'var(--panel-2)' }}>
-                {mdBlocks(text).map((b, i) => (
-                  <Typography key={i} sx={{ fontSize: b.kind === 'h1' ? 15 : 12.5, fontWeight: b.kind === 'p' ? 400 : 800, mb: 1, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>
-                    {b.runs.map((r, j) => <span key={j} style={{ fontWeight: r.bold ? 700 : undefined, fontStyle: r.italic ? 'italic' : undefined }}>{r.text}</span>)}
-                  </Typography>
+              <Box sx={{ maxHeight: 360, overflowY: 'auto', p: 1.5, border: '1px solid var(--line-soft)', borderRadius: 1, bgcolor: 'var(--panel-2)' }}>
+                {renderedTexts?.map((section) => (
+                  <Box key={section.lang} lang={section.lang}>
+                    <Typography sx={{ fontSize: 13, fontWeight: 800, mb: 1, color: 'var(--text-1)' }}>
+                      {section.lang === 'en' ? t('nda.english') : t('nda.chineseSimplified')}
+                    </Typography>
+                    {mdBlocks(section.text).map((b, i) => (
+                      <Typography key={i} sx={{ fontSize: b.kind === 'h1' ? 15 : 12.5, fontWeight: b.kind === 'p' ? 400 : 800, mb: 1, whiteSpace: 'pre-wrap', color: 'var(--text-1)' }}>
+                        {b.runs.map((r, j) => <span key={j} style={{ fontWeight: r.bold ? 700 : undefined, fontStyle: r.italic ? 'italic' : undefined }}>{r.text}</span>)}
+                      </Typography>
+                    ))}
+                  </Box>
                 ))}
               </Box>
             </Box>

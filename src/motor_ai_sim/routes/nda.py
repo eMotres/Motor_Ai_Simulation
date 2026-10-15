@@ -1,7 +1,7 @@
 """Online NDA click-through routes (see :mod:`motor_ai_sim.nda`).
 
-* ``GET  /api/nda/current?lang=``       the current agreement text with its SHA-256 (the hash of exactly the text served)
-* ``GET  /api/nda/current/pdf?lang=``   unsigned specimen PDF of the current agreement for legal review (nothing stored)
+* ``GET  /api/nda/current?lang=``       EN and zh-CN agreement texts plus the selected-language SHA-256 and both hashes
+* ``GET  /api/nda/current/pdf?lang=``   unsigned EN-then-zh-CN specimen PDF for legal review (nothing stored)
 * ``GET  /api/nda/mine``                the caller's NDA state (source, version, company, record id)
 * ``POST /api/nda/sign``                validate, store the append-only record and the signed PDF, open a verification case (the STEP opens
                                        when the case is VERIFIED, see motor_ai_sim.verification)

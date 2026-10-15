@@ -437,7 +437,7 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
                       gamma0: Optional[float] = None,
                       slot: Optional[Dict[str, float]] = None,
                       bearings: Optional[Dict[str, Any]] = None,
-                      mass_fixed_kg: float = 0.0, mass_partial: bool = True) -> None:
+                      mass_fixed_kg: float = 0.0, mass_partial: bool = True, mass_kit: bool = False) -> None:
     from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
     from openpyxl.utils import get_column_letter
 
@@ -695,10 +695,12 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
     # THE motor mass is the FULL assembled mass (owner 2026-10-14): the active mass scales with the stack, the holders,
     # bearings, board ... do not.  No CAD model yet = the active mass, and the line says so.
     R_MASS = r
-    r = line(r, "Motor mass" + (" (partial: no CAD model yet)" if mass_partial else ""),
+    r = line(r, "Motor mass" + (" (frameless kit)" if mass_kit else "") + (" (partial: no CAD model yet)" if mass_partial else ""),
              f"={B(R_MASS_ACT)}+{mass_fixed_kg}", "kg",
              ("active parts only - no CAD bill of materials has been built for this motor" if mass_partial else
-              "full assembled motor: active mass scaled with the stack + the fixed parts of the CAD bill of materials"),
+              ("FRAMELESS KIT (stator + coils + phase board + rotor + magnets; no housing, bearings, shaft, screws): active mass "
+               "without the shaft tube, scaled with the stack, + the fixed kit parts of the CAD bill of materials" if mass_kit else
+               "full assembled motor: active mass scaled with the stack + the fixed parts of the CAD bill of materials")),
              OUT, "0.000")
     r = line(r, "Power per mass",
              f"=IF({B(R_MASS)}<=0,0,{B(R_P)}/{B(R_MASS)})", "kW/kg", "", OUT, "0.00")
@@ -1200,6 +1202,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     # active mass the duty was saved with - flagged partial, never mixed.
     _mi = mass_info or {}
     _partial = (not _mi) or bool(_mi.get("partial"))
+    _kit = bool(_mi.get("kit"))                       # frameless kit: the "full motor mass" is the kit mass (owner 2026-10-15)
+    _full_what = ("frameless kit mass (stator + coils + phase board + rotor + magnets)" if _kit else "full assembled motor mass")
     mass = ([float(_mi["full_kg"]) if (m is not None and not _partial) else m for m in mass_active])
 
     row("Power (kW)", P_kw, "shaft power at this point", 2, bold=True)
@@ -1334,11 +1338,11 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     row("Power per mass (kW/kg)",
         [(P_kw[i] / float(mass[i])) if (P_kw[i] and mass[i]) else None
          for i in range(len(duties))],
-        "active material only (partial mass: no CAD model yet)" if _partial else "full assembled motor mass", 2)
+        "active material only (partial mass: no CAD model yet)" if _partial else _full_what, 2)
     row("Torque per mass (N·m/kg)",
         [(abs(float(T_nm[i])) / float(mass[i])) if (T_nm[i] and mass[i]) else None
          for i in range(len(duties))],
-        "active material only (partial mass: no CAD model yet)" if _partial else "full assembled motor mass", 2)
+        "active material only (partial mass: no CAD model yet)" if _partial else _full_what, 2)
     def _kt(i: int) -> Optional[float]:
         v = _g(duties[i], "summary.Kt_Nm_per_Arms")
         if v is not None:
@@ -1522,10 +1526,12 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             "MAGNETIC gap is the air gap, because carbon fibre is non-magnetic",
             3)
     one("Magnet height (mm)", geo.get("magnet_height"), "", 2)
-    one("Motor mass (kg)" + (" - partial" if _partial else ""), next((m for m in mass if m), None),
+    one("Motor mass (kg)" + (" - frameless kit" if _kit else "") + (" - partial" if _partial else ""), next((m for m in mass if m), None),
         ("partial mass (no CAD model yet): the active parts only - iron + copper + magnets + shaft over the active length"
          if _partial else
-         "full assembled motor: active parts + shaft/carrier, holders, rings, bearings, screws, board, pins, enamel"), 3)
+         ("FRAMELESS KIT: stator iron, rotor iron, magnets, winding copper, enamel and the phase board; no housing, holders, "
+          "carriers, bearings, shaft, screws, rings or propeller plate" if _kit else
+          "full assembled motor: active parts + shaft/carrier, holders, rings, bearings, screws, board, pins, enamel")), 3)
     one("Active mass, EM parts (kg)", next((m for m in mass_active if m), None),
         "iron + copper + magnets + shaft tube over the active length - what the electromagnetic model and the optimizer use", 3)
     one("Cooling", cfg_doc.get("cooling") or die_doc.get("cooling") or "air",
@@ -2052,7 +2058,8 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                           bearings=(_brg_assign if _has_brg else None),
                           mass_fixed_kg=(0.0 if (mass_info is None or mass_info.get("partial"))
                                          else float(mass_info["full_kg"]) - float(mass_info["active_kg"])),
-                          mass_partial=(mass_info is None or bool(mass_info.get("partial"))))
+                          mass_partial=(mass_info is None or bool(mass_info.get("partial"))),
+                          mass_kit=bool(mass_info and mass_info.get("kit")))
 
     # ── Details sheet ───────────────────────────────────────────────────────
     ws2 = wb.create_sheet("Details")
@@ -2098,7 +2105,7 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                  if c.get("name") == nm), None), 3)
         drow("   Total, active parts", lambda du: _g(du, "summary.mass_total_kg", "result.mass_kg"), 3)
         if _mi and not _partial and _mi.get("parts"):
-            ws2.cell(row=r2, column=1, value="Full motor mass breakdown (kg)").font = Font(bold=True)
+            ws2.cell(row=r2, column=1, value=("Frameless kit mass breakdown (kg)" if _kit else "Full motor mass breakdown (kg)")).font = Font(bold=True)
             r2 += 1
             for _nm, _mat, _kg in _mi["parts"]:
                 ws2.cell(row=r2, column=1, value=f"   {_nm} ({_mat})").border = border
@@ -2107,7 +2114,7 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
                     _c.alignment = right
                     _c.border = border
                 r2 += 1
-            drow("   Full motor mass", lambda du: float(_mi["full_kg"]), 3)
+            drow("   Frameless kit mass" if _kit else "   Full motor mass", lambda du: float(_mi["full_kg"]), 3)
         # A frameless build is sold without its shaft: that part is in the
         # FIELD (its material, its eddy losses, its heat) and out of the mass.
         # Say so where the mass is quoted — a 0.000 kg row with no explanation

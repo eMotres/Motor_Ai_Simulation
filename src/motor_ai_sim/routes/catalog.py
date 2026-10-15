@@ -351,7 +351,8 @@ def _with_full_mass(outer: dict, card: Optional[dict]) -> dict:
         extra = {"mass_partial": True}
     else:
         extra = {"mass_partial": False, "mass_fixed_kg": round(summ["full_kg"] - summ["active_kg"], 5),
-                 "mass_active_base_kg": round(summ["active_kg"], 5), "mass_rotating_kg": round(summ["rotating_kg"], 5)}
+                 "mass_active_base_kg": round(summ["active_kg"], 5), "mass_rotating_kg": round(summ["rotating_kg"], 5),
+                 "mass_scope": summ.get("scope", "full motor")}      # "frameless kit": the fixed part may be negative (no shaft tube)
     return {**outer, "passport": {**inner, **extra}}
 
 

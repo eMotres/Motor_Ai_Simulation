@@ -81,28 +81,33 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
     const txt = drafts[r.name] ?? formatValue(r.value);
     const err = drafts[r.name] !== undefined ? draftError(r, drafts[r.name]) : null;
     const changed = drafts[r.name] !== undefined && r.name in changes;
+    const ro = !r.editable;
+    const tip = `${nameOf(r.tip, lang)}${ro ? ` ${nameOf(data?.read_only_note, lang)}` : ''} (${r.name})`;
     return (
       <Box key={r.name} data-testid={`cad-row-${r.name}`}
-        sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 0.5, py: 0.2,
-          bgcolor: changed ? 'rgba(59,130,246,.10)' : 'transparent' }}>
-        <Tooltip title={nameOf(r.tip, lang)} placement="right" enterDelay={250}>
-          <Typography sx={{ flex: 1, fontSize: 12, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-            fontWeight: r.overridden ? 700 : 400 }}>{r.name}</Typography>
+        sx={{ display: 'flex', alignItems: 'center', gap: 0.75, px: 0.5, py: 0.25,
+          bgcolor: changed ? 'rgba(59,130,246,.10)' : 'transparent', opacity: ro ? 0.75 : 1 }}>
+        <Tooltip title={tip} placement="right" enterDelay={250}>
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography data-testid={`cad-label-${r.name}`} sx={{ fontSize: 12, lineHeight: 1.25, fontWeight: r.overridden ? 700 : 400,
+              overflowWrap: 'anywhere' }}>{nameOf(r.label, lang)}</Typography>
+            <Typography sx={{ fontSize: 9.5, lineHeight: 1.2, color: 'var(--text-4)', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{r.name}</Typography>
+          </Box>
         </Tooltip>
         {r.name.startsWith('offset_') && (
           <Tooltip title={tx('cadOnlyTip')}><Chip size="small" label={tx('cadOnlyShort')}
             sx={{ height: 15, fontSize: 9, '& .MuiChip-label': { px: 0.6 }, border: '1px solid var(--line)', bgcolor: 'transparent' }} /></Tooltip>
         )}
-        <TextField size="small" value={txt} disabled={!canWrite || saving} error={!!err}
+        <TextField size="small" value={txt} disabled={!canWrite || saving || ro} error={!!err}
           onChange={(e) => setDrafts((d) => ({ ...d, [r.name]: e.target.value }))}
           onKeyDown={(e) => { if (e.key === 'Enter' && dirty && !invalid.length) void onSave(); }}
           onFocus={(e) => e.target.select()} sx={fieldSx}
-          inputProps={{ inputMode: 'decimal', 'aria-label': r.name,
+          inputProps={{ inputMode: 'decimal', 'aria-label': r.name, readOnly: ro,
             title: err ? tx(`cadErr_${err}`, { min: r.min, max: r.max }) : `${r.min} … ${r.max} ${r.unit}`.trim() }} />
         <Typography sx={{ width: 24, fontSize: 10.5, color: 'var(--text-4)' }}>{r.unit}</Typography>
         <Tooltip title={tx('cadReset', { value: formatValue(r.default) })}>
           <span>
-            <IconButton size="small" sx={{ p: 0.25, visibility: r.overridden || changed ? 'visible' : 'hidden' }} disabled={!canWrite || saving}
+            <IconButton size="small" sx={{ p: 0.25, visibility: !ro && (r.overridden || changed) ? 'visible' : 'hidden' }} disabled={!canWrite || saving}
               onClick={() => setDrafts((d) => ({ ...d, [r.name]: formatValue(r.default) }))}>
               <RestartAltIcon sx={{ fontSize: 15 }} />
             </IconButton>
@@ -181,7 +186,7 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
 
   return (
     <Box sx={{ display: 'flex', height: '100%', minHeight: 0 }} data-testid="geometry-full">
-      <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', p: 1.5, pt: 0.5 }}>{leftBody}</Box>
+      <Box sx={{ width: Math.max(panelWidth, 400), flexShrink: 0, overflowY: 'auto', p: 1.5, pt: 0.5 }}>{leftBody}</Box>
       {divider}
       <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0 }}>
         {model ? (

@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from motor_ai_sim import part_tree as PT
+from motor_ai_sim.cad_param_labels import labels as _labels
 
 #: the block of a die configuration that carries the CAD-only edits
 OVERRIDES_KEY = "cad_overrides"
@@ -136,17 +137,27 @@ EM_FORBIDDEN_PREFIXES = ("stator_", "rotor_up", "rotor_down", "air_gap", "slot_"
 
 def _parse() -> Dict[str, Dict[str, Any]]:
     out: Dict[str, Dict[str, Any]] = {}
+    lab = _labels()
     for line in _TABLE.strip().splitlines():
         name, group, unit, lo, hi, en, zh = line.split("|")
         if group not in PT.GROUP_IDS:
             raise ValueError(f"cad_params: unknown group {group!r} for {name}")
-        out[name] = {"name": name, "group": group, "unit": "" if unit == "count" else unit,
+        if name not in lab:
+            raise ValueError(f"cad_params: no label for {name}")
+        out[name] = {"name": name, "group": group, "label": lab[name], "unit": "" if unit == "count" else unit,
                      "kind": "int" if name.endswith("_count") else "float", "min": float(lo), "max": float(hi),
                      "tip": {"en": en, "zh": zh}, "cad_only": True}
     return out
 
 
 CATALOGUE: Dict[str, Dict[str, Any]] = _parse()
+
+#: Bearing internals (balls, lands, seals, edge radii) belong to the BEARING, not to the motor: they are shown read-only and the only
+#: bearing edit is the choice of the bearing card (``bearing_card``).  Owner 2026-10-15.
+READ_ONLY_GROUPS = ("bearings",)
+READ_ONLY = frozenset(n for n, m in CATALOGUE.items() if m["group"] in READ_ONLY_GROUPS)
+READ_ONLY_NOTE = {"en": "Bearing internals come with the bearing; choose the bearing card instead.",
+                  "zh": "轴承内部尺寸由轴承型号决定;请改选轴承型号。"}
 
 #: roles of a built-model parameter that an edit may replace (a ``derived`` row is a formula of others)
 EDITABLE_ROLES = ("mechanics", "input")
@@ -269,7 +280,7 @@ def rows(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any]) -> List[Di
             continue
         ov = overrides.get(name)
         d = round(float(defaults[name]), 9)
-        out.append({**meta, "default": d, "built": round(float(p.get("value", d)), 9),
+        out.append({**meta, "editable": name not in READ_ONLY, "default": d, "built": round(float(p.get("value", d)), 9),
                     "value": float(ov) if isinstance(ov, (int, float)) else d,
                     "overridden": isinstance(ov, (int, float)) and abs(float(ov) - d) > 1e-9,
                     "cad_only_label": CAD_ONLY_LABEL})
@@ -316,6 +327,9 @@ def validate(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any], *, bea
         meta = CATALOGUE.get(name)
         if meta is None:
             problems.append(f"{name}: not a CAD-only parameter; electromagnetic parameters are edited in Active, not here")
+            continue
+        if name in READ_ONLY:
+            problems.append(f"{name}: a bearing internal, read-only; it comes with the bearing - choose the bearing card instead")
             continue
         p = built.get(name)
         if p is None or p.get("role") not in EDITABLE_ROLES:

@@ -178,6 +178,30 @@ def test_catalogue_has_no_electromagnetic_name_and_every_row_is_translated():
     assert "offset_rotor" in C.CATALOGUE
 
 
+def test_every_parameter_has_a_short_label_in_both_languages_and_bearing_internals_are_read_only():
+    from motor_ai_sim import cad_params as C
+    from motor_ai_sim.cad_param_labels import labels
+    lab = labels()
+    assert set(lab) == set(C.CATALOGUE)
+    for n, m in C.CATALOGUE.items():
+        en, zh = m["label"]["en"], m["label"]["zh"]
+        assert " - " in en and len(en) <= 48 and en != n and any("一" <= ch <= "鿿" for ch in zh), n
+    assert C.CATALOGUE["ring_t"]["label"] == {"en": "Glass-fibre ring - thickness", "zh": "玻璃纤维环 - 厚度"}
+    assert C.CATALOGUE["prop_fix_d"]["label"]["en"] == "Propeller plate - diameter"
+    assert C.CATALOGUE["shaft_bore_tip_angle"]["label"]["en"] == "Shaft - bore tip angle"
+    # every bearing internal is read-only; nothing else is
+    assert C.READ_ONLY == {n for n, m in C.CATALOGUE.items() if m["group"] == "bearings"} and "bearing_ball_count" in C.READ_ONLY
+    p = json.loads((_ROOT / "cad" / "reference" / "CIANO14_40_12.json").read_text("utf-8"))
+    built = {x["name"]: x for sec in C.SECTIONS for x in p[sec]}
+    rows = {r["name"]: r for r in C.rows(built, {})}
+    assert rows["bearing_ball_count"]["editable"] is False and rows["ring_t"]["editable"] is True
+    assert "read-only" in C.validate(built, {"bearing_ball_d": 2.2})[0]
+    # an integer parameter of a carrier motor is still checked as a whole number
+    q = json.loads((_ROOT / "cad" / "reference" / "CIANO28_85_20SW1200.json").read_text("utf-8"))
+    built85 = {x["name"]: x for sec in C.SECTIONS for x in q[sec]}
+    assert "whole number" in " ".join(C.validate(built85, {"rotor_key_count": 3.5}))
+
+
 def test_rows_of_both_reference_profiles_are_editable_and_valid_as_built():
     from motor_ai_sim import cad_params as C
     for f in ("CIANO14_40_12", "CIANO28_85_20SW1200"):
@@ -253,7 +277,7 @@ def test_put_saves_per_config_and_leaves_the_electromagnetics_alone(env):
 
 def test_put_refuses_bad_values_in_words_and_saves_nothing(env):
     before = _cfg_doc(env)
-    for body, needle in (({"ring_t": 50}, "outside the allowed range"), ({"bearing_ball_count": 7.5}, "whole number"),
+    for body, needle in (({"ring_t": 50}, "outside the allowed range"), ({"bearing_ball_count": 12}, "read-only"),
                          ({"magnet_height": 5}, "electromagnetic"), ({"nonsense": 1}, "not a CAD-only"),
                          ({"ring_t": "abc"}, "not a number")):
         r = client.put(CP, json={"values": body}, headers=env["admin"])

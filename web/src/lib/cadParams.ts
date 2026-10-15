@@ -6,6 +6,10 @@ import type { PartNames } from './partTree';
 
 export interface CadRow {
   name: string;
+  /** short human-readable label ("Glass-fibre ring - thickness"); the technical template name is `name` */
+  label: PartNames;
+  /** false = shown read-only (bearing internals come with the bearing card) */
+  editable: boolean;
   group: string;
   unit: '' | 'mm' | 'deg';
   kind: 'float' | 'int';
@@ -46,6 +50,7 @@ export interface CadParamsData {
   bearing?: { override: string | null; config_card: string | null; model: Record<string, number>; choices: BearingChoice[] };
   model?: { motor_id?: string; built_at?: string; template?: string };
   cad_only_label?: PartNames;
+  read_only_note?: PartNames;
 }
 
 /** A typed value ("1,5" and "1.5" both work); null when it is not a finite number. */
@@ -71,6 +76,7 @@ export function draftError(row: Pick<CadRow, 'kind' | 'min' | 'max'>, text: stri
 export function changesOf(rows: readonly CadRow[], drafts: Readonly<Record<string, string>>): Record<string, number | null> {
   const out: Record<string, number | null> = {};
   for (const r of rows) {
+    if (!r.editable) continue;
     const txt = drafts[r.name];
     if (txt === undefined) continue;
     const x = parseDraft(txt);

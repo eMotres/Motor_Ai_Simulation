@@ -95,7 +95,7 @@
   "cadRefused": "The model would not build with these values:",
   "cadBearingCard": "Bearing card",
   "cadBearingModel": "model default",
-  "cadBearingTip": "CAD-only choice of the bearing drawn in the model (from the bearings library). The friction model of the simulation keeps its own bearings. Adjust the bearing rows if the new size needs it.",
+  "cadBearingTip": "CAD-only choice of the bearing drawn in the model (from the bearings library). The bearing rows below come with the bearing and are read-only. The simulation friction model keeps its own bearings; a size the template cannot fit is refused by the check.",
   "cadSave": "Save and rebuild",
   "cadSaveN": "Save and rebuild ({n} changed)",
   "cadSaving": "Saving...",

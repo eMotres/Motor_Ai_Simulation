@@ -119,7 +119,7 @@ def _table(die: str, cfg: str, who: dict) -> Dict[str, Any]:
     c = fam._load_yaml(cfile, "configuration")
     ov = CP.clean_overrides(c.get(CP.OVERRIDES_KEY))
     out: Dict[str, Any] = {"die": die, "config": cfg, "can_write": fam._can_write_catalog(who), "overrides": ov,
-                           "cad_only_label": CP.CAD_ONLY_LABEL}
+                           "cad_only_label": CP.CAD_ONLY_LABEL, "read_only_note": CP.READ_ONLY_NOTE}
     built = CP.read_built_params(die, cfg)
     if built is None:
         out.update(available=False, reason="no CAD model has been built for this motor yet; there is nothing to edit",
@@ -285,7 +285,7 @@ async def import_cad_params(die: str, cfg: str, dry_run: int = Query(1), file: U
     built = CP.read_built_params(die, cfg)
     if built is None:
         raise HTTPException(409, detail="no CAD model has been built for this motor yet; there is nothing to edit")
-    cur = {r["name"]: r["value"] for r in CP.rows(built, saved)}
+    cur = {r["name"]: r["value"] for r in CP.rows(built, saved) if r["editable"]}       # bearing internals are read-only
     todo = {k: v for k, v in found.items() if k in cur and abs(v - cur[k]) > 1e-9}
     res = _change(die, cfg, _w, todo, bearing_set=False, bearing_card=None, dry_run=bool(dry_run), source="import:" + name[-6:])
     res.update(found=len(found), unchanged=sorted(k for k in found if k not in todo))

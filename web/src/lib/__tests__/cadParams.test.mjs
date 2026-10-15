@@ -6,7 +6,7 @@ let C = null;
 try { C = await import('../cadParams.ts'); } catch { /* old Node */ }
 const t = C ? test : test.skip;
 
-const row = (name, over = {}) => ({ name, group: 'housing', unit: 'mm', kind: 'float', min: 0.1, max: 5, tip: { en: 'x', zh: 'y' },
+const row = (name, over = {}) => ({ name, label: { en: name, zh: name }, editable: true, group: 'housing', unit: 'mm', kind: 'float', min: 0.1, max: 5, tip: { en: 'x', zh: 'y' },
   cad_only: true, default: 0.8, built: 0.8, value: 0.8, overridden: false, ...over });
 const ROWS = [row('ring_t'), row('holder_flange_t', { default: 1.2, built: 1.2, value: 1.2, max: 10 }),
   row('bearing_ball_count', { unit: '', kind: 'int', min: 3, max: 60, default: 10, built: 10, value: 10 })];
@@ -35,6 +35,11 @@ t('only changed rows are sent; the reference value is a reset (null); untouched 
   assert.deepEqual(C.changesOf(saved, { ring_t: '0.9' }), {});                         // equal to the saved one: nothing to send
   assert.deepEqual(C.invalidDrafts(ROWS, drafts), ['bearing_ball_count']);
   assert.deepEqual(C.invalidDrafts(ROWS, { ring_t: '60' }), ['ring_t']);
+});
+
+t('a read-only row (bearing internal) is never sent', () => {
+  const ro = [row('bearing_ball_d', { editable: false, unit: 'mm', default: 2, value: 2, min: 0.3, max: 20 })];
+  assert.deepEqual(C.changesOf(ro, { bearing_ball_d: '3' }), {});
 });
 
 t('the model is shown with a badge while it is stale, never blocked', () => {

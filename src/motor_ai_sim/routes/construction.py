@@ -118,14 +118,17 @@ def _table(die: str, cfg: str, who: dict) -> Dict[str, Any]:
     cfile = fam._cfg_file(die, cfg)
     c = fam._load_yaml(cfile, "configuration")
     ov = CP.clean_overrides(c.get(CP.OVERRIDES_KEY))
+    from motor_ai_sim.modules import motor_mass as _mm
+    kit = _mm.config_cad_variant(fam._die_dir(die), cfg) == "frameless"
     out: Dict[str, Any] = {"die": die, "config": cfg, "can_write": fam._can_write_catalog(who), "overrides": ov,
+                           "assembly": "frameless" if kit else "full", "kit": kit,
                            "cad_only_label": CP.CAD_ONLY_LABEL, "read_only_note": CP.READ_ONLY_NOTE}
     built = CP.read_built_params(die, cfg)
     if built is None:
         out.update(available=False, reason="no CAD model has been built for this motor yet; there is nothing to edit",
                    rows=[], groups=[], rebuild=_status(die, cfg, ov))
         return out
-    rows = CP.rows(built, ov)
+    rows = CP.rows(built, ov, kit)
     present = {r["group"] for r in rows}
     out["groups"] = [{"id": g, "name": {"en": en, "zh": zh}} for g, en, zh in PT.GROUPS if g in present]
     man = CP.read_manifest(die, cfg) or {}
@@ -137,7 +140,7 @@ def _table(die: str, cfg: str, who: dict) -> Dict[str, Any]:
         cfg_card = next((str(v.get("card")) for _k, v in sorted(br.items()) if isinstance(v, dict) and v.get("card")), None)
     bear_vals = {k: built[n].get("value") for k, n in (("d", "bearing_d"), ("D", "bearing_D"), ("B", "bearing_B")) if n in built}
     out.update(available=True, rows=rows, rebuild=_status(die, cfg, ov),
-               bearing={"override": eff_card, "config_card": cfg_card, "model": bear_vals, "choices": cards,
+               bearing=None if kit else {"override": eff_card, "config_card": cfg_card, "model": bear_vals, "choices": cards,
                         "group": "bearings", "cad_only": True},
                model={"motor_id": man.get("motor_id"), "built_at": man.get("built_at"),
                       "template": (man.get("template") or {}).get("version")})
@@ -168,7 +171,9 @@ def _change(die: str, cfg: str, who: dict, values: Dict[str, Any], *, bearing_se
     built = CP.read_built_params(die, cfg)
     if built is None:
         raise HTTPException(409, detail="no CAD model has been built for this motor yet; there is nothing to edit")
-    defaults = {r["name"]: r["default"] for r in CP.rows(built, {})}
+    from motor_ai_sim.modules import motor_mass as _mm
+    kit = _mm.config_cad_variant(fam._die_dir(die), cfg) == "frameless"
+    defaults = {r["name"]: r["default"] for r in CP.rows(built, {}, kit)}
     new = dict(cur)
     nums: Dict[str, float] = {}
     for k, v in values.items():
@@ -185,6 +190,8 @@ def _change(die: str, cfg: str, who: dict, values: Dict[str, Any], *, bearing_se
         else:
             new[k] = x
     dims = None
+    if bearing_set and kit:
+        raise HTTPException(422, detail={"error": "the frameless kit has no bearings", "violations": ["bearing_card: the frameless kit has no bearings"]})
     if bearing_set:
         if bearing_card:
             dims = _bearing_dims(bearing_card)
@@ -194,7 +201,7 @@ def _change(die: str, cfg: str, who: dict, values: Dict[str, Any], *, bearing_se
     elif new.get(CP.BEARING_CARD_KEY):
         dims = _bearing_dims(new[CP.BEARING_CARD_KEY])
     try:
-        problems = CP.validate(built, new, bearing=dims)
+        problems = CP.validate(built, new, bearing=dims, kit=kit)
     except CP.CadParamError as exc:
         raise HTTPException(503, detail={"error": str(exc), "violations": exc.violations})
     if problems:
@@ -285,7 +292,9 @@ async def import_cad_params(die: str, cfg: str, dry_run: int = Query(1), file: U
     built = CP.read_built_params(die, cfg)
     if built is None:
         raise HTTPException(409, detail="no CAD model has been built for this motor yet; there is nothing to edit")
-    cur = {r["name"]: r["value"] for r in CP.rows(built, saved) if r["editable"]}       # bearing internals are read-only
+    from motor_ai_sim.modules import motor_mass as _mm
+    kit = _mm.config_cad_variant(fam._die_dir(die), cfg) == "frameless"
+    cur = {r["name"]: r["value"] for r in CP.rows(built, saved, kit) if r["editable"]}       # bearing internals are read-only
     todo = {k: v for k, v in found.items() if k in cur and abs(v - cur[k]) > 1e-9}
     res = _change(die, cfg, _w, todo, bearing_set=False, bearing_card=None, dry_run=bool(dry_run), source="import:" + name[-6:])
     res.update(found=len(found), unchanged=sorted(k for k in found if k not in todo))

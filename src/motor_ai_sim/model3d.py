@@ -131,6 +131,7 @@ def model_info(entry: dict) -> dict:
     m = entry["manifest"]
     glb, step = file_row(entry, "glb"), file_row(entry, "step")
     return dict(die=entry["die"], config=entry["config"], motor_id=entry["motor_id"],
+                assembly=m.get("cad_variant") or "full",              # "full" | "frameless" (no envelope / simplified variants are served)
                 available=bool(glb), glb_bytes=glb and glb["bytes"], glb_sha256=glb and glb["sha256"],
                 step_available=bool(step), step_bytes=step and step["bytes"],
                 version=dict(template=(m.get("template") or {}).get("version"), built_at=m.get("built_at"),

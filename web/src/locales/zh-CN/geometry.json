@@ -110,5 +110,13 @@
   "modelVersion": "模板 {template},生成于 {built}",
   "fit": "适合视图",
   "contextLost": "三维视图丢失了图形上下文。请刷新页面后继续。",
-  "modelStale": "模型已过期"
+  "modelStale": "模型已过期",
+  "files_stepKit": "STEP(无框架套件)",
+  "files_stepKitTip": "无框架套件(带线圈的定子、相位板、带磁钢的转子)的STEP文件,带有您的NDA标记。",
+  "files_bomCsvKit": "套件物料清单(CSV)",
+  "files_bomCsvKitTip": "无框架套件的零件清单,含材料与质量,不含价格。",
+  "files_bomXlsxKit": "套件物料清单(XLSX)",
+  "files_bomXlsxKitTip": "无框架套件的零件清单(Excel 工作簿),不含价格。",
+  "fullKitChip": "无框架套件",
+  "fullKitTip": "此配置是面向机器人的无框架套件:带线圈的定子、相位板、带磁钢的转子。不含外壳、支架、轴承、轴和螺钉。"
 }

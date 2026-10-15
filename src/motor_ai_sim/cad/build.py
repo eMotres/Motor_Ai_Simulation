@@ -2,6 +2,12 @@
 
   python -m motor_ai_sim.cad.build --die "CIANO14 40 new" --config L12
   python cad/run_build.py build --die "CIANO14 40 new" --config L20          (FreeCAD image: no FEM stack needed)
+  python -m motor_ai_sim.cad.build --die "CIANO28 85 20SW1200" --config L13 --variant frameless      (the frameless kit)
+
+Assembly variant (owner 2026-10-15): the configuration's top-level key `cad_variant: full | frameless` (default full) decides what
+is built; `--variant` overrides it for one build.  `frameless` = stator + coils + phase board + rotor + magnets (+ mounting datums);
+no housing, holders, carriers, bearings, shaft, screws, rings, Prop_fix.  Same file names; the manifest, the BOM, the datums JSON
+and the GLB say which variant they are.
   python -m motor_ai_sim.cad.build back --die "CIANO14 40 new" --config L20 --fcstd my_copy.FCStd [--propose]
 
 Outputs go to <out-root>/<die>/<config>/ (default /srv/motres/shared/cad on the server):
@@ -86,6 +92,8 @@ def build(args):
         pj = json.load(open(args.profile_file, encoding="utf-8"))
         eff, pull = None, dict(summary={}, fingerprint=None)
         kind = "profile_file"
+        if args.variant:
+            pj.setdefault("profile", {})["cad_variant"] = store.check_variant(args.variant, "--variant")
         out_dir = args.out_dir
         if not out_dir:
             print("--profile-file needs --out-dir")
@@ -96,8 +104,8 @@ def build(args):
             return 2
         dies = args.dies_dir or store.default_dies_dir()
         try:
-            eff = store.load_effective(dies, args.die, args.config, args.materials, args.bearings)
-        except FileNotFoundError as e:
+            eff = store.load_effective(dies, args.die, args.config, args.materials, args.bearings, cad_variant=args.variant)
+        except (FileNotFoundError, ValueError) as e:
             print(e)
             return 2
         mp = store.load_mapping()
@@ -166,6 +174,7 @@ def build(args):
         m = mf.build_manifest(eff, pj, pull, build_report, step_check, mf.file_rows(work, names),
                               build_report.get("freecad_version") or step_check.get("freecad_version"),
                               round(time.time() - t0, 1), kind=kind)
+        m["cad_variant"] = (pj.get("profile") or {}).get("cad_variant") or "full"
         m["gui"] = dict(done=bool(gui_report.get("ok")), camera=gui_report.get("camera"), freecad_version=gui_report.get("freecad_version"),
                         opens_ready=bool(gui_check.get("ok")), visible_objects=gui_check.get("visible"))
         m["bom"] = bom_info
@@ -215,6 +224,8 @@ def main(argv=None):
     b.add_argument("--profile-file", help="build from this profile JSON instead of the store (reference builds, tests)")
     b.add_argument("--freecadcmd", help="path of freecadcmd (default $FREECADCMD, PATH, Program Files)")
     b.add_argument("--timeout", type=int, default=1800)
+    b.add_argument("--variant", choices=store.CAD_VARIANTS,
+                   help="assembly variant (default: the configuration's cad_variant key, else full); frameless = stator + coils + phase board + rotor + magnets")
     b.add_argument("--set", help="what-if overrides 'name=expr;name2=expr' (tests; manifest then differs from the store)")
     b.add_argument("--no-gui", action="store_true", help="skip the headless GUI step (no GuiDocument.xml)")
     b.add_argument("--no-step", action="store_true")

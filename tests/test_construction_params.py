@@ -540,3 +540,48 @@ def test_a_private_configuration_reads_like_a_missing_one_on_every_new_route(env
             b = client.get(f"/api/model3d/{DIE}/NOSUCH/{f_}", headers=h)
             assert a.status_code == b.status_code == 404 and norm(a, "L20") == norm(b, "NOSUCH"), (who, f_)
     fam._TREE_CACHE.clear()
+
+
+# ── the frameless kit (cad_variant: frameless, #201): only the kit parts, everywhere ──────────────────────────────
+
+def test_a_frameless_configuration_shows_only_the_kit_parts_on_every_surface(env):
+    import csv
+    f = env["dies"] / DIE / f"{CFG}.yaml"
+    doc = yaml.safe_load(f.read_text("utf-8"))
+    doc["cad_variant"] = "frameless"
+    f.write_text(yaml.safe_dump(doc), "utf-8")
+    mf = env["cad"] / DIE / CFG / "manifest.json"
+    m = json.loads(mf.read_text("utf-8"))
+    m["cad_variant"] = "frameless"
+    mf.write_text(json.dumps(m), "utf-8")
+    from motor_ai_sim import part_tree as PT
+    from motor_ai_sim.modules import motor_mass as MM
+    MM._FULL_CACHE.clear()                                                                      # noqa: SLF001
+    tree = client.get(f"/api/family/die/{DIE}/part_tree", params={"config": CFG}, headers=env["admin"]).json()
+    ids = [p["id"] for p in tree["parts"]]
+    assert tree["kit"] is True and tree["assembly"] == "frameless" and tree["scope"] == "frameless kit"
+    assert ids and set(ids) <= set(PT.KIT_PART_IDS) and {"stator_core", "rotor_core", "magnet", "slot", "board"} <= set(ids)
+    assert not set(ids) & {"shaft", "holder_front", "holder_back", "rings", "bearings", "screws", "prop_fix", "carrier_front"}
+    assert {g["id"] for g in tree["groups"]} <= {"stator", "winding", "rotor", "magnets", "electronics"}
+    # Materials Full, the 3-D parts list, the BOM export, the component card: the same ids in the same order
+    pm = client.get(f"/api/family/die/{DIE}/part_materials", params={"config": CFG}, headers=env["admin"]).json()
+    assert [p["key"] for p in pm["parts"]] == ids and pm["kit"] is True
+    assert [p["id"] for p in client.get(f"{M3}/parts", headers=env["nda"]).json()["parts"]] == ids
+    rows = list(csv.reader(io.StringIO(client.get(f"{M3}/bom.csv", headers=env["admin"]).content.decode("utf-8-sig"))))
+    hdr = next(i for i, r in enumerate(rows) if r and r[0] == "item")
+    assert [r[1] for r in rows[hdr + 1:] if r[0].isdigit()] == ids and rows[-1][-1] == "frameless kit"
+    from motor_ai_sim import propeller_s1 as s1
+    from motor_ai_sim.modules.component_adapters import motor_card
+    card = motor_card(s1.load_model(DIE, CFG), dies_dir=env["dies"], cad_dir=env["cad"])
+    assert [p.part_id for p in card.parts] == ids
+    # the CAD table has only the groups a kit still has; a housing edit and a bearing card are refused
+    t = client.get(CP, headers=env["admin"]).json()
+    assert t["kit"] is True and {r["group"] for r in t["rows"]} <= {"winding", "rotor", "magnets", "electronics"} and t["bearing"] is None
+    assert "board_t" in {r["name"] for r in t["rows"]} or "phase_board_x" in {r["name"] for r in t["rows"]}
+    r = client.put(CP, json={"values": {"ring_t": 0.9}}, headers=env["admin"])
+    assert r.status_code == 422 and "frameless kit has no such part" in json.dumps(r.json())
+    assert client.put(CP, json={"bearing_card": "618/8-2Z"}, headers=env["admin"]).status_code == 422
+    assert client.put(CP, json={"values": {"coil_lead_ext": 5.0}}, headers=env["admin"]).status_code == 200
+    # a full configuration of the same die is unchanged
+    t20 = client.get(f"/api/family/config/{DIE}/L20/cad_params", headers=env["admin"]).json()
+    assert t20["kit"] is False and "housing" in {r["group"] for r in t20["rows"]}

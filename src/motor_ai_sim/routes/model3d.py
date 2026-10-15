@@ -211,7 +211,7 @@ def _bom_rows(tree: dict) -> list:
 
 def _bom_total(tree: dict) -> list:
     return ["", "", "", "total (counted)", "", "", "", round((tree.get("total_kg") or 0) * 1000.0, 3), "", "",
-            "partial mass (no CAD model yet)" if tree.get("partial") else ""]
+            "partial mass (no CAD model yet)" if tree.get("partial") else (tree.get("scope") if tree.get("kit") else "")]
 
 
 @router.get("/{die}/{config}/bom.csv")
@@ -282,7 +282,9 @@ def full_param_rows(die: str, config: str) -> list:
         out.append((names.get(k, k), "mm" if unit == "mm" else "", v, desc))
     built = CP.read_built_params(die, config)
     if built is not None:
-        for r in CP.rows(built, CP.clean_overrides(cy.get(CP.OVERRIDES_KEY))):
+        from motor_ai_sim.modules import motor_mass as _mm
+        kit = _mm.config_cad_variant(ddir, config) == "frameless"
+        for r in CP.rows(built, CP.clean_overrides(cy.get(CP.OVERRIDES_KEY)), kit):
             out.append((r["name"], r["unit"], round(r["value"], 6), "%s. %s" % (CP.CAD_ONLY_LABEL["en"], r["tip"]["en"])))
     return out
 

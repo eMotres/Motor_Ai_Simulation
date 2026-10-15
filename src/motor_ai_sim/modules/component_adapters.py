@@ -147,7 +147,7 @@ def motor_card(m: Mapping[str, Any], *, dies_dir: Optional[Any] = None, cad_dir:
     # THE part tree (owner 2026-10-15): the same ids, names, groups and order as Geometry / Materials / the 3-D model / the BOM
     parts = [ComponentPart(name=_pt.card_part_name(p.key, p.name), material_id=p.material_id, mass_kg=p.mass_kg, role=p.role,
                            status=p.status, counted=p.counted, basis=p.basis, part_id=p.key, group=_pt.group_of(p.key))
-             for p in sorted(fm.parts, key=lambda q: _pt.sort_key(q.key)) if p.mass_kg]
+             for p in sorted(fm.parts, key=lambda q: _pt.sort_key(q.key)) if p.mass_kg and (not fm.kit or p.key in _pt.KIT_PART_IDS)]
     counted = sum(p.mass_kg for p in parts if p.counted)
     if abs(counted - fm.total_kg) > 1e-9 + 1e-6 * fm.total_kg:
         raise ValueError(f"motor parts ({counted:.6g} kg) and the full mass ({fm.total_kg:.6g} kg) disagree")

@@ -30,6 +30,8 @@ export interface FilesCtx {
   modelBuilt: boolean;
   /** may this session write the open die/configuration (the server's `can_write`) */
   canWrite: boolean;
+  /** the open model is a frameless kit: STEP and BOM are those of the kit (labels say so) */
+  kit?: boolean;
 }
 
 export interface FileItem {
@@ -40,8 +42,10 @@ export interface FileItem {
   reason?: DisabledReason;
 }
 
-const item = (id: FileItemId, section: 'export' | 'import', enabled: boolean, reason?: DisabledReason): FileItem =>
-  ({ id, section, labelKey: `files_${id}`, enabled, ...(enabled ? {} : { reason }) });
+const KIT_LABELLED: readonly FileItemId[] = ['step', 'bomCsv', 'bomXlsx'];
+
+const item = (id: FileItemId, section: 'export' | 'import', enabled: boolean, reason?: DisabledReason, kit = false): FileItem =>
+  ({ id, section, labelKey: kit && KIT_LABELLED.includes(id) ? `files_${id}Kit` : `files_${id}`, enabled, ...(enabled ? {} : { reason }) });
 
 /** A plain `user` account on an enforcing backend never gets the FreeCAD file. */
 export const mayHaveFreecadFile = (c: Pick<FilesCtx, 'isAdmin' | 'enforced' | 'role'>): boolean =>
@@ -54,9 +58,10 @@ export function filesMenu(c: FilesCtx): FileItem[] {
       : (c.isAdmin || !c.enforced) ? item(id, 'import', true) : item(id, 'import', false, 'adminOnly'));
     return [out('fusionCsvEm'), out('freecadEm'), imp('fusionCsvEmImport'), imp('freecadEmImport')];
   }
-  const dl = (id: FileItemId): FileItem => (!c.connectedToApi ? item(id, 'export', false, 'offline')
-    : !c.modelBuilt ? item(id, 'export', false, 'noModel')
-      : !c.canDownload ? item(id, 'export', false, 'nda') : item(id, 'export', true));
+  const k = !!c.kit;
+  const dl = (id: FileItemId): FileItem => (!c.connectedToApi ? item(id, 'export', false, 'offline', k)
+    : !c.modelBuilt ? item(id, 'export', false, 'noModel', k)
+      : !c.canDownload ? item(id, 'export', false, 'nda', k) : item(id, 'export', true, undefined, k));
   const imp = (id: FileItemId): FileItem => (!c.connectedToApi ? item(id, 'import', false, 'offline')
     : !c.modelBuilt ? item(id, 'import', false, 'noModel')
       : !c.canWrite ? item(id, 'import', false, 'readOnly') : item(id, 'import', true));

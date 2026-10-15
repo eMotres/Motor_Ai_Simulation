@@ -176,6 +176,8 @@
   "materialsFullAssumedTip": "The default is an assumption (the CAD names no grade).",
   "materialsFullTotal": "Motor mass",
   "materialsFullTotalTip": "The full assembled motor: the app's active parts + shaft or carrier, holders, rings, bearings, screws, board, pins, enamel. Every per-kg figure divides by it.",
+  "materialsFullTotalKit": "Frameless kit mass",
+  "materialsFullTotalKitTip": "The frameless kit for robots: stator with coils and the phase board + rotor with magnets. Housing, holders, rotor carriers, bearings, shaft, screws and rings are not included. Every per-kg figure divides by it.",
   "materialsFullNoMotor": "Load a motor to see its parts.",
   "materialsFullUnavailable": "No part list for this motor here.",
   "materialsFullNoCad": "Partial mass (no CAD model yet): only the active parts and what the configuration names are listed.",

@@ -267,7 +267,11 @@ def _reference_expr(p: Dict[str, Any]) -> str:
     return str(p.get("reference_expression") or p.get("freecad_expression"))
 
 
-def rows(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any]) -> List[Dict[str, Any]]:
+#: Groups of parameters a FRAMELESS KIT (``cad_variant: frameless``) still has parts for: housing, shaft, bearings and screws are not built.
+KIT_GROUPS = ("winding", "rotor", "magnets", "electronics")
+
+
+def rows(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any], kit: bool = False) -> List[Dict[str, Any]]:
     """The editable table: every catalogue parameter that the built model has as a ``mechanics`` / ``input`` row.
 
     ``default`` = value without any override, ``built`` = value in the model on the server, ``value`` = value with the saved
@@ -277,6 +281,8 @@ def rows(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any]) -> List[Di
     for name, meta in CATALOGUE.items():
         p = built.get(name)
         if p is None or p.get("role") not in EDITABLE_ROLES:
+            continue
+        if kit and meta["group"] not in KIT_GROUPS:
             continue
         ov = overrides.get(name)
         d = round(float(defaults[name]), 9)
@@ -314,8 +320,8 @@ def load_precheck():
     return _PRECHECK
 
 
-def validate(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any], *, bearing: Optional[Dict[str, float]] = None
-             ) -> List[str]:
+def validate(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any], *, bearing: Optional[Dict[str, float]] = None,
+             kit: bool = False) -> List[str]:
     """Every reason in words why ``overrides`` would not build: ranges, integers, and the template's pre-check applied to the
     whole parameter set (``bearing`` = d / D / B of a chosen bearing card).  Empty list = accepted.
     Raises ``CadParamError`` when the pre-check is not available in this deployment."""
@@ -327,6 +333,9 @@ def validate(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any], *, bea
         meta = CATALOGUE.get(name)
         if meta is None:
             problems.append(f"{name}: not a CAD-only parameter; electromagnetic parameters are edited in Active, not here")
+            continue
+        if kit and meta["group"] not in KIT_GROUPS:
+            problems.append(f"{name}: the frameless kit has no such part (housing, shaft, bearings and screws are not built)")
             continue
         if name in READ_ONLY:
             problems.append(f"{name}: a bearing internal, read-only; it comes with the bearing - choose the bearing card instead")
@@ -348,7 +357,7 @@ def validate(built: Dict[str, Dict[str, Any]], overrides: Dict[str, Any], *, bea
         raise CadParamError("the CAD template pre-check is not available in this deployment; the edit cannot be validated",
                             ["template pre-check unavailable"])
     exprs = apply_overrides({n: _reference_expr(p) for n, p in built.items()}, units, overrides)
-    if bearing:
+    if bearing and not kit:
         for key, name in (("d", "bearing_d"), ("D", "bearing_D"), ("B", "bearing_B")):
             if name in exprs and key in bearing:
                 exprs[name] = "%g mm" % float(bearing[key])

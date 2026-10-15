@@ -74,4 +74,9 @@ t('every Full download has a server path; the menu is sections of export then im
   assert.ok(m.slice(0, firstImport).every((i) => i.section === 'export'));
   assert.ok(m.slice(firstImport).every((i) => i.section === 'import'));
   assert.ok(m.every((i) => i.labelKey === `files_${i.id}`));
+  // a frameless kit: STEP and BOM are the kit's and say so; nothing else changes
+  const kit = F.filesMenu({ ...base, canDownload: true, canWrite: true, kit: true });
+  assert.deepEqual(kit.map((i) => i.id), m.map((i) => i.id));
+  assert.deepEqual(kit.filter((i) => i.labelKey.endsWith('Kit')).map((i) => i.id), ['step', 'bomCsv', 'bomXlsx']);
+  assert.equal(kit.find((i) => i.id === 'paramsCsv').labelKey, 'files_paramsCsv');
 });

@@ -119,7 +119,13 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
 
   const leftBody = (
     <>
-      <SectionLabel sx={{ px: 0.5, py: 0.5 }}>{tx('fullPartsTitle')}</SectionLabel>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+        <SectionLabel sx={{ px: 0.5, py: 0.5 }}>{tx('fullPartsTitle')}</SectionLabel>
+        {(tree?.kit || model?.assembly === 'frameless') && (
+          <Tooltip title={tx('fullKitTip')}><Chip size="small" data-testid="kit-chip" label={tx('fullKitChip')}
+            sx={{ height: 18, fontSize: 10, bgcolor: 'transparent', border: '1px solid var(--line)' }} /></Tooltip>
+        )}
+      </Box>
       <Box sx={{ maxHeight: 260, overflowY: 'auto', border: '1px solid var(--line-soft)', borderRadius: 1, mb: 1 }}>
         {treeLoading && !tree ? <Box sx={{ p: 1 }}><CircularProgress size={14} /></Box>
           : tree && tree.available !== false && tree.groups.length ? (

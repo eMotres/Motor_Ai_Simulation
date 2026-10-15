@@ -105,13 +105,23 @@ def card_part_name(part_id: str, fallback: str) -> str:
     return names_of(part_id, fallback)["en"] if part_id in _BY_ID else fallback
 
 
-def build(rows: List[Dict[str, Any]], *, brief: bool = False) -> Dict[str, Any]:
+#: Frameless kit (``cad_variant: frameless``, motor_mass.SCOPE_KIT): only the kit parts are in the tree - the stator, winding, rotor,
+#: magnets, phase board and pins.  The simulation's shaft stand-in tube and every housing / mechanics part are not parts of the kit.
+KIT_PART_IDS = ("stator_core", "slot", "wire_insulation", "slot_insulation", "rotor_core", "sleeve", "magnet", "board", "pins")
+
+
+def kit_rows(rows: List[Dict[str, Any]], kit: bool) -> List[Dict[str, Any]]:
+    """The rows of THE tree for this assembly variant (a full motor keeps every row)."""
+    return [r for r in rows if str(r.get("key")) in KIT_PART_IDS] if kit else list(rows)
+
+
+def build(rows: List[Dict[str, Any]], *, brief: bool = False, kit: bool = False) -> Dict[str, Any]:
     """Arrange ``full_part_list`` rows into the tree.
 
     ``brief=True`` is the form the 3-D model tab gets: ids, names, groups, order and viewer nodes only - no material, no mass
     (a viewer is not a bill of materials)."""
     parts: List[Dict[str, Any]] = []
-    for r in sorted(rows, key=lambda r: sort_key(str(r.get("key")))):
+    for r in sorted(kit_rows(rows, kit), key=lambda r: sort_key(str(r.get("key")))):
         pid = str(r.get("key"))
         nm = names_of(pid, str(r.get("name") or ""))
         item: Dict[str, Any] = {
@@ -138,9 +148,11 @@ def part_tree(die: str, config: str, *, dies_dir: Optional[Any] = None, cad_dir:
     ``groups`` and ``parts``."""
     from motor_ai_sim.modules import motor_mass as MM
     fl = MM.full_part_list(die, config, dies_dir=dies_dir, cad_dir=cad_dir)
-    out: Dict[str, Any] = {"die": die, "config": config, "source": fl["source"], "partial": fl["partial"]}
+    kit = bool(fl.get("kit"))
+    out: Dict[str, Any] = {"die": die, "config": config, "source": fl["source"], "partial": fl["partial"], "kit": kit,
+                           "assembly": "frameless" if kit else "full", "scope": fl.get("scope")}
     if not brief:
         out.update(total_kg=fl["total_kg"], active_kg=fl["active_kg"], rotating_kg=fl["rotating_kg"],
                    mass_basis=fl["mass_basis"])
-    out.update(build(fl["parts"], brief=brief))
+    out.update(build(fl["parts"], brief=brief, kit=kit))
     return out

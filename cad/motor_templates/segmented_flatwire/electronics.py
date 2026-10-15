@@ -397,12 +397,16 @@ def motor_groups(doc):
     so = mechanics.solids(doc)
     lbl = lambda n: [o for o in doc.Objects if o.Label == n][0].Shape.Solids
     pick = lambda *names: [so[n] for n in names if n in so]
-    return {"Coils": lbl("Coils"), "Core": doc.getObject("Core").Shape.Solids, "RotorCore": doc.getObject("RotorCore").Shape.Solids,
+    groups = {"Coils": lbl("Coils"), "Core": doc.getObject("Core").Shape.Solids, "RotorCore": doc.getObject("RotorCore").Shape.Solids,
             "Magnets": lbl("MagnetArray"), "Shaft": pick("Shaft", "Shaft_rear"),
             "Stator_holder (front)": pick("Stator_holder"), "Stator_holder_back (A_H)": pick("Stator_holder_back"),
             "Rings": pick("Ring_front", "Ring_back"),
             "Bearings": [v for k, v in so.items() if k.startswith("Bearing_618_8")],
             "Screws": [v for k, v in so.items() if k.startswith("Screw_")], "Prop_fix": pick("Prop_fix")}
+    from . import frameless
+    if frameless.is_frameless(doc):                                  # the frameless kit has no housing groups
+        groups = {k: v for k, v in groups.items() if v}
+    return groups
 
 
 def fit(doc, motor_groups):

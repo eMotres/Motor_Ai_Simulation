@@ -110,5 +110,13 @@
   "modelVersion": "Template {template}, built {built}",
   "fit": "Fit to view",
   "contextLost": "The 3D view lost its graphics context. Reload the page to continue.",
-  "modelStale": "Model out of date"
+  "modelStale": "Model out of date",
+  "files_stepKit": "STEP (frameless kit)",
+  "files_stepKitTip": "The frameless kit (stator with coils, phase board, rotor with magnets) as a STEP file, stamped with your NDA.",
+  "files_bomCsvKit": "BOM of the kit (CSV)",
+  "files_bomCsvKitTip": "The part list of the frameless kit with materials and masses. No prices.",
+  "files_bomXlsxKit": "BOM of the kit (XLSX)",
+  "files_bomXlsxKitTip": "The part list of the frameless kit as an Excel workbook. No prices.",
+  "fullKitChip": "Frameless kit",
+  "fullKitTip": "This configuration is the frameless kit for robots: stator with coils, phase board, rotor with magnets. Housing, holders, bearings, shaft and screws are not part of it."
 }

@@ -49,6 +49,7 @@ const FilesMenu: React.FC<Props> = ({ scope, model, canDownload, canWrite, impor
 
   const items = filesMenu({
     scope, connectedToApi: fc.connectedToApi, isAdmin, enforced, role, canDownload, modelBuilt: !!model, canWrite,
+    kit: model?.assembly === 'frameless',
   });
   const exports = items.filter((i) => i.section === 'export');
   const imports = items.filter((i) => i.section === 'import');

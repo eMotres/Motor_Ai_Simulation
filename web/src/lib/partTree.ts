@@ -32,6 +32,10 @@ export interface PartTreeData {
   available?: boolean;
   reason?: string;
   partial?: boolean;
+  /** frameless kit (cad_variant: frameless): the tree holds only the kit parts */
+  kit?: boolean;
+  assembly?: string;
+  scope?: string;
   source?: string;
   total_kg?: number;
   active_kg?: number;

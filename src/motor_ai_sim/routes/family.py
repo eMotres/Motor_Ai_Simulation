@@ -841,6 +841,13 @@ def _save_yaml(p: Path, d: dict) -> None:
             validate_applications(d.get("applications"))
         except ApplicationsError as exc:
             raise HTTPException(422, detail=f"{p.name}: {exc}")
+    # An unknown `cad_variant` (full | frameless, the CAD assembly variant) is refused loudly, never written (owner 2026-10-15).
+    if isinstance(d, dict) and "cad_variant" in d:
+        from motor_ai_sim.cad.store import check_variant
+        try:
+            check_variant(d.get("cad_variant"), "cad_variant")
+        except ValueError as exc:
+            raise HTTPException(422, detail=f"{p.name}: {exc}")
     # Derived geometry is never written stale (2026-09-30): a die document's
     # `geometry` and a configuration's `geometry_overrides` get every derived
     # field they carry recomputed from their own inputs.  Behind the same
@@ -4659,11 +4666,11 @@ def get_part_materials(die: str, config: Optional[str] = None, authorization: st
         fl = _mm.full_part_list(die, cfg, dies_dir=ddir.parent)
         # THE part tree (motor_ai_sim.part_tree): the same ids / names / groups / order in every surface
         from motor_ai_sim import part_tree as _pt
-        tree = _pt.build(fl["parts"])
+        tree = _pt.build(fl["parts"], kit=bool(fl.get("kit")))
         by_id = {p["id"]: p for p in tree["parts"]}
         out.update(fl)
         out["parts"] = [{**r, **{k: by_id[r["key"]][k] for k in ("id", "name", "group", "names", "glb", "order")}}
-                        for r in sorted(fl["parts"], key=lambda r: by_id[r["key"]]["order"])]
+                        for r in sorted((r for r in fl["parts"] if r["key"] in by_id), key=lambda r: by_id[r["key"]]["order"])]
         out["groups"] = tree["groups"]
     except _mm.MotorMassError as exc:
         out.update({"available": False, "reason": str(exc), "parts": []})
@@ -5466,7 +5473,7 @@ def datasheet(die: str, cfg: str, authorization: str = Header(default=None)):
             from motor_ai_sim.modules import motor_mass as _mm
             _fm = _mm.full_mass(die, cfg, dies_dir=_die_dir(die).parent)
             _mass = {"full_kg": _fm.total_kg, "active_kg": _fm.active_kg, "partial": _fm.partial,
-                     "rotating_kg": _fm.rotating_kg,
+                     "rotating_kg": _fm.rotating_kg, "kit": _fm.kit, "scope": _fm.scope,
                      "parts": [(p.name, p.material_id, p.mass_kg) for p in _fm.parts if p.counted and p.mass_kg]}
         except Exception:                                     # noqa: BLE001 - the card never fails for a mass
             _mass = None

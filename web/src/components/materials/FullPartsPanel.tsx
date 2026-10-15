@@ -53,6 +53,7 @@ const FullPartsPanel: React.FC = () => {
   const ordered = rowsForMode(rows, 'full');
   const totalKg = countedMassKg(ordered);
   const partial = !!payload?.partial;
+  const kit = !!payload?.kit;
   const nonEm = ordered.some((r) => !r.em);
 
   // THE part tree: the server's groups and order, with the (overlay-merged) rows as parts
@@ -120,8 +121,8 @@ const FullPartsPanel: React.FC = () => {
         <PartTree tree={tree} selectedPart={selPart} selectedGroup={selGroup} onSelectPart={setSelPart} onSelectGroup={setSelGroup}
           showMass renderRight={renderPicker} rightWidth={210} testId="materials-part-tree" />
         <Box sx={{ display: 'flex', px: 1.5, py: 0.75, borderTop: '1px solid var(--line)', fontSize: 12, gap: 1 }}>
-          <Tooltip title={tx(partial ? 'materialsFullPartialTip' : 'materialsFullTotalTip')}>
-            <span style={{ flex: 1, color: 'var(--text-3)' }}>{tx(partial ? 'materialsFullPartial' : 'materialsFullTotal')}</span>
+          <Tooltip title={tx(partial ? 'materialsFullPartialTip' : kit ? 'materialsFullTotalKitTip' : 'materialsFullTotalTip')}>
+            <span style={{ flex: 1, color: 'var(--text-3)' }}>{tx(partial ? 'materialsFullPartial' : kit ? 'materialsFullTotalKit' : 'materialsFullTotal')}</span>
           </Tooltip>
           <span style={{ fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{formatMass(totalKg)}</span>
         </Box>

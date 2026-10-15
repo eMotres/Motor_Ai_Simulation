@@ -117,17 +117,26 @@ export async function fetchLastMotor(email: string): Promise<{
   return { selection: body.selection ?? null, unavailable: !!body.unavailable };
 }
 
+/** The Thermal store hands over its reader once (`registerThermalFollow`): after a
+ *  motor is remembered, the server answers how it moved the account's Thermal
+ *  cooling to that motor's application, and the open store adopts it.  A
+ *  registry, not an import - the Thermal store already imports this module. */
+let thermalFollow: ((answer: unknown) => void) | null = null;
+export function registerThermalFollow(fn: (answer: unknown) => void): void { thermalFollow = fn; }
+
 export async function rememberLastMotor(email: string,
-                                        selection: LastMotorSelection): Promise<void> {
-  if (!isCurrentLastMotorUser(email)) return;
+                                        selection: LastMotorSelection): Promise<unknown> {
+  if (!isCurrentLastMotorUser(email)) return null;
   const token = getStoredToken();
   const r = await fetch(`${API}/api/me/last_motor`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     body: JSON.stringify({ selection }),
   });
-  if (!isCurrentLastMotorUser(email)) return;
+  if (!isCurrentLastMotorUser(email)) return null;
   if (!r.ok) throw new Error(`remember motor HTTP ${r.status}`);
+  try { return ((await r.json()) as { thermal?: unknown }).thermal ?? null; }
+  catch { return null; }
 }
 
 export async function rememberLoadedMotor(email: string, die: string,
@@ -149,8 +158,11 @@ export async function rememberLoadedMotor(email: string, die: string,
   const selection: LastMotorSelection = { ref_id: ref?.id ?? null, die, config, duty };
   writeLocalLastMotor(identity, selection);
   setLastMotorState({ email: identity, status: 'loaded', selection });
-  try { await rememberLastMotor(identity, selection); } catch { /* local copy remains available */ }
+  let thermal: unknown = null;
+  try { thermal = await rememberLastMotor(identity, selection); }
+  catch { /* local copy remains available */ }
   if (!isCurrentLastMotorOperation(identity, epoch)) return;
+  try { thermalFollow?.(thermal); } catch { /* the server copy is already followed */ }
   window.dispatchEvent(new CustomEvent('family-changed'));
 }
 
@@ -228,6 +240,12 @@ export async function restoreLastMotor(email: string): Promise<LastMotorState> {
     writeLocalLastMotor(identity, candidate);
     const state: LastMotorState = { email: identity, status: 'loaded', selection: candidate };
     setLastMotorState(state);
+    // The same motor again: the server only repairs a Thermal record that
+    // contradicts it (a propeller source left on a robot motor), and the open
+    // Thermal store adopts that repair.
+    void rememberLastMotor(identity, candidate).then((thermal) => {
+      if (isCurrentLastMotorOperation(identity, epoch)) thermalFollow?.(thermal);
+    }).catch(() => { /* best effort - the Run settles it server-side anyway */ });
     window.dispatchEvent(new CustomEvent('family-changed'));
     return state;
   } catch {

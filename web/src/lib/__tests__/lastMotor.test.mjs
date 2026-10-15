@@ -182,3 +182,49 @@ test('a delayed family payload cannot apply geometry after a newer selection sta
     assert.deepEqual(globalThis.__lastMotorTestEffects.apply, []);
   } finally { globalThis.fetch = before; }
 });
+
+test('the answer of PUT last_motor reaches the Thermal store hook after a motor is loaded', async () => {
+  setIdentity('a@example.com');
+  const answer = { changed: true, application: 'robot',
+    settings: { coolMode: 'robotics', airSpeedSource: 'manual', propellerId: '', propellerContextKey: '' },
+    allowed_propellers: [] };
+  const seen = [];
+  M.registerThermalFollow((a) => seen.push(a));
+  const before = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, init) => {
+    calls.push([String(url), init?.method ?? 'GET']);
+    if (String(url).endsWith('/api/catalog/references'))
+      return new Response(JSON.stringify({ motors: [{ id: 'cat_robot', card: { die: 'CIANO28 85', config: 'L13' } }] }), { status: 200 });
+    return new Response(JSON.stringify({ user: 'a@example.com', selection: {}, thermal: answer }), { status: 200 });
+  };
+  try {
+    await M.rememberLoadedMotor('a@example.com', 'CIANO28 85', 'L13', null);
+    assert.deepEqual(seen, [answer]);
+    assert.ok(calls.some(([u, m]) => u.endsWith('/api/me/last_motor') && m === 'PUT'));
+  } finally { globalThis.fetch = before; M.registerThermalFollow(() => {}); }
+});
+
+test('restoring the same motor lets the server repair a contradictory Thermal record', async () => {
+  setIdentity('a@example.com');
+  globalThis.__lastMotorTestEffects = { store: [], apply: [] };
+  const selection = { ref_id: null, die: 'CIANO28 85', config: 'L13', duty: null };
+  const payload = { die: selection.die, config: 'L13', geometry: { slots: 12, poles: 14 }, materials: {} };
+  const answer = { changed: true, application: 'robot',
+    settings: { coolMode: 'robotics', airSpeedSource: 'manual', propellerId: '', propellerContextKey: '' },
+    allowed_propellers: [] };
+  const seen = [];
+  M.registerThermalFollow((a) => seen.push(a));
+  const before = globalThis.fetch;
+  globalThis.fetch = async (url, init) => {
+    if (String(url).endsWith('/api/me/last_motor'))
+      return new Response(JSON.stringify(init?.method === 'PUT'
+        ? { selection, thermal: answer } : { selection, unavailable: false }), { status: 200 });
+    return new Response(JSON.stringify(payload), { status: 200 });
+  };
+  try {
+    await M.restoreLastMotor('a@example.com');
+    await new Promise((r) => setTimeout(r, 20));
+    assert.deepEqual(seen, [answer]);
+  } finally { globalThis.fetch = before; M.registerThermalFollow(() => {}); }
+});

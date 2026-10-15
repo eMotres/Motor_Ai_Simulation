@@ -15,6 +15,9 @@ from motor_ai_sim.routes import account, family
 def last_motor_api(tmp_path, monkeypatch):
     path = tmp_path / ".user_prefs.json"
     monkeypatch.setattr(account, "_prefs_path", lambda: str(path))
+    from motor_ai_sim.routes import panel_settings
+    monkeypatch.setattr(panel_settings, "_store_path",
+                        lambda: str(tmp_path / ".panel_settings.json"))
     users = {
         "Bearer account-a": {"uid": "uid-a", "email": "a@example.com", "role": "user"},
         "Bearer account-b": {"uid": "uid-b", "email": "b@example.com", "role": "user"},
@@ -128,3 +131,42 @@ def test_get_hides_a_selection_when_access_was_revoked(last_motor_api):
     assert response.status_code == 200
     assert response.json()["selection"] is None
     assert response.json()["unavailable"] is True
+
+
+def test_put_moves_thermal_cooling_to_the_new_motors_application(last_motor_api, monkeypatch):
+    """Loading a robot motor after a propeller one must not leave the propeller
+    source in the account's Thermal record (owner 2026-10-15)."""
+    from motor_ai_sim import thermal_settings as ts
+    from motor_ai_sim.routes import propellers
+    client, _path, _denied = last_motor_api
+    options = {
+        "CIANO14 40 new": {"applications": ["propeller"], "application": "propeller",
+                           "cooling_options": ["propeller_air"], "propellers": ["p1"],
+                           "propeller_details": [{"id": "p1", "selectable": True}],
+                           "default_propeller": "p1"},
+        "OTHER": {"applications": ["robot"], "application": "robot",
+                  "cooling_options": ["robotics"], "propellers": [],
+                  "propeller_details": [], "default_propeller": None},
+    }
+    monkeypatch.setattr(propellers, "get_cooling_options",
+                        lambda die, config=None, authorization=None: options[die])
+    prop = {"ref_id": "cat_ciano14", "die": "CIANO14 40 new", "config": "L12", "duty": "peak"}
+    robot = {"ref_id": "cat_other", "die": "OTHER", "config": "L20", "duty": "rated"}
+    h = _headers("Bearer account-a")
+
+    first = client.put("/api/me/last_motor", headers=h, json={"selection": prop}).json()
+    assert first["thermal"]["changed"] is False          # first load, manual record: untouched
+    ts._save_thermal_patch("a@example.com", {
+        "coolMode": "air", "airSpeedSource": "propeller", "propellerId": "p1",
+        "propellerContextKey": "a@example.com|CIANO14 40 new|L12|cat_ciano14"})
+
+    moved = client.put("/api/me/last_motor", headers=h, json={"selection": robot}).json()
+    assert moved["thermal"]["changed"] is True
+    assert moved["thermal"]["settings"] == {
+        "coolMode": "robotics", "airSpeedSource": "manual",
+        "propellerId": "", "propellerContextKey": ""}
+
+    back = client.put("/api/me/last_motor", headers=h, json={"selection": prop}).json()
+    assert back["thermal"]["settings"]["propellerId"] == "p1"
+    assert back["thermal"]["settings"]["propellerContextKey"] == \
+        "a@example.com|CIANO14 40 new|L12|cat_ciano14"

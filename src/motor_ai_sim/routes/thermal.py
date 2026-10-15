@@ -8040,6 +8040,7 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
                                                  steady_state, time_to_limit)
     from motor_ai_sim.thermal_settings import (cooling_fields, cooling_issue,
                                                propeller_cooling_context_issue,
+                                               settle_application_cooling,
                                                thermal_panel_settings)
 
     t0 = time.time()
@@ -8109,6 +8110,8 @@ def duty_cycle(body: Dict[str, Any] = Body(default_factory=dict),
     raw = body.get("thermal_settings")
     settings = dict(raw) if isinstance(raw, dict) else dict(
         thermal_panel_settings(authorization))
+    settings, _cooling_note = settle_application_cooling(
+        settings, authorization, expected_die=die, expected_config=cfg)
     prop_issue = propeller_cooling_context_issue(
         settings, authorization, expected_die=die, expected_config=cfg)
     if prop_issue:

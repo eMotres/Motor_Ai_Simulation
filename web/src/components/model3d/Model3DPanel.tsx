@@ -25,7 +25,7 @@ import { useAssemblyTree } from '../common/useAssemblyTree';
 import ModelCanvas, { modelBase as base, responseDetail as detail, type CanvasTools, type ModelCanvasHandle } from './ModelCanvas';
 import { usePartTreeData } from '../geometry/useConstruction';
 import {
-  filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, resolveModel,
+  filenameFromDisposition, formatBytes, formatMm, fullToolsOpen, modelKey, modelLabel, resolveModel, viewOf,
   type Axis, type ModelInfo, type PartGroup,
 } from '../../lib/model3d';
 
@@ -98,7 +98,9 @@ const Model3DPanel: React.FC = () => {
   useEffect(() => { void loadMine(); }, [loadMine]);
 
   // THE part tree of the open motor (names only, after the NDA) - the same tree as Geometry > Full and Materials > Full
-  const { tree } = usePartTreeData(model?.die ?? null, model?.config ?? null, 'model3d', !!model && canDownload, model?.glb_sha256 ?? 0);
+  // owner 2026-10-15: the full construction (tree, tools) only for view 'full' (NDA + verification); everybody else sees the SIMPLIFIED model
+  const full = fullToolsOpen(viewOf(model, canDownload));
+  const { tree } = usePartTreeData(model?.die ?? null, model?.config ?? null, 'model3d', !!model && full, model?.glb_sha256 ?? 0);
   // THE tree: the "Motor Assembly" panel over the viewer (eye toggles, swatches, Coil n / Magnet n N|S ...), only after the NDA
   const { model: assembly, hiddenNodes, highlight } = useAssemblyTree(tree, nodes, { resetKey: model ? modelKey(model) : '' });
 
@@ -263,14 +265,14 @@ const Model3DPanel: React.FC = () => {
       )}
 
       <Box sx={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
-        <ModelCanvas ref={canvas} model={model} tools={tools} canUseTools={canDownload} highlight={highlight} hiddenNodes={hiddenNodes}
-          contextLostText={t('contextLost')} onMeasure={setMm}
+        <ModelCanvas ref={canvas} model={model} tools={tools} canUseTools={full} highlight={highlight} hiddenNodes={hiddenNodes}
+          contextLostText={t('contextLost')} onMeasure={setMm} simplifiedText={t('simplifiedLine')} simplifiedTip={t('simplifiedLineTip')} noViewText={t('noView')}
           onLoaded={({ groups, range: rg }) => {
             setNodes(groups); setExplode(0); setMeasure(false); setMm(null);
             setRange(rg);
             setSec({ on: false, axis: 'x', position: (rg.min + rg.max) / 2 });
           }} />
-        {ready && canDownload && assembly.rows.length > 0 && (
+        {ready && full && assembly.rows.length > 0 && (
           <ComponentTreeView model={assembly} defaultCollapsed={treeStartsCollapsed(vw)} style={{ top: 8, left: 8, zIndex: 4, width: 230 }}
             rowsMaxHeight="calc(100% - 40px)" />
         )}

@@ -224,7 +224,7 @@ def test_revoke_keeps_the_record_and_closes_the_download(env):
     assert nda["signed"] is False and nda["record_id"] == rid and nda["version"] == "v1-2026-10" and nda["revoked"]
     assert [r["id"] for r in records(env)] == [rid]                         # the record line is never touched
     assert client.get(env["url"] + "/model.step", headers=env["user"]).status_code == 403
-    assert client.get(env["url"] + "/model.glb", headers=env["user"]).status_code == 200
+    assert client.get(env["url"] + "/model.glb", headers=env["user"]).status_code == 403        # a revoked NDA closes the full model too
     assert client.get(f"/api/nda/{rid}/pdf", headers=env["admin"]).status_code == 200        # admin can still open it
     assert sign(env).status_code == 200 and len(records(env)) == 2          # signing again is allowed after a revoke
 

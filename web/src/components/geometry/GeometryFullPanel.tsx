@@ -235,6 +235,7 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
       <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0 }}>
         {model ? (
           <ModelCanvas ref={canvas} model={model} highlight={highlight} hiddenNodes={hiddenNodes} contextLostText={tx('contextLost')}
+            simplifiedText={tx('simplifiedLine')} simplifiedTip={tx('simplifiedLineTip')} noViewText={tx('noView')}
             onLoaded={({ groups }) => setNodes(groups)}>
             {badge === 'failed' && data?.rebuild.message && (
               <Alert severity="error" sx={{ position: 'absolute', left: 10, right: 10, bottom: 10, fontSize: 11.5, zIndex: 2, maxHeight: 130, overflow: 'auto' }}>

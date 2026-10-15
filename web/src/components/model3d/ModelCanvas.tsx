@@ -5,9 +5,9 @@
 // The model reloads when its file changes (GLB sha256 in the model list), so a rebuilt model replaces the old one without a
 // reload of the page.  Everything the viewer shows is decided on the server; this component only draws.
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
-import { Alert, Box, CircularProgress } from '@mui/material';
+import { Alert, Box, CircularProgress, Tooltip, Typography } from '@mui/material';
 import { ModelViewer } from './modelViewer';
-import { effectiveSettings, type Axis, type ModelInfo, type PartGroup } from '../../lib/model3d';
+import { effectiveSettings, glbRoute, type Axis, type ModelInfo, type PartGroup } from '../../lib/model3d';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 
@@ -40,6 +40,11 @@ interface Props {
   /** GLB node names hidden one by one (parts switched off in the part tree; needs the tools, i.e. the NDA) */
   hiddenNodes?: ReadonlySet<string>;
   contextLostText: string;
+  /** one short line over the canvas when the caller sees the SIMPLIFIED model ("sign the NDA for the full construction"); the tooltip is `simplifiedTip` */
+  simplifiedText?: string;
+  simplifiedTip?: string;
+  /** shown when the model has no view for this caller (simplified not built yet) */
+  noViewText?: string;
   onLoaded?: (r: { groups: PartGroup[]; range: { min: number; max: number } }) => void;
   onMeasure?: (mm: number | null) => void;
   onError?: (message: string | null) => void;
@@ -50,7 +55,7 @@ interface Props {
 const NO_TOOLS: CanvasTools = { hidden: new Set(), explode: 0, section: { on: false, axis: 'x', position: 0 }, measure: false };
 
 const ModelCanvas = forwardRef<ModelCanvasHandle, Props>(({
-  model, tools = NO_TOOLS, canUseTools = true, highlight, hiddenNodes, contextLostText, onLoaded, onMeasure, onError, children,
+  model, tools = NO_TOOLS, canUseTools = true, highlight, hiddenNodes, contextLostText, simplifiedText, simplifiedTip, noViewText, onLoaded, onMeasure, onError, children,
 }, ref) => {
   const host = useRef<HTMLDivElement>(null);
   const viewer = useRef<ModelViewer | null>(null);
@@ -79,15 +84,16 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, Props>(({
   }, []);
 
   // load the chosen model; a rebuilt file (new sha256) loads again
-  const fileKey = model ? `${model.die}\u0000${model.config}\u0000${model.glb_sha256 ?? ''}` : '';
+  const route = glbRoute(model);
+  const fileKey = model ? [model.die, model.config, route ?? 'none', (route === 'simplified_view.glb' ? model.simplified_glb_sha256 : model.glb_sha256) ?? ''].join('\u0000') : '';
   useEffect(() => {
     const v = viewer.current;
-    if (!model || !v) return undefined;
+    if (!model || !v || !route) return undefined;
     let live = true;
     setLoading(true); report(null);
     (async () => {
       try {
-        const r = await fetch(`${modelBase(model)}/model.glb`);
+        const r = await fetch(`${modelBase(model)}/${route}`);
         if (!r.ok) { if (live) report(await responseDetail(r)); return; }
         const { groups } = await v.load(await r.arrayBuffer());
         if (!live) return;
@@ -110,6 +116,17 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, Props>(({
       <Box ref={host} sx={{ position: 'absolute', inset: 0 }} />
       {loading && <Box sx={{ position: 'absolute', top: 12, left: 12 }}><CircularProgress size={22} /></Box>}
       {err && <Alert severity="error" sx={{ position: 'absolute', top: 8, left: 8, right: 8, fontSize: 12 }} onClose={() => report(null)}>{err}</Alert>}
+      {model && route === 'simplified_view.glb' && simplifiedText && (
+        <Tooltip title={simplifiedTip ?? ''}>
+          <Typography data-testid="simplified-line" sx={{ position: 'absolute', left: 12, bottom: 10, fontSize: 11.5, color: 'var(--text-3)', bgcolor: 'var(--panel)',
+            border: '1px solid var(--line-soft)', borderRadius: 1, px: 1, py: 0.25 }}>{simplifiedText}</Typography>
+        </Tooltip>
+      )}
+      {model && !route && (
+        <Typography data-testid="model-no-view" sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>
+          {noViewText ?? model.view_reason ?? ''}
+        </Typography>
+      )}
       {children}
     </Box>
   );

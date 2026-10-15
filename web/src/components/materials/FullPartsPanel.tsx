@@ -127,6 +127,7 @@ const FullPartsPanel: React.FC = () => {
       <Box sx={{ position: 'absolute', inset: 0 }} data-testid="materials-full-viewer">
         {model ? (
           <ModelCanvas model={model} highlight={highlight} hiddenNodes={hiddenNodes} contextLostText={tg('contextLost')}
+            simplifiedText={tg('simplifiedLine')} simplifiedTip={tg('simplifiedLineTip')} noViewText={tg('noView')}
             onLoaded={({ groups: g }) => setNodes(g)} />
         ) : (
           <Typography sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 12.5, color: 'var(--text-3)' }}>

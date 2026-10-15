@@ -97,8 +97,9 @@ def test_user_without_nda_views_but_cannot_download(env):
     assert r.status_code == 200 and r.json()["can_download"] is False
     assert [m["motor_id"] for m in r.json()["models"]] == [MID]
     assert r.json()["models"][0]["glb_sha256"] == _sha(GLB)
-    g = client.get(env["url"] + "/model.glb", headers=env["user"])
-    assert g.status_code == 200 and g.content == GLB
+    g = client.get(env["url"] + "/model.glb", headers=env["user"])        # owner 2026-10-15: without the NDA only the SIMPLIFIED model is shown
+    assert g.status_code == 403 and g.json()["detail"]["code"] == "nda_required"
+    assert r.json()["models"][0]["view"] == "none"                      # (this fake tree has no simplified files: never a fallback to the full model)
     s = client.get(env["url"] + "/model.step", headers=env["user"])
     assert s.status_code == 403 and "NDA" in s.json()["detail"]
     assert _log(env) == []                       # a refused download is not logged as a download
@@ -220,7 +221,7 @@ def test_nda_flag_is_admin_only_validated_and_switches_the_download(env):
     off = client.patch(u, json={"nda_signed": False}, headers=env["admin"])
     assert off.json()["user"]["nda"] == {"signed": False, "date": "", "by": ""}
     assert client.get(env["url"] + "/model.step", headers=env["user"]).status_code == 403
-    assert client.get(env["url"] + "/model.glb", headers=env["user"]).status_code == 200      # viewing stays open
+    assert client.get(env["url"] + "/model.glb", headers=env["user"]).status_code == 403      # the full model goes with the NDA
     users = {x["email"]: x for x in client.get("/api/auth/users", headers=env["admin"]).json()["users"]}
     assert users[NDA_USER]["nda"]["signed"] is True and users[ADMIN]["nda"]["signed"] is False
 

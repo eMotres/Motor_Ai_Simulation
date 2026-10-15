@@ -1,8 +1,11 @@
 """3D model menu routes: list the models a caller may see, serve the GLB, download the stamped STEP.
 
-ONE model for everybody (owner 2026-10-13): every signed-in user who may see a motor (``motor_access``: admin / granted dies /
-per-die visibility) can view it - the GLB is the full model, copper board included.  Downloading the STEP is the NDA gate:
-only accounts flagged "NDA signed" and the owner / admin get it; everybody else gets 403.  The URL names the motor, never a
+WHAT A CALLER SEES (owner 2026-10-15, replacing the 2026-10-13 "one model for everybody"): WITHOUT the NDA only the SIMPLIFIED model
+(``simplified_view.glb``); WITH it - the gate of the full STEP, ``model3d.can_download`` = NDA signed AND applicant verification
+VERIFIED, the owner / admin always - the FULL model (``model.glb``) with the part tree and every tool.  The server is the gate: the full GLB
+and the part trees answer 403 ``nda_required`` (``require_full_view``); ``GET /models`` says per entry ``view`` = full | simplified | none
+(none = the simplified files are not built yet: never a fallback to full).  A hidden / ungranted motor stays a 404 before anything else.
+Downloading the STEP is the same gate: only accounts flagged "NDA signed" and the owner / admin get it; everybody else gets 403.  The URL names the motor, never a
 file.  Every download carries a download id and the NDA it rests on (STEP header + the append-only log); the admin can list
 the downloads and trace a file by id or sha256.  Nothing priced is served here.
 
@@ -43,6 +46,23 @@ def _caller(authorization: Optional[str]) -> tuple[dict, dict]:
     return who, rec
 
 
+NDA_REQUIRED = "nda_required"
+
+
+def full_view_denial(who: dict, rec: dict) -> dict:
+    """The 403 body of a FULL-model route for a caller who does not pass the gate: a stable ``code`` and a short ``message``."""
+    return dict(code=NDA_REQUIRED, message="The full model needs the signed NDA and a verified account. The simplified model is open to you.")
+
+
+def require_full_view(authorization: Optional[str]) -> tuple[dict, dict]:
+    """(identity, user record) of a caller who may see the FULL model: the same gate as the full STEP download
+    (``model3d.can_download``: NDA signed AND verification VERIFIED; the owner and admins always).  401 anonymous, 403 ``nda_required``."""
+    who, rec = _caller(authorization)
+    if not M.can_download(who, rec):
+        raise HTTPException(status_code=403, detail=full_view_denial(who, rec))
+    return who, rec
+
+
 def _entry_for(authorization: Optional[str], die: str, config: str) -> dict:
     from motor_ai_sim import motor_access as MA
     e = M.find(die, config)
@@ -61,18 +81,47 @@ def list_models(authorization: Optional[str] = Header(default=None)):
     access = MA.catalog_access(authorization)
     models = [M.model_info(e) for e in M.scan() if MA.may_see_config(access, e["die"], e["config"])]
     from motor_ai_sim import verification as V
-    return {"can_download": M.can_download(who, rec), "access": V.public_access(who, rec), "models": [m for m in models if m["available"]]}
+    full = M.can_download(who, rec)
+    out = []
+    for m in models:
+        if not m["available"]:
+            continue
+        # WHAT THIS CALLER SEES (owner 2026-10-15): the full model with the NDA gate passed, else ONLY the simplified one - never a fallback to full
+        if full:
+            m["view"], m["view_reason"] = "full", ""
+        elif m.get("simplified_available"):
+            m["view"], m["view_reason"] = "simplified", ""
+        else:
+            m["view"], m["view_reason"] = "none", "simplified model not built yet"
+        out.append(m)
+    return {"can_download": full, "access": V.public_access(who, rec), "models": out}
 
 
 @router.get("/{die}/{config}/model.glb")
 def get_glb(die: str, config: str, authorization: Optional[str] = Header(default=None)):
+    """The FULL viewer model.  Only a caller who passes the full-model gate (NDA + verification, owner / admin); everybody else sees the
+    simplified model (``simplified_view.glb``).  The hidden / ungranted 404 comes first."""
     _caller(authorization)
     e = _entry_for(authorization, die, config)
+    require_full_view(authorization)
     row = M.file_row(e, "glb")
     if row is None:
         raise HTTPException(status_code=404, detail="This model has not been built yet.")
     return FileResponse(row["path"], media_type="model/gltf-binary",
                         headers={"ETag": '"%s"' % row["sha256"], "Cache-Control": "private, max-age=0, must-revalidate"})
+
+
+@router.get("/{die}/{config}/simplified_view.glb")
+def get_simplified_view(die: str, config: str, authorization: Optional[str] = Header(default=None)):
+    """The SIMPLIFIED model for the viewer: every signed-in caller who may see the motor.  Viewing is not downloading: not stamped, not
+    logged (``simplified.glb`` / ``simplified.step`` are the logged downloads); a short private cache."""
+    _caller(authorization)
+    e = _entry_for(authorization, die, config)
+    row = M.file_row(e, "simplified_glb")
+    if row is None:
+        raise HTTPException(status_code=404, detail="The simplified model of this motor has not been built yet.")
+    return FileResponse(row["path"], media_type="model/gltf-binary",
+                        headers={"ETag": '"%s"' % row["sha256"], "Cache-Control": "private, max-age=60"})
 
 
 @router.get("/{die}/{config}/model.step")
@@ -258,10 +307,9 @@ def _tree_of(die: str, config: str, *, brief: bool = False) -> dict:
 def get_parts(die: str, config: str, authorization: Optional[str] = Header(default=None)):
     """THE part tree for the 3-D viewer's parts list: ids, names (EN + zh-CN), groups, order and the viewer nodes each part draws.
     After the NDA, like the viewer's other tools; no material and no mass (a viewer is not a bill of materials)."""
-    who, rec = _caller(authorization)
+    _caller(authorization)
     _entry_for(authorization, die, config)
-    if not M.can_download(who, rec):
-        raise HTTPException(status_code=403, detail=M.denial_detail(who, rec))
+    require_full_view(authorization)
     return _tree_of(die, config, brief=True)
 
 

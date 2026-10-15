@@ -18,6 +18,23 @@ export function panelParts(canDownload: boolean): PanelPart[] {
     : [...base, 'signNote', 'signButton'];
 }
 
+export type ModelView = 'full' | 'simplified' | 'none';
+
+/** The view this caller gets of `m`: the server's `view`; an older server that sends none: the NDA flag decides. */
+export function viewOf(m: Pick<ModelInfo, 'view'> | null | undefined, canDownload = false): ModelView {
+  if (m?.view === 'full' || m?.view === 'simplified' || m?.view === 'none') return m.view;
+  return canDownload ? 'full' : 'simplified';
+}
+
+/** The GLB route the viewer loads for `m` (below /api/model3d/{die}/{config}): the full model only for view 'full'; 'none' loads nothing. */
+export function glbRoute(m: Pick<ModelInfo, 'view'> | null | undefined, canDownload = false): string | null {
+  const v = viewOf(m, canDownload);
+  return v === 'full' ? 'model.glb' : v === 'simplified' ? 'simplified_view.glb' : null;
+}
+
+/** The full-model tools (Motor Assembly tree, explode, section, measure, part hints, per-part switches) exist ONLY for the full view. */
+export const fullToolsOpen = (view: ModelView): boolean => view === 'full';
+
 export interface ViewerSettings {
   hidden: ReadonlySet<string>;
   explode: number;
@@ -46,6 +63,11 @@ export interface ModelInfo {
   simplified_available?: boolean;
   simplified_step_bytes?: number | null;
   simplified_glb_bytes?: number | null;
+  simplified_glb_sha256?: string | null;
+  /** WHAT THIS CALLER SEES (server, owner 2026-10-15): 'full' (NDA + verification, owner / admin), 'simplified' (everybody else), 'none' (simplified not built:
+   *  never a fallback to full) */
+  view?: 'full' | 'simplified' | 'none';
+  view_reason?: string;
   version?: { template?: string | null; built_at?: string | null; param_hash?: string };
 }
 

@@ -363,7 +363,7 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("GET", "/api/model3d/{die}/{config}/model.fcstd"),
     # the SIMPLIFIED model (open to every signed-in user, no NDA): the same 404 as model.glb (`_entry_for`), tested in tests/test_cad_simplified_access.py
     ("GET", "/api/model3d/{die}/{config}/simplified.step"), ("GET", "/api/model3d/{die}/{config}/simplified.glb"),
-    ("GET", "/api/model3d/{die}/{config}/simplified.json"),
+    ("GET", "/api/model3d/{die}/{config}/simplified.json"), ("GET", "/api/model3d/{die}/{config}/simplified_view.glb"),
     ("POST", "/api/family/config/{die}/{cfg}/cad_params/import"),       # multipart; tested in tests/test_construction_params.py
     ("GET", "/api/propellers/cooling-options"), ("GET", "/api/propellers/{prop_id}/s1"), ("GET", "/api/system/graph"),
 }
@@ -622,8 +622,12 @@ def test_model3d_list_and_files(env):
             a = client.get(f"/api/model3d/{DIE}/{PRIV}/{kind}", headers=env[who])
             b = client.get(f"/api/model3d/{DIE}/{NOSUCH}/{kind}", headers=env[who])
             assert a.status_code == b.status_code == 404 and a.text == b.text
-    assert client.get(f"/api/model3d/{DIE}/{PRIV}/model.glb", headers=env["granted"]).status_code == 200
+    # the FULL model needs the NDA gate now (owner 2026-10-15): a granted account without it is VISIBLE (403 nda_required, not 404); the admin gets it
+    gr = client.get(f"/api/model3d/{DIE}/{PRIV}/model.glb", headers=env["granted"])
+    assert gr.status_code == 403 and gr.json()["detail"]["code"] == "nda_required"
     assert client.get(f"/api/model3d/{DIE}/{PRIV}/model.glb", headers=env["admin"]).status_code == 200
+    for who in ("eng", "plain"):
+        assert client.get(f"/api/model3d/{DIE}/{PRIV}/simplified_view.glb", headers=env[who]).status_code == 404
 
 
 # ── catalog cards, references, presets, used_by, components ─────────────────

@@ -322,9 +322,9 @@ def test_coil_copper_is_pure_copper_with_its_sources():
     assert "Pure copper" in c.description
     assert 1.0 / c.sigma == pytest.approx(1.72e-8, rel=0.005)             # 1.724e-8 at 20 C (annealed copper standard)
     assert c.thermal_alpha == 0.00393
-    assert c.density == pytest.approx(8940, rel=0.01)                      # 8890 here (CDA C11000): within 0.6 % of 8.94 g/cm3
+    assert c.density == 8940                                               # pure Cu 99.9 % (owner 2026-10-15; was 8890, annealed standard copper)
     card = pm.resolve("copper")
-    assert {"iec60028", "cda_c11000"} <= set(card.sources)
+    assert {"cda_c10200", "cda_c11000"} <= set(card.sources)
     # every shipped default and every tracked configuration weighs and solves its coils with that card
     base = _y.safe_load((REPO / "config" / "motor_config.yaml").read_text(encoding="utf-8"))
     assert base["materials"]["slot"] == "copper"

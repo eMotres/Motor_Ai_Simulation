@@ -838,6 +838,23 @@ def _resolve_geo_dict(geo: Optional[str]) -> dict:
     return merge_geo_override(params_dict, override)
 
 
+def _refuse_infeasible_section(params_dict: dict) -> None:
+    """422 instead of drawing a stator that is not a lamination.
+
+    A wire column wider than the slot mouth leaves (fill radius <= 0): the slot
+    cutters collide and the section carries a lobe (owner 2026-10-15).  Never
+    drawn, never solved — the message names the limit in user terms.
+    """
+    from motor_ai_sim.geometry_validation import slot_mouth_infeasibility
+    bad = slot_mouth_infeasibility(params_dict)
+    if bad is None:
+        return
+    raise reject(
+        "infeasible geometry - " + bad["message"],
+        [param_error(bad["field"], bad["value"], bad["code"], bad["message"],
+                     max=bad["max"], turns=bad["turns"])])
+
+
 #: mesh-data key → the part whose accounting state governs it.  ``coil_7``,
 #: ``magnet_3`` etc. are matched by prefix (see ``_part_of_mesh_key``).
 _MESH_KEY_PART = {
@@ -900,6 +917,7 @@ def get_geometry_mesh(geo: Optional[str] = None):
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
         params_dict = _resolve_geo_dict(geo)
+        _refuse_infeasible_section(params_dict)
         params_hash = hashlib.md5(
             (json.dumps(params_dict, sort_keys=True)
              + _part_state_cache_tag()).encode()).hexdigest()
@@ -971,6 +989,7 @@ def get_geometry_mesh2d(geo: Optional[str] = None):
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
         params_dict = _resolve_geo_dict(geo)
+        _refuse_infeasible_section(params_dict)
         params_hash = hashlib.md5(
             (json.dumps(params_dict, sort_keys=True)
              + _part_state_cache_tag()).encode()).hexdigest()
@@ -1015,6 +1034,7 @@ def get_geometry_mesh_extruded(depth: Optional[float] = None, geo: Optional[str]
         from motor_ai_sim.cadquery_geometry import CadQueryMotor
         import hashlib, json, time
         params_dict = _resolve_geo_dict(geo)
+        _refuse_infeasible_section(params_dict)
         cache_key = hashlib.md5(
             (json.dumps({**params_dict, "_depth": depth}, sort_keys=True)
              + _part_state_cache_tag()).encode()

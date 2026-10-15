@@ -1510,6 +1510,33 @@ def _round_corners_vertex(poly, r, ang_min_deg=8.0, ang_max_deg=168.0,
     return _fillet_ring_corners(poly, r, _sel, ang_min_deg, ang_max_deg, scale_mm)
 
 
+#: a fragment smaller than this fraction of the largest piece of the STATOR is
+#: rounding residue, not lamination (see `_drop_slivers`)
+_SLIVER_REL = 1e-4
+
+
+def _drop_slivers(poly, rel: float = _SLIVER_REL):
+    """The stator is ONE piece: drop the rounding residue the corner fillet leaves.
+
+    `buffer(0)` of a filleted ring that touches itself leaves fragments of
+    1e-4..1e-2 mm2 beside the real body (measured 2026-10-15 on CIANO14 30_10 with
+    wire_width <= 1.2: 262.58 mm2 + two 0.0001 mm2 ghosts at the OD corners —
+    three "pieces" where the lamination is one).  They carry no flux and only
+    break the mesher.  A polygon without such fragments is returned as the same
+    object, so every geometry that was one piece stays bit-identical."""
+    if getattr(poly, "geom_type", "") != "MultiPolygon":
+        return poly
+    parts = list(poly.geoms)
+    if len(parts) < 2:
+        return poly
+    big = max(q.area for q in parts)
+    keep = [q for q in parts if q.area >= rel * big]
+    if len(keep) == len(parts):
+        return poly
+    from shapely.geometry import MultiPolygon as _MP
+    return keep[0] if len(keep) == 1 else _MP(keep)
+
+
 def _round_corners_at_radius(poly, target_r, r_tol, r_fillet, scale_mm,
                              min_angle_deg=20.0):
     """Stator slot-corner rounding: fillet the sharp corners that sit within
@@ -2774,6 +2801,7 @@ class CadQueryMotor:
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
             stator_poly = _round_corners_at_radius(stator_poly, inner_r, 1.0,
                                                    fillet_r1, scale_mm)
+        stator_poly = _drop_slivers(stator_poly)
         stator_poly = _sanitize_geom(stator_poly, scale_mm, "mesh.stator")
 
         r = _tri(stator_poly, z=Z_STATOR)
@@ -3387,6 +3415,7 @@ class CadQueryMotor:
         if fillet_r1 > 0 and hasattr(stator_poly, 'exterior'):
             stator_poly = _round_corners_at_radius(stator_poly, inner_r, 1.0,
                                                    fillet_r1, scale_mm)
+        stator_poly = _drop_slivers(stator_poly)
 
         # ── Coils (winding rectangles in slots) ──────────────────────────────
         # The cadquery iteration places wires on BOTH sides of each central

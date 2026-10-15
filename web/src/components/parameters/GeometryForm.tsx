@@ -19,6 +19,7 @@ import {
 import RefreshIcon from '@mui/icons-material/Refresh';
 import { useMotorStore } from '../../stores/motorStore';
 import HelpTip from '../common/HelpTip';
+import { slotMouthLimit } from '../../lib/slotMouthFit';
 import type {
   GeometryValidation,
   GeometryViolation,
@@ -50,12 +51,14 @@ interface NumberFieldProps {
   max?: number;
   step?: number;
   helperText?: string;
+  /** a standing red line under the field (e.g. the winding does not fit the slot) */
+  warn?: string;
   disabled?: boolean;
   onCommit: (v: number) => void;
 }
 
 const NumberField: React.FC<NumberFieldProps> = ({
-  label, value, type, min, max, step, helperText, disabled, onCommit,
+  label, value, type, min, max, step, helperText, warn, disabled, onCommit,
 }) => {
   const [draft, setDraft] = useState<string>('');
   const [focused, setFocused] = useState(false);
@@ -114,8 +117,8 @@ const NumberField: React.FC<NumberFieldProps> = ({
          decimal inside min/max is legitimate here. */
       inputProps={{ inputMode: 'decimal', step: 'any' }}
       InputProps={{ endAdornment: helperText ? <HelpTip title={helperText} /> : undefined }}
-      error={invalid}
-      helperText={invalid ? `Allowed: ${min ?? '−∞'} … ${max ?? '∞'}` : undefined}
+      error={invalid || !!warn}
+      helperText={invalid ? `Allowed: ${min ?? '−∞'} … ${max ?? '∞'}` : warn}
       disabled={disabled}
     />
   );
@@ -238,6 +241,17 @@ const GeometryForm: React.FC = () => {
   // below — during the outage the form itself is replaced by the error /
   // not-connected alerts, and that is exactly when the user needs to see the
   // queue exists.
+  // The winding has to fit ACROSS the slot (owner 2026-10-15): while it does not, the field
+  // that names the limit carries one red line with the maximum; Configure and the 3-D/2-D
+  // viewers refuse to draw such a machine (422 'infeasible geometry').
+  const [slotNote, setSlotNote] = useState<{ field: string; text: string } | null>(null);
+  const slotWarn = (() => {
+    const l = slotMouthLimit(geometry as unknown as Record<string, unknown>);
+    if (!l || l.feasible) return slotNote;
+    return { field: l.field, text: l.field === 'wire_width'
+      ? tx('slotWireTooWide', { max: l.maxWireWidthMm.toFixed(2), turns: l.turns })
+      : tx('slotSplitTooWide', { n: l.maxStrips, turns: l.turns }) };
+  })();
   const pendingCount = pendingGeometryEdits ? Object.keys(pendingGeometryEdits).length : 0;
   const pendingBanner = pendingCount > 0 ? (
     <Alert severity="warning">
@@ -413,8 +427,18 @@ const GeometryForm: React.FC = () => {
                     max={param.max}
                     step={param.step}
                     helperText={param.description || undefined}
+                    warn={slotWarn && (param.name === slotWarn.field) ? slotWarn.text : undefined}
                     disabled={isLoading}
                     onCommit={(v) => {
+                      // The winding never leaves the slot: a wire (or strip count) that would
+                      // not fit across it is limited to the largest one that does.
+                      if (param.name === 'wire_width' || param.name === 'wire_split') {
+                        const l = slotMouthLimit({ ...geometry, [param.name]: v });
+                        if (l && !l.feasible && l.field === param.name) {
+                          v = param.name === 'wire_split' ? l.maxStrips : Math.floor(l.maxWireWidthMm * 100) / 100;
+                          setSlotNote({ field: param.name, text: tx('slotValueClamped', { field: param.label, value: v }) });
+                        } else setSlotNote(null);
+                      }
                       if (connectedToApi) updateGeometryViaApi({ [param.name]: v });
                       else updateGeometry({ [param.name]: v });
                     }}

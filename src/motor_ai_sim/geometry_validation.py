@@ -328,6 +328,12 @@ _CAUSES: Dict[str, List[str]] = {
     "stator_not_one_piece": [
         "cut_width", "tooth2_width", "tooth_width", "wire_width",
         "slot_height", "core_thickness", "stator_fillet_r"],
+    # The stator outline is not the same in every slot-pair unit (or leaves its
+    # outer circle): the CONSTRUCTION failed, not the design.  The knobs that
+    # shape the slot cutters are the ones to nudge.
+    "stator_outline_not_symmetric": [
+        "insulation_thickness", "wire_width", "tooth_width", "tooth2_width",
+        "cut_width", "slot_height", "core_thickness", "stator_fillet_r"],
     "winding_clipped_by_slot": [
         "wire_width", "wire_height", "num_wires_per_slot",
         "slot_height", "wire_spacing_y", "insulation_thickness"],
@@ -631,6 +637,88 @@ def stator_pieces_violation(stator, min_rel: float = 1e-4) -> Optional[Dict[str,
                         .format(len(big), ", ".join("{:.3f} mm²".format(a) for a in big)))}
 
 
+#: the per-unit sector areas of a sound stator agree to this (catalog: <= 0.12 %,
+#: a dropped slot cutter is > 15 %)
+_OUTLINE_SECTOR_TOL = 0.005
+#: no vertex lies beyond the outer radius by more than this (the OD fillet arcs
+#: overshoot by up to 0.15 %)
+_OUTLINE_RADIUS_TOL = 0.003
+
+
+def stator_outline_violation(stator, params: Optional[Dict[str, Any]] = None,
+                             sector_tol: float = _OUTLINE_SECTOR_TOL,
+                             radius_tol: float = _OUTLINE_RADIUS_TOL
+                             ) -> Optional[Dict[str, Any]]:
+    """``{"code", "message", ...}`` when the stator is not drawn the same in every
+    slot-pair unit or leaves its outer circle, else ``None``.
+
+    The lamination repeats ``num_slots / 2`` identical units, one per slot pair
+    (a 60-degree sector on a 12-slot stator), so the area of the stator inside
+    each unit's wedge must be the same (to ``sector_tol``) and no vertex may lie
+    beyond ``stator_outer_radius * (1 + radius_tol)``.  Either failing means the
+    CONSTRUCTION went wrong - a lobe with a round notch on one sector (owner
+    2026-10-15, CIANO14 40 new / L20: one cutter dropped by the polygon union,
+    +23 % in one sector) - not that the machine is impossible; the design is
+    refused by name rather than drawn or solved.
+
+    ``params`` supplies ``stator_outer_radius`` (else ``stator_diameter / 2``) and
+    ``num_slots``; the radius is read off the polygon when absent and the sector
+    comparison is skipped when the unit count is unknown, odd or single.
+    """
+    if stator is None or getattr(stator, "is_empty", True):
+        return None
+    p = dict(params or {})
+    try:
+        from shapely.geometry import Polygon as _P
+        geoms = list(getattr(stator, "geoms", [stator]))
+        R = _num(p.get("stator_outer_radius"))
+        if not R:
+            d = _num(p.get("stator_diameter"))
+            R = d / 2.0 if d else None
+        rmax = max(math.hypot(x, y) for g in geoms for x, y in g.exterior.coords)
+        if not R:
+            R = rmax
+        if rmax > R * (1.0 + radius_tol):
+            return {"code": "stator_outline_not_symmetric", "r_max_mm": float(rmax),
+                    "R_mm": float(R),
+                    "message": ("stator outline not symmetric (construction "
+                                "failed) - a vertex lies at r = {:.4f} mm, "
+                                "beyond the {:.4f} mm outer radius".format(rmax, R))}
+        ns = int(round(_num(p.get("num_slots")) or 0))
+        half = ns // 2
+        if ns % 2 or half < 2:
+            return None
+        reach = 3.0 * R
+        areas = []
+        for i in range(half):
+            a0 = math.radians(90.0 + i * 360.0 / half - 180.0 / half)
+            a1 = a0 + 2.0 * math.pi / half
+            am = 0.5 * (a0 + a1)
+            wedge = _P([(0.0, 0.0),
+                        (reach * math.cos(a0), reach * math.sin(a0)),
+                        (reach * math.cos(am), reach * math.sin(am)),
+                        (reach * math.cos(a1), reach * math.sin(a1))])
+            areas.append(float(stator.intersection(wedge).area))
+        big = max(areas)
+        if big <= 0.0:
+            return None
+        spread = (big - min(areas)) / big
+        if spread > sector_tol:
+            return {"code": "stator_outline_not_symmetric", "spread": float(spread),
+                    "sector_areas_mm2": areas,
+                    "message": ("stator outline not symmetric (construction "
+                                "failed) - the {:d} slot-pair sectors differ by "
+                                "{:.1f} % in area ({} mm2); a slot cutter was "
+                                "lost, so the section would carry a lobe"
+                                .format(half, 100.0 * spread,
+                                        ", ".join("{:.3f}".format(a) for a in areas)))}
+    except Exception as exc:          # noqa: BLE001 - an unmeasurable outline is not a sound one
+        return {"code": "stator_outline_not_symmetric",
+                "message": ("stator outline not symmetric (construction failed) "
+                            "- the outline could not be measured: {}".format(exc))}
+    return None
+
+
 def slot_mouth_infeasibility(geo: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """The slot-mouth (fill radius <= 0) refusal in the USER's terms, or ``None``.
 
@@ -931,6 +1019,16 @@ def validate_polygons(polys: Dict[str, Any],
             part_a="The stator", part_b="",
             message=_pieces["message"],
             likely_params=list(_CAUSES["stator_not_one_piece"])))
+
+    # ── 1b-2. the stator is the SAME in every slot-pair unit ─────────────────
+    checks.append("stator_outline_symmetric")
+    _outline = stator_outline_violation(polys.get("stator"), p)
+    if _outline is not None:
+        col.add(Violation(
+            code="stator_outline_not_symmetric", severity=_SEV_ERROR,
+            part_a="The stator", part_b="",
+            message=_outline["message"],
+            likely_params=list(_CAUSES["stator_outline_not_symmetric"])))
 
     # ── 1c. conductor cross-section actually delivered ───────────────────────
     # ``winding_does_not_fit`` only catches a stack that would CROSS THE BORE —

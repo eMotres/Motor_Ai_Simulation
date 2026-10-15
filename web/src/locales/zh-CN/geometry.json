@@ -139,5 +139,7 @@
   "assembly_holder_rear": "支架(后)",
   "assemblyNode_PhaseBoard_FR4": "FR4 板体",
   "assemblyNode_PhaseBoard_copper": "铜层",
-  "assemblyNode_PhaseBoard_other": "相位板其他部分"
+  "assemblyNode_PhaseBoard_other": "相位板其他部分",
+  "cadDrawer": "CAD参数",
+  "cadDrawerClose": "关闭参数面板"
 }

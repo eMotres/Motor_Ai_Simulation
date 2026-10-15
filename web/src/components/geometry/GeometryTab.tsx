@@ -15,7 +15,7 @@ import { modelKey } from '../../lib/model3d';
 
 const tx = nsT('geometry');
 
-const GeometryTab: React.FC<{ active: React.ReactNode; panelWidth: number; divider: React.ReactNode }> = ({ active, panelWidth, divider }) => {
+const GeometryTab: React.FC<{ active: React.ReactNode }> = ({ active }) => {
   useTranslation('geometry');
   const [scope] = useConstructionScope();
   const openMotor = useOpenMotor();
@@ -41,7 +41,7 @@ const GeometryTab: React.FC<{ active: React.ReactNode; panelWidth: number; divid
       </Box>
       <Box sx={{ flex: 1, minHeight: 0 }}>
         {scope === 'full'
-          ? <GeometryFullPanel panelWidth={panelWidth} divider={divider} models={models} cad={cad} treeKey={model?.glb_sha256 ?? 0} />
+          ? <GeometryFullPanel models={models} cad={cad} treeKey={model?.glb_sha256 ?? 0} />
           : active}
       </Box>
       <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => setRefresh((n) => n + 1)} />

@@ -6,9 +6,10 @@
 // the model, the motor picker, Fit, the "Download after NDA" note and the Sign button.  No bill of materials, no prices.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, CircularProgress, MenuItem, Select, Slider, Switch,
-  ToggleButton, ToggleButtonGroup, Typography,
+  Alert, Box, Button, CircularProgress, FormControlLabel, IconButton, MenuItem, Popover, Select, Slider, Switch,
+  ToggleButton, ToggleButtonGroup, Tooltip, Typography,
 } from '@mui/material';
+import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import DownloadIcon from '@mui/icons-material/Download';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import { useTranslation } from 'react-i18next';
@@ -16,11 +17,13 @@ import HelpTip from '../common/HelpTip';
 import { useLastMotorState } from '../../lib/lastMotor';
 import NdaDialog from './NdaDialog';
 import ComponentTreeView from '../viewer3d/ComponentTreeView';
+import { useViewportWidth } from '../common/useNarrow';
+import { model3dToolbar, treeStartsCollapsed, type Model3DItem } from '../../lib/viewerToolbar';
 import { useAssemblyTree } from '../common/useAssemblyTree';
 import ModelCanvas, { modelBase as base, responseDetail as detail, type CanvasTools, type ModelCanvasHandle } from './ModelCanvas';
 import { usePartTreeData } from '../geometry/useConstruction';
 import {
-  filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, panelParts, resolveModel,
+  filenameFromDisposition, formatBytes, formatMm, modelKey, modelLabel, resolveModel,
   type Axis, type ModelInfo, type PartGroup,
 } from '../../lib/model3d';
 
@@ -95,7 +98,8 @@ const Model3DPanel: React.FC = () => {
 
   const tools: CanvasTools = useMemo(() => ({ hidden: new Set<string>(), explode, section: sec, measure }), [explode, sec, measure]);
 
-  const show = useMemo(() => new Set(panelParts(canDownload)), [canDownload]);
+  const vw = useViewportWidth();
+  const [infoAnchor, setInfoAnchor] = useState<HTMLElement | null>(null);
 
   const setAxis = useCallback((axis: Axis) => {
     const rg = canvas.current?.sectionRange(axis) ?? range;
@@ -139,72 +143,107 @@ const Model3DPanel: React.FC = () => {
     </Select>
   );
 
+  const entries = model3dToolbar({ canDownload, models: models?.length ?? 0, preparing, stepAvailable: !!model?.step_available, hasPdf });
+  const has = (id: Model3DItem) => entries.some((e) => e.id === id);
+  const enabled = (id: Model3DItem) => entries.find((e) => e.id === id)?.enabled !== false;
+  const inline = { display: 'flex', alignItems: 'center', gap: 0.75 } as const;
+  const lblInline = { ...lbl, fontSize: 10.5, whiteSpace: 'nowrap' } as const;
+  const sw = { m: 0, '& .MuiFormControlLabel-label': { ...lblInline } } as const;
+
   return (
-    <Box sx={{ display: 'flex', height: '100%', minHeight: 0, gap: 0 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
       <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => { setCanDownload(true); void loadMine(); }} />
-      {ready && show.has('parts') && (
-      <Box sx={{ width: 290, flexShrink: 0, p: 1.5, overflowY: 'auto', borderRight: '1px solid var(--line-soft)', bgcolor: 'var(--panel)',
-        display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-        <Box>
-          <Typography sx={lbl}>{t('motor')}</Typography>
-          {picker}
-          {models && !models.length && <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mt: 0.5 }}>{t('none')}</Typography>}
-        </Box>
 
-        <Box>
-          <Typography sx={lbl}>{t('explode')}</Typography>
-          <Slider size="small" min={0} max={1} step={0.01} value={explode} onChange={(_, v) => setExplode(v as number)} />
-        </Box>
-
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography sx={lbl}>{t('section')}</Typography>
-            <Switch size="small" checked={sec.on} onChange={(_, on) => setSec((s) => ({ ...s, on }))} />
-          </Box>
-          <ToggleButtonGroup size="small" exclusive value={sec.axis} disabled={!sec.on}
-            onChange={(_, a) => a && setAxis(a as Axis)} sx={{ mb: 0.5 }}>
-            {(['x', 'y', 'z'] as const).map((a) => <ToggleButton key={a} value={a} sx={{ px: 1.25, py: 0.1, fontSize: 12 }}>{a.toUpperCase()}</ToggleButton>)}
-          </ToggleButtonGroup>
-          <Slider size="small" disabled={!sec.on} min={range.min} max={range.max} step={(range.max - range.min) / 400}
-            value={sec.position} onChange={(_, v) => setSec((s) => ({ ...s, position: v as number }))} />
-        </Box>
-
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography sx={lbl}>{t('measure')}</Typography>
-            <Switch size="small" checked={measure} onChange={(_, on) => { setMeasure(on); if (!on) setMm(null); }} />
-          </Box>
-          {measure && (
-            <Typography sx={{ fontSize: 12, color: 'var(--text-1)', fontWeight: 700 }}>
-              {mm == null ? t('measureHint') : formatMm(mm)}
-            </Typography>
+      {/* ONE compact toolbar on top (it wraps on a narrow screen); the viewer below takes the whole width and height */}
+      {ready && (
+        <Box data-testid="model3d-toolbar" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.25, px: 1.25, py: 0.5, flexShrink: 0,
+          borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel)' }}>
+          {has('motor') && <Box sx={{ flex: '0 1 250px', minWidth: 170 }}>{picker}</Box>}
+          {has('fit') && (
+            <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
+              sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{t('fit')}</Button>
           )}
-        </Box>
-
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.75, mt: 'auto' }}>
-          <Button size="small" variant="contained" disabled={!model?.step_available || dl === 'busy'}
-            startIcon={dl === 'busy' ? <CircularProgress size={14} /> : <DownloadIcon sx={{ fontSize: 16 }} />}
-            onClick={() => void download()} sx={{ textTransform: 'none', fontSize: 12.5 }}>
-            {t('downloadStep')}{model?.step_bytes ? ` (${formatBytes(model.step_bytes)})` : ''}
-          </Button>
-          {hasPdf && (
+          {has('explode') && (
+            <Box sx={inline} data-testid="tool-explode">
+              <Typography sx={lblInline}>{t('explode')}</Typography>
+              <Slider size="small" min={0} max={1} step={0.01} value={explode} onChange={(_, v) => setExplode(v as number)} sx={{ width: 90 }} />
+            </Box>
+          )}
+          {has('section') && (
+            <Box sx={inline} data-testid="tool-section">
+              <FormControlLabel sx={sw} labelPlacement="start" label={t('section')}
+                control={<Switch size="small" checked={sec.on} onChange={(_, on) => setSec((s) => ({ ...s, on }))} />} />
+              {sec.on && (
+                <>
+                  <ToggleButtonGroup size="small" exclusive value={sec.axis} onChange={(_, a) => a && setAxis(a as Axis)}>
+                    {(['x', 'y', 'z'] as const).map((a) => <ToggleButton key={a} value={a} sx={{ px: 1, py: 0, fontSize: 11 }}>{a.toUpperCase()}</ToggleButton>)}
+                  </ToggleButtonGroup>
+                  <Slider size="small" min={range.min} max={range.max} step={(range.max - range.min) / 400}
+                    value={sec.position} onChange={(_, v) => setSec((s) => ({ ...s, position: v as number }))} sx={{ width: 90 }} />
+                </>
+              )}
+            </Box>
+          )}
+          {has('measure') && (
+            <Box sx={inline} data-testid="tool-measure">
+              <FormControlLabel sx={sw} labelPlacement="start" label={t('measure')}
+                control={<Switch size="small" checked={measure} onChange={(_, on) => { setMeasure(on); if (!on) setMm(null); }} />} />
+              {measure && (
+                <Typography sx={{ fontSize: 12, color: 'var(--text-1)', fontWeight: 700 }}>
+                  {mm == null ? t('measureHint') : formatMm(mm)}
+                </Typography>
+              )}
+            </Box>
+          )}
+          {has('download') && (
+            <Button size="small" variant="contained" disabled={!enabled('download') || dl === 'busy'} data-testid="tool-download"
+              startIcon={dl === 'busy' ? <CircularProgress size={14} /> : <DownloadIcon sx={{ fontSize: 16 }} />}
+              onClick={() => void download()} sx={{ textTransform: 'none', fontSize: 12.5 }}>
+              {t('downloadStep')}{model?.step_bytes ? ` (${formatBytes(model.step_bytes)})` : ''}
+            </Button>
+          )}
+          {has('yourNda') && (
             <Button size="small" onClick={() => void downloadPdf()} sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>
               {t('nda.yourNda')}
             </Button>
           )}
-          <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
-            sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{t('fit')}</Button>
-          {model?.version && (
-            <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>
-              {t('version', { template: model.version.template ?? '?', built: (model.version.built_at ?? '').slice(0, 10), hash: model.version.param_hash ?? '' })}
-            </Typography>
+          {has('ndaNote') && (
+            <Box sx={inline}>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography>
+              <HelpTip title={t('downloadLockedHelp')} />
+            </Box>
           )}
-          <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>{t('stamped')}</Typography>
+          {has('sign') && (
+            <Button size="small" variant="contained" onClick={() => setNdaOpen(true)} sx={{ textTransform: 'none', fontSize: 12.5 }}>
+              {t('nda.sign')}
+            </Button>
+          )}
+          {models && !models.length && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('none')}</Typography>}
+          <Box sx={{ flex: 1 }} />
+          {has('info') && (
+            <>
+              <Tooltip title={t('infoTip')}>
+                <IconButton size="small" data-testid="tool-info" onClick={(e) => setInfoAnchor(e.currentTarget)} aria-label={t('infoTip')}>
+                  <InfoOutlinedIcon sx={{ fontSize: 18 }} />
+                </IconButton>
+              </Tooltip>
+              <Popover open={!!infoAnchor} anchorEl={infoAnchor} onClose={() => setInfoAnchor(null)}
+                anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }} transformOrigin={{ vertical: 'top', horizontal: 'right' }}>
+                <Box sx={{ p: 1.5, maxWidth: 320, display: 'flex', flexDirection: 'column', gap: 0.75 }}>
+                  {model?.version && (
+                    <Typography sx={{ fontSize: 11.5, color: 'var(--text-2)' }}>
+                      {t('version', { template: model.version.template ?? '?', built: (model.version.built_at ?? '').slice(0, 10), hash: model.version.param_hash ?? '' })}
+                    </Typography>
+                  )}
+                  <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{t('stamped')}</Typography>
+                </Box>
+              </Popover>
+            </>
+          )}
         </Box>
-      </Box>
       )}
 
-      <Box sx={{ position: 'relative', flex: 1, minWidth: 0 }}>
+      <Box sx={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
         <ModelCanvas ref={canvas} model={model} tools={tools} canUseTools={canDownload} highlight={highlight} hiddenNodes={hiddenNodes}
           contextLostText={t('contextLost')} onMeasure={setMm}
           onLoaded={({ groups, range: rg }) => {
@@ -213,25 +252,8 @@ const Model3DPanel: React.FC = () => {
             setSec({ on: false, axis: 'x', position: (rg.min + rg.max) / 2 });
           }} />
         {ready && canDownload && assembly.rows.length > 0 && (
-          <ComponentTreeView model={assembly} style={{ top: 8, left: 8, zIndex: 4, width: 230 }} rowsMaxHeight="calc(100% - 40px)" />
-        )}
-        {ready && !show.has('parts') && (
-          <>
-            <Box sx={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 1, zIndex: 1 }}>
-              {models && (models.length > 1 || preparing) && <Box sx={{ minWidth: 220, bgcolor: 'var(--panel)', borderRadius: 1 }}>{picker}</Box>}
-              <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
-                sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)', bgcolor: 'var(--panel)' }}>{t('fit')}</Button>
-            </Box>
-            {models && !models.length && <Typography sx={{ position: 'absolute', top: 54, left: 12, fontSize: 12, color: 'var(--text-3)' }}>{t('none')}</Typography>}
-            <Box sx={{ position: 'absolute', left: 10, bottom: 10, display: 'flex', alignItems: 'center', gap: 1, p: 0.75, borderRadius: 1,
-              bgcolor: 'var(--panel)', zIndex: 1 }}>
-              <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('downloadLocked')}</Typography>
-              <HelpTip title={t('downloadLockedHelp')} />
-              <Button size="small" variant="contained" onClick={() => setNdaOpen(true)} sx={{ textTransform: 'none', fontSize: 12.5 }}>
-                {t('nda.sign')}
-              </Button>
-            </Box>
-          </>
+          <ComponentTreeView model={assembly} defaultCollapsed={treeStartsCollapsed(vw)} style={{ top: 8, left: 8, zIndex: 4, width: 230 }}
+            rowsMaxHeight="calc(100% - 40px)" />
         )}
         {err && <Alert severity="error" sx={{ position: 'absolute', bottom: 8, left: 8, right: 8, fontSize: 12, zIndex: 3 }} onClose={() => setErr(null)}>{err}</Alert>}
         {ready && preparing && !model && (

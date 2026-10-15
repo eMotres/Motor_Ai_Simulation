@@ -15,6 +15,8 @@ import { groupMassKg, type PartTreeData, type TreePart } from '../../lib/partTre
 import ComponentTreeView from '../viewer3d/ComponentTreeView';
 import { useAssemblyTree } from '../common/useAssemblyTree';
 import ModelCanvas from '../model3d/ModelCanvas';
+import { useViewportWidth } from '../common/useNarrow';
+import { treeStartsCollapsed } from '../../lib/viewerToolbar';
 import { useModelList, useOpenMotor } from '../geometry/useConstruction';
 import MaterialPickerPopover from './MaterialPickerPopover';
 import { useFullParts } from './useFullParts';
@@ -37,6 +39,7 @@ const FullPartsPanel: React.FC = () => {
   const config = openMotor?.config ?? null;
   const { payload, rows, loading, saving, error, choose, localMode } = useFullParts(die, config, true);
   const { models } = useModelList();
+  const vw = useViewportWidth();
   const model = useMemo(
     () => models?.find((m) => !!die && modelKey(m) === modelKey({ die, config: config ?? '' })) ?? null, [models, die, config]);
 
@@ -132,7 +135,7 @@ const FullPartsPanel: React.FC = () => {
         )}
       </Box>
 
-      <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, px: 1.5, py: 0.75, display: 'flex', alignItems: 'center', gap: 1,
+      <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, px: 1.5, py: 0.75, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1,
         zIndex: 3, pointerEvents: 'none' }}>
         <Tooltip title={tx('materialsFullHintTip')}>
           <Typography sx={{ fontSize: 12, color: 'var(--text-2)', pointerEvents: 'auto' }}>{tx('materialsFullHint')}</Typography>
@@ -146,14 +149,14 @@ const FullPartsPanel: React.FC = () => {
 
       <Box data-testid="materials-full-table">
         {tree && assembly.rows.length > 0 ? (
-          <ComponentTreeView model={assembly} style={{ top: 36, left: 8, zIndex: 4, width: 400 }} rowsMaxHeight="calc(100% - 150px)" />
+          <ComponentTreeView model={assembly} defaultCollapsed={treeStartsCollapsed(vw)} style={{ top: 36, left: 8, zIndex: 4, width: 400 }} rowsMaxHeight="calc(100% - 150px)" />
         ) : note && (
           <Box sx={{ position: 'absolute', top: 40, left: 12, zIndex: 4 }}>{note}</Box>
         )}
       </Box>
 
       {tree && (
-        <Box sx={{ position: 'absolute', left: 8, bottom: 8, zIndex: 4, width: 400, px: 1.25, py: 0.75, borderRadius: 1.5,
+        <Box sx={{ position: 'absolute', left: 8, bottom: 8, zIndex: 4, width: 400, maxWidth: 'calc(100% - 16px)', px: 1.25, py: 0.75, borderRadius: 1.5,
           bgcolor: 'var(--overlay)', border: '1px solid var(--line)', fontSize: 12 }}>
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Tooltip title={tx(partial ? 'materialsFullPartialTip' : kit ? 'materialsFullTotalKitTip' : 'materialsFullTotalTip')}>

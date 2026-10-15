@@ -54,5 +54,6 @@
       "name": "Must match the signatory name",
       "accept": "Tick the box to accept"
     }
-  }
+  },
+  "infoTip": "Model version and file stamp"
 }

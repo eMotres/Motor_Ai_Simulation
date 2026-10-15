@@ -490,11 +490,7 @@ function App() {
       ) },
     { id: 'geometry', label: 'Geometry', order: 20, panelId: 'geometry', gate: TAB_GATES.geometry, showViewer: true,
       render: () => (
-        <GeometryTab panelWidth={panelWidth}
-          divider={(
-            <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
-              bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
-          )}
+        <GeometryTab
           active={(
           <Box sx={{ display: 'flex', height: '100%' }}>
             <Box sx={{ width: panelWidth, flexShrink: 0, overflowY: 'auto', p: 1.5 }}>

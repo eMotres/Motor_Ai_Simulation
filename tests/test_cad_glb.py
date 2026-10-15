@@ -73,7 +73,10 @@ def test_glb_roundtrip_nodes_extras_materials():
     assert [doc["nodes"][i]["name"] for i in names["Coils"]["children"]] == ["Coil_01", "Coil_02"]
     assert st["triangles"] == 12 + 2 + 2 and st["groups"] == {"Core": 12, "Coils": 4}
     assert [m["name"] for m in doc["materials"]] == ["Core", "Coils", "Empty"]
-    assert doc["materials"][1]["pbrMetallicRoughness"]["baseColorFactor"][:3] == [0.8, 0.47, 0.22]
+    # the palette colours are sRGB; glTF base colours are LINEAR (glb_writer converts, #172): 0.8, 0.47, 0.22 -> 0.6038, 0.1873, 0.0397
+    lin = [round(c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4, 4) for c in (0.8, 0.47, 0.22)]
+    assert lin == [0.6038, 0.1873, 0.0397]
+    assert doc["materials"][1]["pbrMetallicRoughness"]["baseColorFactor"][:3] == lin
     # accessor contents: the cube's positions and indices come back exactly
     prim = doc["meshes"][meshes["Core"]["mesh"]]["primitives"][0]
     pos = read_accessor(doc, blob, prim["attributes"]["POSITION"])

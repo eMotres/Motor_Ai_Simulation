@@ -716,7 +716,11 @@ class RoleGateMiddleware(BaseHTTPMiddleware):
             path = request.url.path
             closed = not public_exhibit() and not anonymous_allowed(path)
             need = required_role(request.method, path) if AUTH_ENFORCE else None
-            if closed or need is not None:
+            # An account whose e-mail is NOT confirmed is refused a short list of actions whatever its role (verified_gate.py);
+            # a caller that is anonymous or confirmed is never touched, and AUTH_ENFORCE does not matter.
+            from motor_ai_sim import verified_gate as _vg
+            vgroup = _vg.gate_for(request.method, path)
+            if closed or need is not None or vgroup is not None:
                 _authz = request.headers.get("authorization")
                 user = resolve_user(
                     _authz, ip=(request.client.host if request.client else ""),
@@ -735,6 +739,10 @@ class RoleGateMiddleware(BaseHTTPMiddleware):
                             "your_role": "anon",
                         },
                     )
+                if vgroup is not None and user is not None:
+                    unv = _vg.unverified_email(user)
+                    if unv:
+                        return JSONResponse(status_code=403, content=_vg.refusal_body(unv, vgroup))
                 if need is not None:
                     role = user["role"] if user else "anon"
                     if _ROLE_RANK.get(role, -1) < _ROLE_RANK[need]:
@@ -862,6 +870,15 @@ def account_info(authorization: Optional[str], *, ip: str = "",
         "authError": None if reason in ("ok", "no_token") else reason,
         "sid": det["sid"] or None,
     }
+    # False only for a password account whose address is not confirmed (it may be limited: verified_gate.py)
+    out["emailVerified"] = True
+    if user is not None and user.get("email"):
+        try:
+            from motor_ai_sim import users as _u
+            _rec = _u.get_user(user["email"])
+            out["emailVerified"] = True if _rec is None else _u.is_verified(_rec)
+        except Exception:                                   # noqa: BLE001
+            pass
     # The motor Configure opens on for this account (admin-chosen, validated
     # against the grants by users.normalize_grants); null when none is set.
     out["defaultMotor"] = None

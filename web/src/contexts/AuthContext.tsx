@@ -69,13 +69,17 @@ export interface AuthState {
    *  consent page through the sign-up and its confirmation mail. */
   signIn: (opts?: SignInOptions) => Promise<void>;
   logout: () => Promise<void>;
+  /** False while the signed-in account's e-mail address is not confirmed (it works; a short list of actions waits for the link). */
+  emailVerified: boolean;
+  /** Ask the backend who we are again (e.g. after the confirmation link was opened elsewhere). */
+  refresh: () => Promise<void>;
   /** Our backend token (null if signed out). */
   getToken: () => Promise<string | null>;
 }
 
 const AuthCtx = createContext<AuthState>({
   user: null, loading: false, enabled: true, role: 'anon', isAdmin: false, enforced: false,
-  defaultMotor: null, resolved: false,
+  defaultMotor: null, resolved: false, emailVerified: true, refresh: async () => {},
   signIn: async () => {}, logout: async () => {}, getToken: async () => null,
 });
 
@@ -122,6 +126,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   // Flipped by the first /api/me answer we actually APPLY — never by the
   // store-busy or provisional paths, both of which come back in a moment.
   const [resolved, setResolved] = useState<boolean>(false);
+  const [emailVerified, setEmailVerified] = useState<boolean>(() => getStoredUser()?.email_verified !== false);
   // A mailed ?verify= / ?reset= link opens the dialog, which consumes it; so
   // does ?signup=1 / ?signin=1 (the links the MCP discovery tools hand out).
   const [loginOpen, setLoginOpen] = useState<boolean>(
@@ -168,6 +173,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setRole(j.role ?? 'anon'); setIsAdmin(Boolean(j.isAdmin)); setEnforced(Boolean(j.enforced));
       setDefaultMotor(j.defaultMotor && j.defaultMotor.die && j.defaultMotor.config
         ? { die: String(j.defaultMotor.die), config: String(j.defaultMotor.config) } : null);
+      setEmailVerified(j.emailVerified !== false);
       setResolved(true);
       setSessionRole({ isAdmin: Boolean(j.isAdmin), enforced: Boolean(j.enforced) });
       // Sliding renewal: inside the last 7 days the backend hands back a fresh
@@ -226,7 +232,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const getToken = useCallback(async () => getStoredToken(), []);
 
   return (
-    <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, defaultMotor, resolved, signIn, logout, getToken }}>
+    <AuthCtx.Provider value={{ user, loading, enabled: true, role, isAdmin, enforced, defaultMotor, resolved, emailVerified, refresh: loadRole, signIn, logout, getToken }}>
       {children}
       <LoginDialog open={loginOpen} onClose={() => setLoginOpen(false)} onSignedIn={onSignedIn}
         initialMode={loginOpts.mode} initialTab={loginOpts.tab} returnTo={loginOpts.returnTo} />

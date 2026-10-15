@@ -406,5 +406,15 @@
     "accept": "Accept",
     "decline": "Decline",
     "settings": "Cookie settings"
+  },
+  "verify": {
+    "banner": "Confirm your e-mail: we sent a link to {email}.",
+    "line": "Confirm your e-mail to use this.",
+    "help": "Confirm your e-mail to use this - we sent a link to {email}. Not there? Check spam, or resend the link / change the address. Until then everything else works.",
+    "resend": "Resend",
+    "resendWait": "Resend in {seconds} s",
+    "resent": "Sent again to {email}.",
+    "change": "Change address",
+    "changeHelp": "The account moves from {email} to the address you give; a new confirmation link is sent there."
   }
 }

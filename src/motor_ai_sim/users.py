@@ -62,6 +62,10 @@ ROLES = ("user", "engineer", "admin")
 QUOTA_MAX_CPU_H = 1_000_000.0
 
 
+class EmailUnverified(ValueError):
+    """The account's e-mail address is not confirmed: it may not be given a higher role."""
+
+
 class RoleProtected(ValueError):
     """A role change the registry refuses: the owner's own account, or the last admin."""
 
@@ -622,6 +626,8 @@ def update_user(email: str, *, role: Optional[str] = None,
         if role is not None:
             if role not in ROLES:
                 raise ValueError(f"role must be one of {ROLES}")
+            if role != "user" and not is_verified(users[email]) and (users[email].get("role") or "user") != role:
+                raise EmailUnverified("this account has not confirmed its e-mail address yet; it cannot be given a higher role")
             _check_role_change(users, email, role)
             users[email]["role"] = role
         if sim_quota_cpu_h_month is not _UNSET:

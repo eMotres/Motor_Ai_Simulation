@@ -18,7 +18,7 @@ spec.loader.exec_module(SP)
 
 
 @pytest.mark.parametrize("od,cls,prop", [
-    (30, "smallest", "Stainless_316"), (40, "smallest", "Stainless_316"),
+    (30, "smallest", "Stainless_420"), (40, "smallest", "Stainless_420"),
     (50, "undecided", None), (84.9, "undecided", None),
     (85, "85 mm and larger", "Aluminium_6061"), (100, "85 mm and larger", "Aluminium_6061"),
     (150, "85 mm and larger", "Aluminium_6061"),
@@ -44,8 +44,8 @@ def test_the_proposal_lists_what_each_change_means_and_writes_nothing(tmp_path):
     root = _dies(tmp_path)
     before = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in root.rglob("*.yaml")}
     rows = {r["die"]: r for r in SP.proposal(root, with_mass=False)}
-    # Ø40: aluminium (non-magnetic) -> stainless (non-magnetic): the field is unchanged to first order
-    assert rows["S40"]["proposed"] == "Stainless_316" and rows["S40"]["meaning"].startswith("non-magnetic -> non-magnetic")
+    # Ø40: aluminium (non-magnetic) -> SS420 (FERROMAGNETIC): a physics change
+    assert rows["S40"]["proposed"] == "Stainless_420" and rows["S40"]["meaning"].startswith("NON-MAGNETIC -> MAGNETIC")
     # 85 with the magnetic 42CrMo4 shaft today -> aluminium: this one matters
     assert rows["M85"]["proposed"] == "Aluminium_6061" and rows["M85"]["meaning"].startswith("MAGNETIC -> NON-MAGNETIC")
     # a configuration that names no shaft takes the shipped default (aluminium 6061): already the proposed material

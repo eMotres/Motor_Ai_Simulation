@@ -2557,6 +2557,128 @@ steel:
       - [ 160000, 2.10]
       - [ 250000, 2.18]
 
+  Stainless_420:
+    # -- AISI 420 martensitic stainless steel, hardened + tempered 204 C.  FERROMAGNETIC (unlike 316 / 304): its B-H curve below is the
+    # solver's.  Owner 2026-10-15: the shaft of the small motors (grade "starts with 3": AISI 420 / EN 1.4021 X20Cr13 /
+    # 1.4028 X30Cr13 / Chinese 2Cr13-3Cr13).  NOT assigned to any die yet (docs/SHAFT_MATERIAL_PROPOSAL_2026-10-14.md). --
+    sources:
+      - {"id": "cartech_420", "doc": "Carpenter Technology CarTech 420 Stainless (UNS S42000) technical datasheet, edition 09/01/1986 (as served 2026-10): specific gravity 7.69, density 0.2790 lb/in3, mean specific heat 0.1100 Btu/lb/F (32-212 F), mean CTE 5.70e-6 in/in/F (32-212 F), thermal conductivity 173.0 BTU-in/hr/ft2/F at 212 F, E 29.0e3 ksi, electrical resistivity 331.0 ohm-cir-mil/ft at 70 F; typical room-temperature properties of 1 in. bar: annealed Rp0.2 345 MPa, Rm 655 MPa, 25 % elongation, 196 HB; hardened 1900 F (1038 C) oil quench + tempered 400 F (204 C) Rp0.2 1482 MPa, Rm 1724 MPa, 8 % elongation, 512 HB (about 52 HRC); not to be tempered above 800 F (427 C)", "url": "https://carpentertechnology.com/hubfs/7407324/Material%20Saftey%20Data%20Sheets/420.pdf", "read": "2026-10-15"}
+      - {"id": "oxley_2009", "doc": "P. Oxley, J. Goodell, R. Molt, Magnetic properties of stainless steels at room and cryogenic temperatures, J. Magn. Magn. Mater. 321 (2009) 2107-2114, DOI 10.1016/j.jmmm.2009.01.002: round rod 0.188 in, as received (process annealed), measured at 300 K, 4 Hz. Type 420 (279 HB, 55 uOhm cm, 0.34 % C, 12.2 % Cr): mu_max 450, Hc 820 A/m, Br about 0.83 T, Bs about 1.44 T. Type 440A (222 HB, 60 uOhm cm, 0.55 % C, 15.1 % Cr): mu_max 170, Hc 1430 A/m, Bs about 1.17 T (Figs 5-8, Tables 1-3). The ASM Handbook (Dietrich, Magnetically Soft Materials, vol. 2, 1990) lists FULLY annealed 420 (183 HB) at mu_max 950, Hc 800 A/m", "url": "https://www.holycross.edu/document/stainlesssteelspaper", "read": "2026-10-15"}
+      - {"id": "tavares_2000", "doc": "S. S. M. Tavares et al., Magnetic properties of an AISI 420 martensitic stainless steel, J. Alloys Compd. 312 (2000) 307-314 (abstract only): magnetically softest annealed; oil quenching raises the coercive force and the residual induction and lowers the saturation magnetization; tempering at 300-500 C raises Hc further", "read": "2026-10-15"}
+    prov:
+      density: {"type": "datasheet", "src": "cartech_420", "note": "0.2790 lb/in3 = 7722 kg/m3 (SG 7.69 = 7690)", "verify": true}
+      sigma: {"type": "datasheet", "src": "cartech_420", "note": "331 ohm-cir-mil/ft at 70 F = 0.550 uOhm m -> 1.82 MS/m (Oxley: 55 uOhm cm)", "verify": true}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "cartech_420", "note": "29.0e3 ksi", "verify": true}
+      yield_strength_mpa: {"type": "datasheet", "src": "cartech_420", "note": "hardened 1038 C oil quench, tempered 204 C, 1 in. bar", "verify": true}
+      tensile_strength_mpa: {"type": "datasheet", "src": "cartech_420", "note": "hardened 1038 C oil quench, tempered 204 C, 1 in. bar", "verify": true}
+      thermal_conductivity: {"type": "datasheet", "src": "cartech_420", "note": "173 BTU in/hr/ft2/F at 212 F = 24.9 W/mK", "verify": true}
+      specific_heat: {"type": "datasheet", "src": "cartech_420", "note": "0.1100 Btu/lb/F = 460 J/kgK (32-212 F)", "verify": true}
+      cte_ppm_k: {"type": "datasheet", "src": "cartech_420", "note": "5.70e-6 /F = 10.3 ppm/K (0-100 C)", "verify": true}
+      poisson_ratio: {"type": "estimate", "note": "0.28 handbook figure for martensitic stainless; the datasheet gives none", "verify": true, "source": "none"}
+      max_service_temp_c: {"type": "estimate", "note": "do not exceed the 204 C tempering temperature of the hardened shaft; the datasheet allows annealed or tempered parts up to 427 C only for corrosion resistance", "verify": true, "source": "none"}
+      bh_curve: {"type": "derived", "src": "oxley_2009", "note": "HARDENED-STATE PROXY: the magnetic data of a hardened 420 are not published (Tavares 2000 only says Hc and Br rise and Bs falls after quenching). The closest MEASURED hard martensitic steel is Oxley's 440A (0.55 % C, mu_max 170, Hc 1430 A/m, Bs 1.17 T); a 52 HRC 420 is likely magnetically harder still. FROHLICH-KENNELLY FIT, NOT a measured curve: J = Js H/(H + h), Js = 1.17 T, mu_max = 170 -> h = 5477 A/m; B = mu0 H + J. Replace with a measurement of the actual shaft bar (ring test, IEC 60404-4).", "verify": true}
+      stacking_factor: {"type": "estimate", "note": "1.0 by definition for a solid part"}
+    description: "Stainless steel AISI 420 (UNS S42000; EN 1.4021 / 1.4028), HARDENED + tempered (1038 C oil quench, 204 C temper, about 52 HRC) - FERROMAGNETIC small-motor shaft steel"
+    form: solid          # one piece of stainless steel - a shaft, not a lamination stack
+    sigma: 1817000     # S/m  (rho 0.550 uOhm m at 21 C)
+    density: 7720
+    thermal_conductivity: 24.9
+    specific_heat: 460
+    stacking_factor: 1.0
+    # --- mechanical ---
+    youngs_modulus_gpa: 200
+    poisson_ratio: 0.28
+    cte_ppm_k: 10.3   # ppm/K  0-100 C
+    yield_strength_mpa: 1482   # MPa  Rp0.2, hardened + tempered 204 C: 512 HB, 8 % elongation
+    tensile_strength_mpa: 1724 # MPa  Rm, same condition
+    max_service_temp_c: 200   # C
+    core_loss_model: bertotti
+    core_loss_kh: 0.0
+    core_loss_kc: 0.0
+    core_loss_ke: 0.0
+    core_loss_curve_unit: w_per_kg
+    # B-H magnetisation curve [H (A/m), B (T)] - see prov.bh_curve
+    bh_curve:
+      - [      0, 0.0000]
+      - [    100, 0.0211]
+      - [    200, 0.0415]
+      - [    400, 0.0801]
+      - [    600, 0.1163]
+      - [    800, 0.1501]
+      - [   1000, 0.1819]
+      - [   1500, 0.2534]
+      - [   2000, 0.3155]
+      - [   3000, 0.4178]
+      - [   5000, 0.5647]
+      - [   8000, 0.7046]
+      - [  12000, 0.8184]
+      - [  20000, 0.9436]
+      - [  35000, 1.0557]
+      - [  60000, 1.1475]
+      - [ 100000, 1.2349]
+      - [ 160000, 1.3323]
+      - [ 250000, 1.4591]
+  Stainless_420_annealed:
+    # -- AISI 420 martensitic stainless steel, annealed.  FERROMAGNETIC (unlike 316 / 304): its B-H curve below is the
+    # solver's.  Owner 2026-10-15: the shaft of the small motors (grade "starts with 3": AISI 420 / EN 1.4021 X20Cr13 /
+    # 1.4028 X30Cr13 / Chinese 2Cr13-3Cr13).  NOT assigned to any die yet (docs/SHAFT_MATERIAL_PROPOSAL_2026-10-14.md). --
+    sources:
+      - {"id": "cartech_420", "doc": "Carpenter Technology CarTech 420 Stainless (UNS S42000) technical datasheet, edition 09/01/1986 (as served 2026-10): specific gravity 7.69, density 0.2790 lb/in3, mean specific heat 0.1100 Btu/lb/F (32-212 F), mean CTE 5.70e-6 in/in/F (32-212 F), thermal conductivity 173.0 BTU-in/hr/ft2/F at 212 F, E 29.0e3 ksi, electrical resistivity 331.0 ohm-cir-mil/ft at 70 F; typical room-temperature properties of 1 in. bar: annealed Rp0.2 345 MPa, Rm 655 MPa, 25 % elongation, 196 HB; hardened 1900 F (1038 C) oil quench + tempered 400 F (204 C) Rp0.2 1482 MPa, Rm 1724 MPa, 8 % elongation, 512 HB (about 52 HRC); not to be tempered above 800 F (427 C)", "url": "https://carpentertechnology.com/hubfs/7407324/Material%20Saftey%20Data%20Sheets/420.pdf", "read": "2026-10-15"}
+      - {"id": "oxley_2009", "doc": "P. Oxley, J. Goodell, R. Molt, Magnetic properties of stainless steels at room and cryogenic temperatures, J. Magn. Magn. Mater. 321 (2009) 2107-2114, DOI 10.1016/j.jmmm.2009.01.002: round rod 0.188 in, as received (process annealed), measured at 300 K, 4 Hz. Type 420 (279 HB, 55 uOhm cm, 0.34 % C, 12.2 % Cr): mu_max 450, Hc 820 A/m, Br about 0.83 T, Bs about 1.44 T. Type 440A (222 HB, 60 uOhm cm, 0.55 % C, 15.1 % Cr): mu_max 170, Hc 1430 A/m, Bs about 1.17 T (Figs 5-8, Tables 1-3). The ASM Handbook (Dietrich, Magnetically Soft Materials, vol. 2, 1990) lists FULLY annealed 420 (183 HB) at mu_max 950, Hc 800 A/m", "url": "https://www.holycross.edu/document/stainlesssteelspaper", "read": "2026-10-15"}
+      - {"id": "tavares_2000", "doc": "S. S. M. Tavares et al., Magnetic properties of an AISI 420 martensitic stainless steel, J. Alloys Compd. 312 (2000) 307-314 (abstract only): magnetically softest annealed; oil quenching raises the coercive force and the residual induction and lowers the saturation magnetization; tempering at 300-500 C raises Hc further", "read": "2026-10-15"}
+    prov:
+      density: {"type": "datasheet", "src": "cartech_420", "note": "0.2790 lb/in3 = 7722 kg/m3 (SG 7.69 = 7690)", "verify": true}
+      sigma: {"type": "datasheet", "src": "cartech_420", "note": "331 ohm-cir-mil/ft at 70 F = 0.550 uOhm m -> 1.82 MS/m (Oxley: 55 uOhm cm)", "verify": true}
+      youngs_modulus_gpa: {"type": "datasheet", "src": "cartech_420", "note": "29.0e3 ksi", "verify": true}
+      yield_strength_mpa: {"type": "datasheet", "src": "cartech_420", "note": "annealed, 1 in. bar", "verify": true}
+      tensile_strength_mpa: {"type": "datasheet", "src": "cartech_420", "note": "annealed, 1 in. bar", "verify": true}
+      thermal_conductivity: {"type": "datasheet", "src": "cartech_420", "note": "173 BTU in/hr/ft2/F at 212 F = 24.9 W/mK", "verify": true}
+      specific_heat: {"type": "datasheet", "src": "cartech_420", "note": "0.1100 Btu/lb/F = 460 J/kgK (32-212 F)", "verify": true}
+      cte_ppm_k: {"type": "datasheet", "src": "cartech_420", "note": "5.70e-6 /F = 10.3 ppm/K (0-100 C)", "verify": true}
+      poisson_ratio: {"type": "estimate", "note": "0.28 handbook figure for martensitic stainless; the datasheet gives none", "verify": true, "source": "none"}
+      max_service_temp_c: {"type": "estimate", "note": "annealed 420 is not recommended above about 427 C (corrosion resistance); design limit 400 C", "verify": true, "source": "none"}
+      bh_curve: {"type": "derived", "src": "oxley_2009", "note": "Anchored on the MEASURED 420 bar of Oxley 2009 (mu_max 450, Hc 820 A/m, Bs 1.44 T; as received, process annealed). A fully annealed 420 is softer (ASM: mu_max 950). FROHLICH-KENNELLY FIT, NOT a measured curve: J = Js H/(H + h), Js = 1.44 T, mu_max = 450 -> h = 2546 A/m; B = mu0 H + J. Replace with a measurement of the actual shaft bar (ring test, IEC 60404-4).", "verify": true}
+      stacking_factor: {"type": "estimate", "note": "1.0 by definition for a solid part"}
+    description: "Stainless steel AISI 420 (UNS S42000; EN 1.4021 / 1.4028), ANNEALED - FERROMAGNETIC (B-H curve from the measured annealed bar)"
+    form: solid          # one piece of stainless steel - a shaft, not a lamination stack
+    sigma: 1817000     # S/m  (rho 0.550 uOhm m at 21 C)
+    density: 7720
+    thermal_conductivity: 24.9
+    specific_heat: 460
+    stacking_factor: 1.0
+    # --- mechanical ---
+    youngs_modulus_gpa: 200
+    poisson_ratio: 0.28
+    cte_ppm_k: 10.3   # ppm/K  0-100 C
+    yield_strength_mpa: 345   # MPa  Rp0.2, annealed: 196 HB, 25 % elongation
+    tensile_strength_mpa: 655 # MPa  Rm, same condition
+    max_service_temp_c: 400   # C
+    core_loss_model: bertotti
+    core_loss_kh: 0.0
+    core_loss_kc: 0.0
+    core_loss_ke: 0.0
+    core_loss_curve_unit: w_per_kg
+    # B-H magnetisation curve [H (A/m), B (T)] - see prov.bh_curve
+    bh_curve:
+      - [      0, 0.0000]
+      - [    100, 0.0545]
+      - [    200, 0.1051]
+      - [    400, 0.1960]
+      - [    600, 0.2753]
+      - [    800, 0.3452]
+      - [   1000, 0.4073]
+      - [   1500, 0.5357]
+      - [   2000, 0.6360]
+      - [   3000, 0.7826]
+      - [   5000, 0.9604]
+      - [   8000, 1.1024]
+      - [  12000, 1.2030]
+      - [  20000, 1.3025]
+      - [  35000, 1.3863]
+      - [  60000, 1.4568]
+      - [ 100000, 1.5299]
+      - [ 160000, 1.6185]
+      - [ 250000, 1.7396]
 
 # ── PERMANENT MAGNETS ────────────────────────────────────────
 #
@@ -3482,8 +3604,8 @@ conductor:
     wire_type: rectangular
     thermal_alpha: 0.00094      # 1/K  resistivity temperature coefficient
   Stainless_316:
-    # -- PROVISIONAL shaft material of the smallest motors (owner 2026-10-14: stainless, grade "probably 316", to be
-    # confirmed).  NOT assigned to any die yet; the prepared change is scripts/shaft_material_proposal.py.  Same family as
+    # -- the superseded provisional shaft grade of the smallest motors (owner 2026-10-14 "probably 316"; confirmed grade
+    # on 2026-10-15 is the ferromagnetic Stainless_420).  Kept as the non-magnetic option.  NOT assigned to any die; the prepared change is scripts/shaft_material_proposal.py.  Same family as
     # Stainless_316L (identical electrical and thermal figures); only the strengths differ (ASTM A240: 316 is the higher-
     # carbon grade).  envelope rule: a field with no prov entry is `datasheet` from sources[0] --
     sources:
@@ -3506,6 +3628,34 @@ conductor:
     tensile_strength_mpa: 515 # MPa  annealed minimum
     max_service_temp_c: 400   # °C   design limit
     thermal_conductivity: 16.3  # W/(m·K)
+    specific_heat: 500          # J/(kg·K)
+    permeability: 1.005         # annealed austenite; cold work can raise it to ~1.1
+    wire_type: rectangular
+    thermal_alpha: 0.00094      # 1/K  resistivity temperature coefficient
+  Stainless_304:
+    # -- AISI 304 (EN 1.4301), austenitic, NON-magnetic: the non-magnetic option for the small-motor shaft (owner 2026-10-15).
+    # Same family as Stainless_316 / Stainless_316L.  NOT assigned to any die. envelope rule: a field with no prov entry is
+    # `datasheet` from sources[0] --
+    sources:
+      - {"id": "astm_a240_304", "doc": "ASTM A240/A240M, UNS S30400 (AISI 304, EN 1.4301), annealed: Rp0.2 >= 205 MPa, Rm >= 515 MPa", "read": "2026-10-15"}
+      - {"id": "asm_v1_304", "doc": "ASM Handbook Vol. 1 (1990), wrought austenitic stainless steel 304: 8.0 g/cm3, 72 uOhm cm (1.39 MS/m), 16.2 W/mK at 100 C, 500 J/kgK, 17.2e-6/K (0-100 C), E 193 GPa, relative permeability about 1.02 (annealed)", "read": "2026-10-15"}
+    prov:
+      yield_strength_mpa: {"type": "datasheet", "src": "astm_a240_304", "verify": true}
+      tensile_strength_mpa: {"type": "datasheet", "src": "astm_a240_304", "verify": true}
+      max_service_temp_c: {"type": "estimate", "note": "conservative design limit of a loaded shaft", "verify": true, "source": "none"}
+      poisson_ratio: {"type": "datasheet", "src": "asm_v1_304", "note": "handbook range 0.27-0.30", "verify": true}
+      permeability: {"type": "estimate", "note": "annealed austenite mu_r ~1.005-1.02; cold work (a turned shaft) raises it", "verify": true, "source": "none"}
+      thermal_alpha: {"type": "estimate", "note": "resistivity temperature coefficient not in the sources read", "verify": true, "source": "none"}
+    description: "Stainless steel 304 (EN 1.4301, austenitic, NON-magnetic) - the non-magnetic shaft option (not assigned yet)"
+    sigma: 1389000     # S/m at 20 °C  (resistivity 0.72 µΩ·m)
+    density: 8000      # kg/m³
+    youngs_modulus_gpa: 193        # GPa
+    poisson_ratio: 0.30            # -
+    cte_ppm_k: 17.2   # ppm/K  (0-100 °C)
+    yield_strength_mpa: 205   # MPa  annealed, 0.2 % proof
+    tensile_strength_mpa: 515 # MPa  annealed minimum
+    max_service_temp_c: 400   # °C   design limit
+    thermal_conductivity: 16.2  # W/(m·K)
     specific_heat: 500          # J/(kg·K)
     permeability: 1.005         # annealed austenite; cold work can raise it to ~1.1
     wire_type: rectangular

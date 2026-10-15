@@ -3,9 +3,12 @@
 """PROPOSAL ONLY - the shaft-material rule of 2026-10-14 applied to a die catalog, with what it would change.
 
 Owner rule (2026-10-14): "only the SMALLEST motors have a stainless shaft", and "all the walls and the shafts are
-aluminium 6061".  As a rule, not per-motor guesses:
+aluminium 6061"; grade confirmed 2026-10-15: SS420 (AISI 420 martensitic, EN 1.4021 / 1.4028).  As a rule, not per-motor
+guesses:
 
-  * stator OD <= 40 mm (the Ø30 and Ø40 families) .... stainless steel AISI 316 (PROVISIONAL, grade to be confirmed)
+  * stator OD <= 40 mm (the Ø30 and Ø40 families) .... stainless steel AISI 420 - FERROMAGNETIC (hardened + tempered is the
+                                                       library card ``Stainless_420``; ``Stainless_420_annealed`` is the
+                                                       soft-condition twin - the owner's supplier answer decides which)
   * 85 mm <= stator OD < 200 mm (public dies) ......... aluminium 6061-T6
   * stator OD >= 200 mm ............................... NOT TOUCHED (private, high-speed: kept as is)
   * 40 mm < OD < 85 mm ................................ no rule yet: listed as "undecided"
@@ -34,7 +37,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-STAINLESS = "Stainless_316"          # provisional (owner: "probably 316", confirmation pending)
+STAINLESS = "Stainless_420"          # owner 2026-10-15: SS420 (was provisional 316); hardened + tempered condition
 ALUMINIUM = "Aluminium_6061"         # owner: "aluminium 6061 everywhere"
 
 
@@ -79,7 +82,9 @@ def meaning(cur: str, new: str) -> str:
         return ("MAGNETIC -> NON-MAGNETIC: the shaft leaves the rotor flux path (its B-H curve and solid-steel eddy treatment "
                 "go); rotor field, torque, EMF and losses change - re-solve every passport and duty of the configuration")
     if not mc and mn:
-        return "NON-MAGNETIC -> MAGNETIC: the shaft joins the flux path; re-solve every passport and duty"
+        return ("NON-MAGNETIC -> MAGNETIC: the ferromagnetic shaft joins the rotor flux path (B-H curve + solid-steel eddy "
+                "treatment appear); see docs/SHAFT_MATERIAL_PROPOSAL_2026-10-14.md for the measured effect; re-solve the "
+                "passports and duties if the table says so")
     if mc and mn:
         return "magnetic -> magnetic: B-H curve and eddy loss of the shaft change; re-solve"
     sc, sn = _sigma(cur), _sigma(new)

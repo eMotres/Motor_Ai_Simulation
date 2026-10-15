@@ -920,6 +920,7 @@ const FamilyCatalog: React.FC<{
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
               {die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
             </Typography>
+            {canWrite && (  /* history = rollback, only for those who may edit (owner 2026-10-15) */
             <Tooltip title="History of the die geometry (die.yaml) — every saved version; pick one to roll back.">
               <span>
                 <Button size="small" disabled={!!busy}
@@ -930,6 +931,7 @@ const FamilyCatalog: React.FC<{
                 </Button>
               </span>
             </Tooltip>
+            )}
             {canWrite && (
               <Tooltip title={tx('duplicateTheWholeDieStampedGeometry')}>
                 <span>
@@ -1010,6 +1012,7 @@ const FamilyCatalog: React.FC<{
                     </span>
                   </Tooltip>
                 )}
+                {canWrite && (
                 <Tooltip title="History — every saved version of this configuration (geometry, winding, materials, duties). Pick one to roll back; the current version is kept as a snapshot too.">
                   <span>
                     <Button size="small" disabled={!!busy}
@@ -1020,6 +1023,7 @@ const FamilyCatalog: React.FC<{
                     </Button>
                   </span>
                 </Tooltip>
+                )}
                 {canWrite && (
                   <Tooltip title={tx('duplicateCopyThisConfigurationWithAll')}>
                     <span>

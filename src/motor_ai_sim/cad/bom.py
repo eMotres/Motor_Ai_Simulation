@@ -37,6 +37,19 @@ BOARD_NOMINAL = dict(area_mm2=764.0, thickness_mm=1.6, mass_g=4.0,
 PIN_NOMINAL = dict(d=2.0, tail=2.05, mating=2.70, collar_d=3.0, collar_h=1.15)             # phase board README rev C / pin rev 7
 
 
+FRAMELESS_SCOPE = "frameless kit"
+FRAMELESS_EXPLAIN = ("FRAMELESS KIT (cad_variant = frameless): this bill of materials lists the kit only - stator lamination stack, coils, "
+                     "phase board, rotor lamination stack and magnets (and the sleeve when the rotor has one). Housing, stator holders, "
+                     "rotor carriers / hub, bearings, shaft, screws, housing rings and the propeller plate are NOT included. The "
+                     "simulation passport mass below still includes its shaft stand-in tube and is not the kit mass.")
+
+
+def is_frameless(dump, inputs):
+    """True when this BOM is the frameless kit: the caller's ``cad_variant`` input, else the variant stored in the model's Meta."""
+    v = inputs.get("cad_variant") or (dump.get("meta") or {}).get("motor_cad_variant") or "full"
+    return v == "frameless"
+
+
 # ------------------------------------------------------------------------------------------------------ helpers
 def thread_name(kind, radius_mm):
     """ISO 261 coarse designation of a smooth cylinder that carries a thread ("M2x0.4"), '' when it matches no size or the table
@@ -144,6 +157,7 @@ def _extra(model, pattern):
 # ------------------------------------------------------------------------------------------------------ the BOM
 def build_bom(dump, inputs):
     m = Model(dump)
+    kit = is_frameless(dump, inputs)
     cfg = inputs["config"]
     mats = inputs["materials"]
     cards = inputs.get("cards", {})
@@ -384,7 +398,7 @@ def build_bom(dump, inputs):
             if flag else None)
 
     # ---- phase board and pins (model objects when present, else nominal data) -------------------------------------
-    carrier_board = bool(m.get("Shaft_rear"))
+    carrier_board = bool(m.get("Shaft_rear")) or "board_outer_r" in m.params          # the CIANO28 85 plate board (also without a carrier: frameless kit)
     if carrier_board:                                     # CIANO28 85: simplified plate + lead sleeves in the model, Fusion bodies for the mass
         for e in _extra(m, r"board|pcb|pin"):
             m.claimed.add(e["label"])
@@ -467,6 +481,9 @@ def build_bom(dump, inputs):
     totals = _totals(lines)
     comparison = _compare(lines, inputs, totals)
     comparison["explain"] = _explain(lines, comparison, inputs, m)
+    if kit:
+        totals["scope"] = FRAMELESS_SCOPE
+        comparison["explain"].insert(0, FRAMELESS_EXPLAIN)
     return dict(header=_header(dump, inputs), lines=lines, totals=totals, comparison=comparison,
                 to_be_specified=tbs, warnings=warns, unclassified=[e["label"] for e in unclassified])
 
@@ -548,6 +565,7 @@ def _explain(lines, comp, inputs, m):
 
 def _header(dump, inputs):
     h = dict(die=inputs.get("die"), config=inputs.get("config"), motor_id=inputs.get("motor_id"), model=dump.get("model"),
+             cad_variant="frameless" if is_frameless(dump, inputs) else "full",
              freecad_version=dump.get("freecad_version"), template_meta=dump.get("meta"), generated=datetime.datetime.now().isoformat(timespec="seconds"),
              bom_format=TEMPLATE)
     h.update(inputs.get("provenance") or {})
@@ -605,7 +623,8 @@ def write_csv(bom, path, extra_columns=None):
         w.writerow([title for _, title in CSV_COLUMNS] + list(extra_columns))
         for l in bom["lines"]:
             w.writerow([_csv_value(l, k) for k in keys] + [extra_columns[col].get(l["key"], "") for col in extra_columns])
-        w.writerow(row(dict(item="T1", part="TOTAL mass of the BOM lines (model)", type="total", unit="g", total_mass_g=t["motor_mass_g"])))
+        w.writerow(row(dict(item="T1", part=("TOTAL mass of the frameless kit (BOM lines, model)" if t.get("scope") == FRAMELESS_SCOPE
+                                              else "TOTAL mass of the BOM lines (model)"), type="total", unit="g", total_mass_g=t["motor_mass_g"])))
         w.writerow(row(dict(item="T2", part="Simulation passport mass (%s)" % c["sim_source"], type="total", unit="g", sim_mass_g=c["sim_total_g"])))
         for r in c["rows"]:
             w.writerow(row(dict(item="C", part="compare %s: BOM vs simulation %s %% %s" % (r["component"], r["diff_pct"], r["basis"]),

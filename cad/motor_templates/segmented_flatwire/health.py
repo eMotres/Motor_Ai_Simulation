@@ -25,8 +25,9 @@ def _opt(g, name, default):
         return default
 
 
-def precheck(g):
-    """Necessary conditions for this template; each violation is a sentence naming the parameters."""
+def precheck(g, frameless=False):
+    """Necessary conditions for this template; each violation is a sentence naming the parameters.  frameless=True skips the
+    validity domain of the mechanical parts (holders, bearings, shaft ... are not built in the frameless kit)."""
     v = []
 
     def need(cond, text):
@@ -118,6 +119,8 @@ def precheck(g):
          "magnet_down_height (%.3g) too large for the magnet height (rotor_up_r - rotor_down_r = %.3g)" % (mdh, Rup - Rdn))
     need(_num(g, "mag_step") > 0 and _num(g, "rotor_w") > 0 and _num(g, "motor_length") > 0,
          "motor_length, rotor_w and mag_step must be > 0")
+    if frameless:
+        return v
     try:
         _num(g, "holder_face_z")
     except Exception:
@@ -254,7 +257,9 @@ def gate(doc, sheet_name="Params"):
     sh = doc.getObject(sheet_name)
     g = lambda n: pval(sh, n)
     errors = []
-    pre = precheck(g)
+    from . import frameless
+    kit = frameless.is_frameless(doc)
+    pre = precheck(g, frameless=kit)
     errors += ["precheck: " + t for t in pre]
     for o in doc.Objects:
         st = list(getattr(o, "State", []))
@@ -294,7 +299,9 @@ def gate(doc, sheet_name="Params"):
             errors.append("array %s has %d solids, Params require %d" % (label, n, exp[key]))
         if arr:
             vols[label] = arr[0].Shape.Volume
-    if doc.getObject("Mechanics") is not None:
+    if kit:
+        errors += frameless.gate(doc, g)
+    elif doc.getObject("Mechanics") is not None:
         errors += _gate_mechanics(doc, g, exp, counts, vols)
     if doc.getObject("Electronics") is not None:
         from . import electronics

@@ -29,7 +29,7 @@ import FreeCAD as App  # noqa: E402
 import MeshPart  # noqa: E402
 import glb_writer as G  # noqa: E402
 import threads as TH  # noqa: E402
-from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, electronics, view, palette  # noqa: E402
+from motor_templates.segmented_flatwire import params_sheet as ps, health, mechanics, electronics, view, palette, frameless  # noqa: E402
 from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 # axial factor of the viewer's exploded view (units of the motor length; + = propeller side): physical order along the axis
@@ -271,7 +271,7 @@ def main():
     diag = math.sqrt(sum((max(getattr(b, a + "Max") for b in allbb) - min(getattr(b, a + "Min") for b in allbb)) ** 2 for a in "XYZ"))
     tol = min(0.2, max(0.01, 0.0006 * diag))
     asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), template=meta.get("motor_template"),
-                 tessellation_mm=round(tol, 4))
+                 cad_variant="frameless" if frameless.is_frameless(src) else "full", tessellation_mm=round(tol, 4))
     col = Collector(tol, thread_rules(src) if os.environ.get("FC_THREADS", "1") != "0" else None)
     board_info = add_motor(col, parts)
     glb, st = col.glb(asset)

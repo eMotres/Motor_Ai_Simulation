@@ -34,3 +34,13 @@ t('with a CAD model the fixed parts are added and do NOT scale with the stack; e
   const q = M.scaleMotor(P, K(12), 14);
   assert.equal(a.T_Nm, q.T_Nm); assert.equal(a.P_loss_W, q.P_loss_W); assert.equal(a.P_mech_W, q.P_mech_W);
 });
+
+t('a frameless kit is LIGHTER than the active mass (no shaft tube): a negative fixed part is a real CAD mass, not "no model"', () => {
+  const p = { ...P, mass_partial: false, mass_fixed_kg: -0.0026 };
+  const a = M.scaleMotor(p, K(12), 14);
+  assert.equal(a.mass_partial, false);
+  assert.ok(Math.abs(a.mass_kg - (0.09 - 0.0026)) < 1e-12 && Math.abs(a.mass_active_kg - 0.09) < 1e-12);
+  for (const bad of [null, undefined, NaN, 0]) {                                 // still partial without a usable CAD mass
+    assert.equal(M.scaleMotor({ ...P, mass_partial: false, mass_fixed_kg: bad }, K(12), 14).mass_partial, true);
+  }
+});

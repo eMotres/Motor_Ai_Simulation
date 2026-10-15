@@ -6,6 +6,8 @@ every build manifest.
 
 A.6.0 (2026-10-15): `cad_variant` = full | frameless (frameless.py): the frameless kit omits the housing and the rotating mechanics.
 The full variant builds exactly as A.5.0.
+A.6.1 (2026-10-15): the holder screw length follows the stack (longest stock length that keeps the tip inside the back flange;
+rows screw_tip_margin, holder_screw_max); L12 / L20 / CIANO28 85 L13 keep their lengths.
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.6.0"
+TEMPLATE_VERSION = "A.6.1"

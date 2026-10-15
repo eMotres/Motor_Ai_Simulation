@@ -880,17 +880,7 @@ const FamilyCatalog: React.FC<{
                           {cur.duty ? `${cur.duty}: ` : ''}{fmt(cur.power_kw, 2)} kW · {fmt(cur.torque_nm, 2)} Nm · {fmt(cur.mass_kg, 2)} kg{cur.mass_partial ? ` (${tx('massPartialShort')})` : ''}
                         </Typography>
                       </Tooltip>
-                      {cur.duty && (
-                        <Tooltip title={tx('loadDefaultModeTip', { config: cur.config, duty: cur.duty })}>
-                          <span>
-                            <IconButton size="small" disabled={!!busy || loadRunning}
-                              onClick={() => applyDuty(die.name, cur.config, cur.duty!)}
-                              sx={{ fontSize: 13, p: 0.3, color: '#34d399' }}>
-                              {busy === `${cur.config} / ${cur.duty}` ? '\u2026' : '\u25b6'}
-                            </IconButton>
-                          </span>
-                        </Tooltip>
-                      )}
+                      {/* no load arrow here (owner 2026-10-15): the configuration buttons load the motor */}
                     </>
                   )}
                   <Button size="small" onClick={() => setOpenDie((m) => ({ ...m, [die.name]: !m[die.name] }))}
@@ -930,6 +920,7 @@ const FamilyCatalog: React.FC<{
             <Typography sx={{ fontSize: 11, color: 'var(--text-3)' }}>
               {die.configs.length} configuration{die.configs.length === 1 ? '' : 's'}
             </Typography>
+            {canWrite && (  /* history = rollback, only for those who may edit (owner 2026-10-15) */
             <Tooltip title="History of the die geometry (die.yaml) — every saved version; pick one to roll back.">
               <span>
                 <Button size="small" disabled={!!busy}
@@ -940,6 +931,7 @@ const FamilyCatalog: React.FC<{
                 </Button>
               </span>
             </Tooltip>
+            )}
             {canWrite && (
               <Tooltip title={tx('duplicateTheWholeDieStampedGeometry')}>
                 <span>
@@ -1020,6 +1012,7 @@ const FamilyCatalog: React.FC<{
                     </span>
                   </Tooltip>
                 )}
+                {canWrite && (
                 <Tooltip title="History — every saved version of this configuration (geometry, winding, materials, duties). Pick one to roll back; the current version is kept as a snapshot too.">
                   <span>
                     <Button size="small" disabled={!!busy}
@@ -1030,6 +1023,7 @@ const FamilyCatalog: React.FC<{
                     </Button>
                   </span>
                 </Tooltip>
+                )}
                 {canWrite && (
                   <Tooltip title={tx('duplicateCopyThisConfigurationWithAll')}>
                     <span>

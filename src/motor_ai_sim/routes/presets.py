@@ -141,7 +141,7 @@ def _thumb_path_d(geom, c: float, s: float) -> str:
 #: current one and redraw it; see `report.thumb_svg_for`.
 #:
 #: 1 = the original palette, no band.  2 = app colours + the retaining band.
-THUMB_SVG_VERSION = 2
+THUMB_SVG_VERSION = 3
 
 
 def _gen_thumb_svg(geo: dict):
@@ -186,7 +186,14 @@ def _gen_thumb_svg(geo: dict):
             out.append(f'<path d="{_thumb_path_d(_sl, C, s)}" '
                        f'fill="{COL["sleeve"]}" fill-rule="evenodd"/>')
         # No shaft (owner 2026-10-15): every catalog picture shows the same white rotor bore, whatever the shaft
-        # (solid, tube, reference or none) - the pictures must look alike across the catalog.
+        # (solid, tube, reference or none) - the pictures must look alike across the catalog.  Some rotors are
+        # built solid down to the shaft, so the bore is painted white explicitly at the rotor's inner radius.
+        try:
+            r_in = float(m.parameters.get("rotor_inner_radius") or 0.0)
+        except (TypeError, ValueError):
+            r_in = 0.0
+        if r_in > 0:
+            out.append(f'<circle cx="{C:.2f}" cy="{C:.2f}" r="{r_in * s:.3f}" fill="#ffffff"/>')
         out.append("</svg>")
         return "".join(out)
     except Exception:

@@ -4,7 +4,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   adoptableCoolingFields, coolingMismatch, coolingSourceLine, fieldsMode,
-  isCoolingSource, parseMotorCooling, splitMotorKey,
+  hydrationIsStale, isCoolingSource, ownershipIssue, parseMotorCooling, sameMotor,
+  splitMotorKey, withoutMotorOwned,
 } from '../thermalMotorCooling.ts';
 
 const L155 = { die: 'CIANO10 200 opt', config: 'L155 motor' };
@@ -81,4 +82,39 @@ test('no warning when the result matches, or says nothing', () => {
   // a propeller source solved as air is the same cooling
   assert.equal(coolingMismatch({ cooling: { outer: { mode: 'air' }, frame: 'open' } },
     { coolMode: 'liquid', airSpeedSource: 'propeller', frame: 'open' }), null);
+});
+
+// ── review of PR #218, finding 4: stale hydration and field ownership ─────────
+
+const A = { die: 'CIANO14 40 new', config: 'L12' };
+
+test('a solve under the wrong motor cooling fields is refused by name', () => {
+  assert.equal(ownershipIssue(L155, L155), null);
+  assert.equal(ownershipIssue(null, L155), null);           // nothing hydrated yet
+  assert.equal(ownershipIssue(A, null), null);              // no motor loaded
+  const issue = ownershipIssue(A, L155);
+  assert.match(issue, /CIANO14 40 new L12/);
+  assert.match(issue, /CIANO10 200 opt L155 motor/);
+  assert.equal(sameMotor(A, { ...A }), true);
+  assert.equal(sameMotor(A, L155), false);
+});
+
+test('a hydration that a motor change overtook is stale', () => {
+  // A's GET starts at epoch 0; B's follow bumps the epoch; A's answer lands last
+  assert.equal(hydrationIsStale(0, 1, A, L155), true);
+  // the loaded motor changed with no follow yet
+  assert.equal(hydrationIsStale(0, 0, A, L155), true);
+  assert.equal(hydrationIsStale(0, 0, null, L155), true);
+  assert.equal(hydrationIsStale(0, 0, A, null), true);
+  // nothing moved
+  assert.equal(hydrationIsStale(3, 3, A, { ...A }), false);
+  assert.equal(hydrationIsStale(0, 0, null, null), false);
+});
+
+test('a stale hydration keeps its account-level fields and none of the cooling', () => {
+  const adopted = {
+    coolMode: 'air', frame: 'open', boreMode: 'air', airSpeedSource: 'propeller',
+    propellerId: 'x', propellerContextKey: 'k', maxIter: '9', view: 'flux',
+  };
+  assert.deepEqual(withoutMotorOwned(adopted), { maxIter: '9', view: 'flux' });
 });

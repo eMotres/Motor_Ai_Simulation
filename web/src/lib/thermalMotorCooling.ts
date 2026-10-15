@@ -129,3 +129,50 @@ export function coolingMismatch(
   if (solvedMode === now.mode && solvedFrame === now.frame) return null;
   return { solved: `${solvedMode}/${solvedFrame}`, now: `${now.mode}/${now.frame}` };
 }
+
+/** Every field the server moves with the motor, propeller binding included. */
+export const MOTOR_OWNED_KEYS: readonly string[] = [
+  ...COOLING_FIELD_KEYS, 'airSpeedSource', 'propellerId', 'propellerContextKey',
+];
+
+export function sameMotor(a: MotorIdentity | null | undefined, b: MotorIdentity | null | undefined): boolean {
+  return !!a && !!b && a.die === b.die && a.config === b.config;
+}
+
+/** Why a solve must not use the panel's cooling fields, or `null`.
+ *
+ *  The fields are tagged with the motor they belong to (`fieldsMotor`).  A solve
+ *  of the LOADED motor under the fields of ANOTHER one - a slow hydration that
+ *  landed after a motor change, a follow that never arrived - would solve one
+ *  machine under another's boundary conditions, and the result-vs-fields warning
+ *  cannot see it (both would read the same mode and frame).  Unknown on either
+ *  side (no motor loaded, nothing hydrated yet) is not a mismatch. */
+export function ownershipIssue(
+  fieldsMotor: MotorIdentity | null | undefined, loaded: MotorIdentity | null | undefined,
+): string | null {
+  if (!fieldsMotor || !loaded || sameMotor(fieldsMotor, loaded)) return null;
+  return `the cooling fields shown belong to ${fieldsMotor.die} ${fieldsMotor.config}, `
+    + `not to the loaded ${loaded.die} ${loaded.config} - reload the motor to get its cooling`;
+}
+
+/** A hydration response is stale when a motor change adopted fields while it was
+ *  in flight (`epoch` moved) or the loaded motor is no longer the one it was
+ *  asked for.  A stale response may still carry account-level fields, never
+ *  cooling. */
+export function hydrationIsStale(
+  startEpoch: number, epochNow: number,
+  startMotor: MotorIdentity | null, motorNow: MotorIdentity | null,
+): boolean {
+  if (startEpoch !== epochNow) return true;
+  return (startMotor === null) !== (motorNow === null)
+    || (startMotor !== null && !sameMotor(startMotor, motorNow));
+}
+
+/** `adopted` without any motor-owned field (a stale hydration's account-level rest). */
+export function withoutMotorOwned<T extends Record<string, unknown>>(adopted: T): Partial<T> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(adopted)) {
+    if (!MOTOR_OWNED_KEYS.includes(k)) out[k] = v;
+  }
+  return out as Partial<T>;
+}

@@ -155,7 +155,10 @@ def test_put_moves_thermal_cooling_to_the_new_motors_application(last_motor_api,
     h = _headers("Bearer account-a")
 
     first = client.put("/api/me/last_motor", headers=h, json={"selection": prop}).json()
-    assert first["thermal"]["changed"] is False          # first load, manual record: untouched
+    # the first load INITIALISES the account's cooling for the motor (2026-10-15
+    # review): its application's rule, not whatever a blank record would mean
+    assert first["thermal"]["settings"]["airSpeedSource"] == "propeller"
+    assert first["thermal"]["source"] == "application"
     ts._save_thermal_patch("a@example.com", {
         "coolMode": "air", "airSpeedSource": "propeller", "propellerId": "p1",
         "propellerContextKey": "a@example.com|CIANO14 40 new|L12|cat_ciano14"})

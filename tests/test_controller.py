@@ -1611,7 +1611,8 @@ def _live_thermal(monkeypatch, **fields):
     from motor_ai_sim import thermal_settings as ts
     from motor_ai_sim.routes import controller as rc
     monkeypatch.setattr(rc, "_thermal_live_cooling",
-                        lambda authorization=None: ts.cooling_fields(fields))
+                        lambda authorization=None, die=None, cfg=None:
+                        ts.cooling_fields(fields))
 
 
 def test_thermal_cooling_for_mode_air_forced_from_the_live_thermal_tab(monkeypatch):

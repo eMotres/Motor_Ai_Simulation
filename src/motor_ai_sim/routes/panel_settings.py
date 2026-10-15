@@ -27,8 +27,9 @@ not the open frame and 20 m/s bore air of the 40 mm propeller motor.  The
      "source": "saved|config|application", # where they came from
      "by_motor": {"<die>|<config>": {"settings": {...}, "updated_at": "..."}}}
 
-A save from the panel writes ``by_motor`` for the motor it names (``motor`` in the
-body) or, when it names none, for the motor the account has loaded.
+A save from the panel names the motor its fields belong to (``motor`` in the body);
+``thermal_settings.apply_thermal_save`` decides what it may change: a motor record
+only for a cooling edit, the active settings only when that motor is the loaded one.
 """
 from __future__ import annotations
 
@@ -46,8 +47,6 @@ _LOCK = threading.Lock()
 _PANELS = ("mechanical", "thermal", "simulation", "mesh", "sweep")
 _MAX_KEYS = 200
 _MAX_BYTES = 64 * 1024
-#: Motors one account's Thermal panel remembers; the least recently saved goes.
-_MAX_MOTORS = 200
 
 
 def motor_key(die: Any, config: Any) -> str:
@@ -160,13 +159,15 @@ def put_panel_settings(panel: str = Path(...),
             "invalid_parameters": ["settings"]})
     who = _who(authorization)
     stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "+00:00"
-    key = _thermal_save_key(body, authorization) if panel == "thermal" else ""
+    key = _thermal_save_key(body) if panel == "thermal" else ""
     with _LOCK:
         d = _load()
         prev = (d.get(panel) or {}).get(who) or {}
-        entry: Dict[str, Any] = {"settings": s, "updated_at": stamp}
         if panel == "thermal":
-            entry.update(_thermal_entry_extras(prev, s, key, stamp))
+            from motor_ai_sim.thermal_settings import apply_thermal_save
+            entry = apply_thermal_save(prev, s, key, stamp, who, authorization)
+        else:
+            entry = {"settings": s, "updated_at": stamp}
         d.setdefault(panel, {})[who] = entry
         _save(d)
     out = {"panel": panel, "user": who, "settings": s, "updated_at": stamp}
@@ -175,43 +176,13 @@ def put_panel_settings(panel: str = Path(...),
     return out
 
 
-def _thermal_save_key(body: Dict[str, Any], authorization: Optional[str]) -> str:
-    """The motor a Thermal save belongs to: the one the panel names (it knows
-    which motor its fields were loaded for), else the account's loaded motor,
-    else ``""`` (nothing per-motor is written)."""
+def _thermal_save_key(body: Dict[str, Any]) -> str:
+    """The motor a Thermal save belongs to: only the one the panel NAMES (it
+    knows which motor its fields were loaded for).  A body that names none is
+    never attributed to the account's loaded motor - the motor may have changed
+    since the old snapshot was taken - so it can not write a motor record
+    (:func:`motor_ai_sim.thermal_settings.apply_thermal_save`)."""
     m = body.get("motor") if isinstance(body, dict) else None
     if isinstance(m, dict):
-        key = motor_key(m.get("die"), m.get("config"))
-        if key:
-            return key
-    try:
-        from motor_ai_sim.routes.account import get_last_motor
-        sel = (get_last_motor(authorization=authorization) or {}).get("selection")
-        if isinstance(sel, dict):
-            return motor_key(sel.get("die"), sel.get("config"))
-    except Exception:  # noqa: BLE001 — anonymous / unreadable: no per-motor record
-        pass
+        return motor_key(m.get("die"), m.get("config"))
     return ""
-
-
-def _thermal_entry_extras(prev: Dict[str, Any], s: Dict[str, Any], key: str,
-                          stamp: str) -> Dict[str, Any]:
-    """What a Thermal save keeps from the previous entry and adds for ``key``:
-    every other motor's record untouched, this motor's record replaced."""
-    by_motor = {k: v for k, v in (prev.get("by_motor") or {}).items()
-                if isinstance(v, dict)} if isinstance(prev.get("by_motor"), dict) else {}
-    extras: Dict[str, Any] = {}
-    if key:
-        by_motor[key] = {"settings": s, "updated_at": stamp}
-        if len(by_motor) > _MAX_MOTORS:
-            oldest = sorted(by_motor, key=lambda k: str(by_motor[k].get("updated_at") or ""))
-            for k in oldest[:len(by_motor) - _MAX_MOTORS]:
-                by_motor.pop(k, None)
-        extras.update(motor=key, source="saved")
-    elif prev.get("motor"):
-        # A save that names no motor changes the last-used fields only; they no
-        # longer provably belong to the motor the entry named.
-        extras.update(motor=prev.get("motor"), source=prev.get("source") or "saved")
-    if by_motor:
-        extras["by_motor"] = by_motor
-    return extras

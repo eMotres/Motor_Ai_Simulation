@@ -580,14 +580,18 @@ COOLING_THERMAL_FIELDS = ("air_speed_mps", "t_ambient_c", "coolant",
                           "flow_lpm", "t_in_c")
 
 
-def _thermal_live_cooling(authorization: Optional[str]) -> Dict[str, Any]:
-    """``thermal_settings.cooling_fields()`` of whatever the Thermal tab is
-    CURRENTLY set to for this user — ``{}`` on any failure (a missing store
-    is an empty store, never a 500, the same rule ``thermal_panel_settings``
-    itself states)."""
+def _thermal_live_cooling(authorization: Optional[str],
+                          die: Optional[str] = None,
+                          cfg: Optional[str] = None) -> Dict[str, Any]:
+    """``thermal_settings.cooling_fields()`` of the Thermal settings of the motor
+    the request is FOR (``die`` / ``cfg``; the loaded motor when it names none) —
+    never another motor's, which is what an account-wide read would hand a
+    controller request for a machine that is not the active one.  ``{}`` on any
+    failure (a missing store is an empty store, never a 500, the same rule
+    ``thermal_panel_settings`` itself states)."""
     try:
         from motor_ai_sim import thermal_settings as _TS
-        raw = _TS.thermal_panel_settings(authorization)
+        raw = _TS.thermal_panel_settings(authorization, die=die, config=cfg)
         return _TS.cooling_fields(raw) if raw else {}
     except Exception:                                       # noqa: BLE001
         return {}
@@ -665,7 +669,7 @@ def _thermal_cooling_for_mode(mode: str, die: Optional[str], cfg: Optional[str],
     if want is None:
         return {"fields": {}, "source": None, "thermal_mode": None,
                 "note": f"unknown cooling mode {mode!r}"}
-    live = _thermal_live_cooling(authorization)
+    live = _thermal_live_cooling(authorization, die, cfg)
     live_mode = str(live.get("cooling_mode") or "").strip().lower()
     if live_mode == want:
         return {"fields": _map_thermal_to_controller_cooling(mode, live),

@@ -30,7 +30,8 @@ import { normalizeLocalRows } from '../components/compare/resultRows';
 import type { LocalRow } from '../components/compare/resultRows';
 import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
 import {
-  adoptableCoolingFields, isCoolingSource, parseMotorCooling, splitMotorKey,
+  adoptableCoolingFields, hydrationIsStale, isCoolingSource, ownershipIssue,
+  parseMotorCooling, splitMotorKey, withoutMotorOwned,
 } from '../lib/thermalMotorCooling';
 import type { CoolingSource, MotorIdentity } from '../lib/thermalMotorCooling';
 // `registerThermalPanelBlock` — the Electromagnetic tab's OWN coupled Run
@@ -345,6 +346,11 @@ const COOLING_PERSISTED = new Set<string>([
   'emissivity', 'heatPath', 'endFaces', 'endFaceSides',
 ]);
 
+/** Bumped every time the server's fields for a newly loaded motor are adopted.
+ *  A hydration that started before the bump is OLD: it carries the fields of the
+ *  motor that was loaded when it asked, and must not reinstall them. */
+let followEpoch = 0;
+
 /** Remember how long this kind of solve took, so the NEXT one can say "~40 s".
  *
  *  Written both to the store (the timer re-renders) and to localStorage (the
@@ -593,7 +599,10 @@ function panelCooling(s: ThermalState): Record<string, string> {
  *  panel (the same rule `registerThermalPanelBlock` below follows). */
 export function thermalPanelBlock(): Record<string, string> | null {
   const s = useThermalStore.getState();
-  return s.hydrated ? panelCooling(s) : null;
+  // Fields tagged with ANOTHER motor are not sent: the backend then resolves the
+  // loaded motor's own record (2026-10-15).
+  if (!s.hydrated || ownershipIssue(s.fieldsMotor, loadedMotorIdentity())) return null;
+  return panelCooling(s);
 }
 
 /** The Electromagnetic tab's coupled Run reads the cooling from HERE too
@@ -603,7 +612,7 @@ export function thermalPanelBlock(): Record<string, string> | null {
  *  old per-key `therm.*` read shipped a `liquid` mode without its flow. */
 registerThermalPanelBlock(() => {
   const s = useThermalStore.getState();
-  if (!s.hydrated) return null;
+  if (!s.hydrated || ownershipIssue(s.fieldsMotor, loadedMotorIdentity())) return null;
   const out = panelCooling(s);
   const it = String(s.maxIter ?? '').trim();
   if (it !== '') out.maxIter = it;
@@ -760,6 +769,10 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     // browser, solved or not.  Written straight into state (not via `set`) so
     // the adoption does not echo back as a save.
     try {
+      // The motor and the follow epoch this request is made for: a response that
+      // arrives after another motor's fields were adopted is stale.
+      const epoch0 = followEpoch;
+      const motor0 = loadedMotorIdentity();
       const srv = await loadPanelSettings('thermal');
       const adopted = adoptSettings(get() as unknown as Record<string, unknown>, srv?.settings, PERSISTED as string[]);
       // The stack is a LIST of objects, not a text field: what the server holds
@@ -790,16 +803,24 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
       if (srvS && ('heatPath' in srvS || 'mountG' in srvS || 'mountMode' in srvS)) {
         (adopted as Record<string, unknown>).heatPath = heatPathOf(srvS);
       }
-      if (Object.keys(adopted).length) set(adopted as Partial<ThermalState>);
+      // A STALE response (a motor change adopted its own fields while this was in
+      // flight) keeps only the account-level fields: its cooling is the previous
+      // motor's and must not be reinstalled over the new one's.
+      const stale = hydrationIsStale(epoch0, followEpoch, motor0, loadedMotorIdentity());
+      const toSet = stale ? withoutMotorOwned(adopted) : adopted;
+      if (Object.keys(toSet).length) set(toSet as Partial<ThermalState>);
       // WHICH MOTOR these fields are for (2026-10-15) - the server says; a
       // record from before per-motor settings names none, and the loaded motor
-      // (the one it was last used with) stands in for it.
-      const motor = splitMotorKey(srv?.motor) ?? loadedMotorIdentity();
-      set({
-        fieldsMotor: motor,
-        coolingSource: isCoolingSource(srv?.source) ? (srv?.source as CoolingSource) : (motor ? 'last_used' : null),
-        coolingApp: srv?.application ?? null,
-      });
+      // (the one it was last used with) stands in for it.  A solve of any other
+      // loaded motor is refused until the fields are that motor's (`ownershipIssue`).
+      if (!stale) {
+        const motor = splitMotorKey(srv?.motor) ?? loadedMotorIdentity();
+        set({
+          fieldsMotor: motor,
+          coolingSource: isCoolingSource(srv?.source) ? (srv?.source as CoolingSource) : (motor ? 'last_used' : null),
+          coolingApp: srv?.application ?? null,
+        });
+      }
     } catch { /* offline: localStorage already seeded the state */ }
     set({ serverSettingsLoaded: true });
     try {
@@ -917,7 +938,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
     // Never send a boundary condition that cannot be solved (a liquid loop with
     // no pump, no cooled surface at all): the panel disables Solve on the same
     // verdict, and this is the second lock on the same door.
-    const bad = coolingIssue(s) ?? propellerContextIssue(s);
+    const bad = coolingIssue(s) ?? propellerContextIssue(s)
+      ?? ownershipIssue(s.fieldsMotor, loadedMotorIdentity());
     if (bad) { set({ field: { ...s.field, busy: false, err: bad } }); return; }
     set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() },
           emMissing: null, emMissingReason: null });
@@ -956,7 +978,8 @@ export const useThermalStore = create<ThermalState>()((set, get) => ({
    *  `emMissing`, exactly as the field Solve's does. */
   solveCoupled: async () => {
     const s = get();
-    const bad = coolingIssue(s) ?? propellerContextIssue(s);
+    const bad = coolingIssue(s) ?? propellerContextIssue(s)
+      ?? ownershipIssue(s.fieldsMotor, loadedMotorIdentity());
     if (bad) { set({ coupled: { ...s.coupled, busy: false, err: bad } }); return; }
     set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() },
           emMissing: null, emMissingReason: null });
@@ -1012,6 +1035,7 @@ registerThermalFollow((answer) => {
   // into "your saved settings" just because it was shown.
   const mc = parseMotorCooling(answer);
   if (mc) {
+    followEpoch += 1;
     const f = adoptableCoolingFields(mc.fields);
     const next: Partial<ThermalState> = {
       ...(f as unknown as Partial<ThermalState>),

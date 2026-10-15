@@ -68,22 +68,48 @@ def _unit(v):
     return [c / n for c in v]
 
 
-def thread_extras(kind, radius, length, axis, origin):
-    """The `extras` dict of a thread node, or None when the radius matches no ISO coarse size.  `axis` is normalised and given the
-    canonical sign (first non-zero component positive) so the record is deterministic; `origin` is the point of the axis where the
-    threaded length starts, running `length` along the (canonical) axis."""
+def socket_head_thread_length(d, length, pitch):
+    """Threaded length (mm, from the tip) of a socket head cap screw of nominal size d and length under the head `length`
+    (ISO 4762 / DIN 912): b = 2 d + 12 for lengths up to 125 mm (M2 16, M2.5 17, M3 18, M4 20, M5 22 ...).  A screw is fully threaded
+    when the plain part under the head would be shorter than about two pitches (length <= b + 2 P)."""
+    b = 2.0 * d + 12.0
+    return length if length <= b + 2.0 * pitch else b
+
+
+def socket_head_band(face, solid, b):
+    """Axial band (t0, t1) of the thread on a screw shank, or None.  `face` = (f0, f1) the shank cylinder face and `solid` = (s0, s1) the
+    whole screw along the same axis coordinate.  The tip is the end where the solid reaches less far beyond the face (the chamfer, 0.4
+    mm) than at the head end (head, 2 mm); the thread runs `b` from the tip, clipped to the face, never under the head."""
+    f0, f1 = face
+    s0, s1 = solid
+    if (f0 - s0) < (s1 - f1):                     # tip at the low end
+        t0, t1 = max(f0, s0), min(f1, s0 + b)
+    else:
+        t0, t1 = max(f0, s1 - b), min(f1, s1)
+    return (t0, t1) if t1 - t0 > 1e-9 else None
+
+
+def thread_extras(kind, radius, length, axis, origin, start=0.0):
+    """The `extras` dict of a thread node, or None when the radius matches no ISO coarse size.  The threaded band runs from `start`
+    to `start + length` along `axis` measured from `origin` (the whole face: start 0, length = the face length).  `axis` is normalised
+    and given the canonical sign (first non-zero component positive) so the record is deterministic; `origin` in the record is the axis
+    point where the threaded length starts, running `length_mm` along the canonical axis; for an axis along Z `z_range_mm` is the
+    threaded z interval."""
     t = thread_for(kind, radius)
     if t is None:
         return None
     d, p = t
     ax = [c + 0.0 for c in _unit(axis)]
-    origin = list(origin)
+    origin = [o + a * start for o, a in zip(origin, ax)]
     for c in ax:                                  # canonical sign: the first non-zero component positive
         if abs(c) > 1e-9:
             if c < 0:                             # flip the axis and start the length at the other end, so origin + t * axis,
-                origin = [o + a * length for o, a in zip(origin, ax)]      # t in [0, length], still covers the same face
+                origin = [o + a * length for o, a in zip(origin, ax)]      # t in [0, length], still covers the same band
                 ax = [-x for x in ax]
             break
-    return {"thread": {"kind": kind, "d_mm": d, "pitch_mm": p, "length_mm": round(length, 4), "standard": STANDARD,
-                       "designation": designation(d, p), "radius_mm": round(radius, 5), "axis": [round(x, 6) + 0.0 for x in ax],
-                       "origin": [round(x, 5) + 0.0 for x in origin], "hand": "right"}}
+    rec = {"kind": kind, "d_mm": d, "pitch_mm": p, "length_mm": round(length, 4), "standard": STANDARD,
+           "designation": designation(d, p), "radius_mm": round(radius, 5), "axis": [round(x, 6) + 0.0 for x in ax],
+           "origin": [round(x, 5) + 0.0 for x in origin], "hand": "right"}
+    if abs(ax[0]) < 1e-9 and abs(ax[1]) < 1e-9:
+        rec["z_range_mm"] = [round(origin[2], 5) + 0.0, round(origin[2] + length, 5) + 0.0]
+    return {"thread": rec}

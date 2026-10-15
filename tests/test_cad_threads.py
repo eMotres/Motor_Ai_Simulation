@@ -67,6 +67,64 @@ def cap(z, r=1.0, seg=16):
     return G.Mesh(v, [(0, 1 + k, 1 + (k + 1) % seg) for k in range(seg)])
 
 
+def _cross(m, t):
+    a, b, c = (m.vertices[i] for i in t)
+    u = [b[k] - a[k] for k in range(3)]
+    v = [c[k] - a[k] for k in range(3)]
+    return [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]]
+
+
+def test_split_by_slab_keeps_area_and_winding_and_shares_cut_vertices():
+    c = cyl(r=1.0, z0=0.0, z1=10.0, seg=16)
+    area = lambda m: sum(0.5 * math.sqrt(sum(x * x for x in _cross(m, t))) for t in m.triangles)
+    inside, outside = G.split_by_slab(c, (0, 0, 0), (0, 0, 1), 2.0, 7.0)
+    assert len(outside) == 2
+    parts = [inside] + outside
+    assert sum(area(p) for p in parts) == pytest.approx(area(c), rel=1e-9)               # no area lost or added
+    zs = [v[2] for v in inside.vertices]
+    assert min(zs) == pytest.approx(2.0) and max(zs) == pytest.approx(7.0)
+    assert max(v[2] for v in outside[0].vertices) == pytest.approx(2.0) and min(v[2] for v in outside[1].vertices) == pytest.approx(7.0)
+    for p in parts:                                                                      # outward winding kept
+        for t in p.triangles:
+            n = _cross(p, t)
+            cx = sum(p.vertices[i][0] for i in t) / 3
+            cy = sum(p.vertices[i][1] for i in t) / 3
+            assert n[0] * cx + n[1] * cy > 0
+    assert len(inside.vertices) == 4 * 16              # 16 vertical + 16 diagonal edges cut per plane, each cut once (shared): smooth normals
+    whole, none = G.split_by_slab(c, (0, 0, 0), (0, 0, 1), -1.0, 11.0)
+    assert none == [] and len(whole.triangles) == len(c.triangles) and len(whole.vertices) == len(c.vertices)
+    empty, rest = G.split_by_slab(c, (0, 0, 0), (0, 0, 1), 20.0, 30.0)
+    assert empty is None and len(rest) == 1 and len(rest[0].triangles) == len(c.triangles)
+
+
+def test_socket_head_thread_length_follows_iso_4762():
+    assert [TH.socket_head_thread_length(d, 40, TH.coarse_pitch(d)) for d in (2.0, 2.5, 3.0, 4.0, 5.0)] == [16.0, 17.0, 18.0, 20.0, 22.0]
+    assert TH.socket_head_thread_length(2.0, 25, 0.4) == 16.0          # CIANO14 40 L20: M2x25, 9 mm plain under the head
+    assert TH.socket_head_thread_length(2.0, 17, 0.4) == 16.0          # L12: M2x17, 1 mm plain (more than 2 pitches)
+    assert TH.socket_head_thread_length(2.0, 12, 0.4) == 12            # short screw: fully threaded
+    assert TH.socket_head_thread_length(2.0, 16.5, 0.4) == 16.5        # plain part under 2 pitches: fully threaded
+
+
+def test_screw_band_runs_from_the_tip_never_under_the_head():
+    # shank face z -11.5..13.1, screw -11.9 (tip chamfer 0.4) .. 15.1 (head 2.0): the thread is 16 from the tip, clipped to the face
+    t0, t1 = TH.socket_head_band((-11.5, 13.1), (-11.9, 15.1), 16.0)
+    assert (round(t0, 6), round(t1, 6)) == (-11.5, 4.1)
+    t0, t1 = TH.socket_head_band((-13.1, 11.5), (-15.1, 11.9), 16.0)      # the same screw with the axis the other way round
+    assert (round(t0, 6), round(t1, 6)) == (-4.1, 11.5)
+    assert TH.socket_head_band((-11.5, 13.1), (-11.9, 15.1), 40.0) == (-11.5, 13.1)     # fully threaded: the whole face
+    assert TH.socket_head_band((0, 1), (-0.4, 3.0), 0.0) is None
+
+
+def test_extras_carry_the_threaded_z_range_and_start_offset():
+    ex = TH.thread_extras("external", 1.0, 15.6, (0, 0, 1), (7.4, 12.9, -11.5))["thread"]
+    assert ex["z_range_mm"] == [-11.5, 4.1] and ex["length_mm"] == 15.6
+    ex = TH.thread_extras("external", 1.0, 4.0, (0, 0, 1), (0, 0, 10.0), start=2.0)["thread"]
+    assert ex["origin"][2] == 12.0 and ex["z_range_mm"] == [12.0, 16.0]
+    ex = TH.thread_extras("external", 1.0, 4.0, (0, 0, -1), (0, 0, 10.0), start=2.0)["thread"]   # axis down: the band is z 4 .. 8
+    assert ex["axis"] == [0.0, 0.0, 1.0] and ex["z_range_mm"] == [4.0, 8.0]
+    assert "z_range_mm" not in TH.thread_extras("external", 1.0, 4.0, (1, 0, 0), (0, 0, 0))["thread"]
+
+
 def test_thread_node_carries_extras_and_the_geometry_hash_does_not_change():
     ex = TH.thread_extras("external", 1.0, 4.0, (0, 0, 1), (0, 0, 0))
     plain = G.Group("Screws", (0.85, 0.86, 0.87), extras={"family": "Screws", "explode": 2.6})
@@ -114,10 +172,12 @@ def _freecadcmd():
 
 
 @pytest.mark.skipif(not E2E or _freecadcmd() is None, reason="set MOTRES_CAD_E2E=1 with FreeCAD installed")
-@pytest.mark.parametrize("profile,tapped,screw_d,screws,variant", [("CIANO14_40_12.json", {2.0, 3.0}, 2.0, 6, "full"),
-                                                                    ("CIANO28_85_20SW1200.json", {2.5, 3.0}, 2.5, 6, "full"),
-                                                                    ("CIANO28_85_20SW1200.json", set(), None, 0, "frameless")])
-def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, profile, tapped, screw_d, screws, variant):
+@pytest.mark.parametrize("profile,tapped,screw_d,screws,variant,over", [
+    ("CIANO14_40_12.json", {2.0, 3.0}, 2.0, 6, "full", ""),
+    ("CIANO28_85_20SW1200.json", {2.5, 3.0}, 2.5, 6, "full", ""),
+    ("CIANO28_85_20SW1200.json", {2.5, 3.0}, 2.5, 6, "full", "motor_length=15 mm"),       # 85 L15: M2.5 x 22 (template A.6.1)
+    ("CIANO28_85_20SW1200.json", set(), None, 0, "frameless", "")])
+def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, profile, tapped, screw_d, screws, variant, over):
     root = os.path.dirname(store.CAD_DIR)
     out = tmp_path / "out"
     pfile = os.path.join(store.CAD_DIR, "reference", profile)
@@ -127,7 +187,7 @@ def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, p
         pfile = str(tmp_path / "frameless_profile.json")
         json.dump(pj, open(pfile, "w", encoding="utf-8"))
     cmd = [sys.executable, os.path.join(store.CAD_DIR, "run_build.py"), "build", "--profile-file", pfile,
-           "--out-dir", str(out), "--no-gui", "--no-bom"]
+           "--out-dir", str(out), "--no-gui", "--no-bom"] + (["--set", over] if over else [])
     subprocess.run(cmd, check=True, cwd=root, timeout=3600)
     glb = next(p for p in out.iterdir() if p.name.endswith("_full.glb"))
     doc, _ = G.parse_glb(glb.read_bytes())
@@ -135,12 +195,20 @@ def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, p
     assert doc["asset"]["extras"]["cad_variant"] == variant
     screw_nodes = [t for n, t in th if n.startswith("Screw_")]
     assert len(screw_nodes) == screws and all(t["kind"] == "external" and t["d_mm"] == screw_d for t in screw_nodes)
-    assert all(t["pitch_mm"] == TH.coarse_pitch(screw_d) and t["length_mm"] > 3 for t in screw_nodes)
+    # only the ISO 4762 thread length b = 2d + 12 from the tip, never the whole shank (M2x25: b 16, 9 mm plain under the head)
+    assert all(t["pitch_mm"] == TH.coarse_pitch(screw_d) and 3 < t["length_mm"] <= 2 * screw_d + 12 + 1e-6 for t in screw_nodes)
+    if profile.startswith("CIANO14"):                                        # L20 = M2x25, tip z -11.9, head under-side z 13.1
+        assert all(abs(t["z_range_mm"][0] + 11.5) < 1e-3 and abs(t["z_range_mm"][1] - 4.1) < 1e-3 for t in screw_nodes)
+        shaft = [t for n, t in th if n.startswith("Shaft_thread")]           # the thread is on the shaft's free END: the tip section
+        assert len(shaft) == 1 and shaft[0]["d_mm"] == 5.0 and shaft[0]["pitch_mm"] == 0.8 and shaft[0]["kind"] == "external"
+        assert shaft[0]["z_range_mm"] == pytest.approx([28.7, 36.7], abs=1e-3)
+    if over:                                                                 # L15: the longer stack takes the M2.5 x 22, plain 5 mm under the head
+        assert all(abs(t["length_mm"] - 16.779) < 0.05 and abs(t["z_range_mm"][1] - 5.6) < 0.05 for t in screw_nodes)
     holes = [t for n, t in th if n.startswith("Stator_holder_back")]
     assert all(t["kind"] == "internal" for t in holes) and {t["d_mm"] for t in holes} == tapped
     if variant == "frameless":
         assert not th and not any(n["name"].startswith(("Screw_", "Stator_holder", "Shaft")) for n in doc["nodes"])
-    # the geometry is identical with the thread split switched off (FC_THREADS=0): same groups, triangle counts, vertices, volumes
+    # compare with the export with the thread split switched off (FC_THREADS=0)
     # (exact triangle equality is not a given: OCC may pick other diagonals in planar faces from run to run)
     fcstd = next(p for p in out.iterdir() if p.name.endswith(".FCStd"))
     plain_dir = tmp_path / "plain"
@@ -152,4 +220,13 @@ def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, p
     assert code == 0, st
     plain = G.parse_glb((plain_dir / "plain_full.glb").read_bytes())[0]
     assert not [n for n in plain["nodes"] if "extras" in n and "thread" in n["extras"]]
-    assert G.glb_group_signature((plain_dir / "plain_full.glb").read_bytes()) == G.glb_group_signature(glb.read_bytes())
+    # geometry unchanged: every group has the same enclosed volume and keeps all its vertices; only the screw shank is cut at the end
+    # of its thread, which ADDS the vertices of the cut circle (OCC may also pick other planar-face diagonals from run to run)
+    a_ = G.glb_group_data((plain_dir / "plain_full.glb").read_bytes())
+    b_ = G.glb_group_data(glb.read_bytes())
+    assert set(a_) == set(b_)
+    for k in a_:
+        assert round(a_[k][2], 2) == round(b_[k][2], 2), k
+        assert a_[k][1] <= b_[k][1], k
+        if k != "Screws":
+            assert a_[k][:2] == b_[k][:2], k

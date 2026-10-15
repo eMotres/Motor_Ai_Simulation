@@ -119,21 +119,24 @@ def face_axis_extent(f):
 
 
 def thread_rules(src):
-    """{solid name or 'Screw_' prefix: [(kind, cylinder radius)]}: which smooth cylinders carry a thread (the same faces the GUI
-    finish colours as cosmetic threads, view.thread_face_indices): the screw shanks (external, shank radius), the tapped holes of
-    the back holder (internal, tap radius), the shaft thread M5 (external) or, on the ring carrier, its M3 hub holes (internal)."""
+    """{solid name or 'Screw_' prefix: [(kind, cylinder radius, mode, screw length)]}: which smooth cylinders carry a thread:
+      screw shanks   external, shank radius; mode 'screw' = the ISO 4762 thread length b from the tip only, never under the head
+      back holder    internal, tapping-hole radius (the whole hole face is the tapped depth)
+      shaft          external M5 on the free END: the tip section (shaft_tip_r, z shaft_thread_end_z .. shaft_front_end_z, the part the
+                     propeller nut runs on), NOT the shaft_thread_r section next to the journal, which passes through the propeller
+                     plate's clearance hole (owner 2026-10-15: the thread is at the end)
+      ring carrier   internal M3 hub holes."""
     sh = src.getObject("Params")
     g = lambda n: ps.pval(sh, n)
     carrier = not ps.has_param(sh, "shaft_thread_r")
     shank = g("screw_shank_d") if ps.has_param(sh, "screw_shank_d") else g("bolt_d")
-    rules = {"Screw_": [("external", shank / 2)],
-             "Stator_holder_back": [("internal", g("holder_tap_d") / 2), ("internal", g("back_screw_tap_d") / 2)],
-             "Shaft": [("internal", g("carrier_hole_d") / 2)] if carrier else [("external", g("shaft_thread_r"))]}
-    return rules
+    return {"Screw_": [("external", shank / 2, "screw", g("holder_screw_l"))],
+            "Stator_holder_back": [("internal", g("holder_tap_d") / 2, None, None), ("internal", g("back_screw_tap_d") / 2, None, None)],
+            "Shaft": [("internal", g("carrier_hole_d") / 2, None, None)] if carrier else [("external", g("shaft_tip_r"), None, None)]}
 
 
-def thread_finder(rules, node):
-    """thread_of(face) for the solid `node`, or None when the solid has no thread rules."""
+def thread_finder(rules, node, shape):
+    """thread_of(face) for the solid `node` (`shape`), or None when the solid has no thread rules."""
     rs = rules.get(node) or next((v for k, v in rules.items() if k.endswith("_") and node.startswith(k)), None)
     if not rs:
         return None
@@ -141,10 +144,21 @@ def thread_finder(rules, node):
     def thread_of(f):
         if f.Surface.__class__.__name__ != "Cylinder":
             return None
-        for kind, r in rs:
+        for kind, r, mode, length in rs:
             if abs(f.Surface.Radius - r) < 1e-6:
                 ax, o, ln = face_axis_extent(f)
-                return TH.thread_extras(kind, r, ln, ax, o)
+                start, run = 0.0, ln
+                if mode == "screw":
+                    t = TH.thread_for(kind, r)
+                    if t is None:
+                        return None
+                    a = App.Vector(*ax)
+                    ts = [(v.Point - App.Vector(*o)).dot(a) for v in shape.Vertexes]
+                    band = TH.socket_head_band((0.0, ln), (min(ts), max(ts)), TH.socket_head_thread_length(t[0], length, t[1]))
+                    if band is None:
+                        return None
+                    start, run = band[0], band[1] - band[0]
+                return TH.thread_extras(kind, r, run, ax, o, start)
         return None
     return thread_of
 
@@ -168,9 +182,16 @@ class Collector:
                                              metallic=metallic, roughness=roughness)
         b = budget_of(node)
         patches, vol, tpatches = tessellate(shape, budgeted_tol(shape, self.tol, b) if b else self.tol,
-                                            thread_finder(self.rules, node))
+                                            thread_finder(self.rules, node, shape))
+        bands = []
+        for m, ex in tpatches:             # a thread node is exactly its axial band: the rest of the face stays smooth in the solid's node
+            t = ex["thread"]
+            inside, outside = G.split_by_slab(m, t["origin"], t["axis"], 0.0, t["length_mm"])
+            patches += outside
+            if inside is not None:
+                bands.append((inside, ex))
         g.add(node, patches)
-        for k, (m, ex) in enumerate(tpatches):
+        for k, (m, ex) in enumerate(bands):
             g.add("%s_thread%d" % (node, k + 1), [m], ex)
             self.threads.append((node, ex["thread"]))
         if check and shape.Volume > 0:

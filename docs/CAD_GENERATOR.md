@@ -319,8 +319,20 @@ material, so the same colour) and gives the node `extras.thread`:
 minor diameter D1 is nearest) and `pitch_mm` comes from the ISO 261 coarse table in `cad/fc_scripts/threads.py` (the template states no
 pitch); `axis` is a unit vector (first non-zero component positive), `origin` the axis point where the threaded `length_mm` starts.  A
 radius that matches no coarse size gets no record (a smooth face).  The BOM rows of the screws and of the back holder state the same thread
-(`thread M2x0.4 (ISO 261)`).  The meshes are the same triangles as before: `geometry_sha256` (asset extras and `_models3d.json`) is a hash
-over the sorted triangles per group, unchanged by the split; `FC_THREADS=0` writes the file without the thread nodes for comparison.
+(`thread M2x0.4 (ISO 261)`).  Faces that are threaded over their whole length keep exactly the triangles they had: `geometry_sha256` (asset extras and `_models3d.json`) is a hash
+over the sorted triangles per group; `FC_THREADS=0` writes the file without the thread nodes for comparison.
+
+**Where the thread is (fix 2026-10-15, owner: "the thread must be at the end").** A thread node is exactly the threaded axial band, and
+`extras.thread` states it (`origin` + `length_mm` along `axis`; for an axis along Z also `z_range_mm`, the threaded z interval):
+
+| Part | Threaded band |
+|---|---|
+| Screw shank | the ISO 4762 / DIN 912 thread length b = 2 d + 12 mm (M2 16, M2.5 17, M3 18; for lengths up to 125 mm) measured from the screw TIP, clipped to the shank face, never under the head; a screw whose plain part under the head would be shorter than 2 pitches (length <= b + 2 P) is fully threaded.  CIANO14 40 L20 (M2 x 25): z -11.5 .. 4.1, 9 mm plain under the head. |
+| Tapped hole (back holder, ring-carrier hub holes) | the whole hole face = the tapped depth the template models |
+| Shaft | the free END: the `shaft_tip_r` section (z `shaft_thread_end_z` .. `shaft_front_end_z`, CIANO14 40: 28.7 .. 36.7), the part the propeller nut runs on.  The `shaft_thread_r` section next to the journal (z 20.7 .. 28.7) passes through the propeller plate's clearance hole and is NOT threaded (Fusion's cosmetic thread diameter 4.901 is the tip's, not the 4.95 section's).  The GUI cosmetic colouring (`view.thread_face_indices`, checked by `check_gui.py`) and the `thread` block of the datums JSON (`neck` = the smooth section) follow the same face. |
+
+The rest of a cut face stays smooth in the solid's own node: the shank cylinder is cut at the end of the thread by `glb_writer.split_by_slab`
+(winding kept, cut edges share one new vertex, no area or volume lost), so the geometry is the original plus the vertices of the cut.
 
 The viewer (`web/src/lib/threadTexture.ts`, `components/model3d/modelViewer.ts`) gives each such mesh cylindrical texture coordinates
 (u = angle round the axis, v = axial distance / pitch, so the pitch is exact) and ONE shared procedurally generated normal map (128 x 128,

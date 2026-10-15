@@ -114,21 +114,32 @@ def _freecadcmd():
 
 
 @pytest.mark.skipif(not E2E or _freecadcmd() is None, reason="set MOTRES_CAD_E2E=1 with FreeCAD installed")
-@pytest.mark.parametrize("profile,tapped,screw_d,screws", [("CIANO14_40_12.json", {2.0, 3.0}, 2.0, 6), ("CIANO28_85_20SW1200.json", {2.5, 3.0}, 2.5, 6)])
-def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, profile, tapped, screw_d, screws):
+@pytest.mark.parametrize("profile,tapped,screw_d,screws,variant", [("CIANO14_40_12.json", {2.0, 3.0}, 2.0, 6, "full"),
+                                                                    ("CIANO28_85_20SW1200.json", {2.5, 3.0}, 2.5, 6, "full"),
+                                                                    ("CIANO28_85_20SW1200.json", set(), None, 0, "frameless")])
+def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, profile, tapped, screw_d, screws, variant):
     root = os.path.dirname(store.CAD_DIR)
     out = tmp_path / "out"
-    cmd = [sys.executable, os.path.join(store.CAD_DIR, "run_build.py"), "build", "--profile-file", os.path.join(store.CAD_DIR, "reference", profile),
+    pfile = os.path.join(store.CAD_DIR, "reference", profile)
+    if variant == "frameless":          # the frameless kit has no screws, holders or shaft: no thread node, the export still passes
+        pj = json.load(open(pfile, encoding="utf-8"))
+        pj["profile"]["cad_variant"] = "frameless"
+        pfile = str(tmp_path / "frameless_profile.json")
+        json.dump(pj, open(pfile, "w", encoding="utf-8"))
+    cmd = [sys.executable, os.path.join(store.CAD_DIR, "run_build.py"), "build", "--profile-file", pfile,
            "--out-dir", str(out), "--no-gui", "--no-bom"]
     subprocess.run(cmd, check=True, cwd=root, timeout=3600)
     glb = next(p for p in out.iterdir() if p.name.endswith("_full.glb"))
     doc, _ = G.parse_glb(glb.read_bytes())
     th = [(n["name"], n["extras"]["thread"]) for n in doc["nodes"] if "extras" in n and "thread" in n["extras"]]
+    assert doc["asset"]["extras"]["cad_variant"] == variant
     screw_nodes = [t for n, t in th if n.startswith("Screw_")]
     assert len(screw_nodes) == screws and all(t["kind"] == "external" and t["d_mm"] == screw_d for t in screw_nodes)
     assert all(t["pitch_mm"] == TH.coarse_pitch(screw_d) and t["length_mm"] > 3 for t in screw_nodes)
     holes = [t for n, t in th if n.startswith("Stator_holder_back")]
-    assert holes and all(t["kind"] == "internal" for t in holes) and {t["d_mm"] for t in holes} == tapped
+    assert all(t["kind"] == "internal" for t in holes) and {t["d_mm"] for t in holes} == tapped
+    if variant == "frameless":
+        assert not th and not any(n["name"].startswith(("Screw_", "Stator_holder", "Shaft")) for n in doc["nodes"])
     # the geometry is identical with the thread split switched off (FC_THREADS=0): same groups, triangle counts, vertices, volumes
     # (exact triangle equality is not a given: OCC may pick other diagonals in planar faces from run to run)
     fcstd = next(p for p in out.iterdir() if p.name.endswith(".FCStd"))

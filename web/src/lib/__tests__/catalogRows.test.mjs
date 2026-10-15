@@ -74,13 +74,50 @@ t('a click on L155 motor LOADS its default mode (names with spaces pass through)
   const btns = C.configButtons(l155);
   // the owner was on the 40 mm die: nothing of this die is loaded
   const plan = C.configClickPlan(btns, 'L155 motor', null, false);
-  assert.deepEqual(plan, { pick: 'L155 motor', load: 'rated 1x9 mm', refuse: null });
+  assert.deepEqual(plan, { pick: 'L155 motor', load: 'rated 1x9 mm', refuse: null, alreadyLoaded: false });
   assert.equal(C.configClickPlan(btns, 'L180 gen', 'L155 motor', false).load, 'rated 0.5x9 mm');
 });
 
-t('the loaded configuration is only picked again; the play glyph reloads it', () => {
+t('the loaded configuration is only picked again, and the click SAYS so; the play glyph reloads it', () => {
   const plan = C.configClickPlan(C.configButtons(l155), 'L155 motor', 'L155 motor', false);
-  assert.deepEqual(plan, { pick: 'L155 motor', load: null, refuse: null });
+  assert.deepEqual(plan, { pick: 'L155 motor', load: null, refuse: null, alreadyLoaded: true });
+});
+
+// ---- incident 2026-10-15: the highlighted L12 chip did nothing while CIANO28 85 / L13 was open ----
+const ciano14 = { name: 'CIANO14 40 new', configs: [
+  { name: 'L12', default_duty: 'rated', duties: [duty('rated', 1, 1, 1, 1), duty('peak', 1, 1, 1, 1)] },
+  { name: 'L20', default_duty: 'rated', duties: [duty('rated', 1, 1, 1, 1), duty('peak', 1, 1, 1, 1)] },
+] };
+
+t('loadedMotor: an ordinary account is judged by its OWN remembered motor, never the shared server context', () => {
+  const shared = { active: true, die: 'CIANO14 40 new', config: 'L12', duty: 'rated' };   // the owner's machine
+  const mine = { die: 'CIANO28 85', config: 'L13', duty: 'rated' };
+  assert.deepEqual(C.loadedMotor(true, mine, shared), mine);
+  assert.equal(C.loadedMotor(true, null, shared), null, 'nothing remembered = nothing loaded');
+  assert.deepEqual(C.loadedMotor(false, mine, shared), { die: 'CIANO14 40 new', config: 'L12', duty: 'rated' });
+  assert.equal(C.loadedMotor(false, null, { active: false }), null);
+});
+
+t('the HIGHLIGHTED chip loads when the loaded motor is another one (the live bug)', () => {
+  const btns = C.configButtons(ciano14);
+  const loaded = C.loadedMotor(true, { die: 'CIANO28 85', config: 'L13', duty: 'rated' },
+    { active: true, die: 'CIANO14 40 new', config: 'L12', duty: 'rated' });
+  // this die's row: nothing of it is loaded -> what the component passes is null
+  const forThisDie = loaded && loaded.die === 'CIANO14 40 new' ? loaded : null;
+  const plan = C.configClickPlan(btns, 'L12', forThisDie, false);
+  assert.equal(plan.load, 'rated'); assert.equal(plan.alreadyLoaded, false);
+  // after loading L20 on this die, L12 (not loaded now) loads again, L20 answers "already loaded"
+  const l20 = { config: 'L20', duty: 'rated' };
+  assert.equal(C.configClickPlan(btns, 'L12', l20, false).load, 'rated');
+  const again = C.configClickPlan(btns, 'L20', l20, false);
+  assert.equal(again.load, null); assert.equal(again.alreadyLoaded, true);
+});
+
+t('a chip loads its default mode when another mode of the same configuration is loaded', () => {
+  const btns = C.configButtons(ciano14);
+  const plan = C.configClickPlan(btns, 'L12', { config: 'L12', duty: 'peak' }, false);
+  assert.equal(plan.load, 'rated'); assert.equal(plan.alreadyLoaded, false);
+  assert.equal(C.configClickPlan(btns, 'L12', { config: 'L12', duty: 'rated' }, false).alreadyLoaded, true);
 });
 
 t('a click that cannot load is never silent: it names the reason', () => {

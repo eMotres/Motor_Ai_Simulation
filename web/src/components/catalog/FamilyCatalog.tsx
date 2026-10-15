@@ -43,10 +43,11 @@ import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
-import { configButtons, configClickPlan, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
+import { configButtons, configClickPlan, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
+import { useLastMotorState } from '../../lib/lastMotor';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -289,7 +290,7 @@ const FamilyCatalog: React.FC<{
   // The backend enforces this on every mutating endpoint — this flag only
   // decides whether the editing controls are drawn at all.
   const [canWrite, setCanWrite] = useState(false);
-  const { enforced, isAdmin, role } = useAuth();
+  const { user, enforced, isAdmin, role } = useAuth();
   const standardUser = isStandardUser(enforced, isAdmin, role);
 
   // ONE ROW PER MOTOR (owner 2026-10-13): which configuration button is picked on each die's
@@ -298,8 +299,17 @@ const FamilyCatalog: React.FC<{
   const [openDie, setOpenDie] = useState<Record<string, boolean>>({});
 
   // What is loaded in the editor — its die/config/duty rows get highlighted.
-  const [active, setActive] = useState<{ die?: string; config?: string;
+  // `ctxActive` = the SHARED machine the server reports (/api/family/context); `active` below = the machine
+  // THIS browser has loaded.  For an ordinary account those differ (incident 2026-10-15), so every
+  // "is it loaded" test reads `active`, never `ctxActive`.
+  const [ctxActive, setActive] = useState<{ die?: string; config?: string;
                                          duty?: string | null } | null>(null);
+  const lastMotor = useLastMotorState();
+  const identity = user?.email?.trim().toLowerCase() ?? null;
+  const active = loadedMotor(
+    enforced && !!identity && !isAdmin,
+    lastMotor.email === identity && lastMotor.status === 'loaded' ? lastMotor.selection : null,
+    ctxActive);
 
   // MUI dialogs instead of window.prompt/confirm — Chrome suppresses the
   // native ones after "prevent additional dialogs" and the buttons look dead
@@ -840,9 +850,16 @@ const FamilyCatalog: React.FC<{
                             onClick={() => {
                               // pick it AND load its default mode; a click that cannot load says why
                               const plan = configClickPlan(btns, b.config,
-                                active?.die === die.name ? active.config ?? null : null, !!busy || loadRunning);
+                                active?.die === die.name ? { config: active.config, duty: active.duty } : null,
+                                !!busy || loadRunning);
                               setPicked((m) => ({ ...m, [die.name]: plan.pick }));
                               if (plan.refuse) setMsg(`✗ ${tx(plan.refuse === 'busy' ? 'configClickBusy' : 'configClickNoMode', { config: b.config })}`);
+                              else if (plan.alreadyLoaded) {
+                                // never silent: say it, briefly
+                                const said = `✓ ${tx('configAlreadyLoaded', { config: b.config })}`;
+                                setMsg(said);
+                                window.setTimeout(() => setMsg((cur) => (cur === said ? null : cur)), 3500);
+                              }
                               else if (plan.load) void applyDuty(die.name, plan.pick, plan.load);
                             }}
                             sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 0.9, minWidth: 0, minHeight: 22,

@@ -71,16 +71,43 @@ export interface ConfigClickPlan {
   pick: string;
   load: string | null;
   refuse: 'busy' | 'noMode' | null;
+  /** true = this die + configuration + default mode IS the loaded machine: nothing to load, but the click
+   *  must still answer ("already loaded") - never silence (incident 2026-10-15). */
+  alreadyLoaded: boolean;
 }
 
+/** The machine that is open in THIS browser.  For an ordinary signed-in account (enforced backend, not admin)
+ *  that is the account's own remembered motor (the breadcrumb / lastMotor store) - `/api/family/context` is the
+ *  SHARED machine of the owner and says nothing about what this user has loaded (incident 2026-10-15: the
+ *  catalog compared its chips against that shared context, so the highlighted L12 chip counted as "loaded"
+ *  while CIANO28 85 / L13 was open, and the click did nothing).  Everyone else works on the shared machine. */
+export interface LoadedMotor { die: string; config: string; duty: string | null }
+interface CtxLike { active?: boolean; die?: string; config?: string; duty?: string | null }
+export function loadedMotor(ownWorkspace: boolean,
+                            remembered: { die: string; config: string; duty: string | null } | null,
+                            server: CtxLike | null): LoadedMotor | null {
+  if (ownWorkspace) {
+    return remembered ? { die: remembered.die, config: remembered.config, duty: remembered.duty ?? null } : null;
+  }
+  if (!server || !server.die || !server.config) return null;
+  return { die: server.die, config: server.config, duty: server.duty ?? null };
+}
+
+/** `loaded` is the configuration name of THIS die that is open (string, mode unknown) or the loaded
+ *  {config, duty} (the mode is then compared with the chip's default mode too). */
 export function configClickPlan(buttons: readonly ConfigButton[], config: string,
-                                loaded: string | null, busy: boolean): ConfigClickPlan {
+                                loaded: string | { config: string | null; duty?: string | null } | null,
+                                busy: boolean): ConfigClickPlan {
   const b = buttons.find((x) => x.config === config);
-  if (busy) return { pick: config, load: null, refuse: 'busy' };
-  if (!b || !b.duty) return { pick: config, load: null, refuse: 'noMode' };
-  // the machine that is already loaded: the click only picks it (the play glyph reloads)
-  if (loaded === config) return { pick: config, load: null, refuse: null };
-  return { pick: config, load: b.duty, refuse: null };
+  if (busy) return { pick: config, load: null, refuse: 'busy', alreadyLoaded: false };
+  if (!b || !b.duty) return { pick: config, load: null, refuse: 'noMode', alreadyLoaded: false };
+  const lc = typeof loaded === 'string' || loaded == null ? loaded : loaded.config;
+  const ld = typeof loaded === 'object' && loaded != null ? loaded.duty ?? null : null;
+  // the machine that is already loaded (same configuration, and the same mode when it is known): answer, don't reload
+  if (lc === config && (ld == null || ld === b.duty)) {
+    return { pick: config, load: null, refuse: null, alreadyLoaded: true };
+  }
+  return { pick: config, load: b.duty, refuse: null, alreadyLoaded: false };
 }
 
 /** Where a load opens the view, at once and before the load finishes (owner 2026-10-13): the

@@ -176,6 +176,8 @@
   "materialsFullAssumedTip": "该默认值为假设（CAD 未给出牌号）。",
   "materialsFullTotal": "电机质量",
   "materialsFullTotalTip": "装配后的整机：应用的有效部件 + 轴或支架、定子支架、环、轴承、螺钉、电路板、针、漆包层。所有单位质量指标均以此计算。",
+  "materialsFullTotalKit": "无框套件质量",
+  "materialsFullTotalKitTip": "机器人用无框套件：带线圈和相线板的定子 + 带磁钢的转子。不含壳体、定子支架、转子支架、轴承、轴、螺钉和环。所有单位质量指标均以此计算。",
   "materialsFullNoMotor": "请先加载电机以查看其部件。",
   "materialsFullUnavailable": "此处没有该电机的部件清单。",
   "materialsFullNoCad": "部分质量（尚无 CAD 模型）：仅列出有效部件及配置中提到的部件。",

@@ -194,6 +194,35 @@ ROTATING_KEYS = ("rotor_core", "magnet", "shaft", "sleeve", "carrier_front", "ca
 
 PARTIAL_LABEL = "partial mass (no CAD model yet)"
 
+#: ASSEMBLY VARIANT (owner 2026-10-15).  A configuration with the top-level key ``cad_variant: frameless`` is the FRAMELESS KIT for
+#: robots - stator with coils and the phase board + rotor with magnets.  Its "full motor mass" is the KIT mass, labelled
+#: ``SCOPE_KIT``: housing, holders, rotor carriers / hub, bearings, shaft, screws, housing rings and the propeller plate are not in
+#: it, whatever an older full CAD BOM still lists.  Everything else (``full_kg``, ``partial`` ...) keeps its meaning.
+SCOPE_FULL = "full motor"
+SCOPE_KIT = "frameless kit"
+#: BOM part keys (``part_materials.mechanical_parts``) that belong to the kit; every other keyed BOM row is the housing / mechanics
+KIT_BOM_KEYS = ("board", "pins")
+#: app (active) part keys that are NOT in the kit: the simulation's shaft stand-in tube
+KIT_APP_EXCLUDED = ("shaft",)
+
+FRAMELESS_MASS_BASIS = ("the FRAMELESS KIT: the app's active parts without the shaft (masses.compute_masses: stator iron, rotor iron, "
+                        "magnets, winding copper, sleeve) + the CAD bill of materials' phase board, pins and wire enamel. Housing, "
+                        "holders, rotor carriers / hub, bearings, shaft, screws, housing rings and the propeller plate are not "
+                        "included. Magnets are the nominal magnet (CAD-only assembly clearances are air).")
+
+
+def config_cad_variant(ddir: Optional[os.PathLike], config: str) -> str:
+    """``full`` | ``frameless``: the configuration's top-level ``cad_variant`` key.  Unreadable or unknown values are ``full`` (a
+    mass hiccup never breaks a surface; the CAD build refuses an unknown value in words)."""
+    if ddir is None:
+        return "full"
+    try:
+        cy = yaml.safe_load((Path(ddir) / f"{config}.yaml").read_text(encoding="utf-8")) or {}
+    except Exception:                                                      # noqa: BLE001
+        return "full"
+    v = str(cy.get("cad_variant") or "full").strip().lower()
+    return v if v in ("full", "frameless") else "full"
+
 #: the consistency guard: the non-active parts counted must be at least this fraction of what the BOM itself lists beyond the
 #: simulation (its own "parts the simulation mass does not contain" row), else the mass is flagged partial
 GUARD_FRACTION = 0.5
@@ -379,9 +408,34 @@ class FullMass:
     partial_reason: str = ""               # why the mass is partial (no BOM, rows not accounted for, rules unavailable)
     others: List[str] = field(default_factory=list)     # BOM rows no part rule recognised: COUNTED as "other"
     unmassed: List[str] = field(default_factory=list)   # BOM rows with no mass (adhesive, varnish, liner, leads)
+    scope: str = SCOPE_FULL                # SCOPE_FULL | SCOPE_KIT: what total_kg is the mass OF
+
+    @property
+    def kit(self) -> bool:
+        return self.scope == SCOPE_KIT
 
 
 _FULL_CACHE: Dict[Tuple, FullMass] = {}
+
+
+def _partial_mass(die: str, config: str, mm: "MotorMass", why: str, kit: bool, *, bom: Optional[str] = None,
+                  others: Optional[List[str]] = None, unmassed: Optional[List[str]] = None) -> FullMass:
+    """The active parts only, flagged partial with the REASON.  The frameless kit takes the active parts WITHOUT the shaft stand-in
+    tube (its mass is then the kit's active mass; the board and pins are what the missing BOM would add)."""
+    from dataclasses import replace
+
+    def tag(p):
+        return replace(p, basis=(p.basis + "; " if p.basis else "") + PARTIAL_LABEL)
+    if not kit:
+        return FullMass(die, config, mm.total_kg, mm.total_kg, 0.0, True, "active_only", [tag(p) for p in mm.parts],
+                        APP_MASS_BASIS + " " + PARTIAL_LABEL + ": " + why + ".", bom, why, list(others or []), list(unmassed or []))
+    parts = [tag(replace(p, counted=False, basis="simulation stand-in (hollow tube); the frameless kit has no shaft")
+                 if p.key in KIT_APP_EXCLUDED else p) for p in mm.parts]
+    total = sum(p.mass_kg for p in parts if p.counted and p.mass_kg)
+    rot = sum(p.mass_kg for p in parts if p.counted and p.mass_kg and p.key in ROTATING_KEYS)
+    return FullMass(die, config, total, mm.total_kg, rot, True, "active_only", parts,
+                    FRAMELESS_MASS_BASIS + " " + PARTIAL_LABEL + ": " + why + ".", bom, why, list(others or []), list(unmassed or []),
+                    SCOPE_KIT)
 
 
 def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
@@ -394,8 +448,9 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
     mm = app_motor_mass(die, config, dies_dir=dies_dir)
     bom = find_bom_file(die, config, cad_dir)
     choices = die_part_choices(ddir)
+    kit = config_cad_variant(ddir, config) == "frameless"
     key = (str(ddir), config, (ddir / "die.yaml").stat().st_mtime_ns, (ddir / f"{config}.yaml").stat().st_mtime_ns,
-           str(bom), bom.stat().st_mtime_ns if bom else 0, mm.total_kg)
+           str(bom), bom.stat().st_mtime_ns if bom else 0, mm.total_kg, kit)
     if key in _FULL_CACHE:
         return _FULL_CACHE[key]
     app = {p.key: p for p in mm.parts}
@@ -408,12 +463,9 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
     lines = bf.lines if bf else []
     parts: List[MotorPart] = []
     if not lines:
-        parts = [replace(p, basis=(p.basis + "; " if p.basis else "") + PARTIAL_LABEL) for p in mm.parts]
         why = ("no CAD bill of materials has been built for this motor" if bf is None
                else "the CAD bill of materials carries no part with a mass")
-        out = FullMass(die, config, mm.total_kg, mm.total_kg, 0.0, True, "active_only", parts,
-                       APP_MASS_BASIS + " " + PARTIAL_LABEL + ": " + why + ".", partial_reason=why,
-                       unmassed=list(bf.unmassed) if bf else [])
+        out = _partial_mass(die, config, mm, why, kit, unmassed=list(bf.unmassed) if bf else [])
     else:
         defs = pm.mechanical_parts()
         keyed: Dict[str, BomLine] = {}
@@ -428,16 +480,23 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
                 shaft_line = ln
             else:
                 k = _classify(defs, ln.part)
+                if k and kit and k not in KIT_BOM_KEYS:
+                    continue                   # frameless kit: the housing / mechanics rows of a (stale) full BOM are not in the kit
                 if k and k not in keyed:
                     keyed[k] = ln
                 else:
                     others.append(ln)          # unknown (or a second row of a known part): counted as "other", never dropped
+        if kit:
+            shaft_line = None                  # the kit has no shaft
         has_carrier = "carrier_front" in keyed or "carrier_rear" in keyed
         for k in ("stator_core", "rotor_core", "magnet", "slot", "sleeve"):
             if k in app:
                 parts.append(app[k])
         sh = app.get("shaft")
-        if has_carrier and sh is not None:
+        if kit and sh is not None:
+            parts.append(replace(sh, counted=False, basis="simulation stand-in (hollow tube) of the shaft; the frameless kit has "
+                                                          "no shaft: not counted in the kit mass"))
+        elif has_carrier and sh is not None:
             parts.append(replace(sh, counted=False, basis="simulation stand-in (hollow tube) of the rotor carrier below; "
                                                           "not counted in the full mass"))
         elif shaft_line is not None and sh is not None:
@@ -486,17 +545,16 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
             enamel_m = _BOM_COIL.search(coil_line.notes or "") if coil_line else None
             copper_g = (coil_line.grams - (float(enamel_m.group(2)) if enamel_m else 0.0)) if coil_line else 0.0
             ref_g = sum(ln.grams for ln in lines) - act - shaft_g - copper_g
-        if ref_g > 1.0 and counted_extra_g < GUARD_FRACTION * ref_g:
+        if ref_g > 1.0 and counted_extra_g < GUARD_FRACTION * ref_g and not kit:
             why = (f"only {counted_extra_g:.1f} g of the {ref_g:.1f} g of parts the CAD bill of materials lists beyond "
                    f"the simulation could be accounted for")
             log.error("full mass of %s %s is PARTIAL: %s", die, config, why)
-            parts = [replace(p, basis=(p.basis + "; " if p.basis else "") + PARTIAL_LABEL) for p in mm.parts]
-            out = FullMass(die, config, mm.total_kg, mm.total_kg, 0.0, True, "active_only", parts,
-                           APP_MASS_BASIS + " " + PARTIAL_LABEL + ": " + why + ".", str(bom), why,
-                           [ln.name for ln in others], list(bf.unmassed))
+            out = _partial_mass(die, config, mm, why, kit, bom=str(bom), others=[ln.name for ln in others],
+                                unmassed=list(bf.unmassed))
         else:
-            out = FullMass(die, config, total, mm.total_kg, rot, False, "cad_bom", parts, FULL_MASS_BASIS, str(bom), "",
-                           [ln.name for ln in others], list(bf.unmassed))
+            out = FullMass(die, config, total, mm.total_kg, rot, False, "cad_bom", parts,
+                           FRAMELESS_MASS_BASIS if kit else FULL_MASS_BASIS, str(bom), "",
+                           [ln.name for ln in others], list(bf.unmassed), SCOPE_KIT if kit else SCOPE_FULL)
     if out.partial:
         out.rotating_kg = sum(p.mass_kg for p in out.parts if p.counted and p.mass_kg and p.key in ROTATING_KEYS)
     with _LOCK:
@@ -518,6 +576,8 @@ def full_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None,
         log.error("full mass of %s %s is PARTIAL: part-material rules unavailable: %s", die, config, exc)
         mm = app_motor_mass(die, config, dies_dir=dies_dir)
         why = f"the part-material rules are unavailable ({exc})"
+        if config_cad_variant(find_die_dir(die, dies_dir), config) == "frameless":
+            return _partial_mass(die, config, mm, why, True)
         return FullMass(die, config, mm.total_kg, mm.total_kg, 0.0, True, "active_only", list(mm.parts),
                         APP_MASS_BASIS + " " + PARTIAL_LABEL + ": " + why, partial_reason=why)
 
@@ -532,7 +592,8 @@ def mass_summary(die: str, config: str, *, dies_dir: Optional[os.PathLike] = Non
         return None
     return {"full_kg": fm.total_kg, "active_kg": fm.active_kg, "rotating_kg": fm.rotating_kg, "partial": fm.partial,
             "partial_reason": fm.partial_reason, "others": list(fm.others), "unmassed": list(fm.unmassed),
-            "source": fm.source, "non_active_kg": fm.total_kg - fm.active_kg}
+            "source": fm.source, "non_active_kg": fm.total_kg - fm.active_kg,
+            "scope": fm.scope, "kit": fm.kit}
 
 
 def bom_extra_parts(die: str, config: str, *, cad_dir: Optional[os.PathLike] = None,
@@ -595,7 +656,7 @@ def full_part_list(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
             rows.append(MotorPart(name, str(mat), None, "insulation", False, "computed",
                                   "assigned for the simulation; no mass is known for it", key=akey))
     source = fm.source
-    if fm.partial and config_bearing_cards(ddir, config):
+    if fm.partial and not fm.kit and config_bearing_cards(ddir, config):
         d = pm.mechanical_parts()["bearings"]
         rows.append(MotorPart("Bearings", choices.get("bearings") or d["material"], None, d["role"], False,
                               d.get("status", "computed"),
@@ -603,6 +664,7 @@ def full_part_list(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
                               key="bearings", em=False, default_material_id=d["material"], user_set="bearings" in choices))
         source = "active_only+config"
     return {"die": die, "config": config, "source": source, "partial": fm.partial, "total_kg": fm.total_kg,
+            "scope": fm.scope, "kit": fm.kit,
             "active_kg": fm.active_kg, "rotating_kg": fm.rotating_kg, "mass_basis": fm.basis,
             "parts": [dict(key=p.key, name=p.name, role=p.role, em=p.em, material_id=p.material_id,
                            default_material_id=p.default_material_id, user_set=p.user_set, mass_kg=p.mass_kg,

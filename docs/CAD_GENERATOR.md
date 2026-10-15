@@ -360,6 +360,67 @@ Shaft_rear +0.007 %, Stator_holder +0.005 %, Stator_holder_back +0.241 %, Ring 0
 +0.030 %, balls -0.021 %, Screw +0.004 % (CIANO14 repo `validation/ciano28_85_13/`).  Not modelled: the Fusion slot-edge fillet of the
 carrier (r 0.15), the cone stack of the bearing seal, copper layers of the 85 board (envelope only).
 
+## Frameless variant: the kit for robots (template A.6.0, 2026-10-15)
+
+One parametric model, two assemblies (owner decision 2026-10-15): the CIANO28 85 20SW1200 / L13 becomes a private configuration whose
+3-D model is a **frameless kit** - **stator with coils and the phase board + rotor with magnets**. Not included: housing, stator holders,
+rotor carriers / hub, bearings, shaft, screws, the glass-fibre rings that belong to the housing, the propeller plate. The public CIANO14 40
+(L12 / L20) keeps the full model. The kit is not a second hand-made model: the same Params sheet drives the same parts, the housing and
+the rotating mechanics are simply not built.
+
+**The option.** `cad_variant: full | frameless` is a top-level key of the configuration yaml (`L13.yaml`, next to `role`, `winding`,
+`materials`); absent = `full`. `python -m motor_ai_sim.cad.build ... --variant frameless|full` overrides it for one build. An unknown
+value is refused in words (CLI exit 2; the catalog write refuses it with 422). The profile carries `profile.cad_variant` only for a kit, and the
+manifest `param_hash` includes the variant only for a kit, so every full build keeps its hash (no rebuild of full models). Output file names are
+unchanged (`<motor_id>_active.step`, `<motor_id>_full.glb`, `<motor_id>_BOM.csv`) so the viewer and download routes need no change; the
+manifest (`cad_variant`), the datums JSON (`cad_variant`, `frameless` block), the GLB (`asset.extras.cad_variant`), the BOM (header row, T1
+label "TOTAL mass of the frameless kit", an `E` row) and `GET /api/model3d/models` (`assembly`) say which one it is.
+
+**Built (CIANO28 85 L13, FreeCAD 1.1.3, 214 s vs 482 s for the full model).**
+
+| STEP part | Content | Solids |
+|---|---|---|
+| `Stator / Core` | stator lamination stack | 1 |
+| `Winding / Coils / Coil_1..12` | coils (the enamel is part of the conductor model, as in the full model) | 12 |
+| `Rotor / RotorCore` | rotor lamination stack; bore and the 4 keys exactly as in the full model | 1 |
+| `Magnets / Magnet_01..28` | magnets (a sleeve joins them when a profile has `sleeve_thickness` > 0; L13 has none) | 28 |
+| `Electronics / PhaseBoard_001..025` | phase board: ring plate + 24 lead sleeves (the CIANO14 40 would give the imported board's solids) | 25 |
+
+67 solids (the full model: 114). No `Mechanics`, no bearings, shaft, carrier, holders, rings, screws. The GLB has the groups `Core`, `Coils`, `Rotor`,
+`Magnets`, `Magnets_S`, `PhaseBoard_FR4`, `PhaseBoard_pins` (4.5 MB, 126 k triangles); the web viewer builds its part list from the GLB groups,
+so no housing part is listed.
+
+**Mounting datums** (`Mounting_datums`, an `App::DocumentObjectGroup`; hidden by default; every value bound to Params by an expression and checked
+by the gate; also in the datums JSON `frameless` block): planes `Datum_Stator_front_face` / `_back_face` (z = +-motor_length / 2), `Datum_Mid_plane`,
+`Datum_Rotor_front_face` / `_back_face`, `Datum_Coil_lead_end`, `Datum_Phase_board_top` / `_bottom` (plate board) or `Datum_Phase_board_origin`
+(imported board); the axis `Datum_Motor_axis` (+Z through the origin); properties `Stator_outer_diameter`, `Stator_bore_diameter`, `Rotor_outer_diameter`,
+`Rotor_bore_diameter` (the customer's hub seat, keys excluded), `Air_gap`, `Stator_stack_length`, `Rotor_stack_length`, `Rotor_key_count` / `_width` / `_height`.
+Frame: +Z = motor axis, origin at the axial centre of the stator stack. L13: stator OD 85, rotor bore 49.2, stack 13, air gap 0.3, board faces at
+z = -13.5 / -15.5, coil lead end z = -17.75. The CAD-only clearances (`offset_*`) stay CAD-only: the rotor pocket offset is in the kit's rotor as in the full model.
+
+**Health checks.** The gate refuses a frameless model that contains any housing object (`Mechanics`, `Shaft`, `Stator_holder`, `Screws` ... :
+`frameless.OMITTED_OBJECTS`) and checks the datums against Params. The pre-check does not judge the holder / bearing / shaft domain of a kit (it
+still judges stator, rotor, magnets and coils); the mechanical fit table is not built. Rows that only the omitted parts use are reported in
+`build_report.json` -> `roles_check.omitted_with_housing` (97 of 169 declared rows on the 85) and are not "dead rows" in a kit; a row
+the kit does use but the Params roles do not declare still refuses the build.
+
+**BOM, mass, lists.** The BOM lists the kit lines only (stator and rotor laminations, magnets, coils, wire, phase board, consumables); T1 is the kit
+mass (L13 BOM view 395.6 g; the full BOM 501.4 g). `modules.motor_mass.full_mass` reads `cad_variant` from the configuration: the "full motor
+mass" of a frameless configuration IS the kit mass with `scope = "frameless kit"` (`FullMass.scope` / `.kit`, `mass_summary`, `full_part_list`,
+the catalog tree `mass.scope`, Configure `mass_scope`, the report cover "Mass (frameless kit)", the datasheet rows, the Materials tab total
+"Frameless kit mass"): the app's active parts without the simulation shaft tube + the BOM's phase board / pins / wire enamel; every BOM row of the
+housing is ignored even when an older full BOM is still on the disk (so the mass is right before the kit is rebuilt). With no BOM the kit mass is
+partial exactly as before ("partial mass (no CAD model yet)") and still has no shaft. Real L13 numbers (server die + config, this build):
+**kit 394.2 g, full motor 469.4 g**, active (EM) mass 396.8 g unchanged; rotating mass of the kit 134.6 g (rotor iron + magnets). Configure's fixed
+mass may therefore be slightly negative for a kit (no shaft tube); `motorScaling.ts` accepts that.
+
+**Rendering.** `python scripts/render_cad_glb.py MODEL.glb OUT.png [--view iso|front|back|side]` draws the viewer GLB with the palette colours, opaque
+(a numpy software rasteriser; the FreeCAD GUI and VTK give black images without an OpenGL context).
+
+**Server.** The CAD image on the server is built from the repo (`deploy/Dockerfile.cad`): after merge, build a new image tag from the merged commit,
+then rebuild L13 with it (steps in the PR description). Until the API carries this code, `cad_variant` in a configuration is ignored by the mass and
+the lists (a full BOM stays in use); the CAD build of an old image ignores the key and builds the full model.
+
 ## One colour palette (2026-10-14)
 
 `cad/motor_templates/segmented_flatwire/palette.py` (+ `palette.json`) is the single source of the colours of the FreeCAD GUI finish and

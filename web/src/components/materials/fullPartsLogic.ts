@@ -54,6 +54,10 @@ export interface FullPartsPayload {
   /** true = no CAD model yet: the mass is the active mass only ("partial mass (no CAD model yet)"). */
   partial?: boolean;
   can_write?: boolean;
+  /** What `total_kg` is the mass OF: "full motor" or "frameless kit" (owner 2026-10-15). */
+  scope?: 'full motor' | 'frameless kit';
+  /** true = the frameless kit (stator + coils + phase board + rotor + magnets): the total is the kit mass. */
+  kit?: boolean;
   /** THE motor mass: the full assembled mass (partial: the active mass). */
   total_kg?: number;
   active_kg?: number;

@@ -117,5 +117,6 @@ def test_manifest_lists_the_viewer_files_with_sha256(tmp_path):
 def test_build_cli_has_the_models_switch():
     from motor_ai_sim.cad import build
     src = open(build.__file__, encoding="utf-8").read()
-    assert "--no-models" in src and "export_models.py" in src and "envelope" not in src
+    assert "--no-models" in src and "export_models.py" in src and "_envelope" not in src and "envelope.step" not in src
+    # the retired pre-NDA "envelope" viewer variant is gone; its successor is the SIMPLIFIED model (2026-10-15), a separate, named output
     assert os.path.isfile(os.path.join(store.CAD_DIR, "fc_scripts", "export_models.py"))

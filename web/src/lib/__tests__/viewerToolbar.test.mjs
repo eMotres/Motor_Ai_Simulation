@@ -77,3 +77,14 @@ t('Geometry > Full toolbar: the drawer toggle always; badge and Rebuild now only
   assert.deepEqual(V.fullToolbar({ ...base, badge: 'failed', canWrite: false }), ['params', 'badge', 'fit']);   // read-only: no rebuild button
   assert.deepEqual(V.fullToolbar({ ...base, hasModel: false, badge: 'failed' }), ['params']);
 });
+
+t('the simplified-STEP button is in the toolbar for EVERY signed-in account, with and without the NDA (owner 2026-10-15)', () => {
+  const by2 = (c) => Object.fromEntries(V.model3dToolbar(c).map((e) => [e.id, e.enabled]));
+  const no = { ...ctx, canDownload: false, models: 1 };
+  assert.deepEqual(ids({ ...no, simplified: true }), ['fit', 'simplified', 'ndaNote', 'sign']);
+  assert.deepEqual(ids({ ...no, simplified: true, ndaSigned: true }), ['fit', 'simplified', 'verify']);
+  assert.deepEqual(ids({ ...ctx, simplified: true }), ['motor', 'fit', 'explode', 'section', 'measure', 'download', 'simplified', 'info']);
+  assert.equal(by2({ ...no, simplified: true }).simplified, true);
+  assert.equal(by2({ ...no, simplified: false }).simplified, false);                 // shown, disabled while the files are not built
+  assert.ok(!ids(no).includes('simplified'));                                       // not offered when the flag is not given
+});

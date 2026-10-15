@@ -464,6 +464,55 @@ mass may therefore be slightly negative for a kit (no shaft tube); `motorScaling
 then rebuild L13 with it (steps in the PR description). Until the API carries this code, `cad_variant` in a configuration is ignored by the mass and
 the lists (a full BOM stays in use); the CAD build of an old image ignores the key and builds the full model.
 
+## Simplified model: envelope only, downloadable at once (template A.7.0, 2026-10-15)
+
+Owner decision: every motor has a SIMPLIFIED model that any signed-in user can download immediately; the real model (STEP, BOM, parameters,
+FreeCAD file) stays behind the NDA and the applicant verification. The generator writes it for EVERY config - full and frameless alike -
+next to the real one (`cad/fc_scripts/export_simplified.py`, rules and the hygiene gate in `motor_templates/segmented_flatwire/simplified.py`, run by
+`build.py` after the BOM; `--no-simplified` skips it; a failed gate writes nothing and never refuses the real build, the manifest `simplified` block says why).
+
+| Output | What |
+|---|---|
+| `<motor_id>_simplified.step` | envelope-only STEP |
+| `<motor_id>_simplified.glb` | the same for the web tools (palette colours) |
+| `<motor_id>_simplified.json` | tiny: envelope (bbox, size), mounting interface, board outline + terminal positions, solid counts, **total mass** of the real model (the BOM total, scope `full motor` / `frameless kit`) |
+
+What it is made of:
+
+* **Stator + rotor + magnets = ONE monolithic solid.** The stator outer circle and the end faces, and the rotor bore with its keys (the shaft / hub interface)
+  exactly as built; everything inside is FILLED - slots, teeth, yoke cut-outs, magnet pockets, magnet shapes, the air gap. Its faces are the outer
+  cylinder, two end planes and one face per edge of the bore profile; its volume is the envelope volume.
+* **Every coil = ONE thick turn:** the winding's U-shaped outline in the plane of a middle turn, extruded from the bottom turn to the top turn (end turn
+  included) plus the two terminal stubs where the first and the last turn leave it. No single turns, no wire. The blocks lie inside the filled slots:
+  the solids overlap by design (an envelope model, not an assembly for interference checks).
+* **Every bearing = ONE ring** d x D x B (no balls, cage or seals).
+* **The phase board = ONE plain solid piece with holes** (owner amendment 2026-10-15): the board outline extruded to the board thickness (body, mask and copper
+  together, not the pins), with its through holes - mounting holes, the holes the coil terminals pass through, windows, notches of the outline. No pins,
+  components, copper, pads, silkscreen, mask or imported board body (the terminal positions go into the JSON; the coil terminal stubs may still pass through the
+  holes). The outline and holes are the closed wires of the board body sliced at mid thickness.
+* **As built:** shaft or rotor carrier, stator holders (outer shape and mounting holes), glass-fibre rings, Prop_fix, screws (full variant). A frameless kit has
+  the monolith, the coil blocks and the board only.
+
+**Patent hygiene.** The model must not disclose the AeroStator Core internals (slot / yoke topology, magnet pocket geometry, coil construction).
+`simplified.check()` is a gate the export runs before it writes anything: the monolith is one solid with one shell (an internal cavity would be a
+second shell), has at most 3 + (bore profile edges) faces, only planes and cylinders, no cylinder between the bore and the outer circle, a volume equal to the
+envelope volume within 1e-6; every coil block is one solid with at most 60 faces; the board (`simplified.check_board`) is one solid with one shell, planes and cylinders only, at most
+2 + (outline and hole edges) faces and a volume of net outline area x thickness. Tests: `tests/test_cad_simplified.py` runs a synthetic slotted /
+pocketed motor with a notched PCB (copper layers, pins, silkscreen) through the real builders in FreeCAD and proves that the gate refuses an un-filled stator,
+a coil of single turns, and a board with pins, a curved extra or fused components.
+
+**Access** (`routes/model3d.py`): `GET /api/model3d/<die>/<config>/simplified.step | .glb | .json` - any signed-in account that may see the motor
+(`motor_access.may_see_config`, so a hidden configuration is the same 404 as for the viewer); NO NDA and NO verification; anonymous 401. The STEP header is
+rewritten ("SIMPLIFIED - envelope only", the download id, the recipient, the mass of the real model); every download (STEP, GLB, JSON) is logged in
+`cad_downloads.jsonl` with user, file, version, sha256 (`kind: simplified_step | simplified_glb | simplified_json`, `nda: false`) and can be traced like any
+other (`/api/model3d/trace`). `GET /api/model3d/models` lists `simplified_available`, `simplified_step_bytes`, `simplified_glb_bytes`. The full STEP and every
+Geometry Full file keep the NDA + verification gate. UI: "Download simplified STEP" in the 3-D model tab toolbar and in the Geometry Full Files menu
+(always enabled for a signed-in user once the files exist), EN + zh-CN.
+
+**Server.** The CAD runtime builds it with the real model: rebuild the `motres-cad` image from the merged tree (`export_simplified.py` is under `cad/`), then
+rebuild every config (the rebuild worker / `docker run ... build --die ... --config ...` as above); until a config is rebuilt its list entry says
+`simplified_available: false` and the button is disabled. Rebuilding also refreshes the manifest with the new file list.
+
 ## One colour palette (2026-10-14)
 
 `cad/motor_templates/segmented_flatwire/palette.py` (+ `palette.json`) is the single source of the colours of the FreeCAD GUI finish and

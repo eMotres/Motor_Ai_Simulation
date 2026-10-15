@@ -42,6 +42,10 @@ export interface ModelInfo {
   assembly?: string;
   step_available?: boolean;
   step_bytes?: number | null;
+  /** the SIMPLIFIED envelope-only model exists (downloadable by every signed-in user, no NDA; owner 2026-10-15) */
+  simplified_available?: boolean;
+  simplified_step_bytes?: number | null;
+  simplified_glb_bytes?: number | null;
   version?: { template?: string | null; built_at?: string | null; param_hash?: string };
 }
 

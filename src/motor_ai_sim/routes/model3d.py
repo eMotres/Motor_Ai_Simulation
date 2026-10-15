@@ -6,6 +6,10 @@ only accounts flagged "NDA signed" and the owner / admin get it; everybody else 
 file.  Every download carries a download id and the NDA it rests on (STEP header + the append-only log); the admin can list
 the downloads and trace a file by id or sha256.  Nothing priced is served here.
 
+The SIMPLIFIED model (owner 2026-10-15, ``simplified.step`` / ``.glb`` / ``.json``) is open to every signed-in user who may see the motor:
+no NDA, no verification - envelope only (stator + rotor + magnets one monolith, coils one thick turn, bearings one ring), stamped
+"SIMPLIFIED - envelope only" and logged like every download.
+
 Geometry tab "Full" (owner 2026-10-15) adds the full-construction files next to the STEP, all under the SAME NDA flag and the SAME
 stamped, logged delivery: ``/parts`` (THE part tree, names only), ``/bom.csv`` and ``/bom.xlsx`` (the part list with materials and
 masses - no prices, no suppliers), ``/params.csv`` (the full parameter set, electromagnetic + CAD-only, Fusion Parameter I/O
@@ -112,6 +116,115 @@ def get_step(die: str, config: str, request: Request, authorization: Optional[st
         raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
     return Response(content=data, media_type="model/step",
                     headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
+
+
+# ── the SIMPLIFIED model (owner 2026-10-15): envelope only, open to every signed-in user ─────────────────────────────
+
+def _simplified_row(e: dict, kind: str) -> dict:
+    row = M.file_row(e, kind)
+    if row is None:
+        raise HTTPException(status_code=404, detail="The simplified model of this motor has not been built yet.")
+    return row
+
+
+def _mass_text(die: str, config: str, info: Optional[dict] = None) -> tuple[str, Optional[dict]]:
+    """(text for the STEP header, dict for the JSON): the total mass of the REAL model as the app shows it (the full mass, or the
+    frameless kit's with its label); falls back to the generator's own number in the simplified JSON."""
+    try:
+        from motor_ai_sim.modules import motor_mass as MMASS
+        from motor_ai_sim.routes import family as fam
+        s = MMASS.mass_summary(die, config, dies_dir=fam._die_dir(die).parent)
+    except Exception:                                       # noqa: BLE001 - a mass hiccup never blocks the download
+        s = None
+    if s:
+        g = round(s["full_kg"] * 1000.0, 1)
+        scope = s.get("scope") or "full motor"
+        return ("%s g (%s%s)" % (g, scope, ", partial: no CAD bill of materials yet" if s.get("partial") else ""),
+                dict(total_g=g, scope=scope, partial=bool(s.get("partial"))))
+    m = (info or {}).get("mass") or {}
+    if m.get("total_g") is not None:
+        return ("%s g (%s, bill of materials)" % (m["total_g"], m.get("scope") or "full motor"), dict(m))
+    return "", None
+
+
+def _deliver_simplified(request: Request, who: dict, rec: dict, e: dict, die: str, config: str, *, kind: str, ext: str, media: str,
+                        row: dict, body) -> Response:
+    """Stamp ("SIMPLIFIED - envelope only"), LOG (user, file, version) and return one simplified file.  No NDA, no verification: the
+    log line is the accountability.  ``body`` is ``(stamp, name) -> bytes``."""
+    customer = M.customer_name(who, rec)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    day = now.date()
+    m = e["manifest"]
+    version = "template %s, built %s, param %s" % ((m.get("template") or {}).get("version", "?"), m.get("built_at", "?"),
+                                                  (m.get("param_hash") or "")[:12])
+    basis = dict(type="none", ref="none (simplified model)", label="none")
+    who_for = M.recipient_of(who, rec, basis)
+    download_id = M.new_download_id(now)
+    mass_txt, _mass = _mass_text(die, config)
+    stamp = M.build_simplified_stamp(download_id=download_id, motor_id=e["motor_id"], version=version, day=day, recipient=who_for, mass=mass_txt)
+    name = M.download_name(e["motor_id"] + "_simplified", customer, day, ext)
+    data = body(stamp, name)
+    try:
+        from motor_ai_sim.client_ip import from_request
+        ip = from_request(request)
+    except Exception:                                       # noqa: BLE001
+        ip = "?"
+    try:
+        M.log_download(dict(download_id=download_id, user=who["id"], email=who_for["email"], name=customer, role=who.get("role"),
+                            company=who_for["company"], nda=False, nda_basis=basis, simplified=True,
+                            die=die, config=config, motor_id=e["motor_id"], kind=kind, file=name,
+                            source_file=row["name"], source_sha256=row["sha256"], sha256=M.sha256_bytes(data), bytes=len(data),
+                            template=(m.get("template") or {}).get("version"), built_at=m.get("built_at"),
+                            param_hash=m.get("param_hash"), ip=ip, user_agent=request.headers.get("user-agent", "")[:300]))
+    except OSError as ex:
+        log.error("model3d: download log not writable (%s) - download refused", ex)
+        raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
+    return Response(content=data, media_type=media,
+                    headers={"Content-Disposition": 'attachment; filename="%s"' % name, "Cache-Control": "no-store"})
+
+
+@router.get("/{die}/{config}/simplified.step")
+def get_simplified_step(die: str, config: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """The SIMPLIFIED STEP (stator + rotor + magnets one monolith, every coil one thick turn, every bearing one ring; shaft, holders,
+    board outline as built).  Every signed-in user who may see the motor - no NDA, no verification; stamped "SIMPLIFIED - envelope
+    only" with the download id and the mass of the real model; logged."""
+    who, rec = _caller(authorization)
+    e = _entry_for(authorization, die, config)
+    row = _simplified_row(e, "simplified_step")
+
+    def body(stamp, name):
+        src = open(row["path"], "rb").read()
+        return M.stamp_step(src, filename=name, customer=M.customer_name(who, rec), day=datetime.date.fromisoformat(stamp["date"]),
+                            motor_id=e["motor_id"], version=stamp["version"], stamp=stamp)
+    return _deliver_simplified(request, who, rec, e, die, config, kind="simplified_step", ext="step", media="model/step", row=row, body=body)
+
+
+@router.get("/{die}/{config}/simplified.glb")
+def get_simplified_glb(die: str, config: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """The simplified model for the web tools (same access, logged)."""
+    who, rec = _caller(authorization)
+    e = _entry_for(authorization, die, config)
+    row = _simplified_row(e, "simplified_glb")
+    return _deliver_simplified(request, who, rec, e, die, config, kind="simplified_glb", ext="glb", media="model/gltf-binary", row=row,
+                               body=lambda stamp, name: open(row["path"], "rb").read())
+
+
+@router.get("/{die}/{config}/simplified.json")
+def get_simplified_json(die: str, config: str, request: Request, authorization: Optional[str] = Header(default=None)):
+    """The tiny JSON of the simplified model: envelope, mounting interface, board terminals and the total mass of the real model."""
+    who, rec = _caller(authorization)
+    e = _entry_for(authorization, die, config)
+    row = _simplified_row(e, "simplified_json")
+
+    def body(stamp, name):
+        import json
+        info = json.loads(open(row["path"], encoding="utf-8").read())
+        _txt, mass = _mass_text(die, config, info)
+        if mass:
+            info["mass"] = mass
+        info["download"] = dict(id=stamp["download_id"], notice=stamp["notice"], date=stamp["date"])
+        return json.dumps(info, indent=1, ensure_ascii=False).encode("utf-8")
+    return _deliver_simplified(request, who, rec, e, die, config, kind="simplified_json", ext="json", media="application/json", row=row, body=body)
 
 
 @router.get("/downloads")

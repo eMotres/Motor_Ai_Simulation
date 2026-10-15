@@ -233,14 +233,14 @@ def test_get_table_lists_groups_units_limits_and_marks_cad_only(env):
 
 def test_put_saves_per_config_and_leaves_the_electromagnetics_alone(env):
     before_cfg, before_die = _cfg_doc(env), yaml.safe_load((env["dies"] / DIE / "die.yaml").read_text("utf-8"))
-    r = client.put(CP, json={"values": {"holder_flange_t": 1.5, "ring_t": 0.9}}, headers=env["admin"])
+    r = client.put(CP, json={"values": {"holder_flange_t": 1.0, "ring_t": 0.9}}, headers=env["admin"])
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["changed"] == ["holder_flange_t", "ring_t"] and out["table"]["rebuild"]["state"] == "pending"
     rows = {x["name"]: x for x in out["table"]["rows"]}
     assert rows["ring_t"]["value"] == 0.9 and rows["ring_t"]["overridden"] and rows["ring_t"]["built"] == 0.8
     doc = _cfg_doc(env)
-    assert doc["cad_overrides"] == {"holder_flange_t": 1.5, "ring_t": 0.9}
+    assert doc["cad_overrides"] == {"holder_flange_t": 1.0, "ring_t": 0.9}
     # EM isolation: nothing but the new block changed, in the configuration and in the die
     doc_wo = {k: v for k, v in doc.items() if k != "cad_overrides"}
     assert doc_wo == before_cfg
@@ -390,7 +390,7 @@ def test_import_csv_takes_only_cad_rows_and_dry_runs_first(env):
                 "magnet_height,mm,9,9,em row,False\n"
                 "ring_t,mm,0.9 mm,0.9,x,False\n"
                 "screw_socket_point,deg,110 deg,110,x,False\n"
-                "holder_flange_t,mm,=ring_t*2,1.8,formula,False\n"
+                "holder_flange_t,mm,=ring_t*2,1.0,formula,False\n"
                 "unknown_param,mm,3,3,x,False\n")
     url = CP + "/import"
     files = {"file": ("params.csv", csv_text.encode("utf-8"), "text/csv")}
@@ -398,7 +398,7 @@ def test_import_csv_takes_only_cad_rows_and_dry_runs_first(env):
     assert d["dry_run"] is True and d["changed"] == ["holder_flange_t", "ring_t", "screw_socket_point"] and d["found"] == 3
     assert _cfg_doc(env).get("cad_overrides") is None
     a = client.post(url + "?dry_run=0", files={"file": ("params.csv", csv_text.encode("utf-8"), "text/csv")}, headers=env["admin"]).json()
-    assert a["ok"] and _cfg_doc(env)["cad_overrides"] == {"holder_flange_t": 1.8, "ring_t": 0.9, "screw_socket_point": 110.0}
+    assert a["ok"] and _cfg_doc(env)["cad_overrides"] == {"holder_flange_t": 1.0, "ring_t": 0.9, "screw_socket_point": 110.0}
     assert "magnet_height" not in _cfg_doc(env)["cad_overrides"]
     # a user cannot import
     assert client.post(url + "?dry_run=0", files={"file": ("p.csv", b"Name,Unit,Expression\n", "text/csv")},

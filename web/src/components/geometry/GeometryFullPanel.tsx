@@ -14,6 +14,8 @@ import {
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
 import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import SaveIcon from '@mui/icons-material/Save';
+import TuneIcon from '@mui/icons-material/Tune';
+import CloseIcon from '@mui/icons-material/Close';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import SectionLabel from '../common/SectionLabel';
@@ -28,12 +30,14 @@ import {
   changesOf, draftError, formatValue, invalidDrafts, modelBadge, rowsOfGroup, type CadRow,
 } from '../../lib/cadParams';
 import { usePartTreeData, useCadParams, useOpenMotor } from './useConstruction';
+import { useViewportWidth } from '../common/useNarrow';
+import {
+  DRAWER_STORAGE_KEY, drawerStartsOpen, drawerWidth, fullToolbar, treeStartsCollapsed,
+} from '../../lib/viewerToolbar';
 
 const tx = nsT('geometry');
 
 interface Props {
-  panelWidth: number;
-  divider: React.ReactNode;
   models: ModelInfo[] | null;
   /** the shared CAD hook of the Geometry tab (the Files menu imports through it) */
   cad: ReturnType<typeof useCadParams>;
@@ -43,7 +47,7 @@ interface Props {
 
 const fieldSx = { width: 84, '& .MuiInputBase-input': { px: '6px', py: '3px', fontSize: 12, textAlign: 'right' as const } };
 
-const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, treeKey }) => {
+const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
   const { i18n } = useTranslation('geometry');
   const lang = i18n.resolvedLanguage ?? 'en';
   const openMotor = useOpenMotor();
@@ -57,6 +61,10 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
   const [nodes, setNodes] = useState<PartGroup[]>([]);
   const [problems, setProblems] = useState<string[]>([]);
   const canvas = useRef<ModelCanvasHandle>(null);
+  const vw = useViewportWidth();
+  // the CAD parameter table is a right-hand drawer, closed by default so the model is full screen; remembered per browser
+  const [drawer, setDrawerState] = useState<boolean>(() => { try { return drawerStartsOpen(localStorage.getItem(DRAWER_STORAGE_KEY)); } catch { return false; } });
+  const setDrawer = (open: boolean) => { setDrawerState(open); try { localStorage.setItem(DRAWER_STORAGE_KEY, open ? '1' : '0'); } catch { /* a convenience */ } };
 
   const rows = data?.available ? data.rows : [];
   const changes = useMemo(() => changesOf(rows, drafts), [rows, drafts]);
@@ -130,12 +138,6 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
 
   const leftBody = (
     <>
-      {(tree?.kit || model?.assembly === 'frameless') && (
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5, py: 0.5 }}>
-          <Tooltip title={tx('fullKitTip')}><Chip size="small" data-testid="kit-chip" label={tx('fullKitChip')}
-            sx={{ height: 18, fontSize: 10, bgcolor: 'transparent', border: '1px solid var(--line)' }} /></Tooltip>
-        </Box>
-      )}
       {tree?.partial && <Typography sx={{ px: 0.5, mb: 1, fontSize: 11, color: 'var(--text-4)' }}>{tx('fullPartialNote')}</Typography>}
 
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5, mb: 0.75 }}>
@@ -194,37 +196,50 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
   const badgeText = badge === 'rebuilding' ? tx('modelRebuilding') : badge === 'queued' ? tx('modelQueued')
     : badge === 'stale' ? tx('modelStale') : badge === 'failed' ? tx('modelRebuildFailed') : '';
 
+  const items = fullToolbar({ kit: !!(tree?.kit || model?.assembly === 'frameless'), hasModel: !!model, badge, canWrite });
+  const has = (id: string) => (items as string[]).includes(id);
+
   return (
-    <Box sx={{ display: 'flex', height: '100%', minHeight: 0 }} data-testid="geometry-full">
-      <Box sx={{ width: Math.max(panelWidth, 400), flexShrink: 0, overflowY: 'auto', p: 1.5, pt: 0.5 }}>{leftBody}</Box>
-      {divider}
-      <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0 }}>
+    <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }} data-testid="geometry-full">
+      {/* ONE compact toolbar on top (wraps on a narrow screen); the model below is full screen */}
+      <Box data-testid="geometry-full-toolbar" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 1.25, py: 0.5, flexShrink: 0,
+        borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel)' }}>
+        <Button size="small" variant={drawer ? 'contained' : 'outlined'} data-testid="toggle-cad-drawer" onClick={() => setDrawer(!drawer)}
+          startIcon={<TuneIcon sx={{ fontSize: 16 }} />} sx={{ textTransform: 'none', fontSize: 12 }}>
+          {tx('cadDrawer')}{rows.length ? ` (${rows.length})` : ''}
+        </Button>
+        {has('kit') && (
+          <Tooltip title={tx('fullKitTip')}><Chip size="small" data-testid="kit-chip" label={tx('fullKitChip')}
+            sx={{ height: 20, fontSize: 10.5, bgcolor: 'transparent', border: '1px solid var(--line)' }} /></Tooltip>
+        )}
+        {has('badge') && (
+          <Chip data-testid="model-badge" icon={badge === 'failed' || badge === 'stale' ? undefined : <CircularProgress size={12} />}
+            color={badge === 'failed' ? 'error' : 'warning'} size="small" label={badgeText} />
+        )}
+        {has('rebuildNow') && (
+          <Button size="small" variant="outlined" onClick={() => void requestRebuild()} data-testid="cad-rebuild-now"
+            sx={{ textTransform: 'none', fontSize: 12 }}>{tx('rebuildNow')}</Button>
+        )}
+        <Box sx={{ flex: 1 }} />
+        {data?.model?.template && badge === 'none' && (
+          <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)', display: { xs: 'none', sm: 'block' } }}>
+            {tx('modelVersion', { template: data.model.template, built: (data.model.built_at ?? '').slice(0, 10) })}
+          </Typography>
+        )}
+        {has('fit') && (
+          <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
+            sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{tx('fit')}</Button>
+        )}
+      </Box>
+
+      <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0 }}>
         {model ? (
           <ModelCanvas ref={canvas} model={model} highlight={highlight} hiddenNodes={hiddenNodes} contextLostText={tx('contextLost')}
             onLoaded={({ groups }) => setNodes(groups)}>
-            <Box sx={{ position: 'absolute', top: 10, left: 10, display: 'flex', alignItems: 'center', gap: 1, zIndex: 2, pointerEvents: 'none' }}>
-              {badge !== 'none' && (
-                <Chip data-testid="model-badge" icon={badge === 'failed' || badge === 'stale' ? undefined : <CircularProgress size={12} />}
-                  color={badge === 'failed' ? 'error' : 'warning'} size="small" label={badgeText} sx={{ pointerEvents: 'auto' }} />
-              )}
-            </Box>
-            <Box sx={{ position: 'absolute', top: 8, right: 8, zIndex: 2, display: 'flex', gap: 1, alignItems: 'center' }}>
-              {(badge === 'stale' || badge === 'failed') && canWrite && (
-                <Button size="small" variant="outlined" onClick={() => void requestRebuild()} data-testid="cad-rebuild-now"
-                  sx={{ textTransform: 'none', fontSize: 12, bgcolor: 'var(--panel)' }}>{tx('rebuildNow')}</Button>
-              )}
-              <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
-                sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)', bgcolor: 'var(--panel)' }}>{tx('fit')}</Button>
-            </Box>
             {badge === 'failed' && data?.rebuild.message && (
               <Alert severity="error" sx={{ position: 'absolute', left: 10, right: 10, bottom: 10, fontSize: 11.5, zIndex: 2, maxHeight: 130, overflow: 'auto' }}>
                 {data.rebuild.message}
               </Alert>
-            )}
-            {data?.model?.template && badge === 'none' && (
-              <Typography sx={{ position: 'absolute', left: 12, bottom: 8, fontSize: 10.5, color: 'var(--text-4)', zIndex: 2 }}>
-                {tx('modelVersion', { template: data.model.template, built: (data.model.built_at ?? '').slice(0, 10) })}
-              </Typography>
             )}
           </ModelCanvas>
         ) : (
@@ -233,12 +248,23 @@ const GeometryFullPanel: React.FC<Props> = ({ panelWidth, divider, models, cad, 
             {models === null ? tx('filesWorking') : tx('fullNoModel')}
           </Typography>
         )}
-        {(treeLoading && !tree) ? <Box sx={{ position: 'absolute', top: 44, left: 8 }}><CircularProgress size={14} /></Box>
+        {(treeLoading && !tree) ? <Box sx={{ position: 'absolute', top: 8, left: 8 }}><CircularProgress size={14} /></Box>
           : assembly.rows.length > 0 ? (
-            <ComponentTreeView model={assembly} style={{ top: 44, left: 8, zIndex: 4, width: 300 }} rowsMaxHeight="calc(100% - 110px)" />
+            <ComponentTreeView model={assembly} defaultCollapsed={treeStartsCollapsed(vw)} style={{ top: 8, left: 8, zIndex: 4, width: 300 }}
+              rowsMaxHeight="calc(100% - 50px)" />
           ) : (
-            <Typography sx={{ position: 'absolute', top: 44, left: 12, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoTree')}</Typography>
+            <Typography sx={{ position: 'absolute', top: 10, left: 12, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoTree')}</Typography>
           )}
+
+        {drawer && (
+          <Box data-testid="cad-drawer" sx={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: drawerWidth(vw), zIndex: 6, overflowY: 'auto',
+            p: 1.5, pt: 0.5, bgcolor: 'var(--panel)', borderLeft: '1px solid var(--line)', boxShadow: '-4px 0 16px rgba(0,0,0,0.25)' }}>
+            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <IconButton size="small" onClick={() => setDrawer(false)} aria-label={tx('cadDrawerClose')}><CloseIcon sx={{ fontSize: 18 }} /></IconButton>
+            </Box>
+            {leftBody}
+          </Box>
+        )}
       </Box>
     </Box>
   );

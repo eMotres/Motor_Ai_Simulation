@@ -496,6 +496,7 @@ const ComponentTreeView: React.FC<ComponentTreeViewProps> = ({
         left: 8,
         zIndex: 1100,
         width: 220,
+        maxWidth: 'calc(100% - 16px)',
         background: 'var(--overlay)',
         backdropFilter: 'blur(8px)',
         border: '1px solid var(--line)',

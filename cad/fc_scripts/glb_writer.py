@@ -49,6 +49,62 @@ class Group:
         self.items.append((name, list(patches), dict(extras) if extras else None))
 
 
+def split_by_slab(mesh, origin, axis, t0, t1, eps=2e-4):
+    """Cut a patch by the two planes t = t0 and t = t1 (t = (v - origin) . axis, unit axis).  -> (inside, [outside patches]):
+    the part with t0 <= t <= t1 and the parts below t0 / above t1, as new `Mesh`es (None / omitted when empty).  Winding is kept; a cut
+    edge gets one new vertex shared by both neighbouring triangles (smooth normals stay smooth); the corners of the original vertices
+    are untouched.  A triangle wholly inside the slab is kept as it is."""
+    ts = [sum((v[k] - origin[k]) * axis[k] for k in range(3)) for v in mesh.vertices]
+    parts = {"lo": ([], {}, []), "in": ([], {}, []), "hi": ([], {}, [])}       # name -> (vertices, index map, triangles)
+
+    def vid(part, key, pos):
+        verts, idx, _ = parts[part]
+        if key not in idx:
+            idx[key] = len(verts)
+            verts.append(pos)
+        return idx[key]
+
+    def clip(poly, lo, hi):
+        """Sutherland-Hodgman against lo <= t <= hi on a polygon of (key, t, pos); an edge crossing a plane gets key (i, j, plane)."""
+        out = poly
+        for plane, keep in ((lo, lambda t: t >= lo - eps), (hi, lambda t: t <= hi + eps)):
+            if plane is None or not out:
+                continue
+            nxt = []
+            for a, b in zip(out, out[1:] + out[:1]):
+                ina, inb = keep(a[1]), keep(b[1])
+                if ina:
+                    nxt.append(a)
+                if ina != inb:
+                    u = (plane - a[1]) / (b[1] - a[1])
+                    pos = tuple(a[2][k] + u * (b[2][k] - a[2][k]) for k in range(3))
+                    key = tuple(sorted((a[0], b[0]), key=repr)) + (plane,)       # same key from both triangles sharing the edge
+                    nxt.append((key, plane, pos))
+            out = nxt
+        return out
+
+    for tri in mesh.triangles:
+        poly = [(i, ts[i], tuple(mesh.vertices[i])) for i in tri]
+        for name, lo, hi in (("lo", None, t0), ("in", t0, t1), ("hi", t1, None)):
+            if name == "lo" and min(p[1] for p in poly) >= t0 - eps:
+                continue
+            if name == "hi" and max(p[1] for p in poly) <= t1 + eps:
+                continue
+            if name == "in" and min(p[1] for p in poly) >= t0 - eps and max(p[1] for p in poly) <= t1 + eps:
+                part = [vid("in", p[0], p[2]) for p in poly]
+                parts["in"][2].append(tuple(part))
+                continue
+            cp = clip(poly, lo, hi)
+            if len(cp) < 3:
+                continue
+            ids = [vid(name, p[0], p[2]) for p in cp]
+            for k in range(1, len(ids) - 1):
+                if len({ids[0], ids[k], ids[k + 1]}) == 3:
+                    parts[name][2].append((ids[0], ids[k], ids[k + 1]))
+    made = {n: (Mesh(v, t) if t else None) for n, (v, _i, t) in parts.items()}
+    return made["in"], [m for m in (made["lo"], made["hi"]) if m is not None]
+
+
 def smooth_normals(vertices, triangles):
     """Area-weighted vertex normals of one patch (vertices are shared inside a face, so curved faces come out smooth and
     planar faces exact).  Degenerate vertices get +Z."""
@@ -225,10 +281,8 @@ def glb_geometry_hash(data):
     return h.hexdigest()
 
 
-def glb_group_signature(data):
-    """{group name: (triangles, unique vertices, volume, vertex-set hash)} of a GLB.  Looser than `glb_geometry_hash`: the diagonals
-    OCC picks inside a planar face may differ from run to run (seen on the CIANO28 85 holders), the vertices, the triangle counts and
-    the enclosed volume do not.  The thread export test compares this between a build with and without the thread nodes."""
+def glb_group_data(data):
+    """{group name: (triangles, set of vertices rounded to 1e-4 mm, enclosed volume)} of a GLB."""
     doc, blob = parse_glb(data)
     nodes = doc["nodes"]
     out = {}
@@ -250,8 +304,16 @@ def glb_group_signature(data):
             vs.update(tuple(round(c, 4) + 0.0 for c in p) for p in pts)
             nt += len(idx) // 3
             vol += signed_volume(pts, [tuple(idx[t:t + 3]) for t in range(0, len(idx), 3)])
-        out[g["name"]] = (nt, len(vs), round(vol, 2), hashlib.sha256(repr(sorted(vs)).encode("ascii")).hexdigest()[:16])
+        out[g["name"]] = (nt, vs, vol)
     return out
+
+
+def glb_group_signature(data):
+    """{group name: (triangles, unique vertices, volume, vertex-set hash)} of a GLB.  Looser than `glb_geometry_hash`: the diagonals
+    OCC picks inside a planar face may differ from run to run (seen on the CIANO28 85 holders), the vertices, the triangle counts and
+    the enclosed volume do not."""
+    return {k: (nt, len(vs), round(vol, 2), hashlib.sha256(repr(sorted(vs)).encode("ascii")).hexdigest()[:16])
+            for k, (nt, vs, vol) in glb_group_data(data).items()}
 
 
 def parse_glb(data):

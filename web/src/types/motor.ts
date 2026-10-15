@@ -141,6 +141,12 @@ export interface ParameterVariation {
   min: number;
   max: number;
   step: number;
+  /** Which motor (lib/optVarRanges identityScope: die + configuration + lamination
+   *  keys) this range was seeded or typed for.  The sweep config is ONE per
+   *  account, so a range typed for another motor used to come back when the
+   *  variable was re-added; it is reused only if unstamped-and-containing or
+   *  stamped for the loaded motor.  Travels with the body to the server as-is. */
+  scope?: string;
 }
 
 export type VariationConfig = Record<string, ParameterVariation>;

@@ -37,6 +37,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useLastMotorState } from '../../lib/lastMotor';
 import { fetchFamilyTree } from '../../lib/familyTree';
 import { modeNames, type RowDie } from '../../lib/catalogRows';
+import { dutyEfficiencyPct } from '../../lib/dutyEfficiency';
 
 const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
@@ -67,24 +68,6 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
  * low because the caller had already subtracted the mechanical loss out of
  * `PmW` before handing it to this function).
  */
-export function dutyEfficiencyPct(s: any, pMechW: number): number {
-  const pm = Math.abs(Number(pMechW) || 0);
-  const loss = Number(s?.P_loss_total_W) || 0;
-  const brg = Number(s?.P_bearings_W);
-  const wind = Number(s?.P_windage_W);
-  const known = Number.isFinite(brg) || Number.isFinite(wind);
-  const extra = (Number.isFinite(brg) ? brg : 0) + (Number.isFinite(wind) ? wind : 0);
-  const gen = s?.op_mode === 'generator';
-  if (pm <= 0) return (Number(s?.efficiency) || 0) * 100;
-  const pElec = gen ? Math.max(0, pm - loss) : pm + loss;
-  if (!known) return (gen ? pElec / pm : pm / pElec) * 100;
-  const pShaft = gen ? pm + extra : Math.max(0, pm - extra);
-  return (gen ? (pShaft > 0 ? pElec / pShaft : 0)
-              : (pElec > 0 ? pShaft / pElec : 0)) * 100;
-}
-
-
-
 interface Ctx {
   active: boolean; die?: string; config?: string; duty?: string | null;
   die_locked?: boolean; config_locked?: boolean; can_write?: boolean;

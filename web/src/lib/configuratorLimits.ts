@@ -33,7 +33,8 @@ export type LimitBasis =
   | 'no_controller' // I: nothing saved -> the passport rule
   | 'envelope'      // rpm: the passport's voltage model at the pack maximum
   | 'kv'            // rpm: Kv x V_max x m
-  | 'no_battery';   // rpm: no pack known -> the passport rule
+  | 'no_battery'    // rpm: no pack known -> the passport rule
+  | 'invalid_battery'; // rpm: raw pack input is invalid; the fallback range is not displayable
 
 export interface PhysRange extends KRange { basis: LimitBasis; }
 
@@ -109,14 +110,21 @@ export function envelopeRpm(v0: number, v1000: number, vLim: number): number | n
   return (vLim - v0) / a;
 }
 
-export interface SpeedLimit { rpm: number | null; basis: 'envelope' | 'kv' | 'no_battery'; }
+export interface SpeedLimit { rpm: number | null; basis: 'envelope' | 'kv' | 'no_battery' | 'invalid_battery'; }
+
+/** A requested Sine operating point beyond the pack's full-charge speed is refused. */
+export function speedRequestAccepted(rpm: number, maxRpm: number | null): boolean {
+  return Number.isFinite(rpm) && (maxRpm == null || rpm <= maxRpm);
+}
 
 /** v0 / v1000: the passport's line-peak voltage at 0 and 1000 rpm for the
  *  CURRENT knobs (null when the passport has no loaded-voltage model). */
 export function speedLimit(a: {
   vMax: number | null; m: number; kvRpmPerV: number | null;
   v0: number | null; v1000: number | null;
+  batteryValid?: boolean;
 }): SpeedLimit {
+  if (a.batteryValid === false) return { rpm: null, basis: 'invalid_battery' };
   if (!(a.vMax && a.vMax > 0)) return { rpm: null, basis: 'no_battery' };
   if (a.v0 != null && a.v1000 != null) {
     const r = envelopeRpm(a.v0, a.v1000, a.m * a.vMax);
@@ -166,7 +174,7 @@ export function physicalRanges(a: RangeInputs): Record<KnobKey, PhysRange> {
       : { ...d.I_A, basis: 'no_controller' },
     rpm: a.speed.rpm != null && a.speed.rpm > 0
       ? { min: 0, max: a.speed.rpm, basis: a.speed.basis === 'kv' ? 'kv' : 'envelope' }
-      : { ...d.rpm, basis: 'no_battery' },
+      : { ...d.rpm, basis: a.speed.basis === 'invalid_battery' ? 'invalid_battery' : 'no_battery' },
   };
 }
 

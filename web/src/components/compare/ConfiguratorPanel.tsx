@@ -43,7 +43,7 @@ import PerformanceCharts from './PerformanceCharts';
 import PropellerCurves from './PropellerCurves';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import {
-  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
+  driveRowTiles, extraLossTile, lossTailTiles, totalLossShown, lossDensityShown, systemEfficiency, motorEfficiency, controllerLossW, lossMapAvailability, pointDisplayGate, tempRowTiles, compactResultTiles, COMPACT_BAR_MAX_PX, type DriveTileSpec, type TempTileSpec,
 } from '../../lib/configuratorTiles';
 import {
   isPropellerCooled, isRoboticsCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
@@ -57,14 +57,14 @@ import {
 } from '../../lib/configuratorPropellerS1';
 import { activeDuty } from '../../lib/dutySettings';
 import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
-import { estimateThermal } from '../../lib/thermalEstimate';
+import { configureMotorHeat, estimateThermal } from '../../lib/thermalEstimate';
 import { airH, getCoolingPayload, liqH } from '../thermal/api';
 import CoolingControls from '../thermal/CoolingControls';
 import ChargePanel from './ChargePanel';
 import { canCharge } from '../../lib/generatorCharge';
 import { useWireStock } from '../materials/useWireStock';
 import {
-  batteryFromPack, batteryForMachineConfig, batteryForDisplay, batteryEditKey, readBatteryEditForConfig, writeBatteryEditForConfig, clearBatteryEditForConfig, dropStockEdits, sameBattery, BATTERY_BY_MACHINE_LS,
+  batteryFromPack, batteryForMachineConfig, batteryForDisplay, batteryEditKey, readBatteryEditForConfig, writeBatteryEditForConfig, clearBatteryEditForConfig, dropStockEdits, sameBattery, validBatteryNumbers, BATTERY_BY_MACHINE_LS,
 } from '../../lib/configuratorBattery';
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
@@ -73,7 +73,7 @@ import { buildModePresets, baseModeLabel, type ModePreset } from '../../lib/conf
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
-  physicalRanges, narrowRange, speedLimit, overflows, lineVoltageWarning,
+  physicalRanges, narrowRange, speedLimit, speedRequestAccepted, overflows, lineVoltageWarning,
   readOverrides, writeOverrides, speedLimitNote, propellerCurrentNote, RANGES_LS_V2, WIRE_STEP_MM, DEFAULT_MODULATION,
   type KnobKey, type KRange, type Overrides, type PhysRange, type LimitBasis,
 } from '../../lib/configuratorLimits';
@@ -183,7 +183,9 @@ const KnobSlider: React.FC<{
   zone?: string | null;
   /** a value derived from something else (the current that the propeller needs): shown, not editable */
   disabled?: boolean;
-}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, limitNote, onClearHand, zone, disabled }) => {
+  /** Keep the numeric request editable while withholding an unavailable derived range. */
+  hideRange?: boolean;
+}> = ({ label, unit, value, base, min, max, step, d = 1, onChange, onRangeChange, warn, sub, limitNote, onClearHand, zone, disabled, hideRange }) => {
   const delta = pctDelta(value, base);
   const [txt, setTxt] = React.useState<string | null>(null);   // non-null while the field is being typed in
   return (
@@ -230,14 +232,14 @@ const KnobSlider: React.FC<{
         </Box>
       </Box>
       </Box>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+      {!hideRange && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
         {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} name={tx('configureLimits.rangeMin', { label })} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
         <Slider value={value} min={min} max={max} step={step} aria-label={label}
           onChange={(_, v) => onChange(v as number)} size="small" disabled={disabled}
           sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 },
                 ...(zone ? { '& .MuiSlider-rail': { background: zone, opacity: 0.9, height: 4 } } : {}) }} />
         {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} name={tx('configureLimits.rangeMax', { label })} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
-      </Box>
+      </Box>}
     </Box>
   );
 };
@@ -536,6 +538,8 @@ const ConfiguratorPanel: React.FC = () => {
     ? tx('configure.rLineLineAtReferenceTemp', { temp: resistanceReferenceC })
     : tx('configure.rLineLine');
   const p = ref.passport;
+  const lossAvailability = lossMapAvailability(p);
+  const motorLossesComputed = lossAvailability.complete;
   const [knobs, setKnobs] = useState<Knobs>(() => {
     // the remembered tuning is restored only for the machine it was made on (owner 2026-10-15)
     try { const k = readStampedKnobs<Knobs>(localStorage.getItem(KNOBS_LS), refId); if (k) return k; } catch { /* ignore */ }
@@ -806,6 +810,7 @@ const ConfiguratorPanel: React.FC = () => {
   // the one name the charts and the result use for "the knobs the model reads".
   const scaleKnobs = knobs;
   const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
+  const motorLoss_W = motorLossesComputed ? result.P_loss_W : null;
   const copperBreakdown = catalogCopperBreakdown(scaleKnobs.I_A, result.R_ohm, result.P_cu_W);
   const copperResistanceTempC = p.R_temp_C ?? referenceTemperatureBasis?.windingC ?? null;
   const copperResistanceBasis = copperResistanceTempC == null
@@ -878,10 +883,12 @@ const ConfiguratorPanel: React.FC = () => {
   // voltage warning, the PWM bus-range check.  A machine with no pack of its own and no edit
   // has no pack to judge by (the stock 100-cell default is not this machine's pack).
   const batteryKnown = machinePack != null || batteryEdit != null;
-  const packWindow = batteryKnown
-    ? { min: battery.cells * battery.min, max: battery.cells * battery.max } : null;
+  const batteryNumbers = validBatteryNumbers(battery);
+  const batteryValid = batteryNumbers != null;
+  const packWindow = batteryKnown && batteryNumbers
+    ? { min: batteryNumbers.cells * batteryNumbers.min, max: batteryNumbers.cells * batteryNumbers.max } : null;
   const packMaxV: number | null = packWindow?.max ?? null;
-  const packNomV: number | null = batteryKnown ? battery.cells * battery.nom : null;
+  const packNomV: number | null = batteryKnown && batteryNumbers ? batteryNumbers.cells * batteryNumbers.nom : null;
   /** back to the pack the machine was saved with (the user's edit for it is dropped) */
   const resetBattery = () => {
     if (!machinePack) return;
@@ -898,8 +905,10 @@ const ConfiguratorPanel: React.FC = () => {
     return speedLimit({
       vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
       v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null,
+      batteryValid,
     });
-  }, [p, knobs, ref.poles, packMaxV, modM]);
+  }, [p, knobs, ref.poles, packMaxV, modM, batteryValid]);
+  const sinePointAccepted = batteryValid && speedRequestAccepted(knobs.rpm, speedLim.rpm);
   // The slider's visual scale is a no-load/build envelope.  The physical
   // current-dependent cap remains available through speedLim for validation;
   // using the live current here made the thumb move when only current changed.
@@ -910,8 +919,9 @@ const ConfiguratorPanel: React.FC = () => {
     return speedLimit({
       vMax: packMaxV, m: modM, kvRpmPerV: at1k.KV_rpm_per_Vline,
       v0: model ? at0.Vline_peak_V : null, v1000: model ? at1k.Vline_peak_V : null,
+      batteryValid,
     });
-  }, [p, knobs, ref.poles, packMaxV, modM]);
+  }, [p, knobs, ref.poles, packMaxV, modM, batteryValid]);
   const phys = useMemo(() => physicalRanges({
     p, fit: ref.fit, N: knobs.N, wireH_mm: knobs.wireH_mm,
     lMaxMm: currentContext?.limits.L_max_mm ?? null,
@@ -976,6 +986,7 @@ const ConfiguratorPanel: React.FC = () => {
             tip: tx('configureLimits.iInverterTip', { rating: fmt(cur?.i_d_rating_A ?? NaN, 0), tcase: fmt(cur?.t_case_c ?? NaN, 0) }) }
         : { text: '', tip: tx('configureLimits.iNoControllerTip') };
     }
+    if (k === 'rpm' && !batteryValid) return { text: tx('configure.invalidPack'), tip: tx('configure.invalidPackTip') };
     return speedLimitNote(tx, { basis: b, max: mx, packV: fmt(packMaxV ?? NaN, 1), m: fmt(modM, 2) });
   };
   const above = (v: number, r: KRange) => v > r.max * 1.0005 + 1e-9;
@@ -1053,13 +1064,72 @@ const ConfiguratorPanel: React.FC = () => {
       : []),
     [variant, driveRead, knobs.I_A, devLimits, packWindow]);
   /** the numbers to show — null whenever anything is refused */
-  const drv = driveRead && driveRead.ok && driveProblems.length === 0 ? driveRead.values : null;
+  const drv = batteryValid && speedRequestAccepted(knobs.rpm, speedLim.rpm)
+    && driveRead && driveRead.ok && driveProblems.length === 0 ? driveRead.values : null;
   const driveMode: 'sine' | 'pwm' = driveOn ? 'pwm' : 'sine';
+  /** One short line per refusal (text + tooltip), in the order they matter. */
+  const driveRefusals: { text: string; tip: string }[] = (() => {
+    if (!batteryValid) {
+      return [{ text: tx('configureDrive.refuseInvalidPack'), tip: tx('configure.invalidPackTip') }];
+    }
+    if (!speedRequestAccepted(knobs.rpm, speedLim.rpm)) {
+      return [{ text: tx('configure.refuseSpeedPack', { rpm: fmt(knobs.rpm, 0), max: fmt(speedLim.rpm ?? NaN, 0) }),
+        tip: tx('configure.refuseSpeedPackTip', { rpm: fmt(knobs.rpm, 0), max: fmt(speedLim.rpm ?? NaN, 0) }) }];
+    }
+    if (!driveOn) return motorLossesComputed ? []
+      : [{ text: tx('configure.lossNotComputed'), tip: tx('configure.lossNotComputedTip') }];
+    if (driveBuildMoved) {
+      return [{ text: tx('configureDrive.buildTuned'), tip: tx('configureDrive.buildTunedTip') }];
+    }
+    if (!variant || !driveRead) {
+      return [{ text: tx('configureDrive.refuseMissingPoint'), tip: tx('configureDrive.refuseMissingPointTip') }];
+    }
+    if (driveRead && !driveRead.ok) {
+      const r = driveRead.refusal;
+      const env = tx('configureDrive.refuseEnvelopeTip');
+      const n0 = (x: number) => String(Number(x.toFixed(0)));
+      const n1c = (x: number) => String(Number(x.toFixed(1)));
+      return [{
+        tip: env,
+        text: r.kind === 'speed'
+          ? tx('configureDrive.refuseSpeed', { rpm: n0(r.rpm), lo: n0(r.lo), hi: n0(r.hi) })
+          : r.kind === 'current'
+            ? tx('configureDrive.refuseCurrent', { amps: n1c(r.I), lo: n1c(r.lo), hi: n1c(r.hi) })
+            : r.kind === 'gap' ? tx('configureDrive.refuseGap') : tx('configureDrive.refuseNoCoords'),
+      }];
+    }
+    const tip = tx('configureDrive.refuseLimitTip');
+    const dev = variant?.device ?? '';
+    const n1 = (x: number) => String(Number(x.toFixed(1)));
+    const problemRefusals = driveProblems.map((q) => ({
+      tip: q.kind === 'bus' ? tx('configureDrive.refuseBusTip') : tip,
+      text: q.kind === 'tj'
+        ? tx('configureDrive.refuseTj', { tj: n1(q.tj), limit: n0f(q.limit), device: dev })
+        : q.kind === 'rating'
+          ? tx('configureDrive.refuseRating', { amps: n1(q.amps), limit: n0f(q.limit), device: dev })
+          : q.kind === 'vds'
+            ? tx('configureDrive.refuseVds', { device: dev, vdss: n0f(q.vdss), bus: n1(q.bus), max: n1(q.max) })
+            : tx('configureDrive.refuseBus', { lo: q.lo != null ? n1(q.lo) : '0', hi: q.hi != null ? n1(q.hi) : '∞', pmin: q.packMin != null ? n1(q.packMin) : '0', pmax: q.packMax != null ? n1(q.packMax) : '∞' }),
+    }));
+    if (problemRefusals.length) return problemRefusals;
+    return motorLossesComputed ? []
+      : [{ text: tx('configure.lossNotComputed'), tip: tx('configure.lossNotComputedTip') }];
+  })();
+  const pointGate = pointDisplayGate({
+    batteryValid, speedAccepted: speedRequestAccepted(knobs.rpm, speedLim.rpm),
+    driveMode, driveAccepted: driveMode === 'sine' || drv != null, motorLossesComputed,
+  });
+  const pointBlankTip = driveRefusals[0]
+    ? `${driveRefusals[0].text} ${driveRefusals[0].tip}`
+    : tx('configureDrive.blankMissing');
   /** the EFFICIENCY tile: system (motor + controller), battery -> shaft */
-  const sysEff = systemEfficiency(driveMode, drv, result.P_mech_W, result.P_loss_W);
+  const sysEff = pointGate.showMotorLosses
+    ? systemEfficiency(driveMode, drv, result.P_mech_W, motorLoss_W)
+    : { value: null, blank: 'refused' as const };
   /** …and the reference it is coloured against: the same quantity at the reference knobs (PWM reads the
    *  variant there; if that point is not computed the Sine efficiency stands in) */
   const baseSysEff = (() => {
+    if (!motorLossesComputed) return null;
     if (driveMode === 'sine' || !variant) return baseRes.efficiency * 100;
     const k0 = refKnobs ?? baseKnobs(p);
     const r0 = readVariant(variant, k0.rpm, k0.I_A);
@@ -1070,12 +1140,13 @@ const ConfiguratorPanel: React.FC = () => {
   const renderSpec = (t: DriveTileSpec) => {
     const detail = t.id === 'invLoss' && drv && controllerLossW(drv) != null
       ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1), b: fmt(drv.board_copper_W ?? 0, 1) })}` : '';
+    const shown = pointGate.accepted ? t : { ...t, value: null, blank: 'refused' as const };
     return (
-      <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} unit={t.unit} d={t.d}
-        base={t.value ?? 0} goodHi={t.goodHi}
-        absLevel={t.level} tip={tx(t.tipKey) + detail}
-        blankTip={t.blank === 'sine' ? tx('configureDrive.blankSine')
-          : t.blank === 'refused' ? tx('configureDrive.blankRefused') : tx('configureDrive.blankMissing')} />
+      <MetricTile key={shown.id} label={tx(shown.labelKey)} value={shown.value} unit={shown.unit} d={shown.d}
+        base={shown.value ?? 0} goodHi={shown.goodHi}
+        absLevel={shown.level} tip={tx(shown.tipKey) + detail}
+        blankTip={!pointGate.accepted ? pointBlankTip : shown.blank === 'sine' ? tx('configureDrive.blankSine')
+          : shown.blank === 'refused' ? pointBlankTip : tx('configureDrive.blankMissing')} />
     );
   };
   // ── PROPELLER: the load AND the cooling (owner 2026-10-05) ─────────────────────────────────
@@ -1169,13 +1240,20 @@ const ConfiguratorPanel: React.FC = () => {
   const [series, setSeries] = useState<PropSeries | null>(null);
   useEffect(() => {
     setSeries(null);
-    if (!propellerCoolingActive || !propId) return;
+    if (!pointGate.showBatteryDerived || !propellerCoolingActive || !propId) return;
     let dead = false;
-    const go = () => { void fetchSeries(propId, ambient, housingMm).then((s) => { if (dead) return; if (s) setSeries(s); else setTimeout(go, 3000); }); };
+    let retry: ReturnType<typeof setTimeout> | null = null;
+    const go = () => {
+      if (dead) return;
+      void fetchSeries(propId, ambient, housingMm).then((s) => {
+        if (dead) return;
+        if (s) setSeries(s); else retry = setTimeout(go, 3000);
+      });
+    };
     go();
-    return () => { dead = true; };
-  }, [propellerCoolingActive, propId, ambient, housingMm]);
-  const propPoint = propellerCoolingActive && series ? seriesAt(series, knobs.rpm) : null;
+    return () => { dead = true; if (retry != null) clearTimeout(retry); };
+  }, [pointGate.showBatteryDerived, propellerCoolingActive, propId, ambient, housingMm]);
+  const propPoint = pointGate.showBatteryDerived && propellerCoolingActive && series ? seriesAt(series, knobs.rpm) : null;
   // The continuous (S1) limit with this propeller, from the backend (motor_ai_sim.propeller_s1): the
   // highest speed whose steady winding / magnet temperature stays inside the limits.  It belongs to
   // the configuration's PASSPORT build, so it is not shown once the build knobs move off it.
@@ -1212,7 +1290,7 @@ const ConfiguratorPanel: React.FC = () => {
   const [s1, setS1] = useState<S1Result | null>(null);
   useEffect(() => {
     setS1(null);
-    if (!propellerCoolingActive || !propId || !s1Die || !s1Config) return;
+    if (!pointGate.showBatteryDerived || !propellerCoolingActive || !propId || !s1Die || !s1Config) return;
     let dead = false;
     const pack = s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null;
     void fetchPropellerS1(propId, s1Die, s1Config, ambient, s1Drive, pack, s1Req.escBusA).then((r) => {
@@ -1222,9 +1300,9 @@ const ConfiguratorPanel: React.FC = () => {
       setS1(r);
     });
     return () => { dead = true; };
-  }, [propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pointGate.showBatteryDerived, propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
-  const s1Info = propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
+  const s1Info = pointGate.showBatteryDerived && propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
   const s1Text: { text: string; tip: string } | null = (() => {
     if (!s1Info) return null;
     const prop = propSummary ? modelLabel(propSummary.model) : (propId ?? '');
@@ -1295,7 +1373,10 @@ ${s1Text.tip}` : '';
     magnetOD_mm: ref.geo.rotorOR_mm * 2,
   }), [ref, knobs.L_mm]);
   const tLimits = useMemo(() => tempLimits(currentContext?.thermal_limits), [currentContext]);
-  const extraLossW = extraLossTile(driveMode, drv).value ?? 0;
+  const extraLossW = extraLossTile(driveMode, drv).value;
+  const motorHeat = configureMotorHeat(driveMode, pointGate.accepted,
+    pointGate.showMotorLosses ? { P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W,
+      stator_W: result.P_loss_stator_W, rotor_W: result.P_loss_rotor_W } : null, extraLossW);
   // The typed cooling system (air speed or a liquid jacket) of a machine the registry gives no
   // cooling for: `CoolingControls` persists it to localStorage `sim.cool.*` and fires
   // `cooling:changed` — it is not React state, so read it again on that event.
@@ -1330,11 +1411,10 @@ ${s1Text.tip}` : '';
   }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, roboticsOnly, propPoint, loadRefused, ambient, coolPayload]);
   /** winding / magnet / housing temperatures at the knobs (null while the cooling data is not
    *  here, or while the load is refused — never numbers for a point that cannot be run) */
-  const thermal = useMemo(() => (cooling
-    ? estimateThermal(thermalGeom, { P_cu_W: result.P_cu_W, P_fe_W: result.P_fe_W, P_mag_W: result.P_mag_W,
-        ...(hasPropellerControls ? { P_extra_W: extraLossW } : {}) },
+  const thermal = useMemo(() => (cooling && motorHeat
+    ? estimateThermal(thermalGeom, motorHeat.thermalLosses,
       { h_Wm2K: cooling.h_Wm2K, ambient_C: cooling.ambient_C })
-    : null), [cooling, thermalGeom, result, extraLossW, hasPropellerControls]);
+    : null), [cooling, thermalGeom, motorHeat]);
   const verdict = thermal ? judgeTemps(thermal.T_winding_C, thermal.T_magnet_C, tLimits) : null;
   const overheats = !!verdict?.over;
   /** the ONE red line above the results (fixed height, so it never moves the grid): the propeller's
@@ -1359,24 +1439,33 @@ ${s1Text.tip}` : '';
   // Narrow screens (< COMPACT_BAR_MAX_PX): the knobs are on top and the numbers they move far below, so a one-line results
   // bar stays pinned to the bottom edge and follows every slider (the full tiles are unchanged on a wide screen).
   const narrow = useMediaQuery(`(max-width:${COMPACT_BAR_MAX_PX - 0.05}px)`);
-  const compactTiles = compactResultTiles({ T_Nm: result.T_Nm, P_kW: result.P_mech_W / 1000, eff_pct: sysEff.value, temps: tempTiles });
+  const compactTiles = compactResultTiles({
+    T_Nm: pointGate.accepted ? result.T_Nm : null,
+    P_kW: pointGate.accepted ? result.P_mech_W / 1000 : null,
+    eff_pct: pointGate.showMotorLosses ? sysEff.value : null,
+    temps: pointGate.accepted ? tempTiles : [],
+  });
   const renderTemp = (t: TempTileSpec) => (
     <MetricTile key={t.id} label={tx(t.labelKey)} value={t.value} display={t.display} unit={t.unit} d={t.d} base={t.value ?? 0}
       absLevel={t.level} plain
       tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '',
         air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—',
         surface: t.surface != null ? fmt(t.surface, 0) : '—' })}
-      blankTip={tx(loadRefused ? 'configurePropeller.blankRefused' : 'configurePropeller.blankLoading')} />
+      blankTip={!pointGate.accepted || !pointGate.showMotorLosses ? pointBlankTip
+        : tx(loadRefused ? 'configurePropeller.blankRefused' : 'configurePropeller.blankLoading')} />
   );
   /** thermal zones on the knobs: green = continuous below both limits with this propeller, red = beyond.
    *  Recomputed with wire / turns / length / propeller / ambient (a pure function of them). */
   const zones = useMemo(() => {
-    if (!propellerCoolingActive || !series) return { rpm: null as string | null, I: null as string | null };
+    if (!propellerCoolingActive || !series || driveOn || !sinePointAccepted || !motorLossesComputed) return { rpm: null as string | null, I: null as string | null };
     const okAt = (rpm: number, I: number): boolean | null => {
       const pt = seriesAt(series, rpm);
       if (!pt || pt.h_W_m2K == null) return null;
       const r = scaleMotor(p, { ...knobs, rpm, I_A: I }, ref.poles);
-      const th = estimateThermal(thermalGeom, { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W, P_mag_W: r.P_mag_W, P_extra_W: extraLossW },
+      const heat = configureMotorHeat('sine', true, { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W,
+        P_mag_W: r.P_mag_W, stator_W: r.P_loss_stator_W, rotor_W: r.P_loss_rotor_W }, 0);
+      if (!heat) return null;
+      const th = estimateThermal(thermalGeom, heat.thermalLosses,
         { h_Wm2K: pt.h_W_m2K, ambient_C: ambient });
       return !judgeTemps(th.T_winding_C, th.T_magnet_C, tLimits).over;
     };
@@ -1389,42 +1478,8 @@ ${s1Text.tip}` : '';
     });
     const iOk = propLoad ? [] : zoneSamples(ranges.I_A.min, ranges.I_A.max).map((I) => okAt(knobs.rpm, I));
     return { rpm: zoneGradient(rpmOk), I: zoneGradient(iOk) };
-  }, [propellerCoolingActive, series, p, ref.poles, thermalGeom, tLimits, extraLossW, ambient, propLoad, ranges.rpm.min, ranges.rpm.max, ranges.I_A.min, ranges.I_A.max,
-      knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, propLoad ? 0 : knobs.I_A, propLoad ? 0 : knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
-  /** one short line per refusal (text + tooltip), in the order they matter */
-  const driveRefusals: { text: string; tip: string }[] = (() => {
-    if (!driveOn) return [];
-    if (driveBuildMoved) {
-      return [{ text: tx('configureDrive.buildTuned'), tip: tx('configureDrive.buildTunedTip') }];
-    }
-    if (driveRead && !driveRead.ok) {
-      const r = driveRead.refusal;
-      const env = tx('configureDrive.refuseEnvelopeTip');
-      const n0 = (x: number) => String(Number(x.toFixed(0)));
-      const n1c = (x: number) => String(Number(x.toFixed(1)));
-      return [{
-        tip: env,
-        text: r.kind === 'speed'
-          ? tx('configureDrive.refuseSpeed', { rpm: n0(r.rpm), lo: n0(r.lo), hi: n0(r.hi) })
-          : r.kind === 'current'
-            ? tx('configureDrive.refuseCurrent', { amps: n1c(r.I), lo: n1c(r.lo), hi: n1c(r.hi) })
-            : r.kind === 'gap' ? tx('configureDrive.refuseGap') : tx('configureDrive.refuseNoCoords'),
-      }];
-    }
-    const tip = tx('configureDrive.refuseLimitTip');
-    const dev = variant?.device ?? '';
-    const n1 = (x: number) => String(Number(x.toFixed(1)));
-    return driveProblems.map((q) => ({
-      tip: q.kind === 'bus' ? tx('configureDrive.refuseBusTip') : tip,
-      text: q.kind === 'tj'
-        ? tx('configureDrive.refuseTj', { tj: n1(q.tj), limit: n0f(q.limit), device: dev })
-        : q.kind === 'rating'
-          ? tx('configureDrive.refuseRating', { amps: n1(q.amps), limit: n0f(q.limit), device: dev })
-          : q.kind === 'vds'
-            ? tx('configureDrive.refuseVds', { device: dev, vdss: n0f(q.vdss), bus: n1(q.bus), max: n1(q.max) })
-            : tx('configureDrive.refuseBus', { lo: q.lo != null ? n1(q.lo) : '0', hi: q.hi != null ? n1(q.hi) : '∞', pmin: q.packMin != null ? n1(q.packMin) : '0', pmax: q.packMax != null ? n1(q.packMax) : '∞' }),
-    }));
-  })();
+  }, [propellerCoolingActive, series, p, ref.poles, thermalGeom, tLimits, ambient, propLoad, driveOn, motorLossesComputed, ranges.rpm.min, ranges.rpm.max, ranges.I_A.min, ranges.I_A.max,
+      sinePointAccepted, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, propLoad ? 0 : knobs.I_A, propLoad ? 0 : knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
   // STRANDS IN HAND multiply the parallel paths for every current split: k
   // wires wound together each carry 1/k of the turn's current.  It is a
   // property of the BUILD (the passport records what it was measured at), not
@@ -1528,7 +1583,7 @@ ${s1Text.tip}` : '';
   };
   // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
   // (with a propeller as the load the current is the propeller's, not a setting)
-  const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, battery, batteryFromPack(pr.battery),
+  const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, batteryNumbers, batteryFromPack(pr.battery),
     cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined,
     { ignoreCurrent: propLoad }).length === 0)?.key ?? null;
   // the button the state started from - "changed from L12 · rated" names it
@@ -1597,6 +1652,7 @@ ${s1Text.tip}` : '';
   }, [loadSettled, reconciledKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addConfig = () => {
+    if (!pointGate.accepted) return;
     const n = configs.filter((c) => c.refId === refId).length + 1;
     const name = tx('configure.cfgName', { conn: connLabel(knobs.nP, ref.geo.numSlots), n: knobs.N,
       L: fmt(knobs.L_mm, 0), wire: fmt(knobs.wireH_mm, 2), idx: n });
@@ -1686,17 +1742,26 @@ ${s1Text.tip}` : '';
       ? { name: `${vendorLabel(propSummary.vendor)} ${modelLabel(propSummary.model)}`, ambient_C: ambient,
           load: propLoad ? 'propeller' : 'manual' }
       : null,
-    battery: { cells: battery.cells, cellV: [battery.min, battery.nom, battery.max],
-      pack_V: [battery.cells * battery.min, battery.cells * battery.max],
-      edited: !!machinePack && !sameBattery(battery, machinePack) },
+    battery: batteryNumbers ? { cells: batteryNumbers.cells, cellV: [batteryNumbers.min, batteryNumbers.nom, batteryNumbers.max],
+      pack_V: [batteryNumbers.cells * batteryNumbers.min, batteryNumbers.cells * batteryNumbers.max],
+      edited: !!machinePack && !sameBattery(battery, machinePack) } : null,
     tiles: {
-      torque_Nm: result.T_Nm, power_kW: result.P_mech_W / 1000, mass_kg: result.mass_kg,
-      efficiency_pct: sysEff.value, totalLoss_W: totalLossShown(result.P_loss_W, driveMode, drv),
-      copperLoss_W: result.P_cu_W, ironLoss_W: result.P_fe_W, magnetLoss_W: result.P_mag_W,
-      controllerLoss_W: drv ? controllerLossW(drv) : null, junctionTemp_C: drv?.tj_C ?? null,
-      dcBusMin_V: result.Vphase_peak_V * Math.sqrt(3), currentDensity_A_mm2: J_A_mm2,
-      slotFill_pct: result.slot_fill_pct, T_winding_C: thermal?.T_winding_C,
-      T_magnet_C: thermal?.T_magnet_C, T_housing_C: thermal?.T_housing_C,
+      torque_Nm: pointGate.accepted ? result.T_Nm : null,
+      power_kW: pointGate.accepted ? result.P_mech_W / 1000 : null,
+      mass_kg: result.mass_kg,
+      efficiency_pct: pointGate.showMotorLosses ? sysEff.value : null,
+      totalLoss_W: pointGate.showMotorLosses ? totalLossShown(motorLoss_W, driveMode, drv) : null,
+      copperLoss_W: pointGate.showMotorLosses && lossAvailability.copper ? result.P_cu_W : null,
+      ironLoss_W: pointGate.showMotorLosses && lossAvailability.iron ? result.P_fe_W : null,
+      magnetLoss_W: pointGate.showMotorLosses && lossAvailability.magnet ? result.P_mag_W : null,
+      controllerLoss_W: pointGate.showController && drv ? controllerLossW(drv) : null,
+      junctionTemp_C: pointGate.showController ? drv?.tj_C ?? null : null,
+      dcBusMin_V: pointGate.accepted ? result.Vphase_peak_V * Math.sqrt(3) : null,
+      currentDensity_A_mm2: pointGate.accepted ? J_A_mm2 : null,
+      slotFill_pct: result.slot_fill_pct,
+      T_winding_C: pointGate.accepted ? thermal?.T_winding_C : null,
+      T_magnet_C: pointGate.accepted ? thermal?.T_magnet_C : null,
+      T_housing_C: pointGate.accepted ? thermal?.T_housing_C : null,
     },
     warnings: [
       ...driveRefusals.map((r) => r.text),
@@ -2026,6 +2091,7 @@ ${s1Text.tip}` : '';
               : (cooled ? { ...limitNote('I_A'), tip: `${limitNote('I_A').tip} ${tx('configurePropeller.zoneTip')}` } : limitNote('I_A'))} />
           <KnobSlider label={tx('configureLimits.speed')} unit="rpm" value={knobs.rpm} base={p.rpm0} min={ranges.rpm.min} max={ranges.rpm.max} step={50} d={0} onChange={setRpm} onRangeChange={isAdmin ? setRange('rpm') : undefined}
             warn={above(knobs.rpm, ranges.rpm) || (speedLim.rpm != null && knobs.rpm > speedLim.rpm)} zone={cooled ? zones.rpm : null}
+            hideRange={!pointGate.showBatteryDerived}
             limitNote={(() => {
               const n = limitNote('rpm');
               if (!cooled) return n;
@@ -2138,10 +2204,10 @@ ${s1Text.tip}` : '';
             </Typography>
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label={tx('configure.torque')} value={result.T_Nm} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
-              tip={KT_BASIS_TIP(result.kt_km_basis)} />
-            <MetricTile label={tx('configure.power')} value={result.P_mech_W / 1000} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi
-              absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} />
+            <MetricTile label={tx('configure.torque')} value={pointGate.accepted ? result.T_Nm : null} unit="N·m" d={1} base={baseRes.T_Nm} goodHi
+              tip={KT_BASIS_TIP(result.kt_km_basis)} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.power')} value={pointGate.accepted ? result.P_mech_W / 1000 : null} unit="kW" d={2} base={baseRes.P_mech_W / 1000} goodHi
+              absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} blankTip={pointBlankTip} />
             <MetricTile label={tx(result.mass_partial ? 'configure.massPartial' : 'configure.mass')} value={result.mass_kg} unit="kg" d={3}
               base={baseRes.mass_kg} goodHi={false}
               tip={`${tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')}${result.mass_winding_known ? '' : ` ${tx('configure.massCopperUnscaledTip')}`}`} />
@@ -2149,37 +2215,42 @@ ${s1Text.tip}` : '';
               <MetricTile label={tx('configure.massActive')} value={result.mass_active_kg} unit="kg" d={3}
                 base={baseRes.mass_active_kg} goodHi={false} tip={tx('configure.massActiveTip')} />
             )}
-            <MetricTile label={tx('configure.efficiency')} value={sysEff.value} unit="%" d={1} base={baseSysEff} goodHi
+            <MetricTile label={tx('configure.efficiency')} value={sysEff.value} unit="%" d={1} base={baseSysEff ?? 0} goodHi
               absLevel={propBad ? 'bad' : undefined}
               tip={`${tx('configure.efficiencyTip')}${propBad && propLine ? ` ${propLine.text}` : ''}`}
-              blankTip={tx(sysEff.blank === 'refused' ? 'configureDrive.blankRefused' : 'configureDrive.blankMissing')} />
+              blankTip={pointBlankTip} />
             {ref.passport.ripple0_pct != null && (
               <MetricTile label={tx('configure.tRipple')} value={ref.passport.ripple0_pct} unit="%" d={1}
                 base={ref.passport.ripple0_pct} goodHi={false} tip={tx('configure.tRippleTip')} />
             )}
-            <MetricTile label={tx('configure.tPerMass')} value={result.torque_per_mass} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi />
-            <MetricTile label={tx('configure.pPerMass')} value={result.power_per_mass_W_kg / 1000} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi />
+            <MetricTile label={tx('configure.tPerMass')} value={pointGate.accepted ? result.torque_per_mass : null} unit="N·m/kg" d={2} base={baseRes.torque_per_mass} goodHi blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.pPerMass')} value={pointGate.accepted ? result.power_per_mass_W_kg / 1000 : null} unit="kW/kg" d={2} base={baseRes.power_per_mass_W_kg / 1000} goodHi blankTip={pointBlankTip} />
           </Box>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label={tx('configure.totalLoss')} value={totalLossShown(result.P_loss_W, driveMode, drv)} unit="W" d={0}
-              base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')} blankTip={tx('configure.totalLossBlankTip')} />
-            <MetricTile label={tx('configure.ironLoss')} value={result.P_fe_W} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false} />
-            <MetricTile label={tx('configure.copperLoss')} value={result.P_cu_W} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip} />
-            <MetricTile label={tx('configure.magnetLoss')} value={result.P_mag_W} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false} />
+            <MetricTile label={tx('configure.totalLoss')} value={pointGate.showMotorLosses ? totalLossShown(motorLoss_W, driveMode, drv) : null} unit="W" d={0}
+              base={baseRes.P_loss_W} goodHi={false} tip={tx('configure.totalLossTip')}
+              blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? result.P_fe_W : null} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false}
+              blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? result.P_cu_W : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? result.P_mag_W : null} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false}
+              blankTip={pointBlankTip} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}
-            <MetricTile label={tx('configure.statorHeat')} value={result.P_loss_stator_W} unit="W" d={0}
+            <MetricTile label={tx('configure.statorHeat')} value={motorHeat?.stator_W ?? null} unit="W" d={0}
               base={baseRes.P_loss_stator_W} goodHi={false}
-              tip={tx(result.loss_split_measured ? 'configure.statorHeatTipMeasured' : 'configure.statorHeatTipUnknown')} />
-            <MetricTile label={tx('configure.rotorHeat')} value={result.P_loss_rotor_W} unit="W" d={0}
+              tip={driveOn && !drv ? driveRefusals[0]?.text ?? tx('configureDrive.blankRefused') : tx(result.loss_split_measured ? 'configure.statorHeatTipMeasured' : 'configure.statorHeatTipUnknown') + (driveOn ? ` ${tx('configureDrive.motorLossStatorTip')}` : '')}
+              blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.rotorHeat')} value={motorHeat?.rotor_W ?? null} unit="W" d={0}
               base={baseRes.P_loss_rotor_W} goodHi={false}
               absLevel={result.loss_split_measured ? undefined : 'warn'}
-              tip={tx(result.loss_split_measured ? 'configure.rotorHeatTipMeasured' : 'configure.rotorHeatTipUnknown')} />
-            <MetricTile label={tx('configure.lossDensity')} value={lossDensityShown(result.loss_density_W_kg, result.P_loss_W, driveMode, drv)} unit="W/kg" d={0}
-              base={baseRes.loss_density_W_kg} goodHi={false} blankTip={tx('configure.totalLossBlankTip')} />
+              tip={driveOn && !drv ? driveRefusals[0]?.text ?? tx('configureDrive.blankRefused') : tx(result.loss_split_measured ? 'configure.rotorHeatTipMeasured' : 'configure.rotorHeatTipUnknown') + (driveOn ? ` ${tx('configureDrive.motorHeatSplitTip')}` : '')}
+              blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.lossDensity')} value={pointGate.showMotorLosses ? lossDensityShown(result.loss_density_W_kg, motorLoss_W, driveMode, drv) : null} unit="W/kg" d={0}
+              base={baseRes.loss_density_W_kg} goodHi={false} blankTip={pointBlankTip} />
             {/* ONE contiguous controller group at the end of the loss row (owner 2026-10-05): the PWM loss,
                 the controller loss, then T_j, the efficiencies and P cont — same cells in Sine and PWM */}
             {lossTailTiles(driveMode, drv).map(renderSpec)}
-            {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, motorEfficiency(driveMode, drv, result.P_mech_W, result.P_loss_W)).map(renderSpec)}
+            {driveRowTiles(driveMode, drv, variant ? (devLimits[variant.device]?.t_j_max_c ?? null) : null, motorEfficiency(driveMode, drv, result.P_mech_W, motorLoss_W)).map(renderSpec)}
           </Box>
           {/* ── TEMPERATURES — ONE row in EVERY cooling mode (owner 2026-10-12: the separate
               "Estimated temperatures" block is gone), the same tiles from the first render ── */}
@@ -2189,11 +2260,11 @@ ${s1Text.tip}` : '';
             </Box>
           )}
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-            <MetricTile label={tx('configure.dcBusMin')} value={result.Vphase_peak_V * Math.sqrt(3)} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} />
-            <MetricTile label={tx('configure.vLinePeak')} value={result.Vline_peak_V} unit="V" d={1} base={baseRes.Vline_peak_V} />
-            <MetricTile label={tx('configure.vPhasePeak')} value={result.Vphase_peak_V} unit="V" d={1} base={baseRes.Vphase_peak_V} />
-            <MetricTile label={tx('configure.vLineRms')} value={result.Vline_rms_V} unit="V" d={1} base={baseRes.Vline_rms_V} />
-            <MetricTile label={tx('configure.vPhaseRms')} value={result.Vphase_rms_V} unit="V" d={1} base={baseRes.Vphase_rms_V} />
+            <MetricTile label={tx('configure.dcBusMin')} value={pointGate.accepted ? result.Vphase_peak_V * Math.sqrt(3) : null} unit="V" d={0} base={baseRes.Vphase_peak_V * Math.sqrt(3)} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.vLinePeak')} value={pointGate.accepted ? result.Vline_peak_V : null} unit="V" d={1} base={baseRes.Vline_peak_V} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.vPhasePeak')} value={pointGate.accepted ? result.Vphase_peak_V : null} unit="V" d={1} base={baseRes.Vphase_peak_V} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.vLineRms')} value={pointGate.accepted ? result.Vline_rms_V : null} unit="V" d={1} base={baseRes.Vline_rms_V} blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.vPhaseRms')} value={pointGate.accepted ? result.Vphase_rms_V : null} unit="V" d={1} base={baseRes.Vphase_rms_V} blankTip={pointBlankTip} />
             {/* Absolute thresholds, not "vs reference": ≤12 A/mm² is a
                 continuous-duty winding, ≤25 a short-peak one, above that the
                 copper cooks whatever the reference did. */}
@@ -2337,14 +2408,15 @@ ${s1Text.tip}` : '';
               the banner fired even when the current merely EQUALLED the cap.
               The cap still colours the current slider red. */}
 
-          <Button onClick={addConfig} variant="contained" startIcon={<AddIcon />}
+          <Button onClick={addConfig} variant="contained" startIcon={<AddIcon />} disabled={!pointGate.accepted}
+            title={!pointGate.accepted ? pointBlankTip : undefined}
             sx={{ textTransform: 'none', fontWeight: 700, bgcolor: '#1d4ed8', '&:hover': { bgcolor: '#2563eb' }, alignSelf: 'flex-start' }}>
             {tx('configure.addToComparison')}
           </Button>
         </Box>
       </Box>
 
-      {cooled && propLoad && (
+      {pointGate.showBatteryDerived && cooled && propLoad && (
         <Box sx={{ px: 2, pb: 1.5 }}>
           <PropellerCurves series={series} rpm={knobs.rpm} rpmMin={ranges.rpm.min} rpmMax={ranges.rpm.max}
             powerEstimated={!!series?.power_estimated} onRpmChange={setRpm}
@@ -2427,7 +2499,7 @@ ${s1Text.tip}` : '';
       {/* ── PERFORMANCE VS SPEED ── */}
       {SHOW_CONFIGURE_CHARTS && (
         <Box sx={{ px: 2, pb: 1.5 }}>
-          <PerformanceCharts p={p} knobs={scaleKnobs} packMin={battery.cells * battery.min} packMax={battery.cells * battery.max} />
+          {pointGate.showBatteryDerived && batteryNumbers && <PerformanceCharts p={p} knobs={scaleKnobs} packMin={batteryNumbers.cells * batteryNumbers.min} packMax={batteryNumbers.cells * batteryNumbers.max} />}
         </Box>
       )}
       {narrow && (

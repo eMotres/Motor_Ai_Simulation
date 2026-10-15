@@ -84,3 +84,10 @@ t('which battery a machine opens on: the edit, else the pack, else stock display
   assert.deepEqual(B.batteryForDisplay(null, null), { type: 'NMC', cells: 100, nom: 3.7, max: 4.2, min: 3.0 });
   assert.ok(B.sameBattery(pack, { ...pack }) && !B.sameBattery(pack, edit));
 });
+
+t('invalid finite battery edits survive reload for field-level validation', () => {
+  const invalid = { type: 'NMC', cells: 12, min: 3.5, nom: 3.2, max: 4.2 };
+  const raw = B.writeBatteryEdit(null, 'machine', invalid);
+  assert.deepEqual(B.readBatteryEdit(raw, 'machine'), invalid);
+  assert.deepEqual(B.batteryInputIssues(B.readBatteryEdit(raw, 'machine')), ['min', 'nom']);
+});

@@ -63,6 +63,7 @@
   "optVarsRedoTip": "重做：{action}",
   "optVarsNothingToUndo": "没有可撤销的操作（Ctrl+Z）",
   "optVarsNothingToRedo": "没有可重做的操作（Ctrl+Shift+Z）",
+  "lossNotComputed": "该运行未计算此项。",
   "optVarsActAdd": "添加 {name}",
   "optVarsActRemove": "移除 {name}",
   "optVarsActAddAll": "添加全部几何参数（{count} 个变量）",

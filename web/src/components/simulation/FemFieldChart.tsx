@@ -30,7 +30,14 @@ import { useMotorStore } from '../../stores/motorStore';
 import { geoSignature } from '../common/geoSig';
 import { matOverrideReady } from '../../lib/apiAuth';
 import { EDDY_DEFAULT_STEPS } from '../../lib/eddySteps';
+import { nsT } from '../../i18n/nsT';
 export type { FemPayload } from './fem-types';
+const tx = nsT('simulation');
+
+const computedNumber = (v: unknown): number | null => {
+  const n = typeof v === 'number' ? v : Number(v);
+  return v != null && Number.isFinite(n) ? n : null;
+};
 
 /** True once a physics request would carry the page's `mat=` override — the
  *  gate every free cache/snapshot probe below waits behind.  A probe fired
@@ -97,21 +104,6 @@ const EDDY_MODES = new Set<FieldMode>(['Jeddy']);
 // shared common/FieldViewer, which every tab now draws through.
 
 // ── stats sidebar ─────────────────────────────────────────────────────────
-const StatRow: React.FC<{ label: string; value: string; sub?: string }> = ({
-  label, value, sub,
-}) => (
-  <Box sx={{ display: 'flex', justifyContent: 'space-between',
-    py: 0.4, borderBottom: '1px solid var(--app-bg)' }}>
-    <Box>
-      <Typography sx={{ fontSize: 10, color: 'var(--text-3)' }}>{label}</Typography>
-      {sub && <Typography sx={{ fontSize: 9, color: 'var(--line)' }}>{sub}</Typography>}
-    </Box>
-    <Typography sx={{ fontSize: 11, color: 'var(--text-1)', fontFamily: 'monospace' }}>
-      {value}
-    </Typography>
-  </Box>
-);
-
 // ── main component ────────────────────────────────────────────────────────
 interface Props {
   gamma_deg?: number;
@@ -241,10 +233,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         // The sidebar formats these unconditionally (crashed the panel on
         // 2026-09-05 with "reading 'toFixed'" — they were simply absent).
         A_z_min: 0, A_z_max: 0, B_mag_max: 0,
-        T_em_Nm: Number(t.summary?.T_em_avg_Nm ?? 0), P_cu_W: Number(t.summary?.P_stranded_W ?? 0),
-        P_fe_W: Number(t.summary?.P_core_W ?? 0), P_mag_eddy_W: Number(t.summary?.P_solid_W ?? 0),
-        P_loss_total_W: Number(t.summary?.P_loss_total_W ?? 0), P_mech_W: Number(t.summary?.P_mech_W ?? 0),
-        efficiency: Number(t.summary?.efficiency ?? 0), freq_Hz: 0, rpm: Number(t.summary?.rpm ?? 0),
+        T_em_Nm: Number(t.summary?.T_em_avg_Nm ?? 0), P_cu_W: computedNumber(t.summary?.P_stranded_W),
+        P_fe_W: computedNumber(t.summary?.P_core_W), P_mag_eddy_W: computedNumber(t.summary?.P_solid_W),
+        P_loss_total_W: computedNumber(t.summary?.P_loss_total_W), P_mech_W: Number(t.summary?.P_mech_W ?? 0),
+        efficiency: computedNumber(t.summary?.efficiency), freq_Hz: 0, rpm: Number(t.summary?.rpm ?? 0),
         source: 'transient-snapshot', from_transient: true,
         source_label: `simulation run${when ? ` ${when}` : ''}`
           + (I != null ? ` @ ${Number(I).toFixed(0)} A` : '')
@@ -791,10 +783,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
           gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', gap: 1, mt: 1 }}>
           {(isEddy
             ? [
-                { label: 'Copper loss', value: `${(payload.P_cu_W ?? 0).toFixed(0)} W` },
-                { label: 'Iron loss',   value: `${(payload.P_fe_W ?? 0).toFixed(0)} W` },
-                { label: 'Magnet eddy', value: `${(payload.P_mag_eddy_W ?? 0).toFixed(1)} W` },
-                { label: 'Efficiency',  value: `${((payload.efficiency ?? 0) * 100).toFixed(1)} %` },
+                { label: 'Copper loss', value: payload.P_cu_W == null ? '—' : `${payload.P_cu_W.toFixed(0)} W`, tip: payload.P_cu_W == null ? tx('lossNotComputed') : undefined },
+                { label: 'Iron loss', value: payload.P_fe_W == null ? '—' : `${payload.P_fe_W.toFixed(0)} W`, tip: payload.P_fe_W == null ? tx('lossNotComputed') : undefined },
+                { label: 'Magnet eddy', value: payload.P_mag_eddy_W == null ? '—' : `${payload.P_mag_eddy_W.toFixed(1)} W`, tip: payload.P_mag_eddy_W == null ? tx('lossNotComputed') : undefined },
+                { label: 'Efficiency', value: payload.efficiency == null ? '—' : `${(payload.efficiency * 100).toFixed(1)} %`, tip: payload.efficiency == null ? tx('lossNotComputed') : undefined },
               ]
             : [
                 { label: 'Mesh vertices',  value: payload.n_vertices.toLocaleString() },
@@ -809,7 +801,7 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                 textTransform: 'uppercase', letterSpacing: '0.06em' }}>
                 {s.label}
               </Typography>
-              <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
+              <Typography title={'tip' in s ? s.tip : undefined} sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
                 {s.value}
               </Typography>
             </Box>

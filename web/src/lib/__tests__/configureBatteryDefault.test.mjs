@@ -114,7 +114,7 @@ test('the speed / efficiency charts sit behind the single SHOW_CONFIGURE_CHARTS 
   const src = (f) => readFileSync(join(dir, f), 'utf8');
   assert.match(src('lib/configuratorFlags.ts'), /export const SHOW_CONFIGURE_CHARTS = false;/);
   const panel = src('components/compare/ConfiguratorPanel.tsx');
-  assert.match(panel, /\{SHOW_CONFIGURE_CHARTS && \(\s*<Box[^>]*>\s*<PerformanceCharts/);
+  assert.match(panel, /\{SHOW_CONFIGURE_CHARTS && \(\s*<Box[^>]*>\s*(?:\{[^{}]*&&\s*)?<PerformanceCharts/);
   assert.equal((panel.match(/<PerformanceCharts/g) || []).length, 1);
   assert.match(src('components/compare/ChargePanel.tsx'), /SHOW_CONFIGURE_CHARTS && chartData\.length > 1/);
   // the geometry pictures are NOT behind it

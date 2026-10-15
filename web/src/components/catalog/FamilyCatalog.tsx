@@ -49,6 +49,7 @@ import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
 import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 import { useLastMotorState } from '../../lib/lastMotor';
+import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -1351,17 +1352,19 @@ const FamilyCatalog: React.FC<{
                               windage when the machine has them (2026-09-11).
                               The tooltip splits it, so the column stays one
                               number. */}
-                          <Tooltip title={r.loss_mech_w != null
-                            ? `${fmt(r.loss_w, 0)} W electromagnetic + ${fmt(r.loss_mech_w, 0)} W bearings and windage`
-                              + (r.loss_mech_derived
-                                 ? ' — the mechanical watts read back from this duty’s own run, which was saved before they were stored beside the result'
-                                 : '')
-                            : 'electromagnetic losses; this run carried no bearings, so the mechanical loss is UNKNOWN, not zero'}>
-                            <td style={staleRes ? { color: '#fbbf24' } : undefined}>
-                              {fmt((r.loss_w ?? 0) + (r.loss_mech_w ?? 0), 0)}
-                              {r.loss_mech_w == null ? ' *' : ''}
-                            </td>
-                          </Tooltip>
+                          {(() => {
+                            const loss = catalogLossDisplay(r);
+                            const tip = !loss.available ? tx('lossNotComputed')
+                              : loss.mechanicalKnown
+                                ? tx('lossElectromagneticAndMechanical', { em: fmt(loss.electromagneticW, 0), mech: fmt(loss.mechanicalW, 0) })
+                                  + (loss.mechanicalDerived ? ` — ${tx('lossMechanicalReadback')}` : '')
+                                : tx('lossElectromagneticUnknownMechanical');
+                            return <Tooltip title={tip}>
+                              <td style={staleRes ? { color: '#fbbf24' } : undefined}>
+                                {loss.available ? fmt(loss.totalW, 0) : '—'}{loss.available && !loss.mechanicalKnown ? ' *' : ''}
+                              </td>
+                            </Tooltip>;
+                          })()}
                           <td style={staleRes ? { color: '#fbbf24' } : undefined} title={r.mass_partial ? `${tx('massPartialTip')}${r.mass_partial_reason ? ` (${r.mass_partial_reason})` : ''}` : tx('massFullTip', { active: fmt(r.mass_active_kg, 3) })}>{fmt(r.mass_kg, 2)}{r.mass_partial ? '*' : ''}</td>
                           {/* KV instead of γ (user 2026-08-25) — rpm per volt
                               of the recorded LINE PEAK, the same max/max

@@ -331,6 +331,63 @@ def _l0_mm(card: dict) -> Optional[float]:
         return None
 
 
+def _passport_copper_mass(card: Optional[dict], passport: dict) -> Optional[float]:
+    """Copper mass at the passport's own base geometry, or None if unknown.
+
+    The catalogue configuration can have a different stack/wire build from a
+    passport copied from another build, so set the mass-model geometry from
+    the passport's recorded L/N/h before measuring its copper component.
+    """
+    if not card or not card.get("die") or not card.get("config"):
+        return None
+    try:
+        import yaml
+        from motor_ai_sim.modules import motor_mass as _mm
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override, params_from_config
+        from motor_ai_sim.masses import compute_masses
+        from motor_ai_sim.material_context import get_request_materials, set_request_materials
+
+        ddir = _mm.find_die_dir(str(card["die"]))
+        if ddir is None:
+            return None
+        dy = yaml.safe_load((ddir / "die.yaml").read_text(encoding="utf-8")) or {}
+        cy_path = ddir / f"{card['config']}.yaml"
+        cy = yaml.safe_load(cy_path.read_text(encoding="utf-8")) or {}
+        geo = dict(dy.get("geometry") or {})
+        geo.update(cy.get("geometry_overrides") or {})
+        for key, val in (("motor_length", passport.get("L0_mm")),
+                         ("num_wires_per_slot", passport.get("N0")),
+                         ("wire_height", passport.get("wireH0_mm"))):
+            if val is None or float(val) <= 0:
+                return None
+            geo[key] = float(val)
+        cfg_doc = _mm._default_config_doc()
+        assigned = {k: v for k, v in (cfg_doc.get("materials") or {}).items()
+                    if k in ("stator_core", "rotor_core", "magnet", "slot", "shaft") and v}
+        assigned.update({k: v for k, v in (cy.get("materials") or {}).items() if v})
+        prior = get_request_materials()
+        own_materials = dict(cy.get("custom_materials") or {})
+        own_parts = dict(cy.get("parts") or {})
+        try:
+            e_raw = passport.get("endWindFrac")
+            if e_raw is None:
+                return None
+            e = float(e_raw)
+            if not (0.0 <= e < 1.0):
+                return None
+            set_request_materials({"assignment": assigned, "materials": own_materials, "parts": own_parts})
+            p = params_from_config(geo_override=geo)
+            g = merge_geo_override(dict(cfg_doc.get("geometry") or {}), geo)
+            k_end = 1.0 / (1.0 - e)
+            mass = compute_masses(p, g, k_end=k_end, materials=assigned)
+        finally:
+            set_request_materials(prior)
+        cu = float(mass.get("cu") or 0.0)
+        return cu if cu >= 0.0 else None
+    except Exception:                                  # noqa: BLE001 - missing mass provenance must not break references
+        return None
+
+
 def _with_full_mass(outer: dict, card: Optional[dict]) -> dict:
     """THE MOTOR MASS IS THE FULL ASSEMBLED MASS (owner 2026-10-14).  The passport's ``mass0_kg`` is the ACTIVE mass of its
     base solve (it scales with the stack length); Configure adds ``mass_fixed_kg`` - the parts that do not scale with the
@@ -353,6 +410,9 @@ def _with_full_mass(outer: dict, card: Optional[dict]) -> dict:
         extra = {"mass_partial": False, "mass_fixed_kg": round(summ["full_kg"] - summ["active_kg"], 5),
                  "mass_active_base_kg": round(summ["active_kg"], 5), "mass_rotating_kg": round(summ["rotating_kg"], 5),
                  "mass_scope": summ.get("scope", "full motor")}      # "frameless kit": the fixed part may be negative (no shaft tube)
+    cu = _passport_copper_mass(card, inner)
+    if cu is not None:
+        extra["mass_cu0_kg"] = round(cu, 7)
     return {**outer, "passport": {**inner, **extra}}
 
 

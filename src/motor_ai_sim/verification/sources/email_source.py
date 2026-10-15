@@ -3,6 +3,7 @@ disposable mailbox, does the domain exist and take mail, and is it the domain of
 from __future__ import annotations
 
 from motor_ai_sim.verification import evidence as EV
+from motor_ai_sim.verification import domain_link as DL
 from motor_ai_sim.verification import net as NET
 from motor_ai_sim.verification import textutil as T
 from motor_ai_sim.verification.evidence import Evidence
@@ -35,11 +36,15 @@ class EmailSource(VerificationSource):
             out.append(self._domain(addr, dom, ctx))
             out.append(self._mx(addr, dom, ctx))
             if site:
-                same = T.registrable_domain(dom) == T.registrable_domain(site)
-                out.append(Evidence("domain", EV.CHECK_DOMAIN_MATCH, EV.DOMAIN, EV.PASS if same else EV.FAIL, EV.NONE, addr,
-                                    "e-mail domain %s %s the official website %s" % (T.registrable_domain(dom), "equals" if same else "differs from",
-                                                                                     T.registrable_domain(site)),
-                                    detail={"email_domain": T.registrable_domain(dom), "website_domain": T.registrable_domain(site)}))
+                linked, how, proof = DL.email_domain_linked(dom, T.host_of(site), context=ctx, website_url=site)
+                proof_source = next((p.get("url") or p.get("to") or p.get("source_url") or
+                                     ((p.get("source_urls") or [""])[0]) or p.get("from") or "" for p in proof.get("proofs", [])
+                                     if p.get("url") or p.get("to") or p.get("source_url") or p.get("source_urls") or p.get("from")), "")
+                out.append(Evidence("domain", EV.CHECK_DOMAIN_MATCH, EV.DOMAIN, EV.PASS if linked else EV.FAIL, EV.NONE, addr,
+                                    "e-mail domain %s is linked to the official website domain %s (%s)" % (dom, T.host_of(site), how)
+                                    if linked else "e-mail domain %s is not linked to the official website domain %s (%s)" % (dom, T.host_of(site), how),
+                                    source_url=proof_source,
+                                    detail={"email_domain": dom, "website_domain": T.host_of(site), "how": how, "evidence": proof}))
         return out
 
     @staticmethod

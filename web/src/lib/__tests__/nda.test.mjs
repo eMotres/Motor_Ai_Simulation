@@ -21,6 +21,13 @@ t('the blocks show only the selected variant, placeholders are filled, unknown o
   assert.equal(L.renderNda('x {{#if nope}}a\n\n\n\nb{{/if}}\n\n\n\ny {{unknown}}', L.values(form, 'e', 'd', 'v')), 'x \n\ny {{unknown}}\n');
 });
 
+t('the dialog agreement sections are always English followed by Simplified Chinese', () => {
+  const sections = L.renderNdaLanguages({ en: 'English {{company}}', 'zh-CN': '中文 {{company}}' },
+    L.values({ ...form, country: 'DE' }, 'e@x.de', '2026-10-13', 'v1'));
+  assert.deepEqual(sections.map((section) => section.lang), ['en', 'zh-CN']);
+  assert.deepEqual(sections.map((section) => section.text), ['English Acme Drones Ltd\n', '中文 Acme Drones Ltd\n']);
+});
+
 t('a blank form shows underscores so the preview reads, the flag follows the country', () => {
   const v = L.values(L.emptyForm(), 'e@x.de', 'd', 'v', '______');
   assert.equal(v.company, '______');

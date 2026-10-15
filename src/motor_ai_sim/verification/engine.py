@@ -94,6 +94,7 @@ def derive(application: dict, ev: list[Evidence]) -> dict:
     corporate = {e.value for e in ev if e.check == EV.CHECK_EMAIL_CORPORATE and e.result == EV.PASS}
     matching = {e.value for e in ev if e.check == EV.CHECK_DOMAIN_MATCH and e.result == EV.PASS}
     mismatching = {e.value for e in ev if e.check == EV.CHECK_DOMAIN_MATCH and e.result == EV.FAIL}
+    linked_corporate_unverified = sorted((corporate & matching) - verified)
 
     cands: list[dict] = []
 
@@ -103,7 +104,8 @@ def derive(application: dict, ev: list[Evidence]) -> dict:
 
     for a in sorted(verified & corporate & matching):
         add("email", EV.STRONG if site_confirmed else EV.SUPPORTING, None,
-            "verified e-mail %s is on the official website's domain%s" % (a, "" if site_confirmed else " (the website is not tied to the company)"), a)
+            "verified e-mail %s is on a company-owned domain linked to the official website%s" %
+            (a, "" if site_confirmed else " (the website is not tied to the company)"), a)
     for e in passed(EV.CHECK_REGISTRY_OFFICER):
         add("registry_officer", EV.STRONG, e, e.summary)
     for e in passed(EV.CHECK_SITE_LISTS_PERSON) + passed(EV.CHECK_URL_SITE_PAGE):
@@ -126,6 +128,7 @@ def derive(application: dict, ev: list[Evidence]) -> dict:
     return dict(site=site, site_domain=site_dom, site_resolves=resolves, site_names_company=names_company, site_shows_registration=shows_reg,
                 domain_resembles_company=resembles, site_confirmed=site_confirmed, verified_addresses=sorted(verified),
                 corporate_verified=sorted(verified & corporate), domain_mismatch=sorted((verified & corporate) & mismatching),
+                linked_corporate_unverified=linked_corporate_unverified,
                 free_only=bool(verified) and not (verified & corporate), signals=signals,
                 strong=sum(1 for s in signals if s["strength"] == EV.STRONG), total=len(signals))
 
@@ -178,7 +181,16 @@ def decide(application: dict, evidence: Iterable, prior: Optional[dict] = None) 
         elif not f["verified_addresses"]:
             reqs.append(_req(REQ_ACCOUNT_EMAIL))
             reasons.append(_reason("email_unverified", "no e-mail address of the applicant is verified"))
-        reqs.append(_req(REQ_CORPORATE_EMAIL, domain=f["site_domain"]))
+        if f["linked_corporate_unverified"]:
+            address = f["linked_corporate_unverified"][0]
+            reqs.append(_req(REQ_CORPORATE_EMAIL, address=address, domain=T.host_of(address.rpartition("@")[2]), linked=True,
+                             website_domain=f["site_domain"]))
+        else:
+            reqs.append(_req(REQ_CORPORATE_EMAIL, domain=f["site_domain"]))
+    elif f["domain_mismatch"] and f["linked_corporate_unverified"]:
+        address = f["linked_corporate_unverified"][0]
+        reqs.append(_req(REQ_CORPORATE_EMAIL, address=address, domain=T.host_of(address.rpartition("@")[2]), linked=True,
+                         website_domain=f["site_domain"]))
     elif f["domain_mismatch"] and not any(s["family"] == "email" for s in f["signals"]):
         reqs.append(_req(REQ_DOMAIN_MISMATCH, addresses=f["domain_mismatch"], domain=f["site_domain"]))
         reasons.append(_reason("domain_mismatch", "the verified corporate e-mail is not on the official website's domain"))

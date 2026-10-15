@@ -168,7 +168,14 @@ const MotorsCatalog: React.FC = () => {
           Configure ("My agent drafts"), and every account's drafts + runs are
           in Admin -> Agent activity. */}
 
-      {diams.length === 0 && (() => {
+      {diams.length === 0 && appFilter !== 'all' && allDies.length > 0 && loaded && !failed ? (
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', color: 'var(--text-4)' }}>
+          <Typography sx={{ fontSize: 11 }}>{tx('noMotorsForApplication', { application: tx(`applications.${appFilter}`) })}</Typography>
+          <Button size="small" onClick={() => pickFilter('all')} sx={{ textTransform: 'none', fontSize: 11, minWidth: 0, p: 0.25 }}>
+            {tx('clearApplicationFilter')}
+          </Button>
+        </Box>
+      ) : diams.length === 0 && (() => {
         const line = emptyCatalogLine({ loaded, failed, note, canWrite });
         return (
           <Typography sx={{ fontSize: 11, color: line === 'unreachable' ? '#f59e0b' : 'var(--text-4)' }}>

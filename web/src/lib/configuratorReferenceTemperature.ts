@@ -41,3 +41,20 @@ export function configuratorReferenceTemperatureBasis(
     ? D85_TEMPERATURE_BASIS
     : null;
 }
+
+/** Resistance reference temperature. Standard extraction_rev 2+ calls the
+ *  transient solver with its explicit 120°C default; the reviewed D85 source
+ *  is the exception (180°C). Older/imported records without provenance stay
+ *  explicitly unknown instead of inheriting either value. */
+export function configuratorResistanceReferenceTemperature(
+  candidateSha256: unknown,
+  extractionRev: unknown,
+  recordedTempC: unknown,
+): number | null {
+  const pinned = configuratorReferenceTemperatureBasis(candidateSha256);
+  if (pinned) return pinned.windingC;
+  const recorded = Number(recordedTempC);
+  if (recordedTempC != null && Number.isFinite(recorded) && recorded >= -50 && recorded <= 400) return recorded;
+  const rev = Number(extractionRev);
+  return Number.isFinite(rev) && rev >= 2 ? 120 : null;
+}

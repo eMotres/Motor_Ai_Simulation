@@ -39,7 +39,7 @@ CHECK_EMAIL_VERIFIED = "email.verified"              # value = address; detail.m
 CHECK_EMAIL_CORPORATE = "email.corporate"            # value = address; pass = neither free nor disposable
 CHECK_EMAIL_DOMAIN = "email.domain_exists"
 CHECK_EMAIL_MX = "email.mx"
-CHECK_DOMAIN_MATCH = "domain.match_website"          # value = address; pass = same registrable domain as the official website
+CHECK_DOMAIN_MATCH = "domain.match_website"          # value = address; pass = same or evidence-linked company website domain
 CHECK_SITE_RESOLVES = "website.resolves"
 CHECK_SITE_NAMES_COMPANY = "website.names_company"
 CHECK_SITE_SHOWS_REG = "website.shows_registration"

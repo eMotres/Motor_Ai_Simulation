@@ -10,6 +10,8 @@
   "lossElectromagneticAndMechanical": "电磁损耗 {em} W + 轴承与风摩损耗 {mech} W",
   "lossElectromagneticUnknownMechanical": "仅显示电磁损耗；该工况未配置轴承，因此机械损耗未知，而非零。",
   "lossMechanicalReadback": "从该工况自身运行结果读取的机械损耗",
+  "noMotorsForApplication": "没有适用于{application}的电机。",
+  "clearApplicationFilter": "清除筛选",
   "copyThisMachineIntoMyMotors": "将此电机复制到“我的电机”——您的私有空间，在您分享之前仅您可见",
   "nameStack": "⚠ 名称 ≠ 叠厚",
   "setTheSupplyBatteryDutiesWill": "设置供电电池——各工况将按其电压范围评判",

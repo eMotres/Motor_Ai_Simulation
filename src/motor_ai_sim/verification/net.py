@@ -37,6 +37,7 @@ class HttpResult:
     headers: dict = field(default_factory=dict)
     error: str = ""
     truncated: bool = False
+    redirect_chain: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
@@ -107,6 +108,7 @@ class Http:
         timeout = timeout or C.HTTP_TIMEOUT_S
         cap = max_bytes or C.FETCH_MAX_BYTES
         cur = url
+        redirects = [url]
         try:
             with self._client(timeout) as cl:
                 for _hop in range(C.FETCH_MAX_REDIRECTS + 1):
@@ -117,6 +119,7 @@ class Http:
                     with cl.stream("GET", cur, headers=headers, auth=auth) as r:
                         if r.status_code in (301, 302, 303, 307, 308) and r.headers.get("location"):
                             cur = urllib.parse.urljoin(cur, r.headers["location"])
+                            redirects.append(cur)
                             continue
                         buf, trunc = b"", False
                         for chunk in r.iter_bytes():
@@ -125,7 +128,8 @@ class Http:
                                 buf, trunc = buf[:cap], True
                                 break
                         enc = r.encoding or "utf-8"
-                        return HttpResult(cur, r.status_code, buf.decode(enc, errors="replace"), dict(r.headers), truncated=trunc)
+                        return HttpResult(cur, r.status_code, buf.decode(enc, errors="replace"), dict(r.headers), truncated=trunc,
+                                          redirect_chain=redirects)
                 return HttpResult(cur, 0, error="too_many_redirects")
         except Exception as e:                                   # noqa: BLE001 - any failure is "unknown", never a pass
             return HttpResult(cur, 0, error="%s: %s" % (type(e).__name__, str(e)[:160]))
@@ -207,6 +211,9 @@ class Page:
     status: int = 0
     text: str = ""
     error: str = ""                       # '' | 'robots' | 'blocked:...' | 'http_404' | 'ConnectError: ...'
+    redirects: list[str] = field(default_factory=list)
+    canonical_url: str = ""
+    mailto: list[str] = field(default_factory=list)
 
 
 def robots_allows(url: str, http=None, cache: Optional[dict] = None) -> bool:
@@ -237,7 +244,40 @@ def fetch_page(url: str, http=None, robots: Optional[dict] = None) -> Page:
         return Page(url, False, 0, error=r.error)
     if not r.ok:
         return Page(url, False, r.status, error="http_%d" % r.status)
-    return Page(r.url, True, r.status, html_to_text(r.text))
+    canonical, mailto = page_metadata(r.text, r.url)
+    redirects = list(getattr(r, "redirect_chain", None) or ([url] if url == r.url else [url, r.url]))
+    return Page(r.url, True, r.status, html_to_text(r.text), redirects=redirects, canonical_url=canonical, mailto=mailto)
+
+
+class _PageMetadata(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.canonical = ""
+        self.mailto: list[str] = []
+        self.skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag in ("script", "style", "noscript", "svg"):
+            self.skip += 1
+        if tag == "link" and "canonical" in (attrs.get("rel") or "").lower().split() and attrs.get("href"):
+            self.canonical = attrs["href"]
+        if tag == "a" and (attrs.get("href") or "").lower().startswith("mailto:") and not self.skip:
+            self.mailto.extend(re.split(r"[;,]", urllib.parse.urlsplit(attrs["href"]).path))
+
+    def handle_endtag(self, tag):
+        if tag in ("script", "style", "noscript", "svg"):
+            self.skip = max(0, self.skip - 1)
+
+
+def page_metadata(html: str, base_url: str) -> tuple[str, list[str]]:
+    parser = _PageMetadata()
+    try:
+        parser.feed(html or "")
+    except Exception:                                      # noqa: BLE001 - malformed markup is a partial answer
+        pass
+    canonical = urllib.parse.urljoin(base_url, parser.canonical) if parser.canonical else ""
+    return canonical, [urllib.parse.unquote(x).strip().lower() for x in parser.mailto if "@" in x]
 
 
 # -- DNS MX ----------------------------------------------------------------------------------------------------------

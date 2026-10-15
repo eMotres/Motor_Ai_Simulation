@@ -74,6 +74,9 @@ export interface Passport {
   /** passport extraction revision (absent = before the 2026-09-30 fixes) */
   extraction_rev?: number | null;
   R0_ohm: number;      // base phase resistance
+  R0_temp_C?: number | null;
+  /** Reference temperature for R0, when supplied by the catalog passport. */
+  R_temp_C?: number | null;
   endWindFrac: number; // 0..1 fraction of R0 that is end-winding (does NOT scale with L)
   Pfe0_W: number;      // base iron (core) loss
   /** The BASE POINT's iron loss per half [W].  The loss grid scales ONE core
@@ -89,6 +92,8 @@ export interface Passport {
    *  shaft/carrier, holders, bearings, screws, board, pins, enamel of the CAD bill of materials - added to the
    *  scaled active mass.  Served by GET /api/catalog/references.  Absent/0 with `mass_partial` = no CAD model yet. */
   mass_fixed_kg?: number | null;
+  /** Base winding copper from the same assigned-material mass model as mass0_kg. */
+  mass_cu0_kg?: number | null;
   /** true = no CAD model yet: the mass shown is the active mass only ("partial mass (no CAD model yet)").  Absent =
    *  an older server / the built-in seed passports: treated as partial too, never silently as full. */
   mass_partial?: boolean | null;
@@ -250,6 +255,8 @@ export interface ScaledResult {
   mass_kg: number;                 // THE motor mass: full when a CAD model exists, else the active mass
   mass_active_kg: number;          // the active (EM parts) mass
   mass_partial: boolean;           // true = no CAD model yet
+  mass_copper_scaled: boolean;
+  mass_winding_known: boolean;
   torque_per_mass: number;
   /** 3D end-effect factor applied to T/EMF at this length (null = not measured,
    *  values are pure 2D). */
@@ -511,9 +518,17 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   const P_loss_rotor = P_loss - P_loss_stator;
 
   const eff = P_mech > 0 ? P_mech / (P_mech + P_loss) : 0;
-  // THE MOTOR MASS (owner 2026-10-14): the active mass scales with the stack, the fixed parts do not.  Every per-kg figure
-  // below divides by it.  Without a CAD model (`mass_partial`) it is the active mass and the result says so.
-  const massActive = p.mass0_kg * fL;
+  // Full assembled mass = active parts + fixed CAD rest. Copper is part of
+  // active mass, but follows rows, conductor height, stack and fixed end turns.
+  // Other active parts follow stack only. Legacy passports without a measured
+  // copper component retain the former stack-only active-mass behavior.
+  const massCu0 = Number(p.mass_cu0_kg);
+  const hasCopperMass = p.mass_cu0_kg != null && Number.isFinite(massCu0) && massCu0 >= 0 && massCu0 <= p.mass0_kg;
+  const rowFactor = p.N0 > 0 ? k.N / p.N0 : fN;
+  const copperFactor = rowFactor * fH * ((1 - p.endWindFrac) * fL + p.endWindFrac);
+  const massActive = hasCopperMass
+    ? (p.mass0_kg - massCu0) * fL + massCu0 * copperFactor
+    : p.mass0_kg * fL;
   // The fixed part may be NEGATIVE: a frameless kit (owner 2026-10-15) has no shaft tube, so its mass is lighter than the active mass
   // by the tube and heavier by the board - only a missing / zero value means "no CAD model".
   const fixedKg = p.mass_fixed_kg == null ? NaN : Number(p.mass_fixed_kg);
@@ -554,6 +569,8 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
     P_loss_stator_W: P_loss_stator, P_loss_rotor_W: P_loss_rotor,
     loss_split_measured: feSplit,
     efficiency: eff, mass_kg: mass, mass_active_kg: massActive, mass_partial: massPartial,
+    mass_copper_scaled: hasCopperMass,
+    mass_winding_known: hasCopperMass || (k.N === p.N0 && k.wireH_mm === p.wireH0_mm),
     torque_per_mass: mass > 0 ? T / mass : 0,
     k_end3d: kEnd,
     power_per_mass_W_kg: mass > 0 ? P_mech / mass : 0,

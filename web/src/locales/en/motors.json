@@ -10,6 +10,8 @@
   "lossElectromagneticAndMechanical": "{em} W electromagnetic + {mech} W bearings and windage",
   "lossElectromagneticUnknownMechanical": "Electromagnetic loss only; this run carries no bearings, so mechanical loss is unknown, not zero.",
   "lossMechanicalReadback": "mechanical loss read from this duty’s own run",
+  "noMotorsForApplication": "No motors for {application}.",
+  "clearApplicationFilter": "Clear filter",
   "copyThisMachineIntoMyMotors": "Copy this machine into MY MOTORS — your private space, visible only to you until you share it",
   "nameStack": "⚠ name ≠ stack",
   "setTheSupplyBatteryDutiesWill": "Set the supply battery — duties will be judged against its voltage range",

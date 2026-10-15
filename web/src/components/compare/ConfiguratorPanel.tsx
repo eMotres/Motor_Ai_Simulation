@@ -81,7 +81,9 @@ import {
   fetchConfigureContext, saveLMax, catalogIdOf, type ConfigureContext,
 } from '../../lib/configureContextApi';
 import { ConfigureContextRequestGuard, contextForIdentity } from '../../lib/configureContextRequest';
-import { configuratorReferenceTemperatureBasis } from '../../lib/configuratorReferenceTemperature';
+import { configuratorReferenceTemperatureBasis, configuratorResistanceReferenceTemperature } from '../../lib/configuratorReferenceTemperature';
+import { shouldCommitConfigureNumber } from '../../lib/configureNumberInput';
+import { catalogCopperBreakdown } from '../../lib/catalogCopperBreakdown';
 import { stackCoefficientReferenceOnly } from '../../lib/stackCoefficientBasis.mjs';
 import { coldConstantsUnavailableForCard } from '../../lib/coldConstantsGuard.mjs';
 import { useTranslation } from 'react-i18next';
@@ -154,10 +156,10 @@ const TD = { px: 1.25, py: 0.5, fontSize: 12, whiteSpace: 'nowrap', textAlign: '
 const KNOBS_LS  = 'configurator.knobs.v1';
 
 // a small editable range endpoint (the min / max flanking a slider)
-const RangeEnd: React.FC<{ value: number; d: number; title: string; onCommit: (v: number) => void }> = ({ value, d, title, onCommit }) => {
+const RangeEnd: React.FC<{ value: number; d: number; title: string; name: string; onCommit: (v: number) => void }> = ({ value, d, title, name, onCommit }) => {
   const [t, setT] = React.useState<string | null>(null);
   return (
-    <input title={title} type="number" value={t ?? fmt(value, d)}
+    <input title={title} aria-label={name} type="number" value={t ?? fmt(value, d)}
       onChange={(e) => setT(e.target.value)}
       onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onCommit(v); setT(null); }}
       onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
@@ -215,8 +217,9 @@ const KnobSlider: React.FC<{
         </Typography>
         <Box sx={{ gridArea: 'value', display: 'flex', alignItems: 'baseline', gap: 0.75, flexShrink: 0, justifySelf: 'center' }}>
         <input value={txt ?? fmt(value, d)} type="number" step={step} readOnly={disabled}
+          aria-label={label}
           onChange={(e) => { setTxt(e.target.value); const v = parseFloat(e.target.value); if (Number.isFinite(v) && v >= min && v <= max) onChange(v); }}
-          onBlur={(e) => { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); setTxt(null); }}
+          onBlur={(e) => { if (shouldCommitConfigureNumber(txt !== null, !!disabled)) { const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v))); } setTxt(null); }}
           onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }}
           style={{ width: 66, background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: warn ? '#f87171' : 'var(--text-0)', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
         {unit ? <Box component="span" sx={{ fontSize: 11, color: 'var(--text-3)' }}>{unit}</Box> : null}
@@ -230,12 +233,12 @@ const KnobSlider: React.FC<{
       </Box>
       </Box>
       {!hideRange && <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-        {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
-        <Slider value={value} min={min} max={max} step={step}
+        {onRangeChange && <RangeEnd value={min} d={d} title={tx('configureLimits.rangeMinTip')} name={tx('configureLimits.rangeMin', { label })} onCommit={(v) => onRangeChange(Math.min(v, max - step), max)} />}
+        <Slider value={value} min={min} max={max} step={step} aria-label={label}
           onChange={(_, v) => onChange(v as number)} size="small" disabled={disabled}
           sx={{ flex: 1, color: warn ? '#f87171' : '#3b82f6', py: 0.5, '& .MuiSlider-thumb': { width: 13, height: 13 },
                 ...(zone ? { '& .MuiSlider-rail': { background: zone, opacity: 0.9, height: 4 } } : {}) }} />
-        {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
+        {onRangeChange && <RangeEnd value={max} d={d} title={tx('configureLimits.rangeMaxTip')} name={tx('configureLimits.rangeMax', { label })} onCommit={(v) => onRangeChange(min, Math.max(v, min + step))} />}
       </Box>}
     </Box>
   );
@@ -521,15 +524,18 @@ const ConfiguratorPanel: React.FC = () => {
   const referenceTemperatureBasis = configuratorReferenceTemperatureBasis(
     ref.referenceProvenance?.candidate_sha256,
   );
+  const resistanceReferenceC = configuratorResistanceReferenceTemperature(
+    ref.referenceProvenance?.candidate_sha256, ref.passport.extraction_rev, ref.passport.R0_temp_C,
+  );
   // Exact D85 reference cards fail closed when their audited cold provenance is
   // absent or malformed; otherwise scaleMotor would expose hot passport values
   // as if they were 20 °C constants. Legacy cards retain their prior behavior.
   const coldConstantsUnavailable = coldConstantsUnavailableForCard(catId, referenceTemperatureBasis);
-  const coldBasisLabel = coldConstantsUnavailable && referenceTemperatureBasis
-    ? tx('configure.rPhaseAtReferenceTemp', { temp: referenceTemperatureBasis.windingC })
-    : tx('configure.rPhase');
-  const coldLineBasisLabel = coldConstantsUnavailable && referenceTemperatureBasis
-    ? tx('configure.rLineLineAtReferenceTemp', { temp: referenceTemperatureBasis.windingC })
+  const coldBasisLabel = resistanceReferenceC != null
+    ? tx('configure.rPhaseAtReferenceTemp', { temp: resistanceReferenceC })
+    : tx('configure.rPhaseReferenceUnknown');
+  const coldLineBasisLabel = resistanceReferenceC != null
+    ? tx('configure.rLineLineAtReferenceTemp', { temp: resistanceReferenceC })
     : tx('configure.rLineLine');
   const p = ref.passport;
   const lossAvailability = lossMapAvailability(p);
@@ -805,6 +811,18 @@ const ConfiguratorPanel: React.FC = () => {
   const scaleKnobs = knobs;
   const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
   const motorLoss_W = motorLossesComputed ? result.P_loss_W : null;
+  const copperBreakdown = catalogCopperBreakdown(scaleKnobs.I_A, result.R_ohm, result.P_cu_W);
+  const copperResistanceTempC = p.R_temp_C ?? referenceTemperatureBasis?.windingC ?? null;
+  const copperResistanceBasis = copperResistanceTempC == null
+    ? tx('emTiles.copperResistanceTempUnknown')
+    : tx('emTiles.copperResistanceTemp', { temp: fmt(copperResistanceTempC, 0) });
+  const copperBreakdownTip = copperBreakdown
+    ? tx('emTiles.copperLossBreakdownTip', {
+        current: fmt(scaleKnobs.I_A, 2), resistance: fmt(result.R_ohm * 1000, 3),
+        basis: copperResistanceBasis, dc: fmt(copperBreakdown.dcW, 1),
+        total: fmt(result.P_cu_W, 1), ac: fmt(copperBreakdown.acProximityW, 1),
+      })
+    : tx('emTiles.copperLossBreakdownUnavailable');
   // The winding must fit ACROSS the slot (owner 2026-10-15: a wire wider than the slot mouth
   // draws the stator with a lobe).  Wire WIDTH is fixed per machine in Configure (only turns and
   // wire thickness are knobs), so there is nothing to clamp here: the line names the limit, and
@@ -1340,8 +1358,8 @@ ${s1Text.tip}` : '';
   useEffect(() => {
     if (!propLoadRes || (!propLoadRes.ok && propLoadRes.kind === 'no_prop')) return;
     const I = propLoadRes.I_A;
-    if (Math.abs(I - knobs.I_A) > 1e-3) setKnobs((k) => ({ ...k, I_A: I }));
-  }, [propLoadRes]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (I !== knobs.I_A) setKnobs((k) => ({ ...k, I_A: I }));
+  }, [propLoadRes, knobs.I_A]);
   const loadRefused = !!propLoadRes && !propLoadRes.ok && propLoadRes.kind === 'torque';
   const thermalGeom = useMemo(() => ({
     statorOD_mm: ref.geo.statorOR_mm * 2,
@@ -2192,7 +2210,7 @@ ${s1Text.tip}` : '';
               absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} blankTip={pointBlankTip} />
             <MetricTile label={tx(result.mass_partial ? 'configure.massPartial' : 'configure.mass')} value={result.mass_kg} unit="kg" d={3}
               base={baseRes.mass_kg} goodHi={false}
-              tip={tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')} />
+              tip={`${tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')}${result.mass_winding_known ? '' : ` ${tx('configure.massCopperUnscaledTip')}`}`} />
             {!result.mass_partial && (
               <MetricTile label={tx('configure.massActive')} value={result.mass_active_kg} unit="kg" d={3}
                 base={baseRes.mass_active_kg} goodHi={false} tip={tx('configure.massActiveTip')} />
@@ -2214,8 +2232,7 @@ ${s1Text.tip}` : '';
               blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.ironLoss')} value={pointGate.showMotorLosses && lossAvailability.iron ? result.P_fe_W : null} unit="W" d={0} base={baseRes.P_fe_W} goodHi={false}
               blankTip={pointBlankTip} />
-            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? result.P_cu_W : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false}
-              blankTip={pointBlankTip} />
+            <MetricTile label={tx('configure.copperLoss')} value={pointGate.showMotorLosses && lossAvailability.copper ? result.P_cu_W : null} unit="W" d={0} base={baseRes.P_cu_W} goodHi={false} tip={copperBreakdownTip} blankTip={pointBlankTip} />
             <MetricTile label={tx('configure.magnetLoss')} value={pointGate.showMotorLosses && lossAvailability.magnet ? result.P_mag_W : null} unit="W" d={0} base={baseRes.P_mag_W} goodHi={false}
               blankTip={pointBlankTip} />
             {/* ── HEAT TO REMOVE, per side — what the cooling is sized on ── */}

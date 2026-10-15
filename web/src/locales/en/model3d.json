@@ -52,6 +52,8 @@
     "disabledHelp": "The agreement text is still a draft. It will open as soon as the final text is published.",
     "downloadSpecimen": "Download PDF for review",
     "downloadSpecimenHelp": "Unsigned specimen for your legal team",
+    "english": "English",
+    "chineseSimplified": "Simplified Chinese (zh-CN)",
     "yourNda": "Your signed NDA",
     "errors": {
       "required": "Required",
@@ -71,7 +73,7 @@
   "verification": {
     "title": "Verification",
     "inProgress": "Verification in progress",
-    "inProgressHelp": "You signed the NDA. We are checking the company and your details, or our team is looking at them. The 3-D tools and the STEP download open as soon as this is done; we write to you if we need anything.",
+    "inProgressHelp": "You signed the NDA. We are checking the company and your details. The full construction, 3-D tools and full STEP open after verification; the simplified STEP is available now. We will contact you if we need anything.",
     "needInfo": "We need one more thing from you",
     "needInfoHelp": "We need a specific proof to finish the check - for example a corporate e-mail address or a link to a page of your company that lists you. Open the page to see what and answer there; no sign-in is needed.",
     "denied": "Access was not approved",

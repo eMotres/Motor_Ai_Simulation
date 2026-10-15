@@ -99,10 +99,10 @@
     "dataSharing": "数据集共享设置",
     "nda": {
       "title": "保密协议、三维工具与 STEP",
-      "intro": "签署保密协议后，即可使用三维工具并下载 STEP 文件。",
-      "signed": "您的保密协议已签署。三维工具和 STEP 下载已开放。",
+      "intro": "现在即可查看简化模型并下载简化版 STEP。签署保密协议并完成账户核验后，可使用完整结构、三维工具并下载完整 STEP。",
+      "signed": "您已签署保密协议。完整结构、三维工具和完整 STEP 需完成账户核验；简化版 STEP 现已开放。",
       "sign": "在线签署保密协议",
-      "signHelp": "约需一分钟。可解锁三维工具和 STEP。",
+      "signHelp": "签署保密协议；查看完整结构和下载完整 STEP 还需完成账户核验。",
       "request": "申请保密协议",
       "requestHelp": "在线签署尚未开放。我们会把协议发送给您。",
       "requested": "已提交申请。我们会与您联系。",
@@ -259,8 +259,12 @@
     "badge": "档案",
     "tip": "完整性能档案 · {date}",
     "tipNoDate": "完整性能档案",
+    "olderBuild": "\u65e7\u7248\u672c",
+    "someDuty": "\u81f3\u5c11\u4e00\u4e2a\u5de5\u4f5c\u70b9",
+    "olderBuildTip": "\u5de5\u4f5c\u70b9\u7ed3\u679c\uff08{duties}\uff09\u6309\u65e7\u7248\u672c\u8ba1\u7b97\u3002\u8bf7\u52a0\u8f7d\u5f53\u524d\u7248\u672c\u3001\u91cd\u65b0\u8ba1\u7b97\u5e76\u4fdd\u5b58\u3002",
     "summary": "{cards}/{total} 档案",
-    "summaryTip": "{total} 个配置中有 {cards} 个具备完整性能档案"
+    "summaryTip": "{total} \u4e2a\u914d\u7f6e\u4e2d\u6709 {cards} \u4e2a\u5177\u5907\u5b8c\u6574\u6027\u80fd\u6863\u6848\u5361\u3002\u6b64\u6570\u91cf\u4e0d\u4ee3\u8868\u7ed3\u679c\u4f7f\u7528\u5f53\u524d\u7248\u672c\u3002",
+    "summaryOlderBuildTip": "{cards} \u4e2a\u914d\u7f6e\uff08\u5171 {total} \u4e2a\uff09\u5177\u5907\u5b8c\u6574\u6027\u80fd\u6863\u6848\u5361\u3002{configs} \u7684\u5de5\u4f5c\u70b9\u7ed3\u679c\u6309\u65e7\u7248\u672c\u8ba1\u7b97\u3002\u8bf7\u52a0\u8f7d\u5f53\u524d\u7248\u672c\u3001\u91cd\u65b0\u8ba1\u7b97\u5e76\u4fdd\u5b58\u3002"
   },
   "system": {
     "view": {
@@ -406,5 +410,6 @@
     "accept": "接受",
     "decline": "拒绝",
     "settings": "Cookie 设置"
-  }
+  },
+  "model3dViewed": "当前查看的 3D 模型：{name}"
 }

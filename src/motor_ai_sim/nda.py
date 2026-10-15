@@ -101,19 +101,21 @@ def sha256_text(t: str) -> str:
 
 
 def current(lang: str) -> Optional[dict]:
-    """``{version, lang, text, sha256, signable, countries}`` of the current agreement, None when no text is installed."""
+    """Current EN and zh-CN texts, retaining selected-language scalar fields for compatibility."""
     lang = lang if lang in LANGS else "en"
     cv = current_version()
     if cv is None:
         return None
     version, base = cv
-    text = _read(base / version / ("model_nda_%s.md" % lang))
-    if text is None and lang != "en":
-        lang, text = "en", _read(base / version / "model_nda_en.md")
-    if text is None:
+    texts = {code: _read(base / version / ("model_nda_%s.md" % code)) for code in LANGS}
+    # Both mirrors are presented and signed together; do not silently serve a one-language agreement.
+    if any(text is None for text in texts.values()):
         return None
-    return dict(version=version, lang=lang, text=text, sha256=sha256_text(text),
-                signable=not is_placeholder(version, text) and legal_root().is_dir(), countries=list(COUNTRIES))
+    hashes = {code: sha256_text(texts[code]) for code in LANGS}
+    text = texts[lang]
+    return dict(version=version, lang=lang, text=text, sha256=hashes[lang], texts=texts, sha256s=hashes,
+                signable=not any(is_placeholder(version, texts[code]) for code in LANGS) and legal_root().is_dir(),
+                countries=list(COUNTRIES))
 
 
 _BLOCK = re.compile(r"\{\{#(if|unless)\s+(\w+)\s*\}\}(.*?)\{\{/\1\s*\}\}", re.S)
@@ -199,8 +201,8 @@ def _inline(s: str) -> str:
     return re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"<i>\1</i>", t, flags=re.S)
 
 
-def build_pdf(rendered: str, rec: dict, *, compress: bool = True, specimen: bool = False) -> bytes:
-    """The filled agreement text plus the acceptance block (or, when ``specimen=True``, the unsigned review specimen)."""
+def build_pdf(rendered: str | dict[str, str], rec: dict, *, compress: bool = True, specimen: bool = False) -> bytes:
+    """Render one legacy text or both language sections followed by the acceptance block/specimen details."""
     from xml.sax.saxutils import escape
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
@@ -209,36 +211,62 @@ def build_pdf(rendered: str, rec: dict, *, compress: bool = True, specimen: bool
     from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
     if specimen:
-        block = [("Status", SPECIMEN_HEADER), ("Agreement version", rec["version"]), ("Text SHA-256", rec["text_sha256"])]
+        block = [("Status", SPECIMEN_HEADER), ("Agreement version", rec["version"]),
+                 ("Text SHA-256", rec["text_sha256"]), ("Template SHA-256", rec.get("template_sha256", "?"))]
+        for code, label in (("en", "EN"), ("zh-CN", "zh-CN")):
+            if rec.get("text_sha256s", {}).get(code):
+                block.append(("%s text SHA-256" % label, rec["text_sha256s"][code]))
+            if rec.get("template_sha256s", {}).get(code):
+                block.append(("%s template SHA-256" % label, rec["template_sha256s"][code]))
     else:
         block = [("Signatory", rec["signatory"]), ("Title", rec["title"]), ("Company", rec["company"]),
                  ("Registration no.", rec["reg_no"]), ("Country", rec["country"]), ("Address", rec["address"]),
                  ("E-mail", rec["email"]), ("Signed (UTC)", rec["iso"]), ("IP address", rec.get("ip") or "?"),
-                 ("Agreement version", rec["version"]), ("Text SHA-256", rec["text_sha256"]), ("Record ID", rec["id"])]
-    reg, bold = _pdf_font(rendered, *[str(v) for _, v in block])
-    cjk = reg == "STSong-Light"
-    wrap = {"wordWrap": "CJK"} if cjk else {}
-    body = ParagraphStyle("b", fontName=reg, fontSize=9.5, leading=13.5, spaceAfter=5, **wrap)
-    head = ParagraphStyle("h", parent=body, fontName=bold, fontSize=11.5, leading=15, spaceBefore=6, spaceAfter=4)
-    title = ParagraphStyle("t", parent=head, fontSize=15, leading=19, spaceAfter=10)
-    cell = ParagraphStyle("c", parent=body, fontSize=8.5, leading=11, spaceAfter=0, **wrap)
-    tbl = Table([[Paragraph(escape(k), cell), Paragraph(escape(str(v)), cell)] for k, v in block], colWidths=[40 * mm, 125 * mm])
+                 ("Agreement version", rec["version"]), ("Text SHA-256", rec["text_sha256"]),
+                 ("Template SHA-256", rec.get("template_sha256", "?")), ("Record ID", rec["id"])]
+        for code, label in (("en", "EN"), ("zh-CN", "zh-CN")):
+            if rec.get("text_sha256s", {}).get(code):
+                block.insert(-1, ("%s text SHA-256" % label, rec["text_sha256s"][code]))
+            if rec.get("template_sha256s", {}).get(code):
+                block.insert(-1, ("%s template SHA-256" % label, rec["template_sha256s"][code]))
+    if isinstance(rendered, dict):
+        if set(rendered) != set(LANGS):
+            raise ValueError("Both English and zh-CN agreement texts are required.")
+        sections = {code: rendered[code] for code in LANGS}
+    else:
+        sections = {"en": rendered}
+    meta_font, _meta_bold = _pdf_font(*[str(v) for _, v in block])
+    meta_wrap = {"wordWrap": "CJK"} if meta_font == "STSong-Light" else {}
+    meta = ParagraphStyle("meta", fontName=meta_font, fontSize=8.5, leading=11, spaceAfter=0, **meta_wrap)
+    tbl = Table([[Paragraph(escape(k), meta), Paragraph(escape(str(v)), meta)] for k, v in block], colWidths=[40 * mm, 125 * mm])
     tbl.setStyle(TableStyle([("GRID", (0, 0), (-1, -1), 0.4, colors.grey), ("VALIGN", (0, 0), (-1, -1), "TOP"),
                              ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke)]))
     story = [tbl, Spacer(1, 8)] if specimen else []
-    for chunk in re.split(r"\n\s*\n", rendered.strip()):
-        line = chunk.strip()
-        if not line:
-            continue
-        m = re.match(r"^(#{1,3})\s+(.*)$", line, re.S)
-        if m:
-            story.append(Paragraph(_inline(m.group(2).strip()), title if len(m.group(1)) == 1 else head))
-        else:
-            story.append(Paragraph(_inline(line), body))
+    for index, (code, text) in enumerate(sections.items()):
+        reg, bold = _pdf_font(text)
+        wrap = {"wordWrap": "CJK"} if reg == "STSong-Light" else {}
+        body = ParagraphStyle("body_%s" % code, fontName=reg, fontSize=9.5, leading=13.5, spaceAfter=5, **wrap)
+        head = ParagraphStyle("head_%s" % code, parent=body, fontName=bold, fontSize=11.5, leading=15, spaceBefore=6, spaceAfter=4)
+        title = ParagraphStyle("title_%s" % code, parent=head, fontSize=15, leading=19, spaceAfter=10)
+        if len(sections) > 1:
+            if index:
+                from reportlab.platypus import PageBreak
+                story.append(PageBreak())
+            label = "English (EN)" if code == "en" else "Simplified Chinese (zh-CN)"
+            story.append(Paragraph(escape(label), title))
+        for chunk in re.split(r"\n\s*\n", text.strip()):
+            line = chunk.strip()
+            if not line:
+                continue
+            m = re.match(r"^(#{1,3})\s+(.*)$", line, re.S)
+            if m:
+                story.append(Paragraph(_inline(m.group(2).strip()), title if len(m.group(1)) == 1 else head))
+            else:
+                story.append(Paragraph(_inline(line), body))
     if not specimen:
         story += [Spacer(1, 8), Paragraph("Acceptance record", head), tbl, Spacer(1, 6),
-                  Paragraph(escape("Accepted online by typing the signatory name. The SHA-256 above is the hash of the exact text "
-                                   "shown to the signatory at the time of signing."), cell)]
+                  Paragraph(escape("Accepted online by typing the signatory name. The selected-language SHA-256 above is the hash "
+                                   "of that exact rendered text; both language hashes are recorded."), meta)]
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=20 * mm, rightMargin=20 * mm, topMargin=18 * mm, bottomMargin=18 * mm,
                             title=("NDA %s SPECIMEN" % rec["version"]) if specimen else ("NDA %s" % rec["id"]),
@@ -263,14 +291,22 @@ def build_pdf(rendered: str, rec: dict, *, compress: bool = True, specimen: bool
 
 
 def build_specimen_pdf(cur_or_lang: dict | str = "en", *, compress: bool = True) -> bytes:
-    """Render the current agreement (EN or zh-CN) as an unsigned PDF specimen with blank fields; nothing is stored."""
+    """Render the current agreement (EN followed by zh-CN) as an unsigned specimen; nothing is stored."""
     cur = current(cur_or_lang) if isinstance(cur_or_lang, str) else cur_or_lang
     if cur is None:
         raise FileNotFoundError("The agreement text is not installed.")
     blanks = {k: SPECIMEN_BLANK for k in FIELDS}
     values = template_values(blanks, SPECIMEN_BLANK, SPECIMEN_BLANK, cur["version"])
-    rendered = render(cur["text"], values)
-    return build_pdf(rendered, dict(version=cur["version"], text_sha256=cur["sha256"]), compress=compress, specimen=True)
+    texts = cur.get("texts") or {cur["lang"]: cur["text"]}
+    if set(texts) != set(LANGS):
+        raise FileNotFoundError("Both English and zh-CN agreement texts are required.")
+    rendered_by_lang = {code: render(texts[code], values) for code in LANGS}
+    hashes = cur.get("sha256s") or {code: sha256_text(texts[code]) for code in LANGS}
+    rec = dict(version=cur["version"], text_sha256=sha256_text(rendered_by_lang[cur["lang"]]),
+               template_sha256=cur["sha256"],
+               text_sha256s={code: sha256_text(rendered_by_lang[code]) for code in LANGS},
+               template_sha256s=hashes)
+    return build_pdf(rendered_by_lang, rec, compress=compress, specimen=True)
 
 
 specimen_pdf = build_specimen_pdf
@@ -326,13 +362,18 @@ def sign(*, user: str, email: str, fields: dict, cur: dict, ip: str, user_agent:
         raise OSError("legal directory %s is not installed" % root)
     now = datetime.datetime.now(datetime.timezone.utc)
     values = template_values(fields, email, now.strftime("%Y-%m-%d"), cur["version"])
-    rendered = render(cur["text"], values)
+    texts = cur.get("texts") or {}
+    if set(texts) != set(LANGS):
+        raise ValueError("Both English and zh-CN agreement texts are required for signing.")
+    rendered_by_lang = {code: render(texts[code], values) for code in LANGS}
     rid = new_record_id(now)
     rec = dict(id=rid, ts=round(now.timestamp(), 3), iso=now.strftime("%Y-%m-%dT%H:%M:%SZ"), user=user, email=email, **fields,
-               version=cur["version"], lang=cur["lang"], template_sha256=cur["sha256"], text_sha256=sha256_text(rendered),
+               version=cur["version"], lang=cur["lang"], template_sha256=cur["sha256"], text_sha256=sha256_text(rendered_by_lang[cur["lang"]]),
+               template_sha256s={code: cur.get("sha256s", {}).get(code, sha256_text(texts[code])) for code in LANGS},
+               text_sha256s={code: sha256_text(rendered_by_lang[code]) for code in rendered_by_lang},
                ip=ip, user_agent=(user_agent or "")[:300], pdf=rid + ".pdf", free_mail=free_mail(email),
                data_sharing=dict(consent=data_sharing is True, version=CONSENT_VERSION, time=now.strftime("%Y-%m-%dT%H:%M:%SZ")))
-    pdf = build_pdf(rendered, rec)
+    pdf = build_pdf(rendered_by_lang, rec)
     with _LOCK:
         d = ensure_private_dir(root / "nda_signed")
         tmp = d / (rid + ".pdf.tmp")

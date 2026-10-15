@@ -31,7 +31,7 @@
     "design": { "sub": "几何" },
     "simulation": { "sub": "电磁 · 热 · 应力" },
     "configure": { "sub": "你的工作点" },
-    "model3d": { "sub": "查看 · NDA 后提供 STEP" },
+    "model3d": { "sub": "查看 · 简化版 STEP 现可下载" },
     "production": { "sub": "订购或授权" },
     "open": { "title": "开源", "sub": "Apache-2.0" },
     "agents": { "title": "AI 智能体", "sub": "MCP 服务器" },
@@ -42,7 +42,7 @@
     "design": "按你的任务设定电机几何。",
     "simulation": "电磁、热和机械有限元耦合仿真。",
     "configure": "按工作点选择电机，并配置冷却、螺旋桨、电池和控制器。",
-    "model3d": "所有人都可查看。工具和 STEP 文件在签署 NDA 后提供。",
+    "model3d": "所有人现在都可查看简化模型并下载简化版 STEP。签署保密协议并完成账户核验后，可查看完整结构和工具并下载完整 STEP。",
     "production": "向 MOTRES 订购电机，或获取非独占制造许可。"
   },
   "sim": {

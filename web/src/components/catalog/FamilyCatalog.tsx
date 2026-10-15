@@ -43,6 +43,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { canWriteServer } from '../../lib/localAuth';
 import { emptyCatalogLine, isStandardUser, uiCanWrite } from '../../lib/accessUi';
 import { CardBadge, CardSummary } from '../common/CardBadge';
+import { staleCatalogDutyNames } from '../../lib/catalogCardStaleness';
 import { configButtons, configClickPlan, loadedMotor, loadTargetTab, selectedConfig } from '../../lib/catalogRows';
 import ApplicationEditor from '../admin/ApplicationEditor';
 import { cleanApplications, diesOfDiameter, filterDiesByApplication, type ApplicationFilter } from '../../lib/applications';
@@ -832,7 +833,9 @@ const FamilyCatalog: React.FC<{
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
               {die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
-            <CardSummary cards={die.cards ?? 0} total={die.config_count ?? die.configs.length} />
+            <CardSummary cards={die.cards ?? 0} total={die.config_count ?? die.configs.length}
+              olderBuildConfigs={die.configs.filter((c) => c.card_date
+                && staleCatalogDutyNames(c.build_sig, c.duties).length > 0).map((c) => c.name)} />
             {(() => {
               // The configurations as small buttons; the numbers beside them are those of
               // the picked configuration's DEFAULT mode (lib/catalogRows).
@@ -840,6 +843,8 @@ const FamilyCatalog: React.FC<{
               const sel = selectedConfig(btns, active?.die === die.name ? active.config ?? null : null,
                                          picked[die.name] ?? null);
               const cur = btns.find((b) => b.config === sel) ?? null;
+              const curCfg = cur ? die.configs.find((x) => x.name === cur.config) : undefined;
+              const curStaleDuties = staleCatalogDutyNames(curCfg?.build_sig, curCfg?.duties);
               return (
                 <>
                   <Box sx={{ display: 'inline-flex', gap: 0.4, flexWrap: 'wrap' }}>
@@ -873,7 +878,7 @@ const FamilyCatalog: React.FC<{
                   </Box>
                   {cur && (
                     <>
-                      <CardBadge date={cur.card_date} />
+                      <CardBadge date={cur.card_date} olderBuild={curStaleDuties.length > 0} staleDuties={curStaleDuties} />
                       <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} die={die.name} canEdit={canWrite} />
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
                         <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
@@ -986,7 +991,9 @@ const FamilyCatalog: React.FC<{
                   {(active?.die === die.name && active?.config === c.name)
                     ? ' ●' : ''}
                 </Typography>
-                <CardBadge date={c.card_date} />
+                <CardBadge date={c.card_date}
+                  olderBuild={staleCatalogDutyNames(c.build_sig, c.duties).length > 0}
+                  staleDuties={staleCatalogDutyNames(c.build_sig, c.duties)} />
                 {c.locked && !canWrite && (
                   <Typography component="span" sx={{ fontSize: 11 }}>🔒</Typography>
                 )}

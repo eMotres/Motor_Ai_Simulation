@@ -38,7 +38,11 @@ for k in range(n):
     y = ytop - wh - k * pitch
     outer = Part.Face(Part.makePolygon([V(-6, y, -8), V(6, y, -8), V(6, y, 9), V(-6, y, 9), V(-6, y, -8)]))
     inner = Part.Face(Part.makePolygon([V(-3, y, -8), V(3, y, -8), V(3, y, 6), V(-3, y, 6), V(-3, y, -8)]))
-    turns.append(outer.cut(inner).extrude(V(0, wh, 0)))
+    ring = outer.cut(inner).extrude(V(0, wh, 0))
+    # the winding steps over to the next turn at the REAR end turn: each turn has only HALF of the rear bar (x < 0 on even turns, x > 0 on odd ones),
+    # so ONE turn's plane section is open there (the 2026-10-15 defect) and only the union of the turns closes the end turn
+    half = Part.makeBox(3, wh, 1.5, V(-3 if k % 2 == 0 else 0, y, -8))
+    turns.append(ring.fuse(half))
 coil = turns[0]
 for t in turns[1:]:
     coil = coil.fuse(t)
@@ -71,8 +75,14 @@ board_bad_sphere = S.check_board(Part.makeSphere(5), brep)
 board_bad_whole = S.check_board(fr4.fuse(cu_top).fuse(pin).fuse(silk), brep)
 mono, rep = S.build_monolith(stator, rotor, mags, RO, RR)
 block = S.coil_block(coil, ytop, wh, pitch, n)
+# the OLD block: the section of ONE turn extruded over the winding height - its rear end turn is open
+one = S._turn_faces(coil, ytop, wh, pitch, [1], sub=1)[0]                       # noqa: SLF001
+one.translate(V(0, ytop - wh - (n - 1) * pitch, 0))
+open_block = one.extrude(V(0, wh + (n - 1) * pitch, 0))
+coil_bad = S.check_coil(block, coil, ytop, wh, pitch, n)
+coil_bad_open = S.check_coil(open_block, coil, ytop, wh, pitch, n)
 blocks = [block]
-bad = S.check(mono, rep, blocks, board, brep)
+bad = S.check(mono, rep, blocks, board, brep, dict(coil=coil, ytop=ytop, wire_h=wh, pitch=pitch, n=n))
 # the check must REFUSE the real, un-filled stator (slots, cut-outs) and a coil kept as separate turns
 bad_slotted = S.check(stator, dict(rep, stepped=False), blocks)
 bad_coil = S.check(mono, rep, [coil])
@@ -82,7 +92,7 @@ out = dict(bad=bad, bad_slotted=bad_slotted, bad_turns=bad_coil, mono_solids=len
            envelope_volume=math.pi * RO ** 2 * L - rep["bore_area_mm2"] * L, stator_faces=len(stator.Faces), rotor_faces=len(rotor.Faces),
            coil_faces=len(coil.Faces), block_faces=len(block.Faces), block_solids=len(block.Solids), block_volume=block.Volume,
            turns_volume=coil.Volume, block_bbox=[block.BoundBox.YMin, block.BoundBox.YMax],
-           mono_bbox=[mono.BoundBox.XMin, mono.BoundBox.XMax, mono.BoundBox.ZMin, mono.BoundBox.ZMax], stepped=rep["stepped"],
+           mono_bbox=[mono.BoundBox.XMin, mono.BoundBox.XMax, mono.BoundBox.ZMin, mono.BoundBox.ZMax], stepped=rep["stepped"], coil_bad=coil_bad, coil_bad_open=coil_bad_open, block_wires=len(block.slice(V(0, 1, 0), ytop - 1.0)),
            board_bad=board_bad, board_bad_pin=board_bad_pin, board_bad_sphere=board_bad_sphere, board_bad_whole=board_bad_whole,
            board_solids=len(board.Solids), board_shells=len(board.Shells), board_faces=len(board.Faces), board_volume=board.Volume,
            board_types=sorted({f.Surface.__class__.__name__ for f in board.Faces}), board_cyl=sum(1 for f in board.Faces if f.Surface.__class__.__name__ == "Cylinder"), board_faces_in=len(fr4.Faces),

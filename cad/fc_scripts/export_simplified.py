@@ -113,7 +113,9 @@ def main():
     monolith, rep = S.build_monolith(core, rotor, mags, g("stator_up_r"), g("rotor_up_r"))
     ytop = g("stator_up_r") - g("core_thickness") - g("insulation_thickness") - g("wire_spacing_y") / 2
     n_layers = int(round(g("num_wires_per_slot")))
-    block = S.coil_block(coil_base, ytop, g("wire_height"), g("wire_height") + g("wire_spacing_y"), n_layers)
+    pitch = g("wire_height") + g("wire_spacing_y")
+    block = S.coil_block(coil_base, ytop, g("wire_height"), pitch, n_layers)
+    coil_ref = dict(coil=coil_base, ytop=ytop, wire_h=g("wire_height"), pitch=pitch, n=n_layers)       # the REAL coil: the closure / containment test
     coil_blocks = []
     for i in range(ncoil):
         c = block.copy()
@@ -131,7 +133,7 @@ def main():
         if outer is not None:
             keep["Bearing_%s" % side] = S.bearing_ring(outer, g("bearing_d"))
     board, brep = S.board_plate(braw["body"], braw["thickness_solids"]) if braw else (None, None)
-    bad = S.check(monolith, rep, coil_blocks, board, brep)
+    bad = S.check(monolith, rep, coil_blocks, board, brep, coil_ref)
     for name, s in keep.items():
         if not s.isValid() or len(s.Solids) != 1:
             bad.append("%s is not one valid solid" % name)

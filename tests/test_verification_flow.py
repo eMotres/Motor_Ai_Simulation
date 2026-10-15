@@ -115,7 +115,8 @@ def test_signing_the_nda_alone_does_not_open_the_step_or_the_tools(env):
     assert models["can_download"] is False and models["access"]["state"] in ("in_progress", "need_info") and models["access"]["nda_signed"] is True
     assert client.get(env["url"] + "/parts", headers=env["corp"]).status_code == 403
     assert client.get(env["url"] + "/bom.csv", headers=env["corp"]).status_code == 403
-    assert client.get(env["url"] + "/model.glb", headers=env["corp"]).status_code == 200              # viewing stays open
+    assert client.get(env["url"] + "/model.glb", headers=env["corp"]).status_code == 403              # owner 2026-10-15: the FULL model goes with the gate
+    assert client.get(env["url"] + "/model.glb", headers=env["corp"]).json()["detail"]["code"] == "nda_required"
     assert M.read_log(10) == []
 
 

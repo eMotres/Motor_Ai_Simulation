@@ -154,7 +154,7 @@ def model_info(entry: dict) -> dict:
                 step_available=bool(step), step_bytes=step and step["bytes"],
                 # the simplified model needs a signed-in user and the right to see the motor - nothing else (no NDA, no verification)
                 simplified_available=bool(s_step), simplified_step_bytes=s_step and s_step["bytes"],
-                simplified_glb_bytes=s_glb and s_glb["bytes"],
+                simplified_glb_bytes=s_glb and s_glb["bytes"], simplified_glb_sha256=s_glb and s_glb["sha256"],
                 version=dict(template=(m.get("template") or {}).get("version"), built_at=m.get("built_at"),
                              param_hash=(m.get("param_hash") or "")[:12]))
 

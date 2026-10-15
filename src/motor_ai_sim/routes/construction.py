@@ -63,6 +63,16 @@ def get_part_tree(die: str, config: Optional[str] = None, authorization: str = H
     die = fam._check_name(die, "die")
     who = fam._require_die_access(die, authorization)
     cfg = _resolve_cfg(die, config, who)
+    # the part tree IS the full construction (owner 2026-10-15): the same gate as the full model / STEP; the 404 for a hidden configuration came first
+    from motor_ai_sim import model3d as _m3
+    from motor_ai_sim.auth import caller_identity as _ci
+    _who = _ci(authorization)
+    _rec = {}
+    if not _who.get("is_admin") and _who.get("id"):
+        from motor_ai_sim import users as _U
+        _rec = _U.get_user(_who["id"]) or {}
+    if not _m3.can_download(_who, _rec):
+        raise HTTPException(status_code=403, detail=dict(code="nda_required", message="The part tree of the full construction needs the signed NDA and a verified account."))
     out: Dict[str, Any] = {"die": die, "config": cfg, "can_write": fam._can_write_catalog(who)}
     try:
         out.update(PT.part_tree(die, cfg, dies_dir=fam._die_dir(die).parent))

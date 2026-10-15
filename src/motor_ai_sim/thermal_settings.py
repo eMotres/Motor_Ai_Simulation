@@ -26,12 +26,16 @@ Deliberately a plain module and not a method on the router: it is pure
 """
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Optional
+import logging
+from typing import Any, Dict, List, Mapping, Optional, Tuple
+
+log = logging.getLogger(__name__)
 
 __all__ = ["COOL_MODES", "BORE_MODES", "END_FACE_MODES", "HEAT_PATHS",
            "heat_path_of", "cooling_fields",
            "cooling_issue", "thermal_panel_settings",
-           "coupled_iteration_settings"]
+           "coupled_iteration_settings", "motor_cooling_patch",
+           "follow_loaded_motor", "settle_application_cooling"]
 
 #: The outer stator surface's boundary conditions (routes.thermal).
 #: ``robotics`` (2026-09-14) is ONE mode and not four fields, by the user's
@@ -363,9 +367,19 @@ def propeller_cooling_context_issue(
     config = str(selection.get("config") or "")
     ref_id = str(selection.get("ref_id") or "")
     expected_key = "%s|%s|%s|%s" % (email, die, config, ref_id)
+    # A motor whose application has no propeller (a robot, a liquid-cooled
+    # aviation/marine motor) can never use this source, whatever key came with
+    # it: say what to do instead of the generic "different motor" text.
+    blocked = _application_blocks_propeller(
+        str(expected_die or die), str(expected_config or config), authorization)
+    if blocked is not None:
+        return _application_message(str(expected_die or die),
+                                    str(expected_config or config), blocked)
     if supplied != expected_key:
-        return ("propeller selection belongs to a different motor or account; "
-                "reload the current motor and choose its assigned propeller")
+        return ("propeller selection belongs to a different motor or account "
+                "(chosen for %s, loaded: %s %s); reload the current motor and "
+                "choose its assigned propeller"
+                % (_key_motor(supplied) or "an unknown motor", die, config))
     if expected_die and die != str(expected_die):
         return "propeller selection does not match this duty's die; load that motor first"
     if expected_config and config != str(expected_config):
@@ -389,7 +403,8 @@ def propeller_cooling_context_issue(
         return "propeller selection does not match this duty's configuration; load that motor first"
     try:
         from motor_ai_sim.routes.propellers import get_cooling_options
-        allowed = get_cooling_options(die=die, config=config) or {}
+        allowed = get_cooling_options(die=die, config=config,
+                                      authorization=authorization) or {}
         ids = allowed.get("propellers") or []
         details = allowed.get("propeller_details") or []
         summary = next((p for p in details
@@ -402,3 +417,252 @@ def propeller_cooling_context_issue(
     except Exception:  # noqa: BLE001 — missing allowlist is a refusal, not a guess
         return "the assigned propeller list is unavailable; reload Thermal and try again"
     return None
+
+
+# ── cooling follows the loaded motor's application (2026-10-15) ──────────────
+#
+# The Thermal settings are ONE record per account, but the cooling they hold
+# belongs to a motor: a propeller source bound to the CIANO14 40 drone motor is
+# meaningless on a robot motor.  Before this, loading another motor left the old
+# source in the record and the next coupled Run was refused with "propeller
+# selection belongs to a different motor".  Now (a) loading a different motor
+# moves the cooling fields to that motor's application, and (b) a Run that still
+# finds a propeller source on a motor whose application has no propeller is
+# switched to that application's cooling instead of refused.
+
+#: The record's fields the application decides; everything else the user typed
+#: (ambient, heat path, emissivity, flow ...) is left alone.
+FOLLOW_KEYS = ("coolMode", "airSpeedSource", "propellerId", "propellerContextKey")
+_PROPELLER_AIR = "propeller_air"
+
+
+def context_key(email: str, die: str, config: str, ref_id: Optional[str]) -> str:
+    """The identity a propeller choice is bound to (mirrors the web's
+    ``propellerContextKey``)."""
+    return "%s|%s|%s|%s" % (str(email).strip().lower(), die, config, ref_id or "")
+
+
+def _key_motor(key: str) -> str:
+    parts = str(key or "").split("|")
+    return "%s %s" % (parts[1], parts[2]) if len(parts) >= 3 and parts[1] else ""
+
+
+def _cooling_options_for(die: str, config: str,
+                         authorization: Optional[str]) -> Optional[Mapping[str, Any]]:
+    try:
+        from motor_ai_sim.routes.propellers import get_cooling_options
+        out = get_cooling_options(die=die, config=config, authorization=authorization)
+        return out if isinstance(out, Mapping) else None
+    except Exception:  # noqa: BLE001 — a reader; the guard fails closed on its own
+        return None
+
+
+def _application_blocks_propeller(die: str, config: str,
+                                  authorization: Optional[str]) -> Optional[Mapping[str, Any]]:
+    """The cooling options of ``die``/``config`` when its application list
+    names applications and none of them is ``propeller``; otherwise ``None``."""
+    if not (die and config):
+        return None
+    options = _cooling_options_for(die, config, authorization)
+    apps = list((options or {}).get("applications") or [])
+    if options is not None and apps and "propeller" not in apps:
+        return options
+    return None
+
+
+def _application_cooling_mode(options: Mapping[str, Any]) -> Optional[str]:
+    """The outer cooling mode the application implies, ``None`` = no opinion."""
+    app = options.get("application")
+    if app == "robot":
+        return "robotics"
+    if app in ("aviation", "marine"):
+        return "liquid"
+    return None
+
+
+def _application_message(die: str, config: str, options: Mapping[str, Any],
+                         switched: bool = False) -> str:
+    apps = ", ".join(options.get("applications") or []) or "not a propeller application"
+    mode = {"robotics": "Robotics", "liquid": "Liquid"}.get(
+        _application_cooling_mode(options) or "", "manual air")
+    todo = ("Thermal cooling was switched to %s for this run" if switched
+            else "set Thermal cooling to %s") % mode
+    return ("%s %s is a %s motor (application: %s), so propeller cooling does not "
+            "apply; %s" % (die, config, (options.get("application") or "non-propeller"),
+                           apps, todo))
+
+
+def _selectable_propellers(options: Mapping[str, Any]) -> List[str]:
+    ids = [str(i) for i in (options.get("propellers") or [])]
+    ok = {str(p.get("id")) for p in (options.get("propeller_details") or [])
+          if isinstance(p, Mapping) and p.get("selectable") is True}
+    return [i for i in ids if i in ok]
+
+
+def _liquid_needs_flow(patch: Dict[str, str], settings: Mapping[str, Any]) -> None:
+    """A jacket with no coolant flow cannot be solved: give it the panel's own
+    default (8 L/min) when the record has none."""
+    if patch.get("coolMode") == "liquid" and not _num(settings.get("flowLpm"), 0.0) > 0:
+        patch["flowLpm"] = "8"
+
+
+def motor_cooling_patch(options: Mapping[str, Any], settings: Mapping[str, Any],
+                        key: str, *, motor_changed: bool) -> Dict[str, str]:
+    """The Thermal fields that must change for the motor behind ``options``.
+
+    Pure.  ``options`` is the ``/api/propellers/cooling-options`` answer for the
+    loaded motor, ``key`` its :func:`context_key`.  Returns only the
+    :data:`FOLLOW_KEYS` whose value differs from ``settings`` (``{}`` = leave
+    the record alone):
+
+    * propeller motor: propeller source with this motor's default propeller and
+      the fresh key, unless the record is already bound to this motor with an
+      allowed propeller, or the motor is unchanged and the source is manual
+      (a deliberate choice on the SAME motor is kept);
+    * robot motor: robotics cooling, manual source, propeller fields cleared;
+    * aviation/marine: liquid cooling, manual source, propeller fields cleared;
+    * no opinion (application not set): a leftover propeller source is dropped,
+      the cooling mode is untouched.
+
+    ``motor_changed`` False (the same motor loaded again) only repairs a record
+    that contradicts the motor; it never rewrites a consistent one.
+    """
+    apps = list(options.get("applications") or [])
+    primary = options.get("application")
+    allowed = _selectable_propellers(options)
+    propeller_ok = (_PROPELLER_AIR in (options.get("cooling_options") or [])
+                    and bool(allowed)
+                    and (not apps or "propeller" in apps))
+    source = str(settings.get("airSpeedSource") or "manual").strip().lower()
+    pid = str(settings.get("propellerId") or "").strip()
+    ctx = str(settings.get("propellerContextKey") or "").strip()
+    bound = source == "propeller" and ctx == key and pid in allowed
+
+    want: Dict[str, str]
+    if propeller_ok and primary in (None, "propeller"):
+        if bound or (source != "propeller" and not motor_changed):
+            return {}                    # same motor: manual air is the user's choice
+        default = str(options.get("default_propeller") or "")
+        pick = default if default in allowed else allowed[0]
+        want = {"coolMode": "air", "airSpeedSource": "propeller",
+                "propellerId": pick, "propellerContextKey": key}
+    else:
+        if bound:
+            return {}                    # a propeller deliberately kept on a mixed motor
+        if source != "propeller" and not motor_changed:
+            return {}
+        want = {"airSpeedSource": "manual", "propellerId": "", "propellerContextKey": ""}
+        mode = _application_cooling_mode(options)
+        if mode:
+            want["coolMode"] = mode
+            _liquid_needs_flow(want, settings)
+    return {k: v for k, v in want.items()
+            if str(settings.get(k) if settings.get(k) is not None else "") != v}
+
+
+def _save_thermal_patch(email: str, patch: Mapping[str, str]) -> Dict[str, Any]:
+    """Merge ``patch`` into the account's stored Thermal fields; return them."""
+    import time
+    from motor_ai_sim.routes import panel_settings as ps
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime()) + "+00:00"
+    with ps._LOCK:
+        d = ps._load()
+        cur = (((d.get("thermal") or {}).get(email) or {}).get("settings")) or {}
+        new = {**cur, **patch}
+        d.setdefault("thermal", {})[email] = {"settings": new, "updated_at": stamp}
+        ps._save(d)
+    return new
+
+
+def _stored_thermal(email: str) -> Dict[str, Any]:
+    from motor_ai_sim.routes import panel_settings as ps
+    with ps._LOCK:
+        d = ps._load()
+    return dict((((d.get("thermal") or {}).get(email) or {}).get("settings")) or {})
+
+
+def _same_motor(a: Mapping[str, Any], b: Mapping[str, Any]) -> bool:
+    return all((a.get(k) or None) == (b.get(k) or None) for k in ("die", "config", "ref_id"))
+
+
+def follow_loaded_motor(email: str, selection: Mapping[str, Any],
+                        previous: Optional[Mapping[str, Any]],
+                        authorization: Optional[str] = None) -> Dict[str, Any]:
+    """Make the account's Thermal fields follow the motor it just loaded.
+
+    Called by ``PUT /api/me/last_motor`` after the selection is remembered.
+    ``previous`` is the selection that was remembered before (``None`` = none
+    yet).  The cooling is moved to the motor's application only when the motor
+    CHANGED (die, configuration or catalogue reference); loading the same motor
+    again repairs a contradictory record but keeps the user's manual edits.
+
+    Never raises: a Thermal record that cannot be adjusted must not fail the
+    motor load.  Returns ``{"changed", "application", "settings",
+    "allowed_propellers"}`` where ``settings`` is the effective
+    :data:`FOLLOW_KEYS` after the call.
+    """
+    out: Dict[str, Any] = {"changed": False, "application": None,
+                           "settings": {}, "allowed_propellers": []}
+    try:
+        email = str(email or "").strip().lower()
+        die, config = str(selection.get("die") or ""), str(selection.get("config") or "")
+        options = _cooling_options_for(die, config, authorization)
+        if not email or not die or not config or options is None:
+            return out
+        changed = isinstance(previous, Mapping) and not _same_motor(previous, selection)
+        key = context_key(email, die, config, selection.get("ref_id"))
+        cur = _stored_thermal(email)
+        patch = motor_cooling_patch(options, cur, key, motor_changed=bool(changed))
+        new = _save_thermal_patch(email, patch) if patch else cur
+        out.update(changed=bool(patch), application=options.get("application"),
+                   settings={k: str(new.get(k) or "") for k in FOLLOW_KEYS},
+                   allowed_propellers=_selectable_propellers(options))
+    except Exception:  # noqa: BLE001
+        log.warning("thermal cooling could not follow the loaded motor", exc_info=True)
+    return out
+
+
+def settle_application_cooling(
+        settings: Mapping[str, Any], authorization: Optional[str] = None, *,
+        expected_die: Optional[str] = None,
+        expected_config: Optional[str] = None) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Run-time safety net: a propeller source on a motor that has no propeller.
+
+    Returns ``(settings, note)``.  When ``settings`` carry the propeller source
+    and the motor (``expected_*``, else the account's loaded motor) belongs to an
+    application without a propeller, the returned settings use that
+    application's cooling instead (robot: Robotics; aviation/marine: Liquid),
+    the account's stored record is corrected the same way, and ``note`` says
+    what was switched.  Anything else comes back unchanged with ``note`` None.
+    A propeller source on a propeller motor is NOT touched here - the context
+    guard refuses a stale or forged one.
+    """
+    if str(settings.get("airSpeedSource") or "manual").strip().lower() != "propeller":
+        return dict(settings), None
+    die, config, email = str(expected_die or ""), str(expected_config or ""), ""
+    try:
+        from motor_ai_sim.routes.account import get_last_motor
+        cur = get_last_motor(authorization=authorization) or {}
+        email = str(cur.get("user") or "").strip().lower()
+        sel = cur.get("selection")
+        if isinstance(sel, Mapping):
+            die = die or str(sel.get("die") or "")
+            config = config or str(sel.get("config") or "")
+    except Exception:  # noqa: BLE001
+        pass
+    options = _application_blocks_propeller(die, config, authorization)
+    if options is None:
+        return dict(settings), None
+    patch = {"airSpeedSource": "manual", "propellerId": "", "propellerContextKey": ""}
+    mode = _application_cooling_mode(options)
+    if mode:
+        patch["coolMode"] = mode
+        _liquid_needs_flow(patch, settings)
+    if email:
+        try:
+            _save_thermal_patch(email, patch)
+        except Exception:  # noqa: BLE001 — the run still proceeds with the switched copy
+            log.warning("could not store the corrected Thermal cooling", exc_info=True)
+    note = _application_message(die, config, options, switched=True)
+    log.info("thermal: %s", note)
+    return {**settings, **patch}, note

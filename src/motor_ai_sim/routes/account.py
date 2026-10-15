@@ -182,10 +182,17 @@ def put_last_motor(body: dict = Body(...),
                                      authorization)
     with _PREF_LOCK:
         data = _prefs_load()
+        previous = (data.get(who) or {}).get("last_motor")
         data.setdefault(who, {})["last_motor"] = selection
         path = _prefs_path()
         tmp = f"{path}.tmp{_os.getpid()}"
         with open(tmp, "w", encoding="utf-8") as f:
             _json.dump(data, f, indent=1, ensure_ascii=False)
         _os.replace(tmp, path)
-    return {"user": who, "selection": selection}
+    # The account's Thermal cooling belongs to the motor it is loaded for: a
+    # different motor moves it to that motor's application (robot -> Robotics,
+    # propeller -> its own propeller, ...).  The answer rides back so the
+    # open Thermal store can adopt it without a round trip.
+    from motor_ai_sim.thermal_settings import follow_loaded_motor
+    thermal = follow_loaded_motor(who, selection, previous, authorization)
+    return {"user": who, "selection": selection, "thermal": thermal}

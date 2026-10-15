@@ -320,3 +320,30 @@ t('the zone calculation is cheap enough to follow the sliders (48 samples x a bi
   const per = (performance.now() - t0) / 5;
   assert.ok(per < 400, `one zone recompute took ${per.toFixed(0)} ms`);   // measured: well under; a loose bound for slow CI
 });
+
+t('Thermal follows the loaded motor: robot gets Robotics, a propeller motor its propeller, same motor changes nothing', () => {
+  const robot = { changed: true, application: 'robot', allowed_propellers: [],
+    settings: { coolMode: 'robotics', airSpeedSource: 'manual', propellerId: '', propellerContextKey: '' } };
+  assert.deepEqual(P.thermalFollowFields(robot), {
+    coolMode: 'robotics', airSpeedSource: 'manual', propellerId: '', propellerContextKey: '' });
+  const key = 'user@example.com|D40|L12|ref-p';
+  const prop = { changed: true, application: 'propeller', allowed_propellers: ['a', 'b'],
+    settings: { coolMode: 'air', airSpeedSource: 'propeller', propellerId: 'a', propellerContextKey: key } };
+  assert.deepEqual(P.thermalFollowFields(prop), {
+    coolMode: 'air', airSpeedSource: 'propeller', propellerId: 'a', propellerContextKey: key });
+  // the propeller this browser remembers for the motor wins only while allowed
+  assert.equal(P.thermalFollowFields(prop, 'b').propellerId, 'b');
+  assert.equal(P.thermalFollowFields(prop, 'gone').propellerId, 'a');
+  // nothing changed on the server (same motor reloaded) or an unusable answer: keep the manual edits
+  assert.equal(P.thermalFollowFields({ ...prop, changed: false }), null);
+  assert.equal(P.thermalFollowFields(null), null);
+  assert.equal(P.thermalFollowFields({ ...prop, settings: { ...prop.settings, propellerContextKey: '' } }), null);
+  assert.equal(P.thermalFollowFields({ ...robot, settings: { ...robot.settings, coolMode: 'bogus' } }), null);
+});
+
+t('the Thermal store adopts the motor-load answer in one write and only when hydrated', () => {
+  const store = readFileSync(join(HERE, '..', '..', 'stores', 'thermalStore.ts'), 'utf8');
+  assert.match(store, /registerThermalFollow\(\(answer\) => \{[\s\S]*?if \(!st\.hydrated\) return;/);
+  assert.match(store, /thermalFollowFields\(answer, remembered\)/);
+  assert.match(store, /st\.setPropellerCooling\(f\.airSpeedSource, f\.propellerId, f\.propellerContextKey\)/);
+});

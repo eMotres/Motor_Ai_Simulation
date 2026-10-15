@@ -4885,6 +4885,7 @@ def _run(body: Dict[str, Any],
     from motor_ai_sim.thermal_settings import (cooling_fields, cooling_issue,
                                                coupled_iteration_settings,
                                                propeller_cooling_context_issue,
+                                               settle_application_cooling,
                                                thermal_panel_settings)
 
     # Per-request materials through the BODY, the kernel's transport: the router
@@ -4910,6 +4911,10 @@ def _run(body: Dict[str, Any],
     stored = thermal_panel_settings(authorization)
     raw = body.get("thermal_settings")
     settings = dict(raw) if isinstance(raw, dict) else dict(stored)
+    # A propeller source left over from another motor, on a motor whose
+    # application has no propeller (a robot), is switched to that application's
+    # cooling - not refused (2026-10-15).
+    settings, _cooling_note = settle_application_cooling(settings, authorization)
     prop_issue = propeller_cooling_context_issue(settings, authorization)
     if prop_issue:
         raise _refuse(prop_issue, ["thermal_settings"],

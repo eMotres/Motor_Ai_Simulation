@@ -45,20 +45,16 @@ export interface S1Limit {
               slipstream_source?: string | null };
 }
 
-/** The board's cooling class (the controller board, not the motor): `slipstream` is the board in
- *  the propeller wash, evaluated at the operating point's wash speed. */
+/** The board's cooling class, DECIDED BY THE SERVER from the machine (never a user choice):
+ *  `slipstream` = the board in the propeller wash, evaluated at the operating point's wash speed;
+ *  `favourable` = the passport's rated airflow. */
 export type S1BoardCooling = 'favourable' | 'weak' | 'hot_motor' | 'slipstream';
 
 /** The board build.  The two-device builds are the model's ESTIMATE drives (`_x2` the same board,
  *  `_x2_board2` the board scaled ×2) and are offered only where the S1 model carries them. */
 export type S1BoardBuild = 'as_built' | 'x2' | 'x2_board2';
 
-export const S1_BOARD_COOLING: S1BoardCooling[] = ['favourable', 'weak', 'hot_motor', 'slipstream'];
 export const S1_BOARD_BUILDS: S1BoardBuild[] = ['as_built', 'x2', 'x2_board2'];
-
-export function isBoardCooling(v: string): v is S1BoardCooling {
-  return (S1_BOARD_COOLING as string[]).includes(v);
-}
 
 export function isBoardBuild(v: string): v is S1BoardBuild {
   return (S1_BOARD_BUILDS as string[]).includes(v);
@@ -87,33 +83,9 @@ export function s1BoardBuildOfId(did: string | null | undefined): S1BoardBuild {
   return s.endsWith('_x2_board2') ? 'x2_board2' : s.endsWith('_x2') ? 'x2' : 'as_built';
 }
 
-/** The board cooling classes the S1 response says this model / drive runs (`drive.
- *  board_cooling_classes`) — the select shows only these.  Nothing learned yet (null /
- *  undefined, e.g. before the first answer): all four.  An explicitly EMPTY list means the
- *  model supports no class of its own: only `favourable`, which never gets refused. */
-export function s1BoardCoolingOptions(available: readonly string[] | null | undefined): S1BoardCooling[] {
-  if (available == null) return [...S1_BOARD_COOLING];
-  if (!available.length) return ['favourable'];
-  return S1_BOARD_COOLING.filter((c) => available.includes(c));
-}
-
-/** The remembered board cooling clamped to what the model supports: the remembered choice when
- *  it is available there, else `favourable` (the backend default), else the first supported one. */
-export function s1BoardCoolingChoice(wanted: string | null | undefined,
-                                     available: readonly string[] | null | undefined): S1BoardCooling {
-  const opts = s1BoardCoolingOptions(available);
-  if (wanted && isBoardCooling(wanted) && opts.includes(wanted)) return wanted;
-  return opts.includes('favourable') ? 'favourable' : opts[0];
-}
-
-/** The locale key of a board cooling class (always one of the four the backend accepts). */
+/** The locale key of the board cooling class the server decided. */
 export function s1BoardCoolingKey(bc: string | null | undefined): string {
-  switch (bc) {
-    case 'weak': return 'configurePropeller.s1CoolWeak';
-    case 'hot_motor': return 'configurePropeller.s1CoolHotMotor';
-    case 'slipstream': return 'configurePropeller.s1CoolSlipstream';
-    default: return 'configurePropeller.s1CoolFavourable';
-  }
+  return bc === 'slipstream' ? 'configurePropeller.s1CoolSlipstream' : 'configurePropeller.s1CoolFavourable';
 }
 
 /** The locale key of a board build. */
@@ -144,10 +116,9 @@ export interface S1Result {
   monotone: boolean;
   limits: { winding_C: number; magnet_C: number; winding_basis: string; magnet_basis: string };
   /** the drive the limit was computed for (Configure's selected one) */
-  drive?: { id: string; kind: 'sine' | 'pwm' | 'external'; board_cooling: string;
-            /** the board cooling classes this model / drive supports (`slipstream` only where the
-             *  model carries a board block) — the Board cooling select offers only these */
-            board_cooling_classes?: string[];
+  drive?: { id: string; kind: 'sine' | 'pwm' | 'external';
+            /** the ONE board cooling class the machine decides (null: an external ESC) and why */
+            board_cooling: string | null; board_cooling_basis?: string;
             I_cont_A: number | null; I_bus_cont_A?: number | null; name?: string | null };
   /** every drive id this S1 model offers (`sine`, the computed PWM variants, `external_esc`) */
   drives_available?: string[];
@@ -165,24 +136,23 @@ export type S1Controller = 'drive' | 'external';
 
 export const EXTERNAL_ESC = 'external_esc';
 
-/** The `drive`, the ESC bus current and the board cooling of the S1 request.  A blank / non-positive
- *  typed current sends none, so the backend takes the model's bench ESC (or reports the limit as
- *  unknown).  Our drive carries the board build in the drive id (the model's `_x2` / `_x2_board2`
- *  estimate variants); an external ESC has no board, so no board cooling is sent for it. */
+/** The `drive` and the ESC bus current of the S1 request.  A blank / non-positive typed current
+ *  sends none, so the backend takes the model's bench ESC (or reports the limit as unknown).  Our
+ *  drive carries the board build in the drive id (the model's `_x2` / `_x2_board2` estimate
+ *  variants).  The board cooling is never sent: the server decides it from the machine. */
 export function s1DriveRequest(ctrl: S1Controller, driveBlockId: string, escBusTxt: string | null | undefined,
-                               boardCooling: S1BoardCooling = 'favourable', build: S1BoardBuild = 'as_built'
-): { drive: string; escBusA: number | null; boardCooling: S1BoardCooling | null } {
-  if (ctrl !== 'external') return { drive: s1BuildDriveId(driveBlockId, build), escBusA: null, boardCooling };
+                               build: S1BoardBuild = 'as_built'
+): { drive: string; escBusA: number | null } {
+  if (ctrl !== 'external') return { drive: s1BuildDriveId(driveBlockId, build), escBusA: null };
   const v = parseFloat(String(escBusTxt ?? '').replace(',', '.'));
-  return { drive: EXTERNAL_ESC, escBusA: Number.isFinite(v) && v > 0 ? v : null, boardCooling: null };
+  return { drive: EXTERNAL_ESC, escBusA: Number.isFinite(v) && v > 0 ? v : null };
 }
 
 /** The cache key of one S1 request: every parameter that changes the answer (the board build is
  *  already inside `drive` as the `_x2` / `_x2_board2` suffix). */
 export function s1CacheKey(id: string, die: string, config: string, ambientC: number, drive: string,
-                           pack: { min: number; max: number } | null, escBusA: number | null,
-                           boardCooling: string | null): string {
-  return `${id}|${die}|${config}|${ambientC.toFixed(1)}|${drive}|${pack ? `${pack.min.toFixed(2)}-${pack.max.toFixed(2)}` : ''}|${escBusA ?? ''}|${boardCooling ?? ''}`;
+                           pack: { min: number; max: number } | null, escBusA: number | null): string {
+  return `${id}|${die}|${config}|${ambientC.toFixed(1)}|${drive}|${pack ? `${pack.min.toFixed(2)}-${pack.max.toFixed(2)}` : ''}|${escBusA ?? ''}`;
 }
 
 /** The locale key of what stops the speed. */

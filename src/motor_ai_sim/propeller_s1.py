@@ -709,6 +709,43 @@ def board_cooling_classes(ctrl: Optional[Mapping[str, Any]]) -> List[str]:
     return [x for x in BOARD_COOLING if x in have or (x == "slipstream" and blk)]
 
 
+def _controller_block_of(m: Mapping[str, Any], drive: Optional[str]) -> Optional[Mapping[str, Any]]:
+    """The controller block a drive id selects (``sine`` -> ``sine_controller``, a PWM
+    variant id -> its ``drives`` entry); None for ``external_esc`` / an unknown id."""
+    did = str(drive or SINE)
+    if did == EXTERNAL_ESC:
+        return None
+    if did == SINE:
+        return m.get("sine_controller") or {}
+    return (m.get("drives") or {}).get(did) or {}
+
+
+def effective_board_cooling(m: Mapping[str, Any], drive: Optional[str],
+                            cooling_context: Optional[str] = None) -> Tuple[Optional[str], str]:
+    """THE board cooling class of a drive, decided by the machine - never by the
+    user (owner 2026-10-15: the airflow must be unambiguous).  Returns
+    ``(class, basis)``; the class is None for an external ESC (no board of ours).
+
+    * ``cooling_context == "propeller"`` (the motor is cooled by the propeller wash
+      - the S1 of a propeller) and the drive's controller block carries a ``board``
+      block: ``slipstream`` - the board sits in the wash, its limit evaluated per
+      operating point from the selected propeller's wash speed.
+    * Otherwise the one class the controller is calibrated for: the only class the
+      block carries, else ``favourable`` - the passport's rated airflow, the basis of
+      its datasheet board limit (fullcard "Controller continuous").
+    """
+    if str(drive or SINE) == EXTERNAL_ESC:
+        return None, "external ESC: no board of ours, its current is given by the user / bench"
+    ctrl = _controller_block_of(m, drive)
+    if cooling_context == "propeller" and (ctrl or {}).get("board"):
+        return "slipstream", ("board in the propeller wash: limit evaluated at each operating "
+                              "point from the selected propeller's wash speed")
+    own = [c for c in board_cooling_classes(ctrl) if c != "slipstream"]
+    if len(own) == 1:
+        return own[0], f"the controller's one calibrated cooling class ({own[0]})"
+    return DEFAULT_BOARD_COOLING, "board limit at the passport's rated airflow class (favourable)"
+
+
 def board_limit_A(drive: Mapping[str, Any], *, ambient_c: float,
                   air_speed_ms: Optional[float] = None) -> Tuple[Optional[float], str]:
     """The drive's continuous board current at the S1's own air temperature:
@@ -1515,12 +1552,13 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
               factor: Optional[float] = None, n_points: int = 41,
               rpm_min: Optional[float] = None, rpm_max: Optional[float] = None,
               winding_limit_c: Optional[float] = None, magnet_limit_c: Optional[float] = None,
-              tol_rpm: float = 1.0, drive: Optional[str] = None, board_cooling: Optional[str] = None,
+              tol_rpm: float = 1.0, drive: Optional[str] = None,
               pack_v_min: Optional[float] = None, pack_v_max: Optional[float] = None,
               pack_i_max_A: Optional[float] = None, esc_i_bus_A: Optional[float] = None,
               esc_i_phase_A: Optional[float] = None) -> Dict[str, Any]:
     """Rows over speed and the continuous limit with propeller ``prop``, driven by
-    ``drive`` (``sine``, a PWM variant id - the board at ``board_cooling`` - or
+    ``drive`` (``sine``, a PWM variant id - the board at its one cooling class
+    (:func:`effective_board_cooling`; never a caller's choice) - or
     ``external_esc`` with its continuous bus / phase current ``esc_i_*``, default the
     model's bench ESC) from the pack (``pack_*``; default the passport's battery).
     With no ``factor`` / ``position`` the model's calibrated slipstream factor is used
@@ -1537,7 +1575,9 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
     ``range_end`` says why the scan stopped)."""
     if not prop.selectable:
         raise S1Error(f"{prop.id} has no usable thrust/power data")
-    drv = resolve_drive(m, drive, board_cooling, esc_i_bus_A, esc_i_phase_A)
+    bc, bc_basis = effective_board_cooling(m, drive, "propeller")
+    drv = resolve_drive(m, drive, bc, esc_i_bus_A, esc_i_phase_A)
+    drv["board_cooling_basis"] = bc_basis
     pk = resolve_pack(m, pack_v_min, pack_v_max, pack_i_max_A)
     lims = limits_of(m, winding_limit_c, magnet_limit_c)
     rho = pp.air_density(temp_c=ambient_c, altitude_m=altitude_m)
@@ -1626,10 +1666,10 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
         "power_data": prop.power_data,
         "drive": {"id": drv["id"], "kind": drv["kind"], "device": drv.get("device"),
                   "technology": drv.get("technology"), "carrier_hz": drv.get("carrier_hz"),
-                  "n_parallel": drv.get("n_parallel"), "board_cooling": drv["board_cooling"],
-                  # the board cooling classes this model / drive can run: the UI offers
-                  # only these (e.g. `slipstream` only where the model carries a board block)
-                  "board_cooling_classes": list(drv.get("board_cooling_classes") or []),
+                  "n_parallel": drv.get("n_parallel"),
+                  # the ONE cooling class the machine decides (no user choice) and why
+                  "board_cooling": None if drv["kind"] == "external" else drv["board_cooling"],
+                  "board_cooling_basis": drv["board_cooling_basis"],
                   "I_cont_A": drv.get("I_cont_A"), "I_cont_basis": drv.get("I_cont_basis"),
                   "I_bus_cont_A": drv.get("I_bus_cont_A"), "name": drv.get("name"),
                   "source": drv.get("source"),

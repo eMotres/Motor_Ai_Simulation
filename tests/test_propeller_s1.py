@@ -331,14 +331,17 @@ def test_shipped_models_load_and_rate_with_their_default_propellers():
         assert "class N" in lims["winding_basis"]
     m = s1.load_model("CIANO14 40 new", "L12")
     r = s1.s1_rating(m, pp.get_propeller("tmotor_fpv_10x5"))
-    # a system rating since 2026-10-11: the die's controller binds first — at the board
-    # model's limit for the S1 air temperature (25 °C here), which is above the 45 °C card
-    assert r["limit"] and r["limit"]["binding"] == "controller"
+    # a system rating: the propeller motor's board sits in the wash (the machine decides, no
+    # user choice, 2026-10-15) - L12 + tmotor_fpv_10x5: 3726 g, demag binds (was 2587 g with the
+    # controller binding at the 'favourable' card limit)
+    assert r["drive"]["board_cooling"] == "slipstream"
+    assert r["limit"] and r["limit"]["binding"] == "demag"
     assert 3000.0 < r["limit"]["rpm"] < 20000.0
     card = m["sine_controller"]["i_board_limit_A"]["favourable"]
     assert card == pytest.approx(26.1, abs=0.01)         # the 45 °C card, unchanged
     assert r["limit"]["current_A"] <= r["limit"]["controller_limit_A"] + 1e-6
-    assert r["limit"]["controller_limit_A"] > card       # 25 °C air on the board
+    assert r["limit"]["controller_limit_A"] > card       # wash + 25 °C air on the board
+    assert r["limit"]["thrust_g"] == pytest.approx(3726.0, abs=15.0)
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +553,12 @@ def test_controller_limit_binds_and_drive_variant_is_selected(tmp_path):
     prop = _prop(tmp_path)
     m = _sys_model()
     free = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0)["limit"]
-    weak = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0, board_cooling="weak")
+    # the cooling class is the machine's, not a choice: this controller's rated class
+    # (favourable) is the board limit; a tight one binds the controller
+    tight = _sys_model(sine_controller={"i_board_limit_A": {"favourable": 12.0},
+                                        "i_board_basis": "test board",
+                                        "bus_v": {"min": 250.0, "max": 450.0}})
+    weak = _run(tight, prop, winding_limit_c=400.0, magnet_limit_c=400.0)
     L = weak["limit"]
     assert L["binding"] == "controller" and L["current_A"] <= 12.0 + 1e-6 and L["rpm"] < free["rpm"]
     assert weak["drive"]["I_cont_A"] == 12.0 and weak["drive"]["kind"] == "sine"
@@ -635,11 +643,9 @@ def test_the_response_lists_the_board_cooling_classes_it_supports(tmp_path):
     assert s1.resolve_drive(m, "sine")["board_cooling_classes"] == ["favourable", "weak", "hot_motor"]
     assert s1.resolve_drive(m, "pwm_a")["board_cooling_classes"] == ["favourable"]  # that variant's one class
     assert s1.resolve_drive(m, s1.EXTERNAL_ESC)["board_cooling_classes"] == []     # an external ESC has no board
-    assert _run(m, prop)["drive"]["board_cooling_classes"] == ["favourable", "weak", "hot_motor"]
     mb = _sys_model_with_board()
     assert s1.board_cooling_classes(mb["sine_controller"]) == list(s1.BOARD_COOLING)
     assert s1.resolve_drive(mb, "sine", "slipstream")["board_cooling_classes"] == list(s1.BOARD_COOLING)
-    assert _run(mb, prop, board_cooling="slipstream")["drive"]["board_cooling_classes"] == list(s1.BOARD_COOLING)
     # no controller block at all: no class is supported
     assert s1.board_cooling_classes({}) == [] and s1.board_cooling_classes(None) == []
 
@@ -931,7 +937,7 @@ def test_shipped_models_carry_the_system_data_and_qualify_their_limits():
     for drive in ("sine", "si_48k"):
         L = s1.s1_rating(l12, prop, drive=drive)["limit"]
         # the controller binds at the board model's 25 °C limit (above the 45 °C card)
-        assert L["binding"] == "controller" and 25.0 < L["current_A"] <= L["controller_limit_A"] + 1e-6
+        assert L["binding"] == "demag" and 25.0 < L["current_A"] <= L["controller_limit_A"] + 1e-6   # board in the wash
         assert L["controller_limit_A"] > 26.1
         assert L["drive_feasibility"] == "checked" and "slipstream_bench" in L["flags"]
         assert "slipstream_uncalibrated" not in L["flags"] and L["cooling"]["slipstream_factor"] == pytest.approx(0.53)
@@ -988,28 +994,57 @@ def test_route_takes_the_drive_and_the_pack(client, wired):
                                                          "pack_v_max": 400, "pack_i_max_A": 50}).json()
     assert j["drive"]["id"] == "pwm_a" and j["pack"]["v_min"] == 280.0 and j["pack"]["i_max_A"] == 50.0
     assert j["drives_available"] == [s1.SINE, "pwm_a", s1.EXTERNAL_ESC]
-    assert j["drive"]["board_cooling_classes"] == ["favourable"]   # pwm_a carries one class
+    assert j["drive"]["board_cooling"] == "favourable"   # pwm_a carries one class
     e = client.get("/api/propellers/syn_s1/s1", params={**q, "drive": s1.EXTERNAL_ESC,
                                                         "esc_i_bus_max_A": 42.5}).json()
     assert e["drive"]["kind"] == "external" and e["drive"]["I_bus_cont_A"] == 42.5
     assert client.get("/api/propellers/syn_s1/s1", params={**q, "drive": s1.EXTERNAL_ESC,
                                                            "esc_i_bus_max_A": -1}).status_code == 422
     assert client.get("/api/propellers/syn_s1/s1", params={**q, "drive": "nope"}).status_code == 422
-    assert client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "arctic"}).status_code == 422
+    # a client-sent class is ignored (old clients cannot pick one)
+    r = client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "arctic"})
+    assert r.status_code == 200 and r.json()["drive"]["board_cooling"] == "favourable"
 
 
-def test_route_takes_the_board_cooling_class(client, wired):
+def test_route_board_cooling_is_decided_by_the_machine(client, wired):
     q = {"die": "TEST DIE", "config": "L1", "n": 11}
-    # slipstream on a model without board data: refused with the reason, not guessed
+    # no board block: the passport's rated class, whatever the client asks for
+    base = client.get("/api/propellers/syn_s1/s1", params=q).json()
     r = client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "slipstream"})
-    assert r.status_code == 422 and "board" in r.json()["detail"]
-    # with a board block it is evaluated per point at the S1 air temperature
+    assert r.status_code == 200
+    assert base["drive"]["board_cooling"] == r.json()["drive"]["board_cooling"] == "favourable"
+    assert "passport" in base["drive"]["board_cooling_basis"]
+    assert r.json()["rows"] == base["rows"]
+    # a propeller motor with a board block: the board is in the wash, evaluated per point
     (wired / "s1" / "TEST DIE" / "L1.json").write_text(json.dumps(_sys_model_with_board()),
                                                        encoding="utf-8")
-    r2 = client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "slipstream"})
-    assert r2.status_code == 200, r2.text
-    j = r2.json()
-    assert j["drive"]["board_cooling_classes"] == list(s1.BOARD_COOLING)   # slipstream is on offer here
+    forced = client.get("/api/propellers/syn_s1/s1", params={**q, "board_cooling": "weak"})
+    assert forced.status_code == 200, forced.text
+    j = forced.json()
+    assert j["drive"]["board_cooling"] == "slipstream" and "wash" in j["drive"]["board_cooling_basis"]
+    assert "board_cooling_classes" not in j["drive"]
     assert all(row["controller_limit_A"] is not None for row in j["rows"])
     assert any("wash" in row["controller_limit_basis"] for row in j["rows"])
     assert j["limit"]["controller_limit_A"] is not None
+    assert client.get("/api/propellers/syn_s1/s1", params=q).json()["rows"] == j["rows"]
+    e = client.get("/api/propellers/syn_s1/s1", params={**q, "drive": s1.EXTERNAL_ESC}).json()
+    assert e["drive"]["board_cooling"] is None
+
+
+def test_effective_board_cooling_rule(tmp_path):
+    mb, m = _sys_model_with_board(), _sys_model()
+    assert s1.effective_board_cooling(mb, "sine", "propeller")[0] == "slipstream"
+    # not a propeller-cooled motor: the passport's rated airflow class
+    assert s1.effective_board_cooling(mb, "sine", None)[0] == "favourable"
+    cls, basis = s1.effective_board_cooling(m, "sine", "propeller")      # no board block
+    assert cls == "favourable" and "passport" in basis
+    assert s1.effective_board_cooling(m, "pwm_a", "propeller")[0] == "favourable"   # one class
+    assert s1.effective_board_cooling(m, s1.EXTERNAL_ESC, "propeller")[0] is None
+    # the propeller case equals the old explicit slipstream request, number for number
+    prop = _prop(tmp_path)
+    old = s1.solve_point(mb, prop, 5000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(mb),
+                         drive=s1.resolve_drive(mb, "sine", "slipstream"))
+    new = _run(mb, prop, rpm_min=5000.0, rpm_max=6000.0)
+    assert new["drive"]["board_cooling"] == "slipstream"
+    assert new["rows"][0]["rpm"] == 5000.0
+    assert new["rows"][0]["controller_limit_A"] == pytest.approx(old["controller_limit_A"], rel=1e-12)

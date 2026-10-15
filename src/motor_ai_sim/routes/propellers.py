@@ -189,11 +189,6 @@ def get_s1(prop_id: str,
                                                                 "default the model's bench ESC"),
            esc_i_phase_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0,
                                                       description="external_esc: continuous phase current [A rms]"),
-           board_cooling: str = Query(default="favourable",
-                                     description="board cooling class: favourable | weak | "
-                                                 "hot_motor | slipstream (the board in the "
-                                                 "propeller wash — evaluated per speed from "
-                                                 "the model's board parameters)"),
            pack_v_min: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
                                                description="pack minimum voltage [V]; default the passport's"),
            pack_v_max: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
@@ -209,6 +204,9 @@ def get_s1(prop_id: str,
     the voltage at the pack's minimum, the demagnetisation current at the magnet
     temperature and (when given) the pack's continuous current.  A limit the model
     cannot check is named in ``limit.flags`` / ``limit.qualification``.
+
+    The board's cooling class is decided by the machine (``drive.board_cooling`` +
+    ``drive.board_cooling_basis``): a client-sent ``board_cooling`` is ignored.
 
     Signed-in callers only, and only for a die the account may see (the
     Configure context rule).  Closed-form arithmetic on the configuration's S1
@@ -229,7 +227,7 @@ def get_s1(prop_id: str,
         model = s1.load_model(die, config)
         out = s1.s1_rating(model, prop, ambient_c=ambient_c, altitude_m=altitude_m,
                            position=position, factor=factor, n_points=n, drive=drive,
-                           board_cooling=board_cooling, pack_v_min=pack_v_min, pack_v_max=pack_v_max,
+                           pack_v_min=pack_v_min, pack_v_max=pack_v_max,
                            pack_i_max_A=pack_i_max_A, esc_i_bus_A=esc_i_bus_max_A,
                            esc_i_phase_A=esc_i_phase_max_A)
     except s1.S1ModelNotFound as exc:

@@ -97,7 +97,10 @@ def mech_datums(g, mech):
                    journal_end_z=r6(g("shaft_journal_end_z")),
                    flats=dict(width=r6(g("shaft_flat_w")), z=[r6(g("shaft_journal_end_z") - g("shaft_flat_len")), r6(g("shaft_journal_end_z"))],
                               normals="+-X"),
-                   thread=dict(r=r6(g("shaft_thread_r")), z=[r6(g("shaft_journal_end_z")), r6(g("shaft_thread_end_z"))], note="M5x0.8 in Fusion"),
+                   thread=dict(r=r6(g("shaft_tip_r")), z=[r6(g("shaft_thread_end_z")), r6(g("shaft_front_end_z"))],
+                               note="M5x0.8 cosmetic thread on the free END of the shaft (owner 2026-10-15)"),
+                   neck=dict(r=r6(g("shaft_thread_r")), z=[r6(g("shaft_journal_end_z")), r6(g("shaft_thread_end_z"))],
+                             note="smooth section through the propeller plate hole, no thread"),
                    tip=dict(r=r6(g("shaft_tip_r")), z=[r6(g("shaft_thread_end_z")), r6(g("shaft_front_end_z"))]))
     res = dict(
         A_H=dict(z=r6(zah), outward_normal=[0, 0, -1],

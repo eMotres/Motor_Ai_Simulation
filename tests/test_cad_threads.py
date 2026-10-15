@@ -172,10 +172,12 @@ def _freecadcmd():
 
 
 @pytest.mark.skipif(not E2E or _freecadcmd() is None, reason="set MOTRES_CAD_E2E=1 with FreeCAD installed")
-@pytest.mark.parametrize("profile,tapped,screw_d,screws,variant", [("CIANO14_40_12.json", {2.0, 3.0}, 2.0, 6, "full"),
-                                                                    ("CIANO28_85_20SW1200.json", {2.5, 3.0}, 2.5, 6, "full"),
-                                                                    ("CIANO28_85_20SW1200.json", set(), None, 0, "frameless")])
-def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, profile, tapped, screw_d, screws, variant):
+@pytest.mark.parametrize("profile,tapped,screw_d,screws,variant,over", [
+    ("CIANO14_40_12.json", {2.0, 3.0}, 2.0, 6, "full", ""),
+    ("CIANO28_85_20SW1200.json", {2.5, 3.0}, 2.5, 6, "full", ""),
+    ("CIANO28_85_20SW1200.json", {2.5, 3.0}, 2.5, 6, "full", "motor_length=15 mm"),       # 85 L15: M2.5 x 22 (template A.6.1)
+    ("CIANO28_85_20SW1200.json", set(), None, 0, "frameless", "")])
+def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, profile, tapped, screw_d, screws, variant, over):
     root = os.path.dirname(store.CAD_DIR)
     out = tmp_path / "out"
     pfile = os.path.join(store.CAD_DIR, "reference", profile)
@@ -185,7 +187,7 @@ def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, p
         pfile = str(tmp_path / "frameless_profile.json")
         json.dump(pj, open(pfile, "w", encoding="utf-8"))
     cmd = [sys.executable, os.path.join(store.CAD_DIR, "run_build.py"), "build", "--profile-file", pfile,
-           "--out-dir", str(out), "--no-gui", "--no-bom"]
+           "--out-dir", str(out), "--no-gui", "--no-bom"] + (["--set", over] if over else [])
     subprocess.run(cmd, check=True, cwd=root, timeout=3600)
     glb = next(p for p in out.iterdir() if p.name.endswith("_full.glb"))
     doc, _ = G.parse_glb(glb.read_bytes())
@@ -200,6 +202,8 @@ def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, p
         shaft = [t for n, t in th if n.startswith("Shaft_thread")]           # the thread is on the shaft's free END: the tip section
         assert len(shaft) == 1 and shaft[0]["d_mm"] == 5.0 and shaft[0]["pitch_mm"] == 0.8 and shaft[0]["kind"] == "external"
         assert shaft[0]["z_range_mm"] == pytest.approx([28.7, 36.7], abs=1e-3)
+    if over:                                                                 # L15: the longer stack takes the M2.5 x 22, plain 5 mm under the head
+        assert all(abs(t["length_mm"] - 16.779) < 0.05 and abs(t["z_range_mm"][1] - 5.6) < 0.05 for t in screw_nodes)
     holes = [t for n, t in th if n.startswith("Stator_holder_back")]
     assert all(t["kind"] == "internal" for t in holes) and {t["d_mm"] for t in holes} == tapped
     if variant == "frameless":

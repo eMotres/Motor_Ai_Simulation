@@ -226,7 +226,8 @@ def check_opaque(doc, gdoc):
 
 
 def thread_face_indices(doc):
-    """{body: [face indices]} of the cosmetic thread faces: the M5 section of the shaft, the M3 and M2 tap holes of the back
+    """{body: [face indices]} of the cosmetic thread faces: the M5 tip section at the free END of the shaft (owner 2026-10-15; the
+    Ø4.95 section next to the journal passes through the propeller plate and is smooth), the M3 and M2 tap holes of the back
     holder (cylinders of exactly those radii)."""
     from . import params_sheet as ps
     if doc.getObject("Shaft") is None:             # active-part profile without mechanics
@@ -234,7 +235,7 @@ def thread_face_indices(doc):
     sh = doc.getObject("Params")
     g = lambda n: ps.pval(sh, n)
     from .params_sheet import has_param
-    shaft_thread = g("shaft_thread_r") if has_param(sh, "shaft_thread_r") else g("carrier_hole_d") / 2   # carrier: the M3 hub holes
+    shaft_thread = g("shaft_tip_r") if has_param(sh, "shaft_thread_r") else g("carrier_hole_d") / 2   # carrier: the M3 hub holes
     want = {"Shaft": [shaft_thread], "Stator_holder_back": [g("holder_tap_d") / 2, g("back_screw_tap_d") / 2]}
     out = {}
     for bn, radii in want.items():

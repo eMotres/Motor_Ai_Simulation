@@ -655,6 +655,18 @@ def generate_passport(
             fidelity=str(pwm), sine_steps=(24 if base_steps <= 6 else 40),
             skipped_out=pwm_skipped)
 
+    mass_cu0 = None
+    try:
+        from motor_ai_sim.masses import compute_masses as _compute_masses
+        from motor_ai_sim.simulation.geometry_2d import merge_geo_override as _merge_mass_geo, params_from_config as _mass_params
+        _mass_geo = _merge_mass_geo(dict(cfg.get("geometry") or {}), g)
+        _mass = _compute_masses(_mass_params(geo_override=g), _mass_geo,
+                                k_end=(_k_used if _k_used >= 1.0 else 0.0),
+                                materials=_mmats)
+        mass_cu0 = float(_mass.get("cu") or 0.0)
+    except Exception:          # noqa: BLE001 - a mass metadata miss must not lose a passport
+        pass
+
     passport = {
         # The Mesh settings every solve of this passport used, where each came
         # from, and a note when a labelled fallback was needed.
@@ -704,6 +716,9 @@ def generate_passport(
         # extraction whose stored values carry those errors: regenerate.
         "extraction_rev": 2,
         "R0_ohm": R_A,
+        # The base extraction's transient call uses the solver's 120°C default.
+        # Keep this explicit so the UI can name the fixed resistance basis.
+        "R0_temp_C": 120.0,
         "endWindFrac": endWindFrac,
         "Pfe0_W": _series_mean(A, "P_fe_W", sa.get("P_core_W")),
         # The BASE POINT's iron loss per half.  Configure scales one core-loss
@@ -719,6 +734,7 @@ def generate_passport(
         }),
         "Pmag0_W": float(sa.get("P_solid_W") or 0.0),
         "mass0_kg": float(sa.get("mass_total_kg") or 0.0),
+        **({"mass_cu0_kg": round(mass_cu0, 7)} if mass_cu0 is not None and mass_cu0 >= 0 else {}),
         # Winding window measured on the CAD polygons.  Geometry only — the
         # tuner scales the COPPER with turns and wire height and divides by
         # this, so it can tell the user when a variant stops being windable.

@@ -36,3 +36,11 @@ test('an unrelated or malformed provenance hash never inherits D85 temperatures'
   assert.equal(T.configuratorReferenceTemperatureBasis('0'.repeat(64)), null);
   assert.equal(T.configuratorReferenceTemperatureBasis({ candidate_sha256: T.D85_REFERENCE_CANDIDATE_SHA256 }), null);
 });
+
+test('resistance basis labels standard extraction at 120°C, audited D85 at 180°C, and unknown imports as unknown', () => {
+  assert.equal(T.configuratorResistanceReferenceTemperature(null, 2, null), 120);
+  assert.equal(T.configuratorResistanceReferenceTemperature(T.D85_REFERENCE_CANDIDATE_SHA256, 2, 120), 180);
+  assert.equal(T.configuratorResistanceReferenceTemperature(null, 1, null), null);
+  assert.equal(T.configuratorResistanceReferenceTemperature(null, null, null), null);
+  assert.equal(T.configuratorResistanceReferenceTemperature(null, 1, 95), 95);
+});

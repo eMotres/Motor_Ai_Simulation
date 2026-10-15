@@ -62,6 +62,11 @@ const Model3DPanel: React.FC = () => {
 
   const model = useMemo(() => models?.find((m) => modelKey(m) === key) ?? null, [models, key]);
 
+  useEffect(() => {
+    window.dispatchEvent(new CustomEvent('model3d-view-selected', { detail: { name: model ? modelLabel(model) : null } }));
+    return () => { window.dispatchEvent(new CustomEvent('model3d-view-selected', { detail: { name: null } })); };
+  }, [model]);
+
   // the list of models this account may open
   useEffect(() => {
     let live = true;

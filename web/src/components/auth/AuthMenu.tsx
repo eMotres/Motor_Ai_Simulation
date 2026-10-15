@@ -48,7 +48,7 @@ const AuthMenu: React.FC = () => {
   if (!user) return null;
 
   return (
-    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
       <NewsletterLinkHandler />
       <NoticeBell onOpen={() => setNotifOpen(true)} refreshKey={noticeKey} />
       <Tooltip title={t('account.avatarTooltip', { email: user.email, role })} arrow>

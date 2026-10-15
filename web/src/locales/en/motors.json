@@ -6,6 +6,8 @@
   "duplicateCopyThisConfigurationWithAll": "Duplicate — copy this configuration with ALL its duties (a starting point for a variant)",
   "downloadTheDatasheetXlsxEveryDuty": "Download the datasheet (.xlsx) — every duty in a column, the design and battery blocks, the cross-section, the measured curves and a page explaining each number. Opens in Google Sheets or Excel.",
   "noMotorsAssigned": "No motors are assigned to your account yet. Ask MOTRES for access.",
+  "noMotorsForApplication": "No motors for {application}.",
+  "clearApplicationFilter": "Clear filter",
   "copyThisMachineIntoMyMotors": "Copy this machine into MY MOTORS — your private space, visible only to you until you share it",
   "nameStack": "⚠ name ≠ stack",
   "setTheSupplyBatteryDutiesWill": "Set the supply battery — duties will be judged against its voltage range",

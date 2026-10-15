@@ -31,7 +31,7 @@
     "design": { "sub": "Geometry" },
     "simulation": { "sub": "EM · thermal · stress" },
     "configure": { "sub": "Your operating point" },
-    "model3d": { "sub": "View · STEP after NDA" },
+    "model3d": { "sub": "View · simplified STEP now" },
     "production": { "sub": "Order or licence" },
     "open": { "title": "Open source", "sub": "Apache-2.0" },
     "agents": { "title": "AI agents", "sub": "MCP server" },
@@ -42,7 +42,7 @@
     "design": "Set the motor geometry for your task.",
     "simulation": "Electromagnetic, thermal and mechanical FEM, coupled.",
     "configure": "Choose a motor for your operating point, cooling, propeller, battery and controller.",
-    "model3d": "Everyone can view it. Tools and STEP files follow after the NDA.",
+    "model3d": "Everyone can view the simplified model and download its STEP now. The full construction, tools and full STEP follow after NDA and account verification.",
     "production": "Order motors from MOTRES or take a non-exclusive manufacturing licence."
   },
   "sim": {

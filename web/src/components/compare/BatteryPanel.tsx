@@ -31,7 +31,7 @@ const fmt = (v: number, d = 0) => (Number.isFinite(v) ? v.toFixed(d) : '—');
 const numField = (label: string, value: number, onChange: (e: any) => void, step = 0.05, width = 66) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
     <Typography sx={LABEL}>{label}</Typography>
-    <input type="number" value={value} step={step} onChange={onChange}
+    <input type="number" aria-label={label} value={value} step={step} onChange={onChange}
       style={{ width, background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
   </Box>
 );

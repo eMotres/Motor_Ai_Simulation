@@ -11,11 +11,13 @@ import React, { useMemo } from 'react';
 import { Box, Typography, ToggleButton, ToggleButtonGroup, Button } from '@mui/material';
 import BatteryChargingFullIcon from '@mui/icons-material/BatteryChargingFull';
 import { nsT } from '../../i18n/nsT';
+import { batteryFieldText, editBatteryField, validBatteryNumbers, batteryInputIssues, sameBattery } from '../../lib/configuratorBattery';
 
 const tx = nsT('controller');   // EN source, ZH mirror (docs/I18N.md)
 
 export type CellType = 'NMC' | 'LFP';
-export interface Battery { type: CellType; cells: number; nom: number; max: number; min: number; }
+export interface Battery { type: CellType; cells: number; nom: number; max: number; min: number;
+  draft?: Partial<Record<'cells' | 'min' | 'nom' | 'max', string>>; }
 
 export const PRESETS: Record<CellType, { nom: number; max: number; min: number; label: string }> = {
   NMC: { nom: 3.7, max: 4.2, min: 3.0, label: 'NMC' },
@@ -28,16 +30,14 @@ const fmt = (v: number, d = 0) => (Number.isFinite(v) ? v.toFixed(d) : '—');
 
 /** A labelled number field: the label is a normal title (the panel's LABEL style, never
  *  truncated), the value a plain input — no floating small print. */
-const numField = (label: string, value: number, onChange: (e: any) => void, step = 0.05, width = 66) => (
+const numField = (label: string, value: string, onChange: (e: any) => void, step = 0.05, width = 66, error?: string) => (
   <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.25 }}>
-    <Typography sx={LABEL}>{label}</Typography>
-    <input type="number" value={value} step={step} onChange={onChange}
-      style={{ width, background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
+    <Typography sx={{ ...LABEL, color: error ? '#f87171' : LABEL.color }}>{label}</Typography>
+    <input type="number" aria-label={label} aria-invalid={!!error} value={value} step={step} onChange={onChange}
+      style={{ width, background: 'transparent', border: `1px solid ${error ? '#f87171' : 'var(--line)'}`, borderRadius: 4, color: 'var(--text-0)', fontSize: 14, fontWeight: 700, fontFamily: 'monospace', textAlign: 'right', padding: '1px 5px' }} />
+    {error && <Typography role="alert" sx={{ color: '#f87171', fontSize: 10, lineHeight: 1.15, maxWidth: width + 18 }}>{error}</Typography>}
   </Box>
 );
-
-const sameBat = (a: Battery, b: Battery) => a.cells === b.cells && a.type === b.type
-  && Math.abs(a.nom - b.nom) < 1e-6 && Math.abs(a.max - b.max) < 1e-6 && Math.abs(a.min - b.min) < 1e-6;
 
 const BatteryPanel: React.FC<{
   vDc: number; bat: Battery; onChange: (b: Battery) => void;
@@ -48,12 +48,19 @@ const BatteryPanel: React.FC<{
   /** hover text of the motor-voltage marker (which operating point it is for) */
   vDcTip?: string;
 }> = ({ vDc, bat, onChange, machinePack, onReset, stockNote, vDcTip }) => {
-  const setType = (t: CellType | null) => { if (t) onChange({ ...bat, type: t, ...PRESETS[t] }); };
-  const setF = (k: keyof Battery) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = parseFloat(e.target.value); if (Number.isFinite(v)) onChange({ ...bat, [k]: v });
+  const setType = (t: CellType | null) => {
+    if (t) onChange({ ...bat, type: t, ...PRESETS[t], draft: bat.draft?.cells == null ? undefined : { cells: bat.draft.cells } });
+  };
+  const setF = (k: 'cells' | 'min' | 'nom' | 'max') => (e: React.ChangeEvent<HTMLInputElement>) => {
+    onChange(editBatteryField(bat, k, e.target.value));
   };
 
-  const packMin = bat.cells * bat.min, packNom = bat.cells * bat.nom, packMax = bat.cells * bat.max;
+  const nums = validBatteryNumbers(bat);
+  const packMin = nums ? nums.cells * nums.min : NaN;
+  const packNom = nums ? nums.cells * nums.nom : NaN;
+  const packMax = nums ? nums.cells * nums.max : NaN;
+  const issues = new Set(batteryInputIssues(bat));
+  const valid = issues.size === 0;
 
   const color = useMemo(() => {
     if (vDc > packMax) return '#f87171';   // can't drive
@@ -77,9 +84,11 @@ const BatteryPanel: React.FC<{
           {stockNote && <Box component="span" sx={{ color: '#fbbf24', fontSize: 11, fontWeight: 700 }}>{' · '}{tx('configure.packStock')}</Box>}
         </Typography>
         <Box sx={{ flex: 1 }} />
-        <Typography sx={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'monospace' }}>
+        {valid ? <Typography sx={{ fontSize: 12, color: 'var(--text-2)', fontFamily: 'monospace' }}>
           {tx('configure.packSummary', { nom: fmt(packNom), min: fmt(packMin), max: fmt(packMax) })}
-        </Typography>
+        </Typography> : <Typography role="alert" sx={{ fontSize: 12, color: '#f87171', fontWeight: 700 }}>
+          {tx('configure.invalidPack')}
+        </Typography>}
       </Box>
 
       {/* inputs */}
@@ -92,13 +101,17 @@ const BatteryPanel: React.FC<{
             </ToggleButton>
           ))}
         </ToggleButtonGroup>
-        {numField(tx('configure.cellsSeries'), bat.cells, setF('cells'), 1)}
+        {numField(tx('configure.cellsSeries'), batteryFieldText(bat, 'cells'), setF('cells'), 1, 66,
+          issues.has('cells') ? tx('configure.invalidCellCount') : undefined)}
         <Box sx={{ display: 'flex', alignItems: 'flex-end', gap: 1, flexWrap: 'wrap' }}>
-          {numField(`${tx('configure.cellV')} · ${tx('configure.cellMin')}`, bat.min, setF('min'))}
-          {numField(tx('configure.cellNom'), bat.nom, setF('nom'))}
-          {numField(tx('configure.cellMax'), bat.max, setF('max'))}
+          {numField(`${tx('configure.cellV')} · ${tx('configure.cellMin')}`, batteryFieldText(bat, 'min'), setF('min'), 0.05, 66,
+            issues.has('min') ? tx('configure.invalidCellMin') : undefined)}
+          {numField(tx('configure.cellNom'), batteryFieldText(bat, 'nom'), setF('nom'), 0.05, 66,
+            issues.has('nom') ? tx('configure.invalidCellNom') : undefined)}
+          {numField(tx('configure.cellMax'), batteryFieldText(bat, 'max'), setF('max'), 0.05, 66,
+            issues.has('max') ? tx('configure.invalidCellMax') : undefined)}
         </Box>
-        {machinePack && onReset && !sameBat(bat, machinePack) && (
+        {machinePack && onReset && !sameBattery(bat, machinePack) && (
           <Button size="small" onClick={onReset} title={tx('configure.resetPackTip')}
             sx={{ textTransform: 'none', fontSize: 11, color: '#60a5fa', ml: 'auto' }}>
             {tx('configure.resetPack')}
@@ -107,7 +120,7 @@ const BatteryPanel: React.FC<{
       </Box>
 
       {/* voltage-match bar */}
-      <svg viewBox={`0 0 ${W} 84`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+      {valid ? <svg viewBox={`0 0 ${W} 84`} style={{ width: '100%', height: 'auto', display: 'block' }}>
         {/* baseline track */}
         <line x1={padX} y1={barY + barH / 2} x2={W - padX} y2={barY + barH / 2} stroke="var(--panel)" strokeWidth={1.25} />
         {/* battery window (empty → full) */}
@@ -133,7 +146,7 @@ const BatteryPanel: React.FC<{
         <line x1={mX} y1={barY - 14} x2={mX} y2={barY + barH + 8} stroke={color} strokeWidth={1} />
         <polygon points={`${mX - 5},${barY - 14} ${mX + 5},${barY - 14} ${mX},${barY - 6}`} fill={color} />
         <text x={Math.min(Math.max(mX, 40), W - 40)} y={barY - 18} fill={color} fontSize={12} fontWeight={700} textAnchor="middle" fontFamily="monospace">{vDcTip ? <title>{vDcTip}</title> : null}{tx('configure.motorV', { v: fmt(vDc) })}</text>
-      </svg>
+      </svg> : <Typography sx={{ fontSize: 11, color: '#f87171', py: 1 }}>{tx('configure.invalidPackTip')}</Typography>}
     </Box>
   );
 };

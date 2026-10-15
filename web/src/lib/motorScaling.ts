@@ -403,7 +403,10 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
 
   // Resistance: active copper ∝ L, end-winding ~const; ∝ N (more turns of same
   // wire); ∝ 1/area = 1/wire_height (wire_width fixed); ∝ (nP0/nP)² (connection).
-  const R = ((1 - p.endWindFrac) * fL + p.endWindFrac) * p.R0_ohm * fN / fH * fConn * fConn;
+  const resistanceKnown = Number.isFinite(p.R0_ohm) && Number.isFinite(p.endWindFrac);
+  const R = resistanceKnown
+    ? ((1 - p.endWindFrac) * fL + p.endWindFrac) * p.R0_ohm * fN / fH * fConn * fConn
+    : NaN;
 
   // Back-EMF (no-load) ∝ N·L·rpm·(series count), ×k(L) — same flux that makes
   // the torque makes the EMF.
@@ -433,20 +436,29 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // Iron + magnet loss: FEM speed-curve (interpolated over rpm, × length factor)
   // when the passport carries one, else the analytical f^1.5 / f² laws.
   const sp = p.speed;
-  const hasCurve = !!(sp && sp.rpm.length >= 2);
+  const hasCurve = !!(sp && Array.isArray(sp.rpm) && sp.rpm.length >= 2);
   // Best: the 2-D loss surface, bilinear over (equivalent base-turns current,
   // rpm) — the current axis is read in ampere-turns, same as the torque curve.
   const lg = p.loss_grid;
-  const hasGrid = !!(lg && lg.I_A.length >= 2 && lg.rpm.length >= 2);
-  const gridLoss = (rows: number[][]): number => {
+  const hasGrid = !!(lg && Array.isArray(lg.I_A) && lg.I_A.length >= 2
+    && Array.isArray(lg.rpm) && lg.rpm.length >= 2);
+  const gridLoss = (rows: number[][] | undefined): number => {
+    if (!lg!.I_A.every(Number.isFinite) || !lg!.rpm.every(Number.isFinite)
+      || !Array.isArray(rows) || rows.length !== lg!.I_A.length
+      || rows.some((row) => !Array.isArray(row) || row.length !== lg!.rpm.length || row.some((v) => !Number.isFinite(v)))) return NaN;
     const Ieq = NIfrac * p.I0_A;
     const byI = lg!.I_A.map((_, r) => interp(lg!.rpm, rows[r], k.rpm));
     return interp(lg!.I_A, byI, Ieq);
   };
+  const curveLoss = (ys: number[] | undefined): number =>
+    sp!.rpm.every(Number.isFinite) && Array.isArray(ys) && ys.length === sp!.rpm.length && ys.every(Number.isFinite)
+      ? interp(sp!.rpm, ys, k.rpm) : NaN;
   const P_fe = hasGrid ? gridLoss(lg!.Pfe_W) * fL
-    : hasCurve ? interp(sp!.rpm, sp!.Pfe_W, k.rpm) * fL : p.Pfe0_W * fL * Math.pow(fRpm, 1.5);
+    : hasCurve ? curveLoss(sp!.Pfe_W) * fL
+      : Number.isFinite(p.Pfe0_W) ? p.Pfe0_W * fL * Math.pow(fRpm, 1.5) : NaN;
   const P_mag = hasGrid ? gridLoss(lg!.Pmag_W) * fL
-    : hasCurve ? interp(sp!.rpm, sp!.Pmag_W, k.rpm) * fL : p.Pmag0_W * fL * fRpm * fRpm;
+    : hasCurve ? curveLoss(sp!.Pmag_W) * fL
+      : Number.isFinite(p.Pmag0_W) ? p.Pmag0_W * fL * fRpm * fRpm : NaN;
   // Copper = DC I²R + PROXIMITY.  The stored factor is solved copper over the
   // DC loss of the SAME winding at the passport's own current axis (the LINE
   // current in delta, R0 the equivalent-star R) — so dc·(a − 1) below is the

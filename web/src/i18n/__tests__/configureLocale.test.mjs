@@ -22,9 +22,26 @@ import { fileURLToPath } from 'node:url';
 
 const SRC = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const load = (lng) => JSON.parse(readFileSync(join(SRC, 'locales', lng, 'controller.json'), 'utf8'));
+const raw = (lng) => readFileSync(join(SRC, 'locales', lng, 'controller.json'), 'utf8');
 const EN = load('en');
 const ZH = load('zh-CN');
 const GROUPS = ['configureDrive', 'configureLimits', 'configure', 'emTiles'];
+
+test('heat semantic keys occur once and keep EN/ZH motor/controller parity', () => {
+  for (const lng of ['en', 'zh-CN']) {
+    for (const key of ['motorLossStatorTip', 'motorHeatSplitTip']) {
+      assert.equal([...raw(lng).matchAll(new RegExp(`"${key}"\\s*:`, 'g'))].length, 1, `${lng} ${key}`);
+    }
+  }
+  assert.equal(EN.configureDrive.motorHeatSplitTip,
+    'Stator + rotor show motor heat, including PWM extra loss; controller loss is separate.');
+  assert.equal(ZH.configureDrive.motorHeatSplitTip,
+    '定子 + 转子显示电机发热，包含 PWM 附加损耗；控制器损耗单独计算。');
+  assert.match(EN.configure.rotorHeatTipMeasured, /motor heat; controller heat is separate/);
+  assert.match(ZH.configure.rotorHeatTipMeasured, /电机发热；控制器发热单独计算/);
+  assert.doesNotMatch(ZH.configure.rotorHeatTipMeasured, /总损耗/);
+  assert.doesNotMatch(ZH.configure.rotorHeatTipUnknown, /总损耗/);
+});
 
 const flat = (o, p = '') => Object.entries(o).flatMap(([k, v]) =>
   v && typeof v === 'object' ? flat(v, p ? `${p}.${k}` : k) : [[p ? `${p}.${k}` : k, v]]);
@@ -32,7 +49,7 @@ const get = (o, key) => key.split('.').reduce((a, k) => (a == null ? a : a[k]), 
 
 const ALLOWED = new Set([
   // technologies / standards / chemistries
-  'PWM', 'SVPWM', 'MOSFET', 'Si', 'SiC', 'GaN', 'AWG', 'NMC', 'LFP', 'LiFePO', 'XY', 'TS',
+  'PWM', 'SVPWM', 'MOSFET', 'Si', 'SiC', 'GaN', 'AWG', 'NMC', 'LFP', 'LiFePO', 'XY', 'TS', 'S1',
   // a bearing maker's model, a loss-model author, a drawing format (named in the Electromagnetic tiles' tooltips)
   'SKF', 'Bertotti', 'CAD',
   // units

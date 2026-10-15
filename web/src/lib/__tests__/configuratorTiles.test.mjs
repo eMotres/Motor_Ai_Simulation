@@ -315,12 +315,12 @@ t('the tiles add up: EFFICIENCY = POWER / (POWER + TOTAL LOSS), Sine and PWM, on
 t('the panel: EFFICIENCY is the system, the saved column and the ranking follow it, no duplicate eta drive column', () => {
   const panel = read('components/compare/ConfiguratorPanel.tsx');
   assert.match(panel, /<MetricTile label=\{tx\('configure\.efficiency'\)\} value=\{sysEff\.value\}/);
-  assert.match(panel, /systemEfficiency\(driveMode, drv, result\.P_mech_W, result\.P_loss_W\)/);
-  assert.match(panel, /motorEfficiency\(driveMode, drv, result\.P_mech_W, result\.P_loss_W\)/);
+  assert.match(panel, /systemEfficiency\(driveMode, drv, result\.P_mech_W, motorLoss_W\)/);
+  assert.match(panel, /motorEfficiency\(driveMode, drv, result\.P_mech_W, motorLoss_W\)/);
   assert.match(panel, /board_copper_W \?\? 0, 1\)/);                               // the split in the tooltip names the board copper
   assert.match(panel, /get: \(c\) => \(c\.drive\?\.mode === 'pwm' \? \(c\.drive\.eta_drive_pct \?\? NaN\) : c\.result\.efficiency \* 100\)/);
   assert.doesNotMatch(panel, /columnDriveEff/);
-  assert.match(panel, /base=\{baseSysEff\}/);
+  assert.match(panel, /base=\{baseSysEff \?\? 0\}/);
   for (const l of ['en', 'zh-CN']) {
     const c = loc(l);
     assert.match(c.configure.efficiencyTip, /battery|电池/i);

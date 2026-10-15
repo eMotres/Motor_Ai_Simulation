@@ -24,11 +24,29 @@ export interface ThermalGeom {
 }
 export interface ThermalLosses {
   P_cu_W: number; P_fe_W: number; P_mag_W: number;
-  /** extra heat with no known location (the PWM carrier loss): it leaves through the housing like the
-   *  rest but is not put on the winding or magnet hot-spot (owner 2026-10-05: Total loss includes it) */
+  /** extra motor heat leaving through the housing. */
   P_extra_W?: number;
+  /** portion of P_extra_W attributed to the stator/winding hot spot. */
+  P_extra_stator_W?: number;
 }
 export interface ThermalCooling { h_Wm2K: number; ambient_C: number; }
+
+/** Configure's motor heat attribution. PWM carrier loss is motor heat assigned to the stator/winding;
+ * controller losses are outside this object. Null means the operating point or a required motor loss is unknown. */
+export function configureMotorHeat(
+  mode: 'sine' | 'pwm', pointAccepted: boolean,
+  base: { P_cu_W: number; P_fe_W: number; P_mag_W: number; stator_W: number; rotor_W: number } | null,
+  extraMotorLoss_W: number | null,
+): { stator_W: number; rotor_W: number; totalMotor_W: number; thermalLosses: ThermalLosses } | null {
+  if (!pointAccepted || !base || Object.values(base).some((v) => !Number.isFinite(v) || v < 0)
+    || (mode === 'pwm' && (extraMotorLoss_W == null || !Number.isFinite(extraMotorLoss_W) || extraMotorLoss_W < 0))) return null;
+  const extra = mode === 'sine' ? 0 : extraMotorLoss_W as number;
+  const stator_W = base.stator_W + extra;
+  const rotor_W = base.rotor_W;
+  return { stator_W, rotor_W, totalMotor_W: stator_W + rotor_W,
+    thermalLosses: { P_cu_W: base.P_cu_W, P_fe_W: base.P_fe_W, P_mag_W: base.P_mag_W,
+      P_extra_W: extra, P_extra_stator_W: extra } };
+}
 
 export interface ThermalEstimate {
   P_total_W: number;
@@ -73,7 +91,8 @@ export function estimateThermal(g: ThermalGeom, l: ThermalLosses, c: ThermalCool
   const R_slot = (mm(g.slotWidth_mm) * 0.5) / (K_SLOT * A_slot);
   const R_ins  = mm(g.insulation_mm) / (K_INS * A_slot);
   const R_yoke = mm(g.coreThickness_mm) / (K_IRON * Math.max(1e-4, A_cyl));
-  const dT_winding = P_cu * (R_slot + R_ins + R_yoke);
+  const P_stator_winding = P_cu + Math.max(0, l.P_extra_stator_W || 0);
+  const dT_winding = P_stator_winding * (R_slot + R_ins + R_yoke);
   const T_winding = T_housing + dT_winding;
 
   // Magnet: rotor eddy loss crosses the air gap to the stator / housing.

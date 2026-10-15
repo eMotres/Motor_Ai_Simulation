@@ -14,34 +14,17 @@
  * Owner rule (`one-efficiency-at-the-shaft`): there is ONE efficiency, at the
  * shaft, with bearings and windage included exactly once.
  *
- * The function is re-implemented verbatim below rather than imported: the
- * module is TypeScript and lives beside components that pull in
- * `import.meta.env`, which `node --test` cannot load (same reason as
- * common/__tests__/progressStrip and controller/__tests__/compareRows).
- * Changing `dutyEfficiencyPct` in `ActiveFamilyStrip.tsx` therefore has to
- * change this file too — and that is the moment someone has to justify the
- * new behaviour.
+ * The test imports the production helper so its assertions cannot drift from
+ * the implementation used by the duty-save handler.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { dutyEfficiencyPct } from '../../../lib/dutyEfficiency.ts';
 
-/* ── verbatim copy of the shipped helper ─────────────────────────────────── */
-
-function dutyEfficiencyPct(s, pMechW) {
-  const pm = Math.abs(Number(pMechW) || 0);
-  const loss = Number(s?.P_loss_total_W) || 0;
-  const brg = Number(s?.P_bearings_W);
-  const wind = Number(s?.P_windage_W);
-  const known = Number.isFinite(brg) || Number.isFinite(wind);
-  const extra = (Number.isFinite(brg) ? brg : 0) + (Number.isFinite(wind) ? wind : 0);
-  const gen = s?.op_mode === 'generator';
-  if (pm <= 0) return (Number(s?.efficiency) || 0) * 100;
-  const pElec = gen ? Math.max(0, pm - loss) : pm + loss;
-  if (!known) return (gen ? pElec / pm : pm / pElec) * 100;
-  const pShaft = gen ? pm + extra : Math.max(0, pm - extra);
-  return (gen ? (pShaft > 0 ? pElec / pShaft : 0)
-              : (pElec > 0 ? pShaft / pElec : 0)) * 100;
-}
+test('a duty without computed total loss has no efficiency instead of a zero-loss result', () => {
+  assert.equal(dutyEfficiencyPct({ efficiency: 0.92 }, 1000), null);
+  assert.equal(dutyEfficiencyPct({ P_loss_total_W: null }, 1000), null);
+});
 
 /* ── worked example: motoring, rotor 100 kW, EM loss 3 kW, mech loss 300 W ── */
 /* pElec = pm + loss = 103000; pShaft = pm - extra = 99700
@@ -87,7 +70,7 @@ test('unknown mechanical loss (no bearings named) falls back to the '
 });
 
 test('zero (or unusable) rotor power falls back to the stored efficiency field', () => {
-  const s = { efficiency: 0.9846 };
+  const s = { efficiency: 0.9846, P_loss_total_W: 10 };
   assert.ok(Math.abs(dutyEfficiencyPct(s, 0) - 98.46) < 1e-9);
   assert.ok(Math.abs(dutyEfficiencyPct(s, NaN) - 98.46) < 1e-9);
 });

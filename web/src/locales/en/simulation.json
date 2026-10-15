@@ -63,6 +63,7 @@
   "optVarsRedoTip": "Redo: {action}",
   "optVarsNothingToUndo": "Nothing to undo (Ctrl+Z)",
   "optVarsNothingToRedo": "Nothing to redo (Ctrl+Shift+Z)",
+  "lossNotComputed": "Not computed in this run.",
   "optVarsActAdd": "Add {name}",
   "optVarsActRemove": "Remove {name}",
   "optVarsActAddAll": "Add all geometry ({count, plural, one {# variable} other {# variables}})",

@@ -13,12 +13,12 @@ export interface FemPayload {
   outlines:      { domain: number; loops: [number, number][][] }[];
 
   T_em_Nm:       number;
-  P_cu_W:        number;
-  P_fe_W:        number;
-  P_mag_eddy_W:  number;
-  P_loss_total_W:number;
+  P_cu_W:        number | null;
+  P_fe_W:        number | null;
+  P_mag_eddy_W:  number | null;
+  P_loss_total_W:number | null;
   P_mech_W:      number;
-  efficiency:    number;
+  efficiency:    number | null;
   freq_Hz:       number;
   rpm:           number;
 

@@ -11,6 +11,51 @@ import type { VariantReading } from './configuratorDrive';
 
 export type DriveMode = 'sine' | 'pwm';
 
+/** Whether this passport has computed motor loss inputs, including older point curves/maps. */
+export function lossMapAvailability(p: {
+  Pfe0_W?: number | null; Pmag0_W?: number | null; R0_ohm?: number | null; endWindFrac?: number | null;
+  speed?: { rpm?: number[]; Pfe_W?: number[]; Pmag_W?: number[] } | null;
+  loss_grid?: { I_A?: number[]; rpm?: number[]; Pfe_W?: number[][]; Pmag_W?: number[][] } | null;
+}): { iron: boolean; copper: boolean; magnet: boolean; complete: boolean } {
+  const finiteScalar = (v: number | null | undefined) => typeof v === 'number' && Number.isFinite(v);
+  const finiteAxis = (axis: number[] | undefined) => Array.isArray(axis) && axis.length >= 2 && axis.every(Number.isFinite);
+  const finiteVector = (v: number[] | undefined, axis: number[] | undefined) => Array.isArray(v)
+    && finiteAxis(axis) && v.length === axis!.length && v.every(Number.isFinite);
+  const finiteGrid = (v: number[][] | undefined, rows: number[] | undefined, cols: number[] | undefined) =>
+    Array.isArray(v) && finiteAxis(rows) && finiteAxis(cols) && v.length === rows!.length
+    && v.every((row) => Array.isArray(row) && row.length === cols!.length && row.every(Number.isFinite));
+  const grid = p.loss_grid;
+  const curve = p.speed;
+  const hasGrid = !!(grid && Array.isArray(grid.I_A) && grid.I_A.length >= 2
+    && Array.isArray(grid.rpm) && grid.rpm.length >= 2);
+  const hasCurve = !!(curve && Array.isArray(curve.rpm) && curve.rpm.length >= 2);
+  const iron = hasGrid ? finiteGrid(grid?.Pfe_W, grid?.I_A, grid?.rpm) : hasCurve ? finiteVector(curve?.Pfe_W, curve?.rpm) : finiteScalar(p.Pfe0_W);
+  const copper = finiteScalar(p.R0_ohm) && finiteScalar(p.endWindFrac);
+  const magnet = hasGrid ? finiteGrid(grid?.Pmag_W, grid?.I_A, grid?.rpm) : hasCurve ? finiteVector(curve?.Pmag_W, curve?.rpm) : finiteScalar(p.Pmag0_W);
+  return { iron, copper, magnet, complete: iron && copper && magnet };
+}
+
+export interface PointDisplayGate {
+  accepted: boolean;
+  showMotorLosses: boolean;
+  showController: boolean;
+  showBatteryDerived: boolean;
+}
+
+/** One acceptance decision controls every point-derived Configure presentation. */
+export function pointDisplayGate(i: {
+  batteryValid: boolean; speedAccepted: boolean; driveMode: DriveMode;
+  driveAccepted: boolean; motorLossesComputed: boolean;
+}): PointDisplayGate {
+  const accepted = i.batteryValid && i.speedAccepted && (i.driveMode === 'sine' || i.driveAccepted);
+  return {
+    accepted,
+    showMotorLosses: accepted && i.motorLossesComputed,
+    showController: accepted && i.driveMode === 'pwm' && i.driveAccepted,
+    showBatteryDerived: i.batteryValid,
+  };
+}
+
 /** Why a tile is "—" (picks the tooltip). */
 export type Blank = 'sine' | 'refused' | 'missing' | null;
 
@@ -100,7 +145,8 @@ export const lossTailTiles = (mode: DriveMode, drv: VariantReading | null): Driv
 /** TOTAL LOSS = the model's motor losses + the PWM extra loss + the controller loss (the last two are
  *  0 in Sine).  null while either is unknown (PWM refused), so the tile never shows a total that
  *  leaves a part out. */
-export function totalLossShown(baseW: number, mode: DriveMode, drv: VariantReading | null): number | null {
+export function totalLossShown(baseW: number | null, mode: DriveMode, drv: VariantReading | null): number | null {
+  if (baseW == null || !Number.isFinite(baseW)) return null;
   const e = extraLossTile(mode, drv).value, c = controllerLossTile(mode, drv).value;
   return e == null || c == null ? null : baseW + e + c;
 }
@@ -113,7 +159,7 @@ export function totalLossShown(baseW: number, mode: DriveMode, drv: VariantReadi
  *  with TOTAL LOSS = motor losses + PWM extra loss + controller loss (incl. its board copper).  In Sine the
  *  last two are 0, so it equals the model's own efficiency.  null = "—" while PWM is refused or a part of the
  *  total is unknown. */
-export function systemEfficiency(mode: DriveMode, drv: VariantReading | null, P_shaft_W: number, P_loss_W: number):
+export function systemEfficiency(mode: DriveMode, drv: VariantReading | null, P_shaft_W: number, P_loss_W: number | null):
   { value: number | null; blank: Blank } {
   const tot = totalLossShown(P_loss_W, mode, drv);
   if (tot == null) return { value: null, blank: drv ? 'missing' : 'refused' };
@@ -122,7 +168,8 @@ export function systemEfficiency(mode: DriveMode, drv: VariantReading | null, P_
 
 /** The motor's own efficiency: shaft power over the motor's input power, i.e. the motor losses plus the PWM
  *  extra loss (the controller excluded).  Sine: the model's.  null = "—" while PWM is refused / the extra is unknown. */
-export function motorEfficiency(mode: DriveMode, drv: VariantReading | null, P_shaft_W: number, P_loss_W: number): number | null {
+export function motorEfficiency(mode: DriveMode, drv: VariantReading | null, P_shaft_W: number, P_loss_W: number | null): number | null {
+  if (P_loss_W == null || !Number.isFinite(P_loss_W)) return null;
   const e = extraLossTile(mode, drv).value;
   if (e == null) return null;
   return P_shaft_W > 0 ? (100 * P_shaft_W) / (P_shaft_W + P_loss_W + e) : 0;
@@ -214,7 +261,8 @@ export function tempRowTiles(t: TempRowInput | null, lim: { winding_C: number; m
 }
 
 /** Loss density follows the total (same factor). */
-export function lossDensityShown(baseDensity: number, baseW: number, mode: DriveMode, drv: VariantReading | null): number | null {
+export function lossDensityShown(baseDensity: number, baseW: number | null, mode: DriveMode, drv: VariantReading | null): number | null {
+  if (baseW == null || !Number.isFinite(baseW)) return null;
   const tot = totalLossShown(baseW, mode, drv);
   return tot == null ? null : (baseW > 0 ? baseDensity * (tot / baseW) : baseDensity);
 }

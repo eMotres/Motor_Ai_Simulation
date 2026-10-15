@@ -11,7 +11,60 @@
 // Pure (no imports): web/src/lib/__tests__/configuratorBattery.test.mjs imports this file.
 
 export type CellType = 'NMC' | 'LFP';
-export interface BatteryLike { type: CellType; cells: number; nom: number; max: number; min: number; }
+export type BatteryField = 'cells' | 'min' | 'nom' | 'max';
+export interface BatteryLike {
+  type: CellType; cells: number; nom: number; max: number; min: number;
+  /** Raw text is kept while a field is edited, including empty/nonfinite input. */
+  draft?: Partial<Record<BatteryField, string>>;
+}
+
+/** Text shown in an editable battery field. */
+export function batteryFieldText(b: BatteryLike, field: BatteryField): string {
+  return Object.prototype.hasOwnProperty.call(b.draft ?? {}, field)
+    ? String(b.draft?.[field] ?? '') : String(b[field]);
+}
+
+/** Apply one field edit without losing invalid text or the last finite numeric value. */
+export function editBatteryField(b: BatteryLike, field: BatteryField, raw: string): BatteryLike {
+  const value = raw.trim() === '' ? NaN : Number(raw);
+  return {
+    ...b,
+    ...(Number.isFinite(value) ? { [field]: value } : {}),
+    draft: { ...(b.draft ?? {}), [field]: raw },
+  };
+}
+
+/** Parsed field value; null means the visible draft is empty or nonfinite. */
+export function batteryFieldNumber(b: BatteryLike, field: BatteryField): number | null {
+  const raw = batteryFieldText(b, field);
+  if (raw.trim() === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : null;
+}
+
+/** Numeric pack values are available only when every visible field is valid. */
+export function validBatteryNumbers(b: BatteryLike): Pick<BatteryLike, BatteryField> | null {
+  if (batteryInputIssues(b).length) return null;
+  return {
+    cells: batteryFieldNumber(b, 'cells')!, min: batteryFieldNumber(b, 'min')!,
+    nom: batteryFieldNumber(b, 'nom')!, max: batteryFieldNumber(b, 'max')!,
+  };
+}
+
+/** Per-cell voltage fields must describe an ordered, positive operating window. */
+export function batteryInputIssues(b: Pick<BatteryLike, 'cells' | 'min' | 'nom' | 'max'>): Array<'cells' | 'min' | 'nom' | 'max'> {
+  const d = b as BatteryLike;
+  const cells = batteryFieldNumber(d, 'cells');
+  const min = batteryFieldNumber(d, 'min');
+  const nom = batteryFieldNumber(d, 'nom');
+  const max = batteryFieldNumber(d, 'max');
+  const issues: Array<'cells' | 'min' | 'nom' | 'max'> = [];
+  if (cells == null || cells <= 0 || !Number.isInteger(cells)) issues.push('cells');
+  if (min == null || min <= 0 || (nom != null && min >= nom)) issues.push('min');
+  if (nom == null || nom <= 0 || (min != null && nom <= min) || (max != null && nom > max)) issues.push('nom');
+  if (max == null || max <= 0 || (nom != null && max < nom)) issues.push('max');
+  return issues;
+}
 
 /** A pack as the machine's configuration states it (pack totals; per-cell voltages optional). */
 export interface PackLike {
@@ -94,9 +147,12 @@ export function clearBatteryEditForConfig(
 export const STOCK_BATTERY: BatteryLike = { type: 'NMC', cells: 100, nom: 3.7, max: 4.2, min: 3.0 };
 
 export function isStockBattery(b: BatteryLike): boolean {
-  return b.type === STOCK_BATTERY.type && b.cells === STOCK_BATTERY.cells
+  return batteryInputIssues(b).length === 0
+    && b.type === STOCK_BATTERY.type && b.cells === STOCK_BATTERY.cells
     && Math.abs(b.nom - STOCK_BATTERY.nom) < 1e-6 && Math.abs(b.max - STOCK_BATTERY.max) < 1e-6
-    && Math.abs(b.min - STOCK_BATTERY.min) < 1e-6;
+    && Math.abs(b.min - STOCK_BATTERY.min) < 1e-6
+    && (['cells', 'min', 'nom', 'max'] as BatteryField[])
+      .every((k) => batteryFieldNumber(b, k) === STOCK_BATTERY[k]);
 }
 
 /** One-time cleanup of the stored per-machine edits: drop every entry that equals the stock
@@ -110,7 +166,9 @@ export function dropStockEdits(raw: string | null): string | null {
     for (const k of Object.keys(all)) {
       const b = all[k];
       if (isObj(b) && b.type && isStockBattery({ type: b.type as CellType, cells: Number(b.cells), nom: Number(b.nom),
-          max: Number(b.max), min: Number(b.min) })) { delete all[k]; changed = true; }
+          max: Number(b.max), min: Number(b.min), draft: isObj(b.draft) ? b.draft as Partial<Record<BatteryField, string>> : undefined })) {
+        delete all[k]; changed = true;
+      }
     }
     return changed ? JSON.stringify(all) : raw;
   } catch { return raw; }
@@ -126,9 +184,17 @@ export function readBatteryEdit(raw: string | null, refId: string): BatteryLike 
     const all = JSON.parse(raw);
     const b = isObj(all) ? all[refId] : null;
     if (!isObj(b) || (b.type !== 'NMC' && b.type !== 'LFP')) return null;
-    const cells = pos(b.cells), nom = pos(b.nom), max = pos(b.max), min = pos(b.min);
-    if (!(cells && nom && max && min)) return null;
-    const out: BatteryLike = { type: b.type, cells, nom, max, min };
+    // Preserve finite invalid edits so Configure can identify the exact field
+    // after reload instead of silently replacing the user's value with a pack default.
+    const number = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? v : null;
+    const cells = number(b.cells), nom = number(b.nom), max = number(b.max), min = number(b.min);
+    if (cells == null || nom == null || max == null || min == null) return null;
+    const draftObj = isObj(b.draft) ? b.draft : null;
+    const draft = draftObj
+      ? Object.fromEntries((['cells', 'min', 'nom', 'max'] as BatteryField[])
+        .filter((k) => typeof draftObj[k] === 'string').map((k) => [k, draftObj[k] as string]))
+      : undefined;
+    const out: BatteryLike = { type: b.type, cells, nom, max, min, ...(draft && Object.keys(draft).length ? { draft } : {}) };
     return isStockBattery(out) ? null : out;       // the stock default is never "the user's choice"
   } catch { return null; }
 }
@@ -161,6 +227,10 @@ export function batteryForDisplay(edit: BatteryLike | null, machine: BatteryLike
 }
 
 export function sameBattery(a: BatteryLike, b: BatteryLike): boolean {
-  return a.cells === b.cells && a.type === b.type && Math.abs(a.nom - b.nom) < 1e-6
+  const numericSame = a.cells === b.cells && a.type === b.type && Math.abs(a.nom - b.nom) < 1e-6
     && Math.abs(a.max - b.max) < 1e-6 && Math.abs(a.min - b.min) < 1e-6;
+  if (!numericSame) return false;
+  if (!batteryInputIssues(a).length && !batteryInputIssues(b).length) return true;
+  return (['cells', 'min', 'nom', 'max'] as BatteryField[])
+    .every((k) => batteryFieldText(a, k) === batteryFieldText(b, k));
 }

@@ -7,38 +7,37 @@
 // An edit is validated by the server with the CAD template's own pre-check, saved with the die configuration (cad_overrides) and a
 // rebuild of the CAD model is requested; the old model stays on screen with a "rebuilding" badge until the new one is ready.
 // The electromagnetic parameters are NOT here (they are edited in Active) and a Full edit never changes an electromagnetic input.
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, IconButton, MenuItem, Select, TextField, Tooltip, Typography,
 } from '@mui/material';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
-import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import SaveIcon from '@mui/icons-material/Save';
 import TuneIcon from '@mui/icons-material/Tune';
 import CloseIcon from '@mui/icons-material/Close';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import SectionLabel from '../common/SectionLabel';
-import ComponentTreeView from '../viewer3d/ComponentTreeView';
-import { useAssemblyTree } from '../common/useAssemblyTree';
+import { useAssemblyRows } from '../common/useAssemblyTree';
+import { useViewportWidth } from '../common/useNarrow';
 import HelpTip from '../common/HelpTip';
-import ModelCanvas, { type ModelCanvasHandle } from '../model3d/ModelCanvas';
-import { modelKey, type ModelInfo, type PartGroup } from '../../lib/model3d';
-import { groupMassKg, nameOf } from '../../lib/partTree';
-import { formatMass } from '../materials/fullPartsLogic';
+import { UnifiedViewer } from '../../modules/viewer3d';
+import { fullToolsOpen, modelKey, viewOf, type ModelInfo, type PartGroup } from '../../lib/model3d';
+import { modelGlbUrl } from '../../lib/model3dHost';
+import { nameOf } from '../../lib/partTree';
 import {
   changesOf, draftError, formatValue, invalidDrafts, modelBadge, rowsOfGroup, type CadRow,
 } from '../../lib/cadParams';
 import { usePartTreeData, useCadParams, useOpenMotor } from './useConstruction';
-import { useViewportWidth } from '../common/useNarrow';
 import {
-  DRAWER_STORAGE_KEY, drawerStartsOpen, drawerWidth, fullToolbar, treeStartsCollapsed,
+  DRAWER_STORAGE_KEY, drawerStartsOpen, drawerWidth, fullToolbar,
 } from '../../lib/viewerToolbar';
 
 const tx = nsT('geometry');
 
 interface Props {
   models: ModelInfo[] | null;
+  canDownload: boolean;
   /** the shared CAD hook of the Geometry tab (the Files menu imports through it) */
   cad: ReturnType<typeof useCadParams>;
   /** bump to re-fetch the part tree (after a rebuild) */
@@ -47,7 +46,7 @@ interface Props {
 
 const fieldSx = { width: 84, '& .MuiInputBase-input': { px: '6px', py: '3px', fontSize: 12, textAlign: 'right' as const } };
 
-const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
+const GeometryFullPanel: React.FC<Props> = ({ models, canDownload, cad, treeKey }) => {
   const { i18n } = useTranslation('geometry');
   const lang = i18n.resolvedLanguage ?? 'en';
   const openMotor = useOpenMotor();
@@ -59,9 +58,9 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [nodes, setNodes] = useState<PartGroup[]>([]);
-  const [problems, setProblems] = useState<string[]>([]);
-  const canvas = useRef<ModelCanvasHandle>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const vw = useViewportWidth();
+  const [problems, setProblems] = useState<string[]>([]);
   // the CAD parameter table is a right-hand drawer, closed by default so the model is full screen; remembered per browser
   const [drawer, setDrawerState] = useState<boolean>(() => { try { return drawerStartsOpen(localStorage.getItem(DRAWER_STORAGE_KEY)); } catch { return false; } });
   const setDrawer = (open: boolean) => { setDrawerState(open); try { localStorage.setItem(DRAWER_STORAGE_KEY, open ? '1' : '0'); } catch { /* a convenience */ } };
@@ -72,17 +71,7 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
   const dirty = Object.keys(changes).length;
   const canWrite = !!data?.can_write;
   const badge = modelBadge(data?.rebuild);
-  // THE tree: the "Motor Assembly" panel over the viewer; the mass of every part and group is its extra column
-  const massOf = useMemo(() => new Map((tree?.parts ?? []).map((p) => [p.id, p])), [tree]);
-  const extraFor = useCallback((id: string) => {
-    const p = massOf.get(id);
-    return p?.mass_kg != null ? <span style={{ fontSize: 10, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums', opacity: p.counted === false ? 0.5 : 1 }}>{formatMass(p.mass_kg)}</span> : null;
-  }, [massOf]);
-  const groupExtraFor = useCallback((gid: string) => {
-    const g = tree ? groupMassKg(tree, gid) : null;
-    return g != null ? <span style={{ fontSize: 10, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{formatMass(g)}</span> : null;
-  }, [tree]);
-  const { model: assembly, hiddenNodes, highlight } = useAssemblyTree(tree, nodes, { extraFor, groupExtraFor, resetKey: `${die}/${config}` });
+  const assembly = useAssemblyRows(tree, nodes);
 
   const onSave = useCallback(async () => {
     setProblems([]);
@@ -226,36 +215,26 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
             {tx('modelVersion', { template: data.model.template, built: (data.model.built_at ?? '').slice(0, 10) })}
           </Typography>
         )}
-        {has('fit') && (
-          <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
-            sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{tx('fit')}</Button>
-        )}
       </Box>
 
       <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0 }}>
         {model ? (
-          <ModelCanvas ref={canvas} model={model} highlight={highlight} hiddenNodes={hiddenNodes} contextLostText={tx('contextLost')}
+          <UnifiedViewer sourceKey={`${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}`} resetKey={`geometryFull:${modelKey(model)}`}
+            glbUrl={modelGlbUrl(model, canDownload)} toolbarSpec={fullToolsOpen(viewOf(model, canDownload)) ? 'full' : 'simplified'} tree={assembly}
+            selectedKey={selectedKey} onSelectedKeyChange={setSelectedKey} contextLostText={tx('contextLost')}
             simplifiedText={tx('simplifiedLine')} simplifiedTip={tx('simplifiedLineTip')} noViewText={tx('noView')}
-            onLoaded={({ groups }) => setNodes(groups)}>
-            {badge === 'failed' && data?.rebuild.message && (
+            onLoaded={({ groups }) => setNodes(groups)} hostExtras={badge === 'failed' && data?.rebuild.message ? (
               <Alert severity="error" sx={{ position: 'absolute', left: 10, right: 10, bottom: 10, fontSize: 11.5, zIndex: 2, maxHeight: 130, overflow: 'auto' }}>
                 {data.rebuild.message}
-              </Alert>
-            )}
-          </ModelCanvas>
+              </Alert>) : null} />
         ) : (
           <Typography sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}
             data-testid="full-no-model">
             {models === null ? tx('filesWorking') : tx('fullNoModel')}
           </Typography>
         )}
-        {(treeLoading && !tree) ? <Box sx={{ position: 'absolute', top: 8, left: 8 }}><CircularProgress size={14} /></Box>
-          : assembly.rows.length > 0 ? (
-            <ComponentTreeView model={assembly} defaultCollapsed={treeStartsCollapsed(vw)} style={{ top: 8, left: 8, zIndex: 4, width: 300 }}
-              rowsMaxHeight="calc(100% - 50px)" />
-          ) : (
-            <Typography sx={{ position: 'absolute', top: 10, left: 12, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoTree')}</Typography>
-          )}
+        {(treeLoading && !tree) && <Box sx={{ position: 'absolute', top: 8, left: 8, zIndex: 5 }}><CircularProgress size={14} /></Box>}
+        {(fullToolsOpen(viewOf(model, canDownload)) && assembly.length === 0) && <Typography sx={{ position: 'absolute', top: 10, left: 12, zIndex: 5, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoTree')}</Typography>}
 
         {drawer && (
           <Box data-testid="cad-drawer" sx={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: drawerWidth(vw), zIndex: 6, overflowY: 'auto',

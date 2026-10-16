@@ -145,5 +145,38 @@
   "assemblyNode_PhaseBoard_copper": "铜层",
   "assemblyNode_PhaseBoard_other": "相位板其他部分",
   "cadDrawer": "CAD参数",
-  "cadDrawerClose": "关闭参数面板"
+  "cadDrawerClose": "关闭参数面板",
+  "orthographic": "??",
+  "perspective": "??",
+  "assemblyHide": "隐藏",
+  "assemblyShow": "显示",
+  "assemblyHideAll": "全部隐藏",
+  "assemblyCollapse": "收起",
+  "assemblyExpand": "展开",
+  "assemblyAbsent": "当前模型中不存在",
+  "activeTree": {
+    "stator": "定子",
+    "rotor": "转子",
+    "coils": "线圈",
+    "coil": "线圈 {n}",
+    "magnets": "永磁体",
+    "magnet": "永磁体 {n} {pole}",
+    "shaft": "轴",
+    "sleeve": "护套",
+    "insulation": "槽绝缘",
+    "enamel": "漆包线",
+    "inBand": "内侧气隙区",
+    "outBand": "外侧气隙区"
+  },
+  "partState": {
+    "included": "计入",
+    "reference": "参考",
+    "excluded": "排除",
+    "includedTip": "计入场计算、质量和转动惯量。点击切换。",
+    "referenceTip": "参考部件：材料参与场计算，但不计入质量和转动惯量。点击切换。",
+    "excludedTip": "已排除：按空气处理，质量为零，且不显示。点击切换。",
+    "shaftAlways": "轴始终参与计算，无法更改。",
+    "excludedRisk": "注意：此部件具有磁性作用，排除会改变计算结果。",
+    "nextExcludedRisk": "注意：排除此磁性部件会改变计算结果。"
+  }
 }

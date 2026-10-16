@@ -48,12 +48,12 @@ function withoutExcluded<T>(m: Record<string, T> | null,
 
 const API_BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
 
-interface ComponentMeshData {
+export interface ComponentMeshData {
   vertices: number[] | number[][];
   faces?: number[][];
 }
 
-type AllMeshData = Record<string, ComponentMeshData>;
+export type AllMeshData = Record<string, ComponentMeshData>;
 
 interface MaterialProps {
   color: string;
@@ -131,7 +131,7 @@ export function useMotorMesh() {
  * Uses non-indexed (per-triangle) vertices so each face gets its own
  * vertex normals — this eliminates spike artifacts on sharp CAD edges.
  */
-function buildGeometry(data: ComponentMeshData): THREE.BufferGeometry {
+export function buildGeometry(data: ComponentMeshData): THREE.BufferGeometry {
   const verts = data.vertices;
   let flatPos: number[];
   if (verts.length > 0 && Array.isArray(verts[0])) {

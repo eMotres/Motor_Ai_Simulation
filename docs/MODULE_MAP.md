@@ -2,6 +2,8 @@
 
 Baseline: **2026-10-15, `124f5cbf4dbbe8687bb68846563cdefb62b1b81b`**, worktree `C:\Users\vadim\Projects\mas_modmap`. Prepared by **GPT-6 Astra**, static analysis, no escalation. This is an ownership proposal, not a refactor. Preserve the Sunday 18 October 14:00 freeze and Monday 19 October launch; begin extraction after launch stabilisation.
 
+**Owner addendum, 2026-10-16:** the statement above describes the historical baseline and its original recommendation. The owner has since authorized the narrow viewer extraction recorded under M14 below, including focused Node tests and a strict viewer-only import-boundary gate. No other post-launch extraction is authorized by that exception.
+
 ## 1. Evidence and scope
 
 The initial worktree was clean. Inspection used `git ls-files`, `git grep`, source reading, newline counts and Python AST parsing. **No application imports, tests, servers, API calls, solves, builds or commits.** `wc -l` failed with Windows sandbox `CreateFileMapping` error 5; Python byte-newline counting supplies the same counting convention. Blank lines and comments count.
@@ -136,6 +138,8 @@ Keep one Python distribution and one web deployment initially. A module is an ow
 
 **State:** S18. **Current seams:** app composition, React props/hooks, i18n formatters, navigation descriptors. **Target:** shell imports feature `public.ts` entry points; permission display consumes server decisions and never substitutes for enforcement. **Dependents:** all feature UI and application entry.
 
+**First extracted viewer boundary (owner addendum, 2026-10-16):** `web/src/modules/viewer3d/index.ts` is the public entry for shared 3-D presentation. It exports only `UnifiedViewer` and its prop type, `ViewerToolbarSpec`, and `PartTree` and its prop type. Renderer, camera, clipping, explosion, measurement, cube projection, toolbar implementation, and tree-state helpers remain internal. Camera, section, explode and visibility state live only in module memory, without store or localStorage persistence. The four model hosts pass neutral scene/tree data, role and callbacks; the module imports no host components, feature stores, or business hooks. The FieldViewer and legacy MotorScene callers use the same public PartTree. Extraction validation and the file-movement manifest are recorded in `astra_progress/unified_viewer/MODULE_REPORT.md`.
+
 ## 3. Single-owner state register
 
 These are **target authoritative owners**, including state currently accessed by several areas. A separately named immutable snapshot is owned by its repository and carries its source revision; it is never a second writable master. Mixed physical files use disjoint key ownership. M13 provides atomic read-modify-write mechanics while the named owner validates the mutation. No generic storage helper becomes a second semantic owner.
@@ -254,7 +258,7 @@ Counts are newline counts at the baseline. Destinations are proposed internal re
 
 ## 6. Concrete enforcement, initially report-only
 
-`pyproject.toml` currently declares Ruff/MyPy/pytest but no module-boundary tool. `web/eslint.config.js` has TypeScript/React rules; `web/package.json` has no boundary checker. Add enforcement **after launch**, without changing existing lint/test exit behaviour. Do not enforce independence between all physics domains: legitimate typed data dependencies must remain possible.
+`pyproject.toml` currently declares Ruff/MyPy/pytest but no general module-boundary tool. `web/eslint.config.js` has TypeScript/React rules; `web/package.json` has no general boundary checker. Add broad enforcement **after launch**, without changing existing lint/test exit behaviour. Do not enforce independence between all physics domains: legitimate typed data dependencies must remain possible. **Strict exception, owner-authorized 2026-10-16:** the extracted `modules/viewer3d` boundary has a dependency-free Node scanner and tests now; its public-index-only imports and prohibition on imports from components/stores are enforced for the viewer module immediately. This narrow UI-module gate does not change the report-only status of the repository-wide proposal.
 
 ### Dependency rules
 
@@ -518,6 +522,9 @@ Use these for every extraction PR, including agent-written work. The common gate
 ### M14 — Web shell
 
 - Role/navigation/localisation behaviour and existing EN/ZH parity remain unchanged.
+- The viewer module boundary is strict: only its public index is imported externally; module internals cannot import host components or stores.
+- Shared viewer inputs are neutral and in-memory tool/visibility state resets only at the declared scope or role boundary.
+- Preserve request count, payload order, effect order, stale-result indicators and permission routing across extraction.
 - Features export public hooks/components/types; common UI does not import feature stores or business rules.
 - Browser state is user/workspace scoped; sign-out/switch-user cannot restore another user's machine or results.
 - Inputs/refusals/progress/cancel remain accessible and truthful; no estimates become solved values through formatting.
@@ -557,4 +564,4 @@ Total planning range: **49–87 engineer-days**, approximately **43–63 PRs** a
 5. Sol independently reviews physics-critical/safety-critical solver changes and Astra makes the final acceptance assessment; ordinary implementation can use Luna under the project's routing policy. No commits/pushes delegated without explicit assignment.
 6. Rollback is reverting the path-limited extraction PR: retain old import compatibility wrappers and state formats until callers migrate. A numerical fix, new default, cache-key redesign, new privacy policy or storage migration is a separate reviewed change.
 
-No validation in this protocol was run for this document. The present deliverable verifies static evidence and document completeness only.
+The original module-map baseline verified static evidence and document completeness only; it ran no validation in this protocol. The owner-authorized viewer extraction has separate focused UI validation in `astra_progress/unified_viewer/MODULE_REPORT.md`; no physics extraction or numerical validation is claimed.

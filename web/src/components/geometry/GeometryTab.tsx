@@ -44,7 +44,7 @@ const GeometryTab: React.FC<{ active: React.ReactNode }> = ({ active }) => {
       </Box>
       <Box sx={{ flex: 1, minHeight: 0 }}>
         {scope === 'full'
-          ? <GeometryFullPanel models={models} cad={cad} treeKey={model?.glb_sha256 ?? 0} />
+          ? <GeometryFullPanel models={models} canDownload={canDownload} cad={cad} treeKey={model?.glb_sha256 ?? 0} />
           : active}
       </Box>
       <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => setRefresh((n) => n + 1)} />

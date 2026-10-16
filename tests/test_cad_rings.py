@@ -10,8 +10,9 @@ full model the two rings fix the coils.  Pure checks (no FreeCAD):
 * the simplified export omits them (simplified.OMITTED_MECH, applied by fc_scripts/export_simplified.py);
 * the CIANO28 150_35 port has no ring (no ring rows, no ring BOM line, no ring fit pair in the occupancy branch);
 * the holders / bearings / shaft / screws keep their axial positions (the ring_h + ring_holder_gap chain never moved);
-* the CIANO14 40 front rotor-stop flange is 2 mm above the rotor seat (owner 2026-10-16, Fusion d11885: 3 -> 2 mm; Ø13.9 at the as-built
-  seat Ø9.9)."""
+* the CIANO14 40 shaft follows the owner's Fusion body Shaft:1 (2026-10-16): the front rotor-stop flange is 2 mm above the rotor seat
+  (Fusion d11885: 3 -> 2 mm, Ø13.9 at the as-built seat Ø9.9), the bore is Ø6 (d11692, r 3.0, no longer seat r - shaft_height) and the
+  tip is ONE diameter Ø4.901 over 16 mm (the Ø4.95 / Ø4.9 step is gone); the 0.2 mm chamfers stay."""
 from __future__ import annotations
 
 import ast
@@ -205,12 +206,13 @@ def test_the_ring_thickness_is_an_editable_parameter():
     assert "ring_t" in C.CATALOGUE
 
 
-# ------------------------------------------------------------------------------------------------- the 40 rotor-stop flange
+# ------------------------------------------------------------------------------------------------- the 40 shaft (Fusion Shaft:1)
 
 #: FreeCAD-measured Shaft of the server-built L12 / L20 models BEFORE the 2026-10-16 change (flange step 3, bore r = seat 4.95 - 2):
 #: the analytic model below must reproduce them, so the new numbers it gives are trustworthy without FreeCAD
 _BUILT_BEFORE = {"L12": (1577.9821078617838, 1958.6081182188848, 6.775170399916014),
                  "L20": (1975.0794192755347, 2355.705429632635, 6.653502626485791)}
+FUSION_SHAFT_L12_MM3 = 1485.53          # owner's Fusion CIANO14 40, body Shaft:1 (re-read 2026-10-16 11:45)
 
 
 def _shaft_props(p, n=40000):
@@ -259,27 +261,43 @@ def _shaft_props(p, n=40000):
 @pytest.mark.parametrize("fx", ["L12", "L20"])
 def test_the_analytic_shaft_reproduces_the_freecad_built_shaft(fx):
     p = dict(json.loads((FIX / ("cad_bom_dump_%s.json" % fx)).read_text(encoding="utf-8"))["params"])
-    p.update(shaft_flange_step=3.0)                                                             # the parameters it was built with
+    p.update(shaft_flange_step=3.0, shaft_bore_r=p["shaft_seat_r"] - p["shaft_height"],          # the parameters it was built with
+             shaft_thread_r=2.475, shaft_tip_r=2.45)
     for got, want in zip(_shaft_props(p), _BUILT_BEFORE[fx]):
         assert got == pytest.approx(want, rel=1e-6)
 
 
-def test_the_40_flange_row_is_2_mm():
+def test_the_40_shaft_rows_follow_the_fusion_body():
     _, rows = _profile("CIANO14_40_12.json")
     r = rows["shaft_flange_step"]
     assert (r["value"], r["fusion_dimension_value"], r["freecad_expression"], r["fusion_expression"]) == (2.0, 2.0, "2 mm", "2 mm")
+    b = rows["shaft_bore_r"]
+    assert (b["value"], b["fusion_dimension_value"], b["freecad_expression"]) == (3.0, 3.0, "3 mm")    # Ø6, not seat r - shaft_height
+    for n in ("shaft_thread_r", "shaft_tip_r"):                                         # ONE tip diameter Ø4.901
+        assert (rows[n]["value"], rows[n]["fusion_dimension_value"], rows[n]["freecad_expression"]) == (2.4505, 2.4505, "4.901 mm / 2"), n
+    assert rows["shaft_chamfer"]["value"] == 0.2                                          # the chamfers stay
     v = _values("CIANO14_40_12.json")
+    assert v["shaft_front_end_z"] - v["shaft_journal_end_z"] == pytest.approx(16.0)
     assert v["shaft_shoulder_r"] < v["shaft_seat_r"] + v["shaft_flange_step"]           # the pre-check order still holds
+    assert v["shaft_journal_end_z"] - v["shaft_bore_r"] / math.tan(math.radians(v["shaft_bore_tip_angle"])) == pytest.approx(17.7)
     from motor_templates.segmented_flatwire import health
     assert not [t for t in health.precheck(lambda n: v[n]) if "shaft" in t.lower()]
     assert _profile("CIANO28_85_20SW1200.json")[1]["shaft_flange_step"]["value"] == 2.0   # the 85 (carrier) keeps its own row
 
 
-@pytest.mark.parametrize("fx,volume", [("L12", 1512.4485), ("L20", 1909.5458)])
-def test_the_40_shaft_as_built_flange_d13_9_and_its_volume(fx, volume):
+def test_one_tip_diameter_builds_without_a_zero_length_step_and_keeps_the_thread_at_the_end():
+    mech = _src(TEMPLATE / "mechanics.py")
+    assert "if abs(rtip - rt) < 1e-9:" in mech and "del pts[15:17], spec[15:17]" in mech
+    assert "pl.g[cone_seg], 1, pl.g[13]" in mech and "pl.g[axis_seg], pl.g[cone_seg]" in mech
+    models = _src(FC / "export_models.py")
+    assert '"zband", (g("shaft_thread_end_z"), g("shaft_front_end_z"))' in models and 'mode == "zband"' in models
+
+
+@pytest.mark.parametrize("fx,volume", [("L12", 1485.5290), ("L20", 1875.1493)])
+def test_the_40_shaft_as_built_flange_d13_9_bore_d6_tip_d4_901_and_its_volume(fx, volume):
     d = json.loads((FIX / ("cad_bom_dump_%s.json" % fx)).read_text(encoding="utf-8"))
     p = d["params"]
-    assert p["shaft_flange_step"] == 2.0
+    assert (p["shaft_flange_step"], p["shaft_bore_r"], p["shaft_thread_r"], p["shaft_tip_r"]) == (2.0, 3.0, 2.4505, 2.4505)
     assert 2 * (p["shaft_seat_r"] + p["shaft_flange_step"]) == pytest.approx(13.9)            # flange Ø13.9 at the as-built seat Ø9.9
     assert 2 * p["shaft_seat_r"] == pytest.approx(9.9)                                          # the seat does not move
     vol, area, cz = _shaft_props(p)
@@ -287,3 +305,5 @@ def test_the_40_shaft_as_built_flange_d13_9_and_its_volume(fx, volume):
     shaft = next(e for e in d["entries"] if e["name"] == "Shaft")                              # the pinned dump follows the model
     assert (shaft["volume"], shaft["area"], shaft["com"][2]) == pytest.approx((vol, area, cz), rel=1e-9)
     assert shaft["bbox"][3] == pytest.approx(6.95)
+    if fx == "L12":
+        assert vol == pytest.approx(FUSION_SHAFT_L12_MM3, abs=0.5)                             # = the owner's Fusion body Shaft:1

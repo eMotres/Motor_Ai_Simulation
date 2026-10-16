@@ -315,7 +315,7 @@ def build_bom(dump, inputs):
         sim_mat = inputs["sim_materials"].get("shaft")
         add("shaft", "Shaft (stepped, drive flats, M-thread tip)", "manufactured", 1, "pcs", sim_mat or "42CrMo4 QT (assumed, profile says '%s')" % mat,
             "length %.1f mm, max Ø%.2f mm, journal Ø%.1f, bore Ø%.1f, drive flats %.1f mm across x %.1f long, chamfers %.1f mm" % (
-                ln, w, m.p("bearing_d"), 2 * (m.p("shaft_seat_r") - m.p("shaft_height")),
+                ln, w, m.p("bearing_d"), 2 * (m.p("shaft_bore_r") if "shaft_bore_r" in m.params else m.p("shaft_seat_r") - m.p("shaft_height")),
                 m.p("shaft_flat_w"), m.p("shaft_flat_len"), m.p("shaft_chamfer")),
             sh["volume"] * rho * 1e-6, "model; simulation shaft slot " + ("= %s" % sim_mat if sim_mat else "not set in %s.yaml" % cfg),
             "density %.0f (%s); simulation shaft is a hollow tube 50 mm2 x stack and sits outside the active mass; thread pitch / "

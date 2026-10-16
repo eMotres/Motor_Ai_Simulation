@@ -89,8 +89,8 @@
   "shaft_bore_tip_angle": 45.0,
   "shaft_journal_r": 4.0,
   "shaft_shoulder_len": 0.5,
-  "shaft_tip_r": 2.45,
-  "shaft_bore_r": 2.9499999999999993,
+  "shaft_tip_r": 2.4505,
+  "shaft_bore_r": 3.0,
   "shaft_shoulder_r": 4.7,
   "holder_flange_t": 1.2,
   "holder_lip_t": 0.8,
@@ -104,7 +104,7 @@
   "back_holder_ref_r": 10.0,
   "back_holder_wall": 2.0,
   "holder_hub_wall": 0.8,
-  "shaft_thread_r": 2.475,
+  "shaft_thread_r": 2.4505,
   "shaft_flange_step": 2.0,
   "coil_holder_clearance": 0.4,
   "ring_t": 0.8,
@@ -386,8 +386,8 @@
    "base": null,
    "state": [],
    "n_solids": 1,
-   "volume": 1909.545796518286,
-   "area": 2253.2893862792475,
+   "volume": 1875.1492849348888,
+   "area": 2261.8506588171094,
    "bbox": [
     -6.949999999999999,
     -6.949999999999999,
@@ -399,10 +399,10 @@
    "com": [
     -4.67680209450488e-16,
     9.381158815162016e-16,
-    6.514631051433052
+    6.579976207555713
    ],
    "solid_volumes": [
-    1909.5458
+    1875.14928
    ]
   },
   {
@@ -582,8 +582,8 @@
    "base": null,
    "state": [],
    "n_solids": 1,
-   "volume": 289.92815916439736,
-   "area": 448.9673852668734,
+   "volume": 290.3103488332717,
+   "area": 449.57782656459614,
    "bbox": [
     -7.5,
     -7.5,
@@ -595,10 +595,10 @@
    "com": [
     5.024046689725869e-16,
     -1.7743600890922564e-16,
-    20.742058744514356
+    20.7426616180168
    ],
    "solid_volumes": [
-    289.92816
+    290.31035
    ]
   },
   {

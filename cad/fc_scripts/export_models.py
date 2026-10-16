@@ -125,6 +125,8 @@ def thread_rules(src):
       shaft          external M5 on the free END: the tip section (shaft_tip_r, z shaft_thread_end_z .. shaft_front_end_z, the part the
                      propeller nut runs on), NOT the shaft_thread_r section next to the journal, which passes through the propeller
                      plate's clearance hole (owner 2026-10-15: the thread is at the end)
+                     mode 'zband' = only the z interval (shaft_thread_end_z, shaft_front_end_z) of the face: with ONE tip diameter
+                     (shaft_tip_r = shaft_thread_r, CIANO14 40 2026-10-16) the cylinder runs from the journal end, the thread stays at the end
       ring carrier   internal M3 hub holes."""
     sh = src.getObject("Params")
     g = lambda n: ps.pval(sh, n)
@@ -134,7 +136,8 @@ def thread_rules(src):
     shank = g("screw_shank_d") if ps.has_param(sh, "screw_shank_d") else g("bolt_d")
     return {"Screw_": [("external", shank / 2, "screw", g("holder_screw_l"))],
             "Stator_holder_back": [("internal", g("holder_tap_d") / 2, None, None), ("internal", g("back_screw_tap_d") / 2, None, None)],
-            "Shaft": [("internal", g("carrier_hole_d") / 2, None, None)] if carrier else [("external", g("shaft_tip_r"), None, None)]}
+            "Shaft": [("internal", g("carrier_hole_d") / 2, None, None)] if carrier else
+                     [("external", g("shaft_tip_r"), "zband", (g("shaft_thread_end_z"), g("shaft_front_end_z")))]}
 
 
 def thread_finder(rules, node, shape):
@@ -160,6 +163,11 @@ def thread_finder(rules, node, shape):
                     if band is None:
                         return None
                     start, run = band[0], band[1] - band[0]
+                elif mode == "zband":
+                    t0, t1 = sorted(((z - o[2]) * ax[2] for z in length))       # the z interval in face coordinates (axis along +-z)
+                    start, run = max(0.0, t0), min(ln, t1) - max(0.0, t0)
+                    if run <= 1e-9:
+                        return None
                 return TH.thread_extras(kind, r, run, ax, o, start)
         return None
     return thread_of

@@ -202,13 +202,17 @@ def build_shaft(doc, sh, body):
             ("free",),                                                      # 19 bore tip cone
             ("x", P + "shaft_bore_r", "shaft_bore_r")]                      # 20 bore
     # spec 8 measures from the start of segment 10 (shoulder face) to the start of segment 8 -> negative
+    axis_seg, cone_seg = 18, 19
+    if abs(rtip - rt) < 1e-9:      # ONE tip diameter (CIANO14 40, owner 2026-10-16: no thread / tip step): segment 14 runs to the front end
+        del pts[15:17], spec[15:17]
+        axis_seg, cone_seg = 16, 17
     pl = Poly(sk, pts, spec)
     s = pl.s
     pl.chamfer45(1, name="shaft_chamfer", expr=P + "shaft_chamfer")
     pl.chamfer45(4, first=1)
     pl.chamfer45(12, first=1)
-    s.con("PointOnObject", pl.g[19], 1, pl.g[13])                           # cone apex on the journal end plane (Fusion P32 on L17)
-    s.con("Angle", pl.g[18], pl.g[19], math.radians(g("shaft_bore_tip_angle")),
+    s.con("PointOnObject", pl.g[cone_seg], 1, pl.g[13])                     # cone apex on the journal end plane (Fusion P32 on L17)
+    s.con("Angle", pl.g[axis_seg], pl.g[cone_seg], math.radians(g("shaft_bore_tip_angle")),
           name="shaft_bore_tip_angle", expr=P + "shaft_bore_tip_angle")
     doc.recompute()
     rv = revolve(body, sk, "ShaftRevolve")

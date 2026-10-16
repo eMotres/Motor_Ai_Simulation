@@ -87,7 +87,7 @@ ring_holder_gap`, `bearing_out_z`, `front_holder_end_z`, `shaft_journal_end_z`, 
 `-back_holder_end_z`), ...).  Role `mechanics` = drives the mechanical parts, CAD only (no simulation key); it is live now
 (`LIVE_ROLES`).  Fusion user parameters that no motor feature uses are role `info`.  Values from the simulation where it
 has them: `motor_length` (chain), rotor bore (`shaft_seat_r = rotor_down_r - rotor_house_height` = `rotor_inner_radius`),
-`shaft_height` (bore `shaft_bore_r = shaft_seat_r - shaft_height` = `shaft_inner_radius`), the bearing card of the config
+`shaft_height` (CIANO14 40 since 2026-10-16: the bore is the Fusion `shaft_bore_r` = 3 mm, Ø6, whatever the as-built seat; it equals the simulation `shaft_inner_radius` = 5 - 2), the bearing card of the config
 (`bearings.A.card` -> `bearings_library.yaml` d / D / B -> `bearing_d/D/B`; standard 618/8 8x16x4 if the store has no
 card, stated in `pull_report.json`), the shaft material (`materials.shaft`).
 
@@ -114,13 +114,13 @@ Axial parameters (Fusion Sketch3 dimension names, not renamed; owner to confirm 
 | `bearing_w` (d11703, = card B) | bearing width = seat depth | 4 |
 | `holder_lip_t` (d11700), `holder_lip_r` (d11702) | lip behind each bearing, bore 14.6 | 0.8, 7.3 |
 | `shaft_front_overhang` (d11704) | journal beyond the front holder -> Prop_fix seat (z 20.7) | 4 |
-| `shaft_thread_len`, `shaft_tip_len` (d11705/6) | M5 section (4.95) and tip (4.9) lengths | 8, 8 |
+| `shaft_thread_len`, `shaft_tip_len` (d11705/6) | section next to the journal and threaded end; both Ø4.901 since 2026-10-16 (one tip diameter, `shaft_thread_r` = `shaft_tip_r` = 2.4505) | 8, 8 |
 | `back_holder_len` (d11729) | back holder cylinder; A_H = -(holder_face_z + holder_flange_t + this) | 7 |
 | `back_holder_ref_r` (d11730), `back_holder_wall` (d11731, driven) | outer r = ref + (ref - seat r 8) = 12 | 10, 2 |
 | `holder_hub_wall` (d11752) | front hub r 8 -> 8.8 (also the spoke-root circle) | 0.8 |
 | `shaft_shoulder_len`, `shaft_shoulder_r` (d11689/95) | 9.4 shoulder against the front inner ring | 0.5, 4.7 |
 | `shaft_flange_step` (d11885) | flange r = rotor seat + 2 (front rotor stop, z 10..11.4; Ø13.9 at the as-built seat Ø9.9; owner 2026-10-16: 3 -> 2, balancing adds material on the rotor) | 2 |
-| `shaft_bore_r` (d11692, = seat r - shaft_height), `shaft_bore_tip_angle` (d11685) | bore 6, 45 deg end cone, apex at the journal end | 3, 45 deg |
+| `shaft_bore_r` (d11692, 3 mm; was seat r - shaft_height = 2.95 as built), `shaft_bore_tip_angle` (d11685) | bore 6, 45 deg end cone, apex at the journal end | 3, 45 deg |
 | `coil_holder_clearance` (d11980), `ring_t` (d11983) | flange r = coil corner 13.233 + 0.4; ring radial thickness | 0.4, 0.8 |
 | `ax_core_ref_inset` (d9633) | construction line only (role info) | 0.9 |
 
@@ -329,7 +329,7 @@ over the sorted triangles per group; `FC_THREADS=0` writes the file without the 
 |---|---|
 | Screw shank | the ISO 4762 / DIN 912 thread length b = 2 d + 12 mm (M2 16, M2.5 17, M3 18; for lengths up to 125 mm) measured from the screw TIP, clipped to the shank face, never under the head; a screw whose plain part under the head would be shorter than 2 pitches (length <= b + 2 P) is fully threaded.  CIANO14 40 L20 (M2 x 25): z -11.5 .. 4.1, 9 mm plain under the head. |
 | Tapped hole (back holder, ring-carrier hub holes) | the whole hole face = the tapped depth the template models |
-| Shaft | the free END: the `shaft_tip_r` section (z `shaft_thread_end_z` .. `shaft_front_end_z`, CIANO14 40: 28.7 .. 36.7), the part the propeller nut runs on.  The `shaft_thread_r` section next to the journal (z 20.7 .. 28.7) passes through the propeller plate's clearance hole and is NOT threaded.  (Fusion's cosmetic thread diameter 4.901 is the tip's, not the 4.95 section's).  The GUI cosmetic colouring (`view.thread_face_indices`, checked by `check_gui.py`) and the `thread` block of the datums JSON (`neck` = the smooth section) follow the same face. |
+| Shaft | the free END: the `shaft_tip_r` section (z `shaft_thread_end_z` .. `shaft_front_end_z`, CIANO14 40: 28.7 .. 36.7), the part the propeller nut runs on.  The `shaft_thread_r` section next to the journal (z 20.7 .. 28.7) passes through the propeller plate's clearance hole and is NOT threaded.  Since 2026-10-16 the CIANO14 40 has ONE tip diameter (Ø4.901 = `shaft_thread_r` = `shaft_tip_r`): `build_shaft` drops the zero-length step and the two sections are one cylinder; the GLB thread rule is a z band (`zband`: `shaft_thread_end_z` .. `shaft_front_end_z`), so the texture stays at the end.  The FCStd GUI colouring is per face and colours the whole Ø4.901 cylinder.  The GUI cosmetic colouring (`view.thread_face_indices`, checked by `check_gui.py`) and the `thread` block of the datums JSON (`neck` = the smooth section) follow the same face. |
 
 The rest of a cut face stays smooth in the solid's own node: the shank cylinder is cut at the end of the thread by `glb_writer.split_by_slab`
 (winding kept, cut edges share one new vertex, no area or volume lost), so the geometry is the original plus the vertices of the cut.

@@ -455,20 +455,16 @@ def get_references(authorization: Optional[str] = Header(default=None)):
 
 
 def hidden_preset_view(authorization: Optional[str]) -> tuple:
-    """``(preset ids, casefolded names)`` of the presets that describe a PRIVATE
-    configuration the caller holds no grant for - found through the catalog cards
-    named ``"<die> <config>"`` and through a preset carrying that name itself.
-    ``(set(), set())`` for admins and when nothing is private (the common case:
-    one cached stat per configuration file)."""
+    """``(preset ids, casefolded names)`` of the presets that describe a
+    configuration the caller may not see (``motor_access.config_visible``) -
+    found through the catalog cards named ``"<die> <config>"`` and through a
+    preset carrying that name itself.  ``(set(), set())`` for admins and when
+    nothing is hidden (one cached stat per configuration file)."""
     from motor_ai_sim import motor_access as _ma
     access = _ma.catalog_access(authorization)
     if access.get("is_admin"):
         return set(), set()
-    idx = _ma.private_config_index()
-    if not idx:
-        return set(), set()
-    granted = access.get("configs") or frozenset()
-    names = {n for n, hit in idx.items() if _ma.config_grant_key(*hit) not in granted}
+    names = _ma.hidden_config_names(access)
     if not names:
         return set(), set()
     ids: set = set()
@@ -486,9 +482,9 @@ def hidden_preset_view(authorization: Optional[str]) -> tuple:
 
 
 def _config_hidden_card(motor: dict, authorization: Optional[str]) -> bool:
-    """True when the card describes a PRIVATE configuration the caller holds no
-    grant for (motor_access.drop_private_config_cards) - such a card is, for
-    them, a card that does not exist."""
+    """True when the card describes a configuration the caller may not see
+    (motor_access.drop_private_config_cards) - such a card is, for them, a card
+    that does not exist."""
     from motor_ai_sim import motor_access as _ma
     return not _ma.drop_private_config_cards([motor], _ma.catalog_access(authorization))
 
@@ -1008,8 +1004,9 @@ def _die_docs_of(fam: Optional[dict]) -> tuple:
             for f in sorted(d.glob("*.yaml")):
                 if f.name == "die.yaml":
                     continue
-                if not _ma.may_see_config_file(_acc, str(e.get("name") or die), f.stem, f):
-                    continue         # a PRIVATE sibling configuration is not part of this die for the caller
+                if not _ma.may_see_config_file(_acc, str(e.get("name") or die), f.stem, f,
+                                               layer=e.get("layer")):
+                    continue         # a hidden sibling configuration is not part of this die for the caller
                 c = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
                 if isinstance(c, dict) and c.get("name"):
                     c.setdefault("die", die)

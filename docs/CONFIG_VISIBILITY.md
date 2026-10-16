@@ -1,29 +1,45 @@
-# Configuration-level visibility
+# Configuration-level access
 
 Owner decision 2026-10-15: *the die stays ONE for all; we hide the configuration.*
-A single configuration of a public die can be private (first use: CIANO28 85 20SW1200 / L13,
-whose 3-D model becomes a frameless robot kit; an identical public L15 is created separately).
+Extended 2026-10-16: *restrict access on BOTH levels - the die and each configuration.* Concrete case:
+die *CIANO28 85 20SW1200* stays **Private**, *L15* is open to every signed-in account, *L13* stays hidden.
 
 ## The rule
 
-`visibility: private` as a top-level line of the configuration yaml (absent or anything else = public).
+Each configuration has its own status, stored as one top-level line of its yaml:
+
+| Status | yaml | Who sees the configuration |
+|---|---|---|
+| **As motor** (`inherit`, default) | no `visibility:` line | exactly who sees the die itself (admin, `all`, die grant, die public, die selected clients) |
+| **Private** | `visibility: private` | admins + accounts holding the `"<die>/<cfg>"` grant |
+| **Public** | `visibility: public` | every signed-in account, even when the die is Private |
+| **Selected clients** | `visibility: private` + >= 1 account holding the grant | those accounts (the grants ARE the client list - one store) |
 
 ```
-may_see_config(access, die, cfg) = may_see_die(access, die)
-                                   AND ( admin
-                                         OR the configuration is public
-                                         OR "<die>/<cfg>" is in the account's CONFIG grants )
+die_open(access, die)          = admin / all-mode / die grant / die public / die selected incl. the caller
+config_visible(access, die, c) = admin
+                                 OR "<die>/<c>" is in the account's CONFIG grants
+                                 OR status public
+                                 OR (status inherit AND die_open(access, die))
+may_see_die(access, die)       = die_open(access, die) OR the caller can see >= 1 configuration of the die
 ```
 
-* Per-user CONFIG grants are `motors.configs = ["<die>/<config>"]` in `users.json`, next to the die grants.
-  An `all` grant, a die grant or a public die does **not** open a private configuration.
-* Admins always see everything. The anonymous exhibit never sees a private configuration.
+* A die opened **only through its configurations** shows only those configurations everywhere (tree, catalog cards,
+  Configure, MCP, 3-D models, payload / datasheet routes): an *As motor* sibling of such a die stays hidden.
+* Per-user CONFIG grants are `motors.configs = ["<die>/<config>"]` in `users.json`, next to the die grants; they are
+  edited from Admin · Motors access (Selected clients) and from Admin · Users · Motors. An `all` grant, a die grant or a
+  public die does **not** open a private configuration.
+* Admins always see everything. The anonymous exhibit never sees a private configuration; public and *As motor*
+  configurations behave for it as before.
 * A hidden configuration is **indistinguishable from a non-existent one**: 404 (never 403) with the
   text the route gives a missing configuration, not listed, not counted, not named in any list.
-* The caller's own workspace copy of a die (layering on) is theirs and is not hidden.
-* One helper, `motor_access.may_see_config`; low-level readers use `motor_access.hidden_for_request`
-  (`family.config_doc`, `duty_results.get`); outside a request (CLI, nightly scripts) nothing is hidden.
-* An unreadable configuration file counts as private (fail closed).
+* The caller's own workspace copy of a die (layering on) is theirs and is not hidden. In the published (community)
+  layer, which every registered account may read, only `private` hides a configuration.
+* One rule, `motor_access.config_visible`; `may_see_config`, `config_allowed`, `may_see_config_file`,
+  `drop_private_config_cards` and the low-level `hidden_for_request` (`family.config_doc`, `duty_results.get`) all go
+  through it; outside a request (CLI, nightly scripts) nothing is hidden.
+* An unreadable configuration file counts as private (fail closed); so does a `visibility: private` line right after a
+  UTF-8 BOM. An unknown value reads as *As motor*, never as more open than the die.
 
 ## Where it is enforced
 
@@ -51,23 +67,28 @@ may_see_config(access, die, cfg) = may_see_die(access, die)
 `tests/test_config_visibility.py` carries a sweep over every route that names a die + configuration and fails when a new
 one is added without being covered.
 
-## Setting a configuration private
+## Setting a configuration's access
 
-Admin UI: **Admin → Motors access →** click the die row (for L13: *CIANO28 85 20SW1200*) → in the drawer, under
-**Configurations**, switch **Private** on for **L13** (takes effect at once; the die is untouched).
-Letting an account open it: **Admin → Users →** the user → **Motors →** under **Private configurations** tick
-*CIANO28 85 20SW1200 / L13* → **Save**.
+Admin UI: **Admin → Motors access →** expand the die row (arrow before the name) → click the configuration row
+(for L15: *CIANO28 85 20SW1200 / L15*) → **As motor / Private / Public / Selected clients** (+ the e-mails) → **Save**.
+The die row's chip reads e.g. *Private · 1 open* when the die is private but a configuration is open (tooltip: which).
+Letting one account open a private configuration also works from **Admin → Users →** the user → **Motors →**
+under **Private configurations**.
 
-API: `PUT /api/admin/dies/{die}/configs/{cfg}/access` `{"visibility": "private"}`;
-`PUT /api/admin/users/{email}/motors` with `"configs": ["<die>/<config>"]` (key absent = keep, `[]` = clear).
+API: `PUT /api/admin/dies/{die}/configs/{cfg}/access` with `{"status": "inherit" | "private" | "public" | "selected",
+"clients": [...]}`. `selected` needs >= 1 registered e-mail (422 otherwise), writes `visibility: private` and makes
+exactly those accounts hold the grant (added to them, removed from every other account); `private` removes the grant
+from every account; `inherit` / `public` leave the grants as they are. The older body `{"visibility": "private" |
+"public"}` is still accepted (its `public` = no line = `inherit`). `GET /api/admin/dies` rows carry
+`config_access: [{name, status, clients}]`.
 
 On the server, without the UI (one line; no restart needed, the file's mtime is the cache key):
 
 ```
-f="$(find /srv/motres -path '*/dies/CIANO28 85 20SW1200/L13.yaml' -not -path '*/workspaces/*' -not -path '*/published/*' | head -1)"; test -n "$f" && { grep -q '^visibility:' "$f" || sed -i '1i visibility: private' "$f"; }; grep -n '^visibility' "$f"
+f="$(find /srv/motres -path '*/dies/CIANO28 85 20SW1200/L15.yaml' -not -path '*/workspaces/*' -not -path '*/published/*' | head -1)"; test -n "$f" && { sed -i '/^visibility:/d' "$f"; sed -i '1i visibility: public' "$f"; }; grep -n '^visibility' "$f"
 ```
 
-Reverse: delete that line (or switch the toggle off).
+(`visibility: private` for Private; delete the line for *As motor*.)
 
 ## Known edges
 

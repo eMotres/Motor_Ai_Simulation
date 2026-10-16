@@ -1,20 +1,31 @@
-// Admin · configuration-level visibility — the pure logic behind the "Private" toggle
-// (Motors access drawer) and the per-user config-grant picker (Users · Motors dialog).
+// Admin · configuration-level access — the pure logic behind the configuration rows of
+// Admin · Motors access and the per-user config-grant picker (Users · Motors dialog).
 // No runtime imports, so the node tests exercise it directly.
 //
 // Server contract (routes/admin.py, motor_access.py):
-//   PUT /api/admin/dies/{die}/configs/{cfg}/access  {visibility: 'private' | 'public'}
-//   GET /api/admin/dies, /api/admin/motors          rows carry `private_configs: string[]`
+//   PUT /api/admin/dies/{die}/configs/{cfg}/access  {status: 'inherit'|'private'|'public'|'selected', clients?: string[]}
+//   GET /api/admin/dies     rows carry `config_access: [{name, status, clients}]` (+ `private_configs: string[]`)
+//   GET /api/admin/motors   rows carry `private_configs: string[]`
 //   PUT /api/admin/users/{email}/motors             body `configs: ["<die>/<config>", ...]`
 //                                                   (key absent = keep, [] = clear)
 
-export type CfgVisibility = 'private' | 'public';
+/** inherit = follows the die ("As motor"); selected = private + the accounts holding its grant. */
+export type CfgStatus = 'inherit' | 'private' | 'public' | 'selected';
+
+/** One configuration of a die row with its own access. */
+export interface ConfigAccess {
+  name: string;
+  status: CfgStatus;
+  /** accounts holding the "<die>/<config>" grant */
+  clients: string[];
+}
 
 /** A die row as the two admin lists return it (only what this module reads). */
 export interface DieWithConfigs {
   name: string;
   config_names?: string[];
   private_configs?: string[];
+  config_access?: ConfigAccess[];
 }
 
 /** The grant key the server stores: "<die>/<config>". */
@@ -27,19 +38,37 @@ export const splitGrantKey = (key: string): { die: string; config: string } | nu
   return { die: key.slice(0, i), config: key.slice(i + 1) };
 };
 
-/** True when the die row lists this configuration as private. */
-export const isPrivateConfig = (die: DieWithConfigs, config: string): boolean =>
-  (die.private_configs ?? []).includes(config);
+/** Every configuration of the die with its access (an older server without `config_access`: derived from `private_configs`). */
+export const configAccessOf = (die: DieWithConfigs): ConfigAccess[] => {
+  if (die.config_access) return die.config_access;
+  const priv = new Set(die.private_configs ?? []);
+  return (die.config_names ?? []).map((name) => ({ name, status: priv.has(name) ? 'private' : 'inherit', clients: [] }));
+};
 
-/** A copy of `dies` with one configuration switched private / public (optimistic UI update). */
-export const withConfigVisibility = <T extends DieWithConfigs>(
-  dies: T[], die: string, config: string, visibility: CfgVisibility,
+/** The configurations open beyond their die: Public, or Selected clients. */
+export const openConfigs = (die: DieWithConfigs): ConfigAccess[] =>
+  configAccessOf(die).filter((c) => c.status === 'public' || c.status === 'selected');
+
+/** The PUT body for one configuration (clients only for Selected, trimmed, lower-cased, unique). */
+export const configPutBody = (status: CfgStatus, clients: Iterable<string>) =>
+  status === 'selected'
+    ? { status, clients: [...new Set([...clients].map((c) => c.trim().toLowerCase()).filter(Boolean))].sort() }
+    : { status };
+
+/** A Selected configuration needs at least one client; every other status saves as is. */
+export const canSaveConfig = (status: CfgStatus, clients: readonly string[]): boolean =>
+  status !== 'selected' || clients.some((c) => c.trim() !== '');
+
+/** A copy of `dies` with one configuration's access replaced (optimistic UI update); `private_configs` follows. */
+export const withConfigAccess = <T extends DieWithConfigs>(
+  dies: T[], die: string, config: string, status: CfgStatus, clients: string[],
 ): T[] =>
   dies.map((d) => {
     if (d.name !== die) return d;
+    const access = configAccessOf(d).map((c) => (c.name === config ? { name: config, status, clients: [...clients] } : c));
     const rest = (d.private_configs ?? []).filter((c) => c !== config);
-    const next = visibility === 'private' ? [...rest, config] : rest;
-    return { ...d, private_configs: next.sort() };
+    const priv = status === 'private' || status === 'selected' ? [...rest, config] : rest;
+    return { ...d, config_access: access, private_configs: priv.sort() };
   });
 
 /** One line of the config-grant picker. */
@@ -47,7 +76,7 @@ export interface GrantRow {
   key: string;
   die: string;
   config: string;
-  /** false = the account holds the grant but the configuration is public now (or gone): shown so it can be revoked */
+  /** false = the account holds the grant but the configuration is not private any more (or gone): shown so it can be revoked */
   isPrivate: boolean;
   /** false = no such die / configuration in the catalog any more */
   exists: boolean;
@@ -55,8 +84,8 @@ export interface GrantRow {
 
 /**
  * The rows of the picker: every PRIVATE configuration of the catalog, plus every
- * grant the account already holds (even for a configuration that has since turned
- * public or disappeared) so nothing it holds is invisible and nothing cannot be revoked.
+ * grant the account already holds (even for a configuration that is no longer
+ * private or has disappeared) so nothing it holds is invisible and nothing cannot be revoked.
  * Sorted by die, then configuration.
  */
 export const grantRows = (dies: DieWithConfigs[] | null, granted: Iterable<string>): GrantRow[] => {
@@ -100,6 +129,3 @@ export const motorsPutBody = (args: {
   configs: configsBody(args.configs),
   default: args.defaultMotor,
 });
-
-/** Count of private configurations (for a chip on the die row). */
-export const privateCount = (die: DieWithConfigs): number => (die.private_configs ?? []).length;

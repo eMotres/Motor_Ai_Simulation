@@ -21,14 +21,15 @@ user record (motor_ai_sim.users).  Three answers:
                    follow-up decision may flip (open everything to registered
                    users, or close the exhibit entirely).
 
-CONFIGURATION-level visibility (owner 2026-10-15, "the die stays ONE for all; we
-hide the configuration"): a configuration yaml may carry ``visibility: private``
-(default ``public``).  A private configuration inside a die the caller may see is
-shown only to admins and to accounts holding a per-user CONFIG grant
-(``motors.configs = ["<die>/<config>"]``).  ``may_see_config`` is the one answer,
-used by every route, tool and listing that can name a configuration; a hidden
-configuration is indistinguishable from a non-existent one (404, not listed, not
-counted).  See ``may_see_config`` below.
+CONFIGURATION-level access (owner 2026-10-15, two levels since 2026-10-16): each
+configuration has its own status - ``inherit`` (default: follows the die),
+``private`` (admins + accounts holding the ``"<die>/<config>"`` grant), or
+``public`` (every signed-in account, even when the die is private).  A die is
+visible when it is open itself OR at least one of its configurations is; then
+only the visible configurations are shown.  ``config_visible`` is the one
+answer, used by every route, tool and listing that can name a configuration; a
+hidden configuration is indistinguishable from a non-existent one (404, not
+listed, not counted).
 
 That follow-up decision arrived on 2026-09-16, and it was "close it" — but NOT
 here.  An internet-facing deployment sets ``PUBLIC_EXHIBIT=0`` and then no
@@ -130,17 +131,16 @@ def catalog_access(authorization: Optional[str] = None) -> dict:
             "email": ident, "is_admin": False, "configs": cfgs}
 
 
-def may_see_die(access: dict, die: str) -> bool:
-    """May THIS caller read the named die at all?
+def die_open(access: dict, die: str) -> bool:
+    """Is the DIE ITSELF open to this caller (not through one of its
+    configurations)?
 
     Anonymous is allowed through here on purpose: the public exhibit is
     filtered where it is BUILT (routes/family.tree) and its per-die reads have
     always been open — closing them is the follow-up decision documented above,
     not part of the per-user grant work.  For a signed-in non-admin the answer
     is the grant, OR the die's own owner-set visibility (public / selected
-    clients — see ``get_die_access`` below), so hiding a motor in the tree is
-    not cosmetic: the payload / datasheet / context routes 404 on it, and MCP
-    tools (list_machines, check_fit) ask this same function.
+    clients — see ``get_die_access`` below).
     """
     mode = access.get("mode")
     if mode in (MODE_ALL, MODE_ANONYMOUS):
@@ -154,6 +154,49 @@ def may_see_die(access: dict, die: str) -> bool:
     if vis == VIS_SELECTED:
         email = (access.get("email") or "").strip().lower()
         return bool(email) and email in da.get("clients", ())
+    return False
+
+
+def may_see_die(access: dict, die: str) -> bool:
+    """May THIS caller read the named die at all?
+
+    :func:`die_open`, OR the caller can see at least one configuration of the
+    die (a ``public`` configuration, or one whose ``"<die>/<cfg>"`` grant the
+    caller holds — owner 2026-10-16: "keep the die private, open only L15").  A
+    die opened only through its configurations shows ONLY those configurations:
+    every reader that lists or opens a configuration asks
+    :func:`config_visible`, where an ``inherit`` configuration needs
+    ``die_open``.
+
+    Hiding a motor in the tree is not cosmetic: the payload / datasheet /
+    context routes 404 on it, and MCP tools (list_machines, check_fit) ask this
+    same function.
+    """
+    if die_open(access, die):
+        return True
+    return _die_open_via_config(access, die)
+
+
+def _die_open_via_config(access: dict, die: str) -> bool:
+    """True when some configuration of ``die`` is open to the caller on its own
+    (status ``public``, or the caller holds its grant)."""
+    try:
+        from motor_ai_sim.routes import family as _fam
+        d = _fam._die_dir(str(die))
+    except Exception:                           # noqa: BLE001 — bad name: nothing to open
+        return False
+    granted = access.get("configs") or frozenset()
+    try:
+        files = sorted(d.glob("*.yaml"))
+    except OSError:
+        return False
+    for f in files:
+        if f.name == "die.yaml":
+            continue
+        if config_grant_key(str(die), f.stem) in granted:
+            return True
+        if file_visibility(f) == CFG_PUBLIC:
+            return True
     return False
 
 
@@ -240,37 +283,50 @@ def set_die_access(die: str, *, visibility: str, clients: Optional[list] = None)
     return get_die_access(die)
 
 
-# ── per-CONFIGURATION visibility (owner 2026-10-15) ──────────────────────────
-# "The die stays ONE for all; we hide the configuration."  A configuration yaml
-# may carry a top-level ``visibility: private`` (absent or anything else =
-# ``public``).  The key lives IN the configuration file on purpose: it travels
-# with the configuration (history, backups, duplicate), there is no second store
-# to drift, and the owner flips it with one ``yaml`` edit or the Admin toggle.
+# ── per-CONFIGURATION access (owner 2026-10-15, two levels since 2026-10-16) ─
+# A configuration has its OWN access status, set beside the die's in Admin ·
+# Motors access.  It lives IN the configuration file as one top-level line
+# (``visibility: private|public``; no line = ``inherit``): it travels with the
+# configuration (history, backups, duplicate) and there is no second store.
 #
-#   may_see_config(access, die, cfg) =
-#       may_see_die(access, die)
-#       AND ( admin
-#             OR the configuration is public
-#             OR "<die>/<cfg>" is in the account's CONFIG grants )
+#   inherit  (no line)  follows the die: visible exactly when die_open().
+#   private             admins and accounts holding the "<die>/<cfg>" grant.
+#   public              every signed-in account, even when the die is Private.
+#   selected            (admin view only) a private configuration with >= 1
+#                       account holding its grant — the grant IS the client list.
 #
-# Two deliberate edges:
+#   config_visible(access, die, cfg) =
+#       admin
+#       OR the caller holds the "<die>/<cfg>" grant
+#       OR status public
+#       OR (status inherit AND die_open(access, die))
+#
+# Three deliberate edges:
 #   * the caller's OWN workspace copy of a die is theirs (layering on, layer
-#     ``workspace``): the flag guards the SHARED catalog, like every grant;
+#     ``workspace``): the status guards the SHARED catalog, like every grant;
+#   * the PUBLISHED (community) layer is open to every registered account, so
+#     there only ``private`` hides a configuration (the route settles the die);
 #   * an unreadable file is treated as PRIVATE (fail closed), a MISSING file is
-#     "public" (there is nothing to hide, and the route 404s for its own reason).
+#     ``inherit`` (there is nothing to hide, and the route 404s for its own reason).
 
+CFG_INHERIT = "inherit"
 CFG_PRIVATE = "private"
 CFG_PUBLIC = "public"
+CFG_STATUSES = (CFG_INHERIT, CFG_PRIVATE, CFG_PUBLIC)
+#: The admin-facing fourth status: ``private`` + at least one account holding the grant.
+CFG_SELECTED = "selected"
 
 _CFG_VIS_RE = None
-#: path -> (mtime_ns, size, "private"|"public"); a stat per lookup, a read only
-#: when the file changed (a duty save rewrites the file, so it re-reads then).
+#: path -> (mtime_ns, size, status); a stat per lookup, a read only when the
+#: file changed (a duty save rewrites the file, so it re-reads then).
 _CFG_VIS_CACHE: dict = {}
 _CFG_VIS_LOCK = threading.Lock()
 
 
 def _scan_visibility(text: str) -> str:
-    """The top-level ``visibility:`` scalar of a configuration document.
+    """The top-level ``visibility:`` scalar of a configuration document:
+    ``"private"`` | ``"public"`` | ``"inherit"`` (no line, or a value that is
+    neither - never read as more open than the die).
 
     A line scan, not a YAML parse: configuration files carry every duty and its
     saved results (megabytes), and this runs for every row of every tree
@@ -282,19 +338,25 @@ def _scan_visibility(text: str) -> str:
         import re
         _CFG_VIS_RE = re.compile(r"^visibility[ \t]*:[ \t]*['\"]?([A-Za-z_-]*)",
                                  re.MULTILINE)
-    m = _CFG_VIS_RE.search(text)
+    # a leading BOM is not part of the first line (else "\ufeffvisibility: private" would read as no line)
+    m = _CFG_VIS_RE.search(text[1:] if text.startswith("\ufeff") else text)
     if not m:
+        return CFG_INHERIT
+    v = m.group(1).strip().lower()
+    if v == CFG_PRIVATE:
+        return CFG_PRIVATE
+    if v == CFG_PUBLIC:
         return CFG_PUBLIC
-    return CFG_PRIVATE if m.group(1).strip().lower() == CFG_PRIVATE else CFG_PUBLIC
+    return CFG_INHERIT
 
 
 def file_visibility(path) -> str:
-    """``"private"`` / ``"public"`` for one configuration FILE (cached by mtime)."""
+    """The stored status of one configuration FILE (cached by mtime)."""
     p = Path(str(path))
     try:
         st = p.stat()
     except FileNotFoundError:
-        return CFG_PUBLIC
+        return CFG_INHERIT
     except OSError:
         return CFG_PRIVATE                    # cannot tell -> hide
     key = str(p)
@@ -313,117 +375,169 @@ def file_visibility(path) -> str:
     return vis
 
 
-def _own_workspace_die(die: str) -> bool:
-    """True when ``die`` resolves into the CALLER'S OWN workspace (layering on)."""
+def _die_layer_of(die: str, layer: Optional[str] = None) -> str:
+    """The catalog layer ``die`` is read from, for the access rule: ``shared``
+    whenever multi-user layering is off (there is one catalog, and it is the
+    shared one), else ``layer`` when the caller knows it, else what the caller's
+    catalog resolves the name to."""
     try:
         from motor_ai_sim.routes import family as _fam
-        if not _fam._ws_layering():
-            return False
         from motor_ai_sim import workspace as _WS
-        return _fam._die_layer(str(die)) == _WS.LAYER_WORKSPACE
-    except Exception:                           # noqa: BLE001
-        return False
+        if not _fam._ws_layering():
+            return _WS.LAYER_SHARED
+        if layer:
+            return str(layer)
+        return str(_fam._die_layer(str(die)))
+    except Exception:                           # noqa: BLE001 — cannot tell: the strict rule
+        return "shared"
+
+
+def _own_workspace_die(die: str) -> bool:
+    """True when ``die`` resolves into the CALLER'S OWN workspace (layering on)."""
+    return _die_layer_of(die) == "workspace"
 
 
 def config_visibility(die: str, cfg: str) -> str:
-    """The stored visibility of ``<die>/<cfg>`` as the CURRENT caller's catalog
-    resolves it (``"private"`` | ``"public"``).  Not an access decision."""
+    """The stored status of ``<die>/<cfg>`` (``inherit`` | ``private`` |
+    ``public``) as the CURRENT caller's catalog resolves it.  Not an access
+    decision - :func:`config_visible` is."""
     try:
         from motor_ai_sim.routes import family as _fam
         path = _fam._cfg_file(str(die), str(cfg))
     except Exception:                           # noqa: BLE001 — bad name: nothing to hide
-        return CFG_PUBLIC
-    if _own_workspace_die(die):
-        return CFG_PUBLIC
+        return CFG_INHERIT
     return file_visibility(path)
-
-
-def private_config_index() -> dict:
-    """``{casefolded "<die> <config>": (die, config)}`` of every PRIVATE
-    configuration in the catalog the caller reads (the caller's own workspace
-    copies excluded).  How a catalog CARD - which is tied to its machine only by
-    that name - finds out it describes a hidden configuration."""
-    out: dict = {}
-    try:
-        from motor_ai_sim.routes import family as _fam
-        from motor_ai_sim import workspace as _WS
-        layering = _fam._ws_layering()
-        for e in _fam._iter_die_entries():
-            if layering and e.get("layer") == _WS.LAYER_WORKSPACE:
-                continue
-            die = str(e["name"])
-            for f in Path(str(e["dir"])).glob("*.yaml"):
-                if f.name == "die.yaml" or file_visibility(f) != CFG_PRIVATE:
-                    continue
-                out[f"{die} {f.stem}".casefold()] = (die, f.stem)
-    except Exception:                           # noqa: BLE001 - a listing, never fatal
-        pass
-    return out
-
-
-def drop_private_config_cards(cards: list, access: dict) -> list:
-    """The catalog cards whose machine the caller may see: a card named
-    ``"<die> <config>"`` for a PRIVATE configuration without a grant is dropped.
-    Admins keep everything."""
-    if access.get("is_admin") or not cards:
-        return cards
-    idx = private_config_index()
-    if not idx:
-        return cards
-    granted = access.get("configs") or frozenset()
-    keep = []
-    for m in cards:
-        hit = idx.get(str(m.get("name") or "").strip().casefold())
-        if hit is None and m.get("die") and m.get("config"):
-            hit = idx.get(f"{m.get('die')} {m.get('config')}".casefold())
-        if hit is not None and config_grant_key(*hit) not in granted:
-            continue
-        keep.append(m)
-    return keep
 
 
 def config_grant_key(die: str, cfg: str) -> str:
     return f"{die}/{cfg}"
 
 
+def config_visible(access: dict, die: str, cfg: Optional[str], path=None, *,
+                   layer: Optional[str] = None, _die_open_memo: Optional[dict] = None) -> bool:
+    """THE configuration access rule - every reader that lists, counts or opens a
+    configuration asks this (directly or through the wrappers below).
+
+    ``cfg`` falsy = the question is about the die only (:func:`may_see_die`).
+    ``path`` = the configuration file when the caller already holds it (the tree
+    walks every file once); ``layer`` = the die's catalog layer when the caller
+    already knows it (a listing over ``_iter_die_entries``).
+    """
+    if not cfg:
+        return may_see_die(access, die)
+    if access.get("is_admin"):
+        return True
+    lay = _die_layer_of(die, layer)
+    if lay == "workspace":
+        return True                             # the caller's own copy is theirs
+    if config_grant_key(str(die), str(cfg)) in (access.get("configs") or frozenset()):
+        return True
+    status = file_visibility(path) if path is not None else config_visibility(die, cfg)
+    if status == CFG_PRIVATE:
+        return False
+    if status == CFG_PUBLIC or lay == "published":
+        return True
+    # inherit: exactly when the die itself is open to the caller
+    if _die_open_memo is not None:
+        hit = _die_open_memo.get(str(die))
+        if hit is None:
+            hit = _die_open_memo[str(die)] = die_open(access, die)
+        return hit
+    return die_open(access, die)
+
+
+def config_index() -> dict:
+    """``{casefolded "<die> <config>": (die, config, path, layer)}`` of every
+    configuration in the catalog the caller reads.  How a catalog CARD - which is
+    tied to its machine only by that name - finds the configuration it describes."""
+    out: dict = {}
+    try:
+        from motor_ai_sim.routes import family as _fam
+        for e in _fam._iter_die_entries():
+            die = str(e["name"])
+            for f in Path(str(e["dir"])).glob("*.yaml"):
+                if f.name == "die.yaml":
+                    continue
+                out.setdefault(f"{die} {f.stem}".casefold(),
+                               (die, f.stem, f, str(e.get("layer") or "")))
+    except Exception:                           # noqa: BLE001 - a listing, never fatal
+        pass
+    return out
+
+
+def private_config_index() -> dict:
+    """``{casefolded "<die> <config>": (die, config)}`` of every PRIVATE
+    configuration in the catalog the caller reads (the caller's own workspace
+    copies excluded)."""
+    out: dict = {}
+    for k, (die, cfg, path, layer) in config_index().items():
+        if _die_layer_of(die, layer) == "workspace":
+            continue
+        if file_visibility(path) == CFG_PRIVATE:
+            out[k] = (die, cfg)
+    return out
+
+
+def hidden_config_names(access: dict) -> set:
+    """Casefolded ``"<die> <config>"`` names of every configuration the caller
+    may NOT see (empty for admins)."""
+    if access.get("is_admin"):
+        return set()
+    memo: dict = {}
+    return {k for k, (die, cfg, path, layer) in config_index().items()
+            if not config_visible(access, die, cfg, path, layer=layer, _die_open_memo=memo)}
+
+
+def drop_private_config_cards(cards: list, access: dict) -> list:
+    """The catalog cards whose configuration the caller may see: a card named
+    ``"<die> <config>"`` (or carrying ``die`` + ``config``) for a configuration
+    :func:`config_visible` refuses is dropped.  Admins keep everything; a card
+    that names no configuration of the catalog is left to the caller's own rule."""
+    if access.get("is_admin") or not cards:
+        return cards
+    hidden = hidden_config_names(access)
+    if not hidden:
+        return cards
+    keep = []
+    for m in cards:
+        name = str(m.get("name") or "").strip().casefold()
+        if name in hidden:
+            continue
+        if m.get("die") and m.get("config") and \
+                f"{m.get('die')} {m.get('config')}".casefold() in hidden:
+            continue
+        keep.append(m)
+    return keep
+
+
 def may_see_config(access: dict, die: str, cfg: Optional[str]) -> bool:
     """May THIS caller read configuration ``cfg`` of ``die``?
 
-    ``cfg`` falsy = the question is about the die only.  Anonymous callers
-    never hold a grant, so a private configuration is hidden from the public
-    exhibit too.  Always false when ``may_see_die`` is false.
+    :func:`may_see_die` AND :func:`config_visible`.  For a shared die the second
+    implies the first; the first keeps the die-level answer for the other layers
+    exactly what it was.  Anonymous callers never hold a grant, so a private
+    configuration is hidden from the public exhibit too.
     """
     if not may_see_die(access, die):
         return False
-    if not cfg:
-        return True
-    if access.get("is_admin"):
-        return True
-    if config_visibility(die, cfg) != CFG_PRIVATE:
-        return True
-    return config_grant_key(str(die), str(cfg)) in (access.get("configs") or frozenset())
+    return not cfg or config_visible(access, die, cfg)
 
 
 def config_allowed(access: dict, die: str, cfg: Optional[str]) -> bool:
-    """The CONFIGURATION half of :func:`may_see_config` alone (admin / public / granted),
-    for a caller that has settled the die question itself - the published (community)
-    layer is open to every registered account, so ``may_see_die`` would be the wrong
-    question there."""
-    if not cfg or access.get("is_admin"):
-        return True
-    if config_visibility(die, cfg) != CFG_PRIVATE:
-        return True
-    return config_grant_key(str(die), str(cfg)) in (access.get("configs") or frozenset())
+    """:func:`config_visible` for a caller that has settled the die question
+    itself - the published (community) layer is open to every registered
+    account, so ``may_see_die`` would be the wrong question there (and there
+    only ``private`` hides a configuration).  For a shared die an ``inherit``
+    configuration still needs the die itself open: a die visible only through
+    ANOTHER configuration does not open its siblings."""
+    return not cfg or config_visible(access, die, cfg)
 
 
-def may_see_config_file(access: dict, die: str, cfg: str, path) -> bool:
-    """:func:`may_see_config` for a caller that already holds the file ``path``
-    (the tree walks every file once; no second resolution per row)."""
-    if access.get("is_admin"):
-        return True
-    if file_visibility(path) != CFG_PRIVATE:
-        return True
-    return config_grant_key(str(die), str(cfg)) in (access.get("configs") or frozenset())
+def may_see_config_file(access: dict, die: str, cfg: str, path,
+                        layer: Optional[str] = None) -> bool:
+    """:func:`config_visible` for a caller that already holds the file ``path``
+    (and, in a listing, the die's ``layer``)."""
+    return config_visible(access, die, cfg, path, layer=layer)
 
 
 def require_config(die: str, cfg: Optional[str], authorization: Optional[str] = None,
@@ -439,14 +553,18 @@ def require_config(die: str, cfg: Optional[str], authorization: Optional[str] = 
 
 
 def set_config_visibility(die: str, cfg: str, visibility: str) -> str:
-    """Write ``visibility`` onto the configuration file (admin routes only).
+    """Write the status onto the configuration file (admin routes only):
+    ``inherit`` | ``private`` | ``public``.
 
     A text-level edit of the single top-level line: the file is NOT re-dumped,
-    so nothing else in it (key order, comments, saved results) is touched.
-    ``public`` removes the line (the default), ``private`` adds / rewrites it.
+    so nothing else in it (key order, comments, saved results, line endings,
+    BOM) is touched.  ``inherit`` removes the line (the default); ``private`` /
+    ``public`` add or rewrite it.
     """
     from fastapi import HTTPException
-    vis = CFG_PRIVATE if str(visibility).strip().lower() == CFG_PRIVATE else CFG_PUBLIC
+    vis = str(visibility).strip().lower()
+    if vis not in CFG_STATUSES:
+        raise HTTPException(422, detail=f"status must be one of {list(CFG_STATUSES)}")
     from motor_ai_sim.routes import family as _fam
     # The file the (admin) caller READS is the one edited: an admin resolves the
     # curated shared catalog first, so this is the shared configuration.
@@ -455,13 +573,15 @@ def set_config_visibility(die: str, cfg: str, visibility: str) -> str:
         raise HTTPException(404, detail=f"configuration not found: {cfg}.yaml")
     import re
     raw = path.read_bytes()                       # bytes: the file's own line endings / BOM survive untouched
+    bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
+    raw = raw[len(bom):]                          # (a line right after the BOM is a first line too)
     pat = re.compile(rb"^visibility[ \t]*:[^\r\n]*(?:\r?\n|$)", re.MULTILINE)
     raw = pat.sub(b"", raw)
-    if vis == CFG_PRIVATE:
+    if vis != CFG_INHERIT:
         nl = b"\r\n" if b"\r\n" in raw[:4096] else b"\n"
         # the key goes first so it is easy to find (after a BOM, when the file has one)
-        bom = b"\xef\xbb\xbf" if raw.startswith(b"\xef\xbb\xbf") else b""
-        raw = bom + b"visibility: private" + nl + raw[len(bom):]
+        raw = b"visibility: " + vis.encode("ascii") + nl + raw
+    raw = bom + raw
     tmp = path.with_suffix(".tmp")
     try:
         tmp.write_bytes(raw)
@@ -473,7 +593,10 @@ def set_config_visibility(die: str, cfg: str, visibility: str) -> str:
             pass
         raise HTTPException(409, detail=(
             f"the configuration file is not writable here ({exc.__class__.__name__}: {path}) - "
-            "add or remove the single line `visibility: private` at the top of it on the server"))
+            f"set the single line `visibility: {vis}` at the top of it on the server"
+            if vis != CFG_INHERIT else
+            f"the configuration file is not writable here ({exc.__class__.__name__}: {path}) - "
+            "remove the single `visibility:` line at the top of it on the server"))
     return vis
 
 
@@ -511,21 +634,18 @@ def request_is_bound() -> bool:
 
 def hidden_for_request(die: str, cfg: Optional[str]) -> bool:
     """True when the CURRENT request's caller must not read ``<die>/<cfg>``
-    because it is a PRIVATE configuration they hold no grant for.
+    (:func:`config_visible` refuses it).
 
     The check the low-level readers (``family.config_doc``, ``duty_results.get``)
     make, so every solve / report / controller route that reaches a configuration
     by name through them is covered without each one knowing the rule.  Cheap
-    path first: a public configuration costs one cached file stat.
+    path first: a ``public`` configuration costs one cached file stat.
     """
     if not cfg or not request_is_bound():
         return False
-    if config_visibility(str(die), str(cfg)) != CFG_PRIVATE:
+    if config_visibility(str(die), str(cfg)) == CFG_PUBLIC:
         return False
-    acc = catalog_access(None)
-    if acc.get("is_admin"):
-        return False
-    return config_grant_key(str(die), str(cfg)) not in (acc.get("configs") or frozenset())
+    return not config_visible(catalog_access(None), str(die), str(cfg))
 
 
 async def config_path_gate(request: _Request) -> None:
@@ -561,7 +681,7 @@ def _config_path_check(request) -> None:
         return
     from fastapi import HTTPException
     acc = catalog_access(request.headers.get("authorization"))
-    # (the die question belongs to the route: a published die is open to every registered account)
+    # (a published die is open to every registered account - config_allowed knows the layer)
     if config_allowed(acc, str(die), str(cfg)):
         return
     if path.startswith("/api/family/config/"):

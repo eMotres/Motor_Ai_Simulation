@@ -1,9 +1,9 @@
-/** Pure logic of the Admin configuration-visibility toggle and config-grant picker (`configVisibility.ts` has no runtime imports). */
+/** Pure logic of the Admin configuration access rows and config-grant picker (`configVisibility.ts` has no runtime imports). */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  grantKey, splitGrantKey, isPrivateConfig, withConfigVisibility, grantRows, toggleKey,
-  configsBody, motorsPutBody, privateCount,
+  grantKey, splitGrantKey, grantRows, toggleKey, configsBody, motorsPutBody,
+  configAccessOf, openConfigs, configPutBody, canSaveConfig, withConfigAccess,
 } from '../configVisibility.ts';
 
 const DIES = [
@@ -19,22 +19,42 @@ test('grant keys round trip, even with slashes or spaces in the die name', () =>
   for (const bad of ['', 'nothing', '/L1', 'die/']) assert.equal(splitGrantKey(bad), null);
 });
 
-test('the toggle updates one configuration of one die and nothing else', () => {
-  const on = withConfigVisibility(DIES, 'CIANO28 85 20SW1200', 'L15', 'private');
-  assert.deepEqual(on[0].private_configs, ['L13', 'L15']);
-  assert.equal(on[1], DIES[1]);                                                    // other dies untouched (same object)
-  assert.deepEqual(DIES[0].private_configs, ['L13']);                              // the input is not mutated
-  const off = withConfigVisibility(on, 'CIANO28 85 20SW1200', 'L13', 'public');
-  assert.deepEqual(off[0].private_configs, ['L15']);
-  assert.deepEqual(withConfigVisibility(DIES, 'Plain die', 'L10', 'private')[2].private_configs, ['L10']);   // a die with no list yet
-  assert.deepEqual(withConfigVisibility(on, 'CIANO28 85 20SW1200', 'L15', 'private')[0].private_configs, ['L13', 'L15']);   // idempotent
+test('configuration access: from the server rows, or derived from private_configs on an older server', () => {
+  const rows = [{ name: 'L13', status: 'private', clients: [] }, { name: 'L15', status: 'public', clients: [] }];
+  assert.equal(configAccessOf({ name: 'd', config_access: rows }), rows);
+  assert.deepEqual(configAccessOf(DIES[0]), [
+    { name: 'L13', status: 'private', clients: [] }, { name: 'L15', status: 'inherit', clients: [] }]);
+  assert.deepEqual(configAccessOf({ name: 'empty' }), []);
 });
 
-test('isPrivateConfig / privateCount read the list the server sends', () => {
-  assert.equal(isPrivateConfig(DIES[0], 'L13'), true);
-  assert.equal(isPrivateConfig(DIES[0], 'L15'), false);
-  assert.equal(isPrivateConfig(DIES[2], 'L10'), false);
-  assert.deepEqual(DIES.map(privateCount), [1, 0, 0]);
+test('open configurations: Public and Selected clients only', () => {
+  const die = { name: 'd', config_access: [
+    { name: 'A', status: 'inherit', clients: [] }, { name: 'B', status: 'private', clients: [] },
+    { name: 'C', status: 'public', clients: [] }, { name: 'D', status: 'selected', clients: ['x@y.z'] }] };
+  assert.deepEqual(openConfigs(die).map((c) => c.name), ['C', 'D']);
+  assert.deepEqual(openConfigs(DIES[0]), []);
+});
+
+test('the configuration PUT body and its save guard', () => {
+  assert.deepEqual(configPutBody('inherit', ['a@b.c']), { status: 'inherit' });
+  assert.deepEqual(configPutBody('public', []), { status: 'public' });
+  assert.deepEqual(configPutBody('selected', [' B@x.io ', 'a@x.io', 'b@x.io', '']), { status: 'selected', clients: ['a@x.io', 'b@x.io'] });
+  assert.equal(canSaveConfig('selected', []), false);
+  assert.equal(canSaveConfig('selected', ['  ']), false);
+  assert.equal(canSaveConfig('selected', ['a@x.io']), true);
+  for (const s of ['inherit', 'private', 'public']) assert.equal(canSaveConfig(s, []), true);
+});
+
+test('updating one configuration touches that configuration of that die only', () => {
+  const on = withConfigAccess(DIES, 'CIANO28 85 20SW1200', 'L15', 'selected', ['a@x.io']);
+  assert.deepEqual(on[0].config_access, [
+    { name: 'L13', status: 'private', clients: [] }, { name: 'L15', status: 'selected', clients: ['a@x.io'] }]);
+  assert.deepEqual(on[0].private_configs, ['L13', 'L15']);                          // selected is stored private
+  assert.equal(on[1], DIES[1]);                                                    // other dies untouched (same object)
+  assert.deepEqual(DIES[0].private_configs, ['L13']);                              // the input is not mutated
+  const pub = withConfigAccess(on, 'CIANO28 85 20SW1200', 'L13', 'public', []);
+  assert.deepEqual(pub[0].private_configs, ['L15']);
+  assert.equal(pub[0].config_access[0].status, 'public');
 });
 
 test('picker rows: every private configuration, plus the grants the account already holds', () => {

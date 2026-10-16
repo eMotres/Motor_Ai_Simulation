@@ -72,8 +72,41 @@ def _planar_face_at(shape, z, normal_z):
     return dict(area_mm2=r6(area), r_min=r6(rmin) if area else None, r_max=r6(rmax) if area else None)
 
 
-def mech_datums(g, mech):
+def mech_datums_occupancy(g, mech, sh):
+    """Mechanical datums of the occupancy variant (CIANO28 150): the volume-equivalent holders keep their z stations; the bearings
+    and screws are exact.  The A_H face is measured on the exported Stator_holder_back solid."""
+    from motor_templates.segmented_flatwire.mechanics_occupancy import ring_table
+    zf, zb, zbk = g("holder_face_z"), g("holder_face_z") + g("bearing_B"), g("bearing_back_z0")
+    zah = mech["Stator_holder_back"].BoundBox.ZMin
+
+    def zr(pre):
+        rs = ring_table(sh, pre)
+        return [r6(min(r["z0"] for r in rs)), r6(max(r["z1"] for r in rs))]
+    scr = {}
+    for pre, key in (("screwA", "holder_bolts"), ("screwB", "front_M3"), ("screwC", "back_M3")):
+        if _has(g, pre + "_bolt_r"):
+            flip = g(pre + "_flip") > 0.5
+            top, tip = g(pre + "_head_top_z"), g(pre + "_flange_z") - g(pre + "_length")
+            scr[key] = dict(count=int(round(g(pre + "_count"))), bolt_circle_r=r6(g(pre + "_bolt_r")), length=r6(g(pre + "_length")),
+                            head_seat_z=r6(-g(pre + "_flange_z") if flip else g(pre + "_flange_z")),
+                            tip_z=r6(-tip if flip else tip), head_top_z=r6(-top if flip else top))
+    return dict(
+        variant="occupancy: aluminium holders are volume-equivalent ring models of the Fusion bodies (z stations, envelope and mass "
+                "distribution match; pockets, ribs and holes are not modelled)",
+        A_H=dict(z=r6(zah), outward_normal=[0, 0, -1], what="back end face of Stator_holder_back",
+                 measured=_planar_face_at(mech["Stator_holder_back"], zah, -1)),
+        rotor_holders=dict(front=dict(body="Shaft", z=zr("rotor_holder1")), rear=dict(body="Shaft_rear", z=zr("rotor_holder2"))),
+        stator_holders=dict(front=dict(body="Stator_holder", z=zr("stator_holder")), back=dict(body="Stator_holder_back", z=zr("stator_holder_back"))),
+        bearings=dict(card="61811-2RZ (d %g, D %g, B %g)" % (g("bearing_d"), g("bearing_D"), g("bearing_B")),
+                      front=dict(z=[r6(zf), r6(zb)]), back=dict(z=[r6(zbk), r6(zbk + g("bearing_B"))])),
+        screws=scr,
+        note="z along the motor axis (+z propeller side); every value from the Params of this model")
+
+
+def mech_datums(g, mech, sh=None):
     """Mechanical datums (stage 3), named as in the Fusion model; the A_H face is measured on the exported solid."""
+    if _has(g, "occupancy_variant"):
+        return mech_datums_occupancy(g, mech, sh)
     zf, zfl, zb = g("holder_face_z"), g("holder_flange_z"), g("bearing_out_z")
     zah = -g("back_holder_end_z")
     aw, n = g("angle_wire"), int(round(g("holder_bolt_count")))
@@ -197,7 +230,7 @@ def main():
         frame=dict(origin=[0, 0, 0], axis="+Z = motor axis (+z = propeller / front side)",
                    x_axis="+X", first_coil_and_magnet="centred on +Y", units="mm"),
         axial=dict(core_faces_z=[r6(-L / 2), r6(L / 2)], rotor_faces_z=[r6(-g("rotor_w") / 2), r6(g("rotor_w") / 2)],
-                   magnet_faces_z=[r6(-L / 2), r6(-L / 2 + g("mag_step"))],
+                   magnet_faces_z=[r6(-L / 2), r6(-L / 2 + g("mag_step"))], magnet_slices=int(round(g("magnet_slices"))) if _has(g, "magnet_slices") else 1,
                    coil_straight_ends_z=[r6(-Lc / 2), r6(Lc / 2)],
                    coil_end_turn_max_z=r6(max(s.BoundBox.ZMax for s in coils)),
                    coil_lead_end_z=r6(min(s.BoundBox.ZMin for s in coils))),
@@ -211,7 +244,7 @@ def main():
              "under the yoke), lead end = last layer (inner).")
     datums["cad_variant"] = "frameless" if kit else "full"
     if mech:
-        datums["mechanics"] = mech_datums(g, mech)
+        datums["mechanics"] = mech_datums(g, mech, sh)
     if kit:
         datums["frameless"] = frameless.datums_block(src, g)
     if src.getObject("Electronics") is not None:
@@ -234,8 +267,8 @@ def main():
         solid(cg, "Coil_%d" % (i + 1), s)
     solid(part(root, "Rotor"), "RotorCore", rotor)
     mg = part(root, "Magnets")
-    for i, s in enumerate(mags):
-        solid(mg, "Magnet_%02d" % (i + 1), s)
+    for nm, s in zip(mechanics.magnet_names(len(mags), g("magnet_slices") if _has(g, "magnet_slices") else 1), mags):
+        solid(mg, nm, s)
     if board:
         ep = part(root, "Electronics")
         for i, s in enumerate(board):

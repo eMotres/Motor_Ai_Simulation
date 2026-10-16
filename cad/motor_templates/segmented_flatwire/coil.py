@@ -17,6 +17,7 @@ Layers 0..n-2 = LinearPattern (num_wires_per_slot - 1) of [legs, end turn, trans
 turn) is added separately so the coil stays one connected solid for any num_wires_per_slot >= 3.
 Leads (-z): layer 0 left leg and layer n-1 right leg extended by coil_lead_ext + coil_lead_len (Extrude6 + Extrude7).
 """
+import math
 import FreeCAD as App
 from .sketchkit import SK
 from .params_sheet import pval
@@ -46,13 +47,18 @@ def _ytop_expr(layer_expr, extra=None):
     return e
 
 
-def _layer_rects(sk, g, layer_expr, layer_val, sides=("R", "L"), tag="", drop=0.0):
+def _layer_rects(sk, g, layer_expr, layer_val, sides=("R", "L"), tag="", drop=0.0, xoff=False):
     """Wire cross-section rectangle of one leg of one layer with Params-driven constraints.  Every coil sketch holds ONE
     leg (the legs are separate features so the body stays one solid after every step), so there are no left / right
     dimension pairs: the one-sided distance from the axis is `wire_x_in`.
-    drop = extra fraction of a pitch (loft sections).  Returns {side: geo ids}."""
+    drop = extra fraction of a pitch (loft sections).  xoff = the rectangle is given relative to the bend axis x = coil_bend_axis_dx
+    (sections of a transition that turns about the bend axes).  Returns {side: geo ids}."""
     s = SK(sk)
     x1 = g("tooth_width") / 2 + g("insulation_thickness") + g("wire_spacing_x") / 2
+    x1e = X1
+    if xoff:
+        x1 -= g("coil_bend_axis_dx")
+        x1e = X1 + " - " + AX
     ww, wh = g("wire_width"), g("wire_height")
     ytop = _ytop(g, layer_val) - drop * (wh + g("wire_spacing_y"))
     ytop_expr = _ytop_expr(layer_expr, ("%.6g" % drop) if drop else None)
@@ -60,10 +66,10 @@ def _layer_rects(sk, g, layer_expr, layer_val, sides=("R", "L"), tag="", drop=0.
     for side in sides:
         if side == "R":
             gid = s.rect(x1, ytop - wh, x1 + ww, ytop)
-            s.con("DistanceX", -1, 1, gid[3], 1, x1, name="wire_x_in" + tag, expr=X1)
+            s.con("DistanceX", -1, 1, gid[3], 1, x1, name="wire_x_in" + tag, expr=x1e)
         else:
             gid = s.rect(-x1 - ww, ytop - wh, -x1, ytop)
-            s.con("DistanceX", gid[1], 1, -1, 1, x1, name="wire_x_in" + tag, expr=X1)
+            s.con("DistanceX", gid[1], 1, -1, 1, x1, name="wire_x_in" + tag, expr=x1e)
         s.con("Distance", gid[0], ww, name="wire_width" + tag, expr=P + "wire_width")
         s.con("DistanceY", -1, 1, gid[2], 1, ytop, name="layer_top_y" + tag, expr=ytop_expr)
         s.con("Distance", gid[1], wh, name="wire_height" + tag, expr=P + "wire_height")
@@ -154,15 +160,42 @@ def build_coil(doc, sh, body):
         return out
 
     def transition(name):
-        """Loft from the right leg of layer 0 (theta 0) to the left leg of layer 1 (theta 180) at -z."""
+        """Loft from the right leg of layer 0 (theta 0) to the left leg of layer 1 (theta 180) at -z.
+        Legacy (coil_bridge_length <= 1 mm: CIANO14 40, CIANO28 85): sections on the half annulus about the tooth axis.
+        With a real bridge (CIANO28 150: bend radius 2.5, bridge 5.2): the centre line is the Fusion one - a quarter turn about
+        the right bend axis, the straight bridge, a quarter turn about the left bend axis (sections at 0 / 30 / 60 / 90 deg about
+        x = +coil_bend_axis_dx, then 90 / 120 / 150 / 180 deg about x = -coil_bend_axis_dx); the drop follows LOFT_LAW along the
+        centre-line arc length."""
+        bridge = g("coil_bridge_length") > 1.0
+        if bridge:
+            ax_v = g("coil_bend_axis_dx")
+            rc = g("coil_x_in") - ax_v + g("wire_width") / 2            # centre-line radius about a bend axis
+            seg = rc * math.pi / 2
+            tot = 2 * seg + 2 * ax_v
+            fr = [0.0, seg / 3 / tot, 2 * seg / 3 / tot, seg / tot, (seg + 2 * ax_v) / tot, (seg + 2 * ax_v + seg / 3) / tot,
+                  (seg + 2 * ax_v + 2 * seg / 3) / tot, 1.0]
+            xs = [lo for lo in LOFT_LAW]
+            def law(u):
+                for (a0, d0), (a1, d1) in zip(LOFT_LAW[:-1], LOFT_LAW[1:]):
+                    u0, u1 = a0 / 180.0, a1 / 180.0
+                    if u <= u1 + 1e-12:
+                        return d0 + (d1 - d0) * (u - u0) / (u1 - u0)
+                return 1.0
+            specs = [(+1, 0), (+1, 30), (+1, 60), (+1, 90), (-1, 90), (-1, 120), (-1, 150), (-1, 180)]
+            specs = [(sg, deg, law(f)) for (sg, deg), f in zip(specs, fr)]
+        else:
+            specs = [(0, deg, drop) for deg, drop in LOFT_LAW]
         sks = []
-        for i, (deg, drop) in enumerate(LOFT_LAW):
+        for i, (sg, deg, drop) in enumerate(specs):
             sk = body.newObject("Sketcher::SketchObject", "%sSection%d" % (name, i))
             sk.AttachmentSupport = [(origin_feature(body, "XY_Plane"), "")]
             sk.MapMode = "FlatFace"
-            sk.AttachmentOffset = App.Placement(App.Vector(0, 0, -zend), App.Rotation(App.Vector(0, 1, 0), deg))
+            sk.AttachmentOffset = App.Placement(App.Vector(sg * (g("coil_bend_axis_dx") if bridge else 0.0), 0, -zend),
+                                                App.Rotation(App.Vector(0, 1, 0), deg))
             sk.setExpression(".AttachmentOffset.Base.z", "-" + LC + " / 2")
-            _layer_rects(sk, g, "0", 0, sides=("R",), tag="_s%d" % i, drop=drop)
+            if bridge:
+                sk.setExpression(".AttachmentOffset.Base.x", ("" if sg > 0 else "-") + AX)
+            _layer_rects(sk, g, "0", 0, sides=("R",), tag="_s%d" % i, drop=drop, xoff=bridge)
             sks.append(sk)
         lo = body.newObject("PartDesign::AdditiveLoft", name)
         lo.Profile = sks[0]

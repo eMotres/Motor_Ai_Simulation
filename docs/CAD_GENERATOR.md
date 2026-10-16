@@ -402,6 +402,34 @@ Shaft_rear +0.007 %, Stator_holder +0.005 %, Stator_holder_back +0.241 %, Ring 0
 +0.030 %, balls -0.021 %, Screw +0.004 % (CIANO14 repo `validation/ciano28_85_13/`).  Not modelled: the Fusion slot-edge fillet of the
 carrier (r 0.15), the cone stack of the bearing seal, copper layers of the 85 board (envelope only).
 
+## CIANO28 150_35 (template A.7.3, 2026-10-16)
+
+The 150 mm motor CIANO28 150_35 new / L35 is built by the same template. Reference profile: `cad/reference/CIANO28_150_35_new.json` (+ `_fusion_values.json`),
+read-only from the open Fusion design "CIANO28 150" on 2026-10-16 (dump and tools in the private model repo, `fusion_source/CIANO28_150_35/`,
+`tools/build_params_150.py`, `tools/build_mech_150.py`). Every row carries its Fusion source; formulas are their own source.
+
+What the template gained for it (existing profiles build the same geometry as A.7.2; checked 2026-10-16 on CIANO14 40 L12 / L20 and CIANO28 85 L13 / L15:
+volumes to 1e-6, bounding boxes and solid counts identical):
+
+* **Axial magnet slices** (`mag_step`, `magnet_slices` = motor_length / mag_step; Fusion R-Pattern1): the Draft array `MagnetStack` (z) sits inside `MagnetArray`
+  (polar): 7 x 28 = 196 solids. `magnet_lamination` (10 mm) is the simulation's loss-model slice, not a CAD parameter (pre-check no longer ties it to the sleeve).
+* **Bridge-aware coil transition** (`coil_bridge_length > 1`): the -z end turn is a loft through sections on a real centre line with the Fusion bend axes;
+  the half-annulus path of the 40 / 85 is kept for `coil_bridge_length = 0`.
+* **Occupancy mechanics** (row `occupancy_variant`, `mechanics_occupancy.py`): Rotor_holder1 / 2 (bodies Shaft / Shaft_rear), Stator_holder and Stator_holder_back
+  are cast aluminium parts with 10-20 features each. Each is modelled as rings of the cylindrical grid of the Fusion body (rows `<part>_r0/_r1/_z0/_z1/_fill_<k>`,
+  measured by `tools/fc_scripts/occupancy.py`): a full ring is an annulus pad, a partial ring one sector of angular width fill x 360 / n patterned n times.
+  The volume, z stations, envelope and mass distribution of every part match Fusion (<= 0.02 %); pockets, ribs, holes and the real outline inside a ring do not.
+  The simplified model keeps them as built.
+* **Three screw families** (`screwA` 91290A137 x 12 on R72.2, `screwB` M3 x 30 front, `screwC` M3 x 6 back (head down)): the existing screw builder takes a row prefix.
+* The 61811-2RZ bearing and its shields use the 85's bearing rows (new values), the phase board is the plate board (envelope; the Fusion PCB 150 layers are NOT
+  modelled, its mass is in the BOM from the Fusion bodies).
+* Gate / fit / STEP datums / GLB / BOM have an occupancy branch. Fit kind `approx`: the rings stand in for pocketed parts, so rotor keys, the bearing seat and the coil
+  end turns overlap them a little; the overlap is reported and refused above 2.5 % of the smaller part. The screws are not tested against the holders (their holes are not modelled).
+
+Not modelled (disclosed in the BOM / report): fan plates (Fan_200_24s), the 72 alumina insulation bodies (Insulation_ceramic), pockets / ribs / holes of the four
+holders, the bearing shield detail, slot-edge fillets, screw threads and head knurling, the PCB layers. The Fusion component "M3 x 0.5 x 30" has a 34 mm shank (the
+BOM flags the length for confirmation).
+
 ## The GFRP ring is gone (template A.7.1, 2026-10-15)
 
 Owner: "the ring - remove it from every motor construction". The generator no longer builds the glass-fibre `Ring` (body) and `Ring_back` (link), in

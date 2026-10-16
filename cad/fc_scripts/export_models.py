@@ -128,6 +128,8 @@ def thread_rules(src):
       ring carrier   internal M3 hub holes."""
     sh = src.getObject("Params")
     g = lambda n: ps.pval(sh, n)
+    if ps.has_param(sh, "occupancy_variant"):               # CIANO28 150: no threads are modelled in the volume-equivalent holders / screws
+        return {}
     carrier = not ps.has_param(sh, "shaft_thread_r")
     shank = g("screw_shank_d") if ps.has_param(sh, "screw_shank_d") else g("bolt_d")
     return {"Screw_": [("external", shank / 2, "screw", g("holder_screw_l"))],
@@ -229,8 +231,10 @@ def add_motor(col, parts):
     for i, s in enumerate(coils):
         col.add("Coils", "Coil_%02d" % (i + 1), s, view.COLORS["Coil"], check=i < 2)
     col.add("Rotor", "RotorCore", rotor, view.COLORS["RotorCore"])
-    for i, s in enumerate(mags):                                  # alternating poles N red / S blue (palette.magnet_colour)
-        col.add("Magnets" if i % 2 == 0 else "Magnets_S", "Magnet_%02d" % (i + 1), s, palette.magnet_colour(i),
+    sl = max(1, int(parts.get("mag_slices", 1)))
+    for i, (nm, s) in enumerate(zip(mechanics.magnet_names(len(mags), sl), mags)):   # alternating poles N red / S blue (palette.magnet_colour)
+        pole = i // sl
+        col.add("Magnets" if pole % 2 == 0 else "Magnets_S", nm, s, palette.magnet_colour(pole),
                 family="Magnets", check=i < 2)
     for name, s in mech.items():
         if name == "Shaft":
@@ -284,7 +288,8 @@ def main():
         core=src.getObject("Core").Shape.copy(), rotor=src.getObject("RotorCore").Shape.copy(),
         coils=[s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids],
         mags=[s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids],
-        mech=mechanics.solids(src), board=electronics.board_shape(src) if electronics.has_board(src) else None)
+        mech=mechanics.solids(src), board=electronics.board_shape(src) if electronics.has_board(src) else None,
+        mag_slices=int(round(ps.pval(sh, "magnet_slices"))) if ps.has_param(sh, "magnet_slices") else 1)
     allbb = [parts["core"].BoundBox, parts["rotor"].BoundBox] + [s.BoundBox for s in parts["mech"].values()] \
         + ([parts["board"].BoundBox] if parts["board"] else [])
     diag = math.sqrt(sum((max(getattr(b, a + "Max") for b in allbb) - min(getattr(b, a + "Min") for b in allbb)) ** 2 for a in "XYZ"))

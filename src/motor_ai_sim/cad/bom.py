@@ -178,6 +178,8 @@ def build_bom(dump, inputs):
 
     # ---- laminations -------------------------------------------------------------------------------------------
     L = m.p("motor_length")
+    occ = "occupancy_variant" in m.params                  # CIANO28 150: volume-equivalent aluminium holders, three screw families
+    seat_r = m.p("shaft_seat_r") if "shaft_seat_r" in m.params else m.p("rotor_down_r") - m.p("rotor_house_height")
     steel = inputs["sim_materials"].get("stator_core") or "20SW1200"
     sc = cards.get(steel, {})
     kf = float(sc.get("stacking_factor") or 0.95)
@@ -209,7 +211,7 @@ def build_bom(dump, inputs):
         steel_r = inputs["sim_materials"].get("rotor_core") or steel
         add("rotor_lam", "Rotor lamination (magnet pockets, key), stacked", "manufactured", n_sheets, "pcs", steel_r,
             "OD %s mm, bore %s mm, %d magnet pockets, sheet %.2f mm, stack %.0f mm" % (
-                _num(2 * m.p("rotor_up_r"), 2), _num(2 * m.p("shaft_seat_r"), 2), round(m.p("rotor_poles")), t_sheet, L),
+                _num(2 * m.p("rotor_up_r"), 2), _num(2 * seat_r, 2), round(m.p("rotor_poles")), t_sheet, L),
             mass / n_sheets, "JFE 20SW1200 non-oriented, 0.20 mm", lam_note, sim_g=simg("Rotor back-iron"))
 
     # ---- magnets -----------------------------------------------------------------------------------------------
@@ -223,13 +225,23 @@ def build_bom(dump, inputs):
         w, h, ln = _bb(mag)
         sec = mag["volume"] / ln
         seg = m.params.get("magnet_lamination", 0)
-        add("magnets", "Permanent magnet (sintered NdFeB, ground, coated)", "manufactured (custom shape)", mags["n_solids"], "pcs", mcard,
+        slices = round(m.params.get("magnet_slices", 1) or 1)
+        n_mag = mags["n_solids"]
+        if slices > 1:                                      # CIANO28 150: every pole is a stack of axial slices (Fusion R-Pattern1)
+            for lbl in ("MagnetStack", "MagnetArray"):
+                m.get(lbl)
+            n_mag = round(m.p("rotor_poles")) * slices
+        add("magnets", "Permanent magnet (sintered NdFeB, ground, coated)", "manufactured (custom shape)", n_mag, "pcs", mcard,
             "%.2f x %.2f x %.0f mm bounding box (width x radial x length), wedge section %.2f mm2, edge fillet %.1f mm, %d poles" % (
                 w, h, ln, sec, m.params.get("magnet_edge_fillet", 0.2), round(m.p("rotor_poles"))),
             mag["volume"] * rho_m * 1e-6, "simulation magnet card %s (Br at 120 C)" % mcard,
-            "one piece per pole over the full stack length %.0f mm; segmentation: %s; density %.0f kg/m3 (%s); coating, "
-            "magnetisation direction and tolerances: to be specified" % (
-                ln, "none (magnet_lamination = 0, solid magnet in the simulation)" if not seg else "%.0f" % seg, rho_m, rho_src),
+            ("one piece per pole over the full stack length %.0f mm; segmentation: %s; density %.0f kg/m3 (%s); coating, "
+             "magnetisation direction and tolerances: to be specified" % (
+                 ln, "none (magnet_lamination = 0, solid magnet in the simulation)" if not seg else "%.0f" % seg, rho_m, rho_src))
+            if slices <= 1 else
+            ("%d axial slices of %.0f mm per pole (stack %.0f mm, the Fusion model; the simulation loss model uses magnet_lamination = %.0f mm "
+             "slices); density %.0f kg/m3 (%s); coating, magnetisation direction and tolerances: to be specified" % (
+                 slices, ln, L, seg or 0, rho_m, rho_src)),
             sim_g=simg("Magnets"), tbs_text="magnet coating / tolerance / magnetisation / grading (model gives the shape only)")
 
     # ---- coils / wire ------------------------------------------------------------------------------------------
@@ -277,14 +289,20 @@ def build_bom(dump, inputs):
     if sh and sh_rear:                                    # ring carrier (CIANO28 85): front steel hub + rear aluminium hub
         for key, label, title, dflt in (("shaft", "Shaft", "Rotor carrier, front (hub with 4 M3 end-face holes, rotor seat, bearing journal)", "Steel"),
                                         ("shaft_rear", "Shaft_rear", "Rotor carrier, rear (hub tube, rotor seat, bearing journal)", "Aluminum 6061")):
+            if occ:
+                title = {"Shaft": "Rotor holder, front (Fusion Rotor_holder1; volume-equivalent model)",
+                         "Shaft_rear": "Rotor holder, rear (Fusion Rotor_holder2; volume-equivalent model)"}[label]
             e = m.get(label)
             w, h, ln = _bb(e)
             mat = mats.get(label, dflt)
             rho, rs = density_of(mat, inputs)
             sim_mat = inputs["sim_materials"].get("shaft") if label == "Shaft" else None
             add(key, title, "manufactured", 1, "pcs", sim_mat or mat,
-                "length %.1f mm, max Ø%.2f mm, rotor seat Ø%.1f, journal Ø%.1f, %d key slots %.1f wide in the rim" % (
-                    ln, w, 2 * m.p("shaft_seat_r"), m.p("bearing_d"), round(m.p("rotor_key_count")), m.p("rotor_key_w")),
+                ("length %.1f mm, max Ø%.2f mm, rotor seat Ø%.1f, bearing seat Ø%.1f, %d key pockets %.1f wide; shape modelled as rings of "
+                 "equal volume (pockets, ribs and holes of the Fusion body are not modelled)" % (
+                     ln, w, 2 * seat_r, m.p("bearing_d"), round(m.p("rotor_key_count")), m.p("rotor_key_w"))) if occ else
+                ("length %.1f mm, max Ø%.2f mm, rotor seat Ø%.1f, journal Ø%.1f, %d key slots %.1f wide in the rim" % (
+                    ln, w, 2 * seat_r, m.p("bearing_d"), round(m.p("rotor_key_count")), m.p("rotor_key_w"))),
                 e["volume"] * rho * 1e-6, "model" + ("; simulation shaft slot = %s" % sim_mat if sim_mat else ""),
                 "density %.0f (%s); the rotor keys engage the rim slots; machining, finish, M3 thread depth: to be specified" % (rho, rs),
                 sim_g=simg("Shaft") if label == "Shaft" else None, tbs_text="material / heat treatment / finish of the rotor carrier")
@@ -307,7 +325,16 @@ def build_bom(dump, inputs):
     for key, label, title in (("holder_front", "Stator_holder", "Stator holder, front (propeller side)"),
                               ("holder_back", "Stator_holder_back", "Stator holder, back (A_H hub face, six M3 tapped holes)")):
         e = m.get(label)
-        if e:
+        if e and occ:                                     # CIANO28 150: occupancy rings (volume of the Fusion body)
+            w, h, ln = _bb(e)
+            mat = mats.get(label, "Aluminum 6061")
+            rho, rs = density_of(mat, inputs)
+            add(key, title.split(" (")[0] + " (volume-equivalent model)", "manufactured", 1, "pcs", mat,
+                "envelope %.1f x %.1f x %.1f mm, volume %.1f mm3 (equals the Fusion body; pockets, ribs and holes not modelled)" % (
+                    w, h, ln, e["volume"]),
+                e["volume"] * rho * 1e-6, "model", "density %.0f (%s); machining, anodising / finish: to be specified" % (rho, rs),
+                tbs_text="finish (anodising) and tolerances of the holder")
+        elif e:
             w, h, ln = _bb(e)
             mat = mats.get(label, "Aluminum 6061")
             rho, rs = density_of(mat, inputs)
@@ -337,7 +364,15 @@ def build_bom(dump, inputs):
         card = inputs.get("bearing_card") or {}
         seal = m.get("Bearing_seal")
         m.claimed.add("Bearing_seal_2")                   # the turned-over copy of the seal inside each bearing
-        if seal:                                          # 61707-2RS1 (CIANO28 85): sealed, not in the bearings library
+        if seal and occ:                                  # 61811-2RZ (CIANO28 150): shielded
+            add("bearings", "Ball bearing 61811-2RZ (55 x 72 x 9, shielded)", "purchased", nb, "pcs", "bearing steel, steel shields both sides",
+                "d %.0f x D %.0f x B %.0f mm, %d balls Ø%.3f mm" % (m.p("bearing_d"), m.p("bearing_D"), m.p("bearing_B"),
+                                                                    round(m.p("bearing_ball_count")), m.p("bearing_ball_d")),
+                (v + 2 * seal["volume"]) * rho * 1e-6, "ISO 15 series 618; Fusion component 61811-2rz",
+                "front + back copy; mass = rings + balls + two shield models (density %.0f, %s); cage not modelled; grease / clearance "
+                "class: to be specified" % (rho, rs), tbs_text="bearing grease and internal clearance class")
+            m.claimed.add("Bearing_seal_2")
+        elif seal:                                        # 61707-2RS1 (CIANO28 85): sealed, not in the bearings library
             rho_seal = 1200.0                              # NBR seal (assumed)
             add("bearings", "Ball bearing 61707-2RS1 (35 x 44 x 5, rubber sealed)", "purchased", nb, "pcs", "bearing steel, NBR seals both sides",
                 "d %.0f x D %.0f x B %.0f mm, %d balls Ø%.0f mm" % (m.p("bearing_d"), m.p("bearing_D"), m.p("bearing_B"),
@@ -359,6 +394,27 @@ def build_bom(dump, inputs):
     # ---- screws -------------------------------------------------------------------------------------------------
     scr_i = m.instances("Screw")
     m.get("Screw")
+    if occ:
+        for pre, body, key, nm, ref in (
+                ("screwA", "Screw", "screws", "Screw M3 x 50 socket head (holder bolts)", "McMaster 91290A137 (Fusion component)"),
+                ("screwB", "Screw_M3x30", "screws_m3_front", "Screw DIN 912 M3 socket head cap (front)", "Fusion component 'M3 x 0.5 x 30'; the model shank is 34 mm long"),
+                ("screwC", "Screw_M3x6", "screws_m3_back", "Screw DIN 912 M3 x 6 socket head cap (back)", "Fusion component 'M3 x 0.5 x 6'")):
+            si = m.instances(body)
+            if not si:
+                continue
+            m.get(body)
+            mat = mats.get(body, "Steel")
+            rho, rs = density_of(mat, inputs)
+            one = si["volume"] / si["n_solids"]
+            ln = m.p(pre + "_length")
+            add(key, nm, "purchased", si["n_solids"], "pcs", mat,
+                "length under the head %s mm, head Ø%.1f x %.1f, hex socket %.1f, bolt circle R%.1f" % (
+                    _num(ln, 1), m.p(pre + "_head_d"), m.p(pre + "_head_h"), m.p(pre + "_socket_af"), m.p(pre + "_bolt_r")),
+                one * rho * 1e-6, ref,
+                "model is a plain shank (thread and head knurling not modelled; shank/head volume-equivalent to the Fusion body); density %.0f (%s)" % (rho, rs),
+                tbs_text=("stock length: the Fusion component is named M3 x 30 but its model shank is %s mm long - confirm the bought length" % _num(ln, 1))
+                if pre == "screwB" else None)
+        scr_i = None
     if scr_i:
         ln = m.p("holder_screw_l")
         mat = mats.get("Screw", "18-8 Stainless Steel")
@@ -388,7 +444,21 @@ def build_bom(dump, inputs):
 
     # ---- phase board and pins (model objects when present, else nominal data) -------------------------------------
     carrier_board = bool(m.get("Shaft_rear")) or "board_outer_r" in m.params          # the CIANO28 85 plate board (also without a carrier: frameless kit)
-    if carrier_board:                                     # CIANO28 85: simplified plate + lead sleeves in the model, Fusion bodies for the mass
+    if carrier_board and occ:                             # CIANO28 150: Fusion PCB 150 (8 insulation layers + 6 copper layers, 2026-10-16 dump)
+        for e in _extra(m, r"board|pcb|pin"):
+            m.claimed.add(e["label"])
+        ins_mm3, cu_mm3 = 8 * 3751.64, 1833.4 + 1121.4 + 1777.8 + 1218.5 + 1777.8 + 1248.6 + 914.4
+        mass150 = ins_mm3 * 1.85e-3 + cu_mm3 * 8.933e-3
+        add("board", "Phase board 150 (coil connection, 6 copper layers + 8 insulation layers)", "purchased (custom)", 1, "pcs",
+            "insulation (GFRP, 1.85 g/cm3 assumed), copper",
+            "outer Ø%.1f, inner Ø%.2f (envelope), stack %.1f mm, %d coil-lead slots %.1f x %.1f mm" % (
+                2 * m.p("board_outer_r"), 2 * m.p("board_inner_r"), m.p("board_t"), round(2 * m.p("coil_count")), m.p("board_pin_w"), m.p("board_pin_t")),
+            mass150, "Fusion component PCB 150 2 parallel 0.6x14 (read-only dump 2026-10-16)",
+            "the model has a simplified envelope (ring plate + %d lead sleeves, positions exact; its volume is larger than the real layers); mass from "
+            "the Fusion board bodies: insulation %.0f mm3 x 1.85 + copper %.0f mm3 x 8.933 g/cm3; the controller is NOT part of this BOM" % (
+                round(2 * m.p("coil_count")), ins_mm3, cu_mm3),
+            tbs_text="board stack-up, copper weight, lead terminations and fabrication data of the 150 phase board")
+    elif carrier_board:                                     # CIANO28 85: simplified plate + lead sleeves in the model, Fusion bodies for the mass
         for e in _extra(m, r"board|pcb|pin"):
             m.claimed.add(e["label"])
         ins_mm3, cu_mm3 = 5 * 432.313, 1560.7              # Fusion PCB 85 serial: 5 insulation discs, copper layers + pins + pads (2026-10-14 dump)

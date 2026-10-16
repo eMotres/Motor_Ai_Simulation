@@ -22,7 +22,20 @@ from .rotor import build_rotor
 from .magnet import build_magnet
 from .coil import build_coil
 from .sketchkit import check_sketch
+from .params_sheet import pval as pval_
 from . import mechanics, electronics, frameless
+
+
+def _z_array(doc, base, count_expr, pitch_expr, name):
+    """Draft link ortho array along z (magnet slices): count and pitch from Params."""
+    import Draft
+    arr = Draft.make_ortho_array(base, v_x=App.Vector(10, 0, 0), v_y=App.Vector(0, 10, 0), v_z=App.Vector(0, 0, 10),
+                                 n_x=1, n_y=1, n_z=2, use_link=True)
+    arr.Label = name
+    arr.setExpression("NumberZ", count_expr)
+    arr.setExpression("IntervalZ.z", pitch_expr)
+    base.Visibility = False
+    return arr
 
 
 def _polar_array(doc, base, count_expr, name):
@@ -71,7 +84,11 @@ def build_bodies(doc, sh, pj):
     r_mag = build_magnet(doc, sh, mag)
     doc.recompute()
     coils = _polar_array(doc, coil, "Params.coil_count", "Coils"); winding.addObject(coils)
-    marr = _polar_array(doc, mag, "Params.magnet_count", "MagnetArray"); magnets.addObject(marr)
+    if ps.has_param(sh, "magnet_slices") and round(pval_(sh, "magnet_slices")) > 1:      # axially sliced magnets (CIANO28 150: 7 x 5 mm)
+        stack = _z_array(doc, mag, "Params.magnet_slices", "Params.mag_step", "MagnetStack"); magnets.addObject(stack)
+        marr = _polar_array(doc, stack, "Params.magnet_count", "MagnetArray"); magnets.addObject(marr)
+    else:
+        marr = _polar_array(doc, mag, "Params.magnet_count", "MagnetArray"); magnets.addObject(marr)
     mats = prof.get("materials", {})
     for b in (core, coil, rot, mag):
         if b.Name in mats:

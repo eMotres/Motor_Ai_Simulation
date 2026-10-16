@@ -256,9 +256,9 @@ def board_shape(doc):
 
 def pins(shape):
     tall = [s for s in shape.Solids if s.BoundBox.ZLength > PIN_MIN_Z_LENGTH]
-    if tall:
-        return tall
-    vmax = max([s.Volume for s in shape.Solids] or [0.0])             # plate variant: the lead sleeves are the small solids
+    vmax = max([s.Volume for s in shape.Solids] or [0.0])
+    if tall and not any(abs(s.Volume - vmax) < 1e-9 for s in tall):        # a thick plate (CIANO28 150, 6.1 mm) is not a pin
+        return tall             # plate variant: the lead sleeves are the small solids
     return [s for s in shape.Solids if s.Volume < 0.05 * vmax] if len(shape.Solids) > 1 else []
 
 

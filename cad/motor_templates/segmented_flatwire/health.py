@@ -43,8 +43,11 @@ def precheck(g, frameless=False):
     need(round(_num(g, "num_slots_per_segment")) == 6,
          "num_slots_per_segment = %g is not supported: the template (like the Fusion model, angle_wire = 360/(num_seg*6)) "
          "has 6 slots = 3 wound teeth per segment" % _num(g, "num_slots_per_segment"))
-    for n in ("magnet_lamination", "sleeve_thickness"):
-        need(abs(_num(g, n)) < 1e-12, "%s = %g is not supported by the template (must be 0)" % (n, _num(g, n)))
+    need(abs(_num(g, "sleeve_thickness")) < 1e-12, "sleeve_thickness = %g is not supported by the template (must be 0)" % _num(g, "sleeve_thickness"))
+    # magnet_lamination is the simulation's axial slice length of the LOSS model (die.yaml); the CAD slices are mag_step / magnet_slices
+    sl = _opt(g, "magnet_slices", 1)
+    need(abs(sl - round(sl)) < 1e-9 and sl >= 1, "magnet_slices = motor_length / mag_step = %g must be an integer >= 1 (the magnet stack is "
+                                                  "motor_length long, slices of mag_step)" % sl)
     nkey = _opt(g, "rotor_key_count", 0)
     need(abs(nkey - round(nkey)) < 1e-9 and nkey >= 0, "rotor_key_count = %g must be an integer >= 0" % nkey)
     if round(nkey) == 0:
@@ -137,6 +140,8 @@ def precheck_mechanics(g):
         if not cond:
             v.append(text)
 
+    if _opt(g, "occupancy_variant", None) is not None:                # occupancy variant (CIANO28 150)
+        return precheck_occupancy(g)
     carrier = _opt(g, "carrier_bore_r", None) is not None            # ring-carrier variant (CIANO28 85)
     if carrier:
         v += precheck_carrier(g)
@@ -205,6 +210,52 @@ def precheck_mechanics(g):
     return v
 
 
+OCC_PREFIXES = ("rotor_holder1", "rotor_holder2", "stator_holder", "stator_holder_back")
+SCREW_PREFIXES = ("screwA", "screwB", "screwC")
+
+
+def precheck_occupancy(g):
+    """Occupancy variant (CIANO28 150): rings of the four aluminium parts, the bearing and the three screw families."""
+    v = []
+
+    def need(cond, text):
+        if not cond:
+            v.append(text)
+
+    for pre in OCC_PREFIXES:
+        n = _num(g, pre + "_pattern_n")
+        need(abs(n - round(n)) < 1e-9 and n >= 1, "%s: pattern_n must be a positive integer" % pre)
+        k = 0
+        while _opt(g, "%s_r0_%d" % (pre, k + 1), None) is not None:
+            k += 1
+            r0, r1, z0, z1 = (_num(g, "%s_%s_%d" % (pre, x, k)) for x in ("r0", "r1", "z0", "z1"))
+            f = _opt(g, "%s_fill_%d" % (pre, k), 1.0)
+            need(0 <= r0 < r1 and z1 > z0 and 0 < f <= 1.0 + 1e-9,
+                 "%s ring %d: needs 0 <= r0 (%.4g) < r1 (%.4g), z1 (%.4g) > z0 (%.4g) and 0 < fill (%.4g) <= 1" % (pre, k, r0, r1, z1, z0, f))
+        need(k >= 1, "%s: no occupancy ring rows (%s_r0_1 ...)" % (pre, pre))
+    d, D, B = _num(g, "bearing_d"), _num(g, "bearing_D"), _num(g, "bearing_B")
+    li, lo, bd = _num(g, "bearing_inner_land_d") / 2, _num(g, "bearing_outer_land_d") / 2, _num(g, "bearing_ball_d") / 2
+    pr, e = (d + D) / 4, _num(g, "bearing_edge_r")
+    need(d / 2 + e < li < pr < lo < D / 2 - e, "bearing radii out of order: bore %.3f < inner land %.3f < pitch %.3f < outer "
+                                               "land %.3f < outer %.3f" % (d / 2, li, pr, lo, D / 2))
+    need(pr - li < bd and lo - pr < bd and bd < B / 2, "ball (d %.3f) must cut both lands and fit the width B %.3f" % (2 * bd, B))
+    n = _num(g, "bearing_ball_count")
+    need(abs(n - round(n)) < 1e-9 and n >= 3 and 2 * pr * math.sin(math.pi / max(n, 1)) > 2 * bd,
+         "bearing_ball_count = %g: must be an integer >= 3 and the balls must not overlap on the pitch circle" % n)
+    for pre in SCREW_PREFIXES:
+        if _opt(g, pre + "_bolt_r", None) is None:
+            continue
+        rs, rh, af2, dep = (_num(g, pre + "_shank_d") / 2, _num(g, pre + "_head_d") / 2, _num(g, pre + "_socket_af") / 2,
+                            _num(g, pre + "_socket_depth"))
+        cnt = _num(g, pre + "_count")
+        need(0 < rs < rh and 0 < af2 / math.cos(math.radians(30)) < rh and 0 < dep < _num(g, pre + "_head_h") + 0.5 * _num(g, pre + "_length"),
+             "%s: shank r %.3f < head r %.3f, the hex socket circle must fit the head and the depth be positive" % (pre, rs, rh))
+        need(_num(g, pre + "_length") > 0 and abs(cnt - round(cnt)) < 1e-9 and cnt >= 1, "%s: length > 0 and an integer count >= 1" % pre)
+        need(_num(g, pre + "_tip_chamfer") < rs and _num(g, pre + "_head_fillet") < _num(g, pre + "_head_h"),
+             "%s: tip chamfer / head fillet too large" % pre)
+    return v
+
+
 def precheck_carrier(g):
     """Ring carrier (Shaft + Shaft_rear, CIANO28 85): the rectilinear half section must keep its order, the rim tab / slot and the
     hub holes must fit."""
@@ -239,7 +290,8 @@ def precheck_carrier(g):
 
 def expected_counts(g):
     ns = int(round(_num(g, "num_seg")))
-    out = dict(core_sectors=ns * 3, coils=ns * 3, magnets=ns * int(round(_num(g, "num_poles_per_segment"))),
+    out = dict(core_sectors=ns * 3, coils=ns * 3,
+               magnets=ns * int(round(_num(g, "num_poles_per_segment"))) * int(round(_opt(g, "magnet_slices", 1))),
                layers=int(round(_num(g, "num_wires_per_slot"))))
     try:
         out.update(screws=int(round(_opt(g, "holder_bolt_count", ns * 3))), balls=int(round(_num(g, "bearing_ball_count"))))
@@ -385,6 +437,8 @@ def _gate_mechanics(doc, g, exp, counts, vols):
     from . import mechanics
     errors = []
     carrier = doc.getObject("Shaft_rear") is not None
+    if _opt(g, "occupancy_variant", None) is not None:
+        return _gate_occupancy(doc, g, exp, counts, vols)
     for bn in (MECH_BODIES_CARRIER if carrier else MECH_BODIES):
         b = doc.getObject(bn)
         if b is None:
@@ -455,6 +509,74 @@ def _gate_mechanics(doc, g, exp, counts, vols):
     return errors
 
 
+MECH_BODIES_OCC = ("Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Bearing_outer_ring", "Bearing_inner_ring",
+                   "Bearing_seal", "Bearing_ball", "Screw", "Screw_M3x30", "Screw_M3x6")
+OCC_BODY = {"rotor_holder1": "Shaft", "rotor_holder2": "Shaft_rear", "stator_holder": "Stator_holder", "stator_holder_back": "Stator_holder_back"}
+SCREW_BODY = {"screwA": ("Screw", "Screws", "Screw_1"), "screwB": ("Screw_M3x30", "Screws_M3x30", "Screw_M3x30_1"),
+              "screwC": ("Screw_M3x6", "Screws_M3x6", "Screw_M3x6_1")}
+
+
+def _gate_occupancy(doc, g, exp, counts, vols):
+    """Mechanics of the occupancy variant (CIANO28 150): single valid solids, array counts, links, stale-geometry invariants.
+    Each aluminium part has the volume of its ring table (sum of fill * pi * (r1^2 - r0^2) * dz) and its z extent."""
+    from . import mechanics
+    from .mechanics_occupancy import ring_table
+    errors = []
+    sh = doc.getObject("Params")
+    for bn in MECH_BODIES_OCC:
+        b = doc.getObject(bn)
+        if b is None:
+            errors.append("body %s missing" % bn)
+            continue
+        s = b.Shape
+        if s.isNull() or not s.isValid() or len(s.Solids) != 1 or s.Volume <= 0:
+            errors.append("body %s: null/invalid/%d solids/volume<=0" % (bn, 0 if s.isNull() else len(s.Solids)))
+            continue
+        vols[bn] = s.Volume
+    want_arr = [("Balls", "balls", int(round(g("bearing_ball_count"))))]
+    for pre, (_, lbl, _k) in SCREW_BODY.items():
+        if _opt(g, pre + "_count", None) is not None:
+            want_arr.append((lbl, lbl.lower(), int(round(g(pre + "_count")))))
+    for label, key, want in want_arr:
+        arr = [o for o in doc.Objects if o.Label == label]
+        n = len(arr[0].Shape.Solids) if arr else 0
+        counts[key] = n
+        if n != want:
+            errors.append("array %s has %d solids, Params require %s" % (label, n, want))
+    for ln in ("Bearing_618_8_back", "Bearing_seal_2"):
+        lk = doc.getObject(ln)
+        if lk is None or lk.LinkedObject is None:
+            errors.append("link %s missing or empty" % ln)
+    if errors:
+        return errors
+    so = mechanics.solids(doc)
+    zf, zb, zbk = g("holder_face_z"), g("holder_face_z") + g("bearing_B"), g("bearing_back_z0")
+    inv = []
+    for pre, bn in OCC_BODY.items():
+        rings = ring_table(sh, pre)
+        vol = sum(r["fill"] * math.pi * (r["r1"] ** 2 - r["r0"] ** 2) * (r["z1"] - r["z0"]) for r in rings)
+        inv += [("%s z min = lowest ring z0" % bn, _bb(so[bn]).ZMin, min(r["z0"] for r in rings)),
+                ("%s z max = highest ring z1" % bn, _bb(so[bn]).ZMax, max(r["z1"] for r in rings)),
+                ("%s volume = sum of its occupancy rings" % bn, so[bn].Volume, vol)]
+    inv += [("front bearing inner face z", _bb(so["Bearing_618_8_front_outer_ring"]).ZMin, zf),
+            ("front bearing outer face z", _bb(so["Bearing_618_8_front_outer_ring"]).ZMax, zb),
+            ("back bearing inner face z", _bb(so["Bearing_618_8_back_outer_ring"]).ZMax, zbk + g("bearing_B")),
+            ("back bearing outer face z", _bb(so["Bearing_618_8_back_outer_ring"]).ZMin, zbk),
+            ("bearing outer radius", _bb(so["Bearing_618_8_front_outer_ring"]).XMax, g("bearing_D") / 2)]
+    for pre, (bn, lbl, key) in SCREW_BODY.items():
+        if _opt(g, pre + "_count", None) is None:
+            continue
+        top, tip = g(pre + "_head_top_z"), g(pre + "_flange_z") - g(pre + "_length")
+        if g(pre + "_flip") > 0.5:
+            top, tip = -tip, -top                                     # head down: local +z = global -z
+        inv += [("%s head top z" % bn, _bb(so[key]).ZMax, top), ("%s tip z" % bn, _bb(so[key]).ZMin, tip)]
+    for name, got, want in inv:
+        tol = 1e-6 * abs(want) if "volume" in name else max(TOL, 1e-7 * abs(want))
+        if abs(got - want) > tol:
+            errors.append("stale/incorrect geometry: %s: model %.6f, Params require %.6f" % (name, got, want))
+    return errors
+
+
 def _feature_count(shape, kind):
     """Faces of a feature kind: 'chamfer45' = planar faces at 45 deg to the axis; a number = cylinders of that radius."""
     k = 0
@@ -483,6 +605,19 @@ FIT_PAIRS = [
     ("Screws", "Coils", "clear"), ("Screws", "Stator_holder", "contact"), ("Screws", "Stator_holder_back", "thread"),
     ("Screws", "Shaft", "clear"), ("Screws", "RotorCore", "clear"), ("Screws", "MagnetArray", "clear"),
 ]
+FIT_PAIRS_OCCUPANCY = [   # occupancy variant (CIANO28 150): the holders are volume-equivalent rings, not the real pockets and holes,
+    # so only the pairs whose faces the rings keep exactly are checked (the screws are not tested against the holders)
+    # kind "approx": the ring stands in for a pocketed part (rotor keys, bearing seat, coil end turns sit in real pockets), so a small overlap
+    # is expected and reported; more than APPROX_FRACTION of the smaller part refuses the build
+    ("Shaft", "RotorCore", "approx"), ("Shaft_rear", "RotorCore", "approx"),
+    ("Shaft", "Bearing_618_8_front_inner_ring", "contact"), ("Shaft_rear", "Bearing_618_8_back_inner_ring", "contact"),
+    ("Bearing_618_8_front_outer_ring", "Stator_holder", "approx"), ("Bearing_618_8_back_outer_ring", "Stator_holder_back", "approx"),
+    ("Stator_holder", "Coils", "approx"), ("Stator_holder_back", "Coils", "approx"),
+    ("RotorCore", "Stator_holder", "clear"), ("RotorCore", "Stator_holder_back", "clear"),
+    ("MagnetArray", "Stator_holder", "clear"), ("MagnetArray", "Stator_holder_back", "clear"),
+    ("Shaft", "Stator_holder", "clear"), ("Shaft_rear", "Stator_holder_back", "clear"),
+    ("Shaft", "Stator_holder_back", "clear"), ("Shaft_rear", "Stator_holder", "clear"),
+    ("Screws", "Core", "clear"), ("Screws", "Coils", "clear"), ("Screws", "RotorCore", "clear"), ("Screws", "MagnetArray", "clear")]
 FIT_PAIRS_CARRIER = [(a, b, k) for a, b, k in FIT_PAIRS if "Prop_fix" not in (a, b) and a != "Shaft"
                      and not (b == "Shaft" and a == "Screws")] + [
     ("Shaft", "RotorCore", "contact"), ("Shaft_rear", "RotorCore", "contact"),
@@ -491,6 +626,7 @@ FIT_PAIRS_CARRIER = [(a, b, k) for a, b, k in FIT_PAIRS if "Prop_fix" not in (a,
     ("Shaft", "Stator_holder_back", "clear"), ("Shaft_rear", "Stator_holder", "clear"),
     ("Screws", "Shaft", "clear"), ("Screws", "Shaft_rear", "clear")]
 SCREW_ENGAGE_MIN_D = 1.5     # thread engagement in the back boss: at least 1.5 x screw diameter (owner 2026-10-13, reported)
+APPROX_FRACTION = 0.025     # occupancy variant: overlap allowed between a volume-equivalent ring part and its neighbour (share of the smaller part)
 FIT_REFUSE_MM3 = 0.5        # an overlap above this (outside "thread") refuses the build: a part runs into another one
 
 
@@ -505,6 +641,9 @@ def fit(doc):
     act["Screws"] = Part.makeCompound([v for k, v in so.items() if k.startswith("Screw_")])
     rows, errors = [], []
     pairs = FIT_PAIRS_CARRIER if doc.getObject("Shaft_rear") is not None else FIT_PAIRS
+    from .params_sheet import has_param
+    if doc.getObject("Params") is not None and has_param(doc.getObject("Params"), "occupancy_variant"):
+        pairs = FIT_PAIRS_OCCUPANCY
     for a, b, kind in pairs:
         sa, sb = so.get(a, act.get(a)), so.get(b, act.get(b))
         if sa is None or sb is None:
@@ -517,11 +656,19 @@ def fit(doc):
             row["ok"] = ov < 1e-3 and dist < 1e-6
         elif kind == "clear":
             row["ok"] = ov < 1e-3
+        elif kind == "approx":
+            lim = APPROX_FRACTION * min(sa.Volume, sb.Volume)
+            row["ok"] = ov <= lim
+            row["overlap_limit_mm3"] = round(lim, 3)
+            row["note"] = "volume-equivalent occupancy part: the real pockets are not modelled, overlap reported (limit %.1f %% of the smaller part)" % (
+                100 * APPROX_FRACTION)
+            if not row["ok"]:
+                errors.append("fit: %s runs into %s (overlap %.3f mm3, limit %.3f)" % (a, b, ov, lim))
         else:
             row["ok"] = True
             row["note"] = "screw thread in the tapped hole (overlap = engaged thread)"
         rows.append(row)
-        if kind != "thread" and ov > FIT_REFUSE_MM3:
+        if kind not in ("thread", "approx") and ov > FIT_REFUSE_MM3:
             errors.append("fit: %s runs into %s (overlap %.3f mm3)" % (a, b, ov))
     return dict(pairs=rows, errors=errors, screw=_screw_check(doc, so, errors))
 
@@ -532,8 +679,9 @@ def _screw_check(doc, so, errors):
     >= SCREW_ENGAGE_MIN_D x bolt_d - reported as `engagement_ok`, not refused."""
     from .params_sheet import pval
     sh = doc.getObject("Params")
+    from .params_sheet import has_param
     s1, back = so.get("Screw_1"), so.get("Stator_holder_back")
-    if sh is None or s1 is None or back is None:
+    if sh is None or s1 is None or back is None or has_param(sh, "occupancy_variant"):
         return None
     g = lambda n: pval(sh, n)
     com = s1.common(back)

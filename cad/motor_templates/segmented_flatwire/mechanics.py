@@ -813,16 +813,20 @@ def build_prop_fix(doc, sh, body):
     return dict(sketches=[sk, pk], features=[hub, plate])
 
 
-def build_screw(doc, sh, body):
-    """Socket head screw on the bolt circle at angle_wire (body rotated by angle_wire), head on the front flange face."""
+def build_screw(doc, sh, body, pre=None):
+    """Socket head screw on the bolt circle at angle_wire (body rotated by angle_wire), head on the front flange face.
+    pre = a row prefix (CIANO28 150, three screw families): the rows are <pre>_bolt_r, _shank_d, _head_d, _head_h, _head_fillet,
+    _tip_chamfer, _socket_af, _socket_depth, _socket_point, _flange_z, _length, _head_top_z, _angle and _flip (1 = head down:
+    the body is turned 180 deg about the (1,1,0) axis: local +z = global -z and the +Y screw lands on azimuth 0)."""
     g = _g(sh)
+    N = (lambda legacy, suf: legacy) if pre is None else (lambda legacy, suf: pre + "_" + suf)
     shank_row = has_param(sh, "screw_shank_d")                 # CIANO28 85: the screw shank differs from the hole (bolt_d)
-    shank_expr = P + ("screw_shank_d" if shank_row else "bolt_d") + " / 2"
-    a, rs, rh, hh = g("holder_bolt_r"), g("screw_shank_d" if shank_row else "bolt_d") / 2, g("screw_head_d") / 2, g("screw_head_h")
-    f, ct, af2, dep = g("screw_head_fillet"), g("screw_tip_chamfer"), g("screw_socket_af") / 2, g("screw_socket_depth")
-    zf = g("holder_flange_z")
-    zt, zh = zf - g("holder_screw_l"), zf + hh
-    pa = math.radians(g("screw_socket_point") / 2)
+    shank_expr = P + N("screw_shank_d" if shank_row else "bolt_d", "shank_d") + " / 2"
+    a, rs, rh, hh = g(N("holder_bolt_r", "bolt_r")), g(N("screw_shank_d" if shank_row else "bolt_d", "shank_d")) / 2, g(N("screw_head_d", "head_d")) / 2, g(N("screw_head_h", "head_h"))
+    f, ct, af2, dep = g(N("screw_head_fillet", "head_fillet")), g(N("screw_tip_chamfer", "tip_chamfer")), g(N("screw_socket_af", "socket_af")) / 2, g(N("screw_socket_depth", "socket_depth"))
+    zf = g(N("holder_flange_z", "flange_z"))
+    zt, zh = zf - g(N("holder_screw_l", "length")), zf + hh
+    pa = math.radians(g(N("screw_socket_point", "socket_point")) / 2)
     zc = zh - dep - af2 / math.tan(pa)
     sk = plane_sketch(body, "ScrewSection", "YZ_Plane")
     s = SK(sk)
@@ -831,23 +835,23 @@ def build_screw(doc, sh, body):
     spec = [("free",), ("free",), ("free",), ("free",), ("free",), ("free",), ("free",), ("free",), ("free",)]
     pl = Poly(sk, pts, spec)
     G = pl.g
-    s.con("Vertical", G[0]); s.con("DistanceX", ORIGIN, 1, G[0], 1, a, name="holder_bolt_r", expr=P + "holder_bolt_r")
+    s.con("Vertical", G[0]); s.con("DistanceX", ORIGIN, 1, G[0], 1, a, name="holder_bolt_r", expr=P + N("holder_bolt_r", "bolt_r"))
     s.con("Horizontal", G[1])
     s.con("Vertical", G[3]); s.con("DistanceX", G[0], 1, G[3], 1, rs, name="bolt_r", expr=shank_expr)
-    s.con("Horizontal", G[4]); s.con("DistanceY", ORIGIN, 1, G[4], 1, zf, name="holder_flange_z", expr=P + "holder_flange_z")
-    s.con("DistanceY", G[1], 1, G[4], 1, zf - zt, name="holder_screw_l", expr=P + "holder_screw_l")
-    s.con("Vertical", G[5]); s.con("DistanceX", G[0], 1, G[5], 1, rh, name="screw_head_r", expr=P + "screw_head_d / 2")
-    s.con("Horizontal", G[6]); s.con("DistanceY", G[4], 1, G[6], 1, hh, name="screw_head_h", expr=P + "screw_head_h")
-    s.con("Vertical", G[7]); s.con("DistanceX", G[0], 1, G[7], 1, af2, name="socket_half_af", expr=P + "screw_socket_af / 2")
-    s.con("DistanceY", G[7], 2, G[6], 2, dep, name="screw_socket_depth", expr=P + "screw_socket_depth")
-    s.con("Angle", G[8], G[0], pa, name="socket_point_half_angle", expr=P + "screw_socket_point / 2")
-    pl.chamfer45(2, name="screw_tip_chamfer", expr=P + "screw_tip_chamfer")
-    f1 = rounded_corner(sk, s, G[4], G[5], f, name="screw_head_fillet", expr=P + "screw_head_fillet")
+    s.con("Horizontal", G[4]); s.con("DistanceY", ORIGIN, 1, G[4], 1, zf, name="holder_flange_z", expr=P + N("holder_flange_z", "flange_z"))
+    s.con("DistanceY", G[1], 1, G[4], 1, zf - zt, name="holder_screw_l", expr=P + N("holder_screw_l", "length"))
+    s.con("Vertical", G[5]); s.con("DistanceX", G[0], 1, G[5], 1, rh, name="screw_head_r", expr=P + N("screw_head_d", "head_d") + " / 2")
+    s.con("Horizontal", G[6]); s.con("DistanceY", G[4], 1, G[6], 1, hh, name="screw_head_h", expr=P + N("screw_head_h", "head_h"))
+    s.con("Vertical", G[7]); s.con("DistanceX", G[0], 1, G[7], 1, af2, name="socket_half_af", expr=P + N("screw_socket_af", "socket_af") + " / 2")
+    s.con("DistanceY", G[7], 2, G[6], 2, dep, name="screw_socket_depth", expr=P + N("screw_socket_depth", "socket_depth"))
+    s.con("Angle", G[8], G[0], pa, name="socket_point_half_angle", expr=P + N("screw_socket_point", "socket_point") + " / 2")
+    pl.chamfer45(2, name="screw_tip_chamfer", expr=P + N("screw_tip_chamfer", "tip_chamfer"))
+    f1 = rounded_corner(sk, s, G[4], G[5], f, name="screw_head_fillet", expr=P + N("screw_head_fillet", "head_fillet"))
     rounded_corner(sk, s, G[5], G[6], f, equal_to=f1)
     doc.recompute()
     rv = revolve(body, sk, "ScrewRevolve", axis="Edge1")
     # hex socket (flats parallel to the screw's radial line), depth screw_socket_depth from the head top
-    hk = plane_sketch(body, "ScrewSocketSketch", "XY_Plane", z_expr=P + "screw_head_top_z")
+    hk = plane_sketch(body, "ScrewSocketSketch", "XY_Plane", z_expr=P + N("screw_head_top_z", "head_top_z"))
     s = SK(hk)
     R = af2 / math.cos(math.radians(30))
     vs = [(R * math.cos(math.radians(60 * i)), a + R * math.sin(math.radians(60 * i))) for i in range(6)]
@@ -860,18 +864,21 @@ def build_screw(doc, sh, body):
     for i in range(1, 6):
         s.con("Equal", ls[0], ls[i])
     s.con("PointOnObject", cc, 3, V_AXIS)
-    s.con("DistanceY", ORIGIN, 1, cc, 3, a, name="holder_bolt_r", expr=P + "holder_bolt_r")
+    s.con("DistanceY", ORIGIN, 1, cc, 3, a, name="holder_bolt_r", expr=P + N("holder_bolt_r", "bolt_r"))
     s.con("Horizontal", ls[1])
-    s.con("Distance", cc, 3, ls[1], af2, name="socket_half_af", expr=P + "screw_socket_af / 2")
+    s.con("Distance", cc, 3, ls[1], af2, name="socket_half_af", expr=P + N("screw_socket_af", "socket_af") + " / 2")
     doc.recompute()
     pk = body.newObject("PartDesign::Pocket", "ScrewSocket")
     pk.Profile = hk
-    pk.setExpression("Length", P + "screw_socket_depth")
+    pk.setExpression("Length", P + N("screw_socket_depth", "socket_depth"))
     pk.Refine = True
     hk.Visibility = False
     body.Tip = pk
-    body.Placement = App.Placement(V(0, 0, 0), App.Rotation(V(0, 0, 1), -g("angle_wire")))
-    body.setExpression(".Placement.Rotation.Angle", "-" + P + "angle_wire")
+    if pre is not None and has_param(sh, pre + "_flip") and g(pre + "_flip") > 0.5:
+        body.Placement = App.Placement(V(0, 0, 0), App.Rotation(V(1, 1, 0), 180))
+    else:
+        body.Placement = App.Placement(V(0, 0, 0), App.Rotation(V(0, 0, 1), -g(N("angle_wire", "angle"))))
+        body.setExpression(".Placement.Rotation.Angle", "-" + P + N("angle_wire", "angle"))
     return dict(sketches=[sk, hk], features=[rv, pk])
 
 
@@ -901,6 +908,9 @@ def g_B(sh):
 def build_mechanics(doc, sh, polar_array):
     """Adds the Mechanics part with every mechanical body.  polar_array(doc, base, count_expr, name) -> Draft link array.
     Returns the per-body reports (sketches, chamfer / fillet edge counts)."""
+    if has_param(sh, "occupancy_variant"):                     # CIANO28 150: aluminium parts from occupancy rings
+        from .mechanics_occupancy import build_mechanics_occupancy
+        return build_mechanics_occupancy(doc, sh, polar_array)
     mech = doc.addObject("App::Part", "Mechanics"); mech.Label = "Mechanics"
     rep = {}
 
@@ -945,6 +955,15 @@ def build_mechanics(doc, sh, polar_array):
 # --------------------------------------------------------------------------------------------- solids (export / checks)
 
 
+def magnet_names(n_solids, slices):
+    """Names of the magnet solids in array order (pole-major, slices inside a pole): Magnet_NN for one slice per pole, else
+    Magnet_NN_SS (pole, slice) - the array is a polar array of the z-stack MagnetStack."""
+    slices = max(1, int(slices))
+    if slices == 1:
+        return ["Magnet_%02d" % (i + 1) for i in range(n_solids)]
+    return ["Magnet_%02d_%02d" % (i // slices + 1, i % slices + 1) for i in range(n_solids)]
+
+
 def has_mechanics(doc):
     return doc.getObject("Mechanics") is not None
 
@@ -986,6 +1005,11 @@ def solids(doc):
         out["Prop_fix"] = gs("Prop_fix").copy()
     for i, s in enumerate([o for o in doc.Objects if o.Label == "Screws"][0].Shape.Solids):
         out["Screw_%d" % (i + 1)] = s.copy()
+    for lbl, pre in (("Screws_M3x30", "Screw_M3x30"), ("Screws_M3x6", "Screw_M3x6")):     # CIANO28 150: more screw families
+        for o in doc.Objects:
+            if o.Label == lbl:
+                for i, s in enumerate(o.Shape.Solids):
+                    out["%s_%d" % (pre, i + 1)] = s.copy()
     return out
 
 

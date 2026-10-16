@@ -39,6 +39,7 @@ BODY_ROLE = {
     "Bearing_outer_ring": "bearing_ring", "Bearing_inner_ring": "bearing_ring", "Bearing_ball": "bearing_ball", "Bearing_seal": "bearing_seal",
     "PhaseBoard": "pcb_mask", "PhaseBoardPins": "pcb_pins",
     "Stator_holder": "aluminium", "Stator_holder_back": "aluminium", "Prop_fix": "aluminium", "Screw": "screw",
+    "Screw_M3x30": "screw", "Screw_M3x6": "screw",       # CIANO28 150: two more screw families
 }
 # role -> (metallic, roughness) of the GLB material and, via appearance(), of the FreeCAD ShapeAppearance; default (0.1, 0.55)
 MATERIAL = {"shaft": (0.4, 0.6), "screw": (0.9, 0.25)}      # stainless steel: matte (owner); screws: nickel, shiny

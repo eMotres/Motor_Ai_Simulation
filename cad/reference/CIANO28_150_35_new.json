@@ -1,0 +1,4404 @@
+{
+ "schema": "segmented_flatwire/profile/2",
+ "profile": {
+  "motor_id": "CIANO28_150_35_fusion",
+  "profile_file": "CIANO28_150_35_fusion",
+  "motor": "CIANO28 150_35 new / L35",
+  "template": "segmented_flatwire",
+  "variant": "Fusion reference of the open design CIANO28 150, 2026-10-16",
+  "revision": "A.0",
+  "status": "Fusion reference values (validation of the template; not a simulation profile)",
+  "source": {
+   "fusion_document": "CIANO28 150",
+   "read": "2026-10-16",
+   "method": "local Fusion MCP, readOnly scripts (tools/fusion_scripts)"
+  },
+  "doc_name": "CIANO28_150_35_fusion",
+  "materials": {
+   "Core": "20SW1200",
+   "Coil": "Copper",
+   "RotorCore": "20SW1200",
+   "Magnet": "NdFeB (Steel in Fusion) - grade TBD",
+   "Shaft": "Aluminum 6061",
+   "Shaft_rear": "Aluminum 6061",
+   "Stator_holder": "Aluminum 6061",
+   "Stator_holder_back": "Aluminum 6061",
+   "Bearing_outer_ring": "Steel (bearing)",
+   "Bearing_inner_ring": "Steel (bearing)",
+   "Bearing_ball": "Steel (bearing)",
+   "Bearing_seal": "Steel (bearing)",
+   "Screw": "Steel",
+   "Screw_M3x30": "Steel",
+   "Screw_M3x6": "Steel"
+  },
+  "frame": "Fusion root frame: Z = motor axis (+z = propeller/front side), first core tooth / coil / magnet centred on +Y, mm",
+  "generated": "2026-10-12T16:12:33",
+  "mechanics": "occupancy_housing"
+ },
+ "units": {
+  "length": "mm",
+  "angle": "deg"
+ },
+ "roles": {
+  "input": "drives geometry (constant)",
+  "derived": "drives geometry (formula of others)",
+  "mechanics": "drives the mechanical parts (shaft, bearings, holders, rings, Prop_fix, screws); CAD only, not in the simulation",
+  "info": "reference only",
+  "unsupported": "ignored by the template; pre-check requires nominal",
+  "foreign": "other design in the Fusion file"
+ },
+ "user_parameters": [
+  {
+   "name": "motor_d",
+   "fusion_expression": "( stator_up_r + housing_h ) * 2",
+   "freecad_expression": "( stator_up_r + housing_h ) * 2",
+   "value": 162.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "rotor_r",
+   "fusion_expression": "motor_d / 2",
+   "freecad_expression": "motor_d / 2",
+   "value": 81.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "rotor_h",
+   "fusion_expression": "magnet_height",
+   "freecad_expression": "magnet_height",
+   "value": 14.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "rotor_w",
+   "fusion_expression": "motor_length",
+   "freecad_expression": "motor_length",
+   "value": 35.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "magnet_height",
+   "fusion_expression": "14 mm",
+   "freecad_expression": "14 mm",
+   "value": 14.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter magnet_h = magnet_h_Ref"
+  },
+  {
+   "name": "magnet_w",
+   "fusion_expression": "rotor_w",
+   "freecad_expression": "rotor_w",
+   "value": 35.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "air_gap",
+   "fusion_expression": "0.5 mm",
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter gap = gap_Ref"
+  },
+  {
+   "name": "motor_length",
+   "fusion_expression": "35 mm",
+   "freecad_expression": "35 mm",
+   "value": 35.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter stator_w = 35 mm"
+  },
+  {
+   "name": "stator_up_r",
+   "fusion_expression": "stator_diameter / 2",
+   "freecad_expression": "stator_diameter / 2",
+   "value": 75.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "stator_mid_r",
+   "fusion_expression": "stator_up_r - slot_height - core_thickness / 2",
+   "freecad_expression": "stator_up_r - slot_height - core_thickness / 2",
+   "value": 58.8,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "slot_height",
+   "fusion_expression": "14 mm",
+   "freecad_expression": "14 mm",
+   "value": 14.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter slot_h = slot_h_Ref"
+  },
+  {
+   "name": "core_thickness",
+   "fusion_expression": "4.4 mm",
+   "freecad_expression": "4.4 mm",
+   "value": 4.4,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter core_h = core_h_Ref"
+  },
+  {
+   "name": "stator_down_r",
+   "fusion_expression": "stator_up_r - slot_height - core_thickness",
+   "freecad_expression": "stator_up_r - slot_height - core_thickness",
+   "value": 56.6,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "rotor_down_h",
+   "fusion_expression": "0.5 mm",
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "rotor_down_r",
+   "fusion_expression": "rotor_up_r - rotor_h",
+   "freecad_expression": "rotor_up_r - rotor_h",
+   "value": 42.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "glue",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "magnet_fill_up",
+   "fusion_expression": "0.32",
+   "freecad_expression": "0.32",
+   "value": 0.32,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter magnet_fill_up = magnet_fill_up_Ref"
+  },
+  {
+   "name": "num_seg",
+   "fusion_expression": "4",
+   "freecad_expression": "4",
+   "value": 4.0,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter N1 = 4"
+  },
+  {
+   "name": "angle",
+   "fusion_expression": "( 360 / num_seg ) * 1 deg",
+   "freecad_expression": "( 360 / num_seg ) * 1 deg",
+   "value": 90.0,
+   "unit": "deg",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "angle_wire",
+   "fusion_expression": "( 360 / ( num_seg * 6 ) ) * 1 deg",
+   "freecad_expression": "( 360 / ( num_seg * 6 ) ) * 1 deg",
+   "value": 15.0,
+   "unit": "deg",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "angle_mag",
+   "fusion_expression": "( ( 360 / ( num_seg * num_poles_per_segment ) ) * 1 deg )",
+   "freecad_expression": "( ( 360 / ( num_seg * num_poles_per_segment ) ) * 1 deg )",
+   "value": 12.857142857,
+   "unit": "deg",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "bearing_6005_d",
+   "fusion_expression": "30 mm",
+   "freecad_expression": "30 mm",
+   "value": 30.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "resolver_w",
+   "fusion_expression": "16 mm",
+   "freecad_expression": "16 mm",
+   "value": 16.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "sealing_ring_d",
+   "fusion_expression": "0.9 mm",
+   "freecad_expression": "0.9 mm",
+   "value": 0.9,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "wire_spacing_y",
+   "fusion_expression": "0.13 mm",
+   "freecad_expression": "0.13 mm",
+   "value": 0.13,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter wire_dist_y = 0.13 mm"
+  },
+  {
+   "name": "insulation_thickness",
+   "fusion_expression": "0.15 mm",
+   "freecad_expression": "0.15 mm",
+   "value": 0.15,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter ins_w = ins_w_Ref"
+  },
+  {
+   "name": "slot_hs",
+   "fusion_expression": "0.15",
+   "freecad_expression": "0.15",
+   "value": 0.15,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "magnet_fill_radius",
+   "fusion_expression": "2 mm",
+   "freecad_expression": "2 mm",
+   "value": 2.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter mag_r = mag_r_Ref"
+  },
+  {
+   "name": "slot_r",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "slot_up_r",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "tooth_width",
+   "fusion_expression": "9.8 mm",
+   "freecad_expression": "9.8 mm",
+   "value": 9.8,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter teeth_w = tooth_w_Ref"
+  },
+  {
+   "name": "slot_ds",
+   "fusion_expression": "0.8",
+   "freecad_expression": "0.8",
+   "value": 0.8,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "slot_hs1",
+   "fusion_expression": "0.02",
+   "freecad_expression": "0.02",
+   "value": 0.02,
+   "unit": "",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "housing_h",
+   "fusion_expression": "6 mm",
+   "freecad_expression": "6 mm",
+   "value": 6.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "magnet_fill_down",
+   "fusion_expression": "0.9",
+   "freecad_expression": "0.9",
+   "value": 0.9,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter magnet_fill_down = magnet_fill_down_Ref"
+  },
+  {
+   "name": "rotor_up_r",
+   "fusion_expression": "stator_down_r - air_gap",
+   "freecad_expression": "stator_down_r - air_gap",
+   "value": 56.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "rotor_house_height",
+   "fusion_expression": "1.2 mm",
+   "freecad_expression": "1.2 mm",
+   "value": 1.2,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter r_housing_h = r_housing_h_Ref"
+  },
+  {
+   "name": "arc",
+   "fusion_expression": "stator_down_r * 2 * PI * ( angle_wire / 360 deg ) - tooth_width",
+   "freecad_expression": "stator_down_r * 2 * pi * ( angle_wire / 360 deg ) - tooth_width",
+   "value": 5.017845349,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "wire_height",
+   "fusion_expression": "0.6 mm",
+   "freecad_expression": "0.6 mm",
+   "value": 0.6,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter wire_h = 0.6 mm"
+  },
+  {
+   "name": "wire_width",
+   "fusion_expression": "5 mm",
+   "freecad_expression": "5 mm",
+   "value": 5.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter wire_w = wire_w_Ref"
+  },
+  {
+   "name": "bolt_head_d",
+   "fusion_expression": "8.8 mm",
+   "freecad_expression": "8.8 mm",
+   "value": 8.8,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "source": "Fusion user parameter bolt_head_d",
+   "role_note": "mechanics are added by build_mech_150.py"
+  },
+  {
+   "name": "offset_core",
+   "fusion_expression": "0.006 mm",
+   "freecad_expression": "0.006 mm",
+   "value": 0.006,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "num_wires_per_slot",
+   "fusion_expression": "14",
+   "freecad_expression": "14",
+   "value": 14.0,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter wire_N = 14"
+  },
+  {
+   "name": "dov_d",
+   "fusion_expression": "3 mm",
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "wire_beng_r",
+   "fusion_expression": "2.5 mm",
+   "freecad_expression": "2.5 mm",
+   "value": 2.5,
+   "unit": "mm",
+   "comment": "Coil end-turn bend radius: a constant 2.5 mm in the 150 Fusion model (a formula in the CIANO14 40 / 85 models)",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter wire_beng_r = 2.5 mm"
+  },
+  {
+   "name": "bolt_h",
+   "fusion_expression": "3 mm",
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "bolt_d",
+   "fusion_expression": "2.5 mm",
+   "freecad_expression": "2.5 mm",
+   "value": 2.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "source": "Fusion user parameter bolt_d",
+   "role_note": "mechanics are added by build_mech_150.py"
+  },
+  {
+   "name": "offset_tooth",
+   "fusion_expression": "0.009 mm",
+   "freecad_expression": "0.009 mm",
+   "value": 0.009,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "tooth_r",
+   "fusion_expression": "wire_beng_r - 0.5 mm",
+   "freecad_expression": "wire_beng_r - 0.5 mm",
+   "value": 2.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "reference value from the Fusion model, not used by any feature",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "AWG",
+   "fusion_expression": "5.8 mm + 0.2 mm",
+   "freecad_expression": "5.8 mm + 0.2 mm",
+   "value": 6.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "offset_rotor",
+   "fusion_expression": "0.045 mm",
+   "freecad_expression": "0.045 mm",
+   "value": 0.045,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter offset_rotor = 0.045 mm"
+  },
+  {
+   "name": "offset_bearing",
+   "fusion_expression": "0.04 mm",
+   "freecad_expression": "0.04 mm",
+   "value": 0.04,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "offset_radiator",
+   "fusion_expression": "0.15 mm",
+   "freecad_expression": "0.15 mm",
+   "value": 0.15,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "offset_holder",
+   "fusion_expression": "0.08 mm",
+   "freecad_expression": "0.08 mm",
+   "value": 0.08,
+   "unit": "mm",
+   "comment": "",
+   "role": "info",
+   "role_note": "Fusion user parameter that no feature of the motor uses (checked 2026-10-12)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "coil_w",
+   "fusion_expression": "wire_width + insulation_thickness * 2 + wire_spacing_x",
+   "freecad_expression": "wire_width + insulation_thickness * 2 + wire_spacing_x",
+   "value": 5.4,
+   "unit": "mm",
+   "comment": "",
+   "role": "derived",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "wire_spacing_x",
+   "fusion_expression": "0.1 mm",
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter wire_dist_x = wire_dist_Ref"
+  },
+  {
+   "name": "stator_fillet_r",
+   "fusion_expression": "3.5 mm",
+   "freecad_expression": "3.5 mm",
+   "value": 3.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter stator_r = stator_r_Ref"
+  },
+  {
+   "name": "magnet_up_gap",
+   "fusion_expression": "0.5 mm",
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter mag_sh = mag_sh_Ref"
+  },
+  {
+   "name": "rotor_hole",
+   "fusion_expression": "0.6",
+   "freecad_expression": "0.6",
+   "value": 0.6,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter mag_hole = mag_hole_Ref"
+  },
+  {
+   "name": "tooth2_width",
+   "fusion_expression": "4.1 mm",
+   "freecad_expression": "4.1 mm",
+   "value": 4.1,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter tooth2_w = tooth2_w_Ref"
+  },
+  {
+   "name": "cut_width",
+   "fusion_expression": "4 mm",
+   "freecad_expression": "4 mm",
+   "value": 4.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter cut_down = cut_down_Ref"
+  },
+  {
+   "name": "magnet_down_height",
+   "fusion_expression": "1.6 mm",
+   "freecad_expression": "1.6 mm",
+   "value": 1.6,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter mag_down_h = mag_down_h_Ref"
+  },
+  {
+   "name": "mag_step",
+   "fusion_expression": "5 mm",
+   "freecad_expression": "5 mm",
+   "value": 5.0,
+   "unit": "mm",
+   "comment": "Axial magnet slice length (Fusion mag_step = 5 mm: the magnet is 7 slices of 5 mm along the stack)",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter mag_step = 5 mm"
+  },
+  {
+   "name": "num_poles_per_segment",
+   "fusion_expression": "7",
+   "freecad_expression": "7",
+   "value": 7.0,
+   "unit": "",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion angle_mag = 360 / (N1 * 7): the 7 is a literal in the expression"
+  },
+  {
+   "name": "prop_D",
+   "fusion_expression": "2540.00 mm",
+   "freecad_expression": "2540.00 mm",
+   "value": 2540.0,
+   "unit": "mm",
+   "comment": "propeller diameter",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "prop_pitch",
+   "fusion_expression": "1270.00 mm",
+   "freecad_expression": "1270.00 mm",
+   "value": 1270.0,
+   "unit": "mm",
+   "comment": "geometric pitch",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "hub_D",
+   "fusion_expression": "400.00 mm",
+   "freecad_expression": "400.00 mm",
+   "value": 400.0,
+   "unit": "mm",
+   "comment": "hub diameter",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "hub_H",
+   "fusion_expression": "160.00 mm",
+   "freecad_expression": "160.00 mm",
+   "value": 160.0,
+   "unit": "mm",
+   "comment": "hub height",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "bore_D",
+   "fusion_expression": "80.00 mm",
+   "freecad_expression": "80.00 mm",
+   "value": 80.0,
+   "unit": "mm",
+   "comment": "shaft bore",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "bolt_PCD",
+   "fusion_expression": "250.00 mm",
+   "freecad_expression": "250.00 mm",
+   "value": 250.0,
+   "unit": "mm",
+   "comment": "bolt circle dia",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "bolt_D",
+   "fusion_expression": "32.00 mm",
+   "freecad_expression": "32.00 mm",
+   "value": 32.0,
+   "unit": "mm",
+   "comment": "bolt hole dia",
+   "role": "foreign",
+   "role_note": "pasted propeller block of another design",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "stator_fillet_r1",
+   "fusion_expression": "1 mm",
+   "freecad_expression": "1 mm",
+   "value": 1.0,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "source": "Fusion CIANO28 150 parameter stator_r1 = stator_r1_Ref"
+  },
+  {
+   "name": "rotor_fill_r",
+   "fusion_expression": "0.5 mm",
+   "freecad_expression": "0.5 mm",
+   "value": 0.5,
+   "unit": "mm",
+   "comment": "",
+   "role": "input",
+   "role_note": "Fusion Fillet7: rounds the rotor key edges",
+   "source": "die.yaml rotor_fill_r 0.5 = Fusion Rotor/Fillet7 (rotor key edges)"
+  },
+  {
+   "name": "num_slots_per_segment",
+   "fusion_expression": "6",
+   "freecad_expression": "6",
+   "value": 6.0,
+   "unit": "",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "unsupported",
+   "role_note": "template has 6 slots (3 wound teeth) per segment; angle_wire = 360/(num_seg*6) as in Fusion",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "shaft_height",
+   "fusion_expression": "2 mm",
+   "freecad_expression": "2 mm",
+   "value": 2.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "info",
+   "role_note": "mechanics are added by build_mech_150.py",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "sleeve_thickness",
+   "fusion_expression": "0 mm",
+   "freecad_expression": "0 mm",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "unsupported",
+   "role_note": "no rotor sleeve (must be 0)",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  },
+  {
+   "name": "stator_diameter",
+   "fusion_expression": "150 mm",
+   "freecad_expression": "150 mm",
+   "value": 150.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "input",
+   "source": "stator_up_r = motor_d_Ref / 2 = 75 mm (Fusion), = die.yaml stator_diameter"
+  },
+  {
+   "name": "magnet_lamination",
+   "fusion_expression": "0 mm",
+   "freecad_expression": "0 mm",
+   "value": 0.0,
+   "unit": "mm",
+   "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
+   "role": "info",
+   "role_note": "sim-only loss-model slice length (die.yaml magnet_lamination 10 mm); the CAD slice is mag_step",
+   "source": "Fusion CIANO28 150 (read 2026-10-16)"
+  }
+ ],
+ "named_parameters_sketch3": [],
+ "named_parameters_active_part": [
+  {
+   "name": "coil_straight_len",
+   "source": "owner rule 2026-10-13 (Coil/Extrude1)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length + 1 mm",
+   "value": 36.0,
+   "unit": "mm",
+   "comment": "Straight coil length = Coil/Extrude1 'stator_w + 1 mm' (36 mm at motor_length 35)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (owner rule 2026-10-13)"
+  },
+  {
+   "name": "coil_straight_extra",
+   "source": "Coil/Extrude1",
+   "freecad_expression": "coil_straight_len - motor_length",
+   "value": 1.0,
+   "unit": "mm",
+   "comment": "Coil straight legs stick out of the stack by this much in total (= coil_straight_len - motor_length = 1 mm, 0.5 mm per side)",
+   "role": "info",
+   "role_note": "read by the template code (zend, gate), not by a feature expression; derived from coil_straight_len"
+  },
+  {
+   "name": "coil_bend_axis_dx",
+   "source": "Coil/Sketch1 L1/L3",
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - wire_beng_r",
+   "value": 2.6,
+   "unit": "mm",
+   "comment": "x of the two end-turn bend axes (+-), = half the straight bridge between the 90-deg bends (Coil/Sketch1 L1/L3)",
+   "role": "derived"
+  },
+  {
+   "name": "coil_lead_ext",
+   "source": "Coil/Extrude6",
+   "freecad_expression": "8 mm",
+   "value": 8.0,
+   "unit": "mm",
+   "comment": "Leads: leg extension beyond the straight end (-z) = Coil/Extrude6 8 mm",
+   "role": "input"
+  },
+  {
+   "name": "coil_lead_len",
+   "source": "Coil/Extrude7",
+   "freecad_expression": "12 mm",
+   "value": 12.0,
+   "unit": "mm",
+   "comment": "Leads: stub length = Coil/Extrude7 12 mm (lead end z -38 = -(18 + 8 + 12))",
+   "role": "input"
+  },
+  {
+   "name": "magnet_edge_fillet",
+   "source": "Magnet/Fillet1",
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "Magnet axial-edge fillet in Fusion (no volume effect in the open model; not modelled)",
+   "role": "info",
+   "role_note": "magnet edge fillet not modelled (no volume effect in Fusion)"
+  },
+  {
+   "name": "core_sectors",
+   "fusion_expression": null,
+   "freecad_expression": "num_seg * 3",
+   "value": 12.0,
+   "unit": "",
+   "comment": "Stator sectors = 3 phases x num_seg (CoreSectors polar pattern)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_count",
+   "fusion_expression": null,
+   "freecad_expression": "core_sectors",
+   "value": 12.0,
+   "unit": "",
+   "comment": "Coil copies = one wound tooth per stator sector (Coils array)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "rotor_poles",
+   "fusion_expression": null,
+   "freecad_expression": "num_seg * num_poles_per_segment",
+   "value": 28.0,
+   "unit": "",
+   "comment": "Rotor poles = num_seg x num_poles_per_segment (RotorPoles polar pattern)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "magnet_count",
+   "fusion_expression": null,
+   "freecad_expression": "rotor_poles",
+   "value": 28.0,
+   "unit": "",
+   "comment": "Magnet copies = one per rotor pole (MagnetArray)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_pitch",
+   "fusion_expression": null,
+   "freecad_expression": "wire_height + wire_spacing_y",
+   "value": 0.73,
+   "unit": "mm",
+   "comment": "Layer pitch of the winding = wire_height + wire_spacing_y",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_copies",
+   "fusion_expression": null,
+   "freecad_expression": "num_wires_per_slot - 1",
+   "value": 13.0,
+   "unit": "",
+   "comment": "Layers made by the pattern (the last layer is added separately) = num_wires_per_slot - 1 (CoilLayers)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_layer_span",
+   "fusion_expression": null,
+   "freecad_expression": "(num_wires_per_slot - 2) * coil_layer_pitch",
+   "value": 8.76,
+   "unit": "mm",
+   "comment": "Pattern length of CoilLayers: first to last patterned layer",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_leg_length",
+   "fusion_expression": null,
+   "freecad_expression": "coil_straight_len",
+   "value": 36.0,
+   "unit": "mm",
+   "comment": "Straight coil leg length = coil_straight_len = motor_length + 1 mm",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_x_in",
+   "fusion_expression": null,
+   "freecad_expression": "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2",
+   "value": 5.1,
+   "unit": "mm",
+   "comment": "Inner x of a coil leg (centre line of the tooth to the wire)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_top_y",
+   "fusion_expression": null,
+   "freecad_expression": "stator_up_r - core_thickness - insulation_thickness - wire_spacing_y / 2",
+   "value": 70.385,
+   "unit": "mm",
+   "comment": "y of the top of layer 0 (under the yoke)",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_bridge_length",
+   "fusion_expression": null,
+   "freecad_expression": "2 * coil_bend_axis_dx",
+   "value": 5.2,
+   "unit": "mm",
+   "comment": "Straight bridge of the end turn between the two bend axes",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "coil_lead_total",
+   "fusion_expression": null,
+   "freecad_expression": "coil_lead_ext + coil_lead_len",
+   "value": 20.0,
+   "unit": "mm",
+   "comment": "Lead length beyond the straight leg = coil_lead_ext + coil_lead_len",
+   "role": "derived",
+   "role_note": "named derived row used by a feature expression (no Fusion parameter of this name)"
+  },
+  {
+   "name": "rotor_key_count",
+   "source": "CIANO28 150 Fusion read 2026-10-16",
+   "fusion_expression": null,
+   "freecad_expression": "6",
+   "value": 6.0,
+   "unit": "",
+   "comment": "Rotor keys in the bore: Fusion Rotor/C-Pattern3 = 6 (one on +Y, every 60 deg)",
+   "role": "input",
+   "role_note": "Rotor keys in the bore: Fusion Rotor/C-Pattern3 = 6 (one on +Y, every 60 deg)"
+  },
+  {
+   "name": "rotor_key_w",
+   "source": "CIANO28 150 Fusion read 2026-10-16",
+   "fusion_expression": null,
+   "freecad_expression": "3.5 mm",
+   "value": 3.5,
+   "unit": "mm",
+   "comment": "Rotor key width: Rotor/Extrude5 profile x = +-1.75",
+   "role": "input",
+   "role_note": "Rotor key width: Rotor/Extrude5 profile x = +-1.75"
+  },
+  {
+   "name": "rotor_key_h",
+   "source": "CIANO28 150 Fusion read 2026-10-16",
+   "fusion_expression": null,
+   "freecad_expression": "1.6 mm",
+   "value": 1.6,
+   "unit": "mm",
+   "comment": "Rotor key height below the bore radius (tip y = 39.3 at bore r 40.9)",
+   "role": "input",
+   "role_note": "Rotor key height below the bore radius (tip y = 39.3 at bore r 40.9)"
+  },
+  {
+   "name": "rotor_key_offset",
+   "source": "CIANO28 150 Fusion read 2026-10-16",
+   "fusion_expression": null,
+   "freecad_expression": "0.02 mm",
+   "value": 0.02,
+   "unit": "mm",
+   "comment": "Fusion OffsetFaces6: key sides and tip moved inwards by this (faces x = +-1.73)",
+   "role": "input",
+   "role_note": "Fusion OffsetFaces6: key sides and tip moved inwards by this (faces x = +-1.73)"
+  },
+  {
+   "name": "magnet_lower_fill_r",
+   "source": "CIANO28 150 Fusion read 2026-10-16",
+   "fusion_expression": null,
+   "freecad_expression": "0.2 mm",
+   "value": 0.2,
+   "unit": "mm",
+   "comment": "Magnet bottom and knee fillets (Fusion Magnet/Sketch1 arcs r 0.2); the top fillets use magnet_fill_radius (2 mm)",
+   "role": "input",
+   "role_note": "Magnet bottom and knee fillets (Fusion Magnet/Sketch1 arcs r 0.2); the top fillets use magnet_fill_radius (2 mm)"
+  },
+  {
+   "name": "magnet_slices",
+   "source": "CIANO28 150 Fusion read 2026-10-16",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / mag_step",
+   "value": 7.0,
+   "unit": "",
+   "comment": "Number of magnet slices along the stack (Fusion Magnet R-Pattern1: 7 bodies of 5 mm)",
+   "role": "derived",
+   "role_note": "Number of magnet slices along the stack (Fusion Magnet R-Pattern1: 7 bodies of 5 mm)"
+  }
+ ],
+ "named_parameters_mechanics": [
+  {
+   "name": "rotor_holder1_pattern_n",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "12",
+   "value": 12.0,
+   "unit": "",
+   "comment": "Rotor_holder1: pattern count of the sector rings (Fusion: 12-fold pockets / spokes)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_rot",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0 deg",
+   "value": 0.0,
+   "unit": "deg",
+   "comment": "Rotor_holder1: turn of the sector rings from +Y",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_1",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "15 mm",
+   "value": 15.0,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 1 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_1",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "27.5 mm",
+   "value": 27.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 1 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_1",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 1 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_1",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 19.7 mm",
+   "value": 37.2,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 1 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_1",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9494",
+   "value": 0.9494,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 1 angular fill (volume 32482.7 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_2",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "15 mm",
+   "value": 15.0,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 2 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_2",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "27.5 mm",
+   "value": 27.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 2 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_2",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 19.7 mm",
+   "value": 37.2,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 2 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_2",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 20.2 mm",
+   "value": 37.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 2 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_2",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9237",
+   "value": 0.9237,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 2 angular fill (volume 770.8 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_3",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "27.5 mm",
+   "value": 27.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 3 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_3",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "30 mm",
+   "value": 30.0,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 3 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_3",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 3 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_3",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 7.7 mm",
+   "value": 25.2,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 3 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_4",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "30 mm",
+   "value": 30.0,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 4 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_4",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.4 mm",
+   "value": 35.4,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 4 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_4",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 4 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_4",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 1.2 mm",
+   "value": 18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 4 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_4",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3643",
+   "value": 0.3643,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 4 angular fill (volume 808.4 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_5",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.4 mm",
+   "value": 35.4,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 5 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_5",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.55 mm",
+   "value": 37.55,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 5 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_5",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 10 mm",
+   "value": 7.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 5 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_5",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 5 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_5",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.1817",
+   "value": 0.1817,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 5 angular fill (volume 823.7 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_6",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.4 mm",
+   "value": 35.4,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 6 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_6",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.55 mm",
+   "value": 37.55,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 6 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_6",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 6 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_6",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 1.2 mm",
+   "value": 18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 6 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_6",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3177",
+   "value": 0.3177,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 6 angular fill (volume 313.1 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_7",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.55 mm",
+   "value": 37.55,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 7 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_7",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.9 mm",
+   "value": 37.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 7 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_7",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 10 mm",
+   "value": 7.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 7 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_7",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 7 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_7",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.31",
+   "value": 0.31,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 7 angular fill (volume 236.6 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_8",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.55 mm",
+   "value": 37.55,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 8 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_8",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.9 mm",
+   "value": 37.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 8 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_8",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 8 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_8",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 8 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_8",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3444",
+   "value": 0.3444,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 8 angular fill (volume 22.9 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_9",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.55 mm",
+   "value": 37.55,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 9 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_9",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.9 mm",
+   "value": 37.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 9 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_9",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 9 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_9",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 1.2 mm",
+   "value": 18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 9 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_9",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3799",
+   "value": 0.3799,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 9 angular fill (volume 37.8 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_10",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.9 mm",
+   "value": 37.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 10 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_10",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 10 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_10",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 10 mm",
+   "value": 7.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 10 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_10",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 10 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_10",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.883",
+   "value": 0.883,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 10 angular fill (volume 5430.2 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_11",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.9 mm",
+   "value": 37.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 11 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_11",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 11 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_11",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 11 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_11",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 1.2 mm",
+   "value": 18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 11 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_11",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9623",
+   "value": 0.9623,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 11 angular fill (volume 710.1 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_12",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 12 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_12",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.9 mm",
+   "value": 40.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 12 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_12",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 10 mm",
+   "value": 7.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 12 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_12",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 12 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_12",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.8919",
+   "value": 0.8919,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 12 angular fill (volume 1047.9 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_13",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 13 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_13",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.9 mm",
+   "value": 40.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 13 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_13",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 0.8 mm",
+   "value": 16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 13 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_13",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 13 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_fill_13",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9169",
+   "value": 0.9169,
+   "unit": "",
+   "comment": "Rotor_holder1 ring 13 angular fill (volume 93.7 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_14",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 14 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_14",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.9 mm",
+   "value": 40.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 14 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_14",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 14 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_14",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 1.2 mm",
+   "value": 18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 14 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r0_15",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.9 mm",
+   "value": 40.9,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 15 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_r1_15",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "47.1 mm",
+   "value": 47.1,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 15 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z0_15",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 15 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder1_z1_15",
+   "source": "Fusion Rotor_holder1 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 1.2 mm",
+   "value": 18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder1 ring 15 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_pattern_n",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "12",
+   "value": 12.0,
+   "unit": "",
+   "comment": "Rotor_holder2: pattern count of the sector rings (Fusion: 12-fold pockets / spokes)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_rot",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0 deg",
+   "value": 0.0,
+   "unit": "deg",
+   "comment": "Rotor_holder2: turn of the sector rings from +Y",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_1",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "15 mm",
+   "value": 15.0,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 1 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_1",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "24.5 mm",
+   "value": 24.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 1 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_1",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 17.2 mm)",
+   "value": -34.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 1 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_1",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 14.7 mm)",
+   "value": -32.2,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 1 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_1",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9828",
+   "value": 0.9828,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 1 angular fill (volume 2896.5 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_2",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "24.5 mm",
+   "value": 24.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 2 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_2",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "27.5 mm",
+   "value": 27.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 2 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_2",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 18.2 mm)",
+   "value": -35.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 2 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_2",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 17.2 mm)",
+   "value": -34.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 2 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_2",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9562",
+   "value": 0.9562,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 2 angular fill (volume 468.6 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_3",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "24.5 mm",
+   "value": 24.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 3 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_3",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "27.5 mm",
+   "value": 27.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 3 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_3",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 17.2 mm)",
+   "value": -34.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 3 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_3",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 0.8 mm)",
+   "value": -16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 3 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_4",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "27.5 mm",
+   "value": 27.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 4 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_4",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "30 mm",
+   "value": 30.0,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 4 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_4",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 9.2 mm)",
+   "value": -26.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 4 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_4",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 0.8 mm)",
+   "value": -16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 4 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_5",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "30 mm",
+   "value": 30.0,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 5 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_5",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.4 mm",
+   "value": 35.4,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 5 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_5",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 1.2 mm)",
+   "value": -18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 5 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_5",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 0.8 mm)",
+   "value": -16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 5 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_5",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3643",
+   "value": 0.3643,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 5 angular fill (volume 808.4 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_6",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.4 mm",
+   "value": 35.4,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 6 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_6",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.87 mm",
+   "value": 37.87,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 6 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_6",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 1.2 mm)",
+   "value": -18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 6 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_6",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 0.8 mm)",
+   "value": -16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 6 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_6",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3335",
+   "value": 0.3335,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 6 angular fill (volume 379.2 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_7",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.4 mm",
+   "value": 35.4,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 7 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_7",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.87 mm",
+   "value": 37.87,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 7 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_7",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 0.8 mm)",
+   "value": -16.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 7 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_7",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 9 mm)",
+   "value": -8.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 7 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_7",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.208",
+   "value": 0.208,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 7 angular fill (volume 969.7 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_8",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.87 mm",
+   "value": 37.87,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 8 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_8",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 8 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_8",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 1.2 mm)",
+   "value": -18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 8 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_8",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2)",
+   "value": -17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 8 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_8",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9668",
+   "value": 0.9668,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 8 angular fill (volume 721.7 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_9",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "37.87 mm",
+   "value": 37.87,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 9 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_9",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 9 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_9",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2)",
+   "value": -17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 9 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_9",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 9 mm)",
+   "value": -8.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 9 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_9",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.8878",
+   "value": 0.8878,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 9 angular fill (volume 4970.8 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_10",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 10 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_10",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.9 mm",
+   "value": 40.9,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 10 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_10",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 1.2 mm)",
+   "value": -18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 10 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_10",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2)",
+   "value": -17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 10 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_11",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 11 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_11",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.9 mm",
+   "value": 40.9,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 11 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_11",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2)",
+   "value": -17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 11 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_11",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 8.5 mm)",
+   "value": -9.0,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 11 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_11",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9169",
+   "value": 0.9169,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 11 angular fill (volume 995.3 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_12",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.4 mm",
+   "value": 40.4,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 12 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_12",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.9 mm",
+   "value": 40.9,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 12 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_12",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 8.5 mm)",
+   "value": -9.0,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 12 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_12",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 9 mm)",
+   "value": -8.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 12 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_fill_12",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.4577",
+   "value": 0.4577,
+   "unit": "",
+   "comment": "Rotor_holder2 ring 12 angular fill (volume 29.2 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r0_13",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "40.9 mm",
+   "value": 40.9,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 13 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_r1_13",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "47.1 mm",
+   "value": 47.1,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 13 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z0_13",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 1.2 mm)",
+   "value": -18.7,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 13 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "rotor_holder2_z1_13",
+   "source": "Fusion Rotor_holder2 occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2)",
+   "value": -17.5,
+   "unit": "mm",
+   "comment": "Rotor_holder2 ring 13 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_pattern_n",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "12",
+   "value": 12.0,
+   "unit": "",
+   "comment": "Stator_holder: pattern count of the sector rings (Fusion: 12-fold pockets / spokes)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_rot",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0 deg",
+   "value": 0.0,
+   "unit": "deg",
+   "comment": "Stator_holder: turn of the sector rings from +Y",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r0_1",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "34.5 mm",
+   "value": 34.5,
+   "unit": "mm",
+   "comment": "Stator_holder ring 1 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r1_1",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.96 mm",
+   "value": 35.96,
+   "unit": "mm",
+   "comment": "Stator_holder ring 1 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z0_1",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 16.7 mm",
+   "value": 34.2,
+   "unit": "mm",
+   "comment": "Stator_holder ring 1 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z1_1",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 18.2 mm",
+   "value": 35.7,
+   "unit": "mm",
+   "comment": "Stator_holder ring 1 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r0_2",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.96 mm",
+   "value": 35.96,
+   "unit": "mm",
+   "comment": "Stator_holder ring 2 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r1_2",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "38.5 mm",
+   "value": 38.5,
+   "unit": "mm",
+   "comment": "Stator_holder ring 2 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z0_2",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 7.7 mm",
+   "value": 25.2,
+   "unit": "mm",
+   "comment": "Stator_holder ring 2 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z1_2",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 18.2 mm",
+   "value": 35.7,
+   "unit": "mm",
+   "comment": "Stator_holder ring 2 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r0_3",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "38.5 mm",
+   "value": 38.5,
+   "unit": "mm",
+   "comment": "Stator_holder ring 3 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r1_3",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "60.6 mm",
+   "value": 60.6,
+   "unit": "mm",
+   "comment": "Stator_holder ring 3 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z0_3",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 9.5 mm",
+   "value": 27.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 3 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z1_3",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 14.5 mm",
+   "value": 32.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 3 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_fill_3",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3853",
+   "value": 0.3853,
+   "unit": "",
+   "comment": "Stator_holder ring 3 angular fill (volume 13255.2 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r0_4",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "60.6 mm",
+   "value": 60.6,
+   "unit": "mm",
+   "comment": "Stator_holder ring 4 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r1_4",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder ring 4 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z0_4",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Stator_holder ring 4 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z1_4",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 9.5 mm",
+   "value": 27.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 4 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_fill_4",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.0246",
+   "value": 0.0246,
+   "unit": "",
+   "comment": "Stator_holder ring 4 angular fill (volume 1120.4 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r0_5",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "60.6 mm",
+   "value": 60.6,
+   "unit": "mm",
+   "comment": "Stator_holder ring 5 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r1_5",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder ring 5 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z0_5",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 9.5 mm",
+   "value": 27.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 5 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z1_5",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 14.5 mm",
+   "value": 32.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 5 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_fill_5",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.2897",
+   "value": 0.2897,
+   "unit": "",
+   "comment": "Stator_holder ring 5 angular fill (volume 6944.4 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r0_6",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder ring 6 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r1_6",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "75 mm",
+   "value": 75.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 6 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z0_6",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 - 2 mm",
+   "value": 15.5,
+   "unit": "mm",
+   "comment": "Stator_holder ring 6 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z1_6",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Stator_holder ring 6 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_fill_6",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.2194",
+   "value": 0.2194,
+   "unit": "",
+   "comment": "Stator_holder ring 6 angular fill (volume 588.1 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r0_7",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder ring 7 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r1_7",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "75 mm",
+   "value": 75.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 7 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z0_7",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2",
+   "value": 17.5,
+   "unit": "mm",
+   "comment": "Stator_holder ring 7 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z1_7",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 9.5 mm",
+   "value": 27.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 7 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_fill_7",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9655",
+   "value": 0.9655,
+   "unit": "",
+   "comment": "Stator_holder ring 7 angular fill (volume 12292.4 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r0_8",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder ring 8 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_r1_8",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "75 mm",
+   "value": 75.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 8 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z0_8",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 9.5 mm",
+   "value": 27.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 8 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_z1_8",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 14.5 mm",
+   "value": 32.0,
+   "unit": "mm",
+   "comment": "Stator_holder ring 8 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_fill_8",
+   "source": "Fusion Stator_holder occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.7945",
+   "value": 0.7945,
+   "unit": "",
+   "comment": "Stator_holder ring 8 angular fill (volume 5323.8 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_pattern_n",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "12",
+   "value": 12.0,
+   "unit": "",
+   "comment": "Stator_holder_back: pattern count of the sector rings (Fusion: 12-fold pockets / spokes)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_rot",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "15 deg",
+   "value": 15.0,
+   "unit": "deg",
+   "comment": "Stator_holder_back: turn of the sector rings from +Y",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_1",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "28.5 mm",
+   "value": 28.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 1 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_1",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "30.46 mm",
+   "value": 30.46,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 1 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_1",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 22 mm)",
+   "value": -39.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 1 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_1",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 19.5 mm)",
+   "value": -37.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 1 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_2",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "30.46 mm",
+   "value": 30.46,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 2 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_2",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "34.5 mm",
+   "value": 34.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 2 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_2",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 22 mm)",
+   "value": -39.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 2 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_2",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 19.5 mm)",
+   "value": -37.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 2 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_2",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9754",
+   "value": 0.9754,
+   "unit": "",
+   "comment": "Stator_holder_back ring 2 angular fill (volume 2010.5 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_3",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "34.5 mm",
+   "value": 34.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 3 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_3",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.96 mm",
+   "value": 35.96,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 3 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_3",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 23 mm)",
+   "value": -40.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 3 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_3",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 18.2 mm)",
+   "value": -35.7,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 3 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_4",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.96 mm",
+   "value": 35.96,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 4 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_4",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "44 mm",
+   "value": 44.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 4 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_4",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 23 mm)",
+   "value": -40.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 4 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_4",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 9.5 mm)",
+   "value": -27.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 4 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_4",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9603",
+   "value": 0.9603,
+   "unit": "",
+   "comment": "Stator_holder_back ring 4 angular fill (volume 26183.0 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_5",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "35.96 mm",
+   "value": 35.96,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 5 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_5",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "44 mm",
+   "value": 44.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 5 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_5",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 9.5 mm)",
+   "value": -27.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 5 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_5",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 9.2 mm)",
+   "value": -26.7,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 5 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_5",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9832",
+   "value": 0.9832,
+   "unit": "",
+   "comment": "Stator_holder_back ring 5 angular fill (volume 595.7 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_6",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "44 mm",
+   "value": 44.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 6 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_6",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "60.6 mm",
+   "value": 60.6,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 6 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_6",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 23 mm)",
+   "value": -40.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 6 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_6",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 18 mm)",
+   "value": -35.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 6 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_6",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.4394",
+   "value": 0.4394,
+   "unit": "",
+   "comment": "Stator_holder_back ring 6 angular fill (volume 11984.5 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_7",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "60.6 mm",
+   "value": 60.6,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 7 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_7",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 7 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_7",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 23 mm)",
+   "value": -40.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 7 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_7",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 18 mm)",
+   "value": -35.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 7 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_7",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.2791",
+   "value": 0.2791,
+   "unit": "",
+   "comment": "Stator_holder_back ring 7 angular fill (volume 6690.3 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_8",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "60.6 mm",
+   "value": 60.6,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 8 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_8",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 8 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_8",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 15 mm)",
+   "value": -32.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 8 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_8",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2)",
+   "value": -17.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 8 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_8",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.0271",
+   "value": 0.0271,
+   "unit": "",
+   "comment": "Stator_holder_back ring 8 angular fill (volume 1948.8 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_9",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 9 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_9",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "75 mm",
+   "value": 75.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 9 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_9",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 23 mm)",
+   "value": -40.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 9 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_9",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 15 mm)",
+   "value": -32.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 9 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_9",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.7212",
+   "value": 0.7212,
+   "unit": "",
+   "comment": "Stator_holder_back ring 9 angular fill (volume 7732.3 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_10",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 10 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_10",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "75 mm",
+   "value": 75.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 10 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_10",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 15 mm)",
+   "value": -32.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 10 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_10",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2)",
+   "value": -17.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 10 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_10",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.9752",
+   "value": 0.9752,
+   "unit": "",
+   "comment": "Stator_holder_back ring 10 angular fill (volume 19604.0 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r0_11",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "72.1 mm",
+   "value": 72.1,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 11 r0",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_r1_11",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "75 mm",
+   "value": 75.0,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 11 r1",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z0_11",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2)",
+   "value": -17.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 11 lower z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_z1_11",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 - 2 mm)",
+   "value": -15.5,
+   "unit": "mm",
+   "comment": "Stator_holder_back ring 11 upper z",
+   "role": "mechanics"
+  },
+  {
+   "name": "stator_holder_back_fill_11",
+   "source": "Fusion Stator_holder_back occupancy (measured on the body, tools/fc_scripts/occupancy.py)",
+   "fusion_expression": null,
+   "freecad_expression": "0.2289",
+   "value": 0.2289,
+   "unit": "",
+   "comment": "Stator_holder_back ring 11 angular fill (volume 613.5 mm3 of the Fusion body)",
+   "role": "mechanics"
+  },
+  {
+   "name": "holder_face_z",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 7.7 mm",
+   "value": 25.2,
+   "unit": "mm",
+   "comment": "Front bearing inner face z (25.2): occurrence 61811-2rz:1",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_out_z",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "holder_face_z + bearing_B",
+   "value": 34.2,
+   "unit": "mm",
+   "comment": "Front bearing outer face z (34.2)",
+   "role": "info"
+  },
+  {
+   "name": "bearing_back_z0",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "-(motor_length / 2 + 18.2 mm)",
+   "value": -35.7,
+   "unit": "mm",
+   "comment": "Back bearing: local z = 0 face at z = -35.7 (occurrence 61811-2rz:2)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_d",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "55 mm",
+   "value": 55.0,
+   "unit": "mm",
+   "comment": "Bearing bore (inner ring r 27.5)",
+   "role": "input"
+  },
+  {
+   "name": "bearing_D",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "72 mm",
+   "value": 72.0,
+   "unit": "mm",
+   "comment": "Bearing outer diameter (r 36.0)",
+   "role": "input"
+  },
+  {
+   "name": "bearing_B",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "9 mm",
+   "value": 9.0,
+   "unit": "mm",
+   "comment": "Bearing width (x 0..9)",
+   "role": "input"
+  },
+  {
+   "name": "bearing_pitch_r",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "(bearing_d + bearing_D) / 4",
+   "value": 31.75,
+   "unit": "mm",
+   "comment": "Ball pitch radius (31.75 = torus major radius of the balls)",
+   "role": "derived"
+  },
+  {
+   "name": "bearing_ball_d",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "4.762 mm",
+   "value": 4.762,
+   "unit": "mm",
+   "comment": "Ball diameter (torus minor 2.381)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_ball_count",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "22",
+   "value": 22.0,
+   "unit": "",
+   "comment": "22 balls (Body5 volume 1243.94 / 56.54)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_inner_land_d",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "60.3 mm",
+   "value": 60.3,
+   "unit": "mm",
+   "comment": "Inner ring land diameter (cylinders r 30.15)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_outer_land_d",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "66.4 mm",
+   "value": 66.4,
+   "unit": "mm",
+   "comment": "Outer ring land diameter (cylinders r 33.2)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_edge_r",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3 mm",
+   "value": 0.3,
+   "unit": "mm",
+   "comment": "Ring corner radius (torus minor 0.3)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_notch_r",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "34.34 mm",
+   "value": 34.34,
+   "unit": "mm",
+   "comment": "RZ shield notch in the outer ring: radius (cylinders r 34.34)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_notch_t",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.228 mm",
+   "value": 0.228,
+   "unit": "mm",
+   "comment": "Shield notch depth",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_groove_r",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.456 mm",
+   "value": 0.456,
+   "unit": "mm",
+   "comment": "Shield groove radius (torus minor 0.456)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_cone_dz",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.215 mm",
+   "value": 0.215,
+   "unit": "mm",
+   "comment": "Cone from the groove back to the land (axial 1.133 -> 1.348)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_ri",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "30.272 mm",
+   "value": 30.272,
+   "unit": "mm",
+   "comment": "Shield inner radius (cylinder r 30.272)",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_rm",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "31.094 mm",
+   "value": 31.094,
+   "unit": "mm",
+   "comment": "Shield: radius where the lip meets the flange",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_ro",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "34.83 mm",
+   "value": 34.83,
+   "unit": "mm",
+   "comment": "Shield outer radius",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_z0",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.228 mm",
+   "value": 0.228,
+   "unit": "mm",
+   "comment": "Shield axial start",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_z1",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "1.824 mm",
+   "value": 1.824,
+   "unit": "mm",
+   "comment": "Shield axial end",
+   "role": "mechanics"
+  },
+  {
+   "name": "bearing_seal_t",
+   "source": "Fusion bearing 61811-2rz (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.817 mm",
+   "value": 0.817,
+   "unit": "mm",
+   "comment": "Shield flange thickness: volume-matching value of the L section (883.4 mm3)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_bolt_r",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "72.2 mm",
+   "value": 72.2,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): bolt circle radius (occurrence transforms)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_shank_d",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "3.062 mm",
+   "value": 3.062,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): shank diameter (volume-equivalent of the stepped shank r 1.5 / 1.554 and the knurled head: body volume 427.865 mm3)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_head_d",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "5.5 mm",
+   "value": 5.5,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): head diameter (r 2.75)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_head_h",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): head height",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_head_fillet",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.15 mm",
+   "value": 0.15,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): head edge fillet / chamfer size",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_tip_chamfer",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.32 mm",
+   "value": 0.32,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): tip chamfer",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_socket_af",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "2.5 mm",
+   "value": 2.5,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): hex socket across flats (flat planes at +-1.25)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_socket_depth",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "2 mm",
+   "value": 2.0,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): hex socket depth from the head top",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_socket_point",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "170 deg",
+   "value": 170.0,
+   "unit": "deg",
+   "comment": "91290A137 socket head screw (holder bolts): socket bottom cone (planes 5 deg off flat)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_flange_z",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 11 mm",
+   "value": 28.5,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): head underside z (follows the stack)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_length",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "50 mm",
+   "value": 50.0,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): length under the head",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_head_top_z",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "screwA_flange_z + screwA_head_h",
+   "value": 31.5,
+   "unit": "mm",
+   "comment": "91290A137 socket head screw (holder bolts): head top z",
+   "role": "derived"
+  },
+  {
+   "name": "screwA_angle",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "15 deg",
+   "value": 15.0,
+   "unit": "deg",
+   "comment": "91290A137 socket head screw (holder bolts): turn of the +Y screw (the set is azimuth 15 + 30 k)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_count",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "12",
+   "value": 12.0,
+   "unit": "",
+   "comment": "91290A137 socket head screw (holder bolts): count",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwA_flip",
+   "source": "Fusion occurrences of 91290A137 socket head screw (holder bolts) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0",
+   "value": 0.0,
+   "unit": "",
+   "comment": "91290A137 socket head screw (holder bolts): 1 = head down (axis -z, turned 180 deg about the (1,1,0) axis)",
+   "role": "info"
+  },
+  {
+   "name": "screwB_bolt_r",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "38 mm",
+   "value": 38.0,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): bolt circle radius (occurrence transforms)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_shank_d",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "2.928 mm",
+   "value": 2.928,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): shank diameter (Fusion r 1.464, volume-calibrated: body volume 292.207 mm3)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_head_d",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "5.5 mm",
+   "value": 5.5,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): head diameter (r 2.75)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_head_h",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): head height",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_head_fillet",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3 mm",
+   "value": 0.3,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): head edge fillet / chamfer size",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_tip_chamfer",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): tip chamfer",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_socket_af",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "2.5 mm",
+   "value": 2.5,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): hex socket across flats (flat planes at +-1.25)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_socket_depth",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "1.3 mm",
+   "value": 1.3,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): hex socket depth from the head top",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_socket_point",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "170 deg",
+   "value": 170.0,
+   "unit": "deg",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): socket bottom cone (planes 5 deg off flat)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_flange_z",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 2.2 mm",
+   "value": 19.7,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): head underside z (follows the stack)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_length",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "34 mm",
+   "value": 34.0,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): length under the head",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_head_top_z",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "screwB_flange_z + screwB_head_h",
+   "value": 22.7,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): head top z",
+   "role": "derived"
+  },
+  {
+   "name": "screwB_angle",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "30 deg",
+   "value": 30.0,
+   "unit": "deg",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): turn of the +Y screw (the set is azimuth 0 + 60 k)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_count",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "6",
+   "value": 6.0,
+   "unit": "",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): count",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwB_flip",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0",
+   "value": 0.0,
+   "unit": "",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 30 (front): 1 = head down (axis -z, turned 180 deg about the (1,1,0) axis)",
+   "role": "info"
+  },
+  {
+   "name": "screwC_bolt_r",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "38 mm",
+   "value": 38.0,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): bolt circle radius (occurrence transforms)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_shank_d",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "2.928 mm",
+   "value": 2.928,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): shank diameter (Fusion r 1.464, volume-calibrated: body volume 103.801 mm3)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_head_d",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "5.5 mm",
+   "value": 5.5,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): head diameter (r 2.75)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_head_h",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "3 mm",
+   "value": 3.0,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): head height",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_head_fillet",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.3 mm",
+   "value": 0.3,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): head edge fillet / chamfer size",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_tip_chamfer",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "0.1 mm",
+   "value": 0.1,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): tip chamfer",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_socket_af",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "2.5 mm",
+   "value": 2.5,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): hex socket across flats (flat planes at +-1.25)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_socket_depth",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "1.3 mm",
+   "value": 1.3,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): hex socket depth from the head top",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_socket_point",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "170 deg",
+   "value": 170.0,
+   "unit": "deg",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): socket bottom cone (planes 5 deg off flat)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_flange_z",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "motor_length / 2 + 2.2 mm",
+   "value": 19.7,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): head underside z (follows the stack)",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_length",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "6 mm",
+   "value": 6.0,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): length under the head",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_head_top_z",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "screwC_flange_z + screwC_head_h",
+   "value": 22.7,
+   "unit": "mm",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): head top z",
+   "role": "derived"
+  },
+  {
+   "name": "screwC_angle",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "30 deg",
+   "value": 30.0,
+   "unit": "deg",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): turn of the +Y screw (the set is azimuth 0 + 60 k)",
+   "role": "info"
+  },
+  {
+   "name": "screwC_count",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "6",
+   "value": 6.0,
+   "unit": "",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): count",
+   "role": "mechanics"
+  },
+  {
+   "name": "screwC_flip",
+   "source": "Fusion occurrences of Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back) (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "1",
+   "value": 1.0,
+   "unit": "",
+   "comment": "Hexagon Socket Head Cap Screw DIN 912 M3 x 6 (back): 1 = head down (axis -z, turned 180 deg about the (1,1,0) axis)",
+   "role": "info"
+  },
+  {
+   "name": "board_outer_r",
+   "source": "Fusion Insulation Body142 (PCB occurrences)",
+   "fusion_expression": null,
+   "freecad_expression": "71.19 mm",
+   "value": 71.19,
+   "unit": "mm",
+   "comment": "Phase board outer radius (PCB 150 insulation layers: bbox +-71.19)",
+   "role": "mechanics"
+  },
+  {
+   "name": "board_inner_r",
+   "source": "Fusion PCB 150 layers (read 2026-10-16)",
+   "fusion_expression": null,
+   "freecad_expression": "45 mm",
+   "value": 45.0,
+   "unit": "mm",
+   "comment": "Phase board inner radius (envelope of the PCB inner cut-out; the layers carry pockets, only the ring envelope is kept)",
+   "role": "mechanics"
+  },
+  {
+   "name": "board_t",
+   "source": "Fusion PCB occurrences (Insulation z -28.2..; Null z -33.3)",
+   "fusion_expression": null,
+   "freecad_expression": "6.1 mm",
+   "value": 6.1,
+   "unit": "mm",
+   "comment": "Phase board stack thickness: 8 insulation layers + 6 copper layers, z -27.7..-33.8",
+   "role": "mechanics"
+  },
+  {
+   "name": "board_gap",
+   "source": "Fusion PCB occurrences vs Coil bodies",
+   "fusion_expression": null,
+   "freecad_expression": "1.7 mm",
+   "value": 1.7,
+   "unit": "mm",
+   "comment": "Board top face below the coil lead extension end (lead extension ends z -26, board top z -27.7)",
+   "role": "mechanics"
+  },
+  {
+   "name": "board_top_z",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "-(coil_leg_length / 2 + coil_lead_ext + board_gap)",
+   "value": -27.7,
+   "unit": "mm",
+   "comment": "Board top z (-27.7)",
+   "role": "derived"
+  },
+  {
+   "name": "board_bottom_z",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "board_top_z - board_t",
+   "value": -33.8,
+   "unit": "mm",
+   "comment": "Board bottom z (-33.8)",
+   "role": "derived"
+  },
+  {
+   "name": "board_lead_x",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "coil_x_in + wire_width / 2",
+   "value": 7.6,
+   "unit": "mm",
+   "comment": "x of the lead stub centre",
+   "role": "derived"
+  },
+  {
+   "name": "board_lead_a_y",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "coil_top_y - wire_height / 2",
+   "value": 70.085,
+   "unit": "mm",
+   "comment": "y of the outer-layer lead stub centre, on -x",
+   "role": "derived"
+  },
+  {
+   "name": "board_lead_b_y",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "board_lead_a_y - (num_wires_per_slot - 1) * coil_layer_pitch",
+   "value": 60.595,
+   "unit": "mm",
+   "comment": "y of the inner-layer lead stub centre, on +x",
+   "role": "derived"
+  },
+  {
+   "name": "board_pin_clear",
+   "source": "assumed (85 value)",
+   "fusion_expression": null,
+   "freecad_expression": "0.4 mm",
+   "value": 0.4,
+   "unit": "mm",
+   "comment": "Lead sleeve / slot clearance around the stub on each side (ASSUMED: same as the 85)",
+   "role": "mechanics"
+  },
+  {
+   "name": "board_pin_w",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "wire_width + 2 * board_pin_clear",
+   "value": 5.8,
+   "unit": "mm",
+   "comment": "Lead slot / sleeve width",
+   "role": "derived"
+  },
+  {
+   "name": "board_pin_t",
+   "source": "derived",
+   "fusion_expression": null,
+   "freecad_expression": "wire_height + 2 * board_pin_clear",
+   "value": 1.4,
+   "unit": "mm",
+   "comment": "Lead slot / sleeve thickness",
+   "role": "derived"
+  },
+  {
+   "name": "occupancy_variant",
+   "source": "tools/build_mech_150.py",
+   "fusion_expression": null,
+   "freecad_expression": "1",
+   "value": 1.0,
+   "unit": "",
+   "comment": "Mechanics variant: aluminium parts from occupancy rings (template A.7.3)",
+   "role": "info"
+  }
+ ],
+ "history": [
+  {
+   "date": "2026-10-16",
+   "action": "tools/build_params_150.py from the CIANO14 40 reference + Fusion 150 dump",
+   "changes": [
+    [
+     "magnet_height",
+     "5.7 mm",
+     "14 mm"
+    ],
+    [
+     "air_gap",
+     "0.2 mm",
+     "0.5 mm"
+    ],
+    [
+     "motor_length",
+     "20 mm",
+     "35 mm"
+    ],
+    [
+     "slot_height",
+     "6.1 mm",
+     "14 mm"
+    ],
+    [
+     "core_thickness",
+     "1.9 mm",
+     "4.4 mm"
+    ],
+    [
+     "magnet_fill_up",
+     "0.34",
+     "0.32"
+    ],
+    [
+     "num_seg",
+     "2",
+     "4"
+    ],
+    [
+     "wire_spacing_y",
+     "0.1 mm",
+     "0.13 mm"
+    ],
+    [
+     "insulation_thickness",
+     "0.07 mm",
+     "0.15 mm"
+    ],
+    [
+     "magnet_fill_radius",
+     "0.2 mm",
+     "2 mm"
+    ],
+    [
+     "tooth_width",
+     "3.3 mm",
+     "9.8 mm"
+    ],
+    [
+     "magnet_fill_down",
+     "0.85",
+     "0.9"
+    ],
+    [
+     "rotor_house_height",
+     "1.1 mm",
+     "1.2 mm"
+    ],
+    [
+     "wire_height",
+     "0.6 mm",
+     "0.6 mm"
+    ],
+    [
+     "wire_width",
+     "2.5 mm",
+     "5 mm"
+    ],
+    [
+     "bolt_head_d",
+     "4 mm",
+     "8.8 mm"
+    ],
+    [
+     "num_wires_per_slot",
+     "7",
+     "14"
+    ],
+    [
+     "wire_beng_r",
+     "tooth_width / 2 + insulation_thickness + wire_spacing_x / 2 - 0.05 mm",
+     "2.5 mm"
+    ],
+    [
+     "bolt_d",
+     "2 mm",
+     "2.5 mm"
+    ],
+    [
+     "offset_rotor",
+     "0.035 mm",
+     "0.045 mm"
+    ],
+    [
+     "wire_spacing_x",
+     "0.1 mm",
+     "0.1 mm"
+    ],
+    [
+     "stator_fillet_r",
+     "1.1 mm",
+     "3.5 mm"
+    ],
+    [
+     "magnet_up_gap",
+     "0.1 mm",
+     "0.5 mm"
+    ],
+    [
+     "rotor_hole",
+     "0.9",
+     "0.6"
+    ],
+    [
+     "tooth2_width",
+     "1.7 mm",
+     "4.1 mm"
+    ],
+    [
+     "cut_width",
+     "1 mm",
+     "4 mm"
+    ],
+    [
+     "magnet_down_height",
+     "1 mm",
+     "1.6 mm"
+    ],
+    [
+     "mag_step",
+     "motor_length",
+     "5 mm"
+    ],
+    [
+     "num_poles_per_segment",
+     "7",
+     "7"
+    ],
+    [
+     "stator_fillet_r1",
+     "0.15 mm",
+     "1 mm"
+    ],
+    [
+     "stator_diameter",
+     "40 mm",
+     "150 mm"
+    ]
+   ]
+  }
+ ]
+}

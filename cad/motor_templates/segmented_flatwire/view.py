@@ -22,7 +22,7 @@ BODIES = ("Core", "Coil", "RotorCore", "Magnet",
           "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_seal", "PhaseBoard")
 PARTS = ("Stator", "Winding", "Rotor", "Magnets", "Mechanics", "Bearing_618_8", "Electronics")
 SHAPES = ("PhaseBoard",)                               # imported reference body (Part::Feature, per-face STEP colours)
-ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws", "BoardPinsA", "BoardPinsB")   # labels of the Draft link arrays
+ARRAYS = ("Coils", "MagnetArray", "Balls", "Screws", "Screws_M3x30", "Screws_M3x6", "BoardPinsA", "BoardPinsB")   # labels of the Draft link arrays
 LINKS = ("Bearing_618_8_back", "Bearing_seal_2")            # App::Link copies (Fusion occurrences)
 # per-part colours (r, g, b) from THE palette (palette.py: one source for the GUI finish, the GLB exporter and the web viewer).
 # The template does not know the magnet polarity per pocket: the FCStd array has one colour (N), the GLB / array elements
@@ -32,9 +32,9 @@ COLORS = {n: palette.body_colour(n) for n in palette.BODY_ROLE}
 # Fusion threads (shaft M5, back holder M3 / M2.5) are COSMETIC there (modeled = False): here the thread faces carry the host
 # colour, a little darker; the geometry is the plain core / tap diameter.
 THREAD_COLOURS = {bn: palette.thread_colour(COLORS[bn]) for bn in ("Shaft", "Stator_holder_back")}
-COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet", "Balls": "Bearing_ball", "Screws": "Screw",
+COLOR_OF_ARRAY = {"Coils": "Coil", "MagnetArray": "Magnet", "Balls": "Bearing_ball", "Screws": "Screw", "Screws_M3x30": "Screw_M3x30", "Screws_M3x6": "Screw_M3x6",
                   "BoardPinsA": "PhaseBoardPins", "BoardPinsB": "PhaseBoardPins"}
-_ALL_BODIES = BODIES + ("Bearing_ball", "Screw", "PhaseBoardPins")
+_ALL_BODIES = BODIES + ("Bearing_ball", "Screw", "Screw_M3x30", "Screw_M3x6", "PhaseBoardPins")
 # FreeCAD "isometric" view orientation (SbRotation quaternion x, y, z, w)
 ISO_Q = (0.424707, 0.17592, 0.339851, 0.820473)
 
@@ -235,6 +235,8 @@ def thread_face_indices(doc):
     sh = doc.getObject("Params")
     g = lambda n: ps.pval(sh, n)
     from .params_sheet import has_param
+    if has_param(sh, "occupancy_variant"):         # CIANO28 150: no threads are modelled in the volume-equivalent holders
+        return {}
     shaft_thread = g("shaft_tip_r") if has_param(sh, "shaft_thread_r") else g("carrier_hole_d") / 2   # carrier: the M3 hub holes
     want = {"Shaft": [shaft_thread], "Stator_holder_back": [g("holder_tap_d") / 2, g("back_screw_tap_d") / 2]}
     out = {}
@@ -270,7 +272,7 @@ def apply_appearance(doc, gdoc):
     for bn, role in palette.BODY_ROLE.items():
         if role not in palette.MATERIAL:
             continue
-        for name in (bn, {"Screw": "Screws"}.get(bn)):
+        for name in (bn, {"Screw": "Screws", "Screw_M3x30": "Screws_M3x30", "Screw_M3x6": "Screws_M3x6"}.get(bn)):
             o = doc.getObject(name) if name else None
             if o is None:
                 for x in doc.Objects:

@@ -1,0 +1,482 @@
+[
+ {
+  "name": "motor_d",
+  "expression": "( stator_up_r + housing_h ) * 2",
+  "unit": "mm",
+  "value": 162.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_r",
+  "expression": "rotor_r_Ref",
+  "unit": "mm",
+  "value": 0.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_h",
+  "expression": "magnet_h",
+  "unit": "mm",
+  "value": 14.000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_w",
+  "expression": "stator_w",
+  "unit": "mm",
+  "value": 35.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "magnet_h",
+  "expression": "magnet_h_Ref",
+  "unit": "mm",
+  "value": 14.000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "magnet_w",
+  "expression": "rotor_w",
+  "unit": "mm",
+  "value": 35.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "gap",
+  "expression": "gap_Ref",
+  "unit": "mm",
+  "value": 0.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "stator_w",
+  "expression": "35 mm",
+  "unit": "mm",
+  "value": 35.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "stator_up_r",
+  "expression": "motor_d_Ref / 2",
+  "unit": "mm",
+  "value": 75.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "stator_mid_r",
+  "expression": "stator_up_r - slot_h - core_h / 2",
+  "unit": "mm",
+  "value": 58.8,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "slot_h",
+  "expression": "slot_h_Ref",
+  "unit": "mm",
+  "value": 14.000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "core_h",
+  "expression": "core_h_Ref",
+  "unit": "mm",
+  "value": 4.4,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "stator_down_r",
+  "expression": "stator_up_r - slot_h - core_h",
+  "unit": "mm",
+  "value": 56.599999999999994,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "rotor_down_r",
+  "expression": "rotor_up_r - rotor_h",
+  "unit": "mm",
+  "value": 42.099999999999994,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "magnet_fill_up",
+  "expression": "magnet_fill_up_Ref",
+  "unit": "",
+  "value": 0.32,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "N1",
+  "expression": "4",
+  "unit": "",
+  "value": 4.0,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "angle",
+  "expression": "( 360 / N1 ) * 1 deg",
+  "unit": "deg",
+  "value": 90.0,
+  "value_unit": "deg",
+  "comment": ""
+ },
+ {
+  "name": "angle_wire",
+  "expression": "( 360 / ( N1 * 6 ) ) * 1 deg",
+  "unit": "deg",
+  "value": 14.999999999999998,
+  "value_unit": "deg",
+  "comment": ""
+ },
+ {
+  "name": "angle_mag",
+  "expression": "( ( 360 / ( N1 * 7 ) ) * 1 deg )",
+  "unit": "deg",
+  "value": 12.857142857142858,
+  "value_unit": "deg",
+  "comment": ""
+ },
+ {
+  "name": "bearing_6005_d",
+  "expression": "30 mm",
+  "unit": "mm",
+  "value": 30.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "resolver_w",
+  "expression": "16 mm",
+  "unit": "mm",
+  "value": 16.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "sealing_ring_d",
+  "expression": "0.9 mm",
+  "unit": "mm",
+  "value": 0.9000000000000001,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_dist_y",
+  "expression": "0.13 mm",
+  "unit": "mm",
+  "value": 0.13,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "ins_w",
+  "expression": "ins_w_Ref",
+  "unit": "mm",
+  "value": 0.15,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "slot_hs",
+  "expression": "0.21",
+  "unit": "",
+  "value": 0.21,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "mag_r",
+  "expression": "mag_r_Ref",
+  "unit": "mm",
+  "value": 2.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "teeth_w",
+  "expression": "tooth_w_Ref",
+  "unit": "mm",
+  "value": 9.8,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "slot_ds",
+  "expression": "0.8",
+  "unit": "",
+  "value": 0.8,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "slot_hs1",
+  "expression": "0.02",
+  "unit": "",
+  "value": 0.02,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "housing_h",
+  "expression": "6 mm",
+  "unit": "mm",
+  "value": 6.000000000000001,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "magnet_fill_down",
+  "expression": "magnet_fill_down_Ref",
+  "unit": "",
+  "value": 0.9,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "rotor_up_r",
+  "expression": "stator_down_r - gap",
+  "unit": "mm",
+  "value": 56.099999999999994,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "r_housing_h",
+  "expression": "r_housing_h_Ref",
+  "unit": "mm",
+  "value": 1.2,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "arc",
+  "expression": "stator_down_r * 2 * PI * ( angle_wire / 360 deg ) - teeth_w",
+  "unit": "mm",
+  "value": 5.0178453494318545,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_h",
+  "expression": "0.6 mm",
+  "unit": "mm",
+  "value": 0.6,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_w",
+  "expression": "wire_w_Ref",
+  "unit": "mm",
+  "value": 5.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "bolt_head_d",
+  "expression": "8.8 mm",
+  "unit": "mm",
+  "value": 8.8,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_core",
+  "expression": "0.006 mm",
+  "unit": "mm",
+  "value": 0.006,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_N",
+  "expression": "14",
+  "unit": "",
+  "value": 14.0,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "dov_d",
+  "expression": "3 mm",
+  "unit": "mm",
+  "value": 3.0000000000000004,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_beng_r",
+  "expression": "2.5 mm",
+  "unit": "mm",
+  "value": 2.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "bolt_h",
+  "expression": "3 mm",
+  "unit": "mm",
+  "value": 3.0000000000000004,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "bolt_d",
+  "expression": "2.5 mm",
+  "unit": "mm",
+  "value": 2.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_tooth",
+  "expression": "0.009 mm",
+  "unit": "mm",
+  "value": 0.009,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "tooth_r",
+  "expression": "wire_beng_r - 0.5 mm",
+  "unit": "mm",
+  "value": 2.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "AWG",
+  "expression": "6.3 mm + 0.2 mm",
+  "unit": "mm",
+  "value": 6.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_rotor",
+  "expression": "0.045 mm",
+  "unit": "mm",
+  "value": 0.045,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_bearing",
+  "expression": "0.04 mm",
+  "unit": "mm",
+  "value": 0.04,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_radiator",
+  "expression": "0.15 mm",
+  "unit": "mm",
+  "value": 0.15,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "offset_holder",
+  "expression": "0.08 mm",
+  "unit": "mm",
+  "value": 0.08,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "coil_w",
+  "expression": "wire_w + ins_w * 2 + wire_dist_x",
+  "unit": "mm",
+  "value": 5.4,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "wire_dist_x",
+  "expression": "wire_dist_Ref",
+  "unit": "mm",
+  "value": 0.10000000000000002,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "stator_r",
+  "expression": "stator_r_Ref",
+  "unit": "mm",
+  "value": 3.5000000000000004,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "mag_sh",
+  "expression": "mag_sh_Ref",
+  "unit": "mm",
+  "value": 0.5,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "mag_hole",
+  "expression": "mag_hole_Ref",
+  "unit": "",
+  "value": 0.6,
+  "value_unit": "",
+  "comment": ""
+ },
+ {
+  "name": "tooth2_w",
+  "expression": "tooth2_w_Ref",
+  "unit": "mm",
+  "value": 4.1,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "cut_down",
+  "expression": "cut_down_Ref",
+  "unit": "mm",
+  "value": 4.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "mag_down_h",
+  "expression": "mag_down_h_Ref",
+  "unit": "mm",
+  "value": 1.6000000000000003,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "mag_step",
+  "expression": "5 mm",
+  "unit": "mm",
+  "value": 5.0,
+  "value_unit": "mm",
+  "comment": ""
+ },
+ {
+  "name": "stator_r1",
+  "expression": "stator_r1_Ref",
+  "unit": "mm",
+  "value": 1.0,
+  "value_unit": "mm",
+  "comment": ""
+ }
+]

@@ -306,3 +306,91 @@ def test_coupled_convergence_is_read_from_the_stored_run_without_touching_it(mon
     monkeypatch.setattr(SG, "_history_status", lambda want: {})
     doc = SG.build("modules", die="D", config="C")
     assert {x["id"]: x["convergence"] for x in doc["loops"]}["em_thermal_orchestrator"]["iterations"] == 3
+
+
+def test_every_graph_node_maps_to_a_functional_module():
+    valid = set(SG.MODULE_CATALOG)
+    assert valid == {f"M{i:02d}" for i in range(1, 15)}
+    for doc in (SG.build_modules_graph(), SG.build_propeller_s1_graph()):
+        assert all(n["module_id"] in valid for n in doc["nodes"])
+        assert all(n["module_name"] == SG.MODULE_CATALOG[n["module_id"]]["name"] for n in doc["nodes"])
+        assert all(n["public_api"] and n["documentation"] == "docs/MODULE_MAP.md" for n in doc["nodes"])
+        assert all(n["source"] and n["source"]["file"] and n["source"]["line"] > 0 for n in doc["nodes"])
+
+
+def test_modules_view_exports_functional_module_ids():
+    doc = SG.build_modules_graph()
+    assert {n["module_id"] for n in doc["nodes"]} <= set(SG.MODULE_CATALOG)
+    assert doc["title"] == "Schemas"
+
+
+def test_graph_sources_resolve_to_real_repo_symbols():
+    for doc in (SG.build_modules_graph(), SG.build_propeller_s1_graph()):
+        for node in doc["nodes"]:
+            source = node["source"]
+            path = SG._REPO / source["file"]
+            assert path.is_file(), (node["id"], source)
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            assert any(isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                       and item.name == source["function"] for item in ast.walk(tree)), (node["id"], source)
+
+
+def test_module_documentation_and_unknown_owner_fail_closed():
+    assert (SG._REPO / "docs/MODULE_MAP.md").is_file()
+    assert all(node["documentation"] == "docs/MODULE_MAP.md"
+               for node in SG.build_modules_graph()["nodes"] + SG.build_propeller_s1_graph()["nodes"])
+    with pytest.raises(LookupError, match="unknown functional module id"):
+        SG._attach_module({}, "M99")
+    with pytest.raises(LookupError, match="no MODULE_MAP owner"):
+        SG._registry_owner("test-orphan")
+
+
+
+def test_module_catalog_matches_first_module_map_headings():
+    import re
+    text = (SG._REPO / "docs/MODULE_MAP.md").read_text(encoding="utf-8")
+    headings = {}
+    for line in text.splitlines():
+        match = re.match(r"^### (M\d{2}) \u2014 (.+)$", line)
+        if match and match.group(1) not in headings:
+            headings[match.group(1)] = match.group(2)
+    assert set(headings) == set(SG.MODULE_CATALOG)
+    assert {module_id: entry["name"] for module_id, entry in SG.MODULE_CATALOG.items()} == headings
+
+
+def test_s1_nodes_are_owned_by_configure_module():
+    doc = SG.build_propeller_s1_graph()
+    assert len(doc["nodes"]) == 23
+    assert all(node["module_id"] == "M06" for node in doc["nodes"])
+    assert all(node["source"]["file"] in {
+        "src/motor_ai_sim/propeller_s1.py", "src/motor_ai_sim/propeller.py"
+    } for node in doc["nodes"])
+
+
+def _single_module_registry(name, capability):
+    from motor_ai_sim.modules.base import ModuleManifest, StubModule
+    from motor_ai_sim.modules.registry import ModuleRegistry
+
+    manifest = ModuleManifest(
+        name=name,
+        capability=capability,
+        contracts_version="1",
+        summary="synthetic test registration",
+    )
+    return ModuleRegistry().register(StubModule(manifest))
+
+
+def test_graph_builder_maps_registered_transmission_plugin_to_sdk(monkeypatch):
+    registry = _single_module_registry("transmission-synthetic-gearbox", "transmission.synthetic")
+    monkeypatch.setattr(SG, "_registry", lambda: registry)
+    doc = SG.build_modules_graph()
+    node = next(node for node in doc["nodes"] if node["id"] == "transmission-synthetic-gearbox")
+    assert node["module_id"] == "M11"
+    assert node["module_name"] == SG.MODULE_CATALOG["M11"]["name"]
+
+
+def test_graph_builder_rejects_registered_orphan_plugin(monkeypatch):
+    registry = _single_module_registry("orphan-synthetic-plugin", "orphan.synthetic")
+    monkeypatch.setattr(SG, "_registry", lambda: registry)
+    with pytest.raises(LookupError, match="registry node has no MODULE_MAP owner: orphan-synthetic-plugin"):
+        SG.build_modules_graph()

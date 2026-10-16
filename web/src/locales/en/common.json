@@ -10,7 +10,7 @@
     "mechanical": "Mechanical",
     "thermal": "Thermal",
     "controller": "Controller",
-    "system": "System",
+    "schemas": "Schemas",
     "sweep": "Optimization",
     "comparePoints": "Compare",
     "cost": "Cost",
@@ -271,14 +271,19 @@
       "modules": "All modules",
       "propellerS1": "Propeller S1"
     },
-    "hint": "Read-only map of how the simulations are chained.",
-    "hintTip": "Blocks are modules (or the steps of the S1 rating), wires carry data types, dashed groups are feedback loops. Hover a block or a wire for details. Nothing here runs or edits a model.",
+    "hint": "Read-only schema of how software modules connect.",
+    "hintTip": "Each block identifies a software module; wires carry data types and dashed groups are feedback loops. Click a block for its public API and documentation. Nothing here runs or edits a model.",
     "hoverWire": "Hover a wire to see its data.",
     "refresh": "Reload the graph",
     "failed": "Could not load the graph",
     "in": "In",
     "out": "Out",
-    "roadmap": "Roadmap stub, not implemented yet",
+    "roadmap": "Stub module, planned and not implemented yet",
+    "stub": "STUB",
+    "publicApi": "Public API",
+    "publicApiNone": "No public API is listed for this module.",
+    "moduleDocs": "Open module documentation",
+    "close": "Close",
     "feedback": "feedback",
     "state": {
       "done": "done",
@@ -401,6 +406,22 @@
     "basis": {
       "project_class": "class N",
       "model": "model limit"
+    },
+    "modules": {
+      "M01": "Geometry, materials and mesh construction",
+      "M02": "Electromagnetics, eddy, demagnetisation and PWM field solve",
+      "M03": "Thermal and cooling",
+      "M04": "Mechanical, mass and bearings",
+      "M05": "Controller, inverter and electrical supply",
+      "M06": "Catalog, passports, Configure and reports",
+      "M07": "CAD generator and model artifacts",
+      "M08": "Access, identity, roles, NDA, verification and grants",
+      "M09": "Accounts, analytics, communication and support",
+      "M10": "Optimisation and campaigns",
+      "M11": "System graph, contracts and component SDK",
+      "M12": "Coupled workflows and run records",
+      "M13": "Workspace, persistence, compute and transport",
+      "M14": "Web shell and common presentation"
     }
   },
   "cookies": {

@@ -1,4 +1,4 @@
-// The "System" graph (Simulations > System, owner 2026-10-14): types of GET /api/system/graph and the
+// The "Schemas" graph (Simulations > Schemas, owner 2026-10-14): types of GET /api/system/graph and the
 // pure helpers the view uses (colours, loop nesting, loop boxes).  Schema: docs/SYSTEM_GRAPH.md.
 //
 // Pure, no imports: web/src/lib/__tests__/systemGraph.test.mjs imports this file.
@@ -21,6 +21,10 @@ export interface SgNode {
   kind: string;
   group?: string;
   title: string;
+  module_id: string;
+  module_name: string;
+  public_api: string[];
+  documentation: string;
   summary: string;
   inputs: SgPort[];
   outputs: SgPort[];
@@ -35,6 +39,53 @@ export interface SgNode {
   layout?: { col: number; row: number } | null;
   /** a limit check's condition: i18n key + numbers read from the code (or from the selected motor's model) */
   condition?: { key: string; params: Record<string, string | number> } | null;
+}
+
+/** Pastel module fills and dark module accents keep every card distinct on white. */
+export const MODULE_NODE_TOKENS: Readonly<Record<string, { background: string; accent: string; foreground: string; border: string }>> = {
+  M01: { background: '#dbeafe', accent: '#1d4ed8', foreground: '#111827', border: '#334155' },
+  M02: { background: '#dcfce7', accent: '#15803d', foreground: '#111827', border: '#334155' },
+  M03: { background: '#cffafe', accent: '#0e7490', foreground: '#111827', border: '#334155' },
+  M04: { background: '#e0e7ff', accent: '#4338ca', foreground: '#111827', border: '#334155' },
+  M05: { background: '#fef3c7', accent: '#b45309', foreground: '#111827', border: '#334155' },
+  M06: { background: '#fce7f3', accent: '#be185d', foreground: '#111827', border: '#334155' },
+  M07: { background: '#ffedd5', accent: '#c2410c', foreground: '#111827', border: '#334155' },
+  M08: { background: '#ede9fe', accent: '#6d28d9', foreground: '#111827', border: '#334155' },
+  M09: { background: '#ccfbf1', accent: '#0f766e', foreground: '#111827', border: '#334155' },
+  M10: { background: '#f3e8ff', accent: '#7e22ce', foreground: '#111827', border: '#334155' },
+  M11: { background: '#e2e8f0', accent: '#475569', foreground: '#111827', border: '#334155' },
+  M12: { background: '#fee2e2', accent: '#b91c1c', foreground: '#111827', border: '#334155' },
+  M13: { background: '#e7e5e4', accent: '#57534e', foreground: '#111827', border: '#334155' },
+  M14: { background: '#d1fae5', accent: '#047857', foreground: '#111827', border: '#334155' },
+};
+export const NODE_BORDER_WIDTH_PX = 2;
+
+export const MODULE_NAMES: Readonly<Record<string, string>> = {
+  M01: 'Geometry, materials and mesh construction',
+  M02: 'Electromagnetics, eddy, demagnetisation and PWM field solve',
+  M03: 'Thermal and cooling',
+  M04: 'Mechanical, mass and bearings',
+  M05: 'Controller, inverter and electrical supply',
+  M06: 'Catalog, passports, Configure and reports',
+  M07: 'CAD generator and model artifacts',
+  M08: 'Access, identity, roles, NDA, verification and grants',
+  M09: 'Accounts, analytics, communication and support',
+  M10: 'Optimisation and campaigns',
+  M11: 'System graph, contracts and component SDK',
+  M12: 'Coupled workflows and run records',
+  M13: 'Workspace, persistence, compute and transport',
+  M14: 'Web shell and common presentation',
+};
+
+export function contrastRatio(foreground: string, background: string): number {
+  const linear = (hex: string) => {
+    const raw = hex.replace('#', '');
+    const channels = [0, 2, 4].map((i) => parseInt(raw.slice(i, i + 2), 16) / 255)
+      .map((v) => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
+    return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722;
+  };
+  const a = linear(foreground), b = linear(background);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
 export interface SgEnd { node: string; port: string | null }
 export interface SgEdge {

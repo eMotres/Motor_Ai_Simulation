@@ -11,7 +11,7 @@ export type CompKey = 'stator' | 'rotor' | 'magnets' | 'coils' | 'shaft' | 'slee
 // UI State
 interface UIState {
   sidebarOpen: boolean;
-  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'model3d' | 'admin';
+  activeTab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'model3d' | 'admin' | 'schemas';
   showWireframe: boolean;
   showAxes: boolean;
   showGrid: boolean;
@@ -33,7 +33,7 @@ interface UIState {
   magnetVisibility: Record<number, boolean>;
 
   toggleSidebar: () => void;
-  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'admin') => void;
+  setActiveTab: (tab: 'motors' | 'geometry' | 'materials' | 'mesh' | 'simulation' | 'static3d' | 'cost' | 'sweep' | 'compare' | 'admin' | 'schemas') => void;
   toggleWireframe: () => void;
   toggleAxes: () => void;
   toggleGrid: () => void;
@@ -132,7 +132,7 @@ export const useUIStore = create<UIState>()(
     }),
     {
       name: 'motor-ui-storage',
-      version: 1,
+      version: 2,
       // v1: the FEM sliding-band air domains (in_band/out_band) used to default visible and were
       // drawn as big translucent disks covering the whole motor — it looked like a geometry glitch.
       // Force them off once for users who persisted the old default; they remain toggleable.
@@ -149,6 +149,7 @@ export const useUIStore = create<UIState>()(
             && persisted.componentVisibility.sleeve === undefined) {
           persisted.componentVisibility.sleeve = true;
         }
+        if (persisted?.activeTab === 'system') persisted.activeTab = 'schemas';
         return persisted;
       },
     }

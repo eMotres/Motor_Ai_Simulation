@@ -33,7 +33,7 @@ export const roleLabel = (role: string): string => ROLE_LABELS[role as AccountRo
 export type TabGate = 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin';
 export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   motors: 'always', geometry: 'fullUI', materials: 'fullUI', mesh: 'fullUI', simulation: 'fullUI',
-  static3d: 'admin', mechanical: 'fullUI', thermal: 'fullUI', controller: 'fullUI', system: 'fullUI', sweep: 'admin',
+  static3d: 'admin', mechanical: 'fullUI', thermal: 'fullUI', controller: 'fullUI', schemas: 'fullUI', sweep: 'admin',
   comparePoints: 'fullUI', cost: 'admin', compare: 'signedIn',
   // "3D model" is the simplified Configure workflow's tab (owner 2026-10-15): look at / rotate the full model, tools + STEP after the NDA.
   // Engineers and admins (the simulation UI) have no separate 3D model tab - the same model, its part tree and the files are in Geometry > Full.

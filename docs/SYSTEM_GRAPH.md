@@ -1,14 +1,20 @@
-# System graph (Simulations > System)
+# Schemas graph (Simulations > Schemas)
 
 A view-only map of how the simulations are chained: modules, the data that flows between them, and the
-feedback loops. Engineers, external co-developers and their AI agents read it to see where a module sits.
+feedback loops. Engineers, external co-developers and their AI agents read it to see where a software module sits.
 Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
 
 * Backend: `GET /api/system/graph` (`routes/system_graph.py`, builder in `src/motor_ai_sim/system_graph.py`).
-* Frontend: Simulations > **System** (`web/src/components/system/SystemPanel.tsx`), `@xyflow/react` for the canvas
+* Frontend: Simulations > **Schemas** (`web/src/components/system/SystemPanel.tsx`), `@xyflow/react` for the canvas
   and `@dagrejs/dagre` for the layout.
 * Access: engineer and admin only (`auth._GATED`: `("GET", "/api/system/graph"): "engineer"`; the tab is `fullUI`).
 * It never starts a computation and never writes anything.
+
+## Navigation and presentation
+
+The page is **Schemas** in the Simulations menu. The canonical page route is `/schemas`; the legacy `/system` route redirects to `/schemas`. The legacy `?tab=system` selection redirects to `?tab=schemas`, preserving other query parameters.
+
+Node cards use a dark border at least 2 px wide, a tinted module header or background, and dark readable text on white. Text and background tokens meet at least 4.5:1 contrast. Registered `StubModule` roadmap nodes remain visually distinct with a dashed treatment while retaining readable text and contrast. Clicking a node opens its module detail with the listed public API and documentation link.
 
 ## Request
 
@@ -47,6 +53,8 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
 | `condition` | Limit checks only: `{key, params}`, the one-line condition the block prints (`winding <= 200 C (class N)`, `I <= demag limit(T_magnet)`, ...). The numbers are read from the code (the project insulation class) or, with a motor selected, from that motor's model. |
 | `layout` | Optional `{col, row}` grid hint (row 1 = one block pitch; the main chain is row 0). When every non-context node has one the view uses it, otherwise it falls back to an automatic layout (dagre). |
 | module only | `capability`, `version`, `trust` (core / reference / community / ...), `roadmap` (a registered stub). |
+
+Each node also carries `module_id` (`M01`–`M14`), the exact functional `module_name` from `docs/MODULE_MAP.md`, `public_api` and a repository-relative `documentation` link. The registry view maps registered providers into functional owners; its transmission plugin belongs to M11 as a component SDK registration and BasicCost belongs to M11 because its implementation is a registry module with a Component/Result contract. The S1 steps belong to M06: they describe the Configure passport surrogate workflow and use M03/M05 concepts through adapters, but they do not represent those solvers. Unknown registry nodes fail graph construction instead of receiving a catch-all owner.
 
 ### Edge
 
@@ -120,7 +128,7 @@ Stage 1 (this document) only draws; stage 2 and 3 are outlined at the end.
 
 ## How a module appears in the graph
 
-Nothing to register. A module that is in `modules/bootstrap.default_registry()` is a node:
+Every registered module in `modules/bootstrap.default_registry()` becomes a node automatically. Each registry entry must map to a functional owner in M01-M14; unmapped nodes fail graph construction:
 
 1. `manifest().name` is the id, `ui.title` (else the name) the title, `inputs` / `outputs` the ports,
    `capability` the group, `status` the trust level, a `StubModule` is `roadmap: true`.
@@ -129,8 +137,7 @@ Nothing to register. A module that is in `modules/bootstrap.default_registry()` 
    manifests share; with none shared it is a `dependency` edge.
 3. A declared input that no dependency covers is wired to the module that outputs that type (`ResultIR` is too
    generic and is never auto-wired).
-4. Plugins dropped into `modules/geometry_plugins/` or `modules/component_plugins/` appear the same way once they
-   are registered. Declare accurate `inputs`, `outputs` and `depends_on` in the manifest: that is all the graph reads.
+4. Plugins dropped into `modules/geometry_plugins/` or `modules/component_plugins/` appear once registered and must map to their owning M01-M14 module. Declare accurate `inputs`, `outputs` and `depends_on` in the manifest; the functional owner map is explicit in `system_graph.py`.
 5. A new feedback loop is a few lines in `system_graph.build_modules_graph` (nodes, and the constants through
    `const()` / `default_arg()`); the status layer maps run records to nodes in `_JOB_NODE` / `_HISTORY_NODE`.
 
@@ -168,4 +175,4 @@ marker), and asks for no status when none is selected.
 * The same document through the MCP connector (`describe_service` lists the module graph; a tool returns a view),
   so an external agent sees which modules exist, what each consumes and produces, and where to hook in a new one
   (module contribution rules: `docs/MODULE_CONTRIBUTION_RULES.md`, component SDK: `docs/COMPONENT_SDK.md`).
-* Agents propose a composed graph as JSON; the engineer reviews it in the System view before it is run.
+* Agents propose a composed graph as JSON; the engineer reviews it in the Schemas view before it is run.

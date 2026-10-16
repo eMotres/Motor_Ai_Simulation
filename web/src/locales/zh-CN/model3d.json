@@ -26,7 +26,7 @@
   "simplifiedLineTip": "您看到的是简化模型:仅外形(定子、转子和磁钢为一个实体,每个线圈为一个块),没有零件树,也没有剖切、爆炸和测量工具。签署保密协议并通过账户核验后可查看完整结构。简化版STEP始终可下载。",
   "noView": "该电机的简化模型尚未生成。",
   "downloadSimplified": "下载简化版STEP",
-  "downloadSimplifiedTip": "仅外形的简化模型：定子、转子和磁钢为一个实体，每个线圈为一个块，轴承为环。所有已登录用户均可下载，无需保密协议。文件带有“SIMPLIFIED - envelope only”标记，下载会被记录。",
+  "downloadSimplifiedTip": "简化模型面向所有已登录用户开放，无需签署保密协议。所有下载均会记录。",
   "fit": "适应视图",
   "version": "模板 {template}，构建于 {built}，参数 {hash}",
   "stamped": "您的姓名、公司、日期和所签保密协议会写入文件名和 STEP 文件头。每次下载都有记录。",
@@ -80,5 +80,30 @@
     "deniedHelp": "我们暂时无法为此账户开放 3D 工具。如您认为这是误判，请回复我们的邮件或联系支持。",
     "open": "在此回复",
     "details": "详情"
-  }
+  },
+  "home": "åˆå§‹è§†å›¾",
+  "sectionOffset": "æˆªé¢ä½ç½®",
+  "cube": {
+    "title": "è§†å›¾ç«‹æ–¹ä½“",
+    "front": "å‰",
+    "back": "åŽ",
+    "left": "å·¦",
+    "right": "å³",
+    "top": "ä¸Š",
+    "bottom": "ä¸‹",
+    "frontTop": "å‰ä¸Šæ–¹",
+    "frontBottom": "å‰ä¸‹æ–¹",
+    "backTop": "åŽä¸Šæ–¹",
+    "backBottom": "åŽä¸‹æ–¹",
+    "leftTop": "å·¦ä¸Šæ–¹",
+    "leftBottom": "å·¦ä¸‹æ–¹",
+    "rightTop": "å³ä¸Šæ–¹",
+    "rightBottom": "å³ä¸‹æ–¹",
+    "frontLeft": "å‰å·¦æ–¹",
+    "frontRight": "å‰å³æ–¹",
+    "backLeft": "åŽå·¦æ–¹",
+    "backRight": "åŽå³æ–¹"
+  },
+  "orthographic": "æ­£äº¤",
+  "perspective": "é€è§†"
 }

@@ -1,20 +1,22 @@
 /**
  * ComponentTree — the 3-D viewport's binding of the shared tree.
  *
- * The LOOK lives in `ComponentTreeView` (user 2026-09-06: "use the same tree
- * we already have, so everything is universal" — the
- * field viewer now drives the same view with its own model).  This file is only
- * the wiring to the global `useUIStore`: which rows the machine has, what each
- * eye toggles, what "isolate" and "Show All" mean here.  Rows are listed in the
- * order they always were, so the 3-D tab is unchanged down to the connectors.
+ * Legacy MotorScene host binding for the shared minimal tree. The unified
+ * model hosts use UnifiedViewer, which owns these visibility controls itself.
  */
-import React, { useMemo } from 'react';
-import { useUIStore, useMotorStore, type CompKey } from '../../stores/motorStore';
-import { useMotorMesh } from './ApiMotorMesh';
+import React, { useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
+import { useUIStore, type CompKey } from '../../stores/motorStore';
+import { useMotorMeshExtruded } from './ApiMotorMesh';
 import { PART_COLORS } from '../../lib/partColors';
-import ComponentTreeView, { type TreeRow, type TreeModel } from './ComponentTreeView';
+import { PartTree, type PartTreeProps } from '../../modules/viewer3d';
+import { usePartStates } from '../materials/usePartStates';
 
-const ComponentTree: React.FC = () => {
+interface TreeRow { key:string; label:string; colour:string; visible:boolean; present?:boolean; group?:TreeRow[] }
+interface TreeModel { rows:TreeRow[]; selected?:string|null; onToggle:(key:string)=>void; onSelect?:(key:string)=>void }
+
+export function useActiveTreeModel(): TreeModel {
+  const { t } = useTranslation('geometry');
   const {
     componentVisibility,
     coilVisibility,
@@ -22,20 +24,15 @@ const ComponentTree: React.FC = () => {
     toggleComponentVisibility,
     toggleCoilVisibility,
     toggleMagnetVisibility,
-    isolateComponent,
-    showAllComponents,
     selectedPart,
     setSelectedPart,
   } = useUIStore();
 
   // Read mesh data to know how many coils / magnets exist
-  const meshData = useMotorMesh();
-  // The sleeve row keys on the GEOMETRY, not only on the CadQuery mesh: in the
-  // flat / extruded viewer modes that mesh is never fetched, so the row was
-  // missing there while the ring was drawn (user 2026-09-05: "I don't see
-  // the sleeve in the tree").  The geometry says whether the machine has one.
-  const sleeveT = Number(useMotorStore(s => (s.geometry as Record<string, unknown> | null)?.sleeve_thickness ?? 0));
-  const hasSleeve = sleeveT > 0 || !!(meshData && (meshData as Record<string, unknown>).sleeve);
+  const meshData = useMotorMeshExtruded();
+  const { states } = usePartStates();
+  const hasMesh = useCallback((key: string) => !!(meshData as Record<string, { vertices?: number[] }> | null)?.[key]?.vertices?.length, [meshData]);
+  const hasSleeve = hasMesh('sleeve') && states?.sleeve !== 'excluded';
 
   const coilCount = useMemo(() => {
     if (!meshData) return 0;
@@ -47,78 +44,69 @@ const ComponentTree: React.FC = () => {
     return Object.keys(meshData).filter(k => k.startsWith('magnet_')).length;
   }, [meshData]);
 
-  const hiddenCoils   = Object.values(coilVisibility).filter(v => !v).length;
-  const hiddenMagnets = Object.values(magnetVisibility).filter(v => !v).length;
-
-  const allVisible =
-    componentVisibility.stator &&
-    componentVisibility.rotor &&
-    componentVisibility.magnets &&
-    componentVisibility.coils &&
-    componentVisibility.shaft &&
-    hiddenCoils === 0 &&
-    hiddenMagnets === 0;
-
-  // Child keys are prefixed so one flat `onToggle(key)` can route them: the
-  // model is a list of strings, not a union of component kinds.
   const model: TreeModel = useMemo(() => {
     const rows: TreeRow[] = [
-      { key: 'stator', label: 'Stator Core', colour: PART_COLORS.statorIron,
-        visible: componentVisibility.stator, partKey: 'stator_core' },
-      { key: 'rotor', label: 'Rotor Core', colour: PART_COLORS.rotorIron,
-        visible: componentVisibility.rotor, partKey: 'rotor_core' },
-      { key: 'coils', label: 'Windings', colour: PART_COLORS.copper,
-        visible: componentVisibility.coils, partKey: 'slot',
+      { key: 'stator', label: t('activeTree.stator'), colour: PART_COLORS.statorIron,
+        visible: componentVisibility.stator, present: hasMesh('stator_core') && states?.stator_core !== 'excluded' },
+      { key: 'rotor', label: t('activeTree.rotor'), colour: PART_COLORS.rotorIron,
+        visible: componentVisibility.rotor, present: hasMesh('rotor_core') && states?.rotor_core !== 'excluded' },
+      { key: 'coils', label: t('activeTree.coils'), colour: PART_COLORS.copper,
+        visible: componentVisibility.coils, present: coilCount > 0 && states?.slot !== 'excluded',
         group: Array.from({ length: coilCount }, (_, i) => ({
-          key: `coil:${i}`, label: `Coil ${i + 1}`, colour: PART_COLORS.copper,
-          visible: coilVisibility[i] ?? true,
+          key: `coil:${i}`, label: t('activeTree.coil', { n: i + 1 }), colour: PART_COLORS.copper,
+          visible: coilVisibility[i] ?? true, present: hasMesh(`coil_${i}`),
         })) },
-      { key: 'magnets', label: 'Magnets', colour: PART_COLORS.magnetN,
-        visible: componentVisibility.magnets, partKey: 'magnet',
+      { key: 'magnets', label: t('activeTree.magnets'), colour: PART_COLORS.magnetN,
+        visible: componentVisibility.magnets, present: magnetCount > 0 && states?.magnet !== 'excluded',
         group: Array.from({ length: magnetCount }, (_, i) => ({
           key: `magnet:${i}`,
-          label: `Magnet ${i + 1}${i % 2 === 0 ? ' N' : ' S'}`,
+          label: t('activeTree.magnet', { n: i + 1, pole: i % 2 === 0 ? 'N' : 'S' }),
           colour: i % 2 === 0 ? PART_COLORS.magnetN : PART_COLORS.magnetS,
-          visible: magnetVisibility[i] ?? true,
+          visible: magnetVisibility[i] ?? true, present: hasMesh(`magnet_${i}`),
         })) },
-      { key: 'shaft', label: 'Shaft', colour: PART_COLORS.shaft,
-        visible: componentVisibility.shaft, partKey: 'shaft' },
+      { key: 'shaft', label: t('activeTree.shaft'), colour: PART_COLORS.shaft,
+        visible: componentVisibility.shaft, present: hasMesh('shaft') && states?.shaft !== 'excluded' },
       // Retaining sleeve — only when the machine actually has one, so the row
       // cannot appear for a part that is not built (and the server drops the
       // mesh key for an EXCLUDED sleeve, which hides the row too).
-      ...(hasSleeve ? [{ key: 'sleeve', label: 'Retaining sleeve',
-        colour: PART_COLORS.sleeve, visible: componentVisibility.sleeve,
-        partKey: 'sleeve' } as TreeRow] : []),
-      { key: 'slot_insulation', label: 'Insulation', colour: PART_COLORS.slotLiner,
-        visible: componentVisibility.slot_insulation },
-      { key: 'wire_insulation', label: 'Wire enamel', colour: PART_COLORS.enamel,
-        visible: componentVisibility.wire_insulation },
+      ...(hasSleeve ? [{ key: 'sleeve', label: t('activeTree.sleeve'),
+        colour: PART_COLORS.sleeve, visible: componentVisibility.sleeve, present: hasSleeve,
+        } as TreeRow] : []),
+      { key: 'slot_insulation', label: t('activeTree.insulation'), colour: PART_COLORS.slotLiner,
+        visible: componentVisibility.slot_insulation, present: hasMesh('slot_insulation') },
+      { key: 'wire_insulation', label: t('activeTree.enamel'), colour: PART_COLORS.enamel,
+        visible: componentVisibility.wire_insulation, present: hasMesh('wire_insulation') },
       // Sliding-band air rings: rotor-side, then stator-side.
-      { key: 'in_band', label: 'In Band (rotating air)', colour: PART_COLORS.inBand,
-        visible: componentVisibility.in_band },
-      { key: 'out_band', label: 'Out Band (static air)', colour: PART_COLORS.outBand,
-        visible: componentVisibility.out_band },
+      { key: 'in_band', label: t('activeTree.inBand'), colour: PART_COLORS.inBand,
+        visible: componentVisibility.in_band, present: hasMesh('in_band') },
+      { key: 'out_band', label: t('activeTree.outBand'), colour: PART_COLORS.outBand,
+        visible: componentVisibility.out_band, present: hasMesh('out_band') },
     ];
     return {
       rows,
       selected: selectedPart,
-      allVisible,
       onToggle: (key) => {
         if (key.startsWith('coil:')) return toggleCoilVisibility(Number(key.slice(5)));
         if (key.startsWith('magnet:')) return toggleMagnetVisibility(Number(key.slice(7)));
         toggleComponentVisibility(key as CompKey);
       },
-      onIsolate: (key) => isolateComponent(key as CompKey),
-      onShowAll: showAllComponents,
       // instance rows (coil:3, magnet:1) are not selectable parts; only the component rows are
       onSelect: (key) => { if (key.includes(':')) return; setSelectedPart(selectedPart === key ? null : key as CompKey); },
     };
   }, [componentVisibility, coilVisibility, magnetVisibility, coilCount,
-      magnetCount, hasSleeve, allVisible, selectedPart, toggleComponentVisibility,
-      toggleCoilVisibility, toggleMagnetVisibility, isolateComponent,
-      showAllComponents, setSelectedPart]);
+      magnetCount, hasSleeve, hasMesh, states, selectedPart, toggleComponentVisibility,
+      toggleCoilVisibility, toggleMagnetVisibility, setSelectedPart, t]);
 
-  return <ComponentTreeView model={model} />;
+  return model;
+}
+
+const ComponentTree: React.FC = () => {
+  const model = useActiveTreeModel();
+  const nodes: PartTreeProps['nodes'] = model.rows.map((r) => ({ key:r.key,label:r.label,colour:r.colour,present:r.present,
+    ...(r.group ? {children:r.group.map((c) => ({key:c.key,label:c.label,colour:c.colour,present:c.present}))} : {}) }));
+  const hidden = new Set<string>();
+  const visit = (rows: TreeRow[]) => rows.forEach((r) => { if (!r.visible || r.present === false) hidden.add(r.key); if (r.group) visit(r.group); });
+  visit(model.rows);
+  return <PartTree nodes={nodes} hiddenKeys={hidden} onToggle={model.onToggle} selectedKey={model.selected} onSelect={model.onSelect} />;
 };
-
 export default ComponentTree;

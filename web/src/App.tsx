@@ -15,25 +15,16 @@ import {
   Menu,
   MenuItem,
   CircularProgress,
-  ToggleButtonGroup,
-  ToggleButton,
 } from '@mui/material';
 import {
-  Visibility as VisibilityIcon,
-  GridOn as GridOnIcon,
-  ThreeDRotation as ThreeDRotationIcon,
   Refresh as RefreshIcon,
   CloudSync as CloudSyncIcon,
   CloudOff as CloudOffIcon,
-  ViewInAr as ViewInArIcon,
-  Build as BuildIcon,
-  Square as SquareIcon,
-  DeleteSweep as DeleteSweepIcon,
   LightMode as LightModeIcon,
   DarkMode as DarkModeIcon,
 } from '@mui/icons-material';
 import { buildAppTheme, loadThemeMode, saveThemeMode, type AppMode } from './theme';
-import MotorScene from './components/viewer3d/MotorScene';
+import UnifiedActiveMotorScene from './components/viewer3d/UnifiedActiveMotorScene';
 import BrandLogo from './components/common/BrandLogo';
 import ParameterVariationTable from './components/sweep/ParameterVariationTable';
 import MotorsCatalog from './components/catalog/MotorsCatalog';
@@ -50,7 +41,6 @@ import SupportWidget from './components/support/SupportWidget';
 import AnalyticsConsent from './components/common/AnalyticsConsent';
 import ActivityBeat from './components/common/ActivityBeat';
 import MaterialOverrideSync from './components/materials/MaterialOverrideSync';
-import MaterialControls from './components/parameters/MaterialControls';
 import SaveToMotorButton from './components/common/SaveToMotorButton';
 import SweepConfigPanel from './components/sweep/SweepConfigPanel';
 import MaterialsLibraryTree from './components/materials/MaterialsLibraryTree';
@@ -207,7 +197,7 @@ function App() {
   const [themeMode, setThemeMode] = useState<AppMode>(() => loadThemeMode());
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
-  const { activeTab, setActiveTab, showGrid, showAxes, toggleGrid, toggleAxes } = useUIStore();
+  const { activeTab, setActiveTab } = useUIStore();
   const { user, isAdmin, role, enforced, defaultMotor, resolved: authResolved } = useAuth();
   // Interface language (docs/I18N.md): adopt the signed-in user's stored choice.
   const { t: tr, i18n } = useTranslation('common');
@@ -295,21 +285,9 @@ function App() {
     fetchSchemaFromApi,
     connectedToApi,
     isLoading,
-    viewMode,
-    setViewMode,
-    geometry,
-    runPipeline,
-    clearStlCache,
     loadServerSweepConfig,
   } = useMotorStore();
 
-  // Point-cloud and hybrid render modes were retired from the toolbar (user
-  // decision) — a stored selection of either would leave the viewer in a mode
-  // with no button, so coerce it to solid once on load.
-  useEffect(() => {
-    if (viewMode === 'pointcloud' || viewMode === 'hybrid') setViewMode('solid');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
 
   // Not before somebody is signed in: on a server that publishes nothing
   // (PUBLIC_EXHIBIT=0) these three answer 401 to a visitor, and the retry loop
@@ -501,49 +479,7 @@ function App() {
             <Box onMouseDown={onDividerMouseDown} sx={{ width: 5, flexShrink: 0, cursor: 'col-resize',
               bgcolor: 'divider', transition: 'background-color 0.15s', '&:hover': { bgcolor: 'primary.main' }, userSelect: 'none' }} />
             <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-              {/* Viewer controls live WITH the viewer they drive (moved out of
-                  the AppBar — user request): grid, axes, render mode, STL
-                  build, cache rebuild. */}
-              <Box sx={{ position: 'absolute', top: 40, right: 8, zIndex: 12,
-                         display: 'flex', alignItems: 'center', gap: 0.5,
-                         bgcolor: 'background.paper', border: '1px solid',
-                         borderColor: 'divider', borderRadius: 1, px: 0.5, py: 0.25 }}>
-                <Tooltip title={showGrid ? tr('viewer.hideGrid') : tr('viewer.showGrid')}>
-                  <IconButton size="small" color={showGrid ? 'primary' : 'default'} onClick={toggleGrid}>
-                    <GridOnIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title={showAxes ? tr('viewer.hideAxes') : tr('viewer.showAxes')}>
-                  <IconButton size="small" color={showAxes ? 'primary' : 'default'} onClick={toggleAxes}>
-                    <ThreeDRotationIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <ToggleButtonGroup
-                  value={viewMode}
-                  exclusive
-                  onChange={(_, m) => m && setViewMode(m)}
-                  size="small"
-                  sx={{ mx: 0.5 }}
-                >
-                  <ToggleButton value="solid" sx={{ px: 1 }}>
-                    <Tooltip title={tr('viewer.solidMesh')}><SquareIcon fontSize="small" /></Tooltip>
-                  </ToggleButton>
-                  <ToggleButton value="stl" sx={{ px: 1 }}>
-                    <Tooltip title={tr('viewer.stl')}><ViewInArIcon fontSize="small" /></Tooltip>
-                  </ToggleButton>
-                </ToggleButtonGroup>
-                <Tooltip title={tr('viewer.generateStl')}>
-                  <IconButton size="small" onClick={() => runPipeline(geometry)}>
-                    <BuildIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-                <Tooltip title={tr('viewer.clearCache')}>
-                  <IconButton size="small" onClick={async () => { await clearStlCache(); runPipeline(geometry); }}>
-                    <DeleteSweepIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
-              </Box>
-              <MaterialControls /><MotorScene /><GeometryBuildTimer />
+              <UnifiedActiveMotorScene /><GeometryBuildTimer />
             </Box>
           </Box>
           )} />
@@ -565,7 +501,7 @@ function App() {
           <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
             <Box sx={{ height: '50%', overflow: 'hidden', position: 'relative',
               borderBottom: '1px solid', borderColor: 'divider', bgcolor: 'var(--panel-2)' }}>
-              <MotorScene force3d />
+              <UnifiedActiveMotorScene force3d />
             </Box>
             <Box sx={{ flex: 1, overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
               <MaterialDetailView library={matLibrary} selected={selectedMaterial}
@@ -579,11 +515,6 @@ function App() {
       render: () => <MeshPanel /> },
     { id: 'simulation', label: 'Electromagnetic', order: 50, panelId: 'simulation', gate: TAB_GATES.simulation, showViewer: true, keepMounted: true,
       render: () => <SimulationPanel active={activeTab === 'simulation'} /> },
-    // The 3D end-effect model gets its own scene (its own camera fit, its own
-    // cut planes), so it does NOT take the AppBar's viewer cluster — those
-    // controls drive MotorScene, and wiring them to a second canvas would make
-    // the grid/axes toggles lie about which scene they act on.
-    // 3D static solves are the owner's passport tool (admin-only server-side).
     { id: 'static3d', label: '3D', order: 55, gate: TAB_GATES.static3d, showViewer: false,
       render: () => <Static3DPanel /> },
     // Rotor centrifugal stress / retaining-sleeve sizing.  Like the 3D tab it
@@ -651,7 +582,6 @@ function App() {
     }))
     .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin }))
     .sort((a, b) => a.order - b.order);
-  const showViewer = !!tabs.find((t) => t.id === activeTab)?.showViewer;
   // A tab this account no longer has (a remembered "3D model" tab of an engineer: the model lives in Geometry > Full for the simulation
   // UI, owner 2026-10-15) lands on the first tab it has - never on an empty body.
   useEffect(() => {

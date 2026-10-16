@@ -4,14 +4,17 @@
 //   (web/src/locales/<lng>/<ns>.json, checked by i18nParity.test.mjs).
 // * `common` and `errors` load with the shell; every tab's namespace is lazy:
 //   a component that calls useTranslation('thermal') pulls locales/<lng>/
-//   thermal.json the first time it renders (Suspense is off — the component
-//   re-renders when it arrives, showing English meanwhile, never a blank).
+//   thermal.json the first time it renders. Suspense holds the app on its
+//   loading fallback until the namespace arrives; a failed chunk triggers the
+//   guarded reload and recovery UI instead of exposing untranslated keys.
 // * A key missing in zh-CN falls back to English; in dev it also warns once.
 import i18next, { type i18n as I18n, type Resource } from 'i18next';
 import ICU from 'i18next-icu';
 import resourcesToBackend from 'i18next-resources-to-backend';
 import { initReactI18next } from 'react-i18next';
 import { DEFAULT_LOCALE, DOCUMENT_TITLES, SUPPORTED_LOCALES, normalizeLocale } from './locale';
+import { reportChunkLoadFailure } from '../lib/chunkReload';
+import { loadNamespace } from './loadNamespace';
 
 export const NAMESPACES = ['common', 'errors', 'help', 'motors', 'geometry', 'simulation',
   'results', 'controller', 'thermal', 'admin', 'support', 'model3d', 'landing'] as const;
@@ -42,8 +45,9 @@ export function createI18n(opts: { lng?: string; resources?: Resource; dev?: boo
   const inst = i18next.createInstance();
   inst.use(ICU).use(initReactI18next);
   if (!opts.resources) {
-    inst.use(resourcesToBackend((lng: string, ns: string) =>
-      import(`../locales/${lng}/${ns}.json`)));
+    inst.use(resourcesToBackend((lng: string, ns: string) => loadNamespace(
+      () => import(`../locales/${lng}/${ns}.json`), reportChunkLoadFailure,
+    )));
   }
   const dev = opts.dev ?? false;
   void inst.init({
@@ -58,7 +62,7 @@ export function createI18n(opts: { lng?: string; resources?: Resource; dev?: boo
     partialBundledLanguages: true,
     interpolation: { escapeValue: false },   // React escapes
     returnNull: false,
-    react: { useSuspense: false },
+    react: { useSuspense: true },
     saveMissing: dev,
     missingKeyHandler: dev
       ? (lngs, ns, key) => console.warn(`[i18n] missing key ${ns}:${key} (${lngs.join(',')})`)

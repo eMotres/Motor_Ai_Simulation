@@ -8,7 +8,9 @@ import LanguageSwitcher from '../common/LanguageSwitcher';
 
 // The signed-in menu and its six dialogs are a chunk of their own: a signed-out visitor
 // (the landing, often on a slow link) never downloads them.
-const loadAuthMenu = () => import('./AuthMenu');
+import { watchChunkImport } from '../../lib/chunkReload';
+
+const loadAuthMenu = watchChunkImport(() => import('./AuthMenu'));
 const AuthMenu = lazy(loadAuthMenu);
 /** Start fetching the signed-in menu early (App calls this when it loads). */
 export const preloadAuthMenu = () => { void loadAuthMenu(); };

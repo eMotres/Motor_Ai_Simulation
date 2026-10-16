@@ -19,10 +19,11 @@ import { useAuth } from './contexts/AuthContext';
 import { isPreferencesPath } from './lib/commPrefsLogic';
 import LandingShell from './components/landing/LandingShell';
 import { showsLandingShell } from './lib/rootGate';
+import { watchChunkImport } from './lib/chunkReload';
 
-const App = lazy(() => import('./App'));
-const OAuthConsent = lazy(() => import('./components/auth/OAuthConsent'));
-const CommPrefsPage = lazy(() => import('./components/auth/CommPrefsPage'));
+const App = lazy(watchChunkImport(() => import('./App')));
+const OAuthConsent = lazy(watchChunkImport(() => import('./components/auth/OAuthConsent')));
+const CommPrefsPage = lazy(watchChunkImport(() => import('./components/auth/CommPrefsPage')));
 
 const Loading: React.FC = () => (
   <div role="status" aria-live="polite" style={{

@@ -39,8 +39,6 @@
     "grantNowPublic": "已不再私有",
     "grantUnknown": "未找到",
     "accessTip": "两个层级：每个冲片，以及它的每个配置（展开该行）。设为“随电机”的配置跟随冲片；私有、公开或指定客户会覆盖冲片的设置，因此私有冲片也可以只开放一个配置。",
-    "showConfigs": "显示配置",
-    "hideConfigs": "隐藏配置",
     "cfgStatus": {
       "inherit": "随电机",
       "private": "私有",

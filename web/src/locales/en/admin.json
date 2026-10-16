@@ -39,8 +39,6 @@
     "grantNowPublic": "no longer private",
     "grantUnknown": "not found",
     "accessTip": "Two levels: each die, and each of its configurations (expand a row). A configuration set to As motor follows its die; Private, Public or Selected clients override it, so a private die can still open one configuration.",
-    "showConfigs": "Show configurations",
-    "hideConfigs": "Hide configurations",
     "cfgStatus": {
       "inherit": "As motor",
       "private": "Private",

@@ -11,12 +11,10 @@ import {
   Box, Typography, Paper, Chip, Button, CircularProgress, Table, TableBody,
   TableCell, TableHead, TableRow, TextField, Drawer, RadioGroup, FormControlLabel,
   Radio, Checkbox, Divider, Autocomplete, Dialog, DialogTitle, DialogContent,
-  DialogActions, IconButton, Tooltip,
+  DialogActions, Tooltip,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import RefreshIcon from '@mui/icons-material/Refresh';
-import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
-import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import HelpTip from '../../common/HelpTip';
 import {
   canSaveConfig, configAccessOf, configPutBody, openConfigs, withConfigAccess,
@@ -28,9 +26,14 @@ const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
 
 type Visibility = 'private' | 'public' | 'selected';
 const VIS_LABEL: Record<Visibility, string> = { private: 'Private', public: 'Public', selected: 'Selected clients' };
-const VIS_COLOR: Record<Visibility, string> = { private: 'var(--text-3)', public: '#4ade80', selected: '#60a5fa' };
-const CFG_COLOR: Record<CfgStatus, string> = { inherit: 'var(--text-4)', private: 'var(--text-1)', public: '#4ade80', selected: '#60a5fa' };
-const CHIP_SX = { height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)' } as const;
+/** Open to every signed-in client = green, named clients only = blue, closed = red. */
+const OPEN = '#16a34a', CLIENTS = '#2563eb', CLOSED = '#dc2626';
+const VIS_COLOR: Record<Visibility, string> = { private: CLOSED, public: OPEN, selected: CLIENTS };
+/** What a configuration's status means for clients: `inherit` takes the die's own colour. */
+const cfgColor = (c: ConfigAccess, die: DieRow): string =>
+  c.status === 'inherit' ? VIS_COLOR[die.visibility] : c.status === 'public' ? OPEN : c.status === 'selected' ? CLIENTS : CLOSED;
+const CHIP_SX = { height: 18, fontSize: 10.5, fontWeight: 700 } as const;
+const tinted = (color: string) => ({ ...CHIP_SX, color, bgcolor: `${color}1f` });
 
 type Source = 'open' | 'private';
 const SOURCE_HELP = 'Open = public GitHub repository (Apache-2.0): publishing pushes there at once and is public immediately. Private = our private repository. Only MOTRES reference data; customer dies never go to git.';
@@ -84,7 +87,6 @@ const MotorsAccessSection: React.FC = () => {
   const [selChecked, setSelChecked] = useState<Set<string>>(new Set());
   const [drawerFor, setDrawerFor] = useState<DieRow | null>(null);
   const [cfgDrawer, setCfgDrawer] = useState<{ die: string; cfg: ConfigAccess } | null>(null);
-  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -165,9 +167,6 @@ const MotorsAccessSection: React.FC = () => {
   const toggleChecked = (name: string) => setSelChecked((s) => {
     const n = new Set(s); if (n.has(name)) n.delete(name); else n.add(name); return n;
   });
-  const toggleExpanded = (name: string) => setExpanded((s) => {
-    const n = new Set(s); if (n.has(name)) n.delete(name); else n.add(name); return n;
-  });
 
   return (
     <Box>
@@ -218,7 +217,6 @@ const MotorsAccessSection: React.FC = () => {
             <TableBody>
               {filtered.map((d) => {
                 const cfgs = configAccessOf(d);
-                const open = expanded.has(d.name);
                 return (
                 <React.Fragment key={d.name}>
                 <TableRow hover sx={{ cursor: 'pointer' }}>
@@ -226,15 +224,7 @@ const MotorsAccessSection: React.FC = () => {
                     <Checkbox size="small" checked={selChecked.has(d.name)} onChange={() => toggleChecked(d.name)} />
                   </TableCell>
                   <TableCell onClick={() => setDrawerFor(d)}>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                      <IconButton size="small" disabled={cfgs.length === 0}
-                        aria-label={t(open ? 'motors.hideConfigs' : 'motors.showConfigs')} aria-expanded={open}
-                        onClick={(e) => { e.stopPropagation(); toggleExpanded(d.name); }}
-                        sx={{ p: 0.25, color: 'var(--text-3)', visibility: cfgs.length === 0 ? 'hidden' : 'visible' }}>
-                        {open ? <KeyboardArrowDownIcon sx={{ fontSize: 18 }} /> : <KeyboardArrowRightIcon sx={{ fontSize: 18 }} />}
-                      </IconButton>
-                      <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{d.name}</Typography>
-                    </Box>
+                    <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{d.name}</Typography>
                   </TableCell>
                   <TableCell align="right" onClick={() => setDrawerFor(d)} sx={{ color: 'var(--text-2)' }}>{d.stator_diameter ?? '—'}</TableCell>
                   <TableCell align="center" onClick={() => setDrawerFor(d)}>
@@ -242,18 +232,18 @@ const MotorsAccessSection: React.FC = () => {
                   </TableCell>
                   <TableCell align="center" onClick={() => setDrawerFor(d)}>
                     <Chip size="small" label={sourceLabel(d) + (d.source_clash ? ' ⚠' : '')}
-                      sx={{ ...CHIP_SX, color: sourceColor(d) }} />
+                      sx={{ ...CHIP_SX, bgcolor: 'var(--panel)', color: sourceColor(d) }} />
                   </TableCell>
                   <TableCell align="right" onClick={() => setDrawerFor(d)} sx={{ color: 'var(--text-3)' }}>{d.used_by}</TableCell>
                 </TableRow>
-                {open && cfgs.map((c) => (
+                {cfgs.map((c) => (
                   <TableRow key={`${d.name}/${c.name}`} hover sx={{ cursor: 'pointer' }} onClick={() => setCfgDrawer({ die: d.name, cfg: c })}>
                     <TableCell padding="checkbox" />
-                    <TableCell sx={{ pl: 5.5 }}>
-                      <Typography sx={{ fontSize: 12.5, color: 'var(--text-1)' }}>{c.name}</Typography>
+                    <TableCell sx={{ pl: 3 }}>
+                      <Typography sx={{ fontSize: 12.5, color: 'var(--text-1)' }}>{'└'} {c.name}</Typography>
                     </TableCell>
                     <TableCell />
-                    <TableCell align="center"><Chip size="small" label={cfgStatusLabel(t, c)} sx={{ ...CHIP_SX, color: CFG_COLOR[c.status] }} /></TableCell>
+                    <TableCell align="center"><Chip size="small" label={cfgStatusLabel(t, c)} sx={tinted(cfgColor(c, d))} /></TableCell>
                     <TableCell />
                     <TableCell />
                   </TableRow>
@@ -289,12 +279,12 @@ const DieStatusChip: React.FC<{ die: DieRow }> = ({ die }) => {
   const { t } = useTranslation('admin');
   const open = die.visibility === 'private' ? openConfigs(die) : [];
   if (open.length === 0) {
-    return <Chip size="small" label={statusLabel(die)} sx={{ ...CHIP_SX, color: VIS_COLOR[die.visibility] }} />;
+    return <Chip size="small" label={statusLabel(die)} sx={tinted(VIS_COLOR[die.visibility])} />;
   }
   const list = open.map((c) => `${c.name} (${cfgStatusLabel(t, c)})`).join(', ');
   return (
     <Tooltip title={t('motors.dieOpenTip', { list })}>
-      <Chip size="small" label={t('motors.dieOpenChip', { count: open.length })} sx={{ ...CHIP_SX, color: VIS_COLOR.private }} />
+      <Chip size="small" label={t('motors.dieOpenChip', { count: open.length })} sx={tinted(VIS_COLOR.private)} />
     </Tooltip>
   );
 };

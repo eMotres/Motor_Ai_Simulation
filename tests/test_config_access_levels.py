@@ -118,10 +118,10 @@ def env(request, tmp_path, monkeypatch):
     def write(dies_dir: Path) -> None:
         d = dies_dir / DIE
         d.mkdir(parents=True)
-        (d / "die.yaml").write_text(_die_doc(), encoding="utf-8")
-        (d / f"{OPEN}.yaml").write_text(_cfg_doc(OPEN, "public"), encoding="utf-8")
-        (d / f"{HIDDEN}.yaml").write_text(_cfg_doc(HIDDEN, "private"), encoding="utf-8")
-        (d / f"{SIBLING}.yaml").write_text(_cfg_doc(SIBLING, None), encoding="utf-8")
+        (d / "die.yaml").write_text(_die_doc(), encoding="utf-8", newline="\n")
+        (d / f"{OPEN}.yaml").write_text(_cfg_doc(OPEN, "public"), encoding="utf-8", newline="\n")
+        (d / f"{HIDDEN}.yaml").write_text(_cfg_doc(HIDDEN, "private"), encoding="utf-8", newline="\n")
+        (d / f"{SIBLING}.yaml").write_text(_cfg_doc(SIBLING, None), encoding="utf-8", newline="\n")
 
     if layered:
         tree = tmp_path / "srv"

@@ -42,6 +42,7 @@ BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask"), "PhaseBoard_copper":
                  "PhaseBoard_pins": palette.rgb("pcb_pins"), "PhaseBoard_other": palette.rgb("pcb_fr4")}
 VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny parts are limited by the tessellation tolerance)
 ANG = 0.3                       # angular deflection (rad) of the viewer meshes
+PREVIEW_TOL = 0.5               # coarse linear deflection (mm) for the fast, explicitly labelled preview
 ORDER = ["Core", "Coils", "Rotor", "Magnets", "Magnets_S", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_front_balls", "Bearings_front_seals",
          "Bearings_back", "Bearings_back_balls", "Bearings_back_seals", "Holder_front", "Holder_back",
          "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
@@ -261,6 +262,53 @@ def add_motor(col, parts):
     return info
 
 
+def export_document(src, out_dir, mid, preview=False, gate_result=None):
+    """Export a health-gated viewer GLB from an already-open model document.
+
+    Preview callers use the document built in the same FreeCAD process, avoiding an FCStd
+    save/reopen cycle. The preview is deliberately coarse and omits cosmetic thread nodes.
+    """
+    gt = gate_result or health.gate(src)
+    if not gt["ok"]:
+        return dict(ok=False, message="health gate failed - NO 3D model written: " + " | ".join(gt["errors"][:8]),
+                    gate=gt["errors"])
+    meta = dict(src.Meta or {})
+    parts = dict(
+        core=src.getObject("Core").Shape.copy(), rotor=src.getObject("RotorCore").Shape.copy(),
+        coils=[s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids],
+        mags=[s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids],
+        mech=mechanics.solids(src), board=electronics.board_shape(src) if electronics.has_board(src) else None)
+    allbb = [parts["core"].BoundBox, parts["rotor"].BoundBox] + [s.BoundBox for s in parts["mech"].values()] \
+        + ([parts["board"].BoundBox] if parts["board"] else [])
+    diag = math.sqrt(sum((max(getattr(b, a + "Max") for b in allbb) - min(getattr(b, a + "Min") for b in allbb)) ** 2 for a in "XYZ"))
+    tol = PREVIEW_TOL if preview else min(0.2, max(0.01, 0.0006 * diag))
+    asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), template=meta.get("motor_template"),
+                 cad_variant="frameless" if frameless.is_frameless(src) else "full", tessellation_mm=round(tol, 4))
+    if preview:
+        asset["preview"] = True
+    col = Collector(tol, None if preview else (thread_rules(src) if os.environ.get("FC_THREADS", "1") != "0" else None))
+    board_info = add_motor(col, parts)
+    glb, st = col.glb(asset)
+    gsha = col.geometry_sha256()
+    plate_board = electronics.has_board(src) and electronics.is_plate(src)
+    worst = max([c[3] for c in col.checks] or [0.0])
+    ok = worst < VOL_TOL and (board_info is None or board_info.get("PhaseBoard_copper", 0) > 0          # the copper board is in the model
+                              or (plate_board and board_info.get("PhaseBoard_pins", 0) > 0))               # (CIANO28 85: plate + lead sleeves)
+    suffix = "_preview.glb" if preview else "_full.glb"
+    rep = dict(motor_id=mid, kind="preview" if preview else "full", tessellation_mm=round(tol, 4), glb=mid + suffix, bytes=len(glb), board=board_info,
+               geometry_sha256=gsha, threads=[dict(solid=n, **t) for n, t in col.threads],
+               worst_mesh_volume_error=round(worst, 5), freecad_version=".".join(str(x) for x in App.Version()[:3]), ok=ok, **st,
+               mesh_checks=[dict(node=c[0], solid_volume=c[1], mesh_volume=c[2], rel_error=round(c[3], 5)) for c in col.checks])
+    rep["gate_passed"] = True
+    if not ok:
+        rep["message"] = "3D model check failed: worst_mesh_volume_error=%.4f board=%s" % (worst, board_info)
+        return rep
+    os.makedirs(out_dir, exist_ok=True)
+    with open(os.path.join(out_dir, rep["glb"]), "wb") as fh:
+        fh.write(glb)
+    return rep
+
+
 def main():
     model = os.environ["FC_MODEL"]
     out_dir = os.environ["FC_OUT_DIR"]
@@ -275,49 +323,21 @@ def main():
         ps.set_param(sh, k, v)
     if overrides:
         src.recompute()
-    gt = health.gate(src)
-    if not gt["ok"]:
-        App.closeDocument(src.Name)
-        return finish(False, "health gate failed - NO 3D model written: " + " | ".join(gt["errors"][:8]), gate=gt["errors"])
-    meta = dict(src.Meta or {})
-    parts = dict(
-        core=src.getObject("Core").Shape.copy(), rotor=src.getObject("RotorCore").Shape.copy(),
-        coils=[s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids],
-        mags=[s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids],
-        mech=mechanics.solids(src), board=electronics.board_shape(src) if electronics.has_board(src) else None)
-    allbb = [parts["core"].BoundBox, parts["rotor"].BoundBox] + [s.BoundBox for s in parts["mech"].values()] \
-        + ([parts["board"].BoundBox] if parts["board"] else [])
-    diag = math.sqrt(sum((max(getattr(b, a + "Max") for b in allbb) - min(getattr(b, a + "Min") for b in allbb)) ** 2 for a in "XYZ"))
-    tol = min(0.2, max(0.01, 0.0006 * diag))
-    asset = dict(motor_id=mid, die=meta.get("motor_die"), config=meta.get("motor_variant"), template=meta.get("motor_template"),
-                 cad_variant="frameless" if frameless.is_frameless(src) else "full", tessellation_mm=round(tol, 4))
-    col = Collector(tol, thread_rules(src) if os.environ.get("FC_THREADS", "1") != "0" else None)
-    board_info = add_motor(col, parts)
-    glb, st = col.glb(asset)
-    gsha = col.geometry_sha256()
-    plate_board = electronics.has_board(src) and electronics.is_plate(src)
+    rep = export_document(src, out_dir, mid)
     App.closeDocument(src.Name)
-
-    worst = max([c[3] for c in col.checks] or [0.0])
-    ok = worst < VOL_TOL and (board_info is None or board_info.get("PhaseBoard_copper", 0) > 0          # the copper board is in the model
-                              or (plate_board and board_info.get("PhaseBoard_pins", 0) > 0))               # (CIANO28 85: plate + lead sleeves)
-    rep = dict(motor_id=mid, tessellation_mm=round(tol, 4), glb=mid + "_full.glb", bytes=len(glb), board=board_info,
-               geometry_sha256=gsha, threads=[dict(solid=n, **t) for n, t in col.threads],
-               worst_mesh_volume_error=round(worst, 5), freecad_version=".".join(str(x) for x in App.Version()[:3]), ok=ok, **st,
-               mesh_checks=[dict(node=c[0], solid_volume=c[1], mesh_volume=c[2], rel_error=round(c[3], 5)) for c in col.checks])
-    os.makedirs(out_dir, exist_ok=True)
     with open(os.environ["FC_REPORT"], "w", encoding="utf-8") as fh:
         json.dump(rep, fh, indent=1)
     print(json.dumps({k: v for k, v in rep.items() if k != "mesh_checks"}, indent=1))
-    if not ok:
-        return finish(False, "3D model check failed: worst_mesh_volume_error=%.4f board=%s" % (worst, board_info))
-    with open(os.path.join(out_dir, mid + "_full.glb"), "wb") as fh:
-        fh.write(glb)
-    return finish(True, "3D model written: %d bytes, %d triangles" % (len(glb), st["triangles"]))
+    if not rep.get("ok"):
+        return finish(False, rep.get("message", "3D model export failed"), gate=rep.get("gate"))
+    return finish(True, "3D model written: %d bytes, %d triangles" % (rep["bytes"], rep["triangles"]))
 
 
-try:
-    main()
-except Exception:
-    traceback.print_exc()
-    finish(False, "exception: " + traceback.format_exc().splitlines()[-1])
+_STANDALONE_ENV = all(os.environ.get(k) for k in ("FC_MODEL", "FC_OUT_DIR", "FC_MOTOR_ID", "FC_REPORT", "FC_STATUS"))
+_RUN_EXPORT = (__name__ == "__main__" or os.environ.get("FC_EXPORT_MODELS_MAIN") == "1" or _STANDALONE_ENV)
+if os.environ.get("FC_PREVIEW") != "1" and _RUN_EXPORT:
+    try:
+        main()
+    except Exception:
+        traceback.print_exc()
+        finish(False, "exception: " + traceback.format_exc().splitlines()[-1])

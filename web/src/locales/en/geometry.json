@@ -110,6 +110,7 @@
   "cadErr_int": "Must be a whole number",
   "cadErr_range": "Allowed range: {min} to {max}",
   "modelRebuilding": "Rebuilding the model...",
+  "modelPreview": "Preview",
   "modelQueued": "Rebuild queued",
   "modelRebuildFailed": "Rebuild failed",
   "rebuildNow": "Rebuild now",

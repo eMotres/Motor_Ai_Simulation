@@ -41,7 +41,7 @@ export function useOpenMotor(): OpenMotor | null {
 
 /** The built models the account may open, whether it may download (the server's `can_download`) and why not (`access`: the NDA, or the
  *  applicant verification behind it). */
-export function useModelList(refreshKey: string | number = 0) {
+export function useModelList(refreshKey: string | number = 0, selected: OpenMotor | null = null, pollIfMissing = false) {
   const ready = useApiReady();
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [canDownload, setCanDownload] = useState(false);
@@ -62,6 +62,29 @@ export function useModelList(refreshKey: string | number = 0) {
     })();
     return () => { live = false; };
   }, [ready, refreshKey]);
+  const activeModels = selected ? models?.filter((m) => m.die === selected.die && m.config === selected.config) : models;
+  const poll = selected
+    ? (activeModels?.length ? activeModels.some((m) => m.stale || m.rebuilding) : pollIfMissing && models !== null)
+    : !!activeModels?.some((m) => m.stale || m.rebuilding);
+  useEffect(() => {
+    if (!ready || !poll) return undefined;
+    let live = true;
+    let busy = false;
+    const id = window.setInterval(() => {
+      if (busy) return;
+      busy = true;
+      void fetch(`${API}/api/model3d/models`, { cache: 'no-store' }).then(async (r) => {
+        if (!r.ok) return;
+        const j = await r.json();
+        if (!live) return;
+        setCanDownload(j.can_download === true);
+        setAccess(parseAccess(j.access, j.can_download === true));
+        setModels(j.models as ModelInfo[]);
+      }).catch(() => { /* keep the last visible model during a brief network failure */ })
+        .finally(() => { busy = false; });
+    }, 4000);
+    return () => { live = false; window.clearInterval(id); };
+  }, [ready, poll, selected?.die, selected?.config]);
   return { models, canDownload, access };
 }
 

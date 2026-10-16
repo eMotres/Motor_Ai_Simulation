@@ -24,6 +24,8 @@ export interface UnifiedViewerProps {
   simplifiedText?: string;
   simplifiedTip?: string;
   noViewText?: string;
+  /** Keep this motor's current scene visible while a replacement GLB loads. */
+  retainOnReplace?: boolean;
   onLoaded?: (r: { groups: PartGroup[]; range: { min: number; max: number } }) => void;
   onMeasure?: (mm: number | null) => void;
   onError?: (message: string | null) => void;
@@ -95,6 +97,7 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
     {p.hostExtras}
     <Box sx={{ flex:1, minHeight:0, minWidth:0, position:'relative' }}>
       <ModelCanvas ref={canvas} sourceKey={p.sourceKey} glbUrl={p.glbUrl} objectScene={objectScene} tools={tools} fullAccess={full} highlight={highlight} hiddenNodes={hiddenNodes}
+        retainOnReplace={p.retainOnReplace}
         contextLostText={p.contextLostText} simplifiedText={p.simplifiedText} simplifiedTip={p.simplifiedTip} noViewText={p.noViewText} onLoaded={loaded} onReady={setSceneReady}
         onMeasure={(mm) => { setMeasuredMm(mm); p.onMeasure?.(mm); }} onCameraDirection={setCameraDirection} onCameraUp={setCameraUp} onSelect={onSelectName} onError={p.onError} />
       {sceneReady && <Box sx={{ position:'absolute', top:8, right:8, zIndex:6 }}><NavigationCube cameraDirection={cameraDirection} cameraUp={cameraUp} onView={onView} label={(v) => t(`cube.${v}`)} title={t('cube.title')} /></Box>}

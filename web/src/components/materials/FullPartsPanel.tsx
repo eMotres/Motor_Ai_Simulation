@@ -6,7 +6,7 @@
  * the die.  A row selected in the tree is highlighted in the viewer.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Box, CircularProgress, Tooltip, Typography } from '@mui/material';
+import { Box, Chip, CircularProgress, Tooltip, Typography } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
@@ -36,11 +36,12 @@ const FullPartsPanel: React.FC = () => {
   const openMotor = useOpenMotor();
   const die = openMotor?.die ?? null;
   const config = openMotor?.config ?? null;
-  const { models, canDownload } = useModelList();
+  const { models, canDownload } = useModelList(0, die && config ? { die, config } : null, true);
   const { payload, rows, loading, saving, error, choose, localMode } = useFullParts(die, config, canDownload);
   const model = useMemo(
     () => models?.find((m) => !!die && modelKey(m) === modelKey({ die, config: config ?? '' })) ?? null, [models, die, config]);
   const fullAccess = fullToolsOpen(viewOf(model, canDownload));
+  const previewInUse = !!model?.preview_current && (!model.glb_sha256 || model.stale || model.rebuilding);
   const currentPayload = !!die && payload?.available === true && payload.die === die && payload.config === (config ?? '');
 
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -135,6 +136,10 @@ const FullPartsPanel: React.FC = () => {
         <Box sx={{ flex: 1 }} />
         {die && <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{die}{config ? ` / ${config}` : ''}</Typography>}
         {saving && <CircularProgress size={12} />}
+        {model?.rebuilding && <Chip size="small" icon={<CircularProgress size={11} />} label={tg('modelRebuilding')} sx={{ height: 22, fontSize: 10.5 }} data-testid="model-rebuilding-badge" />}
+        {model?.stale && !model.rebuilding && <Chip size="small" color={model.rebuild_state === 'failed' ? 'error' : 'warning'}
+          label={tg(model.rebuild_state === 'failed' ? 'modelRebuildFailed' : 'modelStale')} sx={{ height: 22, fontSize: 10.5 }} data-testid="model-stale-badge" />}
+        {previewInUse && <Chip size="small" label={tg('modelPreview')} sx={{ height: 22, fontSize: 10.5 }} data-testid="model-preview-badge" />}
         {!saving && nonEm && localMode && (
           <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>{tx('materialsFullLocal')}</Typography>)}
         {fullAccess && currentPayload && selectedKey && byKey.has(selectedKey) && <Box data-testid="materials-full-selected-part" sx={{ display:'flex', alignItems:'center', gap:0.75, px:1, py:.25, border:'1px solid var(--line)', borderRadius:1 }}>
@@ -144,8 +149,9 @@ const FullPartsPanel: React.FC = () => {
 
       <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }} data-testid="materials-full-viewer">
         {model ? (
-          <UnifiedViewer sourceKey={`${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}`} resetKey={`materialsFull:${modelKey(model)}`}
+          <UnifiedViewer sourceKey={`${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.preview_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}:${modelGlbUrl(model, canDownload) ?? ''}`} resetKey={`materialsFull:${modelKey(model)}`}
             glbUrl={modelGlbUrl(model, canDownload)} toolbarSpec={fullAccess ? 'full' : 'simplified'} tree={assembly}
+            retainOnReplace={fullAccess}
             selectedKey={selectedKey} onSelectedKeyChange={setSelectedKey} contextLostText={tg('contextLost')}
             simplifiedText={tg('simplifiedLine')} simplifiedTip={tg('simplifiedLineTip')} noViewText={tg('noView')}
             onLoaded={({ groups: g }) => setNodes(g)} />

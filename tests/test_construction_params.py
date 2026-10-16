@@ -70,9 +70,12 @@ def env(tmp_path, monkeypatch):
         (d / f"{mid}.FCStd").write_bytes(FCSTD)
         shutil.copy2(REF, d / "params.json")
         files = {f"{mid}_full.glb": GLB, f"{mid}_active.step": STEP, f"{mid}.FCStd": FCSTD}
+        from motor_ai_sim.cad.input_fingerprint import current_build_inputs
+        build_inputs_hash = current_build_inputs(str(dies), DIE, v)["build_inputs_hash"]
         (d / "manifest.json").write_text(json.dumps({
             "motor_id": mid, "die": DIE, "config": v, "param_hash": "ab" * 32, "built_at": "2026-10-13T12:00:00+00:00",
             "template": {"version": "A.5.0"}, "cad_overrides_hash": "none",
+            "build_inputs_hash": build_inputs_hash,
             "files": {n: {"sha256": _sha(x), "bytes": len(x)} for n, x in files.items()}}), encoding="utf-8")
     monkeypatch.setenv("MOTRES_CAD_DIR", str(cad))
     monkeypatch.setenv("MOTRES_CAD_ROOT", str(cad))
@@ -342,6 +345,38 @@ def test_every_save_is_audited_and_requests_a_rebuild(env):
     assert RQ.pending(env["cad"])[0]["die"] == DIE
 
 
+def test_catalog_save_queues_build_inputs_but_not_duty_only_changes(env):
+    from motor_ai_sim.cad import rebuild_queue as RQ
+    from motor_ai_sim.routes import family as fam
+
+    cfg_path = env["dies"] / DIE / f"{CFG}.yaml"
+    cfg = _cfg_doc(env)
+    cfg.setdefault("duties", []).append({"name": "new duty", "rpm": 1234})
+    fam._save_yaml(cfg_path, cfg)
+    assert RQ.read(env["cad"], DIE, CFG) is None
+
+    cfg["geometry_overrides"] = dict(cfg.get("geometry_overrides") or {}, motor_length=13.0)
+    fam._save_yaml(cfg_path, cfg)
+    rec = RQ.read(env["cad"], DIE, CFG)
+    assert rec and rec["state"] == "pending" and len(rec["build_inputs_hash"]) == 64
+
+
+def test_geometry_free_keys_sync_to_config_and_queue_when_die_locked(env, monkeypatch):
+    from motor_ai_sim.cad import rebuild_queue as RQ
+    from motor_ai_sim.cad import store as CS
+    from motor_ai_sim.routes import family as fam
+
+    cfg = CS.load_effective(str(env["dies"]), DIE, CFG)
+    before = dict(cfg["geometry"])
+    updated = dict(before, motor_length=float(before.get("motor_length", 12.0)) + 1.0)
+    monkeypatch.setattr(fam, "_read_ctx", lambda: {"die": DIE, "config": CFG})
+    fam.sync_active_die_geometry(updated, prev_geo=before)
+    saved = _cfg_doc(env)
+    assert saved["geometry_overrides"]["motor_length"] == updated["motor_length"]
+    rec = RQ.read(env["cad"], DIE, CFG)
+    assert rec and rec["state"] == "pending"
+
+
 # ── the rebuild hand-over ──────────────────────────────────────────────────────────────────────────────────
 
 def test_rebuild_status_follows_the_manifest_hash_and_the_worker(env, monkeypatch):
@@ -369,6 +404,7 @@ def test_rebuild_status_follows_the_manifest_hash_and_the_worker(env, monkeypatc
     mf = env["cad"] / DIE / CFG / "manifest.json"
     m = json.loads(mf.read_text("utf-8"))
     m["cad_overrides_hash"] = h
+    m["build_inputs_hash"] = RQ.read(env["cad"], DIE, CFG)["build_inputs_hash"]
     mf.write_text(json.dumps(m), "utf-8")
     assert client.get(CP, headers=env["admin"]).json()["rebuild"]["state"] == "current"
     # building shows as such

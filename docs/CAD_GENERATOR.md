@@ -43,6 +43,13 @@ Wrap it in `nice -n 19 ionice -c3` and do not take the compute-lane locks. Witho
 `--freecadcmd` / `$FREECADCMD` / PATH finds the binary). `--dry-run` writes only the profile. `--profile-file P --out-dir D`
 builds from an explicit profile (reference builds, tests).
 
+`--preview` runs the same parametric construction and health checks, then exports a coarse GLB from the in-memory FreeCAD
+document in that same process. It skips FCStd, STEP, BOM, simplified-model, GUI-finish, informational board-fit diagnostics,
+and thread-node exports. Mechanical fit remains a build gate. The checked
+asset and metadata are promoted atomically under `<output>/preview/`; the released files and manifest stay in place. A later
+full-output swap carries the preview directory forward so the viewer can keep using it while the full GLB is pending.
+The preview metadata records `kind: preview`, `ready`, the build-input hash, mesh checks, tessellation and the GLB hash.
+
 Exit code 0 ok, 2 bad input, 3 refused by a check (pre-check of the validity domain, health gate, visibility rules,
 "opens ready to look at" check, STEP re-import check), 4 crash. The build goes into a temporary sibling directory and
 replaces the old output only when every check passed.

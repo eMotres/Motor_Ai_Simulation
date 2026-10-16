@@ -1,6 +1,10 @@
 {
   "motor": "电机",
   "inPreparation": "此电机的 3D 模型正在准备中。",
+  "modelRebuilding": "\u6b63\u5728\u91cd\u5efa...",
+  "modelStale": "\u6a21\u578b\u5df2\u8fc7\u65f6",
+  "modelRebuildFailed": "\u6a21\u578b\u91cd\u5efa\u5931\u8d25",
+  "modelPreview": "\u9884\u89c8",
   "none": "您的电机暂无可用的 3D 模型。",
   "parts": "零件",
   "part": {

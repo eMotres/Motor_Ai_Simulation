@@ -98,7 +98,6 @@ export class ModelViewer {
   /** Parse a GLB and show it.  Returns the part groups in file order. */
   async load(buffer: ArrayBuffer): Promise<{ groups: PartGroup[]; box: Box }> {
     const token = ++this.loadToken;
-    this.clear();
     const gltf = await new GLTFLoader().parseAsync(buffer, '');
     if (token !== this.loadToken || this.disposed) {
       gltf.scene.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.geometry.dispose(); for (const mt of Array.isArray(m.material) ? m.material : [m.material]) mt.dispose(); } });
@@ -111,7 +110,15 @@ export class ModelViewer {
       groups.push({ name: node.name, family: ex.family ?? node.name, explode: Number(ex.explode ?? 0),
         children: node.children.map((c) => c.name), colour: this.colourOf(node) });
     }
+    // setObject clears the previous scene only after parsing has completed, so
+    // users keep seeing the last gated artifact while its replacement loads.
     this.setObject(gltf.scene, groups, model);
+    gltf.scene.traverse((o) => {
+      const mesh = o as Mesh;
+      if (!mesh.isMesh) return;
+      mesh.geometry.dispose();
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) material.dispose();
+    });
     return { groups: this.groups.map((g) => g.part), box: this.box };
   }
 

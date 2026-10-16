@@ -6,7 +6,7 @@
 // the model, the motor picker, Fit, the "Download after NDA" note and the Sign button.  No bill of materials, no prices.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, CircularProgress, IconButton, MenuItem, Popover, Select, Tooltip, Typography,
+  Alert, Box, Button, Chip, CircularProgress, IconButton, MenuItem, Popover, Select, Tooltip, Typography,
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import DownloadIcon from '@mui/icons-material/Download';
@@ -53,6 +53,27 @@ const Model3DPanel: React.FC = () => {
   const [dl, setDl] = useState<'idle' | 'busy'>('idle');
 
   const model = useMemo(() => models?.find((m) => modelKey(m) === key) ?? null, [models, key]);
+  const previewInUse = !!model?.preview_current && (!model.glb_sha256 || model.stale || model.rebuilding);
+
+  // A queued or running build can finish while this tab remains open. Refresh
+  // only the selected model's listing until the server reports a stable state.
+  useEffect(() => {
+    const waitingForFirstBuild = !model && preparing && !!openMotor?.die && !!openMotor?.config;
+    if (!waitingForFirstBuild && (!model || (!model.stale && !model.rebuilding))) return;
+    let live = true;
+    let busy = false;
+    const timer = window.setInterval(() => {
+      if (busy) return;
+      busy = true;
+      void fetch(`${API}/api/model3d/models`).then(async (r) => {
+        if (!r.ok) return;
+        const j = await r.json();
+        if (live) setModels(j.models as ModelInfo[]);
+      }).catch(() => { /* the previous model remains visible through a brief network failure */ })
+        .finally(() => { busy = false; });
+    }, 4000);
+    return () => { live = false; window.clearInterval(timer); };
+  }, [model?.die, model?.config, model?.stale, model?.rebuilding, preparing, openMotor?.die, openMotor?.config]);
 
   useEffect(() => {
     window.dispatchEvent(new CustomEvent('model3d-view-selected', { detail: { name: model ? modelLabel(model) : null } }));
@@ -216,12 +237,19 @@ const Model3DPanel: React.FC = () => {
       )}
 
       <Box sx={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
-        <UnifiedViewer sourceKey={model ? `${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}` : ''} resetKey={`model3d:${model ? modelKey(model) : ''}`}
+        <UnifiedViewer sourceKey={model ? `${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.preview_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}:${modelGlbUrl(model, canDownload) ?? ''}` : ''} resetKey={`model3d:${model ? modelKey(model) : ''}`}
           glbUrl={modelGlbUrl(model, canDownload)} toolbarSpec={full ? 'full' : 'simplified'} tree={ready ? assembly : null}
+          retainOnReplace={full}
           selectedKey={selectedKey} onSelectedKeyChange={setSelectedKey} contextLostText={t('contextLost')} simplifiedText={t('simplifiedLine')} simplifiedTip={t('simplifiedLineTip')}
           noViewText={t('noView')} onLoaded={({ groups }) => setNodes(groups)} hostExtras={<>
             {err && <Alert severity="error" sx={{ position: 'absolute', bottom: 8, left: 8, right: 8, fontSize: 12, zIndex: 3 }} onClose={() => setErr(null)}>{err}</Alert>}
             {ready && preparing && !model && <Typography sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>{t('inPreparation')}</Typography>}
+            {model && (model.stale || model.rebuilding || previewInUse) && <Box sx={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: 0.6, zIndex: 4 }}>
+              {model.rebuilding && <Chip size="small" icon={<CircularProgress size={11} />} label={t('modelRebuilding')} sx={{ height: 22, fontSize: 10.5 }} data-testid="model-rebuilding-badge" />}
+              {model.stale && !model.rebuilding && <Chip size="small" color={model.rebuild_state === 'failed' ? 'error' : 'warning'}
+                label={t(model.rebuild_state === 'failed' ? 'modelRebuildFailed' : 'modelStale')} sx={{ height: 22, fontSize: 10.5 }} data-testid="model-stale-badge" />}
+              {previewInUse && <Chip size="small" label={t('modelPreview')} sx={{ height: 22, fontSize: 10.5 }} data-testid="model-preview-badge" />}
+            </Box>}
           </>} />
       </Box>
     </Box>

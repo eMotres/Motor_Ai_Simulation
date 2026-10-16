@@ -119,6 +119,47 @@ def test_owner_gets_the_glb_and_the_step(env):
     assert client.get(env["url"] + "/model.step", headers=env["admin"]).status_code == 200
 
 
+def test_queued_rebuild_does_not_replace_the_nda_user_record(env, monkeypatch):
+    from motor_ai_sim.cad import rebuild_queue as RQ
+    # The queue row is deliberately unrelated to account authorization. It must
+    # not be passed to can_download in place of the signed-in user's record.
+    monkeypatch.setattr(RQ, "status", lambda *a, **k: {"state": "building", "stale": True})
+    monkeypatch.setattr(RQ, "read", lambda *a, **k: {"state": "building", "build_inputs_hash": "current"})
+    body = client.get("/api/model3d/models", headers=env["nda"]).json()
+    assert body["models"][0]["view"] == "full"
+    assert body["models"][0]["rebuilding"] is False  # unknown current hash does not match the queue row
+
+
+def test_preview_is_gated_like_the_full_glb(env, monkeypatch):
+    d = M.cad_root() / DIE / CFG
+    preview_dir = d / "preview"
+    preview_dir.mkdir()
+    preview = b"glTF-PREVIEW-BYTES"
+    name = MID + "_preview.glb"
+    (preview_dir / name).write_bytes(preview)
+    (preview_dir / "manifest.json").write_text(json.dumps({
+        "motor_id": MID, "die": DIE, "config": CFG, "build_inputs_hash": "preview-hash", "ready": True, "gate_passed": True,
+        "files": {name: {"sha256": _sha(preview), "bytes": len(preview)}}}))
+    from motor_ai_sim.routes import model3d as R
+    monkeypatch.setattr(R, "_current_build_hash", lambda entry: "preview-hash")
+    denied = client.get(env["url"] + "/preview.glb", headers=env["user"])
+    assert denied.status_code == 403 and denied.json()["detail"]["code"] == "nda_required"
+    allowed = client.get(env["url"] + "/preview.glb", headers=env["nda"])
+    assert allowed.status_code == 200 and allowed.content == preview
+    # A first build has no released manifest yet; the preview manifest alone
+    # still makes the model visible to the signed-in account that passes NDA.
+    (d / "manifest.json").write_text(json.dumps({"motor_id": MID, "die": DIE, "config": CFG, "files": {}}))
+    listed = client.get("/api/model3d/models", headers=env["nda"]).json()["models"][0]
+    assert listed["preview_current"] is True
+    assert listed["available"] is True and listed["view"] == "full"
+    assert "preview_build_inputs_hash" not in listed
+    hidden = client.get("/api/model3d/models", headers=env["user"]).json()["models"][0]
+    assert hidden["view"] == "none"
+    monkeypatch.setattr(R, "_current_build_hash", lambda entry: "different-hash")
+    stale = client.get(env["url"] + "/preview.glb", headers=env["nda"])
+    assert stale.status_code == 404
+
+
 def test_one_model_only_no_variant_and_no_envelope_served(env):
     body = client.get("/api/model3d/models", headers=env["admin"]).json()
     assert "variant" not in json.dumps(body).lower()

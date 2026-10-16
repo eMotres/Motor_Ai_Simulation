@@ -9,7 +9,8 @@ import os
 
 from . import bom, store
 
-DEFAULT_WIRE_STOCK = os.path.join(os.path.dirname(store.DEFAULT_SERVER_MATERIALS), "wire_stock.yaml")
+DEFAULT_WIRE_STOCK = (os.environ.get("MOTRES_WIRE_STOCK")
+                      or os.path.join(os.path.dirname(store.DEFAULT_SERVER_MATERIALS), "wire_stock.yaml"))
 EXTRA_CARDS = ("copper", "polyimide", "Nomex", "Aluminium_6061", "Steel_42CrMo4_QT")
 SKIP_KEYS = ("bh_curve", "core_loss_curves")
 
@@ -21,10 +22,14 @@ def _yaml(path):
 
 def assemble(eff, profile, materials_library=None, bearings_library=None, wire_stock=None):
     """Plain-data inputs of bom.build_bom for one effective machine (store.load_effective) and its profile."""
+    snapshots = eff.get("_build_input_documents") or {}
     cards = dict(eff.get("material_cards") or {})
     lib_path = materials_library or store.default_materials_library()
-    if os.path.exists(lib_path):
-        for cat, d in _yaml(lib_path).items():
+    material_doc = snapshots.get("materials")
+    if material_doc is None:
+        material_doc = _yaml(lib_path) if os.path.exists(lib_path) else {}
+    if material_doc:
+        for cat, d in material_doc.items():
             if isinstance(d, dict):
                 for name in EXTRA_CARDS:
                     if name in d and name not in cards:
@@ -32,13 +37,19 @@ def assemble(eff, profile, materials_library=None, bearings_library=None, wire_s
     bcard = None
     used = [v.get("card") for v in (eff.get("bearings") or {}).values() if isinstance(v, dict) and v.get("card")]
     blib = bearings_library or store.default_bearings_library()
-    if used and os.path.exists(blib):
-        for v in _yaml(blib).values():
+    bearing_doc = snapshots.get("bearings")
+    if bearing_doc is None:
+        bearing_doc = _yaml(blib) if os.path.exists(blib) else {}
+    if used and bearing_doc:
+        for v in bearing_doc.values():
             if isinstance(v, dict) and used[0] in v:
                 bcard = v[used[0]]
-        bcard = bcard or _yaml(blib).get(used[0])
+        bcard = bcard or bearing_doc.get(used[0])
     ws_path = wire_stock or DEFAULT_WIRE_STOCK
-    stock = (_yaml(ws_path).get("wires") or []) if os.path.exists(ws_path) else []
+    wire_doc = snapshots.get("wire_stock")
+    if wire_doc is None:
+        wire_doc = _yaml(ws_path) if os.path.exists(ws_path) else {}
+    stock = wire_doc.get("wires") or []
     comps, total, src = [], None, "no config yaml"
     cfg_file = os.path.join(eff["dies_dir"], eff["die"], eff["config"])
     if os.path.exists(cfg_file):

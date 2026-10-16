@@ -71,6 +71,7 @@ const GeometryFullPanel: React.FC<Props> = ({ models, canDownload, cad, treeKey 
   const dirty = Object.keys(changes).length;
   const canWrite = !!data?.can_write;
   const badge = modelBadge(data?.rebuild);
+  const previewInUse = !!model?.preview_current && (!model.glb_sha256 || model.stale || model.rebuilding);
   const assembly = useAssemblyRows(tree, nodes);
 
   const onSave = useCallback(async () => {
@@ -205,6 +206,11 @@ const GeometryFullPanel: React.FC<Props> = ({ models, canDownload, cad, treeKey 
           <Chip data-testid="model-badge" icon={badge === 'failed' || badge === 'stale' ? undefined : <CircularProgress size={12} />}
             color={badge === 'failed' ? 'error' : 'warning'} size="small" label={badgeText} />
         )}
+        {!model && ['rebuilding', 'queued', 'stale', 'failed'].includes(badge) && (
+          <Chip data-testid="model-badge" icon={badge === 'failed' || badge === 'stale' ? undefined : <CircularProgress size={12} />}
+            color={badge === 'failed' ? 'error' : 'warning'} size="small" label={badgeText} />
+        )}
+        {previewInUse && <Chip size="small" label={tx('modelPreview')} data-testid="model-preview-badge" />}
         {has('rebuildNow') && (
           <Button size="small" variant="outlined" onClick={() => void requestRebuild()} data-testid="cad-rebuild-now"
             sx={{ textTransform: 'none', fontSize: 12 }}>{tx('rebuildNow')}</Button>
@@ -219,8 +225,9 @@ const GeometryFullPanel: React.FC<Props> = ({ models, canDownload, cad, treeKey 
 
       <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0 }}>
         {model ? (
-          <UnifiedViewer sourceKey={`${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}`} resetKey={`geometryFull:${modelKey(model)}`}
+          <UnifiedViewer sourceKey={`${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.preview_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}:${modelGlbUrl(model, canDownload) ?? ''}`} resetKey={`geometryFull:${modelKey(model)}`}
             glbUrl={modelGlbUrl(model, canDownload)} toolbarSpec={fullToolsOpen(viewOf(model, canDownload)) ? 'full' : 'simplified'} tree={assembly}
+            retainOnReplace={fullToolsOpen(viewOf(model, canDownload))}
             selectedKey={selectedKey} onSelectedKeyChange={setSelectedKey} contextLostText={tx('contextLost')}
             simplifiedText={tx('simplifiedLine')} simplifiedTip={tx('simplifiedLineTip')} noViewText={tx('noView')}
             onLoaded={({ groups }) => setNodes(groups)} hostExtras={badge === 'failed' && data?.rebuild.message ? (

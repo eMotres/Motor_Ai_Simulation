@@ -1,6 +1,7 @@
 """CAD builder CLI: simulation die + config  ->  <motor_id>.FCStd, full STEP, datums JSON, manifest.
 
   python -m motor_ai_sim.cad.build --die "CIANO14 40 new" --config L12
+  python -m motor_ai_sim.cad.build --die "CIANO14 40 new" --config L12 --preview
   python cad/run_build.py build --die "CIANO14 40 new" --config L20          (FreeCAD image: no FEM stack needed)
   python -m motor_ai_sim.cad.build --die "CIANO28 85 20SW1200" --config L13 --variant frameless      (the frameless kit)
 
@@ -24,6 +25,7 @@ Outputs go to <out-root>/<die>/<config>/ (default /srv/motres/shared/cad on the 
   pull_report.json             simulation vs CAD parameter table
   build_report.json / step_check.json / gui_report.json / gui_check.json
   manifest.json                die, config, param hash (_geoSig + CAD parameter hash), FreeCAD / template version, git sha
+  preview/<motor_id>_preview.glb and preview/manifest.json (fast, coarse viewer model)
 
 The build goes into a temporary sibling directory and replaces the old output only when every check passed.
 Exit code: 0 ok, 2 bad input, 3 refused by a check (pre-check / health gate / STEP check), 4 crash.
@@ -37,6 +39,7 @@ import time
 
 from . import manifest as mf
 from . import runner, store
+from . import input_fingerprint
 
 SCRIPTS = os.path.join(store.CAD_DIR, "fc_scripts")
 DEFAULT_OUT_ROOT = "/srv/motres/shared/cad"
@@ -80,7 +83,8 @@ def _bom(work, mid, fcstd, eff, pj, args):
 def _models3d(work, mid, fcstd, args):
     """3D-viewer model (export_models.py): the full GLB.  A failure of its checks refuses the build; returns (code, info)."""
     rep = os.path.join(work, mid + "_models3d.json")
-    code, st = _fc("export_models.py", dict(FC_MODEL=fcstd, FC_OUT_DIR=work, FC_MOTOR_ID=mid, FC_REPORT=rep), args)
+    code, st = _fc("export_models.py", dict(FC_MODEL=fcstd, FC_OUT_DIR=work, FC_MOTOR_ID=mid, FC_REPORT=rep,
+                                                FC_EXPORT_MODELS_MAIN="1"), args)
     if code:
         print("3D models refused/failed (%s): %s" % (code, st.get("message")))
         return code, None
@@ -116,14 +120,92 @@ def _simplified_mass(work, mid, bom_info):
     _write(path, info)
 
 
+def _preview_build(args, eff, pj, pull, kind, out_dir, mid, build_inputs_hash, t0):
+    """Build and atomically publish only the preview subtree, preserving released files."""
+    preview_dir = os.path.join(out_dir, "preview")
+    work = preview_dir + ".building-%d" % os.getpid()
+    old = preview_dir + ".old-%d" % os.getpid()
+    shutil.rmtree(work, ignore_errors=True)
+    shutil.rmtree(old, ignore_errors=True)
+    os.makedirs(work)
+    profile_path = os.path.join(work, "params.json")
+    _write(profile_path, pj)
+    code, st = _fc("build_model.py", dict(FC_PROFILE=profile_path, FC_OUT=os.path.join(work, mid + ".FCStd"),
+                                             FC_REPORT=os.path.join(work, "build_report.json"),
+                                             FC_PREVIEW="1", FC_PREVIEW_DIR=work,
+                                             FC_SET=args.set or ""), args)
+    if code:
+        print("preview build refused/failed (%s): %s" % (code, st.get("message")))
+        shutil.rmtree(work, ignore_errors=True)
+        return code
+    build_report = _read(os.path.join(work, "build_report.json"))
+    exp = build_report.get("preview") or {}
+    glb = exp.get("glb")
+    if not exp.get("ok") or not glb or not os.path.isfile(os.path.join(work, glb)):
+        print("preview build did not produce a checked GLB")
+        shutil.rmtree(work, ignore_errors=True)
+        return 3
+    # The profile and build report are inputs to this transaction, not user-facing CAD assets.
+    os.remove(profile_path)
+    report_path = os.path.join(work, "build_report.json")
+    if os.path.exists(report_path):
+        os.remove(report_path)
+    metadata = dict(schema="motres-cad-preview/1", kind="preview", ready=True, gate_passed=True,
+                    die=(eff or {}).get("die") or pj.get("profile", {}).get("die"),
+                    config=(eff or {}).get("variant") or pj.get("profile", {}).get("variant"),
+                    motor_id=mid, cad_variant=pj.get("profile", {}).get("cad_variant") or "full",
+                    build_inputs_hash=build_inputs_hash, freecad_version=exp.get("freecad_version"),
+                    seconds=round(time.time() - t0, 1), asset=glb, tessellation_mm=exp.get("tessellation_mm"),
+                    triangles=exp.get("triangles"), worst_mesh_volume_error=exp.get("worst_mesh_volume_error"),
+                    phase_seconds=build_report.get("phase_seconds") or {},
+                    checks=dict(gate_ok=True, mesh_volume_ok=True),
+                    files=mf.file_rows(work, [glb]))
+    _write(os.path.join(work, "preview.json"), metadata)
+    _write(os.path.join(work, "manifest.json"), metadata)
+    os.makedirs(out_dir, exist_ok=True)
+    if os.path.exists(preview_dir):
+        os.rename(preview_dir, old)
+    try:
+        os.rename(work, preview_dir)
+    except Exception:
+        if os.path.exists(old) and not os.path.exists(preview_dir):
+            os.rename(old, preview_dir)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
+    print("preview built %s -> %s (%.1f s, %d triangles)" % (mid, preview_dir, metadata["seconds"], metadata["triangles"]))
+    return 0
+
+
+def _set_snapshot(raw):
+    """Normalize FreeCAD what-if overrides before including them in the build-input hash."""
+    out = {}
+    for item in (raw or "").split(";"):
+        if not item.strip():
+            continue
+        if "=" not in item:
+            raise ValueError("--set entries must be name=expression: %r" % item)
+        name, expression = item.split("=", 1)
+        name, expression = name.strip(), expression.strip()
+        if not name or not expression:
+            raise ValueError("--set entries must have a name and expression: %r" % item)
+        out[name] = expression
+    return {name: out[name] for name in sorted(out)}
+
+
 def build(args):
     t0 = time.time()
+    build_inputs_hash = None
+    if args.preview and args.dry_run:
+        print("--preview cannot be combined with --dry-run")
+        return 2
     if args.profile_file:                                     # explicit profile (e.g. the Fusion reference profile)
         pj = json.load(open(args.profile_file, encoding="utf-8"))
         eff, pull = None, dict(summary={}, fingerprint=None)
         kind = "profile_file"
         if args.variant:
             pj.setdefault("profile", {})["cad_variant"] = store.check_variant(args.variant, "--variant")
+        build_inputs_snapshot = input_fingerprint.fingerprint_profile(pj)
+        build_inputs_hash = build_inputs_snapshot["build_inputs_hash"]
         out_dir = args.out_dir
         if not out_dir:
             print("--profile-file needs --out-dir")
@@ -138,12 +220,29 @@ def build(args):
         except (FileNotFoundError, ValueError) as e:
             print(e)
             return 2
+        # Capture the exact effective inputs before profile generation or any FreeCAD work.
+        build_inputs_snapshot = input_fingerprint.fingerprint_effective(
+            eff, materials_library=args.materials, bearings_library=args.bearings)
         mp = store.load_mapping()
         pj, pull = store.make_profile(eff, mp)
         kind = "store"
         out_dir = args.out_dir or os.path.join(args.out_root or DEFAULT_OUT_ROOT, args.die, eff["variant"])
+    cli_set = _set_snapshot(args.set)
+    if cli_set:
+        inputs = dict(build_inputs_snapshot["build_inputs"])
+        inputs["what_if_overrides"] = cli_set
+        build_inputs_snapshot = {"build_inputs": inputs, "build_inputs_hash": store.canonical_hash(inputs)}
+    build_inputs_hash = build_inputs_snapshot["build_inputs_hash"]
+    if eff is not None:
+        eff["build_inputs_snapshot"] = build_inputs_snapshot
     mid = pj["profile"]["motor_id"]
     out_dir = os.path.abspath(out_dir)
+    if args.preview:
+        try:
+            return _preview_build(args, eff, pj, pull, kind, out_dir, mid, build_inputs_hash, t0)
+        except Exception:
+            shutil.rmtree(os.path.join(out_dir, "preview.building-%d" % os.getpid()), ignore_errors=True)
+            raise
     work = out_dir + ".building-%d" % os.getpid()
     shutil.rmtree(work, ignore_errors=True)
     os.makedirs(work)
@@ -211,6 +310,7 @@ def build(args):
         m = mf.build_manifest(eff, pj, pull, build_report, step_check, mf.file_rows(work, names),
                               build_report.get("freecad_version") or step_check.get("freecad_version"),
                               round(time.time() - t0, 1), kind=kind)
+        m["build_inputs_hash"] = build_inputs_hash
         m["cad_variant"] = (pj.get("profile") or {}).get("cad_variant") or "full"
         m["gui"] = dict(done=bool(gui_report.get("ok")), camera=gui_report.get("camera"), freecad_version=gui_report.get("freecad_version"),
                         opens_ready=bool(gui_check.get("ok")), visible_objects=gui_check.get("visible"))
@@ -218,6 +318,11 @@ def build(args):
         m["models3d"] = models3d
         m["simplified"] = simp
         _write(os.path.join(work, "manifest.json"), m)
+        # A full release swap carries the current preview forward. The worker can publish a
+        # new preview first, then replace full assets without making that preview disappear.
+        saved_preview = os.path.join(out_dir, "preview")
+        if os.path.isdir(saved_preview):
+            shutil.copytree(saved_preview, os.path.join(work, "preview"))
         if os.path.exists(out_dir):
             old = out_dir + ".old-%d" % os.getpid()
             os.rename(out_dir, old)
@@ -260,6 +365,7 @@ def main(argv=None):
     b.add_argument("--out-root", help="default %s" % DEFAULT_OUT_ROOT)
     b.add_argument("--out-dir", help="exact output directory (overrides <out-root>/<die>/<config>)")
     b.add_argument("--profile-file", help="build from this profile JSON instead of the store (reference builds, tests)")
+    b.add_argument("--preview", action="store_true", help="build a fast, coarse GLB in <output>/preview/ without changing released files")
     b.add_argument("--freecadcmd", help="path of freecadcmd (default $FREECADCMD, PATH, Program Files)")
     b.add_argument("--timeout", type=int, default=1800)
     b.add_argument("--variant", choices=store.CAD_VARIANTS,

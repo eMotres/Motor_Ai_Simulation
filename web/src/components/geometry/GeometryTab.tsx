@@ -24,7 +24,7 @@ const GeometryTab: React.FC<{ active: React.ReactNode }> = ({ active }) => {
   const die = openMotor?.die ?? null;
   const config = openMotor?.config ?? null;
   const [refresh, setRefresh] = useState(0);
-  const { models, canDownload, access } = useModelList(refresh);
+  const { models, canDownload, access } = useModelList(refresh, die && config ? { die, config } : null, scope === 'full');
   const cad = useCadParams(die, config, scope === 'full', () => setRefresh((n) => n + 1));
   const [ndaOpen, setNdaOpen] = useState(false);
   const [noticeOpen, setNoticeOpen] = useState(false);

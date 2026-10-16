@@ -67,6 +67,12 @@ def _board_summary(pb):
 
 def build_manifest(eff, profile, pull_report, build_report, step_check, files, freecad_version, seconds, kind="store"):
     """eff = None for a build from an explicit profile file (kind 'profile_file')."""
+    input_snapshot = None
+    if eff:
+        input_snapshot = eff.get("build_inputs_snapshot")
+        if not input_snapshot:
+            from .input_fingerprint import fingerprint_effective
+            input_snapshot = fingerprint_effective(eff)
     sim = (profile.get("profile", {}).get("source", {}) or {}).get("simulation", {}) or {}
     fp = pull_report.get("fingerprint") or sim.get("fingerprint") or {}
     return dict(
@@ -78,6 +84,8 @@ def build_manifest(eff, profile, pull_report, build_report, step_check, files, f
         cad_variant=profile["profile"].get("cad_variant") or "full",
         param_hash=fp.get("cad_param_hash"),
         cad_overrides_hash=fp.get("cad_overrides_hash") or "none",
+        build_inputs_hash=(input_snapshot or {}).get("build_inputs_hash"),
+        build_inputs=(input_snapshot or {}).get("build_inputs"),
         geo_sig=fp.get("geo_sig"),
         geo_sig_hash=fp.get("geo_sig_hash"),
         store_files=(eff or {}).get("files") or sim.get("files"),

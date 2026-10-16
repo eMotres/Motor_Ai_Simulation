@@ -40,7 +40,7 @@ ORGANISATION = "MOTRES d.o.o."
 _LOCK = threading.RLock()
 
 #: file name suffix per kind; the GLB is written by cad/fc_scripts/export_models.py, the STEP by export_step.py
-_SUFFIX = {"glb": "_full.glb", "step": "_active.step",
+_SUFFIX = {"glb": "_full.glb", "preview_glb": "_preview.glb", "step": "_active.step",
            # the SIMPLIFIED model (owner 2026-10-15): envelope only, no NDA, written by cad/fc_scripts/export_simplified.py
            "simplified_step": "_simplified.step", "simplified_glb": "_simplified.glb", "simplified_json": "_simplified.json"}
 
@@ -117,11 +117,19 @@ def scan(root: Optional[Path] = None) -> list[dict]:
         for c in sorted(p for p in d.iterdir() if p.is_dir() and not p.name.startswith(".") and ".building-" not in p.name
                         and ".old-" not in p.name):
             m = _read_json(c / "manifest.json")
+            preview = _read_json(c / "preview" / "manifest.json")
             mid = m.get("motor_id")
+            if not mid:
+                mid = preview.get("motor_id")
             files = m.get("files") or {}
-            if not mid or not any(k.endswith("_full.glb") for k in files):
+            preview_files = preview.get("files") or {}
+            has_full = bool(mid and any(k.endswith("_full.glb") for k in files))
+            has_preview = bool(mid and preview.get("ready") is True and preview.get("gate_passed") is True
+                               and any(k.endswith("_preview.glb") for k in preview_files))
+            if not mid or not (has_full or has_preview):
                 continue
-            out.append(dict(die=d.name, config=c.name, motor_id=mid, dir=c, manifest=m))
+            out.append(dict(die=d.name, config=c.name, motor_id=mid, dir=c, manifest=m,
+                            preview_manifest=preview, has_full=has_full, has_preview=has_preview))
     return out
 
 
@@ -136,8 +144,11 @@ def find(die: str, config: str, root: Optional[Path] = None) -> Optional[dict]:
 def file_row(entry: dict, kind: str) -> Optional[dict]:
     """``{path, name, sha256, bytes}`` of one output (``glb`` / ``step``), or None when the manifest does not list it / it is missing."""
     name = entry["motor_id"] + _SUFFIX[kind]
-    row = (entry["manifest"].get("files") or {}).get(name)
-    p = Path(entry["dir"]) / name
+    source = entry.get("preview_manifest") if kind == "preview_glb" else entry.get("manifest")
+    if kind == "preview_glb" and (not source or source.get("ready") is not True or source.get("gate_passed") is not True):
+        return None
+    row = ((source or {}).get("files") or {}).get(name)
+    p = Path(entry["dir"]) / ("preview" if kind == "preview_glb" else "") / name
     if not row or not p.is_file():
         return None
     return dict(path=p, name=name, sha256=row.get("sha256"), bytes=p.stat().st_size)
@@ -145,12 +156,16 @@ def file_row(entry: dict, kind: str) -> Optional[dict]:
 
 def model_info(entry: dict) -> dict:
     """What the list route says about one model (no BOM, no prices, no store hashes)."""
-    m = entry["manifest"]
+    m = entry["manifest"] if entry.get("has_full") else (entry.get("preview_manifest") or {})
     glb, step = file_row(entry, "glb"), file_row(entry, "step")
+    preview = file_row(entry, "preview_glb")
     s_step, s_glb = file_row(entry, "simplified_step"), file_row(entry, "simplified_glb")
     return dict(die=entry["die"], config=entry["config"], motor_id=entry["motor_id"],
                 assembly=m.get("cad_variant") or "full",              # "full" | "frameless" (no envelope / simplified variants are served)
-                available=bool(glb), glb_bytes=glb and glb["bytes"], glb_sha256=glb and glb["sha256"],
+                available=bool(glb or preview), glb_bytes=glb and glb["bytes"], glb_sha256=glb and glb["sha256"],
+                preview_available=bool(preview), preview_bytes=preview and preview["bytes"],
+                preview_sha256=preview and preview["sha256"],
+                preview_build_inputs_hash=(entry.get("preview_manifest") or {}).get("build_inputs_hash"),
                 step_available=bool(step), step_bytes=step and step["bytes"],
                 # the simplified model needs a signed-in user and the right to see the motor - nothing else (no NDA, no verification)
                 simplified_available=bool(s_step), simplified_step_bytes=s_step and s_step["bytes"],

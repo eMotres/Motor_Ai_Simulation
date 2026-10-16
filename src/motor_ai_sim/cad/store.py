@@ -103,15 +103,27 @@ def default_dies_dir():
 
 
 def default_bearings_library():
-    return os.environ.get("MOTRES_BEARINGS_LIBRARY") or (
-        DEFAULT_SERVER_BEARINGS if os.path.exists(DEFAULT_SERVER_BEARINGS)
-        else os.path.join(ROOT, "config", "bearings_library.yaml"))
+    configured = os.environ.get("MOTRES_BEARINGS_LIBRARY")
+    if configured:
+        return configured
+    try:
+        from motor_ai_sim.bearings import _lib_path
+        return str(_lib_path())
+    except Exception:  # noqa: BLE001 - keep the standalone FreeCAD reader usable
+        return (DEFAULT_SERVER_BEARINGS if os.path.exists(DEFAULT_SERVER_BEARINGS)
+                else os.path.join(ROOT, "config", "bearings_library.yaml"))
 
 
 def default_materials_library():
-    return os.environ.get("MOTRES_MATERIALS_LIBRARY") or (
-        DEFAULT_SERVER_MATERIALS if os.path.exists(DEFAULT_SERVER_MATERIALS)
-        else os.path.join(ROOT, "config", "materials_library.yaml"))
+    configured = os.environ.get("MOTRES_MATERIALS_LIBRARY")
+    if configured:
+        return configured
+    try:
+        from motor_ai_sim.materials import _lib_path
+        return str(_lib_path())
+    except Exception:  # noqa: BLE001 - keep the standalone FreeCAD reader usable
+        return (DEFAULT_SERVER_MATERIALS if os.path.exists(DEFAULT_SERVER_MATERIALS)
+                else os.path.join(ROOT, "config", "materials_library.yaml"))
 
 
 def slug(text):
@@ -202,7 +214,7 @@ def load_mapping(root=None):
                         for k, v in sch.items()},
                 derived=_ast_set(vfile, "DERIVED_GEOMETRY_NAMES"), fusion_excluded=_ast_set(ffile, "FUSION_EXCLUDED_NAMES"),
                 sources={os.path.relpath(p, root).replace("\\", "/"): sha256_file(p)
-                         for p in (mp_file, cfg_file, vfile, ffile)})
+                         for p in (mp_file, vfile, ffile)})
 
 
 def primary_rows(geo, mp):
@@ -343,10 +355,10 @@ def load_effective(dies_dir, die, config, materials_library=None, bearings_libra
     cards = {}
     lib_path = materials_library or default_materials_library()
     mats = cy.get("materials") or {}
-    if mats and os.path.exists(lib_path):
-        lib = yaml.safe_load(open(lib_path, encoding="utf-8")) or {}
+    material_lib = yaml.safe_load(open(lib_path, encoding="utf-8")) or {} if os.path.exists(lib_path) else {}
+    if mats and material_lib:
         for slot, card in mats.items():
-            for cat, d in lib.items():
+            for cat, d in material_lib.items():
                 if isinstance(d, dict) and card in d:
                     cards[card] = dict(category=cat, **{k: x for k, x in d[card].items() if k != "bh_curve"})
         files["materials_library.yaml"] = dict(sha256=sha256_file(lib_path), size=os.path.getsize(lib_path),
@@ -354,14 +366,17 @@ def load_effective(dies_dir, die, config, materials_library=None, bearings_libra
                                                cards_used=sorted(cards))
     bcards = {}
     blib = bearings_library or default_bearings_library()
+    bearing_lib = yaml.safe_load(open(blib, encoding="utf-8")) or {} if os.path.exists(blib) else {}
+    from . import bom_store
+    wire_stock_path = bom_store.DEFAULT_WIRE_STOCK
+    wire_stock_doc = yaml.safe_load(open(wire_stock_path, encoding="utf-8")) or {} if os.path.exists(wire_stock_path) else {}
     cad_ov = clean_cad_overrides(cy.get(CAD_OVERRIDES_KEY))
     used = sorted({str(v.get("card")) for k, v in (cy.get("bearings") or {}).items() if isinstance(v, dict) and v.get("card")})
     if cad_ov.get(BEARING_CARD_KEY):                           # CAD-only bearing choice: drawn after this card, the EM bearings stay
         used = sorted(set(used) | {cad_ov[BEARING_CARD_KEY]})
-    if used and os.path.exists(blib):
-        lib = yaml.safe_load(open(blib, encoding="utf-8")) or {}
+    if used and bearing_lib:
         flat = {}
-        for k, v in lib.items():
+        for k, v in bearing_lib.items():
             if isinstance(v, dict):
                 if any(c in v for c in used):
                     flat.update({c: v[c] for c in used if c in v})
@@ -376,7 +391,13 @@ def load_effective(dies_dir, die, config, materials_library=None, bearings_libra
     return dict(die=die, config=cfg_name, variant=config_stem(config), cad_variant=variant, cad_variant_from=variant_from, geometry=geo,
                 geometry_overrides=cy.get("geometry_overrides") or {}, die_geometry=dy.get("geometry") or {},
                 materials=mats, winding=cy.get("winding") or {}, bearings=cy.get("bearings") or {},
-                cad_overrides=cad_ov, bearing_cards=bcards, material_cards=cards, files=files, dies_dir=dies_dir)
+                cad_overrides=cad_ov, bearing_cards=bcards, material_cards=cards, files=files, dies_dir=dies_dir,
+                # Fingerprinting must describe exactly the documents consumed
+                # by this load, even if the catalog/library changes mid-build.
+                _build_input_documents={"die": dy, "config": cy, "materials": material_lib,
+                                        "bearings": bearing_lib, "wire_stock": wire_stock_doc},
+                _build_input_paths={"materials": lib_path, "bearings": blib, "wire_stock": wire_stock_path},
+                _build_input_hashes={"wire_stock": sha256_file(wire_stock_path) if os.path.isfile(wire_stock_path) else "missing"})
 
 
 def clearance_rows(values, reference=None):

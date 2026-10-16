@@ -26,6 +26,7 @@ from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 def main():
     t0 = time.time()
+    phases = {}
     pj = ps.load_params_json(os.environ["FC_PROFILE"])
     out = os.environ["FC_OUT"]
     overrides = ps.parse_overrides(os.environ.get("FC_SET", ""))
@@ -37,19 +38,31 @@ def main():
     if viol and os.environ.get("FC_SKIP_PRECHECK") != "1":
         return finish(False, "pre-check failed, nothing built: " + " | ".join(viol), precheck=viol, overrides=overrides)
 
+    phase_t = time.time()
     report = build_bodies(doc, sh, pj)
+    phases["build_bodies"] = round(time.time() - phase_t, 2)
+    phase_t = time.time()
     gt = health.gate(doc)
+    phases["health_gate"] = round(time.time() - phase_t, 2)
     if gt["ok"] and doc.getObject("Mechanics") is not None and not kit:
+        phase_t = time.time()
         ft = health.fit(doc)                       # stage 3: interference / contact table of the assembled motor
+        phases["mechanical_fit_gate"] = round(time.time() - phase_t, 2)
         report["fit"] = ft["pairs"]
         report["screw_check"] = ft.get("screw")
         if ft["errors"]:
             gt["errors"] += ft["errors"]
             gt["ok"] = False
-    if gt["ok"] and doc.getObject("Electronics") is not None:
+    preview = os.environ.get("FC_PREVIEW") == "1"
+    if gt["ok"] and doc.getObject("Electronics") is not None and not preview:
         from motor_templates.segmented_flatwire import electronics
+        phase_t = time.time()
         pb = electronics.fit(doc, electronics.motor_groups(doc))       # clearances + lead ends vs the board (reported, not refused)
+        phases["board_diagnostic_fit"] = round(time.time() - phase_t, 2)
         report["phase_board"] = dict(pb, import_=report.get("phase_board_import"))
+    elif preview:
+        phases["board_diagnostic_fit"] = 0.0
+        report["board_diagnostic_fit"] = "skipped for preview; informational only, not a release gate"
     report["gate"] = {k: v for k, v in gt.items() if k != "volumes"}
     report["volumes"] = {k: round(v, 4) for k, v in gt["volumes"].items()}
     direct, live = ps.live_parameters(doc)
@@ -73,21 +86,38 @@ def main():
     bad = view.check_visibility(doc)
     if bad:
         return finish(False, "visibility rules violated: " + " | ".join(bad[:6]))
-    os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-    doc.saveAs(out)
+    preview_export = None
+    if preview:
+        sys.path.insert(0, os.path.join(ROOT, "fc_scripts"))
+        import export_models
+        phase_t = time.time()
+        preview_export = export_models.export_document(doc, os.environ["FC_PREVIEW_DIR"], pj["profile"]["motor_id"],
+                                                       preview=True, gate_result=gt)
+        phases["preview_glb"] = round(time.time() - phase_t, 2)
+        if not preview_export.get("ok"):
+            return finish(False, preview_export.get("message", "preview export failed"),
+                          gate=preview_export.get("gate"), preview=preview_export)
+        preview_export["build_inputs_hash"] = os.environ.get("FC_BUILD_INPUTS_HASH") or None
+    else:
+        os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
+        doc.saveAs(out)
     report["seconds"] = round(time.time() - t0, 1)
+    report["phase_seconds"] = phases
     report["sketches_fully_constrained"] = sum(1 for v in report["sketches"].values() if v["fully_constrained"] and v["solve"] == 0)
     report["sketches_total"] = len(report["sketches"])
     report["expressions"] = {o.Name: len(o.ExpressionEngine) for o in doc.Objects if getattr(o, "ExpressionEngine", None)}
     report["freecad_version"] = ".".join(str(x) for x in App.Version()[:3])
     report["profile"] = pj.get("profile", {})
     report["cad_variant"] = "frameless" if kit else "full"
+    if preview_export is not None:
+        report["preview"] = preview_export
     if os.environ.get("FC_REPORT"):
         with open(os.environ["FC_REPORT"], "w", encoding="utf-8") as fh:
             json.dump(report, fh, indent=1, default=str)
     print(json.dumps({k: report[k] for k in ("param_mismatches", "sketches_fully_constrained", "sketches_total", "volumes",
                                              "roles_check", "seconds")}, indent=1))
-    return finish(True, "saved %s (gate ok, %d expressions)" % (os.path.basename(out), sum(report["expressions"].values())))
+    return finish(True, ("preview written %s" % preview_export["glb"] if preview else
+                         "saved %s (gate ok, %d expressions)" % (os.path.basename(out), sum(report["expressions"].values()))))
 
 
 try:

@@ -833,6 +833,7 @@ def _save_yaml(p: Path, d: dict) -> None:
     # documents across on the way), and an admin's ``?layer=shared`` write is
     # redirected the other way.  With layering off this is a no-op.
     p = _write_target(p)
+    cad_before = _cad_input_hashes_for_catalog_save(p)
     p.parent.mkdir(parents=True, exist_ok=True)
     # An unknown `applications` value is refused loudly, never written (owner 2026-10-13).
     if isinstance(d, dict) and "applications" in d:
@@ -885,6 +886,54 @@ def _save_yaml(p: Path, d: dict) -> None:
     except Exception:   # noqa: BLE001
         log.exception("catalog history snapshot failed (save proceeds)")
     _replace_with_retry(tmp, p)
+    _queue_cad_input_changes(p, cad_before)
+
+
+def _cad_input_hashes_for_catalog_save(p: Path) -> dict:
+    """Capture current fingerprints before a die/config catalog document changes."""
+    if p.suffix.lower() != ".yaml" or (p.name != "die.yaml" and not (p.parent / "die.yaml").is_file()):
+        return {}
+    configs = (sorted(f.stem for f in p.parent.glob("*.yaml") if f.name != "die.yaml")
+               if p.name == "die.yaml" else [p.stem])
+    result = {}
+    try:
+        from motor_ai_sim.cad.input_fingerprint import current_build_inputs
+        for cfg in configs:
+            if not (p.parent / "die.yaml").is_file() or not (p.parent / (cfg + ".yaml")).is_file():
+                result[cfg] = None
+            else:
+                result[cfg] = current_build_inputs(
+                    str(p.parent.parent), p.parent.name, cfg)["build_inputs_hash"]
+    except Exception as exc:  # noqa: BLE001 - report the fingerprint failure with the catalog save
+        log.exception("CAD input fingerprint failed before catalog save %s", p)
+        raise HTTPException(status_code=503, detail=(
+            f"CAD freshness could not be checked before saving {p.name}: {exc}")) from exc
+    return result
+
+
+def _queue_cad_input_changes(p: Path, before: dict) -> None:
+    """Queue changed catalog build inputs once; duty-only YAML writes hash identically."""
+    if not before:
+        return
+    from motor_ai_sim.cad.input_fingerprint import current_build_inputs
+    from motor_ai_sim.cad import rebuild_queue as _rq
+    try:
+        for cfg, old_hash in before.items():
+            new_hash = current_build_inputs(
+                str(p.parent.parent), p.parent.name, cfg)["build_inputs_hash"]
+            if new_hash != old_hash:
+                from motor_ai_sim import cad_params as _cp
+                from motor_ai_sim.cad import store as _cs
+                cfg_doc = _load_yaml(p.parent / (cfg + ".yaml"), "configuration")
+                _rq.request(_cp.cad_root(), p.parent.name, cfg,
+                            build_inputs_hash=new_hash,
+                            overrides_hash=_cs.cad_overrides_hash(cfg_doc.get("cad_overrides")),
+                            layer=_die_layer(p.parent.name))
+                log.info("CAD rebuild queued for changed build inputs: %s/%s", p.parent.name, cfg)
+    except Exception as exc:  # noqa: BLE001 - a saved change without a queue entry must be visible
+        log.exception("CAD rebuild queue failed after catalog save %s", p)
+        raise HTTPException(status_code=503, detail=(
+            f"{p.name} was saved, but the CAD rebuild could not be queued: {exc}")) from exc
 
 
 def _replace_with_retry(tmp: Path, p: Path) -> None:
@@ -3953,12 +4002,19 @@ def sync_active_die_geometry(saved_geo: dict,
     if not ctx:
         return None
     die = str(ctx.get("die") or "")
+    cfg = str(ctx.get("config") or "")
     try:
         d = _load_yaml(_die_file(die), "die")
     except HTTPException:
         return None                        # stale context — die is gone
-    if bool(d.get("locked", True)):
-        return None
+    c = None
+    if cfg:
+        try:
+            c = _load_yaml(_cfg_file(die, cfg), "configuration")
+        except HTTPException:
+            log.warning("family: active configuration %s/%s disappeared before geometry sync", die, cfg)
+            return None
+    die_locked = bool(d.get("locked", True))
     geo = {k: v for k, v in dict(saved_geo or {}).items() if v is not None}
     if not geo:
         return None
@@ -3973,6 +4029,9 @@ def sync_active_die_geometry(saved_geo: dict,
     _die_g0 = d.get("geometry") or {}
     _diffs = die_identity_diffs(_die_g0, geo)
     if _diffs:
+        if die_locked:
+            log.warning("family: locked die '%s' refused geometry sync with changed identity", die)
+            return None
         _ident = [f"{x['key']} {x['die']} → {x['live']}" for x in _diffs]
         log.warning(
             "family: die '%s' identity changed (%s) — auto-transitioning the "
@@ -4001,6 +4060,47 @@ def sync_active_die_geometry(saved_geo: dict,
                 log.warning("family: could not release the context either: %s", _ce)
             return None
         return (out or {}).get("die")
+    # FREE_GEO_KEYS belong to the active configuration, not die.yaml. Check
+    # that the pre-save live machine still matched this config before adopting
+    # stack/winding edits; a delayed Geometry PUT must not overwrite another
+    # config's overrides merely because both share a lamination.
+    config_changed = False
+    if c is not None:
+        die_geo = dict(d.get("geometry") or {})
+        current_overrides = dict(c.get("geometry_overrides") or {})
+        if prev_geo:
+            from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+            foreign = []
+            for k in FREE_GEO_KEYS:
+                expected = current_overrides.get(k, die_geo.get(k))
+                previous = prev_geo.get(k)
+                if (isinstance(expected, (int, float)) and not isinstance(expected, bool)
+                        and is_compared_geometry_input(k, die_geo, prev_geo)
+                        and (not isinstance(previous, (int, float)) or isinstance(previous, bool)
+                             or abs(float(expected) - float(previous)) > 1e-6)):
+                    foreign.append(k)
+            if foreign:
+                log.warning("family: REFUSED to sync config '%s/%s' geometry; pre-save live differs in: %s",
+                            die, cfg, ", ".join(sorted(foreign)[:8]))
+                return None
+        candidate_overrides = dict(current_overrides)
+        for k in FREE_GEO_KEYS:
+            value = geo.get(k)
+            if value is None:
+                continue
+            if k in die_geo and value == die_geo[k]:
+                candidate_overrides.pop(k, None)
+            else:
+                candidate_overrides[k] = value
+        if candidate_overrides != current_overrides:
+            if bool(c.get("locked", False)):
+                log.warning("family: REFUSED to sync locked config '%s/%s' geometry overrides", die, cfg)
+                return None
+            c["geometry_overrides"] = candidate_overrides
+            config_changed = True
+            _save_yaml(_cfg_file(die, cfg), c)
+    if die_locked:
+        return die if config_changed else None
     # ── The stranger guard ───────────────────────────────────────────────────
     # Sync follows EDITS of this die's own machine — it never adopts a foreign
     # one.  A save whose PRE-save live machine does not match the die's
@@ -4044,7 +4144,7 @@ def sync_active_die_geometry(saved_geo: dict,
         else:
             new_geo.pop(k, None)
     if new_geo == _die_prev:
-        return None                        # nothing die-level changed
+        return die if config_changed else None
     geo = new_geo
     d["geometry"] = geo
     try:
@@ -4086,6 +4186,71 @@ def _find_geo_sig(node: Any, depth: int = 0) -> Optional[str]:
             if r:
                 return r
     return None
+
+
+def sync_active_die_build_inputs(block: str, patch: dict) -> Optional[str]:
+    """Persist saved live material/winding fields into the active catalog config.
+
+    The simulation's motor_config.yaml is a per-workspace live document. When
+    that document belongs to an active die/config, mirror only the fields just
+    saved into its catalog configuration; the central catalog save seam then
+    queues CAD only if its effective build fingerprint changed.
+    """
+    if block not in ("materials", "winding") or not isinstance(patch, dict) or not patch:
+        return None
+    ctx = _read_ctx()
+    if not ctx:
+        return None
+    die, cfg = str(ctx.get("die") or ""), str(ctx.get("config") or "")
+    if not die or not cfg:
+        return None
+    try:
+        cfile = _cfg_file(die, cfg)
+        doc = _load_yaml(cfile, "configuration")
+        die_doc = _load_yaml(_die_file(die), "die")
+    except HTTPException as exc:
+        raise HTTPException(status_code=409, detail=(
+            f"active die/config {die}/{cfg} is no longer available; saved {block} fields were not mirrored to CAD")) from exc
+    from motor_ai_sim.config import get_config as _get_config
+    live = _get_config()
+    live_geo = dict(live.get("geometry") or {})
+    expected_geo = dict(die_doc.get("geometry") or {})
+    expected_geo.update(doc.get("geometry_overrides") or {})
+    from motor_ai_sim.geometry.motor_geometry import is_compared_geometry_input
+    geometry_mismatch = []
+    for key, expected in expected_geo.items():
+        actual = live_geo.get(key)
+        if (isinstance(expected, (int, float)) and not isinstance(expected, bool)
+                and isinstance(actual, (int, float)) and not isinstance(actual, bool)
+                and is_compared_geometry_input(key, expected_geo, live_geo)
+                and abs(float(expected) - float(actual)) > 1e-6):
+            geometry_mismatch.append(key)
+    other_block = "winding" if block == "materials" else "materials"
+    live_other = dict(live.get(other_block) or {})
+    expected_other = dict(doc.get(other_block) or {})
+    mismatched_other = sorted(k for k, value in expected_other.items()
+                              if k in live_other and live_other[k] != value)
+    if geometry_mismatch or mismatched_other:
+        detail = []
+        if geometry_mismatch:
+            detail.append("geometry: " + ", ".join(sorted(geometry_mismatch)[:8]))
+        if mismatched_other:
+            detail.append(other_block + ": " + ", ".join(mismatched_other[:8]))
+        message = (f"active die/config context {die}/{cfg} does not match the saved machine "
+                   f"({'; '.join(detail)}); saved {block} fields remain in motor_config.yaml "
+                   "and were not copied into the CAD catalog")
+        log.warning(message)
+        raise HTTPException(status_code=409, detail=message)
+    current = dict(doc.get(block) or {})
+    updated = dict(current)
+    updated.update(patch)
+    if updated == current:
+        return None
+    doc[block] = updated
+    _save_yaml(cfile, doc)
+    log.info("active CAD config %s/%s synchronized after saved %s fields: %s", die, cfg, block,
+             sorted(patch))
+    return die
 
 
 def duty_saved_geometry(duty: Optional[dict]) -> Dict[str, float]:

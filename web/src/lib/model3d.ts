@@ -17,6 +17,13 @@ export function glbRoute(m: Pick<ModelInfo, 'view'> | null | undefined, canDownl
   return v === 'full' ? 'model.glb' : v === 'simplified' ? 'simplified_view.glb' : null;
 }
 
+/** A current preview replaces a stale full artifact while its release build runs. */
+export function artifactRoute(m: Pick<ModelInfo, 'view' | 'preview_current' | 'stale' | 'rebuilding' | 'glb_sha256'> | null | undefined, canDownload = false): string | null {
+  const route = glbRoute(m, canDownload);
+  const usePreview = m?.preview_current && (!m.glb_sha256 || m.stale || m.rebuilding);
+  return route === 'model.glb' && usePreview ? 'preview.glb' : route;
+}
+
 /** The full-model tools (Motor Assembly tree, explode, section, measure, part hints, per-part switches) exist ONLY for the full view. */
 export const fullToolsOpen = (view: ModelView): boolean => view === 'full';
 
@@ -35,6 +42,14 @@ export interface ModelInfo {
   simplified_step_bytes?: number | null;
   simplified_glb_bytes?: number | null;
   simplified_glb_sha256?: string | null;
+  preview_available?: boolean;
+  preview_bytes?: number | null;
+  preview_sha256?: string | null;
+  preview_build_inputs_hash?: string | null;
+  preview_current?: boolean;
+  stale?: boolean;
+  rebuilding?: boolean;
+  rebuild_state?: string;
   /** WHAT THIS CALLER SEES (server, owner 2026-10-15): 'full' (NDA + verification, owner / admin), 'simplified' (everybody else), 'none' (simplified not built:
    *  never a fallback to full) */
   view?: 'full' | 'simplified' | 'none';
@@ -75,7 +90,7 @@ export function resolveModel<T extends Pick<ModelInfo, 'die' | 'config'>>(
 ): { model: T | null; preparing: boolean } {
   if (wanted?.die && wanted?.config) {
     const hit = models.find((m) => modelKey(m) === modelKey(wanted));
-    return hit ? { model: hit, preparing: false } : { model: null, preparing: models.length > 0 };
+    return hit ? { model: hit, preparing: false } : { model: null, preparing: true };
   }
   return { model: pickModel(models, remembered), preparing: false };
 }

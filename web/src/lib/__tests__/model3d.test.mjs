@@ -15,6 +15,16 @@ test('host model picker and route resolution use the remembered or configured mo
   assert.equal(L.modelLabel(models[0]), 'CIANO14 40 new · L12');
   assert.deepEqual(L.resolveModel(models, null, { die: models[1].die, config: models[1].config }), { model: models[1], preparing: false });
   assert.deepEqual(L.resolveModel(models, null, { die: 'missing', config: 'L13' }), { model: null, preparing: true });
+  assert.deepEqual(L.resolveModel([], null, { die: 'first-build', config: 'L12' }), { model: null, preparing: true });
+});
+
+test('a current preview is used only while the released full model is absent or rebuilding', () => {
+  const base = { view: 'full', preview_current: true, glb_sha256: 'released' };
+  assert.equal(L.artifactRoute({ ...base, stale: true }, true), 'preview.glb');
+  assert.equal(L.artifactRoute({ ...base, rebuilding: true }, true), 'preview.glb');
+  assert.equal(L.artifactRoute({ ...base, stale: false, rebuilding: false }, true), 'model.glb');
+  assert.equal(L.artifactRoute({ ...base, glb_sha256: null }, true), 'preview.glb');
+  assert.equal(L.artifactRoute({ ...base, view: undefined, stale: true }, false), 'simplified_view.glb');
 });
 
 test('download names and sizes are host helpers', () => {

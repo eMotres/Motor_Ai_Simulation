@@ -570,6 +570,11 @@ def update_material(assignment: MaterialAssignment):
             clear_simulation_caches(reason="material assignment changed")
         except Exception:
             pass
+        # If this live workspace has an active die/configuration, mirror the
+        # just-saved assignment into that catalog config. Its CAD input hash
+        # decides whether a rebuild is needed; unrelated contexts stay alone.
+        from motor_ai_sim.routes.family import sync_active_die_build_inputs
+        sync_active_die_build_inputs("materials", {assignment.part: assignment.material})
         return {"status": "ok", "assignments": get_material_assignments(reload=True)}
     except HTTPException:
         raise
@@ -1258,6 +1263,8 @@ def update_winding_config(patch: WindingConfigPatch):
 
     _config_path().write_text(''.join(result), encoding="utf-8")
     clear_config_cache()
+    from motor_ai_sim.routes.family import sync_active_die_build_inputs
+    sync_active_die_build_inputs("winding", {key: _w_after.get(key) for key in updates})
     # A winding change (connection / layers / layout) alters the field & torque,
     # so flush the simulation caches (mesh / field / transient) like a geometry edit.
     if {"connection", "layers", "layout", "phases", "set1_paths",

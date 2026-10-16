@@ -110,6 +110,7 @@
   "cadErr_int": "必须是整数",
   "cadErr_range": "允许范围:{min} 至 {max}",
   "modelRebuilding": "正在重新生成模型...",
+  "modelPreview": "\u9884\u89c8",
   "modelQueued": "已排队等待重新生成",
   "modelRebuildFailed": "重新生成失败",
   "rebuildNow": "立即重新生成",

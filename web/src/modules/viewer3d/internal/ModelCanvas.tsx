@@ -21,6 +21,7 @@ interface Props {
   simplifiedText?: string;
   simplifiedTip?: string;
   noViewText?: string;
+  retainOnReplace?: boolean;
   onLoaded?: (r: { groups: PartGroup[]; range: { min: number; max: number } }) => void;
   onReady?: (ready: boolean) => void;
   onMeasure?: (mm: number | null) => void;
@@ -37,6 +38,7 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, Props>((p, ref) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadedTick, setLoadedTick] = useState(0);
+  const priorArtifact = useRef<{ scope: string; fullAccess: boolean }>({ scope: '', fullAccess: false });
   const report = (message: string | null) => { setError(message); callbacks.current.onError?.(message); };
   useImperativeHandle(ref, () => ({ fit: () => viewer.current?.fit(), home: () => viewer.current?.home(), view: (v) => viewer.current?.view(v),
     setProjection: (m) => viewer.current?.setProjection(m), sectionRange: (a) => viewer.current?.sectionRange(a) ?? { min:-1,max:1 } }), []);
@@ -62,7 +64,10 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, Props>((p, ref) => {
       callbacks.current.onLoaded?.({ groups:p.objectScene.groups, range:v.sectionRange('x') });
       return;
     }
-    v.clearModel(); callbacks.current.onReady?.(false);
+    const scope = p.sourceKey.split(':', 1)[0];
+    const retain = !!callbacks.current.retainOnReplace && !!p.fullAccess && priorArtifact.current.scope === scope && priorArtifact.current.fullAccess;
+    priorArtifact.current = { scope, fullAccess: p.fullAccess };
+    if (!retain) { v.clearModel(); callbacks.current.onReady?.(false); }
     if (!p.glbUrl) return;
     setLoading(true);
     (async () => {
@@ -82,7 +87,7 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, Props>((p, ref) => {
       finally { if (live) setLoading(false); }
     })();
     return () => { live = false; v.cancelPendingLoad(); callbacks.current.onReady?.(false); };
-  }, [p.sourceKey, p.glbUrl, p.objectScene?.root]);
+  }, [p.sourceKey, p.glbUrl, p.objectScene?.root, p.fullAccess]);
   useEffect(() => {
     vapply();
     function vapply() {

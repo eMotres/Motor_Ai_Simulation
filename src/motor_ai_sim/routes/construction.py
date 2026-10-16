@@ -119,7 +119,13 @@ def _bearing_dims(card: str) -> Dict[str, float]:
 
 def _status(die: str, cfg: str, overrides: Dict[str, Any]) -> Dict[str, Any]:
     root = CP.cad_root()
-    st = RQ.status(root, die, cfg, CP.overrides_hash(overrides), manifest=CP.read_manifest(die, cfg))
+    try:
+        from motor_ai_sim.cad.input_fingerprint import current_build_inputs
+        current_hash = current_build_inputs(str(fam._die_dir(die).parent), die, cfg)["build_inputs_hash"]
+    except Exception as exc:  # noqa: BLE001 - stale status must not hide fingerprint failures
+        log.exception("could not fingerprint CAD inputs for %s/%s", die, cfg)
+        raise HTTPException(status_code=503, detail=f"CAD freshness could not be checked: {exc}") from exc
+    st = RQ.status(root, die, cfg, current_hash, manifest=CP.read_manifest(die, cfg))
     st["layer"] = _layer_of(die)
     return st
 
@@ -229,7 +235,10 @@ def _change(die: str, cfg: str, who: dict, values: Dict[str, Any], *, bearing_se
         fam._save_yaml(cfile, c)
         actor = _AA.actor_of(who.get("user"))
         _AA.record(actor, "cad.params", f"{die}/{cfg}", details={"changed": changed, "source": source, "hash": CP.overrides_hash(new)})
-        RQ.request(CP.cad_root(), die, cfg, requested_by=actor, overrides_hash=CP.overrides_hash(new), layer=_layer_of(die))
+        from motor_ai_sim.cad.input_fingerprint import current_build_inputs
+        build_hash = current_build_inputs(str(fam._die_dir(die).parent), die, cfg)["build_inputs_hash"]
+        RQ.request(CP.cad_root(), die, cfg, requested_by=actor, overrides_hash=CP.overrides_hash(new),
+                   build_inputs_hash=build_hash, layer=_layer_of(die))
         log.info("construction: %s/%s CAD-only edit by %s: %s", die, cfg, actor, changed)
     res["table"] = _table(die, cfg, who)
     return res
@@ -322,6 +331,9 @@ def request_cad_rebuild(die: str, cfg: str, _w: dict = Depends(fam.require_catal
     if CP.read_manifest(die, cfg) is None:
         raise HTTPException(409, detail="no CAD model has been built for this motor yet")
     actor = _AA.actor_of(_w.get("user"))
-    RQ.request(CP.cad_root(), die, cfg, requested_by=actor, overrides_hash=CP.overrides_hash(ov), layer=_layer_of(die))
-    _AA.record(actor, "cad.rebuild", f"{die}/{cfg}", details={"hash": CP.overrides_hash(ov)})
+    from motor_ai_sim.cad.input_fingerprint import current_build_inputs
+    build_hash = current_build_inputs(str(fam._die_dir(die).parent), die, cfg)["build_inputs_hash"]
+    RQ.request(CP.cad_root(), die, cfg, requested_by=actor, overrides_hash=CP.overrides_hash(ov),
+               build_inputs_hash=build_hash, layer=_layer_of(die))
+    _AA.record(actor, "cad.rebuild", f"{die}/{cfg}", details={"hash": build_hash})
     return {"ok": True, "rebuild": _status(die, cfg, ov)}

@@ -73,13 +73,51 @@ def _entry_for(authorization: Optional[str], die: str, config: str) -> dict:
     return e
 
 
+def _current_build_hash(entry: dict) -> str:
+    """Fingerprint the source inputs used for this visible die/config build."""
+    from motor_ai_sim.cad import input_fingerprint as IF
+    from motor_ai_sim.cad import store as CS
+    from motor_ai_sim.routes import family as F
+    dies_dir = F._die_dir(entry["die"]).parent
+    return IF.current_build_inputs(dies_dir, entry["die"], entry["config"],
+                                  materials_library=CS.default_materials_library(),
+                                  bearings_library=CS.default_bearings_library(),
+                                  root=CS.ROOT, cad_dir=CS.CAD_DIR)["build_inputs_hash"]
+
+
 @router.get("/models")
 def list_models(authorization: Optional[str] = Header(default=None)):
-    """The built models of the motors this caller may open, and whether this caller may download the STEP."""
+    """The current models of the motors this caller may open, and whether this caller may download the STEP."""
     who, rec = _caller(authorization)
     from motor_ai_sim import motor_access as MA
     access = MA.catalog_access(authorization)
-    models = [M.model_info(e) for e in M.scan() if MA.may_see_config(access, e["die"], e["config"])]
+    models = []
+    for entry in M.scan():
+        if not MA.may_see_config(access, entry["die"], entry["config"]):
+            continue
+        item = M.model_info(entry)
+        try:
+            from motor_ai_sim.cad import rebuild_queue as RQ
+            current_hash = _current_build_hash(entry)
+            # A preview can stand in while the full build runs, but it must not
+            # make the released model look current.
+            manifest = entry["manifest"] if entry.get("has_full") else None
+            build = RQ.status(M.cad_root(), entry["die"], entry["config"], current_hash,
+                              manifest=manifest if manifest else None)
+            queue_rec = RQ.read(M.cad_root(), entry["die"], entry["config"])
+            rebuilding = bool(queue_rec and queue_rec.get("state") in ("pending", "building")
+                              and queue_rec.get("build_inputs_hash", queue_rec.get("current_hash",
+                                                                   queue_rec.get("overrides_hash"))) == current_hash)
+            preview_hash = item.get("preview_build_inputs_hash")
+            item.pop("preview_build_inputs_hash", None)
+            item.update(stale=bool(build.get("stale")),
+                        rebuilding=rebuilding, rebuild_state=build.get("state"),
+                        preview_current=bool(item.get("preview_available") and current_hash
+                                             and preview_hash == current_hash))
+        except Exception as exc:  # an unavailable input store must not make the model list fail
+            log.warning("Could not check model freshness for %s/%s: %s", entry["die"], entry["config"], exc)
+            item.update(stale=True, rebuilding=False, rebuild_state="unknown", preview_current=False)
+        models.append(item)
     from motor_ai_sim import verification as V
     full = M.can_download(who, rec)
     out = []
@@ -87,7 +125,7 @@ def list_models(authorization: Optional[str] = Header(default=None)):
         if not m["available"]:
             continue
         # WHAT THIS CALLER SEES (owner 2026-10-15): the full model with the NDA gate passed, else ONLY the simplified one - never a fallback to full
-        if full:
+        if full and (m.get("glb_sha256") or m.get("preview_current")):
             m["view"], m["view_reason"] = "full", ""
         elif m.get("simplified_available"):
             m["view"], m["view_reason"] = "simplified", ""
@@ -107,6 +145,28 @@ def get_glb(die: str, config: str, authorization: Optional[str] = Header(default
     row = M.file_row(e, "glb")
     if row is None:
         raise HTTPException(status_code=404, detail="This model has not been built yet.")
+    return FileResponse(row["path"], media_type="model/gltf-binary",
+                        headers={"ETag": '"%s"' % row["sha256"], "Cache-Control": "private, max-age=0, must-revalidate"})
+
+
+@router.get("/{die}/{config}/preview.glb")
+def get_preview_glb(die: str, config: str, authorization: Optional[str] = Header(default=None)):
+    """The coarse preview of the FULL model. It is private and uses the same NDA gate as the released full GLB."""
+    _caller(authorization)
+    e = _entry_for(authorization, die, config)
+    require_full_view(authorization)
+    try:
+        current_hash = _current_build_hash(e)
+    except Exception as exc:  # noqa: BLE001 - an unverifiable preview is not served
+        log.warning("Could not verify preview inputs for %s/%s: %s", die, config, exc)
+        current_hash = None
+    preview_manifest = e.get("preview_manifest") or {}
+    if (preview_manifest.get("ready") is not True or preview_manifest.get("gate_passed") is not True
+            or not current_hash or current_hash != preview_manifest.get("build_inputs_hash")):
+        raise HTTPException(status_code=404, detail="A current preview of this model is not available.")
+    row = M.file_row(e, "preview_glb")
+    if row is None:
+        raise HTTPException(status_code=404, detail="A preview of this model is not available yet.")
     return FileResponse(row["path"], media_type="model/gltf-binary",
                         headers={"ETag": '"%s"' % row["sha256"], "Cache-Control": "private, max-age=0, must-revalidate"})
 

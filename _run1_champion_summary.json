@@ -1,0 +1,36 @@
+{
+  "run1_champion": {
+    "geometry": {
+      "stator_fillet_r": 0.2,
+      "stator_fillet_r1": 0.0,
+      "slot_height": 5.1000000000000005,
+      "core_thickness": 1.7000000000000002,
+      "tooth_width": 3.0,
+      "tooth2_width": 2.2,
+      "cut_width": 1.1,
+      "wire_width": 1.8,
+      "wire_height": 0.5,
+      "num_wires_per_slot": 10.0,
+      "magnet_height": 5.4,
+      "magnet_fill_up": 0.5919948854313153,
+      "magnet_fill_radius": 0.1,
+      "magnet_up_gap": 0.2,
+      "magnet_down_height": 1.3,
+      "rotor_fill_r": 0.5
+    },
+    "verified_hifi": {
+      "gamma_mtpa_deg": -40,
+      "current_a": 60.0,
+      "T_mean_Nm": 0.4746,
+      "ripple_pct": 2.47,
+      "settings": "full ring, 120 steps, mesh 0.8, macro, converged Picard"
+    },
+    "optimizer_eval": {
+      "gamma_deg": -55,
+      "ripple_pct": 2.35,
+      "TD": 5.363,
+      "eff": 0.8884
+    },
+    "note": "12s14p 40mm; baseline ripple was 37.5% at 60A / cogging 0.138 Nm p-p"
+  }
+}

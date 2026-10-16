@@ -1,11 +1,96 @@
 """Integration tests for the FastAPI endpoints."""
 
+import shutil
+from pathlib import Path
+
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from motor_ai_sim.api import app
 
 client = TestClient(app)
+
+# The file the APP writes (tests/conftest.py points it at a sandbox copy).
+from motor_ai_sim.config import DEFAULT_CONFIG_PATH as _CONFIG
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _preserve_working_config():
+    """Put ``config/motor_config.yaml`` back the way we found it.
+
+    These tests PUT to /api/geometry and POST to /api/geometry/reset, and both
+    write the real config file — the same one the user's active design lives in.
+    Running the suite silently replaced a 30 mm 12s14p machine with the 200 mm
+    defaults, which is a nasty way to lose an afternoon's work and gives anyone
+    a good reason never to run the tests.
+
+    The right fix is to point the API at a temp config during tests; until the
+    config layer takes an injectable path, save and restore.
+    """
+    backup = _CONFIG.read_bytes() if _CONFIG.exists() else None
+    try:
+        yield
+    finally:
+        if backup is not None:
+            _CONFIG.write_bytes(backup)
+        # Restoring the FILE is not restoring the MACHINE: the geometry service
+        # keeps the last PUT/reset in memory (`_current_geometry`, never
+        # re-read unless asked), and the thermal router caches meshes and
+        # fields under the live fingerprint.  Left alone, the next module's
+        # /api/thermal/mesh served the geometry this module reset to while its
+        # own `?geo=` solve described the sandbox machine — two tests in
+        # tests/test_thermal_routes.py failed only when run after this file
+        # (2026-09-08).  Put the in-memory state back where the file is.
+        try:
+            from motor_ai_sim.config import clear_config_cache
+            clear_config_cache()
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:
+            from motor_ai_sim.services import geometry_service as _gs
+            _gs.invalidate_mesh_cache()
+            _gs.get_current_geometry(reload=True)
+        except Exception:                                     # noqa: BLE001
+            pass
+        try:
+            from motor_ai_sim.routes import thermal as _th
+            _th.clear_thermal_caches("test_api teardown")
+        except Exception:                                     # noqa: BLE001
+            pass
+
+
+def _config_geometry() -> dict:
+    """Read the ``geometry`` section straight off disk.
+
+    ``config/motor_config.yaml`` is the source of truth the geometry API serves
+    and resets to, so expectations are derived from it rather than written as
+    literals.  Hard-coded numbers here rot the moment the active design changes
+    (they were 200 mm-era values long after the design moved to 30 mm), and a
+    stale assertion at the top of the file aborts the whole run under ``-x``,
+    hiding the physics regression tests behind an irrelevant failure.
+
+    Reads the file directly instead of going through ``motor_ai_sim.config``:
+    that module caches with a 1 s mtime probe (``_MTIME_PROBE_S``), so a cached
+    copy can lag the file a test just wrote.
+    """
+    with open(_CONFIG, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f).get("geometry", {})
+
+
+def _write_config_geometry(**values) -> None:
+    """Edit the geometry section on disk behind the API's back.
+
+    Deliberately does NOT flush ``motor_ai_sim.config``'s cache or the geometry
+    service's in-process ``_current_geometry`` — that is what makes the state
+    stale, which is exactly what ``POST /api/geometry/reset`` is supposed to
+    discard.
+    """
+    with open(_CONFIG, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f)
+    cfg.setdefault("geometry", {}).update(values)
+    with open(_CONFIG, "w", encoding="utf-8") as f:
+        yaml.dump(cfg, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
 class TestHealthAndMeta:
@@ -51,33 +136,74 @@ class TestGeometryEndpoints:
             assert key in data, f"Missing derived param: {key}"
 
     def test_update_geometry_single_param(self):
-        r = client.put("/api/geometry", json={"stator_diameter": 220.0})
+        # Perturb the *current* design rather than jumping to a fixed diameter:
+        # a literal here is both a stale-value trap and a scale mismatch (a
+        # 220 mm stator wrapped around 4 mm slots is not a machine anyone is
+        # testing).
+        target = float(_config_geometry()["stator_diameter"]) + 10.0
+        r = client.put("/api/geometry", json={"stator_diameter": target})
         assert r.status_code == 200
         data = r.json()
-        assert data["stator_diameter"] == 220.0
-        assert data["stator_outer_radius"] == pytest.approx(110.0)
+        assert data["stator_diameter"] == pytest.approx(target)
+        assert data["stator_outer_radius"] == pytest.approx(target / 2.0)
 
     def test_update_geometry_multiple_params(self):
-        r = client.put("/api/geometry", json={"stator_diameter": 180.0, "num_seg": 4})
-        assert r.status_code == 200
+        # Two parameters at once, both of them edits the machine can take.  The
+        # old second parameter was ``num_seg: 4`` — on the Ø200 that is 24 slots
+        # whose cutters overlap (the slot wall lands 15 mm past the tooth pitch),
+        # a machine the validator now refuses by name; the edit only ever passed
+        # because the derived slot count was still the old one when the rule
+        # ran, and it then broke every later test in this class (2026-09-08).
+        g0 = _config_geometry()
+        target = float(g0["stator_diameter"]) - 5.0
+        length = float(g0["motor_length"]) + 5.0
+        r = client.put("/api/geometry",
+                       json={"stator_diameter": target, "motor_length": length})
+        assert r.status_code == 200, r.text
         data = r.json()
-        assert data["stator_diameter"] == 180.0
-        assert data["num_seg"] == 4
+        assert data["stator_diameter"] == pytest.approx(target)
+        assert data["motor_length"] == pytest.approx(length)
 
     def test_update_geometry_partial_preserves_others(self):
         baseline = client.get("/api/geometry").json()
         slot_height_before = baseline["slot_height"]
 
-        client.put("/api/geometry", json={"stator_diameter": 200.0})
+        client.put("/api/geometry", json={"stator_diameter": baseline["stator_diameter"] + 1.0})
         after = client.get("/api/geometry").json()
         assert after["slot_height"] == slot_height_before
 
     def test_reset_geometry(self):
-        client.put("/api/geometry", json={"stator_diameter": 300.0})
+        """``POST /reset`` re-reads config/motor_config.yaml — it is a *reload*,
+        not a restore-to-factory-defaults.
+
+        ``reset_geometry()`` (src/motor_ai_sim/services/geometry_service.py:82)
+        clears the config cache and rebuilds the geometry from the tracked YAML,
+        and ``PUT /api/geometry`` persists into that same YAML.  So the only
+        state a reset can discard is an in-process copy that has drifted from
+        the file — which is what this test sets up, by editing the file
+        directly after the PUT.
+
+        The old version PUT 300 and then asserted 200: it never exercised the
+        reload at all, it just read back the value it had itself written, and
+        the 200 was a leftover from the 200 mm-era config.
+        """
+        on_disk = float(_config_geometry()["stator_diameter"])
+
+        # In-process geometry (and the file) now say on_disk + 7 …
+        drifted = on_disk + 7.0
+        put = client.put("/api/geometry", json={"stator_diameter": drifted})
+        assert put.status_code == 200
+        assert put.json()["stator_diameter"] == pytest.approx(drifted)
+
+        # … then put the file back without telling the API, so the cached
+        # geometry is stale by exactly 7 mm.
+        _write_config_geometry(stator_diameter=on_disk)
+
         r = client.post("/api/geometry/reset")
         assert r.status_code == 200
         data = r.json()
-        assert data["stator_diameter"] == 200.0
+        assert data["stator_diameter"] == pytest.approx(on_disk)
+        assert data["stator_outer_radius"] == pytest.approx(on_disk / 2.0)
 
     def test_geometry_summary(self):
         r = client.get("/api/geometry/summary")
@@ -136,6 +262,91 @@ class TestPipelineStatus:
         assert r.status_code == 200
         data = r.json()
         assert "fusion360_available" in data
-        assert "modulus_bridge_available" in data
         assert "cache_enabled" in data
         assert isinstance(data["cache_enabled"], bool)
+
+
+class TestUnknownMaterialIsVisible:
+    """F6: an assigned material nobody can resolve must FAIL, not fall back.
+
+    The path this guards used to log one WARNING and drop to the analytic
+    magnet — no BH curve and no demag knee — which returned an empty demag map
+    and a shaft eddy loss of 63.9 W where the real magnet gives 7.0 W, a factor
+    9 with every number on screen looking plausible
+    (docs/SOLVER_TRIALS_2026-07-30.md F6).
+    """
+
+    def test_request_material_override_with_unknown_name_is_400(self):
+        import json
+        bad = json.dumps({"assignment": {"magnet": "N42SH"}})
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"mat": bad, "restore": "true"})
+        assert r.status_code == 400
+        # the offending name AND what is available, or the message is useless
+        assert "N42SH" in r.json()["detail"]
+        assert "F45SH_120C" in r.json()["detail"]
+
+    def test_material_assigned_to_the_wrong_part_is_400(self):
+        import json
+        bad = json.dumps({"assignment": {"magnet": "copper"}})
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"mat": bad, "restore": "true"})
+        assert r.status_code == 400
+        assert "copper" in r.json()["detail"]
+
+    def test_override_carrying_its_own_props_is_accepted(self):
+        """A name the library never heard of is fine when the request BRINGS it."""
+        import json
+        ov = json.dumps({"assignment": {"magnet": "MyLabMagnet"},
+                         "materials": {"MyLabMagnet": {"category": "magnet",
+                                                       "Br": 1.2}}})
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"mat": ov, "restore": "true"})
+        assert r.status_code == 200
+
+    def test_build_materials_raises_on_an_unknown_assignment(self):
+        """The EVAL paths (optimizer, trials, regression) have no HTTP layer —
+        they must see an exception, not a warning."""
+        from motor_ai_sim.materials import UnknownMaterialError
+        from motor_ai_sim.material_context import set_request_materials
+        from motor_ai_sim.simulation.fem_solver_2d import build_materials
+        set_request_materials({"assignment": {"magnet": "N42SH"},
+                               "materials": {}})
+        try:
+            with pytest.raises(UnknownMaterialError):
+                build_materials({"A": 0.0, "B": 0.0, "C": 0.0}, [],
+                                {"magnets": [], "coils": []}, 0.0, 1e-6, 6)
+        finally:
+            set_request_materials(None)
+
+    def test_live_config_assignment_resolves(self):
+        """The shared config's own assignment must be valid — this is the check
+        that turns a stale name in motor_config.yaml into a red test instead of
+        a plausible-looking wrong answer."""
+        from motor_ai_sim.config import get_material_assignments
+        from motor_ai_sim.materials import validate_assignment
+        validate_assignment(get_material_assignments())
+
+
+class TestWindingConnectionArgument:
+    """F3: the per-request winding channel, and its refusal to guess."""
+
+    def test_unreadable_connection_is_400(self):
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"connection": "N42SH", "restore": "true"})
+        assert r.status_code == 400
+        assert "N42SH" in r.json()["detail"]
+
+    def test_readable_connection_is_accepted(self):
+        r = client.get("/api/simulation/physics/fem_transient",
+                       params={"connection": "2S-2P", "restore": "true"})
+        assert r.status_code == 200
+
+    def test_connection_parses_to_the_right_parallel_paths(self):
+        from motor_ai_sim.winding import parse_connection
+        assert parse_connection("4S") == (1, 4)
+        assert parse_connection("4P") == (4, 1)
+        assert parse_connection("2S-2P") == (2, 2)
+        assert parse_connection("2P2S") == (2, 2)      # legacy spelling
+        with pytest.raises(ValueError):
+            parse_connection("nonsense")

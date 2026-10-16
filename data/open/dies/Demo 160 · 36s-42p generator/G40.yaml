@@ -1,0 +1,26 @@
+name: G40
+role: generator
+created: '2026-09-29T12:00:00'
+geometry_overrides:
+  motor_length: 40
+  wire_width: 5.0
+  wire_height: 0.65
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 12.0
+  wire_split: 1
+  insulation_thickness: 0.2
+winding: {}
+duties:
+- name: cruise
+  mode: generator
+  current_arms: 60.0
+  rpm: 2500.0
+  gamma_deg: 10.0
+  note: demo duty
+  saved_at: '2026-09-29T12:00:00'
+materials:
+  magnet: N45EH_150C
+  stator_core: 20SW1200
+  rotor_core: 20SW1200
+die: Demo 160 · 36s-42p generator

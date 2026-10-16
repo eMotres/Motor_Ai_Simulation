@@ -1,0 +1,52 @@
+# SPICE model manifest — IMCQ120R010M2H
+# Written 2026-09-23 from what was actually downloaded.  The vendor
+# files live in ../_vendor/ and are NOT in git (see `licence`); this
+# manifest says where to fetch the identical file and how to check it.
+part: IMCQ120R010M2H
+status: usable_ngspice
+status_reason: "plain-text SPICE (node names obfuscated, not encrypted); runs in ngspice with ngbehavior=psa after the exact DDT() translation (models.ngspice_translate_ddt) — as shipped, a switching transient aborts at 77 ps"
+source:
+  vendor: Infineon Technologies AG
+  product_page: https://www.infineon.com/part/IMCQ120R010M2H
+  document: "CoolSiC 1200V Gen2 Trench MOSFET SPICE model"
+  url: https://www.infineon.com/assets/row/public/documents/60/50/infineon-spice-coolsic-1200v-gen2-trench-mosfet-simulationmodels-en.zip
+  revision: "02_04 (zip folder Infineon-CoolSiC_1200V_Gen2_Trench_MOSFET-SPICE-v02_04-EN)"
+  released: "2026-09-22"
+  access: "public asset (design-resources API: confidentialityLevel Public, damGated f, accessMode Default) — plain HTTPS GET, no login, no click-through"
+  downloaded: "2026-09-23"
+  zip_sha256: 786b1ff910c99ec6b1a6491e94f1aa7d0e9a2892829bc159d9b4bbc7ad5b8a69
+  zip_bytes: 18252
+library:
+  file: ../_vendor/infineon-spice-coolsic-1200v-gen2-trench-mosfet-simulationmodels-en/Infineon-CoolSiC_1200V_Gen2_Trench_MOSFET-SPICE-v02_04-EN/CoolSiC_1200V_Gen2_Trench_MOSFET_L1_L3.lib
+  sha256: f0ce84eb1cf5fe1cc84759a017b2d07ec5faa97b2384d68fc02620c3c1cf8c97
+  bytes: 108992
+  header: "INFINEON Power Transistors, SPICE Simulation Model Library, CoolSiC 1200V SiC MOSFET, Date 2026-06-15; evaluated with SIMetrix"
+  dialect: "SIMetrix/PSpice (VALUE=, IF(), LIMIT(), TEMP)"
+models:
+  L1:
+    subckt: IMCQ120R010M2H_L1
+    pins: [DRAIN, GATE, SOURCE, SOURCESENSE]
+    temperature: "isothermal: the junction node Tj = TEMP, i.e. the netlist's .temp"
+  L3:
+    subckt: IMCQ120R010M2H_L3
+    pins: [DRAIN, GATE, SOURCE, SOURCESENSE, Tj, TCASE]
+    temperature: "self-heating: Tj/TCASE are thermal nodes (voltage = degC), Foster network to TCASE"
+ngspice:
+  compat: psa
+  level: L1
+  include: "_vendor/_ngspice/CoolSiC_1200V_Gen2_Trench_MOSFET_L1_L3.f0ce84eb1cf5.ngspice.lib (generated on first use; 4 DDT() calls replaced, nothing else)"
+  tested_with: "ngspice-46 shared library bundled with KiCad 10.0 (C:/Program Files/KiCad/10.0/bin/ngspice.dll)"
+licence:
+  summary: >-
+    Infineon "MODEL TERMS OF USE" in the library header: by downloading
+    and/or using the model the user agrees to the terms (browse-wrap, no
+    click-through on the download); §1 the model describes a TYPICAL product,
+    the datasheet is the only specification; §2 not qualified for critical
+    applications; §3 CONFIDENTIAL INFORMATION — the model, its documentation
+    and the terms must not be disclosed to third parties and may be used for
+    simulation and testing only; §4 as-is, no warranty; §5 liability limited;
+    §6 export regulations.
+  redistribution: "forbidden — Terms of Use §3 treat the model as confidential information"
+  in_git: false   # config/devices/spice/_vendor/ is .gitignored
+notes:
+  - "one library covers the whole 1200 V G2 family (IMBG/IMBT/IMCQ/IMZA/IMZC/IMSQ); this part's L1/L3 subcircuits are in it"

@@ -1,0 +1,211 @@
+# ============================================================
+# Part materials - mechanical + thermal cards for the component library
+# (docs/COMPONENT_CARD.md section 7; src/motor_ai_sim/part_materials.py).
+#
+# WHY A SECOND FILE.  config/materials_library.yaml is the solver's library
+# (B-H curves, loss fits, magnet cards) and is not touched by the product
+# composer.  This file adds, for the parts of a PRODUCT (frame, propeller,
+# housing, screws, bearings, boards, cells), the cards the materials library
+# does not have, and EXTENDS some library cards with the mechanical/thermal
+# values they lack (ultimate strength, fatigue limit, service temperature).
+# Every other component material (stator steel, magnets, copper, shaft steel,
+# insulation) is read straight from the library: ONE card per material.
+#
+# RULES (repo rule, owner 2026-09-29): every value traces to an INDEPENDENT
+# source - a standard, a supplier data sheet or a handbook.  NOTHING is taken
+# from a commercial FEM package's material library.  Each property is
+#     {v: <number>, src: <source id>, type: <kind>, verify: <bool>, note: <text>}
+# type   : standard | datasheet | handbook | derived | estimate
+# verify : true = the figure was entered from the cited reference without
+#          re-reading the document in the session that created this file
+#          (2026-10-14); check it before it feeds a safety-relevant result.
+#          A property with no entry is "not known" (None), never a guess.
+# Units: density kg/m3, E GPa, strengths MPa, CTE ppm/K, k W/(m K),
+#        cp J/(kg K), temperatures degC.
+# ============================================================
+schema: part-materials-1
+
+sources:
+  iso3506_1:
+    doc: "ISO 3506-1 Mechanical properties of corrosion-resistant stainless steel fasteners - bolts, screws and studs: property class 70 (steel grade A2): Rm >= 700 MPa, Rp0.2 >= 450 MPa"
+  asm_v1_ss:
+    doc: "ASM Handbook Vol. 1 (1990), Properties and Selection: Irons, Steels and High-Performance Alloys, wrought austenitic stainless steel 304: 7.93 g/cm3, E 193 GPa, 17.2e-6/K (0-100 C), 16.2 W/mK, 500 J/kgK"
+  asm_v2:
+    doc: "ASM Handbook Vol. 2 (1990), Properties of Wrought Aluminum and Aluminum Alloys: 6061-T6 (Rm 310 MPa, fatigue 96.5 MPa at 5e8 cycles R=-1), 7075-T6 (Rm 572 MPa, fatigue 159 MPa at 5e8 cycles R=-1)"
+  en10083_3:
+    doc: "EN 10083-3 Steels for quenching and tempering - alloy steels: 42CrMo4 +QT, 16 < d <= 40 mm: Rm 900-1100 MPa, Rp0.2 >= 750 MPa"
+  iso683_17:
+    doc: "ISO 683-17 Heat-treated steels, alloy steels and free-cutting steels - ball and roller bearing steels: 100Cr6 (through-hardening bearing steel)"
+  skf_catalogue:
+    doc: "SKF General Catalogue / Rolling bearings catalogue, bearing steel properties: density 7.8 g/cm3, E 208 GPa, CTE 12e-6/K (20-100 C), hardened 58-64 HRC, dimensional stability to 120 C (standard heat treatment)"
+  ipc4101_fr4:
+    doc: "IPC-4101 laminate specification and typical FR-4 (glass-epoxy) laminate data of major suppliers (e.g. Isola IS410): density 1.85 g/cm3, E in-plane 17-24 GPa, Tg 170 C class, CTE x-y 12-16 and z 50-70 ppm/K, k through-thickness 0.3 W/mK"
+  basf_ultramid:
+    doc: "BASF Ultramid A3WG6 (PA66-GF30) data sheet, dry as moulded: density 1.36 g/cm3, tensile modulus 10 GPa, stress at break 185 MPa, CTE 25e-6/K, k 0.3 W/mK, Tm 260 C"
+  pa66_cf30:
+    doc: "Typical data of carbon-fibre-filled (30 %) PA66 injection-moulding compounds from supplier data sheets: density 1.28 g/cm3, tensile modulus 20-24 GPa, tensile strength 240-260 MPa, k 0.5 W/mK"
+  library_t800:
+    doc: "config/materials_library.yaml card T800_UD_60 (fibre/matrix data sheets cited there: Toray T800 fibre, epoxy matrix, Vf 60 %): E1 165, E2 9, G12 5 GPa, nu12 0.3, rho 1580, CTE -0.5 / 30 ppm/K, k 7 / 0.8 W/mK, cp 900, UD tensile 2500 MPa"
+  jones_clt:
+    doc: "R. M. Jones, Mechanics of Composite Materials (2nd ed., 1999): classical lamination theory, quasi-isotropic [0/45/-90/-45]s laminate from lamina invariants U1, U4 (E_qi = (U1^2 - U4^2)/U1, nu_qi = U4/U1)"
+  li_ion_pouch_lit:
+    doc: "Open literature on commercial Li-ion pouch cells (high-energy NMC/graphite): volumetric/gravimetric energy 650 Wh/L and 250 Wh/kg -> 2.6 kg/L; cp 800-1100 J/kgK; k through-plane 0.5-1.5, in-plane 15-30 W/mK; cell temperature window -20..60 C. Representative values only, NOT a cell measurement"
+  cda_c11000:
+    doc: "Copper Development Association, UNS C11000 (ETP) typical properties, annealed: tensile strength ~32 ksi = 220 MPa"
+  project_insulation:
+    doc: "Project winding-insulation class N (200 C), owner decision 2026-09-11 (single source report.PROJECT_INSULATION_C)"
+
+materials:
+  # -- a BOM row nobody has classified ----------------------------------------------
+  Unspecified_BOM_part:
+    name: "Part of the CAD bill of materials whose material is not identified"
+    category: other
+    notes: "No property is known. A CAD BOM row the part rules do not recognise is COUNTED in the full mass at the BOM's own mass (never silently dropped) and carries this card until somebody names its material; it cannot be picked in a material picker."
+    props: {}
+  # -- fasteners ---------------------------------------------------------
+  Stainless_A2_70:
+    name: "Stainless steel A2-70 (18-8 / 304) fastener grade"
+    category: stainless_steel
+    notes: "Screws and bolts of property class 70. Bulk values of 304 from the handbook, strength from the fastener standard."
+    props:
+      density_kg_m3:        {v: 7930, src: asm_v1_ss, type: handbook, verify: true}
+      youngs_modulus_GPa:   {v: 193, src: asm_v1_ss, type: handbook, verify: true}
+      poisson_ratio:        {v: 0.29, src: asm_v1_ss, type: handbook, verify: true}
+      yield_MPa:            {v: 450, src: iso3506_1, type: standard, verify: false, note: "Rp0.2 minimum of property class 70"}
+      ultimate_MPa:         {v: 700, src: iso3506_1, type: standard, verify: false, note: "Rm minimum of property class 70"}
+      cte_ppm_K:            {v: 17.2, src: asm_v1_ss, type: handbook, verify: true}
+      conductivity_W_mK:    {v: 16.2, src: asm_v1_ss, type: handbook, verify: true}
+      specific_heat_J_kgK:  {v: 500, src: asm_v1_ss, type: handbook, verify: true}
+      max_service_temp_C:   {v: 300, src: iso3506_1, type: estimate, verify: true, note: "strength is reduced above about 300 C (ISO 3506-1 annex on elevated temperature); the figure is a conservative design limit"}
+  # -- shafts ---------------------------------------------------------------
+  # (the stainless shaft cards - AISI 420 `Stainless_420` hardened / `Stainless_420_annealed` (owner 2026-10-15), plus the
+  #  non-magnetic `Stainless_304` / `Stainless_316` - live in config/materials_library.yaml: the shaft is an electromagnetic
+  #  part, so its card is the solver's one card - not assigned to any die yet)
+  # -- bearings ------------------------------------------------------------
+  Bearing_steel_100Cr6:
+    name: "Bearing steel 100Cr6 (SAE 52100), through-hardened"
+    category: steel
+    notes: "Rolling elements and rings. Rolling-contact fatigue is governed by the bearing life rating (ISO 281), so no bulk endurance limit is given."
+    props:
+      density_kg_m3:        {v: 7830, src: skf_catalogue, type: datasheet, verify: true}
+      youngs_modulus_GPa:   {v: 208, src: skf_catalogue, type: datasheet, verify: true}
+      poisson_ratio:        {v: 0.30, src: iso683_17, type: estimate, verify: true, note: "handbook figure for steel"}
+      yield_MPa:            {v: 1650, src: iso683_17, type: estimate, verify: true, note: "hardened 58-62 HRC, typical order of magnitude; not a guaranteed value"}
+      ultimate_MPa:         {v: 2200, src: iso683_17, type: estimate, verify: true, note: "hardened 58-62 HRC, typical order of magnitude; not a guaranteed value"}
+      cte_ppm_K:            {v: 12.0, src: skf_catalogue, type: datasheet, verify: true}
+      conductivity_W_mK:    {v: 46, src: iso683_17, type: handbook, verify: true}
+      specific_heat_J_kgK:  {v: 475, src: iso683_17, type: handbook, verify: true}
+      max_service_temp_C:   {v: 120, src: skf_catalogue, type: datasheet, verify: true, note: "dimensional stability of the standard heat treatment"}
+  # -- boards ----------------------------------------------------------------
+  FR4_glass_epoxy:
+    name: "FR-4 glass-epoxy laminate (PCB substrate, G10-type rings)"
+    category: laminate
+    notes: "In-plane (warp/fill) values. Copper of a board is a separate part (library card 'copper')."
+    props:
+      density_kg_m3:        {v: 1850, src: ipc4101_fr4, type: datasheet, verify: true}
+      youngs_modulus_GPa:   {v: 22, src: ipc4101_fr4, type: datasheet, verify: true, note: "in-plane, typical 17-24"}
+      poisson_ratio:        {v: 0.14, src: ipc4101_fr4, type: datasheet, verify: true}
+      ultimate_MPa:         {v: 310, src: ipc4101_fr4, type: datasheet, verify: true, note: "in-plane tensile, brittle: no yield point"}
+      cte_ppm_K:            {v: 14, src: ipc4101_fr4, type: datasheet, verify: true, note: "x-y below Tg; z is 50-70 ppm/K"}
+      conductivity_W_mK:    {v: 0.3, src: ipc4101_fr4, type: datasheet, verify: true, note: "through-thickness"}
+      specific_heat_J_kgK:  {v: 1100, src: ipc4101_fr4, type: estimate, verify: true}
+      max_service_temp_C:   {v: 130, src: ipc4101_fr4, type: estimate, verify: true, note: "continuous operating limit well below Tg (170 C class)"}
+  # -- composites ------------------------------------------------------------
+  CFRP_QI_T800_epoxy:
+    name: "Carbon-fibre/epoxy quasi-isotropic laminate (frame plates, propellers)"
+    category: composite
+    notes: "Quasi-isotropic [0/45/-90/-45]s laminate built from the library lamina T800_UD_60 by classical lamination theory (stiffness) with the usual strength knock-down (strength). Real frames and propellers differ in layup and resin; the stated layup of a product replaces this card."
+    props:
+      density_kg_m3:        {v: 1580, src: library_t800, type: derived, verify: false}
+      youngs_modulus_GPa:  {v: 62, src: jones_clt, type: derived, verify: false, note: "E_qi = (U1^2 - U4^2)/U1 from E1 165, E2 9, G12 5, nu12 0.3 of T800_UD_60 -> 62.1 GPa"}
+      poisson_ratio:        {v: 0.31, src: jones_clt, type: derived, verify: false, note: "nu_qi = U4/U1 = 0.311"}
+      ultimate_MPa:         {v: 850, src: library_t800, type: estimate, verify: true, note: "about 0.35 x the UD tensile strength 2500 MPa (typical quasi-isotropic knock-down); brittle: no yield point"}
+      cte_ppm_K:            {v: 1.5, src: library_t800, type: estimate, verify: true, note: "in-plane, order 1-3 ppm/K from the lamina values -0.5 / 30"}
+      conductivity_W_mK:    {v: 0.8, src: library_t800, type: derived, verify: false, note: "through-thickness (conservative thermal path); in-plane is about 4"}
+      specific_heat_J_kgK:  {v: 900, src: library_t800, type: derived, verify: false}
+      max_service_temp_C:   {v: 120, src: library_t800, type: estimate, verify: true, note: "generic epoxy matrix, glass transition limited; the library sleeve card quotes 180 C for a 180 C-class resin"}
+  # -- polymers --------------------------------------------------------------
+  PA66_GF30:
+    name: "Polyamide 66, 30 % glass fibre (glass-fibre nylon)"
+    category: polymer
+    notes: "Dry as moulded. Moisture lowers stiffness and strength; fibre orientation makes the part anisotropic. A catalogue statement 'glass fiber nylon' is mapped here with grade ASSUMED."
+    props:
+      density_kg_m3:        {v: 1360, src: basf_ultramid, type: datasheet, verify: true}
+      youngs_modulus_GPa:   {v: 10, src: basf_ultramid, type: datasheet, verify: true}
+      poisson_ratio:        {v: 0.40, src: basf_ultramid, type: estimate, verify: true}
+      ultimate_MPa:         {v: 185, src: basf_ultramid, type: datasheet, verify: true, note: "stress at break, no yield point"}
+      cte_ppm_K:            {v: 25, src: basf_ultramid, type: datasheet, verify: true, note: "along the flow direction"}
+      conductivity_W_mK:    {v: 0.3, src: basf_ultramid, type: datasheet, verify: true}
+      specific_heat_J_kgK:  {v: 1500, src: basf_ultramid, type: estimate, verify: true}
+      max_service_temp_C:   {v: 120, src: basf_ultramid, type: estimate, verify: true, note: "long-term continuous use, well below the melting point"}
+  PA66_CF30:
+    name: "Polyamide 66, 30 % carbon fibre (polymer + carbon fibre)"
+    category: polymer
+    notes: "Dry as moulded; grade ASSUMED when a catalogue only says 'polymer + carbon fiber'."
+    props:
+      density_kg_m3:        {v: 1280, src: pa66_cf30, type: datasheet, verify: true}
+      youngs_modulus_GPa:   {v: 22, src: pa66_cf30, type: datasheet, verify: true}
+      poisson_ratio:        {v: 0.38, src: pa66_cf30, type: estimate, verify: true}
+      ultimate_MPa:         {v: 250, src: pa66_cf30, type: datasheet, verify: true, note: "tensile strength, no yield point"}
+      cte_ppm_K:            {v: 15, src: pa66_cf30, type: estimate, verify: true}
+      conductivity_W_mK:    {v: 0.5, src: pa66_cf30, type: datasheet, verify: true}
+      specific_heat_J_kgK:  {v: 1400, src: pa66_cf30, type: estimate, verify: true}
+      max_service_temp_C:   {v: 120, src: pa66_cf30, type: estimate, verify: true}
+  # -- cells -----------------------------------------------------------------
+  Li_ion_pouch_cell_effective:
+    name: "Li-ion pouch cell, effective homogeneous body"
+    category: cell
+    notes: "REPRESENTATIVE effective properties of a high-energy pouch cell for mass, thermal and packaging studies. Mechanical properties of a cell stack are not characterised here (no figure is given); measure the real cell before a crash or vibration study."
+    props:
+      density_kg_m3:        {v: 2600, src: li_ion_pouch_lit, type: estimate, verify: true}
+      conductivity_W_mK:    {v: 1.0, src: li_ion_pouch_lit, type: estimate, verify: true, note: "through-plane; in-plane is about 25"}
+      specific_heat_J_kgK:  {v: 1000, src: li_ion_pouch_lit, type: estimate, verify: true}
+      max_service_temp_C:   {v: 60, src: li_ion_pouch_lit, type: estimate, verify: true, note: "upper cell temperature limit in discharge"}
+
+# Values the materials library lacks for cards it already has.  They fill gaps
+# only: a value present in the library always wins.
+library_extensions:
+  Aluminium_6061:
+    props:
+      ultimate_MPa:       {v: 310, src: asm_v2, type: handbook, verify: true, note: "6061-T6 typical"}
+      fatigue_limit_MPa:  {v: 96.5, src: asm_v2, type: handbook, verify: true, note: "5e8 cycles, R = -1, unnotched"}
+      max_service_temp_C: {v: 150, src: asm_v2, type: estimate, verify: true, note: "strength of T6 tempers falls quickly above about 150 C"}
+  Aluminium_7075:
+    props:
+      ultimate_MPa:       {v: 572, src: asm_v2, type: handbook, verify: true, note: "7075-T6 typical"}
+      fatigue_limit_MPa:  {v: 159, src: asm_v2, type: handbook, verify: true, note: "5e8 cycles, R = -1, unnotched"}
+      max_service_temp_C: {v: 120, src: asm_v2, type: estimate, verify: true, note: "7075-T6 overages above about 120 C"}
+  Steel_42CrMo4_QT:
+    props:
+      ultimate_MPa:       {v: 1000, src: en10083_3, type: standard, verify: true, note: "16 < d <= 40 mm, mid of 900-1100"}
+      fatigue_limit_MPa:  {v: 450, src: en10083_3, type: estimate, verify: true, note: "about 0.45 x Rm, rotating bending of smooth QT steel; not a tabulated standard value"}
+      max_service_temp_C: {v: 300, src: en10083_3, type: estimate, verify: true, note: "well below the tempering temperature (540-680 C)"}
+  copper:
+    props:
+      ultimate_MPa:       {v: 220, src: cda_c11000, type: handbook, verify: true, note: "annealed C11000"}
+      max_service_temp_C: {v: 200, src: project_insulation, type: estimate, verify: false, note: "limited by the winding insulation class N (200 C), not by the copper"}
+
+# The NON-ACTIVE parts of an assembled motor (those the electromagnetic simulation does not use): holders, the
+# rotor carrier of ring-carrier motors, bearings, screws, the phase board and its pins, the propeller fixing plate.
+# The part LIST of a motor comes from its CAD bill of materials (cad/bom.py; the server writes <cad>/<die>/<config>/*_BOM.csv);
+# a motor without a built BOM lists none of these (no part is invented).  This table says how a BOM line is recognised
+# (``match``: regex on the BOM part name, case-insensitive), what the part is called, its role and the DEFAULT material
+# card the Materials tab starts from.  The user's choice per die overrides the default (die.yaml ``part_materials``) and
+# scales the BOM mass with the density ratio (the CAD volume is fixed).
+# OWNER RULE 2026-10-14: every structural wall / holder / housing / plate and every shaft is aluminium 6061-T6, except the
+# Ø30 and Ø40 shafts (stainless steel AISI 420, confirmed 2026-10-15; the condition - hardened or annealed - waits for the supplier).  ``status`` = how sure the default is.
+mechanical_parts:
+  holder_front:  {name: "Stator holder, front", match: "^stator holder, front", role: structural, material: Aluminium_6061, status: computed}
+  holder_back:   {name: "Stator holder, back", match: "^stator holder, back", role: structural, material: Aluminium_6061, status: computed}
+  holder:        {name: "Stator holder", match: "^stator holder", role: structural, material: Aluminium_6061, status: computed}
+  carrier_front: {name: "Rotor carrier, front", match: "^rotor carrier, front", role: structural, material: Aluminium_6061, status: computed,
+                  note: "aluminium 6061-T6 (owner 2026-10-14: walls and shafts are aluminium 6061); the simulation shaft is the electromagnetic stand-in of this carrier"}
+  carrier_rear:  {name: "Rotor carrier, rear", match: "^rotor carrier, rear", role: structural, material: Aluminium_6061, status: computed}
+  prop_fix:      {name: "Propeller fixing plate", match: "^prop_fix", role: structural, material: Aluminium_6061, status: computed}
+  bearings:      {name: "Bearings", match: "^ball bearing|^bearing", role: structural, material: Bearing_steel_100Cr6, status: computed,
+                  note: "rings and balls only (shields, seals and cage are not modelled)"}
+  screws:        {name: "Screws", match: "^screw", role: fastener, material: Stainless_A2_70, status: computed}
+  board:         {name: "Phase board", match: "^phase board", role: electronic, material: FR4_glass_epoxy, status: assumed,
+                  note: "the copper layers are inside this mass; FR-4 is used for the whole board (small part)"}
+  pins:          {name: "Phase pins", match: "^phase pin", role: conductor, material: copper, status: assumed,
+                  note: "the BOM names a CuCrZr alloy; copper is used (small part)"}

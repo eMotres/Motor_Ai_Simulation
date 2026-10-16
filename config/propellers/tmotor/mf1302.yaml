@@ -1,0 +1,41 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+schema: propeller-1
+id: tmotor_mf1302
+vendor: T-MOTOR
+model: MF1302
+series: MF series polymer folding
+status: current
+product_url: https://store.tmotor.com/product/mf1302-polymer-folding-prop.html
+source_urls:
+- https://store.tmotor.com/product/mf1302-polymer-folding-prop.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 13.4
+  diameter_mm: 339.8
+  pitch_in: 4.8
+  pitch_mm: 121.6
+  blades: null
+material: polymer+CF, folding
+hub: {}
+mass_single_blade_g: 17.0
+mass_package_g: 83.0
+published_limits:
+  recommended_thrust_kg:
+  - 0.7
+  - 1.2
+  recommended_rpm:
+  - 5100
+  - 6600
+  max_thrust_kg: 2.0
+  max_rpm: 8400
+performance:
+  data_quality: geometry_only
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  tables: []
+notes:
+- 'No thrust/torque test data is published for this propeller on T-Motor''s product page or in the motor test tables
+  found; the propeller model refuses to compute loads for it (selectable: false).'
+- Folding prop, diameter 13.4 in as published; number of blades per prop is not stated.

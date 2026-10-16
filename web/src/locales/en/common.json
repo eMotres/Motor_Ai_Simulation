@@ -1,0 +1,415 @@
+{
+  "tabs": {
+    "motors": "Motors",
+    "geometry": "Geometry",
+    "materials": "Materials",
+    "mesh": "Mesh",
+    "simulations": "Simulations",
+    "simulation": "Electromagnetic",
+    "static3d": "3D",
+    "mechanical": "Mechanical",
+    "thermal": "Thermal",
+    "controller": "Controller",
+    "system": "System",
+    "sweep": "Optimization",
+    "comparePoints": "Compare",
+    "cost": "Cost",
+    "compare": "Configure",
+    "model3d": "3D model",
+    "admin": "Admin"
+  },
+  "status": {
+    "connected": "Connected",
+    "localMode": "Local Mode"
+  },
+  "theme": {
+    "dark": "Dark theme",
+    "light": "Light theme"
+  },
+  "actions": {
+    "resetDefaults": "Reset to Defaults"
+  },
+  "viewer": {
+    "showGrid": "Show Grid",
+    "hideGrid": "Hide Grid",
+    "showAxes": "Show Axes",
+    "hideAxes": "Hide Axes",
+    "solidMesh": "Solid Mesh",
+    "stl": "STL (CadQuery)",
+    "generateStl": "Generate STL from CadQuery",
+    "clearCache": "Clear Cache & Rebuild"
+  },
+  "language": {
+    "label": "Language"
+  },
+  "account": {
+    "signIn": "Sign in",
+    "signOut": "Sign out",
+    "avatarTooltip": "{email} · {role} — click for sessions",
+    "sessions": "Sessions",
+    "agents": "Access for agents",
+    "notifications": "Notifications",
+    "computeNodes": "My compute nodes"
+  },
+  "dataSharing": {
+    "version": "data_sharing_consent_v1",
+    "label": "Optional: share my simulation data with the AeroStator dataset",
+    "separate": "Separate from the NDA. Leave it unticked and signing works the same.",
+    "scopeTitle": "What this covers",
+    "scopeData": "The simulation inputs and results, design variants and operating points you create in your workspace.",
+    "scopePurpose": "Used in an engineering dataset shared with the AeroStator community, for research, validation and training of engineering models.",
+    "scopeAnon": "Names, e-mail addresses and company names are removed before anything is included.",
+    "scopeRestricted": "Restricted Material that MOTRES supplied to you is never included.",
+    "withdraw": "You can withdraw at any time in the account menu. Withdrawal stops future inclusion; data already published in a dataset release cannot be recalled.",
+    "menu": "Share my data with the AeroStator dataset",
+    "dialogTitle": "Share my data with the dataset",
+    "toggle": "Share my data with the AeroStator dataset",
+    "on": "On since {time}",
+    "off": "Off",
+    "textVersion": "Consent text {version}",
+    "saveError": "The choice was not saved: {message}",
+    "close": "Close"
+  },
+  "commPrefs": {
+    "title": "Communication preferences",
+    "menu": "E-mail preferences",
+    "intro": "Send me e-mail about (optional, you can change this at any time):",
+    "introHelp": "Nothing is ticked for you. We write to you about a topic only if you tick it. You can change your mind here at any time, or with the unsubscribe link in every e-mail. Messages about your account and security are not affected.",
+    "topics": {
+      "product_updates": "Product updates: release notes and new features",
+      "new_motors": "New motors: additions to the catalogue and new passports",
+      "engineering_content": "Engineering content: articles, webinars and case studies",
+      "co_development": "Co-development: beta programmes and invitations to build modules together"
+    },
+    "for": "Preferences for {account}",
+    "save": "Save",
+    "saved": "Saved.",
+    "saveError": "Not saved: {message}",
+    "loadError": "Could not load your preferences: {message}",
+    "unsubscribeAll": "Unsubscribe from all",
+    "unsubscribeAllHelp": "Switches every topic off at once. You can tick topics again later.",
+    "unsubscribed": "You are unsubscribed. We will not send you any updates.",
+    "invalidLink": "This link is not valid or has expired. Sign in and open E-mail preferences from the account menu.",
+    "signInHint": "Sign in to see your preferences.",
+    "signIn": "Sign in",
+    "legal": "We use this choice only to decide which e-mails you receive. Legal basis: your consent, withdrawable at any time.",
+    "privacy": "Privacy notice",
+    "textVersion": "Wording {version}",
+    "openApp": "Open AeroStator",
+    "dataSharing": "Dataset sharing settings",
+    "nda": {
+      "title": "NDA, 3-D tools and STEP",
+      "intro": "The simplified model and STEP are available now. The full construction, 3-D tools and full STEP open after the NDA and account verification.",
+      "signed": "Your NDA is signed. The full construction, 3-D tools and full STEP require account verification; the simplified STEP is available now.",
+      "sign": "Sign the NDA online",
+      "signHelp": "Sign the NDA; account verification is also required for the full construction and full STEP.",
+      "request": "Request the NDA",
+      "requestHelp": "Online signing is not open yet. We will send you the agreement.",
+      "requested": "Requested. We will contact you.",
+      "requestError": "The request was not sent: {message}",
+      "signinSign": "Sign in to sign the NDA online",
+      "signinRequest": "Sign in to request the NDA"
+    },
+    "newsletterRetired": "The newsletter has been replaced by E-mail preferences. Sign in and choose what you want to receive in the account menu."
+  },
+  "nodes": {
+    "hint": "FEM runs are heavy; for regular work connect your own server",
+    "hintTip": "Your own server runs your jobs with the same solver version. It connects out over HTTPS, so there are no ports to open, and its CPU time does not count against fair use.",
+    "hintNodes": "My compute nodes",
+    "hintDocs": "Install docs",
+    "share": {
+      "label": "Share idle time with MOTRES",
+      "tip": "Off by default. When on, MOTRES may run its own jobs on this node while you have nothing queued: only MOTRES catalog work (for example passport computations of catalog motors) that an admin marked shareable, signed and version-pinned like your own jobs. Never the job of another customer, never confidential or NDA data. Shared jobs run at the lowest priority (nice 19, idle IO) within the core and RAM caps below. Your own jobs always go first: a shared job stops within seconds when you submit one, and is re-queued, not failed.",
+      "maxCores": "Max cores for MOTRES jobs",
+      "maxRam": "Max RAM for MOTRES jobs (GB)",
+      "capsTip": "Default: half of the cores and half of the RAM.",
+      "save": "Save",
+      "stopNow": "Stop sharing now",
+      "stopTip": "Turns sharing off and ends the MOTRES job running on this node within seconds; the job is re-queued elsewhere.",
+      "column": "Idle sharing",
+      "on": "on",
+      "off": "off",
+      "title": "MOTRES jobs that ran on my nodes",
+      "summary": "{runs} runs, {cpuHours} CPU-hours",
+      "none": "None yet.",
+      "colNode": "Node",
+      "colJob": "Job",
+      "colStarted": "Started",
+      "colDuration": "Duration",
+      "colCpuHours": "CPU-hours",
+      "colOutcome": "Outcome",
+      "outcome": {
+        "done": "done",
+        "failed": "failed",
+        "cancelled": "cancelled",
+        "lost": "node went offline",
+        "owner_job": "handed back for your job",
+        "stop_sharing": "handed back, sharing stopped",
+        "ram_cap": "stopped at the RAM cap"
+      }
+    }
+  },
+  "auth": {
+    "title": {
+      "signin": "Sign in",
+      "register": "Create account",
+      "forgot": "Reset password",
+      "reset": "Set a new password"
+    },
+    "cta": {
+      "signin": "Sign in",
+      "register": "Create account",
+      "forgot": "Send reset link",
+      "reset": "Set password"
+    },
+    "lead": {
+      "signin": "Sign in with your e-mail and password.",
+      "register": "We mail you a confirmation link.",
+      "forgot": "We mail you a reset link.",
+      "reset": "Choose a new password."
+    },
+    "help": {
+      "signin": "Same address via Google or password = one account. A new e-mail account works after you confirm the mailed link.",
+      "register": "At least {min} characters; common passwords are refused. We mail a link valid 24 h; until you open it the account cannot sign in.",
+      "forgot": "If an account uses this address we mail a reset link (24 h, one use). Also sets a password for a Google-only account.",
+      "reset": "Setting a new password signs out every other session."
+    },
+    "field": {
+      "name": "Name",
+      "email": "E-mail",
+      "password": "Password",
+      "newPassword": "New password (min {min})",
+      "repeatPassword": "Repeat password"
+    },
+    "validation": {
+      "email": "enter a valid e-mail address",
+      "passwordRequired": "enter a password",
+      "passwordMin": "at least {min} characters",
+      "passwordMismatch": "passwords do not match",
+      "nameRequired": "enter your name"
+    },
+    "info": {
+      "emailConfirmed": "E-mail confirmed — sign in with your password.",
+      "checkConfirmation": "Check your inbox for the confirmation link.",
+      "checkConfirmationReturn": "Check your inbox and open the confirmation link — it brings you back here. Then sign in to finish connecting the app.",
+      "checkReset": "Check your inbox for the reset link.",
+      "passwordChanged": "Password changed — sign in with the new one."
+    },
+    "terms": {
+      "prefix": "By creating an account you accept the",
+      "terms": "Terms",
+      "privacy": "Privacy Policy",
+      "license": "AeroStator is open source under the Apache License 2.0:",
+      "source": "source code"
+    },
+    "link": {
+      "createAccount": "Create account",
+      "forgot": "Forgot password?",
+      "back": "Back to sign in"
+    },
+    "gisUnreachable": "Google sign-in is not reachable from your network; use e-mail sign-in",
+    "google": {
+      "signIn": "Sign in with Google",
+      "useEmail": "Use e-mail sign-in"
+    },
+    "consent": {
+      "newAccountOnly": "applies to a new account only"
+    },
+    "sent": {
+      "title": "Check your inbox",
+      "text": "We sent a confirmation link to {email}. Open it to activate your account.",
+      "textReturn": "We sent a confirmation link to {email}. Open it to finish connecting your AI app.",
+      "spam": "Nothing there? Look in the spam folder, or resend the link.",
+      "resend": "Resend the link",
+      "resendWait": "Resend in {seconds} s",
+      "resent": "Sent again. Check your inbox.",
+      "wrong": "Wrong address? Change e-mail",
+      "newEmail": "Correct e-mail address",
+      "password": "Password you registered with",
+      "change": "Change and resend",
+      "changed": "Address changed. We sent the confirmation link to {email}.",
+      "changeHelp": "Your password proves the account is yours. Only an account that is not confirmed yet can change its address."
+    }
+  },
+  "units": {
+    "motorCount": "{count, plural, one {# motor} other {# motors}}",
+    "dutyCount": "{count, plural, one {# duty} other {# duties}}"
+  },
+  "thisOne": "this one",
+  "browser": "Browser",
+  "signedIn": "Signed in",
+  "lastSeen": "Last seen",
+  "expires": "Expires",
+  "how": "How",
+  "revoked": "revoked",
+  "revoke": "Revoke",
+  "noSessionsRecordedYet": "No sessions recorded yet.",
+  "signOutEverywhere": "Sign out everywhere",
+  "close": "Close",
+  "notifications": "Notifications",
+  "notices": "Notices",
+  "none": "None.",
+  "markRead": "Mark read",
+  "refused": {
+    "admin": "This needs an admin account — your account opens motors in Motors and tunes them in Configure.",
+    "signIn": "Sign in to use this feature.",
+    "forbidden": "Your account is not allowed to do this."
+  },
+  "card": {
+    "badge": "card",
+    "tip": "Full passport card · {date}",
+    "tipNoDate": "Full passport card",
+    "olderBuild": "older build",
+    "someDuty": "at least one duty",
+    "olderBuildTip": "Duty results ({duties}) were computed on an older build. Load the current build, rerun and save them.",
+    "summary": "{cards}/{total} cards",
+    "summaryTip": "{cards} of {total} configurations have a full passport card. This count does not show whether results use the current build.",
+    "summaryOlderBuildTip": "{cards} of {total} configurations have a full passport card. Duty results on {configs} were computed on an older build. Load the current build, rerun and save them."
+  },
+  "system": {
+    "view": {
+      "modules": "All modules",
+      "propellerS1": "Propeller S1"
+    },
+    "hint": "Read-only map of how the simulations are chained.",
+    "hintTip": "Blocks are modules (or the steps of the S1 rating), wires carry data types, dashed groups are feedback loops. Hover a block or a wire for details. Nothing here runs or edits a model.",
+    "hoverWire": "Hover a wire to see its data.",
+    "refresh": "Reload the graph",
+    "failed": "Could not load the graph",
+    "in": "In",
+    "out": "Out",
+    "roadmap": "Roadmap stub, not implemented yet",
+    "feedback": "feedback",
+    "state": {
+      "done": "done",
+      "running": "running",
+      "error": "error",
+      "cached": "stored result"
+    },
+    "loopKind": {
+      "fixed_point": "Fixed-point iteration",
+      "search": "Search"
+    },
+    "loops": {
+      "thermal_fixed_point": "Current ⇄ losses ⇄ temperature",
+      "speed_search": "Speed search",
+      "em_thermal_module": "EM ⇄ thermal (module)",
+      "em_thermal_orchestrator": "EM ⇄ thermal (coupled run)",
+      "design_search": "Design search"
+    },
+    "nodes": {
+      "rpm_search": "Speed search",
+      "conditions": "Ambient and air",
+      "model": "Motor model",
+      "limits": "Limits",
+      "drive": "Drive and pack",
+      "slipstream": "Slipstream factor",
+      "propeller": "Propeller load",
+      "torque_demand": "Shaft torque",
+      "housing_film": "Housing film",
+      "current": "Current",
+      "voltage": "Voltage re-check",
+      "losses": "Losses",
+      "thermal": "Thermal network",
+      "powers": "Electrical and battery power",
+      "board_limit": "Controller board limit",
+      "demag_limit": "Demagnetisation limit",
+      "chk_winding": "Winding temperature",
+      "chk_magnet": "Magnet temperature",
+      "chk_demag": "Demagnetisation",
+      "chk_controller": "Controller current",
+      "chk_battery": "Battery current",
+      "verdict": "Point verdict",
+      "result": "S1 rating",
+      "geometry-2d-aerostator": "Geometry 2D",
+      "geometry-3d-aerostator": "Geometry 3D",
+      "geometry-2d-ring-spm": "Geometry 2D (ring SPM)",
+      "mesh-skfem": "Mesh",
+      "solver-em-static": "EM static",
+      "solver-em-transient": "EM transient",
+      "solver-thermal": "Thermal solver",
+      "solver-em-thermal": "EM–thermal coupling",
+      "solver-mechanical": "Mechanical",
+      "controller-foc": "FOC controller",
+      "surrogate-rf": "Surrogate",
+      "optimization-descent": "Optimizer",
+      "cost-basic": "Cost",
+      "materials-library": "Materials",
+      "users": "Users",
+      "transmission-gearbox-single-stage": "Gearbox (single stage)"
+    },
+    "showAll": "Show all wires",
+    "showAllTip": "Parameter sources (motor model, limits, ambient, drive) are shown as chips on the blocks that use them. Switch on to draw every wire.",
+    "inputs": "Inputs",
+    "pick": {
+      "die": "Die",
+      "config": "Config",
+      "duty": "Duty",
+      "none": "No motor",
+      "anyDuty": "Any duty"
+    },
+    "pickTip": "Pick a motor to see the stored result of each block. With no motor selected no status is shown.",
+    "noRun": "no run yet",
+    "noRunTip": "No stored result for this motor; run it in its Simulation tab.",
+    "chips": {
+      "rpm": "rpm",
+      "shaft_power": "shaft power",
+      "air_speed": "air speed",
+      "converged_current": "converged current"
+    },
+    "rule": {
+      "stopMaxDelta": "stop when max |ΔT| < {value} {unit}",
+      "stopAllPass": "condition: all limit checks pass",
+      "stopBudget": "stop: the run's evaluation budget",
+      "limit": "max {n} iterations",
+      "damping": "damping {start}",
+      "fallback": "if not converged: retry with damping {damping}, max {max}",
+      "steps": "scan {n} speeds + both sides of each grid breakpoint → bisect each pass/fail edge to {tol} {unit} → take the upper edge of the highest passing band",
+      "lastConverged": "last run: converged in {n} / {max}",
+      "lastNot": "last run: NOT converged, {n} / {max} iterations used",
+      "residual": ", ΔT {res} {unit}",
+      "stopExtra": "Between passes the bearing seat must also move less than {bearing} K and the impulse-duty ratio less than {duty} point."
+    },
+    "ruleTip": {
+      "thermal_fixed_point": "Each pass takes the current that makes the shaft torque at the magnet temperature, re-checks the voltage, evaluates the losses at the winding temperature and solves the thermal network; the new winding and magnet temperatures go back into the next pass. Damping starts at {start} and is halved (not below {min}) while the residual stalls. If the first run does not settle, one more run starts with damping {fbDamping} and up to {fbMax} iterations; only then is the point called not converged.",
+      "speed_search": "The speed is the variable: every speed runs the whole chain on the left. The scan covers {scan} speeds plus both sides of every speed where the passport grids change; every pass/fail edge is bisected to {rpmTol} rpm ({passes} refinement passes). The S1 limit is the upper edge of the highest passing band; if the scan ends still passing the limit is only a lower bound.",
+      "em_thermal_module": "The electromagnetic loss field is solved at a winding temperature; the thermal solve returns a new winding temperature, which is fed back (relaxation {start}) until it moves less than {tol} {unit}, at most {max} passes. Losses go one way, temperatures the other.",
+      "em_thermal_orchestrator": "The electromagnetic run gives the loss map, the thermal solve gives coil, magnet and bearing temperatures, which become the next run's operating temperatures. Converged when they move less than {tol} {unit} between passes (at most {max} passes). Losses go one way, temperatures the other.",
+      "design_search": "The optimizer proposes a parameter set, the geometry and mesh are built and the FEM confirms it; the result guides the next proposal. The number of evaluations is set per run."
+    },
+    "exit": {
+      "failPoint": "point fails",
+      "converged": "converged → continue",
+      "limit_found": "limit found → S1 rating",
+      "lower_boundWarn": "scan ends passing → lower bound",
+      "nonconvergedWarn": "not converged → flagged",
+      "no_current": "no current",
+      "loss_data": "loss data",
+      "runaway": "runaway",
+      "runawayAbove": "runaway > {above} °C",
+      "nonconverged": "not converged"
+    },
+    "cond": {
+      "winding": "winding ≤ limit",
+      "windingLimit": "winding ≤ {limit} °C ({basis})",
+      "magnet": "magnet ≤ magnet-card limit",
+      "magnetLimit": "magnet ≤ {limit} °C",
+      "demag": "I ≤ demag limit(T_magnet)",
+      "controller": "I ≤ controller continuous limit",
+      "battery": "battery current ≤ limit"
+    },
+    "basis": {
+      "project_class": "class N",
+      "model": "model limit"
+    }
+  },
+  "cookies": {
+    "title": "Cookies",
+    "text": "We use anonymous usage statistics (Google Analytics) to improve AeroStator, only with your consent.",
+    "privacy": "Privacy",
+    "accept": "Accept",
+    "decline": "Decline",
+    "settings": "Cookie settings"
+  },
+  "model3dViewed": "Viewing 3D model: {name}"
+}

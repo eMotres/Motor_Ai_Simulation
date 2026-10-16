@@ -1,0 +1,927 @@
+{
+  "input": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-field-localization\\cold-field-results",
+  "metadata": {
+    "n4": {
+      "sectors": 4,
+      "frame": 0,
+      "actual_angle_deg": 0.0,
+      "m_shift": 0,
+      "nsn": 5343,
+      "nst": 9966,
+      "radius_in_m": 0.037200000000000004,
+      "radius_out_m": 0.037700000000000004,
+      "stack_length_m": 0.015,
+      "torque_sector_Nm": -0.0018699388540807653,
+      "torque_full_Nm": -0.007479755416323061,
+      "torque_from_saved_cells_Nm": -0.007479755416323064,
+      "nonlinear_iterations": 10,
+      "reported_residual": 4.3174337522814376e-08,
+      "independently_recomputed_relative_residual": 4.3174337522814376e-08,
+      "origin_dofs": [],
+      "origin_A": [],
+      "minimum_dof_radius_m": 0.020699267101223728,
+      "bc_sign": -1.0,
+      "currents": {
+        "A": 0.0,
+        "B": 0.0,
+        "C": -0.0
+      },
+      "projection_shape": [
+        33956,
+        32838
+      ],
+      "source_proof": [
+        {
+          "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-field-localization\\src\\motor_ai_sim\\cadquery_geometry.py",
+          "sha256": "17D39AF02B85E5CB228C4F82A9C2903A35D61FB58552FB6E31441FEC58239EBA"
+        },
+        {
+          "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-field-localization\\src\\motor_ai_sim\\simulation\\mesher.py",
+          "sha256": "8CB0A52FBA3B6A0BEA1BBADD47DFED2532E7B1F6F37A0A068581A6637D28AE16"
+        },
+        {
+          "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-field-localization\\src\\motor_ai_sim\\simulation\\fem_solver_2d.py",
+          "sha256": "491C41972632CACD48E1D9C5A1AB84492C590AD42260CCD162293CDD2CC2B576"
+        }
+      ],
+      "wall_seconds": 13.921072999997705,
+      "capture": "Actual first converged frame; original torque callable; abort before postprocessing"
+    },
+    "n2": {
+      "sectors": 2,
+      "frame": 0,
+      "actual_angle_deg": 0.0,
+      "m_shift": 0,
+      "nsn": 10653,
+      "nst": 19932,
+      "radius_in_m": 0.037200000000000004,
+      "radius_out_m": 0.037700000000000004,
+      "stack_length_m": 0.015,
+      "torque_sector_Nm": -0.0036448735397916834,
+      "torque_full_Nm": -0.007289747079583367,
+      "torque_from_saved_cells_Nm": -0.0072897470795831865,
+      "nonlinear_iterations": 11,
+      "reported_residual": 1.1637369752351024e-08,
+      "independently_recomputed_relative_residual": 1.1637369752351024e-08,
+      "origin_dofs": [],
+      "origin_A": [],
+      "minimum_dof_radius_m": 0.020699267101223728,
+      "bc_sign": 1.0,
+      "currents": {
+        "A": 0.0,
+        "B": 0.0,
+        "C": -0.0
+      },
+      "projection_shape": [
+        67800,
+        65674
+      ],
+      "source_proof": [
+        {
+          "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-field-localization\\src\\motor_ai_sim\\cadquery_geometry.py",
+          "sha256": "17D39AF02B85E5CB228C4F82A9C2903A35D61FB58552FB6E31441FEC58239EBA"
+        },
+        {
+          "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-field-localization\\src\\motor_ai_sim\\simulation\\mesher.py",
+          "sha256": "8CB0A52FBA3B6A0BEA1BBADD47DFED2532E7B1F6F37A0A068581A6637D28AE16"
+        },
+        {
+          "path": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-field-localization\\src\\motor_ai_sim\\simulation\\fem_solver_2d.py",
+          "sha256": "491C41972632CACD48E1D9C5A1AB84492C590AD42260CCD162293CDD2CC2B576"
+        }
+      ],
+      "wall_seconds": 42.451853999999,
+      "capture": "Actual first converged frame; original torque callable; abort before postprocessing"
+    }
+  },
+  "actual_cut_trace": {
+    "n4": {
+      "actual_cut_facets": 55,
+      "registered_actual_facets": 53,
+      "paired_cut_vertex_trace": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "registered_midpoint_trace": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "all_trace": {
+        "max_abs": 0.00027412113865153096,
+        "rms": 5.111988102108936e-05
+      },
+      "missing_pairs": [
+        {
+          "master_dof": 8842,
+          "slave_dof": 20743,
+          "registered": false,
+          "midpoint_m": [
+            5.331801569971807e-18,
+            0.03757358227329212
+          ],
+          "midpoint_radius_m": 0.03757358227329212,
+          "A_master": 0.00013178764523360525,
+          "A_slave": 0.00013010149983154706,
+          "trace_error": 0.00026188914506515234
+        },
+        {
+          "master_dof": 24808,
+          "slave_dof": 32567,
+          "registered": false,
+          "midpoint_m": [
+            1.08786850327923e-18,
+            0.03732543604084866
+          ],
+          "midpoint_radius_m": 0.03732543604084866,
+          "A_master": 0.00013675305292598755,
+          "A_slave": 0.0001373680857255434,
+          "trace_error": 0.00027412113865153096
+        }
+      ]
+    },
+    "n2": {
+      "actual_cut_facets": 55,
+      "registered_actual_facets": 53,
+      "paired_cut_vertex_trace": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "registered_midpoint_trace": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "all_trace": {
+        "max_abs": 0.00027410440291282285,
+        "rms": 5.111675131794221e-05
+      },
+      "missing_pairs": [
+        {
+          "master_dof": 17624,
+          "slave_dof": 43697,
+          "registered": false,
+          "midpoint_m": [
+            -0.03757358227329212,
+            3.4472939288760558e-18
+          ],
+          "midpoint_radius_m": 0.03757358227329212,
+          "A_master": 0.00013177884006580548,
+          "A_slave": -0.00013009422249566518,
+          "trace_error": -0.0002618730625614707
+        },
+        {
+          "master_dof": 48866,
+          "slave_dof": 65025,
+          "registered": false,
+          "midpoint_m": [
+            -0.03732543604084866,
+            3.2604833449190592e-18
+          ],
+          "midpoint_radius_m": 0.03732543604084866,
+          "A_master": 0.00013674399165323475,
+          "A_slave": -0.0001373604112595881,
+          "trace_error": -0.00027410440291282285
+        }
+      ]
+    }
+  },
+  "blocks": [
+    {
+      "half": "stator",
+      "block": 0,
+      "cells": 9966,
+      "actual_magnet_source_error": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "actual_source_max": 0.0,
+      "nu_base_error": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "potential_error": {
+        "max_abs": 0.00013016194468481716,
+        "rms": 5.295125521024178e-06
+      },
+      "B_error_T": {
+        "max_abs": 1.7013601236656428,
+        "rms": 0.010128756250248668
+      },
+      "gap_B_error_T": {
+        "max_abs": 1.7013601236656428,
+        "rms": 0.037633922171406535
+      },
+      "nu_qp_error": {
+        "max_abs": 3751.182913687438,
+        "rms": 18.342752655546125
+      },
+      "gap_cell_torque_error_Nm": {
+        "max_abs": 0.01030931809045467,
+        "rms": 0.0005673333689315805
+      },
+      "copied_half_field_quarter_operator_sector_torque_Nm": -0.006785839854854126,
+      "potential_hotspots": [
+        {
+          "half_dof": 29527,
+          "quarter_dof": 20743,
+          "coordinates_m": [
+            5.331801569971807e-18,
+            0.03757358227329212
+          ],
+          "error": -0.00013016194468481716
+        },
+        {
+          "half_dof": 10147,
+          "quarter_dof": 5341,
+          "coordinates_m": [
+            0.00011671870476777107,
+            0.03744981811362984
+          ],
+          "error": -8.803138056565817e-05
+        },
+        {
+          "half_dof": 29526,
+          "quarter_dof": 20742,
+          "coordinates_m": [
+            5.8359352383889715e-05,
+            0.03757349133010704
+          ],
+          "error": -8.642880625402117e-05
+        },
+        {
+          "half_dof": 47699,
+          "quarter_dof": 24145,
+          "coordinates_m": [
+            0.00017507749027471182,
+            0.037449545284957975
+          ],
+          "error": -8.496353664187625e-05
+        },
+        {
+          "half_dof": 10146,
+          "quarter_dof": 5340,
+          "coordinates_m": [
+            0.00023343627578165257,
+            0.03744927245628611
+          ],
+          "error": -8.238151823465671e-05
+        },
+        {
+          "half_dof": 47698,
+          "quarter_dof": 24144,
+          "coordinates_m": [
+            0.00029179392754021644,
+            0.037448817744777596
+          ],
+          "error": -8.037052644615871e-05
+        },
+        {
+          "half_dof": 10145,
+          "quarter_dof": 5339,
+          "coordinates_m": [
+            0.0003501515792987804,
+            0.03744836303326909
+          ],
+          "error": -7.862824523983118e-05
+        },
+        {
+          "half_dof": 29539,
+          "quarter_dof": 20751,
+          "coordinates_m": [
+            0.00032919268571722304,
+            0.037571545441555235
+          ],
+          "error": -7.860910260815645e-05
+        }
+      ],
+      "gap_B_hotspots": [
+        {
+          "quarter_cell": 9965,
+          "half_cell": 19277,
+          "B_error_max_T": 1.7013601236656428,
+          "centroid_m": [
+            3.8906234922593914e-05,
+            0.037532327553404694
+          ]
+        },
+        {
+          "quarter_cell": 9964,
+          "half_cell": 19276,
+          "B_error_max_T": 0.6314645709922146,
+          "centroid_m": [
+            0.00021946179047815147,
+            0.0376134184765649
+          ]
+        },
+        {
+          "quarter_cell": 9963,
+          "half_cell": 19275,
+          "B_error_max_T": 0.05004423381317058,
+          "centroid_m": [
+            0.0002972738824053662,
+            0.03753078777979886
+          ]
+        },
+        {
+          "quarter_cell": 9962,
+          "half_cell": 19274,
+          "B_error_max_T": 0.03338101005472405,
+          "centroid_m": [
+            0.0003750848405823693,
+            0.03753030275301194
+          ]
+        },
+        {
+          "quarter_cell": 9959,
+          "half_cell": 19271,
+          "B_error_max_T": 0.02663369946594285,
+          "centroid_m": [
+            0.0007361902829974668,
+            0.03760677357502131
+          ]
+        },
+        {
+          "quarter_cell": 9956,
+          "half_cell": 19268,
+          "B_error_max_T": 0.024999996181690687,
+          "centroid_m": [
+            0.0009446517278228281,
+            0.037520347602191
+          ]
+        },
+        {
+          "quarter_cell": 9955,
+          "half_cell": 19267,
+          "B_error_max_T": 0.024976138178598006,
+          "centroid_m": [
+            0.0010224400121518211,
+            0.03751840768349191
+          ]
+        },
+        {
+          "quarter_cell": 9958,
+          "half_cell": 19270,
+          "B_error_max_T": 0.02496872657150817,
+          "centroid_m": [
+            0.0007890589100543374,
+            0.037523500077255224
+          ]
+        }
+      ]
+    },
+    {
+      "half": "stator",
+      "block": 1,
+      "cells": 9966,
+      "actual_magnet_source_error": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "actual_source_max": 0.0,
+      "nu_base_error": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "potential_error": {
+        "max_abs": 0.00013172720038033515,
+        "rms": 5.343790732026866e-06
+      },
+      "B_error_T": {
+        "max_abs": 1.6628431526647844,
+        "rms": 0.01098990366657372
+      },
+      "gap_B_error_T": {
+        "max_abs": 1.6628431526647844,
+        "rms": 0.0411348394733957
+      },
+      "nu_qp_error": {
+        "max_abs": 3790.5211191546,
+        "rms": 18.493069611474418
+      },
+      "gap_cell_torque_error_Nm": {
+        "max_abs": 0.01054150702590585,
+        "rms": 0.000451837535609296
+      },
+      "copied_half_field_quarter_operator_sector_torque_Nm": -0.0041321056534489795,
+      "potential_hotspots": [
+        {
+          "half_dof": 29527,
+          "quarter_dof": 8842,
+          "coordinates_m": [
+            5.331801569971807e-18,
+            0.03757358227329212
+          ],
+          "error": 0.00013172720038033515
+        },
+        {
+          "half_dof": 29528,
+          "quarter_dof": 8843,
+          "coordinates_m": [
+            -5.8359352383883224e-05,
+            0.03757349133010704
+          ],
+          "error": 8.859502076357634e-05
+        },
+        {
+          "half_dof": 10150,
+          "quarter_dof": 4840,
+          "coordinates_m": [
+            -0.00023343627578165623,
+            0.03744927245628611
+          ],
+          "error": 8.733173939533929e-05
+        },
+        {
+          "half_dof": 47703,
+          "quarter_dof": 23645,
+          "coordinates_m": [
+            -0.00029179392754022013,
+            0.037448817744777596
+          ],
+          "error": 8.475841420522594e-05
+        },
+        {
+          "half_dof": 29531,
+          "quarter_dof": 8846,
+          "coordinates_m": [
+            -0.00023343174079914212,
+            0.037572127199998376
+          ],
+          "error": 8.360910165107889e-05
+        },
+        {
+          "half_dof": 47702,
+          "quarter_dof": 23644,
+          "coordinates_m": [
+            -0.0001750774902747155,
+            0.037449545284957975
+          ],
+          "error": 8.332875181915524e-05
+        },
+        {
+          "half_dof": 10149,
+          "quarter_dof": 4839,
+          "coordinates_m": [
+            -0.00011671870476777481,
+            0.03744981811362984
+          ],
+          "error": 8.287557956387513e-05
+        },
+        {
+          "half_dof": 10151,
+          "quarter_dof": 4841,
+          "coordinates_m": [
+            -0.00035015157929878406,
+            0.03744836303326909
+          ],
+          "error": 8.197643641342519e-05
+        }
+      ],
+      "gap_B_hotspots": [
+        {
+          "quarter_cell": 9312,
+          "half_cell": 19278,
+          "B_error_max_T": 1.6628431526647844,
+          "centroid_m": [
+            -3.8906234922588046e-05,
+            0.037532327553404694
+          ]
+        },
+        {
+          "quarter_cell": 9313,
+          "half_cell": 19279,
+          "B_error_max_T": 0.9844212928492864,
+          "centroid_m": [
+            -0.00011671832684980756,
+            0.037532085038833395
+          ]
+        },
+        {
+          "quarter_cell": 9314,
+          "half_cell": 19280,
+          "B_error_max_T": 0.6646168532205907,
+          "centroid_m": [
+            -0.00019452928502681065,
+            0.03753160001204648
+          ]
+        },
+        {
+          "quarter_cell": 9315,
+          "half_cell": 19281,
+          "B_error_max_T": 0.49597276144110936,
+          "centroid_m": [
+            -0.0002723383536323561,
+            0.03753087247775528
+          ]
+        },
+        {
+          "quarter_cell": 9316,
+          "half_cell": 19282,
+          "B_error_max_T": 0.3266942324143489,
+          "centroid_m": [
+            -0.000336176716088317,
+            0.03761250905649246
+          ]
+        },
+        {
+          "quarter_cell": 9322,
+          "half_cell": 19288,
+          "B_error_max_T": 0.030449938413296795,
+          "centroid_m": [
+            -0.0008917774325104301,
+            0.03760337865134193
+          ]
+        },
+        {
+          "quarter_cell": 9321,
+          "half_cell": 19287,
+          "B_error_max_T": 0.028284077108946093,
+          "centroid_m": [
+            -0.0008418844565962624,
+            0.03752230026448551
+          ]
+        },
+        {
+          "quarter_cell": 9320,
+          "half_cell": 19286,
+          "B_error_max_T": 0.027766140795300487,
+          "centroid_m": [
+            -0.0007640961722672722,
+            0.0375242401831846
+          ]
+        }
+      ]
+    },
+    {
+      "half": "rotor",
+      "block": 0,
+      "cells": 6314,
+      "actual_magnet_source_error": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "actual_source_max": 896207.4551684478,
+      "nu_base_error": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "potential_error": {
+        "max_abs": 0.00013742782431879028,
+        "rms": 5.6212311494978655e-06
+      },
+      "B_error_T": {
+        "max_abs": 1.680910151804296,
+        "rms": 0.013249159674585217
+      },
+      "gap_B_error_T": {
+        "max_abs": 1.680910151804296,
+        "rms": 0.03983574143194642
+      },
+      "nu_qp_error": {
+        "max_abs": 9824.295533727756,
+        "rms": 127.22483042717407
+      },
+      "gap_cell_torque_error_Nm": {
+        "max_abs": 0.01116922512398922,
+        "rms": 0.0005950271063175018
+      },
+      "copied_half_field_quarter_operator_sector_torque_Nm": 0.0038533676058265763,
+      "potential_hotspots": [
+        {
+          "half_dof": 56665,
+          "quarter_dof": 32567,
+          "coordinates_m": [
+            1.08786850327923e-18,
+            0.03732543604084866
+          ],
+          "error": -0.00013742782431879028
+        },
+        {
+          "half_dof": 56664,
+          "quarter_dof": 32566,
+          "coordinates_m": [
+            5.835935238388549e-05,
+            0.03732534509766358
+          ],
+          "error": -9.425761498195238e-05
+        },
+        {
+          "half_dof": 17115,
+          "quarter_dof": 8837,
+          "coordinates_m": [
+            0.00011671870476777108,
+            0.03744981811362984
+          ],
+          "error": -8.803138056565817e-05
+        },
+        {
+          "half_dof": 67294,
+          "quarter_dof": 33954,
+          "coordinates_m": [
+            0.00017507749027471182,
+            0.037449545284957975
+          ],
+          "error": -8.496353664187625e-05
+        },
+        {
+          "half_dof": 17114,
+          "quarter_dof": 8836,
+          "coordinates_m": [
+            0.00023343627578165254,
+            0.03744927245628611
+          ],
+          "error": -8.238151823465671e-05
+        },
+        {
+          "half_dof": 67293,
+          "quarter_dof": 33953,
+          "coordinates_m": [
+            0.00029179392754021644,
+            0.037448817744777596
+          ],
+          "error": -8.037052644615871e-05
+        },
+        {
+          "half_dof": 56661,
+          "quarter_dof": 32565,
+          "coordinates_m": [
+            0.0002670513780445335,
+            0.037324174325855185
+          ],
+          "error": -8.02509910359172e-05
+        },
+        {
+          "half_dof": 56660,
+          "quarter_dof": 32564,
+          "coordinates_m": [
+            0.0003254101635514742,
+            0.03732390149718332
+          ],
+          "error": -7.910915157655893e-05
+        }
+      ],
+      "gap_B_hotspots": [
+        {
+          "quarter_cell": 16279,
+          "half_cell": 31929,
+          "B_error_max_T": 1.680910151804296,
+          "centroid_m": [
+            3.890623492259108e-05,
+            0.03736689673177573
+          ]
+        },
+        {
+          "quarter_cell": 16278,
+          "half_cell": 31928,
+          "B_error_max_T": 0.6893043999957476,
+          "centroid_m": [
+            0.00017803425202968896,
+            0.03728307357780256
+          ]
+        },
+        {
+          "quarter_cell": 16277,
+          "half_cell": 31927,
+          "B_error_max_T": 0.04908511478295474,
+          "centroid_m": [
+            0.0002558463439569065,
+            0.037365873702665496
+          ]
+        },
+        {
+          "quarter_cell": 16276,
+          "half_cell": 31926,
+          "B_error_max_T": 0.0327395774104009,
+          "centroid_m": [
+            0.00033365730213390964,
+            0.03736538867587858
+          ]
+        },
+        {
+          "quarter_cell": 16274,
+          "half_cell": 31924,
+          "B_error_max_T": 0.03195280787556931,
+          "centroid_m": [
+            0.0006425309083362287,
+            0.037277286210528664
+          ]
+        },
+        {
+          "quarter_cell": 16272,
+          "half_cell": 31922,
+          "B_error_max_T": 0.02587576403018943,
+          "centroid_m": [
+            0.0007757295296395906,
+            0.037358381148452934
+          ]
+        },
+        {
+          "quarter_cell": 16273,
+          "half_cell": 31923,
+          "B_error_max_T": 0.025853477383080303,
+          "centroid_m": [
+            0.0006979265075599247,
+            0.03735959367419631
+          ]
+        },
+        {
+          "quarter_cell": 16271,
+          "half_cell": 31921,
+          "B_error_max_T": 0.025762212169777143,
+          "centroid_m": [
+            0.0008535283948235679,
+            0.03735692614347264
+          ]
+        }
+      ]
+    },
+    {
+      "half": "rotor",
+      "block": 1,
+      "cells": 6314,
+      "actual_magnet_source_error": {
+        "max_abs": 1.7462298274040222e-10,
+        "rms": 5.89678592504873e-11
+      },
+      "actual_source_max": 896207.4551684478,
+      "nu_base_error": {
+        "max_abs": 0.0,
+        "rms": 0.0
+      },
+      "potential_error": {
+        "max_abs": 0.00013669331433274068,
+        "rms": 5.690760349676077e-06
+      },
+      "B_error_T": {
+        "max_abs": 1.6613522946287094,
+        "rms": 0.013989641985317934
+      },
+      "gap_B_error_T": {
+        "max_abs": 1.6613522946287094,
+        "rms": 0.04230369038517026
+      },
+      "nu_qp_error": {
+        "max_abs": 9372.827326748382,
+        "rms": 126.20663406635087
+      },
+      "gap_cell_torque_error_Nm": {
+        "max_abs": 0.011131759003713257,
+        "rms": 0.000493262858987435
+      },
+      "copied_half_field_quarter_operator_sector_torque_Nm": 0.0034197043626847962,
+      "potential_hotspots": [
+        {
+          "half_dof": 56665,
+          "quarter_dof": 24808,
+          "coordinates_m": [
+            1.08786850327923e-18,
+            0.03732543604084866
+          ],
+          "error": 0.00013669331433274068
+        },
+        {
+          "half_dof": 56666,
+          "quarter_dof": 24809,
+          "coordinates_m": [
+            -5.835935238388746e-05,
+            0.03732534509766358
+          ],
+          "error": 9.344607345332068e-05
+        },
+        {
+          "half_dof": 17118,
+          "quarter_dof": 8336,
+          "coordinates_m": [
+            -0.00023343627578165623,
+            0.03744927245628611
+          ],
+          "error": 8.733173939533929e-05
+        },
+        {
+          "half_dof": 56668,
+          "quarter_dof": 24811,
+          "coordinates_m": [
+            -0.00017507578964939208,
+            0.0373246175574832
+          ],
+          "error": 8.63398244212671e-05
+        },
+        {
+          "half_dof": 67298,
+          "quarter_dof": 33454,
+          "coordinates_m": [
+            -0.00029179392754022013,
+            0.037448817744777596
+          ],
+          "error": 8.475841420522594e-05
+        },
+        {
+          "half_dof": 56667,
+          "quarter_dof": 24810,
+          "coordinates_m": [
+            -0.00011671813789082818,
+            0.03732507226899172
+          ],
+          "error": 8.418962763963843e-05
+        },
+        {
+          "half_dof": 67297,
+          "quarter_dof": 33453,
+          "coordinates_m": [
+            -0.0001750774902747155,
+            0.037449545284957975
+          ],
+          "error": 8.332875181915524e-05
+        },
+        {
+          "half_dof": 17117,
+          "quarter_dof": 8335,
+          "coordinates_m": [
+            -0.00011671870476777481,
+            0.03744981811362984
+          ],
+          "error": 8.287557956387513e-05
+        }
+      ],
+      "gap_B_hotspots": [
+        {
+          "quarter_cell": 15650,
+          "half_cell": 31930,
+          "B_error_max_T": 1.6613522946287094,
+          "centroid_m": [
+            -3.890623492259088e-05,
+            0.03736689673177572
+          ]
+        },
+        {
+          "quarter_cell": 15651,
+          "half_cell": 31931,
+          "B_error_max_T": 1.0055562012746715,
+          "centroid_m": [
+            -0.00011671832684981038,
+            0.03736665421720443
+          ]
+        },
+        {
+          "quarter_cell": 15652,
+          "half_cell": 31932,
+          "B_error_max_T": 0.6675304558684827,
+          "centroid_m": [
+            -0.00019452928502681346,
+            0.03736616919041751
+          ]
+        },
+        {
+          "quarter_cell": 15653,
+          "half_cell": 31933,
+          "B_error_max_T": 0.40237016126860126,
+          "centroid_m": [
+            -0.00025584521020669335,
+            0.03728258855101565
+          ]
+        },
+        {
+          "quarter_cell": 15654,
+          "half_cell": 31934,
+          "B_error_max_T": 0.08561406563643259,
+          "centroid_m": [
+            -0.0004114663707394575,
+            0.03736466114158738
+          ]
+        },
+        {
+          "quarter_cell": 15655,
+          "half_cell": 31935,
+          "B_error_max_T": 0.04390104078327184,
+          "centroid_m": [
+            -0.0004892727939706587,
+            0.03736369110685884
+          ]
+        },
+        {
+          "quarter_cell": 15659,
+          "half_cell": 31939,
+          "B_error_max_T": 0.03630574221049132,
+          "centroid_m": [
+            -0.0007981278830004094,
+            0.03727437621470136
+          ]
+        },
+        {
+          "quarter_cell": 15658,
+          "half_cell": 31938,
+          "B_error_max_T": 0.03325189070800505,
+          "centroid_m": [
+            -0.0007226686338188152,
+            0.03735932610605124
+          ]
+        }
+      ]
+    }
+  ],
+  "copied_half_field_full_equivalent_torque_Nm": [
+    -0.011729888996110199,
+    -0.002849605163056733
+  ],
+  "copied_half_field_recombined_half_torque_full_Nm": -0.007289747079583466,
+  "interpretation": "Saved-array comparison at theta=0 only. Actual source arrays and fields compared after block rotation/sign; copied half quadrature fields contracted with quarter torque tensor/weights. No assembly or solve. Pointwise RMS is diagnostic, not a physical accuracy threshold."
+}

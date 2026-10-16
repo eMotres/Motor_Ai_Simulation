@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily eMotres data retention
+
+[Timer]
+# After the usage job (00:20) so the monthly usage file is written from rows
+# that still exist.
+OnCalendar=*-*-* 00:50:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,282 @@
+[
+  {
+    "rpm": 1000.0,
+    "steps": 72,
+    "f_elec_Hz": 233.33333333333334,
+    "P_fe_avg_W": 13.327,
+    "P_fe_terms": {
+      "stator": {
+        "hysteresis_W": 9.079,
+        "eddy_W": 1.215,
+        "excess_W": 2.092,
+        "k_f": 0.92
+      },
+      "rotor": {
+        "hysteresis_W": 0.504,
+        "eddy_W": 0.301,
+        "excess_W": 0.137,
+        "k_f": 0.92
+      }
+    },
+    "P_mag_avg_W": 2.793,
+    "P_shaft_avg_W": 0.68,
+    "P_loss_total_avg_W": 17.786,
+    "T_avg_Nm": -0.06122866833463526,
+    "V_peak_V": 18.198052551541338,
+    "picard_converged": true,
+    "picard_resid_max": 9.86e-08,
+    "wall_s": 76.4,
+    "P_cu_dc_W": 0.0,
+    "P_cu_total_solve_W": 0.0,
+    "P_cu_dc_2d_solve_W": 0.0,
+    "P_cu_ac_solve_W": 0.0,
+    "P_cu_ac_prox_W": 0.985,
+    "P_mag_solve_W": 0.0,
+    "P_shaft_solve_W": 0.0,
+    "P_mag_honest_W": 2.793,
+    "P_shaft_honest_W": 0.68,
+    "P_airgap_W": -6.41185115430587,
+    "P_mech_avg_W": -23.21233167000338,
+    "P_elec_in_W": 0.0
+  },
+  {
+    "rpm": 1500.0,
+    "steps": 72,
+    "f_elec_Hz": 350.0,
+    "P_fe_avg_W": 21.879,
+    "P_fe_terms": {
+      "stator": {
+        "hysteresis_W": 13.619,
+        "eddy_W": 2.733,
+        "excess_W": 3.842,
+        "k_f": 0.92
+      },
+      "rotor": {
+        "hysteresis_W": 0.755,
+        "eddy_W": 0.678,
+        "excess_W": 0.251,
+        "k_f": 0.92
+      }
+    },
+    "P_mag_avg_W": 6.255,
+    "P_shaft_avg_W": 0.957,
+    "P_loss_total_avg_W": 31.308,
+    "T_avg_Nm": -0.06122866833463526,
+    "V_peak_V": 27.297078827312006,
+    "picard_converged": true,
+    "picard_resid_max": 9.86e-08,
+    "wall_s": 93.1,
+    "P_cu_dc_W": 0.0,
+    "P_cu_total_solve_W": 0.0,
+    "P_cu_dc_2d_solve_W": 0.0,
+    "P_cu_ac_solve_W": 0.0,
+    "P_cu_ac_prox_W": 2.217,
+    "P_mag_solve_W": 0.0,
+    "P_shaft_solve_W": 0.0,
+    "P_mag_honest_W": 6.255,
+    "P_shaft_honest_W": 0.957,
+    "P_airgap_W": -9.617776731458806,
+    "P_mech_avg_W": -38.70829247377443,
+    "P_elec_in_W": 0.0
+  },
+  {
+    "rpm": 2000.0,
+    "steps": 72,
+    "f_elec_Hz": 466.6666666666667,
+    "P_fe_avg_W": 31.532,
+    "P_fe_terms": {
+      "stator": {
+        "hysteresis_W": 18.159,
+        "eddy_W": 4.859,
+        "excess_W": 5.916,
+        "k_f": 0.92
+      },
+      "rotor": {
+        "hysteresis_W": 1.007,
+        "eddy_W": 1.205,
+        "excess_W": 0.387,
+        "k_f": 0.92
+      }
+    },
+    "P_mag_avg_W": 11.027,
+    "P_shaft_avg_W": 1.17,
+    "P_loss_total_avg_W": 47.671,
+    "T_avg_Nm": -0.06122866833463526,
+    "V_peak_V": 36.396105103082675,
+    "picard_converged": true,
+    "picard_resid_max": 9.86e-08,
+    "wall_s": 101.2,
+    "P_cu_dc_W": 0.0,
+    "P_cu_total_solve_W": 0.0,
+    "P_cu_dc_2d_solve_W": 0.0,
+    "P_cu_ac_solve_W": 0.0,
+    "P_cu_ac_prox_W": 3.941,
+    "P_mag_solve_W": 0.0,
+    "P_shaft_solve_W": 0.0,
+    "P_mag_honest_W": 11.027,
+    "P_shaft_honest_W": 1.17,
+    "P_airgap_W": -12.82370230861174,
+    "P_mech_avg_W": -56.5533986462907,
+    "P_elec_in_W": 0.0
+  },
+  {
+    "rpm": 2500.0,
+    "steps": 72,
+    "f_elec_Hz": 583.3333333333334,
+    "P_fe_avg_W": 42.24,
+    "P_fe_terms": {
+      "stator": {
+        "hysteresis_W": 22.698,
+        "eddy_W": 7.592,
+        "excess_W": 8.267,
+        "k_f": 0.92
+      },
+      "rotor": {
+        "hysteresis_W": 1.259,
+        "eddy_W": 1.883,
+        "excess_W": 0.54,
+        "k_f": 0.92
+      }
+    },
+    "P_mag_avg_W": 17.041,
+    "P_shaft_avg_W": 1.343,
+    "P_loss_total_avg_W": 66.783,
+    "T_avg_Nm": -0.06122866833463526,
+    "V_peak_V": 45.49513137885336,
+    "picard_converged": true,
+    "picard_resid_max": 9.86e-08,
+    "wall_s": 91.8,
+    "P_cu_dc_W": 0.0,
+    "P_cu_total_solve_W": 0.0,
+    "P_cu_dc_2d_solve_W": 0.0,
+    "P_cu_ac_solve_W": 0.0,
+    "P_cu_ac_prox_W": 6.158,
+    "P_mag_solve_W": 0.0,
+    "P_shaft_solve_W": 0.0,
+    "P_mag_honest_W": 17.041,
+    "P_shaft_honest_W": 1.343,
+    "P_airgap_W": -16.029627885764675,
+    "P_mech_avg_W": -76.65392260911287,
+    "P_elec_in_W": 0.0
+  },
+  {
+    "rpm": 3000.0,
+    "steps": 72,
+    "f_elec_Hz": 700.0,
+    "P_fe_avg_W": 53.971,
+    "P_fe_terms": {
+      "stator": {
+        "hysteresis_W": 27.238,
+        "eddy_W": 10.933,
+        "excess_W": 10.868,
+        "k_f": 0.92
+      },
+      "rotor": {
+        "hysteresis_W": 1.511,
+        "eddy_W": 2.711,
+        "excess_W": 0.71,
+        "k_f": 0.92
+      }
+    },
+    "P_mag_avg_W": 24.224,
+    "P_shaft_avg_W": 1.492,
+    "P_loss_total_avg_W": 88.555,
+    "T_avg_Nm": -0.06122866833463526,
+    "V_peak_V": 54.59415765462401,
+    "picard_converged": true,
+    "picard_resid_max": 9.86e-08,
+    "wall_s": 96.6,
+    "P_cu_dc_W": 0.0,
+    "P_cu_total_solve_W": 0.0,
+    "P_cu_dc_2d_solve_W": 0.0,
+    "P_cu_ac_solve_W": 0.0,
+    "P_cu_ac_prox_W": 8.868,
+    "P_mag_solve_W": 0.0,
+    "P_shaft_solve_W": 0.0,
+    "P_mag_honest_W": 24.224,
+    "P_shaft_honest_W": 1.492,
+    "P_airgap_W": -19.23555346291761,
+    "P_mech_avg_W": -98.92249397061889,
+    "P_elec_in_W": 0.0
+  },
+  {
+    "rpm": 3500.0,
+    "steps": 72,
+    "f_elec_Hz": 816.6666666666666,
+    "P_fe_avg_W": 66.702,
+    "P_fe_terms": {
+      "stator": {
+        "hysteresis_W": 31.778,
+        "eddy_W": 14.881,
+        "excess_W": 13.695,
+        "k_f": 0.92
+      },
+      "rotor": {
+        "hysteresis_W": 1.762,
+        "eddy_W": 3.691,
+        "excess_W": 0.895,
+        "k_f": 0.92
+      }
+    },
+    "P_mag_avg_W": 32.509,
+    "P_shaft_avg_W": 1.625,
+    "P_loss_total_avg_W": 112.906,
+    "T_avg_Nm": -0.06122866833463526,
+    "V_peak_V": 63.69318393039468,
+    "picard_converged": true,
+    "picard_resid_max": 9.86e-08,
+    "wall_s": 71.0,
+    "P_cu_dc_W": 0.0,
+    "P_cu_total_solve_W": 0.0,
+    "P_cu_dc_2d_solve_W": 0.0,
+    "P_cu_ac_solve_W": 0.0,
+    "P_cu_ac_prox_W": 12.07,
+    "P_mag_solve_W": 0.0,
+    "P_shaft_solve_W": 0.0,
+    "P_mag_honest_W": 32.509,
+    "P_shaft_honest_W": 1.625,
+    "P_airgap_W": -22.441479040070544,
+    "P_mech_avg_W": -123.27667301252296,
+    "P_elec_in_W": 0.0
+  },
+  {
+    "rpm": 4000.0,
+    "steps": 72,
+    "f_elec_Hz": 933.3333333333334,
+    "P_fe_avg_W": 80.414,
+    "P_fe_terms": {
+      "stator": {
+        "hysteresis_W": 36.317,
+        "eddy_W": 19.437,
+        "excess_W": 16.732,
+        "k_f": 0.92
+      },
+      "rotor": {
+        "hysteresis_W": 2.014,
+        "eddy_W": 4.82,
+        "excess_W": 1.093,
+        "k_f": 0.92
+      }
+    },
+    "P_mag_avg_W": 41.83,
+    "P_shaft_avg_W": 1.749,
+    "P_loss_total_avg_W": 139.759,
+    "T_avg_Nm": -0.06122866833463526,
+    "V_peak_V": 72.79221020616535,
+    "picard_converged": true,
+    "picard_resid_max": 9.86e-08,
+    "wall_s": 78.9,
+    "P_cu_dc_W": 0.0,
+    "P_cu_total_solve_W": 0.0,
+    "P_cu_dc_2d_solve_W": 0.0,
+    "P_cu_ac_solve_W": 0.0,
+    "P_cu_ac_prox_W": 15.765,
+    "P_mag_solve_W": 0.0,
+    "P_shaft_solve_W": 0.0,
+    "P_mag_honest_W": 41.83,
+    "P_shaft_honest_W": 1.749,
+    "P_airgap_W": -25.64740461722348,
+    "P_mech_avg_W": -149.6406313713882,
+    "P_elec_in_W": 0.0
+  }
+]

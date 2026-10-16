@@ -1,0 +1,693 @@
+# ============================================================
+# Power-device card — Infineon IQE050N08NM5SC
+# OptiMOS(TM) 5 Si power MOSFET, 80 V, PG-WHSON-8 (dual-side-cooled QFN)
+# ============================================================
+# Owner, 2026-09-22: add this part for the Oe40 motor (CIANO14 40_12 / L12).
+#
+# CORRECTED 2026-09-23: this card was originally transcribed from the BASE
+# part "IQE050N08NM5" (PG-TSON-8-4) datasheet under the ASSUMPTION that
+# "...SC" is only a packing/tape-and-reel suffix.  THAT ASSUMPTION WAS WRONG.
+# Infineon publishes a SEPARATE datasheet for IQE050N08NM5SC — different
+# package (PG-WHSON-8, not PG-TSON-8-4), different outline dimensions, a
+# published TOP-side R_thJC (dual-side-cooled package; the base part's
+# datasheet gives bottom only), a lower internal R_G (0.62 ohm vs 0.8 ohm),
+# and several gate-charge/current numbers a few percent off the base part's —
+# see https://www.infineon.com/assets/row/public/documents/24/49/infineon-iqe050n08nm5sc-datasheet-en.pdf
+# ("Final Data Sheet", Rev. 2.0, 2022-05-02).  This card is re-transcribed
+# from THAT datasheet, block by block, below.  The Infineon OptiMOS5 80V
+# SPICE library independently confirms the same fact — it carries a SEPARATE
+# IQE050N08NM5SC sub-circuit (R_g 0.62 ohm, a top-side thermal pin Ttop
+# besides Tbottom) next to the base part's model (R_g 0.8 ohm, Tcase only);
+# see config/devices/spice/IQE050N08NM5SC/manifest.yaml.
+#
+# EVERY number below is transcribed from the source named in its own block's
+# `source` line.  Nothing is invented.  A value the datasheet does not
+# publish is `null`.
+#
+# THIS PART'S DATASHEET PUBLISHES NO E_on/E_off SWITCHING-ENERGY TABLE — only
+# switching TIMES (Table 5) and gate CHARGES (Table 6), which is normal for a
+# low-voltage synchronous-rectification MOSFET.  `switching_energy_source`
+# below is a marker (not consumed by the loader; the model itself decides via
+# DeviceCard.switching_energy_source(), which returns "times_and_charges"
+# whenever `switching.curves` is absent) — the loss model's
+# `_e_switch_from_times_charges` builds E_on/E_off from Q_gd, Q_sw-Q_gd
+# (~Qgs2) and R_g, and E_fr from Q_rr; see that method's docstring for the
+# formula and its honesty check against IMCQ120R004M2H (the one card this
+# project holds that publishes BOTH the energy curves and the times/charges).
+#
+# Units: V, A, ohm (`_ohm`), mOhm (`_mohm`), degC, W, K/W, nC, pF, uJ.
+# ============================================================
+
+part: IQE050N08NM5SC
+manufacturer: Infineon
+family: "OptiMOS 5 80 V"
+technology: si_mosfet
+package: PG-WHSON-8
+# The SC datasheet's own front page and Package Outlines page give no
+# alternate marketing/common name for PG-WHSON-8 (unlike the base part's
+# product page, which named "PQFN 3.3x3.3 Source-Down" for PG-TSON-8-4) —
+# not invented here.
+package_common_name: null
+cooling: bottom_side          # Table 3 publishes BOTH "junction-case, bottom"
+                               # AND "junction-case, top" resistances (this
+                               # package is dual-side-cooled) — the model
+                               # still derates on the BOTTOM value only (see
+                               # `thermal.r_th_jc_k_w` below); the top-side
+                               # number is carried as a documented, unused
+                               # field (`thermal.r_th_jc_top_k_w`).  Pin-out
+                               # figure (datasheet p.1): Drain pins 5-8, Gate
+                               # pin 4, Source pins 1-3.
+marking: "E"                   # Table "Type / Ordering Code", this datasheet
+                                # (the base part's own marking, "05008N5", is
+                                # NOT this part's marking — corrected)
+# Package outline — datasheet Figure 1 (section 5, "Package Outlines"),
+# PG-WHSON-8-U01, MAX column (same MAX-column convention as
+# IMCQ120R004M2H's card):
+#   length_mm = D   3.20...3.40, MAX = 3.40
+#   width_mm  = E   3.20...3.40, MAX = 3.40
+#   height_mm = A   0.75 max (A1 stand-off 0...0.05)
+# 8 leads on e = 0.65 mm pitch; exposed pad D1 = 2.31...2.51 mm (most of the
+# body — the cooled face; same D1 span as the base part's PG-TSON-8-4, but
+# the body itself is bigger (3.40 vs 3.30) and noticeably THINNER
+# (0.75 vs 1.10 mm) — a genuinely different outline, not a relabeling.
+package_size_mm:
+  source: "Datasheet Figure 1 (section 5, Package Outlines), PG-WHSON-8-U01, MAX column"
+  length_mm: 3.40
+  width_mm: 3.40
+  height_mm: 0.75
+  lead_pitch_mm: 0.65
+  leads: 8
+#: Not published in this datasheet revision (Package Outlines section gives
+#: no mass, same as the base part's).
+weight_g: null
+
+# ── footprint (PCB side; owner 2026-09-26, Task 9) ─────────────────────
+# Read by the Controller catalogue's "fits the selected board" filter, not
+# by the loss model. Unpublished / not-yet-transcribed = null + a note.
+footprint:
+  package_outline_id: PG-WHSON-8-U01
+  outline_source: >-
+    Datasheet Figure 1 (section 5, Package Outlines), PG-WHSON-8-U01
+  land_pattern_ref: null
+  land_pattern_note: >-
+    NOT TRANSCRIBED. The datasheet could not be opened when this block was
+    added (infineon.com unreachable from that session), so whether its Package
+    outlines section carries a land-pattern / footprint figure is unchecked.
+    Fill in 'Figure N, page P' from the datasheet, or write that the datasheet
+    has none.
+  body_height_mm: 0.75
+  body_height_source: >-
+    Datasheet Figure 1 (section 5), dimension A, MAX column
+  top_tab_mm: null
+  top_tab_note: >-
+    NOT TRANSCRIBED. The package is dual-side cooled (Table 3 publishes a
+    junction-case TOP resistance), but the top exposed face's size is not on
+    this card and the datasheet could not be re-opened when this block was
+    added. (The BOTTOM exposed pad is D1 2.31...2.51 mm, Figure 1 — that is a
+    pad, not the top tab.)
+  compatibility_group: whson8_tson8
+  compatibility_basis: >-
+    Owner, 2026-09-26 (Task 9): PG-WHSON-8 and PG-TSON-8-4 share the pads and
+    differ in height. This card's Figure 1 transcription: bottom pad D1
+    2.31...2.51 mm (the same span as the base part IQE050N08NM5's
+    PG-TSON-8-4), height A 0.75 max vs 1.10 on the base part's datasheet, body
+    3.40 vs 3.30 mm. No PG-TSON-8-4 card is in this catalogue, so the group
+    has one member here.
+datasheet_revision: "2.0, 2022-05-02"
+datasheet_url: "https://www.infineon.com/assets/row/public/documents/24/49/infineon-iqe050n08nm5sc-datasheet-en.pdf"
+
+# ── ratings ────────────────────────────────────────────────────────────────
+ratings:
+  source: "Datasheet Table 2 (Maximum ratings); T_j/T_stg from the same table"
+  v_dss_V: 80                  # V_(BR)DSS, Table 4 (VGS=0, ID=1mA)
+  i_d_continuous:
+    # I_D, V_GS = 10 V, vs CASE temperature (Table 2, footnote 1: de-rate per
+    # Diagram 2 for other case temperatures).
+    - {t_case_c: 25,  i_a: 99, basis: table}
+    - {t_case_c: 100, i_a: 70, basis: table}
+  # A FOURTH point Table 2 also states, at a DIFFERENT gate voltage — not
+  # folded into the V_GS=10V curve above (that would corrupt the
+  # interpolation with a point off its own test condition): 54 A at
+  # T_C = 100 degC, V_GS = 6 V.
+  i_d_at_vgs6_100c_A: 54
+  i_d_at_vgs6_100c_note: "Table 2: V_GS = 6 V, T_C = 100 degC (the V_GS=10V curve above is the one this model uses)."
+  # A FIFTH, board-limited number the datasheet also states and this model
+  # does NOT use directly (it derates via R_th(j-c) to the cooled pad, not a
+  # board number): I_D = 16 A at T_A = 25 degC, R_thJA = 60 degC/W — i.e. on
+  # "40 mm x 40 mm x 1.5 mm epoxy PCB FR4 with 6 cm^2 (one layer, 70 um thick)
+  # copper area for drain connection, PCB vertical in still air" (Table 2
+  # footnote 2).  Kept here as provenance for the PCB-copper-spreading
+  # assumption the Controller solve states separately (r_spread_k_w).
+  i_d_pcb_limited_A_at_ta25: 16
+  i_d_pcb_limited_note: >-
+    Table 2 footnote 2: 40x40x1.5 mm FR4, 6 cm^2 one-layer 70 um Cu for the
+    drain connection, PCB vertical in still air, R_thJA(max) = 60 degC/W.
+  i_d_pulsed_A: 396             # I_D,pulse, T_A = 25 degC (Table 2, see Diagram 3)
+  p_tot_W:
+    - {t_case_c: 25, p_w: 100, basis: table}
+  # A SECOND, board-limited P_tot the datasheet also states and this model
+  # does NOT use directly, same PCB as the I_D PCB-limited note above.
+  p_tot_pcb_limited_W_at_ta25: 2.5
+  p_tot_pcb_limited_note: "Table 2: T_A = 25 degC, R_thJA(max) = 60 degC/W (same PCB as i_d_pcb_limited_note)."
+  t_j_max_c: 175                 # T_j, Table 2
+  t_storage_c: {min: -55, max: 175}
+  v_gs_static_V: {min: -20, max: 20}   # V_GS, Table 2 (one window; no
+                                        # separate transient rating published)
+  e_as_mJ: 184                  # single pulse, I_D = 20 A, R_GS = 25 ohm (Table 2, see Diagram 13)
+
+# ── gate ───────────────────────────────────────────────────────────────────
+gate:
+  source: "Datasheet Table 4 (R_G, V_GS(th)) and Table 6 (Gate charge characteristics)"
+  v_gs_th_V: {min: 2.2, typ: 3.0, max: 3.8, at_t_j_c: 25,
+              note: "V_DS = V_GS, I_D = 49 uA"}
+  v_plateau_V: 4.5              # typ, Table 6
+  q_g_nC: 35.0                  # typ (max 44), V_DD=40V, I_D=20A, V_GS=0..10V
+  q_g_max_nC: 44.0
+  q_gs_nC: 10.0                 # typ, same conditions
+  q_gth_nC: 6.7                 # typ, gate charge AT threshold, same conditions
+  q_gd_nC: 8.8                  # typ (max 13.2), same conditions
+  q_gd_max_nC: 13.2
+  q_sw_nC: 12.1                 # typ, "switching charge" (~ Qgs2 + Qgd), same
+                                 # conditions — the model recovers
+                                 # Qgs2 = q_sw_nC - q_gd_nC = 3.3 nC
+  q_g_sync_nC: 29.0              # typ, sync. FET, V_DS=0.1V, V_GS=0..10V
+  gate_charge_test_conditions: "V_DD = 40 V, I_D = 20 A, V_GS = 0 to 10 V (Table 6)"
+  r_g_internal_ohm: 0.62         # typ, Table 4 ("Gate resistance", no separate
+                                  # test condition given) — was 0.8 ohm on the
+                                  # base part's (PG-TSON-8-4) datasheet.
+
+# ── on-state resistance ────────────────────────────────────────────────────
+r_ds_on:
+  source: >-
+    Datasheet Table 4 (R_DS(on) at V_GS = 10 V and 6 V, T_j = 25 degC) and the
+    figure "Normalized drain-source on resistance, R_DS(on) = f(T_j)"
+    (Diagram 9, I_D = 20 A, V_GS = 10 V) for the temperature shape.  Same
+    table anchors and same-numbered/same-captioned figure as the base part's
+    datasheet — this is the same silicon in a different package, and the
+    electrical curves check out identical.
+  measured_at_i_d_A: 20
+  curves:
+    - v_gs_on_V: 10
+      points:
+        # Table 4 anchor at 25 degC: 4.3 typ / 5.0 max mOhm.  Diagram 9 is a
+        # NORMALIZED curve (R_DS(on)/R_DS(on,25C)) vs T_j — read off it and
+        # applied to the table's 25 degC TYP value, so every other point here
+        # is `basis: figure`.
+        - {t_j_c: -55, r_mohm: 3.4,  basis: figure, tolerance_pct: 12}
+        - {t_j_c: -25, r_mohm: 3.7,  basis: figure, tolerance_pct: 12}
+        - {t_j_c: 0,   r_mohm: 3.9,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 25,  r_mohm: 4.3,  basis: table, anchor: true, r_mohm_max: 5.0}
+        - {t_j_c: 50,  r_mohm: 4.9,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 75,  r_mohm: 5.6,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 100, r_mohm: 6.4,  basis: figure, tolerance_pct: 10}
+        - {t_j_c: 125, r_mohm: 7.3,  basis: figure, tolerance_pct: 12}
+        - {t_j_c: 150, r_mohm: 8.2,  basis: figure, tolerance_pct: 12}
+        - {t_j_c: 175, r_mohm: 9.0,  basis: figure, tolerance_pct: 15}
+    - v_gs_on_V: 6
+      points:
+        - {t_j_c: 25, r_mohm: 6.1, basis: table, anchor: true, r_mohm_max: 8.5}
+
+# ── capacitances ────────────────────────────────────────────────────────────
+# No C_o(er)/E_oss table published (only C_oss(typ) at one V_DS and a Q_oss
+# charge) — e_oss_J() is left unusable for this card (c_o_er_pF/e_oss_uJ are
+# both null) rather than approximated from the nonlinear C_oss(V) curve; a
+# solve reports E_oss as not computed for this device, which is honest given
+# `e_oss_policy` defaults to "included_in_eon" and does not need it.
+capacitance:
+  source: "Datasheet Table 5 (Dynamic characteristics) and Table 6 (Q_oss)"
+  at_v_ds_V: 40
+  c_iss_pF: 2200                # typ (max 2900), V_GS=0, V_DS=40V, f=1MHz
+  c_iss_max_pF: 2900
+  c_oss_pF: 370                 # typ (max 480), same conditions
+  c_oss_max_pF: 480
+  c_rss_pF: 21                  # typ (max 37), same conditions
+  c_rss_max_pF: 37
+  q_oss_nC: 40                  # typ (max 53), V_DS=40V, V_GS=0 (Table 6)
+  q_oss_max_nC: 53
+  c_o_er_pF: null
+  e_oss_uJ: null
+
+# ── switching (no E_on/E_off table — times + charges only) ────────────────
+switching:
+  source: >-
+    Datasheet Table 5 (switching times, V_DD=40V, V_GS=10V, I_D=20A,
+    R_G,ext=1.6 ohm, T_j=25 degC) and Table 6 (gate charge, V_DD=40V, I_D=20A,
+    V_GS=0..10V).  NO E_on/E_off ENERGY TABLE IS PUBLISHED for this part —
+    normal for a low-voltage synchronous-rectification OptiMOS device.  The
+    switching TIMES themselves are identical to the base part's datasheet
+    (same silicon); only the package/thermal/R_g blocks differ.
+  energy_source: times_and_charges     # documentary marker; see DeviceCard.switching_energy_source()
+  v_dd_ref_V: 40
+  i_d_ref_A: 20
+  v_gs_ref_V: 10
+  r_g_ext_ref_ohm: 1.6
+  note: >-
+    switching energy is estimated by this project's model from Q_gd,
+    Qgs2 = Q_sw - Q_gd, and R_g (the classic overlap formula), falling back to
+    the datasheet's own t_r/t_f scaled by R_g when charge data is
+    insufficient (not needed here — both are given).  See
+    DeviceCard._e_switch_from_times_charges.  NO TEMPERATURE DEPENDENCE is
+    published for the switching times (only R_DS(on) has a T_j curve) — the
+    25 degC times are used at every T_j, which is a stated model limitation,
+    not a datasheet fact.
+  times_ns:
+    source: "Datasheet Table 5, T_j = 25 degC, V_DD=40V, V_GS=10V, I_D=20A, R_G,ext=1.6 ohm"
+    t_d_on:  {t_j_25: 9.4}
+    t_r:     {t_j_25: 4.6}
+    t_d_off: {t_j_25: 16.1}
+    t_f:     {t_j_25: 4.0}
+
+# ── third quadrant (body diode / reverse conduction) ───────────────────────
+third_quadrant:
+  source: "Datasheet Table 7 (Reverse diode) and Diagram 12 (forward characteristics)"
+  i_sd_continuous:
+    - {t_case_c: 25, i_a: 75, basis: table}    # I_S, Table 7
+  i_sm_A: 396                                   # I_S,pulse, Table 7
+  v_sd_at_20A:
+    - {t_j_c: 25, v: 0.83, basis: table, v_max: 1.1}   # V_SD, V_GS=0, I_F=20A
+  reverse_recovery:
+    q_rr_nC_typ: 30                             # Table 7
+    q_rr_nC_max: 60
+    t_rr_ns_typ: 37
+    t_rr_ns_max: 74
+    v_r_ref_V: 40
+    i_f_ref_A: 20
+    di_dt_ref_A_us: 100
+    source: "Datasheet Table 7, V_R=40V, I_F=20A, diF/dt=100 A/us"
+  # V_SD [V] against reverse current [A] — ONLY the exact table anchor plus
+  # the physical origin.  Diagram 12 (log-scale forward-conduction figure)
+  # also shows 25/175 degC curves, but reading intermediate points reliably
+  # off a log-log hand plot is not honest enough to tag `basis: figure` with
+  # a stated tolerance the way the IMCQ card does; beyond 20 A the model's
+  # own linear extrapolation (interp()) is the stated behaviour, not a
+  # datasheet figure.
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 25
+      basis: table
+      anchor_note: "the 0.83 V / 20 A point is Table 7 (exact); 0 V / 0 A is the physical origin, not measured"
+      points: [[0.0, 0.0], [0.83, 20.0]]
+    # 175 degC: Diagram 12 shows the curve shifted to LOWER V_SD (negative
+    # tempco), but no table value exists at this temperature — a single
+    # hand-read anchor from the figure, wide tolerance stated.  Same
+    # diagram number/caption/axes as the base part's datasheet.
+    - v_gs_off_V: 0
+      t_j_c: 175
+      basis: figure
+      tolerance_pct: 25
+      anchor_note: "read off Diagram 12 (forward characteristics of reverse diode, 175 degC curve) at I_F=20A — no table value at this temperature"
+      points: [[0.0, 0.0], [0.60, 20.0]]
+  channel_on_note: >-
+    At V_GS = 10 V the third quadrant is the CHANNEL (synchronous
+    rectification, this part's stated application — datasheet Features:
+    "Optimized for synchronous rectification"), i.e. V = I * R_DS(on); the
+    body-diode curves above apply only while both switches of the leg are
+    off (dead time).
+
+# ── thermal ────────────────────────────────────────────────────────────────
+thermal:
+  source: "Datasheet Table 3 (Thermal characteristics)"
+  r_th_jc_k_w: {typ: 0.9, max: 1.5}
+  r_th_jc_note: >-
+    "Thermal resistance, junction-case, bottom" (Table 3).  The package is
+    DUAL-SIDE COOLED — Table 3 also publishes a "junction-case, top" row
+    (kept below as `r_th_jc_top_k_w`, documented but NOT used by the loss
+    model) — so unlike the base part's single-sided PG-TSON-8-4, heat here
+    can leave through either face; this model still derates through the
+    BOTTOM path only (the MAX value, 1.5 K/W, same convention as every other
+    card), which is conservative for a design that only cools one face.
+    Pin-out figure: Source pins 1-3, Gate pin 4, Drain pins 5-8.
+  r_th_jc_top_k_w: {typ: 0.7, max: null}
+  r_th_jc_top_note: >-
+    "Thermal resistance, junction-case, top" (Table 3) — no MAX value is
+    published for this row (only TYP).  DOCUMENTED ONLY: the loss model does
+    not read this field and keeps deriving T_j from `r_th_jc_k_w` (the
+    bottom path) exactly as before; a caller wanting to model a top-side
+    coldplate would need to add that path explicitly, which this card does
+    not do on its own.
+  r_th_ja_k_w: {max: 60}
+  r_th_ja_note: >-
+    "Device on PCB, 6 cm^2 cooling area" (Table 3) = a BOARD number, not a
+    package property: 40x40x1.5 mm FR4, 6 cm^2 one-layer 70 um Cu for the
+    drain connection, PCB vertical in still air (Table 2 footnote 2).  This
+    model does NOT use R_thJA — the Controller solve applies R_th(j-c) from
+    the junction to the exposed pad and then the CHOSEN coldplate/TIM stack
+    to that pad directly (`r_tim_k_w`), exactly as for the top-side-cooled
+    IMCQ card.  ASSUMPTION, named once and not a datasheet value: a QFN's
+    pad also spreads some heat sideways into the PCB copper before it ever
+    reaches a coldplate under the board, and that path is NOT inside
+    R_th(j-c) — it is given to the solve as `r_spread_k_w`, a stated K/W
+    per device for the PCB-copper-spreading path (default 0 K/W unless the
+    caller states a board/copper design; the datasheet's own R_thJA=60 K/W
+    number is board-limited free-air and is not a spreading resistance the
+    model can subtract a coldplate term from).
+  z_th_jc_curve: null   # Diagram 4 (max transient thermal impedance) exists
+                         # as a FIGURE but is not digitised here
+
+# >>> switching_table — generated by motor_ai_sim.inverter.spice.table; do not edit by hand
+switching_source: spice
+switching_table:
+  basis: spice:OptiMOS5_80V_Spice.lib@fc2b9524e8b0:IQE050N08NM5SC
+  lib_sha256: fc2b9524e8b0186c93dd94df576aa5052bd531043a69556caaf5e5d5f213f5c4
+  lib_file: OptiMOS5_80V_Spice.lib
+  subckt: IQE050N08NM5SC
+  simulator: ngspice (dll) C:\Program Files\KiCad\10.0\bin\ngspice.dll, ngbehavior=psa
+  circuit: 'datasheet Fig. F double pulse: DUT low side, identical high side freewheeling in its body
+    diode, L_sigma split 1/2 + 1/2, L3 model, case pins held at T_j, junction on the model''s own thermal
+    network (rise < 1 K over the pulses)'
+  switched_current: I_off = I_on = the load current in the gap (freewheel current averaged over its last
+    150 ns)
+  windows: 'E_off/E_on: datasheet Fig. C (10 % V_DS to 10 % I_D / 10 % I_D to 10 % V_DS); E_fr: freewheeling
+    device V*I over t_fr of Fig. B (zero crossing to 10 % I_frm)'
+  generated: '2026-09-27'
+  note: 'THE switching basis of this device (owner 2026-09-27: every motor on SPICE, uniformly); the datasheet
+    path is the labelled fallback only'
+  row_columns:
+  - V_dc
+  - T_j
+  - I_off
+  - E_off_uJ
+  - I_on
+  - E_on_uJ
+  - E_fr_uJ
+  failed_points: 8
+  l_sigma_default_nH: 2.0
+  validation:
+    status: unvalidated
+    limit_pct: 15.0
+    deviates: true
+    line: SPICE switching energies unvalidated — the datasheet publishes no E_on/E_off to check the model
+      against
+    rows: []
+  sets:
+  - v_gs_on_V: 10.0
+    v_gs_off_V: 0.0
+    r_g_on_ohm: 1.6
+    r_g_off_ohm: 1.6
+    l_sigma_nH: 2.0
+    l_gate_nH: 1.0
+    c_sigma_pF: 5.0
+    dropped_runs: 0
+    rows:
+      - [22.2, 25, 4.999, 0.35, 4.999, 0.22, 1.64]
+      - [22.2, 25, 11.9, 0.52, 11.9, 0.38, 2.48]
+      - [22.2, 25, 19.75, 1.13, 19.75, 0.63, 3.35]
+      - [22.2, 25, 30.458, 2.35, 30.458, 1.05, 4.45]
+      - [22.2, 75, 5.008, 0.35, 5.008, 0.22, 1.64]
+      - [22.2, 75, 11.917, 0.53, 11.917, 0.38, 2.47]
+      - [22.2, 75, 19.772, 1.16, 19.772, 0.63, 3.34]
+      - [22.2, 75, 30.48, 2.39, 30.48, 1.07, 4.43]
+      - [22.2, 75, 43.001, 4.28, 43.001, 1.7, 5.57]
+      - [22.2, 75, 58.222, 7.23, 58.222, 2.63, 6.8]
+      - [22.2, 125, 5.016, 0.35, 5.016, 0.22, 1.63]
+      - [22.2, 125, 11.934, 0.55, 11.934, 0.38, 2.46]
+      - [22.2, 125, 19.791, 1.19, 19.791, 0.64, 3.33]
+      - [22.2, 125, 30.494, 2.44, 30.494, 1.1, 4.4]
+      - [22.2, 125, 42.998, 4.33, 42.998, 1.76, 5.52]
+      - [22.2, 125, 58.181, 7.27, 58.181, 2.73, 6.71]
+      - [22.2, 175, 5.025, 0.36, 5.025, 0.22, 1.63]
+      - [22.2, 175, 11.949, 0.57, 11.949, 0.39, 2.46]
+      - [22.2, 175, 19.807, 1.23, 19.807, 0.66, 3.32]
+      - [22.2, 175, 30.5, 2.49, 30.5, 1.13, 4.38]
+      - [22.2, 175, 42.978, 4.38, 42.978, 1.83, 5.47]
+      - [22.2, 175, 58.108, 7.32, 58.108, 2.86, 6.62]
+      - [44.4, 25, 5.063, 0.69, 5.063, 0.83, 3.81]
+      - [44.4, 25, 12.046, 0.81, 12.046, 1.23, 5.89]
+      - [44.4, 25, 30.93, 3.2, 30.93, 2.29, 11.52]
+      - [44.4, 25, 43.76, 5.81, 43.76, 3.17, 15.24]
+      - [44.4, 25, 59.451, 10.14, 59.451, 4.45, 22.46]
+      - [44.4, 75, 5.069, 0.69, 5.069, 0.83, 3.76]
+      - [44.4, 75, 12.059, 0.83, 12.059, 1.24, 5.78]
+      - [44.4, 75, 20.034, 1.66, 20.034, 1.69, 8.12]
+      - [44.4, 75, 30.949, 3.25, 30.949, 2.32, 11.26]
+      - [44.4, 75, 43.774, 5.84, 43.774, 3.23, 14.89]
+      - [44.4, 75, 59.452, 10.09, 59.452, 4.55, 22.11]
+      - [44.4, 125, 5.075, 0.69, 5.075, 0.83, 3.74]
+      - [44.4, 125, 20.05, 1.7, 20.05, 1.7, 7.98]
+      - [44.4, 125, 30.964, 3.31, 30.964, 2.36, 11.05]
+      - [44.4, 125, 43.781, 5.87, 43.781, 3.3, 14.57]
+      - [44.4, 125, 59.44, 10.07, 59.44, 4.67, 21.76]
+      - [44.4, 175, 5.082, 0.69, 5.082, 0.84, 3.74]
+      - [44.4, 175, 12.084, 0.88, 12.084, 1.25, 5.68]
+      - [44.4, 175, 20.064, 1.75, 20.064, 1.71, 7.89]
+      - [44.4, 175, 30.975, 3.38, 30.975, 2.4, 10.86]
+      - [44.4, 175, 59.412, 10.05, 59.412, 4.82, 21.42]
+  - v_gs_on_V: 10.0
+    v_gs_off_V: 0.0
+    r_g_on_ohm: 4.7
+    r_g_off_ohm: 4.7
+    l_sigma_nH: 2.0
+    l_gate_nH: 1.0
+    c_sigma_pF: 5.0
+    dropped_runs: 0
+    rows:
+      - [22.2, 25, 5.055, 0.43, 5.055, 0.72, 1.24]
+      - [22.2, 25, 12.051, 1.24, 12.051, 1.17, 2.07]
+      - [22.2, 25, 19.981, 2.58, 19.981, 1.64, 2.97]
+      - [22.2, 25, 30.779, 4.77, 30.779, 2.21, 4.09]
+      - [22.2, 25, 43.397, 7.81, 43.397, 2.87, 5.29]
+      - [22.2, 25, 58.726, 12.17, 58.726, 3.82, 6.57]
+      - [22.2, 75, 5.07, 0.44, 5.07, 0.71, 1.24]
+      - [22.2, 75, 12.081, 1.28, 12.081, 1.17, 2.07]
+      - [22.2, 75, 20.02, 2.64, 20.02, 1.65, 2.96]
+      - [22.2, 75, 30.823, 4.85, 30.823, 2.24, 4.07]
+      - [22.2, 75, 43.434, 7.91, 43.434, 2.94, 5.24]
+      - [22.2, 125, 5.086, 0.46, 5.086, 0.71, 1.24]
+      - [22.2, 125, 12.11, 1.32, 12.11, 1.17, 2.07]
+      - [22.2, 125, 20.057, 2.7, 20.057, 1.67, 2.96]
+      - [22.2, 125, 30.86, 4.94, 30.86, 2.28, 4.07]
+      - [22.2, 125, 43.458, 8.02, 43.458, 3.01, 5.21]
+      - [22.2, 125, 58.728, 12.41, 58.728, 4.06, 6.42]
+      - [22.2, 175, 5.102, 0.48, 5.102, 0.71, 1.25]
+      - [22.2, 175, 12.138, 1.37, 12.138, 1.18, 2.08]
+      - [22.2, 175, 20.091, 2.77, 20.091, 1.68, 2.97]
+      - [22.2, 175, 30.889, 5.03, 30.889, 2.32, 4.07]
+      - [22.2, 175, 43.464, 8.14, 43.464, 3.1, 5.19]
+      - [22.2, 175, 58.684, 12.55, 58.684, 4.22, 6.37]
+      - [44.4, 25, 5.136, 0.8, 5.136, 1.78, 2.53]
+      - [44.4, 25, 12.246, 1.66, 12.246, 2.88, 4.08]
+      - [44.4, 25, 20.333, 3.34, 20.333, 4.17, 5.92]
+      - [44.4, 25, 31.384, 6.16, 31.384, 6.02, 8.5]
+      - [44.4, 25, 44.354, 10.11, 44.354, 8.31, 11.62]
+      - [44.4, 25, 60.194, 16, 60.194, 11.26, 18.16]
+      - [44.4, 75, 5.149, 0.81, 5.149, 1.8, 2.52]
+      - [44.4, 75, 12.271, 1.71, 12.271, 2.94, 4.04]
+      - [44.4, 75, 20.367, 3.44, 20.367, 4.27, 5.84]
+      - [44.4, 75, 31.423, 6.3, 31.423, 6.19, 8.34]
+      - [44.4, 75, 44.391, 10.27, 44.391, 8.57, 11.3]
+      - [44.4, 75, 60.22, 16.09, 60.22, 11.67, 17.77]
+      - [44.4, 125, 5.162, 0.83, 5.162, 1.83, 2.52]
+      - [44.4, 125, 12.297, 1.77, 12.297, 3, 4.03]
+      - [44.4, 125, 20.4, 3.54, 20.4, 4.38, 5.78]
+      - [44.4, 125, 44.423, 10.45, 44.423, 8.84, 11.06]
+      - [44.4, 125, 60.234, 16.23, 60.234, 12.08, 17.43]
+      - [44.4, 175, 5.177, 0.87, 5.177, 1.87, 2.55]
+      - [44.4, 175, 12.322, 1.84, 12.322, 3.07, 4.04]
+      - [44.4, 175, 20.432, 3.64, 20.432, 4.49, 5.75]
+      - [44.4, 175, 44.447, 10.65, 44.447, 9.12, 10.84]
+      - [44.4, 175, 60.233, 16.42, 60.233, 12.51, 17.12]
+  - v_gs_on_V: 10.0
+    v_gs_off_V: 0.0
+    r_g_on_ohm: 1.6
+    r_g_off_ohm: 1.6
+    l_sigma_nH: 5.0
+    l_gate_nH: 1.0
+    c_sigma_pF: 5.0
+    dropped_runs: 0
+    rows:
+      - [22.2, 25, 4.995, 0.43, 4.995, 0.06, 1.83]
+      - [22.2, 25, 11.88, 0.68, 11.88, 0.05, 2.71]
+      - [22.2, 25, 19.669, 1.66, 19.669, 0.05, 3.55]
+      - [22.2, 25, 30.246, 3.68, 30.246, 0.04, 4.49]
+      - [22.2, 25, 42.546, 7.09, 42.546, 0.03, 5.34]
+      - [22.2, 75, 5.004, 0.43, 5.004, 0.05, 1.83]
+      - [22.2, 75, 11.898, 0.7, 11.898, 0.05, 2.7]
+      - [22.2, 75, 19.692, 1.69, 19.692, 0.04, 3.53]
+      - [22.2, 75, 30.269, 3.71, 30.269, 0.04, 4.46]
+      - [22.2, 75, 42.559, 7.1, 42.559, 0.03, 5.29]
+static_table:
+  basis: spice:OptiMOS5_80V_Spice.lib@fc2b9524e8b0:IQE050N08NM5SC
+  lib_sha256: fc2b9524e8b0186c93dd94df576aa5052bd531043a69556caaf5e5d5f213f5c4
+  simulator: ngspice (dll) C:\Program Files\KiCad\10.0\bin\ngspice.dll, ngbehavior=psa
+  circuit: DC sweep of the device current (voltage-driven where the current-driven operating point does
+    not converge), isothermal at T_j
+  generated: '2026-09-27'
+  row_columns:
+  - V_GS
+  - T_j
+  - I
+  - V_kelvin
+  - V_power_pin
+  notes: []
+  forward:
+    - [10, 25, 5, 0.02149, 0.02149]
+    - [10, 25, 10, 0.043008, 0.043008]
+    - [10, 25, 15, 0.064558, 0.064558]
+    - [10, 25, 20, 0.086144, 0.086144]
+    - [10, 25, 25, 0.10777, 0.10777]
+    - [10, 25, 30, 0.12944, 0.12944]
+    - [10, 25, 35, 0.151158, 0.151158]
+    - [10, 25, 40, 0.172926, 0.172926]
+    - [10, 25, 45, 0.194749, 0.194749]
+    - [10, 25, 50, 0.21663, 0.21663]
+    - [10, 25, 55, 0.238573, 0.238573]
+    - [10, 25, 60, 0.26058, 0.26058]
+    - [10, 25, 65, 0.282655, 0.282655]
+    - [10, 25, 70, 0.304802, 0.304802]
+    - [10, 25, 75, 0.327024, 0.327024]
+    - [10, 25, 80, 0.349325, 0.349325]
+    - [10, 75, 5, 0.026998, 0.026998]
+    - [10, 75, 10, 0.054035, 0.054035]
+    - [10, 75, 15, 0.081116, 0.081116]
+    - [10, 75, 20, 0.108248, 0.108248]
+    - [10, 75, 25, 0.135435, 0.135435]
+    - [10, 75, 30, 0.162683, 0.162683]
+    - [10, 75, 35, 0.189995, 0.189995]
+    - [10, 75, 40, 0.217376, 0.217376]
+    - [10, 75, 45, 0.244831, 0.244831]
+    - [10, 75, 50, 0.272364, 0.272364]
+    - [10, 75, 55, 0.29998, 0.29998]
+    - [10, 75, 60, 0.327683, 0.327683]
+    - [10, 75, 65, 0.355478, 0.355478]
+    - [10, 75, 70, 0.383369, 0.383369]
+    - [10, 75, 75, 0.411361, 0.411361]
+    - [10, 75, 80, 0.439458, 0.439458]
+    - [10, 125, 5, 0.034322, 0.034322]
+    - [10, 125, 10, 0.068696, 0.068696]
+    - [10, 125, 15, 0.10313, 0.10313]
+    - [10, 125, 20, 0.137631, 0.137631]
+    - [10, 125, 25, 0.172206, 0.172206]
+    - [10, 125, 30, 0.206861, 0.206861]
+    - [10, 125, 35, 0.241602, 0.241602]
+    - [10, 125, 40, 0.276435, 0.276435]
+    - [10, 125, 45, 0.311366, 0.311366]
+    - [10, 125, 50, 0.346401, 0.346401]
+    - [10, 125, 55, 0.381546, 0.381546]
+    - [10, 125, 60, 0.416806, 0.416806]
+    - [10, 125, 65, 0.452188, 0.452188]
+    - [10, 125, 70, 0.487698, 0.487698]
+    - [10, 125, 75, 0.523341, 0.523341]
+    - [10, 125, 80, 0.559124, 0.559124]
+    - [10, 150, 5, 0.038772, 0.038772]
+    - [10, 150, 10, 0.077602, 0.077602]
+    - [10, 150, 15, 0.116502, 0.116502]
+    - [10, 150, 20, 0.155479, 0.155479]
+    - [10, 150, 25, 0.19454, 0.19454]
+    - [10, 150, 30, 0.233692, 0.233692]
+    - [10, 150, 35, 0.272943, 0.272943]
+    - [10, 150, 40, 0.312299, 0.312299]
+    - [10, 150, 45, 0.351766, 0.351766]
+    - [10, 150, 50, 0.391353, 0.391353]
+    - [10, 150, 55, 0.431065, 0.431065]
+    - [10, 150, 60, 0.470909, 0.470909]
+    - [10, 150, 65, 0.510893, 0.510893]
+    - [10, 150, 70, 0.551023, 0.551023]
+    - [10, 150, 75, 0.591306, 0.591306]
+    - [10, 150, 80, 0.631748, 0.631748]
+    - [10, 175, 5, 0.043805, 0.043805]
+    - [10, 175, 10, 0.087678, 0.087678]
+    - [10, 175, 15, 0.131628, 0.131628]
+    - [10, 175, 20, 0.175666, 0.175666]
+    - [10, 175, 25, 0.2198, 0.2198]
+    - [10, 175, 30, 0.264037, 0.264037]
+    - [10, 175, 35, 0.308386, 0.308386]
+    - [10, 175, 40, 0.352855, 0.352855]
+    - [10, 175, 45, 0.39745, 0.39745]
+    - [10, 175, 50, 0.442181, 0.442181]
+    - [10, 175, 55, 0.487056, 0.487056]
+    - [10, 175, 60, 0.532081, 0.532081]
+    - [10, 175, 65, 0.577264, 0.577264]
+    - [10, 175, 70, 0.622615, 0.622615]
+    - [10, 175, 75, 0.668139, 0.668139]
+    - [10, 175, 80, 0.713846, 0.713846]
+  third_quadrant:
+    - [0, 25, 5, 0.764956, 0.764956]
+    - [0, 25, 10, 0.789012, 0.789012]
+    - [0, 25, 15, 0.805717, 0.805717]
+    - [0, 25, 20, 0.819247, 0.819247]
+    - [0, 25, 25, 0.830964, 0.830964]
+    - [0, 25, 30, 0.841578, 0.841578]
+    - [0, 25, 35, 0.851424, 0.851424]
+    - [0, 25, 40, 0.860707, 0.860707]
+    - [0, 25, 45, 0.86956, 0.86956]
+    - [0, 25, 50, 0.878073, 0.878073]
+    - [0, 25, 55, 0.886311, 0.886311]
+    - [0, 25, 60, 0.894323, 0.894323]
+    - [0, 25, 65, 0.902143, 0.902143]
+    - [0, 25, 70, 0.909802, 0.909802]
+    - [0, 25, 75, 0.91732, 0.91732]
+    - [0, 25, 80, 0.924717, 0.924717]
+    - [0, 75, 5, 0.703766, 0.703766]
+    - [0, 75, 10, 0.731578, 0.731578]
+    - [0, 75, 15, 0.750179, 0.750179]
+    - [0, 75, 20, 0.765016, 0.765016]
+    - [0, 75, 25, 0.777773, 0.777773]
+    - [0, 75, 30, 0.789242, 0.789242]
+    - [0, 75, 35, 0.799856, 0.799856]
+    - [0, 75, 40, 0.809765, 0.809765]
+    - [0, 75, 45, 0.819159, 0.819159]
+    - [0, 75, 50, 0.828168, 0.828168]
+    - [0, 75, 55, 0.836852, 0.836852]
+    - [0, 75, 60, 0.845269, 0.845269]
+    - [0, 75, 65, 0.853466, 0.853466]
+    - [0, 75, 70, 0.861475, 0.861475]
+    - [0, 75, 75, 0.869321, 0.869321]
+    - [0, 75, 80, 0.877024, 0.877024]
+    - [0, 125, 5, 0.643166, 0.643166]
+    - [0, 125, 10, 0.674163, 0.674163]
+    - [0, 125, 15, 0.694634, 0.694634]
+    - [0, 125, 20, 0.710797, 0.710797]
+    - [0, 125, 25, 0.72461, 0.72461]
+    - [0, 125, 30, 0.73695, 0.73695]
+    - [0, 125, 35, 0.748254, 0.748254]
+    - [0, 125, 40, 0.758783, 0.758783]
+    - [0, 125, 45, 0.768744, 0.768744]
+    - [0, 125, 50, 0.778235, 0.778235]
+    - [0, 125, 55, 0.787374, 0.787374]
+    - [0, 125, 60, 0.796199, 0.796199]
+    - [0, 125, 65, 0.804774, 0.804774]
+    - [0, 125, 70, 0.813136, 0.813136]
+    - [0, 125, 75, 0.82131, 0.82131]
+    - [0, 125, 80, 0.829318, 0.829318]
+    - [0, 150, 5, 0.613907, 0.613907]
+    - [0, 150, 10, 0.645503, 0.645503]
+    - [0, 150, 15, 0.666884, 0.666884]
+    - [0, 150, 20, 0.683754, 0.683754]
+    - [0, 150, 25, 0.698052, 0.698052]
+    - [0, 150, 30, 0.710783, 0.710783]
+    - [0, 150, 35, 0.722424, 0.722424]
+    - [0, 150, 40, 0.733267, 0.733267]
+    - [0, 150, 45, 0.743499, 0.743499]
+    - [0, 150, 50, 0.753249, 0.753249]
+    - [0, 150, 55, 0.762608, 0.762608]
+    - [0, 150, 60, 0.771646, 0.771646]
+    - [0, 150, 65, 0.780412, 0.780412]
+    - [0, 150, 70, 0.788949, 0.788949]
+    - [0, 150, 75, 0.797286, 0.797286]
+    - [0, 150, 80, 0.805451, 0.805451]
+    - [0, 175, 5, 0.582574, 0.582574]
+    - [0, 175, 10, 0.61675, 0.61675]
+    - [0, 175, 15, 0.639096, 0.639096]
+    - [0, 175, 20, 0.656607, 0.656607]
+    - [0, 175, 25, 0.671452, 0.671452]
+    - [0, 175, 30, 0.684656, 0.684656]
+    - [0, 175, 35, 0.696658, 0.696658]
+    - [0, 175, 40, 0.707809, 0.707809]
+    - [0, 175, 45, 0.718311, 0.718311]
+    - [0, 175, 50, 0.728308, 0.728308]
+    - [0, 175, 55, 0.737889, 0.737889]
+    - [0, 175, 60, 0.74713, 0.74713]
+    - [0, 175, 65, 0.756083, 0.756083]
+    - [0, 175, 70, 0.764797, 0.764797]
+    - [0, 175, 75, 0.773295, 0.773295]
+    - [0, 175, 80, 0.78161, 0.78161]
+# <<< switching_table
+
+# -- catalog envelope (catalog stage 1, 2026-09-28) ------------------------
+# Identity, status and revision of this card for the common catalogue browser;
+# the loss model ignores it.  Sources and per-field provenance are DERIVED by
+# motor_ai_sim.catalog from datasheet_url / datasheet_file / datasheet_revision,
+# every block's `source` line and each point's `basis` (table | figure).
+catalog:
+  status: active
+  revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}

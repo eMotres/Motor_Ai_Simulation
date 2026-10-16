@@ -1,0 +1,70 @@
+[
+  {
+    "path": "analyze_raw_waveforms.py",
+    "sha256": "72820B0F71049CEB9EE7DE472D74CCEF9FCCCFCCE64C47E5472D3907F9F5C6C0"
+  },
+  {
+    "path": "cad-cleanup-evidence.md",
+    "sha256": "D7950594F1D8F312C6962E5EC2D92FD1501E2A17B53B0BAD5F9AAA9B47CF5E2E"
+  },
+  {
+    "path": "cold-field-after.json",
+    "sha256": "4510D95833BB5A1D12B388C2C9DF784A96BCA317A5333A4C4DCA38256ACCF29D"
+  },
+  {
+    "path": "cold-field-before.json",
+    "sha256": "4C1C9053CEBD40ABEA70DB63548CCC44D40760380382481375274B8D26EDE580"
+  },
+  {
+    "path": "pending-cad-p2-manifest.json",
+    "sha256": "4CACAF238BBAE5CAEAA6F2038953D715DB74CB6BFDBC38771674FF2E0490AA9E"
+  },
+  {
+    "path": "pending-cad-p2.patch",
+    "sha256": "A3038BF385040070C203C35FB9FCAEC8E6274C9AD4A3816BA1B401D00BF32D0C"
+  },
+  {
+    "path": "raw-waveform-comparison.json",
+    "sha256": "647BEE44FE01F231DED2B722210DF8090AF0FA508B836EEA7F647E12364AB139"
+  },
+  {
+    "path": "regression/p2_demag_eddy.json",
+    "sha256": "DA7D2A6EDA6A7E49FD1C59C4A70B194C219FDAC5A9FC3BC0D64BD81D61871C73"
+  },
+  {
+    "path": "regression/p2_demag.json",
+    "sha256": "332B9DF4E360D4040106014E41BA9FC300F3ACC93A863A1DDB3154F1B2E98249"
+  },
+  {
+    "path": "regression/p2_eddy.json",
+    "sha256": "2D9ED7688D5DE36306172906398B7235C03550C16BA02A7183F8B4B625EECAC9"
+  },
+  {
+    "path": "regression/p2_load.json",
+    "sha256": "ABB1ED2ACBBEEEE83EA04C3E881142E9317BF440D6A302B009422F7E478EA079"
+  },
+  {
+    "path": "regression/p2_noload.json",
+    "sha256": "73F5BE0F2E45E6D85BF3B1DA326AA6A6F4A80DB792929674483BAF34C5C75799"
+  },
+  {
+    "path": "regression/p2_voltage_eddy_rotor.json",
+    "sha256": "EB044EF4B87B57680DE475F7D2604EF95A88FA21606DFFFDD61AB79EF9B5D02F"
+  },
+  {
+    "path": "regression/p2_voltage_eddy.json",
+    "sha256": "17373C656996AF3D28C722A3803438F080F2103815CC6833B9FC242B671CA34E"
+  },
+  {
+    "path": "regression/p2_voltage.json",
+    "sha256": "042E83619410527238AC38226C18E39ACCF1E1C4E537A441FBCCDCA2986F20AA"
+  },
+  {
+    "path": "regression/provenance.json",
+    "sha256": "3416998E5FD215B8683035FA238D58AE8C466C9403585EA056BC9C9A5D601482"
+  },
+  {
+    "path": "regression/summary.json",
+    "sha256": "3A13AC1430DB4E98D32E0CE50942C1EB755458E33415D494EA359F3EC60CC9F2"
+  }
+]

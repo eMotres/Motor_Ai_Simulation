@@ -1,103 +1,264 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Box,
   Typography,
   Button,
   IconButton,
   TextField,
-  InputAdornment,
-  Chip,
-  Divider,
   Card,
   CardContent,
-  Slider,
+  Tooltip,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
   ToggleButton,
   ToggleButtonGroup,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails,
+  Snackbar,
 } from '@mui/material';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
+import { useTranslation } from 'react-i18next';
 import ShowChartIcon from '@mui/icons-material/ShowChart';
 import CloseIcon     from '@mui/icons-material/Close';
 import TuneIcon      from '@mui/icons-material/Tune';
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
+import UndoIcon      from '@mui/icons-material/Undo';
+import RedoIcon      from '@mui/icons-material/Redo';
 import { useMotorStore } from '../../stores/motorStore';
-import type { VariationMode } from '../../types/motor';
+import AutoOptimizePanel from './AutoOptimizePanel';
+import DescentPanel from './DescentPanel';
+import AutoPointsTable from './AutoPointsTable';
+import SweepStudyPanel from './SweepStudyPanel';
+import DOEPanel from './DOEPanel';
+import HelpTip from '../common/HelpTip';
+import SectionLabel from '../common/SectionLabel';
+import { useDieContext } from '../common/useDieContext';
+import { dieDefiningSelected, dieKeyLabel } from '../../lib/releasedContext';
+import { nsT } from '../../i18n/nsT';
+import {
+  emptyHistory, record, undo as histUndo, redo as histRedo,
+  canUndo, canRedo, undoLabel, redoLabel, undoKeyAction,
+} from '../../lib/optVarsHistory';
+import type { History } from '../../lib/optVarsHistory';
+import {
+  bracketRange, identityScope, outOfRangeNames, reuseRemembered, isUsableRange,
+} from '../../lib/optVarRanges';
+import type { ParameterVariation } from '../../types/motor';
 
-// ── Card for one sweep/optimize parameter ─────────────────────────────────────
+const tx = nsT('simulation');
+
+// Undo history of the variables list, one per algorithm (each algorithm keeps
+// its own variable set).  Module-level so it survives a tab switch (the panel
+// re-mounts) but not a reload - in-memory by design.
+type AlgoKey = 'optimize' | 'sweep' | 'doe';
+const _optHist: Partial<Record<AlgoKey, History>> = {};
+
+// Non-geometry variables (selected outside the Geometry tab) need their own
+// display label/unit since they are absent from the geometry parameter schema.
+const SPECIAL_VARS: Record<string, { label: string; unit: string }> = {
+  gamma_deg: { label: 'Load angle γ', unit: '°' },
+  current_a:  { label: 'Phase current', unit: 'Arms' },
+};
+
+// Read a value the Simulation tab persisted in localStorage (keys are sim.*).
+// This is the single source of truth for the operating speed / load angle —
+// the Sweep tab pulls rpm & γ from here instead of keeping its own copy.
+const readSim = <T,>(key: string, def: T): T => {
+  try {
+    const raw = localStorage.getItem(`sim.${key}`);
+    return raw == null ? def : (JSON.parse(raw) as T);
+  } catch {
+    return def;
+  }
+};
+
+// ── Card for one variable — set its range (min · max) + step.  ONE place to
+//    pick variables + ranges for ALL algorithms (Optimize / Sweep / DOE). ──────
 
 interface SweepVarCardProps {
   paramName: string;
   label: string;
   unit?: string;
+  optimize?: boolean;   // Optimize mode → "value + ± change" instead of min/max/step
+  /** Every edit goes through the panel so it lands in the undo history. */
+  onEdit: (patch: Partial<ParameterVariation>, kind: 'edit' | 'remove') => void;
 }
 
-const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit }) => {
-  const { sweepConfig, updateVariation } = useMotorStore();
+// string-backed number field — a leading "-" (or "0." mid-typing) isn't clobbered
+// to NaN, so negative ranges like γ ∈ [-30, 0] type fine.
+const RangeField: React.FC<{ label: string; value: number; onChange: (v: number) => void }> =
+  ({ label, value, onChange }) => {
+    const [s, setS] = useState(String(value));
+    // Re-sync the box when `value` changes from OUTSIDE (e.g. switching the
+    // per-algorithm variable set) — but NOT while typing: skip if the text already
+    // parses to the same number, so an in-progress "-", "0." or "1." isn't clobbered.
+    useEffect(() => { if (parseFloat(s) !== value) setS(String(value)); }, [value]);   // eslint-disable-line react-hooks/exhaustive-deps
+    return (
+      <TextField label={label} size="small" type="text" value={s}
+        onChange={e => { const t = e.target.value; setS(t); const n = parseFloat(t); if (Number.isFinite(n)) onChange(n); }}
+        inputProps={{ inputMode: 'decimal', style: { fontSize: 12, padding: '4px 8px' } }} sx={{ flex: 1 }} />
+    );
+  };
+
+// ── Feasibility bound for one knob ───────────────────────────────────────────
+// Some knobs have a closed-form limit that depends on the OTHER knobs — the
+// winding must fit the slot, so wire_height ≤ (slot_height − 2·insulation) /
+// num_wires_per_slot − wire_spacing_y.  A sweep whose range runs past that
+// limit used to look fine and quietly return duplicates (the backend clamped
+// and solved the bound instead); those points are now rejected outright, so the
+// range has to say so BEFORE the run is started.
+// The bound comes from the backend (motor_ai_sim.geometry_constraints) — never
+// recomputed here, or the two drift apart.  One request per geometry revision,
+// shared by every card.
+const API_G = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
+let _feasCache: { key: string; data: Record<string, any> } | null = null;
+
+const useFeasBound = (paramName: string, geometry: any) => {
+  const key = JSON.stringify(geometry ?? {});
+  const [b, setB] = useState<any>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      if (_feasCache?.key !== key) {
+        try {
+          const r = await fetch(`${API_G}/api/geometry/constraints`).then(x => x.json());
+          _feasCache = { key, data: (r?.bounds as Record<string, any>) || {} };
+        } catch { _feasCache = { key, data: {} }; }
+      }
+      if (alive) setB(_feasCache?.data?.[paramName] ?? null);
+    })();
+    return () => { alive = false; };
+  }, [key, paramName]);
+  return b;
+};
+
+const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit, optimize, onEdit }) => {
+  const { sweepConfig, geometry, parameterSchema } = useMotorStore();
+  const feas = useFeasBound(paramName, geometry);
+  // Phase current: the user works in PEAK amps, the backend (and every stored
+  // range) speaks RMS — so the card offers the unit as a CHOICE and converts at
+  // the edge.  Stored values stay Arms: one source of truth, and a range typed
+  // in peak survives switching the unit back without drift.
+  const isCur = paramName === 'current_a';
+  // PEAK is the default (user's standing choice, 2026-08-22): the inverter and
+  // the commercial FEM side both speak amplitude, so the card opens in peak and only an
+  // explicit RMS pick (persisted) switches it back.  Stored range values remain
+  // Arms either way — only the DISPLAY unit changes.
+  const [iUnit, setIUnitState] = useState<'arms' | 'peak'>(() => {
+    try { return localStorage.getItem('sweep.iUnit') === 'arms' ? 'arms' : 'peak'; }
+    catch { return 'peak'; }
+  });
+  const setIUnit = (u: 'arms' | 'peak') => {
+    setIUnitState(u);
+    try { localStorage.setItem('sweep.iUnit', u); } catch { /* quota */ }
+  };
+  const kU = isCur && iUnit === 'peak' ? Math.SQRT2 : 1;   // display = stored × kU
+  const unitShown = isCur ? (iUnit === 'peak' ? 'A peak' : 'Arms') : unit;
   const v = sweepConfig.variations[paramName];
   if (!v || v.mode === 'fixed') return null;
+  // Current value, shown as a reference: geometry vars from the Geometry tab,
+  // operating-point vars (γ, current) from Simulation.
+  const cur = (paramName === 'gamma_deg'  ? Number(readSim('gamma', 0))
+            : paramName === 'current_a'  ? Number(readSim('current', 85))
+            : Number((geometry as Record<string, any>)[paramName] ?? NaN)) * kU;
+  const src = (paramName === 'gamma_deg' || paramName === 'current_a') ? 'Simulation' : 'Geometry';
+  // Tidy figures: round to 0.1 (whole numbers for integer params like turns /
+  // slot count) so the card shows 4.7 / 14.0 … 23.4 instead of 4.68 / 14.02.
+  const isInt = parameterSchema.find(p => p.name === paramName)?.type === 'int';
+  // 3 decimals, not 1: fraction parameters (magnet fill 0…1) need 0.45-style
+  // values — the old 0.1 grid silently rounded them to 0.5 the moment they
+  // were typed (live 2026-08-21: "Magnet Fill Up, I can't set it to 0.45").
+  const snap = (x: number) => (isInt ? Math.round(x) : Math.round(x * 1000) / 1000);
+  const fmt  = (x: number) => (isInt ? String(Math.round(x)) : String(snap(x)));
+  // Optimize view anchors the ± window on the CURRENT value.
+  const anchor = Number.isFinite(cur) ? cur : (Number(v.min) + Number(v.max)) / 2;
+  const half   = snap(Math.max(0, (Number(v.max) - Number(v.min)) / 2));
 
   return (
-    <Card variant="outlined" sx={{ mb: 1.5, bgcolor: 'rgba(255,255,255,0.02)' }}>
+    <Card variant="outlined" sx={{ mb: 1.5, bgcolor: 'var(--line-soft)' }}>
       <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-        {/* Header */}
         <Box sx={{ display: 'flex', alignItems: 'center', mb: 1 }}>
           <Typography variant="body2" sx={{ fontWeight: 600, flex: 1 }}>
             {label}
-            {unit && (
+            {unitShown && (
               <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
-                ({unit})
+                ({unitShown})
               </Typography>
             )}
           </Typography>
-          <ToggleButtonGroup
-            exclusive
-            size="small"
-            value={v.mode}
-            onChange={(_, m) => m && updateVariation(paramName, { mode: m as VariationMode })}
-            sx={{ height: 22, mr: 1 }}
-          >
-            <ToggleButton value="sweep"    color="primary" sx={{ px: 1, py: 0, fontSize: 10, minWidth: 50 }}>Sweep</ToggleButton>
-            <ToggleButton value="optimize" color="success" sx={{ px: 1, py: 0, fontSize: 10, minWidth: 42 }}>Optimize</ToggleButton>
-          </ToggleButtonGroup>
-          <IconButton
-            size="small"
-            onClick={() => updateVariation(paramName, { mode: 'fixed' })}
-            sx={{ p: 0.25 }}
-          >
+          {isCur && (
+            <Box sx={{ display: 'flex', gap: 0.25, mr: 0.5 }}>
+              {(['arms', 'peak'] as const).map(u => (
+                <Button key={u} size="small" onClick={() => setIUnit(u)}
+                  variant={iUnit === u ? 'contained' : 'outlined'}
+                  sx={{ fontSize: 9, py: 0, px: 0.75, minWidth: 0, textTransform: 'none' }}>
+                  {u === 'arms' ? 'RMS' : 'peak'}
+                </Button>
+              ))}
+            </Box>
+          )}
+          <IconButton size="small" onClick={() => onEdit({ mode: 'fixed' }, 'remove')} sx={{ p: 0.25 }}>
             <CloseIcon sx={{ fontSize: 14 }} />
           </IconButton>
         </Box>
 
-        {/* Range inputs */}
-        <Box sx={{ display: 'flex', gap: 1 }}>
-          <TextField
-            label="Min"
-            size="small"
-            type="number"
-            value={v.min}
-            onChange={e => updateVariation(paramName, { min: parseFloat(e.target.value) })}
-            inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }}
-            sx={{ flex: 1 }}
-          />
-          <TextField
-            label="Max"
-            size="small"
-            type="number"
-            value={v.max}
-            onChange={e => updateVariation(paramName, { max: parseFloat(e.target.value) })}
-            inputProps={{ style: { fontSize: 12, padding: '4px 8px' } }}
-            sx={{ flex: 1 }}
-          />
-          {v.mode === 'sweep' && (
-            <TextField
-              label="Step"
-              size="small"
-              type="number"
-              value={v.step}
-              onChange={e => updateVariation(paramName, { step: parseFloat(e.target.value) })}
-              inputProps={{ min: 0, style: { fontSize: 12, padding: '4px 8px' } }}
-              sx={{ flex: 1 }}
-            />
-          )}
-        </Box>
+        {!optimize && Number.isFinite(cur) && (() => {
+          // cur is in DISPLAY units; the stored range is Arms — compare like
+          // with like, or a peak value reads "above max" against an RMS bound.
+          const outLo = cur < Number(v.min) * kU, outHi = cur > Number(v.max) * kU;
+          const out = outLo || outHi;
+          // Show the FAITHFUL value (not snapped to 0.1) — a small fractional
+          // param like magnet_fill = 0.467 must not display as "0.5" and look like
+          // it contradicts "below min 0.48".  Trim trailing zeros for tidiness.
+          const shown = isInt ? String(Math.round(cur))
+            : cur.toFixed(3).replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '');
+          return (
+            <Typography variant="caption" sx={{ color: out ? '#fbbf24' : 'text.disabled', mb: 0.75, display: 'block' }}>
+              now: {shown}{unitShown ? ` ${unitShown}` : ''} (from {src})
+              {out && ` — ${outLo ? 'below min' : 'above max'}, widen the range to include it`}
+            </Typography>
+          );
+        })()}
+
+        {/* Range running past a closed-form feasibility limit: those points are
+            REJECTED before any FEM time is spent, so say it here rather than
+            letting the run come back with a build-failure box. */}
+        {feas?.kind === 'max' && Number.isFinite(Number(v?.max))
+          && Number(v.max) > Number(feas.bound) + 1e-9 && (
+          <Typography variant="caption"
+            sx={{ color: '#f59e0b', mb: 0.75, display: 'block', lineHeight: 1.35 }}>
+            max {Number(v.max)} is past the fit limit {Number(feas.bound).toFixed(3)}
+            {unitShown ? ` ${unitShown}` : ''} — points above it are rejected, not solved.
+            <br />
+            <span style={{ opacity: 0.75 }}>{feas.label}</span>
+          </Typography>
+        )}
+
+        {optimize ? (
+          // Optimize: vary the variable by ± a change window around its CURRENT
+          // value — more intuitive than absolute min/max (that's the Sweep view).
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
+            <Typography variant="caption" sx={{ fontWeight: 700, color: 'var(--text-0)', flexShrink: 0 }}>
+              {fmt(anchor)}{unitShown ? ` ${unitShown}` : ''}
+            </Typography>
+            <RangeField label="± change" value={half}
+              onChange={d => {
+                const a = Math.abs(d);
+                onEdit({ min: snap(anchor - a) / kU, max: snap(anchor + a) / kU }, 'edit');
+              }} />
+            <Typography variant="caption" sx={{ color: 'text.secondary', whiteSpace: 'nowrap', flexShrink: 0 }}>
+              → {fmt(anchor - half)} … {fmt(anchor + half)}{unitShown ? ` ${unitShown}` : ''}
+            </Typography>
+          </Box>
+        ) : (
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', rowGap: 0.5 }}>
+            <RangeField label="min"  value={snap(Number(v.min) * kU)}  onChange={n => onEdit({ min: n / kU }, 'edit')} />
+            <RangeField label="max"  value={snap(Number(v.max) * kU)}  onChange={n => onEdit({ max: n / kU }, 'edit')} />
+            <RangeField label="step" value={snap(Number(v.step) * kU)} onChange={n => onEdit({ step: n / kU }, 'edit')} />
+          </Box>
+        )}
       </CardContent>
     </Card>
   );
@@ -108,10 +269,11 @@ const SweepVarCard: React.FC<SweepVarCardProps> = ({ paramName, label, unit }) =
 const SweepConfigPanel: React.FC = () => {
   const {
     parameterSchema,
+    geometry,
     sweepConfig,
+    updateVariation,
+    setVariations,
     updateOperatingPoint,
-    updateRippleThreshold,
-    connectedToApi,
     initVariationsFromSchema,
   } = useMotorStore();
 
@@ -119,22 +281,255 @@ const SweepConfigPanel: React.FC = () => {
     if (parameterSchema.length > 0) initVariationsFromSchema();
   }, [parameterSchema.length]);
 
+  // ── Operating speed / load angle come from the Simulation tab ───────────────
+  // One source of truth: pull rpm & γ from the Simulation tab's localStorage into
+  // the operating point whenever the Sweep tab opens (it re-mounts on tab switch),
+  // so the optimizer runs at exactly the condition set in Simulation.  A storage
+  // listener also catches edits made in another browser window.
+  const syncOpFromSim = React.useCallback(() => {
+    const rpm     = Number(readSim('rpm',     3950));
+    const gamma   = Number(readSim('gamma',   0));
+    const current = Number(readSim('current', 85));
+    updateOperatingPoint(0, { rpm, gamma_deg: gamma, current_a: current });
+    updateOperatingPoint(1, { rpm, gamma_deg: gamma, current_a: current });
+  }, [updateOperatingPoint]);
+  useEffect(() => {
+    syncOpFromSim();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'sim.rpm' || e.key === 'sim.gamma' || e.key === 'sim.current') syncOpFromSim();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [syncOpFromSim]);
+
+
   const schemaMap = Object.fromEntries(parameterSchema.map(p => [p.name, p]));
+  const sweepEntries = Object.entries(sweepConfig.variations).filter(([, v]) => v.mode !== 'fixed');
 
-  const sweepEntries   = Object.entries(sweepConfig.variations).filter(([, v]) => v.mode !== 'fixed');
-  const sweepCount     = sweepEntries.filter(([, v]) => v.mode === 'sweep').length;
-  const optimizeCount  = sweepEntries.filter(([, v]) => v.mode === 'optimize').length;
+  // DIE-DEFINING variables under an ACTIVE die (stator Ø, segments, slots /
+  // poles per segment): varying one makes a NEW lamination, and applying such
+  // a result released the die context with nowhere to save (2026-09-20
+  // 12:47).  The backend refuses the run (422) unless the request carries
+  // `allow_new_lamination` — this is that consent: one line + HelpTip, shown
+  // only when it matters, remembered in localStorage and read by every
+  // request builder (SweepStudyPanel, motorStore.runDescent).
+  const dieCtx = useDieContext();
+  const dieHits = dieCtx.active
+    ? dieDefiningSelected(sweepEntries.map(([n]) => n), dieCtx.dieKeys) : [];
 
-  const estimateRuns = () =>
-    Object.values(sweepConfig.variations)
-      .filter(v => v.mode === 'sweep')
-      .reduce((acc, v) => {
-        const steps = Math.max(1, Math.ceil((v.max - v.min) / Math.max(v.step || 1, 1e-9)) + 1);
-        return acc * steps;
-      }, 1);
+  // Algorithm sub-menu state (declared here: the undo history is per algorithm)
+  const [algoTab, setAlgoTab] = useState<'optimize' | 'sweep' | 'doe'>(() => {
+    try { const t = localStorage.getItem('opt.algoTab'); return (t === 'sweep' || t === 'doe') ? t : 'optimize'; }
+    catch { return 'optimize'; }
+  });
+
+  // ── Add-variable dropdown: make the tab self-contained (no need to hunt
+  //    chart-icons in the Geometry/Simulation tabs).  Adds as an optimize var.
+  const DEFAULT_RANGE: Record<string, { min: number; max: number; step: number }> = {
+    gamma_deg: { min: 0, max: 40, step: 2 },   // post-calibration: q-axis = 0, MTPA ~+28
+  };
+  // Default search window for a variable: operating-point specials, else the
+  // CURRENT geometry value of the loaded motor +-10 % (integers +-1..2), rounded
+  // outward to the step and clamped to the schema (lib/optVarRanges.bracketRange).
+  // Shared by the dropdown, "Add all", "Apply DOE importance" and "Reset ranges".
+  const defaultWindow = (name: string): { min: number; max: number; step: number } => {
+    const sch = schemaMap[name];
+    let def = DEFAULT_RANGE[name];
+    if (!def && name === 'current_a') {                  // default ≈ Simulation current ±40 %
+      const i = Math.max(10, Math.round(Number(readSim('current', 100))));
+      def = { min: Math.round(i * 0.6), max: Math.round(i * 1.4), step: Math.max(5, Math.round(i * 0.1)) };
+    }
+    if (def) return { min: def.min, max: def.max, step: def.step ?? sch?.step ?? 0.1 };
+    return bracketRange(Number(geometry?.[name]), sch);
+  };
+  // Which motor the ranges are being set for (die + configuration + lamination).
+  const scope = identityScope(geometry as unknown as Record<string, unknown>, dieCtx.die, dieCtx.config);
+  const varLabel = (name: string) => schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name;
+
+  // ── Undo / redo of the variables list ───────────────────────────────────────
+  // Every change to the list goes through commitEdit: it snapshots the list
+  // BEFORE the change.  A change that turns out to be a no-op is not recorded.
+  useTranslation('simulation');   // re-render on language change; lazy-loads the namespace
+  const [, bump] = useState(0);
+  const [snack, setSnack] = useState<string | null>(null);
+  const hist = _optHist[algoTab] ?? emptyHistory();
+  const commitEdit = (label: string, apply: () => void, key?: string) => {
+    setSnack(null);   // a snackbar Undo must always mean the NEWEST action
+    const before = useMotorStore.getState().sweepConfig.variations;
+    const prevH = _optHist[algoTab] ?? emptyHistory();
+    _optHist[algoTab] = record(prevH, before, label, { key });
+    apply();
+    if (useMotorStore.getState().sweepConfig.variations === before) _optHist[algoTab] = prevH;
+    bump(n => n + 1);
+  };
+  const stepHistory = (dir: 'undo' | 'redo') => {
+    const h = _optHist[algoTab] ?? emptyHistory();
+    const cur = useMotorStore.getState().sweepConfig.variations;
+    const st = dir === 'undo' ? histUndo(h, cur) : histRedo(h, cur);
+    if (!st) return;
+    _optHist[algoTab] = st.history;
+    setVariations(st.vars as typeof cur);
+    setSnack(null);
+    bump(n => n + 1);
+  };
+  // Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y while focus is inside the panel - but never
+  // inside a text field, where the browser's own undo applies.
+  const onPanelKeyDown = (e: React.KeyboardEvent) => {
+    const act = undoKeyAction(e, e.target as unknown as { tagName?: string; type?: string; isContentEditable?: boolean; disabled?: boolean });
+    if (!act) return;
+    e.preventDefault();
+    stepHistory(act);
+  };
+
+  // A variable REMEMBERS the range it last ran with.  Removing it from the
+  // set only flips mode to 'fixed' - min/max/step stay in the store (and the
+  // store survives reloads and follows the user across browsers) - so
+  // re-adding restores the numbers the user last typed.  BUT the config is one
+  // per account, not per motor: ranges typed for a smaller motor came back for
+  // the CIANO28 85 (live 2026-10-15: Slot Height 3.9-4 at 7.4 mm).  A
+  // remembered range is therefore reused only if it was not stamped for a
+  // different motor AND still contains the loaded motor's current value;
+  // otherwise it is re-bracketed around that value.
+  const addVariableRaw = (name: string) => {
+    if (!name) return;
+    const prev = sweepConfig.variations[name];
+    const isOp = name === 'gamma_deg' || name === 'current_a';
+    const remembered = isOp
+      ? isUsableRange(prev)
+      : reuseRemembered(prev, Number(geometry?.[name]), scope);
+    updateVariation(name, remembered
+      ? { mode: 'optimize', scope }
+      : { mode: 'optimize', ...defaultWindow(name), scope });
+  };
+  const addVariable = (name: string) => {
+    if (!name) return;
+    commitEdit(tx('optVarsActAdd', { name: varLabel(name) }), () => addVariableRaw(name));
+  };
+  // One card edit (range field, step, ± change, the x button).
+  const editVar = (name: string, patch: Partial<ParameterVariation>, kind: 'edit' | 'remove') => {
+    const lbl = varLabel(name);
+    if (kind === 'remove') {
+      commitEdit(tx('optVarsActRemove', { name: lbl }), () => updateVariation(name, patch));
+    } else {
+      commitEdit(tx('optVarsActEdit', { name: lbl }),
+        () => updateVariation(name, { ...patch, scope }),
+        `${name}:${Object.keys(patch).join(',')}`);
+    }
+  };
+  const activeNames   = new Set(sweepEntries.map(([n]) => n));
+  // Only params MARKED for optimization (schema.optimizable !== false) — same
+  // whitelist the geometry table + the optimizer use — not the whole schema.
+  const availableVars = [
+    ...parameterSchema.filter(p => p.type !== 'string' && p.optimizable !== false).map(p => p.name),
+    'gamma_deg',
+    'current_a',
+  ].filter(n => !activeNames.has(n));
+
+  // Bulk actions: add every available GEOMETRY var (NOT the operating-point γ /
+  // phase current), or clear all selected variables back to fixed.  Both are
+  // one undo step and offer an Undo snackbar - no confirmation dialog.
+  const geomAvailable = availableVars.filter(n => n !== 'gamma_deg' && n !== 'current_a');
+  const addAll = () => {
+    const n = geomAvailable.length;
+    if (!n) return;
+    commitEdit(tx('optVarsActAddAll', { count: n }), () => geomAvailable.forEach(addVariableRaw));
+    setSnack(tx('optVarsSnackAdded', { count: n }));
+  };
+  const removeAll = () => {
+    const n = sweepEntries.length;
+    if (!n) return;
+    commitEdit(tx('optVarsActRemoveAll', { count: n }), () => {
+      const v = { ...sweepConfig.variations };
+      for (const k of Object.keys(v)) v[k] = { ...v[k], mode: 'fixed' };
+      setVariations(v);
+    });
+    setSnack(tx('optVarsSnackRemoved', { count: n }));
+  };
+  // Selected geometry variables whose range does not contain the loaded
+  // motor's current value (typically ranges left over from another motor):
+  // one click re-brackets them around it.
+  const staleNames = outOfRangeNames(sweepConfig.variations as never, geometry as unknown as Record<string, unknown>);
+  const resetRanges = () => {
+    const names = staleNames;
+    commitEdit(tx('optVarsActReset', { count: names.length }), () => {
+      for (const n of names) updateVariation(n, { ...defaultWindow(n), scope });
+    });
+  };
+
+  // ── DOE → variable screening (close the loop the user asked for) ─────────────
+  // Instead of reading the DOE importance by eye, apply it in one click: KEEP
+  // every geometry var the DOE flagged as a driver of the OBJECTIVE (efficiency,
+  // torque/mass) or the CONSTRAINT (ripple) at/above a % threshold, FIX the rest.
+  // Raw torque is excluded — current auto-solve holds it ~constant.  Kept vars
+  // keep the window you already set (only fresh ones get a default window).  The
+  // optimizer then searches only the vital few → faster, more robust CMA-ES.
+  const [impPct, setImpPct] = useState<number>(() => {
+    try { return Number(JSON.parse(localStorage.getItem('opt.impPct') ?? '5')) || 5; } catch { return 5; }
+  });
+  const setImpPctLS = (v: number) => { setImpPct(v); try { localStorage.setItem('opt.impPct', JSON.stringify(v)); } catch { /* ignore */ } };
+  const [impInfo, setImpInfo] = useState<{ kept: number; fixed: number; n: number } | null>(null);
+  const readDoeImp = (): any => { try { return JSON.parse(localStorage.getItem('doe.lastImportance') || 'null'); } catch { return null; } };
+  const doeReady = !!readDoeImp()?.ok;
+  const applyDoeImportance = () => {
+    const imp = readDoeImp();
+    if (!imp?.ok || !imp.targets) return;
+    commitEdit(tx('optVarsActDoe'), () => applyDoeImportanceNow(imp));
+  };
+  const applyDoeImportanceNow = (imp: any) => {
+    const score: Record<string, number> = {};
+    for (const t of ['eff', 'td', 'ripple'])
+      for (const row of (imp.targets[t]?.ranking || []))
+        score[row.var] = Math.max(score[row.var] ?? 0, Number(row.importance) || 0);
+    const thr = impPct / 100;
+    const geomNames = parameterSchema.filter(p => p.type !== 'string' && p.optimizable !== false)
+      .map(p => p.name).filter(n => n !== 'gamma_deg' && n !== 'current_a');
+    const next: Record<string, any> = { ...useMotorStore.getState().sweepConfig.variations };
+    let kept = 0;
+    for (const n of geomNames) {
+      if ((score[n] ?? 0) >= thr) {
+        kept++;
+        const c = next[n];
+        next[n] = (c && c.mode !== 'fixed') ? { ...c, mode: 'optimize' }
+                                            : { ...(c || {}), mode: 'optimize', ...defaultWindow(n), scope };
+      } else if (next[n]) {
+        next[n] = { ...next[n], mode: 'fixed' };
+      }
+    }
+    setVariations(next);
+    setImpInfo({ kept, fixed: geomNames.length - kept, n: Number(imp.n) || 0 });
+  };
+
+  // Algorithm sub-menu: Optimize (CMA-ES/Gradient) · Sweep study · DOE/Importance.
+  // Optimization Variables + Operating Point stay on top (shared); the sub-menu
+  // switches only the algorithm panel below.
+  // Each algorithm keeps its OWN variable set.  On switch: stash the current
+  // algo's variables, then load the target algo's (seeded from the current set
+  // the first time it's opened, so nothing silently disappears).  The active set
+  // lives in sweepConfig.variations (zustand-persisted) → the algo you reload on
+  // shows its own set; the others are restored from localStorage on switch.
+  const pickAlgo = (t: 'optimize' | 'sweep' | 'doe') => {
+    if (t === algoTab) return;
+    try {
+      const cur = useMotorStore.getState().sweepConfig.variations;
+      localStorage.setItem(`opt.vars.${algoTab}`, JSON.stringify(cur));
+      const saved = localStorage.getItem(`opt.vars.${t}`);
+      setVariations(saved ? JSON.parse(saved) : cur);
+    } catch { /* ignore */ }
+    setAlgoTab(t);
+    try { localStorage.setItem('opt.algoTab', t); } catch { /* ignore */ }
+  };
+
+  // The "now: … (from Geometry)" reference value in each card reads the live
+  // geometry store, so it updates on its own when a design is saved/applied.
+  // The RANGE (min/max/step) is the user's to set and is NEVER auto-changed —
+  // even when an applied design's value lands OUTSIDE the window.  Keeping the
+  // window fixed lets the user see WHERE the new value went relative to the range
+  // they chose (the card flags an out-of-range value in amber); they widen the
+  // range themselves if they want the optimizer to explore around it.
 
   return (
-    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+    <Box onKeyDown={onPanelKeyDown} tabIndex={-1}
+      sx={{ height: '100%', display: 'flex', flexDirection: 'column', overflow: 'hidden', outline: 'none' }}>
 
       {/* ── Header ── */}
       <Box sx={{
@@ -143,119 +538,235 @@ const SweepConfigPanel: React.FC = () => {
         display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0,
       }}>
         <ShowChartIcon sx={{ fontSize: 16 }} />
-        <Typography variant="subtitle2" sx={{ flex: 1 }}>Sweep / Optimize</Typography>
-        <Chip size="small" label={`${sweepCount} sweep`}  color="primary" variant={sweepCount   > 0 ? 'filled' : 'outlined'} sx={{ height: 18, fontSize: 10 }} />
-        <Chip size="small" label={`${optimizeCount} opt`} color="success" variant={optimizeCount > 0 ? 'filled' : 'outlined'} sx={{ height: 18, fontSize: 10 }} />
-        {sweepCount > 0 && (
-          <Chip size="small" label={`~${estimateRuns()} variants`} variant="outlined" sx={{ height: 18, fontSize: 10 }} />
-        )}
-        <Button
-          variant="contained"
-          startIcon={<PlayArrowIcon />}
-          disabled={sweepEntries.length === 0 || !connectedToApi}
-          size="small"
-          sx={{ flexShrink: 0, ml: 1 }}
-        >
-          Run
-        </Button>
+        <Typography variant="subtitle2" sx={{ flex: 1 }}>Optimize</Typography>
+        <Typography variant="caption" color="text.disabled">
+          {sweepEntries.length} variable{sweepEntries.length === 1 ? '' : 's'}
+        </Typography>
       </Box>
+      {dieHits.length > 0 && (
+        <Box sx={{ px: 3, py: 0.5, display: 'flex', alignItems: 'center', gap: 1,
+                   borderBottom: '1px solid', borderColor: 'divider', flexShrink: 0,
+                   fontSize: 11, color: '#f59e0b' }}>
+          <span>⚠ die-defining: {dieHits.map(dieKeyLabel).join(', ')} — varying it makes a NEW die (not '{dieCtx.die}')</span>
+          <HelpTip title={`'${dieCtx.die}' keeps its stator Ø and slot/pole topology for life. Applying a result that varies one of these moves the active configuration/duty to the die that lamination now is (new or an existing match) automatically — '${dieCtx.die}' itself is untouched.`} />
+        </Box>
+      )}
 
-      {/* ── Body: two columns ── */}
-      <Box sx={{ flex: 1, overflowY: 'auto', p: 3, display: 'flex', gap: 4 }}>
+      {/* ── Body: config (two columns) + the optimizer ── */}
+      <Box sx={{ flex: 1, overflowY: 'auto', p: 3 }}>
+        {/* ── Algorithm sub-menu — at the very top; switches the panel below ── */}
+        <ToggleButtonGroup value={algoTab} exclusive size="small" fullWidth
+          onChange={(_, v) => v && pickAlgo(v)} sx={{ mb: 2 }}>
+          <ToggleButton value="optimize" sx={{ textTransform: 'none', fontSize: 12 }}>Optimize</ToggleButton>
+          <ToggleButton value="sweep" sx={{ textTransform: 'none', fontSize: 12 }}>Sweep study</ToggleButton>
+          <ToggleButton value="doe" sx={{ textTransform: 'none', fontSize: 12 }}>DOE / Importance</ToggleButton>
+        </ToggleButtonGroup>
+        {/* One-click card FIRST — the user opens Optimize to run it, not to
+            scroll past 18 variable cards looking for it ("I don't see the chart").
+            The variables block below belongs to the manual flow. */}
+        {algoTab === 'optimize' && (
+          <Box sx={{ mb: 2 }}>
+            <AutoOptimizePanel />
+            {/* The classic optimizer charts (metrics table, convergence, the
+                objective cloud with the baseline line) — user request: back on
+                the tab, without the manual controls. Same store as the auto run. */}
+            <DescentPanel chartsOnly />
+            {/* EVERY EVALUATED DESIGN — last thing on the tab, under all the
+                charts (user placement).  It reads the run state itself, so it
+                works during a run as well as after it. */}
+            <AutoPointsTable />
+          </Box>
+        )}
 
-        {/* Left: sweep variable cards */}
+       {/* The manual flow (variable cards + operating-point column) is HIDDEN
+           on the Optimize tab for now — user decision 2026-08-01: debug ONLY
+           the automatic optimizer; every knob it needs is assembled server-side.
+           The cards still serve the Sweep tab, which grids them. Set
+           localStorage 'opt.showManual' = "1" to bring the manual flow back
+           without a rebuild (escape hatch for debugging the debugger). */}
+       {(algoTab === 'sweep'
+         || (algoTab === 'optimize' && (() => {
+              try { return localStorage.getItem('opt.showManual') === '1'; }
+              catch { return false; }
+            })())) && (
+        <Box sx={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+
+        {/* Left: optimization variable cards */}
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 1 }}>
-            Sweep Variables
-          </Typography>
-          <Typography variant="caption" color="text.disabled" sx={{ display: 'block', mb: 2 }}>
-            Select parameters in the <strong>Geometry</strong> tab using the chart icon.
-          </Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1.5 }}>
+            <SectionLabel>Optimization Variables</SectionLabel>
+            <HelpTip title="Add a parameter (geometry, load angle γ, or phase current) and set its range (min · max) and step. Each algorithm keeps its own set — switch the menu above and these cards follow it (Optimize searches them, Sweep grids them). DOE has its own screening inputs." />
+          </Box>
+
+          <FormControl size="small" fullWidth sx={{ mb: 2 }}>
+            <InputLabel sx={{ fontSize: 12 }}>+ Add optimization variable</InputLabel>
+            <Select
+              label="+ Add optimization variable"
+              value=""
+              onChange={(e) => addVariable(e.target.value as string)}
+              MenuProps={{ PaperProps: { sx: { maxHeight: 360 } } }}
+              sx={{ fontSize: 12 }}
+            >
+              {availableVars.length === 0 && (
+                <MenuItem value="" disabled sx={{ fontSize: 12 }}>All variables added</MenuItem>
+              )}
+              {availableVars.map((name) => {
+                const lbl  = schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name;
+                const unit = schemaMap[name]?.unit  ?? SPECIAL_VARS[name]?.unit;
+                return (
+                  <MenuItem key={name} value={name} sx={{ fontSize: 12 }}>
+                    {lbl}{unit ? ` (${unit})` : ''}
+                  </MenuItem>
+                );
+              })}
+            </Select>
+          </FormControl>
+
+          {/* Bulk add/remove — add all geometry vars (not γ / current), or clear all */}
+          <Box sx={{ display: 'flex', gap: 1, mb: 1.5, mt: -1 }}>
+            <Button size="small" variant="outlined" onClick={addAll} disabled={geomAvailable.length === 0}
+              sx={{ textTransform: 'none', fontSize: 11 }}>
+              + Add all geometry ({geomAvailable.length})
+            </Button>
+            <Button size="small" variant="text" color="inherit" onClick={removeAll} disabled={sweepEntries.length === 0}
+              sx={{ textTransform: 'none', fontSize: 11 }}>
+              Remove all
+            </Button>
+            {/* Undo / redo of the variables list (also Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y
+                while focus is in this panel, outside text fields). */}
+            <Tooltip title={canUndo(hist) ? tx('optVarsUndoTip', { action: undoLabel(hist) ?? '' }) : tx('optVarsNothingToUndo')}>
+              <span>
+                <Button size="small" variant="text" color="inherit" onClick={() => stepHistory('undo')}
+                  disabled={!canUndo(hist)} startIcon={<UndoIcon sx={{ fontSize: 14 }} />}
+                  sx={{ textTransform: 'none', fontSize: 11 }}>
+                  {tx('optVarsUndo')}
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title={canRedo(hist) ? tx('optVarsRedoTip', { action: redoLabel(hist) ?? '' }) : tx('optVarsNothingToRedo')}>
+              <span>
+                <Button size="small" variant="text" color="inherit" onClick={() => stepHistory('redo')}
+                  disabled={!canRedo(hist)} startIcon={<RedoIcon sx={{ fontSize: 14 }} />}
+                  sx={{ textTransform: 'none', fontSize: 11 }}>
+                  {tx('optVarsRedo')}
+                </Button>
+              </span>
+            </Tooltip>
+          </Box>
+
+          {/* Ranges that do not contain the loaded motor's current value
+              (typically left over from another motor): one click re-centres them. */}
+          {staleNames.length > 0 && (
+            <Box sx={{ mb: 1.5, mt: -0.5 }}>
+              <Tooltip title={tx('optVarsResetTip')}>
+                <Button size="small" variant="outlined" color="warning" onClick={resetRanges}
+                  sx={{ textTransform: 'none', fontSize: 11 }}>
+                  {tx('optVarsResetButton', { count: staleNames.length })}
+                </Button>
+              </Tooltip>
+            </Box>
+          )}
+
+          {/* DOE → screening: keep the vars DOE flagged as objective / constraint drivers, fix the rest */}
+          {algoTab === 'optimize' && (
+            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', mb: 1.5, mt: -0.5, flexWrap: 'wrap' }}>
+              <Tooltip title={doeReady
+                ? 'Keep variables the DOE flagged as drivers of efficiency / torque-per-mass / ripple at or above the threshold; fix the rest. Kept vars keep their current window.'
+                : 'Run DOE / Importance first — no screening result yet'}>
+                <span>
+                  <Button size="small" variant="outlined" color="secondary" onClick={applyDoeImportance} disabled={!doeReady}
+                    sx={{ textTransform: 'none', fontSize: 11 }}>
+                    Apply DOE importance
+                  </Button>
+                </span>
+              </Tooltip>
+              <TextField label="keep ≥ %" size="small" type="text" value={impPct} disabled={!doeReady}
+                onChange={e => { const n = parseFloat(e.target.value); if (Number.isFinite(n)) setImpPctLS(n); }}
+                inputProps={{ inputMode: 'decimal', style: { fontSize: 11, padding: '3px 6px', width: 40 } }}
+                sx={{ width: 92 }} />
+              {impInfo && (
+                <Typography variant="caption" sx={{ color: 'text.secondary' }}>
+                  kept {impInfo.kept} · fixed {impInfo.fixed} (DOE n={impInfo.n})
+                </Typography>
+              )}
+            </Box>
+          )}
 
           {sweepEntries.length === 0 ? (
             <Box sx={{ textAlign: 'center', py: 5, color: 'text.disabled' }}>
               <TuneIcon sx={{ fontSize: 40, mb: 1, opacity: 0.2, display: 'block', mx: 'auto' }} />
               <Typography variant="caption">
-                No parameters selected for sweep or optimization.
+                No parameters selected for optimization.
               </Typography>
             </Box>
           ) : (
-            sweepEntries.map(([name]) => (
-              <SweepVarCard
-                key={name}
-                paramName={name}
-                label={schemaMap[name]?.label ?? name}
-                unit={schemaMap[name]?.unit}
-              />
-            ))
+            <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', columnGap: 1.5 }}>
+              {sweepEntries.map(([name]) => (
+                <SweepVarCard
+                  key={name}
+                  paramName={name}
+                  label={(dieHits.includes(name) ? '⚠ die · ' : '')
+                    + (schemaMap[name]?.label ?? SPECIAL_VARS[name]?.label ?? name)}
+                  unit={schemaMap[name]?.unit ?? SPECIAL_VARS[name]?.unit}
+                  optimize={algoTab === 'optimize'}
+                  onEdit={(patch, kind) => editVar(name, patch, kind)}
+                />
+              ))}
+            </Box>
           )}
         </Box>
 
-        <Divider orientation="vertical" flexItem />
+        {/* The right sidebar is gone entirely (user's call, 2026-08-22):
+            the "Operating Point" card only ECHOED Simulation-tab values
+            (syncOpFromSim still runs on mount + storage events, so the
+            optimizer keeps running at exactly that operating point), and the
+            "Torque Ripple" limit moved into the DescentPanel toolbar next to
+            its own λ — the pair that actually enforces it. */}
+       </Box>
+       )}
 
-        {/* Right: operating points + ripple */}
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-
-          <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
-            Operating Points
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-            Each geometry variant is evaluated at both points → segment in Pareto space (Torque/mass vs Efficiency)
-          </Typography>
-
-          <Box sx={{ display: 'flex', gap: 2, mb: 3 }}>
-            {([0, 1] as const).map(i => (
-              <Card key={i} variant="outlined" sx={{ flex: 1, bgcolor: 'rgba(255,255,255,0.02)' }}>
-                <CardContent sx={{ p: 1.5, '&:last-child': { pb: 1.5 } }}>
-                  <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 700, display: 'block', mb: 1 }}>
-                    Point {i + 1}
-                  </Typography>
-                  <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-                    <TextField
-                      label="Current"
-                      size="small"
-                      type="number"
-                      value={sweepConfig.operatingPoints[i].current_a}
-                      onChange={e => updateOperatingPoint(i, { current_a: parseFloat(e.target.value) })}
-                      InputProps={{ endAdornment: <InputAdornment position="end">A</InputAdornment> }}
-                      inputProps={{ min: 0, step: 1 }}
-                    />
-                    <TextField
-                      label="Speed"
-                      size="small"
-                      type="number"
-                      value={sweepConfig.operatingPoints[i].rpm}
-                      onChange={e => updateOperatingPoint(i, { rpm: parseFloat(e.target.value) })}
-                      InputProps={{ endAdornment: <InputAdornment position="end">RPM</InputAdornment> }}
-                      inputProps={{ min: 0, step: 100 }}
-                    />
-                  </Box>
-                </CardContent>
-              </Card>
-            ))}
-          </Box>
-
-          <Divider sx={{ mb: 2.5 }} />
-
-          <Typography variant="overline" color="text.secondary" sx={{ fontSize: 10, letterSpacing: 1, display: 'block', mb: 0.5 }}>
-            Torque Ripple Constraint
-          </Typography>
-          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1.5 }}>
-            Max allowed (T_max − T_min) / T_mean per electrical cycle
-          </Typography>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-            <Slider
-              value={sweepConfig.rippleThreshold * 100}
-              onChange={(_, v) => updateRippleThreshold((v as number) / 100)}
-              min={1} max={30} step={0.5}
-              sx={{ flex: 1 }}
-            />
-            <Typography variant="body2" sx={{ minWidth: 42, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
-              {(sweepConfig.rippleThreshold * 100).toFixed(1)}%
-            </Typography>
-          </Box>
-        </Box>
+        {/* Optimize — the ONE-NUMBER card first: max ripple → Run.  The full
+            manual optimizer is not removed, only demoted: it lives under the
+            collapsed "Advanced" section, because every knob it exposes now has a
+            standing convention behind it and re-deciding them per run is how
+            runs stop being comparable. */}
+        {/* Same gate as the variables block above: manual optimizer hidden
+            while the automatic one is being debugged (opt.showManual = "1"
+            to restore). DescentPanel stays in the bundle untouched. */}
+        {algoTab === 'optimize' && (() => {
+          try { return localStorage.getItem('opt.showManual') === '1'; }
+          catch { return false; }
+        })() && (
+          <Accordion disableGutters elevation={0}
+            sx={{ bgcolor: 'transparent', '&:before': { display: 'none' },
+                  border: '1px solid var(--border-1, rgba(255,255,255,0.12))', borderRadius: 1 }}>
+            <AccordionSummary expandIcon={<ExpandMoreIcon sx={{ fontSize: 18 }} />}
+              sx={{ minHeight: 36, '& .MuiAccordionSummary-content': { my: 0.5 } }}>
+              <Typography variant="caption" sx={{ fontWeight: 700, letterSpacing: 0.4 }}>
+                ADVANCED — manual optimizer (algorithm, weights, ranges, box-walking)
+              </Typography>
+            </AccordionSummary>
+            <AccordionDetails sx={{ pt: 0 }}>
+              <DescentPanel />
+            </AccordionDetails>
+          </Accordion>
+        )}
+        {/* Sweep study = current × γ grid → η-vs-N·m/kg performance map */}
+        {algoTab === 'sweep' && <SweepStudyPanel />}
+        {/* DOE = Latin-Hypercube screening → unbiased variable importance */}
+        {algoTab === 'doe' && <DOEPanel />}
       </Box>
+
+      {/* After a bulk change: a short way back, no confirmation dialog. */}
+      <Snackbar open={snack !== null} autoHideDuration={7000}
+        onClose={(_, reason) => { if (reason !== 'clickaway') setSnack(null); }}
+        message={snack ?? ''}
+        action={
+          <Button color="secondary" size="small" onClick={() => stepHistory('undo')}
+            sx={{ textTransform: 'none' }}>
+            {tx('optVarsUndo')}
+          </Button>
+        } />
     </Box>
   );
 };

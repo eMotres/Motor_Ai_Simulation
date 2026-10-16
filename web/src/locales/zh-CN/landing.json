@@ -1,0 +1,98 @@
+{
+  "meta": {
+    "title": "AeroStator Core — 从构想到产品，携手同行",
+    "description": "基于 AeroStator Core 电机的驱动部件设计、仿真与生产准备平台，开源（Apache-2.0），适用于航空与无人机、机器人和船舶，可接入您的 AI 智能体。"
+  },
+  "hero": {
+    "title": "从构想到产品，携手同行",
+    "agents": "接入您的 AI 智能体，一起共建",
+    "agentsHow": "了解方式",
+    "sub": "基于 AeroStator Core 电机，完成驱动部件的设计、仿真与生产准备。",
+    "signInGoogle": "使用 Google 登录",
+    "signIn": "登录",
+    "signInEmail": "邮箱登录",
+    "request": "申请访问"
+  },
+  "chain": {
+    "label": "从构想到产品",
+    "idea": "构想",
+    "design": "设计",
+    "simulation": "仿真",
+    "configure": "选型配置",
+    "model3d": "3D 模型",
+    "production": "生产",
+    "product": "产品"
+  },
+  "concept": {
+    "title": "一个平台，五个步骤",
+    "sub": "内圈：你做什么。外圈：对所有人开放的部分。",
+    "diagramAlt": "概念图。AeroStator Core 电机位于中心。五个步骤从构想通向产品：设计、仿真、选型配置、3D 模型、生产。外圈展示开放生态：开源、AI 智能体、社区模块、自有算力。",
+    "core": "AeroStator Core",
+    "design": { "sub": "几何" },
+    "simulation": { "sub": "电磁 · 热 · 应力" },
+    "configure": { "sub": "你的工作点" },
+    "model3d": { "sub": "查看 · 简化版 STEP 现可下载" },
+    "production": { "sub": "订购或授权" },
+    "open": { "title": "开源", "sub": "Apache-2.0" },
+    "agents": { "title": "AI 智能体", "sub": "MCP 服务器" },
+    "modules": { "title": "模块", "sub": "螺旋桨、减速器……" },
+    "compute": { "title": "自有算力", "sub": "接入你的服务器" }
+  },
+  "steps": {
+    "design": "按你的任务设定电机几何。",
+    "simulation": "电磁、热和机械有限元耦合仿真。",
+    "configure": "按工作点选择电机，并配置冷却、螺旋桨、电池和控制器。",
+    "model3d": "所有人现在都可查看简化模型并下载简化版 STEP。签署保密协议并完成账户核验后，可查看完整结构和工具并下载完整 STEP。",
+    "production": "向 MOTRES 订购电机，或获取非独占制造许可。"
+  },
+  "sim": {
+    "title": "仿真",
+    "sub": "同一台电机，三种物理场，同一个工作点。",
+    "em": "电磁有限元",
+    "emAlt": "永磁电机磁通密度图：完整截面，十块磁体周围十二个槽，按 |B| 从 0 到 2.4 特斯拉着色，叠加有限元网格，右侧为色标。",
+    "emHint": "一台 200 mm 电机在额定工况下的磁通密度 |B|，叠加求解所用的有限元网格。已求解的一半旋转复制为整圈，这正是求解本身假定的周期性。",
+    "thermal": "热与工作循环",
+    "thermalAlt": "同一完整截面的温度图，从外壳 69 °C 到转子 135 °C，叠加有限元网格，右侧为色标。",
+    "thermalHint": "同一台电机的温度，叠加有限元网格，与同一次计算的损耗耦合。已求解的一半同样复制为整圈。",
+    "mech": "机械仿真",
+    "mechAlt": "同一转子在护套下的变形图：整圈，包括护套、磁体和转子铁心，按高速下各点位移着色，范围 7 到 146 微米，叠加有限元网格，右侧为色标，形状经过放大以便看清弯曲。",
+    "mechHint": "高速下的转子及其护套，叠加有限元网格，按位移 |u| 着色。形状放大 22 倍以便看清弯曲。"
+  },
+  "open": {
+    "title": "开放且免费",
+    "sub": "软件采用 Apache-2.0。任何人及其 AI 智能体都可以接入，解决自己的问题。",
+    "source": { "title": "开源", "text": "可阅读、可分叉、可自行运行。" },
+    "agents": { "title": "AI 智能体", "text": "通过 MCP 服务器，你的智能体可以设计、仿真和选型。" },
+    "modules": { "title": "开放模块", "text": "螺旋桨、减速器、控制器、电池：用组件 SDK 添加你的模块。" },
+    "compute": { "title": "自有算力", "text": "大型计算可接入你自己的服务器。" }
+  },
+  "apps": {
+    "title": "应用领域",
+    "sub": "凡是电机驱动之处，都可使用同一个平台。",
+    "aviation": { "title": "航空与无人机", "text": "电机、螺旋桨和电池一并选型。" },
+    "robotics": { "title": "机器人", "text": "紧凑的关节电机，含工作循环热校核。" },
+    "marine": { "title": "船舶", "text": "船用驱动，从电机到螺旋桨。" },
+    "yours": { "title": "你的应用", "text": "描述你的任务，平台完成选型计算。" }
+  },
+  "start": {
+    "title": "如何开始",
+    "everyone": { "title": "所有人", "text": "使用 Google 登录，然后在选型配置中挑选电机。" },
+    "engineers": { "title": "工程师", "text": "运行你自己的仿真。工程师角色可按需申请。", "link": "申请工程师角色" },
+    "developers": { "title": "开发者与智能体" },
+    "links": {
+      "github": "GitHub 源代码",
+      "sdk": "组件 SDK",
+      "rules": "模块贡献规则",
+      "byo": "接入自有算力",
+      "mcp": "面向智能体的 MCP 服务器"
+    }
+  },
+  "cta": { "title": "准备好试用了吗？" },
+  "footer": {
+    "licence": "软件采用 Apache-2.0。AeroStator Core 电机技术正在申请专利；制造需获得 MOTRES 的许可。",
+    "company": "MOTRES d.o.o."
+  },
+  "static": {
+    "slow": "交互式应用加载时间较长。本页无需它也可使用：请点击上方链接、刷新页面，或发送邮件至"
+  }
+}

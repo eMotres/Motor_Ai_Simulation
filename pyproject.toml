@@ -5,39 +5,81 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "electric-motor-ai-simulator"
 version = "0.1.0"
-description = "Physics-Informed Neural Network for Electric Motor Simulation"
+description = "2-D FEM electric-motor design platform (scikit-fem + gmsh, FastAPI)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "MIT"}
+license = {text = "Apache-2.0"}
 authors = [
-    {name = "Motor AI Team"}
+    {name = "MOTRES d.o.o."}
 ]
-keywords = ["physics", "neural-network", "electric-motor", "simulation"]
+keywords = ["fem", "finite-element", "electric-motor", "simulation", "design"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Physics",
 ]
 
+# Runtime deps for the FEM design platform. The authoritative, pinned list the
+# deploy images install is requirements.txt; this mirrors the core for editable
+# installs.  NOTE: no torch / hydra / omegaconf / tensordict — the NVIDIA Modulus
+# (PINN) path was removed; the active solver is scikit-fem (CPU FEM).
+# Aligned 2026-09-30 with requirements.txt (deploy/compute-worker/Dockerfile
+# runtime-deps fix): this list used to miss sympy, meshio, scikit-learn,
+# pillow, psutil, reportlab, python-docx, openpyxl, pyjwt, pydantic, cma,
+# anthropic, mcp, cadquery-ocp and python-multipart — every one of them a
+# mandatory (non-optional) entry in requirements.txt, so an editable install
+# from this list alone could not even `import motor_ai_sim.simulation`
+# (ModuleNotFoundError: sympy). pypardiso stays out: it is genuinely
+# optional there too (requirements-pardiso.txt), which maps to the `pardiso`
+# extra below.  Triangle was removed on 2026-10-03.
 dependencies = [
-    "torch>=2.0",
     "numpy>=1.24",
+    "scipy>=1.11",
     "matplotlib>=3.7",
-    "hydra-core>=1.3",
-    "omegaconf>=2.3",
-    "tensordict>=0.2",
     "pyyaml>=6.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.23.0",
+    "pydantic>=2.0",
+    "python-multipart>=0.0.9",
+    "httpx>=0.24",
+    "shapely>=2.0",
+    "scikit-fem>=10",
+    "gmsh>=4.13",
+    "netgen-mesher==6.2.2607",   # default CDT backend (LGPL-2.1), pinned
     "trimesh>=4.0",
     "cadquery>=2.4",
+    "cadquery-ocp>=7.8",
+    "argon2-cffi>=23.1",
+    "mapbox-earcut>=1.0",
+    "pyjwt[crypto]>=2.10",
+    "anthropic>=0.40",
+    "cma>=4.0",
+    "sympy>=1.13",
+    "meshio>=5.3",
+    "scikit-learn>=1.5",
+    "pillow>=10",
+    "psutil>=5.9",
+    "reportlab>=5.0",
+    "python-docx>=1.2",
+    "openpyxl>=3.1",
+    "mcp>=2.2",
 ]
 
 [project.optional-dependencies]
+# OPTIONAL: Intel MKL PARDISO accelerator.  pypardiso is BSD-3-Clause but pulls
+# proprietary Intel MKL; every solver falls back to SciPy SuperLU without it.
+pardiso = [
+    "pypardiso>=0.4.7,<0.5",
+]
+# Kept as an alias: netgen-mesher is now a core dependency (the default CDT
+# backend, LGPL-2.1).  docs/MESHER_NETGEN_2026-09-30.md
+netgen = [
+    "netgen-mesher==6.2.2607",
+]
 dev = [
     "pytest>=7.0",
     "pytest-cov>=4.0",
@@ -46,11 +88,6 @@ dev = [
     "ruff>=0.1",
     "mypy>=1.0",
 ]
-
-# PhysicsNeMo dependency - install separately:
-# pip install -e /path/to/modulus
-# or
-# pip install git+https://github.com/NVIDIA/physicsnemo.git
 
 [project.scripts]
 motor-sim = "motor_ai_sim.cli:main"
@@ -79,3 +116,7 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
+markers = [
+    # Real FEM solves — minutes, not milliseconds. Deselect with -m "not slow".
+    "slow: physics regression cases that run the actual solver",
+]

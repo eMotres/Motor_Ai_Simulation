@@ -1,0 +1,655 @@
+# ============================================================
+# Power-device card — Infineon IMCQ120R017M2H
+# CoolSiC(TM) 1200 V SiC MOSFET G2, Q-DPAK top-side cooled
+# Added 2026-09-23 (see IMCQ120R005M2H.yaml header for the full convention
+# note). Nothing invented; unpublished = null.
+# The doc names this part the EXCEPTION to the "negative turn-off halves
+# Eoff" rule: at -5 V its E_tot is HIGHER than at 0 V (forward-recovery
+# energy grows) — confirmed below (E_tot(0V,175)=1170 uJ < E_tot(-5V,175)=
+# 1373 uJ). The driver should default this part to V_GS(off)=0 V.
+# ============================================================
+
+part: IMCQ120R017M2H
+manufacturer: Infineon
+family: "CoolSiC MOSFET 1200 V G2"
+technology: sic_mosfet
+package: PG-HDSOP-22-U03
+package_common_name: Q-DPAK
+cooling: top_side
+marking: 12M2H017
+package_size_mm:
+  source: "Datasheet Figure 1 (section 5, Package outlines), MAX column — same package group as IMCQ120R004M2H"
+  length_mm: 15.10
+  width_mm: 21.11
+  height_mm: 2.35
+  body_width_mm: 15.50
+  lead_pitch_mm: 1.14
+  leads: 22
+weight_g: null
+
+# ── footprint (PCB side; owner 2026-09-26, Task 9) ─────────────────────
+# Read by the Controller catalogue's "fits the selected board" filter, not
+# by the loss model. Unpublished / not-yet-transcribed = null + a note.
+footprint:
+  package_outline_id: PG-HDSOP-22-U03
+  outline_source: >-
+    Datasheet Figure 1 (section 5, Package outlines), PG-HDSOP-22-U03
+  land_pattern_ref: null
+  land_pattern_note: >-
+    NOT TRANSCRIBED. The datasheet could not be opened when this block was
+    added (infineon.com unreachable from that session), so whether its Package
+    outlines section carries a land-pattern / footprint figure is unchecked.
+    Fill in 'Figure N, page P' from the datasheet, or write that the datasheet
+    has none.
+  body_height_mm: 2.35
+  body_height_source: >-
+    Datasheet Figure 1 (section 5), dimension A (seating plane to top of tab),
+    MAX column
+  top_tab_mm: null
+  top_tab_note: >-
+    NOT TRANSCRIBED. package_size_mm carries body D, overall E, body E1 and
+    height A from Figure 1 but not the top cooling tab's own length x width,
+    and the datasheet could not be re-opened when this block was added. null
+    is NOT 'same as the rest of the group'.
+  compatibility_group: qdpak_750_1200
+  compatibility_basis: >-
+    Owner, 2026-09-26 (Task 9): PG-HDSOP-22-U01 (750 V G2) and PG-HDSOP-22-U03
+    (1200 V G2) share one land pattern and differ in the top tab. NOT a
+    datasheet statement and not checked against the two land-pattern drawings.
+    The cards' own Figure 1 MAX columns agree on D 15.10, E1 15.50, A 2.35, e
+    1.14, N 22 and differ in overall E (lead tip to lead tip): U01 21.06, U03
+    21.11 mm.
+datasheet_revision: "1.10, 2025-10-13"
+datasheet_url: "https://www.infineon.com/dgdl/Infineon-IMCQ120R017M2H-DataSheet-v01_00-EN.pdf?fileId=8ac78c8c93dda25b0194da4fa2fa4240"
+
+ratings:
+  source: "Datasheet Table 2 (Maximum rated values); T_vj from Table 4"
+  v_dss_V: 1200
+  i_d_continuous:
+    - {t_case_c: 25,  i_a: 118, basis: table}
+    - {t_case_c: 100, i_a: 84,  basis: table}
+  i_d_pulsed_A: 420
+  p_tot_W:
+    - {t_case_c: 25,  p_w: 580, basis: table}
+    - {t_case_c: 100, p_w: 290, basis: table}
+  t_j_max_c: 175
+  t_j_overload_c: 200
+  t_storage_c: {min: -55, max: 150}
+  v_gs_transient_V: {min: -10, max: 25}
+  v_gs_static_V:    {min: -7,  max: 23}
+  e_as_mJ: 508                 # I_D = 40 A, V_DD = 50 V, L = 0.6 mH
+  e_ar_mJ: 2.54
+  t_sc_us: 2
+
+gate:
+  source: "Datasheet Table 3 and Table 4"
+  v_gs_on_recommended_V:  {min: 15, max: 18}
+  v_gs_off_recommended_V: {min: -5, max: 0}
+  v_gs_th_V: {min: 3.5, typ: 4.2, max: 5.1, at_t_j_c: 25,
+              note: "I_D = 12.7 mA, V_DS = V_GS; typ 3.2 V at T_vj = 175 degC"}
+  q_g_nC: 91.1                 # V_DD = 800 V, I_D = 40 A, V_GS = -2/18 V
+  q_gs_pl_nC: 22.4
+  q_gd_nC: 20.6
+  r_g_internal_ohm: 2.9
+  r_g_ext_datasheet_ohm: 2.3
+  l_sigma_nH: 15
+
+r_ds_on:
+  source: "Datasheet Table 4 (T_vj = 25/150/175 degC at V_GS = 18 V; 25 degC at V_GS = 15 V), R_DS(on) = f(T_vj) figure, I_D = 40 A"
+  measured_at_i_d_A: 40
+  curves:
+    - v_gs_on_V: 18
+      points:
+        - {t_j_c: 25,  r_mohm: 17.1, basis: table, anchor: true}
+        - {t_j_c: 150, r_mohm: 35,   basis: table, anchor: true, r_mohm_max: 45}
+        - {t_j_c: 175, r_mohm: 40.6, basis: table, anchor: true}
+    - v_gs_on_V: 15
+      points:
+        - {t_j_c: 25,  r_mohm: 21.4, basis: table, anchor: true}
+
+capacitance:
+  source: "Datasheet Table 4; f = 100 kHz, V_AC = 25 mV, V_GS = 0 V"
+  at_v_ds_V: 800
+  c_iss_pF: 3730
+  c_oss_pF: 126
+  c_rss_pF: 11
+  c_o_er_pF: 166
+  c_o_tr_pF: 245
+  e_oss_uJ: 53
+  q_oss_nC: 196
+  e_oss_rule: "E_oss(V) = 0.5 * c_o_er * V^2   [AN2025-10 eq. (11), rearranged]"
+
+switching:
+  source: >-
+    Datasheet Table 4 (E_on/E_off/E_tot, T_vj = 25/175 degC) and Table 6
+    (E_fr); current dependence from the figure "E = f(I_D), T_vj = 175 degC,
+    R_G,ext = 2.3 ohm, V_DD = 800 V" (x-axis 20-80 A) — 3-point sparse read.
+  v_dd_ref_V: 800
+  i_d_ref_A: 40
+  r_g_ext_ref_ohm: 2.3
+  scaling:
+    voltage_exponent: 1.8
+    voltage_exponent_fr: 1.0
+    voltage_exponent_source: >-
+      2026-09-27 ASSUMPTION: the CoolSiC G2 family figure of IMCQ120R004M2H
+      (E_on/E_off ~V^1.8, E_fr ~V^1.0); this part's own E = f(V_DD) figure is not digitised.
+    r_g_slope_rel_on_per_ohm: 0.148
+    r_g_slope_rel_off_per_ohm: 0.215
+    r_g_slope_source: >-
+      2026-09-27 ASSUMPTION: the relative slope of IMCQ120R004M2H's figure
+      "E = f(R_G,ext)" (same G2 technology, same test circuit); this part's own figure
+      is not digitised. Supersedes the proportional r_g_rule below.
+    voltage_rule: "E(V_dc) = E(800 V) * (V_dc / 800)^1.0 — first-order hard-switching rule, ASSUMPTION as on IMCQ120R004M2H."
+    current_rule: "Linear interpolation between the tabulated points of `curves`."
+    temperature_rule: "Linear interpolation between the 25 degC and 175 degC curve sets."
+    r_g_rule: "Linear in R_G,ext through the datasheet point (2.3 ohm); E_fr held at its 2.3 ohm value."
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 175
+      e_on_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[20, 430], [40, 590], [80, 1030]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 175 degC = 590 uJ"
+      e_off_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[20, 60], [40, 180], [80, 500]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 175 degC = 180 uJ"
+      e_fr_uJ:
+        basis: figure
+        tolerance_pct: 18
+        points: [[20, 200], [40, 400], [80, 900]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 175 degC = 400 uJ"
+    - v_gs_off_V: 0
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[40, 330]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 4, E_on at T_vj = 25 degC = 330 uJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+      e_off_uJ:
+        basis: table
+        points: [[40, 110]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 4, E_off at T_vj = 25 degC = 110 uJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+      e_fr_uJ:
+        basis: table
+        points: [[40, 140]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 6, E_fr at T_vj = 25 degC = 140 uJ"
+        shape_from: {v_gs_off_V: 0, t_j_c: 175}
+    - v_gs_off_V: -5
+      t_j_c: 175
+      e_on_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[20, 480], [40, 602], [80, 1400]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 175 degC = 602 uJ"
+      e_off_uJ:
+        basis: figure
+        tolerance_pct: 15
+        points: [[20, 20], [40, 88], [80, 250]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 175 degC = 88 uJ"
+      e_fr_uJ:
+        basis: figure
+        tolerance_pct: 18
+        points: [[20, 300], [40, 683], [80, 1600]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 175 degC = 683 uJ"
+    - v_gs_off_V: -5
+      t_j_c: 25
+      e_on_uJ:
+        basis: table
+        points: [[40, 308]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 4, E_on at -5 V, T_vj = 25 degC = 308 uJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+      e_off_uJ:
+        basis: table
+        points: [[40, 80]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 4, E_off at -5 V, T_vj = 25 degC = 80 uJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+      e_fr_uJ:
+        basis: table
+        points: [[40, 197]]
+        anchor_i_d_A: 40
+        anchor_source: "Datasheet Table 6, E_fr at -5 V, T_vj = 25 degC = 197 uJ"
+        shape_from: {v_gs_off_V: -5, t_j_c: 175}
+  times_ns:
+    source: "Datasheet Table 4, V_DD = 800 V, I_D = 40 A, V_GS = 0/18 V, R_G,ext = 2.3 ohm"
+    t_d_on:  {t_j_25: 10,   t_j_175: 7.4}
+    t_r:     {t_j_25: 6,    t_j_175: 5.3}
+    t_d_off: {t_j_25: 20.8, t_j_175: 24.4}
+    t_f:     {t_j_25: 8.9,  t_j_175: 10.5}
+
+third_quadrant:
+  source: "Datasheet Table 6 (V_SD at I_SD = 40 A, V_GS = 0 V) — figure not digitized (scope decision, see IMCQ120R005M2H.yaml)"
+  i_sd_continuous:
+    - {t_case_c: 25,  i_a: 99,   basis: table}
+    - {t_case_c: 100, i_a: 56.6, basis: table}
+  i_sm_A: 252
+  v_sd_at_40A:
+    - {t_j_c: 25,  v: 4.2, basis: table, v_max: 5.5}
+    - {t_j_c: 100, v: 4.1, basis: table}
+    - {t_j_c: 175, v: 4.0, basis: table}
+  q_fr_uC: {t_j_25: 0.33, t_j_175: 0.99}
+  i_frm_A: {t_j_25: 44,   t_j_175: 81}
+  curves:
+    - v_gs_off_V: 0
+      t_j_c: 175
+      basis: table
+      anchor_note: "Table 6 anchor (4.0 V / 40 A) plus the physical origin; the I_SD = f(V_SD) figure was not digitized."
+      points: [[0.0, 0.0], [4.0, 40]]
+  channel_on_note: "At V_GS = 15...18 V the third quadrant is the CHANNEL; the curve above applies only in dead time."
+
+thermal:
+  source: "Datasheet Table 1 (Package, Characteristic values)"
+  r_th_jc_k_w: {typ: 0.20, max: 0.26}
+  r_th_jc_note: "MOSFET/body diode, junction-case; the case is the TOP-SIDE tab"
+  r_th_ja_k_w: {max: 62}
+  z_th_jc_curve: null
+
+# >>> switching_table — generated by motor_ai_sim.inverter.spice.table; do not edit by hand
+switching_source: spice
+switching_table:
+  basis: spice:CoolSiC_1200V_Gen2_Trench_MOSFET_L1_L3.lib@f0ce84eb1cf5:IMCQ120R017M2H_L1
+  lib_sha256: f0ce84eb1cf5fe1cc84759a017b2d07ec5faa97b2384d68fc02620c3c1cf8c97
+  lib_file: CoolSiC_1200V_Gen2_Trench_MOSFET_L1_L3.lib
+  subckt: IMCQ120R017M2H_L1
+  simulator: ngspice (dll) C:\Program Files\KiCad\10.0\bin\ngspice.dll, ngbehavior=psa, DDT() translated
+    to an implicit capacitor sense
+  circuit: 'datasheet Fig. F double pulse: DUT low side, identical high side freewheeling in its body
+    diode, L_sigma split 1/2 + 1/2, isothermal L1 model at .temp = T_j'
+  switched_current: I_off = I_on = the load current in the gap (freewheel current averaged over its last
+    150 ns)
+  windows: 'E_off/E_on: datasheet Fig. C (10 % V_DS to 10 % I_D / 10 % I_D to 10 % V_DS); E_fr: freewheeling
+    device V*I over t_fr of Fig. B (zero crossing to 10 % I_frm)'
+  generated: '2026-09-27'
+  note: 'THE switching basis of this device (owner 2026-09-27: every motor on SPICE, uniformly); the datasheet
+    path is the labelled fallback only'
+  row_columns:
+  - V_dc
+  - T_j
+  - I_off
+  - E_off_uJ
+  - I_on
+  - E_on_uJ
+  - E_fr_uJ
+  failed_points: 0
+  l_sigma_default_nH: 15.0
+  validation:
+    status: deviates
+    limit_pct: 15.0
+    deviates: true
+    worst_pct: -37.2
+    worst: E_off -37 % at 175 degC, V_GS(off) 0 V
+    line: model deviates from datasheet by -37 % (E_off, 175 degC)
+    rows:
+    - energy: E_on
+      t_j_c: 25.0
+      v_gs_off_V: 0.0
+      dev_pct: 13.0
+    - energy: E_off
+      t_j_c: 25.0
+      v_gs_off_V: 0.0
+      dev_pct: -10.5
+    - energy: E_tot
+      t_j_c: 25.0
+      v_gs_off_V: 0.0
+      dev_pct: -4.8
+    - energy: E_on
+      t_j_c: 175.0
+      v_gs_off_V: 0.0
+      dev_pct: 2.1
+    - energy: E_off
+      t_j_c: 175.0
+      v_gs_off_V: 0.0
+      dev_pct: -37.2
+    - energy: E_tot
+      t_j_c: 175.0
+      v_gs_off_V: 0.0
+      dev_pct: -4.1
+    source: scripts/spice_validate_devices.py -> _runs/validation.json (2026-09-23)
+  sets:
+  - v_gs_on_V: 18.0
+    v_gs_off_V: 0.0
+    r_g_on_ohm: 2.3
+    r_g_off_ohm: 2.3
+    l_sigma_nH: 15.0
+    l_gate_nH: 2.0
+    c_sigma_pF: 20.0
+    dropped_runs: 0
+    rows:
+      - [375, 25, 4.919, 0.02, 4.919, 41.03, 48.09]
+      - [375, 25, 19.988, 13.59, 19.988, 61.73, 50.64]
+      - [375, 25, 39.908, 40.64, 39.908, 109.27, 54.04]
+      - [375, 25, 59.596, 81.52, 59.596, 154.9, 54.27]
+      - [375, 125, 4.897, 4.03, 4.897, 42, 62.71]
+      - [375, 125, 19.999, 11.82, 19.999, 73.68, 103.57]
+      - [375, 125, 39.925, 42.71, 39.925, 131.57, 154.69]
+      - [375, 125, 59.579, 90.42, 59.579, 192.48, 203.38]
+      - [375, 175, 4.899, 3.74, 4.899, 42.19, 69.91]
+      - [375, 175, 20.043, 11.13, 20.043, 81.15, 131.38]
+      - [375, 175, 39.906, 42.76, 39.906, 137.24, 206.35]
+      - [375, 175, 59.61, 92.2, 59.61, 207.62, 282.75]
+      - [750.4, 25, 5.007, 2.76, 5.007, 133.29, 72.01]
+      - [750.4, 25, 20.095, 51.53, 20.095, 205.65, 74.07]
+      - [750.4, 25, 40.018, 87.8, 40.018, 324.68, 76.69]
+      - [750.4, 25, 59.887, 166.13, 59.887, 467.5, 78.87]
+      - [750.4, 125, 4.982, 17.3, 4.982, 142.84, 98.16]
+      - [750.4, 125, 20.159, 49.94, 20.159, 273.07, 178.15]
+      - [750.4, 125, 40.014, 97.95, 40.014, 472.33, 267.1]
+      - [750.4, 125, 60, 182.28, 60, 709.7, 364.88]
+      - [750.4, 175, 4.992, 26.82, 4.992, 148.7, 116.72]
+      - [750.4, 175, 20.15, 49.02, 20.15, 298.8, 229.13]
+      - [750.4, 175, 40.034, 102.43, 40.034, 529.14, 379.28]
+      - [750.4, 175, 59.992, 189.21, 59.992, 797.58, 547.62]
+  - v_gs_on_V: 18.0
+    v_gs_off_V: 0.0
+    r_g_on_ohm: 10.0
+    r_g_off_ohm: 10.0
+    l_sigma_nH: 15.0
+    l_gate_nH: 2.0
+    c_sigma_pF: 20.0
+    dropped_runs: 0
+    rows:
+      - [375, 25, 5.011, 17.11, 5.011, 59.86, 21.55]
+      - [375, 25, 20.347, 63.48, 20.347, 117.74, 25.42]
+      - [375, 25, 40.239, 167.18, 40.239, 198.08, 27.92]
+      - [375, 25, 59.933, 297.35, 59.933, 288.12, 29.92]
+      - [375, 125, 5.04, 16.56, 5.04, 63.08, 29.25]
+      - [375, 125, 20.445, 70.38, 20.445, 136.94, 55.93]
+      - [375, 125, 40.418, 181.88, 40.418, 245.76, 92.52]
+      - [375, 125, 60.159, 319.35, 60.159, 367.3, 128.9]
+      - [375, 175, 5.053, 17.73, 5.053, 64.37, 33.54]
+      - [375, 175, 20.48, 74.02, 20.48, 144.48, 73.97]
+      - [375, 175, 40.484, 188.85, 40.484, 262.13, 131.06]
+      - [375, 175, 60.228, 330.67, 60.228, 394.17, 188.8]
+      - [750.4, 25, 5.084, 48.56, 5.084, 161.5, 55.51]
+      - [750.4, 25, 20.552, 180.15, 20.552, 324.55, 35.36]
+      - [750.4, 25, 40.691, 442.98, 40.691, 561.21, 39.16]
+      - [750.4, 25, 60.667, 746.96, 60.667, 815.42, 39.97]
+      - [750.4, 125, 5.114, 50.55, 5.114, 178.55, 80.81]
+      - [750.4, 125, 20.658, 203.87, 20.658, 405.91, 124.31]
+      - [750.4, 125, 40.889, 488.72, 40.889, 737.64, 198.07]
+      - [750.4, 125, 60.929, 812.03, 60.929, 1110.5, 274.13]
+      - [750.4, 175, 5.124, 51.93, 5.124, 187.08, 95.94]
+      - [750.4, 175, 20.712, 216.43, 20.712, 441.59, 172.54]
+      - [750.4, 175, 40.969, 512.79, 40.969, 815.02, 280.48]
+      - [750.4, 175, 61.029, 845.35, 61.029, 1237.85, 411.82]
+static_table:
+  basis: spice:CoolSiC_1200V_Gen2_Trench_MOSFET_L1_L3.lib@f0ce84eb1cf5:IMCQ120R017M2H_L1
+  lib_sha256: f0ce84eb1cf5fe1cc84759a017b2d07ec5faa97b2384d68fc02620c3c1cf8c97
+  simulator: ngspice (dll) C:\Program Files\KiCad\10.0\bin\ngspice.dll, ngbehavior=psa, DDT() translated
+    to an implicit capacitor sense
+  circuit: DC sweep of the device current (voltage-driven where the current-driven operating point does
+    not converge), isothermal at T_j
+  generated: '2026-09-27'
+  row_columns:
+  - V_GS
+  - T_j
+  - I
+  - V_kelvin
+  - V_power_pin
+  notes: []
+  forward:
+    - [18, 25, 4, 0.062997, 0.066787]
+    - [18, 25, 8, 0.126, 0.133579]
+    - [18, 25, 12, 0.189012, 0.200381]
+    - [18, 25, 16, 0.252038, 0.267196]
+    - [18, 25, 20, 0.315078, 0.334027]
+    - [18, 25, 24, 0.378137, 0.400875]
+    - [18, 25, 28, 0.441216, 0.467744]
+    - [18, 25, 32, 0.504316, 0.534634]
+    - [18, 25, 36, 0.567441, 0.601548]
+    - [18, 25, 40, 0.630591, 0.668488]
+    - [18, 25, 44, 0.693769, 0.735455]
+    - [18, 25, 48, 0.756976, 0.802452]
+    - [18, 25, 52, 0.820214, 0.86948]
+    - [18, 25, 56, 0.883484, 0.93654]
+    - [18, 25, 60, 0.946788, 1.00363]
+    - [18, 25, 64, 1.01013, 1.07076]
+    - [18, 75, 4, 0.083417, 0.087207]
+    - [18, 75, 8, 0.166839, 0.174419]
+    - [18, 75, 12, 0.25027, 0.261639]
+    - [18, 75, 16, 0.333712, 0.348871]
+    - [18, 75, 20, 0.417168, 0.436116]
+    - [18, 75, 24, 0.50064, 0.523378]
+    - [18, 75, 28, 0.584129, 0.610657]
+    - [18, 75, 32, 0.667637, 0.697955]
+    - [18, 75, 36, 0.751167, 0.785274]
+    - [18, 75, 40, 0.834719, 0.872616]
+    - [18, 75, 44, 0.918296, 0.959983]
+    - [18, 75, 48, 1.0019, 1.04737]
+    - [18, 75, 52, 1.08553, 1.13479]
+    - [18, 75, 56, 1.16919, 1.22224]
+    - [18, 75, 60, 1.25287, 1.30972]
+    - [18, 75, 64, 1.33659, 1.39723]
+    - [18, 125, 4, 0.114729, 0.118519]
+    - [18, 125, 8, 0.229462, 0.237042]
+    - [18, 125, 12, 0.344203, 0.355572]
+    - [18, 125, 16, 0.458954, 0.474113]
+    - [18, 125, 20, 0.573718, 0.592666]
+    - [18, 125, 24, 0.688495, 0.711233]
+    - [18, 125, 28, 0.803288, 0.829816]
+    - [18, 125, 32, 0.918099, 0.948416]
+    - [18, 125, 36, 1.03293, 1.06703]
+    - [18, 125, 40, 1.14778, 1.18567]
+    - [18, 125, 44, 1.26265, 1.30434]
+    - [18, 125, 48, 1.37754, 1.42302]
+    - [18, 125, 52, 1.49246, 1.54173]
+    - [18, 125, 56, 1.6074, 1.66046]
+    - [18, 125, 60, 1.72237, 1.77922]
+    - [18, 125, 64, 1.83737, 1.89801]
+    - [18, 150, 4, 0.134464, 0.138253]
+    - [18, 150, 8, 0.268931, 0.276511]
+    - [18, 150, 12, 0.403406, 0.414775]
+    - [18, 150, 16, 0.537891, 0.55305]
+    - [18, 150, 20, 0.672387, 0.691336]
+    - [18, 150, 24, 0.806897, 0.829635]
+    - [18, 150, 28, 0.941422, 0.967949]
+    - [18, 150, 32, 1.07596, 1.10628]
+    - [18, 150, 36, 1.21052, 1.24463]
+    - [18, 150, 40, 1.3451, 1.383]
+    - [18, 150, 44, 1.4797, 1.52138]
+    - [18, 150, 48, 1.61432, 1.65979]
+    - [18, 150, 52, 1.74896, 1.79822]
+    - [18, 150, 56, 1.88363, 1.93668]
+    - [18, 150, 60, 2.01832, 2.07516]
+    - [18, 150, 64, 2.15304, 2.21367]
+    - [18, 175, 4, 0.156915, 0.160705]
+    - [18, 175, 8, 0.313834, 0.321413]
+    - [18, 175, 12, 0.47076, 0.482129]
+    - [18, 175, 16, 0.627695, 0.642853]
+    - [18, 175, 20, 0.784641, 0.803589]
+    - [18, 175, 24, 0.941599, 0.964338]
+    - [18, 175, 28, 1.09857, 1.1251]
+    - [18, 175, 32, 1.25556, 1.28588]
+    - [18, 175, 36, 1.41257, 1.44667]
+    - [18, 175, 40, 1.56959, 1.60749]
+    - [18, 175, 44, 1.72663, 1.76832]
+    - [18, 175, 48, 1.88369, 1.92917]
+    - [18, 175, 52, 2.04078, 2.09005]
+    - [18, 175, 56, 2.19789, 2.25094]
+    - [18, 175, 60, 2.35502, 2.41186]
+    - [18, 175, 64, 2.51218, 2.57281]
+  third_quadrant:
+    - [0, 25, 4, 2.68951, 2.6933]
+    - [0, 25, 8, 2.97919, 2.98677]
+    - [0, 25, 12, 3.19889, 3.21026]
+    - [0, 25, 16, 3.38528, 3.40044]
+    - [0, 25, 20, 3.54969, 3.56864]
+    - [0, 25, 24, 3.69843, 3.72117]
+    - [0, 25, 28, 3.83528, 3.86181]
+    - [0, 25, 32, 3.96272, 3.99303]
+    - [0, 25, 36, 4.08606, 4.12016]
+    - [0, 25, 40, 4.19859, 4.23649]
+    - [0, 25, 44, 4.30601, 4.34769]
+    - [0, 25, 48, 4.40873, 4.4542]
+    - [0, 25, 52, 4.50733, 4.5566]
+    - [0, 25, 56, 4.60227, 4.65533]
+    - [0, 25, 60, 4.69393, 4.75078]
+    - [0, 25, 64, 4.78263, 4.84327]
+    - [-5, 25, 4, 3.39388, 3.39767]
+    - [-5, 25, 8, 3.68186, 3.68944]
+    - [-5, 25, 12, 3.90326, 3.91463]
+    - [-5, 25, 16, 4.08965, 4.10481]
+    - [-5, 25, 20, 4.25406, 4.27301]
+    - [-5, 25, 24, 4.4028, 4.42554]
+    - [-5, 25, 28, 4.53965, 4.56618]
+    - [-5, 25, 32, 4.66709, 4.6974]
+    - [-5, 25, 36, 4.78682, 4.82093]
+    - [-5, 25, 40, 4.90011, 4.93801]
+    - [-5, 25, 44, 5.00791, 5.04959]
+    - [-5, 25, 48, 5.11094, 5.15641]
+    - [-5, 25, 52, 5.20979, 5.25905]
+    - [-5, 25, 56, 5.30493, 5.35799]
+    - [-5, 25, 60, 5.39676, 5.45361]
+    - [-5, 25, 64, 5.48561, 5.54624]
+    - [0, 75, 4, 2.68509, 2.68888]
+    - [0, 75, 8, 2.95824, 2.96582]
+    - [0, 75, 12, 3.16542, 3.17679]
+    - [0, 75, 16, 3.3412, 3.35636]
+    - [0, 75, 20, 3.49625, 3.5152]
+    - [0, 75, 24, 3.63653, 3.65927]
+    - [0, 75, 28, 3.7656, 3.79212]
+    - [0, 75, 32, 3.88579, 3.9161]
+    - [0, 75, 36, 4.00212, 4.03622]
+    - [0, 75, 40, 4.10826, 4.14615]
+    - [0, 75, 44, 4.20958, 4.25126]
+    - [0, 75, 48, 4.30647, 4.35194]
+    - [0, 75, 52, 4.39947, 4.44874]
+    - [0, 75, 56, 4.48903, 4.54209]
+    - [0, 75, 60, 4.57549, 4.63234]
+    - [0, 75, 64, 4.65916, 4.7198]
+    - [-5, 75, 4, 3.35424, 3.35803]
+    - [-5, 75, 8, 3.62579, 3.63337]
+    - [-5, 75, 12, 3.83458, 3.84595]
+    - [-5, 75, 16, 4.01035, 4.02551]
+    - [-5, 75, 20, 4.1654, 4.18435]
+    - [-5, 75, 24, 4.30568, 4.32842]
+    - [-5, 75, 28, 4.43475, 4.46128]
+    - [-5, 75, 32, 4.55494, 4.58526]
+    - [-5, 75, 36, 4.66787, 4.70198]
+    - [-5, 75, 40, 4.77473, 4.81262]
+    - [-5, 75, 44, 4.8764, 4.91809]
+    - [-5, 75, 48, 4.97358, 5.01906]
+    - [-5, 75, 52, 5.06682, 5.11609]
+    - [-5, 75, 56, 5.15657, 5.20963]
+    - [-5, 75, 60, 5.2432, 5.30004]
+    - [-5, 75, 64, 5.327, 5.38764]
+    - [0, 125, 4, 2.68677, 2.69056]
+    - [0, 125, 8, 2.94595, 2.95353]
+    - [0, 125, 12, 3.14254, 3.1539]
+    - [0, 125, 16, 3.30933, 3.32449]
+    - [0, 125, 20, 3.45647, 3.47542]
+    - [0, 125, 24, 3.58959, 3.61233]
+    - [0, 125, 28, 3.71207, 3.7386]
+    - [0, 125, 32, 3.82613, 3.85645]
+    - [0, 125, 36, 3.93654, 3.97064]
+    - [0, 125, 40, 4.03727, 4.07516]
+    - [0, 125, 44, 4.13343, 4.17511]
+    - [0, 125, 48, 4.22539, 4.27086]
+    - [0, 125, 52, 4.31366, 4.36293]
+    - [0, 125, 56, 4.39866, 4.45172]
+    - [0, 125, 60, 4.48072, 4.53757]
+    - [0, 125, 64, 4.56014, 4.62078]
+    - [-5, 125, 4, 3.32071, 3.3245]
+    - [-5, 125, 8, 3.57836, 3.58594]
+    - [-5, 125, 12, 3.77648, 3.78784]
+    - [-5, 125, 16, 3.94326, 3.95842]
+    - [-5, 125, 20, 4.0904, 4.10935]
+    - [-5, 125, 24, 4.22352, 4.24626]
+    - [-5, 125, 28, 4.346, 4.37253]
+    - [-5, 125, 32, 4.46007, 4.49038]
+    - [-5, 125, 36, 4.56724, 4.60135]
+    - [-5, 125, 40, 4.66866, 4.70655]
+    - [-5, 125, 44, 4.76515, 4.80684]
+    - [-5, 125, 48, 4.85738, 4.90286]
+    - [-5, 125, 52, 4.94588, 4.99515]
+    - [-5, 125, 56, 5.03106, 5.08412]
+    - [-5, 125, 60, 5.11328, 5.17013]
+    - [-5, 125, 64, 5.19283, 5.25346]
+    - [0, 150, 4, 2.68944, 2.69323]
+    - [0, 150, 8, 2.94239, 2.94997]
+    - [0, 150, 12, 3.13426, 3.14563]
+    - [0, 150, 16, 3.29705, 3.31221]
+    - [0, 150, 20, 3.44067, 3.45961]
+    - [0, 150, 24, 3.57059, 3.59333]
+    - [0, 150, 28, 3.69014, 3.71667]
+    - [0, 150, 32, 3.80148, 3.83179]
+    - [0, 150, 36, 3.90923, 3.94334]
+    - [0, 150, 40, 4.00756, 4.04545]
+    - [0, 150, 44, 4.10142, 4.14311]
+    - [0, 150, 48, 4.19118, 4.23666]
+    - [0, 150, 52, 4.27735, 4.32661]
+    - [0, 150, 56, 4.36031, 4.41337]
+    - [0, 150, 60, 4.44042, 4.49727]
+    - [0, 150, 64, 4.51794, 4.57858]
+    - [-5, 150, 4, 3.30577, 3.30956]
+    - [-5, 150, 8, 3.55723, 3.56481]
+    - [-5, 150, 12, 3.75059, 3.76196]
+    - [-5, 150, 16, 3.91338, 3.92854]
+    - [-5, 150, 20, 4.05699, 4.07594]
+    - [-5, 150, 24, 4.18692, 4.20965]
+    - [-5, 150, 28, 4.30647, 4.333]
+    - [-5, 150, 32, 4.4178, 4.44812]
+    - [-5, 150, 36, 4.52241, 4.55652]
+    - [-5, 150, 40, 4.6214, 4.6593]
+    - [-5, 150, 44, 4.71559, 4.75727]
+    - [-5, 150, 48, 4.80562, 4.85109]
+    - [-5, 150, 52, 4.892, 4.94126]
+    - [-5, 150, 56, 4.97515, 5.0282]
+    - [-5, 150, 60, 5.0554, 5.11225]
+    - [-5, 150, 64, 5.13305, 5.19369]
+    - [0, 175, 4, 2.69314, 2.69693]
+    - [0, 175, 8, 2.9403, 2.94788]
+    - [0, 175, 12, 3.12777, 3.13914]
+    - [0, 175, 16, 3.28684, 3.302]
+    - [0, 175, 20, 3.42717, 3.44611]
+    - [0, 175, 24, 3.55412, 3.57686]
+    - [0, 175, 28, 3.67094, 3.69747]
+    - [0, 175, 32, 3.78346, 3.81378]
+    - [0, 175, 36, 3.88481, 3.91891]
+    - [0, 175, 40, 3.98113, 4.01902]
+    - [0, 175, 44, 4.07283, 4.11452]
+    - [0, 175, 48, 4.16055, 4.20603]
+    - [0, 175, 52, 4.24475, 4.29402]
+    - [0, 175, 56, 4.32583, 4.37889]
+    - [0, 175, 60, 4.40411, 4.46096]
+    - [0, 175, 64, 4.47987, 4.54051]
+    - [-5, 175, 4, 3.29186, 3.29565]
+    - [-5, 175, 8, 3.53901, 3.54659]
+    - [-5, 175, 12, 3.72648, 3.73785]
+    - [-5, 175, 16, 3.88555, 3.90071]
+    - [-5, 175, 20, 4.02588, 4.04483]
+    - [-5, 175, 24, 4.15284, 4.17558]
+    - [-5, 175, 28, 4.26966, 4.29619]
+    - [-5, 175, 32, 4.37845, 4.40876]
+    - [-5, 175, 36, 4.48067, 4.51478]
+    - [-5, 175, 40, 4.5774, 4.6153]
+    - [-5, 175, 44, 4.66944, 4.71113]
+    - [-5, 175, 48, 4.75742, 4.8029]
+    - [-5, 175, 52, 4.84183, 4.8911]
+    - [-5, 175, 56, 4.92309, 4.97614]
+    - [-5, 175, 60, 5.00152, 5.05836]
+    - [-5, 175, 64, 5.0774, 5.13803]
+# <<< switching_table
+
+# -- catalog envelope (catalog stage 1, 2026-09-28) ------------------------
+# Identity, status and revision of this card for the common catalogue browser;
+# the loss model ignores it.  Sources and per-field provenance are DERIVED by
+# motor_ai_sim.catalog from datasheet_url / datasheet_file / datasheet_revision,
+# every block's `source` line and each point's `basis` (table | figure).
+catalog:
+  status: active
+  revision: {n: 1, date: "2026-09-28", by: catalog-stage-1, why: "envelope added"}

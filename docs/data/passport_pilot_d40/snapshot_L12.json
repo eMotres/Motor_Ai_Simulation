@@ -1,0 +1,1852 @@
+{
+ "schema": "passport-v1-snapshot-1",
+ "tag": "L12",
+ "die": "CIANO14 40 new",
+ "configuration": "L12",
+ "role": "motor",
+ "geometry": {
+  "stator_diameter": 40,
+  "slot_height": 6.1,
+  "core_thickness": 1.9,
+  "num_seg": 2,
+  "num_slots_per_segment": 6,
+  "num_poles_per_segment": 7,
+  "air_gap": 0.2,
+  "tooth_width": 3.3,
+  "tooth2_width": 1.7,
+  "cut_width": 1,
+  "insulation_thickness": 0.06,
+  "wire_width": 2.5,
+  "wire_height": 0.6,
+  "wire_spacing_x": 0.1,
+  "wire_spacing_y": 0.1,
+  "num_wires_per_slot": 7,
+  "wire_split": 1,
+  "slot_hs": 0.267,
+  "magnet_height": 5.7,
+  "rotor_house_height": 1.1,
+  "shaft_height": 2,
+  "magnet_fill_down": 0.85,
+  "magnet_fill_up": 0.34,
+  "magnet_fill_radius": 0.2,
+  "magnet_up_gap": 0.1,
+  "rotor_hole": 0.9,
+  "magnet_down_height": 1,
+  "magnet_lamination": 0,
+  "stator_fillet_r": 1.1,
+  "stator_fillet_r1": 0.15,
+  "rotor_fill_r": 0,
+  "motor_length": 12,
+  "stator_outer_radius": 20.0,
+  "stator_inner_radius": 12.000000000000002,
+  "num_slots": 12,
+  "num_poles": 14,
+  "angle_slot": 30.0,
+  "angle_pole": 25.714285714285715,
+  "slot_pitch": 0.5235987755982988,
+  "pole_pitch": 0.4487989505128276,
+  "rotor_outer_radius": 11.800000000000002,
+  "rotor_inner_radius": 5.000000000000002,
+  "slot_width": 2.8200000000000003,
+  "sleeve_thickness": 0,
+  "wire_parallel": 1
+ },
+ "winding": {
+  "n_coils_per_phase": 4,
+  "connection": "2S",
+  "n_parallel": 1,
+  "n_series": 2,
+  "layers": 1,
+  "star_delta": "star"
+ },
+ "materials": {
+  "magnet": {
+   "name": "F52SH_120C",
+   "source": "configuration"
+  },
+  "stator_core": {
+   "name": "20SW1200",
+   "source": "configuration"
+  },
+  "rotor_core": {
+   "name": "20SW1200",
+   "source": "configuration"
+  },
+  "shaft": {
+   "name": "Steel_42CrMo4_QT",
+   "source": "owner workspace motor_config.yaml (left in place by a duty load)"
+  },
+  "sleeve": {
+   "name": "M40X_UD_60",
+   "source": "owner workspace motor_config.yaml (left in place by a duty load)"
+  },
+  "slot": {
+   "name": "copper",
+   "source": "owner workspace motor_config.yaml (left in place by a duty load)"
+  },
+  "slot_insulation": {
+   "name": "Nomex",
+   "source": "absent-part default (routes.family._ABSENT_MATERIALS)"
+  },
+  "wire_insulation": {
+   "name": "polyimide",
+   "source": "absent-part default (routes.family._ABSENT_MATERIALS)"
+  },
+  "air_gap": {
+   "name": "air",
+   "source": "air placeholder (always air)"
+  },
+  "in_band": {
+   "name": "air",
+   "source": "air placeholder (always air)"
+  },
+  "out_band": {
+   "name": "air",
+   "source": "air placeholder (always air)"
+  }
+ },
+ "material_cards": {
+  "20SW1200": {
+   "section": "steel",
+   "card": {
+    "description": "JFE Steel 20SW1200 \u2014 non-oriented electrical steel, 0.20 mm (2025 meas.)",
+    "form": "lamination",
+    "stacking_factor": 0.95,
+    "sigma": 0,
+    "density": 7650,
+    "youngs_modulus_gpa": 200,
+    "poisson_ratio": 0.3,
+    "cte_ppm_k": 12.0,
+    "yield_strength_mpa": 350,
+    "thermal_conductivity": null,
+    "specific_heat": null,
+    "core_loss_model": "bertotti",
+    "core_loss_kh": 139.921979119876,
+    "core_loss_kc": 0.201729356570559,
+    "core_loss_ke": 0.0,
+    "core_loss_curve_unit": "w_per_kg",
+    "bh_curve": [
+     [
+      0,
+      0.0
+     ],
+     [
+      10,
+      0.025
+     ],
+     [
+      20,
+      0.066
+     ],
+     [
+      30,
+      0.133
+     ],
+     [
+      40,
+      0.243
+     ],
+     [
+      50,
+      0.402
+     ],
+     [
+      60,
+      0.564
+     ],
+     [
+      70,
+      0.704
+     ],
+     [
+      80,
+      0.814
+     ],
+     [
+      90,
+      0.901
+     ],
+     [
+      100,
+      0.969
+     ],
+     [
+      120,
+      1.067
+     ],
+     [
+      140,
+      1.113
+     ],
+     [
+      160,
+      1.18
+     ],
+     [
+      180,
+      1.214
+     ],
+     [
+      200,
+      1.241
+     ],
+     [
+      300,
+      1.317
+     ],
+     [
+      400,
+      1.356
+     ],
+     [
+      500,
+      1.38
+     ],
+     [
+      600,
+      1.398
+     ],
+     [
+      700,
+      1.413
+     ],
+     [
+      800,
+      1.427
+     ],
+     [
+      900,
+      1.436
+     ],
+     [
+      1000,
+      1.445
+     ],
+     [
+      1500,
+      1.484
+     ],
+     [
+      2030,
+      1.515
+     ],
+     [
+      2500,
+      1.541
+     ],
+     [
+      3000,
+      1.563
+     ],
+     [
+      4000,
+      1.603
+     ],
+     [
+      5000,
+      1.639
+     ],
+     [
+      6000,
+      1.67
+     ],
+     [
+      7000,
+      1.7
+     ],
+     [
+      8000,
+      1.724
+     ],
+     [
+      9000,
+      1.748
+     ],
+     [
+      10000,
+      1.77
+     ],
+     [
+      12000,
+      1.804
+     ],
+     [
+      14000,
+      1.836
+     ],
+     [
+      16000,
+      1.863
+     ],
+     [
+      18000,
+      1.885
+     ],
+     [
+      20000,
+      1.903
+     ],
+     [
+      22000,
+      1.919
+     ],
+     [
+      24000,
+      1.931
+     ],
+     [
+      26000,
+      1.942
+     ],
+     [
+      28000,
+      1.951
+     ],
+     [
+      30000,
+      1.959
+     ],
+     [
+      35000,
+      1.975
+     ],
+     [
+      40000,
+      1.988
+     ],
+     [
+      45000,
+      2.0
+     ],
+     [
+      50000,
+      2.01
+     ]
+    ],
+    "core_loss_curves": {
+     "30Hz": [
+      [
+       0.1,
+       0.01
+      ],
+      [
+       0.15,
+       0.02
+      ],
+      [
+       0.2,
+       0.03
+      ],
+      [
+       0.25,
+       0.05
+      ],
+      [
+       0.3,
+       0.07
+      ],
+      [
+       0.35,
+       0.09
+      ],
+      [
+       0.4,
+       0.12
+      ],
+      [
+       0.45,
+       0.14
+      ],
+      [
+       0.5,
+       0.17
+      ],
+      [
+       0.55,
+       0.2
+      ],
+      [
+       0.6,
+       0.23
+      ],
+      [
+       0.65,
+       0.26
+      ],
+      [
+       0.7,
+       0.29
+      ],
+      [
+       0.75,
+       0.32
+      ],
+      [
+       0.8,
+       0.36
+      ],
+      [
+       0.85,
+       0.4
+      ],
+      [
+       0.9,
+       0.44
+      ],
+      [
+       0.95,
+       0.48
+      ],
+      [
+       1.0,
+       0.53
+      ],
+      [
+       1.05,
+       0.57
+      ],
+      [
+       1.1,
+       0.62
+      ],
+      [
+       1.15,
+       0.68
+      ],
+      [
+       1.2,
+       0.74
+      ],
+      [
+       1.25,
+       0.81
+      ],
+      [
+       1.3,
+       0.88
+      ],
+      [
+       1.35,
+       0.96
+      ],
+      [
+       1.4,
+       1.05
+      ],
+      [
+       1.45,
+       1.15
+      ],
+      [
+       1.5,
+       1.23
+      ],
+      [
+       1.55,
+       1.3
+      ],
+      [
+       1.6,
+       1.35
+      ],
+      [
+       1.65,
+       1.4
+      ],
+      [
+       1.7,
+       1.44
+      ],
+      [
+       1.75,
+       1.48
+      ],
+      [
+       1.8,
+       1.51
+      ],
+      [
+       1.85,
+       1.53
+      ]
+     ],
+     "50Hz": [
+      [
+       0.1,
+       0.01
+      ],
+      [
+       0.15,
+       0.03
+      ],
+      [
+       0.2,
+       0.06
+      ],
+      [
+       0.25,
+       0.09
+      ],
+      [
+       0.3,
+       0.12
+      ],
+      [
+       0.35,
+       0.16
+      ],
+      [
+       0.4,
+       0.2
+      ],
+      [
+       0.45,
+       0.24
+      ],
+      [
+       0.5,
+       0.29
+      ],
+      [
+       0.55,
+       0.34
+      ],
+      [
+       0.6,
+       0.39
+      ],
+      [
+       0.65,
+       0.45
+      ],
+      [
+       0.7,
+       0.5
+      ],
+      [
+       0.75,
+       0.56
+      ],
+      [
+       0.8,
+       0.63
+      ],
+      [
+       0.85,
+       0.69
+      ],
+      [
+       0.9,
+       0.76
+      ],
+      [
+       0.95,
+       0.83
+      ],
+      [
+       1.0,
+       0.91
+      ],
+      [
+       1.05,
+       1.0
+      ],
+      [
+       1.1,
+       1.08
+      ],
+      [
+       1.15,
+       1.18
+      ],
+      [
+       1.2,
+       1.28
+      ],
+      [
+       1.25,
+       1.4
+      ],
+      [
+       1.3,
+       1.53
+      ],
+      [
+       1.35,
+       1.67
+      ],
+      [
+       1.4,
+       1.83
+      ],
+      [
+       1.45,
+       1.99
+      ],
+      [
+       1.5,
+       2.12
+      ],
+      [
+       1.55,
+       2.23
+      ],
+      [
+       1.6,
+       2.32
+      ],
+      [
+       1.65,
+       2.38
+      ],
+      [
+       1.7,
+       2.44
+      ],
+      [
+       1.75,
+       2.47
+      ],
+      [
+       1.8,
+       2.52
+      ],
+      [
+       1.85,
+       2.54
+      ],
+      [
+       1.9,
+       2.6
+      ]
+     ],
+     "60Hz": [
+      [
+       0.1,
+       0.02
+      ],
+      [
+       0.15,
+       0.04
+      ],
+      [
+       0.2,
+       0.07
+      ],
+      [
+       0.25,
+       0.11
+      ],
+      [
+       0.3,
+       0.15
+      ],
+      [
+       0.35,
+       0.2
+      ],
+      [
+       0.4,
+       0.25
+      ],
+      [
+       0.45,
+       0.3
+      ],
+      [
+       0.5,
+       0.36
+      ],
+      [
+       0.55,
+       0.42
+      ],
+      [
+       0.6,
+       0.48
+      ],
+      [
+       0.65,
+       0.55
+      ],
+      [
+       0.7,
+       0.62
+      ],
+      [
+       0.75,
+       0.69
+      ],
+      [
+       0.8,
+       0.77
+      ],
+      [
+       0.85,
+       0.85
+      ],
+      [
+       0.9,
+       0.93
+      ],
+      [
+       0.95,
+       1.02
+      ],
+      [
+       1.0,
+       1.12
+      ],
+      [
+       1.05,
+       1.22
+      ],
+      [
+       1.1,
+       1.33
+      ],
+      [
+       1.15,
+       1.45
+      ],
+      [
+       1.2,
+       1.57
+      ],
+      [
+       1.25,
+       1.72
+      ],
+      [
+       1.3,
+       1.87
+      ],
+      [
+       1.35,
+       2.05
+      ],
+      [
+       1.4,
+       2.24
+      ],
+      [
+       1.45,
+       2.44
+      ],
+      [
+       1.5,
+       2.61
+      ],
+      [
+       1.55,
+       2.76
+      ],
+      [
+       1.6,
+       2.86
+      ],
+      [
+       1.65,
+       2.96
+      ],
+      [
+       1.7,
+       3.04
+      ],
+      [
+       1.75,
+       3.09
+      ],
+      [
+       1.8,
+       3.13
+      ]
+     ],
+     "100Hz": [
+      [
+       0.1,
+       0.03
+      ],
+      [
+       0.15,
+       0.07
+      ],
+      [
+       0.2,
+       0.12
+      ],
+      [
+       0.25,
+       0.19
+      ],
+      [
+       0.3,
+       0.26
+      ],
+      [
+       0.35,
+       0.34
+      ],
+      [
+       0.4,
+       0.43
+      ],
+      [
+       0.45,
+       0.53
+      ],
+      [
+       0.5,
+       0.63
+      ],
+      [
+       0.55,
+       0.74
+      ],
+      [
+       0.6,
+       0.85
+      ],
+      [
+       0.65,
+       0.97
+      ],
+      [
+       0.7,
+       1.1
+      ],
+      [
+       0.75,
+       1.23
+      ],
+      [
+       0.8,
+       1.37
+      ],
+      [
+       0.85,
+       1.51
+      ],
+      [
+       0.9,
+       1.66
+      ],
+      [
+       0.95,
+       1.83
+      ],
+      [
+       1.0,
+       2.0
+      ],
+      [
+       1.05,
+       2.18
+      ],
+      [
+       1.1,
+       2.37
+      ],
+      [
+       1.15,
+       2.58
+      ],
+      [
+       1.2,
+       2.81
+      ],
+      [
+       1.25,
+       3.07
+      ],
+      [
+       1.3,
+       3.35
+      ],
+      [
+       1.35,
+       3.67
+      ],
+      [
+       1.4,
+       4.02
+      ],
+      [
+       1.45,
+       4.37
+      ],
+      [
+       1.5,
+       4.68
+      ],
+      [
+       1.55,
+       4.9
+      ],
+      [
+       1.6,
+       5.14
+      ],
+      [
+       1.65,
+       5.27
+      ],
+      [
+       1.7,
+       5.44
+      ],
+      [
+       1.75,
+       5.53
+      ],
+      [
+       1.8,
+       5.55
+      ]
+     ],
+     "150Hz": [
+      [
+       0.1,
+       0.05
+      ],
+      [
+       0.15,
+       0.11
+      ],
+      [
+       0.2,
+       0.19
+      ],
+      [
+       0.25,
+       0.3
+      ],
+      [
+       0.3,
+       0.42
+      ],
+      [
+       0.35,
+       0.55
+      ],
+      [
+       0.4,
+       0.69
+      ],
+      [
+       0.45,
+       0.85
+      ],
+      [
+       0.5,
+       1.01
+      ],
+      [
+       0.55,
+       1.19
+      ],
+      [
+       0.6,
+       1.37
+      ],
+      [
+       0.65,
+       1.56
+      ],
+      [
+       0.7,
+       1.77
+      ],
+      [
+       0.75,
+       1.98
+      ],
+      [
+       0.8,
+       2.2
+      ],
+      [
+       0.85,
+       2.44
+      ],
+      [
+       0.9,
+       2.68
+      ],
+      [
+       0.95,
+       2.95
+      ],
+      [
+       1.0,
+       3.22
+      ],
+      [
+       1.05,
+       3.52
+      ],
+      [
+       1.1,
+       3.83
+      ],
+      [
+       1.15,
+       4.17
+      ],
+      [
+       1.2,
+       4.54
+      ],
+      [
+       1.25,
+       4.95
+      ],
+      [
+       1.3,
+       5.41
+      ],
+      [
+       1.35,
+       5.93
+      ],
+      [
+       1.4,
+       6.49
+      ],
+      [
+       1.45,
+       7.05
+      ],
+      [
+       1.5,
+       7.55
+      ],
+      [
+       1.55,
+       7.98
+      ],
+      [
+       1.6,
+       8.3
+      ],
+      [
+       1.65,
+       8.61
+      ],
+      [
+       1.7,
+       8.79
+      ],
+      [
+       1.75,
+       8.94
+      ]
+     ],
+     "200Hz": [
+      [
+       0.1,
+       0.06
+      ],
+      [
+       0.15,
+       0.15
+      ],
+      [
+       0.2,
+       0.27
+      ],
+      [
+       0.25,
+       0.42
+      ],
+      [
+       0.3,
+       0.59
+      ],
+      [
+       0.35,
+       0.78
+      ],
+      [
+       0.4,
+       0.98
+      ],
+      [
+       0.5,
+       1.44
+      ],
+      [
+       0.6,
+       1.95
+      ],
+      [
+       0.7,
+       2.51
+      ],
+      [
+       0.8,
+       3.14
+      ],
+      [
+       0.9,
+       3.83
+      ],
+      [
+       1.0,
+       4.59
+      ],
+      [
+       1.1,
+       5.46
+      ],
+      [
+       1.2,
+       6.48
+      ],
+      [
+       1.3,
+       7.71
+      ],
+      [
+       1.4,
+       9.28
+      ],
+      [
+       1.5,
+       10.86
+      ],
+      [
+       1.55,
+       11.56
+      ]
+     ],
+     "400Hz": [
+      [
+       0.3,
+       1.4
+      ],
+      [
+       0.4,
+       2.34
+      ],
+      [
+       0.5,
+       3.44
+      ],
+      [
+       0.6,
+       4.69
+      ],
+      [
+       0.7,
+       6.1
+      ],
+      [
+       0.8,
+       7.65
+      ],
+      [
+       0.9,
+       9.38
+      ],
+      [
+       1.0,
+       11.21
+      ],
+      [
+       1.1,
+       13.36
+      ],
+      [
+       1.2,
+       15.86
+      ],
+      [
+       1.3,
+       18.89
+      ],
+      [
+       1.4,
+       22.73
+      ],
+      [
+       1.5,
+       26.77
+      ],
+      [
+       1.55,
+       28.54
+      ]
+     ],
+     "500Hz": [
+      [
+       0.3,
+       1.87
+      ],
+      [
+       0.4,
+       3.13
+      ],
+      [
+       0.5,
+       4.61
+      ],
+      [
+       0.6,
+       6.3
+      ],
+      [
+       0.7,
+       8.21
+      ],
+      [
+       0.8,
+       10.34
+      ],
+      [
+       0.9,
+       12.59
+      ],
+      [
+       1.0,
+       15.2
+      ],
+      [
+       1.1,
+       18.14
+      ],
+      [
+       1.2,
+       21.54
+      ],
+      [
+       1.3,
+       25.7
+      ],
+      [
+       1.4,
+       31.11
+      ],
+      [
+       1.5,
+       37.38
+      ],
+      [
+       1.6,
+       43.82
+      ]
+     ],
+     "600Hz": [
+      [
+       0.3,
+       2.38
+      ],
+      [
+       0.4,
+       3.98
+      ],
+      [
+       0.5,
+       5.88
+      ],
+      [
+       0.6,
+       8.05
+      ],
+      [
+       0.7,
+       10.51
+      ],
+      [
+       0.8,
+       13.25
+      ],
+      [
+       0.9,
+       16.18
+      ],
+      [
+       1.0,
+       19.56
+      ],
+      [
+       1.1,
+       23.35
+      ],
+      [
+       1.2,
+       27.77
+      ],
+      [
+       1.3,
+       33.16
+      ],
+      [
+       1.4,
+       40.12
+      ],
+      [
+       1.5,
+       48.26
+      ],
+      [
+       1.6,
+       56.71
+      ]
+     ],
+     "800Hz": [
+      [
+       0.1,
+       0.37
+      ],
+      [
+       0.15,
+       0.88
+      ],
+      [
+       0.2,
+       1.59
+      ],
+      [
+       0.25,
+       2.45
+      ],
+      [
+       0.3,
+       3.46
+      ],
+      [
+       0.35,
+       4.59
+      ],
+      [
+       0.4,
+       5.84
+      ],
+      [
+       0.45,
+       7.2
+      ],
+      [
+       0.5,
+       8.68
+      ],
+      [
+       0.55,
+       10.26
+      ],
+      [
+       0.6,
+       11.95
+      ],
+      [
+       0.65,
+       13.74
+      ],
+      [
+       0.7,
+       15.65
+      ],
+      [
+       0.75,
+       17.66
+      ],
+      [
+       0.8,
+       19.66
+      ],
+      [
+       0.85,
+       21.9
+      ],
+      [
+       0.9,
+       24.26
+      ],
+      [
+       0.95,
+       26.76
+      ],
+      [
+       1.0,
+       29.42
+      ],
+      [
+       1.05,
+       32.23
+      ],
+      [
+       1.1,
+       35.23
+      ],
+      [
+       1.15,
+       38.44
+      ],
+      [
+       1.2,
+       41.97
+      ],
+      [
+       1.25,
+       45.79
+      ],
+      [
+       1.3,
+       50.11
+      ],
+      [
+       1.35,
+       55.05
+      ],
+      [
+       1.4,
+       60.66
+      ],
+      [
+       1.45,
+       66.7
+      ],
+      [
+       1.5,
+       72.98
+      ],
+      [
+       1.55,
+       79.34
+      ],
+      [
+       1.6,
+       85.96
+      ]
+     ]
+    }
+   }
+  },
+  "F52SH_120C": {
+   "section": "magnet",
+   "card": {
+    "Br": 1.27,
+    "Hc": 962525,
+    "bh_curve": [
+     [
+      -652000,
+      -0.739
+     ],
+     [
+      -649300,
+      0.0
+     ],
+     [
+      -649000,
+      0.08
+     ],
+     [
+      -647000,
+      0.249
+     ],
+     [
+      -643000,
+      0.367
+     ],
+     [
+      -638000,
+      0.397
+     ],
+     [
+      -634000,
+      0.407
+     ],
+     [
+      0,
+      1.27
+     ]
+    ],
+    "density": 7500,
+    "youngs_modulus_gpa": 160,
+    "poisson_ratio": 0.24,
+    "cte_ppm_k_1": 5.0,
+    "cte_ppm_k_2": -1.5,
+    "tensile_strength_mpa": 80,
+    "compressive_strength_mpa": 1000,
+    "description": "Sintered NdFeB magnet, F52SH grade - operating point 120 C. Same SH temperature class as F45SH_120C (J-knee at the same demagnetising field); Br scaled from the N52SH 20 C typical 1.445 T by the SH class factor 0.8815 measured on the F45SH record (1.35 -> 1.19). Hc = Br/(mu0*mu_rec).",
+    "grade": "F52SH",
+    "max_working_temp_c": 150,
+    "mu_rec": 1.05,
+    "sigma": "6.25e5",
+    "specific_heat": 460,
+    "temperature_c": 120,
+    "alpha_br_pct_per_k": -0.1344,
+    "beta_hcj_pct_per_k": -1.0,
+    "thermal_conductivity": 7.6
+   }
+  },
+  "M40X_UD_60": {
+   "section": "insulator",
+   "card": {
+    "description": "Toray M40X unidirectional CFRP, ~60 % fibre volume, hoop-wound rotor retaining sleeve. The TOUGH high-modulus option: E1 215 GPa at 2700 MPa, strain to failure ~1.5 % - the largest strain margin of the three. TYPICAL PUBLISHED VALUES - verify with the winder. sigma is the TRANSVERSE value (fibre-graphitisation scaling, rho x0.8 of T800).",
+    "sigma": 100.0,
+    "density": 1590,
+    "youngs_modulus_gpa": 215,
+    "youngs_modulus_transverse_gpa": 8.0,
+    "shear_modulus_gpa": 5.0,
+    "poisson_ratio": 0.3,
+    "cte_ppm_k_1": -0.5,
+    "cte_ppm_k_2": 30.0,
+    "tensile_strength_mpa": 2700,
+    "thermal_conductivity": 0.8,
+    "thermal_conductivity_axial": 7.0,
+    "specific_heat": 900,
+    "permeability": 1.0,
+    "max_service_temp_c": 180
+   }
+  },
+  "Nomex": {
+   "section": "insulator",
+   "card": {
+    "description": "Nomex 410 aramid paper \u2014 slot liner (ground-wall insulation).",
+    "sigma": 0.0,
+    "density": 880,
+    "thermal_conductivity": 0.14,
+    "specific_heat": 1200,
+    "permeability": 1.0
+   }
+  },
+  "Steel_42CrMo4_QT": {
+   "section": "steel",
+   "card": {
+    "description": "42CrMo4 / AISI 4140, quenched and tempered \u2014 solid alloy-steel shaft",
+    "form": "solid",
+    "sigma": 4400000.0,
+    "density": 7850,
+    "thermal_conductivity": 42,
+    "specific_heat": 470,
+    "stacking_factor": 1.0,
+    "youngs_modulus_gpa": 210,
+    "poisson_ratio": 0.3,
+    "cte_ppm_k": 12.3,
+    "yield_strength_mpa": 750,
+    "core_loss_model": "bertotti",
+    "core_loss_kh": 0.0,
+    "core_loss_kc": 0.0,
+    "core_loss_ke": 0.0,
+    "core_loss_curve_unit": "w_per_kg",
+    "bh_curve": [
+     [
+      0,
+      0.0
+     ],
+     [
+      200,
+      0.25
+     ],
+     [
+      400,
+      0.55
+     ],
+     [
+      600,
+      0.8
+     ],
+     [
+      800,
+      0.95
+     ],
+     [
+      1000,
+      1.05
+     ],
+     [
+      1500,
+      1.2
+     ],
+     [
+      2000,
+      1.3
+     ],
+     [
+      3000,
+      1.4
+     ],
+     [
+      5000,
+      1.5
+     ],
+     [
+      8000,
+      1.58
+     ],
+     [
+      12000,
+      1.66
+     ],
+     [
+      20000,
+      1.75
+     ],
+     [
+      35000,
+      1.85
+     ],
+     [
+      60000,
+      1.94
+     ],
+     [
+      100000,
+      2.02
+     ],
+     [
+      160000,
+      2.1
+     ],
+     [
+      250000,
+      2.18
+     ]
+    ]
+   }
+  },
+  "air": {
+   "section": "coolant",
+   "card": {
+    "description": "Air at ~300 K \u2014 natural / forced-convection coolant (gas).",
+    "phase": "gas",
+    "density": 1.16,
+    "specific_heat": 1007,
+    "thermal_conductivity": 0.0263,
+    "kinematic_viscosity": 1.56e-05,
+    "prandtl": 0.707,
+    "sigma": 0.0,
+    "permeability": 1.0
+   }
+  },
+  "copper": {
+   "section": "conductor",
+   "card": {
+    "description": "Pure copper \u2014 rectangular Litz wire",
+    "sigma": 58000000,
+    "density": 8933,
+    "youngs_modulus_gpa": 117,
+    "poisson_ratio": 0.34,
+    "cte_ppm_k": 17.0,
+    "yield_strength_mpa": 70,
+    "thermal_conductivity": 400,
+    "specific_heat": 385,
+    "permeability": 0.999991,
+    "wire_type": "rectangular",
+    "thermal_alpha": 0.0043
+   }
+  },
+  "polyimide": {
+   "section": "insulator",
+   "card": {
+    "description": "Polyimide wire enamel (Kapton-type magnet-wire film). Thermal only; cost bundled in wire.",
+    "sigma": 0.0,
+    "density": 1420,
+    "thermal_conductivity": 0.12,
+    "specific_heat": 1100,
+    "permeability": 1.0
+   }
+  }
+ },
+ "temperatures": {
+  "hot_magnet_c": 107.2,
+  "hot_magnet_source": "rated duty sim.magnetTempC",
+  "hot_coil_c": 100.6,
+  "hot_coil_source": "rated duty sim.coilTemp",
+  "cold_c": 20.0,
+  "cold_source": "spec \u00a78.1 (mandatory COLD = 20 \u00b0C, magnets and winding)"
+ },
+ "part_states": {
+  "stored": {},
+  "effective": "all default (included); shaft included (owner 2026-09-29)"
+ },
+ "mesh": {
+  "mesh_size_mm": 1.0,
+  "min_size_mm": 0.3,
+  "outer_air_factor": 1.2,
+  "gap_layers": 1.0,
+  "n_sectors": 2,
+  "component_mesh_mm": {},
+  "iron_template": true,
+  "geo_mesh": true,
+  "pole_copy": false,
+  "structured_gap": true,
+  "structured_gap_requested": true,
+  "not_consumed": {
+   "mesh.rotorAngle": 0
+  }
+ },
+ "rated_duty": {
+  "name": "rated",
+  "mode": "motor",
+  "current_arms": 42.78,
+  "rpm": 13000.0,
+  "gamma_deg": 10.0,
+  "star_delta": "star",
+  "coil_temp_c": 100.6,
+  "magnet_temp_c": 107.2,
+  "end_winding_factor": 1.759,
+  "steps_per_period": 36,
+  "eddy_coupled": true,
+  "demag": true,
+  "drive": "current",
+  "connection": "2S",
+  "mesh": {
+   "mesh_size_mm": 1.0,
+   "min_size_mm": 0.3,
+   "outer_air_factor": 1.2,
+   "gap_layers": 1.0,
+   "n_sectors": 2,
+   "component_mesh_mm": {},
+   "iron_template": true,
+   "geo_mesh": true,
+   "pole_copy": false,
+   "structured_gap": true,
+   "structured_gap_requested": true,
+   "not_consumed": {
+    "mesh.rotorAngle": 0
+   }
+  },
+  "saved_at": "2026-09-09T08:12:23",
+  "stored_geo_sig": null,
+  "stored_summary": {
+   "T_em_avg_Nm": 0.623,
+   "T_ripple_pct": 6.098553056982946,
+   "P_loss_total_W": 65.9,
+   "P_core_W": 9.3,
+   "P_stranded_W": 53.5,
+   "P_solid_W": 3.1,
+   "P_mag_W": 3.1,
+   "efficiency": 0.928,
+   "efficiency_shaft": 0.9278,
+   "V_line_peak_V": 18.5,
+   "V1_LL_V": 17.4,
+   "R_phase_ohm": 0.008945,
+   "psi_pm_Wb": 0.001003,
+   "Ld_mH": 0.0065,
+   "Lq_mH": 0.0059,
+   "coil_temp_C": 100.6,
+   "end_winding_factor": 1.76,
+   "torque_method": null,
+   "n_steps_per_period": 36
+  }
+ },
+ "peak_duty": {
+  "name": "peak",
+  "mode": "motor",
+  "current_arms": 48.79,
+  "rpm": 14400.0,
+  "gamma_deg": 10.0,
+  "star_delta": "star",
+  "coil_temp_c": 200.0,
+  "magnet_temp_c": null,
+  "end_winding_factor": 1.759,
+  "steps_per_period": 36,
+  "eddy_coupled": true,
+  "demag": true,
+  "drive": "current",
+  "connection": "2S",
+  "mesh": {
+   "mesh_size_mm": 1.0,
+   "min_size_mm": 0.3,
+   "outer_air_factor": 1.2,
+   "gap_layers": 1.0,
+   "n_sectors": 2,
+   "component_mesh_mm": {
+    "coil_rel": 0.5
+   },
+   "iron_template": true,
+   "geo_mesh": true,
+   "pole_copy": false,
+   "structured_gap": true,
+   "structured_gap_requested": true,
+   "not_consumed": {
+    "mesh.rotorAngle": 0
+   }
+  },
+  "saved_at": "2026-08-31T16:52:27",
+  "stored_geo_sig": "air_gap:0.2|angle_pole:25.714285714285715|angle_slot:30|core_thickness:1.9|cut_width:1|insulation_thickness:0.06|magnet_down_height:1|magnet_fill_down:0.85|magnet_fill_radius:0.2|magnet_fill_up:0.34|magnet_height:5.7|magnet_lamination:0|magnet_up_gap:0.1|motor_length:12|num_poles:14|num_poles_per_segment:7|num_seg:2|num_slots:12|num_slots_per_segment:6|num_wires_per_slot:7|pole_pitch:0.4487989505128276|rotor_fill_r:0|rotor_hole:0.9|rotor_house_height:1.1|rotor_inner_radius:5.000000000000002|rotor_outer_radius:11.800000000000002|shaft_diameter:5|shaft_height:2|slot_height:6.1|slot_hs:0.267|slot_pitch:0.5235987755982988|slot_width:2.8200000000000003|stator_diameter:40|stator_fillet_r:1.1|stator_fillet_r1:0.1|stator_inner_radius:12.000000000000002|stator_outer_radius:20|tooth2_width:1.7|tooth_width:3.3|wire_height:0.6|wire_spacing_x:0.1|wire_spacing_y:0.1|wire_split:1|wire_width:2.5",
+  "stored_summary": {
+   "T_em_avg_Nm": 0.7,
+   "T_ripple_pct": 3.6339890502509946,
+   "P_loss_total_W": 101.9,
+   "P_core_W": 10.8,
+   "P_stranded_W": 87.2,
+   "P_solid_W": 3.9,
+   "P_mag_W": null,
+   "efficiency": 0.9119,
+   "efficiency_shaft": null,
+   "V_line_peak_V": 20.6,
+   "V1_LL_V": 19.55,
+   "R_phase_ohm": 0.011598,
+   "psi_pm_Wb": 0.001,
+   "Ld_mH": 0.0075,
+   "Lq_mH": 0.0059,
+   "coil_temp_C": 200,
+   "end_winding_factor": 1.76,
+   "torque_method": null,
+   "n_steps_per_period": 36
+  }
+ },
+ "battery": {
+  "chemistry": "NMC",
+  "cells": 6,
+  "v_cell_min": 3.0,
+  "v_cell_nom": 3.7,
+  "v_cell_max": 4.2,
+  "v_min": 18.0,
+  "v_nom": 22.2,
+  "v_max": 25.2
+ },
+ "bearings": {
+  "A": {
+   "card": "618/8-2Z"
+  },
+  "B": {
+   "card": "618/8-2Z"
+  },
+  "lubrication": "grease",
+  "preload_n": 0.0,
+  "temp_source": "thermal",
+  "temp_c": 70.0
+ },
+ "owner_inputs": {
+  "version": "6S",
+  "bus_V": [
+   18.0,
+   22.2,
+   25.2
+  ],
+  "rated": {
+   "rpm": 13000.0,
+   "I_arms": 42.78
+  },
+  "peak": {
+   "rpm": 14400.0,
+   "I_arms": 48.79
+  },
+  "decided": "owner 2026-10-05 brief"
+ },
+ "source_files": {
+  "die.yaml": "b5d3119a5b13372f7bada48580c52a027ec8c65f99c5cf26eb6e91e7ab2d3a7a",
+  "L12.yaml": "caba13329584349b768e062143972795ab09892774bc9f676df39760ea6ea4d8",
+  "ws_motor_config.yaml": "208ff8fa0e45496dd91c0a7a3727c0432e2b8c28faf50063d34091155e942142",
+  "materials_library.yaml": "80b269b6ab344458409fd7c56ee9e0e84c58fed0af4211f4af14f022d9b80136",
+  "bearings_library.yaml": "4253297016ed6df7217a331ee89443d2e0705e62761105a0cd04d26d74ea814d",
+  "origin": "/srv/motres/workspaces/c309c100cd421858/dies/CIANO14 40 new/ + /srv/motres/shared/{materials,bearings}_library.yaml, copied read-only 2026-10-05"
+ },
+ "signatures": {
+  "geometry_sig": "713d68a176b97360f34a9d512d85cf3262f30bfd76d2e19ebae1dafa6eb3310f",
+  "winding_sig": "af3d04bece7f95ac85e8487320eca05bb7a1460f4923e351044e60f8ab51fbc5",
+  "materials_sig": "7cae09c102b712be855a6fe991b4b5138087929a81e60583ea23660a336ad877",
+  "thermal_sig": "5ac8e69ddb465d7725318038a1089386a97cca4150bb4bf9a0347fb174a44e07",
+  "bus_sig": "653a56cdd1188273b1f5e2ec07beb1f790fc6f70bb61b7ad15cadc7aec8f5ca5",
+  "mesh_sig": "a92c814f4c429ee8515996a71360ad4e0be36425391eaeef013dcfaf51d4f478",
+  "duty_sig": "e6f5f7ee2e29bb6317449d76967e54fcd08f4ac220ceb2605a7944e169d3b9a6",
+  "part_states_sig": "7741aa1edab7c8d540c60d10713ea7faa80c21a038993ab2529cc09e142349c7"
+ },
+ "sandbox_config_sha256": "50fd6b369b9740f456ed23f55577fca91a8f8d61d62e6e04d061a0d91be139b8",
+ "snapshot_sha256": "685206ed5b28e44c55a1d32a9ffd9734a9ccc3dc5be678143f8165e45ed93eea"
+}

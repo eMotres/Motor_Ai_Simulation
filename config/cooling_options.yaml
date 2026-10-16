@@ -1,0 +1,51 @@
+# Per-die cooling options (read by motor_ai_sim.cooling_options; see its docstring).
+# A die with no entry is unrestricted: every cooling mode stays on offer.
+#
+# CIANO14 40 new (configurations L12 6S and L20 12S) is a drone motor: air-cooled
+# only, and the only airflow is the propeller's own slipstream (owner, 2026-10-05).
+# The allowed propellers are the T-Motor entries of 10-13 in that have usable test
+# data (config/propellers/tmotor/); geometry-only entries are not offered.
+# Entries marked "estimated power" have thrust measured but C_P estimated.
+# motres_bench_hq1050_3 is the propeller the L12 ran on the MOTRES bench (HQ1050-3, measured
+# there, config/propellers/motres/); the L12's S1 slipstream factor is fitted on those runs.
+version: 1
+dies:
+  "CIANO14 40 new":
+    cooling_options: [propeller_air]
+    propellers:
+      - motres_bench_hq1050_3  # 10.5 in, 3 blades, torque measured on the MOTRES bench
+      - tmotor_fpv_10x5        # 10 in, 3 blades, torque measured
+      - tmotor_cf10x3_3        # 10 in, thrust measured, estimated power
+      - tmotor_cf11x3_7        # 11 in, thrust measured, estimated power
+      - tmotor_p12x4           # 12 in, torque measured
+      - tmotor_p13x4_4         # 13 in, torque measured
+      - tmotor_fpv_13x10       # 13 in, 3 blades, torque measured
+      - tmotor_fpv_13x12       # 13 in, 3 blades, torque measured
+    # the propeller each configuration opens on (owner 2026-10-05); Configure's picker takes it on
+    # loading the configuration and on "reset to preset", and still lets the user change it
+    defaults:
+      L12: motres_bench_hq1050_3  # 6S: the bench propeller (2026-10-12; was tmotor_fpv_10x5)
+      L20: tmotor_p13x4_4      # 12S: P13x4.4
+
+  # CIANO28 85 20SW1200 (configuration L13, 12S): one motor, two uses (owner 2026-10-05,
+  # "this variant can be used for robots with one cooling and for propellers with
+  # another"). robotics = the robot-joint still-air mode (natural convection + radiation
+  # + heat path into the mount + end faces); propeller_air = the propeller's slipstream.
+  # Configure shows a cooling selector because there are two; robotics is listed first,
+  # so it is the one in force until the user picks the propeller.
+  # Propellers: T-Motor G-series 28-40 in with measured torque whose torque at 1000-2400
+  # rpm lies inside this motor's range (docs/PASSPORT_D85_2026-10-05.md).
+  "CIANO28 85 20SW1200":
+    cooling_options: [robotics, propeller_air]
+    propellers:
+      - tmotor_g28x9_2         # 28 in, torque measured (U8 II KV100, 12S), tested 1896-3709 rpm
+      - tmotor_g30x10_5        # 30 in, torque measured (U13 II KV65), tested 2679-4654 rpm
+      - tmotor_g32x11          # 32 in, torque measured (U13 II KV65), tested 2485-4397 rpm
+      - tmotor_g36x11_5        # 36 in, torque measured (U15 II KV100), tested 2595-4328 rpm
+      - tmotor_g40x13_1        # 40 in, torque measured (U15 II KV80/KV100), tested 1843-3546 rpm
+    defaults:
+      # proposed — owner to confirm: the largest CONTINUOUS thrust of the four on this motor
+      # (~1930 rpm, ~50 N in the card's lumped propeller-air estimate; G40x13.1 reaches more
+      # thrust only for short periods). Below 2485 rpm its coefficients are held at the
+      # tested edge (extrapolated, flagged in Configure).
+      L13: tmotor_g32x11

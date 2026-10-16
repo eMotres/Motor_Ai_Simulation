@@ -1,0 +1,151 @@
+{
+  "case": "p2_eddy",
+  "status": "passed",
+  "parameters": {
+    "n_steps_per_period": 12,
+    "n_periods": 1.0,
+    "mesh_size_mm": 1.4,
+    "min_size_mm": 0.35,
+    "gap_layers": 1.0,
+    "n_sectors": 2,
+    "structured_gap": true,
+    "iron_template": true,
+    "geo_mesh": true,
+    "coil_temp_c": 120.0,
+    "rotor_eddy": true,
+    "element_order": 2,
+    "demag": false,
+    "eddy": true,
+    "I_phase_rms": 60.0,
+    "gamma_deg": 0.0
+  },
+  "actual_metrics": {
+    "T_avg_Nm": 0.41005623077135883,
+    "T_ripple_pct": 0.38354030930438837,
+    "P_cu_W": 110.50002609774417,
+    "P_fe_W": 4.929093234514911,
+    "V_peak": 7.901594053855815,
+    "T_avg_maxwell_Nm": 0.406941688697341,
+    "P_cu_total_solve_W": 65.507,
+    "P_cu_ac_solve_W": 3.274,
+    "P_mag_solve_W": 1.486,
+    "P_shaft_solve_W": 0.013,
+    "P_mag_honest_W": 1.643,
+    "P_shaft_honest_W": 0.566
+  },
+  "baseline_metrics": {
+    "P_cu_W": 110.4996065314955,
+    "P_cu_ac_solve_W": 3.274,
+    "P_cu_total_solve_W": 65.506,
+    "P_fe_W": 4.930332980389385,
+    "P_mag_honest_W": 1.643,
+    "P_mag_solve_W": 1.486,
+    "P_shaft_honest_W": 0.566,
+    "P_shaft_solve_W": 0.013,
+    "T_avg_Nm": 0.4100507273119193,
+    "T_avg_maxwell_Nm": 0.4069,
+    "T_ripple_pct": 0.3834803241873678,
+    "V_peak": 7.901697142132795
+  },
+  "comparisons": {
+    "P_cu_W": {
+      "actual": 110.50002609774417,
+      "baseline": 110.4996065314955,
+      "difference": 0.00041956624866656966,
+      "relative_change_pct": 0.0003796993146278593,
+      "tolerance": 0.5524980326574775,
+      "within_existing_tolerance": true
+    },
+    "P_cu_ac_solve_W": {
+      "actual": 3.274,
+      "baseline": 3.274,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.01637,
+      "within_existing_tolerance": true
+    },
+    "P_cu_total_solve_W": {
+      "actual": 65.507,
+      "baseline": 65.506,
+      "difference": 0.0010000000000047748,
+      "relative_change_pct": 0.001526577718078916,
+      "tolerance": 0.32753,
+      "within_existing_tolerance": true
+    },
+    "P_fe_W": {
+      "actual": 4.929093234514911,
+      "baseline": 4.930332980389385,
+      "difference": -0.0012397458744732859,
+      "relative_change_pct": -0.025145276787682077,
+      "tolerance": 0.024651664901946924,
+      "within_existing_tolerance": true
+    },
+    "P_mag_honest_W": {
+      "actual": 1.643,
+      "baseline": 1.643,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.008215,
+      "within_existing_tolerance": true
+    },
+    "P_mag_solve_W": {
+      "actual": 1.486,
+      "baseline": 1.486,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.00743,
+      "within_existing_tolerance": true
+    },
+    "P_shaft_honest_W": {
+      "actual": 0.566,
+      "baseline": 0.566,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "P_shaft_solve_W": {
+      "actual": 0.013,
+      "baseline": 0.013,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "T_avg_Nm": {
+      "actual": 0.41005623077135883,
+      "baseline": 0.4100507273119193,
+      "difference": 5.503459439504255e-06,
+      "relative_change_pct": 0.0013421411237536612,
+      "tolerance": 0.002050253636559597,
+      "within_existing_tolerance": true
+    },
+    "T_avg_maxwell_Nm": {
+      "actual": 0.406941688697341,
+      "baseline": 0.4069,
+      "difference": 4.1688697341002445e-05,
+      "relative_change_pct": 0.010245440486852407,
+      "tolerance": 0.0020345,
+      "within_existing_tolerance": true
+    },
+    "T_ripple_pct": {
+      "actual": 0.38354030930438837,
+      "baseline": 0.3834803241873678,
+      "difference": 5.998511702054454e-05,
+      "relative_change_pct": 0.01564229329044687,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "V_peak": {
+      "actual": 7.901594053855815,
+      "baseline": 7.901697142132795,
+      "difference": -0.00010308827697969036,
+      "relative_change_pct": -0.0013046346262755545,
+      "tolerance": 0.039508485710663975,
+      "within_existing_tolerance": true
+    }
+  },
+  "run_id": "20260916T204913.918167Z",
+  "wall_seconds": 11.282745499993325,
+  "cpu_seconds": 11.21875
+}

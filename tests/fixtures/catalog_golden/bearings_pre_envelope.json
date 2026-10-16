@@ -1,0 +1,674 @@
+{
+ "bearings": {
+  "6010-2RZ/HC5C3": {
+   "B": 16,
+   "C0_kn": "16.6",
+   "C_kn": "22.9",
+   "D": 80,
+   "balls": "ceramic",
+   "contact_angle_deg": null,
+   "d": 50,
+   "d_m": 65,
+   "default_lubricant": "LGHP_2",
+   "description": "SKF 6010-2RZ/HC5C3 — hybrid DEEP GROOVE with low-friction seals; the 'does not reach the speed' comparison",
+   "friction": {
+    "K_z": "3.1",
+    "R1": "4.3e-07",
+    "S1": "0.00425",
+    "ball_density_ratio": "0.408",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 6300,
+   "n_limit_oil_air_rpm": null,
+   "name": "6010-2RZ/HC5C3",
+   "note": "Carried on purpose as the counter-example: identical envelope to the 7010 CE/HCP4A, ceramic balls too, and it still cannot go near 23 000 rpm — the seals cap it at ~6 300 rpm. Compare its speed check against the angular-contact cards to see that the limit is a SEAL, not a ball.",
+   "seal_beta": "2.25",
+   "seal_ds": null,
+   "seal_ks1": "0.018",
+   "seal_ks2": 20,
+   "seals": "low_friction",
+   "stiffness_n_per_m": "130000000.0",
+   "type": "deep_groove"
+  },
+  "618/8-2Z": {
+   "B": 4,
+   "C0_kn": "0.585",
+   "C_kn": "1.33",
+   "D": 16,
+   "balls": "steel",
+   "contact_angle_deg": null,
+   "d": 8,
+   "d_m": 12,
+   "default_lubricant": "MT47",
+   "description": "SKF 618/8-2Z — miniature deep groove, series 618, metal shields both sides (the 40 mm motor)",
+   "friction": {
+    "K_z": "3.1",
+    "R1": "4.7e-07",
+    "S1": "0.0065",
+    "ball_density_ratio": "1.0",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 45000,
+   "n_limit_oil_air_rpm": null,
+   "name": "618/8-2Z",
+   "note": "Shielded, so there is no seal term at all and the whole loss is the rolling term: a few milliwatts. The opposite regime to the sealed cards above.",
+   "seal_beta": null,
+   "seal_ds": null,
+   "seal_ks1": null,
+   "seal_ks2": null,
+   "seals": "shields",
+   "stiffness_n_per_m": "15000000.0",
+   "type": "deep_groove"
+  },
+  "61811-2RS1": {
+   "B": 9,
+   "C0_kn": "8.15",
+   "C_kn": "9.56",
+   "D": 72,
+   "balls": "steel",
+   "contact_angle_deg": null,
+   "d": 55,
+   "d_m": "63.5",
+   "default_lubricant": "MT47",
+   "description": "SKF 61811-2RS1 — deep groove, series 618 (thin section), contact seals both sides",
+   "friction": {
+    "K_z": "3.1",
+    "R1": "4.7e-07",
+    "S1": "0.0065",
+    "ball_density_ratio": "1.0",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 3800,
+   "n_limit_oil_air_rpm": null,
+   "name": "61811-2RS1",
+   "note": "The bearings of the real 150 mm 24s/28p. Model vs measurement: 0.400 N.m predicted for the pair at 2000 rpm, 0.387 +/- 0.025 N.m returned by the free-run fit (docs/measurements/2026-08-04_noload_decomposition_150mm.md). 98 % of that torque is seal drag, so P_bearing is very nearly linear in speed.",
+   "seal_beta": "2.25",
+   "seal_ds": "59.5",
+   "seal_ks1": "0.018",
+   "seal_ks2": 20,
+   "seals": "contact",
+   "stiffness_n_per_m": "100000000.0",
+   "type": "deep_groove"
+  },
+  "61811-2Z": {
+   "B": 9,
+   "C0_kn": "8.15",
+   "C_kn": "9.56",
+   "D": 72,
+   "balls": "steel",
+   "contact_angle_deg": null,
+   "d": 55,
+   "d_m": "63.5",
+   "default_lubricant": "MT47",
+   "description": "SKF 61811-2Z — deep groove, series 618 (thin section), metal shields both sides (the 150 mm motors, user 2026-09-08)",
+   "friction": {
+    "K_z": "3.1",
+    "R1": "4.7e-07",
+    "S1": "0.0065",
+    "ball_density_ratio": "1.0",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 8500,
+   "n_limit_oil_air_rpm": null,
+   "name": "61811-2Z",
+   "note": "Same rings and balls as the validated 61811-2RS1 card, with non-contact shields: no seal term, so the pair's torque at 2000 rpm falls from about 0.40 N.m to the rolling + sliding share alone.  Not bench-validated.",
+   "seal_beta": null,
+   "seal_ds": null,
+   "seal_ks1": null,
+   "seal_ks2": null,
+   "seals": "shields",
+   "stiffness_n_per_m": "100000000.0",
+   "type": "deep_groove"
+  },
+  "61814-2RS1": {
+   "B": 10,
+   "C0_kn": "11.4",
+   "C_kn": "11.9",
+   "D": 90,
+   "balls": "steel",
+   "contact_angle_deg": null,
+   "d": 70,
+   "d_m": 80,
+   "default_lubricant": "MT47",
+   "description": "SKF 61814-2RS1 — deep groove, series 618, contact seals both sides (the G2 motor)",
+   "friction": {
+    "K_z": "3.1",
+    "R1": "4.7e-07",
+    "S1": "0.0065",
+    "ball_density_ratio": "1.0",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 3000,
+   "n_limit_oil_air_rpm": null,
+   "name": "61814-2RS1",
+   "note": "Same family and the same seal drag mechanism as the 61811 above, one size up. On a sealed bearing the seals are the loss: at 3000 rpm they are far more than the rolling term, so a speed the seal can take is the design question, not the load rating.",
+   "seal_beta": "2.25",
+   "seal_ds": null,
+   "seal_ks1": "0.018",
+   "seal_ks2": 20,
+   "seals": "contact",
+   "stiffness_n_per_m": "120000000.0",
+   "type": "deep_groove"
+  },
+  "7010 CE/HCP4A": {
+   "B": 16,
+   "C0_kn": "19.0",
+   "C_kn": "24.2",
+   "D": 80,
+   "balls": "ceramic",
+   "contact_angle_deg": 15,
+   "d": 50,
+   "d_m": 65,
+   "default_lubricant": "LGLT_2",
+   "description": "SKF 7010 CE/HCP4A — super-precision angular contact 15 deg, hybrid ceramic balls, open, 70-series section",
+   "friction": {
+    "K_z": "4.4",
+    "R1": "5.03e-07",
+    "R2": "1.97",
+    "R3": "1.9e-12",
+    "S1": "0.013",
+    "S2": "0.68",
+    "ball_density_ratio": "0.408",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 19000,
+   "n_limit_oil_air_rpm": 30000,
+   "name": "7010 CE/HCP4A",
+   "note": "Same 50 mm bore as the 71910 in a heavier section: 55 % more load rating and ~45 % more stiffness, at a larger d_m and so a larger centrifugal term.",
+   "seal_beta": null,
+   "seal_ds": null,
+   "seal_ks1": null,
+   "seal_ks2": null,
+   "seals": "none",
+   "stiffness_n_per_m": "220000000.0",
+   "type": "angular_contact"
+  },
+  "71910 CE/HCP4A": {
+   "B": 12,
+   "C0_kn": "12.7",
+   "C_kn": "15.6",
+   "D": 72,
+   "balls": "ceramic",
+   "contact_angle_deg": 15,
+   "d": 50,
+   "d_m": 61,
+   "default_lubricant": "LGLT_2",
+   "description": "SKF 71910 CE/HCP4A — super-precision angular contact 15 deg, hybrid ceramic balls, open",
+   "friction": {
+    "K_z": "4.4",
+    "R1": "5.03e-07",
+    "R2": "1.97",
+    "R3": "1.9e-12",
+    "S1": "0.013",
+    "S2": "0.68",
+    "ball_density_ratio": "0.408",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 21000,
+   "n_limit_oil_air_rpm": 32000,
+   "name": "71910 CE/HCP4A",
+   "note": "The smallest bore that clears a 43 mm shaft bore with a sensible wall. At 23 000 rpm it is ABOVE its grease limit and needs oil-air.",
+   "seal_beta": null,
+   "seal_ds": null,
+   "seal_ks1": null,
+   "seal_ks2": null,
+   "seals": "none",
+   "stiffness_n_per_m": "150000000.0",
+   "type": "angular_contact"
+  },
+  "71911 CE/HCP4A": {
+   "B": 13,
+   "C0_kn": "15.3",
+   "C_kn": "18.2",
+   "D": 80,
+   "balls": "ceramic",
+   "contact_angle_deg": 15,
+   "d": 55,
+   "d_m": "67.5",
+   "default_lubricant": "LGLT_2",
+   "description": "SKF 71911 CE/HCP4A — super-precision angular contact 15 deg, hybrid ceramic balls, open",
+   "friction": {
+    "K_z": "4.4",
+    "R1": "5.03e-07",
+    "R2": "1.97",
+    "R3": "1.9e-12",
+    "S1": "0.013",
+    "S2": "0.68",
+    "ball_density_ratio": "0.408",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 19000,
+   "n_limit_oil_air_rpm": 29000,
+   "name": "71911 CE/HCP4A",
+   "note": "Fits the 53 mm rotor seat directly. Bigger d_m than the 71910 means a larger F_g at the same rpm.",
+   "seal_beta": null,
+   "seal_ds": null,
+   "seal_ks1": null,
+   "seal_ks2": null,
+   "seals": "none",
+   "stiffness_n_per_m": "160000000.0",
+   "type": "angular_contact"
+  },
+  "71912 CE/HCP4A": {
+   "B": 13,
+   "C0_kn": "17.3",
+   "C_kn": "19.5",
+   "D": 85,
+   "balls": "ceramic",
+   "contact_angle_deg": 15,
+   "d": 60,
+   "d_m": "72.5",
+   "default_lubricant": "LGLT_2",
+   "description": "SKF 71912 CE/HCP4A — super-precision angular contact 15 deg, hybrid ceramic balls, open",
+   "friction": {
+    "K_z": "4.4",
+    "R1": "5.03e-07",
+    "R2": "1.97",
+    "R3": "1.9e-12",
+    "S1": "0.013",
+    "S2": "0.68",
+    "ball_density_ratio": "0.408",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 18000,
+   "n_limit_oil_air_rpm": 27000,
+   "name": "71912 CE/HCP4A",
+   "note": "Needs the shaft seat opened to 60 mm. Listed to show the d_m^4 price of going up a size at 23 000 rpm.",
+   "seal_beta": null,
+   "seal_ds": null,
+   "seal_ks1": null,
+   "seal_ks2": null,
+   "seals": "none",
+   "stiffness_n_per_m": "170000000.0",
+   "type": "angular_contact"
+  },
+  "W 638/2-2Z": {
+   "B": "2.3",
+   "C0_kn": "0.025",
+   "C_kn": "0.094",
+   "D": 5,
+   "balls": "steel",
+   "contact_angle_deg": null,
+   "d": 2,
+   "d_m": "3.5",
+   "default_lubricant": "MT47",
+   "description": "SKF W 638/2-2Z — stainless steel miniature deep groove, series 638, metal shields both sides, non-contact (skf.com)",
+   "friction": {
+    "K_z": "3.1",
+    "R1": "4.7e-07",
+    "S1": "0.0065",
+    "ball_density_ratio": "1.0",
+    "mu_sl": "0.05"
+   },
+   "n_limit_grease_rpm": 100000,
+   "n_limit_oil_air_rpm": null,
+   "name": "W 638/2-2Z",
+   "note": "Values read from the SKF product page, 2026-09-28: https://www.skf.com/group/products/rolling-bearings/ball-bearings/deep-groove-ball-bearings/productid-W%20638%2F2-2Z -- Dimensions: bore 2 mm, OD 5 mm, width 2.3 mm. Performance: basic dynamic load rating 0.094 kN, basic static load rating 0.025 kN, reference speed 200 000 r/min, limiting speed 100 000 r/min. Properties: stainless steel, stamped stainless steel cage, radial internal clearance CN, non-contact shields both sides, grease-filled, no relubrication feature. Logistics: net weight 0.0002 kg (not a card field here). Fatigue load limit Pu is NOT published on this page for this size and is left OUT rather than guessed (the schema has no Pu field either — flag for whoever adds one). Not bench-validated; friction constants borrowed from the 617/618/628/637/638 family row per the file header, not SKF-published specifically for W 638/2-2Z.",
+   "seal_beta": null,
+   "seal_ds": null,
+   "seal_ks1": null,
+   "seal_ks2": null,
+   "seals": "shields",
+   "stiffness_n_per_m": "2000000.0",
+   "type": "deep_groove"
+  }
+ },
+ "comment_flags": [
+  {
+   "card": "MT47",
+   "field": "nu40",
+   "flag": "verify",
+   "section": "lubricants"
+  },
+  {
+   "card": "MT47",
+   "field": "nu100",
+   "flag": "verify",
+   "section": "lubricants"
+  },
+  {
+   "card": "61811-2RS1",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61811-2RS1",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61811-2RS1",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61811-2RS1",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "61811-2Z",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61811-2Z",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61811-2Z",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61811-2Z",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "61814-2RS1",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61814-2RS1",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61814-2RS1",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "61814-2RS1",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "618/8-2Z",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "618/8-2Z",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "618/8-2Z",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "618/8-2Z",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "W 638/2-2Z",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "71910 CE/HCP4A",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71910 CE/HCP4A",
+   "field": "n_limit_oil_air_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71910 CE/HCP4A",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71910 CE/HCP4A",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71910 CE/HCP4A",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "71911 CE/HCP4A",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71911 CE/HCP4A",
+   "field": "n_limit_oil_air_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71911 CE/HCP4A",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71911 CE/HCP4A",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71911 CE/HCP4A",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "71912 CE/HCP4A",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71912 CE/HCP4A",
+   "field": "n_limit_oil_air_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71912 CE/HCP4A",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71912 CE/HCP4A",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "71912 CE/HCP4A",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "7010 CE/HCP4A",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "7010 CE/HCP4A",
+   "field": "n_limit_oil_air_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "7010 CE/HCP4A",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "7010 CE/HCP4A",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "7010 CE/HCP4A",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "6010-2RZ/HC5C3",
+   "field": "n_limit_grease_rpm",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "6010-2RZ/HC5C3",
+   "field": "C_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "6010-2RZ/HC5C3",
+   "field": "C0_kn",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "6010-2RZ/HC5C3",
+   "field": "stiffness_n_per_m",
+   "flag": "approx",
+   "section": "bearings"
+  },
+  {
+   "card": "6010-2RZ/HC5C3",
+   "field": "R1",
+   "flag": "verify",
+   "section": "bearings"
+  },
+  {
+   "card": "6010-2RZ/HC5C3",
+   "field": "S1",
+   "flag": "verify",
+   "section": "bearings"
+  }
+ ],
+ "lubricants": {
+  "LGHP_2": {
+   "description": "SKF LGHP 2 — high performance polyurea, electric motor grease",
+   "kind": "grease",
+   "name": "LGHP_2",
+   "note": "",
+   "nu100": "10.5",
+   "nu40": 96,
+   "temp_range_c": [
+    -40,
+    150
+   ]
+  },
+  "LGLT_2": {
+   "description": "SKF LGLT 2 — low temperature, EXTREMELY high speed (spindle grease)",
+   "kind": "grease",
+   "name": "LGLT_2",
+   "note": "the grease super-precision spindle bearings are filled with; its thin base oil is what lets n.dm reach ~1.4e6",
+   "nu100": "3.7",
+   "nu40": 15,
+   "temp_range_c": [
+    -55,
+    110
+   ]
+  },
+  "LGMT_2": {
+   "description": "SKF LGMT 2 — general purpose industrial and automotive",
+   "kind": "grease",
+   "name": "LGMT_2",
+   "note": "",
+   "nu100": 11,
+   "nu40": 110,
+   "temp_range_c": [
+    -30,
+    120
+   ]
+  },
+  "MT47": {
+   "description": "SKF standard fill of 2RS1/2Z deep groove bearings — lithium soap, mineral base oil",
+   "kind": "grease",
+   "name": "MT47",
+   "note": "the grease the sealed SKF bearings below are delivered with",
+   "nu100": "8.6",
+   "nu40": 70,
+   "temp_range_c": [
+    -30,
+    110
+   ]
+  },
+  "OIL_VG10": {
+   "description": "ISO VG 10 spindle oil — the usual oil-air medium",
+   "kind": "oil_air",
+   "name": "OIL_VG10",
+   "note": "",
+   "nu100": "2.6",
+   "nu40": 10,
+   "temp_range_c": null
+  },
+  "OIL_VG32": {
+   "description": "ISO VG 32 spindle / hydraulic oil",
+   "kind": "oil_air",
+   "name": "OIL_VG32",
+   "note": "",
+   "nu100": "5.4",
+   "nu40": 32,
+   "temp_range_c": null
+  }
+ },
+ "raw_sha256": {
+  "bearings/6010-2RZ/HC5C3": "2c49a47e40ba7fc8932698cfdeb602ee394ac27d4942647cf4b23a5079a8abde",
+  "bearings/618/8-2Z": "7ef03e91cf0713c957353c926529fa6ff0bdbb8d1f1942c2bf326743a6e5a3ea",
+  "bearings/61811-2RS1": "d0c373db02bd92a1d5df53ed44efbbccfa06ac9fa1da400898491a51cdb8c5df",
+  "bearings/61811-2Z": "aa3a02f933b2e947de21255886b43ab7a330fe87588bcafec2c3ee76b10b3eb4",
+  "bearings/61814-2RS1": "aa7c8c6ecd121a8e152c01d68779a9c35015af6f3c262d78a3b5d58d7ea63865",
+  "bearings/7010 CE/HCP4A": "4213659260f690c173dbb3d71fc51d388857760682e5afdd10566d6db22dc659",
+  "bearings/71910 CE/HCP4A": "1ffb66e808b413f96f3b852dc43c134cefa2868b96ab215160c069f728d10f38",
+  "bearings/71911 CE/HCP4A": "c321c907c713b62c0c5fad421dc34699b66cd128103c9a00ba1992a033a2fd77",
+  "bearings/71912 CE/HCP4A": "66a950690c40806c65ff5bd3afa0d83853f7fab74764bb16c4a88d26ab4519fc",
+  "bearings/W 638/2-2Z": "f90d03cc7a11446930566370a66d1b32180c077a3deca0932f1cb896422dfb5f",
+  "lubricants/LGHP_2": "a7ab01e159d84610892d5df9e7edaf8c2c8d5914313c8b1ecc97e8095de93f4a",
+  "lubricants/LGLT_2": "c4fe882ab3060710581ae103b776dda940c968c089b8159c214194d9f6c503c2",
+  "lubricants/LGMT_2": "ea2f06d63319e7e802f9877038bfa194c62b11997afad639fd7002de7b0dec66",
+  "lubricants/MT47": "aa73329527214901b98fb5b266edb35b8d0eea1894dd61b24eb3e4f1d750b5d9",
+  "lubricants/OIL_VG10": "bc95b30b0d28f7d49c0e26b50408df9ff8f0ac667bba37b71480a26c59e777fc",
+  "lubricants/OIL_VG32": "95256804148bdea5cd31251c88d28991c85a7e98dc41a989cf1cb0f624e7f7fa"
+ }
+}

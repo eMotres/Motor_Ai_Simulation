@@ -1,0 +1,99 @@
+# motor_ai_sim API — bare-metal alternative to docker-compose.
+#
+# WHEN TO USE THIS INSTEAD OF THE CONTAINER
+#   The container is the recommendation (deploy/README.md): the native
+#   dependency set — gmsh + OCP + Intel MKL — is exactly what you do not want
+#   to reproduce by hand on a rebuild, and the image pins it.  This unit is for
+#   the case the compromise did not cover: NUMA pinning finer than compose's
+#   cpuset, or a host where Docker is not wanted.  It expects the venv at
+#   /opt/motres/venv, built from the SAME requirements.txt.
+#
+#   Install:
+#     sudo cp deploy/systemd/motres-*.{service,timer} /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now motres-api.service
+#
+# THE TWO FAILURES THIS UNIT ANSWERS
+#   Restart=always covers the crash.
+#   WatchdogSec=300 covers the HANG — the process alive, the port open, and
+#   nothing ever answering.  That is not a hypothetical: it is the case
+#   scripts/backend_watchdog.ps1 was written for (its 240 s HangTimeout), and
+#   losing it on the way to Linux would be a silent regression.
+#   src/motor_ai_sim/watchdog_notify.py is the heartbeat half: it probes the
+#   EVENT LOOP, never the threadpool, because a threadpool saturated with
+#   90-minute solves is a healthy busy server and killing it would be the
+#   textbook way to turn a liveness probe into an outage.
+
+[Unit]
+Description=motor_ai_sim FEM API
+Documentation=file:///opt/motres/app/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+
+User=motres
+Group=motres
+WorkingDirectory=/opt/motres/app
+
+# The env contract.  root:root 0600 — it holds AUTH_SECRET.  Same file and the
+# same variable names the container's `env_file` loads; template in
+# scripts/api.env.example.
+EnvironmentFile=/etc/motres/api.env
+Environment=PYTHONPATH=/opt/motres/app/src
+Environment=PYTHONUNBUFFERED=1
+Environment=MPLBACKEND=Agg
+
+ExecStart=/opt/motres/venv/bin/python -m uvicorn motor_ai_sim.api:app \
+          --host 127.0.0.1 --port 8001
+
+Restart=always
+RestartSec=5
+# gmsh + OCP + MKL cold-import is ~10 s; a Type=notify unit that has not said
+# READY=1 by then would be killed mid-boot.
+TimeoutStartSec=120
+# A solve in flight gets the chance to finish its atomic write.  Every store is
+# tmp + os.replace, so this is at worst one write behind — but 30 s of grace
+# costs nothing and a truncated .npz costs a customer's run.
+TimeoutStopSec=90
+KillSignal=SIGTERM
+
+# The hang detector.  watchdog_notify pings at WatchdogSec/3, so two
+# consecutive misses are needed — one slow tick under load is never fatal.
+WatchdogSec=300
+
+# Solver appetite.  AX42 (Ryzen 7 PRO 8700GE, 8 c / 16 t, 64 GB): leave 4
+# threads for nginx, restic and the host.  AX102: AllowedCPUs=0-27.
+AllowedCPUs=0-11
+MemoryMax=48G
+# Below the interactive shell, above nothing: a runaway solve must not make the
+# box unadministrable.
+Nice=5
+IOSchedulingClass=best-effort
+IOSchedulingPriority=5
+
+# Hardening.  The API writes /srv/motres/{workspaces,published,identity} and
+# /var/log/motres, and nothing else — one mis-aimed path should not be able to
+# reach /etc.  shared/ is NOT listed: it is read-only to the app by design.
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+LockPersonality=yes
+ReadWritePaths=/srv/motres/workspaces /srv/motres/published /srv/motres/identity /var/log/motres
+ReadOnlyPaths=/srv/motres/shared
+
+# journald; the app's own rotating logs/api.log still exists underneath.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=motres-api
+
+[Install]
+WantedBy=multi-user.target

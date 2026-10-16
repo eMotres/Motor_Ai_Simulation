@@ -1,0 +1,275 @@
+"""Propeller catalogue routes — /api/propellers (read-only).
+
+    GET /api/propellers                       the catalogue (summary per prop)
+    GET /api/propellers/cooling-options       what a die/config may offer for cooling
+    GET /api/propellers/{id}                  one prop: published data, fits, curves
+    GET /api/propellers/{id}/point            thrust / torque / power / cooling air at an rpm
+    GET /api/propellers/{id}/series           the same on an rpm grid (+ housing film h): Configure's hook
+    GET /api/propellers/{id}/s1               continuous (S1) limit of a die/config with this prop (signed in)
+
+SOLVER ISOLATION: nothing here solves a field or writes anything.  The catalogue
+is read from ``config/propellers/`` (and ``<shared>/propellers/`` on the server)
+through ``motor_ai_sim.propeller``; the cooling options from
+``config/cooling_options.yaml``.  Ungated, like ``GET /api/wires/stock`` and
+``GET /api/materials``: a reference table plus closed-form arithmetic, no compute.
+
+``/point`` is the Configure hook: it turns (propeller, rpm) into the air speed over
+the motor and, when the housing diameter is given, the film coefficient the
+existing air mode (``cooling_models.outer_air``, Churchill–Bernstein cross-flow)
+would use — so the browser's analytical thermal estimate needs no second copy of
+the slipstream model.
+"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Header, HTTPException, Query
+
+from motor_ai_sim import propeller as pp
+
+log = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/propellers", tags=["propellers"])
+
+
+def _rho(temp_c: Optional[float], altitude_m: float, pressure_pa: Optional[float]) -> float:
+    try:
+        return pp.air_density(temp_c=temp_c, altitude_m=altitude_m, pressure_pa=pressure_pa)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+def _get(prop_id: str) -> pp.Propeller:
+    try:
+        return pp.get_propeller(prop_id)
+    except pp.PropellerNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+
+
+@router.get("")
+def list_catalog(selectable_only: bool = Query(
+        default=False, description="only props with usable thrust AND power data")) -> Dict[str, Any]:
+    """Every catalogue entry, smallest diameter first.
+
+    ``selectable`` is False for reference-only entries (geometry published, no
+    test data): the model refuses to compute loads for them.  ``power_data`` says
+    how C_P was obtained: ``measured_torque`` | ``estimated`` | ``none``.
+    """
+    props = [p for p in pp.list_propellers() if p.selectable or not selectable_only]
+    return {
+        "count": len(props),
+        "propellers": [pp.summary(p) for p in props],
+        "rho_default_kg_m3": pp.RHO_ISA,
+        "slipstream": {"default_position": pp.DEFAULT_POSITION,
+                       "factors": pp.POSITION_FACTORS, "notes": pp.POSITION_NOTES},
+    }
+
+
+@router.get("/cooling-options")
+def get_cooling_options(die: str = Query(..., description="die name"),
+                        config: Optional[str] = Query(default=None, description="configuration, e.g. L12"),
+                        authorization: Optional[str] = Header(default=None)
+                        ) -> Dict[str, Any]:
+    """The cooling options the UI may offer for ``die`` / ``config``.
+
+    ``cooling_options`` is ``null`` for an unrestricted die (everything as
+    before).  For a restricted die it lists the modes (``propeller_air`` = slipstream
+    air from the chosen propeller) and ``propeller_details`` carries the summary of
+    each allowed propeller; ids the catalogue does not know are listed in
+    ``unknown_propellers`` so a stale config is visible, not silent.
+    ``default_propeller`` is the propeller this configuration opens on (``defaults`` has every
+    configuration's); a default the configuration may not use, or the catalogue cannot compute,
+    is withheld and named in ``bad_defaults``.  ``None`` = take the first allowed propeller with
+    torque data.
+    """
+    from motor_ai_sim import motor_access as ma
+    from motor_ai_sim.cooling_options import cooling_options
+    access = ma.catalog_access(authorization)
+    # A PRIVATE configuration answers exactly like one that does not exist (no
+    # application, die-level options), and no configuration the caller cannot
+    # see is named in the die's per-configuration defaults.
+    hidden = bool(config) and not ma.may_see_config(access, die, config)
+    if hidden:
+        # asked with a name no file can carry, so nothing of the hidden
+        # configuration's own override / default / application is read
+        out = cooling_options(die, "__no_such_configuration__", applications=[])
+        out["config"] = config
+    else:
+        out = cooling_options(die, config)
+    for _k in ("defaults", "bad_defaults"):
+        if isinstance(out.get(_k), dict):
+            out[_k] = {c: v for c, v in out[_k].items() if ma.may_see_config(access, die, c)}
+    ids = out.get("propellers")
+    details, unknown = [], []
+    if ids:
+        cat = pp.load_catalog()
+        for i in ids:
+            if i in cat:
+                details.append(pp.summary(cat[i]))
+            else:
+                unknown.append(i)
+    out["propeller_details"] = details
+    out["unknown_propellers"] = unknown
+    # a default must be a propeller the catalogue can compute (geometry-only ones cannot be the load)
+    if ids:
+        cat = pp.load_catalog()
+        for c, pid in list(out.get("defaults", {}).items()):
+            if pid not in cat or not cat[pid].selectable:
+                out["defaults"].pop(c)
+                out["bad_defaults"][c] = pid
+        if out.get("default_propeller") and out["default_propeller"] not in out["defaults"].values():
+            out["default_propeller"] = None
+    return out
+
+
+@router.get("/{prop_id}")
+def get_one(prop_id: str,
+            temp_c: Optional[float] = Query(default=None, description="air temperature for the curves [°C]"),
+            altitude_m: float = Query(default=0.0),
+            pressure_pa: Optional[float] = Query(default=None)) -> Dict[str, Any]:
+    """The published data, the fitted C_T / C_P (with residuals) and the curves
+    (thrust, torque, shaft power, wake speed, cooling air speed vs rpm) at the
+    requested air density (default ISA sea level)."""
+    prop = _get(prop_id)
+    return pp.detail(prop, rho=_rho(temp_c, altitude_m, pressure_pa))
+
+
+@router.get("/{prop_id}/series")
+def get_series(prop_id: str,
+               rpm_max: Optional[float] = Query(default=None, gt=0.0, le=60000.0,
+                                                description="top of the rpm grid; default 1.5 x the tested maximum"),
+               n: int = Query(default=61, ge=3, le=400),
+               temp_c: Optional[float] = Query(default=None, description="air temperature [°C]; default ISA"),
+               altitude_m: float = Query(default=0.0),
+               pressure_pa: Optional[float] = Query(default=None),
+               position: Optional[str] = Query(default=None),
+               factor: Optional[float] = Query(default=None, gt=0.0, le=1.5),
+               housing_d_mm: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
+                                                     description="housing diameter: adds the film coefficient per sample")
+               ) -> Dict[str, Any]:
+    """The whole propeller answer on an rpm grid (one request instead of one per rpm):
+    thrust, torque, shaft power, cooling air speed, ``extrapolated`` per sample and,
+    with ``housing_d_mm``, the housing film coefficient ``h_W_m2K`` of every sample
+    (``cooling_models.outer_air``).  Configure interpolates in it for the propeller load
+    and for the thermal zones on its knobs."""
+    prop = _get(prop_id)
+    rho = _rho(temp_c, altitude_m, pressure_pa)
+    try:
+        out = pp.series(prop, rho, rpm_max=rpm_max, n=n, position=position, factor=factor)
+    except pp.PropellerDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    t_amb = 25.0 if temp_c is None else float(temp_c)
+    out["t_ambient_c"] = t_amb
+    if housing_d_mm is not None:
+        from motor_ai_sim.simulation import cooling_models as cm
+        d = float(housing_d_mm) / 1000.0
+        out["h_W_m2K"] = [cm.outer_air(air_speed_mps=v, t_ambient_c=t_amb, d_housing_m=d)["h_conv"]
+                          for v in out["air_speed_ms"]]
+        out["housing_d_mm"] = float(housing_d_mm)
+    return out
+
+
+@router.get("/{prop_id}/s1")
+def get_s1(prop_id: str,
+           die: str = Query(..., min_length=1, max_length=200),
+           config: str = Query(..., min_length=1, max_length=100),
+           ambient_c: float = Query(default=25.0, ge=-60.0, le=80.0, description="air temperature [°C]"),
+           altitude_m: float = Query(default=0.0, ge=-500.0, le=11000.0),
+           position: Optional[str] = Query(default=None),
+           factor: Optional[float] = Query(default=None, gt=0.0, le=1.5),
+           n: int = Query(default=41, ge=5, le=201, description="scan points"),
+           drive: str = Query(default="sine", min_length=1, max_length=100,
+                              description="'sine', a computed PWM variant id (Configure's selected drive) "
+                                          "or 'external_esc'"),
+           esc_i_bus_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0,
+                                                    description="external_esc: continuous bus current [A]; "
+                                                                "default the model's bench ESC"),
+           esc_i_phase_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0,
+                                                      description="external_esc: continuous phase current [A rms]"),
+           pack_v_min: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
+                                               description="pack minimum voltage [V]; default the passport's"),
+           pack_v_max: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
+                                               description="pack full voltage [V]; default the passport's"),
+           pack_i_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0,
+                                                 description="pack continuous current [A]; unknown if omitted"),
+           authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+    """Continuous (S1) limit of ``die`` / ``config`` driving propeller ``prop_id``,
+    which is also its only cooling: per-speed rows (load, current, losses, air,
+    winding / magnet / housing temperature, margins) and the highest speed at
+    which everything stays inside the limits (``motor_ai_sim.propeller_s1``) -
+    the motor's temperatures, the selected drive's continuous controller current,
+    the voltage at the pack's minimum, the demagnetisation current at the magnet
+    temperature and (when given) the pack's continuous current.  A limit the model
+    cannot check is named in ``limit.flags`` / ``limit.qualification``.
+
+    The board's cooling class is decided by the machine (``drive.board_cooling`` +
+    ``drive.board_cooling_basis``): a client-sent ``board_cooling`` is ignored.
+
+    Signed-in callers only, and only for a die the account may see (the
+    Configure context rule).  Closed-form arithmetic on the configuration's S1
+    model (extracted from its passport) - no field solve, nothing written."""
+    from motor_ai_sim import motor_access as ma
+    from motor_ai_sim import propeller_s1 as s1
+    from motor_ai_sim.cooling_options import cooling_options
+    access = ma.catalog_access(authorization)
+    if access.get("mode") == ma.MODE_ANONYMOUS:
+        raise HTTPException(status_code=401, detail="Sign in required.")
+    if not ma.may_see_config(access, die, config):
+        raise HTTPException(status_code=404, detail=f"no propeller S1 model for {die} {config}")
+    allowed = cooling_options(die, config).get("propellers")
+    if allowed is not None and prop_id not in allowed:
+        raise HTTPException(status_code=422, detail=f"{prop_id} is not a propeller {die} {config} may use")
+    prop = _get(prop_id)
+    try:
+        model = s1.load_model(die, config)
+        out = s1.s1_rating(model, prop, ambient_c=ambient_c, altitude_m=altitude_m,
+                           position=position, factor=factor, n_points=n, drive=drive,
+                           pack_v_min=pack_v_min, pack_v_max=pack_v_max,
+                           pack_i_max_A=pack_i_max_A, esc_i_bus_A=esc_i_bus_max_A,
+                           esc_i_phase_A=esc_i_phase_max_A)
+    except s1.S1ModelNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    except (s1.S1Error, pp.PropellerDataError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return out
+
+
+@router.get("/{prop_id}/point")
+def get_point(prop_id: str,
+              rpm: float = Query(..., ge=0.0, le=60000.0),
+              temp_c: Optional[float] = Query(default=None, description="air temperature [°C]; default ISA"),
+              altitude_m: float = Query(default=0.0),
+              pressure_pa: Optional[float] = Query(default=None),
+              position: Optional[str] = Query(default=None,
+                                              description="developed_wake | disc_plane | behind_hub (default)"),
+              factor: Optional[float] = Query(default=None, gt=0.0, le=1.5,
+                                              description="explicit slipstream factor, overrides position"),
+              housing_d_mm: Optional[float] = Query(default=None, gt=0.0, le=2000.0,
+                                                    description="housing diameter: adds the film coefficient")
+              ) -> Dict[str, Any]:
+    """Thrust, torque, shaft power and cooling air speed at ``rpm``.
+
+    With ``housing_d_mm`` the answer also carries ``film``: the h [W/m²K] and
+    Reynolds number ``cooling_models.outer_air`` gives for that housing in the
+    computed air (ambient defaults to 25 °C unless ``temp_c`` is given).
+    """
+    prop = _get(prop_id)
+    rho = _rho(temp_c, altitude_m, pressure_pa)
+    try:
+        out = pp.operating_point(prop, rpm, rho, position=position, factor=factor)
+    except pp.PropellerDataError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    if housing_d_mm is not None:
+        from motor_ai_sim.simulation import cooling_models as cm
+        t_amb = 25.0 if temp_c is None else float(temp_c)
+        rep = cm.outer_air(air_speed_mps=out["air_speed_ms"], t_ambient_c=t_amb,
+                           d_housing_m=float(housing_d_mm) / 1000.0)
+        out["film"] = {"h_conv_W_m2K": rep["h_conv"], "re": rep["re"], "regime": rep.get("regime"),
+                       "t_ambient_c": t_amb, "housing_d_mm": float(housing_d_mm),
+                       "model": "cooling_models.outer_air (Churchill–Bernstein cross-flow)"}
+    return out

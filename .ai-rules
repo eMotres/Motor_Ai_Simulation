@@ -1,20 +1,17 @@
 # Motor AI Simulation - Core Rules for Kilo
 
-## 1. File Protection 
-- Need to push all chnages to github before modify the file `src/motor_ai_sim/cadquery_geometry.py`. 
-- Need to ask me what you want to modify
-- This file contains critical geometry definitions for electromagnetic simulations. Any unauthorized change can break the SDF (Signed Distance Function) generation for NVIDIA Modulus.
+## 1. File Protection
+- Push all changes to GitHub before modifying `src/motor_ai_sim/cadquery_geometry.py`.
+- Ask first what you intend to modify.
+- This file holds critical geometry definitions for the electromagnetic FEM simulation;
+  an unauthorized change can break geometry / mesh generation.
 
-## 2. Geometry Validation Protocol
-Before running any simulation or export for NVIDIA Modulus, you MUST verify the following:
-- **Intersections**: Check that coils do not overlap with stator teeth.
-- **Orientation**: Ensure that all slots and coils are aligned radially using the local coordinate system of the `polarArray`.
-- **Parameters**: Validate that `wire_width + insulation_thickness` does not exceed the physical slot width.
-- **Units**: Ensure all dimensions are consistent (mm).
+## 2. Geometry Validation
+Before running any simulation or geometry export, verify:
+- **Intersections**: coils do not overlap stator teeth.
+- **Orientation**: slots and coils are aligned radially (local `polarArray` frame).
+- **Parameters**: `wire_width + insulation_thickness` does not exceed the slot width.
+- **Units**: all dimensions consistent (mm).
 
-## 3. NVIDIA Modulus Integration
-- When exporting geometry, ensure the output is a valid manifold (watertight) STL or STEP file.
-- Verify that each component (stator, rotor, coils) has a unique name for correct domain assignment in the physics-informed neural network (PINN).
-
-## 4. Termila commands
-- You should run all termial comand wiyh & don't wait it when finished.
+## 3. Terminal commands
+- Run terminal commands non-blocking (with `&`); don't wait for completion.

@@ -1,0 +1,235 @@
+# motor_ai_sim FEM API — self-hosted deploy image (migration Stage 6).
+#
+# Build from the REPO ROOT:
+#   docker build -f deploy/Dockerfile.api -t motres-api .          # runtime
+#   docker build -f deploy/Dockerfile.api --target test -t motres-api:test .
+#
+# Only the working backend ships: src/ + the three migration scripts + the
+# catalog SEED.  No notebooks, no experiments, no repo-root scratch.
+#
+# WHAT CHANGED IN STAGE 6
+#   * the report deps are in requirements.txt now (reportlab,
+#     python-docx) — the image used to build an API whose default
+#     report format 500s on the first call;
+#   * fonts-dejavu-core as insurance.  report.py takes DejaVu Sans out of
+#     matplotlib's own data path and falls back to the Helvetica base-14 set,
+#     so this is NOT required — but base-14 has no Cyrillic, and duty names
+#     admit Cyrillic deliberately (routes/family.py).  ~1 MB to make the
+#     fallback path render "пик 200" instead of black boxes;
+#   * a non-root user: the API writes /srv/motres/{workspaces,published} and
+#     nothing else, and one mis-aimed path should not be able to write /etc;
+#   * config/ is a SEED at /app/config-seed, never the live state.  The live
+#     tree is built once by the `motres-seed` one-shot (docker-compose.yml) —
+#     the old "the image's config/ is copied into an EMPTY volume on first
+#     start" semantics silently produced an empty catalog the second time.
+#
+# WHAT CHANGED 2026-09-30 (intel-openmp removal)
+#   * WITH_PARDISO=1 no longer installs intel-openmp / intel-cmplr-lib-ur /
+#     umf at all -- mkl/onemkl-license/tbb/tcmlib/pypardiso go in pinned,
+#     `--no-deps`.  MKL_THREADING_LAYER=SEQUENTIAL is now a baked-in image
+#     ENV, not just a runtime env-file setting, and a build guard fails the
+#     build if intel-openmp/intel-cmplr-lib-ur or any libiomp5*.so shows up
+#     anyway.  See the comment above the WITH_PARDISO block and
+#     THIRD_PARTY_NOTICES.md note 2.
+
+FROM python:3.11-slim AS base
+
+# gmsh + OCP (cadquery) native runtime libs; libgomp for MKL/OpenMP;
+# fonts-dejavu-core for the reportlab fallback path (see above).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libglu1-mesa libgl1 libxrender1 libxcursor1 libxft2 libxinerama1 \
+        libgomp1 fonts-dejavu-core curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Non-root service account.  Fixed uid/gid so the host bind mounts under
+# /srv/motres can be chowned to a number that does not drift between rebuilds:
+#   sudo chown -R 10001:10001 /srv/motres
+RUN groupadd --gid 10001 motres \
+ && useradd --uid 10001 --gid 10001 --create-home --shell /usr/sbin/nologin motres
+
+WORKDIR /app
+COPY requirements.txt requirements-pardiso.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+# netgen-mesher==6.2.2607 (requirements.txt) is the DEFAULT geometry mesher
+# (owner 2026-10-01, fail-closed: no fallback).  Prove at build time that its
+# OCC bindings load on this base image, so a missing shared library fails the
+# build instead of every first mesh.
+RUN python -c "import netgen, netgen.occ; print('netgen', netgen.__version__)"
+
+# Optional proprietary accelerator (Intel MKL via pypardiso), OFF by default so
+# a distributed image contains only open-source software.  Our own solve
+# server may build with --build-arg WITH_PARDISO=1 (several times faster
+# transient); without it every solver uses SciPy SuperLU.
+#
+# MKL WITHOUT intel-openmp / intel-cmplr-lib-ur (2026-09-30).  Those two ship
+# under the "Intel End User License Agreement for Developer Tools" (Aug 2024),
+# whose §3.1(x) bars linking/distributing so that any part becomes Reciprocal
+# Open Source Software and §3.1(xi) bars SaaS/service-bureau use -- both wrong
+# for this hosted API.  `mkl`, `onemkl-license`, `tbb` and `tcmlib` stay: they
+# are Intel Simplified Software License (ISSL) -- permissive binary
+# redistribution, no SaaS or reciprocal-open-source clause at all.  See
+# THIRD_PARTY_NOTICES.md note 2 and
+# C:\Users\vadim\Downloads\mkl_without_intel_openmp_2026-09-30.md for the full
+# analysis this recipe is based on.
+#
+# `--no-deps` on BOTH installs below is load-bearing, not cosmetic: pip's
+# `mkl` wheel METADATA has an unconditional `Requires-Dist: intel-openmp`, and
+# that graph gets walked and satisfied even when `mkl` itself is already
+# installed at a version that satisfies pypardiso's own `mkl!=2024.0`
+# constraint -- a plain `pip install -r requirements-pardiso.txt` here would
+# pull intel-openmp (then intel-cmplr-lib-ur, then umf) straight back in.
+# Versions pinned to the ones `docker exec deploy-api-1 pip list` reported on
+# the live server (2026-09-30) -- bump deliberately, re-verify with the build
+# guard below, never via an unpinned resolve.
+#
+# MKL_THREADING_LAYER=SEQUENTIAL is baked in further down (the shared `base`
+# stage ENV, so both the `test` and `api` targets get it): MKL's
+# libmkl_rt.so dlopen()s its threading backend at RUNTIME, keyed
+# on that variable, and only the INTEL layer (the default when unset) touches
+# libiomp5.so -- which this image never installs.  Leaving it unset would not
+# merely fail to accelerate; pypardiso's first real solve would try to
+# dlopen() a missing libiomp5.so symbol and abort the interpreter outright
+# (not a catchable Python exception -- see
+# src/motor_ai_sim/simulation/pardiso_threading_guard.py, which refuses
+# PARDISO and falls back to SciPy SuperLU if this is ever misconfigured).
+ARG WITH_PARDISO=0
+RUN if [ "$WITH_PARDISO" = "1" ]; then \
+        pip install --no-cache-dir --no-deps \
+            mkl==2026.1.0 onemkl-license==2026.1.0 \
+            tbb==2023.1.0 tcmlib==1.5.0 \
+        && pip install --no-cache-dir --no-deps pypardiso==0.4.7; \
+    fi
+
+# Triangle (non-commercial licence) was removed on 2026-10-03: the build fails
+# if anything pulls it back in.  gmsh (GPL) is installed but runs only in the
+# separate gmsh worker process (motor_ai_sim.simulation.gmsh_worker_main).
+RUN if pip show triangle >/dev/null 2>&1; then \
+        echo "BUILD GUARD FAILED: the non-commercial 'triangle' package is installed" >&2; \
+        exit 1; fi
+
+# ── build guard: intel-openmp / intel-cmplr-lib-ur / libiomp5.so must never
+# be in this image (2026-09-30) ─────────────────────────────────────────────
+# Fails the build loudly -- instead of shipping a restricted-licence binary
+# silently -- if any future dependency bump, requirements.txt edit, or a
+# `pip install -r requirements-pardiso.txt` reintroduces the EULA'd Intel
+# packages, or if libiomp5.so ends up on disk by any other path (e.g. an apt
+# package).  Runs on every build, WITH_PARDISO=0 or 1 -- the distributed
+# default must pass this exactly as strictly as our own solve-server build.
+RUN set -eu; \
+    fail=0; \
+    if pip show intel-openmp >/dev/null 2>&1; then \
+        echo "BUILD GUARD FAILED: intel-openmp is installed -- Intel EULA for" \
+             "Developer Tools, not redistributable in this image" >&2; \
+        fail=1; \
+    fi; \
+    if pip show intel-cmplr-lib-ur >/dev/null 2>&1; then \
+        echo "BUILD GUARD FAILED: intel-cmplr-lib-ur is installed -- Intel EULA" \
+             "for Developer Tools, not redistributable in this image" >&2; \
+        fail=1; \
+    fi; \
+    site_packages="$(python3 -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"; \
+    hit="$(find "$site_packages" -iname 'libiomp5*.so*' 2>/dev/null || true)"; \
+    if [ -n "$hit" ]; then \
+        echo "BUILD GUARD FAILED: libiomp5*.so found under $site_packages:" >&2; \
+        echo "$hit" >&2; \
+        fail=1; \
+    fi; \
+    if [ "$fail" = "1" ]; then exit 1; fi; \
+    echo "build guard ok: no intel-openmp, no intel-cmplr-lib-ur, no libiomp5.so"
+
+COPY src/ src/
+# Geometry tab "Full" (owner 2026-10-15): a CAD-only edit is validated with the CAD template's own pre-check (cad_params.py loads this
+# one pure-Python file by path).  Without it saving an edit is refused loudly (503), nothing else breaks.
+COPY cad/motor_templates/segmented_flatwire/health.py cad/motor_templates/segmented_flatwire/health.py
+# GET /api/version reads the repo-root VERSION three parents above api.py, i.e.
+# /app/VERSION — never copied, so the API reported "0.0.0" and the frontend's
+# skew check compared 0.1.9 against it and would have flagged a mismatch on
+# every page (found live, 2026-09-16).
+COPY VERSION ./
+# The migration + integrity scripts run INSIDE this image (same python, same
+# pins) — that is the whole point of the seed one-shot.
+COPY scripts/migrate_to_workspaces.py \
+     scripts/catalog_manifest.py \
+     scripts/check_case_collisions.py \
+     scripts/
+# BYO compute (#44): GET /api/nodes/worker/{install.sh,motres_compute_worker.py}
+# serves these two files from /app/deploy/compute-worker (routes/compute_nodes.py
+# _WORKER_DIR); without them the "add a node" install command 404s.
+COPY deploy/compute-worker/install.sh \
+     deploy/compute-worker/motres_compute_worker.py \
+     deploy/compute-worker/
+
+# Catalog SEED — read-only reference material, never the live tree.
+COPY config/ config-seed/
+
+# CadQueryCache defaults to the RELATIVE "./cadquery_cache"
+# (cadquery_geometry.py: CadQueryCache.__init__), i.e. /app/cadquery_cache with
+# WORKDIR /app — and /app is root-owned while the process runs as uid 10001.
+# Without this the cache mkdir raises and the geometry route answers
+#   500 {"detail": "[Errno 13] Permission denied: 'cadquery_cache'"}
+# Found on the server at Stage 7 (2026-09-16); six suite failures were this.
+RUN mkdir -p /app/cadquery_cache /app/logs \
+ && chown -R 10001:10001 /app/cadquery_cache /app/logs
+
+ENV PYTHONPATH=/app/src \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    MKL_THREADING_LAYER=SEQUENTIAL
+
+# ── test image ──────────────────────────────────────────────────────────────
+# docker build -f deploy/Dockerfile.api --target test -t motres-api:test .
+# docker run --rm motres-api:test                     # full suite (~20 min)
+# See deploy/CONTAINER_TEST.md for the runbook this target exists for.
+FROM base AS test
+# git: tests/test_open_private_data.py, test_run_history.py and
+# src/motor_ai_sim/data_publish.py shell out to it; without the binary ~50 tests
+# ERROR at setup instead of running (found 2026-10-10).  Test stage only.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+RUN pip install --no-cache-dir pytest httpx
+COPY tests/ tests/
+COPY pyproject.toml ./
+# Source-contract tests read these repo-shaped paths (web/src for the UI/locale
+# pins, web/public/help for the help sheet, deploy/ for nginx.conf and the node
+# agent / compute worker, scripts/ for the migration + review scripts, data/ for
+# the open demo dies).  Test stage only: the runtime image still ships none of it.
+COPY web/src/ web/src/
+COPY web/public/help/ web/public/help/
+COPY deploy/ deploy/
+COPY scripts/ scripts/
+# data/open/dies is the shipped open demo set (tests/test_open_private_data.py).
+COPY data/ data/
+# tests/conftest.py resolves the repo root as tests/.. and reads
+# <root>/config/motor_config.yaml as the seed for its sandbox copy, so the
+# suite needs the catalog at the REPO-shaped path and not only at config-seed/.
+# It then redirects MOTOR_AI_SIM_CONFIG into a tmp copy before importing the
+# package — the suite must never write the file it started from — which is why
+# nothing here sets that variable.
+COPY config/ config/
+USER motres
+ENV HOME=/home/motres \
+    MPLBACKEND=Agg
+CMD ["python", "-m", "pytest", "-q"]
+
+# ── runtime image (default target) ──────────────────────────────────────────
+FROM base AS api
+
+# Production posture.  Everything else — GOOGLE_CLIENT_ID, ADMIN_EMAILS,
+# AUTH_SECRET, ALLOWED_ORIGINS, the four roots, QUEUE_WORKERS — comes from
+# /etc/motres/api.env (docker-compose.yml `env_file`).  Nothing secret is baked
+# into a layer.
+ENV AUTH_ENFORCE=1 \
+    MPLBACKEND=Agg \
+    HOME=/home/motres
+
+USER motres
+EXPOSE 8001
+
+# Liveness only: /api/health answers unconditionally, so it is green while a
+# wedged worker serves nothing (api.py).  The READINESS probe is /api/me and it
+# lives outside the container — deploy/systemd/motres-health.timer.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:8001/api/health || exit 1
+
+CMD ["python", "-m", "uvicorn", "motor_ai_sim.api:app", \
+     "--host", "0.0.0.0", "--port", "8001"]

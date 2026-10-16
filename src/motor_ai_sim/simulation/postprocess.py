@@ -21,6 +21,9 @@ from typing import Callable, Dict, Optional, Tuple
 
 import numpy as np
 
+# NumPy 2.0 renamed np.trapz → np.trapezoid (the env runs numpy 2.x).
+_trapz = getattr(np, "trapezoid", None) or getattr(np, "trapz")
+
 MU_0 = 4e-7 * math.pi   # [H/m]
 
 
@@ -99,7 +102,7 @@ def compute_torque_maxwell(
     # Maxwell stress tensor torque integral
     #   T = (L·r / μ₀) · (1/2π) · ∫₀²π B_r · B_t dφ  (× 2π for full circle)
     integrand = B_r * B_t
-    torque = (stack_length * r_eval / MU_0) * np.trapz(integrand, phi)
+    torque = (stack_length * r_eval / MU_0) * _trapz(integrand, phi)
     return float(torque)
 
 

@@ -1,0 +1,9 @@
+[Unit]
+Description=eMotres pricing data: storage sample + monthly usage files
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+ExecStart=/bin/bash /opt/motres/app/deploy/systemd/motres-usage.sh

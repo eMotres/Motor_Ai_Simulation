@@ -1,0 +1,557 @@
+{
+  "ir_schema": "assembly-1",
+  "schema_version": "0.1.0",
+  "units": "SI-rpm-v1",
+  "id": "quadcopter_ciano14_40",
+  "name": "Quadcopter, 4 x CIANO14 40 L12 + FPV 10x5 (example)",
+  "description": "Example for docs/COMPONENT_CARD.md: the motor mass is the FULL assembled mass (the app's active parts + the CAD bill of materials' shaft, holders, rings, bearings, screws, board, pins and enamel; the active mass only, flagged partial, when no CAD model is built) with its material + mass per part; the propeller mass and material are the catalogue's (material grade assumed); frame, battery and controller masses and material splits are PLACEHOLDERS (see the cards). parts_summary() lists every part and the mass per material.",
+  "components": [
+    {
+      "instance": "frame",
+      "card": {
+        "component_id": "example_quad_frame_450"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": "PLACEHOLDER frame"
+    },
+    {
+      "instance": "motor_1",
+      "card": {
+        "component_id": "motor_ciano14_40_new_l12"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          159.09902576697317,
+          159.09902576697317,
+          6.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "prop_1",
+      "card": {
+        "component_id": "tmotor_fpv_10x5"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          159.09902576697317,
+          159.09902576697317,
+          14.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "esc_1",
+      "card": {
+        "component_id": "ctrl_ciano14_40_new_l12_si_48k"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          79.54951288348659,
+          79.54951288348659,
+          5.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "motor_2",
+      "card": {
+        "component_id": "motor_ciano14_40_new_l12"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          -159.09902576697317,
+          159.09902576697317,
+          6.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "prop_2",
+      "card": {
+        "component_id": "tmotor_fpv_10x5"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          -159.09902576697317,
+          159.09902576697317,
+          14.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "esc_2",
+      "card": {
+        "component_id": "ctrl_ciano14_40_new_l12_si_48k"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          -79.54951288348659,
+          79.54951288348659,
+          5.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "motor_3",
+      "card": {
+        "component_id": "motor_ciano14_40_new_l12"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          -159.09902576697317,
+          -159.09902576697317,
+          6.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "prop_3",
+      "card": {
+        "component_id": "tmotor_fpv_10x5"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          -159.09902576697317,
+          -159.09902576697317,
+          14.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "esc_3",
+      "card": {
+        "component_id": "ctrl_ciano14_40_new_l12_si_48k"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          -79.54951288348659,
+          -79.54951288348659,
+          5.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "motor_4",
+      "card": {
+        "component_id": "motor_ciano14_40_new_l12"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          159.09902576697317,
+          -159.09902576697317,
+          6.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "prop_4",
+      "card": {
+        "component_id": "tmotor_fpv_10x5"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          159.09902576697317,
+          -159.09902576697317,
+          14.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "esc_4",
+      "card": {
+        "component_id": "ctrl_ciano14_40_new_l12_si_48k"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          79.54951288348659,
+          -79.54951288348659,
+          5.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": ""
+    },
+    {
+      "instance": "battery",
+      "card": {
+        "component_id": "pack_ciano14_40_new_l12_example"
+      },
+      "placement": {
+        "name": "placement",
+        "position_mm": [
+          0.0,
+          0.0,
+          -48.0
+        ],
+        "rotation_wxyz": [
+          1.0,
+          0.0,
+          0.0,
+          0.0
+        ],
+        "note": ""
+      },
+      "note": "PLACEHOLDER pack"
+    }
+  ],
+  "connections": [
+    {
+      "a": {
+        "instance": "motor_1",
+        "port": "shaft"
+      },
+      "b": {
+        "instance": "prop_1",
+        "port": "shaft"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "esc_1",
+        "port": "phase"
+      },
+      "b": {
+        "instance": "motor_1",
+        "port": "phase"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "battery",
+        "port": "dc_out_1"
+      },
+      "b": {
+        "instance": "esc_1",
+        "port": "dc_in"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "arm_1"
+      },
+      "b": {
+        "instance": "motor_1",
+        "port": "mount"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "esc_1"
+      },
+      "b": {
+        "instance": "esc_1",
+        "port": "mount"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "motor_2",
+        "port": "shaft"
+      },
+      "b": {
+        "instance": "prop_2",
+        "port": "shaft"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "esc_2",
+        "port": "phase"
+      },
+      "b": {
+        "instance": "motor_2",
+        "port": "phase"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "battery",
+        "port": "dc_out_2"
+      },
+      "b": {
+        "instance": "esc_2",
+        "port": "dc_in"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "arm_2"
+      },
+      "b": {
+        "instance": "motor_2",
+        "port": "mount"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "esc_2"
+      },
+      "b": {
+        "instance": "esc_2",
+        "port": "mount"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "motor_3",
+        "port": "shaft"
+      },
+      "b": {
+        "instance": "prop_3",
+        "port": "shaft"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "esc_3",
+        "port": "phase"
+      },
+      "b": {
+        "instance": "motor_3",
+        "port": "phase"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "battery",
+        "port": "dc_out_3"
+      },
+      "b": {
+        "instance": "esc_3",
+        "port": "dc_in"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "arm_3"
+      },
+      "b": {
+        "instance": "motor_3",
+        "port": "mount"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "esc_3"
+      },
+      "b": {
+        "instance": "esc_3",
+        "port": "mount"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "motor_4",
+        "port": "shaft"
+      },
+      "b": {
+        "instance": "prop_4",
+        "port": "shaft"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "esc_4",
+        "port": "phase"
+      },
+      "b": {
+        "instance": "motor_4",
+        "port": "phase"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "battery",
+        "port": "dc_out_4"
+      },
+      "b": {
+        "instance": "esc_4",
+        "port": "dc_in"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "arm_4"
+      },
+      "b": {
+        "instance": "motor_4",
+        "port": "mount"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "esc_4"
+      },
+      "b": {
+        "instance": "esc_4",
+        "port": "mount"
+      },
+      "note": ""
+    },
+    {
+      "a": {
+        "instance": "frame",
+        "port": "battery"
+      },
+      "b": {
+        "instance": "battery",
+        "port": "mount"
+      },
+      "note": ""
+    }
+  ],
+  "provenance": {
+    "module": "docs.example",
+    "module_version": "0.1.0",
+    "contracts_version": "0.1.0",
+    "notes": {}
+  }
+}

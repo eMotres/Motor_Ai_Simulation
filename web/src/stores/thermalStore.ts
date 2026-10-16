@@ -1,0 +1,1133 @@
+/**
+ * thermalStore — everything the Thermal tab is showing, kept OUTSIDE the panel's
+ * component tree.
+ *
+ * A clone of `mechanicalStore`, for the same reason and with the same three
+ * layers of survival: the Thermal tab is not `keepMounted` in App.tsx (it draws
+ * its own picture, so it does not take the AppBar's viewer cluster), which means
+ * leaving the tab unmounts the panel and `useState` results would go with it — a
+ * minute-long conduction solve thrown away by clicking "Electromagnetic".
+ *
+ *   1. TAB SWITCH   — this store (module scope, in memory).  Exact restoration,
+ *                     no round trip, including a solve still in flight.
+ *   2. PAGE RELOAD / API RESTART — the backend's `/api/thermal/last`, fetched
+ *                     once, on the first mount that finds this store empty.
+ *   3. THE SMALL CHOICES — localStorage under `therm.*`.  A field payload is far
+ *                     too big and too machine-specific for localStorage; a
+ *                     cooling mode is not.
+ *
+ * NOTHING here solves on its own.  `hydrate()` reads, `solveField()` and
+ * `solveCoupled()` run only when a button is pressed — and neither of them owns
+ * an operating point: the backend takes the LATEST Electromagnetic run of the
+ * loaded machine and adopts its current, angle, speed, temperatures, step
+ * count and mesh (owner rule 2026-09-30, «always take the current one»).  This
+ * store only mirrors which run that is (`emRun`), for the panel's one line.
+ */
+import { create } from 'zustand';
+
+import { liveGeoSig } from '../components/common/geoSig';
+import { normalizeLocalRows } from '../components/compare/resultRows';
+import type { LocalRow } from '../components/compare/resultRows';
+import { adoptSettings, loadPanelSettings, savePanelSettings } from '../lib/panelSettings';
+import {
+  adoptableCoolingFields, followAdoption, hydrationIsStale, hydrationPlan,
+  isCoolingSource, ownershipIssue, resyncAnswer, sameSelection, withoutMotorOwned,
+} from '../lib/thermalMotorCooling';
+import type { CoolingSource, MotorIdentity } from '../lib/thermalMotorCooling';
+// `registerThermalPanelBlock` — the Electromagnetic tab's OWN coupled Run
+// reads this tab's cooling through it.  Nothing here calls the orchestrator
+// any more: the thermal side of this app never launches an electromagnetic
+// run (owner rule, 2026-09-07, repeated 2026-09-30 — see `solveField` and
+// `solveCoupled` below, which refuse in place of what used to chain one).
+import { registerThermalPanelBlock } from '../components/simulation/coupledApi';
+import {
+  fetchCoupled, fetchEmRun, fetchLastThermal, fetchThermalField,
+  fetchThermalMesh, fetchMeshParams, isNoEmRun, readLastSecs, readTherm,
+  refusalReason, writeLastSecs, writeTherm,
+} from '../components/thermal/api';
+import type { EmRunStatus } from '../components/thermal/emRun';
+import type {
+  BoreMode, CoolMode, CoupledResult, EndFaceMode, FrameMode, ThermKind,
+  ThermView, ThermalField, ThermalMeshPayload, ThermalMeshRequest,
+  ThermalRequest,
+} from '../components/thermal/api';
+import { tileFullRing } from '../components/thermal/types';
+import { readMeshSettings } from '../components/common/motorSettings';
+import {
+  configureRefIdForSelection, getLastMotorState, isCurrentLastMotorUser, registerThermalFollow,
+  currentLastMotorEpoch, fetchLastMotorCooling, isCurrentLastMotorOperation,
+} from '../lib/lastMotor';
+import {
+  PROP_CHOICE_LS, coolChoiceKey, propellerContextKey, readCoolChoice,
+  thermalFollowFields, thermalServerSettingsSnapshot,
+} from '../lib/configuratorPropeller';
+
+/* The staleness test is IMPORTED, not re-implemented: "the result on screen is
+   of a different machine" must mean exactly one thing across the app, and this
+   is where it was first written (2026-09-06). */
+export { isStale } from './mechanicalStore';
+
+const msg = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+
+/** A text field's number, or the default — never `Number('') === 0`, which
+ *  would silently solve a 0 °C ambient the user never typed. */
+const num = (v: string, def: number): number => {
+  const t = (v ?? '').trim();
+  const n = Number(t);
+  return t !== '' && Number.isFinite(n) ? n : def;
+};
+
+/* ── reading what a previous version of this tab persisted ─────────────────
+   The cooling inputs were re-shaped on 2026-09-07 (two surfaces instead of one,
+   the outlet temperature gone, the flow now required).  Every key that survived
+   is still read under its old name, so nobody's settings reset; the two readers
+   below are what makes a leftover value that is no longer meaningful — a blank
+   `flowLpm` from the days when blank meant "derive it", a `coolMode` from a
+   future branch — fall back to the default instead of being sent. */
+
+/** A persisted text field, with blank treated as absent. */
+const readStr = (key: string, def: string): string => {
+  const v = readTherm<unknown>(key, def);
+  const s = typeof v === 'number' ? String(v) : (typeof v === 'string' ? v : '');
+  return s.trim() === '' ? def : s;
+};
+
+/** A persisted enum, with anything unrecognised falling back to the default. */
+const readMode = <T extends string>(key: string, allowed: readonly T[], def: T): T => {
+  const v = readTherm<unknown>(key, def);
+  return (typeof v === 'string' && (allowed as readonly string[]).includes(v))
+    ? (v as T) : def;
+};
+
+const COOL_MODES: readonly CoolMode[] = ['air', 'liquid', 'manual', 'none',
+                                         'robotics'];
+const BORE_MODES: readonly BoreMode[] = ['none', 'air', 'liquid', 'still'];
+const END_FACE_MODES: readonly EndFaceMode[] = ['still', 'none'];
+const FRAME_MODES: readonly FrameMode[] = ['housed', 'open'];
+
+/** The robotics mode's ONE conduction choice (2026-09-26, owner: «let's
+ *  simplify it») — replaces mount W/K, mount °C, sink-or-link, link size and link
+ *  material.  See `ROBOTICS_HELP.heatPath` for what each one is. */
+export type HeatPath = 'housing' | 'shaft' | 'both' | 'none';
+export const HEAT_PATHS: readonly HeatPath[] = ['housing', 'shaft', 'both', 'none'];
+
+/** The Heat path from a saved settings object, OLD ones mapped to the nearest
+ *  option.  Mirrors `thermal_settings.heat_path_of`: `heatPath` wins when it is
+ *  one of the four; a store saved before it existed carries the mount fields
+ *  instead — any mount (a conductance > 0, or the robot-link mode) was heat
+ *  leaving the stator by conduction, i.e. 'housing'; a mount typed as 0 was a
+ *  machine bolted to nothing, i.e. 'none'.  Neither → the default, 'housing'
+ *  (the default it replaces was a 2 W/K mount). */
+export function heatPathOf(saved: Record<string, unknown> | null | undefined): HeatPath {
+  const src = saved ?? {};
+  const hp = String(src.heatPath ?? '').trim().toLowerCase();
+  if ((HEAT_PATHS as readonly string[]).includes(hp)) return hp as HeatPath;
+  if (String(src.mountMode ?? '').trim().toLowerCase() === 'link') return 'housing';
+  const g = src.mountG;
+  if (g !== undefined && g !== null && String(g).trim() !== '') {
+    const n = Number(String(g).trim());
+    return Number.isFinite(n) && n > 0 ? 'housing' : 'none';
+  }
+  return 'housing';
+}
+
+interface Slice<T> {
+  data: T | null;
+  busy: boolean;
+  err: string | null;
+  /** geometry signature at the moment it was solved / adopted — see `isStale` */
+  geoSig: string | null;
+  /** the backend's own staleness verdict; null = unknown */
+  backendStale: boolean | null;
+  /** ISO stamp from `/last` for a restored result; null for a fresh solve */
+  restoredAt: string | null;
+  /** `Date.now()` when this solve was started, for the ticking timer.  Client
+   *  side ON PURPOSE: the clock has to move while the request is in flight and
+   *  the backend has said nothing yet.  What ends up on screen afterwards is
+   *  the backend's own `elapsed_s`. */
+  startedAt: number | null;
+}
+
+const EMPTY: Slice<never> = {
+  data: null, busy: false, err: null, geoSig: null,
+  backendStale: null, restoredAt: null, startedAt: null,
+};
+
+export interface ThermalState {
+  /** `/last` has been consulted once — a second mount must not re-ask, or a
+   *  restored-then-cleared result would come back on every tab switch. */
+  hydrated: boolean;
+  /** Server settings read has completed (or failed offline); propeller binding
+   *  waits for this so a local default cannot race a cross-browser saved ID. */
+  serverSettingsLoaded: boolean;
+  /** THE COOLING BELONGS TO THE MOTOR (2026-10-15): the motor the cooling
+   *  fields below were loaded for, where they came from (the account's own
+   *  saved record, the configuration's defaults, the application's rule, or
+   *  the last-used fields of a record that predates per-motor settings) and
+   *  that motor's application.  A save files the fields under THIS motor. */
+  fieldsMotor: MotorIdentity | null;
+  /** this tab shows another motor (or catalogue reference) than the account has
+   *  loaded - its cooling fields are not the account's, solves are refused */
+  tabStale: boolean;
+  coolingSource: CoolingSource | null;
+  coolingApp: string | null;
+
+  field: Slice<ThermalField>;
+  coupled: Slice<CoupledResult>;
+
+  /** The refusal's own sentence, non-null exactly when the last Solve (or the
+   *  coupled loop) came back `no_electromagnetic_run` — there is no current
+   *  Electromagnetic result to heat this point with.  This tab NEVER makes
+   *  that run itself (owner rule, 2026-09-07, repeated 2026-09-30: «we agreed
+   *  not to launch electromagnetic modelling from the thermal side — we
+   *  always take the current one, and if there isn't one, we say it needs to
+   *  be run»); the panel reads this to show one line and a link to the
+   *  Electromagnetic tab, nothing more. */
+  emMissing: string | null;
+  /** …and the reason behind that one line, for its tooltip. */
+  emMissingReason: string | null;
+
+  /** The Electromagnetic run the next Solve will use (a read of
+   *  `/api/thermal/em_run`, refreshed on mount and after every EM run), or
+   *  the refusal Solve would give.  A MIRROR of the run — never edited here. */
+  emRun: EmRunStatus | null;
+  refreshEmRun: () => Promise<void>;
+
+  /** the mesh itself: the bare cross-section drawn when nothing has been
+   *  solved, and what the Build mesh button produces */
+  geom: ThermalMeshPayload | null;
+  geomBusy: boolean;
+  geomErr: string | null;
+  geomStartedAt: number | null;
+
+  /** last measured seconds per kind of solve — the estimate the timer shows
+   *  while the next one runs.  Mirrors localStorage `therm.lastSecs.<kind>`. */
+  est: Record<ThermKind, number | null>;
+
+  // ── cooling inputs (strings: they are text fields) ────────────────────────
+  /* TWO surfaces since 2026-09-07: the outer stator surface and the inner rotor
+     bore, each with its own mode and its own numbers.  A machine cooled through
+     the hollow shaft is a real machine, and it was not expressible before. */
+
+  /** the OUTER stator / housing surface */
+  coolMode: CoolMode;
+  /** ambient air / enclosure temperature, °C — ONE field, because it is the
+   *  same air on both surfaces */
+  ambientT: string;
+  /** blow speed over the housing, m/s (outer air mode) */
+  airSpeed: string;
+  /** Optional source for outer air; propeller speed is recomputed server-side from its RPM. */
+  airSpeedSource: 'manual' | 'propeller';
+  propellerId: string;
+  propellerContextKey: string;
+  fluid: string;
+  /** coolant INLET, °C (outer liquid mode).  There is no outlet field any more:
+   *  how hot the coolant comes back is what the machine does to it, so it is a
+   *  result of the flow below rather than a second number to guess. */
+  tIn: string;
+  /** film coefficient typed by hand, W/m²K (manual mode) */
+  hConv: string;
+  /** litres per minute — REQUIRED and > 0 now that the outlet is a result: the
+   *  pump is what the engineer actually chooses. */
+  flowLpm: string;
+
+  /** the INNER rotor bore (the hollow shaft's inner diameter), off by default */
+  boreMode: BoreMode;
+  /** blow speed through the bore, m/s — against `ambientT`, the same air */
+  boreAirSpeed: string;
+  boreFluid: string;
+  /** bore coolant inlet, °C, and its flow in L/min */
+  boreTIn: string;
+  boreFlowLpm: string;
+
+  /** How much SHAFT sticks out of the housing on each side, mm — '0' = off.
+   *  The rotor's third heat path (user 2026-09-07: "end faces and end
+   *  windings — only for the shaft, everything else rotates inside the motor"): the end faces
+   *  and the end windings turn inside the closed housing and have nowhere else
+   *  to send their heat, but the shaft stubs sit in the room's air. */
+  shaftExtMm: string;
+  /** how many ends come out: '2' = through shaft, '1' = one end capped */
+  shaftExtSides: string;
+
+  /** How the machine is BUILT — 'housed' (the default, and every machine this
+   *  tab has ever solved) or 'open' (user 2026-09-09, the 40 mm CIANO14: no
+   *  housing at all, the tooth blocks with their coils between two end plates
+   *  on standoff pins, the end turns and the axial channels between
+   *  neighbouring coils in the propeller wash). */
+  frame: FrameMode;
+  /** frame=open: air over the end turns and through the slot channels, m/s.
+   *  '0' means "whatever is blowing on the housing" — it is the same wash. */
+  openAirSpeed: string;
+
+  // ── the ROBOTICS mode's own inputs (2026-09-14) ───────────────────────────
+  /* A robot joint is not a machine with a fan: it stands in a room and is
+     BOLTED to an arm.  These four are the difference, and they belong to the
+     one mode that reads them — a half-configured still-air machine would
+     otherwise look exactly like a converged answer. */
+
+  /** total hemispherical emissivity of the housing, 0…1.  On an 85 mm machine
+   *  in still air radiation carries MORE than convection does, so this decides
+   *  over half of what the housing loses. */
+  emissivity: string;
+  /** where a robotics joint's heat goes by conduction (2026-09-26) — see
+   *  `HeatPath`.  Replaces the five mount / robot-link fields. */
+  heatPath: HeatPath;
+  /** are the machine's AXIAL faces exposed?  'still' = the end turns and the
+   *  core / magnet end faces are in the room's air. */
+  endFaces: EndFaceMode;
+  /** how many ends are exposed: '2', or '1' when one end is against a gearbox */
+  endFaceSides: string;
+
+  /** iteration cap of the coupled loop */
+  maxIter: string;
+
+  /** The mesh block the next request will carry — the server's `mesh:` block,
+   *  re-read before every build and solve (see api.fetchMeshParams). */
+  meshCfg: ThermalMeshRequest | null;
+
+  /** The tab's OWN comparison stack — the Configure tab's "Saved
+   *  configurations", for cooling designs (user 2026-09-07: "make a local
+   *  comparison of the thermal simulation parameters, just like in Configure").
+   *  A PERSISTED field like any other, so the stack survives a reload and is
+   *  the same in every browser; the permanent library is still the Compare tab. */
+  compareRows: LocalRow[];
+
+  // ── view choices ─────────────────────────────────────────────────────────
+  view: ThermView;
+  /** rank-equalised temperature colours (default) vs a true linear °C axis */
+  eqTemp: boolean;
+  showFlux: boolean;
+
+  set: <K extends keyof ThermalState>(k: K, v: ThermalState[K]) => void;
+  setPropellerCooling: (source: 'manual' | 'propeller', id?: string, contextKey?: string) => void;
+
+  hydrate: () => Promise<void>;
+  /** Adopt the backend's last result when it is NEWER than what is on screen.
+   *  `hydrate` runs once per SPA session, so a map solved after that first
+   *  visit — the coupled loop's own, at its converged temperatures — never
+   *  reached this tab (2026-09-10).  After a coupled run every tab has to show
+   *  the same answer; that is what the loop is for. */
+  refreshLast: () => Promise<void>;
+  /** Build (or re-fetch) the solid sub-mesh at the Mesh tab's settings.  NEVER
+   *  called on a field edit — each build is seconds of the mesher, so it is a
+   *  button. */
+  loadGeometry: () => Promise<void>;
+  /** `fresh` (2026-09-22, the History notice's Recompute): ignore a stored
+   *  history answer and solve again, even for byte-identical inputs. */
+  solveField: (fresh?: boolean) => Promise<void>;
+  solveCoupled: () => Promise<void>;
+}
+
+/** The small choices persist under `therm.*`.  The operating point is NOT among
+ *  them — it always comes from the Electromagnetic tab. */
+const PERSISTED: (keyof ThermalState)[] = [
+  'coolMode', 'ambientT', 'airSpeed', 'airSpeedSource', 'fluid', 'tIn', 'hConv', 'flowLpm',
+  'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
+  'shaftExtMm', 'shaftExtSides',
+  'frame', 'openAirSpeed',
+  'emissivity', 'heatPath',
+  'endFaces', 'endFaceSides',
+  'maxIter', 'view', 'eqTemp', 'showFlux',
+  // The local comparison stack rides the SAME path as every other remembered
+  // field (localStorage + the server), so there is one way this tab remembers
+  // things rather than two.
+  'compareRows',
+];
+
+/** The subset of ``PERSISTED`` the Controller tab's MOSFET cooling can
+ *  INHERIT (owner 2026-09-25) — a change to any of these fires
+ *  ``thermal-cooling-saved`` so that tab re-fetches instead of polling. */
+const COOLING_INHERITANCE_KEYS = new Set<string>([
+  'coolMode', 'ambientT', 'airSpeed', 'fluid', 'tIn', 'flowLpm',
+]);
+
+/** The persisted keys that describe how the machine is COOLED: an edit of one
+ *  makes the fields the account's own saved record of the loaded motor. */
+const COOLING_PERSISTED = new Set<string>([
+  'coolMode', 'ambientT', 'airSpeed', 'fluid', 'tIn', 'hConv', 'flowLpm',
+  'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
+  'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
+  'emissivity', 'heatPath', 'endFaces', 'endFaceSides',
+]);
+
+/** Bumped every time the server's fields for a newly loaded motor are adopted.
+ *  A hydration that started before the bump is OLD: it carries the fields of the
+ *  motor that was loaded when it asked, and must not reinstall them. */
+let followEpoch = 0;
+
+/** Remember how long this kind of solve took, so the NEXT one can say "~40 s".
+ *
+ *  Written both to the store (the timer re-renders) and to localStorage (the
+ *  estimate is there after a reload, before anything has been solved this
+ *  session).  Only a REAL solve teaches it — a cache hit took no time, and an
+ *  estimate taught by cache hits would promise an instant answer forever. */
+function noteSecs(set: (p: Partial<ThermalState>) => void,
+                  get: () => ThermalState,
+                  kind: ThermKind, secs: number | null | undefined): void {
+  if (secs === null || secs === undefined || !Number.isFinite(secs) || secs <= 0) return;
+  writeLastSecs(kind, secs);
+  set({ est: { ...get().est, [kind]: Math.round(secs * 10) / 10 } });
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * The cooling half of the request
+ *
+ * PURE and exported so it can be pinned by a test without a browser: its body is
+ * copied verbatim into `components/thermal/__tests__/coolingPayload.test.mjs`,
+ * which fixes WHICH fields each mode sends.  That matters twice over — an
+ * `air_speed_mps` shipped with a liquid jacket is a parameter the solver keys
+ * its cache on and never uses, and a `fluid_temp_out_c` shipped at all is the
+ * boundary condition this tab stopped pretending to know on 2026-09-07 (the
+ * outlet temperature is a RESULT of the flow).
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** The two surfaces exactly as the panel holds them — text fields, because
+ *  that is what the user is typing into. */
+export interface CoolingInputs {
+  coolMode: CoolMode; ambientT: string; airSpeed: string; airSpeedSource?: 'manual' | 'propeller';
+  propellerId?: string; propellerContextKey?: string; fluid: string;
+  tIn: string; flowLpm: string; hConv: string;
+  boreMode: BoreMode; boreAirSpeed: string; boreFluid: string;
+  boreTIn: string; boreFlowLpm: string;
+  shaftExtMm: string; shaftExtSides: string;
+  frame: FrameMode; openAirSpeed: string;
+  emissivity: string; heatPath: HeatPath;
+  endFaces: EndFaceMode; endFaceSides: string;
+}
+
+type CoolingRequest = Pick<ThermalRequest,
+  'cooling_mode' | 'ambient_temp' | 'h_conv' | 'air_speed_mps' | 'air_speed_source' | 'propeller_id' | 'propeller_context_key' | 'fluid'
+  | 'fluid_temp_in_c' | 'flow_lpm' | 'bore_mode' | 'bore_air_speed_mps'
+  | 'bore_fluid' | 'bore_fluid_temp_in_c' | 'bore_flow_lpm'
+  | 'shaft_ext_length_mm' | 'shaft_ext_sides' | 'frame' | 'open_air_speed_mps'
+  | 'emissivity' | 'end_faces' | 'end_face_sides' | 'heat_path'>;
+
+/** The bore mode a run actually uses.  A propeller-cooled machine has a SOLID
+ *  shaft (owner 2026-10-12): no bore flow, whatever a saved value from another
+ *  machine says.  Mirrors `thermal_settings.cooling_fields`. */
+export function effectiveBoreMode(
+  s: { airSpeedSource?: string; boreMode: BoreMode }): BoreMode {
+  return s.airSpeedSource === 'propeller' ? 'none' : s.boreMode;
+}
+
+export function coolingFields(s0: CoolingInputs): CoolingRequest {
+  const s: CoolingInputs = { ...s0, boreMode: effectiveBoreMode(s0) };
+  const ambient = num(s.ambientT, 40);
+  const outerMode: CoolMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
+  const liquid = outerMode === 'liquid';
+  const boreLiquid = s.boreMode === 'liquid';
+  // ── THE ROBOTICS MODE's own four (2026-09-14) ───────────────────────────
+  // Same rule as everything else here: a parameter the chosen mode does not use
+  // is not sent.  `emissivity` and the two end-face flags ride with the mode;
+  // `end_face_sides` does not ride alone, because a side count beside
+  // `end_faces: none` is exactly the unused cache-splitting parameter this
+  // function exists to keep off the wire.  The HEAT PATH (2026-09-26) rides
+  // with the mode too, and 'none' is not sent: it is the router's default.
+  // The panel no longer sends a mount conductance at all (mirrored from
+  // `thermal_settings.cooling_fields`).
+  const robot = outerMode === 'robotics';
+  const endFaces: EndFaceMode = s.endFaces === 'none' ? 'none' : 'still';
+  // The exposed shaft is OFF at 0 mm, and off means the two shaft fields are
+  // not sent at all — `shaft_ext_sides` beside a length of zero is a parameter
+  // the solver keys its cache on and never uses, exactly like an `air_speed_mps`
+  // beside a water jacket.  The diameter is never sent: it is derived from the
+  // geometry, and a second place to type a shaft diameter is a second place for
+  // it to disagree with the CAD.
+  const shaftMm = Math.max(0, num(s.shaftExtMm, 0));
+  return {
+    cooling_mode: outerMode,
+    // Always sent: it is the ambient the outer film works against AND the
+    // temperature of the air blown through the bore — the same air.
+    ambient_temp: ambient,
+    h_conv: outerMode === 'manual' ? num(s.hConv, 50) : undefined,
+    air_speed_mps: outerMode === 'air' && s.airSpeedSource !== 'propeller'
+      ? num(s.airSpeed, 0) : undefined,
+    air_speed_source: outerMode === 'air' && s.airSpeedSource === 'propeller' ? 'propeller' : undefined,
+    propeller_id: outerMode === 'air' && s.airSpeedSource === 'propeller' && s.propellerId
+      ? s.propellerId : undefined,
+    propeller_context_key: outerMode === 'air' && s.airSpeedSource === 'propeller'
+      ? s.propellerContextKey : undefined,
+    fluid: liquid ? s.fluid : undefined,
+    // The inlet defaults to the ambient rather than to a number of its own:
+    // a coolant loop nobody has configured sits at room temperature.
+    fluid_temp_in_c: liquid ? num(s.tIn, ambient) : undefined,
+    // Required > 0 by the backend.  The fallback only ever ships if something
+    // solves around `coolingIssue`, which blocks an empty field in the UI.
+    flow_lpm: liquid ? num(s.flowLpm, 8) : undefined,
+    bore_mode: s.boreMode,
+    bore_air_speed_mps: s.boreMode === 'air' ? num(s.boreAirSpeed, 0) : undefined,
+    bore_fluid: boreLiquid ? s.boreFluid : undefined,
+    bore_fluid_temp_in_c: boreLiquid ? num(s.boreTIn, ambient) : undefined,
+    bore_flow_lpm: boreLiquid ? num(s.boreFlowLpm, 4) : undefined,
+    shaft_ext_length_mm: shaftMm > 0 ? shaftMm : undefined,
+    shaft_ext_sides: shaftMm > 0
+      ? (num(s.shaftExtSides, 2) === 1 ? 1 : 2) : undefined,
+    // THE FRAME, sent only when the machine is OPEN — the same rule the shaft
+    // follows.  A `frame: 'housed'` on the wire is a value the solver keys its
+    // cache on and never reads, so it would split one machine's cache in two.
+    // The wash speed is ALWAYS 0 now (owner 2026-09-21: the panel already
+    // states the outer-surface air speed, so a second "wash m/s" input was
+    // redundant — 0 tells the backend to use the housing air speed, which is
+    // the same wash by construction). `s.openAirSpeed` is deliberately not
+    // read here any more: a value left over from before today must not ride
+    // back onto the wire.
+    frame: s.frame === 'open' ? 'open' : undefined,
+    open_air_speed_mps: s.frame === 'open' ? 0 : undefined,
+    emissivity: robot ? Math.min(Math.max(num(s.emissivity, 0.9), 0), 1)
+                      : undefined,
+    end_faces: robot ? endFaces : undefined,
+    end_face_sides: (robot && endFaces !== 'none')
+      ? (num(s.endFaceSides, 2) === 1 ? 1 : 2) : undefined,
+    heat_path: (robot && s.heatPath !== 'none') ? s.heatPath : undefined,
+  };
+}
+
+/** What is wrong with the cooling, as a sentence an engineer can act on — or
+ *  `null`.  Solve is DISABLED while this returns something: a client-facing tab
+ *  validates its input loudly instead of sending an impossible machine and
+ *  translating the solver's 422 afterwards. */
+export function coolingIssue(s0: CoolingInputs): string | null {
+  const s: CoolingInputs = { ...s0, boreMode: effectiveBoreMode(s0) };
+  const outerMode: CoolMode = s.airSpeedSource === 'propeller' ? 'air' : s.coolMode;
+  if (outerMode === 'liquid' && !(num(s.flowLpm, 0) > 0))
+    return 'coolant flow must be greater than 0 L/min';
+  if (outerMode === 'air' && s.airSpeedSource === 'propeller' && !s.propellerId)
+    return 'choose an assigned propeller for slipstream cooling';
+  if (outerMode === 'manual' && !(num(s.hConv, 0) > 0))
+    return 'h must be greater than 0 W/m²K';
+  if (s.boreMode === 'liquid' && !(num(s.boreFlowLpm, 0) > 0))
+    return 'bore coolant flow must be greater than 0 L/min';
+  if (s.boreMode === 'still' && outerMode !== 'robotics')
+    return ('a still (unventilated) bore belongs to the robotics mode — it '
+            + 'radiates out of the two ends at the machine’s emissivity, and '
+            + 'that input only exists there');
+  if (outerMode === 'robotics') {
+    const eps = num(s.emissivity, 0.9);
+    if (!(eps >= 0 && eps <= 1)) return 'emissivity must be between 0 and 1';
+  }
+  // The panel no longer offers a mount (2026-09-26 — the robotics heat path
+  // replaced it; mirrors `thermal_settings.cooling_issue`), so a machine with
+  // no film and no bore has no door at all.
+  if (outerMode === 'none' && s.boreMode === 'none')
+    return 'no cooled surface — the heat has nowhere to leave';
+  return null;
+}
+
+function livePropellerContextKey(): string | null {
+  const motor = getLastMotorState();
+  if (motor.status !== 'loaded' || !motor.email || !motor.selection
+      || !isCurrentLastMotorUser(motor.email)) return null;
+  const s = motor.selection;
+  return propellerContextKey(motor.email, s.die, s.config, s.ref_id);
+}
+
+function propellerContextIssue(s: ThermalState): string | null {
+  if (s.airSpeedSource !== 'propeller') return null;
+  const live = livePropellerContextKey();
+  return live && s.propellerContextKey === live && !!s.propellerId
+    ? null : 'propeller cooling is not ready for the currently loaded motor';
+}
+
+/**
+ * The request BOTH solves send: the COOLING, and nothing else.
+ *
+ * One builder, so the field solve and the coupled solve describe the same
+ * machine under the same cooling.  No operating point and no EM mesh: the
+ * backend takes the latest Electromagnetic run of the loaded machine and
+ * adopts ITS point and settings (2026-09-30) — a copy sent from here could
+ * only disagree with that run, and a disagreement used to be a refusal.
+ */
+function buildRequest(s: ThermalState, fresh?: boolean): ThermalRequest {
+  return {
+    ...coolingFields(s),
+    ...(fresh ? { fresh: true } : {}),
+  };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * When there is no Electromagnetic run to heat the machine with
+ *
+ * The thermal ROUTE never computes electromagnetic losses — it answers 422
+ * `no_electromagnetic_run` naming the run that is missing, and that refusal is a
+ * standing rule of this project (2026-09-07).
+ *
+ * This tab used to answer that refusal itself (2026-09-08), chaining ONE
+ * electromagnetic run through the orchestrator before its own solve.  That
+ * chaining is GONE (owner, 2026-09-30: «we agreed not to launch
+ * electromagnetic modelling from the thermal side — we always take the
+ * current one, and if there isn't one, we say it needs to be run»).  What is
+ * left for the user to do by hand is exactly that: go to the Electromagnetic
+ * tab, press Run, come back, press Solve again — `solveField` and
+ * `solveCoupled` below both stop at the refusal and set `emMissing` to its
+ * sentence, and the panel reads that to show one line and a link to the
+ * Electromagnetic tab.  Nothing in this file calls the orchestrator any more.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+
+/** The cooling THIS panel is showing, in the field names `thermal_settings`
+ *  speaks.  Not `coupledApi.thermalSettings()`, which reads what was persisted:
+ *  the tab that asked for the run is the tab whose boundary conditions it must
+ *  be solved under.  `maxIter` is deliberately not among them — the fallback is
+ *  ONE pass and says so with `max_iter`. */
+function panelCooling(s: ThermalState): Record<string, string> {
+  const KEYS = [
+    'coolMode', 'ambientT', 'airSpeed', 'fluid', 'tIn', 'hConv', 'flowLpm',
+    'boreMode', 'boreAirSpeed', 'boreFluid', 'boreTIn', 'boreFlowLpm',
+    'shaftExtMm', 'shaftExtSides', 'frame', 'openAirSpeed',
+    // …and the robotics block (2026-09-14; the heat path since 2026-09-26).
+    'emissivity', 'heatPath', 'endFaces', 'endFaceSides'] as const;
+  const out: Record<string, string> = {};
+  for (const k of KEYS) {
+    const v = s[k];
+    if (v === null || v === undefined || v === '') continue;
+    out[k] = String(v);
+  }
+  if (s.airSpeedSource === 'propeller') {
+    out.airSpeedSource = 'propeller';
+    out.coolMode = 'air';
+    if (s.propellerId && s.propellerContextKey === livePropellerContextKey()) {
+      out.propellerId = s.propellerId;
+      out.propellerContextKey = s.propellerContextKey;
+    }
+  } else if (s.coolMode === 'air') {
+    out.airSpeedSource = 'manual';
+  }
+  return out;
+}
+
+/** The cooling THIS panel is showing, for anything that has to send
+ *  `thermal_settings` — the duty-cycle solve, which fits its network to one
+ *  steady map and must use the boundary conditions the user is LOOKING at, not
+ *  the ones some earlier session persisted server-side.  `null` before the
+ *  store has adopted the server's settings: until then the backend's copy is
+ *  the whole truth and the request sends nothing rather than a half-hydrated
+ *  panel (the same rule `registerThermalPanelBlock` below follows). */
+export function thermalPanelBlock(): Record<string, string> | null {
+  const s = useThermalStore.getState();
+  // Fields tagged with ANOTHER motor are not sent: the backend then resolves the
+  // loaded motor's own record (2026-10-15).
+  if (!s.hydrated || fieldsBlockIssue(s)) return null;
+  return panelCooling(s);
+}
+
+/** The Electromagnetic tab's coupled Run reads the cooling from HERE too
+ *  (2026-09-09): the same block this tab would send, plus its `maxIter`, and
+ *  only once the store has adopted the server's settings — before that the
+ *  backend's copy of them is the whole truth and the run sends nothing.  The
+ *  old per-key `therm.*` read shipped a `liquid` mode without its flow. */
+registerThermalPanelBlock(() => {
+  const s = useThermalStore.getState();
+  if (!s.hydrated || fieldsBlockIssue(s)) return null;
+  const out = panelCooling(s);
+  const it = String(s.maxIter ?? '').trim();
+  if (it !== '') out.maxIter = it;
+  return out;
+});
+
+export const useThermalStore = create<ThermalState>()((set, get) => ({
+  hydrated: false,
+  serverSettingsLoaded: false,
+  fieldsMotor: null,
+  tabStale: false,
+  coolingSource: null,
+  coolingApp: null,
+  field: { ...EMPTY } as Slice<ThermalField>,
+  coupled: { ...EMPTY } as Slice<CoupledResult>,
+  emMissing: null,
+  emMissingReason: null,
+  emRun: null,
+
+  geom: null,
+  geomBusy: false,
+  geomErr: null,
+  geomStartedAt: null,
+
+  est: {
+    field: readLastSecs('field'), coupled: readLastSecs('coupled'),
+    mesh: readLastSecs('mesh'),
+  },
+
+  coolMode: readMode('coolMode', COOL_MODES, 'air' as CoolMode),
+  ambientT: readStr('ambientT', '40'),
+  airSpeed: readStr('airSpeed', '10'),
+  airSpeedSource: readMode('airSpeedSource', ['manual', 'propeller'] as const, 'manual'),
+  propellerId: '',
+  propellerContextKey: '',
+  fluid: readStr('fluid', 'water'),
+  tIn: readStr('tIn', '40'),
+  hConv: readStr('hConv', '50'),
+  // '' was the old default and meant "let the solver derive the flow from the
+  // inlet↔outlet ΔT".  There is no outlet input any more, so a blank flow is
+  // now simply a missing pump: `readStr` turns it back into the 8 L/min default.
+  flowLpm: readStr('flowLpm', '8'),
+
+  boreMode: readMode('boreMode', BORE_MODES, 'none' as BoreMode),
+  boreAirSpeed: readStr('boreAirSpeed', '10'),
+  boreFluid: readStr('boreFluid', 'water'),
+  boreTIn: readStr('boreTIn', '40'),
+  boreFlowLpm: readStr('boreFlowLpm', '4'),
+
+  // OFF by default, and it has to be: a shaft length nobody typed would add a
+  // heat path nobody designed, and every temperature on this tab would quietly
+  // get better.
+  shaftExtMm: readStr('shaftExtMm', '0'),
+  shaftExtSides: readStr('shaftExtSides', '2'),
+
+  // HOUSED by default, and it has to be: `open` puts the end windings and the
+  // slot channels in the airflow, and a machine that was never described that
+  // way would quietly get tens of kelvin better.
+  frame: readMode('frame', FRAME_MODES, 'housed' as FrameMode),
+  openAirSpeed: readStr('openAirSpeed', '0'),
+
+  // ── the robotics block (2026-09-14) ──────────────────────────────────────
+  // 0.9 is anodised / painted aluminium and most machine housings; bare
+  // polished metal is 0.1 and would remove most of the housing's loss, which is
+  // exactly why it is an input and not a constant.
+  emissivity: readStr('emissivity', '0.9'),
+  // THE HEAT PATH (2026-09-26).  A browser that saved the old mount fields
+  // gets the nearest option (see `heatPathOf`); a fresh one gets 'housing'.
+  heatPath: heatPathOf({
+    heatPath: readTherm<unknown>('heatPath', ''),
+    mountMode: readTherm<unknown>('mountMode', ''),
+    mountG: readTherm<unknown>('mountG', ''),
+  }),
+  endFaces: readMode('endFaces', END_FACE_MODES, 'still' as EndFaceMode),
+  endFaceSides: readStr('endFaceSides', '2'),
+
+  maxIter: readStr('maxIter', '6'),
+
+  // Whatever this browser stacked last time, re-validated: what is in
+  // localStorage was written by a previous version of this app.
+  compareRows: normalizeLocalRows(readTherm<unknown>('compareRows', [])),
+
+  meshCfg: null,
+
+  view: readTherm('view', 'temp' as ThermView),
+  eqTemp: readTherm('eqTemp', true),
+  showFlux: readTherm('showFlux', true),
+
+  set: (k, v) => {
+    set({ [k]: v } as Pick<ThermalState, typeof k>);
+    const st = get();
+    const persistPanelSettings = () => {
+      const snap: Record<string, unknown> = {};
+      for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
+      // The server copy is per account, so carry the exact motor identity
+      // beside the prop ID. Invalid/in-transition choices persist as an
+      // explicit propeller source with no ID and are refused by the mapper.
+      return savePanelSettings('thermal', thermalServerSettingsSnapshot(
+        snap, st.airSpeedSource, st.propellerId, st.propellerContextKey,
+        livePropellerContextKey()), 700, st.fieldsMotor);
+    };
+    if (PERSISTED.includes(k)) {
+      writeTherm(k as string, v);
+      // An edit of a cooling field is the account's own record of this motor now.
+      if (COOLING_PERSISTED.has(k as string) && get().fieldsMotor) set({ coolingSource: 'saved' });
+      // …and to the SERVER, the memory every browser shares — the same bargain
+      // the Electromagnetic tab has with the config (user 2026-09-07: "remember all
+      // the latest settings … the same way for every simulation").
+      void persistPanelSettings();
+      // The Controller tab's cooling INHERITS these from here (owner
+      // 2026-09-25) — tell it to re-fetch rather than making it poll.
+      if (COOLING_INHERITANCE_KEYS.has(k as string)) {
+        try { window.dispatchEvent(new CustomEvent('thermal-cooling-saved')); }
+        catch { /* SSR/no-window */ }
+      }
+    } else if ((k === 'propellerId' || k === 'propellerContextKey') && st.hydrated
+               && st.airSpeedSource === 'propeller') {
+      // This is the sole writer for the shared (server) propeller ID. The ID
+      // is never put in browser-global therm.* storage; stale identities write
+      // a blank ID so another caller cannot inherit a prior motor's propeller.
+      void persistPanelSettings();
+    }
+  },
+
+  setPropellerCooling: (source, id = '', contextKey = '') => {
+    set({ airSpeedSource: source, propellerId: source === 'propeller' ? id : '',
+      propellerContextKey: source === 'propeller' ? contextKey : '' });
+    writeTherm('airSpeedSource', source);
+    const st = get();
+    const snap: Record<string, unknown> = {};
+    for (const pk of PERSISTED) snap[pk as string] = (st as unknown as Record<string, unknown>)[pk as string];
+    void savePanelSettings('thermal', thermalServerSettingsSnapshot(
+      snap, st.airSpeedSource, st.propellerId, st.propellerContextKey,
+      livePropellerContextKey()), 700, st.fieldsMotor);
+    if (st.fieldsMotor) set({ coolingSource: 'saved' });
+    try { window.dispatchEvent(new CustomEvent('thermal-cooling-saved')); }
+    catch { /* SSR/no-window */ }
+  },
+
+  /**
+   * First mount after a reload: adopt whatever the backend still has.
+   *
+   * Only ever fills EMPTY slices — a result solved in this session always wins
+   * over the one on disk, because the disk copy may be the same answer and may
+   * be an older one, and silently replacing what is on screen with a file is
+   * how the Electromagnetic tab's "backNewer" bug read.
+   */
+  hydrate: async () => {
+    if (get().hydrated) return;
+    set({ hydrated: true });
+    // The mesh block is read from the server first, so the context line shows
+    // what a Solve would actually mesh, not the browser's leftover keys.
+    try { set({ meshCfg: await fetchMeshParams() }); } catch { /* shown as local */ }
+    // The FIELDS, from the server: what the user last had on this tab in ANY
+    // browser, solved or not.  Written straight into state (not via `set`) so
+    // the adoption does not echo back as a save.
+    try {
+      // The motor and the follow epoch this request is made for: a response that
+      // arrives after another motor's fields were adopted is stale.
+      const epoch0 = followEpoch;
+      const motor0 = loadedMotorIdentity();
+      const srv = await loadPanelSettings('thermal');
+      const adopted = adoptSettings(get() as unknown as Record<string, unknown>, srv?.settings, PERSISTED as string[]);
+      // The stack is a LIST of objects, not a text field: what the server holds
+      // is JSON another browser wrote, so it is re-validated before it can
+      // reach the table (`adoptSettings` only checks the shape is an array).
+      if ('compareRows' in adopted) {
+        adopted.compareRows = normalizeLocalRows(adopted.compareRows);
+      }
+      // THE HEAT PATH (2026-09-26): validated like an enum, and a server copy
+      // saved before it existed maps its old mount fields to the nearest one.
+      const srvS = (srv?.settings ?? null) as Record<string, unknown> | null;
+      if ('airSpeedSource' in adopted
+          && !['manual', 'propeller'].includes(String(adopted.airSpeedSource))) {
+        adopted.airSpeedSource = 'manual';
+      }
+      if (String(adopted.airSpeedSource ?? srvS?.airSpeedSource ?? 'manual') === 'propeller') {
+        const liveKey = livePropellerContextKey();
+        const savedId = typeof srvS?.propellerId === 'string' ? srvS.propellerId : '';
+        const savedKey = typeof srvS?.propellerContextKey === 'string'
+          ? srvS.propellerContextKey : '';
+        const bound = !!liveKey && !!savedId && savedKey === liveKey;
+        (adopted as Record<string, unknown>).propellerId = bound ? savedId : '';
+        (adopted as Record<string, unknown>).propellerContextKey = bound ? savedKey : '';
+      } else {
+        (adopted as Record<string, unknown>).propellerId = '';
+        (adopted as Record<string, unknown>).propellerContextKey = '';
+      }
+      if (srvS && ('heatPath' in srvS || 'mountG' in srvS || 'mountMode' in srvS)) {
+        (adopted as Record<string, unknown>).heatPath = heatPathOf(srvS);
+      }
+      // A STALE response (a motor change adopted its own fields while this was in
+      // flight) keeps only the account-level fields: its cooling is the previous
+      // motor's and must not be reinstalled over the new one's.
+      const stale = hydrationIsStale(epoch0, followEpoch, motor0, loadedMotorIdentity());
+      // What the read ESTABLISHES (`hydrationPlan`): only a complete cooling bound
+      // to a motor is adopted; a sparse / empty / unbound response keeps the
+      // browser's fields UNVERIFIED and leaves the resolution to the server's
+      // follow answer (below) - never to values localStorage kept from another motor.
+      const plan = hydrationPlan(srv, loadedMotorIdentity());
+      const toSet = (stale || !plan.adoptCooling) ? withoutMotorOwned(adopted) : adopted;
+      if (Object.keys(toSet).length) set(toSet as Partial<ThermalState>);
+      // WHICH MOTOR these fields are for (2026-10-15) - the server says; a
+      // record from before per-motor settings names none, and the loaded motor
+      // (the one it was last used with) stands in for it.  A solve of any other
+      // loaded motor is refused until the fields are that motor's (`ownershipIssue`).
+      // A FAILED settings fetch (`srv` null) assigns no identity: the fields stay
+      // unverified and a loaded motor's solve is held back (`ownershipIssue`).
+      if (!stale && srv && plan.owner) {
+        set({
+          fieldsMotor: plan.owner,
+          coolingSource: isCoolingSource(srv.source) ? (srv.source as CoolingSource) : 'last_used',
+          coolingApp: srv.application ?? null,
+        });
+      }
+      if (!stale && plan.needsResync) void resyncLoadedMotorCooling();
+    } catch { /* offline: localStorage already seeded the state */ }
+    set({ serverSettingsLoaded: true });
+    try {
+      const last = await fetchLastThermal();
+      const adopt = <T,>(cur: Slice<T>,
+                         e: { result: T; geometry_fingerprint: string | null;
+                              computed_at: string | null;
+                              stale_geometry: boolean | null } | null,
+                         tile: (r: T) => T): Slice<T> =>
+        (cur.data || !e?.result) ? cur : {
+          data: tile(e.result), busy: false, err: null,
+          // No stamp of our own: this result was not solved by this client, so
+          // the backend's verdict is the only witness there is.
+          geoSig: null, backendStale: e.stale_geometry,
+          restoredAt: e.computed_at, startedAt: null,
+        };
+      // A field solved before 2026-09-09 17:09 carries no `n_sectors` (only
+      // the mesh preview did), so the tiler would leave it a quarter of a
+      // motor.  It was solved on the Mesh tab's own sector count, which is
+      // what the tiler borrows here (user: "make the thermal fields cover
+      // the whole motor, not just 1/4").
+      const tileRestored = <P extends { n_sectors?: number }>(p: P): P => {
+        if (!p || (p.n_sectors ?? 0) > 0) return tileFullRing(p as never) as P;
+        const mb = readMeshSettings();
+        const n = Math.max(1, Math.round(Number(mb.n_sectors ?? mb.nSectors ?? 1) || 1));
+        return tileFullRing({ ...p, n_sectors: n, symmetry_mult: n } as never) as P;
+      };
+      set({
+        field: adopt(get().field, last.field, tileRestored),
+        coupled: adopt(get().coupled, last.coupled,
+                       (r) => ({ ...r, field: tileRestored(r.field) })),
+      });
+    } catch (e) {
+      // A missing /last is not an error the user has to read: the tab simply
+      // starts empty and draws the geometry.  Keep it for the console.
+      console.warn('thermal: could not read the last result', msg(e));
+    }
+    if (!get().field.data) await get().loadGeometry();
+  },
+
+  refreshEmRun: async () => {
+    try { set({ emRun: await fetchEmRun() }); }
+    catch (e) { console.warn('thermal: could not read the latest EM run', msg(e)); }
+  },
+
+  refreshLast: async () => {
+    // `Date.parse` on both — the stamps arrive in two shapes and a string
+    // compare across them is meaningless (see the mechanical store).
+    const when = (v: unknown): number => {
+      const t = Date.parse(String(v ?? ''));
+      return Number.isFinite(t) ? t : NaN;
+    };
+    try {
+      const last = await fetchLastThermal();
+      const tileRestored = <P extends { n_sectors?: number }>(p: P): P => {
+        if (!p || (p.n_sectors ?? 0) > 0) return tileFullRing(p as never) as P;
+        const mb = readMeshSettings();
+        const n = Math.max(1, Math.round(Number(mb.n_sectors ?? mb.nSectors ?? 1) || 1));
+        return tileFullRing({ ...p, n_sectors: n, symmetry_mult: n } as never) as P;
+      };
+      const adopt = <T,>(cur: Slice<T>,
+                         e: { result: T; geometry_fingerprint: string | null;
+                              computed_at: string | null;
+                              stale_geometry: boolean | null } | null,
+                         tile: (r: T) => T): Slice<T> => {
+        if (!e?.result || cur.busy) return cur;
+        const mine = when((cur.data as { computed_at?: string } | null)?.computed_at
+                          ?? cur.restoredAt);
+        const theirs = when(e.computed_at);
+        if (!Number.isNaN(mine) && !(theirs > mine)) return cur;
+        return {
+          data: tile(e.result), busy: false, err: null,
+          geoSig: null, backendStale: e.stale_geometry,
+          restoredAt: e.computed_at, startedAt: null,
+        };
+      };
+      set({
+        field: adopt(get().field, last.field, tileRestored),
+        coupled: adopt(get().coupled, last.coupled,
+                       (r) => ({ ...r, field: tileRestored(r.field) })),
+      });
+    } catch (e) {
+      console.warn('thermal: could not refresh the last result', msg(e));
+    }
+  },
+
+  loadGeometry: async () => {
+    // A build already running is not re-entered — unless its flag is STALE
+    // (a request the API restart cut off never resolves, and a flag stuck
+    // true would disable the button until a reload: 'the Build mesh button
+    // is impossible to click', 2026-09-07).
+    if (get().geomBusy && Date.now() - (get().geomStartedAt ?? 0) < 180_000) return;
+    const t0 = Date.now();
+    set({ geomBusy: true, geomErr: null, geomStartedAt: t0 });
+    try {
+      // Tiled here, once: a sector mesh drawn as it comes back is a quarter of
+      // a motor on an otherwise empty tab.
+      const mesh = await fetchMeshParams();
+      set({ meshCfg: mesh });
+      const m = tileFullRing(await fetchThermalMesh(mesh));
+      set({ geom: m });
+      noteSecs(set, get, 'mesh',
+               // What it COST to build: a cache hit is not a 0.05 s mesh, and
+               // an estimate taught by cache hits would say "~0 s" forever.
+               (m.mesh_s ?? 0) > 0 ? m.mesh_s : ((Date.now() - t0) / 1000));
+    } catch (e) {
+      set({ geomErr: msg(e) });
+    } finally {
+      set({ geomBusy: false, geomStartedAt: null });
+    }
+  },
+
+  solveField: async (fresh) => {
+    const s = get();
+    // Never send a boundary condition that cannot be solved (a liquid loop with
+    // no pump, no cooled surface at all): the panel disables Solve on the same
+    // verdict, and this is the second lock on the same door.
+    const bad = coolingIssue(s) ?? propellerContextIssue(s)
+      ?? fieldsBlockIssue(s);
+    if (bad) { set({ field: { ...s.field, busy: false, err: bad } }); return; }
+    set({ field: { ...s.field, busy: true, err: null, startedAt: Date.now() },
+          emMissing: null, emMissingReason: null });
+    try {
+      // The mesh block is still read for the panel's mesh line; the solve
+      // itself runs on the EM run's own mesh.
+      try { set({ meshCfg: await fetchMeshParams() }); } catch { /* display only */ }
+      const out = tileFullRing(await fetchThermalField(buildRequest(s, fresh)));
+      set({ field: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
+                     backendStale: false, restoredAt: null, startedAt: null },
+            ...(out.em_run ? { emRun: { ok: true, em_run: out.em_run } } : {}) });
+      if (!out.cached) noteSecs(set, get, 'field', out.elapsed_s ?? out.solve_time_s);
+    } catch (e) {
+      // There is no Electromagnetic run of this machine at this point — this
+      // tab NEVER makes that run itself (owner rule, repeated 2026-09-30).
+      // Solve just STOPS: the panel reads `emMissing` and shows one line and
+      // a link to the Electromagnetic tab. Every other error is the user's to
+      // read as before.
+      if (isNoEmRun(e)) {
+        set({ field: { ...s.field, busy: false, err: null, startedAt: null },
+              emMissing: msg(e), emMissingReason: refusalReason(e),
+              emRun: { ok: false, error: msg(e), reason: refusalReason(e) } });
+        return;
+      }
+      set({ field: { ...EMPTY, err: msg(e) } as Slice<ThermalField> });
+    }
+  },
+
+  /** The EM↔thermal fixed point: losses heat the copper, hotter copper is more
+   *  resistive, more resistive copper loses more.  Each iteration is a full EM
+   *  solve plus a conduction solve, which is why the cap is an input and the
+   *  run is a deliberate press.
+   *
+   *  Like `solveField`, this reuses ONE loss map and never makes it: a
+   *  `no_electromagnetic_run` refusal stops the solve and is read off
+   *  `emMissing`, exactly as the field Solve's does. */
+  solveCoupled: async () => {
+    const s = get();
+    const bad = coolingIssue(s) ?? propellerContextIssue(s)
+      ?? fieldsBlockIssue(s);
+    if (bad) { set({ coupled: { ...s.coupled, busy: false, err: bad } }); return; }
+    set({ coupled: { ...s.coupled, busy: true, err: null, startedAt: Date.now() },
+          emMissing: null, emMissingReason: null });
+    try {
+      try { set({ meshCfg: await fetchMeshParams() }); } catch { /* display only */ }
+      const raw = await fetchCoupled({
+        ...buildRequest(s),
+        // 1…12 on the backend; anything outside that is the field's typo, not a
+        // request, so it falls back to the API's own default rather than 422.
+        max_iter: Math.min(12, Math.max(1, Math.round(num(s.maxIter, 6)))),
+      });
+      const out: CoupledResult = { ...raw, field: tileFullRing(raw.field) };
+      set({ coupled: { data: out, busy: false, err: null, geoSig: liveGeoSig(),
+                       backendStale: false, restoredAt: null, startedAt: null },
+            ...(out.em_run ? { emRun: { ok: true, em_run: out.em_run } } : {}) });
+      if (!out.cached) noteSecs(set, get, 'coupled', out.elapsed_s ?? out.solve_time_s);
+    } catch (e) {
+      if (isNoEmRun(e)) {
+        set({ coupled: { ...s.coupled, busy: false, err: null, startedAt: null },
+              emMissing: msg(e), emMissingReason: refusalReason(e),
+              emRun: { ok: false, error: msg(e), reason: refusalReason(e) } });
+        return;
+      }
+      set({ coupled: { ...EMPTY, err: msg(e) } as Slice<CoupledResult> });
+    }
+  },
+}));
+
+/* ── the cooling follows the loaded motor (2026-10-15) ────────────────────────
+   Loading a different motor moves the account's Thermal cooling to that motor's
+   application ON THE SERVER (`PUT /api/me/last_motor` answers with what it
+   did).  This store adopts that answer so a Run from the Electromagnetic tab
+   never sends the previous motor's propeller source: a robot motor gets
+   Robotics, a propeller motor its propeller with a fresh key.  A store that has
+   not hydrated yet reads the already-followed server copy when it does. */
+function adoptFollowAnswer(answer: unknown): void {
+  const st = useThermalStore.getState();
+  if (!st.hydrated) return;
+  const motor = getLastMotorState();
+  let remembered: string | null = null;
+  if (motor.status === 'loaded' && motor.email && motor.selection) {
+    const refId = configureRefIdForSelection(motor.selection);
+    try {
+      remembered = readCoolChoice(localStorage.getItem(PROP_CHOICE_LS), coolChoiceKey(
+        motor.email, refId ?? `die:${motor.selection.die}`, motor.selection.config)).propId ?? null;
+    } catch { /* browser storage is a convenience */ }
+  }
+  // THE MOTOR'S OWN FIELDS (2026-10-15).  When the motor changed, the server has
+  // already put the fields of the new motor - its saved record, its
+  // configuration's defaults or its application's rule - in the account's
+  // Thermal record, with the frame and the bore reset instead of inherited.
+  // Adopt them as they are and do NOT save them back: a default must not turn
+  // into "your saved settings" just because it was shown.
+  const mc = followAdoption(answer, st.fieldsMotor, loadedMotorIdentity());
+  if (mc) {
+    followEpoch += 1;
+    const f = adoptableCoolingFields(mc.fields);
+    const next: Partial<ThermalState> = {
+      tabStale: false,
+      ...(f as unknown as Partial<ThermalState>),
+      fieldsMotor: mc.motor,
+      coolingSource: mc.source,
+      coolingApp: mc.application,
+    };
+    if ('heatPath' in f) next.heatPath = heatPathOf({ heatPath: f.heatPath });
+    const propSource = mc.fields.airSpeedSource === 'propeller' ? 'propeller' : 'manual';
+    next.airSpeedSource = propSource;
+    next.propellerId = propSource === 'propeller' ? (mc.fields.propellerId ?? '') : '';
+    next.propellerContextKey = propSource === 'propeller' ? (mc.fields.propellerContextKey ?? '') : '';
+    useThermalStore.setState(next);
+    for (const [k, v] of Object.entries(f)) {
+      if (PERSISTED.includes(k as keyof ThermalState)) writeTherm(k, v);
+    }
+    writeTherm('airSpeedSource', propSource);
+    try { window.dispatchEvent(new CustomEvent('thermal-cooling-saved')); }
+    catch { /* SSR/no-window */ }
+    // A propeller this browser remembers for the motor wins over the server's
+    // pick when the registry still allows it - that is the user's own choice.
+    const allowed = ((answer as { allowed_propellers?: unknown })?.allowed_propellers ?? []) as string[];
+    if (propSource === 'propeller' && remembered && remembered !== next.propellerId
+        && allowed.includes(remembered)) {
+      st.setPropellerCooling('propeller', remembered, next.propellerContextKey ?? '');
+    }
+    return;
+  }
+  // An answer that carries fields but was not adopted (already owned, incomplete,
+  // or for another motor) is not a reason to run the old key-by-key path.
+  if ((answer as { fields?: unknown } | null)?.fields) return;
+  const f = thermalFollowFields(answer, remembered);
+  if (!f) return;
+  useThermalStore.setState({ coolMode: f.coolMode as CoolMode });
+  writeTherm('coolMode', f.coolMode);
+  // One write carries the new mode, source and propeller to the server copy.
+  st.setPropellerCooling(f.airSpeedSource, f.propellerId, f.propellerContextKey);
+}
+registerThermalFollow(adoptFollowAnswer);
+
+/** Why the cooling fields must not be used for a solve right now, or `null`. */
+function fieldsBlockIssue(s: ThermalState): string | null {
+  const m = loadedMotorIdentity();
+  if (s.tabStale && m) {
+    return `this tab shows ${m.die} ${m.config}, which is no longer the motor the account has loaded - reload`;
+  }
+  return ownershipIssue(s.fieldsMotor, m);
+}
+
+/** The motor the account has loaded, as the cooling record names it. */
+function loadedMotorIdentity(): MotorIdentity | null {
+  const m = getLastMotorState();
+  return m.status === 'loaded' && m.selection
+    ? { die: m.selection.die, config: m.selection.config } : null;
+}
+
+/** Ask the server for the cooling of the motor the ACCOUNT has loaded - a READ,
+ *  never a PUT, so a stale tab can not reselect its motor for the account - and
+ *  adopt the COMPLETE answer if it is for the motor THIS tab shows.  The recovery
+ *  of a hydration that could not establish ownership (a failed, empty, sparse or
+ *  unbound read) or of a follow answer that was lost.
+ *
+ *  A response is dropped when a newer selection happened meanwhile (the selection
+ *  generation moved - another reference, A -> B -> A) or a follow adopted other
+ *  fields (`followEpoch`).  When the account's motor is not this tab's, the tab is
+ *  stale: nothing is adopted and its solves are refused. */
+async function resyncLoadedMotorCooling(): Promise<void> {
+  const m = getLastMotorState();
+  if (m.status !== 'loaded' || !m.email || !m.selection) return;
+  const selection = m.selection;
+  const gen = currentLastMotorEpoch();
+  const follow0 = followEpoch;
+  try {
+    const read = await fetchLastMotorCooling(m.email);
+    if (!isCurrentLastMotorOperation(m.email, gen) || followEpoch !== follow0) return;
+    const now = getLastMotorState();
+    if (now.status !== 'loaded' || !sameSelection(now.selection, selection)) return;
+    const { thermal, accountDiffers } = resyncAnswer(read, selection);
+    if (accountDiffers) { useThermalStore.setState({ tabStale: true }); return; }
+    if (thermal) adoptFollowAnswer(thermal);
+  } catch { /* stays unverified: the solve is held back, the backend resolves */ }
+}

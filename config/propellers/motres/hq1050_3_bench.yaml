@@ -1,0 +1,73 @@
+# MOTRES bench-measured propeller entry (schema: config/propellers/README.md).
+# Every number below was MEASURED on a MOTRES propeller dynamometer with this propeller; nothing is
+# taken from a vendor table. Source documents and rows are named per table.
+schema: propeller-1
+id: motres_bench_hq1050_3
+vendor: HQProp
+# the picker prints the model up to the bracket ("HQ 10.5×5×3 MOTRES bench"): the bench origin stays visible
+model: HQ 10.5*5*3 MOTRES bench (HQ1050-3, measured on the MOTRES dynamometer)
+series: MOTRES bench-measured
+status: current
+product_url: null
+source_urls:
+- https://emotres.com/shop/ciano-40-12
+- https://emotres.com/news/
+accessed: '2026-10-12'
+bench_measured: true
+geometry:
+  diameter_in: 10.5
+  diameter_mm: 266.7
+  pitch_in: 5.0
+  pitch_mm: 127.0
+  blades: 3
+material: null
+published_limits: {}
+performance:
+  data_quality: torque_measured
+  static_hover_only: true
+  test_density_kg_m3: 1.1375
+  density_basis: "measured ambient of the 2026-06-16 sweep: 31.3 C, 74.7 % RH, 100.70 kPa -> moist-air density 1.1375 kg/m3 (Magnus saturation pressure; dry air at the same p, T would be 1.1522)"
+  tables:
+    - id: motres_ciano14_40_12_bldc_2026-06-16
+      source_url: https://emotres.com/shop/ciano-40-12
+      source_documents:
+        - "CIANO14_40_12_Comparison_Report.pdf (MOTRES, June 2026), section 3, table 'Measured Data - CIANO14 40_12 flat-wire (1050 prop, 24 V)', rows 10 %..100 %"
+        - "MOTRES_ProofOfTRL_CIANO14.pdf (2026-08-21), section 3, test campaign 1 (same rows)"
+      accessed: '2026-10-12'
+      test_motor: "MOTRES CIANO14 40_12 (L12), 80 A trapezoidal ESC, 24 V bus"
+      test_bench: "LY-10KGF propeller dynamometer, torque cell (reaction torque = propeller shaft torque)"
+      prop_label_in_source: "HQ1050 3-blade (10.5x5), report: 'our prop 1050' = T-Motor test prop HQ1050-3"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: 0.001
+      columns_published: ["throttle", "rpm", "voltage_V", "current_A", "thrust_g", "torque_Nm", "temperature_C", "power_el_W", "power_shaft_W", "efficiency_el_pct", "g_per_W"]
+      note: "quick automatic ramp (transient temperatures, 29-38 C); Pel = bus input of motor + ESC"
+      rows:
+      - {thr: 10, V: 24.28, I: 0.33, Pel: 8.0, rpm: 1871, thrust_g: 48, torque_Nm: 0.011}
+      - {thr: 20, V: 24.26, I: 1.65, Pel: 40.1, rpm: 4006, thrust_g: 252, torque_Nm: 0.047}
+      - {thr: 30, V: 24.19, I: 3.64, Pel: 87.9, rpm: 5533, thrust_g: 528, torque_Nm: 0.093}
+      - {thr: 40, V: 24.05, I: 6.81, Pel: 163.7, rpm: 7040, thrust_g: 911, torque_Nm: 0.151}
+      - {thr: 50, V: 23.82, I: 12.19, Pel: 290.2, rpm: 8719, thrust_g: 1438, torque_Nm: 0.231}
+      - {thr: 60, V: 23.59, I: 19.32, Pel: 455.8, rpm: 10222, thrust_g: 1993, torque_Nm: 0.317}
+      - {thr: 70, V: 23.29, I: 28.31, Pel: 659.5, rpm: 11557, thrust_g: 2605, torque_Nm: 0.414}
+      - {thr: 80, V: 23.06, I: 39.96, Pel: 921.4, rpm: 12819, thrust_g: 3305, torque_Nm: 0.528}
+      - {thr: 90, V: 22.80, I: 54.00, Pel: 1231.2, rpm: 13990, thrust_g: 3976, torque_Nm: 0.639}
+      - {thr: 100, V: 22.66, I: 61.89, Pel: 1402.2, rpm: 14524, thrust_g: 4304, torque_Nm: 0.696}
+    - id: motres_ciano14_40_12_continuous_2026-08-13
+      source_url: https://emotres.com/news/
+      source_documents:
+        - "MOTRES_ProofOfTRL_CIANO14.pdf (2026-08-21), section 6.2 'Continuous-power record (13 August 2026)'"
+      accessed: '2026-10-12'
+      test_motor: "MOTRES CIANO14 40_12 (L12), FOURnamics nCTRL FOC ESC, 24.6 V bus"
+      prop_label_in_source: "3-blade 10x5"
+      identity: assumed_same_geometry
+      use_in_fit: false
+      torque_resolution_Nm: null
+      columns_published: ["rpm", "thrust_g", "power_shaft_W", "voltage_V", "current_A", "efficiency_sys_pct", "coil_temperature_C"]
+      note: "one continuous point, ambient not reported (so its density is unknown): stored as the held-out check of the fit. The torque is shaft power / omega (1014 W at 14400 rpm). Within 2 % of the 2026-06-16 fit at the same rpm (4227 g, 1008 W at 14400 rpm and 1.1375 kg/m3), hence the same propeller."
+      rows:
+      - {thr: null, V: 24.6, I: 55.0, Pel: 1353.0, rpm: 14400, thrust_g: 4300, torque_Nm: 0.6724, torque_derived: true}
+notes:
+- Measured by MOTRES on its own bench; the 10.5 in disc (266.7 mm) is the D of C_T, C_P and of the slipstream disc.
+- The 2026-06-23 30-minute continuous run (3455 g, 770 W shaft, 23.7 V / 43.85 A) reports no rpm and no propeller; its thrust and shaft power fall on this curve (770 W -> 3499 g at 13 196 rpm, +1.3 % vs the logged 3455 g; the product page's 13 081 rpm is a linear interpolation of the 2026-06-16 table, not a log), so it is attributed to this propeller in the S1 bench calibration (config/propeller_s1/*/L12.json, thermal_calibration.bench).
+- Against T-Motor FPV 10x5 (10X5X3, tmotor_fpv_10x5) this propeller makes 16-19 % less thrust and absorbs 23-26 % less power at the same rpm (8700-14500 rpm, same air density); at equal shaft power the thrust is within 1 %, but the speed is about 9 % higher (770 W: 13 200 vs 12 100 rpm), so the motor torque and current are about 9 % lower. They are different propellers; the bench motor ran this one.

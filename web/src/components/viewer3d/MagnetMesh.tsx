@@ -29,12 +29,12 @@ const MagnetMesh: React.FC = () => {
       shape.closePath();
       
       const extrudeSettings = {
-        depth: geometry.stator_width,
+        depth: geometry.motor_length,
         bevelEnabled: false,
       };
       
       const extrudedGeometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-      extrudedGeometry.translate(0, 0, -geometry.stator_width / 2);
+      extrudedGeometry.translate(0, 0, -geometry.motor_length / 2);
       
       // Alternating colors for N/S poles
       const color = i % 2 === 0 ? '#dc2626' : '#2563eb'; // Red for N, Blue for S

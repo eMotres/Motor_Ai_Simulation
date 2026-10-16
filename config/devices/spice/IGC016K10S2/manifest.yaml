@@ -1,0 +1,23 @@
+# SPICE model manifest — IGC016K10S2 (CoolGaN 100 V G5, integrated Schottky)
+# Written 2026-10-05 from what Infineon actually publishes for the part.
+part: IGC016K10S2
+status: not_published
+status_reason: >-
+  Infineon publishes no SPICE / simulation model for this part (checked
+  2026-10-05). The part's design-resources list carries only two reference
+  boards (REF_12KW_HFHD_PSU, REF_OPTI_80V20A_GAN); the product-document list
+  (ispnId 77461) carries the datasheet only. No CoolGaN 100 V G5
+  "simulationmodels" asset exists under /assets/row/public/documents/24/50/
+  (100-v-g5 variants return 404). Not a login / WAF block — not public.
+source:
+  vendor: Infineon Technologies AG
+  product_page: https://www.infineon.com/part/IGC016K10S2
+  checked: "2026-10-05"
+  owner_action: >-
+    request the CoolGaN 100 V G5 SPICE model for IGC016K10S2 from Infineon
+    (FAE / support ticket); save the zip to C:\Users\vadim\Downloads
+generation_status: >-
+  NOT GENERATED (2026-10-05): no vendor model. Switching loss on the card =
+  datasheet times-and-charges overlap + published E_oss curve, labelled.
+licence:
+  in_git: false

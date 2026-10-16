@@ -1,0 +1,57 @@
+{
+  "purpose": "Requested Opus independent read-only audit",
+  "approval": "not_sent_pending_explicit_payload_permission_after_auto_review_rejection",
+  "files": [
+    {
+      "path": "scripts/Invoke-ClaudeApiAgent.ps1",
+      "bytes": 16034,
+      "sha256": "9577f21a0953ba64660175a377185eb2090a13c3f83dce8f4e5b04c18cf5f8cf"
+    },
+    {
+      "path": "docs/claude-api-agent.md",
+      "bytes": 5183,
+      "sha256": "6de95770e427b9d18daec0789bc3e1a44b97fd6e3bdc4a4e6484f74c2ddd12f9"
+    },
+    {
+      "path": "docs/d85-configure-coupling-progress-2026-10-08.md",
+      "bytes": 83269,
+      "sha256": "2c20d26f8c9be8429447dbc25c0523cc74da57f64774517c312365340893119c"
+    },
+    {
+      "path": "scratch_s1_20261006/d85_finish_20261007/d85-full-cold-card-domain-20261008/phase06-recovery-independent-review-20261009.md",
+      "bytes": 3799,
+      "sha256": "d4bba6d1ff0cfbdc86ed31e62b281c2a720ccbe8dd8ece2743937089056d59d8"
+    },
+    {
+      "path": "scratch_s1_20261006/d85_finish_20261007/d85-full-cold-card-domain-20261008/phase06-recovery-proposal/run_phase06_recovery.py",
+      "bytes": 17805,
+      "sha256": "696765cc959e55fbcfc83e3ea3e5655b61fec062719218ef484e7a61707b4ba0"
+    },
+    {
+      "path": "scratch_s1_20261006/d85_finish_20261007/d85-full-cold-card-domain-20261008/phase06-recovery-proposal/launch_reviewed_phase06_recovery.cjs",
+      "bytes": 9595,
+      "sha256": "63c14608d3c784303f9880767ce5fd7b5c5e2681db544531fd8e261674b806a0"
+    },
+    {
+      "path": "scratch_s1_20261006/d85_finish_20261007/d85-full-cold-card-domain-20261008/phase06-recovery-proposal/recovery-plan.json",
+      "bytes": 2687,
+      "sha256": "a72bd8f5f6e174ec3e6a152df68f34a8f228ed13857e618c7fc6b9cf42d448cf"
+    },
+    {
+      "path": "scratch_s1_20261006/d85_finish_20261007/d85-full-cold-card-domain-20261008/phase06-recovery-proposal/package_manifest.json",
+      "bytes": 27648,
+      "sha256": "f590aad61a624e54a47f792b17d7bafb91d10899836bc7f9bbd18ac94841c1b6"
+    },
+    {
+      "path": "scratch_s1_20261006/d85_finish_20261007/d85-full-cold-card-domain-20261008/phase06-recovery-proposal/launch_manifest.json",
+      "bytes": 1167,
+      "sha256": "36a5e2a6086c9fed7843fbbe31a7ead5e472d38ade6042ac0245c4693c030880"
+    },
+    {
+      "path": "scratch_s1_20261006/d85_finish_20261007/d85-full-cold-card-domain-20261008/phase06-recovery-proposal/test_phase06_recovery.py",
+      "bytes": 4786,
+      "sha256": "2e549c2034180fd4aa874fcef3105bc9cbc78aab685b003bef93e095bba63250"
+    }
+  ],
+  "note": "Only enumerated files plus mandatory project rules supplied by helper; no raw FEM response files, credentials, config, Drive, ERP, server writes or remote tools. No API invocation occurred."
+}

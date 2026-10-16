@@ -1,0 +1,292 @@
+{
+  "best_balance": {
+    "Tavg": 25.706585702057698,
+    "ripple": 6.81286023022224,
+    "gamma": -15,
+    "over": {
+      "magnet_fill_up": 0.56,
+      "magnet_up_gap": 2.5,
+      "rotor_fill_r": 2.0,
+      "magnet_fill_down": 0.92,
+      "magnet_height": 18
+    }
+  },
+  "min_ripple": {
+    "Tavg": 24.81551616042319,
+    "ripple": 4.71110218525979,
+    "gamma": 0.0,
+    "over": {
+      "magnet_fill_up": 0.56,
+      "magnet_up_gap": 2.5,
+      "rotor_fill_r": 2.0,
+      "magnet_fill_down": 0.92
+    }
+  },
+  "max_torque": {
+    "Tavg": 26.52161030444664,
+    "ripple": 16.730137816670993,
+    "gamma": -15,
+    "over": {
+      "magnet_fill_up": 0.48,
+      "magnet_up_gap": 2.5,
+      "rotor_fill_r": 2.0,
+      "magnet_fill_down": 0.92,
+      "magnet_height": 18
+    }
+  },
+  "all": [
+    {
+      "Tavg": 24.81551616042319,
+      "ripple": 4.71110218525979,
+      "gamma": 0.0,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "r3-start"
+    },
+    {
+      "Tavg": 24.139307377458735,
+      "ripple": 8.261381502190472,
+      "gamma": -30,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "gamma=-30"
+    },
+    {
+      "Tavg": 24.471925105204846,
+      "ripple": 10.416010573635239,
+      "gamma": -25,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "gamma=-25"
+    },
+    {
+      "Tavg": 25.152754257610418,
+      "ripple": 9.695148507667605,
+      "gamma": -20,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "gamma=-20"
+    },
+    {
+      "Tavg": 25.500614247860753,
+      "ripple": 5.794332371207642,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "gamma=-15"
+    },
+    {
+      "Tavg": 25.640226986147027,
+      "ripple": 7.610445789704667,
+      "gamma": -10,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "gamma=-10"
+    },
+    {
+      "Tavg": 25.12242739276601,
+      "ripple": 6.210870768448895,
+      "gamma": -5,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "gamma=-5"
+    },
+    {
+      "Tavg": 24.81551616042319,
+      "ripple": 4.71110218525979,
+      "gamma": 0,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "gamma=0"
+    },
+    {
+      "Tavg": 24.175872780781837,
+      "ripple": 8.602085198258184,
+      "gamma": 5,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92
+      },
+      "tag": "gamma=5"
+    },
+    {
+      "Tavg": 25.500614247860753,
+      "ripple": 5.794332371207642,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 16
+      },
+      "tag": "magnet_height=16"
+    },
+    {
+      "Tavg": 25.397323873023986,
+      "ripple": 8.133764568815927,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 17
+      },
+      "tag": "magnet_height=17"
+    },
+    {
+      "Tavg": 25.706585702057698,
+      "ripple": 6.81286023022224,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18
+      },
+      "tag": "magnet_height=18"
+    },
+    {
+      "Tavg": 25.4379663524621,
+      "ripple": 6.829826706578941,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18,
+        "air_gap": 0.45
+      },
+      "tag": "air_gap=0.45"
+    },
+    {
+      "Tavg": 25.706585702057698,
+      "ripple": 6.81286023022224,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18,
+        "air_gap": 0.5
+      },
+      "tag": "air_gap=0.5"
+    },
+    {
+      "Tavg": 26.52161030444664,
+      "ripple": 16.730137816670993,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.48,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18
+      },
+      "tag": "magnet_fill_up=0.48"
+    },
+    {
+      "Tavg": 25.056565616491998,
+      "ripple": 10.062863991993737,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.52,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18
+      },
+      "tag": "magnet_fill_up=0.52"
+    },
+    {
+      "Tavg": 25.706585702057698,
+      "ripple": 6.81286023022224,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18
+      },
+      "tag": "magnet_fill_up=0.56"
+    },
+    {
+      "Tavg": 25.58071309762117,
+      "ripple": 8.840627908170934,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.4,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18
+      },
+      "tag": "magnet_up_gap=2.4"
+    },
+    {
+      "Tavg": 25.706585702057698,
+      "ripple": 6.81286023022224,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.5,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18
+      },
+      "tag": "magnet_up_gap=2.5"
+    },
+    {
+      "Tavg": 25.399018898919564,
+      "ripple": 5.849435381085451,
+      "gamma": -15,
+      "over": {
+        "magnet_fill_up": 0.56,
+        "magnet_up_gap": 2.6,
+        "rotor_fill_r": 2.0,
+        "magnet_fill_down": 0.92,
+        "magnet_height": 18
+      },
+      "tag": "magnet_up_gap=2.6"
+    }
+  ]
+}

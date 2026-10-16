@@ -1,0 +1,51 @@
+name: L25
+role: motor
+created: '2026-09-29T12:00:00'
+geometry_overrides:
+  motor_length: 25
+  wire_width: 2.2
+  wire_height: 0.65
+  wire_spacing_x: 0.1
+  wire_spacing_y: 0.13
+  num_wires_per_slot: 9.0
+  wire_split: 1
+  insulation_thickness: 0.2
+winding:
+  n_coils_per_phase: 8
+  connection: Y
+  n_parallel: 1
+  n_series: 8
+  layers: 1
+duties:
+- name: rated
+  mode: motor
+  current_arms: 40.0
+  rpm: 3000.0
+  gamma_deg: 10.0
+  note: demo duty
+  saved_at: '2026-09-29T12:00:00'
+- name: peak
+  mode: motor
+  current_arms: 80.0
+  rpm: 1500.0
+  gamma_deg: 20.0
+  note: demo duty
+  saved_at: '2026-09-29T12:00:00'
+materials:
+  magnet: N52UH_150C
+  stator_core: B15AHV950M
+  rotor_core: B15AHV950M
+battery:
+  chemistry: NMC
+  cells: 14
+  v_cell_min: 3.2
+  v_cell_nom: 3.7
+  v_cell_max: 4.2
+  v_min: 44.8
+  v_nom: 51.8
+  v_max: 58.8
+controller:
+  device: IMCQ120R010M2H
+  topology: one_3ph
+  f_carrier_hz: 20000.0
+die: Demo 80 · 24s-28p servo

@@ -1,0 +1,34 @@
+# What restic backs up.  One path per line; --files-from.
+# Install as /etc/motres/restic-include.txt.
+#
+# Derived from scripts/backup_motors.ps1 (the Windows original) and §4.4 of the
+# migration plan.  The ORDER is deliberate: the two irreplaceable files first,
+# so a human reading a backup log sees them before the bulk.
+
+# ── irreplaceable ───────────────────────────────────────────────────────────
+# .auth_secret: losing it signs EVERY account out permanently and users.py
+# refuses by design to mint a replacement.  users.json: the accounts, their
+# tiers and their per-die grants.  Together: a few kB that cannot be rebuilt
+# from anything else on the planet.
+/srv/motres/identity
+
+# ── the customers' work ─────────────────────────────────────────────────────
+# Every account's live machine, duty results, .last_* stores, presets, catalog,
+# saved simulations, sweep config, run sidecars and fields/*.npz overlay.
+# Re-solvable in principle; 90 minutes a duty in practice.
+/srv/motres/workspaces
+
+# ── the catalog ─────────────────────────────────────────────────────────────
+# die.yaml + <cfg>.yaml for all 13 dies, plus materials_library.yaml,
+# bearings_library.yaml, fusion_param_map.yaml and the template presets.
+# 26 MB, admin-written, and the thing every workspace quotes.
+/srv/motres/shared
+
+# Published work — other accounts' dies read through the community layer.
+/srv/motres/published
+
+# ── configuration ───────────────────────────────────────────────────────────
+# The env contract itself (api.env holds AUTH_SECRET) and the backup's own
+# settings.  Restoring a server without these is restoring the data and then
+# guessing the wiring.
+/etc/motres

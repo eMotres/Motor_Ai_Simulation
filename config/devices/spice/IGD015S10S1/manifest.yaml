@@ -1,0 +1,22 @@
+# SPICE model manifest — IGD015S10S1 (CoolGaN 100 V, 5 x 6 mm)
+# Written 2026-10-05 from what Infineon actually publishes for the part.
+part: IGD015S10S1
+status: not_published
+status_reason: >-
+  Infineon publishes NO documents at all for this part (checked 2026-10-05):
+  the product-document list (ispnId 79441) is empty — no datasheet, no
+  simulation model — and the design-resources list is empty. There is no
+  device card for it either (the datasheet is needed first).
+source:
+  vendor: Infineon Technologies AG
+  product_page: https://www.infineon.com/part/IGD015S10S1
+  checked: "2026-10-05"
+  owner_action: >-
+    obtain from Infineon (FAE / myInfineon) the IGD015S10S1 datasheet
+    (expected name infineon-igd015s10s1-datasheet-en.pdf) and its SPICE model
+    zip; save both to C:\Users\vadim\Downloads
+generation_status: >-
+  NOT GENERATED (2026-10-05): no datasheet and no model published; the
+  L20 variants with this device are listed as not computed.
+licence:
+  in_git: false

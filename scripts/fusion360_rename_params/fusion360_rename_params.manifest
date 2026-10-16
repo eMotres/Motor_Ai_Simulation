@@ -1,0 +1,10 @@
+{
+    "autodeskProduct": "Fusion",
+    "type": "script",
+    "author": "MOTRES",
+    "description": {
+        "": "Rename this design's legacy user parameters to motor_ai_sim's canonical geometry names (owner-approved mapping, 2026-09-25). Run once per legacy design, before fusion360_import_params / fusion360_export_params."
+    },
+    "supportedOS": "windows|mac",
+    "editEnabled": true
+}

@@ -1,0 +1,25 @@
+# Daily data-retention pass (audit 2026-09-29 #17) + due account deletions.
+#
+# Runs `python -m motor_ai_sim.retention` inside the api container: drops
+# expired sessions, raw auth events / MCP audit / per-job usage rows older
+# than their retention, rotated api.log files, old visitor chats, and purges
+# self-service account-deletion requests whose 7-day grace period ended.
+# Periods are env-configurable (RETENTION_*_DAYS in /etc/motres/api.env);
+# the table is in docs/DATA_PROTECTION_2026-09-29.md.
+#
+# Setup:
+#   sudo cp deploy/systemd/motres-retention.{service,timer} /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now motres-retention.timer
+# Dry run first:  docker compose exec -T api python -m motor_ai_sim.retention --dry-run
+
+[Unit]
+Description=eMotres data retention (sessions, raw logs, usage events, due deletions)
+After=docker.service
+
+[Service]
+Type=oneshot
+Nice=15
+IOSchedulingClass=idle
+WorkingDirectory=/opt/motres/app/deploy
+ExecStart=/usr/bin/docker compose exec -T api python -m motor_ai_sim.retention

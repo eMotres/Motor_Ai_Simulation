@@ -29,12 +29,12 @@ const RotorMesh: React.FC<RotorMeshProps> = ({ materialProps }) => {
     
     // Extrude to 3D
     const extrudeSettings = {
-      depth: geometry.stator_width,
+      depth: geometry.motor_length,
       bevelEnabled: false,
     };
     
     const extrudedGeometry = new THREE.ExtrudeGeometry(shape, extrudeSettings);
-    extrudedGeometry.translate(0, 0, -geometry.stator_width / 2);
+    extrudedGeometry.translate(0, 0, -geometry.motor_length / 2);
     
     return extrudedGeometry;
   }, [geometry]);

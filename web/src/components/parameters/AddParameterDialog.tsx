@@ -15,6 +15,12 @@ import {
 } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import { useMotorStore } from '../../stores/motorStore';
+import HelpTip from '../common/HelpTip';
+import { useTranslation } from 'react-i18next';
+import { nsT } from '../../i18n/nsT';
+
+// UI strings: locales/<lng>/geometry.json (docs/I18N.md).
+const tx = nsT('geometry');
 
 const GROUPS = [
   { id: 'stator',      label: 'Stator Parameters' },
@@ -58,6 +64,7 @@ const DEFAULTS: FormState = {
 };
 
 const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
+  useTranslation('geometry'); // re-render on language change; lazy-loads the namespace
   const { fetchSchemaFromApi, connectedToApi } = useMotorStore();
   const [form, setForm] = useState<FormState>(DEFAULTS);
   const [error, setError] = useState('');
@@ -94,7 +101,7 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
     setError('');
     setLoading(true);
     try {
-      const res = await fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8000') + '/api/geometry/parameter', {
+      const res = await fetch((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') + '/api/geometry/parameter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -132,11 +139,11 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
 
   return (
     <Dialog open={open} onClose={handleClose} maxWidth="sm" fullWidth>
-      <DialogTitle sx={{ pb: 1 }}>Add New Parameter</DialogTitle>
+      <DialogTitle sx={{ pb: 1 }}>{tx('addNewParameter')}</DialogTitle>
       <DialogContent>
         {!connectedToApi && (
           <Alert severity="warning" sx={{ mb: 2 }}>
-            Not connected to API. Parameter will not be saved.
+            {tx('notConnectedToApiParameterWill')}
           </Alert>
         )}
         {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
@@ -146,10 +153,10 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
           {/* Label + auto-name */}
           <Box sx={{ display: 'flex', gap: 1.5 }}>
             <TextField
-              label="Label"
+              label={tx('label')}
               value={form.label}
               onChange={e => handleLabelChange(e.target.value)}
-              placeholder="Pole Arc Ratio"
+              placeholder={tx('poleArcRatio')}
               fullWidth
               required
             />
@@ -160,22 +167,22 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
               placeholder="pole_arc_ratio"
               fullWidth
               required
-              helperText="Used in code and YAML"
+              InputProps={{ endAdornment: <HelpTip title={tx('usedInCodeAndYaml')} /> }}
             />
           </Box>
 
           {/* Unit + Group */}
           <Box sx={{ display: 'flex', gap: 1.5 }}>
             <TextField
-              label="Unit"
+              label={tx('unit')}
               value={form.unit}
               onChange={e => set('unit', e.target.value)}
-              placeholder="mm, °, —"
+              placeholder={tx('mm')}
               sx={{ flex: 1 }}
             />
             <TextField
               select
-              label="Group"
+              label={tx('group')}
               value={form.group}
               onChange={e => set('group', e.target.value)}
               sx={{ flex: 2 }}
@@ -189,7 +196,7 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
           {/* Type */}
           <Box>
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
-              Type
+              {tx('type')}
             </Typography>
             <ToggleButtonGroup
               exclusive
@@ -197,15 +204,15 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
               onChange={(_, v) => v && set('type', v)}
               size="small"
             >
-              <ToggleButton value="float">Float</ToggleButton>
-              <ToggleButton value="int">Integer</ToggleButton>
+              <ToggleButton value="float">{tx('float')}</ToggleButton>
+              <ToggleButton value="int">{tx('integer')}</ToggleButton>
             </ToggleButtonGroup>
           </Box>
 
           {/* Default / Min / Max / Step */}
           <Box sx={{ display: 'flex', gap: 1.5 }}>
             <TextField
-              label="Default"
+              label={tx('default')}
               type="number"
               value={form.default_value}
               onChange={e => set('default_value', e.target.value)}
@@ -213,21 +220,21 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
               required
             />
             <TextField
-              label="Min"
+              label={tx('min')}
               type="number"
               value={form.min}
               onChange={e => set('min', e.target.value)}
               sx={{ flex: 1 }}
             />
             <TextField
-              label="Max"
+              label={tx('max')}
               type="number"
               value={form.max}
               onChange={e => set('max', e.target.value)}
               sx={{ flex: 1 }}
             />
             <TextField
-              label="Step"
+              label={tx('step')}
               type="number"
               value={form.step}
               onChange={e => set('step', e.target.value)}
@@ -237,10 +244,10 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
 
           {/* Description */}
           <TextField
-            label="Description"
+            label={tx('description')}
             value={form.description}
             onChange={e => set('description', e.target.value)}
-            placeholder="Brief explanation of this parameter"
+            placeholder={tx('briefExplanationOfThisParameter')}
             multiline
             rows={2}
             fullWidth
@@ -248,7 +255,7 @@ const AddParameterDialog: React.FC<Props> = ({ open, onClose }) => {
         </Box>
       </DialogContent>
       <DialogActions sx={{ px: 3, pb: 2 }}>
-        <Button onClick={handleClose} disabled={loading}>Cancel</Button>
+        <Button onClick={handleClose} disabled={loading}>{tx('cancel')}</Button>
         <Button
           variant="contained"
           onClick={handleSubmit}

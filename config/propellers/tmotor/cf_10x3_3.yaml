@@ -1,0 +1,110 @@
+# T-Motor propeller catalogue entry (schema: config/propellers/README.md).
+# Numbers are as published by T-Motor unless marked estimated: true. Source URL + access date per table.
+schema: propeller-1
+id: tmotor_cf10x3_3
+vendor: T-MOTOR
+model: CF 10*3.3 (test-table label 10*3.3CF)
+series: CF (older carbon series, test-table label only)
+status: legacy_label
+product_url: null
+source_urls:
+- https://store.tmotor.com/product/mn3110-motor-navigator-type.html
+accessed: '2026-10-05'
+geometry:
+  diameter_in: 10.0
+  diameter_mm: 254.0
+  pitch_in: 3.3
+  pitch_mm: 83.8
+  blades: 2
+material: carbon fiber (T-Motor 'CF' series; exact layup not stated)
+hub: {}
+published_limits: {}
+performance:
+  data_quality: thrust_measured_power_estimated
+  static_hover_only: true
+  test_density_kg_m3: 1.225
+  density_basis: ISA sea level 1.225 kg/m3 assumed (T-Motor states no ambient pressure or temperature for these tests)
+  power_estimate:
+    estimated: true
+    cp_ref: 0.0246
+    rpm_exponent: 0.0
+    rel_spread: 0.038
+    method: 'Geometric-similarity transfer: T-Motor''s older CF series (13*4.4CF .. 17*5.8CF, all with pitch/diameter
+      about 0.33 like this prop) have published torque; their C_P medians agree within the spread given. C_P of this
+      prop is set to their mean. C_T is measured from the published thrust (no assumption).'
+    basis:
+    - label: 13*4.4CF
+      cp_median: 0.0252
+      n_points: 21
+      source: MN4004/MN4006 torque tables (store.tmotor.com)
+    - label: 14*4.8CF
+      cp_median: 0.0244
+      n_points: 21
+      source: MN4004/MN4006 torque tables (store.tmotor.com)
+    - label: 15*5CF
+      cp_median: 0.0247
+      n_points: 14
+      source: MN4004/MN4006 torque tables (store.tmotor.com)
+    - label: 16*5.4CF
+      cp_median: 0.0253
+      n_points: 14
+      source: MN4004/MN4006 torque tables (store.tmotor.com)
+    - label: 17*5.8CF
+      cp_median: 0.0234
+      n_points: 7
+      source: MN4004/MN4006 torque tables (store.tmotor.com)
+  tables:
+    - id: mn3110_cf10x3_3_1
+      source_url: https://store.tmotor.com/product/mn3110-motor-navigator-type.html
+      accessed: '2026-10-05'
+      test_motor: "MN3110 KV470 @ 22.2 V"
+      prop_label_in_source: "10*3.3CF"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: null
+      columns_published: ["voltage_V", "throttle", "current_A", "power_W", "thrust_g", "rpm", "efficiency_g_per_W", "temperature"]
+      note: "Electrical input power only; no torque published."
+      rows:
+      - {thr: 50, V: 22.2, I: 1.5, Pel: 33.3, rpm: 5500, thrust_g: 350, torque_Nm: null}
+      - {thr: 65, V: 22.2, I: 2.5, Pel: 55.5, rpm: 6500, thrust_g: 500, torque_Nm: null}
+      - {thr: 75, V: 22.2, I: 3.5, Pel: 77.7, rpm: 7300, thrust_g: 630, torque_Nm: null}
+      - {thr: 85, V: 22.2, I: 4.8, Pel: 106.56, rpm: 8300, thrust_g: 780, torque_Nm: null}
+      - {thr: 100, V: 22.2, I: 5.3, Pel: 117.66, rpm: 8600, thrust_g: 890, torque_Nm: null}
+    - id: mn3110_cf10x3_3_2
+      source_url: https://store.tmotor.com/product/mn3110-motor-navigator-type.html
+      accessed: '2026-10-05'
+      test_motor: "MN3110 KV700 @ 14.8 V"
+      prop_label_in_source: "10*3.3CF"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: null
+      columns_published: ["voltage_V", "throttle", "current_A", "power_W", "thrust_g", "rpm", "efficiency_g_per_W", "temperature"]
+      note: "Electrical input power only; no torque published."
+      rows:
+      - {thr: 50, V: 14.8, I: 2.3, Pel: 34.04, rpm: 5500, thrust_g: 320, torque_Nm: null}
+      - {thr: 65, V: 14.8, I: 3.5, Pel: 51.8, rpm: 6500, thrust_g: 430, torque_Nm: null}
+      - {thr: 75, V: 14.8, I: 5, Pel: 74, rpm: 7100, thrust_g: 560, torque_Nm: null}
+      - {thr: 85, V: 14.8, I: 6.8, Pel: 100.64, rpm: 8000, thrust_g: 700, torque_Nm: null}
+      - {thr: 100, V: 14.8, I: 8.1, Pel: 119.88, rpm: 8600, thrust_g: 800, torque_Nm: null}
+    - id: mn3110_cf10x3_3_3
+      source_url: https://store.tmotor.com/product/mn3110-motor-navigator-type.html
+      accessed: '2026-10-05'
+      test_motor: "MN3110 KV780 @ 14.8 V"
+      prop_label_in_source: "10*3.3CF"
+      identity: exact
+      use_in_fit: true
+      torque_resolution_Nm: null
+      columns_published: ["voltage_V", "throttle", "current_A", "power_W", "thrust_g", "rpm", "efficiency_g_per_W", "temperature"]
+      note: "Electrical input power only; no torque published."
+      rows:
+      - {thr: 50, V: 14.8, I: 3.1, Pel: 45.88, rpm: 6000, thrust_g: 360, torque_Nm: null}
+      - {thr: 65, V: 14.8, I: 4.8, Pel: 71.04, rpm: 7000, thrust_g: 530, torque_Nm: null}
+      - {thr: 75, V: 14.8, I: 6.8, Pel: 100.64, rpm: 8000, thrust_g: 660, torque_Nm: null}
+      - {thr: 85, V: 14.8, I: 9.2, Pel: 136.16, rpm: 8800, thrust_g: 850, torque_Nm: null}
+      - {thr: 100, V: 14.8, I: 11, Pel: 162.8, rpm: 9500, thrust_g: 980, torque_Nm: null}
+notes:
+- This size appears only as a test-table label ('10*3.3CF') on T-Motor motor pages (MN3110, MN3508, MN3510, U3);
+  it is not sold as a separate product on store.tmotor.com today. Diameter and pitch are taken from the label; mass
+  and hub are not published.
+- 'Only electrical input power is published, so shaft power is NOT measured here: C_P is an estimate (power_estimate
+  block), C_T is measured from thrust.'

@@ -1,6 +1,6 @@
 """Electric Motor AI Simulator.
 
-Physics-Informed Neural Network for Electric Motor Simulation.
+2-D magnetostatics FEM (scikit-fem) for electric motor simulation.
 """
 
 __version__ = "0.1.0"
@@ -8,8 +8,6 @@ __author__ = "Motor AI Team"
 
 from motor_ai_sim.geometry import (
     MotorGeometryParams,
-    MotorGeometry2D,
-    MotorMeshGenerator,
     MagneticMaterial,
     MaterialRegistry,
 )
@@ -28,8 +26,6 @@ from motor_ai_sim import materials
 __all__ = [
     # Geometry
     "MotorGeometryParams",
-    "MotorGeometry2D",
-    "MotorMeshGenerator",
     "MagneticMaterial",
     "MaterialRegistry",
     # Config

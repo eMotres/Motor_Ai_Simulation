@@ -1,0 +1,98 @@
+{
+  "meta": {
+    "title": "AeroStator Core — From idea to product, together",
+    "description": "Open-source (Apache-2.0) platform to design, simulate and prepare production of drive components built on AeroStator Core motors. For aviation and drones, robotics and marine. Connect your AI agents."
+  },
+  "hero": {
+    "title": "From idea to product, together",
+    "agents": "Connect your AI agents and build together",
+    "agentsHow": "How",
+    "sub": "Design, simulate and prepare production of drive components built on AeroStator Core motors.",
+    "signInGoogle": "Sign in with Google",
+    "signIn": "Sign in",
+    "signInEmail": "Sign in with e-mail",
+    "request": "Request access"
+  },
+  "chain": {
+    "label": "From idea to product",
+    "idea": "Idea",
+    "design": "Design",
+    "simulation": "Simulation",
+    "configure": "Configure",
+    "model3d": "3D model",
+    "production": "Production",
+    "product": "Product"
+  },
+  "concept": {
+    "title": "One platform, five steps",
+    "sub": "Inside: what you do. Outside: what is open to everyone.",
+    "diagramAlt": "Concept diagram. The AeroStator Core motor is in the centre. Five steps lead from idea to product: design, simulation, configure, 3D model, production. An outer ring shows the open ecosystem: open source, AI agents, community modules, your own compute.",
+    "core": "AeroStator Core",
+    "design": { "sub": "Geometry" },
+    "simulation": { "sub": "EM · thermal · stress" },
+    "configure": { "sub": "Your operating point" },
+    "model3d": { "sub": "View · simplified STEP now" },
+    "production": { "sub": "Order or licence" },
+    "open": { "title": "Open source", "sub": "Apache-2.0" },
+    "agents": { "title": "AI agents", "sub": "MCP server" },
+    "modules": { "title": "Modules", "sub": "Propeller, gearbox, …" },
+    "compute": { "title": "Your compute", "sub": "Bring a server" }
+  },
+  "steps": {
+    "design": "Set the motor geometry for your task.",
+    "simulation": "Electromagnetic, thermal and mechanical FEM, coupled.",
+    "configure": "Choose a motor for your operating point, cooling, propeller, battery and controller.",
+    "model3d": "Everyone can view the simplified model and download its STEP now. The full construction, tools and full STEP follow after NDA and account verification.",
+    "production": "Order motors from MOTRES or take a non-exclusive manufacturing licence."
+  },
+  "sim": {
+    "title": "Simulation",
+    "sub": "One machine, three physics, one operating point.",
+    "em": "Electromagnetic FEM",
+    "emAlt": "Flux-density map of a permanent-magnet machine: the whole cross-section, twelve slots around ten magnets, coloured by |B| from 0 to 2.4 tesla, the finite-element mesh drawn over it, and the colour bar beside it.",
+    "emHint": "Flux density |B| of a 200 mm machine at its rated duty, with the FE mesh it was solved on. The solved half is repeated to the full ring, which is the periodicity the solve itself assumed.",
+    "thermal": "Thermal and duty cycle",
+    "thermalAlt": "Temperature map of the same whole cross-section, from 69 °C at the outer housing to 135 °C in the rotor, the finite-element mesh drawn over it, and the colour bar beside it.",
+    "thermalHint": "Temperature of the same machine with the FE mesh over it, coupled to the losses of the same run. The solved half is repeated to the full ring, as above.",
+    "mech": "Mechanical simulation",
+    "mechAlt": "Deformation map of the same rotor under its retaining sleeve: the whole ring, sleeve, magnets and rotor iron, coloured by how far each point moves at speed, 7 to 146 micrometres, the finite-element mesh drawn over it, the colour bar beside it and the shape exaggerated so the bending is visible.",
+    "mechHint": "The rotor and its sleeve at speed with the FE mesh over them, coloured by displacement |u|. The shape is exaggerated 22 times so the bending can be seen."
+  },
+  "open": {
+    "title": "Open and free",
+    "sub": "The software is Apache-2.0. Anyone, and their AI agents, can connect and solve their own problems.",
+    "source": { "title": "Open source", "text": "Read it, fork it, run it yourself." },
+    "agents": { "title": "AI agents", "text": "An MCP server lets your agent design, simulate and configure." },
+    "modules": { "title": "Open modules", "text": "Propeller, gearbox, controller, battery: add yours with the Component SDK." },
+    "compute": { "title": "Your own compute", "text": "Bring your own server for heavy runs." }
+  },
+  "apps": {
+    "title": "Applications",
+    "sub": "One platform wherever a motor turns something.",
+    "aviation": { "title": "Aviation and drones", "text": "Motor, propeller and battery chosen together." },
+    "robotics": { "title": "Robotics", "text": "Compact joint motors with duty-cycle thermal checks." },
+    "marine": { "title": "Marine", "text": "Drives for boats, from the motor to the propeller." },
+    "yours": { "title": "Your application", "text": "Describe your task. The platform does the sizing." }
+  },
+  "start": {
+    "title": "How to start",
+    "everyone": { "title": "Everyone", "text": "Sign in with Google, then pick a motor in Configure." },
+    "engineers": { "title": "Engineers", "text": "Run your own simulations. The engineer role is given on request.", "link": "Ask for the engineer role" },
+    "developers": { "title": "Developers and agents" },
+    "links": {
+      "github": "Source code on GitHub",
+      "sdk": "Component SDK",
+      "rules": "Module contribution rules",
+      "byo": "Bring your own compute",
+      "mcp": "MCP server for agents"
+    }
+  },
+  "cta": { "title": "Ready to try it?" },
+  "footer": {
+    "licence": "Software Apache-2.0. AeroStator Core motor technology is patent pending; manufacturing requires a licence from MOTRES.",
+    "company": "MOTRES d.o.o."
+  },
+  "static": {
+    "slow": "The interactive app is taking a long time to load. This page works without it: use the links above, reload, or write to"
+  }
+}

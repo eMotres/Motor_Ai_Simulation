@@ -1,0 +1,13 @@
+[Unit]
+Description=Weekly motor_ai_sim restic deep check
+Documentation=file:///opt/motres/app/deploy/README.md
+
+[Timer]
+# Sunday 03:20 local — after the hourly, before anyone is working.
+OnCalendar=Sun *-*-* 03:20:00
+RandomizedDelaySec=1800
+Persistent=true
+Unit=motres-backup-check.service
+
+[Install]
+WantedBy=timers.target

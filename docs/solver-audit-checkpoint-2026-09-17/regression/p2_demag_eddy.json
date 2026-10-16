@@ -1,0 +1,171 @@
+{
+  "case": "p2_demag_eddy",
+  "status": "passed",
+  "parameters": {
+    "n_steps_per_period": 12,
+    "n_periods": 1.0,
+    "mesh_size_mm": 1.4,
+    "min_size_mm": 0.35,
+    "gap_layers": 1.0,
+    "n_sectors": 2,
+    "structured_gap": true,
+    "iron_template": true,
+    "geo_mesh": true,
+    "coil_temp_c": 120.0,
+    "rotor_eddy": true,
+    "element_order": 2,
+    "demag": true,
+    "eddy": true,
+    "I_phase_rms": 60.0,
+    "gamma_deg": 0.0
+  },
+  "actual_metrics": {
+    "T_avg_Nm": 0.3959511444006856,
+    "T_ripple_pct": 0.6059233407172465,
+    "P_cu_W": 110.31205714835279,
+    "P_fe_W": 4.7342934711272004,
+    "V_peak": 7.761096745659761,
+    "T_avg_maxwell_Nm": 0.3921213614718962,
+    "P_cu_total_solve_W": 65.319,
+    "P_cu_ac_solve_W": 3.086,
+    "P_mag_solve_W": 1.434,
+    "P_shaft_solve_W": 0.017,
+    "P_mag_honest_W": 1.56,
+    "P_shaft_honest_W": 0.562,
+    "demag_br_min": 0.13833655725964475,
+    "demag_br_mean": 0.8271224408818817
+  },
+  "baseline_metrics": {
+    "P_cu_W": 110.31169894691367,
+    "P_cu_ac_solve_W": 3.086,
+    "P_cu_total_solve_W": 65.318,
+    "P_fe_W": 4.735692685183495,
+    "P_mag_honest_W": 1.56,
+    "P_mag_solve_W": 1.434,
+    "P_shaft_honest_W": 0.562,
+    "P_shaft_solve_W": 0.017,
+    "T_avg_Nm": 0.3959452494247903,
+    "T_avg_maxwell_Nm": 0.3921,
+    "T_ripple_pct": 0.6074015014364422,
+    "V_peak": 7.761157112174035,
+    "demag_br_mean": 0.8271080523781782,
+    "demag_br_min": 0.13833258001291893
+  },
+  "comparisons": {
+    "P_cu_W": {
+      "actual": 110.31205714835279,
+      "baseline": 110.31169894691367,
+      "difference": 0.00035820143912701496,
+      "relative_change_pct": 0.0003247175436028735,
+      "tolerance": 0.5515584947345683,
+      "within_existing_tolerance": true
+    },
+    "P_cu_ac_solve_W": {
+      "actual": 3.086,
+      "baseline": 3.086,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.01543,
+      "within_existing_tolerance": true
+    },
+    "P_cu_total_solve_W": {
+      "actual": 65.319,
+      "baseline": 65.318,
+      "difference": 0.0010000000000047748,
+      "relative_change_pct": 0.0015309715545558267,
+      "tolerance": 0.32659,
+      "within_existing_tolerance": true
+    },
+    "P_fe_W": {
+      "actual": 4.7342934711272004,
+      "baseline": 4.735692685183495,
+      "difference": -0.0013992140562946176,
+      "relative_change_pct": -0.029546132937897804,
+      "tolerance": 0.023678463425917475,
+      "within_existing_tolerance": true
+    },
+    "P_mag_honest_W": {
+      "actual": 1.56,
+      "baseline": 1.56,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.0078000000000000005,
+      "within_existing_tolerance": true
+    },
+    "P_mag_solve_W": {
+      "actual": 1.434,
+      "baseline": 1.434,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.00717,
+      "within_existing_tolerance": true
+    },
+    "P_shaft_honest_W": {
+      "actual": 0.562,
+      "baseline": 0.562,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "P_shaft_solve_W": {
+      "actual": 0.017,
+      "baseline": 0.017,
+      "difference": 0.0,
+      "relative_change_pct": 0.0,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "T_avg_Nm": {
+      "actual": 0.3959511444006856,
+      "baseline": 0.3959452494247903,
+      "difference": 5.89497589525978e-06,
+      "relative_change_pct": 0.0014888361216162359,
+      "tolerance": 0.0019797262471239517,
+      "within_existing_tolerance": true
+    },
+    "T_avg_maxwell_Nm": {
+      "actual": 0.3921213614718962,
+      "baseline": 0.3921,
+      "difference": 2.1361471896186313e-05,
+      "relative_change_pct": 0.005447965288494341,
+      "tolerance": 0.0019605,
+      "within_existing_tolerance": true
+    },
+    "T_ripple_pct": {
+      "actual": 0.6059233407172465,
+      "baseline": 0.6074015014364422,
+      "difference": -0.0014781607191957091,
+      "relative_change_pct": -0.2433580943906149,
+      "tolerance": 0.05,
+      "within_existing_tolerance": true
+    },
+    "V_peak": {
+      "actual": 7.761096745659761,
+      "baseline": 7.761157112174035,
+      "difference": -6.0366514274434735e-05,
+      "relative_change_pct": -0.0007778030183121112,
+      "tolerance": 0.03880578556087018,
+      "within_existing_tolerance": true
+    },
+    "demag_br_mean": {
+      "actual": 0.8271224408818817,
+      "baseline": 0.8271080523781782,
+      "difference": 1.4388503703499644e-05,
+      "relative_change_pct": 0.001739615962162196,
+      "tolerance": 0.01,
+      "within_existing_tolerance": true
+    },
+    "demag_br_min": {
+      "actual": 0.13833655725964475,
+      "baseline": 0.13833258001291893,
+      "difference": 3.9772467258225586e-06,
+      "relative_change_pct": 0.0028751337721389437,
+      "tolerance": 0.01,
+      "within_existing_tolerance": true
+    }
+  },
+  "run_id": "20260916T204913.918167Z",
+  "wall_seconds": 71.26942180000333,
+  "cpu_seconds": 70.453125
+}

@@ -1,0 +1,222 @@
+# ============================================================
+# Power-device card — Infineon IGC019S06S1
+# CoolGaN(TM) Transistor 60 V G3 (e-mode GaN HEMT), PG-TSON-6 (3 x 5 mm,
+# exposed die on top)
+# ============================================================
+# Added 2026-10-05 for the Ø40 motor passport (owner addendum: Infineon
+# support suggested GaN HEMTs for the CIANO14 40 controller — this part for
+# the 6S build).  Same card layout and provenance convention as the
+# OptiMOS 6 cards (config/devices/IQE018N06NM6SC.yaml, PR #79 pattern):
+# `source` per block, `basis: table|figure` per point, nothing invented —
+# a value the datasheet does not publish is null with a note.
+#
+# Source: Infineon "IGC019S06S1 Final datasheet", Revision 1.1, 2025-02-21
+# https://www.infineon.com/assets/row/public/documents/24/49/infineon-igc019s06s1-datasheet-en.pdf
+# (public asset; the PDF is NOT committed — binaries stay out of the repo).
+#
+# GaN FACTS THIS CARD ENCODES (and the loss model reads):
+# * no body diode: the third quadrant is REVERSE CHANNEL CONDUCTION, whose
+#   drop depends on the gate-off voltage (Table 8: V_SD 2.6 V typ at 35 A,
+#   V_GS = 0 V) — a few volts, not a Si diode's 0.8 V;
+# * Q_rr = 0 (Table 8, "defined by design") — no reverse-recovery energy;
+# * the output-capacitance energy E_oss is published (Diagram 16) and is
+#   ADDED by the loss model on the times-and-charges basis (that overlap
+#   model carries no C_oss energy — inverter/losses._leg_losses, 2026-10-05);
+# * NO switching-time table and NO E_on/E_off table are published: the
+#   switching energy is the project's overlap estimate from Q_gd and
+#   Qgs2 = Q_sw - Q_gd (a LOWER BOUND, see DeviceCard._e_switch_from_times_charges).
+#
+# Units: V, A, ohm (`_ohm`), mOhm (`_mohm`), degC, W, K/W, nC, pF, uJ.
+# ============================================================
+
+part: IGC019S06S1
+manufacturer: Infineon
+family: "CoolGaN 60 V G3"
+technology: gan_hemt
+package: PG-TSON-6
+package_common_name: "3 x 5 mm PQFN, exposed die (top side)"
+cooling: top_side            # "Exposed die for top-side thermal excellence"
+                              # (Features); Table 4 R_thJC top 0.5/0.6 K/W vs
+                              # bottom 1.9/2.8 K/W.  The model derates through
+                              # r_th_jc_k_w below (see thermal note).
+marking: "19SC1"
+
+package_size_mm:
+  source: "Datasheet Figure 1 (Outline PG-TSON-6), PG-TSON-6-U01, MAX column"
+  length_mm: 5.10              # E max
+  width_mm: 3.10               # D max
+  height_mm: 1.032             # A max
+  lead_pitch_mm: 1.075         # e
+  leads: 6
+weight_g: null   # not published in this revision
+
+footprint:
+  package_outline_id: PG-TSON-6-U01
+  outline_source: "Datasheet Figure 1 (Outline PG-TSON-6, dimensions in mm)"
+  land_pattern_ref: "Datasheet section 6 (Package outlines), footprint figure"
+  land_pattern_note: null
+  body_height_mm: 1.032
+  body_height_source: "Datasheet Figure 1, dimension A, MAX"
+  top_tab_mm: {length_mm: 4.336, width_mm: 2.616, source: "Datasheet Figure 1, E1 x D1 DIE SIZE (exposed die)"}
+  top_tab_note: >-
+    Exposed silicon substrate (die) on top, D1 x E1 = 2.616 x 4.336 mm
+    (Figure 1 "DIE SIZE"); internally connected to SOURCE — "not recommended
+    to use as an electrical connection" (page 1 note).
+  compatibility_group: tson6_3x5
+  compatibility_basis: "Same PG-TSON-6 3 x 5 mm outline as IGC016K10S2's own datasheet (not a pad-for-pad claim)."
+datasheet_revision: "1.1, 2025-02-21"
+datasheet_url: "https://www.infineon.com/assets/row/public/documents/24/49/infineon-igc019s06s1-datasheet-en.pdf"
+
+ratings:
+  source: "Datasheet Table 2 (Maximum ratings), Table 3 (Recommended operating conditions)"
+  v_dss_V: 60
+  v_ds_pulse_V: 72              # V_GS = 0 V, 1 h total time (robustness, not normal operation)
+  i_d_continuous:
+    # I_D, V_GS = 5 V, vs CASE temperature: 25 degC from Table 2, the rest
+    # hand-read off Diagram 2 (I_D = f(T_C)).
+    - {t_case_c: 25,  i_a: 99, basis: table}
+    - {t_case_c: 50,  i_a: 92, basis: figure, tolerance_pct: 5}
+    - {t_case_c: 75,  i_a: 83, basis: figure, tolerance_pct: 5}
+    - {t_case_c: 100, i_a: 70, basis: figure, tolerance_pct: 5}
+    - {t_case_c: 125, i_a: 50, basis: figure, tolerance_pct: 8}
+  i_d_pcb_limited_A_at_ta25: 27
+  i_d_pcb_limited_note: "Table 2: V_GS = 5 V, T_A = 25 degC, R_thJA = 38 degC/W (4-layer FR4, vertical, still air)."
+  i_d_pulsed_A: 700             # T_j = 25 degC (380 A at T_j = 150 degC), Table 2
+  i_d_pulsed_150c_A: 380
+  p_tot_W:
+    - {t_case_c: 25, p_w: 45, basis: table}
+  p_tot_pcb_limited_W_at_ta25: 3.3
+  t_j_max_c: 150
+  t_storage_c: {min: -55, max: 150}
+  v_gs_static_V: {min: -4.0, max: 5.5}     # Table 3 recommended operating window (typ 5.0)
+  v_gs_pulsed_V: {min: -6.5, max: 6.5}     # Table 2, pulsed, 100 h total time
+  e_as_mJ: null                             # not published (GaN: no avalanche rating)
+
+gate:
+  source: "Datasheet Table 5 (V_GS(th), R_G) and Table 7 (Gate charge characteristics)"
+  v_gs_th_V: {min: 1.2, typ: 2.0, max: 2.9, at_t_j_c: 25, note: "V_DS = V_GS, I_D = 12 mA"}
+  v_plateau_V: 2.8
+  q_g_nC: 13.0                  # typ (max 17), V_DS=30V, I_D=35A, V_GS=0..5V
+  q_g_max_nC: 17.0
+  q_gs_nC: 4.0
+  q_gth_nC: 2.9
+  q_gd_nC: 3.6
+  q_gd_max_nC: null
+  q_sw_nC: 4.7                  # -> Qgs2 = Q_sw - Q_gd = 1.1 nC
+  q_g_sync_nC: null
+  gate_charge_test_conditions: "V_DS = 30 V, I_D = 35 A, V_GS = 0 to 5 V (Table 7)"
+  r_g_internal_ohm: 0.5         # typ, Table 5 (defined by design)
+
+r_ds_on:
+  source: >-
+    Datasheet Table 5 (R_DS(on) 1.3 typ / 1.9 max mOhm at V_GS = 5 V,
+    I_D = 35 A, T_j = 25 degC) and Diagram 11 (R_DS(on) normalised to 25 degC
+    vs T_j, I_D = 35 A, V_GS = 5 V) for the temperature shape.
+  measured_at_i_d_A: 35
+  curves:
+    - v_gs_on_V: 5
+      points:
+        - {t_j_c: -40, r_mohm: 0.88, basis: figure, tolerance_pct: 10}
+        - {t_j_c: 0,   r_mohm: 1.12, basis: figure, tolerance_pct: 8}
+        - {t_j_c: 25,  r_mohm: 1.3,  basis: table, anchor: true, r_mohm_max: 1.9}
+        - {t_j_c: 50,  r_mohm: 1.53, basis: figure, tolerance_pct: 8}
+        - {t_j_c: 75,  r_mohm: 1.85, basis: figure, tolerance_pct: 8}
+        - {t_j_c: 100, r_mohm: 2.21, basis: figure, tolerance_pct: 8}
+        - {t_j_c: 125, r_mohm: 2.67, basis: figure, tolerance_pct: 10}
+        - {t_j_c: 150, r_mohm: 3.21, basis: figure, tolerance_pct: 10}
+
+capacitance:
+  source: "Datasheet Table 6 (Capacitance) and Table 7 (Q_oss); Diagram 16 (E_oss = f(V_DS))"
+  at_v_ds_V: 30
+  c_iss_pF: 1450
+  c_iss_max_pF: 1700
+  c_oss_pF: 700
+  c_oss_max_pF: 770
+  c_rss_pF: 17
+  c_rss_max_pF: 22
+  q_oss_nC: 37                  # typ (max 41), V_DS = 30 V, V_GS = 0
+  q_oss_max_nC: 41
+  c_o_er_pF: null
+  e_oss_uJ: 0.43                # Diagram 16 at 30 V (figure)
+  e_oss_curve:                  # Diagram 16, typ, hand-read (tolerance ~10 %)
+    - {v_ds_V: 0,  e_uJ: 0.0}
+    - {v_ds_V: 10, e_uJ: 0.07}
+    - {v_ds_V: 15, e_uJ: 0.17}
+    - {v_ds_V: 20, e_uJ: 0.25}
+    - {v_ds_V: 30, e_uJ: 0.43}
+    - {v_ds_V: 40, e_uJ: 0.66}
+    - {v_ds_V: 50, e_uJ: 0.92}
+    - {v_ds_V: 60, e_uJ: 1.22}
+
+switching:
+  source: >-
+    Datasheet Table 7 (gate charge, V_DS = 30 V, I_D = 35 A, V_GS = 0..5 V).
+    NO switching-time table and NO E_on/E_off table are published.
+  energy_source: times_and_charges
+  v_dd_ref_V: 30
+  i_d_ref_A: 35
+  v_gs_ref_V: 5
+  r_g_ext_ref_ohm: 5.1          # NOT a datasheet value (none published): the turn-on R_G of
+                                 # Infineon's GaN motor reference board (UG074356 §5.3); only the
+                                 # validator's fallback reference — every solve states its own R_g
+  note: >-
+    switching energy = the project's overlap estimate from Q_gd and
+    Qgs2 = Q_sw - Q_gd with I_g = (V_gs,on - V_gs,off)/(R_g,int + R_g,ext);
+    the request must state R_g,ext.  E_oss is added separately (Diagram 16).
+    A LOWER BOUND, no ringing, no common-source inductance.
+  times_ns: null
+
+third_quadrant:
+  source: "Datasheet Table 8 (Reverse operation) and Diagrams 7/8 (channel reverse characteristics)"
+  i_sd_continuous:
+    - {t_case_c: 25, i_a: 16, basis: table}     # "Reverse continuous current", Table 8
+  i_sm_A: 396
+  v_sd_at_20A:
+    - {t_j_c: 25, v: 2.6, basis: table, v_max: 3.4, i_a: 35,
+       note: "V_SD, V_GS = 0 V, I_S,pulse = 35 A, T_j = 25 degC (Table 8) — NOT 20 A, see i_a"}
+  reverse_recovery:
+    q_rr_nC_typ: 0               # Table 8: "0 nC", V_R=30V, I_S=35A, di/dt=100A/us (defined by design)
+    q_rr_nC_max: null
+    t_rr_ns_typ: null
+    v_r_ref_V: 30
+    i_f_ref_A: 35
+    di_dt_ref_A_us: 100
+    source: "Datasheet Table 8 — no reverse recovery (GaN HEMT, no body diode)"
+  curves:
+    # Reverse CHANNEL conduction at V_GS = 0 V (the dead-time state with a
+    # 0 V gate-off drive).  25 degC: 2.1 V at 0.5 A and 2.6 V at 35 A are
+    # Table 8; the high-current points are read off Diagram 7.
+    - v_gs_off_V: 0
+      t_j_c: 25
+      basis: table+figure
+      tolerance_pct: 10
+      points: [[2.1, 0.5], [2.6, 35.0], [2.75, 100.0], [3.15, 200.0]]
+    # 125 degC: Diagram 8 (V_GS = 0 V curve), hand-read, wider tolerance.
+    - v_gs_off_V: 0
+      t_j_c: 125
+      basis: figure
+      tolerance_pct: 20
+      points: [[2.6, 0.5], [2.95, 35.0], [3.4, 100.0], [3.85, 200.0]]
+  channel_on_note: >-
+    With the gate ON the reverse current flows in the channel at I·R_DS(on);
+    the curves above apply during the dead time only.  A negative gate-off
+    voltage shifts them right by about |V_GS,off| (Diagram 7) — a 0 V off
+    state is assumed here.
+
+thermal:
+  source: "Datasheet Table 4 (Thermal characteristics)"
+  r_th_jc_k_w: {typ: 0.5, max: 0.6}
+  r_th_jc_note: >-
+    The TOP (exposed die) junction-case path, Table 4 — this package is cooled
+    through the top (Features).  This card deliberately carries the TOP value
+    as the derating path (unlike the WHSON-8 Si cards, which derate on the
+    bottom path); the bottom path is documented below.
+  r_th_jc_top_k_w: {typ: 0.5, max: 0.6}
+  r_th_jc_bottom_k_w: {typ: 1.9, max: 2.8}
+  r_th_ja_k_w: {max: 38}
+  r_th_ja_note: "Table 4: 38 K/W 2s2p with vias, 4-layer PCB, vertical, still air (60 K/W 1s0p). Board numbers, not used."
+  z_th_jc_curve: null
+
+catalog:
+  status: active
+  revision: {n: 1, date: "2026-10-05", by: owner-request-gan-hemts, why: "card added (Infineon support suggestion, Ø40 controller)"}

@@ -1,0 +1,11 @@
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0|e_d40_gl1 coul_run.py --machine d40 --gl 1 --steps 48 --eddy --demag
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0|e_d40_gl2 coul_run.py --machine d40 --gl 2 --steps 48 --eddy --demag
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0|e_d40_gl3 coul_run.py --machine d40 --gl 3 --steps 48 --eddy --demag
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0 -e MATLIB=materials_library_shared.yaml|e_l13_gl1 coul_run.py --machine l13 --gl 1 --steps 60 --eddy --demag
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0 -e MATLIB=materials_library_shared.yaml|e_l13_gl2 coul_run.py --machine l13 --gl 2 --steps 60 --eddy --demag
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0 -e MATLIB=materials_library_shared.yaml|e_l13_gl3 coul_run.py --machine l13 --gl 3 --steps 60 --eddy --demag
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0|s_d40_gl2_r288 coul_run.py --machine d40 --ring 288 --gl 2 --steps 288
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0|s_d40_nl_gl2_r288 coul_run.py --machine d40 --ring 288 --gl 2 --steps 288 --noload
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0|e_l155_gl1 coul_run.py --machine l155 --gl 1 --steps 72 --eddy --demag
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0|e_l155_gl2 coul_run.py --machine l155 --gl 2 --steps 72 --eddy --demag
+-e SB_GAP_LAYERS_MIN=1 -e SB_GAP_REFINE=0|e_l155_gl3 coul_run.py --machine l155 --gl 3 --steps 72 --eddy --demag

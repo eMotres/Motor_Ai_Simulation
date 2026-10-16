@@ -1,0 +1,8 @@
+AeroStator / Motor AI Simulation
+Copyright 2026 MOTRES d.o.o. and contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product uses third-party software that remains under its own licence.
+The list of runtime dependencies, their licences and how each is used (in
+process, optional, or as a separate program) is in THIRD_PARTY_NOTICES.md.

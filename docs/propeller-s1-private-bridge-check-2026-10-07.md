@@ -1,0 +1,21 @@
+# Private propeller S1 bridge checkpoint
+
+Date: 2026-10-07. Model: GPT-6; no escalation. This is an offline implementation checkpoint, not a real FEM result, qualification, publication, or public route.
+
+After exact full-identity admission, the child now invokes the unchanged `routes.coupled._run(body, authorization)` while the same authenticated trial `Workspace` and caller bindings are active. It re-resolves the saved build after the call and rejects identity/source drift. The raw key required by the existing propeller cooling guard is inserted only into the in-memory canonical request; stored identity and returned envelope retain the opaque context hash. Route progress/stdout is kept away from the worker's JSON protocol. The response is checkpointed under the private attempt before post-run validation, so a later mismatch does not discard the solver response.
+
+Each RPM/current point is materialized into an attempt-specific copy by `coupled_propeller_s1_trial_context.py`; only `simulation.rpm`, `simulation.max_current`, and mirrored `simulation.current_a` change. The callback test exercises two such points (1000 RPM/3 A and 1500 RPM/5 A) using an isolated fixture account and a stub at the `_run` call boundary. It verifies the active caller/workspace, raw in-memory guard context, distinct propeller-derived speeds, stable build identity, attempt-local raw response checkpoints, and unchanged base workspace hashes. No FEM is run.
+
+Thermal gate evidence is mapped only when the actual response includes consistent `time_to_limit` limits and temperatures, including the required winding and magnet observations. Electrical and mechanical gate evidence remains unknown when no authoritative limit is present; current setpoints are never treated as motor capability. PWM current sweeps remain refused because the saved regulator target may hold current fixed. Unknown gates prevent qualification. This bridge is not registered as an API and does not claim a maximum RPM.
+
+The official account/token fixture is created wholly inside a temporary test workspace with a fresh test secret; it is software boundary evidence, not copied live authority. Auth stores and events remain attempt-local. No server, live API, deployment, or solver run was used.
+
+The boundary regression now uses the official session API to create a signed session token, invokes canonical caller resolution in two distinct trial workspaces, and confirms the session registry changes only in each trial copy while the base remains byte-identical. The subprocess-boundary fixture also asserts that `MOTOR_AI_SIM_CONFIG` is exactly the serialized trial config path and differs from the immutable base config path. The trial session registry is exempted from content-hash equality only after a strict no-symlink, in-job-root path check; unmanifested session-store creation is refused.
+
+Focused combined bridge/trial-context/point/job/search suites: **119 passed, 3 skipped in 19.82 seconds** using Python 3.11. The skips are platform-specific symlink-creation cases. `py_compile` and `git diff --check` passed for the owned bridge and test files. These are offline software-boundary tests with a stub at the canonical `_run` call boundary; no FEM was run, and the bridge does not claim physical qualification or a maximum RPM.
+
+```powershell
+& 'C:\Users\vadim\AppData\Local\Programs\Python\Python311\python.exe' -c "import sys,pytest; sys.path.insert(0,r'C:\Users\vadim\Projects\motor_ai_sim\scratch_s1_20261006\default40-release\src'); raise SystemExit(pytest.main([r'C:\Users\vadim\Projects\motor_ai_sim\scratch_s1_20261006\default40-release\tests\test_propeller_s1_private_bridge.py',r'C:\Users\vadim\Projects\motor_ai_sim\scratch_s1_20261006\default40-release\tests\test_propeller_s1_trial_context.py',r'C:\Users\vadim\Projects\motor_ai_sim\scratch_s1_20261006\default40-release\tests\test_propeller_s1_point.py',r'C:\Users\vadim\Projects\motor_ai_sim\scratch_s1_20261006\default40-release\tests\test_propeller_s1_job.py',r'C:\Users\vadim\Projects\motor_ai_sim\scratch_s1_20261006\default40-release\tests\test_propeller_s1_search.py','-q','--tb=short']))"
+```
+
+No commit or dataset ingestion was performed by this worker; the parent owns review, commit, and combined task logging.

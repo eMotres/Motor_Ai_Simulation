@@ -13,7 +13,7 @@ interface SliderItemProps {
 const SliderItem: React.FC<SliderItemProps> = ({ label, value, color, max = 1, onChange }) => (
   <Tooltip title={`${label}: ${value.toFixed(2)}`} placement="bottom" arrow>
     <Stack direction="row" spacing={0.5} alignItems="center" sx={{ width: 100, flexShrink: 0 }}>
-      <Box component="span" sx={{ color: 'rgba(255,255,255,0.45)', fontSize: '0.6rem', minWidth: 26, flexShrink: 0 }}>
+      <Box component="span" sx={{ color: 'var(--text-3)', fontSize: '0.6rem', minWidth: 26, flexShrink: 0 }}>
         {label}
       </Box>
       <Slider
@@ -27,7 +27,7 @@ const SliderItem: React.FC<SliderItemProps> = ({ label, value, color, max = 1, o
           py: 0,
           '& .MuiSlider-thumb': { width: 8, height: 8 },
           '& .MuiSlider-track': { height: 2 },
-          '& .MuiSlider-rail': { height: 2, bgcolor: 'rgba(255,255,255,0.12)' },
+          '& .MuiSlider-rail': { height: 2, bgcolor: 'var(--line)' },
         }}
       />
     </Stack>
@@ -53,8 +53,8 @@ const MaterialControls: React.FC = () => {
         left: 0,
         right: 0,
         zIndex: 1000,
-        bgcolor: 'rgba(20, 20, 20, 0.88)',
-        borderBottom: '1px solid rgba(255,255,255,0.07)',
+        bgcolor: 'var(--overlay)',
+        borderBottom: '1px solid var(--line-soft)',
         pl: '236px',
         pr: 1,
         py: '3px',
@@ -75,17 +75,17 @@ const MaterialControls: React.FC = () => {
               py: 0,
               fontSize: '0.6rem',
               lineHeight: '20px',
-              borderColor: 'rgba(255,255,255,0.15)',
-              color: 'rgba(255,255,255,0.55)',
+              borderColor: 'var(--line)',
+              color: 'var(--text-2)',
               flexShrink: 0,
-              '&:hover': { borderColor: 'rgba(255,255,255,0.4)', bgcolor: 'rgba(255,255,255,0.06)' },
+              '&:hover': { borderColor: 'var(--text-4)', bgcolor: 'var(--line-soft)' },
             }}
           >
             {p.charAt(0).toUpperCase() + p.slice(1)}
           </Button>
         ))}
 
-        <Box sx={{ width: '1px', height: 14, bgcolor: 'rgba(255,255,255,0.1)', mx: 0.25, flexShrink: 0 }} />
+        <Box sx={{ width: '1px', height: 14, bgcolor: 'var(--line)', mx: 0.25, flexShrink: 0 }} />
 
         {/* Sliders */}
         <SliderItem label="Metal" value={metalness} color="#fbbf24"
@@ -107,8 +107,8 @@ const MaterialControls: React.FC = () => {
             height: 20,
             flexShrink: 0,
             '& .MuiToggleButton-root': {
-              color: 'rgba(255,255,255,0.5)',
-              borderColor: 'rgba(255,255,255,0.15)',
+              color: 'var(--text-3)',
+              borderColor: 'var(--line)',
               fontSize: '0.6rem',
               px: 0.6,
               py: 0,

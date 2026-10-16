@@ -1,0 +1,53 @@
+{
+  "checks": [
+    "Parserpassed",
+    "ThreeunsafeReadPaths refusedbeforeAPI",
+    "Explicit--tools emptyargumentchecked",
+    "Haiku5.5 smokeexit0",
+    "ReadWrite/cancellationtransport not repeated",
+    "SyntheticexeAppControlblock remains"
+  ],
+  "domain": "infra",
+  "tools_used": [
+    "PowerShell parser",
+    "scopedlocal review",
+    "Haiku no-tools smoke",
+    "official logger"
+  ],
+  "model": "Worker reported Codex GPT-5; Codex root; Haiku5.5 API verification",
+  "corrections": [
+    "Initialliveapprovalrefusal resolvedsameexactapproveddocument after proofownerconsent; no bypass"
+  ],
+  "model_versions": {
+    "test": "claude-haiku-5-5",
+    "worker": "reported Codex GPT-5",
+    "root": "Codex"
+  },
+  "task": "Address Opus helper readscope, childenvironment and cancellation findings",
+  "simulation_results": {},
+  "source_project": "motor_ai_sim",
+  "verification": "passed",
+  "final_answer": "Primary broad filesystem reading removed; readonly sends only approved inlinefiles. Cancellationcleanup best effort, not OSsandbox/consoleclosure guarantee. Environment rebuilt. Readonlylive passed; write/cancellation transport not repeated.",
+  "context": "scripts/Invoke-ClaudeApiAgent.ps1 and docs/claude-api-agent.md",
+  "requirements": [
+    "No mainapp/serverchanges",
+    "Keyexistingchildenvonly",
+    "Approvedinlinefiles only",
+    "Ownpaths only"
+  ],
+  "outcome": "success",
+  "quality_status": "raw",
+  "artifacts": [
+    "scripts/Invoke-ClaudeApiAgent.ps1",
+    "docs/claude-api-agent.md"
+  ],
+  "actions": [
+    "Removed broad ReadGlobGrep; validatedReadPaths inlinecontext",
+    "Childenvallowlist and pinned per-userclaude path",
+    "Verifiedtimeoutkill and best-effort own-tree finallycleanup",
+    "Rootrejected missing--toolsinitialpatch and staleclaims",
+    "Correctedmandatoryemptytools/defaultnullReadPaths",
+    "Liveapproveddocumentcall confirmedHARDENED_READONLY_OK"
+  ],
+  "id": "motor_ai_sim_claude_api_helper_hardening_parent_20261009_01"
+}

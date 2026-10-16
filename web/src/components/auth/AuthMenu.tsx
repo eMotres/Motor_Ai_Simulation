@@ -1,0 +1,131 @@
+import React from 'react';
+import { Button, Avatar, Box, Tooltip, Menu, MenuItem, ListItemIcon, Divider } from '@mui/material';
+import LogoutIcon from '@mui/icons-material/Logout';
+import DevicesIcon from '@mui/icons-material/Devices';
+import { useAuth } from '../../contexts/AuthContext';
+import SessionsDialog from './SessionsDialog';
+import AgentKeysDialog from './AgentKeysDialog';
+import AccountDataDialog from './AccountDataDialog';
+import DataSharingDialog from './DataSharingDialog';
+import DatasetIcon from '@mui/icons-material/Dataset';
+import FolderZipIcon from '@mui/icons-material/FolderZip';
+import SmartToyIcon from '@mui/icons-material/SmartToy';
+import NotificationsIcon from '@mui/icons-material/NotificationsNone';
+import NotificationsDialog from './NotificationsDialog';
+import ComputeNodesDialog from './ComputeNodesDialog';
+import DnsIcon from '@mui/icons-material/Dns';
+import { NoticeBell, NewsletterLinkHandler } from './NoticeBell';
+import { useTranslation } from 'react-i18next';
+import LanguageSwitcher from '../common/LanguageSwitcher';
+import CookieIcon from '@mui/icons-material/Cookie';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import { openCookieSettings, useAnalyticsState } from '../common/AnalyticsConsent';
+import { OPEN_COMPUTE_NODES_EVENT } from '../../lib/accessUi';
+
+/**
+ * The signed-in half of the header control: avatar, account menu and the dialogs behind it
+ * (sessions, agent keys, compute nodes, notifications, my data, data sharing).  Split out of
+ * AuthButton.tsx and loaded lazily, so the signed-out landing does not download any of it.
+ */
+const AuthMenu: React.FC = () => {
+  const { user, role, logout } = useAuth();
+  const { t } = useTranslation('common');
+  const analyticsState = useAnalyticsState();
+  const [anchor, setAnchor] = React.useState<HTMLElement | null>(null);
+  const [sessionsOpen, setSessionsOpen] = React.useState(false);
+  const [agentsOpen, setAgentsOpen] = React.useState(false);
+  const [notifOpen, setNotifOpen] = React.useState(false);
+  const [dataOpen, setDataOpen] = React.useState(false);
+  const [shareOpen, setShareOpen] = React.useState(false);
+  const [nodesOpen, setNodesOpen] = React.useState(false);
+  const [noticeKey, setNoticeKey] = React.useState(0);
+  // The "connect your own server" hint on the simulation tabs opens this dialog.
+  React.useEffect(() => {
+    const open = () => setNodesOpen(true);
+    window.addEventListener(OPEN_COMPUTE_NODES_EVENT, open);
+    return () => window.removeEventListener(OPEN_COMPUTE_NODES_EVENT, open);
+  }, []);
+  if (!user) return null;
+
+  return (
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+      <NewsletterLinkHandler />
+      <NoticeBell onOpen={() => setNotifOpen(true)} refreshKey={noticeKey} />
+      <Tooltip title={t('account.avatarTooltip', { email: user.email, role })} arrow>
+        <Avatar src={user.photoURL || undefined}
+          onClick={(e) => setAnchor(e.currentTarget)}
+          sx={{ width: 26, height: 26, fontSize: '0.8rem', bgcolor: 'var(--line-accent)', cursor: 'pointer' }}>
+          {(user.displayName || user.email || '?')[0]?.toUpperCase()}
+        </Avatar>
+      </Tooltip>
+      <Button size="small" variant="text"
+        startIcon={<LogoutIcon sx={{ fontSize: 15 }} />}
+        onClick={() => logout().catch(() => {})}
+        sx={{ textTransform: 'none', fontSize: '0.72rem', color: 'var(--text-2)' }}>
+        {t('account.signOut')}
+      </Button>
+
+      <Menu anchorEl={anchor} open={Boolean(anchor)} onClose={() => setAnchor(null)}>
+        <MenuItem disabled sx={{ fontSize: 11, opacity: '0.7 !important' }}>{user.email}</MenuItem>
+        <Divider />
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setSessionsOpen(true); }}>
+          <ListItemIcon><DevicesIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          {t('account.sessions')}
+        </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setAgentsOpen(true); }}>
+          <ListItemIcon><SmartToyIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          {t('account.agents')}
+        </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setNodesOpen(true); }}>
+          <ListItemIcon><DnsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          {t('account.computeNodes')}
+        </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setNotifOpen(true); }}>
+          <ListItemIcon><NotificationsIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          {t('account.notifications')}
+        </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setDataOpen(true); }}>
+          <ListItemIcon><FolderZipIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          My data
+        </MenuItem>
+        <MenuItem sx={{ fontSize: 12.5 }}
+          onClick={() => { setAnchor(null); setShareOpen(true); }}>
+          <ListItemIcon><DatasetIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          {t('dataSharing.menu')}
+        </MenuItem>
+        <MenuItem component="a" href="/preferences" sx={{ fontSize: 12.5 }} onClick={() => setAnchor(null)}>
+          <ListItemIcon><MailOutlineIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+          {t('commPrefs.menu')}
+        </MenuItem>
+        {analyticsState !== 'blocked' && (
+          <MenuItem sx={{ fontSize: 12.5 }}
+            onClick={() => { setAnchor(null); openCookieSettings(); }}>
+            <ListItemIcon><CookieIcon sx={{ fontSize: 16 }} /></ListItemIcon>
+            {t('cookies.settings')}
+          </MenuItem>
+        )}
+        <Divider />
+        <MenuItem disabled sx={{ fontSize: 11, opacity: '0.7 !important', minHeight: 0, py: 0.25 }}>
+          {t('language.label')}
+        </MenuItem>
+        <LanguageSwitcher variant="menu" onChosen={() => setAnchor(null)} />
+      </Menu>
+      <NotificationsDialog open={notifOpen}
+        onClose={() => { setNotifOpen(false); setNoticeKey((k) => k + 1); }}
+        onRead={() => setNoticeKey((k) => k + 1)} />
+      <SessionsDialog open={sessionsOpen} onClose={() => setSessionsOpen(false)}
+        onSignedOut={() => { void logout(); }} />
+      <AgentKeysDialog open={agentsOpen} onClose={() => setAgentsOpen(false)} />
+      <AccountDataDialog open={dataOpen} onClose={() => setDataOpen(false)} />
+      <DataSharingDialog open={shareOpen} onClose={() => setShareOpen(false)} />
+      <ComputeNodesDialog open={nodesOpen} onClose={() => setNodesOpen(false)} />
+    </Box>
+  );
+};
+
+export default AuthMenu;

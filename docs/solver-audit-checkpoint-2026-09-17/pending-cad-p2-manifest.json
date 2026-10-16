@@ -1,0 +1,55 @@
+{
+  "created_utc": "2026-09-16T20:52:07.799066Z",
+  "status": "prepared_not_integrated_pending_combined_physics_and_loaded_gates",
+  "target_root": "C:\\Users\\vadim\\Projects\\motor_ai_sim",
+  "live_modified": false,
+  "files": [
+    {
+      "path": "src/motor_ai_sim/cadquery_geometry.py",
+      "operation": "replace",
+      "expected_before_sha256": "E2D29B692D245D672EFD19D9A5947140E0F9A8FFED30A24DF2B055A690F4BCDB",
+      "expected_absent": false,
+      "after_sha256": "17D39AF02B85E5CB228C4F82A9C2903A35D61FB58552FB6E31441FEC58239EBA",
+      "candidate_source": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-cad-symmetry\\src\\motor_ai_sim\\cadquery_geometry.py",
+      "review_copy": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-integration-cad-cut\\after\\src\\motor_ai_sim\\cadquery_geometry.py"
+    },
+    {
+      "path": "src/motor_ai_sim/simulation/p2_projection.py",
+      "operation": "replace",
+      "expected_before_sha256": "A1E562C53DAB9C5EC0D17E9B5F9280F35F1987C7F7ADD00631498A8F0D87B5AA",
+      "expected_absent": false,
+      "after_sha256": "352A7E2518CF5997937D8BF45E3BCF62A515B349C34D2C304AB782C3E269155B",
+      "candidate_source": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-cut-facet-fix\\src\\motor_ai_sim\\simulation\\p2_projection.py",
+      "review_copy": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-integration-cad-cut\\after\\src\\motor_ai_sim\\simulation\\p2_projection.py"
+    },
+    {
+      "path": "tests/test_stator_mouth_symmetry.py",
+      "operation": "add",
+      "expected_before_sha256": null,
+      "expected_absent": true,
+      "after_sha256": "7E79138A426880E90CA2490131F689995FE9ADFCDF54DA8A1322DF9C587932F4",
+      "candidate_source": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-cad-symmetry\\tests\\test_stator_mouth_symmetry.py",
+      "review_copy": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-integration-cad-cut\\after\\tests\\test_stator_mouth_symmetry.py"
+    },
+    {
+      "path": "tests/test_stator_local_cleanup.py",
+      "operation": "add",
+      "expected_before_sha256": null,
+      "expected_absent": true,
+      "after_sha256": "22FEC8931C712D93F896BC10C545B29C87E18E2195AF7D4E2EE7BBD5181D8E45",
+      "candidate_source": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-cad-symmetry\\tests\\test_stator_local_cleanup.py",
+      "review_copy": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-integration-cad-cut\\after\\tests\\test_stator_local_cleanup.py"
+    },
+    {
+      "path": "tests/test_p2_cut_facets.py",
+      "operation": "add",
+      "expected_before_sha256": null,
+      "expected_absent": true,
+      "after_sha256": "C8F0EE7EEC0FA567FD6B2E1BD61627B4B9287861CB31F64B5885915E8C5A57D5",
+      "candidate_source": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-cut-facet-fix\\tests\\test_p2_cut_facets.py",
+      "review_copy": "C:\\Users\\vadim\\.codex\\visualizations\\2026\\09\\16\\01a0aaf0-a84f-7d23-9c5b-02df5147e1d6\\solver-integration-cad-cut\\after\\tests\\test_p2_cut_facets.py"
+    }
+  ],
+  "review_patch_sha256": "A3038BF385040070C203C35FB9FCAEC8E6274C9AD4A3816BA1B401D00BF32D0C",
+  "read_only_apply_check": "passed: git -c core.autocrlf=false apply --check"
+}

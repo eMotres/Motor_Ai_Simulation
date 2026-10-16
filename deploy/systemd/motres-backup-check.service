@@ -1,0 +1,27 @@
+# Weekly deep verification: restic actually READS 5 % of the pack files and
+# re-hashes them.
+#
+# WHY A SEPARATE UNIT
+#   `restic check` (in motres-backup.service) verifies the repository's
+#   STRUCTURE — that every snapshot's tree resolves and every blob it names is
+#   indexed.  It does not open the packs.  A Storage Box that has been quietly
+#   returning corrupt bytes passes that check every hour for a year and fails
+#   the one restore that mattered.  --read-data-subset=5% is the cheapest
+#   honest answer: over 20 weeks it has read the whole repository, and any
+#   week's sample is ~5 % of the transfer.
+#
+#   sudo systemctl enable --now motres-backup-check.timer
+
+[Unit]
+Description=Weekly restic deep check (5%% of the data re-read)
+Documentation=file:///opt/motres/app/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/motres/restic.env
+Nice=19
+IOSchedulingClass=idle
+ExecStart=/usr/bin/restic check --read-data-subset=5%%
+TimeoutStartSec=14400

@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional
 
 import numpy as np
-import torch
 
 
 @dataclass
@@ -64,14 +63,14 @@ class MagneticMaterial:
         """Check if material is electrically conductive."""
         return self.sigma > 1e4
 
-    def B_H_curve(self, H: torch.Tensor) -> torch.Tensor:
+    def B_H_curve(self, H):
         """Compute magnetic flux density B from field intensity H.
 
         For linear materials: B = μH
         For ferromagnetic materials with saturation: uses simplified model
 
         Args:
-            H: Magnetic field intensity [A/m]
+            H: Magnetic field intensity [A/m] (scalar or numpy array)
 
         Returns:
             Magnetic flux density [T]
@@ -79,11 +78,11 @@ class MagneticMaterial:
         if self.B_sat is not None and self.is_ferromagnetic:
             # Simplified saturation model using tanh
             B_linear = self.mu * H
-            return self.B_sat * torch.tanh(B_linear / self.B_sat)
+            return self.B_sat * np.tanh(B_linear / self.B_sat)
         else:
             return self.mu * H
 
-    def get_magnetization(self) -> torch.Tensor:
+    def get_magnetization(self) -> float:
         """Get magnetization vector for permanent magnets.
 
         Returns:
@@ -92,7 +91,7 @@ class MagneticMaterial:
         if self.is_permanent_magnet:
             # M = Br / μ0
             return self.Br / self.mu_0
-        return torch.tensor(0.0)
+        return 0.0
 
     def __repr__(self) -> str:
         return (

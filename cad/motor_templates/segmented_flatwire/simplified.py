@@ -16,6 +16,8 @@ Built by ``cad/fc_scripts/export_simplified.py`` from the built, gated model (fu
     silkscreen, mask or imported board body; the terminal positions go into the JSON.
   * what a customer integrates stays as built: shaft / rotor carrier, stator holders (outer shape and mounting holes),
     Prop_fix, screws (the full variant).
+  * the GFRP coil rings (Ring_front / Ring_back) are OMITTED (owner 2026-10-16, template A.7.4): they exist in the FULL model only
+    (they fix the coils); the simplified model, its STEP / GLB / JSON, its solid count and its mass never carry them.
 
 ``check()`` is the patent-hygiene gate the export runs before it writes a file: the monolith is a single solid whose faces are
 only the envelope (no face between the bore and the outer circle except the planar ends), its volume equals the envelope
@@ -30,6 +32,13 @@ MONOLITH_STEP_FACES = 4
 #: a coil block: U outline (its edges) + 2 caps + the stubs; a hard ceiling that no single-turn construction can stay under
 COIL_MAX_FACES = 60
 VOLUME_TOL = 1e-6          # relative: monolith volume vs envelope volume
+#: mechanical solids (mechanics.solids() names) that exist in the FULL model only and never go into the simplified model
+OMITTED_MECH = ("Ring_front", "Ring_back")
+
+
+def keeps_mech(name):
+    """True when the mechanical solid ``name`` (a mechanics.solids() key) is part of the simplified model."""
+    return name not in OMITTED_MECH
 
 
 def _V(*a):

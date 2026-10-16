@@ -196,6 +196,8 @@ def precheck_mechanics(g):
     rm, dm = _num(g, "back_screw_r"), _num(g, "back_screw_tap_d") / 2
     need(R8 < rm - dm and rm + dm < Ro and dm < w, "M3 holes (r %.3f, d %.3f) must lie in the back holder spokes (between the "
                                                    "bearing seat r %.3f and the outer r %.3f)" % (rm, 2 * dm, R8, Ro))
+    need(_num(g, "ring_inner_r") > _num(g, "stator_down_r"), "GFRP ring inner radius %.3f must be > the stator bore %.3f"
+         % (_num(g, "ring_inner_r"), _num(g, "stator_down_r")))
     need(_num(g, "holder_screw_l") > _num(g, "holder_flange_z") + _num(g, "motor_length") / 2,
          "holder screw (%.3f) must reach the back bosses" % _num(g, "holder_screw_l"))
     l_req, l_max = _opt(g, "holder_screw_req", None), _opt(g, "holder_screw_max", None)   # the screw follows the stack (2026-10-15)
@@ -425,9 +427,9 @@ def gate(doc, sheet_name="Params"):
                 precheck_violations=pre)
 
 
-MECH_BODIES = ("Shaft", "Stator_holder", "Stator_holder_back", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring",
+MECH_BODIES = ("Shaft", "Stator_holder", "Stator_holder_back", "Ring", "Prop_fix", "Bearing_outer_ring", "Bearing_inner_ring",
                "Bearing_ball", "Screw")
-MECH_BODIES_CARRIER = ("Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Bearing_outer_ring",
+MECH_BODIES_CARRIER = ("Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Bearing_outer_ring",
                        "Bearing_inner_ring", "Bearing_seal", "Bearing_ball", "Screw")
 
 
@@ -455,7 +457,7 @@ def _gate_mechanics(doc, g, exp, counts, vols):
         counts[key] = n
         if n != exp.get(key):
             errors.append("array %s has %d solids, Params require %s" % (label, n, exp.get(key)))
-    for ln in ("Bearing_618_8_back",) + (("Bearing_seal_2",) if carrier else ()):
+    for ln in ("Bearing_618_8_back", "Ring_back") + (("Bearing_seal_2",) if carrier else ()):
         lk = doc.getObject(ln)
         if lk is None or lk.LinkedObject is None:
             errors.append("link %s missing or empty" % ln)
@@ -484,6 +486,8 @@ def _gate_mechanics(doc, g, exp, counts, vols):
             ("Stator_holder z max = front_holder_end_z", _bb(so["Stator_holder"]).ZMax, g("front_holder_end_z")),
             ("Stator_holder_back z min = A_H = -back_holder_end_z", _bb(so["Stator_holder_back"]).ZMin, -g("back_holder_end_z")),
             ("Stator_holder_back z max = -seat bottom", _bb(so["Stator_holder_back"]).ZMax, -g("holder_seat_z")),
+            ("Ring_front z", _bb(so["Ring_front"]).ZMin, g("motor_length") / 2),
+            ("Ring_back z", _bb(so["Ring_back"]).ZMax, -g("motor_length") / 2),
             ("Screw head top z", _bb(so["Screw_1"]).ZMax, g("screw_head_top_z")),
             ("Screw tip z", _bb(so["Screw_1"]).ZMin, zfl - g("holder_screw_l"))]
     for name, got, want in inv:
@@ -596,14 +600,16 @@ FIT_PAIRS = [
     ("Shaft", "RotorCore", "contact"), ("Shaft", "Bearing_618_8_front_inner_ring", "contact"),
     ("Shaft", "Bearing_618_8_back_inner_ring", "contact"), ("Bearing_618_8_front_outer_ring", "Stator_holder", "contact"),
     ("Bearing_618_8_back_outer_ring", "Stator_holder_back", "contact"), ("Stator_holder", "Core", "contact"),
-    ("Stator_holder_back", "Core", "contact"),
+    ("Stator_holder_back", "Core", "contact"), ("Ring_front", "Core", "contact"), ("Ring_back", "Core", "contact"),
     ("Prop_fix", "Shaft", "contact"), ("Stator_holder", "Coils", "clear"), ("Stator_holder_back", "Coils", "clear"),
-    ("RotorCore", "Stator_holder", "clear"),
+    ("Ring_front", "Coils", "clear"), ("Ring_back", "Coils", "clear"), ("Stator_holder", "Ring_front", "clear"),
+    ("Stator_holder_back", "Ring_back", "clear"), ("RotorCore", "Stator_holder", "clear"),
     ("RotorCore", "Stator_holder_back", "clear"), ("MagnetArray", "Stator_holder", "clear"),
-    ("MagnetArray", "Stator_holder_back", "clear"),
+    ("MagnetArray", "Stator_holder_back", "clear"), ("RotorCore", "Ring_front", "clear"), ("RotorCore", "Ring_back", "clear"),
     ("Shaft", "Stator_holder", "clear"), ("Shaft", "Stator_holder_back", "clear"), ("Screws", "Core", "clear"),
     ("Screws", "Coils", "clear"), ("Screws", "Stator_holder", "contact"), ("Screws", "Stator_holder_back", "thread"),
     ("Screws", "Shaft", "clear"), ("Screws", "RotorCore", "clear"), ("Screws", "MagnetArray", "clear"),
+    ("Screws", "Ring_front", "clear"), ("Screws", "Ring_back", "clear"),
 ]
 FIT_PAIRS_OCCUPANCY = [   # occupancy variant (CIANO28 150): the holders are volume-equivalent rings, not the real pockets and holes,
     # so only the pairs whose faces the rings keep exactly are checked (the screws are not tested against the holders)
@@ -624,7 +630,7 @@ FIT_PAIRS_CARRIER = [(a, b, k) for a, b, k in FIT_PAIRS if "Prop_fix" not in (a,
     ("Shaft", "Bearing_618_8_front_inner_ring", "contact"), ("Shaft_rear", "Bearing_618_8_back_inner_ring", "contact"),
     ("Shaft", "Stator_holder", "clear"), ("Shaft_rear", "Stator_holder_back", "clear"),
     ("Shaft", "Stator_holder_back", "clear"), ("Shaft_rear", "Stator_holder", "clear"),
-    ("Screws", "Shaft", "clear"), ("Screws", "Shaft_rear", "clear")]
+    ("Shaft", "Ring_front", "clear"), ("Shaft_rear", "Ring_back", "clear"), ("Screws", "Shaft", "clear"), ("Screws", "Shaft_rear", "clear")]
 SCREW_ENGAGE_MIN_D = 1.5     # thread engagement in the back boss: at least 1.5 x screw diameter (owner 2026-10-13, reported)
 APPROX_FRACTION = 0.025     # occupancy variant: overlap allowed between a volume-equivalent ring part and its neighbour (share of the smaller part)
 FIT_REFUSE_MM3 = 0.5        # an overlap above this (outside "thread") refuses the build: a part runs into another one

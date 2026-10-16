@@ -136,7 +136,7 @@ def motor_card_from_s1_model(m: Mapping[str, Any], *, mass_kg: Optional[float] =
 def motor_card(m: Mapping[str, Any], *, dies_dir: Optional[Any] = None, cad_dir: Optional[Any] = None,
                component_id: Optional[str] = None, name: str = "") -> ComponentCard:
     """The motor card with the FULL assembled mass (owner 2026-10-14: "the full mass must be used everywhere"): the app's
-    active parts + the CAD bill of materials' shaft or rotor carrier, holders, bearings, screws, phase board, pins
+    active parts + the CAD bill of materials' shaft or rotor carrier, holders, rings, bearings, screws, phase board, pins
     and wire enamel, each with the material of the die's Full assignment (``modules.motor_mass.full_mass``).  A motor with
     no built CAD BOM carries the active mass and says so ("partial mass (no CAD model yet)"); the two are never mixed.
     Raises ``MotorMassError`` when the die is not available: the mass is then unknown, never a placeholder."""

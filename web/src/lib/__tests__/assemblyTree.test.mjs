@@ -11,13 +11,14 @@ const tree = {
     {id:'stator',name:{en:'Stator','zh-CN':'定子'},parts:['stator_core']},
     {id:'winding',name:{en:'Winding','zh-CN':'绕组'},parts:['slot']},
     {id:'magnets',name:{en:'Magnets','zh-CN':'磁钢'},parts:['magnet']},
-    {id:'housing',name:{en:'Housing & holders','zh-CN':'外壳与支架'},parts:['holder']},
+    {id:'housing',name:{en:'Housing & holders','zh-CN':'外壳与支架'},parts:['holder','rings']},
     {id:'bearings',name:{en:'Bearings','zh-CN':'轴承'},parts:['bearings']},
     {id:'fasteners',name:{en:'Fasteners','zh-CN':'紧固件'},parts:['screws']},
   ],
   parts:[
     part('stator_core','stator','Stator core',['Core']), part('slot','winding','Winding copper',['Coils']),
     part('magnet','magnets','Magnets',['Magnets','Magnets_S']), part('holder','housing','Stator holder',['Holder_front','Holder_back']),
+    part('rings','housing','Glass-fibre rings',['Ring_front','Ring_back']),
     part('bearings','bearings','Bearings',['Bearings_front','Bearings_front_balls','Bearings_back']),
     part('screws','fasteners','Screws',['Screws']),
   ],
@@ -28,7 +29,7 @@ const nodes=[
   {name:'Coils',family:'Coils',explode:0,children:numbered('Coil',6),colour:'#e0821a'},
   {name:'Magnets',family:'Magnets',explode:0,children:numbered('Magnet',14).filter((_,i)=>i%2===0),colour:'#e02718'},
   {name:'Magnets_S',family:'Magnets',explode:0,children:numbered('Magnet',14).filter((_,i)=>i%2===1),colour:'#2e86ff'},
-  ...['Holder_front','Holder_back','Bearings_front','Bearings_front_balls','Bearings_back'].map(name=>({name,family:name,explode:0,children:[name],colour:'#abc'})),
+  ...['Holder_front','Holder_back','Ring_front','Ring_back','Bearings_front','Bearings_front_balls','Bearings_back'].map(name=>({name,family:name,explode:0,children:[name],colour:'#abc'})),
   {name:'Screws',family:'Screws',explode:0,children:[1,2,3,4,5,6].map(i=>`Screw_${i}`),colour:'#ccc'},
 ];
 const fmt=(_key,_vars,fallback)=>fallback;
@@ -47,6 +48,7 @@ test('host adapter builds neutral group, part and instance names with scene mapp
   assert.deepEqual(rows[5].children[0].children.map(r=>r.label),['Screw 1','Screw 2','Screw 3','Screw 4','Screw 5','Screw 6']);
   assert.deepEqual(rows[4].children[0].children.map(r=>r.label),['Bearing, front','Balls, front','Bearing, rear']);
   assert.deepEqual(rows[3].children[0].children.map(r=>r.label),['Holder, front','Holder, rear']);
+  assert.deepEqual(rows[3].children[1].children.map(r=>r.label),['Ring, front','Ring, rear']);   // full model: the GFRP rings fix the coils
   assert.equal(rows[0].children[0].children,undefined);
   assert.equal(rows[0].children[0].colour,'#999');
   for (const row of [...rows,...rows.flatMap(r=>r.children)]) {

@@ -10,7 +10,7 @@ are written.  The STEP is written under a temporary name, re-imported and checke
 only then it replaces the final name.
 STEP tree: <motor_id>_active / Stator / Core ; Winding / Coils / Coil_1..N ; Rotor / RotorCore ; Magnets / Magnet_01..M ;
            Mechanics / Shaft, Bearing_618_8_front / (outer_ring, inner_ring, ball_01..), Bearing_618_8_back / (...),
-                       Stator_holder, Stator_holder_back, Prop_fix, Screws / Screw_1..
+                       Stator_holder, Stator_holder_back, Ring_front, Ring_back, Prop_fix, Screws / Screw_1..
            (Mechanics only for profiles with the stage-3 rows)
 Frameless kit (cad_variant = frameless, template A.6.0): Stator / Core ; Winding / Coils / Coil_1..N ; Rotor / RotorCore ; Magnets / Magnet_01..M ;
            Electronics / PhaseBoard_001.. (the phase board: plate + lead sleeves, or the imported board's solids); no Mechanics.
@@ -154,6 +154,9 @@ def mech_datums(g, mech, sh=None):
                                       front_hole_d=r6(g("bolt_d")), back_tap_d=r6(g("holder_tap_d"))),
                      back_m3=dict(r=r6(g("back_screw_r")), d=r6(g("back_screw_tap_d")),
                                   angles_from_y_deg=[r6(g("back_screw_angle") + 360.0 * k / n) for k in range(n)])),
+        rings=dict(front_z=[r6(g("motor_length") / 2), r6(g("motor_length") / 2 + g("ring_h"))],
+                   back_z=[r6(-g("motor_length") / 2 - g("ring_h")), r6(-g("motor_length") / 2)],
+                   r=[r6(g("ring_inner_r")), r6(g("coil_corner_r"))]),
         threads=dict(
             note="Fusion threads are COSMETIC (ThreadFeature modeled = False, full length, read from the Fusion model): "
                  "geometry is the core / tap diameter, the thread faces are coloured in the model",

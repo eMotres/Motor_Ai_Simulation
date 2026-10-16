@@ -50,6 +50,7 @@ _PARTS: Tuple[Tuple[str, str, str, str, Tuple[str, ...]], ...] = (
     ("holder_front", "housing", "Stator holder, front", "定子支架(前)", ("Holder_front",)),
     ("holder_back", "housing", "Stator holder, back", "定子支架(后)", ("Holder_back",)),
     ("holder", "housing", "Stator holder", "定子支架", ("Holder_front", "Holder_back")),
+    ("rings", "housing", "Glass-fibre rings", "玻璃纤维环", ("Ring_front", "Ring_back")),
     ("prop_fix", "housing", "Propeller fixing plate", "螺旋桨固定板", ("Prop_fix",)),
     ("bearings", "bearings", "Bearings", "轴承", ("Bearings_front", "Bearings_front_balls", "Bearings_front_seals",
                                                     "Bearings_back", "Bearings_back_balls", "Bearings_back_seals")),

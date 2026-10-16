@@ -87,8 +87,9 @@ back_screw_r|housing|mm|1|100|Radius of the M3 holes in the back holder face.|�
 back_screw_tap_d|housing|mm|0.5|10|Diameter of the M3 holes as modelled.|M3孔直径(建模值)。
 coil_holder_clearance|housing|mm|0.05|5|Radial clearance between the coil corner and the holder flange.|线圈角与支架法兰之间的径向间隙。
 bolt_head_d|housing|mm|1|20|Screw head circle diameter of the holder bosses.|支架凸台的螺钉头圆直径。
-ring_h|housing|mm|0.2|10|Axial offset of the holders from the stator end face (the space the removed glass-fibre ring used to fill); the holders and bearings move with it.|支架距定子端面的轴向偏移(原玻璃纤维环所占空间);支架与轴承随之移动。
-ring_holder_gap|housing|mm|0|2|Extra axial gap between that offset and the holder flange face; adds to ring_h.|在上述偏移与支架法兰面之间的附加轴向间隙,与ring_h相加。
+ring_t|housing|mm|0.1|5|Radial thickness of the glass-fibre ring.|玻璃纤维环径向厚度。
+ring_h|housing|mm|0.2|10|Axial length of the glass-fibre ring.|玻璃纤维环轴向长度。
+ring_holder_gap|housing|mm|0|2|Axial gap between the ring and the holder flange.|环与支架法兰之间的轴向间隙。
 prop_fix_d|housing|mm|2|100|Outer diameter of the propeller fixing plate.|螺旋桨固定板外径。
 prop_fix_relief_r|housing|mm|0.1|5|Corner relief radius of the double-D hole.|双D孔的拐角卸荷半径。
 prop_fix_hub_t|housing|mm|0.2|10|Hub thickness of the propeller plate on the flats.|螺旋桨板在平面上的轮毂厚度。

@@ -11,7 +11,7 @@ everyone, STEP download under NDA), (5) 3-D load FEM.
 | Path | What |
 |---|---|
 | `cad/motor_templates/segmented_flatwire/` | the FreeCAD template (PartDesign + Draft arrays), version-safe for FreeCAD 1.0.2 and 1.1. `TEMPLATE_VERSION` in its `__init__.py` goes into every manifest. |
-| `cad/reference/` | Fusion reference profile (`CIANO14_40_12.json`, the open Fusion model), its parameter values, `Coil_L20_fusion.step` (read-only Fusion export used for the coil check), `fusion_mechanics/` (read-only Fusion STEP + body/occurrence JSON of Shaft, 618_8, Stator_holder(+screws), Stator_holder_back, Prop_fix, 91292A032), `add_mechanics_rows.py` (adds the stage-3 rows to a profile) |
+| `cad/reference/` | Fusion reference profile (`CIANO14_40_12.json`, the open Fusion model), its parameter values, `Coil_L20_fusion.step` (read-only Fusion export used for the coil check), `fusion_mechanics/` (read-only Fusion STEP + body/occurrence JSON of Shaft, 618_8, Stator_holder(+screws), Stator_holder_back, Ring, Prop_fix, 91292A032), `add_mechanics_rows.py` (adds the stage-3 rows to a profile) |
 | `cad/fc_scripts/` | scripts that run inside FreeCAD: `build_model.py`, `gui_finish.py` (headless GUI: colours, camera), `check_gui.py`, `export_step.py`, `solids_dump.py`, `coil_vs_reference.py`, `mechanics_vs_reference.py` (every mechanical part vs Fusion), `owner_edits.py` (Params edits on a built model + gate + fit) |
 | `src/motor_ai_sim/cad/` | `store.py` (store -> profile, name mapping, fingerprints, owner sync-back diff), `manifest.py`, `runner.py`, `build.py` (CLI). Stdlib + PyYAML only. |
 | `cad/run_build.py` | launcher without the FEM stack (used by the image) |
@@ -76,6 +76,7 @@ Built like the Fusion model CIANO14 40 (read-only MCP dump 2026-10-12, `cad/refe
 | `Bearing_618_8` (Part: `Bearing_outer_ring`, `Bearing_inner_ring`, `Bearing_ball` + `Balls`) and the link `Bearing_618_8_back` | revolves (edge radii, ball groove) | 618_8 import; d / D / B from the config's bearing card |
 | `Stator_holder` | revolve, window between the spokes (pocket), boss to the stator face, seat into the pocket between the core legs, seat chamfers (pocket), x `holder_bolt_count` | Sketch3 profile 0, Sketch2 profiles 16 / 9-11, Extrude42/45/47, Chamfer23, C-Pattern |
 | `Stator_holder_back` | revolve, through window, bosses / seats with M2 tap holes, six M3 holes in the A_H face, seat chamfers, spoke-end fillets (pocket), x `holder_bolt_count` | Sketch3 profile 6, Sketch2, Sketch7, Extrude41/42/43/47, Chamfer23, Fillet27 |
+| `Ring` + link `Ring_back` | revolve | Sketch3 profile 2, occurrences Ring:1 / Ring:3 |
 | `Prop_fix` | double-D hub on the flats + plate, hole faces offset by the clearance in the sketch | Sketch2, Extrude1/2, OffsetFaces1 |
 | `Screw` + `Screws` | M2 socket head screw on the bolt circle, polar array | 91292A032 in Stator_holder |
 
@@ -96,18 +97,18 @@ symmetric profiles are one dimensioned half + `Symmetric` (+ `Equal` for arcs / 
 the bodies, the array counts (`Screws` = `holder_bolt_count`, `Balls` = `bearing_ball_count`), the links and the extents
 the Params demand (stale geometry), and `health.fit()` writes the interference / contact table (`build_report.json`
 `fit`): contacts that must touch without overlap (shaft / rotor bore, shaft / bearing bores, bearings / holder seats,
-holders / stator, Prop_fix / shaft), clearances (holders, screws vs coils / core / rotor) and the screw
+holders and rings / stator, Prop_fix / shaft), clearances (holders, rings, screws vs coils / core / rotor) and the screw
 thread engagement in the back bosses (reported).  An overlap above 0.5 mm3 refuses the build.
 
-The STEP has `Mechanics/...` (34 solids, 56 in all since the ring was removed; 36 / 58 before) and the datums JSON a `mechanics` block (A_H measured on the solid,
-bearing seats, holder faces, shaft journals / flats / thread, bolt circle and angles, M3 holes, Prop_fix, screws).
+The STEP has `Mechanics/...` (36 solids, 58 in all) and the datums JSON a `mechanics` block (A_H measured on the solid,
+bearing seats, holder faces, shaft journals / flats / thread, bolt circle and angles, M3 holes, rings, Prop_fix, screws).
 
 Axial parameters (Fusion Sketch3 dimension names, not renamed; owner to confirm the meaning):
 
 | Param (Fusion dim) | What it is | L20 |
 |---|---|---|
 | `motor_length` (d7582) | stack, stator end faces at +-motor_length/2 | 20 |
-| `ring_h` (d11985), `ring_holder_gap` (d11987) | offset of the holder flange faces from the stator face (the space the removed GFRP ring filled; the Fusion names stay) | 1.8, 0.1 |
+| `ring_h` (d11985), `ring_holder_gap` (d11987) | GFRP ring length from the stator face; gap ring -> holder flange | 1.8, 0.1 |
 | `holder_face_z` (derived) | holder inner faces = bearing inner faces = shaft shoulder (front) / 10 -> 8 step (back) | 11.9 |
 | `holder_flange_t` (d11698) | holder flange thickness (screw head seat front, boss start back) | 1.2 |
 | `bearing_w` (d11703, = card B) | bearing width = seat depth | 4 |
@@ -118,9 +119,9 @@ Axial parameters (Fusion Sketch3 dimension names, not renamed; owner to confirm 
 | `back_holder_ref_r` (d11730), `back_holder_wall` (d11731, driven) | outer r = ref + (ref - seat r 8) = 12 | 10, 2 |
 | `holder_hub_wall` (d11752) | front hub r 8 -> 8.8 (also the spoke-root circle) | 0.8 |
 | `shaft_shoulder_len`, `shaft_shoulder_r` (d11689/95) | 9.4 shoulder against the front inner ring | 0.5, 4.7 |
-| `shaft_flange_step` (d11885) | flange r = rotor bore 5 + 3 (front rotor stop, z 10..11.4) | 3 |
+| `shaft_flange_step` (d11885) | flange r = rotor seat + 2 (front rotor stop, z 10..11.4; Ø13.9 at the as-built seat Ø9.9; owner 2026-10-16: 3 -> 2, balancing adds material on the rotor) | 2 |
 | `shaft_bore_r` (d11692, = seat r - shaft_height), `shaft_bore_tip_angle` (d11685) | bore 6, 45 deg end cone, apex at the journal end | 3, 45 deg |
-| `coil_holder_clearance` (d11980) | flange r = coil corner 13.233 + 0.4 | 0.4 |
+| `coil_holder_clearance` (d11980), `ring_t` (d11983) | flange r = coil corner 13.233 + 0.4; ring radial thickness | 0.4, 0.8 |
 | `ax_core_ref_inset` (d9633) | construction line only (role info) | 0.9 |
 
 Not dimensioned in Fusion (Sketch2 is not fully constrained), read as 14.843191 / 1.460021 and rounded by the owner
@@ -141,7 +142,7 @@ Verification of the mechanics (FreeCAD 1.1.3 server builds; the same numbers on 
 
 | Part vs Fusion (`mechanics_vs_reference.py`, reference profile) | dV | max surface deviation |
 |---|---|---|
-| Stator_holder, Stator_holder_back, Prop_fix, 618/8 rings x4 (bearing rings) | <= 1e-6 | <= 1e-5 mm |
+| Stator_holder, Stator_holder_back, Ring x2, Prop_fix, 618/8 rings x4 | <= 1e-6 | <= 1e-5 mm |
 | Shaft | -0.010 % | 0.141 mm (Fusion chamfers one arc of the journal end only; M5 cosmetic thread 4.901 vs 4.90) |
 | 618/8 balls x2 | -0.013 % | 0.88 mm (Fusion joins the balls by r 0.01 tori into one body) |
 | Screws x6 | +0.18 % | 0.18 mm (no 0.2 mm socket countersink) |
@@ -287,7 +288,7 @@ model, the STEP is not needed to open it); the **placement** is parametric, a pu
 N copper measured on the solid = lead end + offset, pin J13 at (6.606, 12.964) +-0.01 (r 14.55 at 63 deg).  The STEP colours
 (mask green, FR4, ENIG gold, pins / walls grey) are looked up per face through the GUI importer and stored as the `DiffuseColor` of the
 view object (GuiDocument.xml); `check_gui.py` verifies them.  `build_report.json` -> `phase_board`: minimum clearance and overlap
-of the board (and of its pins alone) against Coils, Core, RotorCore, Magnets, Shaft, both holders, Bearings, Screws, Prop_fix, and
+of the board (and of its pins alone) against Coils, Core, RotorCore, Magnets, Shaft, both holders, Rings, Bearings, Screws, Prop_fix, and
 for each of the 12 coil lead ends the overlap / clearance of the lead stub against the board (reported, not refused: the pin tail is
 provisional); the manifest carries a summary.  The datums JSON has a `phase_board` block.  The active-part STEP is unchanged (58 solids).
 
@@ -328,7 +329,7 @@ over the sorted triangles per group; `FC_THREADS=0` writes the file without the 
 |---|---|
 | Screw shank | the ISO 4762 / DIN 912 thread length b = 2 d + 12 mm (M2 16, M2.5 17, M3 18; for lengths up to 125 mm) measured from the screw TIP, clipped to the shank face, never under the head; a screw whose plain part under the head would be shorter than 2 pitches (length <= b + 2 P) is fully threaded.  CIANO14 40 L20 (M2 x 25): z -11.5 .. 4.1, 9 mm plain under the head. |
 | Tapped hole (back holder, ring-carrier hub holes) | the whole hole face = the tapped depth the template models |
-| Shaft | the free END: the `shaft_tip_r` section (z `shaft_thread_end_z` .. `shaft_front_end_z`, CIANO14 40: 28.7 .. 36.7), the part the propeller nut runs on.  The `shaft_thread_r` section next to the journal (z 20.7 .. 28.7) passes through the propeller plate's clearance hole and is NOT threaded (Fusion's cosmetic thread diameter 4.901 is the tip's, not the 4.95 section's).  The GUI cosmetic colouring (`view.thread_face_indices`, checked by `check_gui.py`) and the `thread` block of the datums JSON (`neck` = the smooth section) follow the same face. |
+| Shaft | the free END: the `shaft_tip_r` section (z `shaft_thread_end_z` .. `shaft_front_end_z`, CIANO14 40: 28.7 .. 36.7), the part the propeller nut runs on.  The `shaft_thread_r` section next to the journal (z 20.7 .. 28.7) passes through the propeller plate's clearance hole and is NOT threaded.  (Fusion's cosmetic thread diameter 4.901 is the tip's, not the 4.95 section's).  The GUI cosmetic colouring (`view.thread_face_indices`, checked by `check_gui.py`) and the `thread` block of the datums JSON (`neck` = the smooth section) follow the same face. |
 
 The rest of a cut face stays smooth in the solid's own node: the shank cylinder is cut at the end of the thread by `glb_writer.split_by_slab`
 (winding kept, cut edges share one new vertex, no area or volume lost), so the geometry is the original plus the vertices of the cut.
@@ -430,31 +431,28 @@ Not modelled (disclosed in the BOM / report): fan plates (Fan_200_24s), the 72 a
 holders, the bearing shield detail, slot-edge fillets, screw threads and head knurling, the PCB layers. The Fusion component "M3 x 0.5 x 30" has a 34 mm shank (the
 BOM flags the length for confirmation).
 
-## The GFRP ring is gone (template A.7.1, 2026-10-15)
+## The GFRP rings: full model only (template A.7.4, 2026-10-16)
 
-Owner: "the ring - remove it from every motor construction". The generator no longer builds the glass-fibre `Ring` (body) and `Ring_back` (link), in
-any variant: `mechanics.py`, `build.py`, `health.py` (MECH_BODIES, the extents, the fit pairs with the ring, the `ring_inner_r` pre-check),
-`electronics.py` (the "Rings" fit group), `frameless.py` (OMITTED_OBJECTS), `view.py` / `palette.*` (colour role, visibility), the exports (STEP tree,
-datums JSON `mechanics.rings`, viewer groups `Ring_front` / `Ring_back`, the simplified model), the BOM row "Ring (glass-fibre)" and the `GFRP` default density.
-Removed with it: the profile rows only the ring used (`ring_t`, `ring_inner_r`, `ring_back_dz`), the profile material `Ring`, the editable parameter `ring_t`
-(Geometry Full table), the part `rings` of the part tree ("Glass-fibre rings" in the Motor Assembly panel, the Materials Full list and the full mass: the
-`rings` rule of `part_materials.yaml`, `ROTATING_KEYS`), the web names (`assembly_ring_*`, `materialsPart_rings`) and `fusion_mechanics/Ring.*`.
-A BOM built before the removal still lists a "Ring (glass-fibre)" row: `motor_mass` ignores it (not counted, not "other") until the motor is rebuilt.
+Template A.7.1 (#216, 2026-10-15) removed the glass-fibre `Ring` (body) and its `Ring_back` (link) from every construction. The owner only wanted
+them out of the SIMPLIFIED model: in the FULL model the two rings fix the coils. A.7.4 restores everything A.7.1 removed for the full model
+(`mechanics.py` build_ring + link, `health.py` MECH_BODIES / extents / fit pairs / the `ring_inner_r` pre-check, `electronics.py` "Rings" fit group,
+`frameless.py` OMITTED_OBJECTS, `view.py` / `palette.*`, the STEP tree, datums `mechanics.rings`, viewer groups `Ring_front` / `Ring_back`, the BOM row
+"Ring (glass-fibre)", the `GFRP` density, the profile rows `ring_t`, `ring_inner_r`, `ring_back_dz` and material `Ring`, the editable `ring_t`, the
+part `rings` of the part tree / Materials Full / full mass / `ROTATING_KEYS`, the web names and `fusion_mechanics/Ring.*`).
 
-**What the ring set for other parts - and what stays.** Nothing else took a dimension from the ring's body, but two rows still carry its space: the
-axial chain `holder_face_z = motor_length / 2 + ring_h + ring_holder_gap` (inner face of both holder flanges = bearing inner face = shaft shoulder)
-used `ring_h` (the ring length) and `ring_holder_gap`. They are KEPT unchanged (the Fusion dimension names d11985 / d11987, renamed only in their label and
-comment: "holder offset from the stator face"), so every holder, bearing, shaft, screw, board and the screw clamp length are exactly where they were: the
-geometry of every other part is bit-identical. Consequence for the owner: the space between each stator end face and the holder
-flange (1.9 mm on the CIANO14 40: ring_h 1.8 + gap 0.1; 2.1 mm on the CIANO28 85) that the ring filled is now EMPTY (air); the holders touch the core only through their seats in the pockets between the core legs (as before). If the
-holders should move closer to the stator, lower `ring_h` / `ring_holder_gap` - the whole axial chain, the shaft, the screws (stock length follows) and the
-board move with it. That is a design decision, not made here.
+* Rings exist only where the reference profile has the ring rows: CIANO14 40 (L12, L20) and CIANO28 85 (L13, L15). The CIANO28 150_35 port (occupancy
+  variant) has no ring; `mechanics.solids()` lists `Ring_front` / `Ring_back` only when the `Ring` body exists.
+* The SIMPLIFIED model omits them: `simplified.OMITTED_MECH = ("Ring_front", "Ring_back")`, applied by `export_simplified.py` to the STEP, the GLB
+  (no `Ring_*` group) and the JSON (`solids.mechanics` without them, `omitted` lists them). The simplified JSON's `mass` stays the mass of the REAL
+  (full) model, labelled as such.
+* Nothing else moves: `holder_face_z = motor_length / 2 + ring_h + ring_holder_gap` was kept by A.7.1, so holders, bearings, shaft, screws and board
+  are where they were in A.7.0 - A.7.3; the space between stator face and holder flange is filled by the ring again.
 
 ## Frameless variant: the kit for robots (template A.6.0, 2026-10-15)
 
 One parametric model, two assemblies (owner decision 2026-10-15): the CIANO28 85 20SW1200 / L13 becomes a private configuration whose
 3-D model is a **frameless kit** - **stator with coils and the phase board + rotor with magnets**. Not included: housing, stator holders,
-rotor carriers / hub, bearings, shaft, screws, the propeller plate. The public CIANO14 40
+rotor carriers / hub, bearings, shaft, screws, the glass-fibre rings that belong to the housing, the propeller plate. The public CIANO14 40
 (L12 / L20) keeps the full model. The kit is not a second hand-made model: the same Params sheet drives the same parts, the housing and
 the rotating mechanics are simply not built.
 
@@ -476,7 +474,7 @@ label "TOTAL mass of the frameless kit", an `E` row) and `GET /api/model3d/model
 | `Magnets / Magnet_01..28` | magnets (a sleeve joins them when a profile has `sleeve_thickness` > 0; L13 has none) | 28 |
 | `Electronics / PhaseBoard_001..025` | phase board: ring plate + 24 lead sleeves (the CIANO14 40 would give the imported board's solids) | 25 |
 
-67 solids (the full model: 114). No `Mechanics`, no bearings, shaft, carrier, holders, screws. The GLB has the groups `Core`, `Coils`, `Rotor`,
+67 solids (the full model: 114). No `Mechanics`, no bearings, shaft, carrier, holders, rings, screws. The GLB has the groups `Core`, `Coils`, `Rotor`,
 `Magnets`, `Magnets_S`, `PhaseBoard_FR4`, `PhaseBoard_pins` (4.5 MB, 126 k triangles); the web viewer builds its part list from the GLB groups,
 so no housing part is listed.
 
@@ -539,6 +537,7 @@ What it is made of:
   holes). The outline and holes are the closed wires of the board body sliced at mid thickness.
 * **As built:** shaft or rotor carrier, stator holders (outer shape and mounting holes), Prop_fix, screws (full variant). A frameless kit has
   the monolith, the coil blocks and the board only.
+* **Omitted:** the glass-fibre coil rings `Ring_front` / `Ring_back` (full model only, template A.7.4; `simplified.OMITTED_MECH`, listed in the JSON `omitted`).
 
 **Patent hygiene.** The model must not disclose the AeroStator Core internals (slot / yoke topology, magnet pocket geometry, coil construction).
 `simplified.check()` is a gate the export runs before it writes anything: the monolith is one solid with one shell (an internal cavity would be a
@@ -573,7 +572,7 @@ transparent body (`view.check_opaque`).
 
 The Geometry tab has a switch **Active | Full** (the same state as Materials). Active is the electromagnetic construction. Full shows
 the CAD model, THE part tree and the construction parameters of this template that the simulation does not read - walls, shafts,
-holders, bearings, phase board, screws, leads, `offset_rotor` - editable.
+holders, rings, bearings, phase board, screws, leads, `offset_rotor` - editable.
 
 **Where an edit lives.** `<config>.yaml` gets a `cad_overrides:` block (`{parameter: number}`, plus `bearing_card: <card of
 bearings_library.yaml>`). Nothing else reads it: the electromagnetic solver, the passport and `_geoSig` ignore it (a test pins that

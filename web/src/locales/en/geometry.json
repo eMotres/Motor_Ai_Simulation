@@ -139,6 +139,8 @@
   "assembly_balls_rear": "Balls, rear",
   "assembly_seals_front": "Seals, front",
   "assembly_seals_rear": "Seals, rear",
+  "assembly_ring_front": "Ring, front",
+  "assembly_ring_rear": "Ring, rear",
   "assembly_holder_front": "Holder, front",
   "assembly_holder_rear": "Holder, rear",
   "assemblyNode_PhaseBoard_FR4": "FR4 board",

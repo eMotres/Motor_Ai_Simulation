@@ -10,7 +10,8 @@ Writes into FC_OUT_DIR (under temporary names first, moved only after every chec
 
 The simplified model (owner 2026-10-15; patent hygiene in motor_templates/segmented_flatwire/simplified.py): stator + rotor + magnets are ONE
 monolithic solid (outer envelope, rotor bore with keys, end faces exactly; everything inside filled), every coil is ONE thick turn, every
-bearing ONE solid ring d x D x B; shaft / carrier, holders (outer shape, mounting holes), Prop_fix, screws stay as built; the phase board is ONE plain piece (its outline
+bearing ONE solid ring d x D x B; shaft / carrier, holders (outer shape, mounting holes), Prop_fix, screws stay as built (the GFRP rings
+Ring_front / Ring_back are full-model only and omitted, simplified.OMITTED_MECH); the phase board is ONE plain piece (its outline
 extruded to the board thickness, with its through holes: no pins, components, copper, pads; the terminal positions go into the JSON).  The model is opened, recomputed and must pass health.gate(); simplified.check() refuses the files when
 internal detail would be left.
 """
@@ -127,6 +128,8 @@ def main():
     for name, s in mech.items():
         if name.startswith("Bearing_618_8_"):
             continue                                              # replaced below: one ring per bearing
+        if not S.keeps_mech(name):
+            continue                                              # GFRP rings: full model only (template A.7.4)
         keep[name] = s
     for side in ("front", "back"):
         outer = mech.get("Bearing_618_8_%s_outer_ring" % side)
@@ -176,6 +179,7 @@ def main():
                 envelope=dict(bbox=[r6(x) for x in bb], size=[r6(bb[3] - bb[0]), r6(bb[4] - bb[1]), r6(bb[5] - bb[2])]),
                 mounting=mounting, board=boardinfo,
                 solids=dict(monolith=1, coils=len(coil_blocks), mechanics=len(keep), board=1 if board is not None else 0),
+                omitted=sorted(n for n in mech if not S.keeps_mech(n)),
                 monolith=dict(volume_mm3=r6(monolith.Volume), faces=len(monolith.Faces)), mass=None,
                 note="Envelope model for integration: stator, rotor and magnets are one filled solid, every coil is one thick turn, every "
                      "bearing one ring. The coil blocks lie inside the filled slots (the solids overlap by design). It carries no "

@@ -171,7 +171,7 @@ It stays a separate, labelled row: "Active mass (EM parts)" in the datasheet, th
 tile), the tree (`result.mass_active_kg`, `mass.active_kg`) and the MCP output (`mass_active_kg`). The Simulation tab's own
 tiles and the Compare tab's saved-simulation rows (a geometry variant has no CAD model) are labelled "Active mass".
 **Rotating mass** (mechanics: bearing load, spin-up energy): the rotating parts of the full list (`ROTATING_KEYS`: rotor core,
-magnets, shaft or rotor carrier, sleeve, propeller plate); the datasheet and the report use it for the
+magnets, shaft or rotor carrier, sleeve, glass-fibre rings, propeller plate); the datasheet and the report use it for the
 bearing load when a CAD model exists. `masses.rotor_inertia_kg_m2` keeps its meaning (the active rotor about the shaft axis, from the
 CAD polygons); the BOM has no polar moments, so the rotating mass is a mass, not an inertia.
 

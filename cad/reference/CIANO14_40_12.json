@@ -23,6 +23,7 @@
    "Shaft": "Steel",
    "Stator_holder": "Aluminum 6061",
    "Stator_holder_back": "Aluminum 6061",
+   "Ring": "GFRP",
    "Prop_fix": "Aluminum 6061",
    "Bearing_outer_ring": "Steel (bearing)",
    "Bearing_inner_ring": "Steel (bearing)",
@@ -1016,12 +1017,12 @@
   {
    "name": "shaft_flange_step",
    "source": "CIANO14 40/Sketch3 d11885",
-   "fusion_expression": "3 mm",
-   "fusion_dimension_value": 3.0,
-   "freecad_expression": "3 mm",
-   "value": 3.0,
+   "fusion_expression": "2 mm",
+   "fusion_dimension_value": 2.0,
+   "freecad_expression": "2 mm",
+   "value": 2.0,
    "unit": "mm",
-   "comment": "Shaft: flange r = rotor bore r (5) + 3 = 8, z 10..11.4 (front rotor stop)",
+   "comment": "Shaft: flange r = rotor bore r (5) + 2 = 7, z 10..11.4 (front rotor stop); owner 2026-10-16: 3 -> 2 mm in Fusion, balancing adds material on the rotor",
    "role": "mechanics"
   },
   {
@@ -1036,6 +1037,17 @@
    "role": "mechanics"
   },
   {
+   "name": "ring_t",
+   "source": "CIANO14 40/Sketch3 d11983",
+   "fusion_expression": "0.8 mm",
+   "fusion_dimension_value": 0.8,
+   "freecad_expression": "0.8 mm",
+   "value": 0.8,
+   "unit": "mm",
+   "comment": "GFRP ring: radial thickness r 12.433..13.233",
+   "role": "mechanics"
+  },
+  {
    "name": "ring_h",
    "source": "CIANO14 40/Sketch3 d11985",
    "fusion_expression": "1.8 mm",
@@ -1043,7 +1055,7 @@
    "freecad_expression": "1.8 mm",
    "value": 1.8,
    "unit": "mm",
-   "comment": "Axial offset, stator end face to the part that follows (ring_holder_gap): the front / back space the GFRP ring used to fill. The ring was removed from every construction (owner 2026-10-15); the Fusion dimension name stays and the holders keep their position (axial chain holder_face_z)",
+   "comment": "GFRP ring: axial length z 10..11.8 (front; back ring mirrored)",
    "role": "mechanics"
   },
   {
@@ -1054,7 +1066,7 @@
    "freecad_expression": "0.1 mm",
    "value": 0.1,
    "unit": "mm",
-   "comment": "Axial gap between that offset (ring_h) and the holder flange inner face (the former ring -> holder gap); with ring_h it places the holders: holder_face_z = motor_length / 2 + ring_h + ring_holder_gap",
+   "comment": "Axial gap ring -> holder flange (z 11.8..11.9)",
    "role": "mechanics"
   },
   {
@@ -1492,6 +1504,16 @@
    "role": "derived"
   },
   {
+   "name": "ring_back_dz",
+   "source": "Ring:3 occurrence",
+   "fusion_expression": "-21.8 mm",
+   "freecad_expression": "-(motor_length + ring_h)",
+   "value": -21.8,
+   "unit": "mm",
+   "comment": "Shift of the back ring copy (Fusion occurrence Ring:3)",
+   "role": "derived"
+  },
+  {
    "name": "holder_inner_r",
    "source": "CIANO14 40/Sketch3 L44",
    "fusion_expression": "13.633 mm",
@@ -1519,6 +1541,16 @@
    "value": 12.0,
    "unit": "mm",
    "comment": "Back holder outer radius",
+   "role": "derived"
+  },
+  {
+   "name": "ring_inner_r",
+   "source": "CIANO14 40/Sketch3 L50",
+   "fusion_expression": "12.433 mm",
+   "freecad_expression": "coil_corner_r - ring_t",
+   "value": 12.433268682,
+   "unit": "mm",
+   "comment": "GFRP ring inner radius",
    "role": "derived"
   },
   {

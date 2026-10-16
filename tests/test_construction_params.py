@@ -186,8 +186,7 @@ def test_every_parameter_has_a_short_label_in_both_languages_and_bearing_interna
     for n, m in C.CATALOGUE.items():
         en, zh = m["label"]["en"], m["label"]["zh"]
         assert " - " in en and len(en) <= 48 and en != n and any("一" <= ch <= "鿿" for ch in zh), n
-    assert "ring_t" not in C.CATALOGUE and "Glass-fibre" not in C.CATALOGUE["ring_h"]["label"]["en"]       # the GFRP ring is gone
-    assert C.CATALOGUE["holder_lip_t"]["label"] == {"en": "Stator holder - bearing lip thickness", "zh": "定子支架 - 轴承唇边厚度"}
+    assert C.CATALOGUE["ring_t"]["label"] == {"en": "Glass-fibre ring - thickness", "zh": "玻璃纤维环 - 厚度"}
     assert C.CATALOGUE["prop_fix_d"]["label"]["en"] == "Propeller plate - diameter"
     assert C.CATALOGUE["shaft_bore_tip_angle"]["label"]["en"] == "Shaft - bore tip angle"
     # every bearing internal is read-only; nothing else is
@@ -195,7 +194,7 @@ def test_every_parameter_has_a_short_label_in_both_languages_and_bearing_interna
     p = json.loads((_ROOT / "cad" / "reference" / "CIANO14_40_12.json").read_text("utf-8"))
     built = {x["name"]: x for sec in C.SECTIONS for x in p[sec]}
     rows = {r["name"]: r for r in C.rows(built, {})}
-    assert rows["bearing_ball_count"]["editable"] is False and rows["holder_lip_t"]["editable"] is True
+    assert rows["bearing_ball_count"]["editable"] is False and rows["ring_t"]["editable"] is True
     assert "read-only" in C.validate(built, {"bearing_ball_d": 2.2})[0]
     # an integer parameter of a carrier motor is still checked as a whole number
     q = json.loads((_ROOT / "cad" / "reference" / "CIANO28_85_20SW1200.json").read_text("utf-8"))
@@ -221,8 +220,8 @@ def test_get_table_lists_groups_units_limits_and_marks_cad_only(env):
     t = r.json()
     assert t["available"] and t["can_write"] is True and t["rebuild"]["state"] == "current"
     names = {x["name"]: x for x in t["rows"]}
-    assert {"holder_flange_t", "holder_lip_t", "phase_board_x", "screw_head_d", "offset_rotor", "shaft_thread_len"} <= set(names)
-    row = names["holder_lip_t"]
+    assert {"holder_flange_t", "ring_t", "phase_board_x", "screw_head_d", "offset_rotor", "shaft_thread_len"} <= set(names)
+    row = names["ring_t"]
     assert row["unit"] == "mm" and row["group"] == "housing" and row["cad_only"] is True
     assert row["min"] < row["default"] < row["max"] and row["tip"]["zh"] and row["value"] == row["default"]
     assert t["cad_only_label"]["en"] == "CAD only, not simulated"
@@ -234,14 +233,14 @@ def test_get_table_lists_groups_units_limits_and_marks_cad_only(env):
 
 def test_put_saves_per_config_and_leaves_the_electromagnetics_alone(env):
     before_cfg, before_die = _cfg_doc(env), yaml.safe_load((env["dies"] / DIE / "die.yaml").read_text("utf-8"))
-    r = client.put(CP, json={"values": {"holder_flange_t": 1.0, "holder_lip_t": 0.9}}, headers=env["admin"])
+    r = client.put(CP, json={"values": {"holder_flange_t": 1.0, "ring_t": 0.9}}, headers=env["admin"])
     assert r.status_code == 200, r.text
     out = r.json()
-    assert out["changed"] == ["holder_flange_t", "holder_lip_t"] and out["table"]["rebuild"]["state"] == "pending"
+    assert out["changed"] == ["holder_flange_t", "ring_t"] and out["table"]["rebuild"]["state"] == "pending"
     rows = {x["name"]: x for x in out["table"]["rows"]}
-    assert rows["holder_lip_t"]["value"] == 0.9 and rows["holder_lip_t"]["overridden"] and rows["holder_lip_t"]["built"] == 0.8
+    assert rows["ring_t"]["value"] == 0.9 and rows["ring_t"]["overridden"] and rows["ring_t"]["built"] == 0.8
     doc = _cfg_doc(env)
-    assert doc["cad_overrides"] == {"holder_flange_t": 1.0, "holder_lip_t": 0.9}
+    assert doc["cad_overrides"] == {"holder_flange_t": 1.0, "ring_t": 0.9}
     # EM isolation: nothing but the new block changed, in the configuration and in the die
     doc_wo = {k: v for k, v in doc.items() if k != "cad_overrides"}
     assert doc_wo == before_cfg
@@ -254,7 +253,7 @@ def test_put_saves_per_config_and_leaves_the_electromagnetics_alone(env):
     eff0 = store.load_effective(str(env["dies"]), DIE, "L12")
     pj, rep = store.make_profile(eff0, mp)
     p = {x["name"]: x for sec in store.SECTIONS for x in pj[sec]}
-    assert p["holder_lip_t"]["freecad_expression"] == "0.9 mm" and p["holder_lip_t"]["reference_expression"] == "0.8 mm"
+    assert p["ring_t"]["freecad_expression"] == "0.9 mm" and p["ring_t"]["reference_expression"] == "0.8 mm"
     assert p["holder_flange_t"]["cad_override"] is True
     clean = {k: v for k, v in eff0.items() if k != "cad_overrides"}
     shutil.copy2(env["dies"] / DIE / "L12.yaml", env["tmp"] / "L12.with.yaml")
@@ -272,15 +271,15 @@ def test_put_saves_per_config_and_leaves_the_electromagnetics_alone(env):
     assert rep1["fingerprint"]["cad_overrides_hash"] == "none"
     # a value equal to the default is no override; null removes one
     shutil.copy2(env["tmp"] / "L12.with.yaml", env["dies"] / DIE / "L12.yaml")
-    r = client.put(CP, json={"values": {"holder_lip_t": 0.8, "holder_flange_t": None}}, headers=env["admin"])
+    r = client.put(CP, json={"values": {"ring_t": 0.8, "holder_flange_t": None}}, headers=env["admin"])
     assert r.status_code == 200 and _cfg_doc(env).get("cad_overrides") is None
 
 
 def test_put_refuses_bad_values_in_words_and_saves_nothing(env):
     before = _cfg_doc(env)
-    for body, needle in (({"holder_lip_t": 50}, "outside the allowed range"), ({"bearing_ball_count": 12}, "read-only"),
+    for body, needle in (({"ring_t": 50}, "outside the allowed range"), ({"bearing_ball_count": 12}, "read-only"),
                          ({"magnet_height": 5}, "electromagnetic"), ({"nonsense": 1}, "not a CAD-only"),
-                         ({"holder_lip_t": "abc"}, "not a number")):
+                         ({"ring_t": "abc"}, "not a number")):
         r = client.put(CP, json={"values": body}, headers=env["admin"])
         assert r.status_code == 422, (body, r.text)
         assert needle in json.dumps(r.json()["detail"]), (body, r.text)
@@ -294,8 +293,8 @@ def test_put_refuses_bad_values_in_words_and_saves_nothing(env):
 
 def test_put_dry_run_validates_and_writes_nothing(env):
     before = _cfg_doc(env)
-    r = client.put(CP, json={"values": {"holder_lip_t": 1.0}, "dry_run": True}, headers=env["admin"])
-    assert r.status_code == 200 and r.json()["dry_run"] is True and r.json()["changed"] == ["holder_lip_t"]
+    r = client.put(CP, json={"values": {"ring_t": 1.0}, "dry_run": True}, headers=env["admin"])
+    assert r.status_code == 200 and r.json()["dry_run"] is True and r.json()["changed"] == ["ring_t"]
     assert _cfg_doc(env) == before and not (env["cad"] / ".rebuild").exists()
 
 
@@ -316,7 +315,7 @@ def test_bearing_card_is_a_cad_only_choice(env):
 # ── permission + audit ─────────────────────────────────────────────────────────────────────────────────────
 
 def test_permission_follows_the_catalog_write_rule(env):
-    body = {"values": {"holder_lip_t": 0.9}}
+    body = {"values": {"ring_t": 0.9}}
     assert client.put(CP, json=body).status_code in (401, 403)                            # anonymous
     for who in ("user", "nda", "eng", "engnda"):
         r = client.put(CP, json=body, headers=env[who])
@@ -331,10 +330,10 @@ def test_permission_follows_the_catalog_write_rule(env):
 
 
 def test_every_save_is_audited_and_requests_a_rebuild(env):
-    client.put(CP, json={"values": {"holder_lip_t": 0.9}}, headers=env["admin"])
+    client.put(CP, json={"values": {"ring_t": 0.9}}, headers=env["admin"])
     lines = [json.loads(x) for x in env["audit"].read_text("utf-8").splitlines()]
     hit = [x for x in lines if x["action"] == "cad.params"]
-    assert hit and hit[-1]["target"] == f"{DIE}/{CFG}" and hit[-1]["details"]["changed"] == ["holder_lip_t"]
+    assert hit and hit[-1]["target"] == f"{DIE}/{CFG}" and hit[-1]["details"]["changed"] == ["ring_t"]
     assert hit[-1]["actor"] == ADMIN
     from motor_ai_sim.cad import rebuild_queue as RQ
     rec = RQ.read(env["cad"], DIE, CFG)
@@ -347,11 +346,11 @@ def test_every_save_is_audited_and_requests_a_rebuild(env):
 def test_rebuild_status_follows_the_manifest_hash_and_the_worker(env, monkeypatch):
     from motor_ai_sim import cad_params as C
     from motor_ai_sim.cad import rebuild_queue as RQ
-    r = client.put(CP, json={"values": {"holder_lip_t": 0.9}}, headers=env["admin"]).json()
+    r = client.put(CP, json={"values": {"ring_t": 0.9}}, headers=env["admin"]).json()
     assert r["table"]["rebuild"]["state"] == "pending" and r["table"]["rebuild"]["stale"] is True
     # the old model is still served
     assert client.get(f"{M3}/model.glb", headers=env["admin"]).content == GLB
-    h = C.overrides_hash({"holder_lip_t": 0.9})
+    h = C.overrides_hash({"ring_t": 0.9})
     # the worker builds the request; a refused build comes back as `failed` with the template's words
     class P:
         returncode, stdout = 3, "build refused/failed (3): pre-check failed: ring too thick"
@@ -372,8 +371,8 @@ def test_rebuild_status_follows_the_manifest_hash_and_the_worker(env, monkeypatc
     mf.write_text(json.dumps(m), "utf-8")
     assert client.get(CP, headers=env["admin"]).json()["rebuild"]["state"] == "current"
     # building shows as such
-    RQ._write(env["cad"], dict(RQ.read(env["cad"], DIE, CFG), state="building", overrides_hash=C.overrides_hash({"holder_lip_t": 1.1})))
-    client.put(CP, json={"values": {"holder_lip_t": 1.1}}, headers=env["admin"])
+    RQ._write(env["cad"], dict(RQ.read(env["cad"], DIE, CFG), state="building", overrides_hash=C.overrides_hash({"ring_t": 1.1})))
+    client.put(CP, json={"values": {"ring_t": 1.1}}, headers=env["admin"])
     assert RQ.read(env["cad"], DIE, CFG)["state"] == "building"           # an in-flight request is kept, not duplicated
     assert client.get(CP, headers=env["admin"]).json()["rebuild"]["state"] == "building"
 
@@ -381,7 +380,7 @@ def test_rebuild_status_follows_the_manifest_hash_and_the_worker(env, monkeypatc
 def test_build_records_the_overrides_hash_and_a_model_without_edits_keeps_its_hash():
     from motor_ai_sim.cad import store
     assert store.cad_overrides_hash({}) == "none" and store.cad_overrides_hash({"a": "x", "bearing_card": ""}) == "none"
-    assert store.cad_overrides_hash({"holder_lip_t": 1}) == store.cad_overrides_hash({"holder_lip_t": 1.0}) != "none"
+    assert store.cad_overrides_hash({"ring_t": 1}) == store.cad_overrides_hash({"ring_t": 1.0}) != "none"
 
 
 # ── import (Fusion CSV / FreeCAD) ──────────────────────────────────────────────────────────────────────────
@@ -389,17 +388,17 @@ def test_build_records_the_overrides_hash_and_a_model_without_edits_keeps_its_ha
 def test_import_csv_takes_only_cad_rows_and_dry_runs_first(env):
     csv_text = ("Name,Unit,Expression,Value,Comment,Favorite\n"
                 "magnet_height,mm,9,9,em row,False\n"
-                "holder_lip_t,mm,0.9 mm,0.9,x,False\n"
+                "ring_t,mm,0.9 mm,0.9,x,False\n"
                 "screw_socket_point,deg,110 deg,110,x,False\n"
-                "holder_flange_t,mm,=holder_lip_t*2,1.0,formula,False\n"
+                "holder_flange_t,mm,=ring_t*2,1.0,formula,False\n"
                 "unknown_param,mm,3,3,x,False\n")
     url = CP + "/import"
     files = {"file": ("params.csv", csv_text.encode("utf-8"), "text/csv")}
     d = client.post(url + "?dry_run=1", files=files, headers=env["admin"]).json()
-    assert d["dry_run"] is True and d["changed"] == ["holder_flange_t", "holder_lip_t", "screw_socket_point"] and d["found"] == 3
+    assert d["dry_run"] is True and d["changed"] == ["holder_flange_t", "ring_t", "screw_socket_point"] and d["found"] == 3
     assert _cfg_doc(env).get("cad_overrides") is None
     a = client.post(url + "?dry_run=0", files={"file": ("params.csv", csv_text.encode("utf-8"), "text/csv")}, headers=env["admin"]).json()
-    assert a["ok"] and _cfg_doc(env)["cad_overrides"] == {"holder_flange_t": 1.0, "holder_lip_t": 0.9, "screw_socket_point": 110.0}
+    assert a["ok"] and _cfg_doc(env)["cad_overrides"] == {"holder_flange_t": 1.0, "ring_t": 0.9, "screw_socket_point": 110.0}
     assert "magnet_height" not in _cfg_doc(env)["cad_overrides"]
     # a user cannot import
     assert client.post(url + "?dry_run=0", files={"file": ("p.csv", b"Name,Unit,Expression\n", "text/csv")},
@@ -451,14 +450,14 @@ def test_full_parameter_set_has_em_and_cad_rows_in_the_fusion_dialect(env):
     rows = list(csv.reader(io.StringIO(r.content.decode("utf-8-sig"))))
     assert rows[0] == ["Name", "Unit", "Expression", "Value", "Comment", "Favorite"] and all(len(x) == 6 for x in rows)
     by = {x[0]: x for x in rows[1:]}
-    assert "stator_diameter" in by and "holder_lip_t" in by and "motor_length" in by
-    assert "CAD only, not simulated" in by["holder_lip_t"][4] and "CAD only" not in by["stator_diameter"][4]
+    assert "stator_diameter" in by and "ring_t" in by and "motor_length" in by
+    assert "CAD only, not simulated" in by["ring_t"][4] and "CAD only" not in by["stator_diameter"][4]
     did = _log(env)[-1]["download_id"]
     assert all(did in x[4] for x in rows[1:])
     # the table the file was made from: after a save the file carries the new value
-    client.put(CP, json={"values": {"holder_lip_t": 0.9}}, headers=env["admin"])
+    client.put(CP, json={"values": {"ring_t": 0.9}}, headers=env["admin"])
     r2 = client.get(f"{M3}/params.csv", headers=env["admin"])
-    assert {x[0]: x for x in csv.reader(io.StringIO(r2.content.decode("utf-8-sig")))}["holder_lip_t"][3] == "0.9"
+    assert {x[0]: x for x in csv.reader(io.StringIO(r2.content.decode("utf-8-sig")))}["ring_t"][3] == "0.9"
 
 
 def test_freecad_file_is_for_engineers_and_admins_with_the_nda_never_for_a_user(env):
@@ -492,11 +491,11 @@ def test_under_the_layering_a_registered_account_saves_into_its_own_workspace(en
     monkeypatch.delitem(fam.__dict__, "_DIES_DIR", raising=False)
     monkeypatch.delenv("MOTRES_DIES_DIR", raising=False)
     fam._TREE_CACHE.clear()
-    r = client.put(CP, json={"values": {"holder_lip_t": 0.9}}, headers=env["eng"])
+    r = client.put(CP, json={"values": {"ring_t": 0.9}}, headers=env["eng"])
     assert r.status_code == 200, r.text
     assert "cad_overrides" not in yaml.safe_load((shared / "dies" / DIE / f"{CFG}.yaml").read_text("utf-8"))     # shared untouched
     mine = list(works.rglob(f"{CFG}.yaml"))
-    assert mine and yaml.safe_load(mine[0].read_text("utf-8"))["cad_overrides"] == {"holder_lip_t": 0.9}
+    assert mine and yaml.safe_load(mine[0].read_text("utf-8"))["cad_overrides"] == {"ring_t": 0.9}
     from motor_ai_sim.cad import rebuild_queue as RQ
     assert RQ.read(env["cad"], DIE, CFG)["layer"] != "shared"          # the worker builds shared dies only
     assert RQ.pending(env["cad"]) == [] and len(RQ.pending(env["cad"], layer=None)) == 1
@@ -525,7 +524,7 @@ def test_a_private_configuration_reads_like_a_missing_one_on_every_new_route(env
     norm = lambda r, cfg: (r.status_code, r.text.replace(cfg, "<CFG>"))          # noqa: E731
     for who in ("eng", "nda"):
         h = env[who]
-        for method, path, kw in (("GET", base, {}), ("PUT", base, {"json": {"values": {"holder_lip_t": 0.9}}}),
+        for method, path, kw in (("GET", base, {}), ("PUT", base, {"json": {"values": {"ring_t": 0.9}}}),
                                  ("POST", base + "/import", {"files": {"file": ("p.csv", b"Name,Unit,Expression\n", "text/csv")}}),
                                  ("POST", f"/api/family/config/{DIE}/%s/cad_rebuild", {})):
             a = client.request(method, path % "L20", headers=h, **kw)
@@ -579,7 +578,7 @@ def test_a_frameless_configuration_shows_only_the_kit_parts_on_every_surface(env
     t = client.get(CP, headers=env["admin"]).json()
     assert t["kit"] is True and {r["group"] for r in t["rows"]} <= {"winding", "rotor", "magnets", "electronics"} and t["bearing"] is None
     assert "board_t" in {r["name"] for r in t["rows"]} or "phase_board_x" in {r["name"] for r in t["rows"]}
-    r = client.put(CP, json={"values": {"holder_lip_t": 0.9}}, headers=env["admin"])
+    r = client.put(CP, json={"values": {"ring_t": 0.9}}, headers=env["admin"])
     assert r.status_code == 422 and "frameless kit has no such part" in json.dumps(r.json())
     assert client.put(CP, json={"bearing_card": "618/8-2Z"}, headers=env["admin"]).status_code == 422
     assert client.put(CP, json={"values": {"coil_lead_ext": 5.0}}, headers=env["admin"]).status_code == 200

@@ -78,7 +78,7 @@ def test_full_list_is_the_active_parts_plus_every_cad_part_with_defaults(account
     # the stand-in die has a steel-free aluminium shaft tube: the CAD's real shaft replaces it in the full mass
     assert all(p["em"] and p["counted"] for p in active if p["mass_kg"] and p["key"] != "shaft")
     assert by["shaft"]["counted"] and by["wire_insulation"]["counted"] and by["wire_insulation"]["mass_kg"] > 0
-    for k in ("holder_front", "holder_back", "prop_fix", "bearings", "screws", "board", "pins"):
+    for k in ("holder_front", "holder_back", "rings", "prop_fix", "bearings", "screws", "board", "pins"):
         p = by[k]
         assert p["em"] is False and p["counted"] is True and p["mass_kg"] > 0 and not p["user_set"], k
         assert p["material_id"] == p["default_material_id"]

@@ -35,47 +35,37 @@ t('all twelve cube edges map to normalized diagonal directions', () => {
   }
 });
 
-cubeTest('cube projection exposes 6 face and 12 edge mappings across representative views', () => {
-  const samples = [[0, -1, 0], [0, 0, 1], [1, -1, 1]];
-  const faces = new Set();
-  const edges = new Set();
-  for (const direction of samples) {
-    const projected = C.projectNavigationCube(direction);
-    assert.equal(projected.edges.length, 12);
-    for (const face of projected.faces) faces.add(face.view);
-    for (const edge of projected.edges) edges.add(edge.view);
-  }
-  assert.equal(edges.size, 12);
-  // Opposite axial samples complete the six face mappings without relying on tangent, zero-area faces.
-  for (const direction of [[0, 1, 0], [0, 0, -1], [-1, 1, -1]]) {
-    for (const face of C.projectNavigationCube(direction).faces) faces.add(face.view);
-  }
-  assert.equal(faces.size, 6);
+cubeTest('legacy cube basis maps FRONT +Z to CAD -Y and TOP +Y to CAD +Z', () => {
+  assert.deepEqual(C.cubeLocalToCad([0, 0, 1]), [0, -1, 0]);
+  assert.deepEqual(C.cubeLocalToCad([0, 1, 0]), [0, 0, 1]);
+  assert.deepEqual(C.cubeLocalToCad([1, 0, 0]), [1, 0, 0]);
+  assert.deepEqual(C.cubeLocalToCad([0, -1, 0]), [0, 0, -1]);
 });
 
-cubeTest('front and top projections mark only the frontmost coincident edges pointer-visible', () => {
-  const front = C.projectNavigationCube([0, -1, 0]);
-  assert.deepEqual(front.faces.map((f) => f.view), ['front']);
-  assert.equal(front.edges.find((e) => e.view === 'frontTop').visible, true);
-  assert.equal(front.edges.find((e) => e.view === 'backTop').visible, false);
-  const top = C.projectNavigationCube([0, 0, 1]);
-  assert.deepEqual(top.faces.map((f) => f.view), ['top']);
-  assert.ok(top.edges.filter((e) => e.visible).every((e) => e.view.endsWith('Top') || e.view.startsWith('front') || e.view.startsWith('back')));
+cubeTest('cube camera orientation aligns the original front face and remains orthonormal at poles', () => {
+  assert.deepEqual(C.cubeCameraTransform([0,-1,0],[0,0,1]), [1,0,0, 0,1,0, 0,0,1]);
+  const frontZUp = C.cubeCameraTransform([0,-1,0],[0,0,1]);
+  const frontXUp = C.cubeCameraTransform([0,-1,0],[1,0,0]);
+  assert.notDeepEqual(frontZUp, frontXUp, 'camera roll changes cube orientation');
+  const samples = [
+    C.cubeCameraTransform([0,0,1],[0,0,1]), // supplied up parallel to view direction
+    C.cubeCameraTransform([0,0,-1],[0,-1,0]), // bottom pole
+  ];
+  for (const m of [...samples, frontZUp, frontXUp]) {
+    const rows = [m.slice(0,3),m.slice(3,6),m.slice(6,9)];
+    assert.ok(m.every(Number.isFinite));
+    for (const row of rows) assert.ok(Math.abs(Math.hypot(...row)-1)<1e-12);
+    for (let i=0;i<3;i++) for (let j=i+1;j<3;j++) assert.ok(Math.abs(rows[i].reduce((s,v,k)=>s+v*rows[j][k],0))<1e-12);
+  }
 });
 
-cubeTest('camera screen-up preserves roll and produces finite projected vertices', () => {
-  const direction = [0, -1, 0];
-  const zUp = C.projectNavigationCube(direction, [0, 0, 1]);
-  const xUp = C.projectNavigationCube(direction, [1, 0, 0]);
-  assert.notDeepEqual(zUp.faces[0].points, xUp.faces[0].points);
-  for (const projection of [zUp, xUp]) {
-    for (const face of projection.faces) for (const point of face.points) {
-      assert.equal(Number.isFinite(point[0]) && Number.isFinite(point[1]), true);
-    }
-    for (const edge of projection.edges) for (const point of [edge.from, edge.to]) {
-      assert.equal(Number.isFinite(point[0]) && Number.isFinite(point[1]), true);
-    }
-  }
+cubeTest('all six face and twelve edge hit regions map to distinct standard views', () => {
+  const faces = C.CUBE_FACE_VIEWS.map((view) => C.cubeViewForLocalDirection(({front:[0,0,1],back:[0,0,-1],top:[0,1,0],bottom:[0,-1,0],right:[1,0,0],left:[-1,0,0]})[view]));
+  assert.deepEqual(new Set(faces), new Set(['front','back','top','bottom','right','left']));
+  const edges = C.CUBE_EDGE_DIRECTIONS.map((direction) => C.cubeViewForLocalDirection(direction));
+  assert.equal(edges.length, 12);
+  assert.equal(new Set(edges).size, 12);
+  for (const edge of edges) assert.equal(M.standardViewDirection(edge).filter((v) => Math.abs(v) > 0).length, 2);
 });
 
 t('explosion shift clamps the shared slider and preserves per-group factors', () => {

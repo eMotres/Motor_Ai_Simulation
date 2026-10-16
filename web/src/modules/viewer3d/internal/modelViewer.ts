@@ -148,7 +148,7 @@ export class ModelViewer {
     const core = this.groups.find((g) => g.part.name === 'Core' || g.part.name === 'Housing' || g.part.name === 'stator_core');
     const cb = core ? new Box3().setFromObject(core.node) : b;
     this.motorLength = Math.max(1, cb.max.z - cb.min.z);
-    this.fit();
+    this.home();
   }
 
   /** The #rrggbb colour of the first mesh of a node (its tree swatch), or undefined. */
@@ -389,7 +389,7 @@ export class ModelViewer {
     this.reportCameraDirection();
   }
 
-  home(): void { this.view('frontTop'); this.fit(); }
+  home(): void { this.view('top'); this.fit(); }
 
   // ---------------------------------------------------------------- measure
 

@@ -1,40 +1,57 @@
-import type { StandardView, Vec3 } from './model3d';
+import type { StandardView } from './model3d';
 
-export type CubePoint = readonly [number, number];
-type Vertex = readonly [number, number, number];
-export interface ProjectedCubeFace { view: StandardView; points: CubePoint[]; centre: CubePoint; depth: number }
-export interface ProjectedCubeEdge { view: StandardView; from: CubePoint; to: CubePoint; visible: boolean }
+export type CubeVec3 = readonly [number, number, number];
 
-const VERTICES: Vertex[] = [[-1,-1,-1],[1,-1,-1],[-1,1,-1],[1,1,-1],[-1,-1,1],[1,-1,1],[-1,1,1],[1,1,1]];
-const FACES: Array<{ view: StandardView; normal: Vertex; vertices: number[] }> = [
-  {view:'front',normal:[0,-1,0],vertices:[0,1,5,4]},{view:'back',normal:[0,1,0],vertices:[2,6,7,3]},
-  {view:'left',normal:[-1,0,0],vertices:[0,4,6,2]},{view:'right',normal:[1,0,0],vertices:[1,3,7,5]},
-  {view:'top',normal:[0,0,1],vertices:[4,5,7,6]},{view:'bottom',normal:[0,0,-1],vertices:[0,2,3,1]},
-];
-const EDGES: Array<{ view: StandardView; vertices: readonly [number,number]; normals: readonly [Vertex,Vertex] }> = [
-  {view:'frontBottom',vertices:[0,1],normals:[[0,-1,0],[0,0,-1]]},{view:'backBottom',vertices:[2,3],normals:[[0,1,0],[0,0,-1]]},
-  {view:'frontTop',vertices:[4,5],normals:[[0,-1,0],[0,0,1]]},{view:'backTop',vertices:[6,7],normals:[[0,1,0],[0,0,1]]},
-  {view:'leftBottom',vertices:[0,2],normals:[[-1,0,0],[0,0,-1]]},{view:'rightBottom',vertices:[1,3],normals:[[1,0,0],[0,0,-1]]},
-  {view:'leftTop',vertices:[4,6],normals:[[-1,0,0],[0,0,1]]},{view:'rightTop',vertices:[5,7],normals:[[1,0,0],[0,0,1]]},
-  {view:'frontLeft',vertices:[0,4],normals:[[0,-1,0],[-1,0,0]]},{view:'frontRight',vertices:[1,5],normals:[[0,-1,0],[1,0,0]]},
-  {view:'backLeft',vertices:[2,6],normals:[[0,1,0],[-1,0,0]]},{view:'backRight',vertices:[3,7],normals:[[0,1,0],[1,0,0]]},
-];
-const dot=(a:readonly number[],b:readonly number[])=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
-const cross=(a:readonly number[],b:readonly number[]):Vec3=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
-const unit=(v:readonly number[],fallback:Vec3):Vec3=>{const n=Math.hypot(v[0],v[1],v[2]);return n>1e-7?[v[0]/n,v[1]/n,v[2]/n]:fallback;};
-const mean=(p:readonly CubePoint[]):CubePoint=>[p.reduce((s,v)=>s+v[0],0)/p.length,p.reduce((s,v)=>s+v[1],0)/p.length];
-
-/** Project the CAD Z-up cube using the camera's actual screen-up vector when supplied. */
-export function projectNavigationCube(cameraDirection: readonly number[], cameraUp?: readonly number[]): { faces: ProjectedCubeFace[]; edges: ProjectedCubeEdge[] } {
-  const direction=unit(cameraDirection,[1,-1,1]);
-  const fallback:Vec3=Math.abs(direction[2])>0.96?[0,-1,0]:[0,0,1];
-  const reference=unit(cameraUp ?? fallback,fallback);
-  const right=unit(cross(reference,direction),[1,0,0]);
-  const up=unit(cross(direction,right),[0,0,1]);
-  const projected=VERTICES.map<CubePoint>(v=>[56+dot(v,right)*27,51-dot(v,up)*27]);
-  // Tangent faces have zero projected area and must not intercept the front face or its edges.
-  const visible=(normal:Vertex)=>dot(normal,direction)>1e-6;
-  const faces=FACES.filter(f=>visible(f.normal)).map<ProjectedCubeFace>(f=>{const points=f.vertices.map(i=>projected[i]);return{view:f.view,points,centre:mean(points),depth:dot(f.normal,direction)};}).sort((a,b)=>a.depth-b.depth);
-  const edges=EDGES.map<ProjectedCubeEdge>(e=>({view:e.view,from:projected[e.vertices[0]],to:projected[e.vertices[1]],visible:e.normals.some(visible)}));
-  return {faces,edges};
+/** The legacy cube's local +Z front/+Y top basis mapped into the CAD Z-up frame. */
+export function cubeLocalToCad([x, y, z]: CubeVec3): [number, number, number] {
+  const clean = (v: number) => v === 0 ? 0 : v;
+  return [clean(x), clean(-z), clean(y)];
 }
+
+/** Row-major rotation taking legacy cube-local points into the fixed CAD camera's screen frame. */
+export function cubeCameraTransform(cameraDirection: CubeVec3, cameraUp: CubeVec3): number[] {
+  const length = (v: CubeVec3) => Math.hypot(...v);
+  const directionLength = length(cameraDirection) || 1;
+  const direction = cameraDirection.map((v) => v / directionLength) as [number, number, number];
+  const upLength0 = length(cameraUp) || 1;
+  const up0 = cameraUp.map((v) => v / upLength0) as [number, number, number];
+  let up = up0.map((v, i) => v - direction[i] * (up0[0]*direction[0] + up0[1]*direction[1] + up0[2]*direction[2])) as [number, number, number];
+  let upLength = length(up);
+  if (upLength < 1e-8) {
+    const fallback: [number, number, number] = Math.abs(direction[2]) > 0.95 ? [0,-1,0] : [0,0,1];
+    const projection = fallback[0]*direction[0] + fallback[1]*direction[1] + fallback[2]*direction[2];
+    up = fallback.map((v,i)=>v-direction[i]*projection) as [number,number,number];
+    upLength = length(up);
+  }
+  up = up.map((v)=>v/(upLength||1)) as [number,number,number];
+  const right: [number,number,number] = [up[1]*direction[2]-up[2]*direction[1], up[2]*direction[0]-up[0]*direction[2], up[0]*direction[1]-up[1]*direction[0]];
+  const screenUp: [number,number,number] = [direction[1]*right[2]-direction[2]*right[1], direction[2]*right[0]-direction[0]*right[2], direction[0]*right[1]-direction[1]*right[0]];
+  return [right[0],right[2],-right[1], screenUp[0],screenUp[2],-screenUp[1], direction[0],direction[2],-direction[1]].map((v) => v === 0 ? 0 : v);
+}
+
+const DIRECTIONS: Record<StandardView, [number, number, number]> = {
+  front:[0,-1,0], back:[0,1,0], left:[-1,0,0], right:[1,0,0], top:[0,0,1], bottom:[0,0,-1],
+  frontTop:[0,-1,1], frontBottom:[0,-1,-1], backTop:[0,1,1], backBottom:[0,1,-1],
+  leftTop:[-1,0,1], leftBottom:[-1,0,-1], rightTop:[1,0,1], rightBottom:[1,0,-1],
+  frontLeft:[-1,-1,0], frontRight:[1,-1,0], backLeft:[-1,1,0], backRight:[1,1,0],
+};
+
+/** Resolve an oriented cube face/edge normal pair to the nearest supported camera view. */
+export function cubeViewForLocalDirection(direction: CubeVec3): StandardView {
+  const cad = cubeLocalToCad(direction);
+  let best: StandardView = 'front';
+  let score = -Infinity;
+  for (const [view, candidate] of Object.entries(DIRECTIONS) as Array<[StandardView, [number, number, number]]>) {
+    const length = Math.hypot(...candidate);
+    const next = (cad[0] * candidate[0] + cad[1] * candidate[1] + cad[2] * candidate[2]) / length;
+    if (next > score) { best = view; score = next; }
+  }
+  return best;
+}
+
+export const CUBE_FACE_VIEWS = ['front', 'back', 'top', 'bottom', 'right', 'left'] as const;
+export const CUBE_EDGE_DIRECTIONS: readonly CubeVec3[] = [
+  [-1,-1,0], [1,-1,0], [-1,1,0], [1,1,0],
+  [-1,0,-1], [1,0,-1], [-1,0,1], [1,0,1],
+  [0,-1,-1], [0,1,-1], [0,-1,1], [0,1,1],
+];

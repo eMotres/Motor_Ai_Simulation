@@ -77,7 +77,9 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
     if (s.axis !== section.axis) { const r = canvas.current?.sectionRange(s.axis) ?? range; setRange(r); setSection({ ...s, position:(r.min+r.max)/2 }); }
     else setSection(s);
   }, [section.axis, range]);
-  const onView = (v: StandardView) => canvas.current?.view(v);
+  const onView = useCallback((v: StandardView) => canvas.current?.view(v), []);
+  const onHome = useCallback(() => canvas.current?.home(), []);
+  const cubeLabel = useCallback((v: StandardView) => t(`cube.${v}`), [t]);
   const onSelectName = (name: string | null) => {
     const key = name ? selectedKeyForScene(tree, name) : null;
     if (p.selectedKey === undefined) setLocalSelected(key);
@@ -90,14 +92,14 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   };
   return <Box data-testid="unified-viewer" sx={{ display:'flex', flexDirection:'column', width:'100%', height:'100%', minHeight:0, minWidth:0, position:'relative' }}>
     <ViewerToolbar full={full} sceneReady={sceneReady} controls={controlSet} section={section} sectionRange={range} explode={explode} measure={measure} projection={projection} t={t}
-      onView={onView} onFit={() => canvas.current?.fit()} onHome={() => canvas.current?.home()} onProjection={setProjection} onSection={changeSection} onExplode={setExplode}
+      onView={onView} onFit={() => canvas.current?.fit()} onHome={onHome} onProjection={setProjection} onSection={changeSection} onExplode={setExplode}
       onMeasure={(v) => { setMeasure(v); if (!v) setMeasuredMm(null); }} />
     {p.hostExtras}
     <Box sx={{ flex:1, minHeight:0, minWidth:0, position:'relative' }}>
       <ModelCanvas ref={canvas} sourceKey={p.sourceKey} glbUrl={p.glbUrl} objectScene={objectScene} tools={tools} fullAccess={full} highlight={highlight} hiddenNodes={hiddenNodes}
         contextLostText={p.contextLostText} simplifiedText={p.simplifiedText} simplifiedTip={p.simplifiedTip} noViewText={p.noViewText} onLoaded={loaded} onReady={setSceneReady}
         onMeasure={(mm) => { setMeasuredMm(mm); p.onMeasure?.(mm); }} onCameraDirection={setCameraDirection} onCameraUp={setCameraUp} onSelect={onSelectName} onError={p.onError} />
-      {sceneReady && <Box sx={{ position:'absolute', top:8, right:8, zIndex:6 }}><NavigationCube cameraDirection={cameraDirection} cameraUp={cameraUp} onView={onView} label={(v) => t(`cube.${v}`)} title={t('cube.title')} /></Box>}
+      {sceneReady && <Box sx={{ position:'absolute', top:8, right:8, zIndex:6 }}><NavigationCube cameraDirection={cameraDirection} cameraUp={cameraUp} onView={onView} onHome={onHome} label={cubeLabel} title={t('cube.title')} homeLabel={t('home')} /></Box>}
       {full && sceneReady && tree.length > 0 && <PartTree nodes={tree} hiddenKeys={hiddenKeys} onToggle={(key) => setHiddenKeys((s) => { const n = new Set(s); if (n.has(key)) n.delete(key); else n.add(key); return n; })}
         selectedKey={selectedKey} onSelect={onSelectRow} defaultCollapsed={treeStartsCollapsed(viewport)} style={{ maxWidth:'calc(100% - 136px)' }} rowsMaxHeight="calc(100% - 40px)" />}
       {full && measure && <Box aria-live="polite" sx={{ position:'absolute', bottom:8, right:10, zIndex:5, px:1, py:.35, bgcolor:'var(--overlay)', border:'1px solid var(--line)', borderRadius:1, fontSize:11 }}>{measuredMm == null ? t('measureHint') : formatMm(measuredMm)}</Box>}

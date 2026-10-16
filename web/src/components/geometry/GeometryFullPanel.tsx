@@ -90,9 +90,10 @@ const GeometryFullPanel: React.FC<Props> = ({ models, canDownload, cad, treeKey,
           bgcolor: changed ? 'rgba(59,130,246,.10)' : 'transparent', opacity: ro ? 0.75 : 1 }}>
         <Tooltip title={tip} placement="right" enterDelay={250}>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography data-testid={`cad-label-${r.name}`} sx={{ fontSize: 12, lineHeight: 1.25, fontWeight: r.overridden ? 700 : 400,
-              overflowWrap: 'anywhere' }}>{nameOf(r.label, lang)}</Typography>
-            <Typography sx={{ fontSize: 9.5, lineHeight: 1.2, color: 'var(--text-4)', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{r.name}</Typography>
+            {/* one style for every parameter row (owner 2026-10-16): one line, the template key only in the tooltip */}
+            <Typography data-testid={`cad-label-${r.name}`} noWrap sx={{ fontSize: 12, lineHeight: 1.4, fontWeight: r.overridden ? 700 : 400 }}>
+              {nameOf(r.label, lang)}
+            </Typography>
           </Box>
         </Tooltip>
         {r.name.startsWith('offset_') && (
@@ -120,15 +121,12 @@ const GeometryFullPanel: React.FC<Props> = ({ models, canDownload, cad, treeKey,
 
   const leftBody = (
     <>
-      <Typography sx={{ px:0.5, py:0.75, fontSize:13, fontWeight:700 }}>{tx('cadDrawer')}</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 0.5, pt: 1.25, pb: 0.25 }}>
+        <SectionLabel sx={{ flex: 1 }}>{tx('cadDrawer')}</SectionLabel>
+        <HelpTip title={`${tx('cadOnlyTip')} ${tx('fullEditHelp')}`} />
+      </Box>
       {tree?.partial && <Typography sx={{ px: 0.5, mb: 1, fontSize: 11, color: 'var(--text-4)' }}>{tx('fullPartialNote')}</Typography>}
 
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5, mb: 0.75 }}>
-        <Chip size="small" variant="outlined" label={tx('cadParamCount', { n: rows.length })} sx={{ fontSize: 10, height: 20 }} data-testid="cad-count" />
-        <Tooltip title={tx('cadOnlyTip')}><Chip size="small" label={tx('cadOnlyLabel')} sx={{ fontSize: 10, height: 20, bgcolor: 'transparent', border: '1px solid var(--line)' }} /></Tooltip>
-        <Box sx={{ flex: 1 }} />
-        <HelpTip title={tx('fullEditHelp')} />
-      </Box>
 
       {!die ? <Typography sx={{ p: 1, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoMotor')}</Typography>
         : loading && !data ? <Box sx={{ p: 1 }}><CircularProgress size={14} /></Box>

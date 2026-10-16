@@ -10,7 +10,7 @@ import {
   MeshStandardMaterial, Object3D, PerspectiveCamera, OrthographicCamera, Plane, Raycaster, RepeatWrapping, RGBAFormat, Scene, SphereGeometry,
   UnsignedByteType, Vector2, Vector3, WebGLRenderer,
 } from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
   distance, explodeShift, sectionPlane, sectionRange, type Axis, type Box, type PartGroup, type Vec3, type StandardView, standardViewDirection,
@@ -38,7 +38,7 @@ export class ModelViewer {
   readonly renderer: WebGLRenderer;
   readonly scene = new Scene();
   camera: PerspectiveCamera | OrthographicCamera;
-  controls: OrbitControls;
+  controls: TrackballControls;
   projection: 'perspective' | 'orthographic' = 'orthographic';
   private root: Object3D | null = null;
   private groups: Array<{ node: Object3D; part: PartGroup; base: Vector3 }> = [];
@@ -180,10 +180,19 @@ export class ModelViewer {
     this.clearMarks();
   }
 
-  private makeControls(camera: PerspectiveCamera | OrthographicCamera): OrbitControls {
-    const c = new OrbitControls(camera, this.renderer.domElement);
-    c.enableDamping = false;
+  // Trackball, not orbit (owner 2026-10-16): the model turns freely in every direction, over the poles too.
+  // Trackball moves in update(), so a frame loop runs only while the pointer drags (rendering stays on demand).
+  private makeControls(camera: PerspectiveCamera | OrthographicCamera): TrackballControls {
+    const c = new TrackballControls(camera, this.renderer.domElement);
+    c.rotateSpeed = 3.0;
+    c.zoomSpeed = 1.2;
+    c.panSpeed = 0.8;
+    c.staticMoving = true;
     c.addEventListener('change', () => { this.invalidate(); this.reportCameraDirection(); });
+    let raf = 0;
+    const loop = () => { c.update(); raf = requestAnimationFrame(loop); };
+    c.addEventListener('start', () => { if (!raf) loop(); });
+    c.addEventListener('end', () => { if (raf) cancelAnimationFrame(raf); raf = 0; c.update(); });
     return c;
   }
 
@@ -448,6 +457,7 @@ export class ModelViewer {
     const w = Math.max(1, this.host.clientWidth);
     const h = Math.max(1, this.host.clientHeight);
     this.renderer.setSize(w, h, false);
+    this.controls?.handleResize();
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
     if (this.camera instanceof PerspectiveCamera) this.camera.aspect = w / h;

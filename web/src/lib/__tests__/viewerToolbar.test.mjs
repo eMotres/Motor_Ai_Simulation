@@ -40,28 +40,21 @@ t('the STEP download is disabled when the model has no STEP; the picker is disab
   assert.equal(by({ ...ctx, models: 0 }).motor, false);
 });
 
-t('narrow screens: the tree starts collapsed under 900 px, the drawer is closed, a phone gets the whole width', () => {
+t('narrow screens: the tree starts collapsed under 900 px and toolbar wraps', () => {
   assert.equal(V.NARROW_PX, 900);
   assert.equal(V.isNarrow(899), true);
   assert.equal(V.isNarrow(900), false);
-  assert.equal(V.drawerStartsOpen(null), false);
-  assert.equal(V.drawerStartsOpen('0'), false);
-  assert.equal(V.drawerStartsOpen('1'), true);
-  assert.equal(V.drawerWidth(1400), 420);
-  assert.equal(V.drawerWidth(390), 374);
-  assert.equal(V.drawerWidth(200), 260);
 });
 
-t('Geometry > Full toolbar: the drawer toggle always; badge and Rebuild now only for a model that is not current', () => {
-  const base = { kit: false, hasModel: true, badge: 'none', canWrite: true };
-  assert.deepEqual(V.fullToolbar(base), ['params']);
-  assert.deepEqual(V.fullToolbar({ ...base, kit: true }), ['params', 'kit']);
-  assert.deepEqual(V.fullToolbar({ ...base, badge: 'rebuilding' }), ['params', 'badge']);
-  assert.deepEqual(V.fullToolbar({ ...base, badge: 'queued' }), ['params', 'badge']);
-  assert.deepEqual(V.fullToolbar({ ...base, badge: 'stale' }), ['params', 'badge', 'rebuildNow']);
-  assert.deepEqual(V.fullToolbar({ ...base, badge: 'failed' }), ['params', 'badge', 'rebuildNow']);
-  assert.deepEqual(V.fullToolbar({ ...base, badge: 'failed', canWrite: false }), ['params', 'badge']);   // read-only: no rebuild button
-  assert.deepEqual(V.fullToolbar({ ...base, hasModel: false, badge: 'failed' }), ['params']);
+t('Geometry > Full host toolbar keeps only model status and permitted Rebuild now', () => {
+  const base = { hasModel: true, badge: 'none', canWrite: true };
+  assert.deepEqual(V.fullToolbar(base), []);
+  assert.deepEqual(V.fullToolbar({ ...base, badge: 'rebuilding' }), ['badge']);
+  assert.deepEqual(V.fullToolbar({ ...base, badge: 'queued' }), ['badge']);
+  assert.deepEqual(V.fullToolbar({ ...base, badge: 'stale' }), ['badge', 'rebuildNow']);
+  assert.deepEqual(V.fullToolbar({ ...base, badge: 'failed' }), ['badge', 'rebuildNow']);
+  assert.deepEqual(V.fullToolbar({ ...base, badge: 'failed', canWrite: false }), ['badge']);
+  assert.deepEqual(V.fullToolbar({ ...base, hasModel: false, badge: 'failed' }), []);
 });
 
 t('the simplified-STEP button is in the toolbar for EVERY signed-in account, with and without the NDA (owner 2026-10-15)', () => {

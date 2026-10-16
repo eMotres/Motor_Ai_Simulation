@@ -1,21 +1,13 @@
 // The top toolbar of the model viewers (owner 2026-10-15: "the left side panel would be better on TOP, and the geometry FULL SCREEN").
 //
 // The 3-D model tab, Geometry > Full and Materials > Full put their controls in ONE compact row above the viewer (it wraps on a narrow
-// screen); the viewer takes the full width and height below it; the assembly tree is a collapsible overlay and Geometry > Full keeps
-// its CAD parameter table in a right-hand drawer. Shared viewer controls live in modules/viewer3d.
+// screen); the assembly tree is a collapsible overlay. Geometry Active and Full share an EM parameter column; Full adds CAD-only
+// editable parameters below it. Shared viewer controls live in modules/viewer3d.
 
 /** Below this width the tree starts collapsed and the toolbar wraps onto more rows. */
 export const NARROW_PX = 900;
 
 export const isNarrow = (width: number): boolean => width < NARROW_PX;
-
-/** The CAD parameter drawer of Geometry > Full: closed by default (the model is full screen), remembered per browser. */
-export const DRAWER_STORAGE_KEY = 'geometry.full.paramsDrawer';
-export function drawerStartsOpen(stored: string | null | undefined): boolean {
-  return stored === '1';
-}
-/** Drawer width in px: 420 on a wide screen, the whole width (minus a gutter) on a phone. */
-export const drawerWidth = (viewport: number): number => Math.max(260, Math.min(420, viewport - 16));
 
 export type Model3DItem = 'motor' | 'download' | 'simplified' | 'yourNda' | 'info' | 'ndaNote' | 'sign' | 'verify';
 
@@ -53,8 +45,6 @@ export function model3dToolbar(c: Model3DToolbarCtx): ToolbarEntry[] {
 }
 
 export interface FullToolbarCtx {
-  /** a frameless kit (cad_variant: frameless) */
-  kit: boolean;
   /** a model is built */
   hasModel: boolean;
   /** the model badge (lib/cadParams modelBadge): none | rebuilding | queued | stale | failed */
@@ -63,12 +53,11 @@ export interface FullToolbarCtx {
   canWrite: boolean;
 }
 
-export type FullItem = 'params' | 'kit' | 'badge' | 'rebuildNow';
+export type FullItem = 'badge' | 'rebuildNow';
 
-/** Host-only items of Geometry > Full: CAD-parameter drawer, kit badge, model status, and permitted rebuild action. */
+/** Host-only model status and permitted rebuild action for Geometry > Full. */
 export function fullToolbar(c: FullToolbarCtx): FullItem[] {
-  const out: FullItem[] = ['params'];
-  if (c.kit) out.push('kit');
+  const out: FullItem[] = [];
   if (c.hasModel && c.badge !== 'none') out.push('badge');
   if (c.hasModel && c.canWrite && (c.badge === 'stale' || c.badge === 'failed')) out.push('rebuildNow');
   return out;

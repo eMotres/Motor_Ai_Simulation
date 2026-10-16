@@ -13,6 +13,8 @@ import { PartTree, type PartTreeProps } from '../../modules/viewer3d';
 
 Camera projection, section axis/offset, explosion amount, measurement picks, and row visibility live in the viewer component's memory. `resetKey` or role changes reset tool state; changing only labels or loaded tree metadata does not. Hosts receive scene groups/ranges through `onLoaded`, measured distance through `onMeasure`, selected tree keys through `onSelectedKeyChange`, and load errors through `onError`. Hosts retain network lookup, permission decisions, catalog/material editing, downloads, mass summaries, and active mesh/business filtering.
 
+Both active extruded scenes and GLB models initialize in the TOP view. Home returns to TOP and fits the loaded model.
+
 `PartTree` is the minimal reusable tree view. Its rows contain names, colour dots, visibility eyes, and expansion arrows; the title and collapse control are the panel header. It accepts controlled `hiddenKeys` and `onToggle`, and optional controlled selection. It has no accounting badges, mass/material slots, isolate or show-all actions.
 
 ## M14 checklist reference

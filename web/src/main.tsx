@@ -1,5 +1,6 @@
-import { StrictMode } from 'react'
+import { StrictMode, Suspense } from 'react'
 import { createRoot } from 'react-dom/client'
+import './lib/chunkReload'
 import './index.css'
 // i18n before App: the first render already speaks the detected language (docs/I18N.md)
 import './i18n'
@@ -89,9 +90,11 @@ console.warn = (...args) => {
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AuthProvider>
-      {/* Root: the landing for a signed-out visitor, the lazy workspace for everybody else */}
-      <Root />
-    </AuthProvider>
+    <Suspense fallback={<div role="status" aria-live="polite" style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}>Loading…</div>}>
+      <AuthProvider>
+        {/* Root: the landing for a signed-out visitor, the lazy workspace for everybody else */}
+        <Root />
+      </AuthProvider>
+    </Suspense>
   </StrictMode>,
 )

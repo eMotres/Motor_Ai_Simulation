@@ -29,7 +29,9 @@ import RefusedNotice from '../common/RefusedNotice';
 import { VersionBadge } from '../VersionBadge';
 import Landing from './Landing';
 
-const SupportWidget = lazy(() => import('../support/SupportWidget'));
+import { watchChunkImport } from '../../lib/chunkReload';
+
+const SupportWidget = lazy(watchChunkImport(() => import('../support/SupportWidget')));
 
 /** Mount `children` after the browser has been idle (or 3 s), never during the first paint. */
 const WhenIdle: React.FC<{ children: React.ReactNode }> = ({ children }) => {

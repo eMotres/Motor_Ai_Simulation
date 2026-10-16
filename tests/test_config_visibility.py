@@ -206,11 +206,11 @@ def _cfg_names(resp, die=DIE):
     ('name: L1\nvisibility: "private"  # hidden\n', "private"),
     ("name: L1\r\nvisibility: private\r\n", "private"),
     ("name: L1\nvisibility: public\n", "public"),
-    ("name: L1\n", "public"),
-    ("name: L1\nextras:\n  visibility: private\n", "public"),         # nested: ignored
-    ("name: L1\nduties:\n- visibility: private\n", "public"),
-    ("name: L1\n# visibility: private\n", "public"),                  # a comment
-    ("name: L1\nvisibility_note: private\n", "public"),               # a different key
+    ("name: L1\n", "inherit"),
+    ("name: L1\nextras:\n  visibility: private\n", "inherit"),         # nested: ignored
+    ("name: L1\nduties:\n- visibility: private\n", "inherit"),
+    ("name: L1\n# visibility: private\n", "inherit"),                  # a comment
+    ("name: L1\nvisibility_note: private\n", "inherit"),               # a different key
 ])
 def test_scanner_reads_only_the_top_level_key(text, want):
     from motor_ai_sim import motor_access as MA
@@ -220,13 +220,13 @@ def test_scanner_reads_only_the_top_level_key(text, want):
 def test_file_visibility_follows_the_file(tmp_path):
     from motor_ai_sim import motor_access as MA
     p = tmp_path / "L1.yaml"
-    assert MA.file_visibility(p) == "public"                    # missing: nothing to hide
+    assert MA.file_visibility(p) == "inherit"                   # missing: nothing to hide
     p.write_text("name: L1\n", encoding="utf-8")
-    assert MA.file_visibility(p) == "public"
+    assert MA.file_visibility(p) == "inherit"                   # no line: follows the die (2026-10-16)
     p.write_text("visibility: private\nname: L1\n", encoding="utf-8")
     assert MA.file_visibility(p) == "private"                   # the cache follows size / mtime
     p.write_text("name: L1\n", encoding="utf-8")
-    assert MA.file_visibility(p) == "public"
+    assert MA.file_visibility(p) == "inherit"
 
 
 def _acc(**kw):
@@ -251,8 +251,11 @@ def test_may_see_config_matrix(env):
         (None, _acc(), True),                                               # die-only question
     ]:
         assert MA.may_see_config(who, DIE, cfg) is want, (cfg, who)
-    # a config grant never opens a DIE the account cannot see
-    assert not MA.may_see_config(_acc(dies=frozenset(), configs=frozenset({f"{DIE}/{PRIV}"})), DIE, PRIV)
+    # since 2026-10-16 a config grant opens THAT configuration even when the die is not open to the account
+    # ("selected clients" of a private configuration) - and only that one: the inherit sibling stays hidden
+    only_grant = _acc(dies=frozenset(), configs=frozenset({f"{DIE}/{PRIV}"}))
+    assert MA.may_see_config(only_grant, DIE, PRIV)
+    assert not MA.may_see_config(only_grant, DIE, PUB)
 
 
 def test_grants_round_trip_and_legacy_records_are_untouched(env):

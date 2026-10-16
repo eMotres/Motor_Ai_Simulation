@@ -457,7 +457,7 @@ const ParameterVariationTable: React.FC = () => {
                     no explanation anywhere in the product. */}
                 <Box sx={{ minWidth: 0 }}>
                   <Typography variant="body2" noWrap
-                    sx={{ lineHeight: 1.4, opacity: lockedBy ? 0.55 : 1 }}>
+                    sx={{ fontSize: 12, lineHeight: 1.4, opacity: lockedBy ? 0.55 : 1 }}>
                     {lockedBy && (
                       <Tooltip title={`Locked by ${lockedBy} — unlock it in the Motors catalog to edit`}>
                         <span style={{ marginRight: 4, cursor: 'help', fontSize: 11 }}>🔒</span>

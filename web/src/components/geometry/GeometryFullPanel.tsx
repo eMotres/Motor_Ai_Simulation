@@ -1,53 +1,49 @@
 // Geometry > Full (owner 2026-10-15): the FULL construction of the motor.
-//   left   THE part tree (the same tree as Materials > Full and the 3-D model) and the construction parameters of the CAD template -
-//          walls, shafts, holders, bearings, the phase board, screws, leads, CAD-only clearances - EDITABLE, grouped by the
-//          part-tree groups, with units, limits and tooltips (EN / zh-CN).  Every one of them is "CAD only, not simulated".
-//   right  the server-built CAD model in the same viewer as the 3-D model tab; the part selected in the tree is highlighted.
+//   left   the shared EM parameter column, followed by editable CAD-template construction parameters in Full.
+//   right  the server-built CAD model in the same viewer as the 3-D model tab; the selected part is highlighted.
 //
 // An edit is validated by the server with the CAD template's own pre-check, saved with the die configuration (cad_overrides) and a
 // rebuild of the CAD model is requested; the old model stays on screen with a "rebuilding" badge until the new one is ready.
-// The electromagnetic parameters are NOT here (they are edited in Active) and a Full edit never changes an electromagnetic input.
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+// The shared electromagnetic parameters stay above the CAD editor and CAD edits never change an electromagnetic input.
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   Alert, Box, Button, Chip, CircularProgress, IconButton, MenuItem, Select, TextField, Tooltip, Typography,
 } from '@mui/material';
 import RestartAltIcon from '@mui/icons-material/RestartAlt';
-import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import SaveIcon from '@mui/icons-material/Save';
-import TuneIcon from '@mui/icons-material/Tune';
-import CloseIcon from '@mui/icons-material/Close';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
 import SectionLabel from '../common/SectionLabel';
-import ComponentTreeView from '../viewer3d/ComponentTreeView';
-import { useAssemblyTree } from '../common/useAssemblyTree';
+import { useAssemblyRows } from '../common/useAssemblyTree';
 import HelpTip from '../common/HelpTip';
-import ModelCanvas, { type ModelCanvasHandle } from '../model3d/ModelCanvas';
-import { modelKey, type ModelInfo, type PartGroup } from '../../lib/model3d';
-import { groupMassKg, nameOf } from '../../lib/partTree';
-import { formatMass } from '../materials/fullPartsLogic';
+import GeometryLayout from './GeometryLayout';
+import { UnifiedViewer } from '../../modules/viewer3d';
+import { fullToolsOpen, modelKey, viewOf, type ModelInfo, type PartGroup } from '../../lib/model3d';
+import { modelGlbUrl } from '../../lib/model3dHost';
+import { nameOf } from '../../lib/partTree';
 import {
   changesOf, draftError, formatValue, invalidDrafts, modelBadge, rowsOfGroup, type CadRow,
 } from '../../lib/cadParams';
 import { usePartTreeData, useCadParams, useOpenMotor } from './useConstruction';
-import { useViewportWidth } from '../common/useNarrow';
-import {
-  DRAWER_STORAGE_KEY, drawerStartsOpen, drawerWidth, fullToolbar, treeStartsCollapsed,
-} from '../../lib/viewerToolbar';
+import { fullToolbar } from '../../lib/viewerToolbar';
 
 const tx = nsT('geometry');
 
 interface Props {
   models: ModelInfo[] | null;
+  canDownload: boolean;
   /** the shared CAD hook of the Geometry tab (the Files menu imports through it) */
   cad: ReturnType<typeof useCadParams>;
   /** bump to re-fetch the part tree (after a rebuild) */
   treeKey: string | number;
+  emContent: React.ReactNode;
+  panelWidth: number;
+  onDividerMouseDown: (event: React.MouseEvent) => void;
 }
 
 const fieldSx = { width: 84, '& .MuiInputBase-input': { px: '6px', py: '3px', fontSize: 12, textAlign: 'right' as const } };
 
-const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
+const GeometryFullPanel: React.FC<Props> = ({ models, canDownload, cad, treeKey, emContent, panelWidth, onDividerMouseDown }) => {
   const { i18n } = useTranslation('geometry');
   const lang = i18n.resolvedLanguage ?? 'en';
   const openMotor = useOpenMotor();
@@ -59,12 +55,8 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
 
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [nodes, setNodes] = useState<PartGroup[]>([]);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
-  const canvas = useRef<ModelCanvasHandle>(null);
-  const vw = useViewportWidth();
-  // the CAD parameter table is a right-hand drawer, closed by default so the model is full screen; remembered per browser
-  const [drawer, setDrawerState] = useState<boolean>(() => { try { return drawerStartsOpen(localStorage.getItem(DRAWER_STORAGE_KEY)); } catch { return false; } });
-  const setDrawer = (open: boolean) => { setDrawerState(open); try { localStorage.setItem(DRAWER_STORAGE_KEY, open ? '1' : '0'); } catch { /* a convenience */ } };
 
   const rows = data?.available ? data.rows : [];
   const changes = useMemo(() => changesOf(rows, drafts), [rows, drafts]);
@@ -72,17 +64,7 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
   const dirty = Object.keys(changes).length;
   const canWrite = !!data?.can_write;
   const badge = modelBadge(data?.rebuild);
-  // THE tree: the "Motor Assembly" panel over the viewer; the mass of every part and group is its extra column
-  const massOf = useMemo(() => new Map((tree?.parts ?? []).map((p) => [p.id, p])), [tree]);
-  const extraFor = useCallback((id: string) => {
-    const p = massOf.get(id);
-    return p?.mass_kg != null ? <span style={{ fontSize: 10, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums', opacity: p.counted === false ? 0.5 : 1 }}>{formatMass(p.mass_kg)}</span> : null;
-  }, [massOf]);
-  const groupExtraFor = useCallback((gid: string) => {
-    const g = tree ? groupMassKg(tree, gid) : null;
-    return g != null ? <span style={{ fontSize: 10, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{formatMass(g)}</span> : null;
-  }, [tree]);
-  const { model: assembly, hiddenNodes, highlight } = useAssemblyTree(tree, nodes, { extraFor, groupExtraFor, resetKey: `${die}/${config}` });
+  const assembly = useAssemblyRows(tree, nodes);
 
   const onSave = useCallback(async () => {
     setProblems([]);
@@ -108,9 +90,10 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
           bgcolor: changed ? 'rgba(59,130,246,.10)' : 'transparent', opacity: ro ? 0.75 : 1 }}>
         <Tooltip title={tip} placement="right" enterDelay={250}>
           <Box sx={{ flex: 1, minWidth: 0 }}>
-            <Typography data-testid={`cad-label-${r.name}`} sx={{ fontSize: 12, lineHeight: 1.25, fontWeight: r.overridden ? 700 : 400,
-              overflowWrap: 'anywhere' }}>{nameOf(r.label, lang)}</Typography>
-            <Typography sx={{ fontSize: 9.5, lineHeight: 1.2, color: 'var(--text-4)', fontFamily: 'monospace', overflowWrap: 'anywhere' }}>{r.name}</Typography>
+            {/* one style for every parameter row (owner 2026-10-16): one line, the template key only in the tooltip */}
+            <Typography data-testid={`cad-label-${r.name}`} noWrap sx={{ fontSize: 12, lineHeight: 1.4, fontWeight: r.overridden ? 700 : 400 }}>
+              {nameOf(r.label, lang)}
+            </Typography>
           </Box>
         </Tooltip>
         {r.name.startsWith('offset_') && (
@@ -138,14 +121,12 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
 
   const leftBody = (
     <>
+      <Box sx={{ display: 'flex', alignItems: 'center', px: 0.5, pt: 1.25, pb: 0.25 }}>
+        <SectionLabel sx={{ flex: 1 }}>{tx('cadDrawer')}</SectionLabel>
+        <HelpTip title={`${tx('cadOnlyTip')} ${tx('fullEditHelp')}`} />
+      </Box>
       {tree?.partial && <Typography sx={{ px: 0.5, mb: 1, fontSize: 11, color: 'var(--text-4)' }}>{tx('fullPartialNote')}</Typography>}
 
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 0.5, mb: 0.75 }}>
-        <Chip size="small" variant="outlined" label={tx('cadParamCount', { n: rows.length })} sx={{ fontSize: 10, height: 20 }} data-testid="cad-count" />
-        <Tooltip title={tx('cadOnlyTip')}><Chip size="small" label={tx('cadOnlyLabel')} sx={{ fontSize: 10, height: 20, bgcolor: 'transparent', border: '1px solid var(--line)' }} /></Tooltip>
-        <Box sx={{ flex: 1 }} />
-        <HelpTip title={tx('fullEditHelp')} />
-      </Box>
 
       {!die ? <Typography sx={{ p: 1, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoMotor')}</Typography>
         : loading && !data ? <Box sx={{ p: 1 }}><CircularProgress size={14} /></Box>
@@ -196,22 +177,32 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
   const badgeText = badge === 'rebuilding' ? tx('modelRebuilding') : badge === 'queued' ? tx('modelQueued')
     : badge === 'stale' ? tx('modelStale') : badge === 'failed' ? tx('modelRebuildFailed') : '';
 
-  const items = fullToolbar({ kit: !!(tree?.kit || model?.assembly === 'frameless'), hasModel: !!model, badge, canWrite });
+  const items = fullToolbar({ hasModel: !!model, badge, canWrite });
   const has = (id: string) => (items as string[]).includes(id);
+  const viewer = <>
+    {model ? (
+      <UnifiedViewer sourceKey={`${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}`} resetKey={`geometryFull:${modelKey(model)}`}
+        glbUrl={modelGlbUrl(model, canDownload)} toolbarSpec={fullToolsOpen(viewOf(model, canDownload)) ? 'full' : 'simplified'} tree={assembly}
+        selectedKey={selectedKey} onSelectedKeyChange={setSelectedKey} contextLostText={tx('contextLost')}
+        simplifiedText={tx('simplifiedLine')} simplifiedTip={tx('simplifiedLineTip')} noViewText={tx('noView')}
+        onLoaded={({ groups }) => setNodes(groups)} hostExtras={badge === 'failed' && data?.rebuild.message ? (
+          <Alert severity="error" sx={{ position:'absolute', left:10, right:10, bottom:10, fontSize:11.5, zIndex:2, maxHeight:130, overflow:'auto' }}>
+            {data.rebuild.message}
+          </Alert>) : null} />
+    ) : (
+      <Typography sx={{ position:'absolute', top:'45%', left:0, right:0, textAlign:'center', fontSize:13, color:'var(--text-3)' }} data-testid="full-no-model">
+        {models === null ? tx('filesWorking') : tx('fullNoModel')}
+      </Typography>
+    )}
+    {(treeLoading && !tree) && <Box sx={{ position:'absolute', top:8, left:8, zIndex:5 }}><CircularProgress size={14} /></Box>}
+    {(fullToolsOpen(viewOf(model, canDownload)) && assembly.length === 0) && <Typography sx={{ position:'absolute', top:10, left:12, zIndex:5, fontSize:12, color:'var(--text-3)' }}>{tx('fullNoTree')}</Typography>}
+  </>;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }} data-testid="geometry-full">
-      {/* ONE compact toolbar on top (wraps on a narrow screen); the model below is full screen */}
+      {/* Model status and rebuild action stay in the Full host toolbar. */}
       <Box data-testid="geometry-full-toolbar" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1, px: 1.25, py: 0.5, flexShrink: 0,
         borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel)' }}>
-        <Button size="small" variant={drawer ? 'contained' : 'outlined'} data-testid="toggle-cad-drawer" onClick={() => setDrawer(!drawer)}
-          startIcon={<TuneIcon sx={{ fontSize: 16 }} />} sx={{ textTransform: 'none', fontSize: 12 }}>
-          {tx('cadDrawer')}{rows.length ? ` (${rows.length})` : ''}
-        </Button>
-        {has('kit') && (
-          <Tooltip title={tx('fullKitTip')}><Chip size="small" data-testid="kit-chip" label={tx('fullKitChip')}
-            sx={{ height: 20, fontSize: 10.5, bgcolor: 'transparent', border: '1px solid var(--line)' }} /></Tooltip>
-        )}
         {has('badge') && (
           <Chip data-testid="model-badge" icon={badge === 'failed' || badge === 'stale' ? undefined : <CircularProgress size={12} />}
             color={badge === 'failed' ? 'error' : 'warning'} size="small" label={badgeText} />
@@ -226,47 +217,9 @@ const GeometryFullPanel: React.FC<Props> = ({ models, cad, treeKey }) => {
             {tx('modelVersion', { template: data.model.template, built: (data.model.built_at ?? '').slice(0, 10) })}
           </Typography>
         )}
-        {has('fit') && (
-          <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
-            sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{tx('fit')}</Button>
-        )}
       </Box>
 
-      <Box sx={{ flex: 1, position: 'relative', overflow: 'hidden', minWidth: 0, minHeight: 0 }}>
-        {model ? (
-          <ModelCanvas ref={canvas} model={model} highlight={highlight} hiddenNodes={hiddenNodes} contextLostText={tx('contextLost')}
-            simplifiedText={tx('simplifiedLine')} simplifiedTip={tx('simplifiedLineTip')} noViewText={tx('noView')}
-            onLoaded={({ groups }) => setNodes(groups)}>
-            {badge === 'failed' && data?.rebuild.message && (
-              <Alert severity="error" sx={{ position: 'absolute', left: 10, right: 10, bottom: 10, fontSize: 11.5, zIndex: 2, maxHeight: 130, overflow: 'auto' }}>
-                {data.rebuild.message}
-              </Alert>
-            )}
-          </ModelCanvas>
-        ) : (
-          <Typography sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}
-            data-testid="full-no-model">
-            {models === null ? tx('filesWorking') : tx('fullNoModel')}
-          </Typography>
-        )}
-        {(treeLoading && !tree) ? <Box sx={{ position: 'absolute', top: 8, left: 8 }}><CircularProgress size={14} /></Box>
-          : assembly.rows.length > 0 ? (
-            <ComponentTreeView model={assembly} defaultCollapsed={treeStartsCollapsed(vw)} style={{ top: 8, left: 8, zIndex: 4, width: 300 }}
-              rowsMaxHeight="calc(100% - 50px)" />
-          ) : (
-            <Typography sx={{ position: 'absolute', top: 10, left: 12, fontSize: 12, color: 'var(--text-3)' }}>{tx('fullNoTree')}</Typography>
-          )}
-
-        {drawer && (
-          <Box data-testid="cad-drawer" sx={{ position: 'absolute', top: 0, right: 0, bottom: 0, width: drawerWidth(vw), zIndex: 6, overflowY: 'auto',
-            p: 1.5, pt: 0.5, bgcolor: 'var(--panel)', borderLeft: '1px solid var(--line)', boxShadow: '-4px 0 16px rgba(0,0,0,0.25)' }}>
-            <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
-              <IconButton size="small" onClick={() => setDrawer(false)} aria-label={tx('cadDrawerClose')}><CloseIcon sx={{ fontSize: 18 }} /></IconButton>
-            </Box>
-            {leftBody}
-          </Box>
-        )}
-      </Box>
+      <GeometryLayout emContent={emContent} cadContent={leftBody} viewer={viewer} panelWidth={panelWidth} onDividerMouseDown={onDividerMouseDown} />
     </Box>
   );
 };

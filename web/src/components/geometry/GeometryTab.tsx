@@ -1,6 +1,6 @@
 // The Geometry tab with the Active | Full switch (owner 2026-10-15).
-//   Active  the tab as it was: the EM cross-section parameter table and the 2-D viewer (passed in as `active`).
-//   Full    the full construction: the CAD model, THE part tree, the editable construction parameters.
+//   Active  the shared EM parameter column beside the active-part viewer.
+//   Full    the same EM column, with editable CAD construction parameters below it and the shared CAD viewer beside it.
 // The switch is the one of the Materials tab (one shared state); the Files menu next to it changes with the scope.
 import React, { useMemo, useState } from 'react';
 import { Box, Typography } from '@mui/material';
@@ -12,12 +12,20 @@ import VerificationNotice from '../model3d/VerificationNotice';
 import { lockedKind } from '../../lib/verification';
 import FilesMenu from './FilesMenu';
 import GeometryFullPanel from './GeometryFullPanel';
+import GeometryLayout from './GeometryLayout';
 import { useCadParams, useModelList, useOpenMotor } from './useConstruction';
 import { modelKey } from '../../lib/model3d';
 
 const tx = nsT('geometry');
 
-const GeometryTab: React.FC<{ active: React.ReactNode }> = ({ active }) => {
+interface Props {
+  emContent: React.ReactNode;
+  activeViewer: React.ReactNode;
+  panelWidth: number;
+  onDividerMouseDown: (event: React.MouseEvent) => void;
+}
+
+const GeometryTab: React.FC<Props> = ({ emContent, activeViewer, panelWidth, onDividerMouseDown }) => {
   useTranslation('geometry');
   const [scope] = useConstructionScope();
   const openMotor = useOpenMotor();
@@ -44,8 +52,9 @@ const GeometryTab: React.FC<{ active: React.ReactNode }> = ({ active }) => {
       </Box>
       <Box sx={{ flex: 1, minHeight: 0 }}>
         {scope === 'full'
-          ? <GeometryFullPanel models={models} cad={cad} treeKey={model?.glb_sha256 ?? 0} />
-          : active}
+          ? <GeometryFullPanel models={models} canDownload={canDownload} cad={cad} treeKey={model?.glb_sha256 ?? 0}
+            emContent={emContent} panelWidth={panelWidth} onDividerMouseDown={onDividerMouseDown} />
+          : <GeometryLayout emContent={emContent} viewer={activeViewer} panelWidth={panelWidth} onDividerMouseDown={onDividerMouseDown} />}
       </Box>
       <NdaDialog open={ndaOpen} onClose={() => setNdaOpen(false)} onSigned={() => setRefresh((n) => n + 1)} />
       <VerificationNotice open={noticeOpen} onClose={() => setNoticeOpen(false)} access={access} />

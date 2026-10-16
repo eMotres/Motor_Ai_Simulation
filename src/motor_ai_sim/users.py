@@ -941,7 +941,8 @@ def normalize_grants(raw) -> dict:
     default = _norm_default(raw.get("default"))
     out = {"all": all_motors, "dies": dies}
     # CONFIGURATION grants (owner 2026-10-15): "<die>/<config>" entries that open
-    # a PRIVATE configuration of a die the account can already see.  Key present
+    # one configuration to the account - a PRIVATE one ("selected clients" in
+    # Admin · Motors access), even when the die itself is not open to it.  Key present
     # ONLY when an admin set one, so every pre-existing record round-trips
     # byte-identical.
     cfgs = normalize_config_grants(raw.get("configs"))
@@ -1049,6 +1050,59 @@ def set_motor_grants(email: str, *, all_motors: bool,
              "configs": configs})
         _save(users)
     return get_stored_motor_grants(email)
+
+
+def config_grant_index() -> dict:
+    """``{"<die>/<config>": [emails]}`` over every account's STORED grants (one
+    registry read) - the "selected clients" of each private configuration.
+    The grants ARE the client list; there is no second store."""
+    out: dict = {}
+    for email, rec in _load_soft().items():
+        if not isinstance(rec, dict):
+            continue
+        g = rec.get("motors") if isinstance(rec.get("motors"), dict) else {}
+        for key in normalize_config_grants(g.get("configs")):
+            out.setdefault(key, []).append(_norm(email))
+    return {k: sorted(v) for k, v in out.items()}
+
+
+def config_grant_holders(key: str) -> list:
+    """Every account whose STORED grants hold the configuration grant ``key``
+    (``"<die>/<config>"``), sorted."""
+    return config_grant_index().get(str(key or "").strip(), [])
+
+
+def set_config_grant_holders(key: str, emails) -> list:
+    """Make EXACTLY ``emails`` hold the configuration grant ``key``: added to
+    those accounts, removed from every other one.  One load, one atomic save;
+    every other part of each record (die grants, default motor) is untouched.
+    Unknown e-mails raise ``KeyError`` before anything is written."""
+    key = str(key or "").strip()
+    want = {_norm(e) for e in (emails or []) if _norm(e)}
+    with _LOCK:
+        users = _load()
+        unknown = sorted(want - set(users))
+        if unknown:
+            raise KeyError(", ".join(unknown))
+        changed = False
+        for email, rec in users.items():
+            if not isinstance(rec, dict):
+                continue
+            stored = rec.get("motors") if isinstance(rec.get("motors"), dict) else None
+            have = set(normalize_config_grants((stored or {}).get("configs")))
+            if (key in have) == (email in want):
+                continue
+            if email in want:
+                have.add(key)
+            else:
+                have.discard(key)
+            g = dict(stored or {"all": False, "dies": []})
+            g["configs"] = sorted(have)
+            rec["motors"] = normalize_grants(g)
+            changed = True
+        if changed:
+            _save(users)
+    return config_grant_holders(key)
 
 
 # ── invites ──────────────────────────────────────────────────────────────────

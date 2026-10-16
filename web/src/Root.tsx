@@ -14,15 +14,17 @@
  * one (a sign-out while it is mounted is handled here: `user` becomes null, `Root` swaps
  * back to the shell).
  */
-import React, { Suspense, lazy } from 'react';
+import React, { Suspense, lazy, useEffect } from 'react';
 import { useAuth } from './contexts/AuthContext';
 import { isPreferencesPath } from './lib/commPrefsLogic';
 import LandingShell from './components/landing/LandingShell';
 import { showsLandingShell } from './lib/rootGate';
+import { watchChunkImport } from './lib/chunkReload';
+import { resolveSchemasRoute } from './lib/schemasRoute';
 
-const App = lazy(() => import('./App'));
-const OAuthConsent = lazy(() => import('./components/auth/OAuthConsent'));
-const CommPrefsPage = lazy(() => import('./components/auth/CommPrefsPage'));
+const App = lazy(watchChunkImport(() => import('./App')));
+const OAuthConsent = lazy(watchChunkImport(() => import('./components/auth/OAuthConsent')));
+const CommPrefsPage = lazy(watchChunkImport(() => import('./components/auth/CommPrefsPage')));
 
 const Loading: React.FC = () => (
   <div role="status" aria-live="polite" style={{
@@ -36,6 +38,10 @@ const Loading: React.FC = () => (
 const Root: React.FC = () => {
   const { user, resolved, enforced } = useAuth();
   const path = window.location.pathname;
+  useEffect(() => {
+    const route = resolveSchemasRoute(window.location.href);
+    if (route.redirected) window.history.replaceState(null, '', route.href);
+  }, []);
   // OAuth consent for MCP connectors (docs/MCP_2026-09-28.md) and the communication
   // preferences (mailed link, account menu) are pages of their own.
   if (path === '/agent-consent') return <Suspense fallback={<Loading />}><OAuthConsent /></Suspense>;

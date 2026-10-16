@@ -413,6 +413,9 @@ def _copy_on_write(src_dir: Path, addressed: str) -> Path:
     Idempotent, and it never overwrites a file that is already here: a second
     save of the same die must not undo the first.
     """
+    # the layer the configurations are copied FROM, settled before the copy: once
+    # die.yaml lands here the name resolves to the workspace (the caller's own)
+    _src_layer = _classify_die_dir(src_dir)[0]
     dst = _dies_dir() / addressed
     dst.mkdir(parents=True, exist_ok=True)
     copied = 0
@@ -424,7 +427,7 @@ def _copy_on_write(src_dir: Path, addressed: str) -> Path:
         # A PRIVATE configuration the caller may not see is never forked into
         # their workspace (it would become "theirs" and readable).
         if p.name != "die.yaml" and not may_see_config_file(
-                _acc, addressed, p.stem, p):
+                _acc, addressed, p.stem, p, layer=_src_layer):
             continue
         import shutil as _sh
         _sh.copy2(p, q)
@@ -2212,12 +2215,13 @@ def tree(response: Response, authorization: str = Header(default=None)):
         for cf in sorted(dd.glob("*.yaml")):
             if cf.name == "die.yaml":
                 continue
-            # A PRIVATE configuration is not a row at all for a caller without
-            # access: not listed, not counted (config_count / cards below are
-            # computed from what is left).  The caller's own workspace copy is
-            # theirs (layering on), whatever the file says.
-            if not (_layer == _WS.LAYER_WORKSPACE and _ws_layering()
-                    ) and not may_see_config_file(_acc, _die_name, cf.stem, cf):
+            # A configuration the caller may not see (motor_access.config_visible:
+            # a PRIVATE one without its grant, or an "inherit" one of a die that is
+            # visible only through ANOTHER configuration) is not a row at all: not
+            # listed, not counted (config_count / cards below are computed from
+            # what is left).  The caller's own workspace copy is theirs (layering
+            # on), whatever the file says.
+            if not may_see_config_file(_acc, _die_name, cf.stem, cf, layer=_layer):
                 continue
             c = _load_yaml(cf, "configuration")
             _dr_cfg = _dr_die.get(cf.stem) or {}
@@ -6147,7 +6151,8 @@ def community(response: Response, authorization: str = Header(default=None)):
             for cf in sorted(dd.glob("*.yaml")):
                 if cf.name == "die.yaml":
                     continue
-                if lay.owner_id != me and not may_see_config_file(acc, dd.name, cf.stem, cf):
+                if lay.owner_id != me and not may_see_config_file(
+                        acc, dd.name, cf.stem, cf, layer=_WS.LAYER_PUBLISHED):
                     continue     # a private configuration is not in the community listing
                 try:
                     c = _load_yaml(cf, "configuration")

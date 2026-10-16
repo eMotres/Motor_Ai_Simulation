@@ -6,33 +6,30 @@
 // the model, the motor picker, Fit, the "Download after NDA" note and the Sign button.  No bill of materials, no prices.
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Alert, Box, Button, CircularProgress, FormControlLabel, IconButton, MenuItem, Popover, Select, Slider, Switch,
-  ToggleButton, ToggleButtonGroup, Tooltip, Typography,
+  Alert, Box, Button, CircularProgress, IconButton, MenuItem, Popover, Select, Tooltip, Typography,
 } from '@mui/material';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
 import DownloadIcon from '@mui/icons-material/Download';
-import CenterFocusStrongIcon from '@mui/icons-material/CenterFocusStrong';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../common/HelpTip';
 import { useLastMotorState } from '../../lib/lastMotor';
 import NdaDialog from './NdaDialog';
 import VerificationStatus from './VerificationStatus';
 import { lockedKind, parseAccess, type AccessInfo } from '../../lib/verification';
-import ComponentTreeView from '../viewer3d/ComponentTreeView';
-import { useViewportWidth } from '../common/useNarrow';
-import { model3dToolbar, treeStartsCollapsed, type Model3DItem } from '../../lib/viewerToolbar';
-import { useAssemblyTree } from '../common/useAssemblyTree';
-import ModelCanvas, { modelBase as base, responseDetail as detail, type CanvasTools, type ModelCanvasHandle } from './ModelCanvas';
+
+import { model3dToolbar, type Model3DItem } from '../../lib/viewerToolbar';
+import { useAssemblyRows } from '../common/useAssemblyTree';
+import { modelBase as base, responseDetail as detail, modelGlbUrl } from '../../lib/model3dHost';
 import { usePartTreeData } from '../geometry/useConstruction';
+import { UnifiedViewer } from '../../modules/viewer3d';
 import {
-  filenameFromDisposition, formatBytes, formatMm, fullToolsOpen, modelKey, modelLabel, resolveModel, viewOf,
-  type Axis, type ModelInfo, type PartGroup,
+  filenameFromDisposition, formatBytes, fullToolsOpen, modelKey, modelLabel, resolveModel, viewOf,
+  type ModelInfo, type PartGroup,
 } from '../../lib/model3d';
 
 const API = ((import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string).replace(/\/$/, '');
 const REMEMBER = 'model3d.last';
 
-const lbl = { fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' } as const;
 const rd = (k: string): string | null => { try { return localStorage.getItem(k); } catch { return null; } };
 const wr = (k: string, v: string): void => { try { localStorage.setItem(k, v); } catch { /* private window */ } };
 
@@ -40,7 +37,6 @@ const Model3DPanel: React.FC = () => {
   // `ready` = the lazy namespace has arrived: until then t() would print the raw key ("downloadLocked", "nda.sign").
   const { t, ready } = useTranslation('model3d');
   const { selection: openMotor } = useLastMotorState();
-  const canvas = useRef<ModelCanvasHandle>(null);
   const [models, setModels] = useState<ModelInfo[] | null>(null);
   const [canDownload, setCanDownload] = useState(false);
   // the applicant verification behind it: signing the NDA opens a case, the tools open when it is VERIFIED (server `access`)
@@ -52,11 +48,7 @@ const Model3DPanel: React.FC = () => {
   // the motor open in Configure has no built model (only some motors have one yet)
   const [preparing, setPreparing] = useState(false);
   const [nodes, setNodes] = useState<PartGroup[]>([]);
-  const [explode, setExplode] = useState(0);
-  const [sec, setSec] = useState<{ on: boolean; axis: Axis; position: number }>({ on: false, axis: 'x', position: 0 });
-  const [range, setRange] = useState({ min: -1, max: 1 });
-  const [measure, setMeasure] = useState(false);
-  const [mm, setMm] = useState<number | null>(null);
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [dl, setDl] = useState<'idle' | 'busy'>('idle');
 
@@ -107,18 +99,10 @@ const Model3DPanel: React.FC = () => {
   const full = fullToolsOpen(viewOf(model, canDownload));
   const { tree } = usePartTreeData(model?.die ?? null, model?.config ?? null, 'model3d', !!model && full, model?.glb_sha256 ?? 0);
   // THE tree: the "Motor Assembly" panel over the viewer (eye toggles, swatches, Coil n / Magnet n N|S ...), only after the NDA
-  const { model: assembly, hiddenNodes, highlight } = useAssemblyTree(tree, nodes, { resetKey: model ? modelKey(model) : '' });
+  const assembly = useAssemblyRows(tree, nodes);
 
-  const tools: CanvasTools = useMemo(() => ({ hidden: new Set<string>(), explode, section: sec, measure }), [explode, sec, measure]);
-
-  const vw = useViewportWidth();
   const [infoAnchor, setInfoAnchor] = useState<HTMLElement | null>(null);
 
-  const setAxis = useCallback((axis: Axis) => {
-    const rg = canvas.current?.sectionRange(axis) ?? range;
-    setRange(rg);
-    setSec((s) => ({ ...s, axis, position: (rg.min + rg.max) / 2 }));
-  }, [range]);
 
   const download = async (file = 'model.step') => {
     if (!model) return;
@@ -161,8 +145,6 @@ const Model3DPanel: React.FC = () => {
   const has = (id: Model3DItem) => entries.some((e) => e.id === id);
   const enabled = (id: Model3DItem) => entries.find((e) => e.id === id)?.enabled !== false;
   const inline = { display: 'flex', alignItems: 'center', gap: 0.75 } as const;
-  const lblInline = { ...lbl, fontSize: 10.5, whiteSpace: 'nowrap' } as const;
-  const sw = { m: 0, '& .MuiFormControlLabel-label': { ...lblInline } } as const;
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -173,42 +155,6 @@ const Model3DPanel: React.FC = () => {
         <Box data-testid="model3d-toolbar" sx={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1.25, px: 1.25, py: 0.5, flexShrink: 0,
           borderBottom: '1px solid var(--line-soft)', bgcolor: 'var(--panel)' }}>
           {has('motor') && <Box sx={{ flex: '0 1 250px', minWidth: 170 }}>{picker}</Box>}
-          {has('fit') && (
-            <Button size="small" onClick={() => canvas.current?.fit()} startIcon={<CenterFocusStrongIcon sx={{ fontSize: 16 }} />}
-              sx={{ textTransform: 'none', fontSize: 12, color: 'var(--text-2)' }}>{t('fit')}</Button>
-          )}
-          {has('explode') && (
-            <Box sx={inline} data-testid="tool-explode">
-              <Typography sx={lblInline}>{t('explode')}</Typography>
-              <Slider size="small" min={0} max={1} step={0.01} value={explode} onChange={(_, v) => setExplode(v as number)} sx={{ width: 90 }} />
-            </Box>
-          )}
-          {has('section') && (
-            <Box sx={inline} data-testid="tool-section">
-              <FormControlLabel sx={sw} labelPlacement="start" label={t('section')}
-                control={<Switch size="small" checked={sec.on} onChange={(_, on) => setSec((s) => ({ ...s, on }))} />} />
-              {sec.on && (
-                <>
-                  <ToggleButtonGroup size="small" exclusive value={sec.axis} onChange={(_, a) => a && setAxis(a as Axis)}>
-                    {(['x', 'y', 'z'] as const).map((a) => <ToggleButton key={a} value={a} sx={{ px: 1, py: 0, fontSize: 11 }}>{a.toUpperCase()}</ToggleButton>)}
-                  </ToggleButtonGroup>
-                  <Slider size="small" min={range.min} max={range.max} step={(range.max - range.min) / 400}
-                    value={sec.position} onChange={(_, v) => setSec((s) => ({ ...s, position: v as number }))} sx={{ width: 90 }} />
-                </>
-              )}
-            </Box>
-          )}
-          {has('measure') && (
-            <Box sx={inline} data-testid="tool-measure">
-              <FormControlLabel sx={sw} labelPlacement="start" label={t('measure')}
-                control={<Switch size="small" checked={measure} onChange={(_, on) => { setMeasure(on); if (!on) setMm(null); }} />} />
-              {measure && (
-                <Typography sx={{ fontSize: 12, color: 'var(--text-1)', fontWeight: 700 }}>
-                  {mm == null ? t('measureHint') : formatMm(mm)}
-                </Typography>
-              )}
-            </Box>
-          )}
           {has('download') && (
             <Button size="small" variant="contained" disabled={!enabled('download') || dl === 'busy'} data-testid="tool-download"
               startIcon={dl === 'busy' ? <CircularProgress size={14} /> : <DownloadIcon sx={{ fontSize: 16 }} />}
@@ -270,21 +216,13 @@ const Model3DPanel: React.FC = () => {
       )}
 
       <Box sx={{ position: 'relative', flex: 1, minHeight: 0, minWidth: 0 }}>
-        <ModelCanvas ref={canvas} model={model} tools={tools} canUseTools={full} highlight={highlight} hiddenNodes={hiddenNodes}
-          contextLostText={t('contextLost')} onMeasure={setMm} simplifiedText={t('simplifiedLine')} simplifiedTip={t('simplifiedLineTip')} noViewText={t('noView')}
-          onLoaded={({ groups, range: rg }) => {
-            setNodes(groups); setExplode(0); setMeasure(false); setMm(null);
-            setRange(rg);
-            setSec({ on: false, axis: 'x', position: (rg.min + rg.max) / 2 });
-          }} />
-        {ready && full && assembly.rows.length > 0 && (
-          <ComponentTreeView model={assembly} defaultCollapsed={treeStartsCollapsed(vw)} style={{ top: 8, left: 8, zIndex: 4, width: 230 }}
-            rowsMaxHeight="calc(100% - 40px)" />
-        )}
-        {err && <Alert severity="error" sx={{ position: 'absolute', bottom: 8, left: 8, right: 8, fontSize: 12, zIndex: 3 }} onClose={() => setErr(null)}>{err}</Alert>}
-        {ready && preparing && !model && (
-          <Typography sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>{t('inPreparation')}</Typography>
-        )}
+        <UnifiedViewer sourceKey={model ? `${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}` : ''} resetKey={`model3d:${model ? modelKey(model) : ''}`}
+          glbUrl={modelGlbUrl(model, canDownload)} toolbarSpec={full ? 'full' : 'simplified'} tree={ready ? assembly : null}
+          selectedKey={selectedKey} onSelectedKeyChange={setSelectedKey} contextLostText={t('contextLost')} simplifiedText={t('simplifiedLine')} simplifiedTip={t('simplifiedLineTip')}
+          noViewText={t('noView')} onLoaded={({ groups }) => setNodes(groups)} hostExtras={<>
+            {err && <Alert severity="error" sx={{ position: 'absolute', bottom: 8, left: 8, right: 8, fontSize: 12, zIndex: 3 }} onClose={() => setErr(null)}>{err}</Alert>}
+            {ready && preparing && !model && <Typography sx={{ position: 'absolute', top: '45%', left: 0, right: 0, textAlign: 'center', fontSize: 13, color: 'var(--text-3)' }}>{t('inPreparation')}</Typography>}
+          </>} />
       </Box>
     </Box>
   );

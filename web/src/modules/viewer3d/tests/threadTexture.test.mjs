@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 let T = null;
-try { T = await import('../threadTexture.ts'); } catch { /* old Node */ }
+try { T = await import('../internal/threadTexture.ts'); } catch { /* old Node */ }
 const t = T ? test : test.skip;
 
 const rec = { thread: { kind: 'external', d_mm: 2.5, pitch_mm: 0.45, length_mm: 17, standard: 'ISO 261', designation: 'M2.5x0.45',

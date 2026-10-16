@@ -2,21 +2,20 @@
  * Materials tab, mode "Full": the whole motor part by part, on THE tree - the "Motor Assembly" panel over the 3-D viewer, the same
  * tree (same ids, names, groups, order, eye toggles, swatches, Coil n / Magnet n ...) as Geometry > Full and the 3-D model tab.
  * The active parts (used by the electromagnetic simulation) are read-only here; every other part of the assembled motor has a
- * material picker (the same picker as the viewer's material bar) at the end of its row, next to its mass.  The choice is saved with
+ * material picker (the same picker as the viewer's material bar) in the host bar when selected. The choice is saved with
  * the die.  A row selected in the tree is highlighted in the viewer.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Box, CircularProgress, Tooltip, Typography } from '@mui/material';
 import ArrowDropDownIcon from '@mui/icons-material/ArrowDropDown';
 import { useTranslation } from 'react-i18next';
 import { nsT } from '../../i18n/nsT';
-import { modelKey, type PartGroup } from '../../lib/model3d';
-import { groupMassKg, type PartTreeData, type TreePart } from '../../lib/partTree';
-import ComponentTreeView from '../viewer3d/ComponentTreeView';
-import { useAssemblyTree } from '../common/useAssemblyTree';
-import ModelCanvas from '../model3d/ModelCanvas';
-import { useViewportWidth } from '../common/useNarrow';
-import { treeStartsCollapsed } from '../../lib/viewerToolbar';
+import { type PartGroup } from '../../lib/model3d';
+import { type PartTreeData, type TreePart } from '../../lib/partTree';
+import { useAssemblyRows } from '../common/useAssemblyTree';
+import { UnifiedViewer } from '../../modules/viewer3d';
+import { fullToolsOpen, modelKey, viewOf } from '../../lib/model3d';
+import { modelGlbUrl } from '../../lib/model3dHost';
 import { useModelList, useOpenMotor } from '../geometry/useConstruction';
 import MaterialPickerPopover from './MaterialPickerPopover';
 import { useFullParts } from './useFullParts';
@@ -37,16 +36,25 @@ const FullPartsPanel: React.FC = () => {
   const openMotor = useOpenMotor();
   const die = openMotor?.die ?? null;
   const config = openMotor?.config ?? null;
-  const { payload, rows, loading, saving, error, choose, localMode } = useFullParts(die, config, true);
-  const { models } = useModelList();
-  const vw = useViewportWidth();
+  const { models, canDownload } = useModelList();
+  const { payload, rows, loading, saving, error, choose, localMode } = useFullParts(die, config, canDownload);
   const model = useMemo(
     () => models?.find((m) => !!die && modelKey(m) === modelKey({ die, config: config ?? '' })) ?? null, [models, die, config]);
+  const fullAccess = fullToolsOpen(viewOf(model, canDownload));
+  const currentPayload = !!die && payload?.available === true && payload.die === die && payload.config === (config ?? '');
 
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [picking, setPicking] = useState<FullPartRow | null>(null);
   const [nodes, setNodes] = useState<PartGroup[]>([]);
-  const byKey = useRef(new Map<string, FullPartRow>());
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const byKey = useMemo(() => new Map(currentPayload ? rows.map((r) => [r.key, r]) : []), [currentPayload, rows]);
+
+  useEffect(() => {
+    setSelectedKey(null);
+    setAnchor(null);
+    setPicking(null);
+    setNodes([]);
+  }, [die, config, fullAccess]);
 
   const choices: MaterialChoice[] = payload?.choices ?? [];
   const groups = useMemo(() => groupChoices(choices).map((g) => ({
@@ -62,14 +70,13 @@ const FullPartsPanel: React.FC = () => {
 
   // THE part tree: the server's groups and order, with the (overlay-merged) rows as parts
   const tree: PartTreeData | null = useMemo(() => {
-    if (!payload?.available || !payload.groups) return null;
-    byKey.current = new Map(rows.map((r) => [r.key, r]));
+    if (!currentPayload || !payload.groups) return null;
     return { groups: payload.groups, parts: rows.map((r, i) => ({ ...r, id: r.id ?? r.key, group: r.group ?? 'other',
       names: r.names ?? { en: r.name, zh: r.name }, glb: r.glb ?? [], order: r.order ?? i })) as unknown as TreePart[] };
-  }, [payload, rows]);
+  }, [currentPayload, payload, rows]);
 
   const renderPicker = useCallback((id: string) => {
-    const r = byKey.current.get(id);
+    const r = byKey.get(id);
     if (!r) return null;
     const editable = isEditable(r);
     const isDefault = !r.user_set;
@@ -99,12 +106,8 @@ const FullPartsPanel: React.FC = () => {
         </Tooltip>
       </span>
     );
-  }, []);
-  const groupExtraFor = useCallback((gid: string) => {
-    const g = tree ? groupMassKg(tree, gid) : null;
-    return g != null ? <span style={{ fontSize: 10, color: 'var(--text-3)', fontVariantNumeric: 'tabular-nums' }}>{formatMass(g)}</span> : null;
-  }, [tree]);
-  const { model: assembly, hiddenNodes, highlight } = useAssemblyTree(tree, nodes, { extraFor: renderPicker, groupExtraFor, resetKey: `${die}/${config}` });
+  }, [byKey]);
+  const assembly = useAssemblyRows(tree, nodes);
 
   let note: React.ReactNode = null;
   if (!die) {
@@ -123,10 +126,27 @@ const FullPartsPanel: React.FC = () => {
   }
 
   return (
-    <Box sx={{ height: '100%', position: 'relative', overflow: 'hidden', bgcolor: 'var(--panel-2)', color: 'var(--text-1)' }} data-testid="materials-full-panel">
-      <Box sx={{ position: 'absolute', inset: 0 }} data-testid="materials-full-viewer">
+    <Box sx={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative', overflow: 'hidden', bgcolor: 'var(--panel-2)', color: 'var(--text-1)' }} data-testid="materials-full-panel">
+      <Box sx={{ position: 'relative', px: 1.5, py: 0.75, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1,
+        flexShrink: 0, borderTop: '1px solid var(--line-soft)', bgcolor: 'var(--panel)' }}>
+        <Tooltip title={tx('materialsFullHintTip')}>
+          <Typography sx={{ fontSize: 12, color: 'var(--text-2)', pointerEvents: 'auto' }}>{tx('materialsFullHint')}</Typography>
+        </Tooltip>
+        <Box sx={{ flex: 1 }} />
+        {die && <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{die}{config ? ` / ${config}` : ''}</Typography>}
+        {saving && <CircularProgress size={12} />}
+        {!saving && nonEm && localMode && (
+          <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>{tx('materialsFullLocal')}</Typography>)}
+        {fullAccess && currentPayload && selectedKey && byKey.has(selectedKey) && <Box data-testid="materials-full-selected-part" sx={{ display:'flex', alignItems:'center', gap:0.75, px:1, py:.25, border:'1px solid var(--line)', borderRadius:1 }}>
+          <Typography sx={{ fontSize:11, color:'var(--text-3)' }}>{byKey.get(selectedKey)?.name}</Typography>{renderPicker(selectedKey)}
+        </Box>}
+      </Box>
+
+      <Box sx={{ flex: 1, minHeight: 0, minWidth: 0, position: 'relative' }} data-testid="materials-full-viewer">
         {model ? (
-          <ModelCanvas model={model} highlight={highlight} hiddenNodes={hiddenNodes} contextLostText={tg('contextLost')}
+          <UnifiedViewer sourceKey={`${modelKey(model)}:${model.glb_sha256 ?? ''}:${model.simplified_glb_sha256 ?? ''}`} resetKey={`materialsFull:${modelKey(model)}`}
+            glbUrl={modelGlbUrl(model, canDownload)} toolbarSpec={fullAccess ? 'full' : 'simplified'} tree={assembly}
+            selectedKey={selectedKey} onSelectedKeyChange={setSelectedKey} contextLostText={tg('contextLost')}
             simplifiedText={tg('simplifiedLine')} simplifiedTip={tg('simplifiedLineTip')} noViewText={tg('noView')}
             onLoaded={({ groups: g }) => setNodes(g)} />
         ) : (
@@ -136,28 +156,14 @@ const FullPartsPanel: React.FC = () => {
         )}
       </Box>
 
-      <Box sx={{ position: 'absolute', top: 0, left: 0, right: 0, px: 1.5, py: 0.75, display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 1,
-        zIndex: 3, pointerEvents: 'none' }}>
-        <Tooltip title={tx('materialsFullHintTip')}>
-          <Typography sx={{ fontSize: 12, color: 'var(--text-2)', pointerEvents: 'auto' }}>{tx('materialsFullHint')}</Typography>
-        </Tooltip>
-        <Box sx={{ flex: 1 }} />
-        {die && <Typography sx={{ fontSize: 11, color: 'var(--text-4)' }}>{die}{config ? ` / ${config}` : ''}</Typography>}
-        {saving && <CircularProgress size={12} />}
-        {!saving && nonEm && localMode && (
-          <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>{tx('materialsFullLocal')}</Typography>)}
-      </Box>
-
       <Box data-testid="materials-full-table">
-        {tree && assembly.rows.length > 0 ? (
-          <ComponentTreeView model={assembly} defaultCollapsed={treeStartsCollapsed(vw)} style={{ top: 36, left: 8, zIndex: 4, width: 400 }} rowsMaxHeight="calc(100% - 150px)" />
-        ) : note && (
-          <Box sx={{ position: 'absolute', top: 40, left: 12, zIndex: 4 }}>{note}</Box>
+        {(!tree || !fullAccess) && note && (
+          <Box sx={{ position: 'relative', px: 1.5, py: 0.5 }}>{note}</Box>
         )}
       </Box>
 
       {tree && (
-        <Box sx={{ position: 'absolute', left: 8, bottom: 8, zIndex: 4, width: 400, maxWidth: 'calc(100% - 16px)', px: 1.25, py: 0.75, borderRadius: 1.5,
+        <Box sx={{ position: 'relative', zIndex: 4, width: 400, maxWidth: 'calc(100% - 16px)', mx: 1, mb: 1, px: 1.25, py: 0.75, borderRadius: 1.5,
           bgcolor: 'var(--overlay)', border: '1px solid var(--line)', fontSize: 12 }}>
           <Box sx={{ display: 'flex', gap: 1 }}>
             <Tooltip title={tx(partial ? 'materialsFullPartialTip' : kit ? 'materialsFullTotalKitTip' : 'materialsFullTotalTip')}>
@@ -177,17 +183,17 @@ const FullPartsPanel: React.FC = () => {
       )}
 
       <MaterialPickerPopover
-        open={!!anchor && !!picking}
+        open={!!anchor && !!picking && fullAccess && currentPayload && byKey.has(picking.key)}
         anchorEl={anchor}
         onClose={() => { setAnchor(null); setPicking(null); }}
         title={tx('materialsFullPickTitle', { part: picking ? tx(`materialsPart_${picking.key}`, { defaultValue: picking.name }) : '' }).toUpperCase()}
         groups={groups}
         current={picking?.material_id}
-        disabled={saving}
+        disabled={saving || !fullAccess || !currentPayload}
         anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
         transformOrigin={{ vertical: 'top', horizontal: 'left' }}
         onPick={(id) => {
-          if (picking) choose(picking.key, id === picking.default_material_id ? null : id);
+          if (fullAccess && currentPayload && picking && byKey.has(picking.key)) choose(picking.key, id === picking.default_material_id ? null : id);
           setAnchor(null); setPicking(null);
         }}
       />

@@ -1,4 +1,4 @@
-"""The "System" graph - how the simulations are chained (VIEW ONLY, stage 1).
+"""The "Schemas" graph - how the simulations are chained (VIEW ONLY, stage 1).
 
 Two views, one schema (``docs/SYSTEM_GRAPH.md``):
 
@@ -34,6 +34,142 @@ STATES = ("done", "running", "error", "cached", "unknown")
 
 _PKG = Path(__file__).resolve().parent                    # .../src/motor_ai_sim
 _REPO = _PKG.parents[1]
+
+
+# ---------------------------------------------------------------------------
+# Functional module ownership
+# ---------------------------------------------------------------------------
+
+MODULE_CATALOG = {
+    "M01": {
+        "name": "Geometry, materials and mesh construction",
+        "api": ["CadQueryMotor", "build_mesh_from_polygons", "validate_geometry"],
+    },
+    "M02": {
+        "name": "Electromagnetics, eddy, demagnetisation and PWM field solve",
+        "api": ["fem_field2d", "em_transient_eval", "solve_magnetostatics_p2"],
+    },
+    "M03": {
+        "name": "Thermal and cooling",
+        "api": ["solve_thermal_field", "cooling_fields", "integrate_profile"],
+    },
+    "M04": {
+        "name": "Mechanical, mass and bearings",
+        "api": ["solve_rotor_stress", "solve_contact", "compute_masses"],
+    },
+    "M05": {
+        "name": "Controller, inverter and electrical supply",
+        "api": ["solve_controller", "build_inverter_source"],
+    },
+    "M06": {
+        "name": "Catalog, passports, Configure and reports",
+        "api": ["config_doc", "propeller_s1.solve_point", "build_motor_report"],
+    },
+    "M07": {
+        "name": "CAD generator and model artifacts",
+        "api": ["cad.store.load_effective", "cad.manifest.build_manifest", "freecad_io.build_solids"],
+    },
+    "M08": {
+        "name": "Access, identity, roles, NDA, verification and grants",
+        "api": ["resolve_user", "require_admin", "may_see_config"],
+    },
+    "M09": {
+        "name": "Accounts, analytics, communication and support",
+        "api": ["comm_prefs.erase", "comm_prefs.export_for"],
+    },
+    "M10": {
+        "name": "Optimisation and campaigns",
+        "api": ["optimization.design_eval.build_params", "optimization.refine_proc.run_one"],
+    },
+    "M11": {
+        "name": "System graph, contracts and component SDK",
+        "api": [
+            "ModuleManifest", "ComponentCard", "ResultIR", "BasicCost.manifest",
+            "BasicCost.run", "build_modules_graph",
+        ],
+    },
+    "M12": {
+        "name": "Coupled workflows and run records",
+        "api": ["routes.coupled.run", "duty_results.record", "run_history.history_for"],
+    },
+    "M13": {
+        "name": "Workspace, persistence, compute and transport",
+        "api": ["workspace.BoundedStore", "solve_pool.call", "jobs"],
+    },
+    "M14": {
+        "name": "Web shell and common presentation",
+        "api": ["App", "UnifiedViewer"],
+    },
+}
+_REGISTRY_OWNERS = {
+    "geometry-2d-aerostator": "M01",
+    "geometry-3d-aerostator": "M01",
+    "geometry-2d-ring-spm": "M01",
+    "mesh-skfem": "M01",
+    "materials-library": "M01",
+    "cost-basic": "M11",  # BasicCost is implemented inside the SDK module registry.
+    "component-library": "M11",
+    "solver-em-static": "M02",
+    "solver-em-transient": "M02",
+    "solver-thermal": "M03",
+    "solver-em-thermal": "M12",
+    "solver-mechanical": "M04",
+    "controller-foc": "M05",
+    "surrogate-rf": "M10",
+    "optimization-descent": "M10",
+    "users": "M08",
+    "transmission-gearbox-single-stage": "M11",  # Registered component SDK plugin.
+}
+# S1 nodes describe the Configure passport's surrogate point-evaluation workflow.
+# They use M06 APIs/adapters; they do not represent the underlying FEM solvers.
+_WORKFLOW_OWNERS = {
+    "rpm_search": "M06",
+    "conditions": "M06",
+    "model": "M06",
+    "limits": "M06",
+    "drive": "M06",
+    "slipstream": "M06",
+    "propeller": "M06",
+    "torque_demand": "M06",
+    "housing_film": "M06",
+    "current": "M06",
+    "voltage": "M06",
+    "losses": "M06",
+    "thermal": "M06",
+    "powers": "M06",
+    "board_limit": "M06",
+    "demag_limit": "M06",
+    "chk_winding": "M06",
+    "chk_magnet": "M06",
+    "chk_demag": "M06",
+    "chk_controller": "M06",
+    "chk_battery": "M06",
+    "verdict": "M06",
+    "result": "M06",
+}
+
+
+def _registry_owner(node_id: str) -> str:
+    owner = _REGISTRY_OWNERS.get(node_id)
+    if owner is None and node_id.startswith("geometry-"):
+        owner = "M01"
+    if owner is None and node_id.startswith("transmission-"):
+        owner = "M11"
+    if owner is None:
+        raise LookupError("registry node has no MODULE_MAP owner: " + node_id)
+    return owner
+
+
+def _attach_module(node: Dict[str, Any], module_id: str) -> None:
+    if module_id not in MODULE_CATALOG:
+        raise LookupError(f"unknown functional module id: {module_id}")
+    module = MODULE_CATALOG[module_id]
+    node.update(
+        module_id=module_id,
+        module_name=module["name"],
+        public_api=list(module["api"]),
+        documentation="docs/MODULE_MAP.md",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -362,7 +498,9 @@ def build_modules_graph() -> Dict[str, Any]:
              "dependency covers, the module that outputs that contract type.",
              "A node with `roadmap: true` is a registered stub: it describes a capability that is not "
              "implemented yet."]
-    return _doc("modules", "All modules", nodes, edges, loops, notes)
+    for n in nodes:
+        _attach_module(n, _registry_owner(n["id"]))
+    return _doc("modules", "Schemas", nodes, edges, loops, notes)
 
 
 # ---------------------------------------------------------------------------
@@ -615,6 +753,10 @@ def build_propeller_s1_graph() -> Dict[str, Any]:
     ]
     for lp in loops[1:]:
         lp["edges"] = [e["id"] for e in E if e["from"]["node"] in lp["nodes"] and e["to"]["node"] in lp["nodes"]]
+    if set(n["id"] for n in N) != set(_WORKFLOW_OWNERS):
+        raise LookupError("propeller workflow module ownership map is incomplete or stale")
+    for n in N:
+        _attach_module(n, _WORKFLOW_OWNERS[n["id"]])
     doc = _doc("propeller_s1", "Propeller S1 rating", N, E, loops, [
         "Drawn from propeller_s1.solve_point and s1_rating; each node's hover gives function, file and line.",
         "The slipstream factor of a model comes from its thermal calibration (bench fit); only a model without one "

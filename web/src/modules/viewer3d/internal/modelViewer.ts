@@ -7,17 +7,17 @@
 import {
   AmbientLight, Box3, BufferGeometry, Color, DataTexture, DirectionalLight, DoubleSide, Float32BufferAttribute, Group,
   HemisphereLight, Line, LineBasicMaterial, LinearMipmapLinearFilter, LinearFilter, Material, Mesh, MeshBasicMaterial,
-  MeshStandardMaterial, Object3D, PerspectiveCamera, Plane, Raycaster, RepeatWrapping, RGBAFormat, Scene, SphereGeometry,
+  MeshStandardMaterial, Object3D, PerspectiveCamera, OrthographicCamera, Plane, Raycaster, RepeatWrapping, RGBAFormat, Scene, SphereGeometry,
   UnsignedByteType, Vector2, Vector3, WebGLRenderer,
 } from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
-  distance, explodeShift, sectionPlane, sectionRange, type Axis, type Box, type PartGroup, type Vec3,
-} from '../../lib/model3d';
+  distance, explodeShift, sectionPlane, sectionRange, type Axis, type Box, type PartGroup, type Vec3, type StandardView, standardViewDirection,
+} from './model3d';
 import {
   buildThreadNormalMap, normalScaleFor, parseThread, resolveAxis, threadLabel, threadUVs, type ThreadInfo,
-} from '../../lib/threadTexture';
+} from './threadTexture';
 
 const THREAD_MAP_SIZE = 128;
 
@@ -37,10 +37,11 @@ export interface ViewerState {
 export class ModelViewer {
   readonly renderer: WebGLRenderer;
   readonly scene = new Scene();
-  readonly camera: PerspectiveCamera;
-  readonly controls: OrbitControls;
+  camera: PerspectiveCamera | OrthographicCamera;
+  controls: TrackballControls;
+  projection: 'perspective' | 'orthographic' = 'orthographic';
   private root: Object3D | null = null;
-  private groups: Array<{ node: Object3D; part: PartGroup }> = [];
+  private groups: Array<{ node: Object3D; part: PartGroup; base: Vector3 }> = [];
   private plane = new Plane(new Vector3(0, 0, -1), 0);
   private ray = new Raycaster();
   private marks = new Group();
@@ -49,14 +50,19 @@ export class ModelViewer {
   private dirty = true;
   private ro: ResizeObserver;
   private disposed = false;
+  private loadToken = 0;
   private threadMap: DataTexture | null = null;       // ONE shared normal map for every thread of the model
   private threadMeshes: Array<{ mesh: Mesh; info: ThreadInfo }> = [];
   private hints = false;
   private hoverText = '';
+  private measurementSceneSignature = '';
   private down = new Vector2();
   box: Box = { min: [-1, -1, -1], max: [1, 1, 1] };
   motorLength = 12;
   onMeasure: (mm: number | null) => void = () => {};
+  onCameraDirection: (direction: Vec3) => void = () => {};
+  onCameraUp: (up: Vec3) => void = () => {};
+  onSelect: (name: string | null) => void = () => {};
   onContextLost: () => void = () => {};
 
   private host: HTMLElement;
@@ -68,11 +74,9 @@ export class ModelViewer {
     this.renderer.localClippingEnabled = true;
     host.appendChild(this.renderer.domElement);
     this.renderer.domElement.style.display = 'block';
-    this.camera = new PerspectiveCamera(35, 1, 0.1, 5000);
+    this.camera = new OrthographicCamera(-100, 100, 100, -100, 0.1, 5000);
     this.camera.up.set(0, 0, 1);
-    this.controls = new OrbitControls(this.camera, this.renderer.domElement);
-    this.controls.enableDamping = false;
-    this.controls.addEventListener('change', () => this.invalidate());
+    this.controls = this.makeControls(this.camera);
     this.scene.add(new HemisphereLight(0xffffff, 0x445066, 1.15), new AmbientLight(0xffffff, 0.35));
     const key = new DirectionalLight(0xffffff, 1.6); key.position.set(60, -80, 90);
     const fill = new DirectionalLight(0xffffff, 0.6); fill.position.set(-70, 60, -40);
@@ -93,31 +97,58 @@ export class ModelViewer {
 
   /** Parse a GLB and show it.  Returns the part groups in file order. */
   async load(buffer: ArrayBuffer): Promise<{ groups: PartGroup[]; box: Box }> {
-    const gltf = await new GLTFLoader().parseAsync(buffer, '');
+    const token = ++this.loadToken;
     this.clear();
-    this.root = gltf.scene;
-    this.scene.add(gltf.scene);
+    const gltf = await new GLTFLoader().parseAsync(buffer, '');
+    if (token !== this.loadToken || this.disposed) {
+      gltf.scene.traverse((o) => { const m = o as Mesh; if (m.isMesh) { m.geometry.dispose(); for (const mt of Array.isArray(m.material) ? m.material : [m.material]) mt.dispose(); } });
+      return { groups: [], box: this.box };
+    }
     const model = gltf.scene.getObjectByName('Model') ?? gltf.scene;
+    const groups: PartGroup[] = [];
     for (const node of model.children) {
       const ex = (node.userData ?? {}) as { family?: string; explode?: number };
-      this.groups.push({ node, part: { name: node.name, family: ex.family ?? node.name, explode: Number(ex.explode ?? 0),
-        children: node.children.map((c) => c.name), colour: this.colourOf(node) } });
+      groups.push({ name: node.name, family: ex.family ?? node.name, explode: Number(ex.explode ?? 0),
+        children: node.children.map((c) => c.name), colour: this.colourOf(node) });
     }
-    this.applyThreads(this.root);
-    this.root.traverse((o) => {
+    this.setObject(gltf.scene, groups, model);
+    return { groups: this.groups.map((g) => g.part), box: this.box };
+  }
+
+  /** Install locally-built active geometry into this same scene engine. */
+  setObject(root: Object3D, parts: readonly PartGroup[], groupRoot: Object3D = root): void {
+    this.loadToken++;
+    this.clear();
+    const ownedRoot = root.clone(true);
+    ownedRoot.traverse((o) => {
       const m = o as Mesh;
-      if (m.isMesh) {
-        const mats = Array.isArray(m.material) ? m.material : [m.material];
-        for (const mt of mats) { (mt as Material).side = DoubleSide; (mt as Material).clippingPlanes = [this.plane]; }
+      if (!m.isMesh) return;
+      m.geometry = m.geometry.clone();
+      m.material = Array.isArray(m.material) ? m.material.map((mt) => mt.clone()) : m.material.clone();
+    });
+    this.root = ownedRoot;
+    this.scene.add(ownedRoot);
+    const index = new Map<string, Object3D>();
+    groupRoot = ownedRoot.getObjectByName(groupRoot.name) ?? ownedRoot;
+    for (const child of groupRoot.children) index.set(child.name, child);
+    this.groups = parts.flatMap((part) => {
+      const node = index.get(part.name);
+      return node ? [{ node, part, base: node.position.clone() }] : [];
+    });
+    this.applyThreads(ownedRoot);
+    ownedRoot.traverse((o) => {
+      const m = o as Mesh;
+      if (m.isMesh) for (const mt of Array.isArray(m.material) ? m.material : [m.material]) {
+        (mt as Material).side = DoubleSide;
+        (mt as Material).clippingPlanes = [this.plane];
       }
     });
-    const b = new Box3().setFromObject(this.root);
+    const b = new Box3().setFromObject(ownedRoot);
     this.box = { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
-    const core = this.groups.find((g) => g.part.name === 'Core' || g.part.name === 'Housing');
+    const core = this.groups.find((g) => g.part.name === 'Core' || g.part.name === 'Housing' || g.part.name === 'stator_core');
     const cb = core ? new Box3().setFromObject(core.node) : b;
     this.motorLength = Math.max(1, cb.max.z - cb.min.z);
-    this.fit();
-    return { groups: this.groups.map((g) => g.part), box: this.box };
+    this.home();
   }
 
   /** The #rrggbb colour of the first mesh of a node (its tree swatch), or undefined. */
@@ -148,6 +179,57 @@ export class ModelViewer {
     this.threadMeshes = [];
     this.clearMarks();
   }
+
+  // Trackball, not orbit (owner 2026-10-16): the model turns freely in every direction, over the poles too.
+  // Trackball moves in update(), so a frame loop runs only while the pointer drags (rendering stays on demand).
+  private makeControls(camera: PerspectiveCamera | OrthographicCamera): TrackballControls {
+    const c = new TrackballControls(camera, this.renderer.domElement);
+    c.rotateSpeed = 3.0;
+    c.zoomSpeed = 1.2;
+    c.panSpeed = 0.8;
+    c.staticMoving = true;
+    c.addEventListener('change', () => { this.invalidate(); this.reportCameraDirection(); });
+    let raf = 0;
+    const loop = () => { c.update(); raf = requestAnimationFrame(loop); };
+    c.addEventListener('start', () => { if (!raf) loop(); });
+    c.addEventListener('end', () => { if (raf) cancelAnimationFrame(raf); raf = 0; c.update(); });
+    return c;
+  }
+
+  private reportCameraDirection(): void {
+    this.camera.updateMatrixWorld();
+    const d = this.camera.position.clone().sub(this.controls.target).normalize();
+    this.onCameraDirection([d.x, d.y, d.z]);
+    const e = this.camera.matrixWorld.elements;
+    this.onCameraUp([e[4], e[5], e[6]]);
+  }
+
+  setProjection(mode: 'perspective' | 'orthographic'): void {
+    if (mode === this.projection) return;
+    const position = this.camera.position.clone();
+    const target = this.controls.target.clone();
+    this.controls.dispose();
+    const aspect = Math.max(0.01, this.host.clientWidth / Math.max(1, this.host.clientHeight));
+    this.camera = mode === 'perspective'
+      ? new PerspectiveCamera(35, aspect, 0.1, 5000)
+      : new OrthographicCamera(-100 * aspect, 100 * aspect, 100, -100, 0.1, 5000);
+    this.camera.up.set(0, 0, 1);
+    this.camera.position.copy(position);
+    this.controls = this.makeControls(this.camera);
+    this.controls.target.copy(target);
+    this.projection = mode;
+    this.fit();
+  }
+
+  clearModel(): void {
+    this.loadToken++;
+    this.clear();
+    this.box = { min: [-1, -1, -1], max: [1, 1, 1] };
+    this.motorLength = 12;
+    this.invalidate();
+  }
+
+  cancelPendingLoad(): void { this.loadToken++; }
 
   // ---------------------------------------------------------------- threads
 
@@ -209,10 +291,16 @@ export class ModelViewer {
   // ---------------------------------------------------------------- state
 
   apply(s: ViewerState): void {
+    const signature = JSON.stringify([ [...s.hidden].sort(), [...(s.hiddenNodes ?? [])].sort(), s.explode,
+      s.section.on ? [s.section.axis, s.section.position] : null ]);
+    if (this.measurementSceneSignature && signature !== this.measurementSceneSignature) this.clearMarks();
+    this.measurementSceneSignature = signature;
     for (const g of this.groups) {
       g.node.visible = !s.hidden.has(g.part.family) && !s.hiddenNodes?.has(g.part.name);
       for (const c of g.node.children) c.visible = !s.hiddenNodes?.has(c.name);          // one instance (Coil 3, Screw 2 ...)
-      g.node.position.z = explodeShift(g.part.explode, this.motorLength, s.explode);
+      const shift = explodeShift(g.part.explode, this.motorLength, s.explode);
+      if (g.part.explodeDirection) g.node.position.copy(g.base).add(new Vector3(...g.part.explodeDirection).multiplyScalar(shift));
+      else g.node.position.copy(g.base).add(new Vector3(0, 0, shift));
     }
     this.applyHighlight(s.highlight);
     const p = sectionPlane(s.section.axis, s.section.position);
@@ -260,22 +348,62 @@ export class ModelViewer {
   sectionRange(axis: Axis): { min: number; max: number } { return sectionRange(this.box, axis); }
 
   fit(): void {
-    const c = new Vector3((this.box.min[0] + this.box.max[0]) / 2, (this.box.min[1] + this.box.max[1]) / 2, (this.box.min[2] + this.box.max[2]) / 2);
-    const r = Math.max(1, Math.hypot(this.box.max[0] - this.box.min[0], this.box.max[1] - this.box.min[1], this.box.max[2] - this.box.min[2]) / 2);
-    const d = r / Math.sin((this.camera.fov * Math.PI) / 360);
-    this.camera.position.copy(c).add(new Vector3(0.75, -1, 0.7).normalize().multiplyScalar(d));
+    const visible = new Box3();
+    this.root?.updateMatrixWorld(true);
+    this.root?.traverse((o) => {
+      const m = o as Mesh;
+      if (!m.isMesh) return;
+      for (let n: Object3D | null = m; n; n = n.parent) if (!n.visible) return;
+      visible.expandByObject(m);
+    });
+    const b = visible.isEmpty() ? new Box3(new Vector3(...this.box.min), new Vector3(...this.box.max)) : visible;
+    const c = b.getCenter(new Vector3());
+    const halfW = Math.max(1, (b.max.x - b.min.x) / 2);
+    const halfH = Math.max(1, (b.max.y - b.min.y) / 2);
+    const halfD = Math.max(1, (b.max.z - b.min.z) / 2);
+    const aspect = Math.max(0.01, this.host.clientWidth / Math.max(1, this.host.clientHeight));
+    const r = Math.max(1, Math.hypot(halfW, halfH, halfD));
+    const dir = this.camera.position.clone().sub(this.controls.target);
+    if (dir.lengthSq() < 1e-8) dir.set(0.75, -1, 0.7);
+    dir.normalize();
+    const halfFovV = Math.atan(Math.tan((35 * Math.PI / 180) / 2) * Math.min(1, aspect));
+    const d = this.camera instanceof PerspectiveCamera ? r / Math.sin(halfFovV) * 1.08 : r * Math.max(1, 1 / aspect) * 1.08;
+    this.camera.position.copy(c).addScaledVector(dir, d);
     this.camera.near = d / 200;
     this.camera.far = d * 20;
+    this.camera.zoom = 1;
+    if (this.camera instanceof OrthographicCamera) {
+      const h = r * Math.max(1, 1 / aspect) * 1.08;
+      this.camera.left = -h * aspect; this.camera.right = h * aspect;
+      this.camera.top = h; this.camera.bottom = -h;
+    }
     this.camera.updateProjectionMatrix();
     this.controls.target.copy(c);
     this.controls.update();
     this.invalidate();
+    this.reportCameraDirection();
   }
+
+  /** Animate to a standard face or edge direction around the current target. */
+  view(view: StandardView): void {
+    const direction = new Vector3(...standardViewDirection(view));
+    if (Math.abs(direction.z) > 0.98) direction.x = 1e-7;
+    const center = this.controls.target.clone();
+    const current = Math.max(1, this.camera.position.distanceTo(center));
+    this.camera.position.copy(center).addScaledVector(direction, current);
+    this.camera.up.set(0, 0, 1);
+    this.camera.lookAt(center);
+    this.controls.update();
+    this.invalidate();
+    this.reportCameraDirection();
+  }
+
+  home(): void { this.view('top'); this.fit(); }
 
   // ---------------------------------------------------------------- measure
 
   private onPointerUp(e: PointerEvent): void {
-    if (!this.measuring || !this.root || Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 4) return;   // a drag is an orbit
+    if (!this.root || Math.hypot(e.clientX - this.down.x, e.clientY - this.down.y) > 4) return;   // a drag is an orbit
     const r = this.renderer.domElement.getBoundingClientRect();
     this.ray.setFromCamera(new Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1), this.camera);
     const hits = this.ray.intersectObjects(this.root.children, true).filter((h) => {
@@ -283,7 +411,13 @@ export class ModelViewer {
       while (o) { if (!o.visible) return false; o = o.parent; }
       return this.plane.distanceToPoint(h.point) >= 0 || this.plane.constant > 1e8;      // not on the clipped-away half
     });
-    if (!hits.length) return;
+    if (!hits.length) { if (!this.measuring) this.onSelect(null); return; }
+    if (!this.measuring) {
+      let node: Object3D | null = hits[0].object;
+      while (node && !this.groups.some((g) => g.node === node)) node = node.parent;
+      this.onSelect(node?.name ?? null);
+      return;
+    }
     if (this.picks.length >= 2) this.clearMarks();
     this.picks.push(hits[0].point.clone());
     const rad = Math.max(0.15, this.motorLength / 90);
@@ -323,9 +457,15 @@ export class ModelViewer {
     const w = Math.max(1, this.host.clientWidth);
     const h = Math.max(1, this.host.clientHeight);
     this.renderer.setSize(w, h, false);
+    this.controls?.handleResize();
     this.renderer.domElement.style.width = '100%';
     this.renderer.domElement.style.height = '100%';
-    this.camera.aspect = w / h;
+    if (this.camera instanceof PerspectiveCamera) this.camera.aspect = w / h;
+    else {
+      const halfH = Math.max(1, Math.abs(this.camera.top - this.camera.bottom) / 2);
+      this.camera.left = -halfH * (w / h); this.camera.right = halfH * (w / h);
+      this.camera.top = halfH; this.camera.bottom = -halfH;
+    }
     this.camera.updateProjectionMatrix();
     this.invalidate();
   }

@@ -34,14 +34,9 @@
  *     Both default OFF and are remembered in localStorage (`fieldview.max`,
  *     `fieldview.mesh`) — a preference, not a per-output state.
  *
- *   • ONE **part tree**, added 2026-09-06: "we also need to add the names of
- *     the rotor and stator parts to the output, so you can look at each part
- *     separately and see only its deformations and stresses" — and then, seeing the
- *     3-D tab's tree next to the dropdown that first answered it: "use the
- *     same tree we already have, so everything is universal".
- *     So it IS that tree — `viewer3d/ComponentTreeView`, the same rows, eyes,
- *     colour dots, isolate and Show All — driven here by a LOCAL model built
- *     from the parts of the picture instead of the global 3-D visibility store.
+ *   • ONE **part tree**, using the public viewer3d PartTree with local field
+ *     rows and visibility state. The minimal shared tree has names, swatches,
+ *     visibility eyes, and expansion arrows.
  *     Whatever is left visible is drawn against ITS OWN colour range: scale,
  *     colour bar, header max/min, cursor readout, Max markers, mesh overlay and
  *     the band iso-lines are all recomputed over it.  That re-scaling IS the
@@ -78,9 +73,7 @@ import type {
 // (user 2026-09-06: "use the same tree we already have, so everything is
 // universal").  There it is bound to the global visibility
 // store; here to the parts of the picture below.
-import ComponentTreeView, {
-  type TreeModel, type TreeRow,
-} from '../viewer3d/ComponentTreeView';
+import { PartTree, type PartTreeProps } from '../../modules/viewer3d';
 
 /** Viewer preference, remembered across sessions.  Both toggles are OFF by
  *  default: the plain picture is what the user asked to be able to come back to
@@ -713,42 +706,27 @@ const FieldViewer: React.FC<FieldViewerProps> = ({
   // do, a mechanical part id does not — and the group toggle is what matters
   // anyway, so a machine with more items than the cap keeps the group row alone
   // rather than growing a hundred-row tree (user 2026-09-06: keep it simple).
-  const treeModel: TreeModel = useMemo(() => {
-    const rows: TreeRow[] = allParts.map(p => {
+  const treeNodes: PartTreeProps['nodes'] = useMemo(() => {
+    return allParts.map(p => {
       const here = present.has(p.key);
-      const shown = here && !hidden.has(p.key);
       const kids = (here && p.tags.length > 1 && p.tags.length <= PER_ITEM_ROWS)
         ? p.tags.map((t, i) => ({
             key: `${p.key}#${t}`,
             label: `${cap(p.label)} ${i + 1}`,
             colour: p.colour,
-            visible: shown && !hiddenTags.has(t),
+            present: true,
           }))
         : undefined;
-      return { key: p.key, label: cap(p.label), colour: p.colour,
-               visible: shown, present: here, group: kids };
+      return { key: p.key, label: cap(p.label), colour: p.colour, present: here, ...(kids ? { children:kids } : {}) };
     });
-    return {
-      rows,
-      allVisible: !anyHidden,
-      onToggle: (key) => {
-        const h = key.lastIndexOf('#');
-        if (h > 0) {
-          const tag = Number(key.slice(h + 1));
-          setHiddenTags(s => { const n = new Set(s); if (!n.delete(tag)) n.add(tag); return n; });
-          return;
-        }
-        setHidden(s => { const n = new Set(s); if (!n.delete(key)) n.add(key); return n; });
-      },
-      // Isolate means what it means on the 3-D tab: this part, nothing else —
-      // and all of its items back, or "isolate the magnets" could show none.
-      onIsolate: (key) => {
-        setHidden(new Set([...present].filter(k => k !== key)));
-        setHiddenTags(new Set());
-      },
-      onShowAll: () => { setHidden(new Set()); setHiddenTags(new Set()); },
-    };
-  }, [allParts, present, hidden, hiddenTags, anyHidden]);
+  }, [allParts, present]);
+  const treeHidden = useMemo(() => new Set([...hidden, ...allParts.flatMap(p => p.tags.filter(t => hiddenTags.has(t)).map(t => `${p.key}#${t}`)),
+    ...allParts.filter(p => !present.has(p.key)).map(p => p.key)]), [hidden, hiddenTags, allParts, present]);
+  const toggleTree = React.useCallback((key: string) => {
+    const h = key.lastIndexOf('#');
+    if (h > 0) { const tag = Number(key.slice(h + 1)); setHiddenTags(s => { const n = new Set(s); if (!n.delete(tag)) n.add(tag); return n; }); return; }
+    setHidden(s => { const n = new Set(s); if (!n.delete(key)) n.add(key); return n; });
+  }, []);
 
   const requestFit = React.useCallback(() => setFitToken(t => t + 1), []);
 
@@ -930,8 +908,10 @@ const FieldViewer: React.FC<FieldViewerProps> = ({
               the same tree").  Only when there is a choice to make: one
               part is no tree.  Above the marker layer, under the busy veil. */}
           {allParts.length > 1 && (
-            <ComponentTreeView
-              model={treeModel}
+            <PartTree
+              nodes={treeNodes}
+              hiddenKeys={treeHidden}
+              onToggle={toggleTree}
               style={{ top: 8, left: 8, zIndex: 4, width: 176 }}
               rowsMaxHeight={Math.max(120, height - 70)}
             />

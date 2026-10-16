@@ -254,6 +254,22 @@ def _private_config_names(die_row: dict) -> list:
             if _ma.config_visibility(name, str(c)) == _ma.CFG_PRIVATE]
 
 
+def _config_access_rows(die_row: dict, grants: dict) -> list:
+    """``[{name, status, clients}]`` for every configuration of the die: the
+    stored status (``inherit`` | ``private`` | ``public``), reported as
+    ``selected`` when it is private and at least one account holds its grant.
+    ``clients`` = the accounts holding the ``"<die>/<config>"`` grant."""
+    name = str(die_row.get("name"))
+    out = []
+    for c in die_row.get("config_names") or []:
+        status = _MA.config_visibility(name, str(c))
+        clients = list(grants.get(_MA.config_grant_key(name, str(c))) or [])
+        if status == _MA.CFG_PRIVATE and clients:
+            status = _MA.CFG_SELECTED
+        out.append({"name": str(c), "status": status, "clients": clients})
+    return out
+
+
 @router.get("/users/{email}/motors")
 def get_user_motors(email: str, _admin: dict = Depends(require_admin)):
     """This account's grants: `{"all": bool, "dies": [names]}`."""
@@ -405,12 +421,15 @@ def list_dies_access(_admin: dict = Depends(require_admin)):
         if mv.get("status") in _DP.ACTIVE and mv.get("at", "") >= active.get(mv.get("die"), {}).get("at", ""):
             active[mv.get("die")] = mv
     out = []
+    from motor_ai_sim import users as _U
+    grants = _U.config_grant_index()
     for d in catalog_dies():
         name = d.get("name")
         a = access.get(name) or {"visibility": _MA.VIS_PRIVATE, "clients": []}
         s = scan.get(name)
         out.append({**d, "visibility": a["visibility"], "clients": a["clients"],
                     "private_configs": _private_config_names(d),
+                    "config_access": _config_access_rows(d, grants),
                     "used_by": _used_by_count(name),
                     "source": (s["source"] if s and s["source"] in _DS.SOURCES
                                else _DS.SOURCE_PRIVATE),
@@ -430,6 +449,7 @@ def list_dies_access(_admin: dict = Depends(require_admin)):
         s = scan.get(name) or {}
         out.append({"name": name, "stator_diameter": None, "configs": 0, "duties": 0,
                     "visibility": _MA.VIS_PRIVATE, "clients": [], "used_by": 0,
+                    "config_access": [],
                     "source": _DS.SOURCE_PRIVATE, "source_movable": False,
                     "source_clash": bool(s.get("clash")), "source_error": s.get("error"),
                     "source_pending": active.get(name)})
@@ -598,45 +618,89 @@ def set_die_access(die: str, body: dict = Body(default={}),
     return {"ok": True, "die": die, **result}
 
 
-# ── Configuration-level visibility (owner 2026-10-15) ───────────────────────
-# "The die stays ONE for all; we hide the configuration."  `visibility: private`
-# in the configuration's own yaml (motor_access.may_see_config); an account opens
-# a private configuration with a CONFIG grant (PUT /users/{email}/motors
-# `configs`).  Admins always see everything.
+# ── Configuration-level access (owner 2026-10-15, two levels 2026-10-16) ─────
+# Each configuration has its own status beside its die's: inherit (follows the
+# die), private, public, or selected clients.  The status is the configuration
+# yaml's single ``visibility:`` line (motor_access.config_visible); "selected"
+# is private + the per-account CONFIG grants (users ``motors.configs``) - one
+# store, also edited from Admin · Users · Motors.  Admins always see everything.
 
 @router.get("/dies/{die}/configs")
 def get_config_access(die: str, _admin: dict = Depends(require_admin)):
-    """Every configuration of the die with its stored visibility."""
+    """Every configuration of the die with its stored visibility, in the older
+    two-value shape (``private`` | ``public`` = anything not private); the full
+    status rides on ``GET /dies`` (``config_access``)."""
     from motor_ai_sim.routes.family import die_config_names, die_names
     if die not in die_names():
         raise HTTPException(status_code=404, detail=f"die '{die}' not found")
     return {"die": die, "configs": [
-        {"name": c, "visibility": _MA.config_visibility(die, c)}
+        {"name": c, "visibility": (_MA.CFG_PRIVATE if _MA.config_visibility(die, c) == _MA.CFG_PRIVATE
+                                   else _MA.CFG_PUBLIC)}
         for c in die_config_names(die)]}
 
 
 @router.put("/dies/{die}/configs/{cfg}/access")
 def set_config_access(die: str, cfg: str, body: dict = Body(default={}),
                       admin_user: dict = Depends(require_admin)):
-    """Make one configuration ``private`` (hidden from everyone but admins and
-    accounts holding its config grant) or ``public`` again.  Edits the single
-    ``visibility:`` line of the configuration file; nothing else in it moves."""
+    """Set one configuration's status: ``inherit`` (follows the die), ``private``
+    (admins only - every account's grant for it is removed), ``public`` (every
+    signed-in account, even when the die is private) or ``selected`` (private +
+    exactly the listed accounts hold its grant).  Edits the single
+    ``visibility:`` line of the configuration file; nothing else in it moves.
+
+    The older body ``{"visibility": "private"|"public"}`` is still accepted:
+    its ``public`` meant "no line", which is ``inherit`` now."""
     from motor_ai_sim.routes.family import die_config_names, die_names
-    vis = str((body or {}).get("visibility") or "").strip().lower()
-    if vis not in (_MA.CFG_PRIVATE, _MA.CFG_PUBLIC):
+    from motor_ai_sim import users as _U
+    body = body or {}
+    if "status" in body:
+        status = str(body.get("status") or "").strip().lower()
+    else:
+        old = str(body.get("visibility") or "").strip().lower()
+        status = {_MA.CFG_PRIVATE: _MA.CFG_PRIVATE, _MA.CFG_PUBLIC: _MA.CFG_INHERIT}.get(old, old)
+    allowed = (*_MA.CFG_STATUSES, _MA.CFG_SELECTED)
+    if status not in allowed:
         raise HTTPException(status_code=422,
-                            detail="'visibility' must be 'private' or 'public'")
+                            detail=f"'status' must be one of {list(allowed)}")
+    clients = body.get("clients")
+    if clients is not None and not isinstance(clients, (list, tuple)):
+        raise HTTPException(status_code=422, detail="'clients' must be a list of e-mails")
+    clients = sorted({str(c).strip().lower() for c in (clients or []) if str(c).strip()})
+    if status == _MA.CFG_SELECTED:
+        if not clients:
+            raise HTTPException(status_code=422,
+                                detail="'selected' needs at least one account in 'clients'")
+        unknown = sorted(c for c in clients if _U.get_user(c) is None)
+        if unknown:
+            raise HTTPException(status_code=422,
+                                detail=f"unknown account(s): {', '.join(unknown)}")
     if die not in die_names() or cfg not in die_config_names(die):
         raise HTTPException(status_code=404, detail=f"configuration '{die}/{cfg}' not found")
     _AA.record(_AA.actor_of(admin_user), "config.access", f"{die}/{cfg}", subject="",
-               details={"visibility": vis})
-    _MA.set_config_visibility(die, cfg, vis)
+               details={"status": status,
+                        **({"clients": len(clients)} if status == _MA.CFG_SELECTED else {})})
+    stored = _MA.CFG_PRIVATE if status == _MA.CFG_SELECTED else status
+    _MA.set_config_visibility(die, cfg, stored)
+    key = _MA.config_grant_key(die, cfg)
+    if status == _MA.CFG_SELECTED:
+        try:
+            holders = _U.set_config_grant_holders(key, clients)
+        except KeyError as exc:                   # an account deleted since the check above
+            raise HTTPException(status_code=422, detail=f"unknown account(s): {exc.args[0]}")
+    elif status == _MA.CFG_PRIVATE:
+        holders = _U.set_config_grant_holders(key, [])
+    else:
+        # inherit / public: grants are left as they are (they no longer matter
+        # for visibility, and an account's own grant list is not this route's)
+        holders = _U.config_grant_holders(key)
     from motor_ai_sim import sessions as S
     S.record_event("config_access_change",
                    email=str(admin_user.get("id") or admin_user.get("email") or ""),
-                   reason=f"{die}/{cfg} -> {vis}",
+                   reason=f"{die}/{cfg} -> {status}"
+                          + (f" ({len(clients)} client(s))" if status == _MA.CFG_SELECTED else ""),
                    path=f"/api/admin/dies/{die}/configs/{cfg}/access")
-    return {"ok": True, "die": die, "config": cfg, "visibility": vis}
+    return {"ok": True, "die": die, "config": cfg, "status": status,
+            "visibility": stored, "clients": holders}
 
 
 # ── Invites ───────────────────────────────────────────────────────────────────

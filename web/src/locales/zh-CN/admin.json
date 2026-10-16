@@ -33,15 +33,31 @@
     "cancel": "取消",
     "save": "保存",
     "colDefault": "默认电机",
-    "configsTitle": "配置",
-    "configsTip": "私有配置对所有人隐藏，只有管理员和被授权的账号（用户、电机）可见。冲片及其他配置保持不变。",
-    "configPrivate": "私有",
-    "configPrivateTip": "隐藏此配置：除管理员和被点名授权的账号外，其他人无法在列表中看到、计数、打开、下载或搜索到它。",
     "configToggleFailed": "无法修改 {config}：{reason}",
     "grantTitle": "私有配置",
-    "grantTip": "该账号已可见冲片中的私有配置。勾选后账号即可打开；管理员始终可见全部。",
-    "grantNowPublic": "现已公开",
-    "grantUnknown": "未找到"
+    "grantTip": "目录中的私有配置。勾选后该账号即可打开它，即使未被授权其冲片；管理员始终可见全部。",
+    "grantNowPublic": "已不再私有",
+    "grantUnknown": "未找到",
+    "accessTip": "两个层级：每个冲片，以及它的每个配置（展开该行）。设为“随电机”的配置跟随冲片；私有、公开或指定客户会覆盖冲片的设置，因此私有冲片也可以只开放一个配置。",
+    "showConfigs": "显示配置",
+    "hideConfigs": "隐藏配置",
+    "cfgStatus": {
+      "inherit": "随电机",
+      "private": "私有",
+      "public": "公开",
+      "selected": "指定客户"
+    },
+    "cfgNote": {
+      "inherit": "跟随冲片",
+      "private": "仅管理员",
+      "public": "所有已登录用户，即使冲片为私有",
+      "selected": "仅指定账号，只读"
+    },
+    "cfgClients": "{count} 个客户",
+    "cfgAccessTitle": "访问权限",
+    "clientsLabel": "客户（电子邮件）",
+    "dieOpenChip": "私有 · {count} 个开放",
+    "dieOpenTip": "冲片为私有；以下配置单独开放：{list}"
   },
   "analytics": {
     "title": "访问统计",

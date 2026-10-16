@@ -546,7 +546,7 @@ def move_blockers(die_dir: Path, target: str) -> List[Dict[str, str]]:
     for f in sorted(die_dir.glob("*.yaml")):
         if f.name != "die.yaml" and file_visibility(f) == CFG_PRIVATE:
             out.append({"kind": "private_configuration", "name": f.stem,
-                        "reason": "the configuration is marked private - make it public "
+                        "reason": "the configuration is marked private - set it to As motor or Public "
                                   "(Admin, Motors access) or keep the die private"})
     try:
         mats, devs = referenced_materials(die_dir), referenced_devices(die_dir)

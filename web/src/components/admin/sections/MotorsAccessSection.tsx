@@ -1,20 +1,27 @@
 /**
- * Admin · Motors access — per-die visibility: private (default), public
- * (every signed-in account, including MCP agents of any user), or selected
- * clients (named accounts, read-only). One compact table; click a row for
- * the three-way choice + client picker in a drawer.
+ * Admin · Motors access — access on two levels. Per die: private (default),
+ * public (every signed-in account, including MCP agents of any user), or
+ * selected clients (named accounts, read-only). Per configuration (expand a die
+ * row): As motor (follows the die), private, public, or selected clients — so a
+ * private die can still open one configuration. One compact table; click a die
+ * or configuration row for its choice + client picker in a drawer.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Box, Typography, Paper, Chip, Button, CircularProgress, Table, TableBody,
   TableCell, TableHead, TableRow, TextField, Drawer, RadioGroup, FormControlLabel,
   Radio, Checkbox, Divider, Autocomplete, Dialog, DialogTitle, DialogContent,
-  DialogActions, Switch,
+  DialogActions, IconButton, Tooltip,
 } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import RefreshIcon from '@mui/icons-material/Refresh';
+import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import HelpTip from '../../common/HelpTip';
-import { isPrivateConfig, privateCount, withConfigVisibility, type CfgVisibility } from '../configVisibility';
+import {
+  canSaveConfig, configAccessOf, configPutBody, openConfigs, withConfigAccess,
+  type CfgStatus, type ConfigAccess,
+} from '../configVisibility';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
@@ -22,6 +29,8 @@ const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)',
 type Visibility = 'private' | 'public' | 'selected';
 const VIS_LABEL: Record<Visibility, string> = { private: 'Private', public: 'Public', selected: 'Selected clients' };
 const VIS_COLOR: Record<Visibility, string> = { private: 'var(--text-3)', public: '#4ade80', selected: '#60a5fa' };
+const CFG_COLOR: Record<CfgStatus, string> = { inherit: 'var(--text-4)', private: 'var(--text-1)', public: '#4ade80', selected: '#60a5fa' };
+const CHIP_SX = { height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)' } as const;
 
 type Source = 'open' | 'private';
 const SOURCE_HELP = 'Open = public GitHub repository (Apache-2.0): publishing pushes there at once and is public immediately. Private = our private repository. Only MOTRES reference data; customer dies never go to git.';
@@ -33,8 +42,8 @@ interface PendingMove {
 }
 interface DieRow {
   name: string; stator_diameter: number | null; configs: number; duties: number;
-  /** configuration names of the die, and the ones marked `visibility: private` (hidden from everybody but admins and config grants) */
-  config_names?: string[]; private_configs?: string[];
+  /** configuration names of the die, the private ones, and each configuration's own access */
+  config_names?: string[]; private_configs?: string[]; config_access?: ConfigAccess[];
   visibility: Visibility; clients: string[]; used_by: number;
   source?: Source; source_movable?: boolean; source_clash?: boolean; source_error?: string | null;
   source_pending?: PendingMove | null;
@@ -66,6 +75,7 @@ const statusLabel = (d: DieRow) =>
   d.visibility === 'public' ? 'Public' : d.visibility === 'selected' ? `${d.clients.length} client${d.clients.length === 1 ? '' : 's'}` : 'Private';
 
 const MotorsAccessSection: React.FC = () => {
+  const { t } = useTranslation('admin');
   const [dies, setDies] = useState<DieRow[]>([]);
   const [users, setUsers] = useState<RegistryUser[]>([]);
   const [loading, setLoading] = useState(true);
@@ -73,6 +83,8 @@ const MotorsAccessSection: React.FC = () => {
   const [search, setSearch] = useState('');
   const [selChecked, setSelChecked] = useState<Set<string>>(new Set());
   const [drawerFor, setDrawerFor] = useState<DieRow | null>(null);
+  const [cfgDrawer, setCfgDrawer] = useState<{ die: string; cfg: ConfigAccess } | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -107,20 +119,21 @@ const MotorsAccessSection: React.FC = () => {
     } catch (e) { setNotice(`✗ ${e instanceof Error ? e.message : String(e)}`); } finally { setBusy(false); }
   };
 
-  /** Mark ONE configuration private / public (PUT .../configs/{cfg}/access); the die and its other configurations are untouched. */
-  const setConfigVisibility = async (die: string, config: string, visibility: CfgVisibility): Promise<string | null> => {
+  /** Set ONE configuration's access (PUT .../configs/{cfg}/access); the die and its other configurations are untouched. */
+  const setConfigAccess = async (die: string, config: string, status: CfgStatus, clients: string[]): Promise<string | null> => {
+    setBusy(true);
     try {
       const r = await fetch(`${API}/api/admin/dies/${encodeURIComponent(die)}/configs/${encodeURIComponent(config)}/access`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ visibility }),
+        body: JSON.stringify(configPutBody(status, clients)),
       });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) return detailMsg(j, r.status);
-      setDies((ds) => withConfigVisibility(ds, die, config, visibility));
-      setDrawerFor((cur) => (cur && cur.name === die ? withConfigVisibility([cur], die, config, visibility)[0] : cur));
-      setNotice(`✓ ${die} / ${config}: ${visibility === 'private' ? 'Private' : 'Public'}`);
+      const holders: string[] = Array.isArray(j.clients) ? j.clients : [];
+      setDies((ds) => withConfigAccess(ds, die, config, status, holders));
+      setNotice(`✓ ${die} / ${config}: ${t(`motors.cfgStatus.${status}`)}`);
       return null;
-    } catch (e) { return e instanceof Error ? e.message : String(e); }
+    } catch (e) { return e instanceof Error ? e.message : String(e); } finally { setBusy(false); }
   };
 
   const bulkSet = async (visibility: 'public' | 'private') => {
@@ -152,12 +165,15 @@ const MotorsAccessSection: React.FC = () => {
   const toggleChecked = (name: string) => setSelChecked((s) => {
     const n = new Set(s); if (n.has(name)) n.delete(name); else n.add(name); return n;
   });
+  const toggleExpanded = (name: string) => setExpanded((s) => {
+    const n = new Set(s); if (n.has(name)) n.delete(name); else n.add(name); return n;
+  });
 
   return (
     <Box>
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5, flexWrap: 'wrap' }}>
         <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>Motors access</Typography>
-        <HelpTip title="Who may see each die beyond its owner: private (default), public (every signed-in account, including MCP agents — list_machines/check_fit respect this too), or a named list of clients. Read-only for recipients." />
+        <HelpTip title={t('motors.accessTip')} />
         {notice && <Typography sx={{ fontSize: 11, color: notice.startsWith('✓') ? '#34d399' : '#f87171' }}>{notice}</Typography>}
         <Box sx={{ flex: 1 }} />
         <TextField size="small" placeholder="Search dies" value={search} onChange={(e) => setSearch(e.target.value)}
@@ -200,27 +216,51 @@ const MotorsAccessSection: React.FC = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {filtered.map((d) => (
-                <TableRow key={d.name} hover sx={{ cursor: 'pointer' }}>
+              {filtered.map((d) => {
+                const cfgs = configAccessOf(d);
+                const open = expanded.has(d.name);
+                return (
+                <React.Fragment key={d.name}>
+                <TableRow hover sx={{ cursor: 'pointer' }}>
                   <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
                     <Checkbox size="small" checked={selChecked.has(d.name)} onChange={() => toggleChecked(d.name)} />
                   </TableCell>
                   <TableCell onClick={() => setDrawerFor(d)}>
-                    <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{d.name}</Typography>
-                    {privateCount(d) > 0 && <PrivateChip count={privateCount(d)} />}
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <IconButton size="small" disabled={cfgs.length === 0}
+                        aria-label={t(open ? 'motors.hideConfigs' : 'motors.showConfigs')} aria-expanded={open}
+                        onClick={(e) => { e.stopPropagation(); toggleExpanded(d.name); }}
+                        sx={{ p: 0.25, color: 'var(--text-3)', visibility: cfgs.length === 0 ? 'hidden' : 'visible' }}>
+                        {open ? <KeyboardArrowDownIcon sx={{ fontSize: 18 }} /> : <KeyboardArrowRightIcon sx={{ fontSize: 18 }} />}
+                      </IconButton>
+                      <Typography sx={{ fontSize: 13, color: 'var(--text-0)', fontWeight: 600 }}>{d.name}</Typography>
+                    </Box>
                   </TableCell>
                   <TableCell align="right" onClick={() => setDrawerFor(d)} sx={{ color: 'var(--text-2)' }}>{d.stator_diameter ?? '—'}</TableCell>
                   <TableCell align="center" onClick={() => setDrawerFor(d)}>
-                    <Chip size="small" label={statusLabel(d)}
-                      sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: VIS_COLOR[d.visibility] }} />
+                    <DieStatusChip die={d} />
                   </TableCell>
                   <TableCell align="center" onClick={() => setDrawerFor(d)}>
                     <Chip size="small" label={sourceLabel(d) + (d.source_clash ? ' ⚠' : '')}
-                      sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: sourceColor(d) }} />
+                      sx={{ ...CHIP_SX, color: sourceColor(d) }} />
                   </TableCell>
                   <TableCell align="right" onClick={() => setDrawerFor(d)} sx={{ color: 'var(--text-3)' }}>{d.used_by}</TableCell>
                 </TableRow>
-              ))}
+                {open && cfgs.map((c) => (
+                  <TableRow key={`${d.name}/${c.name}`} hover sx={{ cursor: 'pointer' }} onClick={() => setCfgDrawer({ die: d.name, cfg: c })}>
+                    <TableCell padding="checkbox" />
+                    <TableCell sx={{ pl: 5.5 }}>
+                      <Typography sx={{ fontSize: 12.5, color: 'var(--text-1)' }}>{c.name}</Typography>
+                    </TableCell>
+                    <TableCell />
+                    <TableCell align="center"><Chip size="small" label={cfgStatusLabel(t, c)} sx={{ ...CHIP_SX, color: CFG_COLOR[c.status] }} /></TableCell>
+                    <TableCell />
+                    <TableCell />
+                  </TableRow>
+                ))}
+                </React.Fragment>
+                );
+              })}
               {filtered.length === 0 && (
                 <TableRow><TableCell colSpan={6} sx={{ color: 'var(--text-4)', textAlign: 'center', py: 3 }}>No dies match.</TableCell></TableRow>
               )}
@@ -232,69 +272,92 @@ const MotorsAccessSection: React.FC = () => {
       <DieAccessDrawer die={drawerFor} users={users} busy={busy}
         onClose={() => setDrawerFor(null)}
         onSave={(vis, clients) => { if (drawerFor) void setAccess(drawerFor.name, vis, clients); }}
-        onConfigVisibility={setConfigVisibility}
         onMoved={(msg) => { setNotice(msg); setDrawerFor(null); void load(); }} />
+      <ConfigAccessDrawer target={cfgDrawer} users={users} busy={busy}
+        onClose={() => setCfgDrawer(null)} onSave={setConfigAccess} />
     </Box>
   );
 };
 
-const PrivateChip: React.FC<{ count: number }> = ({ count }) => {
+type TFn = (key: string, opts?: Record<string, unknown>) => string;
+
+const cfgStatusLabel = (t: TFn, c: ConfigAccess) =>
+  c.status === 'selected' ? t('motors.cfgClients', { count: c.clients.length }) : t(`motors.cfgStatus.${c.status}`);
+
+/** The die's own status; a Private die with open configurations says so in one short line + tooltip. */
+const DieStatusChip: React.FC<{ die: DieRow }> = ({ die }) => {
   const { t } = useTranslation('admin');
+  const open = die.visibility === 'private' ? openConfigs(die) : [];
+  if (open.length === 0) {
+    return <Chip size="small" label={statusLabel(die)} sx={{ ...CHIP_SX, color: VIS_COLOR[die.visibility] }} />;
+  }
+  const list = open.map((c) => `${c.name} (${cfgStatusLabel(t, c)})`).join(', ');
   return (
-    <Chip size="small" label={`${t('motors.configPrivate')} ${count}`} title={t('motors.configPrivateTip')}
-      sx={{ height: 16, ml: 1, fontSize: 10, fontWeight: 700, bgcolor: 'var(--panel)', color: '#fbbf24' }} />
+    <Tooltip title={t('motors.dieOpenTip', { list })}>
+      <Chip size="small" label={t('motors.dieOpenChip', { count: open.length })} sx={{ ...CHIP_SX, color: VIS_COLOR.private }} />
+    </Tooltip>
   );
 };
 
-/** One "Private" switch per configuration of the die. Private = hidden from everyone but admins and accounts granted it by name. */
-const ConfigVisibilityBlock: React.FC<{
-  die: DieRow; onChange: (die: string, config: string, visibility: CfgVisibility) => Promise<string | null>;
-}> = ({ die, onChange }) => {
+const CFG_CHOICES: CfgStatus[] = ['inherit', 'private', 'public', 'selected'];
+
+/** One configuration's access: As motor / Private / Public / Selected clients. */
+const ConfigAccessDrawer: React.FC<{
+  target: { die: string; cfg: ConfigAccess } | null; users: RegistryUser[]; busy: boolean;
+  onClose: () => void;
+  onSave: (die: string, config: string, status: CfgStatus, clients: string[]) => Promise<string | null>;
+}> = ({ target, users, busy, onClose, onSave }) => {
   const { t } = useTranslation('admin');
-  const [busyCfg, setBusyCfg] = useState<string | null>(null);
+  const [status, setStatus] = useState<CfgStatus>('inherit');
+  const [clients, setClients] = useState<string[]>([]);
   const [err, setErr] = useState<string | null>(null);
-  const names = die.config_names ?? [];
-  if (names.length === 0) return null;
-  const flip = async (config: string, makePrivate: boolean) => {
-    setBusyCfg(config); setErr(null);
-    const reason = await onChange(die.name, config, makePrivate ? 'private' : 'public');
-    if (reason) setErr(t('motors.configToggleFailed', { config, reason }));
-    setBusyCfg(null);
+  useEffect(() => {
+    if (target) { setStatus(target.cfg.status); setClients(target.cfg.clients); setErr(null); }
+  }, [target]);
+  const save = async () => {
+    if (!target) return;
+    const reason = await onSave(target.die, target.cfg.name, status, status === 'selected' ? clients : []);
+    if (reason) setErr(t('motors.configToggleFailed', { config: target.cfg.name, reason }));
+    else onClose();
   };
   return (
-    <Box sx={{ mb: 2 }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.5 }}>
-        <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase' }}>
-          {t('motors.configsTitle')}
-        </Typography>
-        <HelpTip title={t('motors.configsTip')} />
-      </Box>
-      {names.map((c) => (
-        <Box key={c} sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <Typography sx={{ fontSize: 13, color: 'var(--text-1)' }}>{c}</Typography>
-          <FormControlLabel sx={{ mr: 0 }} labelPlacement="start"
-            control={<Switch size="small" checked={isPrivateConfig(die, c)} disabled={busyCfg === c}
-              onChange={(e) => void flip(c, e.target.checked)} />}
-            label={
-              <Box sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5 }}>
-                <Typography sx={{ fontSize: 12, color: isPrivateConfig(die, c) ? '#fbbf24' : 'var(--text-3)' }}>
-                  {t('motors.configPrivate')}
-                </Typography>
-                <HelpTip title={t('motors.configPrivateTip')} />
-              </Box>} />
-        </Box>
-      ))}
-      {err && <Typography sx={{ fontSize: 11, color: '#f87171', mt: 0.5 }}>{err}</Typography>}
-    </Box>
+    <Drawer anchor="right" open={!!target} onClose={onClose} PaperProps={{ sx: { width: 360, bgcolor: 'var(--panel)', p: 2.5 } }}>
+      {target && (
+        <>
+          <Typography sx={{ fontSize: 15, fontWeight: 800, color: 'var(--text-0)', mb: 2 }}>{target.die} / {target.cfg.name}</Typography>
+          <Typography sx={{ fontSize: 11, color: 'var(--text-3)', fontWeight: 700, textTransform: 'uppercase', mb: 0.5 }}>{t('motors.cfgAccessTitle')}</Typography>
+          <RadioGroup value={status} onChange={(e) => setStatus(e.target.value as CfgStatus)}>
+            {CFG_CHOICES.map((s) => (
+              <FormControlLabel key={s} value={s} control={<Radio size="small" />}
+                label={<Typography sx={{ fontSize: 13 }}>{t(`motors.cfgStatus.${s}`)} <span style={{ color: 'var(--text-4)' }}>— {t(`motors.cfgNote.${s}`)}</span></Typography>} />
+            ))}
+          </RadioGroup>
+          {status === 'selected' && (
+            <Autocomplete
+              multiple size="small" options={users.map((u) => u.email)} value={clients}
+              onChange={(_, v) => setClients(v)}
+              renderInput={(params) => <TextField {...params} label={t('motors.clientsLabel')} size="small" sx={{ mt: 1 }} />}
+              sx={{ mt: 1 }}
+            />
+          )}
+          {err && <Typography sx={{ fontSize: 11, color: '#f87171', mt: 1 }}>{err}</Typography>}
+          <Divider sx={{ my: 2, borderColor: 'var(--line-soft)' }} />
+          <Box sx={{ display: 'flex', gap: 1 }}>
+            <Button size="small" onClick={onClose} sx={{ textTransform: 'none' }}>{t('motors.cancel')}</Button>
+            <Button size="small" variant="contained" disabled={busy || !canSaveConfig(status, clients)} onClick={() => void save()}
+              sx={{ textTransform: 'none' }}>{t('motors.save')}</Button>
+          </Box>
+        </>
+      )}
+    </Drawer>
   );
 };
 
 const DieAccessDrawer: React.FC<{
   die: DieRow | null; users: RegistryUser[]; busy: boolean;
   onClose: () => void; onSave: (vis: Visibility, clients: string[]) => void;
-  onConfigVisibility: (die: string, config: string, visibility: CfgVisibility) => Promise<string | null>;
   onMoved: (msg: string) => void;
-}> = ({ die, users, busy, onClose, onSave, onConfigVisibility, onMoved }) => {
+}> = ({ die, users, busy, onClose, onSave, onMoved }) => {
   const [vis, setVis] = useState<Visibility>('private');
   const [clients, setClients] = useState<string[]>([]);
   useEffect(() => { if (die) { setVis(die.visibility); setClients(die.clients); } }, [die]);
@@ -334,8 +397,6 @@ const DieAccessDrawer: React.FC<{
               sx={{ textTransform: 'none' }}>Save</Button>
           </Box>
 
-          <Divider sx={{ my: 2, borderColor: 'var(--line-soft)' }} />
-          <ConfigVisibilityBlock die={die} onChange={onConfigVisibility} />
 
           <Divider sx={{ my: 2, borderColor: 'var(--line-soft)' }} />
           <SourceBlock die={die} onMoved={onMoved} />

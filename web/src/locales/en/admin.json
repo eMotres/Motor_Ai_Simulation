@@ -33,15 +33,31 @@
     "cancel": "Cancel",
     "save": "Save",
     "colDefault": "Default motor",
-    "configsTitle": "Configurations",
-    "configsTip": "A private configuration is hidden from everyone except admins and the accounts you grant it to (Users, Motors). The die and its other configurations stay as they are.",
-    "configPrivate": "Private",
-    "configPrivateTip": "Hide this configuration: it is not listed, counted, opened, downloaded or found by anyone except admins and accounts granted it by name.",
     "configToggleFailed": "Could not change {config}: {reason}",
     "grantTitle": "Private configurations",
-    "grantTip": "Private configurations of dies this account can already see. Tick one to let the account open it; admins always see everything.",
-    "grantNowPublic": "now public",
-    "grantUnknown": "not found"
+    "grantTip": "Private configurations of the catalog. Tick one to let the account open it, even when its die is not granted; admins always see everything.",
+    "grantNowPublic": "no longer private",
+    "grantUnknown": "not found",
+    "accessTip": "Two levels: each die, and each of its configurations (expand a row). A configuration set to As motor follows its die; Private, Public or Selected clients override it, so a private die can still open one configuration.",
+    "showConfigs": "Show configurations",
+    "hideConfigs": "Hide configurations",
+    "cfgStatus": {
+      "inherit": "As motor",
+      "private": "Private",
+      "public": "Public",
+      "selected": "Selected clients"
+    },
+    "cfgNote": {
+      "inherit": "follows the die",
+      "private": "admins only",
+      "public": "every signed-in user, even if the die is private",
+      "selected": "named accounts only, read-only"
+    },
+    "cfgClients": "{count, plural, one {# client} other {# clients}}",
+    "cfgAccessTitle": "Access",
+    "clientsLabel": "Clients (e-mail)",
+    "dieOpenChip": "Private · {count} open",
+    "dieOpenTip": "The die is private; these configurations are open on their own: {list}"
   },
   "analytics": {
     "title": "Analytics",

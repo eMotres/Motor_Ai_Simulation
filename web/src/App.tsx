@@ -68,7 +68,7 @@ import { pageVisible } from './lib/pageVisible';
 import SimulationPanel from './components/simulation/SimulationPanel';
 import Static3DPanel from './components/static3d/Static3DPanel';
 import MechanicalPanel from './components/mechanical/MechanicalPanel';
-const SystemPanel = lazy(() => import('./components/system/SystemPanel'));
+const SystemPanel = lazy(watchChunkImport(() => import('./components/system/SystemPanel')));
 import ThermalPanel from './components/thermal/ThermalPanel';
 import ControllerPanel from './components/controller/ControllerPanel';
 import { syncMeshConfigFromServer } from './lib/meshConfigSync';
@@ -88,6 +88,7 @@ import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { useServerLocale } from './i18n/persist';
 import { clearLiveDutyContext, invalidateLastMotorOperations, restoreLastMotor, setLastMotorState } from './lib/lastMotor';
+import { watchChunkImport } from './lib/chunkReload';
 
 // The signed-in account menu is its own chunk (AuthButton lazy-loads it); start fetching it
 // together with the workspace so the avatar does not pop in late.

@@ -12,7 +12,7 @@ const t = M ? test : test.skip;
 const REG = [
   ['motors', 0, 'always'], ['geometry', 20, 'fullUI'], ['materials', 30, 'fullUI'],
   ['mesh', 40, 'fullUI'], ['simulation', 50, 'fullUI'], ['static3d', 55, 'admin'],
-  ['mechanical', 57, 'admin'], ['thermal', 58, 'admin'], ['controller', 59, 'admin'], ['system', 61, 'fullUI'],
+  ['mechanical', 57, 'admin'], ['thermal', 58, 'admin'], ['controller', 59, 'admin'], ['schemas', 61, 'fullUI'],
   ['sweep', 60, 'admin'], ['comparePoints', 65, 'fullUI'], ['cost', 70, 'admin'],
   ['compare', 75, 'signedIn'], ['admin', 90, 'admin']]
   .map(([id, order, gate]) => ({ id, order, gate, label: id }));
@@ -27,18 +27,18 @@ const visible = (role) => REG.filter((t) =>
 const bar = (role) => M.barEntries(visible(role)).map((e) =>
   e.kind === 'tab' ? e.id : `sim[${e.members.map((m) => m.id).join(',')}]`);
 
-t('the dropdown lists exactly Electromagnetic, Thermal, Mechanical, System in that order', () => {
-  assert.deepEqual([...M.SIMULATION_TAB_IDS], ['simulation', 'thermal', 'mechanical', 'system']);
+t('the dropdown lists exactly Electromagnetic, Thermal, Mechanical, Schemas in that order', () => {
+  assert.deepEqual([...M.SIMULATION_TAB_IDS], ['simulation', 'thermal', 'mechanical', 'schemas']);
 });
 
 t('admin: one Simulations tab at the place of Electromagnetic; Geometry, Mesh, Controller stay', () => {
-  assert.deepEqual(bar('admin'), ['motors', 'geometry', 'materials', 'mesh', 'sim[simulation,thermal,mechanical,system]',
+  assert.deepEqual(bar('admin'), ['motors', 'geometry', 'materials', 'mesh', 'sim[simulation,thermal,mechanical,schemas]',
     'static3d', 'controller', 'sweep', 'comparePoints', 'cost', 'compare', 'admin']);
 });
 
 t('engineer (full UI, not admin): only the gated member is in the menu', () => {
   const b = bar('engineer');
-  assert.ok(b.includes('sim[simulation,system]'));
+  assert.ok(b.includes('sim[simulation,schemas]'));
   assert.ok(!b.includes('controller') && !b.includes('admin'));
   assert.ok(b.includes('geometry') && b.includes('mesh'));
 });

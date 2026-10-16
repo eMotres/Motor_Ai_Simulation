@@ -74,6 +74,7 @@ import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
 import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
+import { resolveSchemasRoute } from './lib/schemasRoute';
 import RefusedNotice from './components/common/RefusedNotice';
 import { hasOwnConfigureChoice } from './components/compare/configureChoice';
 import { useServerLocale } from './i18n/persist';
@@ -198,6 +199,12 @@ function App() {
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab } = useUIStore();
+
+  useEffect(() => {
+    const route = resolveSchemasRoute(window.location.href);
+    if (route.redirected) window.history.replaceState(null, '', route.href);
+    if (route.activeTab) setActiveTab(route.activeTab);
+  }, [setActiveTab]);
   const { user, isAdmin, role, enforced, defaultMotor, resolved: authResolved } = useAuth();
   // Interface language (docs/I18N.md): adopt the signed-in user's stored choice.
   const { t: tr, i18n } = useTranslation('common');
@@ -392,6 +399,7 @@ function App() {
     if (!signedIn) return;
     try {
       const q = new URLSearchParams(window.location.search);
+      if (resolveSchemasRoute(window.location.href).activeTab === 'schemas') return;
       if (q.get('tab') === 'configure' || q.get('design')) setActiveTab('compare');
     } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -534,10 +542,10 @@ function App() {
     // The optimizer/sweep burns the whole machine on the shared config —
     // server-side it is admin-only since the deploy hardening, so showing the
     // tab to pro users would only offer buttons that 403.
-    // System (owner 2026-10-14): the view-only graph of how the simulations are chained (modules, data flow,
+    // Schemas (owner 2026-10-14): the view-only graph of how the simulations are chained (modules, data flow,
     // coupling loops; the propeller S1 chain).  Engineer + admin, in the Simulations dropdown; lazy, the graph
     // libraries are only fetched when the tab is opened.
-    { id: 'system', label: 'System', order: 61, gate: TAB_GATES.system, showViewer: false,
+    { id: 'schemas', label: 'Schemas', order: 61, gate: TAB_GATES.schemas, showViewer: false,
       render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><SystemPanel /></Suspense> },
     { id: 'sweep', label: 'Optimization', order: 60, panelId: 'optimization', gate: TAB_GATES.sweep, showViewer: false,
       render: () => <SweepConfigPanel /> },

@@ -11,10 +11,10 @@ import { nesting, splitLoops } from './systemGraph.ts';
 import type { Box, SgDoc, SgLoop, SgNode } from './systemGraph.ts';
 
 export const NODE_W = 200;
-export const NODE_H = 62;
+export const NODE_H = 78;
 export const CHIP_ROW = 20;
 export const COND_ROW = 14;
-export const COMPACT_H = 40;
+export const COMPACT_H = 52;
 export const COL_PITCH = 262;
 export const ROW_PITCH = 100;
 const PAD = 16;       // between a loop's border and its content (fallback layout)

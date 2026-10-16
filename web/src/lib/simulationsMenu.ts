@@ -1,5 +1,5 @@
 // The "Simulations" top tab (owner 2026-10-13): Electromagnetic, Thermal and Mechanical
-// share ONE tab with a dropdown, in that order; "System" (owner 2026-10-14: the view-only graph of how the
+// share ONE tab with a dropdown, in that order; "Schemas" (owner 2026-10-14: the view-only graph of how the
 // simulations are chained) is the last entry.  Geometry, Mesh and Controller stay
 // separate tabs, with the same gates and order as before.  The individual panels keep their
 // own tab ids and gates - this only decides how the bar is DRAWN, so every
@@ -8,7 +8,7 @@
 // Pure, no imports: web/src/lib/__tests__/simulationsMenu.test.mjs imports this file.
 
 /** The panels the dropdown lists, in menu order. */
-export const SIMULATION_TAB_IDS: readonly string[] = ['simulation', 'thermal', 'mechanical', 'system'];
+export const SIMULATION_TAB_IDS: readonly string[] = ['simulation', 'thermal', 'mechanical', 'schemas'];
 
 /** The bar's value while one of them is open. */
 export const SIMULATIONS_BAR_ID = 'simulations';

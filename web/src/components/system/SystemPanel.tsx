@@ -1,4 +1,4 @@
-/** System tab - how the simulations are chained (Simulations > System, owner 2026-10-14).  VIEW ONLY.
+/** Schemas tab - software modules and their contracts (Simulations > Schemas, owner 2026-10-14).  VIEW ONLY.
  *
  *  Blocks = modules (or, in the "Propeller S1" view, the steps of the S1 rating).  Parameter sources (motor model,
  *  limits, ...) stand in an Inputs column and appear as chips on the blocks that use them; one wire per block pair
@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
-  Alert, Box, CircularProgress, FormControlLabel, IconButton, MenuItem, Paper, Stack, Switch, TextField,
+  Alert, Box, Button, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle, FormControlLabel, IconButton, Link, MenuItem, Paper, Stack, Switch, TextField,
   ThemeProvider, ToggleButton, ToggleButtonGroup, Tooltip, Typography, createTheme,
 } from '@mui/material';
 import RefreshIcon from '@mui/icons-material/Refresh';
@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 import { formatApiErrorDetail } from '../../lib/apiErrorDetail';
 import { activeDuty } from '../../lib/dutySettings';
 import { fetchFamilyTree } from '../../lib/familyTree';
-import { STATE_COLORS, formatTime, kindColor, loopBadge, splitLoops, typeColor } from '../../lib/systemGraph';
+import { MODULE_NODE_TOKENS, NODE_BORDER_WIDTH_PX, STATE_COLORS, formatTime, loopBadge, splitLoops, typeColor } from '../../lib/systemGraph';
 import type { SgDoc, SgEdge, SgLoop, SgNode } from '../../lib/systemGraph';
 import { badgeOf, buildView, chipCounts, conditionText, exitGroups, laneCounts, loopHead, loopText, neighbours } from '../../lib/systemGraphView';
 import type { Badge, Chip, ExitGroup, LoopText, View as GraphView, Wire } from '../../lib/systemGraphView';
@@ -63,7 +63,8 @@ type Tr = (k: string, o?: Record<string, unknown>) => string;
 
 interface ChipView { chip: Chip; text: string; tip: string }
 interface BlockData extends Record<string, unknown> {
-  node: SgNode; title: string; tip: ReactNode; badge: Badge; badgeText: string; noRunTip: string;
+  node: SgNode; title: string; moduleLabel: string; stubLabel: string; tip: ReactNode; badge: Badge; badgeText: string; noRunTip: string;
+  onSelect: (node: SgNode) => void;
   chips: ChipView[]; dim: boolean; rings: string[]; dots: string[]; condition: string;
 }
 interface LoopData extends Record<string, unknown> {
@@ -75,25 +76,33 @@ const hidden = { opacity: 0, pointerEvents: 'none' } as const;
 
 function BlockNode({ data }: NodeProps<Node<BlockData>>) {
   const n = data.node;
+  const token = MODULE_NODE_TOKENS[n.module_id] ?? MODULE_NODE_TOKENS.M11;
   const ring = data.rings.map((c, i) => `0 0 0 ${2 + i * 3}px ${c}`).join(', ');
   const compact = !!n.context;
   const b = data.badge;
   return (
     <Tooltip arrow placement="top" title={data.tip} enterDelay={250} slotProps={{ tooltip: { sx: { maxWidth: 420 } } }}>
       <Box sx={{
-        width: NODE_W, height: '100%', boxSizing: 'border-box', px: 1, py: 0.5, borderRadius: 1,
-        bgcolor: 'background.paper', border: '1px solid', borderColor: 'divider',
-        borderLeft: `5px solid ${kindColor(n.kind)}`, boxShadow: ring || undefined,
-        opacity: data.dim ? 0.3 : n.roadmap ? 0.6 : 1, transition: 'opacity 120ms',
-        display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.2,
-      }}>
+        width: NODE_W, height: '100%', boxSizing: 'border-box', borderRadius: 1, overflow: 'hidden',
+        bgcolor: '#ffffff', border: `${NODE_BORDER_WIDTH_PX}px ${n.roadmap ? 'dashed' : 'solid'} ${token.border}`,
+        borderLeft: `6px ${n.roadmap ? 'dashed' : 'solid'} ${token.accent}`, boxShadow: ring || undefined,
+        display: 'flex', flexDirection: 'column',
+      }} role="button" tabIndex={0} aria-label={`${data.moduleLabel}: ${data.title}`}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); data.onSelect(n); }
+        }}>
         <Handle type="target" position={Position.Left} style={hidden} />
-        <Stack direction="row" alignItems="center" spacing={0.6}>
-          <Typography variant="body2" noWrap sx={{ fontWeight: 600, lineHeight: 1.25, flex: 1 }}>{data.title}</Typography>
-          {compact && data.dots.map((c) => <Box key={c} sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: c }} />)}
-        </Stack>
+        <Box sx={{ minHeight: 18, px: 0.7, bgcolor: token.background, color: token.foreground, display: 'flex', alignItems: 'center' }}>
+          <Typography variant="caption" noWrap sx={{ fontWeight: 700, fontSize: 9.5, lineHeight: 1.2, flex: 1 }}>{data.moduleLabel}</Typography>
+          {n.roadmap && <Typography variant="caption" sx={{ fontWeight: 700, fontSize: 9, color: token.foreground }}>{data.stubLabel}</Typography>}
+        </Box>
+        <Box sx={{ px: 0.8, py: 0.35, flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 0.2 }}>
+          <Stack direction="row" alignItems="center" spacing={0.6}>
+            <Typography variant="body2" noWrap sx={{ color: '#111827', fontWeight: 700, lineHeight: 1.25, flex: 1 }}>{data.title}</Typography>
+            {compact && data.dots.map((c) => <Box key={c} sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: c }} />)}
+          </Stack>
         {!compact && (
-          <Typography variant="caption" noWrap sx={{ color: 'text.secondary', fontFamily: 'monospace', fontSize: 10.5 }}>
+          <Typography variant="caption" noWrap sx={{ color: '#334155', fontFamily: 'monospace', fontSize: 10.5 }}>
             {n.source?.function ?? n.capability ?? n.id}
           </Typography>
         )}
@@ -104,14 +113,14 @@ function BlockNode({ data }: NodeProps<Node<BlockData>>) {
           <Tooltip title={data.noRunTip} placement="bottom">
             <Stack direction="row" spacing={0.6} alignItems="center" sx={{ cursor: 'help' }}>
               <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: STATE_COLORS.unknown }} />
-              <Typography variant="caption" sx={{ fontSize: 10.5, color: 'text.secondary' }}>{data.badgeText}</Typography>
+              <Typography variant="caption" sx={{ fontSize: 10.5, color: '#334155' }}>{data.badgeText}</Typography>
             </Stack>
           </Tooltip>
         )}
         {!compact && b.kind === 'state' && (
           <Stack direction="row" spacing={0.6} alignItems="center">
             <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: STATE_COLORS[b.state] }} />
-            <Typography variant="caption" sx={{ fontSize: 10.5, color: 'text.secondary' }}>{data.badgeText}</Typography>
+            <Typography variant="caption" sx={{ fontSize: 10.5, color: '#334155' }}>{data.badgeText}</Typography>
             {formatTime(n.status.time_s) && <Typography variant="caption" sx={{ fontSize: 10.5 }}>{formatTime(n.status.time_s)}</Typography>}
           </Stack>
         )}
@@ -130,6 +139,7 @@ function BlockNode({ data }: NodeProps<Node<BlockData>>) {
             ))}
           </Stack>
         )}
+        </Box>
         <Handle type="source" position={Position.Right} style={hidden} />
       </Box>
     </Tooltip>
@@ -209,6 +219,7 @@ export default function SystemPanel() {
   const [loading, setLoading] = useState(false);
   const [hover, setHover] = useState<Wire | null>(null);
   const [focus, setFocus] = useState<string | null>(null);
+  const [selectedNode, setSelectedNode] = useState<SgNode | null>(null);
   const [tick, setTick] = useState(0);
   const box = useRef<HTMLDivElement | null>(null);
   const card = useRef<HTMLDivElement | null>(null);
@@ -247,7 +258,7 @@ export default function SystemPanel() {
     write(MOTOR_KEY, JSON.stringify(m));
   }, []);
 
-  const graph = useMemo(() => (doc ? build(doc, showAll, tr, !!motor) : null), [doc, showAll, tr, motor]);
+  const graph = useMemo(() => (doc ? build(doc, showAll, tr, !!motor, setSelectedNode) : null), [doc, showAll, tr, motor, setSelectedNode]);
   // dev only: the wiring check.  With "Show all wires" on the count is only reported.
   useEffect(() => {
     if (!graph || !import.meta.env.DEV || graph.violations.length === 0) return;
@@ -295,6 +306,7 @@ export default function SystemPanel() {
     <ThemeProvider theme={LIGHT}>
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#ffffff', color: '#111827' }}>
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap', rowGap: 1 }}>
+        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{tr('tabs.schemas')}</Typography>
         <ToggleButtonGroup size="small" exclusive value={view} onChange={onView}>
           <ToggleButton value="modules">{tr('system.view.modules')}</ToggleButton>
           <ToggleButton value="propeller_s1">{tr('system.view.propellerS1')}</ToggleButton>
@@ -349,6 +361,7 @@ export default function SystemPanel() {
             minZoom={0.05} maxZoom={2}
             onNodeMouseEnter={(_, n) => { if (n.type === 'block') setFocus(n.id); }}
             onNodeMouseLeave={() => setFocus(null)}
+            onNodeClick={(_, n) => { if (n.type === 'block') setSelectedNode((n.data as BlockData).node); }}
             onEdgeMouseEnter={(_, e) => setHover((e.data as { wire?: Wire } | undefined)?.wire ?? null)}
             onEdgeMouseLeave={() => setHover(null)}
             proOptions={{ hideAttribution: true }}
@@ -387,6 +400,29 @@ export default function SystemPanel() {
           </Paper>
         )}
       </Box>
+      <Dialog open={!!selectedNode} onClose={() => setSelectedNode(null)} fullWidth maxWidth="sm">
+        {selectedNode && <>
+          <DialogTitle>{selectedNode.module_id} · {moduleDisplayName(selectedNode, tr)}</DialogTitle>
+          <DialogContent dividers>
+            <Typography variant="subtitle2" sx={{ mb: 0.5 }}>{tr(`system.nodes.${selectedNode.id}`, { defaultValue: selectedNode.title })}</Typography>
+            <Typography variant="body2" sx={{ mb: 1.5 }}>{selectedNode.summary}</Typography>
+            <Typography variant="subtitle2">{tr('system.publicApi')}</Typography>
+            {selectedNode.public_api.length ? <Box component="ul" sx={{ mt: 0.5, pl: 2.5 }}>
+              {selectedNode.public_api.map((api) => <li key={api}><Typography variant="body2" component="code">{api}</Typography></li>)}
+            </Box> : <Typography variant="body2" color="text.secondary">{tr('system.publicApiNone')}</Typography>}
+            {selectedNode.source && <Typography variant="caption" component="div" sx={{ mt: 1, fontFamily: 'monospace' }}>
+              {selectedNode.source.file}:{selectedNode.source.line}
+            </Typography>}
+          </DialogContent>
+          <DialogActions>
+            <Link href={`https://github.com/eMotres/Motor_Ai_Simulation/blob/main/${selectedNode.documentation}`}
+              target="_blank" rel="noreferrer" underline="hover" sx={{ mr: 1 }}>
+              {tr('system.moduleDocs')}
+            </Link>
+            <Button onClick={() => setSelectedNode(null)}>{tr('system.close')}</Button>
+          </DialogActions>
+        </>}
+      </Dialog>
     </Box>
     </ThemeProvider>
   );
@@ -416,6 +452,7 @@ function nodeTip(n: SgNode, title: string, badgeText: string, tr: Tr): ReactNode
   return (
     <Box sx={{ fontSize: 12 }}>
       <Box sx={{ fontWeight: 700 }}>{title}</Box>
+      <Box sx={{ fontWeight: 600 }}>{n.module_id} · {moduleDisplayName(n, tr)}</Box>
       <Box>{n.summary}</Box>
       {n.source && <Box sx={{ fontFamily: 'monospace', mt: 0.5 }}>{`${n.source.function} · ${n.source.file}:${n.source.line}`}</Box>}
       {n.inputs.length > 0 && <Box>{tr('system.in')}: {ports(n.inputs)}</Box>}
@@ -424,6 +461,10 @@ function nodeTip(n: SgNode, title: string, badgeText: string, tr: Tr): ReactNode
       {badgeText && <Box sx={{ mt: 0.5 }}>{badgeText}{st.summary ? ` · ${st.summary}` : ''}{values ? ` · ${values}` : ''}</Box>}
     </Box>
   );
+}
+
+function moduleDisplayName(n: SgNode, tr: Tr): string {
+  return tr(`system.modules.${n.module_id}`, { defaultValue: n.module_name });
 }
 
 function loopTip(l: SgLoop, text: LoopText, tr: Tr): ReactNode {
@@ -458,7 +499,7 @@ interface Built {
   ringed: Array<{ id: string; color: string; text: LoopText; tip: ReactNode }>;
 }
 
-function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean): Built {
+function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean, onSelect: (node: SgNode) => void): Built {
   const view = buildView(doc, showAll);
   const counts = chipCounts(doc, view);
   const heights: Record<string, number> = {};
@@ -510,7 +551,8 @@ function build(doc: SgDoc, showAll: boolean, tr: Tr, hasMotor: boolean): Built {
     nodes.push({
       id: n.id, type: 'block', position: { x: b.x, y: b.y }, width: b.w, height: b.h, draggable: false,
       data: {
-        node: n, title: t, tip: nodeTip(n, t, badgeText, tr), badge, badgeText, noRunTip: tr('system.noRunTip'),
+        node: n, title: t, moduleLabel: `${n.module_id} · ${moduleDisplayName(n, tr)}`, stubLabel: tr('system.stub'),
+        tip: nodeTip(n, t, badgeText, tr), badge, badgeText, noRunTip: tr('system.noRunTip'), onSelect,
         chips: chips.map((c) => ({ ...c, tip: c.tip })), dim: false, rings: rings[n.id] ?? [],
         dots: n.context ? [...new Set(n.outputs.map((p) => p.type))].map(typeColor) : [],
         condition: conditionText(n, tr),

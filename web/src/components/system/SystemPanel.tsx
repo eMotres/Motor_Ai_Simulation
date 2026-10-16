@@ -188,17 +188,23 @@ function WireEdge({ id, markerEnd, data }: EdgeProps<Edge<WireData>>) {
       <BaseEdge id={id} path={d.path} markerEnd={markerEnd} interactionWidth={16}
         style={{ stroke: d.color, strokeWidth: d.lit ? 2.8 : 1.8, strokeDasharray: d.feedback ? '6 4' : undefined,
           opacity: d.dim ? 0.1 : 1, transition: 'opacity 120ms' }} />
-      {d.count > 1 && (
-        <EdgeLabelRenderer>
-          <div style={{
-            position: 'absolute', transform: `translate(-50%, -50%) translate(${d.label[0]}px, ${d.label[1]}px)`,
-            pointerEvents: 'none', background: d.color, color: '#fff', borderRadius: 8, minWidth: 16, height: 16,
-            fontSize: 10, fontWeight: 700, lineHeight: '16px', textAlign: 'center', padding: '0 4px', opacity: d.dim ? 0.15 : 1,
-          }}>{d.count}</div>
-        </EdgeLabelRenderer>
-      )}
+      <EdgeLabelRenderer>
+        <div style={{
+          position: 'absolute', transform: `translate(-50%, -50%) translate(${d.label[0]}px, ${d.label[1]}px)`,
+          pointerEvents: 'none', background: '#ffffff', color: d.color, border: `1px solid ${d.color}`, borderRadius: 6,
+          height: 14, fontSize: 9.5, fontWeight: 700, lineHeight: '12px', padding: '0 4px', whiteSpace: 'nowrap',
+          opacity: d.dim ? 0.15 : 1,
+        }}>{wireTag(d.wire)}</div>
+      </EdgeLabelRenderer>
     </>
   );
+}
+
+/** The text drawn ON the wire: its data type(s), and the number of merged items when there are several. */
+function wireTag(w: Wire): string {
+  const types = [...new Set(w.items.map((e) => e.type))];
+  const name = types.length ? types.join(' · ') : w.type;
+  return w.count > 1 ? `${name} ×${w.count}` : name;
 }
 
 const NODE_TYPES = { block: BlockNode, loop: LoopNode, label: LabelNode };
@@ -292,12 +298,6 @@ export default function SystemPanel() {
     n.type === 'block' && lit ? { ...n, data: { ...n.data, dim: !lit.nodes.has(n.id) } } : n)) : []), [graph, lit]);
   const edges = useMemo(() => (graph ? graph.edges.map((e) => (
     lit ? { ...e, data: { ...e.data!, dim: !lit.wires.has(e.id), lit: lit.wires.has(e.id) } } : e)) : []), [graph, lit]);
-  const types = useMemo(() => {
-    if (!graph) return [] as string[];
-    const t = new Set<string>(graph.view.wires.map((w) => w.type));
-    for (const cs of Object.values(graph.view.chips)) for (const c of cs) t.add(c.type);
-    return [...t];
-  }, [graph]);
 
   const dieObj = dies.find((d) => d.name === motor?.die);
   const cfgObj = dieObj?.configs?.find((c) => c.name === motor?.config);
@@ -373,15 +373,7 @@ export default function SystemPanel() {
         )}
         {doc && (
           <Paper ref={card} elevation={2} sx={{ position: 'absolute', left: 12, top: 10, zIndex: 5, px: 1.25, py: 0.75, maxWidth: 'min(620px, 72%)' }}>
-            <Stack direction="row" spacing={1.25} useFlexGap flexWrap="wrap" alignItems="center">
-              {types.map((ty) => (
-                <Stack key={ty} direction="row" spacing={0.5} alignItems="center">
-                  <Box sx={{ width: 14, height: 3, bgcolor: typeColor(ty), borderRadius: 1 }} />
-                  <Typography variant="caption" sx={{ fontSize: 10.5 }}>{ty}</Typography>
-                </Stack>
-              ))}
-            </Stack>
-            <Typography variant="caption" component="div" sx={{ mt: 0.5, minHeight: 16, color: hover ? 'text.primary' : 'text.secondary' }}>
+            <Typography variant="caption" component="div" sx={{ minHeight: 16, color: hover ? 'text.primary' : 'text.secondary' }}>
               {hover ? wireLines(hover, tr) : tr('system.hoverWire')}
             </Typography>
             {graph && graph.ringed.length > 0 && (

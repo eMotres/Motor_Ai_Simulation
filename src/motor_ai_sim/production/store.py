@@ -31,11 +31,17 @@ def _safe_slug(name: str) -> str:
     s = re.sub(r"[/\\]+", "_", name)
     s = re.sub(r"[\s]+", "_", s)
     s = re.sub(r"[^A-Za-z0-9_.\-]", "_", s)
-    return s.strip("_") or "_"
+    s = re.sub(r"\.{2,}", "_", s)                 # no "..": a name can never climb out of the production root
+    s = s.strip("_")
+    return "_" if s in ("", ".") else s
 
 
 def path_for(die: str, config: str) -> Path:
-    return production_root() / _safe_slug(die) / _safe_slug(config)
+    root = production_root().resolve()
+    p = (root / _safe_slug(die) / _safe_slug(config)).resolve()
+    if root != p and root not in p.parents:
+        raise ValueError("production path outside the production root")
+    return p
 
 
 def file_dir(die: str, config: str) -> Path:

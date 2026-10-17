@@ -45,3 +45,28 @@ def test_bad_file_ids_are_refused(prod_env):
     for bad in ("...", "abc", "x" * 80, "....%2F....%2Fproduction.json"):
         r = c.get("/api/production/%s/%s/files/%s" % (DIE, CONFIG, bad), headers=prod_env["admin"])
         assert r.status_code in (400, 404), (bad, r.status_code)
+
+
+def test_oem_cannot_rewrite_design_text_via_translation_confirm(prod_env):
+    _create(prod_env)
+    c = prod_env["client"]
+    part = {"name": {"en": "Shaft", "zh": "", "src_lang": "en", "status": {"en": "confirmed", "zh": "pending"}},
+            "kind": "made", "qty_per_motor": 1}
+    r = c.post("/api/production/%s/%s/parts" % (DIE, CONFIG), json=part, headers=prod_env["engineer"])
+    assert r.status_code in (200, 201), r.text
+    pid = r.json()["id"]
+    body = {"entity": "part", "entity_id": pid, "field": "name", "lang": "en", "text": "HACKED"}
+    r = c.post("/api/production/%s/%s/translate/confirm" % (DIE, CONFIG), json=body, headers=prod_env["oem_nda"])
+    assert r.status_code in (403, 404), r.text
+    names = [p["name"]["en"] for p in c.get("/api/production/%s/%s/parts" % (DIE, CONFIG), headers=prod_env["admin"]).json()["parts"]]
+    assert "HACKED" not in names
+
+
+def test_slug_cannot_escape_the_production_root(tmp_path, monkeypatch):
+    import pytest
+    from motor_ai_sim.production import store
+    monkeypatch.setenv("MOTRES_PRODUCTION_ROOT", str(tmp_path / "production"))
+    for die, cfg in (("..", ".."), ("....", "x"), ("../..", "L12"), (".", ".")):
+        p = store.path_for(die, cfg)
+        assert (tmp_path / "production").resolve() in p.parents, (die, cfg, p)
+    assert store._safe_slug("CIANO14 40 new") == "CIANO14_40_new"

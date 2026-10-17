@@ -189,6 +189,9 @@ async def save_process(request: Request, die: str, config: str):
     if not isinstance(sections, list):
         sections = []
     cleaned = [models.normalize_process_section(s) for s in sections]
+    for sec in cleaned:
+        sec["title"] = models.ensure_translated(sec["title"])
+        sec["body"] = models.ensure_translated(sec["body"])
     store.save_file(die, config, "process.json", {"sections": cleaned})
     _touch(die, config)
     _audit(_email(user), die, config, "update", "process", "process", {"sections": cleaned})
@@ -342,6 +345,7 @@ async def post_message(request: Request, die: str, config: str, thread_id: str):
         "text": text,
         "attachments": attachments,
     })
+    message["text"] = models.ensure_translated(message["text"])
 
     def mut(d):
         for t in d.setdefault("threads", []):
@@ -534,9 +538,16 @@ async def confirm_translation(request: Request, die: str, config: str):
     if text is not None:
         text = str(text)
     ref = {k: body[k] for k in ("entity", "entity_id", "field", "message_id") if k in body}
+    if text is not None and str(ref.get("entity") or "") in _DESIGN_ENTITIES:
+        # supplying new text for a part / process / production / revision field is a DESIGN change: editors only
+        # (an OEM proposes; confirming an existing machine translation without new text stays open to members)
+        require_editor_with_full_view(request, die, config)
     _apply_translation(die, config, ref, lang=lang, text=text)
     _audit(_email(user), die, config, "translate_confirm", ref.get("entity", ""), ref.get("entity_id", ""), {"ref": ref, "lang": lang})
     return {}
+
+
+_DESIGN_ENTITIES = frozenset({"production", "part", "process", "revision"})
 
 
 def _do_translate_or_confirm(bi: dict, retry: bool, lang: str, text: Optional[str]):
@@ -614,7 +625,14 @@ def _apply_translation(die: str, config: str, ref: dict, *, retry: bool = False,
         def mut(d):
             for r in d.setdefault("revisions", []):
                 if r.get("number") == entity_id:
-                    bi = r.get(field)
+                    head, _, idx = field.partition(".")
+                    if idx:
+                        items = r.get(head)
+                        if not isinstance(items, list) or not idx.isdigit() or int(idx) >= len(items):
+                            raise HTTPException(status_code=404, detail="Field not found")
+                        bi = items[int(idx)]
+                    else:
+                        bi = r.get(field)
                     _do_translate_or_confirm(bi, retry, lang, text)
                     return
             raise HTTPException(status_code=404, detail="Revision not found")

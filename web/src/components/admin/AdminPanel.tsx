@@ -24,6 +24,7 @@ import Downloads3dSection from './sections/Downloads3dSection';
 import VerificationSection from './sections/VerificationSection';
 import AnalyticsSection from './sections/AnalyticsSection';
 import ActivitySection from './sections/ActivitySection';
+import DirectorySection from './sections/DirectorySection';
 import MailingCard from './MailingCard';
 import NoticesPanel from './NoticesPanel';
 import { useTranslation } from 'react-i18next';
@@ -41,14 +42,24 @@ const AdminPanel: React.FC = () => {
   const [notice, setNotice] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [waitingCount, setWaitingCount] = useState<number>(0);
+  const [directoryWaitingCount, setDirectoryWaitingCount] = useState<number>(0);
 
   const fetchWaiting = React.useCallback(async () => {
     try {
-      const r = await fetch(`${API}/api/admin/verification/waiting`);
-      if (r.ok) {
-        const j = (await r.json()) as { count?: number };
+      const [vRes, dRes] = await Promise.all([
+        fetch(`${API}/api/admin/verification/waiting`),
+        fetch(`${API}/api/admin/directory/waiting`),
+      ]);
+      if (vRes.ok) {
+        const j = (await vRes.json()) as { count?: number };
         if (typeof j.count === 'number') {
           setWaitingCount(j.count);
+        }
+      }
+      if (dRes.ok) {
+        const j = (await dRes.json()) as { count?: number };
+        if (typeof j.count === 'number') {
+          setDirectoryWaitingCount(j.count);
         }
       }
     } catch { /* ignore network / auth errors */ }
@@ -70,6 +81,7 @@ const AdminPanel: React.FC = () => {
     switch (section) {
       case 'overview': return <OverviewSection onGoto={setSection} />;
       case 'users': return <UsersSection onInvite={openInvite} notice={notice} setNotice={setNotice} />;
+      case 'directory': return <DirectorySection />;
       case 'signups': return <SignupsSection onInvite={openInvite} reload={() => setReloadKey((k) => k + 1)} key={reloadKey} />;
       case 'servers': return <ServersSection />;
       case 'usage': return <UsageSection />;
@@ -94,7 +106,14 @@ const AdminPanel: React.FC = () => {
         <Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>{tx('admin')}</Typography>
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, p: 2, gap: 2, overflow: 'hidden' }}>
-        <AdminNav section={section} onSelect={setSection} badges={waitingCount > 0 ? { verification: waitingCount } : undefined} />
+        <AdminNav
+          section={section}
+          onSelect={setSection}
+          badges={{
+            ...(waitingCount > 0 ? { verification: waitingCount } : {}),
+            ...(directoryWaitingCount > 0 ? { directory: directoryWaitingCount } : {}),
+          }}
+        />
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', pr: 0.5 }}>
           {renderSection()}
         </Box>

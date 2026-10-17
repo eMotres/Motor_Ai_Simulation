@@ -280,6 +280,12 @@ def register(req: RegisterReq, request: Request):
                    path="/api/auth/register")
     if outcome == "created" and req.lang:
         U.set_lang(email, req.lang)
+    if outcome == "created":
+        try:
+            from motor_ai_sim.directory.service import on_user_registered
+            on_user_registered(email, name=req.name.strip(), source="signup")
+        except Exception as e:                               # noqa: BLE001
+            log.warning("directory: on_user_registered failed for %s (%s)", email, e)
     if outcome == "created" and topics:
         # The ticked topics are recorded with the wording shown; mailing needs the verified address anyway.
         _record_signup_topics(email, topics, "signup", ip, req.lang)
@@ -720,6 +726,12 @@ def google_login(req: GoogleReq, request: Request):
     # unproven password — see users.link_google).
     U.link_google(email)
     token = _start_session(email, method="google", request=request)
+    if first_sign_in:
+        try:
+            from motor_ai_sim.directory.service import on_user_registered
+            on_user_registered(email, name=claims.get("name") or "", source="google")
+        except Exception as e:                               # noqa: BLE001
+            log.warning("directory: on_user_registered (google) failed for %s (%s)", email, e)
     if topics:
         _record_signup_topics(email, topics, "google", _ip(request), req.lang)
     ip = (request.client.host if request and request.client else "?")

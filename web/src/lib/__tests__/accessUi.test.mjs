@@ -73,11 +73,11 @@ t('card summary: none / partial / all', () => {
 // -- role "engineer" (owner 2026-10-14): Configure only, or the whole simulation ------------------------------------------
 
 const ALL_TABS = ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'static3d', 'mechanical',
-  'thermal', 'controller', 'schemas', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'admin'];
+  'thermal', 'controller', 'schemas', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'admin'];
 
 // what App.tsx computes for a session: signedIn, fullUI (hasSimulationUI) and isAdmin
 const visible = (enforced, isAdmin, role) => {
-  const ctx = { signedIn: true, fullUI: A.hasSimulationUI(enforced, isAdmin, role), isAdmin };
+  const ctx = { signedIn: true, fullUI: A.hasSimulationUI(enforced, isAdmin, role), isAdmin, producer: A.productionVisible(enforced, isAdmin, role) };
   return ALL_TABS.filter((id) => A.tabVisible(id, ctx));
 };
 
@@ -87,7 +87,7 @@ t('role user: Motors, Configure, 3D model - nothing else', () => {
 
 t('role engineer: the whole simulation UI, no admin sections, and NO separate 3D model tab (it is Geometry > Full)', () => {
   assert.deepEqual(visible(true, false, 'engineer'), ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'mechanical',
-    'thermal', 'controller', 'schemas', 'comparePoints', 'compare']);
+    'thermal', 'controller', 'schemas', 'comparePoints', 'compare', 'production']);
   assert.equal(visible(true, false, 'engineer').includes('model3d'), false);
   for (const id of ['admin', 'sweep', 'cost', 'static3d']) assert.equal(visible(true, false, 'engineer').includes(id), false, id);
 });
@@ -121,8 +121,8 @@ t('every tab App.tsx draws has a gate, unknown tabs are admin only', () => {
 });
 
 t('the role select: Configure / Simulation / Admin for user / engineer / admin', () => {
-  assert.deepEqual([...A.ROLE_VALUES], ['user', 'engineer', 'admin']);
-  assert.deepEqual(A.ROLE_VALUES.map(A.roleLabel), ['Configure', 'Simulation', 'Admin']);
+  assert.deepEqual([...A.ROLE_VALUES], ['user', 'oem', 'engineer', 'admin']);
+  assert.deepEqual(A.ROLE_VALUES.map(A.roleLabel), ['Configure', 'OEM producer', 'Simulation', 'Admin']);
   assert.equal(A.roleLabel('staff'), 'staff');
 });
 
@@ -169,3 +169,13 @@ t('the "freeze the geometry" hint is the vendor\'s, and only once the tree has a
   assert.equal(A.emptyCatalogLine({ loaded: true, failed: false, note: null, canWrite: true }), 'vendorHint');
   assert.equal(A.emptyCatalogLine({ loaded: false, failed: false, note: null, canWrite: true }), 'loading');
 });
+
+t('role oem: not a standard user, no simulation UI; Motors, Configure, 3D model and Production (members only, server-side)', () => {
+  assert.equal(A.isStandardUser(true, false, 'oem'), false);
+  assert.equal(A.hasSimulationUI(true, false, 'oem'), false);
+  assert.deepEqual(visible(true, false, 'oem'), ['motors', 'compare', 'model3d', 'production']);
+  assert.equal(A.productionVisible(true, false, 'user'), false);
+  assert.equal(A.productionVisible(true, false, 'anon'), false);
+  assert.equal(A.productionVisible(false, false, 'user'), true);   // unenforced local backend
+});
+

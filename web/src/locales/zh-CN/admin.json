@@ -15,7 +15,8 @@
     "downloads3d": "3D 下载",
     "analytics": "访问统计",
     "activity": "使用时长",
-    "verification": "身份核实"
+    "verification": "身份核实",
+    "productionAccess": "生产权限"
   },
   "motors": {
     "title": "电机 — {email}",
@@ -185,5 +186,38 @@
     "applicant": "申请人",
     "downloads": "下载记录",
     "timeline": "时间线"
+  },
+  "production": {
+    "title": "生产权限",
+    "tip": "按型号/配置：创建其生产项目并指定参与人员（负责人、工程师、OEM 生产方）。成员只能看到自己所属的生产项目。",
+    "search": "搜索电机",
+    "refresh": "刷新",
+    "loading": "加载中…",
+    "colMotor": "电机",
+    "colStatus": "生产项目",
+    "colMembers": "成员",
+    "none": "无",
+    "status": { "active": "进行中", "paused": "已暂停", "archived": "已归档" },
+    "role": { "owner": "负责人", "engineer": "工程师", "oem": "OEM 生产方" },
+    "noNda": "{count} 人未签 NDA",
+    "noNdaTip": "未签署保密协议的 OEM 成员无法打开生产项目：{list}",
+    "noNdaOne": "未签署 NDA：无法打开生产项目",
+    "noNdaShort": "无 NDA",
+    "noRows": "没有匹配的电机。",
+    "noMembers": "暂无成员。",
+    "create": "创建生产项目",
+    "titleField": "标题",
+    "qtyField": "订单数量",
+    "created": "生产项目已创建",
+    "addMember": "添加成员",
+    "account": "账号（邮箱）",
+    "roleField": "角色",
+    "add": "添加",
+    "added": "成员已添加",
+    "removeMember": "移除成员",
+    "removed": "已移除 {email}",
+    "delete": "删除生产项目",
+    "deleteConfirm": "删除此生产项目及其成员名单？文件仍保留在磁盘上。",
+    "deleted": "生产项目已删除"
   }
 }

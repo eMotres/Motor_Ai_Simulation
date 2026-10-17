@@ -64,6 +64,7 @@ import ControllerPanel from './components/controller/ControllerPanel';
 import { syncMeshConfigFromServer } from './lib/meshConfigSync';
 import CompareTab from './components/compare/CompareTab';
 import Model3DPanel from './components/model3d/Model3DPanel';
+import { ProductionTab } from './modules/production';
 import GeometryTab from './components/geometry/GeometryTab';
 import ComparePanel from './components/compare/ComparePanel';
 import MeshPanel from './components/mesh/MeshPanel';
@@ -72,7 +73,7 @@ import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
-import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, tabAllowed, TAB_GATES } from './lib/accessUi';
+import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
 import { resolveSchemasRoute } from './lib/schemasRoute';
 import RefusedNotice from './components/common/RefusedNotice';
@@ -232,6 +233,7 @@ function App() {
   // /api/simulation/caches for a regular account.
   const fullUI   = authResolved && hasSimulationUI(enforced, isAdmin, role);
   const standardUser = isStandardUser(enforced, isAdmin, role);
+  const producer = authResolved && productionVisible(enforced, isAdmin, role);
   const newRequests = useNewRequestCount(isAdmin);
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
@@ -471,7 +473,7 @@ function App() {
   const geometryActiveViewer = <><UnifiedActiveMotorScene /><GeometryBuildTimer /></>;
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
-    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin'; showViewer: boolean; keepMounted?: boolean;
+    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer'; showViewer: boolean; keepMounted?: boolean;
     render: () => React.ReactNode;
   }> = [
     { id: 'motors', label: 'Motors', order: 0, gate: TAB_GATES.motors, showViewer: false,
@@ -564,6 +566,9 @@ function App() {
     // 3D model (owner 2026-10-13): look at and rotate the motor model; tools and STEP download come with the NDA (server flag can_download).
     { id: 'model3d', label: '3D model', order: 76, gate: TAB_GATES.model3d, showViewer: false,
       render: () => <Model3DPanel /> },
+    // Production (stage 1): parts, BOM, process, documents, discussion, proposals and revisions of one motor; admin, engineer and OEM producer.
+    { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false,
+      render: () => <ProductionTab /> },
     { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: TAB_GATES.admin, showViewer: false,
       render: () => <AdminPanel /> },
   ];
@@ -581,7 +586,7 @@ function App() {
       // below failed to type-check (TS2362/2363).
       order: (t.panelId ? panels[t.panelId]?.order : undefined) ?? t.order,
     }))
-    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin }))
+    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer }))
     .sort((a, b) => a.order - b.order);
   // A tab this account no longer has (a remembered "3D model" tab of an engineer: the model lives in Geometry > Full for the simulation
   // UI, owner 2026-10-15) lands on the first tab it has - never on an empty body.

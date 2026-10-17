@@ -14,23 +14,28 @@ export const STANDARD_USER_TABS: readonly string[] = ['motors', 'compare', 'mode
 /** A signed-in account on a backend that enforces auth whose role is "user" (Configure only).  An "engineer" (the whole
  *  simulation UI, owner 2026-10-14) is NOT a standard user. */
 export const isStandardUser = (enforced: boolean, isAdmin: boolean, role: string): boolean =>
-  enforced && !isAdmin && role !== 'anon' && role !== 'engineer';
+  enforced && !isAdmin && role !== 'anon' && role !== 'engineer' && role !== 'oem';
 
 /** Does this session get the simulation UI (Geometry, Materials, Mesh, Electromagnetic, Thermal, Mechanical, Controller, Compare)?
  *  Admins, engineers and an unenforced (local) backend. */
 export const hasSimulationUI = (enforced: boolean, isAdmin: boolean, role: string): boolean =>
   !enforced || isAdmin || role === 'engineer';
 
+/** The Production tab: admins, engineers, OEM producers and the unenforced local backend.  Standard accounts (role "user") never see it;
+ *  an account that is no member of any production just sees an empty list (the server answers per production). */
+export const productionVisible = (enforced: boolean, isAdmin: boolean, role: string): boolean =>
+  !enforced || isAdmin || role === 'engineer' || role === 'oem';
+
 /** The account roles (the server's users.ROLES) and what the Admin role select calls them (owner 2026-10-14). */
-export const ROLE_VALUES = ['user', 'engineer', 'admin'] as const;
+export const ROLE_VALUES = ['user', 'oem', 'engineer', 'admin'] as const;
 export type AccountRole = typeof ROLE_VALUES[number];
-export const ROLE_LABELS: Readonly<Record<AccountRole, string>> = { user: 'Configure', engineer: 'Simulation', admin: 'Admin' };
+export const ROLE_LABELS: Readonly<Record<AccountRole, string>> = { user: 'Configure', oem: 'OEM producer', engineer: 'Simulation', admin: 'Admin' };
 export const roleLabel = (role: string): string => ROLE_LABELS[role as AccountRole] ?? role;
 
 /** Who may see a tab: 'always' everyone, 'signedIn' any signed-in session, 'standard' a signed-in account WITHOUT the simulation UI
  *  (role "user": the simplified Configure workflow), 'fullUI' the simulation UI (admin, engineer, local dev), 'admin' admins only
  *  (and the local dev backend, which is admin). */
-export type TabGate = 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin';
+export type TabGate = 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer';
 export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   motors: 'always', geometry: 'fullUI', materials: 'fullUI', mesh: 'fullUI', simulation: 'fullUI',
   static3d: 'admin', mechanical: 'fullUI', thermal: 'fullUI', controller: 'fullUI', schemas: 'fullUI', sweep: 'admin',
@@ -38,10 +43,12 @@ export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   // "3D model" is the simplified Configure workflow's tab (owner 2026-10-15): look at / rotate the full model, tools + STEP after the NDA.
   // Engineers and admins (the simulation UI) have no separate 3D model tab - the same model, its part tree and the files are in Geometry > Full.
   model3d: 'standard', admin: 'admin',
+  // Production (docs/PRODUCTION_MODULE_DESIGN.md): admin, engineer and OEM producer; the server decides which productions each account sees.
+  production: 'producer',
 };
-export interface GateCtx { signedIn: boolean; fullUI: boolean; isAdmin: boolean }
+export interface GateCtx { signedIn: boolean; fullUI: boolean; isAdmin: boolean; producer?: boolean }
 export const gateOpen = (gate: TabGate, c: GateCtx): boolean =>
-  gate === 'always' || (gate === 'signedIn' && c.signedIn) || (gate === 'standard' && c.signedIn && !c.fullUI) || (gate === 'fullUI' && c.fullUI) || (gate === 'admin' && c.isAdmin);
+  gate === 'always' || (gate === 'signedIn' && c.signedIn) || (gate === 'standard' && c.signedIn && !c.fullUI) || (gate === 'fullUI' && c.fullUI) || (gate === 'admin' && c.isAdmin) || (gate === 'producer' && c.signedIn && c.producer === true);
 export const tabVisible = (id: string, c: GateCtx): boolean => gateOpen(TAB_GATES[id] ?? 'admin', c);
 
 /** One line for a non-admin account whose catalogue is empty (no motor granted yet). */

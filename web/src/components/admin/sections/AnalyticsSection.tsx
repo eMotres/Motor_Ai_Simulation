@@ -125,13 +125,17 @@ const AnalyticsSection: React.FC = () => {
             </Typography>
             <Box sx={{ height: 220 }}>
               <ResponsiveContainer>
-                <ComposedChart data={chartData(data)} margin={{ top: 5, right: 10, bottom: 0, left: 0 }}>
+                <ComposedChart data={chartData(data)} margin={{ top: 5, right: 0, bottom: 0, left: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke={theme.palette.divider} />
                   <XAxis dataKey="label" tick={{ fontSize: 10 }} />
-                  <YAxis allowDecimals={false} tick={{ fontSize: 10 }} width={36} />
+                  {/* two scales (owner 2026-10-17): page views on the left, visitors on the right, each axis in its series' colour */}
+                  <YAxis yAxisId="views" allowDecimals={false} tick={{ fontSize: 10, fill: bars }} width={36}
+                    label={{ value: t('analytics.pageviews'), angle: -90, position: 'insideLeft', fontSize: 10, fill: bars }} />
+                  <YAxis yAxisId="visitors" orientation="right" allowDecimals={false} tick={{ fontSize: 10, fill: line }} width={36}
+                    label={{ value: t('analytics.visitors'), angle: 90, position: 'insideRight', fontSize: 10, fill: line }} />
                   <RcTooltip />
-                  <Bar dataKey="pageviews" name={t('analytics.pageviews')} fill={bars} fillOpacity={0.55} />
-                  <Line dataKey="visitors" name={t('analytics.visitors')} stroke={line} strokeWidth={2} dot={false} />
+                  <Bar yAxisId="views" dataKey="pageviews" name={t('analytics.pageviews')} fill={bars} fillOpacity={0.55} />
+                  <Line yAxisId="visitors" dataKey="visitors" name={t('analytics.visitors')} stroke={line} strokeWidth={2} dot={false} />
                 </ComposedChart>
               </ResponsiveContainer>
             </Box>

@@ -6,13 +6,14 @@ import { Box, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 
 export type AdminSectionId =
-  | 'overview' | 'users' | 'signups' | 'servers' | 'usage' | 'agents' | 'agentActivity' | 'catalogs' | 'motorsAccess' | 'productionAccess' | 'mailing' | 'logs' | 'downloads3d' | 'verification' | 'analytics' | 'activity';
+  | 'overview' | 'users' | 'directory' | 'signups' | 'servers' | 'usage' | 'agents' | 'agentActivity' | 'catalogs' | 'motorsAccess' | 'productionAccess' | 'mailing' | 'logs' | 'downloads3d' | 'verification' | 'analytics' | 'activity';
 
 export interface AdminSectionDef { id: AdminSectionId; label: string; badge?: number }
 
 export const ADMIN_SECTIONS: { id: AdminSectionId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'users', label: 'Users' },
+  { id: 'directory', label: 'Companies & people' },
   { id: 'signups', label: 'Sign-ups' },
   { id: 'servers', label: 'Servers' },
   { id: 'usage', label: 'Usage & pricing' },
@@ -93,8 +94,8 @@ const AdminNav: React.FC<{
           {!!badge && (
             <Box sx={{
               fontSize: 10, fontWeight: 700,
-              color: s.id === 'verification' ? '#ffffff' : '#fbbf24',
-              bgcolor: s.id === 'verification' ? '#ef4444' : 'var(--panel)',
+              color: (s.id === 'verification' || s.id === 'directory') ? '#ffffff' : '#fbbf24',
+              bgcolor: (s.id === 'verification' || s.id === 'directory') ? '#ef4444' : 'var(--panel)',
               borderRadius: 4, px: 0.6, lineHeight: '15px', minWidth: 15, textAlign: 'center',
             }}>
               {badge}

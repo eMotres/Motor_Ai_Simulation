@@ -119,6 +119,11 @@ def sign(request: Request, body: dict = Body(default={}), authorization: Optiona
         V.on_nda_signed(who["id"], r, body, lang)
     except Exception:                                       # noqa: BLE001
         log.exception("nda: the verification case of %s could not be opened", r["id"])
+    try:
+        from motor_ai_sim.directory.service import ingest_nda_record
+        ingest_nda_record(r, intake=body)
+    except Exception:                                       # noqa: BLE001
+        log.exception("nda: directory ingestion of %s failed", r["id"])
     # the optional dataset consent: its own audit line and user flag; a failure here never undoes the signature (fail-closed:
     # without the audit line the export filter refuses the data)
     from motor_ai_sim import data_sharing as DS

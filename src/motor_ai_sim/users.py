@@ -625,6 +625,11 @@ def mark_verified(email: str, *, by: str = "link") -> bool:
             rec["link_nonces"] = ln
         rec["short_links"] = [r for r in (rec.get("short_links") or []) if not (isinstance(r, dict) and r.get("p") == "verify")]
         _save(users)
+    try:
+        from motor_ai_sim.directory.service import on_user_confirmed
+        on_user_confirmed(email)
+    except Exception as e:                                   # noqa: BLE001
+        log.warning("directory: on_user_confirmed failed for %s (%s)", email, e)
     return True
 
 

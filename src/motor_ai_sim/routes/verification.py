@@ -7,7 +7,7 @@ Signed in:
 
 By the personal link in the mails (no session; the signed token is the credential; plain HTML, no JavaScript):
 * ``GET  /api/verification/reply/{token}``            the reply page
-* ``POST /api/verification/reply/{token}``            form: ``action`` = add_email | confirm_email | reply
+* ``POST /api/verification/reply/{token}``            form: ``action`` = send (details + code to the e-mail) | confirm_email
 * ``POST /api/verification/reply/{token}/document``   multipart: ONE pdf / png / jpg
 
 Admin only (every call audited):
@@ -97,7 +97,8 @@ def _case_or_404(token: str, request: Request) -> dict:
     return case
 
 
-def _render(request: Request, token: str, case: dict, *, flash: str = "", kind: str = "", pending: str = "") -> HTMLResponse:
+def _render(request: Request, token: str, case: dict, *, flash: str = "", kind: str = "", pending: str = "", typed: Optional[dict] = None,
+            saved: bool = False) -> HTMLResponse:
     case = ST.get(case["id"]) or case
     lang = LP.pick_lang(query=request.query_params.get("lang", ""), stored=case.get("lang") or "",
                         accept_language=request.headers.get("accept-language", ""), email=case.get("user") or "")
@@ -107,7 +108,8 @@ def _render(request: Request, token: str, case: dict, *, flash: str = "", kind: 
         pend = [a for a, p in case["emails"]["pending"].items() if p["expires"] > time.time()]
         pending = pend[-1] if pend else ""
     html = PG.page(lang, case, state, token=token, requests=case.get("requests") or [], flash=flash, flash_kind=kind, pending_email=pending,
-                   switch_url=request.url.path + "?lang=" + other, open_url=E.app_url() + ("/zh-cn/" if lang == "zh-CN" else "/"))
+                   switch_url=request.url.path + "?lang=" + other, open_url=E.app_url() + ("/zh-cn/" if lang == "zh-CN" else "/"),
+                   typed=typed, saved=saved)
     return HTMLResponse(html, headers=_HEADERS)
 
 
@@ -134,19 +136,31 @@ def reply_post(token: str, request: Request, action: str = Form(""), email: str 
     if case["status"] == V.DENIED:
         return _render(request, token, case)
     cid = case["id"]
-    if action == "add_email":
-        ok, c = SV.start_email(cid, email)
-        return _render(request, token, case, flash=c if ok else c, kind="" if ok else "err", pending=email.strip().lower() if ok else "")
+    if action in ("send", "add_email", "reply"):         # "add_email" / "reply": pages rendered before the one-button form
+        # ONE button: the links / details typed are stored, and a code goes to the e-mail typed (not again while one is waiting)
+        a = case["application"]
+        changed = {k: v.strip() for k, v in (("website", website), ("reg_no", reg_no), ("vat_no", vat_no)) if v.strip() and v.strip() != (a.get(k) or "")}
+        saved = bool(urls.strip() or note.strip() or changed)
+        if saved:
+            SV.reply(cid, urls_text=urls, note=note, fields=changed)
+        address = email.strip().lower()
+        if not address or action == "reply":
+            if not saved:
+                return _render(request, token, case, flash="nothing", kind="err")
+            return _render(request, token, case, flash="reply")
+        if address in {v["email"] for v in case["emails"]["verified"]}:
+            return _render(request, token, case, flash="verified", pending=address, saved=saved)
+        p = case["emails"]["pending"].get(address)
+        if p and p["expires"] > time.time() and p["attempts"] < C.OTP_MAX_ATTEMPTS:
+            return _render(request, token, case, flash="sent", pending=address, saved=saved)
+        ok, c = SV.start_email(cid, address)
+        if ok:
+            return _render(request, token, case, flash=c, pending=address, saved=saved)
+        typed = {"email": email} if saved else {"email": email, "urls": urls, "note": note, "website": website, "reg_no": reg_no, "vat_no": vat_no}
+        return _render(request, token, case, flash=c, kind="err", typed=typed, saved=saved)
     if action == "confirm_email":
         ok, c = SV.confirm_email(cid, email, code)
         return _render(request, token, case, flash="verified" if ok else c, kind="" if ok else "err", pending="" if ok else email.strip().lower())
-    if action == "reply":
-        a = case["application"]
-        changed = {k: v.strip() for k, v in (("website", website), ("reg_no", reg_no), ("vat_no", vat_no)) if v.strip() and v.strip() != (a.get(k) or "")}
-        if not (urls.strip() or note.strip() or changed):
-            return _render(request, token, case, flash="nothing", kind="err")
-        SV.reply(cid, urls_text=urls, note=note, fields=changed)
-        return _render(request, token, case, flash="reply")
     return _render(request, token, case)
 
 

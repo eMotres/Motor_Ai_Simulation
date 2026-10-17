@@ -47,7 +47,7 @@
     "discussion": "Discussion",
     "proposals": "Proposals",
     "changes": "Changes",
-    "assembly": "Assembly"
+    "assembly": "Assembly process"
   },
   "bilingual": {
     "machine": "Machine translation, not verified",
@@ -141,18 +141,23 @@
   },
   "process": {
     "none": "No process sections.",
-    "kind": {
-      "fits": "Fits",
-      "assembly": "Assembly",
-      "winding": "Winding",
-      "tests": "Tests"
-    },
+    "kind": "Kind",
     "add": "Add section",
     "title": "Section title",
     "body": "Text",
     "up": "Move up",
     "down": "Move down",
-    "kindLabel": "Kind"
+    "kindLabel": "Kind",
+    "operation": "Operation",
+    "check": "Check",
+    "addStep": "Add step",
+    "edit": "Edit",
+    "delete": "Delete",
+    "editStep": "Step",
+    "after": "After steps",
+    "parts": "Parts",
+    "noteEn": "Note (English)",
+    "noteZh": "Note (Chinese)"
   },
   "docs": {
     "none": "No documents.",

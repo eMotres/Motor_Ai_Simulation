@@ -2,7 +2,7 @@
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
 import { errorInfo, safeFileName, unwrapList } from './helpers';
 import type {
-  AssemblyTree, Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
+  AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
   Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
@@ -121,6 +121,10 @@ export const productionApi = {
 
   timeline: (die: string) => call<TimelineData>('GET', `/api/production/${enc(die)}/timeline`),
 
+  assemblyProcess: async (die: string, config: string): Promise<AssemblyProcessView> =>
+    call<AssemblyProcessView>('GET', `${base(die, config)}/assembly_process`),
+  saveAssemblyProcess: async (die: string, config: string, steps: AssemblyStep[]): Promise<AssemblyProcessView> =>
+    call<AssemblyProcessView>('PUT', `${base(die, config)}/assembly_process`, { steps }),
   process: async (die: string, config: string) => unwrapList<ProcessSection>(await call('GET', `${base(die, config)}/process`), 'sections'),
   saveProcess: (die: string, config: string, sections: ProcessSection[]) =>
     call<unknown>('PUT', `${base(die, config)}/process`, { sections }),

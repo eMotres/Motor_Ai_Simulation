@@ -65,6 +65,7 @@ _DEFAULTS: dict[str, Any] = {
     "costs.json": {"rows": [], "extras": [], "margin_pct": 0.0},
     "procurement.json": {"rows": []},
     "schedule.json": {"phases": [], "milestones": [], "baseline": {}},
+    "assembly_process.json": {"steps": []},
     "process.json": {"sections": []},
     "documents.json": {"documents": []},
     "threads.json": {"threads": []},

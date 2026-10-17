@@ -47,7 +47,7 @@
     "discussion": "讨论",
     "proposals": "建议",
     "changes": "变更",
-    "assembly": "装配结构"
+    "assembly": "装配流程"
   },
   "bilingual": {
     "machine": "机器翻译，未经核实",
@@ -141,18 +141,23 @@
   },
   "process": {
     "none": "暂无工艺章节。",
-    "kind": {
-      "fits": "配合",
-      "assembly": "装配",
-      "winding": "绕线",
-      "tests": "测试"
-    },
+    "kind": "类型",
     "add": "添加章节",
     "title": "章节标题",
     "body": "内容",
     "up": "上移",
     "down": "下移",
-    "kindLabel": "类别"
+    "kindLabel": "类别",
+    "operation": "工序",
+    "check": "检验",
+    "addStep": "添加步骤",
+    "edit": "编辑",
+    "delete": "删除",
+    "editStep": "步骤",
+    "after": "前置步骤",
+    "parts": "零件",
+    "noteEn": "备注（英文）",
+    "noteZh": "备注（中文）"
   },
   "docs": {
     "none": "暂无文件。",

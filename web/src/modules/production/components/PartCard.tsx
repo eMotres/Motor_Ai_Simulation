@@ -23,11 +23,12 @@ import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import PartName from './PartName';
 import { downloadFile, downloadModelStep, fileObjectUrl, productionApi } from '../api';
-import { canEditProcurement, displayText, getStatusColor, makeBilingual } from '../helpers';
+import { canEditProcurement, displayText, formatReceiptTime, getStatusColor, makeBilingual } from '../helpers';
 import type {
   CostRow,
   DocumentRec,
   DrawingFile,
+  ExtraCost,
   Lang,
   Part,
   ProcurementLine,
@@ -40,7 +41,7 @@ import type {
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 const CHIP = { height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' } as const;
 
-export const DrawingPreview: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = ({ ctx, d }) => {
+export const InlineDrawing: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = ({ ctx, d }) => {
   const { t } = useTranslation('production');
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -61,30 +62,45 @@ export const DrawingPreview: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = ({ ctx
   }, [ctx.die, ctx.config, d.file_id, d.kind]);
 
   return (
-    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, width: 160 }}>
-      {d.kind === 'png' && url && (
+    <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 0.75, my: 1 }}>
+      {url && (
         <Box
           component="img"
           src={url}
           alt={d.name}
-          sx={{ width: 160, height: 110, objectFit: 'contain', bgcolor: '#fff', borderRadius: 1 }}
+          sx={{
+            width: '100%',
+            maxHeight: 520,
+            objectFit: 'contain',
+            bgcolor: '#ffffff',
+            borderRadius: 1.5,
+            border: '1px solid var(--line-soft)',
+            boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+          }}
         />
       )}
-      <Button
-        size="small"
-        sx={{ textTransform: 'none', fontSize: 11, justifyContent: 'flex-start', p: 0 }}
-        onClick={() => void downloadFile(ctx.die, ctx.config, d.file_id, d.name)}
-      >
-        {d.kind.toUpperCase()} · {d.name || t('parts.download')}
-      </Button>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', px: 0.5 }}>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-2)' }}>{d.name}</Typography>
+        <Button
+          size="small"
+          variant="outlined"
+          sx={{ textTransform: 'none', fontSize: 11, py: 0.2 }}
+          onClick={() => void downloadFile(ctx.die, ctx.config, d.file_id, d.name)}
+        >
+          {t('parts.download')} PNG
+        </Button>
+      </Box>
     </Box>
   );
 };
+
+export const DrawingPreview: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = InlineDrawing;
 
 export interface PartDetailPanelProps {
   part: Part;
   ctx: ProdCtx;
   orderQuantity: number;
+  allParts?: Part[];
   costRow?: CostRow;
   procurementLine?: ProcurementLine;
   documents?: DocumentRec[];
@@ -100,6 +116,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   part,
   ctx,
   orderQuantity,
+  allParts = [],
   costRow,
   procurementLine,
   documents = [],
@@ -120,6 +137,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   const [spec, setSpec] = useState('');
   const [qty, setQty] = useState('1');
   const [kind, setKind] = useState<Part['kind']>('made');
+  const [parentId, setParentId] = useState<string>(part.parent_id || '');
   const [err, setErr] = useState<string | null>(null);
 
   const canProcure = canEditProcurement(ctx.role);
@@ -128,7 +146,6 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   const [procPo, setProcPo] = useState(procurementLine?.po_number || '');
   const [procLeadDays, setProcLeadDays] = useState(String(procurementLine?.lead_time_days ?? 0));
   const [procOrderedOn, setProcOrderedOn] = useState(procurementLine?.ordered_on || '');
-  const [procNeedBy, setProcNeedBy] = useState(procurementLine?.need_by || procurementLine?.due_on || '');
   const [procConfirmedOn, setProcConfirmedOn] = useState(procurementLine?.confirmed_on || '');
   const [procRequestedOn, setProcRequestedOn] = useState(procurementLine?.requested_on || '');
   const [procQtyOrdered, setProcQtyOrdered] = useState(procurementLine?.qty_ordered !== null && procurementLine?.qty_ordered !== undefined ? String(procurementLine.qty_ordered) : '');
@@ -139,7 +156,10 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
 
   // New receipt form state
   const [showAddReceipt, setShowAddReceipt] = useState(false);
-  const [rcptDate, setRcptDate] = useState(new Date().toISOString().slice(0, 10));
+  const [rcptTime, setRcptTime] = useState(() => {
+    const d = new Date(Date.now() - new Date().getTimezoneOffset() * 60000);
+    return d.toISOString().slice(0, 16);
+  });
   const [rcptQty, setRcptQty] = useState('');
   const [rcptAccepted, setRcptAccepted] = useState('');
   const [rcptRejected, setRcptRejected] = useState('0');
@@ -147,12 +167,15 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   const [rcptNote, setRcptNote] = useState('');
 
   useEffect(() => {
+    setParentId(part.parent_id || '');
+  }, [part.parent_id]);
+
+  useEffect(() => {
     if (procurementLine) {
       setProcSupplier(procurementLine.supplier || '');
       setProcPo(procurementLine.po_number || '');
       setProcLeadDays(String(procurementLine.lead_time_days ?? 0));
       setProcOrderedOn(procurementLine.ordered_on || '');
-      setProcNeedBy(procurementLine.need_by || procurementLine.due_on || '');
       setProcConfirmedOn(procurementLine.confirmed_on || '');
       setProcRequestedOn(procurementLine.requested_on || '');
       setProcQtyOrdered(procurementLine.qty_ordered !== null && procurementLine.qty_ordered !== undefined ? String(procurementLine.qty_ordered) : '');
@@ -171,7 +194,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
         po_number: procPo.trim(),
         lead_time_days: Math.max(0, parseInt(procLeadDays) || 0),
         ordered_on: procOrderedOn.trim() || null,
-        need_by: procNeedBy.trim() || null,
+        need_by: procurementLine?.need_by || null,
         confirmed_on: procConfirmedOn.trim() || null,
         requested_on: procRequestedOn.trim() || null,
         qty_ordered: procQtyOrdered.trim() ? Math.max(0, parseFloat(procQtyOrdered)) : null,
@@ -202,7 +225,8 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
       return;
     }
     const newEntry: Receipt = {
-      date: rcptDate.trim() || new Date().toISOString().slice(0, 10),
+      date: rcptTime ? rcptTime.slice(0, 10) : new Date().toISOString().slice(0, 10),
+      timestamp: rcptTime ? (rcptTime.length === 16 ? `${rcptTime}:00` : rcptTime) : undefined,
       qty: q,
       accepted: acc,
       rejected: rej,
@@ -228,6 +252,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
     setSpec(part.spec_i18n ? (part.spec_i18n[ui] || part.spec_i18n.zh || part.spec) : part.spec);
     setQty(String(part.qty_per_motor));
     setKind(part.kind);
+    setParentId(part.parent_id || '');
     setErr(null);
     setEditing(true);
   };
@@ -241,6 +266,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
         spec,
         kind,
         qty_per_motor: Number(qty) || 0,
+        parent_id: parentId || null,
       });
       setEditing(false);
       onChanged();
@@ -274,6 +300,9 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
   const note = costRow?.note || '';
   const orderTotalParts = part.qty_per_motor * orderQuantity;
 
+  const availableAssemblies = allParts.filter((p) => p.kind === 'assembly' && p.id !== part.id);
+  const parentPart = allParts.find((p) => p.id === part.parent_id);
+
   return (
     <Paper sx={{ ...PANEL, p: 2, position: 'relative' }}>
       {/* Header bar */}
@@ -281,6 +310,13 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
           <PartName name={part.name} bold size={15} />
           <Chip size="small" label={t(`parts.kindValue.${part.kind}`)} sx={CHIP} />
+          {parentPart && (
+            <Chip
+              size="small"
+              label={`${t('parts.parentAssembly', 'Sub-assembly')}: ${displayText(parentPart.name, ui).text}`}
+              sx={CHIP}
+            />
+          )}
           <Chip size="small" label={`× ${part.qty_per_motor} (${t('parts.qty')})`} sx={CHIP} />
           <Chip size="small" label={`${t('col.orderQty')}: ${orderTotalParts}`} sx={CHIP} />
           <Chip size="small" label={t('parts.revision', { rev: part.revision })} sx={CHIP} />
@@ -308,10 +344,27 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
           <BilingualInput label={t('parts.description')} value={desc} lang={lang} multiline onChange={(v, l) => { setDesc(v); setLang(l); }} />
           <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
             <TextField select size="small" label={t('parts.kind')} value={kind} onChange={(e) => setKind(e.target.value as Part['kind'])} sx={{ width: 140 }}>
-              {(['made', 'purchased', 'consumable'] as const).map((k) => (
+              {(['made', 'purchased', 'consumable', 'assembly'] as const).map((k) => (
                 <MenuItem key={k} value={k}>{t(`parts.kindValue.${k}`)}</MenuItem>
               ))}
             </TextField>
+            {ctx.canEdit && ctx.role !== 'oem' && (
+              <TextField
+                select
+                size="small"
+                label={t('parts.parentAssembly', 'Sub-assembly')}
+                value={parentId}
+                onChange={(e) => setParentId(e.target.value)}
+                sx={{ width: 170 }}
+              >
+                <MenuItem value="">{t('parts.noParent', 'None (Motor root)')}</MenuItem>
+                {availableAssemblies.map((a) => (
+                  <MenuItem key={a.id} value={a.id}>
+                    {displayText(a.name, ui).text}
+                  </MenuItem>
+                ))}
+              </TextField>
+            )}
             <TextField size="small" label={t('parts.qty')} value={qty} onChange={(e) => setQty(e.target.value)} sx={{ width: 100 }} />
             <TextField size="small" label={t('parts.material')} value={material} onChange={(e) => setMaterial(e.target.value)} sx={{ flex: 1, minWidth: 160 }} />
             <TextField size="small" label={t('parts.spec')} value={spec} onChange={(e) => setSpec(e.target.value)} sx={{ flex: 1, minWidth: 160 }} />
@@ -502,13 +555,12 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
           />
           <TextField
             size="small"
-            type="date"
             InputLabelProps={{ shrink: true }}
-            label={t('procurement.needBy', 'Need By (Assembly)')}
-            value={procNeedBy}
-            disabled={!canProcure}
-            onChange={(e) => setProcNeedBy(e.target.value)}
-            sx={{ width: 160, '& .MuiInputBase-input': { fontSize: 12 } }}
+            label={t('procurement.colReceived', 'Received')}
+            value={procurementLine?.received_on ? formatReceiptTime(procurementLine.received_on) : ''}
+            disabled
+            placeholder={t('procurement.receivedPending', 'Empty until complete')}
+            sx={{ width: 175, '& .MuiInputBase-input': { fontSize: 12, color: procurementLine?.received_on ? '#10b981' : undefined } }}
           />
           <TextField
             size="small"
@@ -523,6 +575,11 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
 
         {/* Derived Dates info */}
         <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', pt: 0.5, fontSize: 11.5, color: 'var(--text-3)' }}>
+          {procurementLine?.need_by && (
+            <span>
+              {t('procurement.needBy', 'Need By (Assembly)')}: <strong style={{ color: 'var(--text-1)' }}>{procurementLine.need_by}</strong>
+            </span>
+          )}
           {procurementLine?.order_by && (
             <span>
               {t('procurement.orderBy', 'MRP Order By')}: <strong style={{ color: procurementLine.is_to_order ? '#f97316' : 'var(--text-1)' }}>{procurementLine.order_by}</strong>
@@ -561,7 +618,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 11.5 }}>
               <thead>
                 <tr style={{ background: 'var(--panel)', color: 'var(--text-3)', textAlign: 'left' }}>
-                  <th style={{ padding: '6px 10px' }}>{t('procurement.rcptDate', 'Date')}</th>
+                  <th style={{ padding: '6px 10px' }}>{t('procurement.rcptTimestamp', 'Date & Time')}</th>
                   <th style={{ padding: '6px 10px', textAlign: 'right' }}>{t('procurement.rcptQty', 'Delivered')}</th>
                   <th style={{ padding: '6px 10px', textAlign: 'right' }}>{t('procurement.rcptAccepted', 'Accepted')}</th>
                   <th style={{ padding: '6px 10px', textAlign: 'right' }}>{t('procurement.rcptRejected', 'Rejected')}</th>
@@ -572,7 +629,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
               <tbody>
                 {receipts.map((rcpt, idx) => (
                   <tr key={idx} style={{ borderTop: '1px solid var(--line-soft)' }}>
-                    <td style={{ padding: '5px 10px' }}>{rcpt.date}</td>
+                    <td style={{ padding: '5px 10px', whiteSpace: 'nowrap' }}>{formatReceiptTime(rcpt.timestamp || rcpt.date)}</td>
                     <td style={{ padding: '5px 10px', textAlign: 'right' }}>{rcpt.qty}</td>
                     <td style={{ padding: '5px 10px', textAlign: 'right', color: '#10b981', fontWeight: 600 }}>{rcpt.accepted}</td>
                     <td style={{ padding: '5px 10px', textAlign: 'right', color: rcpt.rejected > 0 ? '#ef4444' : 'var(--text-4)' }}>{rcpt.rejected}</td>
@@ -598,12 +655,12 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
               <TextField
                 size="small"
-                type="date"
+                type="datetime-local"
                 InputLabelProps={{ shrink: true }}
-                label={t('procurement.rcptDate', 'Date')}
-                value={rcptDate}
-                onChange={(e) => setRcptDate(e.target.value)}
-                sx={{ width: 135, '& .MuiInputBase-input': { fontSize: 12 } }}
+                label={t('procurement.rcptTimestamp', 'Date & Time')}
+                value={rcptTime}
+                onChange={(e) => setRcptTime(e.target.value)}
+                sx={{ width: 195, '& .MuiInputBase-input': { fontSize: 12 } }}
               />
               <TextField
                 size="small"
@@ -666,37 +723,67 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
       <Typography sx={{ fontSize: 12, fontWeight: 700, color: 'var(--text-2)', mb: 0.75 }}>
         {t('tabs.documents')} & {t('parts.drawings')}
       </Typography>
-      <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-        {part.drawing_files.length === 0 && (
-          <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)' }}>{t('parts.noDrawings')}</Typography>
-        )}
-        {part.drawing_files.map((d) => (
-          <DrawingPreview key={d.file_id} ctx={ctx} d={d} />
-        ))}
-        <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
-          {part.optional_step && (
+
+      {/* PDF downloads first and prominent */}
+      {part.drawing_files.filter((d) => d.kind === 'pdf').length > 0 && (
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mb: 1.5 }}>
+          {part.drawing_files.filter((d) => d.kind === 'pdf').map((d) => (
             <Button
+              key={d.file_id}
+              variant="contained"
               size="small"
-              sx={{ textTransform: 'none', fontSize: 11, justifyContent: 'flex-start', p: 0 }}
-              onClick={() => void downloadFile(ctx.die, ctx.config, part.optional_step!.file_id, `${part.id}.step`)}
+              sx={{
+                textTransform: 'none',
+                fontSize: 12,
+                fontWeight: 600,
+                bgcolor: '#dc2626',
+                color: '#ffffff',
+                '&:hover': { bgcolor: '#b91c1c' },
+                px: 1.5,
+                py: 0.4,
+              }}
+              onClick={() => void downloadFile(ctx.die, ctx.config, d.file_id, d.name)}
             >
-              {t('parts.partStep')}
+              PDF · {d.name || t('parts.download')}
             </Button>
-          )}
-          <Tooltip title={t('parts.model3dTip')}>
-            <Button
-              size="small"
-              sx={{ textTransform: 'none', fontSize: 11, justifyContent: 'flex-start', p: 0 }}
-              onClick={() =>
-                void downloadModelStep(ctx.die, ctx.config).catch((e) =>
-                  setErr(t('failed', { reason: e instanceof Error ? e.message : String(e) }))
-                )
-              }
-            >
-              {t('parts.model3d')}
-            </Button>
-          </Tooltip>
+          ))}
         </Box>
+      )}
+
+      {/* Inline Large PNG Drawings */}
+      {part.drawing_files.filter((d) => d.kind === 'png').map((d) => (
+        <InlineDrawing key={d.file_id} ctx={ctx} d={d} />
+      ))}
+
+      {part.drawing_files.length === 0 && (
+        <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)', mb: 1 }}>{t('parts.noDrawings')}</Typography>
+      )}
+
+      <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mt: 1 }}>
+        {part.optional_step && (
+          <Button
+            size="small"
+            variant="outlined"
+            sx={{ textTransform: 'none', fontSize: 11, py: 0.25 }}
+            onClick={() => void downloadFile(ctx.die, ctx.config, part.optional_step!.file_id, `${part.id}.step`)}
+          >
+            {t('parts.partStep')}
+          </Button>
+        )}
+        <Tooltip title={t('parts.model3dTip')}>
+          <Button
+            size="small"
+            variant="outlined"
+            sx={{ textTransform: 'none', fontSize: 11, py: 0.25 }}
+            onClick={() =>
+              void downloadModelStep(ctx.die, ctx.config).catch((e) =>
+                setErr(t('failed', { reason: e instanceof Error ? e.message : String(e) }))
+              )
+            }
+          >
+            {t('parts.model3d')}
+          </Button>
+        </Tooltip>
       </Box>
 
       {/* Linked Documents */}
@@ -768,6 +855,41 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
       )}
 
       {err && <Alert severity="error" sx={{ mt: 1.5, fontSize: 12 }}>{err}</Alert>}
+    </Paper>
+  );
+};
+
+export interface ExtraDetailPanelProps {
+  extra: ExtraCost;
+  currency?: string;
+  onClose?: () => void;
+}
+
+export const ExtraDetailPanel: React.FC<ExtraDetailPanelProps> = ({
+  extra,
+  currency = 'CNY',
+  onClose,
+}) => {
+  const ui = useContentLang();
+  const name = ui === 'zh' ? (extra.name.zh || extra.name.en) : (extra.name.en || extra.name.zh);
+
+  return (
+    <Paper sx={{ ...PANEL, p: 2, position: 'relative' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Typography sx={{ fontSize: 15, fontWeight: 700, color: 'var(--text-0)' }}>
+            {name}
+          </Typography>
+          <Typography sx={{ fontSize: 14, fontWeight: 600, color: '#38bdf8' }}>
+            {extra.amount.toFixed(2)} {currency}
+          </Typography>
+        </Box>
+        {onClose && (
+          <IconButton size="small" onClick={onClose} sx={{ color: 'var(--text-3)' }}>
+            <CloseIcon fontSize="small" />
+          </IconButton>
+        )}
+      </Box>
     </Paper>
   );
 };

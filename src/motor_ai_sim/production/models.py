@@ -233,8 +233,14 @@ def normalize_part(raw: dict, part_id: Optional[str] = None) -> dict:
     if not spec_i18n["zh"] and old_spec:
         spec_i18n["zh"] = old_spec
 
+    pid = part_id or str(raw.get("id") or _new_id("pt"))
+    parent_id_raw = raw.get("parent_id")
+    parent_id = str(parent_id_raw).strip() if parent_id_raw is not None and str(parent_id_raw).strip() else None
+    if parent_id == pid:
+        parent_id = None
+
     return {
-        "id": part_id or str(raw.get("id") or _new_id("pt")),
+        "id": pid,
         "name": normalize_bilingual(raw.get("name")),
         "kind": str(raw.get("kind")) if str(raw.get("kind")) in PART_KINDS else "made",
         "qty_per_motor": max(0, int(raw.get("qty_per_motor") or 1)),
@@ -246,7 +252,221 @@ def normalize_part(raw: dict, part_id: Optional[str] = None) -> dict:
         "drawing_files": drawing_files,
         "optional_step": optional_step,
         "revision": str(raw.get("revision") or "1.0"),
+        "parent_id": parent_id,
     }
+
+
+DEFAULT_SUBASSEMBLIES = [
+    {
+        "id": "sub_stator",
+        "name": {
+            "en": "Stator assembly",
+            "zh": "定子总成",
+            "src_lang": "en",
+            "status": {"en": "confirmed", "zh": "confirmed"},
+        },
+        "kind": "assembly",
+        "qty_per_motor": 1,
+        "material": "",
+        "spec": "",
+        "material_i18n": {"zh": "", "en": ""},
+        "spec_i18n": {"zh": "", "en": ""},
+        "description": {
+            "en": "Stator core, coils, insulation, rings and phase board",
+            "zh": "定子铁芯、线圈、绝缘、固定环与相板",
+            "src_lang": "en",
+            "status": {"en": "confirmed", "zh": "confirmed"},
+        },
+        "drawing_files": [],
+        "optional_step": None,
+        "revision": "1.0",
+        "parent_id": "motor",
+    },
+    {
+        "id": "sub_rotor",
+        "name": {
+            "en": "Rotor assembly",
+            "zh": "转子总成",
+            "src_lang": "en",
+            "status": {"en": "confirmed", "zh": "confirmed"},
+        },
+        "kind": "assembly",
+        "qty_per_motor": 1,
+        "material": "",
+        "spec": "",
+        "material_i18n": {"zh": "", "en": ""},
+        "spec_i18n": {"zh": "", "en": ""},
+        "description": {
+            "en": "Rotor core, magnets and shaft",
+            "zh": "转子铁芯、永磁体与电机轴",
+            "src_lang": "en",
+            "status": {"en": "confirmed", "zh": "confirmed"},
+        },
+        "drawing_files": [],
+        "optional_step": None,
+        "revision": "1.0",
+        "parent_id": "motor",
+    },
+    {
+        "id": "sub_housing",
+        "name": {
+            "en": "Housing",
+            "zh": "机壳与结构件",
+            "src_lang": "en",
+            "status": {"en": "confirmed", "zh": "confirmed"},
+        },
+        "kind": "assembly",
+        "qty_per_motor": 1,
+        "material": "",
+        "spec": "",
+        "material_i18n": {"zh": "", "en": ""},
+        "spec_i18n": {"zh": "", "en": ""},
+        "description": {
+            "en": "Holders, bearings, screws and propeller fix",
+            "zh": "端盖支架、轴承、螺钉与螺旋桨固定片",
+            "src_lang": "en",
+            "status": {"en": "confirmed", "zh": "confirmed"},
+        },
+        "drawing_files": [],
+        "optional_step": None,
+        "revision": "1.0",
+        "parent_id": "motor",
+    },
+]
+
+
+def match_default_assembly_parent(part_name_en: str, part_name_zh: str = "") -> str:
+    """Deterministic canonical mapping for motor parts:
+    - Stator assembly: Stator core, Coil, Slot insulation, Coil-fixing ring, Phase board, Lead wire, Varnish / epoxy
+    - Rotor assembly: Rotor core, Magnet, Shaft
+    - Housing: Front holder, Back holder, Bearing, Socket head screw, Prop_fix
+    """
+    en = (part_name_en or "").strip().lower()
+    zh = (part_name_zh or "").strip()
+
+    # Check housing matches first (so "Bearing / 轴承" is not captured by "轴")
+    if any(k in en for k in ("holder", "bearing", "screw", "bolt", "prop_fix", "prop fix", "housing")) or \
+       any(k in zh for k in ("支架", "端盖", "轴承", "螺钉", "螺栓", "固定片", "机壳")):
+        return "sub_housing"
+
+    # Check rotor matches
+    if any(k in en for k in ("rotor core", "magnet", "shaft")) or \
+       any(k in zh for k in ("转子", "磁钢", "磁体")) or \
+       ("轴" in zh and "轴承" not in zh):
+        if "stator" not in en and "定子" not in zh:
+            return "sub_rotor"
+
+    # Check stator matches
+    if any(k in en for k in ("stator core", "coil", "insulation", "phase board", "lead wire", "varnish", "epoxy")) or \
+       any(k in zh for k in ("定子", "线圈", "绝缘", "相板", "引线", "浸漆", "环氧")):
+        return "sub_stator"
+
+    return "sub_housing"
+
+
+def ensure_default_assembly(parts: list[dict], die: str = "", config: str = "") -> list[dict]:
+    """Ensure parts list contains the default assembly hierarchy if none was defined yet.
+    If sub-assemblies (kind='assembly') or parent_ids are already present, preserve them.
+    """
+    if not parts:
+        return []
+
+    has_assemblies = any(isinstance(p, dict) and p.get("kind") == "assembly" for p in parts)
+    has_parent_ids = any(isinstance(p, dict) and bool(p.get("parent_id")) for p in parts)
+    if has_assemblies or has_parent_ids:
+        return parts
+
+    sub_map = {sub["id"]: dict(sub) for sub in DEFAULT_SUBASSEMBLIES}
+
+    updated_parts = []
+    for p in parts:
+        if not isinstance(p, dict):
+            continue
+        up = dict(p)
+        name_en = (up.get("name") or {}).get("en") or ""
+        name_zh = (up.get("name") or {}).get("zh") or ""
+        parent = match_default_assembly_parent(name_en, name_zh)
+        up["parent_id"] = parent
+        updated_parts.append(up)
+
+    return list(sub_map.values()) + updated_parts
+
+
+def build_assembly_tree(parts: list[dict]) -> dict:
+    """Build hierarchical tree:
+    Root ('motor') -> Sub-assemblies -> Leaf parts.
+    """
+    structured_parts = ensure_default_assembly(parts)
+    by_parent: dict[str, list[dict]] = {}
+    for p in structured_parts:
+        if not isinstance(p, dict):
+            continue
+        pid = p.get("parent_id") or "motor"
+        by_parent.setdefault(pid, []).append(p)
+
+    sub_assemblies = []
+    for sub in by_parent.get("motor", []):
+        children = by_parent.get(sub["id"], [])
+        sub_assemblies.append({
+            "node": sub,
+            "children": children,
+        })
+
+    return {
+        "id": "motor",
+        "name": {"en": "Motor", "zh": "电机整机"},
+        "sub_assemblies": sub_assemblies,
+    }
+
+
+def compute_assembly_costs(parts: list[dict], cost_rows: list[dict] | dict) -> dict[str, float]:
+    """Compute roll-up cost per part/sub-assembly.
+    For leaf parts, cost is unit_price.
+    For a sub-assembly, cost is sum of children's unit_price.
+    """
+    if isinstance(cost_rows, dict):
+        cost_rows = cost_rows.get("rows", [])
+    cost_map: dict[str, float] = {}
+    for cr in cost_rows or []:
+        if isinstance(cr, dict) and cr.get("part_id") and cr.get("unit_price") is not None:
+            try:
+                cost_map[cr["part_id"]] = float(cr["unit_price"])
+            except (ValueError, TypeError):
+                pass
+
+    children_map: dict[str, list[dict]] = {}
+    for p in parts:
+        if isinstance(p, dict):
+            pid = p.get("parent_id")
+            if pid:
+                children_map.setdefault(pid, []).append(p)
+
+    rollup: dict[str, float] = {}
+    for p in parts:
+        if isinstance(p, dict):
+            part_id = p["id"]
+            if p.get("kind") != "assembly":
+                if part_id in cost_map:
+                    rollup[part_id] = cost_map[part_id]
+
+    # Iterative roll-up for assembly nodes
+    for _ in range(5):
+        changed = False
+        for p in parts:
+            if isinstance(p, dict) and p.get("kind") == "assembly":
+                part_id = p["id"]
+                children = children_map.get(part_id, [])
+                total = sum(rollup.get(c["id"], 0.0) for c in children)
+                if round(rollup.get(part_id, 0.0), 2) != round(total, 2):
+                    rollup[part_id] = round(total, 2)
+                    changed = True
+        if not changed:
+            break
+
+    motor_children = [p for p in parts if isinstance(p, dict) and (p.get("parent_id") == "motor" or p.get("kind") == "assembly")]
+    rollup["motor"] = round(sum(rollup.get(c["id"], 0.0) for c in motor_children), 2)
+
+    return rollup
 
 
 
@@ -333,7 +553,7 @@ def normalize_costs(raw: dict) -> dict:
 
 
 def compute_cost_summary(bom_rows: list[dict], cost_rows: list[dict], extras: list[dict],
-                         margin_pct: float, order_quantity: int) -> dict:
+                         margin_pct: float, order_quantity: int, parts: Optional[list[dict]] = None) -> dict:
     order_quantity = max(0, int(order_quantity or 0))
     try:
         margin_pct = max(0.0, min(99.99, float(margin_pct or 0.0)))
@@ -341,11 +561,17 @@ def compute_cost_summary(bom_rows: list[dict], cost_rows: list[dict], extras: li
         margin_pct = 0.0
 
     cost_map = {r["part_id"]: r for r in cost_rows if isinstance(r, dict) and r.get("part_id")}
+    assembly_part_ids = set()
+    if parts:
+        assembly_part_ids = {p["id"] for p in parts if isinstance(p, dict) and p.get("kind") == "assembly"}
+
     missing_prices_count = 0
     parts_subtotal = 0.0
 
     for br in bom_rows:
         pid = br.get("part_id")
+        if pid in assembly_part_ids or br.get("kind") == "assembly":
+            continue
         crow = cost_map.get(pid)
         if crow is None or crow.get("unit_price") is None:
             missing_prices_count += 1
@@ -582,7 +808,20 @@ def validate_iso_date(val: Any, field_name: str = "date") -> Optional[str]:
 def normalize_receipt(raw: dict, ordered_on: Optional[str] = None) -> dict:
     if not isinstance(raw, dict):
         raw = {}
-    date_val = validate_iso_date(raw.get("date"), "receipt date")
+    date_raw = str(raw.get("date") or "").strip()
+    timestamp_raw = raw.get("timestamp")
+    timestamp_val: Optional[str] = None
+
+    if "T" in date_raw or " " in date_raw:
+        iso_str = date_raw.replace(" ", "T")
+        date_part = iso_str.split("T")[0]
+        date_val = validate_iso_date(date_part, "receipt date")
+        timestamp_val = iso_str
+    else:
+        date_val = validate_iso_date(date_raw, "receipt date")
+        if timestamp_raw is not None and str(timestamp_raw).strip():
+            timestamp_val = str(timestamp_raw).strip()
+
     if not date_val:
         raise HTTPException(status_code=422, detail="Receipt date is required.")
     if ordered_on and date_val < ordered_on:
@@ -605,6 +844,7 @@ def normalize_receipt(raw: dict, ordered_on: Optional[str] = None) -> dict:
         )
     return {
         "date": date_val,
+        "timestamp": timestamp_val,
         "qty": qty,
         "accepted": accepted,
         "rejected": rejected,
@@ -748,15 +988,15 @@ def enrich_procurement_row(
     elif due_on or need_by:
         expected_arrival = due_on or need_by
 
-    # received_on: date of the receipt that completed the quantity
+    # received_on: date/timestamp of the receipt that completed the quantity
     received_on: Optional[str] = None
     if receipts:
         running = 0.0
-        sorted_receipts = sorted(receipts, key=lambda r: str(r.get("date") or ""))
+        sorted_receipts = sorted(receipts, key=lambda r: str(r.get("timestamp") or r.get("date") or ""))
         for r in sorted_receipts:
             running += float(r.get("accepted", 0.0))
             if running >= qty_needed and qty_needed > 0 and received_on is None:
-                received_on = str(r.get("date"))
+                received_on = str(r.get("timestamp") or r.get("date"))
     elif row.get("received_on") and (received_qty >= qty_needed or qty_needed == 0):
         received_on = str(row["received_on"])
 

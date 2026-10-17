@@ -57,7 +57,9 @@
     "add": "Add part",
     "name": "Name",
     "kind": "Kind",
-    "kindValue": { "made": "Made", "purchased": "Purchased", "consumable": "Consumable" },
+    "kindValue": { "made": "Made", "purchased": "Purchased", "consumable": "Consumable", "assembly": "Sub-assembly" },
+    "parentAssembly": "Sub-assembly",
+    "noParent": "None (Motor root)",
     "qty": "Per motor",
     "material": "Material / finish",
     "spec": "Specification",
@@ -227,6 +229,8 @@
     "addReceipt": "Record Incoming Receipt",
     "recordInspection": "New Incoming Goods Receipt",
     "rcptDate": "Date",
+    "rcptTimestamp": "Date & Time",
+    "receivedPending": "Empty until complete",
     "rcptQty": "Total Qty",
     "rcptAccepted": "Accepted",
     "rcptRejected": "Rejected",
@@ -259,6 +263,19 @@
     "legendMilestone": "Milestone",
     "legendLate": "Late / At Risk",
     "legendToday": "Today"
+  },
+  "assembly": {
+    "graphTitle": "Assembly Graph",
+    "toggleGraph": "Assembly Graph",
+    "collapseAll": "Collapse all",
+    "expandAll": "Expand all",
+    "fitView": "Fit view",
+    "zoomIn": "Zoom in",
+    "zoomOut": "Zoom out",
+    "applyDefault": "Apply default assembly"
+  },
+  "extras": {
+    "kind": "Work / Extra"
   },
   "errors": { "load": "Could not load: {reason}" }
 }

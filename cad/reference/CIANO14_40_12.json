@@ -754,7 +754,7 @@
    "value": 2.0,
    "unit": "mm",
    "comment": "created by fusion360_rename_params.py (owner-approved 2026-09-25 mapping)",
-   "role": "input",
+   "role": "info",
    "role_note": "shaft wall under the rotor: bore radius = shaft_seat_r - shaft_height"
   },
   {
@@ -843,7 +843,8 @@
    "value": 2.4505,
    "unit": "mm",
    "comment": "Shaft: tip radius (\u00d84.901), z 20.7..36.7 = the thread section radius: ONE tip diameter over 16 mm (owner Fusion model 2026-10-16; the \u00d84.95 / \u00d84.9 step is gone, the M5 thread texture stays on z 28.7..36.7)",
-   "role": "mechanics"
+   "role": "info",
+   "role_note_cad": "not a sketch constraint since A.7.4: equal to shaft_thread_r (one tip diameter), read by the exports and the health checks only"
   },
   {
    "name": "shaft_bore_r",

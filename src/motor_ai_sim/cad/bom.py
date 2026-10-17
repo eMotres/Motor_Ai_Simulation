@@ -29,6 +29,8 @@ ASSUMED_DENSITY = {            # kg/m3, used only when the simulation library ha
     "Copper": (8933, "simulation library card 'copper'"),
     "Aluminum 6061": (2700, "simulation library card 'Aluminium_6061'"),
     "Steel": (7850, "simulation library card 'Steel_42CrMo4_QT'"),
+    "3Cr13": (7720, "assumed: martensitic stainless 3Cr13 / AISI 420"),
+    "3Cr13 (stainless)": (7720, "assumed: martensitic stainless 3Cr13 / AISI 420"),
 }
 PIN_DENSITY = (8900, "assumed: CuCrZr C18150")
 BOARD_NOMINAL = dict(area_mm2=764.0, thickness_mm=1.6, mass_g=4.0,
@@ -95,7 +97,13 @@ def _card_density(cards, *names):
 def density_of(material, inputs):
     """kg/m3 and the source text for a profile material name."""
     cards = inputs.get("cards", {})
-    pick = {"Copper": ("copper",), "Aluminum 6061": ("Aluminium_6061",), "Steel": ("Steel_42CrMo4_QT",)}
+    pick = {
+        "Copper": ("copper",),
+        "Aluminum 6061": ("Aluminium_6061",),
+        "Steel": ("Steel_42CrMo4_QT",),
+        "3Cr13": ("Stainless_420",),
+        "3Cr13 (stainless)": ("Stainless_420",),
+    }
     d, src = _card_density(cards, *pick.get(material, (material,)))
     if d:
         return d, src
@@ -311,9 +319,15 @@ def build_bom(dump, inputs):
     if sh:
         w, h, ln = _bb(sh)
         mat = mats.get("Shaft", "Steel")
+        if mat in ("3Cr13", "3Cr13 (stainless)", "Stainless_420"):     # the motor profile states the shaft steel (Ø40: 3Cr13, owner 2026-10-16)
+            shaft_mat_label = "3Cr13 (stainless)"
+        else:
+            sim_mat = inputs["sim_materials"].get("shaft")
+            shaft_mat_label = sim_mat or "42CrMo4 QT (assumed, profile says '%s')" % mat
+
         rho, rs = density_of(mat, inputs)
         sim_mat = inputs["sim_materials"].get("shaft")
-        add("shaft", "Shaft (stepped, drive flats, M-thread tip)", "manufactured", 1, "pcs", sim_mat or "42CrMo4 QT (assumed, profile says '%s')" % mat,
+        add("shaft", "Shaft (stepped, drive flats, M-thread tip)", "manufactured", 1, "pcs", shaft_mat_label,
             "length %.1f mm, max Ø%.2f mm, journal Ø%.1f, bore Ø%.1f, drive flats %.1f mm across x %.1f long, chamfers %.1f mm" % (
                 ln, w, m.p("bearing_d"), 2 * (m.p("shaft_bore_r") if "shaft_bore_r" in m.params else m.p("shaft_seat_r") - m.p("shaft_height")),
                 m.p("shaft_flat_w"), m.p("shaft_flat_len"), m.p("shaft_chamfer")),

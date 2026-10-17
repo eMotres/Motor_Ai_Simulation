@@ -13,6 +13,7 @@ import {
   ANALYTICS_RANGES, analyticsErrorKind, chartData, countryName, formatDuration, formatPercent,
   withShare, type AnalyticsPayload, type AnalyticsRange, type AnalyticsRow,
 } from '../analyticsPanel';
+import LiveAnalyticsCard from './LiveAnalyticsCard';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.5 } as const;
@@ -89,6 +90,8 @@ const AnalyticsSection: React.FC = () => {
 
   return (
     <Box>
+      <LiveAnalyticsCard />
+
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, mb: 1.5, flexWrap: 'wrap' }}>
         <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>
           {t('analytics.title')}

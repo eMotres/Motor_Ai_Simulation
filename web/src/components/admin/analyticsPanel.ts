@@ -15,6 +15,60 @@ export interface AnalyticsPayload {
   browsers: AnalyticsRow[]; os: AnalyticsRow[]; devices: AnalyticsRow[];
 }
 
+export interface LiveUser {
+  user: string;
+  name: string;
+  tab: string;
+  last_beat: number;
+  last_beat_iso: string;
+  country: string;
+}
+
+export interface LiveAnonymous {
+  configured: boolean;
+  active: number;
+  pages: AnalyticsRow[];
+  countries: AnalyticsRow[];
+}
+
+export type LiveEventType =
+  | 'page_view'
+  | 'signup'
+  | 'login'
+  | 'email_confirmed'
+  | 'nda_request'
+  | 'run_started'
+  | 'admin_action'
+  | string;
+
+export interface LiveEvent {
+  id: string;
+  type: LiveEventType;
+  user: string;
+  ts: number;
+  iso: string;
+  details: string;
+  country: string;
+}
+
+export interface LiveAnalyticsPayload {
+  active_users: LiveUser[];
+  anonymous: LiveAnonymous;
+  events: LiveEvent[];
+  cached_at: number;
+}
+
+/** Formats a timestamp into relative time ("15 s ago", "2 min ago", "just now"). */
+export function formatRelativeTime(ts: number, now = Date.now() / 1000): string {
+  const diff = Math.max(0, Math.round(now - ts));
+  if (diff < 5) return 'just now';
+  if (diff < 60) return `${diff} s ago`;
+  const mins = Math.floor(diff / 60);
+  if (mins < 60) return `${mins} min ago`;
+  const hours = Math.floor(mins / 60);
+  return `${hours} h ago`;
+}
+
 /** "42 s", "3 min 05 s", "1 h 02 min"; 0 -> "0 s". */
 export function formatDuration(seconds: unknown): string {
   const s = Math.max(0, Math.round(Number(seconds) || 0));

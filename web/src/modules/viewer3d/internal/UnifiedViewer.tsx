@@ -30,6 +30,9 @@ export interface UnifiedViewerProps {
   hostExtras?: React.ReactNode;
 }
 
+// the projection the viewer was last left in, kept for this tab's session (owner 2026-10-17)
+let lastProjection: 'perspective'|'orthographic' = 'orthographic';
+
 const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   const { t } = useTranslation('model3d');
   const full = p.toolbarSpec === 'full';
@@ -42,7 +45,8 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   const [measure, setMeasure] = useState(false);
   const [measuredMm, setMeasuredMm] = useState<number | null>(null);
   const [sceneReady, setSceneReady] = useState(false);
-  const [projection, setProjection] = useState<'perspective'|'orthographic'>('orthographic');
+  const [projection, setProjectionState] = useState<'perspective'|'orthographic'>(() => lastProjection);
+  const setProjection = useCallback((m: 'perspective'|'orthographic') => { lastProjection = m; setProjectionState(m); }, []);
   const [cameraDirection, setCameraDirection] = useState<Vec3>([1,-1,1]);
   const [cameraUp, setCameraUp] = useState<Vec3>([0,0,1]);
   const [hiddenKeys, setHiddenKeys] = useState<ReadonlySet<string>>(new Set());

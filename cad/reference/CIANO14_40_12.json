@@ -20,7 +20,7 @@
    "Coil": "Copper",
    "RotorCore": "Steel",
    "Magnet": "NdFeB (Steel in Fusion) - grade TBD",
-   "Shaft": "Steel",
+   "Shaft": "3Cr13",
    "Stator_holder": "Aluminum 6061",
    "Stator_holder_back": "Aluminum 6061",
    "Ring": "GFRP",

@@ -586,3 +586,21 @@ def copper_loss_W(p, geo_cfg, I_phase_rms, n_parallel,
     if float(I_phase_rms) <= 0.0:
         P = 0.0                                         # no current, no watts
     return float(P), float(k_end), float(R_phase_eff)
+
+
+def terminal_phase_resistance(R_winding_ohm: float, terminals_block: Optional[Dict[str, Any]] = None,
+                              temp_c: float = 20.0):
+    """Compute terminal phase resistance (winding + leads + board) at temp_c.
+    Delegates to motor_ai_sim.terminals.terminal_phase_resistance."""
+    from motor_ai_sim.terminals import terminal_phase_resistance as _tpr
+    return _tpr(R_winding_ohm, terminals_block, temp_c)
+
+
+def terminal_loss_W(I_phase_rms: float, terminals_block: Optional[Dict[str, Any]] = None,
+                    temp_c: float = 20.0) -> Dict[str, float]:
+    """Compute external I²R losses in lead wires and phase board outside the motor.
+    These losses do NOT enter the motor thermal network.
+    Delegates to motor_ai_sim.terminals.terminal_loss_W."""
+    from motor_ai_sim.terminals import terminal_loss_W as _tlw
+    return _tlw(I_phase_rms, terminals_block, temp_c)
+

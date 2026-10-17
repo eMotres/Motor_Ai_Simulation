@@ -128,6 +128,9 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
         "T·ω − P_mech")
     row("rated EM loss", "W", lambda r: f(_v(r["card"]["rated_point"], "P_loss_em_W")),
         "Cu DC+AC, iron, magnet, shaft")
+    row("rated leads + board loss", "W",
+        lambda r: f(_v(r["card"]["rated_point"], "P_loss_leads_board_W") or 0.0),
+        "external 3·I²·R outside motor; not in motor thermal network")
     row("rated mech loss", "W", lambda r: f(_v(r["card"]["rated_point"], "P_mech_W")),
         "bearings + windage, analytic")
     row("rated η at the shaft", "%",
@@ -160,10 +163,20 @@ def render(recs: Mapping[str, Mapping[str, Any]], *, budget: Mapping[str, Any]) 
         "MTPA vertices")
     row("Km cold", "N·m/√W", lambda r: f(_v(r["card"]["constants_cold"], "Km_Nm_per_sqrtW")),
         "T/√P_cu,DC at 20 °C")
-    row("R phase 20 °C / hot", "mΩ",
-        lambda r: "%s / %s" % (f(1e3 * _v(r["card"]["constants_cold"], "R_phase_ohm")),
-                               f(1e3 * _v(r["card"]["constants_hot"], "R_phase_ohm"))),
-        "incl. end windings (k_end)")
+    row("R phase (winding) 20 °C / hot", "mΩ",
+        lambda r: "%s / %s" % (
+            f(1e3 * (_v(r["card"]["constants_cold"], "R_phase_winding_ohm") or _v(r["card"]["constants_cold"], "R_phase_ohm"))),
+            f(1e3 * (_v(r["card"]["constants_hot"], "R_phase_winding_ohm") or _v(r["card"]["constants_hot"], "R_phase_ohm")))),
+        "in-motor winding incl. CAD end turns (k_end)")
+    row("R phase (terminals) 20 °C / hot", "mΩ",
+        lambda r: "%s / %s" % (
+            f(1e3 * (_v(r["card"]["constants_cold"], "R_phase_terminal_20_ohm") or _v(r["card"]["constants_cold"], "R_phase_ohm"))),
+            f(1e3 * (_v(r["card"]["constants_hot"], "R_phase_terminal_hot_ohm") or _v(r["card"]["constants_hot"], "R_phase_ohm")))),
+        lambda r: (r["card"]["constants_cold"].get("R_phase_terminal_20_ohm") or {}).get("basis", "at lead ends"))
+    row("R line-to-line (terminals) 20 °C", "mΩ",
+        lambda r: f(1e3 * (_v(r["card"]["constants_cold"], "R_line_line_terminal_20_ohm")
+                           or (2.0 * (_v(r["card"]["constants_cold"], "R_phase_terminal_20_ohm") or _v(r["card"]["constants_cold"], "R_phase_ohm"))))),
+        "4-wire measurement at lead ends at 20 °C (star)")
     row("Ld / Lq bench small-signal cold / hot", "µH",
         lambda r: "%s / %s ; %s / %s" % (
             f(1e3 * _v(r["card"]["constants_cold"], "Ld_bench_mH")),

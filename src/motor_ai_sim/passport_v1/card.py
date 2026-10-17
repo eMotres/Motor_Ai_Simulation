@@ -282,6 +282,20 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
     hnl_full = _r(recs, "hot_noload")
     psi_pm_c, psi_pm_h = float(cnl["psi_d_Wb"]), float(hnl["psi_d_Wb"])
     R20 = float(cnl["R_phase_ohm"])
+
+    # ── terminals / lead wire & phase board model (owner 2026-10-17) ───────
+    from motor_ai_sim.terminals import (
+        terminal_phase_resistance,
+        terminal_loss_W,
+        validate_terminals,
+    )
+    term_blk = snap.get("terminals") or (snap.get("inputs") or {}).get("terminals") or {}
+    term_info = validate_terminals(term_blk)
+    R20_term, term_info_cold = terminal_phase_resistance(R20, term_blk, temp_c=20.0)
+    R_hot_term, term_info_hot = terminal_phase_resistance(R_hot, term_blk, temp_c=float(T_hot_c))
+    loss_leads_board = terminal_loss_W(I0, term_blk, temp_c=float(T_hot_c))
+    P_leads_board_W = loss_leads_board["P_leads_board_total_W"]
+
     cold = {c["fI"]: c for c in st["cold_mtpa"]}
     c1 = cold[1.0]
     c025 = cold[0.25]
@@ -434,6 +448,9 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
             "P_loss_em_W": _val(rated_blk and rated_blk["P_loss_em_W"], "W",
                                 "loss-grid FEM total (Cu DC+AC, iron, magnet, shaft)",
                                 rated_id, labels_hot),
+            "P_loss_leads_board_W": _val(P_leads_board_W, "W",
+                                         "external 3-phase I²R loss in lead wires + phase board (outside motor)",
+                                         [], labels_hot),
             "P_mech_W": _val(rated_blk and rated_blk["P_mech_W"], "W",
                              "SKF bearings + Couette/face windage, analytic", [], labels_hot),
             "eta_shaft": _val(rated_blk and rated_blk["efficiency"]["eta_shaft"], "-",
@@ -480,10 +497,20 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
             "Km_Nm_per_sqrtW": _val(T_c1 / math.sqrt(3.0 * I0 * I0 * R20), "N·m/√W",
                                     "T_cold(I0)/√(3·I0²·R20), DC copper incl. end windings",
                                     [c1["conf_id"], "cold_noload"], labels_cold),
-            "R_phase_ohm": _val(R20, "Ω", "solver R_phase at 20 °C incl. k_end",
+            "R_phase_ohm": _val(R20, "Ω", "solver R_phase at 20 °C (winding)",
                                 ["cold_noload"], labels_cold),
-            "R_line_line_ohm": _val(2.0 * R20, "Ω", "2·R_phase (star)", ["cold_noload"],
+            "R_phase_winding_ohm": _val(R20, "Ω", "winding R_phase at 20 °C incl. CAD end turns",
+                                        ["cold_noload"], labels_cold),
+            "R_line_line_ohm": _val(2.0 * R20, "Ω", "2·R_phase_winding (star)", ["cold_noload"],
                                     labels_cold),
+            "R_phase_terminal_20_ohm": _val(R20_term, "Ω",
+                                            ("terminal R_phase at 20 °C: " + term_info_cold["note"])
+                                            if term_info["stated"]
+                                            else "terminal R_phase at 20 °C (terminal resistance not stated; equals winding)",
+                                            ["cold_noload"], labels_cold),
+            "R_line_line_terminal_20_ohm": _val(2.0 * R20_term, "Ω",
+                                                "2·R_phase_terminal at 20 °C (star line-to-line at lead ends)",
+                                                ["cold_noload"], labels_cold),
             "Ld_bench_mH": _val(ss.get("cold") and 1e3 * ss["cold"]["Ld_H"], "mH",
                                 (ss.get("cold") or {}).get("method", "not measured"),
                                 (ss.get("cold") or {}).get("runs", []), labels_cold),
@@ -535,6 +562,16 @@ def build_record(od: Path, snap: Mapping[str, Any], st: Mapping[str, Any], *,
                                           rated_id, labels_hot),
             "R_phase_ohm": _val(R_hot, "Ω", "solver R_phase at the hot winding temperature",
                                 [m1["conf_id"]], labels_hot),
+            "R_phase_winding_ohm": _val(R_hot, "Ω", "winding R_phase at hot winding temperature",
+                                        [m1["conf_id"]], labels_hot),
+            "R_phase_terminal_hot_ohm": _val(R_hot_term, "Ω",
+                                             ("terminal R_phase hot: " + term_info_hot["note"])
+                                             if term_info["stated"]
+                                             else "terminal R_phase hot (terminal resistance not stated; equals winding)",
+                                             [m1["conf_id"]], labels_hot),
+            "R_line_line_terminal_hot_ohm": _val(2.0 * R_hot_term, "Ω",
+                                                 "2·R_phase_terminal hot (star line-to-line at lead ends)",
+                                                 [m1["conf_id"]], labels_hot),
             "Ld_small_signal_mH": _val(ss.get("hot") and 1e3 * ss["hot"]["Ld_H"], "mH",
                                        (ss.get("hot") or {}).get("method", "not measured"),
                                        (ss.get("hot") or {}).get("runs", []), labels_hot),

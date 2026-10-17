@@ -18,8 +18,17 @@
     "required": "请先签署保密协议（NDA）后再打开此生产项目。",
     "requiredTip": "生产数据与完整 3D 模型及 STEP 下载适用同一份保密协议。"
   },
-  "status": { "active": "进行中", "paused": "已暂停", "archived": "已归档" },
-  "role": { "owner": "负责人", "engineer": "工程师", "oem": "OEM 生产方", "admin": "管理员" },
+  "status": {
+    "active": "进行中",
+    "paused": "已暂停",
+    "archived": "已归档"
+  },
+  "role": {
+    "owner": "负责人",
+    "engineer": "工程师",
+    "oem": "OEM 生产方",
+    "admin": "管理员"
+  },
   "col": {
     "motor": "电机",
     "title": "标题",
@@ -37,7 +46,8 @@
     "documents": "文件",
     "discussion": "讨论",
     "proposals": "建议",
-    "changes": "变更"
+    "changes": "变更",
+    "assembly": "装配结构"
   },
   "bilingual": {
     "machine": "机器翻译，未经核实",
@@ -50,14 +60,22 @@
     "showOriginal": "原文",
     "showTranslation": "译文",
     "originalLang": "原文语言：{lang}",
-    "lang": { "en": "英文", "zh": "中文" }
+    "lang": {
+      "en": "英文",
+      "zh": "中文"
+    }
   },
   "parts": {
     "none": "暂无零件。",
     "add": "添加零件",
     "name": "名称",
     "kind": "类型",
-    "kindValue": { "made": "自制", "purchased": "外购", "consumable": "耗材", "assembly": "部件 / 子装配" },
+    "kindValue": {
+      "made": "自制",
+      "purchased": "外购",
+      "consumable": "耗材",
+      "assembly": "部件 / 子装配"
+    },
     "parentAssembly": "所属部件",
     "noParent": "无（整机直属）",
     "qty": "每台数量",
@@ -77,7 +95,8 @@
     "noLinkedDocs": "暂无关联文档。",
     "threadsAndProposals": "研讨与设计建议",
     "noThreads": "暂无针对此零件的研讨。",
-    "noProposals": "暂无针对此零件的建议。"
+    "noProposals": "暂无针对此零件的建议。",
+    "openFull": "全屏打开"
   },
   "bom": {
     "none": "暂无物料清单行。",
@@ -122,7 +141,12 @@
   },
   "process": {
     "none": "暂无工艺章节。",
-    "kind": { "fits": "配合", "assembly": "装配", "winding": "绕线", "tests": "测试" },
+    "kind": {
+      "fits": "配合",
+      "assembly": "装配",
+      "winding": "绕线",
+      "tests": "测试"
+    },
     "add": "添加章节",
     "title": "章节标题",
     "body": "内容",
@@ -167,7 +191,12 @@
     "linked": "版本 {rev}",
     "by": "{email}",
     "tip": "建议本身不会更改设计；由负责人或工程师决定。",
-    "status": { "open": "待处理", "accepted": "已接受", "rejected": "已拒绝", "implemented": "已实施" }
+    "status": {
+      "open": "待处理",
+      "accepted": "已接受",
+      "rejected": "已拒绝",
+      "implemented": "已实施"
+    }
   },
   "changes": {
     "none": "尚未发布版本。",
@@ -275,7 +304,9 @@
     "applyDefault": "应用默认装配结构"
   },
   "extras": {
-    "kind": "工序 / 杂项"
+    "kind": "工费"
   },
-  "errors": { "load": "无法加载：{reason}" }
+  "errors": {
+    "load": "无法加载：{reason}"
+  }
 }

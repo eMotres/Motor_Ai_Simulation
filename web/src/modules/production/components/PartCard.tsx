@@ -22,7 +22,7 @@ import CloseIcon from '@mui/icons-material/Close';
 import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import PartName from './PartName';
-import { downloadFile, downloadModelStep, fileObjectUrl, productionApi } from '../api';
+import { downloadFile, downloadModelStep, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
 import { canEditProcurement, displayText, formatReceiptTime, getStatusColor, makeBilingual } from '../helpers';
 import type {
   CostRow,
@@ -41,7 +41,7 @@ import type {
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 const CHIP = { height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' } as const;
 
-export const InlineDrawing: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = ({ ctx, d }) => {
+export const InlineDrawing: React.FC<{ ctx: ProdCtx; d: DrawingFile; pdf?: DrawingFile }> = ({ ctx, d, pdf }) => {
   const { t } = useTranslation('production');
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
@@ -68,7 +68,10 @@ export const InlineDrawing: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = ({ ctx,
           component="img"
           src={url}
           alt={d.name}
+          title={t('parts.openFull', 'Open full screen')}
+          onClick={() => { const f = pdf ?? d; void openFileInNewWindow(ctx.die, ctx.config, f.file_id, f.kind); }}
           sx={{
+            cursor: 'zoom-in',
             width: '100%',
             maxHeight: 520,
             objectFit: 'contain',
@@ -742,7 +745,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
                 px: 1.5,
                 py: 0.4,
               }}
-              onClick={() => void downloadFile(ctx.die, ctx.config, d.file_id, d.name)}
+              onClick={() => void openFileInNewWindow(ctx.die, ctx.config, d.file_id, 'pdf')}
             >
               PDF · {d.name || t('parts.download')}
             </Button>
@@ -751,9 +754,12 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
       )}
 
       {/* Inline Large PNG Drawings */}
-      {part.drawing_files.filter((d) => d.kind === 'png').map((d) => (
-        <InlineDrawing key={d.file_id} ctx={ctx} d={d} />
-      ))}
+      {part.drawing_files.filter((d) => d.kind === 'png').map((d) => {
+        // a click on the picture opens the drawing full screen: its PDF (same name) when there is one, else the PNG
+        const stem = d.name.replace(/\.png$/i, '');
+        const pdf = part.drawing_files.find((x) => x.kind === 'pdf' && x.name.replace(/\.pdf$/i, '') === stem);
+        return <InlineDrawing key={d.file_id} ctx={ctx} d={d} pdf={pdf} />;
+      })}
 
       {part.drawing_files.length === 0 && (
         <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)', mb: 1 }}>{t('parts.noDrawings')}</Typography>

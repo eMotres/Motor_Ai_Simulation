@@ -58,6 +58,23 @@ export async function fileObjectUrl(die: string, config: string, fileId: string)
   return URL.createObjectURL(await r.blob());
 }
 
+/** Open a production file in a NEW browser window (owner 2026-10-17: a click on a drawing shows it full screen).  The window is
+ *  opened synchronously (no popup block) and pointed at a typed blob URL, so a PDF opens in the browser's viewer. */
+export async function openFileInNewWindow(die: string, config: string, fileId: string, kind: string): Promise<void> {
+  const w = window.open('', '_blank');
+  try {
+    const r = await fetch(`${API}${base(die, config)}/files/${enc(fileId)}`);
+    if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
+    const type = kind === 'pdf' ? 'application/pdf' : kind === 'png' ? 'image/png' : kind === 'jpg' ? 'image/jpeg' : (r.headers.get('content-type') || '');
+    const url = URL.createObjectURL(new Blob([await r.blob()], { type }));
+    if (w) w.location.href = url; else window.location.href = url;
+    window.setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
+  } catch (e) {
+    w?.close();
+    throw e;
+  }
+}
+
 /** The existing 3-D model download of the same motor (same NDA gate). */
 export async function downloadModelStep(die: string, config: string): Promise<void> {
   const r = await fetch(`${API}/api/model3d/${enc(die)}/${enc(config)}/model.step`);

@@ -38,7 +38,7 @@ const ProposalsPanel: React.FC<{ proposals: Proposal[]; parts: Part[]; ctx: Prod
             <Box sx={{ flex: 1 }} />
             <TextField select size="small" label={t('proposals.forPart')} value={partId} onChange={(e) => setPartId(e.target.value)} sx={{ minWidth: 220 }}>
               <MenuItem value="">{t('proposals.general')}</MenuItem>
-              {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name[p.name.src_lang]}</MenuItem>)}
+              {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}</MenuItem>)}
             </TextField>
           </Box>
           <BilingualInput label={t('proposals.text')} value={text} lang={lang} multiline onChange={(v, l) => { setText(v); setLang(l); }} />

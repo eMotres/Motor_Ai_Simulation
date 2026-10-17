@@ -41,7 +41,7 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
         <TextField select size="small" label={t('discussion.thread')} value={sel} onChange={(e) => setSel(e.target.value)} sx={{ minWidth: 240 }}>
           <MenuItem value="">{t('discussion.general')}</MenuItem>
-          {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name[p.name.src_lang]}</MenuItem>)}
+          {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}</MenuItem>)}
         </TextField>
         <HelpTip title={t('discussion.tip')} />
       </Box>

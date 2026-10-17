@@ -18,7 +18,7 @@ import type {
   BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
 } from '../types';
 
-const TABS = ['bom', 'timeline', 'process', 'documents', 'discussion', 'proposals', 'changes'] as const;
+const TABS = ['bom', 'assembly', 'timeline', 'process', 'documents', 'discussion', 'proposals', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 interface Data {
@@ -83,6 +83,18 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
         )}
       </Box>
 
+      {prod && !loading && (
+        // owner 2026-10-17: the tab menu at the very top, fixed while the page scrolls
+        <Box sx={{ position: 'sticky', top: 0, zIndex: 20, bgcolor: 'var(--app-bg)', mb: 1.5 }}>
+          <Tabs value={tab} onChange={(_, v) => setTab(v as TabId)} variant="scrollable" scrollButtons="auto"
+            sx={{ minHeight: 32, borderBottom: '1px solid var(--line-soft)', '& .MuiTab-root': { minHeight: 32, textTransform: 'none', fontSize: 12.5, py: 0.5 } }}>
+            {TABS.map((id) => (
+              <Tab key={id} value={id} label={id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : t(`tabs.${id}`)} />
+            ))}
+          </Tabs>
+        </Box>
+      )}
+
       {/* Top Readiness Summary Bar */}
       {prod && readiness && !loading && (
         <Paper
@@ -146,12 +158,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
 
       {prod && !loading && (
         <>
-          <Tabs value={tab} onChange={(_, v) => setTab(v as TabId)} variant="scrollable" scrollButtons="auto"
-            sx={{ minHeight: 32, mb: 1.5, borderBottom: '1px solid var(--line-soft)', '& .MuiTab-root': { minHeight: 32, textTransform: 'none', fontSize: 12.5, py: 0.5 } }}>
-            {TABS.map((id) => (
-              <Tab key={id} value={id} label={id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : t(`tabs.${id}`)} />
-            ))}
-          </Tabs>
+
           {tab === 'bom' && (
             <>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
@@ -170,6 +177,11 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
                 onPartChanged={reload}
               />
             </>
+          )}
+          {tab === 'assembly' && (
+            <BomTable view="graph" rows={data.bom} parts={data.parts} orderQuantity={prod.order_quantity} ctx={ctx}
+              shareCostsWithOem={prod.share_costs_with_oem} documents={data.documents} threads={data.threads}
+              proposals={data.proposals} onPartChanged={reload} />
           )}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'process' && <ProcessView sections={data.process} ctx={ctx} />}

@@ -33,6 +33,7 @@ import {
   dateSpanToPx,
   dateToPx,
   daysBetween,
+  formatReceiptTime,
   formatShortDate,
   getStatusColor,
 } from '../helpers';
@@ -851,10 +852,12 @@ export const TimelineView: React.FC<TimelineViewProps> = ({ ctx, prod }) => {
 
                   // 4. Receipt Markers
                   const receiptMarkers = (part.receipts || []).map((rcpt, rcptIdx) => {
-                    if (!rcpt.date) return null;
-                    const rx = dateToPx(rcpt.date, minDate, pxPerDay);
+                    const dStr = (rcpt.timestamp ? rcpt.timestamp.slice(0, 10) : rcpt.date) || '';
+                    if (!dStr) return null;
+                    const rx = dateToPx(dStr, minDate, pxPerDay);
                     const ry = y + ROW_HEIGHT / 2;
                     const isRejected = (rcpt.rejected || 0) > 0;
+                    const timeLabel = rcpt.timestamp ? formatReceiptTime(rcpt.timestamp) : rcpt.date;
                     return (
                       <circle
                         key={`rcpt_${rcptIdx}`}
@@ -864,7 +867,9 @@ export const TimelineView: React.FC<TimelineViewProps> = ({ ctx, prod }) => {
                         fill={isRejected ? '#ef4444' : '#10b981'}
                         stroke="#fff"
                         strokeWidth="1"
-                      />
+                      >
+                        <title>{`${timeLabel}: +${rcpt.accepted || rcpt.qty}`}</title>
+                      </circle>
                     );
                   });
 

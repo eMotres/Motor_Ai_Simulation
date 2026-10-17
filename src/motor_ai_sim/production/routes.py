@@ -251,9 +251,14 @@ async def update_part(request: Request, die: str, config: str, part_id: str):
             if isinstance(p, dict) and p.get("id") == part_id:
                 # merge allowed scalar fields, replace bilingual objects
                 updated = dict(p)
-                for k in ("kind", "qty_per_motor", "optional_step", "revision"):
+                for k in ("kind", "qty_per_motor", "optional_step", "revision", "parent_id"):
                     if k in body:
-                        updated[k] = body[k]
+                        if k == "parent_id":
+                            val = str(body[k]).strip() if body[k] is not None and str(body[k]).strip() else None
+                            if val != part_id:
+                                updated["parent_id"] = val
+                        else:
+                            updated[k] = body[k]
                 if "material" in body or "material_i18n" in body:
                     mat_raw = body.get("material_i18n", body.get("material"))
                     mat_i18n = models.normalize_i18n_dict(mat_raw, default_zh=str(body.get("material") or ""))
@@ -298,6 +303,35 @@ def delete_part(request: Request, die: str, config: str, part_id: str):
     _touch(die, config)
     _audit(_email(user), die, config, "delete", "part", part_id, {})
     return {}
+
+
+@router.get("/{die}/{config}/assembly")
+def get_assembly(request: Request, die: str, config: str):
+    user, production = require_member_with_full_view(request, die, config)
+    parts_data = store.load_file(die, config, "parts.json")
+    parts = parts_data.get("parts", [])
+    tree = models.build_assembly_tree(parts)
+    from motor_ai_sim.production import access
+    costs = store.load_file(die, config, "costs.json") if access.can_view_costs(user, production) else {}
+    cost_rollup = models.compute_assembly_costs(parts, costs) if costs else {}
+    return {
+        "tree": tree,
+        "parts": models.ensure_default_assembly(parts, die, config),
+        "costs": cost_rollup,
+    }
+
+
+@router.post("/{die}/{config}/assembly/default")
+def apply_default_assembly(request: Request, die: str, config: str):
+    user, _production = require_editor_with_full_view(request, die, config)
+    def mut(d):
+        parts = d.get("parts", [])
+        d["parts"] = models.ensure_default_assembly(parts, die, config)
+    store.mutate_file(die, config, "parts.json", mut)
+    _touch(die, config)
+    _audit(_email(user), die, config, "update", "assembly", "default_tree", {})
+    parts = store.load_file(die, config, "parts.json").get("parts", [])
+    return {"parts": parts, "tree": models.build_assembly_tree(parts)}
 
 
 # ── BOM ──────────────────────────────────────────────────────────────────────

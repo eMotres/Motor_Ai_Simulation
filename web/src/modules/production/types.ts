@@ -37,7 +37,7 @@ export interface DrawingFile { file_id: string; kind: 'pdf' | 'png'; name: strin
 export interface Part {
   id: string;
   name: Bilingual;
-  kind: 'made' | 'purchased' | 'consumable';
+  kind: 'made' | 'purchased' | 'consumable' | 'assembly';
   qty_per_motor: number;
   material: string;
   spec: string;
@@ -47,6 +47,27 @@ export interface Part {
   drawing_files: DrawingFile[];
   optional_step: { file_id: string } | null;
   revision: string;
+  parent_id?: string | null;
+}
+
+export interface AssemblyNode {
+  id: string;
+  name: Bilingual;
+  kind: 'made' | 'purchased' | 'consumable' | 'assembly';
+  qty_per_motor: number;
+  parent_id?: string | null;
+  unit_price?: number | null;
+  line_total?: number | null;
+  children?: AssemblyNode[];
+}
+
+export interface AssemblyTree {
+  id: string;
+  name: Bilingual;
+  sub_assemblies: Array<{
+    node: AssemblyNode;
+    children: AssemblyNode[];
+  }>;
 }
 
 export interface BomRow {
@@ -72,6 +93,7 @@ export type ProcurementStatus =
 
 export interface Receipt {
   date: string;
+  timestamp?: string | null;
   qty: number;
   accepted: number;
   rejected: number;

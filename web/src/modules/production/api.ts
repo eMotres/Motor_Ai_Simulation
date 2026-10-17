@@ -2,7 +2,7 @@
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
 import { errorInfo, safeFileName, unwrapList } from './helpers';
 import type {
-  Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
+  AssemblyTree, Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
   Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
@@ -82,6 +82,11 @@ export const productionApi = {
 
   bom: async (die: string, config: string) => unwrapList<BomRow>(await call('GET', `${base(die, config)}/bom`), 'rows'),
   saveBom: (die: string, config: string, rows: BomRow[]) => call<unknown>('PUT', `${base(die, config)}/bom`, { rows }),
+
+  assembly: (die: string, config: string) =>
+    call<{ tree: AssemblyTree; parts: Part[]; costs: Record<string, number> }>('GET', `${base(die, config)}/assembly`),
+  applyDefaultAssembly: (die: string, config: string) =>
+    call<{ tree: AssemblyTree; parts: Part[] }>('POST', `${base(die, config)}/assembly/default`, {}),
 
   costs: (die: string, config: string) => call<CostsData>('GET', `${base(die, config)}/costs`),
   saveCosts: (die: string, config: string, data: { rows: CostRow[]; extras: ExtraCost[]; margin_pct: number }) =>

@@ -277,6 +277,8 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
     for k in ("v_min", "v_nom", "v_max"):
         _req(battery, k, "battery")
     bearings = dict(cfg.get("bearings") or {})
+    from motor_ai_sim.terminals import validate_terminals
+    terminals = validate_terminals(cfg.get("terminals"))
     temps = {
         "hot_magnet_c": rated["magnet_temp_c"],
         "hot_magnet_source": ("rated duty sim.magnetTempC" if rated["magnet_temp_c"]
@@ -317,6 +319,7 @@ def machine_snapshot(*, tag: str, die: Mapping[str, Any], cfg: Mapping[str, Any]
         "peak_duty": (_duty_point(pk) if pk else None),
         "battery": battery,
         "bearings": bearings,
+        "terminals": terminals,
         "owner_inputs": dict(owner_inputs),
         "source_files": dict(source_files),
     }

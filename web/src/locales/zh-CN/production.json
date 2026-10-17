@@ -57,7 +57,9 @@
     "add": "添加零件",
     "name": "名称",
     "kind": "类型",
-    "kindValue": { "made": "自制", "purchased": "外购", "consumable": "耗材" },
+    "kindValue": { "made": "自制", "purchased": "外购", "consumable": "耗材", "assembly": "部件 / 子装配" },
+    "parentAssembly": "所属部件",
+    "noParent": "无（整机直属）",
     "qty": "每台数量",
     "material": "材料 / 表面",
     "spec": "规格",
@@ -227,6 +229,8 @@
     "addReceipt": "登记到货检验",
     "recordInspection": "新增到货检验记录",
     "rcptDate": "收货日期",
+    "rcptTimestamp": "日期时间",
+    "receivedPending": "全部到货前为空",
     "rcptQty": "到货总数",
     "rcptAccepted": "合格数量",
     "rcptRejected": "不合格数量",
@@ -259,6 +263,19 @@
     "legendMilestone": "里程碑",
     "legendLate": "逾期 / 风险",
     "legendToday": "今日"
+  },
+  "assembly": {
+    "graphTitle": "装配结构图",
+    "toggleGraph": "装配结构图",
+    "collapseAll": "全部折叠",
+    "expandAll": "全部展开",
+    "fitView": "适应视图",
+    "zoomIn": "放大",
+    "zoomOut": "缩小",
+    "applyDefault": "应用默认装配结构"
+  },
+  "extras": {
+    "kind": "工序 / 杂项"
   },
   "errors": { "load": "无法加载：{reason}" }
 }

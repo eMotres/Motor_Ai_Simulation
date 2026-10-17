@@ -244,3 +244,83 @@ t('Gantt date math: daysBetween, dateToPx, dateSpanToPx, formatShortDate', () =>
   assert.equal(H.formatShortDate(null), '—');
 });
 
+t('assembly tree: canonical mapping and default hierarchy', () => {
+  assert.equal(H.matchDefaultParent('Stator core 40_12', '定子铁芯 40_12'), 'sub_stator');
+  assert.equal(H.matchDefaultParent('Coil 40_12', '线圈 40_12'), 'sub_stator');
+  assert.equal(H.matchDefaultParent('Slot insulation', '槽绝缘'), 'sub_stator');
+  assert.equal(H.matchDefaultParent('Coil-fixing ring 40', '线圈固定环 40'), 'sub_stator');
+  assert.equal(H.matchDefaultParent('Phase board 40 rev C', '相板 40 rev C'), 'sub_stator');
+  assert.equal(H.matchDefaultParent('Lead wire', '引线'), 'sub_stator');
+
+  assert.equal(H.matchDefaultParent('Rotor core 40_12', '转子铁芯 40_12'), 'sub_rotor');
+  assert.equal(H.matchDefaultParent('Magnet 40_12', '磁钢 40_12'), 'sub_rotor');
+  assert.equal(H.matchDefaultParent('Shaft 40_12', '轴 40_12'), 'sub_rotor');
+
+  assert.equal(H.matchDefaultParent('Front holder 40', '前支架 40'), 'sub_housing');
+  assert.equal(H.matchDefaultParent('Back holder 40', '后支架 40'), 'sub_housing');
+  assert.equal(H.matchDefaultParent('Bearing 618/8-2Z C3', '轴承 618/8-2Z C3'), 'sub_housing');
+  assert.equal(H.matchDefaultParent('Socket head screw M2.5', '内六角螺钉 M2.5'), 'sub_housing');
+  assert.equal(H.matchDefaultParent('Prop_fix 40', '螺旋桨固定片 40'), 'sub_housing');
+
+  // Build tree from raw unparented parts
+  const rawParts = [
+    { id: 'p_sc', name: { en: 'Stator core 40_12', zh: '定子铁芯 40_12' }, kind: 'made', qty_per_motor: 1 },
+    { id: 'p_mg', name: { en: 'Magnet 40_12', zh: '磁钢 40_12' }, kind: 'purchased', qty_per_motor: 14 },
+    { id: 'p_fh', name: { en: 'Front holder 40', zh: '前支架 40' }, kind: 'made', qty_per_motor: 1 },
+  ];
+
+  const tree = H.buildAssemblyTree(rawParts);
+  assert.equal(tree.id, 'motor');
+  assert.equal(tree.sub_assemblies.length, 3);
+  const subIds = tree.sub_assemblies.map((s) => s.node.id);
+  assert.ok(subIds.includes('sub_stator'));
+  assert.ok(subIds.includes('sub_rotor'));
+  assert.ok(subIds.includes('sub_housing'));
+
+  const statorSub = tree.sub_assemblies.find((s) => s.node.id === 'sub_stator');
+  assert.equal(statorSub.children.length, 1);
+  assert.equal(statorSub.children[0].id, 'p_sc');
+});
+
+t('assembly cost roll-up: sub-assembly cost is the sum of children', () => {
+  const parts = [
+    { id: 'sub_s', name: { en: 'Stator assembly', zh: '定子总成' }, kind: 'assembly', qty_per_motor: 1, parent_id: 'motor' },
+    { id: 'sub_r', name: { en: 'Rotor assembly', zh: '转子总成' }, kind: 'assembly', qty_per_motor: 1, parent_id: 'motor' },
+    { id: 'p_core', name: { en: 'Stator core', zh: '定子铁芯' }, kind: 'made', qty_per_motor: 1, parent_id: 'sub_s' },
+    { id: 'p_coil', name: { en: 'Coil', zh: '线圈' }, kind: 'made', qty_per_motor: 6, parent_id: 'sub_s' },
+    { id: 'p_mag', name: { en: 'Magnet', zh: '磁钢' }, kind: 'purchased', qty_per_motor: 14, parent_id: 'sub_r' },
+    { id: 'p_shaft', name: { en: 'Shaft', zh: '转轴' }, kind: 'made', qty_per_motor: 1, parent_id: 'sub_r' },
+  ];
+
+  const costRows = [
+    { part_id: 'p_core', unit_price: 110, currency: 'CNY' },
+    { part_id: 'p_coil', unit_price: 65, currency: 'CNY' },
+    { part_id: 'p_mag', unit_price: 85, currency: 'CNY' },
+    { part_id: 'p_shaft', unit_price: 40, currency: 'CNY' },
+  ];
+
+  const rollups = H.calcAssemblyRollup(parts, costRows);
+  assert.equal(rollups.get('p_core'), 110);
+  assert.equal(rollups.get('p_coil'), 65);
+  // Stator assembly sum = 110 + 65 = 175
+  assert.equal(rollups.get('sub_s'), 175);
+  // Rotor assembly sum = 85 + 40 = 125
+  assert.equal(rollups.get('sub_r'), 125);
+  // Motor total = 175 + 125 = 300
+  assert.equal(rollups.get('motor'), 300);
+
+  // Formatted tree includes line_totals
+  const tree = H.buildAssemblyTree(parts, costRows, 10);
+  const sNode = tree.sub_assemblies.find((s) => s.node.id === 'sub_s').node;
+  assert.equal(sNode.unit_price, 175);
+  assert.equal(sNode.line_total, 1750);
+});
+
+t('formatReceiptTime: formats ISO timestamp or returns date/dash', () => {
+  assert.equal(H.formatReceiptTime('2026-10-17T14:30:00Z'), '2026-10-17 14:30');
+  assert.equal(H.formatReceiptTime('2026-10-17T09:15'), '2026-10-17 09:15');
+  assert.equal(H.formatReceiptTime('2026-10-17'), '2026-10-17');
+  assert.equal(H.formatReceiptTime(''), '—');
+  assert.equal(H.formatReceiptTime(null), '—');
+});
+

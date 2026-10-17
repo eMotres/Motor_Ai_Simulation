@@ -1,7 +1,7 @@
 // Pure helpers of the Production module (no React, no I/O): revision numbers, bilingual display, caller standing.
 // Imported by __tests__/helpers.test.mjs (Node >= 22.18 strips the types).
 import type {
-  Bilingual, BomRow, CallerRole, CostRow, CostSummary, ExtraCost, Lang, Member, Production, Revision, TranslationStatus,
+  AssemblyNode, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, ExtraCost, Lang, Member, Part, Production, Revision, TranslationStatus,
 } from './types';
 
 // -- revisions --------------------------------------------------------------------------------------------------------
@@ -335,4 +335,241 @@ export function computeClientProcurementStatus(line: {
   if (line.ordered_on) return 'ordered';
   if (isToOrder) return 'to_order';
   return 'not_ordered';
+}
+
+// -- Assembly Tree & Roll-up ------------------------------------------------------------------------------------------------
+
+export const DEFAULT_SUBASSEMBLY_PARTS: readonly Part[] = [
+  {
+    id: 'sub_stator',
+    name: {
+      en: 'Stator assembly',
+      zh: '定子总成',
+      src_lang: 'en',
+      status: { en: 'confirmed', zh: 'confirmed' },
+    },
+    kind: 'assembly',
+    qty_per_motor: 1,
+    material: '',
+    spec: '',
+    description: {
+      en: 'Stator core, coils, insulation, rings and phase board',
+      zh: '定子铁芯、线圈、绝缘、固定环与相板',
+      src_lang: 'en',
+      status: { en: 'confirmed', zh: 'confirmed' },
+    },
+    drawing_files: [],
+    optional_step: null,
+    revision: '1.0',
+    parent_id: 'motor',
+  },
+  {
+    id: 'sub_rotor',
+    name: {
+      en: 'Rotor assembly',
+      zh: '转子总成',
+      src_lang: 'en',
+      status: { en: 'confirmed', zh: 'confirmed' },
+    },
+    kind: 'assembly',
+    qty_per_motor: 1,
+    material: '',
+    spec: '',
+    description: {
+      en: 'Rotor core, magnets and shaft',
+      zh: '转子铁芯、永磁体与电机轴',
+      src_lang: 'en',
+      status: { en: 'confirmed', zh: 'confirmed' },
+    },
+    drawing_files: [],
+    optional_step: null,
+    revision: '1.0',
+    parent_id: 'motor',
+  },
+  {
+    id: 'sub_housing',
+    name: {
+      en: 'Housing',
+      zh: '机壳与结构件',
+      src_lang: 'en',
+      status: { en: 'confirmed', zh: 'confirmed' },
+    },
+    kind: 'assembly',
+    qty_per_motor: 1,
+    material: '',
+    spec: '',
+    description: {
+      en: 'Holders, bearings, screws and propeller fix',
+      zh: '端盖支架、轴承、螺钉与螺旋桨固定片',
+      src_lang: 'en',
+      status: { en: 'confirmed', zh: 'confirmed' },
+    },
+    drawing_files: [],
+    optional_step: null,
+    revision: '1.0',
+    parent_id: 'motor',
+  },
+];
+
+export function matchDefaultParent(nameEn?: string, nameZh?: string): string {
+  const en = (nameEn ?? '').trim().toLowerCase();
+  const zh = (nameZh ?? '').trim();
+
+  // Check housing first (to avoid "轴" matching "轴承")
+  if (
+    ['holder', 'bearing', 'screw', 'bolt', 'prop_fix', 'prop fix', 'housing'].some((k) => en.includes(k)) ||
+    ['支架', '端盖', '轴承', '螺钉', '螺栓', '固定片', '机壳'].some((k) => zh.includes(k))
+  ) {
+    return 'sub_housing';
+  }
+
+  // Check rotor
+  if (
+    ['rotor core', 'magnet', 'shaft'].some((k) => en.includes(k)) ||
+    ['转子', '磁钢', '磁体'].some((k) => zh.includes(k)) ||
+    (zh.includes('轴') && !zh.includes('轴承'))
+  ) {
+    if (!en.includes('stator') && !zh.includes('定子')) {
+      return 'sub_rotor';
+    }
+  }
+
+  // Check stator
+  if (
+    ['stator core', 'coil', 'insulation', 'phase board', 'lead wire', 'varnish', 'epoxy'].some((k) => en.includes(k)) ||
+    ['定子', '线圈', '绝缘', '相板', '引线', '浸漆', '环氧'].some((k) => zh.includes(k))
+  ) {
+    return 'sub_stator';
+  }
+
+  return 'sub_housing';
+}
+
+export function ensureDefaultAssemblyParts(parts: readonly Part[]): Part[] {
+  if (!parts || parts.length === 0) return [];
+  const hasAssemblies = parts.some((p) => p.kind === 'assembly');
+  const hasParentIds = parts.some((p) => Boolean(p.parent_id));
+  if (hasAssemblies || hasParentIds) return [...parts];
+
+  const subMap = new Map(DEFAULT_SUBASSEMBLY_PARTS.map((s) => [s.id, { ...s }]));
+  const updated = parts.map((p) => {
+    const parent = matchDefaultParent(p.name?.en, p.name?.zh);
+    return { ...p, parent_id: parent };
+  });
+
+  return [...subMap.values(), ...updated];
+}
+
+export function calcAssemblyRollup(
+  parts: readonly Part[],
+  costRows: readonly CostRow[],
+): Map<string, number> {
+  const costMap = new Map(costRows.map((r) => [r.part_id, Number(r.unit_price) || 0]));
+  const rollup = new Map<string, number>();
+
+  // Leaf costs
+  for (const p of parts) {
+    if (p.kind !== 'assembly') {
+      if (costMap.has(p.id)) {
+        rollup.set(p.id, costMap.get(p.id)!);
+      }
+    }
+  }
+
+  // Assembly nodes (parent -> children)
+  const childrenMap = new Map<string, Part[]>();
+  for (const p of parts) {
+    if (p.parent_id) {
+      const list = childrenMap.get(p.parent_id) ?? [];
+      list.push(p);
+      childrenMap.set(p.parent_id, list);
+    }
+  }
+
+  for (let iter = 0; iter < 5; iter++) {
+    let changed = false;
+    for (const p of parts) {
+      if (p.kind === 'assembly') {
+        const children = childrenMap.get(p.id) ?? [];
+        const sum = Math.round(children.reduce((acc, c) => acc + (rollup.get(c.id) ?? 0), 0) * 100) / 100;
+        if (rollup.get(p.id) !== sum) {
+          rollup.set(p.id, sum);
+          changed = true;
+        }
+      }
+    }
+    if (!changed) break;
+  }
+
+  // Motor total
+  const motorChildren = parts.filter((p) => p.parent_id === 'motor' || p.kind === 'assembly');
+  const motorSum = Math.round(motorChildren.reduce((acc, c) => acc + (rollup.get(c.id) ?? 0), 0) * 100) / 100;
+  rollup.set('motor', motorSum);
+
+  return rollup;
+}
+
+export function buildAssemblyTree(
+  parts: readonly Part[],
+  costRows: readonly CostRow[] = [],
+  orderQuantity = 1,
+): AssemblyTree {
+  const structuredParts = ensureDefaultAssemblyParts(parts);
+  const rollups = calcAssemblyRollup(structuredParts, costRows);
+
+  const byParent = new Map<string, Part[]>();
+  for (const p of structuredParts) {
+    const pid = p.parent_id || 'motor';
+    const list = byParent.get(pid) ?? [];
+    list.push(p);
+    byParent.set(pid, list);
+  }
+
+  const toAssemblyNode = (p: Part): AssemblyNode => {
+    const unitPrice = rollups.has(p.id) ? rollups.get(p.id)! : null;
+    const lineTotal = unitPrice !== null ? Math.round(unitPrice * orderQuantity * 100) / 100 : null;
+    return {
+      id: p.id,
+      name: p.name,
+      kind: p.kind,
+      qty_per_motor: p.qty_per_motor,
+      parent_id: p.parent_id,
+      unit_price: unitPrice,
+      line_total: lineTotal,
+    };
+  };
+
+  const subAssemblies: Array<{ node: AssemblyNode; children: AssemblyNode[] }> = [];
+  const directSubs = byParent.get('motor') ?? [];
+
+  for (const sub of directSubs) {
+    const subNode = toAssemblyNode(sub);
+    const childrenParts = byParent.get(sub.id) ?? [];
+    const childrenNodes = childrenParts.map(toAssemblyNode);
+    subAssemblies.push({
+      node: subNode,
+      children: childrenNodes,
+    });
+  }
+
+  return {
+    id: 'motor',
+    name: {
+      en: 'Motor',
+      zh: '电机整机',
+      src_lang: 'en',
+      status: { en: 'confirmed', zh: 'confirmed' },
+    },
+    sub_assemblies: subAssemblies,
+  };
+}
+
+export function formatReceiptTime(val: string | null | undefined): string {
+  if (!val) return '—';
+  if (val.includes('T')) {
+    const [d, t] = val.split('T');
+    const timePart = t.slice(0, 5);
+    return `${d} ${timePart}`;
+  }
+  return val;
 }

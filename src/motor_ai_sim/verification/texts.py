@@ -61,52 +61,70 @@ def need_info_mail(requests: list, url: str, zh: bool, name: str = "") -> tuple[
     en = ("Hello%s,\n\nthank you for signing our model NDA. Before we open the 3-D tools and the STEP download we check who is asking - "
           "a short routine step that protects our customers' designs.\n\nWe need one more thing from you:\n\n%s\n\n"
           "Answer here (no sign-in needed, the link is personal):\n\n%s\n\n"
-          "We do not ask for a passport or an ID. If something is unclear, just reply to this e-mail.\n\n%s support\n") % (
+          "We do not ask for a passport or an ID. If something is unclear, just reply to this e-mail.\n\n%s support\nsupport@aerostator.com\n") % (
         (" " + name) if name else "", _items(requests, "en"), url, _BRAND)
     if not zh:
         return ("%s: one more thing we need to open your 3-D model access" % _BRAND, en)
     cn = ("\n---\n您好%s，\n\n感谢您签署模型保密协议。在开放 3D 工具和 STEP 下载之前，我们需要例行核实申请人身份，以保护客户的设计。\n\n"
           "还需要您提供以下信息：\n\n%s\n\n请在此页面回复（无需登录，链接为您专属）：\n\n%s\n\n"
-          "我们不会索要护照或身份证件。如有疑问，直接回复此邮件即可。\n\n%s 支持团队\n") % (
+          "我们不会索要护照或身份证件。如有疑问，直接回复此邮件即可。\n\n%s 支持团队\nsupport@aerostator.com\n") % (
         (" " + name) if name else "", _items(requests, "zh-CN"), url, _BRAND)
     return ("%s: one more thing we need / 还需要您补充一项信息" % _BRAND, en + cn)
+
+
+def reminder_mail(requests: list, url: str, zh: bool, name: str = "") -> tuple[str, str]:
+    en = ("Hello%s,\n\na gentle reminder about your request for 3-D model and STEP download access.\n\n"
+          "We still need one more thing from you:\n\n%s\n\n"
+          "Answer here (no sign-in needed, the link is personal):\n\n%s\n\n"
+          "We do not ask for a passport or an ID. If something is unclear, write to support@aerostator.com or reply to this e-mail.\n\n"
+          "%s support\nsupport@aerostator.com\n") % (
+        (" " + name) if name else "", _items(requests, "en"), url, _BRAND)
+    if not zh:
+        return ("%s: reminder: one more thing we need to open your 3-D model access" % _BRAND, en)
+    cn = ("\n---\n您好%s，\n\n温馨提醒：关于您申请 3D 模型和 STEP 下载权限的事宜。\n\n"
+          "为了核实您的申请，我们还需要您补充以下信息：\n\n%s\n\n"
+          "请在此页面回复（无需登录，链接为您专属）：\n\n%s\n\n"
+          "我们不会索要护照或身份证件。如有疑问，可联系 support@aerostator.com 或直接回复此邮件。\n\n"
+          "%s 支持团队\nsupport@aerostator.com\n") % (
+        (" " + name) if name else "", _items(requests, "zh-CN"), url, _BRAND)
+    return ("%s: reminder: one more thing we need / 温馨提醒：还需要您补充信息" % _BRAND, en + cn)
 
 
 def review_mail(requests: list, url: str, zh: bool) -> tuple[str, str]:
     extra = ("\nIn the meantime we would also like:\n\n%s\n\nAnswer here:\n\n%s\n" % (_items(requests, "en"), url)) if requests else ""
     en = ("Hello,\n\nthank you for signing our model NDA. Your request is with our team for a manual check; we will write to you as soon as it is done "
-          "(usually within one working day).%s\n\n%s support\n") % (extra, _BRAND)
+          "(usually within one working day).%s\n\n%s support\nsupport@aerostator.com\n") % (extra, _BRAND)
     if not zh:
         return ("%s: your request is being reviewed" % _BRAND, en)
     cn_extra = ("\n同时请您补充：\n\n%s\n\n请在此页面回复：\n\n%s\n" % (_items(requests, "zh-CN"), url)) if requests else ""
-    cn = "\n---\n您好，\n\n感谢您签署模型保密协议。您的申请已转交我们的团队人工核实，完成后我们会立即通知您（通常在一个工作日内）。%s\n\n%s 支持团队\n" % (cn_extra, _BRAND)
+    cn = "\n---\n您好，\n\n感谢您签署模型保密协议。您的申请已转交我们的团队人工核实，完成后我们会立即通知您（通常在一个工作日内）。%s\n\n%s 支持团队\nsupport@aerostator.com\n" % (cn_extra, _BRAND)
     return ("%s: your request is being reviewed / 您的申请正在审核" % _BRAND, en + cn)
 
 
 def verified_mail(zh: bool) -> tuple[str, str]:
-    en = "Hello,\n\nyour verification is complete. The 3-D tools and the STEP download are now open in your account.\n\n%s support\n" % _BRAND
+    en = "Hello,\n\nyour verification is complete. The 3-D tools and the STEP download are now open in your account.\n\n%s support\nsupport@aerostator.com\n" % _BRAND
     if not zh:
         return ("%s: your 3-D model access is open" % _BRAND, en)
     return ("%s: your 3-D model access is open / 3D 模型权限已开通" % _BRAND,
-            en + "\n---\n您好，\n\n核实已完成，您账户中的 3D 工具和 STEP 下载现已开通。\n\n%s 支持团队\n" % _BRAND)
+            en + "\n---\n您好，\n\n核实已完成，您账户中的 3D 工具和 STEP 下载现已开通。\n\n%s 支持团队\nsupport@aerostator.com\n" % _BRAND)
 
 
 def denied_mail(reason_public: str, zh: bool) -> tuple[str, str]:
     en = ("Hello,\n\nwe cannot open the 3-D model downloads for your account at this time.%s\n"
-          "If you think this is a mistake, reply to this e-mail.\n\n%s support\n") % ((" " + reason_public) if reason_public else "", _BRAND)
+          "If you think this is a mistake, reply to this e-mail.\n\n%s support\nsupport@aerostator.com\n") % ((" " + reason_public) if reason_public else "", _BRAND)
     if not zh:
         return ("%s: about your 3-D model access" % _BRAND, en)
     return ("%s: about your 3-D model access / 关于您的 3D 模型权限" % _BRAND,
-            en + "\n---\n您好，\n\n目前我们无法为您的账户开通 3D 模型下载。如您认为这是误判，请直接回复此邮件。\n\n%s 支持团队\n" % _BRAND)
+            en + "\n---\n您好，\n\n目前我们无法为您的账户开通 3D 模型下载。如您认为这是误判，请直接回复此邮件。\n\n%s 支持团队\nsupport@aerostator.com\n" % _BRAND)
 
 
 def otp_mail(code: str, zh: bool) -> tuple[str, str]:
     en = ("Hello,\n\nyour AeroStator confirmation code is %s\n\nIt is valid for 30 minutes. Enter it on the verification page. "
-          "If you did not ask for it, ignore this message.\n") % code
+          "If you did not ask for it, ignore this message.\n\n%s support\nsupport@aerostator.com\n") % (code, _BRAND)
     if not zh:
         return ("%s: your confirmation code %s" % (_BRAND, code), en)
     return ("%s: your confirmation code %s / 验证码" % (_BRAND, code),
-            en + "\n---\n您好，\n\n您的 AeroStator 验证码是 %s，30 分钟内有效。请在核实页面输入。如果这不是您本人的操作，请忽略此邮件。\n" % code)
+            en + "\n---\n您好，\n\n您的 AeroStator 验证码是 %s，30 分钟内有效。请在核实页面输入。如果这不是您本人的操作，请忽略此邮件。\n\n%s 支持团队\nsupport@aerostator.com\n" % (code, _BRAND))
 
 
 def admin_mail(case: dict, url: str) -> tuple[str, str]:
@@ -116,6 +134,35 @@ def admin_mail(case: dict, url: str) -> tuple[str, str]:
             "Case %s\nApplicant: %s (%s) <%s>\nCompany: %s, %s, reg. %s\nStatus: %s\n\n%s\n\nOpen: %s\n" % (
                 case["id"], a.get("applicant_name"), a.get("title"), case.get("user"), a.get("legal_name"), a.get("country"), a.get("reg_no"),
                 case.get("status"), reasons, url))
+
+
+def digest_mail(waiting: list[dict], url: str, now: float) -> tuple[str, str]:
+    lines = []
+    for c in waiting:
+        a = c.get("application") or {}
+        st = c.get("status", "")
+        if st == ENG.MANUAL_REVIEW:
+            ref_t = c.get("status_at") or c.get("created", now)
+        else:
+            ref_t = c.get("created", now)
+        days = max(0.0, (now - ref_t) / 86400.0)
+        days_str = ("%.1f days" % days) if days >= 0.1 else ("%.1f hours" % ((now - ref_t) / 3600.0))
+        lines.append(
+            "- Company: %s (%s)\n  Applicant: %s\n  Status: %s\n  Waiting: %s\n  Case: %s" % (
+                a.get("legal_name") or "—",
+                a.get("country") or "—",
+                a.get("applicant_name") or c.get("user", "—"),
+                st,
+                days_str,
+                c.get("id", "—"),
+            )
+        )
+    body = (
+        "Hello,\n\nThe following %d verification case(s) are waiting for administrator review:\n\n%s\n\n"
+        "Review queue: %s\n\n%s\n"
+    ) % (len(waiting), "\n\n".join(lines), url, _BRAND)
+    subject = "[verification] Daily digest: %d case(s) waiting for review" % len(waiting)
+    return (subject, body)
 
 
 #: the public status line (the web translates by `state`; this English text is for API clients)

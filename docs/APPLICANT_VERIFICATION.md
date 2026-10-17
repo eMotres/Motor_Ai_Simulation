@@ -191,6 +191,33 @@ required, every action audited and written to the case):
 * **Deny** -> DENIED, access revoked, a neutral mail; replies are ignored.
 * **Re-run checks** -> clears the case cache and runs every source again.
 
+## Follow-ups and background automation
+
+### Periodic sweep (`motor_ai_sim.verification.sweep`)
+
+Run via cron or systemd timer (e.g. hourly or daily):
+```bash
+python -m motor_ai_sim.verification.sweep [--dry-run]
+```
+The sweep performs:
+1. **Silent applicant reminders (Day 3)**: cases in `MORE_INFORMATION_REQUIRED` where the applicant has been silent for `>= REMINDER_AFTER_DAYS` (3 days) receive a reminder email (`reminder_sent` event recorded, sent at most once).
+2. **Escalation to manual review (Day 7)**: cases silent for `>= ESCALATE_AFTER_DAYS` (7 days) transition to `MANUAL_REVIEW` (`reason = "applicant_silent"`). Both the admin (`NDA_NOTIFY_EMAIL`) and applicant are notified.
+3. **Daily digest**: if any cases are waiting (`MANUAL_REVIEW` or `PENDING > 1h`), sends a summary email to `support@aerostator.com` (at most once per calendar day, tracked in `<root>/digest.json`).
+
+Any applicant action (opening reply page, sending links/notes, requesting OTP) resets the silence clock.
+
+### Admin badge for waiting decisions
+
+- `GET /api/admin/verification/waiting` returns `{"count": N}`, counting cases in `MANUAL_REVIEW` plus cases stuck in `PENDING` for over 1 hour.
+- `AdminPanel.tsx` polls this endpoint every 60 seconds on mount.
+- `AdminNav.tsx` displays a red pill badge (`#ef4444`) with white text next to the "Verification" tab whenever `count > 0`.
+
+### Reply page contact & OTP resend
+
+- The reply page includes a "Did not get the code?" section with a spam folder notice and a direct mailto link to `support@aerostator.com`.
+- Applicants can request a new OTP code via the "Send a new code" button (`action=resend`), subject to a 120-second cooldown (`OTP_RESEND_COOLDOWN_S`) and the per-case daily code limit.
+- All outbound applicant verification emails include a direct support address below the signature.
+
 ## What the owner configures
 
 | Setting | Where | Effect |
@@ -201,6 +228,9 @@ required, every action audited and written to the case):
 | `VERIFICATION_SECRET` | optional | key of the reply links (else derived from the session secret; rotating it invalidates open links) |
 | `VERIFY_DISPOSABLE_FILE` | optional | extra disposable domains, one per line |
 | `MOTRES_VERIFICATION_ROOT` | optional | move the store (default `<shared>/legal/verification`) |
+| `REMINDER_AFTER_DAYS` | `config.py` (default 3) | Days of silence before reminder email is sent |
+| `ESCALATE_AFTER_DAYS` | `config.py` (default 7) | Days of silence before escalating to MANUAL_REVIEW |
+| `OTP_RESEND_COOLDOWN_S` | `config.py` (default 120) | Seconds before a new OTP can be requested |
 
 No new Python dependency (standard library + `httpx`, already in `requirements.txt`; a test fails if the package imports anything else).
 Accounts that signed the NDA online **before** this change lose the STEP / tools until verified (their case opens at first look): approve the
@@ -210,7 +240,8 @@ known ones in Admin > Verification, or set the NDA flag in Admin > Users (that i
 
 `tests/test_verification_engine.py` (decision table, text helpers), `tests/test_verification_sources.py` (adapters with a mocked network, SSRF guard, the
 registry), `tests/test_verification_flow.py` (gate, intake, automatic decision, reply page with one-time code / links / document, admin actions, audit
-completeness, rebuild), `tests/test_verification_misc.py` (no new dependency, failure isolation, background run, mails, limits); web:
+completeness, rebuild), `tests/test_verification_misc.py` (no new dependency, failure isolation, background run, mails, limits),
+`tests/test_verification_sweep.py` (periodic sweep, reminders, escalations, waiting decisions count, daily digest, OTP cooldown and resend); web:
 `web/src/lib/__tests__/verification.test.mjs`, `viewerToolbar.test.mjs`.  `tests/conftest.py` replaces the HTTP client and the MX lookup with offline
 doubles and runs the checks inline for the whole suite.
 

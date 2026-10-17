@@ -164,6 +164,14 @@ def reply_post(token: str, request: Request, action: str = Form(""), email: str 
     if action == "confirm_email":
         ok, c = SV.confirm_email(cid, email, code)
         return _render(request, token, case, flash="verified" if ok else c, kind="" if ok else "err", pending="" if ok else email.strip().lower())
+    if action == "resend":
+        address = email.strip().lower()
+        ok, c = SV.resend_email(cid, address)
+        case = ST.get(cid) or case
+        pending_addr = address or (list(case["emails"]["pending"].keys())[-1] if case["emails"]["pending"] else "")
+        if ok:
+            return _render(request, token, case, flash="sent", pending=pending_addr)
+        return _render(request, token, case, flash=c, kind="err", pending=pending_addr)
     return _render(request, token, case)
 
 
@@ -206,8 +214,14 @@ def admin_list(status: str = "", limit: int = 200, admin: dict = Depends(require
     counts: dict = {}
     for c in ST.list_cases():
         counts[c["status"]] = counts.get(c["status"], 0) + 1
+    counts["waiting"] = SV.count_waiting()
     AA.record(AA.actor_of(admin), "verification.read", "queue", details={"status": st or "all"})
     return {"cases": rows, "counts": counts}
+
+
+@admin_router.get("/waiting")
+def admin_waiting(admin: dict = Depends(require_admin)):
+    return {"count": SV.count_waiting()}
 
 
 @admin_router.get("/{case_id}")

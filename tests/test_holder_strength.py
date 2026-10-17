@@ -245,10 +245,7 @@ def test_api_holder_strength_endpoint():
 
 
 def test_api_holder_fem_job_endpoint():
-    """Verify POST /api/mechanical/holder_fem_job route."""
+    """The 3-D holder FEM job is not wired yet: the route says so (501) instead of pretending it queued (review 2026-10-17)."""
     client = TestClient(app)
     resp = client.post("/api/mechanical/holder_fem_job?holder_type=front&thrust_n=49.05")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "queued"
-    assert data["holder_type"] == "front"
+    assert resp.status_code == 501

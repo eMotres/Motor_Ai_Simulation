@@ -369,6 +369,8 @@ SELF_GATED = {           # routes whose natural "missing" answer is not a 404: g
     ("GET", "/api/model3d/{die}/{config}/simplified.json"), ("GET", "/api/model3d/{die}/{config}/simplified_view.glb"),
     ("POST", "/api/family/config/{die}/{cfg}/cad_params/import"),       # multipart; tested in tests/test_construction_params.py
     ("GET", "/api/propellers/cooling-options"), ("GET", "/api/propellers/{prop_id}/s1"), ("GET", "/api/system/graph"),
+    # bearing fit / holder strength: a hidden configuration answers 404 in-route (_gate_config), tested below
+    ("GET", "/api/mechanical/bearing_fit"), ("GET", "/api/mechanical/holder_strength"), ("POST", "/api/mechanical/holder_fem_job"),
 }
 NOT_CONFIG_ROUTES = {    # name a `die` or a `config` that is not a catalog configuration
     ("POST", "/api/family/save_as_new_die"), ("POST", "/api/optimization/saved"),
@@ -396,9 +398,15 @@ def _api_routes():
     return out
 
 
+def _production_route(r) -> bool:
+    """Production routes are gated by explicit production MEMBERSHIP (production/access.py), stricter than catalog
+    visibility; tested in tests/test_production_access.py."""
+    return r[1].startswith("/api/production/") or r[1].startswith("/api/admin/production/")
+
+
 def test_every_config_route_is_covered():
     covered = set(READ_ROUTES) | set(WRITE_ROUTES) | set(BODY_ROUTES) | SELF_GATED | NOT_CONFIG_ROUTES
-    missing = sorted(r for r in _api_routes() if r not in covered)
+    missing = sorted(r for r in _api_routes() if r not in covered and not _production_route(r))
     assert not missing, ("a route names a die + configuration but is not in the config-visibility sweep "
                          f"(gate it with motor_access.may_see_config and add it here): {missing}")
 
@@ -582,7 +590,10 @@ def test_controller_routes_read_a_hidden_configuration_as_an_unsaved_one(env):
 
 
 def test_system_graph_status_does_not_look_up_a_hidden_configuration(env):
-    for who in ("plain", "eng"):
+    # the System graph is engineer/admin only since stage 2 (#259); a plain account is refused outright
+    assert client.get("/api/system/graph", params={"view": "propeller_s1", "die": DIE, "config": PRIV},
+                      headers=env["plain"]).status_code == 403
+    for who in ("eng",):
         a = client.get("/api/system/graph", params={"view": "propeller_s1", "die": DIE, "config": PRIV}, headers=env[who])
         b = client.get("/api/system/graph", params={"view": "propeller_s1", "die": DIE, "config": NOSUCH}, headers=env[who])
         assert a.status_code == b.status_code == 200
@@ -887,3 +898,12 @@ def test_the_safety_net_gates_a_route_nobody_gated_by_hand(env):
     finally:
         app.router.routes[:] = [r for r in app.router.routes
                                 if not str(getattr(r, "path", "")).startswith("/api/_net_probe")]
+
+
+def test_bearing_fit_and_holder_strength_hide_a_hidden_configuration(env):
+    for path in ("/api/mechanical/bearing_fit", "/api/mechanical/holder_strength"):
+        for who in ("plain", "anon"):
+            r = client.get(path, params={"die": DIE, "config": PRIV}, headers=env[who])
+            assert r.status_code in (401, 404), (path, who, r.status_code)
+        assert client.get(path, params={"die": DIE, "config": PUB}, headers=env["plain"]).status_code == 200, path
+    assert client.post("/api/mechanical/holder_fem_job", params={"die": DIE, "config": PUB}, headers=env["eng"]).status_code == 501

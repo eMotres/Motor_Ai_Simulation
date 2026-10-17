@@ -18,7 +18,7 @@ import time
 from collections import OrderedDict
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from motor_ai_sim import workspace as _WSP
 from motor_ai_sim import jobs as _JOBS
@@ -2573,6 +2573,15 @@ def _resolve_bearing_card(
     return "61811-2Z"
 
 
+def _gate_config(die: Optional[str], config: Optional[str], authorization: Optional[str]) -> None:
+    """A hidden configuration answers like a missing one (config-visibility sweep, review 2026-10-17)."""
+    if not die:
+        return
+    from motor_ai_sim import motor_access as _MA
+    if not _MA.may_see_config(_MA.catalog_access(authorization), die, config):
+        raise HTTPException(status_code=404, detail="unknown configuration")
+
+
 @router.get("/bearing_fit")
 def get_bearing_fit(
     die: Optional[str] = Query(default=None),
@@ -2586,11 +2595,13 @@ def get_bearing_fit(
     thrust_n: float = Query(default=49.05, ge=0.0),
     radial_load_n: float = Query(default=0.0, ge=0.0),
     hub_od: Optional[float] = Query(default=None, ge=1.0),
+    authorization: Optional[str] = Header(default=None),
 ):
     """Closed-form bearing fit vs temperature curve, Lamé contact pressure,
     hub hoop stress, internal clearance loss, and ISO 281 L10 life (1 vs 2 bearings).
     Instant execution (analytic, not FEM).
     """
+    _gate_config(die, config, authorization)
     from motor_ai_sim.bearing_fit import bearing_fit_analysis
     brg_card = _resolve_bearing_card(bearing, die, config)
     speed = float(rpm) if rpm is not None and rpm > 0 else max(_default_rpm(), 5000.0)
@@ -2626,11 +2637,13 @@ def get_holder_strength(
     t_working: float = Query(default=70.0),
     motor_dia: Optional[float] = Query(default=None, ge=5.0),
     bearing: Optional[str] = None,
+    authorization: Optional[str] = Header(default=None),
 ):
     """Holder strength assessment under axial thrust (49 N / 5 kg) and torque (1 N*m),
     combined with bearing press-fit preload. Reports AVERAGED stresses and safety factors
     for both Front and Back holders across every motor family.
     """
+    _gate_config(die, config, authorization)
     from motor_ai_sim.holder_strength import assess_holder_strength
 
     d_motor = float(motor_dia) if motor_dia is not None and motor_dia > 0 else _resolve_die_diameter(die)
@@ -2662,15 +2675,11 @@ def queue_holder_fem_job(
     holder_type: str = Query(default="front", pattern="^(front|back)$"),
     thrust_n: float = Query(default=49.05),
     torque_nm: float = Query(default=1.0),
+    authorization: Optional[str] = Header(default=None),
 ):
-    """Queue a CalculiX 3D FEA holder strength solve as a background job."""
-    return {
-        "status": "queued",
-        "holder_type": holder_type,
-        "die": die,
-        "config": config,
-        "thrust_n": thrust_n,
-        "torque_nm": torque_nm,
-        "message": "Holder FEM solve queued (calculix_fem)",
-    }
+    """The 3-D CalculiX holder solve is not wired to the job queue yet (review 2026-10-17: the stub answered 'queued'
+    without queueing anything) - say so instead of pretending."""
+    _gate_config(die, config, authorization)
+    raise HTTPException(status_code=501, detail="The 3-D holder FEM job is not available yet; the closed-form holder "
+                                                "strength (GET /api/mechanical/holder_strength) is.")
 

@@ -15,7 +15,8 @@
     "downloads3d": "3D downloads",
     "analytics": "Analytics",
     "activity": "Activity",
-    "verification": "Verification"
+    "verification": "Verification",
+    "productionAccess": "Production access"
   },
   "motors": {
     "title": "Motors — {email}",
@@ -185,5 +186,38 @@
     "applicant": "applicant",
     "downloads": "Downloads",
     "timeline": "Timeline"
+  },
+  "production": {
+    "title": "Production access",
+    "tip": "Per die/configuration: create its production and choose who works on it (owner, engineer, OEM producer). Members of a production see only that one.",
+    "search": "Search motors",
+    "refresh": "Refresh",
+    "loading": "Loading…",
+    "colMotor": "Motor",
+    "colStatus": "Production",
+    "colMembers": "Members",
+    "none": "None",
+    "status": { "active": "Active", "paused": "Paused", "archived": "Archived" },
+    "role": { "owner": "Owner", "engineer": "Engineer", "oem": "OEM producer" },
+    "noNda": "{count, plural, one {# without NDA} other {# without NDA}}",
+    "noNdaTip": "OEM members without a signed NDA cannot open the production: {list}",
+    "noNdaOne": "No signed NDA: cannot open the production",
+    "noNdaShort": "No NDA",
+    "noRows": "No motors match.",
+    "noMembers": "No members yet.",
+    "create": "Create production",
+    "titleField": "Title",
+    "qtyField": "Order quantity",
+    "created": "Production created",
+    "addMember": "Add member",
+    "account": "Account (e-mail)",
+    "roleField": "Role",
+    "add": "Add",
+    "added": "Member added",
+    "removeMember": "Remove member",
+    "removed": "Removed {email}",
+    "delete": "Delete production",
+    "deleteConfirm": "Delete this production and its members list? Files stay on disk.",
+    "deleted": "Production deleted"
   }
 }

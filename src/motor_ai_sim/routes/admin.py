@@ -25,7 +25,7 @@ from motor_ai_sim.auth import require_admin, require_admin_or_token
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
-_VALID_ROLES = ("user", "engineer", "admin")
+_VALID_ROLES = ("user", "oem", "engineer", "admin")
 _DAY_MS = 86_400_000.0
 
 #: ``source`` of the real user list (the self-hosted registry).

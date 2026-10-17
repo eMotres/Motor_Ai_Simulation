@@ -66,7 +66,7 @@ ADMIN_API_TOKEN = os.environ.get("ADMIN_API_TOKEN", "").strip()
 
 #: "engineer" (owner 2026-10-14) sits between: every route a "user" may call, plus the per-workspace ones in
 #: ``_ENGINEER_WORKSPACE_GATES`` below; never an "admin" route.
-_ROLE_RANK = {"anon": -1, "user": 0, "engineer": 1, "admin": 2}
+_ROLE_RANK = {"anon": -1, "user": 0, "oem": 1, "engineer": 2, "admin": 3}
 
 # ── PUBLIC_EXHIBIT — is there an anonymous audience at all? ──────────────────
 #

@@ -55,7 +55,8 @@ _TOKEN_TTL_S = 30 * 24 * 3600          # 30 days
 RENEW_WINDOW_S = 7 * 24 * 3600         # 7 days
 #: "user" = Configure only (Motors + Configure); "engineer" = the whole simulation UI on the account's OWN workspace and the dies it
 #: is granted (no admin sections, no user management, no shared stores); "admin" = everything.  (Owner 2026-10-14.)
-ROLES = ("user", "engineer", "admin")
+#: "oem" (owner 2026-10-17) = an OEM producer: sees only the productions it is a member of (motor_ai_sim.production); never the simulation UI.
+ROLES = ("user", "oem", "engineer", "admin")
 
 #: Optional per-account CPU-hour allowance per month (owner 2026-10-14).  PREPARATION ONLY: stored and shown in Admin; no job is
 #: blocked by it.  ``None`` = not set.
@@ -100,7 +101,7 @@ def _check_role_change(users: dict, email: str, new_role: str) -> None:
 def _migrate_role(rec: dict) -> str:
     """Old free/pro/team/internal/etc. tiers collapse to user; admin stays admin."""
     v = rec.get("role") or rec.get("tier") or "user"
-    return str(v) if str(v) in ("admin", "engineer") else "user"
+    return str(v) if str(v) in ("admin", "engineer", "oem") else "user"
 
 #: Every possible outcome of verifying a bearer token.  Only the first is a
 #: success; only `store_unavailable` is NOT the client's fault and must never

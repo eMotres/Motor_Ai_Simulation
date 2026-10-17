@@ -794,7 +794,12 @@ const FamilyCatalog: React.FC<{
           : '')
       : 'No duties saved yet, so this is the Simulation mode that was set when the configuration was created. It follows the duties as soon as there is one.');
 
-  const shown = diameter == null ? filterDiesByApplication(dies, application) : diesOfDiameter(dies, application, diameter);
+  const shownAll = diameter == null ? filterDiesByApplication(dies, application) : diesOfDiameter(dies, application, diameter);
+  // Clients see only what is computed (owner 2026-10-17): a configuration without a catalogue card is hidden, and a motor
+  // with none left is not listed.  Editors keep every row (they need the uncomputed ones to work on).
+  const shown = canWrite ? shownAll : shownAll
+    .map((d) => ({ ...d, configs: d.configs.filter((c) => !!c.card_date), config_count: d.configs.filter((c) => !!c.card_date).length }))
+    .filter((d) => d.configs.length > 0);
   if (embedded && shown.length === 0 && !msg) return null;
 
   const body = (
@@ -831,11 +836,12 @@ const FamilyCatalog: React.FC<{
                 thumbSvg={die.thumb_svg ?? undefined} />
             </Box>
             <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-1)' }}>
-              {die.locked ? '🔒 ' : ''}{die.name}
+              {canWrite && die.locked ? '🔒 ' : ''}{die.name}
             </Typography>
-            <CardSummary cards={die.cards ?? 0} total={die.config_count ?? die.configs.length}
+            {/* card status / build currency are editor information, not for clients (owner 2026-10-17) */}
+            {canWrite && <CardSummary cards={die.cards ?? 0} total={die.config_count ?? die.configs.length}
               olderBuildConfigs={die.configs.filter((c) => c.card_date
-                && staleCatalogDutyNames(c.build_sig, c.duties).length > 0).map((c) => c.name)} />
+                && staleCatalogDutyNames(c.build_sig, c.duties).length > 0).map((c) => c.name)} />}
             {(() => {
               // The configurations as small buttons; the numbers beside them are those of
               // the picked configuration's DEFAULT mode (lib/catalogRows).
@@ -878,7 +884,7 @@ const FamilyCatalog: React.FC<{
                   </Box>
                   {cur && (
                     <>
-                      <CardBadge date={cur.card_date} olderBuild={curStaleDuties.length > 0} staleDuties={curStaleDuties} />
+                      {canWrite && <CardBadge date={cur.card_date} olderBuild={curStaleDuties.length > 0} staleDuties={curStaleDuties} />}
                       <ApplicationBadge cfg={die.configs.find((x) => x.name === cur.config)} die={die.name} canEdit={canWrite} />
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
                         <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
@@ -991,12 +997,9 @@ const FamilyCatalog: React.FC<{
                   {(active?.die === die.name && active?.config === c.name)
                     ? ' ●' : ''}
                 </Typography>
-                <CardBadge date={c.card_date}
+                {canWrite && <CardBadge date={c.card_date}
                   olderBuild={staleCatalogDutyNames(c.build_sig, c.duties).length > 0}
-                  staleDuties={staleCatalogDutyNames(c.build_sig, c.duties)} />
-                {c.locked && !canWrite && (
-                  <Typography component="span" sx={{ fontSize: 11 }}>🔒</Typography>
-                )}
+                  staleDuties={staleCatalogDutyNames(c.build_sig, c.duties)} />}
                 {canWrite && (
                   <Tooltip title={tx('renameConfiguration')}>
                     <span>

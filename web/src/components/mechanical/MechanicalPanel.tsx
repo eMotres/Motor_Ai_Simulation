@@ -37,6 +37,7 @@ import type { ColumnDef } from '../common/LocalCompareTable';
 import SolveProgressStrip from '../common/SolveProgressStrip';
 import ModalSection from './ModalSection';
 import BearingsSection from './BearingsSection';
+import BearingFitSection from './BearingFitSection';
 import { SolveTimer, solvedIn } from './SolveTimer';
 import StressMap, { GeometryMap } from './StressMap';
 import {
@@ -1143,6 +1144,7 @@ const MechanicalPanel: React.FC = () => {
           sit at the bottom of the Modal card where nobody found it. */}
       <Paper sx={{ p: 1.25, mb: 1.5, bgcolor: 'var(--panel)' }}>
         <BearingsSection rpm={Number(rpm) || 0} />
+        <BearingFitSection rpm={Number(rpm) || 0} />
       </Paper>
 
       {err && <Alert severity="error" sx={{ mb: 1.5, fontSize: 12 }}>{err}</Alert>}

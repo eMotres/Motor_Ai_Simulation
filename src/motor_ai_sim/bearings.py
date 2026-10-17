@@ -944,3 +944,36 @@ def machine_bearing_losses(assignment: Optional[Dict[str, Any]],
         "model": ("SKF frictional-moment model (tables 2 and 3) + analytic "
                   "windage — ANALYTIC, not FEM"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Bearing fit & thermal mechanics re-exports
+# ---------------------------------------------------------------------------
+def bearing_fit(
+    name: Optional[str] = None,
+    od_mm: Optional[float] = None,
+    bore_mm: Optional[float] = None,
+    offset_mm: float = 0.04,
+    offset_mode: str = "diametral",
+    t_assembly_c: float = 20.0,
+    t_max_c: float = 150.0,
+    rpm: float = 5000.0,
+    thrust_n: float = 49.05,
+    hub_od_mm: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Calculate bearing fit vs temperature, Lamé contact pressure, hoop stress,
+    internal clearance loss, and ISO 281 L10 life with 1 vs 2 bearings."""
+    from motor_ai_sim.bearing_fit import bearing_fit_analysis
+    return bearing_fit_analysis(
+        bearing_name=name,
+        bearing_od_mm=od_mm,
+        bearing_bore_mm=bore_mm,
+        offset_bearing_mm=offset_mm,
+        offset_mode=offset_mode,
+        t_assembly_c=t_assembly_c,
+        t_max_c=t_max_c,
+        rpm=rpm,
+        thrust_load_n=thrust_n,
+        hub_od_mm=hub_od_mm,
+    )
+

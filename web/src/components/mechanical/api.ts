@@ -1023,3 +1023,184 @@ export function fmtClock(ms: number): string {
   const t = Math.max(0, Math.floor(ms / 1000));
   return `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Bearing Fit & Holder Strength API
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface FitCurvePoint {
+  temp_c: number;
+  dT_k: number;
+  interference_mm: number;
+  interference_um: number;
+  p_contact_mpa: number;
+  sigma_hoop_mpa: number;
+  sigma_vm_mpa: number;
+  sf_yield: number | null;
+  ring_compression_um: number;
+  clearance_loss_um: number;
+  is_tight: boolean;
+}
+
+export interface BearingFitResponse {
+  bearing_name: string;
+  bearing_card: Record<string, any> | null;
+  fit: {
+    bearing_od_mm: number;
+    bearing_bore_mm: number;
+    offset_bearing_mm: number;
+    offset_mode: 'diametral' | 'radial';
+    delta_0_mm: number;
+    t_assembly_c: number;
+    t_max_c: number;
+    dT_loss_k: number;
+    t_loss_c: number;
+    is_fit_tight_at_t_max: boolean;
+    assembly: {
+      interference_um: number;
+      p_contact_mpa: number;
+      sigma_hoop_mpa: number;
+      sigma_vm_mpa: number;
+      sf_yield: number | null;
+      ring_compression_um: number;
+      clearance_loss_um: number;
+    };
+    curve: FitCurvePoint[];
+    convention_note: string;
+  };
+  l10_life: {
+    C_kn: number;
+    C0_kn: number;
+    rpm: number;
+    thrust_load_n: number;
+    radial_load_n: number;
+    fit_is_tight: boolean;
+    single_bearing: {
+      fa_n: number;
+      p_equiv_n: number;
+      l10h_hours: number;
+    };
+    two_bearings_shared: {
+      fa_n: number;
+      p_equiv_n: number;
+      l10h_hours: number;
+    };
+    life_ratio_shared_to_single: number;
+    note: string;
+  };
+}
+
+export interface HolderStressItem {
+  holder_type: 'front' | 'back';
+  load_case: string;
+  thrust_n: number;
+  torque_nm: number;
+  press_fit_p_mpa: number;
+  sigma_avg_mpa: number;
+  sigma_peak_mpa: number;
+  safety_factor: number | null;
+  sf_peak: number | null;
+  yield_strength_mpa: number;
+  max_deflection_um: number;
+  model_type: string;
+  note: string;
+}
+
+export interface HolderStrengthResponse {
+  motor_dia_mm: number;
+  bearing_od_mm: number;
+  bearing_bore_mm: number;
+  thrust_n: number;
+  torque_nm: number;
+  t_working_c: number;
+  press_fit: {
+    interference_um: number;
+    contact_pressure_mpa: number;
+    hub_hoop_stress_mpa: number;
+    bearing_clearance_loss_um: number;
+  };
+  front_holder: {
+    thrust_only: HolderStressItem;
+    combined: HolderStressItem;
+  };
+  back_holder: {
+    thrust_torque: HolderStressItem;
+    combined: HolderStressItem;
+  };
+  summary: {
+    front_sf: number | null;
+    front_sigma_avg_mpa: number;
+    back_sf: number | null;
+    back_sigma_avg_mpa: number;
+    convention: string;
+  };
+}
+
+export async function fetchBearingFit(params: {
+  die?: string | null;
+  config?: string | null;
+  bearing?: string;
+  offset_bearing?: number;
+  offset_mode?: string;
+  t_assembly?: number;
+  t_max?: number;
+  rpm?: number;
+  thrust_n?: number;
+  radial_load_n?: number;
+  hub_od?: number;
+  signal?: AbortSignal;
+}): Promise<BearingFitResponse | null> {
+  const q = new URLSearchParams();
+  if (params.die) q.set('die', params.die);
+  if (params.config) q.set('config', params.config);
+  if (params.bearing) q.set('bearing', params.bearing);
+  if (params.offset_bearing != null) q.set('offset_bearing', String(params.offset_bearing));
+  if (params.offset_mode) q.set('offset_mode', params.offset_mode);
+  if (params.t_assembly != null) q.set('t_assembly', String(params.t_assembly));
+  if (params.t_max != null) q.set('t_max', String(params.t_max));
+  if (params.rpm != null) q.set('rpm', String(params.rpm));
+  if (params.thrust_n != null) q.set('thrust_n', String(params.thrust_n));
+  if (params.radial_load_n != null) q.set('radial_load_n', String(params.radial_load_n));
+  if (params.hub_od != null) q.set('hub_od', String(params.hub_od));
+
+  try {
+    const res = await fetch(`${BASE}/bearing_fit?${q.toString()}`, { signal: params.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchHolderStrength(params: {
+  die?: string | null;
+  config?: string | null;
+  thrust_n?: number;
+  torque_nm?: number;
+  offset_bearing?: number;
+  offset_mode?: string;
+  t_working?: number;
+  motor_dia?: number;
+  bearing?: string;
+  signal?: AbortSignal;
+}): Promise<HolderStrengthResponse | null> {
+  const q = new URLSearchParams();
+  if (params.die) q.set('die', params.die);
+  if (params.config) q.set('config', params.config);
+  if (params.thrust_n != null) q.set('thrust_n', String(params.thrust_n));
+  if (params.torque_nm != null) q.set('torque_nm', String(params.torque_nm));
+  if (params.offset_bearing != null) q.set('offset_bearing', String(params.offset_bearing));
+  if (params.offset_mode) q.set('offset_mode', params.offset_mode);
+  if (params.t_working != null) q.set('t_working', String(params.t_working));
+  if (params.motor_dia != null) q.set('motor_dia', String(params.motor_dia));
+  if (params.bearing) q.set('bearing', params.bearing);
+
+  try {
+    const res = await fetch(`${BASE}/holder_strength?${q.toString()}`, { signal: params.signal });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+

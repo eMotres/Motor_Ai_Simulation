@@ -375,6 +375,11 @@ app.include_router(mcp_discovery_router)
 # Configure) — /api/agent_designs.
 from motor_ai_sim.routes.agent_designs import router as agent_designs_router
 app.include_router(agent_designs_router)
+# Production module (stage 1): /api/production and /api/admin/production
+from motor_ai_sim.production.routes import router as production_router
+from motor_ai_sim.production.admin_routes import router as production_admin_router
+app.include_router(production_router)
+app.include_router(production_admin_router)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

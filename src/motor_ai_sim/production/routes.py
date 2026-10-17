@@ -10,7 +10,7 @@ import secrets
 from typing import Any, Optional
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from motor_ai_sim import auth, model3d, users
 from motor_ai_sim.production import store, models
@@ -43,7 +43,10 @@ def _production_list_for(email: str, is_admin: bool) -> list[dict]:
         return out
     for d in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")):
         for c in sorted(p for p in d.iterdir() if p.is_dir() and not p.name.startswith(".")):
-            rec = store.load_file(d.name, c.name, "production.json")
+            p = c / "production.json"
+            if not p.is_file():
+                continue
+            rec = store._read_json(p, default={})
             if not isinstance(rec, dict) or not rec.get("die"):
                 continue
             if is_admin or models.is_member(email, rec) is not None:
@@ -90,6 +93,8 @@ async def create_part(request: Request, die: str, config: str):
     user, _production = require_editor_with_full_view(request, die, config)
     body = await _json_or_form(request)
     part = models.normalize_part(body)
+    part["name"] = models.ensure_translated(part["name"])
+    part["description"] = models.ensure_translated(part["description"])
     store.mutate_file(die, config, "parts.json", lambda d: d.setdefault("parts", []).append(part))
     _touch(die, config)
     _audit(_email(user), die, config, "create", "part", part["id"], {"part": part})
@@ -111,9 +116,9 @@ async def update_part(request: Request, die: str, config: str, part_id: str):
                     if k in body:
                         updated[k] = body[k]
                 if "name" in body:
-                    updated["name"] = models.normalize_bilingual(body["name"])
+                    updated["name"] = models.ensure_translated(models.normalize_bilingual(body["name"]))
                 if "description" in body:
-                    updated["description"] = models.normalize_bilingual(body["description"])
+                    updated["description"] = models.ensure_translated(models.normalize_bilingual(body["description"]))
                 if "drawing_files" in body:
                     updated["drawing_files"] = models.normalize_part({"drawing_files": body["drawing_files"]}).get("drawing_files", [])
                 parts[i] = updated
@@ -200,7 +205,9 @@ def list_documents(request: Request, die: str, config: str):
 
 @router.post("/{die}/{config}/documents")
 async def upload_document(request: Request, die: str, config: str):
-    user, _production = require_editor_with_full_view(request, die, config)
+    # every member may upload (owner 2026-10-17: the factory sends photos, test reports, anything it needs;
+    # we sort the documents out ourselves).  Design data (parts / BOM / process) stays editor-only.
+    user, _production = require_member_with_full_view(request, die, config)
     form = await request.form()
     uploaded = form.get("file")
     if uploaded is None:
@@ -222,20 +229,56 @@ async def upload_document(request: Request, die: str, config: str):
 
 @router.get("/{die}/{config}/files/{file_id}")
 def download_file(request: Request, die: str, config: str, file_id: str):
+    """Download one production file.  Logged in the SAME traced download log as the full 3-D / STEP files
+    (model3d.log_download: who, company, NDA basis, sha256, IP) plus the production audit."""
+    import datetime
+    from motor_ai_sim import model3d as M
+    if not store.valid_file_id(file_id):
+        raise HTTPException(status_code=404, detail="File not found")
     user, _production = require_member_with_full_view(request, die, config)
     path = store.read_uploaded_file(die, config, file_id)
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")
-    _audit(_email(user), die, config, "download", "document", file_id, {})
+    data = path.read_bytes()
+    name = _original_name(die, config, file_id) or file_id
+    rec = users.get_user(_email(user)) or {}
+    basis = M.nda_basis(user, rec)
+    who_for = M.recipient_of(user, rec, basis)
+    now = datetime.datetime.now(datetime.timezone.utc)
+    try:
+        from motor_ai_sim.client_ip import from_request
+        ip = from_request(request)
+    except Exception:                                       # noqa: BLE001
+        ip = "?"
+    try:
+        M.log_download(dict(download_id=M.new_download_id(now), user=user.get("id"), email=who_for["email"],
+                            name=M.customer_name(user, rec), role=user.get("role"), company=who_for["company"],
+                            nda=basis["type"] != "internal", nda_basis=basis, die=die, config=config,
+                            motor_id="%s/%s" % (die, config), kind="production_file", file=name, source_file=file_id,
+                            sha256=M.sha256_bytes(data), bytes=len(data), ip=ip,
+                            user_agent=request.headers.get("user-agent", "")[:300]))
+    except OSError as ex:
+        log.error("production: download log not writable (%s) - download refused", ex)
+        raise HTTPException(status_code=503, detail="Download log unavailable; try again later.")
+    _audit(_email(user), die, config, "download", "document", file_id, {"file": name})
+    safe = M.ascii_text(name, 120).replace('"', "") or file_id
+    from urllib.parse import quote
+    return Response(content=data, media_type="application/octet-stream",
+                    headers={"Content-Disposition": "attachment; filename=\"%s\"; filename*=UTF-8''%s" % (safe, quote(name)),
+                             "Cache-Control": "no-store"})
 
-    def iterfile():
-        with open(path, "rb") as fh:
-            yield from fh
 
-    from pathlib import Path
-    filename = Path(str(path)).name
-    return StreamingResponse(iterfile(), media_type="application/octet-stream",
-                             headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+def _original_name(die: str, config: str, file_id: str) -> Optional[str]:
+    """The uploader's file name of a document or a message attachment (None when unknown)."""
+    for d in (store.load_file(die, config, "documents.json") or {}).get("documents", []):
+        if d.get("file_id") == file_id or d.get("id") == file_id:
+            return d.get("name") or d.get("filename")
+    for t in (store.load_file(die, config, "threads.json") or {}).get("threads", []):
+        for m in t.get("messages", []):
+            for a in m.get("attachments", []) or []:
+                if a.get("file_id") == file_id:
+                    return a.get("name")
+    return None
 
 
 # ── threads / messages ───────────────────────────────────────────────────────
@@ -344,6 +387,7 @@ async def create_proposal(request: Request, die: str, config: str):
         "author_email": _email(user),
         "text": text,
     })
+    proposal["text"] = models.ensure_translated(proposal["text"])
     store.mutate_file(die, config, "proposals.json", lambda d: d.setdefault("proposals", []).append(proposal))
     _touch(die, config)
     _audit(_email(user), die, config, "create", "proposal", proposal["id"], {"proposal": proposal})
@@ -363,7 +407,7 @@ async def _decide_proposal(request: Request, die: str, config: str, proposal_id:
                 p["status"] = action
                 p["resolved_at"] = _now()
                 if note:
-                    p["decision_note"] = models.normalize_bilingual(note)
+                    p["decision_note"] = models.ensure_translated(models.normalize_bilingual(note))
                 else:
                     p["decision_note"] = None
                 if action == "implemented":
@@ -414,7 +458,9 @@ async def publish_revision(request: Request, die: str, config: str):
         raise HTTPException(status_code=400, detail="Revision summary required")
     if not isinstance(changes, list):
         changes = []
-    revision = _publish_revision(die, config, user, summary, [models.normalize_bilingual(c) for c in changes])
+    summary_norm = models.ensure_translated(models.normalize_bilingual(summary))
+    changes_norm = [models.ensure_translated(models.normalize_bilingual(c)) for c in changes]
+    revision = _publish_revision(die, config, user, summary_norm, changes_norm)
     return revision
 
 
@@ -493,85 +539,88 @@ async def confirm_translation(request: Request, die: str, config: str):
     return {}
 
 
+def _do_translate_or_confirm(bi: dict, retry: bool, lang: str, text: Optional[str]):
+    if not isinstance(bi, dict) or "src_lang" not in bi:
+        raise HTTPException(status_code=400, detail="Field is not bilingual")
+    if retry:
+        src_lang = bi.get("src_lang") or "en"
+        other = "zh" if src_lang == "en" else "en"
+        from motor_ai_sim.production import translate as T
+        try:
+            translated = T.translate_text(bi[src_lang], src_lang, other)
+            bi[other] = translated
+            bi.setdefault("status", {})[other] = "machine"
+        except Exception:                               # noqa: BLE001
+            pass
+    else:
+        if text is not None:
+            bi[lang] = str(text)
+            bi.setdefault("status", {})[lang] = "confirmed"
+        elif bi.get("status", {}).get(lang) in ("machine", "pending") and bi.get(lang):
+            bi.setdefault("status", {})[lang] = "confirmed"
+
+
 def _apply_translation(die: str, config: str, ref: dict, *, retry: bool = False, lang: str = "en", text: Optional[str] = None):
-    from motor_ai_sim.production import translate as T
     entity = str(ref.get("entity") or "")
     entity_id = str(ref.get("entity_id") or "")
     field = str(ref.get("field") or "")
     message_id = ref.get("message_id")
 
-    def get_bilingual_obj() -> tuple[Any, dict]:
-        if entity == "production":
-            prod = store.load_file(die, config, "production.json")
-            return prod, prod.get(field)
-        if entity == "part":
-            parts = store.load_file(die, config, "parts.json").get("parts", [])
-            for p in parts:
+    if entity == "production":
+        def mut(prod):
+            bi = prod.get(field)
+            _do_translate_or_confirm(bi, retry, lang, text)
+        store.mutate_file(die, config, "production.json", mut)
+    elif entity == "part":
+        def mut(d):
+            for p in d.setdefault("parts", []):
                 if p.get("id") == entity_id:
-                    return p, p.get(field)
+                    bi = p.get(field)
+                    _do_translate_or_confirm(bi, retry, lang, text)
+                    return
             raise HTTPException(status_code=404, detail="Part not found")
-        if entity == "process":
-            sections = store.load_file(die, config, "process.json").get("sections", [])
-            for s in sections:
+        store.mutate_file(die, config, "parts.json", mut)
+    elif entity == "process":
+        def mut(d):
+            for s in d.setdefault("sections", []):
                 if s.get("id") == entity_id:
-                    return s, s.get(field)
+                    bi = s.get(field)
+                    _do_translate_or_confirm(bi, retry, lang, text)
+                    return
             raise HTTPException(status_code=404, detail="Process section not found")
-        if entity == "thread":
-            threads = store.load_file(die, config, "threads.json").get("threads", [])
-            for th in threads:
+        store.mutate_file(die, config, "process.json", mut)
+    elif entity == "thread":
+        def mut(d):
+            for th in d.setdefault("threads", []):
                 if th.get("id") == entity_id:
                     for msg in th.get("messages", []):
                         if msg.get("id") == message_id:
-                            return msg, msg.get(field)
+                            bi = msg.get(field)
+                            _do_translate_or_confirm(bi, retry, lang, text)
+                            return
                     raise HTTPException(status_code=404, detail="Message not found")
             raise HTTPException(status_code=404, detail="Thread not found")
-        if entity == "proposal":
-            proposals = store.load_file(die, config, "proposals.json").get("proposals", [])
-            for p in proposals:
-                if p.get("id") == entity_id:
-                    return p, p.get(field)
-            raise HTTPException(status_code=404, detail="Proposal not found")
-        if entity == "revision":
-            revisions = store.load_file(die, config, "revisions.json").get("revisions", [])
-            for r in revisions:
-                if r.get("number") == entity_id:
-                    return r, r.get(field)
-            raise HTTPException(status_code=404, detail="Revision not found")
-        raise HTTPException(status_code=400, detail="Unknown entity")
-
-    obj, bi = get_bilingual_obj()
-    if not isinstance(bi, dict) or "src_lang" not in bi:
-        raise HTTPException(status_code=400, detail="Field is not bilingual")
-
-    if retry:
-        src_lang = bi["src_lang"]
-        other = "zh" if src_lang == "en" else "en"
-        if bi["status"].get(other) == "pending":
-            try:
-                translated = T.translate_text(bi[src_lang], src_lang, other)
-                bi[other] = translated
-                bi["status"][other] = "machine"
-            except Exception:                           # noqa: BLE001
-                pass
-    else:
-        if text is not None:
-            bi[lang] = text
-            bi["status"][lang] = "confirmed"
-        elif bi["status"].get(lang) in ("machine", "pending") and bi.get(lang):
-            bi["status"][lang] = "confirmed"
-
-    if entity == "production":
-        store.save_file(die, config, "production.json", obj)
-    elif entity == "part":
-        store.save_file(die, config, "parts.json", {"parts": store.load_file(die, config, "parts.json").get("parts", [])})
-    elif entity == "process":
-        store.save_file(die, config, "process.json", {"sections": store.load_file(die, config, "process.json").get("sections", [])})
-    elif entity == "thread":
-        store.save_file(die, config, "threads.json", {"threads": store.load_file(die, config, "threads.json").get("threads", [])})
+        store.mutate_file(die, config, "threads.json", mut)
     elif entity == "proposal":
-        store.save_file(die, config, "proposals.json", {"proposals": store.load_file(die, config, "proposals.json").get("proposals", [])})
+        def mut(d):
+            for p in d.setdefault("proposals", []):
+                if p.get("id") == entity_id:
+                    bi = p.get(field)
+                    _do_translate_or_confirm(bi, retry, lang, text)
+                    return
+            raise HTTPException(status_code=404, detail="Proposal not found")
+        store.mutate_file(die, config, "proposals.json", mut)
     elif entity == "revision":
-        store.save_file(die, config, "revisions.json", {"revisions": store.load_file(die, config, "revisions.json").get("revisions", [])})
+        def mut(d):
+            for r in d.setdefault("revisions", []):
+                if r.get("number") == entity_id:
+                    bi = r.get(field)
+                    _do_translate_or_confirm(bi, retry, lang, text)
+                    return
+            raise HTTPException(status_code=404, detail="Revision not found")
+        store.mutate_file(die, config, "revisions.json", mut)
+    else:
+        raise HTTPException(status_code=400, detail="Unknown entity")
 
 
 async def _json_or_form(request: Request):

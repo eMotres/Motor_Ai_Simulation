@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from motor_ai_sim import auth, users
-from motor_ai_sim.production import models, store
+from motor_ai_sim.production import MEMBER_ROLES, models, store
 from motor_ai_sim.production.access import _is_admin, load_production
 
 router = APIRouter(prefix="/api/admin/production", tags=["admin-production"])
@@ -26,7 +26,10 @@ def _production_list_admin() -> list[dict]:
         return out
     for d in sorted(p for p in root.iterdir() if p.is_dir() and not p.name.startswith(".")):
         for c in sorted(p for p in d.iterdir() if p.is_dir() and not p.name.startswith(".")):
-            rec = store.load_file(d.name, c.name, "production.json")
+            p = c / "production.json"
+            if not p.is_file():
+                continue
+            rec = store._read_json(p, default={})
             if not isinstance(rec, dict) or not rec.get("die"):
                 continue
             rec = dict(rec)
@@ -113,7 +116,7 @@ async def admin_add_member(request: Request, die: str, config: str, admin_user: 
     role = str(body.get("role") or "oem")
     if not email:
         raise HTTPException(status_code=400, detail="email required")
-    if role not in models.MEMBER_ROLES:
+    if role not in MEMBER_ROLES:
         raise HTTPException(status_code=400, detail="invalid role")
 
     def mut(d):

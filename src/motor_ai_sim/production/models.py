@@ -48,11 +48,17 @@ def _machine_fill(text: str, src_lang: str) -> dict:
 def make_bilingual(text: str, src_lang: str,
                    translate_fn: Optional[Any] = None) -> dict:
     """Create a bilingual object; machine-translate the other side if a translator
-    callable is supplied.  On failure the other side stays ``pending``."""
+    callable is supplied (or default to translate_text). On failure the other side stays pending."""
     if src_lang not in LANGS:
         src_lang = "en"
     out = _machine_fill(text, src_lang)
     other = "zh" if src_lang == "en" else "en"
+    if translate_fn is None:
+        try:
+            from motor_ai_sim.production import translate as T
+            translate_fn = T.translate_text
+        except Exception:                               # noqa: BLE001
+            translate_fn = None
     if translate_fn is not None and str(text or "").strip():
         try:
             out[other] = str(translate_fn(text, src_lang, other)).strip()
@@ -60,6 +66,36 @@ def make_bilingual(text: str, src_lang: str,
         except Exception:                               # noqa: BLE001 - never block save
             pass
     return out
+
+
+def ensure_translated(bi: dict, translate_fn: Optional[Any] = None) -> dict:
+    """If one language is pending and empty, attempt machine translation with translate_text."""
+    if not isinstance(bi, dict):
+        return bi
+    src = bi.get("src_lang") or "en"
+    other = "zh" if src == "en" else "en"
+    if not bi.get(other) or bi.get("status", {}).get(other) == "pending":
+        if bi.get(src):
+            try:
+                fn = translate_fn
+                if fn is None:
+                    from motor_ai_sim.production import translate as T
+                    fn = T.translate_text
+                bi[other] = str(fn(bi[src], src, other)).strip()
+                bi.setdefault("status", {})[other] = "machine"
+            except Exception:                           # noqa: BLE001 - never block save
+                bi.setdefault("status", {})[other] = "pending"
+    return bi
+
+
+def is_member(email: str, production: dict) -> Optional[str]:
+    """Return caller's role if a member of production, else None."""
+    for m in (production or {}).get("members") or []:
+        if isinstance(m, dict) and str(m.get("email", "")).strip().lower() == email.strip().lower():
+            role = m.get("role")
+            if role in MEMBER_ROLES:
+                return role
+    return None
 
 
 def normalize_bilingual(raw: dict) -> dict:

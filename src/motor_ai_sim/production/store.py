@@ -115,7 +115,17 @@ def save_uploaded_file(die: str, config: str, file_id: str, data: bytes) -> Path
     return dest
 
 
+_FILE_ID_RE = __import__("re").compile(r"^[A-Za-z0-9_-]{8,64}$")
+
+
+def valid_file_id(file_id: str) -> bool:
+    """File ids are server-generated (secrets.token_urlsafe): anything else - '..', separators - is refused."""
+    return bool(_FILE_ID_RE.match(str(file_id or "")))
+
+
 def read_uploaded_file(die: str, config: str, file_id: str) -> Optional[Path]:
+    if not valid_file_id(file_id):
+        return None
     d = file_dir(die, config)
     candidate = d / file_id
     if candidate.is_file():

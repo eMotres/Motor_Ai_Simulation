@@ -67,14 +67,17 @@ async def admin_create(request: Request, die: str, config: str, admin_user: dict
         raise HTTPException(status_code=400, detail="title required")
     order_quantity = int(body.get("order_quantity") or 0)
     members = models.normalize_members(body.get("members"))
+    share_costs = bool(body.get("share_costs_with_oem", False))
     production = models.normalize_production({
         "title": title,
         "order_quantity": order_quantity,
         "members": members,
+        "share_costs_with_oem": share_costs,
     }, die, config)
     store.save_file(die, config, "production.json", production)
     store.save_file(die, config, "parts.json", {"parts": []})
     store.save_file(die, config, "bom.json", {"rows": []})
+    store.save_file(die, config, "costs.json", {"rows": [], "extras": [], "margin_pct": 0.0})
     store.save_file(die, config, "process.json", {"sections": []})
     store.save_file(die, config, "documents.json", {"documents": []})
     store.save_file(die, config, "threads.json", {"threads": []})
@@ -82,6 +85,18 @@ async def admin_create(request: Request, die: str, config: str, admin_user: dict
     store.save_file(die, config, "revisions.json", {"revisions": []})
     store.append_audit(die, config, models.audit_entry(_email(admin_user), "create", "production", f"{die}/{config}", production))
     return production
+
+
+@router.put("/{die}/{config}/share_costs")
+@router.put("/{die}/{config}/share-costs")
+async def admin_set_share_costs(request: Request, die: str, config: str, admin_user: dict = Depends(auth.require_admin)):
+    if load_production(die, config) is None:
+        raise HTTPException(status_code=404, detail="Production not found")
+    body = await request.json()
+    flag = bool(body.get("share_costs_with_oem", False))
+    store.mutate_file(die, config, "production.json", lambda d: d.update({"share_costs_with_oem": flag, "updated_at": models._now()}))
+    store.append_audit(die, config, models.audit_entry(_email(admin_user), "update", "share_costs_with_oem", f"{die}/{config}", {"share_costs_with_oem": flag}))
+    return {"share_costs_with_oem": flag}
 
 
 @router.delete("/{die}/{config}")

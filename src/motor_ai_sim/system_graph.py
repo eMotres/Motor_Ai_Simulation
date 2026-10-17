@@ -930,3 +930,23 @@ def build(view: str = "modules", die: Optional[str] = None, config: Optional[str
     if die or config or duty:
         attach_status(doc, die, config, duty, visible=visible)
     return doc
+
+
+# Stage 2: User-composed graphs, validation, topological sort, study execution and storage
+from motor_ai_sim.system_graph_edit import (  # noqa: E402
+    CycleRefusalError,
+    TEMPLATE_PROPELLER_S1_NAME,
+    WiringError,
+    delete_user_graph,
+    get_propeller_s1_template,
+    graph_to_study_steps,
+    list_user_graphs,
+    load_user_graph,
+    run_graph_study,
+    save_user_graph,
+    topological_sort,
+    validate_graph_name,
+    validate_graph_wiring,
+    validate_wire,
+)
+

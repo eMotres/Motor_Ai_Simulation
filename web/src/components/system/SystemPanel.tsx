@@ -32,9 +32,11 @@ import { NODE_W, blockHeight } from '../../lib/systemGraphLayout';
 import type { Layout } from '../../lib/systemGraphLayout';
 import { buildWiring, roundedPath, summarize, validateWiring } from '../../lib/systemGraphRoute';
 import type { Pt, Route, Violation } from '../../lib/systemGraphRoute';
+import SystemComposer from './SystemComposer';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const VIEW_KEY = 'system.view';
+const MODE_KEY = 'system.mode';
 const ALL_KEY = 'system.showAll';
 const MOTOR_KEY = 'system.motor';
 type ViewName = 'modules' | 'propeller_s1';
@@ -216,6 +218,7 @@ interface FamilyDie { name: string; configs?: Array<{ name: string; duties?: Arr
 
 export default function SystemPanel() {
   const { t: tr } = useTranslation('common');
+  const [mode, setMode] = useState<'view' | 'compose'>(() => (read(MODE_KEY) === 'compose' ? 'compose' : 'view'));
   const [view, setView] = useState<ViewName>(() => (read(VIEW_KEY) === 'propeller_s1' ? 'propeller_s1' : 'modules'));
   const [showAll, setShowAll] = useState<boolean>(() => read(ALL_KEY) === '1');
   const [motor, setMotor] = useState<Motor | null>(savedMotor);
@@ -231,6 +234,12 @@ export default function SystemPanel() {
   const card = useRef<HTMLDivElement | null>(null);
   const rf = useRef<ReactFlowInstance | null>(null);
 
+  const onMode = useCallback((_: unknown, m: 'view' | 'compose' | null) => {
+    if (!m) return;
+    setMode(m);
+    write(MODE_KEY, m);
+  }, []);
+
   useEffect(() => {
     let live = true;
     fetchFamilyTree().then((t) => { if (live) setDies(((t?.dies ?? []) as FamilyDie[]).filter((d) => d?.name)); }).catch(() => { /* the picker stays empty */ });
@@ -238,6 +247,7 @@ export default function SystemPanel() {
   }, []);
 
   useEffect(() => {
+    if (mode !== 'view') return;
     const ctl = new AbortController();
     setLoading(true);
     const qs = new URLSearchParams({ view });
@@ -252,7 +262,7 @@ export default function SystemPanel() {
       .catch((e: unknown) => { if ((e as Error)?.name !== 'AbortError') setError(String((e as Error)?.message ?? e)); })
       .finally(() => setLoading(false));
     return () => ctl.abort();
-  }, [view, motor, tick]);
+  }, [mode, view, motor, tick]);
 
   const onView = useCallback((_: unknown, v: ViewName | null) => {
     if (!v) return;
@@ -307,48 +317,60 @@ export default function SystemPanel() {
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0, bgcolor: '#ffffff', color: '#111827' }}>
       <Stack direction="row" spacing={1.5} alignItems="center" sx={{ px: 2, py: 1, borderBottom: '1px solid', borderColor: 'divider', flexWrap: 'wrap', rowGap: 1 }}>
         <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>{tr('tabs.schemas')}</Typography>
-        <ToggleButtonGroup size="small" exclusive value={view} onChange={onView}>
-          <ToggleButton value="modules">{tr('system.view.modules')}</ToggleButton>
-          <ToggleButton value="propeller_s1">{tr('system.view.propellerS1')}</ToggleButton>
+        <ToggleButtonGroup size="small" exclusive value={mode} onChange={onMode}>
+          <ToggleButton value="view">{tr('system.mode.view')}</ToggleButton>
+          <ToggleButton value="compose">{tr('system.mode.compose')}</ToggleButton>
         </ToggleButtonGroup>
-        <Tooltip title={tr('system.hintTip')}>
-          <Typography variant="body2" sx={{ color: 'text.secondary', cursor: 'help' }}>{tr('system.hint')}</Typography>
-        </Tooltip>
-        <Box sx={{ flexGrow: 1 }} />
-        <Tooltip title={tr('system.showAllTip')}>
-          <FormControlLabel sx={{ mr: 0 }} control={<Switch size="small" checked={showAll}
-            onChange={(_, v) => { setShowAll(v); write(ALL_KEY, v ? '1' : '0'); }} />}
-            label={<Typography variant="body2">{tr('system.showAll')}</Typography>} />
-        </Tooltip>
-        <Tooltip title={tr('system.pickTip')}>
-          <Stack direction="row" spacing={1}>
-            <TextField select size="small" label={tr('system.pick.die')} sx={{ minWidth: 150, ...PICK_SX }} value={motor?.die ?? ''}
-              onChange={(e) => {
-                const d = dies.find((x) => x.name === e.target.value);
-                const c = d?.configs?.[0];
-                pick(d && c ? { die: d.name, config: c.name, duty: '' } : null);
-              }}>
-              <MenuItem value=""><em>{tr('system.pick.none')}</em></MenuItem>
-              {dies.map((d) => <MenuItem key={d.name} value={d.name}>{d.name}</MenuItem>)}
-            </TextField>
-            <TextField select size="small" label={tr('system.pick.config')} sx={{ minWidth: 100, ...PICK_SX }} value={motor?.config ?? ''}
-              disabled={!dieObj} onChange={(e) => motor && pick({ ...motor, config: String(e.target.value), duty: '' })}>
-              {(dieObj?.configs ?? []).map((c) => <MenuItem key={c.name} value={c.name}>{c.name}</MenuItem>)}
-            </TextField>
-            <TextField select size="small" label={tr('system.pick.duty')} sx={{ minWidth: 120, ...PICK_SX }} value={motor?.duty ?? ''}
-              disabled={!cfgObj} onChange={(e) => motor && pick({ ...motor, duty: String(e.target.value) })}>
-              <MenuItem value=""><em>{tr('system.pick.anyDuty')}</em></MenuItem>
-              {(cfgObj?.duties ?? []).map((d) => <MenuItem key={d.name} value={d.name}>{d.name}</MenuItem>)}
-            </TextField>
-          </Stack>
-        </Tooltip>
-        {loading && <CircularProgress size={16} />}
-        <Tooltip title={tr('system.refresh')}>
-          <IconButton size="small" onClick={() => setTick((x) => x + 1)}><RefreshIcon fontSize="small" /></IconButton>
-        </Tooltip>
+        {mode === 'view' && (
+          <>
+            <ToggleButtonGroup size="small" exclusive value={view} onChange={onView}>
+              <ToggleButton value="modules">{tr('system.view.modules')}</ToggleButton>
+              <ToggleButton value="propeller_s1">{tr('system.view.propellerS1')}</ToggleButton>
+            </ToggleButtonGroup>
+            <Tooltip title={tr('system.hintTip')}>
+              <Typography variant="body2" sx={{ color: 'text.secondary', cursor: 'help' }}>{tr('system.hint')}</Typography>
+            </Tooltip>
+            <Box sx={{ flexGrow: 1 }} />
+            <Tooltip title={tr('system.showAllTip')}>
+              <FormControlLabel sx={{ mr: 0 }} control={<Switch size="small" checked={showAll}
+                onChange={(_, v) => { setShowAll(v); write(ALL_KEY, v ? '1' : '0'); }} />}
+                label={<Typography variant="body2">{tr('system.showAll')}</Typography>} />
+            </Tooltip>
+            <Tooltip title={tr('system.pickTip')}>
+              <Stack direction="row" spacing={1}>
+                <TextField select size="small" label={tr('system.pick.die')} sx={{ minWidth: 150, ...PICK_SX }} value={motor?.die ?? ''}
+                  onChange={(e) => {
+                    const d = dies.find((x) => x.name === e.target.value);
+                    const c = d?.configs?.[0];
+                    pick(d && c ? { die: d.name, config: c.name, duty: '' } : null);
+                  }}>
+                  <MenuItem value=""><em>{tr('system.pick.none')}</em></MenuItem>
+                  {dies.map((d) => <MenuItem key={d.name} value={d.name}>{d.name}</MenuItem>)}
+                </TextField>
+                <TextField select size="small" label={tr('system.pick.config')} sx={{ minWidth: 100, ...PICK_SX }} value={motor?.config ?? ''}
+                  disabled={!dieObj} onChange={(e) => motor && pick({ ...motor, config: String(e.target.value), duty: '' })}>
+                  {(dieObj?.configs ?? []).map((c) => <MenuItem key={c.name} value={c.name}>{c.name}</MenuItem>)}
+                </TextField>
+                <TextField select size="small" label={tr('system.pick.duty')} sx={{ minWidth: 120, ...PICK_SX }} value={motor?.duty ?? ''}
+                  disabled={!cfgObj} onChange={(e) => motor && pick({ ...motor, duty: String(e.target.value) })}>
+                  <MenuItem value=""><em>{tr('system.pick.anyDuty')}</em></MenuItem>
+                  {(cfgObj?.duties ?? []).map((d) => <MenuItem key={d.name} value={d.name}>{d.name}</MenuItem>)}
+                </TextField>
+              </Stack>
+            </Tooltip>
+            {loading && <CircularProgress size={16} />}
+            <Tooltip title={tr('system.refresh')}>
+              <IconButton size="small" onClick={() => setTick((x) => x + 1)}><RefreshIcon fontSize="small" /></IconButton>
+            </Tooltip>
+          </>
+        )}
       </Stack>
 
-      {error && <Alert severity="error" sx={{ m: 2 }}>{tr('system.failed')}: {error}</Alert>}
+      {mode === 'compose' ? (
+        <SystemComposer />
+      ) : (
+        <>
+          {error && <Alert severity="error" sx={{ m: 2 }}>{tr('system.failed')}: {error}</Alert>}
 
       <Box ref={box} sx={{ flex: 1, minHeight: 0, position: 'relative' }}>
         {graph && (
@@ -415,6 +437,8 @@ export default function SystemPanel() {
           </DialogActions>
         </>}
       </Dialog>
+        </>
+      )}
     </Box>
     </ThemeProvider>
   );

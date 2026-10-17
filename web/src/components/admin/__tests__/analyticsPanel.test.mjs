@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   ANALYTICS_RANGES, formatDuration, formatPercent, bucketLabel, chartData, withShare,
-  countryName, analyticsErrorKind,
+  countryName, analyticsErrorKind, formatRelativeTime,
 } from '../analyticsPanel.ts';
 
 test('ranges are 24 h, 7 d, 30 d', () => {
@@ -54,3 +54,12 @@ test('analyticsErrorKind', () => {
   assert.equal(analyticsErrorKind(403), 'forbidden');
   assert.equal(analyticsErrorKind(500), 'error');
 });
+
+test('formatRelativeTime: formats relative seconds and minutes', () => {
+  const now = 1000;
+  assert.equal(formatRelativeTime(998, now), 'just now');
+  assert.equal(formatRelativeTime(970, now), '30 s ago');
+  assert.equal(formatRelativeTime(880, now), '2 min ago');
+  assert.equal(formatRelativeTime(0, now), '16 min ago');
+});
+

@@ -35,6 +35,8 @@ STR = {
         "e_nothing": "Please fill in at least one field.", "other": "中文",
         "m_need_email": "Your details are saved. To finish, enter an e-mail address at your company above and press Send - we send a code to it.",
         "done": "Already received", "d_company": "company confirmed", "d_links": "links: {n}", "d_email": "company e-mail confirmed",
+        "no_code_h": "Did not get the code?", "no_code_spam": "Please check your spam or junk folder.", "resend_go": "Send a new code",
+        "support_q": "Questions? Write to ", "e_cooldown": "Please wait 2 minutes before requesting a new code.",
     },
     "zh-CN": {
         "title": "身份核实", "h": "申请核实", "intro": "开放 3D 工具和 STEP 下载之前，我们需要核实申请人身份。只需一分钟，无需登录。",
@@ -59,6 +61,8 @@ STR = {
         "e_nothing": "请至少填写一项。", "other": "English",
         "m_need_email": "您的资料已保存。最后一步：请在上方填写您的公司邮箱并点击提交，我们会发送验证码。",
         "done": "已收到", "d_company": "公司已核实", "d_links": "链接：{n}", "d_email": "公司邮箱已确认",
+        "no_code_h": "没收到验证码？", "no_code_spam": "请检查垃圾邮件箱。", "resend_go": "重新发送验证码",
+        "support_q": "如有疑问，请写信至 ", "e_cooldown": "请等待 2 分钟后再重新获取验证码。",
     },
 }
 
@@ -110,10 +114,19 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
         if pending_email:
             code_form = ('<form method="post" action="%s"><input type="hidden" name="action" value="confirm_email"><input type="hidden" name="email" value="%s">'
                          '<h2>%s</h2><label for="code">%s</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required>'
-                         '<button type="submit">%s</button></form>') % (_e(base), _e(pending_email), _e(s["code_h"].replace("{email}", pending_email)),
-                                                                       _e(s["code_label"]), _e(s["code_go"]))
+                         '<button type="submit">%s</button></form>'
+                         '<div class="no-code"><h2>%s</h2><p class="muted">%s</p>'
+                         '<form method="post" action="%s" style="border-top:none;margin-top:8px">'
+                         '<input type="hidden" name="action" value="resend"><input type="hidden" name="email" value="%s">'
+                         '<button type="submit" class="alt">%s</button></form>'
+                         '<p class="muted">%s<a href="mailto:support@aerostator.com">support@aerostator.com</a></p></div>') % (
+                _e(base), _e(pending_email), _e(s["code_h"].replace("{email}", pending_email)),
+                _e(s["code_label"]), _e(s["code_go"]),
+                _e(s["no_code_h"]), _e(s["no_code_spam"]), _e(base), _e(pending_email), _e(s["resend_go"]),
+                _e(s["support_q"]))
         # ONE form, ONE button (owner 2026-10-17): it stores the links / details and sends a code to the e-mail typed.  Before, "Send me
         # a code" dropped the links / registration / VAT typed in a second form, and a refused address looked like a reset.
+        contact_line = ('<p class="muted">%s<a href="mailto:support@aerostator.com">support@aerostator.com</a></p>' % _e(s["support_q"])) if not pending_email else ""
         forms = (
             '%s<form method="post" action="%s"><h2>%s</h2>'
             '<label for="em">%s</label><input id="em" name="email" type="email" value="%s" autocomplete="email">'
@@ -125,13 +138,13 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
             '<label for="nt">%s</label><textarea id="nt" name="note" rows="3" maxlength="%d">%s</textarea>'
             '<input type="hidden" name="action" value="send"><button type="submit">%s</button></form>'
             '<form method="post" action="%s/document" enctype="multipart/form-data"><h2>%s</h2><p class="muted">%s</p>'
-            '<input name="file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" required><button type="submit">%s</button></form>'
+            '<input name="file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" required><button type="submit">%s</button></form>%s'
         ) % (code_form, _e(base), _e(s["email_h"]), _e(s["email_label"]), _e(typed.get("email") or suggested_email), _e(s["email_go"]),
              _e(s["links_h"]), _e(s["urls_label"]), _e(typed.get("urls", "")),
              _e(s["site_label"]), _e(typed.get("website") or app.get("website", "")), _e(s["reg_label"]), _e(typed.get("reg_no") or app.get("reg_no", "")),
              _e(s["vat_label"]), _e(typed.get("vat_no") or app.get("vat_no", "")), _e(s["note_label"]), C.MAX_NOTE_CHARS, _e(typed.get("note", "")),
              _e(s["links_go"]),
-             _e(base), _e(s["doc_h"]), _e(s["doc_hint"]), _e(s["doc_go"]))
+             _e(base), _e(s["doc_h"]), _e(s["doc_hint"]), _e(s["doc_go"]), contact_line)
     verified = ""
     vs = [v["email"] for v in case.get("emails", {}).get("verified", [])]
     if vs:
@@ -147,7 +160,8 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
 
 
 _EXTRA_CSS = ("h2{font-size:17px;margin:20px 0 6px}textarea{box-sizing:border-box;width:100%;padding:12px;font:inherit;border:1px solid #cbd5e1;border-radius:8px}"
-              ".ok{color:#166534;font-weight:600}ol{padding-left:20px;margin:0 0 14px}li{margin:6px 0}form{border-top:1px solid #e2e8f0;margin-top:14px}")
+              ".ok{color:#166534;font-weight:600}ol{padding-left:20px;margin:0 0 14px}li{margin:6px 0}form{border-top:1px solid #e2e8f0;margin-top:14px}"
+              "button.alt{background:#fff;color:#2563eb;border:2px solid #2563eb}.no-code{margin-top:16px;border-top:1px solid #e2e8f0;padding-top:12px}")
 
 
 def bad_link(lang: str) -> str:

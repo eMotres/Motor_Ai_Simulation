@@ -31,6 +31,7 @@ import { nsT } from '../../i18n/nsT';
 
 // UI strings: locales/<lng>/admin.json (docs/I18N.md).
 const tx = nsT('admin');
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 const AdminPanel: React.FC = () => {
   useTranslation('admin'); // re-render on language change; lazy-loads the namespace
@@ -39,6 +40,29 @@ const AdminPanel: React.FC = () => {
   const [invitePrefill, setInvitePrefill] = useState('');
   const [notice, setNotice] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [waitingCount, setWaitingCount] = useState<number>(0);
+
+  const fetchWaiting = React.useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/api/admin/verification/waiting`);
+      if (r.ok) {
+        const j = (await r.json()) as { count?: number };
+        if (typeof j.count === 'number') {
+          setWaitingCount(j.count);
+        }
+      }
+    } catch { /* ignore network / auth errors */ }
+  }, []);
+
+  React.useEffect(() => {
+    void fetchWaiting();
+    const interval = setInterval(() => { void fetchWaiting(); }, 60_000);
+    return () => clearInterval(interval);
+  }, [fetchWaiting]);
+
+  React.useEffect(() => {
+    void fetchWaiting();
+  }, [section, fetchWaiting]);
 
   const openInvite = (email?: string) => { setInvitePrefill(email ?? ''); setInviteOpen(true); };
 
@@ -70,7 +94,7 @@ const AdminPanel: React.FC = () => {
         <Typography sx={{ fontSize: 18, fontWeight: 800, color: 'var(--text-0)' }}>{tx('admin')}</Typography>
       </Box>
       <Box sx={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, p: 2, gap: 2, overflow: 'hidden' }}>
-        <AdminNav section={section} onSelect={setSection} />
+        <AdminNav section={section} onSelect={setSection} badges={waitingCount > 0 ? { verification: waitingCount } : undefined} />
         <Box sx={{ flex: 1, minWidth: 0, overflowY: 'auto', pr: 0.5 }}>
           {renderSection()}
         </Box>

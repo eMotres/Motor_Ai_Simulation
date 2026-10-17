@@ -30,6 +30,164 @@ DRAWING_KEYWORDS: dict[str, list[str]] = {
     "ring": ["环", "ring", "retaining"],
 }
 
+PART_NAME_MAP: list[tuple[str, str]] = [
+    ("定子铁芯", "Stator core"),
+    ("转子铁芯", "Rotor core"),
+    ("线圈固定环", "Coil-fixing ring"),
+    ("磁钢", "Magnet"),
+    ("线圈", "Coil"),
+    ("前支架", "Front holder"),
+    ("后支架", "Back holder"),
+    ("轴承", "Bearing 618/8-2Z C3"),
+    ("内六角螺钉", "Socket head screw"),
+    ("相板 rev C", "Phase board rev C"),
+    ("相板", "Phase board rev C"),
+    ("引线", "Lead wire"),
+    ("槽绝缘", "Slot insulation"),
+    ("浸漆 / 环氧胶", "Varnish / epoxy"),
+    ("浸漆", "Varnish / epoxy"),
+    ("环氧胶", "Varnish / epoxy"),
+    ("胶粘剂", "Adhesive"),
+    ("轴", "Shaft"),
+]
+
+# Classification of parts for naming rules
+CONFIG_DIFFERING_PARTS = {"Stator core", "Rotor core", "Magnet", "Coil", "Shaft"}
+PHASE_BOARD_PARTS = {"Phase board rev C", "Phase board"}
+MANUFACTURED_PARTS = {"Front holder", "Back holder", "Coil-fixing ring"}
+
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+
+def resolve_die_stator_diameter(die: str) -> str:
+    """Find stator diameter for a die from catalog, or fallback from die name."""
+    die_clean = str(die or "").strip()
+    try:
+        from motor_ai_sim.routes import catalog
+        cat = catalog._load()
+        die_lower = die_clean.lower()
+        for m in cat.get("motors", []):
+            if str(m.get("name") or "").strip().lower() == die_lower:
+                diam = m.get("diameter_mm")
+                if diam is not None:
+                    return str(diam)
+        for m in cat.get("motors", []):
+            m_name = str(m.get("name") or "").strip().lower()
+            if m_name and (die_lower.startswith(m_name) or m_name.startswith(die_lower)):
+                diam = m.get("diameter_mm")
+                if diam is not None:
+                    return str(diam)
+    except Exception:
+        pass
+
+    digits = re.findall(r"\d+", die_clean)
+    if digits:
+        for num in digits:
+            if num in ("30", "40", "50", "85", "90", "100", "150", "200"):
+                return num
+        return digits[-1]
+    return "40"
+
+
+def resolve_config_digits(config: str) -> str:
+    """Extract configuration digits (e.g. '12' from 'L12', '20' from 'L20', '12' from '40_12')."""
+    digits = re.findall(r"\d+", str(config or ""))
+    return digits[-1] if digits else str(config or "")
+
+
+def _apply_part_naming_rule(base_en: str, size: str = "", cfg_digits: str = "") -> str:
+    """Apply generic size and config suffixes to canonical English part names."""
+    if not size:
+        return base_en
+
+    if base_en in CONFIG_DIFFERING_PARTS:
+        if cfg_digits:
+            return f"{base_en} {size}_{cfg_digits}"
+        return f"{base_en} {size}"
+    elif base_en in PHASE_BOARD_PARTS:
+        return f"Phase board {size} rev C"
+    elif base_en in MANUFACTURED_PARTS:
+        return f"{base_en} {size}"
+    return base_en
+
+
+def resolve_part_name(name_raw: str, die: str = "", config: str = "", size: str = "", cfg_digits: str = "") -> tuple[str, str, bool]:
+    """Resolve part name to (en, zh, unmapped) according to canonical part mappings and naming rules."""
+    name_str = name_raw.strip()
+    if not size and die:
+        size = resolve_die_stator_diameter(die)
+    if not cfg_digits and config:
+        cfg_digits = resolve_config_digits(config)
+
+    for zh_key, en_val in PART_NAME_MAP:
+        if zh_key in name_str:
+            final_en = _apply_part_naming_rule(en_val, size, cfg_digits)
+            return final_en, name_str, False
+
+    # Parentheses check e.g. "主轴 (Shaft)"
+    m = re.search(r"[（(]([A-Za-z0-9_ /.-]+)[）)]", name_str)
+    if m:
+        en_part = m.group(1).strip()
+        if en_part and not _CJK_RE.search(en_part):
+            final_en = _apply_part_naming_rule(en_part, size, cfg_digits)
+            return final_en, name_str, False
+
+    # Pure English
+    if not _CJK_RE.search(name_str) and any(c.isalpha() for c in name_str):
+        # Check if matches any known base
+        for _, en_val in PART_NAME_MAP:
+            if en_val.lower() == name_str.lower():
+                final_en = _apply_part_naming_rule(en_val, size, cfg_digits)
+                return final_en, "", False
+        final_en = _apply_part_naming_rule(name_str, size, cfg_digits)
+        return final_en, "", False
+
+    # Unknown: keep zh and flag
+    return "", name_str, True
+
+
+
+def _translate_tables(tables: list, translate_fn: Optional[Any] = None) -> list:
+    """Translate table cells from zh to en. Cells without CJK copied as is, each distinct CJK cell translated once."""
+    if not isinstance(tables, list):
+        return []
+    if translate_fn is None:
+        try:
+            from motor_ai_sim.production import translate as T
+            translate_fn = T.translate_text
+        except Exception:
+            translate_fn = None
+
+    cache: dict[str, str] = {}
+    out_tables = []
+    for tbl in tables:
+        if not isinstance(tbl, list):
+            out_tables.append(tbl)
+            continue
+        out_tbl = []
+        for row in tbl:
+            if not isinstance(row, list):
+                out_tbl.append(row)
+                continue
+            out_row = []
+            for cell in row:
+                cell_str = str(cell) if cell is not None else ""
+                if not _CJK_RE.search(cell_str):
+                    out_row.append(cell_str)
+                else:
+                    if cell_str not in cache:
+                        if translate_fn is not None:
+                            try:
+                                cache[cell_str] = str(translate_fn(cell_str, "zh", "en")).strip() or cell_str
+                            except Exception:
+                                cache[cell_str] = cell_str
+                        else:
+                            cache[cell_str] = cell_str
+                    out_row.append(cache[cell_str])
+            out_tbl.append(out_row)
+        out_tables.append(out_tbl)
+    return out_tables
+
 
 def _is_bom_table(table: list) -> bool:
     if not isinstance(table, list) or not table:
@@ -173,8 +331,22 @@ def import_package(package_path: Path, die: str, config: str,
             desc = str(row[7] if len(row) > 7 else "").strip()
 
             part_id = models._new_id("pt")
-            part_name = models.make_bilingual(name_raw, "zh")
+            en_name, zh_name, unmapped = resolve_part_name(name_raw, die=die, config=config)
+            part_name = {
+                "en": en_name,
+                "zh": zh_name,
+                "src_lang": "en" if en_name else "zh",
+                "status": {
+                    "en": "confirmed" if en_name else "pending",
+                    "zh": "confirmed" if zh_name else "pending",
+                },
+            }
+            if unmapped:
+                part_name["unmapped"] = True
             part_desc = models.make_bilingual(desc, "zh")
+
+            material_i18n = models.ensure_i18n_translated({"zh": material, "en": ""})
+            spec_i18n = models.ensure_i18n_translated({"zh": spec, "en": ""})
 
             part = models.normalize_part({
                 "id": part_id,
@@ -183,6 +355,8 @@ def import_package(package_path: Path, die: str, config: str,
                 "qty_per_motor": qty_per_motor,
                 "material": material,
                 "spec": spec,
+                "material_i18n": material_i18n,
+                "spec_i18n": spec_i18n,
                 "description": part_desc,
                 "drawing_files": [],
                 "revision": "1.0",
@@ -277,11 +451,13 @@ def import_package(package_path: Path, die: str, config: str,
         body_zh = "\n\n".join(current_proc_paragraphs)
         kind = _detect_section_kind(title_zh, body_zh)
 
+        tables_en = _translate_tables(current_proc_tables)
         sec = models.normalize_process_section({
             "kind": kind,
             "title": models.make_bilingual(title_zh, "zh"),
             "body": models.make_bilingual(body_zh, "zh"),
             "tables": current_proc_tables,
+            "tables_i18n": {"zh": current_proc_tables, "en": tables_en},
         })
         process_sections.append(sec)
         current_proc_title = ""
@@ -343,6 +519,8 @@ def import_package(package_path: Path, die: str, config: str,
     store.save_file(die, config, "production.json", production)
     store.save_file(die, config, "parts.json", {"parts": parts})
     store.save_file(die, config, "bom.json", {"rows": bom_rows})
+    if not (store.path_for(die, config) / "costs.json").is_file():
+        store.save_file(die, config, "costs.json", {"rows": [], "extras": [], "margin_pct": 0.0})
     store.save_file(die, config, "process.json", {"sections": process_sections})
     store.save_file(die, config, "documents.json", {"documents": []})
     store.save_file(die, config, "threads.json", {"threads": []})

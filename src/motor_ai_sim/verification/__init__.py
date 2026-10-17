@@ -15,5 +15,5 @@ The functions the rest of the application uses:
 from motor_ai_sim.verification.engine import (  # noqa: F401
     DENIED, MANUAL_REVIEW, MORE_INFORMATION_REQUIRED, PENDING, STATUSES, VERIFIED, Decision, decide)
 from motor_ai_sim.verification.service import (  # noqa: F401
-    ActionError, access_ok, basis_of, ensure_case, governing_case, is_verified, note_download, on_nda_signed, public_access,
-    reply_url, validate_intake)
+    ActionError, access_ok, basis_of, count_waiting, ensure_case, governing_case, is_verified, note_download,
+    on_nda_signed, public_access, reply_url, resend_email, sweep, validate_intake, waiting_cases)

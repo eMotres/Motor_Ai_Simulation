@@ -736,7 +736,7 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
               <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 0.25 }}>
                 {m.author_email} · {m.created_at.slice(0, 16).replace('T', ' ')}
               </Typography>
-              <BilingualText value={m.text} isMessage size={12} />
+              <BilingualText value={m.text} chat size={12} />
             </Box>
           ))}
         </Box>

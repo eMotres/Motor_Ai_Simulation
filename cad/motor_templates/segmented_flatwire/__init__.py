@@ -16,6 +16,9 @@ A.7.3 (2026-10-16): CIANO28 150_35 port. Axial magnet slices (rows mag_step, mag
 coil transition (-z end turn with a real centre line, used when coil_bridge_length > 1), the occupancy mechanics variant (row occupancy_variant:
 mechanics_occupancy.py; aluminium holders as volume-equivalent rings, three screw families, plate phase board) with its gate / fit / STEP /
 GLB / BOM branches. Existing profiles (CIANO14 40, CIANO28 85) build the same geometry as A.7.2.
+A.7.4 (2026-10-16): the GFRP Ring (body Ring, link Ring_back) is back in the FULL model of every profile that has ring rows (CIANO14 40,
+CIANO28 85; it fixes the coils) and is omitted only from the SIMPLIFIED model; CIANO28 150_35 has no ring. Holders / bearings / shaft keep
+their axial positions (same ring_h + ring_holder_gap chain).
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.7.3"
+TEMPLATE_VERSION = "A.7.4"

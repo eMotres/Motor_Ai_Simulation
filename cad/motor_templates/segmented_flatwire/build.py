@@ -7,10 +7,10 @@ Tree (FreeCAD 1.0.2):
   Rotor    (App::Part)  -> RotorCore(PartDesign Body)
   Magnets  (App::Part)  -> Magnet   (PartDesign Body, hidden base) + MagnetArray (Draft link polar array,
                                                                               num_seg*num_poles_per_segment)
-  Mechanics (App::Part) -> Shaft, Stator_holder, Stator_holder_back, Prop_fix, Screw (hidden
+  Mechanics (App::Part) -> Shaft, Stator_holder, Stator_holder_back, Ring (+ Ring_back link), Prop_fix, Screw (hidden
                            base) + Screws (array), Bearing_618_8 (Part: outer / inner ring, Bearing_ball + Balls array)
                            + Bearing_618_8_back (link)                    [only when the profile has mechanics rows]
-cad_variant = frameless (profile.cad_variant, frameless.py) omits Mechanics as a whole (housing, bearings, shaft, screws, Prop_fix)
+cad_variant = frameless (profile.cad_variant, frameless.py) omits Mechanics as a whole (housing, bearings, shaft, screws, rings, Prop_fix)
 and adds the App::DocumentObjectGroup Mounting_datums; stator, coils, phase board, rotor and magnets are built exactly as in the full model.
 Motor-specific metadata (motor id, variant, revision, materials, document name) comes from the profile (N02).
 Use prepare_document() + precheck before build_bodies(); call health.gate() before saving/exporting (B01).

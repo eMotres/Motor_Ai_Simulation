@@ -23,6 +23,7 @@
    "Shaft": "Steel",
    "Stator_holder": "Aluminum 6061",
    "Stator_holder_back": "Aluminum 6061",
+   "Ring": "GFRP",
    "Prop_fix": "Aluminum 6061",
    "Bearing_outer_ring": "Steel (bearing)",
    "Bearing_inner_ring": "Steel (bearing)",
@@ -836,12 +837,12 @@
   {
    "name": "shaft_tip_r",
    "source": "CIANO14 40/Sketch3 d11691",
-   "fusion_expression": "( 4.9 / 2 ) * 1 mm",
-   "fusion_dimension_value": 2.45,
-   "freecad_expression": "4.9 mm / 2",
-   "value": 2.45,
+   "fusion_expression": "( 4.901 / 2 ) * 1 mm",
+   "fusion_dimension_value": 2.4505,
+   "freecad_expression": "4.901 mm / 2",
+   "value": 2.4505,
    "unit": "mm",
-   "comment": "Shaft: tip radius (\u00d84.9), z 28.7..36.7",
+   "comment": "Shaft: tip radius (\u00d84.901), z 20.7..36.7 = the thread section radius: ONE tip diameter over 16 mm (owner Fusion model 2026-10-16; the \u00d84.95 / \u00d84.9 step is gone, the M5 thread texture stays on z 28.7..36.7)",
    "role": "mechanics"
   },
   {
@@ -849,12 +850,12 @@
    "source": "CIANO14 40/Sketch3 d11692",
    "fusion_expression": "3 mm",
    "fusion_dimension_value": 3.0,
-   "freecad_expression": "shaft_seat_r - shaft_height",
+   "freecad_expression": "3 mm",
    "value": 3.0,
    "unit": "mm",
-   "comment": "Shaft: bore radius (\u00d86), z -15.9..17.7",
-   "role": "derived",
-   "role_note": "Fusion '3 mm'; = simulation shaft_inner_radius = rotor_inner_radius - shaft_height"
+   "comment": "Shaft: bore radius (\u00d86), z -15.9..17.7; owner Fusion model 2026-10-16: r 3.0 whatever the CAD rotor seat (r 4.95 as built), the 90 deg tip cone keeps its apex on the journal end plane",
+   "role": "mechanics",
+   "role_note": "Fusion '3 mm' (Sketch3 d11692); = simulation shaft_inner_radius (rotor_inner_radius 5 - shaft_height 2). Was shaft_seat_r - shaft_height (r 2.95 at the as-built seat r 4.95)"
   },
   {
    "name": "shaft_shoulder_r",
@@ -932,7 +933,7 @@
    "freecad_expression": "4 mm",
    "value": 4.0,
    "unit": "mm",
-   "comment": "Shaft: from front holder face z=16.7 to the \u00d88 -> \u00d84.95 step z=20.7",
+   "comment": "Shaft: from front holder face z=16.7 to the \u00d88 -> \u00d84.901 step z=20.7",
    "role": "mechanics"
   },
   {
@@ -943,7 +944,7 @@
    "freecad_expression": "8 mm",
    "value": 8.0,
    "unit": "mm",
-   "comment": "Shaft: length of the \u00d84.95 (thread) section z 20.7..28.7",
+   "comment": "Shaft: length of the section next to the journal z 20.7..28.7 (\u00d84.901 like the tip since 2026-10-16)",
    "role": "mechanics"
   },
   {
@@ -954,7 +955,7 @@
    "freecad_expression": "8 mm",
    "value": 8.0,
    "unit": "mm",
-   "comment": "Shaft: length of the \u00d84.9 tip z 28.7..36.7",
+   "comment": "Shaft: length of the threaded end z 28.7..36.7 (\u00d84.901)",
    "role": "mechanics"
   },
   {
@@ -1005,23 +1006,23 @@
   {
    "name": "shaft_thread_r",
    "source": "CIANO14 40/Sketch3 d11881",
-   "fusion_expression": "( 4.95 / 2 ) * 1 mm",
-   "fusion_dimension_value": 2.475,
-   "freecad_expression": "4.95 mm / 2",
-   "value": 2.475,
+   "fusion_expression": "( 4.901 / 2 ) * 1 mm",
+   "fusion_dimension_value": 2.4505,
+   "freecad_expression": "4.901 mm / 2",
+   "value": 2.4505,
    "unit": "mm",
-   "comment": "Shaft: thread section radius (\u00d84.95), z 20.7..28.7",
+   "comment": "Shaft: section next to the journal, z 20.7..28.7; = shaft_tip_r (\u00d84.901, one tip diameter, owner Fusion model 2026-10-16; was \u00d84.95)",
    "role": "mechanics"
   },
   {
    "name": "shaft_flange_step",
    "source": "CIANO14 40/Sketch3 d11885",
-   "fusion_expression": "3 mm",
-   "fusion_dimension_value": 3.0,
-   "freecad_expression": "3 mm",
-   "value": 3.0,
+   "fusion_expression": "2 mm",
+   "fusion_dimension_value": 2.0,
+   "freecad_expression": "2 mm",
+   "value": 2.0,
    "unit": "mm",
-   "comment": "Shaft: flange r = rotor bore r (5) + 3 = 8, z 10..11.4 (front rotor stop)",
+   "comment": "Shaft: flange r = rotor bore r (5) + 2 = 7, z 10..11.4 (front rotor stop); owner 2026-10-16: 3 -> 2 mm in Fusion, balancing adds material on the rotor",
    "role": "mechanics"
   },
   {
@@ -1036,6 +1037,17 @@
    "role": "mechanics"
   },
   {
+   "name": "ring_t",
+   "source": "CIANO14 40/Sketch3 d11983",
+   "fusion_expression": "0.8 mm",
+   "fusion_dimension_value": 0.8,
+   "freecad_expression": "0.8 mm",
+   "value": 0.8,
+   "unit": "mm",
+   "comment": "GFRP ring: radial thickness r 12.433..13.233",
+   "role": "mechanics"
+  },
+  {
    "name": "ring_h",
    "source": "CIANO14 40/Sketch3 d11985",
    "fusion_expression": "1.8 mm",
@@ -1043,7 +1055,7 @@
    "freecad_expression": "1.8 mm",
    "value": 1.8,
    "unit": "mm",
-   "comment": "Axial offset, stator end face to the part that follows (ring_holder_gap): the front / back space the GFRP ring used to fill. The ring was removed from every construction (owner 2026-10-15); the Fusion dimension name stays and the holders keep their position (axial chain holder_face_z)",
+   "comment": "GFRP ring: axial length z 10..11.8 (front; back ring mirrored)",
    "role": "mechanics"
   },
   {
@@ -1054,7 +1066,7 @@
    "freecad_expression": "0.1 mm",
    "value": 0.1,
    "unit": "mm",
-   "comment": "Axial gap between that offset (ring_h) and the holder flange inner face (the former ring -> holder gap); with ring_h it places the holders: holder_face_z = motor_length / 2 + ring_h + ring_holder_gap",
+   "comment": "Axial gap ring -> holder flange (z 11.8..11.9)",
    "role": "mechanics"
   },
   {
@@ -1492,6 +1504,16 @@
    "role": "derived"
   },
   {
+   "name": "ring_back_dz",
+   "source": "Ring:3 occurrence",
+   "fusion_expression": "-21.8 mm",
+   "freecad_expression": "-(motor_length + ring_h)",
+   "value": -21.8,
+   "unit": "mm",
+   "comment": "Shift of the back ring copy (Fusion occurrence Ring:3)",
+   "role": "derived"
+  },
+  {
    "name": "holder_inner_r",
    "source": "CIANO14 40/Sketch3 L44",
    "fusion_expression": "13.633 mm",
@@ -1519,6 +1541,16 @@
    "value": 12.0,
    "unit": "mm",
    "comment": "Back holder outer radius",
+   "role": "derived"
+  },
+  {
+   "name": "ring_inner_r",
+   "source": "CIANO14 40/Sketch3 L50",
+   "fusion_expression": "12.433 mm",
+   "freecad_expression": "coil_corner_r - ring_t",
+   "value": 12.433268682,
+   "unit": "mm",
+   "comment": "GFRP ring inner radius",
    "role": "derived"
   },
   {

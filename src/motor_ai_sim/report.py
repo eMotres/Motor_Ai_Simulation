@@ -566,7 +566,7 @@ def _rotating_mass_kg(summary: Dict[str, Any]) -> float:
     the same rule ``datasheet._rotating_mass_kg`` follows.
     """
     # THE FULL MASS (owner 2026-10-14): when the document carries the CAD bill of materials, the rotating mass is the
-    # rotating parts of that list (rotor, magnets, shaft or rotor carrier ...), set by `_inject_full_mass`.
+    # rotating parts of that list (rotor, magnets, shaft or rotor carrier, rings ...), set by `_inject_full_mass`.
     _rm = _numf(_g(summary, "rotating_mass_kg"))
     if _rm:
         return float(_rm)
@@ -7484,7 +7484,7 @@ def _inject_full_mass(em: Dict[str, Any], die: str, cfg: str) -> None:
 
     Done on the one ``em`` every table, total, per-mass figure and pie of the document reads, so the report can never
     carry two motor masses: ``mass_total_kg`` becomes the full mass (active parts + the CAD bill of materials' shaft or
-    carrier, holders, bearings, screws, board, pins, enamel; ``modules.motor_mass.full_mass``), the mass rows
+    carrier, holders, rings, bearings, screws, board, pins, enamel; ``modules.motor_mass.full_mass``), the mass rows
     become the full part list, and the run's own active mass is kept as ``mass_active_total_kg`` (the table prints it as
     "Active mass (electromagnetic parts only)").  ``rotating_mass_kg`` is the rotating parts of that list.  A motor with
     no built CAD model keeps the active mass and carries ``mass_partial`` - "partial mass (no CAD model yet)" - on the

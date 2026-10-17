@@ -79,11 +79,10 @@ def test_full_mass_is_active_plus_the_cad_parts_and_names_what_it_replaced(catal
     assert "CAD bill of materials" in by["shaft"].basis
     assert by["wire_insulation"].mass_kg == pytest.approx(0.00122, abs=2e-5)            # the coil enamel of the BOM
     extras = {k: p for k, p in by.items() if not p.em}
-    assert {"holder_front", "holder_back", "bearings", "screws", "board", "pins", "prop_fix"} <= set(extras)
-    assert "rings" not in by                                     # the GFRP ring is gone from every construction (owner 2026-10-15)
+    assert {"holder_front", "holder_back", "bearings", "screws", "board", "pins", "rings", "prop_fix"} <= set(extras)
     assert fm.total_kg == pytest.approx(sum(p.mass_kg for p in fm.parts if p.counted))
     assert fm.total_kg > fm.active_kg * 1.15
-    # rotating mass = the rotating parts of the list (rotor, magnets, shaft, prop plate) and nothing else
+    # rotating mass = the rotating parts of the list (rotor, magnets, shaft, rings, prop plate) and nothing else
     rot = sum(p.mass_kg for p in fm.parts if p.counted and p.key in MM.ROTATING_KEYS)
     assert fm.rotating_kg == pytest.approx(rot) and 0 < rot < fm.total_kg
     assert by["bearings"].key not in MM.ROTATING_KEYS and by["stator_core"].key not in MM.ROTATING_KEYS

@@ -7,7 +7,7 @@ STEP export.
 Writes into FC_OUT_DIR (under a temporary name first, moved only after its check passed):
   <motor_id>_full.glb          the model for the web viewer, ONE model for everybody (owner 2026-10-13): every part of the active
                                STEP plus the phase board with its copper, one coloured node per part (Core, Coils/Coil_nn, Rotor,
-                               Magnets/Magnet_nn, Shaft, Bearings_front/back, Holder_front/back, Screws/Screw_n,
+                               Magnets/Magnet_nn, Shaft, Bearings_front/back, Holder_front/back, Ring_front/back, Screws/Screw_n,
                                Prop_fix, PhaseBoard*); node extras carry the exploded-view axial factor.  Viewing is open to every
                                signed-in user who may see the motor; the STEP download is for NDA accounts and the owner only.
   <motor_id>_models3d.json     evidence: triangle counts and the mesh-vs-solid volume check (the manifest holds the hashes)
@@ -34,8 +34,8 @@ from motor_templates.segmented_flatwire.runstatus import finish  # noqa: E402
 
 # axial factor of the viewer's exploded view (units of the motor length; + = propeller side): physical order along the axis
 EXPLODE = {"Core": 0.0, "Coils": -0.35, "Rotor": 0.9, "Magnets": 0.9, "Shaft": 2.2,
-           "Holder_back": -1.15, "Bearings_back": -1.55, "PhaseBoard": -2.2,
-           "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
+           "Ring_back": -0.7, "Holder_back": -1.15, "Bearings_back": -1.55, "PhaseBoard": -2.2,
+           "Ring_front": 0.45, "Holder_front": 1.35, "Bearings_front": 1.75, "Screws": 2.6, "Prop_fix": 3.2}
 # board groups use THE palette (palette.py): the board body is the solder-mask green, copper layers + pads gold, pins brass, the
 # remaining solids (notch walls) the FR4 edge colour
 BOARD_COLOURS = {"PhaseBoard_FR4": palette.rgb("pcb_mask"), "PhaseBoard_copper": palette.rgb("pcb_gold"),
@@ -44,7 +44,7 @@ VOL_TOL = 0.03                  # mesh volume vs solid volume (relative; tiny pa
 ANG = 0.3                       # angular deflection (rad) of the viewer meshes
 ORDER = ["Core", "Coils", "Rotor", "Magnets", "Magnets_S", "Shaft", "Shaft_rear", "Bearings_front", "Bearings_front_balls", "Bearings_front_seals",
          "Bearings_back", "Bearings_back_balls", "Bearings_back_seals", "Holder_front", "Holder_back",
-         "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
+         "Ring_front", "Ring_back", "Screws", "Prop_fix", "PhaseBoard_FR4", "PhaseBoard_copper", "PhaseBoard_other", "PhaseBoard_pins"]
 
 
 def _mesh(sol, tol):
@@ -125,6 +125,8 @@ def thread_rules(src):
       shaft          external M5 on the free END: the tip section (shaft_tip_r, z shaft_thread_end_z .. shaft_front_end_z, the part the
                      propeller nut runs on), NOT the shaft_thread_r section next to the journal, which passes through the propeller
                      plate's clearance hole (owner 2026-10-15: the thread is at the end)
+                     mode 'zband' = only the z interval (shaft_thread_end_z, shaft_front_end_z) of the face: with ONE tip diameter
+                     (shaft_tip_r = shaft_thread_r, CIANO14 40 2026-10-16) the cylinder runs from the journal end, the thread stays at the end
       ring carrier   internal M3 hub holes."""
     sh = src.getObject("Params")
     g = lambda n: ps.pval(sh, n)
@@ -134,7 +136,8 @@ def thread_rules(src):
     shank = g("screw_shank_d") if ps.has_param(sh, "screw_shank_d") else g("bolt_d")
     return {"Screw_": [("external", shank / 2, "screw", g("holder_screw_l"))],
             "Stator_holder_back": [("internal", g("holder_tap_d") / 2, None, None), ("internal", g("back_screw_tap_d") / 2, None, None)],
-            "Shaft": [("internal", g("carrier_hole_d") / 2, None, None)] if carrier else [("external", g("shaft_tip_r"), None, None)]}
+            "Shaft": [("internal", g("carrier_hole_d") / 2, None, None)] if carrier else
+                     [("external", g("shaft_tip_r"), "zband", (g("shaft_thread_end_z"), g("shaft_front_end_z")))]}
 
 
 def thread_finder(rules, node, shape):
@@ -160,6 +163,11 @@ def thread_finder(rules, node, shape):
                     if band is None:
                         return None
                     start, run = band[0], band[1] - band[0]
+                elif mode == "zband":
+                    t0, t1 = sorted(((z - o[2]) * ax[2] for z in length))       # the z interval in face coordinates (axis along +-z)
+                    start, run = max(0.0, t0), min(ln, t1) - max(0.0, t0)
+                    if run <= 1e-9:
+                        return None
                 return TH.thread_extras(kind, r, run, ax, o, start)
         return None
     return thread_of
@@ -251,6 +259,8 @@ def add_motor(col, parts):
             col.add("Holder_front", name, s, view.COLORS["Stator_holder"])
         elif name == "Stator_holder_back":
             col.add("Holder_back", name, s, view.COLORS["Stator_holder_back"])
+        elif name in ("Ring_front", "Ring_back"):
+            col.add(name, name, s, view.COLORS["Ring"])
         elif name == "Prop_fix":
             col.add("Prop_fix", name, s, view.COLORS["Prop_fix"])
         elif name.startswith("Screw_"):

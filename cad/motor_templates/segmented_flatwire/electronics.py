@@ -400,6 +400,7 @@ def motor_groups(doc):
     groups = {"Coils": lbl("Coils"), "Core": doc.getObject("Core").Shape.Solids, "RotorCore": doc.getObject("RotorCore").Shape.Solids,
             "Magnets": lbl("MagnetArray"), "Shaft": pick("Shaft", "Shaft_rear"),
             "Stator_holder (front)": pick("Stator_holder"), "Stator_holder_back (A_H)": pick("Stator_holder_back"),
+            "Rings": pick("Ring_front", "Ring_back"),
             "Bearings": [v for k, v in so.items() if k.startswith("Bearing_618_8")],
             "Screws": [v for k, v in so.items() if k.startswith("Screw_")], "Prop_fix": pick("Prop_fix")}
     from . import frameless
@@ -411,7 +412,7 @@ def motor_groups(doc):
 def fit(doc, motor_groups):
     """Clearance table of the board against the motor and the 12 lead ends against the board.
 
-    motor_groups: {name: [solids]} in the motor frame (coils, core, rotor, magnets, holders, shaft, ...).
+    motor_groups: {name: [solids]} in the motor frame (coils, core, rotor, magnets, holders, shaft, rings, ...).
     Returns dict(groups, leads, pins, errors).  Errors only for structural problems (a lead stub running into the board);
     overlaps of the board with motor parts are REPORTED (status 'CLASH'), not refused: the pin tail is provisional."""
     import Part

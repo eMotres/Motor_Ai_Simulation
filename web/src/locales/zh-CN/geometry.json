@@ -139,6 +139,8 @@
   "assembly_balls_rear": "钢球(后)",
   "assembly_seals_front": "密封圈(前)",
   "assembly_seals_rear": "密封圈(后)",
+  "assembly_ring_front": "环(前)",
+  "assembly_ring_rear": "环(后)",
   "assembly_holder_front": "支架(前)",
   "assembly_holder_rear": "支架(后)",
   "assemblyNode_PhaseBoard_FR4": "FR4 板体",

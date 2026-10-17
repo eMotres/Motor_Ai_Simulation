@@ -23,6 +23,7 @@ TEMPLATE = "bom/1"
 # purchased / standard parts the model does not carry as solids (nominal data from the PCB project and the stock tables)
 M2_STOCK_LENGTHS = [3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 30, 35, 40, 45, 50, 55, 60]     # ISO 4762 / DIN 912, M2 (14 and 18: catalogue sizes, 18 chosen by the owner 2026-10-13 for L12)
 ASSUMED_DENSITY = {            # kg/m3, used only when the simulation library has no card (stated in the line notes)
+    "GFRP": (1900, "assumed: glass-fibre / epoxy laminate (G10-type) 1.8-2.0 g/cm3"),
     "Steel (bearing)": (7830, "assumed: bearing steel 100Cr6"),
     "18-8 Stainless Steel": (7930, "assumed: A2 / 18-8 stainless"),
     "Copper": (8933, "simulation library card 'copper'"),
@@ -39,7 +40,7 @@ PIN_NOMINAL = dict(d=2.0, tail=2.05, mating=2.70, collar_d=3.0, collar_h=1.15)  
 FRAMELESS_SCOPE = "frameless kit"
 FRAMELESS_EXPLAIN = ("FRAMELESS KIT (cad_variant = frameless): this bill of materials lists the kit only - stator lamination stack, coils, "
                      "phase board, rotor lamination stack and magnets (and the sleeve when the rotor has one). Housing, stator holders, "
-                     "rotor carriers / hub, bearings, shaft, screws and the propeller plate are NOT included. The "
+                     "rotor carriers / hub, bearings, shaft, screws, housing rings and the propeller plate are NOT included. The "
                      "simulation passport mass below still includes its shaft stand-in tube and is not the kit mass.")
 
 
@@ -314,14 +315,14 @@ def build_bom(dump, inputs):
         sim_mat = inputs["sim_materials"].get("shaft")
         add("shaft", "Shaft (stepped, drive flats, M-thread tip)", "manufactured", 1, "pcs", sim_mat or "42CrMo4 QT (assumed, profile says '%s')" % mat,
             "length %.1f mm, max Ø%.2f mm, journal Ø%.1f, bore Ø%.1f, drive flats %.1f mm across x %.1f long, chamfers %.1f mm" % (
-                ln, w, m.p("bearing_d"), 2 * (m.p("shaft_seat_r") - m.p("shaft_height")),
+                ln, w, m.p("bearing_d"), 2 * (m.p("shaft_bore_r") if "shaft_bore_r" in m.params else m.p("shaft_seat_r") - m.p("shaft_height")),
                 m.p("shaft_flat_w"), m.p("shaft_flat_len"), m.p("shaft_chamfer")),
             sh["volume"] * rho * 1e-6, "model; simulation shaft slot " + ("= %s" % sim_mat if sim_mat else "not set in %s.yaml" % cfg),
             "density %.0f (%s); simulation shaft is a hollow tube 50 mm2 x stack and sits outside the active mass; thread pitch / "
             "heat treatment / surface: to be specified" % (rho, rs), sim_g=simg("Shaft"),
             tbs_text="thread type and pitch on the tip, heat treatment, surface finish")
 
-    # ---- holders, Prop_fix (the GFRP ring was removed from every construction, owner 2026-10-15) -----------------------------------------------------------------------------------
+    # ---- holders, rings, Prop_fix -----------------------------------------------------------------------------------
     for key, label, title in (("holder_front", "Stator_holder", "Stator holder, front (propeller side)"),
                               ("holder_back", "Stator_holder_back", "Stator holder, back (A_H hub face, six M3 tapped holes)")):
         e = m.get(label)
@@ -344,6 +345,16 @@ def build_bom(dump, inputs):
                     m.p("holder_tap_d"), (", thread " + tn + " (ISO 261)") if (tn := thread_name("internal", m.p("holder_tap_d") / 2)) else "")),
                 e["volume"] * rho * 1e-6, "model", "density %.0f (%s); machining, anodising / finish: to be specified" % (rho, rs),
                 tbs_text="finish (anodising) and tolerances of the holder")
+    ring = m.get("Ring")
+    if ring:
+        n_ring = 1 + m.copies("Ring")
+        w, h, ln = _bb(ring)
+        mat = mats.get("Ring", "GFRP")
+        rho, rs = density_of(mat, inputs)
+        add("rings", "Ring (glass-fibre)", "manufactured", n_ring, "pcs", mat,
+            "OD %.2f mm, ID %.2f mm, thickness %.1f mm" % (w, 2 * m.p("ring_inner_r"), ln), ring["volume"] * rho * 1e-6, "model",
+            "front and back copy; density %.0f (%s); laminate type / fibre orientation: to be specified" % (rho, rs),
+            tbs_text="glass-fibre ring laminate (resin, thickness tolerance)")
     pf = m.get("Prop_fix")
     if pf:
         w, h, ln = _bb(pf)
@@ -618,7 +629,7 @@ def _explain(lines, comp, inputs, m):
             out.append("%s %+.1f g (%+.1f %%): simulation masses come from CAD polygon sections at the geometry saved with the duty and are rounded to "
                        "1 g; the BOM uses the current model solid (air gap, fillets, key)." % (nm, r["diff_g"], r["diff_pct"]))
     out.append("Parts without a simulation mass: " + ", ".join("%s %.1f g" % (by[k]["part"].split(" (")[0], by[k]["total_mass_g"])
-               for k in ("holder_front", "holder_back", "prop_fix", "bearings", "screws", "board", "pins") if k in by and by[k]["total_mass_g"]) + ".")
+               for k in ("holder_front", "holder_back", "rings", "prop_fix", "bearings", "screws", "board", "pins") if k in by and by[k]["total_mass_g"]) + ".")
     return out
 
 
@@ -782,7 +793,7 @@ def write_xlsx(bom, path, banner="", extra_sheets=None, sheet_name=None):
         for j, k in enumerate(["component", "sim_g", "bom_g", "diff_g", "diff_pct", "basis"], 2):
             ws.cell(r, j, row[k])
         r += 1
-    ws.cell(r, 2, "Parts the simulation mass does not contain (holders, bearings, Prop_fix, screws, board, pins; shaft/enamel basis)")
+    ws.cell(r, 2, "Parts the simulation mass does not contain (holders, rings, bearings, Prop_fix, screws, board, pins; shaft/enamel basis)")
     ws.cell(r, 4, c["extra_parts_g"])
     ws.cell(r, 5, "g")
     r += 2

@@ -185,7 +185,7 @@ library_extensions:
       ultimate_MPa:       {v: 220, src: cda_c11000, type: handbook, verify: true, note: "annealed C11000"}
       max_service_temp_C: {v: 200, src: project_insulation, type: estimate, verify: false, note: "limited by the winding insulation class N (200 C), not by the copper"}
 
-# The NON-ACTIVE parts of an assembled motor (those the electromagnetic simulation does not use): holders, the
+# The NON-ACTIVE parts of an assembled motor (those the electromagnetic simulation does not use): holders, rings, the
 # rotor carrier of ring-carrier motors, bearings, screws, the phase board and its pins, the propeller fixing plate.
 # The part LIST of a motor comes from its CAD bill of materials (cad/bom.py; the server writes <cad>/<die>/<config>/*_BOM.csv);
 # a motor without a built BOM lists none of these (no part is invented).  This table says how a BOM line is recognised
@@ -201,6 +201,8 @@ mechanical_parts:
   carrier_front: {name: "Rotor carrier, front", match: "^rotor carrier, front", role: structural, material: Aluminium_6061, status: computed,
                   note: "aluminium 6061-T6 (owner 2026-10-14: walls and shafts are aluminium 6061); the simulation shaft is the electromagnetic stand-in of this carrier"}
   carrier_rear:  {name: "Rotor carrier, rear", match: "^rotor carrier, rear", role: structural, material: Aluminium_6061, status: computed}
+  rings:         {name: "Glass-fibre rings", match: "^ring", role: structural, material: FR4_glass_epoxy, status: assumed,
+                  note: "the BOM says GFRP (G10-type); FR-4 is the flame-retardant grade of the same laminate"}
   prop_fix:      {name: "Propeller fixing plate", match: "^prop_fix", role: structural, material: Aluminium_6061, status: computed}
   bearings:      {name: "Bearings", match: "^ball bearing|^bearing", role: structural, material: Bearing_steel_100Cr6, status: computed,
                   note: "rings and balls only (shields, seals and cage are not modelled)"}

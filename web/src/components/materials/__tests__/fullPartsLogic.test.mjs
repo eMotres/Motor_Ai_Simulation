@@ -102,7 +102,7 @@ test('every Full-mode string is translated in EN and zh-CN', () => {
   const en = JSON.parse(readFileSync(resolve(root, 'en', 'motors.json'), 'utf8'));
   // every part name the server can send has a translated label (the panel falls back to the server's English name)
   for (const k of ['stator_core', 'rotor_core', 'magnet', 'slot', 'shaft', 'sleeve', 'slot_insulation', 'wire_insulation',
-    'holder_front', 'holder_back', 'holder', 'carrier_front', 'carrier_rear', 'prop_fix', 'bearings', 'screws', 'board', 'pins']) {
+    'holder_front', 'holder_back', 'holder', 'carrier_front', 'carrier_rear', 'rings', 'prop_fix', 'bearings', 'screws', 'board', 'pins']) {
     assert.equal(typeof en[`materialsPart_${k}`], 'string', `en.materialsPart_${k}`);
     assert.match(zh[`materialsPart_${k}`], /[一-鿿]/, `zh.materialsPart_${k}`);
   }

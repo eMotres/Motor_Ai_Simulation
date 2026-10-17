@@ -39,7 +39,7 @@ export function instanceLabel(name: string, fmt: Fmt): string {
     const label = `${what === 'bearing' ? 'Bearing' : what === 'balls' ? 'Balls' : 'Seals'}, ${side}`;
     return fmt(`assembly_${what}_${side}`, {}, label);
   }
-  m = /^(Holder)_(front|back)$/.exec(name);
+  m = /^(Ring|Holder)_(front|back)$/.exec(name);
   if (m) {
     const side = m[2] === 'front' ? 'front' : 'rear';
     return fmt(`assembly_${m[1].toLowerCase()}_${side}`, {}, `${m[1]}, ${side}`);

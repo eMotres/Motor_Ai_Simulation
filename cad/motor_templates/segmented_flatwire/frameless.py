@@ -6,7 +6,7 @@ kit a robot builder integrates into his own frame:
     stator lamination stack + coils + phase board        (Stator, Winding, Electronics)
     rotor lamination stack + magnets                     (Rotor, Magnets)
 
-and OMITS the housing and the rotating mechanics: Stator_holder, Stator_holder_back, Prop_fix, Screws, bearings,
+and OMITS the housing and the rotating mechanics: Stator_holder, Stator_holder_back, Ring (+ link), Prop_fix, Screws, bearings,
 shaft / rotor carrier (`Mechanics` part as a whole).  The omitted parts are not a second hand-made model: the same Params
 sheet drives the kept parts, the mechanical rows simply stay in the sheet (the customer may still read them).  The rotor's
 inner interface (bore and keys) is built exactly as in the full model, so a customer's hub can be designed to it.
@@ -24,7 +24,7 @@ DATUMS_GROUP = "Mounting_datums"
 AXIS = "Datum_Motor_axis"
 
 #: App::Part / bodies / links that must NOT exist in a frameless model (the housing and the rotating mechanics)
-OMITTED_OBJECTS = ("Mechanics", "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Prop_fix",
+OMITTED_OBJECTS = ("Mechanics", "Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back", "Ring", "Ring_back", "Prop_fix",
                    "Screw", "Bearing_618_8", "Bearing_618_8_back", "Bearing_outer_ring", "Bearing_inner_ring", "Bearing_ball",
                    "Bearing_seal", "Bearing_seal_2")
 OMITTED_LABELS = ("Screws", "Balls")
@@ -32,7 +32,8 @@ OMITTED_LABELS = ("Screws", "Balls")
 #: what the frameless kit contains, for the manifest / README / BOM text
 KIT_PARTS = ("Stator lamination stack", "Coils (with insulation / enamel)", "Phase board (with pins / lead sleeves)",
              "Rotor lamination stack (bore and keys as built)", "Magnets (and the sleeve, when the rotor has one)")
-KIT_OMITS = ("housing / stator holders", "rotor carriers / hub", "bearings", "shaft", "screws", "propeller plate")
+KIT_OMITS = ("housing / stator holders", "rotor carriers / hub", "bearings", "shaft", "screws",
+             "glass-fibre rings that belong to the housing", "propeller plate")
 
 #: axial planes: (object name, Params expression of z, description); a row is created only when all its Params exist
 _PLANES = (

@@ -3,7 +3,7 @@
 Sheet `Params` (owner-editable, like Fusion user parameters):
   A: name   B: value (=expression, alias = name)   C: unit   D: role   E: comment / source
 Row colour = role:  input (green) and derived (pale green) drive the geometry; mechanics (blue) drives the mechanical
-parts (shaft, bearings, holders, Prop_fix, screws) and has no simulation counterpart; info (grey) is reference only; unsupported (orange) is ignored by this
+parts (shaft, bearings, holders, rings, Prop_fix, screws) and has no simulation counterpart; info (grey) is reference only; unsupported (orange) is ignored by this
 template (pre-check demands its nominal value); foreign (dark grey) belongs to another design in the Fusion file.
 
 Round trip (M01): read_sheet() -> apply_sheet_to_profile() writes the owner's edits (expressions AND values, by

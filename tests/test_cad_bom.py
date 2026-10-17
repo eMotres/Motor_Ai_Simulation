@@ -12,7 +12,7 @@ from motor_ai_sim.cad import bom, bom_store
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 MATS = {"Core": "20SW1200", "Coil": "Copper", "RotorCore": "20SW1200", "Magnet": "F52SH_120C", "Shaft": "Steel",
-        "Stator_holder": "Aluminum 6061", "Stator_holder_back": "Aluminum 6061", "Prop_fix": "Aluminum 6061",
+        "Stator_holder": "Aluminum 6061", "Stator_holder_back": "Aluminum 6061", "Ring": "GFRP", "Prop_fix": "Aluminum 6061",
         "Bearing_outer_ring": "Steel (bearing)", "Bearing_inner_ring": "Steel (bearing)", "Bearing_ball": "Steel (bearing)",
         "Screw": "18-8 Stainless Steel"}
 CARDS = {"20SW1200": dict(density=7650, stacking_factor=0.95, description="JFE Steel 20SW1200, non-oriented electrical steel, 0.20 mm"),
@@ -41,8 +41,7 @@ def test_counts_masses_and_stock_check(v, sheets, screw):
     b, dump = make(v)
     k = {l["key"]: l for l in b["lines"]}
     assert k["stator_lam"]["qty"] == k["rotor_lam"]["qty"] == sheets            # round(L x k_f / 0.20 mm)
-    assert (k["magnets"]["qty"], k["coils"]["qty"], k["bearings"]["qty"], k["screws"]["qty"]) == (14, 6, 2, 6)
-    assert "rings" not in k and not any("ring (glass" in l["part"].lower() for l in b["lines"])      # the GFRP ring is gone from every construction
+    assert (k["magnets"]["qty"], k["coils"]["qty"], k["bearings"]["qty"], k["rings"]["qty"], k["screws"]["qty"]) == (14, 6, 2, 2, 6)
     assert k["pins"]["qty"] == 3 and k["board"]["qty"] == 1 and not b["unclassified"]
     mag = next(e for e in dump["entries"] if e["label"] == "Magnet")
     assert k["magnets"]["total_mass_g"] == pytest.approx(14 * mag["volume"] * 7500e-6, abs=1e-3)

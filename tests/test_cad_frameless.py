@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # Copyright (C) MOTRES d.o.o. and contributors
 """The FRAMELESS assembly variant of the CAD generator (owner decision 2026-10-15): CIANO28 85 L13 becomes a kit for robots -
-stator with coils and the phase board + rotor with magnets.  Housing, holders, rotor carriers / hub, bearings, shaft, screws
-and the propeller plate are not in it.  ONE parametric model with parts omitted, never a second model.
+stator with coils and the phase board + rotor with magnets.  Housing, holders, rotor carriers / hub, bearings, shaft, screws,
+housing rings and the propeller plate are not in it.  ONE parametric model with parts omitted, never a second model.
 
 No FreeCAD needed here: the store side (``cad_variant`` key, override, hash), the template rules that are pure Python
 (pre-check, the omitted-object list), the BOM of a kit built from model dumps, and the mass of the kit on the real server BOM file
@@ -213,13 +213,13 @@ def test_the_kit_bom_lists_the_kit_and_no_housing():
     keys = [l["key"] for l in kit["lines"]]
     for k in ("stator_lam", "rotor_lam", "magnets", "coils", "wire", "board", "pins"):
         assert k in keys, k
-    for k in ("shaft", "holder_front", "holder_back", "prop_fix", "bearings", "screws"):
+    for k in ("shaft", "holder_front", "holder_back", "rings", "prop_fix", "bearings", "screws"):
         assert k not in keys, k
     assert not kit["unclassified"] and kit["header"]["cad_variant"] == "frameless" and full["header"]["cad_variant"] == "full"
     assert kit["totals"]["scope"] == "frameless kit" and "scope" not in full["totals"]
     # the kit is the full BOM minus exactly the housing / mechanics lines
     fk = {l["key"]: l for l in full["lines"]}
-    gone = {"shaft", "holder_front", "holder_back", "prop_fix", "bearings", "screws"}
+    gone = {"shaft", "holder_front", "holder_back", "rings", "prop_fix", "bearings", "screws"}
     assert kit["totals"]["motor_mass_g"] == pytest.approx(
         full["totals"]["motor_mass_g"] - sum(fk[k]["total_mass_g"] for k in gone), abs=0.01)
     assert kit["comparison"]["explain"][0].startswith("FRAMELESS KIT")
@@ -332,7 +332,7 @@ def test_the_materials_full_list_of_a_kit_has_no_housing_part(tmp_path, monkeypa
     out = MM.full_part_list(DIE, CFG, dies_dir=dies, cad_dir=cad)
     assert out["scope"] == "frameless kit" and out["kit"] is True
     keys = {p["key"] for p in out["parts"] if p["counted"]}
-    assert not keys & {"carrier_front", "carrier_rear", "holder_front", "holder_back", "holder", "prop_fix", "bearings",
+    assert not keys & {"carrier_front", "carrier_rear", "holder_front", "holder_back", "holder", "rings", "prop_fix", "bearings",
                        "screws", "shaft"}
     assert {"stator_core", "rotor_core", "magnet", "slot", "board"} <= keys
     dies2, cad2 = _setup(tmp_path / "again", monkeypatch, kit=True, with_bom=False)

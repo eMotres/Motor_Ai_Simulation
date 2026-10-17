@@ -226,8 +226,7 @@ def test_bom_parts_are_counted_in_the_full_motor_mass(tmp_path):
     card = A.motor_card(s1.load_model("CIANO14 40 new", "L12"), cad_dir=tmp_path)
     assert_component_card(card)
     names = {p.name for p in card.parts}
-    assert {"Bearings", "Screws", "Phase board", "Wire enamel", "Shaft"} <= names
-    assert "Glass-fibre rings" not in names
+    assert {"Bearings", "Screws", "Glass-fibre rings", "Phase board", "Wire enamel", "Shaft"} <= names
     assert all(p.counted and pm.exists(p.material_id) for p in card.parts)
     # the card mass IS the sum of its parts, and it is larger than the app's active mass
     mm = MM.app_motor_mass("CIANO14 40 new", "L12")

@@ -565,3 +565,33 @@ def test_the_store_lives_beside_the_nda_records_and_nothing_is_ever_deleted(env)
     assert (ST.root() / "events.jsonl").is_file() and (ST.root() / "index.json").is_file()
     src = (__import__("pathlib").Path(__file__).resolve().parents[1] / "src" / "motor_ai_sim" / "verification" / "store.py").read_text(encoding="utf-8")
     assert "unlink" not in src and "os.remove" not in src and "rmtree" not in src
+
+
+def test_one_form_keeps_what_was_typed_and_stores_the_details_with_send_me_a_code(env):
+    """Owner 2026-10-17: a free address + links / registration / VAT, then "Send me a code" -> the page came back empty and nothing was
+    stored.  Now the details are stored with either button and a refused address is shown again with the error."""
+    sign(env, who="gmail")
+    c = case_of(GMAIL)
+    before = c["rounds"]
+    url = f"/api/verification/reply/{token_of(c)}"
+    r = client.post(url, data={"action": "add_email", "email": "x@gmail.com", "urls": "https://www.linkedin.com/in/erika-mustermann-1a2b",
+                                "website": "https://www.acme-drones.com", "reg_no": "7255691000", "vat_no": "SI22399933", "note": ""})
+    assert "free or disposable" in r.text and "received your answer" in r.text
+    assert 'value="x@gmail.com"' in r.text and 'value="7255691000"' in r.text and 'value="SI22399933"' in r.text
+    c = case_of(GMAIL)
+    assert c["rounds"] == before + 1 and c["urls"] == ["https://www.linkedin.com/in/erika-mustermann-1a2b"]
+    assert c["application"]["reg_no"] == "7255691000" and c["application"]["vat_no"] == "SI22399933"
+    # nothing else typed: the refused address and the error come back, nothing is stored
+    r = client.post(url, data={"action": "add_email", "email": "y@gmail.com"})
+    assert "free or disposable" in r.text and 'value="y@gmail.com"' in r.text and "received your answer" not in r.text
+    assert case_of(GMAIL)["rounds"] == before + 1
+    # one form, one button: details + a corporate address in one submit store the details and send the code
+    r = client.post(url, data={"action": "send", "email": "erika@acme-drones.com", "note": "I lead the drive team."})
+    assert "We sent a code to erika@acme-drones.com" in r.text and "received your answer" in r.text and 'name="code"' in r.text
+    assert case_of(GMAIL)["notes"][-1]["note"] == "I lead the drive team."
+    # pressing Send again while the code waits does not send another one
+    sends = len([x for x in case_of(GMAIL)["correspondence"] if x.get("dir") == "out"])
+    client.post(url, data={"action": "send", "email": "erika@acme-drones.com"})
+    assert len([x for x in case_of(GMAIL)["correspondence"] if x.get("dir") == "out"]) == sends
+    page = client.get(url).text
+    assert page.count('name="action" value="send"') == 1 and "add_email" not in page and page.count("<button") == 3   # send, confirm, upload

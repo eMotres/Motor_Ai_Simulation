@@ -4,6 +4,7 @@ note, corrections of the company details, ONE document (pdf / png / jpg).  Every
 from __future__ import annotations
 
 import html
+from typing import Optional
 from motor_ai_sim import link_pages as LP
 from motor_ai_sim.verification import config as C
 from motor_ai_sim.verification import engine as ENG
@@ -18,7 +19,7 @@ STR = {
         "s_need_info": "We need one more thing from you.", "s_ok": "Verified - your access is open.",
         "s_denied": "We could not open access for this account. Please reply to our e-mail if you think this is a mistake.",
         "needs": "What we need", "nothing": "Nothing is needed from you right now. We will write to you.",
-        "email_h": "Confirm a corporate e-mail", "email_label": "E-mail address at your company", "email_go": "Send me a code",
+        "email_h": "Confirm a corporate e-mail", "email_label": "E-mail address at your company", "email_go": "We send a six-digit code to this address.",
         "code_h": "Enter the code we sent to {email}", "code_label": "Six-digit code", "code_go": "Confirm",
         "links_h": "Links and details", "urls_label": "Links (one per line): a page of your company that lists you, your professional profile, a press mention",
         "note_label": "A note (optional)", "site_label": "Official website", "reg_label": "Company registration number", "vat_label": "VAT number (optional)",
@@ -40,7 +41,7 @@ STR = {
         "s_need_info": "还需要您补充一项信息。", "s_ok": "已通过核实 - 您的权限已开通。",
         "s_denied": "目前无法为此账户开通权限。如您认为这是误判，请回复我们的邮件。",
         "needs": "需要您提供", "nothing": "目前无需您操作，我们会再与您联系。",
-        "email_h": "确认公司邮箱", "email_label": "您的公司邮箱地址", "email_go": "发送验证码",
+        "email_h": "确认公司邮箱", "email_label": "您的公司邮箱地址", "email_go": "我们会向该地址发送六位验证码。",
         "code_h": "请输入发送到 {email} 的验证码", "code_label": "六位验证码", "code_go": "确认",
         "links_h": "链接与资料", "urls_label": "链接（每行一个）：贵公司网站上列出您的页面、您的职业主页、媒体报道",
         "note_label": "备注（可选）", "site_label": "官方网站", "reg_label": "公司注册号", "vat_label": "增值税号（可选）",
@@ -67,7 +68,9 @@ def _status_line(s: dict, state: str) -> str:
 
 
 def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash: str = "", flash_kind: str = "", pending_email: str = "",
-         switch_url: str = "", open_url: str = "") -> str:
+         switch_url: str = "", open_url: str = "", typed: Optional[dict] = None, saved: bool = False) -> str:
+    """``typed`` = what the applicant entered in the form, shown again after an error so nothing typed is lost; ``saved`` = the links /
+    details of the same submit were stored (said next to an e-mail error)."""
     lang = LP.norm_lang(lang)
     s = STR[lang]
     app = case.get("application") or {}
@@ -77,6 +80,9 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
         key = ("e_" if flash_kind == "err" else "m_") + flash
         text = s.get(key, flash).replace("{email}", pending_email or "")
         msg = '<p class="%s" role="%s">%s</p>' % ("err" if flash_kind == "err" else "ok", "alert" if flash_kind == "err" else "status", _e(text))
+    if saved and flash != "reply":
+        msg += '<p class="ok" role="status">%s</p>' % _e(s["m_reply"])
+    typed = typed or {}
     needs = ""
     if state in ("need_info", "in_progress"):
         if requests:
@@ -93,20 +99,25 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
                          '<h2>%s</h2><label for="code">%s</label><input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required>'
                          '<button type="submit">%s</button></form>') % (_e(base), _e(pending_email), _e(s["code_h"].replace("{email}", pending_email)),
                                                                        _e(s["code_label"]), _e(s["code_go"]))
+        # ONE form, ONE button (owner 2026-10-17): it stores the links / details and sends a code to the e-mail typed.  Before, "Send me
+        # a code" dropped the links / registration / VAT typed in a second form, and a refused address looked like a reset.
         forms = (
-            '<form method="post" action="%s"><input type="hidden" name="action" value="add_email"><h2>%s</h2>'
-            '<label for="em">%s</label><input id="em" name="email" type="email" value="%s" required autocomplete="email"><button type="submit">%s</button></form>%s'
-            '<form method="post" action="%s"><input type="hidden" name="action" value="reply"><h2>%s</h2>'
-            '<label for="ur">%s</label><textarea id="ur" name="urls" rows="3"></textarea>'
+            '%s<form method="post" action="%s"><h2>%s</h2>'
+            '<label for="em">%s</label><input id="em" name="email" type="email" value="%s" autocomplete="email">'
+            '<p class="muted">%s</p><h2>%s</h2>'
+            '<label for="ur">%s</label><textarea id="ur" name="urls" rows="3">%s</textarea>'
             '<label for="st">%s</label><input id="st" name="website" value="%s" autocomplete="url">'
             '<label for="rg">%s</label><input id="rg" name="reg_no" value="%s">'
             '<label for="vt">%s</label><input id="vt" name="vat_no" value="%s">'
-            '<label for="nt">%s</label><textarea id="nt" name="note" rows="3" maxlength="%d"></textarea><button type="submit">%s</button></form>'
+            '<label for="nt">%s</label><textarea id="nt" name="note" rows="3" maxlength="%d">%s</textarea>'
+            '<input type="hidden" name="action" value="send"><button type="submit">%s</button></form>'
             '<form method="post" action="%s/document" enctype="multipart/form-data"><h2>%s</h2><p class="muted">%s</p>'
             '<input name="file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" required><button type="submit">%s</button></form>'
-        ) % (_e(base), _e(s["email_h"]), _e(s["email_label"]), _e(suggested_email), _e(s["email_go"]), code_form,
-             _e(base), _e(s["links_h"]), _e(s["urls_label"]), _e(s["site_label"]), _e(app.get("website", "")), _e(s["reg_label"]), _e(app.get("reg_no", "")),
-             _e(s["vat_label"]), _e(app.get("vat_no", "")), _e(s["note_label"]), C.MAX_NOTE_CHARS, _e(s["links_go"]),
+        ) % (code_form, _e(base), _e(s["email_h"]), _e(s["email_label"]), _e(typed.get("email") or suggested_email), _e(s["email_go"]),
+             _e(s["links_h"]), _e(s["urls_label"]), _e(typed.get("urls", "")),
+             _e(s["site_label"]), _e(typed.get("website") or app.get("website", "")), _e(s["reg_label"]), _e(typed.get("reg_no") or app.get("reg_no", "")),
+             _e(s["vat_label"]), _e(typed.get("vat_no") or app.get("vat_no", "")), _e(s["note_label"]), C.MAX_NOTE_CHARS, _e(typed.get("note", "")),
+             _e(s["links_go"]),
              _e(base), _e(s["doc_h"]), _e(s["doc_hint"]), _e(s["doc_go"]))
     verified = ""
     vs = [v["email"] for v in case.get("emails", {}).get("verified", [])]

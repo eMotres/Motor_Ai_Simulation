@@ -58,7 +58,7 @@ const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx }> = ({ s
           </Box>
           <BilingualText value={s.body} size={12.5} canConfirm={ctx.canEdit} die={ctx.die} config={ctx.config}
             tref={{ entity: 'process', entity_id: s.id, field: 'body' }} onChanged={ctx.reload} />
-          {s.tables.map((tb, ti) => (
+          {(s.tables_i18n?.[ui] || s.tables_i18n?.zh || s.tables || []).map((tb, ti) => (
             <Box key={ti} component="table" sx={{ mt: 1, borderCollapse: 'collapse', fontSize: 12, '& td, & th': { border: '1px solid var(--line-soft)', px: 0.75, py: 0.25 } }}>
               <tbody>{tb.map((row, ri) => <tr key={ri}>{row.map((c, ci) => <td key={ci}>{c}</td>)}</tr>)}</tbody>
             </Box>

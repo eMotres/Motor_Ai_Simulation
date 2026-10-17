@@ -1,25 +1,24 @@
-/** One production: Parts, BOM, Process, Documents, Discussion, Proposals, Changes. Also exports ProductionTab (list <-> page). */
+/** One production: BOM (parts+costs), Process, Documents, Discussion, Proposals, Changes. Also exports ProductionTab (list <-> page). */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, MenuItem, Tab, Tabs, TextField, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, Tab, Tabs, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
-import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
+import BilingualText, { useContentLang } from './BilingualText';
 import BomTable from './BomTable';
 import ChangesPanel from './ChangesPanel';
 import DiscussionPanel from './DiscussionPanel';
 import DocumentsPanel from './DocumentsPanel';
-import PartCard from './PartCard';
 import ProcessView from './ProcessView';
 import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
 import { ProductionApiError, productionApi } from '../api';
-import { callerRole, canEditRole, emptyBilingual, makeBilingual, sortByBom, unackedRevisions } from '../helpers';
+import { callerRole, canEditRole, unackedRevisions } from '../helpers';
 import type {
-  BomRow, DocumentRec, Lang, Part, ProcessSection, Production, Proposal, Revision, Thread,
+  BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, Revision, Thread,
 } from '../types';
 
-const TABS = ['parts', 'bom', 'process', 'documents', 'discussion', 'proposals', 'changes'] as const;
+const TABS = ['bom', 'process', 'documents', 'discussion', 'proposals', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 interface Data {
@@ -28,34 +27,6 @@ interface Data {
 }
 const EMPTY: Data = { parts: [], bom: [], process: [], documents: [], threads: [], proposals: [], revisions: [] };
 
-const AddPart: React.FC<{ die: string; config: string; onDone: () => void }> = ({ die, config, onDone }) => {
-  const { t } = useTranslation('production');
-  const ui = useContentLang();
-  const [open, setOpen] = useState(false);
-  const [name, setName] = useState('');
-  const [lang, setLang] = useState<Lang>(ui);
-  const [kind, setKind] = useState<Part['kind']>('made');
-  const [err, setErr] = useState<string | null>(null);
-  if (!open) return <Button size="small" sx={{ textTransform: 'none', alignSelf: 'flex-start' }} onClick={() => setOpen(true)}>{t('parts.add')}</Button>;
-  return (
-    <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-      <Box sx={{ flex: 1, minWidth: 260 }}><BilingualInput label={t('parts.name')} value={name} lang={lang} onChange={(v, l) => { setName(v); setLang(l); }} /></Box>
-      <TextField select size="small" value={kind} onChange={(e) => setKind(e.target.value as Part['kind'])} sx={{ width: 140 }}>
-        {(['made', 'purchased', 'consumable'] as const).map((k) => <MenuItem key={k} value={k}>{t(`parts.kindValue.${k}`)}</MenuItem>)}
-      </TextField>
-      <Button size="small" variant="contained" disabled={!name.trim()} sx={{ textTransform: 'none' }}
-        onClick={async () => {
-          try {
-            await productionApi.createPart(die, config, { name: makeBilingual(name, lang), description: emptyBilingual(lang), kind, qty_per_motor: 1, material: '', spec: '' });
-            setOpen(false); setName(''); onDone();
-          } catch (e) { setErr(t('failed', { reason: e instanceof Error ? e.message : String(e) })); }
-        }}>{t('add')}</Button>
-      <Button size="small" sx={{ textTransform: 'none' }} onClick={() => setOpen(false)}>{t('cancel')}</Button>
-      {err && <Typography sx={{ fontSize: 11, color: '#f87171' }}>{err}</Typography>}
-    </Box>
-  );
-};
-
 const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void }> = ({ die, config, onBack }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
@@ -63,7 +34,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const email = user?.email ?? '';
   const [prod, setProd] = useState<Production | null>(null);
   const [data, setData] = useState<Data>(EMPTY);
-  const [tab, setTab] = useState<TabId>('parts');
+  const [tab, setTab] = useState<TabId>('bom');
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -89,7 +60,6 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
     die, config, role, email, uiLang: ui, canEdit: canEditRole(role), reload: () => { void reload(); },
   }), [die, config, role, email, ui, reload]);
   const toAck = prod ? unackedRevisions(data.revisions, email).length : 0;
-  const parts = useMemo(() => sortByBom(data.parts, data.bom), [data.parts, data.bom]);
 
   return (
     <Box>
@@ -123,20 +93,23 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
               <Tab key={id} value={id} label={id === 'changes' && toAck > 0 ? `${t('tabs.changes')} (${toAck})` : t(`tabs.${id}`)} />
             ))}
           </Tabs>
-          {tab === 'parts' && (
-            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-              {ctx.canEdit && <AddPart die={die} config={config} onDone={ctx.reload} />}
-              {parts.length === 0 && <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('parts.none')}</Typography>}
-              {parts.map((p) => <PartCard key={p.id} part={p} ctx={ctx} onChanged={ctx.reload} />)}
-            </Box>
-          )}
           {tab === 'bom' && (
             <>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 1 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('col.orderQty')}: {prod.order_quantity}</Typography>
                 <HelpTip title={t('bom.tip')} />
               </Box>
-              <BomTable rows={data.bom} parts={data.parts} orderQuantity={prod.order_quantity} ctx={ctx} />
+              <BomTable
+                rows={data.bom}
+                parts={data.parts}
+                orderQuantity={prod.order_quantity}
+                ctx={ctx}
+                shareCostsWithOem={prod.share_costs_with_oem}
+                documents={data.documents}
+                threads={data.threads}
+                proposals={data.proposals}
+                onPartChanged={reload}
+              />
             </>
           )}
           {tab === 'process' && <ProcessView sections={data.process} ctx={ctx} />}

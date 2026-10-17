@@ -1,7 +1,7 @@
 // Pure helpers of the Production module (no React, no I/O): revision numbers, bilingual display, caller standing.
 // Imported by __tests__/helpers.test.mjs (Node >= 22.18 strips the types).
 import type {
-  Bilingual, BomRow, CallerRole, Lang, Member, Production, Revision, TranslationStatus,
+  Bilingual, BomRow, CallerRole, CostRow, CostSummary, ExtraCost, Lang, Member, Production, Revision, TranslationStatus,
 } from './types';
 
 // -- revisions --------------------------------------------------------------------------------------------------------
@@ -121,6 +121,65 @@ export const withQty = (rows: readonly BomRow[], partId: string, qty: number, or
 export function sortByBom<T extends { id: string }>(parts: readonly T[], rows: readonly BomRow[]): T[] {
   const idx = new Map(rows.map((r, i) => [r.part_id, i] as const));
   return [...parts].sort((a, b) => (idx.get(a.id) ?? 1e9) - (idx.get(b.id) ?? 1e9));
+}
+
+// -- Costs ----------------------------------------------------------------------------------------------------------------
+
+export const canViewCosts = (role: CallerRole, shareWithOem = false): boolean =>
+  role === 'owner' || role === 'engineer' || role === 'admin' || (role === 'oem' && shareWithOem);
+
+export const canEditCosts = (role: CallerRole): boolean =>
+  role === 'owner' || role === 'engineer' || role === 'admin';
+
+export function calcCostSummary(
+  bomRows: readonly BomRow[],
+  costRows: readonly CostRow[],
+  extras: readonly ExtraCost[],
+  marginPct = 0,
+  orderQuantity = 0,
+): CostSummary {
+  const qty = Math.max(0, Number.isFinite(orderQuantity) ? orderQuantity : 0);
+  const margin = Math.max(0, Math.min(99.99, Number.isFinite(marginPct) ? marginPct : 0));
+  const costMap = new Map(costRows.map((r) => [r.part_id, r]));
+
+  let partsSubtotal = 0;
+  let missingPricesCount = 0;
+
+  for (const br of bomRows) {
+    const cr = costMap.get(br.part_id);
+    const p = cr ? cr.unit_price : br.unit_price;
+    if (p !== null && p !== undefined && Number.isFinite(p)) {
+      partsSubtotal += p;
+    } else {
+      missingPricesCount += 1;
+    }
+  }
+
+  const extraSubtotal = extras.reduce((sum, e) => sum + (Number.isFinite(e.amount) ? Math.max(0, e.amount) : 0), 0);
+  const costPerMotor = partsSubtotal + extraSubtotal;
+  const priceFactor = 1 - margin / 100;
+  const pricePerMotor = priceFactor > 0 ? costPerMotor / priceFactor : costPerMotor;
+
+  const round2 = (v: number) => Math.round(v * 100) / 100;
+  const warnings: string[] = [];
+  if (missingPricesCount > 0) {
+    warnings.push(`${missingPricesCount} BOM item(s) have missing prices; parts subtotal is incomplete.`);
+  }
+
+  return {
+    parts_subtotal: round2(partsSubtotal),
+    extra_subtotal: round2(extraSubtotal),
+    cost_per_motor: round2(costPerMotor),
+    margin_pct: round2(margin),
+    price_per_motor: round2(pricePerMotor),
+    order_quantity: qty,
+    order_parts_total: round2(partsSubtotal * qty),
+    order_extra_total: round2(extraSubtotal * qty),
+    order_cost_total: round2(costPerMotor * qty),
+    order_price_total: round2(pricePerMotor * qty),
+    missing_prices_count: missingPricesCount,
+    warnings,
+  };
 }
 
 // -- API replies ------------------------------------------------------------------------------------------------------------

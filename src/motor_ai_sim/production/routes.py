@@ -93,8 +93,12 @@ async def create_part(request: Request, die: str, config: str):
     user, _production = require_editor_with_full_view(request, die, config)
     body = await _json_or_form(request)
     part = models.normalize_part(body)
-    part["name"] = models.ensure_translated(part["name"])
+    # Do not machine-translate part names: canonical English is kept or pending
     part["description"] = models.ensure_translated(part["description"])
+    part["material_i18n"] = models.ensure_i18n_translated(part["material_i18n"])
+    part["spec_i18n"] = models.ensure_i18n_translated(part["spec_i18n"])
+    part["material"] = part["material_i18n"]["zh"]
+    part["spec"] = part["spec_i18n"]["zh"]
     store.mutate_file(die, config, "parts.json", lambda d: d.setdefault("parts", []).append(part))
     _touch(die, config)
     _audit(_email(user), die, config, "create", "part", part["id"], {"part": part})
@@ -112,11 +116,21 @@ async def update_part(request: Request, die: str, config: str, part_id: str):
             if isinstance(p, dict) and p.get("id") == part_id:
                 # merge allowed scalar fields, replace bilingual objects
                 updated = dict(p)
-                for k in ("kind", "qty_per_motor", "material", "spec", "optional_step", "revision"):
+                for k in ("kind", "qty_per_motor", "optional_step", "revision"):
                     if k in body:
                         updated[k] = body[k]
+                if "material" in body or "material_i18n" in body:
+                    mat_raw = body.get("material_i18n", body.get("material"))
+                    mat_i18n = models.normalize_i18n_dict(mat_raw, default_zh=str(body.get("material") or ""))
+                    updated["material_i18n"] = models.ensure_i18n_translated(mat_i18n)
+                    updated["material"] = updated["material_i18n"]["zh"]
+                if "spec" in body or "spec_i18n" in body:
+                    spec_raw = body.get("spec_i18n", body.get("spec"))
+                    spec_i18n = models.normalize_i18n_dict(spec_raw, default_zh=str(body.get("spec") or ""))
+                    updated["spec_i18n"] = models.ensure_i18n_translated(spec_i18n)
+                    updated["spec"] = updated["spec_i18n"]["zh"]
                 if "name" in body:
-                    updated["name"] = models.ensure_translated(models.normalize_bilingual(body["name"]))
+                    updated["name"] = models.normalize_bilingual(body["name"])
                 if "description" in body:
                     updated["description"] = models.ensure_translated(models.normalize_bilingual(body["description"]))
                 if "drawing_files" in body:
@@ -155,8 +169,64 @@ def delete_part(request: Request, die: str, config: str, part_id: str):
 
 @router.get("/{die}/{config}/bom")
 def get_bom(request: Request, die: str, config: str):
-    require_member_with_full_view(request, die, config)
-    return store.load_file(die, config, "bom.json")
+    user, production = require_member_with_full_view(request, die, config)
+    bom_data = store.load_file(die, config, "bom.json")
+    rows = list(bom_data.get("rows", []))
+    from motor_ai_sim.production import access
+    if not access.can_view_costs(user, production):
+        # OEM members do not receive cost fields at all (strip them server-side)
+        cleaned = [
+            {
+                "part_id": str(r.get("part_id") or ""),
+                "qty_per_motor": max(0, int(r.get("qty_per_motor") or 1)),
+                "order_total": max(0, int(r.get("order_total") or 0)),
+            }
+            for r in rows if isinstance(r, dict)
+        ]
+        return {"rows": cleaned}
+
+    costs = store.load_file(die, config, "costs.json")
+    cost_map = {r["part_id"]: r for r in costs.get("rows", []) if isinstance(r, dict) and r.get("part_id")}
+    order_qty = max(0, int(production.get("order_quantity") or 0))
+
+    enriched_rows = []
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        pid = str(r.get("part_id") or "")
+        row_dict = {
+            "part_id": pid,
+            "qty_per_motor": max(0, int(r.get("qty_per_motor") or 1)),
+            "order_total": max(0, int(r.get("order_total") or 0)),
+        }
+        crow = cost_map.get(pid)
+        if crow and crow.get("unit_price") is not None:
+            try:
+                up = float(crow["unit_price"])
+                row_dict["unit_price"] = up
+                row_dict["line_total"] = round(up * order_qty, 2)
+            except (ValueError, TypeError):
+                row_dict["unit_price"] = None
+                row_dict["line_total"] = None
+        else:
+            row_dict["unit_price"] = None
+            row_dict["line_total"] = None
+        row_dict["currency"] = str(crow.get("currency") or "CNY") if crow else "CNY"
+        row_dict["note"] = crow.get("note") if crow else None
+        enriched_rows.append(row_dict)
+
+    summary = models.compute_cost_summary(
+        enriched_rows,
+        costs.get("rows", []),
+        costs.get("extras", []),
+        costs.get("margin_pct", 0.0),
+        order_qty,
+    )
+    return {
+        "rows": enriched_rows,
+        "costs": costs,
+        "summary": summary,
+    }
 
 
 @router.put("/{die}/{config}/bom")
@@ -171,6 +241,81 @@ async def save_bom(request: Request, die: str, config: str):
     _touch(die, config)
     _audit(_email(user), die, config, "update", "bom", "bom", {"rows": cleaned})
     return {}
+
+
+# ── costs ────────────────────────────────────────────────────────────────────
+
+@router.get("/{die}/{config}/costs")
+def get_costs(request: Request, die: str, config: str):
+    user, production = require_member_with_full_view(request, die, config)
+    from motor_ai_sim.production import access
+    if not access.can_view_costs(user, production):
+        raise HTTPException(status_code=403, detail="Cost access restricted")
+
+    costs = store.load_file(die, config, "costs.json")
+    bom = store.load_file(die, config, "bom.json")
+    bom_rows = bom.get("rows", [])
+    order_qty = max(0, int(production.get("order_quantity") or 0))
+
+    cost_map = {r["part_id"]: r for r in costs.get("rows", []) if isinstance(r, dict) and r.get("part_id")}
+    rows_out = []
+    for br in bom_rows:
+        if not isinstance(br, dict):
+            continue
+        pid = str(br.get("part_id") or "")
+        crow = cost_map.get(pid)
+        if crow:
+            nr = models.normalize_cost_row(crow)
+            nr["part_id"] = pid
+            rows_out.append(nr)
+        else:
+            rows_out.append({"part_id": pid, "unit_price": None, "currency": "CNY", "note": None})
+
+    summary = models.compute_cost_summary(
+        bom_rows,
+        rows_out,
+        costs.get("extras", []),
+        costs.get("margin_pct", 0.0),
+        order_qty,
+    )
+    return {
+        "rows": rows_out,
+        "extras": costs.get("extras", []),
+        "margin_pct": float(costs.get("margin_pct", 0.0)),
+        "summary": summary,
+    }
+
+
+@router.put("/{die}/{config}/costs")
+async def save_costs(request: Request, die: str, config: str):
+    user, production = require_editor_with_full_view(request, die, config)
+    from motor_ai_sim.production import access
+    if not access.can_edit_costs(user, production):
+        raise HTTPException(status_code=403, detail="Editor access required")
+
+    body = await _json_or_form(request)
+    costs = models.normalize_costs(body)
+    for extra in costs["extras"]:
+        extra["name"] = models.ensure_translated(extra["name"])
+
+    store.save_file(die, config, "costs.json", costs)
+    _touch(die, config)
+    _audit(_email(user), die, config, "update", "costs", "costs", {"costs": costs})
+
+    bom = store.load_file(die, config, "bom.json")
+    bom_rows = bom.get("rows", [])
+    order_qty = max(0, int(production.get("order_quantity") or 0))
+    summary = models.compute_cost_summary(
+        bom_rows,
+        costs["rows"],
+        costs["extras"],
+        costs["margin_pct"],
+        order_qty,
+    )
+    return {
+        **costs,
+        "summary": summary,
+    }
 
 
 # ── process ──────────────────────────────────────────────────────────────────

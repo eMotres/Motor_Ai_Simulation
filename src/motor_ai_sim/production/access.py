@@ -49,6 +49,24 @@ def can_propose(email: str, production: dict, is_admin: bool) -> bool:
     return role in ("owner", "engineer", "oem")
 
 
+def can_view_costs(user: dict, production: dict) -> bool:
+    if is_admin(user):
+        return True
+    role = is_member(user["email"], production)
+    if role in ("owner", "engineer"):
+        return True
+    if role == "oem" and bool(production.get("share_costs_with_oem")):
+        return True
+    return False
+
+
+def can_edit_costs(user: dict, production: dict) -> bool:
+    if is_admin(user):
+        return True
+    role = is_member(user["email"], production)
+    return role in ("owner", "engineer")
+
+
 def require_signed_in(request: Request) -> dict:
     user = auth.resolve_user(request.headers.get("authorization"))
     if user is None:

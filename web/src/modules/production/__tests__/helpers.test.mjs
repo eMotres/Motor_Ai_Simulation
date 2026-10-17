@@ -114,3 +114,39 @@ t('list replies: array or keyed object; errors: string or {code, message} detail
   assert.equal(H.safeFileName('a/b:c.pdf'), 'a_b_c.pdf');
   assert.equal(H.safeFileName('///'), '_');
 });
+
+t('costs: permissions and summary calculation including margin and warnings', () => {
+  assert.equal(H.canViewCosts('owner'), true);
+  assert.equal(H.canViewCosts('engineer'), true);
+  assert.equal(H.canViewCosts('admin'), true);
+  assert.equal(H.canViewCosts('oem', false), false);
+  assert.equal(H.canViewCosts('oem', true), true);
+  assert.equal(H.canViewCosts(null), false);
+
+  assert.equal(H.canEditCosts('owner'), true);
+  assert.equal(H.canEditCosts('engineer'), true);
+  assert.equal(H.canEditCosts('admin'), true);
+  assert.equal(H.canEditCosts('oem'), false);
+
+  const bom = [
+    { part_id: 'p1', qty_per_motor: 1, order_total: 10, unit_price: 100 },
+    { part_id: 'p2', qty_per_motor: 2, order_total: 20, unit_price: 50 },
+    { part_id: 'p3', qty_per_motor: 1, order_total: 10, unit_price: null },
+  ];
+  const extras = [
+    { id: 'e1', name: { en: 'Packaging', zh: '包装', src_lang: 'en', status: { en: 'confirmed', zh: 'confirmed' } }, amount: 20 },
+  ];
+  const summary = H.calcCostSummary(bom, [], extras, 20, 10);
+  // parts subtotal = 100 + 50 = 150
+  assert.equal(summary.parts_subtotal, 150);
+  assert.equal(summary.extra_subtotal, 20);
+  assert.equal(summary.cost_per_motor, 170);
+  // price = 170 / (1 - 0.20) = 170 / 0.8 = 212.5
+  assert.equal(summary.price_per_motor, 212.5);
+  assert.equal(summary.order_parts_total, 1500);
+  assert.equal(summary.order_extra_total, 200);
+  assert.equal(summary.order_cost_total, 1700);
+  assert.equal(summary.order_price_total, 2125);
+  assert.equal(summary.missing_prices_count, 1);
+  assert.equal(summary.warnings.length, 1);
+});

@@ -2,7 +2,7 @@
 // (docs/PRODUCTION_MODULE_DESIGN.md section 5). The session token is added by the global fetch interceptor.
 import { errorInfo, safeFileName, unwrapList } from './helpers';
 import type {
-  Bilingual, BomRow, DocumentRec, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
+  Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
   Thread, TranslationRef, Lang,
 } from './types';
 
@@ -83,6 +83,10 @@ export const productionApi = {
   bom: async (die: string, config: string) => unwrapList<BomRow>(await call('GET', `${base(die, config)}/bom`), 'rows'),
   saveBom: (die: string, config: string, rows: BomRow[]) => call<unknown>('PUT', `${base(die, config)}/bom`, { rows }),
 
+  costs: (die: string, config: string) => call<CostsData>('GET', `${base(die, config)}/costs`),
+  saveCosts: (die: string, config: string, data: { rows: CostRow[]; extras: ExtraCost[]; margin_pct: number }) =>
+    call<CostsData>('PUT', `${base(die, config)}/costs`, data),
+
   process: async (die: string, config: string) => unwrapList<ProcessSection>(await call('GET', `${base(die, config)}/process`), 'sections'),
   saveProcess: (die: string, config: string, sections: ProcessSection[]) =>
     call<unknown>('PUT', `${base(die, config)}/process`, { sections }),
@@ -138,4 +142,6 @@ export const productionApi = {
     call<unknown>('POST', `${adminBase(die, config)}/members`, { email, role }),
   adminRemoveMember: (die: string, config: string, email: string) =>
     call<unknown>('DELETE', `${adminBase(die, config)}/members/${enc(email)}`),
+  setShareCosts: (die: string, config: string, share: boolean) =>
+    call<{ share_costs_with_oem: boolean }>('PUT', `${adminBase(die, config)}/share_costs`, { share_costs_with_oem: share }),
 };

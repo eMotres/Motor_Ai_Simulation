@@ -88,6 +88,51 @@ def ensure_translated(bi: dict, translate_fn: Optional[Any] = None) -> dict:
     return bi
 
 
+_CJK_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+
+def normalize_i18n_dict(raw: Any, default_zh: str = "") -> dict:
+    if isinstance(raw, dict):
+        zh = str(raw.get("zh") or "").strip()
+        en = str(raw.get("en") or "").strip()
+        return {"zh": zh or default_zh, "en": en}
+    elif isinstance(raw, str):
+        return {"zh": raw.strip() or default_zh, "en": ""}
+    return {"zh": default_zh, "en": ""}
+
+
+def ensure_i18n_translated(d: dict, translate_fn: Optional[Any] = None) -> dict:
+    """Ensure {zh, en} dict has both languages filled, auto-translating if needed."""
+    if not isinstance(d, dict):
+        return {"zh": "", "en": ""}
+    zh = str(d.get("zh") or "").strip()
+    en = str(d.get("en") or "").strip()
+    out = {"zh": zh, "en": en}
+    if zh and not en:
+        if not _CJK_RE.search(zh):
+            out["en"] = zh
+        else:
+            try:
+                fn = translate_fn
+                if fn is None:
+                    from motor_ai_sim.production import translate as T
+                    fn = T.translate_text
+                out["en"] = str(fn(zh, "zh", "en")).strip() or zh
+            except Exception:
+                pass
+    elif en and not zh:
+        try:
+            fn = translate_fn
+            if fn is None:
+                from motor_ai_sim.production import translate as T
+                fn = T.translate_text
+            out["zh"] = str(fn(en, "en", "zh")).strip() or en
+        except Exception:
+            pass
+    return out
+
+
+
 def is_member(email: str, production: dict) -> Optional[str]:
     """Return caller's role if a member of production, else None."""
     for m in (production or {}).get("members") or []:
@@ -136,6 +181,7 @@ def normalize_production(raw: dict, die: str, config: str) -> dict:
         "order_quantity": max(0, int(raw.get("order_quantity") or 0)),
         "status": raw.get("status") if raw.get("status") in ("active", "paused", "archived") else "active",
         "current_revision": str(raw.get("current_revision") or "1.0"),
+        "share_costs_with_oem": bool(raw.get("share_costs_with_oem", False)),
         "members": members,
         "created_at": str(raw.get("created_at") or _now()),
         "updated_at": str(raw.get("updated_at") or _now()),
@@ -175,18 +221,31 @@ def normalize_part(raw: dict, part_id: Optional[str] = None) -> dict:
         optional_step = {"file_id": str(optional_step["file_id"])}
     else:
         optional_step = None
+
+    old_mat = str(raw.get("material") or "").strip()
+    old_spec = str(raw.get("spec") or "").strip()
+    mat_i18n = normalize_i18n_dict(raw.get("material_i18n"), default_zh=old_mat)
+    if not mat_i18n["zh"] and old_mat:
+        mat_i18n["zh"] = old_mat
+    spec_i18n = normalize_i18n_dict(raw.get("spec_i18n"), default_zh=old_spec)
+    if not spec_i18n["zh"] and old_spec:
+        spec_i18n["zh"] = old_spec
+
     return {
         "id": part_id or str(raw.get("id") or _new_id("pt")),
         "name": normalize_bilingual(raw.get("name")),
         "kind": str(raw.get("kind")) if str(raw.get("kind")) in PART_KINDS else "made",
         "qty_per_motor": max(0, int(raw.get("qty_per_motor") or 1)),
-        "material": str(raw.get("material") or ""),
-        "spec": str(raw.get("spec") or ""),
+        "material": mat_i18n["zh"] or old_mat,
+        "spec": spec_i18n["zh"] or old_spec,
+        "material_i18n": mat_i18n,
+        "spec_i18n": spec_i18n,
         "description": normalize_bilingual(raw.get("description")),
         "drawing_files": drawing_files,
         "optional_step": optional_step,
         "revision": str(raw.get("revision") or "1.0"),
     }
+
 
 
 def normalize_bom_rows(raw: list, part_ids: set) -> list:
@@ -207,6 +266,120 @@ def normalize_bom_rows(raw: list, part_ids: set) -> list:
     return out
 
 
+def normalize_cost_row(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    pid = str(raw.get("part_id") or raw.get("bom_row_id") or "").strip()
+    price_raw = raw.get("unit_price")
+    unit_price: Optional[float] = None
+    if price_raw is not None and str(price_raw).strip() != "":
+        try:
+            unit_price = float(price_raw)
+        except (ValueError, TypeError):
+            unit_price = None
+    currency = str(raw.get("currency") or "CNY").strip().upper() or "CNY"
+    note = str(raw.get("note") or "").strip() or None
+    return {
+        "part_id": pid,
+        "unit_price": unit_price,
+        "currency": currency,
+        "note": note,
+    }
+
+
+def normalize_extra_cost(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    eid = str(raw.get("id") or _new_id("ec"))
+    name = normalize_bilingual(raw.get("name"))
+    try:
+        amount = max(0.0, float(raw.get("amount") or 0.0))
+    except (ValueError, TypeError):
+        amount = 0.0
+    return {
+        "id": eid,
+        "name": name,
+        "amount": amount,
+    }
+
+
+def normalize_costs(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    rows = raw.get("rows") or []
+    if not isinstance(rows, list):
+        rows = []
+    norm_rows = []
+    for r in rows:
+        if isinstance(r, dict):
+            nr = normalize_cost_row(r)
+            if nr["part_id"]:
+                norm_rows.append(nr)
+    extras = raw.get("extras") or []
+    if not isinstance(extras, list):
+        extras = []
+    norm_extras = [normalize_extra_cost(e) for e in extras if isinstance(e, dict)]
+    try:
+        margin_pct = max(0.0, min(99.99, float(raw.get("margin_pct") or 0.0)))
+    except (ValueError, TypeError):
+        margin_pct = 0.0
+    return {
+        "rows": norm_rows,
+        "extras": norm_extras,
+        "margin_pct": margin_pct,
+    }
+
+
+def compute_cost_summary(bom_rows: list[dict], cost_rows: list[dict], extras: list[dict],
+                         margin_pct: float, order_quantity: int) -> dict:
+    order_quantity = max(0, int(order_quantity or 0))
+    try:
+        margin_pct = max(0.0, min(99.99, float(margin_pct or 0.0)))
+    except (ValueError, TypeError):
+        margin_pct = 0.0
+
+    cost_map = {r["part_id"]: r for r in cost_rows if isinstance(r, dict) and r.get("part_id")}
+    missing_prices_count = 0
+    parts_subtotal = 0.0
+
+    for br in bom_rows:
+        pid = br.get("part_id")
+        crow = cost_map.get(pid)
+        if crow is None or crow.get("unit_price") is None:
+            missing_prices_count += 1
+        else:
+            parts_subtotal += float(crow["unit_price"])
+
+    extra_subtotal = sum(float(e.get("amount") or 0.0) for e in extras if isinstance(e, dict))
+    cost_per_motor = parts_subtotal + extra_subtotal
+    price_factor = 1.0 - (margin_pct / 100.0)
+    price_per_motor = (cost_per_motor / price_factor) if price_factor > 0 else cost_per_motor
+
+    order_parts_total = parts_subtotal * order_quantity
+    order_extra_total = extra_subtotal * order_quantity
+    order_cost_total = cost_per_motor * order_quantity
+    order_price_total = price_per_motor * order_quantity
+
+    warnings = []
+    if missing_prices_count > 0:
+        warnings.append(f"{missing_prices_count} BOM item(s) have missing prices; parts subtotal is incomplete.")
+
+    return {
+        "parts_subtotal": round(parts_subtotal, 2),
+        "extra_subtotal": round(extra_subtotal, 2),
+        "cost_per_motor": round(cost_per_motor, 2),
+        "margin_pct": round(margin_pct, 2),
+        "price_per_motor": round(price_per_motor, 2),
+        "order_quantity": order_quantity,
+        "order_parts_total": round(order_parts_total, 2),
+        "order_extra_total": round(order_extra_total, 2),
+        "order_cost_total": round(order_cost_total, 2),
+        "order_price_total": round(order_price_total, 2),
+        "missing_prices_count": missing_prices_count,
+        "warnings": warnings,
+    }
+
+
 def normalize_process_section(raw: dict, section_id: Optional[str] = None) -> dict:
     if not isinstance(raw, dict):
         raw = {}
@@ -216,12 +389,21 @@ def normalize_process_section(raw: dict, section_id: Optional[str] = None) -> di
     tables = raw.get("tables") or []
     if not isinstance(tables, list):
         tables = []
+    tables_i18n = raw.get("tables_i18n")
+    if not isinstance(tables_i18n, dict):
+        tables_i18n = {"zh": tables, "en": tables}
+    else:
+        tables_i18n = {
+            "zh": tables_i18n.get("zh") if isinstance(tables_i18n.get("zh"), list) else tables,
+            "en": tables_i18n.get("en") if isinstance(tables_i18n.get("en"), list) else [],
+        }
     return {
         "id": section_id or str(raw.get("id") or _new_id("sec")),
         "kind": kind,
         "title": normalize_bilingual(raw.get("title")),
         "body": normalize_bilingual(raw.get("body")),
         "tables": tables,
+        "tables_i18n": tables_i18n,
     }
 
 

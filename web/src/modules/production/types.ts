@@ -24,6 +24,7 @@ export interface Production {
   order_quantity: number;
   status: 'active' | 'paused' | 'archived';
   current_revision: string;
+  share_costs_with_oem?: boolean;
   members: Member[];
   created_at: string;
   updated_at: string;
@@ -40,13 +41,59 @@ export interface Part {
   qty_per_motor: number;
   material: string;
   spec: string;
+  material_i18n?: Record<Lang, string>;
+  spec_i18n?: Record<Lang, string>;
   description: Bilingual;
   drawing_files: DrawingFile[];
   optional_step: { file_id: string } | null;
   revision: string;
 }
 
-export interface BomRow { part_id: string; qty_per_motor: number; order_total: number }
+export interface BomRow {
+  part_id: string;
+  qty_per_motor: number;
+  order_total: number;
+  unit_price?: number | null;
+  currency?: string;
+  note?: string | null;
+  line_total?: number | null;
+}
+
+export interface CostRow {
+  part_id: string;
+  unit_price: number | null;
+  currency: string;
+  note: string | null;
+  line_total?: number | null;
+}
+
+export interface ExtraCost {
+  id: string;
+  name: Bilingual;
+  amount: number;
+}
+
+export interface CostSummary {
+  parts_subtotal: number;
+  extra_subtotal: number;
+  cost_per_motor: number;
+  margin_pct: number;
+  price_per_motor: number;
+  order_quantity: number;
+  order_parts_total: number;
+  order_extra_total: number;
+  order_cost_total: number;
+  order_price_total: number;
+  missing_prices_count: number;
+  warnings: string[];
+}
+
+export interface CostsData {
+  rows: CostRow[];
+  extras: ExtraCost[];
+  margin_pct: number;
+  summary: CostSummary;
+}
 
 export type ProcessKind = 'fits' | 'assembly' | 'winding' | 'tests';
 export interface ProcessSection {
@@ -55,6 +102,10 @@ export interface ProcessSection {
   title: Bilingual;
   body: Bilingual;
   tables: string[][][];
+  tables_i18n?: {
+    zh?: string[][][];
+    en?: string[][][];
+  };
 }
 
 export interface DocumentRec {

@@ -8,6 +8,7 @@ Mail goes out over SMTP configured ONLY from the environment (on the server:
     SMTP_USER=...
     SMTP_PASS=...                   # SMTP_PASSWORD (notify.py's name) also read
     MAIL_FROM=no-reply@...          # default NOTIFY_FROM, then SMTP_USER
+    MAIL_REPLY_TO=support@...       # optional Reply-To on every message without one
     PUBLIC_APP_URL=https://app...   # base of the links in the mails
 
 Unconfigured is a supported state, not an error: the link is written to the
@@ -79,6 +80,9 @@ def deliver(msg: EmailMessage) -> None:
         raise RuntimeError("SMTP is not configured")
     if not msg.get("From"):
         msg["From"] = mail_from()
+    if not msg.get("Reply-To") and _env("MAIL_REPLY_TO"):
+        # answers reach the support mailbox, not the SMTP account the relay rewrites From to (owner 2026-10-17)
+        msg["Reply-To"] = _env("MAIL_REPLY_TO")
     host = _env("SMTP_HOST", DEFAULT_SMTP_HOST)
     try:
         port = int(_env("SMTP_PORT", str(DEFAULT_SMTP_PORT)))

@@ -145,7 +145,10 @@ def reply_post(token: str, request: Request, action: str = Form(""), email: str 
             SV.reply(cid, urls_text=urls, note=note, fields=changed)
         address = email.strip().lower()
         if not address or action == "reply":
-            if not saved:
+            if not saved:                                 # nothing new: the details are on file already, the e-mail is what is missing
+                a = case["application"]
+                if action == "send" and (a.get("website") or a.get("reg_no") or a.get("vat_no")):
+                    return _render(request, token, case, flash="need_email")
                 return _render(request, token, case, flash="nothing", kind="err")
             return _render(request, token, case, flash="reply")
         if address in {v["email"] for v in case["emails"]["verified"]}:

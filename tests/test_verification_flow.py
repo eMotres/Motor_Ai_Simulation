@@ -595,3 +595,22 @@ def test_one_form_keeps_what_was_typed_and_stores_the_details_with_send_me_a_cod
     assert len([x for x in case_of(GMAIL)["correspondence"] if x.get("dir") == "out"]) == sends
     page = client.get(url).text
     assert page.count('name="action" value="send"') == 1 and "add_email" not in page and page.count("<button") == 3   # send, confirm, upload
+
+
+def test_send_with_nothing_new_asks_for_the_email_and_no_repeat_mail(env):
+    """Owner 2026-10-17: details saved, then Send with an empty e-mail -> a red error and the same "one more thing" mail again, a loop.
+    Now the page says the details are saved and the company e-mail is the next step; a page answer sends no new request mail."""
+    network({k: v for k, v in NET_OK.items() if not k.endswith("/team")})
+    sign(env, who="gmail")
+    c = case_of(GMAIL)
+    url = f"/api/verification/reply/{token_of(c)}"
+    outs = lambda: len([x for x in case_of(GMAIL)["correspondence"] if x.get("dir") == "out"])     # noqa: E731
+    n0 = outs()
+    r = client.post(url, data={"action": "send", "urls": "https://www.linkedin.com/in/erika-mustermann-1a2b", "vat_no": "DE123456789"})
+    assert "received your answer" in r.text
+    new = [x for x in case_of(GMAIL)["correspondence"] if x.get("dir") == "out"][n0:]
+    assert not [x for x in new if "one more thing" in (x.get("subject") or "")], [x.get("subject") for x in new]
+    r = client.post(url, data={"action": "send", "email": ""})
+    assert case_of(GMAIL)["status"] == ENG.MORE_INFORMATION_REQUIRED
+    assert "Your details are saved" in r.text and 'class="err"' not in r.text
+    assert "Already received" in client.get(url).text and "links: 1" in client.get(url).text

@@ -527,6 +527,9 @@ def from_full(args) -> Dict[str, Any]:
                    **({"extra_points": [Path(f).name for f in args.extra_points]} if extra else {}),
                    **({"floors": Path(args.floors).name} if getattr(args, "floors", None) else {})},
         "R_phase_ohm": r_hot, "R_temp_C": t_coil,
+        "R_phase_winding_ohm": r_hot,
+        "R_phase_terminal_hot_ohm": _val(ch.get("R_phase_terminal_hot_ohm")) or r_hot,
+        "R_phase_terminal_20_ohm": _val(cc.get("R_phase_terminal_20_ohm")) or _val(cc.get("R_phase_ohm")),
         "magnet_ref_temp_C": t_mag,
         "flux_temp_coeff_per_K": c_psi,
         "flux_coeff_basis": (f"passport psi_PM hot {psi_h:.6g} Wb @ {t_mag:g} C vs cold {psi_c:.6g} Wb @ {t_cold:g} C, "

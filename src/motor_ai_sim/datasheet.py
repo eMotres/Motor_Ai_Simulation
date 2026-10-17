@@ -132,17 +132,20 @@ def _setting(duty: Dict[str, Any], key: str) -> Any:
 
 def _k_end_geom(geo: Dict[str, Any]) -> Optional[float]:
     """End-winding factor the SOLVER derives from this cross-section:
-    k_end = (pi*(wire_width + tooth_width)/2 + L) / L  (masses.end_winding_factor).
-
-    Used when a duty did not record the value it ran with.  A stored override
-    is deliberately NOT trusted here: one number was found copied across a
-    40 / 160 / 220 mm family, where the true factor runs 1.72 / 1.18 / 1.13."""
+    CAD coil mean turn length (masses.end_winding_factor)."""
     L = float(geo.get("motor_length") or 0)
     if L <= 0:
         return None
-    ww = float(geo.get("wire_width") or 0)
-    tw = float(geo.get("tooth_width") or 0)
-    return (math.pi * (ww / 2 + tw / 2) + L) / L
+    from motor_ai_sim.masses import end_winding_factor
+
+    class _P:
+        stack_length = L * 1e-3
+        slot_width_m = float(geo.get("slot_width") or 0) * 1e-3
+        r_stator_in = float(geo.get("stator_inner_radius") or 0) * 1e-3
+        slot_height_m = float(geo.get("slot_height") or 0) * 1e-3
+        num_slots = int(geo.get("num_slots") or 12)
+
+    return end_winding_factor(_P(), geo)
 
 
 def _magnet_temp(grade: str) -> Optional[float]:
@@ -1698,13 +1701,33 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     r_phase = _g(_rd, "summary.R_phase_ohm") if _rd else None
     if r_phase:
         t_coil = float(_g(_rd, "summary.coil_temp_C") or 120)
-        one("Phase resistance, hot (mΩ)" + (" — winding" if _delta else ""),
+        from motor_ai_sim.terminals import validate_terminals, terminal_phase_resistance
+        _t_block = cfg_doc.get("terminals") if isinstance(cfg_doc, dict) else None
+        if not _t_block and isinstance(passport, dict):
+            _t_block = passport.get("terminals") or (passport.get("passport") or {}).get("terminals")
+        _t_info = validate_terminals(_t_block)
+
+        one("Phase resistance, hot (mΩ)" + (" — winding" if (_delta or _t_info["stated"]) else ""),
             1000 * float(r_phase),
             f"at {t_coil:g} °C, end winding included", 2)
-        one("Phase resistance, 25 °C (mΩ)" + (" — winding" if _delta else ""),
-            1000 * float(r_phase) * (1 + 0.00393 * (25 - 20)) / (1 + 0.00393 * (t_coil - 20)),
+        r_25 = 1000 * float(r_phase) * (1 + 0.00393 * (25 - 20)) / (1 + 0.00393 * (t_coil - 20))
+        one("Phase resistance, 25 °C (mΩ)" + (" — winding" if (_delta or _t_info["stated"]) else ""),
+            r_25,
             "what an ohmmeter reads on a cold motor" if not _delta else
             "of ONE winding; an ohmmeter across two terminals of the delta reads ⅔ of it", 2)
+        if _t_info["stated"]:
+            r_w_20 = float(r_phase) / (1 + 0.00393 * (t_coil - 20))
+            r_term_20, _ = terminal_phase_resistance(r_w_20, _t_block, temp_c=20.0)
+            one("Phase resistance, 20 °C — terminals (mΩ)",
+                1000 * r_term_20,
+                f"measured at lead ends at 20 °C: {_t_info['note']}", 2)
+            one("Line-to-line resistance, 20 °C — terminals (mΩ)",
+                2000 * r_term_20,
+                "what a 4-wire milliohm meter reads across two lead ends at 20 °C", 2)
+        else:
+            one("Phase resistance at terminals",
+                "terminal resistance not stated",
+                "equals winding resistance; no leads/board specified in configuration")
         if _delta:
             one("Phase resistance, star-equivalent, hot (mΩ)",
                 1000 * float(r_phase) / 3.0,

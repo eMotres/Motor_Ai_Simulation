@@ -49,7 +49,7 @@ const DiscussionPanel: React.FC<{ threads: Thread[]; parts: Part[]; ctx: ProdCtx
       {sorted.map((m) => (
         <Paper key={m.id} sx={{ ...PANEL, p: 1.25, borderLeft: m.author_email.toLowerCase() === ctx.email.toLowerCase() ? '3px solid #2563eb' : undefined }}>
           <Typography sx={{ fontSize: 11, color: 'var(--text-3)', mb: 0.25 }}>{m.author_email} · {m.created_at.slice(0, 16).replace('T', ' ')}</Typography>
-          <BilingualText value={m.text} canConfirm={ctx.canEdit} die={ctx.die} config={ctx.config}
+          <BilingualText chat value={m.text} canConfirm={ctx.canEdit} die={ctx.die} config={ctx.config}
             tref={{ entity: 'thread', entity_id: thread!.id, field: 'text', message_id: m.id }} onChanged={ctx.reload} />
           {m.attachments.length > 0 && (
             <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', mt: 0.5 }}>

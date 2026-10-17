@@ -10,7 +10,7 @@ import os
 from . import bom, store
 
 DEFAULT_WIRE_STOCK = os.path.join(os.path.dirname(store.DEFAULT_SERVER_MATERIALS), "wire_stock.yaml")
-EXTRA_CARDS = ("copper", "polyimide", "Nomex", "Aluminium_6061", "Steel_42CrMo4_QT")
+EXTRA_CARDS = ("copper", "polyimide", "Nomex", "Aluminium_6061", "Steel_42CrMo4_QT", "Stainless_420")
 SKIP_KEYS = ("bh_curve", "core_loss_curves")
 
 

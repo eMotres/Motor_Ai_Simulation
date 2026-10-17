@@ -23,11 +23,18 @@ log = logging.getLogger(__name__)
 
 # Keywords for matching drawing file names to motor parts
 DRAWING_KEYWORDS: dict[str, list[str]] = {
-    "shaft": ["轴", "shaft", "axis"],
-    "magnet": ["磁钢", "磁体", "magnet"],
-    "front_holder": ["前支架", "前端盖", "前盖", "front_holder", "front holder", "front"],
-    "back_holder": ["后支架", "后端盖", "后盖", "back_holder", "back holder", "back", "rear"],
-    "ring": ["环", "ring", "retaining"],
+    "shaft": ["主轴", "轴", "shaft", "axis"],
+    "magnet": ["磁钢", "磁体", "永磁体", "magnet"],
+    "stator": ["定子铁芯", "定子冲片", "定子", "stator"],
+    "rotor": ["转子铁芯", "转子冲片", "转子", "rotor"],
+    "coil": ["线圈", "coil", "winding"],
+    "screws": ["内六角螺钉", "螺钉", "螺栓", "screw", "bolt"],
+    "front_holder": ["前支架", "前端盖", "前盖", "front_holder", "front holder"],
+    "back_holder": ["后支架", "后端盖", "后盖", "back_holder", "back holder", "rear"],
+    "ring": ["线圈固定环", "玻纤环", "环", "ring", "retaining"],
+    "phase_board": ["相板", "线路板", "phase_board", "phase board", "pcb"],
+    "prop_fix": ["prop_fix", "prop fix", "螺旋桨固定片", "固定片"],
+    "bearing": ["轴承", "bearing"],
 }
 
 PART_NAME_MAP: list[tuple[str, str]] = [
@@ -231,23 +238,65 @@ def _detect_section_kind(heading: str, text: str) -> str:
     return "assembly"
 
 
+def drawing_matches_config(caption: str, fname: str, config: str, die: str = "") -> bool:
+    """Check whether a drawing belongs to the given configuration.
+    Config-specific drawings (shaft, magnet, stator, rotor, coil, screws, etc.)
+    attach strictly to their own configuration. Common drawings (e.g. holders,
+    rings marked 通用 / common, or without conflicting config) attach to all."""
+    full_str = f"{caption} {fname}".lower()
+
+    # Common / universal indicator
+    if any(k in full_str for k in ("通用", "common", "universal", "all")):
+        return True
+
+    target_digits = resolve_config_digits(config)
+    size = resolve_die_stator_diameter(die) if die else "40"
+
+    # Multi-config indicator (e.g. 'L12 / L20' or 'L12/L20')
+    l_matches = set(re.findall(r"\bl(\d+)\b", full_str))
+    if len(l_matches) > 1 and target_digits in l_matches:
+        return True
+
+    # Check size_config pattern (e.g. 40_12 or 40-12)
+    size_matches = set(re.findall(rf"\b{re.escape(size)}[-_](\d+)\b", full_str))
+
+    found_configs = l_matches | size_matches
+    if found_configs:
+        return target_digits in found_configs
+
+    # No specific config found -> common drawing
+    return True
+
+
 def _match_part_for_drawing(drawing_name: str, parts: list[dict]) -> Optional[dict]:
     d_lower = drawing_name.lower()
+    is_bearing = "轴承" in drawing_name or "bearing" in d_lower
+    is_ring = "环" in drawing_name or "ring" in d_lower
+
     for cat, kws in DRAWING_KEYWORDS.items():
-        if cat in d_lower or any(kw in d_lower for kw in kws):
+        if cat == "shaft" and is_bearing:
+            continue
+        if cat == "coil" and is_ring:
+            continue
+        if cat in d_lower or any(kw.lower() in d_lower for kw in kws):
             # Find matching part
             for p in parts:
                 p_name_zh = p["name"].get("zh", "").lower()
                 p_name_en = p["name"].get("en", "").lower()
-                if any(kw in p_name_zh or kw in p_name_en for kw in kws):
+                if any(kw.lower() in p_name_zh or kw.lower() in p_name_en for kw in kws):
                     return p
     # Fallback substring match
     for p in parts:
         zh = p["name"].get("zh", "")
         en = p["name"].get("en", "")
-        if zh and zh in drawing_name:
-            return p
-        if en and en.lower() in d_lower:
+        if zh:
+            if zh == "轴" and is_bearing:
+                continue
+            if zh == "线圈" and is_ring:
+                continue
+            if zh in drawing_name:
+                return p
+        if en and len(en) >= 3 and en.lower() in d_lower:
             return p
     return None
 
@@ -381,8 +430,10 @@ def import_package(package_path: Path, die: str, config: str,
                     drawing_candidates.append((caption, fpath))
         if "img" in s and isinstance(s["img"], str):
             fpath = str(s["img"])
-            caption = Path(fpath).stem
-            drawing_candidates.append((caption, fpath))
+            fname_lower = Path(fpath).name.lower()
+            if not re.match(r"^(?:fem_|q\d+_|sample_)", fname_lower):
+                caption = Path(fpath).stem
+                drawing_candidates.append((caption, fpath))
 
     # Also check if part descriptions mentioned image files (e.g. shaft.png)
     for p in parts:
@@ -399,23 +450,37 @@ def import_package(package_path: Path, die: str, config: str,
 
     for caption, rel_path in drawing_candidates:
         fname = Path(rel_path).name
+        if not drawing_matches_config(caption, fname, config=config, die=die):
+            continue
+
         matched_part = _match_part_for_drawing(f"{caption} {fname}", parts)
         if not matched_part:
             continue
 
-        # Look for the asset file
-        found_file: Optional[Path] = None
-        for sdir in search_dirs:
-            candidate = sdir / rel_path
-            if candidate.is_file():
-                found_file = candidate
-                break
-            candidate2 = sdir / fname
-            if candidate2.is_file():
-                found_file = candidate2
-                break
+        stem = Path(rel_path).stem
+        parent_rel = Path(rel_path).parent
 
-        if found_file:
+        # Find all associated file variants: PDF first (primary download), then PNG, then others
+        variants_to_search: list[str] = [f"{stem}.pdf", f"{stem}.png"]
+        if fname not in variants_to_search:
+            variants_to_search.append(fname)
+
+        found_files: list[Path] = []
+        seen_names: set[str] = set()
+        for variant_name in variants_to_search:
+            for sdir in search_dirs:
+                c1 = sdir / parent_rel / variant_name
+                if c1.is_file() and c1.name not in seen_names:
+                    found_files.append(c1)
+                    seen_names.add(c1.name)
+                    break
+                c2 = sdir / variant_name
+                if c2.is_file() and c2.name not in seen_names:
+                    found_files.append(c2)
+                    seen_names.add(c2.name)
+                    break
+
+        for found_file in found_files:
             try:
                 data = found_file.read_bytes()
                 file_id = secrets.token_urlsafe(16)
@@ -424,15 +489,15 @@ def import_package(package_path: Path, die: str, config: str,
                 drawing_entry = {
                     "file_id": file_id,
                     "kind": "pdf" if is_pdf else "png",
-                    "name": fname,
+                    "name": found_file.name,
                 }
                 # Check not already added
-                if not any(df["file_id"] == file_id or df["name"] == fname for df in matched_part["drawing_files"]):
+                if not any(df["name"] == found_file.name for df in matched_part["drawing_files"]):
                     matched_part["drawing_files"].append(drawing_entry)
                     store.append_audit(
                         die, config,
                         models.audit_entry("system/import", "upload_drawing", "part", matched_part["id"],
-                                           {"name": fname, "file_id": file_id})
+                                           {"name": found_file.name, "file_id": file_id})
                     )
             except Exception as ex:                     # noqa: BLE001
                 log.warning("failed to copy asset %s: %s", found_file, ex)

@@ -351,3 +351,17 @@ export interface ProdCtx {
   canEdit: boolean;
   reload: () => void;
 }
+
+
+/** One step of the assembly PROCESS (owner 2026-10-17). */
+export interface AssemblyStep {
+  id: string;
+  n: number;
+  title: Bilingual;
+  kind: 'operation' | 'check';
+  parts: string[];
+  after: string[];
+  note: Bilingual | null;
+  parts_resolved?: Array<{ id: string; name: Bilingual }>;
+}
+export interface AssemblyProcessView { default: boolean; steps: AssemblyStep[] }

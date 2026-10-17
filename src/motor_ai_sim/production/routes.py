@@ -1158,3 +1158,30 @@ async def _json_or_form(request: Request):
         return await request.json()
     except Exception:                               # noqa: BLE001
         return {}
+
+
+# -- assembly process (owner 2026-10-17: the Assembly tab shows the PROCESS, step by step) ------------------------------
+
+@router.get("/{die}/{config}/assembly_process")
+def get_assembly_process(request: Request, die: str, config: str):
+    from motor_ai_sim.production import process_steps as PS
+    access.require_member(request, die, config)
+    parts = store.load_file(die, config, "parts.json").get("parts") or []
+    return PS.view(store.load_file(die, config, "assembly_process.json"), parts)
+
+
+@router.put("/{die}/{config}/assembly_process")
+async def save_assembly_process(request: Request, die: str, config: str):
+    from motor_ai_sim.production import process_steps as PS
+    user, _prod = access.require_editor(request, die, config)
+    body = await _json_or_form(request)
+    try:
+        steps = PS.validate_steps((body or {}).get("steps"))
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+    old = store.load_file(die, config, "assembly_process.json")
+    store.save_file(die, config, "assembly_process.json", {"steps": steps})
+    _audit(_email(user), die, config, "update", "assembly_process", "steps",
+           {"from": len(old.get("steps") or []), "to": len(steps)})
+    parts = store.load_file(die, config, "parts.json").get("parts") or []
+    return PS.view({"steps": steps}, parts)

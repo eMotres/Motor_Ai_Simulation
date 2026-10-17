@@ -3,6 +3,7 @@ import { Alert, Box, Button, Chip, CircularProgress, Paper, Tab, Tabs, Typograph
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
+import AssemblyProcess from './AssemblyProcess';
 import BilingualText, { useContentLang } from './BilingualText';
 import BomTable from './BomTable';
 import ChangesPanel from './ChangesPanel';
@@ -178,11 +179,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
               />
             </>
           )}
-          {tab === 'assembly' && (
-            <BomTable view="graph" rows={data.bom} parts={data.parts} orderQuantity={prod.order_quantity} ctx={ctx}
-              shareCostsWithOem={prod.share_costs_with_oem} documents={data.documents} threads={data.threads}
-              proposals={data.proposals} onPartChanged={reload} />
-          )}
+          {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} />}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'process' && <ProcessView sections={data.process} ctx={ctx} />}
           {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} />}

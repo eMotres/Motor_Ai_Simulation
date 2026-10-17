@@ -8,7 +8,7 @@ MEMBER_ROLES = ("owner", "engineer", "oem")
 #: Members who may change design data (parts, BOM, process, revisions, proposal decisions).
 EDIT_ROLES = ("owner", "engineer")
 PRODUCTION_STATUSES = ("active", "paused", "archived")
-PART_KINDS = ("made", "purchased", "consumable")
+PART_KINDS = ("made", "purchased", "consumable", "assembly")
 PROPOSAL_STATUSES = ("open", "accepted", "rejected", "implemented")
 SECTION_KINDS = ("fits", "assembly", "winding", "tests")
 TEXT_STATUSES = ("machine", "confirmed", "pending")

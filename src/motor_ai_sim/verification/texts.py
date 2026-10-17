@@ -122,8 +122,8 @@ def otp_mail(code: str, zh: bool) -> tuple[str, str]:
     en = ("Hello,\n\nyour AeroStator confirmation code is %s\n\nIt is valid for 30 minutes. Enter it on the verification page. "
           "If you did not ask for it, ignore this message.\n\n%s support\nsupport@aerostator.com\n") % (code, _BRAND)
     if not zh:
-        return ("%s: your confirmation code %s" % (_BRAND, code), en)
-    return ("%s: your confirmation code %s / 验证码" % (_BRAND, code),
+        return ("%s: your confirmation code" % _BRAND, en)          # the code never in the subject (it is logged and previewed)
+    return ("%s: your confirmation code / 验证码" % _BRAND,
             en + "\n---\n您好，\n\n您的 AeroStator 验证码是 %s，30 分钟内有效。请在核实页面输入。如果这不是您本人的操作，请忽略此邮件。\n\n%s 支持团队\nsupport@aerostator.com\n" % (code, _BRAND))
 
 

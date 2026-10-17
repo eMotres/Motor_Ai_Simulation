@@ -10,7 +10,6 @@ import {
   MeshStandardMaterial, Object3D, PerspectiveCamera, OrthographicCamera, Plane, Raycaster, RepeatWrapping, RGBAFormat, Scene, SphereGeometry,
   UnsignedByteType, Vector2, Vector3, WebGLRenderer,
 } from 'three';
-import { TrackballControls } from 'three/examples/jsm/controls/TrackballControls.js';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import {
   distance, explodeShift, sectionPlane, sectionRange, type Axis, type Box, type PartGroup, type Vec3, type StandardView, standardViewDirection,
@@ -18,6 +17,7 @@ import {
 import {
   buildThreadNormalMap, normalScaleFor, parseThread, resolveAxis, threadLabel, threadUVs, type ThreadInfo,
 } from './threadTexture';
+import { FreeOrbitControls } from './freeOrbit';
 
 const THREAD_MAP_SIZE = 128;
 
@@ -34,11 +34,15 @@ export interface ViewerState {
   hints?: boolean;
 }
 
+export interface CameraPose {
+  projection: 'perspective' | 'orthographic'; position: Vec3; up: Vec3; target: Vec3; zoom: number; halfH: number | null; near: number; far: number;
+}
+
 export class ModelViewer {
   readonly renderer: WebGLRenderer;
   readonly scene = new Scene();
   camera: PerspectiveCamera | OrthographicCamera;
-  controls: TrackballControls;
+  controls: FreeOrbitControls;
   projection: 'perspective' | 'orthographic' = 'orthographic';
   private root: Object3D | null = null;
   private groups: Array<{ node: Object3D; part: PartGroup; base: Vector3 }> = [];
@@ -180,19 +184,11 @@ export class ModelViewer {
     this.clearMarks();
   }
 
-  // Trackball, not orbit (owner 2026-10-16): the model turns freely in every direction, over the poles too.
-  // Trackball moves in update(), so a frame loop runs only while the pointer drags (rendering stays on demand).
-  private makeControls(camera: PerspectiveCamera | OrthographicCamera): TrackballControls {
-    const c = new TrackballControls(camera, this.renderer.domElement);
-    c.rotateSpeed = 3.0;
-    c.zoomSpeed = 1.2;
-    c.panSpeed = 0.8;
-    c.staticMoving = true;
+  // Free orbit (owner 2026-10-16: turn in every direction, over the poles; 2026-10-17: the trackball felt erratic, so a
+  // CAD-style screen-axis orbit, see freeOrbit.ts).  Moves only on input, so rendering stays on demand.
+  private makeControls(camera: PerspectiveCamera | OrthographicCamera): FreeOrbitControls {
+    const c = new FreeOrbitControls(camera, this.renderer.domElement);
     c.addEventListener('change', () => { this.invalidate(); this.reportCameraDirection(); });
-    let raf = 0;
-    const loop = () => { c.update(); raf = requestAnimationFrame(loop); };
-    c.addEventListener('start', () => { if (!raf) loop(); });
-    c.addEventListener('end', () => { if (raf) cancelAnimationFrame(raf); raf = 0; c.update(); });
     return c;
   }
 
@@ -379,6 +375,34 @@ export class ModelViewer {
     }
     this.camera.updateProjectionMatrix();
     this.controls.target.copy(c);
+    this.controls.update();
+    this.invalidate();
+    this.reportCameraDirection();
+  }
+
+  /** The camera as it is now (kept per model for the session, owner 2026-10-17: re-entering the view shows the same pose). */
+  getPose(): CameraPose {
+    const ortho = this.camera instanceof OrthographicCamera;
+    return { projection: this.projection, position: this.camera.position.toArray() as Vec3, up: this.camera.up.toArray() as Vec3,
+      target: this.controls.target.toArray() as Vec3, zoom: this.camera.zoom, halfH: ortho ? (this.camera as OrthographicCamera).top : null,
+      near: this.camera.near, far: this.camera.far };
+  }
+
+  /** Put the camera back to a saved pose (same projection only; otherwise the fitted view stays). */
+  setPose(p: CameraPose): void {
+    if (p.projection !== this.projection) return;
+    this.camera.position.fromArray(p.position);
+    this.camera.up.fromArray(p.up);
+    this.controls.target.fromArray(p.target);
+    this.camera.zoom = p.zoom;
+    this.camera.near = p.near;
+    this.camera.far = p.far;
+    if (this.camera instanceof OrthographicCamera && p.halfH) {
+      const aspect = Math.max(0.01, this.host.clientWidth / Math.max(1, this.host.clientHeight));
+      this.camera.top = p.halfH; this.camera.bottom = -p.halfH;
+      this.camera.left = -p.halfH * aspect; this.camera.right = p.halfH * aspect;
+    }
+    this.camera.updateProjectionMatrix();
     this.controls.update();
     this.invalidate();
     this.reportCameraDirection();

@@ -1,8 +1,20 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { Alert, Box, CircularProgress, Tooltip, Typography } from '@mui/material';
 import type { Object3D } from 'three';
-import { ModelViewer, type ViewerState } from './modelViewer';
+import { ModelViewer, type CameraPose, type ViewerState } from './modelViewer';
 import { effectiveSettings, type Axis, type Box as BoundsBox, type PartGroup, type StandardView, type Vec3 } from './model3d';
+
+// Session memory (owner 2026-10-17): leaving the 3D view and coming back must not download the model again or lose the pose.
+// The GLB bytes are kept per source key (it carries the GLB sha256, so a rebuilt model is a new key), newest last, about
+// 300 MB at most; the camera pose is kept per source key too.  Both live only in this tab's memory.
+const GLB_CACHE_BYTES = 300 * 1024 * 1024;
+const glbCache = new Map<string, ArrayBuffer>();
+const poses = new Map<string, CameraPose>();
+function cacheGlb(key: string, buffer: ArrayBuffer): void {
+  glbCache.delete(key); glbCache.set(key, buffer);
+  let total = 0; for (const b of glbCache.values()) total += b.byteLength;
+  for (const k of glbCache.keys()) { if (total <= GLB_CACHE_BYTES || glbCache.size <= 1) break; total -= glbCache.get(k)!.byteLength; glbCache.delete(k); }
+}
 
 export interface ObjectSceneAdapter { root: Object3D; groups: PartGroup[]; box?: BoundsBox }
 export interface ModelCanvasHandle {
@@ -37,6 +49,7 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, Props>((p, ref) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loadedTick, setLoadedTick] = useState(0);
+  const shownKey = useRef<string | null>(null);              // the source whose model is on screen (its pose is saved on leave)
   const report = (message: string | null) => { setError(message); callbacks.current.onError?.(message); };
   useImperativeHandle(ref, () => ({ fit: () => viewer.current?.fit(), home: () => viewer.current?.home(), view: (v) => viewer.current?.view(v),
     setProjection: (m) => viewer.current?.setProjection(m), sectionRange: (a) => viewer.current?.sectionRange(a) ?? { min:-1,max:1 } }), []);
@@ -49,15 +62,17 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, Props>((p, ref) => {
     v.onSelect = (name) => { if (callbacks.current.fullAccess) callbacks.current.onSelect?.(name); };
     v.onContextLost = () => report(callbacks.current.contextLostText);
     viewer.current = v;
-    return () => { v.onContextLost = () => {}; v.onMeasure = () => {}; v.onCameraDirection = () => {}; v.onCameraUp = () => {}; v.onSelect = () => {}; v.dispose(); viewer.current = null; };
+    return () => { if (shownKey.current) poses.set(shownKey.current, v.getPose()); v.onContextLost = () => {}; v.onMeasure = () => {}; v.onCameraDirection = () => {}; v.onCameraUp = () => {}; v.onSelect = () => {}; v.dispose(); viewer.current = null; };
   }, []);
   useEffect(() => {
     const v = viewer.current;
     if (!v) return;
     let live = true;
     setLoading(false); report(null);
+    const key = `${p.sourceKey}|${p.glbUrl ?? 'scene'}`;
+    const show = () => { shownKey.current = key; const pose = poses.get(key); if (pose) v.setPose(pose); };
     if (p.objectScene) {
-      v.setObject(p.objectScene.root, p.objectScene.groups);
+      v.setObject(p.objectScene.root, p.objectScene.groups); show();
       callbacks.current.onReady?.(true); setLoadedTick((n) => n + 1);
       callbacks.current.onLoaded?.({ groups:p.objectScene.groups, range:v.sectionRange('x') });
       return;
@@ -67,21 +82,30 @@ const ModelCanvas = forwardRef<ModelCanvasHandle, Props>((p, ref) => {
     setLoading(true);
     (async () => {
       try {
-        const response = await fetch(p.glbUrl!);
-        if (!live) return;
-        if (!response.ok) {
-          let detail = String(response.status);
-          try { const body = await response.json(); detail = typeof body?.detail === 'string' ? body.detail : JSON.stringify(body?.detail ?? body); } catch { /* status fallback */ }
-          if (live) report(detail); return;
+        let buffer = glbCache.get(key);
+        if (!buffer) {
+          const response = await fetch(p.glbUrl!);
+          if (!live) return;
+          if (!response.ok) {
+            let detail = String(response.status);
+            try { const body = await response.json(); detail = typeof body?.detail === 'string' ? body.detail : JSON.stringify(body?.detail ?? body); } catch { /* status fallback */ }
+            if (live) report(detail); return;
+          }
+          buffer = await response.arrayBuffer(); if (!live) return;
+          cacheGlb(key, buffer);
         }
-        const buffer = await response.arrayBuffer(); if (!live) return;
-        const { groups } = await v.load(buffer); if (!live) return;
+        const { groups } = await v.load(buffer.slice(0)); if (!live) return;
+        show();
         callbacks.current.onReady?.(true); setLoadedTick((n) => n + 1);
         callbacks.current.onLoaded?.({ groups, range:v.sectionRange('x') });
       } catch (e) { if (live) report(e instanceof Error ? e.message : String(e)); }
       finally { if (live) setLoading(false); }
     })();
-    return () => { live = false; v.cancelPendingLoad(); callbacks.current.onReady?.(false); };
+    return () => {
+      live = false; v.cancelPendingLoad(); callbacks.current.onReady?.(false);
+      if (shownKey.current && viewer.current === v) poses.set(shownKey.current, v.getPose());
+      shownKey.current = null;
+    };
   }, [p.sourceKey, p.glbUrl, p.objectScene?.root]);
   useEffect(() => {
     vapply();

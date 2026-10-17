@@ -48,12 +48,17 @@ CACHE_S = 6 * 3600
 OTP_TTL_S = 30 * 60
 OTP_MAX_ATTEMPTS = 5
 OTP_MAX_SENDS_PER_CASE_DAY = 6
+OTP_RESEND_COOLDOWN_S = 120
 REPLY_TOKEN_TTL_S = 30 * 24 * 3600
 UPLOAD_MAX_BYTES = 5 * 1024 * 1024
 UPLOAD_EXTENSIONS = {"pdf": b"%PDF", "png": b"\x89PNG\r\n\x1a\n", "jpg": b"\xff\xd8\xff", "jpeg": b"\xff\xd8\xff"}
 MAX_URLS_PER_REPLY = 5
 MAX_NOTE_CHARS = 2000
 MAX_DOCUMENTS_PER_CASE = 5
+
+# -- reminders and escalation (sweep) --------------------------------------------------------------------------------
+REMINDER_AFTER_DAYS = 3
+ESCALATE_AFTER_DAYS = 7
 
 # -- lists -----------------------------------------------------------------------------------------------------------
 #: throw-away mailbox providers (never a company); extend with a file, one domain per line: VERIFY_DISPOSABLE_FILE

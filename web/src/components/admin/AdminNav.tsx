@@ -92,7 +92,9 @@ const AdminNav: React.FC<{
           </Typography>
           {!!badge && (
             <Box sx={{
-              fontSize: 10, fontWeight: 700, color: '#fbbf24', bgcolor: 'var(--panel)',
+              fontSize: 10, fontWeight: 700,
+              color: s.id === 'verification' ? '#ffffff' : '#fbbf24',
+              bgcolor: s.id === 'verification' ? '#ef4444' : 'var(--panel)',
               borderRadius: 4, px: 0.6, lineHeight: '15px', minWidth: 15, textAlign: 'center',
             }}>
               {badge}

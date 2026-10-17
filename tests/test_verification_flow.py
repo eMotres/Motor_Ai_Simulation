@@ -594,7 +594,7 @@ def test_one_form_keeps_what_was_typed_and_stores_the_details_with_send_me_a_cod
     client.post(url, data={"action": "send", "email": "erika@acme-drones.com"})
     assert len([x for x in case_of(GMAIL)["correspondence"] if x.get("dir") == "out"]) == sends
     page = client.get(url).text
-    assert page.count('name="action" value="send"') == 1 and "add_email" not in page and page.count("<button") == 3   # send, confirm, upload
+    assert page.count('name="action" value="send"') == 1 and "add_email" not in page and page.count("<button") == 4   # send, confirm, resend, upload
 
 
 def test_send_with_nothing_new_asks_for_the_email_and_no_repeat_mail(env):

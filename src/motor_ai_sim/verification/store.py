@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 _LOCK = threading.RLock()
 EVENT_TYPES = frozenset("""case_created application_updated check_run status_changed mail_out reply_in email_otp_sent email_otp_failed
-email_verified document_uploaded admin_action access_granted access_revoked download""".split())
+email_verified document_uploaded admin_action access_granted access_revoked download reminder_sent""".split())
 
 
 def root() -> Path:
@@ -82,7 +82,7 @@ def _blank(cid: str) -> dict:
             "lang": "en", "emails": {"verified": [], "pending": {}}, "urls": [], "notes": [], "documents": [], "evidence": [],
             "decision": {}, "rounds": 0, "open_replies": 0, "requested": [], "reply_since_request": False, "correspondence": [],
             "access": {"granted": False, "at": 0.0, "by": "", "reason": ""}, "admin_actions": [], "downloads": 0,
-            "last_download": None, "events": 0, "last_mail_ts": 0.0}
+            "last_download": None, "events": 0, "last_mail_ts": 0.0, "reminder_sent": 0.0}
 
 
 def apply(state: Optional[dict], ev: dict) -> dict:
@@ -149,6 +149,8 @@ def apply(state: Optional[dict], ev: dict) -> dict:
     elif t == "download":
         s["downloads"] = int(s.get("downloads", 0)) + 1
         s["last_download"] = {k: d.get(k) for k in ("download_id", "file", "motor_id", "sha256", "kind")} | {"at": ts}
+    elif t == "reminder_sent":
+        s["reminder_sent"] = ts
     return s
 
 
@@ -295,3 +297,21 @@ def append(case_id: str, type_: str, data: Optional[dict] = None, actor: str = "
                 idx[state["user"]].append(case_id)
             _write_json(index_path(), idx)
     return ev
+
+
+def digest_path() -> Path:
+    return root() / "digest.json"
+
+
+def get_last_digest_day() -> Optional[str]:
+    try:
+        d = _read_json(digest_path())
+        return str(d.get("day")) if isinstance(d, dict) and d.get("day") else None
+    except OSError:
+        return None
+
+
+def set_last_digest_day(day: str, now: Optional[float] = None) -> None:
+    ts = time.time() if now is None else now
+    with _LOCK:
+        _write_json(digest_path(), {"day": day, "ts": ts})

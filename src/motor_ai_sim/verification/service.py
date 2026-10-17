@@ -145,7 +145,7 @@ def _zh(case: dict) -> bool:
     return E.wants_zh(case.get("lang") or "", case.get("user") or "")
 
 
-def _send(case: dict, subject: str, body: str, codes=(), *, to: str = "", actor: str = "system", store_body: bool = True) -> bool:
+def _send(case: dict, subject: str, body: str, codes=(), *, to: str = "", actor: str = "system", store_body: bool = True, now: Optional[float] = None) -> bool:
     from motor_ai_sim import auth_email as E
     to = to or case["user"]
     try:
@@ -155,7 +155,7 @@ def _send(case: dict, subject: str, body: str, codes=(), *, to: str = "", actor:
         delivered = False
     ST.append(case["id"], "mail_out", {"to": to, "subject": subject if store_body else "[one-time code mail]",
                                        "body": body if store_body else "[one-time code - not stored]",
-                                       "codes": list(codes), "delivered": bool(delivered)}, actor=actor)
+                                       "codes": list(codes), "delivered": bool(delivered)}, actor=actor, now=now)
     return bool(delivered)
 
 
@@ -351,7 +351,7 @@ def _otp_hash(case_id: str, address: str, code: str) -> str:
     return hmac.new(_key(), ("otp|%s|%s|%s" % (case_id, address, code)).encode("utf-8"), hashlib.sha256).hexdigest()
 
 
-def start_email(case_id: str, address: str) -> tuple[bool, str]:
+def start_email(case_id: str, address: str, *, now: Optional[float] = None) -> tuple[bool, str]:
     """Send a six-digit code to a corporate address.  -> (ok, code): codes ``sent`` | ``invalid`` | ``free`` | ``no_domain`` | ``limit``."""
     from motor_ai_sim import email_domain as ED
     case = ST.get(case_id)
@@ -363,14 +363,45 @@ def start_email(case_id: str, address: str) -> tuple[bool, str]:
         return False, "free"
     if not ED.check(address).ok:
         return False, "no_domain"
-    day = time.time() - 24 * 3600
+    t = time.time() if now is None else now
+    day = t - 24 * 3600
     sends = sum(1 for c in case["correspondence"] if c.get("dir") == "out" and c.get("ts", 0) > day and c.get("body", "").startswith("[one-time"))
     if sends >= C.OTP_MAX_SENDS_PER_CASE_DAY:
         return False, "limit"
     code = "%06d" % secrets.randbelow(10 ** 6)
-    ST.append(case_id, "email_otp_sent", {"email": address, "hash": _otp_hash(case_id, address, code), "expires": time.time() + C.OTP_TTL_S}, actor="applicant")
+    ST.append(case_id, "email_otp_sent", {"email": address, "hash": _otp_hash(case_id, address, code), "expires": t + C.OTP_TTL_S}, actor="applicant", now=now)
     s, b = TX.otp_mail(code, _zh(case))
-    _send(case, s, b, to=address, store_body=False)
+    _send(case, s, b, to=address, store_body=False, now=now)
+    return True, "sent"
+
+
+def resend_email(case_id: str, address: str = "", *, now: Optional[float] = None) -> tuple[bool, str]:
+    """Re-send a six-digit code to the pending address. Allowed again after 2 minutes (C.OTP_RESEND_COOLDOWN_S).
+    Keeps the per-day limit (C.OTP_MAX_SENDS_PER_CASE_DAY). -> (ok, code): ``sent`` | ``cooldown`` | ``limit`` | ``none``."""
+    case = ST.get(case_id)
+    if case is None:
+        return False, "none"
+    address = str(address or "").strip().lower()
+    if not address:
+        pends = list((case.get("emails", {}).get("pending") or {}).keys())
+        if not pends:
+            return False, "none"
+        address = pends[-1]
+    pending = case.get("emails", {}).get("pending", {}).get(address)
+    if not pending:
+        return False, "none"
+    t = time.time() if now is None else now
+    cooldown = getattr(C, "OTP_RESEND_COOLDOWN_S", 120)
+    if t - pending.get("sent", 0) < cooldown:
+        return False, "cooldown"
+    day = t - 24 * 3600
+    sends = sum(1 for c in case["correspondence"] if c.get("dir") == "out" and c.get("ts", 0) > day and c.get("body", "").startswith("[one-time"))
+    if sends >= C.OTP_MAX_SENDS_PER_CASE_DAY:
+        return False, "limit"
+    code = "%06d" % secrets.randbelow(10 ** 6)
+    ST.append(case_id, "email_otp_sent", {"email": address, "hash": _otp_hash(case_id, address, code), "expires": t + C.OTP_TTL_S}, actor="applicant", now=now)
+    s, b = TX.otp_mail(code, _zh(case))
+    _send(case, s, b, to=address, store_body=False, now=now)
     return True, "sent"
 
 
@@ -393,7 +424,7 @@ def confirm_email(case_id: str, address: str, code: str) -> tuple[bool, str]:
     return True, "verified"
 
 
-def add_document(case_id: str, filename: str, data: bytes) -> tuple[bool, str]:
+def add_document(case_id: str, filename: str, data: bytes, *, now: Optional[float] = None) -> tuple[bool, str]:
     """Store ONE uploaded document privately.  -> (ok, code): ``stored`` | ``type`` | ``size`` | ``empty`` | ``limit``.  The file is
     never executed, never parsed here and never served inline (admins download it as an attachment)."""
     from motor_ai_sim.private_files import chmod_private, ensure_private_dir
@@ -417,7 +448,7 @@ def add_document(case_id: str, filename: str, data: bytes) -> tuple[bool, str]:
     chmod_private(p)
     safe = re.sub(r"[^\w.\- ]+", "_", str(filename))[:120]
     ST.append(case_id, "document_uploaded", {"id": did, "name": safe, "ext": "jpg" if ext == "jpeg" else ext, "bytes": len(data),
-                                             "sha256": hashlib.sha256(data).hexdigest()}, actor="applicant")
+                                             "sha256": hashlib.sha256(data).hexdigest()}, actor="applicant", now=now)
     schedule_checks(case_id, trigger="document")
     return True, "stored"
 
@@ -602,3 +633,121 @@ def note_download(row: dict) -> None:
     if not c:
         return
     ST.append(c["id"], "download", {k: row.get(k) for k in ("download_id", "file", "motor_id", "sha256", "kind", "die", "config")}, actor="system")
+
+
+# -- maintenance sweep (reminders, escalation, daily digest) -----------------------------------------------------------
+
+APPLICANT_EVENTS = frozenset({"reply_in", "document_uploaded", "email_otp_sent", "email_verified", "application_updated"})
+
+
+def applicant_silence_seconds(case: dict, events: list[dict], now: float) -> float:
+    """Seconds the applicant has stayed silent while in MORE_INFORMATION_REQUIRED."""
+    entered_ts = None
+    prev_status = None
+    for e in events:
+        if e.get("type") == "status_changed":
+            st = (e.get("data") or {}).get("status")
+            if st == ENG.MORE_INFORMATION_REQUIRED and prev_status != ENG.MORE_INFORMATION_REQUIRED:
+                entered_ts = e.get("ts")
+            prev_status = st
+    if entered_ts is None:
+        entered_ts = case.get("status_at") or case.get("created", now)
+
+    last_event_ts = entered_ts
+    for e in events:
+        if e.get("ts", 0) >= entered_ts and e.get("type") in APPLICANT_EVENTS:
+            if e.get("ts", 0) > last_event_ts:
+                last_event_ts = e.get("ts")
+    return max(0.0, now - last_event_ts)
+
+
+def waiting_cases(now: Optional[float] = None) -> list[dict]:
+    """Cases waiting for an administrator: MANUAL_REVIEW, plus PENDING older than 1 hour."""
+    t = time.time() if now is None else now
+    out = []
+    for c in ST.list_cases():
+        st = c.get("status")
+        if st == ENG.MANUAL_REVIEW:
+            out.append(c)
+        elif st == ENG.PENDING:
+            created = c.get("created", 0)
+            if t - created > 3600:
+                out.append(c)
+    return out
+
+
+def count_waiting(now: Optional[float] = None) -> int:
+    """The badge count for Admin."""
+    return len(waiting_cases(now))
+
+
+def sweep(now: Optional[float] = None, dry_run: bool = False) -> dict:
+    """Sweep all verification cases for reminders, escalation and daily digest.
+    Pure-ish over all cases, idempotent. Returns counts."""
+    import datetime
+    t = time.time() if now is None else now
+    reminded = 0
+    escalated = 0
+    digest_sent = 0
+
+    # 1. Reminders and escalation for silent applicants
+    for c in ST.list_cases(ENG.MORE_INFORMATION_REQUIRED):
+        cid = c["id"]
+        evs = ST.events_of(cid)
+        silence = applicant_silence_seconds(c, evs, t)
+        if silence >= C.ESCALATE_AFTER_DAYS * 86400:
+            if not dry_run:
+                with _lock_for(cid):
+                    cur = ST.get(cid)
+                    if cur and cur.get("status") == ENG.MORE_INFORMATION_REQUIRED:
+                        reason_text = "applicant silent for %d days" % C.ESCALATE_AFTER_DAYS
+                        reasons = [{"code": "applicant_silent", "text": reason_text}]
+                        ST.append(cid, "status_changed", {
+                            "status": ENG.MANUAL_REVIEW,
+                            "reason": reason_text,
+                            "reasons": reasons,
+                            "requests": cur.get("requests") or [],
+                        }, actor="system", now=t)
+                        updated = ST.get(cid) or cur
+                        s, b = TX.review_mail(updated.get("requests") or [], reply_url(cid), _zh(updated))
+                        _send(updated, s, b, [r["code"] for r in updated.get("requests") or []], now=t)
+                        _notify_admin(updated)
+            escalated += 1
+        elif silence >= C.REMINDER_AFTER_DAYS * 86400:
+            already = bool(c.get("reminder_sent")) or any(e.get("type") == "reminder_sent" for e in evs)
+            if not already:
+                if not dry_run:
+                    with _lock_for(cid):
+                        cur = ST.get(cid)
+                        if cur and not cur.get("reminder_sent"):
+                            app = cur.get("application") or {}
+                            name = (app.get("applicant_name") or "").split(" ")[0]
+                            s, b = TX.reminder_mail(cur.get("requests") or [], reply_url(cid), _zh(cur), name=name)
+                            _send(cur, s, b, ["reminder"], now=t)
+                            ST.append(cid, "reminder_sent", {"to": cur.get("user")}, actor="system", now=t)
+                reminded += 1
+
+    # 2. Daily digest to support@ (at most once per calendar day)
+    current_day = datetime.datetime.fromtimestamp(t, datetime.timezone.utc).strftime("%Y-%m-%d")
+    last_day = ST.get_last_digest_day()
+    waiting = waiting_cases(now=t)
+    if waiting and current_day != last_day:
+        if not dry_run:
+            from motor_ai_sim import auth_email as E
+            from motor_ai_sim import nda as N
+            to = N.admin_address()
+            if to and E.smtp_configured():
+                subject, body = TX.digest_mail(waiting, E.app_url() + "/?admin=verification", t)
+                try:
+                    E.send(to, subject, body, kind="verification-digest")
+                except Exception:
+                    pass
+            ST.set_last_digest_day(current_day, now=t)
+        digest_sent = 1
+
+    return {
+        "reminded": reminded,
+        "escalated": escalated,
+        "digest": digest_sent,
+        "waiting": len(waiting),
+    }

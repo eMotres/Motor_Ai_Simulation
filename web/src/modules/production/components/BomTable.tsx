@@ -127,6 +127,8 @@ interface BomTableProps {
   threads?: Thread[];
   proposals?: Proposal[];
   onPartChanged?: () => void;
+  /** 'table' = the BOM tab; 'graph' = the Assembly tab (graph + the same detail panel), owner 2026-10-17 */
+  view?: 'table' | 'graph';
 }
 
 const BomTable: React.FC<BomTableProps> = ({
@@ -138,6 +140,7 @@ const BomTable: React.FC<BomTableProps> = ({
   documents = [],
   threads = [],
   proposals = [],
+  view = 'table',
   onPartChanged,
 }) => {
   const { t } = useTranslation('production');
@@ -166,7 +169,6 @@ const BomTable: React.FC<BomTableProps> = ({
     }
   });
   const [selectedExtraId, setSelectedExtraId] = useState<string | null>(null);
-  const [showGraph, setShowGraph] = useState(true);
 
   const handleRowClick = (partId: string) => {
     const next = selectedPartId === partId ? null : partId;
@@ -460,7 +462,7 @@ const BomTable: React.FC<BomTableProps> = ({
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-      {/* Assembly Graph (React Flow) */}
+      {view === 'graph' && (
       <Box>
         <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
@@ -469,15 +471,8 @@ const BomTable: React.FC<BomTableProps> = ({
               {t('assembly.graphTitle', 'Assembly Graph')}
             </Typography>
           </Box>
-          <Button
-            size="small"
-            onClick={() => setShowGraph((prev) => !prev)}
-            sx={{ textTransform: 'none', fontSize: 12 }}
-          >
-            {showGraph ? t('assembly.collapseAll', 'Hide Graph') : t('assembly.expandAll', 'Show Graph')}
-          </Button>
         </Box>
-        {showGraph && (
+        {(
           <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
             <AssemblyGraph
               tree={assemblyTree}
@@ -490,7 +485,10 @@ const BomTable: React.FC<BomTableProps> = ({
           </Paper>
         )}
       </Box>
+      )}
 
+      {view === 'table' && (
+        <>
       {/* Add Part bar for editors */}
       {canEdit && <AddPart die={ctx.die} config={ctx.config} onDone={() => { onPartChanged?.(); ctx.reload(); }} />}
 
@@ -558,7 +556,8 @@ const BomTable: React.FC<BomTableProps> = ({
                     '&:hover': { bgcolor: isSelected ? 'rgba(59, 130, 246, 0.14) !important' : undefined },
                   }}
                 >
-                  <TableCell sx={{ color: 'var(--text-4)' }}>{i + 1}</TableCell>
+                  {/* materials (parts) and works (extras) differ by colour only; the columns are the same (owner 2026-10-17) */}
+                  <TableCell sx={{ color: 'var(--text-4)', borderLeft: '3px solid #3b82f6' }}>{i + 1}</TableCell>
                   <TableCell>
                     {p ? <PartName name={p.name} /> : <span style={{ color: 'var(--text-4)' }}>{t('bom.unknownPart')}</span>}
                   </TableCell>
@@ -694,19 +693,21 @@ const BomTable: React.FC<BomTableProps> = ({
                   hover
                   onClick={() => handleExtraRowClick(extra.id)}
                   sx={{
-                    bgcolor: isSelected ? 'rgba(59, 130, 246, 0.08)' : 'rgba(255, 255, 255, 0.01)',
+                    bgcolor: isSelected ? 'rgba(59, 130, 246, 0.08)' : 'rgba(245, 158, 11, 0.07)',
                     cursor: 'pointer',
-                    '&:hover': { bgcolor: isSelected ? 'rgba(59, 130, 246, 0.14) !important' : undefined },
+                    '&:hover': { bgcolor: isSelected ? 'rgba(59, 130, 246, 0.14) !important' : 'rgba(245, 158, 11, 0.12) !important' },
                   }}
                 >
-                  <TableCell sx={{ color: 'var(--text-4)' }}>{draftRows.length + extraIdx + 1}</TableCell>
+                  <TableCell sx={{ color: 'var(--text-4)', borderLeft: '3px solid #f59e0b' }}>{draftRows.length + extraIdx + 1}</TableCell>
                   <TableCell onClick={(e) => canEdit && e.stopPropagation()}>
                     {canEdit ? (
                       <TextField
                         size="small"
                         value={extraName}
                         onChange={(e) => handleExtraNameChange(extra.id, e.target.value)}
-                        sx={{ minWidth: 160, '& .MuiInputBase-input': { fontSize: 12.5, py: 0.25 } }}
+                        variant="standard"
+                        fullWidth
+                        sx={{ minWidth: 140, '& .MuiInputBase-input': { fontSize: 12.5, fontWeight: 600, py: 0.25 } }}
                       />
                     ) : (
                       <Typography sx={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-1)' }}>
@@ -714,7 +715,7 @@ const BomTable: React.FC<BomTableProps> = ({
                       </Typography>
                     )}
                   </TableCell>
-                  <TableCell sx={{ color: 'var(--text-3)' }}>{t('extras.kind', 'Work / Extra')}</TableCell>
+                  <TableCell sx={{ color: '#b45309', whiteSpace: 'nowrap' }}>{t('extras.kind', 'Work')}</TableCell>
                   <TableCell align="right" sx={{ color: 'var(--text-4)' }}>—</TableCell>
                   <TableCell align="right" sx={{ color: 'var(--text-4)' }}>—</TableCell>
                   <TableCell sx={{ color: 'var(--text-4)' }}>—</TableCell>
@@ -931,6 +932,8 @@ const BomTable: React.FC<BomTableProps> = ({
             </Typography>
           )}
         </Box>
+      )}
+        </>
       )}
 
       {/* Part Detail Panel (rendered below BOM table when a part row/node is clicked) */}

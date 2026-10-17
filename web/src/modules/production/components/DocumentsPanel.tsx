@@ -2,9 +2,9 @@
 import React, { useRef, useState } from 'react';
 import { Box, Button, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
-import BilingualText from './BilingualText';
+import { PartName } from './PartName';
 import HelpTip from '../../../components/common/HelpTip';
-import { downloadFile, productionApi } from '../api';
+import { downloadFile, openFileInNewWindow, productionApi } from '../api';
 import type { DocumentRec, Part, ProdCtx } from '../types';
 
 const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: ProdCtx }> = ({ documents, parts, ctx }) => {
@@ -31,7 +31,7 @@ const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: P
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
           <TextField select size="small" label={t('docs.forPart')} value={partId} onChange={(e) => setPartId(e.target.value)} sx={{ minWidth: 200 }}>
             <MenuItem value="">{t('docs.general')}</MenuItem>
-            {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name[p.name.src_lang]}</MenuItem>)}
+            {parts.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}</MenuItem>)}
           </TextField>
           <input ref={fileRef} type="file" multiple hidden onChange={(e) => void upload(e.target.files)} />
           <Button size="small" variant="contained" disabled={busy} sx={{ textTransform: 'none' }} onClick={() => fileRef.current?.click()}>{t('docs.upload')}</Button>
@@ -56,8 +56,21 @@ const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: P
                 const p = d.part_id ? byId.get(d.part_id) : undefined;
                 return (
                   <TableRow key={d.id} hover>
-                    <TableCell>{d.name}</TableCell>
-                    <TableCell>{p ? <BilingualText value={p.name} size={12.5} /> : <span style={{ color: 'var(--text-4)' }}>{t('docs.general')}</span>}</TableCell>
+                    <TableCell>
+                      {/* a click opens the document in a new window (pdf / pictures); other types download (owner 2026-10-17) */}
+                      <Box component="span" title={t('parts.openFull', 'Open full screen')}
+                        onClick={() => {
+                          const ext = (d.name.split('.').pop() || '').toLowerCase();
+                          const viewable = ['pdf', 'png', 'jpg', 'jpeg'].includes(ext);
+                          const run = viewable ? openFileInNewWindow(ctx.die, ctx.config, d.file_id, ext === 'jpeg' ? 'jpg' : ext)
+                                               : downloadFile(ctx.die, ctx.config, d.file_id, d.name);
+                          void run.catch((e) => setErr(t('failed', { reason: String(e) })));
+                        }}
+                        sx={{ cursor: 'pointer', color: '#2563eb', '&:hover': { textDecoration: 'underline' } }}>
+                        {d.name}
+                      </Box>
+                    </TableCell>
+                    <TableCell>{p ? <PartName name={p.name} size={12.5} /> : <span style={{ color: 'var(--text-4)' }}>{t('docs.general')}</span>}</TableCell>
                     <TableCell sx={{ color: 'var(--text-2)' }}>{d.uploader_email}</TableCell>
                     <TableCell sx={{ color: 'var(--text-3)' }}>{d.uploaded_at.slice(0, 10)}</TableCell>
                     <TableCell align="right">

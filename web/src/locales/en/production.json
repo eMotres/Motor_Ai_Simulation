@@ -18,8 +18,17 @@
     "required": "Sign the NDA to open this production.",
     "requiredTip": "Production data is open under the same NDA as the full 3-D model and STEP download."
   },
-  "status": { "active": "Active", "paused": "Paused", "archived": "Archived" },
-  "role": { "owner": "Owner", "engineer": "Engineer", "oem": "OEM producer", "admin": "Admin" },
+  "status": {
+    "active": "Active",
+    "paused": "Paused",
+    "archived": "Archived"
+  },
+  "role": {
+    "owner": "Owner",
+    "engineer": "Engineer",
+    "oem": "OEM producer",
+    "admin": "Admin"
+  },
   "col": {
     "motor": "Motor",
     "title": "Title",
@@ -37,7 +46,8 @@
     "documents": "Documents",
     "discussion": "Discussion",
     "proposals": "Proposals",
-    "changes": "Changes"
+    "changes": "Changes",
+    "assembly": "Assembly"
   },
   "bilingual": {
     "machine": "Machine translation, not verified",
@@ -50,14 +60,22 @@
     "showOriginal": "Original",
     "showTranslation": "Translation",
     "originalLang": "Original: {lang}",
-    "lang": { "en": "English", "zh": "Chinese" }
+    "lang": {
+      "en": "English",
+      "zh": "Chinese"
+    }
   },
   "parts": {
     "none": "No parts yet.",
     "add": "Add part",
     "name": "Name",
     "kind": "Kind",
-    "kindValue": { "made": "Made", "purchased": "Purchased", "consumable": "Consumable", "assembly": "Sub-assembly" },
+    "kindValue": {
+      "made": "Made",
+      "purchased": "Purchased",
+      "consumable": "Consumable",
+      "assembly": "Sub-assembly"
+    },
     "parentAssembly": "Sub-assembly",
     "noParent": "None (Motor root)",
     "qty": "Per motor",
@@ -77,7 +95,8 @@
     "noLinkedDocs": "No linked documents.",
     "threadsAndProposals": "Discussion & proposals",
     "noThreads": "No discussions for this part.",
-    "noProposals": "No proposals for this part."
+    "noProposals": "No proposals for this part.",
+    "openFull": "Open full screen"
   },
   "bom": {
     "none": "No BOM rows.",
@@ -122,7 +141,12 @@
   },
   "process": {
     "none": "No process sections.",
-    "kind": { "fits": "Fits", "assembly": "Assembly", "winding": "Winding", "tests": "Tests" },
+    "kind": {
+      "fits": "Fits",
+      "assembly": "Assembly",
+      "winding": "Winding",
+      "tests": "Tests"
+    },
     "add": "Add section",
     "title": "Section title",
     "body": "Text",
@@ -167,7 +191,12 @@
     "linked": "Revision {rev}",
     "by": "{email}",
     "tip": "A proposal never changes the design by itself; an owner or engineer decides.",
-    "status": { "open": "Open", "accepted": "Accepted", "rejected": "Rejected", "implemented": "Implemented" }
+    "status": {
+      "open": "Open",
+      "accepted": "Accepted",
+      "rejected": "Rejected",
+      "implemented": "Implemented"
+    }
   },
   "changes": {
     "none": "No revisions published.",
@@ -275,7 +304,9 @@
     "applyDefault": "Apply default assembly"
   },
   "extras": {
-    "kind": "Work / Extra"
+    "kind": "Work"
   },
-  "errors": { "load": "Could not load: {reason}" }
+  "errors": {
+    "load": "Could not load: {reason}"
+  }
 }

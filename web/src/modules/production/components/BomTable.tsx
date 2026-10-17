@@ -117,6 +117,9 @@ export const AddPart: React.FC<{ die: string; config: string; onDone: () => void
   );
 };
 
+/** height of the sticky tab menu of the production page (ProductionPage.tsx), the header sticks right below it */
+const STICKY_TABS_PX = 33;
+
 interface BomTableProps {
   rows: BomRow[];
   parts: Part[];
@@ -493,8 +496,11 @@ const BomTable: React.FC<BomTableProps> = ({
       {canEdit && <AddPart die={ctx.die} config={ctx.config} onDone={() => { onPartChanged?.(); ctx.reload(); }} />}
 
       {/* Main BOM Table */}
-      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden' }}>
-        <Table size="small" sx={{ '& td, & th': { borderColor: 'var(--line-soft)', fontSize: 12.5, py: 0.6 } }}>
+      {/* overflow 'clip' (not 'hidden'): keeps the rounded corners without becoming a scroll box, so the header can stick */}
+      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'clip' }}>
+        <Table size="small" sx={{ '& td, & th': { borderColor: 'var(--line-soft)', fontSize: 12.5, py: 0.6 },
+          // the column header stays visible under the fixed tab menu while the page scrolls (owner 2026-10-17)
+          '& thead th': { position: 'sticky', top: STICKY_TABS_PX, zIndex: 15, bgcolor: 'var(--panel)' } }}>
           <TableHead>
             <TableRow sx={{ bgcolor: 'var(--panel)' }}>
               <TableCell sx={{ width: 40 }}>#</TableCell>

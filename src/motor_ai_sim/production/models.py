@@ -8,6 +8,8 @@ import re
 import secrets
 from typing import Any, Optional
 
+from fastapi import HTTPException
+
 from motor_ai_sim.production import (
     LANGS, MEMBER_ROLES, EDIT_ROLES, PART_KINDS, PROPOSAL_STATUSES,
     SECTION_KINDS, TEXT_STATUSES,
@@ -553,3 +555,660 @@ def update_bilingual_text(obj: dict, ref: dict, lang: str, text: Optional[str]) 
         target["status"][lang] = "confirmed"
         return True
     return False
+
+
+# ── procurement & project schedule ──────────────────────────────────────────
+
+def validate_iso_date(val: Any, field_name: str = "date") -> Optional[str]:
+    """Validate ISO date YYYY-MM-DD or return None if empty. Reject invalid format or calendar date with 422."""
+    if val is None or str(val).strip() == "":
+        return None
+    s = str(val).strip()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", s):
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid date format for {field_name}: '{s}'. Expected YYYY-MM-DD.",
+        )
+    try:
+        datetime.date.fromisoformat(s)
+    except ValueError:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid calendar date for {field_name}: '{s}'.",
+        )
+    return s
+
+
+def normalize_receipt(raw: dict, ordered_on: Optional[str] = None) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    date_val = validate_iso_date(raw.get("date"), "receipt date")
+    if not date_val:
+        raise HTTPException(status_code=422, detail="Receipt date is required.")
+    if ordered_on and date_val < ordered_on:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Receipt date {date_val} cannot be before ordered date {ordered_on}.",
+        )
+    try:
+        qty = float(raw.get("qty", 0.0))
+        accepted = float(raw.get("accepted", 0.0))
+        rejected = float(raw.get("rejected", 0.0))
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=422, detail="Receipt quantities must be numbers.")
+    if qty < 0 or accepted < 0 or rejected < 0:
+        raise HTTPException(status_code=422, detail="Receipt quantities must be non-negative.")
+    if abs((accepted + rejected) - qty) > 1e-4:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Receipt inspection mismatch: accepted ({accepted}) + rejected ({rejected}) != qty ({qty}).",
+        )
+    return {
+        "date": date_val,
+        "qty": qty,
+        "accepted": accepted,
+        "rejected": rejected,
+        "inspector": str(raw.get("inspector") or "").strip(),
+        "note": str(raw.get("note") or "").strip(),
+    }
+
+
+def normalize_procurement_line(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    part_id = str(raw.get("part_id") or "").strip()
+    supplier = str(raw.get("supplier") or "").strip()
+    po_number = str(raw.get("po_number") or "").strip()
+    try:
+        lead_time_days = max(0, int(raw.get("lead_time_days") or 0))
+    except (ValueError, TypeError):
+        lead_time_days = 0
+
+    requested_on = validate_iso_date(raw.get("requested_on"), "requested_on")
+    confirmed_on = validate_iso_date(raw.get("confirmed_on"), "confirmed_on")
+    ordered_on = validate_iso_date(raw.get("ordered_on"), "ordered_on")
+    due_on = validate_iso_date(raw.get("due_on"), "due_on")
+    need_by = validate_iso_date(raw.get("need_by") or due_on, "need_by")
+
+    # qty_ordered
+    qty_ordered_raw = raw.get("qty_ordered")
+    qty_ordered: Optional[float] = None
+    if qty_ordered_raw is not None and str(qty_ordered_raw).strip() != "":
+        try:
+            qty_ordered = max(0.0, float(qty_ordered_raw))
+        except (ValueError, TypeError):
+            qty_ordered = None
+
+    # receipts
+    receipts_raw = raw.get("receipts") or []
+    if not isinstance(receipts_raw, list):
+        receipts_raw = []
+    receipts = [normalize_receipt(r, ordered_on) for r in receipts_raw if isinstance(r, dict)]
+
+    # direct received_on (optional legacy/simple)
+    received_on = validate_iso_date(raw.get("received_on"), "received_on")
+    if ordered_on and received_on and received_on < ordered_on:
+        raise HTTPException(status_code=422, detail=f"received_on {received_on} cannot be before ordered_on {ordered_on}.")
+
+    qty_received: Optional[float] = None
+    if raw.get("qty_received") is not None and not receipts:
+        try:
+            qty_received = max(0.0, float(raw["qty_received"]))
+        except (ValueError, TypeError):
+            qty_received = None
+
+    note = str(raw.get("note") or "").strip() or None
+    updated_by = str(raw.get("updated_by") or "").strip()
+    updated_at = str(raw.get("updated_at") or _now())
+
+    return {
+        "part_id": part_id,
+        "supplier": supplier,
+        "po_number": po_number,
+        "lead_time_days": lead_time_days,
+        "requested_on": requested_on,
+        "confirmed_on": confirmed_on,
+        "ordered_on": ordered_on,
+        "due_on": due_on,
+        "need_by": need_by,
+        "qty_ordered": qty_ordered,
+        "qty_received": qty_received,
+        "received_on": received_on,
+        "receipts": receipts,
+        "note": note,
+        "updated_by": updated_by,
+        "updated_at": updated_at,
+    }
+
+
+def enrich_procurement_row(
+    row: dict,
+    bom_row: Optional[dict] = None,
+    part: Optional[dict] = None,
+    order_quantity: int = 1,
+    default_need_by: Optional[str] = None,
+    today: Optional[str] = None,
+) -> dict:
+    if today:
+        today_iso = str(today).strip()
+    else:
+        today_iso = datetime.date.today().isoformat()
+
+    part_id = str(row.get("part_id") or (bom_row or {}).get("part_id") or "").strip()
+    supplier = str(row.get("supplier") or "").strip()
+    po_number = str(row.get("po_number") or "").strip()
+    lead_time_days = max(0, int(row.get("lead_time_days") or 0))
+
+    requested_on = row.get("requested_on") or None
+    confirmed_on = row.get("confirmed_on") or None
+    ordered_on = row.get("ordered_on") or None
+
+    need_by = row.get("need_by") or row.get("due_on") or default_need_by or None
+    due_on = row.get("due_on") or need_by
+
+    qty_per_motor = max(0, int((bom_row or {}).get("qty_per_motor") or (part or {}).get("qty_per_motor") or 1))
+    order_quantity = max(0, int(order_quantity or 0))
+
+    if row.get("qty_ordered") is not None and float(row["qty_ordered"]) > 0:
+        qty_needed = float(row["qty_ordered"])
+    else:
+        qty_needed = float(qty_per_motor * order_quantity)
+
+    receipts = list(row.get("receipts") or [])
+    accepted_sum = sum(float(r.get("accepted", 0.0)) for r in receipts)
+    rejected_sum = sum(float(r.get("rejected", 0.0)) for r in receipts)
+
+    if not receipts and row.get("qty_received") is not None:
+        received_qty = float(row["qty_received"])
+    else:
+        received_qty = accepted_sum
+    rejected_qty = rejected_sum
+
+    # order_by = need_by - lead_time_days
+    order_by: Optional[str] = None
+    if need_by:
+        try:
+            nb_date = datetime.date.fromisoformat(need_by)
+            order_by = (nb_date - datetime.timedelta(days=lead_time_days)).isoformat()
+        except ValueError:
+            order_by = None
+
+    # expected_arrival = confirmed_on or requested_on or (ordered_on + lead_time_days) or due_on
+    expected_arrival: Optional[str] = None
+    if confirmed_on:
+        expected_arrival = confirmed_on
+    elif requested_on:
+        expected_arrival = requested_on
+    elif ordered_on and lead_time_days >= 0:
+        try:
+            od_date = datetime.date.fromisoformat(ordered_on)
+            expected_arrival = (od_date + datetime.timedelta(days=lead_time_days)).isoformat()
+        except ValueError:
+            expected_arrival = None
+    elif due_on or need_by:
+        expected_arrival = due_on or need_by
+
+    # received_on: date of the receipt that completed the quantity
+    received_on: Optional[str] = None
+    if receipts:
+        running = 0.0
+        sorted_receipts = sorted(receipts, key=lambda r: str(r.get("date") or ""))
+        for r in sorted_receipts:
+            running += float(r.get("accepted", 0.0))
+            if running >= qty_needed and qty_needed > 0 and received_on is None:
+                received_on = str(r.get("date"))
+    elif row.get("received_on") and (received_qty >= qty_needed or qty_needed == 0):
+        received_on = str(row["received_on"])
+
+    # Computed Status Priority:
+    # 1. received: accepted >= needed
+    # 2. partial: some accepted
+    # 3. late: expected arrival < today, not received
+    # 4. at_risk: expected arrival > need_by
+    # 5. confirmed: supplier date set
+    # 6. ordered
+    # 7. to_order: not ordered and today >= order_by
+    # 8. not_ordered
+    is_fully_received = (qty_needed > 0 and received_qty >= qty_needed) or (qty_needed == 0 and received_qty > 0)
+    is_partially_received = (0 < received_qty < qty_needed)
+
+    is_late = bool(expected_arrival and expected_arrival < today_iso and not is_fully_received)
+    is_at_risk = bool(expected_arrival and need_by and expected_arrival > need_by and not is_fully_received)
+    is_to_order = bool(not ordered_on and order_by and today_iso >= order_by)
+
+    if is_fully_received:
+        status = "received"
+    elif is_partially_received:
+        status = "partial"
+    elif is_late:
+        status = "late"
+    elif is_at_risk:
+        status = "at_risk"
+    elif bool(confirmed_on):
+        status = "confirmed"
+    elif bool(ordered_on):
+        status = "ordered"
+    elif is_to_order:
+        status = "to_order"
+    else:
+        status = "not_ordered"
+
+    return {
+        "part_id": part_id,
+        "supplier": supplier,
+        "po_number": po_number,
+        "lead_time_days": lead_time_days,
+        "requested_on": requested_on,
+        "confirmed_on": confirmed_on,
+        "ordered_on": ordered_on,
+        "due_on": due_on,
+        "need_by": need_by,
+        "order_by": order_by,
+        "expected_arrival": expected_arrival,
+        "qty_ordered": row.get("qty_ordered"),
+        "qty_needed": qty_needed,
+        "qty_per_motor": qty_per_motor,
+        "received_qty": received_qty,
+        "rejected_qty": rejected_qty,
+        "received_on": received_on,
+        "receipts": receipts,
+        "status": status,
+        "is_late": is_late,
+        "is_at_risk": is_at_risk,
+        "is_to_order": is_to_order,
+        "has_quality_issue": (rejected_qty > 0),
+        "note": row.get("note"),
+        "updated_by": row.get("updated_by"),
+        "updated_at": row.get("updated_at"),
+        "part_name": part.get("name") if part else None,
+        "part_kind": part.get("kind") if part else None,
+        "material": part.get("material") if part else None,
+        "spec": part.get("spec") if part else None,
+        "drawing_files": part.get("drawing_files") if part else [],
+    }
+
+
+def compute_readiness_summary(rows: list[dict], assembly_planned_start: Optional[str] = None) -> dict:
+    parts_total_count = len(rows)
+    parts_received_count = sum(1 for r in rows if r.get("status") == "received")
+    received_pct = round((parts_received_count / parts_total_count * 100), 1) if parts_total_count else 0.0
+
+    qty_needed_total = sum(float(r.get("qty_needed", 0.0)) for r in rows)
+    qty_received_total = sum(float(r.get("received_qty", 0.0)) for r in rows)
+    qty_received_pct = round((qty_received_total / qty_needed_total * 100), 1) if qty_needed_total else 0.0
+
+    late_count = sum(1 for r in rows if r.get("status") == "late" or r.get("is_late"))
+    at_risk_count = sum(1 for r in rows if r.get("status") == "at_risk" or r.get("is_at_risk"))
+    to_order_count = sum(1 for r in rows if r.get("status") == "to_order" or r.get("is_to_order"))
+    quality_issue_count = sum(1 for r in rows if r.get("has_quality_issue"))
+
+    ready_for_assembly = bool(parts_total_count > 0 and parts_received_count == parts_total_count)
+
+    unreceived = [r for r in rows if r.get("status") != "received"]
+    expected_dates = [r.get("expected_arrival") for r in unreceived if r.get("expected_arrival")]
+    latest_expected_arrival = max(expected_dates) if expected_dates else None
+
+    assembly_warnings = []
+    if assembly_planned_start:
+        for r in unreceived:
+            exp = r.get("expected_arrival")
+            if exp and exp > assembly_planned_start:
+                pid = r.get("part_id", "")
+                pname = (r.get("part_name", {}) or {}).get("en") or pid
+                assembly_warnings.append({
+                    "part_id": pid,
+                    "expected_arrival": exp,
+                    "assembly_planned_start": assembly_planned_start,
+                    "message": f"Assembly at risk: {pname} expected {exp}, need by {assembly_planned_start}",
+                })
+
+    if ready_for_assembly:
+        status_message = "Ready for assembly"
+    elif late_count > 0:
+        status_message = "Late"
+    elif latest_expected_arrival:
+        status_message = f"Expected {latest_expected_arrival}"
+    else:
+        status_message = "In progress"
+
+    return {
+        "parts_received_count": parts_received_count,
+        "parts_total_count": parts_total_count,
+        "received_pct": received_pct,
+        "qty_received_total": round(qty_received_total, 2),
+        "qty_needed_total": round(qty_needed_total, 2),
+        "qty_received_pct": qty_received_pct,
+        "late_count": late_count,
+        "at_risk_count": at_risk_count,
+        "to_order_count": to_order_count,
+        "quality_issue_count": quality_issue_count,
+        "ready_for_assembly": ready_for_assembly,
+        "latest_expected_arrival": latest_expected_arrival,
+        "status_message": status_message,
+        "assembly_warnings": assembly_warnings,
+    }
+
+
+DEFAULT_SCHEDULE_PHASES = [
+    {
+        "id": "requirements",
+        "key": "requirements",
+        "title": {"en": "Requirements", "zh": "需求定义"},
+        "planned_start": "",
+        "planned_end": "",
+        "actual_start": "",
+        "actual_end": "",
+        "status": "not_started",
+        "depends_on": [],
+        "percent_complete": 0,
+        "owner_role": "us",
+        "note": "",
+    },
+    {
+        "id": "design",
+        "key": "design",
+        "title": {"en": "Design", "zh": "工程设计"},
+        "planned_start": "",
+        "planned_end": "",
+        "actual_start": "",
+        "actual_end": "",
+        "status": "not_started",
+        "depends_on": ["requirements"],
+        "percent_complete": 0,
+        "owner_role": "us",
+        "note": "",
+    },
+    {
+        "id": "ordering",
+        "key": "ordering",
+        "title": {"en": "Ordering", "zh": "物料采购"},
+        "planned_start": "",
+        "planned_end": "",
+        "actual_start": "",
+        "actual_end": "",
+        "status": "not_started",
+        "depends_on": ["design"],
+        "percent_complete": 0,
+        "owner_role": "factory",
+        "note": "",
+    },
+    {
+        "id": "assembly",
+        "key": "assembly",
+        "title": {"en": "Assembly", "zh": "样机装配"},
+        "planned_start": "",
+        "planned_end": "",
+        "actual_start": "",
+        "actual_end": "",
+        "status": "not_started",
+        "depends_on": ["ordering"],
+        "percent_complete": 0,
+        "owner_role": "factory",
+        "note": "",
+    },
+    {
+        "id": "testing",
+        "key": "testing",
+        "title": {"en": "Testing", "zh": "性能测试"},
+        "planned_start": "",
+        "planned_end": "",
+        "actual_start": "",
+        "actual_end": "",
+        "status": "not_started",
+        "depends_on": ["assembly"],
+        "percent_complete": 0,
+        "owner_role": "us",
+        "note": "",
+    },
+    {
+        "id": "delivery",
+        "key": "delivery",
+        "title": {"en": "Delivery", "zh": "首批交付"},
+        "planned_start": "",
+        "planned_end": "",
+        "actual_start": "",
+        "actual_end": "",
+        "status": "not_started",
+        "depends_on": ["testing"],
+        "percent_complete": 0,
+        "owner_role": "factory",
+        "note": "",
+    },
+]
+
+DEFAULT_MILESTONES = [
+    {"id": "ms_design_freeze", "title": {"en": "Design freeze", "zh": "设计冻结"}, "date": "", "done": False, "rule": "design_freeze"},
+    {"id": "ms_all_pos_placed", "title": {"en": "All POs placed", "zh": "采购订单已全下"}, "date": "", "done": False, "rule": "all_pos_placed"},
+    {"id": "ms_all_parts_received", "title": {"en": "All parts received", "zh": "全部物料已到齐"}, "date": "", "done": False, "rule": "all_parts_received"},
+    {"id": "ms_first_article_approved", "title": {"en": "First article approved", "zh": "首件样品确认"}, "date": "", "done": False, "rule": "first_article_approved"},
+    {"id": "ms_tests_passed", "title": {"en": "Tests passed", "zh": "测试通过"}, "date": "", "done": False, "rule": "tests_passed"},
+    {"id": "ms_shipped", "title": {"en": "Shipped", "zh": "样机已发货"}, "date": "", "done": False, "rule": "shipped"},
+]
+
+
+def normalize_schedule_phase(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    pid = str(raw.get("id") or raw.get("key") or _new_id("ph")).strip()
+    key = str(raw.get("key") or pid).strip()
+    title = raw.get("title")
+    if isinstance(title, dict):
+        title = {"en": str(title.get("en") or "").strip(), "zh": str(title.get("zh") or "").strip()}
+    else:
+        title = {"en": str(title or ""), "zh": str(title or "")}
+
+    planned_start = validate_iso_date(raw.get("planned_start"), f"phase {pid} planned_start") or ""
+    planned_end = validate_iso_date(raw.get("planned_end"), f"phase {pid} planned_end") or ""
+    actual_start = validate_iso_date(raw.get("actual_start"), f"phase {pid} actual_start") or ""
+    actual_end = validate_iso_date(raw.get("actual_end"), f"phase {pid} actual_end") or ""
+
+    status = str(raw.get("status") or "not_started").strip()
+    if status not in ("not_started", "in_progress", "done", "blocked"):
+        status = "not_started"
+
+    depends_on = raw.get("depends_on") or []
+    if isinstance(depends_on, list):
+        depends_on = [str(d).strip() for d in depends_on if str(d).strip()]
+    else:
+        depends_on = []
+
+    try:
+        percent_complete = max(0, min(100, int(raw.get("percent_complete") or 0)))
+    except (ValueError, TypeError):
+        percent_complete = 0
+
+    owner_role = str(raw.get("owner_role") or "us").strip()
+    if owner_role not in ("us", "factory"):
+        owner_role = "us"
+
+    note = str(raw.get("note") or "").strip()
+
+    return {
+        "id": pid,
+        "key": key,
+        "title": title,
+        "planned_start": planned_start,
+        "planned_end": planned_end,
+        "actual_start": actual_start,
+        "actual_end": actual_end,
+        "status": status,
+        "depends_on": depends_on,
+        "percent_complete": percent_complete,
+        "owner_role": owner_role,
+        "note": note,
+    }
+
+
+def normalize_milestone(raw: dict) -> dict:
+    if not isinstance(raw, dict):
+        raw = {}
+    mid = str(raw.get("id") or _new_id("ms")).strip()
+    title = raw.get("title")
+    if isinstance(title, dict):
+        title = {"en": str(title.get("en") or "").strip(), "zh": str(title.get("zh") or "").strip()}
+    else:
+        title = {"en": str(title or ""), "zh": str(title or "")}
+    date_val = validate_iso_date(raw.get("date"), f"milestone {mid} date") or ""
+    done = bool(raw.get("done", False))
+    rule = str(raw.get("rule") or "").strip() or None
+    return {
+        "id": mid,
+        "title": title,
+        "date": date_val,
+        "done": done,
+        "rule": rule,
+    }
+
+
+def detect_cycle(phases: list[dict]) -> None:
+    """Detect cycles in depends_on DAG. Reject with 422 if cycle found."""
+    adj: dict[str, list[str]] = {p["id"]: list(p.get("depends_on", [])) for p in phases}
+    visited: dict[str, int] = {}  # 0: unvisited, 1: visiting (in stack), 2: visited
+
+    def dfs(node: str, stack: list[str]) -> None:
+        visited[node] = 1
+        for neighbor in adj.get(node, []):
+            if neighbor in adj:
+                if visited.get(neighbor) == 1:
+                    cycle_path = " -> ".join(stack + [neighbor])
+                    raise HTTPException(
+                        status_code=422,
+                        detail=f"Dependency cycle detected in schedule: {cycle_path}.",
+                    )
+                if visited.get(neighbor, 0) == 0:
+                    dfs(neighbor, stack + [neighbor])
+        visited[node] = 2
+
+    for node in adj:
+        if visited.get(node, 0) == 0:
+            dfs(node, [node])
+
+
+def compute_critical_path_and_slack(phases: list[dict]) -> list[dict]:
+    """Compute early start, early finish, late start, late finish, slack, and critical path."""
+    if not phases:
+        return []
+    detect_cycle(phases)
+
+    durations: dict[str, int] = {}
+    phase_map: dict[str, dict] = {}
+    for p in phases:
+        pid = p["id"]
+        phase_map[pid] = dict(p)
+        start = p.get("planned_start")
+        end = p.get("planned_end")
+        if start and end:
+            try:
+                ds = datetime.date.fromisoformat(start)
+                de = datetime.date.fromisoformat(end)
+                durations[pid] = max(1, (de - ds).days + 1)
+            except ValueError:
+                durations[pid] = 1
+        else:
+            durations[pid] = 1
+
+    # Topological sort
+    in_degree = {p["id"]: 0 for p in phases}
+    children: dict[str, list[str]] = {p["id"]: [] for p in phases}
+    for p in phases:
+        for dep in p.get("depends_on", []):
+            if dep in phase_map:
+                in_degree[p["id"]] += 1
+                children[dep].append(p["id"])
+
+    queue = [pid for pid, deg in in_degree.items() if deg == 0]
+    topo_order = []
+    while queue:
+        curr = queue.pop(0)
+        topo_order.append(curr)
+        for child in children.get(curr, []):
+            in_degree[child] -= 1
+            if in_degree[child] == 0:
+                queue.append(child)
+
+    # Forward pass: early start (ES) and early finish (EF)
+    es: dict[str, int] = {p["id"]: 0 for p in phases}
+    ef: dict[str, int] = {}
+    for pid in topo_order:
+        deps = [d for d in phase_map[pid].get("depends_on", []) if d in ef]
+        es[pid] = max([ef[d] for d in deps], default=0)
+        ef[pid] = es[pid] + durations[pid]
+
+    max_project_duration = max(ef.values(), default=0)
+
+    # Backward pass: late finish (LF) and late start (LS)
+    lf: dict[str, int] = {p["id"]: max_project_duration for p in phases}
+    ls: dict[str, int] = {}
+    for pid in reversed(topo_order):
+        succs = [c for c in children.get(pid, []) if c in ls]
+        if succs:
+            lf[pid] = min(ls[c] for c in succs)
+        else:
+            lf[pid] = max_project_duration
+        ls[pid] = lf[pid] - durations[pid]
+
+    # Slack and critical path
+    out = []
+    for p in phases:
+        pid = p["id"]
+        slack = max(0, lf.get(pid, 0) - ef.get(pid, 0))
+        is_crit = (slack == 0)
+        enriched = dict(phase_map[pid])
+        enriched["duration_days"] = durations[pid]
+        enriched["early_start_day"] = es.get(pid, 0)
+        enriched["early_finish_day"] = ef.get(pid, 0)
+        enriched["slack_days"] = slack
+        enriched["is_critical"] = is_crit
+        out.append(enriched)
+    return out
+
+
+def derive_ordering_phase(
+    phases: list[dict], procurement_rows: list[dict], ready_for_assembly: bool
+) -> list[dict]:
+    """Derive Ordering phase actual dates and status from procurement rows if not explicitly set."""
+    ordered_dates = [r.get("ordered_on") for r in procurement_rows if r.get("ordered_on")]
+    received_dates = [r.get("received_on") for r in procurement_rows if r.get("received_on")]
+
+    for p in phases:
+        if p.get("key") == "ordering" or p.get("id") == "ordering":
+            if not p.get("actual_start") and ordered_dates:
+                p["actual_start"] = min(ordered_dates)
+            if not p.get("actual_end") and ready_for_assembly and received_dates:
+                p["actual_end"] = max(received_dates)
+            if p.get("status") in ("not_started", ""):
+                if ready_for_assembly:
+                    p["status"] = "done"
+                    p["percent_complete"] = 100
+                elif ordered_dates:
+                    p["status"] = "in_progress"
+    return phases
+
+
+def update_auto_milestones(
+    milestones: list[dict],
+    phases: list[dict],
+    procurement_rows: list[dict],
+    ready_for_assembly: bool,
+) -> list[dict]:
+    phase_status_map = {p.get("key") or p.get("id"): p.get("status") for p in phases}
+    for m in milestones:
+        rule = m.get("rule")
+        done = bool(m.get("done", False))
+        if rule == "all_pos_placed":
+            if procurement_rows and all(bool(r.get("ordered_on")) for r in procurement_rows):
+                done = True
+        elif rule == "all_parts_received":
+            if ready_for_assembly:
+                done = True
+        elif rule == "design_freeze":
+            if phase_status_map.get("design") == "done":
+                done = True
+        elif rule == "tests_passed":
+            if phase_status_map.get("testing") == "done":
+                done = True
+        elif rule == "shipped":
+            if phase_status_map.get("delivery") == "done":
+                done = True
+        m["done"] = done
+    return milestones

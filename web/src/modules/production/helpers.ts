@@ -205,3 +205,134 @@ export function errorInfo(status: number, body: unknown): { code: string | null;
 
 /** Safe file name for a download. */
 export const safeFileName = (name: string): string => name.replace(/[\\/:*?"<>|]+/g, '_').trim() || 'file';
+
+// -- Procurement & Timeline ------------------------------------------------------------------------------------------------
+
+export const canEditProcurement = (role: CallerRole): boolean =>
+  role === 'owner' || role === 'engineer' || role === 'admin' || role === 'oem';
+
+export const canEditSchedule = (role: CallerRole): boolean =>
+  role === 'owner' || role === 'engineer' || role === 'admin';
+
+export const canEditScheduleOem = (role: CallerRole): boolean =>
+  role === 'oem' || canEditSchedule(role);
+
+export function getStatusColor(status: string | undefined): { bg: string; text: string; border: string } {
+  switch (status) {
+    case 'received':
+      return { bg: 'rgba(16, 185, 129, 0.15)', text: '#10b981', border: 'rgba(16, 185, 129, 0.4)' };
+    case 'partial':
+      return { bg: 'rgba(59, 130, 246, 0.15)', text: '#3b82f6', border: 'rgba(59, 130, 246, 0.4)' };
+    case 'late':
+      return { bg: 'rgba(239, 68, 68, 0.15)', text: '#ef4444', border: 'rgba(239, 68, 68, 0.4)' };
+    case 'at_risk':
+      return { bg: 'rgba(245, 158, 11, 0.15)', text: '#f59e0b', border: 'rgba(245, 158, 11, 0.4)' };
+    case 'confirmed':
+      return { bg: 'rgba(139, 92, 246, 0.15)', text: '#8b5cf6', border: 'rgba(139, 92, 246, 0.4)' };
+    case 'ordered':
+      return { bg: 'rgba(6, 182, 212, 0.15)', text: '#06b6d4', border: 'rgba(6, 182, 212, 0.4)' };
+    case 'to_order':
+      return { bg: 'rgba(249, 115, 22, 0.15)', text: '#f97316', border: 'rgba(249, 115, 22, 0.4)' };
+    case 'not_ordered':
+    default:
+      return { bg: 'rgba(107, 114, 128, 0.15)', text: '#9ca3af', border: 'rgba(107, 114, 128, 0.4)' };
+  }
+}
+
+/** Number of days between two ISO dates (YYYY-MM-DD). */
+export function daysBetween(d1: string, d2: string): number {
+  if (!d1 || !d2) return 0;
+  const t1 = new Date(d1).getTime();
+  const t2 = new Date(d2).getTime();
+  if (isNaN(t1) || isNaN(t2)) return 0;
+  return Math.round((t2 - t1) / (1000 * 60 * 60 * 24));
+}
+
+/** Offset in px of a date relative to minDate. */
+export function dateToPx(dateStr: string, minDate: string, pxPerDay: number): number {
+  const d = daysBetween(minDate, dateStr);
+  return Math.max(0, d * pxPerDay);
+}
+
+/** Width in px for a date span [start, end]. */
+export function dateSpanToPx(startDate: string, endDate: string, pxPerDay: number): number {
+  const d = Math.max(1, daysBetween(startDate, endDate) + 1);
+  return d * pxPerDay;
+}
+
+/** Format YYYY-MM-DD to short display e.g. "Oct 12" / "10-12". */
+export function formatShortDate(d: string | null | undefined): string {
+  if (!d) return '—';
+  const parts = d.split('-');
+  if (parts.length === 3) {
+    return `${parts[1]}-${parts[2]}`;
+  }
+  return d;
+}
+
+/** Compute procurement line status client-side matching the ERP priority order. */
+export function computeClientProcurementStatus(line: {
+  qty_ordered?: number | null;
+  qty_needed?: number;
+  qty_per_motor?: number;
+  receipts?: Array<{ accepted: number; rejected: number; date: string }>;
+  received_qty?: number;
+  confirmed_on?: string | null;
+  requested_on?: string | null;
+  ordered_on?: string | null;
+  need_by?: string | null;
+  due_on?: string | null;
+  lead_time_days?: number;
+  today?: string;
+}, orderQuantity = 1): string {
+  const today = line.today ?? new Date().toISOString().slice(0, 10);
+  const qtyNeeded = line.qty_ordered && line.qty_ordered > 0
+    ? line.qty_ordered
+    : (line.qty_needed ?? (line.qty_per_motor ?? 1) * orderQuantity);
+
+  const receipts = line.receipts ?? [];
+  const acceptedSum = receipts.reduce((sum, r) => sum + (Number(r.accepted) || 0), 0);
+  const receivedQty = receipts.length > 0 ? acceptedSum : (Number(line.received_qty) || 0);
+
+  const needBy = line.need_by || line.due_on;
+  const leadTime = Number(line.lead_time_days) || 0;
+
+  let orderBy: string | null = null;
+  if (needBy) {
+    const d = new Date(needBy);
+    if (!isNaN(d.getTime())) {
+      d.setDate(d.getDate() - leadTime);
+      orderBy = d.toISOString().slice(0, 10);
+    }
+  }
+
+  let expectedArrival: string | null = null;
+  if (line.confirmed_on) {
+    expectedArrival = line.confirmed_on;
+  } else if (line.requested_on) {
+    expectedArrival = line.requested_on;
+  } else if (line.ordered_on && leadTime >= 0) {
+    const d = new Date(line.ordered_on);
+    if (!isNaN(d.getTime())) {
+      d.setDate(d.getDate() + leadTime);
+      expectedArrival = d.toISOString().slice(0, 10);
+    }
+  } else if (line.due_on || line.need_by) {
+    expectedArrival = line.due_on || line.need_by || null;
+  }
+
+  const isFullyReceived = (qtyNeeded > 0 && receivedQty >= qtyNeeded) || (qtyNeeded === 0 && receivedQty > 0);
+  const isPartiallyReceived = 0 < receivedQty && receivedQty < qtyNeeded;
+  const isLate = Boolean(expectedArrival && expectedArrival < today && !isFullyReceived);
+  const isAtRisk = Boolean(expectedArrival && needBy && expectedArrival > needBy && !isFullyReceived);
+  const isToOrder = Boolean(!line.ordered_on && orderBy && today >= orderBy);
+
+  if (isFullyReceived) return 'received';
+  if (isPartiallyReceived) return 'partial';
+  if (isLate) return 'late';
+  if (isAtRisk) return 'at_risk';
+  if (line.confirmed_on) return 'confirmed';
+  if (line.ordered_on) return 'ordered';
+  if (isToOrder) return 'to_order';
+  return 'not_ordered';
+}

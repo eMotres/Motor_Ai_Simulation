@@ -5,7 +5,7 @@
  * drawing previews + downloads, optional STEP, linked docs, discussions/proposals, and editor controls.
  * Deep link ?part=<id> is supported and preserved.
  */
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Box,
@@ -33,7 +33,16 @@ import PartName from './PartName';
 import { useContentLang } from './BilingualText';
 import { PartDetailPanel } from './PartCard';
 import { productionApi } from '../api';
-import { calcCostSummary, canEditCosts, canViewCosts, emptyBilingual, orderTotal, withQty } from '../helpers';
+import {
+  calcCostSummary,
+  canEditCosts,
+  canViewCosts,
+  emptyBilingual,
+  formatShortDate,
+  getStatusColor,
+  orderTotal,
+  withQty,
+} from '../helpers';
 import type {
   Bilingual,
   BomRow,
@@ -42,6 +51,8 @@ import type {
   DocumentRec,
   ExtraCost,
   Part,
+  ProcurementData,
+  ProcurementLine,
   ProdCtx,
   Proposal,
   Thread,
@@ -200,6 +211,32 @@ const BomTable: React.FC<BomTableProps> = ({
     return () => { live = false; };
   }, [ctx.die, ctx.config, hasCostAccess, rows]);
 
+  const [procData, setProcData] = useState<ProcurementData | null>(null);
+
+  const loadProcurement = useCallback(() => {
+    let live = true;
+    productionApi.procurement(ctx.die, ctx.config)
+      .then((data) => {
+        if (live) setProcData(data);
+      })
+      .catch(() => {});
+    return () => { live = false; };
+  }, [ctx.die, ctx.config]);
+
+  useEffect(() => {
+    return loadProcurement();
+  }, [loadProcurement]);
+
+  const procMap = useMemo(() => {
+    const map = new Map<string, ProcurementLine>();
+    if (procData?.rows) {
+      for (const line of procData.rows) {
+        map.set(line.part_id, line);
+      }
+    }
+    return map;
+  }, [procData]);
+
   // Merge cost info by part_id for fast lookup
   const costMap = useMemo(() => new Map(costRows.map((r) => [r.part_id, r])), [costRows]);
 
@@ -348,6 +385,10 @@ const BomTable: React.FC<BomTableProps> = ({
               <TableCell>{t('parts.kind')}</TableCell>
               <TableCell align="right">{t('parts.qty')}</TableCell>
               <TableCell align="right">{t('col.orderQty')}</TableCell>
+              <TableCell sx={{ minWidth: 90 }}>{t('procurement.colStatus', 'Status')}</TableCell>
+              <TableCell sx={{ minWidth: 70 }}>{t('procurement.colOrdered', 'Ordered')}</TableCell>
+              <TableCell sx={{ minWidth: 70 }}>{t('procurement.colDue', 'Due')}</TableCell>
+              <TableCell align="right" sx={{ minWidth: 75 }}>{t('procurement.colReceived', 'Received')}</TableCell>
               {hasCostAccess && (
                 <>
                   <TableCell align="right">
@@ -369,6 +410,15 @@ const BomTable: React.FC<BomTableProps> = ({
             {draftRows.map((r, i) => {
               const p = byId.get(r.part_id);
               const crow = costMap.get(r.part_id);
+              const proc = procMap.get(r.part_id) || r.procurement;
+              const pStatus = proc?.status || 'not_ordered';
+              const statusColors = getStatusColor(pStatus);
+              const orderedDisplay = formatShortDate(proc?.ordered_on);
+              const dueDisplay = formatShortDate(proc?.need_by || proc?.due_on);
+              const receivedDisplay = proc
+                ? `${proc.received_qty ?? 0} / ${proc.qty_needed ?? ((p?.qty_per_motor ?? r.qty_per_motor ?? 1) * orderQuantity)}`
+                : '—';
+
               const unitPrice = crow?.unit_price !== undefined ? crow.unit_price : (r.unit_price ?? null);
               const currency = crow?.currency || r.currency || 'CNY';
               const note = crow?.note !== undefined ? crow.note : (r.note || '');
@@ -407,6 +457,36 @@ const BomTable: React.FC<BomTableProps> = ({
                     )}
                   </TableCell>
                   <TableCell align="right">{canEdit ? orderTotal(r.qty_per_motor, orderQuantity) : r.order_total}</TableCell>
+
+                  {/* Procurement Columns */}
+                  <TableCell>
+                    <Box
+                      component="span"
+                      sx={{
+                        display: 'inline-block',
+                        px: 1,
+                        py: 0.2,
+                        borderRadius: 1,
+                        fontSize: 10.5,
+                        fontWeight: 600,
+                        bgcolor: statusColors.bg,
+                        color: statusColors.text,
+                        border: `1px solid ${statusColors.border}`,
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {t(`procurement.status.${pStatus}`, pStatus.replace('_', ' '))}
+                    </Box>
+                  </TableCell>
+                  <TableCell sx={{ color: 'var(--text-2)', whiteSpace: 'nowrap', fontSize: 12 }}>
+                    {orderedDisplay}
+                  </TableCell>
+                  <TableCell sx={{ color: 'var(--text-2)', whiteSpace: 'nowrap', fontSize: 12 }}>
+                    {dueDisplay}
+                  </TableCell>
+                  <TableCell align="right" sx={{ color: 'var(--text-1)', whiteSpace: 'nowrap', fontFamily: 'monospace', fontSize: 12 }}>
+                    {receivedDisplay}
+                  </TableCell>
 
                   {/* Cost Columns */}
                   {hasCostAccess && (
@@ -699,6 +779,7 @@ const BomTable: React.FC<BomTableProps> = ({
             ctx={ctx}
             orderQuantity={orderQuantity}
             costRow={costMap.get(selectedPart.id)}
+            procurementLine={procMap.get(selectedPart.id)}
             documents={documents}
             threads={threads}
             proposals={proposals}
@@ -707,8 +788,13 @@ const BomTable: React.FC<BomTableProps> = ({
               if (cur) handleCurrencyChange(partId, cur);
               if (nt !== undefined) handleNoteChange(partId, nt || '');
             }}
+            onProcurementSaved={() => {
+              loadProcurement();
+              ctx.reload();
+            }}
             onChanged={() => {
               onPartChanged?.();
+              loadProcurement();
               ctx.reload();
             }}
             onClose={() => handleRowClick(selectedPart.id)}

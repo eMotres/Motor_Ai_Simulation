@@ -3,7 +3,7 @@
 import { errorInfo, safeFileName, unwrapList } from './helpers';
 import type {
   Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
-  Thread, TranslationRef, Lang,
+  Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -86,6 +86,18 @@ export const productionApi = {
   costs: (die: string, config: string) => call<CostsData>('GET', `${base(die, config)}/costs`),
   saveCosts: (die: string, config: string, data: { rows: CostRow[]; extras: ExtraCost[]; margin_pct: number }) =>
     call<CostsData>('PUT', `${base(die, config)}/costs`, data),
+
+  procurement: (die: string, config: string) => call<ProcurementData>('GET', `${base(die, config)}/procurement`),
+  saveProcurementLine: (die: string, config: string, partId: string, line: Partial<ProcurementLine>) =>
+    call<{ row: ProcurementLine }>('PUT', `${base(die, config)}/procurement/${enc(partId)}`, line),
+
+  schedule: (die: string, config: string) => call<ScheduleData>('GET', `${base(die, config)}/schedule`),
+  saveSchedule: (die: string, config: string, data: Partial<ScheduleData>) =>
+    call<ScheduleData>('PUT', `${base(die, config)}/schedule`, data),
+  freezeBaseline: (die: string, config: string) =>
+    call<{ baseline: ScheduleBaseline }>('POST', `${base(die, config)}/schedule/baseline`, {}),
+
+  timeline: (die: string) => call<TimelineData>('GET', `/api/production/${enc(die)}/timeline`),
 
   process: async (die: string, config: string) => unwrapList<ProcessSection>(await call('GET', `${base(die, config)}/process`), 'sections'),
   saveProcess: (die: string, config: string, sections: ProcessSection[]) =>

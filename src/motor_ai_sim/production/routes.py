@@ -13,11 +13,12 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response, StreamingResponse
 
 from motor_ai_sim import auth, model3d, users
-from motor_ai_sim.production import store, models
+from motor_ai_sim.production import store, models, access
 from motor_ai_sim.production.access import (
     require_member, require_member_with_full_view,
     require_editor, require_editor_with_full_view,
     require_proposer_or_editor,
+    require_procurement_editor, require_schedule_editor_or_oem,
 )
 
 log = logging.getLogger(__name__)
@@ -72,6 +73,140 @@ def list_productions(request: Request):
     if user is None:
         raise HTTPException(status_code=401, detail="Sign in required.")
     return {"productions": _production_list_for(_email(user), _is_admin(user))}
+
+
+# ── procurement & project schedule helpers ───────────────────────────────────
+
+def _get_procurement_data(die: str, config: str, production: dict, today: Optional[str] = None) -> tuple[list[dict], dict]:
+    bom = store.load_file(die, config, "bom.json")
+    bom_rows = bom.get("rows", [])
+    parts_data = store.load_file(die, config, "parts.json")
+    parts = parts_data.get("parts", [])
+    parts_map = {p["id"]: p for p in parts if isinstance(p, dict) and p.get("id")}
+
+    proc_data = store.load_file(die, config, "procurement.json")
+    proc_rows = proc_data.get("rows", [])
+    proc_map = {r["part_id"]: r for r in proc_rows if isinstance(r, dict) and r.get("part_id")}
+
+    sched_data = store.load_file(die, config, "schedule.json")
+    phases = sched_data.get("phases", [])
+    assembly_phase = next((p for p in phases if p.get("key") == "assembly" or p.get("id") == "assembly"), None)
+    assembly_planned_start = assembly_phase.get("planned_start") if assembly_phase else None
+
+    order_qty = max(0, int(production.get("order_quantity") or 0))
+
+    # We want a row for every part in BOM (or parts list if BOM is empty)
+    target_part_ids = []
+    if bom_rows:
+        for br in bom_rows:
+            pid = str(br.get("part_id") or "")
+            if pid and pid not in target_part_ids:
+                target_part_ids.append(pid)
+    else:
+        for p in parts:
+            pid = str(p.get("id") or "")
+            if pid and pid not in target_part_ids:
+                target_part_ids.append(pid)
+
+    enriched_rows = []
+    for pid in target_part_ids:
+        bom_row = next((br for br in bom_rows if br.get("part_id") == pid), None)
+        part = parts_map.get(pid)
+        raw_row = proc_map.get(pid, {"part_id": pid})
+        enriched = models.enrich_procurement_row(
+            raw_row,
+            bom_row=bom_row,
+            part=part,
+            order_quantity=order_qty,
+            default_need_by=assembly_planned_start,
+            today=today,
+        )
+        enriched_rows.append(enriched)
+
+    summary = models.compute_readiness_summary(enriched_rows, assembly_planned_start=assembly_planned_start)
+    return enriched_rows, summary
+
+
+def _get_schedule_data(die: str, config: str, production: dict, today: Optional[str] = None) -> dict:
+    sched_data = store.load_file(die, config, "schedule.json")
+    phases = list(sched_data.get("phases") or [])
+    if not phases:
+        phases = [dict(p) for p in models.DEFAULT_SCHEDULE_PHASES]
+    else:
+        phases = [models.normalize_schedule_phase(p) for p in phases]
+
+    milestones = list(sched_data.get("milestones") or [])
+    if not milestones:
+        milestones = [dict(m) for m in models.DEFAULT_MILESTONES]
+    else:
+        milestones = [models.normalize_milestone(m) for m in milestones]
+
+    baseline = sched_data.get("baseline") or {}
+
+    proc_rows, proc_summary = _get_procurement_data(die, config, production, today=today)
+    ready_for_assembly = proc_summary.get("ready_for_assembly", False)
+
+    # Ordering phase actual dates derived when not set
+    phases = models.derive_ordering_phase(phases, proc_rows, ready_for_assembly)
+    milestones = models.update_auto_milestones(milestones, phases, proc_rows, ready_for_assembly)
+
+    enriched_phases = models.compute_critical_path_and_slack(phases)
+    return {
+        "phases": enriched_phases,
+        "tasks": enriched_phases,
+        "milestones": milestones,
+        "baseline": baseline,
+        "procurement_summary": proc_summary,
+    }
+
+
+@router.get("/{die}/timeline")
+def get_die_timeline(request: Request, die: str, today: Optional[str] = None):
+    user = auth.resolve_user(request.headers.get("authorization"))
+    if user is None:
+        raise HTTPException(status_code=401, detail="Sign in required.")
+    caller_email = _email(user)
+    is_admin = _is_admin(user)
+
+    root = store.production_root()
+    die_dir = root / store._safe_slug(die)
+    if not die_dir.is_dir():
+        return {"die": die, "productions": []}
+
+    productions_out = []
+    for c in sorted(p for p in die_dir.iterdir() if p.is_dir() and not p.name.startswith(".")):
+        prod_file = c / "production.json"
+        if not prod_file.is_file():
+            continue
+        prod = store._read_json(prod_file, default={})
+        if not isinstance(prod, dict) or not prod.get("die"):
+            continue
+
+        role = models.is_member(caller_email, prod)
+        if not is_admin and role is None:
+            continue
+        if role == "oem" and not is_admin:
+            identity = auth.caller_identity(request.headers.get("authorization"))
+            rec = access._user_rec(identity.get("id") or "")
+            if not model3d.can_download(identity, rec):
+                continue
+
+        config_name = str(prod.get("config") or c.name)
+        rows, summary = _get_procurement_data(die, config_name, prod, today=today)
+        sched = _get_schedule_data(die, config_name, prod, today=today)
+        productions_out.append({
+            "config": config_name,
+            "title": prod.get("title"),
+            "order_quantity": prod.get("order_quantity", 0),
+            "status": prod.get("status", "active"),
+            "procurement": {
+                "rows": rows,
+                "summary": summary,
+            },
+            "schedule": sched,
+        })
+
+    return {"die": die, "productions": productions_out}
 
 
 @router.get("/{die}/{config}")
@@ -316,6 +451,200 @@ async def save_costs(request: Request, die: str, config: str):
         **costs,
         "summary": summary,
     }
+
+
+# ── procurement & project timeline ───────────────────────────────────────────
+
+@router.get("/{die}/{config}/procurement")
+def get_procurement(request: Request, die: str, config: str, today: Optional[str] = None):
+    user, production = require_member_with_full_view(request, die, config)
+    rows, summary = _get_procurement_data(die, config, production, today=today)
+    return {"rows": rows, "summary": summary}
+
+
+@router.put("/{die}/{config}/procurement/{part_id}")
+async def save_procurement_line(request: Request, die: str, config: str, part_id: str):
+    user, production = require_procurement_editor(request, die, config)
+    body = await _json_or_form(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="Request body must be a JSON object.")
+    body["part_id"] = part_id
+
+    normalized = models.normalize_procurement_line(body)
+    normalized["part_id"] = part_id
+    normalized["updated_by"] = _email(user)
+    normalized["updated_at"] = _now()
+
+    old_row = None
+    def mut(data: dict):
+        nonlocal old_row
+        rows = data.setdefault("rows", [])
+        found = False
+        for i, r in enumerate(rows):
+            if isinstance(r, dict) and r.get("part_id") == part_id:
+                old_row = dict(r)
+                rows[i] = normalized
+                found = True
+                break
+        if not found:
+            rows.append(normalized)
+
+    store.mutate_file(die, config, "procurement.json", mut)
+    _touch(die, config)
+    _audit(_email(user), die, config, "update", "procurement", part_id, {"old": old_row, "new": normalized})
+    return {"row": normalized}
+
+
+@router.get("/{die}/{config}/schedule")
+def get_schedule(request: Request, die: str, config: str, today: Optional[str] = None):
+    user, production = require_member_with_full_view(request, die, config)
+    return _get_schedule_data(die, config, production, today=today)
+
+
+@router.put("/{die}/{config}/schedule")
+async def save_schedule(request: Request, die: str, config: str):
+    user, production, is_full_editor = access.require_schedule_editor_or_oem(request, die, config)
+    body = await _json_or_form(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="Request body must be a JSON object.")
+
+    existing_sched = store.load_file(die, config, "schedule.json")
+    existing_phases = list(existing_sched.get("phases") or [])
+    if not existing_phases:
+        existing_phases = [dict(p) for p in models.DEFAULT_SCHEDULE_PHASES]
+    else:
+        existing_phases = [models.normalize_schedule_phase(p) for p in existing_phases]
+
+    existing_milestones = list(existing_sched.get("milestones") or [])
+    if not existing_milestones:
+        existing_milestones = [dict(m) for m in models.DEFAULT_MILESTONES]
+    else:
+        existing_milestones = [models.normalize_milestone(m) for m in existing_milestones]
+
+    existing_baseline = existing_sched.get("baseline") or {}
+
+    if not is_full_editor:
+        # OEM member: may only set actual_start, actual_end, and status of ordering, assembly, testing
+        ALLOWED_OEM_PHASES = {"ordering", "assembly", "testing"}
+
+        # OEM cannot edit baseline
+        if "baseline" in body and body["baseline"] != existing_baseline:
+            raise HTTPException(status_code=403, detail="OEM members cannot edit schedule baseline.")
+        # OEM cannot edit milestones
+        if "milestones" in body and body["milestones"] != existing_milestones:
+            raise HTTPException(status_code=403, detail="OEM members cannot edit milestones.")
+
+        incoming_phases = body.get("phases") or body.get("tasks") or []
+        if not isinstance(incoming_phases, list):
+            raise HTTPException(status_code=422, detail="Phases must be a list.")
+
+        phase_lookup = {p["id"]: p for p in existing_phases}
+        phase_key_lookup = {p.get("key", p["id"]): p for p in existing_phases}
+
+        for inc in incoming_phases:
+            if not isinstance(inc, dict):
+                continue
+            inc_id = str(inc.get("id") or inc.get("key") or "")
+            target = phase_lookup.get(inc_id) or phase_key_lookup.get(inc_id)
+            if not target:
+                continue
+            target_key = target.get("key") or target.get("id")
+            if target_key not in ALLOWED_OEM_PHASES:
+                # Disallow modifying non-allowed phases
+                for forbidden_field in ("actual_start", "actual_end", "status", "planned_start", "planned_end", "depends_on", "title", "percent_complete", "owner_role", "note"):
+                    if forbidden_field in inc and inc[forbidden_field] != target.get(forbidden_field):
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"OEM members may not modify phase '{target_key}'. Only Ordering, Assembly, and Testing actuals may be edited.",
+                        )
+            else:
+                # Disallow modifying planned_start, planned_end, depends_on, title, owner_role
+                for forbidden_field in ("planned_start", "planned_end", "depends_on", "title", "owner_role"):
+                    if forbidden_field in inc and inc[forbidden_field] != target.get(forbidden_field):
+                        raise HTTPException(
+                            status_code=403,
+                            detail=f"OEM members cannot modify {forbidden_field} on phase '{target_key}'.",
+                        )
+                # Apply allowed updates: actual_start, actual_end, status
+                if "actual_start" in inc:
+                    target["actual_start"] = models.validate_iso_date(inc["actual_start"], "actual_start") or ""
+                if "actual_end" in inc:
+                    target["actual_end"] = models.validate_iso_date(inc["actual_end"], "actual_end") or ""
+                if "status" in inc:
+                    st = str(inc["status"] or "").strip()
+                    if st in ("not_started", "in_progress", "done", "blocked"):
+                        target["status"] = st
+                if "percent_complete" in inc:
+                    try:
+                        target["percent_complete"] = max(0, min(100, int(inc["percent_complete"] or 0)))
+                    except (ValueError, TypeError):
+                        pass
+
+        saved_phases = existing_phases
+        saved_milestones = existing_milestones
+        saved_baseline = existing_baseline
+        action = "schedule_oem_update"
+    else:
+        # Full editor
+        raw_phases = body.get("phases") or body.get("tasks")
+        if raw_phases is not None:
+            saved_phases = [models.normalize_schedule_phase(p) for p in raw_phases if isinstance(p, dict)]
+        else:
+            saved_phases = existing_phases
+
+        raw_milestones = body.get("milestones")
+        if raw_milestones is not None:
+            saved_milestones = [models.normalize_milestone(m) for m in raw_milestones if isinstance(m, dict)]
+        else:
+            saved_milestones = existing_milestones
+
+        saved_baseline = body.get("baseline") if "baseline" in body else existing_baseline
+        action = "schedule_update"
+
+    models.detect_cycle(saved_phases)
+    store.save_file(die, config, "schedule.json", {
+        "phases": saved_phases,
+        "milestones": saved_milestones,
+        "baseline": saved_baseline,
+    })
+    _touch(die, config)
+    _audit(_email(user), die, config, action, "schedule", "schedule", {"phases": saved_phases, "milestones": saved_milestones})
+    return _get_schedule_data(die, config, production)
+
+
+@router.post("/{die}/{config}/schedule/baseline")
+def freeze_schedule_baseline(request: Request, die: str, config: str):
+    user, _production = require_editor_with_full_view(request, die, config)
+    sched_data = store.load_file(die, config, "schedule.json")
+    phases = sched_data.get("phases") or list(models.DEFAULT_SCHEDULE_PHASES)
+    milestones = sched_data.get("milestones") or list(models.DEFAULT_MILESTONES)
+
+    baseline = {
+        "phases": [
+            {
+                "id": p["id"],
+                "key": p.get("key"),
+                "planned_start": p.get("planned_start", ""),
+                "planned_end": p.get("planned_end", ""),
+            }
+            for p in phases if isinstance(p, dict)
+        ],
+        "milestones": [
+            {
+                "id": m["id"],
+                "date": m.get("date", ""),
+            }
+            for m in milestones if isinstance(m, dict)
+        ],
+        "frozen_at": _now(),
+        "frozen_by": _email(user),
+    }
+
+    sched_data["baseline"] = baseline
+    store.save_file(die, config, "schedule.json", sched_data)
+    _touch(die, config)
+    _audit(_email(user), die, config, "freeze_baseline", "schedule", "baseline", {"baseline": baseline})
+    return {"baseline": baseline}
 
 
 # ── process ──────────────────────────────────────────────────────────────────

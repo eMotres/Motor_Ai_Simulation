@@ -150,3 +150,97 @@ t('costs: permissions and summary calculation including margin and warnings', ()
   assert.equal(summary.missing_prices_count, 1);
   assert.equal(summary.warnings.length, 1);
 });
+
+t('procurement permissions: OEM can edit procurement, only editors can edit schedule', () => {
+  assert.equal(H.canEditProcurement('oem'), true);
+  assert.equal(H.canEditProcurement('engineer'), true);
+  assert.equal(H.canEditProcurement('admin'), true);
+  assert.equal(H.canEditProcurement(null), false);
+
+  assert.equal(H.canEditSchedule('oem'), false);
+  assert.equal(H.canEditSchedule('engineer'), true);
+  assert.equal(H.canEditSchedule('owner'), true);
+  assert.equal(H.canEditScheduleOem('oem'), true);
+});
+
+t('procurement status calculation priority: received > partial > late > at_risk > confirmed > ordered > to_order > not_ordered', () => {
+  const today = '2026-10-20';
+
+  // not_ordered
+  assert.equal(H.computeClientProcurementStatus({ today }), 'not_ordered');
+
+  // to_order
+  assert.equal(H.computeClientProcurementStatus({
+    need_by: '2026-10-25',
+    lead_time_days: 10,
+    today,
+  }), 'to_order');
+
+  // ordered
+  assert.equal(H.computeClientProcurementStatus({
+    ordered_on: '2026-10-16',
+    need_by: '2026-10-30',
+    lead_time_days: 5,
+    today,
+  }), 'ordered');
+
+  // confirmed
+  assert.equal(H.computeClientProcurementStatus({
+    ordered_on: '2026-10-16',
+    confirmed_on: '2026-10-22',
+    need_by: '2026-10-30',
+    today,
+  }), 'confirmed');
+
+  // at_risk: arrival > need_by
+  assert.equal(H.computeClientProcurementStatus({
+    ordered_on: '2026-10-16',
+    confirmed_on: '2026-11-05',
+    need_by: '2026-10-30',
+    today,
+  }), 'at_risk');
+
+  // late: arrival < today and not received
+  assert.equal(H.computeClientProcurementStatus({
+    ordered_on: '2026-10-10',
+    confirmed_on: '2026-10-18',
+    need_by: '2026-10-30',
+    today,
+  }), 'late');
+
+  // partial: some accepted
+  assert.equal(H.computeClientProcurementStatus({
+    ordered_on: '2026-10-10',
+    confirmed_on: '2026-10-25',
+    need_by: '2026-10-30',
+    qty_ordered: 10,
+    receipts: [{ accepted: 4, rejected: 0, date: '2026-10-18' }],
+    today,
+  }), 'partial');
+
+  // received: accepted >= needed
+  assert.equal(H.computeClientProcurementStatus({
+    ordered_on: '2026-10-10',
+    confirmed_on: '2026-10-25',
+    need_by: '2026-10-30',
+    qty_ordered: 10,
+    receipts: [{ accepted: 10, rejected: 0, date: '2026-10-19' }],
+    today,
+  }), 'received');
+});
+
+t('Gantt date math: daysBetween, dateToPx, dateSpanToPx, formatShortDate', () => {
+  assert.equal(H.daysBetween('2026-10-01', '2026-10-10'), 9);
+  assert.equal(H.daysBetween('2026-10-10', '2026-10-01'), -9);
+  assert.equal(H.daysBetween('', '2026-10-10'), 0);
+
+  // dateToPx: 5 days offset * 24px = 120px
+  assert.equal(H.dateToPx('2026-10-06', '2026-10-01', 24), 120);
+
+  // dateSpanToPx: inclusive 5 days [Oct 1..Oct 5] * 20px = 100px
+  assert.equal(H.dateSpanToPx('2026-10-01', '2026-10-05', 20), 100);
+
+  assert.equal(H.formatShortDate('2026-10-15'), '10-15');
+  assert.equal(H.formatShortDate(null), '—');
+});
+

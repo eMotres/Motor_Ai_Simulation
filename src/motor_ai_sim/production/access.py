@@ -67,6 +67,13 @@ def can_edit_costs(user: dict, production: dict) -> bool:
     return role in ("owner", "engineer")
 
 
+def can_edit_procurement(email: str, production: dict, is_admin: bool) -> bool:
+    if is_admin:
+        return True
+    role = is_member(email, production)
+    return role in ("owner", "engineer", "oem")
+
+
 def require_signed_in(request: Request) -> dict:
     user = auth.resolve_user(request.headers.get("authorization"))
     if user is None:
@@ -125,3 +132,27 @@ def require_proposer_or_editor(request: Request, die: str, config: str) -> tuple
     if not (can_edit(user["email"], production, is_admin) or can_propose(user["email"], production, is_admin)):
         raise HTTPException(status_code=403, detail="Member access required.")
     return user, production
+
+
+def require_procurement_editor(request: Request, die: str, config: str) -> tuple[dict, dict]:
+    user, production = require_member_with_full_view(request, die, config)
+    is_adm = is_admin(user)
+    if not can_edit_procurement(user["email"], production, is_adm):
+        raise HTTPException(status_code=403, detail="Procurement editor access required.")
+    return user, production
+
+
+def require_schedule_editor_or_oem(request: Request, die: str, config: str) -> tuple[dict, dict, bool]:
+    """Returns (user, production, is_full_editor).
+
+    Full editors: owner, engineer, admin.
+    OEM member has limited schedule editing rights (actuals for Ordering, Assembly, Testing).
+    """
+    user, production = require_member_with_full_view(request, die, config)
+    is_adm = is_admin(user)
+    is_ed = can_edit(user["email"], production, is_adm)
+    role = is_member(user["email"], production)
+    is_oem = (role == "oem")
+    if not (is_ed or is_oem):
+        raise HTTPException(status_code=403, detail="Schedule editor access required.")
+    return user, production, is_ed

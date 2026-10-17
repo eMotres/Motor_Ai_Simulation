@@ -1,6 +1,5 @@
-/** One production: BOM (parts+costs), Process, Documents, Discussion, Proposals, Changes. Also exports ProductionTab (list <-> page). */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Box, Button, Chip, CircularProgress, Tab, Tabs, Typography } from '@mui/material';
+import { Alert, Box, Button, Chip, CircularProgress, Paper, Tab, Tabs, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../../components/common/HelpTip';
 import { useAuth } from '../../../contexts/AuthContext';
@@ -12,13 +11,14 @@ import DocumentsPanel from './DocumentsPanel';
 import ProcessView from './ProcessView';
 import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
+import { TimelineView } from './TimelineView';
 import { ProductionApiError, productionApi } from '../api';
 import { callerRole, canEditRole, unackedRevisions } from '../helpers';
 import type {
-  BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, Revision, Thread,
+  BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
 } from '../types';
 
-const TABS = ['bom', 'process', 'documents', 'discussion', 'proposals', 'changes'] as const;
+const TABS = ['bom', 'timeline', 'process', 'documents', 'discussion', 'proposals', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 interface Data {
@@ -34,6 +34,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const email = user?.email ?? '';
   const [prod, setProd] = useState<Production | null>(null);
   const [data, setData] = useState<Data>(EMPTY);
+  const [readiness, setReadiness] = useState<ReadinessSummary | null>(null);
   const [tab, setTab] = useState<TabId>('bom');
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
@@ -42,12 +43,17 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const reload = useCallback(async () => {
     try {
       const p = await productionApi.get(die, config);
-      const [parts, bom, process, documents, threads, proposals, revisions] = await Promise.all([
+      const [parts, bom, process, documents, threads, proposals, revisions, proc] = await Promise.all([
         productionApi.parts(die, config), productionApi.bom(die, config), productionApi.process(die, config),
         productionApi.documents(die, config), productionApi.threads(die, config), productionApi.proposals(die, config),
         productionApi.revisions(die, config),
+        productionApi.procurement(die, config).catch(() => null),
       ]);
-      setProd(p); setData({ parts, bom, process, documents, threads, proposals, revisions }); setErr(null); setNda(false);
+      setProd(p);
+      setData({ parts, bom, process, documents, threads, proposals, revisions });
+      if (proc?.summary) setReadiness(proc.summary);
+      setErr(null);
+      setNda(false);
     } catch (e) {
       if (e instanceof ProductionApiError && e.ndaRequired) setNda(true);
       else setErr(t('errors.load', { reason: e instanceof Error ? e.message : String(e) }));
@@ -76,6 +82,59 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           </>
         )}
       </Box>
+
+      {/* Top Readiness Summary Bar */}
+      {prod && readiness && !loading && (
+        <Paper
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 1.5,
+            px: 2,
+            py: 1,
+            mb: 1.5,
+            bgcolor: readiness.ready_for_assembly ? 'rgba(16, 185, 129, 0.08)' : 'rgba(239, 68, 68, 0.08)',
+            border: `1px solid ${readiness.ready_for_assembly ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+            borderRadius: 1.5,
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flexWrap: 'wrap' }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 700, color: 'var(--text-0)' }}>
+              {t('procurement.summary', {
+                received: readiness.parts_received_count,
+                total: readiness.parts_total_count,
+                pct: Math.round(readiness.received_pct),
+                late: readiness.late_count,
+                assemblyStatus: readiness.ready_for_assembly
+                  ? `✓ ${t('procurement.readyForAssembly')}`
+                  : `✗ ${t('procurement.notReadyForAssembly')}`,
+              })}
+            </Typography>
+            {readiness.at_risk_count > 0 && (
+              <Chip
+                size="small"
+                label={`${readiness.at_risk_count} ${t('procurement.status.at_risk')}`}
+                sx={{
+                  height: 20,
+                  fontSize: 11,
+                  bgcolor: 'rgba(245, 158, 11, 0.15)',
+                  color: '#f59e0b',
+                  border: '1px solid rgba(245, 158, 11, 0.4)',
+                }}
+              />
+            )}
+          </Box>
+          {readiness.assembly_warnings && readiness.assembly_warnings.length > 0 && (
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography sx={{ fontSize: 11.5, color: '#ef4444', fontWeight: 600 }}>
+                ⚠️ {readiness.assembly_warnings[0].message}
+              </Typography>
+            </Box>
+          )}
+        </Paper>
+      )}
 
       {loading && <Box sx={{ display: 'flex', gap: 1.5, color: 'var(--text-3)', py: 3 }}><CircularProgress size={18} /><Typography sx={{ fontSize: 13 }}>{t('loading')}</Typography></Box>}
       {nda && (
@@ -112,6 +171,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
               />
             </>
           )}
+          {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
           {tab === 'process' && <ProcessView sections={data.process} ctx={ctx} />}
           {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}

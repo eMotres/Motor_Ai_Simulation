@@ -236,7 +236,10 @@ def _transition(case_id: str, decision: ENG.Decision, trigger: str, notify: bool
         elif before == ENG.VERIFIED and case["access"]["granted"]:
             ST.append(case_id, "access_revoked", {"reason": reason})
     case = ST.get(case_id)
-    if notify and trigger != "lazy" and (not same or decision.status == ENG.MORE_INFORMATION_REQUIRED):
+    # an answer given on the reply page is answered ON the page: no "one more thing" mail right after the applicant pressed Send
+    # (owner 2026-10-17: the same mail after every Send looked like an endless loop); verified / review / denied mails still go
+    page_answer = trigger in ("reply", "document") and decision.status == ENG.MORE_INFORMATION_REQUIRED
+    if notify and trigger != "lazy" and not page_answer and (not same or decision.status == ENG.MORE_INFORMATION_REQUIRED):
         try:
             _notify(before, case, decision, trigger)
         except Exception:                                            # noqa: BLE001

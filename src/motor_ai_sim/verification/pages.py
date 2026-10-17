@@ -33,6 +33,8 @@ STR = {
         "e_none": "There is no code waiting for that address. Ask for a new one.", "e_type": "Only PDF, PNG or JPG files are accepted.",
         "e_size": "The file is too large (5 MB at most).", "e_empty": "Choose a file first.", "e_docs": "The limit of documents for this request is reached.",
         "e_nothing": "Please fill in at least one field.", "other": "中文",
+        "m_need_email": "Your details are saved. To finish, enter an e-mail address at your company above and press Send - we send a code to it.",
+        "done": "Already received", "d_company": "company confirmed", "d_links": "links: {n}", "d_email": "company e-mail confirmed",
     },
     "zh-CN": {
         "title": "身份核实", "h": "申请核实", "intro": "开放 3D 工具和 STEP 下载之前，我们需要核实申请人身份。只需一分钟，无需登录。",
@@ -55,6 +57,8 @@ STR = {
         "e_none": "该地址没有待验证的验证码，请重新获取。", "e_type": "仅接受 PDF、PNG 或 JPG 文件。",
         "e_size": "文件过大（最大 5 MB）。", "e_empty": "请先选择文件。", "e_docs": "此申请的文件数量已达上限。",
         "e_nothing": "请至少填写一项。", "other": "English",
+        "m_need_email": "您的资料已保存。最后一步：请在上方填写您的公司邮箱并点击提交，我们会发送验证码。",
+        "done": "已收到", "d_company": "公司已核实", "d_links": "链接：{n}", "d_email": "公司邮箱已确认",
     },
 }
 
@@ -84,11 +88,20 @@ def page(lang: str, case: dict, state: str, *, token: str, requests: list, flash
         msg += '<p class="ok" role="status">%s</p>' % _e(s["m_reply"])
     typed = typed or {}
     needs = ""
+    got = []                                          # what is already settled, so a second visit does not look like the same form
+    if ((case.get("decision") or {}).get("company") or {}).get("confirmed"):
+        got.append(s["d_company"])
+    if case.get("urls"):
+        got.append(s["d_links"].replace("{n}", str(len(case["urls"]))))
+    if (case.get("emails") or {}).get("verified"):
+        got.append(s["d_email"])
+    if got and state in ("need_info", "in_progress"):
+        needs += '<p class="ok">%s: %s</p>' % (_e(s["done"]), _e(" · ".join("✓ " + g for g in got)))
     if state in ("need_info", "in_progress"):
         if requests:
-            needs = "<h2>%s</h2><ol>%s</ol>" % (_e(s["needs"]), "".join("<li>%s</li>" % _e(TX.ask_line(r["code"], r.get("params") or {}, lang)) for r in requests))
+            needs += "<h2>%s</h2><ol>%s</ol>" % (_e(s["needs"]), "".join("<li>%s</li>" % _e(TX.ask_line(r["code"], r.get("params") or {}, lang)) for r in requests))
         else:
-            needs = "<p>%s</p>" % _e(s["nothing"])
+            needs += "<p>%s</p>" % _e(s["nothing"])
     forms = ""
     if state not in ("ok", "denied"):
         suggested_email = next((str(r.get("params", {}).get("address") or "") for r in requests

@@ -268,6 +268,27 @@
     "summaryOlderBuildTip": "{cards} 个配置（共 {total} 个）具备完整性能档案卡。{configs} 的工作点结果按旧版本计算。请加载当前版本、重新计算并保存。"
   },
   "system": {
+    "mode": {
+      "view": "查看",
+      "compose": "编辑编排"
+    },
+    "compose": "编排",
+    "run": "运行",
+    "running": "运行中...",
+    "save": "保存",
+    "saveAs": "另存为",
+    "deleteGraph": "删除",
+    "newGraph": "新建",
+    "palette": "模块库",
+    "selectGraph": "选择图",
+    "template": "模板",
+    "deleteGraphConfirm": "确定要删除图 '{{name}}' 吗？",
+    "wireRefused": "连线被拒绝：{{reason}}",
+    "studySuccess": "计算流程已完成，耗时 {{time}}",
+    "studyFailed": "计算失败：{{error}}",
+    "graphSaved": "图 '{{name}}' 已保存",
+    "graphDeleted": "图 '{{name}}' 已删除",
+    "enterGraphName": "请输入图名称：",
     "view": {
       "modules": "全部模块",
       "propellerS1": "螺旋桨 S1"

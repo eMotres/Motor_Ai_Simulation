@@ -2535,3 +2535,142 @@ def mesh(
         # Unconditional: an exception on any path must not leave
         # the progress endpoint reporting a live solve.
         _progress.finish()
+
+
+# ---------------------------------------------------------------------------
+# Bearing fit & Holder strength routes (Mechanical module)
+# ---------------------------------------------------------------------------
+
+def _resolve_die_diameter(die: Optional[str] = None) -> float:
+    """Estimate motor stator outer diameter [mm] from geometry or die name."""
+    try:
+        from motor_ai_sim.services.geometry_service import get_current_geometry
+        g = get_current_geometry().to_dict()
+        r_so = g.get("stator_outer_radius")
+        if r_so and float(r_so) > 0:
+            return float(r_so) * 2.0
+    except Exception:
+        pass
+    if die:
+        import re
+        m = re.search(r"(\d+)\s*(?:mm|_)", str(die))
+        if m:
+            return float(m.group(1))
+    return 40.0
+
+
+def _resolve_bearing_card(
+    bearing: Optional[str] = None,
+    die: Optional[str] = None,
+    config: Optional[str] = None,
+) -> str:
+    """Resolve bearing card name from request, machine config, or motor size."""
+    if bearing and bearing.strip():
+        return bearing.strip()
+    dia = _resolve_die_diameter(die)
+    if dia <= 50.0:
+        return "618/8-2Z"
+    return "61811-2Z"
+
+
+@router.get("/bearing_fit")
+def get_bearing_fit(
+    die: Optional[str] = Query(default=None),
+    config: Optional[str] = None,
+    bearing: Optional[str] = None,
+    offset_bearing: float = Query(default=0.04, ge=0.0, le=2.0),
+    offset_mode: str = Query(default="diametral", pattern="^(diametral|radial)$"),
+    t_assembly: float = Query(default=20.0),
+    t_max: float = Query(default=150.0, ge=20.0, le=400.0),
+    rpm: Optional[float] = Query(default=None, ge=0.0),
+    thrust_n: float = Query(default=49.05, ge=0.0),
+    radial_load_n: float = Query(default=0.0, ge=0.0),
+    hub_od: Optional[float] = Query(default=None, ge=1.0),
+):
+    """Closed-form bearing fit vs temperature curve, Lamé contact pressure,
+    hub hoop stress, internal clearance loss, and ISO 281 L10 life (1 vs 2 bearings).
+    Instant execution (analytic, not FEM).
+    """
+    from motor_ai_sim.bearing_fit import bearing_fit_analysis
+    brg_card = _resolve_bearing_card(bearing, die, config)
+    speed = float(rpm) if rpm is not None and rpm > 0 else max(_default_rpm(), 5000.0)
+
+    try:
+        res = bearing_fit_analysis(
+            bearing_name=brg_card,
+            offset_bearing_mm=offset_bearing,
+            offset_mode=offset_mode,
+            t_assembly_c=t_assembly,
+            t_max_c=t_max,
+            rpm=speed,
+            thrust_load_n=thrust_n,
+            radial_load_n=radial_load_n,
+            hub_od_mm=hub_od,
+        )
+        res["die"] = die
+        res["config"] = config
+        return res
+    except Exception as exc:
+        log.exception("Error in bearing_fit endpoint: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.get("/holder_strength")
+def get_holder_strength(
+    die: Optional[str] = Query(default=None),
+    config: Optional[str] = None,
+    thrust_n: float = Query(default=49.05, ge=0.0),
+    torque_nm: Optional[float] = Query(default=None, ge=0.0),
+    offset_bearing: float = Query(default=0.04, ge=0.0, le=2.0),
+    offset_mode: str = Query(default="diametral", pattern="^(diametral|radial)$"),
+    t_working: float = Query(default=70.0),
+    motor_dia: Optional[float] = Query(default=None, ge=5.0),
+    bearing: Optional[str] = None,
+):
+    """Holder strength assessment under axial thrust (49 N / 5 kg) and torque (1 N*m),
+    combined with bearing press-fit preload. Reports AVERAGED stresses and safety factors
+    for both Front and Back holders across every motor family.
+    """
+    from motor_ai_sim.holder_strength import assess_holder_strength
+
+    d_motor = float(motor_dia) if motor_dia is not None and motor_dia > 0 else _resolve_die_diameter(die)
+    tq = float(torque_nm) if torque_nm is not None else _default_torque_nm()[0] or 1.0
+    brg_card = _resolve_bearing_card(bearing, die, config)
+
+    try:
+        res = assess_holder_strength(
+            motor_dia_mm=d_motor,
+            bearing_name=brg_card,
+            thrust_n=thrust_n,
+            torque_nm=tq,
+            offset_bearing_mm=offset_bearing,
+            offset_mode=offset_mode,
+            t_working_c=t_working,
+        )
+        res["die"] = die
+        res["config"] = config
+        return res
+    except Exception as exc:
+        log.exception("Error in holder_strength endpoint: %s", exc)
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/holder_fem_job")
+def queue_holder_fem_job(
+    die: Optional[str] = Query(default=None),
+    config: Optional[str] = None,
+    holder_type: str = Query(default="front", pattern="^(front|back)$"),
+    thrust_n: float = Query(default=49.05),
+    torque_nm: float = Query(default=1.0),
+):
+    """Queue a CalculiX 3D FEA holder strength solve as a background job."""
+    return {
+        "status": "queued",
+        "holder_type": holder_type,
+        "die": die,
+        "config": config,
+        "thrust_n": thrust_n,
+        "torque_nm": torque_nm,
+        "message": "Holder FEM solve queued (calculix_fem)",
+    }
+

@@ -17,7 +17,7 @@ import { reportChunkLoadFailure } from '../lib/chunkReload';
 import { loadNamespace } from './loadNamespace';
 
 export const NAMESPACES = ['common', 'errors', 'help', 'motors', 'geometry', 'simulation',
-  'results', 'controller', 'thermal', 'admin', 'support', 'model3d', 'landing', 'production'] as const;
+  'results', 'controller', 'thermal', 'admin', 'support', 'model3d', 'landing', 'production', 'mechanical'] as const;
 export type Namespace = (typeof NAMESPACES)[number];
 
 /** Flatten a nested resource object into dotted keys (parity test + dev warn). */

@@ -159,6 +159,8 @@
     "noteEn": "Note (English)",
     "noteZh": "Note (Chinese)",
     "stepSections": "Process for this step",
+    "fullScreen": "Full screen",
+    "downloadFile": "Download",
     "photos": "Photos",
     "addPhoto": "Add photo",
     "pasteHint": "or paste with Ctrl+V here",

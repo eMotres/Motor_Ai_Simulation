@@ -159,6 +159,8 @@
     "noteEn": "备注（英文）",
     "noteZh": "备注（中文）",
     "stepSections": "本工序的工艺",
+    "fullScreen": "全屏",
+    "downloadFile": "下载",
     "photos": "照片",
     "addPhoto": "添加照片",
     "pasteHint": "或在此处 Ctrl+V 粘贴",

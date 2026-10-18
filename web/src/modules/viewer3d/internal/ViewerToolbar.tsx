@@ -11,6 +11,7 @@ export interface UnifiedViewerToolbarProps {
   sectionRange: { min: number; max: number };
   explode: number;
   measure: boolean;
+  edges: boolean;
   projection: 'perspective' | 'orthographic';
   t: (key: string) => string;
   onView: (v: StandardView) => void;
@@ -20,6 +21,7 @@ export interface UnifiedViewerToolbarProps {
   onSection: (v: { on: boolean; axis: Axis; position: number }) => void;
   onExplode: (v: number) => void;
   onMeasure: (v: boolean) => void;
+  onEdges: (v: boolean) => void;
 }
 
 const UnifiedViewerToolbar: React.FC<UnifiedViewerToolbarProps> = (p) => {
@@ -34,6 +36,8 @@ const UnifiedViewerToolbar: React.FC<UnifiedViewerToolbarProps> = (p) => {
         <ToggleButton value="orthographic" aria-label={p.t('orthographic')} sx={{ px: 0.75, py: 0, fontSize: 10 }}>{p.t('orthographic')}</ToggleButton>
         <ToggleButton value="perspective" aria-label={p.t('perspective')} sx={{ px: 0.75, py: 0, fontSize: 10 }}>{p.t('perspective')}</ToggleButton>
       </ToggleButtonGroup>
+      {p.controls.has('edges') && <FormControlLabel sx={{ m: 0, ml: 0.5, '& .MuiFormControlLabel-label': label }} labelPlacement="start" label={p.t('edges')}
+        control={<Switch size="small" data-testid="tool-edges" disabled={!p.sceneReady} checked={p.edges} onChange={(_, v) => p.onEdges(v)} />} />}
     </Box>
     {p.full && <>
       {p.controls.has('explode') && <Box sx={line} data-testid="tool-explode"><Typography sx={label}>{p.t('explode')}</Typography>

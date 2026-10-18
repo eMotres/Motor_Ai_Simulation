@@ -22,6 +22,7 @@
   "explode": "爆炸视图",
   "section": "剖切面",
   "measure": "测量",
+  "edges": "边线",
   "measureHint": "在模型上点击两个点",
   "downloadStep": "下载 STEP",
   "simplifiedLine": "简化模型 - 签署保密协议后可查看完整结构",

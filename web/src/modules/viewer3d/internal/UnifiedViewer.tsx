@@ -45,6 +45,7 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   const [section, setSection] = useState<{ on: boolean; axis: Axis; position: number }>({ on:false, axis:'x', position:0 });
   const [range, setRange] = useState({ min:-1, max:1 });
   const [measure, setMeasure] = useState(false);
+  const [edges, setEdges] = useState(true);     // CAD-style outlines on by default (owner 2026-10-18)
   const [measuredMm, setMeasuredMm] = useState<number | null>(null);
   const [sceneReady, setSceneReady] = useState(false);
   const [projection, setProjectionState] = useState<'perspective'|'orthographic'>(() => lastProjection);
@@ -84,7 +85,7 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   // the view frames what is shown: after the other parts are hidden, fit to the remaining one
   useEffect(() => { if (onlyKey && loadedGroups.length) { const h = window.setTimeout(() => canvas.current?.fit(), 60); return () => window.clearTimeout(h); } return undefined; }, [onlyKey, loadedGroups]);
   const highlight = useMemo(() => selectedSceneNames(tree, selectedKey ?? null), [tree, selectedKey]);
-  const tools = useMemo(() => ({ hidden:new Set<string>(), explode, section, measure }), [explode, section, measure]);
+  const tools = useMemo(() => ({ hidden:new Set<string>(), explode, section, measure, edges }), [explode, section, measure, edges]);
   const loaded = useCallback((r: { groups: PartGroup[]; range: { min:number; max:number } }) => {
     setExplode(0); setMeasure(false); setMeasuredMm(null); p.onMeasure?.(null);
     setRange(r.range); setSection({ on:false, axis:'x', position:(r.range.min+r.range.max)/2 }); setLoadedGroups(r.groups); p.onLoaded?.(r);
@@ -107,9 +108,9 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
     p.onSelectedKeyChange?.(next);
   };
   return <Box data-testid="unified-viewer" sx={{ display:'flex', flexDirection:'column', width:'100%', height:'100%', minHeight:0, minWidth:0, position:'relative' }}>
-    <ViewerToolbar full={full} sceneReady={sceneReady} controls={controlSet} section={section} sectionRange={range} explode={explode} measure={measure} projection={projection} t={t}
+    <ViewerToolbar full={full} sceneReady={sceneReady} controls={controlSet} section={section} sectionRange={range} explode={explode} measure={measure} edges={edges} projection={projection} t={t}
       onView={onView} onFit={() => canvas.current?.fit()} onHome={onHome} onProjection={setProjection} onSection={changeSection} onExplode={setExplode}
-      onMeasure={(v) => { setMeasure(v); if (!v) setMeasuredMm(null); }} />
+      onMeasure={(v) => { setMeasure(v); if (!v) setMeasuredMm(null); }} onEdges={setEdges} />
     {p.hostExtras}
     <Box sx={{ flex:1, minHeight:0, minWidth:0, position:'relative' }}>
       <ModelCanvas ref={canvas} sourceKey={p.sourceKey} glbUrl={p.glbUrl} objectScene={objectScene} tools={tools} fullAccess={full} highlight={highlight} hiddenNodes={hiddenNodes}

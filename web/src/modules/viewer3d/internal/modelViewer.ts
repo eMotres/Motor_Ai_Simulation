@@ -6,7 +6,7 @@
 // contains - what a caller may see is decided on the server.
 import {
   AmbientLight, Box3, BufferGeometry, Color, DataTexture, DirectionalLight, DoubleSide, Float32BufferAttribute, Group,
-  HemisphereLight, Line, LineBasicMaterial, LinearMipmapLinearFilter, LinearFilter, Material, Mesh, MeshBasicMaterial,
+  EdgesGeometry, HemisphereLight, Line, LineBasicMaterial, LineSegments, LinearMipmapLinearFilter, LinearFilter, Material, Mesh, MeshBasicMaterial,
   MeshStandardMaterial, Object3D, PerspectiveCamera, OrthographicCamera, Plane, Raycaster, RepeatWrapping, RGBAFormat, Scene, SphereGeometry,
   UnsignedByteType, Vector2, Vector3, WebGLRenderer,
 } from 'three';
@@ -32,7 +32,12 @@ export interface ViewerState {
   measure: boolean;
   /** show part hints (the thread size under the pointer); the NDA view only */
   hints?: boolean;
+  /** dark outlines on the model's feature edges, like a CAD viewer (owner 2026-10-18); default on */
+  edges?: boolean;
 }
+
+/** Faces meeting at more than this angle draw an outline; tessellated cylinders (a few degrees per facet) stay smooth. */
+const EDGE_ANGLE_DEG = 25;
 
 export interface CameraPose {
   projection: 'perspective' | 'orthographic'; position: Vec3; up: Vec3; target: Vec3; zoom: number; halfH: number | null; near: number; far: number;
@@ -47,6 +52,10 @@ export class ModelViewer {
   private root: Object3D | null = null;
   private groups: Array<{ node: Object3D; part: PartGroup; base: Vector3 }> = [];
   private plane = new Plane(new Vector3(0, 0, -1), 0);
+  private edgesOn = true;
+  private edgeLines: LineSegments[] = [];
+  private edgeMat: LineBasicMaterial | null = null;
+  private edgeMatDim: LineBasicMaterial | null = null;
   private ray = new Raycaster();
   private marks = new Group();
   private picks: Vector3[] = [];
@@ -145,8 +154,12 @@ export class ModelViewer {
       if (m.isMesh) for (const mt of Array.isArray(m.material) ? m.material : [m.material]) {
         (mt as Material).side = DoubleSide;
         (mt as Material).clippingPlanes = [this.plane];
+        (mt as Material).polygonOffset = true;
+        (mt as Material).polygonOffsetFactor = 1;
+        (mt as Material).polygonOffsetUnits = 1;
       }
     });
+    if (this.edgesOn) this.buildEdges();
     const b = new Box3().setFromObject(ownedRoot);
     this.box = { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
     const core = this.groups.find((g) => g.part.name === 'Core' || g.part.name === 'Housing' || g.part.name === 'stator_core');
@@ -178,6 +191,8 @@ export class ModelViewer {
         }
       });
     }
+    for (const l of this.edgeLines) l.geometry.dispose();
+    this.edgeLines = [];
     this.root = null;
     this.groups = [];
     this.threadMeshes = [];
@@ -298,6 +313,7 @@ export class ModelViewer {
       if (g.part.explodeDirection) g.node.position.copy(g.base).add(new Vector3(...g.part.explodeDirection).multiplyScalar(shift));
       else g.node.position.copy(g.base).add(new Vector3(0, 0, shift));
     }
+    this.setEdges(s.edges ?? true);
     this.applyHighlight(s.highlight);
     const p = sectionPlane(s.section.axis, s.section.position);
     this.plane.normal.set(...p.normal);
@@ -311,6 +327,36 @@ export class ModelViewer {
 
   private measuring = false;
 
+  /** The outline materials (shared by every line; the dimmed one for parts outside a highlight), clipped like the faces. */
+  private edgeMaterials(): [LineBasicMaterial, LineBasicMaterial] {
+    this.edgeMat ??= new LineBasicMaterial({ color: 0x1f2937, transparent: true, opacity: 0.55, clippingPlanes: [this.plane] });
+    this.edgeMatDim ??= new LineBasicMaterial({ color: 0x1f2937, transparent: true, opacity: 0.06, depthWrite: false, clippingPlanes: [this.plane] });
+    return [this.edgeMat, this.edgeMatDim];
+  }
+
+  /** One LineSegments child per mesh, built once per loaded model (on first use, so a viewer with outlines off pays nothing). */
+  private buildEdges(): void {
+    if (!this.root || this.edgeLines.length) return;
+    const [mat] = this.edgeMaterials();
+    const meshes: Mesh[] = [];
+    this.root.traverse((o) => { if ((o as Mesh).isMesh) meshes.push(o as Mesh); });
+    for (const m of meshes) {
+      const line = new LineSegments(new EdgesGeometry(m.geometry, EDGE_ANGLE_DEG), mat);
+      line.name = '';
+      line.userData.edge = true;
+      line.raycast = () => {};            // picking and measuring hit the faces, never the outlines
+      line.visible = this.edgesOn;
+      m.add(line);
+      this.edgeLines.push(line);
+    }
+  }
+
+  private setEdges(on: boolean): void {
+    this.edgesOn = on;
+    if (on) this.buildEdges();
+    for (const l of this.edgeLines) l.visible = on;
+  }
+
   /** Highlight the nodes in `names` (selected part): they glow, every other node is dimmed; an empty set restores the model. */
   private applyHighlight(names: ReadonlySet<string> | undefined): void {
     const on = !!names && names.size > 0;
@@ -322,6 +368,9 @@ export class ModelViewer {
         // a mesh is highlighted when its group or any node between it and the group (a single Coil, a single Screw) is named
         let hit = groupHit;
         for (let n: Object3D | null = m; on && !hit && n && n !== g.node.parent; n = n.parent) hit = names!.has(n.name);
+        if (this.edgeMat) for (const c of m.children) if ((c as LineSegments).isLineSegments) {
+          (c as LineSegments).material = on && !hit ? this.edgeMatDim! : this.edgeMat;
+        }
         for (const mt of Array.isArray(m.material) ? m.material : [m.material]) {
           const mm = mt as Material & { emissive?: Color; emissiveIntensity?: number };
           const keep = (mm.userData ??= {}) as { orig?: { transparent: boolean; opacity: number; depthWrite: boolean; emissive?: number; intensity?: number } };

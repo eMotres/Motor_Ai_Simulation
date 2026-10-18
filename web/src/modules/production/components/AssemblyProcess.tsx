@@ -5,6 +5,7 @@
  * delete steps (PUT /assembly_process, audited).
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import ProcessView from './ProcessView';
 import {
   Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper, TextField, Typography,
 } from '@mui/material';
@@ -16,7 +17,7 @@ import { useTranslation } from 'react-i18next';
 import { useContentLang } from './BilingualText';
 import { displayText } from '../helpers';
 import { productionApi } from '../api';
-import type { AssemblyStep, Bilingual, Part, ProdCtx } from '../types';
+import type { AssemblyStep, Bilingual, Part, ProcessSection, ProdCtx } from '../types';
 
 const W = 230;
 const H = 74;
@@ -108,7 +109,7 @@ const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: As
   );
 };
 
-export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[] }> = ({ ctx, parts }) => {
+export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?: ProcessSection[] }> = ({ ctx, parts, sections = [] }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const [steps, setSteps] = useState<AssemblyStep[]>([]);
@@ -178,8 +179,19 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[] }> = ({ ctx
               ? <Typography sx={{ fontSize: 12.5, color: 'var(--text-4)' }}>—</Typography>
               : (cur.parts_resolved ?? []).map((p) => <Chip key={p.id} size="small" label={p.name.en || p.name.zh} />)}
           </Box>
+          {relatedSections(cur, sections).length > 0 && (
+            <Box sx={{ mt: 1.5 }}>
+              <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepSections', 'Process for this step')}</Typography>
+              <ProcessView sections={relatedSections(cur, sections)} ctx={ctx} readOnly />
+            </Box>
+          )}
         </Paper>
       )}
+      {/* the whole process document (fits, assembly, winding, tests) under the graph; edited here */}
+      <Box sx={{ mt: 1 }}>
+        <Typography sx={{ fontSize: 14, fontWeight: 800, mb: 1 }}>{t('process.document', 'Process document')}</Typography>
+        <ProcessView sections={sections} ctx={ctx} />
+      </Box>
       <StepDialog open={!!edit} step={edit} steps={steps} parts={parts} onClose={() => setEdit(null)}
         onSave={(s) => {
           const exists = steps.some((x) => x.id === s.id);
@@ -189,5 +201,24 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[] }> = ({ ctx
     </Box>
   );
 };
+
+/** Which process-document sections belong to a step: the step's own `sections` ids when it names them, else the
+ *  default steps' keywords matched against the section titles (owner 2026-10-18: a click on a step shows its process). */
+const STEP_KEYWORDS: Record<string, string[]> = {
+  s1: ['winding', 'coil'], s2: ['winding', 'insulation'], s3: ['pre-power', 'inspection'], s4: ['ring'],
+  s5: ['magnet'], s6: ['magnet'], s7: ['shaft', 'fits'], s8: ['balance'], s9: ['assembly sequence', 'bearing', 'fits', 'bracket'],
+  s10: ['phase plate', 'wiring'], s11: ['phase plate', 'wiring'], s12: ['pre-power', 'winding'], s13: ['pre-power'],
+};
+
+export function relatedSections(step: AssemblyStep, sections: ProcessSection[]): ProcessSection[] {
+  const own = (step as AssemblyStep & { sections?: string[] }).sections;
+  if (own && own.length) return sections.filter((x) => own.includes(x.id));
+  const keys = STEP_KEYWORDS[step.id] ?? [];
+  if (!keys.length) return [];
+  return sections.filter((x) => {
+    const title = `${x.title?.en ?? ''} ${x.title?.zh ?? ''}`.toLowerCase();
+    return keys.some((k) => title.includes(k));
+  });
+}
 
 export default AssemblyProcess;

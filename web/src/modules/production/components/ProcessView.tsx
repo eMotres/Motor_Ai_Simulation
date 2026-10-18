@@ -10,7 +10,7 @@ import type { Lang, ProcessKind, ProcessSection, ProdCtx } from '../types';
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 const KINDS: ProcessKind[] = ['fits', 'assembly', 'winding', 'tests'];
 
-const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx }> = ({ sections, ctx }) => {
+const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx; readOnly?: boolean }> = ({ sections, ctx, readOnly = false }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const [editing, setEditing] = useState(false);
@@ -32,7 +32,7 @@ const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx }> = ({ s
 
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1.25 }}>
-      {ctx.canEdit && (
+      {ctx.canEdit && !readOnly && (
         <Box sx={{ display: 'flex', gap: 1 }}>
           {!editing && <Button size="small" sx={{ textTransform: 'none' }} onClick={() => { setDraft(sections); setErr(null); setEditing(true); }}>{t('edit')}</Button>}
           {editing && (

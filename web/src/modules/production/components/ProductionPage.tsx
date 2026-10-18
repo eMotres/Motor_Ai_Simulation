@@ -9,7 +9,6 @@ import BomTable from './BomTable';
 import ChangesPanel from './ChangesPanel';
 import DiscussionPanel from './DiscussionPanel';
 import DocumentsPanel from './DocumentsPanel';
-import ProcessView from './ProcessView';
 import ProductionListPage from './ProductionListPage';
 import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
@@ -19,7 +18,8 @@ import type {
   BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
 } from '../types';
 
-const TABS = ['bom', 'assembly', 'timeline', 'process', 'documents', 'discussion', 'proposals', 'changes'] as const;
+// 'process' merged into the Assembly tab (owner 2026-10-18): the graph on top, the process document below it
+const TABS = ['bom', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes'] as const;
 type TabId = typeof TABS[number];
 
 interface Data {
@@ -180,9 +180,8 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
               />
             </>
           )}
-          {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} />}
+          {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} />}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
-          {tab === 'process' && <ProcessView sections={data.process} ctx={ctx} />}
           {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
           {tab === 'proposals' && <ProposalsPanel proposals={data.proposals} parts={data.parts} ctx={ctx} />}

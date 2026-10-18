@@ -157,7 +157,9 @@
     "after": "前置步骤",
     "parts": "零件",
     "noteEn": "备注（英文）",
-    "noteZh": "备注（中文）"
+    "noteZh": "备注（中文）",
+    "stepSections": "本工序的工艺",
+    "document": "工艺文件"
   },
   "docs": {
     "none": "暂无文件。",

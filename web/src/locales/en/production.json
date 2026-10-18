@@ -157,7 +157,9 @@
     "after": "After steps",
     "parts": "Parts",
     "noteEn": "Note (English)",
-    "noteZh": "Note (Chinese)"
+    "noteZh": "Note (Chinese)",
+    "stepSections": "Process for this step",
+    "document": "Process document"
   },
   "docs": {
     "none": "No documents.",

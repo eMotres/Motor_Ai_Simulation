@@ -29,14 +29,22 @@ def _authorise(authorization: Optional[str]) -> None:
     require_admin(authorization)          # 401 anonymous, 403 not an admin
 
 
+def _server_data(fn):
+    """The catalogue and the productions are server data: read them in the process workspace, whatever workspace the
+    request was given (a service-token request counts as anonymous and would otherwise see an empty layer)."""
+    from motor_ai_sim import workspace as _ws
+    with _ws.use_workspace(_ws.process_workspace()):
+        return fn()
+
+
 @router.get("/directory")
 def directory(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     _authorise(authorization)
-    return _x.directory_export()
+    return _server_data(_x.directory_export)
 
 
 @router.get("/motor-prices")
 def motor_prices(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     _authorise(authorization)
-    return _x.motor_prices_export()
+    return _server_data(_x.motor_prices_export)
 

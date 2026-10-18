@@ -88,6 +88,8 @@ def normalize_step(raw: Any) -> dict:
             "after": [str(a)[:40] for a in (raw.get("after") or []) if str(a).strip()][:20],
             # the process sections of this step, by id (owner 2026-10-18); empty = matched by the title keywords
             "sections": [str(x)[:60] for x in (raw.get("sections") or []) if str(x).strip()][:40],
+            # documents of the step itself (a test drawing for a check step without parts), by document id
+            "documents": [str(x)[:60] for x in (raw.get("documents") or []) if str(x).strip()][:40],
             "note": models.normalize_bilingual(note) if isinstance(note, dict) and (note.get("en") or note.get("zh")) else None}
 
 

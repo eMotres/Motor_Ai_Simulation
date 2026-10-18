@@ -5,7 +5,7 @@
  * motor may drive.  Each point is a steady continuous operating point from the backend's propeller S1 rows; the
  * part above the continuous limit is dashed.
  */
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Chip, Paper, Tooltip, Typography } from '@mui/material';
 import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip as RcTooltip, XAxis, YAxis } from 'recharts';
 import type { PropSummary } from '../../lib/configuratorPropeller';
@@ -26,8 +26,7 @@ interface Props {
   escBusA: number | null;
   allowed: PropSummary[];
   selectedId: string | null;
-  /** the speed Configure is set to (a vertical line) and the continuous limit (green dashed); a click sets the speed */
-  rpm?: number;
+  /** the continuous limit with this propeller (green dashed); the chip sets the speed to it */
   s1Rpm?: number | null;
   onRpmChange?: (rpm: number) => void;
 }
@@ -35,7 +34,7 @@ interface Props {
 const propName = (p: PropSummary | undefined, id: string) =>
   p ? `${vendorLabel(p.vendor)} ${modelLabel(p.model)}` : id;
 
-const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, rpm, s1Rpm, onRpmChange }) => {
+const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, onRpmChange }) => {
   const [metric, setMetric] = useState<LoadMetric>('thrust');
   const [extra, setExtra] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, S1ChartRow[] | null>>({});
@@ -67,29 +66,6 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
   const toggle = (id: string) => setExtra((cur) => (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]));
 
-  // The speed under the pointer, continuous (not snapped to the computed rows): x range of the plotted data and the
-  // plot area of the chart (margins + y-axis width below).  A click sets the speed; dragging moves it.
-  const box = useRef<HTMLDivElement | null>(null);
-  const dragging = useRef(false);
-  const xs = lines.flatMap((l) => [...l.ok, ...l.over].map((p) => p.x));
-  const xMin = xs.length ? Math.min(...xs) : 0;
-  const xMax = xs.length ? Math.max(...xs) : 0;
-  const PLOT_LEFT = 4 + 46, PLOT_RIGHT = 12;
-  const rpmAt = (chartX: unknown): number | null => {
-    const w = box.current?.clientWidth ?? 0;
-    const x = Number(chartX);
-    if (!w || !Number.isFinite(x) || xMax <= xMin) return null;
-    const f = (x - PLOT_LEFT) / Math.max(1, w - PLOT_LEFT - PLOT_RIGHT);
-    if (f < 0 || f > 1) return null;
-    return Math.round((xMin + f * (xMax - xMin)) / 10) * 10;
-  };
-  const setFrom = (ev: { clientX?: number } | undefined) => {
-    const rect = box.current?.getBoundingClientRect();
-    if (!rect || ev?.clientX == null) return;
-    const r = rpmAt(ev.clientX - rect.left);
-    if (r != null && onRpmChange) onRpmChange(r);
-  };
-
   return (
     <Paper variant="outlined" sx={{ p: 1.5, bgcolor: 'var(--panel-2)' }}>
       <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1, mb: 0.75, flexWrap: 'wrap' }}>
@@ -112,13 +88,10 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
             sx={{ fontSize: 11, height: 22, borderColor: '#16a34a', color: '#16a34a' }} />
         </Box>
       )}
-      <Box ref={box} sx={{ height: 390, cursor: onRpmChange ? 'crosshair' : undefined, userSelect: 'none' }}
-        onMouseUp={() => { dragging.current = false; }} onMouseLeave={() => { dragging.current = false; }}>
+      <Box sx={{ height: 390 }}>
         {anyData ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart margin={{ top: 6, right: 12, bottom: 18, left: 4 }}
-              onMouseDown={(_s: unknown, ev: { clientX?: number }) => { dragging.current = true; setFrom(ev); }}
-              onMouseMove={(_s: unknown, ev: { clientX?: number }) => { if (dragging.current) setFrom(ev); }}>
+            <LineChart margin={{ top: 6, right: 12, bottom: 18, left: 4 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.25)" />
               <XAxis type="number" dataKey="x" domain={['dataMin', 'dataMax']} tick={{ fontSize: 11 }} tickFormatter={(v: number) => v.toFixed(0)}
                 label={{ value: tx('propLoad.x'), position: 'insideBottom', offset: -10, fontSize: 11 }} />
@@ -130,8 +103,6 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
               <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 11 }} />
               {s1Rpm != null && <ReferenceLine x={s1Rpm} stroke="#16a34a" strokeDasharray="4 3"
                 label={{ value: tx('propLoad.s1Label', { rpm: Math.round(s1Rpm) }), fill: '#16a34a', fontSize: 10.5, position: 'insideTopRight' }} />}
-              {rpm != null && rpm > 0 && <ReferenceLine x={rpm} stroke="var(--text-1)" strokeWidth={1.5}
-                label={{ value: tx('propLoad.setLabel', { rpm: Math.round(rpm) }), fill: 'var(--text-1)', fontSize: 10.5, position: 'insideTopLeft' }} />}
               {lines.flatMap((l) => [
                 <Line key={`${l.id}-ok`} data={l.ok} dataKey="y" name={l.name} stroke={l.color} strokeWidth={2} dot={false} isAnimationActive={false} />,
                 <Line key={`${l.id}-over`} data={l.over} dataKey="y" name={`${l.name} — ${tx('propLoad.over')}`} legendType="none"
@@ -157,7 +128,7 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
           })}
         </Box>
       )}
-      <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: 0.5 }}>{tx('propLoad.note')} {tx('propLoad.linesNote')}</Typography>
+      <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: 0.5 }}>{tx('propLoad.note')} {tx('propLoad.s1Note')}</Typography>
     </Paper>
   );
 };

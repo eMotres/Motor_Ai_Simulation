@@ -9,7 +9,7 @@ import ProcessView from './ProcessView';
 import {
   Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper, TextField, Typography,
 } from '@mui/material';
-import { Background, Handle, Panel, Position, ReactFlow, ReactFlowProvider, useReactFlow } from '@xyflow/react';
+import { Background, Handle, Panel, Position, ReactFlow, ReactFlowProvider, useNodesInitialized, useReactFlow, useStore } from '@xyflow/react';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
@@ -281,10 +281,16 @@ const STEP_KEYWORDS: Record<string, string[]> = {
  *  the steps arrived, so the graph opened cut off). */
 const FitToScreen: React.FC<{ nodeCount: number; label: string }> = ({ nodeCount, label }) => {
   const rf = useReactFlow();
+  // fit by default (owner 2026-10-18) - and again whenever the pane gets a real size (the tab was hidden: 0 x 0, which
+  // fitted the graph tiny into a corner) or the nodes are measured / change
+  const w = useStore((st) => st.width);
+  const h = useStore((st) => st.height);
+  const measured = useNodesInitialized();
   useEffect(() => {
-    const id = window.setTimeout(() => { void rf.fitView({ padding: 0.08 }); }, 50);
+    if (!w || !h || !measured) return undefined;
+    const id = window.setTimeout(() => { void rf.fitView({ padding: 0.08 }); }, 30);
     return () => window.clearTimeout(id);
-  }, [nodeCount, rf]);
+  }, [nodeCount, w, h, measured, rf]);
   return (
     <Panel position="top-right">
       <Button size="small" variant="outlined" onClick={() => void rf.fitView({ padding: 0.08, duration: 250 })}

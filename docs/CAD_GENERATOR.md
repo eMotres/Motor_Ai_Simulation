@@ -3,6 +3,11 @@
 One parameter source: the simulation die/config (`/srv/motres/shared/dies/<die>/{die.yaml, L*.yaml}` and the
 materials library). The generator reads it, never writes it, and builds the motor model with FreeCAD 1.1 on the server.
 
+**Tool versions (owner 2026-10-18): FreeCAD 1.1.3 only**, on the server (image `motres-cad:1.1.3-*`, the current tag in
+`/etc/motres/cad-image`) and on any workstation; **KiCad 10.0** for boards. Never fall back to FreeCAD 1.0.2. The scripts'
+"1.0.2 / 1.1" notes describe the version-safe code, they are not an instruction. A locally built model is finished only after
+the GUI finish (GuiDocument.xml: visibility, colours, camera); without it FreeCAD opens it with no 3-D view.
+
 Roadmap: (1) model done, (2) this generator + server build per die/config, (3) BOM (done, section below), (4) STEP download + the web "3D model" menu (done, section below: view for
 everyone, STEP download under NDA), (5) 3-D load FEM.
 

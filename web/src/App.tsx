@@ -64,7 +64,8 @@ import ControllerPanel from './components/controller/ControllerPanel';
 import { syncMeshConfigFromServer } from './lib/meshConfigSync';
 import CompareTab from './components/compare/CompareTab';
 import Model3DPanel from './components/model3d/Model3DPanel';
-import { ProductionTab } from './modules/production';
+// Production is its own chunk (owner 2026-10-18): its updates never touch the Configure / Motors bundle
+const ProductionTab = lazy(watchChunkImport(() => import('./modules/production/components/ProductionPage').then((m) => ({ default: m.ProductionTab }))));
 import UpdateBanner from './components/common/UpdateBanner';
 const DesignerTab = lazy(() => import('./modules/designer/DesignerTab'));
 import GeometryTab from './components/geometry/GeometryTab';
@@ -614,7 +615,7 @@ function App() {
     // Production (stage 1): parts, BOM, process, documents, discussion, proposals and revisions of one motor; admin, engineer and OEM producer.
     // kept mounted once opened (owner 2026-10-18): coming back shows the same motor, sub-tab and scroll, no reload
     { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false, keepMounted: 'visited',
-      render: () => <ProductionTab /> },
+      render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><ProductionTab /></Suspense> },
     // Designer (pilot 2026-10-18): the design assistant chat; shown when the server says this account may use it.
     { id: 'designer', label: 'Designer', order: 1, gate: TAB_GATES.designer, showViewer: false,
       render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><DesignerTab /></Suspense> },

@@ -324,24 +324,7 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
               ? <Typography sx={{ fontSize: 12.5, color: 'var(--text-4)' }}>—</Typography>
               : (cur.parts_resolved ?? []).map((p) => <Chip key={p.id} size="small" label={p.name.en || p.name.zh} />)}
           </Box>
-          {/* the drawings and documents of this step's parts (owner 2026-10-18: the magnet layout drawing belongs here); a click opens it */}
-          {(() => {
-            const docs = stepDocsOf(cur, documents);
-            return docs.length > 0 && (
-              <Box sx={{ mt: 1.25 }}>
-                <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepDocs', 'Drawings and documents')}</Typography>
-                <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-                  {docs.map((d) => {
-                    const ext = (d.name.split('.').pop() || '').toLowerCase();
-                    const viewable = ['pdf', 'png', 'jpg', 'jpeg'].includes(ext);
-                    return <Chip key={d.id} size="small" variant="outlined" label={d.name} clickable
-                      onClick={() => void (viewable ? openFileInNewWindow(ctx.die, ctx.config, d.file_id, ext === 'jpeg' ? 'jpg' : ext)
-                        : downloadFile(ctx.die, ctx.config, d.file_id, d.name)).catch((e) => setErr(String(e)))} />;
-                  })}
-                </Box>
-              </Box>
-            );
-          })()}
+          {/* the step's drawings are shown open below (DocPreview); no file-name list here (owner 2026-10-18) */}
           <StepPhotos ctx={ctx} step={cur} documents={documents} />
           </Box>
           <StepModel3D ctx={ctx} steps={steps} step={cur} />

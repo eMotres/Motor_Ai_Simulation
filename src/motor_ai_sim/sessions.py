@@ -149,10 +149,10 @@ def create(email: str, *, expires: float, login_method: str = "password",
     }
     try:
         with _LOCK:
-            try:
-                d = _load()
-            except StoreUnavailable:
-                d = {}          # a fresh registry beats refusing the login
+            # An unreadable registry is NEVER replaced by an empty one: that would erase every revocation and
+            # bring revoked tokens back (security audit 2026-10-18).  The sign-in still succeeds; this session
+            # just is not recorded until the store is readable again.
+            d = _load()
             d = _sweep(d, now)
             d[sid] = rec
             _save(d)

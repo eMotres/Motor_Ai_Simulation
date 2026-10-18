@@ -35,7 +35,7 @@ export const roleLabel = (role: string): string => ROLE_LABELS[role as AccountRo
 /** Who may see a tab: 'always' everyone, 'signedIn' any signed-in session, 'standard' a signed-in account WITHOUT the simulation UI
  *  (role "user": the simplified Configure workflow), 'fullUI' the simulation UI (admin, engineer, local dev), 'admin' admins only
  *  (and the local dev backend, which is admin). */
-export type TabGate = 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer';
+export type TabGate = 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer';
 export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   motors: 'always', geometry: 'fullUI', materials: 'fullUI', mesh: 'fullUI', simulation: 'fullUI',
   static3d: 'admin', mechanical: 'fullUI', thermal: 'fullUI', controller: 'fullUI', schemas: 'fullUI', sweep: 'admin',
@@ -45,12 +45,12 @@ export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   model3d: 'standard', admin: 'admin',
   // Production (docs/PRODUCTION_MODULE_DESIGN.md): admin, engineer and OEM producer; the server decides which productions each account sees.
   production: 'producer',
-  // Designer (pilot 2026-10-18): any signed-in account; App.tsx also asks the server (/api/design-agent/status).
-  designer: 'signedIn',
+  // Designer (pilot 2026-10-18): whoever the server opens it for (/api/design-agent/status, DESIGN_AGENT_ACCESS).
+  designer: 'designer',
 };
-export interface GateCtx { signedIn: boolean; fullUI: boolean; isAdmin: boolean; producer?: boolean }
+export interface GateCtx { signedIn: boolean; fullUI: boolean; isAdmin: boolean; producer?: boolean; designer?: boolean }
 export const gateOpen = (gate: TabGate, c: GateCtx): boolean =>
-  gate === 'always' || (gate === 'signedIn' && c.signedIn) || (gate === 'standard' && c.signedIn && !c.fullUI) || (gate === 'fullUI' && c.fullUI) || (gate === 'admin' && c.isAdmin) || (gate === 'producer' && c.signedIn && c.producer === true);
+  gate === 'always' || (gate === 'signedIn' && c.signedIn) || (gate === 'standard' && c.signedIn && !c.fullUI) || (gate === 'fullUI' && c.fullUI) || (gate === 'admin' && c.isAdmin) || (gate === 'producer' && c.signedIn && c.producer === true) || (gate === 'designer' && c.signedIn && c.designer === true);
 export const tabVisible = (id: string, c: GateCtx): boolean => gateOpen(TAB_GATES[id] ?? 'admin', c);
 
 /** One line for a non-admin account whose catalogue is empty (no motor granted yet). */

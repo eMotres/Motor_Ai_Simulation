@@ -73,7 +73,7 @@ t('card summary: none / partial / all', () => {
 // -- role "engineer" (owner 2026-10-14): Configure only, or the whole simulation ------------------------------------------
 
 const ALL_TABS = ['motors', 'geometry', 'materials', 'mesh', 'simulation', 'static3d', 'mechanical',
-  'thermal', 'controller', 'schemas', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'admin'];
+  'thermal', 'controller', 'schemas', 'sweep', 'comparePoints', 'cost', 'compare', 'model3d', 'production', 'designer', 'admin'];
 
 // what App.tsx computes for a session: signedIn, fullUI (hasSimulationUI) and isAdmin
 const visible = (enforced, isAdmin, role) => {
@@ -92,10 +92,17 @@ t('role engineer: the whole simulation UI, no admin sections, and NO separate 3D
   for (const id of ['admin', 'sweep', 'cost', 'static3d']) assert.equal(visible(true, false, 'engineer').includes(id), false, id);
 });
 
-t('role admin and the local backend see every tab except the user-only 3D model tab', () => {
-  const all = ALL_TABS.filter((id) => id !== 'model3d');
+t('role admin and the local backend see every tab except the user-only 3D model tab (Designer: when the server opens it)', () => {
+  const all = ALL_TABS.filter((id) => id !== 'model3d' && id !== 'designer');
   assert.deepEqual(visible(true, true, 'admin'), all);
   assert.deepEqual(visible(false, true, 'admin'), all);
+});
+
+t('Designer is drawn only when the server opened it for the signed-in account, whatever the role', () => {
+  const base = { signedIn: true, fullUI: false, isAdmin: false };
+  assert.equal(A.tabVisible('designer', base), false);
+  assert.equal(A.tabVisible('designer', { ...base, designer: true }), true);
+  assert.equal(A.tabVisible('designer', { ...base, signedIn: false, designer: true }), false);
 });
 
 t('the 3D model tab is the simplified Configure workflow (role user) only; anonymous sees nothing of it', () => {

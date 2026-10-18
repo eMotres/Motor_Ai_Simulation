@@ -120,6 +120,21 @@ function useNewRequestCount(isAdmin: boolean): number {
   return n;
 }
 
+/** Is this account a member of at least one production?  One read when asked (`check`); a failure is "no". */
+function useProductionMember(check: boolean): boolean {
+  const [ok, setOk] = useState(false);
+  useEffect(() => {
+    if (!check) { setOk(false); return; }
+    let alive = true;
+    fetch(`${API_BASE}/api/production`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (alive) setOk(Array.isArray(j?.productions) && j.productions.length > 0); })
+      .catch(() => { /* signed out or offline - no tab */ });
+    return () => { alive = false; };
+  }, [check]);
+  return ok;
+}
+
 /** Designer tab (pilot): drawn only when the server says this account may use the design assistant
  *  (DESIGN_AGENT_ACCESS) - one read per sign-in, a failure is "not allowed". */
 function useDesignerAllowed(signedIn: boolean): boolean {
@@ -250,7 +265,10 @@ function App() {
   // /api/simulation/caches for a regular account.
   const fullUI   = authResolved && hasSimulationUI(enforced, isAdmin, role);
   const standardUser = isStandardUser(enforced, isAdmin, role);
-  const producer = authResolved && productionVisible(enforced, isAdmin, role);
+  // Production tab: the roles that work on productions, or ANY account that is a member of one (owner 2026-10-18: a standard
+  // account added to a production as engineer saw nothing - the server grants by membership, the tab gated by role).
+  const productionMember = useProductionMember(authResolved && signedIn && !productionVisible(enforced, isAdmin, role));
+  const producer = authResolved && (productionVisible(enforced, isAdmin, role) || productionMember);
   const newRequests = useNewRequestCount(isAdmin);
   const designerAllowed = useDesignerAllowed(signedIn);
   const [panelWidth, setPanelWidth] = React.useState(300);
@@ -464,10 +482,13 @@ function App() {
     // A standard account has Motors and Configure and nothing else.  Anything
     // else (a stale tab from before the role was known, a ?tab= link) lands on
     // Configure when something is selected there, else on Motors.
-    if (standardUser && !tabAllowed(activeTab, true)) {
+    // ...plus Production when it is a member of one, and Designer when the server opened it for the account.
+    const tab = activeTab as string;   // the store's tab type predates these two tabs
+    const extraOk = (tab === 'production' && producer) || (tab === 'designer' && designerAllowed);
+    if (standardUser && !tabAllowed(activeTab, true) && !extraOk) {
       setActiveTab(landingTabForUser(hasOwnConfigureChoice(user?.email) || !!defaultMotor));
     }
-  }, [activeTab, isAdmin, standardUser, signedIn, authResolved, defaultMotor, setActiveTab]);
+  }, [activeTab, isAdmin, standardUser, signedIn, authResolved, defaultMotor, setActiveTab, producer, designerAllowed]);
 
   // A standard account's first screen: Configure when it already has something
   // selected (his own last choice or the default motor an admin set), else the
@@ -491,7 +512,7 @@ function App() {
   const geometryActiveViewer = <><UnifiedActiveMotorScene /><GeometryBuildTimer /></>;
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
-    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer'; showViewer: boolean; keepMounted?: boolean;
+    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer'; showViewer: boolean; keepMounted?: boolean;
     render: () => React.ReactNode;
   }> = [
     { id: 'motors', label: 'Motors', order: 0, gate: TAB_GATES.motors, showViewer: false,
@@ -607,7 +628,7 @@ function App() {
       // below failed to type-check (TS2362/2363).
       order: (t.panelId ? panels[t.panelId]?.order : undefined) ?? t.order,
     }))
-    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer }) && (t.id !== 'designer' || designerAllowed))
+    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer, designer: designerAllowed }))
     .sort((a, b) => a.order - b.order);
   // A tab this account no longer has (a remembered "3D model" tab of an engineer: the model lives in Geometry > Full for the simulation
   // UI, owner 2026-10-15) lands on the first tab it has - never on an empty body.

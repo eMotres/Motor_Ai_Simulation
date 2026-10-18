@@ -233,6 +233,9 @@ function App() {
   useEffect(() => { saveThemeMode(themeMode); }, [themeMode]);
   const appTheme = useMemo(() => buildAppTheme(themeMode), [themeMode]);
   const { activeTab, setActiveTab } = useUIStore();
+  // tabs opened in this page session ('visited' keep-mounted tabs stay mounted after their first visit)
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<string>>(() => new Set([activeTab]));
+  useEffect(() => { setVisitedTabs((s) => (s.has(activeTab) ? s : new Set(s).add(activeTab))); }, [activeTab]);
 
   useEffect(() => {
     const route = resolveSchemasRoute(window.location.href);
@@ -513,7 +516,9 @@ function App() {
   const geometryActiveViewer = <><UnifiedActiveMotorScene /><GeometryBuildTimer /></>;
   const tabDefs: Array<{
     id: string; label: string; order: number; panelId?: string;
-    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer'; showViewer: boolean; keepMounted?: boolean;
+    gate: 'always' | 'signedIn' | 'standard' | 'fullUI' | 'admin' | 'producer' | 'designer'; showViewer: boolean;
+    /** true: mounted from the start and display-toggled; 'visited': mounted on the first visit, then kept */
+    keepMounted?: boolean | 'visited';
     render: () => React.ReactNode;
   }> = [
     { id: 'motors', label: 'Motors', order: 0, gate: TAB_GATES.motors, showViewer: false,
@@ -607,7 +612,8 @@ function App() {
     { id: 'model3d', label: '3D model', order: 76, gate: TAB_GATES.model3d, showViewer: false,
       render: () => <Model3DPanel /> },
     // Production (stage 1): parts, BOM, process, documents, discussion, proposals and revisions of one motor; admin, engineer and OEM producer.
-    { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false,
+    // kept mounted once opened (owner 2026-10-18): coming back shows the same motor, sub-tab and scroll, no reload
+    { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false, keepMounted: 'visited',
       render: () => <ProductionTab /> },
     // Designer (pilot 2026-10-18): the design assistant chat; shown when the server says this account may use it.
     { id: 'designer', label: 'Designer', order: 1, gate: TAB_GATES.designer, showViewer: false,
@@ -770,7 +776,7 @@ function App() {
               mounted and are just display-toggled so the computed dashboard +
               field animation survive navigating away and back. */}
           {tabs.map((t) => (
-            t.keepMounted ? (
+            t.keepMounted && (t.keepMounted === true || visitedTabs.has(t.id)) ? (
               <Box key={t.id} sx={{ height: '100%', display: activeTab === t.id ? 'block' : 'none' }}>
                 <ErrorBoundary label={t.label}>{t.render()}</ErrorBoundary>
               </Box>

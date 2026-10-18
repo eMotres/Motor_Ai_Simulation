@@ -119,9 +119,9 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
                 label={{ value: tx('propLoad.supplyLabel', { rpm: Math.round(supplyRpm) }) + (supplyReason ? ` - ${supplyReason}` : ''),
                   fill: '#ea580c', fontSize: 10.5, position: 'insideBottomLeft' }} />}
               {s1Rpm != null && s1Y != null && <ReferenceDot x={s1Rpm} y={s1Y} r={5} fill="#16a34a" stroke="#fff"
-                label={{ value: `${fmt(s1Y)} ${unit}`, position: 'left', fill: '#16a34a', fontSize: 11, fontWeight: 700 }} />}
+                label={{ value: `${fmt(s1Y)} ${unit}`, position: 'top', offset: 12, fill: '#16a34a', fontSize: 11, fontWeight: 700 }} />}
               {supplyRpm != null && supplyY != null && <ReferenceDot x={supplyRpm} y={supplyY} r={5} fill="#ea580c" stroke="#fff"
-                label={{ value: `${fmt(supplyY)} ${unit}`, position: 'right', fill: '#ea580c', fontSize: 11, fontWeight: 700 }} />}
+                label={{ value: `${fmt(supplyY)} ${unit}`, position: 'bottom', offset: 12, fill: '#ea580c', fontSize: 11, fontWeight: 700 }} />}
               {lines.flatMap((l) => [
                 <Line key={`${l.id}-ok`} data={l.ok} dataKey="y" name={l.name} stroke={l.color} strokeWidth={2} dot={false} isAnimationActive={false} />,
                 <Line key={`${l.id}-over`} data={l.over} dataKey="y" name={`${l.name} — ${tx('propLoad.over')}`} legendType="none"

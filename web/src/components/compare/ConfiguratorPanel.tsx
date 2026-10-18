@@ -68,7 +68,7 @@ import {
 } from '../../lib/configuratorBattery';
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
-import { presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
+import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
 import { buildModePresets, baseModeLabel, type ModePreset } from '../../lib/configuratorModes';
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
@@ -1288,6 +1288,12 @@ const ConfiguratorPanel: React.FC = () => {
   const s1PackMin = packWindow?.min ?? null;
   const s1PackMax = packWindow?.max ?? null;
   const [s1, setS1] = useState<S1Result | null>(null);
+  // "Rated must always work, for any propeller - find rated for each propeller with its cooling air" (owner 2026-10-18):
+  // with a propeller as the load, the RATED speed is this propeller's MOTOR continuous (S1) limit - the speed where the
+  // propeller's own wash still holds the winding and the magnets inside their limits.  After a rated preset is applied, a
+  // propeller is picked or the page loads, the speed is SET there ('set'); after another preset it is only capped there
+  // ('cap').  The reference point moves with it, so the state still reads as that preset.  A speed set later is the user's.
+  const clampToS1Ref = React.useRef<'set' | 'cap' | null>('set');
   useEffect(() => {
     setS1(null);
     if (!pointGate.showBatteryDerived || !propellerCoolingActive || !propId || !s1Die || !s1Config) return;
@@ -1298,9 +1304,23 @@ const ConfiguratorPanel: React.FC = () => {
       const avail = r?.drives_available;
       if (Array.isArray(avail)) setS1Drives({ key: s1ModelKey, drives: avail });
       setS1(r);
+      const lim = r?.limit_motor;
+      const how = clampToS1Ref.current;
+      if (how && lim && lim.rpm != null && !lim.lower_bound && Number.isFinite(lim.rpm) && lim.rpm > 0) {
+        clampToS1Ref.current = null;
+        const cap = Math.floor((lim.rpm * 0.99) / 10) * 10;          // 1 % inside the limit, a round number
+        const to = (v: number) => (how === 'set' ? cap : Math.min(v, cap));
+        setKnobs((k) => ({ ...k, rpm: to(k.rpm) }));
+        setRefKnobs((k) => (k ? { ...k, rpm: to(k.rpm) } : k));
+      } else if (lim) {
+        clampToS1Ref.current = null;
+      }
     });
     return () => { dead = true; };
   }, [pointGate.showBatteryDerived, propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the speed the rated point is capped at for this propeller (see clampToS1Ref)
+  const s1CapRpm = s1?.limit_motor && s1.limit_motor.rpm != null && !s1.limit_motor.lower_bound && s1.limit_motor.rpm > 0
+    ? Math.floor((s1.limit_motor.rpm * 0.99) / 10) * 10 : null;
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = pointGate.showBatteryDerived && propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
   // The load chart's two vertical lines (owner 2026-10-18): the MOTOR's own continuous limit and the supply's
@@ -1571,6 +1591,7 @@ ${s1Text.tip}` : '';
   /** Restore EVERYTHING to a real configuration of the die: every knob, its saved pack, its
    *  default drive.  The user's battery edit for this machine is dropped (the pack is the preset's). */
   const applyPreset = (pr: Preset | ModePreset) => {
+    clampToS1Ref.current = isRatedPreset(pr) ? 'set' : 'cap';
     const catalogPoint = cooled && propLoad ? propellerDutyRpmDefault(pr, activeDuty()) : null;
     const nk0 = presetKnobs(knobs, pr);
     const nk = { ...nk0, rpm: initialRpmForLoadMode(propLoad ? 'prop' : 'manual', nk0.rpm,
@@ -1596,7 +1617,7 @@ ${s1Text.tip}` : '';
   // (with a propeller as the load the current is the propeller's, not a setting)
   const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, batteryNumbers, batteryFromPack(pr.battery),
     cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined,
-    { ignoreCurrent: propLoad }).length === 0)?.key ?? null;
+    { ignoreCurrent: propLoad, speedCap: propLoad ? s1CapRpm : null, speedIsCap: isRatedPreset(pr) }).length === 0)?.key ?? null;
   // the button the state started from - "changed from L12 · rated" names it
   const baseModePreset = modePresets.find((m) => m.config === baseConfig && m.duty === baseMode) ?? null;
   const baseLabel = baseModeLabel(modePresets, baseConfig, baseMode);
@@ -2069,7 +2090,11 @@ ${s1Text.tip}` : '';
                 {cooled && (
                 <select value={propId ?? ''} aria-label={tx('configurePropeller.title')}
                   disabled={!propLoad}
-                  onChange={(e) => updateCool({ propId: e.target.value })}
+                  onChange={(e) => {
+                    const at = modePresets.find((m) => m.key === matchedKey);
+                    clampToS1Ref.current = s1Moved ? null : (!at || isRatedPreset(at) ? 'set' : 'cap');
+                    updateCool({ propId: e.target.value });
+                  }}
                   title={propSelTip}
                   style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260, opacity: !propLoad ? 0.5 : 1, cursor: !propLoad ? 'not-allowed' : 'pointer' }}>
                   {!allowedProps.length && <option value="" style={{ color: '#000' }}>…</option>}

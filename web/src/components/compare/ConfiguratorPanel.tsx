@@ -1665,7 +1665,8 @@ ${s1Text.tip}` : '';
     || (!!machinePack && !sameBattery(battery, machinePack))
     || (() => {
     const r0 = refKnobs ?? baseKnobs(p);
-    return (['N', 'L_mm', 'wireH_mm', 'nP', 'I_A', 'rpm'] as const)
+    // with a propeller as the load the current FOLLOWS the propeller - not a setting that makes the state "changed"
+    return ((propLoad ? ['N', 'L_mm', 'wireH_mm', 'nP', 'rpm'] : ['N', 'L_mm', 'wireH_mm', 'nP', 'I_A', 'rpm']) as ('N' | 'L_mm' | 'wireH_mm' | 'nP' | 'I_A' | 'rpm')[])
       .some((kk) => Math.abs(Number(knobs[kk]) - Number(r0[kk]))
                     > 1e-6 * Math.max(1, Math.abs(Number(r0[kk]))));
   })();

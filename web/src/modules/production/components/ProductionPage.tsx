@@ -196,10 +196,14 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
 export const ProductionTab: React.FC = () => {
   const [sel, setSel] = useState<{ die: string; config: string } | null>(null);
   return (
-    <Box sx={{ p: 3, overflowY: 'auto', height: '100%' }}>
-      {sel
-        ? <ProductionPage die={sel.die} config={sel.config} onBack={() => setSel(null)} />
-        : <ProductionListPage onOpen={(p) => setSel({ die: p.die, config: p.config })} />}
+    // No top padding on the scroller itself: a sticky child sticks below the scroller's padding, and rows showed
+    // through that gap above the fixed tab menu (owner 2026-10-18).  The padding lives on the inner box.
+    <Box sx={{ overflowY: 'auto', height: '100%' }}>
+      <Box sx={{ px: 3, pt: 3, pb: 3 }}>
+        {sel
+          ? <ProductionPage die={sel.die} config={sel.config} onBack={() => setSel(null)} />
+          : <ProductionListPage onOpen={(p) => setSel({ die: p.die, config: p.config })} />}
+      </Box>
     </Box>
   );
 };

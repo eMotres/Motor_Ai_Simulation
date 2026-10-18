@@ -40,7 +40,6 @@ import { readConfigureRefId, writeConfigureRefId, isOwnChoice } from './configur
 import { useLastMotorState } from '../../lib/lastMotor';
 import { getStoredUser } from '../../lib/localAuth';
 import PerformanceCharts from './PerformanceCharts';
-import PropellerCurves from './PropellerCurves';
 import PropellerLoadChart from './PropellerLoadChart';
 import { SHOW_CONFIGURE_CHARTS } from '../../lib/configuratorFlags';
 import {
@@ -2417,13 +2416,7 @@ ${s1Text.tip}` : '';
         </Box>
       </Box>
 
-      {pointGate.showBatteryDerived && cooled && propLoad && (
-        <Box sx={{ px: 2, pb: 1.5 }}>
-          <PropellerCurves series={series} rpm={knobs.rpm} rpmMin={ranges.rpm.min} rpmMax={ranges.rpm.max}
-            powerEstimated={!!series?.power_estimated} onRpmChange={setRpm}
-            s1Rpm={s1Info?.kind === 'limit' ? s1Info.rpm : null} />
-        </Box>
-      )}
+      {/* owner 2026-10-18: the two propeller-curve charts repeated the load chart below - only the load chart stays */}
 
       {/* Load chart (owner 2026-10-18): thrust per rotor on x, one switchable parameter, any of this motor's
           propellers - the S1 rows of the catalogue build, so it is withheld once the build knobs move. */}
@@ -2433,7 +2426,8 @@ ${s1Text.tip}` : '';
             ? <Typography sx={{ fontSize: 11.5, color: 'var(--text-3)' }}>{tx('propLoad.moved')}</Typography>
             : <PropellerLoadChart die={s1Die} config={s1Config} ambient={ambient} drive={s1Drive}
                 pack={s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null}
-                escBusA={s1Req.escBusA} allowed={allowedProps} selectedId={propId} />}
+                escBusA={s1Req.escBusA} allowed={allowedProps} selectedId={propId}
+                rpm={knobs.rpm} s1Rpm={s1Info?.kind === 'limit' ? s1Info.rpm : null} onRpmChange={setRpm} />}
         </Box>
       )}
 

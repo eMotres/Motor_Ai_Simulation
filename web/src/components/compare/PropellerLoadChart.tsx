@@ -7,7 +7,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Chip, Paper, Tooltip, Typography } from '@mui/material';
-import { CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip as RcTooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip as RcTooltip, XAxis, YAxis } from 'recharts';
 import type { PropSummary } from '../../lib/configuratorPropeller';
 import { modelLabel, vendorLabel } from '../../lib/configuratorPropeller';
 import { fetchPropellerS1 } from '../../lib/propellerApi';
@@ -26,12 +26,16 @@ interface Props {
   escBusA: number | null;
   allowed: PropSummary[];
   selectedId: string | null;
+  /** the speed Configure is set to (a vertical line) and the continuous limit (green dashed); a click sets the speed */
+  rpm?: number;
+  s1Rpm?: number | null;
+  onRpmChange?: (rpm: number) => void;
 }
 
 const propName = (p: PropSummary | undefined, id: string) =>
   p ? `${vendorLabel(p.vendor)} ${modelLabel(p.model)}` : id;
 
-const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId }) => {
+const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, rpm, s1Rpm, onRpmChange }) => {
   const [metric, setMetric] = useState<LoadMetric>('thrust');
   const [extra, setExtra] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, S1ChartRow[] | null>>({});
@@ -78,10 +82,14 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
             sx={{ fontSize: 11, height: 24 }} />
         ))}
       </Box>
-      <Box sx={{ height: 260 }}>
+      <Box sx={{ height: 390, cursor: onRpmChange ? 'crosshair' : undefined }}>
         {anyData ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart margin={{ top: 6, right: 12, bottom: 18, left: 4 }}>
+            <LineChart margin={{ top: 6, right: 12, bottom: 18, left: 4 }}
+              onClick={(e: { activeLabel?: unknown } | null) => {
+                const x = Number(e?.activeLabel);
+                if (onRpmChange && Number.isFinite(x) && x > 0) onRpmChange(Math.round(x));
+              }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.25)" />
               <XAxis type="number" dataKey="x" domain={['dataMin', 'dataMax']} tick={{ fontSize: 11 }} tickFormatter={(v: number) => v.toFixed(0)}
                 label={{ value: tx('propLoad.x'), position: 'insideBottom', offset: -10, fontSize: 11 }} />
@@ -90,7 +98,9 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
               <RcTooltip formatter={(v: unknown) => [`${fmt(Number(v))} ${unit}`, tx(`propLoad.m.${metric}`)]}
                 labelFormatter={(x: unknown) => `${Number(x).toFixed(0)} rpm`}
                 contentStyle={{ fontSize: 11 }} />
-              <Legend wrapperStyle={{ fontSize: 11 }} />
+              <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 11 }} />
+              {s1Rpm != null && <ReferenceLine x={s1Rpm} stroke="#16a34a" strokeDasharray="4 3" label={{ value: 'S1', fill: '#16a34a', fontSize: 10, position: 'top' }} />}
+              {rpm != null && rpm > 0 && <ReferenceLine x={rpm} stroke="var(--text-2)" strokeWidth={1.5} />}
               {lines.flatMap((l) => [
                 <Line key={`${l.id}-ok`} data={l.ok} dataKey="y" name={l.name} stroke={l.color} strokeWidth={2} dot={false} isAnimationActive={false} />,
                 <Line key={`${l.id}-over`} data={l.over} dataKey="y" name={`${l.name} — ${tx('propLoad.over')}`} legendType="none"

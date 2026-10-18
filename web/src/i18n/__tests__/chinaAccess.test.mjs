@@ -248,15 +248,16 @@ test('every page ships the same redirect script; the English link keeps the choi
 });
 
 // 4. the static block works without the bundle --------------------------------
-test('static block: readable colours, scrollable page, Sign in / Request access, slow note', () => {
+test('static block: readable colours, scrollable page, Sign in / Request access, no slow note', () => {
   for (const loc of LOCALES) {
     const html = renderPage(read(path.join(WEB, 'index.html')), loadLocale(loc.id, WEB), loc);
     assert.match(html, /#seo-landing\{[^}]*background:#f7f6f3;color:#0f172a/, 'explicit dark-on-light pair (the light default)');
     assert.match(html, /html,body,#root\{height:auto;overflow:auto\}/, 'scrolls without the app');
     assert.match(html, new RegExp(`<a href="${loc.path}\\?signin=1">`));
     assert.match(html, new RegExp(`<a class="alt" href="${loc.path}\\?signup=1">`));
-    assert.match(html, /class="slow-note"/);
-    assert.match(html, /data-mount-watch/);
+    // owner 2026-10-18: no "the app is taking a long time" note - it frightened users
+    assert.doesNotMatch(html, /class="slow-note"/);
+    assert.doesNotMatch(html, /data-mount-watch/);
     // Body text was pale (#475569 on a light page); the lead colour is now #1e293b.
     assert.doesNotMatch(html, /\.lead\{[^}]*#475569/);
   }

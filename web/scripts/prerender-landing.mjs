@@ -203,7 +203,6 @@ export function renderBody(L, loc, webDir = WEB) {
   out.push('<nav aria-label="Language">' + LOCALES.map((l) =>
     `<a href="${l.path === '/' ? '/?lang=en' : l.path}" hreflang="${l.lang}" lang="${l.lang}">${esc(l.label)}</a>`).join('') + '</nav>');
   out.push('</header>');
-  out.push(`<p class="slow-note" role="status">${t('static.slow')} <a href="mailto:${REQUEST_ACCESS_EMAIL}">${esc(REQUEST_ACCESS_EMAIL)}</a></p>`);
   out.push('<main>');
   out.push(`<h1>${t('hero.title')}</h1>`);
   out.push(`<h2 style="margin-top:0;font-size:1.3rem">${t('hero.agents')}</h2>`);

@@ -191,7 +191,7 @@ export class ModelViewer {
         }
       });
     }
-    for (const l of this.edgeLines) l.geometry.dispose();
+    for (const l of this.edgeLines ?? []) l.geometry.dispose();
     this.edgeLines = [];
     this.root = null;
     this.groups = [];
@@ -336,7 +336,8 @@ export class ModelViewer {
 
   /** One LineSegments child per mesh, built once per loaded model (on first use, so a viewer with outlines off pays nothing). */
   private buildEdges(): void {
-    if (!this.root || this.edgeLines.length) return;
+    if (!this.root || this.edgeLines?.length) return;
+    this.edgeLines ??= [];
     const [mat] = this.edgeMaterials();
     const meshes: Mesh[] = [];
     this.root.traverse((o) => { if ((o as Mesh).isMesh) meshes.push(o as Mesh); });
@@ -354,7 +355,7 @@ export class ModelViewer {
   private setEdges(on: boolean): void {
     this.edgesOn = on;
     if (on) this.buildEdges();
-    for (const l of this.edgeLines) l.visible = on;
+    for (const l of this.edgeLines ?? []) l.visible = on;
   }
 
   /** Highlight the nodes in `names` (selected part): they glow, every other node is dimmed; an empty set restores the model. */
@@ -460,11 +461,13 @@ export class ModelViewer {
   /** Animate to a standard face or edge direction around the current target. */
   view(view: StandardView): void {
     const direction = new Vector3(...standardViewDirection(view));
-    if (Math.abs(direction.z) > 0.98) direction.x = 1e-7;
+    // Top / bottom look along the motor axis: screen up = +Y and +X to the right on TOP (owner 2026-10-18 - with the
+    // Z-up rule the view up was degenerate and TOP came out turned); every other view keeps Z up.
+    const axial = Math.abs(direction.z) > 0.98;
     const center = this.controls.target.clone();
     const current = Math.max(1, this.camera.position.distanceTo(center));
     this.camera.position.copy(center).addScaledVector(direction, current);
-    this.camera.up.set(0, 0, 1);
+    if (axial) this.camera.up.set(0, 1, 0); else this.camera.up.set(0, 0, 1);
     this.camera.lookAt(center);
     this.controls.update();
     this.invalidate();

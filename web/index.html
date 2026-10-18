@@ -62,13 +62,7 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
-    <!-- If the bundle has not replaced the pre-rendered block after 8 s, say so (the block
-         stays readable and its links work); the app removes #seo-landing when it mounts. -->
-    <script data-mount-watch>
-      setTimeout(function () {
-        var s = document.getElementById('seo-landing');
-        if (s) s.className = (s.className ? s.className + ' ' : '') + 'slow';
-      }, 8000);
-    </script>
+    <!-- No "taking a long time" note any more (owner 2026-10-18: it frightens users): the pre-rendered block stays
+         readable and its links work until the app replaces it. -->
   </body>
 </html>

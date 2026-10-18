@@ -152,10 +152,11 @@ export const productionApi = {
   setDocumentInternal: (die: string, config: string, docId: string, internal: boolean) =>
     call<DocumentRec>('PATCH', `${base(die, config)}/documents/${enc(docId)}`, { internal }),
   documents: async (die: string, config: string) => unwrapList<DocumentRec>(await call('GET', `${base(die, config)}/documents`), 'documents'),
-  uploadDocument: (die: string, config: string, file: File, partId: string | null) => {
+  uploadDocument: (die: string, config: string, file: File, partId: string | null, stepId: string | null = null) => {
     const f = new FormData();
     f.append('file', file, file.name);
     if (partId) f.append('part_id', partId);
+    if (stepId) f.append('step_id', stepId);
     return call<DocumentRec>('POST', `${base(die, config)}/documents`, f);
   },
 

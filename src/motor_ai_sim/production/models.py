@@ -662,6 +662,8 @@ def normalize_document(raw: dict, file_id: str, uploader_email: str, name: str,
         "name": name,
         # internal = our own working document: never listed for, nor downloadable by, the factory (role oem)
         "internal": bool((raw or {}).get("internal", False)),
+        # a picture posted to one assembly step (owner 2026-10-18: images in every production step)
+        "step_id": str((raw or {}).get("step_id"))[:40] if (raw or {}).get("step_id") else None,
     }
 
 

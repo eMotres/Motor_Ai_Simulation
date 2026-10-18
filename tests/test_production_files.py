@@ -70,3 +70,16 @@ def test_slug_cannot_escape_the_production_root(tmp_path, monkeypatch):
         p = store.path_for(die, cfg)
         assert (tmp_path / "production").resolve() in p.parents, (die, cfg, p)
     assert store._safe_slug("CIANO14 40 new") == "CIANO14_40_new"
+
+
+def test_factory_posts_a_picture_to_a_step(prod_env):
+    """Owner 2026-10-18: pictures in every production step - any member posts, the document carries the step id."""
+    _create(prod_env)
+    c = prod_env["client"]
+    url = "/api/production/%s/%s/documents" % (DIE, CONFIG)
+    r = c.post(url, headers=prod_env["oem_nda"], data={"step_id": "s5"},
+               files={"file": ("rotor_film.jpg", b"\xff\xd8\xff jpeg", "image/jpeg")})
+    assert r.status_code == 200, r.text
+    assert r.json()["step_id"] == "s5" and r.json()["part_id"] is None
+    assert c.post(url, headers=prod_env["oem_nda"], data={"step_id": "../x"},
+                  files={"file": ("a.jpg", b"x", "image/jpeg")}).status_code == 422

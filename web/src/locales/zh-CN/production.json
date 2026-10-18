@@ -159,7 +159,15 @@
     "noteEn": "备注（英文）",
     "noteZh": "备注（中文）",
     "stepSections": "本工序的工艺",
-    "document": "工艺文件"
+    "stepDocs": "图纸和文件",
+    "document": "工艺文件",
+    "kinds": {"fits": "配合", "assembly": "装配", "winding": "绕线", "tests": "测试"},
+    "docTitle": "工艺文件",
+    "docTip": "由装配和测试步骤生成：步骤编号与流程图一致，每步附其工艺章节（n.1、n.2 …）。",
+    "view": "查看",
+    "download": "下载",
+    "editSections": "编辑工艺章节",
+    "hideSections": "收起章节"
   },
   "docs": {
     "none": "暂无文件。",

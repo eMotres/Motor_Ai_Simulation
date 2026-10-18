@@ -10,7 +10,9 @@ import type { Lang, ProcessKind, ProcessSection, ProdCtx } from '../types';
 const PANEL = { bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5 } as const;
 const KINDS: ProcessKind[] = ['fits', 'assembly', 'winding', 'tests'];
 
-const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx; readOnly?: boolean }> = ({ sections, ctx, readOnly = false }) => {
+/** `numberPrefix`: the sections of ONE assembly step, numbered n.1, n.2 ... like the graph and the generated process
+ *  document (their own old numbering, "6a.", is dropped from the title). */
+const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx; readOnly?: boolean; numberPrefix?: string }> = ({ sections, ctx, readOnly = false, numberPrefix }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const [editing, setEditing] = useState(false);
@@ -49,11 +51,12 @@ const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx; readOnly
         </Box>
       )}
       {!editing && sections.length === 0 && <Typography sx={{ fontSize: 13, color: 'var(--text-4)' }}>{t('process.none')}</Typography>}
-      {!editing && sections.map((s) => (
+      {!editing && sections.map((s, si) => (
         <Paper key={s.id} sx={{ ...PANEL, p: 1.5 }}>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
-            <Chip size="small" label={t(`process.kind.${s.kind}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} />
-            <BilingualText value={s.title} bold size={14} canConfirm={ctx.canEdit} die={ctx.die} config={ctx.config}
+            <Chip size="small" label={t(`process.kinds.${s.kind}`)} sx={{ height: 18, fontSize: 10.5, fontWeight: 700, bgcolor: 'var(--panel)', color: 'var(--text-2)' }} />
+            {numberPrefix && <Typography sx={{ fontSize: 14, fontWeight: 800 }}>{numberPrefix}.{si + 1}</Typography>}
+            <BilingualText value={numberPrefix ? stripTitleNumber(s.title) : s.title} bold size={14} canConfirm={ctx.canEdit && !numberPrefix} die={ctx.die} config={ctx.config}
               tref={{ entity: 'process', entity_id: s.id, field: 'title' }} onChanged={ctx.reload} />
           </Box>
           <BilingualText value={s.body} size={12.5} canConfirm={ctx.canEdit} die={ctx.die} config={ctx.config}
@@ -69,7 +72,7 @@ const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx; readOnly
         <Paper key={s.id} sx={{ ...PANEL, p: 1.5, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
             <TextField select size="small" label={t('process.kindLabel')} value={s.kind} onChange={(e) => patch(i, { kind: e.target.value as ProcessKind })} sx={{ width: 140 }}>
-              {KINDS.map((k) => <MenuItem key={k} value={k}>{t(`process.kind.${k}`)}</MenuItem>)}
+              {KINDS.map((k) => <MenuItem key={k} value={k}>{t(`process.kinds.${k}`)}</MenuItem>)}
             </TextField>
             <Box sx={{ flex: 1 }} />
             <Button size="small" disabled={i === 0} sx={{ textTransform: 'none', fontSize: 11 }} onClick={() => move(i, -1)}>{t('process.up')}</Button>
@@ -85,5 +88,12 @@ const ProcessView: React.FC<{ sections: ProcessSection[]; ctx: ProdCtx; readOnly
     </Box>
   );
 };
+
+/** A section title without its own old numbering ("6a. Winding" -> "Winding"); the step gives the number
+ *  (the same rule as the server's process document, process_steps.strip_number). */
+export function stripTitleNumber(b: ProcessSection['title']): ProcessSection['title'] {
+  const strip = (x: string | undefined | null) => (x ?? '').replace(/^\s*(\d+[a-z]?|[A-Z])[.)]\s+/, '');
+  return { ...b, en: strip(b.en), zh: strip(b.zh) };
+}
 
 export default ProcessView;

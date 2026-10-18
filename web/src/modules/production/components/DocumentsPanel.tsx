@@ -4,16 +4,20 @@ import { Box, Button, Chip, MenuItem, Paper, Table, TableBody, TableCell, TableH
 import { useTranslation } from 'react-i18next';
 import { PartName } from './PartName';
 import HelpTip from '../../../components/common/HelpTip';
-import { downloadFile, openFileInNewWindow, productionApi } from '../api';
-import type { DocumentRec, Part, ProdCtx } from '../types';
+import ProcessView from './ProcessView';
+import { downloadFile, openFileInNewWindow, processDocument, productionApi } from '../api';
+import type { DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
 
-const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: ProdCtx }> = ({ documents, parts, ctx }) => {
+const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: ProdCtx; sections?: ProcessSection[] }> = ({ documents, parts, ctx, sections = [] }) => {
   const { t } = useTranslation('production');
   const fileRef = useRef<HTMLInputElement>(null);
   const [partId, setPartId] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const byId = new Map(parts.map((p) => [p.id, p]));
+  const [showSections, setShowSections] = useState(false);
+  const procDoc = (lang: 'en' | 'zh', mode: 'view' | 'download') =>
+    void processDocument(ctx.die, ctx.config, lang, mode).catch((e) => setErr(t('failed', { reason: String(e) })));
 
   const upload = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -27,6 +31,23 @@ const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: P
 
   return (
     <Box>
+      {/* the process document, generated from the assembly and test steps (owner 2026-10-18); its sections are edited here */}
+      <Paper sx={{ bgcolor: 'var(--panel-2)', border: '1px solid var(--line-soft)', borderRadius: 1.5, p: 1.25, mb: 1.5 }}>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <Typography sx={{ fontSize: 13.5, fontWeight: 800 }}>{t('process.docTitle', 'Process document')}</Typography>
+          <HelpTip title={t('process.docTip')} />
+          <Box sx={{ flex: 1 }} />
+          {(['en', 'zh'] as const).map((lg) => (
+            <React.Fragment key={lg}>
+              <Button size="small" sx={{ textTransform: 'none' }} onClick={() => procDoc(lg, 'view')}>{t('process.view', 'View')} {lg === 'en' ? 'EN' : '中文'}</Button>
+              <Button size="small" sx={{ textTransform: 'none' }} onClick={() => procDoc(lg, 'download')}>{t('process.download', 'Download')} {lg === 'en' ? 'EN' : '中文'}</Button>
+            </React.Fragment>
+          ))}
+          {ctx.canEdit && <Button size="small" variant="outlined" sx={{ textTransform: 'none' }} onClick={() => setShowSections((v) => !v)}>
+            {showSections ? t('process.hideSections', 'Hide sections') : t('process.editSections', 'Edit process sections')}</Button>}
+        </Box>
+        {showSections && <Box sx={{ mt: 1.25 }}><ProcessView sections={sections} ctx={ctx} /></Box>}
+      </Paper>
       {ctx.canEdit && (
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5, flexWrap: 'wrap' }}>
           <TextField select size="small" label={t('docs.forPart')} value={partId} onChange={(e) => setPartId(e.target.value)} sx={{ minWidth: 200 }}>

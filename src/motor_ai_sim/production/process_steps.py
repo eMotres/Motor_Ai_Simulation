@@ -5,6 +5,8 @@ after: [step ids], note (bilingual or None)}``.  The default for a CIANO14-famil
 2026-10-17; editors change it, every member reads it.  Stored in ``assembly_process.json``."""
 from __future__ import annotations
 
+import html
+import re
 from typing import Any, Dict, List, Optional
 
 from motor_ai_sim.production import models
@@ -133,3 +135,132 @@ def view(doc: Optional[dict], parts: List[dict], product_type: str = "motor") ->
     steps = (doc or {}).get("steps") or default_steps(product_type)
     return {"default": not (doc or {}).get("steps"),
             "steps": [dict(s, parts_resolved=resolve_parts(s, parts)) for s in steps]}
+
+
+# ── the process document, generated from the steps (owner 2026-10-18) ──────────────────────────────────────────────
+# One document over every assembly and test step, in the graph's order and numbering: step n, its parts and note, then
+# the process sections that belong to it numbered n.1, n.2 ...  Sections no step names come last ("General").
+
+#: the default steps' keywords matched against the section titles (a step may name its sections itself: ``sections``)
+STEP_KEYWORDS: Dict[str, List[str]] = {
+    "s1": ["winding", "coil"], "s2": ["winding", "insulation"], "s3": ["pre-power", "inspection"], "s4": ["ring"],
+    "s5": ["magnet"], "s6": ["magnet"], "s7": ["shaft", "fits"], "s8": ["balance"],
+    "s9": ["assembly sequence", "bearing", "fits", "bracket"], "s10": ["phase plate", "wiring"],
+    "s11": ["phase plate", "wiring"], "s12": ["pre-power", "winding"], "s13": ["pre-power"],
+}
+
+_NUM_PREFIX = re.compile(r"^\s*(\d+[a-z]?|[A-Z])[.)]\s+")
+
+
+def related_sections(step: dict, sections: List[dict]) -> List[dict]:
+    """The process sections of one step (the same rule as the Assembly tab's step panel)."""
+    own = step.get("sections")
+    if own:
+        return [s for s in sections if s.get("id") in own]
+    keys = STEP_KEYWORDS.get(str(step.get("id")), [])
+    if not keys:
+        return []
+    out = []
+    for s in sections:
+        t = ("%s %s" % ((s.get("title") or {}).get("en") or "", (s.get("title") or {}).get("zh") or "")).lower()
+        if any(k in t for k in keys):
+            out.append(s)
+    return out
+
+
+def strip_number(text: str) -> str:
+    """A section title without its own old numbering ("6a. Winding" -> "Winding"): the step gives the number."""
+    return _NUM_PREFIX.sub("", text or "", count=1)
+
+
+def step_number(step: dict, index: int) -> int:
+    return int(step.get("n") or 0) or index + 1
+
+
+def _txt(b: Any, lang: str) -> str:
+    if not isinstance(b, dict):
+        return str(b or "")
+    other = "zh" if lang == "en" else "en"
+    return str(b.get(lang) or b.get(other) or "")
+
+
+_LABELS = {
+    "en": {"title": "Assembly and test process", "parts": "Parts", "note": "Note", "operation": "Operation",
+           "check": "Check", "general": "General", "same": "see %s", "revision": "Revision", "generated":
+           "Generated from the production's assembly steps and process sections; the steps' numbers are the graph's.",
+           "contents": "Contents"},
+    "zh": {"title": "装配与测试工艺", "parts": "零件", "note": "备注", "operation": "工序", "check": "检验",
+           "general": "通用", "same": "见 %s", "revision": "版本", "generated": "由生产模块的装配步骤和工艺章节生成；步骤编号与流程图一致。",
+           "contents": "目录"},
+}
+
+
+def document_html(steps: List[dict], sections: List[dict], title: str, revision: Any, lang: str = "en") -> str:
+    """The process document as one self-contained HTML page (view in the browser, print to PDF, download)."""
+    lang = "zh" if lang == "zh" else "en"
+    L = _LABELS[lang]
+    e = html.escape
+    order = sorted(enumerate(steps), key=lambda p: (step_number(p[1], p[0]), p[0]))
+    first: Dict[str, str] = {}                    # section id -> the number it was printed under first
+    toc: List[str] = []
+    body: List[str] = []
+
+    def section_html(num: str, s: dict) -> str:
+        out = ['<h3 id="sec-%s">%s %s</h3>' % (e(num), e(num), e(strip_number(_txt(s.get("title"), lang))))]
+        text = _txt(s.get("body"), lang).strip()
+        if text:
+            out.append("".join("<p>%s</p>" % e(par).replace("\n", "<br>") for par in text.split("\n\n")))
+        ti = s.get("tables_i18n") or {}
+        tables = ti.get(lang) or s.get("tables") or []
+        for tb in tables:
+            if not isinstance(tb, list) or not tb:
+                continue
+            rows = "".join("<tr>%s</tr>" % "".join(("<th>%s</th>" if i == 0 else "<td>%s</td>") % e(str(c))
+                                                     for c in (r if isinstance(r, list) else [r]))
+                           for i, r in enumerate(tb))
+            out.append("<table>%s</table>" % rows)
+        return "".join(out)
+
+    for idx, st in order:
+        n = step_number(st, idx)
+        kind = L["check"] if st.get("kind") == "check" else L["operation"]
+        name = _txt(st.get("title"), lang)
+        toc.append('<li><a href="#step-%d">%d. %s</a></li>' % (n, n, e(name)))
+        body.append('<h2 id="step-%d">%d. %s <span class="kind">%s</span></h2>' % (n, n, e(name), e(kind)))
+        parts = [_txt(p.get("name"), lang) for p in st.get("parts_resolved") or []]
+        if parts:
+            body.append('<p class="parts"><b>%s:</b> %s</p>' % (e(L["parts"]), e(", ".join(parts))))
+        note = _txt(st.get("note"), lang).strip() if st.get("note") else ""
+        if note:
+            body.append('<p class="note"><b>%s:</b> %s</p>' % (e(L["note"]), e(note)))
+        for k, s in enumerate(related_sections(st, sections), start=1):
+            num = "%d.%d" % (n, k)
+            sid = str(s.get("id"))
+            if sid in first:
+                body.append('<p class="ref">%s %s - <a href="#sec-%s">%s</a></p>' % (
+                    e(num), e(strip_number(_txt(s.get("title"), lang))), e(first[sid]), e(L["same"] % first[sid])))
+                continue
+            first[sid] = num
+            body.append(section_html(num, s))
+    rest = [s for s in sections if str(s.get("id")) not in first]
+    if rest:
+        g = (max((step_number(st, i) for i, st in enumerate(steps)), default=0) + 1)
+        toc.append('<li><a href="#step-%d">%d. %s</a></li>' % (g, g, e(L["general"])))
+        body.append('<h2 id="step-%d">%d. %s</h2>' % (g, g, e(L["general"])))
+        for k, s in enumerate(rest, start=1):
+            body.append(section_html("%d.%d" % (g, k), s))
+    head = "%s - %s" % (title, L["title"])
+    return ("<!doctype html><html lang=\"%s\"><head><meta charset=\"utf-8\"><title>%s</title>"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><style>"
+            "body{font:14px/1.5 system-ui,-apple-system,'Segoe UI','Microsoft YaHei',sans-serif;max-width:900px;"
+            "margin:24px auto;padding:0 16px;color:#111}h1{font-size:22px;margin-bottom:2px}"
+            "h2{font-size:17px;margin-top:28px;border-bottom:1px solid #ddd;padding-bottom:3px}"
+            "h3{font-size:14.5px;margin:16px 0 4px}.kind{font-size:11px;font-weight:600;color:#555;background:#eef;"
+            "border-radius:9px;padding:1px 8px;margin-left:6px;vertical-align:middle}.meta{color:#555;font-size:12px}"
+            "table{border-collapse:collapse;margin:6px 0 10px;font-size:13px}td,th{border:1px solid #ccc;"
+            "padding:3px 7px;text-align:left;vertical-align:top}th{background:#f3f4f6}.ref{color:#555}"
+            "@media print{a{color:inherit;text-decoration:none}h2{break-after:avoid}}</style></head><body>"
+            "<h1>%s</h1><p class=\"meta\">%s %s. %s</p><h2>%s</h2><ol class=\"toc\" style=\"list-style:none;"
+            "padding-left:0\">%s</ol>%s</body></html>") % (
+        lang, e(head), e(head), e(L["revision"]), e(str(revision if revision is not None else "-")),
+        e(L["generated"]), e(L["contents"]), "".join(toc), "".join(body))

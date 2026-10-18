@@ -159,7 +159,15 @@
     "noteEn": "Note (English)",
     "noteZh": "Note (Chinese)",
     "stepSections": "Process for this step",
-    "document": "Process document"
+    "stepDocs": "Drawings and documents",
+    "document": "Process document",
+    "kinds": {"fits": "Fits", "assembly": "Assembly", "winding": "Winding", "tests": "Tests"},
+    "docTitle": "Process document",
+    "docTip": "Generated from the assembly and test steps: the steps in the graph's numbering, each with its process sections (n.1, n.2 ...).",
+    "view": "View",
+    "download": "Download",
+    "editSections": "Edit process sections",
+    "hideSections": "Hide sections"
   },
   "docs": {
     "none": "No documents.",

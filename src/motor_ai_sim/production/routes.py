@@ -702,6 +702,27 @@ def get_process(request: Request, die: str, config: str):
     return store.load_file(die, config, "process.json")
 
 
+@router.get("/{die}/{config}/process_document")
+def get_process_document(request: Request, die: str, config: str, lang: str = "en", download: bool = False):
+    """The process document generated from the assembly and test steps (owner 2026-10-18): steps in the graph's
+    numbering, each with its process sections (n.1, n.2 ...); HTML to view, print or download."""
+    from motor_ai_sim.production import process_steps as PS
+    require_member_with_full_view(request, die, config)
+    prod = access.load_production(die, config) or {}
+    parts = store.load_file(die, config, "parts.json").get("parts") or []
+    steps = PS.view(store.load_file(die, config, "assembly_process.json"), parts,
+                    models.product_type_of(prod))["steps"]
+    sections = (store.load_file(die, config, "process.json") or {}).get("sections") or []
+    lang = "zh" if lang == "zh" else "en"
+    doc = PS.document_html(steps, sections, "%s %s" % (die, config), prod.get("current_revision"), lang)
+    headers = {}
+    if download:
+        fname = "%s_%s_process_%s.html" % (die.replace(" ", "_"), config.replace(" ", "_"), lang)
+        headers["Content-Disposition"] = 'attachment; filename="%s"' % "".join(
+            c for c in fname if c.isalnum() or c in "._-")
+    return Response(content=doc.encode("utf-8"), media_type="text/html; charset=utf-8", headers=headers)
+
+
 @router.put("/{die}/{config}/process")
 async def save_process(request: Request, die: str, config: str):
     user, _production = require_editor_with_full_view(request, die, config)

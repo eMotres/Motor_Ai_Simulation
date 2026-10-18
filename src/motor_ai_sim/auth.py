@@ -147,7 +147,10 @@ _ANON_OK_PREFIXES = ("/api/auth/login", "/api/auth/google", "/api/auth/logout",
                      "/api/comm-prefs",
                      # the applicant's personal reply page (no session: the signed token in the path is the credential; bad tokens are
                      # rate-limited in routes/verification.py).  /api/verification/mine and the admin routes keep their own checks.
-                     "/api/verification/reply")
+                     "/api/verification/reply",
+                     # MOTRES ERP pulls the companies catalogue and the motor prices with its own service token
+                     # (ERP_SYNC_TOKEN, checked in routes/erp_export.py; without it the route asks for an admin).
+                     "/api/erp-export")
 
 
 #: The worker-facing routes of docs/BYO_COMPUTE.md (heartbeat, lease, progress,

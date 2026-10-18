@@ -60,15 +60,42 @@ if [ "$MODE" != web ]; then
   done
 fi
 
-# 3) switch: only the services of this MODE are recreated
+# 3) switch.  The PAGES are published, not restarted: the new image's bundle is copied to /srv/motres/web/builds/<sha>
+#    (with the previous builds' hashed assets hard-linked in, so pages already open still load their lazy chunks) and
+#    the symlink /srv/motres/web/current is switched atomically - the web container keeps serving without a pause.
+#    The web container itself is recreated only when its nginx setup changed (or it does not serve the builds yet).
+WEB=/srv/motres/web
+PREV_WEB=$(readlink $WEB/current 2>/dev/null || true)
+publish_web() {
+  mkdir -p $WEB/builds
+  local B=$WEB/builds/$SHA cid
+  rm -rf $B.tmp
+  cid=$(docker create deploy-web:latest) && docker cp $cid:/usr/share/nginx/html $B.tmp && docker rm $cid >/dev/null || return 1
+  [ -n "$PREV_WEB" ] && [ -d "$WEB/$PREV_WEB/assets" ] && cp -aln "$WEB/$PREV_WEB/assets/." $B.tmp/assets/ 2>/dev/null
+  rm -rf $B && mv $B.tmp $B
+  ln -sfn builds/$SHA $WEB/current.new && mv -T $WEB/current.new $WEB/current
+  ls -1dt $WEB/builds/*/ 2>/dev/null | tail -n +11 | xargs -r rm -rf          # keep the last 10 builds
+}
+web_conf_sig() { md5sum /etc/nginx/conf.d/default.conf /docker-entrypoint.d/16-webroot.sh 2>/dev/null | cut -c1-32 | tr -d '\n'; }
 rm -rf $APP.prev && mv $APP $APP.prev && mv $APP.new $APP
-(cd $APP/deploy && docker compose up -d --no-build --no-deps $SERVICES 2>&1 | tail -3)
+if [ "$MODE" != api ]; then
+  publish_web || { echo "web publish failed"; }
+  new_sig=$(docker run --rm --entrypoint sh deploy-web:latest -c "$(declare -f web_conf_sig); web_conf_sig")
+  old_sig=$(docker exec deploy-web-1 sh -c "$(declare -f web_conf_sig); web_conf_sig" 2>/dev/null || true)
+  if [ "$new_sig" != "$old_sig" ] || ! docker exec deploy-web-1 grep -q /srv/web/current /etc/nginx/webroot.conf 2>/dev/null; then
+    echo "web container recreated (nginx setup changed)"; (cd $APP/deploy && docker compose up -d --no-build --no-deps web 2>&1 | tail -2)
+  else
+    echo "web published without restart: current -> $(readlink $WEB/current)"
+  fi
+fi
+[ "$MODE" != web ] && (cd $APP/deploy && docker compose up -d --no-build --no-deps api 2>&1 | tail -3)
 echo "$SHA" > $APP/.deployed_commit
 
 rollback() {
   echo "ROLLBACK to $PREV"
   for s in $SERVICES; do docker image inspect deploy-$s:prev >/dev/null 2>&1 && docker tag deploy-$s:prev deploy-$s:latest; done
   rm -rf $APP.failed && mv $APP $APP.failed && mv $APP.prev $APP
+  [ -n "$PREV_WEB" ] && ln -sfn $PREV_WEB $WEB/current.new && mv -T $WEB/current.new $WEB/current
   (cd $APP/deploy && docker compose up -d --no-build --no-deps $SERVICES 2>&1 | tail -2)
   echo "$PREV" > $APP/.deployed_commit
 }

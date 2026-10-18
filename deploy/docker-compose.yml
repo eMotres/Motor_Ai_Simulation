@@ -140,6 +140,9 @@ services:
     ports:
       # host nginx + certbot terminate TLS in front and proxy to 127.0.0.1:8080
       - "127.0.0.1:8080:80"
+    # published builds (deploy/deploy_module.sh): /srv/web/current is switched atomically, no container restart
+    volumes:
+      - /srv/motres/web:/srv/web:ro
     # nginx over a static bundle: one thread and a quarter of a gigabyte is more
     # than it has ever used, and the same 512 shares as the API keep it behind
     # the ERP under contention (see the api block above).

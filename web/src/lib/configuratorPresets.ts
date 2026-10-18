@@ -90,7 +90,7 @@ export function presetDiff(pr: Preset, k: KnobsLike, battery: BatteryCmp | null,
                            prop?: { current: string | null; wanted: string | null },
                            /** `ignoreCurrent`: a propeller is the load, so the current FOLLOWS the propeller
                             *  and is not a setting that can differ from the preset */
-                           opts?: { ignoreCurrent?: boolean }): string[] {
+                           opts?: { ignoreCurrent?: boolean; speedCap?: number | null; speedIsCap?: boolean }): string[] {
   // the drive is the (transistor, frequency) PAIR: two ids of one pair are the same drive
   const out: string[] = [];
   const p = pr.knobs;
@@ -98,7 +98,11 @@ export function presetDiff(pr: Preset, k: KnobsLike, battery: BatteryCmp | null,
   if (diff(k.L_mm, p.L_mm) || diff(k.N, p.N) || diff(k.wireH_mm, p.wireH_mm)
       || diff(k.nP, p.nP) || (p.split != null && diff(k.split ?? 1, p.split))) out.push('build');
   if (!opts?.ignoreCurrent && diff(k.I_A, p.I_A)) out.push('current');
-  if (diff(k.rpm, p.rpm)) out.push('speed');
+  // `speedCap`: the propeller's motor S1 limit - the preset's speed capped there is still the preset (owner 2026-10-18)
+  // (`speedIsCap`: the RATED preset's speed IS that limit for the propeller in use)
+  const cap = opts?.speedCap != null && opts.speedCap > 0 ? opts.speedCap : null;
+  const wantRpm = cap == null || p.rpm == null ? p.rpm : opts?.speedIsCap ? cap : Math.min(p.rpm, cap);
+  if (diff(k.rpm, wantRpm)) out.push('speed');
   if (presetBattery && battery) {
     if (battery.cells !== presetBattery.cells || !close(battery.nom, presetBattery.nom)
         || !close(battery.max, presetBattery.max) || !close(battery.min, presetBattery.min)) out.push('battery');
@@ -123,3 +127,7 @@ export function presetOfBuild(presets: Preset[], k: Pick<KnobsLike, 'N' | 'L_mm'
     return p.L_mm != null && eq(k.L_mm, p.L_mm) && eq(k.N, p.N) && eq(k.wireH_mm, p.wireH_mm) && eq(k.nP, p.nP);
   }) ?? null;
 }
+
+/** A rated preset: a configuration's own preset (no duty) or its duty named "rated". */
+export const isRatedPreset = (pr: { duty?: string | null }): boolean =>
+  !pr.duty || pr.duty.trim().toLowerCase() === 'rated';

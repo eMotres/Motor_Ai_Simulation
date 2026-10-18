@@ -18,8 +18,7 @@ import { useContentLang } from './BilingualText';
 import { displayText, stepModelFamilies } from '../helpers';
 import { downloadFile, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
 import type { AssemblyStep, Bilingual, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
-import { UnifiedViewer } from '../../viewer3d';
-import type { PartGroup } from '../../viewer3d/internal/model3d';
+import { UnifiedViewer, type PartGroup } from '../../viewer3d';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const W = 230;
@@ -175,6 +174,42 @@ const StepThumb: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string)
   );
 };
 
+/** One drawing / document shown IN the page (owner 2026-10-18: "show the content of these files on the page, so
+ *  everything is visible and can be downloaded"): a PDF in the browser's viewer, a picture as an image, with
+ *  full-screen and download buttons.  The file needs the session header, so it is fetched as a typed blob. */
+const DocPreview: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string) => void }> = ({ ctx, doc, onError }) => {
+  const { t } = useTranslation('production');
+  const ext = extOf(doc.name);
+  const kind = ext === 'pdf' ? 'pdf' : IMAGE_EXT.includes(ext) ? 'image' : null;
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!kind) return undefined;
+    let dead = false; let u: string | null = null;
+    const type = kind === 'pdf' ? 'application/pdf' : `image/${ext === 'jpg' ? 'jpeg' : ext}`;
+    void fileObjectUrl(ctx.die, ctx.config, doc.file_id)
+      .then((blobUrl) => fetch(blobUrl).then((r) => r.blob()).then((b) => { URL.revokeObjectURL(blobUrl); return URL.createObjectURL(new Blob([b], { type })); }))
+      .then((x) => { if (dead) URL.revokeObjectURL(x); else { u = x; setUrl(x); } })
+      .catch((e) => onError(String(e)));
+    return () => { dead = true; if (u) URL.revokeObjectURL(u); };
+  }, [ctx.die, ctx.config, doc.file_id, kind, ext, onError]);
+  const btn = { textTransform: 'none', fontSize: 11.5, py: 0, minHeight: 0 } as const;
+  return (
+    <Paper variant="outlined" sx={{ bgcolor: 'var(--panel-2)', borderRadius: 1.5, overflow: 'hidden' }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, px: 1.25, py: 0.6, borderBottom: kind ? '1px solid var(--line-soft)' : 'none' }}>
+        <Typography sx={{ fontSize: 12.5, fontWeight: 700, flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{doc.name}</Typography>
+        {kind && <Button size="small" sx={btn} onClick={() => void openFileInNewWindow(ctx.die, ctx.config, doc.file_id, ext === 'jpeg' ? 'jpg' : ext).catch((e) => onError(String(e)))}>
+          {t('process.fullScreen', 'Full screen')}</Button>}
+        <Button size="small" variant="outlined" sx={btn} onClick={() => void downloadFile(ctx.die, ctx.config, doc.file_id, doc.name).catch((e) => onError(String(e)))}>
+          {t('process.downloadFile', 'Download')}</Button>
+      </Box>
+      {kind === 'pdf' && (url
+        ? <Box component="iframe" src={`${url}#view=FitH`} title={doc.name} sx={{ display: 'block', width: '100%', height: { xs: 360, md: 560 }, border: 0, bgcolor: '#fff' }} />
+        : <Typography sx={{ fontSize: 11, color: 'var(--text-4)', p: 1.5 }}>…</Typography>)}
+      {kind === 'image' && url && <Box component="img" src={url} alt={doc.name} sx={{ display: 'block', maxWidth: '100%', maxHeight: 560, mx: 'auto', bgcolor: '#fff' }} />}
+    </Paper>
+  );
+};
+
 /** Pictures of one step (owner 2026-10-18: "post pictures to every production step"): every member - the factory too -
  *  adds photos (button or Ctrl+V); they are production documents tagged with the step. */
 const StepPhotos: React.FC<{ ctx: ProdCtx; step: AssemblyStep; documents: DocumentRec[] }> = ({ ctx, step, documents }) => {
@@ -289,30 +324,17 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
               ? <Typography sx={{ fontSize: 12.5, color: 'var(--text-4)' }}>—</Typography>
               : (cur.parts_resolved ?? []).map((p) => <Chip key={p.id} size="small" label={p.name.en || p.name.zh} />)}
           </Box>
-          {/* the drawings and documents of this step's parts (owner 2026-10-18: the magnet layout drawing belongs here); a click opens it */}
-          {(() => {
-            const ids = new Set((cur.parts_resolved ?? []).map((p) => p.id));
-            const own = new Set(cur.documents ?? []);
-            const docs = documents.filter((d) => !d.step_id && (own.has(d.id) || (d.part_id && ids.has(d.part_id))) && !d.name.startsWith('[superseded'));
-            return docs.length > 0 && (
-              <Box sx={{ mt: 1.25 }}>
-                <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepDocs', 'Drawings and documents')}</Typography>
-                <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
-                  {docs.map((d) => {
-                    const ext = (d.name.split('.').pop() || '').toLowerCase();
-                    const viewable = ['pdf', 'png', 'jpg', 'jpeg'].includes(ext);
-                    return <Chip key={d.id} size="small" variant="outlined" label={d.name} clickable
-                      onClick={() => void (viewable ? openFileInNewWindow(ctx.die, ctx.config, d.file_id, ext === 'jpeg' ? 'jpg' : ext)
-                        : downloadFile(ctx.die, ctx.config, d.file_id, d.name)).catch((e) => setErr(String(e)))} />;
-                  })}
-                </Box>
-              </Box>
-            );
-          })()}
+          {/* the step's drawings are shown open below (DocPreview); no file-name list here (owner 2026-10-18) */}
           <StepPhotos ctx={ctx} step={cur} documents={documents} />
           </Box>
           <StepModel3D ctx={ctx} steps={steps} step={cur} />
           </Box>
+          {/* the drawings themselves, open on the page (owner 2026-10-18) */}
+          {stepDocsOf(cur, documents).length > 0 && (
+            <Box sx={{ mt: 1.5, display: 'grid', gap: 1.25, gridTemplateColumns: { xs: '1fr', lg: 'repeat(2, minmax(0, 1fr))' } }}>
+              {stepDocsOf(cur, documents).map((d) => <DocPreview key={d.id} ctx={ctx} doc={d} onError={setErr} />)}
+            </Box>
+          )}
           {relatedSections(cur, sections, explicitSections).length > 0 && (
             <Box sx={{ mt: 1.5 }}>
               <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepSections', 'Process for this step')}</Typography>
@@ -361,6 +383,15 @@ const FitToScreen: React.FC<{ nodeCount: number; label: string }> = ({ nodeCount
     </Panel>
   );
 };
+
+/** The drawings / documents of a step: its own documents and those of its parts (not step photos, not superseded files). */
+function stepDocsOf(step: AssemblyStep, documents: DocumentRec[]): DocumentRec[] {
+  const ids = new Set((step.parts_resolved ?? []).map((p) => p.id));
+  const own = new Set(step.documents ?? []);
+  const seen = new Set<string>();      // one drawing linked to two parts of the step is shown once (owner 2026-10-18)
+  return documents.filter((d) => !d.step_id && (own.has(d.id) || (!!d.part_id && ids.has(d.part_id))) && !d.name.startsWith('[superseded'))
+    .filter((d) => (seen.has(d.name) ? false : (seen.add(d.name), true)));
+}
 
 export function relatedSections(step: AssemblyStep, sections: ProcessSection[], explicit = false): ProcessSection[] {
   const own = step.sections ?? [];

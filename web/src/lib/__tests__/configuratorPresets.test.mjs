@@ -67,3 +67,16 @@ t('any number of configurations: 1, 3 or 5 presets are all handled the same way'
     });
   }
 });
+
+test('rated follows the propeller S1 limit; other presets are only capped (owner 2026-10-18)', async () => {
+  const P = await import('../configuratorPresets.ts');
+  assert.equal(P.isRatedPreset({}), true);
+  assert.equal(P.isRatedPreset({ duty: 'Rated ' }), true);
+  assert.equal(P.isRatedPreset({ duty: 'peak' }), false);
+  const pr = { knobs: { L_mm: 15, N: 7, wireH_mm: 1, nP: 1, I_A: 30, rpm: 10000 }, pwm_variants: [], drive_variant: null };
+  const k = (rpm) => ({ L_mm: 15, N: 7, wireH_mm: 1, nP: 1, I_A: 30, rpm, drive: 'sine' });
+  assert.deepEqual(P.presetDiff(pr, k(7400), null, null, undefined, { ignoreCurrent: true, speedCap: 7400, speedIsCap: true }), []);
+  assert.deepEqual(P.presetDiff(pr, k(10000), null, null, undefined, { ignoreCurrent: true, speedCap: 7400, speedIsCap: true }), ['speed']);
+  assert.deepEqual(P.presetDiff(pr, k(7400), null, null, undefined, { ignoreCurrent: true, speedCap: 7400 }), []);
+  assert.deepEqual(P.presetDiff(pr, k(10000), null, null, undefined, { ignoreCurrent: true, speedCap: 12000 }), []);
+});

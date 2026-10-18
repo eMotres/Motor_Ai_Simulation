@@ -68,7 +68,7 @@ import {
 } from '../../lib/configuratorBattery';
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
-import { presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
+import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
 import { buildModePresets, baseModeLabel, type ModePreset } from '../../lib/configuratorModes';
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
@@ -1288,6 +1288,12 @@ const ConfiguratorPanel: React.FC = () => {
   const s1PackMin = packWindow?.min ?? null;
   const s1PackMax = packWindow?.max ?? null;
   const [s1, setS1] = useState<S1Result | null>(null);
+  // "Rated must always work, for any propeller - find rated for each propeller with its cooling air" (owner 2026-10-18):
+  // with a propeller as the load, the RATED speed is this propeller's MOTOR continuous (S1) limit - the speed where the
+  // propeller's own wash still holds the winding and the magnets inside their limits.  After a rated preset is applied, a
+  // propeller is picked or the page loads, the speed is SET there ('set'); after another preset it is only capped there
+  // ('cap').  The reference point moves with it, so the state still reads as that preset.  A speed set later is the user's.
+  const clampToS1Ref = React.useRef<'set' | 'cap' | null>('set');
   useEffect(() => {
     setS1(null);
     if (!pointGate.showBatteryDerived || !propellerCoolingActive || !propId || !s1Die || !s1Config) return;
@@ -1301,6 +1307,9 @@ const ConfiguratorPanel: React.FC = () => {
     });
     return () => { dead = true; };
   }, [pointGate.showBatteryDerived, propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
+  // the speed the rated point is capped at for this propeller (see clampToS1Ref)
+  const s1CapRpm = s1?.limit_motor && s1.limit_motor.rpm != null && !s1.limit_motor.lower_bound && s1.limit_motor.rpm > 0
+    ? Math.floor((s1.limit_motor.rpm * 0.99) / 10) * 10 : null;
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = pointGate.showBatteryDerived && propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
   // The load chart's two vertical lines (owner 2026-10-18): the MOTOR's own continuous limit and the supply's
@@ -1468,7 +1477,7 @@ ${s1Text.tip}` : '';
   /** thermal zones on the knobs: green = continuous below both limits with this propeller, red = beyond.
    *  Recomputed with wire / turns / length / propeller / ambient (a pure function of them). */
   const zones = useMemo(() => {
-    if (!propellerCoolingActive || !series || driveOn || !sinePointAccepted || !motorLossesComputed) return { rpm: null as string | null, I: null as string | null };
+    if (!propellerCoolingActive || !series || driveOn || !sinePointAccepted || !motorLossesComputed) return { rpm: null as string | null, I: null as string | null, greenTop: null as number | null };
     const okAt = (rpm: number, I: number): boolean | null => {
       const pt = seriesAt(series, rpm);
       if (!pt || pt.h_W_m2K == null) return null;
@@ -1480,17 +1489,51 @@ ${s1Text.tip}` : '';
         { h_Wm2K: pt.h_W_m2K, ambient_C: ambient });
       return !judgeTemps(th.T_winding_C, th.T_magnet_C, tLimits).over;
     };
-    const rpmOk = zoneSamples(ranges.rpm.min, ranges.rpm.max).map((r) => {
+    const okRpm = (r: number): boolean | null => {
       if (!propLoad) return okAt(r, knobs.I_A);
       const pt = seriesAt(series, r);
       if (!pt) return null;
       const ld = currentForTorque(pt.torque_Nm, torqueAtI({ ...knobs, rpm: r }), ranges.I_A.max);
       return ld.ok ? okAt(r, ld.I_A) : false;
-    });
+    };
+    const samples = zoneSamples(ranges.rpm.min, ranges.rpm.max);
+    const rpmOk = samples.map(okRpm);
     const iOk = propLoad ? [] : zoneSamples(ranges.I_A.min, ranges.I_A.max).map((I) => okAt(knobs.rpm, I));
-    return { rpm: zoneGradient(rpmOk), I: zoneGradient(iOk) };
+    // the top of the green band from the bottom of the range, bisected between the last green and the first red sample:
+    // the same model the overheat line uses, so a speed at or below it never shows "overheats" (owner 2026-10-18)
+    let greenTop: number | null = null;
+    if (propLoad) {
+      let i = 0;
+      while (i < samples.length && rpmOk[i] === true) i += 1;
+      if (i === samples.length && i > 0) greenTop = samples[i - 1];
+      else if (i > 0) {
+        let lo = samples[i - 1], hi = samples[i];
+        for (let k = 0; k < 12; k += 1) { const mid = 0.5 * (lo + hi); if (okRpm(mid) === true) lo = mid; else hi = mid; }
+        greenTop = lo;
+      }
+    }
+    return { rpm: zoneGradient(rpmOk), I: zoneGradient(iOk), greenTop };
   }, [propellerCoolingActive, series, p, ref.poles, thermalGeom, tLimits, ambient, propLoad, driveOn, motorLossesComputed, ranges.rpm.min, ranges.rpm.max, ranges.I_A.min, ranges.I_A.max,
       sinePointAccepted, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, propLoad ? 0 : knobs.I_A, propLoad ? 0 : knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The RATED speed for this propeller (owner 2026-10-18: "rated must always work - find the real point for each propeller"):
+  // the lower of the server's motor S1 limit (calibrated passport thermal) and the top of the green band of the model
+  // this page judges overheating with, 1 % inside, a round number.  Applied after a preset / propeller pick / load
+  // (clampToS1Ref) once both answers are in, so the rated point never shows "overheats".
+  const ratedCapRpm = useMemo(() => {
+    const caps = [s1CapRpm, zones.greenTop != null ? Math.floor((zones.greenTop * 0.99) / 10) * 10 : null]
+      .filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
+    return caps.length ? Math.min(...caps) : null;
+  }, [s1CapRpm, zones.greenTop]);
+  useEffect(() => {
+    const how = clampToS1Ref.current;
+    if (!how || ratedCapRpm == null) return;
+    const to = (v: number) => (how === 'set' ? ratedCapRpm : Math.min(v, ratedCapRpm));
+    setKnobs((k) => (k.rpm === to(k.rpm) ? k : { ...k, rpm: to(k.rpm) }));
+    setRefKnobs((k) => (k && k.rpm !== to(k.rpm) ? { ...k, rpm: to(k.rpm) } : k));
+    // HELD until the user sets a speed himself (setRpm): a later seed of the catalog duty speed, a fresh S1 answer or a
+    // build change re-applies it, so the rated point stays at the propeller's real continuous point
+  }, [ratedCapRpm, knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // STRANDS IN HAND multiply the parallel paths for every current split: k
   // wires wound together each carry 1/k of the turn's current.  It is a
   // property of the BUILD (the passport records what it was measured at), not
@@ -1560,6 +1603,7 @@ ${s1Text.tip}` : '';
 
   const set = (k: keyof Knobs) => (v: number) => { setRestoreMisfitNote(null); setKnobs((s) => ({ ...s, [k]: v })); };
   const setRpm = (v: number) => {
+    clampToS1Ref.current = null;          // the user's own speed: no longer held at the rated point
     setRestoreMisfitNote(null);
     if (propLoad && propRpmSeedKey) propRpmManualEditRef.current = propRpmSeedKey;
     setKnobs((s) => ({ ...s, rpm: v }));
@@ -1571,6 +1615,7 @@ ${s1Text.tip}` : '';
   /** Restore EVERYTHING to a real configuration of the die: every knob, its saved pack, its
    *  default drive.  The user's battery edit for this machine is dropped (the pack is the preset's). */
   const applyPreset = (pr: Preset | ModePreset) => {
+    clampToS1Ref.current = isRatedPreset(pr) ? 'set' : 'cap';
     const catalogPoint = cooled && propLoad ? propellerDutyRpmDefault(pr, activeDuty()) : null;
     const nk0 = presetKnobs(knobs, pr);
     const nk = { ...nk0, rpm: initialRpmForLoadMode(propLoad ? 'prop' : 'manual', nk0.rpm,
@@ -1596,7 +1641,7 @@ ${s1Text.tip}` : '';
   // (with a propeller as the load the current is the propeller's, not a setting)
   const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, batteryNumbers, batteryFromPack(pr.battery),
     cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined,
-    { ignoreCurrent: propLoad }).length === 0)?.key ?? null;
+    { ignoreCurrent: propLoad, speedCap: propLoad ? ratedCapRpm : null, speedIsCap: isRatedPreset(pr) }).length === 0)?.key ?? null;
   // the button the state started from - "changed from L12 · rated" names it
   const baseModePreset = modePresets.find((m) => m.config === baseConfig && m.duty === baseMode) ?? null;
   const baseLabel = baseModeLabel(modePresets, baseConfig, baseMode);
@@ -1620,7 +1665,8 @@ ${s1Text.tip}` : '';
     || (!!machinePack && !sameBattery(battery, machinePack))
     || (() => {
     const r0 = refKnobs ?? baseKnobs(p);
-    return (['N', 'L_mm', 'wireH_mm', 'nP', 'I_A', 'rpm'] as const)
+    // with a propeller as the load the current FOLLOWS the propeller - not a setting that makes the state "changed"
+    return ((propLoad ? ['N', 'L_mm', 'wireH_mm', 'nP', 'rpm'] : ['N', 'L_mm', 'wireH_mm', 'nP', 'I_A', 'rpm']) as ('N' | 'L_mm' | 'wireH_mm' | 'nP' | 'I_A' | 'rpm')[])
       .some((kk) => Math.abs(Number(knobs[kk]) - Number(r0[kk]))
                     > 1e-6 * Math.max(1, Math.abs(Number(r0[kk]))));
   })();
@@ -2069,7 +2115,11 @@ ${s1Text.tip}` : '';
                 {cooled && (
                 <select value={propId ?? ''} aria-label={tx('configurePropeller.title')}
                   disabled={!propLoad}
-                  onChange={(e) => updateCool({ propId: e.target.value })}
+                  onChange={(e) => {
+                    const at = modePresets.find((m) => m.key === matchedKey);
+                    clampToS1Ref.current = s1Moved ? null : (!at || isRatedPreset(at) ? 'set' : 'cap');
+                    updateCool({ propId: e.target.value });
+                  }}
                   title={propSelTip}
                   style={{ background: 'transparent', border: '1px solid var(--line)', borderRadius: 4, color: 'var(--text-0)', fontSize: 12, fontFamily: 'monospace', padding: '2px 4px', flex: '1 1 auto', minWidth: 0, maxWidth: 260, opacity: !propLoad ? 0.5 : 1, cursor: !propLoad ? 'not-allowed' : 'pointer' }}>
                   {!allowedProps.length && <option value="" style={{ color: '#000' }}>…</option>}

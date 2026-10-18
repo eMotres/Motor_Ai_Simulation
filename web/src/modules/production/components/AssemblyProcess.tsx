@@ -131,6 +131,7 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
   const titleOf = useCallback((s: AssemblyStep) => displayText(s.title, ui).text, [ui]);
   const { nodes, edges } = useMemo(() => layout(steps, titleOf, sel), [steps, titleOf, sel]);
   const cur = steps.find((s) => s.id === sel) ?? null;
+  const explicitSections = steps.some((s) => (s.sections ?? []).length > 0);
 
   const save = async (next: AssemblyStep[]) => {
     try {
@@ -204,10 +205,10 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
               </Box>
             );
           })()}
-          {relatedSections(cur, sections).length > 0 && (
+          {relatedSections(cur, sections, explicitSections).length > 0 && (
             <Box sx={{ mt: 1.5 }}>
               <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepSections', 'Process for this step')}</Typography>
-              <ProcessView sections={relatedSections(cur, sections)} ctx={ctx} readOnly numberPrefix={String(cur.n || (steps.findIndex((s) => s.id === cur.id) + 1))} />
+              <ProcessView sections={relatedSections(cur, sections, explicitSections)} ctx={ctx} readOnly numberPrefix={String(cur.n || (steps.findIndex((s) => s.id === cur.id) + 1))} />
             </Box>
           )}
         </Paper>
@@ -231,9 +232,10 @@ const STEP_KEYWORDS: Record<string, string[]> = {
   s10: ['phase plate', 'wiring'], s11: ['phase plate', 'wiring'], s12: ['pre-power', 'winding'], s13: ['pre-power'],
 };
 
-export function relatedSections(step: AssemblyStep, sections: ProcessSection[]): ProcessSection[] {
-  const own = step.sections;
-  if (own && own.length) return sections.filter((x) => own.includes(x.id));
+export function relatedSections(step: AssemblyStep, sections: ProcessSection[], explicit = false): ProcessSection[] {
+  const own = step.sections ?? [];
+  // explicit: the process names its sections per step, so an empty list means none (no keyword guessing)
+  if (own.length || explicit) return sections.filter((x) => own.includes(x.id));
   const keys = STEP_KEYWORDS[step.id] ?? [];
   if (!keys.length) return [];
   return sections.filter((x) => {

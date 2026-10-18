@@ -78,3 +78,31 @@ export function loadLine(rows: readonly S1ChartRow[] | null | undefined, m: Load
 
 /** Line colours, one per propeller in the order picked. */
 export const LOAD_COLORS = ['#3b82f6', '#f59e0b', '#16a34a', '#db2777', '#8b5cf6', '#0891b2'];
+
+/** The line's value at speed ``x`` (linear between the neighbouring rows; null outside the line) - the S1 point's
+ *  value on the chart (owner 2026-10-18: "I cannot pick the S1 value itself"). */
+export function valueAt(line: { ok: readonly LoadPoint[]; over: readonly LoadPoint[] }, x: number): number | null {
+  const pts = [...line.ok, ...line.over].sort((a, b) => a.x - b.x);
+  for (let i = 1; i < pts.length; i += 1) {
+    const a = pts[i - 1], b = pts[i];
+    if (x >= a.x && x <= b.x) return b.x === a.x ? a.y : a.y + (b.y - a.y) * (x - a.x) / (b.x - a.x);
+  }
+  return null;
+}
+
+/** The line with a point AT speed ``x`` added (both to the continuous and the dashed part when x is their joint), so
+ *  the tooltip can stop exactly there. */
+export function withPointAt(line: { ok: LoadPoint[]; over: LoadPoint[] }, x: number | null | undefined): { ok: LoadPoint[]; over: LoadPoint[] } {
+  if (x == null || !Number.isFinite(x)) return line;
+  const y = valueAt(line, x);
+  if (y == null) return line;
+  const p: LoadPoint = { x, y, rpm: x };
+  const add = (arr: LoadPoint[]) => {
+    if (!arr.length || x < arr[0].x || x > arr[arr.length - 1].x || arr.some((q) => q.x === x)) return arr;
+    return [...arr, p].sort((a, b) => a.x - b.x);
+  };
+  const okEnd = line.ok.length ? line.ok[line.ok.length - 1].x : -Infinity;
+  const nextFail = line.over.find((q) => q.x > okEnd);                // the solid line ends AT the limit
+  const ok = line.ok.length && x > okEnd && nextFail && x <= nextFail.x ? [...line.ok, p] : add(line.ok);
+  return { ok, over: add(line.over) };
+}

@@ -40,3 +40,14 @@ t('every metric has a unit and an all-continuous line has no dashed part', () =>
   assert.equal(over.length, 0);
   assert.deepEqual(L.loadLine(null, 'thrust'), { ok: [], over: [] });
 });
+
+t('the S1 point: value interpolated at the limit, the solid line ends exactly there', () => {
+  const line = { ok: [{ x: 1000, y: 1, rpm: 1000 }, { x: 2000, y: 2, rpm: 2000 }],
+                 over: [{ x: 2000, y: 2, rpm: 2000 }, { x: 3000, y: 4, rpm: 3000 }] };
+  assert.equal(L.valueAt(line, 2500), 3);
+  assert.equal(L.valueAt(line, 5000), null);
+  const w = L.withPointAt(line, 2500);
+  assert.deepEqual(w.ok.map((p) => p.x), [1000, 2000, 2500]);
+  assert.deepEqual(w.over.map((p) => p.x), [2000, 2500, 3000]);
+  assert.equal(L.withPointAt(line, null), line);
+});

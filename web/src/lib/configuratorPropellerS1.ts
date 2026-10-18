@@ -11,6 +11,16 @@ export type S1Binding = 'winding' | 'magnet' | 'current' | 'voltage' | 'speed_ra
 /** Why a scan that still passes stopped (the limit is then a LOWER bound). */
 export type S1RangeEnd = 'propeller_data' | 'motor_speed_grid' | 'requested';
 
+export interface S1SideLimit {
+  rpm: number | null;
+  binding: S1Binding | 'speed_range' | null;
+  lower_bound: boolean;
+  current_A?: number | null;
+  battery_current_A?: number | null;
+  controller_limit_A?: number | null;
+  controller_bus_limit_A?: number | null;
+}
+
 export interface S1Limit {
   rpm: number;
   thrust_N: number;
@@ -111,6 +121,9 @@ export interface S1Result {
   config: string;
   ambient_c: number;
   limit: S1Limit | null;
+  /** the motor's own limit and the supply's (controller / ESC / pack current) apart - the load chart's two lines */
+  limit_motor?: S1SideLimit | null;
+  limit_supply?: S1SideLimit | null;
   no_continuous_point: boolean;
   first_failure: S1Binding | null;
   monotone: boolean;

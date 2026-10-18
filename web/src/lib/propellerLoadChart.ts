@@ -17,6 +17,8 @@ export interface S1ChartRow {
   T_winding_C?: number | null;
   T_magnet_C?: number | null;
   ok: boolean;
+  /** inside the MOTOR's own limits (the controller / pack current judged apart, owner 2026-10-18) */
+  ok_motor?: boolean;
 }
 
 export type LoadMetric = 'thrust' | 'torque' | 'batteryCurrent' | 'phaseCurrent' | 'efficiency' | 'gPerW'
@@ -58,14 +60,15 @@ export function metricValue(r: S1ChartRow, m: LoadMetric): number | null {
 
 export interface LoadPoint { x: number; y: number; rpm: number }
 
-/** One propeller's line over speed: the continuous part (rows inside every limit) and the part above it (dashed; it
+/** One propeller's line over speed: the continuous part (rows inside the motor's own limits; the supply's limit is a
+ *  separate vertical line) and the part above it (dashed; it
  *  starts at the last continuous point so the two join).  Rows without a value are left out. */
 export function loadLine(rows: readonly S1ChartRow[] | null | undefined, m: LoadMetric): { ok: LoadPoint[]; over: LoadPoint[] } {
   const pts = (rows ?? [])
     .map((r) => ({ r, n: num(r.rpm), y: metricValue(r, m) }))
     .filter((p): p is { r: S1ChartRow; n: number; y: number } => p.n != null && p.n > 0 && p.y != null)
     .sort((a, b) => a.n - b.n);
-  const firstOver = pts.findIndex((p) => !p.r.ok);
+  const firstOver = pts.findIndex((p) => !(p.r.ok_motor ?? p.r.ok));
   const toPt = (p: { r: S1ChartRow; n: number; y: number }): LoadPoint => ({ x: p.n, y: p.y, rpm: p.n });
   if (firstOver < 0) return { ok: pts.map(toPt), over: [] };
   const ok = pts.slice(0, firstOver).map(toPt);

@@ -761,6 +761,10 @@
     "compare": "Compare propellers:",
     "note": "Solid: continuous (S1) operation. Dashed: above the continuous limit - short bursts only.",
     "moved": "The load chart belongs to the catalogue build of this motor: return the build settings to see it.",
+    "s1Label": "S1 limit {rpm} rpm",
+    "setLabel": "Selected {rpm} rpm",
+    "toS1": "Set speed to the S1 limit ({rpm} rpm)",
+    "linesNote": "Vertical lines: solid = the speed selected in Configure (click or drag on the chart to change it); green dashed = the continuous (S1) limit with this propeller.",
     "m": {
       "thrust": "Thrust, kg",
       "torque": "Torque, N·m",

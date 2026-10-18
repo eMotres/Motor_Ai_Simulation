@@ -37,3 +37,11 @@ def test_keywords_match_whole_words_and_own_sections_win():
     own = dict(steps["s4"], sections=["b"])
     assert [s["id"] for s in PS.related_sections(own, secs)] == ["b"]
     assert PS.normalize_step(dict(own))["sections"] == ["b"]
+
+
+def test_explicit_process_means_empty_is_empty():
+    steps = PS.default_steps("motor")
+    secs = [_sec("w", "6a. Winding and wiring")]
+    steps[1]["sections"] = ["w"]
+    doc = PS.document_html(steps, secs, "T", 1, "en")
+    assert "1.1" not in doc and "2.1 Winding and wiring" in doc     # step 1 (coil keyword) gets nothing

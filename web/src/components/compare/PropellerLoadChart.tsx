@@ -7,11 +7,11 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Box, Chip, Paper, Tooltip, Typography } from '@mui/material';
-import { CartesianGrid, Legend, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip as RcTooltip, XAxis, YAxis } from 'recharts';
+import { CartesianGrid, Legend, Line, LineChart, ReferenceDot, ReferenceLine, ResponsiveContainer, Tooltip as RcTooltip, XAxis, YAxis } from 'recharts';
 import type { PropSummary } from '../../lib/configuratorPropeller';
 import { modelLabel, vendorLabel } from '../../lib/configuratorPropeller';
 import { fetchPropellerS1 } from '../../lib/propellerApi';
-import { LOAD_COLORS, LOAD_METRICS, METRIC_UNIT, loadLine, type LoadMetric, type S1ChartRow } from '../../lib/propellerLoadChart';
+import { LOAD_COLORS, LOAD_METRICS, METRIC_UNIT, loadLine, valueAt, withPointAt, type LoadMetric, type S1ChartRow } from '../../lib/propellerLoadChart';
 import { nsT } from '../../i18n/nsT';
 
 const tx = nsT('controller');
@@ -64,8 +64,15 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
     return () => { dead = true; };
   }, [ids, die, config, ambient, drive, packMin, packMax, escBusA]);
 
-  const lines = ids.map((id, i) => ({ id, color: LOAD_COLORS[i], name: propName(allowed.find((p) => p.id === id), id),
-    ...loadLine(rows[id], metric) }));
+  // the selected propeller's line carries points AT the two limit speeds, so the tooltip stops exactly there
+  const lines = ids.map((id, i) => {
+    let ln = loadLine(rows[id], metric);
+    if (id === selectedId) ln = withPointAt(withPointAt(ln, s1Rpm), supplyRpm);
+    return { id, color: LOAD_COLORS[i], name: propName(allowed.find((p) => p.id === id), id), ...ln };
+  });
+  const sel = lines.find((l) => l.id === selectedId);
+  const s1Y = sel && s1Rpm != null ? valueAt(sel, s1Rpm) : null;
+  const supplyY = sel && supplyRpm != null ? valueAt(sel, supplyRpm) : null;
   const anyData = lines.some((l) => l.ok.length || l.over.length);
   const unit = METRIC_UNIT[metric];
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 10 ? v.toFixed(1) : v.toFixed(2));
@@ -111,6 +118,10 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
               {supplyRpm != null && <ReferenceLine x={supplyRpm} stroke="#ea580c" strokeDasharray="6 3"
                 label={{ value: tx('propLoad.supplyLabel', { rpm: Math.round(supplyRpm) }) + (supplyReason ? ` - ${supplyReason}` : ''),
                   fill: '#ea580c', fontSize: 10.5, position: 'insideBottomLeft' }} />}
+              {s1Rpm != null && s1Y != null && <ReferenceDot x={s1Rpm} y={s1Y} r={5} fill="#16a34a" stroke="#fff"
+                label={{ value: `${fmt(s1Y)} ${unit}`, position: 'left', fill: '#16a34a', fontSize: 11, fontWeight: 700 }} />}
+              {supplyRpm != null && supplyY != null && <ReferenceDot x={supplyRpm} y={supplyY} r={5} fill="#ea580c" stroke="#fff"
+                label={{ value: `${fmt(supplyY)} ${unit}`, position: 'right', fill: '#ea580c', fontSize: 11, fontWeight: 700 }} />}
               {lines.flatMap((l) => [
                 <Line key={`${l.id}-ok`} data={l.ok} dataKey="y" name={l.name} stroke={l.color} strokeWidth={2} dot={false} isAnimationActive={false} />,
                 <Line key={`${l.id}-over`} data={l.over} dataKey="y" name={`${l.name} — ${tx('propLoad.over')}`} legendType="none"

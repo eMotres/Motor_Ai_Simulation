@@ -154,10 +154,12 @@ STEP_KEYWORDS: Dict[str, List[str]] = {
 _NUM_PREFIX = re.compile(r"^\s*(\d+[a-z]?|[A-Z])[.)]\s+")
 
 
-def related_sections(step: dict, sections: List[dict]) -> List[dict]:
-    """The process sections of one step (the same rule as the Assembly tab's step panel)."""
+def related_sections(step: dict, sections: List[dict], explicit: bool = False) -> List[dict]:
+    """The process sections of one step (the same rule as the Assembly tab's step panel).  ``explicit``: the process
+    names its sections per step (any step has a list), so an empty list means none - no keyword guessing."""
     own = step.get("sections")
-    if own:
+    if own or explicit:
+        own = own or []
         return [s for s in sections if s.get("id") in own]
     keys = STEP_KEYWORDS.get(str(step.get("id")), [])
     if not keys:
@@ -203,6 +205,7 @@ def document_html(steps: List[dict], sections: List[dict], title: str, revision:
     L = _LABELS[lang]
     e = html.escape
     order = sorted(enumerate(steps), key=lambda p: (step_number(p[1], p[0]), p[0]))
+    explicit = any(st.get("sections") for st in steps)
     first: Dict[str, str] = {}                    # section id -> the number it was printed under first
     toc: List[str] = []
     body: List[str] = []
@@ -235,7 +238,7 @@ def document_html(steps: List[dict], sections: List[dict], title: str, revision:
         note = _txt(st.get("note"), lang).strip() if st.get("note") else ""
         if note:
             body.append('<p class="note"><b>%s:</b> %s</p>' % (e(L["note"]), e(note)))
-        for k, s in enumerate(related_sections(st, sections), start=1):
+        for k, s in enumerate(related_sections(st, sections, explicit), start=1):
             num = "%d.%d" % (n, k)
             sid = str(s.get("id"))
             if sid in first:

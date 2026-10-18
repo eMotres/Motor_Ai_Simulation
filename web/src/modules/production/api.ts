@@ -51,6 +51,26 @@ export async function downloadFile(die: string, config: string, fileId: string, 
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
 
+/** The process document generated from the assembly steps (owner 2026-10-18): open it in a new window or download it. */
+export async function processDocument(die: string, config: string, lang: 'en' | 'zh', mode: 'view' | 'download'): Promise<void> {
+  const w = mode === 'view' ? window.open('', '_blank') : null;
+  try {
+    const r = await fetch(`${API}${base(die, config)}/process_document?lang=${lang}`);
+    if (!r.ok) throw new ProductionApiError(r.status, null, `HTTP ${r.status}`);
+    const url = URL.createObjectURL(new Blob([await r.blob()], { type: 'text/html;charset=utf-8' }));
+    if (mode === 'view') { if (w) w.location.href = url; else window.location.href = url; }
+    else {
+      const a = document.createElement('a');
+      a.href = url; a.download = safeFileName(`${die}_${config}_process_${lang}.html`);
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    window.setTimeout(() => URL.revokeObjectURL(url), 10 * 60 * 1000);
+  } catch (e) {
+    w?.close();
+    throw e;
+  }
+}
+
 /** A production file as an object URL (drawing preview); the caller revokes it. */
 export async function fileObjectUrl(die: string, config: string, fileId: string): Promise<string> {
   const r = await fetch(`${API}${base(die, config)}/files/${enc(fileId)}`);

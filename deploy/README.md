@@ -190,7 +190,7 @@ bash deploy/bluegreen.sh exec api python -m motor_ai_sim.retention     # run som
 bash deploy/bluegreen.sh exec worker python -m motor_ai_sim.worker state   # the worker's state (JSON)
 ```
 
-The one-time move from the single `api` service is `deploy/cutover_stage2.sh`. Everything - the single-instance audit, the
+The one-time move from the single `api` service is `deploy/cutover_stage2.sh` (`--check` is read-only and ends with a GO / FIX list; run `--go` and every `deploy_module.sh` detached: `setsid nohup bash ... > /root/x.log 2>&1 < /dev/null &`, then `tail -f` the log). Everything - the single-instance audit, the
 resource budget, the cutover runbook, the risks - is in [`docs/DEPLOY_STAGE2.md`](../docs/DEPLOY_STAGE2.md).
 
 ### Queue class by tier

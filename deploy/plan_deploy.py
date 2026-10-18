@@ -45,20 +45,24 @@ BOTH_FILES = ("deploy/docker-compose.yml", "VERSION")
 #: backend files that only the API process executes for the paths nginx sends it (roles.WORKER_PREFIXES decides the paths).
 #: A change here never needs the worker restarted.  Keep this list to code the worker really never runs: a module the
 #: worker imports for a route it serves (family, catalog, presets, the solvers' helpers ...) is NOT here.
+#: SHARED, deliberately absent: ``oauth.py`` and ``mcp_discovery.py`` (the modules: ``mcp_app`` - the worker's /mcp - imports
+#: both; ``agent_keys`` / ``agent_designs`` / ``mcp_tools`` are not listed either), ``auth_email.py`` (imported at module
+#: level by route modules every process loads, and by the mail paths) and ``account_lifecycle.py`` (the retention job).
+#: Only the ROUTERS (``routes/oauth.py``, ``routes/mcp_discovery.py``) are API-only.
 API_ONLY = (
     "src/motor_ai_sim/production/", "src/motor_ai_sim/directory/", "src/motor_ai_sim/design_agent/",
     "src/motor_ai_sim/routes/design_agent.py", "src/motor_ai_sim/routes/admin", "src/motor_ai_sim/erp_export.py",
     "src/motor_ai_sim/routes/erp_export.py", "src/motor_ai_sim/routes/support.py", "src/motor_ai_sim/support_",
     "src/motor_ai_sim/routes/newsletter.py", "src/motor_ai_sim/newsletter.py", "src/motor_ai_sim/mailing.py",
     "src/motor_ai_sim/routes/comm_prefs.py", "src/motor_ai_sim/comm_prefs.py", "src/motor_ai_sim/routes/auth_local.py",
-    "src/motor_ai_sim/auth_email.py", "src/motor_ai_sim/routes/oauth.py", "src/motor_ai_sim/oauth.py",
+    "src/motor_ai_sim/routes/oauth.py",
     "src/motor_ai_sim/routes/agent_keys.py", "src/motor_ai_sim/routes/account.py", "src/motor_ai_sim/routes/account_data.py",
-    "src/motor_ai_sim/account_lifecycle.py", "src/motor_ai_sim/routes/nda.py", "src/motor_ai_sim/nda.py",
+    "src/motor_ai_sim/routes/nda.py", "src/motor_ai_sim/nda.py",
     "src/motor_ai_sim/routes/verification.py", "src/motor_ai_sim/verification/", "src/motor_ai_sim/routes/cluster.py",
     "src/motor_ai_sim/routes/activity.py", "src/motor_ai_sim/routes/data_sharing.py", "src/motor_ai_sim/data_sharing.py",
     "src/motor_ai_sim/routes/compute_nodes.py", "src/motor_ai_sim/routes/live.py", "src/motor_ai_sim/routes/model3d.py",
     "src/motor_ai_sim/routes/construction.py", "src/motor_ai_sim/model3d.py", "src/motor_ai_sim/cad/",
-    "src/motor_ai_sim/routes/mcp_discovery.py", "src/motor_ai_sim/mcp_discovery.py",
+    "src/motor_ai_sim/routes/mcp_discovery.py",
 )
 
 

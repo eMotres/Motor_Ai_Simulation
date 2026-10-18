@@ -82,6 +82,16 @@ def test_nginx_has_no_direct_api_proxy_left():
     assert "error_page 502 = @worker_down;" in CONF and "location @worker_down" in CONF
 
 
+def test_mcp_has_its_own_exact_location_with_short_timeouts():
+    """The regex gives a worker path the FEM solves' hour-long timeouts and 20 MB bodies; `/mcp` is a short JSON-RPC exchange."""
+    assert roles.is_worker_path("/mcp") and re.search(roles.nginx_regex(), "/mcp")
+    block = CONF.split("location = /mcp {", 1)[1].split(chr(10) + "    }", 1)[0]
+    assert "proxy_pass $motres_worker;" in block and "set $motres_worker http://worker:8002;" in block
+    assert "proxy_read_timeout 120s;" in block and "proxy_send_timeout 120s;" in block
+    assert "client_max_body_size 1m;" in block and "error_page 502 = @worker_down;" in block
+    assert "3600s" not in block
+
+
 # ── the real routes ──────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")

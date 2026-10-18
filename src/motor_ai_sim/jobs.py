@@ -1158,16 +1158,40 @@ def admit(kind: str, *, priority: Priority = Priority.DUTY, run_id: str = "",
         q.finish(rec, JobState.DONE)
 
 
-def recover_stale_records(root: Optional[Path] = None) -> int:
+#: A file in the workspaces root that postpones the worker's start-up recovery.  The one-time cutover (deploy/cutover_stage2.sh)
+#: starts the worker while the OLD single API process still computes: its running records are alive, not stale.  The cutover
+#: writes the marker before the worker starts and removes it - then runs the recovery by hand - once the old process is gone.
+#: A marker older than :data:`RECOVERY_DEFER_MAX_S` is ignored (a cutover that died must not switch recovery off for ever).
+RECOVERY_DEFER_FILE = ".recovery_deferred"
+RECOVERY_DEFER_MAX_S = 6 * 3600
+
+
+def recovery_deferred(base: Path) -> bool:
+    try:
+        age = time.time() - (Path(str(base)) / RECOVERY_DEFER_FILE).stat().st_mtime
+    except OSError:
+        return False
+    return age < RECOVERY_DEFER_MAX_S
+
+
+def recover_stale_records(root: Optional[Path] = None, before: Optional[float] = None) -> int:
     """Mark every ``queued`` / ``running`` record on disk as ``interrupted``.  Returns how many were changed.
 
     For the START of the compute worker (deploy stage 2): nothing can be running in a process that has just started, so a
     record still saying so was left by a crash.  ``live_status`` counts such a record as work in progress, and the deploy
     waits for idle - one stale record would hold the next worker update for ever.  (The in-process queue already reads such
     a record back as ``interrupted``; this makes the file say it too.)
+
+    ``before`` (epoch seconds): only records queued before that moment are touched - for a process that is ALREADY serving
+    (the cutover calls it once the old API is gone: the worker's own jobs, queued since the switch, must stay as they are).
+    With no ``root`` the start-up call is postponed while :data:`RECOVERY_DEFER_FILE` is present in the workspaces root.
     """
     base = root if root is not None else _WSP.workspaces_root()
     if base is None:
+        return 0
+    if root is None and recovery_deferred(base):
+        log.warning("stale job records NOT recovered: %s is present - the old API may still be computing; the cutover "
+                    "runs the recovery itself once that process is gone", RECOVERY_DEFER_FILE)
         return 0
     n = 0
     for f in Path(str(base)).glob("*/" + JOBS_FILE):
@@ -1181,6 +1205,8 @@ def recover_stale_records(root: Optional[Path] = None) -> int:
         changed = 0
         for row in rows:
             if isinstance(row, dict) and row.get("state") in (JobState.RUNNING, JobState.QUEUED):
+                if before is not None and float(row.get("queued_at") or 0.0) >= before:
+                    continue
                 row["state"] = JobState.INTERRUPTED
                 row["position"] = 0
                 row["error"] = row.get("error") or "the compute worker restarted"

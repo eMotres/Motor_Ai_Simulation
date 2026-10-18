@@ -19,6 +19,10 @@
 # Images are built while the old containers keep serving: deploy-api:<SHA> (api + worker, one image) and deploy-web.
 # The previous API colour stays tagged and stopped for the rollback; deploy-web:prev for the pages.
 #
+# RUN IT DETACHED (an SSH drop must not cut it):  setsid nohup bash deploy_module.sh ... > /root/deploy.log 2>&1 &  and tail -f the log.
+# SIGHUP is ignored; SIGINT / SIGTERM end the script, and an exit trap lifts the worker's drain if the script ends (for any
+# reason) between `drain on` and the end of the worker restart - a worker must never be left refusing new jobs.
+#
 # Exit codes: 0 done, 2 usage, 3 PREV is not the deployed commit (or no cutover yet), 5 build / start failed (nothing
 # switched), 6 a check failed after the switch (rolled back), 7 api/web done, worker pending.
 set -uo pipefail
@@ -32,6 +36,19 @@ PYTHON=${PYTHON:-python3}
 CURL=${CURL:-curl}
 DOCKER=${DOCKER:-docker}
 nap() { sleep "${MOTRES_POLL_S:-$1}"; }          # (tests set MOTRES_POLL_S=0)
+DRAINED=0
+undrain() {   # exit trap: if this script ends while it holds the worker drained, open the door again
+  if [ "$DRAINED" = 1 ]; then
+    DRAINED=0
+    echo "$(date +%T) leaving with the worker drained - lifting the drain"
+    "$DOCKER" exec deploy-worker-1 python -m motor_ai_sim.worker drain off >/dev/null 2>&1 \
+      || echo "WARNING: could not lift the worker drain - run: bash $HERE/bluegreen.sh exec worker python -m motor_ai_sim.worker drain off"
+  fi
+}
+trap '' HUP
+trap 'echo "SIGINT received" >&2; exit 130' INT
+trap 'echo "SIGTERM received" >&2; exit 143' TERM
+trap undrain EXIT
 TARBALL=${MOTRES_TARBALL:-/tmp/deploy_main.tar}
 case "$MODE" in
   web)    WANT_WEB=1 WANT_API=0 WANT_WORKER=0;;
@@ -190,10 +207,12 @@ if [ $WANT_WORKER = 1 ]; then
       done
       # idle now: close the door for NEW jobs, then look again - a job that slipped in while we were deciding is waited for
       worker_exec python -m motor_ai_sim.worker drain on >/dev/null || { echo "ABORT: cannot reach the worker to drain it"; worker_pending; }
+      DRAINED=1
       nap 2
       if worker_exec python -m motor_ai_sim.worker idle; then break; fi
       echo "$(date +%T) a request or job arrived while draining - waiting again"
       worker_exec python -m motor_ai_sim.worker drain off >/dev/null
+      DRAINED=0
       [ "$(date +%s)" -ge "$deadline" ] && worker_pending
       nap 5
     done
@@ -207,8 +226,10 @@ if [ $WANT_WORKER = 1 ]; then
       echo "ROLLBACK of the worker to $OLD_WORKER"
       sed -i "s/^WORKER_SHA=.*/WORKER_SHA=$OLD_WORKER/" "$RUN/state.env"
       (. "$RUN/state.env"; export BLUE_SHA GREEN_SHA WORKER_SHA; cd $APP/deploy && "$DOCKER" compose up -d --no-build --no-deps worker 2>&1 | tail -2)
+      DRAINED=0                  # (the rolled-back worker is a fresh process: no drain flag)
       exit 6
     fi
+    DRAINED=0                    # (the new worker is a fresh process: no drain flag)
     api_call DELETE /api/admin/notice "{}" 2>/dev/null || true
     echo "worker: running $SHA"
   fi

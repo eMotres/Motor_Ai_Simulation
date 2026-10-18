@@ -127,8 +127,15 @@ resume, stale-record recovery) is tied to the role that can legitimately run it.
   each hold their own copy, so a preset applied through the API would leave the worker solving the previous machine.
   **`state_epoch.py`**: every workspace has a file `<ws>/.state_epoch`; the funnels that already clear the caches
   (`clear_simulation_caches`, `update_current_geometry`, `reset_geometry`) bump it; `workspace.WorkspaceMiddleware` compares it
-  on each request of that workspace and evicts the *other* process's in-memory state when it moved and the move was not its
-  own. Eviction costs time, never data (`WorkspaceState.evict` documents it). Off unless the role is `api` / `worker`.
+  on each request of that workspace and, when it moved and the move was not its own, drops the *other* process's cached
+  machine. Off unless the role is `api` / `worker`. What the drop does (review of 25c12b42, fixed): it goes through the same
+  funnels a single-process config write uses (`clear_simulation_caches(announce=False)`, the geometry singleton, the mesh
+  cache, the config cache) and **never calls `WorkspaceState.evict()`**, which would also wipe the optimizer campaign slots
+  (`_scan` / `_descent` / `_doe` / `_refine_state`), the per-workspace `ws_lock` RLocks and the static-3D slots - the state of
+  a job running in that process right now. A workspace with a queued or running job in this process (`jobs.queue().snapshot()`)
+  is **not touched at all** and its `seen` token is left alone, so the caches are dropped on the first request after the job
+  ended. Two bumps of one process (two request threads) are serialised and use unique temp names (pid, thread, random), so a
+  process can no longer read its own bump as somebody else's.
 * "Every Run replaces all caches" (memory note) stays true: runs and their caches are in the worker only.
 * The caches are keyed on the geometry fingerprint anyway (`clear_simulation_caches` calls itself "a belt, not the braces"),
   so a missed bump is a stale entry that the next request with different inputs does not hit - the pre-existing situation when
@@ -142,7 +149,12 @@ can collide on. Several processes now write them (two API colours during a switc
 
 `file_lock.StoreLock` is a drop-in for the `RLock` (`with lock:`): the same thread lock, then an `flock` on a sidecar
 `.<name>.lock`, released in the reverse order (so lock order between stores is unchanged). Off outside the multi-process roles
-(no sidecar files on a workstation). Bounded wait (20 s, then it logs and goes on - never wedges a request). Verified with real
+(no sidecar files on a workstation). Bounded wait (20 s, then it logs and goes on - never wedges a request). One lock per
+store path in a process: two `StoreLock` objects made for the same file (a module-level one and `json_store.lock_for`) share
+one thread lock and one flock state, so a thread nesting them cannot wait for itself until the timeout. `users._save` writes
+through a unique temp name, and `users._secret()` reads `.auth_secret` once per process (the file branch only; `AUTH_SECRET`
+in the environment still wins and is not required) instead of taking the `users.json` flock on every authenticated request.
+Verified with real
 `flock` under Linux (WSL): 3 processes x 150 read-modify-write cycles = exactly 450 with the lock, lost updates without.
 
 | store | writers in several processes? | status |
@@ -265,24 +277,53 @@ $SSH 'cd /tmp && rm -rf cutover_src && mkdir cutover_src && tar -x -C cutover_sr
       && sed -i "s/\r$//" cutover_src/deploy/*.sh && bash cutover_src/deploy/cutover_stage2.sh --check <SHA> '"$PREV"
 ```
 
-Expect `PREFLIGHT OK`. Every `FAIL` line names its fix (not root, wrong deployed commit, a stage-2 container already exists,
-less than 12 GB available, ...).
+`--check` is **strictly read-only** on the server: no tag, no build, no `up`/`stop`/`rm`, no file written outside `/tmp` (the new
+`deploy/` tree is unpacked into a `mktemp -d` there and removed again; `tests/test_deploy_stage2_bluegreen.py` runs it against
+a fake `docker` and fails on any state-changing call). Besides the preflight it reports:
 
-**Step 3 - go:**
+* the docker compose version, and whether `compose config --profile stack` parses the NEW file (the `<<: [*a, *b]` merge);
+* `nginx -t` of a temp copy of the new `nginx.conf` with the upstream include, in a throwaway `docker run --rm` container of the
+  CURRENT web image, every file mounted `:ro`;
+* whether `/srv/motres` is a local filesystem (`stat -f -c %T`; a network filesystem is a FIX: the `flock` locks need a local one);
+* `docker stats --no-stream` of every container (the ERP and `ppg2-*` included) and the idle RSS of `deploy-api-1`;
+* running / queued records in the `.jobs.json` files (a stale record while the old API is idle is only a leftover; a live job
+  makes `--go` wait);
+* `systemctl cat motres-cad-rebuild`, root's crontab and the ERP env files (`/srv/erp /etc/erp /opt/erp`, override with
+  `MOTRES_ERP_DIRS`) grepped for a direct use of `deploy-api-1`, `api:8001` or `127.0.0.1:8001` - the things that break when the
+  old container is removed.
+
+It ends with `GO: nothing blocks the cutover` or `FIX before --go:` and the list (exit 1). Every `FAIL` line of the preflight
+names its fix (not root, wrong deployed commit, a stage-2 container already exists, less than 12 GB available, ...).
+
+**Step 3 - go, detached** (an SSH drop must not cut the cutover half way; the script also ignores SIGHUP and stops cleanly on
+SIGINT / SIGTERM - before the switch it rolls back, after it it prints what is left to do):
 
 ```bash
-$SSH 'cd /tmp/cutover_src && bash deploy/cutover_stage2.sh --go <SHA> '"$PREV"' 20'
+$SSH 'cd /tmp/cutover_src && setsid nohup bash deploy/cutover_stage2.sh --go <SHA> '"$PREV"' 20 > /root/cutover.log 2>&1 < /dev/null &'
+$SSH 'tail -f /root/cutover.log'                    # Ctrl-C only ends the tail; the cutover goes on
 ```
 
-What it does and prints, in order (details in the script header): preflight; tags the running image `deploy-api:stage1`;
-unpacks and builds `deploy-api:<SHA>` and `deploy-web`; **`nginx -t` of the new web image and `compose config` of the new file must
+Same for every later `deploy_module.sh` run: `setsid nohup bash deploy/deploy_module.sh ... > /root/deploy.log 2>&1 < /dev/null &`.
+`deploy_module.sh` sets an exit trap right after `worker drain on`: if the script ends for any reason before the worker restart is
+done (signal, error), it lifts the drain again - the worker is never left refusing new jobs.
+
+What it does and prints, in order (details in the script header): preflight; tags the **running containers' images** as
+`deploy-api:stage1` and `deploy-web:stage1` (by image id: the rollback must not depend on what `:latest` / `:prev` are by
+then); unpacks and builds `deploy-api:<SHA>` and `deploy-web`; **`nginx -t` of the new web image and `compose config` of the new file must
 pass**; waits for the old API to be idle (ABORT 4 if a job runs for 3 x MAX_WAIT; shows the 2-minute banner first when only users
 are present); swaps `/opt/motres/app`; writes `state.env` and the upstream (`api-blue`); starts the worker, waits for its
-health (`build == <SHA>`, `role == worker`); starts api-blue, waits healthy, warms it up; **recreates the web container** (the
-blip); verifies through the edge: `/api/health` says `role api, instance blue`; a worker route (`/api/simulation/config`)
+health (`build == <SHA>`, `role == worker`); starts api-blue, waits healthy, warms it up; **looks at the old API's jobs once
+more (5b)**: a job that started during the build and start is waited for (bounded by `MAX_WAIT_MIN`), else the cutover rolls
+back (exit 4) instead of orphaning it - after the switch nothing reaches a job of the old process; **recreates the web
+container** (the blip); verifies through the edge: `/api/health` says `role api, instance blue`; a worker route (`/api/simulation/config`)
 answers with `X-Motres-Instance: worker`; `/api/version` with `blue`; `/build.json` 200; `/api/worker/state` is closed (not
 reachable from outside); then drains the old API (requests + jobs, 30 s minimum) and stops and removes it (its image stays as
 `deploy-api:stage1`); finally publishes the pages of `<SHA>` through `deploy_module.sh <SHA> <SHA> web`.
+
+The worker's start-up recovery (`jobs.recover_stale_records`: records still saying running / queued are marked `interrupted`) is
+**postponed** by a marker file `/srv/motres/workspaces/.recovery_deferred` while the old API may still be computing those very
+records; step 8 removes the marker once the old API is gone and runs the recovery for the records queued before the switch only
+(`before=`), never for the worker's own jobs. A marker older than 6 h is ignored (a dead cutover cannot switch recovery off).
 
 **Step 4 - verify by hand (2 minutes):**
 
@@ -300,7 +341,9 @@ rows; Admin -> Servers lists the queue; start one short transient in the Simulat
 progress bar moving (that is the whole worker path: nginx -> worker -> queue -> progress poll); the Catalog / Configure tab
 loads; sign out and in.
 
-**Step 5 - housekeeping after a green cutover:**
+**Step 5 - housekeeping, the SAME night, before you leave (part of the cutover, not a follow-up):** the retention unit installed
+on the server still runs `docker compose exec -T api ...`, and the `api` service no longer exists in the stage-2 compose file, so
+the next retention run would fail. The repo's unit goes through `bluegreen.sh exec api`.
 
 ```bash
 $SSH 'cp /opt/motres/app/deploy/systemd/motres-retention.service /etc/systemd/system/ && systemctl daemon-reload'   # exec via bluegreen.sh
@@ -312,9 +355,11 @@ $SSH 'systemctl start motres-retention.service && journalctl -u motres-retention
 
 | when | command | effect |
 |---|---|---|
-| any failure in `--go` before step 8 | automatic (`do_rollback`) | the old tree and the stage-1 `nginx.conf` are put back (web recreated), the new containers stopped, `state.env` and `api.conf` removed; stage 1 was never stopped |
+| any failure in `--go` before step 8 | automatic (`do_rollback`) | the old tree is put back, the old API (if gone) is re-created from `deploy-api:stage1`, `state.env` and `upstream/api.conf` are removed, **then** the web container is recreated from `deploy-web:stage1` (the stage-1 `nginx.conf`), **then** the stage-2 containers are stopped - `/api` is never pointed at a container that is about to stop. A worker with a job is left running (the note names the command to stop it later) |
 | after `--go`, the old API still exists (only when its drain timed out) | `bash cutover_stage2.sh --rollback` | same as above |
-| after the old API was removed | `bash cutover_stage2.sh --rollback` | re-creates it from `deploy-api:stage1` with the stage-1 compose file, recreates web with the stage-1 conf; the stage-2 containers are stopped |
+| after the old API was removed | `bash cutover_stage2.sh --rollback` | same; the images are the `:stage1` tags made at step 2 from the running containers (an earlier version used `deploy-web:prev`, which step 9 had re-tagged as the stage-2 web: web came back on the stage-2 conf while `/api` pointed at a stopped api-blue) |
+| the worker has a job | `--rollback` **refuses** (exit 4) unless `python -m motor_ai_sim.worker idle` succeeds | `--rollback --force` stops it anyway (the job is lost) |
+| nothing of stage 2 is left | `--rollback` exits 2 "nothing to roll back" | a second rollback never swaps the trees back |
 | an API problem found later (not the cutover) | `bash deploy/bluegreen.sh rollback` | nginx back to the previous colour (instant while it still runs, else it is started with its previous image first) |
 
 Do not: run a bare `docker compose up -d` (starts only `web`, harmless but confusing), `--remove-orphans`, `compose down`,
@@ -376,6 +421,12 @@ bash deploy/deploy_module.sh <SHA> <PREV> <MODE> [MODULES] [MAX_WAIT_MIN]
 9. **`docker compose` defaults**: a manual command that interpolates the compose file without `state.env` falls back to
    `deploy-api:latest` for all three services; use the scripts (the API/worker services are behind the `stack` profile so a bare
    `up -d` cannot restart them).
+
+10. **`/mcp` has its own location** (`location = /mcp`, 120 s, 1 MB bodies) instead of the solves' hour-long timeouts and 20 MB bodies;
+    an agent call that queues a job answers at once and is polled with `get_job`. Sub-paths (`/mcp/...`) still match the regex.
+11. **`plan_deploy.API_ONLY` lists only code the worker never runs.** `oauth.py`, `mcp_discovery.py` (imported by `mcp_app`, the
+    worker's `/mcp`), `auth_email.py` and `account_lifecycle.py` are shared: changing them restarts the (idle) worker too. Only the
+    routers (`routes/oauth.py`, `routes/mcp_discovery.py`) are API-only.
 
 ## 7. Tests (this branch)
 

@@ -38,8 +38,12 @@ echo "docker $*" >> "$FAKE/log"
 key() { echo "$1" | tr '/?=&' '____'; }
 case "$1" in
   image)    [ -e "$FAKE/images/$(echo "$3" | tr ':/' '__')" ];;
-  inspect)  [ -e "$FAKE/running/${@: -1}" ] && echo true || echo false;;
-  tag)      exit 0;;
+  inspect)  if [ "$2" = "-f" ] && [ "$3" = "{{.Image}}" ]; then      # the image id a RUNNING container uses
+              [ -e "$FAKE/running/$4" ] && { echo "sha256:img_$4"; exit 0; }; exit 1
+            fi
+            [ -e "$FAKE/running/${@: -1}" ] && echo true || echo false;;
+  tag)      touch "$FAKE/images/$(echo "$3" | tr ':/' '__')"; exit 0;;
+  stats)    echo "deploy-api-1 1.2GiB / 62GiB 3.0%"; echo "ppg2-db-1 400MiB / 62GiB 0.5%"; exit 0;;
   stop)     shift; for c in "$@"; do rm -f "$FAKE/running/$c"; done;;
   rm)       exit 0;;
   create)   echo cid123;;
@@ -69,8 +73,10 @@ case "$1" in
            if [ "$svc" = web ]; then      # the recreated web container now proxies to the upstream file
              c=$(sed 's/^server api-\([a-z]*\):.*/\1/' "$MOTRES_WEB/upstream/api.conf" 2>/dev/null)
              [ -n "$c" ] && cp "$FAKE/http/deploy-api-$c-1/8001_api_health" "$FAKE/edge_health" 2>/dev/null
+             if [ -e "$MOTRES_WEB/upstream/api.conf" ]; then echo present >> "$FAKE/web_up_api_conf"; else echo absent >> "$FAKE/web_up_api_conf"; fi
              exit 0
            fi
+           [ "$svc" = worker ] && [ -e "$MOTRES_STATE_ROOT/workspaces/.recovery_deferred" ] && echo yes > "$FAKE/marker_at_worker_start"
            if [ ! -e "$FAKE/unhealthy" ]; then
              echo "{\"status\":\"healthy\",\"role\":\"$role\",\"instance\":\"$inst\",\"build\":\"$sha\"}" > "$FAKE/http/$ctr/8001_api_health"
              cp "$FAKE/http/$ctr/8001_api_health" "$FAKE/http/$ctr/8002_api_health"
@@ -86,6 +92,10 @@ case "$1" in
     case "$1" in
       curl) url=${@: -1}; f="$FAKE/http/$ctr/$(key "${url#http://127.0.0.1:}")"
             [ -e "$FAKE/running/$ctr" ] || exit 1
+            if [ -e "$f.when_worker" ] && [ -e "$FAKE/running/deploy-worker-1" ]; then   # the old api gets a job once the worker is up
+              n=$(cat "$FAKE/busy_reads" 2>/dev/null || echo 999)
+              if [ "$n" -gt 0 ]; then echo $((n - 1)) > "$FAKE/busy_reads"; f="$f.when_worker"; fi
+            fi
             if echo "$*" | grep -q -- ' -w '; then [ -e "$f" ] && printf 200 || printf 000; exit 0; fi
             [ -e "$f" ] && cat "$f" || exit 7;;
       nginx) if [ "$2" = "-t" ]; then exit "$(cat "$FAKE/nginx_t_rc" 2>/dev/null || echo 0)"; fi
@@ -103,7 +113,9 @@ case "$1" in
                 case "${@: -1}" in
                   on)   touch "$FAKE/draining"; exit 0;;
                   off)  rm -f "$FAKE/draining"; exit 0;;
-                  idle) if [ -e "$FAKE/worker_busy_once" ]; then rm -f "$FAKE/worker_busy_once"; exit 1; fi; exit 0;;
+                  idle) if [ -e "$FAKE/term_parent" ]; then kill -TERM $PPID; sleep 1; exit 1; fi    # "the operator hits Ctrl-C / kill"
+                        if [ -e "$FAKE/worker_busy" ]; then exit 1; fi
+                        if [ -e "$FAKE/worker_busy_once" ]; then rm -f "$FAKE/worker_busy_once"; exit 1; fi; exit 0;;
                 esac
               fi
               code="$*"
@@ -593,7 +605,7 @@ def test_cutover_rolls_back_when_the_edge_does_not_reach_the_worker(st):
     assert (st.app / "marker_stage1").exists() and (st.fake / "running" / "deploy-api-1").exists()
     assert not (st.run / "state.env").exists()
     log = st.log()
-    assert log.rindex("tag deploy-web:prev deploy-web:latest") < log.rindex("--no-deps web"), \
+    assert log.rindex("tag deploy-web:stage1 deploy-web:latest") < log.rindex("--no-deps web"), \
         "the stage-1 web image is restored before the web container is recreated"
 
 
@@ -606,3 +618,219 @@ def test_cutover_usage_and_preflight_refuse_without_a_server(st):
     assert r.returncode == 1 and "PREFLIGHT FAILED" in r.stdout
     assert "FAIL" in r.stdout
     assert not (st.run / "state.env").exists(), "--check changes nothing"
+
+
+# ── rollback after a completed --go (review finding: the stage-2 web image used to be restored, /api stayed down) ───────
+
+def _after_go(st: Stack):
+    _stage1_world(st)
+    r = _cutover(st, "--go", "new111", "prev000")
+    assert r.returncode == 0, r.stdout + r.stderr
+    return r
+
+
+def test_cutover_tags_the_stage1_images_from_the_running_containers(st):
+    _stage1_world(st)
+    r = _cutover(st, "--go", "new111", "prev000")
+    assert r.returncode == 0, r.stdout + r.stderr
+    log = st.log()
+    assert "tag sha256:img_deploy-api-1 deploy-api:stage1" in log, "the api image the RUNNING container uses"
+    assert "tag sha256:img_deploy-web-1 deploy-web:stage1" in log, "the web image the RUNNING container uses"
+    assert log.index("deploy-web:stage1") < log.index("compose build"), "tagged before anything is built"
+
+
+def test_rollback_after_a_completed_go_puts_stage1_back_and_keeps_api_up(st):
+    _after_go(st)
+    assert "tag deploy-web:latest deploy-web:prev" in st.log(), "step 9 re-tagged :prev as the STAGE-2 web (the old trap)"
+    mark = len(st.log())
+    r = _cutover(st, "--rollback")
+    assert r.returncode == 0, r.stdout + r.stderr
+    tail = st.log()[mark:]
+    assert "deploy-web:prev" not in tail, "the rollback must not trust :prev"
+    order = ["tag deploy-api:stage1 deploy-api:latest", "--no-deps api", "tag deploy-web:stage1 deploy-web:latest",
+             "--no-deps web", "stop deploy-worker-1 deploy-api-blue-1 deploy-api-green-1"]
+    pos = [tail.index(x) for x in order]
+    assert pos == sorted(pos), "old api back, THEN the stage-1 web, THEN the stage-2 containers stop: %s" % pos
+    assert (st.fake / "web_up_api_conf").read_text().split()[-1] == "absent", \
+        "upstream/api.conf is removed BEFORE `compose up web` (it pointed at api-blue)"
+    assert not (st.web / "upstream" / "api.conf").exists() and not (st.run / "state.env").exists()
+    run = lambda n: (st.fake / "running" / n).exists()      # noqa: E731
+    assert run("deploy-api-1") and run("deploy-web-1") and not run("deploy-worker-1") and not run("deploy-api-blue-1")
+    assert (st.app / "marker_stage1").exists() and (st.tmp / "app.stage2").exists(), "the trees are swapped back"
+    assert not (st.tmp / "state_root" / "workspaces" / ".recovery_deferred").exists()
+    # a second rollback has nothing to do (and must not swap the trees again)
+    r2 = _cutover(st, "--rollback")
+    assert r2.returncode == 2 and "nothing to roll back" in r2.stderr
+    assert (st.app / "marker_stage1").exists()
+
+
+def test_manual_rollback_refuses_while_the_worker_has_a_job_unless_forced(st):
+    _after_go(st)
+    (st.fake / "worker_busy").touch()
+    r = _cutover(st, "--rollback")
+    assert r.returncode == 4 and "REFUSED" in r.stderr and "--force" in r.stderr
+    assert (st.run / "state.env").exists() and (st.fake / "running" / "deploy-worker-1").exists()
+    assert (st.tmp / "app.stage1" / "marker_stage1").exists(), "nothing was swapped"
+    r = _cutover(st, "--rollback", "--force")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert not (st.fake / "running" / "deploy-worker-1").exists() and (st.fake / "running" / "deploy-api-1").exists()
+
+
+def test_a_rollback_never_stops_a_worker_that_became_busy_meanwhile(st):
+    """The automatic rollback of a failed --go (a user may have started a job on the new stack in the meantime)."""
+    _stage1_world(st)
+    (st.fake / "edge_worker_wrong").touch()                # step 7 fails -> automatic rollback
+    (st.fake / "worker_busy").touch()
+    r = _cutover(st, "--go", "new111", "prev000")
+    assert r.returncode == 6 and "rolled back" in r.stderr
+    assert (st.fake / "running" / "deploy-worker-1").exists(), "left running to finish its job"
+    assert not (st.fake / "running" / "deploy-api-blue-1").exists() and (st.fake / "running" / "deploy-api-1").exists()
+    assert "WORKER still has a job" in r.stdout
+
+
+# ── a job that starts on the old api after step 3 ───────────────────────────────────────────────────────────────────────
+
+def test_cutover_aborts_and_rolls_back_when_a_job_started_on_the_old_api_after_step_3(st):
+    _stage1_world(st)
+    busy = dict(OLD_LIVE, jobs={"running": 1, "queued": 0, "kinds": {"coupled.run": 1}})
+    (st.fake / "http" / "deploy-api-1" / "8001_api_admin_live.when_worker").write_text(json.dumps(busy))
+    r = _cutover(st, "--go", "new111", "prev000", "0")
+    assert r.returncode == 4 and "ABORT 4" in r.stderr and "rolled back" in r.stderr, r.stdout + r.stderr
+    assert "5b/8" in r.stdout
+    log = st.log()
+    assert log.count("--no-deps web") == 1 and log.index("--no-deps web") > log.index("tag deploy-web:stage1 deploy-web:latest"),         "the only web recreate is the rollback's (stage-1 image), never the switch"
+    assert (st.app / "marker_stage1").exists() and (st.fake / "running" / "deploy-api-1").exists()
+    assert not (st.run / "state.env").exists()
+
+
+def test_cutover_waits_for_that_job_and_goes_on_when_it_ends(st):
+    _stage1_world(st)
+    busy = dict(OLD_LIVE, jobs={"running": 1, "queued": 0, "kinds": {"coupled.run": 1}})
+    (st.fake / "http" / "deploy-api-1" / "8001_api_admin_live.when_worker").write_text(json.dumps(busy))
+    (st.fake / "busy_reads").write_text("3")               # the job is seen three times, then it is done
+    r = _cutover(st, "--go", "new111", "prev000", "20")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert r.stdout.count("the old api has job(s) now") == 3 and "CUTOVER DONE on new111" in r.stdout
+
+
+# ── the worker's start-up recovery must not touch a record the old api is still running ─────────────────────────────
+
+def test_cutover_postpones_the_workers_recovery_until_the_old_api_is_gone(st):
+    _stage1_world(st)
+    r = _cutover(st, "--go", "new111", "prev000")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert (st.fake / "marker_at_worker_start").read_text().strip() == "yes", "the marker was there when the worker started"
+    assert not (st.tmp / "state_root" / "workspaces" / ".recovery_deferred").exists(), "and is removed once the old api is gone"
+    log = st.log()
+    assert "recover_stale_records(before=" in log
+    assert log.index("rm deploy-api-1") < log.index("recover_stale_records(before="), "recovery runs only after the old api was removed"
+
+
+# ── --check: strictly read-only, and a report ───────────────────────────────────────────────────────────────────────────
+
+def _tree(root: Path, skip=()):
+    return sorted((str(p.relative_to(root)), p.stat().st_size) for p in root.rglob("*")
+                  if p.is_file() and p.relative_to(root).parts[0] not in skip)
+
+
+def _check(st: Stack, extra=None):
+    chk = st.tmp / "chk"
+    chk.mkdir(exist_ok=True)
+    env = dict(MOTRES_CHECK_TMP=st.p(chk), MOTRES_ERP_DIRS=st.p(st.tmp / "erp"))
+    env.update(extra or {})
+    return _cutover(st, "--check", "new111", "prev000", extra=env)
+
+
+def test_cutover_check_changes_nothing_and_makes_no_state_changing_docker_call(st):
+    _stage1_world(st)
+    (st.tmp / "erp").mkdir()
+    (st.tmp / "erp" / ".env").write_text("SIMULATION_API=http://edge:8080\n")
+    before = _tree(st.tmp, skip=("fake", "bin"))
+    r = _check(st)
+    assert r.returncode == 0 and "PREFLIGHT OK" in r.stdout and "GO:" in r.stdout, r.stdout + r.stderr
+    assert _tree(st.tmp, skip=("fake", "bin")) == before, "no file written or removed (the temp dir is gone again)"
+    assert list((st.tmp / "chk").iterdir()) == [], "the scratch copy lives in the temp dir only and is removed"
+    calls = [ln.split() for ln in st.log().splitlines() if ln.startswith("docker ")]
+    assert calls
+    forbidden = {"tag", "build", "up", "stop", "rm", "create", "cp", "kill", "restart", "pull", "push", "load", "start", "down"}
+    for c in calls:
+        assert not (set(c[1:]) & forbidden), "state-changing docker call in --check: %s" % " ".join(c)
+        if c[1] == "compose":
+            assert c[2] in ("version",) or "config" in c, " ".join(c)
+        if c[1] == "run":
+            assert "--rm" in c and "--entrypoint" in c and all(a.endswith(":ro") for i, a in enumerate(c) if c[i - 1] == "-v"), \
+                "the nginx -t container is throwaway and its files are read-only mounts: %s" % " ".join(c)
+        if c[1] == "exec":
+            assert "drain" not in c and "notice" not in " ".join(c).lower().replace("api/admin/live", ""), " ".join(c)
+    kinds = {c[1] for c in calls}
+    assert {"stats", "inspect", "run", "compose"} <= kinds
+    assert not (st.run / "state.env").exists()
+
+
+def test_cutover_check_reports_what_the_server_has(st):
+    _stage1_world(st)
+    ws = st.tmp / "state_root" / "workspaces" / "w1"
+    ws.mkdir(parents=True)
+    (ws / ".jobs.json").write_text(json.dumps({"jobs": [{"run_id": "a", "state": "running"}, {"run_id": "b", "state": "done"}]}))
+    r = _check(st)
+    out = r.stdout
+    assert r.returncode == 0, out + r.stderr
+    for needle in ("docker compose:", "OK   compose config", "OK   nginx -t of the new conf", "containers (docker stats --no-stream",
+                   "ppg2-db-1", "idle RSS of deploy-api-1", "1 running/queued in .jobs.json", "stale running/queued record",
+                   "no direct use of deploy-api-1", "--- GO / FIX ---"):
+        assert needle in out, "%r missing from:\n%s" % (needle, out)
+    assert "--profile stack config" in st.log()
+    nginx_run = next(ln for ln in st.log().splitlines() if "--entrypoint nginx" in ln)
+    assert "sha256:img_deploy-web-1" in nginx_run, "run in a throwaway container of the CURRENT web image"
+    assert "api-upstream.conf:/etc/nginx/api-upstream.conf:ro" in nginx_run and "default.conf:ro" in nginx_run
+
+
+def test_cutover_check_says_fix_when_the_new_nginx_conf_does_not_parse(st):
+    _stage1_world(st)
+    (st.fake / "nginx_image_t_rc").write_text("1")
+    r = _check(st)
+    assert r.returncode == 1 and "PREFLIGHT FAILED" in r.stdout and "FIX before --go" in r.stdout
+    assert "nginx -t fails on the new nginx.conf" in r.stdout
+
+
+def test_cutover_check_finds_direct_users_of_the_old_container_and_its_port(st):
+    _stage1_world(st)
+    (st.tmp / "erp").mkdir()
+    (st.tmp / "erp" / "backend.env").write_text("SIM_URL=http://127.0.0.1:8001/api\n")
+    r = _check(st)
+    assert r.returncode == 1 and "ERP env:" in r.stdout and "127.0.0.1:8001" in r.stdout
+    assert "names deploy-api-1 / api:8001 / 127.0.0.1:8001 directly" in r.stdout
+
+
+def test_cutover_check_refuses_a_network_filesystem(st):
+    _stage1_world(st)
+    (st.bin / "stat").write_text("#!/bin/bash\necho nfs\n", newline="\n")
+    (st.bin / "stat").chmod(0o755)
+    r = _check(st, {"MOTRES_STAT": st.p(st.bin / "stat")})
+    assert r.returncode == 1 and "NETWORK filesystem (nfs)" in r.stdout
+    (st.bin / "stat").write_text("#!/bin/bash\necho ext2/ext3\n", newline="\n")
+    r = _check(st, {"MOTRES_STAT": st.p(st.bin / "stat")})
+    assert r.returncode == 0 and "is on a local filesystem (ext2/ext3)" in r.stdout
+
+
+# ── signals ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+def test_a_terminated_worker_deploy_lifts_the_drain_again(st):
+    """SIGTERM between `drain on` and the end of the restart must not leave the worker refusing new jobs."""
+    _worker_world(st)
+    (st.fake / "term_parent").touch()
+    r = _deploy_worker(st, IDLE)
+    assert r.returncode == 143, r.stdout + r.stderr
+    log = st.log()
+    assert log.index("worker drain on") < log.rindex("worker drain off"), "the exit trap lifted the drain"
+    assert "lifting the drain" in r.stdout and "--no-deps worker" not in log, "the worker was never restarted"
+    assert not (st.fake / "draining").exists()
+
+
+def test_deploy_scripts_ignore_hangup_and_trap_int_term():
+    for n in ("cutover_stage2.sh", "deploy_module.sh", "bluegreen.sh"):
+        assert "trap '' HUP" in (DEPLOY / n).read_text(encoding="utf-8"), n
+    cut = (DEPLOY / "cutover_stage2.sh").read_text(encoding="utf-8")
+    assert "trap 'on_signal INT' INT" in cut and "trap 'on_signal TERM' TERM" in cut
+    mod = (DEPLOY / "deploy_module.sh").read_text(encoding="utf-8")
+    assert "trap undrain EXIT" in mod and "exit 130" in mod and "exit 143" in mod

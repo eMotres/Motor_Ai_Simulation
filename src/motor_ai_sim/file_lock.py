@@ -19,6 +19,10 @@ the order of two stores' locks is exactly the order the in-process code already 
 * Never wedges a request: waiting is bounded (``MOTRES_LOCK_TIMEOUT_S``, default 20 s); on a timeout it logs and goes on
   without the process lock - the same fail-open stance the audit writers take.
 * Re-entrant like an RLock: the same thread may nest ``with`` blocks.
+* ONE lock per store path in a process: two ``StoreLock`` objects made for the same file (a module-level lock and a
+  ``json_store.lock_for`` one, say) share the thread lock and the per-thread flock state.  Without that, a thread holding
+  one and taking the other would flock the same sidecar through two descriptors - and wait for ITSELF until the timeout.
+  ``isolated=True`` opts out (a test that wants to play "the other process").
 """
 from __future__ import annotations
 
@@ -64,39 +68,76 @@ def sidecar(path: Union[str, os.PathLike]) -> Path:
     return p.with_name("." + p.name + ".lock")
 
 
+class _Core:
+    """What the instances for one store path share: the thread lock and the per-thread (depth, fd) state."""
+
+    __slots__ = ("tl", "local")
+
+    def __init__(self) -> None:
+        self.tl = threading.RLock()
+        self.local = threading.local()
+
+
+_CORES: "dict[str, _Core]" = {}
+_CORES_LOCK = threading.Lock()
+
+
+def _core_for(lock_path: Path) -> _Core:
+    key = os.path.abspath(str(lock_path))
+    with _CORES_LOCK:
+        c = _CORES.get(key)
+        if c is None:
+            c = _CORES[key] = _Core()
+        return c
+
+
 class StoreLock:
     """``threading.RLock`` + a cross-process ``flock`` on a sidecar file.  See the module docstring."""
 
-    def __init__(self, path: PathLike) -> None:
+    def __init__(self, path: PathLike, isolated: bool = False) -> None:
         self._path = path
-        self._tl = threading.RLock()
-        self._local = threading.local()           # per-thread: depth + the open fd
+        self._isolated = bool(isolated)
+        self._own = _Core() if isolated else None
+        self._held = threading.local()            # per thread: the core taken by the outermost acquire (release uses it)
 
     # -- the file -----------------------------------------------------------
     def _lock_path(self) -> Path:
         p = self._path() if callable(self._path) else self._path
         return sidecar(p)
 
+    def _core(self) -> _Core:
+        return self._own if self._own is not None else _core_for(self._lock_path())
+
     # -- RLock interface ----------------------------------------------------
     def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
-        if not self._tl.acquire(blocking, timeout):
+        stack = getattr(self._held, "stack", None)
+        if stack is None:
+            stack = self._held.stack = []
+        # a nested acquire by the same thread goes to the core the outer one took (a late-bound path may have moved)
+        core = stack[-1] if stack else self._core()
+        if not core.tl.acquire(blocking, timeout):
             return False
-        depth = getattr(self._local, "depth", 0)
+        stack.append(core)
+        depth = getattr(core.local, "depth", 0)
         if depth == 0 and _enabled():
             try:
-                self._local.fd = self._flock()
+                core.local.fd = self._flock()
             except Exception as exc:                    # noqa: BLE001 - never fail a request over the lock
                 log.warning("store lock %s not taken: %s", self._lock_path(), exc)
-                self._local.fd = None
-        self._local.depth = depth + 1
+                core.local.fd = None
+        core.local.depth = depth + 1
         return True
 
     def release(self) -> None:
-        depth = getattr(self._local, "depth", 0) - 1
-        self._local.depth = max(0, depth)
+        stack = getattr(self._held, "stack", None)
+        if not stack:
+            raise RuntimeError("cannot release an un-acquired StoreLock")
+        core = stack.pop()
+        depth = getattr(core.local, "depth", 0) - 1
+        core.local.depth = max(0, depth)
         if depth <= 0:
-            fd: Optional[int] = getattr(self._local, "fd", None)
-            self._local.fd = None
+            fd: Optional[int] = getattr(core.local, "fd", None)
+            core.local.fd = None
             if fd is not None:
                 try:
                     _fcntl.flock(fd, _fcntl.LOCK_UN)
@@ -106,7 +147,7 @@ class StoreLock:
                     os.close(fd)
                 except OSError:
                     pass
-        self._tl.release()
+        core.tl.release()
 
     def __enter__(self) -> "StoreLock":
         self.acquire()
@@ -134,6 +175,8 @@ class StoreLock:
                 time.sleep(_POLL_S)
 
 
-def store_lock(path: PathLike) -> StoreLock:
-    """A cross-process lock for the store at ``path`` (or a callable returning it, for late-bound paths)."""
-    return StoreLock(path)
+def store_lock(path: PathLike, isolated: bool = False) -> StoreLock:
+    """A cross-process lock for the store at ``path`` (or a callable returning it, for late-bound paths).
+
+    Every lock made for the same path in this process is the same lock (see the module docstring)."""
+    return StoreLock(path, isolated=isolated)

@@ -24,6 +24,7 @@
 # Testable without a server: DOCKER, CURL, MOTRES_RUN, MOTRES_WEB, MOTRES_APP, MOTRES_EDGE, PYTHON, MOTRES_POLL_S override the
 # defaults below (tests/test_deploy_stage2_bluegreen.py runs this script against a fake `docker`).
 set -uo pipefail
+trap '' HUP          # a dropped SSH session must not cut a switch half way (drain-old can wait for minutes); `exec` resets it
 
 RUN=${MOTRES_RUN:-/srv/motres/run}
 WEB=${MOTRES_WEB:-/srv/motres/web}
@@ -265,6 +266,7 @@ cmd_exec() {    # <api|worker> CMD...
   load_state
   local which=${1:-}; shift || true
   [ $# -gt 0 ] || die "usage: exec <api|worker> CMD..."
+  trap - HUP                                    # the command is the caller's own (interactive or a timer's)
   case "$which" in
     api)    exec "$DOCKER" exec -i "$(ctr api-$ACTIVE)" "$@";;
     worker) exec "$DOCKER" exec -i "$(ctr worker)" "$@";;

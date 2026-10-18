@@ -31,6 +31,17 @@ def test_api_only_code_never_restarts_the_worker():
         assert P.plan([SRC + f]) == ("api", "all"), f
 
 
+def test_modules_the_worker_imports_for_mcp_are_shared_not_api_only():
+    """`/mcp` is the worker's: mcp_app imports oauth, mcp_discovery and agent_keys.  auth_email and account_lifecycle are
+    imported by modules every process loads.  A change to any of them must restart the (idle) worker too."""
+    for f in ("oauth.py", "mcp_discovery.py", "mcp_app.py", "agent_keys.py", "agent_designs.py", "mcp_tools.py",
+              "auth_email.py", "account_lifecycle.py"):
+        assert P.plan([SRC + f])[0] == "back", f
+    # the ROUTERS stay API-only
+    for f in ("routes/oauth.py", "routes/mcp_discovery.py"):
+        assert P.plan([SRC + f]) == ("api", "all"), f
+
+
 def test_code_the_worker_runs_restarts_it_when_idle():
     for f in ("routes/thermal.py", "routes/simulation.py", "routes/coupled.py", "simulation/fem_solver_2d.py", "jobs.py",
               "workspace.py", "roles.py", "live_status.py", "routes/family.py", "routes/catalog.py", "config.py"):

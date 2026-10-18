@@ -159,6 +159,7 @@
     "noteEn": "备注（英文）",
     "noteZh": "备注（中文）",
     "stepSections": "本工序的工艺",
+    "stepSectionsPick": "工艺章节",
     "stepDocs": "图纸和文件",
     "document": "工艺文件",
     "kinds": {"fits": "配合", "assembly": "装配", "winding": "绕线", "tests": "测试"},

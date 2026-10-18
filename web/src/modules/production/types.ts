@@ -370,6 +370,8 @@ export interface AssemblyStep {
   kind: 'operation' | 'check';
   parts: string[];
   after: string[];
+  /** the process sections of this step by id (empty = matched by title keywords) */
+  sections?: string[];
   note: Bilingual | null;
   parts_resolved?: Array<{ id: string; name: Bilingual }>;
 }

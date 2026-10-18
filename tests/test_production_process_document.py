@@ -28,3 +28,12 @@ def test_document_follows_step_numbers_and_strips_old_section_numbers():
 def test_document_escapes_text():
     doc = PS.document_html([], [_sec("a", "<b>x</b>", "a < b")], "T", None, "en")
     assert "<b>x</b>" not in doc and "a &lt; b" in doc
+
+
+def test_keywords_match_whole_words_and_own_sections_win():
+    steps = {s["id"]: s for s in PS.default_steps("motor")}
+    secs = [_sec("b", "Bearing Acceptance"), _sec("w", "6a. Winding and Wiring"), _sec("r", "8.1 Blue ring")]
+    assert [s["id"] for s in PS.related_sections(steps["s4"], secs)] == ["r"]     # not bearing / wiring
+    own = dict(steps["s4"], sections=["b"])
+    assert [s["id"] for s in PS.related_sections(own, secs)] == ["b"]
+    assert PS.normalize_step(dict(own))["sections"] == ["b"]

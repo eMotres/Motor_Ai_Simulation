@@ -86,6 +86,8 @@ def normalize_step(raw: Any) -> dict:
     return {"id": sid, "n": int(raw.get("n") or 0), "title": title, "kind": kind,
             "parts": [str(p)[:120] for p in (raw.get("parts") or []) if str(p).strip()][:40],
             "after": [str(a)[:40] for a in (raw.get("after") or []) if str(a).strip()][:20],
+            # the process sections of this step, by id (owner 2026-10-18); empty = matched by the title keywords
+            "sections": [str(x)[:60] for x in (raw.get("sections") or []) if str(x).strip()][:40],
             "note": models.normalize_bilingual(note) if isinstance(note, dict) and (note.get("en") or note.get("zh")) else None}
 
 
@@ -163,7 +165,7 @@ def related_sections(step: dict, sections: List[dict]) -> List[dict]:
     out = []
     for s in sections:
         t = ("%s %s" % ((s.get("title") or {}).get("en") or "", (s.get("title") or {}).get("zh") or "")).lower()
-        if any(k in t for k in keys):
+        if any(re.search(r"\b%s\b" % re.escape(k), t) for k in keys):   # whole words: "ring" is not in "bearing"
             out.append(s)
     return out
 

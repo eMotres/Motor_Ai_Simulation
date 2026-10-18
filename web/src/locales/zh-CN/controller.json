@@ -764,7 +764,7 @@
     "s1Label": "S1 极限 {rpm} rpm",
     "setLabel": "当前 {rpm} rpm",
     "toS1": "转速设为 S1 极限（{rpm} rpm）",
-    "linesNote": "竖线：实线 = Configure 中选定的转速（在图上点击或拖动可修改）；绿色虚线 = 该螺旋桨的连续（S1）极限。",
+    "s1Note": "绿色虚线：该螺旋桨的连续（S1）极限。",
     "m": {
       "thrust": "拉力，kg",
       "torque": "转矩，N·m",

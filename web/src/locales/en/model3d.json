@@ -22,6 +22,7 @@
   "explode": "Exploded view",
   "section": "Section plane",
   "measure": "Measure",
+  "edges": "Edges",
   "measureHint": "Click two points on the model",
   "downloadStep": "Download STEP",
   "simplifiedLine": "Simplified model - sign the NDA for the full construction",

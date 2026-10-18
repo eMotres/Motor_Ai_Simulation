@@ -18,10 +18,12 @@ export interface ViewerSettings {
   section: { on: boolean; axis: Axis; position: number };
   measure: boolean;
   hints?: boolean;
+  /** feature-edge outlines; kept in the simplified view too (a display style, not a tool) */
+  edges?: boolean;
 }
 export const effectiveSettings = (full: boolean, s: ViewerSettings): ViewerSettings => full
   ? { ...s, hints: true }
-  : { hidden: new Set(), explode: 0, section: { ...s.section, on: false }, measure: false, hints: false };
+  : { hidden: new Set(), explode: 0, section: { ...s.section, on: false }, measure: false, hints: false, edges: s.edges ?? true };
 export const explodeShift = (factor: number, length: number, slider: number): number =>
   factor * length * Math.max(0, Math.min(1, slider));
 export function standardViewDirection(view: StandardView): Vec3 {

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { controlsFor, treeStartsCollapsed } from '../internal/toolbarSpec.ts';
 
 test('all four hosts use the same toolbar controls by role', () => {
-  const expected = ['navigation', 'cube', 'fit', 'home', 'projection'];
+  const expected = ['navigation', 'cube', 'fit', 'home', 'projection', 'edges'];
   for (const host of ['geometryActive', 'geometryFull', 'materialsFull', 'model3d']) {
     assert.deepEqual(controlsFor('simplified'), expected, `${host} simplified`);
     assert.deepEqual(controlsFor('full'), [...expected, 'tree', 'section', 'explode', 'measure'], `${host} full`);

@@ -88,6 +88,7 @@ t('simplified effective scene settings remove full-access tools without mutating
   const plain = M.effectiveSettings(false, s);
   assert.equal(plain.hidden.size, 0); assert.equal(plain.explode, 0);
   assert.equal(plain.section.on, false); assert.equal(plain.measure, false); assert.equal(plain.hints, false);
+  assert.equal(plain.edges, true);                                    // outlines stay in the simplified view
   assert.deepEqual(s.hidden, new Set(['Coils']));
 });
 

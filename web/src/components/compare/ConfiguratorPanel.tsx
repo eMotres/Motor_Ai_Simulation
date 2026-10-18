@@ -1303,6 +1303,11 @@ const ConfiguratorPanel: React.FC = () => {
   }, [pointGate.showBatteryDerived, propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = pointGate.showBatteryDerived && propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
+  // the reason on the chart's S1 line (owner 2026-10-18: "what limits this point?"), with the controller's current
+  const s1LineReason = s1Info?.kind === 'limit'
+    ? tx(s1Info.bindingKey) + (s1Info.limit?.binding === 'controller' && s1Info.limit?.controller_limit_A
+      ? ` ${Number(s1Info.limit.controller_limit_A).toFixed(1)} A rms` : '')
+    : null;
   const s1Text: { text: string; tip: string } | null = (() => {
     if (!s1Info) return null;
     const prop = propSummary ? modelLabel(propSummary.model) : (propId ?? '');
@@ -2427,7 +2432,7 @@ ${s1Text.tip}` : '';
             : <PropellerLoadChart die={s1Die} config={s1Config} ambient={ambient} drive={s1Drive}
                 pack={s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null}
                 escBusA={s1Req.escBusA} allowed={allowedProps} selectedId={propId}
-                s1Rpm={s1Info?.kind === 'limit' ? s1Info.rpm : null} onRpmChange={setRpm} />}
+                s1Reason={s1LineReason} s1Rpm={s1Info?.kind === 'limit' ? s1Info.rpm : null} onRpmChange={setRpm} />}
         </Box>
       )}
 

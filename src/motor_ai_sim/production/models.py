@@ -168,6 +168,15 @@ def _norm_member_role(role: str) -> str:
     return role if role in MEMBER_ROLES else "oem"
 
 
+PRODUCT_TYPES = ("motor", "electronics")
+ROOT_NAMES = {"motor": {"en": "Motor", "zh": "电机整机"}, "electronics": {"en": "Assembly", "zh": "整机"}}
+
+
+def product_type_of(production: Optional[dict]) -> str:
+    t = (production or {}).get("product_type")
+    return t if t in PRODUCT_TYPES else "motor"
+
+
 def normalize_production(raw: dict, die: str, config: str) -> dict:
     if not isinstance(raw, dict):
         raw = {}
@@ -184,6 +193,8 @@ def normalize_production(raw: dict, die: str, config: str) -> dict:
         "status": raw.get("status") if raw.get("status") in ("active", "paused", "archived") else "active",
         "current_revision": str(raw.get("current_revision") or "1.0"),
         "share_costs_with_oem": bool(raw.get("share_costs_with_oem", False)),
+        # what is produced (owner 2026-10-18: the 800 V controller is produced here too): a motor or electronics
+        "product_type": raw.get("product_type") if raw.get("product_type") in PRODUCT_TYPES else "motor",
         "members": members,
         "created_at": str(raw.get("created_at") or _now()),
         "updated_at": str(raw.get("updated_at") or _now()),
@@ -392,11 +403,11 @@ def ensure_default_assembly(parts: list[dict], die: str = "", config: str = "") 
     return list(sub_map.values()) + updated_parts
 
 
-def build_assembly_tree(parts: list[dict]) -> dict:
+def build_assembly_tree(parts: list[dict], product_type: str = "motor") -> dict:
     """Build hierarchical tree:
-    Root ('motor') -> Sub-assemblies -> Leaf parts.
-    """
-    structured_parts = ensure_default_assembly(parts)
+    Root ('motor') -> Sub-assemblies -> Leaf parts.  The motor's default sub-assemblies (stator / rotor / housing) are
+    added only for a motor; an electronics production brings its own."""
+    structured_parts = ensure_default_assembly(parts) if product_type == "motor" else parts
     by_parent: dict[str, list[dict]] = {}
     for p in structured_parts:
         if not isinstance(p, dict):
@@ -414,7 +425,7 @@ def build_assembly_tree(parts: list[dict]) -> dict:
 
     return {
         "id": "motor",
-        "name": {"en": "Motor", "zh": "电机整机"},
+        "name": dict(ROOT_NAMES.get(product_type, ROOT_NAMES["motor"])),
         "sub_assemblies": sub_assemblies,
     }
 
@@ -644,6 +655,8 @@ def normalize_document(raw: dict, file_id: str, uploader_email: str, name: str,
         "part_id": part_id,
         "file_id": file_id,
         "name": name,
+        # internal = our own working document: never listed for, nor downloadable by, the factory (role oem)
+        "internal": bool((raw or {}).get("internal", False)),
     }
 
 

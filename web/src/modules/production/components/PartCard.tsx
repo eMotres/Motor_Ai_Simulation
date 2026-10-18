@@ -116,7 +116,7 @@ export function partFamilies(nameEn: string): string[] {
 
 /** The part's own 3-D model: the motor's full CAD model with only this part shown, in the standard viewer, no tree. */
 const PartModel3D: React.FC<{ ctx: ProdCtx; part: Part }> = ({ ctx, part }) => {
-  const fams = partFamilies(part.name.en || '');
+  const fams = ctx.productType === 'electronics' ? [] : partFamilies(part.name.en || '');
   if (fams.length === 0) return null;
   const glb = `${API}/api/model3d/${encodeURIComponent(ctx.die)}/${encodeURIComponent(ctx.config)}/model.glb`;
   return (

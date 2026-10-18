@@ -129,6 +129,8 @@ export const productionApi = {
   saveProcess: (die: string, config: string, sections: ProcessSection[]) =>
     call<unknown>('PUT', `${base(die, config)}/process`, { sections }),
 
+  setDocumentInternal: (die: string, config: string, docId: string, internal: boolean) =>
+    call<DocumentRec>('PATCH', `${base(die, config)}/documents/${enc(docId)}`, { internal }),
   documents: async (die: string, config: string) => unwrapList<DocumentRec>(await call('GET', `${base(die, config)}/documents`), 'documents'),
   uploadDocument: (die: string, config: string, file: File, partId: string | null) => {
     const f = new FormData();

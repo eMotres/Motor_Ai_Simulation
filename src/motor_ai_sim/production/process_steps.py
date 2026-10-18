@@ -36,12 +36,33 @@ _DEFAULT = [
     ("s13", "Run the motor with an ESC", "用电调（ESC）试运行", "check", [], ["s12"], "", ""),
 ]
 
+#: The default for an ELECTRONICS production (power converter: power board, control board, DC-link board, mechanics):
+#: three board branches meet at the mechanical integration, then the tests.  Same tuple layout as _DEFAULT.
+_DEFAULT_ELECTRONICS = [
+    ("e1", "Incoming inspection of bare boards and components", "PCB 与元器件来料检验", "check", ["Power PCB", "Control PCB", "DC-link PCB"], [], "Bare-board electrical test result (IPC-D-356 netlist) from the fabricator.", "制板厂提供的光板电测报告（IPC-D-356 网表）。"),
+    ("e2", "Power board: solder paste, SMT placement, reflow", "功率板：印锡、贴片、回流焊", "operation", ["Power PCB"], ["e1"], "", ""),
+    ("e3", "Power board: AOI and X-ray of the power devices", "功率板：AOI 与功率器件 X 光检测", "check", [], ["e2"], "", ""),
+    ("e4", "Power board: press-fit terminals and through-hole parts", "功率板：压接端子与插件", "operation", ["Press-fit terminal"], ["e3"], "", ""),
+    ("e5", "Power board: cleaning and visual inspection", "功率板：清洗与目检", "check", [], ["e4"], "", ""),
+    ("c1", "Control board: SMT assembly and AOI", "控制板：贴片组装与 AOI", "operation", ["Control PCB"], ["e1"], "", ""),
+    ("c2", "Control board: firmware programming", "控制板：烧录固件", "operation", [], ["c1"], "", ""),
+    ("d1", "DC-link capacitor board assembly", "直流母线电容板组装", "operation", ["DC-link PCB"], ["e1"], "", ""),
+    ("m1", "Mechanical integration: boards, busbars, coldplate, harness", "机械总装：电路板、母排、冷板、线束", "operation", ["Busbar", "Coldplate", "Enclosure", "Harness", "Screw"], ["e5", "c2", "d1"], "Torques per the assembly drawing.", "拧紧力矩按装配图。"),
+    ("m2", "Conformal coating", "三防漆涂覆", "operation", [], ["m1"], "", ""),
+    ("t1", "Insulation (hipot) test", "绝缘耐压测试", "check", [], ["m2"], "", ""),
+    ("t2", "Low-voltage functional test", "低压功能测试", "check", [], ["t1"], "", ""),
+    ("t3", "Double-pulse test of every phase leg", "各桥臂双脉冲测试", "check", [], ["t2"], "", ""),
+    ("t4", "Full-power run and thermal check", "满功率运行与温升检查", "check", [], ["t3"], "", ""),
+    ("t5", "Final inspection and packing", "终检与包装", "operation", [], ["t4"], "", ""),
+]
+
 KINDS = ("operation", "check")
 
 
-def default_steps() -> List[dict]:
+def default_steps(product_type: str = "motor") -> List[dict]:
     out = []
-    for i, (sid, en, zh, kind, parts, after, nen, nzh) in enumerate(_DEFAULT, 1):
+    table = _DEFAULT_ELECTRONICS if product_type == "electronics" else _DEFAULT
+    for i, (sid, en, zh, kind, parts, after, nen, nzh) in enumerate(table, 1):
         out.append({"id": sid, "n": i, "title": _bi(en, zh), "kind": kind, "parts": list(parts), "after": list(after),
                     "note": _bi(nen, nzh) if (nen or nzh) else None})
     return out
@@ -108,7 +129,7 @@ def resolve_parts(step: dict, parts: List[dict]) -> List[dict]:
     return [{"id": p["id"], "name": p.get("name")} for p in out]
 
 
-def view(doc: Optional[dict], parts: List[dict]) -> dict:
-    steps = (doc or {}).get("steps") or default_steps()
+def view(doc: Optional[dict], parts: List[dict], product_type: str = "motor") -> dict:
+    steps = (doc or {}).get("steps") or default_steps(product_type)
     return {"default": not (doc or {}).get("steps"),
             "steps": [dict(s, parts_resolved=resolve_parts(s, parts)) for s in steps]}

@@ -64,8 +64,9 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
 
   const role = prod ? callerRole(prod.members, email, isAdmin) : null;
   const ctx = useMemo(() => ({
-    die, config, role, email, uiLang: ui, canEdit: canEditRole(role), reload: () => { void reload(); },
-  }), [die, config, role, email, ui, reload]);
+    die, config, role, email, uiLang: ui, canEdit: canEditRole(role), productType: prod?.product_type ?? 'motor',
+    reload: () => { void reload(); },
+  }), [die, config, role, email, ui, reload, prod?.product_type]);
   const toAck = prod ? unackedRevisions(data.revisions, email).length : 0;
 
   return (

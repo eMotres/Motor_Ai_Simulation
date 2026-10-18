@@ -22,6 +22,17 @@ import type {
 const TABS = ['bom', 'assembly', 'timeline', 'documents', 'discussion', 'proposals', 'changes'] as const;
 type TabId = typeof TABS[number];
 
+// Where the user stopped (owner 2026-10-18): the open production and its sub-tab survive a page reload.  Browser
+// storage only (a per-viewer convenience); every access guarded, a missing or stale entry falls back to the list.
+const LAST_KEY = 'production.last.v1';
+const TAB_KEY = (die: string, config: string) => `production.tab.v1:${die}|${config}`;
+function readStore<T>(key: string): T | null {
+  try { const v = window.localStorage.getItem(key); return v ? (JSON.parse(v) as T) : null; } catch { return null; }
+}
+function writeStore(key: string, v: unknown): void {
+  try { if (v == null) window.localStorage.removeItem(key); else window.localStorage.setItem(key, JSON.stringify(v)); } catch { /* storage off */ }
+}
+
 interface Data {
   parts: Part[]; bom: BomRow[]; process: ProcessSection[]; documents: DocumentRec[];
   threads: Thread[]; proposals: Proposal[]; revisions: Revision[];
@@ -36,7 +47,11 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const [prod, setProd] = useState<Production | null>(null);
   const [data, setData] = useState<Data>(EMPTY);
   const [readiness, setReadiness] = useState<ReadinessSummary | null>(null);
-  const [tab, setTab] = useState<TabId>('bom');
+  const [tab, setTabState] = useState<TabId>(() => {
+    const saved = readStore<string>(TAB_KEY(die, config));
+    return saved && (TABS as readonly string[]).includes(saved) ? (saved as TabId) : 'bom';
+  });
+  const setTab = (v: TabId) => { setTabState(v); writeStore(TAB_KEY(die, config), v); };
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -194,14 +209,18 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
 
 /** The top-level Production tab: the list, and one production once opened. */
 export const ProductionTab: React.FC = () => {
-  const [sel, setSel] = useState<{ die: string; config: string } | null>(null);
+  const [sel, setSelState] = useState<{ die: string; config: string } | null>(() => {
+    const v = readStore<{ die?: unknown; config?: unknown }>(LAST_KEY);
+    return v && typeof v.die === 'string' && typeof v.config === 'string' ? { die: v.die, config: v.config } : null;
+  });
+  const setSel = (v: { die: string; config: string } | null) => { setSelState(v); writeStore(LAST_KEY, v); };
   return (
     // No top padding on the scroller itself: a sticky child sticks below the scroller's padding, and rows showed
     // through that gap above the fixed tab menu (owner 2026-10-18).  The padding lives on the inner box.
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ px: 3, pt: 3, pb: 3 }}>
         {sel
-          ? <ProductionPage die={sel.die} config={sel.config} onBack={() => setSel(null)} />
+          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={() => setSel(null)} />
           : <ProductionListPage onOpen={(p) => setSel({ die: p.die, config: p.config })} />}
       </Box>
     </Box>

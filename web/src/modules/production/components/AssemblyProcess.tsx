@@ -18,8 +18,7 @@ import { useContentLang } from './BilingualText';
 import { displayText, stepModelFamilies } from '../helpers';
 import { downloadFile, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
 import type { AssemblyStep, Bilingual, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
-import { UnifiedViewer } from '../../viewer3d';
-import type { PartGroup } from '../../viewer3d/internal/model3d';
+import { UnifiedViewer, type PartGroup } from '../../viewer3d';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const W = 230;

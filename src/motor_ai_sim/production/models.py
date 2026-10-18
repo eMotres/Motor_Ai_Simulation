@@ -529,10 +529,15 @@ def normalize_extra_cost(raw: dict) -> dict:
         amount = max(0.0, float(raw.get("amount") or 0.0))
     except (ValueError, TypeError):
         amount = 0.0
+    cur = str(raw.get("currency") or "CNY").strip().upper()
+    note = raw.get("note")
     return {
         "id": eid,
         "name": name,
         "amount": amount,
+        # a work line has the same columns as a BOM line (owner 2026-10-18): its own currency and note
+        "currency": cur if cur in ("CNY", "USD", "EUR") else "CNY",
+        "note": str(note).strip()[:300] if note not in (None, "") else None,
     }
 
 

@@ -765,6 +765,9 @@
     "setLabel": "Selected {rpm} rpm",
     "toS1": "Set speed to the S1 limit ({rpm} rpm)",
     "s1Note": "Green dashed line: the continuous (S1) limit with this propeller.",
+    "motorLabel": "Motor S1 {rpm} rpm",
+    "supplyLabel": "Controller {rpm} rpm",
+    "linesNote2": "Green dashed: the motor's own continuous limit (temperature, demagnetisation, voltage). Orange dashed: the controller's (or ESC's, battery's) continuous current; not shown with a sine drive.",
     "m": {
       "thrust": "Thrust, kg",
       "torque": "Torque, N·m",

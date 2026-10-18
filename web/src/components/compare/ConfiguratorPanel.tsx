@@ -52,8 +52,8 @@ import {
 } from '../../lib/configuratorPropeller';
 import { fetchPropellers, fetchSeries, fetchPropellerS1 } from '../../lib/propellerApi';
 import {
-  s1Line, s1DriveRequest, s1BoardBuilds, s1BoardBuildKey, s1BoardBuildOfId, s1BoardCoolingKey,
-  type S1BoardBuild, type S1Controller, type S1Result,
+  s1Line, s1BindingKey, s1DriveRequest, s1BoardBuilds, s1BoardBuildKey, s1BoardBuildOfId, s1BoardCoolingKey,
+  type S1Binding, type S1BoardBuild, type S1Controller, type S1Result,
 } from '../../lib/configuratorPropellerS1';
 import { activeDuty } from '../../lib/dutySettings';
 import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
@@ -1303,10 +1303,16 @@ const ConfiguratorPanel: React.FC = () => {
   }, [pointGate.showBatteryDerived, propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
   const s1Moved = buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const s1Info = pointGate.showBatteryDerived && propellerCoolingActive && !s1Moved ? s1Line(s1, propId, s1Config) : null;
-  // the reason on the chart's S1 line (owner 2026-10-18: "what limits this point?"), with the controller's current
-  const s1LineReason = s1Info?.kind === 'limit'
-    ? tx(s1Info.bindingKey) + (s1Info.limit?.binding === 'controller' && s1Info.limit?.controller_limit_A
-      ? ` ${Number(s1Info.limit.controller_limit_A).toFixed(1)} A rms` : '')
+  // The load chart's two vertical lines (owner 2026-10-18): the MOTOR's own continuous limit and the supply's
+  // (controller / ESC / pack current) - the controller does not cut the motor's line; a sine drive has one line.
+  const s1Motor = s1Info && s1?.limit_motor && s1.limit_motor.rpm != null ? s1.limit_motor : null;
+  const s1Supply = s1Info && s1Drive !== 'sine' && s1?.limit_supply && s1.limit_supply.rpm != null ? s1.limit_supply : null;
+  const s1MotorRpm = s1Motor && !s1Motor.lower_bound ? s1Motor.rpm : (s1Info?.kind === 'limit' && !s1?.limit_motor ? s1Info.rpm : null);
+  const s1MotorReason = s1Motor && !s1Motor.lower_bound ? tx(s1BindingKey(s1Motor.binding as S1Binding)) : null;
+  const s1SupplyReason = s1Supply
+    ? tx(s1BindingKey(s1Supply.binding as S1Binding)) + (s1Supply.binding === 'controller'
+      ? (s1Supply.controller_limit_A ? ` ${Number(s1Supply.controller_limit_A).toFixed(1)} A rms`
+        : s1Supply.controller_bus_limit_A ? ` ${Number(s1Supply.controller_bus_limit_A).toFixed(1)} A` : '') : '')
     : null;
   const s1Text: { text: string; tip: string } | null = (() => {
     if (!s1Info) return null;
@@ -2432,7 +2438,8 @@ ${s1Text.tip}` : '';
             : <PropellerLoadChart die={s1Die} config={s1Config} ambient={ambient} drive={s1Drive}
                 pack={s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null}
                 escBusA={s1Req.escBusA} allowed={allowedProps} selectedId={propId}
-                s1Reason={s1LineReason} s1Rpm={s1Info?.kind === 'limit' ? s1Info.rpm : null} onRpmChange={setRpm} />}
+                s1Reason={s1MotorReason} s1Rpm={s1MotorRpm}
+                supplyRpm={s1Supply?.rpm ?? null} supplyReason={s1SupplyReason} onRpmChange={setRpm} />}
         </Box>
       )}
 

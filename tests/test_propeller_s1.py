@@ -564,6 +564,15 @@ def test_controller_limit_binds_and_drive_variant_is_selected(tmp_path):
     assert weak["drive"]["I_cont_A"] == 12.0 and weak["drive"]["kind"] == "sine"
     assert L["qualification"]["checks"]["controller"] == "checked"
     pw = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0, drive="pwm_a")
+    # the load chart's two lines (owner 2026-10-18): the supply side at the controller edge, the motor's own
+    # limit above it (the controller does not cut the motor's line); the rows say which side they pass
+    assert weak["limit_supply"]["binding"] == "controller"
+    assert weak["limit_supply"]["rpm"] == pytest.approx(L["rpm"], abs=5.0)
+    assert weak["limit_motor"]["rpm"] > L["rpm"] + 100.0
+    assert weak["limit_motor"]["rpm"] == pytest.approx(free["rpm"], abs=5.0)
+    assert any(r["ok_motor"] and not r["ok"] for r in weak["rows"])
+    sys_free = _run(m, prop, winding_limit_c=400.0, magnet_limit_c=400.0)
+    assert sys_free["limit_motor"]["rpm"] == pytest.approx(sys_free["limit"]["rpm"], abs=5.0)         or sys_free["limit"]["binding"] in s1.SUPPLY_VIOLATIONS
     assert pw["limit"]["binding"] == "controller" and pw["limit"]["current_A"] <= 14.0 + 1e-6
     # the variant's controller loss reaches the battery power, its PWM extra the motor
     row = s1.solve_point(m, prop, 5000.0, ambient_c=25.0, rho=1.2, lims=s1.limits_of(m),

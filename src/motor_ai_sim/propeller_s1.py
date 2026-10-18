@@ -1425,6 +1425,59 @@ def _bisect_edge(f: Callable[[float], Dict[str, Any]], lo: float, hi: float, tol
     return r_lo, r_hi
 
 
+# The supply side of the system (the drive's continuous current, the ESC bus current, the pack's current): the
+# load chart draws its limit as a separate line, the motor's own limit (winding, magnet, demagnetisation,
+# voltage, data) as another (owner 2026-10-18: "the controller must not cut the motor's S1 line").
+SUPPLY_VIOLATIONS = ("controller", "battery_current")
+
+
+def _view(row: Mapping[str, Any], kind: str) -> Mapping[str, Any]:
+    """``row`` judged by one side only: ``motor`` drops the supply violations, ``supply`` keeps only them (a
+    point the motor model cannot solve has no supply verdict, so it passes on that side)."""
+    v = list(row.get("violations") or [])
+    keep = ([k for k in v if k not in SUPPLY_VIOLATIONS] if kind == "motor"
+            else [k for k in v if k in SUPPLY_VIOLATIONS])
+    if keep == v and (kind == "motor" or row["ok"] == (not keep)):
+        return row
+    out = dict(row)
+    out.update(violations=keep, ok=not keep, binding=keep[0] if keep else None)
+    return out
+
+
+def _side_limit(f: Callable[[float], Dict[str, Any]], cache: Mapping[float, Dict[str, Any]], kind: str,
+                tol_rpm: float) -> Optional[Dict[str, Any]]:
+    """The top of the passing speeds judged by one side (``_view``), its edge bisected like the system limit.
+    None when that side never fails in the scan (no supply limit: a sine drive without a board limit) or for
+    the supply side when it fails from the lowest speed on (``rpm`` None, ``binding`` set)."""
+    g = lambda r: _view(f(r), kind)  # noqa: E731
+    for _ in range(2):
+        allv = sorted((_view(r, kind) for r in list(cache.values())), key=lambda r: r["rpm"])
+        for a, b in zip(allv, allv[1:]):
+            if b["rpm"] - a["rpm"] > tol_rpm and a["ok"] != b["ok"]:
+                _bisect_edge(g, a["rpm"], b["rpm"], tol_rpm)
+    allv = sorted((_view(r, kind) for r in cache.values()), key=lambda r: r["rpm"])
+    oks = [i for i, r in enumerate(allv) if r["ok"]]
+    if not any(not r["ok"] for r in allv):
+        return None if kind == "supply" else {"rpm": allv[-1]["rpm"], "binding": "speed_range",
+                                              "lower_bound": True, "violations_above": []}
+    if not oks:
+        return {"rpm": None, "binding": allv[0]["binding"], "lower_bound": False,
+                "violations_above": list(allv[0]["violations"])}
+    top = max(oks)
+    best = allv[top]
+    if top == len(allv) - 1:
+        nxt, binding = None, "speed_range"
+    else:
+        nxt = allv[top + 1]
+        binding = nxt["binding"]
+    return {"rpm": best["rpm"], "binding": binding, "lower_bound": binding == "speed_range",
+            "violations_above": list((nxt or {}).get("violations") or []),
+            "current_A": best.get("current_A"), "battery_current_A": best.get("battery_current_A"),
+            "T_winding_C": best.get("T_winding_C"), "T_magnet_C": best.get("T_magnet_C"),
+            "controller_limit_A": best.get("controller_limit_A"),
+            "controller_bus_limit_A": best.get("controller_bus_limit_A")}
+
+
 def _breakpoints(m: Mapping[str, Any], drive: Mapping[str, Any], prop: pp.Propeller,
                  lo: float, hi: float) -> List[float]:
     """Speeds where the model's answer can jump (a loss-grid / drive-grid speed row,
@@ -1658,6 +1711,11 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
             else:
                 limit["range_end"] = "propeller_data"
                 limit["range_end_basis"] = "1.5 x the propeller's highest tested rpm"
+    # the two sides of the system apart (the load chart's two lines); the rows say which side they pass
+    limit_motor = _side_limit(f, cache, "motor", tol_rpm)
+    limit_supply = _side_limit(f, cache, "supply", tol_rpm)
+    for r in rows:
+        r["ok_motor"] = bool(_view(r, "motor")["ok"])
     return {
         "propeller_id": prop.id, "propeller": prop.model,
         "die": m.get("die"), "config": m.get("config"),
@@ -1683,6 +1741,8 @@ def s1_rating(m: Mapping[str, Any], prop: pp.Propeller, *, ambient_c: float = 25
         "bands": [list(b) for b in bands], "monotone": monotone,
         "nonconverged_rpm": [r["rpm"] for r in allr if r["binding"] == "nonconverged"],
         "limit": limit,
+        "limit_motor": limit_motor,
+        "limit_supply": limit_supply,
         "no_continuous_point": limit is None,
         "first_failure": (None if first_fail is None else allr[first_fail]["binding"]),
         "model": {"source": m.get("source"), "labels": m.get("labels") or [], "schema": m.get("schema"),

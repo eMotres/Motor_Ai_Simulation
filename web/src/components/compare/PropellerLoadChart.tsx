@@ -28,13 +28,15 @@ interface Props {
   selectedId: string | null;
   /** the continuous limit with this propeller (green dashed); the chip sets the speed to it */
   s1Rpm?: number | null;
+  /** what stops the continuous line there (controller current, winding, demagnetisation ...), shown on the S1 line */
+  s1Reason?: string | null;
   onRpmChange?: (rpm: number) => void;
 }
 
 const propName = (p: PropSummary | undefined, id: string) =>
   p ? `${vendorLabel(p.vendor)} ${modelLabel(p.model)}` : id;
 
-const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, onRpmChange }) => {
+const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, s1Reason, onRpmChange }) => {
   const [metric, setMetric] = useState<LoadMetric>('thrust');
   const [extra, setExtra] = useState<string[]>([]);
   const [rows, setRows] = useState<Record<string, S1ChartRow[] | null>>({});
@@ -102,7 +104,7 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
                 contentStyle={{ fontSize: 11 }} />
               <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 11 }} />
               {s1Rpm != null && <ReferenceLine x={s1Rpm} stroke="#16a34a" strokeDasharray="4 3"
-                label={{ value: tx('propLoad.s1Label', { rpm: Math.round(s1Rpm) }), fill: '#16a34a', fontSize: 10.5, position: 'insideTopRight' }} />}
+                label={{ value: tx('propLoad.s1Label', { rpm: Math.round(s1Rpm) }) + (s1Reason ? ` - ${s1Reason}` : ''), fill: '#16a34a', fontSize: 10.5, position: 'insideTopRight' }} />}
               {lines.flatMap((l) => [
                 <Line key={`${l.id}-ok`} data={l.ok} dataKey="y" name={l.name} stroke={l.color} strokeWidth={2} dot={false} isAnimationActive={false} />,
                 <Line key={`${l.id}-over`} data={l.over} dataKey="y" name={`${l.name} — ${tx('propLoad.over')}`} legendType="none"

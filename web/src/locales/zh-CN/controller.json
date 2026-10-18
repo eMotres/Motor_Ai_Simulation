@@ -750,5 +750,28 @@
     "robot": "机器人",
     "aviation": "航空",
     "marine": "船舶"
+  },
+  "propLoad": {
+    "title": "负载曲线",
+    "subtitle": "连续运行，空气 {ambient} °C，由螺旋桨气流冷却",
+    "tip": "每个点都是本电机驱动该螺旋桨时的稳态连续工作点（我们的螺旋桨 S1 评定：螺旋桨负载、护照中的转矩和损耗、热平衡温度）。虚线：超出连续极限（仅限短时）。",
+    "x": "转速，rpm",
+    "over": "超出连续极限",
+    "noData": "该螺旋桨暂无负载数据。",
+    "compare": "对比螺旋桨：",
+    "note": "实线：连续（S1）运行。虚线：超出连续极限，仅限短时。",
+    "moved": "负载曲线对应本电机的目录构型：请恢复构型设置后查看。",
+    "m": {
+      "thrust": "拉力，kg",
+      "torque": "转矩，N·m",
+      "batteryCurrent": "电池电流，A",
+      "phaseCurrent": "相电流，A rms",
+      "efficiency": "效率，%",
+      "gPerW": "力效，g/W",
+      "shaftPower": "轴功率，W",
+      "inputPower": "电池功率，W",
+      "tWinding": "绕组温度，°C",
+      "tMagnet": "磁钢温度，°C"
+    }
   }
 }

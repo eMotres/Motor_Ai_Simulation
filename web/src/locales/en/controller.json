@@ -750,5 +750,28 @@
     "robot": "Robot",
     "aviation": "Aviation",
     "marine": "Marine"
+  },
+  "propLoad": {
+    "title": "Load chart",
+    "subtitle": "continuous operation, air {ambient} °C, cooled by the propeller",
+    "tip": "Every point is a steady continuous operating point of this motor driving the propeller (our propeller S1 rating: propeller load, passport torque and losses, temperatures at equilibrium). Dashed: above the continuous limit (short bursts only).",
+    "x": "Speed, rpm",
+    "over": "above the continuous limit",
+    "noData": "No load data for this propeller yet.",
+    "compare": "Compare propellers:",
+    "note": "Solid: continuous (S1) operation. Dashed: above the continuous limit - short bursts only.",
+    "moved": "The load chart belongs to the catalogue build of this motor: return the build settings to see it.",
+    "m": {
+      "thrust": "Thrust, kg",
+      "torque": "Torque, N·m",
+      "batteryCurrent": "Battery current, A",
+      "phaseCurrent": "Phase current, A rms",
+      "efficiency": "Efficiency, %",
+      "gPerW": "Efficiency, g/W",
+      "shaftPower": "Shaft power, W",
+      "inputPower": "Battery power, W",
+      "tWinding": "Winding temperature, °C",
+      "tMagnet": "Magnet temperature, °C"
+    }
   }
 }

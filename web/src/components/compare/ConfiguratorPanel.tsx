@@ -1304,17 +1304,6 @@ const ConfiguratorPanel: React.FC = () => {
       const avail = r?.drives_available;
       if (Array.isArray(avail)) setS1Drives({ key: s1ModelKey, drives: avail });
       setS1(r);
-      const lim = r?.limit_motor;
-      const how = clampToS1Ref.current;
-      if (how && lim && lim.rpm != null && !lim.lower_bound && Number.isFinite(lim.rpm) && lim.rpm > 0) {
-        clampToS1Ref.current = null;
-        const cap = Math.floor((lim.rpm * 0.99) / 10) * 10;          // 1 % inside the limit, a round number
-        const to = (v: number) => (how === 'set' ? cap : Math.min(v, cap));
-        setKnobs((k) => ({ ...k, rpm: to(k.rpm) }));
-        setRefKnobs((k) => (k ? { ...k, rpm: to(k.rpm) } : k));
-      } else if (lim) {
-        clampToS1Ref.current = null;
-      }
     });
     return () => { dead = true; };
   }, [pointGate.showBatteryDerived, propellerCoolingActive, propId, s1Die, s1Config, ambient, s1Drive, s1PackMin, s1PackMax, s1Req.escBusA]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1488,7 +1477,7 @@ ${s1Text.tip}` : '';
   /** thermal zones on the knobs: green = continuous below both limits with this propeller, red = beyond.
    *  Recomputed with wire / turns / length / propeller / ambient (a pure function of them). */
   const zones = useMemo(() => {
-    if (!propellerCoolingActive || !series || driveOn || !sinePointAccepted || !motorLossesComputed) return { rpm: null as string | null, I: null as string | null };
+    if (!propellerCoolingActive || !series || driveOn || !sinePointAccepted || !motorLossesComputed) return { rpm: null as string | null, I: null as string | null, greenTop: null as number | null };
     const okAt = (rpm: number, I: number): boolean | null => {
       const pt = seriesAt(series, rpm);
       if (!pt || pt.h_W_m2K == null) return null;
@@ -1500,17 +1489,55 @@ ${s1Text.tip}` : '';
         { h_Wm2K: pt.h_W_m2K, ambient_C: ambient });
       return !judgeTemps(th.T_winding_C, th.T_magnet_C, tLimits).over;
     };
-    const rpmOk = zoneSamples(ranges.rpm.min, ranges.rpm.max).map((r) => {
+    const okRpm = (r: number): boolean | null => {
       if (!propLoad) return okAt(r, knobs.I_A);
       const pt = seriesAt(series, r);
       if (!pt) return null;
       const ld = currentForTorque(pt.torque_Nm, torqueAtI({ ...knobs, rpm: r }), ranges.I_A.max);
       return ld.ok ? okAt(r, ld.I_A) : false;
-    });
+    };
+    const samples = zoneSamples(ranges.rpm.min, ranges.rpm.max);
+    const rpmOk = samples.map(okRpm);
     const iOk = propLoad ? [] : zoneSamples(ranges.I_A.min, ranges.I_A.max).map((I) => okAt(knobs.rpm, I));
-    return { rpm: zoneGradient(rpmOk), I: zoneGradient(iOk) };
+    // the top of the green band from the bottom of the range, bisected between the last green and the first red sample:
+    // the same model the overheat line uses, so a speed at or below it never shows "overheats" (owner 2026-10-18)
+    let greenTop: number | null = null;
+    if (propLoad) {
+      let i = 0;
+      while (i < samples.length && rpmOk[i] === true) i += 1;
+      if (i === samples.length && i > 0) greenTop = samples[i - 1];
+      else if (i > 0) {
+        let lo = samples[i - 1], hi = samples[i];
+        for (let k = 0; k < 12; k += 1) { const mid = 0.5 * (lo + hi); if (okRpm(mid) === true) lo = mid; else hi = mid; }
+        greenTop = lo;
+      }
+    }
+    return { rpm: zoneGradient(rpmOk), I: zoneGradient(iOk), greenTop };
   }, [propellerCoolingActive, series, p, ref.poles, thermalGeom, tLimits, ambient, propLoad, driveOn, motorLossesComputed, ranges.rpm.min, ranges.rpm.max, ranges.I_A.min, ranges.I_A.max,
       sinePointAccepted, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, propLoad ? 0 : knobs.I_A, propLoad ? 0 : knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The RATED speed for this propeller (owner 2026-10-18: "rated must always work - find the real point for each propeller"):
+  // the lower of the server's motor S1 limit (calibrated passport thermal) and the top of the green band of the model
+  // this page judges overheating with, 1 % inside, a round number.  Applied after a preset / propeller pick / load
+  // (clampToS1Ref) once both answers are in, so the rated point never shows "overheats".
+  const ratedCapRpm = useMemo(() => {
+    const caps = [s1CapRpm, zones.greenTop != null ? Math.floor((zones.greenTop * 0.99) / 10) * 10 : null]
+      .filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
+    return caps.length ? Math.min(...caps) : null;
+  }, [s1CapRpm, zones.greenTop]);
+  const s1Expected = pointGate.showBatteryDerived && propellerCoolingActive && !!propId;
+  useEffect(() => {
+    const how = clampToS1Ref.current;
+    if (!how || ratedCapRpm == null) return;
+    const to = (v: number) => (how === 'set' ? ratedCapRpm : Math.min(v, ratedCapRpm));
+    setKnobs((k) => (k.rpm === to(k.rpm) ? k : { ...k, rpm: to(k.rpm) }));
+    setRefKnobs((k) => (k && k.rpm !== to(k.rpm) ? { ...k, rpm: to(k.rpm) } : k));
+    // done once both sources have answered (the S1 limit when one is expected, and the propeller's green band)
+    // (the green band has answered when the zones are computed; with a PWM drive / no series it never will - then the S1
+    // answer alone closes it, so a later ambient or drive change does not move the speed again)
+    const greenAnswered = zones.rpm != null || driveOn || !series;
+    if ((!s1Expected || s1 !== null) && greenAnswered) clampToS1Ref.current = null;
+  }, [ratedCapRpm, s1, zones.greenTop, zones.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // STRANDS IN HAND multiply the parallel paths for every current split: k
   // wires wound together each carry 1/k of the turn's current.  It is a
   // property of the BUILD (the passport records what it was measured at), not
@@ -1617,7 +1644,7 @@ ${s1Text.tip}` : '';
   // (with a propeller as the load the current is the propeller's, not a setting)
   const matchedKey = modePresets.find((pr) => presetDiff(pr, knobs, batteryNumbers, batteryFromPack(pr.battery),
     cooled ? { current: propId, wanted: propDefaultFor(pr.config) } : undefined,
-    { ignoreCurrent: propLoad, speedCap: propLoad ? s1CapRpm : null, speedIsCap: isRatedPreset(pr) }).length === 0)?.key ?? null;
+    { ignoreCurrent: propLoad, speedCap: propLoad ? ratedCapRpm : null, speedIsCap: isRatedPreset(pr) }).length === 0)?.key ?? null;
   // the button the state started from - "changed from L12 · rated" names it
   const baseModePreset = modePresets.find((m) => m.config === baseConfig && m.duty === baseMode) ?? null;
   const baseLabel = baseModeLabel(modePresets, baseConfig, baseMode);

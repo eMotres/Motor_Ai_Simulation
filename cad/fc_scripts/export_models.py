@@ -217,10 +217,12 @@ class Collector:
         return G.build_glb(self.ordered(), dict(asset_extras, geometry_sha256=self.geometry_sha256()))
 
 
-def classify_board(shape):
-    """PhaseBoard solids -> {group name: [solids]} (FR4, copper layers + pads, pins, other: notch walls / mask)."""
+def classify_board(shape, keep_pins=True):
+    """PhaseBoard solids -> {group name: [solids]} (FR4, copper layers + pads, pins, other: notch walls / mask).
+    `keep_pins=False` (an imported PCB, owner 2026-10-18): the phase leads are soldered straight into the holes, so the
+    3 phase pins of the board's STEP are not part of the motor and are left out (a plate board keeps its lead sleeves)."""
     pins = electronics.pins(shape)
-    out = {"PhaseBoard_FR4": [], "PhaseBoard_copper": [], "PhaseBoard_pins": list(pins), "PhaseBoard_other": []}
+    out = {"PhaseBoard_FR4": [], "PhaseBoard_copper": [], "PhaseBoard_pins": list(pins) if keep_pins else [], "PhaseBoard_other": []}
     rest = [s for s in shape.Solids if all(not s.isSame(p) for p in pins)]
     fr4 = max(rest, key=lambda s: s.Volume)
     for s in rest:
@@ -268,7 +270,7 @@ def add_motor(col, parts):
     info = None
     if board is not None:
         info = {}
-        for gname, sols in classify_board(board).items():
+        for gname, sols in classify_board(board, keep_pins=bool(parts.get("board_plate"))).items():
             info[gname] = len(sols)
             for i, s in enumerate(sols):
                 col.add(gname, "%s_%03d" % (gname, i + 1), s, BOARD_COLOURS[gname], family="PhaseBoard", check=False)
@@ -299,6 +301,7 @@ def main():
         coils=[s.copy() for s in [o for o in src.Objects if o.Label == "Coils"][0].Shape.Solids],
         mags=[s.copy() for s in [o for o in src.Objects if o.Label == "MagnetArray"][0].Shape.Solids],
         mech=mechanics.solids(src), board=electronics.board_shape(src) if electronics.has_board(src) else None,
+        board_plate=electronics.has_board(src) and electronics.is_plate(src),
         mag_slices=int(round(ps.pval(sh, "magnet_slices"))) if ps.has_param(sh, "magnet_slices") else 1)
     allbb = [parts["core"].BoundBox, parts["rotor"].BoundBox] + [s.BoundBox for s in parts["mech"].values()] \
         + ([parts["board"].BoundBox] if parts["board"] else [])

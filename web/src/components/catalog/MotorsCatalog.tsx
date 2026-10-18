@@ -54,7 +54,7 @@ const MotorsCatalog: React.FC = () => {
   const [appFilter, setAppFilter] = useState<ApplicationFilter>(() => {
     try { return parseApplicationFilter(localStorage.getItem('motors.application')); } catch { return 'all'; }
   });
-  const [allDies, setAllDies] = useState<{ name: string; stator_diameter: number; configs: { name: string; applications?: unknown }[] }[]>([]);
+  const [allDies, setAllDies] = useState<{ name: string; stator_diameter: number; configs: { name: string; applications?: unknown; card_date?: unknown }[] }[]>([]);
   const pickFilter = (v: string) => {
     const f = parseApplicationFilter(v);
     setAppFilter(f);
@@ -92,8 +92,14 @@ const MotorsCatalog: React.FC = () => {
         // 2026-08-25: "I don't see the lock icons").
         setTimeout(() => { void load(true); }, 3000);
       });
-  // Ø sections come from the dies that survive the application filter
-  const diams = useMemo(() => catalogDiameters(allDies, appFilter), [allDies, appFilter]);
+  // Ø sections come from the dies that survive the application filter - and, for clients, only the dies with a computed
+  // configuration (FamilyCatalog hides the rest), so no Ø header stands over nothing (owner 2026-10-18: the empty Ø 100)
+  const diams = useMemo(() => {
+    const visible = canWrite ? allDies : allDies
+      .map((d) => ({ ...d, configs: d.configs.filter((c) => !!c.card_date) }))
+      .filter((d) => d.configs.length > 0);
+    return catalogDiameters(visible, appFilter);
+  }, [allDies, appFilter, canWrite]);
   // The page can mount BEFORE /api/me has answered, or outlive a sign-in / sign-out: the tree is per account, so a change of
   // identity re-reads it (and tells the Ø sections, which hold their own copy, through the same event as every mutation).
   const { user, role, isAdmin, enforced, resolved } = useAuth();

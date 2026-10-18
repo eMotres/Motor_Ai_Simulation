@@ -295,6 +295,8 @@ export interface DocumentRec {
   name: string;
   /** our own working document: hidden from the factory (OEM members) */
   internal?: boolean;
+  /** a picture posted to one assembly step */
+  step_id?: string | null;
 }
 
 export interface Attachment { file_id: string; name: string }

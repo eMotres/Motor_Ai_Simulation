@@ -16,7 +16,7 @@ import dagre from '@dagrejs/dagre';
 import { useTranslation } from 'react-i18next';
 import { useContentLang } from './BilingualText';
 import { displayText, stepModelFamilies } from '../helpers';
-import { downloadFile, openFileInNewWindow, productionApi } from '../api';
+import { downloadFile, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
 import type { AssemblyStep, Bilingual, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
 import { UnifiedViewer } from '../../viewer3d';
 import type { PartGroup } from '../../viewer3d/internal/model3d';
@@ -152,6 +152,68 @@ const StepModel3D: React.FC<{ ctx: ProdCtx; steps: AssemblyStep[]; step: Assembl
   );
 };
 
+const IMAGE_EXT = ['png', 'jpg', 'jpeg', 'webp', 'gif'];
+const extOf = (name: string) => (name.split('.').pop() || '').toLowerCase();
+
+/** One posted picture as a thumbnail (the file needs the session header, so it is fetched as a blob). */
+const StepThumb: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string) => void }> = ({ ctx, doc, onError }) => {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    let dead = false; let u: string | null = null;
+    void fileObjectUrl(ctx.die, ctx.config, doc.file_id).then((x) => { if (dead) URL.revokeObjectURL(x); else { u = x; setUrl(x); } }).catch(() => undefined);
+    return () => { dead = true; if (u) URL.revokeObjectURL(u); };
+  }, [ctx.die, ctx.config, doc.file_id]);
+  const ext = extOf(doc.name);
+  return (
+    <Box title={`${doc.name} · ${doc.uploader_email} · ${doc.uploaded_at.slice(0, 16).replace('T', ' ')}`}
+      onClick={() => void openFileInNewWindow(ctx.die, ctx.config, doc.file_id, ext === 'jpeg' ? 'jpg' : ext).catch((e) => onError(String(e)))}
+      sx={{ width: 112, height: 84, borderRadius: 1, overflow: 'hidden', border: '1px solid var(--line-soft)', cursor: 'zoom-in',
+            bgcolor: 'var(--panel)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+      {url ? <img src={url} alt={doc.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+        : <Typography sx={{ fontSize: 10, color: 'var(--text-4)' }}>…</Typography>}
+    </Box>
+  );
+};
+
+/** Pictures of one step (owner 2026-10-18: "post pictures to every production step"): every member - the factory too -
+ *  adds photos (button or Ctrl+V); they are production documents tagged with the step. */
+const StepPhotos: React.FC<{ ctx: ProdCtx; step: AssemblyStep; documents: DocumentRec[] }> = ({ ctx, step, documents }) => {
+  const { t } = useTranslation('production');
+  const input = React.useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const photos = documents.filter((d) => d.step_id === step.id && IMAGE_EXT.includes(extOf(d.name)));
+  const upload = async (files: File[]) => {
+    const imgs = files.filter((f) => f.type.startsWith('image/'));
+    if (!imgs.length) return;
+    setBusy(true); setErr(null);
+    try {
+      for (const f of imgs) {
+        const named = f.name && f.name !== 'image.png' ? f : new File([f], `step${step.n}_${new Date().toISOString().replace(/[:.]/g, '-')}.${(f.type.split('/')[1] || 'png').replace('jpeg', 'jpg')}`, { type: f.type });
+        await productionApi.uploadDocument(ctx.die, ctx.config, named, null, step.id);
+      }
+      ctx.reload();
+    } catch (e) { setErr(String(e)); } finally { setBusy(false); if (input.current) input.current.value = ''; }
+  };
+  return (
+    <Box sx={{ mt: 1.25 }} tabIndex={0} onPaste={(e) => { const fs = Array.from(e.clipboardData.files); if (fs.length) { e.preventDefault(); void upload(fs); } }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+        <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('process.photos', 'Photos')}</Typography>
+        <input ref={input} type="file" accept="image/*" multiple hidden onChange={(e) => void upload(Array.from(e.target.files ?? []))} />
+        <Button size="small" variant="outlined" disabled={busy} onClick={() => input.current?.click()}
+          sx={{ textTransform: 'none', fontSize: 11.5, py: 0, minHeight: 0 }}>+ {t('process.addPhoto', 'Add photo')}</Button>
+        <Typography sx={{ fontSize: 10.5, color: 'var(--text-4)' }}>{t('process.pasteHint', 'or paste with Ctrl+V here')}</Typography>
+        {err && <Typography sx={{ fontSize: 11, color: '#f87171' }}>{err}</Typography>}
+      </Box>
+      {photos.length > 0 && (
+        <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
+          {photos.map((d) => <StepThumb key={d.id} ctx={ctx} doc={d} onError={setErr} />)}
+        </Box>
+      )}
+    </Box>
+  );
+};
+
 export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?: ProcessSection[]; documents?: DocumentRec[] }> = ({ ctx, parts, sections = [], documents = [] }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
@@ -231,7 +293,7 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
           {(() => {
             const ids = new Set((cur.parts_resolved ?? []).map((p) => p.id));
             const own = new Set(cur.documents ?? []);
-            const docs = documents.filter((d) => (own.has(d.id) || (d.part_id && ids.has(d.part_id))) && !d.name.startsWith('[superseded'));
+            const docs = documents.filter((d) => !d.step_id && (own.has(d.id) || (d.part_id && ids.has(d.part_id))) && !d.name.startsWith('[superseded'));
             return docs.length > 0 && (
               <Box sx={{ mt: 1.25 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepDocs', 'Drawings and documents')}</Typography>
@@ -247,6 +309,7 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
               </Box>
             );
           })()}
+          <StepPhotos ctx={ctx} step={cur} documents={documents} />
           </Box>
           <StepModel3D ctx={ctx} steps={steps} step={cur} />
           </Box>

@@ -801,7 +801,12 @@ async def upload_document(request: Request, die: str, config: str):
     part_id = form.get("part_id")
     if part_id and not isinstance(part_id, str):
         part_id = str(part_id)
-    doc = models.normalize_document({}, file_id, _email(user), str(uploaded.filename or "unnamed"), part_id if part_id else None)
+    step_id = form.get("step_id")
+    step_id = str(step_id).strip()[:40] if step_id else None
+    if step_id and not all(c.isalnum() or c in "-_" for c in step_id):
+        raise HTTPException(status_code=422, detail="bad step id")
+    doc = models.normalize_document({"step_id": step_id}, file_id, _email(user), str(uploaded.filename or "unnamed"),
+                                    part_id if part_id else None)
     store.mutate_file(die, config, "documents.json", lambda d: d.setdefault("documents", []).append(doc))
     _touch(die, config)
     _audit(_email(user), die, config, "create", "document", doc["id"], {"doc": doc})

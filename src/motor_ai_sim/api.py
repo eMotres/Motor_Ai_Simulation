@@ -386,6 +386,9 @@ app.include_router(directory_admin_router)
 # Design assistant (pilot 2026-10-18): /api/design-agent, /api/admin/design-agent/usage
 from motor_ai_sim.routes.design_agent import router as design_agent_router
 app.include_router(design_agent_router)
+# MOTRES ERP export (2026-10-18): /api/erp-export/directory, /api/erp-export/motor-prices (service token)
+from motor_ai_sim.routes.erp_export import router as erp_export_router
+app.include_router(erp_export_router)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

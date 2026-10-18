@@ -121,6 +121,11 @@ def record_beat(user: str, sid: Any, tab: Any, now: Optional[float] = None) -> D
     if not user or s is None:
         return {"counted_s": 0.0, "dropped": "invalid"}
     tab = clean_tab(tab)
+    try:                                         # who is in which module right now (live_status, deploys)
+        from motor_ai_sim import live_status as _live
+        _live.note_tab(user, s, tab, now)
+    except Exception:                            # noqa: BLE001 - never let the live view break the accounting
+        pass
     if not _rate_ok(user, s, now):
         return {"counted_s": 0.0, "dropped": "rate"}
     day = day_of(now)

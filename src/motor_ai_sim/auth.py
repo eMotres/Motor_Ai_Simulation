@@ -121,7 +121,7 @@ def public_exhibit() -> bool:
 #: canned notice instead of calling the provider once a cap is hit.  It
 #: describes the product, never a machine: the visitor prompt forbids catalog
 #: contents and customer designs, and the route hands the model no app state.
-_ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version",
+_ANON_OK_PATHS = frozenset({"/api/health", "/api/me", "/api/version", "/api/notice",
                             "/api/support/chat",
                             # node agents: own per-node bearer, checked in the route
                             "/api/admin/nodes/metrics"})

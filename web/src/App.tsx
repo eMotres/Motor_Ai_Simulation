@@ -65,6 +65,7 @@ import { syncMeshConfigFromServer } from './lib/meshConfigSync';
 import CompareTab from './components/compare/CompareTab';
 import Model3DPanel from './components/model3d/Model3DPanel';
 import { ProductionTab } from './modules/production';
+import UpdateBanner from './components/common/UpdateBanner';
 const DesignerTab = lazy(() => import('./modules/designer/DesignerTab'));
 import GeometryTab from './components/geometry/GeometryTab';
 import ComparePanel from './components/compare/ComparePanel';
@@ -645,6 +646,7 @@ function App() {
   return (
     <ThemeProvider theme={appTheme}>
       <CssBaseline />
+      <UpdateBanner />
       <Box sx={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
 
         {/* ── AppBar ── */}

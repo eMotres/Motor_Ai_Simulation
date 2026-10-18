@@ -454,5 +454,9 @@
     "decline": "拒绝",
     "settings": "Cookie 设置"
   },
-  "model3dViewed": "当前查看的 3D 模型：{name}"
+  "model3dViewed": "当前查看的 3D 模型：{name}",
+  "update": {
+    "newVersion": "AeroStator 有新版本。",
+    "reload": "刷新"
+  }
 }

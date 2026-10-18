@@ -454,5 +454,9 @@
     "decline": "Decline",
     "settings": "Cookie settings"
   },
-  "model3dViewed": "Viewing 3D model: {name}"
+  "model3dViewed": "Viewing 3D model: {name}",
+  "update": {
+    "newVersion": "A new version of AeroStator is available.",
+    "reload": "Reload"
+  }
 }

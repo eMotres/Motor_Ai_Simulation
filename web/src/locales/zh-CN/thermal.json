@@ -84,11 +84,11 @@
   "allowableEdVsCycleLength": "允许 ED 与周期长度关系",
   "tTOverOneCycle": "一个周期内的 T(t)",
   "shaftTorqueOverTheSameCycle": "同一周期内的轴转矩",
-  "coolingSourceSaved": "{{motor}} 的冷却：您保存的设置",
-  "coolingSourceConfig": "{{motor}} 的冷却：配置默认值",
-  "coolingSourceApplication": "{{motor}} 的冷却：应用默认值（{{app}}）",
-  "coolingSourceLastUsed": "{{motor}} 的冷却：您上次使用的设置",
+  "coolingSourceSaved": "{motor} 的冷却：您保存的设置",
+  "coolingSourceConfig": "{motor} 的冷却：配置默认值",
+  "coolingSourceApplication": "{motor} 的冷却：应用默认值（{app}）",
+  "coolingSourceLastUsed": "{motor} 的冷却：您上次使用的设置",
   "coolingSourceTip": "冷却字段按电机分别记忆。“您保存的设置”是您上次为该电机设置的值；“配置默认值”来自配置的 thermal_defaults 块；“应用默认值”是其应用类型的规则（外壳形式和转子内孔会被重置，而不是沿用上一台电机的值）。修改任一冷却字段即可保存您自己的设置。",
-  "coolingMismatch": "求解时为 {{solved}}，当前字段为 {{now}} - 请重新求解",
+  "coolingMismatch": "求解时为 {solved}，当前字段为 {now} - 请重新求解",
   "coolingMismatchTip": "该结果所用的外部冷却方式或外壳形式与当前字段不同。请点击“求解”，用此处显示的冷却重新计算。"
 }

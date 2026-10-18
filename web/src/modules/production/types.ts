@@ -372,6 +372,8 @@ export interface AssemblyStep {
   after: string[];
   /** the process sections of this step by id (empty = matched by title keywords) */
   sections?: string[];
+  /** the step's own documents by id (a test drawing for a check step), shown with its parts' drawings */
+  documents?: string[];
   note: Bilingual | null;
   parts_resolved?: Array<{ id: string; name: Bilingual }>;
 }

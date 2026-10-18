@@ -45,3 +45,8 @@ def test_explicit_process_means_empty_is_empty():
     steps[1]["sections"] = ["w"]
     doc = PS.document_html(steps, secs, "T", 1, "en")
     assert "1.1" not in doc and "2.1 Winding and wiring" in doc     # step 1 (coil keyword) gets nothing
+
+
+def test_step_keeps_its_documents():
+    st = dict(PS.default_steps("motor")[2], documents=["doc_1"])
+    assert PS.normalize_step(st)["documents"] == ["doc_1"]

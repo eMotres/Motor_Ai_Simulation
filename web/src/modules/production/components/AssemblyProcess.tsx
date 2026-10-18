@@ -190,7 +190,8 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
           {/* the drawings and documents of this step's parts (owner 2026-10-18: the magnet layout drawing belongs here); a click opens it */}
           {(() => {
             const ids = new Set((cur.parts_resolved ?? []).map((p) => p.id));
-            const docs = documents.filter((d) => d.part_id && ids.has(d.part_id) && !d.name.startsWith('[superseded'));
+            const own = new Set(cur.documents ?? []);
+            const docs = documents.filter((d) => (own.has(d.id) || (d.part_id && ids.has(d.part_id))) && !d.name.startsWith('[superseded'));
             return docs.length > 0 && (
               <Box sx={{ mt: 1.25 }}>
                 <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepDocs', 'Drawings and documents')}</Typography>

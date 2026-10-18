@@ -68,3 +68,16 @@ def test_routes_admin_or_loopback(monkeypatch, tmp_path):
     assert c.put("/api/admin/notice", json={"message": {"en": "x"}, "minutes": 2}).status_code == 200
     assert c.get("/api/notice").json()["notice"]["message"]["en"] == "x"
     assert c.delete("/api/admin/notice").json() == {"notice": None}
+
+
+def test_the_door_lets_only_direct_loopback_deploy_calls_through():
+    from types import SimpleNamespace
+    from motor_ai_sim.auth import _deploy_loopback
+
+    def req(path, host, headers=None):
+        return SimpleNamespace(url=SimpleNamespace(path=path), client=SimpleNamespace(host=host), headers=headers or {})
+    assert _deploy_loopback(req("/api/admin/live", "127.0.0.1"))
+    assert _deploy_loopback(req("/api/admin/notice", "::1"))
+    assert not _deploy_loopback(req("/api/admin/live", "172.18.0.5"))
+    assert not _deploy_loopback(req("/api/admin/live", "127.0.0.1", {"x-forwarded-for": "1.2.3.4"}))
+    assert not _deploy_loopback(req("/api/admin/users", "127.0.0.1"))

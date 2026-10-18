@@ -715,6 +715,17 @@ def resolve_user(authorization: Optional[str], *, ip: str = "",
                                path=path)["user"]
 
 
+#: The deploy script's own calls (deploy/deploy_module.sh, run inside the API container): the live status and the
+#: maintenance notice, reached DIRECTLY on loopback - never through a proxy.  routes/live.py checks the same again.
+_DEPLOY_LOOPBACK_PATHS = frozenset({"/api/admin/live", "/api/admin/notice"})
+
+
+def _deploy_loopback(request: Request) -> bool:
+    host = request.client.host if request.client else ""
+    return (request.url.path in _DEPLOY_LOOPBACK_PATHS and host in ("127.0.0.1", "::1")
+            and not request.headers.get("x-forwarded-for") and not request.headers.get("x-real-ip"))
+
+
 class RoleGateMiddleware(BaseHTTPMiddleware):
     """Two gates, one place, in this order:
 
@@ -730,7 +741,7 @@ class RoleGateMiddleware(BaseHTTPMiddleware):
     """
 
     async def dispatch(self, request: Request, call_next):
-        if request.method != "OPTIONS":
+        if request.method != "OPTIONS" and not _deploy_loopback(request):
             path = request.url.path
             closed = not public_exhibit() and not anonymous_allowed(path)
             need = required_role(request.method, path) if AUTH_ENFORCE else None

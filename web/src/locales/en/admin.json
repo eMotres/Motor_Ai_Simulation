@@ -287,5 +287,17 @@
     "linkedProductions": "Linked Productions (Information Only)",
     "auditTrail": "Audit Trail",
     "bankNotice": "Never store bank account numbers or SWIFT details. These are internal and kept separate."
+  },
+  "live": {
+    "title": "Now on the site",
+    "users": "{n} users",
+    "requests": "{n} requests",
+    "jobs": "jobs: {running} running, {queued} queued",
+    "error": "live status unavailable",
+    "module": "Module",
+    "usersCol": "Users",
+    "requestsCol": "Requests",
+    "accounts": "Accounts",
+    "empty": "Nobody active right now."
   }
 }

@@ -389,6 +389,11 @@ app.include_router(design_agent_router)
 # MOTRES ERP export (2026-10-18): /api/erp-export/directory, /api/erp-export/motor-prices (service token)
 from motor_ai_sim.routes.erp_export import router as erp_export_router
 app.include_router(erp_export_router)
+# Live status for module-wise deploys (2026-10-18): /api/admin/live, /api/notice
+from motor_ai_sim.routes.live import router as live_router
+app.include_router(live_router)
+from motor_ai_sim.live_status import InflightMiddleware as _InflightMiddleware
+app.add_middleware(_InflightMiddleware)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

@@ -287,5 +287,17 @@
     "linkedProductions": "关联生产项目（仅供参考）",
     "auditTrail": "审计日志",
     "bankNotice": "严禁存储银行账号或 SWIFT 代码。此类内部财务信息在管理系统中严格隔离。"
+  },
+  "live": {
+    "title": "当前在线",
+    "users": "{n} 位用户",
+    "requests": "{n} 个请求",
+    "jobs": "任务：{running} 运行，{queued} 排队",
+    "error": "无法获取实时状态",
+    "module": "模块",
+    "usersCol": "用户",
+    "requestsCol": "请求",
+    "accounts": "账号",
+    "empty": "当前无人在线。"
   }
 }

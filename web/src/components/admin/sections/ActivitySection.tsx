@@ -9,6 +9,7 @@ import RefreshIcon from '@mui/icons-material/Refresh';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RcTooltip } from 'recharts';
 import { useTranslation } from 'react-i18next';
 import HelpTip from '../../common/HelpTip';
+import LiveNowPanel from '../LiveNowPanel';
 import {
   dayChartData, formatActive, formatTopTabs, sortRows, totalSeconds,
   type ActivityDay, type ActivityRow, type ActivitySortKey,
@@ -92,6 +93,7 @@ const ActivitySection: React.FC = () => {
 
   return (
     <Box>
+      <LiveNowPanel />
       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
         <Typography sx={{ fontSize: 16, fontWeight: 800, color: 'var(--text-0)' }}>{t('activity.title')}</Typography>
         <HelpTip title={t('activity.help')} />

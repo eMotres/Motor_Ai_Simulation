@@ -133,6 +133,7 @@ services:
         # BUILD-time (baked into the bundle), from deploy/.env — not from
         # /etc/motres/api.env, which is a runtime file.
         VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in deploy/.env}
+        BUILD_ID: ${BUILD_ID:-dev}
     restart: unless-stopped
     depends_on:
       - api

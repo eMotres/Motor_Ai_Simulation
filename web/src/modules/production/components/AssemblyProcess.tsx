@@ -15,10 +15,13 @@ import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
 import { useTranslation } from 'react-i18next';
 import { useContentLang } from './BilingualText';
-import { displayText } from '../helpers';
+import { displayText, stepModelFamilies } from '../helpers';
 import { downloadFile, openFileInNewWindow, productionApi } from '../api';
 import type { AssemblyStep, Bilingual, DocumentRec, Part, ProcessSection, ProdCtx } from '../types';
+import { UnifiedViewer } from '../../viewer3d';
+import type { PartGroup } from '../../viewer3d/internal/model3d';
 
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const W = 230;
 const H = 74;
 const COLORS = { operation: { bg: 'rgba(59,130,246,0.08)', border: '#3b82f6' }, check: { bg: 'rgba(245,158,11,0.10)', border: '#f59e0b' } };
@@ -115,6 +118,40 @@ const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: As
   );
 };
 
+/** What is assembled at a step, in the motor's CAD model (owner 2026-10-18): the step's own parts glow, the parts of the
+ *  earlier steps stay as faint ghosts they go onto, a small explode shows how they fit; nothing else is drawn.  A step with
+ *  no parts of its own shows everything assembled up to it. */
+const StepModel3D: React.FC<{ ctx: ProdCtx; steps: AssemblyStep[]; step: AssemblyStep }> = ({ ctx, steps, step }) => {
+  const { t } = useTranslation('production');
+  const { own, context } = useMemo(() => stepModelFamilies(steps, step.id), [steps, step]);
+  const [loaded, setLoaded] = useState<ReadonlySet<string> | null>(null);
+  const onLoaded = useCallback((r: { groups: PartGroup[] }) => setLoaded(new Set(r.groups.map((g) => g.family))), []);
+  if (ctx.productType === 'electronics' || own.length + context.length === 0) return null;
+  const shown = [...own, ...context];
+  const missing = loaded !== null && !shown.some((f) => loaded.has(f));
+  const glb = `${API}/api/model3d/${encodeURIComponent(ctx.die)}/${encodeURIComponent(ctx.config)}/model.glb`;
+  const caption = own.length === 0 ? t('process.model3dUpTo', 'Everything assembled up to this step.')
+    : context.length > 0 ? t('process.model3dGhost', 'Highlighted: assembled in this step. Faint: already assembled in earlier steps.')
+    : t('process.model3dOwn', 'The parts assembled in this step.');
+  return (
+    <Box sx={{ flex: '1 1 420px', minWidth: 320 }}>
+      <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.model3d', 'Assembled in this step (3-D)')}</Typography>
+      <Box sx={{ height: 400, border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden', bgcolor: 'var(--panel-2)', position: 'relative' }}>
+        <UnifiedViewer sourceKey={`production:${ctx.die}:${ctx.config}`} resetKey={`production:${ctx.die}:${ctx.config}:step:${step.id}:${own.join('|')}:${context.join('|')}`}
+          glbUrl={glb} toolbarSpec="full" tree={null} onlyFamilies={shown} highlightFamilies={own.length > 0 && context.length > 0 ? own : null}
+          defaultExplode={0.25} onLoaded={onLoaded} contextLostText={t('process.model3dLost', '3-D view lost - reload the page')} noViewText="" />
+        {missing && (
+          <Typography sx={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+                            px: 3, fontSize: 12.5, color: 'var(--text-3)', pointerEvents: 'none' }}>
+            {t('process.model3dNone', 'The 3-D model has no geometry for these parts.')}
+          </Typography>
+        )}
+      </Box>
+      <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)', mt: 0.5 }}>{caption}</Typography>
+    </Box>
+  );
+};
+
 export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?: ProcessSection[]; documents?: DocumentRec[] }> = ({ ctx, parts, sections = [], documents = [] }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
@@ -181,6 +218,9 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
           {cur.note && displayText(cur.note, ui).text && (
             <Typography sx={{ fontSize: 13, color: 'var(--text-1)', mb: 1, whiteSpace: 'pre-wrap' }}>{displayText(cur.note, ui).text}</Typography>
           )}
+          {/* parts and drawings on the left, what is assembled at this step in 3-D on the right (owner 2026-10-18) */}
+          <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+          <Box sx={{ flex: '1 1 300px', minWidth: 0 }}>
           <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.parts', 'Parts')}</Typography>
           <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap' }}>
             {(cur.parts_resolved ?? []).length === 0
@@ -207,6 +247,9 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
               </Box>
             );
           })()}
+          </Box>
+          <StepModel3D ctx={ctx} steps={steps} step={cur} />
+          </Box>
           {relatedSections(cur, sections, explicitSections).length > 0 && (
             <Box sx={{ mt: 1.5 }}>
               <Typography sx={{ fontSize: 12, color: 'var(--text-3)', mb: 0.5 }}>{t('process.stepSections', 'Process for this step')}</Typography>

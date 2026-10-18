@@ -30,6 +30,10 @@ export interface UnifiedViewerProps {
   hostExtras?: React.ReactNode;
   /** show ONLY the top-level groups of these families (one part of the motor, e.g. a BOM line), no tree (owner 2026-10-18) */
   onlyFamilies?: readonly string[] | null;
+  /** with `onlyFamilies`: glow these families and ghost the rest of what is shown (an assembly step's own parts on the earlier ones) */
+  highlightFamilies?: readonly string[] | null;
+  /** the explode slider's start value (0..1) after every load / reset; default 0 */
+  defaultExplode?: number;
 }
 
 // the projection the viewer was last left in, kept for this tab's session (owner 2026-10-17)
@@ -65,13 +69,13 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   useEffect(() => {
     if (initialized.current !== resetKey) {
       initialized.current = resetKey; initializedWithRows.current = false;
-      setHiddenKeys(new Set()); setExplode(0); setMeasure(false); setMeasuredMm(null); setSection({ on:false, axis:'x', position:0 }); setLocalSelected(null);
+      setHiddenKeys(new Set()); setExplode(p.defaultExplode ?? 0); setMeasure(false); setMeasuredMm(null); setSection({ on:false, axis:'x', position:0 }); setLocalSelected(null);
       p.onMeasure?.(null); p.onSelectedKeyChange?.(null);
     }
     if (!initializedWithRows.current && tree.length > 0) {
       initializedWithRows.current = true; setHiddenKeys(hiddenKeysByDefault(tree));
     }
-  }, [resetKey, tree, p.onMeasure, p.onSelectedKeyChange]);
+  }, [resetKey, tree, p.onMeasure, p.onSelectedKeyChange, p.defaultExplode]);
   useEffect(() => { canvas.current?.setProjection(projection); }, [projection]);
   useEffect(() => { if (!full) { setExplode(0); setSection((s) => ({ ...s, on:false })); setMeasure(false); setMeasuredMm(null); } }, [full]);
   const onlyKey = (p.onlyFamilies ?? []).join('|');
@@ -84,12 +88,19 @@ const UnifiedViewer: React.FC<UnifiedViewerProps> = (p) => {
   }, [tree, hiddenKeys, loadedGroups, onlyKey]);  // eslint-disable-line react-hooks/exhaustive-deps
   // the view frames what is shown: after the other parts are hidden, fit to the remaining one
   useEffect(() => { if (onlyKey && loadedGroups.length) { const h = window.setTimeout(() => canvas.current?.fit(), 60); return () => window.clearTimeout(h); } return undefined; }, [onlyKey, loadedGroups]);
-  const highlight = useMemo(() => selectedSceneNames(tree, selectedKey ?? null), [tree, selectedKey]);
+  const glowKey = (p.highlightFamilies ?? []).join('|');
+  const highlight = useMemo(() => {
+    if (p.highlightFamilies && p.highlightFamilies.length > 0) {
+      const glow = new Set(p.highlightFamilies);
+      return new Set(loadedGroups.filter((g) => glow.has(g.family) || glow.has(g.name)).map((g) => g.name));
+    }
+    return selectedSceneNames(tree, selectedKey ?? null);
+  }, [tree, selectedKey, loadedGroups, glowKey]);  // eslint-disable-line react-hooks/exhaustive-deps
   const tools = useMemo(() => ({ hidden:new Set<string>(), explode, section, measure, edges }), [explode, section, measure, edges]);
   const loaded = useCallback((r: { groups: PartGroup[]; range: { min:number; max:number } }) => {
-    setExplode(0); setMeasure(false); setMeasuredMm(null); p.onMeasure?.(null);
+    setExplode(p.defaultExplode ?? 0); setMeasure(false); setMeasuredMm(null); p.onMeasure?.(null);
     setRange(r.range); setSection({ on:false, axis:'x', position:(r.range.min+r.range.max)/2 }); setLoadedGroups(r.groups); p.onLoaded?.(r);
-  }, [p.onLoaded, p.onMeasure]);
+  }, [p.onLoaded, p.onMeasure, p.defaultExplode]);
   const changeSection = useCallback((s: { on:boolean; axis:Axis; position:number }) => {
     if (s.axis !== section.axis) { const r = canvas.current?.sectionRange(s.axis) ?? range; setRange(r); setSection({ ...s, position:(r.min+r.max)/2 }); }
     else setSection(s);

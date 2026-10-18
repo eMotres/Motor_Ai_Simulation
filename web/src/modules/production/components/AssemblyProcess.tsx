@@ -388,7 +388,9 @@ const FitToScreen: React.FC<{ nodeCount: number; label: string }> = ({ nodeCount
 function stepDocsOf(step: AssemblyStep, documents: DocumentRec[]): DocumentRec[] {
   const ids = new Set((step.parts_resolved ?? []).map((p) => p.id));
   const own = new Set(step.documents ?? []);
-  return documents.filter((d) => !d.step_id && (own.has(d.id) || (!!d.part_id && ids.has(d.part_id))) && !d.name.startsWith('[superseded'));
+  const seen = new Set<string>();      // one drawing linked to two parts of the step is shown once (owner 2026-10-18)
+  return documents.filter((d) => !d.step_id && (own.has(d.id) || (!!d.part_id && ids.has(d.part_id))) && !d.name.startsWith('[superseded'))
+    .filter((d) => (seen.has(d.name) ? false : (seen.add(d.name), true)));
 }
 
 export function relatedSections(step: AssemblyStep, sections: ProcessSection[], explicit = false): ProcessSection[] {

@@ -32,7 +32,6 @@ import logging
 import os
 import re
 import secrets
-import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -40,13 +39,15 @@ from typing import Optional
 import jwt
 
 from motor_ai_sim.config import DEFAULT_CONFIG_PATH
+from motor_ai_sim.file_lock import store_lock
 from motor_ai_sim.sessions import StoreUnavailable
 
 log = logging.getLogger(__name__)
 
 _USERS_FILE = Path(DEFAULT_CONFIG_PATH).parent / "users.json"
 _SECRET_FILE = Path(DEFAULT_CONFIG_PATH).parent / ".auth_secret"
-_LOCK = threading.RLock()
+# Cross-process (deploy stage 2): two API instances and the worker may all write users.json - see file_lock.py.
+_LOCK = store_lock(lambda: _USERS_FILE)
 
 _PBKDF2_ITERS = 600_000
 _TOKEN_TTL_S = 30 * 24 * 3600          # 30 days

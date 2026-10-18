@@ -1,7 +1,10 @@
 """What is in use RIGHT NOW, per module (owner 2026-10-18: "we fix bugs continuously after the launch; restart only
 what changed, when nobody is using it").
 
-Three signals, all in this API process (one uvicorn process, so in-memory is the truth):
+Three signals, all in this API process (one uvicorn process, so in-memory is the truth).  Since deploy stage 2 the
+computations run in the separate compute worker (``roles``): the API's snapshot then MERGES the worker's own
+(``worker_client.fetch_state``) - its jobs, the requests it is serving - so the deploy script and the Admin panel keep
+one answer for the whole site, and ``worker`` in it says what the worker is doing.
 
 * users per tab - the activity heartbeat (``activity.record_beat``) also notes the tab here; a user counts as present
   in a tab for ``LIVE_WINDOW_S`` after the last beat (the app beats about once a minute while the tab is visible and
@@ -18,6 +21,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -59,6 +63,25 @@ def note_tab(user: str, sid: str, tab: str, now: Optional[float] = None) -> None
                 _tabs.pop(k, None)
 
 
+#: Work that is running in this process without an HTTP request holding it open (the design assistant's answer thread ...).
+#: The blue-green drain waits for it as it waits for requests: stopping the old API colour would kill it.
+_background: Dict[str, int] = {}
+
+
+@contextmanager
+def background(kind: str):
+    """``with background("design-agent"):`` - count this thread as work in progress for the drain."""
+    with _lock:
+        _background[kind] = _background.get(kind, 0) + 1
+    try:
+        yield
+    finally:
+        with _lock:
+            _background[kind] = _background.get(kind, 1) - 1
+            if _background[kind] <= 0:
+                _background.pop(kind, None)
+
+
 def _begin(path: str) -> Optional[int]:
     global _seq
     mod = module_of(path)
@@ -83,7 +106,8 @@ class InflightMiddleware:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope.get("type") != "http" or scope.get("path") in ("/api/admin/live", "/api/health", "/api/notice"):
+        if scope.get("type") != "http" or scope.get("path") in (
+                "/api/admin/live", "/api/health", "/api/notice", "/api/worker/state", "/api/worker/drain"):
             return await self.app(scope, receive, send)
         token = _begin(scope.get("path") or "")
         try:
@@ -115,11 +139,64 @@ def _jobs() -> Dict[str, Any]:
     return out
 
 
+def _jobs_memory() -> Dict[str, Any]:
+    """Queued / running jobs of THIS process's queue (the compute worker: the truth, a record file only says it at the
+    moment it was written)."""
+    from motor_ai_sim import jobs as _J
+    snap = _J.queue().snapshot()
+    kinds: Dict[str, int] = {}
+    for it in snap.get("items") or []:
+        k = str(it.get("kind") or "?")
+        kinds[k] = kinds.get(k, 0) + 1
+    return {"running": int(snap.get("running") or 0), "queued": int(snap.get("queued") or 0), "kinds": kinds}
+
+
+def job_rows(limit: int = 50) -> List[Dict[str, Any]]:
+    """The running / queued jobs of this process for the Admin panel (no request bodies)."""
+    from motor_ai_sim import jobs as _J
+    out: List[Dict[str, Any]] = []
+    for it in (_J.queue().snapshot().get("items") or [])[:limit]:
+        out.append({k: it.get(k) for k in ("run_id", "kind", "owner", "state", "position", "elapsed_s", "waited_s")})
+    return out
+
+
 def snapshot(include_users: bool = False, now: Optional[float] = None) -> Dict[str, Any]:
+    """The site's live status: this process's own, plus the compute worker's when this is the API process."""
+    snap = local_snapshot(include_users, now)
+    from motor_ai_sim import roles
+    if roles.is_api():
+        snap = merge_worker(snap)
+    return snap
+
+
+def merge_worker(snap: Dict[str, Any], state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Fold the worker's live status into the API's.  ``state`` None = ask the worker now."""
+    if state is None:
+        from motor_ai_sim import worker_client
+        state = worker_client.fetch_state()
+    if not state or not isinstance(state.get("live"), dict):
+        # The worker cannot be asked.  Keep the record-file view of the jobs (conservative: it reports busy), and say so.
+        snap["worker"] = {"reachable": False, "draining": None, "jobs": snap["jobs"], "items": []}
+        return snap
+    live = state["live"]
+    snap["jobs"] = live.get("jobs") or {"running": 0, "queued": 0, "kinds": {}}
+    for name, m in (live.get("modules") or {}).items():
+        mine = snap["modules"].setdefault(name, {"users": 0, "requests": 0, "oldest_request_s": 0.0})
+        mine["requests"] += int(m.get("requests") or 0)
+        mine["oldest_request_s"] = max(float(mine.get("oldest_request_s") or 0.0), float(m.get("oldest_request_s") or 0.0))
+    snap["requests_total"] += int(live.get("requests_total") or 0)
+    snap["worker"] = {"reachable": True, "draining": bool(state.get("draining")), "build": state.get("build"),
+                      "instance": state.get("instance"), "uptime_s": state.get("uptime_s"),
+                      "jobs": snap["jobs"], "items": state.get("jobs") or []}
+    return snap
+
+
+def local_snapshot(include_users: bool = False, now: Optional[float] = None) -> Dict[str, Any]:
     now = time.time() if now is None else now
     with _lock:
         tabs = [(u, t) for (u, _s), (t, ts) in _tabs.items() if now - ts <= LIVE_WINDOW_S]
         infl = list(_inflight.values())
+        bg = dict(_background)
     by_tab: Dict[str, Dict[str, Any]] = {}
     for user, tab in tabs:
         e = by_tab.setdefault(tab, {"users": set()})
@@ -134,8 +211,12 @@ def snapshot(include_users: bool = False, now: Optional[float] = None) -> Dict[s
         m = modules.setdefault(mod, {"users": 0, "requests": 0, "oldest_request_s": 0.0})
         m["requests"] += 1
         m["oldest_request_s"] = round(max(m["oldest_request_s"], now - started), 1)
+    from motor_ai_sim import roles
     return {"at": now, "window_s": LIVE_WINDOW_S, "users_total": len({u for u, _t in tabs}),
-            "requests_total": len(infl), "jobs": _jobs(), "modules": modules, "notice": read_notice(now)}
+            "requests_total": len(infl), "jobs": _jobs_memory() if roles.is_worker() else _jobs(), "modules": modules,
+            "background": {"total": sum(bg.values()), "kinds": bg},
+            # what stopping this process would cut off: requests in flight + background threads (the drain checks it)
+            "busy_total": len(infl) + sum(bg.values()), "notice": read_notice(now)}
 
 
 def idle(snap: Dict[str, Any], modules: List[str]) -> bool:

@@ -11,7 +11,8 @@
 #   sudo cp deploy/systemd/motres-retention.{service,timer} /etc/systemd/system/
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now motres-retention.timer
-# Dry run first:  docker compose exec -T api python -m motor_ai_sim.retention --dry-run
+# Dry run first:  bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.retention --dry-run
+# (stage 2: the `api` service is now two colours - bluegreen.sh exec picks the live one)
 
 [Unit]
 Description=eMotres data retention (sessions, raw logs, usage events, due deletions)
@@ -22,4 +23,4 @@ Type=oneshot
 Nice=15
 IOSchedulingClass=idle
 WorkingDirectory=/opt/motres/app/deploy
-ExecStart=/usr/bin/docker compose exec -T api python -m motor_ai_sim.retention
+ExecStart=/bin/bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.retention

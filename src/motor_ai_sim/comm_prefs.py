@@ -39,12 +39,12 @@ import hmac
 import json
 import logging
 import os
-import threading
 import time
 from pathlib import Path
 from typing import Optional
 
 from motor_ai_sim.config import DEFAULT_CONFIG_PATH
+from motor_ai_sim.file_lock import store_lock
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ WORDING = {
 TOKEN_TTL_S = 90 * 24 * 3600
 TOKEN_PURPOSE = "prefs"
 
-_LOCK = threading.RLock()
+_LOCK = store_lock(lambda: _STATE_FILE)       # cross-process (deploy stage 2)
 _ROOT = Path(DEFAULT_CONFIG_PATH).parent
 _STATE_FILE = _ROOT / "comm_prefs.json"
 _HISTORY_FILE = _ROOT / "comm_prefs_history.jsonl"

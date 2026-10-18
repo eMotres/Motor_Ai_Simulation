@@ -4153,6 +4153,12 @@ def clear_simulation_caches(reason: str = "") -> None:
         pass
     _cache_state["last_cleared_reason"] = reason or "unspecified"
     _cache_state["last_refreshed_by"] = None
+    # Other processes of the deployment (API <-> compute worker) hold their own copy of this workspace's machine.
+    try:
+        from motor_ai_sim import state_epoch as _EPOCH
+        _EPOCH.bump(reason=reason)
+    except Exception:       # noqa: BLE001
+        pass
 
 
 def _cache_stats() -> Dict:

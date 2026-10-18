@@ -7,11 +7,15 @@ import { useTranslation } from 'react-i18next';
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
 interface Mod { users: number; requests: number; oldest_request_s: number; accounts?: string[] }
+interface WorkerJob { run_id: string; kind: string; owner: string; state: string; elapsed_s?: number | null; waited_s?: number | null }
+interface Worker { reachable: boolean; draining: boolean | null; build?: string; items: WorkerJob[] }
 interface Live {
   users_total: number; requests_total: number;
   jobs: { running: number; queued: number; kinds: Record<string, number> };
   modules: Record<string, Mod>;
   notice: { message: { en?: string; zh?: string }; until: number } | null;
+  // the compute worker (deploy stage 2); absent on a single-process install
+  worker?: Worker;
 }
 
 const LiveNowPanel: React.FC = () => {
@@ -38,6 +42,11 @@ const LiveNowPanel: React.FC = () => {
           <Chip size="small" label={t('live.requests', { n: d.requests_total })} />
           <Chip size="small" color={d.jobs.running ? 'warning' : 'default'}
             label={t('live.jobs', { running: d.jobs.running, queued: d.jobs.queued })} />
+          {d.worker && (
+            <Chip size="small" color={!d.worker.reachable ? 'error' : d.worker.draining ? 'warning' : 'default'}
+              label={!d.worker.reachable ? t('live.workerDown')
+                : d.worker.draining ? t('live.workerDraining') : t('live.workerReady')} />
+          )}
           {d.notice && <Chip size="small" color="info" label={d.notice.message.en ?? ''} />}
         </>}
         {failed && <Typography sx={{ fontSize: 12, color: '#fca5a5' }}>{t('live.error')}</Typography>}
@@ -60,6 +69,25 @@ const LiveNowPanel: React.FC = () => {
           </TableBody>
         </Table>
       ) : d && <Typography sx={{ fontSize: 12, color: 'var(--text-3)' }}>{t('live.empty')}</Typography>}
+      {d?.worker && d.worker.items.length > 0 && (
+        <Table size="small" sx={{ mt: 1 }}>
+          <TableHead><TableRow>
+            <TableCell>{t('live.jobKind')}</TableCell><TableCell>{t('live.jobOwner')}</TableCell>
+            <TableCell>{t('live.jobState')}</TableCell><TableCell align="right">{t('live.jobElapsed')}</TableCell>
+          </TableRow></TableHead>
+          <TableBody>
+            {d.worker.items.map((j) => (
+              <TableRow key={j.run_id}>
+                <TableCell>{j.kind}</TableCell>
+                <TableCell sx={{ fontSize: 11, color: 'var(--text-3)' }}>{j.owner}</TableCell>
+                <TableCell>{j.state}</TableCell>
+                <TableCell align="right">{j.state === 'running' && j.elapsed_s != null ? `${Math.round(j.elapsed_s)} s`
+                  : j.waited_s != null ? `${Math.round(j.waited_s)} s` : ''}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
     </Paper>
   );
 };

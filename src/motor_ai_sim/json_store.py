@@ -35,6 +35,8 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, TypeVar
 
+from motor_ai_sim.file_lock import StoreLock
+
 log = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -53,17 +55,17 @@ _REPLACE_BACKOFF_MAX_S = 0.25
 # path -> lock.  Guarded by _LOCKS_GUARD so two threads racing to create the
 # lock for the same file cannot end up with one lock each (which would lock
 # nothing at all).
-_LOCKS: Dict[str, threading.RLock] = {}
+_LOCKS: Dict[str, StoreLock] = {}
 _LOCKS_GUARD = threading.Lock()
 
 
-def lock_for(path: Path) -> threading.RLock:
+def lock_for(path: Path) -> StoreLock:
     """The one lock guarding this file, shared by every module that writes it."""
     key = str(Path(path).resolve())
     with _LOCKS_GUARD:
         lk = _LOCKS.get(key)
         if lk is None:
-            lk = threading.RLock()
+            lk = StoreLock(key)               # cross-process in a multi-process deployment (deploy stage 2)
             _LOCKS[key] = lk
         return lk
 

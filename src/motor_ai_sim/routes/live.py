@@ -1,6 +1,9 @@
 """Live status for module-wise deploys (owner 2026-10-18), see motor_ai_sim.live_status.
 
-GET    /api/admin/live      who is in which module now, requests in flight, jobs; admin or a direct loopback call
+GET    /api/admin/live      who is in which module now, requests in flight, jobs; admin or a direct loopback call.
+                            In the API process of a two-process deployment (stage 2) the compute worker's jobs and
+                            requests are merged in, and ``worker`` says what it is doing; ``?local=1`` = this process only
+                            (what deploy/bluegreen.sh asks the OLD colour while it drains)
 GET    /api/notice          the maintenance banner, if one is up (public: every page shows it)
 PUT    /api/admin/notice    {message: {en, zh}, minutes}  admin or loopback (the deploy script)
 DELETE /api/admin/notice
@@ -33,10 +36,11 @@ def _require(request: Request, authorization: Optional[str]) -> None:
 
 
 @router.get("/api/admin/live")
-def live(request: Request, authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
+def live(request: Request, local: bool = False,
+         authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     _require(request, authorization)
     is_admin = bool(caller_identity(authorization).get("is_admin"))
-    return L.snapshot(include_users=is_admin)
+    return L.local_snapshot(include_users=is_admin) if local else L.snapshot(include_users=is_admin)
 
 
 @router.get("/api/notice")

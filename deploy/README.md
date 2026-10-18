@@ -73,7 +73,8 @@ Windows workstation, so a value proven there is the value that ships.
 | `PUBLISHED_ROOT` | `<WORKSPACES_ROOT>/../published` | the community layer |
 | `SHARED_ROOT` | *(process config dir)* | the read-only catalog + libraries |
 | `MOTOR_AI_SIM_CONFIG` | repo `config/motor_config.yaml` | the process workspace **and the identity layer** — see the trap above |
-| `QUEUE_WORKERS` | `2` | concurrent solves. Physical cores / 4 (§2.4): **2** on an AX42, 4 on an AX102. Measured: a pool of 10 pinned workers stretched a 60 s eval to a 231 s median. |
+| `QUEUE_WORKERS` | `2` | concurrent solves, per compute process (stage 2: the **worker** container; the API colours run no job). Physical cores / 4 (§2.4): **2** on an AX42, 4 on an AX102. Measured: a pool of 10 pinned workers stretched a 60 s eval to a 231 s median. |
+| `MOTRES_ROLE` | `all` | **set by `docker-compose.yml`, never in `api.env`.** `all` = one process does everything (workstation, BYO install, tests); `api` = the web-facing blue/green instances, which refuse to run a queued computation; `worker` = the compute process. See [Stage 2](#stage-2-two-api-colours-and-a-compute-worker). |
 | `AUTH_SECRET` | *generated* | HS256 session key. **Set it explicitly.** Losing the generated file signs every account out permanently and `users.py` refuses by design to mint a replacement. `openssl rand -hex 32` |
 | `GOOGLE_CLIENT_ID` | *(empty)* | Google sign-in. Must equal the frontend's `VITE_GOOGLE_CLIENT_ID`, and the production origin must be listed under *Authorized JavaScript origins* in the Google console **before** cutover. |
 | `ADMIN_EMAILS` | — | comma-separated, always admin, overrides `users.json` |
@@ -158,7 +159,7 @@ An admin token for these calls is minted on the server, never pasted from a
 browser:
 
 ```bash
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env exec -T api \
+bash deploy/bluegreen.sh exec api \
   python -c "from motor_ai_sim import users as U; print(U.issue_token('<admin email>'))"
 ```
 
@@ -166,6 +167,31 @@ Sign-in itself provisions: `routes/auth_local._start_session` calls
 `workspace.provision(email)`, so the account's `<WORKSPACES_ROOT>/<ws_id>/`
 exists and holds a `motor_config.yaml` seeded from `shared/` before the first
 `/api/config` arrives.
+
+### Stage 2: two API colours and a compute worker
+
+Since 2026-10-18 the node runs **four** services from one image and one `docker-compose.yml`:
+
+| service | role | restarted | fences (AX42) |
+|---|---|---|---|
+| `web` | nginx: pages + reverse proxy | only when its nginx setup changed | cpuset 12-13, 1 cpu, 256 MB |
+| `api-blue` / `api-green` | `MOTRES_ROLE=api`: accounts, admin, catalog, production, support, OAuth | **blue-green**: the idle colour is started, warmed, nginx switched, the old colour drained and stopped - nobody waits, nobody sees a 502 | cpuset 12-15, 3 cpus, 5 GB each (both exist only during a switch) |
+| `worker` | `MOTRES_ROLE=worker`: the job queue, FEM solves, optimizer campaigns, the live workbench, `/mcp` | **only when idle** (drain, wait, restart), and only when its own code changed | cpuset 0-11, 12 cpus, 36 GB |
+
+Which paths go to the worker is one table, `motor_ai_sim/roles.py`, mirrored in `nginx.conf` (a test fails if they drift).
+**Operate it through the scripts, not by hand** - a bare `docker compose up -d` starts only `web`:
+
+```bash
+bash deploy/bluegreen.sh state                     # live colour, images, health of both colours and the worker
+bash deploy/deploy_module.sh <SHA> <PREV> <web|api|webapi|worker|back|full> [MODULES]
+python deploy/plan_deploy.py <PREV> <SHA> [<WORKER_PREV>]   # prints "<MODE> <MODULES>"
+bash deploy/bluegreen.sh rollback                  # nginx back to the previous colour (instant while it still runs)
+bash deploy/bluegreen.sh exec api python -m motor_ai_sim.retention     # run something in the live API container
+bash deploy/bluegreen.sh exec worker python -m motor_ai_sim.worker state   # the worker's state (JSON)
+```
+
+The one-time move from the single `api` service is `deploy/cutover_stage2.sh`. Everything - the single-instance audit, the
+resource budget, the cutover runbook, the risks - is in [`docs/DEPLOY_STAGE2.md`](../docs/DEPLOY_STAGE2.md).
 
 ### Queue class by tier
 
@@ -260,9 +286,12 @@ python scripts/check_case_collisions.py --tree /srv/motres      # must exit 0
 **5. Build and start.**
 
 ```bash
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d --build
-docker compose -f deploy/docker-compose.yml logs -f api
-curl -s localhost:8080/api/health          # {"status":"healthy"}
+# stage 2: build the one image, then start the stack through the state script (never a bare `up -d`)
+BUILD_SHA=$(git rev-parse --short HEAD) docker compose -f deploy/docker-compose.yml --env-file deploy/.env build api-image web
+bash deploy/bluegreen.sh init "$(git rev-parse --short HEAD)"      # state.env + the upstream file (api-blue)
+bash deploy/bluegreen.sh first-start                                # worker, api-blue, then web
+docker logs -f deploy-api-blue-1
+curl -s localhost:8080/api/health          # {"status":"healthy","role":"api","instance":"blue",...}
 curl -s localhost:8080/api/me              # the real readiness probe
 ```
 
@@ -270,7 +299,7 @@ The compose file builds the API with `WITH_PARDISO=1` (the optional MKL
 PARDISO sparse solver, see `THIRD_PARTY_NOTICES`). Triangle was removed on
 2026-10-03; gmsh is installed but runs only in its own worker process. The default mesher is Netgen (`netgen-mesher==6.2.2607` in
 `requirements.txt`, LGPL, no fallback to gmsh). Check after a build:
-`docker compose -f deploy/docker-compose.yml exec api python -c "import netgen.occ, pypardiso"`.
+`bash deploy/bluegreen.sh exec worker python -c "import netgen.occ, pypardiso"`.
 
 `WITH_PARDISO=1` never installs `intel-openmp` / `intel-cmplr-lib-ur` (2026-09-30
 — see `THIRD_PARTY_NOTICES.md` note 2): the image pins `mkl`/`onemkl-license`/
@@ -323,7 +352,7 @@ If `requirements.txt` changed, the build reinstalls the whole native stack
    (docs/DATA_PROTECTION_2026-09-29.md §2):
    ```bash
    cd /opt/motres/app/deploy
-   docker compose exec -T api python -m motor_ai_sim.account_lifecycle reapply
+   bash bluegreen.sh exec api python -m motor_ai_sim.account_lifecycle reapply
    # restored register older than the copy you kept aside:
    #   ... account_lifecycle reapply --register <path of the newest copy, inside the container>
    ```
@@ -417,8 +446,9 @@ sudo systemctl enable --now motres-health.timer motres-backup.timer \
 
 The FEM transient is CPU-bound (MKL PARDISO): real cores matter, 2–4 GB RAM per
 concurrent solve at 200 mm / 2 mm mesh. On the AX42 that is `QUEUE_WORKERS=2`
-and `cpuset: "0-11"`, leaving four threads for nginx, restic and the host. On an
-AX102: `QUEUE_WORKERS=4`, `cpuset: "0-27"`.
+and, for the **worker**, `cpuset: "0-11"`, leaving four threads for nginx, restic, the host and the two light API
+colours (cpuset 12-15). On an AX102: `QUEUE_WORKERS=4`, worker `cpuset: "0-27"`. Memory ceilings: worker 36 GB, each API
+colour 5 GB (docs/DEPLOY_STAGE2.md has the budget and how to measure it).
 
 ## Testing the image
 

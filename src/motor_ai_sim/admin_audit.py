@@ -38,16 +38,16 @@ from __future__ import annotations
 import json
 import logging
 import os
-import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from motor_ai_sim.file_lock import store_lock
 from motor_ai_sim.private_files import chmod_private, ensure_private_dir, open_private
 
 log = logging.getLogger(__name__)
 
-_LOCK = threading.RLock()
+_LOCK = store_lock(lambda: audit_path())      # cross-process (deploy stage 2)
 
 ACTIONS = frozenset({
     # accounts

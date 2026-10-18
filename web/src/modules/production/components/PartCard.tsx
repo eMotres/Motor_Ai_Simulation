@@ -25,7 +25,7 @@ import PartName from './PartName';
 import { UnifiedViewer } from '../../viewer3d';
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 import { downloadFile, downloadModelStep, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
-import { canEditProcurement, displayText, formatReceiptTime, getStatusColor, makeBilingual } from '../helpers';
+import { canEditProcurement, displayText, formatReceiptTime, getStatusColor, makeBilingual, partFamilies } from '../helpers';
 import type {
   CostRow,
   DocumentRec,
@@ -100,19 +100,6 @@ export const InlineDrawing: React.FC<{ ctx: ProdCtx; d: DrawingFile; pdf?: Drawi
 };
 
 export const DrawingPreview: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = InlineDrawing;
-
-/** The CAD groups of the motor model (cad/fc_scripts/glb_writer.py families) that make one BOM part, by its canonical
- *  English name; a part without 3-D geometry (lead wire, insulation, packaging) has none. */
-const PART_FAMILIES: Array<[string, string[]]> = [
-  ['Stator core', ['Core']], ['Rotor core', ['Rotor']], ['Magnet', ['Magnets']], ['Coil-fixing ring', ['Ring_front', 'Ring_back']],
-  ['Coil', ['Coils']], ['Shaft', ['Shaft']], ['Front holder', ['Holder_front']], ['Back holder', ['Holder_back']],
-  ['Prop_fix', ['Prop_fix']], ['Bearing', ['Bearings_front', 'Bearings_back']], ['Socket head screw', ['Screws']],
-  ['Phase board', ['PhaseBoard']],
-];
-
-export function partFamilies(nameEn: string): string[] {
-  return PART_FAMILIES.find(([prefix]) => nameEn.startsWith(prefix))?.[1] ?? [];
-}
 
 /** The part's own 3-D model: the motor's full CAD model with only this part shown, in the standard viewer, no tree. */
 const PartModel3D: React.FC<{ ctx: ProdCtx; part: Part }> = ({ ctx, part }) => {

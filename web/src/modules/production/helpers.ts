@@ -1,7 +1,7 @@
 // Pure helpers of the Production module (no React, no I/O): revision numbers, bilingual display, caller standing.
 // Imported by __tests__/helpers.test.mjs (Node >= 22.18 strips the types).
 import type {
-  AssemblyNode, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, ExtraCost, Lang, Member, Part, Production, Revision, TranslationStatus,
+  AssemblyNode, AssemblyStep, AssemblyTree, Bilingual, BomRow, CallerRole, CostRow, CostSummary, ExtraCost, Lang, Member, Part, Production, Revision, TranslationStatus,
 } from './types';
 
 // -- revisions --------------------------------------------------------------------------------------------------------
@@ -572,4 +572,40 @@ export function formatReceiptTime(val: string | null | undefined): string {
     return `${d} ${timePart}`;
   }
   return val;
+}
+
+// -- 3-D model of an assembly step ---------------------------------------------------------------------------------------
+
+/** The CAD groups of the motor model (cad/fc_scripts/glb_writer.py families) that make one BOM part, by its canonical
+ *  English name; a part without 3-D geometry (lead wire, insulation, packaging) has none. */
+const PART_FAMILIES: Array<[string, string[]]> = [
+  ['Stator core', ['Core']], ['Rotor core', ['Rotor']], ['Magnet', ['Magnets']], ['Coil-fixing ring', ['Ring_front', 'Ring_back']],
+  ['Coil', ['Coils']], ['Shaft', ['Shaft']], ['Front holder', ['Holder_front']], ['Back holder', ['Holder_back']],
+  ['Prop_fix', ['Prop_fix']], ['Bearing', ['Bearings_front', 'Bearings_back']], ['Socket head screw', ['Screws']],
+  ['Phase board', ['PhaseBoard']],
+];
+
+export function partFamilies(nameEn: string): string[] {
+  return PART_FAMILIES.find(([prefix]) => nameEn.startsWith(prefix))?.[1] ?? [];
+}
+
+/** The model groups a step shows (owner 2026-10-18): `own` = the families of the parts this step assembles, `context` =
+ *  the families of the parts of every earlier step in the graph (its `after` ancestors) that this step does not add. */
+export function stepModelFamilies(steps: readonly AssemblyStep[], stepId: string): { own: string[]; context: string[] } {
+  const byId = new Map(steps.map((s) => [s.id, s] as const));
+  const famsOf = (s: AssemblyStep): string[] => (s.parts_resolved ?? []).flatMap((p) => partFamilies(p.name.en || ''));
+  const own = [...new Set(byId.has(stepId) ? famsOf(byId.get(stepId)!) : [])];
+  const seen = new Set<string>([stepId]);
+  const todo = [...(byId.get(stepId)?.after ?? [])];
+  const earlier = new Set<string>();
+  while (todo.length) {                                    // transitive `after`, cycle-safe
+    const id = todo.pop()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const s = byId.get(id);
+    if (!s) continue;
+    famsOf(s).forEach((f) => earlier.add(f));
+    todo.push(...s.after);
+  }
+  return { own, context: [...earlier].filter((f) => !own.includes(f)) };
 }

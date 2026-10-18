@@ -70,8 +70,8 @@ function layout(steps: AssemblyStep[], titleOf: (s: AssemblyStep) => string, sel
 
 const emptyBi: Bilingual = { en: '', zh: '', src_lang: 'en', status: { en: 'confirmed', zh: 'confirmed' } } as Bilingual;
 
-const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: AssemblyStep[]; parts: Part[];
-  onClose: () => void; onSave: (s: AssemblyStep) => void }> = ({ open, step, steps, parts, onClose, onSave }) => {
+const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: AssemblyStep[]; parts: Part[]; sections: ProcessSection[];
+  onClose: () => void; onSave: (s: AssemblyStep) => void }> = ({ open, step, steps, parts, sections, onClose, onSave }) => {
   const { t } = useTranslation('production');
   const [d, setD] = useState<AssemblyStep | null>(step);
   useEffect(() => setD(step), [step]);
@@ -95,6 +95,12 @@ const StepDialog: React.FC<{ open: boolean; step: AssemblyStep | null; steps: As
         <TextField select size="small" label={t('process.parts', 'Parts')} SelectProps={{ multiple: true }} value={d.parts.filter((x) => leaf.some((p) => p.id === x))}
           onChange={(e) => set({ parts: (typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value) as string[] })}>
           {leaf.map((p) => <MenuItem key={p.id} value={p.id}>{p.name.en || p.name.zh}</MenuItem>)}
+        </TextField>
+        {/* the process sections this step shows and the process document prints under it (empty = by title keywords) */}
+        <TextField select size="small" label={t('process.stepSectionsPick', 'Process sections')} SelectProps={{ multiple: true }}
+          value={(d.sections ?? []).filter((x) => sections.some((s) => s.id === x))}
+          onChange={(e) => set({ sections: (typeof e.target.value === 'string' ? e.target.value.split(',') : e.target.value) as string[] })}>
+          {sections.map((s) => <MenuItem key={s.id} value={s.id}>{s.title.en || s.title.zh}</MenuItem>)}
         </TextField>
         <TextField size="small" multiline minRows={2} label={t('process.noteEn', 'Note (English)')} value={d.note?.en ?? ''}
           onChange={(e) => set({ note: { ...(d.note ?? emptyBi), en: e.target.value } })} />
@@ -207,7 +213,7 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
         </Paper>
       )}
       {/* the whole process document is generated from these steps and lives in Documents (owner 2026-10-18) */}
-      <StepDialog open={!!edit} step={edit} steps={steps} parts={parts} onClose={() => setEdit(null)}
+      <StepDialog open={!!edit} step={edit} steps={steps} parts={parts} sections={sections} onClose={() => setEdit(null)}
         onSave={(s) => {
           const exists = steps.some((x) => x.id === s.id);
           const next = exists ? steps.map((x) => (x.id === s.id ? s : x)) : [...steps, s];
@@ -226,13 +232,14 @@ const STEP_KEYWORDS: Record<string, string[]> = {
 };
 
 export function relatedSections(step: AssemblyStep, sections: ProcessSection[]): ProcessSection[] {
-  const own = (step as AssemblyStep & { sections?: string[] }).sections;
+  const own = step.sections;
   if (own && own.length) return sections.filter((x) => own.includes(x.id));
   const keys = STEP_KEYWORDS[step.id] ?? [];
   if (!keys.length) return [];
   return sections.filter((x) => {
     const title = `${x.title?.en ?? ''} ${x.title?.zh ?? ''}`.toLowerCase();
-    return keys.some((k) => title.includes(k));
+    // whole words, like the server: "ring" is not in "bearing" or "wiring"
+    return keys.some((k) => new RegExp(`\\b${k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(title));
   });
 }
 

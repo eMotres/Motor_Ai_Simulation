@@ -1332,7 +1332,9 @@ def verify_token(token: str, *, renew: bool = False) -> TokenResult:
             rec = S.get(sid)
         except StoreUnavailable:
             return TokenResult("store_unavailable", email=email, sid=sid, exp=exp)
-        if isinstance(rec, dict) and rec.get("revoked"):
+        # A token whose session the readable registry does not know is refused like a revoked one (security
+        # audit 2026-10-18): revocations live in the registry, so an unknown sid cannot be shown to be live.
+        if not isinstance(rec, dict) or rec.get("revoked"):
             return TokenResult("revoked", email=email, sid=sid, exp=exp)
 
     renewed = None

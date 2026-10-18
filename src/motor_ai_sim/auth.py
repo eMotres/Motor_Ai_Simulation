@@ -462,18 +462,28 @@ GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "").strip()
 _GOOGLE_JWKS_URL = "https://www.googleapis.com/oauth2/v3/certs"
 _gjwks: dict = {}
 _gjwks_exp: float = 0.0
+_gjwks_fetched_at: float = 0.0
+#: At most one network fetch of Google's keys per this many seconds, whatever callers ask (security audit
+#: 2026-10-18): a token with an unknown key id used to force a blocking fetch under the global lock on EVERY
+#: request, so a stream of junk tokens could stall sign-in for everybody.  Google rotates keys hours apart.
+JWKS_MIN_REFETCH_S = 60.0
 
 
 def _google_keys(force: bool = False) -> dict:
-    global _gjwks, _gjwks_exp
+    global _gjwks, _gjwks_exp, _gjwks_fetched_at
     with _lock:
-        if not force and _gjwks and time.time() < _gjwks_exp:
+        now = time.time()
+        if _gjwks and (now < _gjwks_exp and not force):
             return _gjwks
+        if now - _gjwks_fetched_at < JWKS_MIN_REFETCH_S:
+            # fetched (or failed) a moment ago: answer from what we have instead of hitting Google again
+            return _gjwks
+        _gjwks_fetched_at = now
         with urllib.request.urlopen(_GOOGLE_JWKS_URL, timeout=5) as resp:
             raw = json.loads(resp.read().decode("utf-8"))
         _gjwks = {k["kid"]: jwt.algorithms.RSAAlgorithm.from_jwk(json.dumps(k))
                   for k in raw.get("keys", [])}
-        _gjwks_exp = time.time() + 3600
+        _gjwks_exp = now + 3600
         return _gjwks
 
 
@@ -658,7 +668,7 @@ def resolve_user_detail(authorization: Optional[str], *, renew: bool = False,
     claims = _verify_google_token(token)
     if claims is not None:
         email = (claims.get("email") or "").strip().lower()
-        if claims.get("email_verified") is False:
+        if claims.get("email_verified") is not True:            # Google must say the address is verified
             _report_reject("google_unverified_email", email, "", ip, user_agent, path)
             return _out(None, "google_rejected", email=email)
         role = _registry_role(email)

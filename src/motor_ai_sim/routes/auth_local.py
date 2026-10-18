@@ -713,7 +713,7 @@ def google_login(req: GoogleReq, request: Request):
     claims = _verify_google_token(req.credential)
     if claims is None:
         raise HTTPException(401, detail="Google token was not accepted")
-    if claims.get("email_verified") is False:
+    if claims.get("email_verified") is not True:
         raise HTTPException(403, detail="Google account email is not verified")
     email = (claims.get("email") or "").strip().lower()
     first_sign_in = U.get_user(email) is None

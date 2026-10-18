@@ -22,6 +22,8 @@ import CloseIcon from '@mui/icons-material/Close';
 import { useTranslation } from 'react-i18next';
 import BilingualText, { BilingualInput, useContentLang } from './BilingualText';
 import PartName from './PartName';
+import { UnifiedViewer } from '../../viewer3d';
+const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 import { downloadFile, downloadModelStep, fileObjectUrl, openFileInNewWindow, productionApi } from '../api';
 import { canEditProcurement, displayText, formatReceiptTime, getStatusColor, makeBilingual } from '../helpers';
 import type {
@@ -98,6 +100,33 @@ export const InlineDrawing: React.FC<{ ctx: ProdCtx; d: DrawingFile; pdf?: Drawi
 };
 
 export const DrawingPreview: React.FC<{ ctx: ProdCtx; d: DrawingFile }> = InlineDrawing;
+
+/** The CAD groups of the motor model (cad/fc_scripts/glb_writer.py families) that make one BOM part, by its canonical
+ *  English name; a part without 3-D geometry (lead wire, insulation, packaging) has none. */
+const PART_FAMILIES: Array<[string, string[]]> = [
+  ['Stator core', ['Core']], ['Rotor core', ['Rotor']], ['Magnet', ['Magnets']], ['Coil-fixing ring', ['Ring_front', 'Ring_back']],
+  ['Coil', ['Coils']], ['Shaft', ['Shaft']], ['Front holder', ['Holder_front']], ['Back holder', ['Holder_back']],
+  ['Prop_fix', ['Prop_fix']], ['Bearing', ['Bearings_front', 'Bearings_back']], ['Socket head screw', ['Screws']],
+  ['Phase board', ['PhaseBoard']],
+];
+
+export function partFamilies(nameEn: string): string[] {
+  return PART_FAMILIES.find(([prefix]) => nameEn.startsWith(prefix))?.[1] ?? [];
+}
+
+/** The part's own 3-D model: the motor's full CAD model with only this part shown, in the standard viewer, no tree. */
+const PartModel3D: React.FC<{ ctx: ProdCtx; part: Part }> = ({ ctx, part }) => {
+  const fams = partFamilies(part.name.en || '');
+  if (fams.length === 0) return null;
+  const glb = `${API}/api/model3d/${encodeURIComponent(ctx.die)}/${encodeURIComponent(ctx.config)}/model.glb`;
+  return (
+    <Box sx={{ flex: '1 1 420px', minWidth: 320, height: 460, border: '1px solid var(--line-soft)', borderRadius: 1.5, overflow: 'hidden', bgcolor: 'var(--panel-2)' }}>
+      <UnifiedViewer sourceKey={`production:${ctx.die}:${ctx.config}`} resetKey={`production:${ctx.die}:${ctx.config}:${fams.join('|')}`}
+        glbUrl={glb} toolbarSpec="full" tree={null} onlyFamilies={fams}
+        contextLostText="3-D view lost - reload the page" noViewText="" />
+    </Box>
+  );
+};
 
 export interface PartDetailPanelProps {
   part: Part;
@@ -753,17 +782,21 @@ export const PartDetailPanel: React.FC<PartDetailPanelProps> = ({
         </Box>
       )}
 
-      {/* Inline Large PNG Drawings */}
-      {part.drawing_files.filter((d) => d.kind === 'png').map((d) => {
-        // a click on the picture opens the drawing full screen: its PDF (same name) when there is one, else the PNG
-        const stem = d.name.replace(/\.png$/i, '');
-        const pdf = part.drawing_files.find((x) => x.kind === 'pdf' && x.name.replace(/\.pdf$/i, '') === stem);
-        return <InlineDrawing key={d.file_id} ctx={ctx} d={d} pdf={pdf} />;
-      })}
-
-      {part.drawing_files.length === 0 && (
-        <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)', mb: 1 }}>{t('parts.noDrawings')}</Typography>
-      )}
+      {/* drawings and the part's own 3-D model side by side (owner 2026-10-18) */}
+      <Box sx={{ display: 'flex', gap: 2, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <Box sx={{ flex: '1 1 480px', minWidth: 0 }}>
+          {part.drawing_files.filter((d) => d.kind === 'png').map((d) => {
+            // a click on the picture opens the drawing full screen: its PDF (same name) when there is one, else the PNG
+            const stem = d.name.replace(/\.png$/i, '');
+            const pdf = part.drawing_files.find((x) => x.kind === 'pdf' && x.name.replace(/\.pdf$/i, '') === stem);
+            return <InlineDrawing key={d.file_id} ctx={ctx} d={d} pdf={pdf} />;
+          })}
+          {part.drawing_files.length === 0 && (
+            <Typography sx={{ fontSize: 11.5, color: 'var(--text-4)', mb: 1 }}>{t('parts.noDrawings')}</Typography>
+          )}
+        </Box>
+        <PartModel3D ctx={ctx} part={part} />
+      </Box>
 
       <Box sx={{ display: 'flex', gap: 1.5, flexWrap: 'wrap', mt: 1 }}>
         {part.optional_step && (

@@ -9,7 +9,7 @@ import ProcessView from './ProcessView';
 import {
   Box, Button, Chip, Dialog, DialogActions, DialogContent, DialogTitle, MenuItem, Paper, TextField, Typography,
 } from '@mui/material';
-import { Background, Handle, Position, ReactFlow, ReactFlowProvider } from '@xyflow/react';
+import { Background, Handle, Panel, Position, ReactFlow, ReactFlowProvider, useReactFlow } from '@xyflow/react';
 import type { Edge, Node, NodeProps } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import dagre from '@dagrejs/dagre';
@@ -160,6 +160,7 @@ export const AssemblyProcess: React.FC<{ ctx: ProdCtx; parts: Part[]; sections?:
             nodesDraggable={false} nodesConnectable={false} elementsSelectable={false}
             onNodeClick={(_, n) => setSel(n.id === sel ? null : n.id)}>
             <Background gap={18} size={1} />
+            <FitToScreen nodeCount={nodes.length} label={t('process.fit', 'Fit to screen')} />
           </ReactFlow>
         </ReactFlowProvider>
       </Paper>
@@ -230,6 +231,22 @@ const STEP_KEYWORDS: Record<string, string[]> = {
   s1: ['winding', 'coil'], s2: ['winding', 'insulation'], s3: ['pre-power', 'inspection'], s4: ['ring'],
   s5: ['magnet'], s6: ['magnet'], s7: ['shaft', 'fits'], s8: ['balance'], s9: ['assembly sequence', 'bearing', 'fits', 'bracket'],
   s10: ['phase plate', 'wiring'], s11: ['phase plate', 'wiring'], s12: ['pre-power', 'winding'], s13: ['pre-power'],
+};
+
+/** "Fit to screen" (owner 2026-10-18), and a re-fit whenever the graph's steps change (the first fitView ran before
+ *  the steps arrived, so the graph opened cut off). */
+const FitToScreen: React.FC<{ nodeCount: number; label: string }> = ({ nodeCount, label }) => {
+  const rf = useReactFlow();
+  useEffect(() => {
+    const id = window.setTimeout(() => { void rf.fitView({ padding: 0.08 }); }, 50);
+    return () => window.clearTimeout(id);
+  }, [nodeCount, rf]);
+  return (
+    <Panel position="top-right">
+      <Button size="small" variant="outlined" onClick={() => void rf.fitView({ padding: 0.08, duration: 250 })}
+        sx={{ textTransform: 'none', bgcolor: 'var(--panel)', fontSize: 12 }}>{label}</Button>
+    </Panel>
+  );
 };
 
 export function relatedSections(step: AssemblyStep, sections: ProcessSection[], explicit = false): ProcessSection[] {

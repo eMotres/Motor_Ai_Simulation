@@ -4,14 +4,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Box, Button, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
+import { useUIStore } from '../../stores/motorStore';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 const visible = () => typeof document === 'undefined' || document.visibilityState === 'visible';
 
 const UpdateBanner: React.FC = () => {
   const { t, i18n } = useTranslation('common');
-  const loaded = useRef<string | null>(null);
-  const [newBuild, setNewBuild] = useState(false);
+  const loaded = useRef<{ build: string; modules: Record<string, string> | null } | null>(null);
+  // which modules changed since this page loaded; with no module data (an old build.json) a new build is "core"
+  const [changed, setChanged] = useState<ReadonlySet<string>>(new Set());
+  const { activeTab } = useUIStore();
   const [notice, setNotice] = useState<{ en?: string; zh?: string } | null>(null);
 
   useEffect(() => {
@@ -23,8 +26,14 @@ const UpdateBanner: React.FC = () => {
         .then((j) => {
           const b = j && typeof j.build === 'string' ? j.build : null;
           if (!alive || !b) return;
-          if (loaded.current === null) loaded.current = b;
-          else if (b !== loaded.current) setNewBuild(true);
+          const mods = j && typeof j.modules === 'object' && j.modules ? (j.modules as Record<string, string>) : null;
+          if (loaded.current === null) { loaded.current = { build: b, modules: mods }; return; }
+          if (b === loaded.current.build) return;
+          const old = loaded.current.modules;
+          const diff = new Set<string>();
+          if (!old || !mods) diff.add('core');
+          else for (const k of new Set([...Object.keys(old), ...Object.keys(mods)])) if (old[k] !== mods[k]) diff.add(k);
+          setChanged(diff);
         })
         .catch(() => { /* local dev or offline: no bar */ });
     };
@@ -43,6 +52,8 @@ const UpdateBanner: React.FC = () => {
     return () => { alive = false; clearInterval(a); clearInterval(b); document.removeEventListener('visibilitychange', onShow); };
   }, []);
 
+  // a production-only update asks only the Production tab to reload (owner 2026-10-18); core changes ask everybody
+  const newBuild = changed.has('core') || (changed.has('production') && (activeTab as string) === 'production');
   const zh = (i18n.resolvedLanguage ?? 'en').startsWith('zh');
   const noticeText = notice ? ((zh ? notice.zh : notice.en) || notice.en || '') : '';
   if (!newBuild && !noticeText) return null;

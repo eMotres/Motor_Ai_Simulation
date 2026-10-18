@@ -168,7 +168,10 @@
     "uploader": "Uploaded by",
     "date": "Date",
     "download": "Download",
-    "uploadTip": "Owner and engineer upload; every download is traced."
+    "uploadTip": "Owner and engineer upload; every download is traced.",
+    "internal": "Internal",
+    "shared": "Factory sees",
+    "internalTip": "Internal documents are hidden from the factory (OEM members). Click to switch."
   },
   "discussion": {
     "general": "General",

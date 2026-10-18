@@ -73,6 +73,7 @@ async def admin_create(request: Request, die: str, config: str, admin_user: dict
         "order_quantity": order_quantity,
         "members": members,
         "share_costs_with_oem": share_costs,
+        "product_type": body.get("product_type"),
     }, die, config)
     store.save_file(die, config, "production.json", production)
     store.save_file(die, config, "parts.json", {"parts": []})

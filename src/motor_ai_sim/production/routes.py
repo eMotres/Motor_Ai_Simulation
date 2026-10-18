@@ -320,13 +320,14 @@ def get_assembly(request: Request, die: str, config: str):
     user, production = require_member_with_full_view(request, die, config)
     parts_data = store.load_file(die, config, "parts.json")
     parts = parts_data.get("parts", [])
-    tree = models.build_assembly_tree(parts)
+    ptype = models.product_type_of(production)
+    tree = models.build_assembly_tree(parts, ptype)
     from motor_ai_sim.production import access
     costs = store.load_file(die, config, "costs.json") if access.can_view_costs(user, production) else {}
     cost_rollup = models.compute_assembly_costs(parts, costs) if costs else {}
     return {
         "tree": tree,
-        "parts": models.ensure_default_assembly(parts, die, config),
+        "parts": models.ensure_default_assembly(parts, die, config) if ptype == "motor" else parts,
         "costs": cost_rollup,
     }
 
@@ -334,6 +335,8 @@ def get_assembly(request: Request, die: str, config: str):
 @router.post("/{die}/{config}/assembly/default")
 def apply_default_assembly(request: Request, die: str, config: str):
     user, _production = require_editor_with_full_view(request, die, config)
+    if models.product_type_of(_production) != "motor":
+        raise HTTPException(status_code=422, detail="the default motor sub-assemblies apply to a motor production only")
     def mut(d):
         parts = d.get("parts", [])
         d["parts"] = models.ensure_default_assembly(parts, die, config)
@@ -718,10 +721,46 @@ async def save_process(request: Request, die: str, config: str):
 
 # ── documents / files ────────────────────────────────────────────────────────
 
+def _sees_internal(user: dict, production: dict) -> bool:
+    """Internal documents are ours: hidden from the factory (an OEM member)."""
+    from motor_ai_sim.production import access
+    return access.is_admin(user) or models.is_member(_email(user), production) != "oem"
+
+
+def _internal_file_ids(die: str, config: str) -> set:
+    return {d.get("file_id") for d in (store.load_file(die, config, "documents.json") or {}).get("documents", [])
+            if d.get("internal")}
+
+
 @router.get("/{die}/{config}/documents")
 def list_documents(request: Request, die: str, config: str):
-    require_member_with_full_view(request, die, config)
-    return store.load_file(die, config, "documents.json")
+    user, production = require_member_with_full_view(request, die, config)
+    data = store.load_file(die, config, "documents.json") or {"documents": []}
+    if not _sees_internal(user, production):
+        data = dict(data, documents=[d for d in data.get("documents", []) if not d.get("internal")])
+    return data
+
+
+@router.patch("/{die}/{config}/documents/{doc_id}")
+async def patch_document(request: Request, die: str, config: str, doc_id: str):
+    """Editors mark a document internal (hidden from the factory) or not."""
+    user, _production = require_editor_with_full_view(request, die, config)
+    body = await request.json()
+    if not isinstance(body, dict) or "internal" not in body:
+        raise HTTPException(status_code=400, detail="internal: true | false expected")
+    flag = bool(body.get("internal"))
+    found = {}
+
+    def mut(d):
+        for doc in d.get("documents", []):
+            if doc.get("id") == doc_id:
+                doc["internal"] = flag
+                found["doc"] = doc
+    store.mutate_file(die, config, "documents.json", mut)
+    if not found:
+        raise HTTPException(status_code=404, detail="Document not found")
+    _audit(_email(user), die, config, "update", "document", doc_id, {"internal": flag})
+    return found["doc"]
 
 
 @router.post("/{die}/{config}/documents")
@@ -757,6 +796,8 @@ def download_file(request: Request, die: str, config: str, file_id: str):
     if not store.valid_file_id(file_id):
         raise HTTPException(status_code=404, detail="File not found")
     user, _production = require_member_with_full_view(request, die, config)
+    if not _sees_internal(user, _production) and file_id in _internal_file_ids(die, config):
+        raise HTTPException(status_code=404, detail="File not found")
     path = store.read_uploaded_file(die, config, file_id)
     if path is None:
         raise HTTPException(status_code=404, detail="File not found")
@@ -1177,7 +1218,8 @@ def get_assembly_process(request: Request, die: str, config: str):
     from motor_ai_sim.production import process_steps as PS
     access.require_member(request, die, config)
     parts = store.load_file(die, config, "parts.json").get("parts") or []
-    return PS.view(store.load_file(die, config, "assembly_process.json"), parts)
+    return PS.view(store.load_file(die, config, "assembly_process.json"), parts,
+                   models.product_type_of(access.load_production(die, config)))
 
 
 @router.put("/{die}/{config}/assembly_process")

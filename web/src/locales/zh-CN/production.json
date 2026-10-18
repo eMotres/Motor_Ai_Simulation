@@ -168,7 +168,10 @@
     "uploader": "上传人",
     "date": "日期",
     "download": "下载",
-    "uploadTip": "负责人和工程师可上传；每次下载均有记录。"
+    "uploadTip": "负责人和工程师可上传；每次下载均有记录。",
+    "internal": "内部",
+    "shared": "工厂可见",
+    "internalTip": "内部文件对工厂（OEM 成员）隐藏。点击切换。"
   },
   "discussion": {
     "general": "综合",

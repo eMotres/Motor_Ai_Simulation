@@ -1,6 +1,6 @@
 /** Documents: upload (owner/engineer/admin) and traced download (every member). */
 import React, { useRef, useState } from 'react';
-import { Box, Button, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
+import { Box, Button, Chip, MenuItem, Paper, Table, TableBody, TableCell, TableHead, TableRow, TextField, Typography } from '@mui/material';
 import { useTranslation } from 'react-i18next';
 import { PartName } from './PartName';
 import HelpTip from '../../../components/common/HelpTip';
@@ -71,7 +71,19 @@ const DocumentsPanel: React.FC<{ documents: DocumentRec[]; parts: Part[]; ctx: P
                       </Box>
                     </TableCell>
                     <TableCell>{p ? <PartName name={p.name} size={12.5} /> : <span style={{ color: 'var(--text-4)' }}>{t('docs.general')}</span>}</TableCell>
-                    <TableCell sx={{ color: 'var(--text-2)' }}>{d.uploader_email}</TableCell>
+                    <TableCell sx={{ color: 'var(--text-2)' }}>
+                      {d.uploader_email}
+                      {/* internal = hidden from the factory; editors switch it (owner 2026-10-18) */}
+                      {(d.internal || ctx.canEdit) && (
+                        <Chip size="small" label={t(d.internal ? 'docs.internal' : 'docs.shared')}
+                          title={t('docs.internalTip')}
+                          onClick={ctx.canEdit ? () => void productionApi.setDocumentInternal(ctx.die, ctx.config, d.id, !d.internal)
+                            .then(() => ctx.reload()).catch((e) => setErr(t('failed', { reason: String(e) }))) : undefined}
+                          sx={{ ml: 1, height: 18, fontSize: 10, cursor: ctx.canEdit ? 'pointer' : 'default',
+                            bgcolor: d.internal ? '#7f1d1d' : 'transparent', color: d.internal ? '#fff' : 'var(--text-3)',
+                            border: d.internal ? 'none' : '1px solid var(--line-soft)' }} />
+                      )}
+                    </TableCell>
                     <TableCell sx={{ color: 'var(--text-3)' }}>{d.uploaded_at.slice(0, 10)}</TableCell>
                     <TableCell align="right">
                       <Button size="small" sx={{ textTransform: 'none', fontSize: 11 }}

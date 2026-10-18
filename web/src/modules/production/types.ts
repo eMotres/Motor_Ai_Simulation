@@ -25,6 +25,8 @@ export interface Production {
   status: 'active' | 'paused' | 'archived';
   current_revision: string;
   share_costs_with_oem?: boolean;
+  /** what is produced: a motor (default) or electronics (the 800 V controller) */
+  product_type?: 'motor' | 'electronics';
   members: Member[];
   created_at: string;
   updated_at: string;
@@ -288,6 +290,8 @@ export interface DocumentRec {
   part_id: string | null;
   file_id: string;
   name: string;
+  /** our own working document: hidden from the factory (OEM members) */
+  internal?: boolean;
 }
 
 export interface Attachment { file_id: string; name: string }
@@ -349,6 +353,8 @@ export interface ProdCtx {
   email: string;
   uiLang: Lang;
   canEdit: boolean;
+  /** 'electronics' productions have no motor CAD model: no per-part 3-D view */
+  productType?: 'motor' | 'electronics';
   reload: () => void;
 }
 

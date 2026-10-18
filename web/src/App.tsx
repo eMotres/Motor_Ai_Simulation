@@ -65,6 +65,7 @@ import { syncMeshConfigFromServer } from './lib/meshConfigSync';
 import CompareTab from './components/compare/CompareTab';
 import Model3DPanel from './components/model3d/Model3DPanel';
 import { ProductionTab } from './modules/production';
+const DesignerTab = lazy(() => import('./modules/designer/DesignerTab'));
 import GeometryTab from './components/geometry/GeometryTab';
 import ComparePanel from './components/compare/ComparePanel';
 import MeshPanel from './components/mesh/MeshPanel';
@@ -117,6 +118,22 @@ function useNewRequestCount(isAdmin: boolean): number {
     return () => { alive = false; clearInterval(id); window.removeEventListener('focus', read); };
   }, [isAdmin]);
   return n;
+}
+
+/** Designer tab (pilot): drawn only when the server says this account may use the design assistant
+ *  (DESIGN_AGENT_ACCESS) - one read per sign-in, a failure is "not allowed". */
+function useDesignerAllowed(signedIn: boolean): boolean {
+  const [ok, setOk] = useState(false);
+  useEffect(() => {
+    if (!signedIn) { setOk(false); return; }
+    let alive = true;
+    fetch(`${API_BASE}/api/design-agent/status`, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j) => { if (alive) setOk(!!j?.allowed); })
+      .catch(() => { /* offline or signed out - no tab */ });
+    return () => { alive = false; };
+  }, [signedIn]);
+  return ok;
 }
 
 // ─── Geometry build timer ───────────────────────────────────────────────────
@@ -235,6 +252,7 @@ function App() {
   const standardUser = isStandardUser(enforced, isAdmin, role);
   const producer = authResolved && productionVisible(enforced, isAdmin, role);
   const newRequests = useNewRequestCount(isAdmin);
+  const designerAllowed = useDesignerAllowed(signedIn);
   const [panelWidth, setPanelWidth] = React.useState(300);
   const [selectedMaterial, setSelectedMaterial] = useState<SelectedMaterial | null>(null);
   const { library: matLibrary, loading: matLoading, error: matError, reload: matReload } = useMaterialsLibrary();
@@ -569,6 +587,9 @@ function App() {
     // Production (stage 1): parts, BOM, process, documents, discussion, proposals and revisions of one motor; admin, engineer and OEM producer.
     { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false,
       render: () => <ProductionTab /> },
+    // Designer (pilot 2026-10-18): the design assistant chat; shown when the server says this account may use it.
+    { id: 'designer', label: 'Designer', order: 1, gate: TAB_GATES.designer, showViewer: false,
+      render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><DesignerTab /></Suspense> },
     { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: TAB_GATES.admin, showViewer: false,
       render: () => <AdminPanel /> },
   ];
@@ -586,7 +607,7 @@ function App() {
       // below failed to type-check (TS2362/2363).
       order: (t.panelId ? panels[t.panelId]?.order : undefined) ?? t.order,
     }))
-    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer }))
+    .filter((t) => gateOpen(t.gate, { signedIn, fullUI, isAdmin, producer }) && (t.id !== 'designer' || designerAllowed))
     .sort((a, b) => a.order - b.order);
   // A tab this account no longer has (a remembered "3D model" tab of an engineer: the model lives in Geometry > Full for the simulation
   // UI, owner 2026-10-15) lands on the first tab it has - never on an empty body.

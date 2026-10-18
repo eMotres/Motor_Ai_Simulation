@@ -383,6 +383,9 @@ app.include_router(production_admin_router)
 # Directory module: /api/admin/directory
 from motor_ai_sim.directory.routes import router as directory_admin_router
 app.include_router(directory_admin_router)
+# Design assistant (pilot 2026-10-18): /api/design-agent, /api/admin/design-agent/usage
+from motor_ai_sim.routes.design_agent import router as design_agent_router
+app.include_router(design_agent_router)
 
 
 # (There is no FEM worker pool to warm any more.  It existed to hide the

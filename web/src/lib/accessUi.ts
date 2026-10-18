@@ -45,6 +45,8 @@ export const TAB_GATES: Readonly<Record<string, TabGate>> = {
   model3d: 'standard', admin: 'admin',
   // Production (docs/PRODUCTION_MODULE_DESIGN.md): admin, engineer and OEM producer; the server decides which productions each account sees.
   production: 'producer',
+  // Designer (pilot 2026-10-18): any signed-in account; App.tsx also asks the server (/api/design-agent/status).
+  designer: 'signedIn',
 };
 export interface GateCtx { signedIn: boolean; fullUI: boolean; isAdmin: boolean; producer?: boolean }
 export const gateOpen = (gate: TabGate, c: GateCtx): boolean =>

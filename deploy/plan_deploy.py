@@ -23,12 +23,18 @@ BACKEND_MODULES = (
     ("src/motor_ai_sim/routes/thermal.py", "thermal"), ("src/motor_ai_sim/routes/controller.py", "controller"),
     ("src/motor_ai_sim/routes/system_graph.py", "schemas"),
 )
-NEUTRAL = ("tests/", "docs/", "README", "CHANGELOG", ".github/")
+NEUTRAL = ("tests/", "docs/", "README", "CHANGELOG", ".github/", ".gitattributes",
+           "deploy/deploy_module.sh", "deploy/plan_deploy.py")
+#: files that only change the web container (pages and their nginx)
+WEB_FILES = ("web/", "deploy/nginx.conf", "deploy/Dockerfile.web", "deploy/nginx-")
+#: files that change both containers
+BOTH_FILES = ("deploy/docker-compose.yml", "VERSION")
 
 
 def plan(files):
-    web = [f for f in files if f.startswith("web/")]
-    back = [f for f in files if not f.startswith("web/") and not f.startswith(NEUTRAL)]
+    both = [f for f in files if f.startswith(BOTH_FILES)]
+    web = [f for f in files if f.startswith(WEB_FILES)] + both
+    back = [f for f in files if not f.startswith(WEB_FILES) and not f.startswith(NEUTRAL)]
     mode = "full" if web and back else ("web" if web else ("api" if back else "web"))
     mods = set()
     for f in back:

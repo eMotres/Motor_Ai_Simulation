@@ -422,6 +422,10 @@ const BomTable: React.FC<BomTableProps> = ({
     );
   };
 
+  const handleExtraFieldChange = (extraId: string, patch: Partial<ExtraCost>) => {
+    setExtras((prev) => prev.map((x) => (x.id === extraId ? { ...x, ...patch } : x)));
+  };
+
   const handleExtraAmountChange = (extraId: string, val: string) => {
     const num = Math.max(0, Number(val) || 0);
     setExtras((prev) =>
@@ -706,6 +710,7 @@ const BomTable: React.FC<BomTableProps> = ({
                 >
                   <TableCell sx={{ color: 'var(--text-4)', borderLeft: '3px solid #f59e0b' }}>{draftRows.length + extraIdx + 1}</TableCell>
                   <TableCell onClick={(e) => canEdit && e.stopPropagation()}>
+                    {/* the same look as a part name (editable in place, no underline) */}
                     {canEdit ? (
                       <TextField
                         size="small"
@@ -713,17 +718,23 @@ const BomTable: React.FC<BomTableProps> = ({
                         onChange={(e) => handleExtraNameChange(extra.id, e.target.value)}
                         variant="standard"
                         fullWidth
-                        sx={{ minWidth: 140, '& .MuiInputBase-input': { fontSize: 12.5, fontWeight: 600, py: 0.25 } }}
+                        InputProps={{ disableUnderline: true }}
+                        sx={{ minWidth: 140, '& .MuiInputBase-input': { fontSize: 13, fontWeight: 600, py: 0, color: 'var(--text-1)' } }}
                       />
                     ) : (
-                      <Typography sx={{ fontSize: 12.5, fontWeight: 500, color: 'var(--text-1)' }}>
+                      <Typography sx={{ fontSize: 13, fontWeight: 600, color: 'var(--text-1)' }}>
                         {extraName}
                       </Typography>
                     )}
                   </TableCell>
                   <TableCell sx={{ color: '#b45309', whiteSpace: 'nowrap' }}>{t('extras.kind', 'Work')}</TableCell>
-                  <TableCell align="right" sx={{ color: 'var(--text-4)' }}>—</TableCell>
-                  <TableCell align="right" sx={{ color: 'var(--text-4)' }}>—</TableCell>
+                  <TableCell align="right">
+                    {canEdit ? (
+                      <TextField size="small" value={1} disabled
+                        sx={{ width: 65, '& .MuiInputBase-input': { fontSize: 12.5, py: 0.3, textAlign: 'right' } }} />
+                    ) : 1}
+                  </TableCell>
+                  <TableCell align="right">{orderQuantity}</TableCell>
                   <TableCell sx={{ color: 'var(--text-4)' }}>—</TableCell>
                   <TableCell sx={{ color: 'var(--text-4)' }}>—</TableCell>
                   <TableCell sx={{ color: 'var(--text-4)' }}>—</TableCell>
@@ -744,19 +755,40 @@ const BomTable: React.FC<BomTableProps> = ({
                   <TableCell align="right">
                     {extraOrderTotal.toFixed(2)}
                   </TableCell>
-                  <TableCell sx={{ color: 'var(--text-2)' }}>CNY</TableCell>
+                  <TableCell onClick={(e) => e.stopPropagation()}>
+                    {canEdit ? (
+                      <TextField
+                        select
+                        size="small"
+                        value={extra.currency || 'CNY'}
+                        onChange={(e) => handleExtraFieldChange(extra.id, { currency: e.target.value })}
+                        sx={{ width: 85, '& .MuiInputBase-input': { fontSize: 12, py: 0.3 } }}
+                      >
+                        <MenuItem value="CNY">CNY</MenuItem>
+                        <MenuItem value="USD">USD</MenuItem>
+                        <MenuItem value="EUR">EUR</MenuItem>
+                      </TextField>
+                    ) : (
+                      extra.currency || 'CNY'
+                    )}
+                  </TableCell>
                   <TableCell sx={{ color: 'var(--text-2)' }} onClick={(e) => e.stopPropagation()}>
                     {canEdit ? (
-                      <IconButton
-                        size="small"
-                        sx={{ p: 0.25, color: '#f87171' }}
-                        onClick={() => handleDeleteExtra(extra.id)}
-                        title={t('remove')}
-                      >
-                        <DeleteOutlineIcon fontSize="small" />
-                      </IconButton>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                        <TextField
+                          size="small"
+                          value={extra.note || ''}
+                          placeholder="Optional note"
+                          onChange={(e) => handleExtraFieldChange(extra.id, { note: e.target.value })}
+                          sx={{ width: 140, '& .MuiInputBase-input': { fontSize: 12, py: 0.3 } }}
+                        />
+                        <IconButton size="small" sx={{ p: 0.25, color: '#f87171' }}
+                          onClick={() => handleDeleteExtra(extra.id)} title={t('remove')}>
+                          <DeleteOutlineIcon fontSize="small" />
+                        </IconButton>
+                      </Box>
                     ) : (
-                      '—'
+                      extra.note || '—'
                     )}
                   </TableCell>
                   <TableCell sx={{ color: 'var(--text-4)' }}>—</TableCell>

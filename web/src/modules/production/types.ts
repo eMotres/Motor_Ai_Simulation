@@ -246,6 +246,9 @@ export interface ExtraCost {
   id: string;
   name: Bilingual;
   amount: number;
+  /** same columns as a BOM line (owner 2026-10-18) */
+  currency?: string;
+  note?: string | null;
 }
 
 export interface CostSummary {

@@ -1524,19 +1524,15 @@ ${s1Text.tip}` : '';
       .filter((v): v is number => v != null && Number.isFinite(v) && v > 0);
     return caps.length ? Math.min(...caps) : null;
   }, [s1CapRpm, zones.greenTop]);
-  const s1Expected = pointGate.showBatteryDerived && propellerCoolingActive && !!propId;
   useEffect(() => {
     const how = clampToS1Ref.current;
     if (!how || ratedCapRpm == null) return;
     const to = (v: number) => (how === 'set' ? ratedCapRpm : Math.min(v, ratedCapRpm));
     setKnobs((k) => (k.rpm === to(k.rpm) ? k : { ...k, rpm: to(k.rpm) }));
     setRefKnobs((k) => (k && k.rpm !== to(k.rpm) ? { ...k, rpm: to(k.rpm) } : k));
-    // done once both sources have answered (the S1 limit when one is expected, and the propeller's green band)
-    // (the green band has answered when the zones are computed; with a PWM drive / no series it never will - then the S1
-    // answer alone closes it, so a later ambient or drive change does not move the speed again)
-    const greenAnswered = zones.rpm != null || driveOn || !series;
-    if ((!s1Expected || s1 !== null) && greenAnswered) clampToS1Ref.current = null;
-  }, [ratedCapRpm, s1, zones.greenTop, zones.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
+    // HELD until the user sets a speed himself (setRpm): a later seed of the catalog duty speed, a fresh S1 answer or a
+    // build change re-applies it, so the rated point stays at the propeller's real continuous point
+  }, [ratedCapRpm, knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // STRANDS IN HAND multiply the parallel paths for every current split: k
   // wires wound together each carry 1/k of the turn's current.  It is a
@@ -1607,6 +1603,7 @@ ${s1Text.tip}` : '';
 
   const set = (k: keyof Knobs) => (v: number) => { setRestoreMisfitNote(null); setKnobs((s) => ({ ...s, [k]: v })); };
   const setRpm = (v: number) => {
+    clampToS1Ref.current = null;          // the user's own speed: no longer held at the rated point
     setRestoreMisfitNote(null);
     if (propLoad && propRpmSeedKey) propRpmManualEditRef.current = propRpmSeedKey;
     setKnobs((s) => ({ ...s, rpm: v }));

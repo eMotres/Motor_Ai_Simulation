@@ -21,6 +21,7 @@ import hashlib
 import io
 import json
 import math
+import operator
 import os
 import re
 
@@ -139,6 +140,52 @@ _FUN = dict(pi=math.pi, sqrt=math.sqrt, abs=abs, min=min, max=max, ceil=math.cei
             cos=lambda d: math.cos(math.radians(d)), tan=lambda d: math.tan(math.radians(d)))
 
 
+_BIN = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.Div: operator.truediv,
+        ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow}
+_UN = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_MAX_EXPR_CHARS = 500
+_MAX_POW = 64.0
+
+
+def _safe_eval(expr, ns):
+    """Arithmetic on numbers, the names in ``ns`` and the ``_FUN`` functions - nothing else.  The expression comes from an
+    uploaded CAD file, so it is parsed, never ``eval``-ed (a builtins-free ``eval`` is still escapable through attribute
+    access; security audit 2026-10-18)."""
+    if len(expr) > _MAX_EXPR_CHARS:
+        raise ValueError("expression too long")
+    try:
+        tree = ast.parse(expr, mode="eval")
+    except SyntaxError as exc:
+        raise ValueError("bad expression %r" % expr) from exc
+
+    def walk(node):
+        if isinstance(node, ast.Expression):
+            return walk(node.body)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            return node.value
+        if isinstance(node, ast.Name) and node.id in ns and not callable(ns[node.id]):
+            return ns[node.id]
+        if isinstance(node, ast.BinOp) and type(node.op) in _BIN:
+            a, b = walk(node.left), walk(node.right)
+            if isinstance(node.op, ast.Pow) and (abs(b) > _MAX_POW or abs(a) > 1e6):
+                raise ValueError("power out of range in %r" % expr)
+            return _BIN[type(node.op)](a, b)
+        if isinstance(node, ast.UnaryOp) and type(node.op) in _UN:
+            return _UN[type(node.op)](walk(node.operand))
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and callable(_FUN.get(node.func.id))
+                and not node.keywords and len(node.args) <= 8):
+            return _FUN[node.func.id](*[walk(a) for a in node.args])
+        raise ValueError("unsupported element in expression %r" % expr)
+
+    try:
+        v = walk(tree)
+    except (TypeError, OverflowError, ZeroDivisionError, RecursionError) as exc:
+        raise ValueError("cannot evaluate %r: %s" % (expr, exc)) from exc
+    if not isinstance(v, (int, float)) or isinstance(v, bool) or not math.isfinite(v):
+        raise ValueError("expression %r is not a finite number" % expr)
+    return v
+
+
 def evaluate(exprs):
     """{name: FreeCAD/Fusion expression} -> {name: value} (lengths mm, angles deg).  Raises on unknown names/loops."""
     vals, busy = {}, set()
@@ -156,7 +203,7 @@ def evaluate(exprs):
         for tok in set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", e)):
             if tok in exprs and tok not in ns:
                 ns[tok] = ev(tok)
-        v = float(eval(e, {"__builtins__": {}}, ns))
+        v = float(_safe_eval(e, ns))
         busy.discard(n)
         vals[n] = v
         return v

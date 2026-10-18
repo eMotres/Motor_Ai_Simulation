@@ -49,3 +49,10 @@ def test_only_editors_change_the_process_and_cycles_are_refused(prod_env):
     unknown = [dict(s) for s in steps]
     unknown[1]["after"] = ["nope"]
     assert c.put(_url(), json={"steps": unknown}, headers=prod_env["engineer"]).status_code == 422
+
+
+def test_a_new_part_is_a_bom_line_at_once(prod_env):
+    _create(prod_env)
+    rows = prod_env["client"].get("/api/production/%s/%s/bom" % (DIE, CONFIG), headers=prod_env["engineer"]).json()["rows"]
+    parts = prod_env["client"].get("/api/production/%s/%s/parts" % (DIE, CONFIG), headers=prod_env["engineer"]).json()["parts"]
+    assert {r["part_id"] for r in rows} >= {p["id"] for p in parts if p.get("kind") != "assembly"}

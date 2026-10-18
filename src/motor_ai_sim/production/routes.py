@@ -235,6 +235,16 @@ async def create_part(request: Request, die: str, config: str):
     part["material"] = part["material_i18n"]["zh"]
     part["spec"] = part["spec_i18n"]["zh"]
     store.mutate_file(die, config, "parts.json", lambda d: d.setdefault("parts", []).append(part))
+    if part.get("kind") != "assembly":
+        # a new part is a BOM line at once (owner 2026-10-18: "Add part" created a part the BOM table never showed)
+        oq = int((_production or {}).get("order_quantity") or 0)
+        qty = float(part.get("qty_per_motor") or 1)
+
+        def _add_row(d):
+            rows = d.setdefault("rows", [])
+            if not any(r.get("part_id") == part["id"] for r in rows):
+                rows.append({"part_id": part["id"], "qty_per_motor": qty, "order_total": qty * oq})
+        store.mutate_file(die, config, "bom.json", _add_row)
     _touch(die, config)
     _audit(_email(user), die, config, "create", "part", part["id"], {"part": part})
     return part

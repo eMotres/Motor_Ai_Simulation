@@ -283,7 +283,10 @@ t('the panel: ONE temperature row in every cooling mode, the still-air estimate 
   assert.match(panel, /if \(optionalPropellerCooling \|\| roboticsOnly\) return \{ h_Wm2K: airH\(0, D\)/);                       // still air (Robotics) at the natural-convection floor
   assert.match(panel, /<CoolingControls diameterMm=/);                                                         // the cooling basis inputs moved into Operating point
   assert.match(panel, /const propLoad = propellerCoolingActive &&/);                                             // the propeller is the load whenever its cooling is active
-  assert.match(panel, /currentForTorque\(propPoint\?\.torque_Nm \?\? null, torqueAtI\(knobs\), ranges\.I_A\.max\)/);
+  // the current follows the propeller: the server's S1 model where the configuration has one, else the passport scaling
+  assert.match(panel, /propLoad && propRpmReady \? propCurrentAt\(knobs, knobs\.rpm, propPoint\)/);
+  assert.match(panel, /s1LoadPoint\(calModel, rpm, pt\.torque_Nm, pt\.h_W_m2K, ambient, calDriveId \?\? null\)/);
+  assert.match(panel, /return currentForTorque\(pt\?\.torque_Nm \?\? null, torqueAtI\(\{ \.\.\.k, rpm \}\), ranges\.I_A\.max\)/);
   assert.match(panel, /disabled=\{propLoad\}/);                                                              // the current is shown, not typed, in propeller mode
   assert.match(panel, /updateCool\(\{ load: v \}\)/);                                                       // the manual-load toggle
   assert.match(panel, /zone=\{cooled \? zones\.rpm : null\}/);                                               // thermal zones on the speed knob

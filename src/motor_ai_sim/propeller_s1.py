@@ -1191,6 +1191,104 @@ def temperatures(geom: Mapping[str, float], p_cu: float, p_rotor: float, p_total
 
 
 # ---------------------------------------------------------------------------
+# Configure's thermal tiles = THIS model (owner 2026-10-19: "one model only, the server is the truth")
+# ---------------------------------------------------------------------------
+
+def thermal_at(m: Mapping[str, Any], rpm: float, I: float, h: float, ambient_c: float,
+               drive: Optional[Mapping[str, Any]] = None, max_it: int = FIXED_POINT_MAX_IT
+               ) -> Optional[Dict[str, Any]]:
+    """The model's steady temperatures at a GIVEN speed and current (Configure's knobs): the
+    passport's losses at (rpm, I) with the copper at its own temperature, through the calibrated
+    network (``temperatures``), iterated in the winding temperature exactly like ``_fixed_point``
+    (which also re-derives the current from the torque; here the current is the caller's).  At a
+    converged S1 point (rpm, I) it returns that point's temperatures.  ``drive`` = a mapping with
+    the variant's ``rpm``/``I_A``/``pwm_extra_W`` (``resolve_drive`` or ``configure_thermal_model``'s
+    ``drives``), None = sine.  None when a loss group has no value here; ``state`` runaway /
+    nonconverged otherwise as the S1 fixed point says it.
+    ``web/src/lib/s1Thermal.ts`` is the same function in the browser (parity: tests/test_configure_thermal_parity.py)."""
+    cal = calibration_of(m)
+    t_w = float(ambient_c)
+    damping, last_res = 1.0, float("inf")
+    for it in range(1, max_it + 1):
+        ls = losses(m, rpm, I, t_w, drive)
+        if ls["unavailable"]:
+            return None
+        th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
+                          ls["motor_total"], h, ambient_c, cal)
+        res = abs(th["winding"] - t_w)
+        if res > last_res * 0.999 and it > 3:
+            damping = max(0.05, damping * 0.5)
+        last_res = res
+        t_w += damping * (th["winding"] - t_w)
+        if t_w > RUNAWAY_C:
+            return {"state": "runaway", "iterations": it}
+        if res < FIXED_POINT_TOL_K:
+            ls = losses(m, rpm, I, t_w, drive)
+            th = temperatures(m["thermal_geom"], ls["cu_dc"] + ls["cu_ac"], ls["fe_rotor"] + ls["rotor_eddy"],
+                              ls["motor_total"], h, ambient_c, cal)
+            return {"state": "converged", "iterations": it, "T_winding_C": th["winding"],
+                    "T_magnet_C": th["magnet"], "T_housing_C": th["housing"],
+                    "losses_W": {k: ls[k] for k in ("cu_dc", "cu_ac", "fe_stator", "fe_rotor", "rotor_eddy",
+                                                    "pwm_extra", "mech", "motor_total")}}
+    return {"state": "nonconverged", "iterations": max_it}
+
+
+def load_point(m: Mapping[str, Any], rpm: float, q_load_Nm: float, h: float, ambient_c: float,
+               drive: Optional[Mapping[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """The S1 fixed point at ONE speed for a load torque already known (the propeller's at that
+    speed): the current from the torque map at the magnets' own temperature, the losses, the
+    calibrated network - ``_fixed_point`` itself, with the bearing + windage torque on top as
+    ``solve_point`` adds it.  The pack's voltage re-check (deeper field weakening at the minimum pack
+    voltage) is NOT applied here (no pack): where it would raise the current the S1 row carries more.
+    ``web/src/lib/s1Thermal.ts`` evaluates the same for every knob position (Configure's current and
+    temperatures in propeller mode).  None = no current makes the torque / no loss data."""
+    w = 2.0 * math.pi * rpm / 60.0
+    q_em = float(q_load_Nm) + (_mech_W(m, rpm) / w if w > 0 else 0.0)
+    fp = _fixed_point(m, rpm, q_em, h, ambient_c, calibration_of(m), dict(drive or {}), {"v_min": None},
+                      1.0, FIXED_POINT_MAX_IT)
+    if fp["state"] == "nonconverged":
+        fp2 = _fixed_point(m, rpm, q_em, h, ambient_c, calibration_of(m), dict(drive or {}), {"v_min": None},
+                           0.2, 3 * FIXED_POINT_MAX_IT)
+        fp = fp2 if fp2["state"] != "nonconverged" else fp
+    if fp["state"] != "converged":
+        return {"state": fp["state"], "status": fp.get("status")}
+    I = fp["I"]
+    t = thermal_at(m, rpm, I, h, ambient_c, drive)
+    return {**(t or {}), "state": "converged", "current_A": I, "torque_em_Nm": q_em}
+
+
+def configure_thermal_model(m: Mapping[str, Any]) -> Dict[str, Any]:
+    """What Configure needs to evaluate ``thermal_at`` itself for every knob position (no request per
+    slider move): the loss grid, the copper resistance law, bearings + windage, each drive variant's
+    PWM extra-loss grid, the thermal geometry, the fitted calibration and slipstream factor, the
+    limits, and the torque map + flux law ``load_point`` finds the current with.  Nothing else of the
+    model (voltage / psi-map, demagnetisation, controller) leaves the server here."""
+    g = m["grid"]
+    grid: Dict[str, Any] = {"rpm": list(g["rpm"]), "I_A": list(g["I_A"]), "T_Nm": g["T_Nm"],
+                            "loss_W": dict(g["loss_W"])}
+    if g.get("I_floor_A"):
+        grid["I_floor_A"] = list(g["I_floor_A"])
+    lims = limits_of(m)
+    cal_raw = m.get("thermal_calibration") or {}
+    return {
+        "schema": "configure-thermal-1",
+        "die": m.get("die"), "config": m.get("config"),
+        "R_phase_ohm": float(m["R_phase_ohm"]), "R_temp_C": float(m["R_temp_C"]),
+        # the load side of ``load_point``: the torque map at the magnets' own temperature
+        "torque_factor": float(m["torque_factor"]), "flux_temp_coeff_per_K": float(m["flux_temp_coeff_per_K"]),
+        "magnet_ref_temp_C": float(m["magnet_ref_temp_C"]), "I_cap_A": current_cap(m),
+        "grid": grid, "mech_W": m.get("mech_W"),
+        "drives": {k: {"rpm": d["rpm"], "I_A": d["I_A"], "pwm_extra_W": d.get("pwm_extra_W")}
+                   for k, d in (m.get("drives") or {}).items()},
+        "thermal_geom": dict(m["thermal_geom"]),
+        "calibration": calibration_of(m), "calibrated": bool(cal_raw),
+        "slipstream_factor": model_slipstream(m)[1],
+        "fit_domain": (cal_raw.get("fit_domain") or {}).get("air_speed_ms") or cal_raw.get("anchor_air_speed_ms"),
+        "limits": {"winding_C": lims["winding_C"], "magnet_C": lims["magnet_C"]},
+    }
+
+
+# ---------------------------------------------------------------------------
 # One speed: the coupled fixed point
 # ---------------------------------------------------------------------------
 

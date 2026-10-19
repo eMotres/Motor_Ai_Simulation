@@ -145,6 +145,21 @@ def test_one_answer_carries_the_target_and_the_existing_routes_numbers(client, w
     assert s1_direct.status_code == 200, s1_direct.text
     assert pr["s1"] == s1_direct.json() and pr["s1"]["limit"]["rpm"] > 0
     assert pr["s1_error"] is None and pr["series_error"] is None
+    # THE thermal model of the configuration travels with the load (the page evaluates it itself)
+    assert j["thermal_model"]["schema"] == "configure-thermal-1" and j["thermal_model"]["config"] == "L1"
+    assert pr["slipstream_factor"] == j["thermal_model"]["slipstream_factor"]
+
+
+def test_the_series_uses_the_models_own_slipstream_factor(client, wired):
+    m = json.loads((wired / "s1" / "TEST DIE" / "L1.json").read_text(encoding="utf-8"))
+    m["thermal_calibration"] = {"housing_film_factor": 0.5, "slipstream_factor": 0.7}
+    (wired / "s1" / "TEST DIE" / "L1.json").write_text(json.dumps(m), encoding="utf-8")
+    j = client.get("/api/catalog/cat_t/configure_load", params={"config": "L1", "housing_d_mm": 40,
+                                                                "series_rpm_max": 12000, "series_n": 41}).json()
+    assert j["propeller"]["slipstream_factor"] == 0.7
+    with_f = client.get("/api/propellers/syn_s1/series", params={"rpm_max": 12000, "n": 41, "temp_c": 25,
+                                                                  "housing_d_mm": 40, "factor": 0.7}).json()
+    assert j["propeller"]["series"] == with_f
 
 
 def test_the_requested_duty_and_the_robot_machine(client, wired):

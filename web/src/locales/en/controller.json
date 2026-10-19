@@ -569,6 +569,8 @@
     "noPropellerTip": "The cooling options of this motor name no propeller that the catalogue knows.",
     "tWinding": "Winding",
     "tWindingTip": "Winding hot-spot temperature. Judged against {limit} °C; above it the tile reads the limit with a >.",
+    "thermalBasisModel": "From this configuration's calibrated thermal model, the same one as its continuous limit.",
+    "thermalBasisLumped": "Simple estimate: this point has no calibrated thermal model (another build, cooling or drive).",
     "tMagnet": "Magnet",
     "tMagnetTip": "Magnet temperature. Judged against {limit} °C (the magnet card's limit); above it the tile reads the limit with a >.",
     "tHousing": "Housing",

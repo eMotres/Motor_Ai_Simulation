@@ -1106,7 +1106,7 @@ def get_configure_load(motor_id: str,
     mode = _ld.pick_mode(preset, duty)
     out: Dict[str, Any] = {"motor_id": motor_id, "context": ctx, "config": config,
                            "duty": (mode or {}).get("name") or preset.get("duty"),
-                           "propeller": None}
+                           "propeller": None, "thermal_model": None}
     cooling = ctx.get("cooling") if isinstance(ctx.get("cooling"), dict) else {}
     try:
         catalog = _pp.load_catalog()
@@ -1119,15 +1119,33 @@ def get_configure_load(motor_id: str,
     s1_drive = drive or preset.get("drive_variant") or "sine"
     pack = ({"min": pack_v_min, "max": pack_v_max} if pack_v_min and pack_v_max
             else _ld.preset_pack(preset))
+    # THE thermal model of this configuration (its S1 model: passport losses + the calibrated network,
+    # owner 2026-10-19 "one model only"): the page evaluates it for every knob position itself, and the
+    # air over the housing is the model's own (its fitted slipstream factor), so the series below, the S1
+    # limit and the tiles all see the same air.  Same gate as /s1 (signed in, a configuration the caller
+    # may see); a machine without a model keeps the page's lumped estimate.
+    thermal_model = None
+    if cooling.get("die"):
+        from motor_ai_sim import motor_access as _ma
+        from motor_ai_sim import propeller_s1 as _s1
+        acc = _ma.catalog_access(authorization)
+        if acc.get("mode") != _ma.MODE_ANONYMOUS and _ma.may_see_config(acc, str(cooling["die"]), config):
+            try:
+                thermal_model = _s1.configure_thermal_model(_s1.load_model(str(cooling["die"]), config))
+            except (_s1.S1ModelNotFound, _s1.S1Error):
+                thermal_model = None
+    out["thermal_model"] = thermal_model
+    factor = (thermal_model or {}).get("slipstream_factor")
     prop_out: Dict[str, Any] = {"id": pid, "ambient_c": ambient_c, "housing_d_mm": housing,
                                 "series_rpm_max": series_rpm_max, "series_n": series_n,
+                                "slipstream_factor": factor,
                                 "die": cooling.get("die"), "config": config,
                                 "drive": s1_drive, "pack": pack,
                                 "series": None, "series_error": None, "s1": None, "s1_error": None}
     try:
         prop_out["series"] = _prop_routes.get_series(
             pid, rpm_max=series_rpm_max, n=series_n, temp_c=ambient_c, altitude_m=0.0,
-            pressure_pa=None, position=None, factor=None, housing_d_mm=housing)
+            pressure_pa=None, position=None, factor=factor, housing_d_mm=housing)
     except HTTPException as exc:
         prop_out["series_error"] = str(exc.detail)
     if cooling.get("die"):

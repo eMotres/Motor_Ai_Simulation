@@ -220,6 +220,19 @@ def test_a_visitor_reads_only_what_a_new_account_may_open(cat):
         assert hidden not in t, hidden
 
 
+def test_a_visitor_gets_the_shared_baseline_die_like_a_fresh_account(cat, monkeypatch):
+    """Every registered account is given the baseline die at read time (users._effective_motor_grants);
+    a visitor is told exactly that - the die's open configurations, never a private one."""
+    from motor_ai_sim import users as U
+    monkeypatch.setattr(U, "_BASELINE_DIE", DIE_PRIV)
+    monkeypatch.setattr(U, "_shared_baseline_available", lambda: True)
+    SC.clear_cache()
+    assert _names(SC.published_motors_block(None, visitor=True)) == [f"{DIE_PRIV} / L15", f"{DIE_PUB} / L12"]
+    # the same set a freshly registered, ungranted account really gets
+    SC.clear_cache()
+    assert _names(SC.published_motors_block(cat["plain"])) == [f"{DIE_PRIV} / L15", f"{DIE_PUB} / L12"]
+
+
 def test_a_plain_account_sees_what_a_visitor_sees(cat):
     assert _names(SC.published_motors_block(cat["plain"])) == [f"{DIE_PUB} / L12"]
 

@@ -11,8 +11,8 @@ tab reads (``routes.family.tree_for_access``) and the same access answer
 open and a private die / configuration never appears for someone without access;
 an admin reads all.  A VISITOR has no account, but sign-up is automatic and
 instant, so a visitor is told what a FRESH sign-up with no grants could open at
-once (the same tree for ``granted`` access with no dies and no configurations) -
-never more: nothing a person would have to be granted can reach an anonymous
+once (the same tree for ``granted`` access with no stored grants, plus the shared
+baseline die every registered account gets from ``users``) - never more: nothing a person would have to be granted can reach an anonymous
 chat.
 
 WHAT IS IN IT (a datasheet's facts, taken from explicit whitelisted fields, never
@@ -317,10 +317,15 @@ def _models_index() -> Dict[tuple, Dict[str, Any]]:
 
 
 def _visitor_access() -> dict:
-    """What a brand-new account (no grants at all) is allowed to open."""
+    """What a freshly registered account is allowed to open: no stored grants, plus the
+    read-time shared baseline every registered account gets
+    (``users._effective_motor_grants``: the baseline die, when it is installed).  The public
+    dies and configurations come from ``motor_access`` itself, as for any signed-in account."""
     from motor_ai_sim import motor_access as MA
+    from motor_ai_sim import users as U
     mode = MA.MODE_ALL if MA.grant_all_registered() else MA.MODE_GRANTED
-    return {"mode": mode, "dies": frozenset(), "email": None, "is_admin": False,
+    dies = frozenset({U._BASELINE_DIE}) if U._shared_baseline_available() else frozenset()
+    return {"mode": mode, "dies": dies, "email": None, "is_admin": False,
             "configs": frozenset()}
 
 

@@ -1,0 +1,13 @@
+{
+  "autodeskProduct": "Fusion",
+  "type": "addin",
+  "id": "c799fa2c-d013-4622-8c50-a5f297083e26",
+  "author": "MOTRES",
+  "description": {
+    "": "Two-way sync with AeroStator: Export to AeroStator (STEP per component, parameters, sketches, version) and Import from AeroStator (EM parameters with a diff)."
+  },
+  "version": "0.1.0",
+  "runOnStartup": false,
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}

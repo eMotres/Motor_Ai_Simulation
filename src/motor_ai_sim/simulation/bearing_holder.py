@@ -439,7 +439,10 @@ def end_geometry(*, end: str, card: Mapping[str, Any],
         # tenth of the yoke annulus.  A placeholder that is SAID to be one.
         r_seat = 0.5 * D
         r_od = 0.5 * od
-        r_yoke = 0.5 * (stator_bore_m + od) if stator_bore_m > 0 else 0.75 * r_od
+        # the pads sit on the outer half of the stator's end face: from the
+        # mid radius between the bore and the OD (both given as DIAMETERS)
+        r_yoke = (0.25 * (stator_bore_m + od) if stator_bore_m > 0
+                  else 0.75 * r_od)
         contact = 0.1 * math.pi * max(r_od ** 2 - r_yoke ** 2, 0.0)
         r_mid = 0.5 * (r_seat + r_yoke)
         arms = [(max(r_yoke - r_seat, 1e-3), 2.0 * math.pi * r_mid * max(B, 1e-3))]
@@ -638,7 +641,10 @@ def summarize(solved: Mapping[str, Any], net: Mapping[str, Any],
         film_w = float(nodes.get(n_h, {}).get("heat_removed_W") or 0.0) * sym
         temps = {"inner_ring_c": _t(n_in), "balls_c": _t(n_ba),
                  "outer_ring_c": _t(n_out), "holder_c": _t(n_h)}
-        for v in temps.values():
+        # the BEARING's temperature: its rings and balls (where the grease
+        # is), not the holder it sits in
+        for k_t in ("inner_ring_c", "balls_c", "outer_ring_c"):
+            v = temps[k_t]
             if v is not None:
                 t_max = v if t_max is None else max(t_max, v)
         out_ends.append({
@@ -646,7 +652,9 @@ def summarize(solved: Mapping[str, Any], net: Mapping[str, Any],
             "shaft_seat_mean_c": (None if s_sh.get("t_mean_c") is None
                                   else round(float(s_sh["t_mean_c"]), 2)),
             "shaft_to_bearing_W": round(float(s_sh.get("heat_removed_W") or 0.0) * sym, 4),
-            "stator_to_holder_W": round(-float(s_hs.get("heat_removed_W") or 0.0) * sym, 4),
+            # the sink's own watts: what LEAVES the stator mesh into the holder
+            # (negative when a holder feeds the stator)
+            "stator_to_holder_W": round(float(s_hs.get("heat_removed_W") or 0.0) * sym, 4),
             "holder_to_air_W": round(film_w, 4),
             "friction_W": round(float(rep.get("P_friction_W") or 0.0), 4),
             "links_W": {k: round(float(v["heat_W"]) * sym, 4)

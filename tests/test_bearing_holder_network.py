@@ -321,3 +321,26 @@ def test_the_bearing_temperature_is_the_solved_bearing_first():
     res["cooling"]["bearing_node"]["mode"] = "off"
     t, where = bearing_temp_from_map(res)
     assert t == pytest.approx(113.0)
+
+
+def test_the_real_network_on_a_mesh_closes_and_reports_signed_flows():
+    kw = dict(card=CARD_618_8, stack_m=L_STACK, shaft_area_stack_m2=49.64e-6,
+              shaft_bore_d_m=5.9e-3, stator_od_m=0.024, stator_bore_m=0.012)
+    ends = [{"end": e, "card": CARD_618_8, "f_r_n": 0.18, "p_w": 0.05,
+             "geom": bh.end_geometry(end=e, cad=None, **kw)} for e in "AB"]
+    net = bh.network(ends=ends, k_shaft=42.0, rpm=13000, t_ambient_c=T_AMB,
+                     air_mode="wash", air_speed_mps=12.0, holder_wall_c={},
+                     emissivity=0.9, symmetry_mult=1, shaft_tags=[DOM_SHAFT],
+                     stator_tags=[DOM_STATOR])
+    r = _solve(sinks=net["sinks"], nodes=net["nodes"], links=net["links"])
+    s = bh.summarize(r, net, t_ambient_c=T_AMB)
+    for e in s["ends"]:
+        # what reaches the holder (shaft side + stator side + friction) leaves by its film
+        assert (e["shaft_to_bearing_W"] + e["stator_to_holder_W"] + e["friction_W"]
+                == pytest.approx(e["holder_to_air_W"], rel=1e-6, abs=1e-9))
+        # the stator here is the hotter side: heat LEAVES it into the holder
+        assert e["stator_to_holder_W"] > 0.0
+    # the reported bearing temperature is the hottest ring / ball node
+    assert s["t_bearing_max_c"] == pytest.approx(max(
+        max(e["inner_ring_c"], e["balls_c"], e["outer_ring_c"])
+        for e in s["ends"]), abs=0.01)

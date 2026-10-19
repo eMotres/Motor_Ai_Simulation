@@ -6557,7 +6557,10 @@ def solve_thermal_field(
             gap_flow["notes"] = list(_gf_notes)
 
     _resid = (_gen_w - _outer_w - _bore_w - _shaft_w - _ew_w - _ch_w
-              - _mount_w - _ef_w_total - _gf_w - _brg_w - _hfe_w)
+              - _mount_w - _ef_w_total - _gf_w - _brg_w - _hfe_w
+              # the bearing holders off the stator and the rotor's own
+              # channels (2026-10-19) leave the mesh like every path above
+              - _bn_stator_w - _rch_w_mag - _rch_w_iron)
 
     # ── WHERE THE ROTOR'S HEAT GOES: out through the gap, or in through the
     #    shaft (2026-09-10) ───────────────────────────────────────────────────

@@ -103,6 +103,58 @@ export function dutyGeometryApplyDisabledReason(
   return null;
 }
 
+/** Why "apply" is unavailable, as a code the dialog translates (the English
+ *  sentence above stays for logs and the older callers). */
+export function dutyGeometryApplyDisabledCode(
+  diffs: DutyGeometryDiffRow[], dieLocked: boolean,
+): 'identity' | 'locked' | null {
+  if (diffs.some((d) => d.scope === 'identity')) return 'identity';
+  if (dieLocked) return 'locked';
+  return null;
+}
+
+/** One side of the diff as a plain list: "magnet_up_gap 0.200 mm, rotor_hole
+ *  0.900 mm".  `live` = the die as it is now, `duty` = what the duty was
+ *  computed on.  Rounded for display only (formatDutyGeometryValue). */
+export function formatDutyGeometryKeyList(
+  diffs: DutyGeometryDiffRow[], side: 'live' | 'duty',
+): string {
+  return diffs.map((d) => `${d.key} ${formatDutyGeometryValue(d.key, d[side])}`).join(', ');
+}
+
+/** True when applying the duty rewrites the DIE file (a die-scope key differs),
+ *  which is shared by every configuration of the die and their 3-D models; a
+ *  winding / stack-only difference lands in this configuration alone. */
+export function dutyGeometryRewritesDie(diffs: DutyGeometryDiffRow[]): boolean {
+  return diffs.some((d) => d.scope === 'die');
+}
+
+/** What the two choice buttons say (locale keys in `motors` + their values), so
+ *  the wording is built from the real diff and is testable without React. */
+export interface DutyGeometryButtonPlan {
+  /** Button 1 - "Use the current die": the die's values now. */
+  keepValues: string;
+  /** Button 2 - the duty's values the apply would write. */
+  applyValues: string;
+  /** `motors` locale key for the apply button (and its confirmation). */
+  applyKey: 'dutyGeoApplyDie' | 'dutyGeoApplyDieNoCount' | 'dutyGeoApplyConfig';
+  /** Configurations of the die, when the server said (die-wide apply only). */
+  configCount?: number;
+}
+
+export function dutyGeometryButtonPlan(
+  diffs: DutyGeometryDiffRow[], configCount?: number,
+): DutyGeometryButtonPlan {
+  const dieWide = dutyGeometryRewritesDie(diffs);
+  const known = typeof configCount === 'number' && configCount > 0;
+  return {
+    keepValues: formatDutyGeometryKeyList(diffs, 'live'),
+    applyValues: formatDutyGeometryKeyList(diffs, 'duty'),
+    applyKey: !dieWide ? 'dutyGeoApplyConfig' : known ? 'dutyGeoApplyDie' : 'dutyGeoApplyDieNoCount',
+    configCount: dieWide && known ? configCount : undefined,
+  };
+}
+
 /** The three choices the dialog can resolve to.  `null` only when no dialog
  *  could be shown at all (e.g. the render tree that owns it never mounted) —
  *  the load stops rather than silently picking one side. */

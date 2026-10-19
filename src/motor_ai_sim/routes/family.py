@@ -4329,6 +4329,15 @@ def duty_geometry_diff(die_doc: dict, cfg_doc: dict,
     return out
 
 
+def _die_config_count(die: str) -> int:
+    """Number of configurations of `die` (its ``*.yaml`` files but ``die.yaml``)."""
+    try:
+        return len([p for p in _die_dir(die).glob("*.yaml")
+                    if p.name != "die.yaml" and ".bak" not in p.name])
+    except Exception:   # noqa: BLE001 - informational only
+        return 0
+
+
 def _blocking(diffs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [x for x in diffs if x["scope"] != "free"]
 
@@ -4428,7 +4437,10 @@ def activate(req: Activate, _w: dict = Depends(require_catalog_write)):
                                "or keep the die geometry?",
                     "diffs": diffs,
                     "choices": ["apply_duty", "keep_die"],
-                    "die_locked": die_locked})
+                    "die_locked": die_locked,
+                    # how many configurations an "apply_duty" on a die key
+                    # would rewrite (the dialog names the number)
+                    "config_count": _die_config_count(die)})
             if choice == "apply_duty":
                 geometry_applied = _apply_duty_geometry(die, cfg, d, c, diffs)
     import json

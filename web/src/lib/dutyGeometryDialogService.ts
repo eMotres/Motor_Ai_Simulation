@@ -23,6 +23,11 @@ export interface DutyGeometryRequest {
   message: string;
   diffs: DutyGeometryDiffRow[];
   dieLocked: boolean;
+  /** Configurations of the die (409 `config_count`) - what a die-wide apply
+   *  rewrites; undefined from an older server. */
+  configCount?: number;
+  /** The configuration being loaded, named in the config-only apply wording. */
+  config?: string;
 }
 
 interface DutyGeometryDialogState {

@@ -77,6 +77,8 @@ def test_differing_duty_is_refused_with_a_diff_and_nothing_is_written(dies, tmp_
     # unlocked die (fixture default) — the frontend may offer "apply duty
     # geometry" straight away, nothing will refuse it downstream
     assert det["die_locked"] is False
+    # the dialog names how many configurations an apply on a die key rewrites
+    assert det["config_count"] == 1
 
 
 def test_differing_duty_on_a_locked_die_flags_die_locked_in_the_409(dies):

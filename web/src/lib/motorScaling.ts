@@ -97,6 +97,10 @@ export interface Passport {
   /** true = no CAD model yet: the mass shown is the active mass only ("partial mass (no CAD model yet)").  Absent =
    *  an older server / the built-in seed passports: treated as partial too, never silently as full. */
   mass_partial?: boolean | null;
+  /** The mass ANCHOR (set by Configure from the loaded preset, owner 2026-10-19): the server's full / active mass of that
+   *  configuration at its build.  The scaled masses equal these at that build and scale from them off it. */
+  mass_anchor?: { N: number; L_mm: number; wireH_mm: number; active_kg: number; full_kg: number; partial: boolean;
+                  partial_reason?: string } | null;
   /** Rated-point torque ripple [%] from the fine (48-step) base solve — a
    *  datasheet figure of the base operating point; never rescaled by knobs. */
   ripple0_pct?: number | null;
@@ -524,15 +528,27 @@ export function scaleMotor(p: Passport, k: Knobs, poles?: number): ScaledResult 
   // copper component retain the former stack-only active-mass behavior.
   const massCu0 = Number(p.mass_cu0_kg);
   const hasCopperMass = p.mass_cu0_kg != null && Number.isFinite(massCu0) && massCu0 >= 0 && massCu0 <= p.mass0_kg;
-  const rowFactor = p.N0 > 0 ? k.N / p.N0 : fN;
-  const copperFactor = rowFactor * fH * ((1 - p.endWindFrac) * fL + p.endWindFrac);
-  const massActive = hasCopperMass
-    ? (p.mass0_kg - massCu0) * fL + massCu0 * copperFactor
-    : p.mass0_kg * fL;
+  /** the active-mass MODEL at a build (stack, wire rows, wire height), from the passport base */
+  const activeAt = (N: number, L: number, H: number): number => {
+    const fl = p.L0_mm ? L / p.L0_mm : 1;
+    const fh = p.wireH0_mm ? H / p.wireH0_mm : 1;
+    const rowFactor = p.N0 > 0 ? N / p.N0 : fN;
+    const copperFactor = rowFactor * fh * ((1 - p.endWindFrac) * fl + p.endWindFrac);
+    return hasCopperMass ? (p.mass0_kg - massCu0) * fl + massCu0 * copperFactor : p.mass0_kg * fl;
+  };
+  // THE MASSES OF THE LOADED BUILD ARE THE SERVER'S (owner 2026-10-19): with a mass anchor (the loaded preset's build and
+  // its server full / active mass) the page shows exactly those at that build, and the model only SCALES from them when
+  // the user moves the build - never from a stored passport mass0_kg (40 L20 showed 0.211 / 0.181 against 0.181 / 0.151 kg).
+  const an = p.mass_anchor;
+  const anchorModel = an ? activeAt(an.N, an.L_mm, an.wireH_mm) : 0;
+  const anchored = !!an && an.active_kg > 0 && anchorModel > 0 && Number.isFinite(an.full_kg);
+  const massActive = anchored ? an!.active_kg * activeAt(k.N, k.L_mm, k.wireH_mm) / anchorModel
+    : activeAt(k.N, k.L_mm, k.wireH_mm);
   // The fixed part may be NEGATIVE: a frameless kit (owner 2026-10-15) has no shaft tube, so its mass is lighter than the active mass
   // by the tube and heavier by the board - only a missing / zero value means "no CAD model".
-  const fixedKg = p.mass_fixed_kg == null ? NaN : Number(p.mass_fixed_kg);
-  const massPartial = p.mass_partial !== false || !Number.isFinite(fixedKg) || fixedKg === 0;
+  const fixedKg = anchored ? an!.full_kg - an!.active_kg : (p.mass_fixed_kg == null ? NaN : Number(p.mass_fixed_kg));
+  const massPartial = anchored ? an!.partial || fixedKg === 0
+    : (p.mass_partial !== false || !Number.isFinite(fixedKg) || fixedKg === 0);
   const mass = massActive + (massPartial ? 0 : fixedKg);
 
   // No-load KV, the drone-bench convention: rpm per volt of LINE peak EMF —

@@ -71,7 +71,7 @@ import {
 } from '../../lib/configuratorBattery';
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
-import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, type Preset } from '../../lib/configuratorPresets';
+import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, presetMassAnchor, type Preset } from '../../lib/configuratorPresets';
 import { buildModePresets, baseModeLabel, type ModePreset } from '../../lib/configuratorModes';
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
@@ -744,6 +744,11 @@ const ConfiguratorPanel: React.FC = () => {
   }, [loadCtx]);
   const presets: Preset[] = currentContext?.presets ?? [];
   const basePreset: Preset | null = presets.find((x) => x.config === baseConfig) ?? null;
+  // THE MASSES OF THE LOADED BUILD ARE THE SERVER'S (owner 2026-10-19): the loaded configuration's full / active mass anchor
+  // the mass model, so the tiles show exactly those at that build and scale from them only when the build moves
+  const massPreset = basePreset ?? presetOfBuild(presets, refKnobs ?? baseKnobs(p));
+  const massAnchor = useMemo(() => presetMassAnchor(baseKnobs(p), massPreset), [p, massPreset]);
+  const pMass = useMemo(() => (massAnchor ? { ...p, mass_anchor: massAnchor } : p), [p, massAnchor]);
   // One button per configuration x mode that has data (lib/configuratorModes); the build is the
   // configuration's, the current and speed are the mode's.
   const modePresets: ModePreset[] = useMemo(() => buildModePresets(presets), [presets]);
@@ -812,7 +817,7 @@ const ConfiguratorPanel: React.FC = () => {
   // scaleMotor() is the SINE model and never sees the drive; `scaleKnobs` stays as
   // the one name the charts and the result use for "the knobs the model reads".
   const scaleKnobs = knobs;
-  const result  = useMemo(() => scaleMotor(p, scaleKnobs, ref.poles), [p, scaleKnobs, ref.poles]);
+  const result  = useMemo(() => scaleMotor(pMass, scaleKnobs, ref.poles), [pMass, scaleKnobs, ref.poles]);
   const motorLoss_W = motorLossesComputed ? result.P_loss_W : null;
   const copperBreakdown = catalogCopperBreakdown(scaleKnobs.I_A, result.R_ohm, result.P_cu_W);
   const copperResistanceTempC = p.R_temp_C ?? referenceTemperatureBasis?.windingC ?? null;
@@ -1025,8 +1030,8 @@ const ConfiguratorPanel: React.FC = () => {
   // showed −92.7 % with nothing touched — it was being compared to another
   // configuration's base build).  refKnobs is set when a machine is adopted;
   // it falls back to the passport base when nothing is loaded.
-  const baseRes = useMemo(() => scaleMotor(p, refKnobs ?? baseKnobs(p), ref.poles),
-                          [p, ref.poles, refKnobs]);
+  const baseRes = useMemo(() => scaleMotor(pMass, refKnobs ?? baseKnobs(p), ref.poles),
+                          [pMass, p, ref.poles, refKnobs]);
   const iMax    = useMemo(() => maxCurrent(p, knobs), [p, knobs]);
 
   // ── DRIVE, continued: the choice, its reading, the device limits ──────────
@@ -1792,8 +1797,17 @@ ${s1Text.tip}` : '';
       clearBatteryEditForConfig(readLs(BATTERY_BY_MACHINE_LS), refId, pr.config, originalConfig)); } catch { /* ignore */ }
     batterySeeded.current = '';
     if (pk) setBattery(pk);
-    // the propeller goes back to the one this configuration opens on (the user's pick is dropped)
-    if (cooled) updateCool({ propId: null });
+    // the propeller goes back to the one this configuration opens on (the user's pick is dropped) - for the TARGET
+    // configuration too: a signed-in account keeps its pick per configuration (coolChoiceKey), and the page reads the
+    // target's key once baseConfig moves, so an older pick there made a fresh load read "changed from L20 · rated"
+    // (owner 2026-10-19, 40 L20 + 50 L15)
+    if (cooled) {
+      updateCool({ propId: null });
+      const targetKey = coolChoiceKey(identity, refId, pr.config);
+      if (targetKey !== coolKey) {
+        try { localStorage.setItem(PROP_CHOICE_LS, writeCoolChoice(readLs(PROP_CHOICE_LS), targetKey, { propId: null })); } catch { /* ignore */ }
+      }
+    }
   };
   // Which preset the state IS (every knob, the pack and the drive equal) — highlighted.
   // (with a propeller as the load the current is the propeller's, not a setting)
@@ -2557,7 +2571,7 @@ ${s1Text.tip}` : '';
               absLevel={propBad ? 'bad' : undefined} tip={propBad && propLine ? propLine.text : undefined} blankTip={pointBlankTip} />
             <MetricTile label={tx(result.mass_partial ? 'configure.massPartial' : 'configure.mass')} value={result.mass_kg} unit="kg" d={3}
               base={baseRes.mass_kg} goodHi={false}
-              tip={`${tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')}${result.mass_winding_known ? '' : ` ${tx('configure.massCopperUnscaledTip')}`}`} />
+              tip={`${tx(result.mass_partial ? 'configure.massPartialTip' : 'configure.massFullTip')}${result.mass_partial && massAnchor?.partial_reason ? ` (${massAnchor.partial_reason})` : ''}${result.mass_winding_known ? '' : ` ${tx('configure.massCopperUnscaledTip')}`}`} />
             {!result.mass_partial && (
               <MetricTile label={tx('configure.massActive')} value={result.mass_active_kg} unit="kg" d={3}
                 base={baseRes.mass_active_kg} goodHi={false} tip={tx('configure.massActiveTip')} />

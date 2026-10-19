@@ -206,7 +206,7 @@ def _mass(c: Dict[str, Any], rated: Dict[str, Any], mass: Optional[Dict[str, Any
         kg, partial = _n(r.get("mass_kg"), 3), True
     if not kg:
         return None
-    return f"mass {kg} kg" + (" (active parts only, the full assembly is not built yet)" if partial else "")
+    return (f"active mass {kg} kg (full mass incomplete)" if partial else f"mass {kg} kg (full assembled motor)")
 
 
 def _battery(c: Dict[str, Any]) -> Optional[str]:

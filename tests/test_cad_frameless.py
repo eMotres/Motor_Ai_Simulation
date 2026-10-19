@@ -322,7 +322,7 @@ def test_the_kit_mass_is_the_active_parts_without_the_shaft_plus_board_and_ename
 def test_a_kit_without_a_built_bom_is_partial_and_still_has_no_shaft(tmp_path, monkeypatch):
     dies, cad = _setup(tmp_path, monkeypatch, kit=True, with_bom=False)
     fm = MM.full_mass(DIE, CFG, dies_dir=dies, cad_dir=cad)
-    assert fm.partial and fm.kit and fm.source == "active_only" and "partial mass (no CAD model yet)" in fm.basis
+    assert fm.partial and fm.kit and fm.source == "active_only" and MM.PARTIAL_LABEL in fm.basis
     assert fm.total_kg * 1000 == pytest.approx(126.09 + 64.13 + 70.49 + 106.26)
     assert not next(p for p in fm.parts if p.key == "shaft").counted
 

@@ -92,8 +92,8 @@ def test_no_built_cad_model_keeps_the_active_mass_and_says_partial(catalog):
     fm = MM.full_mass(DIE, "L20")
     mm = MM.app_motor_mass(DIE, "L20")
     assert fm.partial and fm.source == "active_only" and fm.total_kg == pytest.approx(mm.total_kg)
-    assert fm.total_kg == fm.active_kg and "partial mass (no CAD model yet)" in fm.basis
-    assert all("partial mass (no CAD model yet)" in p.basis for p in fm.parts)
+    assert fm.total_kg == fm.active_kg and MM.PARTIAL_LABEL in fm.basis
+    assert all(MM.PARTIAL_LABEL in p.basis for p in fm.parts)
     assert MM.mass_summary(DIE, "L20")["partial"] is True and MM.mass_summary("NO SUCH DIE", "L20") is None
 
 

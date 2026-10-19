@@ -12,6 +12,12 @@ mass, slot/pole count, materials by name.  NEVER stator/rotor dimensions,
 winding geometry, thumbnails or build signatures.  Every machine payload is
 built from an explicit whitelist, and ``assert_no_geometry`` re-checks the
 result against ``GEOMETRY_DENYLIST`` before it leaves the server.
+
+PUBLIC-CATALOG RULE (2026-10-19): the MCP is public-facing for every caller,
+admins included.  Catalogue text is sanitised (``public_text``): no warehouse
+stock (batches, lots, kilograms), no internal design notes or attributions, no
+measurement-document paths.  Machines without a catalogue card (``card_date``)
+are not listed - the same rule as the web's Motors tab for clients.
 """
 from __future__ import annotations
 
@@ -20,6 +26,7 @@ from contextlib import ExitStack, contextmanager
 from typing import Any, Dict, Iterator, List, Optional
 
 from motor_ai_sim.agent_keys import Principal
+from motor_ai_sim.public_text import public_strings, public_text, public_wire_spec
 
 CATALOG_KINDS = ("magnets", "steels", "wires", "bearings", "devices", "dies")
 
@@ -146,7 +153,7 @@ def _mat_row(name: str, raw: dict, keymap: Dict[str, str]) -> dict:
         v = raw.get(src)
         if v is None:
             continue
-        row[dst] = v if isinstance(v, str) else _f(v, 6)
+        row[dst] = public_text(v) if isinstance(v, str) else _f(v, 6)
     row["provenance"] = {"source": "eMotres materials library",
                          "has_bh_curve": bool(raw.get("bh_curve")),
                          "has_core_loss_curves": bool(raw.get("core_loss_curves"))}
@@ -163,15 +170,17 @@ def _wires() -> List[dict]:
         doc = {}
     out = []
     for w in doc.get("wires") or []:
-        out.append({"id": str(w.get("code")), "spec": w.get("spec"),
+        # Technical designation only: the stock table's spec text may carry
+        # batches / lots / kilograms, and its provenance is the warehouse.
+        out.append({"id": str(w.get("code")),
+                    "spec": public_wire_spec(w.get("spec"), _f(w.get("thickness_mm")),
+                                             _f(w.get("width_mm"))),
                     "thickness_mm": _f(w.get("thickness_mm")),
                     "width_mm": _f(w.get("width_mm")),
                     "insulation": w.get("insulation"),
                     "self_bonding": bool(w.get("self_bonding")),
                     "in_stock": bool((w.get("stock_kg") or 0) > 0),
-                    "provenance": {"source": "warehouse stock table",
-                                   "updated": doc.get("updated"),
-                                   "label_ambiguous": bool(w.get("check"))}})
+                    "provenance": {"source": "eMotres wire catalog"}})
     return out
 
 
@@ -190,9 +199,11 @@ def _bearings() -> List[dict]:
         row: Dict[str, Any] = {"id": n}
         for k in _BEARING_KEYS:
             if card.get(k) is not None:
-                row[_BEARING_RENAME.get(k, k)] = card.get(k)
-        row["provenance"] = {"source": lib.get("source"),
-                             "note": card.get("note")}
+                v = card.get(k)
+                row[_BEARING_RENAME.get(k, k)] = public_text(v) if isinstance(v, str) else v
+        # The card's free-text `note` is design commentary about our own
+        # machines and measurements: never part of the public answer.
+        row["provenance"] = {"source": lib.get("source")}
         out.append(row)
     return out
 
@@ -226,10 +237,19 @@ def _devices() -> List[dict]:
 
 
 def _visible_tree() -> List[dict]:
-    """The caller's catalog tree — the SAME function the web's Motors tab calls."""
+    """The caller's catalog tree - the SAME function the web's Motors tab calls,
+    minus every configuration without a catalogue card (``card_date``) and every
+    die left with none: uncomputed machines are not shown to clients (the rule of
+    ``web/src/components/catalog/MotorsCatalog.tsx``)."""
     from fastapi import Response
     from motor_ai_sim.routes import family as _fam
-    return list((_fam.tree(Response(), authorization=None) or {}).get("dies") or [])
+    dies = list((_fam.tree(Response(), authorization=None) or {}).get("dies") or [])
+    out = []
+    for d in dies:
+        cfgs = [c for c in d.get("configs") or [] if c.get("card_date")]
+        if cfgs:
+            out.append({**d, "configs": cfgs, "config_count": len(cfgs)})
+    return out
 
 
 def _ownership(die: dict, me: str) -> str:

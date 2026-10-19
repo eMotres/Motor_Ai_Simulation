@@ -56,6 +56,11 @@ def env(tmp_path, monkeypatch):
     for n in _PICK:
         shutil.copytree(_REPO_DIES / n, dd / n)
     monkeypatch.setattr(fam, "_DIES_DIR", dd, raising=False)
+    # the repo's own passport store is not in the sandbox: give every copied
+    # configuration a catalogue card so the MCP's card_date filter keeps it
+    from motor_ai_sim import passport_store as _ps
+    monkeypatch.setattr(_ps, "card_index", lambda: {
+        n: {p.stem: "2026-10-19" for p in (dd / n).glob("*.yaml")} for n in _PICK})
     for e in (A, B):
         U.create_user(e, "pw-" + e, role="user")
     dies = _die_names()

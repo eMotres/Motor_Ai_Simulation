@@ -60,6 +60,7 @@ import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/config
 import { configurePointThermal, configureMotorHeat, type ThermalEstimate } from '../../lib/thermalEstimate';
 import { ratedSpeedCap } from '../../lib/configureRatedCap';
 import { s1LoadPoint, s1ThermalAt, type S1ThermalModel } from '../../lib/s1Thermal';
+import { anchoredTemperatures, anchorLossRatios, type ThermalAnchor } from '../../lib/thermalAnchor';
 import { airH, getCoolingPayload, liqH } from '../thermal/api';
 import CoolingControls from '../thermal/CoolingControls';
 import ChargePanel from './ChargePanel';
@@ -93,7 +94,7 @@ import { nsT } from '../../i18n/nsT';
 import { slotMouthLimit } from '../../lib/slotMouthFit';
 import i18n from '../../i18n';
 import {
-  usableVariants, variantFacts, readVariant, buildTuned, limitProblems,
+  usableVariants, variantFacts, readVariantNear, buildTuned, limitProblems,
   pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
   variantDevices, variantCarriers, switchDevice, switchCarrier, resolveVariant, pairKey, carrierLabel,
   type DriveRecord, type DeviceLimits, type VariantReading,
@@ -1060,7 +1061,7 @@ const ConfiguratorPanel: React.FC = () => {
   /** the variants were computed for the loaded build: only I and rpm move */
   const driveBuildMoved = driveOn && buildTuned(knobs, refKnobs ?? baseKnobs(p));
   const driveRead = useMemo(
-    () => (variant && !driveBuildMoved ? readVariant(variant, knobs.rpm, knobs.I_A) : null),
+    () => (variant && !driveBuildMoved ? readVariantNear(variant, knobs.rpm, knobs.I_A) : null),
     [variant, driveBuildMoved, knobs.rpm, knobs.I_A]);
   const driveProblems = useMemo(
     () => (variant && driveRead && driveRead.ok
@@ -1136,14 +1137,17 @@ const ConfiguratorPanel: React.FC = () => {
     if (!motorLossesComputed) return null;
     if (driveMode === 'sine' || !variant) return baseRes.efficiency * 100;
     const k0 = refKnobs ?? baseKnobs(p);
-    const r0 = readVariant(variant, k0.rpm, k0.I_A);
+    const r0 = readVariantNear(variant, k0.rpm, k0.I_A);
     const e0 = r0.ok ? systemEfficiency('pwm', r0.values, baseRes.P_mech_W, baseRes.P_loss_W).value : null;
     return e0 ?? baseRes.efficiency * 100;
   })();
   /** one tile of the drive-dependent set, from its spec */
   const renderSpec = (t: DriveTileSpec) => {
-    const detail = t.id === 'invLoss' && drv && controllerLossW(drv) != null
-      ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1), b: fmt(drv.board_copper_W ?? 0, 1) })}` : '';
+    const detail = (t.id === 'invLoss' && drv && controllerLossW(drv) != null
+      ? ` ${tx('configureDrive.invLossSplit', { c: fmt(drv.inv_cond_W ?? 0, 1), s: fmt(drv.inv_sw_W ?? 0, 1), d: fmt(drv.inv_dead_W ?? 0, 1), b: fmt(drv.board_copper_W ?? 0, 1) })}` : '')
+      // outside the variant's computed points: read at the nearest one (never a refusal of the loaded point)
+      + (drv && driveRead && driveRead.ok && 'near' in driveRead && driveRead.near
+        ? `\n${tx('configureDrive.readNearTip', { rpm: fmt(driveRead.near.rpm, 0), amps: fmt(driveRead.near.I, 1) })}` : '');
     const shown = pointGate.accepted ? t : { ...t, value: null, blank: 'refused' as const };
     return (
       <MetricTile key={shown.id} label={tx(shown.labelKey)} value={shown.value} unit={shown.unit} d={shown.d}
@@ -1248,6 +1252,9 @@ const ConfiguratorPanel: React.FC = () => {
   // It comes with the configuration's load; null = the machine has none (the lumped estimate stands in, labelled).
   const [thermalModelState, setThermalModelState] = useState<{ key: string; value: S1ThermalModel | null } | null>(null);
   const calModel = thermalModelState && thermalModelState.key === `${catId ?? ''}|${baseConfig ?? ''}` ? thermalModelState.value : null;
+  // ... and where no calibrated network applies, the lumped network anchored to the loaded duty's coupled FEM record
+  const [anchorState, setAnchorState] = useState<{ key: string; value: ThermalAnchor | null } | null>(null);
+  const thermalAnchor = anchorState && anchorState.key === `${catId ?? ''}|${baseConfig ?? ''}|${baseMode ?? ''}` ? anchorState.value : null;
   // the air over the housing is the model's own (its fitted slipstream factor) - the S1 limit's air
   const seriesFactor = calModel?.slipstream_factor ?? null;
   const seriesKey = pointGate.showBatteryDerived && propellerCoolingActive && propId
@@ -1463,10 +1470,38 @@ ${s1Text.tip}` : '';
    *  here, or while the load is refused — never numbers for a point that cannot be run) */
   /** ONE verdict for a point: the server's thermal model at (rpm, I) when it applies, else the lumped estimate - for the
    *  tiles, the red line, the rail zones and the rated cap alike.  `heat` gates it: a refused point shows nothing. */
+  // The ANCHOR applies where the calibrated network does not: the cooling the record was solved in (still air / robotics,
+  // or typed air), the configuration's own build.  Its housing film follows the page's film (h / h at the record's air).
+  const anchorCoolingMatch = (() => {
+    if (!thermalAnchor) return false;
+    const m = thermalAnchor.cooling_mode;
+    const stillAir = !propellerCoolingActive && (optionalPropellerCooling || roboticsOnly);
+    if (m === 'robotics' || m === 'still') return stillAir;
+    if (m === 'air') return !propellerCoolingActive && !stillAir && coolPayload?.cooling_mode === 'air';
+    return false;
+  })();
+  const anchorUsable = !!thermalAnchor && !calUsable && anchorCoolingMatch && !buildTuned(knobs, refKnobs ?? baseKnobs(p));
+  const anchorHRef = thermalAnchor
+    ? airH(thermalAnchor.cooling_mode === 'air' ? thermalAnchor.air_speed_ms : 0, (thermalGeom.statorOD_mm || 150) / 1000) : 1;
+  /** record / page losses at the record's point: the stored point IS the record, the loss model only carries the change */
+  const anchorRatios = useMemo(() => {
+    if (!anchorUsable || !thermalAnchor) return null;
+    const r = scaleMotor(p, { ...knobs, rpm: thermalAnchor.point.rpm, I_A: thermalAnchor.point.I_A }, ref.poles);
+    return anchorLossRatios(thermalAnchor, { P_cu_W: r.P_cu_W, P_rotor_W: r.P_mag_W, P_total_W: r.P_cu_W + r.P_fe_W + r.P_mag_W });
+  }, [anchorUsable, thermalAnchor, p, ref.poles, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split]); // eslint-disable-line react-hooks/exhaustive-deps
   const judgePoint = (mode: 'sine' | 'pwm', accepted: boolean, base: Parameters<typeof configurePointThermal>[2],
                       extraW: number | null, cool: { h_Wm2K: number; ambient_C: number } | null,
                       rpm: number, I: number, L_mm: number) => {
     const lumped = configurePointThermal(mode, accepted, base, extraW, cool, { ...thermalGeom, stackLength_mm: L_mm }, tLimits);
+    if (anchorUsable && thermalAnchor && anchorRatios && lumped.heat && cool && base) {
+      // the lumped network anchored to the duty's coupled FEM record (the stored point IS the record)
+      const a = anchoredTemperatures(thermalAnchor, base.P_cu_W, base.P_mag_W, base.P_cu_W + base.P_fe_W + base.P_mag_W,
+        cool.h_Wm2K, anchorHRef, cool.ambient_C, anchorRatios, extraW ?? 0);
+      const th: ThermalEstimate = { ...lumped.thermal!, T_housing_C: a.housing, T_winding_C: a.winding, T_magnet_C: a.magnet,
+        dT_conv_C: a.housing - cool.ambient_C, dT_winding_C: a.winding - a.housing, dT_magnet_C: a.magnet - a.housing };
+      const windingOver = a.winding > tLimits.winding_C, magnetOver = a.magnet > tLimits.magnet_C;
+      return { heat: lumped.heat, thermal: th, over: windingOver || magnetOver, windingOver, magnetOver, basis: 'anchor' as const };
+    }
     if (!calUsable || !calModel || !lumped.heat || !cool) return { ...lumped, basis: 'lumped' as const };
     const t = s1ThermalAt(calModel, rpm, I, cool.h_Wm2K, cool.ambient_C, calDriveId ?? null);
     if (!t) return { ...lumped, basis: 'lumped' as const };
@@ -1486,7 +1521,8 @@ ${s1Text.tip}` : '';
   const pointNow = useMemo(() => judgePoint(driveMode, pointGate.accepted, motorHeatBase, extraLossW,
     cooling ? { h_Wm2K: cooling.h_Wm2K, ambient_C: cooling.ambient_C } : null, knobs.rpm, knobs.I_A, knobs.L_mm),
   [driveMode, pointGate.accepted, motorHeatBase?.P_cu_W, motorHeatBase?.P_fe_W, motorHeatBase?.P_mag_W, motorHeatBase?.stator_W, // eslint-disable-line react-hooks/exhaustive-deps
-    motorHeatBase?.rotor_W, extraLossW, cooling, thermalGeom, tLimits, calUsable, calModel, calDriveId, knobs.rpm, knobs.I_A, knobs.L_mm]);
+    motorHeatBase?.rotor_W, extraLossW, cooling, thermalGeom, tLimits, calUsable, calModel, calDriveId, knobs.rpm, knobs.I_A, knobs.L_mm,
+    anchorUsable, thermalAnchor, anchorRatios, anchorHRef]);
   const thermal = pointNow.thermal;
   const verdict = thermal ? { over: pointNow.over, windingOver: pointNow.windingOver, magnetOver: pointNow.magnetOver } : null;
   const overheats = !!verdict?.over;
@@ -1525,7 +1561,9 @@ ${s1Text.tip}` : '';
         air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—',
         surface: t.surface != null ? fmt(t.surface, 0) : '—' })
         // which model the temperature comes from: the configuration's calibrated one, or the labelled fallback
-        + (t.id !== 'airSpeed' && thermal ? `\n${tx(pointNow.basis === 'model' ? 'configurePropeller.thermalBasisModel' : 'configurePropeller.thermalBasisLumped')}` : '')}
+        + (t.id !== 'airSpeed' && thermal ? `\n${pointNow.basis === 'model' ? tx('configurePropeller.thermalBasisModel')
+          : pointNow.basis === 'anchor' ? tx('configurePropeller.thermalBasisAnchor', { duty: thermalAnchor?.duty ?? '' })
+            : tx('configurePropeller.thermalBasisLumped')}` : '')}
       blankTip={!pointGate.accepted || !pointGate.showMotorLosses ? pointBlankTip
         : tx(loadRefused ? 'configurePropeller.blankRefused' : 'configurePropeller.blankLoading')} />
   );
@@ -1577,7 +1615,7 @@ ${s1Text.tip}` : '';
     let dr: VariantReading | null = null;
     if (driveOn) {
       if (!variant || driveBuildMoved) return true;
-      const read = readVariant(variant, rpm, ld.I_A);
+      const read = readVariantNear(variant, rpm, ld.I_A);
       if (!read.ok || limitProblems(variant, read.values, ld.I_A, devLimits[variant.device] ?? null, packWindow).length) return true;
       dr = read.values;
     }
@@ -1795,6 +1833,7 @@ ${s1Text.tip}` : '';
       if (a && a.context?.motor_id === catalogIdOf(forRef)) {
         setCtxState({ identity, value: a.context }); setCtxDone(true);
         setThermalModelState({ key: `${catalogIdOf(forRef) ?? ''}|${a.config}`, value: a.thermal_model ?? null });
+        setAnchorState({ key: `${catalogIdOf(forRef) ?? ''}|${a.config}|${a.duty ?? ''}`, value: a.thermal_anchor ?? null });
         const pr = a.propeller;
         if (pr?.series) {
           const f = pr.slipstream_factor ?? null;

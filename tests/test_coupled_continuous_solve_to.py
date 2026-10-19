@@ -891,3 +891,23 @@ def test_a_one_pass_answer_with_no_resolve_attempt_is_not_penalised(monkeypatch)
         mode="motor", time_to_limit={"within_limits": False,
                                      "limiting_part": "winding"})
     assert out.get("trustworthy", True) is True
+
+
+def test_the_cooling_label_names_a_propeller_slipstream():
+    """Owner case 2026-10-19 (CIANO28 150_35 new / L35): a propeller-sourced
+    air film carries no `air_speed_mps` (the router derives it), so the S1
+    line, the datasheet and the MCP's `continuous_cooling` all read "still
+    air" for a machine cooled by its propeller.  The label must name the
+    propeller, and a genuinely still or typed-speed film must keep its words."""
+    from motor_ai_sim.routes import coupled as cp
+
+    prop = cp._cooling_label({"cooling_mode": "air", "ambient_temp": 40.0,
+                              "air_speed_source": "propeller",
+                              "propeller_id": "tmotor-g32x11"})
+    assert "still air" not in prop
+    assert prop == "propeller tmotor-g32x11 slipstream, 40 °C"
+    assert cp._cooling_label({"cooling_mode": "air", "ambient_temp": 40.0,
+                              "air_speed_mps": 0.0}) == "still air, 40 °C"
+    assert cp._cooling_label({"cooling_mode": "air", "ambient_temp": 25.0,
+                              "air_speed_mps": 20.0}) \
+        == "forced air 20 m/s, 25 °C"

@@ -7245,8 +7245,19 @@ def _cooling_label(cooling: Mapping[str, Any]) -> str:
     mode = str(c.get("cooling_mode") or "").strip().lower()
     parts: List[str] = []
     if mode == "air":
+        # A propeller-sourced film carries NO `air_speed_mps` (the router
+        # derives it from the propeller, and `_prune` drops the typed one), so
+        # it must be named before the speed is read — otherwise the S1 line of
+        # a propeller-cooled run says "still air" (owner case 2026-10-19,
+        # CIANO28 150_35 new / L35), the same mistake
+        # `thermal_settings.cooling_words` already avoids.
         v = _ccr._num(c.get("air_speed_mps"))
-        parts.append("forced air %.0f m/s" % v if v else "still air")
+        if str(c.get("air_speed_source") or "manual").strip().lower() \
+                == "propeller":
+            pid = str(c.get("propeller_id") or "").strip()
+            parts.append("propeller %s slipstream" % (pid or "(missing ID)"))
+        else:
+            parts.append("forced air %.0f m/s" % v if v else "still air")
     elif mode == "liquid":
         v = _ccr._num(c.get("flow_lpm"))
         parts.append("liquid jacket, %s%s" % (

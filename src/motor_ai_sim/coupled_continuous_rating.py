@@ -416,13 +416,25 @@ def _search_scale(loss: Mapping[str, Any], p_cu_ref_w: float,
     lo_state, lo_rows = evaluate(s_min)
     if _worst(lo_rows)[0] > tol_k:
         part = _worst(lo_rows)[1]
+        # THE WATTS AND THE TEMPERATURE travel with the refusal (owner case
+        # 2026-10-19): "88 K over at zero current" read as a bug beside a
+        # magnet at 112 °C at the 6-minute limit, because the sentence named
+        # neither how much heat is left at s → 0 nor what it settles at.
+        w = tdc.node_watts(loss)
+        p_held = sum(w[n] for n in NODES if n != "winding")
+        row = next(r for r in lo_rows if r["part"] == part)
         return {"feasible": False, "s": None, "n_evaluations": n_eval,
                 "limiting_part": part, "state_c": lo_state, "parts": lo_rows,
+                "held_W": round(p_held, 3),
                 "note": ("this cooling cannot hold even the losses that do NOT "
-                         "come from the current: at s → 0 (iron, magnet eddy and "
-                         "the mechanical watts alone) the %s is already %.1f K "
-                         "over its limit, so there is no continuous rating at "
-                         "this speed" % (_ttl.part_label(part), _worst(lo_rows)[0]))}
+                         "come from the current: at s → 0 the %.1f W left "
+                         "(stator %.1f W, rotor %.1f W, magnets %.1f W: iron, "
+                         "eddy and mechanical) settle the %s at %.1f °C, "
+                         "%.1f K over its %g °C limit, so there is no "
+                         "continuous rating at this speed"
+                         % (p_held, w["stator"], w["rotor"], w["magnet"],
+                            _ttl.part_label(part), float(row["quantity_c"]),
+                            _worst(lo_rows)[0], float(row["limit_c"])))}
 
     hi = 1.0
     while over(hi) < -tol_k and hi < s_max:

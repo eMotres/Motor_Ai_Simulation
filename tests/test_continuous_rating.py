@@ -161,6 +161,11 @@ def test_losses_that_do_not_come_from_the_current_can_make_it_infeasible(
     assert got["limiting_part"] == "winding"
     assert got["parts"][0]["quantity_c"] == pytest.approx(125.0, abs=1.0)
     assert "at s → 0" in got["note"]
+    # The refusal names the heat that is left and where it settles (owner case
+    # 2026-10-19: "88 K over at zero current" read as a bug without them).
+    assert got["held_W"] == pytest.approx(100.0)
+    assert "100.0 W left" in got["note"]
+    assert "at 125.0 °C" in got["note"] and "60 °C limit" in got["note"]
 
 
 def test_no_part_with_a_limit_is_refused_by_name(caps):

@@ -507,6 +507,29 @@ def parameter_fingerprint(eff, mp):
 
 
 # ----------------------------------------------------------------------------------------------- profile (pull)
+def restrict_fusion_parts(prof, die):
+    """`profile.fusion_parts` (Fusion STEP bodies, template A.7.7) with a `dies` list belongs to those dies only: any other die that shares the
+    reference profile (the CIANO14 40 reference is the fall-back of every die without its own) builds the template parts.  Edits `prof` in place;
+    returns True when the Fusion parts stay."""
+    fp = prof.get("fusion_parts")
+    if fp and fp.get("dies") and die not in fp["dies"]:
+        del prof["fusion_parts"]
+        return False
+    return bool(fp)
+
+
+def apply_fusion_param_overrides(pj):
+    """`fusion_parts.param_overrides` = {row: expression}: Params rows of the TEMPLATE parts that must follow the Fusion body (e.g. the screws sit on the
+    bolt circle of the Fusion holder holes, 14.8431907 mm, where the template row says 14.85).  Applied only while the Fusion parts are in use."""
+    fp = pj["profile"].get("fusion_parts") or {}
+    rows = {p["name"]: p for sec in SECTIONS for p in pj.get(sec, [])}
+    for name, expr in (fp.get("param_overrides") or {}).items():
+        if name not in rows:
+            raise KeyError("fusion_parts.param_overrides: no Params row %r" % name)
+        rows[name]["freecad_expression"] = expr
+        rows[name]["source"] = "Fusion part geometry (profile.fusion_parts.param_overrides)"
+
+
 def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, motor_id=None):
     """Store -> (profile dict for the FreeCAD template, review report).  Where a formula of the Fusion reference
     profile already gives the simulation value it is kept (Fusion intent); any other value becomes a constant."""
@@ -519,6 +542,8 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
     if fv and os.path.exists(fv):
         fus = {p["name"]: p["value"] for p in json.load(open(fv, encoding="utf-8"))}
     pj = copy.deepcopy(base)
+    if restrict_fusion_parts(pj["profile"], eff["die"]):
+        apply_fusion_param_overrides(pj)
     params = {p["name"]: p for sec in SECTIONS for p in pj.get(sec, [])}
     geo = eff["geometry"]
     rows = primary_rows(geo, mp)

@@ -505,14 +505,56 @@ shape valid in memory but not after a copy (the simplified / STEP exporters copy
 (`SourceValid`, `SourceCheck` on `<part>_Fusion`); the gate and the simplified exporter accept an invalid imported solid only when the STEP itself is
 invalid, it has one closed shell and the Fusion volume.  A valid source (both rotor holders) must stay valid.
 
-* STEP location: `$FC_FUSION_PARTS/<file>`, `cad/reference/fusion_parts/CIANO28_150_35/<file>` or (owner repo) `fusion_source/CIANO28_150_35/mechanics/<file>`.
-  The files are owner design data and the repository is public: `cad/reference/fusion_parts/` is git-ignored. For the server build the files must be
-  put into the CAD image (or the directory mounted and `FC_FUSION_PARTS` set). A missing STEP REFUSES the build; there is no silent fall-back to rings.
+* STEP location: `$FC_FUSION_PARTS/<file>`, `$FC_CAD_REFERENCE/fusion_parts/CIANO28_150_35/<file>` (the private data repository, see "Private reference
+  files"), `cad/reference/fusion_parts/CIANO28_150_35/<file>` or (owner repo) `fusion_source/CIANO28_150_35/mechanics/<file>`.
+  The files are owner design data and this repository is public: they live ONLY in `eMotres/motor-ai-sim-private` `cad/reference/fusion_parts/CIANO28_150_35/`
+  (`cad/reference/fusion_parts/` is also git-ignored here) and travel into the CAD image with the `private` build context. A missing STEP REFUSES the build;
+  there is no silent fall-back to rings.
 * The occupancy rows (`<part>_r0_k ...`) stay in the profile as the measured record, role `info` (not live, so the role check does not call them
   dead); `test_occupancy_rings_reproduce_the_fusion_body_volume` still ties them to the Fusion volumes. Profiles without `fusion_parts` still build rings.
 * Gate: each part must be one valid solid, its volume must equal the imported solid and be within 0.1 % of `fusion_parts.volumes_mm3` (the Fusion body
   volume); the z extent invariant is kept.
 * The lightening pockets and screw holes of the holders are Fusion design features and are now in the model (they are not gaps of the template).
+
+## CIANO14 40: Shaft, Prop_fix and both stator holders are the Fusion v19 bodies (template A.7.7, 2026-10-19)
+
+Owner 2026-10-19: the 3-D view of the 40 mm production module showed the OLD shaft design ("with the hole"): the Ø6 bore broke into the drive flats.
+He fixed the shaft in Fusion (document `CIANO14 40`, version 19: the bore is 1.5 mm shallower) and ruled that **everything in production comes ONLY
+from Fusion**. The template shaft differed from Fusion (bore bottom, flange Ø15.9 instead of Ø13.9 in the old server build, thread section Ø4.95
+instead of Ø4.901) and so did the `Prop_fix` hole (4.99 vs 4.901).
+
+**Mechanism**: the same `profile.fusion_parts` as the 150 (A.7.6), now in the standard mechanics too (`fusion_parts.py`, `mechanics.build_mechanics`).
+The four parts are the read-only STEP exports of the Fusion components, imported once (biggest solid of the STEP) as the BaseFeature of the same
+PartDesign bodies, so names, solids, gate, fit, BOM, STEP tree and GLB code are unchanged. Per part:
+
+| part | at another `motor_length` |
+|---|---|
+| `Stator_holder`, `Prop_fix` | rigid shift +(motor_length - ref) / 2 (`fusion_parts.shift`) |
+| `Stator_holder_back` | rigid shift -(motor_length - ref) / 2 |
+| `Shaft` | **stretch** (`fusion_parts.stretch`): cut-and-shift in the constant Ø9.9 rotor-seat section at z = 0; the part behind moves -d/2, the part in front +d/2 and the extruded section fills the gap (a slab is removed for d < 0). Volume = Fusion volume + d x section area (48.70 mm2 per mm: Ø9.9 x Ø6 tube). This is the production drawing rule (`production/CIANO14_40/shaft_drawing.py`, note 10): L20 = L12 + 8 mm in the Ø9.9 section |
+
+* **Reference length**: the STEP files were exported with the design at `motor_length` 12 (the open design was at 12 when read, 2026-10-19 11:58), so
+  `ref_motor_length` = 12 and L12 is the Fusion body as it is; L20 is derived by the stretch. The derivation was checked against the earlier L20 dump
+  of the same Fusion version (shaft 1917.559 mm3 = 1527.939 + 8 x 48.70).
+* **Only the die it was drawn for**: `fusion_parts.dies` = `["CIANO14 40 new"]`. The CIANO14 40 reference is the fall-back of every die without its own
+  reference; `store.restrict_fusion_parts` drops the Fusion bodies for any other die (they build the template parts).
+* **Private files**: the STEP files (`Shaft.step`, `Prop_fix.step`, `Stator_holder.step`, `Stator_holder_back.step`) and `fusion_export_manifest.json` (document
+  version, motor_length, volumes, bounding boxes) are owner design data and live ONLY in `eMotres/motor-ai-sim-private`
+  `cad/reference/fusion_parts/CIANO14_40/` (folder `CIANO28_150_35/` holds the 150 files). Lookup order (`fusion_parts.find_fusion_part`):
+  `$FC_FUSION_PARTS/<file>`, `$FC_FUSION_PARTS/<dir>/<file>`, `$FC_CAD_REFERENCE/fusion_parts/<dir>/<file>` (the builder sets `FC_CAD_REFERENCE` to the
+  private `cad/reference`; in the CAD image it is `/app/cad/reference`, copied from the `private` build context), `cad/reference/fusion_parts/<dir>/<file>`.
+  A missing file REFUSES the build; there is no fall-back to the template geometry.
+* **Rows**: the 48 Params rows that only the replaced template geometry read (`shaft_*`, `prop_fix_*`, `holder_*`, `back_holder_*` ...) stay in the profile
+  (`fusion_parts.replaced_rows`); `build_model.py` lists them in `roles_check.replaced_by_fusion` instead of refusing the build ("dead by design"). Editing them in
+  the Params sheet changes nothing: change the part in Fusion and export it again.
+* **Gate**: each part is one valid solid whose volume equals the imported solid and the Fusion volume (+ stretch) within 0.1 %; the z-extent invariants
+  against the bearing / holder rows stay (they tie the Fusion bodies to the positions the rest of the template uses); the flange-radius and the holder
+  feature-count invariants are the template's and are skipped for Fusion bodies. The fit table (contact / clearance pairs) is unchanged and decides.
+* **Threads** stay cosmetic: the radii of the cylinders that carry them are measured on the Fusion part (`fusion_parts.thread_radii`: shaft tip 2.4505,
+  back-holder taps 0.8115 / 1.2645) and read by `view.thread_face_indices` (colour) and `export_models.thread_rules` (glTF thread nodes).
+* **No phase pins** on the board (owner rule) - unchanged: the template drops pins on an imported board.
+* Rebuild: `MOTOR_AI_SIM_PRIVATE_DATA=<private checkout> python cad/run_build.py build --die "CIANO14 40 new" --config L12|L20` (the server runs the same
+  inside the CAD image built with `--build-context private=...`).
 
 ## The GFRP rings: full model only (template A.7.4, 2026-10-16)
 

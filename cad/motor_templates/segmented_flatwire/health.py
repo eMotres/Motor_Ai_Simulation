@@ -433,6 +433,25 @@ MECH_BODIES_CARRIER = ("Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_ba
                        "Bearing_inner_ring", "Bearing_seal", "Bearing_ball", "Screw")
 
 
+def _fusion_valid(doc, bn, s):
+    """A part is a valid shape; a Fusion body (A.7.6 / A.7.7) may be exactly as invalid as its STEP (tolerance-level wire errors of Fusion's B-rep)."""
+    if s.isNull():
+        return False
+    fus = doc.getObject(bn + "_Fusion")
+    return s.isValid() or (fus is not None and not fus.SourceValid and all(x.isClosed() for x in s.Shells))
+
+
+def _fusion_volume_errors(doc, bn):
+    """The imported Fusion solid must have the Fusion body volume (at this motor_length; wrong or stale STEP otherwise)."""
+    fus = doc.getObject(bn + "_Fusion")
+    if fus is None or not fus.FusionBodyVolume > 0:
+        return []
+    if abs(fus.SourceVolume - fus.FusionBodyVolume) <= 1e-3 * fus.FusionBodyVolume:
+        return []
+    return ["%s: imported Fusion solid %.3f mm3 differs from the Fusion body volume %.3f mm3 by more than 0.1 %% (wrong or stale STEP)" % (
+        bn, fus.SourceVolume, fus.FusionBodyVolume)]
+
+
 def _gate_mechanics(doc, g, exp, counts, vols):
     """Mechanical parts: valid single solids, array counts, links, and stale-geometry invariants (extents that the
     current Params demand)."""
@@ -447,9 +466,10 @@ def _gate_mechanics(doc, g, exp, counts, vols):
             errors.append("body %s missing" % bn)
             continue
         s = b.Shape
-        if s.isNull() or not s.isValid() or len(s.Solids) != 1 or s.Volume <= 0:
+        if s.isNull() or not _fusion_valid(doc, bn, s) or len(s.Solids) != 1 or s.Volume <= 0:
             errors.append("body %s: null/invalid/%d solids/volume<=0" % (bn, 0 if s.isNull() else len(s.Solids)))
             continue
+        errors += _fusion_volume_errors(doc, bn)
         vols[bn] = s.Volume
     for label, key in (("Screws", "screws"), ("Balls", "balls")):
         arr = [o for o in doc.Objects if o.Label == label]
@@ -475,9 +495,10 @@ def _gate_mechanics(doc, g, exp, counts, vols):
     else:
         inv = [("Shaft back end z = -bearing_out_z", _bb(so["Shaft"]).ZMin, -zb),
                ("Shaft front end z = shaft_front_end_z", _bb(so["Shaft"]).ZMax, g("shaft_front_end_z")),
-               ("Shaft flange radius", _bb(so["Shaft"]).XMax, g("shaft_seat_r") + g("shaft_flange_step")),
                ("Prop_fix z min", _bb(so["Prop_fix"]).ZMin, g("shaft_journal_end_z") - g("prop_fix_hub_t")),
                ("Prop_fix z max", _bb(so["Prop_fix"]).ZMax, g("shaft_journal_end_z") + g("prop_fix_plate_t"))]
+        if doc.getObject("Shaft_Fusion") is None:               # the flange of a Fusion shaft is Fusion's (dia 13.9), not the template row; the z ends above still hold
+            inv.insert(2, ("Shaft flange radius", _bb(so["Shaft"]).XMax, g("shaft_seat_r") + g("shaft_flange_step")))
     inv += [("front bearing inner face z", _bb(so["Bearing_618_8_front_outer_ring"]).ZMin, zf),
             ("front bearing outer face z", _bb(so["Bearing_618_8_front_outer_ring"]).ZMax, zb),
             ("back bearing inner face z", _bb(so["Bearing_618_8_back_outer_ring"]).ZMax, -zf),
@@ -506,6 +527,8 @@ def _gate_mechanics(doc, g, exp, counts, vols):
                 ("Stator_holder_back", g("back_holder_fillet_r")): 2 * n, ("Stator_holder_back", g("back_screw_tap_d") / 2): n,
                 ("Stator_holder", g("bolt_d") / 2): n, ("Stator_holder_back", g("holder_tap_d") / 2): n}
     for (body, kind), cnt in want.items():
+        if doc.getObject(body + "_Fusion") is not None:         # a Fusion holder has Fusion's features, not the template's counts
+            continue
         got = _feature_count(so[body], kind)
         if got != cnt:
             errors.append("incomplete %s: %d %s faces, Params require %d" % (
@@ -533,10 +556,7 @@ def _gate_occupancy(doc, g, exp, counts, vols):
             errors.append("body %s missing" % bn)
             continue
         s = b.Shape
-        fus = doc.getObject(bn + "_Fusion")
-        valid = (not s.isNull() and s.isValid()) or (fus is not None and not fus.SourceValid and not s.isNull()
-                                                     and all(x.isClosed() for x in s.Shells))      # a Fusion body may be exactly as invalid as its STEP
-        if s.isNull() or not valid or len(s.Solids) != 1 or s.Volume <= 0:
+        if s.isNull() or not _fusion_valid(doc, bn, s) or len(s.Solids) != 1 or s.Volume <= 0:
             errors.append("body %s: null/invalid/%d solids/volume<=0" % (bn, 0 if s.isNull() else len(s.Solids)))
             continue
         vols[bn] = s.Volume

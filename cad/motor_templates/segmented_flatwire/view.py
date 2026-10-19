@@ -244,6 +244,10 @@ def thread_face_indices(doc):
         b = doc.getObject(bn)
         if b is None:
             continue
+        fus = doc.getObject(bn + "_Fusion")
+        if fus is not None:                         # a Fusion body (A.7.7): the thread radii are measured on the Fusion part (profile.fusion_parts.thread_radii)
+            import json
+            radii = json.loads(fus.ThreadRadii or "[]")
         out[bn] = [i for i, f in enumerate(b.Shape.Faces) if f.Surface.__class__.__name__ == "Cylinder"
                    and any(abs(f.Surface.Radius - r) < 1e-6 for r in radii)]
     return out

@@ -5,7 +5,7 @@
 The stored shapes are read as saved (no recompute: a model built by FreeCAD 1.1.3 on the server is not re-evaluated by
 1.0.2 identically - coils split into fragments); FC_RECOMPUTE=1 recomputes first.  One entry per BOM-relevant object, found GENERICALLY (not from a fixed name list),
 so parts added later (phase board, pins, threads, further screws) show up without editing this script:
-  * every PartDesign::Body that is not a feature of another body,
+  * every PartDesign::Body that is not a feature of another body (an imported Fusion solid, the BaseFeature of its body, is part of that body),
   * every App::Link (placed copy: back bearing, back ring),
   * every Draft array / Part feature with solids that is not inside a body (Coils, MagnetArray, Balls, Screws, imports),
 and the Params sheet (alias -> value, mm / deg).  Per entry: label, type, parent App::Part, linked object, solid count,
@@ -25,6 +25,11 @@ SKIP = ("Sketcher::", "Spreadsheet::", "App::Origin", "App::Plane", "App::Line",
 
 def in_body(o):
     return any(p.TypeId == "PartDesign::Body" and o in getattr(p, "Group", []) for p in o.InList)
+
+
+def is_base_feature(o):
+    """The imported Fusion solid (`<part>_Fusion`, template A.7.6 / A.7.7) is the BaseFeature of its body: part of that body, not a part of its own."""
+    return any(p.TypeId == "PartDesign::Body" and getattr(p, "BaseFeature", None) == o for p in o.InList)
 
 
 def parent_part(o):
@@ -62,7 +67,7 @@ def main():
         doc.recompute()
     entries = []
     for o in doc.Objects:
-        if o.TypeId.startswith(SKIP) or not hasattr(o, "Shape"):
+        if o.TypeId.startswith(SKIP) or not hasattr(o, "Shape") or is_base_feature(o):
             continue
         if o.TypeId == "PartDesign::Body" or o.TypeId == "App::Link" or not in_body(o):
             if o.TypeId.startswith("PartDesign::") and o.TypeId != "PartDesign::Body":

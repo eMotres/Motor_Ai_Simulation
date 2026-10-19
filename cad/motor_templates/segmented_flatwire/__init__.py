@@ -27,6 +27,11 @@ A.7.6 (2026-10-19): CIANO28 150_35: the four aluminium parts (Shaft, Shaft_rear,
 (profile.fusion_parts: read-only Fusion STEP of each part, imported once as the BaseFeature of the same body) instead of the volume-equivalent
 rings, whose partial rings were sector sets with gaps (windows, hairline slits, notched rims) that the Fusion design does not have (owner
 2026-10-19: no gaps anywhere, Fusion is the truth). Profiles without fusion_parts, and every CIANO14 40 / 50 and CIANO28 85 build, are unchanged.
+A.7.7 (2026-10-19): CIANO14 40: Shaft, Prop_fix, Stator_holder and Stator_holder_back of the die "CIANO14 40 new" are the REAL Fusion v19 bodies
+(profile.fusion_parts of cad/reference/CIANO14_40_12.json, STEP files in the private data repository; owner: "everything in production comes ONLY from
+Fusion"). The same mechanism as A.7.6 now serves the standard mechanics (fusion_parts.py): rigid parts shift with motor_length, the Shaft is stretched by
+a cut-and-shift in its constant dia 9.9 rotor-seat section (L20 = L12 + 8 mm). The template shaft differed from Fusion (bore bottom, flange dia 15.9 instead
+of 13.9, thread section dia 4.95 instead of 4.901) and so did the Prop_fix hole (4.99 vs 4.901). Other dies and the other mechanics are unchanged.
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.7.6"
+TEMPLATE_VERSION = "A.7.7"

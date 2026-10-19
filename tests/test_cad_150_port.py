@@ -27,9 +27,9 @@ def ref():
     return pj, rows, vals
 
 
-def test_template_version_is_a76():                      # A.7.6: the 150 holders are the real Fusion bodies (no gapped rings)
+def test_template_version_has_the_150_fusion_bodies():  # A.7.6 (150 holders are the real Fusion bodies, no gapped rings); A.7.7 added the CIANO14 40 parts
     src = open(os.path.join(TPL, "__init__.py"), encoding="utf-8").read()
-    assert 'TEMPLATE_VERSION = "A.7.6"' in src
+    assert 'TEMPLATE_VERSION = "A.7.7"' in src and "A.7.6 (2026-10-19)" in src
 
 
 def test_reference_is_found_for_the_die():
@@ -105,8 +105,9 @@ def test_the_holders_are_the_fusion_bodies_not_gapped_rings(ref):
 
 
 def test_the_fusion_part_import_has_no_silent_fallback():
-    src = open(os.path.join(TPL, "mechanics_occupancy.py"), encoding="utf-8").read()
+    src = open(os.path.join(TPL, "fusion_parts.py"), encoding="utf-8").read()          # the import moved here in A.7.7 (shared with the CIANO14 40)
     assert "not found" in src and "raise RuntimeError" in src and "fusion_parts" in src
+    assert "import_fusion_part" in open(os.path.join(TPL, "mechanics_occupancy.py"), encoding="utf-8").read()
 
 
 def test_the_occupancy_rows_are_declared_info_only_where_python_reads_them(ref):

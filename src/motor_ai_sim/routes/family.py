@@ -819,8 +819,8 @@ def die_config_names(die: str) -> list[str]:
 
 def _load_yaml(p: Path, what: str) -> dict:
     try:
-        with open(p, encoding="utf-8") as f:
-            d = yaml.safe_load(f) or {}
+        from motor_ai_sim import fscache as _fsc     # parsed once per version of the file, a fresh copy each
+        d = _fsc.read_yaml(p) or {}
         if not isinstance(d, dict):
             raise ValueError("not a mapping")
         return d

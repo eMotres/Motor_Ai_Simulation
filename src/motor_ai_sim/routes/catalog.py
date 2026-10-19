@@ -7,15 +7,16 @@ the presets service.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header, HTTPException, Query
 
 import logging
 import threading
 
 from motor_ai_sim.auth import caller_identity as _caller_identity
 from motor_ai_sim.json_store import mutate_json as _mutate_json, read_json as _read_json
+from motor_ai_sim.fscache import read_yaml as _fsc_read_yaml
 
 log = logging.getLogger(__name__)
 
@@ -350,9 +351,10 @@ def _passport_copper_mass(card: Optional[dict], passport: dict) -> Optional[floa
         ddir = _mm.find_die_dir(str(card["die"]))
         if ddir is None:
             return None
-        dy = yaml.safe_load((ddir / "die.yaml").read_text(encoding="utf-8")) or {}
+        from motor_ai_sim import fscache as _fsc
+        dy = _fsc.read_yaml(ddir / "die.yaml") or {}
         cy_path = ddir / f"{card['config']}.yaml"
-        cy = yaml.safe_load(cy_path.read_text(encoding="utf-8")) or {}
+        cy = _fsc.read_yaml(cy_path) or {}
         geo = dict(dy.get("geometry") or {})
         geo.update(cy.get("geometry_overrides") or {})
         for key, val in (("motor_length", passport.get("L0_mm")),
@@ -646,7 +648,7 @@ def _family_doc_of_motor(motor: dict,
                   for q in sorted(Path(str(e["dir"])).glob("*.yaml"))]:
             if f.name == "die.yaml":
                 continue
-            d = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            d = _fsc_read_yaml(f) or {}
             if f"{d.get('die')} {d.get('name')}".casefold() == name:
                 return d
             by_die.setdefault(str(d.get("die") or "").casefold(), []).append(d)
@@ -694,7 +696,7 @@ def _role_of_motor(motor: dict) -> Optional[str]:
                   for q in sorted(Path(str(e["dir"])).glob("*.yaml"))]:
             if f.name == "die.yaml":
                 continue
-            d = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+            d = _fsc_read_yaml(f) or {}
             if f"{d.get('die')} {d.get('name')}".casefold() == name:
                 r = str(d.get("role") or "").strip().lower()
                 return r if r in ("motor", "generator") else None
@@ -995,7 +997,7 @@ def _die_docs_of(fam: Optional[dict]) -> tuple:
                 continue
             d = Path(str(e["dir"]))
             try:
-                dy = _yaml.safe_load((d / "die.yaml").read_text(encoding="utf-8")) or {}
+                dy = _fsc_read_yaml(d / "die.yaml") or {}
             except Exception:                                   # noqa: BLE001
                 dy = {}
             docs = []
@@ -1007,7 +1009,7 @@ def _die_docs_of(fam: Optional[dict]) -> tuple:
                 if not _ma.may_see_config_file(_acc, str(e.get("name") or die), f.stem, f,
                                                layer=e.get("layer")):
                     continue         # a hidden sibling configuration is not part of this die for the caller
-                c = _yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+                c = _fsc_read_yaml(f) or {}
                 if isinstance(c, dict) and c.get("name"):
                     c.setdefault("die", die)
                     docs.append(c)
@@ -1023,16 +1025,33 @@ def get_configure_context(motor_id: str,
     """What Configure's sliders need to know about ONE machine: the hand-set
     stack-length maximum, the inverter's phase-current ceiling, the pack and the
     modulation index.  Read-only; open to every caller who can read the card
-    (the numbers are limits, not data of the owner's)."""
-    from motor_ai_sim import configure_limits as _cl
+    (the numbers are limits, not data of the owner's).
+
+    STORED (``answer_store``): built once per version of its inputs (``_configure_stamp``) and read back after
+    that - the caller check (``_configure_motor``) runs on every request."""
+    from motor_ai_sim import answer_store as _as
+    return _as.json_response(configure_context_answer(motor_id, authorization))
+
+
+def configure_context_answer(motor_id: str, authorization: Optional[str] = None) -> Dict[str, Any]:
+    """The stored context as a dict (the route sends it to the wire; the warm-up and tests read it)."""
+    motor, src = _configure_motor(motor_id, authorization)
+    from motor_ai_sim import answer_store as _as
+    return _as.get_or_compute("configure_context", {"motor": motor_id, "src": str(src)}, _configure_stamp(src),
+                              lambda: _configure_context_of(motor_id, motor), persist=_shared_source(src))
+
+
+def _configure_motor(motor_id: str, authorization: Optional[str]) -> tuple:
+    """``(card, catalogue file it came from)`` of a motor the caller may read; 404 otherwise."""
     # The Configure picker may have received this card from the shared catalog
     # while the caller's workspace has its own unrelated catalog. Resolve in
     # the same workspace-first source order as references, keeping local cards
     # authoritative when IDs collide.
+    loaded_path = _read_path()
     current = _load()
     motor = next((m for m in current.get("motors", []) if m.get("id") == motor_id), None)
+    src = loaded_path
     if motor is None:
-        loaded_path = _read_path()
         for path in _reference_catalog_paths():
             if path == loaded_path:
                 continue
@@ -1040,6 +1059,7 @@ def get_configure_context(motor_id: str,
             motor = next((m for m in other.get("motors", [])
                           if m.get("id") == motor_id), None)
             if motor is not None:
+                src = path
                 break
 
     from motor_ai_sim.auth import caller_identity as _cid
@@ -1053,6 +1073,59 @@ def get_configure_context(motor_id: str,
         # 404 for a motor the account was not granted: the same answer as one
         # that does not exist, so the id is not an oracle.
         raise HTTPException(status_code=404, detail=f"motor '{motor_id}' not found")
+    return motor, src
+
+
+def _shared_source(src: Any) -> bool:
+    """A card read from the SHARED catalogue may have its answers stored in the shared layer; a card of the
+    caller's own workspace (private data) is never written there - its answers stay in this process."""
+    try:
+        from motor_ai_sim.workspace import shared_root
+        return Path(str(src)).resolve() == (Path(str(shared_root())) / "motor_catalog.json").resolve()
+    except Exception:                                           # noqa: BLE001
+        return False
+
+
+#: the code a stored Configure answer is computed by: a deploy that changes it invalidates every stored answer
+_CONFIGURE_CODE = ("routes/catalog.py", "configure_limits.py", "configure_load.py", "configure_anchor.py",
+                   "propeller_s1.py", "propeller.py", "cooling_options.py", "passport_store.py", "duty_class.py",
+                   "duty_results.py", "applications.py", "routes/propellers.py")
+
+
+def _configure_stamp(src: Any = None) -> str:
+    """The cheap input hash of every stored Configure answer: the catalogue files, every die's configuration
+    files, the passport store, the duty results, the cooling registry, the propeller cards, the S1 models, the
+    material cards, the tombstones and the code - file versions only (stat calls, no parsing)."""
+    from motor_ai_sim import fscache as _fsc
+    paths: list = [src] if src else []
+    dirs: list = []
+    try:
+        from motor_ai_sim.workspace import iter_dies as _iter_dies, shared_root
+        from motor_ai_sim import duty_results as _dres
+        for e in _iter_dies():
+            d = Path(str(e["dir"]))
+            paths += sorted(d.glob("*.yaml"))
+            paths += _dres.store_paths(str(e.get("die") or e.get("name") or ""))
+        sr = Path(str(shared_root()))
+        paths += [sr / "cooling_options.yaml", sr / "materials_library.yaml"]
+    except Exception:                                           # noqa: BLE001
+        log.debug("configure stamp: dies unavailable", exc_info=True)
+    try:
+        from motor_ai_sim import cooling_options as _co, passport_store as _ps, propeller as _pp
+        from motor_ai_sim import propeller_s1 as _s1
+        from motor_ai_sim.workspace import _tombstones_file
+        paths += [_co._FILE, _tombstones_file()]
+        dirs += [_ps.store_dir(), *_pp.catalog_dirs(), *_s1.model_dirs()]
+    except Exception:                                           # noqa: BLE001
+        log.debug("configure stamp: stores unavailable", exc_info=True)
+    src = Path(__file__).resolve().parents[1]
+    paths += [src / f for f in _CONFIGURE_CODE]
+    return _fsc.stamp_of(sorted({str(x) for x in paths}), dirs, salt="configure-1")
+
+
+def _configure_context_of(motor_id: str, motor: dict) -> Dict[str, Any]:
+    """The context of one machine (no caller check - ``get_configure_context`` does it)."""
+    from motor_ai_sim import configure_limits as _cl
     # Several configurations can share one die name ("CIANO14 40 new": L12, L20), and a
     # card carries no geometry of its own — the passport's base stack length is what
     # tells them apart.
@@ -1065,14 +1138,184 @@ def get_configure_context(motor_id: str,
     docs, die_geo = _die_docs_of(fam)
     presets = _cl.presets_for_die(
         docs, die_geo, lambda die, cfg: _ps.variants_for(f"{die} {cfg}", None))
+    ctx = {"motor_id": motor_id,
+           **_cl.context(motor, fam),
+           # one preset per configuration of the die, read from the machines themselves
+           "presets": presets}
+    s1_die = str(((ctx.get("cooling") or {}) if isinstance(ctx.get("cooling"), dict) else {}).get("die") or "")
     for pr in presets:
         # does this configuration have a FULL passport card (v1 record)?
         pr["card_date"] = _ps.card_date(str(pr.get("die") or ""), str(pr.get("config") or ""))
         _mark_duty_classes(pr, docs)
-    return {"motor_id": motor_id,
-            **_cl.context(motor, fam),
-            # one preset per configuration of the die, read from the machines themselves
-            "presets": presets}
+        _drive_the_s1_model_carries(pr, s1_die)
+    return ctx
+
+
+def _drive_the_s1_model_carries(pr: dict, s1_die: str) -> None:
+    """A default load never opens on a drive the configuration's S1 model does not carry (owner 2026-10-19: 50 L15
+    opened on si_48k, whose S1 answer is a 422 - an empty load chart).  The preset then opens on Sine and says
+    which drive it set aside (``drive_variant_unmodelled``); the drive stays selectable by hand."""
+    dv = pr.get("drive_variant")
+    if not dv or not s1_die:
+        return
+    try:
+        from motor_ai_sim import propeller_s1 as _s1
+        model = _s1.load_model(s1_die, str(pr.get("config") or ""))
+    except Exception:                                           # noqa: BLE001 - no S1 model: nothing to agree with
+        return
+    if dv not in (model.get("drives") or {}):
+        pr["drive_variant_unmodelled"] = dv
+        pr["drive_variant"] = None
+
+
+@router.get("/{motor_id}/configure_load")
+def get_configure_load(motor_id: str,
+                       config: str = Query(..., min_length=1, max_length=100),
+                       duty: Optional[str] = Query(default=None, max_length=100,
+                                                   description="the duty to open on; default rated"),
+                       ambient_c: float = Query(default=25.0, ge=-60.0, le=80.0),
+                       propeller: Optional[str] = Query(default=None, max_length=200,
+                                                        description="the viewer's propeller; default the configuration's"),
+                       housing_d_mm: Optional[float] = Query(default=None, gt=0.0, le=2000.0),
+                       drive: Optional[str] = Query(default=None, max_length=100,
+                                                    description="S1 drive; default the preset's own (its first PWM variant, else sine)"),
+                       pack_v_min: Optional[float] = Query(default=None, gt=0.0, le=2000.0),
+                       pack_v_max: Optional[float] = Query(default=None, gt=0.0, le=2000.0),
+                       series_rpm_max: float = Query(default=40000.0, gt=0.0, le=60000.0),
+                       series_n: int = Query(default=321, ge=3, le=400),
+                       authorization: Optional[str] = Header(default=None)):
+    """ONE Configure load (``motor_ai_sim.configure_load``): the context, the target
+    configuration + duty, and - when the machine is propeller-cooled - the propeller it opens
+    on, its rpm series with the housing film h and its motor S1 limit for the preset's drive
+    and pack, in one answer, so the page renders the loaded point once.  The parts are the
+    existing routes' own answers; a part that cannot be computed is ``null`` with its reason.
+
+    STORED (owner 2026-10-19: "it must already be ready"): the whole answer is built once per version of its
+    inputs (``_configure_stamp``) and kept (``answer_store``; the warm-up process builds the default loads of the
+    public machines ahead of any request).  The caller check runs on every request, and the signed-in-only parts
+    (the S1 limit and model, the duty anchor) are stripped for a caller who may not see them."""
+    from motor_ai_sim import answer_store as _as
+    return _as.json_response(configure_load_answer(
+        motor_id, authorization, config=config, duty=duty, ambient_c=ambient_c, propeller=propeller,
+        housing_d_mm=housing_d_mm, drive=drive, pack_v_min=pack_v_min, pack_v_max=pack_v_max,
+        series_rpm_max=series_rpm_max, series_n=series_n))
+
+
+def configure_load_answer(motor_id: str, authorization: Optional[str] = None, **params: Any) -> Dict[str, Any]:
+    """The stored load as THIS caller may see it, as a dict (the route sends it to the wire; the warm-up reads it)."""
+    motor, src = _configure_motor(motor_id, authorization)
+    from motor_ai_sim import answer_store as _as
+    keyp = {k: (round(float(v), 6) if isinstance(v, float) else v) for k, v in params.items()}
+    full = _as.get_or_compute("configure_load", {"motor": motor_id, "src": str(src), **keyp}, _configure_stamp(src),
+                              lambda: _configure_load_full(motor_id, motor, src, **params), persist=_shared_source(src))
+    return _gate_configure_load(full, authorization)
+
+
+def _gate_configure_load(full: Dict[str, Any], authorization: Optional[str]) -> Dict[str, Any]:
+    """The stored answer as THIS caller may see it: the S1 limit / model and the duty anchor only for a signed-in
+    caller who may see the configuration (the /s1 rule)."""
+    from motor_ai_sim import motor_access as _ma
+    gate = full.get("_gate") or {}
+    out = {k: v for k, v in full.items() if k != "_gate"}
+    acc = _ma.catalog_access(authorization)
+    signed = acc.get("mode") != _ma.MODE_ANONYMOUS
+    cfg = str(out.get("config") or "")
+    if not (signed and gate.get("s1_die") and _ma.may_see_config(acc, str(gate["s1_die"]), cfg)):
+        out["thermal_model"] = None
+        if isinstance(out.get("propeller"), dict):
+            pr = dict(out["propeller"])
+            if pr.get("s1") is not None or pr.get("s1_error"):
+                pr["s1"], pr["s1_error"] = None, "Sign in required."
+            out["propeller"] = pr
+    if not (signed and gate.get("anchor_die") is not None and _ma.may_see_config(acc, str(gate["anchor_die"]), cfg)):
+        out["thermal_anchor"] = None
+    return out
+
+
+def _configure_load_full(motor_id: str, motor: dict, src: Any = None, *, config: str, duty: Optional[str], ambient_c: float,
+                         propeller: Optional[str], housing_d_mm: Optional[float], drive: Optional[str],
+                         pack_v_min: Optional[float], pack_v_max: Optional[float], series_rpm_max: float,
+                         series_n: int) -> Dict[str, Any]:
+    """The whole answer, every part computed (no caller gate: ``_gate_configure_load`` applies it on serving)."""
+    from motor_ai_sim import answer_store as _as
+    from motor_ai_sim import configure_load as _ld
+    from motor_ai_sim import propeller as _pp
+    from motor_ai_sim.routes import propellers as _prop_routes
+    ctx = _as.get_or_compute("configure_context", {"motor": motor_id, "src": str(src)}, _configure_stamp(src),
+                             lambda: _configure_context_of(motor_id, motor), persist=_shared_source(src))
+    preset = next((p for p in ctx.get("presets") or [] if p.get("config") == config), None)
+    if preset is None:
+        raise HTTPException(status_code=404, detail=f"motor '{motor_id}' has no configuration '{config}'")
+    mode = _ld.pick_mode(preset, duty)
+    die0 = str(preset.get("die") or "")
+    out: Dict[str, Any] = {"motor_id": motor_id, "context": ctx, "config": config,
+                           "duty": (mode or {}).get("name") or preset.get("duty"),
+                           "propeller": None, "thermal_model": None, "thermal_anchor": None,
+                           "_gate": {"s1_die": None, "anchor_die": die0}}
+    # The duty's coupled FEM record anchors the page's lumped network wherever no calibrated S1 network
+    # applies (still air / robotics, typed air): motor_ai_sim.configure_anchor.  Gated on serving.
+    try:
+        from motor_ai_sim import configure_anchor as _anc
+        from motor_ai_sim import duty_results as _dres
+        if out["duty"]:
+            out["thermal_anchor"] = _anc.anchor_from_record(
+                str(out["duty"]), (_dres.get(die0, config) or {}).get(str(out["duty"])))
+    except Exception:                                           # noqa: BLE001
+        log.debug("configure_load: no thermal anchor", exc_info=True)
+    cooling = ctx.get("cooling") if isinstance(ctx.get("cooling"), dict) else {}
+    try:
+        catalog = _pp.load_catalog()
+    except Exception:                                           # noqa: BLE001
+        catalog = {}
+    pid = _ld.pick_propeller(cooling, config, propeller, catalog)
+    if not pid:
+        return out
+    housing = housing_d_mm          # the page's housing diameter (its film h uses the same)
+    pack = ({"min": pack_v_min, "max": pack_v_max} if pack_v_min and pack_v_max
+            else _ld.preset_pack(preset))
+    # THE thermal model of this configuration (its S1 model: passport losses + the calibrated network,
+    # owner 2026-10-19 "one model only"): the page evaluates it for every knob position itself, and the
+    # air over the housing is the model's own (its fitted slipstream factor), so the series below, the S1
+    # limit and the tiles all see the same air.  Gated on serving like /s1.
+    thermal_model = None
+    available = ["sine"]
+    if cooling.get("die"):
+        from motor_ai_sim import propeller_s1 as _s1
+        out["_gate"]["s1_die"] = str(cooling["die"])
+        try:
+            model = _s1.load_model(str(cooling["die"]), config)
+            thermal_model = _s1.configure_thermal_model(model)
+            available += sorted((model.get("drives") or {}).keys())
+        except (_s1.S1ModelNotFound, _s1.S1Error):
+            thermal_model = None
+    out["thermal_model"] = thermal_model
+    # the S1 drive: the one asked for, else the preset's own - only one the S1 model carries, else Sine
+    wanted = drive or preset.get("drive_variant") or preset.get("drive_variant_unmodelled") or "sine"
+    s1_drive = wanted if wanted in available else "sine"
+    factor = (thermal_model or {}).get("slipstream_factor")
+    prop_out: Dict[str, Any] = {"id": pid, "ambient_c": ambient_c, "housing_d_mm": housing,
+                                "series_rpm_max": series_rpm_max, "series_n": series_n,
+                                "slipstream_factor": factor,
+                                "die": cooling.get("die"), "config": config,
+                                "drive": s1_drive, "drive_wanted": wanted, "drives_available": available,
+                                "pack": pack,
+                                "series": None, "series_error": None, "s1": None, "s1_error": None}
+    try:
+        prop_out["series"] = _prop_routes.get_series(
+            pid, rpm_max=series_rpm_max, n=series_n, temp_c=ambient_c, altitude_m=0.0,
+            pressure_pa=None, position=None, factor=factor, housing_d_mm=housing)
+    except HTTPException as exc:
+        prop_out["series_error"] = str(exc.detail)
+    if cooling.get("die"):
+        try:
+            prop_out["s1"] = _prop_routes.s1_answer(
+                pid, str(cooling["die"]), config, ambient_c=ambient_c, altitude_m=0.0,
+                position=None, factor=None, n=41, drive=s1_drive,
+                pack_v_min=pack["min"] if pack else None, pack_v_max=pack["max"] if pack else None)
+        except HTTPException as exc:
+            prop_out["s1_error"] = str(exc.detail)
+    out["propeller"] = prop_out
+    return out
 
 
 def _mark_duty_classes(pr: dict, docs: list) -> None:

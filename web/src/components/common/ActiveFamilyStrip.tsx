@@ -985,7 +985,7 @@ const ActiveFamilyStrip: React.FC = () => {
                            border: '1px solid var(--line-soft)', borderRadius: 4, padding: '0 2px' }}>
                   {(modes.includes(ctx.duty) ? modes : [ctx.duty, ...modes]).map((m) => (
                     <option key={m} value={m}>
-                      {isShortTime(ctx.duty_classes?.[m]) ? `${m} — short-time` : m}
+                      {m.trim().toLowerCase() !== 'rated' && isShortTime(ctx.duty_classes?.[m]) ? `${m} — short-time` : m}
                     </option>
                   ))}
                   <option value="__new__">{'＋ new mode'}</option>
@@ -993,7 +993,7 @@ const ActiveFamilyStrip: React.FC = () => {
               </Tooltip></> : null}
             {/* SHORT-TIME (owner 2026-10-19): the loaded duty cannot be held
                 for ever — say for how long it runs, wherever it is named. */}
-            {ctx.duty && isShortTime(ctx.duty_classes?.[ctx.duty]) ? (
+            {ctx.duty && ctx.duty.trim().toLowerCase() !== 'rated' && isShortTime(ctx.duty_classes?.[ctx.duty]) ? (
               <span style={{ marginLeft: 6, fontSize: 11, color: '#f59e0b' }}>
                 {ctx.duty_classes?.[ctx.duty]?.short_time?.words
                   ?? dutyLabel(ctx.duty, ctx.duty_classes?.[ctx.duty])}

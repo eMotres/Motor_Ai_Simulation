@@ -54,7 +54,8 @@ PROPELLER_AIR = "propeller_air"
 
 def _read(path: Path) -> Dict[str, Any]:
     try:
-        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        from motor_ai_sim import fscache as _fsc
+        raw = _fsc.read_yaml(path) or {}
     except Exception as exc:                                # noqa: BLE001
         log.warning("cooling options: %s is unreadable: %s", path, exc)
         return {}

@@ -277,6 +277,45 @@ export function readVariant(v: PwmVariant, rpm: number, I: number):
   return { ok: true, values: out, exact };
 }
 
+/**
+ * The variant at (rpm, I), never refused for being outside its computed points (owner 2026-10-19: "never refuse the
+ * default load"): inside the envelope it is `readVariant`; outside it (or in a gap) the reading is taken at the nearest
+ * computed point - the envelope edge, else the nearest point - its motor PWM extra loss kept (the delta over the sine
+ * losses), the bridge's current-driven losses scaled to the actual current (conduction and board copper with I^2,
+ * switching and dead time with I).  `near` names the point read, for one tooltip line.  Only a variant with no
+ * computed point at all is refused.
+ */
+export function readVariantNear(v: PwmVariant, rpm: number, I: number):
+  { ok: true; values: VariantReading; exact: boolean; near?: { rpm: number; I: number } } | { ok: false; refusal: VariantRefusal } {
+  const r = readVariant(v, rpm, I);
+  if (r.ok || r.refusal.kind === 'no_coords') return r;
+  const env = variantEnvelope(v);
+  const pts = variantPoints(v);
+  if (!env || !pts.length) return r;
+  let at = { rpm: Math.min(env.rpmMax, Math.max(env.rpmMin, rpm)), I: Math.min(env.iMax, Math.max(env.iMin, I)) };
+  let base: VariantReading | null = null;
+  const edge = readVariant(v, at.rpm, at.I);
+  if (edge.ok) base = edge.values;
+  else {
+    const dr = Math.max(1e-9, env.rpmMax - env.rpmMin), di = Math.max(1e-9, env.iMax - env.iMin);
+    const q = pts.reduce((b, x) => (Math.hypot((x.rpm - rpm) / dr, (x.I - I) / di)
+      < Math.hypot((b.rpm - rpm) / dr, (b.I - I) / di) ? x : b));
+    at = { rpm: q.rpm, I: q.I };
+    base = readingOf(q.p);
+  }
+  const s = at.I > 0 ? Math.max(0, I) / at.I : 1;
+  const sc = (x: number | null, p: number) => (x == null ? null : x * s ** p);
+  const cond = sc(base.inv_cond_W, 2), sw = sc(base.inv_sw_W, 1), dead = sc(base.inv_dead_W, 1);
+  const values: VariantReading = {
+    ...base,
+    inv_cond_W: cond, inv_sw_W: sw, inv_dead_W: dead,
+    inv_total_W: cond != null && sw != null && dead != null ? cond + sw + dead
+      : base.inv_total_W == null ? null : base.inv_total_W * s,
+    board_copper_W: sc(base.board_copper_W, 2),
+  };
+  return { ok: true, values, exact: false, near: at };
+}
+
 /** True when a build knob moved off the machine as loaded.  The variants were
  *  computed for the loaded build; only current and speed are free. */
 export function buildTuned(k: Knobs, r: Knobs | null): boolean {

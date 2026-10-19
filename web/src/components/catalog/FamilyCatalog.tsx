@@ -50,7 +50,7 @@ import { cleanApplications, diesOfDiameter, filterDiesByApplication, type Applic
 import { beginFamilyLoad, failFamilyLoad, finishFamilyLoad, getFamilyLoad, subscribeFamilyLoad } from '../../lib/familyLoad';
 import { useLastMotorState } from '../../lib/lastMotor';
 import { catalogLossDisplay } from '../../lib/catalogLossDisplay';
-import { dutyLabel, fmtDuration, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
+import { dutyLabel, shortTimeChip, type DutyClassInfo } from '../../lib/dutyClass';
 
 // UI strings: locales/<lng>/motors.json (docs/I18N.md).
 const tx = nsT('motors');
@@ -894,15 +894,9 @@ const FamilyCatalog: React.FC<{
                       <Tooltip title={tx('defaultModeNumbersTip', { duty: cur.duty ?? '\u2014' })}>
                         <Typography component="span" sx={{ fontSize: 12, color: 'var(--text-2)', cursor: 'help',
                                                           fontVariantNumeric: 'tabular-nums' }}>
+                          {/* the rated line, plainly: rated is always the continuous maximum, never a
+                              short-time mark (owner 2026-10-19) */}
                           {cur.duty ? `${cur.duty}: ` : ''}{fmt(cur.power_kw, 2)} kW · {fmt(cur.torque_nm, 2)} Nm · {fmt(cur.mass_kg, 2)} kg{cur.mass_partial ? ` (${tx('massPartialShort')})` : ''}
-                          {/* SHORT-TIME (owner 2026-10-19): no continuous mode to show
-                              in its place, so the card says it is not a rating. */}
-                          {cur.short_time && (
-                            <span style={{ color: '#f59e0b', marginLeft: 6 }}>
-                              {cur.short_time_s != null
-                                ? `short-time ${fmtDuration(cur.short_time_s)}` : 'short-time'}
-                            </span>
-                          )}
                         </Typography>
                       </Tooltip>
                       {/* no load arrow here (owner 2026-10-15): the configuration buttons load the motor */}
@@ -1266,8 +1260,9 @@ const FamilyCatalog: React.FC<{
                               <span style={{ color: roleColor(d.mode), fontWeight: 600,
                                              cursor: 'help' }}>
                                 {staleRes ? '⚠ ' : ''}{d.name}{(c.default_duty ?? null) === d.name ? ' ★' : ''}
-                                {/* SHORT-TIME (owner 2026-10-19): never read as a rating. */}
-                                {shortTimeChip(d) && (
+                                {/* SHORT-TIME (owner 2026-10-19): a mark for peak and the other modes;
+                                    rated is always continuous and never carries it. */}
+                                {d.name.trim().toLowerCase() !== 'rated' && shortTimeChip(d) && (
                                   <Tooltip title={dutyLabel(d.name, d)}>
                                     <span style={{ color: '#f59e0b', fontWeight: 400,
                                                    fontSize: 10, marginLeft: 6 }}>

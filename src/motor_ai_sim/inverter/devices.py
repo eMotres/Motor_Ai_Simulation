@@ -157,7 +157,8 @@ def _read(path: Path) -> Dict[str, Any]:
         if hit and hit[0] == mtime:
             return hit[1]
         with path.open("r", encoding="utf-8") as fh:
-            doc = yaml.safe_load(fh) or {}
+            # libyaml when present: the catalogue's first read was ~1 s of pure-Python parsing (2026-10-19)
+            doc = yaml.load(fh, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader)) or {}
         if not isinstance(doc, dict):
             raise CardError(f"device card {path.name!r} is not a mapping")
         _CACHE[str(path)] = (mtime, doc)

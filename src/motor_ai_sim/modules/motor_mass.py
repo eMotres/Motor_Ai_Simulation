@@ -29,6 +29,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
+from motor_ai_sim.fscache import read_yaml as _fsc_read_yaml
+
 log = logging.getLogger(__name__)
 
 #: compute_masses key -> (card part name, assignment key, role)
@@ -111,7 +113,7 @@ def find_die_dir(die: str, dies_dir: Optional[os.PathLike] = None) -> Optional[P
 
 def _default_config_doc() -> dict:
     from motor_ai_sim.simulation.geometry_2d import _cfg_path
-    return yaml.safe_load(Path(_cfg_path()).read_text(encoding="utf-8")) or {}
+    return _fsc_read_yaml(Path(_cfg_path())) or {}
 
 
 _CACHE: Dict[Tuple[str, str, float, float], MotorMass] = {}
@@ -130,8 +132,8 @@ def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
     with _LOCK:
         if key in _CACHE:
             return _CACHE[key]
-    dy = yaml.safe_load(dfile.read_text(encoding="utf-8")) or {}
-    cy = yaml.safe_load(cfile.read_text(encoding="utf-8")) or {}
+    dy = _fsc_read_yaml(dfile) or {}
+    cy = _fsc_read_yaml(cfile) or {}
     geo = dict(dy.get("geometry") or {})
     geo.update(cy.get("geometry_overrides") or {})
     cfg_doc = _default_config_doc()
@@ -217,7 +219,7 @@ def config_cad_variant(ddir: Optional[os.PathLike], config: str) -> str:
     if ddir is None:
         return "full"
     try:
-        cy = yaml.safe_load((Path(ddir) / f"{config}.yaml").read_text(encoding="utf-8")) or {}
+        cy = _fsc_read_yaml(Path(ddir) / f"{config}.yaml") or {}
     except Exception:                                                      # noqa: BLE001
         return "full"
     v = str(cy.get("cad_variant") or "full").strip().lower()
@@ -351,7 +353,7 @@ def die_part_choices(die_dir: Optional[os.PathLike]) -> Dict[str, str]:
         return {}
     f = Path(die_dir) / "die.yaml"
     try:
-        doc = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
+        doc = _fsc_read_yaml(f) or {}
     except Exception:                                                      # noqa: BLE001
         return {}
     pm = doc.get("part_materials") or {}
@@ -455,7 +457,7 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
         return _FULL_CACHE[key]
     app = {p.key: p for p in mm.parts}
     try:
-        cy = yaml.safe_load((ddir / f"{config}.yaml").read_text(encoding="utf-8")) or {}
+        cy = _fsc_read_yaml((ddir / f"{config}.yaml")) or {}
     except Exception:                                                      # noqa: BLE001
         cy = {}
     em_mats = cy.get("materials") or {}
@@ -626,7 +628,7 @@ def bom_extra_parts(die: str, config: str, *, cad_dir: Optional[os.PathLike] = N
 def config_bearing_cards(die_dir: Path, config: str) -> List[str]:
     """Bearing cards named by the configuration (its mechanical description when no CAD BOM exists)."""
     try:
-        cy = yaml.safe_load((die_dir / f"{config}.yaml").read_text(encoding="utf-8")) or {}
+        cy = _fsc_read_yaml((die_dir / f"{config}.yaml")) or {}
     except Exception:                                                      # noqa: BLE001
         return []
     br = cy.get("bearings") or {}
@@ -646,7 +648,7 @@ def full_part_list(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
     choices = die_part_choices(ddir)
     rows: List[MotorPart] = list(fm.parts)
     try:
-        cy = yaml.safe_load((ddir / f"{config}.yaml").read_text(encoding="utf-8")) or {}
+        cy = _fsc_read_yaml((ddir / f"{config}.yaml")) or {}
     except Exception:                                                      # noqa: BLE001
         cy = {}
     have = {p.key for p in rows}

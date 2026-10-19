@@ -24,6 +24,14 @@ their time, KV, Kt, mass, battery, application and allowed propellers, whether a
 3-D model exists, and that the 40 mm motor is in production.  NEVER a cost, a
 supplier, stock, an internal note or anything about an unpublished patent.
 
+WHERE IT READS FROM.  The block is about the vendor's SHARED catalog, so the tree is read in a
+NEUTRAL workspace (``_neutral_workspace``): in a request the bound workspace is the caller's own - for
+a visitor the server's process workspace, which holds the owner's working copies of the dies - and a
+copy there shadows the shared die of the same name, which then comes back as layer ``workspace`` and
+is not a published motor (live 2026-10-19: the baseline die CIANO14 40 new vanished for a visitor).
+It also builds NO geometry: the tree is asked without the full-mass overlay (that builds every
+machine's 2-D geometry), and the full mass is memoised per build instead.
+
 Cached a few minutes per access shape; the tree underneath has its own memo.
 """
 from __future__ import annotations
@@ -189,13 +197,15 @@ def _kv_kt(rated: Dict[str, Any]) -> Optional[str]:
                   f"Kt {kt} N·m/A rms (T/I at the rated point)" if kt else None], ", ") or None
 
 
-def _mass(c: Dict[str, Any], rated: Dict[str, Any]) -> Optional[str]:
-    m = c.get("mass") if isinstance(c.get("mass"), dict) else {}
+def _mass(c: Dict[str, Any], rated: Dict[str, Any], mass: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    m = mass if isinstance(mass, dict) else (c.get("mass") if isinstance(c.get("mass"), dict) else {})
     r = rated.get("result") if isinstance(rated.get("result"), dict) else {}
-    kg = _n(m.get("full_kg"), 3) or _n(r.get("mass_kg"), 3)
+    kg = _n(m.get("full_kg"), 3)
+    partial = bool(m.get("partial", False))
+    if not kg:                                   # no full-mass summary: the saved run's active mass, said so
+        kg, partial = _n(r.get("mass_kg"), 3), True
     if not kg:
         return None
-    partial = bool(m.get("partial", r.get("mass_partial", False)))
     return f"mass {kg} kg" + (" (active parts only, the full assembly is not built yet)" if partial else "")
 
 
@@ -242,7 +252,8 @@ def _propellers_text(cool: Optional[Dict[str, Any]]) -> Optional[str]:
 
 def render_config(die: Dict[str, Any], c: Dict[str, Any], *,
                   cooling: Optional[Dict[str, Any]] = None,
-                  model: Optional[Dict[str, Any]] = None) -> Optional[str]:
+                  model: Optional[Dict[str, Any]] = None,
+                  mass: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """The few lines for one configuration, or None when it has no duty to quote."""
     rated = _pick_rated(c)
     if rated is None:
@@ -261,7 +272,7 @@ def render_config(die: Dict[str, Any], c: Dict[str, Any], *,
                  abs(dia - d) < 0.5 for d in IN_PRODUCTION_DIAMETERS_MM) else "")]
     for ln in _rated_lines(rated) + _other_duties(c, rated):
         lines.append("  " + ln)
-    extra = _join([_kv_kt(rated), _mass(c, rated), _battery(c)], "; ")
+    extra = _join([_kv_kt(rated), _mass(c, rated, mass), _battery(c)], "; ")
     if extra:
         lines.append("  " + extra)
     use = _join([f"application: {_application(c)}" if _application(c) else None,
@@ -279,8 +290,9 @@ def _shared(dies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
 
 def render_block(dies: List[Dict[str, Any]], *, visitor: bool = False,
-                 cooling_of: Optional[Callable[[str, str], Optional[Dict[str, Any]]]] = None,
-                 model_of: Optional[Callable[[str, str], Optional[Dict[str, Any]]]] = None) -> str:
+                 cooling_of: Optional[Callable[[str, str, Any], Optional[Dict[str, Any]]]] = None,
+                 model_of: Optional[Callable[[str, str], Optional[Dict[str, Any]]]] = None,
+                 mass_of: Optional[Callable[[Dict[str, Any], Dict[str, Any]], Optional[Dict[str, Any]]]] = None) -> str:
     """The block for a tree already filtered to the caller's access (pure)."""
     parts: List[str] = []
     for d in sorted(_shared(dies), key=lambda x: (_f(x.get("stator_diameter")) or 0, str(x.get("name")))):
@@ -291,9 +303,9 @@ def render_block(dies: List[Dict[str, Any]], *, visitor: bool = False,
                 continue
             name, cfg = str(d.get("name") or ""), str(c.get("name") or "")
             try:
-                cool = cooling_of(name, cfg) if cooling_of else None
+                cool = cooling_of(name, cfg, c.get("applications")) if cooling_of else None
                 mdl = model_of(name, cfg) if model_of else None
-                text = render_config(d, c, cooling=cool, model=mdl)
+                text = render_config(d, c, cooling=cool, model=mdl, mass=mass_of(d, c) if mass_of else None)
             except Exception as e:                           # noqa: BLE001 - one bad card never blanks the rest
                 logger.warning("support catalog: %s / %s skipped (%s: %s)", name, cfg, type(e).__name__, e)
                 continue
@@ -306,14 +318,77 @@ def render_block(dies: List[Dict[str, Any]], *, visitor: bool = False,
 
 # ── live data ───────────────────────────────────────────────────────────────
 
-def _cooling_of(die: str, cfg: str) -> Optional[Dict[str, Any]]:
+def _cooling_of(die: str, cfg: str, applications: Any = None) -> Optional[Dict[str, Any]]:
+    """Cooling options of one configuration.  The tree already carries its applications; handing
+    them over saves ``cooling_options`` re-reading (and re-parsing) the configuration's yaml."""
     from motor_ai_sim.cooling_options import cooling_options
-    return cooling_options(die, cfg)
+    apps = [a for a in applications if isinstance(a, str)] if isinstance(applications, (list, tuple)) else None
+    return cooling_options(die, cfg, apps)
 
 
 def _models_index() -> Dict[tuple, Dict[str, Any]]:
     from motor_ai_sim import model3d
     return {(e["die"], e["config"]): model3d.model_info(e) for e in model3d.scan()}
+
+
+_NEUTRAL_ID = "support-shared-view"
+_neutral_lock = threading.Lock()
+_neutral: Dict[tuple, Any] = {}
+
+
+def _neutral_workspace():
+    """A workspace that owns no dies: only the shared (and published) layers answer in it.
+
+    ``None`` when multi-user layering is off (a single-folder install has no "shared layer" to
+    separate - the one folder IS the catalog).  Nothing is created on disk: its root does not exist.
+    """
+    from motor_ai_sim import workspace as WS
+    if not WS.layering():
+        return None
+    shared = WS.shared_root()
+    cfg = WS.process_workspace().config_file
+    key = (str(shared), str(cfg))
+    # ONE object per (shared root, config): the workspace owns the per-workspace caches the tree
+    # and the stores fill, so a fresh object per call would start every call cold.
+    with _neutral_lock:
+        ws = _neutral.get(key)
+        if ws is None:
+            ws = _neutral[key] = WS.Workspace(id=_NEUTRAL_ID, email="", root=shared / ".support-shared-view",
+                                              shared_root=shared, config_file=cfg)
+        return ws
+
+
+_mass_lock = threading.Lock()
+_mass_memo: Dict[tuple, Optional[Dict[str, Any]]] = {}
+
+
+def _mass_of(die: Dict[str, Any], c: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """The full-mass summary of one configuration, computed once per build (geometry!) and kept.
+
+    Keyed by the die/config, the build signature (geometry, winding, materials) and the CAD BOM's
+    mtime, so a changed machine or a rebuilt BOM is re-weighed and nothing else ever is.
+    """
+    from motor_ai_sim.modules import motor_mass as MM
+    from motor_ai_sim.routes import family as fam
+    name, cfg = str(die.get("name") or ""), str(c.get("name") or "")
+    try:
+        bom = MM.find_bom_file(name, cfg)
+        stamp = bom.stat().st_mtime_ns if bom else None
+    except OSError:
+        stamp = None
+    key = (name, cfg, str(c.get("build_sig") or ""), stamp)
+    with _mass_lock:
+        if key in _mass_memo:
+            return _mass_memo[key]
+    try:
+        summ = MM.mass_summary(name, cfg, dies_dir=fam._die_dir(name).parent)
+    except Exception:                                        # noqa: BLE001 - mass is a nicety
+        summ = None
+    with _mass_lock:
+        if len(_mass_memo) > 512:
+            _mass_memo.clear()
+        _mass_memo[key] = summ
+    return summ
 
 
 def _visitor_access() -> dict:
@@ -363,13 +438,17 @@ def published_motors_block(authorization: Optional[str] = None, *, visitor: bool
             hit = _cache.get(key)
         if hit is not None and t - hit[0] < CACHE_TTL_S:
             return hit[1]
-        dies = list((fam.tree_for_access(Response(), acc) or {}).get("dies") or [])
-        try:
-            models = _models_index()
-        except Exception:                                    # noqa: BLE001
-            models = {}
-        text = render_block(dies, visitor=visitor, cooling_of=_cooling_of,
-                            model_of=lambda d, c: models.get((d, c)))
+        from contextlib import nullcontext
+        from motor_ai_sim import workspace as WS
+        neutral = _neutral_workspace()
+        with (WS.use_workspace(neutral) if neutral is not None else nullcontext()):
+            dies = list((fam.tree_for_access(Response(), acc, with_mass=False) or {}).get("dies") or [])
+            try:
+                models = _models_index()
+            except Exception:                                # noqa: BLE001
+                models = {}
+            text = render_block(dies, visitor=visitor, cooling_of=_cooling_of,
+                                model_of=lambda d, c: models.get((d, c)), mass_of=_mass_of)
         with _lock:
             if len(_cache) >= _CACHE_MAX:
                 _cache.clear()

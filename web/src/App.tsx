@@ -617,7 +617,7 @@ function App() {
     { id: 'production', label: 'Production', order: 77, gate: TAB_GATES.production, showViewer: false, keepMounted: 'visited',
       render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><ProductionTab /></Suspense> },
     // Designer (pilot 2026-10-18): the design assistant chat; shown when the server says this account may use it.
-    { id: 'designer', label: 'Designer', order: 1, gate: TAB_GATES.designer, showViewer: false,
+    { id: 'designer', label: 'Designer', order: 95, gate: TAB_GATES.designer, showViewer: false,
       render: () => <Suspense fallback={<CircularProgress size={18} sx={{ m: 2 }} />}><DesignerTab /></Suspense> },
     { id: 'admin', label: 'Admin', order: 90, panelId: 'admin', gate: TAB_GATES.admin, showViewer: false,
       render: () => <AdminPanel /> },

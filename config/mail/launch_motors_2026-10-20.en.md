@@ -8,12 +8,13 @@ You have an AeroStator account, so here is a short introduction to what AeroStat
 
 We build electric motors and generators. AeroStator is the engineering platform behind that work, and its software is open source (Apache-2.0). The catalogue combines FEM-based motor data with interactive engineering estimates, and each model shows the available results and their verification status. In **Configure** you can change motor and operating parameters and instantly explore their estimated effect on torque, losses, temperature and efficiency.
 
-Our long-term goal is to help engineers develop motors, controllers and mechanical systems together, **from an initial idea to a finished product**.
+Our long-term goal is to help engineers develop motors, controllers and mechanical systems together, **from an initial idea to a finished product**. Step by step, AeroStator will let you assemble and simulate whole machines from these components (drones, robots and vehicles), so you can see how a motor choice plays out in the complete system.
 
 ## How you can take part
 
 - **Use the motors** in your designs and tell us what is missing. The assistant on the site turns your question into a ticket.
 - **Co-develop modules** with us and other engineers, such as propellers, gearboxes and controllers. We review and integrate good work.
+- **Work with the full simulation.** If you are interested, we can open access to the FEM simulation of our motors, including the coupled electromagnetic, thermal and mechanical analysis, on your account. Just ask the assistant on the site.
 - **Bring your AI agent.** AeroStator speaks MCP (https://aerostator.com/mcp). With the appropriate account permissions and compute resources, your agent can browse the catalogue, assess motor suitability and submit simulation jobs.
 
 ## Motors you can work with now

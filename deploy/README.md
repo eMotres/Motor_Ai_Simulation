@@ -450,6 +450,25 @@ and, for the **worker**, `cpuset: "0-11"`, leaving four threads for nginx, resti
 colours (cpuset 12-15). On an AX102: `QUEUE_WORKERS=4`, worker `cpuset: "0-27"`. Memory ceilings: worker 36 GB, each API
 colour 5 GB (docs/DEPLOY_STAGE2.md has the budget and how to measure it).
 
+## Private assets (3-D models and closed-motor data, 2026-10-19)
+
+The public repository holds no 3-D model and no closed-motor data. The CAD image build needs the files of `cad/reference/` from the
+private repository as a second build context:
+
+```bash
+# /srv/motres/private_assets = checkout (or plain copy) of eMotres/motor-ai-sim-private
+docker build -f deploy/Dockerfile.cad --build-context private=/srv/motres/private_assets \
+  --build-arg GIT_SHA=$(git rev-parse HEAD) -t motres-cad:1.1.3-<tag> .
+```
+
+* First time, with no access from the server to GitHub: BEFORE the deploy of this change removes `cad/reference/` from `/opt/motres/app`, run
+  `mkdir -p /srv/motres/private_assets/cad && cp -a /opt/motres/app/cad/reference /srv/motres/private_assets/cad/ && rm -f /srv/motres/private_assets/cad/reference/*.py`.
+  Later: `git clone` the private repository there (read-only deploy key) and `git pull` on every private-data change.
+* The API needs none of it for CAD (builds run in the image). To read the passports / S1 models of the closed motors from the checkout
+  instead of `/srv/motres/shared/{passports,propeller_s1}`, set `MOTOR_AI_SIM_PRIVATE_DATA=/srv/motres/private_assets` in
+  `/etc/motres/api.env` (the shared folders win when present, so this is optional).
+* What the two build contexts would carry, without Docker: `python scripts/cad_context_listing.py --private /srv/motres/private_assets`.
+
 ## Testing the image
 
 [`CONTAINER_TEST.md`](CONTAINER_TEST.md) — build the `test` target, run the

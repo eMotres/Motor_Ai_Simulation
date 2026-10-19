@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from motor_ai_sim.cad import build, manifest, runner, store
+from tests.private_fixtures import need_cad_reference   # the Fusion reference profiles / STEPs are private data (skip without them)
 
 CAD_DIR = store.CAD_DIR
 if CAD_DIR not in sys.path:
@@ -17,6 +18,7 @@ if CAD_DIR not in sys.path:
 
 @pytest.fixture()
 def dies(tmp_path):
+    need_cad_reference("CIANO14_40_12.json")
     d = tmp_path / "dies" / "TEST die"
     d.mkdir(parents=True)
     (d / "die.yaml").write_text(yaml.safe_dump({"geometry": {
@@ -330,7 +332,7 @@ def test_phase_board_placement_is_an_expression_of_the_params_rows():
 
 def test_phase_board_step_has_the_colours_and_pin_j13_lands_where_the_pcb_session_says():
     import re
-    p = os.path.join(CAD_DIR, "reference", "phase_board", "CIANO14_40_phase_board_revC_colour.step")
+    p = str(need_cad_reference("phase_board", "CIANO14_40_phase_board_revC_colour.step"))
     t = open(p, encoding="latin-1").read()
     assert len(set(re.findall(r"COLOUR_RGB\('',([^)]*)\)", t))) >= 4                   # mask, FR4, ENIG, pins / walls
     pts = [(float(a), float(b)) for a, b in re.findall(r"CARTESIAN_POINT\('[^']*',\(([-\d.E+]+),([-\d.E+]+),[-\d.E+]+\)\)", t)]
@@ -348,7 +350,7 @@ def test_screw_length_is_req_rounded_up_to_even_mm_and_coil_straight_is_stack_pl
 
 
 def _rows_of(profile):
-    base = json.load(open(os.path.join(CAD_DIR, "reference", profile), encoding="utf-8"))
+    base = json.load(open(need_cad_reference(profile), encoding="utf-8"))
     return {p["name"]: p["freecad_expression"] for sec in store.SECTIONS for p in base.get(sec, [])}
 
 

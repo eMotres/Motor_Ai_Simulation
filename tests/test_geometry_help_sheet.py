@@ -51,6 +51,12 @@ _FIXTURE_DIE = "CIANO28 150_35"
 _FIXTURE_DUTY = "L35.yaml"
 
 
+def _fixture_die_dir():
+    """CIANO28 150_35 is a CLOSED die (private data since 2026-10-19): skip the test without the private checkout."""
+    from tests.private_fixtures import need_closed_die_dir
+    return need_closed_die_dir(_FIXTURE_DIE)
+
+
 def _schema_keys() -> set:
     """Every key the STATIC generator script draws from — the config's own
     ``geometry_schema`` block plus the server-owned fallback knobs
@@ -132,8 +138,8 @@ def test_radii_ring_has_all_seven_names_and_is_not_tiny():
          for gid, meta in groups_cfg.items()],
         key=lambda g: g["order"])
 
-    die_path = _ROOT / "config" / "dies" / _FIXTURE_DIE / "die.yaml"
-    duty_path = _ROOT / "config" / "dies" / _FIXTURE_DIE / _FIXTURE_DUTY
+    die_path = _fixture_die_dir() / "die.yaml"
+    duty_path = _fixture_die_dir() / _FIXTURE_DUTY
     die = yaml.safe_load(die_path.read_text(encoding="utf-8"))
     duty = yaml.safe_load(duty_path.read_text(encoding="utf-8"))
     full_geo = {**die["geometry"], **(duty.get("geometry_overrides") or {})}
@@ -279,8 +285,8 @@ def test_magnet_dimensions_match_real_geometry_vertices():
     from motor_ai_sim.cadquery_geometry import CadQueryMotor
     from motor_ai_sim.services.dimension_sheet import _nearest_to_angle
 
-    die_path = _ROOT / "config" / "dies" / _FIXTURE_DIE / "die.yaml"
-    duty_path = _ROOT / "config" / "dies" / _FIXTURE_DIE / _FIXTURE_DUTY
+    die_path = _fixture_die_dir() / "die.yaml"
+    duty_path = _fixture_die_dir() / _FIXTURE_DUTY
     die = yaml.safe_load(die_path.read_text(encoding="utf-8"))
     duty = yaml.safe_load(duty_path.read_text(encoding="utf-8"))
     full_geo = {**die["geometry"], **(duty.get("geometry_overrides") or {})}

@@ -9,8 +9,8 @@ import pytest
 import yaml
 
 from motor_ai_sim.cad import bom, bom_store
+from tests.private_fixtures import need_fixture   # the CAD BOM dumps of the closed motors are private data (skip without them)
 
-FIX = os.path.join(os.path.dirname(__file__), "fixtures")
 MATS = {"Core": "20SW1200", "Coil": "Copper", "RotorCore": "20SW1200", "Magnet": "F52SH_120C", "Shaft": "Steel",
         "Stator_holder": "Aluminum 6061", "Stator_holder_back": "Aluminum 6061", "Ring": "GFRP", "Prop_fix": "Aluminum 6061",
         "Bearing_outer_ring": "Steel (bearing)", "Bearing_inner_ring": "Steel (bearing)", "Bearing_ball": "Steel (bearing)",
@@ -28,7 +28,7 @@ WIRES = [dict(code="010119", spec="SFT-AIW 0.6*2.5", thickness_mm=0.6, width_mm=
 
 
 def make(v, dump=None, **over):
-    dump = dump or json.load(open(os.path.join(FIX, "cad_bom_dump_%s.json" % v), encoding="utf-8"))
+    dump = dump or json.load(open(need_fixture("cad_bom_dump_%s.json" % v), encoding="utf-8"))
     inputs = dict(die="CIANO14 40 new", config=v, motor_id="CIANO14_40_new_" + v, materials=MATS, cards=CARDS, wire_stock=WIRES,
                   winding=dict(connection="2S", n_coils_per_phase=4), sim_materials=dict(magnet="F52SH_120C", stator_core="20SW1200", rotor_core="20SW1200"),
                   sim_components=COMPS if v == "L12" else COMPS_L20, sim_total_kg=0.095 if v == "L12" else 0.151, sim_source="test")

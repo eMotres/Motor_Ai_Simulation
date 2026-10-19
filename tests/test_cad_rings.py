@@ -25,6 +25,7 @@ from pathlib import Path
 import pytest
 
 from motor_ai_sim.cad import store
+from tests.private_fixtures import need_cad_reference, need_fixture   # reference profiles / Fusion STEPs / BOM dumps: private data
 
 CAD = Path(store.CAD_DIR)
 if str(CAD) not in sys.path:
@@ -32,7 +33,6 @@ if str(CAD) not in sys.path:
 TEMPLATE = CAD / "motor_templates" / "segmented_flatwire"
 FC = CAD / "fc_scripts"
 REPO = CAD.parent
-FIX = Path(__file__).parent / "fixtures"
 RING_PROFILES = ("CIANO14_40_12.json", "CIANO28_85_20SW1200.json")
 NO_RING_PROFILE = "CIANO28_150_35_new.json"
 
@@ -49,7 +49,7 @@ def _const(src, name):
 
 
 def _profile(name):
-    pj = json.loads((CAD / "reference" / name).read_text(encoding="utf-8"))
+    pj = json.loads(need_cad_reference(name).read_text(encoding="utf-8"))
     return pj, {p["name"]: p for sec in store.SECTIONS for p in pj.get(sec, [])}
 
 
@@ -108,8 +108,8 @@ def test_the_full_exports_carry_the_rings():
         assert n in _const(models, "ORDER") and n in _const(models, "EXPLODE")
     assert 'name in ("Ring_front", "Ring_back")' in models
     assert '"Ring"' in _src(FC / "mechanics_vs_reference.py")
-    assert (CAD / "reference" / "fusion_mechanics" / "Ring.json").exists()
-    assert (CAD / "reference" / "fusion_mechanics" / "Ring.step").exists()
+    assert need_cad_reference("fusion_mechanics", "Ring.json").exists()
+    assert need_cad_reference("fusion_mechanics", "Ring.step").exists()
 
 
 # ------------------------------------------------------------------------------------------------- the simplified model
@@ -260,7 +260,7 @@ def _shaft_props(p, n=40000):
 
 @pytest.mark.parametrize("fx", ["L12", "L20"])
 def test_the_analytic_shaft_reproduces_the_freecad_built_shaft(fx):
-    p = dict(json.loads((FIX / ("cad_bom_dump_%s.json" % fx)).read_text(encoding="utf-8"))["params"])
+    p = dict(json.loads(need_fixture("cad_bom_dump_%s.json" % fx).read_text(encoding="utf-8"))["params"])
     p.update(shaft_flange_step=3.0, shaft_bore_r=p["shaft_seat_r"] - p["shaft_height"],          # the parameters it was built with
              shaft_thread_r=2.475, shaft_tip_r=2.45)
     for got, want in zip(_shaft_props(p), _BUILT_BEFORE[fx]):
@@ -295,7 +295,7 @@ def test_one_tip_diameter_builds_without_a_zero_length_step_and_keeps_the_thread
 
 @pytest.mark.parametrize("fx,volume", [("L12", 1485.5290), ("L20", 1875.1493)])
 def test_the_40_shaft_as_built_flange_d13_9_bore_d6_tip_d4_901_and_its_volume(fx, volume):
-    d = json.loads((FIX / ("cad_bom_dump_%s.json" % fx)).read_text(encoding="utf-8"))
+    d = json.loads(need_fixture("cad_bom_dump_%s.json" % fx).read_text(encoding="utf-8"))
     p = d["params"]
     assert (p["shaft_flange_step"], p["shaft_bore_r"], p["shaft_thread_r"], p["shaft_tip_r"]) == (2.0, 3.0, 2.4505, 2.4505)
     assert 2 * (p["shaft_seat_r"] + p["shaft_flange_step"]) == pytest.approx(13.9)            # flange Ø13.9 at the as-built seat Ø9.9

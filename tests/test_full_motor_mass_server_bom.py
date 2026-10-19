@@ -19,7 +19,9 @@ import pytest
 from motor_ai_sim import part_materials as pm
 from motor_ai_sim.modules import motor_mass as MM
 
-FIX = Path(__file__).resolve().parent / "fixtures" / "server_bom"
+from tests.private_fixtures import require_private
+
+FIX = require_private("tests", "fixtures", "server_bom")      # the BOMs of the closed motors are private data: the module skips without them
 FILES = {"L12": "CIANO14_40_new_L12_BOM.csv", "L20": "CIANO14_40_new_L20_BOM.csv", "L13": "CIANO28_85_20SW1200_L13_BOM.csv"}
 DIE_OF = {"L12": "CIANO14 40 new", "L20": "CIANO14 40 new", "L13": "CIANO28 85 20SW1200"}
 

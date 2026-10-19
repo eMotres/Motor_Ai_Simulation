@@ -13,6 +13,10 @@ import json
 import math
 
 import pytest
+
+from tests.private_fixtures import SKIP_NOTE, private_file  # noqa: E402
+#: the S1 models of the closed machines (CIANO14 40 new L12 / L20, CIANO28 85 L13) are private data since 2026-10-19
+needs_private_s1 = pytest.mark.skipif(private_file("config", "propeller_s1", "CIANO14 40 new", "L12.json") is None, reason=SKIP_NOTE)
 import yaml
 
 from motor_ai_sim import propeller as pp
@@ -322,6 +326,8 @@ def test_model_calibration_is_validated_and_used(tmp_path):
 
 def test_shipped_models_load_and_rate_with_their_default_propellers():
     """The three extracted models load; L12 gives a limit inside the grid."""
+    from tests.private_fixtures import need_private       # the S1 models of the closed machines are private data
+    need_private("config", "propeller_s1", "CIANO14 40 new", "L12.json")
     for die, cfg in (("CIANO14 40 new", "L12"), ("CIANO14 40 new", "L20"), ("CIANO28 85 20SW1200", "L13")):
         m = s1.load_model(die, cfg)
         assert m["limits"]["magnet_C"] == 150.0
@@ -412,6 +418,7 @@ def _exporter():
     return mod
 
 
+@needs_private_s1
 def test_calibration_fit_recovers_known_constants(tmp_path):
     """Anchors made by a known calibrated network: the fit gives the constants back
     and the 'after' temperatures land on the anchors."""
@@ -463,6 +470,7 @@ def test_calibration_fit_recovers_known_constants(tmp_path):
     assert s1.calibration_covers(_model(), 5.0) is None       # uncalibrated: no claim
 
 
+@needs_private_s1
 def test_housed_calibration_form_fits_the_gap_resistance(tmp_path):
     """The housed frame (Ø85) has no rotor-to-air path: its fit scales the gap
     resistance, which can make the magnet HOTTER than the uncalibrated network —
@@ -833,6 +841,7 @@ def test_missing_loss_cell_refuses_the_point_and_current_extrapolation_is_flagge
     assert not c["below_loss_grid"] and c["unavailable"] == []
 
 
+@needs_private_s1
 def test_shipped_l12_with_a_null_loss_cell_is_refused_not_zeroed():
     m = s1.load_model("CIANO14 40 new", "L12")
     ok = s1.losses(m, 6500.0, 21.39, 100.0)
@@ -877,6 +886,7 @@ def test_scan_end_is_a_lower_bound_with_its_reason(tmp_path):
     assert r2["rpm"] == pytest.approx(1.5 * prop.rpm_range[1])
 
 
+@needs_private_s1
 def test_flux_slope_is_normalised_to_the_hot_reference():
     ex = _exporter()
     psi_h, t_h, psi_c, t_c = 0.00102108, 53.5, 0.00103042, 20.0
@@ -910,6 +920,7 @@ def test_thermal_domain_fit_validated_extrapolated():
     assert s1.thermal_domain(_model(), 8.0) is None
 
 
+@needs_private_s1
 def test_shipped_models_carry_the_system_data_and_qualify_their_limits():
     l12 = s1.load_model("CIANO14 40 new", "L12")
     assert l12["schema"] == s1.SCHEMA and "si_48k" in l12["drives"]
@@ -972,6 +983,7 @@ def test_shipped_models_carry_the_system_data_and_qualify_their_limits():
     assert "mech_omitted" in L["flags"] and L["voltage"]["v_dc"] == 36.0
 
 
+@needs_private_s1
 def test_the_l20_and_l13_models_carry_board_blocks_and_offer_their_classes():
     """Both re-exported models (2026-10-12) carry a ``board`` block on every
     controller block, so ``slipstream`` is offered and runs there too.  The L13's

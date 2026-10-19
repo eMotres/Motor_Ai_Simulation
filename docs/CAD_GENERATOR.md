@@ -16,7 +16,7 @@ everyone, STEP download under NDA), (5) 3-D load FEM.
 | Path | What |
 |---|---|
 | `cad/motor_templates/segmented_flatwire/` | the FreeCAD template (PartDesign + Draft arrays), version-safe for FreeCAD 1.0.2 and 1.1. `TEMPLATE_VERSION` in its `__init__.py` goes into every manifest. |
-| `cad/reference/` | Fusion reference profile (`CIANO14_40_12.json`, the open Fusion model), its parameter values, `Coil_L20_fusion.step` (read-only Fusion export used for the coil check), `fusion_mechanics/` (read-only Fusion STEP + body/occurrence JSON of Shaft, 618_8, Stator_holder(+screws), Stator_holder_back, Ring, Prop_fix, 91292A032), `add_mechanics_rows.py` (adds the stage-3 rows to a profile) |
+| `cad/reference/` (**private**: only the three tool scripts stay here; the data lives in `eMotres/motor-ai-sim-private` `cad/reference/`, see "Private reference files") | Fusion reference profile (`CIANO14_40_12.json`, the open Fusion model), its parameter values, `Coil_L20_fusion.step` (read-only Fusion export used for the coil check), `fusion_mechanics/` (read-only Fusion STEP + body/occurrence JSON of Shaft, 618_8, Stator_holder(+screws), Stator_holder_back, Ring, Prop_fix, 91292A032), `add_mechanics_rows.py` (adds the stage-3 rows to a profile) |
 | `cad/fc_scripts/` | scripts that run inside FreeCAD: `build_model.py`, `gui_finish.py` (headless GUI: colours, camera), `check_gui.py`, `export_step.py`, `solids_dump.py`, `coil_vs_reference.py`, `mechanics_vs_reference.py` (every mechanical part vs Fusion), `owner_edits.py` (Params edits on a built model + gate + fit) |
 | `src/motor_ai_sim/cad/` | `store.py` (store -> profile, name mapping, fingerprints, owner sync-back diff), `manifest.py`, `runner.py`, `build.py` (CLI). Stdlib + PyYAML only. |
 | `cad/run_build.py` | launcher without the FEM stack (used by the image) |
@@ -29,6 +29,40 @@ Derived values are never CAD inputs; `wire_split` / `wire_parallel` have no CAD 
 
 History: moved from the `CIANO14_40_motor_model` repo (template commit 8ef2e35, `tools/sim_sync.py`, export and
 validation scripts). That repo keeps its history and the local owner files.
+
+## Private reference files (owner decision 2026-10-19)
+
+All 3-D models are private data. The files that used to be in `cad/reference/` (Fusion reference profiles and parameter dumps,
+`Coil_L20_fusion.step`, `fusion_mechanics/*`, `phase_board/*.step`, `designs/`) are NOT in this repository any more; they are
+in the private repository `eMotres/motor-ai-sim-private` under the same path `cad/reference/`. The three tool scripts
+(`add_mechanics_rows.py`, `add_phase_board_rows.py`, `make_die_reference.py`) stay here.
+
+`store.find_reference_dir()` looks for the folder in this order and takes the first one that holds `CIANO14_40_12.json`:
+
+1. `$MOTRES_CAD_REFERENCE_DIR` (the `cad/reference` folder itself),
+2. `$MOTOR_AI_SIM_PRIVATE_DATA/cad/reference` (a checkout of the private repository, the one variable of the app),
+3. `<repo>/cad/reference` (what the CAD image bakes in),
+4. `<repo>/../motor-ai-sim-private/cad/reference` (a sibling checkout),
+5. `/srv/motres/private_assets/cad/reference` (the server).
+
+The builder hands the folder to FreeCAD as `$FC_CAD_REFERENCE` (the phase board STEP is found there). Without the files a build stops with
+a message that names the folders it searched.
+
+**CAD image (server).** The image gets the reference files from a SECOND build context named `private`; the build fails when it has no
+`cad/reference`. The image carries 3-D data: it is private and is never pushed to a public registry.
+
+```bash
+# /srv/motres/private_assets = a checkout of eMotres/motor-ai-sim-private
+#   (until a deploy key exists: a copy of cad/reference from the previous deploy, see deploy/README.md "Private assets")
+cd /opt/motres/app    # the merged tree
+docker build -f deploy/Dockerfile.cad --build-context private=/srv/motres/private_assets \
+  --build-arg GIT_SHA=$(git rev-parse HEAD) -t motres-cad:1.1.3-<tag> .
+echo motres-cad:1.1.3-<tag> > /etc/motres/cad-image        # after a smoke build
+```
+
+A local build is the same with `--build-context private=<path of the motor-ai-sim-private checkout>` (Docker Engine 23+ / BuildKit).
+Without Docker: `MOTOR_AI_SIM_PRIVATE_DATA=<checkout> python cad/run_build.py build ...`.
+What the two contexts send, without building: `python scripts/cad_context_listing.py --private <checkout>`.
 
 ## Rebuild
 

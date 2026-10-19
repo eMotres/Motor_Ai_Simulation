@@ -180,7 +180,8 @@ def _freecadcmd():
 def test_export_marks_screws_and_tapped_holes_and_keeps_the_geometry(tmp_path, profile, tapped, screw_d, screws, variant, over):
     root = os.path.dirname(store.CAD_DIR)
     out = tmp_path / "out"
-    pfile = os.path.join(store.CAD_DIR, "reference", profile)
+    from tests.private_fixtures import need_cad_reference
+    pfile = str(need_cad_reference(profile))
     if variant == "frameless":          # the frameless kit has no screws, holders or shaft: no thread node, the export still passes
         pj = json.load(open(pfile, encoding="utf-8"))
         pj["profile"]["cad_variant"] = "frameless"

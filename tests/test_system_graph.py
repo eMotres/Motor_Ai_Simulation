@@ -174,6 +174,8 @@ def test_propeller_s1_chain_row_and_context():
 # -- status layer ----------------------------------------------------------------------------------
 
 def test_status_reads_the_model_and_never_computes():
+    from tests.private_fixtures import need_private       # the S1 model of the closed CIANO14 40 new L12 is private data
+    need_private("config", "propeller_s1", "CIANO14 40 new", "L12.json")
     doc = SG.build("propeller_s1", die="CIANO14 40 new", config="L12")
     st = {n["id"]: n["status"] for n in doc["nodes"]}
     assert st["model"]["state"] == "cached"
@@ -274,6 +276,8 @@ def test_modules_loop_rules_carry_the_constants():
 
 def test_check_blocks_state_their_condition():
     from motor_ai_sim.report import PROJECT_INSULATION_C
+    from tests.private_fixtures import need_private       # the S1 model of the closed CIANO14 40 new L12 is private data
+    need_private("config", "propeller_s1", "CIANO14 40 new", "L12.json")
     by = {n["id"]: n for n in SG.build("propeller_s1")["nodes"]}
     assert [by[i]["condition"]["key"] for i in ("chk_winding", "chk_magnet", "chk_demag", "chk_controller", "chk_battery")] == [
         "winding", "magnet", "demag", "controller", "battery"]

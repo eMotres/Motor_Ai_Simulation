@@ -28,7 +28,7 @@ CAD_DIR = store.CAD_DIR
 if CAD_DIR not in sys.path:
     sys.path.insert(0, CAD_DIR)
 
-FIX = Path(__file__).resolve().parent / "fixtures"
+from tests.private_fixtures import need_cad_reference, need_fixture   # reference profile / BOMs of the closed motors: private data
 TEMPLATE = Path(CAD_DIR) / "motor_templates" / "segmented_flatwire"
 
 
@@ -146,7 +146,7 @@ def test_variant_of_profile():
 
 
 def _values_85():
-    pj = json.load(open(Path(CAD_DIR) / "reference" / "CIANO28_85_20SW1200.json", encoding="utf-8"))
+    pj = json.load(open(need_cad_reference("CIANO28_85_20SW1200.json"), encoding="utf-8"))
     rows = {p["name"]: p["freecad_expression"] for sec in ("user_parameters", "named_parameters_sketch3", "named_parameters_active_part",
                                                            "named_parameters_mechanics") for p in pj.get(sec, [])}
     return store.evaluate(rows), rows
@@ -190,7 +190,7 @@ KIT_LABELS = {"Core", "Coil", "RotorCore", "Magnet", "Coils", "MagnetArray", "Ph
 
 
 def _kit_dump():
-    dump = json.load(open(FIX / "cad_bom_dump_L20.json", encoding="utf-8"))
+    dump = json.load(open(need_fixture("cad_bom_dump_L20.json"), encoding="utf-8"))
     d = copy.deepcopy(dump)
     d["entries"] = [e for e in dump["entries"] if e["label"] in KIT_LABELS]
     d["meta"] = dict(d.get("meta") or {}, motor_cad_variant="frameless")
@@ -278,7 +278,7 @@ def _setup(tmp_path, monkeypatch, *, kit, with_bom=True):
     cad = tmp_path / "cad" / DIE / CFG
     cad.mkdir(parents=True)
     if with_bom:
-        shutil.copy(FIX / "server_bom" / "CIANO28_85_20SW1200_L13_BOM.csv", cad / "CIANO28_85_20SW1200_L13_BOM.csv")
+        shutil.copy(need_fixture("server_bom", "CIANO28_85_20SW1200_L13_BOM.csv"), cad / "CIANO28_85_20SW1200_L13_BOM.csv")
     names = {"stator_core": ("Stator core", "20SW1200"), "rotor_core": ("Rotor core", "20SW1200"),
              "magnet": ("Magnets", "F52SH_120C"), "slot": ("Winding copper", "copper"), "shaft": ("Shaft", "Aluminium_6061")}
     parts = [MM.MotorPart(names[k][0], names[k][1], g / 1000.0, "magnetic", True, "computed", "", key=k) for k, g in ACTIVE.items()]
@@ -306,7 +306,7 @@ def test_the_kit_mass_is_the_active_parts_without_the_shaft_plus_board_and_ename
     counted = {k for k, p in by.items() if p.counted}
     assert counted == {"stator_core", "rotor_core", "magnet", "slot", "wire_insulation", "board"}      # nothing of the housing
     assert by["shaft"].counted is False and "no shaft" in by["shaft"].basis
-    bf = MM.read_bom_file(FIX / "server_bom" / "CIANO28_85_20SW1200_L13_BOM.csv")
+    bf = MM.read_bom_file(need_fixture("server_bom", "CIANO28_85_20SW1200_L13_BOM.csv"))
     board_g = next(ln.grams for ln in bf.lines if ln.part.startswith("Phase board"))
     expect = 126.09 + 64.13 + 70.49 + 106.26 + 9.45 + board_g
     assert fm.total_kg * 1000 == pytest.approx(expect, rel=0.002)

@@ -38,8 +38,7 @@ from motor_ai_sim.simulation.sb_domains import DOM_SHAFT
 
 MU0 = 4e-7 * math.pi
 _ROOT = Path(__file__).resolve().parents[1]
-_PRESETS = json.loads((_ROOT / "config" / "motor_presets.json")
-                      .read_text(encoding="utf-8"))
+from tests.private_fixtures import require_closed_preset   # my_40mm_last is a CLOSED motor's preset: private data, the module skips without it
 G150 = {
     "stator_diameter": 150.0, "slot_height": 14.0, "core_thickness": 4.2,
     "num_seg": 4, "num_slots_per_segment": 6, "num_poles_per_segment": 7,
@@ -53,7 +52,7 @@ G150 = {
     "stator_fillet_r": 3.5, "stator_fillet_r1": 1.2, "rotor_fill_r": 0.2,
     "motor_length": 35.0,
 }
-G40 = _PRESETS["my_40mm_last"]["geometry"]
+G40 = require_closed_preset("my_40mm_last")["geometry"]
 
 
 # ── the rule ─────────────────────────────────────────────────────────────────

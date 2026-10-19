@@ -32,7 +32,10 @@ MID = "CIANO14_40_new_L12"
 ADMIN, USER, NDA_USER, ENG_NDA, ENG = ("admin@example.com", "user@example.com", "nda@example.com", "eng-nda@example.com",
                                        "eng@example.com")
 client = TestClient(app)
-REF = _ROOT / "cad" / "reference" / "CIANO14_40_12.json"
+from motor_ai_sim.cad import store as _store
+from tests.private_fixtures import need_cad_reference
+
+REF = Path(_store.REFERENCE_DIR) / "CIANO14_40_12.json"          # private data (cad/reference): tests below skip without it
 
 GLB = b"glTF-FULL-MODEL-BYTES"
 STEP = (b"ISO-10303-21;\nHEADER;\nFILE_DESCRIPTION(('x'),'2;1');\nFILE_NAME('a','2026-10-13T10:00:00',('A'),('O'),'OCC','FreeCAD','U');\n"
@@ -191,13 +194,13 @@ def test_every_parameter_has_a_short_label_in_both_languages_and_bearing_interna
     assert C.CATALOGUE["shaft_bore_tip_angle"]["label"]["en"] == "Shaft - bore tip angle"
     # every bearing internal is read-only; nothing else is
     assert C.READ_ONLY == {n for n, m in C.CATALOGUE.items() if m["group"] == "bearings"} and "bearing_ball_count" in C.READ_ONLY
-    p = json.loads((_ROOT / "cad" / "reference" / "CIANO14_40_12.json").read_text("utf-8"))
+    p = json.loads(need_cad_reference("CIANO14_40_12.json").read_text("utf-8"))
     built = {x["name"]: x for sec in C.SECTIONS for x in p[sec]}
     rows = {r["name"]: r for r in C.rows(built, {})}
     assert rows["bearing_ball_count"]["editable"] is False and rows["ring_t"]["editable"] is True
     assert "read-only" in C.validate(built, {"bearing_ball_d": 2.2})[0]
     # an integer parameter of a carrier motor is still checked as a whole number
-    q = json.loads((_ROOT / "cad" / "reference" / "CIANO28_85_20SW1200.json").read_text("utf-8"))
+    q = json.loads(need_cad_reference("CIANO28_85_20SW1200.json").read_text("utf-8"))
     built85 = {x["name"]: x for sec in C.SECTIONS for x in q[sec]}
     assert "whole number" in " ".join(C.validate(built85, {"rotor_key_count": 3.5}))
 
@@ -205,7 +208,7 @@ def test_every_parameter_has_a_short_label_in_both_languages_and_bearing_interna
 def test_rows_of_both_reference_profiles_are_editable_and_valid_as_built():
     from motor_ai_sim import cad_params as C
     for f in ("CIANO14_40_12", "CIANO28_85_20SW1200"):
-        p = json.loads((_ROOT / "cad" / "reference" / f"{f}.json").read_text("utf-8"))
+        p = json.loads(need_cad_reference(f"{f}.json").read_text("utf-8"))
         built = {x["name"]: x for sec in C.SECTIONS for x in p[sec]}
         rows = C.rows(built, {})
         assert len(rows) > 40 and all(not r["overridden"] and r["value"] == r["default"] for r in rows)

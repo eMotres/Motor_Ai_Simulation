@@ -9,16 +9,18 @@ import sys
 import pytest
 
 from motor_ai_sim.cad import store
+from tests.private_fixtures import need_cad_reference, need_fixture   # the reference files + BOM dump are private data
 
 if store.CAD_DIR not in sys.path:
     sys.path.insert(0, store.CAD_DIR)
 
-REF = os.path.join(store.CAD_DIR, "reference", "CIANO28_150_35_new.json")
+REF = os.path.join(store.REFERENCE_DIR, "CIANO28_150_35_new.json")
 TPL = os.path.join(store.CAD_DIR, "motor_templates", "segmented_flatwire")
 
 
 @pytest.fixture(scope="module")
 def ref():
+    need_cad_reference("CIANO28_150_35_new.json")
     pj = json.load(open(REF, encoding="utf-8"))
     rows = {r["name"]: r for sec in store.SECTIONS for r in pj.get(sec, [])}
     vals = store.evaluate({n: r["freecad_expression"] for n, r in rows.items()})
@@ -31,6 +33,7 @@ def test_template_version_is_a75():                      # A.7.5 (CIANO14 50, ev
 
 
 def test_reference_is_found_for_the_die():
+    need_cad_reference("CIANO28_150_35_new.json")
     own, fv = store.reference_for("CIANO28 150_35 new")
     assert own == REF and os.path.exists(fv)
 
@@ -93,7 +96,7 @@ def test_the_occupancy_rows_are_declared_info_only_where_python_reads_them(ref):
 
 def _bom():
     from motor_ai_sim.cad import bom
-    fix = os.path.join(os.path.dirname(__file__), "fixtures", "cad_bom_dump_150_L35.json")
+    fix = str(need_fixture("cad_bom_dump_150_L35.json"))
     dump = json.load(open(fix, encoding="utf-8"))
     mats = {"Core": "20SW1200", "Coil": "Copper", "RotorCore": "20SW1200", "Magnet": "F52SH_120C", "Shaft": "Aluminum 6061",
             "Shaft_rear": "Aluminum 6061", "Stator_holder": "Aluminum 6061", "Stator_holder_back": "Aluminum 6061",

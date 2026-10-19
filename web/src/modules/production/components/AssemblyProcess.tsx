@@ -203,7 +203,7 @@ const DocPreview: React.FC<{ ctx: ProdCtx; doc: DocumentRec; onError: (e: string
           {t('process.downloadFile', 'Download')}</Button>
       </Box>
       {kind === 'pdf' && (url
-        ? <Box component="iframe" src={`${url}#view=FitH`} title={doc.name} sx={{ display: 'block', width: '100%', height: { xs: 360, md: 560 }, border: 0, bgcolor: '#fff' }} />
+        ? <Box component="iframe" src={`${url}#view=FitH&navpanes=0&pagemode=none`} title={doc.name} sx={{ display: 'block', width: '100%', height: { xs: 360, md: 560 }, border: 0, bgcolor: '#fff' }} />
         : <Typography sx={{ fontSize: 11, color: 'var(--text-4)', p: 1.5 }}>…</Typography>)}
       {kind === 'image' && url && <Box component="img" src={url} alt={doc.name} sx={{ display: 'block', maxWidth: '100%', maxHeight: 560, mx: 'auto', bgcolor: '#fff' }} />}
     </Paper>

@@ -172,11 +172,12 @@ def test_continuous_stops_the_loop_exactly_as_limits_does(client, monkeypatch):
     # …and the S1 verification ran on top, at the rating's OWN estimated
     # winding temperature (103.0 °C from _RATING_BLOCK) — the fake thermal
     # solve never settles near the magnet's 149.7 °C card, so it used its
-    # full two-pass budget and reported the miss rather than a false "verified".
-    assert seen["coil_in"][2:] == [103.0, 103.0]
+    # full pass budget (three since 2026-10-19) and reported the miss rather
+    # than a false "verified".
+    assert seen["coil_in"][2:] == [103.0, 103.0, 103.0]
     cr = c["continuous_rating"]
     assert cr["verified"] is False
-    assert cr["verification_passes"] == 2
+    assert cr["verification_passes"] == 3
     assert cr["I_estimated_A_rms"] == 34.36
     # A failed verification is evidence only: the record remains the original
     # limited machine, while the estimate and failed trial are both retained.
@@ -304,12 +305,12 @@ def _fake_verify(monkeypatch, *, winding_max_at, magnet_max_at):
 def test_a_verification_within_3k_is_accepted_in_one_pass(client, monkeypatch):
     _fake_rating(monkeypatch, block=dict(_RATING_BLOCK))    # magnet, 149.7 °C
     seen = _fake_verify(monkeypatch, winding_max_at=lambda i: 100.0,
-                        magnet_max_at=lambda i: 148.0)       # 1.7 K under
+                        magnet_max_at=lambda i: 149.2)       # 0.5 K under
     c = _run(client, solve_to="continuous")
     cr = c["continuous_rating"]
     assert cr["verified"] is True
     assert cr["verification_passes"] == 1
-    assert abs(cr["miss_K"]) <= 3.0
+    assert -1.0 <= cr["miss_K"] <= 0.0      # one-sided since 2026-10-19
     # The loop makes its own two passes first (unmocked here, both at this
     # fixture's fixed I=20.0); the verification's OWN call is the one after.
     verify_calls = seen["I"][2:]
@@ -332,7 +333,7 @@ def test_a_miss_over_3k_triggers_one_correction_pass_and_can_converge(
     # The correction must pull the current DOWN; the second pass then lands
     # under 30 A, where this fixture settles comfortably inside the card.
     def magnet_fn(i):
-        return 200.0 if i > 30.0 else 148.0
+        return 200.0 if i > 30.0 else 149.2
     seen = _fake_verify(monkeypatch, winding_max_at=lambda i: 50.0,
                         magnet_max_at=magnet_fn)
     c = _run(client, solve_to="continuous")
@@ -355,8 +356,8 @@ def test_a_verification_still_off_after_two_passes_states_the_miss(
     c = _run(client, solve_to="continuous")
     cr = c["continuous_rating"]
     verify_calls = seen["I"][2:]
-    assert len(verify_calls) == 2                # the cap, never chased further
-    assert cr["verification_passes"] == 2
+    assert len(verify_calls) == 3                # the cap, never chased further
+    assert cr["verification_passes"] == 3
     assert cr["verified"] is False
     assert cr["miss_K"] is not None and cr["miss_K"] > 3.0
     assert "still" in cr["note"] and "verification pass" in cr["note"]
@@ -646,6 +647,10 @@ def test_the_datasheet_carries_one_row_per_duty_when_a_duty_has_it(tmp_path):
 # caught.
 # ---------------------------------------------------------------------------
 
+#: What `_mock_rating_deps`' fake `rate` was called with, per test.
+RATE_CALLS: list = []
+
+
 def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
                       capture_em=True):
     """Every collaborator `_continuous_rating_for_loop` calls, mocked.
@@ -659,6 +664,8 @@ def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
     from motor_ai_sim import thermal_capacities as tc
 
     calls = solve_map_calls if solve_map_calls is not None else []
+    rate_calls = RATE_CALLS
+    rate_calls.clear()
 
     def _solve_map(point, cooling, *, em_map=None, em_source=None,
                    capture=None):
@@ -689,7 +696,9 @@ def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
 
     def _rate(*, thermal_result, em_summary, caps, geometry, cooling,
              side_areas, d_housing_m, duty, mode, resolve, refit,
-             magnet_grade, speed_search=None, eddy_noload_fraction=None):
+             magnet_grade, speed_search=None, eddy_noload_fraction=None,
+             **kw):
+        rate_calls.append(dict(kw))
         return dict(rate_return)
 
     monkeypatch.setattr(cp._ccr, "rate", _rate, raising=True)
@@ -781,14 +790,17 @@ def test_over_the_limit_but_rated_above_the_duty_current_is_flagged():
     assert "cannot hold MORE current" in out["note"]
 
 
-def test_inside_every_limit_but_rated_below_the_duty_current_is_flagged():
+def test_inside_every_limit_but_rated_below_the_duty_current_is_not_flagged():
+    """Since 2026-10-19 the rating aims at the RATED winding (180 °C mean)
+    and `time_to_limit` at the insulation class (200 °C hot spot): a point
+    between the two is inside every limit AND above the rated point."""
     from motor_ai_sim.routes import coupled as cp
 
     block = {"ok": True, "feasible": True, "trustworthy": True, "s": 0.8,
             "notes": []}
     out = cp._cr_consistency_guard(block, {"within_limits": True})
-    assert out["trustworthy"] is False
-    assert any("CONTRADICTS" in n for n in out["notes"])
+    assert out.get("trustworthy", True) is True
+    assert not any("CONTRADICTS" in n for n in out.get("notes") or [])
 
 
 def test_a_consistent_answer_is_left_alone():

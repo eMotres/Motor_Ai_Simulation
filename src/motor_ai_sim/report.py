@@ -4818,6 +4818,24 @@ DEFAULT_INSULATION_CLASS = "N"
 #: the temperature is unchanged.
 PROJECT_INSULATION_C = 200.0
 PROJECT_INSULATION_LABEL = "N (200 °C)"
+
+#: THE RATED POINT (owner 2026-10-19): a rated duty is the continuous point at
+#: which the coils sit at THIS temperature — the winding MEAN, the coil
+#: temperature the EM solve runs at — at the duty's own speed and cooling.  The
+#: insulation class above stays the limit every overheat warning is judged on;
+#: this is the DESIGN point below it.  One place: the S1 / continuous rating,
+#: ``solve_to: continuous``, the duty class and Configure's rated speed cap all
+#: read it through ``coupled_time_to_limit.rated_winding_limit``.
+PROJECT_RATED_WINDING_C = 180.0
+#: …PER APPLICATION (owner 2026-10-19: «180 is for aviation; for robots let it
+#: be 70 °C, and the air temperature 30 °C»).  Keyed by the configuration's
+#: application (``applications.APPLICATIONS``); an application not listed takes
+#: ``PROJECT_RATED_WINDING_C``.
+RATED_WINDING_C_BY_APPLICATION = {"propeller": 180.0, "aviation": 180.0,
+                                  "robot": 70.0}
+#: The ambient the RATED point is stated at, per application; an application
+#: not listed (None) is rated at the duty's own ambient.
+RATED_AMBIENT_C_BY_APPLICATION = {"robot": 30.0}
 #: The same statement as a sentence, for the places that spell the assumption
 #: out rather than putting a letter in a cell.
 PROJECT_INSULATION_TEXT = ("class N per IEC 60085 (200 °C) — this project's "

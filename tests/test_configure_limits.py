@@ -298,8 +298,12 @@ def test_context_names_the_cooling_and_the_temperature_limits():
     from motor_ai_sim.coupled_time_to_limit import winding_limit
     w_c, w_basis = winding_limit()
     assert w_c == 200.0
+    r_c, r_basis = cl.rated_winding()
     assert c["thermal_limits"] == {"winding_C": 200.0, "winding_basis": w_basis,
+                                   "rated_winding_C": 180.0,
+                                   "rated_winding_basis": r_basis,
                                    "magnet_C": 150.0, "magnet_card": "F52SH_120C"}
+    assert r_c == 180.0
     # another die is unrestricted; no magnet named = no magnet limit invented
     free = cl.context(None, {"die": "100 mm · 24s-28p mid-torque", "name": "L15"})
     assert free["cooling"]["restricted"] is False and free["cooling"]["cooling_options"] is None

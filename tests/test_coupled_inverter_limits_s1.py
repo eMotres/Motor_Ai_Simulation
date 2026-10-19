@@ -180,7 +180,7 @@ def test_s1_verification_passes_run_on_the_controller(client, monkeypatch):
     _fake_rating(monkeypatch, block=_RATING_BLOCK)
     from tests.test_coupled_continuous_solve_to import _fake_verify
     _fake_verify(monkeypatch, winding_max_at=lambda _i: 50.0,
-                 magnet_max_at=lambda i: 200.0 if i > 30.0 else 148.0)
+                 magnet_max_at=lambda i: 200.0 if i > 30.0 else 149.2)
     from motor_ai_sim.routes import coupled as cp
     current_aware_em = cp._em_run
 
@@ -199,7 +199,8 @@ def test_s1_verification_passes_run_on_the_controller(client, monkeypatch):
     c = _run(client, solve_to="continuous")
     ctl = _FakeCtl.instances[-1]
     # loop pass + limit pass + TWO S1 verification passes: the current-aware
-    # fake misses on pass 1 and settles within 3 K after one correction.
+    # fake misses on pass 1 and settles inside the one-sided window
+    # [-1 K, 0] (2026-10-19) after one correction.
     assert len(ctl_kw) == 4 and all(k is ctl for k in ctl_kw)
     assert [p for p, _i in ctl.steps] == ["loop", "limit", "s1_verify",
                                           "s1_verify"]

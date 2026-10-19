@@ -128,6 +128,12 @@ def _num(v: Any) -> Optional[float]:
 #: node) and is accepted so a block that still says it is read, not skipped.
 TOUCH_PARTS: Tuple[str, ...] = ("housing", "structure", "link")
 
+#: Parts verified like a touch limit — one-sided, by the secant through real
+#: readings: the touch bodies and the BEARING SEAT (2026-10-19), which rides
+#: the rotor and rises far less than with the square of the current (the
+#: rotor's eddy loss is mostly there at no load).
+SLOW_PARTS: Tuple[str, ...] = TOUCH_PARTS + ("bearing",)
+
 #: A touch limit is a hard limit (IEC 60335), so a verified point may sit
 #: UNDER it by up to ``TOUCH_UNDER_TOL_K`` but never over it; the correction
 #: aims ``TOUCH_AIM_K`` below it so a pass that lands a hair high is not lost.
@@ -143,7 +149,19 @@ TOUCH_AIM_K = 0.5
 TOUCH_MAX_PASSES = 4
 
 
-def field_reading(field: Mapping[str, Any], part: str) -> Optional[float]:
+def bearing_seat_of(field: Optional[Mapping[str, Any]]) -> Optional[float]:
+    """The bearing seat off ONE real map (°C) by the project's one rule
+    (``mech_losses.bearing_temp_from_map``), or ``None``."""
+    try:
+        from motor_ai_sim.mech_losses import bearing_temp_from_map
+        hit = bearing_temp_from_map(dict(field) if field else None)
+    except Exception:  # noqa: BLE001 — no seat is an answer, not an error
+        return None
+    return None if hit is None else _num(hit[0])
+
+
+def field_reading(field: Mapping[str, Any], part: str, *,
+                  winding_mean: bool = False) -> Optional[float]:
     """The temperature of ``part`` read off a REAL thermal map (°C), or
     ``None`` when this map does not carry it.
 
@@ -157,6 +175,13 @@ def field_reading(field: Mapping[str, Any], part: str) -> Optional[float]:
     ``cooling.mount.link.t_link_c``.
     """
     fld = field or {}
+    if part == "winding" and winding_mean:
+        # the RATED point (2026-10-19): the coils' MEAN, the coil temperature
+        # the EM solve runs at — not the hot spot the insulation is judged on
+        return _num(((fld.get("components") or {}).get("winding") or {})
+                    .get("avg"))
+    if part == "bearing":
+        return bearing_seat_of(fld)
     if part in TOUCH_PARTS:
         cool = fld.get("cooling") or {}
         hp = cool.get("heat_path")
@@ -174,7 +199,8 @@ def field_reading(field: Mapping[str, Any], part: str) -> Optional[float]:
 
 
 def touch_next_current(trials: Sequence[Tuple[float, float]], *, limit_c: float,
-                       ambient_c: float) -> float:
+                       ambient_c: float,
+                       aim_k: float = TOUCH_AIM_K) -> float:
     """The next trial current for a touch-limited verification, from the REAL
     readings so far (``[(I, T_actual), …]``, in the order they were solved).
 
@@ -186,7 +212,7 @@ def touch_next_current(trials: Sequence[Tuple[float, float]], *, limit_c: float,
     than 50 %, or would not go below the lowest current already seen over the
     limit.
     """
-    aim = float(limit_c) - TOUCH_AIM_K
+    aim = float(limit_c) - float(aim_k)
     i2, t2 = trials[-1]
     sq = i2 * math.sqrt(max(aim - ambient_c, 1e-6) / max(t2 - ambient_c, 1e-6))
     nxt = sq
@@ -817,6 +843,27 @@ def _judge(state: Mapping[str, float], limits: Sequence[_ttl.PartLimit],
     return rows
 
 
+def _still_on_limit(loss: Mapping[str, Any], p_cu_ref_w: float, s_prev: float,
+                    net: tdc.Network, caps: Mapping[str, Any],
+                    limits: Sequence[_ttl.PartLimit], duty: str,
+                    tol_k: float) -> bool:
+    """Is the PREVIOUS pass's ``s`` still on the limit (within ``tol_k``) on
+    THIS pass's network?  Then the fixed point has converged in the quantity
+    that is judged, even when ``s`` itself still moves by more than
+    ``REL_TOL`` (2026-10-19).  A part that hardly depends on the current — the
+    bearing seat of a rotor whose eddy loss is 95 % no-load — sits within the
+    bisection's ``tol_k`` over a band of ``s`` several per cent wide, so the
+    bisection's answer jumps inside that band from map to map (40 L20:
+    1.156 ↔ 1.172) and an ``s``-only test never closes."""
+    try:
+        state = tdc.steady_state(_segment_at(loss, p_cu_ref_w, float(s_prev),
+                                             duty), net, caps)
+        resid, _part = _worst(_judge(state, limits, net))
+    except Exception:  # noqa: BLE001 — no answer is "not converged"
+        return False
+    return abs(float(resid)) <= float(tol_k)
+
+
 def _worst(rows: Sequence[Mapping[str, Any]]) -> Tuple[float, str]:
     """``(the largest over_by_K, the part it belongs to)``."""
     best = max(rows, key=lambda r: float(r["over_by_K"]))
@@ -1014,6 +1061,7 @@ def rate(*, thermal_result: Mapping[str, Any],
          s_max: float = S_MAX,
          speed_search: Optional[Mapping[str, Any]] = None,
          eddy_noload_fraction: Optional[float] = None,
+         bearing_seat_from_map: bool = False,
          **limit_kw: Any) -> Dict[str, Any]:
     """The continuous rating of this machine under the cooling ``thermal_result``
     was solved with.
@@ -1043,6 +1091,13 @@ def rate(*, thermal_result: Mapping[str, Any],
     ``**limit_kw`` goes to :func:`coupled_time_to_limit.part_limits`
     (``magnet_grade``, ``bearing_temp_c``, ``winding_limit_c``, …) and is used
     only when ``limits`` is not given.
+
+    ``bearing_seat_from_map`` (2026-10-19) — judge the bearing seat too, read
+    off EVERY map this search solves (``mech_losses.bearing_temp_from_map``)
+    rather than a fixed seat temperature: a fixed one is echoed back as the
+    seat at any current (the offset to the rotor node is re-fitted to each map
+    while the seat stays put), which is how the loop's rating used to leave
+    the bearing out while ``time_to_limit`` judged it.
     """
     ref = reference_point(em_summary, thermal_result)
     loss0 = tdc.losses_by_node(em_summary, thermal_result)
@@ -1089,9 +1144,12 @@ def rate(*, thermal_result: Mapping[str, Any],
             # 2026-09-21 and is spelled out here anyway, because this feature
             # cannot be correct without it.
             surface_fit=True)
+        _kw = dict(limit_kw)
+        if bearing_seat_from_map and limits is None:
+            _kw["bearing_temp_c"] = bearing_seat_of(cur_map)
         judged = list(limits if limits is not None
                       else _ttl.part_limits(thermal_result=cur_map,
-                                            em_summary=em_summary, **limit_kw))
+                                            em_summary=em_summary, **_kw))
         if not judged:
             raise DutyCycleError(
                 "no_part_limits",
@@ -1128,8 +1186,10 @@ def rate(*, thermal_result: Mapping[str, Any],
             # never be at.  One more solve with the copper taken out settles it.
             break
         if search.get("feasible"):
-            if s_prev is not None and abs(s_star - s_prev) <= rel_tol * max(
-                    s_prev, 1e-9):
+            if s_prev is not None and (
+                    abs(s_star - s_prev) <= rel_tol * max(s_prev, 1e-9)
+                    or _still_on_limit(loss, p_cu_ref_w, s_prev, net, caps,
+                                       judged, duty, tol_k)):
                 converged = True
                 break
             s_prev = s_star
@@ -1197,6 +1257,11 @@ def rate(*, thermal_result: Mapping[str, Any],
         "passes": passes,
         "judged": [p.part for p in judged],
         "limits_c": {p.part: round(float(p.limit_c), 2) for p in judged},
+        # WHICH winding quantity the rating sits on: "mean" for the RATED
+        # point (the coils at the rated winding temperature, 2026-10-19),
+        # "hot_spot" for the insulation class.
+        "winding_basis": ("mean" if limit_kw.get("rated_winding")
+                          else "hot_spot"),
         "cooling": _prune(dict(cooling or {})),
         "model": (
             "the four-node lumped network fitted to a 2-D steady thermal map of "

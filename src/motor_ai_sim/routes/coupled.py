@@ -6105,6 +6105,12 @@ def _run(body: Dict[str, Any],
                     _cr_temps = continuous_rating.get("temperatures_c") or {}
                     _coil_guess = round(
                         float(_cr_temps.get("winding") or t_coil), 1)
+                    if (part == "winding" and continuous_rating.get(
+                            "winding_basis") == "mean"):
+                        # THE RATED POINT: the EM pass runs with the coils AT
+                        # the rated temperature, the number the record and
+                        # the Simulation tab then carry (2026-10-19).
+                        _coil_guess = round(float(lim_c), 1)
                     _mag_guess = _cr_temps.get("magnet")
                     _mag_guess = (None if _mag_guess is None
                                  else round(float(_mag_guess), 1))
@@ -6116,7 +6122,9 @@ def _run(body: Dict[str, Any],
                             coil_temp_c_guess=_coil_guess,
                             magnet_temp_c_guess=_mag_guess,
                             limiting_part=part, limit_c=float(lim_c),
-                            controller=ctl)
+                            controller=ctl,
+                            winding_mean=(continuous_rating.get(
+                                "winding_basis") == "mean"))
                     except HTTPException as exc:
                         v = None
                         continuous_rating["verified"] = False
@@ -6210,6 +6218,7 @@ def _run(body: Dict[str, Any],
                                      "verified S1 current — report.shaft_view, "
                                      "not the linear estimate"),
                         }
+                    if v and v.get("verified") is True:
                         # THE RECORD BECOMES THE S1 MACHINE (owner's rule): the
                         # same replacement `limits` mode makes for the setpoint,
                         # made here for the rating instead.
@@ -6277,6 +6286,28 @@ def _run(body: Dict[str, Any],
                                     "power below are the S1 machine the "
                                     "continuous rating verified, not this "
                                     "crossing.")
+                        # …AND THE RECORD'S OWN `time_to_limit` IS THE S1
+                        # MACHINE'S (2026-10-19).  The setpoint's verdict
+                        # ("runs 3 m 33 s") stays with the setpoint
+                        # (`duty_point.time_to_limit`, `limited`, `warning`);
+                        # left at the top of a record whose em / field /
+                        # temperatures are the S1 pass, it made
+                        # `duty_class.classify` call the S1 duty short-time.
+                        # Judged on the S1 pass's OWN map, bearing seat
+                        # included (read off that map, not the setpoint's).
+                        _brg_hit = _bearing_temp(field)
+                        if _brg_hit is not None:
+                            t_brg, brg_where = _brg_hit
+                        _ttl_s1 = _s1_time_to_limit(
+                            body, cooling, em, field,
+                            i_s1=_ccr._num(v.get("I_cont_A_rms")) or i_est,
+                            bearing_temp_c=(None if _brg_hit is None
+                                            else float(_brg_hit[0])))
+                        if _ttl_s1:
+                            if time_to_limit:
+                                continuous_rating["duty_point"][
+                                    "time_to_limit"] = time_to_limit
+                            time_to_limit = _ttl_s1
             # ── NO RATING AT THIS SPEED → THE SPEED THAT HOLDS (2026-10-19) ──
             # Owner: *«whatever cooling is set, when I run coupling it must
             # only ever end with a positive result»*.  `rate` already found the
@@ -6578,7 +6609,9 @@ def _run(body: Dict[str, Any],
             # WHICH STATE THE RECORD AROUND IT DESCRIBES.  A reader who has only
             # this block must not have to guess whether the temperatures beside
             # it are a steady state or the instant of the crossing.
-            time_to_limit["reported_state"] = "limited" if limited else "steady"
+            time_to_limit["reported_state"] = (
+                "steady" if time_to_limit.get("point") == "s1"
+                else "limited" if limited else "steady")
             time_to_limit["solve_to"] = solve_to
         # THE THIRD TAB at the same temperatures (phase 3): the rotor stress is
         # solved once, at the per-part averages of the last thermal map, while
@@ -7348,12 +7381,10 @@ def _cr_consistency_guard(block: Dict[str, Any],
             "(s=%.3f) — a point that reaches its limit cannot hold MORE "
             "current for ever" % (time_to_limit.get("limiting_part")
                                   or "a part", s))
-    elif within is True and s < 1.0:
-        contradiction = (
-            "time_to_limit says this point is INSIDE every limit, yet the "
-            "continuous rating came out below the duty's own current "
-            "(s=%.3f) — an inside-limits point should rate at or above its "
-            "own current" % s)
+    # (`within and s < 1` is NOT a contradiction since 2026-10-19: the rating
+    # aims at the RATED winding temperature, 180 °C, while `time_to_limit`
+    # judges the 200 °C insulation class — a point between the two is inside
+    # every limit and above the rated point.)
     if contradiction is None:
         return block
     out = dict(block)
@@ -7388,13 +7419,57 @@ def _setpoint_only_limited_line(i_duty: Optional[float],
                else "its limit"))
 
 
+def _active_application() -> Optional[str]:
+    """The default application of the catalogued configuration this run is
+    on (``applications``: propeller / robot / aviation / marine), or ``None``
+    when the run is not on a catalogued machine or the configuration names
+    none.  Never raises."""
+    try:
+        from motor_ai_sim.applications import (config_applications,
+                                               default_application)
+        from motor_ai_sim.duty_results import active_context
+        from motor_ai_sim.routes import family as _fam
+        ctx = active_context()
+        if not ctx:
+            return None
+        doc = _fam.config_doc(str(ctx[0]), str(ctx[1]))
+        return default_application(config_applications(doc)[0])
+    except Exception:  # noqa: BLE001 — no application is the ordinary case
+        return None
+
+
+def _s1_time_to_limit(body: Dict[str, Any], cooling: Dict[str, Any],
+                      em: Mapping[str, Any], field: Mapping[str, Any], *,
+                      i_s1: float, bearing_temp_c: Optional[float]
+                      ) -> Optional[Dict[str, Any]]:
+    """``time_to_limit`` for the S1 machine a verified pass made the record —
+    the same `_ttl_step` the loop uses, on that pass's own map and summary.
+    Tagged ``point: "s1"``.  ``None`` when it cannot be formed (the caller
+    then keeps the setpoint's block, as before)."""
+    try:
+        blk = _ttl_step({**body, "I_phase_rms": float(i_s1)}, cooling,
+                        dict((em or {}).get("summary") or {}), dict(field or {}),
+                        bearing_temp_c=bearing_temp_c, runaway=False)
+    except Exception:  # noqa: BLE001 — never fails a solved run
+        log.debug("coupled: no time to the limit for the S1 machine",
+                  exc_info=True)
+        return None
+    if not blk:
+        return None
+    blk = dict(blk)
+    blk["point"] = "s1"
+    blk["I_phase_rms_A"] = round(float(i_s1), 3)
+    return blk
+
+
 #: How far over its card a part may read on the REAL pass and the continuous
 #: point still count as holding — the rating's own tolerance, one-sided: a
 #: point below every limit holds, one above any of them does not.
 _CP_TOL_K = _ccr.TOL_K
 
 
-def _cp_judge(field: Mapping[str, Any], limits: Mapping[str, float]
+def _cp_judge(field: Mapping[str, Any], limits: Mapping[str, float],
+              winding_mean: bool = False
               ) -> Tuple[Optional[str], Optional[float], Optional[float],
                          Dict[str, float]]:
     """``(worst part, its reading, its miss, every reading)`` off a real map —
@@ -7404,7 +7479,7 @@ def _cp_judge(field: Mapping[str, Any], limits: Mapping[str, float]
     worst: Tuple[Optional[str], Optional[float], Optional[float]] = (
         None, None, None)
     for part, lim in limits.items():
-        v = _ccr.field_reading(field, part)
+        v = _ccr.field_reading(field, part, winding_mean=winding_mean)
         if v is None:
             continue
         readings[part] = round(float(v), 2)
@@ -7456,6 +7531,8 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
     limits = {p: float(v) for p, v in (block.get("limits_c") or {}).items()
               if p in ("winding", "magnet", "housing", "structure")
               and _ccr._num(v) is not None}
+    # the RATED winding is judged on its mean (the coils at 180 °C)
+    _wm = block.get("winding_basis") == "mean"
     part = str(cp.get("limiting_part") or "winding")
     if part not in limits:
         part = next(iter(limits), part)
@@ -7485,7 +7562,7 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
                                  else round(float(temps.get("magnet", t_mag)),
                                             1)),
             limiting_part=part, limit_c=limits[part], controller=controller,
-            max_passes=passes)
+            max_passes=passes, winding_mean=_wm)
 
     v: Optional[Dict[str, Any]] = None
     last: Optional[Tuple[Dict[str, Any], float, float]] = None
@@ -7496,7 +7573,7 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
             n_passes = 1
             last = (v, rpm_cp, i_est)
             w_part, actual, miss, readings = _cp_judge(v.get("field") or {},
-                                                       limits)
+                                                       limits, _wm)
             if (miss is not None and miss > _CP_TOL_K and i_ref
                     and actual is not None):
                 est = _ccr._num(temps.get(w_part))
@@ -7524,7 +7601,7 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
             # A touch-limited part takes the touch verification's own pass
             # budget (`max_passes=None`); winding / magnet keep their two.
             v = one_pass(rpm_cp, i_est,
-                         None if part in _ccr.TOUCH_PARTS else 2)
+                         None if part in _ccr.SLOW_PARTS else 2)
             n_passes = int(v.get("passes") or 1)
             last = (v, rpm_cp, i_est)
     except Exception as exc:  # noqa: BLE001 — never fails the loop
@@ -7546,7 +7623,8 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
         return
     v, rpm_cp, i_est = last
 
-    w_part, actual, miss, readings = _cp_judge(v.get("field") or {}, limits)
+    w_part, actual, miss, readings = _cp_judge(v.get("field") or {}, limits,
+                                               _wm)
     summ = (v.get("em") or {}).get("summary") or {}
     i_solved = _ccr._num(v.get("I_cont_A_rms")) or i_est
     cp["verification_passes"] = n_passes
@@ -7622,12 +7700,23 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
             if summ.get(k) is not None}
 
 
+#: The window a verified non-touch S1 pass must land in, below its limit
+#: (owner 2026-10-19: the rated point is the coils AT 180 °C, "0 to -1 K"):
+#: never over, at most ``_S1_UNDER_TOL_K`` under.  Corrections aim at the middle.
+_S1_UNDER_TOL_K = 1.0
+_S1_AIM_K = 0.5
+#: Real passes a non-touch verification may spend: the first square-law step,
+#: then the secant through the real readings (a 1 K window needs it).
+_S1_MAX_PASSES = 3
+
+
 def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                inverter: Optional[Dict[str, Any]], i_estimate: float,
                coil_temp_c_guess: float, magnet_temp_c_guess: Optional[float],
                limiting_part: str, limit_c: float,
                max_passes: Optional[int] = None,
-               controller: Optional["_ControllerLoop"] = None
+               controller: Optional["_ControllerLoop"] = None,
+               winding_mean: bool = False
                ) -> Dict[str, Any]:
     """CONFIRM the S1 network estimate with a real EM pass, at the current
     the estimate found — never trust the network alone.
@@ -7638,16 +7727,20 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     found — the currents don't match"*.  One EM pass at ``i_estimate``,
     one real 2-D thermal solve of its own loss map, and the limiting part's
     OWN hot spot / hottest element read straight off that map (never the
-    network's node-mean-plus-offset estimate).  Off by more than 3 K in
-    either direction: ONE first-order correction —
-    ``i_next = i_now · sqrt((limit − ambient) / (actual − ambient))``, the
+    network's node-mean-plus-offset estimate).  ``winding_mean`` (the RATED
+    point, owner 2026-10-19: the coils at 180 °C) reads the winding's MEAN — the
+    coil temperature the EM solve is run at — instead of its hot spot.  Outside
+    the ONE-SIDED window [``_S1_UNDER_TOL_K`` under, 0 over] (2026-10-19; it was
+    ±3 K): a first-order correction, aimed ``_S1_AIM_K`` under the limit —
+    ``i_next = i_now · sqrt((limit − aim − ambient) / (actual − ambient))``, the
     same square-law the network search itself bisects on, applied once more
     with the REAL map's reading in place of the estimate — and one more pass.
     Two passes, never more: a machine that still misses after two real solves
     is reported with the miss stated, not chased further.
 
     A TOUCH-limited part (``housing`` / ``structure`` / ``link``, the robotics
-    heat path's body) is read off the map's ``cooling.heat_path.t_body_c``
+    heat path's body — and since 2026-10-19 the BEARING SEAT, ``SLOW_PARTS``)
+    is read off the map's ``cooling.heat_path.t_body_c``
     (:func:`coupled_continuous_rating.field_reading` — the map has no
     ``components.housing``; before 2026-10-19 only the legacy name ``link`` was
     read, so a housing-limited machine never verified).  Its limit is hard: a
@@ -7687,9 +7780,9 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
         amb = 25.0
     i_now = float(i_estimate)
     last: Dict[str, Any] = {}
-    touch = limiting_part in _ccr.TOUCH_PARTS
+    touch = limiting_part in _ccr.SLOW_PARTS
     if max_passes is None:
-        max_passes = _ccr.TOUCH_MAX_PASSES if touch else 2
+        max_passes = _ccr.TOUCH_MAX_PASSES if touch else _S1_MAX_PASSES
     trials: List[Tuple[float, float]] = []
     for k in range(max(int(max_passes), 1)):
         _progress.update(phase="S1 verification %d/%d — EM at %.1f A"
@@ -7773,7 +7866,8 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
         # The part's own reading off THIS pass's real map — the winding /
         # magnet hot spot from the components, the housing / structure from
         # the heat path's solved body node (`field_reading`).
-        actual = _ccr.field_reading(field_v, limiting_part)
+        actual = _ccr.field_reading(field_v, limiting_part,
+                                    winding_mean=winding_mean)
         miss = None if actual is None else round(actual - float(limit_c), 3)
         if miss is None:
             _held = False
@@ -7781,7 +7875,12 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
             _held = (-_ccr.TOUCH_UNDER_TOL_K <= miss
                      <= _ccr.TOUCH_OVER_TOL_K)
         else:
-            _held = abs(miss) <= 3.0
+            # ONE-SIDED (2026-10-19): a verified S1 point is never OVER its
+            # limit — two-sided ±3 K let a "verified" point sit up to 3 K over,
+            # which the record's own time to the limit then calls short-time —
+            # and at most `_S1_UNDER_TOL_K` under (the rated point is the coils
+            # AT 180 °C, not somewhere below it).
+            _held = -_S1_UNDER_TOL_K <= miss <= 0.0
         last = {"verified": _held,
                 "passes": k + 1, "miss_K": miss, "I_cont_A_rms": round(i_solved, 3),
                 "em": em_v, "field": field_v,
@@ -7814,15 +7913,15 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                                 "unverified" % (abs(miss), "over" if miss > 0
                                                   else "under", k + 1))
             break
-        # ONE correction, from the REAL map's reading.
+        # A correction, from the REAL map's readings: the square law first,
+        # the secant through the real readings once there are two.
+        trials.append((float(i_solved), float(actual)))
         if touch:
-            trials.append((float(i_solved), float(actual)))
             i_now = _ccr.touch_next_current(trials, limit_c=float(limit_c),
                                             ambient_c=amb)
             continue
-        over_amb_actual = max(actual - amb, 1e-6)
-        over_amb_limit = max(float(limit_c) - amb, 1e-6)
-        i_now = max(i_now * math.sqrt(over_amb_limit / over_amb_actual), 0.01)
+        i_now = _ccr.touch_next_current(trials, limit_c=float(limit_c),
+                                        ambient_c=amb, aim_k=_S1_AIM_K)
     return last
 
 
@@ -8043,6 +8142,14 @@ def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any]
             geometry=geom, cooling=cooling, side_areas=side0,
             d_housing_m=d_housing_m, duty=duty, mode=mode,
             resolve=_resolve, refit=_refit, magnet_grade=mats.get("magnet"),
+            # THE RATED POINT (owner 2026-10-19): the coils AT the rated
+            # winding temperature of THIS configuration's application
+            # (`coupled_time_to_limit.rated_winding_limit`: 180 °C aviation /
+            # propeller, 70 °C robots), judged on the winding MEAN — the coil
+            # temperature the EM solve runs at.  The bearing seat is NOT
+            # judged: it is reported, never a limit on rated.
+            rated_winding=True,
+            winding_limit_c=_ttl.rated_winding_limit(_active_application())[0],
             speed_search=_cr_speed_search_opts(cooling, summary, float(rpm),
                                                pwm=pwm),
             eddy_noload_fraction=_cr_eddy_f0(summary, float(rpm))[0])

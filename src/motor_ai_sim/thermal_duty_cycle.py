@@ -97,6 +97,14 @@ SHORT: Dict[str, str] = {"winding": "w", "stator": "s", "rotor": "r",
 #: import falls back to.
 PROJECT_INSULATION_C = 200.0
 
+#: The RATED winding temperature (owner 2026-10-19), mirroring
+#: ``report.PROJECT_RATED_WINDING_C`` the same way — the literal the lazy
+#: import in ``coupled_time_to_limit.rated_winding_limit`` falls back to.
+PROJECT_RATED_WINDING_C = 180.0
+RATED_WINDING_C_BY_APPLICATION = {"propeller": 180.0, "aviation": 180.0,
+                                  "robot": 70.0}
+RATED_AMBIENT_C_BY_APPLICATION = {"robot": 30.0}
+
 #: Past this, there is no machine left to have an equilibrium — the same ceiling
 #: the coupled EM↔thermal loop calls runaway (``routes.thermal.RUNAWAY_C``).
 RUNAWAY_C = 400.0

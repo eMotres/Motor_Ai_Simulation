@@ -66,6 +66,8 @@ def short_time_info(coupled: Optional[Mapping[str, Any]]
     t = c.get("time_to_limit")
     if not isinstance(t, Mapping) or t.get("within_limits", True):
         return None
+    if _only_advisory_over(t):
+        return None
     starts = t.get("starts") if isinstance(t.get("starts"), Mapping) else {}
     cold = starts.get("cold") if isinstance(starts.get("cold"), Mapping) else {}
     rated = starts.get("rated") if isinstance(starts.get("rated"), Mapping) else {}
@@ -79,9 +81,22 @@ def short_time_info(coupled: Optional[Mapping[str, Any]]
             "limit_c": _num((t.get("limits_c") or {}).get(part)) if part else None}
 
 
+def _only_advisory_over(t: Mapping[str, Any]) -> bool:
+    """True when every part a (stored) ``time_to_limit`` calls over is an
+    ADVISORY one — the bearing seat, which never limits a point (owner
+    2026-10-19).  Records solved before the advisory rule list it in
+    ``over_parts``; those must not read as short-time either."""
+    from motor_ai_sim.coupled_time_to_limit import ADVISORY_PARTS
+    over = t.get("over_parts")
+    if not isinstance(over, (list, tuple)) or not over:
+        return False
+    return all(str(p) in ADVISORY_PARTS for p in over)
+
+
 def _holds_its_current(coupled: Mapping[str, Any]) -> bool:
     t = coupled.get("time_to_limit")
-    if isinstance(t, Mapping) and t.get("within_limits") is True:
+    if isinstance(t, Mapping) and (t.get("within_limits") is True
+                                   or _only_advisory_over(t)):
         return True
     cr = coupled.get("continuous_rating")
     if not isinstance(cr, Mapping) or not cr:
@@ -107,7 +122,24 @@ def classify(entry: Optional[Mapping[str, Any]],
     if st:
         return {"duty_class": SHORT_TIME, **st}
     if c and _holds_its_current(c):
-        return {"duty_class": CONTINUOUS, "basis": "coupled record"}
+        out = {"duty_class": CONTINUOUS, "basis": "coupled record"}
+        # WHERE the coils sit against the RATED point (owner 2026-10-19: rated
+        # = the coils at the rated winding temperature) — said, not judged.
+        coil = _num(c.get("coil_temp_c"))
+        if coil is not None:
+            from motor_ai_sim.coupled_time_to_limit import rated_winding_limit
+            cr = c.get("continuous_rating")
+            cr = cr if isinstance(cr, Mapping) else {}
+            # the record's OWN rated temperature (it depends on the
+            # configuration's application) when its rating states one
+            rated_c = (_num((cr.get("limits_c") or {}).get("winding"))
+                       if cr.get("winding_basis") == "mean" else None)
+            if rated_c is None:
+                rated_c = rated_winding_limit()[0]
+            out.update({"winding_c": round(coil, 1),
+                        "rated_winding_c": rated_c,
+                        "at_rated_winding": -1.0 - 0.05 <= coil - rated_c <= 0.05})
+        return out
     if str((entry or {}).get("duty_class") or "") == CONTINUOUS:
         return {"duty_class": CONTINUOUS,
                 "basis": "saved as a continuous point"}

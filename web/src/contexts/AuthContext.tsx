@@ -13,6 +13,7 @@ import {
 import LoginDialog from '../components/auth/LoginDialog';
 import { pendingEmailLink, requestedAuthMode } from '../lib/localAuth';
 import { meFailureAction, meResponseUsable, meRetryDelayMs } from '../lib/authFallback';
+import { isProductionLinkPath } from '../lib/productionLink';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
 
@@ -129,6 +130,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     () => pendingEmailLink() !== null || (requestedAuthMode() !== null && !getStoredUser()));
   const [loginOpts, setLoginOpts] = useState<SignInOptions>(
     () => ({ mode: requestedAuthMode() ?? 'signin' }));
+  // A shared link to a production page (/production/<die>/<config>/documents?...) opened while signed out: the sign-in dialog
+  // opens at once ON that URL (the address bar is never touched), so signing in - or registering and confirming the mail -
+  // ends on the page.  Once per page load; a visitor who closes the dialog is not asked again.
+  const shareDialogShown = React.useRef(false);
+  useEffect(() => {
+    if (shareDialogShown.current || !resolved || user || !enforced) return;
+    if (!isProductionLinkPath(window.location.pathname)) return;
+    shareDialogShown.current = true;
+    setLoginOpts({ mode: 'signin' });
+    setLoginOpen(true);
+  }, [resolved, user, enforced]);
   // One short amber line when the backend could not READ its own auth store —
   // the session is kept and retried, so the user needs to know only that the
   // pause is ours and temporary.

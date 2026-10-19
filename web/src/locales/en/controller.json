@@ -777,6 +777,8 @@
     "s1Note": "Green dashed line: the continuous (S1) limit with this propeller.",
     "motorLabel": "Motor S1 {rpm} rpm",
     "supplyLabel": "Controller {rpm} rpm",
+    "motorBoundLabel": "S1: holds up to {rpm} rpm ({why})",
+    "supplyBoundLabel": "Controller: holds up to {rpm} rpm ({why})",
     "linesNote2": "Green dashed: the motor's own continuous limit (temperature, demagnetisation, voltage). Orange dashed: the controller's (or ESC's, battery's) continuous current; not shown with a sine drive.",
     "m": {
       "thrust": "Thrust, kg",

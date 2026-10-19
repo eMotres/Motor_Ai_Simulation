@@ -777,6 +777,8 @@
     "s1Note": "绿色虚线：该螺旋桨的连续（S1）极限。",
     "motorLabel": "电机 S1 {rpm} rpm",
     "supplyLabel": "控制器 {rpm} rpm",
+    "motorBoundLabel": "S1：可持续运行至 {rpm} rpm（{why}）",
+    "supplyBoundLabel": "控制器：可持续运行至 {rpm} rpm（{why}）",
     "linesNote2": "绿色虚线：电机自身的连续极限（温度、退磁、电压）。橙色虚线：控制器（或电调、电池）的连续电流极限；正弦驱动时不显示。",
     "m": {
       "thrust": "拉力，kg",

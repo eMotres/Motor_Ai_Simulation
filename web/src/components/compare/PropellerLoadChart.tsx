@@ -34,13 +34,17 @@ interface Props {
   /** the controller / ESC / pack current limit (orange dashed); absent with a sine drive */
   supplyRpm?: number | null;
   supplyReason?: string | null;
+  /** a side that holds to the top of its scan (a BOUND): the whole label of its line, e.g. "S1: holds up to 9 090 rpm
+   *  (end of propeller data)" - the line is still drawn (owner 2026-10-19) */
+  s1Label?: string | null;
+  supplyLabel?: string | null;
   onRpmChange?: (rpm: number) => void;
 }
 
 const propName = (p: PropSummary | undefined, id: string) =>
   p ? `${vendorLabel(p.vendor)} ${modelLabel(p.model)}` : id;
 
-const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, s1Reason, supplyRpm, supplyReason, onRpmChange }) => {
+const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, s1Reason, supplyRpm, supplyReason, s1Label, supplyLabel, onRpmChange }) => {
   const [metric, setMetric] = useState<LoadMetric>('thrust');
   const [extra, setExtra] = useState<string[]>([]);
   // the answers kept WITH the request they answer (propeller, drive, pack, air): a line never shows another request's rows,
@@ -138,9 +142,9 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
                 contentStyle={{ fontSize: 11 }} />
               <Legend verticalAlign="top" height={24} wrapperStyle={{ fontSize: 11 }} />
               {s1Rpm != null && <ReferenceLine x={s1Rpm} stroke="#16a34a" strokeDasharray="4 3"
-                label={{ value: tx('propLoad.motorLabel', { rpm: Math.round(s1Rpm) }) + (s1Reason ? ` - ${s1Reason}` : ''), fill: '#16a34a', fontSize: 10.5, position: 'insideTopRight' }} />}
+                label={{ value: s1Label ?? (tx('propLoad.motorLabel', { rpm: Math.round(s1Rpm) }) + (s1Reason ? ` - ${s1Reason}` : '')), fill: '#16a34a', fontSize: 10.5, position: 'insideTopRight' }} />}
               {supplyRpm != null && <ReferenceLine x={supplyRpm} stroke="#ea580c" strokeDasharray="6 3"
-                label={{ value: tx('propLoad.supplyLabel', { rpm: Math.round(supplyRpm) }) + (supplyReason ? ` - ${supplyReason}` : ''),
+                label={{ value: supplyLabel ?? (tx('propLoad.supplyLabel', { rpm: Math.round(supplyRpm) }) + (supplyReason ? ` - ${supplyReason}` : '')),
                   fill: '#ea580c', fontSize: 10.5, position: 'insideBottomLeft' }} />}
               {s1Rpm != null && s1Y != null && <ReferenceDot x={s1Rpm} y={s1Y} r={5} fill="#16a34a" stroke="#fff"
                 label={{ value: `${fmt(s1Y)} ${unit}`, position: 'top', offset: 12, fill: '#16a34a', fontSize: 11, fontWeight: 700 }} />}

@@ -60,6 +60,30 @@ def _fc(script, env, args, gui=False):
     return code, st
 
 
+def _fusion_bundle(pj):
+    """profile.fusion_parts of a die built from its Fusion export (template A.8, docs/FUSION_SYNC.md), else None."""
+    fp = (pj.get("profile") or {}).get("fusion_parts") or {}
+    return fp if fp.get("source") == "bundle" else None
+
+
+def _stamp(work, mid, bundle, models3d):
+    """The Fusion source on the STEP header and the GLB files (the BOM gets it when it is written)."""
+    from motor_ai_sim.fusion_sync import profile as FSP
+    from motor_ai_sim.fusion_sync import stamp as ST
+    text = FSP.stamp_text(bundle) + " -> AeroStator CAD"
+    done = {}
+    for f in (mid + "_active.step", mid + "_simplified.step"):
+        p = os.path.join(work, f)
+        if os.path.exists(p):
+            done[f] = ST.stamp_step(p, text)
+    short = {k: bundle.get(k) for k in ("document", "version")}             # the simplified files are public: no ids
+    for f, info in ([(models3d["full_glb"], bundle)] if models3d else []) + [(mid + "_simplified.glb", short)]:
+        p = os.path.join(work, f)
+        if os.path.exists(p):
+            done[f] = ST.stamp_glb(p, info)
+    return done
+
+
 def _bom(work, mid, fcstd, eff, pj, args):
     """Bill of materials next to the STEP (bom.py / bom_store.py).  Never refuses the build: a failure is recorded in the manifest."""
     from . import bom_store
@@ -69,7 +93,9 @@ def _bom(work, mid, fcstd, eff, pj, args):
         print("BOM skipped: model dump failed (%s): %s" % (code, st.get("message")))
         return dict(ok=False, message=st.get("message"))
     try:
-        info = bom_store.write(dump, eff, pj, os.path.join(work, mid))
+        b = _fusion_bundle(pj)
+        from motor_ai_sim.fusion_sync import profile as FSP
+        info = bom_store.write(dump, eff, pj, os.path.join(work, mid), source=FSP.stamp_text(b["bundle"]) if b else None)
     except Exception as e:                                           # a BOM problem must not lose a good model
         print("BOM skipped: %s: %s" % (type(e).__name__, e))
         return dict(ok=False, message="%s: %s" % (type(e).__name__, e))
@@ -139,10 +165,17 @@ def build(args):
             print(e)
             return 2
         mp = store.load_mapping()
-        pj, pull = store.make_profile(eff, mp)
+        try:
+            pj, pull = store.make_profile(eff, mp)
+        except RuntimeError as e:                              # e.g. a Fusion export without one of the required parts
+            print(e)
+            return 2
         kind = "store"
         out_dir = args.out_dir or os.path.join(args.out_root or DEFAULT_OUT_ROOT, args.die, eff["variant"])
     mid = pj["profile"]["motor_id"]
+    fusion = _fusion_bundle(pj)
+    if fusion:                                                 # the template finds the bundle's part STEPs here (fusion_parts.find_fusion_part)
+        os.environ["FC_FUSION_PARTS"] = fusion["dir"]
     out_dir = os.path.abspath(out_dir)
     work = out_dir + ".building-%d" % os.getpid()
     shutil.rmtree(work, ignore_errors=True)
@@ -196,6 +229,7 @@ def build(args):
             simp = _simplified(work, mid, fcstd, args)
             if simp.get("ok"):
                 _simplified_mass(work, mid, bom_info)
+        stamped = _stamp(work, mid, fusion["bundle"], models3d) if fusion else None
         build_report = _read(os.path.join(work, "build_report.json"))
         step_check = _read(os.path.join(work, "step_check.json"))
         gui_report = _read(os.path.join(work, "gui_report.json"))
@@ -217,6 +251,8 @@ def build(args):
         m["bom"] = bom_info
         m["models3d"] = models3d
         m["simplified"] = simp
+        if fusion:                                             # docs/FUSION_SYNC.md 4.2: every derived file names the Fusion export
+            m["fusion"] = dict(fusion["bundle"], stamped=stamped, warnings=build_report.get("fusion_warnings") or [])
         _write(os.path.join(work, "manifest.json"), m)
         if os.path.exists(out_dir):
             old = out_dir + ".old-%d" % os.getpid()

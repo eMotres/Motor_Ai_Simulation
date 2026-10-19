@@ -1,6 +1,6 @@
 # Fusion ↔ AeroStator sync — design (Stage 1, DRAFT for owner approval)
 
-Status: **draft, 2026-10-19**. No server endpoint is coded before the owner approves this document.
+Status: **approved by the owner 2026-10-19** (section 8). Stage 1 in progress.
 Motor-specific details (document ids, component map, the first round-trip plan) live in the private repository:
 `motor-ai-sim-private/docs/FUSION_SYNC_CIANO14_50.md`.
 
@@ -241,14 +241,19 @@ options (owner decision, §8 Q3):
 - Round trip on CIANO14 50 (manual, owner present): Export v1 → server rebuild → change one parameter in AeroStator →
   Import → Fusion updates → owner saves v2 → Export v2 → guard clears.
 
-## 8. Open questions for the owner
+## 8. Owner decisions (2026-10-19)
 
-1. **The Fusion document "CIANO14 50" (v1) is still the 40 mm geometry with the legacy parameter names**; AeroStator
-   `CIANO14 50 edited / L15` differs in almost every EM parameter (table in the private doc). Should the first round
-   trip be: approved rename → Import from AeroStator (L15 values) → you fix what the timeline breaks → save v2?
-2. **Testing in Fusion:** may an agent run the add-in on "CIANO14 50" through the Fusion MCP with writes (parameter
-   changes in the open session, then Undo / close without saving), or do you prefer a copy "CIANO14 50 sync-test"?
-3. **Private repo copy:** option A (mirror folder + agent commit, recommended) or B (server only)?
-4. **Auth:** agent key with the new scope `fusion:sync`, admin accounts only — OK?
-5. **Active parts from Fusion too** (core, rotor, magnets, coils placed from Fusion bodies in the 3-D model; the EM
-   solver keeps its own parametric 2-D geometry) — OK?
+1. **First round trip** — yes. The Fusion document "CIANO14 50" was a copy of the 40 mm model; the owner allowed an
+   agent to bring the 50 mm into it («можешь переносить и делать всё, что хочешь с CIANO14 50»). Done: version 2/3 =
+   the approved rename + AeroStator `CIANO14 50 edited / L15` + the 50 mm mechanics as named user parameters (details
+   in the private doc).
+2. **Fusion writes by an agent** — allowed on that one document only; every other Fusion document stays read-only.
+3. **Private repository copy: option A.** The add-in also saves each bundle in the local private-repo checkout
+   (`cad/reference/fusion_bundles/<die slug>/`), and an agent commits it on a branch for review.
+4. **Auth:** an admin-only agent key with the new scope `fusion:sync`.
+5. **Active parts from Fusion too:** core, rotor, magnets and coils in the 3-D model come from the Fusion bodies. The
+   EM solver keeps its own parametric 2-D geometry. The server checks the bodies against the die/config parameters and
+   warns on a mismatch (section 5.3, `body_checks`).
+
+Purchased parts are not redrawn from Fusion: bearings and screws stay catalogue/template parts (their Fusion bodies are
+checked against them by volume), and the phase board stays the KiCad STEP of the Controller repository.

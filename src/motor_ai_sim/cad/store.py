@@ -530,6 +530,19 @@ def apply_fusion_param_overrides(pj):
         rows[name]["source"] = "Fusion part geometry (profile.fusion_parts.param_overrides)"
 
 
+def fusion_bundle_parts(die, geometry):
+    """profile.fusion_parts from the die's latest Fusion export (motor_ai_sim.fusion_sync, docs/FUSION_SYNC.md 4.1), or None
+    (die not synced / no export / the sync package not installed).  A bundle without a required part raises RuntimeError."""
+    try:
+        from motor_ai_sim.fusion_sync import profile as FSP
+    except ImportError:
+        return None
+    try:
+        return FSP.fusion_parts_for(die, geometry)
+    except FSP.MissingFusionPart as e:
+        raise RuntimeError(str(e))
+
+
 def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, motor_id=None):
     """Store -> (profile dict for the FreeCAD template, review report).  Where a formula of the Fusion reference
     profile already gives the simulation value it is kept (Fusion intent); any other value becomes a constant."""
@@ -542,7 +555,10 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
     if fv and os.path.exists(fv):
         fus = {p["name"]: p["value"] for p in json.load(open(fv, encoding="utf-8"))}
     pj = copy.deepcopy(base)
-    if restrict_fusion_parts(pj["profile"], eff["die"]):
+    bundle = fusion_bundle_parts(eff["die"], eff["geometry"])
+    if bundle:                                                  # A.8: the die's latest Fusion export replaces any reference Fusion parts
+        pj["profile"]["fusion_parts"] = bundle
+    elif restrict_fusion_parts(pj["profile"], eff["die"]):
         apply_fusion_param_overrides(pj)
     params = {p["name"]: p for sec in SECTIONS for p in pj.get(sec, [])}
     geo = eff["geometry"]

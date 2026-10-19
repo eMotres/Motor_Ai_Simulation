@@ -437,6 +437,104 @@ export interface ViewOpts {
   perMaterialLoss?: boolean;
 }
 
+/** Which triangles the Loss view draws and the SHARED colour range built from
+ *  them.  One definition for the view and for `lossScaleHint`, so the hint can
+ *  never judge a different scale than the one on screen.
+ *
+ *  Classes no model produced a value for are NOT DRAWN.  Painting them the
+ *  bottom of the scale is indistinguishable from air, i.e. from "no loss
+ *  here" — and the magnets are exactly the component that kept coming back
+ *  unmodelled (a run without the coupled eddy solve leaves P_mag at 0) and
+ *  exactly the one the user was looking at.
+ *
+ *  AIR IS NEVER DRAWN ON A LOSS MAP — unconditionally, not only when the
+ *  backend remembered to say so.  There is no air-loss model to run (σ=0,
+ *  no hysteresis, windage is not a magnetic solve), so every air element is
+ *  exactly 0 — and 0 on a LOG scale is a COLOUR, band 0, the same deep blue
+ *  a genuinely-measured tiny loss gets.  That is what painted the air gap
+ *  as a smooth ring and put contour bands through the rotor's air pockets
+ *  and the bore: not a smear, just zero being coloured in.  A payload from
+ *  an older backend (or the single-frame analytic estimate) never carries
+ *  the flag, so the rule lives here, where the picture is made.
+ *
+ *  The colour range — and so the legend's floor — is built from MODELLED,
+ *  NON-ZERO elements only: `drawn` drops air and every unmodelled class,
+ *  then v > 0 drops the genuine zeros inside a material that IS modelled.
+ *  So the bottom of the log scale is a real density somebody computed, and
+ *  nothing sits below it except the blanks. */
+function lossSharedRange(payload: FemPayload) {
+  const dom = payload.domain_per_tri as unknown as number[];
+  const nTri = payload.triangles.length;
+  const ld = payload.loss_density_per_tri ?? [];
+  const unmod = new Set<number>();
+  for (const n of (payload.loss_density_unmodelled ?? [])) {
+    if (n === 'magnets') unmod.add(3);
+    else if (n === 'copper') unmod.add(4);
+    else if (n === 'iron') { unmod.add(1); unmod.add(2); }
+    else if (n === 'shaft') unmod.add(5);
+    else if (n === 'air') unmod.add(0);
+  }
+  unmod.add(0);
+  const drawn = (_ti: number, d: number) =>
+    d !== DOM.OUTER && !unmod.has(classOf(d));
+  const pos: number[] = [];
+  for (let ti = 0; ti < nTri; ti++) {
+    if (!drawn(ti, dom[ti])) continue;
+    const v = ti < ld.length ? ld[ti] : 0;
+    if (v > 0) pos.push(v);
+  }
+  const vmax = Math.max(pctl(pos, 99.5), 1e-3);
+  const vmin = Math.max(pctl(pos, 5), vmax * 1e-4);
+  return { ld, drawn, vmin, vmax };
+}
+
+/** A material whose own structure the SHARED loss scale cannot show.
+ *  `topBandShare` = share of its elements in the scale's top band (incl. the
+ *  clamped ones), `spread` = its own p95/p5.  See `lossScaleHint`. */
+export interface LossScaleHint {
+  cls: number;
+  name: string;
+  topBandShare: number;
+  spread: number;
+}
+
+/** Loss view, SHARED scale only: is some material pinned in the top colour band
+ *  while it has real structure inside?  (owner 2026-10-19, CIANO14 50: every
+ *  flat-wire strip was the same dark red although the stored field has the
+ *  gap-side strip 1.6x the far one — on a log axis 11 bands span ~3.6 decades,
+ *  a band is x2.1, and the copper floor (DC I²R + the uniform end-winding term)
+ *  already sits above the top band's lower edge.)  The picture is honest, it is
+ *  just blind there; the chart uses this to say so and point at "per-material".
+ *  Returns the worst such material, or null.  Per-material mode never needs it. */
+export function lossScaleHint(payload: FemPayload, o: ViewOpts): LossScaleHint | null {
+  if (o.perMaterialLoss) return null;
+  const dom = payload.domain_per_tri as unknown as number[];
+  const { ld, drawn, vmin, vmax } = lossSharedRange(payload);
+  const top = o.logLoss
+    ? Math.pow(10, Math.log10(vmin) + (Math.log10(vmax) - Math.log10(vmin)) * (N_BANDS - 1) / N_BANDS)
+    : vmin + (vmax - vmin) * (N_BANDS - 1) / N_BANDS;
+  const byCls = new Map<number, number[]>();
+  for (let ti = 0; ti < payload.triangles.length; ti++) {
+    if (!drawn(ti, dom[ti])) continue;
+    const v = ti < ld.length ? ld[ti] : 0;
+    if (!(v > 0)) continue;
+    const c = classOf(dom[ti]);
+    const a = byCls.get(c); if (a) a.push(v); else byCls.set(c, [v]);
+  }
+  let worst: LossScaleHint | null = null;
+  byCls.forEach((arr, c) => {
+    if (arr.length < 20) return;
+    const share = arr.filter(v => v >= top).length / arr.length;
+    const spread = pctl(arr, 95) / Math.max(pctl(arr, 5), 1e-30);
+    if (share >= 0.75 && spread >= 1.3
+        && (!worst || spread > (worst as LossScaleHint).spread)) {
+      worst = { cls: c, name: CLASS_NAME[c] ?? `class ${c}`,
+                topBandShare: share, spread };
+    }
+  });
+  return worst;
+}
+
 function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | null {
   const dom = payload.domain_per_tri as unknown as number[];
   const tris = payload.triangles;
@@ -470,45 +568,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
   }
 
   if (mode === 'Loss') {
-    const ld = payload.loss_density_per_tri ?? [];
-    // Classes no model produced a value for are NOT DRAWN.  Painting them the
-    // bottom of the scale is indistinguishable from air, i.e. from "no loss
-    // here" — and the magnets are exactly the component that kept coming back
-    // unmodelled (a run without the coupled eddy solve leaves P_mag at 0) and
-    // exactly the one the user was looking at.
-    const unmod = new Set<number>();
-    for (const n of (payload.loss_density_unmodelled ?? [])) {
-      if (n === 'magnets') unmod.add(3);
-      else if (n === 'copper') unmod.add(4);
-      else if (n === 'iron') { unmod.add(1); unmod.add(2); }
-      else if (n === 'shaft') unmod.add(5);
-      else if (n === 'air') unmod.add(0);
-    }
-    // AIR IS NEVER DRAWN ON A LOSS MAP — unconditionally, not only when the
-    // backend remembered to say so.  There is no air-loss model to run (σ=0,
-    // no hysteresis, windage is not a magnetic solve), so every air element is
-    // exactly 0 — and 0 on a LOG scale is a COLOUR, band 0, the same deep blue
-    // a genuinely-measured tiny loss gets.  That is what painted the air gap
-    // as a smooth ring and put contour bands through the rotor's air pockets
-    // and the bore: not a smear, just zero being coloured in.  A payload from
-    // an older backend (or the single-frame analytic estimate) never carries
-    // the flag, so the rule lives here, where the picture is made.
-    unmod.add(0);
-    const drawn = (_ti: number, d: number) =>
-      d !== DOM.OUTER && !unmod.has(classOf(d));
-    // The colour range — and so the legend's floor — is built from MODELLED,
-    // NON-ZERO elements only: `drawn` drops air and every unmodelled class,
-    // then v > 0 drops the genuine zeros inside a material that IS modelled.
-    // So the bottom of the log scale is a real density somebody computed, and
-    // nothing sits below it except the blanks.
-    const pos: number[] = [];
-    for (let ti = 0; ti < nTri; ti++) {
-      if (!drawn(ti, dom[ti])) continue;
-      const v = ti < ld.length ? ld[ti] : 0;
-      if (v > 0) pos.push(v);
-    }
-    const vmax = Math.max(pctl(pos, 99.5), 1e-3);
-    const vmin = Math.max(pctl(pos, 5), vmax * 1e-4);
+    const { ld, drawn, vmin, vmax } = lossSharedRange(payload);
     const label = (payload as any).loss_density_label as string | undefined;
 
     // ── PER-MATERIAL scaling (opt-in) ────────────────────────────────────
@@ -576,9 +636,16 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
       };
     }
 
+    const hint = lossScaleHint(payload, o);
     const note = (label ? label : 'loss density')
       + (o.logLoss ? ' · log colour scale' : ' · linear colour scale')
       + ' · one shared scale across all materials'
+      + (hint
+        ? ` · NOTE: ${(hint.topBandShare * 100).toFixed(0)} % of the ${hint.name}`
+          + ' is in the top colour band, so the differences inside it'
+          + ` (p5→p95 ×${hint.spread.toFixed(1)}) cannot be seen on this scale`
+          + ' — press "shared" to switch to per-material'
+        : '')
       + ' · air and any unmodelled material are left BLANK — every coloured'
       + ' element is a modelled one, and the scale floor is the 5th percentile'
       + ' of the modelled NON-ZERO densities';

@@ -61,7 +61,7 @@ function useMatOverrideReady(): boolean {
 // ./fieldView — see the header there for why they had to stop being seven
 // hand-written copies.  Nothing in this file may build a field colour of its
 // own: that is exactly how the views drifted apart.
-import { EM_MENU, emOutputs, outlinesFromMesh } from './fieldView';
+import { EM_MENU, emOutputs, lossScaleHint, outlinesFromMesh } from './fieldView';
 import { storedMeshQuery } from '../../lib/meshSettings';
 
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
@@ -274,6 +274,13 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // independently and could disagree about what a colour meant.)
   const emOut = useMemo(
     () => emOutputs(payload, mode, { logLoss, perMaterialLoss: perMat }),
+    [payload, mode, logLoss, perMat]);
+  // Loss view, shared scale: a material pinned in the top band hides its own
+  // structure (CIANO14 50, 2026-10-19: every copper strip one dark red).  The
+  // scale button turns amber and says which material and what to press.
+  const lossHint = useMemo(
+    () => (mode === 'Loss' && payload
+      ? lossScaleHint(payload, { logLoss, perMaterialLoss: perMat }) : null),
     [payload, mode, logLoss, perMat]);
 
   /** Single-angle field (A_z / |B| / J / Demag static).  `probeOnly` asks the
@@ -739,7 +746,12 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
             )}
             {mode === 'Loss' && (
               <Button size="small" onClick={() => setPerMat(v => !v)}
-                title={'Colour scale span. "shared" is the honest one: one W/m³ '
+                title={(lossHint
+                  ? `The ${lossHint.name} is pinned in the top colour band over `
+                    + `${(lossHint.topBandShare * 100).toFixed(0)} % of its area on this shared scale, `
+                    + `so differences inside it (p5→p95 ×${lossHint.spread.toFixed(1)}) are invisible. `
+                    + 'Press to switch to per-material (or use lin). '
+                  : '') + 'Colour scale span. "shared" is the honest one: one W/m³ '
                   + 'axis for the whole cross-section, so copper (≈4e7 W/m³ here) '
                   + 'and the magnets (≈2e6) are directly comparable — and the '
                   + 'magnets sit low because they ARE low. "per-material" '
@@ -747,10 +759,11 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                   + 'inside the weakest one is readable; a colour then means a '
                   + 'different number in each material and levels cannot be '
                   + 'compared across them.'}
-                sx={{ color: perMat ? '#fbbf24' : '#93c5fd', fontSize: 10,
+                sx={{ color: (perMat || lossHint) ? '#fbbf24' : '#93c5fd', fontSize: 10,
                   textTransform: 'none', minWidth: 0, px: 1,
-                  border: '1px solid var(--line-soft)' }}>
-                {perMat ? 'per-material' : 'shared'}
+                  border: lossHint ? '1px solid #fbbf24'
+                                   : '1px solid var(--line-soft)' }}>
+                {perMat ? 'per-material' : (lossHint ? 'shared ⚠' : 'shared')}
               </Button>
             )}
           </>

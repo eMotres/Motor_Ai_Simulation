@@ -65,7 +65,7 @@ MODEL = {"available": True, "simplified_available": True, "step_available": True
 
 
 def _render(dies, **kw):
-    return SC.render_block(dies, cooling_of=lambda d, c: COOL, model_of=lambda d, c: MODEL, **kw)
+    return SC.render_block(dies, cooling_of=lambda d, c, a: COOL, model_of=lambda d, c: MODEL, **kw)
 
 
 # ── 1. the renderer ──────────────────────────────────────────────────────────
@@ -303,3 +303,138 @@ def test_the_visitor_text_says_free_and_instant_not_invitation_or_pricing():
     assert "invitation" not in P.USER_PROMPT.lower() and "pricing" not in P.USER_PROMPT.lower()
     for reply in support._LIMIT_REPLIES.values():
         assert "invitation" not in reply.lower()
+
+
+# ── 4. the real tree_for_access path, layered like the server (regression 2026-10-19) ───────────────
+#
+# Live, the visitor block listed ONLY the shared "50 edited" die: the server's process workspace holds
+# the owner's working copies of the other dies, they shadow the shared ones and come back as layer
+# "workspace", which the block (rightly) does not call published.  And building the block built the 2-D
+# geometry of every machine (the full-mass overlay) on every call.
+
+BASE = "BASE 40"
+
+
+@pytest.fixture()
+def layered(tmp_path, monkeypatch):
+    import shutil
+    from pathlib import Path
+
+    from motor_ai_sim import auth, model3d, passport_store
+    from motor_ai_sim import motor_access as MA
+    from motor_ai_sim import users as U
+    from motor_ai_sim.routes import family as fam
+
+    def write(dies_dir: Path, cfgs):
+        d = dies_dir / BASE
+        d.mkdir(parents=True)
+        (d / "die.yaml").write_text(yaml.safe_dump({
+            "name": BASE, "locked": False, "created": "2026-10-19T10:00:00",
+            "geometry": {"num_slots": 12, "num_poles": 14, "stator_diameter": 40.0, "magnet_height": 2.0,
+                         "motor_length": 12.0}}, sort_keys=False), encoding="utf-8", newline="\n")
+        for name, vis in cfgs:
+            (d / f"{name}.yaml").write_text(_cfg_yaml(BASE, name, vis), encoding="utf-8", newline="\n")
+
+    root = tmp_path / "srv"
+    shared, published, works = root / "shared", root / "published", root / "workspaces"
+    for d in (shared / "dies", published, works, tmp_path / "identity"):
+        d.mkdir(parents=True, exist_ok=True)
+    # the vendor's catalog: L12, L20 open with the die, L13 private
+    write(shared / "dies", (("L12", None), ("L20", None), ("L13", "private")))
+    # the owner's WORKING COPY in the process workspace: same die, and L13 without its private flag
+    write(tmp_path / "identity" / "dies", (("L12", None), ("L20", None), ("L13", None)))
+    shutil.copy2(Path(__file__).resolve().parents[1] / "config" / "motor_config.yaml",
+                 tmp_path / "identity" / "motor_config.yaml")
+    monkeypatch.setenv("WORKSPACES_ROOT", str(works))
+    monkeypatch.setenv("SHARED_ROOT", str(shared))
+    monkeypatch.setenv("PUBLISHED_ROOT", str(published))
+    monkeypatch.delitem(fam.__dict__, "_DIES_DIR", raising=False)
+    monkeypatch.setattr("motor_ai_sim.config.DEFAULT_CONFIG_PATH", str(tmp_path / "identity" / "motor_config.yaml"))
+    monkeypatch.setattr(U, "_USERS_FILE", tmp_path / "users.json")
+    monkeypatch.setattr(U, "_BASELINE_DIE", BASE)
+    monkeypatch.setattr(MA, "_DIE_ACCESS_FILE", tmp_path / "die_access.json")
+    monkeypatch.setenv("AUTH_SECRET", "test-secret-not-the-real-one")
+    monkeypatch.delenv("CATALOG_GRANT_ALL_REGISTERED", raising=False)
+    monkeypatch.setenv("MOTRES_CAD_ROOT", str(tmp_path / "cad"))
+    monkeypatch.setattr(auth, "_ADMIN_EMAILS", {ADMIN})
+    monkeypatch.setattr(auth, "AUTH_ENFORCE", False)
+    monkeypatch.setattr(passport_store, "card_index",
+                        lambda: {BASE: {"L12": "2026-10-19", "L20": "2026-10-19", "L13": "2026-10-19"}})
+    monkeypatch.setattr(model3d, "scan", lambda root=None: [])
+    MA._CFG_VIS_CACHE.clear()
+    fam._TREE_CACHE.clear()
+    SC.clear_cache()
+    SC._mass_memo.clear()
+    U.create_user(ADMIN, "password-admin", role="admin", name="Admin")
+    yield {"admin": f"Bearer {U.issue_token(ADMIN)}", "root": root}
+    fam._TREE_CACHE.clear()
+    MA._CFG_VIS_CACHE.clear()
+    SC.clear_cache()
+    SC._mass_memo.clear()
+
+
+def test_the_baseline_die_survives_the_owners_working_copy_in_the_process_workspace(layered):
+    from fastapi import Response
+
+    from motor_ai_sim.routes import family as fam
+    # the control: read in the process workspace, the shared die is shadowed by the working copy
+    seen = {d["name"]: d.get("layer") for d in fam.tree_for_access(Response(), SC._visitor_access())["dies"]}
+    assert seen.get(BASE) == "workspace"
+    # the block reads the shared catalog: both open configurations, never the private one
+    t = SC.published_motors_block(None, visitor=True)
+    assert _names(t) == [f"{BASE} / L12", f"{BASE} / L20"]
+    assert "L13" not in t
+
+
+def test_an_admin_reads_the_shared_catalog_too_including_its_private_configuration(layered):
+    assert _names(SC.published_motors_block(layered["admin"])) == [f"{BASE} / L12", f"{BASE} / L13", f"{BASE} / L20"]
+
+
+def test_building_the_block_builds_no_geometry(layered, monkeypatch):
+    from motor_ai_sim.modules import motor_mass as MM
+    from motor_ai_sim.routes import family as fam
+
+    def no_overlay(*a, **k):
+        raise AssertionError("the full-mass overlay builds the 2-D geometry of the machine")
+
+    monkeypatch.setattr(fam, "_overlay_mass", no_overlay)
+    calls = []
+
+    def fake_summary(die, cfg, **kw):
+        calls.append((die, cfg))
+        return {"full_kg": 0.2, "active_kg": 0.1, "partial": False}
+
+    monkeypatch.setattr(MM, "mass_summary", fake_summary)
+    t = SC.published_motors_block(None, visitor=True)
+    assert _names(t) == [f"{BASE} / L12", f"{BASE} / L20"] and "mass 0.2 kg" in t
+    # a cache expiry re-renders from the tree and re-weighs NOTHING: the mass is kept per build
+    first = len(calls)
+    assert first == 2
+    SC.clear_cache()
+    assert SC.published_motors_block(None, visitor=True) == t
+    assert len(calls) == first
+
+
+def test_a_rebuilt_bom_is_weighed_again(layered, monkeypatch):
+    from motor_ai_sim.modules import motor_mass as MM
+    calls = []
+    monkeypatch.setattr(MM, "mass_summary", lambda d, c, **k: calls.append(c) or {"full_kg": 0.2, "partial": False})
+    bom = layered["root"] / "bom.csv"
+    bom.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(MM, "find_bom_file", lambda d, c, cad_dir=None: bom)
+    SC.published_motors_block(None, visitor=True)
+    n = len(calls)
+    SC.clear_cache()
+    SC.published_motors_block(None, visitor=True)
+    assert len(calls) == n
+    bom.write_text("changed bom", encoding="utf-8")
+    import os
+    os.utime(bom, ns=(1, 1))
+    SC.clear_cache()
+    SC.published_motors_block(None, visitor=True)
+    assert len(calls) == 2 * n
+
+
+def test_the_neutral_workspace_creates_nothing_on_disk(layered):
+    SC.published_motors_block(None, visitor=True)
+    assert not (layered["root"] / "shared" / ".support-shared-view").exists()

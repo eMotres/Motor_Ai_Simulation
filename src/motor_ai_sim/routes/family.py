@@ -2110,12 +2110,16 @@ def _overlay_mass(die: str, cfg: dict) -> dict:
     return {**cfg, "mass": summ, "duties": duties}
 
 
-def _stamp_cards(dies: list) -> list:
+def _stamp_cards(dies: list, with_mass: bool = True) -> list:
     """Copy of the tree's dies with the FULL-passport-card flag on every
     configuration (``card_date``: the card's date or None) and the die-level
     summary (``cards`` / ``config_count``).  Stamped AFTER the tree cache, on
     copies, so the cache never holds a stale flag and adding or removing a
-    passport-store file shows on the next request."""
+    passport-store file shows on the next request.
+
+    ``with_mass=False`` skips the full-mass overlay: that one builds the machine's 2-D geometry
+    for every configuration on EVERY call (the tree memo sits before it), which a caller that only
+    needs the catalog rows (the support assistant) must not pay."""
     try:
         from motor_ai_sim import passport_store as _ps
         idx = _ps.card_index()
@@ -2124,7 +2128,8 @@ def _stamp_cards(dies: list) -> list:
     out = []
     for d in dies:
         have = idx.get(str(d.get("name")), {})
-        cfgs = [_overlay_mass(str(d.get("name")), {**c, "card_date": have.get(str(c.get("name")))})
+        cfgs = [(_overlay_mass if with_mass else (lambda _n, cc: cc))(
+                    str(d.get("name")), {**c, "card_date": have.get(str(c.get("name")))})
                 for c in (d.get("configs") or [])]
         out.append({**d, "configs": cfgs,
                     "cards": sum(1 for c in cfgs if c["card_date"]),
@@ -2137,12 +2142,13 @@ def tree(response: Response, authorization: str = Header(default=None)):
     return tree_for_access(response, catalog_access(authorization))
 
 
-def tree_for_access(response: Response, _acc: dict):
+def tree_for_access(response: Response, _acc: dict, *, with_mass: bool = True):
     """The catalog tree for an ALREADY RESOLVED ``motor_access`` answer.
 
     ``tree`` is this with the caller's own access; the support assistant calls it
     directly to list "the motors a fresh sign-up may open" for a visitor, which no
-    header can express.  Same rules, same memo.
+    header can express.  Same rules, same memo.  ``with_mass=False`` leaves the per-configuration
+    ``mass`` block and the full-mass overlay of the duties out (see :func:`_stamp_cards`).
     """
     # Who may CHANGE the catalog: the vendor alone on a single-layer install,
     # and — since Stage 5 — any registered account once layering is on, because
@@ -2234,7 +2240,7 @@ def tree_for_access(response: Response, _acc: dict):
     _sig = _tree_signature(_client_filter)
     _hit = _TREE_CACHE.get(_key)
     if _sig and _hit is not None and _hit[0] == _sig:
-        res = {"dies": _stamp_cards(_hit[1]), "can_write": _can_write}
+        res = {"dies": _stamp_cards(_hit[1], with_mass), "can_write": _can_write}
         if not _hit[1] and _acc["mode"] == MODE_GRANTED:
             res["note"] = "no motors granted yet — ask the vendor"
         return res
@@ -2403,7 +2409,7 @@ def tree_for_access(response: Response, _acc: dict):
         })
     if _sig:
         _TREE_CACHE[_key] = (_sig, out)
-    res = {"dies": _stamp_cards(out), "can_write": _can_write}
+    res = {"dies": _stamp_cards(out, with_mass), "can_write": _can_write}
     if not out and _acc["mode"] == MODE_GRANTED:
         # An empty page tells a new account nothing.  ONE line, no wall of
         # text — the catalog renders it where "no dies yet" would go.

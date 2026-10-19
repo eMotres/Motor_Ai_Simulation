@@ -555,6 +555,13 @@ PartDesign bodies, so names, solids, gate, fit, BOM, STEP tree and GLB code are 
 * **No phase pins** on the board (owner rule) - unchanged: the template drops pins on an imported board.
 * Rebuild: `MOTOR_AI_SIM_PRIVATE_DATA=<private checkout> python cad/run_build.py build --die "CIANO14 40 new" --config L12|L20` (the server runs the same
   inside the CAD image built with `--build-context private=...`).
+* **Checked** (local rebuild through `cad/run_build.py`, FreeCAD 1.1.3, private checkout, die copy of 2026-10-13, geometry rows identical to the server's L12):
+  gate ok, fit table 33/33 ok (the old server L12 had the same 33 rows), GUI finish + `check_gui` ok, STEP re-import check ok, full + simplified GLB, BOM.
+  Volumes (mm3): L12 Shaft 1527.939, Prop_fix 290.620, Stator_holder 558.525, Stator_holder_back 1105.343 = the Fusion bodies (1527.938979, 290.619544,
+  558.525393, 1105.342978); L20 Shaft 1917.559 = the Fusion v19 L20 dump of the shaft (1917.559253, 23 faces, every face area equal), the other three as L12.
+  Shaft wall: bore to drive flat 1.025 mm (the old bore broke into the flats); smallest wall of the bore 0.8 mm (the C0.2 chamfer at the rear end face, as in
+  Fusion). Every visible object opaque (the 28 transparent view objects are hidden sketches). CIANO14 50 L15: 15 volumes, 33 fit rows, screw check and gate
+  identical to the server build report; CIANO28 150_35 L35: volumes, 20 fit rows and parameter hash identical to the A.7.6 build.
 
 ## The GFRP rings: full model only (template A.7.4, 2026-10-16)
 

@@ -10,11 +10,12 @@ sol = max(Part.read(os.environ["FC_STEP"]).Solids, key=lambda s: s.Volume)
 area = FP._section_face(sol, 0.0).Area
 longer, fill = FP.stretch_solid(sol, 0.0, 8.0)
 back, _ = FP.stretch_solid(longer, 0.0, -8.0)
-rt = sol.cut(back).Volume + back.cut(sol).Volume
+rt = abs(back.Volume - sol.Volume)      # boolean differences of near-identical Fusion surfaces are unreliable: compare volume, extent and face count
+rt_ext = max(abs(back.BoundBox.ZMax - sol.BoundBox.ZMax), abs(back.BoundBox.ZMin - sol.BoundBox.ZMin))
 rep = dict(fusion_volume=sol.Volume, section_area=area, longer_minus_fusion=longer.Volume - sol.Volume, filler=fill,
            solids=len(longer.Solids), valid=longer.isValid(),
            z_max_shift=longer.BoundBox.ZMax - sol.BoundBox.ZMax, z_min_shift=longer.BoundBox.ZMin - sol.BoundBox.ZMin,
-           round_trip_volume_error=rt, faces_fusion=len(sol.Faces), faces_longer=len(longer.Faces))
+           round_trip_volume_error=rt, round_trip_extent_error=rt_ext, faces_back=len(back.Faces), faces_fusion=len(sol.Faces), faces_longer=len(longer.Faces))
 with open(os.environ["FC_REPORT"], "w", encoding="utf-8") as fh:
     json.dump(rep, fh, indent=1)
 finish(True, "stretch checked")

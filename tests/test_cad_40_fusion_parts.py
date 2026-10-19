@@ -81,6 +81,7 @@ def test_the_stretch_is_a_cut_and_shift_of_the_constant_section(prof, tmp_path):
     assert code == 0, log
     r = json.load(open(tmp_path / "fusion_stretch.json", encoding="utf-8"))
     assert r["solids"] == 1 and r["valid"]
-    assert r["longer_minus_fusion"] == pytest.approx(8 * r["section_area"], rel=1e-6)
+    assert r["longer_minus_fusion"] == pytest.approx(8 * r["section_area"], rel=2e-5)       # a plain STEP read carries Fusion's 1e-5 tolerance noise (the build imports it canonical)
     assert r["z_max_shift"] == pytest.approx(4.0, abs=1e-6) and r["z_min_shift"] == pytest.approx(-4.0, abs=1e-6)
-    assert r["round_trip_volume_error"] < 1e-6 * r["fusion_volume"]
+    assert r["round_trip_volume_error"] < 1e-5 * r["fusion_volume"] and r["round_trip_extent_error"] < 1e-6
+    assert r["faces_back"] == r["faces_fusion"]                    # the cylinders stay one face each after the cut-and-shift (removeSplitter)

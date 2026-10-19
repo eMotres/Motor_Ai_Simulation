@@ -1284,8 +1284,16 @@ def configure_thermal_model(m: Mapping[str, Any]) -> Dict[str, Any]:
         "calibration": calibration_of(m), "calibrated": bool(cal_raw),
         "slipstream_factor": model_slipstream(m)[1],
         "fit_domain": (cal_raw.get("fit_domain") or {}).get("air_speed_ms") or cal_raw.get("anchor_air_speed_ms"),
-        "limits": {"winding_C": lims["winding_C"], "magnet_C": lims["magnet_C"]},
+        "limits": {"winding_C": lims["winding_C"], "magnet_C": lims["magnet_C"],
+                   # the RATED point (owner 2026-10-19): coils at 180 °C
+                   "rated_winding_C": _rated_winding_c()},
     }
+
+
+def _rated_winding_c() -> float:
+    """The project's rated winding temperature, from its one place."""
+    from motor_ai_sim.configure_limits import rated_winding
+    return rated_winding()[0]
 
 
 # ---------------------------------------------------------------------------

@@ -384,3 +384,15 @@ def test_the_rated_point_judges_coils_and_magnets_only():
     assert "housing" not in rated and "winding" in rated
     plain = [p.part for p in ttl.part_limits(thermal_result=field)]
     assert "housing" in plain
+
+
+def test_configure_reads_the_same_rated_winding():
+    """Configure's rated cap aims at the SAME rated point (PR #331 reads
+    ``thermal_limits.rated_winding_C``); the red line stays on ``winding_C``."""
+    from motor_ai_sim import configure_limits as cl
+    from motor_ai_sim import propeller_s1 as ps1
+
+    t = cl.thermal_limits({})
+    assert t["rated_winding_C"] == 180.0 and t["winding_C"] == 200.0
+    assert "rated" in t["rated_winding_basis"]
+    assert ps1._rated_winding_c() == 180.0

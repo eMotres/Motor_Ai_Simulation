@@ -249,8 +249,31 @@ def thermal_limits(fam: Optional[Dict[str, Any]]) -> Dict[str, Any]:
         w_c, w_basis = winding_limit()
     except Exception:                                   # noqa: BLE001
         w_c, w_basis = WINDING_LIMIT_C, "project insulation class N (200 °C)"
+    r_c, r_basis = rated_winding()
     return {"winding_C": float(w_c), "winding_basis": w_basis,
+            # THE RATED POINT (owner 2026-10-19): the coils' mean at the rated
+            # winding temperature — Configure's rated cap aims here; the red
+            # line stays on ``winding_C`` (the insulation class).
+            "rated_winding_C": r_c, "rated_winding_basis": r_basis,
             "magnet_C": mag, "magnet_card": str(name) if name else None}
+
+
+#: Rated winding fallback when the single source cannot be imported — mirrors
+#: ``report.PROJECT_RATED_WINDING_C`` (owner 2026-10-19: rated = coils at 180 °C).
+RATED_WINDING_C = 180.0
+
+
+def rated_winding() -> tuple:
+    """``(rated winding °C, basis)`` from ``coupled_time_to_limit.
+    rated_winding_limit`` — the ONE place the S1 rating, ``solve_to:
+    continuous``, the duty class and Configure all read."""
+    try:
+        from motor_ai_sim.coupled_time_to_limit import rated_winding_limit
+        c, basis = rated_winding_limit()
+        return float(c), basis
+    except Exception:                                   # noqa: BLE001
+        return RATED_WINDING_C, "project rated winding temperature (180 °C)"
+
 
 
 def cooling(fam: Optional[Dict[str, Any]], card: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:

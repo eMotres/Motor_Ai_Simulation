@@ -374,3 +374,36 @@ test('the manual "Use N A as the operating point" button no longer exists', () =
   assert.ok(!/Use \{[^}]*\}\s*A as/.test(summarySrc),
     'no button text template ("Use {…} A as the operating point") left');
 });
+
+
+// NEVER A DEAD END (owner 2026-10-19): no current holds at the duty's own
+// speed, so the line names the highest speed that holds under that cooling.
+test('an infeasible S1 names the continuous point instead of a dead end', () => {
+  const coupling = { continuous_rating: {
+    ok: true, feasible: false, limiting_part: 'magnet',
+    reference: { rpm: 4000 },
+    note: 'this cooling cannot hold even the losses that do NOT come from the current',
+    continuous_point: { feasible: true, rpm: 3120.4, I_cont_A_rms: 54.07,
+                        verified: true, power: { P_shaft_W: 7912 } },
+  } };
+  assert.equal(continuousRatingLine(coupling),
+    'S1 at 4000 rpm: none (magnet); continuous: 3120 rpm, 54.1 A rms, 7.9 kW (FEM-verified)');
+  coupling.continuous_rating.continuous_point.verified = false;
+  assert.match(continuousRatingLine(coupling), /\(estimate, not verified\)$/);
+  delete coupling.continuous_rating.continuous_point;
+  assert.match(continuousRatingLine(coupling), /^S1: this cooling cannot hold/);
+});
+
+
+test('a missed continuous point says by how much, and nothing at all says so too', () => {
+  const coupling = { continuous_rating: {
+    ok: true, feasible: false, limiting_part: 'magnet', reference: { rpm: 4000 },
+    continuous_point: { feasible: true, rpm: 2600, I_cont_A_rms: 24, verified: false,
+                        miss_K: 6.2 },
+  } };
+  assert.match(continuousRatingLine(coupling), /\(estimate, real pass \+6\.2 K\)$/);
+  coupling.continuous_rating.continuous_point = { feasible: false, rpm_min: 400 };
+  assert.equal(continuousRatingLine(coupling),
+    'S1 at 4000 rpm: none (magnet); no speed down to 400 rpm holds under this '
+    + 'cooling — it needs more cooling');
+});

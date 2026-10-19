@@ -466,11 +466,32 @@ def losses_by_node(summary: Mapping[str, Any],
                          "stator — it is sheared in the air between them"
                          % p_wind)
 
+    # WHAT EACH NODE'S WATTS ARE MADE OF (2026-10-19), for a caller that has
+    # to move them with the current or the speed (the continuous rating's
+    # eddy law and its speed search): the Bertotti terms per side, and the
+    # share of the rotor node that is SOLID eddy loss (the shaft) rather than
+    # lamination iron or mechanical friction.  Not a node — `node_watts` and
+    # `total_W` never see it.
+    def _terms(side: str) -> Dict[str, float]:
+        blk = dict(terms.get(side) or {})
+        return {k: float(blk.get(k) or 0.0)
+                for k in ("hysteresis_W", "eddy_W", "excess_W")}
+
+    split = {
+        "stator_core": (_terms("stator") if terms
+                        else {"hysteresis_W": 0.0, "eddy_W": 0.0,
+                              "excess_W": 0.0,
+                              "lumped_W": float(s.get("P_core_W") or 0.0)}),
+        "rotor_core": _terms("rotor"),
+        "rotor_solid_W": (max(p_solid - p_mag, 0.0)
+                          if th.get("P_mag_eddy_W") is not None else 0.0),
+    }
     out = {
         "winding": round(p_w, 4),
         "stator": round(p_s, 4),
         "rotor": round(p_r, 4),
         "magnet": round(p_mag, 4),
+        "split": split,
         "coil_ref_c": float(s.get("coil_temp_C") or th.get("coil_temp_c") or 20.0),
         "rpm": float(s.get("rpm") or th.get("rpm") or 0.0),
         "notes": notes,

@@ -431,6 +431,31 @@ export interface ContinuousRating {
    *  AT-THE-LIMIT line both kept describing the setpoint while the tiles
    *  had already moved to S1, with nothing on screen saying so). */
   record_is_s1?: boolean;
+  /** Present when no current holds at the duty's own speed (`feasible:
+   *  false`): the highest speed that holds continuously under the same
+   *  cooling — on the propeller's load line when the air is its slipstream —
+   *  confirmed by one real EM + thermal pass when `verified` is `true`.  It
+   *  never replaces the record: the tiles stay the duty's. */
+  continuous_point?: {
+    feasible?: boolean;
+    rpm?: number | null;
+    /** the lowest speed the search tried, when nothing held */
+    rpm_min?: number | null;
+    I_cont_A_rms?: number | null;
+    /** on a load line: the most current the cooling holds at `rpm` */
+    I_limit_A_rms?: number | null;
+    capped?: boolean;
+    limiting_part?: string | null;
+    temperatures_c?: Record<string, number>;
+    power?: { T_em_Nm?: number | null; P_shaft_W?: number | null;
+              P_mech_W?: number | null; basis?: string };
+    verified?: boolean | null;
+    miss_K?: number | null;
+    basis?: string;
+    load_line?: string | null;
+    speed_law?: string;
+    note?: string | null;
+  };
 }
 
 /** The found regime, as the coupling block carries it.  It IS a `RegimeLimits`
@@ -980,6 +1005,31 @@ export function continuousRatingLine(c: CouplingBlock | null | undefined):
       ?? r.note ?? 'the map could not be iterated';
     return `S1: NOT A RATING — ${why}`;
   }
+  // NEVER A DEAD END (owner 2026-10-19: «when I run coupling it must only
+  // ever end with a positive result»): no current holds at the duty's own speed,
+  // so the line names the highest speed that DOES hold under the same cooling.
+  const cp = r.continuous_point;
+  if (r.ok && r.feasible === false && cp) {
+    const rpmRef = r.reference?.rpm;
+    const lead = `S1 at ${rpmRef != null ? `${Math.round(rpmRef)} rpm` : 'this speed'}`
+      + `: none (${r.limiting_part ?? 'a part'}); `;
+    if (cp.feasible && cp.rpm != null && cp.I_cont_A_rms != null) {
+      const p = cp.power?.P_shaft_W ?? cp.power?.P_mech_W;
+      // A point the real pass did not confirm says by how much it missed.
+      const tag = cp.verified === true ? 'FEM-verified'
+        : cp.verified === false
+          ? (cp.miss_K != null
+            ? `estimate, real pass ${cp.miss_K >= 0 ? '+' : ''}${cp.miss_K.toFixed(1)} K`
+            : 'estimate, not verified')
+          : 'network estimate';
+      return lead + `continuous: ${Math.round(cp.rpm)} rpm, `
+        + `${cp.I_cont_A_rms.toFixed(1)} A rms`
+        + `${p != null ? `, ${(p / 1000).toFixed(1)} kW` : ''} (${tag})`;
+    }
+    return lead + `no speed down to ${cp.rpm_min != null
+      ? `${Math.round(cp.rpm_min)} rpm` : 'the search floor'} holds under `
+      + 'this cooling — it needs more cooling';
+  }
   if (!r.ok || r.feasible === false || r.I_cont_A_rms == null) {
     return `S1: ${r.refusal?.error ?? r.note ?? 'no continuous rating under '
       + 'this cooling'}`;
@@ -1023,8 +1073,8 @@ export function continuousRatingTip(c: CouplingBlock | null | undefined): string
       : Object.entries(r.temperatures_c ?? {}).map(
         ([part, temperature]) => `Last verification ${part}: ${temperature.toFixed(1)} °C`)) : []),
     'Fitted-network estimate: torque '
-    + 'scaled linearly with current, iron and magnet losses held at the '
-    + 'solved point.',
+    + 'scaled linearly with current, iron held at the solved point, magnet '
+    + 'and shaft eddy growing with current squared over a no-load share.',
     ...rows,
     r.trustworthy === false
       ? (r.notes?.find(n => n.startsWith('THE 2-D')) ?? '') : '',

@@ -41,9 +41,10 @@ const API = import.meta.env.VITE_API_URL ?? 'http://localhost:8001';
  * then stops exactly as a Cancel would.
  */
 export async function chooseDutyGeometry(message: string, diffs: DutyGeometryDiffRow[],
-                                         dieLocked: boolean): Promise<'apply_duty' | 'keep_die' | null> {
+                                         dieLocked: boolean, configCount?: number,
+                                         config?: string): Promise<'apply_duty' | 'keep_die' | null> {
   try {
-    return await askDutyGeometryChoice({ message, diffs, dieLocked });
+    return await askDutyGeometryChoice({ message, diffs, dieLocked, configCount, config });
   } catch {
     return null;
   }
@@ -133,7 +134,8 @@ export async function applyDutyEverywhere(die: string, cfg: string, duty: string
           throw new Error(String(det?.message ?? det ?? `HTTP ${ar.status}`));
         }
         const choice = await chooseDutyGeometry(String(det.message ?? ''),
-          det.diffs ?? [], det.die_locked === true);
+          det.diffs ?? [], det.die_locked === true,
+          typeof det.config_count === 'number' ? det.config_count : undefined, cfg);
         if (!choice) throw new Error(dutyGeometryCancelledMessage());
         if (choice === 'keep_die') {
           staleGeometryNotice = ` — saved results of ${duty} were computed on `

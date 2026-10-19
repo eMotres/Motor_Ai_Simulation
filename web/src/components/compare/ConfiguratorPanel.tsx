@@ -94,7 +94,7 @@ import { nsT } from '../../i18n/nsT';
 import { slotMouthLimit } from '../../lib/slotMouthFit';
 import i18n from '../../i18n';
 import {
-  usableVariants, variantFacts, readVariantNear, buildTuned, limitProblems,
+  usableVariants, variantFacts, readVariantNear, buildTuned, limitProblems, pwmBuildScale, transferPwmReading,
   pickDrive, readDriveChoice, writeDriveChoice, driveText, DRIVE_LS,
   variantDevices, variantCarriers, switchDevice, switchCarrier, resolveVariant, pairKey, carrierLabel,
   type DriveRecord, type DeviceLimits, type VariantReading,
@@ -1058,11 +1058,17 @@ const ConfiguratorPanel: React.FC = () => {
     }).catch(() => { if (!dead) setDevLimitsDone(true); /* limits unknown: only the envelope checks apply */ });
     return () => { dead = true; };
   }, [driveOn]);
-  /** the variants were computed for the loaded build: only I and rpm move */
+  /** the variants were computed for the loaded build; a moved build keeps PWM, carried from it (never a blank page) */
   const driveBuildMoved = driveOn && buildTuned(knobs, refKnobs ?? baseKnobs(p));
-  const driveRead = useMemo(
-    () => (variant && !driveBuildMoved ? readVariantNear(variant, knobs.rpm, knobs.I_A) : null),
-    [variant, driveBuildMoved, knobs.rpm, knobs.I_A]);
+  /** PWM asked for on a machine with no computed drive variant at all: Sine is shown, with one note */
+  const pwmWithoutVariant = knobs.drive === 'pwm' && variants.length === 0;
+  /** the PWM extra loss's factor from the loaded build to the knobs' build (`pwmBuildScale`; 1 = the loaded build) */
+  const pwmScale = driveBuildMoved ? pwmBuildScale(refKnobs ?? baseKnobs(p), knobs) : 1;
+  const driveRead = useMemo(() => {
+    if (!variant) return null;
+    const r = readVariantNear(variant, knobs.rpm, knobs.I_A);
+    return r.ok && driveBuildMoved ? { ...r, values: transferPwmReading(r.values, pwmScale), exact: false } : r;
+  }, [variant, driveBuildMoved, pwmScale, knobs.rpm, knobs.I_A]);
   const driveProblems = useMemo(
     () => (variant && driveRead && driveRead.ok
       ? limitProblems(variant, driveRead.values, knobs.I_A, devLimits[variant.device] ?? null, packWindow)
@@ -1083,9 +1089,6 @@ const ConfiguratorPanel: React.FC = () => {
     }
     if (!driveOn) return motorLossesComputed ? []
       : [{ text: tx('configure.lossNotComputed'), tip: tx('configure.lossNotComputedTip') }];
-    if (driveBuildMoved) {
-      return [{ text: tx('configureDrive.buildTuned'), tip: tx('configureDrive.buildTunedTip') }];
-    }
     if (!variant || !driveRead) {
       return [{ text: tx('configureDrive.refuseMissingPoint'), tip: tx('configureDrive.refuseMissingPointTip') }];
     }
@@ -1632,10 +1635,10 @@ ${s1Text.tip}` : '';
     const speedOk = batteryValid && speedRequestAccepted(rpm, lim.rpm);
     let dr: VariantReading | null = null;
     if (driveOn) {
-      if (!variant || driveBuildMoved) return true;
+      if (!variant) return true;
       const read = readVariantNear(variant, rpm, ld.I_A);
       if (!read.ok || limitProblems(variant, read.values, ld.I_A, devLimits[variant.device] ?? null, packWindow).length) return true;
-      dr = read.values;
+      dr = driveBuildMoved ? transferPwmReading(read.values, pwmScale) : read.values;
     }
     const gate = pointDisplayGate({ batteryValid, speedAccepted: speedOk, driveMode,
       driveAccepted: driveMode === 'sine' || dr != null, motorLossesComputed });
@@ -1658,7 +1661,7 @@ ${s1Text.tip}` : '';
     if (!propLoad || !series || ratedCapStart == null) return null;
     return ratedSpeedCap(ratedCapStart, pointBadAt, { floor: Math.max(ranges.rpm.min, 0.05 * ratedCapStart) })
       ?? s1CapRpm;
-  }, [propLoad, series, ratedCapStart, s1CapRpm, p, ref.poles, thermalGeom, tLimits, ambient, driveOn, variant, driveBuildMoved, // eslint-disable-line react-hooks/exhaustive-deps
+  }, [propLoad, series, ratedCapStart, s1CapRpm, p, ref.poles, thermalGeom, tLimits, ambient, driveOn, variant, driveBuildMoved, pwmScale, // eslint-disable-line react-hooks/exhaustive-deps
       devLimits, packWindow?.min, packWindow?.max, packMaxV, modM, batteryValid, motorLossesComputed, ranges.I_A.max, ranges.rpm.min,
       knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, calUsable, calModel, calDriveId, ratedWindingC]);
   useEffect(() => {
@@ -2481,13 +2484,20 @@ ${s1Text.tip}` : '';
           {/* ONE reserved two-line slot: a refusal fills it, it never pushes the blocks below
               (the tiles on the right turn to "—" at the same time) */}
           <Box sx={{ height: 34, overflow: 'hidden', mb: 0.5 }}
-            title={driveRefusals.map((r) => `${r.text}. ${r.tip}`).join('\n')}>
-            {driveRefusals.length > 0 && (
+            title={driveRefusals.length ? driveRefusals.map((r) => `${r.text}. ${r.tip}`).join('\n')
+              : driveBuildMoved ? tx('configureDrive.buildScaledTip', { k: fmt(pwmScale, 2) })
+                : pwmWithoutVariant ? tx('configureDrive.noVariantTip') : undefined}>
+            {driveRefusals.length > 0 ? (
               <Typography sx={{ fontSize: 11, fontWeight: 700, color: '#f87171', lineHeight: 1.3,
                 display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                 ⚠ {driveRefusals[0].text}{driveRefusals.length > 1 ? ` (+${driveRefusals.length - 1})` : ''}
               </Typography>
-            )}
+            ) : (driveBuildMoved || pwmWithoutVariant) ? (
+              // a moved build keeps its PWM numbers, carried from the loaded build (owner 2026-10-19: never blank)
+              <Typography sx={{ fontSize: 11, color: 'var(--text-3)', lineHeight: 1.3 }}>
+                {tx(driveBuildMoved ? 'configureDrive.buildScaled' : 'configureDrive.noVariant')}
+              </Typography>
+            ) : null}
           </Box>
 
 

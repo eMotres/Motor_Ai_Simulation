@@ -106,3 +106,29 @@ export function withPointAt(line: { ok: LoadPoint[]; over: LoadPoint[] }, x: num
   const ok = line.ok.length && x > okEnd && nextFail && x <= nextFail.x ? [...line.ok, p] : add(line.ok);
   return { ok, over: add(line.over) };
 }
+
+/** The chart's plot margins (PropellerLoadChart: LineChart margin left 4 + YAxis width 46, right 12). */
+export const PLOT_LEFT_PX = 4 + 46;
+export const PLOT_RIGHT_PX = 12;
+
+/**
+ * The speed under the pointer: a click on the load chart sets the motor's speed there (owner 2026-10-19 «раньше на
+ * графике пропеллера нажимаешь на точку и мотор пересчитывался»), dragging moves it.  `chartX` is the pointer's x in the
+ * chart's own pixels, `width` the chart's width, [xMin, xMax] the speed axis.  Rounded to 10 rpm; null outside the
+ * plot area or with no axis.
+ */
+export function rpmAtChartX(chartX: number, width: number, xMin: number, xMax: number,
+                            left = PLOT_LEFT_PX, right = PLOT_RIGHT_PX): number | null {
+  if (!(width > 0) || !Number.isFinite(chartX) || !(xMax > xMin)) return null;
+  const f = (chartX - left) / Math.max(1, width - left - right);
+  if (f < 0 || f > 1) return null;
+  return Math.round((xMin + f * (xMax - xMin)) / 10) * 10;
+}
+
+/** What the chart says while it has no line: still LOADING (a request in flight) or truly NO DATA (every answer came
+ *  back empty).  `answers` maps each requested propeller to its rows: undefined = in flight, null / [] = no data. */
+export function chartState(ids: readonly string[], answers: Readonly<Record<string, readonly unknown[] | null | undefined>>):
+  'loading' | 'nodata' | 'data' {
+  if (ids.some((id) => (answers[id]?.length ?? 0) > 0)) return 'data';
+  return ids.some((id) => answers[id] === undefined) ? 'loading' : 'nodata';
+}

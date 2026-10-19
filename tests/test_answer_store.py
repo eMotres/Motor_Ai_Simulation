@@ -126,3 +126,39 @@ def test_the_stored_answer_is_stripped_for_a_caller_who_may_not_see_it(monkeypat
     monkeypatch.setattr(ma, "may_see_config", lambda acc, die, cfg: True)
     out = cat._gate_configure_load(full, "Bearer x")
     assert out["thermal_model"] == {"x": 1} and out["propeller"]["s1"] == {"z": 3}
+
+
+def test_the_warm_up_stores_every_allowed_propellers_s1(tmp_path, monkeypatch):
+    """Every propeller a public configuration may drive, for Sine and the preset's own drive when its S1 model carries
+    it - so picking another propeller in the selector or the load chart reads a stored answer (owner 2026-10-19)."""
+    from motor_ai_sim import configure_warm as cw
+    from motor_ai_sim import cooling_options as co
+    from motor_ai_sim import propeller as pp
+    from motor_ai_sim import propeller_s1 as s1
+    from motor_ai_sim.routes import catalog as cat
+    from tests.test_propeller_s1 import _model, _prop
+    for name in ("syn_a", "syn_b"):
+        pr = _prop(tmp_path, name=name)
+        (tmp_path / "props" / "v").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "props" / "v" / f"{name}.yaml").write_text(yaml.safe_dump(pr.raw), encoding="utf-8")
+    monkeypatch.setattr(pp, "_DIR", tmp_path / "props")
+    (tmp_path / "s1" / "TEST DIE").mkdir(parents=True)
+    (tmp_path / "s1" / "TEST DIE" / "L1.json").write_text(json.dumps(_model()), encoding="utf-8")
+    monkeypatch.setattr(s1, "_DIR", tmp_path / "s1")
+    f = tmp_path / "co.yaml"
+    f.write_text(yaml.safe_dump({"version": 1, "dies": {"TEST DIE": {
+        "cooling_options": ["propeller_air"], "propellers": ["syn_a", "syn_b", "unknown_prop"]}}}), encoding="utf-8")
+    monkeypatch.setattr(co, "_FILE", f)
+    monkeypatch.setenv(st.ENV_ROOT, str(tmp_path / "store"))
+    st._ROOT_CHECKED.clear(); st.clear_memory()
+    monkeypatch.setattr(cw, "_shared_cards", lambda: [{"id": "cat_t"}])
+    monkeypatch.setattr(cat, "configure_context_answer", lambda mid, auth=None: {
+        "cooling": {"die": "TEST DIE"},
+        "presets": [{"config": "L1", "drive_variant": "si_48k",            # a drive the synthetic model does not carry
+                     "battery": {"cells": 6, "v_cell_min": 3.0, "v_cell_max": 4.2}}]})
+    out = cw.warm_propellers(limit_s=120)
+    assert out["s1_answers"] == 2 and out["failed"] == 0          # two computable propellers x Sine only
+    assert len(list((tmp_path / "store" / "s1").glob("*.json"))) == 2
+    st.clear_memory()
+    again = cw.warm_propellers(limit_s=120)                        # a restart: read back, not recomputed
+    assert again["s1_answers"] == 2 and again["seconds"] <= out["seconds"] + 0.5

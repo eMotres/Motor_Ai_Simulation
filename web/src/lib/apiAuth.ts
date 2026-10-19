@@ -5,6 +5,7 @@
 // Scoped strictly to the backend API base, so Firebase SDK / third-party calls
 // are never touched. No-op when signed out (free endpoints stay anonymous).
 import { refusalReasonKey } from './accessUi';
+import { sharedGet } from './sharedGet';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001').replace(/\/$/, '');
 
@@ -121,7 +122,8 @@ export function installFetchAuth(): void {
     } catch {
       /* never let auth wiring break a request */
     }
-    const res = await orig(input as RequestInfo | URL, init);
+    // identical catalogue reads in flight share one request (lib/sharedGet)
+    const res = await sharedGet(orig, API, input as RequestInfo | URL, init);
     // A call the server's role gate REFUSED must never fail silently: say why,
     // in one line (components/common/RefusedNotice).  Only the gate's own body
     // ({detail, required_role, your_role}) counts - any other 401/403 is the

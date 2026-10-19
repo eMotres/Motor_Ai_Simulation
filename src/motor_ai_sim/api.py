@@ -187,6 +187,14 @@ async def _lifespan(_app):
         except Exception as _e:
             _log.warning("sweep resumption failed: %s", _e)
     _watchdog.start()
+    # The stored Configure answers are built ahead of any request (owner 2026-10-19: "it must already be ready"):
+    # a separate low-priority process, so its S1 searches never hold this process's GIL.  Off on a workstation.
+    try:
+        from motor_ai_sim import configure_warm as _cwarm
+        if not _roles.is_worker():
+            _cwarm.start_background()
+    except Exception as _e:                              # noqa: BLE001
+        _log.warning("configure warm-up not started: %s", _e)
     # MCP server for external AI agents (Stage 1, docs/MCP_2026-09-28.md): the
     # SDK's session manager lives for the whole process.  A missing `mcp`
     # package must not take the API down — /mcp then answers 404.

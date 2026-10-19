@@ -29,7 +29,9 @@ export interface ConfigureContext {
   /** what cooling the die may offer (config/cooling_options.yaml) — `propeller_air` for the Ø40 drone motors */
   cooling?: import('./configuratorPropeller').CoolingInfo;
   /** the temperatures a winding / magnet is judged against */
-  thermal_limits?: { winding_C?: number | null; magnet_C?: number | null; winding_basis?: string; magnet_card?: string | null };
+  thermal_limits?: { winding_C?: number | null; magnet_C?: number | null; winding_basis?: string; magnet_card?: string | null;
+    /** the winding temperature RATED aims at (owner 2026-10-19: 180 °C), below the class limit `winding_C` */
+    rated_winding_C?: number | null };
   /** one per configuration of the machine's die (read from the machines themselves) */
   presets?: Preset[];
 }

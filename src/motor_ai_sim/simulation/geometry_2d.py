@@ -295,8 +295,8 @@ def params_from_config(cfg_path: Path = None, geo_override=None) -> MotorDomainP
     # `None` (the default) is resolved HERE, per call — not bound at import.
     # See `_cfg_path`.
     cfg_path = Path(cfg_path) if cfg_path is not None else _cfg_path()
-    with cfg_path.open() as f:
-        cfg = yaml.safe_load(f)
+    from motor_ai_sim import fscache as _fsc     # parsed once per version of the file
+    cfg = _fsc.read_yaml(cfg_path)
 
     g   = merge_geo_override(cfg["geometry"], geo_override)
     mm  = 1e-3

@@ -102,7 +102,10 @@ def test_configure_load_carries_the_anchor(monkeypatch):
            "presets": [{"config": "L15", "die": "R", "duty": "rated", "knobs": {}, "pwm_variants": [],
                         "drive_variant": None, "battery": None,
                         "duty_points": [{"name": "rated", "current_A": 6.0, "rpm": 1000.0}]}]}
-    monkeypatch.setattr(cat_mod, "get_configure_context", lambda mid, authorization=None: json.loads(json.dumps(ctx)))
+    from motor_ai_sim import answer_store
+    answer_store.clear_memory()
+    monkeypatch.setattr(cat_mod, "_configure_motor", lambda mid, authorization=None: ({"id": mid}, "x"))
+    monkeypatch.setattr(cat_mod, "_configure_context_of", lambda mid, motor: json.loads(json.dumps(ctx)))
     monkeypatch.setattr(dres, "get", lambda die, cfg: {"rated": REC} if (die, cfg) == ("R", "L15") else {})
     monkeypatch.setattr(ma, "catalog_access", lambda a=None: {"mode": ma.MODE_ALL, "dies": frozenset()})
     monkeypatch.setattr(ma, "may_see_config", lambda acc, die, cfg: True)

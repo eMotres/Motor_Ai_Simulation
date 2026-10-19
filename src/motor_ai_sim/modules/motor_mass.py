@@ -120,6 +120,20 @@ _CACHE: Dict[Tuple[str, str, float, float], MotorMass] = {}
 _LOCK = threading.Lock()
 
 
+def config_build(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None) -> Optional[Dict[str, float]]:
+    """The build the configuration's mass is computed for: ``{L_mm, N, wireH_mm}`` (stack, wire rows per slot, wire height) from
+    die.yaml + the configuration's geometry overrides, or ``None`` when it cannot be read."""
+    ddir = find_die_dir(die, dies_dir)
+    if ddir is None or not (ddir / f"{config}.yaml").is_file():
+        return None
+    try:
+        geo = dict((_fsc_read_yaml(ddir / "die.yaml") or {}).get("geometry") or {})
+        geo.update((_fsc_read_yaml(ddir / f"{config}.yaml") or {}).get("geometry_overrides") or {})
+        return {"L_mm": float(geo["motor_length"]), "N": float(geo["num_wires_per_slot"]), "wireH_mm": float(geo["wire_height"])}
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = None) -> MotorMass:
     """The app's mass of ``die`` / ``config`` with its per-part breakdown.  Raises ``MotorMassError``."""
     ddir = find_die_dir(die, dies_dir)
@@ -194,7 +208,9 @@ def app_motor_mass(die: str, config: str, *, dies_dir: Optional[os.PathLike] = N
 #: the propeller fixing plate).  Bearings are not listed: half of each turns, and the app has no split.
 ROTATING_KEYS = ("rotor_core", "magnet", "shaft", "sleeve", "carrier_front", "carrier_rear", "rings", "prop_fix")
 
-PARTIAL_LABEL = "partial mass (no CAD model yet)"
+#: the one wording of an incomplete full mass (owner 2026-10-19: "Mass" = the FULL mass, "Active mass" = the active parts; a motor
+#: whose full mass cannot be completed shows its active mass under this label, never as "Mass")
+PARTIAL_LABEL = "full mass incomplete (active parts only)"
 
 #: ASSEMBLY VARIANT (owner 2026-10-15).  A configuration with the top-level key ``cad_variant: frameless`` is the FRAMELESS KIT for
 #: robots - stator with coils and the phase board + rotor with magnets.  Its "full motor mass" is the KIT mass, labelled
@@ -224,6 +240,17 @@ def config_cad_variant(ddir: Optional[os.PathLike], config: str) -> str:
         return "full"
     v = str(cy.get("cad_variant") or "full").strip().lower()
     return v if v in ("full", "frameless") else "full"
+
+
+def _config_says_variant(ddir: Optional[os.PathLike], config: str) -> bool:
+    """True when the configuration file NAMES its ``cad_variant`` (an absent key is the default, not a statement)."""
+    if ddir is None:
+        return False
+    try:
+        cy = _fsc_read_yaml(Path(ddir) / f"{config}.yaml") or {}
+    except Exception:                                                      # noqa: BLE001
+        return False
+    return bool(str(cy.get("cad_variant") or "").strip())
 
 #: the consistency guard: the non-active parts counted must be at least this fraction of what the BOM itself lists beyond the
 #: simulation (its own "parts the simulation mass does not contain" row), else the mass is flagged partial
@@ -276,12 +303,8 @@ class BomFile:
     unmassed: List[str] = field(default_factory=list)         # numbered rows with no mass (adhesive, varnish, liner ...)
     total_g: Optional[float] = None                           # the file's T1 row: total mass of the BOM lines
     non_sim_g: Optional[float] = None                         # the file's C row: "parts the simulation mass does not contain"
-
-    @property
-    def density(self) -> Optional[float]:
-        """The density the CAD mass was computed with (the BOM states it in its notes), kg/m3."""
-        m = _BOM_NUM.search(self.notes or "")
-        return float(m.group(1)) if m else None
+    sim_g: Optional[float] = None                             # the file's T2 row: the simulation passport mass it compared with
+    kit_declared: bool = False                                # the file says it lists the FRAMELESS KIT (T1 / E rows)
 
 
 def _cad_dirs() -> List[Path]:
@@ -326,6 +349,10 @@ def read_bom_file(path: os.PathLike) -> BomFile:
             item = (row.get("item") or "").strip()
             part = (row.get("part") or "").strip()
             grams = _num(row.get("total mass g"))
+            if item in ("T1", "E") and "frameless kit" in part.lower():
+                out.kit_declared = True
+            if item == "T2":
+                out.sim_g = _num(row.get("simulation mass g"))
             if item == "T1" and grams is not None:
                 out.total_g = grams
             elif item == "C" and part.lower().startswith("parts the simulation mass does not contain") and grams is not None:
@@ -450,7 +477,12 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
     mm = app_motor_mass(die, config, dies_dir=dies_dir)
     bom = find_bom_file(die, config, cad_dir)
     choices = die_part_choices(ddir)
-    kit = config_cad_variant(ddir, config) == "frameless"
+    bf = read_bom_file(bom) if bom else None
+    # The kit decision: the configuration's own ``cad_variant``; when the configuration does not NAME one (an older copy of the
+    # die read outside a workspace, 2026-10-19: identity/dies/CIANO28 85 ... L15.yaml), the BOM's own statement that it lists the
+    # frameless kit.  A configuration that explicitly says ``full`` is never overruled by a (stale) kit BOM.
+    kit = (config_cad_variant(ddir, config) == "frameless"
+           or (bf is not None and bf.kit_declared and not _config_says_variant(ddir, config)))
     key = (str(ddir), config, (ddir / "die.yaml").stat().st_mtime_ns, (ddir / f"{config}.yaml").stat().st_mtime_ns,
            str(bom), bom.stat().st_mtime_ns if bom else 0, mm.total_kg, kit)
     if key in _FULL_CACHE:
@@ -461,11 +493,12 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
     except Exception:                                                      # noqa: BLE001
         cy = {}
     em_mats = cy.get("materials") or {}
-    bf = read_bom_file(bom) if bom else None
     lines = bf.lines if bf else []
     parts: List[MotorPart] = []
     if not lines:
-        why = ("no CAD bill of materials has been built for this motor" if bf is None
+        why = (("no CAD bill of materials has been built for this motor: phase board, pins and wire enamel are not weighed"
+                if kit else "no CAD bill of materials has been built for this motor: holders, rings, bearings, screws, phase "
+                            "board, pins and wire enamel are not weighed") if bf is None
                else "the CAD bill of materials carries no part with a mass")
         out = _partial_mass(die, config, mm, why, kit, unmassed=list(bf.unmassed) if bf else [])
     else:
@@ -540,8 +573,11 @@ def _full_mass_impl(die: str, config: str, *, dies_dir: Optional[os.PathLike] = 
         # rules were unavailable): say partial, with the reason, instead of claiming a full mass.
         counted_extra_g = 1000.0 * sum(p.mass_kg for p in parts if p.counted and p.mass_kg
                                        and (not p.em or p.key == "wire_insulation") and p.key != "carrier_front")
-        ref_g = bf.non_sim_g if bf and bf.non_sim_g else None
-        if ref_g is None:                                     # no C row: the same sum from the file's own massed lines
+        # The C row is "BOM minus the simulation passport mass": with no passport mass (T2 = 0 / absent) it is the WHOLE BOM,
+        # active parts included, and no reference for the non-active parts (2026-10-19: 85 L15 flagged "only 27.9 g of the
+        # 443.5 g" although every row was counted).  Then the same sum comes from the file's own massed lines.
+        ref_g = bf.non_sim_g if bf and bf.non_sim_g and bf.sim_g else None
+        if ref_g is None:                                     # no usable C row: the same sum from the file's own massed lines
             act = sum(ln.grams for ln in lines if _BOM_ACTIVE.search(ln.part))
             shaft_g = (shaft_line.grams if shaft_line else (keyed["carrier_front"].grams if "carrier_front" in keyed else 0.0))
             enamel_m = _BOM_COIL.search(coil_line.notes or "") if coil_line else None

@@ -739,7 +739,14 @@ def _principal(email):
     return Principal(email=email, credential_id="k", scopes=("read",))
 
 
-def test_mcp_tools_do_not_see_a_hidden_configuration(env):
+@pytest.fixture
+def _carded(monkeypatch):
+    """Both configurations carry a FULL passport card: the MCP catalog lists only carded configurations (``_visible_tree``)."""
+    from motor_ai_sim import passport_store as PS
+    monkeypatch.setattr(PS, "card_index", lambda: {DIE: {PUB: "2026-10-15", PRIV: "2026-10-15"}})
+
+
+def test_mcp_tools_do_not_see_a_hidden_configuration(env, _carded):
     from motor_ai_sim import mcp_tools as T
     for who, seen in ((ENG, False), (PLAIN, False), (GRANTED, True), (ADMIN, True)):
         p = _principal(who)
@@ -762,6 +769,20 @@ def test_mcp_tools_do_not_see_a_hidden_configuration(env):
         fit = T.check_fit(p, torque_nm=1.0, speed_rpm=100.0, limit=50)
         names = {r["config"] for r in fit["fits"] + fit["rejected"]}
         assert (PRIV in names) is seen, who
+
+
+def test_mcp_catalog_drops_a_die_with_no_visible_configuration(env, _carded):
+    """2026-10-19 (owner: «150_35 L35 and 85 L13 are private»): a die whose every configuration is private is not listed to an
+    account that cannot see them - not even its name - while the admin (whose agent key the connector uses) still sees it."""
+    from motor_ai_sim import mcp_tools as T
+    f = env["dies_dir"] / DIE / f"{PUB}.yaml"
+    f.write_text(_cfg_doc(DIE, PUB, True), encoding="utf-8")         # now BOTH configurations are private
+    for who, seen in ((ENG, False), (PLAIN, False), (ADMIN, True)):
+        ids = [d["id"] for d in T.list_catalog(_principal(who), "dies")["entries"]]
+        assert (DIE in ids) is seen, who
+        if not seen:
+            with pytest.raises(T.ToolError):
+                T.get_catalog_entry(_principal(who), "dies", DIE)
 
 
 # ── Admin: the toggle and the grant ──────────────────────────────────────────

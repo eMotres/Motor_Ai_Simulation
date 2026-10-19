@@ -698,7 +698,7 @@ def _build_calculator(wb, *, pp: Dict[str, Any], geo: Dict[str, Any],
     # THE motor mass is the FULL assembled mass (owner 2026-10-14): the active mass scales with the stack, the holders,
     # bearings, board ... do not.  No CAD model yet = the active mass, and the line says so.
     R_MASS = r
-    r = line(r, "Motor mass" + (" (frameless kit)" if mass_kit else "") + (" (partial: no CAD model yet)" if mass_partial else ""),
+    r = line(r, "Motor mass" + (" (frameless kit)" if mass_kit else "") + (" (active parts only: full mass incomplete)" if mass_partial else ""),
              f"={B(R_MASS_ACT)}+{mass_fixed_kg}", "kg",
              ("active parts only - no CAD bill of materials has been built for this motor" if mass_partial else
               ("FRAMELESS KIT (stator + coils + phase board + rotor + magnets; no housing, bearings, shaft, screws): active mass "
@@ -1367,11 +1367,11 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     row("Power per mass (kW/kg)",
         [(P_kw[i] / float(mass[i])) if (P_kw[i] and mass[i]) else None
          for i in range(len(duties))],
-        "active material only (partial mass: no CAD model yet)" if _partial else _full_what, 2)
+        "active parts only: full mass incomplete" if _partial else _full_what, 2)
     row("Torque per mass (N·m/kg)",
         [(abs(float(T_nm[i])) / float(mass[i])) if (T_nm[i] and mass[i]) else None
          for i in range(len(duties))],
-        "active material only (partial mass: no CAD model yet)" if _partial else _full_what, 2)
+        "active parts only: full mass incomplete" if _partial else _full_what, 2)
     def _kt(i: int) -> Optional[float]:
         v = _g(duties[i], "summary.Kt_Nm_per_Arms")
         if v is not None:
@@ -1556,7 +1556,7 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
             3)
     one("Magnet height (mm)", geo.get("magnet_height"), "", 2)
     one("Motor mass (kg)" + (" - frameless kit" if _kit else "") + (" - partial" if _partial else ""), next((m for m in mass if m), None),
-        ("partial mass (no CAD model yet): the active parts only - iron + copper + magnets + shaft over the active length"
+        ("full mass incomplete: the active parts only - iron + copper + magnets + shaft over the active length"
          if _partial else
          ("FRAMELESS KIT: stator iron, rotor iron, magnets, winding copper, enamel and the phase board; no housing, holders, "
           "carriers, bearings, shaft, screws, rings or propeller plate" if _kit else

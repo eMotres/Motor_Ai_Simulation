@@ -160,9 +160,15 @@ def _export_geometry(des, em, out_dir, sketches, say, hidden_exporter):
             bodies.append(dict(name=b.name, volume_mm3=round(b.volume * 1000.0, 6), area_mm2=round(b.area * 100.0, 6),
                                bbox_mm=_bbox(b.boundingBox), faces=b.faces.count, hidden=not b.isLightBulbOn,
                                material=b.material.name if b.material else None))
+        threads = set()                                      # cosmetic threads: the server colours these cylinders (GLB, GUI)
+        for tf in comp.features.threadFeatures:
+            for f in tf.faces:
+                if f.geometry.objectType.endswith("Cylinder"):
+                    threads.add(round(f.geometry.radius * 10.0, 6))
         occs = [dict(path=o.fullPathName, hidden=not o.isVisible, matrix=_matrix_mm(o.transform2))
                 for o in root.allOccurrencesByComponent(comp)]
-        parts[comp.name] = dict(file="parts/" + fname, bodies=bodies, occurrences=occs, hidden_in_document=not shown, referenced=any(o.isReferencedComponent for o in root.allOccurrencesByComponent(comp)),
+        parts[comp.name] = dict(file="parts/" + fname, bodies=bodies, occurrences=occs, hidden_in_document=not shown,
+                                thread_radii=sorted(threads), referenced=any(o.isReferencedComponent for o in root.allOccurrencesByComponent(comp)),
                                 material=comp.material.name if comp.material else None)
 
     sk_out, used_dxf = {}, set()

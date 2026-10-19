@@ -39,12 +39,14 @@ def fusion_parts_for(die: str, geometry: Dict[str, Any]) -> Optional[Dict[str, A
     link = FS.link_of_die(die) or {}
     cmap = dict(link.get("component_map") or COMPONENT_MAP)
     parts = m.get("parts") or {}
-    files, vols = {}, {}
+    files, vols, threads = {}, {}, {}
     for comp, body in cmap.items():
         p = parts.get(comp)
         if not p:
             continue
         files[body] = os.path.basename(p["file"])
+        if p.get("thread_radii"):                               # cosmetic thread cylinders measured in Fusion (view.thread_face_indices)
+            threads[body] = [float(r) for r in p["thread_radii"]]
         vols[body] = round(sum(float(b.get("volume_mm3") or 0.0) for b in p.get("bodies") or []), 6)
     missing = [b for b in REQUIRED if b not in files]
     if missing:
@@ -58,6 +60,7 @@ def fusion_parts_for(die: str, geometry: Dict[str, Any]) -> Optional[Dict[str, A
         "ref_motor_length": float(geometry.get("motor_length") or 0.0),       # the export is at the real length: no shift / stretch
         "files": files,
         "volumes_mm3": vols,
+        "thread_radii": threads,
         "multi": {k: x for k, x in MULTI.items() if k in files},
         "canonical": True,
         "bundle": {"document": m.get("document"), "urn": m.get("urn"), "version": v, "exported_at": m.get("exported_at"),

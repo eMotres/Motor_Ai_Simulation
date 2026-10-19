@@ -9,6 +9,9 @@
 export interface RowDuty {
   name: string; mode?: string; power_kw?: number | null; torque_nm?: number | null;
   rpm?: number | null; current_arms?: number | null;
+  /** SHORT-TIME OR CONTINUOUS (owner 2026-10-19), from the server */
+  duty_class?: string | null;
+  short_time?: { time_to_limit_s?: number | null } | null;
   result?: { mass_kg?: number | null; mass_active_kg?: number | null; mass_partial?: boolean | null } | null;
 }
 export interface RowCfg {
@@ -34,6 +37,10 @@ export interface ConfigButton {
   mass_partial: boolean;
   mass_active_kg: number | null;
   card_date: string | null; modes: number;
+  /** the default mode is SHORT-TIME and the configuration has no continuous
+   *  one to show instead: the card says so rather than calling it a rating */
+  short_time: boolean;
+  short_time_s: number | null;
 }
 
 const num = (v: unknown): number | null =>
@@ -49,6 +56,8 @@ export function configButtons(die: RowDie): ConfigButton[] {
       mass_kg: num(d?.result?.mass_kg), rpm: num(d?.rpm),
       mass_partial: d?.result?.mass_partial !== false, mass_active_kg: num(d?.result?.mass_active_kg),
       card_date: c.card_date ?? null, modes: (c.duties ?? []).length,
+      short_time: d?.duty_class === 'short_time',
+      short_time_s: num(d?.short_time?.time_to_limit_s),
     };
   });
 }

@@ -969,8 +969,23 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
     role = str(cfg_doc.get("role") or "motor")
     duties: List[Dict[str, Any]] = [d for d in (cfg_doc.get("duties") or [])
                                     if isinstance(d, dict)]
-    # continuous-looking duties first, peak last — the order of the paper card
-    duties.sort(key=lambda d: ("peak" in str(d.get("name", "")).lower(),
+    # SHORT-TIME OR CONTINUOUS (owner 2026-10-19), read off each duty's stored
+    # coupled record: a CONTINUOUS duty leads the card (it is the rating), a
+    # SHORT-TIME one is never shown as the rating — it keeps its own column,
+    # named with the time it may run.
+    from motor_ai_sim import duty_class as _dcl
+    _classes = {str(d.get("name") or ""): _dcl.classify(
+        d, (coupled or {}).get(str(d.get("name") or "")))
+        for d in duties}
+
+    def _cls_of(d: Dict[str, Any]) -> str:
+        return str((_classes.get(str(d.get("name") or "")) or {})
+                   .get("duty_class") or "")
+
+    # continuous duties first, then the unclassified, short-time and peak last
+    # — the order of the paper card
+    duties.sort(key=lambda d: ({_dcl.CONTINUOUS: 0, "": 1}.get(_cls_of(d), 2),
+                               "peak" in str(d.get("name", "")).lower(),
                                str(d.get("name", ""))))
     ncol = max(1, len(duties))
 
@@ -1186,8 +1201,19 @@ def build_datasheet(*, die: str, cfg: str, die_doc: Dict[str, Any],
 
     # ── operating points ────────────────────────────────────────────────────
     section("OPERATING POINTS")
-    row("Duty", [str(d.get("name") or "") for d in duties],
+    row("Duty", [str(d.get("name") or "")
+                 + (" (short-time)" if _cls_of(d) == _dcl.SHORT_TIME else "")
+                 for d in duties],
         "the named points this machine was characterised at", 0, bold=True)
+    if any(_cls_of(d) for d in duties):
+        row("Duty class",
+            [("continuous" if _cls_of(d) == _dcl.CONTINUOUS
+              else _dcl.short_time_words(_classes.get(str(d.get("name") or "")))
+              if _cls_of(d) == _dcl.SHORT_TIME else "")
+             for d in duties],
+            "continuous = holds for ever at its saved cooling; short-time = "
+            "how long it runs from cold before the named part reaches its "
+            "limit (coupled EM-thermal run)", 0)
     row("Mode", [str(d.get("mode") or role) for d in duties],
         "motor = drives the shaft, generator = driven by it", 0)
 

@@ -1068,10 +1068,36 @@ def get_configure_context(motor_id: str,
     for pr in presets:
         # does this configuration have a FULL passport card (v1 record)?
         pr["card_date"] = _ps.card_date(str(pr.get("die") or ""), str(pr.get("config") or ""))
+        _mark_duty_classes(pr, docs)
     return {"motor_id": motor_id,
             **_cl.context(motor, fam),
             # one preset per configuration of the die, read from the machines themselves
             "presets": presets}
+
+
+def _mark_duty_classes(pr: dict, docs: list) -> None:
+    """SHORT-TIME OR CONTINUOUS on every mode of a Configure preset (owner
+    2026-10-19): ``duty_class`` and ``duty_label`` on each ``duty_points``
+    entry, read off the duty's stored coupled record.  Never fails the
+    context — a mode with nothing stored simply carries no class."""
+    try:
+        from motor_ai_sim import duty_class as _dcl
+        from motor_ai_sim import duty_results as _dres
+        cfg = str(pr.get("config") or "")
+        doc = next((d for d in docs if isinstance(d, dict)
+                    and str(d.get("name") or "") == cfg), {}) or {}
+        rec = _dres.get(str(pr.get("die") or ""), cfg) or {}
+        for dp in pr.get("duty_points") or []:
+            n = str(dp.get("name") or "")
+            entry = next((x for x in (doc.get("duties") or [])
+                          if isinstance(x, dict) and x.get("name") == n), None)
+            k = _dcl.classify(entry, (rec.get(n) or {}).get("coupled"))
+            if k:
+                dp["duty_class"] = k["duty_class"]
+                dp["duty_label"] = _dcl.label(n, k)
+    except Exception:                                       # noqa: BLE001
+        log.debug("duty classes for the presets could not be read",
+                  exc_info=True)
 
 
 @router.patch("/{motor_id}/configure_limits")

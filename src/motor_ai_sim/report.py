@@ -7836,8 +7836,9 @@ def duty_class_mark(col: Dict[str, Any]) -> str:
     a duty class for the reader.
     """
     rec = duty_cycle_record(col)
+    st = short_time_mark(col)
     if rec is None:
-        return ""
+        return st
     spec = rec.get("spec") or {}
     bits = [duty_cycle_kind(rec)]
     ed = _numf(spec.get("ed_pct"))
@@ -7846,7 +7847,22 @@ def duty_class_mark(col: Dict[str, Any]) -> str:
     cyc = _numf(spec.get("cycle_s"))
     if cyc is not None:
         bits.append(_fmt(cyc, 0, "s"))
-    return " · " + " ".join(bits)
+    return " · " + " ".join(bits) + st
+
+
+def short_time_mark(col: Dict[str, Any]) -> str:
+    """``" · short-time 6 min 11 s"`` when this duty's stored coupled record
+    says it runs out (owner 2026-10-19, ``duty_class``), else ``""`` — a
+    short-time duty is never left to read as a rating."""
+    try:
+        from motor_ai_sim import duty_class as _dcl
+        k = _dcl.classify(col.get("d") if isinstance(col.get("d"), dict) else None,
+                          (col.get("res") or {}).get("coupled"))
+    except Exception:                                       # noqa: BLE001
+        return ""
+    if not k or k.get("duty_class") != _dcl.SHORT_TIME:
+        return ""
+    return " · short-time %s" % _dcl.fmt_duration(k.get("time_to_limit_s"))
 
 
 def _cmp_table(header: str, cols: List[Dict[str, Any]],

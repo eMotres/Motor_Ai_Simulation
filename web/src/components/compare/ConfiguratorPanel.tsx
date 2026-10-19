@@ -72,7 +72,7 @@ import {
 import { isSizeInStock, nearestStockSizes, formatNearestSizes } from '../../lib/wireStock';
 import { listDevices } from '../controller/controllerApi';
 import { isRatedPreset, presetKnobs, presetDiff, presetOfBuild, presetMassAnchor, type Preset } from '../../lib/configuratorPresets';
-import { buildModePresets, baseModeLabel, type ModePreset } from '../../lib/configuratorModes';
+import { buildModePresets, baseModeLabel, presetButtons, type ModePreset } from '../../lib/configuratorModes';
 import { seedBase, stampKnobs, readStampedKnobs, restoreMisfit, reconcilePlan, type Misfit } from '../../lib/configureRestore';
 import { APPLICATIONS, cleanApplications, coolingForApplication, hasApplicationSwitch, selectedApplication } from '../../lib/applications';
 import {
@@ -2258,12 +2258,13 @@ ${s1Text.tip}` : '';
                 </Button>
               )}
               <ToggleButtonGroup exclusive size="small" value={matchedKey} sx={{ ml: 'auto', flexWrap: 'wrap' }}>
-                {modePresets.map((pr) => (
+                {/* only the LOADED configuration's modes, named by the mode alone (owner 2026-10-19) */}
+                {presetButtons(modePresets, baseConfig).map(({ preset: pr, text }) => (
                   <ToggleButton key={pr.key} value={pr.key} onClick={() => startLoad(pr.config, pr.duty || null)}
-                    title={tx('configure.presetTip')}
+                    title={pr.short_time ? `${tx('configure.presetTip')} ${tx('configure.presetShortTimeTip')}` : tx('configure.presetTip')}
                     sx={{ px: 1.5, py: 0.25, fontSize: 12, color: 'var(--text-2)', borderColor: 'var(--line)',
                       '&.Mui-selected': { bgcolor: '#1d4ed8', color: '#fff', '&:hover': { bgcolor: '#2563eb' } } }}>
-                    {pr.label}
+                    {text}
                   </ToggleButton>
                 ))}
               </ToggleButtonGroup>
@@ -2789,7 +2790,7 @@ ${s1Text.tip}` : '';
                 pack={s1PackMin != null && s1PackMax != null ? { min: s1PackMin, max: s1PackMax } : null}
                 escBusA={s1Req.escBusA} allowed={allowedProps} selectedId={propId}
                 s1Reason={s1MotorReason} s1Rpm={s1MotorRpm} s1Label={s1MotorLabel}
-                supplyRpm={s1Supply?.rpm ?? null} supplyReason={s1SupplyReason} supplyLabel={s1SupplyLabel} onRpmChange={setRpm} />}
+                supplyRpm={s1Supply?.rpm ?? null} supplyReason={s1SupplyReason} supplyLabel={s1SupplyLabel} speedRpm={knobs.rpm} onRpmChange={setRpm} />}
           {!s1Moved && s1DriveFellBack && (
             <Typography sx={{ fontSize: 10.5, color: 'var(--text-3)', mt: 0.5 }}>
               {tx('configurePropeller.s1DriveFallback', { drive: s1Req.drive })}

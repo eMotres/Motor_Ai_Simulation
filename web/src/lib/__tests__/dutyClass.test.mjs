@@ -43,10 +43,12 @@ t('the catalog card says when its default mode is short-time', () => {
   assert.equal(R.configButtons(die)[0].short_time, false);
 });
 
-t('a Configure mode that is short-time says so on its button', () => {
+t('a short-time Configure mode (peak) says so in its tooltip, never on the button (owner 2026-10-19)', () => {
   const presets = [{ config: 'L35', die: 'X', knobs: {}, battery: null, pwm_variants: [], drive_variant: null,
-    duty_points: [{ name: 'rated', current_A: 82.3, rpm: 4000, duty_class: 'short_time' },
-                  { name: 'rated_cont', current_A: 24, rpm: 2643, duty_class: 'continuous' }] }];
-  const labels = M.buildModePresets(presets).map((m) => m.label);
-  assert.deepEqual(labels, ['L35 · rated (short-time)', 'L35 · rated_cont']);
+    duty_points: [{ name: 'rated', current_A: 24, rpm: 2643, duty_class: 'short_time' },   // rated is never short-time
+                  { name: 'peak', current_A: 82.3, rpm: 4000, duty_class: 'short_time' }] }];
+  const b = M.buildModePresets(presets);
+  assert.deepEqual(b.map((m) => m.label), ['L35 · rated', 'L35 · peak']);
+  assert.deepEqual(b.map((m) => m.buttonLabel), ['rated', 'peak']);
+  assert.deepEqual(b.map((m) => m.short_time), [false, true]);
 });

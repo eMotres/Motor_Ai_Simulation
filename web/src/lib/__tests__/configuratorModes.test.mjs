@@ -73,9 +73,22 @@ t('rated is never short-time and a rated variant is never a button (owner 2026-1
     { ...pt('rated', 6.3, 1000, 0), duty_class: 'short_time' },   // even if a stored record says so
   ]);
   const b = M.buildModePresets([d85]);
-  assert.deepEqual(b.map((x) => x.label), ['L15 · rated', 'L15 · peak (short-time)']);
+  assert.deepEqual(b.map((x) => x.label), ['L15 · rated', 'L15 · peak']);
+  assert.deepEqual(b.map((x) => x.short_time), [false, true]);         // said in the tooltip, never on the button
   assert.equal(b[0].knobs.I_A, 6.3);                               // the default load lands on rated
   assert.equal(M.isPresetMode('Rated short time'), false);
   assert.equal(M.isPresetMode('rated'), true);
   assert.equal(M.isPresetMode('peak'), true);
+});
+
+t('the buttons show only the modes of the loaded configuration, by the mode alone (owner 2026-10-19)', () => {
+  const bs = M.buildModePresets([L12, L20]);
+  const txt = (cfg) => M.presetButtons(bs, cfg).map((x) => x.text);
+  assert.deepEqual(txt('L12'), ['rated', 'peak']);                  // no 'L20 · rated' on the L12 motor
+  assert.deepEqual(txt('L20'), ['rated', 'peak', 'S1 prop']);
+  assert.ok(M.presetButtons(bs, 'L12').every((x) => x.preset.config === 'L12'));
+  assert.ok(bs.every((x) => !/short/i.test(x.buttonLabel)));
+  // nothing loaded yet / a configuration without buttons: every mode, named with its configuration
+  assert.deepEqual(txt(null), ['L12 · rated', 'L12 · peak', 'L20 · rated', 'L20 · peak', 'L20 · S1 prop']);
+  assert.deepEqual(txt('L99'), txt(null));
 });

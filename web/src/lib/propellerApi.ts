@@ -79,14 +79,17 @@ export function fetchPropellerS1(id: string, die: string, config: string, ambien
 const _series = new Map<string, Promise<PropSeries | null>>();
 
 /** One propeller's answer on the rpm grid, with the housing film coefficient of every sample. */
-export function fetchSeries(id: string, ambientC: number, housingMm: number): Promise<PropSeries | null> {
-  const key = seriesCacheKey(id, ambientC, housingMm);
+export function fetchSeries(id: string, ambientC: number, housingMm: number,
+                            factor: number | null = null): Promise<PropSeries | null> {
+  const key = seriesCacheKey(id, ambientC, housingMm, factor);
   const hit = _series.get(key);
   if (hit) return hit;
   const q = new URLSearchParams({
     rpm_max: String(SERIES_RPM_MAX), n: String(SERIES_N),
     temp_c: String(ambientC), housing_d_mm: String(housingMm),
   });
+  // the machine's own fitted slipstream factor (its thermal model's), so the air is the S1 limit's air
+  if (factor != null && factor > 0) q.set('factor', String(factor));
   const p = fetch(`${API}/api/propellers/${encodeURIComponent(id)}/series?${q}`, { cache: 'no-store' })
     .then((r) => (r.ok ? (r.json() as Promise<PropSeries>) : null))
     .catch(() => null)
@@ -96,13 +99,13 @@ export function fetchSeries(id: string, ambientC: number, housingMm: number): Pr
 }
 
 /** The cache key of one `/series` request (propeller, ambient, housing diameter). */
-export const seriesCacheKey = (id: string, ambientC: number, housingMm: number): string =>
-  `${id}|${ambientC.toFixed(1)}|${housingMm.toFixed(1)}`;
+export const seriesCacheKey = (id: string, ambientC: number, housingMm: number, factor: number | null = null): string =>
+  `${id}|${ambientC.toFixed(1)}|${housingMm.toFixed(1)}${factor != null && factor > 0 ? `|f${factor.toFixed(4)}` : ''}`;
 
 /** Put answers the server already gave (the one-call load below) into the request caches, so the
  *  page's own request for the same thing is answered without a second trip. */
-export function primeSeries(id: string, ambientC: number, housingMm: number, s: PropSeries): void {
-  _series.set(seriesCacheKey(id, ambientC, housingMm), Promise.resolve(s));
+export function primeSeries(id: string, ambientC: number, housingMm: number, factor: number | null, s: PropSeries): void {
+  _series.set(seriesCacheKey(id, ambientC, housingMm, factor), Promise.resolve(s));
 }
 export function primeS1(id: string, die: string, config: string, ambientC: number, drive: string,
                         pack: { min: number; max: number } | null, r: S1Result): void {
@@ -118,8 +121,11 @@ export interface ConfigureLoadAnswer {
   context: import('./configureContextApi').ConfigureContext;
   config: string;
   duty: string | null;
+  /** THE thermal model of this configuration (its S1 model's thermal side), evaluated by lib/s1Thermal.ts;
+   *  null = none (the page's lumped estimate stands in, labelled) */
+  thermal_model?: import('./s1Thermal').S1ThermalModel | null;
   propeller: null | {
-    id: string; ambient_c: number; housing_d_mm: number | null;
+    id: string; ambient_c: number; housing_d_mm: number | null; slipstream_factor?: number | null;
     die: string | null; config: string; drive: string; pack: { min: number; max: number } | null;
     series: PropSeries | null; series_error: string | null;
     s1: S1Result | null; s1_error: string | null;

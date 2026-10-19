@@ -47,7 +47,7 @@ import {
 } from '../../lib/configuratorTiles';
 import {
   isPropellerCooled, isRoboticsCooled, hasPropellerCooling, allowedPropellers, effectivePropeller, defaultPropellerFor, readCoolChoice, writeCoolChoice, coolChoiceKey, PROP_CHOICE_LS, DEFAULT_AMBIENT_C,
-  seriesAt, currentForTorque, tempLimits, judgeTemps, zoneGradient, zoneSamples, modelLabel, vendorLabel,
+  seriesAt, currentForTorque, tempLimits, zoneGradient, zoneSamples, modelLabel, vendorLabel,
   type CoolChoice, type PropSeries, type PropSummary,
 } from '../../lib/configuratorPropeller';
 import { fetchPropellers, fetchSeries, fetchPropellerS1, fetchConfigureLoad, primeSeries, primeS1, seriesCacheKey } from '../../lib/propellerApi';
@@ -57,8 +57,9 @@ import {
 } from '../../lib/configuratorPropellerS1';
 import { activeDuty } from '../../lib/dutySettings';
 import { initialRpmForLoadMode, propellerDutyRpmDefault } from '../../lib/configuratorDutyDefaults';
-import { configurePointThermal, configureMotorHeat, estimateThermal } from '../../lib/thermalEstimate';
+import { configurePointThermal, configureMotorHeat, type ThermalEstimate } from '../../lib/thermalEstimate';
 import { ratedSpeedCap } from '../../lib/configureRatedCap';
+import { s1LoadPoint, s1ThermalAt, type S1ThermalModel } from '../../lib/s1Thermal';
 import { airH, getCoolingPayload, liqH } from '../thermal/api';
 import CoolingControls from '../thermal/CoolingControls';
 import ChargePanel from './ChargePanel';
@@ -1242,8 +1243,15 @@ const ConfiguratorPanel: React.FC = () => {
   const housingMm = ref.geo.statorOR_mm * 2;
   // The series is kept WITH the request it answers: an answer for another propeller, ambient or
   // machine is never read (no stale numbers after a switch, no "—" flash while the next one loads).
+  // THE thermal model of the loaded configuration (its server S1 model's thermal side, owner 2026-10-19 "one model
+  // only"): the temperature tiles, the red line and the rated cap evaluate it for every knob position (lib/s1Thermal.ts).
+  // It comes with the configuration's load; null = the machine has none (the lumped estimate stands in, labelled).
+  const [thermalModelState, setThermalModelState] = useState<{ key: string; value: S1ThermalModel | null } | null>(null);
+  const calModel = thermalModelState && thermalModelState.key === `${catId ?? ''}|${baseConfig ?? ''}` ? thermalModelState.value : null;
+  // the air over the housing is the model's own (its fitted slipstream factor) - the S1 limit's air
+  const seriesFactor = calModel?.slipstream_factor ?? null;
   const seriesKey = pointGate.showBatteryDerived && propellerCoolingActive && propId
-    ? seriesCacheKey(propId, ambient, housingMm) : '';
+    ? seriesCacheKey(propId, ambient, housingMm, seriesFactor) : '';
   const [seriesState, setSeriesState] = useState<{ key: string; value: PropSeries } | null>(null);
   const series = seriesKey && seriesState?.key === seriesKey ? seriesState.value : null;
   useEffect(() => {
@@ -1252,7 +1260,7 @@ const ConfiguratorPanel: React.FC = () => {
     let retry: ReturnType<typeof setTimeout> | null = null;
     const go = () => {
       if (dead) return;
-      void fetchSeries(propId, ambient, housingMm).then((s) => {
+      void fetchSeries(propId, ambient, housingMm, seriesFactor).then((s) => {
         if (dead) return;
         if (s) setSeriesState({ key: seriesKey, value: s }); else retry = setTimeout(go, 3000);
       });
@@ -1377,9 +1385,25 @@ ${s1Text.tip}` : '';
     : tx(propLoad ? 'configurePropeller.pickerTip' : 'configurePropeller.coolingPickerTip')) + s1Tail;
   /** the torque of the passport at a current — every other knob as given */
   const torqueAtI = (k: Knobs) => (I: number) => scaleMotor(p, { ...k, I_A: I }, ref.poles).T_Nm;
+  // THE thermal model applies to the loaded configuration's own build, in the propeller's wash it was fitted to, with a
+  // drive it computed (`undefined` = a PWM variant it does not carry).  Anywhere else the lumped estimate stands in.
+  const calDriveId: string | null | undefined = driveOn
+    ? (variant && calModel?.drives?.[String(variant.id)] ? String(variant.id) : undefined) : null;
+  const calUsable = !!calModel && propellerCoolingActive && calDriveId !== undefined
+    && !buildTuned(knobs, refKnobs ?? baseKnobs(p));
+  /** The current the propeller's torque needs at `rpm`: with the configuration's model, the SERVER's S1 current (the torque
+   *  map at the magnets' own temperature, the coupled fixed point - propeller_s1.load_point); else the passport scaling. */
+  const propCurrentAt = (k: Knobs, rpm: number, pt: { torque_Nm: number | null; h_W_m2K: number | null } | null) => {
+    if (calUsable && calModel && pt && pt.torque_Nm != null && pt.h_W_m2K != null) {
+      const lp = s1LoadPoint(calModel, rpm, pt.torque_Nm, pt.h_W_m2K, ambient, calDriveId ?? null);
+      if (lp) return { ok: true as const, I_A: lp.current_A };
+    }
+    return currentForTorque(pt?.torque_Nm ?? null, torqueAtI({ ...k, rpm }), ranges.I_A.max);
+  };
   const propLoadRes = useMemo(
-    () => (propLoad && propRpmReady ? currentForTorque(propPoint?.torque_Nm ?? null, torqueAtI(knobs), ranges.I_A.max) : null),
-    [propLoad, propRpmReady, propPoint?.torque_Nm, p, ref.poles, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, knobs.rpm, ranges.I_A.max]); // eslint-disable-line react-hooks/exhaustive-deps
+    () => (propLoad && propRpmReady ? propCurrentAt(knobs, knobs.rpm, propPoint) : null),
+    [propLoad, propRpmReady, propPoint?.torque_Nm, propPoint?.h_W_m2K, p, ref.poles, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, knobs.rpm, ranges.I_A.max, // eslint-disable-line react-hooks/exhaustive-deps
+      calUsable, calModel, calDriveId, ambient]);
   // the current knob FOLLOWS the propeller (a refusal parks it at the largest current the motor may carry)
   useEffect(() => {
     if (!propLoadRes || (!propLoadRes.ok && propLoadRes.kind === 'no_prop')) return;
@@ -1437,11 +1461,32 @@ ${s1Text.tip}` : '';
   }, [thermalGeom, propellerCoolingActive, optionalPropellerCooling, roboticsOnly, propPoint, loadRefused, ambient, coolPayload]);
   /** winding / magnet / housing temperatures at the knobs (null while the cooling data is not
    *  here, or while the load is refused — never numbers for a point that cannot be run) */
+  /** ONE verdict for a point: the server's thermal model at (rpm, I) when it applies, else the lumped estimate - for the
+   *  tiles, the red line, the rail zones and the rated cap alike.  `heat` gates it: a refused point shows nothing. */
+  const judgePoint = (mode: 'sine' | 'pwm', accepted: boolean, base: Parameters<typeof configurePointThermal>[2],
+                      extraW: number | null, cool: { h_Wm2K: number; ambient_C: number } | null,
+                      rpm: number, I: number, L_mm: number) => {
+    const lumped = configurePointThermal(mode, accepted, base, extraW, cool, { ...thermalGeom, stackLength_mm: L_mm }, tLimits);
+    if (!calUsable || !calModel || !lumped.heat || !cool) return { ...lumped, basis: 'lumped' as const };
+    const t = s1ThermalAt(calModel, rpm, I, cool.h_Wm2K, cool.ambient_C, calDriveId ?? null);
+    if (!t) return { ...lumped, basis: 'lumped' as const };
+    const g = calModel.thermal_geom;
+    const D = g.statorOD_mm / 1000, L = g.stackLength_mm / 1000;
+    const th: ThermalEstimate = {
+      P_total_W: t.losses_W.motor_total, A_surface_m2: Math.PI * D * L + 2 * Math.PI * (D / 2) ** 2,
+      h_Wm2K: cool.h_Wm2K, ambient_C: cool.ambient_C,
+      T_housing_C: t.T_housing_C, T_winding_C: t.T_winding_C, T_magnet_C: t.T_magnet_C,
+      dT_conv_C: t.T_housing_C - cool.ambient_C, dT_winding_C: t.T_winding_C - t.T_housing_C,
+      dT_magnet_C: t.T_magnet_C - t.T_housing_C,
+    };
+    const windingOver = t.T_winding_C > tLimits.winding_C, magnetOver = t.T_magnet_C > tLimits.magnet_C;
+    return { heat: lumped.heat, thermal: th, over: windingOver || magnetOver, windingOver, magnetOver, basis: 'model' as const };
+  };
   // ONE function judges this point AND every speed the rated cap tries (`pointBadAt` below)
-  const pointNow = useMemo(() => configurePointThermal(driveMode, pointGate.accepted, motorHeatBase, extraLossW,
-    cooling ? { h_Wm2K: cooling.h_Wm2K, ambient_C: cooling.ambient_C } : null, thermalGeom, tLimits),
+  const pointNow = useMemo(() => judgePoint(driveMode, pointGate.accepted, motorHeatBase, extraLossW,
+    cooling ? { h_Wm2K: cooling.h_Wm2K, ambient_C: cooling.ambient_C } : null, knobs.rpm, knobs.I_A, knobs.L_mm),
   [driveMode, pointGate.accepted, motorHeatBase?.P_cu_W, motorHeatBase?.P_fe_W, motorHeatBase?.P_mag_W, motorHeatBase?.stator_W, // eslint-disable-line react-hooks/exhaustive-deps
-    motorHeatBase?.rotor_W, extraLossW, cooling, thermalGeom, tLimits]);
+    motorHeatBase?.rotor_W, extraLossW, cooling, thermalGeom, tLimits, calUsable, calModel, calDriveId, knobs.rpm, knobs.I_A, knobs.L_mm]);
   const thermal = pointNow.thermal;
   const verdict = thermal ? { over: pointNow.over, windingOver: pointNow.windingOver, magnetOver: pointNow.magnetOver } : null;
   const overheats = !!verdict?.over;
@@ -1478,7 +1523,9 @@ ${s1Text.tip}` : '';
       absLevel={t.level} plain
       tip={tx(t.tipKey, { limit: t.limit != null ? fmt(t.limit, 0) : '',
         air: t.air != null ? fmt(t.air, 1) : '—', h: t.h != null ? fmt(t.h, 0) : '—',
-        surface: t.surface != null ? fmt(t.surface, 0) : '—' })}
+        surface: t.surface != null ? fmt(t.surface, 0) : '—' })
+        // which model the temperature comes from: the configuration's calibrated one, or the labelled fallback
+        + (t.id !== 'airSpeed' && thermal ? `\n${tx(pointNow.basis === 'model' ? 'configurePropeller.thermalBasisModel' : 'configurePropeller.thermalBasisLumped')}` : '')}
       blankTip={!pointGate.accepted || !pointGate.showMotorLosses ? pointBlankTip
         : tx(loadRefused ? 'configurePropeller.blankRefused' : 'configurePropeller.blankLoading')} />
   );
@@ -1490,18 +1537,16 @@ ${s1Text.tip}` : '';
       const pt = seriesAt(series, rpm);
       if (!pt || pt.h_W_m2K == null) return null;
       const r = scaleMotor(p, { ...knobs, rpm, I_A: I }, ref.poles);
-      const heat = configureMotorHeat('sine', true, { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W,
-        P_mag_W: r.P_mag_W, stator_W: r.P_loss_stator_W, rotor_W: r.P_loss_rotor_W }, 0);
-      if (!heat) return null;
-      const th = estimateThermal(thermalGeom, heat.thermalLosses,
-        { h_Wm2K: pt.h_W_m2K, ambient_C: ambient });
-      return !judgeTemps(th.T_winding_C, th.T_magnet_C, tLimits).over;
+      const j = judgePoint('sine', true, { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W,
+        P_mag_W: r.P_mag_W, stator_W: r.P_loss_stator_W, rotor_W: r.P_loss_rotor_W }, 0,
+        { h_Wm2K: pt.h_W_m2K, ambient_C: ambient }, rpm, I, knobs.L_mm);
+      return j.thermal ? !j.over : null;
     };
     const okRpm = (r: number): boolean | null => {
       if (!propLoad) return okAt(r, knobs.I_A);
       const pt = seriesAt(series, r);
       if (!pt) return null;
-      const ld = currentForTorque(pt.torque_Nm, torqueAtI({ ...knobs, rpm: r }), ranges.I_A.max);
+      const ld = propCurrentAt(knobs, r, pt);
       return ld.ok ? okAt(r, ld.I_A) : false;
     };
     const samples = zoneSamples(ranges.rpm.min, ranges.rpm.max);
@@ -1509,7 +1554,8 @@ ${s1Text.tip}` : '';
     const iOk = propLoad ? [] : zoneSamples(ranges.I_A.min, ranges.I_A.max).map((I) => okAt(knobs.rpm, I));
     return { rpm: zoneGradient(rpmOk), I: zoneGradient(iOk) };
   }, [propellerCoolingActive, series, p, ref.poles, thermalGeom, tLimits, ambient, propLoad, driveOn, motorLossesComputed, ranges.rpm.min, ranges.rpm.max, ranges.I_A.min, ranges.I_A.max,
-      sinePointAccepted, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, propLoad ? 0 : knobs.I_A, propLoad ? 0 : knobs.rpm]); // eslint-disable-line react-hooks/exhaustive-deps
+      sinePointAccepted, knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, propLoad ? 0 : knobs.I_A, propLoad ? 0 : knobs.rpm,
+      calUsable, calModel]); // eslint-disable-line react-hooks/exhaustive-deps
   /** Would the page refuse this speed or draw the red line at it?  The SAME chain as the tiles - the propeller's current,
    *  the pack's speed limit at that current, the drive reading and its device limits (PWM), the motor heat of that drive
    *  (`configurePointThermal`) in the propeller's wash - only at another speed.  Propeller load only. */
@@ -1518,7 +1564,7 @@ ${s1Text.tip}` : '';
     const pt = seriesAt(series, rpm);
     if (!pt) return true;                                     // off the propeller's grid
     const k: Knobs = { ...knobs, rpm };
-    const ld = currentForTorque(pt.torque_Nm, torqueAtI(k), ranges.I_A.max);
+    const ld = propCurrentAt(knobs, rpm, pt);
     if (!ld.ok) return true;                                  // the motor cannot carry the propeller here
     const kI: Knobs = { ...k, I_A: ld.I_A };
     const r = scaleMotor(p, kI, ref.poles);
@@ -1538,12 +1584,12 @@ ${s1Text.tip}` : '';
     const gate = pointDisplayGate({ batteryValid, speedAccepted: speedOk, driveMode,
       driveAccepted: driveMode === 'sine' || dr != null, motorLossesComputed });
     if (!gate.accepted) return true;
-    return configurePointThermal(driveMode, gate.accepted,
+    return judgePoint(driveMode, gate.accepted,
       gate.showMotorLosses ? { P_cu_W: r.P_cu_W, P_fe_W: r.P_fe_W, P_mag_W: r.P_mag_W,
         stator_W: r.P_loss_stator_W, rotor_W: r.P_loss_rotor_W } : null,
       extraLossTile(driveMode, dr).value,
       pt.h_W_m2K != null ? { h_Wm2K: pt.h_W_m2K, ambient_C: ambient } : null,
-      { ...thermalGeom, stackLength_mm: kI.L_mm }, tLimits).over;
+      rpm, ld.I_A, kI.L_mm).over;
   };
   // The RATED speed for this propeller (owner 2026-10-18 "rated must always work - find the real point for each
   // propeller", 2026-10-19 "no overheat at all"): from the server's motor S1 limit (else the preset's own speed), lowered
@@ -1555,7 +1601,7 @@ ${s1Text.tip}` : '';
       ?? s1CapRpm;
   }, [propLoad, series, ratedCapStart, s1CapRpm, p, ref.poles, thermalGeom, tLimits, ambient, driveOn, variant, driveBuildMoved, // eslint-disable-line react-hooks/exhaustive-deps
       devLimits, packWindow?.min, packWindow?.max, packMaxV, modM, batteryValid, motorLossesComputed, ranges.I_A.max, ranges.rpm.min,
-      knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split]);
+      knobs.N, knobs.L_mm, knobs.wireH_mm, knobs.nP, knobs.split, calUsable, calModel, calDriveId]);
   useEffect(() => {
     const how = clampToS1Ref.current;
     // one step, never two: wait for this request's S1 answer before moving the speed at all
@@ -1748,10 +1794,12 @@ ${s1Text.tip}` : '';
       if (loadSeqRef.current !== seq || refIdNowRef.current !== forRef) return;   // a newer load / another machine
       if (a && a.context?.motor_id === catalogIdOf(forRef)) {
         setCtxState({ identity, value: a.context }); setCtxDone(true);
+        setThermalModelState({ key: `${catalogIdOf(forRef) ?? ''}|${a.config}`, value: a.thermal_model ?? null });
         const pr = a.propeller;
         if (pr?.series) {
-          primeSeries(pr.id, pr.ambient_c, pr.housing_d_mm ?? housingMm, pr.series);
-          setSeriesState({ key: seriesCacheKey(pr.id, pr.ambient_c, pr.housing_d_mm ?? housingMm), value: pr.series });
+          const f = pr.slipstream_factor ?? null;
+          primeSeries(pr.id, pr.ambient_c, pr.housing_d_mm ?? housingMm, f, pr.series);
+          setSeriesState({ key: seriesCacheKey(pr.id, pr.ambient_c, pr.housing_d_mm ?? housingMm, f), value: pr.series });
         }
         if (pr && pr.die) {
           // a refused S1 (no model for this configuration) is an answer too: null, exactly as the page's own request gives

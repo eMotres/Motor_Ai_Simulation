@@ -569,6 +569,8 @@
     "noPropellerTip": "此电机的冷却选项未指明目录中已有的任何螺旋桨。",
     "tWinding": "绕组",
     "tWindingTip": "绕组热点温度。以 {limit} °C 为限值；超过时磁贴显示带 > 的限值。",
+    "thermalBasisModel": "来自本配置的校准热模型，与其连续工作极限所用模型相同。",
+    "thermalBasisLumped": "简化估算：该工作点没有校准热模型（其他结构、冷却或驱动）。",
     "tMagnet": "磁钢",
     "tMagnetTip": "磁钢温度。以 {limit} °C（磁钢牌号的限值）为限值；超过时磁贴显示带 > 的限值。",
     "tHousing": "外壳",

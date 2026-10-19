@@ -88,6 +88,24 @@ document and never in plain text.
    transaction: if the timeline reports errors after recompute the dialog lists the failing features and offers
    **Undo all**. The add-in **never saves**: the owner reviews and saves a new Fusion version, then exports it.
 
+### 3.3 Add-in status and Fusion API findings (2026-10-19)
+
+Built: `fusion/AeroStatorSync/` (entry `AeroStatorSync.py`, package `aerostator_sync/`: `params`, `bundle`, `client`,
+`keystore`, `fusion_collect`), unit tests `tests/test_fusion_sync_addin_lib.py`. The export was run through the local
+Fusion MCP on the CIANO14 50 document; every part STEP matched the Fusion body volumes (FreeCAD read-back).
+
+Fusion API behaviour the code works around:
+
+- A component STEP silently leaves out **hidden** geometry (light bulb off). Switching bulbs on and back off marks the
+  document modified, so hidden components are copied (TemporaryBRepManager) into a temporary design, exported from
+  there, and that design is closed unsaved. Fusion has no invisible documents, so it shows for a moment.
+- A component STEP includes the component's sub-occurrences (e.g. the holder STEP also carries its screws); the
+  manifest lists the component's own bodies, and the server matches solids to them by volume.
+- The DXF sketch export needs a writable script context even though it changes nothing.
+- `importToTarget` (STEP import) always goes into the **active** document, whatever target component is passed.
+- An occurrence (component) pattern whose count is an expression shows a "not an exact integer" warning while its
+  document is not active; the copies are still placed correctly.
+
 ## 4. Server: rebuild from Fusion bodies
 
 ### 4.1 Template A.8 "Fusion assembly"

@@ -5125,11 +5125,18 @@ def solve_thermal_field(
     # The air that reaches the rotor's end faces and its axial channels is the
     # wash times that fraction (continuity through the windows).  No CAD → 1.0,
     # the rotor face fully in the wash (what the open frame assumed until now).
+    # It rides with ``rotor_channels``: 'off' is the map as it was, faces in
+    # the full wash.
     try:
+        if rotor_channels == "off":
+            raise ValueError("rotor_channels off")
         _phi_face = float(_bn_cad.get("rotor_face_open_fraction"))
         _phi_src = "CAD (bearings.thermal_path.rotor_face_open_fraction)"
     except (TypeError, ValueError):
-        _phi_face, _phi_src = 1.0, "no CAD holder: the face is taken fully open"
+        _phi_face, _phi_src = 1.0, ("rotor_channels = 'off': the face fully in "
+                                    "the wash, as before" if rotor_channels == "off"
+                                    else "no CAD holder: the face is taken "
+                                         "fully open")
     _phi_face = min(max(_phi_face, 0.0), 1.0)
     _face_v = float(_open_v) * _phi_face
 

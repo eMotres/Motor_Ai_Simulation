@@ -69,8 +69,27 @@ def _rotor_mass_kg(geo: Dict[str, Any]) -> Optional[float]:
 # Routes
 # ---------------------------------------------------------------------------
 
+def _public_library(lib: Dict[str, Any]) -> Dict[str, Any]:
+    """Library copy for non-admin callers: card / lubricant free text goes
+    through ``public_text`` (owner attributions, design notes about our own
+    machines and measurement-document paths are not datasheet facts).  Keys are
+    kept, so every reader finds the fields it expects."""
+    from motor_ai_sim.public_text import public_text
+    out = dict(lib)
+    for sect in ("bearings", "lubricants"):
+        rows = {}
+        for n, card in (lib.get(sect) or {}).items():
+            c = dict(card)
+            for k in ("description", "note"):
+                if isinstance(c.get(k), str):
+                    c[k] = public_text(c[k])
+            rows[n] = c
+        out[sect] = rows
+    return out
+
+
 @router.get("/library")
-def get_library() -> Dict[str, Any]:
+def get_library(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """Every card and lubricant in ``config/bearings_library.yaml``.
 
     The loader follows the file's mtime (``bearings._load``), so a card
@@ -79,9 +98,13 @@ def get_library() -> Dict[str, Any]:
     """
     from motor_ai_sim import bearings as brg
     try:
-        return brg.library()
+        lib = brg.library()
     except FileNotFoundError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+    from motor_ai_sim import auth as _auth
+    if _auth.caller_identity(authorization).get("is_admin"):
+        return lib
+    return _public_library(lib)
 
 
 @router.get("/losses")

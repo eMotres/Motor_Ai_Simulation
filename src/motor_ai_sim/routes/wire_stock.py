@@ -13,17 +13,27 @@ compute endpoint.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 
 log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/wires", tags=["wires"])
 
 
+def _public_wire(w: Dict[str, Any]) -> Dict[str, Any]:
+    """A stock row for a non-admin caller: the spec text loses batches / lots /
+    kilograms and the warehouse name goes.  Every key stays, so the Materials
+    table reads the same shape (its numeric ``stock_kg`` column is untouched)."""
+    from motor_ai_sim.public_text import public_wire_spec
+    return {**w, "spec": public_wire_spec(w.get("spec"), w.get("thickness_mm"),
+                                          w.get("width_mm")),
+            "warehouse": ""}
+
+
 @router.get("/stock")
-def get_stock() -> Dict[str, Any]:
+def get_stock(authorization: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """The whole wire-stock table plus the sizes it makes available.
 
     ``wires`` — every row, sorted by thickness then width then code.
@@ -39,8 +49,11 @@ def get_stock() -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(exc))
     except ws.WireStockError as exc:
         raise HTTPException(status_code=500, detail=str(exc))
+    from motor_ai_sim import auth as _auth
+    is_admin = bool(_auth.caller_identity(authorization).get("is_admin"))
+    rows = [w.to_dict() for w in wires]
     return {
         **meta,
-        "wires": [w.to_dict() for w in wires],
+        "wires": rows if is_admin else [_public_wire(w) for w in rows],
         "available_sizes": sizes,
     }

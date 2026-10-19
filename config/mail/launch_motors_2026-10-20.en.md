@@ -1,6 +1,6 @@
 Subject: AeroStator is open: first motors to work with, two of them already in production
 
-{{hello}}
+Hello,
 
 You have an AeroStator account, so here is a short note on what AeroStator is for and what you can do with it now.
 

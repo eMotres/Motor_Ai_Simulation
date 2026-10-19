@@ -1,6 +1,6 @@
 Subject: AeroStator 已开放：首批可使用的电机，其中两款已投入生产
 
-{{hello}}
+您好，
 
 您已注册 AeroStator 账户，因此我们简要介绍一下 AeroStator 的用途以及您现在可以做什么。
 

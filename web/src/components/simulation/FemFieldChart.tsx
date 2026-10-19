@@ -61,7 +61,7 @@ function useMatOverrideReady(): boolean {
 // ./fieldView — see the header there for why they had to stop being seven
 // hand-written copies.  Nothing in this file may build a field colour of its
 // own: that is exactly how the views drifted apart.
-import { EM_MENU, emOutputs, lossScaleHint, outlinesFromMesh } from './fieldView';
+import { EM_MENU, emOutputs, outlinesFromMesh } from './fieldView';
 import { storedMeshQuery } from '../../lib/meshSettings';
 
 // ── helpers: read mesh params persisted by MeshPanel ──────────────────────
@@ -155,7 +155,11 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   const [lossSnap,    setLossSnap]    = useState<FemPayload | null>(null);
   const [lossProbing, setLossProbing] = useState<boolean>(false);
   const [lossProbed,  setLossProbed]  = useState<boolean>(false);
-  const [logLoss,     setLogLoss]     = useState<boolean>(true);   // log W/m³ map
+  // Loss view axis of the ONE shared scale.  Default 'power' (owner 2026-10-19:
+  // one scale for all materials, and the copper strip gradient toward the air
+  // gap must still show): linear hides iron and magnets, log hides the copper
+  // gradient, v^0.4 shows both.  The button cycles power -> lin -> log.
+  const [lossScale,   setLossScale]   = useState<'power' | 'linear' | 'log'>('power');
   // Loss view: one shared W/m³ axis (default, comparable) vs each material
   // scaled to its own range (readable inside the weakest component, but a
   // colour no longer means one number).  Default OFF — the shared axis is the
@@ -273,15 +277,8 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // the colour bar off the SAME FieldScale.  (They used to derive their ranges
   // independently and could disagree about what a colour meant.)
   const emOut = useMemo(
-    () => emOutputs(payload, mode, { logLoss, perMaterialLoss: perMat }),
-    [payload, mode, logLoss, perMat]);
-  // Loss view, shared scale: a material pinned in the top band hides its own
-  // structure (CIANO14 50, 2026-10-19: every copper strip one dark red).  The
-  // scale button turns amber and says which material and what to press.
-  const lossHint = useMemo(
-    () => (mode === 'Loss' && payload
-      ? lossScaleHint(payload, { logLoss, perMaterialLoss: perMat }) : null),
-    [payload, mode, logLoss, perMat]);
+    () => emOutputs(payload, mode, { lossScale, perMaterialLoss: perMat }),
+    [payload, mode, lossScale, perMat]);
 
   /** Single-angle field (A_z / |B| / J / Demag static).  `probeOnly` asks the
    *  backend ONLY for a picture it already holds for this exact key (its
@@ -626,8 +623,9 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
   // map on screen is the run's own cycle-averaged one or the single-frame
   // analytic fallback, and saying which is not optional.
   const headerLabel = mode === 'Loss'
-    ? (lossSnap ? 'Loss density (simulation run, cycle-averaged)'
-                : 'Loss density (single frame, analytic)')
+    ? ((lossSnap ? 'Loss density (simulation run, cycle-averaged)'
+                 : 'Loss density (single frame, analytic)')
+       + (perMat ? ' · per-material scale' : ' · one scale for all materials'))
     : mode === 'Demag'
       ? ((lossSnap || runDemag)
            ? 'Demagnetisation, % of Br remaining (simulation run, worst over period)'
@@ -737,21 +735,22 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
         controls={
           <>
             {mode === 'Loss' && (
-              <Button size="small" onClick={() => setLogLoss(v => !v)}
-                title="Toggle log / linear colour scale"
+              <Button size="small"
+                onClick={() => setLossScale(v => v === 'power' ? 'linear' : v === 'linear' ? 'log' : 'power')}
+                title={'Axis of the colour scale (one scale for all materials in every case). '
+                  + '"v^0.4" (default) is between linear and log: copper strips and the '
+                  + 'iron / magnet pattern are both readable. "lin" shows only the strongest '
+                  + 'losses (iron and magnets turn dark blue); "log" shows every material but '
+                  + 'squeezes a x1.6 change in copper into a few per cent of the ramp. '
+                  + 'Press to cycle.'}
                 sx={{ color: '#93c5fd', fontSize: 10, textTransform: 'none',
                   minWidth: 0, px: 1, border: '1px solid var(--line-soft)' }}>
-                {logLoss ? 'log' : 'lin'}
+                {lossScale === 'power' ? 'v^0.4' : lossScale === 'linear' ? 'lin' : 'log'}
               </Button>
             )}
             {mode === 'Loss' && (
               <Button size="small" onClick={() => setPerMat(v => !v)}
-                title={(lossHint
-                  ? `The ${lossHint.name} is pinned in the top colour band over `
-                    + `${(lossHint.topBandShare * 100).toFixed(0)} % of its area on this shared scale, `
-                    + `so differences inside it (p5→p95 ×${lossHint.spread.toFixed(1)}) are invisible. `
-                    + 'Press to switch to per-material (or use lin). '
-                  : '') + 'Colour scale span. "shared" is the honest one: one W/m³ '
+                title={'Colour scale span. "shared" is the honest one: one W/m³ '
                   + 'axis for the whole cross-section, so copper (≈4e7 W/m³ here) '
                   + 'and the magnets (≈2e6) are directly comparable — and the '
                   + 'magnets sit low because they ARE low. "per-material" '
@@ -759,11 +758,10 @@ const FemFieldChart: React.FC<Props> = ({ gamma_deg = 0, rotor_angle_deg = 0,
                   + 'inside the weakest one is readable; a colour then means a '
                   + 'different number in each material and levels cannot be '
                   + 'compared across them.'}
-                sx={{ color: (perMat || lossHint) ? '#fbbf24' : '#93c5fd', fontSize: 10,
+                sx={{ color: perMat ? '#fbbf24' : '#93c5fd', fontSize: 10,
                   textTransform: 'none', minWidth: 0, px: 1,
-                  border: lossHint ? '1px solid #fbbf24'
-                                   : '1px solid var(--line-soft)' }}>
-                {perMat ? 'per-material' : (lossHint ? 'shared ⚠' : 'shared')}
+                  border: '1px solid var(--line-soft)' }}>
+                {perMat ? 'per-material' : 'shared'}
               </Button>
             )}
           </>

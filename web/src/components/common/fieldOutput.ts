@@ -24,7 +24,7 @@
 import * as THREE from 'three';
 import { PART_COLORS } from '../../lib/partColors';
 import {
-  bandColor, linScale, logScale, N_BANDS, normaliser, pctl, rankScale,
+  bandColor, linScale, logScale, N_BANDS, normaliser, pctl, powScale, rankScale,
 } from '../simulation/fieldView';
 import type { FieldScale, FieldProbeData } from '../simulation/fieldView';
 
@@ -658,6 +658,15 @@ function rescaleLike(
              clipped: hi0 > hi * 1.02 };
   }
 
+  if (sc.mapping === 'power') {
+    // The Loss axis (one scale for all materials) re-ranged to the visible parts.
+    const pos = sorted.filter(v => v > 0);
+    const lo = pos.length ? pos[0] : 0;
+    const hi = Math.max(hi0, lo * 1.0001, 1e-30);
+    return { scale: powScale(lo, hi, sc.gamma ?? 0.5, sc.unit, sc.note, sc.fmt, sc.bands),
+             clipped: false };
+  }
+
   const clipHi = trueMax != null && Number.isFinite(trueMax)
     && sc.vmax < trueMax - Math.abs(trueMax) * 1e-6;
   const clipLo = trueMin != null && Number.isFinite(trueMin)
@@ -821,7 +830,7 @@ export function restrictToParts(
 
   return {
     ...out,
-    scale: r.scale,
+    scale: sc.continuous ? { ...r.scale, continuous: true } : r.scale,
     geometry: g,
     vertexValues: rawVals,
     probe: { cx: pcx, cy: pcy, val: pv, cls: pcl },

@@ -240,3 +240,66 @@ def test_rate_judges_the_bearing_seat_read_off_each_map():
     # without the flag (the old call) the seat is not judged at all
     old = ccr.rate(**kw)
     assert "bearing" not in old["judged"]
+
+
+
+def _alternating_rate(monkeypatch, *, still_on_limit):
+    """``rate`` on the linear-map fixture with the bisection's answer forced
+    to jump 1.156 <-> 1.172 (the 40 L20 bearing-seat case, 1.35 % > REL_TOL)."""
+    from tests.test_continuous_rating import RATED_SUMMARY, _limit, _linear_map
+    from tests.test_thermal_capacities import (L13_MATERIALS, L13_PARTS,
+                                               L13_SUMMARY)
+    from tests.test_thermal_duty_cycle import D_HOUSING_M, L13_GEO, RATED_MAP
+    from motor_ai_sim import coupled_continuous_rating as ccr
+    from motor_ai_sim.thermal_capacities import part_capacities
+
+    real = ccr._search_scale
+    seq = iter([1.15625, 1.17188] * 4)
+
+    def jumping(*a, **k):
+        out = dict(real(*a, **k))
+        out["s"] = next(seq)
+        return out
+
+    monkeypatch.setattr(ccr, "_search_scale", jumping)
+    monkeypatch.setattr(ccr, "_still_on_limit", lambda *a, **k: still_on_limit)
+    caps = part_capacities(L13_SUMMARY, L13_MATERIALS, L13_PARTS)
+    p_cu_ref = float(RATED_MAP["P_cu_exact_W"])
+    return ccr.rate(thermal_result=_linear_map(p_cu_ref),
+                    em_summary=RATED_SUMMARY, caps=caps,
+                    limits=[_limit("winding", "winding", 180.0, 3.0)],
+                    geometry=L13_GEO, cooling={"ambient_temp": 40.0},
+                    d_housing_m=D_HOUSING_M, duty="rated",
+                    resolve=lambda f: _linear_map(p_cu_ref * float(f)))
+
+
+def test_a_jumping_s_converges_when_the_previous_s_is_still_on_the_limit(
+        monkeypatch):
+    out = _alternating_rate(monkeypatch, still_on_limit=True)
+    assert out["converged"] is True
+    assert out["n_thermal_fem_solves"] == 2
+
+
+def test_a_jumping_s_off_the_limit_is_still_not_converged(monkeypatch):
+    from motor_ai_sim import coupled_continuous_rating as ccr
+
+    out = _alternating_rate(monkeypatch, still_on_limit=False)
+    assert out["converged"] is False
+    assert out["n_thermal_fem_solves"] == ccr.MAX_MAP_PASSES
+
+
+def test_still_on_limit_reads_the_previous_s_on_the_new_network(monkeypatch):
+    from tests.test_continuous_rating import (_limit, _one_node_network,
+                                              _loss)
+    from motor_ai_sim import coupled_continuous_rating as ccr
+    from motor_ai_sim import thermal_duty_cycle as dc
+    from motor_ai_sim.thermal_capacities import NODES
+
+    monkeypatch.setattr(dc, "cu_rho_ratio", lambda *a, **k: 1.0)
+    net = _one_node_network(1.0, t_amb=25.0)
+    loss = _loss(100.0)
+    caps = {n: 50.0 for n in NODES}
+    lim = [_limit("winding", "winding", 125.0, 0.0)]       # 100 W -> 125 C
+    assert ccr._still_on_limit(loss, 100.0, 1.0, net, caps, lim, "rated", 0.5)
+    assert not ccr._still_on_limit(loss, 100.0, 1.05, net, caps, lim,
+                                   "rated", 0.5)

@@ -836,6 +836,27 @@ def _judge(state: Mapping[str, float], limits: Sequence[_ttl.PartLimit],
     return rows
 
 
+def _still_on_limit(loss: Mapping[str, Any], p_cu_ref_w: float, s_prev: float,
+                    net: tdc.Network, caps: Mapping[str, Any],
+                    limits: Sequence[_ttl.PartLimit], duty: str,
+                    tol_k: float) -> bool:
+    """Is the PREVIOUS pass's ``s`` still on the limit (within ``tol_k``) on
+    THIS pass's network?  Then the fixed point has converged in the quantity
+    that is judged, even when ``s`` itself still moves by more than
+    ``REL_TOL`` (2026-10-19).  A part that hardly depends on the current — the
+    bearing seat of a rotor whose eddy loss is 95 % no-load — sits within the
+    bisection's ``tol_k`` over a band of ``s`` several per cent wide, so the
+    bisection's answer jumps inside that band from map to map (40 L20:
+    1.156 ↔ 1.172) and an ``s``-only test never closes."""
+    try:
+        state = tdc.steady_state(_segment_at(loss, p_cu_ref_w, float(s_prev),
+                                             duty), net, caps)
+        resid, _part = _worst(_judge(state, limits, net))
+    except Exception:  # noqa: BLE001 — no answer is "not converged"
+        return False
+    return abs(float(resid)) <= float(tol_k)
+
+
 def _worst(rows: Sequence[Mapping[str, Any]]) -> Tuple[float, str]:
     """``(the largest over_by_K, the part it belongs to)``."""
     best = max(rows, key=lambda r: float(r["over_by_K"]))
@@ -1158,8 +1179,10 @@ def rate(*, thermal_result: Mapping[str, Any],
             # never be at.  One more solve with the copper taken out settles it.
             break
         if search.get("feasible"):
-            if s_prev is not None and abs(s_star - s_prev) <= rel_tol * max(
-                    s_prev, 1e-9):
+            if s_prev is not None and (
+                    abs(s_star - s_prev) <= rel_tol * max(s_prev, 1e-9)
+                    or _still_on_limit(loss, p_cu_ref_w, s_prev, net, caps,
+                                       judged, duty, tol_k)):
                 converged = True
                 break
             s_prev = s_star

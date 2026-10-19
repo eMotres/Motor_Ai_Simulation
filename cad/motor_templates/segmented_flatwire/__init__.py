@@ -23,6 +23,10 @@ A.7.5 (2026-10-19): CIANO14 50 (a reference profile with no Fusion model: cad/re
 profile.phase_board (step, pins, copper_volume; a board STEP without pins), the Tip of the array bases Screw / Bearing_ball is visible so the
 link arrays Screws / Balls show. Owner 2026-10-19: holder_screw_l = holder_screw_req rounded UP to an even mm (CIANO14 40 L20: M2x26, was 25;
 L12 18, 85 L13 20 unchanged).
+A.7.6 (2026-10-19): CIANO28 150_35: the four aluminium parts (Shaft, Shaft_rear, Stator_holder, Stator_holder_back) are the REAL Fusion bodies
+(profile.fusion_parts: read-only Fusion STEP of each part, imported once as the BaseFeature of the same body) instead of the volume-equivalent
+rings, whose partial rings were sector sets with gaps (windows, hairline slits, notched rims) that the Fusion design does not have (owner
+2026-10-19: no gaps anywhere, Fusion is the truth). Profiles without fusion_parts, and every CIANO14 40 / 50 and CIANO28 85 build, are unchanged.
 """
 TEMPLATE_NAME = "segmented_flatwire"
-TEMPLATE_VERSION = "A.7.5"
+TEMPLATE_VERSION = "A.7.6"

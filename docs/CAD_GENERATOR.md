@@ -445,9 +445,40 @@ volumes to 1e-6, bounding boxes and solid counts identical):
 * Gate / fit / STEP datums / GLB / BOM have an occupancy branch. Fit kind `approx`: the rings stand in for pocketed parts, so rotor keys, the bearing seat and the coil
   end turns overlap them a little; the overlap is reported and refused above 2.5 % of the smaller part. The screws are not tested against the holders (their holes are not modelled).
 
-Not modelled (disclosed in the BOM / report): fan plates (Fan_200_24s), the 72 alumina insulation bodies (Insulation_ceramic), pockets / ribs / holes of the four
-holders, the bearing shield detail, slot-edge fillets, screw threads and head knurling, the PCB layers. The Fusion component "M3 x 0.5 x 30" has a 34 mm shank (the
+Not modelled (disclosed in the BOM / report): fan plates (Fan_200_24s), the 72 alumina insulation bodies (Insulation_ceramic), (until A.7.6: pockets / ribs / holes of the four
+holders - since A.7.6 they are the Fusion bodies), the bearing shield detail, slot-edge fillets, screw threads and head knurling, the PCB layers. The Fusion component "M3 x 0.5 x 30" has a 34 mm shank (the
 BOM flags the length for confirmation).
+
+## CIANO28 150_35: the holders are the real Fusion bodies, no gaps (template A.7.6, 2026-10-19)
+
+Owner 2026-10-19 (looking at the server build): "gaps everywhere" - the Stator_holder flange was a set of arc segments with gaps, the back holder
+had 12 big windows and hairline radial slits, both rotor holders (Shaft, Shaft_rear) had radial hairline slits and notches at the windows.
+**Cause**: the volume-equivalent occupancy rings of A.7.3. A ring with `fill` < 1 is ONE sector of angular width fill x 360 / n patterned n times,
+so every partial ring is a set of sectors with gaps between them (fill 0.9655 -> a 1.1 deg slit; fill 0.0246 -> ribs; the 12 windows of the front
+holder are the empty angle of the fill 0.39 / 0.29 / 0.22 rings). None of it is in the Fusion design: its holders are lightened lattices of closed
+pockets (the web between the pockets is continuous, the rim is a closed ring with 12 screw holes) and the rotor holders have only round holes and
+the 12 magnet-sector windows.
+
+**Fix**: when the profile has `profile.fusion_parts` the four aluminium parts are the Fusion bodies (read-only STEP export of the open design,
+`fusion_source/CIANO28_150_35/mechanics/{Rotor_holder1,Rotor_holder2,Stator_holder,Stator_holder_back}.step`, dump 2026-10-16): imported once (the
+biggest solid of each STEP; the Stator_holder STEP also carries its 12 screws), set as the BaseFeature of the same bodies `Shaft`, `Shaft_rear`,
+`Stator_holder`, `Stator_holder_back`, so names, solids, gate, fit, BOM, STEP tree and GLB are unchanged. Nothing else moves: volumes are the Fusion
+volumes (Shaft 48825.9, Shaft_rear 27786.9, Stator_holder 46239.5, Stator_holder_back 79820.2 mm3), the z extents are the old ring extents.
+Only the axial position follows `motor_length` (a shift of +-(motor_length - 35) / 2 at build time); the shape is NOT parametric.
+Fusion's own B-rep trips FreeCAD's BRepCheck on 12 pocket faces (outer wire "self-intersecting") and 2 large planar faces ("intersecting wires") of each
+stator holder: tolerance-level wire errors, the volume matches Fusion to 5e-6, booleans, meshing and STEP export work.  Repairing the faces made the
+shape valid in memory but not after a copy (the simplified / STEP exporters copy), so the import keeps the STEP as it is and records the verdict
+(`SourceValid`, `SourceCheck` on `<part>_Fusion`); the gate and the simplified exporter accept an invalid imported solid only when the STEP itself is
+invalid, it has one closed shell and the Fusion volume.  A valid source (both rotor holders) must stay valid.
+
+* STEP location: `$FC_FUSION_PARTS/<file>`, `cad/reference/fusion_parts/CIANO28_150_35/<file>` or (owner repo) `fusion_source/CIANO28_150_35/mechanics/<file>`.
+  The files are owner design data and the repository is public: `cad/reference/fusion_parts/` is git-ignored. For the server build the files must be
+  put into the CAD image (or the directory mounted and `FC_FUSION_PARTS` set). A missing STEP REFUSES the build; there is no silent fall-back to rings.
+* The occupancy rows (`<part>_r0_k ...`) stay in the profile as the measured record, role `info` (not live, so the role check does not call them
+  dead); `test_occupancy_rings_reproduce_the_fusion_body_volume` still ties them to the Fusion volumes. Profiles without `fusion_parts` still build rings.
+* Gate: each part must be one valid solid, its volume must equal the imported solid and be within 0.1 % of `fusion_parts.volumes_mm3` (the Fusion body
+  volume); the z extent invariant is kept.
+* The lightening pockets and screw holes of the holders are Fusion design features and are now in the model (they are not gaps of the template).
 
 ## The GFRP rings: full model only (template A.7.4, 2026-10-16)
 

@@ -6088,7 +6088,7 @@ def _run(body: Dict[str, Any],
                 }
                 continuous_rating["I_estimated_A_rms"] = round(i_est, 3)
                 # ── THE SETPOINT ALREADY HOLDS (2026-10-19) ──────────────────
-                # Owner: «rated всегда постоянный».  A setpoint this run's own
+                # Owner: a rated duty is always continuous.  A setpoint this run's own
                 # `time_to_limit` puts INSIDE every limit, rated at or above its
                 # own current, is ALREADY a continuous point: it is what the
                 # record must keep describing.  Moving the record up to the S1
@@ -7801,7 +7801,8 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     is reported with the miss stated, not chased further.
 
     A TOUCH-limited part (``housing`` / ``structure`` / ``link``, the robotics
-    heat path's body — and since 2026-10-19 the BEARING SEAT, ``SLOW_PARTS``) is read off the map's ``cooling.heat_path.t_body_c``
+    heat path's body — and since 2026-10-19 the BEARING SEAT, ``SLOW_PARTS``)
+    is read off the map's ``cooling.heat_path.t_body_c``
     (:func:`coupled_continuous_rating.field_reading` — the map has no
     ``components.housing``; before 2026-10-19 only the legacy name ``link`` was
     read, so a housing-limited machine never verified).  Its limit is hard: a

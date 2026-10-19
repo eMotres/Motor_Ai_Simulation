@@ -1,7 +1,7 @@
 """A RATED duty must be a continuous point its own record calls continuous.
 
-Launch day 2026-10-19 (owner: «rated всегда постоянный, short time только
-peak»).  Four public rated duties (CIANO14 40 new L12 / L20, CIANO14 50 edited
+Launch day 2026-10-19 (owner: a rated duty is always continuous, short-time
+is for peak only).  Four public rated duties (CIANO14 40 new L12 / L20, CIANO14 50 edited
 L15, CIANO28 150_35 new L35) came out of ``solve_to: continuous`` with a record
 that contradicts itself:
 

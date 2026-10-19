@@ -82,7 +82,7 @@ from typing import Optional
 from fastapi import APIRouter, Body, Header, Request
 from fastapi.responses import JSONResponse
 
-from motor_ai_sim import support_context
+from motor_ai_sim import support_catalog, support_context
 from motor_ai_sim.support_prompt import (
     STAFF_PROMPT, TICKET_PROTOCOL, USER_PROMPT, prompt_for_role,
 )
@@ -121,17 +121,24 @@ VISITOR_NOTE = """
 ## Visitor mode — this person is NOT signed in
 They are on the public landing page and have no account yet. Answer product
 questions briefly and plainly — what the portal is for, what it analyses, what a
-motor design involves — in two or three sentences. Access is **by invitation**:
-the **Request access** link on the page, or a note to support@aerostator.com, and
-the team creates the account and grants the motors it may open. Plans and
-pricing are agreed individually; never name a price or a plan, and never say
-there is a free tier or a trial. Do NOT describe internal data, the catalog's contents,
-any specific customer machine or numbers from any design, and do not walk
-them step by step through tabs they cannot open yet.
+motor design involves — in two or three sentences. **The service is free and
+sign-up is instant**: on aerostator.com they press **Sign in with Google**, or
+**Sign in with e-mail** and choose **Create account** (the **Request access**
+button opens the same form). The account works at once; confirming the e-mail
+only matters later, for the NDA, STEP downloads, FEM runs and the mailing list.
+Never say that the team must grant or approve an account first, and
+never name a price, a plan, a tier or a trial — there is nothing to pay for.
+You MAY say which motors are open to a new account and what they deliver, but
+only from the "Published motors" list given below (when there is one). Do NOT
+describe internal data, any motor that is not in that list, any specific
+customer machine, geometry or costs, and do not walk them step by step through
+tabs they cannot open yet.
 
 ### What to do, and when
-1. **A question about the product** → answer it, briefly. Nothing else needed.
-2. **They want access, a quote, a demo, prices, or to be contacted** → collect
+1. **A question about the product or the open motors** → answer it, briefly.
+   Nothing else needed. **They just want an account** → tell them to sign up
+   (above); do not collect their details for that.
+2. **They want a quote, to order motors, a manufacturing licence, a demo, or to be contacted** → collect
    their details, ONE QUESTION AT A TIME, in a sentence, never as a form or a
    list of fields: their name, then the company, then their work e-mail, then in
    one sentence what they want to do (which machine, what power / torque /
@@ -729,24 +736,24 @@ _ip_hits: dict[str, list[float]] = {}
 _global_hits: list[float] = []
 
 #: What the visitor reads instead of an answer.  It is still an ANSWER to the
-#: question they came with — access is by invitation — so it names the way in.
+#: question they came with - how do I get in - so it names the way in (free, instant sign-up).
 _LIMIT_REPLIES = {
     "ip_burst": (
         "I've answered as many questions as I can from this connection for the "
         "moment — please try again in a few minutes.\n\n"
-        "If you're after access: the portal is invitation-only. Use the "
-        "**Request access** link on this page, or write to support@aerostator.com, "
-        "and we'll set you up."
+        "If you're after access: the service is free and sign-up is instant — "
+        "use **Sign in** on this page and create an account, or write to "
+        "support@aerostator.com."
     ),
     "ip_day": (
         "That's my daily limit for questions from this connection. Please write "
-        "to support@aerostator.com — access to the portal is by invitation and we "
-        "answer every request personally."
+        "to support@aerostator.com — we answer every request personally. "
+        "Sign-up on this page is free and instant."
     ),
     "global_day": (
         "The assistant has reached today's limit for visitors. Please write to "
-        "support@aerostator.com — access to the portal is by invitation, and we "
-        "answer every request personally."
+        "support@aerostator.com — we answer every request personally. "
+        "Sign-up on this page is free and instant."
     ),
 }
 _RETRY_AFTER = {"ip_burst": int(ANON_BURST_WINDOW_S), "ip_day": 3600,
@@ -812,20 +819,27 @@ def _is_anonymous(authorization: Optional[str]) -> bool:
     return _caller_role(authorization) == "anon"
 
 
-def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None) -> str:
+def build_system_prompt(role: str, *, anon: bool, context: Optional[dict] = None,
+                        authorization: Optional[str] = None) -> str:
     """Everything the model is told for one call.
 
-    * a visitor: the small (Motors + Configure) prompt + the visitor note, and
-      nothing about a session - a visitor has none;
+    * a visitor: the small (Motors + Configure) prompt + the visitor note + the
+      "Published motors" block for a brand-new account, and nothing about a
+      session - a visitor has none;
     * a signed-in caller: the prompt FOR THEIR ROLE (an admin's custom prompt, if
-      any, replaces it for everyone) + the ticket protocol + the hidden session
-      context, which the server has already sanitised.
+      any, replaces it for everyone) + the ticket protocol + the "Published
+      motors" block for THAT caller's access (``authorization`` is their header) +
+      the hidden session context, which the server has already sanitised.
     """
     if anon:
-        return _effective_prompt("anon") + VISITOR_NOTE
+        block = support_catalog.published_motors_block(None, visitor=True)
+        return _effective_prompt("anon") + VISITOR_NOTE + ("\n\n" + block if block else "")
     sp = _effective_prompt(role)
     if "TICKET_DRAFT" not in sp:
         sp += "\n\n" + TICKET_PROTOCOL
+    block = support_catalog.published_motors_block(authorization)
+    if block:
+        sp += "\n\n" + block
     return sp + support_context.render_for_model(context or {}, role=role)
 
 
@@ -959,7 +973,7 @@ def chat(request: Request, body: dict = Body(default={}),
         return deliver(_mock_reply(messages), "mock")
 
     ctx = {} if anon else support_context.sanitize_context(body.get("context"))
-    sp = build_system_prompt(role, anon=anon, context=ctx)
+    sp = build_system_prompt(role, anon=anon, context=ctx, authorization=authorization)
     try:
         if provider == "gemini":
             g = eff["gemini"]
@@ -985,8 +999,8 @@ def chat(request: Request, body: dict = Body(default={}),
                        " [anonymous]" if anon else "")
         # There is no model to draft a ticket right now, so everybody gets the
         # address; a visitor's is also the way in.
-        where = ("write to support@aerostator.com — access is by invitation and we "
-                 "answer every request personally"
+        where = ("write to support@aerostator.com — we answer every request "
+                 "personally"
                  if anon else
                  "write to support@aerostator.com")
         return deliver(

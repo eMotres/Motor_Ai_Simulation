@@ -2134,6 +2134,16 @@ def _stamp_cards(dies: list) -> list:
 
 @router.get("/tree")
 def tree(response: Response, authorization: str = Header(default=None)):
+    return tree_for_access(response, catalog_access(authorization))
+
+
+def tree_for_access(response: Response, _acc: dict):
+    """The catalog tree for an ALREADY RESOLVED ``motor_access`` answer.
+
+    ``tree`` is this with the caller's own access; the support assistant calls it
+    directly to list "the motors a fresh sign-up may open" for a visitor, which no
+    header can express.  Same rules, same memo.
+    """
     # Who may CHANGE the catalog: the vendor alone on a single-layer install,
     # and — since Stage 5 — any registered account once layering is on, because
     # then its saves land in its own workspace (`require_catalog_write`).
@@ -2146,7 +2156,6 @@ def tree(response: Response, authorization: str = Header(default=None)):
     # The answer depends on the Authorization header and changes the moment a
     # grant does — it must never be cached (a stale tree is a user reporting
     # "I still don't see my motors" after the vendor granted them).
-    _acc = catalog_access(authorization)
     _can_write = _can_write_catalog(_acc)
     response.headers["Cache-Control"] = "no-store"
     response.headers["Vary"] = "Authorization"

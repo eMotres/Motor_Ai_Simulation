@@ -26,6 +26,9 @@ class MissingFusionPart(RuntimeError):
 def fusion_parts_for(die: str, geometry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if die not in FS.allowed_dies():
         return None
+    if not FS.root().is_dir():                                  # a synced die's geometry is Fusion's: never guess "no export yet"
+        raise MissingFusionPart("die %r is synced with Fusion but the bundle store %s is not there (mount it / set "
+                                "MOTRES_FUSION_SYNC_ROOT, docs/FUSION_SYNC.md section 9)" % (die, FS.root()))
     lt = FS.latest(die)
     if not lt:
         return None

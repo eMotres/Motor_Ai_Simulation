@@ -6,6 +6,10 @@
     <root>/<die slug>/audit.jsonl        one line per link / upload
 
 <root> = $MOTRES_FUSION_SYNC_ROOT, else <shared root>/fusion.  Nothing here writes a die or configuration file.
+
+The READ side (latest, record, bundle_manifest, link_of_die, allowed_dies) is stdlib only: the FreeCAD image imports it to
+build a die's 3-D model from its export (cad.store.fusion_bundle_parts) and carries no other motor_ai_sim module.  The write
+side takes json_store's locks and atomic writes lazily.
 """
 from __future__ import annotations
 
@@ -20,7 +24,24 @@ import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from motor_ai_sim.json_store import atomic_write_json, lock_for, read_json
+
+def read_json(path, default=None):
+    """A JSON file or `default` (missing / unreadable) - stdlib only, see the module docstring."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return default
+
+
+def atomic_write_json(path, data):
+    from motor_ai_sim.json_store import atomic_write_json as _w
+    _w(Path(path), data)
+
+
+def lock_for(path):
+    from motor_ai_sim.json_store import lock_for as _l
+    return _l(Path(path))
 
 SCHEMA = "motres-fusion-bundle/1"
 #: Stage 1 allow-list (owner 2026-10-19): the one motor whose Fusion model is the sync's prototype.  Frozen dies (the 40 mm,
@@ -45,7 +66,11 @@ def root() -> Path:
     env = os.environ.get("MOTRES_FUSION_SYNC_ROOT", "").strip()
     if env:
         return Path(env)
-    from motor_ai_sim.workspace import shared_root
+    try:
+        from motor_ai_sim.workspace import shared_root
+    except ImportError:                                         # the FreeCAD image: it must be told (deploy/Dockerfile.cad)
+        raise RuntimeError("MOTRES_FUSION_SYNC_ROOT is not set and this runtime has no workspace module to find the "
+                           "Fusion bundle store")
     return Path(shared_root()) / "fusion"
 
 

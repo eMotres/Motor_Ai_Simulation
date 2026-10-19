@@ -532,11 +532,9 @@ def apply_fusion_param_overrides(pj):
 
 def fusion_bundle_parts(die, geometry):
     """profile.fusion_parts from the die's latest Fusion export (motor_ai_sim.fusion_sync, docs/FUSION_SYNC.md 4.1), or None
-    (die not synced / no export / the sync package not installed).  A bundle without a required part raises RuntimeError."""
-    try:
-        from motor_ai_sim.fusion_sync import profile as FSP
-    except ImportError:
-        return None
+    (die not synced / no export).  A bundle without a required part raises RuntimeError.  No ImportError fall-back: a CAD
+    runtime without the sync package would quietly build template geometry for a die whose geometry is Fusion's."""
+    from motor_ai_sim.fusion_sync import profile as FSP
     try:
         return FSP.fusion_parts_for(die, geometry)
     except FSP.MissingFusionPart as e:

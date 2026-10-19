@@ -3,7 +3,7 @@
 import { errorInfo, safeFileName, unwrapList } from './helpers';
 import type {
   AssemblyProcessView, AssemblyStep, AssemblyTree, Bilingual, BomRow, CostRow, CostsData, DocumentRec, ExtraCost, Member, MemberRole, Part, ProcessSection, Production, Proposal, Revision,
-  Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
+  ProductionAccess, Thread, TranslationRef, Lang, ProcurementData, ProcurementLine, ScheduleData, ScheduleBaseline, TimelineData,
 } from './types';
 
 const API = (import.meta.env.VITE_API_URL ?? 'http://localhost:8001') as string;
@@ -110,6 +110,11 @@ export const productionApi = {
   // -- caller routes ---------------------------------------------------------------------------------------------------
   list: async (): Promise<Production[]> => unwrapList<Production>(await call('GET', '/api/production'), 'productions'),
   get: (die: string, config: string) => call<Production>('GET', base(die, config)),
+  /** What the caller may do behind a shared link: `member` (with the role), or `none` - a nameless answer, same for a missing production. */
+  access: (die: string, config: string) => call<ProductionAccess>('GET', `${base(die, config)}/access`),
+  /** A stranger asks the team for access (one ticket in the admin inbox; nothing is granted). */
+  requestAccess: (die: string, config: string) =>
+    call<{ ok: boolean; already_member: boolean }>('POST', `${base(die, config)}/request_access`, {}),
 
   parts: async (die: string, config: string) => unwrapList<Part>(await call('GET', `${base(die, config)}/parts`), 'parts'),
   createPart: (die: string, config: string, part: Partial<Part>) => call<Part>('POST', `${base(die, config)}/parts`, part),

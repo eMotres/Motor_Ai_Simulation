@@ -380,3 +380,8 @@ export interface AssemblyStep {
   parts_resolved?: Array<{ id: string; name: Bilingual }>;
 }
 export interface AssemblyProcessView { default: boolean; steps: AssemblyStep[] }
+
+/** GET /api/production/{die}/{config}/access - the answer behind a shared documents link. */
+export type ProductionAccess =
+  | { access: 'member'; role: MemberRole | 'admin'; can_share: boolean; factory: boolean }
+  | { access: 'none'; requested: boolean };

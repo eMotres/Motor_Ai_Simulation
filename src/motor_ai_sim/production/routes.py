@@ -215,6 +215,61 @@ def get_production(request: Request, die: str, config: str):
     return production
 
 
+# ── shared links: who may open a production's page, and how a stranger asks ─────
+
+def _access_request_title(die: str, config: str) -> str:
+    import re
+    clean = lambda v: re.sub(r"[^\w .\-]", "_", str(v))[:48]                    # noqa: E731 - names come from the URL
+    return "Production access: %s / %s" % (clean(die), clean(config))
+
+
+def _has_open_access_request(email: str, title: str) -> bool:
+    from motor_ai_sim import ticket_store as T
+    return any(r.get("title") == title and (r.get("status") or "open") in ("open", "in_progress")
+               for r in T.list_for(email))
+
+
+@router.get("/{die}/{config}/access")
+def my_access(request: Request, die: str, config: str):
+    """What the caller may do with a shared link to this production - and NOTHING else about it.
+
+    The answer for a stranger is the same whether the production exists or not and carries no name, title or count
+    (the page behind the link must not confirm what is there).  Opening a link grants nothing: ``member`` only when the
+    account is on the production's member list (or an admin), exactly the rule every other route applies."""
+    user = access.require_signed_in(request)
+    production = access.load_production(die, config)
+    admin = access.is_admin(user)
+    role = models.is_member(_email(user), production) if production else None
+    if production is not None and (admin or role is not None):
+        return {"access": "member", "role": role or "admin",
+                "can_share": bool(admin or role == "owner"), "factory": role == "oem" and not admin}
+    title = _access_request_title(die, config)
+    return {"access": "none", "requested": _has_open_access_request(_email(user), title)}
+
+
+@router.post("/{die}/{config}/request_access")
+def request_access(request: Request, die: str, config: str):
+    """A signed-in stranger asks the team for access: one 'account' ticket in the admin inbox (the existing support path).
+    Nothing is granted and nothing is sent; asking twice files one ticket; the answer never says whether the production
+    exists."""
+    from motor_ai_sim import ticket_store as T
+    user = access.require_signed_in(request)
+    email = _email(user)
+    production = access.load_production(die, config)
+    if production is not None and (access.is_admin(user) or models.is_member(email, production) is not None):
+        return {"ok": True, "already_member": True}
+    title = _access_request_title(die, config)
+    if not _has_open_access_request(email, title):
+        try:
+            T.create(email, "account", title,
+                     "Asked for access through a shared link to the documents of this production. "
+                     "Grant a role under Admin > Production access, or decline.",
+                     context={"source": "production_share_link"})
+        except T.TicketError as e:
+            raise HTTPException(status_code=e.status, detail=str(e))
+    return {"ok": True, "already_member": False}
+
+
 # ── parts ────────────────────────────────────────────────────────────────────
 
 @router.get("/{die}/{config}/parts")

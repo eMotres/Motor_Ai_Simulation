@@ -28,6 +28,7 @@ STRINGS = {
         "open": "Open AeroStator",
         "signin": "Sign in",
         "cont": "Continue connecting your AI app",
+        "open_next": "Open the page you came for",
         "bad_title": "Link expired",
         "bad_head": "This link has expired or was already used",
         "bad_text": "Enter your e-mail address and we will send a new link.",
@@ -60,6 +61,7 @@ STRINGS = {
         "open": "打开 AeroStator",
         "signin": "登录",
         "cont": "继续连接您的 AI 应用",
+        "open_next": "打开您要访问的页面",
         "bad_title": "链接已失效",
         "bad_head": "此链接已过期或已使用过",
         "bad_text": "请输入您的邮箱地址，我们会发送新的链接。",
@@ -132,11 +134,12 @@ def _page(lang: str, title: str, body: str, switch_url: str = "") -> str:
             % (lang, _e(title), _CSS, sw, s["brand"], body))
 
 
-def verified(lang: str, email: str, *, already: bool = False, open_url: str, signin_url: str, continue_url: str = "", switch_url: str = "") -> str:
+def verified(lang: str, email: str, *, already: bool = False, open_url: str, signin_url: str, continue_url: str = "", switch_url: str = "",
+             open_label: str = "") -> str:
     s = STRINGS[norm_lang(lang)]
     lang = norm_lang(lang)
     body = ('<h1>%s</h1><p>%s</p><a class="btn" href="%s">%s</a>' % (_e(s["already_head"] if already else s["ok_head"]),
-            _e(s["ok_text"].format(email=email)), _e(continue_url or open_url), _e(s["cont"] if continue_url else s["open"])))
+            _e(s["ok_text"].format(email=email)), _e(continue_url or open_url), _e(s["cont"] if continue_url else s[open_label or "open"])))
     body += '<a class="btn alt" href="%s">%s</a>' % (_e(signin_url), _e(s["signin"]))
     return _page(lang, s["ok_title"], body, switch_url)
 

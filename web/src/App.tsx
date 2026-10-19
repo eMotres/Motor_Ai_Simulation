@@ -76,6 +76,7 @@ import { ensureActiveMotor } from './components/common/motorSettings';
 import { useModulePanels } from './modules/moduleTabs';
 import { useTranslation } from 'react-i18next';
 import { useApiReady } from './contexts/AuthContext';
+import { parseProductionLink } from './lib/productionLink';
 import { computeHintApplies, gateOpen, hasSimulationUI, isStandardUser, landingTabForUser, productionVisible, tabAllowed, TAB_GATES } from './lib/accessUi';
 import { barEntries, barValue, simulationsLabel, SIMULATIONS_BAR_ID } from './lib/simulationsMenu';
 import { resolveSchemasRoute } from './lib/schemasRoute';
@@ -274,6 +275,14 @@ function App() {
   // account added to a production as engineer saw nothing - the server grants by membership, the tab gated by role).
   const productionMember = useProductionMember(authResolved && signedIn && !productionVisible(enforced, isAdmin, role));
   const producer = authResolved && (productionVisible(enforced, isAdmin, role) || productionMember);
+  // A shared documents link (/production/<die>/<config>/documents?...): once the account is known to reach the Production tab, open it
+  // there - the page itself reads the link from the address bar.  Root has already checked on the server that the caller is a member.
+  const shareLinkPending = useRef(parseProductionLink(window.location.pathname, window.location.search) !== null);
+  useEffect(() => {
+    if (!shareLinkPending.current || !authResolved || !signedIn || !producer) return;
+    shareLinkPending.current = false;
+    setActiveTab('production' as never);
+  }, [authResolved, signedIn, producer, setActiveTab]);
   const newRequests = useNewRequestCount(isAdmin);
   const designerAllowed = useDesignerAllowed(signedIn);
   const [panelWidth, setPanelWidth] = React.useState(300);

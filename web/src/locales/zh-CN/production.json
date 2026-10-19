@@ -182,6 +182,15 @@
     "editSections": "编辑工艺章节",
     "hideSections": "收起章节"
   },
+  "access": {
+    "none": "您不在此生产项目中。",
+    "request": "申请权限",
+    "requested": "已提交申请，团队会与您联系。",
+    "tip": "页面链接不授予权限。请联系团队将您的账户加入此生产项目。",
+    "error": "无法检查权限。",
+    "retry": "重试",
+    "home": "首页"
+  },
   "docs": {
     "none": "暂无文件。",
     "upload": "上传",
@@ -194,7 +203,18 @@
     "uploadTip": "负责人和工程师可上传；每次下载均有记录。",
     "internal": "内部",
     "shared": "工厂可见",
-    "internalTip": "内部文件对工厂（OEM 成员）隐藏。点击切换。"
+    "internalTip": "内部文件对工厂（OEM 成员）隐藏。点击切换。",
+    "copyLink": "复制链接",
+    "copied": "链接已复制",
+    "sinceLabel": "起始日期",
+    "copyNew": "复制新文件链接",
+    "copyTip": "工程师登录或注册后，链接会直接打开此页面。链接本身不授予权限：只有本生产项目的成员才能看到文件。",
+    "copyManual": "请复制此链接",
+    "newBadge": "新",
+    "newSince": "自 {date} 起新增：{n}",
+    "selected": "分享的文件：{n}",
+    "showAll": "显示全部",
+    "clear": "清除"
   },
   "discussion": {
     "general": "综合",

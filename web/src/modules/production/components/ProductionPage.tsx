@@ -14,6 +14,7 @@ import ProposalsPanel from './ProposalsPanel';
 import { TimelineView } from './TimelineView';
 import { ProductionApiError, productionApi } from '../api';
 import { callerRole, canEditRole, unackedRevisions } from '../helpers';
+import { isProductionLinkPath, parseProductionLink, productionLinkPath, type ProductionLink } from '../../../lib/productionLink';
 import type {
   BomRow, DocumentRec, Part, ProcessSection, Production, Proposal, ReadinessSummary, Revision, Thread,
 } from '../types';
@@ -39,7 +40,12 @@ interface Data {
 }
 const EMPTY: Data = { parts: [], bom: [], process: [], documents: [], threads: [], proposals: [], revisions: [] };
 
-const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void }> = ({ die, config, onBack }) => {
+/** The shared documents link this page load was opened with, if the address bar holds a valid one (read once, at mount). */
+function linkFromAddressBar(): ProductionLink | null {
+  try { return parseProductionLink(window.location.pathname, window.location.search); } catch { return null; }
+}
+
+const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void; link?: ProductionLink | null }> = ({ die, config, onBack, link: linkProp = null }) => {
   const { t } = useTranslation('production');
   const ui = useContentLang();
   const { user, isAdmin } = useAuth();
@@ -47,11 +53,26 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
   const [prod, setProd] = useState<Production | null>(null);
   const [data, setData] = useState<Data>(EMPTY);
   const [readiness, setReadiness] = useState<ReadinessSummary | null>(null);
+  // a shared link (since= / ids=) opens the Documents sub-tab; "Clear" / "Show all" drops its filter for this visit
+  const [link, setLink] = useState<ProductionLink | null>(linkProp);
   const [tab, setTabState] = useState<TabId>(() => {
+    if (linkProp) return 'documents';
     const saved = readStore<string>(TAB_KEY(die, config));
     return saved && (TABS as readonly string[]).includes(saved) ? (saved as TabId) : 'bom';
   });
   const setTab = (v: TabId) => { setTabState(v); writeStore(TAB_KEY(die, config), v); };
+  // While the page was entered by a link its address stays that link (reload / copy from the bar both work); leaving the
+  // Documents view or the link's filter returns the bar to the app root.
+  useEffect(() => {
+    try {
+      if (linkProp && tab === 'documents') {
+        const p = productionLinkPath({ die, config, since: link?.since, ids: link?.ids });
+        if (p && p !== window.location.pathname + window.location.search) window.history.replaceState(null, '', p);
+      } else if (isProductionLinkPath(window.location.pathname)) {
+        window.history.replaceState(null, '', '/');
+      }
+    } catch { /* no history API */ }
+  }, [linkProp, tab, link, die, config]);
   const [loading, setLoading] = useState(true);
   const [nda, setNda] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -197,7 +218,7 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
           )}
           {tab === 'assembly' && <AssemblyProcess ctx={ctx} parts={data.parts} sections={data.process} documents={data.documents} />}
           {tab === 'timeline' && <TimelineView ctx={ctx} prod={prod} />}
-          {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} />}
+          {tab === 'documents' && <DocumentsPanel documents={data.documents} parts={data.parts} ctx={ctx} sections={data.process} link={link} onLinkChange={setLink} />}
           {tab === 'discussion' && <DiscussionPanel threads={data.threads} parts={data.parts} ctx={ctx} />}
           {tab === 'proposals' && <ProposalsPanel proposals={data.proposals} parts={data.parts} ctx={ctx} />}
           {tab === 'changes' && <ChangesPanel revisions={data.revisions} currentRevision={prod.current_revision} ctx={ctx} />}
@@ -209,7 +230,10 @@ const ProductionPage: React.FC<{ die: string; config: string; onBack: () => void
 
 /** The top-level Production tab: the list, and one production once opened. */
 export const ProductionTab: React.FC = () => {
+  // opened by a shared documents link: that production (and its filter) wins over the remembered one
+  const [entry, setEntry] = useState<ProductionLink | null>(linkFromAddressBar);
   const [sel, setSelState] = useState<{ die: string; config: string } | null>(() => {
+    if (entry) return { die: entry.die, config: entry.config };
     const v = readStore<{ die?: unknown; config?: unknown }>(LAST_KEY);
     return v && typeof v.die === 'string' && typeof v.config === 'string' ? { die: v.die, config: v.config } : null;
   });
@@ -220,8 +244,9 @@ export const ProductionTab: React.FC = () => {
     <Box sx={{ overflowY: 'auto', height: '100%' }}>
       <Box sx={{ px: 3, pt: 3, pb: 3 }}>
         {sel
-          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={() => setSel(null)} />
-          : <ProductionListPage onOpen={(p) => setSel({ die: p.die, config: p.config })} />}
+          ? <ProductionPage key={`${sel.die}|${sel.config}`} die={sel.die} config={sel.config} onBack={() => { setEntry(null); setSel(null); }}
+              link={entry && entry.die === sel.die && entry.config === sel.config ? entry : null} />
+          : <ProductionListPage onOpen={(p) => { setEntry(null); setSel({ die: p.die, config: p.config }); }} />}
       </Box>
     </Box>
   );

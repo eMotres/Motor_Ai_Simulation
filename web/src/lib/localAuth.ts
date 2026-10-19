@@ -193,15 +193,17 @@ async function postPlain(path: string, body: unknown): Promise<{ message?: strin
  *  sign-up started inside an AI app's authorization window — the mailed link
  *  then opens that page again and the pending authorization is kept alive. */
 export function registerAccount(email: string, password: string, name: string, commPrefs: Partial<Record<string, boolean>> = {},
-  lang = 'en', returnTo?: string) {
+  lang = 'en', returnTo?: string, next?: string) {
   return postPlain('/api/auth/register', {
     email, password, name, comm_prefs: commPrefs, lang, ...(returnTo ? { return_to: returnTo } : {}),
+    // a shared link the visitor opened before registering (lib/productionLink.ts): the confirmation page leads on to it
+    ...(next ? { next } : {}),
   });
 }
 
 /** Mail the confirmation link again (the server limits it to 3 an hour per address and answers the same whatever the address is). */
-export function resendVerification(email: string) {
-  return postPlain('/api/auth/register/resend', { email });
+export function resendVerification(email: string, next?: string) {
+  return postPlain('/api/auth/register/resend', { email, ...(next ? { next } : {}) });
 }
 
 /** An unconfirmed account fixes a mistyped address; the password it was registered with proves it is theirs. */

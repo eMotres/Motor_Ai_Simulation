@@ -101,7 +101,7 @@ def build_bodies(doc, sh, pj):
     for sk in r_coil["sketches"]:
         report["sketches"][sk.Name] = check_sketch(sk)[1]
     if pj.get("named_parameters_mechanics") and not kit:
-        rep = mechanics.build_mechanics(doc, sh, _polar_array)
+        rep = mechanics.build_mechanics(doc, sh, _polar_array, prof.get("fusion_parts"))
         for b in mechanics.MECH_BODIES + mechanics.ARRAY_BASES:
             o = doc.getObject(b)
             if o is not None and b in mats:

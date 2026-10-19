@@ -60,6 +60,12 @@ def main():
     if kit:                     # the rows that only the omitted housing / mechanics use are dead by design in the frameless kit
         report["roles_check"]["omitted_with_housing"] = report["roles_check"].pop("declared_but_dead")
         report["roles_check"]["declared_but_dead"] = []
+    fusion = (pj.get("profile") or {}).get("fusion_parts") or {}
+    if fusion.get("replaced_rows") and not kit:     # rows that only the replaced template geometry read are dead by design (the part is the Fusion body, not parametric)
+        gone = set(fusion["replaced_rows"])
+        dead = report["roles_check"]["declared_but_dead"]
+        report["roles_check"]["replaced_by_fusion"] = [n for n in dead if n in gone]
+        report["roles_check"]["declared_but_dead"] = [n for n in dead if n not in gone]
     if report["roles_check"]["live_but_not_declared"] or report["roles_check"]["declared_but_dead"]:
         gt["errors"].append("parameter roles out of date: %s" % report["roles_check"])
         gt["ok"] = False

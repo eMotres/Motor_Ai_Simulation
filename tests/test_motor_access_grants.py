@@ -51,13 +51,13 @@ CLIENT = "client@example.com"
 # test (a granted account sees exactly its grants, ungranted = 404) does not care
 # which dies they are, only that the exhibit filter does not pass them.  The name
 # DIES_85 is kept for the diff's sake.
-DIES_85 = ["CIANO14 40_12", "CIANO20 150_35 new"]
+DIES_85 = ["CIANO14 30_10", "CIANO20 150_35 new"]
 
 # The dies whose machine a characterised passport card in the sandbox catalogue
 # (_write_passported_catalog below) describes: slots, poles, stator OR, magnet
 # height.  The ANONYMOUS public exhibit must be exactly these -- the passport-
 # filtered set it always was -- and the two granted dies above are NOT among them.
-PASSPORTED_DIES = ["CIANO14 30_10", "CIANO28 150_35"]
+PASSPORTED_DIES = ["100 mm · 24s-28p mid-torque"]
 PUBLIC_EXHIBIT = list(PASSPORTED_DIES)
 
 

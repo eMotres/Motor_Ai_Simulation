@@ -94,6 +94,21 @@ for _env, _real, _name in (("MOTOR_AI_SIM_CONFIG", _REAL_CONFIG, "motor_config.y
             _zero_the_sleeve(_copy)
     os.environ[_env] = str(_copy)
 
+# ── presets of the CLOSED motors (owner 2026-10-19) ──────────────────────────
+# The presets of the closed motors (my_40mm_last, ...) live only in the private data repository
+# (config/motor_presets_closed.json of the checkout MOTOR_AI_SIM_PRIVATE_DATA points at).  With that checkout present the
+# sandbox copy of the preset store gets them back, so the tests that drive the app on those presets run as before; without
+# it they are absent and the tests that need them skip (tests/private_fixtures.py).
+_PRIV = os.environ.get("MOTOR_AI_SIM_PRIVATE_DATA", "").strip()
+if _PRIV and "MOTOR_AI_SIM_PRESETS" in os.environ and os.environ["MOTOR_AI_SIM_PRESETS"] == str(_SANDBOX / "motor_presets.json"):
+    _closed = Path(_PRIV).expanduser() / "config" / "motor_presets_closed.json"
+    if _closed.is_file():
+        import json as _json
+        _p = _SANDBOX / "motor_presets.json"
+        _d = _json.loads(_p.read_text(encoding="utf-8")) if _p.is_file() else {}
+        _d.update(_json.loads(_closed.read_text(encoding="utf-8")))
+        _p.write_text(_json.dumps(_d, indent=2, ensure_ascii=False), encoding="utf-8")
+
 # ── the READ-ONLY libraries (migration Stage 2) ──────────────────────────────
 # Materials, bearings and the fusion map are ONE machine-wide answer that every
 # workspace quotes and no workspace may edit, so Stage 2 gives them to the
@@ -298,3 +313,39 @@ def _no_network_in_verification_tests(monkeypatch):
         _vnet.set_mx(None)
     except Exception:                                       # noqa: BLE001
         pass
+
+
+# ── a missing PRIVATE file is a skip, not a failure (owner 2026-10-19) ────────────────────────────────────────────
+# The 3-D reference files and the data of the closed motors live only in the private repository.  Without a checkout
+# (MOTOR_AI_SIM_PRIVATE_DATA unset) a test that reaches for one of them skips with the path.  With a checkout configured
+# a missing file is a real failure and is NOT converted.
+_PRIVATE_PATH_MARKERS = (
+    "cad/reference", "tests/fixtures/server_bom", "tests/fixtures/cad_bom_dump", "docs/data/passport_",
+    "docs/data/propeller_s1_", "docs/data/shaft_ss420", "config/passports", "config/passport_specs",
+    "config/propeller_s1", "scripts/gap_layers_study/inputs", "motor_presets_closed",
+)
+
+
+def _private_missing_skip(outcome):
+    exc = outcome.excinfo
+    if not exc or not issubclass(exc[0], FileNotFoundError):
+        return
+    if os.environ.get("MOTOR_AI_SIM_PRIVATE_DATA", "").strip():
+        return
+    text = (str(exc[1]) + " " + str(getattr(exc[1], "filename", "") or "")).replace("\\", "/")
+    if any(m in text for m in _PRIVATE_PATH_MARKERS):
+        outcome.force_exception(pytest.skip.Exception(
+            "needs the private data repository (set MOTOR_AI_SIM_PRIVATE_DATA to a checkout of "
+            "eMotres/motor-ai-sim-private): " + text[:200]))
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    outcome = yield
+    _private_missing_skip(outcome)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_setup(item):
+    outcome = yield
+    _private_missing_skip(outcome)

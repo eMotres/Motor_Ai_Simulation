@@ -134,10 +134,17 @@ def thread_rules(src):
         return {}
     carrier = not ps.has_param(sh, "shaft_thread_r")
     shank = g("screw_shank_d") if ps.has_param(sh, "screw_shank_d") else g("bolt_d")
-    return {"Screw_": [("external", shank / 2, "screw", g("holder_screw_l"))],
-            "Stator_holder_back": [("internal", g("holder_tap_d") / 2, None, None), ("internal", g("back_screw_tap_d") / 2, None, None)],
-            "Shaft": [("internal", g("carrier_hole_d") / 2, None, None)] if carrier else
-                     [("external", g("shaft_tip_r"), "zband", (g("shaft_thread_end_z"), g("shaft_front_end_z")))]}
+    rules = {"Screw_": [("external", shank / 2, "screw", g("holder_screw_l"))],
+             "Stator_holder_back": [("internal", g("holder_tap_d") / 2, None, None), ("internal", g("back_screw_tap_d") / 2, None, None)],
+             "Shaft": [("internal", g("carrier_hole_d") / 2, None, None)] if carrier else
+                      [("external", g("shaft_tip_r"), "zband", (g("shaft_thread_end_z"), g("shaft_front_end_z")))]}
+    for node in ("Shaft", "Stator_holder_back"):             # a Fusion body (template A.7.7): the thread cylinders are Fusion's, measured radii in profile.fusion_parts.thread_radii
+        fus = src.getObject(node + "_Fusion")
+        if fus is not None:
+            radii = json.loads(fus.ThreadRadii or "[]")
+            kind, _, mode, length = rules[node][0]
+            rules[node] = [(kind, r, mode, length) for r in radii]
+    return rules
 
 
 def thread_finder(rules, node, shape):

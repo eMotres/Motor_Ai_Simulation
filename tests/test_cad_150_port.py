@@ -9,28 +9,31 @@ import sys
 import pytest
 
 from motor_ai_sim.cad import store
+from tests.private_fixtures import need_cad_reference, need_fixture   # the reference files + BOM dump are private data
 
 if store.CAD_DIR not in sys.path:
     sys.path.insert(0, store.CAD_DIR)
 
-REF = os.path.join(store.CAD_DIR, "reference", "CIANO28_150_35_new.json")
+REF = os.path.join(store.REFERENCE_DIR, "CIANO28_150_35_new.json")
 TPL = os.path.join(store.CAD_DIR, "motor_templates", "segmented_flatwire")
 
 
 @pytest.fixture(scope="module")
 def ref():
+    need_cad_reference("CIANO28_150_35_new.json")
     pj = json.load(open(REF, encoding="utf-8"))
     rows = {r["name"]: r for sec in store.SECTIONS for r in pj.get(sec, [])}
     vals = store.evaluate({n: r["freecad_expression"] for n, r in rows.items()})
     return pj, rows, vals
 
 
-def test_template_version_is_a75():                      # A.7.5 (CIANO14 50, even-mm holder screw) keeps the 150 port
+def test_template_version_has_the_150_fusion_bodies():  # A.7.6 (150 holders are the real Fusion bodies, no gapped rings); A.7.7 added the CIANO14 40 parts
     src = open(os.path.join(TPL, "__init__.py"), encoding="utf-8").read()
-    assert 'TEMPLATE_VERSION = "A.7.5"' in src
+    assert 'TEMPLATE_VERSION = "A.7.7"' in src and "A.7.6 (2026-10-19)" in src
 
 
 def test_reference_is_found_for_the_die():
+    need_cad_reference("CIANO28_150_35_new.json")
     own, fv = store.reference_for("CIANO28 150_35 new")
     assert own == REF and os.path.exists(fv)
 
@@ -85,6 +88,28 @@ def test_every_row_has_a_source(ref):
     assert all(r.get("source") or r["role"] == "derived" for r in rows.values())     # a derived row is its own formula
 
 
+def test_the_holders_are_the_fusion_bodies_not_gapped_rings(ref):
+    """Owner 2026-10-19: no gaps anywhere, Fusion is the truth.  The four aluminium parts come from the Fusion STEP bodies; the measured
+    occupancy rows stay only as the record (role info: not live, so the role check does not call them dead)."""
+    pj, rows, _ = ref
+    fp = pj["profile"]["fusion_parts"]
+    assert set(fp["files"]) == {"Shaft", "Shaft_rear", "Stator_holder", "Stator_holder_back"} == set(fp["volumes_mm3"])
+    assert fp["ref_motor_length"] == 35 and fp["dir"] == "CIANO28_150_35"
+    for n, r in rows.items():
+        if n.split("_r0_")[0] in ("rotor_holder1", "rotor_holder2", "stator_holder", "stator_holder_back") and "_r0_" in n:
+            assert r["role"] == "info", n
+    for pre in ("rotor_holder1", "rotor_holder2", "stator_holder", "stator_holder_back"):
+        for suf in ("pattern_n", "rot", "r0_1", "r1_1", "z0_1", "z1_1"):
+            if pre + "_" + suf in rows:
+                assert rows[pre + "_" + suf]["role"] == "info"
+
+
+def test_the_fusion_part_import_has_no_silent_fallback():
+    src = open(os.path.join(TPL, "fusion_parts.py"), encoding="utf-8").read()          # the import moved here in A.7.7 (shared with the CIANO14 40)
+    assert "not found" in src and "raise RuntimeError" in src and "fusion_parts" in src
+    assert "import_fusion_part" in open(os.path.join(TPL, "mechanics_occupancy.py"), encoding="utf-8").read()
+
+
 def test_the_occupancy_rows_are_declared_info_only_where_python_reads_them(ref):
     _, rows, _ = ref
     for n in ("occupancy_variant", "bearing_out_z", "screwA_flip", "screwB_flip", "screwC_flip", "screwC_angle"):
@@ -93,7 +118,7 @@ def test_the_occupancy_rows_are_declared_info_only_where_python_reads_them(ref):
 
 def _bom():
     from motor_ai_sim.cad import bom
-    fix = os.path.join(os.path.dirname(__file__), "fixtures", "cad_bom_dump_150_L35.json")
+    fix = str(need_fixture("cad_bom_dump_150_L35.json"))
     dump = json.load(open(fix, encoding="utf-8"))
     mats = {"Core": "20SW1200", "Coil": "Copper", "RotorCore": "20SW1200", "Magnet": "F52SH_120C", "Shaft": "Aluminum 6061",
             "Shaft_rear": "Aluminum 6061", "Stator_holder": "Aluminum 6061", "Stator_holder_back": "Aluminum 6061",

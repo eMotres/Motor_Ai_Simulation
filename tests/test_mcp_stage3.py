@@ -38,7 +38,7 @@ A = "alice@example.com"
 B = "bob@example.com"
 ACCEPT = "application/json, text/event-stream"
 _REPO = Path(__file__).resolve().parents[1]
-_PICK = ("100 mm · 24s-28p mid-torque", "CIANO14 40_12")
+_PICK = ("100 mm · 24s-28p mid-torque", "CIANO14 30_10")   # two OPEN dies of the repo catalog (closed dies are private data since 2026-10-19)
 ALL = ["catalog:read", "machines:read", "designs:write", "simulate"]
 REQ = {"torque_nm": 0.5, "speed_rpm": 10000, "dc_bus_v": 48, "cooling": "air",
        "duty": "S1"}
@@ -82,7 +82,7 @@ def env(tmp_path, monkeypatch):
         n: {p.stem: "2026-10-19" for p in (dd / n).glob("*.yaml")} for n in _PICK})
     for e in (A, B):
         U.create_user(e, "pw-" + e, role="user")
-    U.set_motor_grants(A, all_motors=False, dies=["CIANO14 40_12"])
+    U.set_motor_grants(A, all_motors=False, dies=["CIANO14 30_10"])
     U.set_motor_grants(B, all_motors=False, dies=["100 mm · 24s-28p mid-torque"])
     K.reset_quotas()
     K._touched.clear()
@@ -234,7 +234,7 @@ def test_draft_created_and_live_state_untouched(env):
     d = _design(env, tok)
     assert d["status"] == "draft"
     assert d["created_by"]["client_name"] == "Claude Desktop"
-    assert d["starting_point"]["die"] == "CIANO14 40_12"
+    assert d["starting_point"]["die"] == "CIANO14 30_10"
     assert d["why"] and d["parameters"]["active_length_mm"] > 0
     job = _payload(_call(env["c"], tok, "simulate",
                          {"design_id": d["design_id"], "what": "em", "steps": 24}))
@@ -315,7 +315,7 @@ def test_two_users_isolated(env):
     ta, _ = K.create_key(A, "a", scopes=ALL)
     tb, _ = K.create_key(B, "b", scopes=ALL)
     da = _design(env, ta)
-    assert da["starting_point"]["die"] == "CIANO14 40_12"     # A's grant only
+    assert da["starting_point"]["die"] == "CIANO14 30_10"     # A's grant only
     for tool, args in (("get_design", {"design_id": da["design_id"]}),
                        ("get_design_result", {"design_id": da["design_id"]}),
                        ("open_in_configure", {"design_id": da["design_id"]}),
@@ -326,7 +326,7 @@ def test_two_users_isolated(env):
     assert "not found" in _payload(_call(env["c"], tb, "get_job", {"job_id": j["job_id"]}))["__error__"]
     # B cannot address A's granted die as a base either
     out = _payload(_call(env["c"], tb, "start_design", {"requirements": REQ,
-                   "base": {"die": "CIANO14 40_12", "config": "L12"}}))
+                   "base": {"die": "CIANO14 30_10", "config": "L10"}}))
     assert "not found" in out["__error__"]
 
 

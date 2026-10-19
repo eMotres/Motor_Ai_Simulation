@@ -1,4 +1,3 @@
-cad/reference/**/*.step -text
 
 # shell scripts run on the Linux server: LF everywhere, also in `git archive` from a Windows checkout (autocrlf)
 *.sh text eol=lf

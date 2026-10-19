@@ -45,6 +45,8 @@ PATHS = ("occ_2d_single_polygon", "occ_2d_full_section", "gmsh_cdt_backend",
 
 @pytest.fixture(scope="module")
 def probe():
+    from tests.private_fixtures import need_closed_preset
+    need_closed_preset("my_40mm_last")        # the probe meshes the 40 mm machine, a CLOSED motor's preset: private data
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
         [str(_ROOT / "src"), str(_ROOT)] + ([env["PYTHONPATH"]]

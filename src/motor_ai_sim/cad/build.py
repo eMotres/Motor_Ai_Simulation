@@ -52,7 +52,7 @@ def _read(path):
 
 
 def _fc(script, env, args, gui=False):
-    code, log, st = runner.run_script(os.path.join(SCRIPTS, script), dict(env, FC_CAD_ROOT=store.CAD_DIR),
+    code, log, st = runner.run_script(os.path.join(SCRIPTS, script), dict(env, FC_CAD_ROOT=store.CAD_DIR, FC_CAD_REFERENCE=store.REFERENCE_DIR),
                                       freecadcmd=args.freecadcmd, timeout=args.timeout,
                                       low_priority=not args.normal_priority, gui=gui)
     if args.verbose or code:

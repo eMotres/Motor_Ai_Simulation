@@ -14,6 +14,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from motor_ai_sim import passport_store as ps
+from tests.private_fixtures import need_private
+
+# The passports of the closed machines (CIANO14 40 new L12 / L20) are private data (owner 2026-10-19): the tests that read the
+# real store skip without the private checkout (MOTOR_AI_SIM_PRIVATE_DATA).
 
 DIE = "CIANO14 40 new"
 
@@ -26,6 +30,7 @@ def _card(name=DIE, L0=12.0, **extra):
 
 @pytest.fixture()
 def client(tmp_path, monkeypatch):
+    need_private("config", "passports", "CIANO14 40 new", "L12.json")
     from motor_ai_sim.routes import catalog as cat_mod
     p = tmp_path / "motor_catalog.json"
     cards = [_card(), {**_card(name="CIANO14 40 new L20", L0=20.0), "id": "cat_l20"},
@@ -75,6 +80,7 @@ def test_l20_is_matched_by_name_other_cards_and_unpassported_cards_are_unchanged
 
 
 def test_every_stored_variant_is_readable_by_configure():
+    need_private("config", "passports", "CIANO14 40 new", "L12.json")
     """What the web's usableVariants() and readVariant() need: id, device, a carrier,
     points that carry rpm and I_A on a FULL (rpm × I_A) grid (readVariant refuses
     a gap), and the loss/efficiency fields — or, where the machine cannot run
@@ -101,6 +107,7 @@ def test_every_stored_variant_is_readable_by_configure():
 
 
 def test_the_variants_reach_below_and_above_the_rated_current():
+    need_private("config", "passports", "CIANO14 40 new", "L12.json")
     """Configure's default point (I0 of the old preset, 40.7 A on L12) must be
     inside every L12 variant's current range (2026-10-05 gap)."""
     for die, cfg, rec in ps._records():
@@ -185,6 +192,7 @@ def test_the_store_is_parsed_once_per_change_and_keeps_only_what_configure_reads
 
 
 def test_the_references_route_is_lean_and_visible_like_the_catalogue(tmp_path, monkeypatch):
+    need_private("config", "passports", "CIANO14 40 new", "L12.json")
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from motor_ai_sim.routes import catalog as cat_mod

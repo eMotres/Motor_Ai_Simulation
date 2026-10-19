@@ -98,4 +98,11 @@ def default_spec_path(repo: Path, name: str) -> Path:
     q = Path(name)
     if q.suffix in (".yaml", ".yml") and q.exists():
         return q
-    return Path(repo) / "config" / "passport_specs" / f"{name}.yaml"
+    here = Path(repo) / "config" / "passport_specs" / f"{name}.yaml"
+    if not here.exists():
+        # The specs of the closed motors live in the private data repository (2026-10-19).
+        from motor_ai_sim.private_data import private_path
+        q = private_path("config", "passport_specs", f"{name}.yaml")
+        if q is not None:
+            return q
+    return here

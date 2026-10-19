@@ -30,6 +30,37 @@ record was created (append-only `legal/data_sharing_audit.jsonl`). It always str
 and account identifiers, and never exports Restricted Material (`restricted`, `nda`, `confidential`). Without
 consent the `customer` block stays. Counsel draft: `legal_review_2026-10-13/output/v5/Data_Sharing_Consent_v1_DRAFT.md`.
 
+## 3-D models and closed-motor data (owner decision 2026-10-19)
+
+- **Closed** (private) motors are stored in the PRIVATE repository, **open** motors in this public one.
+- **ALL 3-D models of every motor are stored ONLY in the private repository** (STEP, FCStd, GLB, STL, BREP, IGES, KiCad
+  boards, DXF laminations, and the Fusion reference profiles and parameter dumps that define a model).
+- "Closed" = not public in the server catalogue (`die_access.json` visibility, per-configuration `visibility:`, catalogue tier).
+  Open at this date: `100 mm · 24s-28p mid-torque`, `CIANO14 30_10`, `CIANO20 150_35 new` (and the made-up `data/open/dies/Demo *`).
+
+What lives where (same relative paths in both repositories; the private one is the checkout `MOTOR_AI_SIM_PRIVATE_DATA`
+points at):
+
+| Private repository path | What | Who reads it |
+|---|---|---|
+| `cad/reference/**` | Fusion reference profiles + parameter dumps, `fusion_mechanics/*.step`, `phase_board/*.step`, `Coil_L20_fusion.step` | CAD builder (`cad/store.py: REFERENCE_DIR`), the CAD image (`COPY --from=private`) |
+| `config/passports/`, `config/propeller_s1/`, `config/passport_specs/` | passports, S1 models, passport specs of the closed machines | `passport_store`, `propeller_s1`, `passport_v1.spec` (after `<shared>/…` on a server) |
+| `config/dies/<closed die>/` | `die.yaml` + configuration yaml of the closed dies | `data_sources` private layer, the tests that need them |
+| `config/motor_catalog_closed_entries.json`, `config/motor_presets_closed.json` | catalogue entries and presets removed from the public JSON files | the tests that need the 40 mm / 150 mm fixtures |
+| `tests/fixtures/server_bom/`, `tests/fixtures/cad_bom_dump_*.json` | BOMs with materials of the closed machines | the CAD / mass tests (they skip without it) |
+| `docs/data/passport_*`, `docs/data/propeller_s1_*`, `docs/data/shaft_ss420_fem_*` | passport and S1 data dumps | documentation only |
+
+Without the private checkout the application runs on the public data alone and the tests that need the private files
+**skip** (they never fail for a missing private file). A CAD build needs the reference files: set `MOTOR_AI_SIM_PRIVATE_DATA`
+(or `MOTRES_CAD_REFERENCE_DIR` to the `cad/reference` folder itself); on the server the folder is
+`/srv/motres/private_assets` (see `docs/CAD_GENERATOR.md`, "Private reference files").
+
+**Guard.** `scripts/check_no_private_data.py` (CI workflow `no-private-data.yml`, test
+`tests/test_no_private_data_in_public.py`) fails when a tracked file is a 3-D / CAD / board file, sits under one of the
+closed-data paths above, is a die other than the open ones, or when `config/motor_catalog.json` / `config/motor_presets.json`
+carry a non-open entry. Publishing a new open motor means adding its name to the lists in that script in the same pull
+request.
+
 The data set is **not** the same thing as *visibility* (Admin → Motors access:
 Private / Public / Selected clients). Visibility decides who can see a die on
 this server; the data set decides which git repository holds its files.

@@ -174,3 +174,21 @@ uvicorn_*.err
 # Raw supplier documents are never committed (owner 2026-09-29); only derived values go into the libraries
 supplier_docs/
 **/supplier_docs/
+
+# 3-D models and the data of closed motors are PRIVATE (owner 2026-10-19): they live in eMotres/motor-ai-sim-private.
+# A private checkout dropped into this tree must never be committed (scripts/check_no_private_data.py enforces it in CI).
+*.step
+*.stp
+*.FCStd
+*.FCStd1
+*.glb
+*.stl
+*.brep
+*.iges
+*.igs
+cad/reference/*
+!cad/reference/*.py
+
+# the tool scripts above are public code; the data beside them is private
+# owner design data of the CIANO28 150: Fusion STEP bodies of the four aluminium parts (template A.7.6); never committed to the public repo
+cad/reference/fusion_parts/

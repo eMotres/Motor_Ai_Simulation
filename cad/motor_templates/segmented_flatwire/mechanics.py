@@ -922,12 +922,13 @@ def g_B(sh):
     return pval(sh, "bearing_B")
 
 
-def build_mechanics(doc, sh, polar_array):
+def build_mechanics(doc, sh, polar_array, fusion_parts=None):
     """Adds the Mechanics part with every mechanical body.  polar_array(doc, base, count_expr, name) -> Draft link array.
-    Returns the per-body reports (sketches, chamfer / fillet edge counts)."""
-    if has_param(sh, "occupancy_variant"):                     # CIANO28 150: aluminium parts from occupancy rings
+    Returns the per-body reports (sketches, chamfer / fillet edge counts).  fusion_parts = profile.fusion_parts: the named parts are the Fusion STEP
+    bodies instead of the parametric template geometry (A.7.6 occupancy variant, A.7.7 CIANO14 40 mechanics; see fusion_parts.py)."""
+    if has_param(sh, "occupancy_variant"):                     # CIANO28 150: aluminium parts = the Fusion bodies (A.7.6) or occupancy rings
         from .mechanics_occupancy import build_mechanics_occupancy
-        return build_mechanics_occupancy(doc, sh, polar_array)
+        return build_mechanics_occupancy(doc, sh, polar_array, fusion_parts)
     mech = doc.addObject("App::Part", "Mechanics"); mech.Label = "Mechanics"
     rep = {}
 
@@ -936,12 +937,39 @@ def build_mechanics(doc, sh, polar_array):
         return b
 
     carrier = has_param(sh, "carrier_bore_r")                  # profile mechanics = ring_carrier (CIANO28 85)
-    b = body("Shaft"); mech.addObject(b)
-    if carrier:
+    fusion = dict(fusion_parts.get("files", {})) if fusion_parts else {}
+    if fusion and carrier:
+        raise RuntimeError("profile.fusion_parts is not supported for the ring-carrier mechanics (CIANO28 85)")
+    from . import fusion_parts as FP
+    if fusion:
+        bad = sorted(set(fusion) - {"Shaft", "Stator_holder", "Stator_holder_back", "Prop_fix"})
+        if bad:
+            raise RuntimeError("profile.fusion_parts lists %s: only Shaft, Stator_holder, Stator_holder_back, Prop_fix can be Fusion bodies here" % ", ".join(bad))
+
+    def fusion_body(name):
+        """The part `name` as the Fusion STEP body (BaseFeature of its PartDesign body), None when the profile does not list it."""
+        if name not in fusion:
+            return None
+        b = body(name); mech.addObject(b)
+        dz = pval(sh, "motor_length") - float(fusion_parts["ref_motor_length"])
+        stretch = (fusion_parts.get("stretch") or {}).get(name)
+        shift = float((fusion_parts.get("shift") or {}).get(name, 0.0)) * dz / 2.0
+        if stretch is not None and name in (fusion_parts.get("shift") or {}):
+            raise RuntimeError("fusion_parts: %s is both shifted and stretched" % name)
+        rep[name] = dict(sketches=[], features=[], fusion=FP.import_fusion_part(
+            doc, b, name, fusion[name], fusion_parts, shift, mech, None if stretch is None else dict(z=float(stretch["z"]), dz=dz)))
+        return b
+
+    b = fusion_body("Shaft")
+    if b is not None:
+        pass
+    elif carrier:
+        b = body("Shaft"); mech.addObject(b)
         from .mechanics_carrier import build_carrier
         rep["Shaft"] = build_carrier(doc, sh, b)
         b = body("Shaft_rear"); mech.addObject(b); rep["Shaft_rear"] = build_carrier(doc, sh, b, rear=True)
     else:
+        b = body("Shaft"); mech.addObject(b)
         rep["Shaft"] = build_shaft(doc, sh, b)
     brg = doc.addObject("App::Part", "Bearing_618_8"); brg.Label = "Bearing_618_8"; mech.addObject(brg)
     o, i, ba = body("Bearing_outer_ring"), body("Bearing_inner_ring"), body("Bearing_ball")
@@ -956,10 +984,12 @@ def build_mechanics(doc, sh, polar_array):
         lk.setExpression(".Placement.Base.z", P + "bearing_B")
         brg.addObject(lk)
     brg.setExpression(".Placement.Base.z", P + "holder_face_z")
-    b = body("Stator_holder"); mech.addObject(b); rep["Stator_holder"] = build_holder_front(doc, sh, b)
-    b = body("Stator_holder_back"); mech.addObject(b); rep["Stator_holder_back"] = build_holder_back(doc, sh, b)
+    if fusion_body("Stator_holder") is None:
+        b = body("Stator_holder"); mech.addObject(b); rep["Stator_holder"] = build_holder_front(doc, sh, b)
+    if fusion_body("Stator_holder_back") is None:
+        b = body("Stator_holder_back"); mech.addObject(b); rep["Stator_holder_back"] = build_holder_back(doc, sh, b)
     b = body("Ring"); mech.addObject(b); rep["Ring"] = build_ring(doc, sh, b)
-    if not carrier:
+    if not carrier and fusion_body("Prop_fix") is None:
         b = body("Prop_fix"); mech.addObject(b); rep["Prop_fix"] = build_prop_fix(doc, sh, b)
     sc = body("Screw"); mech.addObject(sc); rep["Screw"] = build_screw(doc, sh, sc)
     doc.recompute()

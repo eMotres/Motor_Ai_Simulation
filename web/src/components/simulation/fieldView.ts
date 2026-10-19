@@ -235,7 +235,7 @@ export const BAND_FRAG = `
 `;
 
 // ── scale ─────────────────────────────────────────────────────────────────
-export type Mapping = 'linear' | 'log' | 'rank' | 'edges';
+export type Mapping = 'linear' | 'log' | 'rank' | 'edges' | 'power';
 
 export interface FieldScale {
   vmin: number;
@@ -250,6 +250,10 @@ export interface FieldScale {
   fmt: (v: number) => string;
   /** One line saying what the colours mean, printed under the view. */
   note: string;
+  /** 'power' mapping: t = ((v - vmin) / (vmax - vmin)) ** gamma. */
+  gamma?: number;
+  /** Draw a smooth ramp (no bands); `bands` then only sets the legend ticks. */
+  continuous?: boolean;
 }
 
 /** Per drawn triangle: centroid in DISPLAY mm and the value in DISPLAY units.
@@ -339,6 +343,15 @@ export function logScale(vmin: number, vmax: number, unit: string, note: string,
   return { vmin, vmax, unit, bands, mapping: 'log', fmt, note,
            edge: (k) => Math.pow(10, a + (b - a) * (k / bands)) };
 }
+/** Power-law axis: t = ((v - vmin) / (vmax - vmin)) ** gamma, gamma < 1.  Sits
+ *  between linear (hides everything weak) and log (hides everything strong):
+ *  one monotone axis, so equal colour still means equal value everywhere. */
+export function powScale(vmin: number, vmax: number, gamma: number, unit: string,
+                         note: string, fmt = fmtSI, bands = 10): FieldScale {
+  const span = (vmax - vmin) || 1e-12;
+  return { vmin, vmax, unit, bands, mapping: 'power', gamma, fmt, note,
+           edge: (k) => vmin + span * Math.pow(k / bands, 1 / gamma) };
+}
 export function rankScale(sorted: Float64Array, unit: string, note: string,
                           fmt = fmt0, bands = N_BANDS): FieldScale {
   const q = (f: number) => sorted.length
@@ -378,6 +391,11 @@ export function normaliser(sc: FieldScale, sorted?: Float64Array): (v: number) =
     const b = Math.log10(Math.max(sc.vmax, sc.vmin * 10));
     const d = Math.max(b - a, 1e-9);
     return (v) => (v <= 0 ? 0 : Math.max(0, Math.min(1, (Math.log10(v) - a) / d)));
+  }
+  if (sc.mapping === 'power') {
+    const g = sc.gamma ?? 0.5;
+    const span = Math.max(sc.vmax - sc.vmin, 1e-12);
+    return (v) => Math.pow(Math.max(0, Math.min(1, (v - sc.vmin) / span)), g);
   }
   if (sc.mapping === 'rank' && sorted && sorted.length > 1) {
     const n = sorted.length;
@@ -432,10 +450,80 @@ export function demagRange(dc: number[] | undefined,
 }
 
 export interface ViewOpts {
+  /** Loss view axis for the SHARED scale.  Default 'power'. */
+  lossScale?: 'power' | 'linear' | 'log';
+  /** Legacy: true = 'log', false = 'linear' (used when `lossScale` is absent). */
   logLoss?: boolean;
   /** Loss view: colour each material against its OWN range (reading aid). */
   perMaterialLoss?: boolean;
 }
+
+/** Which triangles the Loss view draws and the SHARED colour range built from
+ *  them (true min / max of the drawn, modelled, non-zero elements).
+ *
+ *  Classes no model produced a value for are NOT DRAWN.  Painting them the
+ *  bottom of the scale is indistinguishable from air, i.e. from "no loss
+ *  here" — and the magnets are exactly the component that kept coming back
+ *  unmodelled (a run without the coupled eddy solve leaves P_mag at 0) and
+ *  exactly the one the user was looking at.
+ *
+ *  AIR IS NEVER DRAWN ON A LOSS MAP — unconditionally, not only when the
+ *  backend remembered to say so.  There is no air-loss model to run (σ=0,
+ *  no hysteresis, windage is not a magnetic solve), so every air element is
+ *  exactly 0 — and 0 on a LOG scale is a COLOUR, band 0, the same deep blue
+ *  a genuinely-measured tiny loss gets.  That is what painted the air gap
+ *  as a smooth ring and put contour bands through the rotor's air pockets
+ *  and the bore: not a smear, just zero being coloured in.  A payload from
+ *  an older backend (or the single-frame analytic estimate) never carries
+ *  the flag, so the rule lives here, where the picture is made.
+ *
+ *  The colour range — and so the legend's floor — is built from MODELLED,
+ *  NON-ZERO elements only: `drawn` drops air and every unmodelled class,
+ *  then v > 0 drops the genuine zeros inside a material that IS modelled.
+ *  So the bottom of the scale is a real density somebody computed, and
+ *  nothing sits below it except the blanks. */
+function lossSharedRange(payload: FemPayload) {
+  const dom = payload.domain_per_tri as unknown as number[];
+  const nTri = payload.triangles.length;
+  const ld = payload.loss_density_per_tri ?? [];
+  const unmod = new Set<number>();
+  for (const n of (payload.loss_density_unmodelled ?? [])) {
+    if (n === 'magnets') unmod.add(3);
+    else if (n === 'copper') unmod.add(4);
+    else if (n === 'iron') { unmod.add(1); unmod.add(2); }
+    else if (n === 'shaft') unmod.add(5);
+    else if (n === 'air') unmod.add(0);
+  }
+  unmod.add(0);
+  const drawn = (_ti: number, d: number) =>
+    d !== DOM.OUTER && !unmod.has(classOf(d));
+  const pos: number[] = [];
+  for (let ti = 0; ti < nTri; ti++) {
+    if (!drawn(ti, dom[ti])) continue;
+    const v = ti < ld.length ? ld[ti] : 0;
+    if (v > 0) pos.push(v);
+  }
+  // The TRUE extremes of what is drawn, not percentiles (owner 2026-10-19: one
+  // scale for all materials, and the percentile ceiling had put the whole copper
+  // floor into the top band).  The few singular corner elements set the top.
+  let vmax = 1e-3, vmin = Infinity;
+  for (const v of pos) { if (v > vmax) vmax = v; if (v < vmin) vmin = v; }
+  if (!Number.isFinite(vmin)) vmin = vmax * 1e-4;
+  return { ld, drawn, vmin, vmax };
+}
+
+/** The Loss axis in force: explicit `lossScale`, else the legacy boolean, else
+ *  the power-law default. */
+export function lossKind(o: ViewOpts): 'power' | 'linear' | 'log' {
+  return o.lossScale ?? (o.logLoss === true ? 'log' : o.logLoss === false ? 'linear' : 'power');
+}
+
+/** Exponent of the default shared Loss axis.  Picked on the CIANO14 50 L15 run
+ *  (copper 5.5e7 .. 8.6e7 across the strips, iron 1e5 .. 6e6, max 2.7e8): linear
+ *  leaves all iron and magnets one dark blue, log leaves all copper one red
+ *  (strip-to-strip change 0.04 of the ramp); v**0.4 keeps both readable
+ *  (copper strips differ by 0.10 of the ramp, iron spans 0.12 .. 0.22). */
+export const LOSS_GAMMA = 0.4;
 
 function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | null {
   const dom = payload.domain_per_tri as unknown as number[];
@@ -470,45 +558,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
   }
 
   if (mode === 'Loss') {
-    const ld = payload.loss_density_per_tri ?? [];
-    // Classes no model produced a value for are NOT DRAWN.  Painting them the
-    // bottom of the scale is indistinguishable from air, i.e. from "no loss
-    // here" — and the magnets are exactly the component that kept coming back
-    // unmodelled (a run without the coupled eddy solve leaves P_mag at 0) and
-    // exactly the one the user was looking at.
-    const unmod = new Set<number>();
-    for (const n of (payload.loss_density_unmodelled ?? [])) {
-      if (n === 'magnets') unmod.add(3);
-      else if (n === 'copper') unmod.add(4);
-      else if (n === 'iron') { unmod.add(1); unmod.add(2); }
-      else if (n === 'shaft') unmod.add(5);
-      else if (n === 'air') unmod.add(0);
-    }
-    // AIR IS NEVER DRAWN ON A LOSS MAP — unconditionally, not only when the
-    // backend remembered to say so.  There is no air-loss model to run (σ=0,
-    // no hysteresis, windage is not a magnetic solve), so every air element is
-    // exactly 0 — and 0 on a LOG scale is a COLOUR, band 0, the same deep blue
-    // a genuinely-measured tiny loss gets.  That is what painted the air gap
-    // as a smooth ring and put contour bands through the rotor's air pockets
-    // and the bore: not a smear, just zero being coloured in.  A payload from
-    // an older backend (or the single-frame analytic estimate) never carries
-    // the flag, so the rule lives here, where the picture is made.
-    unmod.add(0);
-    const drawn = (_ti: number, d: number) =>
-      d !== DOM.OUTER && !unmod.has(classOf(d));
-    // The colour range — and so the legend's floor — is built from MODELLED,
-    // NON-ZERO elements only: `drawn` drops air and every unmodelled class,
-    // then v > 0 drops the genuine zeros inside a material that IS modelled.
-    // So the bottom of the log scale is a real density somebody computed, and
-    // nothing sits below it except the blanks.
-    const pos: number[] = [];
-    for (let ti = 0; ti < nTri; ti++) {
-      if (!drawn(ti, dom[ti])) continue;
-      const v = ti < ld.length ? ld[ti] : 0;
-      if (v > 0) pos.push(v);
-    }
-    const vmax = Math.max(pctl(pos, 99.5), 1e-3);
-    const vmin = Math.max(pctl(pos, 5), vmax * 1e-4);
+    const { ld, drawn, vmin, vmax } = lossSharedRange(payload);
     const label = (payload as any).loss_density_label as string | undefined;
 
     // ── PER-MATERIAL scaling (opt-in) ────────────────────────────────────
@@ -546,11 +596,11 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
       // reads as band 4 against 10, which is what it is.  A reader who cannot
       // see which mapping is on cannot know which of those they are looking at.
       const note = (label ? label : 'loss density')
-        + (o.logLoss ? ' · log' : ' · linear')
+        + (lossKind(o) === 'log' ? ' · log' : ' · linear')
         + ' PER-MATERIAL colour scale: every material spans its own'
         + ' 5-99.5 % range, so a colour is NOT comparable between'
         + ' materials — read structure here, read levels on the shared scale'
-        + (o.logLoss ? '; log compresses ratios, switch to lin to judge how'
+        + (lossKind(o) === 'log' ? '; log compresses ratios, switch to lin to judge how'
                        + ' much hotter one spot is than another' : '');
       return {
         // Normalised to PER CENT of the element's own class range right here
@@ -564,7 +614,7 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
           const r = rng.get(classOf(dom[ti]));
           if (!r) return 0;
           const [lo, hi] = r;
-          const t = o.logLoss
+          const t = lossKind(o) === 'log'
             ? (Math.log10(v) - Math.log10(lo))
               / Math.max(Math.log10(hi) - Math.log10(lo), 1e-9)
             : v / hi;
@@ -572,21 +622,26 @@ function sourceFor(payload: FemPayload, mode: string, o: ViewOpts): Source | nul
         },
         include: drawn,
         // The bar can only be a fraction: there is no single W/m³ axis left.
-        scale: linScale(0, 100, '% of each material’s own range', note, fmt0),
+        scale: linScale(0, 100, '% of own range · per-material scale', note, fmt0),
       };
     }
 
+    const kind = lossKind(o);
+    const axis = kind === 'log' ? 'log'
+      : kind === 'linear' ? 'linear' : `power-law v^${LOSS_GAMMA} (between linear and log)`;
     const note = (label ? label : 'loss density')
-      + (o.logLoss ? ' · log colour scale' : ' · linear colour scale')
-      + ' · one shared scale across all materials'
-      + ' · air and any unmodelled material are left BLANK — every coloured'
-      + ' element is a modelled one, and the scale floor is the 5th percentile'
-      + ' of the modelled NON-ZERO densities';
+      + ` · ONE colour scale for all materials (${axis}): the same colour is the`
+      + ' same W/m³ in iron, magnets and copper'
+      + ' · range = the true min and max of the drawn elements'
+      + ' · air and any unmodelled material are left BLANK';
+    const unit = 'W/m³ · one scale for all materials';
+    const sc = kind === 'log' ? logScale(vmin, vmax, unit, note, fmtSI, 10)
+      : kind === 'linear' ? linScale(vmin, vmax, unit, note, fmtSI, 10)
+      : powScale(vmin, vmax, LOSS_GAMMA, unit, note, fmtSI, 10);
     return {
       elem: (ti) => (ti < ld.length ? ld[ti] : 0),
       include: drawn,
-      scale: o.logLoss ? logScale(vmin, vmax, 'W/m³', note)
-                       : linScale(Math.min(vmin, vmax * 0.999), vmax, 'W/m³', note, fmtSI),
+      scale: { ...sc, continuous: true },
     };
   }
 

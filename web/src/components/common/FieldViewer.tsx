@@ -62,6 +62,7 @@ import { guardCanvas } from '../viewer3d/webglGuard';
 import { OrthographicCamera } from '@react-three/drei';
 import * as THREE from 'three';
 
+import { jet01 } from '../simulation/fieldView';
 import {
   GROUP_ORDER, PART_GROUP_ORDER, buildEdgeGeometry, extremaOf, jetPalette,
   loopsToSegments, partsOf, restrictToParts,
@@ -131,9 +132,17 @@ const FIELD_FRAG = `
   uniform vec3  uCols[MAXB];
   uniform float uBands;
   uniform float uIso;
+  uniform float uCont;           // 1 = smooth jet ramp, no bands, no iso-lines
   varying float vVal;
+  vec3 jet(float x) {
+    x = clamp(x, 0.0, 1.0);
+    return vec3(clamp(1.5 - abs(4.0 * x - 3.0), 0.0, 1.0),
+                clamp(1.5 - abs(4.0 * x - 2.0), 0.0, 1.0),
+                clamp(1.5 - abs(4.0 * x - 1.0), 0.0, 1.0));
+  }
   void main() {
     float t = clamp(vVal, 0.0, 1.0);
+    if (uCont > 0.5) { gl_FragColor = vec4(jet(t), 1.0); return; }
     float b = min(floor(t * uBands), uBands - 1.0);
     vec3 col = uCols[0];
     for (int i = 0; i < MAXB; i++) {
@@ -163,8 +172,9 @@ const OutputMesh: React.FC<{ out: FieldOutput; mesh: boolean }> = ({ out, mesh }
       uCols:  { value: cols },
       uBands: { value: bands },
       uIso:   { value: out.iso ?? 0.85 },
+      uCont:  { value: out.scale?.continuous ? 1 : 0 },
     };
-  }, [out.palette, out.iso, bands]);
+  }, [out.palette, out.iso, bands, out.scale?.continuous]);
 
   const outGeo = useMemo(() => {
     if (!out.outlines?.length) return null;
@@ -570,10 +580,17 @@ const ColourBar: React.FC<{ out: FieldOutput; height: number }> = ({ out, height
     <Box sx={{ display: 'flex', alignItems: 'stretch', gap: 0.5, pl: 1, pr: 1, py: 1 }}>
       <Box sx={{ display: 'flex', flexDirection: 'column-reverse', height: H,
         width: 14, border: '1px solid var(--line-soft)' }}>
-        {Array.from({ length: bands }, (_, k) => {
-          const [r, g, b] = pal[Math.min(k, pal.length - 1)] ?? [128, 128, 128];
-          return <Box key={k} sx={{ flex: 1, background: `rgb(${r | 0},${g | 0},${b | 0})` }}/>;
-        })}
+        {scale.continuous
+          // smooth ramp: same jet the shader draws, bottom (low) to top (high)
+          ? <Box sx={{ flex: 1, background: `linear-gradient(to top, ${
+              Array.from({ length: 17 }, (_, i) => {
+                const [r, g, b] = jet01(i / 16);
+                return `rgb(${r | 0},${g | 0},${b | 0}) ${(i / 16 * 100).toFixed(1)}%`;
+              }).join(', ')})` }}/>
+          : Array.from({ length: bands }, (_, k) => {
+              const [r, g, b] = pal[Math.min(k, pal.length - 1)] ?? [128, 128, 128];
+              return <Box key={k} sx={{ flex: 1, background: `rgb(${r | 0},${g | 0},${b | 0})` }}/>;
+            })}
       </Box>
       <Box sx={{ position: 'relative', height: H, minWidth: 62 }}>
         {Array.from({ length: bands + 1 }, (_, k) => (

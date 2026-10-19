@@ -587,6 +587,46 @@ class TestLossDensityMap:
         assert dens[coil].tolist() == pytest.approx([101.0, 301.0])
         assert "end-winding" in label
 
+    def test_solved_copper_keeps_the_gap_side_strip_gradient(self):
+        """CIANO14 50 (L15, 49 A, 10 krpm), 2026-10-19: the owner saw every
+        flat-wire strip the same dark red and asked whether the loss near the
+        magnets was being computed.  It is — the STORED map has the strip next
+        to the air gap at 1.6x the far one (DC floor 5.47e7 W/m3 = in-plane
+        I²R 3.12e7 + uniform end-winding 2.35e7; AC adds 3.15e7 to the gap-side
+        strip and ~0 to the far ones) and the picture was flat only because the
+        shared log colour scale puts all of it in its top band.  Pin the data
+        half: the map must neither flatten the strips nor lose watts, and the
+        uniform end-winding term must lift every strip by the SAME amount."""
+        from motor_ai_sim.simulation.losses import loss_density_map
+        n_strips = 11
+        n_st, n_el = n_strips, n_strips + 1
+        coil = np.arange(n_strips)               # strip 0 = far, 10 = at the gap
+        dc_plane = 3.117e7                       # in-plane DC I²R, uniform
+        ac = np.array([4.7e5, 1.8e5, 1.6e5, 2.3e5, 3.5e5, 5.5e5,
+                       9.0e5, 1.72e6, 3.98e6, 1.09e7, 3.15e7])   # AC excess
+        solved = np.zeros(n_el)
+        solved[coil] = dc_plane + ac
+        # element area 1 m2, L 0.05 m, sector_scale 4  ->  V_cu = 2.2 m3
+        v_cu = n_strips * 1.0 * 0.05 * 4.0
+        p_end = 2.35e7 * v_cu                    # end-winding watts, uniform
+        dens, label, unmod = loss_density_map(**self._kw(
+            n_st, n_el, coil_idx=coil, solved_dens=solved,
+            solved_groups=("cu",), solved_elems={"cu": coil},
+            P_cu_end_winding_W=p_end,
+            P_cu_dc=(dc_plane * v_cu + p_end), P_cu_ac_avg=float(ac.sum()) * 0.2))
+        cu = dens[coil]
+        # strictly rising toward the air gap from strip 4 on, nothing flattened
+        assert np.all(np.diff(cu[4:]) > 0)
+        assert cu[10] / cu[0] == pytest.approx(
+            (dc_plane + ac[10] + 2.35e7) / (dc_plane + ac[0] + 2.35e7), rel=1e-9)
+        assert cu[10] / cu[0] > 1.5
+        # the end-winding term is the same for every strip (uniform, declared)
+        assert (cu - solved[coil]) == pytest.approx(np.full(n_strips, 2.35e7))
+        assert "end-winding" in label
+        # and the map still integrates to solved watts + end-winding watts
+        assert float(np.sum(cu)) * 0.05 * 4.0 == pytest.approx(
+            float(np.sum(solved[coil])) * 0.05 * 4.0 + p_end)
+
     def test_no_solved_groups_leaves_the_modelled_path_untouched(self):
         """A run with the coupled solve OFF must behave exactly as before."""
         from motor_ai_sim.simulation.losses import loss_density_map

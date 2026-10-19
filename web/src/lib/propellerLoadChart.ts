@@ -125,6 +125,25 @@ export function rpmAtChartX(chartX: number, width: number, xMin: number, xMax: n
   return Math.round((xMin + f * (xMax - xMin)) / 10) * 10;
 }
 
+/**
+ * The SPEED MARKER (owner 2026-10-19 «при нажатии на графике, чтобы оставалась полоска в точке нажатия ... при нажатии на
+ * другое место она должна смещаться»): a vertical line at the speed Configure is set to - where the user clicked or
+ * dragged on the chart, typed the rpm, moved the slider, or where a preset load put it - with a dot on every line that
+ * reaches that speed.  `rpm` is ALWAYS the current knob value; the marker has no state of its own, so a second click
+ * (a new knob value) moves it.  null when the speed is not on the chart's speed axis [xMin, xMax].
+ */
+export function speedMarker(lines: readonly { id: string; color: string; ok: readonly LoadPoint[]; over: readonly LoadPoint[] }[],
+                            rpm: number | null | undefined): { x: number; dots: { id: string; color: string; y: number }[] } | null {
+  if (rpm == null || !Number.isFinite(rpm)) return null;
+  const xs = lines.flatMap((l) => [...l.ok, ...l.over].map((q) => q.x));
+  if (!xs.length || rpm < Math.min(...xs) || rpm > Math.max(...xs)) return null;
+  const dots = lines.flatMap((l) => {
+    const y = valueAt(l, rpm);
+    return y == null ? [] : [{ id: l.id, color: l.color, y }];
+  });
+  return { x: rpm, dots };
+}
+
 /** What the chart says while it has no line: still LOADING (a request in flight) or truly NO DATA (every answer came
  *  back empty).  `answers` maps each requested propeller to its rows: undefined = in flight, null / [] = no data. */
 export function chartState(ids: readonly string[], answers: Readonly<Record<string, readonly unknown[] | null | undefined>>):

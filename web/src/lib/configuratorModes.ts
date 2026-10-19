@@ -12,8 +12,13 @@ export interface ModePreset extends Preset {
   duty: string;
   /** `${config}|${duty}` - the toggle value */
   key: string;
-  /** "L12 · rated" */
+  /** "L12 · rated" - names the mode where the configuration matters ("changed from L12 · rated") */
   label: string;
+  /** what the BUTTON says: the mode alone ("rated", "peak"; owner 2026-10-19 «можно просто писать peak без short time»,
+   *  «не надо писать L20 rated в моторе L12») - the buttons show only the loaded configuration's modes */
+  buttonLabel: string;
+  /** a short-time mode (peak): said in the button's tooltip, never on the button */
+  short_time: boolean;
   gamma_deg: number | null;
 }
 
@@ -53,7 +58,7 @@ export function buildModePresets(presets: readonly Preset[]): ModePreset[] {
     const modes = modesOf(pr);
     if (!modes.length) {
       out.push({ ...pr, duty: pr.duty ?? '', key: modeKey(pr.config, pr.duty ?? ''),
-                 label: pr.config, gamma_deg: null });
+                 label: pr.config, buttonLabel: pr.config, short_time: false, gamma_deg: null });
       continue;
     }
     for (const m of modes) {
@@ -62,15 +67,26 @@ export function buildModePresets(presets: readonly Preset[]): ModePreset[] {
         duty: m.name,
         knobs: { ...pr.knobs, I_A: m.current_A, rpm: m.rpm },
         key: modeKey(pr.config, m.name),
-        // SHORT-TIME (owner 2026-10-19) is only ever peak's mark: rated is always continuous,
-        // so the rated button never carries it, whatever a stored record says.
-        label: modeLabel(pr.config, m.name)
-          + (m.duty_class === 'short_time' && m.name.trim().toLowerCase() !== 'rated' ? ' (short-time)' : ''),
+        label: modeLabel(pr.config, m.name),
+        buttonLabel: m.name,
+        // SHORT-TIME (owner 2026-10-19) is only ever peak's mark: rated is always continuous, whatever a stored record
+        // says.  It is told in the tooltip, never on the button («можно просто писать peak без short time»).
+        short_time: m.duty_class === 'short_time' && m.name.trim().toLowerCase() !== 'rated',
         gamma_deg: finite(m.gamma_deg) ? m.gamma_deg : null,
       });
     }
   }
   return out;
+}
+
+/** The preset BUTTONS: only the modes of the loaded configuration (owner 2026-10-19: «не надо писать L20 rated в моторе
+ *  L12»); switching configuration is the motor / configuration selector's job.  With no loaded configuration, or one that
+ *  has no button, every configuration's modes are offered, named with their configuration ("L12 · rated"). */
+export function presetButtons(modePresets: readonly ModePreset[], config: string | null | undefined):
+    { preset: ModePreset; text: string }[] {
+  const own = config ? modePresets.filter((m) => m.config === config) : [];
+  return own.length ? own.map((m) => ({ preset: m, text: m.buttonLabel }))
+    : modePresets.map((m) => ({ preset: m, text: m.label }));
 }
 
 /** The "changed from ..." wording: the mode button the state started from. */

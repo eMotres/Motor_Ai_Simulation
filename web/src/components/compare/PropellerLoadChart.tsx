@@ -12,7 +12,7 @@ import type { PropSummary } from '../../lib/configuratorPropeller';
 import { modelLabel, vendorLabel } from '../../lib/configuratorPropeller';
 import { fetchPropellerS1 } from '../../lib/propellerApi';
 import { s1CacheKey } from '../../lib/configuratorPropellerS1';
-import { LOAD_COLORS, LOAD_METRICS, METRIC_UNIT, chartState, loadLine, rpmAtChartX, valueAt, withPointAt, type LoadMetric, type S1ChartRow } from '../../lib/propellerLoadChart';
+import { LOAD_COLORS, LOAD_METRICS, METRIC_UNIT, chartState, loadLine, rpmAtChartX, speedMarker, valueAt, withPointAt, type LoadMetric, type S1ChartRow } from '../../lib/propellerLoadChart';
 import { nsT } from '../../i18n/nsT';
 
 const tx = nsT('controller');
@@ -38,13 +38,16 @@ interface Props {
    *  (end of propeller data)" - the line is still drawn (owner 2026-10-19) */
   s1Label?: string | null;
   supplyLabel?: string | null;
+  /** the speed Configure is set to NOW (knobs.rpm): a solid marker line with a dot on every curve - where the user clicked,
+   *  dragged, typed or slid, or where a preset load put it (owner 2026-10-19) */
+  speedRpm?: number | null;
   onRpmChange?: (rpm: number) => void;
 }
 
 const propName = (p: PropSummary | undefined, id: string) =>
   p ? `${vendorLabel(p.vendor)} ${modelLabel(p.model)}` : id;
 
-const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, s1Reason, supplyRpm, supplyReason, s1Label, supplyLabel, onRpmChange }) => {
+const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack, escBusA, allowed, selectedId, s1Rpm, s1Reason, supplyRpm, supplyReason, s1Label, supplyLabel, speedRpm, onRpmChange }) => {
   const [metric, setMetric] = useState<LoadMetric>('thrust');
   const [extra, setExtra] = useState<string[]>([]);
   // the answers kept WITH the request they answer (propeller, drive, pack, air): a line never shows another request's rows,
@@ -78,13 +81,15 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
   // the selected propeller's line carries points AT the two limit speeds, so the tooltip stops exactly there
   const lines = ids.map((id, i) => {
     let ln = loadLine(answers[id], metric);
-    if (id === selectedId) ln = withPointAt(withPointAt(ln, s1Rpm), supplyRpm);
+    if (id === selectedId) ln = withPointAt(withPointAt(withPointAt(ln, s1Rpm), supplyRpm), speedRpm);
     return { id, color: LOAD_COLORS[i], name: propName(allowed.find((p) => p.id === id), id), ...ln };
   });
   const sel = lines.find((l) => l.id === selectedId);
   const s1Y = sel && s1Rpm != null ? valueAt(sel, s1Rpm) : null;
   const supplyY = sel && supplyRpm != null ? valueAt(sel, supplyRpm) : null;
   const anyData = lines.some((l) => l.ok.length || l.over.length);
+  // the speed marker: always the CURRENT speed, so a click elsewhere (a new speed) moves it
+  const marker = speedMarker(lines, speedRpm);
   const state = anyData ? 'data' : chartState(ids, answers);
   // A click on the chart sets the motor's speed there, dragging moves it (owner 2026-10-19: "it used to recompute the
   // motor") - the current then follows the propeller, no loading gate: an interactive move recomputes at once.
@@ -129,7 +134,7 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
         onMouseUp={() => { dragging.current = false; }} onMouseLeave={() => { dragging.current = false; }}>
         {anyData ? (
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart margin={{ top: 6, right: 12, bottom: 18, left: 4 }}
+            <LineChart margin={{ top: 18, right: 12, bottom: 18, left: 4 }}
               onMouseDown={(_s: unknown, ev: { clientX?: number }) => { dragging.current = true; setFrom(ev); }}
               onMouseMove={(_s: unknown, ev: { clientX?: number }) => { if (dragging.current) setFrom(ev); }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.25)" />
@@ -150,6 +155,14 @@ const PropellerLoadChart: React.FC<Props> = ({ die, config, ambient, drive, pack
                 label={{ value: `${fmt(s1Y)} ${unit}`, position: 'top', offset: 12, fill: '#16a34a', fontSize: 11, fontWeight: 700 }} />}
               {supplyRpm != null && supplyY != null && <ReferenceDot x={supplyRpm} y={supplyY} r={5} fill="#ea580c" stroke="#fff"
                 label={{ value: `${fmt(supplyY)} ${unit}`, position: 'bottom', offset: 12, fill: '#ea580c', fontSize: 11, fontWeight: 700 }} />}
+              {marker && <ReferenceLine x={marker.x} stroke="var(--text-1)" strokeWidth={1.25}
+                label={{ value: tx('propLoad.speedLabel', { rpm: Math.round(marker.x) }), position: 'top', fill: 'var(--text-1)',
+                  fontSize: 11, fontWeight: 700 }} />}
+              {marker?.dots.map((d) => (
+                <ReferenceDot key={`speed-${d.id}`} x={marker.x} y={d.y} r={4} fill={d.color} stroke="var(--text-1)" strokeWidth={1.25}
+                  label={d.id === selectedId ? { value: `${fmt(d.y)} ${unit}`, position: 'right', offset: 8,
+                    fill: 'var(--text-1)', fontSize: 11, fontWeight: 700 } : undefined} />
+              ))}
               {lines.flatMap((l) => [
                 <Line key={`${l.id}-ok`} data={l.ok} dataKey="y" name={l.name} stroke={l.color} strokeWidth={2} dot={false} isAnimationActive={false} />,
                 <Line key={`${l.id}-over`} data={l.over} dataKey="y" name={`${l.name} — ${tx('propLoad.over')}`} legendType="none"

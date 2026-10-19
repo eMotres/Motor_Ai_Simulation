@@ -1106,7 +1106,20 @@ def get_configure_load(motor_id: str,
     mode = _ld.pick_mode(preset, duty)
     out: Dict[str, Any] = {"motor_id": motor_id, "context": ctx, "config": config,
                            "duty": (mode or {}).get("name") or preset.get("duty"),
-                           "propeller": None, "thermal_model": None}
+                           "propeller": None, "thermal_model": None, "thermal_anchor": None}
+    # The duty's coupled FEM record anchors the page's lumped network wherever no calibrated S1 network
+    # applies (still air / robotics, typed air): motor_ai_sim.configure_anchor.  Same gate as /s1.
+    try:
+        from motor_ai_sim import configure_anchor as _anc
+        from motor_ai_sim import duty_results as _dres
+        from motor_ai_sim import motor_access as _ma0
+        acc0 = _ma0.catalog_access(authorization)
+        die0 = str(preset.get("die") or "")
+        if out["duty"] and acc0.get("mode") != _ma0.MODE_ANONYMOUS and _ma0.may_see_config(acc0, die0, config):
+            out["thermal_anchor"] = _anc.anchor_from_record(
+                str(out["duty"]), (_dres.get(die0, config) or {}).get(str(out["duty"])))
+    except Exception:                                           # noqa: BLE001
+        log.debug("configure_load: no thermal anchor", exc_info=True)
     cooling = ctx.get("cooling") if isinstance(ctx.get("cooling"), dict) else {}
     try:
         catalog = _pp.load_catalog()

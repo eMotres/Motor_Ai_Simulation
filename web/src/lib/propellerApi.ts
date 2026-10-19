@@ -124,6 +124,9 @@ export interface ConfigureLoadAnswer {
   /** THE thermal model of this configuration (its S1 model's thermal side), evaluated by lib/s1Thermal.ts;
    *  null = none (the page's lumped estimate stands in, labelled) */
   thermal_model?: import('./s1Thermal').S1ThermalModel | null;
+  /** the lumped network anchored to the target duty's coupled FEM record (lib/thermalAnchor.ts), where no
+   *  calibrated S1 network applies; null = no usable record */
+  thermal_anchor?: import('./thermalAnchor').ThermalAnchor | null;
   propeller: null | {
     id: string; ambient_c: number; housing_d_mm: number | null; slipstream_factor?: number | null;
     die: string | null; config: string; drive: string; pack: { min: number; max: number } | null;

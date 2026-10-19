@@ -60,11 +60,12 @@ from __future__ import annotations
 import json
 import logging
 import os
-import threading
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from motor_ai_sim.file_lock import store_lock
 
 log = logging.getLogger(__name__)
 
@@ -91,7 +92,10 @@ KINDS: Tuple[str, ...] = ("thermal", "rotor_stress", "modes",
 MECH_KINDS: Tuple[str, ...] = ("rotor_stress", "modes", "critical_speeds")
 
 VERSION = 1
-_STORE_LOCK = threading.RLock()
+# Written by the compute worker (a run files its answer) AND by the API (POST /api/family/duty_result): in a multi-process
+# deployment (deploy stage 2) the lock has to hold across processes.  The path is resolved per acquire - the store is
+# per workspace, or the shared catalog's for a verified admin.
+_STORE_LOCK = store_lock(lambda: store_path())
 
 
 # ---------------------------------------------------------------------------

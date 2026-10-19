@@ -4094,7 +4094,7 @@ def _charge_outer_loops(route_kwargs: dict, *, batt, mode_eff: str,
     return _charge_attach(res, "charge_search", search)
 
 
-def clear_simulation_caches(reason: str = "") -> None:
+def clear_simulation_caches(reason: str = "", announce: bool = True) -> None:
     """Drop every cached 2-D polygon / mesh / field / transient result.
 
     Called whenever the motor GEOMETRY changes (PUT /api/geometry) so the
@@ -4123,7 +4123,9 @@ def clear_simulation_caches(reason: str = "") -> None:
     Idempotent and cheap: six `dict.clear()` calls plus the two sibling
     routers', safe to call on every write, safe to call twice.  `reason` is
     remembered for GET /api/simulation/caches so a surprising empty store can be
-    explained.
+    explained.  `announce=False` skips the state-epoch bump: the cross-process
+    cache drop (state_epoch.check) is the REACTION to somebody else's bump and
+    must not bump again.
     """
     for _c in (_motor_geom_cache, _fem_mesh_cache, _fem_mesh_sb_cache,
                _fem_field_cache, _fem_transient_cache, _transient_field_snap):
@@ -4153,6 +4155,13 @@ def clear_simulation_caches(reason: str = "") -> None:
         pass
     _cache_state["last_cleared_reason"] = reason or "unspecified"
     _cache_state["last_refreshed_by"] = None
+    # Other processes of the deployment (API <-> compute worker) hold their own copy of this workspace's machine.
+    if announce:
+        try:
+            from motor_ai_sim import state_epoch as _EPOCH
+            _EPOCH.bump(reason=reason)
+        except Exception:       # noqa: BLE001
+            pass
 
 
 def _cache_stats() -> Dict:

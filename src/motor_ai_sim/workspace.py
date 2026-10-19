@@ -1374,6 +1374,10 @@ class WorkspaceMiddleware:
             else:
                 await _refuse(send, exc)
                 return
+        # Another process (the API <-> the compute worker) changed this workspace's machine since we last looked: drop our
+        # in-memory copy before the handler reads it.  A no-op unless the deployment has several processes.
+        from motor_ai_sim import state_epoch as _EPOCH
+        _EPOCH.check(resolved)
         token = _WS.set(resolved)
         # ``?layer=shared`` rides the request, not the route signature: every
         # family write funnels through one helper and that helper asks here.

@@ -1134,8 +1134,9 @@ def get_geometry_pointcloud(n_points: int = 20000):
 # Boot-time warm-up of the live geometry's viewer meshes (see _warm_live_mesh).
 # 5 s after import: the config is loaded by then and the request handlers are
 # up, and the OCC import (2.4 s) plus the build (~10 s) happen while nobody is
-# waiting.  Disabled with SB_NO_MESH_WARMUP=1 (tests, tooling).
-if os.environ.get("SB_NO_MESH_WARMUP") != "1":
+# waiting.  Disabled with SB_NO_MESH_WARMUP=1 (tests, tooling) and in the API process of a two-process deployment
+# (MOTRES_ROLE=api: the geometry routes are served by the compute worker, which warms its own copy).
+if os.environ.get("SB_NO_MESH_WARMUP") != "1" and os.environ.get("MOTRES_ROLE", "").strip().lower() != "api":
     try:
         _warm_live_mesh()
     except Exception:      # noqa: BLE001

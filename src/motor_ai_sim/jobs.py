@@ -105,7 +105,8 @@ __all__ = [
     "RedisQueue", "JobCancelled", "JobAccepted", "NotOwner",
     "queue", "reset_queue", "run_job", "admit", "queued",
     "cancel_run", "is_cancelled", "clear_cancelled", "current_run_id",
-    "check_cancelled",
+    "check_cancelled", "ComputeNotHere", "WorkerDraining", "set_draining", "is_draining",
+    "recover_stale_records",
     "current_owner", "current_role", "priority_for",
     "new_run_id", "async_mode", "store_path",
     "HANDLERS", "register_handler", "register_cancel_hook",
@@ -173,6 +174,19 @@ class JobCancelled(BaseException):
 
 class NotOwner(Exception):
     """Somebody asked to cancel a run that is not theirs (→ 403)."""
+
+
+class ComputeNotHere(Exception):
+    """This process is the web-facing API of a two-process deployment and never runs a queued computation (→ 503).
+
+    Deploy stage 2 (``MOTRES_ROLE=api``): nginx sends every computation route to the compute worker, so this is only
+    reachable by a misrouted request or a code path that was not moved.  Refusing is the safe answer: a multi-hour job
+    started in a process that is switched out by the next update would be lost.
+    """
+
+
+class WorkerDraining(Exception):
+    """The compute worker is being updated: it finishes what it has and takes nothing new (→ 503, retry shortly)."""
 
 
 class JobAccepted(Exception):
@@ -401,6 +415,32 @@ REMOTE_ROUTER: "Optional[Callable[[JobRecord], bool]]" = None
 #: here, so ``POST /api/jobs/{run_id}/cancel`` reaches them without this module
 #: importing a single route.
 _CANCEL_HOOKS: "Dict[str, Callable[[str], None]]" = {}
+
+
+#: Set by ``POST /api/worker/drain`` (deploy stage 2): no NEW job is admitted; queued and running ones finish.
+_DRAINING = threading.Event()
+
+
+def set_draining(on: bool) -> bool:
+    """Start / stop draining; returns the new state."""
+    if on:
+        _DRAINING.set()
+    else:
+        _DRAINING.clear()
+    return _DRAINING.is_set()
+
+
+def is_draining() -> bool:
+    return _DRAINING.is_set()
+
+
+def _admission_guard() -> None:
+    """Refuse a NEW submission in a process that must not take one (see :class:`ComputeNotHere`, :class:`WorkerDraining`)."""
+    from motor_ai_sim import roles as _roles
+    if not _roles.serves_compute():
+        raise ComputeNotHere("this is the API process - computations run on the compute worker")
+    if _DRAINING.is_set():
+        raise WorkerDraining("the compute service is being updated - try again in a minute")
 
 
 def register_handler(kind: str, fn: Callable[[Dict[str, Any]], Any]) -> None:
@@ -651,6 +691,7 @@ class InProcessQueue(JobQueue):
             block = not async_mode()
         if work is None and not block:
             raise ValueError("the 202 mode needs a work callable")
+        _admission_guard()
 
         w = _Waiter(record, work)
         try:
@@ -1117,6 +1158,70 @@ def admit(kind: str, *, priority: Priority = Priority.DUTY, run_id: str = "",
         q.finish(rec, JobState.DONE)
 
 
+#: A file in the workspaces root that postpones the worker's start-up recovery.  The one-time cutover (deploy/cutover_stage2.sh)
+#: starts the worker while the OLD single API process still computes: its running records are alive, not stale.  The cutover
+#: writes the marker before the worker starts and removes it - then runs the recovery by hand - once the old process is gone.
+#: A marker older than :data:`RECOVERY_DEFER_MAX_S` is ignored (a cutover that died must not switch recovery off for ever).
+RECOVERY_DEFER_FILE = ".recovery_deferred"
+RECOVERY_DEFER_MAX_S = 6 * 3600
+
+
+def recovery_deferred(base: Path) -> bool:
+    try:
+        age = time.time() - (Path(str(base)) / RECOVERY_DEFER_FILE).stat().st_mtime
+    except OSError:
+        return False
+    return age < RECOVERY_DEFER_MAX_S
+
+
+def recover_stale_records(root: Optional[Path] = None, before: Optional[float] = None) -> int:
+    """Mark every ``queued`` / ``running`` record on disk as ``interrupted``.  Returns how many were changed.
+
+    For the START of the compute worker (deploy stage 2): nothing can be running in a process that has just started, so a
+    record still saying so was left by a crash.  ``live_status`` counts such a record as work in progress, and the deploy
+    waits for idle - one stale record would hold the next worker update for ever.  (The in-process queue already reads such
+    a record back as ``interrupted``; this makes the file say it too.)
+
+    ``before`` (epoch seconds): only records queued before that moment are touched - for a process that is ALREADY serving
+    (the cutover calls it once the old API is gone: the worker's own jobs, queued since the switch, must stay as they are).
+    With no ``root`` the start-up call is postponed while :data:`RECOVERY_DEFER_FILE` is present in the workspaces root.
+    """
+    base = root if root is not None else _WSP.workspaces_root()
+    if base is None:
+        return 0
+    if root is None and recovery_deferred(base):
+        log.warning("stale job records NOT recovered: %s is present - the old API may still be computing; the cutover "
+                    "runs the recovery itself once that process is gone", RECOVERY_DEFER_FILE)
+        return 0
+    n = 0
+    for f in Path(str(base)).glob("*/" + JOBS_FILE):
+        try:
+            raw = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        rows = (raw or {}).get("jobs") if isinstance(raw, dict) else None
+        if not isinstance(rows, list):
+            continue
+        changed = 0
+        for row in rows:
+            if isinstance(row, dict) and row.get("state") in (JobState.RUNNING, JobState.QUEUED):
+                if before is not None and float(row.get("queued_at") or 0.0) >= before:
+                    continue
+                row["state"] = JobState.INTERRUPTED
+                row["position"] = 0
+                row["error"] = row.get("error") or "the compute worker restarted"
+                changed += 1
+        if changed:
+            try:
+                tmp = f.with_name(f.name + ".tmp-%d" % os.getpid())
+                tmp.write_text(json.dumps({"jobs": rows}, indent=1), encoding="utf-8")
+                os.replace(str(tmp), str(f))
+                n += changed
+            except OSError as exc:                      # noqa: BLE001
+                log.warning("could not mark stale job records in %s: %s", f, exc)
+    return n
+
+
 def body_run_id(prefix: str) -> Callable[[Dict[str, Any]], str]:
     """``run_id`` out of a POST body — ``coupled.run``, ``thermal.duty_cycle``.
 
@@ -1178,6 +1283,10 @@ def queued(kind: str, *, priority: Priority = Priority.DUTY,
                 # because the status code is half the message.
                 from fastapi.responses import JSONResponse
                 return JSONResponse(status_code=202, content=acc.payload())
+            except (ComputeNotHere, WorkerDraining) as exc:
+                # Deploy stage 2: not admitted here (API process) or not now (worker draining for an update).
+                from fastapi import HTTPException
+                raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "30"})
             except JobCancelled:
                 # Stopped BEFORE it ever started.  499 is what this backend
                 # already answers for a transient stopped mid-march
@@ -1193,6 +1302,8 @@ def queued(kind: str, *, priority: Priority = Priority.DUTY,
             if isinstance(out, dict) and not out.get("run_id"):
                 out["run_id"] = rid
             return out
+        # which routes queue work: tests/test_deploy_stage2_roles.py checks every one is a compute-worker path (roles.py)
+        _wrapped.__job_kind__ = kind
         return _wrapped
 
     return _decorate

@@ -261,9 +261,16 @@ def start_turn(principal: Principal, text: str, cid: Optional[str] = None) -> Di
                "display": [{"role": "user", "text": text, "ts": time.time()}],
                "state": "running", "error": None, "pending": {"steps": []}, "cost_usd": 0.0}
         _save(doc)
-    threading.Thread(target=_run_turn, args=(principal, cid), daemon=True,
+    threading.Thread(target=_run_turn_tracked, args=(principal, cid), daemon=True,
                      name=f"design-agent-{cid}").start()
     return view(doc)
+
+
+def _run_turn_tracked(principal: Principal, cid: str) -> None:
+    """The answer thread, counted as work in progress so an API update (blue-green, deploy stage 2) lets it finish."""
+    from motor_ai_sim import live_status
+    with live_status.background("design-agent"):
+        _run_turn(principal, cid)
 
 
 def _close_open_round(doc: Dict[str, Any], why: str) -> None:

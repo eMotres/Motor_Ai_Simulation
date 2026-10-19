@@ -43,12 +43,12 @@ import json
 import os
 import re
 import secrets
-import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from motor_ai_sim import cluster_monitor as CM
+from motor_ai_sim.file_lock import store_lock
 
 TOKEN_PREFIX = "mcnode_"
 #: Routing preference values (per user; a job may override).
@@ -89,7 +89,7 @@ QUEUED, LEASED, DONE, FAILED, CANCELLED = ("queued", "leased", "done",
                                            "failed", "cancelled")
 _OPEN = (QUEUED, LEASED)
 
-_LOCK = threading.RLock()
+_LOCK = store_lock(lambda: CM.data_dir())     # cross-process (deploy stage 2): the platform queues, the API leases
 _LATEST: Dict[str, Dict[str, Any]] = {}
 
 

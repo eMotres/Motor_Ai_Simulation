@@ -298,6 +298,13 @@
     "usersCol": "Users",
     "requestsCol": "Requests",
     "accounts": "Accounts",
-    "empty": "Nobody active right now."
+    "empty": "Nobody active right now.",
+    "workerReady": "compute worker: ready",
+    "workerDraining": "compute worker: updating",
+    "workerDown": "compute worker: not reachable",
+    "jobKind": "Job",
+    "jobOwner": "Account",
+    "jobState": "State",
+    "jobElapsed": "Time"
   }
 }

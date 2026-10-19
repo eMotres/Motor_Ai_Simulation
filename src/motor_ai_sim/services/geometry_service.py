@@ -90,6 +90,15 @@ _DERIVED_PARAMS = frozenset([
 ])
 
 
+def _announce_change(reason: str) -> None:
+    """Tell the other processes of a multi-process deployment that this workspace's geometry changed (state_epoch)."""
+    try:
+        from motor_ai_sim import state_epoch as _EPOCH
+        _EPOCH.bump(reason=reason)
+    except Exception:                                   # noqa: BLE001
+        pass
+
+
 def get_current_geometry(reload: bool = False) -> MotorGeometryParams:
     current = _geom_get()
     if current is None or reload:
@@ -113,6 +122,7 @@ def update_current_geometry(**kwargs) -> MotorGeometryParams:
     new = MotorGeometryParams(geometry_config, {})
     _geom_set(new)
     invalidate_mesh_cache()
+    _announce_change("geometry updated")
     return new
 
 
@@ -121,6 +131,7 @@ def reset_geometry() -> MotorGeometryParams:
     new = get_geometry_params(reload=True)
     _geom_set(new)
     invalidate_mesh_cache()
+    _announce_change("geometry reset")
     return new
 
 

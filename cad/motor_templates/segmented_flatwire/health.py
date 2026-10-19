@@ -203,10 +203,10 @@ def precheck_mechanics(g):
     l_req, l_max = _opt(g, "holder_screw_req", None), _opt(g, "holder_screw_max", None)   # the screw follows the stack (2026-10-15)
     if l_req is not None and l_max is not None:                                         # older profiles have no such rows: no check
         l_sel = _num(g, "holder_screw_l")
-        need(l_sel >= l_req - 1e-6,
+        need(l_req - 1e-6 <= l_sel <= l_max + 1e-6,
              "no stock screw length fits the holder stack: it needs at least %.3f mm under the head (front flange face to the back holder "
-             "face) but the tip may not go beyond %.3f mm (back flange outer face less the tip margin); the longest stock length that fits "
-             "is %.3f mm - change the stack length (motor_length) or the holder flange / rib thickness" % (l_req, l_max, l_sel))
+             "face), rounded up to an even mm = %.3f mm, but the tip may not go beyond %.3f mm (back flange outer face less the tip "
+             "margin) - change the stack length (motor_length) or the holder flange / rib thickness" % (l_req, l_sel, l_max))
     if not carrier:
         need(_num(g, "prop_fix_d") / 2 > rj + _num(g, "prop_fix_relief_r"), "Prop_fix diameter too small for the hole")
     return v

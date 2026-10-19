@@ -21,7 +21,7 @@ import re
 
 TEMPLATE = "bom/1"
 # purchased / standard parts the model does not carry as solids (nominal data from the PCB project and the stock tables)
-M2_STOCK_LENGTHS = [3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 30, 35, 40, 45, 50, 55, 60]     # ISO 4762 / DIN 912, M2 (14 and 18: catalogue sizes, 18 chosen by the owner 2026-10-13 for L12)
+M2_STOCK_LENGTHS = [3, 4, 5, 6, 8, 10, 12, 14, 16, 18, 20, 22, 25, 26, 30, 35, 40, 45, 50, 55, 60]     # ISO 4762 / DIN 912, M2 (14, 18 and 26: catalogue sizes, 18 chosen by the owner 2026-10-13 for L12, 26 on 2026-10-19 for L20)
 ASSUMED_DENSITY = {            # kg/m3, used only when the simulation library has no card (stated in the line notes)
     "GFRP": (1900, "assumed: glass-fibre / epoxy laminate (G10-type) 1.8-2.0 g/cm3"),
     "Steel (bearing)": (7830, "assumed: bearing steel 100Cr6"),

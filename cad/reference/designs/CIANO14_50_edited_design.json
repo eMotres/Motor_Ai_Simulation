@@ -1,0 +1,144 @@
+{
+ "note": "CIANO14 50 L15 mechanics: the simulation carries no bearing / shaft / holder rows. Bearing: SKF 61901-2Z (12x24x6), normal CN clearance; fits (owner 2026-10-19): journal O12 g6 (-0.006/-0.017) for the first samples (light, hand assembly; tightened for series production after the samples are checked, re-check with tools/analysis/bearing_fits.py), holder seat O24 -0.015/-0.028 (O23.972..23.985) hot (shrink) fit: heat the holder to about 100-120 C, drop the bearing in, let it cool; no retaining compound or adhesive (fits_61901-2Z.json). Other rows: CIANO14 40 values re-dimensioned for the 50 mm stator; the holder flange thickness comes from the strength study in validation/holder_fem/.",
+ "set": {
+  "user_parameters": {
+   "bolt_head_d": {
+    "expr": "6 mm",
+    "source": "CIANO14 50 design 2026-10-18: spoke / boss width 6 mm (40: 4); with the 7 mm boss the back holder touches the coil leads (0.0 mm), 6 mm keeps 0.50 mm; holder study validation/holder_fem (sweeps 5, 6)"
+   },
+   "shaft_height": {
+    "expr": "2 mm",
+    "role": "input",
+    "source": "CIANO14 50: the shaft bore follows the simulation again (shaft_bore_r = shaft_seat_r - shaft_height), so the row is live (the CIANO14 40 reference has the bore fixed at the Fusion 3 mm and shaft_height as an info row)"
+   }
+  },
+  "named_parameters_sketch3": {
+   "shaft_shoulder_r": {
+    "expr": "7 mm",
+    "source": "CIANO14 50 design 2026-10-18 (scaled from CIANO14 40, PROGRESS.md (CIANO14 50 section)): between the journal (6) and the bearing inner-ring land (7.8)"
+   },
+   "holder_lip_r": {
+    "expr": "22.6 mm / 2",
+    "source": "CIANO14 50 design 2026-10-18 (scaled from CIANO14 40, PROGRESS.md (CIANO14 50 section)): lip covers the outer ring by 0.7 mm per side, as on the 40 (16 -> 14.6)"
+   },
+   "back_holder_ref_r": {
+    "expr": "13.55 mm",
+    "source": "CIANO14 50 design 2026-10-18: back holder outer radius 15.1 mm (= 2 x 13.55 - 12) = phase board window radius 15.35 - 0.25 clearance (the 40 holder is 12.0 in a 12.25 window)"
+   },
+   "back_holder_len": {
+    "expr": "9 mm",
+    "source": "CIANO14 50 design 2026-10-18 (scaled from CIANO14 40, PROGRESS.md (CIANO14 50 section)): 7 + (6 - 4) so the closed end stays 4.2 mm beyond the bearing as on the 40"
+   },
+   "shaft_thread_r": {
+    "expr": "5.95 mm / 2",
+    "source": "CIANO14 50 design 2026-10-18 (scaled from CIANO14 40, PROGRESS.md (CIANO14 50 section)): M6 tip section (all six allowed propellers have a 6 mm bore); 40: M5"
+   },
+   "shaft_tip_r": {
+    "expr": "5.9 mm / 2",
+    "source": "CIANO14 50 design 2026-10-18 (scaled from CIANO14 40, PROGRESS.md (CIANO14 50 section)): 40: 4.9 mm / 2",
+    "role": "mechanics"
+   },
+   "coil_holder_clearance": {
+    "expr": "1.2 mm",
+    "source": "CIANO14 50 design 2026-10-18: the 50 mm core flares (leg root fillets) up to r 17.25, so the holder outer radius must clear it: 16.08 + 1.2 = 17.28 (40: 0.4)"
+   },
+   "holder_flange_t": {
+    "expr": "1.8 mm",
+    "source": "CIANO14 50 design 2026-10-18: holder flange 1.8 mm (40: 1.2); the back tube is limited to r 15.1 by the phase board window (15.35), which costs strength: 1.8 mm + 6 mm spokes give back SF 4.6 (element mean) / 3.5 (peak) at 85 N + 2.4 N*m"
+   },
+   "shaft_bore_r": {
+    "expr": "shaft_seat_r - shaft_height",
+    "source": "CIANO14 50 design: the shaft bore follows the simulation (rotor bore - shaft_height, as the owner's CIANO14 50 L15 model); the 40 mm reference has the fixed Fusion 3 mm",
+    "role": "derived"
+   },
+   "shaft_flange_step": {
+    "expr": "3 mm",
+    "source": "CIANO14 50 design: 3 mm as the owner's CIANO14 50 L15 model (the 2026-10-16 change 3 -> 2 mm is a CIANO14 40 decision)"
+   }
+  },
+  "named_parameters_mechanics": {
+   "bearing_d": {
+    "expr": "12 mm",
+    "source": "bearing choice 2026-10-18: SKF 61901-2Z (12x24x6, shielded), see PROGRESS.md (CIANO14 50 section) section Bearings; the simulation config L15 names no bearing",
+    "comment": "Bearing bore 12 mm (61901-2Z, normal CN clearance 3..18 um, no C3). Journal tolerance: g6 (-0.006/-0.017) for the first samples (light fit, hand assembly), to be tightened for series production after the samples are checked (re-check with tools/analysis/bearing_fits.py), see validation/bearings/fits_61901-2Z.json"
+   },
+   "bearing_D": {
+    "expr": "24 mm",
+    "source": "bearing choice 2026-10-18: SKF 61901-2Z (12x24x6, shielded), see PROGRESS.md (CIANO14 50 section) section Bearings; the simulation config L15 names no bearing",
+    "comment": "Bearing OD 24 mm. Holder seat O24 -0.015/-0.028 (O23.972..23.985), hot (shrink) fit: heat the holder to about 100-120 C, drop the bearing in, let it cool (interference 6..28 um, operating clearance hot >= 0); no retaining compound"
+   },
+   "bearing_B": {
+    "expr": "6 mm",
+    "source": "bearing choice 2026-10-18: SKF 61901-2Z (12x24x6, shielded), see PROGRESS.md (CIANO14 50 section) section Bearings; the simulation config L15 names no bearing"
+   },
+   "bearing_ball_d": {
+    "expr": "3.175 mm",
+    "source": "bearing choice 2026-10-18: SKF 61901-2Z (12x24x6, shielded), see PROGRESS.md (CIANO14 50 section) section Bearings; the simulation config L15 names no bearing: 1/8 in ball, typical for the 619xx series (visual only)"
+   },
+   "bearing_ball_count": {
+    "expr": "11",
+    "source": "bearing choice 2026-10-18: SKF 61901-2Z (12x24x6, shielded), see PROGRESS.md (CIANO14 50 section) section Bearings; the simulation config L15 names no bearing: typical (visual only)"
+   },
+   "bearing_inner_land_d": {
+    "expr": "15.6 mm",
+    "source": "bearing choice 2026-10-18: SKF 61901-2Z (12x24x6, shielded), see PROGRESS.md (CIANO14 50 section) section Bearings; the simulation config L15 names no bearing: d1 of the series (visual only)"
+   },
+   "bearing_outer_land_d": {
+    "expr": "20.4 mm",
+    "source": "bearing choice 2026-10-18: SKF 61901-2Z (12x24x6, shielded), see PROGRESS.md (CIANO14 50 section) section Bearings; the simulation config L15 names no bearing: D2 of the series (visual only)"
+   },
+   "bearing_edge_r": {
+    "expr": "0.3 mm",
+    "source": "bearing choice 2026-10-18: SKF 61901-2Z (12x24x6, shielded), see PROGRESS.md (CIANO14 50 section) section Bearings; the simulation config L15 names no bearing: ISO r_s min 0.3"
+   },
+   "shaft_flat_w": {
+    "expr": "8.5 mm",
+    "source": "CIANO14 50 design 2026-10-18 (scaled from CIANO14 40, PROGRESS.md (CIANO14 50 section)): 0.71 x journal diameter (40: 5.9 / 8)"
+   },
+   "holder_bolt_r": {
+    "expr": "18.5 mm",
+    "source": "CIANO14 50 design 2026-10-18: holder_inner_r (17.28) + 1.22, the 40 margin (14.85 - 13.63)"
+   },
+   "back_screw_r": {
+    "expr": "13.55 mm",
+    "source": "CIANO14 50 design 2026-10-18: middle of the back holder wall (12 .. 15.1)"
+   },
+   "prop_fix_d": {
+    "expr": "20 mm",
+    "source": "CIANO14 50 design 2026-10-18 (scaled from CIANO14 40, PROGRESS.md (CIANO14 50 section)): journal 12 mm + 4 mm wall each side (40: 15 for a 8 mm journal)"
+   },
+   "holder_seat_depth": {
+    "expr": "2 mm",
+    "source": "CIANO14 50 design 2026-10-18 (owner item 6): boss seat 2 mm deep into the stator pocket (40: 1) -> the tapped length grows by 1 mm, M2 thread engagement 2.69 -> 3.69 mm (guideline 1.5 d = 3.0); more seat wall for the torque"
+   },
+   "holder_screw_req": {
+    "expr": "20 mm - 0.1 mm",
+    "source": "CIANO14 50 design 2026-10-18: clamp length 19.9 -> the stock M2 x 20 (rule since 2026-10-19: req rounded up to an even mm); the template formula would give 24 here, which breaks through the back flange; the thread engagement (3.09 mm >= 1.5 d) is checked by the fit gate"
+   }
+  },
+  "named_parameters_active_part": {
+   "coil_lead_ext": {
+    "expr": "4.65 mm",
+    "source": "CIANO14 50 design 2026-10-18: coil leads 0.55 mm longer than the 40 value 4.1 so that the phase board sits 0.35 mm below the end turns (the 50 end turns are 5.15 mm high, the 40's 4.22)"
+   }
+  }
+ },
+ "remove": [],
+ "deviations": {
+  "rotor_fill_r": {
+   "expr": "0 mm",
+   "why": "rotor_fill_r 0.2 mm (fillet on the 28 lip corners at the air gap) is not built by the template; at most 3.6 mm3 of 3685 mm3 rotor steel (0.10 %), see validation/validation_L15.json"
+  }
+ },
+ "profile": {
+  "phase_board": {
+   "step": "CIANO14_50_phase_board_revC_colour.step",
+   "pins": false,
+   "copper_volume": [
+    80,
+    260
+   ],
+   "note": "parametric 50 mm board of the Controller repo (phase_board_variants/CIANO50_4L_6OZ_35UM_20261018, generator from the L15 lead datums); phase holes without pins. REPLACEABLE: a revised board is a drop-in file of the same name in cad/reference/phase_board/ (or another name in 'step'); copper_volume is a wide range so that lead cut-outs do not move a copper layer out of it"
+  }
+ }
+}

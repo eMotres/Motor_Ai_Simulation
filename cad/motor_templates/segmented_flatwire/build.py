@@ -112,7 +112,7 @@ def build_bodies(doc, sh, pj):
             for sk in part["sketches"]:
                 report["sketches"][sk.Name] = check_sketch(sk)[1]
     if any(p["name"] in ("phase_board_z", "board_outer_r") for _, p in ps.all_params(pj)):
-        report["phase_board_import"] = electronics.build_electronics(doc, sh)
+        report["phase_board_import"] = electronics.build_electronics(doc, sh, prof.get("phase_board"))
         doc.recompute()
     if kit:
         report["mounting_datums"] = frameless.build_mounting_datums(doc, sh)

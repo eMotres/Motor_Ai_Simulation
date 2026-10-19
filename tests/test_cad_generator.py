@@ -193,13 +193,17 @@ def test_mechanics_rows_reproduce_the_fusion_axial_chain():
     rows = {p["name"]: p for sec in store.SECTIONS for p in base.get(sec, [])}
     vals = store.evaluate({n: p["freecad_expression"] for n, p in rows.items()})
     for n, v in FUSION_MECH_VALUES.items():
+        if n == "holder_screw_l":                    # Fusion M2x25; the owner chose M2x26 for L20 on 2026-10-19 (req 25 rounded up to an even mm)
+            assert vals[n] == pytest.approx(26.0)
+            continue
         assert abs(vals[n] - v) < 1e-6, (n, vals[n], v)
     from motor_templates.segmented_flatwire import params_sheet as ps
     assert ps.SECTIONS == store.SECTIONS and "mechanics" in ps.LIVE_ROLES
     for n in ("motor_d", "glue", "housing_h", "offset_holder", "bearing_6005_d"):     # used by no Fusion motor feature
         assert rows[n]["role"] == "info", n
     for p in base["named_parameters_mechanics"]:
-        assert p["role"] in ("input", "derived", "mechanics") and p["comment"] and p["source"], p["name"]
+        live = ("input", "derived", "mechanics") + (("info",) if p["name"] in ("holder_screw_max", "screw_tip_margin") else ())   # checks only since 2026-10-19
+        assert p["role"] in live and p["comment"] and p["source"], p["name"]
     assert rows["bearing_d"]["role"] == "input" and rows["shaft_journal_r"]["freecad_expression"] == "bearing_d / 2"
 
 
@@ -336,8 +340,8 @@ def test_phase_board_step_has_the_colours_and_pin_j13_lands_where_the_pcb_sessio
     assert abs(math.degrees(math.atan2(y, x)) - 63.0) < 0.05
 
 
-@pytest.mark.parametrize("length,req,screw", [(12, 17.0, 18.0), (20, 25.0, 25.0), (16, 21.0, 22.0), (24, 29.0, 30.0)])
-def test_screw_length_is_stock_rounded_and_coil_straight_is_stack_plus_1(length, req, screw):
+@pytest.mark.parametrize("length,req,screw", [(12, 17.0, 18.0), (20, 25.0, 26.0), (16, 21.0, 22.0), (24, 29.0, 30.0)])
+def test_screw_length_is_req_rounded_up_to_even_mm_and_coil_straight_is_stack_plus_1(length, req, screw):
     v, _ = _eval_with(length)
     assert abs(v["holder_screw_req"] - req) < 1e-9 and abs(v["holder_screw_l"] - screw) < 1e-9
     assert abs(v["coil_straight_len"] - (length + 1)) < 1e-9 and abs(v["coil_leg_length"] - (length + 1)) < 1e-9
@@ -349,9 +353,9 @@ def _rows_of(profile):
 
 
 @pytest.mark.parametrize("profile,length,screw,tip_margin", [
-    ("CIANO14_40_12.json", 12, 18.0, 0.2), ("CIANO14_40_12.json", 20, 25.0, 1.2),                  # as built before (owner 2026-10-13)
+    ("CIANO14_40_12.json", 12, 18.0, 0.2), ("CIANO14_40_12.json", 20, 26.0, 0.2),                  # L12 as built (owner 2026-10-13), L20 M2x26 (owner 2026-10-19)
     ("CIANO28_85_20SW1200.json", 13, 20.0, 1.2),                                                    # L13 as built (Fusion M2.5 x 20)
-    ("CIANO28_85_20SW1200.json", 15, 22.0, 1.2),                                                    # L15: 25 broke through the flange, 22 fits
+    ("CIANO28_85_20SW1200.json", 15, 22.0, 1.2),                                                    # L15: req 20.2 rounded up (25 broke through the flange)
     ("CIANO14_40_12.json", 16, 22.0, 0.2)])
 def test_screw_length_follows_the_stack_the_longest_stock_length_that_keeps_the_tip_inside(profile, length, screw, tip_margin):
     from motor_templates.segmented_flatwire import health
@@ -370,11 +374,14 @@ def test_screw_length_follows_the_stack_the_longest_stock_length_that_keeps_the_
 def test_no_stock_screw_fits_is_refused_in_words():
     from motor_templates.segmented_flatwire import health
     expr = _rows_of("CIANO14_40_12.json")
-    expr["motor_length"] = "22 mm"                                                   # clamp 27 mm, the tip limit 28 mm: no stock length between
+    expr["motor_length"] = "22 mm"                                                   # clamp 27 mm -> M2x28; the tip limit is 28 mm: fits
     v = store.evaluate(expr)
-    assert v["holder_screw_req"] == pytest.approx(27.0) and v["holder_screw_l"] == pytest.approx(25.0)
+    assert v["holder_screw_req"] == pytest.approx(27.0) and v["holder_screw_l"] == pytest.approx(28.0)
+    assert not [t for t in health.precheck(lambda n: v[n]) if "screw" in t]
+    expr["screw_tip_margin"] = "0.5 mm"                                              # tip limit 27.7 mm < 28: the next even length breaks through
+    v = store.evaluate(expr)
     msgs = [t for t in health.precheck(lambda n: v[n]) if "stock screw" in t]
-    assert msgs and "27.000" in msgs[0] and "25.000" in msgs[0]
+    assert msgs and "27.000" in msgs[0] and "27.700" in msgs[0]
 
 
 def test_the_bom_knows_the_new_stock_length():

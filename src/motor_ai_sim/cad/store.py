@@ -483,6 +483,15 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
                 p["freecad_expression"] = _fmt(v, unit)
             p["source"] = "simulation %s/%s:%s" % (eff["die"], row["sim_file"], key)
         report.append(row)
+    # documented deviations of the die's reference profile: simulation values the template cannot build (set to the buildable value,
+    # kept visible in the report and in the row's source) - e.g. CIANO14 50 rotor_fill_r
+    for dn, dd in (pj.pop("deviations", None) or {}).items():
+        if dn in params:
+            params[dn]["freecad_expression"] = dd["expr"]
+            params[dn]["source"] = "simulation value NOT modelled: " + dd["why"]
+            for row in report:
+                if row["name"] == dn:
+                    row["deviation"] = dd["why"]
     bearing_rows = bearing_profile_rows(eff, params, report)
     cad_applied = apply_cad_overrides(params, eff.get("cad_overrides"), eff["die"], eff["variant"])
     vals = evaluate({n: p["freecad_expression"] for n, p in params.items()})
@@ -491,9 +500,9 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
     for row in report:
         if row["name"] in params:
             row["freecad"] = round(vals[row["name"]], 9)
-            sim_ok = _eq(row["freecad"], row["sim"])
+            sim_ok = _eq(row["freecad"], row["sim"]) or bool(row.get("deviation"))
             fus_ok = _eq(row["fusion"], row["sim"]) if row["fusion"] is not None else None
-            row["status"] = ("ok" if sim_ok else "FreeCAD != sim") + ("" if fus_ok in (True, None) else
+            row["status"] = ("ok" if sim_ok else "FreeCAD != sim") + ("; DEVIATION, not modelled" if row.get("deviation") else "") + ("" if fus_ok in (True, None) else
                                                                       "; Fusion open model differs (import the CSV)")
     derived = []
     for k, e in DERIVED_EQ.items():

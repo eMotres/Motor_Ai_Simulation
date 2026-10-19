@@ -73,7 +73,7 @@ def board_parts(doc):
     if electronics.is_plate(doc):
         plate, sleeves = bs.Solids[0], list(bs.Solids[1:])
         return dict(body=plate, pins=sleeves, thickness_solids=[plate])
-    pins = electronics.pins(bs)
+    pins = electronics.pins(bs, electronics.board_cfg(doc)[0])
     rest = [s for s in bs.Solids if all(not s.isSame(p) for p in pins)]
     return dict(body=max(rest, key=lambda s: s.Volume), pins=list(pins), thickness_solids=rest)
 

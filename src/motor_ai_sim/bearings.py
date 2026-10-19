@@ -209,6 +209,11 @@ class BearingCard:
     C_kn: Optional[float] = None
     C0_kn: Optional[float] = None
     stiffness_n_per_m: Optional[float] = None
+    # The BALL SET (2026-10-19), read by the bearing's thermal model
+    # (``simulation.bearing_holder``) and nothing else: how many balls and
+    # their diameter [mm].  Optional; absent = that module's stated estimate.
+    n_balls: Optional[float] = None
+    ball_d: Optional[float] = None
     friction: Dict[str, float] = field(default_factory=dict)
     note: str = ""
 
@@ -243,6 +248,7 @@ class BearingCard:
             "n_limit_oil_air_rpm": self.n_limit_oil_air_rpm,
             "C_kn": self.C_kn, "C0_kn": self.C0_kn,
             "stiffness_n_per_m": self.stiffness_n_per_m,
+            "n_balls": self.n_balls, "ball_d": self.ball_d,
             "friction": dict(self.friction), "note": self.note,
         }
 
@@ -254,7 +260,7 @@ class BearingCard:
 _NUMERIC_CARD_FIELDS = (
     "d", "D", "B", "d_m", "contact_angle_deg", "seal_ks1", "seal_ks2",
     "seal_beta", "seal_ds", "n_limit_grease_rpm", "n_limit_oil_air_rpm",
-    "C_kn", "C0_kn", "stiffness_n_per_m",
+    "C_kn", "C0_kn", "stiffness_n_per_m", "n_balls", "ball_d",
 )
 
 

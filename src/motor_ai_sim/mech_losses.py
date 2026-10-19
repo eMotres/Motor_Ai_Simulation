@@ -202,6 +202,11 @@ def bearing_temp_from_map(result: Optional[Dict[str, Any]]
 
     WHICH temperature, in the order a bearing engineer would ask for it:
 
+      0. ``cooling.bearing_node.t_bearing_max_c`` (2026-10-19) — the bearing
+         itself, SOLVED: the hottest of the inner ring, the balls and the outer
+         ring over both ends of the shaft / bearing / holder network
+         (``simulation.bearing_holder``).  The hottest, because the grease
+         limit is a limit on the hottest grease;
       1. ``cooling.shaft_ends.t_shaft_mean_c`` — the mean temperature of the
          shaft elements the exposed-stub conductance acts on, i.e. the metal the
          inner ring is pressed onto, measured by the solve.  Available only when
@@ -222,6 +227,17 @@ def bearing_temp_from_map(result: Optional[Dict[str, Any]]
     res = result if isinstance(result, dict) else None
     if res is None:
         return None
+    bn = ((res.get("cooling") or {}).get("bearing_node") or {})
+    t = bn.get("t_bearing_max_c") if bn.get("mode") == "solved" else None
+    where = ("the bearing itself — the hottest ring / ball node of the solved "
+             "shaft-bearing-holder network")
+    if t is not None:
+        try:
+            t = float(t)
+        except (TypeError, ValueError):
+            t = None
+        if t is not None and BEARING_SEAT_MIN_C <= t <= BEARING_SEAT_MAX_C:
+            return t, where
     se = ((res.get("cooling") or {}).get("shaft_ends") or {})
     t = se.get("t_shaft_mean_c")
     where = "the shaft's mean temperature at the exposed ends"

@@ -314,6 +314,8 @@ bearings:
     C_kn: 9.56
     C0_kn: 8.15
     stiffness_n_per_m: 1.0e+8
+    n_balls: 22                 # ball set, CAD CIANO28_150_35_L35.FCStd (Balls array, 2026-10-19); read by the bearing thermal model only
+    ball_d: 4.762
     catalog:
       manufacturer: SKF
       part_number: 61811-2Z
@@ -408,6 +410,8 @@ bearings:
     C_kn: 1.33
     C0_kn: 0.585
     stiffness_n_per_m: 1.5e+7
+    n_balls: 10                 # ball set, CAD CIANO14_40_L12.FCStd (Balls array, 2026-10-19); read by the bearing thermal model only
+    ball_d: 2.0
     catalog:
       manufacturer: SKF
       part_number: 618/8-2Z

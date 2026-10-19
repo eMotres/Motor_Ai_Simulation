@@ -304,7 +304,7 @@ t('one identical template: the propeller is the LOAD whenever its cooling is ACT
   assert.doesNotMatch(panel, /propellerOnly &&/);                                                   // no render branch keys on the die shape
   assert.match(panel, /\{(?:[\w.]+ && )?cooled && propLoad && \(\s*<Box sx=\{\{ px: 2, pb: 1\.5 \}\}>\s*<PropellerCurves/);
   assert.match(panel, /s1Rpm=\{s1Info\?\.kind === 'limit' \? s1Info\.rpm : null\}/);
-  assert.match(panel, /if \((?:![\w.]+ \|\| )?!propellerCoolingActive \|\| !propId \|\| !s1Die \|\| !s1Config\) return;/);   // S1 only while the propeller cools
+  assert.match(panel, /const s1Key = pointGate\.showBatteryDerived && propellerCoolingActive && propId && s1Die && s1Config/);   // S1 only while the propeller cools
   assert.match(panel, /if \(!propellerCoolingActive \|\| !propLoad \|\| !ctxDone/);                // the prop-rpm seed uses the same rule
   assert.match(panel, /tx\(propLoad \? 'configurePropeller\.pickerTip' : 'configurePropeller\.coolingPickerTip'\)/);
   assert.match(panel, /tx\(propLoad \? 'configurePropeller\.ambientTip' : 'configurePropeller\.coolingAmbientTip'\)/);

@@ -25,13 +25,21 @@ const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFi
 /** Mandatory modes sort first: rated, then peak, then the rest in saved order. */
 const rank = (name: string): number => {
   const n = name.trim().toLowerCase();
-  return n.startsWith('rated') ? 0 : n.startsWith('peak') ? 1 : 2;
+  return n === 'rated' ? 0 : n.startsWith('peak') ? 1 : 2;
+};
+
+/** A saved duty that may be a preset button.  Rated is always continuous and short-time is only
+ *  peak (owner 2026-10-19), so a rated VARIANT ("rated_short_time") is never a button - it stays
+ *  in the catalog's duty list.  Mirrors motor_ai_sim.configure_load.is_preset_mode. */
+export const isPresetMode = (name: string | null | undefined): boolean => {
+  const n = String(name ?? '').trim();
+  return !!n && !/^rated[\s_-]+/i.test(n);
 };
 
 /** The modes of one configuration that have a usable operating point. */
 export function modesOf(pr: Preset): PresetDutyPoint[] {
   const pts = (pr.duty_points ?? []).filter(
-    (d) => d.name && finite(d.current_A) && finite(d.rpm) && d.rpm > 0);
+    (d) => d.name && isPresetMode(d.name) && finite(d.current_A) && finite(d.rpm) && d.rpm > 0);
   return pts.map((d, i) => ({ d, i }))
     .sort((a, b) => rank(a.d.name) - rank(b.d.name) || a.i - b.i)
     .map((x) => x.d);
@@ -54,10 +62,10 @@ export function buildModePresets(presets: readonly Preset[]): ModePreset[] {
         duty: m.name,
         knobs: { ...pr.knobs, I_A: m.current_A, rpm: m.rpm },
         key: modeKey(pr.config, m.name),
-        // SHORT-TIME (owner 2026-10-19): a mode the machine cannot hold for
-        // ever is never offered as if it were a rating.
+        // SHORT-TIME (owner 2026-10-19) is only ever peak's mark: rated is always continuous,
+        // so the rated button never carries it, whatever a stored record says.
         label: modeLabel(pr.config, m.name)
-          + (m.duty_class === 'short_time' ? ' (short-time)' : ''),
+          + (m.duty_class === 'short_time' && m.name.trim().toLowerCase() !== 'rated' ? ' (short-time)' : ''),
         gamma_deg: finite(m.gamma_deg) ? m.gamma_deg : null,
       });
     }

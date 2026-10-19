@@ -68,6 +68,10 @@ def legacy_names_present(fusion_names: Iterable[str]) -> Dict[str, str]:
     return {old: new for old, new in LEGACY_NAMES.items() if old in names and new not in names}
 
 
+#: Never created by the import (approved mapping 2026-09-25: "ours defaults to 1; do not create unless already present").
+NEVER_CREATE = frozenset({"wire_split"})
+
+
 def import_diff(fusion: Dict[str, dict], server: List[dict]) -> List[dict]:
     """Rows of the Import dialog.
 
@@ -75,7 +79,8 @@ def import_diff(fusion: Dict[str, dict], server: List[dict]) -> List[dict]:
     server: [{"name", "key", "value", "unit"}] - the die/config's parameters under their Fusion names.
 
     Row action: "update" (value differs), "create" (no such user parameter yet), "unchanged".  `tick` is the dialog's default:
-    an update of a FORMULA row is shown but not ticked (the owner decides), everything else that changes is ticked."""
+    an update of a plain value is ticked; an update of a FORMULA row and every "create" are shown but not ticked (a parameter
+    the model does not use is only noise in Fusion's list - the owner decides).  NEVER_CREATE names are not offered at all."""
     rows = []
     for s in server:
         name, unit = s["name"], (s.get("unit") or "")
@@ -83,7 +88,9 @@ def import_diff(fusion: Dict[str, dict], server: List[dict]) -> List[dict]:
         f = fusion.get(name)
         row = dict(name=name, key=s.get("key", name), unit=unit, server_value=new, new_expression=format_expression(new, unit))
         if f is None:
-            row.update(action="create", fusion_expression=None, fusion_value=None, formula=False, tick=True)
+            if name in NEVER_CREATE:
+                continue
+            row.update(action="create", fusion_expression=None, fusion_value=None, formula=False, tick=False)
         else:
             fu = f.get("unit") or ""
             row.update(fusion_expression=f.get("expression"), fusion_value=f.get("value"), formula=is_formula(f.get("expression", "")))

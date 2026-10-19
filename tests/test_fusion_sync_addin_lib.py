@@ -55,6 +55,7 @@ SERVER = [
     {"name": "magnet_height", "key": "magnet_height", "value": 7, "unit": "mm"},
     {"name": "num_seg", "key": "num_seg", "value": 2, "unit": ""},
     {"name": "shaft_height", "key": "shaft_height", "value": 2, "unit": "mm"},
+    {"name": "wire_split", "key": "wire_split", "value": 1, "unit": ""},
 ]
 
 
@@ -65,8 +66,9 @@ def test_import_diff_rows_and_default_ticks():
     assert rows["motor_length"]["action"] == "unchanged" and not rows["motor_length"]["tick"]
     # a formula row is shown but NOT ticked: writing a number would cut the owner's formula
     assert rows["magnet_height"]["action"] == "update" and rows["magnet_height"]["formula"] and not rows["magnet_height"]["tick"]
-    assert rows["shaft_height"]["action"] == "create" and rows["shaft_height"]["tick"]
+    assert rows["shaft_height"]["action"] == "create" and not rows["shaft_height"]["tick"]      # shown, the owner decides
     assert [r["action"] for r in P.import_diff(FUSION, SERVER)][:2] == ["update", "update"]       # changes first
+    assert "wire_split" not in rows                               # approved mapping: never created by the import
 
 
 def test_export_diff_lists_only_disagreements():

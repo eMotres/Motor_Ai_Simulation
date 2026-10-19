@@ -119,6 +119,89 @@ def _num(v: Any) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# Reading a part off a REAL thermal map (the S1 verification passes)
+# ---------------------------------------------------------------------------
+
+#: The robotics heat path's TOUCH-limited bodies.  ``housing`` / ``structure``
+#: are the names the lumped network and ``coupled_time_to_limit.part_limits``
+#: use; ``link`` is the older spelling of the same thing (the mount's link
+#: node) and is accepted so a block that still says it is read, not skipped.
+TOUCH_PARTS: Tuple[str, ...] = ("housing", "structure", "link")
+
+#: A touch limit is a hard limit (IEC 60335), so a verified point may sit
+#: UNDER it by up to ``TOUCH_UNDER_TOL_K`` but never over it; the correction
+#: aims ``TOUCH_AIM_K`` below it so a pass that lands a hair high is not lost.
+TOUCH_OVER_TOL_K = 0.0
+TOUCH_UNDER_TOL_K = 3.0
+TOUCH_AIM_K = 0.5
+
+#: Real EM + thermal passes a touch-limited verification may spend (the
+#: winding / magnet verification keeps its two).  The housing rises far less
+#: than with the square of the current — the iron and rotor losses do not
+#: follow it — so one square-law step undershoots the correction; the next
+#: steps use the secant through the real readings.
+TOUCH_MAX_PASSES = 4
+
+
+def field_reading(field: Mapping[str, Any], part: str) -> Optional[float]:
+    """The temperature of ``part`` read off a REAL thermal map (°C), or
+    ``None`` when this map does not carry it.
+
+    ``winding`` / ``magnet`` — the hottest element of that component.
+    ``housing`` / ``structure`` / ``link`` — the heat path's body temperature,
+    ``cooling.heat_path.t_body_c``, the solve's own node (the map has no
+    ``components.housing``).  A named body must be the one the map was solved
+    with (``heat_path='shaft'`` has a structure, no housing): a different body
+    reads ``None`` rather than silently judging another part.  ``link`` takes
+    whichever body the map has, then falls back to the legacy
+    ``cooling.mount.link.t_link_c``.
+    """
+    fld = field or {}
+    if part in TOUCH_PARTS:
+        cool = fld.get("cooling") or {}
+        hp = cool.get("heat_path")
+        hp = hp if isinstance(hp, Mapping) else {}
+        body = str(hp.get("body") or "")
+        t = _num(hp.get("t_body_c"))
+        if t is not None and body in ("housing", "structure") and (
+                part == "link" or part == body):
+            return t
+        if part == "link":
+            blk = ((cool.get("mount") or {}).get("link")) or {}
+            return _num(blk.get("t_link_c"))
+        return None
+    return _num(((fld.get("components") or {}).get(part) or {}).get("max"))
+
+
+def touch_next_current(trials: Sequence[Tuple[float, float]], *, limit_c: float,
+                       ambient_c: float) -> float:
+    """The next trial current for a touch-limited verification, from the REAL
+    readings so far (``[(I, T_actual), …]``, in the order they were solved).
+
+    The first correction is the network search's own square law
+    ``I·√((aim − amb)/(T − amb))``.  Once two readings exist the secant through
+    the last two is used — it learns the machine's real slope, which the
+    square law (every watt ∝ I²) over-states.  The secant is refused, and the
+    square law used instead, when it is not rising, not finite, moves by more
+    than 50 %, or would not go below the lowest current already seen over the
+    limit.
+    """
+    aim = float(limit_c) - TOUCH_AIM_K
+    i2, t2 = trials[-1]
+    sq = i2 * math.sqrt(max(aim - ambient_c, 1e-6) / max(t2 - ambient_c, 1e-6))
+    nxt = sq
+    if len(trials) >= 2:
+        i1, t1 = trials[-2]
+        if abs(i2 - i1) > 1e-9 and (t2 - t1) / (i2 - i1) > 1e-6:
+            cand = i2 + (aim - t2) * (i2 - i1) / (t2 - t1)
+            over = [i for i, t in trials if t > limit_c]
+            if (math.isfinite(cand) and 0.5 * i2 <= cand <= 1.5 * i2
+                    and (not over or cand < min(over))):
+                nxt = cand
+    return max(nxt, 0.01)
+
+
+# ---------------------------------------------------------------------------
 # One cooling condition, as the thermal solve takes it
 # ---------------------------------------------------------------------------
 

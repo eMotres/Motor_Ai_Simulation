@@ -7398,13 +7398,13 @@ def _cp_judge(field: Mapping[str, Any], limits: Mapping[str, float]
               ) -> Tuple[Optional[str], Optional[float], Optional[float],
                          Dict[str, float]]:
     """``(worst part, its reading, its miss, every reading)`` off a real map —
-    the winding hot spot and the hottest magnet element against their cards."""
-    comp = (field or {}).get("components") or {}
+    the winding hot spot, the hottest magnet element and the robotics heat
+    path's housing / structure against their limits."""
     readings: Dict[str, float] = {}
     worst: Tuple[Optional[str], Optional[float], Optional[float]] = (
         None, None, None)
     for part, lim in limits.items():
-        v = _ccr._num((comp.get(part) or {}).get("max"))
+        v = _ccr.field_reading(field, part)
         if v is None:
             continue
         readings[part] = round(float(v), 2)
@@ -7454,7 +7454,8 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
                       "at %.0f rpm" % rpm_cp)
         return
     limits = {p: float(v) for p, v in (block.get("limits_c") or {}).items()
-              if p in ("winding", "magnet") and _ccr._num(v) is not None}
+              if p in ("winding", "magnet", "housing", "structure")
+              and _ccr._num(v) is not None}
     part = str(cp.get("limiting_part") or "winding")
     if part not in limits:
         part = next(iter(limits), part)
@@ -7474,7 +7475,8 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
     i_ref = i_est / s_cp if s_cp > 0.0 else None
     ctl_before = controller.state() if controller is not None else None
 
-    def one_pass(rpm: float, i: float, passes: int) -> Dict[str, Any]:
+    def one_pass(rpm: float, i: float, passes: Optional[int]
+                 ) -> Dict[str, Any]:
         return _s1_verify(
             dict(body, rpm=float(rpm)), cooling=cooling, rpm=float(rpm),
             inverter=None, i_estimate=float(i),
@@ -7519,7 +7521,10 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
                     cp["note"] = ("corrected by the real pass, no speed on the "
                                   "stored curve carries the load line")
         else:
-            v = one_pass(rpm_cp, i_est, 2)
+            # A touch-limited part takes the touch verification's own pass
+            # budget (`max_passes=None`); winding / magnet keep their two.
+            v = one_pass(rpm_cp, i_est,
+                         None if part in _ccr.TOUCH_PARTS else 2)
             n_passes = int(v.get("passes") or 1)
             last = (v, rpm_cp, i_est)
     except Exception as exc:  # noqa: BLE001 — never fails the loop
@@ -7620,7 +7625,8 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
 def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                inverter: Optional[Dict[str, Any]], i_estimate: float,
                coil_temp_c_guess: float, magnet_temp_c_guess: Optional[float],
-               limiting_part: str, limit_c: float, max_passes: int = 2,
+               limiting_part: str, limit_c: float,
+               max_passes: Optional[int] = None,
                controller: Optional["_ControllerLoop"] = None
                ) -> Dict[str, Any]:
     """CONFIRM the S1 network estimate with a real EM pass, at the current
@@ -7639,6 +7645,18 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     with the REAL map's reading in place of the estimate — and one more pass.
     Two passes, never more: a machine that still misses after two real solves
     is reported with the miss stated, not chased further.
+
+    A TOUCH-limited part (``housing`` / ``structure`` / ``link``, the robotics
+    heat path's body) is read off the map's ``cooling.heat_path.t_body_c``
+    (:func:`coupled_continuous_rating.field_reading` — the map has no
+    ``components.housing``; before 2026-10-19 only the legacy name ``link`` was
+    read, so a housing-limited machine never verified).  Its limit is hard: a
+    pass verifies only when it sits at most 3 K UNDER and not at all OVER the
+    limit, the correction steps the current down from the real readings (the
+    secant once two passes exist, :func:`touch_next_current`) and up to
+    ``TOUCH_MAX_PASSES`` passes are spent, because the housing rises far less
+    than with the square of the current.  A part that still misses is reported
+    NOT VERIFIED with the miss in K.
 
     Returns ``{"verified", "passes", "miss_K", "I_cont_A_rms", "em", "field",
     "coil_temp_c", "magnet_temp_c"}`` — ``em``/``field`` are the LAST pass
@@ -7669,6 +7687,10 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
         amb = 25.0
     i_now = float(i_estimate)
     last: Dict[str, Any] = {}
+    touch = limiting_part in _ccr.TOUCH_PARTS
+    if max_passes is None:
+        max_passes = _ccr.TOUCH_MAX_PASSES if touch else 2
+    trials: List[Tuple[float, float]] = []
     for k in range(max(int(max_passes), 1)):
         _progress.update(phase="S1 verification %d/%d — EM at %.1f A"
                                % (k + 1, max_passes, i_now))
@@ -7747,24 +7769,20 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
             _d_tj_v = controller.step(em_v, it=k + 1, phase="s1_verify")
         i_solved = _ccr._num((em_v.get("summary") or {}).get("I_phase_rms_A")) \
             or _ccr._num(em_v.get("I_phase_rms_solved_A")) or i_now
-        comp = (field_v.get("components") or {})
-        node = "winding" if limiting_part == "winding" else (
-            "magnet" if limiting_part == "magnet" else limiting_part)
-        if limiting_part == "link":
-            # The housing/touch-limit node is not a solved FEM component — it
-            # is `cooling_models.robot_link_path`'s own lumped node, read back
-            # from THIS pass's fresh steady solve exactly as
-            # `coupled_time_to_limit.part_limits` reads it off the reference
-            # map (`cooling.mount.link.t_link_c`). `comp.get("link")` is
-            # always empty, which is why S1 stayed "estimate, not verified"
-            # under the housing heat path (PR #9) — fixed 2026-09-27.
-            _link_blk = ((field_v.get("cooling") or {}).get("mount") or {}
-                        ).get("link")
-            actual = _ccr._num((_link_blk or {}).get("t_link_c"))
-        else:
-            actual = _ccr._num((comp.get(node) or {}).get("max"))
+        node = limiting_part
+        # The part's own reading off THIS pass's real map — the winding /
+        # magnet hot spot from the components, the housing / structure from
+        # the heat path's solved body node (`field_reading`).
+        actual = _ccr.field_reading(field_v, limiting_part)
         miss = None if actual is None else round(actual - float(limit_c), 3)
-        last = {"verified": (miss is not None and abs(miss) <= 3.0),
+        if miss is None:
+            _held = False
+        elif touch:
+            _held = (-_ccr.TOUCH_UNDER_TOL_K <= miss
+                     <= _ccr.TOUCH_OVER_TOL_K)
+        else:
+            _held = abs(miss) <= 3.0
+        last = {"verified": _held,
                 "passes": k + 1, "miss_K": miss, "I_cont_A_rms": round(i_solved, 3),
                 "em": em_v, "field": field_v,
                 "coil_temp_c": coil_temp_c_guess,
@@ -7796,7 +7814,12 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                                 "unverified" % (abs(miss), "over" if miss > 0
                                                   else "under", k + 1))
             break
-        # ONE first-order correction, from the REAL map's reading.
+        # ONE correction, from the REAL map's reading.
+        if touch:
+            trials.append((float(i_solved), float(actual)))
+            i_now = _ccr.touch_next_current(trials, limit_c=float(limit_c),
+                                            ambient_c=amb)
+            continue
         over_amb_actual = max(actual - amb, 1e-6)
         over_amb_limit = max(float(limit_c) - amb, 1e-6)
         i_now = max(i_now * math.sqrt(over_amb_limit / over_amb_actual), 0.01)

@@ -7,7 +7,10 @@ import sys
 import pytest
 
 from motor_ai_sim.cad import store
+from tests.private_fixtures import require_cad_reference
 
+# The reference profiles, the design file and the phase board STEPs are private data (owner 2026-10-19): skip the module without them.
+REF_DIR = str(require_cad_reference())
 if store.CAD_DIR not in sys.path:
     sys.path.insert(0, store.CAD_DIR)
 
@@ -34,8 +37,8 @@ def test_the_board_step_is_a_replaceable_named_file(ref):
     _, pj, _, _ = ref
     pb = pj["profile"]["phase_board"]
     assert pb["pins"] is False and pb["copper_volume"][0] < pb["copper_volume"][1]
-    assert os.path.isfile(os.path.join(store.CAD_DIR, "reference", "phase_board", pb["step"]))      # the file electronics.find_step(name) opens
-    assert os.path.isfile(os.path.join(store.CAD_DIR, "reference", "phase_board", "CIANO14_40_phase_board_revC_colour.step"))   # default board
+    assert os.path.isfile(os.path.join(REF_DIR, "phase_board", pb["step"]))      # the file electronics.find_step(name) opens
+    assert os.path.isfile(os.path.join(REF_DIR, "phase_board", "CIANO14_40_phase_board_revC_colour.step"))   # default board
 
 
 def test_the_screw_stays_m2x20(ref):
@@ -45,9 +48,9 @@ def test_the_screw_stays_m2x20(ref):
 
 
 def test_the_design_file_regenerates_the_reference():
-    sys.path.insert(0, os.path.join(store.CAD_DIR, "reference"))
+    sys.path.insert(0, os.path.join(store.CAD_DIR, "reference"))       # the tool script make_die_reference.py (public)
     import make_die_reference as m
-    design = json.load(open(os.path.join(store.CAD_DIR, "reference", "designs", "CIANO14_50_edited_design.json"), encoding="utf-8"))
+    design = json.load(open(os.path.join(REF_DIR, "designs", "CIANO14_50_edited_design.json"), encoding="utf-8"))
     pj = m.apply_design(json.load(open(store.BASE_PROFILE, encoding="utf-8")), design)
     mine = {r["name"]: r["freecad_expression"] for sec in store.SECTIONS for r in pj[sec]}
     saved = json.load(open(store.reference_for(DIE)[0], encoding="utf-8"))

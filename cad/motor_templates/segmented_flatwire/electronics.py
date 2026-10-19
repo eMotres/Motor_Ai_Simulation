@@ -33,12 +33,15 @@ LEAD_PROBE_LEN = 40.0
 
 
 def find_step(name=None):
-    """STEP of the board: $FC_PHASE_BOARD_STEP, cad/reference/phase_board/ (motor_ai_sim) or fusion_source/phase_board/
+    """STEP of the board: $FC_PHASE_BOARD_STEP, <$FC_CAD_REFERENCE>/phase_board/ (the private data repository's cad/reference,
+    set by the builder: store.REFERENCE_DIR), cad/reference/phase_board/ (what the CAD image bakes in) or fusion_source/phase_board/
     (owner repo), relative to the template's grand-parent directory.  `name` = the STEP file name of the profile
-    (`profile.phase_board.step`; default: the CIANO14 40 board)."""
+    (`profile.phase_board.step`; default: the CIANO14 40 board).  The board STEPs are 3-D model data: private repository only."""
     name = name or STEP_NAME
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    cands = [os.environ.get("FC_PHASE_BOARD_STEP"), os.path.join(root, "reference", "phase_board", name),
+    ref = os.environ.get("FC_CAD_REFERENCE")
+    cands = [os.environ.get("FC_PHASE_BOARD_STEP"), os.path.join(ref, "phase_board", name) if ref else None,
+             os.path.join(root, "reference", "phase_board", name),
              os.path.join(root, "fusion_source", "phase_board", name)]
     for c in cands:
         if c and os.path.isfile(c):
@@ -71,7 +74,7 @@ def build_electronics(doc, sh, cfg=None):
     step_name = cfg.get("step", STEP_NAME)
     path = find_step(step_name)
     if path is None:
-        raise RuntimeError("phase board STEP %s not found (cad/reference/phase_board/ or $FC_PHASE_BOARD_STEP)" % step_name)
+        raise RuntimeError("phase board STEP %s not found (private data repository cad/reference/phase_board/, $FC_CAD_REFERENCE or $FC_PHASE_BOARD_STEP)" % step_name)
     shape = Part.read(path)
     part = doc.addObject("App::Part", PART)
     part.Label = PART

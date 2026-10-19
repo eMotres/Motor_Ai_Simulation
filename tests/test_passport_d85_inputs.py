@@ -14,8 +14,9 @@ NEW_PROPS = ("tmotor_g28x9_2", "tmotor_g30x10_5", "tmotor_g32x11", "tmotor_g36x1
 
 def test_specs_load_and_name_their_machines():
     from motor_ai_sim.passport_v1.spec import load_spec
-    d40 = load_spec(ROOT / "config" / "passport_specs" / "CIANO14_40_new.yaml")
-    d85 = load_spec(ROOT / "config" / "passport_specs" / "CIANO28_85_20SW1200.yaml")
+    from tests.private_fixtures import need_private       # the specs of the closed machines are private data
+    d40 = load_spec(need_private("config", "passport_specs", "CIANO14_40_new.yaml"))
+    d85 = load_spec(need_private("config", "passport_specs", "CIANO28_85_20SW1200.yaml"))
     assert set(d40["machines"]) == {"L12", "L20"}
     m = d85["machines"]["L13"]
     assert d85["die"] == DIE

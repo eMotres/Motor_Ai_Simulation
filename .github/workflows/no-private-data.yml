@@ -1,0 +1,22 @@
+# Guard: this PUBLIC repository must not hold a 3-D model or the data of a closed motor (owner decision 2026-10-19).
+# They live in eMotres/motor-ai-sim-private.  No third-party action, no secrets: it only reads the tracked files.
+name: No private data
+
+on:
+  pull_request:
+  push:
+    branches: [main, pre-migration-freeze-2026-09-15]
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: No 3-D model and no closed-motor data in the tracked files
+        run: python scripts/check_no_private_data.py

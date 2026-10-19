@@ -62,7 +62,7 @@ from motor_ai_sim.cadquery_geometry import (
 )
 
 _ROOT = Path(__file__).resolve().parents[1]
-_PRESETS = json.loads((_ROOT / "config" / "motor_presets.json").read_text(encoding="utf-8"))
+from tests.private_fixtures import case, closed_preset_case   # closed-motor presets are private data
 
 # The machine the bug was reported on, pinned field by field.  It must NOT come
 # from config/motor_config.yaml: the user edits that constantly (rotor_fill_r
@@ -96,11 +96,11 @@ def _cases():
     bug, the 40 mm preset, the shipped default config, and two more sizes so a
     scale-dependent tolerance cannot pass on one diameter and fail on another."""
     return [
-        ("150 mm 24s28p as reported", GEO_150MM_REPORTED),
-        ("default config (CadQueryMotor with no override)", None),
-        ("preset my_40mm_last", _PRESETS["my_40mm_last"]["geometry"]),
-        ("preset ciano14_30_10", _PRESETS["ciano14_30_10"]["geometry"]),
-        ("preset motor_100mm", _PRESETS["motor_100mm"]["geometry"]),
+        case("150 mm 24s28p as reported", GEO_150MM_REPORTED),
+        case("default config (CadQueryMotor with no override)", None),
+        closed_preset_case("preset my_40mm_last", "my_40mm_last"),      # a CLOSED motor: private data, skipped without it
+        closed_preset_case("preset ciano14_30_10", "ciano14_30_10"),
+        closed_preset_case("preset motor_100mm", "motor_100mm"),
     ]
 
 
@@ -242,7 +242,7 @@ def test_weld_is_order_and_direction_independent():
                 f"reversed={rev}): {got} != {ref}")
 
 
-@pytest.mark.parametrize("name,geo", _cases(), ids=[c[0] for c in _cases()])
+@pytest.mark.parametrize("name,geo", _cases())
 def test_shared_boundaries_stay_point_identical(name, geo):
     """Every stator boundary point must still be a point of out_band.
 
@@ -265,7 +265,7 @@ def test_shared_boundaries_stay_point_identical(name, geo):
 
 # ───────────────────────────── the ring survey ────────────────────────────────
 
-@pytest.mark.parametrize("name,geo", _cases(), ids=[c[0] for c in _cases()])
+@pytest.mark.parametrize("name,geo", _cases())
 def test_no_coincident_points_and_no_degenerate_rings(name, geo):
     polys, diameter = _build(geo)
     weld = diameter / _WELD_DIV
@@ -293,7 +293,7 @@ def test_no_coincident_points_and_no_degenerate_rings(name, geo):
     assert not problems, f"{name}:\n  " + "\n  ".join(problems)
 
 
-@pytest.mark.parametrize("name,geo", _cases(), ids=[c[0] for c in _cases()])
+@pytest.mark.parametrize("name,geo", _cases())
 def test_arc_chords_are_not_micro_against_their_neighbours(name, geo):
     """No segment may be a small fraction of the LOCAL discretisation.
 
@@ -320,7 +320,7 @@ def test_arc_chords_are_not_micro_against_their_neighbours(name, geo):
     assert not problems, f"{name}:\n  " + "\n  ".join(problems)
 
 
-@pytest.mark.parametrize("name,geo", _cases(), ids=[c[0] for c in _cases()])
+@pytest.mark.parametrize("name,geo", _cases())
 def test_every_domain_survives_the_sanitize_pass(name, geo):
     """Sanitising must never silently delete a body: the machine still has its
     stator, rotor, shaft, bands, every magnet and every coil, all with area."""

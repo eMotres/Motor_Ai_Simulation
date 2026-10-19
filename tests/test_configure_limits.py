@@ -158,6 +158,8 @@ def test_a_preset_falls_back_to_the_die_geometry_and_carries_its_variants():
 
 
 def test_the_context_route_lists_the_dies_presets_and_their_own_variants(tmp_path, monkeypatch):
+    from tests.private_fixtures import need_private      # reads the pilot passports of the closed CIANO14 40 new: private data
+    need_private("config", "passports", "CIANO14 40 new", "L12.json")
     from motor_ai_sim.routes import catalog as cat_mod
     p = tmp_path / "motor_catalog.json"
     p.write_text(json.dumps({"motors": [

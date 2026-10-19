@@ -1,4 +1,6 @@
 # BuildKit uses <Dockerfile>.dockerignore: send only what Dockerfile.cad copies.
+# cad/reference/ is NOT part of this repository (private data): the image gets it from the `private` build context
+# (docker build --build-context private=<private data checkout>, see deploy/Dockerfile.cad).
 *
 !cad
 !src/motor_ai_sim/cad
@@ -8,3 +10,7 @@
 !config/motor_config.yaml
 !config/bearings_library.yaml
 **/__pycache__
+# last, so they win: no 3-D model file ever travels in the main context (it comes from the `private` context only)
+**/*.step
+**/*.stp
+**/*.FCStd

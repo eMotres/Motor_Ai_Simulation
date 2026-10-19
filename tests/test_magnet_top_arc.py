@@ -44,7 +44,7 @@ from shapely.ops import unary_union
 from motor_ai_sim.cadquery_geometry import CadQueryMotor, _circle_points
 
 _ROOT = Path(__file__).resolve().parents[1]
-_PRESETS = json.loads((_ROOT / "config" / "motor_presets.json").read_text(encoding="utf-8"))
+from tests.private_fixtures import case, closed_preset_case   # closed-motor presets are private data
 
 # A SYNTHETIC large-format 12s/10p sleeved machine (made-up numbers, not any
 # product; the original complaint was made on a real machine whose data is
@@ -72,10 +72,10 @@ GEO_200_SLEEVED = {
 _ON_RING_MM = 1e-6
 
 _PRESET_CASES = [
-    ("large-format sleeved (synthetic)", GEO_200_SLEEVED),
-    ("preset my_40mm_last", _PRESETS["my_40mm_last"]["geometry"]),
-    ("preset ciano14_30_10", _PRESETS["ciano14_30_10"]["geometry"]),
-    ("preset motor_100mm", _PRESETS["motor_100mm"]["geometry"]),
+    case("large-format sleeved (synthetic)", GEO_200_SLEEVED),
+    closed_preset_case("preset my_40mm_last", "my_40mm_last"),      # a CLOSED motor: private data, skipped without it
+    closed_preset_case("preset ciano14_30_10", "ciano14_30_10"),
+    closed_preset_case("preset motor_100mm", "motor_100mm"),
 ]
 
 
@@ -314,7 +314,7 @@ def test_the_rotor_iron_gives_up_nothing_to_the_magnet_top():
 
 # ─────────────────────── 4. the mesher and the validator ─────────────────────
 
-@pytest.mark.parametrize("name,geo", _PRESET_CASES, ids=[c[0] for c in _PRESET_CASES])
+@pytest.mark.parametrize("name,geo", _PRESET_CASES)
 @pytest.mark.parametrize("angle", [0.0, 7.5])
 def test_validator_accepts_every_preset_with_the_arc_top(name, geo, angle):
     """Every machine in the presets file is now arc-topped, whether it was saved

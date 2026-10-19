@@ -52,10 +52,8 @@ STAGE_A_MATERIALS = {"stator_core": "B15AHV950M", "rotor_core": "B15AHV950M",
 
 def _preset_geometry(name: str = PRESET) -> dict:
     import json
-    from pathlib import Path
-    root = Path(__file__).resolve().parents[1]
-    with (root / "config" / "motor_presets.json").open(encoding="utf-8") as fh:
-        return dict(json.load(fh)[name]["geometry"])
+    from tests.private_fixtures import need_closed_preset   # my_40mm_last is a CLOSED motor's preset: private data
+    return dict(need_closed_preset(name)["geometry"])
 
 
 @pytest.fixture(scope="module")

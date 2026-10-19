@@ -37,8 +37,8 @@ from motor_ai_sim.simulation.geo_mesh_gmsh import triangulate_gmsh
 from motor_ai_sim.simulation.sb_domains import DOM_COIL_BASE, DOM_MAG_BASE
 
 _ROOT = Path(__file__).resolve().parents[1]
-G40 = json.loads((_ROOT / "config" / "motor_presets.json")
-                 .read_text(encoding="utf-8"))["my_40mm_last"]["geometry"]
+from tests.private_fixtures import require_closed_preset  # noqa: E402
+G40 = require_closed_preset("my_40mm_last")["geometry"]      # a CLOSED motor's preset: private data, the module skips without it
 
 
 @pytest.fixture(autouse=True, scope="module")

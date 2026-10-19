@@ -28,8 +28,60 @@ import re
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))          # repo root (or /app in the images)
 CAD_DIR = os.path.join(ROOT, "cad")
-BASE_PROFILE = os.path.join(CAD_DIR, "reference", "CIANO14_40_12.json")  # Fusion reference profile (open Fusion model)
-FUSION_VALUES = os.path.join(CAD_DIR, "reference", "user_parameters_values_2026-10-12.json")
+
+# The CAD REFERENCE FILES (Fusion reference profiles + parameter dumps, the read-only Fusion STEP exports, the phase board
+# STEPs) are 3-D model data and live ONLY in the private data repository (owner 2026-10-19), at ``cad/reference/``.  They are
+# found, in this order, at
+#   1. $MOTRES_CAD_REFERENCE_DIR                      (the reference folder itself),
+#   2. $MOTOR_AI_SIM_PRIVATE_DATA/cad/reference       (a checkout of the private repository: the one variable of the app),
+#   3. <repo>/cad/reference                           (what the CAD image bakes in: ``COPY --from=private``, deploy/Dockerfile.cad),
+#   4. <repo>/../motor-ai-sim-private/cad/reference   (a sibling checkout on a workstation),
+#   5. /srv/motres/private_assets/cad/reference       (the server).
+# The first folder that holds the CIANO14 40 profile wins.  If none does, REFERENCE_DIR is the in-tree path (3) so a missing file
+# is an error that names it; ``reference_missing_message()`` says where to put the files.
+ENV_REFERENCE_DIR = "MOTRES_CAD_REFERENCE_DIR"
+ENV_PRIVATE_DATA = "MOTOR_AI_SIM_PRIVATE_DATA"
+DEFAULT_PRIVATE_ASSETS = "/srv/motres/private_assets"
+_BASE_PROFILE_NAME = "CIANO14_40_12.json"
+_VALUES_NAME = "user_parameters_values_2026-10-12.json"
+
+
+def reference_candidates():
+    """The folders searched for ``cad/reference/`` (see above), in order."""
+    out = []
+    env = (os.environ.get(ENV_REFERENCE_DIR) or "").strip()
+    if env:
+        out.append(os.path.expanduser(env))
+    priv = (os.environ.get(ENV_PRIVATE_DATA) or "").strip()
+    if priv:
+        out.append(os.path.join(os.path.expanduser(priv), "cad", "reference"))
+    out.append(os.path.join(CAD_DIR, "reference"))
+    out.append(os.path.join(os.path.dirname(ROOT), "motor-ai-sim-private", "cad", "reference"))
+    out.append(os.path.join(DEFAULT_PRIVATE_ASSETS, "cad", "reference"))
+    return out
+
+
+def find_reference_dir():
+    """The first candidate that holds the base profile, else ``None``."""
+    for d in reference_candidates():
+        if os.path.isfile(os.path.join(d, _BASE_PROFILE_NAME)):
+            return d
+    return None
+
+
+def reference_available():
+    return find_reference_dir() is not None
+
+
+def reference_missing_message():
+    return ("the CAD reference files (cad/reference: Fusion profiles, Fusion STEP exports, phase boards) are private data and were "
+            "not found; set %s to a checkout of eMotres/motor-ai-sim-private (or %s to its cad/reference folder). Searched: %s"
+            % (ENV_PRIVATE_DATA, ENV_REFERENCE_DIR, ", ".join(reference_candidates())))
+
+
+REFERENCE_DIR = find_reference_dir() or os.path.join(CAD_DIR, "reference")
+BASE_PROFILE = os.path.join(REFERENCE_DIR, _BASE_PROFILE_NAME)  # Fusion reference profile (open Fusion model)
+FUSION_VALUES = os.path.join(REFERENCE_DIR, _VALUES_NAME)
 DEFAULT_SERVER_DIES = "/srv/motres/shared/dies"
 DEFAULT_SERVER_MATERIALS = "/srv/motres/shared/materials_library.yaml"
 DEFAULT_SERVER_BEARINGS = "/srv/motres/shared/bearings_library.yaml"
@@ -91,9 +143,9 @@ def reference_for(die):
     """(base profile, Fusion values file) of a die: `cad/reference/<die slug>.json` (+ `<slug>_fusion_values.json`) when the
     die has its own Fusion reference (e.g. CIANO28_85_20SW1200), else the CIANO14 40 reference (the first template)."""
     sl = slug(die)
-    own = os.path.join(CAD_DIR, "reference", sl + ".json")
+    own = os.path.join(REFERENCE_DIR, sl + ".json")
     if os.path.exists(own):
-        fv = os.path.join(CAD_DIR, "reference", sl + "_fusion_values.json")
+        fv = os.path.join(REFERENCE_DIR, sl + "_fusion_values.json")
         return own, (fv if os.path.exists(fv) else FUSION_VALUES)
     return BASE_PROFILE, FUSION_VALUES
 
@@ -459,6 +511,8 @@ def make_profile(eff, mp, base_profile=None, fusion_values=None, stamp=None, mot
     """Store -> (profile dict for the FreeCAD template, review report).  Where a formula of the Fusion reference
     profile already gives the simulation value it is kept (Fusion intent); any other value becomes a constant."""
     ref_base, ref_fv = reference_for(eff["die"])
+    if not (base_profile or os.path.exists(ref_base)):
+        raise FileNotFoundError("%s: %s" % (ref_base, reference_missing_message()))
     base = json.load(open(base_profile or ref_base, encoding="utf-8"))
     fus = {}
     fv = fusion_values or ref_fv

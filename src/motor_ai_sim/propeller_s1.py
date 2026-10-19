@@ -134,6 +134,11 @@ def model_dirs() -> List[Path]:
     """Repo folder first, then ``<shared>/propeller_s1`` (which wins per file)."""
     dirs = [_DIR]
     if _DIR == _REPO_DIR:
+        # S1 models of the closed motors live in the private data repository (2026-10-19).
+        from motor_ai_sim.private_data import private_path
+        q = private_path("config", "propeller_s1")
+        if q is not None and q.is_dir():
+            dirs.append(q)
         try:
             from motor_ai_sim.workspace import shared_root
             p = Path(str(shared_root())) / "propeller_s1"

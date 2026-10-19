@@ -53,8 +53,7 @@ from motor_ai_sim.simulation.sb_domains import (DOM_AIR, DOM_COIL_BASE,
                                                 DOM_MAG_BASE, DOM_SHAFT)
 
 _ROOT = Path(__file__).resolve().parents[1]
-_PRESETS = json.loads((_ROOT / "config" / "motor_presets.json")
-                      .read_text(encoding="utf-8"))
+from tests.private_fixtures import SKIP_NOTE, closed_preset   # my_40mm_last is a CLOSED motor's preset: private data (that case skips without it)
 
 # FROZEN geometries — not config/motor_config.yaml, which the user edits
 # constantly (same reasoning as tests/test_masses.py and
@@ -73,9 +72,11 @@ G150 = {
     "stator_fillet_r": 3.5, "stator_fillet_r1": 1.2, "rotor_fill_r": 0.2,
     "motor_length": 35.0,
 }
-G40 = _PRESETS["my_40mm_last"]["geometry"]
 
-MACHINES = [("150 mm 24s28p", G150), ("40 mm 12s14p (my_40mm_last)", G40)]
+_G40 = closed_preset("my_40mm_last")
+MACHINES = [pytest.param(G150, id="150 mm 24s28p"),
+            pytest.param(_G40["geometry"] if _G40 else None, id="40 mm 12s14p (my_40mm_last)",
+                         marks=[] if _G40 else [pytest.mark.skip(reason=SKIP_NOTE + ": preset 'my_40mm_last'")])]
 
 #: The meshed annulus is bounded by two POLYGONS, so it under-reads the CAD
 #: annulus by (2π/n)²/6 per circle.  Measured: 1.38 % (150 mm), 0.19 % (40 mm).
@@ -99,9 +100,9 @@ def _rotor_half(geo):
     return p, polys, area, r, np.asarray(tags_r)
 
 
-@pytest.fixture(scope="module", params=MACHINES, ids=[m[0] for m in MACHINES])
+@pytest.fixture(scope="module", params=MACHINES)
 def machine(request):
-    return _rotor_half(request.param[1])
+    return _rotor_half(request.param)
 
 
 def test_the_cad_shaft_is_a_tube_not_a_disc(machine):

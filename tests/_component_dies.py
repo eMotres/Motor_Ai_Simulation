@@ -4,9 +4,10 @@
 
 The motor cards take their mass from the app's own mass model on the passport's die + configuration.  The
 real dies of the passports (``CIANO14 40 new``) live in the private catalog, so the tests build a small catalog
-in a temp folder: a die named like the passport's, with the geometry and materials of the repository's tracked
-``CIANO14 40_12`` die (the older 40 mm build).  The numbers are therefore the app's numbers for THAT geometry;
-the tests compare them with ``masses.compute_masses`` called directly, not with a constant.
+in a temp folder: a die named like the passport's, with the geometry and materials of the ``CIANO14 40_12`` die
+(the older 40 mm build; a CLOSED die since 2026-10-19: it lives in the private data repository, so the tests that
+use this stand-in SKIP when MOTOR_AI_SIM_PRIVATE_DATA is not set).  The numbers are therefore the app's numbers for THAT
+geometry; the tests compare them with ``masses.compute_masses`` called directly, not with a constant.
 """
 from __future__ import annotations
 
@@ -15,13 +16,24 @@ from typing import Dict
 
 import yaml
 
+import pytest
+
+from tests.private_fixtures import SKIP_NOTE, closed_die_dir
+
 REPO = Path(__file__).resolve().parents[1]
-TRACKED = REPO / "config" / "dies" / "CIANO14 40_12"
 STAND_IN_DIE = "CIANO14 40 new"
+
+
+def _tracked() -> Path:
+    d = closed_die_dir("CIANO14 40_12")
+    if d is None:
+        pytest.skip(f"{SKIP_NOTE}: die 'CIANO14 40_12'")
+    return d
 
 
 def make_dies(root: Path) -> Path:
     """``root/dies/<STAND_IN_DIE>/{die.yaml, L12.yaml, L20.yaml}``; returns ``root/dies``."""
+    TRACKED = _tracked()
     d = root / "dies" / STAND_IN_DIE
     d.mkdir(parents=True)
     die = yaml.safe_load((TRACKED / "die.yaml").read_text(encoding="utf-8"))

@@ -31,6 +31,9 @@ from motor_ai_sim.simulation.static3d import viewer as V
 PRESET = "my_40mm_last"
 _ROOT = Path(__file__).resolve().parents[1]
 
+from tests.private_fixtures import require_closed_preset  # noqa: E402
+require_closed_preset(PRESET)      # a CLOSED motor's preset: private data, the module skips without it
+
 
 @pytest.fixture(scope="module")
 def client():

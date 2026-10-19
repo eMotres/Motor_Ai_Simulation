@@ -47,6 +47,13 @@ def store_dir() -> Path:
             return p
     except Exception:                                       # noqa: BLE001
         pass
+    # The passports of the closed motors live in the private data repository
+    # (2026-10-19): without a shared store the checkout MOTOR_AI_SIM_PRIVATE_DATA
+    # points at is the workstation store.
+    from motor_ai_sim.private_data import private_path
+    q = private_path("config", "passports")
+    if q is not None and q.is_dir():
+        return q
     return _DIR
 
 

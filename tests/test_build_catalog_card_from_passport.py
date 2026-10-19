@@ -10,7 +10,9 @@ spec = importlib.util.spec_from_file_location(
 bcc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(bcc)
 
-FULL = ROOT / "docs" / "data" / "passport_d85" / "passport_L13.json"
+from tests.private_fixtures import need_private
+
+# The full passport of the Ø85 (a closed machine) is private data since 2026-10-19; the test skips without the private checkout.
 
 STATIC = {
     "diameter_mm": 85, "poles": 28, "slots": 24,
@@ -22,6 +24,7 @@ STATIC = {
 
 
 def test_card_is_not_reference_only_and_carries_20c_constants():
+    FULL = need_private("docs", "data", "passport_d85", "passport_L13.json")
     full = json.loads(FULL.read_text(encoding="utf-8"))
     card = bcc.build_card(full, STATIC, "cat_x", "CIANO28 85 20SW1200 L13", "o@example.com")
     assert "reference_only" not in card and "visibility" not in card

@@ -65,9 +65,8 @@ J_COIL = K_COIL / (R_O - R_I)
 
 
 def _preset(name: str = PRESET) -> dict:
-    root = Path(__file__).resolve().parents[1]
-    with (root / "config" / "motor_presets.json").open(encoding="utf-8") as fh:
-        return dict(json.load(fh)[name])
+    from tests.private_fixtures import need_closed_preset   # my_40mm_last is a CLOSED motor's preset: private data
+    return dict(need_closed_preset(name))
 
 
 @pytest.fixture(scope="module")

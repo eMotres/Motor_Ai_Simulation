@@ -53,8 +53,8 @@ def _square_pslg():
 
 def _section_40mm():
     from motor_ai_sim.simulation.static3d.motor_geometry import load_motor_section
-    with (_ROOT / "config" / "motor_presets.json").open(encoding="utf-8") as fh:
-        geo = dict(json.load(fh)["my_40mm_last"]["geometry"])
+    from tests.private_fixtures import need_closed_preset   # a CLOSED motor's preset: private data (the case skips without it)
+    geo = dict(need_closed_preset("my_40mm_last")["geometry"])
     return load_motor_section(geo_override=geo)
 
 

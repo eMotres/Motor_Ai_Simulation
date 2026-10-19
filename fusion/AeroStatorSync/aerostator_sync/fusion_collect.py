@@ -53,37 +53,48 @@ def user_parameters(des) -> list:
     return out
 
 
-class _AllVisible:
-    """Every occurrence and body light bulb ON for the export, each one restored exactly afterwards.  Fusion's STEP export
-    silently drops hidden geometry (a component whose occurrence is switched off exports an empty STEP), and a hidden part
-    is still a part of the motor."""
-
-    def __init__(self, des):
-        self.des, self.saved = des, []
-
-    def __enter__(self):
-        root = self.des.rootComponent
-        for o in root.allOccurrences:
-            if not o.isLightBulbOn:
-                self.saved.append(o)
-                o.isLightBulbOn = True
-        for c in self.des.allComponents:
-            for b in c.bRepBodies:
-                if not b.isLightBulbOn:
-                    self.saved.append(b)
-                    b.isLightBulbOn = True
-        return self
-
-    def hidden_tokens(self):
-        return {x.entityToken for x in self.saved}
-
-    def __exit__(self, *exc):
-        for x in reversed(self.saved):
-            try:
-                x.isLightBulbOn = False
-            except Exception:      # noqa: BLE001 - restoring the rest matters more than one failure
-                pass
+def _is_shown(comp, root) -> bool:
+    """True when Fusion's own STEP export of `comp` would contain all its solids: some occurrence is visible (parents
+    included) and no solid body is switched off.  Fusion silently leaves hidden geometry out of a STEP."""
+    occs = list(root.allOccurrencesByComponent(comp))
+    if occs and not any(o.isVisible for o in occs):
         return False
+    return all(b.isLightBulbOn for b in comp.bRepBodies if b.isSolid)
+
+
+class _HiddenExporter:
+    """STEP of a hidden component without touching the source document: its solids are copied (TemporaryBRepManager) into a
+    temporary design that is closed unsaved.  Switching light bulbs on and off would mark the source document modified.
+    Fusion has no invisible documents, so the temporary design shows for a moment; the source document is activated again."""
+
+    def __init__(self, src_doc):
+        self.src, self.doc, self.des = src_doc, None, None
+
+    def export(self, comp, path):
+        app = adsk.core.Application.get()
+        if self.doc is None:
+            self.doc = app.documents.add(adsk.core.DocumentTypes.FusionDesignDocumentType)
+            self.des = adsk.fusion.Design.cast(self.doc.products.itemByProductType("DesignProductType"))
+            self.des.designType = adsk.fusion.DesignTypes.DirectDesignType
+        tbm = adsk.fusion.TemporaryBRepManager.get()
+        root = self.des.rootComponent
+        added = []
+        for b in comp.bRepBodies:
+            if b.isSolid:
+                nb = root.bRepBodies.add(tbm.copy(b))
+                nb.name = b.name
+                added.append(nb)
+        em = self.des.exportManager
+        ok = em.execute(em.createSTEPExportOptions(path))
+        for nb in added:
+            nb.deleteMe()
+        return ok
+
+    def close(self):
+        if self.doc is not None:
+            self.doc.close(False)
+            self.doc = None
+            self.src.activate()
 
 
 def _solid_components(des):
@@ -114,18 +125,20 @@ def collect(doc, out_dir: str, *, sketches=(), link=None, allow_modified: bool =
     with open(os.path.join(out_dir, "parameters.json"), "w", encoding="utf-8") as fh:
         json.dump(user_parameters(des), fh, indent=1, ensure_ascii=False)
 
-    with _AllVisible(des) as vis:
-        parts, sk_out = _export_geometry(des, em, out_dir, sketches, say, vis.hidden_tokens())
+    hidden = _HiddenExporter(doc)
+    try:
+        parts, sk_out = _export_geometry(des, em, out_dir, sketches, say, hidden)
+    finally:
+        hidden.close()
     app = adsk.core.Application.get()
     df = doc.dataFile
     manifest = B.make_manifest(document=doc.name, urn=df.id, version=df.versionNumber, link=link,
                                fusion_build=app.version, user=app.currentUser.displayName if app.currentUser else "",
                                parts=parts, sketches=sk_out, root_dir=out_dir)
-    manifest["hidden_in_document"] = len(vis.saved)
     return manifest
 
 
-def _export_geometry(des, em, out_dir, sketches, say, hidden):
+def _export_geometry(des, em, out_dir, sketches, say, hidden_exporter):
     say("assembly STEP")
     if not em.execute(em.createSTEPExportOptions(os.path.join(out_dir, "assembly.step"))):
         raise ExportRefused("the assembly STEP export failed")
@@ -135,7 +148,9 @@ def _export_geometry(des, em, out_dir, sketches, say, hidden):
     for comp in _solid_components(des):
         fname = B.unique_file(B.safe_name(comp.name), used, ".step")
         say("part " + comp.name)
-        ok = em.execute(em.createSTEPExportOptions(os.path.join(out_dir, "parts", fname), comp))
+        shown = _is_shown(comp, root)
+        path = os.path.join(out_dir, "parts", fname)
+        ok = em.execute(em.createSTEPExportOptions(path, comp)) if shown else hidden_exporter.export(comp, path)
         if not ok:
             raise ExportRefused("the STEP export of component %r failed" % comp.name)
         bodies = []
@@ -143,11 +158,11 @@ def _export_geometry(des, em, out_dir, sketches, say, hidden):
             if not b.isSolid:
                 continue
             bodies.append(dict(name=b.name, volume_mm3=round(b.volume * 1000.0, 6), area_mm2=round(b.area * 100.0, 6),
-                               bbox_mm=_bbox(b.boundingBox), faces=b.faces.count, hidden=b.entityToken in hidden,
+                               bbox_mm=_bbox(b.boundingBox), faces=b.faces.count, hidden=not b.isLightBulbOn,
                                material=b.material.name if b.material else None))
-        occs = [dict(path=o.fullPathName, hidden=o.entityToken in hidden, matrix=_matrix_mm(o.transform2))
+        occs = [dict(path=o.fullPathName, hidden=not o.isVisible, matrix=_matrix_mm(o.transform2))
                 for o in root.allOccurrencesByComponent(comp)]
-        parts[comp.name] = dict(file="parts/" + fname, bodies=bodies, occurrences=occs, referenced=any(o.isReferencedComponent for o in root.allOccurrencesByComponent(comp)),
+        parts[comp.name] = dict(file="parts/" + fname, bodies=bodies, occurrences=occs, hidden_in_document=not shown, referenced=any(o.isReferencedComponent for o in root.allOccurrencesByComponent(comp)),
                                 material=comp.material.name if comp.material else None)
 
     sk_out, used_dxf = {}, set()

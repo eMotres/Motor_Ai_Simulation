@@ -369,7 +369,9 @@ def test_staff_get_every_tab_held_to_app_tsx(env):
 def test_a_visitor_gets_the_small_prompt_plus_the_note_and_no_session(env):
     chat("what is this?", context={"tab": "compare", "configure": {"knobs": {"speed_rpm": 1}}})
     sp = _system_of_last_call(env)
-    assert sp.startswith(P.USER_PROMPT) and sp.endswith(support.VISITOR_NOTE)
+    assert sp.startswith(P.USER_PROMPT) and support.VISITOR_NOTE in sp
+    # the Published motors block follows the note (owner 2026-10-19)
+    assert sp.index(support.VISITOR_NOTE) < sp.index("## Published motors")
     assert "TICKET_DRAFT" not in sp and "Session context (hidden from the user)" not in sp
     assert "speed_rpm" not in sp
 
@@ -444,11 +446,14 @@ def test_the_configure_section_has_no_stale_controls():
 
 def test_the_prompts_keep_the_commercial_rules():
     for p in (P.USER_PROMPT, P.STAFF_PROMPT):
-        assert "support@aerostator.com" in p and "invitation" in p.lower()
+        # owner 2026-10-19: the service is FREE and sign-up is instant - no invitation, no pricing talk
+        assert "support@aerostator.com" in p and "free to use" in p and "sign up at once" in p
+        assert "invitation" not in p.lower() and "pricing" not in p.lower()
         assert "NEVER name a price" in p and "Never invent a price" in p
         assert "SAME language" in p
         assert "Never discuss how this assistant itself is built" in p
-        assert "$19" not in p and "free tier" in p.lower()
+        assert "$19" not in p and "free tier" not in p.lower()
+        assert "datasheet / Configure is the source" in p
     assert "Never promise a fix, a date or a price" in P.TICKET_PROTOCOL
 
 

@@ -204,7 +204,7 @@ def test_a_reply_that_is_only_a_marker_still_says_something():
     clean, req = support.parse_access_request(MARKER)
     assert req is not None and clean == ""
     # …the route substitutes the confirmation (asserted end-to-end below)
-    assert "vadim@motresres.com" in support.ACCESS_CONFIRMATION
+    assert "support@aerostator.com" in support.ACCESS_CONFIRMATION
 
 
 # ── 2. the visitor log ───────────────────────────────────────────────────────
@@ -680,12 +680,12 @@ def test_the_visitor_note_carries_the_whole_contract():
     for field in ('name="', 'company="', 'email="', 'note="'):
         assert field in note, field
     for rule in ("ONE QUESTION AT A TIME", "never as a form",
-                 "I've passed this to the team", "vadim@motresres.com",
+                 "I've passed this to the team", "support@aerostator.com",
                  "Never promise a timeline"):
         assert rule in note, rule
     # …and the old promises it must keep making
-    assert "Request access" in note and "invitation" in note.lower()
-    for forbidden in ("customer machine", "catalog's contents"):
+    assert "Request access" in note and "invitation" not in note.lower()
+    for forbidden in ("customer machine", "internal data"):
         assert forbidden in note
 
 

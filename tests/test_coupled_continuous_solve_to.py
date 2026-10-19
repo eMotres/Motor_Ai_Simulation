@@ -646,6 +646,10 @@ def test_the_datasheet_carries_one_row_per_duty_when_a_duty_has_it(tmp_path):
 # caught.
 # ---------------------------------------------------------------------------
 
+#: What `_mock_rating_deps`' fake `rate` was called with, per test.
+RATE_CALLS: list = []
+
+
 def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
                       capture_em=True):
     """Every collaborator `_continuous_rating_for_loop` calls, mocked.
@@ -659,6 +663,8 @@ def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
     from motor_ai_sim import thermal_capacities as tc
 
     calls = solve_map_calls if solve_map_calls is not None else []
+    rate_calls = RATE_CALLS
+    rate_calls.clear()
 
     def _solve_map(point, cooling, *, em_map=None, em_source=None,
                    capture=None):
@@ -689,7 +695,9 @@ def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
 
     def _rate(*, thermal_result, em_summary, caps, geometry, cooling,
              side_areas, d_housing_m, duty, mode, resolve, refit,
-             magnet_grade, speed_search=None, eddy_noload_fraction=None):
+             magnet_grade, speed_search=None, eddy_noload_fraction=None,
+             bearing_seat_from_map=False):
+        rate_calls.append({"bearing_seat_from_map": bearing_seat_from_map})
         return dict(rate_return)
 
     monkeypatch.setattr(cp._ccr, "rate", _rate, raising=True)

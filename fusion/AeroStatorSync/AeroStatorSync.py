@@ -18,10 +18,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
-from lib import client as C          # noqa: E402
-from lib import fusion_collect as FC  # noqa: E402
-from lib import keystore as K         # noqa: E402
-from lib import params as PR          # noqa: E402
+from aerostator_sync import client as C          # noqa: E402
+from aerostator_sync import fusion_collect as FC  # noqa: E402
+from aerostator_sync import keystore as K         # noqa: E402
+from aerostator_sync import params as PR          # noqa: E402
 
 PANEL_ID = "AeroStatorSyncPanel"
 CMDS = {

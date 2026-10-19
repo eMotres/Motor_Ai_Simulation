@@ -1,4 +1,4 @@
-"""The Fusion add-in's pure-Python parts (fusion/AeroStatorSync/lib): units, Import diff, bundle manifest, HTTP client.
+"""The Fusion add-in's pure-Python parts (fusion/AeroStatorSync/aerostator_sync): units, Import diff, bundle manifest, HTTP client.
 The Fusion-side code (fusion_collect.py, AeroStatorSync.py) needs Fusion and is exercised through the Fusion MCP; see
 docs/FUSION_SYNC.md section 7."""
 import io
@@ -13,9 +13,9 @@ import pytest
 ADDIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "fusion", "AeroStatorSync")
 sys.path.insert(0, ADDIN)
 
-from lib import bundle as B  # noqa: E402
-from lib import client as C  # noqa: E402
-from lib import params as P  # noqa: E402
+from aerostator_sync import bundle as B  # noqa: E402
+from aerostator_sync import client as C  # noqa: E402
+from aerostator_sync import params as P  # noqa: E402
 
 
 # ── units / expressions ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -195,7 +195,7 @@ def test_upload_is_multipart_with_the_zip(tmp_path):
 @pytest.mark.skipif(sys.platform != "win32", reason="DPAPI is Windows only")
 def test_key_store_round_trip(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
-    from lib import keystore as K
+    from aerostator_sync import keystore as K
     K.save_key("emk_test_secret")
     assert K.load_key() == "emk_test_secret"
     assert b"emk_test_secret" not in (tmp_path / "MOTRES" / "fusion_sync" / "key.dpapi").read_bytes()

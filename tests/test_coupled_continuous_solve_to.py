@@ -687,7 +687,7 @@ def _mock_rating_deps(monkeypatch, *, rate_return, solve_map_calls=None,
 
     def _rate(*, thermal_result, em_summary, caps, geometry, cooling,
              side_areas, d_housing_m, duty, mode, resolve, refit,
-             magnet_grade):
+             magnet_grade, speed_search=None):
         return dict(rate_return)
 
     monkeypatch.setattr(cp._ccr, "rate", _rate, raising=True)
@@ -911,3 +911,77 @@ def test_the_cooling_label_names_a_propeller_slipstream():
     assert cp._cooling_label({"cooling_mode": "air", "ambient_temp": 25.0,
                               "air_speed_mps": 20.0}) \
         == "forced air 20 m/s, 25 °C"
+
+
+def test_the_propeller_load_line_is_its_own_torque_curve():
+    """`_cr_speed_search_opts` for a propeller-cooled duty: the load line is
+    the propeller's torque over the reference torque (× the 3-D factor), and
+    its air the propeller's slipstream at the new speed."""
+    from motor_ai_sim import propeller as pp
+    from motor_ai_sim.routes import coupled as cp
+
+    cooling = {"cooling_mode": "air", "ambient_temp": 40.0,
+               "air_speed_source": "propeller",
+               "propeller_id": "tmotor_g40x13_1"}
+    opts = cp._cr_speed_search_opts(
+        cooling, {"T_em_avg_Nm": 31.07, "end3d": {"k_flux": 0.957}}, 4000.0)
+    prop = pp.get_propeller("tmotor_g40x13_1")
+    q = pp.torque_Nm(prop, 3000.0, rho=pp.air_density(40.0))
+    assert opts["load_s_at"](3000.0) == pytest.approx(q / (31.07 * 0.957))
+    v_full = opts["air_speed_at_ratio"](1.0)
+    v_low = opts["air_speed_at_ratio"](0.75)
+    assert v_full > v_low > 0.0
+    # Any other cooling: no load line, the most-power answer.
+    assert "load_s_at" not in cp._cr_speed_search_opts(
+        {"cooling_mode": "air", "air_speed_mps": 10.0}, {}, 4000.0)
+
+
+def test_the_continuous_point_is_verified_but_never_becomes_the_record(
+        monkeypatch):
+    from motor_ai_sim.routes import coupled as cp
+
+    seen = {}
+
+    def fake_verify(body, **kw):
+        seen.update(rpm_body=body.get("rpm"), rpm=kw["rpm"],
+                    i=kw["i_estimate"])
+        return {"verified": True, "passes": 1, "miss_K": 0.8,
+                "I_cont_A_rms": 52.3, "actual_c": 150.8,
+                "em": {"summary": {"T_em_avg_Nm": 20.0, "P_mech_W": 6500.0,
+                                   "P_loss_total_W": 310.0}},
+                "field": {}}
+
+    monkeypatch.setattr(cp, "_s1_verify", fake_verify)
+    block = {"ok": True, "feasible": False, "limits_c": {"magnet": 150.0}}
+    point = {"feasible": True, "rpm": 3120.0, "I_cont_A_rms": 54.0,
+             "limiting_part": "magnet",
+             "temperatures_c": {"winding": 140.0, "magnet": 149.6}}
+    cp._cp_verify_continuous_point({"I_phase_rms": 82.3}, block, point,
+                                   cooling={"ambient_temp": 40.0},
+                                   inverter=None, controller=None,
+                                   t_coil=200.0, t_mag=110.0)
+    assert seen == {"rpm_body": 3120.0, "rpm": 3120.0, "i": 54.0}
+    assert point["verified"] is True and point["I_cont_A_rms"] == 52.3
+    assert point["temperatures_c"]["magnet"] == 150.8
+    assert "record_is_s1" not in block
+
+    # A pass that misses its limit leaves the estimate standing, as evidence.
+    def fake_miss(body, **kw):
+        return {"verified": False, "passes": 2, "miss_K": 9.0,
+                "I_cont_A_rms": 50.0, "actual_c": 159.0, "em": {}, "field": {},
+                "note": "still 9.0 K over its limit after 2 verification passes"}
+
+    monkeypatch.setattr(cp, "_s1_verify", fake_miss)
+    miss = {"feasible": True, "rpm": 3120.0, "I_cont_A_rms": 54.0,
+            "limiting_part": "magnet", "temperatures_c": {"magnet": 149.6}}
+    cp._cp_verify_continuous_point({}, block, miss, cooling={}, inverter=None,
+                                   controller=None, t_coil=200.0, t_mag=None)
+    assert miss["verified"] is False and miss["I_cont_A_rms"] == 54.0
+    assert miss["verification_trial"]["actual_c"] == 159.0
+
+    # A PWM drive is never re-run at another speed: the estimate stands.
+    pwm = dict(point, verified=None)
+    cp._cp_verify_continuous_point({}, block, pwm, cooling={},
+                                   inverter={"target_I_phase_rms_A": 80.0},
+                                   controller=None, t_coil=200.0, t_mag=None)
+    assert pwm["verified"] is None and pwm["verification_status"] == "not_tried"

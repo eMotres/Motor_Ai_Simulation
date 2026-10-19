@@ -590,3 +590,120 @@ def test_the_time_to_limit_record_carries_all_four_calibration_means(caps):
     assert set(got["map_means_c"]) == set(NODES)
     assert got["map_means_c"]["winding"] == pytest.approx(
         float(m["components"]["winding"]["avg"]), abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# (f) the eddy law and the speed search (owner case 2026-10-19, CIANO28
+#     150_35 new / L35: "S1: NOT A RATING" under a propeller that holds it)
+# ---------------------------------------------------------------------------
+
+def _eddy_loss(p_cu: float, p_mag: float, p_iron_eddy: float = 0.0,
+               coil_ref_c: float = 20.0) -> Dict[str, Any]:
+    """A loss split whose iron is ALL Bertotti eddy (∝ r²) on the stator."""
+    return {"winding": float(p_cu), "stator": float(p_iron_eddy),
+            "rotor": 0.0, "magnet": float(p_mag), "coil_ref_c": coil_ref_c,
+            "rpm": 4000.0, "notes": [],
+            "split": {"stator_core": {"hysteresis_W": 0.0,
+                                      "eddy_W": float(p_iron_eddy),
+                                      "excess_W": 0.0},
+                      "rotor_core": {}, "rotor_solid_W": 0.0},
+            "total_W": p_cu + p_mag + p_iron_eddy}
+
+
+def test_the_magnet_eddy_loss_goes_with_the_current_over_a_no_load_share():
+    loss = _eddy_loss(100.0, p_mag=40.0)
+    f0 = ccr.EDDY_NOLOAD_FRACTION
+    assert ccr._segment_at(loss, 100.0, 0.0, "t").losses["magnet"] \
+        == pytest.approx(40.0 * f0)
+    assert ccr._segment_at(loss, 100.0, 1.0, "t").losses["magnet"] \
+        == pytest.approx(40.0)
+    assert ccr._segment_at(loss, 100.0, 2.0, "t").losses["magnet"] \
+        == pytest.approx(40.0 * (f0 + (1 - f0) * 4.0))
+
+
+def test_held_eddy_no_longer_condemns_a_machine_at_zero_current(monkeypatch):
+    """100 W of MAGNET eddy on a 1 W/K lump: held at every current it sat at
+    125 °C at s → 0 and the 60 °C limit made it unrateable.  With the law it
+    is 25 W at s → 0, and s* is the closed form of
+    25 + s²·P_cu + 100·(f0 + (1 − f0)s²) = 60."""
+    monkeypatch.setattr(dc, "cu_rho_ratio", lambda *a, **k: 1.0)
+    net = _one_node_network(1.0, 25.0)
+    caps = {n: 50.0 for n in NODES}
+    f0 = ccr.EDDY_NOLOAD_FRACTION
+    got = ccr._search_scale(_eddy_loss(100.0, p_mag=100.0), 100.0, net, caps,
+                            [_limit("magnet", "magnet", 60.0)], "t",
+                            tol_k=0.01)
+    assert got["feasible"] is True
+    exact = math.sqrt((60.0 - 25.0 - 100.0 * f0) / (100.0 + 100.0 * (1 - f0)))
+    assert got["s"] == pytest.approx(exact, rel=2e-3)
+
+
+def test_the_speed_search_finds_where_the_load_line_meets_the_limit(
+        monkeypatch):
+    """One 1 W/K lump, 100 W of iron eddy (∝ r²), 100 W of copper at s = 1
+    and a propeller load line s = r²: 25 + 100 r² + 100 r⁴ = 60 at the
+    answer, so r² = (−1 + √2.4)/2."""
+    monkeypatch.setattr(dc, "cu_rho_ratio", lambda *a, **k: 1.0)
+    net = _one_node_network(1.0, 25.0)
+    caps = {n: 50.0 for n in NODES}
+    loss = _eddy_loss(100.0, p_mag=0.0, p_iron_eddy=100.0)
+    lim = [_limit("winding", "winding", 60.0)]
+    # At the duty's own speed the iron alone is 125 °C: no rating.
+    assert ccr._search_scale(loss, 100.0, net, caps, lim, "t")["feasible"] \
+        is False
+    got = ccr._search_speed(loss, 100.0, net, caps, lim, "t", rpm_ref=4000.0,
+                            factors_at=lambda r: {"housing": 1.0, "gap": 1.0},
+                            load_s_at=lambda n: (n / 4000.0) ** 2,
+                            tol_k=0.01)
+    r2 = (-1.0 + math.sqrt(2.4)) / 2.0
+    assert got["feasible"] is True and got["basis"] == "load_line"
+    assert got["r"] == pytest.approx(math.sqrt(r2), abs=3e-3)
+    assert got["rpm"] == pytest.approx(4000.0 * math.sqrt(r2), abs=12.0)
+    assert got["s"] == pytest.approx(r2, rel=2e-2)
+
+
+def test_without_a_load_line_the_speed_search_takes_the_most_power(
+        monkeypatch):
+    """No load line: the answer maximises s*(n)·n, and it holds."""
+    monkeypatch.setattr(dc, "cu_rho_ratio", lambda *a, **k: 1.0)
+    net = _one_node_network(1.0, 25.0)
+    caps = {n: 50.0 for n in NODES}
+    loss = _eddy_loss(100.0, p_mag=0.0, p_iron_eddy=100.0)
+    got = ccr._search_speed(loss, 100.0, net, caps,
+                            [_limit("winding", "winding", 60.0)], "t",
+                            rpm_ref=4000.0,
+                            factors_at=lambda r: {"housing": 1.0, "gap": 1.0})
+    # s*(r)² = (35 − 100 r²)/100, power ∝ r·s* → max at r² = 35/200.
+    assert got["feasible"] is True and got["basis"] == "max_power"
+    assert got["r"] == pytest.approx(math.sqrt(35.0 / 200.0), abs=0.02)
+
+
+def test_the_infeasible_headline_names_the_speed_that_holds():
+    block = {"feasible": False, "limiting_part": "magnet",
+             "reference": {"rpm": 4000.0},
+             "continuous_point": {"feasible": True, "rpm": 3120.4,
+                                  "I_cont_A_rms": 54.07, "verified": True,
+                                  "power": {"P_shaft_W": 7912.0}}}
+    assert ccr.headline(block) == ("S1 at 4000 rpm: none (magnet); "
+                                   "continuous: 3120 rpm, 54.1 A rms, 7.9 kW "
+                                   "(FEM-verified)")
+    block["continuous_point"]["verified"] = None
+    assert ccr.headline(block).endswith("(network estimate)")
+    # …and with no point at all, the old refusal sentence stands.
+    assert ccr.headline({"feasible": False, "note": "x"}) == "x"
+
+
+def test_a_propeller_film_follows_the_slipstream_and_a_typed_one_does_not():
+    m = {"rpm": 4000.0,
+         "cooling": {"outer": {"air_speed_mps": 12.1},
+                     "gap": {"delta_mm": 0.5, "r_mean_mm": 56.55,
+                             "T_gap_c": 100.0}}}
+    prop = {"cooling_mode": "air", "air_speed_source": "propeller",
+            "propeller_id": "x", "ambient_temp": 40.0}
+    typed = {"cooling_mode": "air", "air_speed_mps": 12.1,
+             "ambient_temp": 40.0}
+    f_p = ccr.speed_factors(m, prop, 0.75, d_housing_m=0.15)
+    f_t = ccr.speed_factors(m, typed, 0.75, d_housing_m=0.15)
+    assert 0.6 < f_p["housing"] < 1.0
+    assert f_t["housing"] == 1.0
+    assert f_p["gap"] <= 1.0 + 1e-9 and f_t["gap"] == f_p["gap"]

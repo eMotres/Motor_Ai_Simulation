@@ -6277,6 +6277,28 @@ def _run(body: Dict[str, Any],
                                     "power below are the S1 machine the "
                                     "continuous rating verified, not this "
                                     "crossing.")
+            # ── NO RATING AT THIS SPEED → THE SPEED THAT HOLDS (2026-10-19) ──
+            # Owner: *«whatever cooling is set, when I run coupling it must
+            # only ever end with a positive result»*.  `rate` already found the
+            # highest speed that holds continuously (`continuous_point`, a
+            # network estimate); confirm it with ONE real EM + thermal pass at
+            # that speed and current, exactly as the S1 point above is
+            # confirmed.  The record is NOT moved to it: it is another speed,
+            # and the Operating point panel only follows a current
+            # (`s1AutoSetPlan`) — the duty's own tiles stay the duty's, and the
+            # point rides the S1 block with its own verified numbers.
+            _cp = (continuous_rating.get("continuous_point")
+                   if isinstance(continuous_rating, dict) else None)
+            if (continuous_rating and continuous_rating.get("ok")
+                    and continuous_rating.get("feasible") is False
+                    and isinstance(_cp, dict) and _cp.get("feasible")
+                    and _cp.get("limiting_part")
+                    and _ccr._num(_cp.get("rpm"))
+                    and _ccr._num(_cp.get("I_cont_A_rms"))):
+                _cp_verify_continuous_point(
+                    body, continuous_rating, _cp, cooling=cooling,
+                    inverter=inverter, controller=ctl, t_coil=t_coil,
+                    t_mag=t_mag)
             if continuous_rating:
                 # The first headline is the network estimate.  Rebuild it
                 # after verification so a failed or missing pass cannot leave
@@ -7363,6 +7385,103 @@ def _setpoint_only_limited_line(i_duty: Optional[float],
                else "its limit"))
 
 
+def _cp_verify_continuous_point(body: Dict[str, Any],
+                                block: Dict[str, Any], cp: Dict[str, Any], *,
+                                cooling: Dict[str, Any],
+                                inverter: Optional[Dict[str, Any]],
+                                controller: Optional["_ControllerLoop"],
+                                t_coil: float, t_mag: Optional[float]) -> None:
+    """Confirm ``block["continuous_point"]`` (``cp``, edited in place) with a
+    real EM + thermal pass at its own speed and current (:func:`_s1_verify`).
+
+    ``cp["verified"]``: ``True`` when the pass lands within 3 K of the
+    limiting part's card, ``False`` when it does not or cannot be solved,
+    ``None`` when no pass was tried (a PWM drive: its voltage is regulated
+    for the duty's speed, and a pass at another speed would be fed the wrong
+    fundamental).  The controller is always put back — this point never
+    becomes the record's machine.  Never raises.
+    """
+    part = str(cp["limiting_part"])
+    lim_c = _ccr._num((block.get("limits_c") or {}).get(part))
+    rpm_cp = float(cp["rpm"])
+    i_est = float(cp["I_cont_A_rms"])
+    cp["I_estimated_A_rms"] = round(i_est, 3)
+    if inverter is not None:
+        cp["verified"] = None
+        cp["verification_status"] = "not_tried"
+        cp["note"] = ("network estimate: the PWM drive is regulated for the "
+                      "duty's own speed, so no electromagnetic pass was made "
+                      "at %.0f rpm" % rpm_cp)
+        return
+    if lim_c is None:
+        cp["verified"] = False
+        cp["verification_status"] = "unavailable"
+        cp["note"] = "no card limit for %r, so the point is not verified" % part
+        return
+    temps = cp.get("temperatures_c") or {}
+    coil_guess = round(float(temps.get("winding") or t_coil), 1)
+    mag_guess = temps.get("magnet", t_mag)
+    mag_guess = None if mag_guess is None else round(float(mag_guess), 1)
+    ctl_before = controller.state() if controller is not None else None
+    try:
+        v = _s1_verify(dict(body, rpm=rpm_cp), cooling=cooling, rpm=rpm_cp,
+                       inverter=None, i_estimate=i_est,
+                       coil_temp_c_guess=coil_guess,
+                       magnet_temp_c_guess=mag_guess, limiting_part=part,
+                       limit_c=float(lim_c), controller=controller)
+    except Exception as exc:  # noqa: BLE001 — never fails the loop
+        log.debug("coupled: continuous point verification failed",
+                  exc_info=True)
+        v = None
+        cp["verified"] = False
+        cp["verification_status"] = "failed"
+        cp["note"] = ("the verification pass at %.0f rpm could not be solved "
+                      "(%s) — the point is the network's estimate"
+                      % (rpm_cp, _detail_text(exc) if isinstance(
+                          exc, HTTPException) else exc))
+    finally:
+        if controller is not None:
+            controller.restore(ctl_before)
+    if not v:
+        return
+    summ = (v.get("em") or {}).get("summary") or {}
+    cp["verified"] = v.get("verified") is True
+    cp["verification_status"] = "passed" if cp["verified"] else "failed"
+    cp["verification_passes"] = v.get("passes")
+    cp["miss_K"] = v.get("miss_K")
+    if v.get("note"):
+        cp["note"] = v["note"]
+    if not cp["verified"]:
+        # Evidence, not the answer — the same rule the S1 point follows: a
+        # pass that misses its limit leaves the estimate standing.
+        cp["verification_trial"] = {
+            "limiting_part": part, "limit_c": float(lim_c),
+            "actual_c": v.get("actual_c"), "miss_K": v.get("miss_K"),
+            "I_phase_rms_A": v.get("I_cont_A_rms"), "rpm": rpm_cp}
+        return
+    if v.get("I_cont_A_rms") is not None:
+        cp["I_cont_A_rms"] = v["I_cont_A_rms"]
+        cp["I_cont_A_peak"] = round(float(v["I_cont_A_rms"]) * math.sqrt(2.0), 3)
+    if v.get("actual_c") is not None:
+        cp["temperatures_c"] = dict(temps)
+        cp["temperatures_c"][part] = round(float(v["actual_c"]), 2)
+    from motor_ai_sim.report import shaft_view
+    t_v, _t_note = _shaft_torque_nm(summ)
+    x_v = _ccr._num(summ.get("P_mech_extra_W"))
+    brg_v = ({"has_bearings": True, "P_mech_extra_W": x_v}
+             if x_v is not None else None)
+    sv = shaft_view(summ, brg_v, str(body.get("mode") or "motor"))
+    cp["power"] = {
+        "T_em_Nm": t_v, "P_mech_W": sv.get("P_mech_W"),
+        "P_shaft_W": sv.get("P_shaft_W"), "eta_shaft": sv.get("eta_shaft"),
+        "basis": ("real electromagnetic pass at %.0f rpm and the verified "
+                  "current — report.shaft_view, not the linear estimate"
+                  % rpm_cp)}
+    cp["losses_W"] = {k: summ.get(k) for k in (
+        "P_loss_total_W", "P_core_W", "P_solid_W", "P_stranded_W")
+        if summ.get(k) is not None}
+
+
 def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                inverter: Optional[Dict[str, Any]], i_estimate: float,
                coil_temp_c_guess: float, magnet_temp_c_guess: Optional[float],
@@ -7549,6 +7668,63 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     return last
 
 
+def _cr_speed_search_opts(cooling: Mapping[str, Any], summary: Mapping[str, Any],
+                          rpm: float) -> Dict[str, Any]:
+    """What the S1 speed search needs to know about THIS duty's load and air
+    (owner 2026-10-19: *«when I run coupling it must only ever end with a
+    positive result»*).
+
+    A PROPELLER-cooled machine drives that propeller: its load line is the
+    propeller's own torque curve (``propeller.torque_Nm`` at the ambient air's
+    density) as a multiple of the reference run's torque — the 2-D torque
+    times the 3-D end-effect factor, linear in current — and its housing air
+    is the propeller's slipstream at the new speed, by the SAME function the
+    thermal router uses (``routes.thermal._apply_air_speed_source``).  Any
+    other cooling has no load line here, and the search answers the speed of
+    the most shaft power instead.  Never raises: a propeller the catalogue
+    cannot compute simply leaves the search on its default laws.
+    """
+    c = dict(cooling or {})
+    opts: Dict[str, Any] = {"r_min": 0.1}
+    if str(c.get("air_speed_source") or "").strip().lower() != "propeller":
+        return opts
+    pid = str(c.get("propeller_id") or "").strip()
+    amb = _ccr._num(c.get("ambient_temp"))
+    amb = 25.0 if amb is None else float(amb)
+    try:
+        from motor_ai_sim import propeller as _pp
+        from motor_ai_sim.routes.thermal import _apply_air_speed_source
+        prop = _pp.get_propeller(pid)
+        rho = _pp.air_density(amb)
+    except Exception:  # noqa: BLE001 — the default laws still answer
+        log.debug("coupled: no propeller load line for %r", pid, exc_info=True)
+        return opts
+    t_ref = _ccr._num((summary or {}).get("T_em_avg_Nm"))
+    k3d = _ccr._num(((summary or {}).get("end3d") or {}).get("k_flux")) or 1.0
+    if t_ref and abs(t_ref) > 0.0:
+        def load_s_at(n: float) -> Optional[float]:
+            try:
+                q = float(_pp.torque_Nm(prop, float(n), rho=rho))
+            except Exception:  # noqa: BLE001
+                return None
+            return q / (abs(float(t_ref)) * float(k3d))
+        opts["load_s_at"] = load_s_at
+        opts["load_line"] = ("propeller %s torque curve at %.0f °C air "
+                             "(torque linear in current, 3-D factor %.3f)"
+                             % (pid, amb, k3d))
+
+    def air_speed_at_ratio(r: float) -> Optional[float]:
+        try:
+            return _apply_air_speed_source(
+                "propeller", pid, str(c.get("propeller_position") or ""),
+                rpm=float(rpm) * float(r), ambient_temp=amb,
+                cooling_mode="air", air_speed_mps=0.0)[0]
+        except Exception:  # noqa: BLE001
+            return None
+    opts["air_speed_at_ratio"] = air_speed_at_ratio
+    return opts
+
+
 def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any],
                                 rpm: float, coil_temp_c: float,
                                 magnet_temp_c: Optional[float], duty: str,
@@ -7662,7 +7838,8 @@ def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any]
             thermal_result=field0, em_summary=summary, caps=caps,
             geometry=geom, cooling=cooling, side_areas=side0,
             d_housing_m=d_housing_m, duty=duty, mode=mode,
-            resolve=_resolve, refit=_refit, magnet_grade=mats.get("magnet"))
+            resolve=_resolve, refit=_refit, magnet_grade=mats.get("magnet"),
+            speed_search=_cr_speed_search_opts(cooling, summary, float(rpm)))
     except _cdc.DutyCycleError as exc:
         return {"ok": False, "cooling": dict(cooling or {}),
                 "cooling_label": _cooling_label(cooling),

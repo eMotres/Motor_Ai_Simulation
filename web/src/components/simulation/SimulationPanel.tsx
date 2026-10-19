@@ -2847,8 +2847,10 @@ const SimulationPanel: React.FC<{ active?: boolean }> = ({ active = false }) => 
                       + 'Continuous rating (S1): does the same, then finds the '
                       + "largest current the machine holds for ever at this "
                       + "duty's saved cooling; torque scaled linearly with "
-                      + 'current, iron and magnet losses held at the solved '
-                      + 'point.'} />
+                      + 'current, iron held at the solved point, magnet eddy '
+                      + 'growing with current squared; with no rating at this '
+                      + 'speed, the highest speed that holds is found and '
+                      + 'checked with one more EM pass.'} />
                   </InputAdornment>
                 }
               >

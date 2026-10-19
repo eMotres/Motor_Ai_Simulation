@@ -336,21 +336,252 @@ COPPER_LAW = ("copper ∝ s²·ρ_Cu(T_w)/ρ_Cu(coil_ref): the DC and the solved
               "number), so the proximity share's own 1/ρ dependence is not "
               "separated here")
 
+#: The share of the reference run's MAGNET and SHAFT eddy loss that is left
+#: with NO current (the slotting harmonics of the magnets' own field).  The
+#: rest is armature reaction and goes as the current squared.  Measured on the
+#: CIANO28 L13 passport grid (the same 24-slot / 28-pole family, the same
+#: solver): rotor eddy 30.6 W at 25.9 A and 81.4 W at 46.0 A at 4000 rpm fit
+#: P = 7.1 W + 0.035·I² — a no-load share of 9 % at 46 A; 1.7 W at 6.5 A
+#: against 7.0 W at 38.8 A at 2000 rpm — about 20 %.  A quarter is the
+#: CONSERVATIVE end of that and is stated wherever it is used.  Holding the
+#: whole eddy loss at every current (the law before 2026-10-19) put 58.6 W of
+#: rotor heat into the "s → 0" machine of CIANO28 150_35 new / L35 and called
+#: a propeller-cooled motor unrateable; every S1 estimate is confirmed by a
+#: real electromagnetic pass anyway, which carries the true eddy loss.
+EDDY_NOLOAD_FRACTION = 0.25
+
 #: …and what everything else does.
-HELD_LAW = ("iron, magnet-eddy and mechanical watts are HELD at the reference "
-            "run's values: at a fixed speed they move with the field and only "
-            "weakly with the current, and Br(T) is not fed back")
+HELD_LAW = ("iron and mechanical watts are HELD at the reference run's values "
+            "(at a fixed speed they move with the field and only weakly with "
+            "the current); the magnet and shaft EDDY watts go as "
+            "f0 + (1 − f0)·s² with f0 = %.2f — they are driven by the "
+            "armature field's harmonics, not by the magnets; Br(T) is not fed "
+            "back" % EDDY_NOLOAD_FRACTION)
+
+
+def eddy_factor(s: float, f0: float = EDDY_NOLOAD_FRACTION) -> float:
+    """The magnet / shaft eddy loss at current scale ``s``, per reference watt."""
+    f0 = min(max(float(f0), 0.0), 1.0)
+    return f0 + (1.0 - f0) * float(s) * float(s)
+
+
+def _held_watts(loss: Mapping[str, Any], s: float) -> Dict[str, float]:
+    """The NON-copper node watts at current scale ``s``: the magnets and the
+    rotor's solid (shaft) share by :func:`eddy_factor`, everything else held."""
+    watts = tdc.node_watts(loss)
+    k = eddy_factor(s)
+    solid_r = float((loss.get("split") or {}).get("rotor_solid_W") or 0.0)
+    solid_r = min(max(solid_r, 0.0), watts["rotor"])
+    watts["magnet"] = watts["magnet"] * k
+    watts["rotor"] = watts["rotor"] - solid_r + solid_r * k
+    watts.pop("winding", None)
+    return watts
 
 
 def _segment_at(loss: Mapping[str, Any], p_cu_ref_w: float, s: float,
                 duty: str) -> tdc.Segment:
     """The reference point at current scale ``s``, as ONE powered segment."""
-    watts = tdc.node_watts(loss)
+    watts = _held_watts(loss, s)
     watts["winding"] = float(p_cu_ref_w) * float(s) * float(s)
     return tdc.Segment(str(duty or "continuous"), t_s=1.0, losses=watts,
                        coil_ref_c=float(loss["coil_ref_c"]),
                        rpm=float(loss.get("rpm") or 0.0),
                        note="; ".join(loss.get("notes") or ()))
+
+
+# ---------------------------------------------------------------------------
+# The machine at another SPEED (owner 2026-10-19: a coupled run must end with
+# an answer, so when no current holds at the duty's speed the rating looks for
+# the speed that does)
+# ---------------------------------------------------------------------------
+
+#: The speed law, in words — printed beside every speed-search answer.
+SPEED_LAW = ("at speed ratio r = n/n_ref: iron by its own Bertotti terms "
+             "(hysteresis ∝ r, eddy ∝ r², excess ∝ r^1.5; a summary with no "
+             "split ∝ r^1.5), magnet and shaft eddy ∝ r² (resistance-limited "
+             "at these frequencies), mechanical and copper held (the copper's "
+             "AC share falls with speed, so holding it is conservative); a "
+             "propeller's housing film follows its slipstream speed and the "
+             "air gap its Taylor number")
+
+
+def losses_at_speed(loss: Mapping[str, Any], r: float) -> Dict[str, Any]:
+    """``losses_by_node`` output moved to speed ratio ``r`` at a FIXED current."""
+    r = max(float(r), 1e-6)
+    out = dict(loss)
+    split = dict(loss.get("split") or {})
+
+    def _bertotti(blk: Mapping[str, Any]) -> Tuple[float, float]:
+        b = dict(blk or {})
+        lumped = float(b.get("lumped_W") or 0.0)
+        h, e, x = (float(b.get(k) or 0.0)
+                   for k in ("hysteresis_W", "eddy_W", "excess_W"))
+        now = h + e + x + lumped
+        new = h * r + e * r * r + x * r ** 1.5 + lumped * r ** 1.5
+        return now, new
+
+    s_now, s_new = _bertotti(split.get("stator_core") or {})
+    r_now, r_new = _bertotti(split.get("rotor_core") or {})
+    solid = float(split.get("rotor_solid_W") or 0.0)
+    out["stator"] = max(float(loss.get("stator") or 0.0) - s_now + s_new, 0.0)
+    out["rotor"] = max(float(loss.get("rotor") or 0.0) - r_now + r_new
+                       - solid + solid * r * r, 0.0)
+    out["magnet"] = float(loss.get("magnet") or 0.0) * r * r
+    split["rotor_solid_W"] = solid * r * r
+    out["split"] = split
+    out["rpm"] = float(loss.get("rpm") or 0.0) * r
+    out["total_W"] = round(sum(float(out.get(n) or 0.0) for n in NODES), 4)
+    return out
+
+
+def network_at_speed(net: tdc.Network, *, housing_factor: float = 1.0,
+                     gap_factor: float = 1.0) -> tdc.Network:
+    """``net`` with its FORCED housing film and its gap conductance scaled."""
+    g = dict(net.G)
+    if "r_s" in g:
+        g["r_s"] = float(g["r_s"]) * float(gap_factor)
+    g_fit = dict(net.G_fit)
+    for key, kind in (net.film_kind or {}).items():
+        if kind == "forced" and key in g_fit:
+            g_fit[key] = float(g_fit[key]) * float(housing_factor)
+    hg = net.housing_G_fixed
+    if hg is not None and (net.film_kind or {}).get("housing") == "forced":
+        hg = float(hg) * float(housing_factor)
+    return replace(net, G=g, G_fit=g_fit, housing_G_fixed=hg)
+
+
+def speed_factors(thermal_result: Mapping[str, Any], cooling: Mapping[str, Any],
+                  r: float, *, d_housing_m: Optional[float] = None,
+                  air_speed_at_ratio: Optional[Callable[[float],
+                                                        Optional[float]]] = None
+                  ) -> Dict[str, float]:
+    """``{housing, gap}`` — how the two speed-dependent films move at ratio r.
+
+    The HOUSING film moves only when the air over it comes from the machine's
+    own propeller (a typed air speed, a jacket and still air do not care how
+    fast the rotor turns): its slipstream at the new speed, from
+    ``air_speed_at_ratio(r)`` when the caller can compute it, else ∝ r (the
+    wake of a propeller at a constant thrust coefficient).  The GAP follows
+    ``cooling_models.taylor_couette_gap`` at the map's own radii.
+    """
+    from motor_ai_sim.simulation import cooling_models as cm
+
+    res = dict(thermal_result or {})
+    cl = dict(res.get("cooling") or {})
+    outer = dict(cl.get("outer") or {})
+    amb = _num((cooling or {}).get("ambient_temp")) or 25.0
+    house = 1.0
+    if str((cooling or {}).get("air_speed_source") or "").lower() == "propeller":
+        v_ref = _num(outer.get("air_speed_mps"))
+        v_new = air_speed_at_ratio(r) if air_speed_at_ratio else None
+        if v_ref and v_ref > 0.0:
+            v_new = v_ref * r if v_new is None else float(v_new)
+            d_h = float(d_housing_m or 0.0) or 0.1
+            h0 = cm.outer_air(air_speed_mps=v_ref, t_ambient_c=amb,
+                              d_housing_m=d_h)["h_conv"]
+            h1 = cm.outer_air(air_speed_mps=max(v_new, 0.0), t_ambient_c=amb,
+                              d_housing_m=d_h)["h_conv"]
+            house = float(h1) / float(h0) if h0 else 1.0
+    gap = 1.0
+    gb = dict(cl.get("gap") or {})
+    rpm_ref = _num(res.get("rpm"))
+    d_mm, rm_mm = _num(gb.get("delta_mm")), _num(gb.get("r_mean_mm"))
+    if rpm_ref and d_mm and rm_mm:
+        t_gap = _num(gb.get("T_gap_c")) or 100.0
+        ri, ro = (rm_mm - 0.5 * d_mm) * 1e-3, (rm_mm + 0.5 * d_mm) * 1e-3
+        k0 = cm.taylor_couette_gap(rpm=rpm_ref, r_rotor_m=ri, r_bore_m=ro,
+                                   t_gap_c=t_gap)["k_eff"]
+        k1 = cm.taylor_couette_gap(rpm=rpm_ref * r, r_rotor_m=ri, r_bore_m=ro,
+                                   t_gap_c=t_gap)["k_eff"]
+        gap = float(k1) / float(k0) if k0 else 1.0
+    return {"housing": house, "gap": gap}
+
+
+def _search_speed(loss: Mapping[str, Any], p_cu_ref_w: float,
+                  network: tdc.Network, caps: Mapping[str, Any],
+                  limits: Sequence[_ttl.PartLimit], duty: str, *,
+                  rpm_ref: float,
+                  factors_at: Callable[[float], Mapping[str, float]],
+                  load_s_at: Optional[Callable[[float], Optional[float]]] = None,
+                  r_min: float = 0.1, tol_k: float = TOL_K,
+                  max_iter: int = 30) -> Dict[str, Any]:
+    """The highest speed at which this machine holds continuously.
+
+    ``load_s_at(rpm)`` is the duty's LOAD LINE as a current scale — for a
+    propeller its own torque curve divided by the reference torque.  With one,
+    the answer is where the load line meets the S1 line (``s*(n)`` falls with
+    speed — more iron, more eddy — and a propeller's demand rises, so the two
+    cross once); without one it is the speed of the most shaft power,
+    ``max s*(n)·n``.  Either way ``s*(n)`` is :func:`_search_scale` on the
+    loss split and the network moved to that speed.
+    """
+    cache: Dict[float, Dict[str, Any]] = {}
+
+    def at(r: float) -> Dict[str, Any]:
+        key = round(float(r), 6)
+        if key not in cache:
+            f = dict(factors_at(key) or {})
+            net = network_at_speed(network, housing_factor=f.get("housing", 1.0),
+                                   gap_factor=f.get("gap", 1.0))
+            ls = losses_at_speed(loss, key)
+            res = _search_scale(ls, p_cu_ref_w, net, caps, limits, duty,
+                                tol_k=tol_k)
+            res["r"], res["loss"], res["factors"] = key, ls, f
+            cache[key] = res
+        return cache[key]
+
+    def s_star(r: float) -> Optional[float]:
+        res = at(r)
+        return _num(res.get("s")) if res.get("feasible") else None
+
+    best: Optional[Dict[str, Any]] = None
+    if load_s_at is not None:
+        def gap_to_load(r: float) -> float:
+            s = s_star(r)
+            need = load_s_at(rpm_ref * r)
+            if s is None:
+                return -1.0
+            return float(s) - float(need or 0.0)
+
+        lo, hi = float(r_min), 1.0
+        if gap_to_load(lo) < 0.0:
+            return {"feasible": False, "n_points": len(cache),
+                    "note": ("no current holds continuously even at %.0f rpm "
+                             "on this load line" % (rpm_ref * lo))}
+        for _ in range(int(max_iter)):
+            mid = 0.5 * (lo + hi)
+            if gap_to_load(mid) >= 0.0:
+                lo = mid
+            else:
+                hi = mid
+            if hi - lo <= 2e-3:
+                break
+        best = at(lo)
+        basis = "load_line"
+    else:
+        grid = [r_min + (1.0 - r_min) * i / 18.0 for i in range(19)]
+        scored = [(float(s_star(r) or 0.0) * r, r) for r in grid]
+        p_best, r_best = max(scored)
+        if p_best <= 0.0:
+            return {"feasible": False, "n_points": len(cache),
+                    "note": ("no current holds continuously at any speed "
+                             "down to %.0f rpm" % (rpm_ref * r_min))}
+        step = (1.0 - r_min) / 18.0
+        a, b = max(r_min, r_best - step), min(1.0, r_best + step)
+        for _ in range(20):
+            m1, m2 = a + (b - a) / 3.0, b - (b - a) / 3.0
+            if float(s_star(m1) or 0.0) * m1 < float(s_star(m2) or 0.0) * m2:
+                a = m1
+            else:
+                b = m2
+        best = at(0.5 * (a + b))
+        basis = "max_power"
+    return {"feasible": bool(best.get("feasible")), "r": best["r"],
+            "rpm": rpm_ref * best["r"], "s": best.get("s"),
+            "limiting_part": best.get("limiting_part"),
+            "state_c": best.get("state_c"), "parts": best.get("parts"),
+            "loss": best["loss"], "factors": best["factors"],
+            "basis": basis, "n_points": len(cache)}
 
 
 def _judge(state: Mapping[str, float], limits: Sequence[_ttl.PartLimit],
@@ -420,8 +651,8 @@ def _search_scale(loss: Mapping[str, Any], p_cu_ref_w: float,
         # 2026-10-19): "88 K over at zero current" read as a bug beside a
         # magnet at 112 °C at the 6-minute limit, because the sentence named
         # neither how much heat is left at s → 0 nor what it settles at.
-        w = tdc.node_watts(loss)
-        p_held = sum(w[n] for n in NODES if n != "winding")
+        w = _held_watts(loss, s_min)
+        p_held = sum(w.values())
         row = next(r for r in lo_rows if r["part"] == part)
         return {"feasible": False, "s": None, "n_evaluations": n_eval,
                 "limiting_part": part, "state_c": lo_state, "parts": lo_rows,
@@ -496,8 +727,7 @@ def _power_block(ref: Mapping[str, Any], loss: Mapping[str, Any],
     coil_ref = float(loss["coil_ref_c"])
     r = (tdc.cu_rho_ratio(float(t_w_c)) / tdc.cu_rho_ratio(coil_ref))
     p_cu = float(p_cu_ref_w) * float(s) * float(s) * r
-    p_other = float(sum(float(loss.get(n, 0.0) or 0.0)
-                        for n in NODES if n != "winding"))
+    p_other = float(sum(_held_watts(loss, s).values()))
     p_loss_em = p_cu + p_other
     out: Dict[str, Any] = {
         "T_em_Nm": (None if t_ref is None else float(t_ref) * float(s)),
@@ -565,9 +795,17 @@ def rate(*, thermal_result: Mapping[str, Any],
          rel_tol: float = REL_TOL,
          tol_k: float = TOL_K,
          s_max: float = S_MAX,
+         speed_search: Optional[Mapping[str, Any]] = None,
          **limit_kw: Any) -> Dict[str, Any]:
     """The continuous rating of this machine under the cooling ``thermal_result``
     was solved with.
+
+    ``speed_search`` (2026-10-19, owner: *a coupled run must end with a
+    positive result*) — when no current holds at the reference speed, look for
+    the highest speed that does (:func:`_search_speed`) and return it as
+    ``continuous_point``.  ``{"load_s_at": rpm -> s or None,
+    "air_speed_at_ratio": r -> m/s or None, "r_min": 0.1}``; every key is
+    optional.  ``None`` (the default) keeps the old answer exactly.
 
     ``thermal_result`` is the REFERENCE map: the 2-D steady map of the reference
     electromagnetic run's loss field under this condition.  ``resolve(factor)``
@@ -754,6 +992,12 @@ def rate(*, thermal_result: Mapping[str, Any],
         })
         out["network"] = _ttl._fit_residual(
             _ttl._segment(em_summary, cur_map, duty), net, caps, cur_map)
+        if speed_search is not None:
+            out["continuous_point"] = _continuous_point(
+                ref=ref, loss=loss, p_cu_ref_w=p_cu_ref_w, net=net, caps=caps,
+                limits=judged, duty=duty, mode=mode, cur_map=cur_map,
+                cooling=cooling or {}, d_housing_m=cur_dh, tol_k=tol_k,
+                opts=speed_search)
         return out
 
     s_star = float(search["s"])
@@ -775,8 +1019,8 @@ def rate(*, thermal_result: Mapping[str, Any],
                    for k2, v in r.items()} for r in search["parts"]],
         "node_means_c": {n: round(float(state[net.rep(n)]), 2) for n in NODES},
         "losses_W": {"winding": round(float(power["P_cu_W"]), 3),
-                     **{n: round(float(loss.get(n, 0.0) or 0.0), 3)
-                        for n in NODES if n != "winding"}},
+                     **{n: round(float(w), 3)
+                        for n, w in _held_watts(loss, s_star).items()}},
         "power": {k2: (round(v, 4) if isinstance(v, float) else v)
                   for k2, v in power.items()},
         # HOW WELL the network reproduces the map it was fitted to, measured on
@@ -805,12 +1049,96 @@ def rate(*, thermal_result: Mapping[str, Any],
     return out
 
 
+def _continuous_point(*, ref: Mapping[str, Any], loss: Mapping[str, Any],
+                      p_cu_ref_w: float, net: tdc.Network,
+                      caps: Mapping[str, Any],
+                      limits: Sequence[_ttl.PartLimit], duty: str, mode: str,
+                      cur_map: Mapping[str, Any], cooling: Mapping[str, Any],
+                      d_housing_m: Optional[float], tol_k: float,
+                      opts: Mapping[str, Any]) -> Dict[str, Any]:
+    """The ``continuous_point`` block: the highest speed that holds, with its
+    current, torque and power — a NETWORK ESTIMATE until the caller confirms
+    it with a real electromagnetic pass (``verified``)."""
+    rpm_ref = _num(ref.get("rpm")) or _num(loss.get("rpm"))
+    if not rpm_ref or rpm_ref <= 0.0:
+        return {"feasible": False, "note": "the reference run states no speed"}
+    air_at = opts.get("air_speed_at_ratio")
+
+    def factors_at(r: float) -> Dict[str, float]:
+        return speed_factors(cur_map, cooling, r, d_housing_m=d_housing_m,
+                             air_speed_at_ratio=air_at)
+
+    res = _search_speed(loss, p_cu_ref_w, net, caps, limits, duty,
+                        rpm_ref=float(rpm_ref), factors_at=factors_at,
+                        load_s_at=opts.get("load_s_at"),
+                        r_min=float(opts.get("r_min") or 0.1), tol_k=tol_k)
+    if not res.get("feasible") or _num(res.get("s")) is None:
+        return {"feasible": False, "note": res.get("note")
+                or "no speed holds continuously under this cooling",
+                "speed_law": SPEED_LAW}
+    s = float(res["s"])
+    rpm = float(res["rpm"])
+    state = res["state_c"]
+    t_w = float(state[net.rep("winding")])
+    power = _power_block(dict(ref, rpm=rpm), res["loss"], p_cu_ref_w, s, t_w,
+                         mode)
+    i = float(ref["I_phase_rms_A"]) * s
+    return {
+        "feasible": True, "verified": None,
+        "rpm": round(rpm, 1), "speed_ratio": round(float(res["r"]), 5),
+        "s": round(s, 5), "I_cont_A_rms": round(i, 3),
+        "I_cont_A_peak": round(i * math.sqrt(2.0), 3),
+        "limiting_part": res.get("limiting_part"),
+        "temperatures_c": {r["part"]: round(float(r["quantity_c"]), 2)
+                           for r in (res.get("parts") or ())},
+        "losses_W": {"winding": round(float(power["P_cu_W"]), 3),
+                     **{n: round(float(w), 3)
+                        for n, w in _held_watts(res["loss"], s).items()}},
+        "power": {k: (round(v, 4) if isinstance(v, float) else v)
+                  for k, v in power.items()},
+        "basis": res.get("basis"),
+        "film_factors": {k: round(float(v), 4)
+                         for k, v in (res.get("factors") or {}).items()},
+        "speed_law": SPEED_LAW,
+        "load_line": opts.get("load_line"),
+        "note": ("network estimate: the highest speed at which this machine "
+                 "holds %s continuously under this cooling"
+                 % ("its load line" if res.get("basis") == "load_line"
+                    else "the most shaft power")),
+    }
+
+
+def continuous_point_words(cp: Optional[Mapping[str, Any]]) -> str:
+    """``"continuous: 3120 rpm, 54.1 A rms, 7.9 kW (FEM-verified)"`` or ``""``."""
+    c = dict(cp or {})
+    if not c.get("feasible"):
+        return ""
+    p = _num((c.get("power") or {}).get("P_shaft_W"))
+    if p is None:
+        p = _num((c.get("power") or {}).get("P_mech_W"))
+    tag = ("FEM-verified" if c.get("verified") is True
+           else "estimate, not verified" if c.get("verified") is False
+           else "network estimate")
+    return "continuous: %.0f rpm, %.1f A rms%s (%s)" % (
+        float(c.get("rpm") or 0.0), float(c.get("I_cont_A_rms") or 0.0),
+        "" if p is None else ", %.1f kW" % (p / 1000.0), tag)
+
+
 def headline(block: Optional[Mapping[str, Any]]) -> str:
     """The ONE sentence — ``""`` when there is nothing to say."""
     b = dict(block or {})
     if not b:
         return ""
     if not b.get("feasible"):
+        cp_words = continuous_point_words(b.get("continuous_point"))
+        if cp_words:
+            # NEVER A DEAD END (owner 2026-10-19): the duty's own speed has no
+            # rating, and the sentence says what DOES hold.
+            rpm = _num((b.get("reference") or {}).get("rpm"))
+            return "S1 at %s: none (%s); %s" % (
+                ("%.0f rpm" % rpm) if rpm else "this speed",
+                _ttl.part_label(str(b.get("limiting_part") or "a part")),
+                cp_words)
         return str(b.get("note") or "there is no continuous rating under this "
                                     "cooling")
     if not b.get("trustworthy", True):

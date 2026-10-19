@@ -284,7 +284,7 @@ copy of the die, CAD build in the server sandbox (CAD image + this branch):
 | Step | Result |
 |---|---|
 | Export v5 → upload | stored; parameter diff empty; 7/7 body checks pass; rebuild queued |
-| CAD build from the v5 bodies (sandbox) | see the private doc (gate, volumes, stamps) |
+| CAD build from the v5 / v7 bodies (sandbox) | gate ok, 0 Fusion-vs-parameter warnings, all fit pairs pass, BOM within 0.2 % of the template build, STEP / GLB / BOM / manifest stamped; the simplified (public) model is not written yet for a Fusion coil (follow-up) |
 | AeroStator changes `air_gap` 0.25 → 0.3 | guard: 1 parameter differs, "Import into Fusion pending" |
 | Import (add-in) → Fusion | one-row diff; `air_gap` updated, rotor volume 3685.302 → 3668.751 mm³; saved v6; export v6 → guard clean |
-| Revert 0.3 → 0.25 (Import) | rotor back to 3685.302 mm³; saved v7 = AeroStator L15; export v7 → guard clean |
+| Revert 0.3 → 0.25 (Import) | rotor back to 3685.302 mm³; saved v7 = AeroStator L15; export v7 → CAD build v7 → guard: no warnings |

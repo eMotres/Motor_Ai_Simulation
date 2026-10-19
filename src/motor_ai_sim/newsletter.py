@@ -20,7 +20,6 @@ import hmac
 import json
 import logging
 import os
-import threading
 import time
 import uuid
 from pathlib import Path
@@ -31,11 +30,12 @@ import jwt
 from motor_ai_sim import auth_email as E
 from motor_ai_sim import users as U
 from motor_ai_sim.config import DEFAULT_CONFIG_PATH
+from motor_ai_sim.file_lock import store_lock
 
 log = logging.getLogger(__name__)
 
 _STORE_FILE = Path(DEFAULT_CONFIG_PATH).parent / "newsletter.json"
-_LOCK = threading.RLock()
+_LOCK = store_lock(lambda: _STORE_FILE)       # cross-process (deploy stage 2)
 
 _ISS = "motor-ai-sim-newsletter"
 

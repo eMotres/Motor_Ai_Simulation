@@ -40,13 +40,15 @@ from typing import Optional
 import jwt
 
 from motor_ai_sim.config import DEFAULT_CONFIG_PATH
+from motor_ai_sim.file_lock import store_lock
 from motor_ai_sim.sessions import StoreUnavailable
 
 log = logging.getLogger(__name__)
 
 _USERS_FILE = Path(DEFAULT_CONFIG_PATH).parent / "users.json"
 _SECRET_FILE = Path(DEFAULT_CONFIG_PATH).parent / ".auth_secret"
-_LOCK = threading.RLock()
+# Cross-process (deploy stage 2): two API instances and the worker may all write users.json - see file_lock.py.
+_LOCK = store_lock(lambda: _USERS_FILE)
 
 _PBKDF2_ITERS = 600_000
 _TOKEN_TTL_S = 30 * 24 * 3600          # 30 days
@@ -136,6 +138,13 @@ class TokenResult:
 
 # ── secret ───────────────────────────────────────────────────────────────────
 
+#: The signing secret read from `_SECRET_FILE`, cached for the life of the process as ``(path, secret)``.  It never changes
+#: at runtime (a changed file is a restart, or `AUTH_SECRET` in the environment, which is read first on every call), and
+#: reading it used to take the cross-process `users.json` lock on EVERY authenticated request, inside the async
+#: middleware, behind whatever holds that lock (an argon2 hash takes ~100 ms under it).
+_SECRET_CACHE: "Optional[tuple]" = None
+
+
 def _secret() -> str:
     """The HS256 signing secret.  Raises StoreUnavailable rather than rotate.
 
@@ -143,34 +152,51 @@ def _secret() -> str:
     raises, that is a filesystem problem, not a missing secret — generating a
     replacement would sign out every session on the deployment, so we refuse
     and say so.
+
+    `AUTH_SECRET` in the environment wins and is not required.  Otherwise the file's value is read ONCE per process and
+    kept in memory: only that first read takes the store lock (it may also have to create the file).
     """
     env = os.environ.get("AUTH_SECRET", "").strip()
     if env:
         return env
+    cached = _SECRET_CACHE
+    if cached is not None and cached[0] == str(_SECRET_FILE):
+        return cached[1]
     with _LOCK:
-        if _SECRET_FILE.exists():
-            try:
-                s = _SECRET_FILE.read_text(encoding="utf-8").strip()
-            except Exception as e:
-                log.error("auth: %s exists but could not be read (%s: %s) — "
-                          "REFUSING to mint a new secret (that would sign out "
-                          "every session); auth is unavailable until this is "
-                          "fixed", _SECRET_FILE, type(e).__name__, e)
-                raise StoreUnavailable(f"secret unreadable: {e}") from e
-            if s:
-                return s
-            log.error("auth: %s exists but is EMPTY — refusing to overwrite it. "
-                      "Restore the secret from a backup, or delete the file "
-                      "deliberately to start fresh (everyone signs in again).",
-                      _SECRET_FILE)
-            raise StoreUnavailable("secret file is empty")
-        s = secrets.token_hex(32)
-        from motor_ai_sim.private_files import ensure_private_dir, write_private_text
-        ensure_private_dir(_SECRET_FILE.parent)
-        write_private_text(_SECRET_FILE, s)
-        log.warning("auth: generated a new signing secret at %s (first run)",
-                    _SECRET_FILE)
-        return s
+        return _read_or_create_secret()
+
+
+def _read_or_create_secret() -> str:
+    """The file branch of :func:`_secret`; the caller holds `_LOCK`."""
+    global _SECRET_CACHE
+    cached = _SECRET_CACHE
+    if cached is not None and cached[0] == str(_SECRET_FILE):        # another thread filled it while we waited
+        return cached[1]
+    if _SECRET_FILE.exists():
+        try:
+            s = _SECRET_FILE.read_text(encoding="utf-8").strip()
+        except Exception as e:
+            log.error("auth: %s exists but could not be read (%s: %s) — "
+                      "REFUSING to mint a new secret (that would sign out "
+                      "every session); auth is unavailable until this is "
+                      "fixed", _SECRET_FILE, type(e).__name__, e)
+            raise StoreUnavailable(f"secret unreadable: {e}") from e
+        if s:
+            _SECRET_CACHE = (str(_SECRET_FILE), s)
+            return s
+        log.error("auth: %s exists but is EMPTY — refusing to overwrite it. "
+                  "Restore the secret from a backup, or delete the file "
+                  "deliberately to start fresh (everyone signs in again).",
+                  _SECRET_FILE)
+        raise StoreUnavailable("secret file is empty")
+    s = secrets.token_hex(32)
+    from motor_ai_sim.private_files import ensure_private_dir, write_private_text
+    ensure_private_dir(_SECRET_FILE.parent)
+    write_private_text(_SECRET_FILE, s)
+    log.warning("auth: generated a new signing secret at %s (first run)",
+                _SECRET_FILE)
+    _SECRET_CACHE = (str(_SECRET_FILE), s)
+    return s
 
 
 # ── store ────────────────────────────────────────────────────────────────────
@@ -208,10 +234,18 @@ def _load_soft() -> dict:
 def _save(d: dict) -> None:
     from motor_ai_sim.private_files import chmod_private, ensure_private_dir, open_private
     ensure_private_dir(_USERS_FILE.parent)
-    tmp = _USERS_FILE.with_suffix(".tmp")
-    with open_private(tmp, "w") as f:       # 0600 — audit 2026-09-29 #9
-        json.dump(d, f, indent=1, ensure_ascii=False, sort_keys=True)
-    tmp.replace(_USERS_FILE)
+    # unique per call (pid + thread + random): two API colours / the worker never write the same temp file
+    tmp = _USERS_FILE.with_name("%s.%d.%d.%s.tmp" % (_USERS_FILE.name, os.getpid(), threading.get_ident(),
+                                                     secrets.token_hex(4)))
+    try:
+        with open_private(tmp, "w") as f:       # 0600 — audit 2026-09-29 #9
+            json.dump(d, f, indent=1, ensure_ascii=False, sort_keys=True)
+        tmp.replace(_USERS_FILE)
+    finally:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
     chmod_private(_USERS_FILE)
 
 

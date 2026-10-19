@@ -298,6 +298,13 @@
     "usersCol": "用户",
     "requestsCol": "请求",
     "accounts": "账号",
-    "empty": "当前无人在线。"
+    "empty": "当前无人在线。",
+    "workerReady": "计算服务：就绪",
+    "workerDraining": "计算服务：正在更新",
+    "workerDown": "计算服务：无法连接",
+    "jobKind": "任务",
+    "jobOwner": "账号",
+    "jobState": "状态",
+    "jobElapsed": "用时"
   }
 }

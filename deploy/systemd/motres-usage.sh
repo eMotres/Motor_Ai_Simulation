@@ -6,7 +6,8 @@ set -euo pipefail
 OUT=/srv/motres/usage
 cd /opt/motres/app/deploy
 install -d -m 0750 "$OUT"
-run() { docker compose exec -T api python -m motor_ai_sim.usage_stats "$@"; }
+# stage 2: the API is two colours; bluegreen.sh picks the live one
+run() { bash /opt/motres/app/deploy/bluegreen.sh exec api python -m motor_ai_sim.usage_stats "$@"; }
 run daily >/dev/null
 for M in "$(date -u +%Y-%m)" $( [ "$(date -u +%d)" = "01" ] && date -u -d "yesterday" +%Y-%m ); do
   run monthly "$M" > "$OUT/usage_$M.json.tmp" && mv "$OUT/usage_$M.json.tmp" "$OUT/usage_$M.json"

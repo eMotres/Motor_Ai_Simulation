@@ -717,13 +717,25 @@ def resolve_user(authorization: Optional[str], *, ip: str = "",
 
 #: The deploy script's own calls (deploy/deploy_module.sh, run inside the API container): the live status and the
 #: maintenance notice, reached DIRECTLY on loopback - never through a proxy.  routes/live.py checks the same again.
-_DEPLOY_LOOPBACK_PATHS = frozenset({"/api/admin/live", "/api/admin/notice"})
+#: Stage 2 adds the compute worker's state / drain pair.  Those two are also reachable from the OTHER container of the
+#: deployment (the API reads the worker's state to show it in Admin -> "Now on the site"): a request that carries the
+#: deployment's internal key (roles.internal_key: an HMAC of the auth secret) passes the door as well.
+_DEPLOY_LOOPBACK_PATHS = frozenset({"/api/admin/live", "/api/admin/notice", "/api/worker/state", "/api/worker/drain"})
+_INTERNAL_PATHS = frozenset({"/api/worker/state", "/api/worker/drain"})
 
 
 def _deploy_loopback(request: Request) -> bool:
+    path = request.url.path
+    if path not in _DEPLOY_LOOPBACK_PATHS:
+        return False
     host = request.client.host if request.client else ""
-    return (request.url.path in _DEPLOY_LOOPBACK_PATHS and host in ("127.0.0.1", "::1")
-            and not request.headers.get("x-forwarded-for") and not request.headers.get("x-real-ip"))
+    if (host in ("127.0.0.1", "::1")
+            and not request.headers.get("x-forwarded-for") and not request.headers.get("x-real-ip")):
+        return True
+    if path in _INTERNAL_PATHS:
+        from motor_ai_sim import roles as _roles
+        return _roles.internal_ok(request.headers)
+    return False
 
 
 class RoleGateMiddleware(BaseHTTPMiddleware):

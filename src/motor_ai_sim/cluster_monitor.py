@@ -46,8 +46,13 @@ TOKEN_PREFIX = "mnode_"
 #: The two containers the app itself runs in (docker-compose default naming
 #: `<project>-<service>-<index>`, project = the `deploy/` directory); only
 #: JOB_CONTAINER runs the job queue that job_usage meters.
+#: Deploy stage 2: the API runs as two colours (blue / green) and the job queue lives in the worker.  The names are the
+#: compose defaults (project ``deploy``); the single-container defaults stay for a one-process install, and
+#: docker-compose.yml sets both variables explicitly for the API containers (JOB_CONTAINER = deploy-worker-1).
 APP_CONTAINERS = {c.strip() for c in
-                  os.environ.get("CLUSTER_APP_CONTAINERS", "deploy-api-1,deploy-web-1").split(",")
+                  os.environ.get("CLUSTER_APP_CONTAINERS",
+                                 "deploy-api-1,deploy-web-1,deploy-api-blue-1,deploy-api-green-1,deploy-worker-1"
+                                 ).split(",")
                   if c.strip()}
 JOB_CONTAINER = os.environ.get("CLUSTER_JOB_CONTAINER", "deploy-api-1").strip()
 HOST_KEY = "host"
@@ -549,8 +554,22 @@ def app_metrics(now: Optional[float] = None) -> Dict[str, Any]:
                     "throttled_429": sum(1 for s in mcp if s == 429)}}
 
 
-def jobs_view() -> Dict[str, Any]:
-    """Queue view for the admin: every account's running/queued jobs."""
+def jobs_view(local: bool = False) -> Dict[str, Any]:
+    """Queue view for the admin: every account's running/queued jobs.
+
+    Deploy stage 2: the queue lives in the compute worker.  In the API process (``MOTRES_ROLE=api``) this asks the
+    worker for ITS view (``local=True`` is the worker answering for itself); an unreachable worker is an empty queue
+    with ``worker_reachable: false``, never an error.
+    """
+    from motor_ai_sim import roles as _roles
+    if not local and _roles.is_api():
+        from motor_ai_sim import worker_client as _WC
+        st = _WC.fetch_state() or {}
+        view = st.get("jobs_view")
+        if isinstance(view, dict):
+            return view
+        return {"running": 0, "queued": 0, "workers": None, "oldest_wait_s": 0.0, "per_user": {}, "items": [],
+                "worker_reachable": False}
     from motor_ai_sim import jobs as _J
     from motor_ai_sim import progress as _P
     q = _J.queue()

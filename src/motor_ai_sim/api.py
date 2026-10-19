@@ -163,12 +163,29 @@ from motor_ai_sim import watchdog_notify as _watchdog
 async def _lifespan(_app):
     _log_redaction.install()        # again: uvicorn may have (re)built its handlers
     _run_startup_checks()
-    # Resume any incomplete sweeps from before the restart
-    try:
-        from motor_ai_sim import sweep_resume as _sweep_resume
-        _sweep_resume.resume_incomplete_sweeps()
-    except Exception as _e:
-        logging.getLogger(__name__).warning("sweep resumption failed: %s", _e)
+    # Deploy stage 2 (docs/DEPLOY_STAGE2.md): which process is this?  Leader-only work runs in exactly one place - the
+    # process that computes.  The API role (blue / green, two of them alive during a switch) never resumes a sweep.
+    from motor_ai_sim import roles as _roles
+    _log = logging.getLogger(__name__)
+    _log.info("process role: %s (instance %s, build %s)", _roles.role(), _roles.instance() or "-",
+              _roles.build_id() or "-")
+    if _roles.serves_compute():
+        if _roles.is_worker():
+            # Nothing can be running in a process that has just started: records left "queued"/"running" by a crash
+            # would hold the next deploy's idle check for ever.
+            try:
+                from motor_ai_sim import jobs as _jobs_mod
+                _n = _jobs_mod.recover_stale_records()
+                if _n:
+                    _log.warning("marked %d stale job record(s) interrupted at worker start", _n)
+            except Exception as _e:
+                _log.warning("stale job records not recovered: %s", _e)
+        # Resume any incomplete sweeps from before the restart
+        try:
+            from motor_ai_sim import sweep_resume as _sweep_resume
+            _sweep_resume.resume_incomplete_sweeps()
+        except Exception as _e:
+            _log.warning("sweep resumption failed: %s", _e)
     _watchdog.start()
     # MCP server for external AI agents (Stage 1, docs/MCP_2026-09-28.md): the
     # SDK's session manager lives for the whole process.  A missing `mcp`
@@ -392,6 +409,11 @@ app.include_router(erp_export_router)
 # Live status for module-wise deploys (2026-10-18): /api/admin/live, /api/notice
 from motor_ai_sim.routes.live import router as live_router
 app.include_router(live_router)
+# The compute worker's state + drain switch (deploy stage 2); closed to everything but loopback / the internal key.
+from motor_ai_sim.routes.worker_state import router as worker_state_router
+app.include_router(worker_state_router)
+from motor_ai_sim.roles import InstanceHeaderMiddleware as _InstanceHeaderMiddleware
+app.add_middleware(_InstanceHeaderMiddleware)
 from motor_ai_sim.live_status import InflightMiddleware as _InflightMiddleware
 app.add_middleware(_InflightMiddleware)
 
@@ -437,8 +459,11 @@ def health_check():
     from motor_ai_sim.simulation.pardiso_threading_guard import (
         pardiso_threading_status, libiomp5_mapped)
     status = pardiso_threading_status()
+    from motor_ai_sim import roles as _roles
     return {
         "status": "healthy",
+        # deploy stage 2: which process answered (the blue-green switch and the worker update check these)
+        "role": _roles.role(), "instance": _roles.instance(), "build": _roles.build_id(),
         "mkl": {
             "threading_layer": status["layer"],
             "pardiso_safe": status["safe"],

@@ -266,7 +266,9 @@ def test_llms_txt(c):
 
 def test_nginx_serves_llms_txt_from_the_api_before_the_spa():
     conf = (Path(__file__).resolve().parents[1] / "deploy" / "nginx.conf").read_text(encoding="utf-8")
-    i = conf.index("location = /llms.txt")
-    assert "proxy_pass http://api:8001;" in conf[i:i + 200]
-    # /.well-known/ (server card) is already proxied to the API
-    assert "location /.well-known/" in conf and "location = /mcp" in conf
+    # /llms.txt is a plain file; the API's generated catalogue is served as /llms-full.txt (the URI in the proxy_pass
+    # rewrites the path).  Since deploy stage 2 "the API" is the nginx upstream motres_api (blue / green).
+    i = conf.index("location = /llms-full.txt")
+    assert "proxy_pass http://motres_api/llms.txt;" in conf[i:i + 200]
+    # /.well-known/ (server card) is already proxied to the API; /mcp (the endpoint) is a worker path since stage 2
+    assert "location /.well-known/" in conf and "location = /mcp/" in conf

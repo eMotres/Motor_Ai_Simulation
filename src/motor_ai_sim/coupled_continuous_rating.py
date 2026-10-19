@@ -160,7 +160,8 @@ def bearing_seat_of(field: Optional[Mapping[str, Any]]) -> Optional[float]:
     return None if hit is None else _num(hit[0])
 
 
-def field_reading(field: Mapping[str, Any], part: str) -> Optional[float]:
+def field_reading(field: Mapping[str, Any], part: str, *,
+                  winding_mean: bool = False) -> Optional[float]:
     """The temperature of ``part`` read off a REAL thermal map (°C), or
     ``None`` when this map does not carry it.
 
@@ -174,6 +175,11 @@ def field_reading(field: Mapping[str, Any], part: str) -> Optional[float]:
     ``cooling.mount.link.t_link_c``.
     """
     fld = field or {}
+    if part == "winding" and winding_mean:
+        # the RATED point (2026-10-19): the coils' MEAN, the coil temperature
+        # the EM solve runs at — not the hot spot the insulation is judged on
+        return _num(((fld.get("components") or {}).get("winding") or {})
+                    .get("avg"))
     if part == "bearing":
         return bearing_seat_of(fld)
     if part in TOUCH_PARTS:
@@ -193,7 +199,8 @@ def field_reading(field: Mapping[str, Any], part: str) -> Optional[float]:
 
 
 def touch_next_current(trials: Sequence[Tuple[float, float]], *, limit_c: float,
-                       ambient_c: float) -> float:
+                       ambient_c: float,
+                       aim_k: float = TOUCH_AIM_K) -> float:
     """The next trial current for a touch-limited verification, from the REAL
     readings so far (``[(I, T_actual), …]``, in the order they were solved).
 
@@ -205,7 +212,7 @@ def touch_next_current(trials: Sequence[Tuple[float, float]], *, limit_c: float,
     than 50 %, or would not go below the lowest current already seen over the
     limit.
     """
-    aim = float(limit_c) - TOUCH_AIM_K
+    aim = float(limit_c) - float(aim_k)
     i2, t2 = trials[-1]
     sq = i2 * math.sqrt(max(aim - ambient_c, 1e-6) / max(t2 - ambient_c, 1e-6))
     nxt = sq
@@ -1250,6 +1257,11 @@ def rate(*, thermal_result: Mapping[str, Any],
         "passes": passes,
         "judged": [p.part for p in judged],
         "limits_c": {p.part: round(float(p.limit_c), 2) for p in judged},
+        # WHICH winding quantity the rating sits on: "mean" for the RATED
+        # point (the coils at the rated winding temperature, 2026-10-19),
+        # "hot_spot" for the insulation class.
+        "winding_basis": ("mean" if limit_kw.get("rated_winding")
+                          else "hot_spot"),
         "cooling": _prune(dict(cooling or {})),
         "model": (
             "the four-node lumped network fitted to a 2-D steady thermal map of "

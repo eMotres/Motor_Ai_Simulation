@@ -6087,20 +6087,6 @@ def _run(body: Dict[str, Any],
                                      if time_to_limit else None)),
                 }
                 continuous_rating["I_estimated_A_rms"] = round(i_est, 3)
-                # ── THE SETPOINT ALREADY HOLDS (2026-10-19) ──────────────────
-                # Owner: a rated duty is always continuous.  A setpoint this run's own
-                # `time_to_limit` puts INSIDE every limit, rated at or above its
-                # own current, is ALREADY a continuous point: it is what the
-                # record must keep describing.  Moving the record up to the S1
-                # current (on the limit) and then filing it under the duty
-                # leaves `time_to_limit` and `s` describing a current that is no
-                # longer the duty's — the contradiction
-                # `duty_class.classify` read off the launch-day records.  So the
-                # S1 pass still VERIFIES the rating with a real EM + thermal
-                # solve, but as an errand (`run_recording.no_record`, the last
-                # transient put back afterwards), and never replaces the record.
-                _sp_holds = _setpoint_holds(time_to_limit, continuous_rating,
-                                            limited)
                 if lim_c is None:
                     continuous_rating["verified"] = False
                     continuous_rating["verification_status"] = "unavailable"
@@ -6119,22 +6105,26 @@ def _run(body: Dict[str, Any],
                     _cr_temps = continuous_rating.get("temperatures_c") or {}
                     _coil_guess = round(
                         float(_cr_temps.get("winding") or t_coil), 1)
+                    if (part == "winding" and continuous_rating.get(
+                            "winding_basis") == "mean"):
+                        # THE RATED POINT: the EM pass runs with the coils AT
+                        # the rated temperature, the number the record and
+                        # the Simulation tab then carry (2026-10-19).
+                        _coil_guess = round(float(lim_c), 1)
                     _mag_guess = _cr_temps.get("magnet")
                     _mag_guess = (None if _mag_guess is None
                                  else round(float(_mag_guess), 1))
                     _ctl_before_s1 = ctl.state() if ctl is not None else None
-                    _lt_before = (_last_transient_snapshot() if _sp_holds
-                                  else None)
                     try:
-                        with (_rr.no_record() if _sp_holds
-                              else _nullcontext()):
-                            v = _s1_verify(
-                                body, cooling=cooling, rpm=rpm_eff,
-                                inverter=inverter, i_estimate=i_est,
-                                coil_temp_c_guess=_coil_guess,
-                                magnet_temp_c_guess=_mag_guess,
-                                limiting_part=part, limit_c=float(lim_c),
-                                controller=ctl)
+                        v = _s1_verify(
+                            body, cooling=cooling, rpm=rpm_eff,
+                            inverter=inverter, i_estimate=i_est,
+                            coil_temp_c_guess=_coil_guess,
+                            magnet_temp_c_guess=_mag_guess,
+                            limiting_part=part, limit_c=float(lim_c),
+                            controller=ctl,
+                            winding_mean=(continuous_rating.get(
+                                "winding_basis") == "mean"))
                     except HTTPException as exc:
                         v = None
                         continuous_rating["verified"] = False
@@ -6153,16 +6143,11 @@ def _run(body: Dict[str, Any],
                         continuous_rating["note"] = (
                             "the S1 verification failed (%s) — the estimate "
                             "remains unconfirmed" % _detail_text(exc))
-                    if ctl is not None and (not v or v.get("verified") is not True
-                                            or _sp_holds):
+                    if ctl is not None and (not v or v.get("verified") is not True):
                         # The coupled record still points at the preceding
                         # duty pass, so a failed S1 trial cannot leave the
                         # controller's junction/device state at that trial.
                         ctl.restore(_ctl_before_s1)
-                    if _sp_holds:
-                        # The verification was an errand: the Electromagnetic
-                        # tab's last run is the setpoint's again.
-                        _restore_last_transient(_lt_before)
                     if v and v.get("verified") is not True:
                         # Preserve the failed FEM trial as evidence, but leave
                         # the rate() estimate and its estimated temperatures /
@@ -6233,24 +6218,7 @@ def _run(body: Dict[str, Any],
                                      "verified S1 current — report.shaft_view, "
                                      "not the linear estimate"),
                         }
-                    if (v and v.get("verified") is True and _sp_holds):
-                        # The setpoint holds: the record stays the setpoint's
-                        # machine; the verified S1 numbers above are its
-                        # HEADROOM.  A real pass that rates BELOW the setpoint
-                        # this run's own verdict calls inside every limit is
-                        # the contradiction `_cr_consistency_guard` exists for.
-                        continuous_rating["record_is_s1"] = False
-                        continuous_rating["record_note"] = (
-                            "the setpoint is inside every limit and holds for "
-                            "ever, so the record stays the setpoint's machine; "
-                            "the S1 current above is its verified headroom")
-                        _i_sp = _f(body, "I_phase_rms", 0.0)
-                        _i_v = _ccr._num(continuous_rating.get("I_cont_A_rms"))
-                        if _i_v is not None and _i_sp and _i_v < 0.999 * _i_sp:
-                            continuous_rating = _cr_consistency_guard(
-                                {**continuous_rating,
-                                 "s": round(_i_v / _i_sp, 5)}, time_to_limit)
-                    if v and v.get("verified") is True and not _sp_holds:
+                    if v and v.get("verified") is True:
                         # THE RECORD BECOMES THE S1 MACHINE (owner's rule): the
                         # same replacement `limits` mode makes for the setpoint,
                         # made here for the rating instead.
@@ -7413,12 +7381,10 @@ def _cr_consistency_guard(block: Dict[str, Any],
             "(s=%.3f) — a point that reaches its limit cannot hold MORE "
             "current for ever" % (time_to_limit.get("limiting_part")
                                   or "a part", s))
-    elif within is True and s < 1.0:
-        contradiction = (
-            "time_to_limit says this point is INSIDE every limit, yet the "
-            "continuous rating came out below the duty's own current "
-            "(s=%.3f) — an inside-limits point should rate at or above its "
-            "own current" % s)
+    # (`within and s < 1` is NOT a contradiction since 2026-10-19: the rating
+    # aims at the RATED winding temperature, 180 °C, while `time_to_limit`
+    # judges the 200 °C insulation class — a point between the two is inside
+    # every limit and above the rated point.)
     if contradiction is None:
         return block
     out = dict(block)
@@ -7453,65 +7419,6 @@ def _setpoint_only_limited_line(i_duty: Optional[float],
                else "its limit"))
 
 
-def _setpoint_holds(time_to_limit: Optional[Dict[str, Any]],
-                    rating: Optional[Mapping[str, Any]],
-                    limited: Optional[Mapping[str, Any]]) -> bool:
-    """Is this run's SETPOINT already a continuous point (2026-10-19)?
-
-    True when the run's own ``time_to_limit`` puts it inside every limit, the
-    loop reported no crossing, and the rating (a multiple ``s`` of THIS run's
-    current) holds at least that current.  Such a record must stay the
-    setpoint's: its ``time_to_limit`` and ``s`` describe the setpoint, and a
-    record moved up to the S1 current would carry them under a current they
-    were never computed for."""
-    if limited or not isinstance(time_to_limit, dict):
-        return False
-    if time_to_limit.get("within_limits") is not True:
-        return False
-    s = _ccr._num((rating or {}).get("s"))
-    return s is not None and s >= 1.0
-
-
-class _nullcontext:
-    """``contextlib.nullcontext`` without the import (3.7-safe, one line)."""
-
-    def __enter__(self):
-        return None
-
-    def __exit__(self, *_exc):
-        return False
-
-
-def _last_transient_snapshot() -> Optional[Tuple[Any, Any]]:
-    """``(key, result)`` of the persisted last transient, to be put back after
-    an errand pass (``_restore_last_transient``); ``None`` when there is none."""
-    try:
-        from motor_ai_sim.routes import simulation as sim
-        key = sim._last_transient_ref.get("key")
-        res = sim._last_transient_ref.get("result")
-    except Exception:  # noqa: BLE001 — a snapshot never fails a run
-        return None
-    if key is None or not isinstance(res, dict):
-        return None
-    return tuple(key), res
-
-
-def _restore_last_transient(snap: Optional[Tuple[Any, Any]]) -> None:
-    """Put the last transient back as it was before an errand pass — so the
-    Electromagnetic tab, and `_attach_coupling` after the loop, see the
-    record's own run, not the S1 verification's."""
-    if not snap:
-        return
-    try:
-        from motor_ai_sim.routes import simulation as sim
-        if sim._last_transient_ref.get("result") is snap[1]:
-            return
-        sim._save_last_transient(tuple(snap[0]), snap[1], journal=False)
-    except Exception:  # noqa: BLE001 — never fails a solved run
-        log.warning("coupled: the last transient could not be put back after "
-                    "the S1 verification", exc_info=True)
-
-
 def _s1_time_to_limit(body: Dict[str, Any], cooling: Dict[str, Any],
                       em: Mapping[str, Any], field: Mapping[str, Any], *,
                       i_s1: float, bearing_temp_c: Optional[float]
@@ -7542,7 +7449,8 @@ def _s1_time_to_limit(body: Dict[str, Any], cooling: Dict[str, Any],
 _CP_TOL_K = _ccr.TOL_K
 
 
-def _cp_judge(field: Mapping[str, Any], limits: Mapping[str, float]
+def _cp_judge(field: Mapping[str, Any], limits: Mapping[str, float],
+              winding_mean: bool = False
               ) -> Tuple[Optional[str], Optional[float], Optional[float],
                          Dict[str, float]]:
     """``(worst part, its reading, its miss, every reading)`` off a real map —
@@ -7552,7 +7460,7 @@ def _cp_judge(field: Mapping[str, Any], limits: Mapping[str, float]
     worst: Tuple[Optional[str], Optional[float], Optional[float]] = (
         None, None, None)
     for part, lim in limits.items():
-        v = _ccr.field_reading(field, part)
+        v = _ccr.field_reading(field, part, winding_mean=winding_mean)
         if v is None:
             continue
         readings[part] = round(float(v), 2)
@@ -7604,6 +7512,8 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
     limits = {p: float(v) for p, v in (block.get("limits_c") or {}).items()
               if p in ("winding", "magnet", "housing", "structure")
               and _ccr._num(v) is not None}
+    # the RATED winding is judged on its mean (the coils at 180 °C)
+    _wm = block.get("winding_basis") == "mean"
     part = str(cp.get("limiting_part") or "winding")
     if part not in limits:
         part = next(iter(limits), part)
@@ -7633,7 +7543,7 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
                                  else round(float(temps.get("magnet", t_mag)),
                                             1)),
             limiting_part=part, limit_c=limits[part], controller=controller,
-            max_passes=passes)
+            max_passes=passes, winding_mean=_wm)
 
     v: Optional[Dict[str, Any]] = None
     last: Optional[Tuple[Dict[str, Any], float, float]] = None
@@ -7644,7 +7554,7 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
             n_passes = 1
             last = (v, rpm_cp, i_est)
             w_part, actual, miss, readings = _cp_judge(v.get("field") or {},
-                                                       limits)
+                                                       limits, _wm)
             if (miss is not None and miss > _CP_TOL_K and i_ref
                     and actual is not None):
                 est = _ccr._num(temps.get(w_part))
@@ -7694,7 +7604,8 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
         return
     v, rpm_cp, i_est = last
 
-    w_part, actual, miss, readings = _cp_judge(v.get("field") or {}, limits)
+    w_part, actual, miss, readings = _cp_judge(v.get("field") or {}, limits,
+                                               _wm)
     summ = (v.get("em") or {}).get("summary") or {}
     i_solved = _ccr._num(v.get("I_cont_A_rms")) or i_est
     cp["verification_passes"] = n_passes
@@ -7770,9 +7681,14 @@ def _cp_verify_continuous_point(body: Dict[str, Any],
             if summ.get(k) is not None}
 
 
-#: Where a non-touch S1 correction aims, below the limit (2026-10-19): the
-#: middle of the one-sided window [-3 K, +OVER_TOL_K] a verified pass must land in.
-_S1_AIM_K = 1.0
+#: The window a verified non-touch S1 pass must land in, below its limit
+#: (owner 2026-10-19: the rated point is the coils AT 180 °C, "0 to -1 K"):
+#: never over, at most ``_S1_UNDER_TOL_K`` under.  Corrections aim at the middle.
+_S1_UNDER_TOL_K = 1.0
+_S1_AIM_K = 0.5
+#: Real passes a non-touch verification may spend: the first square-law step,
+#: then the secant through the real readings (a 1 K window needs it).
+_S1_MAX_PASSES = 3
 
 
 def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
@@ -7780,7 +7696,8 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                coil_temp_c_guess: float, magnet_temp_c_guess: Optional[float],
                limiting_part: str, limit_c: float,
                max_passes: Optional[int] = None,
-               controller: Optional["_ControllerLoop"] = None
+               controller: Optional["_ControllerLoop"] = None,
+               winding_mean: bool = False
                ) -> Dict[str, Any]:
     """CONFIRM the S1 network estimate with a real EM pass, at the current
     the estimate found — never trust the network alone.
@@ -7791,9 +7708,11 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     found — the currents don't match"*.  One EM pass at ``i_estimate``,
     one real 2-D thermal solve of its own loss map, and the limiting part's
     OWN hot spot / hottest element read straight off that map (never the
-    network's node-mean-plus-offset estimate).  Outside the ONE-SIDED window
-    [3 K under, ``OVER_TOL_K`` over] (2026-10-19; it was ±3 K): ONE
-    first-order correction, aimed ``_S1_AIM_K`` under the limit —
+    network's node-mean-plus-offset estimate).  ``winding_mean`` (the RATED
+    point, owner 2026-10-19: the coils at 180 °C) reads the winding's MEAN — the
+    coil temperature the EM solve is run at — instead of its hot spot.  Outside
+    the ONE-SIDED window [``_S1_UNDER_TOL_K`` under, 0 over] (2026-10-19; it was
+    ±3 K): a first-order correction, aimed ``_S1_AIM_K`` under the limit —
     ``i_next = i_now · sqrt((limit − aim − ambient) / (actual − ambient))``, the
     same square-law the network search itself bisects on, applied once more
     with the REAL map's reading in place of the estimate — and one more pass.
@@ -7844,7 +7763,7 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
     last: Dict[str, Any] = {}
     touch = limiting_part in _ccr.SLOW_PARTS
     if max_passes is None:
-        max_passes = _ccr.TOUCH_MAX_PASSES if touch else 2
+        max_passes = _ccr.TOUCH_MAX_PASSES if touch else _S1_MAX_PASSES
     trials: List[Tuple[float, float]] = []
     for k in range(max(int(max_passes), 1)):
         _progress.update(phase="S1 verification %d/%d — EM at %.1f A"
@@ -7928,7 +7847,8 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
         # The part's own reading off THIS pass's real map — the winding /
         # magnet hot spot from the components, the housing / structure from
         # the heat path's solved body node (`field_reading`).
-        actual = _ccr.field_reading(field_v, limiting_part)
+        actual = _ccr.field_reading(field_v, limiting_part,
+                                    winding_mean=winding_mean)
         miss = None if actual is None else round(actual - float(limit_c), 3)
         if miss is None:
             _held = False
@@ -7937,11 +7857,11 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                      <= _ccr.TOUCH_OVER_TOL_K)
         else:
             # ONE-SIDED (2026-10-19): a verified S1 point is never OVER its
-            # limit by more than the tolerance `coupled_time_to_limit` calls
-            # "over" with (OVER_TOL_K) — two-sided ±3 K let a "verified" point
-            # sit up to 3 K over, which the record's own time to the limit
-            # then calls short-time.  Up to 3 K UNDER still holds.
-            _held = -3.0 <= miss <= _ttl.OVER_TOL_K
+            # limit — two-sided ±3 K let a "verified" point sit up to 3 K over,
+            # which the record's own time to the limit then calls short-time —
+            # and at most `_S1_UNDER_TOL_K` under (the rated point is the coils
+            # AT 180 °C, not somewhere below it).
+            _held = -_S1_UNDER_TOL_K <= miss <= 0.0
         last = {"verified": _held,
                 "passes": k + 1, "miss_K": miss, "I_cont_A_rms": round(i_solved, 3),
                 "em": em_v, "field": field_v,
@@ -7974,16 +7894,15 @@ def _s1_verify(body: Dict[str, Any], *, cooling: Dict[str, Any], rpm: float,
                                 "unverified" % (abs(miss), "over" if miss > 0
                                                   else "under", k + 1))
             break
-        # ONE correction, from the REAL map's reading.
+        # A correction, from the REAL map's readings: the square law first,
+        # the secant through the real readings once there are two.
+        trials.append((float(i_solved), float(actual)))
         if touch:
-            trials.append((float(i_solved), float(actual)))
             i_now = _ccr.touch_next_current(trials, limit_c=float(limit_c),
                                             ambient_c=amb)
             continue
-        over_amb_actual = max(actual - amb, 1e-6)
-        # aimed 1 K under the limit, the middle of the one-sided window
-        over_amb_limit = max(float(limit_c) - _S1_AIM_K - amb, 1e-6)
-        i_now = max(i_now * math.sqrt(over_amb_limit / over_amb_actual), 0.01)
+        i_now = _ccr.touch_next_current(trials, limit_c=float(limit_c),
+                                        ambient_c=amb, aim_k=_S1_AIM_K)
     return last
 
 
@@ -8204,11 +8123,12 @@ def _continuous_rating_for_loop(body: Dict[str, Any], *, cooling: Dict[str, Any]
             geometry=geom, cooling=cooling, side_areas=side0,
             d_housing_m=d_housing_m, duty=duty, mode=mode,
             resolve=_resolve, refit=_refit, magnet_grade=mats.get("magnet"),
-            # THE BEARING SEAT IS JUDGED TOO (2026-10-19), read off each map,
-            # exactly as this run's `time_to_limit` judges it — otherwise the
-            # two answer different questions and a "continuous" S1 current can
-            # put the seat 40 K over its grease (launch-day 40 L20: 150 °C).
-            bearing_seat_from_map=True,
+            # THE RATED POINT (owner 2026-10-19): the coils AT the project's
+            # rated winding temperature (`coupled_time_to_limit.
+            # rated_winding_limit`, 180 °C), judged on the winding MEAN — the
+            # coil temperature the EM solve runs at.  The bearing seat is NOT
+            # judged: it is reported, never a limit on rated.
+            rated_winding=True,
             speed_search=_cr_speed_search_opts(cooling, summary, float(rpm),
                                                pwm=pwm),
             eddy_noload_fraction=_cr_eddy_f0(summary, float(rpm))[0])

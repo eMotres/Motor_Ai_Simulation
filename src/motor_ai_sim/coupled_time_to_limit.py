@@ -185,6 +185,29 @@ def _offset(thermal_result: Mapping[str, Any], node: str) -> Tuple[float, str]:
 # The limits — read off the machine's own cards, by the report's own rules
 # ---------------------------------------------------------------------------
 
+def rated_winding_limit() -> Tuple[float, str]:
+    """The RATED winding temperature — the coils' mean at the rated point
+    (owner 2026-10-19: 180 °C) — from the ONE place the project states it
+    (``report.PROJECT_RATED_WINDING_C``).  Configure's rated speed cap, the S1
+    rating, ``solve_to: continuous`` and the duty class read it here."""
+    try:
+        from motor_ai_sim.report import PROJECT_RATED_WINDING_C as lim
+    except Exception:                                        # noqa: BLE001
+        lim = tdc.PROJECT_RATED_WINDING_C
+    return float(lim), ("the project's RATED winding temperature (%g °C, the "
+                        "coils' mean at the rated point; the insulation class "
+                        "stays the overheat limit)" % float(lim))
+
+
+#: Parts that are REPORTED and warned about but never limit a point (owner
+#: 2026-10-19: «the bearing never limits rated»).  An advisory part over its
+#: limit does not make a point short-time and is not a crossing the loop stops
+#: at; it rides the block as ``advisories``.  The bearing seat of the 2-D map is
+#: the shaft inside the active stack — no holder, no axial path — so its number
+#: is an upper bound, not a seat temperature (see `mech_losses`).
+ADVISORY_PARTS: Tuple[str, ...] = ("bearing",)
+
+
 def winding_limit() -> Tuple[float, str]:
     """The insulation class, from the ONE place the project states it."""
     try:
@@ -261,6 +284,7 @@ def part_limits(*, thermal_result: Mapping[str, Any],
                 winding_limit_c: Optional[float] = None,
                 magnet_limit_c: Optional[float] = None,
                 bearing_limit_c: Optional[float] = None,
+                rated_winding: bool = False,
                 ) -> List[PartLimit]:
     """Every part that HAS a limit on this machine, with the offset it rides.
 
@@ -271,9 +295,16 @@ def part_limits(*, thermal_result: Mapping[str, Any],
     out: List[PartLimit] = []
 
     w_lim, w_src = ((float(winding_limit_c), "given by the caller")
-                    if winding_limit_c is not None else winding_limit())
+                    if winding_limit_c is not None
+                    else rated_winding_limit() if rated_winding
+                    else winding_limit())
     w_mean = _comp(thermal_result, "winding", "avg")
-    if w_mean is not None:
+    if w_mean is not None and rated_winding:
+        # THE RATED POINT is the coils' MEAN at the rated temperature — no
+        # hot-spot offset (owner 2026-10-19: «all coils at 180 °C»).
+        out.append(PartLimit("winding", "winding", w_lim, 0.0, w_mean,
+                             "%s; judged on the winding mean" % w_src))
+    elif w_mean is not None:
         off, off_note = _offset(thermal_result, "winding")
         out.append(PartLimit("winding", "winding", w_lim, off, w_mean + off,
                              "%s; the hot spot is %s" % (w_src, off_note)))
@@ -683,11 +714,22 @@ def solve(*, thermal_result: Mapping[str, Any],
     constraint.
     """
     judged = list(limits or ())
-    over = [p for p in judged if p.over]
+    over = [p for p in judged if p.over and p.part not in ADVISORY_PARTS]
     limits_c = {p.part: round(float(p.limit_c), 2) for p in judged}
     at_point = {p.part: round(float(p.at_point_c), 2) for p in judged}
+    advisories = {
+        p.part: {"at_point_c": round(float(p.at_point_c), 2),
+                 "limit_c": round(float(p.limit_c), 2),
+                 "over_by_K": round(p.over_by_k, 2),
+                 "note": ("%s over its %g °C limit — REPORTED, never a limit on "
+                          "this point; the 2-D seat is the shaft inside the "
+                          "active stack (no holder, no axial path), so this "
+                          "is an upper bound" % (PART_QUANTITY.get(p.part, p.part),
+                                                 float(p.limit_c)))}
+        for p in judged if p.over and p.part in ADVISORY_PARTS}
     if not over:
         return {
+            **({"advisories": advisories} if advisories else {}),
             "within_limits": True,
             "time_to_limit_s": None,
             "limiting_part": None,
@@ -696,7 +738,9 @@ def solve(*, thermal_result: Mapping[str, Any],
             "judged": [p.part for p in judged],
             "note": ("every part this machine states a limit for (%s) is inside "
                      "it at this operating point, so it may be held for ever"
-                     % (", ".join(p.part for p in judged) or "none")),
+                     % (", ".join(p.part for p in judged
+                                  if p.part not in advisories) or "none"))
+                    + "".join("; %s" % a["note"] for a in advisories.values()),
         }
 
     net = tdc.network_from_steady(
@@ -746,6 +790,7 @@ def solve(*, thermal_result: Mapping[str, Any],
         }
     cold = starts.get("cold") or {}
     out: Dict[str, Any] = {
+        **({"advisories": advisories} if advisories else {}),
         "within_limits": False,
         "time_to_limit_s": cold.get("time_to_limit_s"),
         "time_to_limit_words": cold.get("time_to_limit_words"),

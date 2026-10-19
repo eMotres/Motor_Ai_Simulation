@@ -69,12 +69,28 @@ export function fetchPropellerS1(id: string, die: string, config: string, ambien
   if (escBusA != null) q.set('esc_i_bus_max_A', String(escBusA));
   // the board's cooling class is decided by the server from the machine: never sent
   const p = fetch(`${API}/api/propellers/${encodeURIComponent(id)}/s1?${q}`, { cache: 'no-store' })
-    .then((r) => (r.ok ? (r.json() as Promise<S1Result>) : null))
+    .then(async (r) => {
+      if (r.ok) return (await r.json()) as S1Result;
+      // a drive the S1 model does not carry: the server names the ones it does (the page then falls back)
+      if (r.status === 422) {
+        const d = (await r.json().catch(() => null))?.detail;
+        if (d && d.code === 'drive_not_available' && Array.isArray(d.drives_available)) {
+          _s1Drives.set(`${die}|${config}`, d.drives_available.map(String));
+        }
+      }
+      return null;
+    })
     .catch(() => null)
     .then((v) => { if (v == null) _s1.delete(key); return v; });
   _s1.set(key, p);
   return p;
 }
+
+const _s1Drives = new Map<string, string[]>();
+/** The drives an S1 model carries, as a refused request named them (null = not learned yet). */
+export const s1KnownDrives = (die: string, config: string): string[] | null => _s1Drives.get(`${die}|${config}`) ?? null;
+/** ... or as the one-call load said. */
+export const noteS1Drives = (die: string, config: string, drives: string[]): void => { _s1Drives.set(`${die}|${config}`, drives); };
 
 const _series = new Map<string, Promise<PropSeries | null>>();
 
@@ -129,6 +145,8 @@ export interface ConfigureLoadAnswer {
   thermal_anchor?: import('./thermalAnchor').ThermalAnchor | null;
   propeller: null | {
     id: string; ambient_c: number; housing_d_mm: number | null; slipstream_factor?: number | null;
+    /** the drives the S1 model carries ('sine' first); `drive` is one of them, `drive_wanted` the one asked for */
+    drives_available?: string[]; drive_wanted?: string;
     die: string | null; config: string; drive: string; pack: { min: number; max: number } | null;
     series: PropSeries | null; series_error: string | null;
     s1: S1Result | null; s1_error: string | null;
@@ -137,14 +155,14 @@ export interface ConfigureLoadAnswer {
 
 export async function fetchConfigureLoad(motorId: string, q: {
   config: string; duty: string | null; ambientC: number; housingMm: number | null;
-}): Promise<ConfigureLoadAnswer | null> {
+}, signal?: AbortSignal): Promise<ConfigureLoadAnswer | null> {
   const p = new URLSearchParams({ config: q.config, ambient_c: String(q.ambientC),
     series_rpm_max: String(SERIES_RPM_MAX), series_n: String(SERIES_N) });
   if (q.duty) p.set('duty', q.duty);
   if (q.housingMm != null && q.housingMm > 0) p.set('housing_d_mm', String(q.housingMm));
   try {
     const r = await fetch(`${API}/api/catalog/${encodeURIComponent(motorId)}/configure_load?${p}`,
-      { cache: 'no-store' });
+      { cache: 'no-store', signal });
     return r.ok ? ((await r.json()) as ConfigureLoadAnswer) : null;
   } catch { return null; }
 }

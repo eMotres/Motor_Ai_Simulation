@@ -80,7 +80,8 @@ def read_json(path: Path, default: Any = None) -> Any:
     if not p.exists():
         return default
     try:
-        return json.loads(p.read_text(encoding="utf-8"))
+        from motor_ai_sim import fscache as _fsc     # parsed once per version of the file, a fresh copy each
+        return _fsc.read_json(p)
     except Exception as e:  # noqa: BLE001
         log.warning("could not parse %s (%s) — treating as empty", p, e)
         return default

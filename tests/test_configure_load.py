@@ -105,14 +105,16 @@ def wired(tmp_path, monkeypatch):
              "presets": [{"config": "L15", "die": "R", **{k: D85_L15[k] for k in ("duty_points", "battery")},
                           "duty": "rated", "knobs": {}, "pwm_variants": [], "drive_variant": None}]}
 
-    def fake_ctx(motor_id, authorization=None):
-        if motor_id == "cat_t":
-            return json.loads(json.dumps(ctx))
-        if motor_id == "cat_r":
-            return json.loads(json.dumps(robot))
+    def fake_motor(motor_id, authorization=None):
+        if motor_id in ("cat_t", "cat_r"):
+            return {"id": motor_id}, tmp_path / "motor_catalog.json"
         from fastapi import HTTPException
         raise HTTPException(status_code=404, detail="not found")
-    monkeypatch.setattr(cat_mod, "get_configure_context", fake_ctx)
+    monkeypatch.setattr(cat_mod, "_configure_motor", fake_motor)
+    monkeypatch.setattr(cat_mod, "_configure_context_of",
+                        lambda mid, motor: json.loads(json.dumps(ctx if mid == "cat_t" else robot)))
+    from motor_ai_sim import answer_store
+    answer_store.clear_memory()
     return tmp_path
 
 

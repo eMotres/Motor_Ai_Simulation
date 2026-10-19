@@ -172,7 +172,6 @@ def get_series(prop_id: str,
     return out
 
 
-@router.get("/{prop_id}/s1")
 def get_s1(prop_id: str,
            die: str = Query(..., min_length=1, max_length=200),
            config: str = Query(..., min_length=1, max_length=100),
@@ -212,29 +211,94 @@ def get_s1(prop_id: str,
     Configure context rule).  Closed-form arithmetic on the configuration's S1
     model (extracted from its passport) - no field solve, nothing written."""
     from motor_ai_sim import motor_access as ma
-    from motor_ai_sim import propeller_s1 as s1
-    from motor_ai_sim.cooling_options import cooling_options
     access = ma.catalog_access(authorization)
     if access.get("mode") == ma.MODE_ANONYMOUS:
         raise HTTPException(status_code=401, detail="Sign in required.")
     if not ma.may_see_config(access, die, config):
         raise HTTPException(status_code=404, detail=f"no propeller S1 model for {die} {config}")
+    return s1_answer(prop_id, die, config, ambient_c=ambient_c, altitude_m=altitude_m, position=position,
+                     factor=factor, n=n, drive=drive, esc_i_bus_max_A=esc_i_bus_max_A,
+                     esc_i_phase_max_A=esc_i_phase_max_A, pack_v_min=pack_v_min, pack_v_max=pack_v_max,
+                     pack_i_max_A=pack_i_max_A)
+
+
+
+@router.get("/{prop_id}/s1")
+def get_s1_route(prop_id: str,
+                 die: str = Query(..., min_length=1, max_length=200),
+                 config: str = Query(..., min_length=1, max_length=100),
+                 ambient_c: float = Query(default=25.0, ge=-60.0, le=80.0),
+                 altitude_m: float = Query(default=0.0, ge=-500.0, le=11000.0),
+                 position: Optional[str] = Query(default=None),
+                 factor: Optional[float] = Query(default=None, gt=0.0, le=1.5),
+                 n: int = Query(default=41, ge=5, le=201),
+                 drive: str = Query(default="sine", min_length=1, max_length=100),
+                 esc_i_bus_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0),
+                 esc_i_phase_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0),
+                 pack_v_min: Optional[float] = Query(default=None, gt=0.0, le=2000.0),
+                 pack_v_max: Optional[float] = Query(default=None, gt=0.0, le=2000.0),
+                 pack_i_max_A: Optional[float] = Query(default=None, gt=0.0, le=10000.0),
+                 authorization: Optional[str] = Header(default=None)):
+    """``get_s1`` over HTTP (its docstring has the contract); the stored answer goes to the wire serialised once."""
+    from motor_ai_sim.answer_store import json_response
+    return json_response(get_s1(prop_id, die=die, config=config, ambient_c=ambient_c, altitude_m=altitude_m,
+                                position=position, factor=factor, n=n, drive=drive, esc_i_bus_max_A=esc_i_bus_max_A,
+                                esc_i_phase_max_A=esc_i_phase_max_A, pack_v_min=pack_v_min, pack_v_max=pack_v_max,
+                                pack_i_max_A=pack_i_max_A, authorization=authorization))
+
+#: the code an S1 answer is computed by: a deploy that changes it invalidates every stored answer
+_S1_CODE = ("propeller_s1.py", "propeller.py", "simulation/cooling_models.py", "routes/propellers.py")
+
+
+def s1_answer(prop_id: str, die: str, config: str, *, ambient_c: float = 25.0, altitude_m: float = 0.0,
+              position: Optional[str] = None, factor: Optional[float] = None, n: int = 41,
+              drive: str = "sine", esc_i_bus_max_A: Optional[float] = None,
+              esc_i_phase_max_A: Optional[float] = None, pack_v_min: Optional[float] = None,
+              pack_v_max: Optional[float] = None, pack_i_max_A: Optional[float] = None) -> Dict[str, Any]:
+    """The S1 answer of ``GET /{prop_id}/s1`` WITHOUT the caller gate (the route and ``configure_load`` check it).
+
+    STORED (``answer_store``, namespace ``s1``): computed once per version of its inputs - the S1 model file, the
+    propeller's card, the cooling registry and the code - and read back in milliseconds after that.  A drive the
+    model does not carry is a 422 that NAMES it and lists ``drives_available``, so a client can fall back."""
+    from pathlib import Path as _P
+    from motor_ai_sim import answer_store as _as
+    from motor_ai_sim import fscache as _fsc
+    from motor_ai_sim import propeller_s1 as s1
+    from motor_ai_sim.cooling_options import cooling_options
     allowed = cooling_options(die, config).get("propellers")
     if allowed is not None and prop_id not in allowed:
         raise HTTPException(status_code=422, detail=f"{prop_id} is not a propeller {die} {config} may use")
     prop = _get(prop_id)
     try:
         model = s1.load_model(die, config)
-        out = s1.s1_rating(model, prop, ambient_c=ambient_c, altitude_m=altitude_m,
-                           position=position, factor=factor, n_points=n, drive=drive,
-                           pack_v_min=pack_v_min, pack_v_max=pack_v_max,
-                           pack_i_max_A=pack_i_max_A, esc_i_bus_A=esc_i_bus_max_A,
-                           esc_i_phase_A=esc_i_phase_max_A)
     except s1.S1ModelNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc))
-    except (s1.S1Error, pp.PropellerDataError, ValueError) as exc:
+    except s1.S1Error as exc:
         raise HTTPException(status_code=422, detail=str(exc))
-    return out
+    available = ["sine"] + sorted((model.get("drives") or {}).keys())
+    d = str(drive or "sine")
+    if d not in available and d != s1.EXTERNAL_ESC:
+        raise HTTPException(status_code=422, detail={
+            "code": "drive_not_available", "drive": d, "drives_available": available,
+            "message": f"the S1 model of {die} {config} carries no drive {d!r}; available: {', '.join(available)}"})
+    src = _P(__file__).resolve().parents[1]
+    stamp = _fsc.stamp_of([model.get("_path"), getattr(prop, "source_path", "")]
+                          + [src / f for f in _S1_CODE], salt="s1-1")
+    r6 = lambda v: None if v is None else round(float(v), 6)    # noqa: E731 - 50.4 and 12*4.2 are one pack
+    key = {"prop": prop_id, "die": die, "config": config, "ambient_c": r6(ambient_c), "altitude_m": r6(altitude_m),
+           "position": position, "factor": r6(factor), "n": n, "drive": d, "esc_bus": r6(esc_i_bus_max_A),
+           "esc_phase": r6(esc_i_phase_max_A), "pack": [r6(pack_v_min), r6(pack_v_max), r6(pack_i_max_A)]}
+
+    def compute() -> Dict[str, Any]:
+        try:
+            return s1.s1_rating(model, prop, ambient_c=ambient_c, altitude_m=altitude_m,
+                                position=position, factor=factor, n_points=n, drive=d,
+                                pack_v_min=pack_v_min, pack_v_max=pack_v_max,
+                                pack_i_max_A=pack_i_max_A, esc_i_bus_A=esc_i_bus_max_A,
+                                esc_i_phase_A=esc_i_phase_max_A)
+        except (s1.S1Error, pp.PropellerDataError, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc))
+    return _as.get_or_compute("s1", key, stamp, compute)
 
 
 @router.get("/{prop_id}/point")
